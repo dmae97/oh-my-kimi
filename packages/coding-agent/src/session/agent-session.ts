@@ -285,6 +285,7 @@ import {
 	selectDiscoverableToolNamesByServer,
 } from "../tool-discovery/tool-index";
 import { assertEditableFile } from "../tools/auto-generated-guard";
+import { releaseTabsForOwner } from "../tools/browser/tab-supervisor";
 import { normalizeToolNames } from "../tools/builtin-names";
 import type { CheckpointState } from "../tools/checkpoint";
 import { outputMeta, wrapToolWithMetaNotice } from "../tools/output-meta";
@@ -5093,6 +5094,28 @@ export class AgentSession {
 		await disposeKernelSessionsByOwner(this.#evalKernelOwnerId);
 		await disposeRubyKernelSessionsByOwner(this.#evalKernelOwnerId);
 		await disposeJuliaKernelSessionsByOwner(this.#evalKernelOwnerId);
+		// Release headless / spawned Chromium and worker tabs this session
+		// opened via the browser tool. The tool's `tabs`/`browsers` maps are
+		// module-global — subagents and future sessions share them — so we
+		// walk by `ownerSessionId` (assigned at `acquireTab` creation, never on
+		// reuse) and touch only what THIS session created. Bounded so a broken
+		// CDP close cannot stall `/exit`; mirrors the async-job/MCP pattern.
+		// (Issue #3963.)
+		const browserOwnerId = this.sessionManager.getSessionId();
+		if (browserOwnerId) {
+			try {
+				const released = await withTimeout(
+					releaseTabsForOwner(browserOwnerId, { kill: true }),
+					3_000,
+					"Timed out releasing owned browser tabs during dispose",
+				);
+				if (released > 0) {
+					logger.debug("Released owned browser tabs during dispose", { ownerId: browserOwnerId, released });
+				}
+			} catch (error) {
+				logger.warn("Failed to release owned browser tabs during dispose", { error: String(error) });
+			}
+		}
 		await shutdownTinyTitleClient();
 		this.#releasePowerAssertion();
 		// Clean up an empty session created by this session's /move so it doesn't accumulate.
