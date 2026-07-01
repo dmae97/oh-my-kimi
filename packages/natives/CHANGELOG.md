@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed native `astGrep` and `astMatch` retaining every match payload before applying pagination; broad searches now keep only the requested page window while preserving exact totals. ([#3935](https://github.com/can1357/oh-my-pi/issues/3935))
+
 ## [16.2.10] - 2026-06-30
 
 ### Added

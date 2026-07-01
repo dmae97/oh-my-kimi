@@ -44,6 +44,33 @@ const astGrepSchema = type({
 	"skip?": type("number").describe("matches to skip"),
 });
 
+function compareAstFindMatch(left: AstFindMatch, right: AstFindMatch): number {
+	const pathCmp = left.path.localeCompare(right.path);
+	if (pathCmp !== 0) return pathCmp;
+	if (left.startLine !== right.startLine) return left.startLine - right.startLine;
+	if (left.startColumn !== right.startColumn) return left.startColumn - right.startColumn;
+	if (left.endLine !== right.endLine) return left.endLine - right.endLine;
+	if (left.endColumn !== right.endColumn) return left.endColumn - right.endColumn;
+	if (left.byteStart !== right.byteStart) return left.byteStart - right.byteStart;
+	return left.byteEnd - right.byteEnd;
+}
+
+function retainAstFindMatch(matches: AstFindMatch[], capacity: number, candidate: AstFindMatch): void {
+	if (matches.length < capacity) {
+		matches.push(candidate);
+		return;
+	}
+	let worstIndex = 0;
+	for (let index = 1; index < matches.length; index++) {
+		if (compareAstFindMatch(matches[index]!, matches[worstIndex]!) > 0) {
+			worstIndex = index;
+		}
+	}
+	if (compareAstFindMatch(candidate, matches[worstIndex]!) < 0) {
+		matches[worstIndex] = candidate;
+	}
+}
+
 async function runMultiTargetAstGrep(
 	targets: Array<{ basePath: string; glob?: string }>,
 	options: { patterns: string[]; commonBasePath: string; skip: number; limit: number; signal?: AbortSignal },
@@ -55,9 +82,11 @@ async function runMultiTargetAstGrep(
 	limitReached: boolean;
 	parseErrors?: string[];
 }> {
-	const aggregatedMatches: AstFindMatch[] = [];
+	const retainedMatches: AstFindMatch[] = [];
+	const retainedCapacity = options.skip + options.limit + 1;
 	const parseErrors: string[] = [];
 	let totalMatches = 0;
+	let filesWithMatches = 0;
 	let filesSearched = 0;
 	let limitReached = false;
 	for (const target of targets) {
@@ -71,26 +100,19 @@ async function runMultiTargetAstGrep(
 			signal: options.signal,
 		});
 		totalMatches += targetResult.totalMatches;
+		filesWithMatches += targetResult.filesWithMatches;
 		filesSearched += targetResult.filesSearched;
 		limitReached = limitReached || targetResult.limitReached;
 		if (targetResult.parseErrors) parseErrors.push(...targetResult.parseErrors);
 		for (const match of targetResult.matches) {
 			const absolute = path.resolve(target.basePath, match.path);
 			const rebased = path.relative(options.commonBasePath, absolute).replace(/\\/g, "/");
-			aggregatedMatches.push({ ...match, path: rebased });
+			retainAstFindMatch(retainedMatches, retainedCapacity, { ...match, path: rebased });
 		}
 	}
-	aggregatedMatches.sort((left, right) => {
-		const pathCmp = left.path.localeCompare(right.path);
-		if (pathCmp !== 0) return pathCmp;
-		if (left.startLine !== right.startLine) return left.startLine - right.startLine;
-		if (left.startColumn !== right.startColumn) return left.startColumn - right.startColumn;
-		if (left.byteStart !== right.byteStart) return left.byteStart - right.byteStart;
-		return left.byteEnd - right.byteEnd;
-	});
-	const visible = aggregatedMatches.slice(options.skip);
+	retainedMatches.sort(compareAstFindMatch);
+	const visible = retainedMatches.slice(options.skip);
 	const paged = visible.slice(0, options.limit);
-	const filesWithMatches = new Set(aggregatedMatches.map(match => match.path)).size;
 	return {
 		matches: paged,
 		totalMatches,
