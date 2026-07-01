@@ -56,8 +56,22 @@ export abstract class SnapshotStore {
 	/** Most-recently recorded version for `path`, or `null` if none. */
 	abstract head(path: string): Snapshot | null;
 
-	/** Recorded version for `path` whose tag equals `hash`, or `null`. */
+	/**
+	 * Recorded version for `path` whose tag equals `hash`, or `null`. When two
+	 * distinct texts collide on the 16-bit tag, returns the most-recently
+	 * recorded one; callers that need the exact content must verify
+	 * {@link Snapshot.text} against the live text (or use {@link byContent}).
+	 */
 	abstract byHash(path: string, hash: string): Snapshot | null;
+
+	/**
+	 * Recorded version for `path` whose {@link Snapshot.text} equals `fullText`,
+	 * or `null`. Disambiguates hash collisions where two distinct file states
+	 * share the same 4-hex tag: the patcher consults this before taking the
+	 * no-drift path so a colliding live text is never accepted as the exact
+	 * snapshot the model's line anchors were minted against.
+	 */
+	abstract byContent(path: string, fullText: string): Snapshot | null;
 
 	/**
 	 * Every retained version whose tag equals `hash`, across all tracked
@@ -133,7 +147,10 @@ export interface InMemorySnapshotStoreOptions {
  *
  * Recording byte-identical content again refreshes recency and reuses the
  * existing tag (read fusion); recording new content unshifts a fresh version
- * onto the front of the path history.
+ * onto the front of the path history. Two distinct texts that collide on the
+ * short 4-hex tag are retained as separate versions so callers can still tell
+ * them apart via {@link Snapshot.text} — the tag is only a fast index, never
+ * the identity.
  */
 export class InMemorySnapshotStore extends SnapshotStore {
 	readonly #versions: LRUCache<string, Snapshot[]>;
@@ -162,6 +179,11 @@ export class InMemorySnapshotStore extends SnapshotStore {
 		return history?.find(version => version.hash === hash) ?? null;
 	}
 
+	byContent(path: string, fullText: string): Snapshot | null {
+		const history = this.#versions.get(path);
+		return history?.find(version => version.text === fullText) ?? null;
+	}
+
 	findByHash(hash: string): Snapshot[] {
 		const matches: Snapshot[] = [];
 		for (const history of this.#versions.values()) {
@@ -176,7 +198,13 @@ export class InMemorySnapshotStore extends SnapshotStore {
 		const hash = computeFileHash(fullText);
 		// `get` refreshes LRU recency for `path`.
 		const history = this.#versions.get(path) ?? [];
-		const existing = history.find(version => version.hash === hash);
+		// Dedup requires full-text equality, not just tag equality: two distinct
+		// texts that happen to share the 4-hex tag are DIFFERENT snapshots — fusing
+		// them under one entry would corrupt seenLines (attaching lines from
+		// text B onto the stored text A) and let the patcher misresolve which
+		// snapshot the section tag names when it does 3-way merge or seen-line
+		// validation. See issue #4075.
+		const existing = history.find(version => version.hash === hash && version.text === fullText);
 		if (existing) {
 			// Same content state observed again: refresh recency and promote to
 			// head (it is the current file content), then reuse the tag. Union any

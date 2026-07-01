@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed hashline patcher accepting a 16-bit snapshot tag collision as an exact live match, applying line-anchored edits directly to unrelated live content. The store now retains two distinct texts that collide on the 4-hex tag as separate versions, and the patcher requires the stored snapshot's full text to match the live text before taking the no-drift path. ([#4075](https://github.com/can1357/oh-my-pi/issues/4075))
+
 ## [16.2.8] - 2026-06-30
 
 ### Fixed
