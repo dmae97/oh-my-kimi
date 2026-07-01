@@ -35,6 +35,36 @@
 
 - Sped up fuzzy filtering in selectors (model, settings, file/tree, hook, OAuth) by preparing the query once per filter instead of once per candidate, and memoizing the per-text search index across keystrokes. Incremental typing over a 400-item list drops ~57% (6.7ms → 2.9ms for an 8-keystroke session) with no change to match ranking and no first-keystroke regression; long texts (pasted prompts, transcripts) bypass the cache so memory stays bounded.
 
+## [16.2.13] - 2026-07-01
+
+### Fixed
+
+- Fixed fuzzy-search filtering for CJK and other non-ASCII queries by preserving Unicode letters and numbers during query normalization ([#4114](https://github.com/can1357/oh-my-pi/issues/4114)).
+
+## [16.2.12] - 2026-07-01
+
+### Fixed
+
+- Optimized streaming markdown rendering to reuse already-rendered prefix lines and only render new content deltas, improving performance and reducing redraw flicker.
+
+## [16.2.10] - 2026-06-30
+
+### Fixed
+
+- Fixed mid-prompt `/skill:<name>` autocomplete acceptance wiping the user's draft. The autocomplete now inserts the `/skill:<name> ` token at the cursor (replacing only the partial `/sk` slash token) and preserves prose typed before and after it, so a user can compose a prompt and reach for a skill without losing their train of thought ([#3913](https://github.com/can1357/oh-my-pi/issues/3913)).
+
+## [16.2.9] - 2026-06-30
+
+### Added
+
+- Added `Editor.submit()` to allow programmatic composer submission, enabling integration with speech input and other automated flows.
+
+## [16.2.7] - 2026-06-30
+
+### Fixed
+
+- Fixed an issue where a fast double-Escape keypress was swallowed and ignored, preventing double-escape gestures and subsequent Escape key handlers from firing.
+
 ## [16.2.3] - 2026-06-28
 
 ### Added
