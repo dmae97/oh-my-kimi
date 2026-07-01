@@ -2,7 +2,7 @@
 
 The advisor is an optional second model attached to a session. It reviews the primary agent's transcript after each turn, inspects the workspace with its own tools, and injects concise advice back into the primary session.
 
-The advisor is not a second executor: it cannot approve actions or change primary session state directly, and its tool calls flow through the session's normal approval policy. Its default toolset is read-only (`read`, `grep`, `glob`) plus `advise`, but a `WATCHDOG.yml` roster entry may broaden `tools:` to any built-in — including mutating tools such as `edit`, `write`, `bash`, `eval`, and `browser` — subject to the same approval mode as the primary agent (see [Tools and isolation](#tools-and-isolation)).
+The advisor is not a second executor: it cannot approve actions or change primary session state directly. Its default toolset is read-only (`read`, `grep`, `glob`) plus `advise`, but a `WATCHDOG.yml` roster entry may broaden `tools:` to any built-in — including mutating tools such as `edit`, `write`, `bash`, `eval`, and `browser` — so grant those tools only when the advisor model and workspace are trusted (see [Tools and isolation](#tools-and-isolation)).
 
 ## Implementation files
 
@@ -82,7 +82,7 @@ Every advisor has the `advise` tool for surfacing notes into the primary transcr
 
 A `WATCHDOG.yml` roster entry may broaden this with `tools: [...]`, selecting any subset of the built-in pool the session actually built (a factory that returned `null`, e.g. `lsp` with no matching servers, is absent). Grantable tools include mutating ones: `edit`, `write`, `bash`, `eval`, `browser`, `debug`, `ast_edit`, `task`, `job`, and the memory tools. Tool names outside [`BUILTIN_TOOL_NAMES`](../packages/coding-agent/src/tools/builtin-names.ts) are dropped with a warning.
 
-Grants do not bypass approval policy. Write- and exec-tier tools still run through the session's approval mode (`always-ask`, `write`, `yolo`) and any `tools.approval.<tool>` overrides exactly like the primary — the `-advisor` `ToolSession` is a separate state namespace, not a separate policy. In `always-ask` and `write` modes an advisor-initiated exec/write therefore still prompts the user; in `yolo` (or under a per-tool `allow` override) it runs without prompting, so grant mutating tools deliberately.
+Advisor grants are not routed through the primary agent's approval wrapper. The advisor pool is built from the built-in tool factories against its own `-advisor` `ToolSession` and then filtered by `WATCHDOG.yml`; it is not the primary `toolRegistry` wrapped with `ExtensionToolWrapper`. Granting write- or exec-tier tools therefore lets the advisor invoke those tools directly, subject to the tool's own runtime guards but not to `tools.approvalMode` / `tools.approval.<tool>` prompts. Keep mutating grants narrow and trusted.
 
 The `advise` tool accepts one note and an optional severity:
 
@@ -233,7 +233,7 @@ Fields:
 - `instructions` (top level): shared prompt prepended to every advisor's system prompt alongside `WATCHDOG.md`. Concatenated across all discovered `WATCHDOG.yml` files.
 - `advisors[].name`: human label; slugified for the session id and the `<session>/__advisor.jsonl` filename. Duplicate slugs across files are resolved by the same specificity rule as `WATCHDOG.md` discovery (project leaf > project ancestor > user).
 - `advisors[].model`: optional model selector with optional `:level` thinking suffix (e.g. `x-ai/grok-code-fast:high`). Omitted → the advisor uses `modelRoles.advisor`.
-- `advisors[].tools`: optional list of built-in tool names to grant. Omitted or empty → the default `read`/`grep`/`glob` subset. Any name in [`BUILTIN_TOOL_NAMES`](../packages/coding-agent/src/tools/builtin-names.ts) is accepted, including mutating tools (`edit`, `write`, `bash`, `eval`, `browser`, `debug`, `ast_edit`, `task`, `job`, and the memory tools). Legacy aliases (`search`→`grep`, `find`→`glob`) are normalized. Unknown names are dropped with a warning. See [Tools and isolation](#tools-and-isolation) for the approval-policy implications of granting mutating tools.
+- `advisors[].tools`: optional list of built-in tool names to grant. Omitted or empty → the default `read`/`grep`/`glob` subset. Any name in [`BUILTIN_TOOL_NAMES`](../packages/coding-agent/src/tools/builtin-names.ts) is accepted, including mutating tools (`edit`, `write`, `bash`, `eval`, `browser`, `debug`, `ast_edit`, `task`, `job`, and the memory tools). Legacy aliases (`search`→`grep`, `find`→`glob`) are normalized. Unknown names are dropped with a warning. See [Tools and isolation](#tools-and-isolation) for the safety implications of granting mutating tools.
 - `advisors[].instructions`: this advisor's specialization, appended after the shared baseline. Both instruction fields expand `@path` imports like `WATCHDOG.md`.
 
 ### Discovery locations
