@@ -96,9 +96,10 @@ describe("CoreWeave Serverless Inference project header", () => {
 		});
 
 		expect(setup.headers["OpenAI-Project"]).toBe("team/project");
+		expect(setup.headers["openai-project"]).toBeUndefined();
 	});
 
-	test("sends OpenAI-Project on chat-completions requests", async () => {
+	test("sends one OpenAI-Project header on chat-completions requests when a blank override is present", async () => {
 		Bun.env.COREWEAVE_PROJECT = "team/project";
 		const requestHeaders: Headers[] = [];
 		const fetchMock: FetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
@@ -109,6 +110,7 @@ describe("CoreWeave Serverless Inference project header", () => {
 		await completeSimple(getBundledModel("coreweave", "zai-org/GLM-5.2"), context, {
 			apiKey: "coreweave-key",
 			fetch: fetchMock,
+			headers: { "openai-project": "   " },
 		});
 
 		expect(requestHeaders[0]?.get("OpenAI-Project")).toBe("team/project");

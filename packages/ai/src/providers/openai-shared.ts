@@ -17,6 +17,7 @@ import {
 	COREWEAVE_PROJECT_HEADER,
 	coreWeaveProjectHeaders,
 	hasCoreWeaveProjectHeader,
+	removeBlankCoreWeaveProjectHeaders,
 } from "@oh-my-pi/pi-catalog/wire/coreweave";
 import { parseGitHubCopilotApiKey } from "@oh-my-pi/pi-catalog/wire/github-copilot";
 import {
@@ -160,6 +161,7 @@ function resolveSakanaRequestBaseUrl(): string | undefined {
 }
 
 function applyCoreWeaveProjectHeader(headers: Record<string, string>): void {
+	removeBlankCoreWeaveProjectHeaders(headers);
 	if (hasCoreWeaveProjectHeader(headers)) {
 		return;
 	}
