@@ -10,7 +10,7 @@ import {
 import { validateToolCall } from "@oh-my-pi/pi-ai/utils/validation";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/sdk";
-import { BrowserTool } from "@oh-my-pi/pi-coding-agent/tools/browser";
+import { type BrowserParams, BrowserTool } from "@oh-my-pi/pi-coding-agent/tools/browser";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 
 function makeSession(): ToolSession {
@@ -23,17 +23,21 @@ function makeSession(): ToolSession {
 	};
 }
 describe("browser tool schema", () => {
-	it("rejects run calls without code at schema validation", () => {
+	it("rejects run calls without code during execution", async () => {
 		const tool = new BrowserTool(makeSession());
+		const args: BrowserParams = { action: "run", name: "x" };
 		const call: ToolCall = {
 			type: "toolCall",
 			id: "browser-run-without-code",
 			name: "browser",
-			arguments: { action: "run", name: "x" },
+			arguments: args,
 		};
 
-		expect(validateJsonSchemaValue(toolWireSchema(tool), call.arguments).success).toBe(false);
-		expect(() => validateToolCall([tool], call)).toThrow(/Validation failed for tool "browser"[\s\S]*code/);
+		expect(validateJsonSchemaValue(toolWireSchema(tool), call.arguments).success).toBe(true);
+		expect(validateToolCall([tool], call)).toEqual(call.arguments);
+		await expect(
+			tool.execute("browser-run-without-code", args),
+		).rejects.toThrow(/Missing required parameter 'code' for action 'run'/);
 	});
 
 	it("accepts run calls with code at schema validation", () => {

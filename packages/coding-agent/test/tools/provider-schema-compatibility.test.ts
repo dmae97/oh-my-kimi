@@ -128,4 +128,11 @@ describe("builtin tool schemas provider compatibility", () => {
 
 		expect(failures).toEqual([]);
 	});
+
+	it("asserts that browser tool schema root has 'type: \"object\"' for Codex and OpenAI Responses compatibility", async () => {
+		const toolSchemas = await collectToolSchemas();
+		const browserEntry = toolSchemas.find(tool => tool.name === "browser");
+		expect(browserEntry).toBeDefined();
+		expect(browserEntry?.schema.type).toBe("object");
+	});
 });
