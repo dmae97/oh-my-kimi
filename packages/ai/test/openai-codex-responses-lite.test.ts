@@ -147,6 +147,48 @@ describe("openai-codex reasoning.context", () => {
 	});
 });
 
+describe("openai-codex reasoning.summary", () => {
+	it("sends summary on gpt-5.4+ models and honors explicit levels", async () => {
+		const model = createCodexModel("gpt-5.4");
+
+		const defaulted = await transformRequestBody({ model: model.id }, model, { reasoningEffort: "medium" });
+		expect(defaulted.reasoning?.summary).toBe("detailed");
+
+		const explicit = await transformRequestBody({ model: model.id }, model, {
+			reasoningEffort: "medium",
+			reasoningSummary: "concise",
+		});
+		expect(explicit.reasoning?.summary).toBe("concise");
+
+		const suppressed = await transformRequestBody({ model: model.id }, model, {
+			reasoningEffort: "medium",
+			reasoningSummary: null,
+		});
+		expect("summary" in (suppressed.reasoning ?? {})).toBe(false);
+	});
+
+	// gpt-5.1-codex / gpt-5.3-codex / gpt-5.3-codex-spark reject `reasoning.summary`
+	// ("Unsupported parameter: 'reasoning.summary' is not supported with this model").
+	it.each([
+		"gpt-5.1-codex",
+		"gpt-5.3-codex",
+		"gpt-5.3-codex-spark",
+	])("omits reasoning.summary for pre-5.4 model %s", async modelId => {
+		const model = createCodexModel(modelId);
+
+		const defaulted = await transformRequestBody({ model: model.id }, model, { reasoningEffort: "medium" });
+		expect(defaulted.reasoning).toBeDefined();
+		expect("summary" in (defaulted.reasoning ?? {})).toBe(false);
+
+		// Even an explicit summary level is suppressed on unsupported ids.
+		const forced = await transformRequestBody({ model: model.id }, model, {
+			reasoningEffort: "medium",
+			reasoningSummary: "detailed",
+		});
+		expect("summary" in (forced.reasoning ?? {})).toBe(false);
+	});
+});
+
 describe("openai-codex Responses Lite input shaping", () => {
 	it("keeps full Responses image details when a requested lite body contains images", async () => {
 		const model = createCodexModel("gpt-5.1-codex");

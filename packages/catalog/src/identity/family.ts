@@ -123,6 +123,13 @@ export const isOpenAIModelId = memo((modelId: string): boolean => {
 	return /(^|\/)(gpt|o1|o3|o4)[-.]/i.test(modelId) || modelId.toLowerCase().includes("openai/");
 });
 
+/** OpenAI models at or above the gpt-5.4 wire generation, keyed off the parsed version. */
+const isOpenAIWireGen54Plus = memo((modelId: string): boolean => {
+	const parsed = parseOpenAIModel(bareModelId(modelId));
+	if (!parsed) return false;
+	return semverGte(parsed.version, "5.4");
+});
+
 /**
  * OpenAI Codex models that honor `reasoning.context: "all_turns"` (full
  * cross-turn reasoning replay). The `reasoning.context` field itself exists for
@@ -133,11 +140,17 @@ export const isOpenAIModelId = memo((modelId: string): boolean => {
  * floor (not an allowlist) so 5.6/6.x inherit support automatically. Callers
  * fall back to omitting `context`, letting the server default to `current_turn`.
  */
-export const supportsAllTurnsReasoningContext = memo((modelId: string): boolean => {
-	const parsed = parseOpenAIModel(bareModelId(modelId));
-	if (!parsed) return false;
-	return semverGte(parsed.version, "5.4");
-});
+export const supportsAllTurnsReasoningContext = isOpenAIWireGen54Plus;
+
+/**
+ * OpenAI Codex models that accept `reasoning.summary`. Shares the gpt-5.4 wire
+ * floor with {@link supportsAllTurnsReasoningContext}: earlier Codex ids
+ * (`gpt-5.1-codex`, `gpt-5.3-codex`, `gpt-5.3-codex-spark`) reject the field
+ * with `Unsupported parameter: 'reasoning.summary' is not supported with this
+ * model`. Callers omit `summary` for unsupported ids, letting the server skip
+ * the human-readable summary stream.
+ */
+export const supportsCodexReasoningSummary = isOpenAIWireGen54Plus;
 
 /**
  * Reasoning-capable GLM coding SKUs: glm-4.5 and up on the base / `-air` /

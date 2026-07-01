@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed pre-5.4 OpenAI Codex models (`gpt-5.1-codex`, `gpt-5.3-codex`, `gpt-5.3-codex-spark`) rejecting requests with `Unsupported parameter: 'reasoning.summary' is not supported with this model` by gating `reasoning.summary` behind the same gpt-5.4 wire floor as `reasoning.context: "all_turns"`.
+
 ## [16.2.12] - 2026-07-01
 
 ### Changed
