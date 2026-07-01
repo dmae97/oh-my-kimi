@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Bounded ConPTY full-paint resume frames to the retained visible tail so large Windows session restores do not get truncated mid-frame by the host.
+
 ## [16.2.13] - 2026-07-01
 
 ### Fixed

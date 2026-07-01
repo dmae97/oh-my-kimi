@@ -978,6 +978,8 @@ export class TUI extends Container {
 	// ConPTY hosts (`isConPTYHosted()`); other terminals do not exhibit the
 	// drift and would just see an unnecessary post-paint latency. See #2095.
 	static readonly #CONPTY_POST_FULL_PAINT_SETTLE_MS = 150;
+	static readonly #CONPTY_FRAME_TRUNCATE_THRESHOLD_BYTES = 512 * 1024;
+	static readonly #CONPTY_FRAME_RETAIN_BYTES = 64 * 1024;
 	#postFullPaintSettleUntilMs = 0;
 	#postFullPaintSettleTimer: RenderTimer | undefined;
 	#hardwareCursorRow = 0; // Actual terminal cursor row (may differ due to IME positioning)
@@ -2480,6 +2482,56 @@ export class TUI extends Container {
 		return markers;
 	}
 
+	#truncateLargeConptyFrame(
+		lines: string[],
+		width: number,
+		height: number,
+		cursorPos: { row: number; col: number } | null,
+	): { lines: string[]; cursorPos: { row: number; col: number } | null } {
+		if (!isConPTYHosted()) return { lines, cursorPos };
+
+		let totalBytes = 0;
+		let exceedsThreshold = false;
+		for (const line of lines) {
+			totalBytes += Buffer.byteLength(line, "utf8") + 8;
+			if (totalBytes > TUI.#CONPTY_FRAME_TRUNCATE_THRESHOLD_BYTES) {
+				exceedsThreshold = true;
+				break;
+			}
+		}
+		if (!exceedsThreshold) return { lines, cursorPos };
+
+		let retainedBytes = 0;
+		let retainedStart = lines.length;
+		while (
+			retainedStart > 0 &&
+			(retainedBytes < TUI.#CONPTY_FRAME_RETAIN_BYTES || lines.length - retainedStart < height)
+		) {
+			retainedStart -= 1;
+			retainedBytes += Buffer.byteLength(lines[retainedStart] ?? "", "utf8") + 8;
+		}
+		if (retainedStart <= 0) return { lines, cursorPos };
+
+		const marker = truncateToWidth(
+			`[${retainedStart} older lines hidden to keep Windows console resume responsive]`,
+			width,
+			Ellipsis.Omit,
+		);
+		const truncated = new Array<string>(lines.length - retainedStart + 1);
+		truncated[0] = marker;
+		for (let i = retainedStart; i < lines.length; i++) {
+			truncated[i - retainedStart + 1] = lines[i] ?? "";
+		}
+
+		if (cursorPos === null || cursorPos.row < retainedStart) {
+			return { lines: truncated, cursorPos: null };
+		}
+		return {
+			lines: truncated,
+			cursorPos: { row: cursorPos.row - retainedStart + 1, col: cursorPos.col },
+		};
+	}
+
 	#terminalLine(line: string): string {
 		if (TERMINAL.isImageLine(line)) return line;
 		const coalesced = coalesceAdjacentSgr(line);
@@ -3224,6 +3276,22 @@ export class TUI extends Container {
 	): void {
 		this.#fullRedrawCount += 1;
 		const { chunkTo, windowTop } = options;
+		const paintFrame = new Array<string>(chunkTo + height);
+		for (let i = 0; i < chunkTo; i++) paintFrame[i] = frame[i] ?? "";
+		for (let screenRow = 0; screenRow < height; screenRow++) {
+			paintFrame[chunkTo + screenRow] = window[screenRow] ?? "";
+		}
+		let untruncatedPaintCursorPos: { row: number; col: number } | null = null;
+		if (cursorPos !== null) {
+			if (cursorPos.row < chunkTo) {
+				untruncatedPaintCursorPos = cursorPos;
+			} else if (cursorPos.row >= windowTop && cursorPos.row < windowTop + height) {
+				untruncatedPaintCursorPos = { row: chunkTo + cursorPos.row - windowTop, col: cursorPos.col };
+			}
+		}
+		const paint = this.#truncateLargeConptyFrame(paintFrame, width, height, untruncatedPaintCursorPos);
+		const paintLines = paint.lines;
+		const paintCursorPos = paint.cursorPos;
 		let buffer = this.#paintBeginSequence + this.#leaveResizeAltSequence() + purgeSequence;
 		if (options.clearScrollback) {
 			buffer += "\x1b[2J\x1b[H\x1b[3J";
@@ -3240,21 +3308,23 @@ export class TUI extends Container {
 		// DECCARA fills optimize only the rows that stay visible; history-bound
 		// rows are written as full styled strings (their background must
 		// survive in scrollback, which DECCARA cannot reach).
-		const { texts, sequence } = this.#deccaraFillsEnabled()
-			? planDeccaraFills(window, width)
-			: { texts: window, sequence: "" };
-		let wroteLine = false;
-		for (let i = 0; i < chunkTo; i++) {
-			if (wroteLine) buffer += "\r\n";
-			buffer += this.#terminalLine(frame[i] ?? "");
-			wroteLine = true;
+		const visibleStart = Math.max(0, paintLines.length - height);
+		let fillSequence = "";
+		let visibleTexts: string[] | null = null;
+		if (this.#deccaraFillsEnabled() && visibleStart < paintLines.length) {
+			const visible = new Array<string>(paintLines.length - visibleStart);
+			for (let k = 0; k < visible.length; k++) visible[k] = paintLines[visibleStart + k] ?? "";
+			const plan = planDeccaraFills(visible, width);
+			visibleTexts = plan.texts;
+			fillSequence = plan.sequence;
 		}
-		for (let screenRow = 0; screenRow < height; screenRow++) {
-			if (wroteLine) buffer += "\r\n";
-			buffer += this.#terminalLine(texts[screenRow] ?? "");
-			wroteLine = true;
+		for (let i = 0; i < paintLines.length; i++) {
+			if (i > 0) buffer += "\r\n";
+			buffer += this.#terminalLine(
+				visibleTexts && i >= visibleStart ? visibleTexts[i - visibleStart] : (paintLines[i] ?? ""),
+			);
 		}
-		buffer += sequence;
+		buffer += fillSequence;
 		// Park the hardware cursor at real content bottom, not the padded
 		// window bottom — a later height shrink would otherwise scroll live
 		// rows into scrollback and duplicate them per resize step.
@@ -3262,14 +3332,28 @@ export class TUI extends Container {
 		const parkUp = height - contentRows;
 		if (parkUp > 0) buffer += `\x1b[${parkUp}A`;
 		const contentBottomRow = windowTop + contentRows - 1;
-		const cursorControl = this.#cursorControlSequence(cursorPos, frame.length, contentBottomRow);
+		const paintContentBottomRow = Math.max(0, paintLines.length - 1 - parkUp);
+		const cursorControl = this.#cursorControlSequence(paintCursorPos, paintLines.length, paintContentBottomRow);
 		buffer += cursorControl.seq;
 		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
 
+		const committedCursorState = paintCursorPos ? this.#targetHardwareCursorState(cursorPos, frame.length) : null;
+		const committedCursor = committedCursorState
+			? {
+					toRow: committedCursorState.row,
+					state: committedCursorState,
+					visible: committedCursorState.visible,
+				}
+			: {
+					toRow: contentBottomRow,
+					state: null,
+					visible: cursorControl.visible,
+				};
+
 		this.#committedRows = chunkTo;
 		this.#windowTopRow = windowTop;
-		this.#commit(frame, window, width, height, cursorControl);
+		this.#commit(frame, window, width, height, committedCursor);
 	}
 
 	/**
