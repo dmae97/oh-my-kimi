@@ -225,11 +225,20 @@ export class RpcClient {
 
 	/**
 	 * Start the RPC agent process.
+	 *
+	 * Safe to call again after {@link stop} on the same instance: a fresh
+	 * {@link AbortController} is minted for each start, and any failure after
+	 * the child spawn kills the child and clears internal state so callers may
+	 * retry without leaking processes.
 	 */
 	async start(): Promise<void> {
 		if (this.#process) {
 			throw new Error("Client already started");
 		}
+
+		// Mint a fresh controller so a previous stop()'s abort does not
+		// short-circuit the new stdout reader (issue #4079).
+		this.#abortController = new AbortController();
 
 		const cliPath = this.options.cliPath ?? "dist/cli.js";
 		const args = ["--mode", "rpc"];
@@ -304,6 +313,18 @@ export class RpcClient {
 			if (this.#customTools.length > 0) {
 				await this.setCustomTools(this.#customTools);
 			}
+		} catch (err) {
+			// Startup failed after we spawned the child. Kill it and clear
+			// state so the caller (or a retry via start() again) does not
+			// leak the abandoned process (issue #4079).
+			try {
+				this.#process?.kill();
+			} catch {
+				// best-effort cleanup
+			}
+			this.#abortController.abort();
+			this.#process = null;
+			throw err;
 		} finally {
 			clearTimeout(readyTimeout);
 		}

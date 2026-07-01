@@ -1,0 +1,164 @@
+import { describe, expect, test } from "bun:test";
+import {
+	dispatchRpcInputFrame,
+	type PendingExtensionRequest,
+	type RpcInputFrameDeps,
+} from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
+import type { RpcCommand, RpcResponse } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
+
+type OutputFrame = RpcResponse | object;
+
+const makeDeps = (handleCommand: RpcInputFrameDeps["handleCommand"]) => {
+	const outputs: OutputFrame[] = [];
+	const deps: RpcInputFrameDeps = {
+		handleCommand,
+		output: obj => {
+			outputs.push(obj as OutputFrame);
+		},
+		errorResponse: (id, command, message) => ({
+			id,
+			type: "response",
+			command,
+			success: false,
+			error: message,
+		}),
+		pendingExtensionRequests: new Map<string, PendingExtensionRequest>(),
+		onHostToolResult: () => {},
+		onHostToolUpdate: () => {},
+		onHostUriResult: () => {},
+	};
+	return { deps, outputs };
+};
+
+const flushMicrotasks = () => new Promise<void>(resolve => setImmediate(resolve));
+
+const cancelledBashResponse = (id: string): RpcResponse => ({
+	id,
+	type: "response",
+	command: "bash",
+	success: true,
+	data: {
+		output: "",
+		exitCode: -1,
+		cancelled: true,
+		truncated: false,
+		totalLines: 0,
+		totalBytes: 0,
+		outputLines: 0,
+		outputBytes: 0,
+	},
+});
+
+describe("dispatchRpcInputFrame", () => {
+	test("bash is dispatched in the background so abort_bash preempts it (issue #4079 A)", async () => {
+		const { promise: bashPending, resolve: resolveBash } = Promise.withResolvers<RpcResponse>();
+		let abortBashCalled = false;
+
+		const handleCommand = async (command: RpcCommand): Promise<RpcResponse> => {
+			if (command.type === "bash") {
+				// Block until abort_bash resolves the shared promise.
+				return await bashPending;
+			}
+			if (command.type === "abort_bash") {
+				abortBashCalled = true;
+				// Emulate `session.abortBash()` cancelling the in-flight bash so
+				// the queued executeBash promise resolves with cancelled=true.
+				resolveBash(cancelledBashResponse("b1"));
+				return { id: command.id, type: "response", command: "abort_bash", success: true };
+			}
+			throw new Error(`unexpected command type: ${command.type}`);
+		};
+
+		const { deps, outputs } = makeDeps(handleCommand);
+
+		// Kick off bash. If the fix works, dispatchRpcInputFrame returns
+		// undefined immediately without waiting for handleCommand.
+		const bashAwait = dispatchRpcInputFrame({ id: "b1", type: "bash", command: "sleep 9999" }, deps);
+		expect(bashAwait).toBeUndefined();
+		await flushMicrotasks();
+		expect(outputs).toHaveLength(0);
+
+		// Now dispatch abort_bash. It must run serially (not backgrounded)
+		// and resolve after handleCommand completes.
+		const abortAwait = dispatchRpcInputFrame({ id: "a1", type: "abort_bash" }, deps);
+		expect(abortAwait).toBeInstanceOf(Promise);
+		await abortAwait;
+
+		expect(abortBashCalled).toBe(true);
+		expect(outputs[0]).toEqual({
+			id: "a1",
+			type: "response",
+			command: "abort_bash",
+			success: true,
+		});
+
+		// The background bash response arrives after abort_bash.
+		await flushMicrotasks();
+		expect(outputs).toHaveLength(2);
+		const bashFrame = outputs[1] as RpcResponse;
+		expect(bashFrame.command).toBe("bash");
+		expect(bashFrame.success).toBe(true);
+		if (bashFrame.command === "bash" && bashFrame.success) {
+			expect(bashFrame.data.cancelled).toBe(true);
+			expect(bashFrame.data.exitCode).toBe(-1);
+		}
+	});
+
+	test("non-bash commands are dispatched serially (ordering preserved)", async () => {
+		const started: string[] = [];
+		const finished: string[] = [];
+		const handleCommand = async (command: RpcCommand): Promise<RpcResponse> => {
+			started.push(command.type);
+			await Bun.sleep(5);
+			finished.push(command.type);
+			if (command.type === "abort_retry") {
+				return { id: command.id, type: "response", command: "abort_retry", success: true };
+			}
+			if (command.type === "set_auto_retry") {
+				return { id: command.id, type: "response", command: "set_auto_retry", success: true };
+			}
+			throw new Error(`unexpected: ${command.type}`);
+		};
+
+		const { deps, outputs } = makeDeps(handleCommand);
+
+		const first = dispatchRpcInputFrame({ id: "c1", type: "abort_retry" }, deps);
+		expect(first).toBeInstanceOf(Promise);
+		// The input loop awaits each command's promise before pulling the next
+		// frame; simulate that contract by awaiting before the next dispatch.
+		await first;
+		expect(outputs).toHaveLength(1);
+		expect(started).toEqual(["abort_retry"]);
+		expect(finished).toEqual(["abort_retry"]);
+
+		const second = dispatchRpcInputFrame({ id: "c2", type: "set_auto_retry", enabled: true }, deps);
+		await second;
+		expect(outputs).toHaveLength(2);
+		expect(started).toEqual(["abort_retry", "set_auto_retry"]);
+	});
+
+	test("bash handler errors surface as an error response on the background frame", async () => {
+		const handleCommand = async (command: RpcCommand): Promise<RpcResponse> => {
+			if (command.type === "bash") throw new Error("kaboom");
+			throw new Error(`unexpected: ${command.type}`);
+		};
+
+		const { deps, outputs } = makeDeps(handleCommand);
+
+		const awaited = dispatchRpcInputFrame({ id: "b2", type: "bash", command: "echo hi" }, deps);
+		expect(awaited).toBeUndefined();
+
+		// Give the background dispatch a chance to run its catch.
+		await flushMicrotasks();
+		await flushMicrotasks();
+
+		expect(outputs).toHaveLength(1);
+		expect(outputs[0]).toEqual({
+			id: "b2",
+			type: "response",
+			command: "bash",
+			success: false,
+			error: "kaboom",
+		});
+	});
+});

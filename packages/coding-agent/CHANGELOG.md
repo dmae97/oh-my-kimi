@@ -31,6 +31,10 @@
 ### Fixed
 
 - Fixed git and GitHub CLI subprocesses hanging on interactive credential prompts or buffering unbounded output by forcing non-interactive env defaults, adding a timeout, and capping captured stdout/stderr. ([#4072](https://github.com/can1357/oh-my-pi/issues/4072))
+### Fixed
+
+- Fixed RPC mode `abort_bash` being queued behind the `bash` command it must cancel; the input loop now dispatches `bash` in the background so `abort_bash` (and other commands) can preempt a running shell command ([#4079](https://github.com/can1357/oh-my-pi/issues/4079)).
+- Fixed `RpcClient.start()` failing on a second call to the same instance after `stop()` (or after a failed first start) by minting a fresh `AbortController` per start and cleaning up the spawned child on startup failure ([#4079](https://github.com/can1357/oh-my-pi/issues/4079)).
 
 ## [16.2.12] - 2026-07-01
 
