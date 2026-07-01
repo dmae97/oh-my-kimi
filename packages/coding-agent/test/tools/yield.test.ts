@@ -410,6 +410,89 @@ describe("YieldTool", () => {
 		);
 	});
 
+	it("rejects unknown incremental labels for JTD discriminator (oneOf-of-closed) caller schemas", async () => {
+		// JTD discriminator output schemas compile to a top-level `oneOf` of closed object
+		// variants (no root `additionalProperties: false`, no `allOf`). Closure MUST be derived
+		// across the union — otherwise a stale label is accepted here and, once a sibling section
+		// exhausts MAX_SCHEMA_RETRIES, finalizeSubprocessOutput honors schemaOverridden and the
+		// stale label lands in a "successful" result (PR #3927 review).
+		const tool = new YieldTool(
+			createSession({
+				outputSchema: {
+					discriminator: "verdict",
+					mapping: {
+						clean: {
+							properties: { issue_key: { type: "string" } },
+						},
+						blockers: {
+							properties: { issue_key: { type: "string" } },
+							optionalProperties: {
+								blockers: { elements: { properties: { title: { type: "string" } } } },
+							},
+						},
+					},
+				},
+			}),
+		);
+
+		await expect(
+			tool.execute("call-jtd-discriminator-stale-label", {
+				type: ["findings"],
+				result: { data: { title: "native reviewer finding" } },
+			} as never),
+		).rejects.toThrow(
+			/Section "findings" uses unknown incremental yield label\(s\): "findings"\. Resubmit with one of the schema's labels: "issue_key", "verdict", "blockers"\./,
+		);
+
+		// A label declared by only ONE variant is known: union semantics are disjunctive, the
+		// assembled output only has to match one variant.
+		const singleVariantLabel = await tool.execute("call-jtd-discriminator-variant-label", {
+			type: ["blockers"],
+			result: { data: { title: "blocker from the blockers variant" } },
+		} as never);
+		expect(singleVariantLabel.details?.data).toEqual({ title: "blocker from the blockers variant" });
+
+		// The discriminator property itself is declared by every variant.
+		const discriminatorLabel = await tool.execute("call-jtd-discriminator-tag-label", {
+			type: ["verdict"],
+			result: { data: "blockers" },
+		} as never);
+		expect(discriminatorLabel.details?.data).toBe("blockers");
+	});
+
+	it("does not gate incremental labels when a oneOf variant is open", async () => {
+		// One open variant (`additionalProperties` not false) accepts arbitrary top-level
+		// properties, so the union places no constraint on labels — engaging the gate would
+		// reject labels the schema actually allows.
+		const tool = new YieldTool(
+			createSession({
+				outputSchema: {
+					oneOf: [
+						{
+							type: "object",
+							properties: {
+								issue_key: { type: "string" },
+								verdict: { enum: ["clean", "blockers"] },
+							},
+							required: ["issue_key", "verdict"],
+							additionalProperties: false,
+						},
+						{
+							type: "object",
+							properties: { notes: { type: "string" } },
+						},
+					],
+				},
+			}),
+		);
+
+		const result = await tool.execute("call-open-variant-label", {
+			type: ["findings"],
+			result: { data: { title: "accepted because one variant is open" } },
+		} as never);
+		expect(result.details?.data).toEqual({ title: "accepted because one variant is open" });
+	});
+
 	it("detects array-valued labels when the closed caller schema is a root $ref", () => {
 		const labels = arrayValuedLabels({
 			$ref: "#/$defs/Closed",

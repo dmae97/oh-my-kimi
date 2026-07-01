@@ -390,8 +390,9 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 	}
 
 	/**
-	 * Return incremental yield labels that are not declared as top-level properties of a closed
-	 * caller schema. Open schemas (no `additionalProperties: false`) accept any label.
+	 * Return incremental yield labels the closed caller schema does not accept. Closure covers the
+	 * root, `allOf` conjuncts, and `oneOf`/`anyOf` unions whose every variant is closed (e.g. JTD
+	 * discriminators). Open schemas accept any label.
 	 */
 	#unknownIncrementalLabels(labels: string[]): string[] {
 		if (!this.#rejectUnknownSections) return [];

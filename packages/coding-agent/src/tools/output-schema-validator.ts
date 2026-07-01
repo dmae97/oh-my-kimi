@@ -139,14 +139,38 @@ interface SectionLabelMetadata {
 	isKnown(label: string): boolean;
 }
 
+/**
+ * Derive incremental-label metadata from top-level schema closure.
+ *
+ * The unknown-label gate (`rejectUnknownSections`) engages when the schema constrains top-level
+ * property names anywhere: a closed conjunct (root or recursive `allOf` child with
+ * `additionalProperties: false`) or a `oneOf`/`anyOf` union whose EVERY variant is closed. A label
+ * is known iff every closed conjunct accepts it AND, per closed union, at least one variant
+ * accepts it (union semantics are disjunctive — the assembled output only has to match one
+ * variant). Unions containing any open variant never gate: the open variant accepts arbitrary
+ * labels, so rejection would be a false positive.
+ */
 function buildSectionLabelMetadata(jsonSchema: Record<string, unknown>): SectionLabelMetadata {
-	const closedSchemas = collectClosedTopLevelSchemas(jsonSchema);
-	const labels = [...new Set(closedSchemas.flatMap(schema => declaredPropertyLabels(schema)))];
+	const closedConjuncts = collectClosedTopLevelSchemas(jsonSchema);
+	const closedUnions = collectClosedTopLevelUnions(jsonSchema);
+	const closed = closedConjuncts.length > 0 || closedUnions.length > 0;
+	const acceptedByAll = (conjuncts: readonly Record<string, unknown>[], label: string): boolean =>
+		conjuncts.every(schema => schemaAcceptsSectionLabel(schema, label));
+	const labels = [
+		...new Set([
+			...closedConjuncts.flatMap(schema => declaredPropertyLabels(schema)),
+			...closedUnions.flatMap(variants =>
+				variants.flatMap(conjuncts => conjuncts.flatMap(schema => declaredPropertyLabels(schema))),
+			),
+		]),
+	];
 	return {
 		labels,
-		rejectUnknownSections: closedSchemas.length > 0,
+		rejectUnknownSections: closed,
 		isKnown: label =>
-			closedSchemas.length === 0 || closedSchemas.every(schema => schemaAcceptsSectionLabel(schema, label)),
+			!closed ||
+			(acceptedByAll(closedConjuncts, label) &&
+				closedUnions.every(variants => variants.some(conjuncts => acceptedByAll(conjuncts, label)))),
 	};
 }
 
@@ -162,6 +186,43 @@ function collectClosedTopLevelSchemas(jsonSchema: Record<string, unknown>): Reco
 		}
 	}
 	return schemas;
+}
+
+/** One fully-closed `oneOf`/`anyOf` union: per variant, that variant's closed conjunct schemas. */
+type ClosedUnionVariants = Record<string, unknown>[][];
+
+/**
+ * Collect top-level `oneOf`/`anyOf` unions in which EVERY variant is closed — i.e. each variant
+ * (or one of its `allOf` conjuncts, resolved via `collectClosedTopLevelSchemas`) carries
+ * `additionalProperties: false`. JTD discriminator output schemas compile to exactly this shape:
+ * a root `oneOf` of closed object variants. Unions with any open (or non-object) variant are
+ * skipped entirely so the unknown-label gate cannot fire false rejections. Unions nested under
+ * `allOf` conjuncts gate identically (intersection semantics).
+ */
+function collectClosedTopLevelUnions(jsonSchema: Record<string, unknown>): ClosedUnionVariants[] {
+	const unions: ClosedUnionVariants[] = [];
+	for (const key of ["oneOf", "anyOf"] as const) {
+		const rawVariants = jsonSchema[key];
+		if (!Array.isArray(rawVariants) || rawVariants.length === 0) continue;
+		const variants: ClosedUnionVariants = [];
+		let allClosed = true;
+		for (const raw of rawVariants) {
+			const conjuncts = isRecord(raw) ? collectClosedTopLevelSchemas(raw) : [];
+			if (conjuncts.length === 0) {
+				allClosed = false;
+				break;
+			}
+			variants.push(conjuncts);
+		}
+		if (allClosed) unions.push(variants);
+	}
+	const allOf = jsonSchema.allOf;
+	if (Array.isArray(allOf)) {
+		for (const raw of allOf) {
+			if (isRecord(raw)) unions.push(...collectClosedTopLevelUnions(raw));
+		}
+	}
+	return unions;
 }
 
 function declaredPropertyLabels(jsonSchema: Record<string, unknown>): string[] {
