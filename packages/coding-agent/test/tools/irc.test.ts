@@ -558,6 +558,35 @@ describe("IRC", () => {
 			expect(text).toContain("No reply from 0-Sub");
 		});
 
+		it("op=send await=true preserves the delivery receipt when the wait is interrupted", async () => {
+			// Regression: the tool is marked interruptible so `job poll` / `irc wait` return
+			// early on incoming messages, but `send await:true` also runs the reply wait under
+			// the same signal. If the abort lands after the message was delivered, the tool
+			// must surface a successful receipt so the agent loop keeps the tool as "sent"
+			// and does not report it as skipped — which would prompt a duplicate resend.
+			const sub = makeFakeSession();
+			registry.register({ id: "0-Sub", displayName: "task", kind: "sub", session: sub.session });
+
+			const tool = new IrcTool(makeToolSession(registry, "0-Main"));
+			const controller = new AbortController();
+			// Abort once delivery reaches the peer, mimicking a steering / IRC interrupt
+			// landing between the send resolving and the reply arriving.
+			sub.onDeliver(() => controller.abort(new Error("mock interrupt")));
+
+			const result = await tool.execute(
+				"call-1",
+				{ op: "send", to: "0-Sub", message: "ping", await: true, timeoutMs: 30_000 },
+				controller.signal,
+			);
+
+			expect(result.isError).toBeFalsy();
+			expect(sub.delivered.map(msg => msg.body)).toEqual(["ping"]);
+			expect(result.details?.receipts?.[0]?.outcome).toBe("injected");
+			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+			expect(text).toContain("Send delivered");
+			expect(text).toContain("interrupted");
+		});
+
 		it("op=send rejects await with to=all and self-sends", async () => {
 			const tool = new IrcTool(makeToolSession(registry, "0-Main"));
 			const broadcast = await tool.execute("call-1", { op: "send", to: "all", message: "x", await: true });
