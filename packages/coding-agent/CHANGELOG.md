@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed session context and branch path reconstruction doing quadratic `Array.unshift` work on deep linear histories. ([#3961](https://github.com/can1357/oh-my-pi/issues/3961))
+
 ## [16.2.11] - 2026-07-01
 
 ### Fixed

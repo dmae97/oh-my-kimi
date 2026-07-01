@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import type { CustomEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { assistantMsg, userMsg } from "../utilities";
@@ -158,6 +158,22 @@ describe("SessionManager append and tree traversal", () => {
 			const path = session.getBranch(id2);
 			expect(path).toHaveLength(2);
 			expect(path.map(e => e.id)).toEqual([id1, id2]);
+		});
+
+		it("returns deep branch paths without quadratic unshift work", () => {
+			const session = SessionManager.inMemory();
+			const ids: string[] = [];
+			for (let i = 0; i < 1000; i++) {
+				ids.push(session.appendMessage(userMsg(`message-${i}`)));
+			}
+
+			const unshift = spyOn(Array.prototype, "unshift");
+			try {
+				expect(session.getBranch().map(entry => entry.id)).toEqual(ids);
+				expect(unshift).not.toHaveBeenCalled();
+			} finally {
+				unshift.mockRestore();
+			}
 		});
 	});
 
