@@ -89,6 +89,16 @@
 	text-align: center;
 }
 
+/* Terminal transcript-read failure reported by the host (drawer stops polling). */
+.ag-fetch-error {
+	padding: 10px;
+	color: var(--err);
+	font-size: 12px;
+	text-align: center;
+	border-top: 1px solid color-mix(in srgb, var(--err) 25%, transparent);
+	overflow-wrap: anywhere;
+}
+
 /* ── Status dot ───────────────────────────────────────────────────── */
 
 .ag-dot {

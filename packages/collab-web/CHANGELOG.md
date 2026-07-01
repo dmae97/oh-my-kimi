@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed an issue in the mobile collaboration web UI where 'ask' questions were displayed without response controls.
+- Fixed the agent transcript drawer hot-retrying forever when the host reports a terminal transcript error (such as an oversized row); the error now stops polling and is shown below any rows already loaded.
 
 ## [16.2.0] - 2026-06-27
 

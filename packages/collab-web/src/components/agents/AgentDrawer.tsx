@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import type { GuestClient } from "../../lib/client";
 import { fmtCost, fmtDuration, fmtTokens } from "../../lib/format";
-import { parseJsonl } from "../../lib/jsonl";
+import { decideTranscriptPoll } from "../../lib/transcript-poll";
 import type { TranscriptProps } from "../transcript/Transcript";
 import { Transcript } from "../transcript/Transcript";
 
@@ -23,6 +23,7 @@ export function AgentDrawer(props: {
 }): ReactNode {
 	const { agent, progress, client, readOnly, host, onClose } = props;
 	const [entries, setEntries] = useState<readonly SessionEntry[]>([]);
+	const [fetchError, setFetchError] = useState<string | null>(null);
 	const [draft, setDraft] = useState("");
 
 	useEffect(() => {
@@ -36,45 +37,58 @@ export function AgentDrawer(props: {
 	// Live transcript: poll the host-side session file while the drawer is
 	// open, appending parsed JSONL entries. State resets when the agent
 	// changes; the interval and any in-flight reply are dropped on cleanup.
+	// A frame-level host error is terminal: stop polling and show it (the
+	// host replies with an unchanged cursor, so retrying would loop hot).
 	useEffect(() => {
 		setEntries([]);
+		setFetchError(null);
 		if (!agent.hasSessionFile) return;
 		let disposed = false;
 		let inFlight = false;
 		let cursor = 0;
 		let carry = "";
 		let acc: readonly SessionEntry[] = [];
+		let timer: Timer | null = null;
+		const stopPolling = () => {
+			if (timer !== null) {
+				clearInterval(timer);
+				timer = null;
+			}
+		};
 		const poll = async (): Promise<void> => {
 			if (disposed || inFlight) return;
 			inFlight = true;
 			try {
 				const reply = await client.fetchTranscript(agent.id, cursor);
-				if (disposed || reply === null) return; // timeout/error → keep polling
-				cursor = reply.newSize;
-				if (!reply.text) return;
-				const parsed = parseJsonl(reply.text, carry);
-				carry = parsed.carry;
-				const fresh: SessionEntry[] = [];
-				for (const item of parsed.items) {
-					if (typeof item !== "object" || item === null) continue;
-					if ((item as { type?: unknown }).type === "session") continue;
-					fresh.push(item as SessionEntry);
-				}
-				if (fresh.length > 0) {
-					acc = [...acc, ...fresh];
-					setEntries(acc);
+				if (disposed) return;
+				const decision = decideTranscriptPoll(reply, carry);
+				switch (decision.action) {
+					case "retry":
+						return; // timeout/transient → keep polling from the same cursor
+					case "stop":
+						stopPolling();
+						setFetchError(decision.message);
+						return;
+					case "advance":
+						cursor = decision.newSize;
+						carry = decision.carry;
+						if (decision.fresh.length > 0) {
+							acc = [...acc, ...decision.fresh];
+							setEntries(acc);
+						}
+						return;
 				}
 			} finally {
 				inFlight = false;
 			}
 		};
 		void poll();
-		const timer = setInterval(() => {
+		timer = setInterval(() => {
 			void poll();
 		}, POLL_MS);
 		return () => {
 			disposed = true;
-			clearInterval(timer);
+			stopPolling();
 		};
 	}, [agent.id, agent.hasSessionFile, client]);
 
@@ -154,15 +168,22 @@ export function AgentDrawer(props: {
 			) : null}
 			<div className="ag-drawer-body">
 				{agent.hasSessionFile ? (
-					<Transcript
-						compact
-						entries={entries}
-						stream={null}
-						streamDone={false}
-						activeTools={EMPTY_TOOLS}
-						working={agent.status === "running"}
-						host={host}
-					/>
+					<>
+						<Transcript
+							compact
+							entries={entries}
+							stream={null}
+							streamDone={false}
+							activeTools={EMPTY_TOOLS}
+							working={agent.status === "running" && fetchError === null}
+							host={host}
+						/>
+						{fetchError !== null ? (
+							<div className="ag-fetch-error" role="alert">
+								transcript unavailable: {fetchError}
+							</div>
+						) : null}
+					</>
 				) : (
 					<div className="ag-empty">no transcript available</div>
 				)}

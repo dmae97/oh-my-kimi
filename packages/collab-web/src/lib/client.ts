@@ -74,8 +74,17 @@ const WELCOME_TIMEOUT_MS = 30_000;
 /** Mirrors the TUI guest's SNAPSHOT_PROGRESS_TIMEOUT_MS: every snapshot chunk must make progress. */
 const SNAPSHOT_PROGRESS_TIMEOUT_MS = 30_000;
 
+/**
+ * One fetch-transcript round trip.
+ * - `rows`: decoded JSONL from `fromByte`; `newSize` is the next offset base.
+ * - `error`: terminal read failure reported by the host (unchanged cursor);
+ *   callers must surface it and stop polling instead of hot retrying.
+ * Transient failures (timeout, session end) resolve `null` and are retryable.
+ */
+export type TranscriptResult = { kind: "rows"; text: string; newSize: number } | { kind: "error"; message: string };
+
 interface PendingTranscript {
-	resolve: (result: { text: string; newSize: number } | null) => void;
+	resolve: (result: TranscriptResult | null) => void;
 	timer: Timer;
 }
 
@@ -180,10 +189,14 @@ export class GuestClient {
 		this.#socket.send({ t: "agent-cmd", cmd, agentId, text });
 	}
 
-	/** Incremental subagent-transcript read. Resolves null on error reply or 10s timeout. */
-	fetchTranscript(agentId: string, fromByte: number): Promise<{ text: string; newSize: number } | null> {
+	/**
+	 * Incremental subagent-transcript read. Resolves a {@link TranscriptResult}
+	 * (`rows` or terminal `error`), or `null` on transient failure (10s timeout,
+	 * session end) where re-polling from the same cursor is correct.
+	 */
+	fetchTranscript(agentId: string, fromByte: number): Promise<TranscriptResult | null> {
 		const reqId = ++this.#reqSeq;
-		const { promise, resolve } = Promise.withResolvers<{ text: string; newSize: number } | null>();
+		const { promise, resolve } = Promise.withResolvers<TranscriptResult | null>();
 		const timer = setTimeout(() => {
 			this.#pendingTranscripts.delete(reqId);
 			resolve(null);
@@ -354,7 +367,11 @@ export class GuestClient {
 				if (pending) {
 					this.#pendingTranscripts.delete(frame.reqId);
 					clearTimeout(pending.timer);
-					pending.resolve(frame.error !== undefined ? null : { text: frame.text, newSize: frame.newSize });
+					pending.resolve(
+						frame.error !== undefined
+							? { kind: "error", message: frame.error }
+							: { kind: "rows", text: frame.text, newSize: frame.newSize },
+					);
 				}
 				break;
 			}
