@@ -256,7 +256,7 @@ class ThemeSceneController implements SetupSceneController {
 		} else {
 			this.host.ctx.settings.set("theme.dark", themeName);
 		}
-		await previewTheme(themeName);
+		await previewTheme(themeName, { ephemeral: false });
 	}
 
 	async #preview(value: string): Promise<void> {
@@ -270,7 +270,7 @@ class ThemeSceneController implements SetupSceneController {
 		let result: { success: boolean; error?: string } = { success: true };
 		if (value === "auto") {
 			await this.#applyPreviewPresentation(this.#originalSymbolPreset, this.#originalColorBlindMode);
-			enableAutoTheme();
+			enableAutoTheme({ ephemeral: true });
 		} else if (value === "colorblind") {
 			await this.#applyPreviewPresentation(this.#originalSymbolPreset, true);
 		} else if (value === "ansi") {

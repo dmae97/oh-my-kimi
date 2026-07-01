@@ -128,6 +128,7 @@
 ### Fixed
 
 - Fixed status-line redraws crashing when tool-call arguments contain `BigInt` values.
+- Fixed committed native scrollback rows retaining the previous palette after committed theme switches; direct-terminal theme swaps now replay the transcript so scrolling history matches the live viewport without making theme previews destructive.
 
 ## [16.2.7] - 2026-06-30
 

@@ -21,6 +21,7 @@ import { isConPTYHosted, setAltScreenActive, type Terminal } from "./terminal";
 import {
 	encodeKittyDeleteImage,
 	ImageProtocol,
+	isInsideTerminalMultiplexer,
 	setCellDimensions,
 	setTerminalImageProtocol,
 	shouldEnableSynchronizedOutputByDefault,
@@ -387,17 +388,7 @@ function parseSizeValue(value: SizeValue | undefined, referenceSize: number): nu
 
 /** Detect terminal multiplexers where scrollback clearing and height-change redraws are hostile. */
 function isMultiplexerSession(): boolean {
-	// TMUX/STY/ZELLIJ/CMUX workspace+surface ids are authoritative session
-	// signals. TERM can also survive when those are stripped (`sudo` without -E,
-	// `su`, env-sanitizing launchers/ssh), so keep the TERM prefix fallback aligned
-	// with sibling multiplexer checks (terminal-capabilities.ts). Misclassifying a
-	// multiplexer as a direct terminal lets resize/reset paths emit ED3 (`CSI 3 J`)
-	// and wipe pane scrollback. Do not use CMUX_SOCKET_PATH here: it is a CLI socket
-	// override and can be set outside a CMUX terminal.
-	if (Bun.env.TMUX || Bun.env.STY || Bun.env.ZELLIJ) return true;
-	if (Bun.env.CMUX_WORKSPACE_ID || Bun.env.CMUX_SURFACE_ID) return true;
-	const term = Bun.env.TERM?.toLowerCase() ?? "";
-	return term.startsWith("tmux") || term.startsWith("screen");
+	return isInsideTerminalMultiplexer();
 }
 
 /**

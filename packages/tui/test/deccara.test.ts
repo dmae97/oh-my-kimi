@@ -138,10 +138,11 @@ describe("detectRectangularSgrSupport", () => {
 		expect(detectRectangularSgrSupport("kitty", { PI_NO_DECCARA: "false" })).toBe(true);
 	});
 
-	it("disables under tmux/screen/zellij multiplexers", () => {
+	it("disables under tmux/screen/zellij/cmux multiplexers", () => {
 		expect(detectRectangularSgrSupport("kitty", { TMUX: "/tmp/tmux-1000/default,123,0" })).toBe(false);
 		expect(detectRectangularSgrSupport("kitty", { STY: "1234.pts-0" })).toBe(false);
 		expect(detectRectangularSgrSupport("kitty", { ZELLIJ: "0" })).toBe(false);
+		expect(detectRectangularSgrSupport("kitty", { CMUX_SURFACE_ID: "surface" })).toBe(false);
 		expect(detectRectangularSgrSupport("kitty", { TERM: "tmux-256color" })).toBe(false);
 		expect(detectRectangularSgrSupport("kitty", { TERM: "screen.xterm" })).toBe(false);
 	});

@@ -36,6 +36,7 @@ import {
 	TUI,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
+import { isInsideTerminalMultiplexer } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import {
 	APP_NAME,
 	adjustHsv,
@@ -955,13 +956,22 @@ export class InteractiveMode implements InteractiveModeContext {
 		);
 		// Set up theme file watcher
 		this.#eventBusUnsubscribers.push(
-			onThemeChange(() => {
+			onThemeChange(event => {
 				this.#clearWorkingMessageAccentCache();
 				clearRenderCache();
 				clearMermaidCache();
 				this.ui.invalidate();
 				this.updateEditorBorderColor();
-				this.ui.requestRender();
+				if (event.ephemeral || isInsideTerminalMultiplexer()) {
+					// Theme previews and multiplexer panes cannot safely replace native
+					// scrollback: previews must stay non-destructive, and multiplexers
+					// suppress ED3 so a forced replay would duplicate transcript history.
+					this.ui.requestRender();
+					return;
+				}
+				// Rows already committed to native scrollback are immutable; replay them
+				// after a theme swap so a reader scrolled up sees the same palette.
+				this.ui.requestRender(true, { clearScrollback: true });
 			}),
 		);
 
