@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed git and GitHub CLI subprocesses hanging on interactive credential prompts or buffering unbounded output by forcing non-interactive env defaults, adding a timeout, and capping captured stdout/stderr. ([#4072](https://github.com/can1357/oh-my-pi/issues/4072))
+
 ## [16.2.12] - 2026-07-01
 
 ### Breaking Changes

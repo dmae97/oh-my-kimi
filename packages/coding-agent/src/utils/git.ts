@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { $which, hasFsCode, isEisdir, isEnoent, isEnotdir, Snowflake } from "@oh-my-pi/pi-utils";
+import type { Subprocess } from "bun";
 import {
 	parseDiffHunks as parseCommitDiffHunks,
 	parseFileDiffs,
@@ -184,11 +185,144 @@ const AMBIENT_GIT_ENV = {
 	GIT_ALTERNATE_OBJECT_DIRECTORIES: undefined,
 } satisfies Record<string, undefined>;
 
+const GIT_NON_INTERACTIVE_ENV = {
+	GIT_ASKPASS: "true",
+	GIT_EDITOR: "true",
+	GIT_TERMINAL_PROMPT: "0",
+	GPG_TTY: "not a tty",
+	SSH_ASKPASS: "/usr/bin/false",
+} satisfies Record<string, string>;
+const GH_NON_INTERACTIVE_ENV = {
+	...GIT_NON_INTERACTIVE_ENV,
+	GH_PROMPT_DISABLED: "1",
+} satisfies Record<string, string>;
+
+/** Default deadline for git and gh subprocesses spawned by the coding agent. */
+export const GIT_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
+/** Maximum captured stdout or stderr bytes retained from git and gh subprocesses. */
+export const GIT_COMMAND_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024;
+
+const GIT_COMMAND_TIMEOUT_EXIT_CODE = 124;
+const GIT_OUTPUT_TRUNCATED_MARKER = "\n[git subprocess output truncated after 8 MiB]\n";
+
+type CommandName = "git" | "gh";
+
+function resolveTimeoutMs(timeoutMs: number | undefined): number {
+	if (timeoutMs === undefined) return GIT_COMMAND_TIMEOUT_MS;
+	if (!Number.isFinite(timeoutMs) || timeoutMs < 0) return GIT_COMMAND_TIMEOUT_MS;
+	return Math.trunc(timeoutMs);
+}
+
+function resolveOutputLimit(maxOutputBytes: number | undefined): number {
+	if (maxOutputBytes === undefined) return GIT_COMMAND_OUTPUT_LIMIT_BYTES;
+	if (!Number.isFinite(maxOutputBytes) || maxOutputBytes < 0) return GIT_COMMAND_OUTPUT_LIMIT_BYTES;
+	return Math.trunc(maxOutputBytes);
+}
+
+function formatCommandLabel(command: CommandName, args: readonly string[]): string {
+	return `${command} ${args.join(" ")}`.trim();
+}
+
+async function waitForExitWithTimeout(
+	child: Subprocess,
+	commandLabel: string,
+	timeoutMs: number,
+): Promise<{ exitCode: number | null; timedOut: false } | { timedOut: true; stderr: string }> {
+	if (timeoutMs === 0) {
+		child.kill("SIGTERM");
+		return { timedOut: true, stderr: `${commandLabel} timed out after 0ms` };
+	}
+	const timeout = Promise.withResolvers<"timeout">();
+	const timer = setTimeout(() => timeout.resolve("timeout"), timeoutMs);
+	timer.unref?.();
+	try {
+		const result = await Promise.race([
+			child.exited.then(exitCode => ({ kind: "exit" as const, exitCode })),
+			timeout.promise.then(() => ({ kind: "timeout" as const })),
+		]);
+		if (result.kind === "exit") {
+			return { timedOut: false, exitCode: result.exitCode };
+		}
+		child.kill("SIGTERM");
+		return { timedOut: true, stderr: `${commandLabel} timed out after ${timeoutMs}ms` };
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+async function readCappedText(stream: ReadableStream<Uint8Array>, maxBytes: number): Promise<string> {
+	const reader = stream.getReader();
+	const decoder = new TextDecoder();
+	const chunks: string[] = [];
+	let remaining = maxBytes;
+	let truncated = false;
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			if (!truncated && value.length <= remaining) {
+				chunks.push(decoder.decode(value, { stream: true }));
+				remaining -= value.length;
+				continue;
+			}
+			if (!truncated && remaining > 0) {
+				chunks.push(decoder.decode(value.subarray(0, remaining), { stream: true }));
+				remaining = 0;
+			}
+			truncated = true;
+		}
+		chunks.push(decoder.decode());
+		if (truncated) chunks.push(GIT_OUTPUT_TRUNCATED_MARKER);
+		return chunks.join("");
+	} finally {
+		reader.releaseLock();
+	}
+}
+
+async function cancelOutput(stream: ReadableStream<Uint8Array>): Promise<void> {
+	try {
+		await stream.cancel();
+	} catch {
+		// Best-effort cleanup after a timeout; the subprocess has already been signaled.
+	}
+}
+
+async function collectSubprocessResult(
+	command: CommandName,
+	args: readonly string[],
+	child: Subprocess,
+	options: Pick<CommandOptions, "maxOutputBytes" | "timeoutMs"> = {},
+): Promise<GitCommandResult> {
+	const stdoutStream = child.stdout;
+	const stderrStream = child.stderr;
+	if (!(stdoutStream instanceof ReadableStream) || !(stderrStream instanceof ReadableStream)) {
+		throw new Error(`Failed to capture ${command} command output.`);
+	}
+	const maxOutputBytes = resolveOutputLimit(options.maxOutputBytes);
+	const stdoutPromise = readCappedText(stdoutStream, maxOutputBytes);
+	const stderrPromise = readCappedText(stderrStream, maxOutputBytes);
+	const exit = await waitForExitWithTimeout(
+		child,
+		formatCommandLabel(command, args),
+		resolveTimeoutMs(options.timeoutMs),
+	);
+	if (exit.timedOut) {
+		void stdoutPromise.catch(() => undefined);
+		void stderrPromise.catch(() => undefined);
+		await Promise.all([cancelOutput(stdoutStream), cancelOutput(stderrStream)]);
+		return { exitCode: GIT_COMMAND_TIMEOUT_EXIT_CODE, stdout: "", stderr: exit.stderr };
+	}
+	const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+	return { exitCode: exit.exitCode ?? 0, stdout, stderr };
+}
+
 interface CommandOptions {
 	readonly env?: Record<string, string | undefined>;
+	readonly maxOutputBytes?: number;
 	readonly readOnly?: boolean;
 	readonly signal?: AbortSignal;
 	readonly stdin?: string | Uint8Array | ArrayBuffer | SharedArrayBuffer;
+	readonly timeoutMs?: number;
 }
 
 function normalizeStdin(input: CommandOptions["stdin"]): "ignore" | Uint8Array {
@@ -204,6 +338,7 @@ function buildGitEnv(overrides?: Record<string, string | undefined>): Record<str
 		GIT_OPTIONAL_LOCKS: "0",
 		...AMBIENT_GIT_ENV,
 		...overrides,
+		...GIT_NON_INTERACTIVE_ENV,
 	};
 }
 
@@ -236,17 +371,7 @@ async function git(cwd: string, args: readonly string[], options: CommandOptions
 		windowsHide: true,
 	});
 
-	if (!child.stdout || !child.stderr) {
-		throw new Error("Failed to capture git command output.");
-	}
-
-	const [stdout, stderr, exitCode] = await Promise.all([
-		new Response(child.stdout).text(),
-		new Response(child.stderr).text(),
-		child.exited,
-	]);
-
-	return { exitCode: exitCode ?? 0, stdout, stderr };
+	return await collectSubprocessResult("git", commandArgs, child, options);
 }
 
 function withNoOptionalLocks(args: readonly string[]): string[] {
@@ -1857,20 +1982,17 @@ export const github = {
 		try {
 			const child = Bun.spawn(["gh", ...args], {
 				cwd,
+				env: {
+					...process.env,
+					...GH_NON_INTERACTIVE_ENV,
+				},
 				stdin: "ignore",
 				stdout: "pipe",
 				stderr: "pipe",
 				windowsHide: true,
 				signal,
 			});
-			if (!child.stdout || !child.stderr) {
-				throw new ToolError("Failed to capture GitHub CLI output.");
-			}
-			const [stdout, stderr, exitCode] = await Promise.all([
-				new Response(child.stdout).text(),
-				new Response(child.stderr).text(),
-				child.exited,
-			]);
+			const { stdout, stderr, exitCode } = await collectSubprocessResult("gh", args, child, {});
 			throwIfAborted(signal);
 			const trim = options?.trimOutput !== false;
 			return {
