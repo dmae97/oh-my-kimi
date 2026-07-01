@@ -4,8 +4,8 @@
 
 ### Fixed
 
-- Cursor and Devin providers now use `parseStreamingJsonThrottled` for mid-stream tool-call argument parsing, bounding total parse work to O(N) in argument-buffer length instead of O(N²). Large tool-call payloads (e.g. sizeable `write` / `apply_patch` args) no longer stall streaming with quadratic re-parses ([#3946](https://github.com/can1357/oh-my-pi/issues/3946)).
-- Fixed `pi-native` streams to honor first-event and idle timeout watchdogs, preventing stalled auth-gateway SSE responses from hanging forever ([#3947](https://github.com/can1357/oh-my-pi/issues/3947)).
+- Improved streaming performance for Cursor and Devin providers by optimizing mid-stream tool-call argument parsing, preventing UI stalls when handling large payloads (such as write or apply_patch arguments).
+- Fixed an issue where stalled auth-gateway SSE responses could hang indefinitely in pi-native streams by ensuring first-event and idle timeout watchdogs are properly honored.
 
 ## [16.2.11] - 2026-07-01
 
