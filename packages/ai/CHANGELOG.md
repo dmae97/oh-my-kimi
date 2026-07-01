@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `pi-native` streams to honor first-event and idle timeout watchdogs, preventing stalled auth-gateway SSE responses from hanging forever ([#3947](https://github.com/can1357/oh-my-pi/issues/3947)).
+
 ## [16.2.10] - 2026-06-30
 
 ### Added

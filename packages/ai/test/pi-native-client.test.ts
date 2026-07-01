@@ -26,12 +26,23 @@ function sseBytes(events: AssistantMessageEvent[]): Uint8Array {
 	}
 	return out;
 }
+function sseEventBytes(event: AssistantMessageEvent): Uint8Array {
+	return new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`);
+}
 
 function fakeBody(bytes: Uint8Array): ReadableStream<Uint8Array> {
 	return new ReadableStream<Uint8Array>({
 		start(controller) {
 			controller.enqueue(bytes);
 			controller.close();
+		},
+	});
+}
+
+function stalledBody(bytes: Uint8Array[] = []): ReadableStream<Uint8Array> {
+	return new ReadableStream<Uint8Array>({
+		start(controller) {
+			for (const chunk of bytes) controller.enqueue(chunk);
 		},
 	});
 }
@@ -251,6 +262,63 @@ describe("streamPiNative event flow", () => {
 		await expect(stream.result()).rejects.toThrow(/502/);
 	});
 
+	it("rejects when the gateway sends headers but no first event before the timeout", async () => {
+		const fetchImpl: FetchImpl = (async () =>
+			new Response(stalledBody(), { status: 200, headers: { "Content-Type": "text/event-stream" } })) as FetchImpl;
+
+		const stream = streamPiNative(fakeModel(), baseContext, {
+			apiKey: "k",
+			fetch: fetchImpl,
+			streamFirstEventTimeoutMs: 20,
+			streamIdleTimeoutMs: 20,
+		});
+
+		await expect(stream.result()).rejects.toThrow(/first event/);
+	});
+
+	it("uses PI_STREAM_FIRST_EVENT_TIMEOUT_MS for silent pi-native streams", async () => {
+		const previous = Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+		Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS = "20";
+		try {
+			const fetchImpl: FetchImpl = (async () =>
+				new Response(stalledBody(), {
+					status: 200,
+					headers: { "Content-Type": "text/event-stream" },
+				})) as FetchImpl;
+
+			const stream = streamPiNative(fakeModel(), baseContext, { apiKey: "k", fetch: fetchImpl });
+
+			await expect(stream.result()).rejects.toThrow(/first event/);
+		} finally {
+			if (previous === undefined) {
+				delete Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+			} else {
+				Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS = previous;
+			}
+		}
+	});
+
+	it("rejects when a pi-native stream stalls after semantic progress", async () => {
+		const partial = baseAssistant({ content: [{ type: "text", text: "hi" }] });
+		const chunks = [
+			sseEventBytes({ type: "start", partial: baseAssistant() }),
+			sseEventBytes({ type: "text_delta", contentIndex: 0, delta: "hi", partial }),
+		];
+		const fetchImpl: FetchImpl = (async () =>
+			new Response(stalledBody(chunks), {
+				status: 200,
+				headers: { "Content-Type": "text/event-stream" },
+			})) as FetchImpl;
+
+		const stream = streamPiNative(fakeModel(), baseContext, {
+			apiKey: "k",
+			fetch: fetchImpl,
+			streamFirstEventTimeoutMs: 1_000,
+			streamIdleTimeoutMs: 20,
+		});
+
+		await expect(stream.result()).rejects.toThrow(/next event/);
+	});
 	it("synthesizes a terminal `done` when the SSE stream closes silently", async () => {
 		// Models the gateway dropping mid-stream — without this synthetic terminator,
 		// `.result()` would hang forever.
@@ -291,24 +359,25 @@ describe("streamPiNative event flow", () => {
 		expect((fetchImpl as unknown as Mock<typeof globalThis.fetch>).mock.calls.length).toBe(0);
 	});
 
-	it("forwards the caller's AbortSignal to the underlying fetch", async () => {
-		// The real abort path runs through fetch — its body is wired to the
-		// signal by the runtime. We test the contract we guarantee (signal
-		// forwarding); body-cancel hooks are a best-effort backstop on the
-		// `streamProxy` shape, and not worth asserting through a synthetic
-		// `ReadableStream` (whose reader is locked by `readSseJson`, so any
-		// `body.cancel()` would throw a `TypeError("locked")` we then swallow).
+	it("forwards caller aborts to the underlying fetch signal", async () => {
 		const captured: { signal?: AbortSignal } = {};
 		const fetchImpl: FetchImpl = (async (_input, init) => {
 			captured.signal = init?.signal ?? undefined;
-			return fakeResponse([{ type: "done", reason: "stop", message: baseAssistant() }]);
+			return new Response(stalledBody(), { status: 200, headers: { "Content-Type": "text/event-stream" } });
 		}) as FetchImpl;
 		const controller = new AbortController();
-		await streamPiNative(fakeModel(), baseContext, {
+		const stream = streamPiNative(fakeModel(), baseContext, {
 			apiKey: "k",
 			fetch: fetchImpl,
 			signal: controller.signal,
-		}).result();
-		expect(captured.signal).toBe(controller.signal);
+		});
+
+		await Bun.sleep(0);
+		expect(captured.signal?.aborted).toBe(false);
+		controller.abort(new Error("caller aborted"));
+
+		const result = await stream.result();
+		expect(captured.signal?.aborted).toBe(true);
+		expect(result.stopReason).toBe("aborted");
 	});
 });
