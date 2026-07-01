@@ -4,7 +4,6 @@ use std::{
 	cmp::Ordering,
 	collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap},
 	path::{Path, PathBuf},
-	sync::Arc,
 };
 
 use ast_grep_core::{MatchStrictness, matcher::Pattern, source::Edit, tree_sitter::LanguageExt};
@@ -149,7 +148,7 @@ impl PartialOrd for AstFindOrderKey {
 #[derive(Eq, PartialEq)]
 struct RetainedAstFindMatch {
 	key:            AstFindOrderKey,
-	source:         Option<Arc<str>>,
+	text:           String,
 	meta_variables: Option<HashMap<String, String>>,
 }
 
@@ -216,19 +215,8 @@ fn page_retained_matches(
 	(matches, limit_reached)
 }
 
-fn source_slice(source: &str, byte_start: u32, byte_end: u32) -> String {
-	let start = usize::try_from(byte_start).unwrap_or(usize::MAX);
-	let end = usize::try_from(byte_end).unwrap_or(usize::MAX);
-	source.get(start..end).unwrap_or_default().to_string()
-}
-
-fn retained_to_find_match(
-	retained: RetainedAstFindMatch,
-	source_override: Option<&str>,
-) -> AstFindMatch {
-	let RetainedAstFindMatch { key, source, meta_variables } = retained;
-	let source = source_override.or(source.as_deref()).unwrap_or_default();
-	let text = source_slice(source, key.byte_start, key.byte_end);
+fn retained_to_find_match(retained: RetainedAstFindMatch) -> AstFindMatch {
+	let RetainedAstFindMatch { key, text, meta_variables } = retained;
 	AstFindMatch {
 		path: key.path,
 		text,
@@ -730,7 +718,7 @@ pub fn ast_grep(options: AstFindOptions<'_>) -> task::Promise<AstFindResult> {
 			};
 			let lang_key = language.canonical_name();
 			let source = match std::fs::read_to_string(&candidate.absolute_path) {
-				Ok(source) => Arc::<str>::from(source),
+				Ok(source) => source,
 				Err(err) => {
 					for compiled in &compiled_patterns {
 						parse_errors
@@ -756,7 +744,7 @@ pub fn ast_grep(options: AstFindOptions<'_>) -> task::Promise<AstFindResult> {
 				continue;
 			}
 
-			let ast = language.ast_grep(source.as_ref());
+			let ast = language.ast_grep(source);
 			if ast.root().dfs().any(|node| node.is_error()) {
 				parse_errors.push(format!(
 					"{}: parse error (syntax tree contains error nodes)",
@@ -799,7 +787,7 @@ pub fn ast_grep(options: AstFindOptions<'_>) -> task::Promise<AstFindResult> {
 							retained_capacity,
 							RetainedAstFindMatch {
 								key,
-								source: Some(Arc::clone(&source)),
+								text: matched.text().into_owned(),
 								meta_variables,
 							},
 						);
@@ -812,7 +800,7 @@ pub fn ast_grep(options: AstFindOptions<'_>) -> task::Promise<AstFindResult> {
 			page_retained_matches(retained_matches, normalized_offset, normalized_limit);
 		let matches = matches
 			.into_iter()
-			.map(|retained| retained_to_find_match(retained, None))
+			.map(retained_to_find_match)
 			.collect::<Vec<_>>();
 
 		Ok(AstFindResult {
@@ -909,7 +897,11 @@ pub fn ast_match(options: AstMatchOptions<'_>) -> task::Promise<AstMatchResult> 
 						retain_bounded_match(
 							&mut retained_matches,
 							retained_capacity,
-							RetainedAstFindMatch { key, source: None, meta_variables },
+							RetainedAstFindMatch {
+								key,
+								text: matched.text().into_owned(),
+								meta_variables,
+							},
 						);
 					}
 				}
@@ -920,7 +912,7 @@ pub fn ast_match(options: AstMatchOptions<'_>) -> task::Promise<AstMatchResult> 
 			page_retained_matches(retained_matches, normalized_offset, normalized_limit);
 		let matches = matches
 			.into_iter()
-			.map(|retained| retained_to_find_match(retained, Some(&source)))
+			.map(retained_to_find_match)
 			.collect::<Vec<_>>();
 
 		Ok(AstMatchResult {
@@ -1208,7 +1200,7 @@ mod tests {
 				byte_end:     line,
 				sequence:     u64::from(line),
 			},
-			source:         None,
+			text:           String::new(),
 			meta_variables: None,
 		}
 	}
