@@ -11,6 +11,8 @@
 import type {
 	AgentSnapshot,
 	AssistantMessage,
+	CollabUiRequest,
+	CollabUiResponseValue,
 	HostFrame,
 	SessionEntry,
 	SessionHeader,
@@ -59,6 +61,8 @@ export interface GuestSnapshot {
 	working: boolean;
 	/** True when this guest joined through a read-only (view) link. */
 	readOnly: boolean;
+	/** Pending host-side UI request (`ask` select/editor) this guest can answer. */
+	uiRequest: CollabUiRequest | null;
 	/** Capped at 50, newest last. */
 	notices: readonly Notice[];
 }
@@ -102,6 +106,7 @@ export class GuestClient {
 	#activeTools: ReadonlyMap<string, ActiveTool> = new Map();
 	#working = false;
 	#readOnly = false;
+	#uiRequest: CollabUiRequest | null = null;
 	#notices: readonly Notice[] = [];
 	#snapshot: GuestSnapshot;
 
@@ -156,6 +161,14 @@ export class GuestClient {
 
 	sendPrompt(text: string): void {
 		this.#socket.send({ t: "prompt", text });
+	}
+
+	sendUiResponse(reqId: number, value?: CollabUiResponseValue): void {
+		this.#socket.send({ t: "ui-response", reqId, value });
+		if (this.#uiRequest?.reqId === reqId) {
+			this.#uiRequest = null;
+			this.#commit();
+		}
 	}
 
 	sendAbort(): void {
@@ -213,6 +226,7 @@ export class GuestClient {
 			pending.resolve(null);
 		}
 		this.#pendingTranscripts.clear();
+		this.#uiRequest = null;
 		this.#commit();
 		this.#socket.close();
 	}
@@ -270,6 +284,7 @@ export class GuestClient {
 				this.#lifecycle = new Map();
 				this.#working = frame.state.isStreaming;
 				this.#readOnly = frame.readOnly === true;
+				this.#uiRequest = null;
 				this.#welcomed = true;
 				this.#clearWelcomeTimer();
 				if (frame.entryCount === 0) {
@@ -324,6 +339,12 @@ export class GuestClient {
 					const payload = frame.data as SubagentLifecyclePayload;
 					this.#lifecycle = new Map(this.#lifecycle).set(payload.id, payload);
 				}
+				break;
+			case "ui-request":
+				this.#uiRequest = frame.request;
+				break;
+			case "ui-request-end":
+				if (this.#uiRequest?.reqId === frame.reqId) this.#uiRequest = null;
 				break;
 			case "transcript": {
 				const pending = this.#pendingTranscripts.get(frame.reqId);
@@ -448,6 +469,7 @@ export class GuestClient {
 			activeTools: this.#activeTools,
 			working: this.#working,
 			readOnly: this.#readOnly,
+			uiRequest: this.#uiRequest,
 			notices: this.#notices,
 		};
 	}

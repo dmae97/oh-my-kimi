@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `/collab` web guests being unable to answer `ask` tool questions by routing host UI requests through writable collab peers. ([#4035](https://github.com/can1357/oh-my-pi/issues/4035))
+
 ## [16.2.12] - 2026-07-01
 
 ### Breaking Changes

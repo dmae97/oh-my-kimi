@@ -10,6 +10,7 @@
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
 import type {
 	BusChannel,
+	CollabUiRequest,
 	GuestFrame,
 	ParsedCollabLink,
 	Participant,
@@ -29,6 +30,10 @@ import type { SessionEntry, SessionHeader } from "../session/session-entries";
 
 export type {
 	CollabPromptDetails,
+	CollabUiRequest,
+	CollabUiRequestDraft,
+	CollabUiResponseValue,
+	CollabUiSelectItem,
 	ParsedCollabLink,
 	RelayControlMessage,
 	RelayControlToGuest,
@@ -57,7 +62,7 @@ export type CollabSessionState = SessionState & {
  * that serialize into those shapes.
  */
 export type CollabFrame =
-	// guest -> host (hello/abort/agent-cmd/fetch-transcript are taken verbatim from the wire grammar)
+	// guest -> host (hello/abort/agent-cmd/fetch-transcript/ui-response are taken verbatim from the wire grammar)
 	| Exclude<GuestFrame, { t: "prompt" }>
 	| { t: "prompt"; text: string; images?: ImageContent[] }
 	// host -> guest
@@ -93,6 +98,8 @@ export type CollabFrame =
 	| { t: "bus"; channel: BusChannel; data: unknown }
 	/** Full agent-registry snapshot (debounced on registry change). */
 	| { t: "agents"; agents: AgentSnapshot[] }
+	| { t: "ui-request"; request: CollabUiRequest }
+	| { t: "ui-request-end"; reqId: number }
 	/** Targeted reply to fetch-transcript; `text` is decoded JSONL from `fromByte`, `newSize` the next offset base. */
 	| { t: "transcript"; reqId: number; text: string; newSize: number; error?: string }
 	| { t: "bye"; reason: string }

@@ -13,7 +13,14 @@ import { timingSafeEqual } from "node:crypto";
 import * as fs from "node:fs/promises";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
-import type { BusChannel, AgentEvent as WireAgentEvent, SessionEntry as WireSessionEntry } from "@oh-my-pi/pi-wire";
+import type {
+	BusChannel,
+	CollabUiRequest,
+	CollabUiRequestDraft,
+	CollabUiResponseValue,
+	AgentEvent as WireAgentEvent,
+	SessionEntry as WireSessionEntry,
+} from "@oh-my-pi/pi-wire";
 import type { InteractiveModeContext } from "../modes/types";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry } from "../registry/agent-registry";
@@ -114,6 +121,8 @@ export class CollabHost {
 	#sessionId = "";
 	#unsubscribe?: () => void;
 	#peers = new Map<number, { name: string; canWrite: boolean }>();
+	#uiReqSeq = 0;
+	#pendingUi = new Map<number, { resolve(value: CollabUiResponseValue): void }>();
 	#lastStateJson = "";
 	#stateDebounce: Timer | null = null;
 	#streamingInterval: Timer | null = null;
@@ -151,6 +160,43 @@ export class CollabHost {
 			list.push({ name: peer.name, role: "guest", readOnly: peer.canWrite ? undefined : true });
 		}
 		return list;
+	}
+
+	requestGuestUi(request: CollabUiRequestDraft, signal?: AbortSignal): Promise<CollabUiResponseValue> | null {
+		if (!this.#socket || !this.#hasWritablePeers()) return null;
+		const reqId = ++this.#uiReqSeq;
+		const fullRequest: CollabUiRequest = { ...request, reqId };
+		const { promise, resolve } = Promise.withResolvers<CollabUiResponseValue>();
+		let settled = false;
+		const settle = (value: CollabUiResponseValue): void => {
+			if (settled) return;
+			settled = true;
+			signal?.removeEventListener("abort", onAbort);
+			this.#pendingUi.delete(reqId);
+			this.#sendWritablePeers({ t: "ui-request-end", reqId });
+			resolve(value);
+		};
+		const onAbort = (): void => settle(undefined);
+		if (signal?.aborted) return Promise.resolve(undefined);
+		signal?.addEventListener("abort", onAbort, { once: true });
+		this.#pendingUi.set(reqId, { resolve: settle });
+		this.#sendWritablePeers({ t: "ui-request", request: fullRequest });
+		return promise;
+	}
+
+	#hasWritablePeers(): boolean {
+		for (const peer of this.#peers.values()) {
+			if (peer.canWrite) return true;
+		}
+		return false;
+	}
+
+	#sendWritablePeers(frame: CollabFrame): void {
+		const socket = this.#socket;
+		if (!socket) return;
+		for (const [peerId, peer] of this.#peers) {
+			if (peer.canWrite) socket.send(frame, peerId);
+		}
 	}
 
 	async start(relayUrl: string, webUrl = ""): Promise<void> {
@@ -255,6 +301,8 @@ export class CollabHost {
 		this.#agentsDebounce = null;
 		clearInterval(this.#streamingInterval ?? undefined);
 		this.#streamingInterval = null;
+		for (const pending of this.#pendingUi.values()) pending.resolve(undefined);
+		this.#pendingUi.clear();
 		this.#peers.clear();
 		this.#socket?.close();
 		this.#socket = null;
@@ -286,6 +334,9 @@ export class CollabHost {
 				break;
 			case "agent-cmd":
 				this.#handleAgentCmd(frame.cmd, frame.agentId, frame.text, fromPeer);
+				break;
+			case "ui-response":
+				this.#handleUiResponse(frame.reqId, frame.value, fromPeer);
 				break;
 			case "fetch-transcript":
 				void this.#handleFetchTranscript(frame.reqId, frame.agentId, frame.fromByte, fromPeer);
@@ -390,6 +441,15 @@ export class CollabHost {
 			}
 			socket.send({ t: "snapshot-chunk", entries: batch, final: i >= entries.length }, fromPeer);
 		}
+	}
+
+	#handleUiResponse(reqId: number, value: CollabUiResponseValue, fromPeer: number): void {
+		const peer = this.#peers.get(fromPeer);
+		if (!peer?.canWrite) {
+			this.#rejectReadOnly("responding to ask", fromPeer);
+			return;
+		}
+		this.#pendingUi.get(reqId)?.resolve(value);
 	}
 
 	#handlePrompt(text: string, images: ImageContent[] | undefined, fromPeer: number): void {

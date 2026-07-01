@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "bun:test";
 import type {
 	AgentSnapshot,
 	AssistantMessage,
+	GuestFrame,
 	HostFrame,
 	SessionEntry,
 	SessionHeader,
@@ -11,6 +12,7 @@ import type {
 } from "@oh-my-pi/pi-wire";
 import { GuestClient } from "../src/lib/client";
 import { encodeBase64Url } from "../src/lib/link";
+import { CollabSocket } from "../src/lib/socket";
 
 const LINK = `roomroomroom1234#${encodeBase64Url(new Uint8Array(32))}`;
 
@@ -230,6 +232,42 @@ describe("GuestClient frame apply", () => {
 		const notices = client.getSnapshot().notices;
 		expect(notices).toHaveLength(1);
 		expect(notices[0]).toMatchObject({ level: "error", message: "boom" });
+	});
+
+	it("tracks host UI requests and sends responses", () => {
+		const sent: GuestFrame[] = [];
+		const sendSpy = vi.spyOn(CollabSocket.prototype, "send").mockImplementation((frame: GuestFrame) => {
+			sent.push(frame);
+		});
+		try {
+			const client = liveClient();
+			const request = {
+				reqId: 7,
+				kind: "select" as const,
+				title: "Continue?",
+				options: ["Yes", { label: "No", description: "Stop here" }],
+				selectionMarker: "radio" as const,
+			};
+			client.applyFrameForTest({ t: "ui-request", request });
+			expect(client.getSnapshot().uiRequest).toEqual(request);
+
+			client.sendUiResponse(7, "Yes");
+			expect(sent).toEqual([{ t: "ui-response", reqId: 7, value: "Yes" }]);
+			expect(client.getSnapshot().uiRequest).toBeNull();
+		} finally {
+			sendSpy.mockRestore();
+		}
+	});
+
+	it("clears pending host UI requests when the host ends them", () => {
+		const client = liveClient();
+		client.applyFrameForTest({
+			t: "ui-request",
+			request: { reqId: 8, kind: "editor", title: "Other", prefill: "draft" },
+		});
+		expect(client.getSnapshot().uiRequest?.reqId).toBe(8);
+		client.applyFrameForTest({ t: "ui-request-end", reqId: 8 });
+		expect(client.getSnapshot().uiRequest).toBeNull();
 	});
 
 	it("snapshot reference is stable between frames and replaced per frame", () => {

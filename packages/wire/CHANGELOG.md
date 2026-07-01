@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added collab UI request/response wire frames so browser guests can answer host-side interactive prompts. ([#4035](https://github.com/can1357/oh-my-pi/issues/4035))
+
 ## [16.1.8] - 2026-06-20
 
 ### Breaking Changes
