@@ -5,6 +5,7 @@
 ### Fixed
 
 - Clarified queued-message skipped tool results so the model does not count a skipped tool as completed work or verification before retrying it when still needed.
+- Fixed branch summaries to preserve informative tool results from abandoned branches while still dropping useless tool output. ([#4076](https://github.com/can1357/oh-my-pi/issues/4076))
 
 ## [16.2.4] - 2026-06-28
 

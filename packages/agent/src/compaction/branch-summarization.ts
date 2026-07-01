@@ -168,8 +168,12 @@ export function collectEntriesForBranchSummary(
 function getMessageFromEntry(entry: SessionEntry): AgentMessage | undefined {
 	switch (entry.type) {
 		case "message":
-			// Skip tool results - context is in assistant's tool call
-			if (entry.message.role === "toolResult") return undefined;
+			// Useless non-error tool results are dropped by serializeConversation()
+			// downstream. Skip them here so a large useless payload can't eat the
+			// branch-summary token budget and starve older useful entries.
+			if (entry.message.role === "toolResult" && entry.message.useless === true && entry.message.isError !== true) {
+				return undefined;
+			}
 			return entry.message;
 
 		case "custom_message":
