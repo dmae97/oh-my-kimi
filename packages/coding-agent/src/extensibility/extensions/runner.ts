@@ -693,8 +693,24 @@ export class ExtensionRunner {
 		};
 	}
 
+	/**
+	 * Emit a `tool_call` event to every subscribed extension before the tool executes.
+	 *
+	 * Each handler is bounded by `extensionHandlerTimeoutMs` (default 30s). This
+	 * matches the timeout policy already applied to `emitToolResult` and every
+	 * other handler routed through `#runHandlerWithTimeout`; without it a single
+	 * hung extension (unresolved `await`, network call with no timeout) would
+	 * park `ExtensionToolWrapper.execute` indefinitely and freeze tool
+	 * dispatch — see issue #3948.
+	 *
+	 * On-timeout policy: **fail-closed** (return `{ block: true }`). This is
+	 * symmetric with the existing error path below and safer for a
+	 * pre-execution gate — an unresponsive extension MUST NOT be treated as
+	 * silent consent to run the tool.
+	 */
 	async emitToolCall(event: ToolCallEvent): Promise<ToolCallEventResult | undefined> {
 		const ctx = this.createContext();
+		const timeoutMs = extensionHandlerTimeoutMs;
 		let result: ToolCallEventResult | undefined;
 
 		for (const ext of this.extensions) {
@@ -703,7 +719,28 @@ export class ExtensionRunner {
 
 			for (const handler of handlers) {
 				try {
-					const handlerResult = await handler(event, ctx);
+					const handlerResult = await Promise.race([
+						Promise.resolve(handler(event, ctx)),
+						Bun.sleep(timeoutMs).then(() => EXTENSION_HANDLER_TIMEOUT),
+					]);
+
+					if (handlerResult === EXTENSION_HANDLER_TIMEOUT) {
+						const error = `handler timed out after ${timeoutMs}ms`;
+						logger.warn("Extension handler timed out", {
+							extensionPath: ext.path,
+							event: "tool_call",
+							timeoutMs,
+						});
+						this.emitError({
+							extensionPath: ext.path,
+							event: "tool_call",
+							error,
+						});
+						return {
+							block: true,
+							reason: `Extension ${ext.path} timed out after ${timeoutMs}ms`,
+						};
+					}
 
 					if (handlerResult) {
 						result = handlerResult as ToolCallEventResult;

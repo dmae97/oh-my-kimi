@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed extension `tool_call` handlers running without a timeout, so a hung third-party extension could indefinitely block tool execution. `ExtensionRunner.emitToolCall` now bounds each handler by `extensionHandlerTimeoutMs` (30s default) with a fail-closed policy — on timeout the runner emits an `ExtensionError`, logs a warning, and returns `{ block: true, reason: "Extension <path> timed out after <ms>ms" }`, symmetric with the existing per-handler error path and with `emitToolResult`'s timeout wrapping. ([#3948](https://github.com/can1357/oh-my-pi/issues/3948))
+
 ## [16.2.10] - 2026-06-30
 
 ### Changed
