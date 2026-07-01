@@ -1,0 +1,57 @@
+/**
+ * Signal-safe session teardown: persists the in-progress editor draft, then
+ * disposes the session (which emits `session_shutdown`, cancels the session's
+ * background async jobs, and closes the session manager). Shared by the TUI
+ * Ctrl+C/Ctrl+D/`/exit` keypress path in `InteractiveMode.shutdown()` and by
+ * the postmortem `SIGINT`/`SIGTERM`/`SIGHUP`/`uncaughtException` handlers so a
+ * real kernel signal executes the exact same teardown as a keypress exit.
+ *
+ * Extracted (rather than inlined into `InteractiveMode`) so the callback body
+ * is directly unit-testable without instantiating the full TUI stack.
+ */
+import { logger } from "@oh-my-pi/pi-utils";
+
+/** Dependencies the teardown captures at construction time. */
+export interface SessionTeardownDeps {
+	/** Snapshot the current editor text; called once, before disposal touches session state. */
+	getDraftText: () => string;
+	/**
+	 * Persist the snapshotted draft. Called even for an empty string so a
+	 * previously-persisted draft sidecar is cleared on a clean exit.
+	 */
+	saveDraft: (text: string) => Promise<void>;
+	/** Dispose the session — emits `session_shutdown`, drains async jobs, closes the manager. */
+	disposeSession: () => Promise<void>;
+}
+
+/** Idempotent teardown: concurrent/repeat invocations share one settled promise. */
+export type SessionTeardown = () => Promise<void>;
+
+/**
+ * Build a promise-memoized teardown function. The first call snapshots the
+ * draft text, runs `saveDraft` (draft-loss protection for `--resume`), then
+ * `disposeSession`; subsequent calls await the same settled promise, so the
+ * keypress `InteractiveMode.shutdown()` path and the postmortem signal
+ * callback cannot double-emit `session_shutdown`, double-dispose the
+ * session's async-job manager, or race each other.
+ *
+ * `saveDraft` failures are logged but never abort the disposal chain — a
+ * draft-write error must not leak background bash/task jobs or skip the
+ * extension `session_shutdown` event.
+ */
+export function createSessionTeardown(deps: SessionTeardownDeps): SessionTeardown {
+	let pending: Promise<void> | undefined;
+	const run = async (): Promise<void> => {
+		const draftText = deps.getDraftText();
+		try {
+			await deps.saveDraft(draftText);
+		} catch (err) {
+			logger.warn("Failed to save session draft during teardown", { error: String(err) });
+		}
+		await deps.disposeSession();
+	};
+	return () => {
+		if (!pending) pending = run();
+		return pending;
+	};
+}

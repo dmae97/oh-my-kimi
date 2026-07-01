@@ -156,6 +156,7 @@ import { OAuthManualInputManager } from "./oauth-manual-input";
 import { countRunningSubagentBadgeAgents, getRunningSubagentBadgeRegistry } from "./running-subagent-badge";
 import type { ObservableSession } from "./session-observer-registry";
 import { SessionObserverRegistry } from "./session-observer-registry";
+import { createSessionTeardown, type SessionTeardown } from "./session-teardown";
 import { runProviderSetupWizard } from "./setup-wizard/lazy";
 import { interruptHint } from "./shared";
 import { clearMermaidCache } from "./theme/mermaid-cache";
@@ -485,6 +486,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#pendingSlashCommands: SlashCommand[] = [];
 	#cleanupUnsubscribe?: () => void;
+	#signalTeardown?: SessionTeardown;
 	readonly #version: string;
 	readonly #changelogMarkdown: string | undefined;
 	#planModePreviousTools: string[] | undefined;
@@ -766,8 +768,22 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		this.keybindings = logger.time("InteractiveMode.init:keybindings", () => KeybindingsManager.create());
 
-		// Register session manager flush for signal handlers (SIGINT, SIGTERM, SIGHUP)
-		this.#cleanupUnsubscribe = postmortem.register("session-manager-flush", () => this.sessionManager.flush());
+		// Route SIGINT/SIGTERM/SIGHUP/uncaughtException through the same teardown
+		// the TUI Ctrl+C keypress path performs: persist the in-progress editor
+		// draft for `--resume`, then dispose the session (which emits the extension
+		// `session_shutdown` event, cancels the owned async job manager, disposes
+		// eval kernels, releases owned browser tabs, and closes the session
+		// manager). Without this callback a real kernel signal would drop the
+		// draft, skip the `session_shutdown` contract from `shared-events.ts`,
+		// and orphan background bash/task processes (issue #4080). The registered
+		// callback and `shutdown()` share one promise-memoized teardown, so a
+		// signal arriving mid-Ctrl+C no-ops instead of racing a second dispose.
+		this.#signalTeardown = createSessionTeardown({
+			getDraftText: () => this.editor.getText(),
+			saveDraft: text => this.sessionManager.saveDraft(text),
+			disposeSession: () => this.session.dispose(),
+		});
+		this.#cleanupUnsubscribe = postmortem.register("session-teardown", () => this.#signalTeardown!());
 
 		// Wire the report_tool_issue consent gate to the Yes/No dialog popup.
 		// The handler is process-global — subagent tools (which can't reach
@@ -3289,24 +3305,21 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.#isShuttingDown) return;
 		this.#isShuttingDown = true;
 
-		// Snapshot the editor before any teardown empties it. Persisting the draft
-		// here covers Ctrl+D shutdown with non-empty text; for /exit the editor is
-		// already cleared so saveDraft("") just removes any stale sidecar.
-		const draftText = this.editor.getText();
-
-		// Flush pending session writes before shutdown
-		await this.sessionManager.flush();
-		try {
-			await this.sessionManager.saveDraft(draftText);
-		} catch (err) {
-			logger.warn("Failed to save session draft", { error: String(err) });
-		}
 		this.#btwController.dispose();
 		this.#omfgController.dispose();
 		this.#focusController.dispose();
 
-		// Emit shutdown event to hooks
-		await this.session.dispose();
+		// Persist the draft and dispose the session through the shared teardown
+		// so a signal that arrives mid-shutdown cannot fire a second dispose.
+		// The teardown is a promise-memoized singleton; whichever path calls it
+		// first runs the work, the other awaits the same settled promise.
+		// The teardown is registered lazily in `init()` — a `/exit` reached
+		// before `init()` completed falls back to a direct dispose.
+		if (this.#signalTeardown) {
+			await this.#signalTeardown();
+		} else {
+			await this.session.dispose();
+		}
 
 		// Do not force a final render during teardown: disposed session/UI state can
 		// collapse to an empty frame, clearing the viewport and leaving the parent

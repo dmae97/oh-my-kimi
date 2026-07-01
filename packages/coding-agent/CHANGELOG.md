@@ -35,6 +35,9 @@
 
 - Fixed RPC mode `abort_bash` being queued behind the `bash` command it must cancel; the input loop now dispatches `bash` in the background so `abort_bash` (and other commands) can preempt a running shell command ([#4079](https://github.com/can1357/oh-my-pi/issues/4079)).
 - Fixed `RpcClient.start()` failing on a second call to the same instance after `stop()` (or after a failed first start) by minting a fresh `AbortController` per start and cleaning up the spawned child on startup failure ([#4079](https://github.com/can1357/oh-my-pi/issues/4079)).
+### Fixed
+
+- Fixed `SIGTERM`/`SIGHUP`/`uncaughtException` skipping the editor draft save, the extension `session_shutdown` event, and background async-job disposal, so closing the terminal or a process manager killing `omp` no longer drops the in-progress draft or orphans background bash/task processes ([#4080](https://github.com/can1357/oh-my-pi/issues/4080)).
 
 ## [16.2.12] - 2026-07-01
 

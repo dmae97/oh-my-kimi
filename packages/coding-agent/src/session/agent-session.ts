@@ -5225,8 +5225,20 @@ export class AgentSession {
 	/**
 	 * Remove all listeners, flush pending writes, and disconnect from agent.
 	 * Call this when completely done with the session.
+	 *
+	 * Idempotent: concurrent or repeated calls share one settled promise. The
+	 * keypress `InteractiveMode.shutdown()` path and the postmortem
+	 * `SIGTERM`/`SIGHUP`/`uncaughtException` callback can both target this
+	 * method, so a second invocation must never re-emit `session_shutdown` or
+	 * double-drain the owned `AsyncJobManager` (issue #4080).
 	 */
-	async dispose(): Promise<void> {
+	#disposeCall?: Promise<void>;
+	dispose(): Promise<void> {
+		if (!this.#disposeCall) this.#disposeCall = this.#doDispose();
+		return this.#disposeCall;
+	}
+
+	async #doDispose(): Promise<void> {
 		this.beginDispose();
 		try {
 			if (this.#extensionRunner?.hasHandlers("session_shutdown")) {
