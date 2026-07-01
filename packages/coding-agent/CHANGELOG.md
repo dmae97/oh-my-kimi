@@ -67,6 +67,7 @@
 
 - Fixed `models.yml` remote compaction schema support for V2 streaming endpoint fields. ([#4146](https://github.com/can1357/oh-my-pi/issues/4146))
 - Fixed the SSH tool to reject `cwd` values of `~` and `~/...` before sending guaranteed-bad quoted tilde paths to remote POSIX shells. ([#4002](https://github.com/can1357/oh-my-pi/issues/4002))
+- Status line token throughput segment now uses a dedicated tachometer icon (`icon.throughput`) instead of reusing the output arrow; cache read/write segments use a single database icon instead of stacking input/output arrows alongside it.
 
 ## [16.2.12] - 2026-07-01
 
