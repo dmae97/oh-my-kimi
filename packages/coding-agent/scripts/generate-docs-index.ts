@@ -40,10 +40,6 @@ function isStringArray(value: unknown): value is string[] {
 	return Array.isArray(value) && value.every(item => typeof item === "string");
 }
 
-function fail(message: string): never {
-	throw new Error(message);
-}
-
 /** Build the exact two-line `omp://` docs embed from the source `docs/**\/*.md` corpus. */
 export async function buildDocsIndexPayload(): Promise<DocsIndexPayload> {
 	const glob = new Glob("**/*.md");
@@ -68,50 +64,53 @@ export function decodeDocsIndexPayload(embed: string): DecodedDocsIndexPayload |
 	if (newline === -1) return null;
 
 	const filenames: unknown = JSON.parse(embed.slice(0, newline));
-	if (!isStringArray(filenames)) fail("Embedded docs index filename line is not a JSON string array.");
+	if (!isStringArray(filenames)) {
+		throw new Error("Embedded docs index filename line is not a JSON string array.");
+	}
 
 	const inflated = gunzipSync(Buffer.from(embed.slice(newline + 1), "base64"));
 	const bodies: unknown = JSON.parse(inflated.toString("utf8"));
-	if (!isStringArray(bodies)) fail("Embedded docs index body blob is not a JSON string array.");
+	if (!isStringArray(bodies)) {
+		throw new Error("Embedded docs index body blob is not a JSON string array.");
+	}
 
 	return { files: filenames, bodies };
 }
 
-/** Assert that an embed payload is fresh against the current source docs payload. */
+/**
+ * Assert that an embed payload is fresh against the current source docs payload.
+ * An empty placeholder is accepted by round-tripping the expected payload (the
+ * dev tree and post-build reset state both checked-in placeholders).
+ */
 export function assertDocsIndexFresh(embed: string, expected: DecodedDocsIndexPayload): void {
-	const decoded =
-		embed.length === 0 ? decodeDocsIndexPayload(buildPayloadText(expected)) : decodeDocsIndexPayload(embed);
-	if (decoded === null) fail("Embedded docs index is malformed: missing newline separator.");
+	const source =
+		embed.length > 0
+			? embed
+			: `${JSON.stringify(expected.files)}\n${Buffer.from(gzipSync(Buffer.from(JSON.stringify(expected.bodies)), { level: 9 })).toString("base64")}`;
+	const decoded = decodeDocsIndexPayload(source);
+	if (decoded === null) {
+		throw new Error("Embedded docs index is malformed: missing newline separator.");
+	}
 	if (decoded.files.length !== expected.files.length) {
-		fail(`Embedded docs index has ${decoded.files.length} docs; source corpus has ${expected.files.length}.`);
+		throw new Error(
+			`Embedded docs index has ${decoded.files.length} docs; source corpus has ${expected.files.length}.`,
+		);
 	}
 	if (decoded.bodies.length !== expected.bodies.length) {
-		fail(`Embedded docs index has ${decoded.bodies.length} bodies; source corpus has ${expected.bodies.length}.`);
+		throw new Error(
+			`Embedded docs index has ${decoded.bodies.length} bodies; source corpus has ${expected.bodies.length}.`,
+		);
 	}
 	for (let i = 0; i < expected.files.length; i++) {
 		if (decoded.files[i] !== expected.files[i]) {
-			fail(
+			throw new Error(
 				`Embedded docs index filename mismatch at ${i}: ${decoded.files[i] ?? "<missing>"} !== ${expected.files[i]}.`,
 			);
 		}
 		if (decoded.bodies[i] !== expected.bodies[i]) {
-			fail(`Embedded docs index body mismatch for ${expected.files[i]}. Run \`bun run gen:docs\`.`);
+			throw new Error(`Embedded docs index body mismatch for ${expected.files[i]}. Run \`bun run gen:docs\`.`);
 		}
 	}
-}
-
-function buildPayloadText(payload: DecodedDocsIndexPayload): string {
-	const bodiesB64 = Buffer.from(gzipSync(Buffer.from(JSON.stringify(payload.bodies)), { level: 9 })).toString(
-		"base64",
-	);
-	return `${JSON.stringify(payload.files)}\n${bodiesB64}`;
-}
-
-async function checkDocsIndexFreshness(rel: string): Promise<void> {
-	const current = await buildDocsIndexPayload();
-	const embed = await Bun.file(outputPath).text();
-	assertDocsIndexFresh(embed, current);
-	process.stdout.write(`Docs index fresh for ${current.files.length} docs (${rel})\n`);
 }
 
 async function main(): Promise<void> {
@@ -124,7 +123,10 @@ async function main(): Promise<void> {
 	}
 
 	if (process.argv.includes(CHECK_FLAG)) {
-		await checkDocsIndexFreshness(rel);
+		const current = await buildDocsIndexPayload();
+		const embed = await Bun.file(outputPath).text();
+		assertDocsIndexFresh(embed, current);
+		process.stdout.write(`Docs index fresh for ${current.files.length} docs (${rel})\n`);
 		return;
 	}
 

@@ -7,7 +7,7 @@ This page indexes README-only user-facing package CLIs and features that need ro
 - **Include** root docs coverage for package-local CLIs, extension features, dashboards, and benchmark runners that users can run directly or through `omp`.
 - **Exclude explicitly** when a package/crate is internal implementation only; point to the architecture doc that owns it.
 - Package READMEs and manifests remain the source of truth for package-local setup and flags; root docs make the feature discoverable and link to exact source paths.
-- Internal Rust crates remain covered by native architecture docs unless promoted as standalone user-facing commands or APIs. Today, `crates/pi-natives` is documented through [`natives-architecture.md`](./natives-architecture.md) and related native docs because it backs `@oh-my-pi/pi-natives` rather than exposing its own user CLI.
+- Internal Rust crates remain covered by native architecture docs unless promoted as standalone user-facing commands or APIs. The contributor-facing map lives at [`native-crates.md`](./native-crates.md); today every `crates/*` entry is internal to `@oh-my-pi/pi-natives` and the embedded shell, so [`natives-architecture.md`](./natives-architecture.md) and the surrounding native docs own them.
 
 ## Package CLIs and features
 
