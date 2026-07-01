@@ -436,8 +436,10 @@ describe("streaming tool call preview height (bounded across renderers)", () => 
 			for (const needle of [firstVisible, lastVisible]) {
 				expect(text, `${testCase.name} preview should keep ${needle}`).toContain(needle);
 			}
-			expect(text, `${testCase.name} preview should elide line-0`).not.toContain("line-0");
-			expect(text, `${testCase.name} preview should elide ${lastHidden}`).not.toContain(lastHidden);
+			expect(text, `${testCase.name} preview should elide line-0`).not.toMatch(/\bline-0\b/);
+			expect(text, `${testCase.name} preview should elide ${lastHidden}`).not.toMatch(
+				new RegExp(`\\b${lastHidden}\\b`),
+			);
 			expect(text, `${testCase.name} preview should advertise the elided head`).toContain(
 				`… ${hidden} earlier lines`,
 			);
