@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed streaming markdown renders reprocessing the already-frozen prefix on every delta, so transient assistant-message paints reuse rendered prefix lines and only render the changed tail ([#3975](https://github.com/can1357/oh-my-pi/issues/3975)).
+
 ## [16.2.10] - 2026-06-30
 
 ### Fixed
