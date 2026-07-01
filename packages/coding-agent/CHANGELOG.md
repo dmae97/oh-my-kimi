@@ -54,6 +54,7 @@
 - Added retry-path diagnostics for assistant-tail removal and scheduled continuations after transient provider errors.
 - Fixed CJK history rendering issues across repeated compactions.
 - Fixed user-invoked skills failing to identify themselves or resolve relative paths across various execution paths.
+- Fixed macOS `Command+V` image pastes in Ghostty by binding the Kitty `super+v` key event to the image-paste action alongside `Ctrl+V`. ([#4178](https://github.com/can1357/oh-my-pi/issues/4178))
 
 ## [16.2.13] - 2026-07-01
 

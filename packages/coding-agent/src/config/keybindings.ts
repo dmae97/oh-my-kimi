@@ -65,7 +65,9 @@ declare module "@oh-my-pi/pi-tui" {
  * Resolve default image-paste shortcuts for the current terminal platform.
  */
 export function getDefaultPasteImageKeys(platform: NodeJS.Platform = process.platform): KeyId[] {
-	return platform === "win32" ? ["ctrl+v", "alt+v"] : ["ctrl+v"];
+	if (platform === "win32") return ["ctrl+v", "alt+v"];
+	if (platform === "darwin") return ["ctrl+v", "super+v"];
+	return ["ctrl+v"];
 }
 
 /**

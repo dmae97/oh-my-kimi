@@ -1,6 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import { $ } from "bun";
+import { setKittyProtocolActive } from "@oh-my-pi/pi-tui/keys";
 import { getEditorTheme, initTheme } from "../theme/theme";
+import { getDefaultPasteImageKeys } from "../../config/keybindings";
 import {
 	CustomEditor,
 	extractBracketedImagePastePaths,
@@ -124,6 +126,25 @@ describe("CustomEditor bracketed path paste", () => {
 		expect(imagePathCalls).toBe(0);
 	});
 });
+describe("CustomEditor configured paste image keys", () => {
+	it("routes Ghostty Cmd+V kitty key events through the macOS image-paste default", () => {
+		const { editor } = makeEditor();
+		const onPasteImage = vi.fn();
+		editor.onPasteImage = onPasteImage;
+		editor.setActionKeys("app.clipboard.pasteImage", getDefaultPasteImageKeys("darwin"));
+		setKittyProtocolActive(true);
+
+		try {
+			editor.handleInput("\x1b[118;9u");
+		} finally {
+			setKittyProtocolActive(false);
+		}
+
+		expect(onPasteImage).toHaveBeenCalledTimes(1);
+		expect(editor.getText()).toBe("");
+	});
+});
+
 
 describe("extractImagePathFromText (issue #3506)", () => {
 	it("returns the path when the text is a single image file path", () => {
