@@ -8,6 +8,11 @@ const DEFAULT_CONTEXT_WINDOW = 272_000;
 const DEFAULT_MAX_TOKENS = 128_000;
 const DEFAULT_CODEX_CLIENT_VERSION = "0.99.0";
 const NPM_CODEX_LATEST_URL = "https://registry.npmjs.org/@openai%2Fcodex/latest";
+const CODEX_REMOTE_COMPACTION = {
+	enabled: true,
+	api: "openai-codex-responses",
+	v2StreamingEnabled: true,
+} as const;
 
 const codexReasoningPresetSchema = type({
 	"effort?": "unknown",
@@ -269,6 +274,7 @@ function normalizeCodexModelEntry(entry: unknown, baseUrl: string): NormalizedCo
 			reasoning,
 			input,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			remoteCompaction: CODEX_REMOTE_COMPACTION,
 			contextWindow,
 			maxTokens,
 			...(preferWebsockets ? { preferWebsockets: true } : {}),

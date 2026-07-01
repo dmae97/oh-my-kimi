@@ -7,14 +7,15 @@ import { getModelDbPath } from "@oh-my-pi/pi-utils";
 import type { Api, Model, ModelSpec } from "./types";
 
 // Rows persist ModelSpec JSON (sparse `compat`, never the resolved record);
-// the model manager rebuilds via `buildModel` on load. v7 invalidates rows
-// predating the Antigravity Gemini budget-mode migration (cached specs still
-// carrying `thinking.mode: "google-level"` and the old 3.5-flash effort
-// routing); v6 invalidates rows that may contain the retired unknown-limit
-// sentinels (222222/8888); v5 invalidated rows predating effort-tier variant
-// collapsing (raw `-low`/`-high`/`-thinking` member ids); v4 dropped the
-// pre-efforts ThinkingConfig shape.
-const CACHE_SCHEMA_VERSION = 7;
+// the model manager rebuilds via `buildModel` on load. v8 invalidates Codex
+// discovery rows predating provider-native V2 compaction metadata; v7
+// invalidated rows predating the Antigravity Gemini budget-mode migration
+// (cached specs still carrying `thinking.mode: "google-level"` and the old
+// 3.5-flash effort routing); v6 invalidated rows that may contain the retired
+// unknown-limit sentinels (222222/8888); v5 invalidated rows predating
+// effort-tier variant collapsing (raw `-low`/`-high`/`-thinking` member ids);
+// v4 dropped the pre-efforts ThinkingConfig shape.
+const CACHE_SCHEMA_VERSION = 8;
 
 interface CacheRow {
 	provider_id: string;
@@ -100,7 +101,12 @@ function migrateCacheSchema(db: Database): void {
 	} finally {
 		stmt.finalize();
 	}
-	db.run("UPDATE model_cache SET version = ? WHERE version = 2", [CACHE_SCHEMA_VERSION]);
+	// Delete rows written under any older schema so they cannot be reused. The
+	// legacy `UPDATE ... WHERE version = 2` migration silently promoted the very
+	// first cache version to whatever the current one is, defeating every
+	// subsequent invalidation (see #4146: pre-V2 Codex rows kept the legacy
+	// compaction path even after CACHE_SCHEMA_VERSION was bumped).
+	db.run("DELETE FROM model_cache WHERE version <> ?", [CACHE_SCHEMA_VERSION]);
 }
 
 export function readModelCache<TApi extends Api>(

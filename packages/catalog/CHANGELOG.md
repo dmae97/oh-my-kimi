@@ -5,6 +5,9 @@
 ### Added
 
 - Added support for human-readable reasoning summaries on compatible OpenAI Codex models (v5.4+)
+### Fixed
+
+- Fixed discovered OpenAI Codex models to advertise V2 streaming remote compaction, avoiding the legacy compact endpoint timeout path for Codex sessions. ([#4146](https://github.com/can1357/oh-my-pi/issues/4146))
 
 ## [16.2.12] - 2026-07-01
 
