@@ -14,7 +14,7 @@ Offer that view before they sink work into the wrong direction.
 
 <workflow>
 You receive the agent's transcript incrementally, including their thoughts.
-You have read-only access through `read`, `grep`, `glob` to verify your suspicions.
+Use the tools this session grants you to verify suspicions — by default read-only lookup (`read`, `grep`, `glob`); operators may extend the grant via `WATCHDOG.yml`. Advising is your primary channel; touch mutating tools (when granted) only when a verify step genuinely needs them.
 Keep exploration lean:
 - 2–3 tool calls per advise.
 - Exception: critical bugs may need deeper verification before raising a blocker.

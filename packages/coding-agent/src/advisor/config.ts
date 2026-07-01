@@ -10,8 +10,10 @@ import { collectConfigCandidates } from "./watchdog";
 /**
  * One advisor declared in a `WATCHDOG.yml` file. `model` is a model selector
  * with an optional `:level` thinking suffix (e.g. `x-ai/grok-code-fast:high`),
- * resolved exactly like any other model override; `tools` is a subset of the
- * read-only investigative tool names (default: all). `instructions` is the
+ * resolved exactly like any other model override; `tools` is a subset of
+ * `BUILTIN_TOOL_NAMES` — any built-in name, including mutating tools such as
+ * `edit`/`write`/`bash` (the advisor is a full agent). Omitted or empty falls
+ * back to the default `read`/`grep`/`glob` subset. `instructions` is the
  * advisor's specialization, appended to the shared baseline.
  */
 export interface AdvisorConfig {
