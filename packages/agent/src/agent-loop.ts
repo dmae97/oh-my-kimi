@@ -1663,53 +1663,73 @@ async function executeToolCalls(
 	const batchId = `${assistantMessage.timestamp ?? Date.now()}_${toolCalls[0]?.id ?? "batch"}`;
 	const shouldInterruptImmediately = interruptMode !== "wait";
 	const steeringAbortController = new AbortController();
-	const toolSignal = signal
+	const ircAbortController = new AbortController();
+	// Interruptible tools observe steering + external + IRC aborts; every other
+	// tool only sees steering + external, so an IRC-only interrupt never kills a
+	// partially side-effecting foreground tool (e.g. `bash`) running alongside a
+	// pure wait (e.g. `job` poll).
+	const nonInterruptibleSignal: AbortSignal = signal
 		? AbortSignal.any([signal, steeringAbortController.signal])
 		: steeringAbortController.signal;
+	const interruptibleSignal: AbortSignal = signal
+		? AbortSignal.any([signal, steeringAbortController.signal, ircAbortController.signal])
+		: AbortSignal.any([steeringAbortController.signal, ircAbortController.signal]);
 	const interruptState = { triggered: false };
 
-	const records = toolCalls.map(toolCall => ({
-		toolCall,
+	const records = toolCalls.map(toolCall => {
 		// Tools emitted via OpenAI's custom-tool path (e.g. `apply_patch` on GPT-5)
 		// come back under their wire-level name, which may differ from the
 		// harness-internal `name`. Match on either, preferring `name` for
 		// determinism if both somehow collide.
-		tool:
+		const tool =
 			tools?.find(t => t.name === toolCall.name) ??
-			tools?.find(t => t.customWireName !== undefined && t.customWireName === toolCall.name),
-		args: toolCall.arguments as Record<string, unknown>,
-		started: false,
-		result: undefined as AgentToolResult<any> | undefined,
-		isError: false,
-		skipped: false,
-		toolResultMessage: undefined as ToolResultMessage | undefined,
-		resultEmitted: false,
-	}));
+			tools?.find(t => t.customWireName !== undefined && t.customWireName === toolCall.name);
+		return {
+			toolCall,
+			tool,
+			args: toolCall.arguments as Record<string, unknown>,
+			signal: tool?.interruptible ? interruptibleSignal : nonInterruptibleSignal,
+			started: false,
+			result: undefined as AgentToolResult<any> | undefined,
+			isError: false,
+			skipped: false,
+			toolResultMessage: undefined as ToolResultMessage | undefined,
+			resultEmitted: false,
+		};
+	});
 
 	const checkSteering = async (): Promise<void> => {
 		// `signal` (external/user abort) is checked separately from the internal
-		// steeringAbortController: once the run is externally aborted it is
-		// unwinding and the interrupt would be redundant.
-		if (!shouldInterruptImmediately || interruptState.triggered || signal?.aborted) {
+		// abort controllers: once the run is externally aborted it is unwinding
+		// and the interrupt would be redundant.
+		if (!shouldInterruptImmediately || signal?.aborted) {
 			return;
 		}
 		// Prefer non-consuming peeks so queues still own their messages until
 		// the injection boundary. Fall back to consuming steering only for older
 		// integrations that never supplied a peek.
-		let hasMessages = false;
+		let steeringQueued = false;
 		if (hasSteeringMessages) {
-			hasMessages = await hasSteeringMessages();
+			steeringQueued = await hasSteeringMessages();
 		} else if (getSteeringMessages) {
 			const msgs = await getSteeringMessages();
-			hasMessages = (msgs?.length ?? 0) > 0;
+			steeringQueued = (msgs?.length ?? 0) > 0;
 		}
-		if (!hasMessages && hasIrcInterrupts) {
-			hasMessages = await hasIrcInterrupts();
+		if (steeringQueued) {
+			// User steering upgrades an in-flight IRC interrupt: it aborts the
+			// shared signal so foreground tools stop as they do for a user Esc.
+			if (!steeringAbortController.signal.aborted) {
+				interruptState.triggered = true;
+				steeringAbortController.abort();
+			}
+			return;
 		}
-		if (hasMessages) {
-			if (interruptState.triggered || signal?.aborted) return;
+		if (interruptState.triggered) return;
+		if (hasIrcInterrupts && (await hasIrcInterrupts())) {
+			// Peer IRC only aborts interruptible waits: a foreground bash / write
+			// mid-execution keeps running so we never leave partial side effects.
 			interruptState.triggered = true;
-			steeringAbortController.abort();
+			ircAbortController.abort();
 		}
 	};
 
@@ -1820,14 +1840,14 @@ async function executeToolCalls(
 		}
 
 		record.args = effectiveArgs;
-		if (toolSignal.aborted) {
+		if (record.signal.aborted) {
 			record.skipped = true;
 			recordSkippedTool(telemetry, {
 				toolCallId: toolCall.id,
 				toolName: toolCall.name,
 				status: "aborted",
 			});
-			emitToolResult(record, createToolSignalAbortedResult(toolSignal), true);
+			emitToolResult(record, createToolSignalAbortedResult(record.signal), true);
 			return;
 		}
 		record.started = true;
@@ -1858,8 +1878,8 @@ async function executeToolCalls(
 		await runInActiveSpan(toolSpan, async () => {
 			try {
 				if (!tool) throw new Error(`Tool ${toolCall.name} not found`);
-				if (toolSignal.aborted) {
-					result = createToolSignalAbortedResult(toolSignal);
+				if (record.signal.aborted) {
+					result = createToolSignalAbortedResult(record.signal);
 					isError = true;
 					return;
 				}
@@ -1872,14 +1892,14 @@ async function executeToolCalls(
 							args: effectiveArgs,
 							context: currentContext,
 						},
-						toolSignal,
+						record.signal,
 					);
 					if (beforeResult?.block) {
 						throw new ToolCallBlockedError(beforeResult.reason);
 					}
 				}
-				if (toolSignal.aborted) {
-					result = createToolSignalAbortedResult(toolSignal);
+				if (record.signal.aborted) {
+					result = createToolSignalAbortedResult(record.signal);
 					isError = true;
 					return;
 				}
@@ -1899,7 +1919,7 @@ async function executeToolCalls(
 				const rawResult = await tool.execute(
 					toolCall.id,
 					executionArgs,
-					toolSignal,
+					record.signal,
 					partialResult => {
 						stream.push({
 							type: "tool_execution_update",
@@ -1924,7 +1944,7 @@ async function executeToolCalls(
 				isError = true;
 			}
 
-			if (afterToolCall && (!toolSignal.aborted || completedToolExecution)) {
+			if (afterToolCall && (!record.signal.aborted || completedToolExecution)) {
 				try {
 					const after = await afterToolCall(
 						{
@@ -1935,7 +1955,7 @@ async function executeToolCalls(
 							isError,
 							context: currentContext,
 						},
-						toolSignal,
+						record.signal,
 					);
 					if (after) {
 						// Re-normalize the post-hook result: `afterToolCall` is untyped user/extension
@@ -1963,30 +1983,33 @@ async function executeToolCalls(
 		});
 
 		const interrupted = interruptState.triggered;
-		const abortedDuringExecution = toolSignal.aborted && isError;
-		if (interrupted && isError) {
-			// Steering/abort fired AND this tool failed — it was cut off before producing a
-			// usable result, so report it as skipped.
+		const perToolAborted = record.signal.aborted;
+		const abortedDuringExecution = perToolAborted && isError;
+		if (interrupted && perToolAborted && isError) {
+			// This tool's own signal fired AND it failed — it was cut off before producing
+			// a usable result, so report it as skipped.
 			record.skipped = true;
 			emitToolResult(record, createSkippedToolResult(), true);
 		} else {
-			// No interrupt, or the tool finished (successfully or with a genuine error) before
-			// the interrupt landed. Keep its real result: a completed tool already ran its side
-			// effects, so the model must see what actually happened rather than a false "skipped".
+			// No interrupt on this signal, or the tool finished (successfully or with a
+			// genuine error) before the interrupt landed. Keep its real result: a completed
+			// tool already ran its side effects, so the model must see what actually
+			// happened rather than a false "skipped". A peer-IRC interrupt on the batch
+			// leaves non-interruptible tools' signals untouched — their genuine errors
+			// survive here instead of being clobbered into "skipped".
 			emitToolResult(record, result, isError);
 		}
 
 		const firstTextBlock = result.content?.[0];
 		const errorMessageForSpan =
 			caughtError === undefined && isError && firstTextBlock?.type === "text" ? firstTextBlock.text : undefined;
-		const status =
-			(interrupted && isError) || abortedDuringExecution
-				? "aborted"
-				: caughtError instanceof ToolCallBlockedError
-					? "blocked"
-					: isError
-						? "error"
-						: "ok";
+		const status = abortedDuringExecution
+			? "aborted"
+			: caughtError instanceof ToolCallBlockedError
+				? "blocked"
+				: isError
+					? "error"
+					: "ok";
 		finishExecuteToolSpan(telemetry, toolSpan, {
 			result,
 			isError,
