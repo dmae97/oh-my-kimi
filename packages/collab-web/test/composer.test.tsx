@@ -57,4 +57,13 @@ describe("Composer host UI requests", () => {
 		expect(html).toContain("draft");
 		expect(html).toContain("Submit");
 	});
+
+	it("keeps the editor submit enabled for whitespace-only drafts", () => {
+		const html = renderToStaticMarkup(
+			<Composer client={client} snapshot={snapshot({ reqId: 3, kind: "editor", title: "Other", prefill: "   " })} />,
+		);
+
+		expect(html).toContain('title="submit response"');
+		expect(html).not.toMatch(/title="submit response"[^>]*disabled/);
+	});
 });

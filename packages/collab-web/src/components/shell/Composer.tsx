@@ -32,7 +32,7 @@ export function Composer({ client, snapshot }: ComposerProps): ReactNode {
 	const busy = snapshot.working || (snapshot.state?.isStreaming ?? false);
 	const queued = snapshot.state?.queuedMessageCount ?? 0;
 	const canSend = canPrompt && text.trim().length > 0;
-	const canSubmitUiDraft = canPrompt && uiRequest?.kind === "editor" && uiDraft.trim().length > 0;
+	const canSubmitUiDraft = canPrompt && uiRequest?.kind === "editor";
 
 	useEffect(() => {
 		setUiDraft(uiRequest?.kind === "editor" ? (uiRequestPrefill ?? "") : "");
@@ -55,9 +55,8 @@ export function Composer({ client, snapshot }: ComposerProps): ReactNode {
 	}, [client, live, readOnly, text]);
 
 	const submitUiDraft = useCallback((): void => {
-		const trimmed = uiDraft.trim();
-		if (!trimmed || !canPrompt || uiRequest?.kind !== "editor") return;
-		client.sendUiResponse(uiRequest.reqId, trimmed);
+		if (!canPrompt || uiRequest?.kind !== "editor") return;
+		client.sendUiResponse(uiRequest.reqId, uiDraft);
 		setUiDraft("");
 	}, [canPrompt, client, uiDraft, uiRequest]);
 
