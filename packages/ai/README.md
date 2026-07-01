@@ -965,7 +965,14 @@ For Cloudflare AI Gateway models, use provider base URL format
 
 For Anthropic Foundry routing, set `CLAUDE_CODE_USE_FOUNDRY=true` plus:
 `FOUNDRY_BASE_URL`, `ANTHROPIC_FOUNDRY_API_KEY`, optional `ANTHROPIC_CUSTOM_HEADERS`,
-and optional mTLS material (`CLAUDE_CODE_CLIENT_CERT`, `CLAUDE_CODE_CLIENT_KEY`, `NODE_EXTRA_CA_CERTS`).
+and optional mTLS material (`CLAUDE_CODE_CLIENT_CERT`, `CLAUDE_CODE_CLIENT_KEY`).
+
+`NODE_EXTRA_CA_CERTS` (PEM file path or inline PEM, mirroring Node's contract)
+is honoured on every provider fetch — OpenAI-compatible, Codex, Ollama, Azure
+Responses, Google, and Anthropic alike — for corporate relays or private CA
+bundles. Bun's `fetch` does not consume the env var natively, so omp injects
+the bundle into `RequestInit.tls.ca` and seeds the system root store
+alongside it.
 
 Provider endpoint defaults for the current OpenAI-compatible integrations:
 
