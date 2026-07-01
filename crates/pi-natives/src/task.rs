@@ -27,8 +27,10 @@
 //! }
 //! ```
 
-use std::future::Future;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::{
+	future::Future,
+	panic::{AssertUnwindSafe, catch_unwind},
+};
 
 use napi::{Env, Error, Result, Status, Task, bindgen_prelude::*};
 use pi_shell::cancel as core_cancel;
@@ -179,9 +181,12 @@ where
 		// a plain `unsafe extern "C" fn` (napi 3.9.4 `src/async_work.rs:109`),
 		// so an unwind escaping this frame would cross a non-`C-unwind` FFI
 		// edge and force-abort the host under Rust's stabilized C-unwind rules
-		// (RFC 2945, stable since 1.81). Catch here and map the payload to a
-		// `GenericFailure` so the JS `Promise` rejects instead.
-		match catch_unwind(AssertUnwindSafe(move || work(cancel_token))) {
+		// (RFC 2945, stable since 1.81). The crash handler scope tells the
+		// global panic hook this panic is about to be caught and mapped to a
+		// `GenericFailure`, so it must not emit a native crash report.
+		match catch_unwind(AssertUnwindSafe(move || {
+			crate::crash_handler::blocking_task_panic_scope(move || work(cancel_token))
+		})) {
 			Ok(result) => result,
 			Err(payload) => Err(Error::new(
 				Status::GenericFailure,
