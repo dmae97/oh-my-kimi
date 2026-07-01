@@ -34,6 +34,7 @@ import { ToolExecutionComponent } from "../../modes/components/tool-execution";
 import { TranscriptBlock } from "../../modes/components/transcript-container";
 import { createUsageRowBlock } from "../../modes/components/usage-row";
 import { UserMessageComponent } from "../../modes/components/user-message";
+import { decodeStreamedToolArgs, streamingStringKeysForTool } from "../../modes/controllers/tool-args-reveal";
 import { materializeImageReferenceLinksSync } from "../../modes/image-references";
 import { theme } from "../../modes/theme/theme";
 import type { CompactionQueuedMessage, InteractiveModeContext } from "../../modes/types";
@@ -412,8 +413,18 @@ export class UiHelpers {
 					readGroup = null;
 					const tool = this.ctx.viewSession.getToolByName(content.name);
 					const partialJson = getStreamingPartialJson(content);
+					// Mid-stream rebuild (theme change, settings, focus replay): decode
+					// display args from the raw stream exactly like the live reveal path.
+					// The provider-parsed `arguments` lag the stream by up to a throttled
+					// parse window, so spreading them alone would freeze a long write/edit
+					// preview at its last full parse.
+					const rawInput = content.customWireName !== undefined;
 					const renderArgs = partialJson
-						? { ...content.arguments, __partialJson: partialJson }
+						? decodeStreamedToolArgs(partialJson, {
+								rawInput,
+								fullArgs: content.arguments,
+								streamingStringKeys: streamingStringKeysForTool(content.name, rawInput),
+							})
 						: content.arguments;
 					const component = new ToolExecutionComponent(
 						content.name,

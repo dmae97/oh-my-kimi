@@ -14,6 +14,7 @@
 import { afterEach, beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Usage } from "@oh-my-pi/pi-ai";
+import { kStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
@@ -303,5 +304,46 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 		expect(countImageComponents(chatContainer)).toBe(2);
 		expect(Bun.stripANSI(chatContainer.render(100).join("\n"))).toContain("Read reopened.png");
 		expect(ctx.ui.requestRender).toHaveBeenCalledWith(true, { clearScrollback: true });
+	});
+});
+
+describe("UiHelpers.renderSessionContext — mid-stream tool call rebuild", () => {
+	it("decodes streamed write content from partialJson, not the provider's stale parsed arguments", async () => {
+		// A transcript rebuild (theme change, settings edit, focus replay) can land
+		// while a write's args still stream. The provider re-parses `arguments`
+		// only every STREAMING_JSON_PARSE_MIN_GROWTH bytes, so the parsed snapshot
+		// lags the raw buffer. The rebuilt preview must decode from the buffer —
+		// exactly like the live reveal path — or the write body freezes at the
+		// last throttled parse until more bytes arrive.
+		await Settings.init({ inMemory: true });
+		const staleContent = "line one of the streamed write";
+		const grownBuffer = `{"path":"/tmp/mid.ts","content":"${staleContent}\\nGROWN_TAIL_SENTINEL`;
+		const transcript = transcriptWith([
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "write-mid",
+						name: "write",
+						// Provider-parsed snapshot from BEFORE the buffer grew.
+						arguments: { path: "/tmp/mid.ts", content: staleContent },
+						[kStreamingPartialJson]: grownBuffer,
+					},
+				],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude-sonnet",
+				usage: emptyUsage,
+				stopReason: "toolUse",
+				timestamp: 1,
+			},
+		]);
+		const { ctx, chatContainer } = makeRenderCtx(transcript);
+
+		new UiHelpers(ctx).renderInitialMessages();
+
+		const rendered = Bun.stripANSI(chatContainer.render(120).join("\n"));
+		expect(rendered).toContain("GROWN_TAIL_SENTINEL");
 	});
 });

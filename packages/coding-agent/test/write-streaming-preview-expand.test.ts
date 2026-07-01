@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
+import {
+	decodeStreamedToolArgs,
+	streamingStringKeysForTool,
+} from "@oh-my-pi/pi-coding-agent/modes/controllers/tool-args-reveal";
 import * as themeModule from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { writeToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/write";
 import type { TUI } from "@oh-my-pi/pi-tui";
@@ -116,5 +120,36 @@ describe("write streaming preview honors Ctrl+O expansion", () => {
 		expect(rendered).not.toContain("\t");
 		expect(rendered).not.toContain("UNTRUNCATED_TAIL_SENTINEL");
 		expect(rendered).not.toContain("diagnostic sentinel");
+	});
+
+	it("shows content grown past the last throttled parse when rebuilt mid-stream", async () => {
+		// Regression: a transcript rebuild (theme change, settings, focus replay)
+		// recreates the pending write component while args still stream. The
+		// rebuild must decode display args from the raw partialJson buffer — the
+		// provider-parsed arguments lag by up to a throttled parse window, and
+		// spreading them alone froze the preview at the last full parse.
+		if (!initialized) {
+			await themeModule.initTheme();
+			initialized = true;
+		}
+		const uiStub = { requestRender() {} } as unknown as TUI;
+		const staleContent = "line before throttle";
+		// Provider parsed up to here…
+		const seenByProvider = `{"path":"/tmp/foo.ts","content":"${staleContent}`;
+		// …then the buffer grew, but not enough to re-trigger the 256-byte parse.
+		const partialJson = `${seenByProvider}\\nGROWN_TAIL_SENTINEL`;
+		const staleProviderArgs = { path: "/tmp/foo.ts", content: staleContent };
+
+		const renderArgs = decodeStreamedToolArgs(partialJson, {
+			rawInput: false,
+			fullArgs: staleProviderArgs,
+			streamingStringKeys: streamingStringKeysForTool("write", false),
+		});
+		// No updateResult() -> pending, exercising the streaming renderCall path
+		// that reads args.content.
+		const comp = new ToolExecutionComponent("write", renderArgs, {}, undefined, uiStub);
+
+		const rendered = stripAnsi(comp.render(100).join("\n"));
+		expect(rendered).toContain("GROWN_TAIL_SENTINEL");
 	});
 });

@@ -6,6 +6,23 @@ type ToolArgsRevealComponent = {
 	updateArgs(args: unknown, toolCallId?: string): void;
 };
 
+// Top-level string args a renderer reads mid-stream. The streamed-args decode
+// reads these fields incrementally between throttled full-JSON parses so a
+// long payload updates preview args at reveal cadence instead of stalling for
+// STREAMING_JSON_PARSE_MIN_GROWTH bytes at a time. Nested-array modes (edit
+// patch/replace `edits[].diff`) still fall through to the throttled parse.
+const STREAMING_STRING_KEYS_BY_TOOL: Record<string, readonly string[]> = {
+	write: ["content"],
+	edit: ["input"],
+	eval: ["code"],
+};
+
+/** String fields the streamed-args decode reads incrementally for `toolName`. */
+export function streamingStringKeysForTool(toolName: string, rawInput: boolean): readonly string[] | undefined {
+	if (rawInput) return undefined;
+	return STREAMING_STRING_KEYS_BY_TOOL[toolName];
+}
+
 type ToolArgsRevealControllerOptions = {
 	getSmoothStreaming(): boolean;
 	requestRender(): void;
@@ -300,7 +317,6 @@ function clampSliceEnd(text: string, end: number): number {
 type ToolArgsRevealTarget = {
 	rawInput: boolean;
 	exposeRawPartialJson: boolean;
-	fullArgs: Record<string, unknown>;
 	streamingStringKeys?: readonly string[];
 };
 
@@ -364,6 +380,39 @@ function displayArgsForPrefix(entry: RevealEntry, prefix: string, forceParse = f
 	return { args, changed: true };
 }
 
+type StreamedToolArgsSource = {
+	/** Custom-tool raw text stream (`customWireName` tools): never JSON-parsed. */
+	rawInput: boolean;
+	/** Provider-parsed arguments, spread UNDER the fresh decode: a dialect
+	 *  projector may carry keys a raw re-parse cannot recover, but any key the
+	 *  fresh parse does recover wins — provider parses lag the stream by up to
+	 *  STREAMING_JSON_PARSE_MIN_GROWTH bytes mid-stream. */
+	fullArgs?: Record<string, unknown>;
+	/** See {@link streamingStringKeysForTool}. */
+	streamingStringKeys?: readonly string[];
+};
+
+/**
+ * One-shot decode of a streamed tool-call argument buffer into display args —
+ * the same decode the live reveal applies frame-by-frame, for paths that see
+ * the buffer once (transcript rebuilds on theme change, settings, focus
+ * replay). Keeps a rebuilt preview identical to the live preview: parsed
+ * fields come from a fresh parse of the full buffer, `streamingStringKeys`
+ * fields from the incremental string decoder (which also wins ties in the
+ * live path), never from the provider's throttled `arguments`.
+ */
+export function decodeStreamedToolArgs(partialJson: string, source: StreamedToolArgsSource): Record<string, unknown> {
+	if (source.rawInput) {
+		return { input: partialJson, __partialJson: partialJson };
+	}
+	const parsed = parseStreamingJson<Record<string, unknown>>(partialJson);
+	const args: Record<string, unknown> = source.fullArgs ? { ...source.fullArgs, ...parsed } : { ...parsed };
+	const extracted = createStringExtractor(source.streamingStringKeys)?.update(partialJson);
+	if (extracted) Object.assign(args, extracted.values);
+	args.__partialJson = partialJson;
+	return args;
+}
+
 /**
  * Paces streamed tool-call arguments the same way StreamingRevealController
  * paces assistant text: providers that deliver `partialJson` in large batches
@@ -391,16 +440,15 @@ export class ToolArgsRevealController {
 
 	/**
 	 * Record the latest streamed argument text for a tool call and return the
-	 * args to render right now. With smoothing disabled the full target passes
-	 * through in the caller's legacy shape (`{ ...args, __partialJson }`).
+	 * args to render right now. With smoothing disabled nothing is paced — the
+	 * full received buffer decodes in one step — but the entry still runs the
+	 * incremental string decoder + parse throttle, so streamed text fields
+	 * (write `content`, edit bodies, eval `code`) stay fresh between the
+	 * provider's own throttled full-JSON parses instead of lagging up to
+	 * STREAMING_JSON_PARSE_MIN_GROWTH bytes behind.
 	 */
 	setTarget(id: string, partialJson: string, target: ToolArgsRevealTarget): Record<string, unknown> {
-		const { rawInput, exposeRawPartialJson, fullArgs, streamingStringKeys } = target;
-		if (!this.#getSmoothStreaming()) {
-			// Toggle may flip mid-call: drop any live entry so ticks stop.
-			this.#entries.delete(id);
-			return { ...fullArgs, __partialJson: partialJson };
-		}
+		const { rawInput, exposeRawPartialJson, streamingStringKeys } = target;
 		let entry = this.#entries.get(id);
 		if (!entry) {
 			entry = {
@@ -436,6 +484,9 @@ export class ToolArgsRevealController {
 			}
 			entry.target = partialJson;
 		}
+		// Toggle may flip mid-call: snap the reveal to everything received so
+		// pacing stops (and never restarts while the toggle stays off).
+		if (!this.#getSmoothStreaming()) entry.revealed = entry.target.length;
 		entry.revealed = clampSliceEnd(entry.target, entry.revealed);
 		this.#syncTimer();
 		return displayArgsForPrefix(entry, entry.target.slice(0, entry.revealed)).args;
