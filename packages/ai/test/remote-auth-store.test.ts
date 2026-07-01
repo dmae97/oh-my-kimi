@@ -223,9 +223,7 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 			},
 		});
 
-		const fetchSpy = vi
-			.spyOn(brokerClient, "fetchUsage")
-			.mockRejectedValue(new Error("broker offline"));
+		const fetchSpy = vi.spyOn(brokerClient, "fetchUsage").mockRejectedValue(new Error("broker offline"));
 
 		const nowSpy = vi.spyOn(Date, "now");
 		nowSpy.mockReturnValue(1_000_000);
