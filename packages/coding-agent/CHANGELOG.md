@@ -14,6 +14,7 @@
 - Fixed a bug where cached model edit variants failed to update when changing project directories
 - Fixed subagents with structured output schemas repeatedly failing `yield` validation because the system prompt rendered the schema as a bare TypeScript interface, so the model matched the whole yield payload against it instead of nesting the data under `result.data`. The prompt now shows the schema wrapped inside `result: { data: … }` via a new `renderYieldSchema` Handlebars helper. ([#3972](https://github.com/can1357/oh-my-pi/issues/3972))
 - Fixed MCP Streamable HTTP request and notify timeouts staying unarmed during stalled response body reads. ([#3974](https://github.com/can1357/oh-my-pi/issues/3974))
+- Fixed eval and task spawn defaults to respect restricted agent `spawns` lists. ([#3973](https://github.com/can1357/oh-my-pi/issues/3973))
 
 ## [16.2.11] - 2026-07-01
 
