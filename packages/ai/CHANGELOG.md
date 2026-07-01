@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Reworded the GPT-5 Responses no-reasoning fallback developer item so it no longer says `# Juice: 0 !important` or implies a zero tool/execution budget. ([#4151](https://github.com/can1357/oh-my-pi/issues/4151))
+
 ## [16.2.12] - 2026-07-01
 
 ### Changed

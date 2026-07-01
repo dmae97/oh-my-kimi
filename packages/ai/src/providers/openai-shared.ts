@@ -2365,6 +2365,9 @@ export function applyCommonResponsesSamplingParams<P extends CommonResponsesPara
 	applyOpenAIServiceTier(params, options?.serviceTier, model.provider);
 }
 
+const RESPONSES_REASONING_SUPPRESSION_PROMPT =
+	"Keep internal reasoning brief. Continue following the task and use tools normally.";
+
 type ReasoningOptions = {
 	reasoning?: string;
 	reasoningSummary?: "auto" | "detailed" | "concise" | null;
@@ -2409,7 +2412,7 @@ export function applyResponsesCompatPolicy<P extends ResponseCreateParamsStreami
 		if (policy.compat.requiresJuiceZeroHack && reasoning.requestedEffort === undefined) {
 			messages.push({
 				role: "developer",
-				content: [{ type: "input_text", text: "# Juice: 0 !important" }],
+				content: [{ type: "input_text", text: RESPONSES_REASONING_SUPPRESSION_PROMPT }],
 			});
 			return 1;
 		}
@@ -2441,7 +2444,7 @@ export function applyResponsesCompatPolicy<P extends ResponseCreateParamsStreami
 	if (policy.compat.requiresJuiceZeroHack) {
 		messages.push({
 			role: "developer",
-			content: [{ type: "input_text", text: "# Juice: 0 !important" }],
+			content: [{ type: "input_text", text: RESPONSES_REASONING_SUPPRESSION_PROMPT }],
 		});
 		return 1;
 	}

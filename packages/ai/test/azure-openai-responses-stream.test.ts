@@ -154,7 +154,12 @@ describe("azure openai responses streaming", () => {
 			{ role: "user", content: [{ type: "input_text", text: "Say hello" }] },
 			{
 				role: "developer",
-				content: [{ type: "input_text", text: "# Juice: 0 !important" }],
+				content: [
+					{
+						type: "input_text",
+						text: "Keep internal reasoning brief. Continue following the task and use tools normally.",
+					},
+				],
 			},
 		]);
 	});

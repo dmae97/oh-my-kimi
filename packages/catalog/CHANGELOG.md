@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Updated the Responses compat flag docs to describe the no-reasoning fallback without the old `# Juice: 0 !important` wording. ([#4151](https://github.com/can1357/oh-my-pi/issues/4151))
+
 ## [16.2.12] - 2026-07-01
 
 ### Breaking Changes
