@@ -44,6 +44,9 @@
 ### Fixed
 
 - Fixed the `<workstation>` block rendering `Kernel: unknown` on macOS 15+, which caused the model to display the wrong OS glyph, by falling back to `<type> <release>` (e.g. `Darwin 25.5.0`) when `os.version()` returns `"unknown"` or an empty string ([#4141](https://github.com/can1357/oh-my-pi/issues/4141)).
+### Fixed
+
+- Fixed the TUI busy-looping at ~40–50% CPU during long-running tool sessions. `EventController.handleEvent` no longer rebuilds the status-line top border synchronously on every session event; the rebuild now runs inside a lazy provider that fires at most once per painted frame, so streaming/tool bursts collapse into the render throttle instead of stacking `getContextUsage` serialization work between paints. ([#4145](https://github.com/can1357/oh-my-pi/issues/4145))
 
 ## [16.2.12] - 2026-07-01
 

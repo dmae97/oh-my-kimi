@@ -302,7 +302,7 @@ export class EventController {
 		}
 
 		this.ctx.statusLine.invalidate();
-		this.ctx.updateEditorTopBorder();
+		this.ctx.ui.requestRender();
 
 		const run = this.#handlers[event.type] as (e: AgentSessionEvent) => Promise<void>;
 		await run(event);
@@ -816,7 +816,7 @@ export class EventController {
 				this.ctx.showPinnedError(event.message.errorMessage);
 			}
 			this.ctx.statusLine.invalidate();
-			this.ctx.updateEditorTopBorder();
+			this.ctx.ui.requestRender();
 		}
 		this.ctx.ui.requestRender();
 	}
@@ -1174,21 +1174,21 @@ export class EventController {
 				if (!event.skipped) {
 					this.ctx.rebuildChatFromMessages();
 					this.ctx.statusLine.invalidate();
-					this.ctx.updateEditorTopBorder();
+					this.ctx.ui.requestRender();
 				}
 				this.ctx.showWarning(event.errorMessage);
 			} else if (!event.skipped) {
 				this.ctx.lastAssistantUsage = undefined;
 				this.ctx.rebuildChatFromMessages();
 				this.ctx.statusLine.invalidate();
-				this.ctx.updateEditorTopBorder();
+				this.ctx.ui.requestRender();
 				this.ctx.showStatus("Auto-shake completed");
 			}
 		} else if (event.result) {
 			this.ctx.lastAssistantUsage = undefined;
 			this.ctx.rebuildChatFromMessages();
 			this.ctx.statusLine.invalidate();
-			this.ctx.updateEditorTopBorder();
+			this.ctx.ui.requestRender();
 		} else if (event.errorMessage) {
 			this.ctx.showWarning(event.errorMessage);
 		} else if (isHandoffAction) {
@@ -1196,7 +1196,7 @@ export class EventController {
 			this.ctx.lastAssistantUsage = undefined;
 			this.ctx.rebuildChatFromMessages();
 			this.ctx.statusLine.invalidate();
-			this.ctx.updateEditorTopBorder();
+			this.ctx.ui.requestRender();
 			await this.ctx.reloadTodos();
 			this.ctx.showStatus("Auto-handoff completed");
 		} else if (event.skipped) {

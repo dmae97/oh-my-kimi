@@ -13,6 +13,13 @@
 ### Added
 
 - Added regression coverage for `findCommittedPrefixResync` — the tui seam that re-anchors the committed prefix when a live block re-lays-out at settle. Locks in the earliest-audited-mismatch re-anchor, the hard-scan escape from tail-sample tolerance for a newly-permanent forced-overflow row, exempt-window drift silence, and shrink-into-prefix truncation, so a future refactor of the resync path cannot silently strand pending SSH placeholder chrome above the settled block ([#4124](https://github.com/can1357/oh-my-pi/issues/4124)).
+### Added
+
+- Added `Editor.setTopBorderProvider()` so hosts can install a lazy top-border builder that runs once per painted frame instead of eagerly rebuilding after every state change. Falls back to the existing `setTopBorder()` slot when no provider is registered.
+
+### Fixed
+
+- Added adaptive render backpressure: a frame that overruns the 30 fps cadence now inflates the following frame's delay to at most twice its own cost (capped at 200 ms), preventing the render loop from busy-looping when a slow paint would otherwise fire the next frame at `setTimeout(0)`. ([#4145](https://github.com/can1357/oh-my-pi/issues/4145))
 
 ## [16.2.12] - 2026-07-01
 
