@@ -4,8 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { applyEligibleNestedPatches, mergeIsolatedChanges } from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
 import type { SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
-import * as gitModule from "@oh-my-pi/pi-coding-agent/utils/git";
 import * as worktreeModule from "@oh-my-pi/pi-coding-agent/task/worktree";
+import * as gitModule from "@oh-my-pi/pi-coding-agent/utils/git";
 import { $ } from "bun";
 
 function result(overrides: Partial<SingleResult> = {}): SingleResult {
