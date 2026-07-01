@@ -1,5 +1,6 @@
 import type { Component, OverlayHandle, TUI } from "@oh-my-pi/pi-tui";
 import { Container, Spacer, Text } from "@oh-my-pi/pi-tui";
+import type { CollabUiRequestDraft, CollabUiSelectItem } from "@oh-my-pi/pi-wire";
 import { KeybindingsManager } from "../../config/keybindings";
 import type {
 	CompactOptions,
@@ -28,6 +29,31 @@ import { setSessionTerminalTitle, setTerminalTitle } from "../../utils/title-gen
 
 const MAX_WIDGET_LINES = 10;
 
+interface CollabDialogWinner {
+	source: "local" | "remote";
+	value: string | undefined;
+}
+
+function toWireSelectOptions(options: ExtensionUISelectItem[]): CollabUiSelectItem[] {
+	return options.map(option =>
+		typeof option === "string"
+			? option
+			: option.description
+				? { label: option.label, description: option.description }
+				: { label: option.label },
+	);
+}
+
+function mergeAbortSignals(first: AbortSignal | undefined, second: AbortSignal): AbortSignal {
+	if (!first) return second;
+	if (first.aborted) return first;
+	const controller = new AbortController();
+	const abort = (): void => controller.abort();
+	first.addEventListener("abort", abort, { once: true });
+	second.addEventListener("abort", abort, { once: true });
+	return controller.signal;
+}
+
 export class ExtensionUiController {
 	#extensionTerminalInputUnsubscribers = new Set<() => void>();
 	#hookWidgetsAbove = new Map<string, ExtensionUiComponent>();
@@ -45,7 +71,7 @@ export class ExtensionUiController {
 	async initHooksAndCustomTools(): Promise<void> {
 		// Create and set hook & tool UI context
 		const uiContext: ExtensionUIContext = {
-			select: (title, options, dialogOptions) => this.showHookSelector(title, options, dialogOptions),
+			select: (title, options, dialogOptions) => this.showCollabAwareSelector(title, options, dialogOptions),
 			confirm: (title, message, _dialogOptions) => this.showHookConfirm(title, message),
 			input: (title, placeholder, dialogOptions) => this.showHookInput(title, placeholder, dialogOptions),
 			notify: (message, type) => this.showHookNotify(message, type),
@@ -61,7 +87,7 @@ export class ExtensionUiController {
 			},
 			getEditorText: () => this.ctx.editor.getText(),
 			editor: (title, prefill, dialogOptions, editorOptions) =>
-				this.showHookEditor(title, prefill, dialogOptions, editorOptions),
+				this.showCollabAwareEditor(title, prefill, dialogOptions, editorOptions),
 			get theme() {
 				return theme;
 			},
@@ -529,6 +555,59 @@ export class ExtensionUiController {
 	setHookStatus(key: string, text: string | undefined): void {
 		this.ctx.statusLine.setHookStatus(key, text);
 		this.ctx.ui.requestRender();
+	}
+
+	async showCollabAwareSelector(
+		title: string,
+		options: ExtensionUISelectItem[],
+		dialogOptions?: InteractiveSelectorDialogOptions,
+		extra?: { slider?: HookSelectorSlider },
+	): Promise<string | undefined> {
+		const request: CollabUiRequestDraft = {
+			kind: "select",
+			title,
+			options: toWireSelectOptions(options),
+			initialIndex: dialogOptions?.initialIndex,
+			selectionMarker: dialogOptions?.selectionMarker,
+			checkedIndices: dialogOptions?.checkedIndices ? [...dialogOptions.checkedIndices] : undefined,
+			markableCount: dialogOptions?.markableCount,
+			helpText: dialogOptions?.helpText,
+		};
+		return this.#raceCollabDialog(request, dialogOptions?.signal, signal =>
+			this.showHookSelector(title, options, { ...dialogOptions, signal }, extra),
+		);
+	}
+
+	async showCollabAwareEditor(
+		title: string,
+		prefill?: string,
+		dialogOptions?: ExtensionUIDialogOptions,
+		editorOptions?: { promptStyle?: boolean },
+	): Promise<string | undefined> {
+		const request: CollabUiRequestDraft = { kind: "editor", title, prefill };
+		return this.#raceCollabDialog(request, dialogOptions?.signal, signal =>
+			this.showHookEditor(title, prefill, { ...dialogOptions, signal }, editorOptions),
+		);
+	}
+
+	async #raceCollabDialog(
+		request: CollabUiRequestDraft,
+		signal: AbortSignal | undefined,
+		local: (signal: AbortSignal) => Promise<string | undefined>,
+	): Promise<string | undefined> {
+		const host = this.ctx.collabHost;
+		if (!host) return local(signal ?? new AbortController().signal);
+		const localAbort = new AbortController();
+		const remoteAbort = new AbortController();
+		const remote = host.requestGuestUi(request, mergeAbortSignals(signal, remoteAbort.signal));
+		if (!remote) return local(signal ?? new AbortController().signal);
+		const localSignal = mergeAbortSignals(signal, localAbort.signal);
+		const localWinner = local(localSignal).then((value): CollabDialogWinner => ({ source: "local", value }));
+		const remoteWinner = remote.then((value): CollabDialogWinner => ({ source: "remote", value }));
+		const winner = await Promise.race([localWinner, remoteWinner]);
+		if (winner.source === "remote") localAbort.abort();
+		else remoteAbort.abort();
+		return winner.value;
 	}
 
 	/**

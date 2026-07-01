@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the mobile collab web UI showing `ask` questions without response controls. ([#4035](https://github.com/can1357/oh-my-pi/issues/4035))
+
 ## [16.2.0] - 2026-06-27
 
 ### Added

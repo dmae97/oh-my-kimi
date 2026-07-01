@@ -323,6 +323,24 @@ describe("collab read-only links", () => {
 		expect(host.participants.find(p => p.name === "writer")?.readOnly).toBeUndefined();
 	});
 
+	it("routes host UI requests to write guests and resolves their response", async () => {
+		const guest = await joinAsGuest(host.link, "writer-ui");
+		guestCleanups.push(() => guest.socket.close());
+		const welcome = await guest.nextFrame();
+		if (welcome.t !== "welcome") throw new Error(`expected welcome, got ${welcome.t}`);
+
+		const pending = host.requestGuestUi({ kind: "select", title: "Continue?", options: ["Yes"] });
+		if (!pending) throw new Error("expected writable guest UI request");
+		const request = await guest.nextFrame();
+		if (request.t !== "ui-request") throw new Error(`expected ui-request, got ${request.t}`);
+		expect(request.request).toMatchObject({ kind: "select", title: "Continue?", options: ["Yes"] });
+
+		guest.socket.send({ t: "ui-response", reqId: request.request.reqId, value: "Yes" });
+		expect(await pending).toBe("Yes");
+		const end = await guest.nextFrame();
+		expect(end).toEqual({ t: "ui-request-end", reqId: request.request.reqId });
+	});
+
 	it("treats a forged write token as read-only", async () => {
 		const { prompts } = harness;
 

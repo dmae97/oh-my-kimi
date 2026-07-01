@@ -298,6 +298,29 @@ export interface SubagentLifecyclePayload {
 // Frames (JSON inside the AES-GCM seal)
 // ═══════════════════════════════════════════════════════════════════════════
 
+export type CollabUiSelectItem = string | { label: string; description?: string };
+
+export type CollabUiResponseValue = string | undefined;
+
+export type CollabUiRequestDraft =
+	| {
+			kind: "select";
+			title: string;
+			options: CollabUiSelectItem[];
+			initialIndex?: number;
+			selectionMarker?: "radio" | "checkbox";
+			checkedIndices?: number[];
+			markableCount?: number;
+			helpText?: string;
+	  }
+	| {
+			kind: "editor";
+			title: string;
+			prefill?: string;
+	  };
+
+export type CollabUiRequest = CollabUiRequestDraft & { reqId: number };
+
 export type GuestFrame =
 	| {
 			t: "hello";
@@ -311,6 +334,7 @@ export type GuestFrame =
 			writeToken?: string;
 	  }
 	| { t: "prompt"; text: string; images?: ImageContent[] }
+	| { t: "ui-response"; reqId: number; value?: CollabUiResponseValue }
 	| { t: "abort" }
 	| { t: "agent-cmd"; cmd: "chat" | "kill" | "revive"; agentId: string; text?: string }
 	| { t: "fetch-transcript"; reqId: number; agentId: string; fromByte: number };
@@ -348,6 +372,8 @@ export type HostFrame =
 	/** Mirrored EventBus traffic (task subagent lifecycle/progress channels only). */
 	| { t: "bus"; channel: BusChannel; data: unknown }
 	| { t: "agents"; agents: AgentSnapshot[] }
+	| { t: "ui-request"; request: CollabUiRequest }
+	| { t: "ui-request-end"; reqId: number }
 	/** Targeted reply to fetch-transcript; `text` is decoded JSONL from `fromByte`, `newSize` the next offset base. */
 	| { t: "transcript"; reqId: number; text: string; newSize: number; error?: string }
 	| { t: "bye"; reason: string }

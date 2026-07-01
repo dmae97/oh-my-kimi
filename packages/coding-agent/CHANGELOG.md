@@ -12,6 +12,9 @@
 - Improved robustness of MCP authentication error detection and header-based server discovery
 - Fixed `search` and AST tools accepting external read URLs by materializing fetched URL text through the read cache before path resolution. ([#3649](https://github.com/can1357/oh-my-pi/issues/3649))
 - Fixed reliable detection of 401/403 authorization failures during Smithery commands and HTTP RPCs
+### Fixed
+
+- Fixed `/collab` web guests being unable to answer `ask` tool questions by routing host UI requests through writable collab peers. ([#4035](https://github.com/can1357/oh-my-pi/issues/4035))
 
 ## [16.2.12] - 2026-07-01
 
