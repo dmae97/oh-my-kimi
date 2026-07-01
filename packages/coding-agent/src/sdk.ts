@@ -1266,6 +1266,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				const sessionModelStr = sessionModelStrings[i];
 				const parsedModel = parseModelString(sessionModelStr, {
 					allowMaxAlias: true,
+					allowAutoAlias: true,
 					isLiteralModelId: (provider, id) => modelRegistry.find(provider, id) !== undefined,
 				});
 				if (!parsedModel) {
@@ -1916,6 +1917,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				const sessionModelStr = sessionModelStrings[i];
 				const parsedModel = parseModelString(sessionModelStr, {
 					allowMaxAlias: true,
+					allowAutoAlias: true,
 					isLiteralModelId: (provider, id) => modelRegistry.find(provider, id) !== undefined,
 				});
 				if (!parsedModel) continue;

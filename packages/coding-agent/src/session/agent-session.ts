@@ -870,6 +870,7 @@ function parseRetryFallbackSelector(
 	if (!trimmed) return undefined;
 	const parsed = parseModelString(trimmed, {
 		allowMaxAlias: true,
+		allowAutoAlias: true,
 		isLiteralModelId: (provider, id) => modelLookup?.find(provider, id) !== undefined,
 	});
 	if (!parsed) return undefined;
@@ -10758,6 +10759,7 @@ export class AgentSession {
 
 		const parsed = parseModelString(trimmedTarget, {
 			allowMaxAlias: true,
+			allowAutoAlias: true,
 			isLiteralModelId: (provider, id) =>
 				availableModels.some(model => model.provider === provider && model.id === id),
 		});

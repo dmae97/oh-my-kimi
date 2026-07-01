@@ -79,28 +79,35 @@ export interface ScopedModel {
 
 interface ThinkingSuffixOptions {
 	allowMaxAlias?: boolean;
+	allowAutoAlias?: boolean;
 }
 
 interface ModelStringParseOptions extends ThinkingSuffixOptions {
 	isLiteralModelId?: (provider: string, id: string) => boolean;
 }
-const MAX_THINKING_SUFFIX_OPTIONS: ThinkingSuffixOptions = { allowMaxAlias: true };
+// Alias-suffix recognition for the model-pattern parser: `:max` maps to xhigh
+// and `:auto` maps to the auto sentinel. Both are gated behind the alias flags
+// (and the literal-id / exact-match guards on the callers) so a real model id
+// ending in `:max` / `:auto` isn't silently reinterpreted as a thinking suffix.
+const MAX_THINKING_SUFFIX_OPTIONS: ThinkingSuffixOptions = { allowMaxAlias: true, allowAutoAlias: true };
 
 function parseThinkingSuffix(value: string, options?: ThinkingSuffixOptions): ConfiguredThinkingLevel | undefined {
-	if (value === AUTO_THINKING) return AUTO_THINKING;
 	const level = parseThinkingLevel(value);
 	if (level !== undefined) return level;
-	return options?.allowMaxAlias === true && value === "max" ? ThinkingLevel.XHigh : undefined;
+	if (options?.allowMaxAlias === true && value === "max") return ThinkingLevel.XHigh;
+	if (options?.allowAutoAlias === true && value === AUTO_THINKING) return AUTO_THINKING;
+	return undefined;
 }
 
 /**
  * Split a trailing `:<level>` thinking selector off a model pattern.
  *
- * `level` is set when the suffix parses as a concrete thinking level or the
- * `auto` sentinel, in which case `base` has the suffix stripped; otherwise
- * `base` is the input. `minColonIndex` requires the colon to appear strictly
- * after that index — role-alias callers pass `PREFIX_MODEL_ROLE.length` so the
- * base is at least as long as the `pi/` prefix.
+ * `level` is set when the suffix parses as a concrete thinking level (or, when
+ * the caller opts in via `allowMaxAlias`/`allowAutoAlias`, the `:max` / `:auto`
+ * aliases); `base` then has the suffix stripped. Otherwise `base` is the input.
+ * `minColonIndex` requires the colon to appear strictly after that index —
+ * role-alias callers pass `PREFIX_MODEL_ROLE.length` so the base is at least
+ * as long as the `pi/` prefix.
  */
 function splitThinkingSuffix(
 	pattern: string,
