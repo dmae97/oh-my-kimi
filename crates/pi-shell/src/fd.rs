@@ -988,9 +988,10 @@ fn matches_walker_type_filter(
 /// cancellation token fire, then awaits the blocking task. Without this
 /// closure, `pi_walker`'s per-entry heartbeat never checks the flag and a
 /// cancelled walk keeps traversing until the whole tree is collected.
-/// Returning [`io::ErrorKind::Interrupted`] surfaces as [`WalkError::Interrupted`],
-/// which the callers translate to a silent break — the shell wrapper owns the
-/// user-visible exit code (130), so no `fd:` diagnostic is emitted.
+/// Returning [`io::ErrorKind::Interrupted`] surfaces as
+/// [`WalkError::Interrupted`], which the callers translate to a silent break —
+/// the shell wrapper owns the user-visible exit code (130), so no `fd:`
+/// diagnostic is emitted.
 ///
 /// Regression cover for #3949 (fd) and #3933 (grep/rg — same class of defect).
 fn cancel_heartbeat(cancelled: &AtomicBool) -> impl Fn() -> io::Result<()> + Sync + '_ {

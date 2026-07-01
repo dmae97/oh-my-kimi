@@ -50,19 +50,19 @@ import { type OutputMeta, outputMeta } from "./output-meta";
 import { formatPathRelativeToCwd, isInternalUrlPath, pathTargetsSsh, peelWriteUrlSelector } from "./path-utils";
 import { enforcePlanModeWrite, resolvePlanPath, unwrapHashlineHeaderPath } from "./plan-mode-guard";
 import {
-	Ellipsis,
 	cachedRenderedString,
 	createRenderedStringCache,
+	Ellipsis,
 	formatDiagnostics,
 	formatErrorDetail,
 	formatExpandHint,
 	formatMoreItems,
 	formatStatusIcon,
 	getLspBatchRequest,
-	TRUNCATE_LENGTHS,
 	type RenderedStringCache,
 	replaceTabs,
 	shortenPath,
+	TRUNCATE_LENGTHS,
 	truncateToWidth,
 } from "./render-utils";
 import {
@@ -1180,7 +1180,11 @@ export const writeToolRenderer = {
 			const { expanded } = options;
 			let body = renderContentPreview(fileContent, expanded, lang, uiTheme, previewCache);
 			if (isPartial && progressText) {
-				const safeProgressText = truncateToWidth(replaceTabs(progressText), TRUNCATE_LENGTHS.LINE, Ellipsis.Unicode);
+				const safeProgressText = truncateToWidth(
+					replaceTabs(progressText),
+					TRUNCATE_LENGTHS.LINE,
+					Ellipsis.Unicode,
+				);
 				body = `${uiTheme.fg("muted", safeProgressText)}${body ? `\n${body}` : ""}`;
 			}
 			if (!isPartial && diagnostics) {

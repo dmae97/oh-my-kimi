@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { create, toBinary } from "@bufbuild/protobuf";
+import { streamDevin } from "@oh-my-pi/pi-ai/providers/devin";
+import type { Context, Model, ToolCall } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { GetChatMessageResponseSchema } from "@oh-my-pi/pi-catalog/discovery/devin-gen/exa/api_server_pb/api_server_pb";
 import { GetUserJwtResponseSchema } from "@oh-my-pi/pi-catalog/discovery/devin-gen/exa/auth_pb/auth_pb";
@@ -7,8 +9,6 @@ import {
 	ChatToolCallSchema,
 	StopReason,
 } from "@oh-my-pi/pi-catalog/discovery/devin-gen/exa/codeium_common_pb/codeium_common_pb";
-import { streamDevin } from "@oh-my-pi/pi-ai/providers/devin";
-import type { Context, Model, ToolCall } from "@oh-my-pi/pi-ai/types";
 
 function frameConnectMessage(payload: Uint8Array): Uint8Array {
 	const out = new Uint8Array(5 + payload.length);
@@ -49,7 +49,7 @@ describe("streamDevin args streaming", () => {
 		const chunks = [
 			toolCallDelta(`{"agent":"task","note":"initial"`),
 			toolCallDelta(`{"agent":"task","note":"initial","step":1`),
-			toolCallDelta(`{"agent":"task","note":"initial","step":12`, StopReason.END_TURN),
+			toolCallDelta(`{"agent":"task","note":"initial","step":12`, StopReason.FUNCTION_CALL),
 		];
 		const fetchImpl = (async (input: string | URL | Request) => {
 			const url = String(input);

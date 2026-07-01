@@ -104,18 +104,17 @@ describe("Python runner shell output streaming", () => {
 	});
 
 	it("caps !cmd output and captured result by line count with a truncation notice", async () => {
-		const child = [
-			"import sys",
-			"sys.stdout.write(('x' + chr(10)) * 3100)",
-			"sys.stdout.flush()",
-		].join(";");
+		const child = ["import sys", "sys.stdout.write(('x' + chr(10)) * 3100)", "sys.stdout.flush()"].join(";");
 		const frames = await runCell(
 			[
 				`result = !${pythonPath} -c ${shellQuote(child)}`,
 				"print('captured=' + str(len(result)) + ' return=' + str(result.returncode))",
 			].join("\n"),
 		);
-		const stdout = frames.filter(frame => frame.type === "stdout").map(frame => frame.data).join("");
+		const stdout = frames
+			.filter(frame => frame.type === "stdout")
+			.map(frame => frame.data)
+			.join("");
 
 		expect(stdout).toContain("[output truncated: shell helper exceeded");
 		expect(stdout).toContain("captured=3000 return=0");
@@ -123,18 +122,17 @@ describe("Python runner shell output streaming", () => {
 	});
 
 	it("caps newline-free !cmd output by bytes with a truncation notice", async () => {
-		const child = [
-			"import sys",
-			"sys.stdout.write('z' * (1024 * 1024 + 17))",
-			"sys.stdout.flush()",
-		].join(";");
+		const child = ["import sys", "sys.stdout.write('z' * (1024 * 1024 + 17))", "sys.stdout.flush()"].join(";");
 		const frames = await runCell(
 			[
 				`result = !${pythonPath} -c ${shellQuote(child)}`,
 				"print('capturedChars=' + str(len(result.n)) + ' return=' + str(result.returncode))",
 			].join("\n"),
 		);
-		const stdout = frames.filter(frame => frame.type === "stdout").map(frame => frame.data).join("");
+		const stdout = frames
+			.filter(frame => frame.type === "stdout")
+			.map(frame => frame.data)
+			.join("");
 
 		expect(stdout).toContain("[output truncated: shell helper exceeded");
 		expect(stdout).toContain("capturedChars=1048576 return=0");
