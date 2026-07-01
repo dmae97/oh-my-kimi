@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { JsRuntime, type RuntimeHooks } from "../../src/eval/js/shared/runtime";
-import { waitForBrowserRun } from "../../src/tools/browser/run-cancellation";
+import { bindBrowserRunFacade, waitForBrowserRun } from "../../src/tools/browser/run-cancellation";
 
 describe("browser run cancellation", () => {
 	beforeEach(() => {
@@ -28,16 +28,19 @@ describe("browser run cancellation", () => {
 		});
 		runtime.setRunScope({
 			wait: (ms: number): Promise<void> => waitForBrowserRun(ms, signal),
-			tab: {
-				goto: async (url: string): Promise<void> => {
-					state.lateNavigation = url;
+			tab: bindBrowserRunFacade(
+				{
+					goto: async (url: string): Promise<void> => {
+						state.lateNavigation = url;
+					},
 				},
-			},
+				signal,
+			),
 		});
 
 		const run = Promise.race([
 			runtime.run(
-				'await wait(60); await tab.goto("https://late.example"); display("late display");',
+				'try { await wait(60); } catch {} await tab.goto("https://late.example"); display("late display");',
 				"browser-run-cancellation-test.js",
 				hooks,
 			),

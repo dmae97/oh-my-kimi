@@ -13,7 +13,7 @@ import { ToolAbortError, ToolError, throwIfAborted } from "../../tool-errors";
 import { type AriaSnapshotOptions, buildAriaSnapshotScript } from "../aria/aria-snapshot";
 import { DEFAULT_VIEWPORT } from "../launch";
 import { extractReadableFromHtml, type ReadableFormat } from "../readable";
-import { waitForBrowserRun } from "../run-cancellation";
+import { bindBrowserRunFacade, waitForBrowserRun } from "../run-cancellation";
 import type { Observation, ReadyInfo, RunResultOk, ScreenshotResult, SessionSnapshot } from "../tab-protocol";
 import {
 	type CmuxEvalResult,
@@ -1290,10 +1290,11 @@ export async function runCmuxCode(tab: CmuxTab, opts: RunCmuxCodeOptions): Promi
 	tab.setRunContext({ session: opts.snapshot, displays, screenshots, signal, timeoutMs: opts.timeoutMs });
 	const runtime = tab.ensureRuntime(opts.snapshot);
 	runtime.setCwd(opts.snapshot.cwd);
+	const runTab = bindBrowserRunFacade(tab, signal);
 	runtime.setRunScope({
-		page: tab.page,
-		browser: tab.browser,
-		tab,
+		page: bindBrowserRunFacade(tab.page, signal),
+		browser: bindBrowserRunFacade(tab.browser, signal),
+		tab: runTab,
 		assert: (cond: unknown, text?: string): void => {
 			if (!cond) throw new ToolError(text ?? "Assertion failed");
 		},
