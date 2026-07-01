@@ -21,6 +21,7 @@
 - Fixed RPC mode abort_bash being blocked by running bash commands by dispatching bash in the background.
 - Fixed task.maxConcurrency and task.maxRecursionDepth limits being bypassed by sub-spawn paths, ensuring limits are dynamically resized and respected.
 - Fixed the edit tool inflating session files by pruning extremely large file snapshots from tool-result details.
+- Fixed edit-tool Markdown list guidance so hashline parser errors and the model-facing prompt teach `+- item` escaping instead of steering agents toward full-file `write` fallbacks. ([#4179](https://github.com/can1357/oh-my-pi/issues/4179))
 - Fixed workstation OS detection rendering "Kernel: unknown" on macOS 15+.
 - Fixed /copy code and /copy cmd commands being treated as normal prompts instead of copying the requested blocks.
 - Fixed interactive bash status line not updating after directory changes (cd).

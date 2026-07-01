@@ -19,7 +19,7 @@ Single line: `SWAP N.=N:` / `DEL N`. The range is the ORIGINAL lines you touch; 
 </ops>
 
 <body-rows>
-Body rows appear only under a `:` header. Every body row is `+TEXT` — add a literal line `TEXT`, verbatim (leading whitespace kept); `+` alone adds a blank line. No other row kind. NEVER write `-old` or a bare/context line. To keep a line, leave it out of every range. To insert a literal line starting with `-` or `+`, prefix it: `+-x`, `++x`.
+Body rows appear only under a `:` header. Every body row is `+TEXT` — add a literal line `TEXT`, verbatim (leading whitespace kept); `+` alone adds a blank line. No other row kind. NEVER write `-old` or a bare/context line. To keep a line, leave it out of every range. Literal lines starting with `-`/`+` still need the body prefix: Markdown `- item` → `+- item`, `+ item` → `++ item`.
 </body-rows>
 
 <rules>
@@ -103,6 +103,14 @@ INS.TAIL:
 +greet("everyone")
 ```
 
+Insert Markdown bullets — the leading `+` is the body-row marker; the file receives `- task`:
+```
+[PLAN.md#A1B2]
+INS.POST 2:
++- task
++  - nested task
+```
+
 Replace the whole `greet` function block — `SWAP.BLK 1:` resolves lines 1–3 (the `def` header through `print(msg)`); line 4 is a separate statement and stays:
 ```
 [greet.py#A1B2]
@@ -160,5 +168,5 @@ INS.POST 3:
 If you remember nothing else:
 1. RE-GROUND AFTER EVERY EDIT. Every apply mints a fresh `#TAG` and renumbers — take the next edit's numbers from the edit response or a fresh `read`. Stale tag or surprise? STOP, re-`read`.
 2. RANGES ARE TIGHT. Cover only lines that change; a stale wide range shreds everything it spans. Whole construct → `SWAP.BLK N`.
-3. THE BODY IS THE FINAL CONTENT. Only `+TEXT` rows; never `-old`/context lines. The range does the deleting.
+3. THE BODY IS THE FINAL CONTENT. Every body row starts with `+`; Markdown bullets use `+- item`, not `- item`.
 </critical>

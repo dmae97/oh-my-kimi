@@ -6,6 +6,7 @@
 
 - Fixed an issue where snapshot tag collisions could cause line-anchored edits to be incorrectly applied to unrelated content.
 - Fixed tracking of edit anchors when earlier in-session insertions or deletions shift unchanged target lines.
+- Fixed hashline edit guidance for Markdown list rows by teaching `+- item` escaping in the model prompt and minus-row parser error. ([#4179](https://github.com/can1357/oh-my-pi/issues/4179))
 
 ## [16.2.8] - 2026-06-30
 
