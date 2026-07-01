@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { applyEligibleNestedPatches, mergeIsolatedChanges } from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
 import type { SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
 import * as worktreeModule from "@oh-my-pi/pi-coding-agent/task/worktree";
+import * as gitModule from "@oh-my-pi/pi-coding-agent/utils/git";
+import { $ } from "bun";
 
 function result(overrides: Partial<SingleResult> = {}): SingleResult {
 	return {
@@ -22,9 +27,47 @@ function result(overrides: Partial<SingleResult> = {}): SingleResult {
 	};
 }
 
+const tempRoots: string[] = [];
+
+async function git(repoRoot: string, ...args: string[]): Promise<string> {
+	const result = await $`git ${args}`.cwd(repoRoot).quiet().nothrow();
+	if (result.exitCode !== 0) {
+		throw new Error(`git ${args.join(" ")} failed: ${result.stderr.toString()}`);
+	}
+	return result.text();
+}
+
+async function seedFooRepo(finalContent: string): Promise<{ repoRoot: string; patchPath: string }> {
+	const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-isolation-merge-"));
+	tempRoots.push(repoRoot);
+
+	await git(repoRoot, "init");
+	await git(repoRoot, "config", "user.email", "repro@example.com");
+	await git(repoRoot, "config", "user.name", "Repro");
+	await Bun.write(path.join(repoRoot, "foo.txt"), "old\n");
+	await git(repoRoot, "add", "foo.txt");
+	await git(repoRoot, "commit", "-m", "base");
+	await Bun.write(path.join(repoRoot, "foo.txt"), "new\n");
+	await git(repoRoot, "commit", "-am", "change to new");
+
+	const patchPath = path.join(repoRoot, "task.patch");
+	const patchText = await git(repoRoot, "diff-tree", "--binary", "--full-index", "--no-commit-id", "-p", "HEAD");
+	await Bun.write(patchPath, patchText);
+
+	if (finalContent !== "new\n") {
+		await git(repoRoot, "reset", "--hard", "HEAD~1");
+		if (finalContent !== "old\n") {
+			await Bun.write(path.join(repoRoot, "foo.txt"), finalContent);
+			await git(repoRoot, "commit", "-am", "diverge");
+		}
+	}
+	return { repoRoot, patchPath };
+}
+
 describe("mergeIsolatedChanges", () => {
-	afterEach(() => {
+	afterEach(async () => {
 		vi.restoreAllMocks();
+		await Promise.all(tempRoots.splice(0).map(tempRoot => fs.rm(tempRoot, { force: true, recursive: true })));
 	});
 
 	it("allows nested-only branch-mode patches to apply when no root branch was created", async () => {
@@ -61,6 +104,70 @@ describe("mergeIsolatedChanges", () => {
 		expect(outcome.summary).toContain("Branch merge failed before a task branch could be created");
 		expect(outcome.summary).toContain("git apply --3way failed");
 		expect(outcome.summary).not.toContain("No changes to apply");
+	});
+
+	it("treats already-applied patch-mode diffs as successful no-ops", async () => {
+		const { repoRoot, patchPath } = await seedFooRepo("new\n");
+
+		const outcome = await mergeIsolatedChanges({
+			repoRoot,
+			mergeMode: "patch",
+			result: result({ patchPath }),
+		});
+
+		expect(outcome.changesApplied).toBe(true);
+		expect(outcome.summary).not.toContain("Patches were not applied");
+		expect(await git(repoRoot, "status", "--porcelain", "--", "foo.txt")).toBe("");
+	});
+
+	it("rejects patch-mode conflicts without dirtying the worktree", async () => {
+		const { repoRoot, patchPath } = await seedFooRepo("other\n");
+
+		const outcome = await mergeIsolatedChanges({
+			repoRoot,
+			mergeMode: "patch",
+			result: result({ patchPath }),
+		});
+
+		expect(outcome.changesApplied).toBe(false);
+		expect(outcome.summary).toContain("Patches were not applied");
+		expect(await git(repoRoot, "status", "--porcelain", "--", "foo.txt")).toBe("");
+		expect(await Bun.file(path.join(repoRoot, "foo.txt")).text()).toBe("other\n");
+		expect(await git(repoRoot, "ls-files", "-u", "--", "foo.txt")).toBe("");
+	});
+
+	it("applies a fresh patch-mode diff when context matches", async () => {
+		const { repoRoot, patchPath } = await seedFooRepo("old\n");
+
+		const outcome = await mergeIsolatedChanges({
+			repoRoot,
+			mergeMode: "patch",
+			result: result({ patchPath }),
+		});
+
+		expect(outcome.changesApplied).toBe(true);
+		expect(outcome.hadAnyChanges).toBe(true);
+		expect(await Bun.file(path.join(repoRoot, "foo.txt")).text()).toBe("new\n");
+	});
+
+	it("prefers forward apply when both reverse-check and forward-check succeed", async () => {
+		// If git-apply's fuzz ever lets `--reverse --check` succeed while forward
+		// `--check` also succeeds (e.g. repeated context with the postimage present
+		// elsewhere), the outcome must NOT be a silent no-op.
+		const { repoRoot, patchPath } = await seedFooRepo("old\n");
+		const canApplySpy = vi.spyOn(gitModule.patch, "canApplyText").mockResolvedValue(true);
+		const applySpy = vi.spyOn(gitModule.patch, "applyText").mockResolvedValue(undefined);
+
+		const outcome = await mergeIsolatedChanges({
+			repoRoot,
+			mergeMode: "patch",
+			result: result({ patchPath }),
+		});
+
+		expect(canApplySpy).toHaveBeenCalledTimes(2);
+		expect(applySpy).toHaveBeenCalledTimes(1);
+		expect(outcome.changesApplied).toBe(true);
+		expect(outcome.hadAnyChanges).toBe(true);
 	});
 
 	it("does not mark failed branch-mode runs as nested-patch eligible", async () => {
