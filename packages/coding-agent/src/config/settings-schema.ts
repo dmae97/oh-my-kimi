@@ -233,7 +233,7 @@ interface StringDef {
 
 interface NumberDef {
 	type: "number";
-	default: number;
+	default: number | undefined;
 	ui?: UiNumber;
 }
 
@@ -1997,7 +1997,11 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"compaction.reserveTokens": { type: "number", default: 16384 },
+	// No default: an unset reserve tells the compaction layer the user never
+	// chose one, so small-window recovery may swap in the proportional reserve
+	// (see resolveBudgetReserveTokens). A materialized 16384 here would make
+	// every session look explicitly configured.
+	"compaction.reserveTokens": { type: "number", default: undefined },
 
 	"compaction.keepRecentTokens": { type: "number", default: 20000 },
 
@@ -4930,17 +4934,19 @@ export type SettingValue<P extends SettingPath> = Schema[P] extends { type: "boo
 		? boolean
 		: Schema[P] extends { type: "string" }
 			? string | undefined
-			: Schema[P] extends { type: "number" }
-				? number
-				: Schema[P] extends { type: "enum"; values: infer V }
-					? V extends readonly string[]
-						? V[number]
-						: never
-					: Schema[P] extends { type: "array"; default: infer D }
-						? D
-						: Schema[P] extends { type: "record"; default: infer D }
+			: Schema[P] extends { type: "number"; default: undefined }
+				? number | undefined
+				: Schema[P] extends { type: "number" }
+					? number
+					: Schema[P] extends { type: "enum"; values: infer V }
+						? V extends readonly string[]
+							? V[number]
+							: never
+						: Schema[P] extends { type: "array"; default: infer D }
 							? D
-							: never;
+							: Schema[P] extends { type: "record"; default: infer D }
+								? D
+								: never;
 
 /** Get the default value for a setting path */
 export function getDefault<P extends SettingPath>(path: P): SettingValue<P> {
@@ -5002,7 +5008,7 @@ export interface CompactionSettings {
 	strategy: "context-full" | "handoff" | "shake" | "snapcompact" | "off";
 	thresholdPercent: number;
 	thresholdTokens: number;
-	reserveTokens: number;
+	reserveTokens: number | undefined;
 	keepRecentTokens: number;
 	midTurnEnabled: boolean;
 	handoffSaveToDisk: boolean;

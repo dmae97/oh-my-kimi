@@ -8,6 +8,7 @@
 - Improved branch summaries to preserve informative tool results from abandoned branches while filtering out redundant output.
 - Fixed interruptible tool waits to properly abort on host-provided IRC interrupts in addition to user steering.
 - Fixed schema validation errors for closed union tools by correctly injecting intent tracing into each variant.
+- Fixed compaction reserve-budget provenance: an explicit `reserveTokens` equal to the built-in default is now honored instead of being replaced by the proportional small-window fallback, and the fallback reserve is clamped to at least one token so tiny context windows keep a threshold below the window size.
 
 ## [16.2.4] - 2026-06-28
 

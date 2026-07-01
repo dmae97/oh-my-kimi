@@ -228,7 +228,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 		expect(noProgress[0].level).toBe("warning");
 	});
 
-	it("clamps default reserve for small-window threshold recovery bands", () => {
+	it("clamps a reserve exceeding the window for small-window threshold recovery bands", () => {
 		const settings = {
 			enabled: true,
 			strategy: "context-full" as const,
@@ -709,10 +709,10 @@ describe("AgentSession auto-compaction progress guard", () => {
 		);
 	});
 
-	it("retries a small-window overflow when the default reserve exceeds the model window", async () => {
-		// Bundled 4k/8k models can be smaller than the default absolute reserve
-		// (16,384). Retry fit must clamp that reserve; otherwise the budget goes
-		// negative and a prompt that fits the actual model window dead-ends.
+	it("retries a small-window overflow when the reserve exceeds the model window", async () => {
+		// Bundled 4k/8k models can be smaller than the absolute reserve (16,384,
+		// explicit or defaulted). Retry fit must clamp that reserve; otherwise the
+		// budget goes negative and a prompt that fits the actual model window dead-ends.
 		session.settings.set("compaction.keepRecentTokens", 100);
 		const smallText = "lorem ipsum ".repeat(100);
 		for (let i = 0; i < 4; i++) {
@@ -794,7 +794,10 @@ describe("AgentSession auto-compaction progress guard", () => {
 		const currentModel = session.agent.state.model;
 		session.agent.setModel({ ...currentModel, contextWindow: 16385, maxTokens: 1024 });
 		session.settings.set("contextPromotion.enabled", false);
-		session.settings.set("compaction.reserveTokens", 16384);
+		// compaction.reserveTokens stays unset: the DEFAULTED reserve is the
+		// scenario — an explicit 16384 would be honored and leave a 1-token
+		// budget on purpose (see "pauses an overflow retry when it only fits
+		// after ignoring a configured reserve" below for the explicit contract).
 		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
 		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
 		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 10000, contextWindow: 16385, percent: 61 });

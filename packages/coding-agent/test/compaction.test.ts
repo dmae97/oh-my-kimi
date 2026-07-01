@@ -242,11 +242,12 @@ describe("shouldCompact", () => {
 		expect(shouldCompact(84000, 100000, settings)).toBe(false);
 	});
 
-	it("uses proportional reserve when the default reserve nearly consumes a small window", () => {
+	it("uses proportional reserve when the DEFAULTED reserve nearly consumes a small window", () => {
 		const settings: CompactionSettings = {
 			enabled: true,
 			thresholdPercent: -1,
-			reserveTokens: 16_384,
+			// reserveTokens deliberately unset: provenance, not value equality,
+			// is what allows the proportional fallback.
 			keepRecentTokens: 20_000,
 		};
 
@@ -254,6 +255,20 @@ describe("shouldCompact", () => {
 		// used by smaller windows instead of collapsing the threshold to one token.
 		expect(shouldCompact(10_000, 16_385, settings)).toBe(false);
 		expect(shouldCompact(13_929, 16_385, settings)).toBe(true);
+	});
+
+	it("honors an EXPLICIT reserve equal to the old default on a small window", () => {
+		const settings: CompactionSettings = {
+			enabled: true,
+			thresholdPercent: -1,
+			reserveTokens: 16_384,
+			keepRecentTokens: 20_000,
+		};
+
+		// The user chose 16,384 on purpose; it must not be mistaken for the
+		// defaulted reserve and silently replaced with the proportional one.
+		expect(resolveThresholdTokens(16_385, settings)).toBe(1);
+		expect(shouldCompact(2, 16_385, settings)).toBe(true);
 	});
 
 	it("respects a large valid configured reserve", () => {
