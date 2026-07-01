@@ -161,4 +161,42 @@ describe("dispatchRpcInputFrame", () => {
 			error: "kaboom",
 		});
 	});
+
+	test("background bash task is exposed so EOF cleanup can await its response", async () => {
+		const bashResponse: RpcResponse = {
+			id: "b3",
+			type: "response",
+			command: "bash",
+			success: true,
+			data: {
+				output: "done",
+				exitCode: 0,
+				cancelled: false,
+				truncated: false,
+				totalLines: 1,
+				totalBytes: 4,
+				outputLines: 1,
+				outputBytes: 4,
+			},
+		};
+		const { promise: bashPending, resolve: resolveBash } = Promise.withResolvers<RpcResponse>();
+		const { deps, outputs } = makeDeps(async command => {
+			if (command.type === "bash") return await bashPending;
+			throw new Error(`unexpected: ${command.type}`);
+		});
+		let trackedTask: Promise<void> | undefined;
+		deps.trackBackgroundTask = task => {
+			trackedTask = task;
+		};
+
+		const awaited = dispatchRpcInputFrame({ id: "b3", type: "bash", command: "echo done" }, deps);
+		expect(awaited).toBeUndefined();
+		expect(trackedTask).toBeInstanceOf(Promise);
+		expect(outputs).toHaveLength(0);
+
+		resolveBash(bashResponse);
+		await trackedTask;
+
+		expect(outputs).toEqual([bashResponse]);
+	});
 });

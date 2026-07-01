@@ -224,6 +224,7 @@ export interface RpcInputFrameDeps {
 	handleCommand: (command: RpcCommand) => Promise<RpcResponse>;
 	output: RpcOutput;
 	errorResponse: (id: string | undefined, command: string, message: string) => RpcResponse;
+	trackBackgroundTask?: (task: Promise<void>) => void;
 	pendingExtensionRequests: Map<string, PendingExtensionRequest>;
 	onHostToolResult: (frame: RpcHostToolResult) => void;
 	onHostToolUpdate: (frame: RpcHostToolUpdate) => void;
@@ -291,7 +292,7 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
 	// for the shell command to finish on its own. The response is emitted
 	// when `handleCommand` resolves; clients correlate via `command.id`.
 	if (command.type === "bash") {
-		void (async () => {
+		const task = (async () => {
 			try {
 				deps.output(await deps.handleCommand(command));
 			} catch (err: unknown) {
@@ -299,6 +300,8 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
 				deps.output(deps.errorResponse(command.id, "bash", message));
 			}
 		})();
+		deps.trackBackgroundTask?.(task);
+		void task;
 		return undefined;
 	}
 
@@ -1204,10 +1207,17 @@ export async function runRpcMode(
 		process.exit(0);
 	}
 
+	const backgroundInputTasks = new Set<Promise<void>>();
+	const trackBackgroundTask = (task: Promise<void>) => {
+		backgroundInputTasks.add(task);
+		void task.finally(() => backgroundInputTasks.delete(task));
+	};
+
 	const dispatchFrameDeps: RpcInputFrameDeps = {
 		handleCommand,
 		output,
 		errorResponse: error,
+		trackBackgroundTask,
 		pendingExtensionRequests,
 		onHostToolResult: frame => hostToolBridge.handleResult(frame),
 		onHostToolUpdate: frame => hostToolBridge.handleUpdate(frame),
@@ -1231,6 +1241,10 @@ export async function runRpcMode(
 			const message = e instanceof Error ? e.message : String(e);
 			output(error(undefined, "parse", `Failed to parse command: ${message}`));
 		}
+	}
+
+	if (backgroundInputTasks.size > 0) {
+		await Promise.allSettled(Array.from(backgroundInputTasks));
 	}
 
 	// stdin closed — RPC client is gone, exit cleanly
