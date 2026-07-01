@@ -78,4 +78,16 @@ describe("Markdown streaming prefix render cache", () => {
 		expect(codeBlockBorderCalls).toBe(0);
 		expect(streamingLines).toEqual(renderCold(thirdText, theme));
 	});
+
+	it("drops cached prefix lines after truncating to a previously frozen prefix", () => {
+		const prefix = "---\n\n";
+		const md = new Markdown(`${prefix}body`, 0, 0, defaultMarkdownTheme);
+		md.transientRenderCache = true;
+		md.render(WIDTH);
+
+		md.setText(prefix);
+		const streamingLines = md.render(WIDTH);
+
+		expect(streamingLines).toEqual(renderCold(prefix, defaultMarkdownTheme));
+	});
 });

@@ -890,15 +890,16 @@ export class Markdown implements Component {
 		) {
 			const tailTokens = markdownParser.lexer(text.slice(prefix.length));
 			const tokens = [...prefixTokens, ...tailTokens];
-			this.#freezeStablePrefix(text, tokens);
+			this.#freezeStablePrefix(text, tokens, { preserveExisting: true });
 			return tokens;
 		}
 		const tokens = markdownParser.lexer(text);
 		if (canStream) {
-			this.#freezeStablePrefix(text, tokens);
+			this.#freezeStablePrefix(text, tokens, { preserveExisting: false });
 		} else {
 			this.#streamPrefixText = undefined;
 			this.#streamPrefixTokens = undefined;
+			this.#streamPrefixLineCache = undefined;
 		}
 		return tokens;
 	}
@@ -908,7 +909,7 @@ export class Markdown implements Component {
 	// render re-lexes only the unfrozen tail. Caller guarantees no CR / no
 	// reference definitions, so each token's `raw` is a verbatim slice of `text`
 	// and the summed offsets address `text` exactly.
-	#freezeStablePrefix(text: string, tokens: Token[]): void {
+	#freezeStablePrefix(text: string, tokens: Token[], opts: { preserveExisting: boolean }): void {
 		let pos = 0;
 		let frozenEnd = 0;
 		let frozenCount = 0;
@@ -937,7 +938,14 @@ export class Markdown implements Component {
 			if (next !== 0x20 /* space */ && next !== 0x0a /* \n */) {
 				this.#streamPrefixText = text.slice(0, frozenEnd);
 				this.#streamPrefixTokens = tokens.slice(0, frozenCount);
+				return;
 			}
+		}
+
+		if (!opts.preserveExisting) {
+			this.#streamPrefixText = undefined;
+			this.#streamPrefixTokens = undefined;
+			this.#streamPrefixLineCache = undefined;
 		}
 	}
 
