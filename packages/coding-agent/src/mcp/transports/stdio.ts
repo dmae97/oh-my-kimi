@@ -591,8 +591,8 @@ export class StdioTransport implements MCPTransport {
 			// into `reject()` while leaving the returned promise free to settle
 			// from the response, timer, abort signal, or read-loop transport-close.
 			const wrote = stdin.write(message);
-			const flushed = stdin.flush();
 			if (isThenable(wrote)) wrote.then(undefined, failFromSend);
+			const flushed = stdin.flush();
 			if (isThenable(flushed)) flushed.then(undefined, failFromSend);
 		} catch (error) {
 			failFromSend(error);
