@@ -82,4 +82,36 @@ describe("write streaming preview honors Ctrl+O expansion", () => {
 		component.render(120);
 		expect(highlightSpy).toHaveBeenCalledTimes(1);
 	});
+
+	it("renders execution progress as a partial result without diagnostics", async () => {
+		if (!initialized) {
+			await themeModule.initTheme();
+			initialized = true;
+		}
+		const uiTheme = (await themeModule.getThemeByName("dark")) ?? (await themeModule.getThemeByName("light"));
+		if (!uiTheme) {
+			throw new Error("expected an initialized theme");
+		}
+
+		const component = writeToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "Writing 12 bytes to progress.ts..." }],
+				details: {
+					resolvedPath: "/tmp/progress.ts",
+					diagnostics: {
+						errored: true,
+						summary: "1 error",
+						messages: ["diagnostic sentinel"],
+					},
+				},
+			},
+			{ expanded: false, isPartial: true, spinnerFrame: 0 },
+			uiTheme,
+			{ path: "/tmp/progress.ts", content: "const x = 1;" },
+		);
+
+		const rendered = stripAnsi(component.render(100).join("\n"));
+		expect(rendered).toContain("Writing 12 bytes to progress.ts...");
+		expect(rendered).not.toContain("diagnostic sentinel");
+	});
 });

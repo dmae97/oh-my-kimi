@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the write tool not streaming execution progress to the TUI while files were being written. ([#3960](https://github.com/can1357/oh-my-pi/issues/3960))
+
 ## [16.2.11] - 2026-07-01
 
 ### Fixed
