@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.13] - 2026-07-01
+
 ### Fixed
 
 - Fixed `models.yml` remote compaction schema support for V2 streaming endpoint fields. ([#4146](https://github.com/can1357/oh-my-pi/issues/4146))

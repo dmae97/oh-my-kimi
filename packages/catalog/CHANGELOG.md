@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.13] - 2026-07-01
+
 ### Added
 
 - Added support for human-readable reasoning summaries on compatible OpenAI Codex models (v5.4+)
