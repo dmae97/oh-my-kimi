@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.12] - 2026-07-01
+
 ### Breaking Changes
 
 - Removed runtime canonical-equivalence APIs from the identity module, including resolveCanonicalVariant, buildCanonicalModelOrder, CanonicalVariantPreferences, and getBundledCanonicalReferenceData. These utilities have been transitioned to a build-time generator script and are no longer exposed in the runtime bundle.

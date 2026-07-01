@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.12] - 2026-07-01
+
 ### Changed
 
 - Improved streaming performance for Cursor and Devin providers by optimizing mid-stream tool-call argument parsing to prevent UI stalls when handling large payloads.

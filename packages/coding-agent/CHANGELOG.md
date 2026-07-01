@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.12] - 2026-07-01
+
 ### Breaking Changes
 
 - Removed the canonical-alias grouping and resolution layer. The `equivalence` key (`overrides`/`exclude`) in `models.yml`/`models.json` is now inert, and canonical-related methods have been removed from `ModelRegistry`.
