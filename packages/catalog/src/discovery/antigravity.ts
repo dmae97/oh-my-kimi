@@ -1,3 +1,4 @@
+import { wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 import type { ModelSpec } from "../types";
 import { toPositiveNumber } from "../utils";
@@ -161,7 +162,7 @@ export interface FetchAntigravityDiscoveryModelsOptions {
 export async function fetchAntigravityDiscoveryModels(
 	options: FetchAntigravityDiscoveryModelsOptions,
 ): Promise<ModelSpec<"google-gemini-cli">[] | null> {
-	const fetcher = options.fetcher ?? fetch;
+	const fetcher = options.fetcher ?? wrapFetchForExtraCa(fetch);
 	const endpoints = options.endpoint
 		? [trimTrailingSlashes(options.endpoint)]
 		: DEFAULT_ANTIGRAVITY_DISCOVERY_ENDPOINTS.map(trimTrailingSlashes);

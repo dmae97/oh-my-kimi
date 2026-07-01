@@ -1,3 +1,4 @@
+import { wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 import { getBundledModels } from "../models";
 import { toModelSpec } from "../provider-models/bundled-references";
@@ -77,7 +78,7 @@ export async function fetchGeminiModels(
 		return null;
 	}
 
-	const fetchImpl = options.fetch ?? fetch;
+	const fetchImpl = options.fetch ?? wrapFetchForExtraCa(fetch);
 	const baseUrl = normalizeBaseUrl(options.baseUrl);
 	const pageSize = normalizePositiveInt(options.pageSize, DEFAULT_PAGE_SIZE);
 	const maxPages = normalizePositiveInt(options.maxPages, DEFAULT_MAX_PAGES);

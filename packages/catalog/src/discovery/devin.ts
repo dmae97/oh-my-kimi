@@ -1,5 +1,6 @@
 import { gunzipSync } from "node:zlib";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
+import { wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
 import type { FetchImpl, ModelSpec } from "../types";
 import {
 	GetCliModelConfigsRequestSchema,
@@ -76,7 +77,7 @@ export async function fetchDevinModels(
 			accept: "*/*",
 		};
 
-		const fetchImpl = options.fetch ?? fetch;
+		const fetchImpl = options.fetch ?? wrapFetchForExtraCa(fetch);
 		const response = await fetchImpl(requestUrl, { method: "POST", headers, body, signal });
 		if (!response.ok) {
 			return null;

@@ -1,3 +1,4 @@
+import { wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
 import {
 	fetchOpenAICompatibleModels,
 	type OpenAICompatibleModelMapperContext,
@@ -743,7 +744,7 @@ async function fetchUmansModelsInfo(options: {
 	if (options.apiKey) {
 		requestHeaders["x-api-key"] = options.apiKey;
 	}
-	const fetchImpl = options.fetch ?? fetch;
+	const fetchImpl = options.fetch ?? wrapFetchForExtraCa(fetch);
 	let payload: unknown;
 	try {
 		const response = await fetchImpl(`${discoveryBaseUrl}${UMANS_MODELS_INFO_PATH}`, {
@@ -1541,7 +1542,7 @@ async function fetchFireworksServerlessModels(options: {
 }): Promise<ModelSpec<"openai-completions">[] | null> {
 	const listUrl = toFireworksControlPlaneModelsUrl(options.baseUrl, FIREWORKS_CONTROL_PLANE_ACCOUNT);
 	if (!listUrl) return null;
-	const fetchImpl = options.fetch ?? fetch;
+	const fetchImpl = options.fetch ?? wrapFetchForExtraCa(fetch);
 	const collected = new Map<string, ModelSpec<"openai-completions">>();
 	let pageToken = "";
 	for (let page = 0; page < FIREWORKS_CONTROL_PLANE_MAX_PAGES; page++) {
@@ -3079,7 +3080,7 @@ async function fetchLiteLLMRichEndpoint<TApi extends Api>(
 	runtimeBaseUrl: string,
 	signal?: AbortSignal,
 ): Promise<ModelSpec<TApi>[] | null> {
-	const fetchImpl = options.fetch ?? globalThis.fetch;
+	const fetchImpl = options.fetch ?? wrapFetchForExtraCa(globalThis.fetch);
 	const requestHeaders: Record<string, string> = {
 		Accept: "application/json",
 		...options.headers,

@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed the Xiaomi provider's default model to use the supported mimo-v2.5 model.
+- Fixed model discovery (`/models` probes) failing behind private-CA gateways: the discovery fetch fallback now honors `NODE_EXTRA_CA_CERTS`, matching provider chat requests.
 - Fixed CoreWeave Serverless Inference project-header detection to ensure blank OpenAI-Project overrides do not block the COREWEAVE_PROJECT fallback.
 - Fixed LiteLLM MiniMax M3 discovery to remove reseller-only (3x usage) display suffixes.
 - Fixed users with a warm LiteLLM model cache keeping stale reseller display-name suffixes for up to 24 hours by bumping the cache namespace to rich-v2.

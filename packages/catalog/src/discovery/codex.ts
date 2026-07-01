@@ -1,3 +1,4 @@
+import { type FetchImpl, wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 import type { ModelSpec } from "../types";
 import { isRecord } from "../utils";
@@ -81,7 +82,7 @@ export interface CodexModelDiscoveryResult {
  * Returns `{ models: [] }` when a route succeeds but yields no usable models.
  */
 export async function fetchCodexModels(options: CodexModelDiscoveryOptions): Promise<CodexModelDiscoveryResult | null> {
-	const fetchFn = options.fetchFn ?? fetch;
+	const fetchFn = options.fetchFn ?? wrapFetchForExtraCa(fetch);
 	const baseUrl = normalizeBaseUrl(options.baseUrl);
 	const paths = normalizePaths(options.paths);
 	const headers = buildCodexHeaders(options);
@@ -168,7 +169,7 @@ function buildCodexHeaders(options: CodexModelDiscoveryOptions): Headers {
 
 async function resolveCodexClientVersion(
 	clientVersion: string | undefined,
-	fetchFn: typeof fetch,
+	fetchFn: FetchImpl,
 	signal: AbortSignal | undefined,
 ): Promise<string> {
 	const normalizedClientVersion = normalizeClientVersion(clientVersion);

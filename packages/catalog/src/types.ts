@@ -1,5 +1,8 @@
 import type { Effort } from "./effort";
 
+// Re-exported from @oh-my-pi/pi-utils so the whole workspace shares one
+// `fetch`-compatible signature (tls-fetch's wrappers produce/accept it).
+export type { FetchImpl } from "@oh-my-pi/pi-utils";
 export type { KnownProvider } from "./provider-models/descriptors";
 
 export type KnownApi =
@@ -88,15 +91,6 @@ export type Provider = string;
 
 /** Token budgets for each thinking level (token-based providers only) */
 export type ThinkingBudgets = { [key in Effort]?: number };
-
-/**
- * `fetch`-compatible function. Accepts any callable matching the standard
- * fetch signature; `preconnect` is optional because non-Bun runtimes (browsers,
- * test mocks) won't expose it.
- */
-export type FetchImpl = ((input: string | URL | Request, init?: RequestInit) => Promise<Response>) & {
-	preconnect?: typeof globalThis.fetch.preconnect;
-};
 
 export interface Usage {
 	/** Non-cached input tokens (matches the bucket the provider bills as new input). */

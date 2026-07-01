@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
 import { z } from "zod/v4";
 import type { FetchImpl, ModelSpec } from "../types";
 import { isRecord } from "../utils";
@@ -340,7 +341,7 @@ async function fetchNamespaceOverrideCandidate(
 	if (!restNamespaceId) {
 		return null;
 	}
-	const fetchImpl = config.fetch ?? fetch;
+	const fetchImpl = config.fetch ?? wrapFetchForExtraCa(fetch);
 	let response: Response;
 	try {
 		response = await fetchImpl(`${baseUrl}${GROUPS_PATH}/${encodeURIComponent(restNamespaceId)}`, {
@@ -406,7 +407,7 @@ async function fetchProjectRootNamespaceViaRest(
 	baseUrl: string,
 	projectIdOrPath: string,
 ): Promise<GitLabDuoWorkflowRestProject | null> {
-	const fetchImpl = config.fetch ?? fetch;
+	const fetchImpl = config.fetch ?? wrapFetchForExtraCa(fetch);
 	let response: Response;
 	try {
 		response = await fetchImpl(`${baseUrl}${PROJECTS_PATH}/${encodeURIComponent(projectIdOrPath)}`, {
@@ -449,7 +450,7 @@ async function fetchTopLevelGroupNamespaceCandidates(
 	config: GitLabDuoWorkflowDiscoveryConfig,
 	baseUrl: string,
 ): Promise<GitLabDuoWorkflowCandidate[]> {
-	const fetchImpl = config.fetch ?? fetch;
+	const fetchImpl = config.fetch ?? wrapFetchForExtraCa(fetch);
 	const candidates: (GitLabDuoWorkflowCandidate & { preferred: boolean })[] = [];
 	// GitLab paginates `/groups`; a token can belong to more than one page of top-level
 	// groups, and a usable Duo namespace may live on a later page. Follow the keyset/
@@ -518,7 +519,7 @@ async function postGraphQL(
 	query: string,
 	variables: Record<string, string>,
 ): Promise<unknown | null> {
-	const fetchImpl = config.fetch ?? fetch;
+	const fetchImpl = config.fetch ?? wrapFetchForExtraCa(fetch);
 	let response: Response;
 	try {
 		response = await fetchImpl(`${baseUrl}${GRAPHQL_PATH}`, {
