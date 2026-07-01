@@ -689,14 +689,7 @@ async function replayFilteredAgentCommits(opts: FilteredAgentReplayOptions): Pro
 			// case where every filtered patch collapsed to empty.
 			if (opts.rootPatch.trim()) {
 				const msg = (opts.commitMessage && (await opts.commitMessage(opts.rootPatch))) || opts.fallbackMessage;
-				await commitPatchToBranchWorktree(
-					tmpDir,
-					opts.taskId,
-					opts.rootPatch,
-					msg,
-					undefined,
-					opts.baseline.root,
-				);
+				await commitPatchToBranchWorktree(tmpDir, opts.taskId, opts.rootPatch, msg, undefined, opts.baseline.root);
 			}
 		} else {
 			// A filtered commit landed; tmpDir has advanced past baselineSha and
