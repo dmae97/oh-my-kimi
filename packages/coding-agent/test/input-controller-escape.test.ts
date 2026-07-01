@@ -616,7 +616,7 @@ describe("InputController escape behavior", () => {
 		const controller = new InputController(ctx);
 
 		controller.setupKeyHandlers();
-		expect(() => editor.onEscape?.()).not.toThrow();
+		editor.onEscape?.();
 
 		expect(viewSession.abortCompaction).toHaveBeenCalledTimes(1);
 		expect(viewSession.abortHandoff).toHaveBeenCalledTimes(1);

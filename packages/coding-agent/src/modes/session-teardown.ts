@@ -9,7 +9,7 @@
  * Extracted (rather than inlined into `InteractiveMode`) so the callback body
  * is directly unit-testable without instantiating the full TUI stack.
  */
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger, type postmortem } from "@oh-my-pi/pi-utils";
 
 /** Dependencies the teardown captures at construction time. */
 export interface SessionTeardownDeps {
@@ -26,12 +26,22 @@ export interface SessionTeardownDeps {
 	 * previously-persisted draft sidecar is cleared on a clean exit.
 	 */
 	saveDraft: (text: string) => Promise<void>;
-	/** Dispose the session — emits `session_shutdown`, drains async jobs, closes the manager. */
-	disposeSession: () => Promise<void>;
+	/**
+	 * Dispose the session — emits `session_shutdown`, drains async jobs, closes
+	 * the manager. Receives the postmortem reason that triggered the teardown
+	 * (undefined on the keypress/`/exit` path) so `AgentSession.dispose()` can
+	 * persist the real exit reason instead of the generic `"dispose"`.
+	 */
+	disposeSession: (reason?: postmortem.Reason) => Promise<void>;
 }
 
-/** Idempotent teardown: concurrent/repeat invocations share one settled promise. */
-export type SessionTeardown = () => Promise<void>;
+/**
+ * Idempotent teardown: concurrent/repeat invocations share one settled
+ * promise. The optional `reason` is the postmortem reason that triggered the
+ * teardown (`sigterm`, `sighup`, `uncaught_exception`, …); only the FIRST
+ * call's reason is used — later callers await the same settled promise.
+ */
+export type SessionTeardown = (reason?: postmortem.Reason) => Promise<void>;
 
 /**
  * Build a promise-memoized teardown function. The first call snapshots the
@@ -42,13 +52,20 @@ export type SessionTeardown = () => Promise<void>;
  * double-emit `session_shutdown`, double-dispose the session's async-job
  * manager, or race each other.
  *
+ * The postmortem callback forwards its `Reason` so the persisted
+ * `session_exit` diagnostic carries the real trigger (`sigterm`, `sighup`,
+ * `uncaught_exception`, …) instead of the generic `"dispose"` that plain
+ * programmatic disposal records. First call wins: a signal arriving after a
+ * keypress-initiated teardown awaits the in-flight promise and its reason is
+ * dropped — by then the exit entry is already being written as a normal exit.
+ *
  * `saveDraft` failures are logged but never abort the disposal chain — a
  * draft-write error must not leak background bash/task jobs or skip the
  * extension `session_shutdown` event.
  */
 export function createSessionTeardown(deps: SessionTeardownDeps): SessionTeardown {
 	let pending: Promise<void> | undefined;
-	const run = async (): Promise<void> => {
+	const run = async (reason?: postmortem.Reason): Promise<void> => {
 		const draftText = deps.getDraftText();
 		deps.beginDispose();
 		try {
@@ -56,10 +73,10 @@ export function createSessionTeardown(deps: SessionTeardownDeps): SessionTeardow
 		} catch (err) {
 			logger.warn("Failed to save session draft during teardown", { error: String(err) });
 		}
-		await deps.disposeSession();
+		await deps.disposeSession(reason);
 	};
-	return () => {
-		if (!pending) pending = run();
+	return (reason?: postmortem.Reason) => {
+		if (!pending) pending = run(reason);
 		return pending;
 	};
 }

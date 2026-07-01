@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { postmortem } from "@oh-my-pi/pi-utils";
 import { createSessionTeardown } from "./session-teardown";
 
 /**
@@ -155,5 +156,64 @@ describe("createSessionTeardown", () => {
 		await running;
 
 		expect(captured).toBe("before");
+	});
+
+	it("forwards the postmortem reason into disposeSession so signal exits record the real trigger", async () => {
+		const received: Array<postmortem.Reason | undefined> = [];
+
+		const teardown = createSessionTeardown({
+			getDraftText: () => "",
+			beginDispose: () => {},
+			saveDraft: async () => {},
+			disposeSession: async reason => {
+				received.push(reason);
+			},
+		});
+
+		await teardown(postmortem.Reason.SIGTERM);
+
+		expect(received).toEqual([postmortem.Reason.SIGTERM]);
+	});
+
+	it("keypress path passes no reason — dispose falls back to a normal exit record", async () => {
+		const received: Array<postmortem.Reason | undefined> = [];
+
+		const teardown = createSessionTeardown({
+			getDraftText: () => "",
+			beginDispose: () => {},
+			saveDraft: async () => {},
+			disposeSession: async reason => {
+				received.push(reason);
+			},
+		});
+
+		await teardown();
+
+		expect(received).toEqual([undefined]);
+	});
+
+	it("first call's reason wins: a later caller with a different reason awaits the same promise", async () => {
+		const received: Array<postmortem.Reason | undefined> = [];
+		const release = Promise.withResolvers<void>();
+
+		const teardown = createSessionTeardown({
+			getDraftText: () => "",
+			beginDispose: () => {},
+			saveDraft: async () => {},
+			disposeSession: async reason => {
+				received.push(reason);
+				await release.promise;
+			},
+		});
+
+		// SIGTERM lands first; postmortem.quit(0)'s MANUAL pass arrives while the
+		// teardown is still draining — it must not restart the run or mutate the
+		// recorded reason.
+		const first = teardown(postmortem.Reason.SIGTERM);
+		const second = teardown(postmortem.Reason.MANUAL);
+		release.resolve();
+		await Promise.all([first, second]);
+
+		expect(received).toEqual([postmortem.Reason.SIGTERM]);
 	});
 });

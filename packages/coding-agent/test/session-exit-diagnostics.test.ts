@@ -6,6 +6,7 @@ import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { createSessionTeardown } from "@oh-my-pi/pi-coding-agent/modes/session-teardown";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import {
@@ -17,7 +18,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/session/exit-diagnostics";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { postmortem, TempDir } from "@oh-my-pi/pi-utils";
 
 const pendingAssistant: AssistantMessage = {
 	role: "assistant",
@@ -128,6 +129,70 @@ describe("session exit diagnostics", () => {
 					args: { command: "bun run check:ts" },
 				},
 			],
+		});
+	});
+
+	it("signal teardown persists the postmortem reason, not the generic dispose", async () => {
+		tempDir = TempDir.createSync("@pi-session-exit-signal-");
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage);
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected built-in anthropic model to exist");
+		const sessionManager = SessionManager.inMemory(tempDir.path());
+		const agent = new Agent({
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			convertToLlm,
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry,
+		});
+		const activeSession = session;
+
+		// The assistant message persists through an async queue; the tool start
+		// marker is appended synchronously and is what makes the session durable
+		// enough for #recordSessionExit to write the exit entry (same setup as
+		// the plain-dispose test above).
+		agent.emitExternalEvent({ type: "message_end", message: pendingAssistant });
+		await Promise.resolve();
+		agent.emitExternalEvent({
+			type: "tool_execution_start",
+			toolCallId: "toolu_repro",
+			toolName: "bash",
+			args: { command: "bun run check:ts" },
+		});
+		await Promise.resolve();
+
+		// Mirror InteractiveMode.init(): the postmortem "session-teardown"
+		// callback runs FIRST on SIGTERM/SIGHUP/uncaughtException (reverse
+		// registration order) and calls dispose(). Without reason threading,
+		// #doDispose would persist the generic "dispose"/"normal" and cancel the
+		// reason-specific agent-session recorder — losing the real trigger.
+		const teardown = createSessionTeardown({
+			getDraftText: () => "",
+			beginDispose: () => activeSession.beginDispose(),
+			saveDraft: async () => {},
+			disposeSession: reason => activeSession.dispose({ reason }),
+		});
+
+		await teardown(postmortem.Reason.SIGTERM);
+		session = undefined;
+
+		const exitEntry = sessionManager
+			.getEntries()
+			.find(entry => entry.type === "custom" && entry.customType === SESSION_EXIT_CUSTOM_TYPE);
+		if (exitEntry?.type !== "custom") throw new Error("Expected session exit marker");
+		expect(exitEntry.data).toMatchObject({
+			reason: "sigterm",
+			kind: "signal",
 		});
 	});
 
