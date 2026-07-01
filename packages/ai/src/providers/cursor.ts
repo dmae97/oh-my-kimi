@@ -102,7 +102,13 @@ import {
 	WriteSuccessSchema,
 } from "@oh-my-pi/pi-catalog/discovery/cursor-gen/agent_pb";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
-import { $env, parseJsonWithRepair, parseStreamingJson, sanitizeText } from "@oh-my-pi/pi-utils";
+import {
+	$env,
+	parseJsonWithRepair,
+	parseStreamingJson,
+	parseStreamingJsonThrottled,
+	sanitizeText,
+} from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import type {
 	Api,
@@ -129,6 +135,7 @@ import {
 	clearStreamingPartialJson,
 	kStreamingBlockIndex,
 	kStreamingBlockKind,
+	kStreamingLastParseLen,
 	kStreamingPartialJson,
 } from "../utils/block-symbols";
 import { deterministicUuid } from "../utils/deterministic-id";
@@ -620,6 +627,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 export type ToolCallState = ToolCall & {
 	[kStreamingBlockIndex]: number;
 	[kStreamingPartialJson]?: string;
+	[kStreamingLastParseLen]?: number;
 	[kStreamingBlockKind]: "mcp" | "todo";
 };
 
@@ -2105,8 +2113,16 @@ export function processInteractionUpdate(
 			if (chunk.length === 0) {
 				return;
 			}
-			state.currentToolCall[kStreamingPartialJson] = current + chunk;
-			state.currentToolCall.arguments = parseStreamingJson(state.currentToolCall[kStreamingPartialJson]);
+			const nextBuffer = current + chunk;
+			state.currentToolCall[kStreamingPartialJson] = nextBuffer;
+			// Throttle mid-stream parses to keep total parse work O(N) instead of O(N²)
+			// in the argument-buffer length; the authoritative full parse runs in
+			// `toolCallCompleted` (mcp branch) and the fallback end-of-stream path.
+			const throttled = parseStreamingJsonThrottled(nextBuffer, state.currentToolCall[kStreamingLastParseLen] ?? 0);
+			if (throttled) {
+				state.currentToolCall.arguments = throttled.value;
+				state.currentToolCall[kStreamingLastParseLen] = throttled.parsedLen;
+			}
 			const idx = output.content.indexOf(state.currentToolCall);
 			stream.push({ type: "toolcall_delta", contentIndex: idx, delta: chunk, partial: output });
 		}
@@ -2114,6 +2130,12 @@ export function processInteractionUpdate(
 		if (state.currentToolCall) {
 			const toolCall = update.message.value.toolCall;
 			if (state.currentToolCall[kStreamingBlockKind] === "mcp") {
+				// Authoritative full parse of the accumulated argument buffer; the delta
+				// path throttles mid-stream parses, so `arguments` may lag the buffer.
+				const partial = state.currentToolCall[kStreamingPartialJson];
+				if (partial !== undefined) {
+					state.currentToolCall.arguments = parseStreamingJson(partial);
+				}
 				const decodedArgs = decodeMcpArgsMap(toolCall?.mcpToolCall?.args?.args);
 				state.currentToolCall.arguments = mergeCursorMcpToolCallArgs(
 					state.currentToolCall.arguments as Record<string, unknown> | undefined,

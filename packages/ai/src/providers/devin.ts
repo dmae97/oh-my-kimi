@@ -28,7 +28,7 @@ import {
 	StopReason,
 } from "@oh-my-pi/pi-catalog/discovery/devin-gen/exa/codeium_common_pb/codeium_common_pb";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
-import { logger, parseStreamingJson } from "@oh-my-pi/pi-utils";
+import { logger, parseStreamingJson, parseStreamingJsonThrottled } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import type {
 	Api,
@@ -105,6 +105,11 @@ export const streamDevin: StreamFunction<"devin-agent"> = (
 		// accumulated per id (kept out of the content object so finalized tool calls stay clean).
 		const toolBlocks = new Map<string, ToolCall>();
 		const toolPartialJson = new Map<string, string>();
+		// Last-parsed argument-buffer length per tool-call id — bounds the
+		// mid-stream parse work to O(N) via `parseStreamingJsonThrottled`; the
+		// authoritative final parse still runs unconditionally in the toolcall_end
+		// loop below.
+		const toolLastParseLen = new Map<string, number>();
 		let activeToolCallId: string | undefined;
 		let latestStopReason = StopReason.UNSPECIFIED;
 
@@ -279,7 +284,11 @@ export const streamDevin: StreamFunction<"devin-agent"> = (
 								: previousJson + tc.argumentsJson;
 							const delta = accumulated.slice(previousJson.length);
 							toolPartialJson.set(toolCallId, accumulated);
-							block.arguments = parseStreamingJson(accumulated);
+							const throttled = parseStreamingJsonThrottled(accumulated, toolLastParseLen.get(toolCallId) ?? 0);
+							if (throttled) {
+								block.arguments = throttled.value;
+								toolLastParseLen.set(toolCallId, throttled.parsedLen);
+							}
 							stream.push({
 								type: "toolcall_delta",
 								contentIndex: output.content.indexOf(block),

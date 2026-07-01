@@ -213,15 +213,22 @@ describe("processInteractionUpdate args_text_delta handling", () => {
 
 		const block = h.state.currentToolCall!;
 		expect(getStreamingPartialJson(block)).toBe(cumulative[cumulative.length - 1]);
-		expect(block.arguments).toEqual({
-			agent: "task",
-			tasks: [{ assignment: "do A" }, { assignment: "do B" }],
-		});
 
 		// Each cumulative snapshot only emits the new suffix as the delta event.
 		const deltas = h.captured.filter(e => e.type === "toolcall_delta").map(e => (e as { delta: string }).delta);
 		expect(deltas.join("")).toBe(cumulative[cumulative.length - 1]);
 		expect(deltas).toEqual([`{"agent":"task","tas`, `ks":[{"assignme`, `nt":"do A"},{"assignment":"do B"}]}`]);
+
+		// The delta path throttles mid-stream parses; the authoritative full parse
+		// runs at toolCallCompleted, so the finalized block carries the full args.
+		completeMcpToolCall(h, undefined);
+		const finalBlock = h.output.content[0];
+		expect(finalBlock?.type).toBe("toolCall");
+		if (finalBlock?.type !== "toolCall") throw new Error("expected toolCall block");
+		expect(finalBlock.arguments).toEqual({
+			agent: "task",
+			tasks: [{ assignment: "do A" }, { assignment: "do B" }],
+		});
 	});
 
 	it("still appends genuinely incremental argsTextDelta fragments", () => {
@@ -234,7 +241,46 @@ describe("processInteractionUpdate args_text_delta handling", () => {
 		}
 
 		expect(getStreamingPartialJson(h.state.currentToolCall!)).toBe(fragments.join(""));
-		expect(h.state.currentToolCall!.arguments).toEqual({ agent: "task", items: [1, 2, 3] });
+
+		// Finalize to observe the authoritative full parse (delta path is throttled).
+		completeMcpToolCall(h, undefined);
+		const finalBlock = h.output.content[0];
+		expect(finalBlock?.type).toBe("toolCall");
+		if (finalBlock?.type !== "toolCall") throw new Error("expected toolCall block");
+		expect(finalBlock.arguments).toEqual({ agent: "task", items: [1, 2, 3] });
+	});
+
+	it("throttles mid-stream arg parsing to bound work at O(N) in buffer length (issue #3946)", () => {
+		// Regression for the O(N²) streaming hot path: parseStreamingJson used to
+		// run on every delta, re-parsing the entire accumulated buffer each time.
+		// With parseStreamingJsonThrottled, mid-stream re-parses only fire once
+		// the buffer has grown by at least STREAMING_JSON_PARSE_MIN_GROWTH bytes.
+		const h = newHarness();
+		startMcpToolCall(h, "task");
+
+		// First snapshot: initial parse fires (lastParsedLen was 0).
+		pushArgsTextDelta(h, `{"agent":"task","note":"initial"`);
+		const block = h.state.currentToolCall!;
+		const argsAfterFirst = block.arguments;
+		expect(argsAfterFirst).toEqual({ agent: "task", note: "initial" });
+
+		// Tiny follow-up snapshots that grow the buffer by far less than the
+		// throttle threshold. block.arguments must NOT be re-parsed; if it were,
+		// the O(N²) regression would resurface for a long stream of small deltas.
+		pushArgsTextDelta(h, `{"agent":"task","note":"initial","step":1`);
+		pushArgsTextDelta(h, `{"agent":"task","note":"initial","step":12`);
+		expect(block.arguments).toBe(argsAfterFirst);
+
+		// The full buffer is still accumulated for the authoritative final parse.
+		expect(getStreamingPartialJson(block)).toBe(`{"agent":"task","note":"initial","step":12`);
+
+		// toolCallCompleted re-parses the full buffer unconditionally; the merged
+		// arguments reflect every byte streamed, including the throttled tail.
+		completeMcpToolCall(h, undefined);
+		const finalBlock = h.output.content[0];
+		expect(finalBlock?.type).toBe("toolCall");
+		if (finalBlock?.type !== "toolCall") throw new Error("expected toolCall block");
+		expect(finalBlock.arguments).toEqual({ agent: "task", note: "initial", step: 12 });
 	});
 
 	it("skips empty argsTextDelta snapshots without emitting a delta event", () => {
