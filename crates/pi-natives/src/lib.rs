@@ -179,10 +179,15 @@ fn probe_spawnable_workers(target: usize) -> usize {
 /// Rayon stores global initialization in a `Once`, so a failed
 /// `build_global()` call would permanently poison the process for later
 /// parallel work.
+#[cfg(any(target_os = "windows", test))]
+fn rayon_probe_target(desired: usize) -> usize {
+	clamped_rayon_threads(desired).saturating_add(RAYON_RESERVED_NON_RAYON_THREADS)
+}
+
 #[cfg(target_os = "windows")]
 fn configure_rayon_pool() {
 	let desired = desired_rayon_threads();
-	let plan = rayon_pool_plan(desired, probe_spawnable_workers(desired));
+	let plan = rayon_pool_plan(desired, probe_spawnable_workers(rayon_probe_target(desired)));
 	let result = match plan {
 		RayonPoolPlan::WorkerThreads(threads) => rayon::ThreadPoolBuilder::new()
 			.num_threads(threads)
@@ -306,13 +311,24 @@ pub fn omp_install_tokio_runtime() {
 
 #[cfg(test)]
 mod tests {
-	use super::{RAYON_MAX_THREADS, RayonPoolPlan, clamped_rayon_threads, rayon_pool_plan};
+	use super::{
+		RAYON_MAX_THREADS, RayonPoolPlan, clamped_rayon_threads, rayon_pool_plan, rayon_probe_target,
+	};
 
 	#[test]
 	fn rayon_threads_are_capped_for_windows_commit_pressure() {
 		assert_eq!(clamped_rayon_threads(0), 1);
 		assert_eq!(clamped_rayon_threads(1), 1);
 		assert_eq!(clamped_rayon_threads(RAYON_MAX_THREADS + 1), RAYON_MAX_THREADS);
+	}
+
+	#[test]
+	fn rayon_probe_includes_reserved_non_rayon_capacity() {
+		assert_eq!(rayon_probe_target(4), 5);
+		assert_eq!(
+			rayon_probe_target(RAYON_MAX_THREADS + 4),
+			RAYON_MAX_THREADS + super::RAYON_RESERVED_NON_RAYON_THREADS
+		);
 	}
 
 	#[test]
