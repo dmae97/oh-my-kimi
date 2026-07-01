@@ -30,6 +30,7 @@ import taskSummaryTemplate from "../prompts/tools/task-summary.md" with { type: 
 import { truncateForPrompt } from "../tools/approval";
 import { isIrcEnabled } from "../tools/irc";
 import { formatBytes, formatDuration } from "../tools/render-utils";
+import { DEFAULT_SPAWN_AGENT, resolveSpawnPolicy } from "./spawn-policy";
 import {
 	type AgentDefinition,
 	type AgentProgress,
@@ -187,17 +188,13 @@ function renderDescription(
 	ircEnabled: boolean,
 	parentSpawns: string,
 ): string {
-	const spawningDisabled = parentSpawns === "";
+	const spawnPolicy = resolveSpawnPolicy(parentSpawns);
+	const spawningDisabled = !spawnPolicy.enabled;
 	let filteredAgents = disabledAgents.length > 0 ? agents.filter(a => !disabledAgents.includes(a.name)) : agents;
 	if (spawningDisabled) {
 		filteredAgents = [];
-	} else if (parentSpawns !== "*") {
-		const allowed = new Set(
-			parentSpawns
-				.split(",")
-				.map(s => s.trim())
-				.filter(Boolean),
-		);
+	} else if (spawnPolicy.allowedAgents !== null) {
+		const allowed = new Set(spawnPolicy.allowedAgents);
 		filteredAgents = filteredAgents.filter(a => allowed.has(a.name));
 	}
 	const renderedAgents = filteredAgents.map(agent => ({
@@ -208,6 +205,9 @@ function renderDescription(
 	return prompt.render(taskDescriptionTemplate, {
 		agents: renderedAgents,
 		spawningDisabled,
+		defaultAgent: spawnPolicy.defaultAgent,
+		defaultAgentIsGeneric: spawnPolicy.defaultAgent === DEFAULT_SPAWN_AGENT,
+		allowedAgentsText: spawnPolicy.allowedPromptText,
 		MAX_CONCURRENCY: maxConcurrency,
 		isolationEnabled,
 		batchEnabled,
@@ -330,9 +330,6 @@ function spawnParamsFor(params: TaskParams, item: TaskItem): TaskParams {
 	}
 	return spawn;
 }
-
-/** Agent type spawned when a `task` call omits `agent`; mirrors the schema default in `getTaskSchema`. */
-const DEFAULT_TASK_AGENT = "task";
 
 /** Generic worker agents whose output sharpens with a tailored `role` rather than the bare type. */
 const GENERIC_SPAWN_AGENTS: ReadonlySet<string> = new Set(["task", "sonic"]);
@@ -511,7 +508,8 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 
 	get parameters(): TaskToolSchemaInstance {
 		const isolationEnabled = this.session.settings.get("task.isolation.mode") !== "none";
-		return getTaskSchema({ isolationEnabled, batchEnabled: this.#isBatchEnabled() });
+		const defaultAgent = resolveSpawnPolicy(this.session.getSessionSpawns()).defaultAgent;
+		return getTaskSchema({ isolationEnabled, batchEnabled: this.#isBatchEnabled(), defaultAgent });
 	}
 
 	renderCall(args: unknown, options: Parameters<typeof renderTaskCall>[1], theme: Theme) {
@@ -566,13 +564,14 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
 	): Promise<AgentToolResult<TaskToolDetails>> {
 		const repaired = repairTaskParams(rawParams as TaskParams);
-		// The schema defaults `agent` to `task` for model calls, but internal
-		// callers and stale transcripts build params directly and bypass arktype.
-		// Normalize once here so every downstream path sees the resolved agent.
+		// Schema defaults run for model calls, but internal callers and stale
+		// transcripts can bypass arktype. Normalize once so every downstream path
+		// sees the session's actual default agent.
+		const defaultAgent = resolveSpawnPolicy(this.session.getSessionSpawns()).defaultAgent;
 		const params =
 			typeof repaired.agent === "string" && repaired.agent.trim() !== ""
 				? repaired
-				: { ...repaired, agent: DEFAULT_TASK_AGENT };
+				: { ...repaired, agent: defaultAgent };
 		const batchEnabled = this.#isBatchEnabled();
 		const validationError = validateShapeParams(batchEnabled, params) ?? validateSpawnParams(params, batchEnabled);
 		if (validationError) {
@@ -1189,18 +1188,15 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			}
 
 			// Check spawn restrictions from parent
-			const parentSpawns = this.session.getSessionSpawns() ?? "*";
-			const allowedSpawns = parentSpawns.split(",").map(s => s.trim());
-			const isSpawnAllowed = (): boolean => {
-				if (parentSpawns === "") return false; // Empty = deny all
-				if (parentSpawns === "*") return true; // Wildcard = allow all
-				return allowedSpawns.includes(agentName);
-			};
-
-			if (!isSpawnAllowed()) {
-				const allowed = parentSpawns === "" ? "none (spawns disabled for this agent)" : parentSpawns;
+			const spawnPolicy = resolveSpawnPolicy(this.session.getSessionSpawns());
+			const spawnAllowed =
+				spawnPolicy.enabled &&
+				(spawnPolicy.allowedAgents === null || spawnPolicy.allowedAgents.includes(agentName));
+			if (!spawnAllowed) {
 				return {
-					content: [{ type: "text", text: `Cannot spawn '${agentName}'. Allowed: ${allowed}` }],
+					content: [
+						{ type: "text", text: `Cannot spawn '${agentName}'. Allowed: ${spawnPolicy.allowedErrorText}` },
+					],
 					details: { projectAgentsDir, results: [], totalDurationMs: Date.now() - startTime },
 				};
 			}

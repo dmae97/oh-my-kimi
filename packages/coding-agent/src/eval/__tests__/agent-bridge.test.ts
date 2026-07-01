@@ -196,13 +196,27 @@ describe("runEvalAgent", () => {
 		await expect(runEvalAgent({ prompt: "hello" }, { session: makeSession({ spawns: "" }) })).rejects.toThrow(
 			"spawns disabled",
 		);
-		await expect(runEvalAgent({ prompt: "hello" }, { session: makeSession({ spawns: "reviewer" }) })).rejects.toThrow(
-			"Allowed: reviewer",
-		);
+		await expect(
+			runEvalAgent({ prompt: "hello", agent: "task" }, { session: makeSession({ spawns: "reviewer" }) }),
+		).rejects.toThrow("Allowed: reviewer");
 		await expect(
 			runEvalAgent({ prompt: "hello" }, { session: makeSession({ depth: EVAL_AGENT_MAX_DEPTH }) }),
 		).rejects.toThrow("maximum depth");
 		expect(runSpy).not.toHaveBeenCalled();
+	});
+
+	it("defaults to the first allowed spawn under restricted eval policies", async () => {
+		mockAgents();
+		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options =>
+			singleResult(options, {
+				output: options.agent.name,
+			}),
+		);
+
+		const result = await runEvalAgent({ prompt: "hello" }, { session: makeSession({ spawns: "reviewer,task" }) });
+
+		expect(result.text).toBe("reviewer");
+		expect(runSpy.mock.calls[0]?.[0].agent.name).toBe("reviewer");
 	});
 
 	it("throws instead of spawning from plan mode", async () => {

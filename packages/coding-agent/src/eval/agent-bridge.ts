@@ -24,6 +24,7 @@ import {
 	runIsolatedSubprocess,
 } from "../task/isolation-runner";
 import { AgentOutputManager } from "../task/output-manager";
+import { resolveSpawnPolicy } from "../task/spawn-policy";
 import type { AgentDefinition, AgentProgress, SingleResult } from "../task/types";
 import { type NestedRepoPatch, parseIsolationMode } from "../task/worktree";
 import type { ToolSession } from "../tools";
@@ -39,7 +40,6 @@ export const EVAL_AGENT_BRIDGE_NAME = "__agent__";
 /** Hard recursion limit for eval-driven subagents. */
 export const EVAL_AGENT_MAX_DEPTH = 3;
 
-const DEFAULT_AGENT_TYPE = "task";
 const DEFAULT_AGENT_LABEL = "EvalAgent";
 
 const agentArgsSchema = type({
@@ -139,14 +139,12 @@ function assertDepthAllowed(session: ToolSession): void {
 }
 
 function assertSpawnAllowed(session: ToolSession, agentName: string): void {
-	const parentSpawns = session.getSessionSpawns() ?? "*";
-	if (parentSpawns === "*") return;
-	if (parentSpawns === "") {
-		throw new ToolError(`Cannot spawn '${agentName}'. Allowed: none (spawns disabled for this agent)`);
+	const spawnPolicy = resolveSpawnPolicy(session.getSessionSpawns());
+	if (!spawnPolicy.enabled) {
+		throw new ToolError(`Cannot spawn '${agentName}'. Allowed: ${spawnPolicy.allowedErrorText}`);
 	}
-	const allowedSpawns = parentSpawns.split(",").map(spawn => spawn.trim());
-	if (!allowedSpawns.includes(agentName)) {
-		throw new ToolError(`Cannot spawn '${agentName}'. Allowed: ${parentSpawns}`);
+	if (spawnPolicy.allowedAgents !== null && !spawnPolicy.allowedAgents.includes(agentName)) {
+		throw new ToolError(`Cannot spawn '${agentName}'. Allowed: ${spawnPolicy.allowedErrorText}`);
 	}
 }
 
@@ -283,7 +281,7 @@ function buildSubagentFailureMessage(agentName: string, result: SingleResult): s
  */
 export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOptions): Promise<EvalAgentResult> {
 	const parsed = parseAgentArgs(args);
-	const agentName = parsed.agent ?? DEFAULT_AGENT_TYPE;
+	const agentName = parsed.agent ?? resolveSpawnPolicy(options.session.getSessionSpawns()).defaultAgent;
 	const structured = Object.hasOwn(parsed, "schema");
 
 	assertNotPlanMode(options.session);

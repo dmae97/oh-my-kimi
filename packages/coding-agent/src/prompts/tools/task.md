@@ -10,7 +10,7 @@ Execution blocks your turn: the call only returns once the work is completely fi
 - **One-pass agents:** Prefer agents that investigate **and** edit in a single pass; only spin a read-only discovery step (e.g. `explore`) when the affected files are genuinely unknown.
 
 # Inputs
-- `agent` (optional): The base agent type to use (e.g., `explore`, `reviewer`). Defaults to `task` (the general-purpose worker) — omit it for the default worker instead of passing `agent: "task"`.
+- `agent` (optional): The base agent type to use (e.g., `explore`, `reviewer`). Defaults to `{{defaultAgent}}`{{#if defaultAgentIsGeneric}} (the general-purpose worker){{/if}} — omit it for the default worker instead of passing `agent: "{{defaultAgent}}"`.{{#if allowedAgentsText}} Current spawn policy allows: {{allowedAgentsText}}.{{/if}}
 {{#if batchEnabled}}
 - `context`: Shared project state, constraints, and contracts. Applies to the entire batch; do not duplicate this background into individual tasks.
 - `tasks[]`: Array of subagents to spawn.

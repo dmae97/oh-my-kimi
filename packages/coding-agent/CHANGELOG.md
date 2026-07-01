@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed eval and task spawn defaults to respect restricted agent `spawns` lists. ([#3973](https://github.com/can1357/oh-my-pi/issues/3973))
+
 ## [16.2.11] - 2026-07-01
 
 ### Fixed

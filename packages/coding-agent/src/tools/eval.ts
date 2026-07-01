@@ -10,6 +10,7 @@ import { defaultEvalSessionId } from "../eval/session-id";
 import type { EvalCellResult, EvalDisplayOutput, EvalLanguage, EvalStatusEvent, EvalToolDetails } from "../eval/types";
 import evalDescription from "../prompts/tools/eval.md" with { type: "text" };
 import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary, TailBuffer } from "../session/streaming-output";
+import { resolveSpawnPolicy } from "../task/spawn-policy";
 import { webpExclusionForModel } from "../utils/image-loading";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import type { ToolSession } from ".";
@@ -164,13 +165,10 @@ export interface EvalToolDescriptionOptions {
 	rb?: boolean;
 	jl?: boolean;
 	/**
-	 * Whether `agent()` is allowed in this session. Driven by the parent's
-	 * spawn policy (`getSessionSpawns`). Defaults to `true` for backward
-	 * compatibility — when the session forbids spawning, the prelude doc
-	 * omits the `agent()` entry so the model does not promise itself a
-	 * helper that will only ever throw "spawns disabled".
+	 * Parent spawn policy (`getSessionSpawns`). `true`/omitted means unrestricted,
+	 * `false`/`""` hides `agent()`, and a comma list drives the advertised default.
 	 */
-	spawns?: boolean;
+	spawns?: boolean | string | null;
 }
 
 export function getEvalToolDescription(options: EvalToolDescriptionOptions = {}): string {
@@ -178,8 +176,16 @@ export function getEvalToolDescription(options: EvalToolDescriptionOptions = {})
 	const js = options.js ?? true;
 	const rb = options.rb ?? false;
 	const jl = options.jl ?? false;
-	const spawns = options.spawns ?? true;
-	return prompt.render(evalDescription, { py, js, rb, jl, spawns });
+	const spawnPolicy = resolveSpawnPolicy(options.spawns ?? true);
+	return prompt.render(evalDescription, {
+		py,
+		js,
+		rb,
+		jl,
+		spawns: spawnPolicy.enabled,
+		spawnDefaultAgent: spawnPolicy.defaultAgent,
+		spawnAllowedAgentsText: spawnPolicy.allowedPromptText,
+	});
 }
 
 export interface EvalToolOptions {
@@ -294,13 +300,12 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 		if (!this.session) return getEvalToolDescription();
 		const backends = resolveEvalBackends(this.session);
 		const sessionSpawns = this.session.getSessionSpawns?.() ?? "*";
-		const spawnsAllowed = sessionSpawns !== "" && sessionSpawns !== null;
 		return getEvalToolDescription({
 			py: backends.python,
 			js: backends.js,
 			rb: backends.ruby,
 			jl: backends.julia,
-			spawns: spawnsAllowed,
+			spawns: sessionSpawns,
 		});
 	}
 	/** All reuse-chain examples; the `examples` getter filters by enabled languages. */
