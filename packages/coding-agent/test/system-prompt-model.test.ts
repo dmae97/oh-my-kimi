@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, setSystemTime } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -47,6 +47,33 @@ describe("system prompt model identifier", () => {
 		});
 
 		expect(systemPrompt.join("\n\n")).toContain("Model: anthropic/claude-opus-4");
+	});
+
+	it("renders the prompt date from the local timezone rather than UTC", async () => {
+		const originalTimezone = process.env.TZ;
+		process.env.TZ = "America/Los_Angeles";
+		setSystemTime(new Date("2026-07-01T03:15:00Z"));
+		try {
+			const { systemPrompt } = await buildSystemPrompt({
+				cwd: tempDir,
+				contextFiles: [],
+				skills: [],
+				rules: [],
+				toolNames: [],
+				workspaceTree: { ...EMPTY_TREE, rootPath: tempDir },
+			});
+			const rendered = systemPrompt.join("\n\n");
+
+			expect(rendered).toContain("Today is 2026-06-30");
+			expect(rendered).not.toContain("Today is 2026-07-01");
+		} finally {
+			setSystemTime();
+			if (originalTimezone === undefined) {
+				delete process.env.TZ;
+			} else {
+				process.env.TZ = originalTimezone;
+			}
+		}
 	});
 
 	it("omits the model line when no model is provided", async () => {
