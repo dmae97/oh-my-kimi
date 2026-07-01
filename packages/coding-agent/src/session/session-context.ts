@@ -307,21 +307,23 @@ export function buildSessionContext(
 		})();
 		const remoteReplacementHistory = providerPayload?.items;
 
-		if (options?.transcript) handleEntryResetTracking(compaction);
-		// Emit summary first; re-attach any archived snapcompact frames so the
-		// model can keep reading the archived history after every context rebuild.
+		// Re-attach any archived snapcompact frames so the model can keep
+		// reading the archived history after every context rebuild.
 		const snapcompactArchive = snapcompact.getPreservedArchive(compaction.preserveData);
-		pushMessage(
-			createCompactionSummaryMessage(
-				compaction.summary,
-				compaction.tokensBefore,
-				compaction.timestamp,
-				compaction.shortSummary,
-				providerPayload,
-				undefined,
-				snapcompactHistoryBlocksForContext(snapcompactArchive, options),
-			),
+		const compactionSummaryMsg = createCompactionSummaryMessage(
+			compaction.summary,
+			compaction.tokensBefore,
+			compaction.timestamp,
+			compaction.shortSummary,
+			providerPayload,
+			undefined,
+			snapcompactHistoryBlocksForContext(snapcompactArchive, options),
 		);
+		// Agent context (non-transcript): summary first so the LLM sees the
+		// compacted context before recent messages.
+		if (!options?.transcript) {
+			pushMessage(compactionSummaryMsg);
+		}
 
 		// Find compaction index in path
 		const compactionIdx = path.findIndex(e => e.type === "compaction" && e.id === compaction.id);
@@ -343,6 +345,16 @@ export function buildSessionContext(
 					appendMessage(entry);
 				}
 			}
+		}
+
+		// Display transcript: emit the summary at the chronological compaction
+		// point (after kept messages, before post-compaction) so it stays in
+		// the live region where Ctrl+O can expand it. Reset tracking fires
+		// here so the first post-compaction assistant turn — not a kept
+		// pre-compaction one — is marked as a cache miss.
+		if (options?.transcript) handleEntryResetTracking(compaction);
+		if (options?.transcript) {
+			pushMessage(compactionSummaryMsg);
 		}
 
 		// Emit messages after compaction

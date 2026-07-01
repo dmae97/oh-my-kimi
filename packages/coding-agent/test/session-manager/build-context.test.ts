@@ -321,6 +321,105 @@ describe("buildSessionContext", () => {
 		});
 	});
 
+	describe("collapsed transcript ordering", () => {
+		it("display transcript: summary after kept messages, not at top", () => {
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "old question"),
+				msg("2", "1", "assistant", "old response"),
+				msg("3", "2", "user", "kept question"),
+				msg("4", "3", "assistant", "kept response"),
+				compaction("5", "4", "Summary of compacted turns", "3"),
+				msg("6", "5", "user", "after compact"),
+			];
+
+			// Display transcript: kept messages → summary → post-compaction
+			const transcript = buildSessionContext(entries, undefined, undefined, {
+				transcript: true,
+				collapseCompactedHistory: true,
+			});
+
+			expect(transcript.messages).toHaveLength(4);
+			expect(transcript.messages[0]?.role).toBe("user");
+			expect(transcript.messages[1]?.role).toBe("assistant");
+			expect(transcript.messages[2]?.role).toBe("compactionSummary");
+			expect(transcript.messages[3]?.role).toBe("user");
+		});
+
+		it("agent context: summary stays at top", () => {
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "old question"),
+				msg("2", "1", "assistant", "old response"),
+				msg("3", "2", "user", "kept question"),
+				msg("4", "3", "assistant", "kept response"),
+				compaction("5", "4", "Summary of compacted turns", "3"),
+				msg("6", "5", "user", "after compact"),
+			];
+
+			// Agent context (no transcript): summary first
+			const agentCtx = buildSessionContext(entries);
+
+			expect(agentCtx.messages).toHaveLength(4);
+			expect(agentCtx.messages[0]?.role).toBe("compactionSummary");
+			expect(agentCtx.messages[1]?.role).toBe("user");
+			expect(agentCtx.messages[2]?.role).toBe("assistant");
+			expect(agentCtx.messages[3]?.role).toBe("user");
+		});
+
+		it("display transcript with no post-compaction messages: summary at bottom", () => {
+			// Simulates the moment right after /compact runs — compaction is the
+			// last entry, so the summary should be the last (bottom) message.
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "old question"),
+				msg("2", "1", "assistant", "old response"),
+				msg("3", "2", "user", "kept question"),
+				msg("4", "3", "assistant", "kept response"),
+				compaction("5", "4", "Freshly compacted", "3"),
+			];
+
+			const transcript = buildSessionContext(entries, undefined, undefined, {
+				transcript: true,
+				collapseCompactedHistory: true,
+			});
+
+			expect(transcript.messages).toHaveLength(3);
+			expect(transcript.messages[0]?.role).toBe("user");
+			expect(transcript.messages[1]?.role).toBe("assistant");
+			expect(transcript.messages[2]?.role).toBe("compactionSummary");
+		});
+
+		it("collapsed transcript marks first post-compaction assistant as cache miss", () => {
+			// With kept assistant BEFORE compaction and assistant AFTER compaction,
+			// the cache-miss flag must land on the post-compaction assistant (the
+			// turn that actually follows /compact), not on the kept pre-compaction one.
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "old question"),
+				msg("2", "1", "assistant", "old response"),
+				msg("3", "2", "user", "kept question"),
+				msg("4", "3", "assistant", "kept response"),
+				compaction("5", "4", "Compacted", "3"),
+				msg("6", "5", "user", "after compact"),
+				msg("7", "6", "assistant", "after response"),
+			];
+
+			const transcript = buildSessionContext(entries, undefined, undefined, {
+				transcript: true,
+				collapseCompactedHistory: true,
+			});
+
+			// Roles: user(3), assistant(4), compactionSummary, user(6), assistant(7)
+			expect(transcript.messages.map(m => m.role)).toEqual([
+				"user",
+				"assistant",
+				"compactionSummary",
+				"user",
+				"assistant",
+			]);
+			// cacheMissExplainedAt: the kept assistant (index 1) should NOT be a miss;
+			// the post-compaction assistant (index 4) SHOULD be a miss.
+			expect(transcript.cacheMissExplainedAt).toEqual([false, false, false, false, true]);
+		});
+	});
+
 	describe("with branches", () => {
 		it("follows path to specified leaf", () => {
 			// Tree:
