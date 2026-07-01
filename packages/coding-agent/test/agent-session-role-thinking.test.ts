@@ -530,4 +530,43 @@ describe("AgentSession role model thinking behavior", () => {
 		expect(session.agent.state.thinkingLevel).toBeUndefined();
 		expect(session.autoResolvedThinkingLevel()).toBeUndefined();
 	});
+
+	it("ignores a stale recorded role and cycles from the active model", async () => {
+		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const slowModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+
+		await createSession({
+			initialModelId: defaultModel.id,
+			initialThinkingLevel: Effort.High,
+			modelRoles: {
+				default: `${defaultModel.provider}/${defaultModel.id}`,
+				slow: `${slowModel.provider}/${slowModel.id}`,
+			},
+		});
+
+		// Record a model_change for the "slow" role WITHOUT switching the
+		// active model — the session still runs the default model. This is the
+		// stale state left behind when the model is changed through another
+		// surface (alt+m, temporary model, /model) after a role cycle.
+		session.sessionManager.appendModelChange(`${slowModel.provider}/${slowModel.id}`, "slow");
+		expect(session.sessionManager.getLastModelChangeRole()).toBe("slow");
+		expect(session.model?.id).toBe(defaultModel.id);
+
+		// The recorded role's resolved model (4-6) no longer equals the active
+		// model (4-5), so the cycle position must fall back to model equality
+		// and point at "default" — not trust the stale "slow" slot.
+		const cycle = session.getRoleModelCycle(["default", "slow"]);
+		if (!cycle) throw new Error("Expected a resolved role model cycle");
+		expect(cycle.models.map(entry => entry.role)).toEqual(["default", "slow"]);
+		expect(cycle.currentIndex).toBe(0);
+		expect(cycle.models[cycle.currentIndex]?.role).toBe("default");
+
+		// Cycling advances from the ACTIVE model's position: default → slow.
+		// With the stale slot trusted, the cycle would compute slow → default
+		// and "switch" right back onto the model already running.
+		const result = await session.cycleRoleModels(["default", "slow"]);
+		expect(result?.role).toBe("slow");
+		expect(result?.model.id).toBe(slowModel.id);
+		expect(session.model?.id).toBe(slowModel.id);
+	});
 });

@@ -8509,8 +8509,16 @@ export class AgentSession {
 
 		if (models.length === 0) return undefined;
 
+		// Trust the recorded role only while its resolved model still IS the
+		// active model. A model switch through another surface (alt+m, retry
+		// fallback, /model) or a role re-configuration leaves the recorded role
+		// pointing at a model the session no longer runs; cycling from that
+		// stale slot lands on the wrong neighbor and reads as a skipped entry.
 		const lastRole = this.sessionManager.getLastModelChangeRole();
 		let currentIndex = lastRole ? models.findIndex(entry => entry.role === lastRole) : -1;
+		if (currentIndex !== -1 && !modelsAreEqual(models[currentIndex].model, currentModel)) {
+			currentIndex = -1;
+		}
 		if (currentIndex === -1) {
 			currentIndex = models.findIndex(entry => modelsAreEqual(entry.model, currentModel));
 		}

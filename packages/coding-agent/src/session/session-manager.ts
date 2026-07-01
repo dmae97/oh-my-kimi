@@ -246,8 +246,6 @@ class SessionEntryIndex {
 			cursor = cursor.parentId ? this.#entriesById.get(cursor.parentId) : undefined;
 		}
 		branch.reverse();
-
-		branch.reverse();
 		return branch;
 	}
 
