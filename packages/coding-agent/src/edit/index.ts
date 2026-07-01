@@ -143,8 +143,12 @@ async function executeApplyPatchPerFile(
 	for (let i = 0; i < fileEntries.length; i++) {
 		const { path, run } = fileEntries[i];
 		const isLast = i === fileEntries.length - 1;
+		// Multi-file apply_patch stops after the first failed entry. Flush each
+		// successful file when the outer call asked for a final flush so an
+		// intervening failure cannot leave already-written files sitting in an
+		// unfinalized LSP write batch.
 		const batchRequest: LspBatchRequest | undefined = outerBatchRequest
-			? { id: outerBatchRequest.id, flush: isLast && outerBatchRequest.flush }
+			? { id: outerBatchRequest.id, flush: outerBatchRequest.flush }
 			: undefined;
 
 		try {
