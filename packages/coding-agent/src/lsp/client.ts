@@ -180,13 +180,24 @@ const CLIENT_CAPABILITIES = {
 // LSP Message Protocol
 // =============================================================================
 
+function abortReason(signal: AbortSignal): Error {
+	return signal.reason instanceof Error ? signal.reason : new ToolAbortError();
+}
+
+class LspFlushAbortError extends Error {
+	constructor(readonly reason: Error) {
+		super(reason.message);
+		this.name = "LspFlushAbortError";
+	}
+}
+
 async function writeMessage(
 	sink: Bun.FileSink,
 	message: LspJsonRpcRequest | LspJsonRpcNotification | LspJsonRpcResponse,
 	signal?: AbortSignal,
 ): Promise<void> {
 	if (signal?.aborted) {
-		throw signal.reason instanceof Error ? signal.reason : new ToolAbortError();
+		throw abortReason(signal);
 	}
 	const content = JSON.stringify(message);
 	sink.write(`Content-Length: ${Buffer.byteLength(content, "utf-8")}\r\n\r\n${content}`);
@@ -205,7 +216,7 @@ async function writeMessage(
 		// The underlying flush stays pending in the background; suppress its
 		// eventual settlement so we do not surface an unhandled rejection.
 		flush.catch(() => {});
-		reject(signal.reason instanceof Error ? signal.reason : new ToolAbortError());
+		reject(new LspFlushAbortError(abortReason(signal)));
 	};
 	signal.addEventListener("abort", onAbort, { once: true });
 	flush.then(
@@ -242,14 +253,18 @@ function queueWriteMessage(
 	signal?: AbortSignal,
 ): Promise<void> {
 	const write = client.writeQueue.catch(() => {}).then(() => writeMessage(client.proc.stdin, message, signal));
-	client.writeQueue = write.catch(err => {
-		// An aborted flush leaves the sink pending; the next queued write
-		// would stall behind it. Force a fresh spawn on the next lookup.
-		if (signal?.aborted) teardownWedgedClient(client);
-		// Swallow: writeQueue is a barrier for the next writer, not a value.
-		void err;
+	const result = write.catch((err: unknown) => {
+		if (err instanceof LspFlushAbortError) {
+			// Only an abort that raced this write's in-flight flush leaves
+			// the sink pending. Pre-write aborts and queued caller timeouts
+			// must not kill a healthy shared client.
+			teardownWedgedClient(client);
+			throw err.reason;
+		}
+		throw err;
 	});
-	return write;
+	client.writeQueue = result.catch(() => {});
+	return result;
 }
 
 // =============================================================================

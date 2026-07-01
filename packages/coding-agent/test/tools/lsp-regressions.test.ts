@@ -2319,6 +2319,59 @@ describe("lsp regressions", () => {
 			}
 		});
 
+		it("does not tear down when a caller aborts before its queued write reaches flush", async () => {
+			const firstFlush = Promise.withResolvers<number>();
+			const writes: Array<string | Uint8Array> = [];
+			const kill = vi.fn();
+			const client: LspClient = {
+				name: "fake-lsp-queued-abort:/tmp",
+				cwd: "/tmp",
+				config: { command: "fake-lsp-queued-abort", fileTypes: ["ts"], rootMarkers: [] },
+				proc: {
+					exited: new Promise<number>(() => {}),
+					exitCode: null,
+					stdin: {
+						write(chunk: string | Uint8Array) {
+							writes.push(chunk);
+							return typeof chunk === "string" ? Buffer.byteLength(chunk, "utf-8") : chunk.byteLength;
+						},
+						flush: () => firstFlush.promise,
+					},
+					stdout: new ReadableStream<Uint8Array>(),
+					peekStderr: () => "",
+					kill,
+				} as unknown as LspClient["proc"],
+				requestId: 0,
+				diagnostics: new Map(),
+				diagnosticsVersion: 0,
+				openFiles: new Map(),
+				pendingRequests: new Map(),
+				messageBuffer: new Uint8Array(0),
+				isReading: false,
+				status: "ready",
+				lastActivity: Date.now(),
+				writeQueue: Promise.resolve(),
+				activeProgressTokens: new Set(),
+				projectLoaded: Promise.resolve(),
+				resolveProjectLoaded: () => {},
+			};
+
+			const first = lspClient.sendNotification(client, "workspace/didChangeConfiguration", { settings: {} });
+			await Bun.sleep(0);
+
+			const controller = new AbortController();
+			const second = lspClient.sendNotification(client, "textDocument/didOpen", {}, controller.signal);
+			controller.abort();
+			await Bun.sleep(0);
+
+			expect(kill).not.toHaveBeenCalled();
+			firstFlush.resolve(0);
+			await first;
+			await expect(second).rejects.toBeInstanceOf(Error);
+			expect(kill).not.toHaveBeenCalled();
+			expect(writes).toHaveLength(1);
+		});
+
 		it("bounds a wedged notification flush on the caller signal and tears down the client", async () => {
 			// Custom fake: stdin.flush is gated by a controllable promise so we
 			// can simulate a server that stopped draining stdin AFTER init has
