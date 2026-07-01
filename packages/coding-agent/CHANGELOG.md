@@ -17,6 +17,7 @@
 - Fixed evaluation and task spawn defaults to respect restricted agent spawn lists.
 - Fixed timed-out browser.run calls leaving evaluated JavaScript continuations running, which could cause late tab mutations after the tool returned.
 - Fixed performance degradation in session context and branch path reconstruction on deep linear histories.
+- Fixed agents repeating the same tool call across turns without corrective steering by wiring the cross-turn tool-call loop guard into sessions. ([#3971](https://github.com/can1357/oh-my-pi/issues/3971))
 
 ## [16.2.11] - 2026-07-01
 

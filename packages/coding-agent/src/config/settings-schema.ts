@@ -285,6 +285,7 @@ const EMPTY_STRING_ARRAY: string[] = [];
 const EMPTY_STRING_RECORD: Record<string, string> = {};
 const EMPTY_NUMBER_RECORD: Record<string, number> = {};
 const DEFAULT_CYCLE_ORDER: string[] = ["smol", "default", "slow"];
+const DEFAULT_TOOL_CALL_LOOP_EXEMPT_TOOLS: string[] = ["job", "irc"];
 const EMPTY_MODEL_TAGS_RECORD: ModelTagsSettings = {};
 const HINDSIGHT_RECALL_TYPES_DEFAULT: string[] = ["world", "experience"];
 export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [
@@ -989,7 +990,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "model",
 			group: "Thinking",
 			label: "Loop Guard",
-			description: "Enable automatic stream loop detection for Gemini and DeepSeek models",
+			description: "Enable automatic stream loop detection for model reasoning and prose",
 		},
 	},
 
@@ -1013,6 +1014,39 @@ export const SETTINGS_SCHEMA = {
 			label: "Loop Guard Tool-Call Reminder",
 			description:
 				"When a Gemini reasoning stream emits many consecutive planning headers without calling a tool, interrupt it and inject a reminder to issue a tool call (requires Loop Guard)",
+		},
+	},
+
+	"model.toolCallLoopGuard.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "model",
+			group: "Thinking",
+			label: "Tool-Call Loop Guard",
+			description: "Detect consecutive identical tool calls across turns and inject a corrective steer",
+		},
+	},
+
+	"model.toolCallLoopGuard.threshold": {
+		type: "number",
+		default: 5,
+		ui: {
+			tab: "model",
+			group: "Thinking",
+			label: "Tool-Call Loop Threshold",
+			description: "Consecutive identical tool calls required before the corrective steer is injected",
+		},
+	},
+
+	"model.toolCallLoopGuard.exemptTools": {
+		type: "array",
+		default: DEFAULT_TOOL_CALL_LOOP_EXEMPT_TOOLS,
+		ui: {
+			tab: "model",
+			group: "Thinking",
+			label: "Tool-Call Loop Exempt Tools",
+			description: "Tool names that may repeat consecutively without triggering the cross-turn loop guard",
 		},
 	},
 

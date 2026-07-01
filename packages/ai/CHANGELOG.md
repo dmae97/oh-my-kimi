@@ -6,6 +6,7 @@
 
 - Improved streaming performance for Cursor and Devin providers by optimizing mid-stream tool-call argument parsing, preventing UI stalls when handling large payloads (such as write or apply_patch arguments).
 - Fixed an issue where stalled auth-gateway SSE responses could hang indefinitely in pi-native streams by ensuring first-event and idle timeout watchdogs are properly honored.
+- Fixed cross-turn tool-call loops going undetected by adding a guard for consecutive identical tool calls. ([#3971](https://github.com/can1357/oh-my-pi/issues/3971))
 
 ## [16.2.11] - 2026-07-01
 
