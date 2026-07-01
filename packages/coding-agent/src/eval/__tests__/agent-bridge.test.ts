@@ -219,6 +219,48 @@ describe("runEvalAgent", () => {
 		expect(runSpy.mock.calls[0]?.[0].agent.name).toBe("reviewer");
 	});
 
+	it("honors task.maxRecursionDepth on top of the hard eval ceiling", async () => {
+		mockAgents();
+		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
+
+		// task.maxRecursionDepth=0 means "no spawning at all" — even depth 0 (the
+		// top-level agent) must be blocked, matching canSpawnAtDepth().
+		await expect(
+			runEvalAgent(
+				{ prompt: "hello" },
+				{
+					session: makeSession({
+						settings: Settings.isolated({
+							"async.enabled": false,
+							"task.isolation.mode": "none",
+							"task.maxRecursionDepth": 0,
+						}),
+					}),
+				},
+			),
+		).rejects.toThrow("maximum depth is 0");
+
+		// task.maxRecursionDepth=1 ("Single") lets the top spawn but a depth-1
+		// subagent cannot spawn further — even though the hard ceiling is 3.
+		await expect(
+			runEvalAgent(
+				{ prompt: "hello" },
+				{
+					session: makeSession({
+						depth: 1,
+						settings: Settings.isolated({
+							"async.enabled": false,
+							"task.isolation.mode": "none",
+							"task.maxRecursionDepth": 1,
+						}),
+					}),
+				},
+			),
+		).rejects.toThrow("maximum depth is 1");
+
+		expect(runSpy).not.toHaveBeenCalled();
+	});
+
 	it("throws instead of spawning from plan mode", async () => {
 		mockAgents();
 		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
@@ -234,7 +276,19 @@ describe("runEvalAgent", () => {
 		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
 		const abortController = new AbortController();
 		const schema = { type: "object", properties: { ok: { type: "boolean" } } };
-		const session = makeSession({ depth: 2, activeModel: "p/current", modelString: "p/fallback" });
+		const session = makeSession({
+			depth: 2,
+			activeModel: "p/current",
+			modelString: "p/fallback",
+			settings: Settings.isolated({
+				"async.enabled": false,
+				"task.isolation.mode": "none",
+				"task.enableLsp": true,
+				// Default task.maxRecursionDepth is 2, which would now (correctly)
+				// block depth=2 — widen it so the test still exercises depth=2.
+				"task.maxRecursionDepth": -1,
+			}),
+		});
 
 		await runEvalAgent(
 			{ prompt: " hello ", label: "My Agent", model: "p/override", schema },

@@ -501,8 +501,10 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	readonly #blockedAgent: string | undefined;
 	/**
 	 * One semaphore per TaskTool instance (i.e. per session): bounds concurrent
-	 * subagents across parallel `task` calls within the session. Sized from
-	 * `task.maxConcurrency` at first use; later setting changes do not resize it.
+	 * subagents across parallel `task` calls within the session. Resized in
+	 * place from `task.maxConcurrency` on every acquire so a mid-session
+	 * settings change (UI toggle, `/settings`) takes effect on the next spawn,
+	 * rather than baking in whatever the cap was when the first spawn ran.
 	 */
 	#spawnSemaphore: Semaphore | undefined;
 
@@ -545,7 +547,12 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	}
 
 	#getSpawnSemaphore(): Semaphore {
-		this.#spawnSemaphore ??= new Semaphore(this.session.settings.get("task.maxConcurrency"));
+		const max = this.session.settings.get("task.maxConcurrency");
+		if (this.#spawnSemaphore) {
+			this.#spawnSemaphore.resize(max);
+		} else {
+			this.#spawnSemaphore = new Semaphore(max);
+		}
 		return this.#spawnSemaphore;
 	}
 
