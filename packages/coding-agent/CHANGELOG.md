@@ -4,39 +4,32 @@
 
 ### Breaking Changes
 
-- Removed the `equivalence` key (`overrides`/`exclude`) from `models.yml`/`models.json` provider config; canonical-alias grouping no longer exists so the field is inert
+- Removed the canonical-alias grouping and resolution layer. The `equivalence` key (`overrides`/`exclude`) in `models.yml`/`models.json` is now inert, and canonical-related methods have been removed from `ModelRegistry`.
+- Removed the "CANONICAL" tab from the interactive model selector and the `omp models canonical` subcommand.
 
 ### Changed
 
-- Simplified model selection and matching by removing the canonical-alias grouping/resolution layer. `ModelRegistry` no longer exposes `getCanonicalId`, `getCanonicalVariants`, `getCanonicalModels`, `getCanonicalModelSelections`, or `resolveCanonicalModel`; the resolver's matching pipeline (`parseModelPattern`, `resolveModelRoleValue`, `resolveRoleSelection`, `resolveModelScope`, `resolveCliModel`, `filterAvailableModelsByEnabledPatterns`) resolves bare/`provider/id`/glob patterns directly without a canonical index
-- Bare model ids in `--model`, `modelRoles`, and `enabledModels` resolve via exact/flat-id + provider-preference matching instead of cross-spelling canonical coalescing
-- Cold start no longer builds the catalog-wide canonical index (the `inlineToolDescriptors: auto` Gemini check now classifies the raw model id directly), removing that work from the first-paint path
-- Modified bench CLI auth fallback to match identical model IDs instead of routing via a canonical equivalence index
-
-### Removed
-
-- Removed the coalesced canonical model view (the "CANONICAL" tab in the interactive model selector and the `omp models canonical` subcommand)
+- Simplified model selection and matching by resolving bare model IDs in `--model`, `modelRoles`, and `enabledModels` via exact/flat-ID and provider-preference matching instead of cross-spelling canonical coalescing.
+- Improved cold start performance by removing the catalog-wide canonical index build from the startup path.
 
 ### Fixed
 
 - Fixed the write tool not streaming execution progress to the TUI while files are being written.
-- Fixed live tool-call argument previews disappearing while arguments stream, restoring direct rendering from provider-preserved partial JSON instead of empty-id placeholder migration.
-- Fixed the LSP tool ignoring timeouts and abort signals during cold-starts and notification writes, preventing hung processes.
-- Fixed the browser tool leaking Chromium/Puppeteer processes when operations were aborted or when an agent session was disposed.
-- Added a 30-second timeout (configurable via extensionHandlerTimeoutMs) to extension tool call handlers to prevent hung third-party extensions from blocking execution, and fixed a timer leak that kept the CLI alive.
-- Fixed the built-in fd tool ignoring shell cancellation (such as Ctrl-C or timeouts) during directory walks.
-- Fixed MCP stdio requests hanging indefinitely past their configured timeouts when the child subprocess stopped draining stdin.
-- Fixed Python eval shell helpers buffering child-process output by streaming chunks and truncating oversized output with a notice.
+- Fixed live tool-call argument previews disappearing while arguments stream.
+- Fixed the LSP tool ignoring timeouts and abort signals during cold-starts and notification writes.
+- Fixed the browser tool leaking Chromium/Puppeteer processes when operations are aborted or when an agent session is disposed.
+- Added a configurable 30-second timeout (`extensionHandlerTimeoutMs`) to extension tool call handlers to prevent hung third-party extensions from blocking execution, and fixed a timer leak keeping the CLI alive.
+- Fixed the built-in `fd` tool ignoring shell cancellation (such as Ctrl-C or timeouts) during directory walks.
+- Fixed MCP stdio requests hanging indefinitely past their configured timeouts when the child subprocess stops draining stdin.
+- Fixed Python eval shell helpers buffering child-process output by streaming chunks and truncating oversized output.
 - Fixed cached model edit variants failing to update when changing project directories.
 - Fixed subagents with structured output schemas failing validation by correctly wrapping the schema in the system prompt.
 - Fixed MCP Streamable HTTP request and notification timeouts staying unarmed during stalled response body reads.
 - Fixed evaluation and task spawn defaults to respect restricted agent spawn lists.
-- Fixed timed-out browser.run calls leaving evaluated JavaScript continuations running, which could cause late tab mutations after the tool returned.
+- Fixed timed-out `browser.run` calls leaving evaluated JavaScript continuations running.
 - Fixed performance degradation in session context and branch path reconstruction on deep linear histories.
-- Fixed agents repeating the same tool call across turns without corrective steering by wiring the cross-turn tool-call loop guard into sessions. ([#3971](https://github.com/can1357/oh-my-pi/issues/3971))
-### Fixed
-
-- Fixed `discovery: { type: "openai-models-list" }` (and its `lm-studio` sibling) reporting the flat 128K/33K discovery-default context window for every model when a thin OpenAI-compatible proxy omits `context_length`/`max_model_len` on `/v1/models`. Discovery now resolves each id against the bundled model reference catalog (`getBundledModelReferenceIndex` / `resolveModelReference`, same pattern as `proxy` / `litellm` discovery), so a proxied `gpt-5` / `claude-sonnet-5` inherits its true context window, output limit, display name, modality, and reasoning support while provider-reported `max_model_len` / `context_length`, `lm-studio` native metadata, per-provider `headers`/`baseUrl`, and local-unknown pricing remain authoritative. ([#3983](https://github.com/can1357/oh-my-pi/issues/3983))
+- Fixed agents repeating the same tool call across turns without corrective steering by wiring the cross-turn tool-call loop guard into sessions.
+- Fixed OpenAI-compatible model discovery (including LM Studio) reporting flat default context windows when proxies omit context length metadata, by resolving discovered IDs against the bundled model reference catalog to inherit accurate context windows, output limits, display names, modalities, and reasoning support.
 
 ## [16.2.11] - 2026-07-01
 

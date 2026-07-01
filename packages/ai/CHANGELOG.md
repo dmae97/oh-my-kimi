@@ -2,15 +2,16 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Improved streaming performance for Cursor and Devin providers by optimizing mid-stream tool-call argument parsing to prevent UI stalls when handling large payloads.
+
 ### Fixed
 
-- Fixed an issue where tool call IDs and partial JSON payloads were lost during streaming under certain provider configurations
-- Fixed native tool calls with late-arriving IDs being prematurely filtered or incorrectly initialized in the event stream
-
-- Improved streaming performance for Cursor and Devin providers by optimizing mid-stream tool-call argument parsing, preventing UI stalls when handling large payloads (such as write or apply_patch arguments).
-- Fixed leaked-thinking stream healing replacing live provider tool-call blocks with empty-id placeholders, which broke streamed tool arguments and could emit invalid `tool_use` IDs through Anthropic-compatible streams.
+- Fixed issues with tool call streaming where tool call IDs, partial JSON payloads, or late-arriving IDs could be lost, filtered, or incorrectly initialized.
+- Fixed an issue where stream healing for leaked thinking blocks could replace live tool-call blocks with empty-id placeholders, breaking streamed tool arguments on Anthropic-compatible streams.
 - Fixed an issue where stalled auth-gateway SSE responses could hang indefinitely in pi-native streams by ensuring first-event and idle timeout watchdogs are properly honored.
-- Fixed cross-turn tool-call loops going undetected by adding a guard for consecutive identical tool calls. ([#3971](https://github.com/can1357/oh-my-pi/issues/3971))
+- Fixed cross-turn tool-call loops going undetected by adding a guard for consecutive identical tool calls. (#3971)
 
 ## [16.2.11] - 2026-07-01
 
