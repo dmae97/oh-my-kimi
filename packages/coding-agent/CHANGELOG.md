@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.11] - 2026-07-01
+
 ### Fixed
 
 - Fixed model-discovery requests (Ollama, Llama.cpp, LM Studio, OpenAI, LiteLLM, vLLM) failing to clear timeouts after completion, preventing potential memory and timer leaks.

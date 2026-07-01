@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.11] - 2026-07-01
+
 ### Fixed
 
 - Fixed a potential memory leak caused by dangling timeout timers during model discovery in OpenAI-compatible, vLLM, LiteLLM, and LM Studio catalogs.

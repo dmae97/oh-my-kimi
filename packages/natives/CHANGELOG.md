@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.11] - 2026-07-01
+
 ### Fixed
 
 - Fixed high memory usage in native `astGrep` and `astMatch` by retaining only the requested page window of match payloads during broad searches while preserving exact totals.
