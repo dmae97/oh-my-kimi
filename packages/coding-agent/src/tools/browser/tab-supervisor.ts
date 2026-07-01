@@ -1,8 +1,8 @@
 import { getPuppeteerDir, logger, Snowflake, workerHostEntry } from "@oh-my-pi/pi-utils";
 import type { Page, Target } from "puppeteer-core";
 import { callSessionTool } from "../../eval/js/tool-bridge";
-import type { ToolSession } from "../index";
 import { webpExclusionForModel } from "../../utils/image-loading";
+import type { ToolSession } from "../index";
 import { expandPath } from "../path-utils";
 import { ToolAbortError, ToolError } from "../tool-errors";
 import { pickElectronTarget } from "./attach";
