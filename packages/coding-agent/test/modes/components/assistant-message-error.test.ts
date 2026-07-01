@@ -178,10 +178,13 @@ describe("AssistantMessageComponent streaming thinking pulse", () => {
 
 	// First frame of the expanding/shrinking ✻ pulse; deterministic right after updateContent.
 	const PULSE = "✻";
+	const THINKING_LABEL = "Thinking";
+	const THINKING_GLYPH_ONLY_LINE = /^[✻✼❉❊✺✹✸✶]\s*$/;
 
-	it("shows the pulse in place of hidden reasoning while thinking streams", () => {
+	it("shows a described pulse in place of hidden reasoning while thinking streams", () => {
 		const lines = liveLines(streaming([{ type: "thinking", thinking: "private reasoning" }]));
-		expect(lines.some(line => line.includes(PULSE))).toBe(true);
+		expect(lines.some(line => line.includes(PULSE) && line.includes(THINKING_LABEL))).toBe(true);
+		expect(lines.map(line => line.trim()).some(line => THINKING_GLYPH_ONLY_LINE.test(line))).toBe(false);
 		expect(lines.some(line => line.includes("private reasoning"))).toBe(false);
 	});
 
@@ -261,7 +264,7 @@ describe("AssistantMessageComponent streaming thinking pulse", () => {
 		component.updateContent(streaming([{ type: "thinking", thinking: "ab" }], 57), { transient: true });
 
 		const plain = Bun.stripANSI(component.render(RENDER_WIDTH).join("\n"));
-		// Layout: "<glyph> <total> · <rate> toks/s" — 57 provider tokens, 47.0 tok/s.
+		// Layout: "<glyph> Thinking · <total> · <rate> toks/s" — 57 provider tokens, 47.0 tok/s.
 		expect(plain).toContain("57 · 47.0 toks/s");
 
 		nowSpy.mockRestore();
@@ -301,12 +304,14 @@ describe("AssistantMessageComponent streaming thinking pulse", () => {
 
 		// Long pause: rate observations age out of the window. A same-token update
 		// refreshes the live label, which now drops the numeric badge entirely
-		// rather than lingering on "0.0 toks/s" — only the bare pulse remains.
+		// rather than lingering on "0.0 toks/s" while retaining descriptive text.
 		mockTime = 30_000;
 		component.updateContent(streaming([{ type: "thinking", thinking: "ab" }], 57), { transient: true });
 		const plain = Bun.stripANSI(component.render(RENDER_WIDTH).join("\n"));
 		expect(plain).not.toContain("toks/s");
+		expect(plain).not.toContain("57");
 		expect(plain.includes(PULSE)).toBe(true);
+		expect(plain).toContain(THINKING_LABEL);
 
 		nowSpy.mockRestore();
 		component.dispose();
@@ -335,6 +340,7 @@ describe("AssistantMessageComponent streaming thinking pulse", () => {
 		expect(plain).not.toContain("toks/s");
 		expect(plain).not.toContain("99");
 		expect(plain.includes(PULSE)).toBe(true);
+		expect(plain).toContain(THINKING_LABEL);
 
 		nowSpy.mockRestore();
 		b.dispose();
