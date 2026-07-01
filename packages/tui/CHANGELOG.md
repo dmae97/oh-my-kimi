@@ -64,6 +64,9 @@
 ### Fixed
 
 - Fixed an issue where a fast double-Escape keypress was swallowed and ignored, preventing double-escape gestures and subsequent Escape key handlers from firing.
+### Changed
+
+- Avoided reallocating the tab-expansion space string on every `replaceTabs` call by hoisting it to a module constant.
 
 ## [16.2.3] - 2026-06-28
 

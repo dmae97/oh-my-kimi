@@ -143,12 +143,13 @@ export function extractSegments(
 
 // Pre-allocated space buffer for padding
 const SPACE_BUFFER = " ".repeat(512);
+const TAB_SPACES = " ".repeat(DEFAULT_TAB_WIDTH);
 
 /*
  * Replace tabs with the fixed display tab width for consistent rendering.
  */
 export function replaceTabs(text: string): string {
-	return text.replaceAll("\t", " ".repeat(DEFAULT_TAB_WIDTH));
+	return text.replaceAll("\t", TAB_SPACES);
 }
 
 /**

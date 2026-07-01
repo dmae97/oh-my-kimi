@@ -207,19 +207,18 @@ function groupApplyPatchEntriesByPath(entries: readonly ApplyPatchEntry[]): Map<
  * `create` op), otherwise an empty string (grammar-only payloads).
  */
 function extractAddedLines(text: string, fallbackToWhole: boolean): string {
-	let added: string | undefined;
+	const added: string[] = [];
 	let lineStart = 0;
 	while (lineStart <= text.length) {
 		let lineEnd = text.indexOf("\n", lineStart);
 		if (lineEnd === -1) lineEnd = text.length;
 		if (text.charCodeAt(lineStart) === 43 /* + */ && !text.startsWith("+++ ", lineStart)) {
-			const line = text.slice(lineStart + 1, lineEnd);
-			added = added === undefined ? line : `${added}\n${line}`;
+			added.push(text.slice(lineStart + 1, lineEnd));
 		}
 		lineStart = lineEnd + 1;
 	}
-	if (added === undefined) return fallbackToWhole ? text : "";
-	return added;
+	if (added.length === 0) return fallbackToWhole ? text : "";
+	return added.join("\n");
 }
 
 /**

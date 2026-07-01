@@ -455,7 +455,8 @@ function trimCommonContext(oldLines: string[], newLines: string[]): HunkVariant 
 }
 
 function collapseConsecutiveSharedLines(oldLines: string[], newLines: string[]): HunkVariant | undefined {
-	const shared = new Set(oldLines.filter(line => newLines.includes(line)));
+	const newSet = new Set(newLines);
+	const shared = new Set(oldLines.filter(line => newSet.has(line)));
 	const collapse = (lines: string[]): string[] => {
 		const out: string[] = [];
 		let i = 0;
@@ -480,30 +481,31 @@ function collapseConsecutiveSharedLines(oldLines: string[], newLines: string[]):
 }
 
 function collapseRepeatedBlocks(oldLines: string[], newLines: string[]): HunkVariant | undefined {
-	const shared = new Set(oldLines.filter(line => newLines.includes(line)));
+	const newSet = new Set(newLines);
+	const shared = new Set(oldLines.filter(line => newSet.has(line)));
 	const collapse = (lines: string[]): string[] => {
 		const output = [...lines];
 		let changed = false;
 		let i = 0;
 		while (i < output.length) {
 			let collapsed = false;
-			for (let size = Math.floor((output.length - i) / 2); size >= 2; size--) {
-				const first = output.slice(i, i + size);
-				const second = output.slice(i + size, i + size * 2);
-				if (first.length !== second.length || first.length === 0) continue;
-				if (!first.every(line => shared.has(line))) continue;
-				let same = true;
-				for (let idx = 0; idx < size; idx++) {
-					if (first[idx] !== second[idx]) {
-						same = false;
+			// Only blocks whose lines are all shared are collapsible; if the first line
+			// is not shared no size can match, so skip the size search entirely.
+			if (shared.has(output[i])) {
+				for (let size = Math.floor((output.length - i) / 2); size >= 2; size--) {
+					let same = true;
+					for (let idx = 0; idx < size; idx++) {
+						if (output[i + idx] !== output[i + size + idx] || !shared.has(output[i + idx])) {
+							same = false;
+							break;
+						}
+					}
+					if (same) {
+						output.splice(i + size, size);
+						changed = true;
+						collapsed = true;
 						break;
 					}
-				}
-				if (same) {
-					output.splice(i + size, size);
-					changed = true;
-					collapsed = true;
-					break;
 				}
 			}
 			if (!collapsed) {
