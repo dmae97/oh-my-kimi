@@ -1635,7 +1635,7 @@ export const stash = {
 			}
 			if (restoredUntracked.length > 0) {
 				try {
-					await clean(cwd, { paths: restoredUntracked });
+					await clean(cwd, { includeIgnored: true, paths: restoredUntracked });
 				} catch {
 					/* best-effort cleanup — do not mask the primary conflict */
 				}
@@ -1709,9 +1709,9 @@ export async function reset(
 
 export async function clean(
 	cwd: string,
-	options: { ignoredOnly?: boolean; paths?: readonly string[]; signal?: AbortSignal } = {},
+	options: { ignoredOnly?: boolean; includeIgnored?: boolean; paths?: readonly string[]; signal?: AbortSignal } = {},
 ): Promise<void> {
-	const args = ["clean", options.ignoredOnly ? "-fdX" : "-fd"];
+	const args = ["clean", options.ignoredOnly ? "-fdX" : options.includeIgnored ? "-fdx" : "-fd"];
 	if (options.paths?.length) args.push("--", ...options.paths);
 	await runEffect(cwd, args, { signal: options.signal });
 }
