@@ -10,7 +10,7 @@
 
 import type { AuthStorage } from "@oh-my-pi/pi-ai";
 import type { SearchProvider } from "./providers/base";
-import { SEARCH_PROVIDER_LABELS, SEARCH_PROVIDER_ORDER, type SearchProviderId } from "./types";
+import { SEARCH_PROVIDER_LABELS, SEARCH_PROVIDER_ORDER, SearchProviderError, type SearchProviderId } from "./types";
 
 export type { SearchParams } from "./providers/base";
 export { SearchProvider } from "./providers/base";
@@ -121,6 +121,31 @@ const instanceCache = new Map<SearchProviderId, SearchProvider>();
 /** Cheap, sync metadata accessor — never triggers a provider load. */
 export function getSearchProviderLabel(id: SearchProviderId): string {
 	return PROVIDER_META[id]?.label ?? id;
+}
+
+/** Format one provider failure for the user-facing fallback summary. */
+export function formatSearchProviderFailure(error: unknown, provider: Pick<SearchProvider, "id" | "label">): string {
+	if (error instanceof SearchProviderError) {
+		if (error.provider === "anthropic" && error.status === 404) {
+			return "Anthropic web search returned 404 (model or endpoint not found).";
+		}
+		if (error.status === 401 || error.status === 403) {
+			if (error.provider === "zai") {
+				return error.message;
+			}
+			return `${getSearchProviderLabel(error.provider)} authorization failed (${error.status}). Check API key or base URL.`;
+		}
+		return error.message;
+	}
+	if (error instanceof Error) return error.message;
+	return `Unknown error from ${provider.label}`;
+}
+
+/** Format the ordered provider fallback failures for terminal/tool output. */
+export function formatSearchProviderFailures(
+	failures: readonly { provider: Pick<SearchProvider, "id" | "label">; error: unknown }[],
+): string {
+	return failures.map(f => `${f.provider.id}: ${formatSearchProviderFailure(f.error, f.provider)}`).join("; ");
 }
 
 /**

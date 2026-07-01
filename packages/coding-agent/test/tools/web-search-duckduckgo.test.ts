@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import type { AuthStorage, FetchImpl } from "@oh-my-pi/pi-ai";
 import { searchDuckDuckGo } from "@oh-my-pi/pi-coding-agent/web/search/providers/duckduckgo";
-import { SearchProviderError } from "@oh-my-pi/pi-coding-agent/web/search/types";
+import { SEARCH_PROVIDER_OPTIONS, SearchProviderError } from "@oh-my-pi/pi-coding-agent/web/search/types";
+import { formatSearchProviderFailures } from "../../src/web/search/provider";
 
 const fakeAuthStorage = {
 	async getApiKey() {
@@ -200,6 +201,8 @@ describe("DuckDuckGo web search provider", () => {
 			expect(err.provider).toBe("duckduckgo");
 			expect(err.status).toBe(429);
 			expect(err.message).toMatch(/bot-detection challenge/i);
+			expect(err.message).toContain("datacenter/shared-egress IPs");
+			expect(err.message).toContain("configure a credentialed provider");
 		}
 	});
 
@@ -237,5 +240,36 @@ describe("DuckDuckGo web search provider", () => {
 				message: "DuckDuckGo HTML error (503)",
 			});
 		}
+	});
+
+	it("formats DuckDuckGo bot detection clearly in a fallback-chain failure", () => {
+		const message = `All web search providers failed: ${formatSearchProviderFailures([
+			{
+				provider: { id: "codex", label: "OpenAI" },
+				error: new SearchProviderError("codex", "codex: 401 unauthorized", 401),
+			},
+			{
+				provider: { id: "duckduckgo", label: "DuckDuckGo" },
+				error: new SearchProviderError(
+					"duckduckgo",
+					"DuckDuckGo blocked the request with a bot-detection challenge. DuckDuckGo throttles automated HTML searches from datacenter/shared-egress IPs; configure a credentialed provider such as Brave, Tavily, Exa, or Kagi for reliable web search.",
+					429,
+				),
+			},
+		])}`;
+
+		expect(message).toContain("All web search providers failed");
+		expect(message).toContain("codex: OpenAI authorization failed (401). Check API key or base URL.");
+		expect(message).toContain("duckduckgo: DuckDuckGo blocked the request with a bot-detection challenge.");
+		expect(message).toContain("datacenter/shared-egress IPs");
+		expect(message).toContain("configure a credentialed provider");
+		expect(message).not.toContain("codex: 401 unauthorized");
+	});
+
+	it("documents DuckDuckGo as a best-effort datacenter-sensitive fallback", () => {
+		const option = SEARCH_PROVIDER_OPTIONS.find(item => item.value === "duckduckgo");
+
+		expect(option?.description).toContain("Credential-free best-effort fallback");
+		expect(option?.description).toContain("datacenter/shared-egress IPs");
 	});
 });

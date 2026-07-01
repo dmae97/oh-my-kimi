@@ -167,7 +167,7 @@ async function callDuckDuckGoHtml(params: SearchParams): Promise<string> {
 	if (isAnomalyResponse(body)) {
 		throw new SearchProviderError(
 			"duckduckgo",
-			"DuckDuckGo blocked the request with a bot-detection challenge. DuckDuckGo throttles repeat searches from datacenter and shared-egress IPs; configure another provider (e.g. Brave, Tavily, SearXNG) or retry from a residential network.",
+			"DuckDuckGo blocked the request with a bot-detection challenge. DuckDuckGo throttles automated HTML searches from datacenter/shared-egress IPs; configure a credentialed provider such as Brave, Tavily, Exa, or Kagi for reliable web search.",
 			429,
 		);
 	}

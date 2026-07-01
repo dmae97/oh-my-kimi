@@ -17,7 +17,13 @@ import { discoverAuthStorage } from "../../sdk";
 import type { ToolSession } from "../../tools";
 import { formatAge } from "../../tools/render-utils";
 import { throwIfAborted } from "../../tools/tool-errors";
-import { getSearchProvider, getSearchProviderLabel, resolveProviderChain, type SearchProvider } from "./provider";
+import {
+	formatSearchProviderFailure,
+	formatSearchProviderFailures,
+	getSearchProvider,
+	resolveProviderChain,
+	type SearchProvider,
+} from "./provider";
 import { renderSearchCall, renderSearchResult, type SearchRenderDetails } from "./render";
 import type { SearchProviderId, SearchResponse } from "./types";
 import { SearchProviderError } from "./types";
@@ -36,23 +42,6 @@ export type SearchToolParams = typeof webSearchSchema.infer;
 
 export interface SearchQueryParams extends SearchToolParams {
 	provider?: SearchProviderId | "auto";
-}
-
-function formatProviderError(error: unknown, provider: SearchProvider): string {
-	if (error instanceof SearchProviderError) {
-		if (error.provider === "anthropic" && error.status === 404) {
-			return "Anthropic web search returned 404 (model or endpoint not found).";
-		}
-		if (error.status === 401 || error.status === 403) {
-			if (error.provider === "zai") {
-				return error.message;
-			}
-			return `${getSearchProviderLabel(error.provider)} authorization failed (${error.status}). Check API key or base URL.`;
-		}
-		return error.message;
-	}
-	if (error instanceof Error) return error.message;
-	return `Unknown error from ${provider.label}`;
 }
 
 /** Truncate text for tool output */
@@ -212,18 +201,10 @@ async function executeSearch(
 
 	const lastFailure = failures[failures.length - 1];
 	const baseMessage = lastFailure
-		? formatProviderError(lastFailure.error, lastFailure.provider)
+		? formatSearchProviderFailure(lastFailure.error, lastFailure.provider)
 		: `Unknown error from ${lastProvider.label}`;
 	const message =
-		providers.length > 1
-			? `All web search providers failed: ${failures
-					.map(f =>
-						f.error instanceof SearchProviderError
-							? f.error.message
-							: `${f.provider.id}: ${formatProviderError(f.error, f.provider)}`,
-					)
-					.join("; ")}`
-			: baseMessage;
+		providers.length > 1 ? `All web search providers failed: ${formatSearchProviderFailures(failures)}` : baseMessage;
 
 	return {
 		content: [{ type: "text" as const, text: `Error: ${message}` }],

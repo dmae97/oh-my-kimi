@@ -143,6 +143,7 @@
 ### Fixed
 
 - Improved reliability of DuckDuckGo web searches by updating browser request headers and parameters
+- Clarified DuckDuckGo web search bot-detection failures and documented its datacenter/shared-egress limitations in provider settings. ([#3863](https://github.com/can1357/oh-my-pi/issues/3863))
 - Fixed an issue where CJK (Chinese, Japanese, Korean) history could become unrenderable during repeated context compactions.
 - Fixed a memory exhaustion bug in the TUI when using `/resume` on large previous sessions.
 - Fixed an issue where the `irc` inbox missed messages that arrived while the recipient agent was already running.
