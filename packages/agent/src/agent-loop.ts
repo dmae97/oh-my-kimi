@@ -1647,6 +1647,7 @@ async function executeToolCalls(
 	const tools = currentContext.tools;
 	const {
 		hasSteeringMessages,
+		hasIrcInterrupts,
 		getSteeringMessages,
 		interruptMode = "immediate",
 		getToolContext,
@@ -1692,19 +1693,18 @@ async function executeToolCalls(
 		if (!shouldInterruptImmediately || interruptState.triggered || signal?.aborted) {
 			return;
 		}
-		// Prefer the non-consuming peek (`hasSteeringMessages`) when available.
-		// Fall back to calling `getSteeringMessages` directly when only it is
-		// provided (e.g. in tests or minimal integrations without a separate
-		// peek function). In that case the message is consumed here rather than
-		// at the outer injection boundary, but the interrupt still fires.
-		let hasMessages: boolean;
+		// Prefer non-consuming peeks so queues still own their messages until
+		// the injection boundary. Fall back to consuming steering only for older
+		// integrations that never supplied a peek.
+		let hasMessages = false;
 		if (hasSteeringMessages) {
 			hasMessages = await hasSteeringMessages();
 		} else if (getSteeringMessages) {
 			const msgs = await getSteeringMessages();
 			hasMessages = (msgs?.length ?? 0) > 0;
-		} else {
-			return;
+		}
+		if (!hasMessages && hasIrcInterrupts) {
+			hasMessages = await hasIrcInterrupts();
 		}
 		if (hasMessages) {
 			if (interruptState.triggered || signal?.aborted) return;
@@ -2030,15 +2030,15 @@ async function executeToolCalls(
 		}
 	}
 
-	// While an interruptible tool is in flight (e.g. a `job` poll blocking on
-	// background work), a queued steer would otherwise wait out the tool's own
-	// window. Poll the steering queue and let checkSteering() abort the shared
-	// tool signal so the wait returns early; the boundary dequeue below then
-	// injects it. Gated on immediate-interrupt mode + an interruptible tool;
-	// checkSteering is idempotent (no-op once triggered).
+	// While an interruptible tool is in flight (e.g. a `job`/`irc` wait
+	// blocking on external work), queued steering or interrupting IRC would
+	// otherwise wait out the tool's own window. Poll the non-consuming queues
+	// and abort the shared tool signal so the boundary dequeue below injects
+	// the message promptly. Gated on immediate-interrupt mode + an
+	// interruptible tool; checkSteering is idempotent (no-op once triggered).
 	const watchSteeringWhileRunning =
 		shouldInterruptImmediately &&
-		(hasSteeringMessages !== undefined || getSteeringMessages !== undefined) &&
+		(hasSteeringMessages !== undefined || getSteeringMessages !== undefined || hasIrcInterrupts !== undefined) &&
 		records.some(r => r.tool?.interruptible === true);
 	const steeringWatchTimer = watchSteeringWhileRunning
 		? setInterval(() => void checkSteering(), STEERING_INTERRUPT_POLL_MS)

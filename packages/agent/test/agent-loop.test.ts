@@ -1180,6 +1180,81 @@ describe("agentLoop with AgentMessage", () => {
 		).toBe(true);
 	});
 
+	it("drains queued IRC interrupts by aborting an interruptible tool mid-wait", async () => {
+		const toolSchema = type({});
+		let ircReady = false;
+		let ircDrained = false;
+		let observedAbort = false;
+		let resolvedByTimeout = false;
+		const ircMessage = createUserMessage("irc interrupt");
+
+		const tool: AgentTool<typeof toolSchema, Record<string, never>> = {
+			name: "wait",
+			label: "Wait",
+			description: "Blocks until aborted (mimics a job poll)",
+			parameters: toolSchema,
+			interruptible: true,
+			async execute(_toolCallId, _params, signal) {
+				ircReady = true;
+				const { promise, resolve } = Promise.withResolvers<void>();
+				if (signal?.aborted) {
+					resolve();
+				} else {
+					const timer = setTimeout(() => {
+						resolvedByTimeout = true;
+						resolve();
+					}, 1000);
+					signal?.addEventListener(
+						"abort",
+						() => {
+							clearTimeout(timer);
+							resolve();
+						},
+						{ once: true },
+					);
+				}
+				await promise;
+				observedAbort = signal?.aborted === true;
+				return { content: [{ type: "text", text: "waited" }], details: {} };
+			},
+		};
+
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const mock = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", id: "tool-1", name: "wait", arguments: {} }] },
+				{ content: ["done"] },
+			],
+		});
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			interruptMode: "immediate",
+			hasIrcInterrupts: () => ircReady && !ircDrained,
+			getAsideMessages: async () => {
+				if (ircReady && !ircDrained) {
+					ircDrained = true;
+					return [() => ircMessage];
+				}
+				return [];
+			},
+		};
+
+		const events: AgentEvent[] = [];
+		for await (const event of agentLoop([createUserMessage("start")], context, config, undefined, mock.stream)) {
+			events.push(event);
+		}
+
+		expect(observedAbort).toBe(true);
+		expect(resolvedByTimeout).toBe(false);
+		expect(ircDrained).toBe(true);
+		expect(
+			events.some(
+				e => e.type === "message_start" && e.message.role === "user" && e.message.content === "irc interrupt",
+			),
+		).toBe(true);
+	});
+
 	it("does not abort a non-interruptible tool mid-wait; steering still drains at the boundary", async () => {
 		const toolSchema = type({});
 		let steerReady = false;

@@ -366,7 +366,7 @@ describe("IRC", () => {
 			expect(IrcTool.createIf(session)).toBeNull();
 		});
 
-		it("createIf enables irc while the task tool is available", () => {
+		it("createIf enables interruptible irc while the task tool is available", () => {
 			const session: ToolSession = {
 				cwd: "/tmp",
 				hasUI: false,
@@ -378,7 +378,9 @@ describe("IRC", () => {
 			};
 			// Default task.maxRecursionDepth (2) at depth 0: task can spawn, and a
 			// finished subagent must stay reachable.
-			expect(IrcTool.createIf(session)).toBeInstanceOf(IrcTool);
+			const tool = IrcTool.createIf(session);
+			expect(tool).toBeInstanceOf(IrcTool);
+			expect(tool?.interruptible).toBe(true);
 		});
 
 		it("createIf enables irc for a subagent even at the recursion-depth cap", () => {
@@ -677,7 +679,7 @@ describe("IRC", () => {
 			expect(event.type).toBe("irc_message");
 		});
 
-		it("queues a non-interrupting aside when a turn is streaming", async () => {
+		it("queues peer IRC as an interrupt while a turn is streaming", async () => {
 			const { session } = createRealSession();
 			sessions.push(session);
 			const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
@@ -692,6 +694,32 @@ describe("IRC", () => {
 			});
 			expect(outcome).toBe("injected");
 			expect(promptSpy).not.toHaveBeenCalled();
+			expect(await session.agent.hasIrcInterrupts?.()).toBe(true);
+		});
+
+		it("queues parent IRC as steering while a subagent turn is streaming", async () => {
+			const { session } = createRealSession();
+			sessions.push(session);
+			const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
+			Object.defineProperty(session, "isStreaming", { value: true, configurable: true });
+			registry.register({ id: "0-Child", displayName: "task", kind: "sub", parentId: "Main", session });
+
+			const outcome = await session.deliverIrcMessage({
+				id: "msg-parent",
+				from: "Main",
+				to: "0-Child",
+				body: "change approach",
+				ts: Date.now(),
+			});
+			const queued = session.agent.peekSteeringQueue();
+			expect(outcome).toBe("injected");
+			expect(promptSpy).not.toHaveBeenCalled();
+			expect(session.agent.hasIrcInterrupts?.()).toBe(false);
+			expect(queued).toHaveLength(1);
+			const parentSteer = queued[0];
+			expect(parentSteer?.role).toBe("user");
+			if (parentSteer?.role !== "user") throw new Error("expected queued parent IRC steer");
+			expect(parentSteer.content).toContain("change approach");
 		});
 
 		it("auto-replies via an ephemeral side turn when the sender awaits and async execution is disabled", async () => {

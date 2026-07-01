@@ -414,6 +414,10 @@ export class Agent {
 	 * UI emission, and tool dispatch. Reassign at any time to swap the implementation.
 	 */
 	transformAssistantMessage?: AgentLoopConfig["transformAssistantMessage"];
+	/**
+	 * Hook that peeks whether interrupting IRC asides are queued for the next boundary.
+	 */
+	hasIrcInterrupts?: AgentLoopConfig["hasIrcInterrupts"];
 
 	constructor(opts: AgentOptions = {}) {
 		this.#state = { ...this.#state, ...opts.initialState };
@@ -1182,6 +1186,7 @@ export class Agent {
 				return this.#dequeueSteeringMessages();
 			},
 			hasSteeringMessages: () => this.#steeringQueue.length > 0,
+			hasIrcInterrupts: this.hasIrcInterrupts,
 			getFollowUpMessages: async () => this.#dequeueFollowUpMessages(),
 			getAsideMessages: async () => (await this.#asideMessageProvider?.()) ?? [],
 			onBeforeYield: () => this.#onBeforeYield?.(),

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed interruptible tool waits to also abort for host-provided IRC interrupts, not only user steering. ([#4160](https://github.com/can1357/oh-my-pi/issues/4160))
+
 ## [16.2.4] - 2026-06-28
 
 ### Changed

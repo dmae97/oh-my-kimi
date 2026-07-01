@@ -97,6 +97,7 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 	readonly description: string;
 	readonly parameters = ircSchema;
 	readonly strict = true;
+	readonly interruptible = true;
 
 	readonly examples: readonly ToolExample<typeof ircSchema.infer>[] = [
 		{

@@ -12,7 +12,8 @@ Use `op: "send"` to deliver a message to a specific peer or broadcast to `"all"`
 
 # Waiting and Inboxes
 Messages only arrive when the peer actively sends one—do not interrogate a peer for status.
-- If you are completely blocked and MUST wait for an answer, use `op: "wait"` (or `await: true` on a send). This blocks your turn until a message arrives. If it times out, that just means "no message arrived", not a failure.
+- If you are completely blocked and MUST wait for an answer, use `op: "wait"` (or `await: true` on a send). The wait returns when a matching message arrives, the timeout elapses, or any IRC / steering message interrupts the wait. Parent-agent IRC interrupts with steering-level priority.
+- No need to alternate `irc wait`, `irc inbox`, and `job poll`: waits surface cross-channel interrupts promptly. The next turn includes the interrupt reason and message.
 - To check for messages without blocking, use `op: "inbox"` to drain your queue.
 
 # When to Coordinate
