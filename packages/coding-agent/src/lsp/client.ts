@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { isEnoent, logger, ptree, untilAborted } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger, postmortem, ptree, untilAborted } from "@oh-my-pi/pi-utils";
 import { MessageFramer } from "../jsonrpc/message-framing";
 import { ToolAbortError, throwIfAborted } from "../tools/tool-errors";
 import { applyWorkspaceEdit } from "./edits";
@@ -1232,21 +1232,18 @@ export function getActiveClients(): LspServerStatus[] {
 // Process Cleanup
 // =============================================================================
 
-// Register cleanup on module unload
+// Route signal-triggered LSP cleanup through the shared `postmortem` cleanup
+// list so it runs alongside every other session teardown (draft save,
+// `session.dispose()`, kernels, MCP) instead of racing them via a
+// module-owned `SIGINT`/`SIGTERM` handler + `process.exit(0)`. Historically
+// this file registered its own signal handlers that called `shutdownAll()`
+// then `process.exit(0)` — winning the race would drop `session_shutdown`
+// extensions, orphan background bash/task jobs, and skip the editor draft
+// save (issue #4080). `beforeExit` stays as-is: it fires only when the event
+// loop drains with no more work, distinct from signal delivery.
 if (typeof process !== "undefined") {
 	process.on("beforeExit", () => {
 		void shutdownAll();
 	});
-	process.on("SIGINT", () => {
-		void (async () => {
-			await shutdownAll();
-			process.exit(0);
-		})();
-	});
-	process.on("SIGTERM", () => {
-		void (async () => {
-			await shutdownAll();
-			process.exit(0);
-		})();
-	});
+	postmortem.register("lsp-shutdown", () => shutdownAll());
 }
