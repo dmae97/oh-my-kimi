@@ -98,7 +98,7 @@ describe("LiteLLM provider discovery", () => {
 		const models = await options.fetchDynamicModels?.();
 
 		expect(options.cacheProviderId).toBe(
-			`litellm:rich-v1:${Bun.hash("http://litellm.example:4100/v1").toString(36)}`,
+			`litellm:rich-v2:${Bun.hash("http://litellm.example:4100/v1").toString(36)}`,
 		);
 		expect(fetchMock).toHaveBeenCalledTimes(6);
 		expect(models).toHaveLength(1);
@@ -121,7 +121,7 @@ describe("LiteLLM provider discovery", () => {
 		const models = await options.fetchDynamicModels?.();
 
 		expect(options.cacheProviderId).toBe(
-			`litellm:rich-v1:${Bun.hash("http://litellm-config.example:4200/v1/").toString(36)}`,
+			`litellm:rich-v2:${Bun.hash("http://litellm-config.example:4200/v1/").toString(36)}`,
 		);
 		expect(fetchMock).toHaveBeenCalledTimes(6);
 		expect(models).toHaveLength(1);

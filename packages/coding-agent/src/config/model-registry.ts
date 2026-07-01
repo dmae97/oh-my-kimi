@@ -1369,7 +1369,10 @@ export class ModelRegistry {
 			return `${providerConfig.provider}:openai-models-list-context-v2`;
 		}
 		if (providerConfig.discovery.type === "litellm") {
-			return `${providerConfig.provider}:litellm-rich-v1`;
+			// rich-v2 invalidates rows cached before reseller usage-suffix stripping
+			// (stale display names like `MiniMax-M3 (3x usage)`); keep in lockstep
+			// with the catalog package's `litellm:rich-vN` namespace.
+			return `${providerConfig.provider}:litellm-rich-v2`;
 		}
 		return providerConfig.provider;
 	}

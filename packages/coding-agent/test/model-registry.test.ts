@@ -1666,6 +1666,8 @@ describe("ModelRegistry", () => {
 		let cachedDiscoverableRemoteCompaction: ModelRegistry;
 		let vertexNonAuthoritative: ModelRegistry;
 		let vertexStale: ModelRegistry;
+		let litellmStaleNamespaceCache: ModelRegistry;
+		let litellmCurrentNamespaceCache: ModelRegistry;
 		const vertexProjectModel = () =>
 			buildModel({
 				id: "zai-org/glm-4.7-maas",
@@ -1913,6 +1915,54 @@ describe("ModelRegistry", () => {
 						),
 				},
 			);
+			const litellmProxyConfig = () => ({
+				providers: {
+					"litellm-proxy": {
+						baseUrl: "http://litellm-proxy.example:4000/v1",
+						apiKey: "TEST_KEY",
+						api: "openai-completions",
+						discovery: { type: "litellm" },
+						models: [],
+					},
+				},
+			});
+			const litellmCachedModel = (name: string) =>
+				buildModel({
+					id: "minimax/minimax-m3",
+					name,
+					api: "openai-completions",
+					provider: "litellm-proxy",
+					baseUrl: "http://litellm-proxy.example:4000/v1",
+					reasoning: true,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 128_000,
+					maxTokens: 16_384,
+				});
+			litellmStaleNamespaceCache = readonlyRegistry(litellmProxyConfig(), {
+				// Row under the retired pre-reseller-suffix-stripping namespace; the
+				// rich-v2 bump must orphan it instead of serving the stale name.
+				seedCache: dbPath =>
+					writeModelCache(
+						"litellm-proxy:litellm-rich-v1",
+						Date.now(),
+						[litellmCachedModel("MiniMax-M3 (3x usage)")],
+						true,
+						"",
+						dbPath,
+					),
+			});
+			litellmCurrentNamespaceCache = readonlyRegistry(litellmProxyConfig(), {
+				seedCache: dbPath =>
+					writeModelCache(
+						"litellm-proxy:litellm-rich-v2",
+						Date.now(),
+						[litellmCachedModel("MiniMax-M3")],
+						true,
+						"",
+						dbPath,
+					),
+			});
 		});
 
 		test("legacy cached discovery sentinels are ignored after nullable limit cutover", () => {
@@ -1950,6 +2000,19 @@ describe("ModelRegistry", () => {
 				endpoint: "https://compact-proxy.example.com/v1/responses/provider-compact",
 				model: "provider-compact",
 			});
+		});
+
+		test("ignores litellm discovery rows cached under the retired rich-v1 namespace", () => {
+			// PR #3717 changed the LiteLLM mappers (reseller usage-suffix stripping);
+			// warm rich-v1 rows carry pre-change display names and must not load.
+			expect(litellmStaleNamespaceCache.find("litellm-proxy", "minimax/minimax-m3")).toBeUndefined();
+			expect(getModelsForProvider(litellmStaleNamespaceCache, "litellm-proxy")).toHaveLength(0);
+		});
+
+		test("loads litellm discovery rows cached under the rich-v2 namespace", () => {
+			const model = litellmCurrentNamespaceCache.find("litellm-proxy", "minimax/minimax-m3");
+			expect(model?.name).toBe("MiniMax-M3");
+			expect(model?.provider).toBe("litellm-proxy");
 		});
 
 		test("replaces bundled google-vertex models with authoritative Vertex project discovery", () => {
