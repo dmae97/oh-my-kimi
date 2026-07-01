@@ -1,11 +1,11 @@
-import { $ } from "bun";
+import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it, vi } from "bun:test";
 import { applyEligibleNestedPatches, mergeIsolatedChanges } from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
 import type { SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
 import * as worktreeModule from "@oh-my-pi/pi-coding-agent/task/worktree";
+import { $ } from "bun";
 
 function result(overrides: Partial<SingleResult> = {}): SingleResult {
 	return {
