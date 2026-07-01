@@ -611,6 +611,18 @@ describe("StdinBuffer", () => {
 			for (let i = 0; i < 10; i++) processInput(";".repeat(8192));
 			expect(buffer.getBuffer().length).toBeLessThan(8192);
 		});
+
+		it("resets the string-search hint before processing paste remainder", () => {
+			// A stale OSC/DCS/APC resume offset must not be reused after paste
+			// mode clears the buffer. Otherwise a complete post-paste string
+			// sequence whose terminator is before the old offset is retained
+			// and later flushed together with trailing text.
+			processInput(`\x1b]${"x".repeat(100)}`);
+			processInput("\x1b[200~paste\x1b[201~\x1b]z\x07abc");
+
+			expect(emittedSequences).toEqual(["\x1b]z\x07", "a", "b", "c"]);
+			expect(buffer.getBuffer()).toBe("");
+		});
 	});
 
 	describe("Destroy", () => {

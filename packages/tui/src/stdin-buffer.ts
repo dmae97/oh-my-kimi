@@ -403,6 +403,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 				}
 			}
 
+			this.#escapeSearchOffset = 0;
 			this.#pendingKittyPrintableCodepoint = undefined;
 			this.#buffer = this.#buffer.slice(startIndex + BRACKETED_PASTE_START.length);
 			const firstChunk = this.#buffer;
