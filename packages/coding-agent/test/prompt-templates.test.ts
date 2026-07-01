@@ -355,7 +355,7 @@ describe("renderYieldSchema", () => {
 				summary: { type: "string" },
 			},
 		});
-		expect(rendered).toContain("```ts\nresult: {\n  data: {\n    status: \"goal_complete\" | \"plan_created\";");
+		expect(rendered).toContain('```ts\nresult: {\n  data: {\n    status: "goal_complete" | "plan_created";');
 		expect(rendered).toContain("    summary: string;\n  };\n}\n```");
 		// The old rendering advertised a bare interface with no `result.data` context.
 		// Guard against regressing to it — that phrasing is what caused the reported bug.
