@@ -14,6 +14,7 @@ import astGrepDescription from "../prompts/tools/ast-grep.md" with { type: "text
 import { Ellipsis, fileHyperlink, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
+import { materializeReadUrlToFile, parseReadUrlTarget } from "./fetch";
 import { createFileRecorder, formatResultPath } from "./file-recorder";
 import { classifyGroupedLines, formatGroupedFiles, groupLineIndicesByBlank } from "./grouped-file-output";
 import { formatMatchLine } from "./match-line-format";
@@ -208,6 +209,16 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 				signal,
 				localProtocolOptions: this.session.localProtocolOptions,
 				skills: this.session.skills,
+				resolveExternalUrl: async rawPath => {
+					const target = parseReadUrlTarget(rawPath);
+					if (!target) return undefined;
+					const materialized = await materializeReadUrlToFile(
+						this.session,
+						{ path: target.path, raw: target.raw },
+						signal,
+					);
+					return { sourcePath: materialized.path, immutable: true };
+				},
 			});
 			const { searchPath: resolvedSearchPath, scopePath, isDirectory, multiTargets, globFilter } = scope;
 

@@ -1,0 +1,88 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import * as scrapers from "@oh-my-pi/pi-coding-agent/web/scrapers/types";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
+
+function createSession(testDir: string): ToolSession {
+	const sessionFile = path.join(testDir, "session.jsonl");
+	const artifactsDir = sessionFile.slice(0, -6);
+	let nextArtifactId = 0;
+	return {
+		cwd: testDir,
+		hasUI: false,
+		getSessionFile: () => sessionFile,
+		getArtifactsDir: () => artifactsDir,
+		getSessionSpawns: () => "*",
+		allocateOutputArtifact: async toolType => {
+			const id = String(nextArtifactId++);
+			return { id, path: path.join(artifactsDir, `${id}.${toolType}.log`) };
+		},
+		settings: Settings.isolated({ "fetch.enabled": true, "grep.contextBefore": 0, "grep.contextAfter": 0 }),
+	};
+}
+
+function resultText(result: { content: Array<{ type: string; text?: string }> }): string {
+	return result.content
+		.filter(entry => entry.type === "text")
+		.map(entry => entry.text ?? "")
+		.join("\n");
+}
+
+function stubLoadPage(body: string, contentType: string): void {
+	vi.spyOn(scrapers, "loadPage").mockImplementation(async requestedUrl => ({
+		ok: true,
+		status: 200,
+		finalUrl: requestedUrl,
+		contentType,
+		content: body,
+	}));
+}
+
+describe("search tools with external URL paths", () => {
+	let testDir: string;
+
+	beforeEach(async () => {
+		testDir = await fs.mkdtemp(path.join(os.tmpdir(), "search-url-paths-"));
+	});
+
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		await removeWithRetries(testDir);
+	});
+
+	it("search fetches a URL through the read cache and greps the rendered text", async () => {
+		stubLoadPage("alpha\nremote needle\nomega\n", "text/plain");
+		const tools = await createTools(createSession(testDir));
+		const tool = tools.find(entry => entry.name === "grep");
+		expect(tool).toBeDefined();
+
+		const result = await tool!.execute("search-url", {
+			pattern: "remote needle",
+			paths: ["https://example.com/notes.txt"],
+		});
+
+		const text = resultText(result);
+		expect(text).toContain("remote needle");
+		expect(text).not.toContain("Cannot search external URL");
+	});
+
+	it("ast_grep materializes URL content with the source extension", async () => {
+		stubLoadPage("export function remoteNeedle() {\n\treturn 1;\n}\n", "text/plain");
+		const tools = await createTools(createSession(testDir));
+		const tool = tools.find(entry => entry.name === "ast_grep");
+		expect(tool).toBeDefined();
+
+		const result = await tool!.execute("ast-grep-url", {
+			pat: "remoteNeedle",
+			paths: ["https://example.com/snippet.ts"],
+		});
+
+		const text = resultText(result);
+		expect(text).toContain("remoteNeedle");
+		expect(text).not.toContain("Parse issues");
+	});
+});

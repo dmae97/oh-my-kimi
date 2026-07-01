@@ -1559,9 +1559,12 @@ export interface ReadUrlToolDetails {
 
 interface ReadUrlCacheEntry {
 	artifactId?: string;
+	artifactPath?: string;
+	contentPath?: string;
 	details: ReadUrlToolDetails;
 	image?: FetchImagePayload;
 	output: string;
+	content: string;
 }
 
 const READ_URL_CACHE_MAX_ENTRIES = 100;
@@ -1572,18 +1575,22 @@ function getReadUrlCacheKey(session: ToolSession, requestedUrl: string, raw: boo
 	return `${scope}::${raw ? "raw" : "rendered"}::${normalizeUrl(requestedUrl)}`;
 }
 
-async function readArtifactOutput(session: ToolSession, artifactId: string): Promise<string | null> {
+async function findArtifactPath(session: ToolSession, artifactId: string): Promise<string | null> {
 	const artifactsDir = session.getArtifactsDir?.();
 	if (!artifactsDir) return null;
 
 	try {
 		const files = await fs.readdir(artifactsDir);
 		const match = files.find(file => file.startsWith(`${artifactId}.`));
-		if (!match) return null;
-		return await Bun.file(path.join(artifactsDir, match)).text();
+		return match ? path.join(artifactsDir, match) : null;
 	} catch {
 		return null;
 	}
+}
+
+async function readArtifactOutput(session: ToolSession, artifactId: string): Promise<string | null> {
+	const artifactPath = await findArtifactPath(session, artifactId);
+	return artifactPath ? await Bun.file(artifactPath).text() : null;
 }
 
 async function materializeReadUrlCacheEntry(
@@ -1600,17 +1607,58 @@ async function materializeReadUrlCacheEntry(
 	return entry.output.length > 0 ? entry : null;
 }
 
-async function persistReadUrlArtifact(session: ToolSession, output: string): Promise<string | undefined> {
-	const { path: artifactPath, id } = (await session.allocateOutputArtifact?.("read")) ?? {};
-	if (!artifactPath) return undefined;
-	await Bun.write(artifactPath, output);
-	return id;
+async function persistReadUrlArtifact(
+	session: ToolSession,
+	output: string,
+): Promise<{ id?: string; path?: string } | undefined> {
+	const artifact = await session.allocateOutputArtifact?.("read");
+	if (!artifact?.path) return undefined;
+	await Bun.write(artifact.path, output);
+	return artifact;
 }
 
 async function ensureReadUrlCacheArtifact(session: ToolSession, entry: ReadUrlCacheEntry): Promise<ReadUrlCacheEntry> {
-	if (entry.artifactId) return entry;
-	const artifactId = await persistReadUrlArtifact(session, entry.output);
-	return artifactId ? { ...entry, artifactId } : entry;
+	if (entry.artifactId && entry.artifactPath) return entry;
+	if (entry.artifactId) {
+		const artifactPath = await findArtifactPath(session, entry.artifactId);
+		if (artifactPath) return { ...entry, artifactPath };
+	}
+	const artifact = await persistReadUrlArtifact(session, entry.output);
+	return artifact?.id ? { ...entry, artifactId: artifact.id, artifactPath: artifact.path } : entry;
+}
+
+function readUrlContentExtension(finalUrl: string): string {
+	try {
+		const ext = getFilenameExtensionHint(new URL(finalUrl).pathname);
+		return ext && /^\.[a-z0-9][a-z0-9+.-]{0,15}$/i.test(ext) ? ext : ".txt";
+	} catch {
+		return ".txt";
+	}
+}
+
+async function ensureReadUrlContentFile(
+	session: ToolSession,
+	entry: ReadUrlCacheEntry,
+	raw: boolean,
+): Promise<ReadUrlCacheEntry> {
+	if (entry.contentPath) {
+		try {
+			await Bun.file(entry.contentPath).stat();
+			return entry;
+		} catch {
+			// Recreate below when the cached scratch file was removed.
+		}
+	}
+	const root = session.getArtifactsDir?.();
+	if (!root) {
+		throw new ToolError("Cannot search URL output because this session cannot materialize read artifacts.");
+	}
+	const dir = path.join(root, "url-search");
+	await fs.mkdir(dir, { recursive: true });
+	const hash = Bun.hash(`${raw ? "raw" : "rendered"}:${entry.details.finalUrl}`).toString(36);
+	const contentPath = path.join(dir, `${hash}${readUrlContentExtension(entry.details.finalUrl)}`);
+	await Bun.write(contentPath, entry.content);
+	return { ...entry, contentPath };
 }
 
 function cacheReadUrlEntry(session: ToolSession, requestedUrl: string, raw: boolean, entry: ReadUrlCacheEntry): void {
@@ -1644,10 +1692,11 @@ async function buildReadUrlCacheEntry(
 		webpExclusionForModel(session.getActiveModel?.()),
 	);
 	const output = buildUrlReadOutput(result, result.content);
-	const artifactId = options?.ensureArtifact ? await persistReadUrlArtifact(session, output) : undefined;
+	const artifact = options?.ensureArtifact ? await persistReadUrlArtifact(session, output) : undefined;
 
 	return {
-		artifactId,
+		artifactId: artifact?.id,
+		artifactPath: artifact?.path,
 		details: {
 			kind: "url",
 			url: result.url,
@@ -1659,6 +1708,7 @@ async function buildReadUrlCacheEntry(
 		},
 		image: result.image,
 		output,
+		content: result.content,
 	};
 }
 
@@ -1684,6 +1734,24 @@ export async function loadReadUrlCacheEntry(
 	});
 	cacheReadUrlEntry(session, params.path, raw, fresh);
 	return fresh;
+}
+
+/** Materialize rendered URL body text to a local file for tools that require filesystem paths. */
+export async function materializeReadUrlToFile(
+	session: ToolSession,
+	params: { path: string; raw?: boolean },
+	signal?: AbortSignal,
+): Promise<{ path: string; details: ReadUrlToolDetails }> {
+	if (!session.settings.get("fetch.enabled")) {
+		throw new ToolError("URL reads are disabled by settings.");
+	}
+	const cacheEntry = await loadReadUrlCacheEntry(session, params, signal, { preferCached: true });
+	const materialized = await ensureReadUrlContentFile(session, cacheEntry, params.raw ?? false);
+	cacheReadUrlEntry(session, params.path, params.raw ?? false, materialized);
+	if (!materialized.contentPath) {
+		throw new ToolError("Cannot search URL output because this session cannot materialize read artifacts.");
+	}
+	return { path: materialized.contentPath, details: materialized.details };
 }
 
 function buildUrlReadOutput(result: FetchRenderResult, content: string): string {

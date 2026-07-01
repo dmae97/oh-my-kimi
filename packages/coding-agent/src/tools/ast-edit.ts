@@ -16,6 +16,7 @@ import { Ellipsis, fileHyperlink, framedBlock, renderStatusLine, truncateToWidth
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
 import { truncateForPrompt } from "./approval";
+import { materializeReadUrlToFile, parseReadUrlTarget } from "./fetch";
 import { createFileRecorder, formatResultPath } from "./file-recorder";
 import { classifyGroupedLines, formatGroupedFiles, groupLineIndicesByBlank } from "./grouped-file-output";
 import type { OutputMeta } from "./output-meta";
@@ -284,6 +285,16 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 				signal,
 				localProtocolOptions: this.session.localProtocolOptions,
 				skills: this.session.skills,
+				resolveExternalUrl: async rawPath => {
+					const target = parseReadUrlTarget(rawPath);
+					if (!target) return undefined;
+					const materialized = await materializeReadUrlToFile(
+						this.session,
+						{ path: target.path, raw: target.raw },
+						signal,
+					);
+					return { sourcePath: materialized.path, immutable: true };
+				},
 			});
 			const { searchPath: resolvedSearchPath, scopePath, isDirectory, multiTargets, globFilter } = scope;
 

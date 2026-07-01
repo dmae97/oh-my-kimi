@@ -1026,6 +1026,14 @@ export function resolveReadPath(filePath: string, cwd: string): string {
 // Tool-scope resolution (search/ast tools)
 // =============================================================================
 
+/** Local file materialized from a readable external URL for shared tool-scope resolution. */
+export interface ResolvedExternalSearchUrl {
+	/** Absolute or cwd-relative file path to search. */
+	sourcePath: string;
+	/** True when the materialized file must not mint editable anchors. */
+	immutable?: boolean;
+}
+
 export interface ToolScopeOptions {
 	rawPaths: string[];
 	cwd: string;
@@ -1049,6 +1057,8 @@ export interface ToolScopeOptions {
 	localProtocolOptions?: LocalProtocolOptions;
 	/** Calling session's loaded skills — lets skill:// resolve without process-global state. */
 	skills?: readonly Skill[];
+	/** Materialize readable external URLs to local text files before scope derivation. */
+	resolveExternalUrl?: (rawPath: string) => Promise<ResolvedExternalSearchUrl | undefined>;
 }
 
 export interface ToolScopeResolution {
@@ -1080,19 +1090,22 @@ export async function resolveToolSearchScope(opts: ToolScopeOptions): Promise<To
 	if (rawPaths.some(rawPath => rawPath.length === 0)) {
 		throw new ToolError("`paths` must contain non-empty paths or globs");
 	}
-	// External (http/https/ftp/file) URLs are not searchable; route the caller
-	// to `read` instead of letting the path-resolver surface a confusing
-	// "Path not found" for a slash-stripped URL.
-	const externalUrl = rawPaths.find(rawPath => /^(?:https?|ftp|file|ws|wss):\/\//i.test(rawPath));
-	if (externalUrl) {
-		throw new ToolError(
-			`Cannot ${internalUrlAction} external URL: ${externalUrl}. Use \`read\` to fetch web content, then search the returned text.`,
-		);
-	}
+	const externalUrlRe = /^(?:https?|ftp|file|ws|wss):\/\//i;
 	const internalRouter = InternalUrlRouter.instance();
 	const resolvedPathInputs: string[] = [];
 	const immutableSourcePaths = new Set<string>();
 	for (const rawPath of rawPaths) {
+		const externalUrl = externalUrlRe.test(rawPath);
+		if (externalUrl && opts.resolveExternalUrl) {
+			const resolved = await opts.resolveExternalUrl(rawPath);
+			if (resolved) {
+				resolvedPathInputs.push(resolved.sourcePath);
+				if (opts.trackImmutableSources && resolved.immutable) {
+					immutableSourcePaths.add(path.resolve(resolved.sourcePath));
+				}
+				continue;
+			}
+		}
 		if (!internalRouter.canHandle(rawPath)) {
 			resolvedPathInputs.push(rawPath);
 			continue;

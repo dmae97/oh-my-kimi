@@ -10,6 +10,7 @@
 - Fixed the SSH tool to reject `cwd` values of `~` and `~/...` before sending guaranteed-bad quoted tilde paths to remote POSIX shells. ([#4002](https://github.com/can1357/oh-my-pi/issues/4002))
 - Fixed the browser tool schema so `run` calls require `code` during JSON-schema validation. ([#3645](https://github.com/can1357/oh-my-pi/issues/3645))
 - Improved robustness of MCP authentication error detection and header-based server discovery
+- Fixed `search` and AST tools accepting external read URLs by materializing fetched URL text through the read cache before path resolution. ([#3649](https://github.com/can1357/oh-my-pi/issues/3649))
 - Fixed reliable detection of 401/403 authorization failures during Smithery commands and HTTP RPCs
 
 ## [16.2.12] - 2026-07-01
