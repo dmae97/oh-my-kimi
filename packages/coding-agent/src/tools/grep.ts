@@ -902,6 +902,18 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 			const rawEntries = await expandDelimitedPathEntries(effectivePaths, this.session.cwd);
 			const pathSpecs = parsePathSpecs(rawEntries);
 			const paths = pathSpecs.map(spec => spec.clean);
+			const materializedExternalPaths = new Map<string, string>();
+			const materializeExternalUrlForSearch = async (rawPath: string) => {
+				const target = parseReadUrlTarget(rawPath);
+				if (!target) return undefined;
+				const materialized = await materializeReadUrlToFile(
+					this.session,
+					{ path: target.path, raw: target.raw },
+					signal,
+				);
+				materializedExternalPaths.set(rawPath, materialized.path);
+				return { sourcePath: materialized.path, immutable: true };
+			};
 			const {
 				resolvedPaths,
 				displayMap: archiveDisplayMap,
@@ -922,34 +934,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 				});
 				const searchablePaths = internalResolution.paths;
 				const { virtualResources, virtualPathSet, virtualInputIndexes } = internalResolution;
-				// Build the per-file line-range filter (keyed by absolute path) now that
-				// archive entries have been materialized to scratch files. Plain entries
-				// resolve through `resolveReadPath`; archive entries are keyed by the
-				// scratch path that grep will actually report against.
 				const rangesByAbsPath = new Map<string, LineRange[]>();
-				for (let idx = 0; idx < pathSpecs.length; idx++) {
-					const spec = pathSpecs[idx];
-					if (!spec.ranges) continue;
-					if (virtualInputIndexes.has(idx)) continue;
-					const resolved = internalResolution.resolvedPathsByInput[idx];
-					if (!resolved) continue;
-					if (resolved === spec.clean && !archiveDisplayMap.has(resolved)) {
-						// Non-archive entry; ensure the cleaned path resolves to a regular file.
-						const absKey = path.resolve(resolveReadPath(resolved, this.session.cwd));
-						const stats = await stat(absKey).catch(() => null);
-						if (!stats) {
-							throw new ToolError(`Path not found for line-range selector: ${spec.original}`);
-						}
-						if (!stats.isFile()) {
-							throw new ToolError(`Line-range selector requires a single file: ${spec.original} is a directory`);
-						}
-						mergeRangesInto(rangesByAbsPath, absKey, spec.ranges);
-					} else {
-						// Archive entry — `resolveArchiveSearchPaths` substituted a scratch path.
-						const absKey = path.resolve(resolved);
-						mergeRangesInto(rangesByAbsPath, absKey, spec.ranges);
-					}
-				}
 
 				if (
 					archiveUnreadable.length > 0 &&
@@ -992,16 +977,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 						signal,
 						localProtocolOptions: this.session.localProtocolOptions,
 						skills: this.session.skills,
-						resolveExternalUrl: async rawPath => {
-							const target = parseReadUrlTarget(rawPath);
-							if (!target) return undefined;
-							const materialized = await materializeReadUrlToFile(
-								this.session,
-								{ path: target.path, raw: target.raw },
-								signal,
-							);
-							return { sourcePath: materialized.path, immutable: true };
-						},
+						resolveExternalUrl: materializeExternalUrlForSearch,
 					});
 					searchPath = scope.searchPath;
 					isDirectory = scope.isDirectory;
@@ -1011,6 +987,35 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					globFilter = scope.globFilter;
 					for (const immutablePath of scope.immutableSourcePaths) {
 						immutableSourcePaths.add(immutablePath);
+					}
+					// Build the per-file line-range filter after URL materialization has run:
+					// archive entries are keyed by scratch path, URL entries by read-cache
+					// content path, and ordinary files by their resolved filesystem path.
+					for (let idx = 0; idx < pathSpecs.length; idx++) {
+						const spec = pathSpecs[idx];
+						if (!spec.ranges) continue;
+						if (virtualInputIndexes.has(idx)) continue;
+						const resolved = internalResolution.resolvedPathsByInput[idx];
+						if (!resolved) continue;
+						const materializedExternalPath = materializedExternalPaths.get(spec.clean);
+						if (materializedExternalPath) {
+							mergeRangesInto(rangesByAbsPath, path.resolve(materializedExternalPath), spec.ranges);
+							continue;
+						}
+						if (resolved === spec.clean && !archiveDisplayMap.has(resolved)) {
+							// Non-archive entry; ensure the cleaned path resolves to a regular file.
+							const absKey = path.resolve(resolveReadPath(resolved, this.session.cwd));
+							const stats = await stat(absKey).catch(() => null);
+							if (!stats) {
+								throw new ToolError(`Path not found for line-range selector: ${spec.original}`);
+							}
+							if (!stats.isFile()) {
+								throw new ToolError(`Line-range selector requires a single file: ${spec.original} is a directory`);
+							}
+							mergeRangesInto(rangesByAbsPath, absKey, spec.ranges);
+						} else {
+							mergeRangesInto(rangesByAbsPath, path.resolve(resolved), spec.ranges);
+						}
 					}
 					// When the only input was an archive selector, surface that selector instead
 					// of the temp scratch path the resolver substituted in.

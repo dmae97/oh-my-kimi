@@ -70,6 +70,37 @@ describe("search tools with external URL paths", () => {
 		expect(text).not.toContain("Cannot search external URL");
 	});
 
+	it("search applies URL line-range selectors after materialization", async () => {
+		stubLoadPage("outside before\nremote needle\noutside after\n", "text/plain");
+		const tools = await createTools(createSession(testDir));
+		const tool = tools.find(entry => entry.name === "grep");
+		expect(tool).toBeDefined();
+
+		const result = await tool!.execute("search-url-range", {
+			pattern: "outside|remote needle",
+			paths: ["https://example.com/notes.txt:2-2"],
+		});
+
+		const text = resultText(result);
+		expect(text).toContain("remote needle");
+		expect(text).not.toContain("outside before");
+		expect(text).not.toContain("outside after");
+	});
+
+	it("ast_edit rejects external URLs instead of staging read-cache files", async () => {
+		stubLoadPage("legacyWrap(x, value)\n", "text/plain");
+		const tools = await createTools(createSession(testDir));
+		const tool = tools.find(entry => entry.name === "ast_edit");
+		expect(tool).toBeDefined();
+
+		await expect(
+			tool!.execute("ast-edit-url", {
+				ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
+				paths: ["https://example.com/snippet.ts"],
+			}),
+		).rejects.toThrow("Cannot rewrite external URL");
+	});
+
 	it("ast_grep materializes URL content with the source extension", async () => {
 		stubLoadPage("export function remoteNeedle() {\n\treturn 1;\n}\n", "text/plain");
 		const tools = await createTools(createSession(testDir));
