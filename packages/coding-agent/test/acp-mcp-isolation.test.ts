@@ -75,3 +75,65 @@ describe("createAcpSessionFactory MCP isolation (issue #1234)", () => {
 		}
 	});
 });
+
+describe("createAcpSessionFactory TITLE_SYSTEM.md per-cwd resolution (PR #3736)", () => {
+	it("re-resolves the title prompt for the per-session cwd instead of inheriting the launch cwd's override", async () => {
+		const tempDir = TempDir.createSync("@pi-acp-title-prompt-");
+		let authStorage: AuthStorage | undefined;
+		try {
+			authStorage = await AuthStorage.create(tempDir.join("auth.db"));
+			const modelRegistry = new ModelRegistry(authStorage);
+			const settings = Settings.isolated({});
+
+			const projectDir = tempDir.join("project");
+			await Bun.write(`${projectDir}/.omp/TITLE_SYSTEM.md`, "Project-specific title policy.");
+
+			const fakeSession = {} as AgentSession;
+			const captured: CreateAgentSessionOptions[] = [];
+			const createSession = async (options: CreateAgentSessionOptions): Promise<CreateAgentSessionResult> => {
+				captured.push(options);
+				return {
+					session: fakeSession,
+					extensionsResult: {
+						extensions: [],
+						errors: [],
+						runner: undefined,
+					} as unknown as CreateAgentSessionResult["extensionsResult"],
+					setToolUIContext: () => {},
+					eventBus: {
+						emit: () => {},
+						on: () => () => {},
+						off: () => {},
+					} as unknown as CreateAgentSessionResult["eventBus"],
+				};
+			};
+
+			// baseOptions carries the LAUNCH cwd's prompt; the factory must
+			// override it with the per-session cwd's `TITLE_SYSTEM.md`.
+			const factory = createAcpSessionFactory({
+				baseOptions: {
+					titleSystemPrompt: "Launch-cwd policy that must not leak.",
+				} as CreateAgentSessionOptions,
+				settings,
+				sessionDir: tempDir.join("sessions"),
+				authStorage,
+				modelRegistry,
+				parsedArgs: {},
+				rawArgs: [],
+				createSession,
+			});
+
+			await factory(projectDir);
+
+			expect(captured).toHaveLength(1);
+			expect(captured[0].titleSystemPrompt).toBe("Project-specific title policy.");
+		} finally {
+			try {
+				authStorage?.close();
+			} finally {
+				await Bun.sleep(0);
+				await tempDir.remove();
+			}
+		}
+	});
+});

@@ -373,7 +373,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	keybindings: KeybindingsManager;
 	agent: Agent;
 	historyStorage?: HistoryStorage;
-	titleSystemPrompt?: string;
 
 	ui: TUI;
 	chatContainer: TranscriptContainer;
@@ -583,7 +582,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		lspServers: LspStartupServerInfo[] | undefined = undefined,
 		mcpManager?: MCPManager,
 		eventBus?: EventBus,
-		titleSystemPrompt?: string,
 	) {
 		this.session = session;
 		this.sessionManager = session.sessionManager;
@@ -596,7 +594,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.lspServers = lspServers;
 		this.mcpManager = mcpManager;
 		this.#eventBus = eventBus;
-		this.titleSystemPrompt = titleSystemPrompt;
 		if (eventBus) {
 			this.#eventBusUnsubscribers.push(
 				eventBus.on(LSP_STARTUP_EVENT_CHANNEL, data => {
@@ -985,11 +982,16 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.updateEditorTopBorder();
 	}
 
-	/** Reload the title-generation system prompt override for the provided working directory. */
+	/** Reload the title-generation system prompt override for the provided working
+	 *  directory and stash it on the session so first-input titling
+	 *  ({@link input-controller}) and replan-driven refresh
+	 *  ({@link AgentSession.#refreshTitleAfterReplan}) share one source
+	 *  ({@link discoverTitleSystemPromptFile}; issue #3734). */
 	async refreshTitleSystemPrompt(cwd?: string): Promise<void> {
 		const basePath = cwd ?? this.sessionManager.getCwd();
 		const titleSystemPromptSource = discoverTitleSystemPromptFile(basePath);
-		this.titleSystemPrompt = await resolvePromptInput(titleSystemPromptSource, "title system prompt");
+		const resolved = await resolvePromptInput(titleSystemPromptSource, "title system prompt");
+		this.session.setTitleSystemPrompt(resolved);
 	}
 
 	/** Reload slash commands and autocomplete for the provided working directory. */

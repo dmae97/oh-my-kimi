@@ -681,6 +681,14 @@ export interface AgentSessionConfig {
 	 * teardown never tears down the shared servers.
 	 */
 	disconnectOwnedMcpManager?: () => Promise<void>;
+	/**
+	 * Override the bundled system prompt used by automatic session-title
+	 * generation paths (initial title + replan refresh). Source-of-truth is
+	 * `TITLE_SYSTEM.md` discovered via {@link discoverTitleSystemPromptFile} and
+	 * resolved through {@link resolvePromptInput}; refresh after a `/move`-style
+	 * cwd change via {@link AgentSession.setTitleSystemPrompt}.
+	 */
+	titleSystemPrompt?: string;
 }
 
 /** Options for AgentSession.prompt() */
@@ -1440,6 +1448,10 @@ export class AgentSession {
 	#toolTurnsSinceLastTodoTouch = 0;
 	#todoPhases: TodoPhase[] = [];
 	#replanTitleRefreshInFlight: Promise<void> | undefined = undefined;
+	/** Resolved TITLE_SYSTEM.md override applied to every automatic session-title
+	 *  generation path. Refresh via {@link AgentSession.setTitleSystemPrompt} when
+	 *  the session cwd changes. */
+	#titleSystemPrompt: string | undefined;
 	#toolChoiceQueue = new ToolChoiceQueue();
 
 	// Bash execution state
@@ -1829,6 +1841,7 @@ export class AgentSession {
 		this.#advisorSharedInstructions = config.advisorSharedInstructions;
 		this.#advisorContextPrompt = config.advisorContextPrompt;
 		this.#advisorConfigs = config.advisorConfigs;
+		this.#titleSystemPrompt = config.titleSystemPrompt;
 		this.#pruneToolDescriptions = config.pruneToolDescriptions === true;
 		this.#validateRetryFallbackChains();
 		this.#toolRegistry = config.toolRegistry ?? new Map();
@@ -7866,6 +7879,7 @@ export class AgentSession {
 			sessionId,
 			this.model,
 			provider => this.agent.metadataForProvider(provider),
+			this.#titleSystemPrompt,
 		);
 		if (!title) return;
 		if (this.sessionManager.getSessionId() !== sessionId) return;
@@ -7873,6 +7887,21 @@ export class AgentSession {
 		if (this.sessionManager.titleSource === "user") return;
 		const setSessionName = this.sessionManager.setSessionName as SetSessionNameWithTrigger;
 		await setSessionName.call(this.sessionManager, title, "auto", "replan");
+	}
+
+	/** Currently-applied {@link TITLE_SYSTEM.md} override, or undefined when the
+	 *  bundled prompt is in effect. Consumed by {@link InteractiveMode} so the
+	 *  first-input title path and the replan refresh share one source. */
+	get titleSystemPrompt(): string | undefined {
+		return this.#titleSystemPrompt;
+	}
+
+	/** Replace the title-generation system prompt override. Called by
+	 *  {@link InteractiveMode.refreshTitleSystemPrompt} after the session cwd
+	 *  changes (e.g. `/move` relocation) so the next replan refresh resolves
+	 *  against the destination project's override. */
+	setTitleSystemPrompt(prompt: string | undefined): void {
+		this.#titleSystemPrompt = prompt;
 	}
 
 	#syncTodoPhasesFromBranch(): void {

@@ -196,6 +196,9 @@
 - Fixed omp update leaving behind stale Bun install-cache directories for globally installed packages.
 - Fixed a reconnection loop issue in /collab sessions caused by oversized entries (such as large tool outputs) by truncating replicated payloads that exceed 1 MB.
 - Fixed autolearn and local memory writes mutating Anthropic prompt-cache prefixes mid-session, ensuring prompt injections remain session-stable.
+### Fixed
+
+- Fixed replan-driven session title refresh (`title.refreshOnReplan`, triggered after `todo init`) ignoring the user's `TITLE_SYSTEM.md` override and silently falling back to the bundled prompt — most visible in Plan Mode, where early todo init replans would overwrite the auto title against the configured policy. `AgentSession` now owns the resolved title prompt (threaded through `CreateAgentSessionOptions.titleSystemPrompt`), the ACP per-`session/new` factory re-resolves `TITLE_SYSTEM.md` against each client-supplied workspace cwd, and both first-input titling and replan refresh read from the same source ([#3734](https://github.com/can1357/oh-my-pi/issues/3734)).
 
 ## [16.2.3] - 2026-06-28
 
