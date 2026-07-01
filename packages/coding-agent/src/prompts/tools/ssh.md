@@ -19,4 +19,5 @@ Runs commands on remote hosts.
 
 <critical>
 You MUST verify the shell type from "Available hosts" and use matching commands.
+You SHOULD omit `cwd` unless required. `cwd` MUST be an explicit remote path; NEVER use `~` or `~/…`.
 </critical>

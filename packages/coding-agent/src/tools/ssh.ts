@@ -26,7 +26,7 @@ import { clampTimeout } from "./tool-timeouts";
 const sshSchema = type({
 	host: type("string").describe("ssh host"),
 	command: type("string").describe("remote command"),
-	"cwd?": type("string").describe("remote working directory"),
+	"cwd?": type("string").describe("remote working directory; omit unless required, never ~ or ~/..."),
 	"timeout?": type("number").describe("timeout in seconds"),
 });
 
@@ -88,6 +88,12 @@ function quotePowerShellPath(value: string): string {
 function quoteCmdPath(value: string): string {
 	const escaped = value.replace(/"/g, '""');
 	return `"${escaped}"`;
+}
+function assertValidSshCwd(cwd: string | undefined): void {
+	if (!cwd) return;
+	if (cwd === "~" || cwd.startsWith("~/")) {
+		throw new ToolError("SSH cwd must be an absolute remote path; omit cwd instead of using ~.");
+	}
 }
 
 function buildRemoteCommand(command: string, cwd: string | undefined, info: SSHHostInfo): string {
@@ -177,6 +183,7 @@ export class SshTool implements AgentTool<typeof sshSchema, SSHToolDetails> {
 		if (!hostConfig) {
 			throw new ToolError(`SSH host not loaded: ${host}`);
 		}
+		assertValidSshCwd(cwd);
 
 		const hostInfo = await ensureHostInfo(hostConfig);
 		const remoteCommand = buildRemoteCommand(command, cwd, hostInfo);
