@@ -10,6 +10,9 @@
 ### Fixed
 
 - Bounded terminal input parsing so a malformed CSI/OSC/DCS/APC or a large non-bracketed paste no longer blocks the event loop. `StdinBuffer.extractCompleteSequences` now resolves each escape by a single linear scan with a per-type length cap (CSI 4 KiB, OSC/DCS/APC 16 MiB) and carries a resume-search offset so a chunked OSC 5522 payload stays O(total) instead of O(total²). `BracketedPasteHandler` gained a byte cap (default 64 MiB) that aborts paste mode and delivers the accumulated bytes when a lost end marker would otherwise hold memory forever — defense in depth for callers that bypass `StdinBuffer`. The `ProcessTerminal` data handler now takes a fast path when the sequence is not ESC-prefixed and no reassembly buffer is active, so a large non-bracketed paste skips six escape-probe regex tests per Unicode scalar ([#4073](https://github.com/can1357/oh-my-pi/issues/4073)).
+### Added
+
+- Added regression coverage for `findCommittedPrefixResync` — the tui seam that re-anchors the committed prefix when a live block re-lays-out at settle. Locks in the earliest-audited-mismatch re-anchor, the hard-scan escape from tail-sample tolerance for a newly-permanent forced-overflow row, exempt-window drift silence, and shrink-into-prefix truncation, so a future refactor of the resync path cannot silently strand pending SSH placeholder chrome above the settled block ([#4124](https://github.com/can1357/oh-my-pi/issues/4124)).
 
 ## [16.2.12] - 2026-07-01
 
