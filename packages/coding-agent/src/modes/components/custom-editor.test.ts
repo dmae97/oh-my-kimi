@@ -1,8 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
-import { $ } from "bun";
 import { setKittyProtocolActive } from "@oh-my-pi/pi-tui/keys";
-import { getEditorTheme, initTheme } from "../theme/theme";
+import { $ } from "bun";
 import { getDefaultPasteImageKeys } from "../../config/keybindings";
+import { getEditorTheme, initTheme } from "../theme/theme";
 import {
 	CustomEditor,
 	extractBracketedImagePastePaths,
@@ -144,7 +144,6 @@ describe("CustomEditor configured paste image keys", () => {
 		expect(editor.getText()).toBe("");
 	});
 });
-
 
 describe("extractImagePathFromText (issue #3506)", () => {
 	it("returns the path when the text is a single image file path", () => {
