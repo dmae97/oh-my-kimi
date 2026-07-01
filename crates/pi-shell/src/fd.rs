@@ -738,9 +738,11 @@ fn search(
 		let mut fd_ignores = FdIgnoreMatcher::new(&config.base_dir, &search_path.resolved, &cli)?;
 		let request =
 			fd_walk_request(&search_path.resolved, &cli, use_gitignore, cli.one_file_system);
-		let outcome = request
-			.collect_with_heartbeat(|| Ok::<(), io::Error>(()))
-			.map_err(walker_collect_error_to_io)?;
+		let outcome = match request.collect_with_heartbeat(cancel_heartbeat(cancelled)) {
+			Ok(outcome) => outcome,
+			Err(pi_walker::WalkError::Interrupted(_)) if cancelled.load(Ordering::Relaxed) => break,
+			Err(err) => return Err(walker_collect_error_to_io(err)),
+		};
 		let mut pruned_dirs = Vec::new();
 		for entry in &outcome.entries {
 			if cancelled.load(Ordering::Relaxed) || max_results.is_some_and(|max| state.matches >= max)
@@ -811,7 +813,7 @@ fn try_search_fast(
 		let mut had_error = state.had_error;
 		let request = fd_walk_request(&search_path.resolved, cli, false, false);
 		let status = request.for_each_entry_with_heartbeat(
-			|| Ok::<(), io::Error>(()),
+			cancel_heartbeat(cancelled),
 			|entry| {
 				if cancelled.load(Ordering::Relaxed) || max_results.is_some_and(|max| matches >= max) {
 					return Ok(pi_walker::WalkDecision::Stop);
@@ -843,6 +845,7 @@ fn try_search_fast(
 		state.had_error = had_error;
 		match status {
 			Ok(pi_walker::WalkStatus::Complete | pi_walker::WalkStatus::Stopped) => {},
+			Err(pi_walker::WalkError::Interrupted(_)) if cancelled.load(Ordering::Relaxed) => break,
 			Err(err) => return Err(walker_error_to_io(err)),
 		}
 	}
@@ -977,6 +980,27 @@ fn matches_walker_type_filter(
 		return false;
 	}
 	true
+}
+
+/// Builds a walker heartbeat closure that observes the shell cancel flag.
+///
+/// The shell wrapper (`run_fd`) flips `cancelled` when it sees the runtime
+/// cancellation token fire, then awaits the blocking task. Without this
+/// closure, `pi_walker`'s per-entry heartbeat never checks the flag and a
+/// cancelled walk keeps traversing until the whole tree is collected.
+/// Returning [`io::ErrorKind::Interrupted`] surfaces as [`WalkError::Interrupted`],
+/// which the callers translate to a silent break — the shell wrapper owns the
+/// user-visible exit code (130), so no `fd:` diagnostic is emitted.
+///
+/// Regression cover for #3949 (fd) and #3933 (grep/rg — same class of defect).
+fn cancel_heartbeat(cancelled: &AtomicBool) -> impl Fn() -> io::Result<()> + Sync + '_ {
+	move || {
+		if cancelled.load(Ordering::Relaxed) {
+			Err(io::Error::from(io::ErrorKind::Interrupted))
+		} else {
+			Ok(())
+		}
+	}
 }
 
 fn walker_error_to_io(err: pi_walker::WalkError<io::Error>) -> io::Error {
@@ -1611,4 +1635,171 @@ fn fd_content(
 
 fn exit_status(code: i32) -> u8 {
 	u8::try_from(code.clamp(0, 255)).unwrap_or(1)
+}
+
+#[cfg(test)]
+mod tests {
+	use std::{
+		env, fs,
+		io::Read,
+		sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+		time::{SystemTime, UNIX_EPOCH},
+	};
+
+	use brush_core::openfiles::OpenFile;
+	use clap::Parser;
+
+	use super::{FdCli, cancel_heartbeat, search};
+
+	static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+	/// Build a fresh temp directory containing a single matchable file plus a
+	/// filler file, so the walker has more than one entry to iterate. Both the
+	/// walker-level regressions below and the positive-path search test assert
+	/// against this seed.
+	fn seeded_tree(tag: &str) -> std::path::PathBuf {
+		let nanos = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.map_or(0, |d| d.as_nanos());
+		let root = env::temp_dir().join(format!(
+			"pi-shell-fd-cancel-{tag}-{}-{}-{}",
+			std::process::id(),
+			nanos,
+			COUNTER.fetch_add(1, Ordering::Relaxed),
+		));
+		fs::create_dir_all(&root).expect("temp tree should be created");
+		fs::write(root.join("haystack.txt"), b"needle\n").expect("seed file should be written");
+		fs::write(root.join("filler.txt"), b"filler\n").expect("filler file should be written");
+		root
+	}
+
+	/// Returns `(capture_path, writable_handle)`. The path is a fresh temp file
+	/// scoped to this test invocation; the handle wraps that same file so writes
+	/// go through the `OpenFile::File` variant and can later be read back.
+	fn capture_file(kind: &str) -> (std::path::PathBuf, fs::File) {
+		let nanos = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.map_or(0, |d| d.as_nanos());
+		let path = env::temp_dir().join(format!(
+			"pi-shell-fd-cancel-{kind}-{}-{}-{}",
+			std::process::id(),
+			nanos,
+			COUNTER.fetch_add(1, Ordering::Relaxed),
+		));
+		let file = fs::OpenOptions::new()
+			.create(true)
+			.read(true)
+			.write(true)
+			.truncate(true)
+			.open(&path)
+			.expect("capture file should open");
+		(path, file)
+	}
+
+	fn read_all(path: &std::path::Path) -> Vec<u8> {
+		let mut file = fs::File::open(path).expect("open capture");
+		let mut buf = Vec::new();
+		file.read_to_end(&mut buf).expect("read capture");
+		let _ = fs::remove_file(path);
+		buf
+	}
+
+	/// Build the same `WalkRequest` `search`/`try_search_fast` build for the
+	/// seeded tree: hidden entries included, gitignore disabled, root emitted.
+	/// Keeping the shape in one place so both walker-level regressions exercise
+	/// what fd actually asks the walker to do.
+	fn walk_request(tree: &std::path::Path) -> pi_walker::WalkRequest {
+		pi_walker::WalkRequest::new(tree)
+			.hidden(true)
+			.gitignore(false)
+			.emit_root(true)
+	}
+
+	// Regression note (#3949): both call sites in this file feed the walker
+	// `cancel_heartbeat(cancelled)` — one via `collect_with_heartbeat` in the
+	// gitignore-respecting fallback path, one via `for_each_entry_with_heartbeat`
+	// in the fast path. `search`/`try_search_fast` also carry an outer
+	// pre-loop `if cancelled { break }` guard that fires when the flag is
+	// already set before search runs, so a pre-set-flag test at the `search()`
+	// level never reaches the walker (the outer guard short-circuits first) and
+	// therefore does not protect the regression. The tests below drive both
+	// walker APIs directly with `cancel_heartbeat` so a revert to the pre-fix
+	// no-op heartbeat fails immediately.
+
+	#[test]
+	fn cancel_heartbeat_aborts_collect_with_heartbeat() {
+		// Covers the fallback path's walker call: without `cancel_heartbeat`,
+		// `collect_with_heartbeat` returns `Ok(outcome)` even after
+		// cancellation and the fd builtin drains the whole tree before
+		// observing the flag — the exact bug #3949 reports.
+		let tree = seeded_tree("collect");
+		let cancelled = AtomicBool::new(true);
+		let err = walk_request(&tree)
+			.collect_with_heartbeat(cancel_heartbeat(&cancelled))
+			.expect_err("walker must surface the cancel flag as an error");
+		assert!(
+			matches!(err, pi_walker::WalkError::Interrupted(_)),
+			"heartbeat interruption should surface as WalkError::Interrupted, got {err:?}"
+		);
+		let _ = fs::remove_dir_all(&tree);
+	}
+
+	#[test]
+	fn cancel_heartbeat_aborts_for_each_entry_with_heartbeat() {
+		// Symmetric coverage for the fast path's walker API: the streaming
+		// variant must also surface `WalkError::Interrupted`, and the visitor
+		// must never see any entry (proving the abort happened at the
+		// heartbeat, not after entries were already delivered).
+		let tree = seeded_tree("stream");
+		let cancelled = AtomicBool::new(true);
+		let visited = std::cell::Cell::new(0_usize);
+		let result = walk_request(&tree).for_each_entry_with_heartbeat(
+			cancel_heartbeat(&cancelled),
+			|_entry| {
+				visited.set(visited.get() + 1);
+				Ok::<_, std::io::Error>(pi_walker::WalkDecision::Include)
+			},
+			|_error| Ok::<_, std::io::Error>(pi_walker::WalkDecision::Include),
+		);
+		let err = result.expect_err("streaming walker must surface the cancel flag as an error");
+		assert!(
+			matches!(err, pi_walker::WalkError::Interrupted(_)),
+			"heartbeat interruption should surface as WalkError::Interrupted, got {err:?}"
+		);
+		assert_eq!(
+			visited.get(),
+			0,
+			"visitor must not receive any entry once the heartbeat has aborted the walk",
+		);
+		let _ = fs::remove_dir_all(&tree);
+	}
+
+	#[test]
+	fn walk_completes_normally_when_cancel_flag_is_unset() {
+		// Pin the non-cancelled contract: adding the cancel-observing heartbeat
+		// must not affect a normal walk. `fd` still exercises both `search()`
+		// and its walker call (the outer pre-loop guard passes with
+		// cancelled=false), then finds the seeded match.
+		let tree = seeded_tree("normal");
+		let path = tree.to_str().expect("utf8 path");
+		let cli = FdCli::try_parse_from(["fd", "haystack", path]).expect("argv");
+		let (stdout_capture, stdout_file) = capture_file("stdout-ok");
+		let (stderr_capture, stderr_file) = capture_file("stderr-ok");
+		let mut stdout = OpenFile::from(stdout_file);
+		let mut stderr = OpenFile::from(stderr_file);
+		let cancelled = AtomicBool::new(false);
+		let state = search(cli, tree.clone(), &mut stdout, &mut stderr, &cancelled)
+			.expect("uncancelled search should succeed");
+		drop(stdout);
+		drop(stderr);
+		assert_eq!(state.matches, 1, "seeded haystack.txt should match once");
+		let out = read_all(&stdout_capture);
+		let err = read_all(&stderr_capture);
+		assert!(
+			String::from_utf8_lossy(&out).contains("haystack.txt"),
+			"stdout should list the match: {out:?}"
+		);
+		assert!(err.is_empty(), "stderr should stay clean on success: {err:?}");
+		let _ = fs::remove_dir_all(&tree);
+	}
 }
