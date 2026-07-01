@@ -43,171 +43,131 @@ const SGR_MOUSE_PARTIAL = /^\x1b\[<[\d;]*$/;
 // completes (e.g. a bare ESC delivered while the kitty-active flag is
 // stale); keep it small.
 const PARTIAL_HOLD_MAX_MS = 150;
-/**
- * Check if a string is a complete escape sequence or needs more data
- */
-function isCompleteSequence(data: string): "complete" | "incomplete" | "not-escape" {
-	if (!data.startsWith(ESC)) {
-		return "not-escape";
-	}
+// Escape-sequence length caps. `resolveEscapeEnd` scans within these bounds
+// only, so a malformed CSI (missing final byte in `0x40-0x7E`) or a
+// terminator-less OSC/DCS/APC cannot force `extractCompleteSequences` to
+// re-inspect a growing prefix on every `process()` call — a single call
+// stays bounded work, and a streamed run of garbage bytes is flushed as
+// raw sequences instead of accumulated forever (issue #4073 case A).
+//
+// CSI is intentionally tight: real CSI keys, mouse reports, and DECRQM
+// replies are always well under 4 KiB. OSC/DCS/APC allow much larger
+// payloads (kitty OSC 5522 clipboard reads, Sixel DCS, kitty graphics APC),
+// so the string-terminator cap is generous.
+const MAX_CSI_BYTES = 4096;
+const MAX_STRING_SEQ_BYTES = 16 * 1024 * 1024;
 
-	if (data.length === 1) {
-		return "incomplete";
-	}
-
-	const afterEsc = data.slice(1);
-
-	// CSI sequences: ESC [
-	if (afterEsc.startsWith("[")) {
-		// Check for old-style mouse sequence: ESC[M + 3 bytes
-		if (afterEsc.startsWith("[M")) {
-			// Old-style mouse needs ESC[M + 3 bytes = 6 total
-			return data.length >= 6 ? "complete" : "incomplete";
-		}
-		return isCompleteCsiSequence(data);
-	}
-
-	// OSC sequences: ESC ]
-	if (afterEsc.startsWith("]")) {
-		return isCompleteOscSequence(data);
-	}
-
-	// DCS sequences: ESC P ... ESC \ (includes XTVersion responses)
-	if (afterEsc.startsWith("P")) {
-		return isCompleteDcsSequence(data);
-	}
-
-	// APC sequences: ESC _ ... ESC \ (includes Kitty graphics responses)
-	if (afterEsc.startsWith("_")) {
-		return isCompleteApcSequence(data);
-	}
-
-	// SS3 sequences: ESC O
-	if (afterEsc.startsWith("O")) {
-		// ESC O followed by a single character
-		return afterEsc.length >= 2 ? "complete" : "incomplete";
-	}
-
-	// ESC-prefixed sequences (terminals with metaSendsEscape):
-	// Only when the inner ESC starts a CSI ('[') or SS3 ('O') sequence.
-	// Bare double-ESC (e.g. \x1b\x1bX) remains complete to avoid 10ms timeout lag.
-	if (afterEsc.startsWith(ESC)) {
-		const inner = data.slice(1);
-		const third = inner.charCodeAt(1);
-		if (third === 0x5b || third === 0x4f) {
-			return isCompleteSequence(inner);
-		}
-		return "complete";
-	}
-
-	// Meta key sequences: ESC followed by a single character
-	if (afterEsc.length === 1) {
-		return "complete";
-	}
-
-	// Unknown escape sequence - treat as complete
-	return "complete";
-}
+// SGR mouse report bodies live between `<` and the terminating `M`/`m`.
+// Matched only when the trailing byte is a valid terminator, so the regex
+// runs at most once per resolved report — never inside the growth loop.
+const SGR_MOUSE_COMPLETE = /^<\d+;\d+;\d+[Mm]$/;
+const DIGITS_ONLY = /^\d+$/;
 
 /**
- * Check if CSI sequence is complete
- * CSI sequences: ESC [ ... followed by a final byte (0x40-0x7E)
+ * Resolve the exclusive-end index of the escape sequence starting at `pos`
+ * (`buffer.charCodeAt(pos)` must be ESC). `resumeSearchFrom` is honored only
+ * for OSC/DCS/APC — it lets a chunked payload skip the prefix that a prior
+ * `process()` call already searched, so a large OSC 5522 image paste stays
+ * O(total) instead of O(total²).
+ *
+ * Meta-ESC (`\x1b\x1b…`) is not resolved here; the outer loop handles the
+ * disambiguation shared with the flush timer and the SGR mouse split. This
+ * helper returns -1 when the first byte after ESC is another ESC.
+ *
+ * Return codes:
+ *   `end > pos`  — complete sequence, exclusive end index.
+ *   `-1`         — incomplete, still under the per-type cap; buffer for more.
+ *   `-2`         — incomplete and the prefix already spans the per-type cap;
+ *                  the caller flushes it as raw bytes to guarantee progress.
  */
-function isCompleteCsiSequence(data: string): "complete" | "incomplete" {
-	if (!data.startsWith(`${ESC}[`)) {
-		return "complete";
-	}
+function resolveEscapeEnd(buffer: string, pos: number, length: number, resumeSearchFrom: number): number {
+	if (pos + 1 >= length) return -1;
+	const next = buffer.charCodeAt(pos + 1);
 
-	// Need at least ESC [ and one more character
-	if (data.length < 3) {
-		return "incomplete";
-	}
-
-	const payload = data.slice(2);
-
-	// CSI sequences end with a byte in the range 0x40-0x7E (@-~)
-	// This includes all letters and several special characters
-	const lastChar = payload[payload.length - 1];
-	const lastCharCode = lastChar.charCodeAt(0);
-
-	if (lastCharCode >= 0x40 && lastCharCode <= 0x7e) {
-		// Special handling for SGR mouse sequences
-		// Format: ESC[<B;X;Ym or ESC[<B;X;YM
-		if (payload.startsWith("<")) {
-			// Must have format: <digits;digits;digits[Mm]
-			const mouseMatch = /^<\d+;\d+;\d+[Mm]$/.test(payload);
-			if (mouseMatch) {
-				return "complete";
+	switch (next) {
+		case 0x1b /* ESC */:
+			// Meta-ESC handled by the caller.
+			return -1;
+		case 0x5b /* [ */: {
+			// CSI: ESC [ ... final byte in 0x40-0x7E.
+			if (pos + 2 >= length) return -1;
+			// Old-style X10 mouse: ESC [ M + 3 arbitrary bytes.
+			if (buffer.charCodeAt(pos + 2) === 0x4d /* M */) {
+				if (pos + 6 <= length) return pos + 6;
+				return length - pos >= MAX_CSI_BYTES ? -2 : -1;
 			}
-			// If it ends with M or m but doesn't match the pattern, still incomplete
-			if (lastChar === "M" || lastChar === "m") {
-				// Check if we have the right structure
-				const parts = payload.slice(1, -1).split(";");
-				if (parts.length === 3 && parts.every(p => /^\d+$/.test(p))) {
-					return "complete";
+			const capEnd = Math.min(length, pos + MAX_CSI_BYTES);
+			const isSgrMouse = buffer.charCodeAt(pos + 2) === 0x3c /* < */;
+			// Resume from where the last call gave up. `-1` preserves the
+			// safety window used by OSC/DCS/APC; CSI has no multi-byte
+			// terminator, but keeping the same rule avoids a fencepost gap.
+			let i = Math.max(pos + 2, resumeSearchFrom - 1);
+			if (i < pos + 2) i = pos + 2;
+			while (i < capEnd) {
+				const code = buffer.charCodeAt(i);
+				if (code >= 0x40 && code <= 0x7e) {
+					if (isSgrMouse) {
+						// SGR mouse only terminates on M/m. Any other final
+						// byte would be a malformed body — keep scanning to
+						// match the prior `isCompleteCsiSequence` semantics.
+						if (code !== 0x4d && code !== 0x6d) {
+							i++;
+							continue;
+						}
+						const payload = buffer.slice(pos + 2, i + 1);
+						if (SGR_MOUSE_COMPLETE.test(payload)) return i + 1;
+						const parts = payload.slice(1, -1).split(";");
+						if (parts.length === 3 && parts.every(p => DIGITS_ONLY.test(p))) return i + 1;
+						// Malformed body ending in M/m — keep scanning for a
+						// real terminator. Bounded by capEnd.
+						i++;
+						continue;
+					}
+					return i + 1;
 				}
+				i++;
 			}
-
-			return "incomplete";
+			return length - pos >= MAX_CSI_BYTES ? -2 : -1;
 		}
-
-		return "complete";
+		case 0x5d /* ] */: {
+			// OSC: ESC ] ... BEL or ST (ESC \).
+			const searchFrom = Math.max(pos + 2, resumeSearchFrom - 1);
+			const scanLimit = Math.min(length, pos + MAX_STRING_SEQ_BYTES);
+			const belIndex = buffer.indexOf("\x07", searchFrom);
+			const stIndex = buffer.indexOf("\x1b\\", searchFrom);
+			let end = -1;
+			if (belIndex !== -1 && belIndex + 1 <= scanLimit) end = belIndex + 1;
+			if (stIndex !== -1 && stIndex + 2 <= scanLimit && (end === -1 || stIndex + 2 < end)) end = stIndex + 2;
+			if (end !== -1) return end;
+			return length - pos >= MAX_STRING_SEQ_BYTES ? -2 : -1;
+		}
+		case 0x50 /* P */:
+		case 0x5f /* _ */: {
+			// DCS / APC: ESC P/_ ... ST (ESC \).
+			const searchFrom = Math.max(pos + 2, resumeSearchFrom - 1);
+			const scanLimit = Math.min(length, pos + MAX_STRING_SEQ_BYTES);
+			const stIndex = buffer.indexOf("\x1b\\", searchFrom);
+			if (stIndex !== -1 && stIndex + 2 <= scanLimit) return stIndex + 2;
+			return length - pos >= MAX_STRING_SEQ_BYTES ? -2 : -1;
+		}
+		case 0x4f /* O */:
+			// SS3: ESC O + 1 char.
+			return pos + 3 <= length ? pos + 3 : -1;
+		default:
+			// Meta chord: ESC + 1 char.
+			return pos + 2;
 	}
-
-	return "incomplete";
 }
 
 /**
- * Check if OSC sequence is complete
- * OSC sequences: ESC ] ... ST (where ST is ESC \ or BEL)
+ * Per-type cap used to flush the incomplete prefix when `resolveEscapeEnd`
+ * returns -2. The cap keeps issue-4073's malformed streamed CSI/OSC/…
+ * bounded in both work and memory.
  */
-function isCompleteOscSequence(data: string): "complete" | "incomplete" {
-	if (!data.startsWith(`${ESC}]`)) {
-		return "complete";
-	}
-
-	// OSC sequences end with ST (ESC \) or BEL (\x07)
-	if (data.endsWith(`${ESC}\\`) || data.endsWith("\x07")) {
-		return "complete";
-	}
-
-	return "incomplete";
-}
-
-/**
- * Check if DCS (Device Control String) sequence is complete
- * DCS sequences: ESC P ... ST (where ST is ESC \)
- * Used for XTVersion responses like ESC P >| ... ESC \
- */
-function isCompleteDcsSequence(data: string): "complete" | "incomplete" {
-	if (!data.startsWith(`${ESC}P`)) {
-		return "complete";
-	}
-
-	// DCS sequences end with ST (ESC \)
-	if (data.endsWith(`${ESC}\\`)) {
-		return "complete";
-	}
-
-	return "incomplete";
-}
-
-/**
- * Check if APC (Application Program Command) sequence is complete
- * APC sequences: ESC _ ... ST (where ST is ESC \)
- * Used for Kitty graphics responses like ESC _ G ... ESC \
- */
-function isCompleteApcSequence(data: string): "complete" | "incomplete" {
-	if (!data.startsWith(`${ESC}_`)) {
-		return "complete";
-	}
-
-	// APC sequences end with ST (ESC \)
-	if (data.endsWith(`${ESC}\\`)) {
-		return "complete";
-	}
-
-	return "incomplete";
+function escapeCapFor(next: number): number {
+	// OSC/DCS/APC carry the large payloads (image paste, Sixel); CSI stays
+	// tight because real CSI keys/mouse/responses fit comfortably below 4 KiB.
+	return next === 0x5d || next === 0x50 || next === 0x5f ? MAX_STRING_SEQ_BYTES : MAX_CSI_BYTES;
 }
 
 /**
@@ -221,7 +181,10 @@ function parseUnmodifiedKittyPrintableCodepoint(sequence: string): number | unde
 	return codepoint >= 32 ? codepoint : undefined;
 }
 
-function extractCompleteSequences(buffer: string): { sequences: string[]; remainder: string } {
+function extractCompleteSequences(
+	buffer: string,
+	resumeSearchFrom: number,
+): { sequences: string[]; remainder: string; resumeSearchFrom: number } {
 	const sequences: string[] = [];
 	const length = buffer.length;
 	let pos = 0;
@@ -229,75 +192,106 @@ function extractCompleteSequences(buffer: string): { sequences: string[]; remain
 	// Index-based scanning: this is the input hot path. Slicing the remaining
 	// buffer (or Array.from-ing it) per iteration would make plain-text bursts
 	// O(n²) — a 100KB non-bracketed paste must stay O(n).
-	while (pos < length) {
-		if (buffer.charCodeAt(pos) === 0x1b) {
-			// Find the end of this escape sequence by growing the candidate.
-			let end = pos + 1;
-			let consumed = false;
-			while (end <= length) {
-				const candidate = buffer.slice(pos, end);
-				const status = isCompleteSequence(candidate);
-				if (status === "incomplete") {
-					end++;
-					continue;
-				}
-				// "\x1b\x1b" is one of three things:
-				//   1. ESC prefixing CSI/SS3 (meta-CSI, held Esc joined by a follower):
-				//      next byte is "[" or "O" — keep growing so the full sequence stays
-				//      together. Consuming two bytes here would tear the follower and
-				//      leak its tail as typed text (settings search filling with "[B"
-				//      or "[<35;22;17M").
-				//   2. ESC followed by a legacy Alt chord (`\x1bd`, `\x1b\x7f`, …):
-				//      emit the first ESC, then restart at the second ESC so downstream
-				//      parsing still sees the Alt chord as one keypress (#3860 review).
-				//   3. Two real Esc keypresses bursted by terminal input batching:
-				//      when the buffer ends here, hold the partial for the flush window
-				//      so case 1/2 can still arrive; if no follower arrives, `flush()`
-				//      splits the held remainder into two ESC events (#3857).
-				if (candidate === `${ESC}${ESC}`) {
-					if (end >= length) {
-						return { sequences, remainder: buffer.slice(pos) };
-					}
-					const next = buffer.charCodeAt(end);
-					if (next === 0x5b || next === 0x4f) {
-						end++;
-						continue;
-					}
-					sequences.push(ESC);
-					pos += 1;
-					consumed = true;
-					break;
-				}
-				// ESC + SGR mouse report is never a meta chord: alt-modified mouse
-				// reports carry the modifier in the button bits, not an ESC prefix.
-				// Deliver the bare ESC (a real Esc keypress) and the report separately.
-				if (candidate.startsWith(`${ESC}${ESC}[<`)) {
-					sequences.push(ESC, candidate.slice(1));
-					pos = end;
-					consumed = true;
-					break;
-				}
-				// "complete" — or "not-escape", which should not happen when
-				// starting with ESC; both consume the candidate.
-				sequences.push(candidate);
-				pos = end;
-				consumed = true;
-				break;
-			}
+	//
+	// `resumeSearchFrom` applies only when the buffer starts with an
+	// incomplete OSC/DCS/APC we buffered on the previous call; once any
+	// bytes are consumed (pos advances past the leading escape), the hint no
+	// longer maps to the current buffer offsets and is discarded.
+	let hint = resumeSearchFrom;
 
-			if (!consumed) {
-				return { sequences, remainder: buffer.slice(pos) };
-			}
-		} else {
+	while (pos < length) {
+		if (buffer.charCodeAt(pos) !== 0x1b) {
 			// Not an escape sequence - take one Unicode scalar, not a UTF-16 code unit.
 			const codePoint = buffer.codePointAt(pos)!;
 			const charLength = codePoint > 0xffff ? 2 : 1;
 			sequences.push(buffer.slice(pos, pos + charLength));
 			pos += charLength;
+			hint = 0;
+			continue;
 		}
+
+		// `\x1b\x1b` is one of three things — see the outer switch below.
+		// Kept in the outer loop because it interacts with flush timing
+		// (bare `\x1b\x1b` is held for the timer chain) and with the SGR
+		// mouse split that splits `\x1b\x1b[<…` into `\x1b` + `\x1b[<…`.
+		if (pos + 1 < length && buffer.charCodeAt(pos + 1) === 0x1b) {
+			if (pos + 2 >= length) {
+				//   Two real Esc keypresses bursted by terminal input batching:
+				//   when the buffer ends here, hold the partial for the flush
+				//   window so cases 1/2 can still arrive; if no follower
+				//   arrives, `flush()` splits the held remainder into two ESC
+				//   events (#3857).
+				return { sequences, remainder: buffer.slice(pos), resumeSearchFrom: 0 };
+			}
+			const third = buffer.charCodeAt(pos + 2);
+			if (third !== 0x5b && third !== 0x4f) {
+				//   ESC followed by a legacy Alt chord (`\x1bd`, `\x1b\x7f`, …):
+				//   emit the first ESC, then restart at the second ESC so
+				//   downstream parsing still sees the Alt chord as one
+				//   keypress (#3860 review).
+				sequences.push(ESC);
+				pos += 1;
+				hint = 0;
+				continue;
+			}
+			//   ESC prefixing CSI/SS3 (meta-CSI, held Esc joined by a follower):
+			//   resolve the inner escape's end from `pos + 1`. Consuming two
+			//   bytes here would tear the follower and leak its tail as typed
+			//   text (settings search filling with "[B" or "[<35;22;17M").
+			const innerEnd = resolveEscapeEnd(buffer, pos + 1, length, 0);
+			if (innerEnd === -1) {
+				return { sequences, remainder: buffer.slice(pos), resumeSearchFrom: 0 };
+			}
+			if (innerEnd === -2) {
+				const cap = escapeCapFor(third);
+				const flushEnd = Math.min(length, pos + cap);
+				sequences.push(buffer.slice(pos, flushEnd));
+				pos = flushEnd;
+				hint = 0;
+				continue;
+			}
+			// ESC + SGR mouse is never a meta chord: alt-modified mouse
+			// reports carry the modifier in the button bits, not an ESC
+			// prefix. Deliver the bare ESC and the report separately.
+			if (third === 0x5b && buffer.charCodeAt(pos + 3) === 0x3c) {
+				sequences.push(ESC);
+				sequences.push(buffer.slice(pos + 1, innerEnd));
+				pos = innerEnd;
+				hint = 0;
+				continue;
+			}
+			sequences.push(buffer.slice(pos, innerEnd));
+			pos = innerEnd;
+			hint = 0;
+			continue;
+		}
+
+		// Single ESC — resolve directly. Hint carries over from the previous
+		// call only when we are still on the buffered escape (pos === 0).
+		const end = resolveEscapeEnd(buffer, pos, length, pos === 0 ? hint : 0);
+		if (end === -1) {
+			// Buffer for more. When this is the leading OSC/DCS/APC,
+			// remember how far we scanned so the next `process()` call
+			// resumes from there instead of rescanning the whole buffer.
+			const next = pos + 1 < length ? buffer.charCodeAt(pos + 1) : -1;
+			const nextHint = pos === 0 && (next === 0x5d || next === 0x50 || next === 0x5f) ? length : 0;
+			return { sequences, remainder: buffer.slice(pos), resumeSearchFrom: nextHint };
+		}
+		if (end === -2) {
+			const next = buffer.charCodeAt(pos + 1);
+			const cap = escapeCapFor(next);
+			const flushEnd = Math.min(length, pos + cap);
+			sequences.push(buffer.slice(pos, flushEnd));
+			pos = flushEnd;
+			hint = 0;
+			continue;
+		}
+		sequences.push(buffer.slice(pos, end));
+		pos = end;
+		hint = 0;
 	}
 
-	return { sequences, remainder: "" };
+	return { sequences, remainder: "", resumeSearchFrom: 0 };
 }
 
 export type StdinBufferOptions = {
@@ -350,6 +344,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 	#pasteWatchdog?: NodeJS.Timeout;
 	#pendingKittyPrintableCodepoint: number | undefined;
 	#pendingKittyPrintableAtMs = 0;
+	#escapeSearchOffset = 0;
 
 	constructor(options: StdinBufferOptions = {}) {
 		super();
@@ -402,7 +397,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		if (startIndex !== -1) {
 			if (startIndex > 0) {
 				const beforePaste = this.#buffer.slice(0, startIndex);
-				const result = extractCompleteSequences(beforePaste);
+				const result = extractCompleteSequences(beforePaste, 0);
 				for (const sequence of result.sequences) {
 					this.#emitDataSequence(sequence);
 				}
@@ -420,8 +415,9 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 			return;
 		}
 
-		const result = extractCompleteSequences(this.#buffer);
+		const result = extractCompleteSequences(this.#buffer, this.#escapeSearchOffset);
 		this.#buffer = result.remainder;
+		this.#escapeSearchOffset = result.resumeSearchFrom;
 
 		for (const sequence of result.sequences) {
 			this.#emitDataSequence(sequence);
@@ -617,6 +613,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 
 		const buffered = this.#buffer;
 		this.#buffer = "";
+		this.#escapeSearchOffset = 0;
 		this.#pendingKittyPrintableCodepoint = undefined;
 		// Bare double-ESC remainder (no disambiguating "[" / "O" arrived in time):
 		// two real Esc keypresses bursted by terminal batching, not a meta-CSI/SS3
@@ -639,6 +636,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		this.#pasteBytes = 0;
 		this.#pendingKittyPrintableCodepoint = undefined;
 		this.#partialHoldStartMs = 0;
+		this.#escapeSearchOffset = 0;
 	}
 
 	getBuffer(): string {

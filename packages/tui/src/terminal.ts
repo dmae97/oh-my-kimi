@@ -691,8 +691,28 @@ export class ProcessTerminal implements Terminal {
 		// In-band resize report (DEC mode 2048): \x1b[48;rows;cols;yPixels;xPixels t
 		const inBandResizePattern = /^\x1b\[48;(\d+);(\d+);(\d+);(\d+)t$/;
 
-		// Forward individual sequences to the input handler
 		this.#stdinBuffer.on("data", (sequence: string) => {
+			// Fast path for plain-text bytes: every escape-probe regex below
+			// anchors on `^\x1b…`, so a byte that is not ESC can never match. A
+			// non-bracketed paste of N printable chars arrives as N per-scalar
+			// `data` events; running the full probe suite per event turns a
+			// 100 KB paste into ~600K regex executions and blocks the event
+			// loop. Skip straight to the input handler when no reassembly
+			// buffer is holding state that a non-ESC continuation could feed
+			// (issue #4073 case C).
+			if (
+				(sequence.length === 0 || sequence.charCodeAt(0) !== 0x1b) &&
+				this.#privateCsiResponseBuffer.length === 0 &&
+				this.#inBandResizeBuffer.length === 0 &&
+				this.#osc11ResponseBuffer.length === 0 &&
+				this.#osc99ResponseBuffer.length === 0
+			) {
+				if (this.#inputHandler) {
+					this.#inputHandler(sequence);
+				}
+				return;
+			}
+
 			// Reassemble split private CSI responses (DA1, kitty keyboard, Mode 2031).
 			// When the terminal writes the response slowly enough that the StdinBuffer's
 			// flush timeout elapses mid-sequence, the prefix `\x1b[?<digits>` arrives as

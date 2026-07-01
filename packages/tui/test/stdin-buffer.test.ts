@@ -570,6 +570,49 @@ describe("StdinBuffer", () => {
 		});
 	});
 
+	describe("Malformed Escape Bounds (issue #4073 case A)", () => {
+		it("caps a malformed CSI without terminator so a single process() stays bounded", () => {
+			// The prior grow-and-recheck inner loop rescanned every prefix on
+			// each call; a streamed run with no final byte in 0x40-0x7E left
+			// the whole prefix in the buffer and re-inspected it forever.
+			const input = `\x1b[${";".repeat(200_000)}`;
+			processInput(input);
+			// Cap-flush emitted the leading capped prefix as one raw sequence
+			// so progress is guaranteed; the rest is per-scalar plain text.
+			expect(emittedSequences.length).toBeGreaterThan(0);
+			expect(emittedSequences[0]!.length).toBeLessThan(input.length);
+			expect(buffer.getBuffer().length).toBe(0);
+		});
+
+		it("resumes OSC terminator search across chunks — chunked payload stays O(total)", () => {
+			// A legit chunked OSC 5522 payload must not force a full re-scan
+			// of the accumulated buffer per chunk. Delivery completes on the
+			// terminator; only the assembled sequence is emitted.
+			const chunkSize = 4096;
+			const chunkCount = 128;
+			const chunk = "a".repeat(chunkSize);
+			processInput("\x1b]5522;type=read;");
+			for (let i = 0; i < chunkCount - 1; i++) processInput(chunk);
+			processInput(`${chunk.slice(0, chunkSize - 1)}\x07`);
+			expect(emittedSequences.length).toBe(1);
+			expect(emittedSequences[0]!.startsWith("\x1b]5522;")).toBe(true);
+			expect(emittedSequences[0]!.endsWith("\x07")).toBe(true);
+			expect(buffer.getBuffer().length).toBe(0);
+		});
+
+		it("caps a streamed CSI garbage run so the buffer never grows without bound", () => {
+			// Streaming a malformed CSI (no terminator) in many small chunks
+			// used to accumulate the whole run in #buffer, giving O(n^2)
+			// cumulative work. After the cap fires, the buffer resets so
+			// subsequent chunks are re-scanned fresh.
+			processInput("\x1b[");
+			// Ten 8 KiB chunks — first two exceed MAX_CSI_BYTES (4 KiB) and
+			// force a cap-flush; the buffer must not retain the full run.
+			for (let i = 0; i < 10; i++) processInput(";".repeat(8192));
+			expect(buffer.getBuffer().length).toBeLessThan(8192);
+		});
+	});
+
 	describe("Destroy", () => {
 		it("should clear buffer on destroy", () => {
 			processInput("\x1b[<35");
