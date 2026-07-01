@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed a rare Bun GC crash (exit 133, intermittent `SIGSEGV`/`SIGBUS` in JSC `PreciseAllocation::sweep` / `JSAbortSignal::visitAdditionalChildren`) when running the coding-agent test buckets. Tests that construct a real `InteractiveMode` open the process-global `bun:sqlite`-backed `HistoryStorage` singleton, which was never released in teardown; the live native handle accumulated across files in a single `bun test` process until Bun 1.3.14's garbage collector corrupted the heap mid-sweep. The affected tests now call `HistoryStorage.resetInstance()` in `afterEach` (the existing repo convention), closing the database between tests. Verified with 300 consecutive clean stress iterations of the failing 10-file bucket under `--smol` versus a baseline that crashed roughly every 20-38 runs.
+- Made model-discovery request timeouts cancellable. Every discovery fetch (`ollama`, `llama.cpp`, `lm-studio`, `openai-models-list`, new-api/one-api proxies, LiteLLM, vLLM) armed an uncancellable `AbortSignal.timeout(...)` that kept a pending timer on the heap after the request settled and only bounded the header fetch, not the `response.json()` body read. Discovery now runs each fetch + body parse under a `withTimeoutSignal` helper (and a `timeoutMs` option on the catalog `fetchOpenAICompatibleModels`/`fetchLiteLLMRichModels` resolvers) that covers the whole operation and clears the backing timer the instant it settles.
+
 ## [16.2.10] - 2026-06-30
 
 ### Changed
@@ -19,7 +24,6 @@
 - Fixed the incomplete-todo reminder drifting to the bottom of the screen and piling up as dozens of duplicate copies in native scrollback. The reminder rendered in a dedicated anchored live-region container (`todoReminderContainer`) pinned above the editor, so it re-rendered in place every frame and — being taller than the viewport on short terminals while the subagent/job HUD churned below it — had its top rows committed to scrollback again on each reflow. It is now committed once into the transcript as a regular block (the same path TTSR notifications use), so it stays anchored in history where it fired.
 - Fixed subagent frontmatter `thinkingLevel` being overridden by `modelRoles.task` model suffixes. ([#3915](https://github.com/can1357/oh-my-pi/issues/3915))
 - Fixed Ruff LSP auto-detection for Windows Python virtualenvs by checking `.venv/Scripts`, `venv/Scripts`, and `.env/Scripts` before falling back to PATH. ([#3916](https://github.com/can1357/oh-my-pi/issues/3916))
-- Fixed a rare Bun GC segfault (exit 133) during model discovery: every discovery fetch armed an uncancellable `AbortSignal.timeout(...)` whose timer outlived the request (instantly against a mocked or fast endpoint). The pending timer fired later — sometimes during an unrelated allocation or test teardown — set the signal's abort `reason`, and crashed JSC's concurrent garbage collector while it marked the wrapped reason (`JSAbortSignal::visitAdditionalChildren`). Discovery now runs each fetch under a `withTimeoutSignal` helper that clears the backing timer the instant the operation settles, so the signal is never left armed on the heap.
 
 ## [16.2.9] - 2026-06-30
 

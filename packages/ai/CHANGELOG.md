@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed streaming UI glitches and invalid empty tool call IDs persisting in history
+
 ## [16.2.10] - 2026-06-30
 
 ### Added

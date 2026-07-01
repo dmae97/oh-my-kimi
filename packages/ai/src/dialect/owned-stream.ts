@@ -67,6 +67,10 @@ function syncToolCall(target: StreamingToolCall, source: StreamingToolCall): voi
 	else setStreamingPartialJson(target, partialJson);
 }
 
+function hasUsableNativeToolCall(source: StreamingToolCall | undefined): source is StreamingToolCall {
+	return source !== undefined && source.name.trim().length > 0 && source.id.trim().length > 0;
+}
+
 export function parseInbandToolMessage(
 	message: AssistantMessage,
 	dialect: Dialect,
@@ -208,10 +212,13 @@ class InbandStreamProjector {
 	// stream's current partial block. When owned mode wraps a provider that still
 	// emits native tool calls, the projected block must mirror the provider's live
 	// id / args / partial-json state rather than inventing `{ id: "", arguments:
-	// {} }` placeholders — otherwise the UI loses streaming args and can mis-key
-	// the call until `toolcall_end`.
+	// {} }` placeholders — otherwise the UI loses streaming args, can mis-key the
+	// call until `toolcall_end`, and may even persist an invalid empty id into
+	// replay history. So we do NOT start until the provider has emitted both a
+	// non-empty name and a non-empty id; if either lands late, `nativeToolDelta`
+	// retries the start on subsequent deltas.
 	nativeToolStart(srcIndex: number, source: StreamingToolCall | undefined): void {
-		if (this.#stopped || !source?.name || this.#toolChannel === "inband") return;
+		if (this.#stopped || !hasUsableNativeToolCall(source) || this.#toolChannel === "inband") return;
 		this.#toolChannel = "native";
 		this.#closeText();
 		this.#closeThinking();
@@ -225,7 +232,7 @@ class InbandStreamProjector {
 	nativeToolDelta(srcIndex: number, delta: string, source: StreamingToolCall | undefined): void {
 		if (this.#stopped) return;
 		let entry = this.#nativeBlocks.get(srcIndex);
-		if (!entry && source?.name && this.#toolChannel !== "inband") {
+		if (!entry && hasUsableNativeToolCall(source) && this.#toolChannel !== "inband") {
 			this.nativeToolStart(srcIndex, source);
 			entry = this.#nativeBlocks.get(srcIndex);
 		}
@@ -239,7 +246,7 @@ class InbandStreamProjector {
 		if (this.#stopped) return;
 		const entry = this.#nativeBlocks.get(srcIndex);
 		if (entry) {
-			syncToolCall(entry.block, toolCall);
+			if (hasUsableNativeToolCall(toolCall)) syncToolCall(entry.block, toolCall);
 			if (this.#emitEvents)
 				this.#out.push({
 					type: "toolcall_end",
@@ -250,10 +257,10 @@ class InbandStreamProjector {
 			this.#nativeBlocks.delete(srcIndex);
 			return;
 		}
-		// Never streamed (name was empty at start). Salvage a real call whose name
-		// only arrived now; drop nameless ghosts and anything the in-band channel
-		// already claimed.
-		if (!toolCall.name || this.#toolChannel === "inband") return;
+		// Never streamed (name/id were incomplete at start). Salvage only a real
+		// native call whose identifier is now present; drop nameless/id-less ghosts
+		// and anything the in-band channel already claimed.
+		if (!hasUsableNativeToolCall(toolCall) || this.#toolChannel === "inband") return;
 		this.#toolChannel = "native";
 		this.#closeText();
 		this.#closeThinking();
