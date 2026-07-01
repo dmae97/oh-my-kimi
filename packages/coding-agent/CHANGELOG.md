@@ -16,6 +16,7 @@
 - Fixed MCP Streamable HTTP request and notify timeouts staying unarmed during stalled response body reads. ([#3974](https://github.com/can1357/oh-my-pi/issues/3974))
 - Fixed eval and task spawn defaults to respect restricted agent `spawns` lists. ([#3973](https://github.com/can1357/oh-my-pi/issues/3973))
 - Fixed timed-out `browser.run` calls leaving evaluated JavaScript continuations alive, allowing late tab mutations after the tool had already returned. ([#3964](https://github.com/can1357/oh-my-pi/issues/3964))
+- Fixed session context and branch path reconstruction doing quadratic `Array.unshift` work on deep linear histories. ([#3961](https://github.com/can1357/oh-my-pi/issues/3961))
 
 ## [16.2.11] - 2026-07-01
 

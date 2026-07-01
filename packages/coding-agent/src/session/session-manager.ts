@@ -242,9 +242,10 @@ class SessionEntryIndex {
 
 		while (cursor && !seen.has(cursor.id)) {
 			seen.add(cursor.id);
-			branch.unshift(cursor);
+			branch.push(cursor);
 			cursor = cursor.parentId ? this.#entriesById.get(cursor.parentId) : undefined;
 		}
+		branch.reverse();
 
 		return branch;
 	}
