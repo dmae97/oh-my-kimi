@@ -62,6 +62,7 @@ import {
 	generateHandoffFromContext,
 	prepareCompaction,
 	renderHandoffPrompt,
+	resolveBudgetReserveTokens,
 	resolveThresholdTokens,
 	type SessionEntry,
 	type SessionMessageEntry,
@@ -463,6 +464,7 @@ type CompactionCheckResult = Readonly<{
 	deferredHandoff: boolean;
 	continuationScheduled: boolean;
 	automaticContinuationBlocked?: boolean;
+	historyRewritten?: boolean;
 }>;
 
 const COMPACTION_CHECK_NONE: CompactionCheckResult = {
@@ -10254,15 +10256,17 @@ export class AgentSession {
 	 * Drop the failed assistant turn from persisted history, run
 	 * {@link #runAutoCompaction} for an `overflow` / `incomplete` recovery, and
 	 * restore the assistant entry if compaction did not actually commit
-	 * anything (no usable model/preparation, hook cancel, or compaction error).
+	 * anything (no usable model/preparation, hook cancel, compaction error,
+	 * or a no-progress automatic-continuation block before any summary was
+	 * written).
 	 *
 	 * Compaction has to see a clean branch — otherwise its `prepareCompaction`
 	 * pass would keep the failed turn in the kept region and the retry would
-	 * replay it. But a NONE return that was not paired with a fresh compaction
-	 * summary means no recovery is in progress, and leaving the branch
-	 * reparented would erase the only user-visible explanation for why the turn
-	 * stopped. Reverting the drop in that case preserves the transcript while
-	 * still letting a real recovery path own the rewrite.
+	 * replay it. But a return that was not paired with a fresh compaction
+	 * summary or a successful history rewrite means no recovery is in progress,
+	 * even if queued user input gets drained next. Restoring the failed turn
+	 * before that continuation preserves the visible stop reason and rebuilds the
+	 * active assistant tail that `Agent.continue()` needs to dequeue follow-ups.
 	 */
 	async #runRecoveryCompactionWithRollback(
 		reason: "overflow" | "incomplete",
@@ -10273,15 +10277,23 @@ export class AgentSession {
 		const compactionEntryBefore = getLatestCompactionEntry(this.sessionManager.getBranch());
 		await this.#dropPersistedAssistantTurn(assistantMessage);
 		const result = await this.#runAutoCompaction(reason, true, false, allowDefer, options);
-		const recoveryCommitted =
-			result.continuationScheduled || result.deferredHandoff || result.automaticContinuationBlocked === true;
-		if (!recoveryCommitted) {
-			const compactionEntryAfter = getLatestCompactionEntry(this.sessionManager.getBranch());
-			if (compactionEntryAfter === compactionEntryBefore) {
-				this.sessionManager.appendMessage(assistantMessage);
-			}
+		const compactionEntryAfter = getLatestCompactionEntry(this.sessionManager.getBranch());
+		if (result.historyRewritten !== true && compactionEntryAfter === compactionEntryBefore) {
+			this.#restoreFailedAssistantTurn(assistantMessage);
 		}
 		return result;
+	}
+
+	#restoreFailedAssistantTurn(assistantMessage: AssistantMessage): void {
+		this.sessionManager.appendMessage(assistantMessage);
+		const lastMessage = this.agent.state.messages.at(-1);
+		if (
+			lastMessage?.role === "assistant" &&
+			this.#isSameAssistantMessage(lastMessage as AssistantMessage, assistantMessage)
+		) {
+			return;
+		}
+		this.agent.appendMessage(assistantMessage);
 	}
 
 	/**
@@ -11513,12 +11525,14 @@ export class AgentSession {
 	 * `0.8 × 170k = 136k` and was wrongly refused (PR #3412 review).
 	 *
 	 * Measures residual context against the usable budget (`contextWindow - reserve`).
-	 * The default absolute reserve can exceed bundled small-context windows, so
-	 * the retry path clamps that reserve back to the proportional 15% default
-	 * before comparing; otherwise a prompt that fits the model window would still
-	 * see a negative budget and dead-end. Callers MUST invoke this AFTER dropping
-	 * the failed assistant from `this.messages`, so the just-failed turn (which
-	 * the retry prompt will not include) is excluded from the estimate.
+	 * The default absolute reserve can exceed bundled small-context windows, or
+	 * nearly consume a 16k-class window; those known-impossible defaults fall
+	 * back to the proportional 15% reserve. Explicit valid reserves still define
+	 * the usable prompt budget so retries do not enter headroom the user
+	 * intentionally reserved. Callers MUST
+	 * invoke this AFTER dropping the failed assistant from `this.messages`, so
+	 * the just-failed turn (which the retry prompt will not include) is excluded
+	 * from the estimate.
 	 *
 	 * When the model/window is unknown we cannot evaluate the budget, so we
 	 * optimistically allow the retry (preserving prior behavior).
@@ -11531,10 +11545,7 @@ export class AgentSession {
 			this.getContextUsage({ contextWindow })?.tokens ?? 0,
 			this.#estimateStoredContextTokens(),
 		);
-		const reserveTokens = effectiveReserveTokens(contextWindow, compactionSettings);
-		const defaultReserveTokens = Math.floor(contextWindow * 0.15);
-		const fitReserveTokens = Math.min(reserveTokens, defaultReserveTokens);
-		const fitBudget = Math.max(0, contextWindow - fitReserveTokens);
+		const fitBudget = Math.max(0, contextWindow - resolveBudgetReserveTokens(contextWindow, compactionSettings));
 		return residualTokens <= fitBudget;
 	}
 
@@ -11720,7 +11731,10 @@ export class AgentSession {
 					if (continuationScheduled) {
 						this.#scheduleAutoContinuePrompt(generation);
 					}
-					return continuationScheduled ? COMPACTION_CHECK_CONTINUATION : COMPACTION_CHECK_NONE;
+					return {
+						...(continuationScheduled ? COMPACTION_CHECK_CONTINUATION : COMPACTION_CHECK_NONE),
+						historyRewritten: true,
+					};
 				}
 			}
 
@@ -11765,15 +11779,25 @@ export class AgentSession {
 					willRetry: false,
 					skipped: true,
 				});
-				if (!willRetry && this.agent.hasQueuedMessages()) {
+				const noProgressDeadEnd = reason !== "idle";
+				let continuationScheduled = false;
+				if (!suppressContinuation && this.agent.hasQueuedMessages()) {
 					this.#scheduleAgentContinue({
 						delayMs: 100,
 						generation,
 						shouldContinue: () => this.agent.hasQueuedMessages(),
 					});
-					return COMPACTION_CHECK_CONTINUATION;
+					continuationScheduled = true;
 				}
-				return COMPACTION_CHECK_NONE;
+				if (noProgressDeadEnd) {
+					this.emitNotice(
+						"warning",
+						"Compaction freed too little context to make progress — pausing automatic maintenance to avoid a compaction loop. The most recent turn alone is too large to reduce further; shrink it (e.g. clear large tool output) or switch to a larger-context model.",
+						"compaction",
+					);
+				}
+				if (continuationScheduled) return COMPACTION_CHECK_CONTINUATION;
+				return noProgressDeadEnd ? COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION : COMPACTION_CHECK_NONE;
 			}
 
 			let hookCompaction: CompactionResult | undefined;
@@ -12347,7 +12371,17 @@ export class AgentSession {
 				});
 				continuationScheduled = true;
 			}
-			return continuationScheduled ? COMPACTION_CHECK_CONTINUATION : COMPACTION_CHECK_NONE;
+			if (!reclaimed) {
+				return willRetry && continuationScheduled
+					? { ...COMPACTION_CHECK_CONTINUATION, historyRewritten: true }
+					: continuationScheduled
+						? COMPACTION_CHECK_CONTINUATION
+						: COMPACTION_CHECK_NONE;
+			}
+			return {
+				...(continuationScheduled ? COMPACTION_CHECK_CONTINUATION : COMPACTION_CHECK_NONE),
+				historyRewritten: true,
+			};
 		} catch (error) {
 			if (signal.aborted) {
 				await this.#emitSessionEvent({

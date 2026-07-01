@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
+import { scheduler } from "node:timers/promises";
 import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ImageContent, ToolResultMessage } from "@oh-my-pi/pi-ai";
@@ -191,6 +192,119 @@ describe("AgentSession shake", () => {
 			const end = events.filter(e => e.type === "auto_compaction_end");
 			expect(end).toHaveLength(1);
 			expect(end[0]).toMatchObject({ type: "auto_compaction_end", action: "shake" });
+		});
+
+		it("keeps a successful overflow shake recovery committed before retrying", async () => {
+			session.settings.set("compaction.strategy", "shake");
+			session.settings.set("contextPromotion.enabled", false);
+			seedHeavyToolResult("X ".repeat(20000));
+			branchToolResults()[0].useless = true;
+			vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+			vi.spyOn(session.agent, "continue").mockResolvedValue();
+			vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 1000, contextWindow: 200000, percent: 0.5 });
+
+			const assistantMessage: AssistantMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "" }],
+				...apiInfo,
+				stopReason: "error",
+				errorMessage: "prompt is too long: 250000 tokens > 200000 maximum",
+				usage: {
+					input: 250_000,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 250_000,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				timestamp: Date.now(),
+			};
+			const { promise: compactionDone, resolve: onCompactionDone } = Promise.withResolvers<void>();
+			session.subscribe(event => {
+				if (event.type === "auto_compaction_end" && event.action === "shake") onCompactionDone();
+			});
+			session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
+			session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
+
+			await compactionDone;
+			await session.waitForIdle();
+
+			const shakeEnd = events.find(event => event.type === "auto_compaction_end" && event.action === "shake");
+			expect(shakeEnd).toMatchObject({ type: "auto_compaction_end", action: "shake", willRetry: true });
+			expect(sessionManager.getBranch()).not.toContainEqual(
+				expect.objectContaining({
+					type: "message",
+					message: expect.objectContaining({
+						role: "assistant",
+						stopReason: "error",
+						errorMessage: assistantMessage.errorMessage,
+					}),
+				}),
+			);
+			expect(session.agent.state.messages).not.toContainEqual(
+				expect.objectContaining({
+					role: "assistant",
+					stopReason: "error",
+					errorMessage: assistantMessage.errorMessage,
+				}),
+			);
+		});
+
+		it("keeps a no-op incomplete shake retry committed before rollback can restore the length tail", async () => {
+			session.settings.set("compaction.strategy", "shake");
+			session.settings.set("contextPromotion.enabled", false);
+			vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+			vi.spyOn(session.agent, "continue").mockResolvedValue();
+			vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 1000, contextWindow: 200000, percent: 0.5 });
+			const shakeSpy = vi
+				.spyOn(session, "shake")
+				.mockResolvedValue({ mode: "elide", toolResultsDropped: 0, blocksDropped: 0, tokensFreed: 0 });
+
+			const assistantMessage: AssistantMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "partial response" }],
+				...apiInfo,
+				stopReason: "length",
+				usage: {
+					input: 20_000,
+					output: 5_000,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 25_000,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				timestamp: Date.now(),
+			};
+			const { promise: compactionDone, resolve: onCompactionDone } = Promise.withResolvers<void>();
+			session.subscribe(event => {
+				if (event.type === "auto_compaction_end" && event.action === "shake") onCompactionDone();
+			});
+			session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
+			session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
+
+			await compactionDone;
+			await session.waitForIdle();
+
+			expect(shakeSpy).toHaveBeenCalledTimes(1);
+			const shakeEnd = events.find(event => event.type === "auto_compaction_end" && event.action === "shake");
+			expect(shakeEnd).toMatchObject({ type: "auto_compaction_end", action: "shake", willRetry: true });
+			expect(sessionManager.getBranch()).not.toContainEqual(
+				expect.objectContaining({
+					type: "message",
+					message: expect.objectContaining({
+						role: "assistant",
+						stopReason: "length",
+						timestamp: assistantMessage.timestamp,
+					}),
+				}),
+			);
+			expect(session.agent.state.messages).not.toContainEqual(
+				expect.objectContaining({
+					role: "assistant",
+					stopReason: "length",
+					timestamp: assistantMessage.timestamp,
+				}),
+			);
 		});
 
 		it("has isCompacting true when the shake auto_compaction_start event fires", async () => {

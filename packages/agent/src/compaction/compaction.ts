@@ -240,6 +240,25 @@ export function effectiveReserveTokens(contextWindow: number, settings: Compacti
 }
 
 /**
+ * Reserve used when deciding whether a prompt still fits inside the model window.
+ *
+ * The default absolute reserve predates small bundled windows and can leave no
+ * practical budget there; recover those known-impossible defaults with the 15%
+ * proportional reserve. Explicit valid reserves still win, even when they are
+ * large, because they intentionally shrink the usable prompt budget.
+ */
+export function resolveBudgetReserveTokens(contextWindow: number, settings: CompactionSettings): number {
+	const reserveTokens = effectiveReserveTokens(contextWindow, settings);
+	const proportionalReserveTokens = Math.floor(contextWindow * 0.15);
+	const usesDefaultAbsoluteReserve = settings.reserveTokens === DEFAULT_COMPACTION_SETTINGS.reserveTokens;
+	const defaultReserveIsEffectivelyImpossible =
+		usesDefaultAbsoluteReserve && reserveTokens >= contextWindow - proportionalReserveTokens;
+	const reserveExceedsWindow = reserveTokens >= contextWindow;
+
+	return defaultReserveIsEffectivelyImpossible || reserveExceedsWindow ? proportionalReserveTokens : reserveTokens;
+}
+
+/**
  * Check if compaction should trigger based on context usage.
  */
 export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
@@ -275,10 +294,14 @@ export function resolveThresholdTokens(contextWindow: number, settings: Compacti
 		return Math.min(contextWindow - 1, Math.max(1, thresholdTokens));
 	}
 
-	// Percentage-based threshold
+	// Percentage-based threshold. The default absolute reserve can exceed bundled
+	// small-context windows, or nearly consume a 16k-class window; in those
+	// known-impossible default configurations, fall back to the proportional
+	// reserve so threshold/recovery-band checks stay usable. Explicit valid
+	// configured reserves still define the usable prompt budget.
 	const thresholdPercent = settings.thresholdPercent;
 	if (typeof thresholdPercent !== "number" || !Number.isFinite(thresholdPercent) || thresholdPercent <= 0) {
-		return contextWindow - effectiveReserveTokens(contextWindow, settings);
+		return Math.max(0, contextWindow - resolveBudgetReserveTokens(contextWindow, settings));
 	}
 	const clampedThresholdPercent = Math.min(99, Math.max(1, thresholdPercent));
 	return Math.floor(contextWindow * (clampedThresholdPercent / 100));
