@@ -1294,6 +1294,38 @@ type MessageEndPersistenceSlot = {
 	release: () => void;
 };
 
+type PostPromptSkipReason = "aborted" | "stale-generation";
+
+type AgentContinueSkipReason =
+	| PostPromptSkipReason
+	| "session-unavailable"
+	| "should-continue-false"
+	| "post-restore-unavailable";
+
+type ScheduledAgentContinueOptions = {
+	delayMs?: number;
+	generation?: number;
+	shouldContinue?: () => boolean;
+	onSkip?: (reason: AgentContinueSkipReason) => void;
+	onError?: () => void;
+};
+
+type AssistantContextRemovalResult = {
+	reason: string;
+	removed: boolean;
+	beforeLength: number;
+	afterLength: number;
+	lastRole: AgentMessage["role"] | undefined;
+	candidateTimestamp: number;
+	lastTimestamp: number | undefined;
+	candidateProvider: string;
+	lastProvider: string | undefined;
+	candidateModel: string;
+	lastModel: string | undefined;
+	candidateStopReason: AssistantMessage["stopReason"];
+	lastStopReason: AssistantMessage["stopReason"] | undefined;
+};
+
 const REPLAN_TITLE_CONTEXT_TURN_LIMIT = 6;
 
 type SessionTitleSource = "auto" | "user";
@@ -3688,7 +3720,7 @@ export class AgentSession {
 
 	#schedulePostPromptTask(
 		task: (signal: AbortSignal) => Promise<void>,
-		options?: { delayMs?: number; generation?: number; onSkip?: () => void },
+		options?: { delayMs?: number; generation?: number; onSkip?: (reason: PostPromptSkipReason) => void },
 	): void {
 		const delayMs = options?.delayMs ?? 0;
 		const signal = this.#postPromptTasksAbortController.signal;
@@ -3701,11 +3733,11 @@ export class AgentSession {
 				}
 			}
 			if (signal.aborted) {
-				options?.onSkip?.();
+				options?.onSkip?.("aborted");
 				return;
 			}
 			if (options?.generation !== undefined && this.#promptGeneration !== options.generation) {
-				options.onSkip?.();
+				options.onSkip?.("stale-generation");
 				return;
 			}
 			await task(signal);
@@ -3713,13 +3745,35 @@ export class AgentSession {
 		this.#trackPostPromptTask(scheduled);
 	}
 
-	#scheduleAgentContinue(options?: {
-		delayMs?: number;
-		generation?: number;
-		shouldContinue?: () => boolean;
-		onSkip?: () => void;
-		onError?: () => void;
-	}): void {
+	#agentContinueState(options: ScheduledAgentContinueOptions | undefined, signal: AbortSignal | undefined) {
+		const messages = this.agent.state.messages;
+		return {
+			signalAborted: signal?.aborted === true,
+			disposed: this.#isDisposed,
+			compacting: this.isCompacting,
+			handoff: this.isGeneratingHandoff,
+			generation: this.#promptGeneration,
+			expectedGeneration: options?.generation,
+			messageCount: messages.length,
+			lastRole: messages.at(-1)?.role,
+			steeringQueueLength: this.agent.peekSteeringQueue().length,
+			followUpQueueLength: this.agent.peekFollowUpQueue().length,
+		};
+	}
+
+	#skipAgentContinue(
+		reason: AgentContinueSkipReason,
+		options: ScheduledAgentContinueOptions | undefined,
+		signal: AbortSignal | undefined,
+	): void {
+		logger.debug("agent.continue skipped after scheduling", {
+			reason,
+			...this.#agentContinueState(options, signal),
+		});
+		options?.onSkip?.(reason);
+	}
+
+	#scheduleAgentContinue(options?: ScheduledAgentContinueOptions): void {
 		this.#schedulePostPromptTask(
 			async signal => {
 				// Defense in depth: if compaction/handoff slipped onto the post-prompt queue
@@ -3728,25 +3782,28 @@ export class AgentSession {
 				// reset. The first-class fix is in #checkCompaction/the agent_end handler,
 				// but this guard catches anything that bypasses that path.
 				if (signal.aborted || this.#isDisposed || this.isCompacting || this.isGeneratingHandoff) {
-					options?.onSkip?.();
+					this.#skipAgentContinue("session-unavailable", options, signal);
 					return;
 				}
 				if (options?.shouldContinue && !options.shouldContinue()) {
-					options?.onSkip?.();
+					this.#skipAgentContinue("should-continue-false", options, signal);
 					return;
 				}
 				this.#beginInFlight();
 				try {
 					await this.#maybeRestoreRetryFallbackPrimary();
 					if (signal.aborted || this.#isDisposed) {
-						options?.onSkip?.();
+						this.#skipAgentContinue("post-restore-unavailable", options, signal);
 						return;
 					}
+					logger.debug("agent.continue starting after scheduling", this.#agentContinueState(options, signal));
 					await this.agent.continue();
 				} catch (error) {
 					logger.warn("agent.continue failed after scheduling", {
 						error: error instanceof Error ? error.message : String(error),
+						stack: error instanceof Error ? error.stack : undefined,
 					});
+					logger.debug("agent.continue failed state after scheduling", this.#agentContinueState(options, signal));
 					options?.onError?.();
 				} finally {
 					this.#endInFlight();
@@ -3755,7 +3812,7 @@ export class AgentSession {
 			{
 				delayMs: options?.delayMs,
 				generation: options?.generation,
-				onSkip: options?.onSkip,
+				onSkip: reason => this.#skipAgentContinue(reason, options, undefined),
 			},
 		);
 	}
@@ -10040,15 +10097,35 @@ export class AgentSession {
 		});
 	}
 
-	#removeAssistantMessageFromActiveContext(assistantMessage: AssistantMessage): void {
+	#removeAssistantMessageFromActiveContext(
+		assistantMessage: AssistantMessage,
+		reason = "assistant-context-cleanup",
+	): AssistantContextRemovalResult {
 		const messages = this.agent.state.messages;
+		const beforeLength = messages.length;
 		const lastMessage = messages[messages.length - 1];
-		if (
-			lastMessage?.role === "assistant" &&
-			this.#isSameAssistantMessage(lastMessage as AssistantMessage, assistantMessage)
-		) {
+		const lastAssistant: AssistantMessage | undefined = lastMessage?.role === "assistant" ? lastMessage : undefined;
+		const removed = lastAssistant !== undefined && this.#isSameAssistantMessage(lastAssistant, assistantMessage);
+		if (removed) {
 			this.agent.replaceMessages(messages.slice(0, -1));
 		}
+		const result: AssistantContextRemovalResult = {
+			reason,
+			removed,
+			beforeLength,
+			afterLength: this.agent.state.messages.length,
+			lastRole: lastMessage?.role,
+			candidateTimestamp: assistantMessage.timestamp,
+			lastTimestamp: lastAssistant?.timestamp,
+			candidateProvider: assistantMessage.provider,
+			lastProvider: lastAssistant?.provider,
+			candidateModel: assistantMessage.model,
+			lastModel: lastAssistant?.model,
+			candidateStopReason: assistantMessage.stopReason,
+			lastStopReason: lastAssistant?.stopReason,
+		};
+		logger.debug("agent active context assistant removal", result);
+		return result;
 	}
 
 	/**
@@ -12832,7 +12909,7 @@ export class AgentSession {
 		});
 
 		// Remove the failed assistant message from active context before retrying.
-		this.#removeAssistantMessageFromActiveContext(message);
+		this.#removeAssistantMessageFromActiveContext(message, "auto-retry");
 
 		// A thinking/response loop retried into identical context loops again. Inject a
 		// hidden redirect so the retried turn sees a directive to break the repeated

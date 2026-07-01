@@ -21,6 +21,9 @@
 ### Fixed
 
 - Fixed long streaming previews for `write` (`content`), `edit` (`input`), and `eval` (`code`) updating in throttle-sized chunks by decoding the streamed string arguments incrementally between full JSON re-parses. ([#4043](https://github.com/can1357/oh-my-pi/issues/4043))
+### Fixed
+
+- Added retry-path diagnostics for assistant-tail removal and scheduled continuations after transient provider errors ([#4070](https://github.com/can1357/oh-my-pi/issues/4070)).
 
 ## [16.2.12] - 2026-07-01
 
