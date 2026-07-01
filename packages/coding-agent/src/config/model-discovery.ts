@@ -19,7 +19,7 @@ import {
 	OPENAI_COMPAT_DISCOVERY_DEFAULT_CONTEXT_WINDOW,
 	OPENAI_COMPAT_DISCOVERY_DEFAULT_MAX_TOKENS,
 } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
-import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
+import type { ModelSpec, OpenAICompat } from "@oh-my-pi/pi-catalog/types";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { ProviderDiscovery } from "./models-config-schema";
 
@@ -598,9 +598,10 @@ export async function discoverOpenAIModelsList(
 		// (same pattern as `discoverProxyModels` and `discoverLiteLLMModels`) so
 		// intrinsic metadata — context/output limits, display name, modality,
 		// reasoning support — flows through when the provider is silent. Local
-		// runtime state (lm-studio native metadata) and any provider-reported
-		// value still win, keeping proxy-specific headers/baseUrl/cost local.
+		// runtime state and provider-reported values still win; proxy-specific
+		// headers/baseUrl/cost stay local.
 		const reference = resolveModelReference(id, references) as ModelSpec<Api> | undefined;
+		const referenceCompat = reference?.compat as OpenAICompat | undefined;
 		const contextWindow =
 			toPositiveNumberOrUndefined(item.max_model_len) ??
 			toPositiveNumberOrUndefined(item.context_length) ??
@@ -631,7 +632,11 @@ export async function discoverOpenAIModelsList(
 				compat: {
 					supportsStore: false,
 					supportsDeveloperRole: false,
-					supportsReasoningEffort: false,
+					supportsReasoningEffort: referenceCompat?.supportsReasoningEffort ?? false,
+					...(referenceCompat?.reasoningEffortMap ? { reasoningEffortMap: referenceCompat.reasoningEffortMap } : {}),
+					...(referenceCompat?.omitReasoningEffort !== undefined
+						? { omitReasoningEffort: referenceCompat.omitReasoningEffort }
+						: {}),
 				},
 			} as ModelSpec<Api>),
 		);

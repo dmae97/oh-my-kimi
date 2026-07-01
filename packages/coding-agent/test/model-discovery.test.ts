@@ -1142,6 +1142,9 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(proxied?.reasoning).toBe(true);
 		expect(proxied?.thinking?.mode).toBe("effort");
 		expect(proxied?.input).toEqual(["text", "image"]);
+		const proxiedCompat = proxied?.compat as OpenAICompat | undefined;
+		expect(proxiedCompat?.supportsReasoningEffort).toBe(true);
+		expect(proxiedCompat?.omitReasoningEffort).toBe(false);
 		// Proxy pricing is untrusted even when the identity resolves.
 		expect(proxied?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
 		// Unknown model ids stay on the default fallback path.
