@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the `<workstation>` block rendering `Kernel: unknown` on macOS 15+, which caused the model to display the wrong OS glyph, by falling back to `<type> <release>` (e.g. `Darwin 25.5.0`) when `os.version()` returns `"unknown"` or an empty string ([#4141](https://github.com/can1357/oh-my-pi/issues/4141)).
+
 ## [16.2.12] - 2026-07-01
 
 ### Breaking Changes
