@@ -19,10 +19,7 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import type { CmuxKind } from "@oh-my-pi/pi-coding-agent/tools/browser/cmux/rpc";
 import { CmuxSocketClient } from "@oh-my-pi/pi-coding-agent/tools/browser/cmux/socket-client";
-import {
-	acquireBrowser,
-	getBrowsersMapForTest,
-} from "@oh-my-pi/pi-coding-agent/tools/browser/registry";
+import { acquireBrowser, getBrowsersMapForTest } from "@oh-my-pi/pi-coding-agent/tools/browser/registry";
 import {
 	acquireTab,
 	getTabsMapForTest,
@@ -83,9 +80,9 @@ describe("browser lifecycle — aborted open must not leak a browser handle", ()
 			const kind = makeKind("preaborted");
 			const controller = new AbortController();
 			controller.abort();
-			await expect(
-				acquireBrowser(kind, { cwd: "/tmp", signal: controller.signal }),
-			).rejects.toBeInstanceOf(ToolAbortError);
+			await expect(acquireBrowser(kind, { cwd: "/tmp", signal: controller.signal })).rejects.toBeInstanceOf(
+				ToolAbortError,
+			);
 			// Not called: pre-abort short-circuit fires before openBrowserHandle.
 			expect(connectSpy).not.toHaveBeenCalled();
 			expect(closeSpy).not.toHaveBeenCalled();
