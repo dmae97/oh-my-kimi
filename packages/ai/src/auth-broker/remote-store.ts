@@ -58,7 +58,13 @@ interface CacheEntry {
 }
 
 interface UsageCacheEntry {
-	reports: UsageReport[];
+	/**
+	 * `null` means the last aggregate `/v1/usage` fetch failed. Callers treat
+	 * this the same as a successful empty-report response ("no usage signal
+	 * for this cycle"), and the same 15s TTL applies so transient broker
+	 * outages don't turn every ranking pass into a broker retry storm.
+	 */
+	reports: UsageReport[] | null;
 	fetchedAt: number;
 }
 
@@ -573,6 +579,10 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			})
 			.catch(error => {
 				logger.warn("auth-broker usage fetch failed", { error: String(error) });
+				// Documented 15s TTL fallback: cache the null so sequential callers
+				// don't re-hit the broker while it's still down. See
+				// docs/auth-broker-gateway.md § "Client-side single-flight".
+				this.#usageCache = { reports: null, fetchedAt: Date.now() };
 				return null;
 			})
 			.finally(() => {
