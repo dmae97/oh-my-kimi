@@ -611,6 +611,25 @@ describe("resolveModelRoleValue", () => {
 		expect(result.thinkingLevel).toBe(Effort.High);
 		expect(result.explicitThinkingLevel).toBe(true);
 	});
+
+	test("preserves an explicit :auto suffix as an explicit thinking selector", () => {
+		const result = resolveModelRoleValue("anthropic/claude-sonnet-4-5:auto", allModels);
+
+		expect(result.model?.provider).toBe("anthropic");
+		expect(result.model?.id).toBe("claude-sonnet-4-5");
+		expect(result.thinkingLevel).toBe("auto");
+		expect(result.explicitThinkingLevel).toBe(true);
+		expect(result.warning).toBeUndefined();
+	});
+
+	test("does not clamp :auto against the model's supported efforts", () => {
+		// claude-sonnet-4-5 caps at "high"; ensure auto isn't collapsed onto it
+		// by resolveThinkingLevelForModel.
+		const result = resolveModelRoleValue("anthropic/claude-sonnet-4-5:auto", allModels);
+
+		expect(result.thinkingLevel).toBe("auto");
+		expect(result.explicitThinkingLevel).toBe(true);
+	});
 });
 describe("resolveAgentModelPatterns", () => {
 	test("falls back to the active session model when pi/task is unset", () => {

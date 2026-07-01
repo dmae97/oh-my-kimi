@@ -727,7 +727,7 @@ export interface RoleModelCycleResult {
 export interface ResolvedRoleModel {
 	role: string;
 	model: Model;
-	thinkingLevel?: ThinkingLevel;
+	thinkingLevel?: ConfiguredThinkingLevel;
 	explicitThinkingLevel: boolean;
 }
 
@@ -877,7 +877,7 @@ function parseRetryFallbackSelector(
 		raw: trimmed,
 		provider: parsed.provider,
 		id: parsed.id,
-		thinkingLevel: parsed.thinkingLevel,
+		thinkingLevel: parsed.thinkingLevel === AUTO_THINKING ? undefined : parsed.thinkingLevel,
 	};
 }
 
@@ -2102,7 +2102,7 @@ export class AgentSession {
 			if (config.model) {
 				const resolved = resolveModelOverride([config.model], this.#modelRegistry, this.settings);
 				model = resolved.model;
-				thinkingLevel = resolved.thinkingLevel;
+				thinkingLevel = resolved.thinkingLevel === AUTO_THINKING ? undefined : resolved.thinkingLevel;
 				if (!model) {
 					this.emitNotice("warning", `Advisor "${config.name}": no model matched "${config.model}"`, "advisor");
 					continue;
@@ -2116,7 +2116,7 @@ export class AgentSession {
 					continue;
 				}
 				model = sel.model;
-				thinkingLevel = sel.thinkingLevel;
+				thinkingLevel = sel.thinkingLevel === AUTO_THINKING ? undefined : sel.thinkingLevel;
 			}
 			const advisorModel = model;
 			const advisorName = config.name;

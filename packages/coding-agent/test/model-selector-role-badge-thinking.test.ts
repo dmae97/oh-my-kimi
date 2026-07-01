@@ -174,6 +174,47 @@ describe("ModelSelector role badge thinking display", () => {
 		expect(rendered).toContain("DEFAULT (auto)");
 	});
 
+	test("renders DEFAULT (auto) when modelRoles.default carries an explicit :auto suffix", async () => {
+		installTestTheme();
+		const model = getBundledModel("openai", "gpt-5.5");
+		if (!model) throw new Error("Expected bundled model openai/gpt-5.5");
+
+		const settings = Settings.isolated({
+			modelRoles: {
+				default: `${model.provider}/${model.id}:auto`,
+			},
+		});
+
+		const selector = createSelector(model, settings);
+		await Bun.sleep(0);
+		installTestTheme();
+
+		const rendered = normalizeRenderedText(selector.render(220).join("\n"));
+		expect(rendered).toContain("DEFAULT (auto)");
+		expect(rendered).not.toContain("DEFAULT (inherit)");
+	});
+
+	test("renders SMOL (auto) when modelRoles.smol carries an explicit :auto suffix", async () => {
+		installTestTheme();
+		const model = getBundledModel("openai", "gpt-5.5");
+		if (!model) throw new Error("Expected bundled model openai/gpt-5.5");
+
+		const settings = Settings.isolated({
+			modelRoles: {
+				default: `${model.provider}/${model.id}`,
+				smol: `${model.provider}/${model.id}:auto`,
+			},
+		});
+
+		const selector = createSelector(model, settings);
+		await Bun.sleep(0);
+		installTestTheme();
+
+		const rendered = normalizeRenderedText(selector.render(220).join("\n"));
+		expect(rendered).toContain("SMOL (auto)");
+		expect(rendered).not.toContain("SMOL (inherit)");
+	});
+
 	test("shows compact auto badges for unconfigured role defaults", async () => {
 		installTestTheme();
 		const settings = Settings.isolated({});

@@ -1258,7 +1258,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			? getRestorableSessionModels(existingSession.models, sessionManager.getLastModelChangeRole())
 			: [];
 	let restoredSessionModelIndex = -1;
-	let restoredSessionThinkingLevel: ThinkingLevel | undefined;
+	let restoredSessionThinkingLevel: ConfiguredThinkingLevel | undefined;
 	if (!hasExplicitModel && !model && sessionModelStrings.length > 0) {
 		logger.time("restoreSessionModel", () => {
 			let failedSessionModel: string | undefined;
