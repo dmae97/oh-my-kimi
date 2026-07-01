@@ -682,6 +682,30 @@ describe("AskTool custom input", () => {
 		expect(title).toContain("Enter your response:");
 	});
 
+	it("keeps sparse checked gap markers within the Other title budget", async () => {
+		const tool = new AskTool(createSession());
+		const editor = vi.fn(async (_title: string) => "custom");
+		const checkedLabels = [10, 20, 30, 40, 50, 60].map(i => `opt-${i}`);
+		const options = Array.from({ length: 61 }, (_, i) => ({ label: `opt-${i}` }));
+		const questions = [{ id: "pick", question: "Pick sparse", options, multi: true }];
+		let call = 0;
+		const context = createContext({
+			select: async (_prompt, opts) => {
+				const next = checkedLabels[call++];
+				return next ? selectItemLabel(opts.find(o => selectItemLabel(o) === next)) : "Other (type your own)";
+			},
+			editor,
+		});
+
+		await tool.execute("call-editor-cap-sparse-checked", { questions }, undefined, undefined, context);
+
+		const title = editor.mock.calls[0]?.[0] ?? "";
+		expect(title.split("\n").length).toBeLessThanOrEqual(16);
+		expect(title).toContain("Other (type your own)");
+		expect(title).toContain("more option");
+		expect(title).toContain("Enter your response:");
+	});
+
 	it("enforces total title row budget under narrow terminals", async () => {
 		const originalColumns = process.stdout.columns;
 		// Force an 80-wide terminal so long descriptions would wrap to multiple

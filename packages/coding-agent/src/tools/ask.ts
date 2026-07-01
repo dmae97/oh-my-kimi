@@ -259,9 +259,9 @@ function pickCustomInputOptionWindow(
 
 interface CustomInputRow {
 	text: string;
-	/** Lower priority drops first when over budget; negative values are pinned
-	 *  and never dropped (question, blank, option labels, gap markers, prompt). */
-	priority: number;
+	/** Lower priority drops first when over budget; negative values are pinned.
+	 *  Gap markers are budgeted rows too so sparse checked selections cannot
+	 *  push the editor input off-screen. */
 }
 
 function buildCustomInputRows(
@@ -284,7 +284,7 @@ function buildCustomInputRows(
 				`    … ${gap.total} more option${gap.total === 1 ? "" : "s"}${checkedSuffix} …`,
 				contentWidth,
 			),
-			priority: -1,
+			priority: 2,
 		});
 	};
 
