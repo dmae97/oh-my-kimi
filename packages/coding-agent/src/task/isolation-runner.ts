@@ -291,26 +291,31 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
 				hadAnyChanges = false;
 			} else {
 				const normalized = patchText.endsWith("\n") ? patchText : `${patchText}\n`;
-				// Idempotence: if the reverse patch applies cleanly the target state is
-				// already present. Reverse-check reads without touching the worktree, so
-				// a conflicting patch cannot be misdetected as a no-op — unlike
-				// `--3way --check`, which exits 0 even when the real apply would write
-				// conflict markers and unmerged index entries.
-				const alreadyApplied = await git.patch.canApplyText(repoRoot, normalized, { reverse: true });
-				if (alreadyApplied) {
+				// Idempotence: declare a no-op only when the reverse patch applies AND
+				// the forward patch does not. `--reverse --check` alone can theoretically
+				// succeed if the file happens to carry the postimage at another location
+				// via git-apply's fuzz factor; requiring the forward check to fail
+				// removes that ambiguity while still catching true already-applied
+				// runs. Reads only — neither call touches the worktree, unlike
+				// `--3way --check`, which exits 0 even when the real apply would
+				// leave conflict markers and unmerged index entries.
+				const [alreadyApplied, forwardApplies] = await Promise.all([
+					git.patch.canApplyText(repoRoot, normalized, { reverse: true }),
+					git.patch.canApplyText(repoRoot, normalized),
+				]);
+				hadAnyChanges = false;
+				if (alreadyApplied && !forwardApplies) {
 					changesApplied = true;
-					hadAnyChanges = false;
-				} else {
-					changesApplied = await git.patch.canApplyText(repoRoot, normalized);
-					hadAnyChanges = false;
-					if (changesApplied) {
-						try {
-							await git.patch.applyText(repoRoot, normalized);
-							hadAnyChanges = true;
-						} catch {
-							changesApplied = false;
-						}
+				} else if (forwardApplies) {
+					changesApplied = true;
+					try {
+						await git.patch.applyText(repoRoot, normalized);
+						hadAnyChanges = true;
+					} catch {
+						changesApplied = false;
 					}
+				} else {
+					changesApplied = false;
 				}
 			}
 		}

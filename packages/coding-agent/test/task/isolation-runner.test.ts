@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { applyEligibleNestedPatches, mergeIsolatedChanges } from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
 import type { SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
+import * as gitModule from "@oh-my-pi/pi-coding-agent/utils/git";
 import * as worktreeModule from "@oh-my-pi/pi-coding-agent/task/worktree";
 import { $ } from "bun";
 
@@ -147,6 +148,26 @@ describe("mergeIsolatedChanges", () => {
 		expect(outcome.changesApplied).toBe(true);
 		expect(outcome.hadAnyChanges).toBe(true);
 		expect(await Bun.file(path.join(repoRoot, "foo.txt")).text()).toBe("new\n");
+	});
+
+	it("prefers forward apply when both reverse-check and forward-check succeed", async () => {
+		// If git-apply's fuzz ever lets `--reverse --check` succeed while forward
+		// `--check` also succeeds (e.g. repeated context with the postimage present
+		// elsewhere), the outcome must NOT be a silent no-op.
+		const { repoRoot, patchPath } = await seedFooRepo("old\n");
+		const canApplySpy = vi.spyOn(gitModule.patch, "canApplyText").mockResolvedValue(true);
+		const applySpy = vi.spyOn(gitModule.patch, "applyText").mockResolvedValue(undefined);
+
+		const outcome = await mergeIsolatedChanges({
+			repoRoot,
+			mergeMode: "patch",
+			result: result({ patchPath }),
+		});
+
+		expect(canApplySpy).toHaveBeenCalledTimes(2);
+		expect(applySpy).toHaveBeenCalledTimes(1);
+		expect(outcome.changesApplied).toBe(true);
+		expect(outcome.hadAnyChanges).toBe(true);
 	});
 
 	it("does not mark failed branch-mode runs as nested-patch eligible", async () => {
