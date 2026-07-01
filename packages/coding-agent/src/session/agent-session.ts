@@ -237,6 +237,7 @@ import { createPlanReadMatcher } from "../plan-mode/plan-protection";
 import type { PlanModeState } from "../plan-mode/state";
 import advisorSystemPrompt from "../prompts/advisor/system.md" with { type: "text" };
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
+import parentIrcSteerTemplate from "../prompts/steering/parent-irc.md" with { type: "text" };
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import eagerTaskPrompt from "../prompts/system/eager-task.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
@@ -13214,9 +13215,7 @@ export class AgentSession {
 			if (recipientParentId === msg.from) {
 				this.agent.steer({
 					role: "user",
-					content:
-						`Your current interruptible wait was interrupted because an IRC message arrived from your parent agent \`${msg.from}\`.\n\n` +
-						`Parent IRC message:\n\n${msg.body}`,
+					content: prompt.render(parentIrcSteerTemplate, { from: msg.from, message: msg.body }),
 					attribution: "agent",
 					timestamp: msg.ts,
 					steering: true,
