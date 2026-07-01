@@ -1104,6 +1104,52 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(fallback?.contextWindow).toBe(128000);
 	});
 
+	test("openai-models-list discovery enriches thin /v1/models payloads from the bundled reference catalog", async () => {
+		writeRawModelsJson({
+			"openai-test": {
+				baseUrl: "http://127.0.0.1:9997",
+				api: "openai-completions",
+				auth: "none",
+				discovery: { type: "openai-models-list" },
+			},
+		});
+		const fetchMock: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:9997/v1/models") {
+				// Thin gateway payload: `{id, object, owned_by}` with no
+				// `context_length` / `max_model_len`. Without reference lookup
+				// every discovered model falls back to the 128K/33K default,
+				// even when the id matches a bundled model with a much larger
+				// intrinsic context window.
+				return new Response(
+					JSON.stringify({
+						data: [
+							{ id: "gpt-5", object: "model", owned_by: "gateway" },
+							{ id: "unknown-proxy-model", object: "model", owned_by: "gateway" },
+						],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refresh();
+		const proxied = registry.find("openai-test", "gpt-5");
+		expect(proxied?.name).toBe("GPT-5");
+		expect(proxied?.contextWindow).toBe(400_000);
+		expect(proxied?.maxTokens).toBe(128_000);
+		expect(proxied?.reasoning).toBe(true);
+		expect(proxied?.thinking?.mode).toBe("effort");
+		expect(proxied?.input).toEqual(["text", "image"]);
+		// Proxy pricing is untrusted even when the identity resolves.
+		expect(proxied?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+		// Unknown model ids stay on the default fallback path.
+		const unknown = registry.find("openai-test", "unknown-proxy-model");
+		expect(unknown?.contextWindow).toBe(128000);
+		expect(unknown?.reasoning).toBe(false);
+	});
+
 	test("proxy discovery honors API-reported context_length and endpoint routing", async () => {
 		writeRawModelsJson({
 			"proxy-test": {
