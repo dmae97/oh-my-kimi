@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed subagents with structured output schemas repeatedly failing `yield` validation because the system prompt rendered the schema as a bare TypeScript interface, so the model matched the whole yield payload against it instead of nesting the data under `result.data`. The prompt now shows the schema wrapped inside `result: { data: … }` via a new `renderYieldSchema` Handlebars helper. ([#3972](https://github.com/can1357/oh-my-pi/issues/3972))
+
 ## [16.2.11] - 2026-07-01
 
 ### Fixed
