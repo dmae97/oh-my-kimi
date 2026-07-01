@@ -484,39 +484,146 @@ function baselineHasRootWip(baseline: RepoBaseline): boolean {
 	return !!(baseline.staged.trim() || baseline.unstaged.trim() || baseline.untrackedPatch.trim());
 }
 
+/**
+ * Baseline WIP context needed to safely apply a delta patch whose hunks were
+ * captured against `HEAD + WIP` (see {@link captureRepoDeltaPatch}). Passed
+ * whenever {@link baselineHasRootWip} is true so
+ * {@link commitPatchToBranchWorktree} can replay the WIP into the temp
+ * worktree first, then rewind WIP-only files after applying the delta.
+ */
+interface BaselineWipContext {
+	readonly staged: string;
+	readonly unstaged: string;
+	readonly untrackedPatch: string;
+	/** Untracked file paths present in the baseline (never in HEAD). */
+	readonly untracked: readonly string[];
+}
+
+function collectWipPatches(wip: BaselineWipContext | undefined): string[] {
+	if (!wip) return [];
+	return [wip.staged, wip.unstaged, wip.untrackedPatch].filter(p => p.trim());
+}
+
 async function commitPatchToBranchWorktree(
 	tmpDir: string,
 	taskId: string,
 	patchText: string,
 	message: string,
 	author?: git.CommitAuthor,
+	baselineWip?: BaselineWipContext,
 ): Promise<void> {
+	// Try the two clean paths first — they yield an agent-only commit and are
+	// the happy case when the temp worktree can resolve the patch against
+	// HEAD directly:
+	//
+	//   1. Plain apply — works when WIP context happens to match HEAD (e.g.
+	//      WIP-touched files that the delta patch doesn't reference).
+	//   2. `--3way`   — works when the WIP-side blob is tracked in HEAD and
+	//      lives in the shared ODB (captureDeltaPatch seeded it while writing
+	//      the synthetic baseline tree). The 3-way merge subtracts WIP,
+	//      producing an agent-only commit even when WIP and agent modify the
+	//      same tracked file at unrelated lines.
+	//
+	// If both fail (untracked WIP files, staged-new WIP files, or overlap that
+	// --3way can't resolve — see #4136), replay the WIP into the worktree
+	// first so the delta's context lines match, then rewind WIP-only files so
+	// they don't leak into the commit. Files touched by BOTH WIP and delta
+	// keep their combined state; the parent's stash-pop reconciles the WIP
+	// side via 3-way merge on merge-back.
+	let plainErr: git.GitCommandError | undefined;
 	try {
 		await git.patch.applyText(tmpDir, patchText);
 	} catch (err) {
 		if (!(err instanceof git.GitCommandError)) throw err;
-		// Plain apply rejects when the parent checkout carries unrelated dirty
-		// context near the task's edits; retry with --3way before giving up.
+		plainErr = err;
+	}
+	if (plainErr) {
+		let threeWayErr: git.GitCommandError | undefined;
 		try {
 			await git.patch.applyText(tmpDir, patchText, { threeWay: true });
-		} catch (threeWayErr) {
-			if (threeWayErr instanceof git.GitCommandError) {
+		} catch (err) {
+			if (!(err instanceof git.GitCommandError)) throw err;
+			threeWayErr = err;
+		}
+		if (threeWayErr) {
+			const wipPatches = collectWipPatches(baselineWip);
+			if (wipPatches.length === 0 || !baselineWip) {
 				const stderr = threeWayErr.result.stderr.slice(0, 2000);
 				logger.error("commitToBranch: git apply --3way failed", {
 					taskId,
 					exitCode: threeWayErr.result.exitCode,
 					stderr,
-					initialStderr: err.result.stderr.slice(0, 2000),
+					initialStderr: plainErr.result.stderr.slice(0, 2000),
 					patchSize: patchText.length,
 					patchHead: patchText.slice(0, 500),
 				});
 				throw new Error(`git apply --3way failed for task ${taskId}: ${stderr}`);
 			}
-			throw threeWayErr;
+			try {
+				// `git apply --3way` leaves conflict markers in `U` files when
+				// it can't resolve; reset the worktree so the WIP-seeded retry
+				// starts from a clean HEAD tree.
+				await git.reset(tmpDir, { hard: true, target: "HEAD" });
+				await applyDeltaOverBaselineWip(tmpDir, taskId, patchText, wipPatches, baselineWip);
+			} catch (wipErr) {
+				if (!(wipErr instanceof git.GitCommandError)) throw wipErr;
+				const stderr = wipErr.result.stderr.slice(0, 2000);
+				logger.error("commitToBranch: git apply with baseline WIP failed", {
+					taskId,
+					exitCode: wipErr.result.exitCode,
+					stderr,
+					threeWayStderr: threeWayErr.result.stderr.slice(0, 2000),
+					initialStderr: plainErr.result.stderr.slice(0, 2000),
+					patchSize: patchText.length,
+					patchHead: patchText.slice(0, 500),
+				});
+				throw new Error(`git apply with baseline WIP failed for task ${taskId}: ${stderr}`);
+			}
 		}
 	}
+
 	await git.stage.files(tmpDir);
 	await git.commit(tmpDir, message, author ? { author } : {});
+}
+
+/**
+ * Replay baseline WIP into the temp worktree so the delta patch's HEAD+WIP
+ * context matches, apply the delta, then rewind files WIP touched but the
+ * delta didn't — HEAD-tracked files are restored via `git restore`, untracked
+ * or staged-new WIP files are removed from the worktree. The commit that
+ * follows reflects agent's delta plus any overlap with WIP; parent's
+ * stash-pop reconciles the WIP side on merge-back.
+ */
+async function applyDeltaOverBaselineWip(
+	tmpDir: string,
+	_taskId: string,
+	patchText: string,
+	wipPatches: readonly string[],
+	baselineWip: BaselineWipContext,
+): Promise<void> {
+	for (const wip of wipPatches) {
+		await git.patch.applyText(tmpDir, wip);
+	}
+	await git.patch.applyText(tmpDir, patchText);
+
+	const wipFiles = new Set(wipPatches.flatMap(patchTouchedFiles));
+	const deltaFiles = new Set(patchTouchedFiles(patchText));
+	const wipOnly = [...wipFiles].filter(f => !deltaFiles.has(f));
+	if (wipOnly.length === 0) return;
+
+	// Any wipOnly file baselined as untracked cannot be in HEAD.
+	// Everything else may or may not — verify against HEAD's tree.
+	const untrackedSet = new Set(baselineWip.untracked);
+	const candidates = wipOnly.filter(f => !untrackedSet.has(f));
+	const inHead = candidates.length > 0 ? new Set(await git.ls.tree(tmpDir, "HEAD", candidates)) : new Set<string>();
+	const toRestore = candidates.filter(f => inHead.has(f));
+	const toRemove = wipOnly.filter(f => !toRestore.includes(f));
+	if (toRestore.length > 0) {
+		await git.restore(tmpDir, { source: "HEAD", staged: true, worktree: true, files: toRestore });
+	}
+	for (const rel of toRemove) {
+		await fs.rm(path.join(tmpDir, rel), { force: true });
+	}
 }
 
 interface FilteredAgentReplayOptions {
@@ -576,7 +683,14 @@ async function replayFilteredAgentCommits(opts: FilteredAgentReplayOptions): Pro
 		});
 		if (leftoverPatch.trim()) {
 			const msg = (opts.commitMessage && (await opts.commitMessage(leftoverPatch))) || opts.fallbackMessage;
-			await commitPatchToBranchWorktree(tmpDir, opts.taskId, leftoverPatch, msg);
+			// Only seed baseline WIP for the leftover patch when the loop body never
+			// ran — the tmpDir worktree is still pinned at baselineSha and the
+			// leftover collapses to the raw rootPatch (whose context is WIP-based).
+			// After any filtered agent commit landed, tmpDir has advanced past
+			// baselineSha and leftoverPatch is HEAD-derived; applying WIP would
+			// corrupt it.
+			const wip = agentCommits.length === 0 ? opts.baseline.root : undefined;
+			await commitPatchToBranchWorktree(tmpDir, opts.taskId, leftoverPatch, msg, undefined, wip);
 		}
 	} finally {
 		await git.worktree.tryRemove(opts.repoRoot, tmpDir);
@@ -677,7 +791,8 @@ export async function commitToBranch(
 			await git.worktree.add(repoRoot, tmpDir, branchName);
 
 			const msg = (commitMessage && (await commitMessage(rootPatch))) || fallbackMessage;
-			await commitPatchToBranchWorktree(tmpDir, taskId, rootPatch, msg);
+			const wip = baselineHasRootWip(baseline.root) ? baseline.root : undefined;
+			await commitPatchToBranchWorktree(tmpDir, taskId, rootPatch, msg, undefined, wip);
 		} finally {
 			await git.worktree.tryRemove(repoRoot, tmpDir);
 			await fs.rm(tmpDir, { recursive: true, force: true });
