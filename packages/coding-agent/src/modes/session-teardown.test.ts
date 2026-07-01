@@ -17,6 +17,9 @@ describe("createSessionTeardown", () => {
 
 		const teardown = createSessionTeardown({
 			getDraftText: () => "unsent draft",
+			beginDispose: () => {
+				order.push("beginDispose");
+			},
 			saveDraft: async text => {
 				order.push("saveDraft");
 				saved.push(text);
@@ -28,8 +31,38 @@ describe("createSessionTeardown", () => {
 
 		await teardown();
 
-		expect(order).toEqual(["saveDraft", "disposeSession"]);
+		expect(order).toEqual(["beginDispose", "saveDraft", "disposeSession"]);
 		expect(saved).toEqual(["unsent draft"]);
+	});
+
+	it("marks the session disposing before awaiting draft persistence", async () => {
+		const order: string[] = [];
+		const release = Promise.withResolvers<void>();
+
+		const teardown = createSessionTeardown({
+			getDraftText: () => {
+				order.push("snapshot");
+				return "draft";
+			},
+			beginDispose: () => {
+				order.push("beginDispose");
+			},
+			saveDraft: async () => {
+				order.push("saveDraft:start");
+				await release.promise;
+				order.push("saveDraft:done");
+			},
+			disposeSession: async () => {
+				order.push("disposeSession");
+			},
+		});
+
+		const running = teardown();
+		expect(order).toEqual(["snapshot", "beginDispose", "saveDraft:start"]);
+		release.resolve();
+		await running;
+
+		expect(order).toEqual(["snapshot", "beginDispose", "saveDraft:start", "saveDraft:done", "disposeSession"]);
 	});
 
 	it("still disposes when saveDraft rejects — never leaves session_shutdown unemitted", async () => {
@@ -37,6 +70,7 @@ describe("createSessionTeardown", () => {
 
 		const teardown = createSessionTeardown({
 			getDraftText: () => "draft",
+			beginDispose: () => {},
 			saveDraft: async () => {
 				throw new Error("disk full");
 			},
@@ -54,6 +88,7 @@ describe("createSessionTeardown", () => {
 		const seen: string[] = [];
 		const teardown = createSessionTeardown({
 			getDraftText: () => "",
+			beginDispose: () => {},
 			saveDraft: async text => {
 				seen.push(text);
 			},
@@ -76,6 +111,7 @@ describe("createSessionTeardown", () => {
 				getDraftCalls++;
 				return `draft-${getDraftCalls}`;
 			},
+			beginDispose: () => {},
 			saveDraft: async () => {
 				saveDraftCalls++;
 			},
@@ -107,6 +143,7 @@ describe("createSessionTeardown", () => {
 
 		const teardown = createSessionTeardown({
 			getDraftText: () => editorText,
+			beginDispose: () => {},
 			saveDraft: async text => {
 				captured = text;
 			},

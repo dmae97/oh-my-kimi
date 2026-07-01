@@ -16,6 +16,12 @@ export interface SessionTeardownDeps {
 	/** Snapshot the current editor text; called once, before disposal touches session state. */
 	getDraftText: () => string;
 	/**
+	 * Synchronously mark the session as disposing before any awaited teardown
+	 * work. This closes the async gap where deferred jobs could otherwise start
+	 * after a signal requested shutdown but before `disposeSession()` begins.
+	 */
+	beginDispose: () => void;
+	/**
 	 * Persist the snapshotted draft. Called even for an empty string so a
 	 * previously-persisted draft sidecar is cleared on a clean exit.
 	 */
@@ -29,11 +35,12 @@ export type SessionTeardown = () => Promise<void>;
 
 /**
  * Build a promise-memoized teardown function. The first call snapshots the
- * draft text, runs `saveDraft` (draft-loss protection for `--resume`), then
- * `disposeSession`; subsequent calls await the same settled promise, so the
- * keypress `InteractiveMode.shutdown()` path and the postmortem signal
- * callback cannot double-emit `session_shutdown`, double-dispose the
- * session's async-job manager, or race each other.
+ * draft text, marks the session disposing synchronously, runs `saveDraft`
+ * (draft-loss protection for `--resume`), then `disposeSession`; subsequent
+ * calls await the same settled promise, so the keypress
+ * `InteractiveMode.shutdown()` path and the postmortem signal callback cannot
+ * double-emit `session_shutdown`, double-dispose the session's async-job
+ * manager, or race each other.
  *
  * `saveDraft` failures are logged but never abort the disposal chain — a
  * draft-write error must not leak background bash/task jobs or skip the
@@ -43,6 +50,7 @@ export function createSessionTeardown(deps: SessionTeardownDeps): SessionTeardow
 	let pending: Promise<void> | undefined;
 	const run = async (): Promise<void> => {
 		const draftText = deps.getDraftText();
+		deps.beginDispose();
 		try {
 			await deps.saveDraft(draftText);
 		} catch (err) {
