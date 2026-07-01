@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Cursor and Devin providers now use `parseStreamingJsonThrottled` for mid-stream tool-call argument parsing, bounding total parse work to O(N) in argument-buffer length instead of O(N²). Large tool-call payloads (e.g. sizeable `write` / `apply_patch` args) no longer stall streaming with quadratic re-parses ([#3946](https://github.com/can1357/oh-my-pi/issues/3946)).
+
 ## [16.2.10] - 2026-06-30
 
 ### Added
