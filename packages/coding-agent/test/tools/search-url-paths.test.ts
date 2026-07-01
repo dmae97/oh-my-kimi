@@ -32,8 +32,8 @@ function resultText(result: { content: Array<{ type: string; text?: string }> })
 		.join("\n");
 }
 
-function stubLoadPage(body: string, contentType: string): void {
-	vi.spyOn(scrapers, "loadPage").mockImplementation(async requestedUrl => ({
+function stubLoadPage(body: string, contentType: string) {
+	return vi.spyOn(scrapers, "loadPage").mockImplementation(async requestedUrl => ({
 		ok: true,
 		status: 200,
 		finalUrl: requestedUrl,
@@ -115,5 +115,83 @@ describe("search tools with external URL paths", () => {
 		const text = resultText(result);
 		expect(text).toContain("remoteNeedle");
 		expect(text).not.toContain("Parse issues");
+	});
+
+	it("search materializes a scheme-less www. scope like its canonical spelling", async () => {
+		const loadPage = stubLoadPage("alpha\nremote needle\nomega\n", "text/plain");
+		const tools = await createTools(createSession(testDir));
+		const tool = tools.find(entry => entry.name === "grep");
+		expect(tool).toBeDefined();
+
+		const result = await tool!.execute("search-url-www", {
+			pattern: "remote needle",
+			paths: ["www.example.com/notes.txt"],
+		});
+
+		expect(resultText(result)).toContain("remote needle");
+		expect(loadPage).toHaveBeenCalledWith("https://www.example.com/notes.txt", expect.anything());
+	});
+
+	it("search repairs a collapsed https:/ scheme before materializing", async () => {
+		const loadPage = stubLoadPage("alpha\nremote needle\nomega\n", "text/plain");
+		const tools = await createTools(createSession(testDir));
+		const tool = tools.find(entry => entry.name === "grep");
+		expect(tool).toBeDefined();
+
+		const result = await tool!.execute("search-url-collapsed", {
+			pattern: "remote needle",
+			paths: ["https:/example.com/notes.txt"],
+		});
+
+		expect(resultText(result)).toContain("remote needle");
+		expect(loadPage).toHaveBeenCalledWith("https://example.com/notes.txt", expect.anything());
+	});
+
+	it("search prefers an existing local directory named like a www. host", async () => {
+		const loadPage = stubLoadPage("remote body\n", "text/plain");
+		await fs.mkdir(path.join(testDir, "www.example.com"), { recursive: true });
+		await fs.writeFile(path.join(testDir, "www.example.com", "notes.txt"), "local needle\n");
+		const tools = await createTools(createSession(testDir));
+		const tool = tools.find(entry => entry.name === "grep");
+		expect(tool).toBeDefined();
+
+		const result = await tool!.execute("search-local-dir", {
+			pattern: "local needle",
+			paths: ["www.example.com"],
+		});
+
+		expect(resultText(result)).toContain("local needle");
+		expect(loadPage).not.toHaveBeenCalled();
+	});
+
+	it("search leaves plain relative paths untouched by URL materialization", async () => {
+		const loadPage = stubLoadPage("remote body\n", "text/plain");
+		await fs.mkdir(path.join(testDir, "src"), { recursive: true });
+		await fs.writeFile(path.join(testDir, "src", "notes.txt"), "local needle\n");
+		const tools = await createTools(createSession(testDir));
+		const tool = tools.find(entry => entry.name === "grep");
+		expect(tool).toBeDefined();
+
+		const result = await tool!.execute("search-local-rel", {
+			pattern: "local needle",
+			paths: ["src/notes.txt"],
+		});
+
+		expect(resultText(result)).toContain("local needle");
+		expect(loadPage).not.toHaveBeenCalled();
+	});
+
+	it("search rejects unsupported URL schemes explicitly", async () => {
+		stubLoadPage("remote body\n", "text/plain");
+		const tools = await createTools(createSession(testDir));
+		const tool = tools.find(entry => entry.name === "grep");
+		expect(tool).toBeDefined();
+
+		await expect(
+			tool!.execute("search-url-ftp", {
+				pattern: "needle",
+				paths: ["ftp://example.com/notes.txt"],
+			}),
+		).rejects.toThrow("Cannot search external URL");
 	});
 });

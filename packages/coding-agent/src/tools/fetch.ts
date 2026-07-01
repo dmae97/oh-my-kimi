@@ -27,7 +27,7 @@ import { finalizeOutput, loadPage, looksLikeHtml, MAX_BYTES, MAX_OUTPUT_CHARS } 
 import { convertWithMarkit, fetchBinary } from "../web/scrapers/utils";
 import { applyListLimit } from "./list-limit";
 import { formatStyledArtifactReference, type OutputMeta } from "./output-meta";
-import { type LineRange, parseLineRanges } from "./path-utils";
+import { isReadableUrlPath, type LineRange, parseLineRanges } from "./path-utils";
 import { formatBytes, formatExpandHint, getDomain, replaceTabs } from "./render-utils";
 import { listTables, looksLikeSqlite, renderTableList } from "./sqlite-reader";
 import { ToolAbortError, ToolError } from "./tool-errors";
@@ -143,10 +143,6 @@ function normalizeUrl(url: string): string {
 		return `https://${url}`;
 	}
 	return url;
-}
-
-export function isReadableUrlPath(value: string): boolean {
-	return /^https?:\/\/?/i.test(value) || /^www\./i.test(value);
 }
 
 // URL line selectors mirror the file form: `:50`, `:50-100`, `:50+150`, `:5-10,20-30`, `:raw`,

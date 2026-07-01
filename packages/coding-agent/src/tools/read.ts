@@ -77,7 +77,6 @@ import {
 } from "./conflict-detect";
 import {
 	executeReadUrl,
-	isReadableUrlPath,
 	loadReadUrlCacheEntry,
 	parseReadUrlTarget,
 	type ReadUrlToolDetails,
@@ -95,6 +94,7 @@ import {
 import {
 	expandPath,
 	formatPathRelativeToCwd,
+	isReadableUrlPath,
 	type LineRange,
 	parseLineRanges,
 	pathTargetsSsh,

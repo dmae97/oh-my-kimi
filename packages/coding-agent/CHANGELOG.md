@@ -11,6 +11,11 @@
 
 ### Fixed
 
+- Fixed task.maxConcurrency being breachable when a queued spawn was cancelled: the spawn path could release a semaphore permit it never acquired, letting a later task start while the cap was saturated.
+- Fixed session exit diagnostics recording signal and crash exits (SIGTERM, SIGHUP, uncaught exceptions) as a normal "dispose": the postmortem teardown now threads the real reason into session disposal.
+- Fixed the subagent yield-label guard ignoring JTD discriminator (oneOf) output schemas, which let stale incremental labels pass into successful results when final validation was skipped after retries.
+- Fixed grep/ast_grep search scopes rejecting `www.` and collapsed-scheme (`https:/host`) URL spellings that the read tool accepts; unresolvable URL-shaped scopes now fail with an explicit external-URL error instead of "Path not found".
+- Fixed model discovery ignoring `NODE_EXTRA_CA_CERTS`: the model registry's default fetch now applies the extra-CA wrapper, so `/models` probes work behind private-CA gateways like provider chat requests.
 - Fixed ctrl+p role-model cycling getting stuck on one transition and skipping every other role: a session-branch traversal regression returned entries leaf-to-root, so the cycle (and session model restore) read the oldest recorded model change instead of the newest.
 - Fixed ctrl+p cycling from a stale slot after the model was switched through another surface (alt+m, /model, retry fallback): the recorded role is now trusted only while its resolved model is still the active model, falling back to matching by model.
 - Fixed the apply_patch tool to prevent silently overwriting pre-existing files during creation or renaming, rejecting upfront with an error instead.

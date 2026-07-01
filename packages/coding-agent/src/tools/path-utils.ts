@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as url from "node:url";
-import { isEnoent, stripWindowsExtendedLengthPathPrefix } from "@oh-my-pi/pi-utils";
+import { isEnoent, isEnotdir, stripWindowsExtendedLengthPathPrefix } from "@oh-my-pi/pi-utils";
 import type { Skill } from "../extensibility/skills";
 import { InternalUrlRouter, type LocalProtocolOptions } from "../internal-urls";
 import { ToolError } from "./tool-errors";
@@ -433,6 +433,16 @@ export function pathTargetsSsh(path: string): boolean {
  */
 export function isSshUrl(path: string): boolean {
 	return /^ssh:\/\//i.test(path.trim());
+}
+
+/**
+ * True when the read tool's URL parser (`parseReadUrlTarget` in fetch.ts) would
+ * recognize this path as a readable external URL: a strict `http(s)://`, a
+ * collapsed `http(s):/host` (Node path normalization folds `//` → `/`), or a
+ * scheme-less `www.` spelling. Keep in sync with `parseReadUrlTarget`.
+ */
+export function isReadableUrlPath(value: string): boolean {
+	return /^https?:\/\/?/i.test(value) || /^www\./i.test(value);
 }
 
 /**
@@ -1090,14 +1100,30 @@ export async function resolveToolSearchScope(opts: ToolScopeOptions): Promise<To
 	if (rawPaths.some(rawPath => rawPath.length === 0)) {
 		throw new ToolError("`paths` must contain non-empty paths or globs");
 	}
-	const externalUrlRe = /^(?:https?|ftp|file|ws|wss):\/\//i;
+	// Strict external-URL schemes. `file://` is intentionally absent: it has
+	// local-path semantics (expandPath strips it downstream), so it flows through
+	// the ordinary filesystem pipeline instead of the external-URL resolver.
+	const strictExternalUrlRe = /^(?:https?|ftp|ws|wss):\/\//i;
 	const internalRouter = InternalUrlRouter.instance();
 	const resolvedPathInputs: string[] = [];
 	const immutableSourcePaths = new Set<string>();
 	for (const rawPath of rawPaths) {
-		const externalUrl = externalUrlRe.test(rawPath);
-		if (externalUrl && opts.resolveExternalUrl) {
-			const resolved = await opts.resolveExternalUrl(rawPath);
+		let externalUrl = strictExternalUrlRe.test(rawPath);
+		if (!externalUrl && isReadableUrlPath(rawPath) && !hasGlobPathChars(rawPath)) {
+			// Fuzzy spelling the read parser accepts (`www.host/…`, collapsed
+			// `https:/host/…`). An existing local path wins over URL
+			// interpretation so a directory literally named `www.foo` stays
+			// searchable; only a definitive ENOENT/ENOTDIR flips to URL handling
+			// (any other stat error means the path exists — let the local
+			// pipeline surface it).
+			try {
+				await fs.promises.stat(resolveToCwd(rawPath, cwd));
+			} catch (err) {
+				externalUrl = isEnoent(err) || isEnotdir(err);
+			}
+		}
+		if (externalUrl) {
+			const resolved = opts.resolveExternalUrl ? await opts.resolveExternalUrl(rawPath) : undefined;
 			if (resolved) {
 				resolvedPathInputs.push(resolved.sourcePath);
 				if (opts.trackImmutableSources && resolved.immutable) {
@@ -1105,6 +1131,12 @@ export async function resolveToolSearchScope(opts: ToolScopeOptions): Promise<To
 				}
 				continue;
 			}
+			// Resolver missing or declined (e.g. ftp/ws/wss): fail explicitly
+			// instead of letting the local-path fallthrough surface a confusing
+			// "Path not found" for a URL-shaped input.
+			throw new ToolError(
+				`Cannot ${internalUrlAction} external URL: ${rawPath}. Use \`read\` to fetch web content, then search the returned text.`,
+			);
 		}
 		if (!internalRouter.canHandle(rawPath)) {
 			resolvedPathInputs.push(rawPath);
