@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `wrapFetchForExtraCa` / `withExtraCaFetch` (moved from `@oh-my-pi/pi-ai` internals): a fetch wrapper that applies `NODE_EXTRA_CA_CERTS` to Bun's `RequestInit.tls.ca`, shared by provider streaming and catalog model discovery.
+
 ## [16.2.9] - 2026-06-30
 
 ### Added

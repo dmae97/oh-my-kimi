@@ -3,9 +3,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as tls from "node:tls";
-import * as AIError from "../../error";
-import type { FetchImpl } from "../../types";
-import { __resetExtraCaCache, withExtraCaFetch, wrapFetchForExtraCa } from "../tls-fetch";
+import {
+	__resetExtraCaCache,
+	ExtraCaError,
+	type FetchImpl,
+	withExtraCaFetch,
+	wrapFetchForExtraCa,
+} from "@oh-my-pi/pi-utils/tls-fetch";
 
 const SAMPLE_PEM =
 	"-----BEGIN CERTIFICATE-----\nMIIBkTCCATegAwIBAgIUF/sample/extra/ca/for/tests/1234567=\n-----END CERTIFICATE-----\n";
@@ -128,12 +132,12 @@ describe("wrapFetchForExtraCa", () => {
 		expect(ca).not.toContain(SAMPLE_PEM);
 	});
 
-	it("throws ValidationError when the configured path does not exist", async () => {
+	it("throws ExtraCaError when the configured path does not exist", async () => {
 		Bun.env.NODE_EXTRA_CA_CERTS = path.join(tmpDir, "missing.pem");
 
 		const { fetchImpl } = makeRecordingFetch();
 		const wrapped = wrapFetchForExtraCa(fetchImpl);
-		await expect(wrapped("https://corp.example/v1")).rejects.toBeInstanceOf(AIError.ValidationError);
+		await expect(wrapped("https://corp.example/v1")).rejects.toBeInstanceOf(ExtraCaError);
 	});
 
 	it("is idempotent — wrapping a wrapped fetch returns the same reference", async () => {

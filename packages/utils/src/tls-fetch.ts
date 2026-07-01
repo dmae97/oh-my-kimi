@@ -1,15 +1,13 @@
 /**
- * `NODE_EXTRA_CA_CERTS` shim for the Bun fetch path used by every provider
- * stream.
+ * `NODE_EXTRA_CA_CERTS` shim for Bun's `fetch`.
  *
  * Node's TLS layer honours `NODE_EXTRA_CA_CERTS` natively, but Bun's
- * `fetch` does not, and the OpenAI-compatible providers (`openai-responses`,
- * `openai-completions`, `openai-codex-responses`, `ollama-chat`, ...) route
- * every request through Bun's runtime. Without this wrapper, corporate
- * relays and private gateways behind a custom CA bundle fail with
+ * `fetch` does not, and both the provider streams (`openai-responses`,
+ * `openai-completions`, `openai-codex-responses`, `ollama-chat`, ...) and
+ * catalog model discovery (`/models` probes) route every request through
+ * Bun's runtime. Without this wrapper, corporate relays and private
+ * gateways behind a custom CA bundle fail with
  * `unknown certificate verification error` even when the env var is set.
- * (Foundry mTLS in {@link resolveFoundryTlsOptions} consumed the env var for
- * the Anthropic path only — issue #3731.)
  *
  * The wrapper merges the resolved CA bundle into Bun's `RequestInit.tls.ca`.
  * Bun's `tls.ca` REPLACES the default trust store when set, so the wrapper
@@ -18,9 +16,29 @@
  */
 import * as fs from "node:fs";
 import * as tls from "node:tls";
-import { $env, isEnoent } from "@oh-my-pi/pi-utils";
-import * as AIError from "../error";
-import type { FetchImpl } from "../types";
+import { $env } from "./env";
+import { isEnoent } from "./fs-error";
+
+/**
+ * `fetch`-compatible function. Accepts any callable matching the standard
+ * fetch signature; `preconnect` is optional because non-Bun runtimes
+ * (browsers, test mocks) won't expose it.
+ */
+export type FetchImpl = ((input: string | URL | Request, init?: RequestInit) => Promise<Response>) & {
+	preconnect?: typeof globalThis.fetch.preconnect;
+};
+
+/**
+ * `NODE_EXTRA_CA_CERTS` was set but unusable (path does not exist). This is
+ * a config/contract error, not a transient transport fault — it is never
+ * retried.
+ */
+export class ExtraCaError extends Error {
+	constructor(message: string, options?: { cause?: unknown }) {
+		super(message, options?.cause === undefined ? undefined : { cause: options.cause });
+		this.name = "ExtraCaError";
+	}
+}
 
 /** Bun extension to `RequestInit` for the TLS options we touch. */
 type BunTlsOptions = {
@@ -41,7 +59,7 @@ type ExtraCaFetch = FetchImpl & { [EXTRA_CA_FETCH_MARKER]?: true };
  * Cached resolution of `NODE_EXTRA_CA_CERTS`. Keyed on the env value plus
  * the file mtime for path values so on-disk cert rotation (short-lived
  * corporate bundles) invalidates the cache instead of pinning the first
- * read forever. Mirrors {@link foundryTlsOptionsCacheKey}.
+ * read forever.
  */
 let cacheKey: string | undefined;
 let cacheValue: string | undefined;
@@ -56,7 +74,7 @@ let cacheValue: string | undefined;
  *   shell exports.
  * - File path. Anything that does not contain a PEM header is treated as a
  *   path, matching Node's "extensionless filename is still a path" contract.
- *   `ENOENT` becomes {@link AIError.ValidationError}; other I/O errors bubble.
+ *   `ENOENT` becomes {@link ExtraCaError}; other I/O errors bubble.
  */
 function resolveExtraCa(): string | undefined {
 	const raw = $env.NODE_EXTRA_CA_CERTS?.trim();
@@ -81,7 +99,7 @@ function resolveExtraCa(): string | undefined {
 			cacheValue = fs.readFileSync(raw, "utf8");
 		} catch (error) {
 			if (isEnoent(error)) {
-				throw new AIError.ValidationError(`NODE_EXTRA_CA_CERTS path does not exist: ${raw}`);
+				throw new ExtraCaError(`NODE_EXTRA_CA_CERTS path does not exist: ${raw}`);
 			}
 			throw error;
 		}
@@ -101,7 +119,7 @@ export function __resetExtraCaCache(): void {
  * list, the system root store is included alongside the extra bundle —
  * Bun's `tls.ca` replaces the default trust store, so omitting roots would
  * break every public host. When the caller already curated a list (e.g.
- * Anthropic Foundry's {@link resolveFoundryTlsOptions}, which already seeds
+ * Anthropic Foundry's mTLS options, which already seed
  * `tls.rootCertificates`), only the extra CA is appended.
  */
 function withExtraCaInit(init: RequestInit | undefined, extraCa: string): RequestInit {
@@ -146,9 +164,10 @@ export function wrapFetchForExtraCa(fetchImpl: FetchImpl): FetchImpl {
 }
 
 /**
- * Convenience for the stream-entry composition in `stream.ts`. Mirrors
- * {@link withRequestDebugFetch} so the proxy/debug/extra-CA wrappers compose
- * uniformly. No-op when the env var is unset.
+ * Convenience for options-bag composition (e.g. the stream-entry path in
+ * `@oh-my-pi/pi-ai`'s `stream.ts`, which mirrors `withRequestDebugFetch` so
+ * the proxy/debug/extra-CA wrappers compose uniformly). No-op when the env
+ * var is unset.
  */
 export function withExtraCaFetch<T extends { fetch?: FetchImpl } | undefined>(options: T): T {
 	if (!$env.NODE_EXTRA_CA_CERTS?.trim()) return options;

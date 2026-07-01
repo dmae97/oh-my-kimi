@@ -29,6 +29,7 @@ export * from "./snowflake";
 export * from "./stream";
 export * from "./tab-spacing";
 export * from "./temp";
+export * from "./tls-fetch";
 export * from "./type-guards";
 export * from "./which";
 
