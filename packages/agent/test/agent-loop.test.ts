@@ -1086,6 +1086,8 @@ describe("agentLoop with AgentMessage", () => {
 		expect(toolEnds[1].isError).toBe(true);
 		if (toolEnds[1].result.content[0]?.type === "text") {
 			expect(toolEnds[1].result.content[0].text).toContain("Skipped due to queued user message");
+			expect(toolEnds[1].result.content[0].text).toContain("Do not count this skipped result as completed work");
+			expect(toolEnds[1].result.content[0].text).toContain("retry the skipped tool if it is still needed");
 		}
 
 		// Queued message should appear in events after the tool results and before the next model call.
