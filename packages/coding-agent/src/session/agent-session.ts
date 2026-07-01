@@ -10446,6 +10446,11 @@ export class AgentSession {
 			timestamp: Date.now(),
 		};
 
+		// A stop-time reminder starts a fresh reminder runway. Without resetting
+		// the mid-run counter here, a run that stopped just below the threshold
+		// would spend its stale pre-reminder count and fire "Mid-run reminder 2/3"
+		// after only one post-reminder tool turn.
+		this.#toolTurnsSinceLastTodoTouch = 0;
 		this.#todoReminderAwaitingProgress = true;
 		// Inject reminder and persist it so the JSONL transcript matches model context.
 		this.agent.appendMessage(reminderMessage);

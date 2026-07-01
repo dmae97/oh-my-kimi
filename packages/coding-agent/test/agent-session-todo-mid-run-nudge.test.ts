@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent, type AgentTool, type AsideMessage } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, ToolCall } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, TextContent, ToolCall } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -64,6 +64,49 @@ describe("AgentSession mid-run todo reconciliation nudge", () => {
 
 	function emitToolUseTurn(toolName: string): void {
 		session.agent.emitExternalEvent({ type: "message_end", message: toolUseAssistant(toolName) });
+	}
+
+	function textOnlyAssistant(): AssistantMessage {
+		return {
+			role: "assistant",
+			content: [{ type: "text", text: "paused for instruction" }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			stopReason: "stop",
+			usage: {
+				input: 50,
+				output: 10,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 60,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		};
+	}
+	async function emitTextOnlyStop(): Promise<void> {
+		const msg = textOnlyAssistant();
+		session.agent.emitExternalEvent({ type: "message_end", message: msg });
+		await settle();
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [msg] });
+	}
+
+	function emitToolResult(toolName: string): void {
+		const toolCallId = `call_${toolName}_${Date.now()}_${Math.random()}`;
+		emitToolUseTurn(toolName);
+		const content: TextContent[] = [{ type: "text", text: "ok" }];
+		session.agent.emitExternalEvent({
+			type: "message_end",
+			message: {
+				role: "toolResult",
+				toolCallId,
+				toolName,
+				content,
+				isError: false,
+				timestamp: Date.now(),
+			},
+		});
 	}
 
 	/**
@@ -167,6 +210,7 @@ describe("AgentSession mid-run todo reconciliation nudge", () => {
 		try {
 			await tempDir.remove();
 		} catch {}
+		vi.restoreAllMocks();
 	});
 
 	it("stays silent until the threshold of non-todo tool-use turns is reached", async () => {
@@ -256,5 +300,22 @@ describe("AgentSession mid-run todo reconciliation nudge", () => {
 		const messages = await drainAsides();
 		expect(messages).toEqual([]);
 		expect(reminderEvents).toEqual([]);
+	});
+
+	it("does not spend the pre-stop tool-turn count immediately after a stop-time reminder", async () => {
+		vi.spyOn(session.agent, "continue").mockResolvedValue();
+		for (let i = 0; i < THRESHOLD - 1; i++) emitToolUseTurn("edit");
+
+		await settle();
+		await emitTextOnlyStop();
+		await session.waitForIdle();
+		expect(reminderEvents.length).toBe(1);
+		expect(reminderEvents[0]?.attempt).toBe(1);
+
+		emitToolResult("edit");
+		await settle();
+		const messages = await drainAsides();
+		expect(messages).toEqual([]);
+		expect(reminderEvents.length).toBe(1);
 	});
 });
