@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Bumped `COLLAB_PROTO` to `3`: the `ui-request`/`ui-request-end` host frames and `ui-response` guest frame are part of the handshake contract. Proto-2 guests, which silently dropped host ask requests, are now rejected at hello with the protocol-mismatch error.
+
 ### Added
 
 - Added collaboration UI request/response wireframes, enabling browser guests to respond to host-side interactive prompts.

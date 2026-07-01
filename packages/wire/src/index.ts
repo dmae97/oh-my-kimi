@@ -389,8 +389,12 @@ export type WireFrame = GuestFrame | HostFrame;
  *   transcript entries follow in `snapshot-chunk` frames, so multi-MB
  *   sessions are not gated on a single welcome frame fitting under the
  *   guest's first-welcome timeout.
+ * - `3`: host asks guests through `ui-request`/`ui-request-end` host frames
+ *   answered by the `ui-response` guest frame. Guests that predate the
+ *   grammar would silently drop `ui-request` (asks hang forever on the
+ *   host), so they must be rejected at hello.
  */
-export const COLLAB_PROTO = 2;
+export const COLLAB_PROTO = 3;
 
 /** Parameter key used for intent tracing (e.g. prompt explanation/reasoning) */
 export const INTENT_FIELD = "i";
