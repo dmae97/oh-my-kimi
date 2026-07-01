@@ -1,4 +1,6 @@
 import { describe, expect, it } from "bun:test";
+import { SttClient } from "@oh-my-pi/pi-coding-agent/stt/asr-client";
+import type { SttWorkerInbound, SttWorkerOutbound } from "@oh-my-pi/pi-coding-agent/stt/asr-protocol";
 import { TinyTitleClient } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
 import type { TinyTitleWorkerInbound, TinyTitleWorkerOutbound } from "@oh-my-pi/pi-coding-agent/tiny/title-protocol";
 
@@ -46,6 +48,49 @@ class FakeTinyWorker {
 
 	emitError(error: Error): void {
 		for (const handler of this.#errorHandlers) handler(error);
+	}
+}
+
+class FakeSttWorker {
+	terminated = false;
+	refCalls = 0;
+	unrefCalls = 0;
+	#messageHandlers = new Set<(message: SttWorkerOutbound) => void>();
+	#errorHandlers = new Set<(error: Error) => void>();
+	#onSend: (message: SttWorkerInbound, worker: FakeSttWorker) => void;
+
+	constructor(onSend: (message: SttWorkerInbound, worker: FakeSttWorker) => void) {
+		this.#onSend = onSend;
+	}
+
+	send(message: SttWorkerInbound): void {
+		this.#onSend(message, this);
+	}
+
+	onMessage(handler: (message: SttWorkerOutbound) => void): () => void {
+		this.#messageHandlers.add(handler);
+		return () => this.#messageHandlers.delete(handler);
+	}
+
+	onError(handler: (error: Error) => void): () => void {
+		this.#errorHandlers.add(handler);
+		return () => this.#errorHandlers.delete(handler);
+	}
+
+	async terminate(): Promise<void> {
+		this.terminated = true;
+	}
+
+	ref(): void {
+		this.refCalls += 1;
+	}
+
+	unref(): void {
+		this.unrefCalls += 1;
+	}
+
+	emit(message: SttWorkerOutbound): void {
+		for (const handler of this.#messageHandlers) handler(message);
 	}
 }
 
@@ -193,6 +238,51 @@ describe("issue #3291 — tiny-model downloads keep the worker referenced", () =
 
 			expect(await download).toEqual({ ok: false, error: "Error: runtime install failed" });
 			expect(worker.terminated).toBe(true);
+		} finally {
+			await client.terminate();
+		}
+	});
+});
+
+describe("issue #3939 — stt downloads keep the worker referenced", () => {
+	it("references the worker while a download request is pending", async () => {
+		let downloadRequestId = "";
+		const worker = new FakeSttWorker(message => {
+			if (message.type === "download") downloadRequestId = message.id;
+		});
+		const client = new SttClient(() => worker);
+
+		try {
+			const download = client.downloadModel("turbo");
+
+			expect(downloadRequestId).not.toBe("");
+			expect(worker.refCalls).toBe(1);
+			expect(worker.unrefCalls).toBe(0);
+
+			worker.emit({ type: "downloaded", id: downloadRequestId });
+
+			expect(await download).toEqual({ ok: true });
+			expect(worker.unrefCalls).toBe(1);
+		} finally {
+			await client.terminate();
+		}
+	});
+
+	it("surfaces worker download errors to setup callers", async () => {
+		let downloadRequestId = "";
+		const worker = new FakeSttWorker(message => {
+			if (message.type === "download") downloadRequestId = message.id;
+		});
+		const client = new SttClient(() => worker);
+
+		try {
+			const download = client.downloadModel("turbo");
+
+			expect(downloadRequestId).not.toBe("");
+			worker.emit({ type: "error", id: downloadRequestId, error: "Error: Hub returned 403" });
+
+			expect(await download).toEqual({ ok: false, error: "Error: Hub returned 403" });
+			expect(worker.unrefCalls).toBe(1);
 		} finally {
 			await client.terminate();
 		}
