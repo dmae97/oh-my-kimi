@@ -11,6 +11,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import {
+	computeFileHash,
 	InMemorySnapshotStore,
 	parsePatch,
 	RECOVERY_LINE_REMAP_WARNING,
@@ -156,5 +157,96 @@ describe("Recovery — session-chain replay anchor-content gate", () => {
 		});
 
 		expect(recovered).toBeNull();
+	});
+
+	it("recovers duplicate-line anchors shifted by a prior insertion when context still matches", () => {
+		// Remap-parity pin for the linearized validator: an anchor RANGE
+		// covering a duplicated line ("DUP" appears twice) plus a unique line
+		// must still remap through a prior insertion — the duplicate-context
+		// and unique-context branches both accept exactly as before.
+		const store = new InMemorySnapshotStore();
+		const v0Text = lines("alpha", "DUP", "beta", "DUP", "omega");
+		const h0 = store.record(PATH, v0Text);
+		const v1Text = lines("alpha", "INSERTED", "DUP", "beta", "DUP", "omega");
+		store.record(PATH, v1Text);
+		const { edits } = parsePatch("SWAP 3.=4:\n+B-MODEL\n+MODEL");
+
+		const recovered = new Recovery(store).tryRecover({
+			path: PATH,
+			currentText: v1Text,
+			fileHash: h0,
+			edits,
+		});
+
+		expect(recovered).not.toBeNull();
+		expect(recovered?.text).toBe(lines("alpha", "INSERTED", "DUP", "B-MODEL", "MODEL", "omega"));
+		expect(recovered?.warnings).toContain(RECOVERY_LINE_REMAP_WARNING);
+	});
+});
+
+/**
+ * Brute-force two distinct texts sharing one 4-hex tag. 16-bit tags collide
+ * within a few hundred candidates (birthday bound), so this stays cheap.
+ * Texts share `template` around a varying middle line so line-anchored edits
+ * against one collider are plausible-but-wrong against the other.
+ */
+function findCollidingTexts(): { older: string; newer: string } {
+	const textFor = (n: number): string => lines("shared head", `unique payload ${n}`, "shared tail");
+	const byTag = new Map<string, number>();
+	for (let n = 0; ; n++) {
+		const text = textFor(n);
+		const tag = computeFileHash(text);
+		const prior = byTag.get(tag);
+		if (prior !== undefined) return { older: textFor(prior), newer: text };
+		byTag.set(tag, n);
+	}
+}
+
+describe("Recovery — colliding snapshot tags", () => {
+	it("refuses recovery when two retained texts share the section's tag", () => {
+		const { older, newer } = findCollidingTexts();
+		const tag = computeFileHash(older);
+		expect(computeFileHash(newer)).toBe(tag);
+		expect(newer).not.toBe(older);
+
+		const store = new InMemorySnapshotStore();
+		store.record(PATH, older);
+		store.record(PATH, newer);
+
+		// Live file drifted away from both colliders, so recovery cannot
+		// shortcut via live==snapshot; it must pick a base text for the tag.
+		// The model's edit was authored against `older` (line 2 = its unique
+		// payload). Resolving the tag to the most-recent collider would 3-way
+		// merge the stale payload onto `newer`'s unrelated line 2 — silent
+		// corruption. The ambiguous tag must refuse instead.
+		const currentText = `${newer}drifted trailer\n`;
+		const recovered = new Recovery(store).tryRecover({
+			path: PATH,
+			currentText,
+			fileHash: tag,
+			edits: parsePatch("SWAP 2.=2:\n+model payload").edits,
+		});
+
+		expect(recovered).toBeNull();
+	});
+
+	it("still recovers when exactly one retained text carries the tag", () => {
+		// Same drift scenario minus the collision: the unambiguous tag keeps
+		// recovering via 3-way merge, proving the collision gate above does
+		// not overreach.
+		const { older } = findCollidingTexts();
+		const store = new InMemorySnapshotStore();
+		const tag = store.record(PATH, older);
+
+		const currentText = `${older}drifted trailer\n`;
+		const recovered = new Recovery(store).tryRecover({
+			path: PATH,
+			currentText,
+			fileHash: tag,
+			edits: parsePatch("SWAP 2.=2:\n+model payload").edits,
+		});
+
+		expect(recovered).not.toBeNull();
+		expect(recovered?.text).toBe(lines("shared head", "model payload", "shared tail", "drifted trailer"));
 	});
 });

@@ -130,37 +130,59 @@ function buildLineMap(previousText: string, currentText: string): Map<number, nu
 	return map;
 }
 
-function lineIsDuplicated(lines: readonly string[], line: number): boolean {
-	const value = lines[line - 1];
-	return lines.indexOf(value) !== lines.lastIndexOf(value);
+/** Values appearing two or more times in `lines`, for O(1) duplicate checks. */
+function collectDuplicatedValues(lines: readonly string[]): Set<string> {
+	const seen = new Set<string>();
+	const duplicated = new Set<string>();
+	for (const value of lines) {
+		if (seen.has(value)) duplicated.add(value);
+		else seen.add(value);
+	}
+	return duplicated;
 }
 
-function nearestContextLine(
-	line: number,
-	direction: -1 | 1,
-	anchorLines: ReadonlySet<number>,
-	lineCount: number,
-): number | undefined {
-	for (let candidate = line + direction; candidate >= 1 && candidate <= lineCount; candidate += direction) {
-		if (!anchorLines.has(candidate)) return candidate;
+interface AnchorNeighbors {
+	/** Nearest non-anchor line below the anchor's run, or `undefined` at the file edge. */
+	before: number | undefined;
+	/** Nearest non-anchor line above the anchor's run, or `undefined` at the file edge. */
+	after: number | undefined;
+}
+
+/**
+ * Nearest non-anchor context line on each side of every anchor, computed in
+ * one sweep over the sorted anchor set. Anchors in one contiguous run share
+ * both neighbors (the lines just outside the run), so this replaces the
+ * per-anchor directional walk across anchored ranges — O(anchors²) on a
+ * large block replacement — with one O(anchors log anchors) pass.
+ */
+function computeAnchorNeighbors(anchorLines: ReadonlySet<number>, lineCount: number): Map<number, AnchorNeighbors> {
+	const sorted = [...anchorLines].sort((a, b) => a - b);
+	const neighbors = new Map<number, AnchorNeighbors>();
+	for (let i = 0; i < sorted.length; ) {
+		let j = i;
+		while (j + 1 < sorted.length && sorted[j + 1] === sorted[j] + 1) j++;
+		const start = sorted[i];
+		const end = sorted[j];
+		const before = start - 1 >= 1 && start - 1 <= lineCount ? start - 1 : undefined;
+		const after = end + 1 <= lineCount ? end + 1 : undefined;
+		for (let k = i; k <= j; k++) neighbors.set(sorted[k], { before, after });
+		i = j + 1;
 	}
-	return undefined;
+	return neighbors;
 }
 
 function validateDuplicateAnchorContext(
 	line: number,
 	mapped: number,
-	previousLines: readonly string[],
+	neighbors: AnchorNeighbors,
 	lineMap: ReadonlyMap<number, number>,
-	anchorLines: ReadonlySet<number>,
 ): boolean {
 	let checked = false;
-	const before = nearestContextLine(line, -1, anchorLines, previousLines.length);
+	const { before, after } = neighbors;
 	if (before !== undefined) {
 		checked = true;
 		if (lineMap.get(before) !== mapped - (line - before)) return false;
 	}
-	const after = nearestContextLine(line, 1, anchorLines, previousLines.length);
 	if (after !== undefined) {
 		checked = true;
 		if (lineMap.get(after) !== mapped + (after - line)) return false;
@@ -171,14 +193,12 @@ function validateDuplicateAnchorContext(
 function validateUniqueAnchorContext(
 	line: number,
 	mapped: number,
-	previousLines: readonly string[],
+	neighbors: AnchorNeighbors,
 	lineMap: ReadonlyMap<number, number>,
-	anchorLines: ReadonlySet<number>,
 ): boolean {
 	const offset = mapped - line;
-	const after = nearestContextLine(line, 1, anchorLines, previousLines.length);
+	const { before, after } = neighbors;
 	if (after !== undefined) return lineMap.get(after) === after + offset;
-	const before = nearestContextLine(line, -1, anchorLines, previousLines.length);
 	return before !== undefined && lineMap.get(before) === before + offset;
 }
 
@@ -191,17 +211,25 @@ function validateRemappedAnchorContext(
 	const previousLines = previousText.split("\n");
 	const currentLines = currentText.split("\n");
 	const anchorLines = new Set(collectAnchorLines(edits));
+	// Precompute once per validation pass: which line values are duplicated,
+	// and each anchor's nearest non-anchor context. The per-anchor forms —
+	// indexOf/lastIndexOf full-file scans plus directional walks across
+	// anchored ranges — are O(anchors×lines) + O(anchors²) and blow up on
+	// large block replacements.
+	const duplicatedPrevious = collectDuplicatedValues(previousLines);
+	const duplicatedCurrent = collectDuplicatedValues(currentLines);
+	const anchorNeighbors = computeAnchorNeighbors(anchorLines, previousLines.length);
 
-	for (const line of anchorLines) {
+	for (const [line, neighbors] of anchorNeighbors) {
 		const mapped = lineMap.get(line);
 		if (mapped === undefined) return false;
-		if (!lineIsDuplicated(previousLines, line) && !lineIsDuplicated(currentLines, mapped)) {
-			if (!validateUniqueAnchorContext(line, mapped, previousLines, lineMap, anchorLines)) {
+		if (!duplicatedPrevious.has(previousLines[line - 1]) && !duplicatedCurrent.has(currentLines[mapped - 1])) {
+			if (!validateUniqueAnchorContext(line, mapped, neighbors, lineMap)) {
 				return false;
 			}
 			continue;
 		}
-		if (!validateDuplicateAnchorContext(line, mapped, previousLines, lineMap, anchorLines)) {
+		if (!validateDuplicateAnchorContext(line, mapped, neighbors, lineMap)) {
 			return false;
 		}
 	}
@@ -364,7 +392,11 @@ export class Recovery {
 	 */
 	tryRecover(args: RecoveryArgs): RecoveryResult | null {
 		const { path, currentText, fileHash, edits } = args;
-		const snapshot = this.store.byHash(path, fileHash);
+		// Collision-safe lookup: when two retained texts share the 16-bit tag
+		// there is no way to know which one the model's anchors were minted
+		// against — replaying against the wrong collider would land the edit
+		// on unrelated content. Refuse and let the caller reject (re-read).
+		const snapshot = this.store.byHashExact(path, fileHash);
 		if (!snapshot) return null;
 		const isHead = isHeadSnapshot(this.store.head(path), snapshot);
 		const recoveryWarning = isHead ? RECOVERY_EXTERNAL_WARNING : RECOVERY_SESSION_CHAIN_WARNING;
