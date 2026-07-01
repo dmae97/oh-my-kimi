@@ -1496,9 +1496,7 @@ async function applyNormalizedPatch(input: PatchInput, options: ApplyPatchOption
 		// really need to replace the destination must delete it in an
 		// earlier hunk.
 		if (await fs.exists(destPath)) {
-			throw new ApplyPatchError(
-				`Cannot rename ${input.path} to ${input.rename}: destination already exists.`,
-			);
+			throw new ApplyPatchError(`Cannot rename ${input.path} to ${input.rename}: destination already exists.`);
 		}
 	}
 
