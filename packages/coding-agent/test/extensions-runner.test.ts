@@ -903,6 +903,74 @@ describe("ExtensionRunner", () => {
 
 			warnSpy.mockRestore();
 		});
+
+		it("times out tool_call handlers with fail-closed policy so a hung extension cannot indefinitely block tool execution (#3948)", async () => {
+			const hangExtensionPath = path.join(tempDir.path(), "hang-tool-call.ts");
+			fs.writeFileSync(
+				hangExtensionPath,
+				`
+					export default function(pi) {
+						pi.on("tool_call", async () => {
+							await Promise.withResolvers().promise;
+						});
+					}
+				`,
+			);
+
+			const result = await loadTestExtensions([hangExtensionPath]);
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+			const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+			const errors: Array<{ extensionPath: string; event: string; error: string }> = [];
+			runner.onError(err => {
+				errors.push(err);
+			});
+			testSetExtensionHandlerTimeoutMs(10);
+
+			const executeCalls: unknown[] = [];
+			const tool: AgentTool = {
+				name: "sleepy",
+				label: "Sleepy",
+				description: "records execute() invocations",
+				parameters: Type.Object({}),
+				strict: true,
+				execute: async (_id, params) => {
+					executeCalls.push(params);
+					return { content: [{ type: "text", text: "ran" }] };
+				},
+			};
+			const wrapped = new ExtensionToolWrapper(tool, runner);
+
+			const startedAt = performance.now();
+			await expect(wrapped.execute("tool-call-id", {})).rejects.toThrow(
+				`Extension ${hangExtensionPath} timed out after 10ms`,
+			);
+			const elapsedMs = performance.now() - startedAt;
+
+			expect(elapsedMs).toBeGreaterThanOrEqual(8);
+			expect(elapsedMs).toBeLessThan(500);
+			// Fail-closed: the underlying tool MUST NOT run when a gate handler timed out.
+			expect(executeCalls).toEqual([]);
+			expect(warnSpy).toHaveBeenCalledWith("Extension handler timed out", {
+				extensionPath: hangExtensionPath,
+				event: "tool_call",
+				timeoutMs: 10,
+			});
+			expect(errors).toEqual([
+				{
+					extensionPath: hangExtensionPath,
+					event: "tool_call",
+					error: "handler timed out after 10ms",
+				},
+			]);
+
+			warnSpy.mockRestore();
+		});
 	});
 
 	describe("memory context", () => {

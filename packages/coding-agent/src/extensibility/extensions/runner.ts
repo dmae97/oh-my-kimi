@@ -98,6 +98,32 @@ function handlerTimeoutForEvent(eventType: string): number {
 
 const EXTENSION_HANDLER_TIMEOUT = Symbol("extensionHandlerTimeout");
 
+/**
+ * Race `work` against a `timeoutMs` budget, clearing the pending timer the
+ * instant the work settles.
+ *
+ * We deliberately avoid `Bun.sleep(timeoutMs).then(...)` here: that leaves an
+ * uncancellable timer registered with the event loop, so every successful
+ * handler race leaks a timer that keeps the process alive until the deadline
+ * fires — up to the default 30s cap, which stalls non-interactive CLI exit
+ * after any subscribed `tool_call`/`tool_result` handler runs (issue #3948
+ * review, `chatgpt-codex-connector[bot]`). `setTimeout` returns a handle we
+ * can `clearTimeout` on the winning branch.
+ */
+async function raceHandlerWithTimeout<T>(
+	work: Promise<T>,
+	timeoutMs: number,
+): Promise<T | typeof EXTENSION_HANDLER_TIMEOUT> {
+	const { promise: timeoutPromise, resolve: resolveTimeout } =
+		Promise.withResolvers<typeof EXTENSION_HANDLER_TIMEOUT>();
+	const timer = setTimeout(() => resolveTimeout(EXTENSION_HANDLER_TIMEOUT), timeoutMs);
+	try {
+		return await Promise.race([work, timeoutPromise]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
 const MAX_PENDING_CREDENTIAL_DISABLED = 32;
 
 /**
@@ -555,10 +581,7 @@ export class ExtensionRunner {
 		timeoutMs: number,
 	): Promise<TResult | undefined> {
 		try {
-			const handlerResult = await Promise.race([
-				Promise.resolve(handler(event, ctx)),
-				Bun.sleep(timeoutMs).then(() => EXTENSION_HANDLER_TIMEOUT),
-			]);
+			const handlerResult = await raceHandlerWithTimeout(Promise.resolve(handler(event, ctx)), timeoutMs);
 			if (handlerResult === EXTENSION_HANDLER_TIMEOUT) {
 				const error = `handler timed out after ${timeoutMs}ms`;
 				logger.warn("Extension handler timed out", {
@@ -693,8 +716,24 @@ export class ExtensionRunner {
 		};
 	}
 
+	/**
+	 * Emit a `tool_call` event to every subscribed extension before the tool executes.
+	 *
+	 * Each handler is bounded by `extensionHandlerTimeoutMs` (default 30s). This
+	 * matches the timeout policy already applied to `emitToolResult` and every
+	 * other handler routed through `#runHandlerWithTimeout`; without it a single
+	 * hung extension (unresolved `await`, network call with no timeout) would
+	 * park `ExtensionToolWrapper.execute` indefinitely and freeze tool
+	 * dispatch — see issue #3948.
+	 *
+	 * On-timeout policy: **fail-closed** (return `{ block: true }`). This is
+	 * symmetric with the existing error path below and safer for a
+	 * pre-execution gate — an unresponsive extension MUST NOT be treated as
+	 * silent consent to run the tool.
+	 */
 	async emitToolCall(event: ToolCallEvent): Promise<ToolCallEventResult | undefined> {
 		const ctx = this.createContext();
+		const timeoutMs = extensionHandlerTimeoutMs;
 		let result: ToolCallEventResult | undefined;
 
 		for (const ext of this.extensions) {
@@ -703,7 +742,25 @@ export class ExtensionRunner {
 
 			for (const handler of handlers) {
 				try {
-					const handlerResult = await handler(event, ctx);
+					const handlerResult = await raceHandlerWithTimeout(Promise.resolve(handler(event, ctx)), timeoutMs);
+
+					if (handlerResult === EXTENSION_HANDLER_TIMEOUT) {
+						const error = `handler timed out after ${timeoutMs}ms`;
+						logger.warn("Extension handler timed out", {
+							extensionPath: ext.path,
+							event: "tool_call",
+							timeoutMs,
+						});
+						this.emitError({
+							extensionPath: ext.path,
+							event: "tool_call",
+							error,
+						});
+						return {
+							block: true,
+							reason: `Extension ${ext.path} timed out after ${timeoutMs}ms`,
+						};
+					}
 
 					if (handlerResult) {
 						result = handlerResult as ToolCallEventResult;
