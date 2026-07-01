@@ -188,10 +188,16 @@ where
 			crate::crash_handler::blocking_task_panic_scope(move || work(cancel_token))
 		})) {
 			Ok(result) => result,
-			Err(payload) => Err(Error::new(
-				Status::GenericFailure,
-				format!("native task `{tag}` panicked: {}", panic_payload_message(&*payload)),
-			)),
+			Err(payload) => {
+				// Extract the message BEFORE touching the payload's destructor:
+				// disposal is the one remaining step that can panic again.
+				let message = panic_payload_message(&*payload);
+				dispose_panic_payload(payload);
+				Err(Error::new(
+					Status::GenericFailure,
+					format!("native task `{tag}` panicked: {message}"),
+				))
+			},
 		}
 	}
 
@@ -211,6 +217,33 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
 		s.clone()
 	} else {
 		String::from("<non-string panic payload>")
+	}
+}
+
+/// Dispose of a caught panic payload without any possibility of a second
+/// unwind escaping this frame.
+///
+/// A [`std::panic::panic_any`] payload is an arbitrary user type whose `Drop`
+/// impl may itself panic. [`Blocking::compute`] runs inside napi's async-work
+/// `extern "C"` frame, so a panic escaping the payload's destructor would
+/// cross the same non-`C-unwind` FFI edge the surrounding [`catch_unwind`]
+/// exists to guard — force-aborting the host and defeating the recovery. The
+/// drop is therefore attempted under its own [`catch_unwind`], inside a
+/// crash-handler scope so the global hook stays silent for a panic we are
+/// about to swallow.
+///
+/// SAFETY: if the destructor panics, the *secondary* payload is
+/// [`std::mem::forget`]-ten instead of dropped — dropping it could panic
+/// again, unwinding out of this frame after the guard already fired once.
+/// Leaking one payload on this pathological path is a bounded, acceptable
+/// cost; aborting the whole host process is not. `forget` on a
+/// `Box<dyn Any + Send>` is always memory-safe (it only skips the destructor
+/// and leaks the allocation).
+fn dispose_panic_payload(payload: Box<dyn std::any::Any + Send>) {
+	if let Err(secondary) = catch_unwind(AssertUnwindSafe(|| {
+		crate::crash_handler::blocking_task_panic_scope(|| drop(payload));
+	})) {
+		std::mem::forget(secondary);
 	}
 }
 
@@ -387,6 +420,64 @@ mod tests {
 		});
 		let err = task.compute().unwrap_err();
 		assert!(err.reason.contains("<non-string panic payload>"), "reason = {}", err.reason);
+	}
+
+	/// Payload whose destructor itself panics — the pathological
+	/// `panic_any` shape that used to double-unwind out of `compute` and
+	/// abort the host across the napi `extern "C"` boundary.
+	///
+	/// `drop` records that it ran via `dropped`, then detonates. The
+	/// [`std::thread::panicking`] guard keeps the detonation out of any
+	/// *unrelated* unwind (e.g. a failing test assertion dropping the bomb),
+	/// where a second panic would abort the whole test binary instead of
+	/// failing one test; on the recovery path under test the thread is no
+	/// longer panicking, so the bomb always fires there.
+	struct DropBomb {
+		dropped: &'static std::sync::atomic::AtomicBool,
+	}
+
+	impl Drop for DropBomb {
+		fn drop(&mut self) {
+			self
+				.dropped
+				.store(true, std::sync::atomic::Ordering::SeqCst);
+			if !std::thread::panicking() {
+				panic!("DropBomb detonated in drop");
+			}
+		}
+	}
+
+	#[test]
+	fn compute_survives_payload_whose_drop_panics() {
+		static DROPPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+		let _silence = SilenceHook::new();
+		let mut task = blocking_task::<u32, _>("t_drop_bomb", |_| {
+			std::panic::panic_any(DropBomb { dropped: &DROPPED });
+		});
+		// Before the fix this aborted the process: the payload's Drop panicked
+		// while `compute` returned, unwinding across napi's `extern "C"` frame.
+		let err = task.compute().unwrap_err();
+		assert_eq!(err.status, Status::GenericFailure);
+		assert!(err.reason.contains("t_drop_bomb"), "reason = {}", err.reason);
+		assert!(err.reason.contains("<non-string panic payload>"), "reason = {}", err.reason);
+		assert!(
+			DROPPED.load(std::sync::atomic::Ordering::SeqCst),
+			"payload destructor must have run (and panicked) through the recovery path"
+		);
+	}
+
+	#[test]
+	fn dispose_panic_payload_swallows_drop_panic() {
+		static DROPPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+		let _silence = SilenceHook::new();
+		let payload = catch_unwind(AssertUnwindSafe(|| {
+			std::panic::panic_any(DropBomb { dropped: &DROPPED });
+		}))
+		.unwrap_err();
+		assert!(!DROPPED.load(std::sync::atomic::Ordering::SeqCst), "bomb must still be armed");
+		// Must return normally despite the payload's Drop panicking.
+		dispose_panic_payload(payload);
+		assert!(DROPPED.load(std::sync::atomic::Ordering::SeqCst), "destructor ran");
 	}
 
 	#[test]

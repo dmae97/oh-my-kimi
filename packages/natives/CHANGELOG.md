@@ -9,6 +9,7 @@
 ### Fixed
 
 - Fixed an issue where panics in native worker tasks (such as grep, AST parsing, globbing, workspace listing, HTML-to-markdown conversion, fuzzy finding, and clipboard image reading) would abort the host process instead of properly rejecting the returned JavaScript Promise.
+- Fixed the blocking-task panic recovery itself aborting the host when a panic payload's own destructor panics; the message is extracted first and the payload disposed without unwinding across the FFI boundary.
 - Fixed a crash on Windows under low memory/commit charge conditions when spawning worker threads for token counting or sorting operations.
 
 ## [16.2.11] - 2026-07-01
