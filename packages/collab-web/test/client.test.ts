@@ -11,7 +11,7 @@ import type {
 	WireMessage,
 } from "@oh-my-pi/pi-wire";
 import { GuestClient } from "../src/lib/client";
-import { encodeBase64Url } from "../src/lib/link";
+import { COLLAB_PROTO, encodeBase64Url } from "../src/lib/link";
 import { CollabSocket } from "../src/lib/socket";
 
 const LINK = `roomroomroom1234#${encodeBase64Url(new Uint8Array(32))}`;
@@ -53,7 +53,7 @@ function messageEntry(id: string, message: WireMessage): SessionEntry {
 }
 
 function welcomeFrame(entryCount = 0, readOnly?: boolean): HostFrame {
-	return { t: "welcome", proto: 2, header: HEADER, state: STATE, agents: AGENTS, entryCount, readOnly };
+	return { t: "welcome", proto: COLLAB_PROTO, header: HEADER, state: STATE, agents: AGENTS, entryCount, readOnly };
 }
 
 function snapshotChunk(entries: SessionEntry[], final = true): HostFrame {
@@ -232,6 +232,18 @@ describe("GuestClient frame apply", () => {
 		const notices = client.getSnapshot().notices;
 		expect(notices).toHaveLength(1);
 		expect(notices[0]).toMatchObject({ level: "error", message: "boom" });
+	});
+
+	it("a pre-welcome error (hello rejection, e.g. protocol mismatch) ends the session with the host's reason", () => {
+		const client = new GuestClient(LINK, "tester");
+		client.applyFrameForTest({
+			t: "error",
+			message: `protocol mismatch: host speaks v${COLLAB_PROTO}, guest sent v${COLLAB_PROTO - 1}`,
+		});
+		const snap = client.getSnapshot();
+		expect(snap.phase).toBe("ended");
+		expect(snap.endedReason).toContain("protocol mismatch");
+		expect(snap.endedReason).toContain(`v${COLLAB_PROTO}`);
 	});
 
 	it("tracks host UI requests and sends responses", () => {

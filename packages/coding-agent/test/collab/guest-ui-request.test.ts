@@ -14,10 +14,13 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { generateRoomKey, importRoomKey } from "@oh-my-pi/pi-coding-agent/collab/crypto";
 import { CollabGuestLink } from "@oh-my-pi/pi-coding-agent/collab/guest";
+import { CollabHost } from "@oh-my-pi/pi-coding-agent/collab/host";
 import {
 	COLLAB_PROTO,
+	type CollabFrame,
 	type CollabSessionState,
 	formatCollabLink,
+	parseCollabLink,
 	rewriteEnvelopePeer,
 	unpackEnvelope,
 } from "@oh-my-pi/pi-coding-agent/collab/protocol";
@@ -521,5 +524,169 @@ describe("collab TUI guest ui-request handling (#4049)", () => {
 		await h.barrier(); // frames apply in order: the ui-request has fully applied
 		expect(h.dialogLog).toHaveLength(0);
 		expect(h.uiResponses).toEqual([]);
+	});
+});
+
+// ── Proto handshake (#4049: ui-request frames require COLLAB_PROTO >= 3) ───
+//
+// The ui-request/ui-response grammar shipped without a proto bump, so v2
+// guests joined fine and silently dropped host asks. These tests pin the
+// enforcement: a real CollabHost must reject stale-proto hellos with an
+// observable error frame (never a welcome), current-proto guests must still
+// complete a full ui-request round trip, and a rejected CollabGuestLink
+// join must fail fast with the host's reason instead of hanging until the
+// welcome timeout.
+
+/** Minimal InteractiveModeContext double: only the members CollabHost touches. */
+function makeHostContext(): InteractiveModeContext {
+	return {
+		settings: { get: () => "" },
+		sessionManager: {
+			getSessionId: () => "sess-proto",
+			getCwd: () => "/tmp",
+			snapshotForReplication: () => ({
+				header: { type: "session", id: "sess-proto", timestamp: new Date().toISOString(), cwd: "/tmp" },
+				entries: [],
+			}),
+			onEntryAppended: undefined,
+		},
+		session: {
+			isStreaming: false,
+			queuedMessageCount: 0,
+			sessionName: "proto test",
+			model: undefined,
+			thinkingLevel: undefined,
+			subscribe: () => () => {},
+			emitNotice: () => {},
+			promptCustomMessage: () => Promise.resolve(),
+			abort: () => Promise.resolve(),
+		},
+		eventBus: undefined,
+		statusLine: {
+			setCollabStatus: () => {},
+			invalidate: () => {},
+			getCachedContextBreakdown: () => ({ usedTokens: 0, contextWindow: 0 }),
+		},
+		ui: { requestRender: () => {} },
+		showStatus: () => {},
+		collabHost: undefined,
+	} as unknown as InteractiveModeContext;
+}
+
+/** Raw wire-speaking guest with a configurable hello proto. */
+async function joinRawGuest(
+	link: string,
+	proto: number,
+): Promise<{ socket: CollabSocket; nextFrame(): Promise<CollabFrame> }> {
+	const parsed = parseCollabLink(link);
+	if ("error" in parsed) throw new Error(parsed.error);
+	const writeToken = parsed.writeToken ? Buffer.from(parsed.writeToken).toString("base64url") : undefined;
+	const key = await importRoomKey(parsed.key);
+	const socket = new CollabSocket({ wsUrl: parsed.wsUrl, role: "guest", key });
+	const queue: CollabFrame[] = [];
+	const waiters: ((frame: CollabFrame) => void)[] = [];
+	// Directed welcome/error/ui frames only: the host's debounced broadcasts
+	// (state/agents/entry/event/bus) and the snapshot-chunk train interleave
+	// nondeterministically with the frames these tests assert on.
+	const filtered: Record<string, true> = {
+		state: true,
+		agents: true,
+		entry: true,
+		event: true,
+		bus: true,
+		"snapshot-chunk": true,
+	};
+	socket.onFrame = frame => {
+		if (filtered[frame.t]) return;
+		const waiter = waiters.shift();
+		if (waiter) waiter(frame);
+		else queue.push(frame);
+	};
+	socket.onOpen = () => socket.send({ t: "hello", proto, name: `guest-v${proto}`, writeToken });
+	socket.connect();
+	const nextFrame = (): Promise<CollabFrame> => {
+		const queued = queue.shift();
+		if (queued) return Promise.resolve(queued);
+		const { promise, resolve } = Promise.withResolvers<CollabFrame>();
+		waiters.push(resolve);
+		return promise;
+	};
+	return { socket, nextFrame };
+}
+
+describe("collab proto handshake (#4049)", () => {
+	it("host rejects a stale-proto hello with a protocol-mismatch error and never welcomes or admits the guest", async () => {
+		const host = new CollabHost(makeHostContext());
+		await host.start("ws://localhost:8787");
+		const guest = await joinRawGuest(host.link, COLLAB_PROTO - 1);
+		try {
+			const reply = await guest.nextFrame();
+			if (reply.t !== "error") throw new Error(`expected error, got ${reply.t}`);
+			expect(reply.message).toContain("protocol mismatch");
+			expect(reply.message).toContain(`host speaks v${COLLAB_PROTO}`);
+			expect(reply.message).toContain(`guest sent v${COLLAB_PROTO - 1}`);
+			// The rejected guest was never admitted: no participant entry, and a
+			// host ask finds no writable peer to route to.
+			expect(host.participants.filter(p => p.role !== "host")).toEqual([]);
+			expect(host.requestGuestUi({ kind: "select", title: "anyone?", options: ["Yes"] })).toBeNull();
+		} finally {
+			guest.socket.close();
+			await host.stop("test done");
+		}
+	});
+
+	it("welcomes a current-proto guest at v3 and round-trips a ui-request", async () => {
+		const host = new CollabHost(makeHostContext());
+		await host.start("ws://localhost:8787");
+		const guest = await joinRawGuest(host.link, COLLAB_PROTO);
+		try {
+			const welcome = await guest.nextFrame();
+			if (welcome.t !== "welcome") throw new Error(`expected welcome, got ${welcome.t}`);
+			expect(welcome.proto).toBe(COLLAB_PROTO);
+			expect(welcome.proto).toBe(3);
+
+			const pending = host.requestGuestUi({ kind: "select", title: "Continue?", options: ["Yes"] });
+			if (!pending) throw new Error("expected writable guest UI request");
+			const request = await guest.nextFrame();
+			if (request.t !== "ui-request") throw new Error(`expected ui-request, got ${request.t}`);
+			guest.socket.send({ t: "ui-response", reqId: request.request.reqId, value: "Yes" });
+			expect(await pending).toBe("Yes");
+		} finally {
+			guest.socket.close();
+			await host.stop("test done");
+		}
+	});
+
+	it("CollabGuestLink.join fails fast with the host's rejection message instead of hanging for the welcome", async () => {
+		// Scripted host that rejects every hello the way CollabHost does for a
+		// proto mismatch. The real guest must surface that message from join().
+		const roomId = "proto-reject-room";
+		const roomKey = generateRoomKey();
+		const cryptoKey = await importRoomKey(roomKey);
+		const link = formatCollabLink("ws://localhost:8788", roomId, roomKey);
+		const hostSocket = new CollabSocket({ wsUrl: `ws://localhost:8788/r/${roomId}`, role: "host", key: cryptoKey });
+		const hostOpen = Promise.withResolvers<void>();
+		hostSocket.onOpen = () => hostOpen.resolve();
+		hostSocket.onFrame = frame => {
+			if (frame.t === "hello") {
+				hostSocket.send({
+					t: "error",
+					message: `protocol mismatch: host speaks v${COLLAB_PROTO + 1}, guest sent v${frame.proto}`,
+				});
+			}
+		};
+		hostSocket.connect();
+		await hostOpen.promise;
+
+		const ctx = {
+			settings: { get: () => "" },
+			sessionManager: { getSessionFile: () => null },
+		} as unknown as InteractiveModeContext;
+		const guest = new CollabGuestLink(ctx);
+		try {
+			await expect(guest.join(link)).rejects.toThrow(/protocol mismatch/);
+		} finally {
+			hostSocket.close();
+		}
 	});
 });

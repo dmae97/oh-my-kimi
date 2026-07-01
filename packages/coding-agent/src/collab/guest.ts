@@ -275,6 +275,16 @@ export class CollabGuestLink {
 						}
 						return;
 					}
+					if (frame.t === "error" && !this.#welcomed && !this.#left) {
+						// Pre-welcome errors are the host's targeted reply to our
+						// hello (e.g. protocol mismatch): no welcome will follow.
+						// Fail the join with the host's message instead of hanging
+						// until the welcome timeout.
+						this.#clearWelcomeTimer();
+						if (joined) this.#ctx.showError(`Collab host: ${frame.message}`);
+						else firstWelcome.reject(new Error(frame.message));
+						return;
+					}
 					if (!this.#welcomed || this.#left) return;
 					this.#applyFrame(frame);
 				})

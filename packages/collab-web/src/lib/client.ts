@@ -379,6 +379,14 @@ export class GuestClient {
 				this.#end(frame.reason);
 				return; // #end already committed
 			case "error":
+				if (!this.#welcomed) {
+					// Pre-welcome errors are the host's targeted reply to our
+					// hello (e.g. protocol mismatch): no welcome will follow.
+					// End with the host's reason instead of waiting out the
+					// welcome timeout.
+					this.#end(frame.message);
+					return; // #end already committed
+				}
 				this.#pushNotice("error", frame.message);
 				break;
 			default:
