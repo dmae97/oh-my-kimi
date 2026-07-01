@@ -118,7 +118,16 @@ function messageFingerprint(msg: AgentMessage): string {
 					redactedLen += b.data.length;
 				} else if (b.type === "toolCall") {
 					if (typeof b.name === "string") textLen += b.name.length;
-					textLen += b.arguments === undefined ? 0 : JSON.stringify(b.arguments).length;
+					if (b.arguments !== undefined) {
+						try {
+							textLen +=
+								JSON.stringify(b.arguments, (_key, value) =>
+									typeof value === "bigint" ? value.toString() : value,
+								)?.length ?? 0;
+						} catch {
+							textLen += String(b.arguments).length;
+						}
+					}
 				}
 			}
 		}
