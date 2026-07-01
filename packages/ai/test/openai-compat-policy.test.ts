@@ -123,6 +123,35 @@ describe("OpenAI compat policy", () => {
 		expect(responseBody.reasoning).toBeUndefined();
 	});
 
+	it("uses a non-budget fallback prompt for Responses no-reasoning compat", () => {
+		const compat: OpenAICompat = { requiresJuiceZeroHack: true };
+		const responseBody = responsesParams();
+		const responseInput: ResponseInput = [];
+
+		const appended = applyResponsesCompatPolicy(
+			responseBody,
+			responseInput,
+			resolveOpenAICompatPolicy(responsesModel(compat), { endpoint: "responses" }),
+			undefined,
+		);
+
+		expect(appended).toBe(1);
+		expect(responseInput.at(-1)).toEqual({
+			role: "developer",
+			content: [
+				{
+					type: "input_text",
+					text: "Keep internal reasoning brief. Continue following the task and use tools normally.",
+				},
+			],
+		});
+		const serialized = JSON.stringify(responseInput.at(-1));
+		expect(serialized).not.toContain("Juice");
+		expect(serialized).not.toContain("!important");
+		expect(serialized).not.toContain("budget");
+		expect(serialized).not.toContain("zero");
+	});
+
 	it("exposes reasoning replay constraints independent of endpoint", () => {
 		const compat: OpenAICompat = {
 			requiresReasoningContentForToolCalls: true,

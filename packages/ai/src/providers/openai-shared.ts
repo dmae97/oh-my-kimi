@@ -75,6 +75,7 @@ import {
 } from "./github-copilot-headers";
 import type { ChatCompletionCreateParamsStreaming } from "./openai-chat-wire";
 import type { InputItem } from "./openai-codex/request-transformer";
+import responsesReasoningSuppressionPrompt from "./openai-responses-reasoning-suppression.md" with { type: "text" };
 import type {
 	ResponseContentPartAddedEvent,
 	ResponseCreateParamsStreaming,
@@ -2365,6 +2366,8 @@ export function applyCommonResponsesSamplingParams<P extends CommonResponsesPara
 	applyOpenAIServiceTier(params, options?.serviceTier, model.provider);
 }
 
+const RESPONSES_REASONING_SUPPRESSION_PROMPT = responsesReasoningSuppressionPrompt.trim();
+
 type ReasoningOptions = {
 	reasoning?: string;
 	reasoningSummary?: "auto" | "detailed" | "concise" | null;
@@ -2409,7 +2412,7 @@ export function applyResponsesCompatPolicy<P extends ResponseCreateParamsStreami
 		if (policy.compat.requiresJuiceZeroHack && reasoning.requestedEffort === undefined) {
 			messages.push({
 				role: "developer",
-				content: [{ type: "input_text", text: "# Juice: 0 !important" }],
+				content: [{ type: "input_text", text: RESPONSES_REASONING_SUPPRESSION_PROMPT }],
 			});
 			return 1;
 		}
@@ -2441,7 +2444,7 @@ export function applyResponsesCompatPolicy<P extends ResponseCreateParamsStreami
 	if (policy.compat.requiresJuiceZeroHack) {
 		messages.push({
 			role: "developer",
-			content: [{ type: "input_text", text: "# Juice: 0 !important" }],
+			content: [{ type: "input_text", text: RESPONSES_REASONING_SUPPRESSION_PROMPT }],
 		});
 		return 1;
 	}

@@ -26,9 +26,9 @@ function createCodexToken(accountId: string): string {
 
 /**
  * Returns the bundled `gpt-5-mini` model with `compat.requiresJuiceZeroHack`
- * cleared so it doesn't trigger the GPT-5 "Juice: 0" developer-message hack
- * injected by `applyResponsesReasoningParams`. The hack is exercised by its
- * own targeted tests; these history-replay tests assert raw payload shape and
+ * cleared so it doesn't trigger the GPT-5 no-reasoning developer-message
+ * fallback injected by `applyResponsesReasoningParams`. The fallback is
+ * exercised by its own targeted tests; these history-replay tests assert raw payload shape and
  * should stay independent of it.
  */
 function getOpenAIReasoningModel(
