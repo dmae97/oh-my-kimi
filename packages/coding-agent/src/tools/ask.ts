@@ -262,6 +262,7 @@ interface CustomInputRow {
 	/** Lower priority drops first when over budget; negative values are pinned.
 	 *  Gap markers are budgeted rows too so sparse checked selections cannot
 	 *  push the editor input off-screen. */
+	priority: number;
 }
 
 function buildCustomInputRows(

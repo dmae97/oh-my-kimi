@@ -35,9 +35,9 @@ describe("browser tool schema", () => {
 
 		expect(validateJsonSchemaValue(toolWireSchema(tool), call.arguments).success).toBe(true);
 		expect(validateToolCall([tool], call)).toEqual(call.arguments);
-		await expect(
-			tool.execute("browser-run-without-code", args),
-		).rejects.toThrow(/Missing required parameter 'code' for action 'run'/);
+		await expect(tool.execute("browser-run-without-code", args)).rejects.toThrow(
+			/Missing required parameter 'code' for action 'run'/,
+		);
 	});
 
 	it("accepts run calls with code at schema validation", () => {

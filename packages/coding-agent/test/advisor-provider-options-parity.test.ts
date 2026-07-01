@@ -186,7 +186,7 @@ describe("AgentSession advisor provider-options parity", () => {
 			sessionManager,
 			settings: settings(),
 			modelRegistry,
-			advisorReadOnlyTools: [],
+			advisorTools: [],
 		});
 		session.settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
 		expect(session.setAdvisorEnabled(true)).toBe(true);

@@ -55,7 +55,9 @@ function messageTexts(entries: FileEntry[]): string[] {
 	const texts: string[] = [];
 	for (const entry of entries) {
 		if (entry.type !== "message") continue;
-		const content = entry.message.content;
+		const message: unknown = entry.message;
+		if (!message || typeof message !== "object" || !("content" in message)) continue;
+		const content = message.content;
 		if (!Array.isArray(content)) continue;
 		const first = content[0];
 		if (
