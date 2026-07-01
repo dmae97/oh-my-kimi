@@ -10,6 +10,9 @@
 ### Fixed
 
 - `RemoteAuthCredentialStore` now caches broker `/v1/usage` fetch failures for the documented 15s TTL fallback, so sequential ranking passes no longer re-hit the broker while it is down ([#4045](https://github.com/can1357/oh-my-pi/issues/4045)).
+### Fixed
+
+- Fixed Xiaomi MiMo standard API-key validation to use the supported `mimo-v2.5` model. ([#4063](https://github.com/can1357/oh-my-pi/issues/4063))
 
 ## [16.2.12] - 2026-07-01
 

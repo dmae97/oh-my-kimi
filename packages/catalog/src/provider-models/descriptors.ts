@@ -415,7 +415,7 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "xiaomi",
-		defaultModel: "mimo-v2-flash",
+		defaultModel: "mimo-v2.5",
 		envVars: ["XIAOMI_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => xiaomiModelManagerOptions(config),
 		catalogDiscovery: { label: "Xiaomi" },

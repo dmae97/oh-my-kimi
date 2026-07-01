@@ -11,6 +11,9 @@
 ### Fixed
 
 - Fixed discovered OpenAI Codex models to advertise V2 streaming remote compaction, avoiding the legacy compact endpoint timeout path for Codex sessions. ([#4146](https://github.com/can1357/oh-my-pi/issues/4146))
+### Fixed
+
+- Fixed the Xiaomi provider default model to use the supported `mimo-v2.5` model. ([#4063](https://github.com/can1357/oh-my-pi/issues/4063))
 
 ## [16.2.12] - 2026-07-01
 

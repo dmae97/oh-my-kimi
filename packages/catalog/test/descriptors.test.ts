@@ -16,6 +16,7 @@ describe("catalog provider descriptors", () => {
 		expect(DEFAULT_MODEL_PER_PROVIDER.minimax).toBe("MiniMax-M3");
 		expect(DEFAULT_MODEL_PER_PROVIDER["minimax-code"]).toBe("MiniMax-M3");
 		expect(DEFAULT_MODEL_PER_PROVIDER["minimax-code-cn"]).toBe("MiniMax-M3");
+		expect(DEFAULT_MODEL_PER_PROVIDER.xiaomi).toBe("mimo-v2.5");
 		// Login-only tools have no default model.
 		expect(DEFAULT_MODEL_PER_PROVIDER).not.toHaveProperty("kagi");
 	});
