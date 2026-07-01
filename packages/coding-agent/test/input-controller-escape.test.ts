@@ -4,6 +4,7 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext, SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
+import * as logger from "@oh-my-pi/pi-utils/logger";
 
 type Spy = Mock<(...args: unknown[]) => unknown>;
 type StartPendingSubmissionSpy = Mock<InteractiveModeContext["startPendingSubmission"]>;
@@ -251,6 +252,21 @@ function createContext(): {
 		inputListeners,
 		sessionListeners,
 	};
+}
+
+type AbortViewSession = {
+	isCompacting: boolean;
+	isGeneratingHandoff: boolean;
+	isRetrying: boolean;
+	abortCompaction: Spy;
+	abortHandoff: Spy;
+	abortRetry: Spy;
+};
+
+function abortViewSession(ctx: InteractiveModeContext): AbortViewSession {
+	// Test harness installs a mutable fake AgentSession; keep the unchecked cast named
+	// so property access is explicit.
+	return ctx.viewSession as unknown as AbortViewSession;
 }
 beforeEach(async () => {
 	await Settings.init({ inMemory: true });
@@ -579,6 +595,36 @@ describe("InputController escape behavior", () => {
 		expect(ctx.viewSession.abortCompaction as unknown as Spy).toHaveBeenCalledTimes(1);
 		expect(spies.abortHandoff).toHaveBeenCalledTimes(1);
 		expect(ctx.viewSession.abortRetry as unknown as Spy).toHaveBeenCalledTimes(1);
+	});
+
+	it("logs abort failures while treating maintenance Esc as handled", () => {
+		const debugSpy = vi.spyOn(logger, "debug").mockImplementation(() => {});
+		const { ctx, editor, spies } = createContext();
+		const viewSession = abortViewSession(ctx);
+		viewSession.isCompacting = true;
+		viewSession.isGeneratingHandoff = true;
+		viewSession.isRetrying = true;
+		viewSession.abortCompaction = vi.fn(() => {
+			throw new Error("compaction boom");
+		});
+		viewSession.abortHandoff = vi.fn(() => {
+			throw new Error("handoff boom");
+		});
+		viewSession.abortRetry = vi.fn(() => {
+			throw new Error("retry boom");
+		});
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		expect(() => editor.onEscape?.()).not.toThrow();
+
+		expect(viewSession.abortCompaction).toHaveBeenCalledTimes(1);
+		expect(viewSession.abortHandoff).toHaveBeenCalledTimes(1);
+		expect(viewSession.abortRetry).toHaveBeenCalledTimes(1);
+		expect(debugSpy).toHaveBeenCalledWith("Failed to abort compaction", { error: "compaction boom" });
+		expect(debugSpy).toHaveBeenCalledWith("Failed to abort handoff", { error: "handoff boom" });
+		expect(debugSpy).toHaveBeenCalledWith("Failed to abort retry", { error: "retry boom" });
+		expect(spies.abort).not.toHaveBeenCalled();
 	});
 
 	it("routes a focused double-← through the global input listener like Esc", () => {
