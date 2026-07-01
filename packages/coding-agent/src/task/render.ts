@@ -12,6 +12,7 @@ import { settings } from "../config/settings";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { formatContextUsage } from "../modes/components/status-line/context-thresholds";
 import { getMarkdownTheme, type Theme } from "../modes/theme/theme";
+import { stripGeneratedOutputNotice, stripRawOutputArtifactNotice } from "../tools/output-meta";
 import {
 	formatBadge,
 	formatDuration,
@@ -19,6 +20,7 @@ import {
 	formatMoreItems,
 	formatStatusIcon,
 	previewLine,
+	previewWindowRows,
 	replaceTabs,
 	type ToolUIStatus,
 	truncateToWidth,
@@ -448,6 +450,41 @@ function renderJsonTreeLines(
 	renderRoot(value);
 
 	return { lines, truncated };
+}
+
+const BASH_WALL_TIME_NOTICE_RE = /^Wall time: \d+(?:\.\d+)? seconds$/u;
+const BASH_EXIT_CODE_NOTICE_RE = /^Command exited with code -?\d+$/u;
+
+function stripRecentOutputNoticeLine(text: string): string {
+	const trimmed = text.trimEnd();
+	const lineStart = trimmed.lastIndexOf("\n");
+	const candidateStart = lineStart === -1 ? 0 : lineStart + 1;
+	const line = trimmed.slice(candidateStart);
+	if (!BASH_WALL_TIME_NOTICE_RE.test(line) && !BASH_EXIT_CODE_NOTICE_RE.test(line)) return text;
+	return trimmed.slice(0, lineStart === -1 ? 0 : lineStart).trimEnd();
+}
+
+function sanitizeRecentOutput(output: string): string {
+	let text = output.trimEnd();
+	while (text) {
+		const withoutArtifactNotice = stripRawOutputArtifactNotice(text).text;
+		if (withoutArtifactNotice !== text) {
+			text = withoutArtifactNotice;
+			continue;
+		}
+		const withoutOutputNotice = stripGeneratedOutputNotice(text);
+		if (withoutOutputNotice !== text) {
+			text = withoutOutputNotice;
+			continue;
+		}
+		const withoutRuntimeNotice = stripRecentOutputNoticeLine(text);
+		if (withoutRuntimeNotice !== text) {
+			text = withoutRuntimeNotice;
+			continue;
+		}
+		break;
+	}
+	return text;
 }
 
 function renderOutputSection(
@@ -1016,8 +1053,8 @@ function renderAgentProgress(
 
 	// Expanded view: recent output and tools
 	if (expanded && progress.status === "running") {
-		const output = progress.recentOutput.join("\n");
-		lines.push(...renderOutputSection(output, continuePrefix, true, theme, 2, 6));
+		const output = sanitizeRecentOutput([...progress.recentOutput].reverse().join("\n"));
+		lines.push(...renderOutputSection(output, continuePrefix, expanded, theme, 2, previewWindowRows()));
 	}
 
 	return lines;
