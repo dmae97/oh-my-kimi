@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed timed-out `browser.run` calls leaving evaluated JavaScript continuations alive, allowing late tab mutations after the tool had already returned. ([#3964](https://github.com/can1357/oh-my-pi/issues/3964))
+
 ## [16.2.11] - 2026-07-01
 
 ### Fixed
