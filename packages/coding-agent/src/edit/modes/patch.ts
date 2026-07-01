@@ -1490,12 +1490,31 @@ async function applyNormalizedPatch(input: PatchInput, options: ApplyPatchOption
 		if (destPath === absolutePath) {
 			throw new ApplyPatchError("rename path is the same as source path");
 		}
+		// The `*** Move to` / rename contract is strictly non-overwriting:
+		// reject before the update path reads or writes anything, so both
+		// source and pre-existing destination remain untouched. Callers who
+		// really need to replace the destination must delete it in an
+		// earlier hunk.
+		if (await fs.exists(destPath)) {
+			throw new ApplyPatchError(
+				`Cannot rename ${input.path} to ${input.rename}: destination already exists.`,
+			);
+		}
 	}
 
 	// Handle CREATE operation
 	if (op === "create") {
 		if (!input.diff) {
 			throw new ApplyPatchError("Create operation requires diff (file content)");
+		}
+		// The `*** Add File` / create contract is strictly non-overwriting:
+		// reject before mkdir/write so pre-existing content stays intact and
+		// the caller can re-issue as an explicit `*** Update File` (or a
+		// delete+add pair) if overwrite is genuinely intended.
+		if (await fs.exists(absolutePath)) {
+			throw new ApplyPatchError(
+				`Cannot create ${input.path}: file already exists. Use *** Update File to modify it in place.`,
+			);
 		}
 		// Strip + prefixes if present (handles diffs formatted as additions)
 		const normalizedContent = normalizeCreateContent(input.diff);
