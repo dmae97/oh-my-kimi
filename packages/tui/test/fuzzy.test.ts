@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { fuzzyFilter } from "@oh-my-pi/pi-tui/fuzzy";
+import { fuzzyFilter, fuzzyMatch } from "@oh-my-pi/pi-tui/fuzzy";
 
 describe("fuzzyFilter", () => {
 	it("does not satisfy long tokens by scattering letters across unrelated words", () => {
@@ -34,5 +34,12 @@ describe("fuzzyFilter", () => {
 		const items = ["Ollama", "Kagi", "OpenCode Go", "Tavily"];
 
 		expect(fuzzyFilter(items, "og", item => item)).toEqual(["OpenCode Go"]);
+	});
+
+	it("filters CJK queries instead of treating them as match-all", () => {
+		const items = ["文件搜索", "搜索历史", "Settings"];
+
+		expect(fuzzyFilter(items, "搜索", item => item)).toEqual(["搜索历史", "文件搜索"]);
+		expect(fuzzyMatch("搜索", "Settings").matches).toBe(false);
 	});
 });
