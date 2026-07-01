@@ -38,5 +38,14 @@ export function coreWeaveProjectHeaders(env: CoreWeaveProjectEnv): Record<string
 
 export function hasCoreWeaveProjectHeader(headers: Record<string, string>): boolean {
 	const normalized = COREWEAVE_PROJECT_HEADER.toLowerCase();
-	return Object.keys(headers).some(header => header.toLowerCase() === normalized);
+	return Object.entries(headers).some(([header, value]) => header.toLowerCase() === normalized && value.trim() !== "");
+}
+
+export function removeBlankCoreWeaveProjectHeaders(headers: Record<string, string>): void {
+	const normalized = COREWEAVE_PROJECT_HEADER.toLowerCase();
+	for (const [header, value] of Object.entries(headers)) {
+		if (header.toLowerCase() === normalized && value.trim() === "") {
+			delete headers[header];
+		}
+	}
 }

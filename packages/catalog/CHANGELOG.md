@@ -17,6 +17,9 @@
 ### Fixed
 
 - Updated the Responses compat flag docs to describe the no-reasoning fallback without the old `# Juice: 0 !important` wording. ([#4151](https://github.com/can1357/oh-my-pi/issues/4151))
+### Fixed
+
+- Fixed CoreWeave Serverless Inference project-header detection so blank `OpenAI-Project` overrides do not block `COREWEAVE_PROJECT` fallback.
 
 ## [16.2.12] - 2026-07-01
 

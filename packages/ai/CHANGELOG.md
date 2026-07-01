@@ -16,6 +16,9 @@
 ### Fixed
 
 - Reworded the GPT-5 Responses no-reasoning fallback developer item so it no longer says `# Juice: 0 !important` or implies a zero tool/execution budget. ([#4151](https://github.com/can1357/oh-my-pi/issues/4151))
+### Changed
+
+- Clarified CoreWeave Serverless Inference login instructions to persist `COREWEAVE_PROJECT` in the user's shell startup file.
 
 ## [16.2.12] - 2026-07-01
 
