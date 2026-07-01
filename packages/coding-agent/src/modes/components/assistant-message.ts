@@ -34,11 +34,16 @@ type ThinkingContentBlock = Extract<AssistantMessage["content"][number], { type:
 type DisplayThinkingContentBlock = ThinkingContentBlock & { rawThinking?: string };
 
 function resolveThinkingDisplay(block: ThinkingContentBlock, proseOnly: boolean): { text: string; visible: boolean } {
-	const rawThinking = (block as DisplayThinkingContentBlock).rawThinking ?? block.thinking;
-	const formatted = formatThinkingForDisplay(block.thinking, proseOnly);
+	const rawThinking = (block as DisplayThinkingContentBlock).rawThinking;
+	// When rawThinking is set, `block.thinking` is already the formatted display
+	// text that buildDisplayMessage produced (then revealed/sliced by the
+	// streaming controller) — re-running the formatter would double-process it,
+	// and the growing revealed slice would never hit the per-tick memo. Only
+	// format raw (non-display) thinking blocks.
+	const formatted = rawThinking !== undefined ? block.thinking : formatThinkingForDisplay(block.thinking, proseOnly);
 	return {
 		text: formatted.trim(),
-		visible: hasDisplayableThinking(rawThinking, formatted),
+		visible: hasDisplayableThinking(rawThinking ?? block.thinking, formatted),
 	};
 }
 

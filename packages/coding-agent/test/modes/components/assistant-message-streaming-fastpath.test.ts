@@ -191,4 +191,22 @@ describe("AssistantMessageComponent streaming fast path", () => {
 		reused.updateContent(filled);
 		expect(reused.render(W).join("\n")).toBe(teardownRender(filled));
 	});
+	it("does not re-format an already-display thinking block (rawThinking set)", () => {
+		// buildDisplayMessage emits a thinking block whose `thinking` is already the
+		// formatted display text and stamps the original under `rawThinking`.
+		// resolveThinkingDisplay must treat `thinking` as display-ready and NOT
+		// re-run the fence-stripping formatter — otherwise the fenced content
+		// ("keep me") is stripped a second time.
+		const m = msg([
+			{
+				type: "thinking",
+				thinking: "Visible\n```\nkeep me\n```",
+				rawThinking: "raw",
+			},
+		] as unknown as AssistantMessage["content"]);
+		const component = new AssistantMessageComponent();
+		component.updateContent(m);
+		const rendered = Bun.stripANSI(component.render(W).join("\n"));
+		expect(rendered).toContain("keep me");
+	});
 });
