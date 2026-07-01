@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Fixed the bounded stdin escape parser scanning past its own cap: OSC/DCS/APC terminator lookups used unbounded `indexOf`, so one oversized unterminated sequence could still block the event loop; scans are now strictly bounded to the per-sequence byte cap.
 - Fixed an issue where large Windows terminal session restores could get truncated mid-frame during ConPTY full-paint resume.
 
 ## [16.2.13] - 2026-07-01

@@ -103,6 +103,29 @@ describe("StdinBuffer", () => {
 			expect(emittedSequences).toEqual(["\x1b[<35;20;5m"]);
 		});
 
+		it("reassembles an OSC whose ST is split exactly at the chunk boundary", () => {
+			// Chunk 1 ends on the ESC of `ESC \`; chunk 2 opens with the `\`.
+			// The resume overlap (`resumeSearchFrom - 1`) must re-inspect the
+			// trailing ESC, or the terminator is never seen and the payload
+			// leaks via timeout flush as raw bytes.
+			processInput("\x1b]52;c;aGVsbG8=\x1b");
+			expect(emittedSequences).toEqual([]);
+			expect(buffer.getBuffer()).toBe("\x1b]52;c;aGVsbG8=\x1b");
+
+			processInput("\\");
+			expect(emittedSequences).toEqual(["\x1b]52;c;aGVsbG8=\x1b\\"]);
+			expect(buffer.getBuffer()).toBe("");
+		});
+
+		it("reassembles a DCS whose ST is split exactly at the chunk boundary", () => {
+			processInput("\x1bPq#0;2;0;0;0\x1b");
+			expect(emittedSequences).toEqual([]);
+
+			processInput("\\");
+			expect(emittedSequences).toEqual(["\x1bPq#0;2;0;0;0\x1b\\"]);
+			expect(buffer.getBuffer()).toBe("");
+		});
+
 		it("should flush incomplete sequence after timeout", async () => {
 			// Non-mouse CSI partial: ambiguous, so it flushes after the timeout.
 			processInput("\x1b[1;5");
@@ -621,6 +644,32 @@ describe("StdinBuffer", () => {
 			processInput("\x1b[200~paste\x1b[201~\x1b]z\x07abc");
 
 			expect(emittedSequences).toEqual(["\x1b]z\x07", "a", "b", "c"]);
+			expect(buffer.getBuffer()).toBe("");
+		});
+
+		it("caps an unterminated OSC delivered as one oversized chunk and keeps parsing", () => {
+			// MAX_STRING_SEQ_BYTES = 16 MiB. A single chunk whose OSC payload
+			// exceeds the cap with no BEL/ST must cap-flush the capped prefix
+			// as ONE raw sequence (progress guaranteed, scan bounded to the
+			// cap — not the whole chunk), deliver the tail per scalar, and
+			// leave the buffer clean so later input still parses.
+			const cap = 16 * 1024 * 1024;
+			const head = "\x1b]5522;";
+			const tail = "xy";
+			// Total pre-tail length is exactly `cap`, so the cap-flush consumes
+			// the whole unterminated sequence and only `tail` remains.
+			processInput(`${head}${"a".repeat(cap - head.length)}${tail}`);
+
+			expect(emittedSequences.length).toBe(1 + tail.length);
+			expect(emittedSequences[0]!.length).toBe(cap);
+			expect(emittedSequences[0]!.startsWith("\x1b]5522;")).toBe(true);
+			expect(emittedSequences.slice(1)).toEqual(["x", "y"]);
+			expect(buffer.getBuffer()).toBe("");
+
+			// Parser state is clean: a normal OSC afterwards completes.
+			emittedSequences.length = 0;
+			processInput("\x1b]z\x07");
+			expect(emittedSequences).toEqual(["\x1b]z\x07"]);
 			expect(buffer.getBuffer()).toBe("");
 		});
 	});
