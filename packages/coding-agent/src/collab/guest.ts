@@ -9,6 +9,9 @@
  * ecosystem is mirrored too: agent snapshots populate a local AgentRegistry
  * (Agent Hub), EventBus traffic (observer HUD) is republished, and hub
  * actions (chat/kill/revive/transcript reads) round-trip over the wire.
+ * Host ask dialogs (`ui-request` select/editor) present through the same
+ * hook selector/editor seam and answer with `ui-response`; `ui-request-end`
+ * dismisses a pending presentation without responding.
  * Everything renders through the same components, so ctrl+o, theming, and
  * transcript behavior are native by construction.
  */
@@ -30,6 +33,7 @@ import {
 	COLLAB_PROTO,
 	type CollabFrame,
 	type CollabSessionState,
+	type CollabUiRequest,
 	parseCollabLink,
 } from "./protocol";
 import { CollabSocket } from "./relay-client";
@@ -156,6 +160,8 @@ export class CollabGuestLink {
 	/** Per-agent `hasSessionFile` from the last snapshot; gates remote transcript fetches. */
 	#agentHasTranscript = new Map<string, boolean>();
 	#pendingTranscripts = new Map<number, (r: AgentHubRemoteTranscript | null) => void>();
+	/** Host `ui-request`s presented (or queued) locally, keyed by reqId; aborting dismisses. */
+	#pendingUiRequests = new Map<number, AbortController>();
 	#nextReqId = 1;
 	readonly #hubRemote: AgentHubRemote = {
 		chat: (id, text) => {
@@ -480,6 +486,12 @@ export class CollabGuestLink {
 				this.#applyAgentSnapshots(frame.agents);
 				this.#ctx.syncRunningSubagentBadge();
 				break;
+			case "ui-request":
+				this.#presentUiRequest(frame.request);
+				break;
+			case "ui-request-end":
+				this.#endUiRequest(frame.reqId);
+				break;
 			case "transcript": {
 				const resolve = this.#pendingTranscripts.get(frame.reqId);
 				if (resolve) {
@@ -591,7 +603,74 @@ export class CollabGuestLink {
 		this.#pendingTranscripts.clear();
 	}
 
+	/**
+	 * Surface a host `ui-request` (ask select/editor) through the local
+	 * hook-dialog seam. The dialog settles on user submit/cancel — both send a
+	 * `ui-response` (cancel carries `value: undefined`, mirroring the web
+	 * client's Cancel button) — or when {@link #endUiRequest} aborts it because
+	 * the host settled the request elsewhere; that path must NOT respond.
+	 */
+	#presentUiRequest(request: CollabUiRequest): void {
+		// The host only targets writable peers; drop defensively on a read-only link.
+		if (this.#readOnly || this.#pendingUiRequests.has(request.reqId)) return;
+		const abort = new AbortController();
+		this.#pendingUiRequests.set(request.reqId, abort);
+		const dialog =
+			request.kind === "select"
+				? this.#ctx.showHookSelector(request.title, request.options, {
+						signal: abort.signal,
+						initialIndex: request.initialIndex,
+						selectionMarker: request.selectionMarker,
+						checkedIndices: request.checkedIndices,
+						markableCount: request.markableCount,
+						helpText: request.helpText,
+					})
+				: this.#ctx.showHookEditor(request.title, request.prefill, { signal: abort.signal });
+		dialog
+			.then(value => {
+				// Identity check: only the presentation that still owns the reqId
+				// may respond. An abort from #endUiRequest / #clearUiRequests
+				// removes (or replaces, on resync replay) the entry before this
+				// microtask runs, so a dismissed dialog stays silent.
+				if (this.#pendingUiRequests.get(request.reqId) !== abort) return;
+				this.#pendingUiRequests.delete(request.reqId);
+				this.#socket?.send({ t: "ui-response", reqId: request.reqId, value });
+			})
+			.catch(err => {
+				if (this.#pendingUiRequests.get(request.reqId) === abort) {
+					this.#pendingUiRequests.delete(request.reqId);
+				}
+				logger.warn("collab guest ui-request presentation failed", {
+					reqId: request.reqId,
+					error: String(err),
+				});
+			});
+	}
+
+	/** Host settled the request (answered elsewhere or aborted): dismiss without responding. */
+	#endUiRequest(reqId: number): void {
+		const abort = this.#pendingUiRequests.get(reqId);
+		if (!abort) return;
+		this.#pendingUiRequests.delete(reqId);
+		abort.abort();
+	}
+
+	/**
+	 * Dismiss every locally presented `ui-request` without responding: on
+	 * resync the host replays the ones still pending, and on leave they are no
+	 * longer ours to answer. Queued dialogs abort before the presented one
+	 * (reverse insertion order) so settling the active dialog cannot flash the
+	 * next queued one onto the surface first.
+	 */
+	#clearUiRequests(): void {
+		if (this.#pendingUiRequests.size === 0) return;
+		const aborts = [...this.#pendingUiRequests.values()];
+		this.#pendingUiRequests.clear();
+		for (const abort of aborts.reverse()) abort.abort();
+	}
+
 	#clearTransientUi(): void {
+		this.#clearUiRequests();
 		this.#ctx.statusContainer.clear();
 		this.#ctx.pendingMessagesContainer.clear();
 		this.#ctx.compactionQueuedMessages = [];
