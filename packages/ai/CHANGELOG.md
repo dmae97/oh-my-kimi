@@ -7,6 +7,9 @@
 ### Fixed
 
 - Fixed pre-5.4 OpenAI Codex models (`gpt-5.1-codex`, `gpt-5.3-codex`, `gpt-5.3-codex-spark`) rejecting requests with `Unsupported parameter: 'reasoning.summary' is not supported with this model` by gating `reasoning.summary` behind the same gpt-5.4 wire floor as `reasoning.context: "all_turns"`.
+### Fixed
+
+- `RemoteAuthCredentialStore` now caches broker `/v1/usage` fetch failures for the documented 15s TTL fallback, so sequential ranking passes no longer re-hit the broker while it is down ([#4045](https://github.com/can1357/oh-my-pi/issues/4045)).
 
 ## [16.2.12] - 2026-07-01
 
