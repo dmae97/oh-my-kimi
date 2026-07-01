@@ -814,6 +814,17 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				const startedAt = Date.now();
 				const semaphore = this.#getSpawnSemaphore();
 				let semaphoreHeld = false;
+				// Every release funnels through here: the flag flips before the
+				// release so no path — acquire-time abort, executor failure, or a
+				// future refactor that reorders the branches — can return a permit
+				// twice. Releasing a permit this job never acquired would steal one
+				// from a running job and let a later spawn start past
+				// task.maxConcurrency.
+				const releasePermit = () => {
+					if (!semaphoreHeld) return;
+					semaphoreHeld = false;
+					this.#releaseSpawnSemaphore();
+				};
 				try {
 					await semaphore.acquire(runSignal);
 					semaphoreHeld = true;
@@ -825,7 +836,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				}
 				const acquiredAt = Date.now();
 				if (!semaphoreHeld || runSignal.aborted) {
-					if (semaphoreHeld) this.#releaseSpawnSemaphore();
+					releasePermit();
 					progress.status = "aborted";
 					onSettled?.(true);
 					throw new Error("Aborted before execution");
@@ -897,7 +908,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					const hint = AgentRegistry.global().get(agentId) ? buildFollowUpHint(false) : "";
 					throw new TaskJobError(`${message}${hint}`);
 				} finally {
-					this.#releaseSpawnSemaphore();
+					releasePermit();
 				}
 			},
 			{

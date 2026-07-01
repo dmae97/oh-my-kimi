@@ -231,6 +231,73 @@ describe("task spawn routing", () => {
 		expect(secondJob.status).toBe("cancelled");
 	});
 
+	it("keeps the concurrency cap intact when a queued spawn is cancelled (no permit leak)", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [taskAgent],
+			projectAgentsDir: null,
+		});
+		const started: string[] = [];
+		const gates = new Map<string, Deferred>();
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			const id = options.id ?? "?";
+			started.push(id);
+			const gate = deferred();
+			gates.set(id, gate);
+			await gate.promise;
+			return makeResult(id);
+		});
+
+		const manager = createManager();
+		const tool = await TaskTool.create(createSession({ manager, settings: { "task.maxConcurrency": 1 } }));
+
+		// A holds the only permit, gated inside the executor.
+		const first = await tool.execute("tc-1", { agent: "task", id: "First", assignment: "Work A." } as TaskParams);
+		const firstJob = manager.getJob(first.details!.async!.jobId)!;
+		await pollUntil(() => started.length === 1);
+
+		// B parks at the semaphore, then is cancelled while queued. Its
+		// teardown must NOT release a permit it never acquired.
+		const second = await tool.execute("tc-2", { agent: "task", id: "Second", assignment: "Work B." } as TaskParams);
+		const secondJob = manager.getJob(second.details!.async!.jobId)!;
+		expect(secondJob.queued).toBe(true);
+		expect(manager.cancel(secondJob.id)).toBe(true);
+		await secondJob.promise;
+		expect(secondJob.status).toBe("cancelled");
+
+		// C must stay parked while A still holds the cap. A phantom release
+		// from B's cancellation would admit C here, running 2 bodies at cap 1.
+		const third = await tool.execute("tc-3", { agent: "task", id: "Third", assignment: "Work C." } as TaskParams);
+		const thirdJob = manager.getJob(third.details!.async!.jobId)!;
+		await Bun.sleep(50);
+		expect(started).toEqual(["First"]);
+		expect(thirdJob.queued).toBe(true);
+
+		// A finishing admits C — the cap still cycles normally.
+		gates.get("First")!.resolve();
+		await firstJob.promise;
+		await pollUntil(() => started.length === 2);
+		expect(started).toEqual(["First", "Third"]);
+
+		// D queued behind running C stays serialized: if B's teardown had
+		// double-released, two permits would be free and D would start now.
+		const fourth = await tool.execute("tc-4", { agent: "task", id: "Fourth", assignment: "Work D." } as TaskParams);
+		const fourthJob = manager.getJob(fourth.details!.async!.jobId)!;
+		await Bun.sleep(50);
+		expect(started).toEqual(["First", "Third"]);
+		expect(fourthJob.queued).toBe(true);
+
+		gates.get("Third")!.resolve();
+		await thirdJob.promise;
+		await pollUntil(() => started.length === 3);
+		gates.get("Fourth")!.resolve();
+		await fourthJob.promise;
+
+		expect(started).toEqual(["First", "Third", "Fourth"]);
+		expect(firstJob.status).toBe("completed");
+		expect(thirdJob.status).toBe("completed");
+		expect(fourthJob.status).toBe("completed");
+	});
+
 	for (const maxConcurrency of [0, 0.5]) {
 		it(`runs spawn job bodies unbounded when task.maxConcurrency is ${maxConcurrency}`, async () => {
 			vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
