@@ -107,6 +107,7 @@ export class GuestClient {
 	#working = false;
 	#readOnly = false;
 	#uiRequest: CollabUiRequest | null = null;
+	#uiRequestQueue: CollabUiRequest[] = [];
 	#notices: readonly Notice[] = [];
 	#snapshot: GuestSnapshot;
 
@@ -166,7 +167,7 @@ export class GuestClient {
 	sendUiResponse(reqId: number, value?: CollabUiResponseValue): void {
 		this.#socket.send({ t: "ui-response", reqId, value });
 		if (this.#uiRequest?.reqId === reqId) {
-			this.#uiRequest = null;
+			this.#showNextUiRequest();
 			this.#commit();
 		}
 	}
@@ -226,7 +227,7 @@ export class GuestClient {
 			pending.resolve(null);
 		}
 		this.#pendingTranscripts.clear();
-		this.#uiRequest = null;
+		this.#clearUiRequests();
 		this.#commit();
 		this.#socket.close();
 	}
@@ -284,7 +285,7 @@ export class GuestClient {
 				this.#lifecycle = new Map();
 				this.#working = frame.state.isStreaming;
 				this.#readOnly = frame.readOnly === true;
-				this.#uiRequest = null;
+				this.#clearUiRequests();
 				this.#welcomed = true;
 				this.#clearWelcomeTimer();
 				if (frame.entryCount === 0) {
@@ -341,10 +342,12 @@ export class GuestClient {
 				}
 				break;
 			case "ui-request":
-				this.#uiRequest = frame.request;
+				if (this.#uiRequest) this.#uiRequestQueue = [...this.#uiRequestQueue, frame.request];
+				else this.#uiRequest = frame.request;
 				break;
 			case "ui-request-end":
-				if (this.#uiRequest?.reqId === frame.reqId) this.#uiRequest = null;
+				if (this.#uiRequest?.reqId === frame.reqId) this.#showNextUiRequest();
+				else this.#uiRequestQueue = this.#uiRequestQueue.filter(request => request.reqId !== frame.reqId);
 				break;
 			case "transcript": {
 				const pending = this.#pendingTranscripts.get(frame.reqId);
@@ -452,6 +455,17 @@ export class GuestClient {
 		const next = [...this.#notices, notice];
 		if (next.length > MAX_NOTICES) next.splice(0, next.length - MAX_NOTICES);
 		this.#notices = next;
+	}
+
+	#clearUiRequests(): void {
+		this.#uiRequest = null;
+		this.#uiRequestQueue = [];
+	}
+
+	#showNextUiRequest(): void {
+		const [next, ...rest] = this.#uiRequestQueue;
+		this.#uiRequest = next ?? null;
+		this.#uiRequestQueue = rest;
 	}
 
 	#buildSnapshot(): GuestSnapshot {

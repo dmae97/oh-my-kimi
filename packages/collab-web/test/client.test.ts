@@ -270,6 +270,21 @@ describe("GuestClient frame apply", () => {
 		expect(client.getSnapshot().uiRequest).toBeNull();
 	});
 
+	it("queues overlapping host UI requests until the active one resolves", () => {
+		const client = liveClient();
+		const first = { reqId: 9, kind: "select" as const, title: "First?", options: ["A"] };
+		const second = { reqId: 10, kind: "editor" as const, title: "Second?", prefill: "draft" };
+		client.applyFrameForTest({ t: "ui-request", request: first });
+		client.applyFrameForTest({ t: "ui-request", request: second });
+		expect(client.getSnapshot().uiRequest).toEqual(first);
+
+		client.applyFrameForTest({ t: "ui-request-end", reqId: 9 });
+		expect(client.getSnapshot().uiRequest).toEqual(second);
+
+		client.applyFrameForTest({ t: "ui-request-end", reqId: 10 });
+		expect(client.getSnapshot().uiRequest).toBeNull();
+	});
+
 	it("snapshot reference is stable between frames and replaced per frame", () => {
 		const client = liveClient();
 		const before = client.getSnapshot();

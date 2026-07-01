@@ -123,7 +123,7 @@ export class CollabHost {
 	#unsubscribe?: () => void;
 	#peers = new Map<number, { name: string; canWrite: boolean }>();
 	#uiReqSeq = 0;
-	#pendingUi = new Map<number, { resolve(value: CollabUiResponseValue): void }>();
+	#pendingUi = new Map<number, { request: CollabUiRequest; resolve(value: CollabUiResponseValue): void }>();
 	#lastStateJson = "";
 	#stateDebounce: Timer | null = null;
 	#streamingInterval: Timer | null = null;
@@ -180,7 +180,7 @@ export class CollabHost {
 		const onAbort = (): void => settle(undefined);
 		if (signal?.aborted) return Promise.resolve(undefined);
 		signal?.addEventListener("abort", onAbort, { once: true });
-		this.#pendingUi.set(reqId, { resolve: settle });
+		this.#pendingUi.set(reqId, { request: fullRequest, resolve: settle });
 		this.#sendWritablePeers({ t: "ui-request", request: fullRequest });
 		return promise;
 	}
@@ -400,6 +400,11 @@ export class CollabHost {
 			fromPeer,
 		);
 		this.#sendSnapshotChunks(entries, fromPeer);
+		if (canWrite) {
+			for (const pending of this.#pendingUi.values()) {
+				socket.send({ t: "ui-request", request: pending.request }, fromPeer);
+			}
+		}
 		this.#ctx.session.emitNotice(
 			"info",
 			`${cleanName} joined the collab session${canWrite ? "" : " (read-only)"}`,

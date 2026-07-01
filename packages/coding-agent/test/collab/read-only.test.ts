@@ -341,6 +341,28 @@ describe("collab read-only links", () => {
 		expect(end).toEqual({ t: "ui-request-end", reqId: request.request.reqId });
 	});
 
+	it("replays pending host UI requests to writable guests that join later", async () => {
+		const firstGuest = await joinAsGuest(host.link, "writer-ui-first");
+		guestCleanups.push(() => firstGuest.socket.close());
+		const firstWelcome = await firstGuest.nextFrame();
+		if (firstWelcome.t !== "welcome") throw new Error(`expected welcome, got ${firstWelcome.t}`);
+
+		const pending = host.requestGuestUi({ kind: "editor", title: "Pending?", prefill: "draft" });
+		if (!pending) throw new Error("expected writable guest UI request");
+		const firstRequest = await firstGuest.nextFrame();
+		if (firstRequest.t !== "ui-request") throw new Error(`expected ui-request, got ${firstRequest.t}`);
+
+		const secondGuest = await joinAsGuest(host.link, "writer-ui-second");
+		guestCleanups.push(() => secondGuest.socket.close());
+		const secondWelcome = await secondGuest.nextFrame();
+		if (secondWelcome.t !== "welcome") throw new Error(`expected welcome, got ${secondWelcome.t}`);
+		const replayed = await secondGuest.nextFrame();
+		expect(replayed).toEqual(firstRequest);
+
+		secondGuest.socket.send({ t: "ui-response", reqId: firstRequest.request.reqId, value: "late" });
+		expect(await pending).toBe("late");
+	});
+
 	it("treats a forged write token as read-only", async () => {
 		const { prompts } = harness;
 
