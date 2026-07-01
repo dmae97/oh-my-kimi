@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed approved plan execution prompts embedding the full plan instead of requiring the executor to read the durable `local://<slug>-plan.md` file. ([#4164](https://github.com/can1357/oh-my-pi/issues/4164))
+
 ## [16.2.12] - 2026-07-01
 
 ### Breaking Changes
