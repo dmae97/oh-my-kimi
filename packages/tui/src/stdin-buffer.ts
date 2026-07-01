@@ -88,68 +88,71 @@ function resolveEscapeEnd(buffer: string, pos: number, length: number, resumeSea
 		case 0x1b /* ESC */:
 			// Meta-ESC handled by the caller.
 			return -1;
-		case 0x5b /* [ */: {
-			// CSI: ESC [ ... final byte in 0x40-0x7E.
-			if (pos + 2 >= length) return -1;
-			// Old-style X10 mouse: ESC [ M + 3 arbitrary bytes.
-			if (buffer.charCodeAt(pos + 2) === 0x4d /* M */) {
-				if (pos + 6 <= length) return pos + 6;
-				return length - pos >= MAX_CSI_BYTES ? -2 : -1;
-			}
-			const capEnd = Math.min(length, pos + MAX_CSI_BYTES);
-			const isSgrMouse = buffer.charCodeAt(pos + 2) === 0x3c /* < */;
-			// Resume from where the last call gave up. `-1` preserves the
-			// safety window used by OSC/DCS/APC; CSI has no multi-byte
-			// terminator, but keeping the same rule avoids a fencepost gap.
-			let i = Math.max(pos + 2, resumeSearchFrom - 1);
-			if (i < pos + 2) i = pos + 2;
-			while (i < capEnd) {
-				const code = buffer.charCodeAt(i);
-				if (code >= 0x40 && code <= 0x7e) {
-					if (isSgrMouse) {
-						// SGR mouse only terminates on M/m. Any other final
-						// byte would be a malformed body — keep scanning to
-						// match the prior `isCompleteCsiSequence` semantics.
-						if (code !== 0x4d && code !== 0x6d) {
+		case 0x5b /* [ */:
+			{
+				// CSI: ESC [ ... final byte in 0x40-0x7E.
+				if (pos + 2 >= length) return -1;
+				// Old-style X10 mouse: ESC [ M + 3 arbitrary bytes.
+				if (buffer.charCodeAt(pos + 2) === 0x4d /* M */) {
+					if (pos + 6 <= length) return pos + 6;
+					return length - pos >= MAX_CSI_BYTES ? -2 : -1;
+				}
+				const capEnd = Math.min(length, pos + MAX_CSI_BYTES);
+				const isSgrMouse = buffer.charCodeAt(pos + 2) === 0x3c /* < */;
+				// Resume from where the last call gave up. `-1` preserves the
+				// safety window used by OSC/DCS/APC; CSI has no multi-byte
+				// terminator, but keeping the same rule avoids a fencepost gap.
+				let i = Math.max(pos + 2, resumeSearchFrom - 1);
+				if (i < pos + 2) i = pos + 2;
+				while (i < capEnd) {
+					const code = buffer.charCodeAt(i);
+					if (code >= 0x40 && code <= 0x7e) {
+						if (isSgrMouse) {
+							// SGR mouse only terminates on M/m. Any other final
+							// byte would be a malformed body — keep scanning to
+							// match the prior `isCompleteCsiSequence` semantics.
+							if (code !== 0x4d && code !== 0x6d) {
+								i++;
+								continue;
+							}
+							const payload = buffer.slice(pos + 2, i + 1);
+							if (SGR_MOUSE_COMPLETE.test(payload)) return i + 1;
+							const parts = payload.slice(1, -1).split(";");
+							if (parts.length === 3 && parts.every(p => DIGITS_ONLY.test(p))) return i + 1;
+							// Malformed body ending in M/m — keep scanning for a
+							// real terminator. Bounded by capEnd.
 							i++;
 							continue;
 						}
-						const payload = buffer.slice(pos + 2, i + 1);
-						if (SGR_MOUSE_COMPLETE.test(payload)) return i + 1;
-						const parts = payload.slice(1, -1).split(";");
-						if (parts.length === 3 && parts.every(p => DIGITS_ONLY.test(p))) return i + 1;
-						// Malformed body ending in M/m — keep scanning for a
-						// real terminator. Bounded by capEnd.
-						i++;
-						continue;
+						return i + 1;
 					}
-					return i + 1;
+					i++;
 				}
-				i++;
+				return length - pos >= MAX_CSI_BYTES ? -2 : -1;
 			}
-			return length - pos >= MAX_CSI_BYTES ? -2 : -1;
-		}
-		case 0x5d /* ] */: {
-			// OSC: ESC ] ... BEL or ST (ESC \).
-			const searchFrom = Math.max(pos + 2, resumeSearchFrom - 1);
-			const scanLimit = Math.min(length, pos + MAX_STRING_SEQ_BYTES);
-			const belIndex = buffer.indexOf("\x07", searchFrom);
-			const stIndex = buffer.indexOf("\x1b\\", searchFrom);
-			let end = -1;
-			if (belIndex !== -1 && belIndex + 1 <= scanLimit) end = belIndex + 1;
-			if (stIndex !== -1 && stIndex + 2 <= scanLimit && (end === -1 || stIndex + 2 < end)) end = stIndex + 2;
-			if (end !== -1) return end;
-			return length - pos >= MAX_STRING_SEQ_BYTES ? -2 : -1;
-		}
+		case 0x5d /* ] */:
+			{
+				// OSC: ESC ] ... BEL or ST (ESC \).
+				const searchFrom = Math.max(pos + 2, resumeSearchFrom - 1);
+				const scanLimit = Math.min(length, pos + MAX_STRING_SEQ_BYTES);
+				const belIndex = buffer.indexOf("\x07", searchFrom);
+				const stIndex = buffer.indexOf("\x1b\\", searchFrom);
+				let end = -1;
+				if (belIndex !== -1 && belIndex + 1 <= scanLimit) end = belIndex + 1;
+				if (stIndex !== -1 && stIndex + 2 <= scanLimit && (end === -1 || stIndex + 2 < end)) end = stIndex + 2;
+				if (end !== -1) return end;
+				return length - pos >= MAX_STRING_SEQ_BYTES ? -2 : -1;
+			}
 		case 0x50 /* P */:
-		case 0x5f /* _ */: {
-			// DCS / APC: ESC P/_ ... ST (ESC \).
-			const searchFrom = Math.max(pos + 2, resumeSearchFrom - 1);
-			const scanLimit = Math.min(length, pos + MAX_STRING_SEQ_BYTES);
-			const stIndex = buffer.indexOf("\x1b\\", searchFrom);
-			if (stIndex !== -1 && stIndex + 2 <= scanLimit) return stIndex + 2;
-			return length - pos >= MAX_STRING_SEQ_BYTES ? -2 : -1;
-		}
+		case 0x5f /* _ */:
+			{
+				// DCS / APC: ESC P/_ ... ST (ESC \).
+				const searchFrom = Math.max(pos + 2, resumeSearchFrom - 1);
+				const scanLimit = Math.min(length, pos + MAX_STRING_SEQ_BYTES);
+				const stIndex = buffer.indexOf("\x1b\\", searchFrom);
+				if (stIndex !== -1 && stIndex + 2 <= scanLimit) return stIndex + 2;
+				return length - pos >= MAX_STRING_SEQ_BYTES ? -2 : -1;
+			}
 		case 0x4f /* O */:
 			// SS3: ESC O + 1 char.
 			return pos + 3 <= length ? pos + 3 : -1;

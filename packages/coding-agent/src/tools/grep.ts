@@ -1010,7 +1010,9 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 								throw new ToolError(`Path not found for line-range selector: ${spec.original}`);
 							}
 							if (!stats.isFile()) {
-								throw new ToolError(`Line-range selector requires a single file: ${spec.original} is a directory`);
+								throw new ToolError(
+									`Line-range selector requires a single file: ${spec.original} is a directory`,
+								);
 							}
 							mergeRangesInto(rangesByAbsPath, absKey, spec.ranges);
 						} else {

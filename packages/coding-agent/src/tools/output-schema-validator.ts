@@ -144,7 +144,8 @@ function buildSectionLabelMetadata(jsonSchema: Record<string, unknown>): Section
 	return {
 		labels,
 		rejectUnknownSections: closedSchemas.length > 0,
-		isKnown: label => closedSchemas.length === 0 || closedSchemas.every(schema => schemaAcceptsSectionLabel(schema, label)),
+		isKnown: label =>
+			closedSchemas.length === 0 || closedSchemas.every(schema => schemaAcceptsSectionLabel(schema, label)),
 	};
 }
 

@@ -161,7 +161,9 @@ describe("session exit diagnostics", () => {
 
 		expect(fs.existsSync(sessionFile)).toBe(false);
 		expect(
-			sessionManager.getEntries().some(entry => entry.type === "custom" && entry.customType === SESSION_EXIT_CUSTOM_TYPE),
+			sessionManager
+				.getEntries()
+				.some(entry => entry.type === "custom" && entry.customType === SESSION_EXIT_CUSTOM_TYPE),
 		).toBe(false);
 	});
 

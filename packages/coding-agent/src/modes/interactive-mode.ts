@@ -91,10 +91,10 @@ import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compa
 };
 import type { AgentRegistry } from "../registry/agent-registry";
 import {
-	SHUTDOWN_CONSOLIDATE_BUDGET_MS,
 	type AgentSession,
 	type AgentSessionEvent,
 	type ResolvedRoleModel,
+	SHUTDOWN_CONSOLIDATE_BUDGET_MS,
 } from "../session/agent-session";
 import type { CompactMode } from "../session/compact-modes";
 import { HistoryStorage } from "../session/history-storage";

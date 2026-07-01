@@ -2,23 +2,21 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Clarified CoreWeave Serverless Inference login instructions to persist `COREWEAVE_PROJECT` in the user's shell startup file.
+
+### Fixed
+
+- Fixed an issue where broker usage fetch failures were not cached, causing sequential ranking passes to repeatedly hit the broker when it is down.
+- Fixed Xiaomi MiMo API key validation to use the supported `mimo-v2.5` model.
+- Fixed certificate verification errors for custom gateways behind private CA bundles by applying `NODE_EXTRA_CA_CERTS` to all provider fetches (including OpenAI-compatible, Codex, Ollama, Azure, and Google).
+
 ## [16.2.13] - 2026-07-01
 
 ### Fixed
 
 - Fixed pre-5.4 OpenAI Codex models (`gpt-5.1-codex`, `gpt-5.3-codex`, `gpt-5.3-codex-spark`) rejecting requests with `Unsupported parameter: 'reasoning.summary' is not supported with this model` by gating `reasoning.summary` behind the same gpt-5.4 wire floor as `reasoning.context: "all_turns"`.
-### Fixed
-
-- `RemoteAuthCredentialStore` now caches broker `/v1/usage` fetch failures for the documented 15s TTL fallback, so sequential ranking passes no longer re-hit the broker while it is down ([#4045](https://github.com/can1357/oh-my-pi/issues/4045)).
-### Fixed
-
-- Fixed Xiaomi MiMo standard API-key validation to use the supported `mimo-v2.5` model. ([#4063](https://github.com/can1357/oh-my-pi/issues/4063))
-### Fixed
-
-- Reworded the GPT-5 Responses no-reasoning fallback developer item so it no longer says `# Juice: 0 !important` or implies a zero tool/execution budget. ([#4151](https://github.com/can1357/oh-my-pi/issues/4151))
-### Changed
-
-- Clarified CoreWeave Serverless Inference login instructions to persist `COREWEAVE_PROJECT` in the user's shell startup file.
 
 ## [16.2.12] - 2026-07-01
 
@@ -115,9 +113,6 @@
 - Fixed usage reporting for Antigravity and Z.AI to correctly surface and preserve distinct quota windows (daily, weekly, monthly) instead of collapsing or duplicating them
 - Fixed an issue where `/usage show` returned "No usage data available" when using a custom proxy base URL for Codex
 - Fixed OpenAI stream read errors being incorrectly classified as non-transient, enabling the coding agent to automatically retry after recoverable stream failures
-### Fixed
-
-- Applied `NODE_EXTRA_CA_CERTS` to every provider fetch — OpenAI-compatible, Codex, Ollama, Azure Responses, and Google — not just the Anthropic Foundry path, so custom gateways behind a private CA bundle no longer fail with certificate verification errors ([#3731](https://github.com/can1357/oh-my-pi/issues/3731)).
 
 ## [16.2.3] - 2026-06-28
 

@@ -536,7 +536,8 @@ export class Patcher {
 		const storedSnapshotForTag = expected === undefined ? null : this.snapshots.byHash(canonicalPath, expected);
 		const hashMatches = expected !== undefined && computeFileHash(normalized) === expected;
 		const matchedSnapshot = hashMatches ? this.snapshots.byContent(canonicalPath, normalized) : null;
-		const liveMatches = hashMatches && !ambiguousStoredTag && (storedSnapshotForTag === null || matchedSnapshot !== null);
+		const liveMatches =
+			hashMatches && !ambiguousStoredTag && (storedSnapshotForTag === null || matchedSnapshot !== null);
 
 		// Resolve `replace_block N:` edits to concrete ranges before recovery
 		// runs. Block anchors are expressed against the snapshot the section tag

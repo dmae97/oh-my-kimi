@@ -43,4 +43,3 @@ describe("fuzzyFilter", () => {
 		expect(fuzzyMatch("搜索", "Settings").matches).toBe(false);
 	});
 });
-

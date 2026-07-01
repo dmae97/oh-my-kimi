@@ -4,10 +4,12 @@
 
 ### Added
 
-- Added `workingDir` to `ShellRunResult` so hosts can sync session cwd without running a hidden probe command.
+- Added `workingDir` to `ShellRunResult` to allow hosts to synchronize the session's current working directory without executing a hidden probe command.
+
 ### Fixed
 
-- Fixed `task::blocking` native worker panics aborting the host process instead of rejecting the returned JS Promise. `Blocking::compute` now catches unwinds before they cross napi-rs's plain `extern "C"` async-work callback and maps the payload to a `GenericFailure` `Error` — the FFI edge is not `C-unwind`, so a stray panic was force-aborting under Rust's stabilized C-unwind rules. Affects every `task::blocking`-backed native (grep, ast, glob, listWorkspace, html-to-markdown, snapcompact, fuzzy find, clipboard image read) ([#4071](https://github.com/can1357/oh-my-pi/issues/4071)).
+- Fixed an issue where panics in native worker tasks (such as grep, AST parsing, globbing, workspace listing, HTML-to-markdown conversion, fuzzy finding, and clipboard image reading) would abort the host process instead of properly rejecting the returned JavaScript Promise.
+- Fixed a crash on Windows under low memory/commit charge conditions when spawning worker threads for token counting or sorting operations.
 
 ## [16.2.11] - 2026-07-01
 
@@ -27,9 +29,6 @@
 
 - Added embedded Silver TrueType font rendering support to `renderSnapcompactPng`, featuring automatic per-glyph fallback for missing bitmap characters and anti-aliased scaling for East Asian wide code points.
 - Added the `snapcompactSupportedChars` function to check font capability for specific characters.
-### Fixed
-
-- Fixed `pi-natives` aborting on Windows under low commit charge when Rayon's global pool lazily spawned one worker per logical CPU for `count_tokens` or vendored `sort`. The post-load native runtime installer now configures Rayon's global pool through the same Windows thread-spawn probe used for Tokio and keeps patched Rayon callsites sequential if no worker remains after reserving capacity for native helper threads ([#3770](https://github.com/can1357/oh-my-pi/issues/3770)).
 
 ## [16.2.5] - 2026-06-28
 

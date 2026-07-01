@@ -393,7 +393,9 @@ describe("task spawn routing", () => {
 
 		// `0` = Unlimited in the settings UI; fractional values truncate to 0.
 		for (const maxConcurrency of [0, 0.5]) {
-			const unboundedTool = await TaskTool.create(createSession({ settings: { "task.maxConcurrency": maxConcurrency } }));
+			const unboundedTool = await TaskTool.create(
+				createSession({ settings: { "task.maxConcurrency": maxConcurrency } }),
+			);
 			expect(unboundedTool.description).not.toContain("Concurrency cap");
 		}
 	});

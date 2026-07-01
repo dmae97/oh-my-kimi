@@ -48,7 +48,7 @@ describe("scripts/link-omp.sh", () => {
 		const shimDir = writeBunShim(
 			dir,
 			[
-				"if [ \"$1\" = \"pm\" ] && [ \"$2\" = \"-g\" ] && [ \"$3\" = \"bin\" ]; then",
+				'if [ "$1" = "pm" ] && [ "$2" = "-g" ] && [ "$3" = "bin" ]; then',
 				"  echo 'error: No package.json was found for directory' >&2",
 				"  exit 1",
 				"fi",
@@ -75,7 +75,7 @@ describe("scripts/link-omp.sh", () => {
 		const shimDir = writeBunShim(
 			dir,
 			[
-				"if [ \"$1\" = \"pm\" ] && [ \"$2\" = \"-g\" ] && [ \"$3\" = \"bin\" ]; then",
+				'if [ "$1" = "pm" ] && [ "$2" = "-g" ] && [ "$3" = "bin" ]; then',
 				`  echo '${globalBin}'`,
 				"  exit 0",
 				"fi",

@@ -4,26 +4,32 @@
 
 ### Fixed
 
-- Bounded ConPTY full-paint resume frames to the retained visible tail so large Windows session restores do not get truncated mid-frame by the host.
+- Fixed an issue where large Windows terminal session restores could get truncated mid-frame during ConPTY full-paint resume.
 
 ## [16.2.13] - 2026-07-01
 
 ### Fixed
 
 - Fixed fuzzy-search filtering for CJK and other non-ASCII queries by preserving Unicode letters and numbers during query normalization ([#4114](https://github.com/can1357/oh-my-pi/issues/4114)).
-### Fixed
-
 - Bounded terminal input parsing so a malformed CSI/OSC/DCS/APC or a large non-bracketed paste no longer blocks the event loop. `StdinBuffer.extractCompleteSequences` now resolves each escape by a single linear scan with a per-type length cap (CSI 4 KiB, OSC/DCS/APC 16 MiB) and carries a resume-search offset so a chunked OSC 5522 payload stays O(total) instead of O(total²). `BracketedPasteHandler` gained a byte cap (default 64 MiB) that aborts paste mode and delivers the accumulated bytes when a lost end marker would otherwise hold memory forever — defense in depth for callers that bypass `StdinBuffer`. The `ProcessTerminal` data handler now takes a fast path when the sequence is not ESC-prefixed and no reassembly buffer is active, so a large non-bracketed paste skips six escape-probe regex tests per Unicode scalar ([#4073](https://github.com/can1357/oh-my-pi/issues/4073)).
+- Added adaptive render backpressure: a frame that overruns the 30 fps cadence now inflates the following frame's delay to at most twice its own cost (capped at 200 ms), preventing the render loop from busy-looping when a slow paint would otherwise fire the next frame at `setTimeout(0)`. ([#4145](https://github.com/can1357/oh-my-pi/issues/4145))
+
 ### Added
 
 - Added regression coverage for `findCommittedPrefixResync` — the tui seam that re-anchors the committed prefix when a live block re-lays-out at settle. Locks in the earliest-audited-mismatch re-anchor, the hard-scan escape from tail-sample tolerance for a newly-permanent forced-overflow row, exempt-window drift silence, and shrink-into-prefix truncation, so a future refactor of the resync path cannot silently strand pending SSH placeholder chrome above the settled block ([#4124](https://github.com/can1357/oh-my-pi/issues/4124)).
-### Added
-
 - Added `Editor.setTopBorderProvider()` so hosts can install a lazy top-border builder that runs once per painted frame instead of eagerly rebuilding after every state change. Falls back to the existing `setTopBorder()` slot when no provider is registered.
+
+## [16.2.13] - 2026-07-01
 
 ### Fixed
 
-- Added adaptive render backpressure: a frame that overruns the 30 fps cadence now inflates the following frame's delay to at most twice its own cost (capped at 200 ms), preventing the render loop from busy-looping when a slow paint would otherwise fire the next frame at `setTimeout(0)`. ([#4145](https://github.com/can1357/oh-my-pi/issues/4145))
+- Fixed fuzzy-search filtering for CJK and other non-ASCII queries by preserving Unicode letters and numbers during query normalization ([#4114](https://github.com/can1357/oh-my-pi/issues/4114)).
+
+## [16.2.12] - 2026-07-01
+
+### Fixed
+
+- Optimized streaming markdown rendering to reuse already-rendered prefix lines and only render new content deltas, improving performance and reducing redraw flicker.
 
 ## [16.2.12] - 2026-07-01
 
@@ -37,6 +43,18 @@
 
 - Fixed mid-prompt `/skill:<name>` autocomplete acceptance wiping the user's draft. The autocomplete now inserts the `/skill:<name> ` token at the cursor (replacing only the partial `/sk` slash token) and preserves prose typed before and after it, so a user can compose a prompt and reach for a skill without losing their train of thought ([#3913](https://github.com/can1357/oh-my-pi/issues/3913)).
 
+## [16.2.10] - 2026-06-30
+
+### Fixed
+
+- Fixed mid-prompt `/skill:<name>` autocomplete acceptance wiping the user's draft. The autocomplete now inserts the `/skill:<name> ` token at the cursor (replacing only the partial `/sk` slash token) and preserves prose typed before and after it, so a user can compose a prompt and reach for a skill without losing their train of thought ([#3913](https://github.com/can1357/oh-my-pi/issues/3913)).
+
+## [16.2.9] - 2026-06-30
+
+### Added
+
+- Added `Editor.submit()` to allow programmatic composer submission, enabling integration with speech input and other automated flows.
+
 ## [16.2.9] - 2026-06-30
 
 ### Added
@@ -48,42 +66,16 @@
 ### Fixed
 
 - Fixed an issue where a fast double-Escape keypress was swallowed and ignored, preventing double-escape gestures and subsequent Escape key handlers from firing.
+
 ### Changed
 
 - Sped up fuzzy filtering in selectors (model, settings, file/tree, hook, OAuth) by preparing the query once per filter instead of once per candidate, and memoizing the per-text search index across keystrokes. Incremental typing over a 400-item list drops ~57% (6.7ms → 2.9ms for an 8-keystroke session) with no change to match ranking and no first-keystroke regression; long texts (pasted prompts, transcripts) bypass the cache so memory stays bounded.
 
-## [16.2.13] - 2026-07-01
-
-### Fixed
-
-- Fixed fuzzy-search filtering for CJK and other non-ASCII queries by preserving Unicode letters and numbers during query normalization ([#4114](https://github.com/can1357/oh-my-pi/issues/4114)).
-
-## [16.2.12] - 2026-07-01
-
-### Fixed
-
-- Optimized streaming markdown rendering to reuse already-rendered prefix lines and only render new content deltas, improving performance and reducing redraw flicker.
-
-## [16.2.10] - 2026-06-30
-
-### Fixed
-
-- Fixed mid-prompt `/skill:<name>` autocomplete acceptance wiping the user's draft. The autocomplete now inserts the `/skill:<name> ` token at the cursor (replacing only the partial `/sk` slash token) and preserves prose typed before and after it, so a user can compose a prompt and reach for a skill without losing their train of thought ([#3913](https://github.com/can1357/oh-my-pi/issues/3913)).
-
-## [16.2.9] - 2026-06-30
-
-### Added
-
-- Added `Editor.submit()` to allow programmatic composer submission, enabling integration with speech input and other automated flows.
-
 ## [16.2.7] - 2026-06-30
 
 ### Fixed
 
 - Fixed an issue where a fast double-Escape keypress was swallowed and ignored, preventing double-escape gestures and subsequent Escape key handlers from firing.
-### Changed
-
-- Avoided reallocating the tab-expansion space string on every `replaceTabs` call by hoisting it to a module constant.
 
 ## [16.2.3] - 2026-06-28
 

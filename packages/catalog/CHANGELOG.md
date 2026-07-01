@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the Xiaomi provider's default model to use the supported mimo-v2.5 model.
+- Fixed CoreWeave Serverless Inference project-header detection to ensure blank OpenAI-Project overrides do not block the COREWEAVE_PROJECT fallback.
+- Fixed LiteLLM MiniMax M3 discovery to remove reseller-only (3x usage) display suffixes.
+- Updated the Responses compatibility flag documentation to clarify the no-reasoning fallback behavior.
+
 ## [16.2.13] - 2026-07-01
 
 ### Added
@@ -11,15 +18,6 @@
 ### Fixed
 
 - Fixed discovered OpenAI Codex models to advertise V2 streaming remote compaction, avoiding the legacy compact endpoint timeout path for Codex sessions. ([#4146](https://github.com/can1357/oh-my-pi/issues/4146))
-### Fixed
-
-- Fixed the Xiaomi provider default model to use the supported `mimo-v2.5` model. ([#4063](https://github.com/can1357/oh-my-pi/issues/4063))
-### Fixed
-
-- Updated the Responses compat flag docs to describe the no-reasoning fallback without the old `# Juice: 0 !important` wording. ([#4151](https://github.com/can1357/oh-my-pi/issues/4151))
-### Fixed
-
-- Fixed CoreWeave Serverless Inference project-header detection so blank `OpenAI-Project` overrides do not block `COREWEAVE_PROJECT` fallback.
 
 ## [16.2.12] - 2026-07-01
 
@@ -84,10 +82,6 @@
 - Enabled automatic content markup healing for all OpenAI-compatible streaming models
 - Updated pricing and context window limits for several catalog models.
 - Disabled reasoning capability for multiple providers in the catalog.
-
-### Fixed
-
-- Fixed LiteLLM MiniMax M3 discovery to drop reseller-only `(3x usage)` display suffixes. ([#3715](https://github.com/can1357/oh-my-pi/issues/3715))
 
 ## [16.2.2] - 2026-06-27
 
