@@ -31,6 +31,9 @@
 ### Fixed
 
 - Fixed an issue where a fast double-Escape keypress was swallowed and ignored, preventing double-escape gestures and subsequent Escape key handlers from firing.
+### Changed
+
+- Sped up fuzzy filtering in selectors (model, settings, file/tree, hook, OAuth) by preparing the query once per filter instead of once per candidate, and memoizing the per-text search index across keystrokes. Incremental typing over a 400-item list drops ~57% (6.7ms → 2.9ms for an 8-keystroke session) with no change to match ranking and no first-keystroke regression; long texts (pasted prompts, transcripts) bypass the cache so memory stays bounded.
 
 ## [16.2.3] - 2026-06-28
 
