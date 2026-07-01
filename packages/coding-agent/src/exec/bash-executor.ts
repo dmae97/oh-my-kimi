@@ -51,6 +51,7 @@ export interface BashResult {
 	outputLines: number;
 	outputBytes: number;
 	artifactId?: string;
+	workingDir?: string;
 }
 
 const shellSessions = new Map<string, Shell>();
@@ -429,6 +430,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		return {
 			exitCode: winner.result.exitCode,
 			cancelled: false,
+			workingDir: winner.result.workingDir,
 			...(await sink.dump()),
 		};
 	} catch (err) {

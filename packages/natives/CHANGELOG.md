@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added post-command `workingDir` metadata to native shell execution results so callers can sync persistent shell directory changes without running probe commands.
+
 ## [16.2.11] - 2026-07-01
 
 ### Fixed

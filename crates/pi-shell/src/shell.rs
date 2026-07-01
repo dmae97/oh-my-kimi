@@ -99,10 +99,11 @@ pub struct MinimizerResult {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ShellRunResult {
-	pub exit_code: Option<i32>,
-	pub cancelled: bool,
-	pub timed_out: bool,
-	pub minimized: Option<MinimizerResult>,
+	pub exit_code:   Option<i32>,
+	pub cancelled:   bool,
+	pub timed_out:   bool,
+	pub minimized:   Option<MinimizerResult>,
+	pub working_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -322,10 +323,11 @@ async fn run_shell_session(
 			}
 			let _ = process_cancel_bridge.await;
 			return Ok(ShellRunResult {
-				exit_code: None,
-				cancelled: matches!(reason, AbortReason::Signal),
-				timed_out: matches!(reason, AbortReason::Timeout),
-				minimized: None,
+				exit_code:   None,
+				cancelled:   matches!(reason, AbortReason::Signal),
+				timed_out:   matches!(reason, AbortReason::Timeout),
+				minimized:   None,
+				working_dir: None,
 			});
 		}
 	};
@@ -339,12 +341,13 @@ async fn run_shell_session(
 	if !keepalive {
 		*session.lock().await = None;
 	}
-	let (exec, minimized) = res?;
+	let (exec, minimized, working_dir) = res?;
 	Ok(ShellRunResult {
 		exit_code: Some(exit_code(&exec)),
 		cancelled: false,
 		timed_out: false,
 		minimized,
+		working_dir: Some(working_dir),
 	})
 }
 
@@ -390,10 +393,11 @@ async fn run_shell_oneshot(
 			}
 			let _ = process_cancel_bridge.await;
 			return Ok(ShellExecuteResult {
-				exit_code: None,
-				cancelled: matches!(reason, AbortReason::Signal),
-				timed_out: matches!(reason, AbortReason::Timeout),
-				minimized: None,
+				exit_code:   None,
+				cancelled:   matches!(reason, AbortReason::Signal),
+				timed_out:   matches!(reason, AbortReason::Timeout),
+				minimized:   None,
+				working_dir: None,
 			});
 		},
 	};
@@ -402,12 +406,13 @@ async fn run_shell_oneshot(
 	let _ = process_cancel_bridge.await;
 	let res = run_result
 		.unwrap_or_else(|err| Err(Error::msg(format!("Shell execution task failed: {err}"))));
-	let (exec, minimized) = res?;
+	let (exec, minimized, working_dir) = res?;
 	Ok(ShellExecuteResult {
 		exit_code: Some(exit_code(&exec)),
 		cancelled: false,
 		timed_out: false,
 		minimized,
+		working_dir: Some(working_dir),
 	})
 }
 
@@ -458,6 +463,7 @@ async fn run_shell_oneshot_streams(
 				cancelled: matches!(reason, AbortReason::Signal),
 				timed_out: matches!(reason, AbortReason::Timeout),
 				minimized: None,
+				working_dir: None,
 			});
 		},
 	};
@@ -468,10 +474,11 @@ async fn run_shell_oneshot_streams(
 		.unwrap_or_else(|err| Err(Error::msg(format!("Shell execution task failed: {err}"))));
 	let exec = res?;
 	Ok(ShellExecuteResult {
-		exit_code: Some(exit_code(&exec)),
-		cancelled: false,
-		timed_out: false,
-		minimized: None,
+		exit_code:   Some(exit_code(&exec)),
+		cancelled:   false,
+		timed_out:   false,
+		minimized:   None,
+		working_dir: None,
 	})
 }
 
@@ -760,7 +767,7 @@ async fn run_shell_command(
 	on_chunk: Option<Sender<String>>,
 	cancel_token: CancellationToken,
 	spawn_registry: Arc<process::SpawnRegistry>,
-) -> Result<(ExecutionResult, Option<MinimizerResult>)> {
+) -> Result<(ExecutionResult, Option<MinimizerResult>, String)> {
 	if let Some(cwd) = options.cwd.as_deref() {
 		session
 			.shell
@@ -802,7 +809,9 @@ async fn run_shell_command(
 			.map_err(|err| Error::msg(format!("Failed to pop env scope: {err}")))?;
 	}
 
-	result
+	result.map(|(exec, minimized)| {
+		(exec, minimized, session.shell.working_dir().to_string_lossy().into_owned())
+	})
 }
 
 async fn run_shell_command_single(

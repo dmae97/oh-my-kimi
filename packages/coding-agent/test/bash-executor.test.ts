@@ -122,17 +122,21 @@ describe("executeBash", () => {
 		expect(result.output.trim()).toBe(fs.realpathSync(tempDir));
 	});
 
-	it("syncs persistent shell directory changes back to the session", async () => {
+	it("syncs persistent shell directory changes back to the session without clobbering status", async () => {
 		const childDir = path.join(tempDir, "child");
 		fs.mkdirSync(childDir);
 		const sessionKey = `cwd-sync-${Date.now()}`;
-		await executeBash(`cd ${shellQuote(childDir)}`, { sessionKey, timeout: 5000, useUserShell: true });
+		const result = await executeBash(`cd ${shellQuote(childDir)}; false`, {
+			sessionKey,
+			timeout: 5000,
+			useUserShell: true,
+		});
+		expect(result.exitCode).toBe(1);
 
 		const applied: string[] = [];
 		const synced = await syncBashSessionCwd({
-			sessionKey,
+			result,
 			currentCwd: tempDir,
-			useUserShell: true,
 			applyCwd: async cwd => {
 				applied.push(cwd);
 			},
@@ -140,6 +144,8 @@ describe("executeBash", () => {
 
 		expect(synced).toBe(childDir);
 		expect(applied).toEqual([childDir]);
+		const status = await executeBash("echo $?", { sessionKey, timeout: 5000, useUserShell: true });
+		expect(status.output.trim()).toBe("1");
 	});
 
 	it("canonicalizes symlinked cwd before execution", async () => {

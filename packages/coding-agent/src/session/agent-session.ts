@@ -12778,9 +12778,8 @@ export class AgentSession {
 			});
 
 			await syncBashSessionCwd({
-				sessionKey: this.sessionId,
+				result,
 				currentCwd: cwd,
-				useUserShell: options?.useUserShell,
 				applyCwd: async nextCwd => {
 					await this.sessionManager.moveTo(nextCwd);
 					setProjectDir(nextCwd);

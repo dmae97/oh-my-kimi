@@ -1437,6 +1437,8 @@ export interface ShellRunResult {
    * minimized text shown to the agent. `None` when nothing was rewritten.
    */
   minimized?: MinimizerResult
+  /** Shell working directory after command completion. */
+  workingDir?: string
 }
 
 /**

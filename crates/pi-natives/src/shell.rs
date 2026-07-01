@@ -162,25 +162,28 @@ impl From<CoreMinimizerResult> for MinimizerResult {
 #[napi(object)]
 pub struct ShellRunResult {
 	/// Exit code when the command completes normally.
-	pub exit_code: Option<i32>,
+	pub exit_code:   Option<i32>,
 	/// Whether the command was cancelled via abort.
-	pub cancelled: bool,
+	pub cancelled:   bool,
 	/// Whether the command timed out before completion.
-	pub timed_out: bool,
+	pub timed_out:   bool,
 	/// When the minimizer rewrote the captured output, this carries the
 	/// original buffer + telemetry so the session layer can persist it as
 	/// an artifact and splice an `artifact://<id>` reference into the
 	/// minimized text shown to the agent. `None` when nothing was rewritten.
-	pub minimized: Option<MinimizerResult>,
+	pub minimized:   Option<MinimizerResult>,
+	/// Shell working directory after command completion.
+	pub working_dir: Option<String>,
 }
 
 impl From<CoreShellRunResult> for ShellRunResult {
 	fn from(value: CoreShellRunResult) -> Self {
 		Self {
-			exit_code: value.exit_code,
-			cancelled: value.cancelled,
-			timed_out: value.timed_out,
-			minimized: value.minimized.map(Into::into),
+			exit_code:   value.exit_code,
+			cancelled:   value.cancelled,
+			timed_out:   value.timed_out,
+			minimized:   value.minimized.map(Into::into),
+			working_dir: value.working_dir,
 		}
 	}
 }
