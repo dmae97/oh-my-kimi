@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { StdioTransport, resolveStdioSpawnCommand } from "./stdio";
+import { resolveStdioSpawnCommand, StdioTransport } from "./stdio";
 
 describe("resolveStdioSpawnCommand", () => {
 	it("hides Windows executable MCP servers when the host has no console", async () => {
@@ -61,7 +61,6 @@ describe.skipIf(process.platform === "win32")("StdioTransport request write stal
 		// overruns the OS pipe buffer plus any FileSink JS-side buffering, so
 		// Bun's write() returns a Promise that only settles if the child reads.
 		const transport = new StdioTransport({
-			name: "stall-regression",
 			command: "sleep",
 			args: ["60"],
 			timeout: timeoutMs,
@@ -72,12 +71,10 @@ describe.skipIf(process.platform === "win32")("StdioTransport request write stal
 
 			const bigParam = "x".repeat(1024 * 1024);
 			const started = performance.now();
-			const outcome = await transport
-				.request("tools/call", { name: "noop", arguments: { blob: bigParam } })
-				.then(
-					() => ({ kind: "resolved" as const }),
-					(error: unknown) => ({ kind: "rejected" as const, error }),
-				);
+			const outcome = await transport.request("tools/call", { name: "noop", arguments: { blob: bigParam } }).then(
+				() => ({ kind: "resolved" as const }),
+				(error: unknown) => ({ kind: "rejected" as const, error }),
+			);
 			const elapsedMs = performance.now() - started;
 
 			expect(outcome.kind).toBe("rejected");
