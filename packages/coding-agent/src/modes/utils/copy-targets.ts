@@ -118,6 +118,18 @@ export function extractCodeBlocks(text: string): CodeBlock[] {
 		.map(b => ({ lang: b.lang, code: b.code }));
 }
 
+/** Walk the transcript backwards for the most recent fenced assistant code block. */
+export function extractLastCodeBlock(messages: readonly AgentMessage[]): CodeBlock | undefined {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		const text = assistantText(msg);
+		if (!text) continue;
+		const blocks = extractCodeBlocks(text);
+		if (blocks.length > 0) return blocks[blocks.length - 1];
+	}
+	return undefined;
+}
+
 /** Extract `>`-quoted blocks from assistant markdown, in document order. */
 export function extractQuoteBlocks(text: string): QuoteBlock[] {
 	return extractBlocks(text)

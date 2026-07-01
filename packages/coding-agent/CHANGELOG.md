@@ -102,6 +102,9 @@
 ### Removed
 
 - Removed the built-in oracle subagent.
+### Fixed
+
+- Fixed `/copy code` and `/copy cmd` being treated as normal prompts instead of copying the latest code or command block. ([#3893](https://github.com/can1357/oh-my-pi/issues/3893))
 
 ## [16.2.8] - 2026-06-30
 
