@@ -769,6 +769,26 @@ function codespanSwatch(code: string, glyph: string): string {
 	return colorSwatch(match[1], glyph);
 }
 
+interface RenderSignature {
+	width: number;
+	paddingX: number;
+	paddingY: number;
+	codeBlockIndent: number;
+	themeId: number;
+	defaultTextStyleId: number;
+	imageProtocol: string;
+	hyperlinks: boolean;
+	textSizing: boolean;
+	bgColorProbe: string;
+	headingProbe: string;
+}
+
+interface StreamPrefixLineCache extends RenderSignature {
+	text: string;
+	tokenCount: number;
+	lines: readonly string[];
+}
+
 export class Markdown implements Component {
 	#text: string;
 	#paddingX: number; // Left/right padding
@@ -796,6 +816,7 @@ export class Markdown implements Component {
 	// tokenization, so this cache is independent of the render caches above.
 	#streamPrefixText?: string;
 	#streamPrefixTokens?: Token[];
+	#streamPrefixLineCache?: StreamPrefixLineCache;
 
 	#ignoreTight = false;
 
@@ -829,6 +850,7 @@ export class Markdown implements Component {
 			// outlives the content it indexed.
 			this.#streamPrefixText = undefined;
 			this.#streamPrefixTokens = undefined;
+			this.#streamPrefixLineCache = undefined;
 		}
 		this.invalidate();
 	}
@@ -942,6 +964,7 @@ export class Markdown implements Component {
 
 		// Replace tabs with 3 spaces for consistent rendering
 		const normalizedText = replaceTabs(this.#text);
+		const signature = this.#renderSignature(width, paddingX);
 
 		// L2: module-level LRU — survives component disposal/recreation across
 		// session-tree navigations. Key encodes every dimension that affects the
@@ -957,9 +980,7 @@ export class Markdown implements Component {
 		// by MarkdownTheme and is one of the most styling-sensitive entries.
 		let cacheKey: string | undefined;
 		if (!this.transientRenderCache) {
-			const bgColorProbe = this.#defaultTextStyle?.bgColor ? this.#defaultTextStyle.bgColor("\x01") : "";
-			const headingProbe = this.#theme.heading("");
-			cacheKey = `${normalizedText}\x00${width}\x00${paddingX}\x00${this.#paddingY}\x00${this.#codeBlockIndent}\x00${objectId(this.#theme)}\x00${this.#defaultTextStyle ? objectId(this.#defaultTextStyle) : -1}\x00${TERMINAL.imageProtocol ?? ""}\x00${TERMINAL.hyperlinks ? 1 : 0}\x00${TERMINAL.textSizing ? 1 : 0}\x00${bgColorProbe}\x00${headingProbe}`;
+			cacheKey = this.#renderCacheKey(normalizedText, signature);
 			const cached = renderCache.get(cacheKey);
 			if (cached !== undefined) {
 				// Populate L1 so subsequent calls from this instance are O(1) map lookup.
@@ -972,18 +993,130 @@ export class Markdown implements Component {
 
 		// Parse markdown to HTML-like tokens
 		const tokens = this.#lexTokens(normalizedText);
+		const contentLines = this.transientRenderCache
+			? this.#renderStreamingContentLines(tokens, normalizedText, signature, contentWidth)
+			: this.#renderContentLines(tokens, 0, tokens.length, contentWidth, signature);
+		const emptyLines = this.#renderEmptyPaddingLines(signature);
 
-		// Convert tokens to styled terminal output
-		const renderedLines: string[] = [];
+		// Combine top padding, content, and bottom padding
+		const rawResult = [...emptyLines, ...contentLines, ...emptyLines];
+		const result = rawResult.length > 0 ? rawResult : [""];
 
-		for (let i = 0; i < tokens.length; i++) {
-			const token = tokens[i];
-			const nextToken = tokens[i + 1];
-			const tokenLines = this.#renderToken(token, contentWidth, nextToken?.type);
-			renderedLines.push(...tokenLines);
+		// Update caches and hand the array out by reference. Callers must not
+		// mutate it (Component render contract); the L2 entry is shared across
+		// instances keyed on identical inputs.
+		this.#cachedText = this.#text;
+		this.#cachedWidth = width;
+		this.#cachedLines = result;
+
+		// Update L2 module-level LRU so future instances with the same key skip
+		// the marked.lexer + highlightCode (Rust FFI) work entirely.
+		if (cacheKey !== undefined) {
+			renderCache.set(cacheKey, result);
 		}
 
-		// Wrap lines (NO padding, NO background yet)
+		return result;
+	}
+
+	#renderSignature(width: number, paddingX: number): RenderSignature {
+		const bgColorProbe = this.#defaultTextStyle?.bgColor ? this.#defaultTextStyle.bgColor("\x01") : "";
+		const headingProbe = this.#theme.heading("");
+		return {
+			width,
+			paddingX,
+			paddingY: this.#paddingY,
+			codeBlockIndent: this.#codeBlockIndent,
+			themeId: objectId(this.#theme),
+			defaultTextStyleId: this.#defaultTextStyle ? objectId(this.#defaultTextStyle) : -1,
+			imageProtocol: TERMINAL.imageProtocol ?? "",
+			hyperlinks: TERMINAL.hyperlinks,
+			textSizing: TERMINAL.textSizing,
+			bgColorProbe,
+			headingProbe,
+		};
+	}
+
+	#renderCacheKey(normalizedText: string, signature: RenderSignature): string {
+		return `${normalizedText}\x00${signature.width}\x00${signature.paddingX}\x00${signature.paddingY}\x00${signature.codeBlockIndent}\x00${signature.themeId}\x00${signature.defaultTextStyleId}\x00${signature.imageProtocol}\x00${signature.hyperlinks ? 1 : 0}\x00${signature.textSizing ? 1 : 0}\x00${signature.bgColorProbe}\x00${signature.headingProbe}`;
+	}
+
+	#renderStreamingContentLines(
+		tokens: Token[],
+		normalizedText: string,
+		signature: RenderSignature,
+		contentWidth: number,
+	): string[] {
+		const frozenText = this.#streamPrefixText;
+		const frozenTokenCount = this.#streamPrefixTokens?.length ?? 0;
+		if (frozenText === undefined || frozenTokenCount === 0 || !normalizedText.startsWith(frozenText)) {
+			return this.#renderContentLines(tokens, 0, tokens.length, contentWidth, signature);
+		}
+
+		const contentLines: string[] = [];
+		const reusablePrefix = this.#matchingStreamPrefixLineCache(normalizedText, frozenText, signature);
+		let renderedUntil = 0;
+		if (reusablePrefix && reusablePrefix.tokenCount <= frozenTokenCount) {
+			contentLines.push(...reusablePrefix.lines);
+			renderedUntil = reusablePrefix.tokenCount;
+		}
+
+		if (renderedUntil < frozenTokenCount) {
+			contentLines.push(
+				...this.#renderContentLines(tokens, renderedUntil, frozenTokenCount, contentWidth, signature),
+			);
+			renderedUntil = frozenTokenCount;
+		}
+
+		this.#streamPrefixLineCache = {
+			...signature,
+			text: frozenText,
+			tokenCount: frozenTokenCount,
+			lines: contentLines.slice(),
+		};
+
+		if (renderedUntil < tokens.length) {
+			contentLines.push(...this.#renderContentLines(tokens, renderedUntil, tokens.length, contentWidth, signature));
+		}
+
+		return contentLines;
+	}
+
+	#matchingStreamPrefixLineCache(
+		normalizedText: string,
+		frozenText: string,
+		signature: RenderSignature,
+	): StreamPrefixLineCache | undefined {
+		const cache = this.#streamPrefixLineCache;
+		if (!cache) return undefined;
+		if (!normalizedText.startsWith(cache.text) || !frozenText.startsWith(cache.text)) return undefined;
+		if (cache.width !== signature.width) return undefined;
+		if (cache.paddingX !== signature.paddingX) return undefined;
+		if (cache.paddingY !== signature.paddingY) return undefined;
+		if (cache.codeBlockIndent !== signature.codeBlockIndent) return undefined;
+		if (cache.themeId !== signature.themeId) return undefined;
+		if (cache.defaultTextStyleId !== signature.defaultTextStyleId) return undefined;
+		if (cache.imageProtocol !== signature.imageProtocol) return undefined;
+		if (cache.hyperlinks !== signature.hyperlinks) return undefined;
+		if (cache.textSizing !== signature.textSizing) return undefined;
+		if (cache.bgColorProbe !== signature.bgColorProbe) return undefined;
+		if (cache.headingProbe !== signature.headingProbe) return undefined;
+		return cache;
+	}
+
+	#renderContentLines(
+		tokens: Token[],
+		start: number,
+		end: number,
+		contentWidth: number,
+		signature: RenderSignature,
+	): string[] {
+		const renderedLines: string[] = [];
+		for (let i = start; i < end; i++) {
+			const token = tokens[i];
+			const nextToken = tokens[i + 1];
+			renderedLines.push(...this.#renderToken(token, contentWidth, nextToken?.type));
+		}
+
 		const wrappedLines: string[] = [];
 		for (const line of renderedLines) {
 			// Skip wrapping for image protocol lines and OSC 66 sized headings
@@ -995,12 +1128,10 @@ export class Markdown implements Component {
 			}
 		}
 
-		// Add margins and background to each wrapped line
-		const leftMargin = padding(paddingX);
-		const rightMargin = padding(paddingX);
+		const leftMargin = padding(signature.paddingX);
+		const rightMargin = padding(signature.paddingX);
 		const bgFn = this.#defaultTextStyle?.bgColor;
 		const contentLines: string[] = [];
-
 		let previousLineWasOsc66 = false;
 
 		for (const line of wrappedLines) {
@@ -1023,45 +1154,30 @@ export class Markdown implements Component {
 			}
 
 			previousLineWasOsc66 = false;
-
 			const lineWithMargins = leftMargin + line + rightMargin;
 
 			if (bgFn) {
-				contentLines.push(applyBackgroundToLine(lineWithMargins, width, bgFn));
+				contentLines.push(applyBackgroundToLine(lineWithMargins, signature.width, bgFn));
 			} else {
 				// No background - just pad to width
 				const visibleLen = visibleWidth(lineWithMargins);
-				const paddingNeeded = Math.max(0, width - visibleLen);
+				const paddingNeeded = Math.max(0, signature.width - visibleLen);
 				contentLines.push(lineWithMargins + padding(paddingNeeded));
 			}
 		}
 
-		// Add top/bottom padding (empty lines)
-		const emptyLine = padding(width);
+		return contentLines;
+	}
+
+	#renderEmptyPaddingLines(signature: RenderSignature): string[] {
+		const emptyLine = padding(signature.width);
 		const emptyLines: string[] = [];
-		for (let i = 0; i < this.#paddingY; i++) {
-			const line = bgFn ? applyBackgroundToLine(emptyLine, width, bgFn) : emptyLine;
+		const bgFn = this.#defaultTextStyle?.bgColor;
+		for (let i = 0; i < signature.paddingY; i++) {
+			const line = bgFn ? applyBackgroundToLine(emptyLine, signature.width, bgFn) : emptyLine;
 			emptyLines.push(line);
 		}
-
-		// Combine top padding, content, and bottom padding
-		const rawResult = [...emptyLines, ...contentLines, ...emptyLines];
-		const result = rawResult.length > 0 ? rawResult : [""];
-
-		// Update caches and hand the array out by reference. Callers must not
-		// mutate it (Component render contract); the L2 entry is shared across
-		// instances keyed on identical inputs.
-		this.#cachedText = this.#text;
-		this.#cachedWidth = width;
-		this.#cachedLines = result;
-
-		// Update L2 module-level LRU so future instances with the same key skip
-		// the marked.lexer + highlightCode (Rust FFI) work entirely.
-		if (cacheKey !== undefined) {
-			renderCache.set(cacheKey, result);
-		}
-
-		return result;
+		return emptyLines;
 	}
 
 	/**
