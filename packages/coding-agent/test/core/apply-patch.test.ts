@@ -717,4 +717,68 @@ describe("applyCodexPatch (production)", () => {
 		// First op should have landed before the failure.
 		expect(await Bun.file(path.join(tempDir, "first.txt")).text()).toBe("A\n");
 	});
+
+	// #4074-A: Add File / Move to must not silently overwrite pre-existing
+	// destinations. The apply_patch grammar documents these as create/rename
+	// with no overwrite affordance (see prompts/tools/apply-patch.md), and
+	// the fs-level `applyPatch`, the envelope-level `applyCodexPatch`, and
+	// their shared `applyNormalizedPatch` implementation share the guard.
+	test("applyPatch create refuses to overwrite an existing file", async () => {
+		const target = path.join(tempDir, "exists.txt");
+		await Bun.write(target, "original\n");
+
+		await expect(
+			applyPatch({ path: "exists.txt", op: "create", diff: "replacement\n" }, { cwd: tempDir }),
+		).rejects.toBeInstanceOf(ApplyPatchError);
+		// Pre-existing content must remain byte-identical.
+		expect(await Bun.file(target).text()).toBe("original\n");
+	});
+
+	test("applyPatch rename refuses to overwrite an existing destination", async () => {
+		const src = path.join(tempDir, "src.txt");
+		const dst = path.join(tempDir, "dst.txt");
+		await Bun.write(src, "source\n");
+		await Bun.write(dst, "destination\n");
+
+		await expect(
+			applyPatch(
+				{ path: "src.txt", op: "update", rename: "dst.txt", diff: "@@\n-source\n+source2" },
+				{ cwd: tempDir },
+			),
+		).rejects.toBeInstanceOf(ApplyPatchError);
+		// Both source and destination must remain byte-identical.
+		expect(await Bun.file(src).text()).toBe("source\n");
+		expect(await Bun.file(dst).text()).toBe("destination\n");
+	});
+
+	test("applyCodexPatch *** Add File over existing file rejects and preserves content", async () => {
+		const target = path.join(tempDir, "hello.txt");
+		await Bun.write(target, "kept\n");
+
+		const patch = ["*** Begin Patch", "*** Add File: hello.txt", "+overwritten", "*** End Patch"].join("\n");
+
+		await expect(applyCodexPatch(patch, { cwd: tempDir })).rejects.toBeInstanceOf(ApplyPatchError);
+		expect(await Bun.file(target).text()).toBe("kept\n");
+	});
+
+	test("applyCodexPatch *** Move to over existing destination rejects and preserves both files", async () => {
+		const src = path.join(tempDir, "src.txt");
+		const dst = path.join(tempDir, "dst.txt");
+		await Bun.write(src, "hello\n");
+		await Bun.write(dst, "will-be-preserved\n");
+
+		const patch = [
+			"*** Begin Patch",
+			"*** Update File: src.txt",
+			"*** Move to: dst.txt",
+			"@@",
+			"-hello",
+			"+HELLO",
+			"*** End Patch",
+		].join("\n");
+
+		await expect(applyCodexPatch(patch, { cwd: tempDir })).rejects.toBeInstanceOf(ApplyPatchError);
+		expect(await Bun.file(src).text()).toBe("hello\n");
+		expect(await Bun.file(dst).text()).toBe("will-be-preserved\n");
+	});
 });

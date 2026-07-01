@@ -24,6 +24,10 @@
 ### Fixed
 
 - Added retry-path diagnostics for assistant-tail removal and scheduled continuations after transient provider errors ([#4070](https://github.com/can1357/oh-my-pi/issues/4070)).
+### Fixed
+
+- Fixed the `apply_patch` tool silently overwriting pre-existing destinations for `*** Add File:` (create) and `*** Move to:` (rename), which could clobber unrelated content and, in the rename case, also delete the source. Both operations now reject upfront with an `ApplyPatchError` and leave the source and destination byte-identical ([#4074](https://github.com/can1357/oh-my-pi/issues/4074)).
+- Fixed multi-file `apply_patch` swallowing per-file failures: the aggregate result now stops at the first failing file, surfaces the applied vs. skipped file paths, and sets top-level `isError` so the agent loop and renderer take the error branch instead of treating a partial application as success ([#4074](https://github.com/can1357/oh-my-pi/issues/4074)).
 
 ## [16.2.12] - 2026-07-01
 
