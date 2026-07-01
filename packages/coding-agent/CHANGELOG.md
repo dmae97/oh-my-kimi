@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the in-process `fd` builtin ignoring shell cancellation during the directory walk. Both the gitignore-respecting fallback path (`collect_with_heartbeat`) and the fast path (`for_each_entry_with_heartbeat`) previously passed no-op heartbeats to `pi_walker`, so a cancelled `fd` (`Ctrl-C`/`timeout`) kept collecting the whole tree before the shell wrapper could return exit 130. Both call sites now feed a heartbeat that observes the cancel flag and returns `io::ErrorKind::Interrupted`, and the callers translate that interruption to a silent break — the wrapper still owns the user-visible exit code and no `fd:` diagnostic leaks to stderr. Mirrors the grep/rg fix from #3933. ([#3949](https://github.com/can1357/oh-my-pi/issues/3949))
+
 ## [16.2.10] - 2026-06-30
 
 ### Changed
