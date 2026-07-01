@@ -154,6 +154,9 @@
 - Fixed snapcompact preflight to use the same font-aware renderability probe as compaction, including prior preserved archive text, so CJK history remains renderable through per-glyph Silver fallback across repeated compactions.
 - Sped up resuming large (≥8MiB) sessions: the streaming session loader now uses Bun's native `Bun.JSONL` parser instead of `node:readline` + per-line `JSON.parse`, ~35% faster on a 10MiB session (~36ms/MB → ~22ms/MB) while preserving the memory guard (the file is streamed, never fully loaded), title-slot folding, blank-line handling, and malformed-line skipping.
 
+### Changed
+
+- Esc/Ctrl+C teardown now logs a failing compaction/handoff/retry abort at debug instead of silently swallowing it.
 
 ## [16.2.6] - 2026-06-29
 
