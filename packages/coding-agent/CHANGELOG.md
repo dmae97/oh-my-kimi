@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `omp setup speech` returning before Whisper STT downloads finish by keeping the STT worker referenced while setup awaits it, and surfaced worker download errors instead of collapsing them to a silent false result. ([#3939](https://github.com/can1357/oh-my-pi/issues/3939))
+
 ## [16.2.10] - 2026-06-30
 
 ### Changed
