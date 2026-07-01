@@ -551,14 +551,13 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	 */
 	#updateSpinnerAnimation(): void {
 		// Live partial tool blocks stay repaintable until a terminal result seals
-		// them. Todo snapshots and detached background task progress are deliberate
+		// them. Todo snapshots and detached background tool progress are deliberate
 		// static exceptions because their rows can be superseded or committed to
 		// scrollback while later updates continue elsewhere.
 		const isStreamingArgs = !this.#argsComplete && (isEditLikeToolName(this.#toolName) || this.#toolName === "write");
 		const isBackgroundAsyncRunning =
 			(this.#result?.details as { async?: { state?: string } } | undefined)?.async?.state === "running";
-		const isBackgroundAsyncTask = this.#toolName === "task" && isBackgroundAsyncRunning;
-		const isLivePartialTool = this.#isPartial && this.#toolName !== "todo" && !isBackgroundAsyncTask;
+		const isLivePartialTool = this.#isPartial && this.#toolName !== "todo" && !isBackgroundAsyncRunning;
 		const needsSpinner = isStreamingArgs || isLivePartialTool || this.#displaceableByToolName === "job";
 		if (needsSpinner && !this.#spinnerInterval) {
 			const frameCount = theme.spinnerFrames.length;

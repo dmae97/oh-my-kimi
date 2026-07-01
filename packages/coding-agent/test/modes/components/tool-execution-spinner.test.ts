@@ -69,4 +69,35 @@ describe("ToolExecutionComponent live preview spinners", () => {
 			component.stopAnimation();
 		}
 	});
+
+	it("does not tick detached async bash result snapshots", () => {
+		vi.useFakeTimers();
+		const requestRender = vi.fn();
+		const component = new ToolExecutionComponent(
+			"bash",
+			{ command: "sleep 600", async: true },
+			{},
+			undefined,
+			{ requestRender } as unknown as TUI,
+			process.cwd(),
+		);
+
+		try {
+			component.updateResult(
+				{
+					content: [{ type: "text", text: "started background job" }],
+					details: {
+						command: "sleep 600",
+						async: { state: "running", jobId: "job-1", type: "bash" },
+					},
+				},
+				true,
+			);
+			requestRender.mockClear();
+			vi.advanceTimersByTime(500);
+			expect(requestRender).not.toHaveBeenCalled();
+		} finally {
+			component.stopAnimation();
+		}
+	});
 });
