@@ -29,6 +29,7 @@ import {
 	SUMMARIZATION_SYSTEM_PROMPT,
 	serializeConversation,
 	stripReadSelector,
+	truncateToolResultForSummary,
 	upsertFileOperations,
 } from "./utils";
 
@@ -206,6 +207,19 @@ function getMessageFromEntry(entry: SessionEntry): AgentMessage | undefined {
 	}
 }
 
+function estimateBranchSummaryTokens(message: AgentMessage): number {
+	if (message.role !== "toolResult") return estimateTokens(message);
+	const text = message.content
+		.filter((c): c is { type: "text"; text: string } => c.type === "text")
+		.map(c => c.text)
+		.join("");
+	if (!text) return 0;
+	return estimateTokens({
+		...message,
+		content: [{ type: "text", text: truncateToolResultForSummary(text) }],
+	});
+}
+
 /**
  * Prepare entries for summarization with token budget.
  *
@@ -251,7 +265,7 @@ export function prepareBranchEntries(entries: SessionEntry[], tokenBudget: numbe
 		// Extract file ops from assistant messages (tool calls)
 		extractFileOpsFromMessage(message, fileOps);
 
-		const tokens = estimateTokens(message);
+		const tokens = estimateBranchSummaryTokens(message);
 
 		// Check budget before adding
 		if (tokenBudget > 0 && totalTokens + tokens > tokenBudget) {

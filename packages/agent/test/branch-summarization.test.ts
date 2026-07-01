@@ -190,4 +190,44 @@ describe("branch summarization", () => {
 		expect(userMessages[0].content).toBe("OLDER_USEFUL_FACT_4076");
 		expect(messages.some(m => m.role === "toolResult")).toBe(false);
 	});
+
+	test("large informative tool results are budgeted after summary truncation", () => {
+		const informativeBlob = `IMPORTANT_LARGE_TOOL_FACT_4112\n${"x".repeat(20_000)}`;
+		const entries: SessionEntry[] = [
+			{
+				type: "message",
+				id: "assistant-1",
+				parentId: null,
+				timestamp: new Date(0).toISOString(),
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "call-read", name: "read", arguments: { path: "big.txt" } }],
+					api: "mock",
+					provider: "mock",
+					model: "mock-model",
+					usage: ZERO_USAGE,
+					stopReason: "toolUse",
+					timestamp: 0,
+				},
+			},
+			{
+				type: "message",
+				id: "tool-1",
+				parentId: "assistant-1",
+				timestamp: new Date(1).toISOString(),
+				message: {
+					role: "toolResult",
+					toolCallId: "call-read",
+					toolName: "read",
+					content: [{ type: "text", text: informativeBlob }],
+					isError: false,
+					timestamp: 1,
+				},
+			},
+		];
+
+		const { messages } = prepareBranchEntries(entries, 700);
+
+		expect(messages.some(m => m.role === "toolResult")).toBe(true);
+	});
 });
