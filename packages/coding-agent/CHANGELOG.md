@@ -47,6 +47,9 @@
 ### Fixed
 
 - Fixed the TUI busy-looping at ~40–50% CPU during long-running tool sessions. `EventController.handleEvent` no longer rebuilds the status-line top border synchronously on every session event; the rebuild now runs inside a lazy provider that fires at most once per painted frame, so streaming/tool bursts collapse into the render throttle instead of stacking `getContextUsage` serialization work between paints. ([#4145](https://github.com/can1357/oh-my-pi/issues/4145))
+### Fixed
+
+- Fixed the multi-select (checkbox) `ask` picker showing no visible cursor on themes where `accent` fg is close to the terminal foreground; the focused option now renders as a full-width `selectedBg` highlight band spanning label and wrapped description rows, matching the Ctrl+R history overlay ([#4157](https://github.com/can1357/oh-my-pi/issues/4157)).
 
 ## [16.2.12] - 2026-07-01
 

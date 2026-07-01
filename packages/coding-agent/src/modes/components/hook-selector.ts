@@ -113,11 +113,23 @@ function splitLeadingSpacesForWrap(line: string, width: number): { indent: strin
 	};
 }
 
-class OutlinedList extends Container {
-	#lines: string[] = [];
+/** One row fed to {@link OutlinedList} or the plain list container. `highlight`
+ *  causes the row (and its wrapped continuations, plus trailing padding) to be
+ *  painted with the theme's `selectedBg` band — the focus cue that survives
+ *  themes where `accent` fg is close to the terminal foreground. */
+type SelectorRow = { text: string; highlight: boolean };
 
-	setLines(lines: string[]): void {
-		this.#lines = lines;
+/** Paint `content` with the `selectedBg` background, applied AFTER any inner
+ *  ANSI styling so the band spans padding as well as content. */
+function paintSelectedRow(content: string): string {
+	return theme.bg("selectedBg", content);
+}
+
+class OutlinedList extends Container {
+	#rows: SelectorRow[] = [];
+
+	setLines(rows: readonly SelectorRow[]): void {
+		this.#rows = rows.slice();
 		this.invalidate();
 	}
 
@@ -126,16 +138,16 @@ class OutlinedList extends Container {
 		const horizontal = borderColor(theme.boxRound.horizontal.repeat(Math.max(1, width)));
 		const innerWidth = Math.max(1, width - 2);
 		const content: string[] = [];
-		for (const line of this.#lines) {
-			const normalized = replaceTabs(line);
+		for (const row of this.#rows) {
+			const normalized = replaceTabs(row.text);
 			const { indent, body } = splitLeadingSpacesForWrap(normalized, innerWidth);
 			const wrapped = wrapTextWithAnsi(body, Math.max(1, innerWidth - visibleWidth(indent)));
 			for (const wrappedBody of wrapped.length > 0 ? wrapped : [""]) {
 				const wrappedLine = `${indent}${wrappedBody}`;
 				const pad = Math.max(0, innerWidth - visibleWidth(wrappedLine));
-				content.push(
-					`${borderColor(theme.boxRound.vertical)}${wrappedLine}${padding(pad)}${borderColor(theme.boxRound.vertical)}`,
-				);
+				const filled = `${wrappedLine}${padding(pad)}`;
+				const painted = row.highlight ? paintSelectedRow(filled) : filled;
+				content.push(`${borderColor(theme.boxRound.vertical)}${painted}${borderColor(theme.boxRound.vertical)}`);
 			}
 		}
 		return [horizontal, ...content, horizontal];
@@ -472,7 +484,7 @@ export class HookSelectorComponent extends Container {
 	}
 
 	#updateList(renderWidth = this.#lastRenderWidth): void {
-		const lines: string[] = [];
+		const rows: SelectorRow[] = [];
 		const total = this.#filteredOptions.length;
 		const mdTheme = getMarkdownTheme();
 		// Compact mode kicks in exactly when the fully-expanded list (all
@@ -500,34 +512,41 @@ export class HookSelectorComponent extends Container {
 			const filtered = this.#filteredOptions[i];
 			if (filtered === undefined) continue;
 			const isSelected = i === this.#selectedIndex;
+			const isDisabled = this.#isDisabled(filtered.index);
 			const descMode: number | "full" = compact ? (isSelected ? selectedDescRows : 0) : "full";
-			lines.push(
-				...this.#renderOptionLines(
-					filtered.option,
-					isSelected,
-					this.#isDisabled(filtered.index),
-					mdTheme,
-					descMode,
-					renderWidth,
-					filtered.index,
-				),
-			);
+			// Highlight the whole option block (label + wrapped description rows)
+			// so the focus band reads as one continuous bar rather than a stripe
+			// under the label alone. Disabled rows never claim focus even if the
+			// index momentarily lands on one during initial coercion.
+			const highlight = isSelected && !isDisabled;
+			for (const text of this.#renderOptionLines(
+				filtered.option,
+				isSelected,
+				isDisabled,
+				mdTheme,
+				descMode,
+				renderWidth,
+				filtered.index,
+			)) {
+				rows.push({ text, highlight });
+			}
 		}
 
 		if (total === 0) {
-			lines.push(theme.fg("dim", "  No matching options"));
+			rows.push({ text: theme.fg("dim", "  No matching options"), highlight: false });
 		}
 
 		if (startIndex > 0 || endIndex < total || this.#shouldRenderSearchStatus(renderWidth, mdTheme)) {
-			lines.push(this.#renderStatusLine(total));
+			rows.push({ text: this.#renderStatusLine(total), highlight: false });
 		}
 		if (this.#outlinedList) {
-			this.#outlinedList.setLines(lines);
+			this.#outlinedList.setLines(rows);
 			return;
 		}
 		this.#listContainer?.clear();
-		for (const line of lines) {
-			this.#listContainer?.addChild(new Text(line, 1, 0));
+		for (const row of rows) {
+			const bgFn = row.highlight ? paintSelectedRow : undefined;
+			this.#listContainer?.addChild(new Text(row.text, 1, 0, bgFn));
 		}
 	}
 
