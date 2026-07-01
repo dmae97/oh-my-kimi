@@ -281,19 +281,24 @@ describe("worktree isolation helpers", () => {
 				expect(delta.rootPatch).toContain("+downstream edit");
 			});
 
-			it("removes ignored untracked files partially restored before failed stash pop exits", async () => {
+			it("cleans restored stash files with literal pathspecs", async () => {
 				// Force the fallback branch: preflight would normally refuse this
 				// pop before Git can restore anything, but mode/delete edge cases can
 				// still pass preflight and fail during the actual stash pop. Git can
 				// restore unrelated untracked files before reporting the tracked
 				// conflict. If the task branch also adds an ignore rule for that
-				// restored path, default `git clean -fd -- <path>` leaves it behind;
-				// the fallback must clean restored ignored paths too.
+				// restored path, the fallback must clean the restored ignored path
+				// without interpreting stash-derived filenames as pathspec magic.
+				const magicName = ":(glob)*";
+				const buildLog = path.join(repo, "build.log");
 				const ignoredBranch = "task/ignored-restored-untracked";
+				await fs.writeFile(path.join(repo, ".gitignore"), "*.log\n");
+				await runGit(repo, ["add", ".gitignore"]);
+				await runGit(repo, ["commit", "-q", "-m", "ignore-build-artifacts"]);
 				await runGit(repo, ["checkout", "-q", "-b", ignoredBranch]);
 				await Promise.all([
 					fs.writeFile(path.join(repo, "merged.txt"), "task branch change\n"),
-					fs.writeFile(path.join(repo, ".gitignore"), "note.txt\n"),
+					fs.writeFile(path.join(repo, ".gitignore"), `*.log\n${magicName}\n`),
 				]);
 				await runGit(repo, ["add", ".gitignore", "merged.txt"]);
 				await runGit(repo, ["commit", "-q", "-m", "task-change-ignored-note"]);
@@ -301,17 +306,18 @@ describe("worktree isolation helpers", () => {
 				try {
 					vi.spyOn(git.patch, "canApplyText").mockResolvedValue(true);
 					await fs.writeFile(path.join(repo, "merged.txt"), "user wip\n");
-					await fs.writeFile(path.join(repo, "note.txt"), "untracked wip\n");
+					await fs.writeFile(path.join(repo, magicName), "untracked wip\n");
+					await fs.writeFile(buildLog, "ignored build artifact\n");
 
 					const result = await mergeTaskBranches(repo, [{ branchName: ignoredBranch, taskId: "task-1" }]);
 
-					const [status, ignoredStatus, unmerged, stashList, headContent, noteExists] = await Promise.all([
+					const [status, unmerged, stashList, headContent, magicExists, buildLogExists] = await Promise.all([
 						runGit(repo, ["status", "--porcelain=v1"]),
-						runGit(repo, ["status", "--porcelain=v1", "--ignored=matching"]),
 						runGit(repo, ["ls-files", "--unmerged"]),
 						runGit(repo, ["stash", "list"]),
 						fs.readFile(path.join(repo, "merged.txt"), "utf8"),
-						Bun.file(path.join(repo, "note.txt")).exists(),
+						Bun.file(path.join(repo, magicName)).exists(),
+						Bun.file(buildLog).exists(),
 					]);
 
 					expect(result.merged).toEqual([ignoredBranch]);
@@ -319,13 +325,16 @@ describe("worktree isolation helpers", () => {
 					expect(result.stashConflict).toBeDefined();
 					expect(unmerged).toBe("");
 					expect(status).toBe("");
-					expect(ignoredStatus).toBe("");
-					expect(noteExists).toBe(false);
+					expect(magicExists).toBe(false);
+					expect(buildLogExists).toBe(true);
 					expect(headContent).toBe("task branch change\n");
 					expect(stashList).toContain("omp-task-merge");
 				} finally {
 					await cleanupTaskBranches(repo, [ignoredBranch]);
-					await fs.rm(path.join(repo, "note.txt"), { force: true });
+					await Promise.all([
+						fs.rm(path.join(repo, magicName), { force: true }),
+						fs.rm(buildLog, { force: true }),
+					]);
 				}
 			});
 
