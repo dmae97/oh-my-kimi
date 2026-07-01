@@ -71,8 +71,28 @@ export async function acquireBrowser(kind: BrowserKind, opts: AcquireBrowserOpti
 		browsers.delete(key);
 		await disposeBrowserHandle(existing, { kill: false });
 	}
+	// Short-circuit before launching: the tool wrapper's `untilAborted` only
+	// rejects its outer promise on abort; without this check `openBrowserHandle`
+	// would still fire and its result would land in `browsers` below.
+	if (opts.signal?.aborted) throw new ToolAbortError("Browser open aborted");
 
 	const handle = await openBrowserHandle(kind, opts);
+	// The launch may resolve AFTER the caller has already aborted (the outer
+	// `untilAborted` rejects immediately on abort but does not cancel the
+	// inner promise, and `launchHeadlessBrowser` does not accept a signal).
+	// Without this branch the completed handle sits in `browsers` at
+	// refCount:0 forever — no tab ever takes a hold, `releaseBrowser` never
+	// fires, and `releaseAllTabs` walks `tabs`, not `browsers`, so the
+	// orphaned Chromium/app process / puppeteer handle survives to process
+	// exit. (Issue #3963.)
+	if (opts.signal?.aborted) {
+		await disposeBrowserHandle(handle, { kill: kind.kind === "spawned" }).catch(err => {
+			logger.debug("Failed to dispose orphan browser after abort", {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		});
+		throw new ToolAbortError("Browser open aborted");
+	}
 	browsers.set(key, handle);
 	return handle;
 }
@@ -238,4 +258,9 @@ async function disposeBrowserHandle(handle: BrowserHandle, opts: { kill: boolean
 		}
 	}
 	if (opts.kill && handle.pid !== undefined) await gracefulKillTreeOnce(handle.pid);
+}
+
+/** Test-only accessor for the module-global browsers map. */
+export function getBrowsersMapForTest(): ReadonlyMap<string, BrowserHandle> {
+	return browsers;
 }

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the browser tool leaking Chromium/Puppeteer processes at two termination boundaries: (1) an aborted `browser.open` observed abort only in its `untilAborted` wrapper while the inner launch resolved in the background and unconditionally published the handle into the module-global `browsers` map at refCount:0 (no `releaseAllTabs` walk covered it), and (2) `AgentSession.dispose()` had no browser teardown hook, so tabs a session opened outlived the session. `acquireBrowser` now short-circuits before launch on a pre-aborted signal and disposes the handle if the launch completes after abort; tabs record the creating session's id and `AgentSession.dispose()` reaps them via a bounded `releaseTabsForOwner` call. ([#3963](https://github.com/can1357/oh-my-pi/issues/3963))
+
 ## [16.2.11] - 2026-07-01
 
 ### Fixed

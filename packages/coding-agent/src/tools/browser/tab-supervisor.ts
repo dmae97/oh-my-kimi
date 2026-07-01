@@ -59,6 +59,13 @@ interface TabSessionBase<TBrowser extends BrowserHandle = BrowserHandle> {
 	pending: Map<string, PendingRun>;
 	dialogPolicy?: DialogPolicy;
 	kindTag: BrowserKindTag;
+	/**
+	 * Session id of the caller that CREATED the tab. Preserved across reuse so
+	 * that dispose of the creating session can reap browser resources without
+	 * yanking the tab out from under a subagent that only reused it.
+	 * Undefined when the acquirer did not identify itself.
+	 */
+	ownerSessionId?: string;
 }
 
 export interface WorkerTabSession extends TabSessionBase<PuppeteerBrowserHandle> {
@@ -84,6 +91,12 @@ export interface AcquireTabOptions {
 	timeoutMs: number;
 	dialogs?: DialogPolicy;
 	cmuxSurface?: string;
+	/**
+	 * Session id of the acquirer. Recorded on the tab when created (never on
+	 * reuse) so `releaseTabsForOwner` can walk the shared tabs map on session
+	 * dispose. Optional — omitting it opts the tab out of session-scoped reap.
+	 */
+	ownerSessionId?: string;
 }
 
 export interface AcquireTabResult {
@@ -239,6 +252,16 @@ async function acquireTabImpl(
 		}
 	}
 
+	// If the caller aborted while we were spawning/initializing the worker,
+	// tear the freshly-built worker down before publishing the tab so the
+	// browser refCount (which `holdBrowser` below would take) never grows for
+	// a tab nobody is waiting for.
+	if (opts.signal?.aborted) {
+		await worker.terminate().catch(() => undefined);
+		if (tempHold) await releaseBrowser(browser, { kill: false }).catch(() => undefined);
+		throw new ToolAbortError("Browser tab open aborted");
+	}
+
 	holdBrowser(browser);
 	if (tempHold) await releaseBrowser(browser, { kill: false });
 	const tab: WorkerTabSession = {
@@ -252,6 +275,7 @@ async function acquireTabImpl(
 		pending: new Map(),
 		dialogPolicy: opts.dialogs,
 		kindTag: browser.kind.kind,
+		ownerSessionId: opts.ownerSessionId,
 	};
 	worker.onMessage(msg => handleTabMessage(tab, msg));
 	tabs.set(name, tab);
@@ -303,6 +327,11 @@ async function acquireCmuxTab(
 			await cmuxTab.goto(opts.url, { waitUntil: opts.waitUntil ?? "load", timeoutMs: opts.timeoutMs });
 		}
 		const info = await cmuxTab.readyInfo(opts.viewport ?? DEFAULT_VIEWPORT);
+		// If the caller aborted while we were opening the cmux surface, close the
+		// surface (if we own it) instead of taking a browser hold on it.
+		if (opts.signal?.aborted) {
+			throw new ToolAbortError("Browser tab open aborted");
+		}
 		holdBrowser(browser);
 		const tab: CmuxTabSession = {
 			name,
@@ -317,6 +346,7 @@ async function acquireCmuxTab(
 			dialogPolicy: opts.dialogs,
 			kindTag: browser.kind.kind,
 			cmuxAttachedSurface: attachedSurface,
+			ownerSessionId: opts.ownerSessionId,
 		};
 		tabs.set(name, tab);
 		return { tab, created: true };
@@ -465,6 +495,34 @@ export async function releaseAllTabs(opts: ReleaseTabOptions = {}): Promise<numb
 export async function dropHeadlessTabs(): Promise<void> {
 	const names = [...tabs.values()].filter(tab => tab.kindTag === "headless").map(tab => tab.name);
 	for (const name of names) await releaseTab(name);
+}
+
+/**
+ * Release every tab created by the given session id. Invoked from
+ * `AgentSession.dispose()` so headless/spawned Chromium and workers the
+ * session opened do not leak into the long-lived process — the module-global
+ * `tabs`/`browsers` maps that back this tool are not otherwise walked by
+ * session teardown. (Issue #3963.)
+ *
+ * Ownership is recorded ONLY on tab creation (`acquireTab` with
+ * `ownerSessionId`), never on reuse: a subagent re-driving a tab another
+ * session opened will not yank teardown responsibility away from the
+ * creator. Tabs opened with no owner (e.g. from an SDK caller that doesn't
+ * identify a session) are skipped and must be released explicitly.
+ */
+export async function releaseTabsForOwner(ownerId: string, opts: ReleaseTabOptions = {}): Promise<number> {
+	if (!ownerId) return 0;
+	const names = [...tabs.values()].filter(tab => tab.ownerSessionId === ownerId).map(tab => tab.name);
+	let count = 0;
+	for (const name of names) {
+		if (await releaseTab(name, opts)) count++;
+	}
+	return count;
+}
+
+/** Test-only accessor for the module-global tabs map. */
+export function getTabsMapForTest(): ReadonlyMap<string, TabSession> {
+	return tabs;
 }
 
 function isLastSurfaceCloseError(err: unknown): boolean {
