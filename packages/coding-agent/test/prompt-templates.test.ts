@@ -9,9 +9,12 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { expandPromptTemplate, type PromptTemplate } from "@oh-my-pi/pi-coding-agent/config/prompt-templates";
 import { expandSlashCommand, type FileSlashCommand } from "@oh-my-pi/pi-coding-agent/extensibility/slash-commands";
 import { parseCommandArgs, substituteArgs } from "@oh-my-pi/pi-coding-agent/utils/command-args";
+import { prompt } from "@oh-my-pi/pi-utils";
 
 // ============================================================================
 // substituteArgs
@@ -333,16 +336,11 @@ describe("template expansion fallback", () => {
 // ============================================================================
 
 describe("renderYieldSchema", () => {
+	// prompt-templates is imported for its Handlebars helper registration side-effect
+	// (jtdToTypeScript + renderYieldSchema); the render calls below rely on it.
+	const templatePath = path.resolve(import.meta.dir, "../src/prompts/system/subagent-system-prompt.md");
+
 	async function renderSubagentPrompt(outputSchema: unknown): Promise<string> {
-		// Loading prompt-templates registers the Handlebars helper as a side-effect;
-		// keep the import inside the test so ordering with other suites stays explicit.
-		await import("@oh-my-pi/pi-coding-agent/config/prompt-templates");
-		const [{ prompt }, fs, path] = await Promise.all([
-			import("@oh-my-pi/pi-utils"),
-			import("node:fs/promises"),
-			import("node:path"),
-		]);
-		const templatePath = path.resolve(import.meta.dir, "../src/prompts/system/subagent-system-prompt.md");
 		const templateSource = await fs.readFile(templatePath, "utf-8");
 		return prompt.render(templateSource, { agent: "test-agent", outputSchema });
 	}
