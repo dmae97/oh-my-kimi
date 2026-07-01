@@ -11,6 +11,7 @@ const openAICompletionsModel = {
 	...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
 	api: "openai-completions",
 } satisfies Model<"openai-completions">;
+const openAIResponsesModel = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
 
 function baseContext(): Context {
 	return {
@@ -188,6 +189,41 @@ describe("resolveOpenAICompat stream idle timeout", () => {
 
 	it("keeps ordinary OpenAI-compatible models on the global timeout", () => {
 		expect(openAICompletionsModel.compat.streamIdleTimeoutMs).toBeUndefined();
+	});
+
+	it("widens local OpenAI-compatible stream watchdogs", () => {
+		const completions = buildModel({
+			...openAICompletionsModel,
+			id: "qwen3-local",
+			name: "Qwen3 Local",
+			provider: "llama.cpp",
+			baseUrl: "http://localhost:8080/v1",
+			compat: openAICompletionsModel.compatConfig,
+		} as ModelSpec<"openai-completions">);
+		const responses = buildModel({
+			...openAIResponsesModel,
+			id: "qwen3-local",
+			name: "Qwen3 Local",
+			provider: "llama.cpp",
+			baseUrl: "http://localhost:8080/v1",
+			compat: openAIResponsesModel.compatConfig,
+		} as ModelSpec<"openai-responses">);
+
+		expect(completions.compat.streamIdleTimeoutMs).toBe(300_000);
+		expect(responses.compat.streamIdleTimeoutMs).toBe(300_000);
+	});
+
+	it("widens custom loopback OpenAI-compatible responses stream watchdogs", () => {
+		const model = buildModel({
+			...openAIResponsesModel,
+			id: "local-model",
+			name: "Local Model",
+			provider: "custom-local",
+			baseUrl: "http://127.0.0.1:8080/v1",
+			compat: openAIResponsesModel.compatConfig,
+		} as ModelSpec<"openai-responses">);
+
+		expect(model.compat.streamIdleTimeoutMs).toBe(300_000);
 	});
 
 	it("widens Xiaomi MiMo Pro stream watchdog (issue #1770)", () => {

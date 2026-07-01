@@ -5,6 +5,7 @@
 ### Fixed
 
 - Made discovery request timeouts cancellable in the OpenAI-compatible resolvers. `fetchOpenAICompatibleModels` and `fetchLiteLLMRichModels` (used by the vLLM, LiteLLM, and LM Studio catalogs) previously received or armed an uncancellable `AbortSignal.timeout(...)`, leaving a pending timer on the heap after the request settled. They now accept a `timeoutMs` option and arm a cancellable `AbortController` whose backing timer is cleared the instant the fetch + body read settle, covering the whole operation and never leaving a signal armed on the heap.
+- Widened stream watchdogs for local OpenAI-compatible backends (llama.cpp, LM Studio, vLLM, Ollama, and loopback custom providers) so cold model loads do not trip first-event timeouts. ([#3940](https://github.com/can1357/oh-my-pi/issues/3940))
 
 ## [16.2.10] - 2026-06-30
 
