@@ -487,6 +487,14 @@ function sanitizeRecentOutput(output: string): string {
 	return text;
 }
 
+function capRecentOutputForPreview(output: string, maxRows: number): string {
+	const lines = output.split("\n");
+	if (lines.length <= maxRows) return output;
+	const visible = maxRows <= 1 ? [] : lines.slice(lines.length - (maxRows - 1));
+	const hidden = lines.length - visible.length;
+	return [`… ${hidden} earlier ${hidden === 1 ? "line" : "lines"}`, ...visible].join("\n");
+}
+
 function renderOutputSection(
 	output: string,
 	continuePrefix: string,
@@ -1053,8 +1061,12 @@ function renderAgentProgress(
 
 	// Expanded view: recent output and tools
 	if (expanded && progress.status === "running") {
-		const output = sanitizeRecentOutput([...progress.recentOutput].reverse().join("\n"));
-		lines.push(...renderOutputSection(output, continuePrefix, expanded, theme, 2, previewWindowRows()));
+		const previewRows = previewWindowRows();
+		const output = capRecentOutputForPreview(
+			sanitizeRecentOutput([...progress.recentOutput].reverse().join("\n")),
+			previewRows,
+		);
+		lines.push(...renderOutputSection(output, continuePrefix, expanded, theme, 2, previewRows));
 	}
 
 	return lines;
