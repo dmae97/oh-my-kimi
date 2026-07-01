@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
@@ -128,6 +129,40 @@ describe("session exit diagnostics", () => {
 				},
 			],
 		});
+	});
+
+	it("does not materialize an empty session just to write an exit marker", async () => {
+		tempDir = TempDir.createSync("@pi-empty-session-exit-");
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
+		const modelRegistry = new ModelRegistry(authStorage);
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected built-in anthropic model to exist");
+		const sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
+		const sessionFile = sessionManager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected persistent session file path");
+		const agent = new Agent({
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			convertToLlm,
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry,
+		});
+
+		await session.dispose();
+		session = undefined;
+
+		expect(fs.existsSync(sessionFile)).toBe(false);
+		expect(
+			sessionManager.getEntries().some(entry => entry.type === "custom" && entry.customType === SESSION_EXIT_CUSTOM_TYPE),
+		).toBe(false);
 	});
 
 	it("treats assistant tool calls as pending even when stopReason is not toolUse", () => {
