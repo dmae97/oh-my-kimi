@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed long `write` tool streaming previews updating in throttle-sized chunks by decoding the streamed `content` argument incrementally. ([#4043](https://github.com/can1357/oh-my-pi/issues/4043))
+- Fixed long streaming previews for `write` (`content`), `edit` (`input`), and `eval` (`code`) updating in throttle-sized chunks by decoding the streamed string arguments incrementally between full JSON re-parses. ([#4043](https://github.com/can1357/oh-my-pi/issues/4043))
 
 ## [16.2.12] - 2026-07-01
 
