@@ -18,7 +18,6 @@ function createSelector(model: Model, settings: Settings): ModelSelectorComponen
 	const modelRegistry = {
 		getAll: () => [model],
 		getDiscoverableProviders: () => [],
-		getCanonicalModelSelections: () => [],
 	} as unknown as ModelRegistry;
 	const ui = {
 		requestRender: vi.fn(),
@@ -73,7 +72,6 @@ function createScopedSelector(
 	const modelRegistry = {
 		getAll: () => models,
 		getDiscoverableProviders: () => [],
-		getCanonicalModelSelections: () => [],
 	} as unknown as ModelRegistry;
 	const ui = {
 		requestRender: vi.fn(),
@@ -273,7 +271,6 @@ describe("ModelSelector role badge thinking display", () => {
 			getError: () => undefined,
 			getAvailable: () => [cachedModel],
 			getDiscoverableProviders: () => [],
-			getCanonicalModelSelections: () => [],
 		} as unknown as ModelRegistry;
 		const ui = {
 			requestRender: vi.fn(),
@@ -312,7 +309,6 @@ describe("ModelSelector role badge thinking display", () => {
 			getError: () => undefined,
 			getAvailable: () => availableModels,
 			getDiscoverableProviders: () => [],
-			getCanonicalModelSelections: () => [],
 		} as unknown as ModelRegistry;
 		const ui = {
 			requestRender: vi.fn(),
@@ -357,7 +353,6 @@ describe("ModelSelector role badge thinking display", () => {
 			getError: () => undefined,
 			getAvailable: () => availableModels,
 			getDiscoverableProviders: () => ["ollama-cloud"],
-			getCanonicalModelSelections: () => [],
 			getProviderDiscoveryState: () => ({
 				provider: "ollama-cloud",
 				status: "idle",
@@ -385,7 +380,6 @@ describe("ModelSelector role badge thinking display", () => {
 		const initialRendered = normalizeRenderedText(selector.render(220).join("\n"));
 		expect(initialRendered).toContain("OLLAMA CLOUD");
 
-		selector.handleInput("\t");
 		selector.handleInput("\t");
 		await Bun.sleep(125);
 		installTestTheme();
@@ -419,7 +413,6 @@ describe("ModelSelector role badge thinking display", () => {
 			getError: () => undefined,
 			getAvailable: () => availableModels,
 			getDiscoverableProviders: () => ["ollama-cloud"],
-			getCanonicalModelSelections: () => [],
 			getProviderDiscoveryState: () => ({
 				provider: "ollama-cloud",
 				status: "idle",
@@ -444,7 +437,6 @@ describe("ModelSelector role badge thinking display", () => {
 		await Bun.sleep(0);
 		installTestTheme();
 
-		selector.handleInput("\t");
 		selector.handleInput("\t");
 
 		// Core regression: tab switch must not synchronously enter provider refresh.

@@ -30,7 +30,6 @@ const available = [claude, gpt] as Model<Api>[];
 function registry(): ModelRegistry {
 	return {
 		getAvailable: () => available,
-		getCanonicalId: (m: Model<Api>) => m.id,
 	} as unknown as ModelRegistry;
 }
 
@@ -68,17 +67,5 @@ describe("createExtensionModelQuery", () => {
 		const q = createExtensionModelQuery(registry(), undefined, () => undefined);
 		expect(q.family(claude)).toBe(q.family(claudePrev));
 		expect(q.family(claude)).not.toBe(q.family(gpt));
-	});
-
-	test("family() folds an opaque proxy id onto its canonical lineage", () => {
-		// "proxy-xyz-1" classifies to no family on its own; canonical resolution maps it
-		// onto claude-opus-4-8, so it must group with Claude rather than its own provider.
-		const proxy = model("proxy-xyz-1", "Proxy Claude", "someproxy") as Model<Api>;
-		const reg = {
-			getAvailable: () => available,
-			getCanonicalId: (m: Model<Api>) => (m === proxy ? "claude-opus-4-8" : m.id),
-		} as unknown as ModelRegistry;
-		const q = createExtensionModelQuery(reg, undefined, () => undefined);
-		expect(q.family(proxy)).toBe(q.family(claude));
 	});
 });

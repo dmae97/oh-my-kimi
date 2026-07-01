@@ -1579,7 +1579,7 @@ describe("advisor", () => {
 
 	describe("AdvisorConfigOverlayComponent", () => {
 		const deps = {
-			modelRegistry: { getCanonicalModelSelections: () => [] } as unknown as ModelRegistry,
+			modelRegistry: {} as unknown as ModelRegistry,
 			settings: {} as unknown as Settings,
 			scopedModels: [],
 			availableToolNames: ["read", "grep", "glob", "lsp", "web_search"],

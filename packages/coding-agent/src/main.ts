@@ -850,7 +850,6 @@ async function buildSessionOptions(
 				{
 					settings: activeSettings,
 					matchPreferences: modelMatchPreferences,
-					modelRegistry,
 				},
 			);
 			const rememberedResolvedModel = rememberedSpec.model;

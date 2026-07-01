@@ -9,8 +9,7 @@ import { modelFamilyToken } from "@oh-my-pi/pi-catalog/identity";
  * Gemini benefits from descriptors in-prompt; other providers keep them in the
  * tool schemas. `on`/`off` are explicit user overrides.
  *
- * @param modelId Canonical model id (e.g. `gemini-3-pro`); resolve aliases via
- *   `ModelRegistry.getCanonicalId` before calling so `auto` classifies correctly.
+ * @param modelId Model id (e.g. `gemini-3-pro`) used to classify `auto`.
  */
 export function shouldInlineToolDescriptors(
 	setting: "auto" | "on" | "off" | undefined,

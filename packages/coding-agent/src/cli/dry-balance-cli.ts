@@ -12,11 +12,10 @@ import type {
 	SimpleStreamOptions,
 } from "@oh-my-pi/pi-ai";
 import { streamSimple } from "@oh-my-pi/pi-ai";
-import type { CanonicalModelVariant } from "@oh-my-pi/pi-catalog/identity";
 import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
 import { formatDuration, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
-import { type CanonicalModelQueryOptions, ModelRegistry } from "../config/model-registry";
+import { ModelRegistry } from "../config/model-registry";
 import {
 	formatModelString,
 	getModelMatchPreferences,
@@ -74,9 +73,6 @@ export interface DryBalanceModelRegistry {
 	getAll(): Model<Api>[];
 	getAvailable(): Model<Api>[];
 	getApiKey(model: Model<Api>, sessionId?: string): Promise<string | undefined>;
-	getCanonicalVariants(canonicalId: string, options?: CanonicalModelQueryOptions): CanonicalModelVariant[];
-	resolveCanonicalModel?(canonicalId: string, options?: CanonicalModelQueryOptions): Model<Api> | undefined;
-	getCanonicalId?(model: Model<Api>): string | undefined;
 }
 
 export interface DryBalanceRuntime {
@@ -566,7 +562,6 @@ async function resolveDryBalanceModel(
 	const defaultRoleSpec = resolveModelRoleValue(settings?.getModelRole("default"), allowedModels, {
 		settings,
 		matchPreferences: preferences,
-		modelRegistry,
 	});
 	if (defaultRoleSpec.model) {
 		return { model: defaultRoleSpec.model, warning: defaultRoleSpec.warning };

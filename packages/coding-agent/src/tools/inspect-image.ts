@@ -152,7 +152,7 @@ export class InspectImageTool implements AgentTool<typeof inspectImageSchema, In
 		const resolvePattern = (pattern: string | undefined): Model<Api> | undefined => {
 			if (!pattern) return undefined;
 			const expanded = expandRoleAlias(pattern, this.session.settings);
-			return resolveModelFromString(expanded, availableModels, matchPreferences, modelRegistry);
+			return resolveModelFromString(expanded, availableModels, matchPreferences);
 		};
 
 		const activeModelPattern = this.session.getActiveModelString?.() ?? this.session.getModelString?.();

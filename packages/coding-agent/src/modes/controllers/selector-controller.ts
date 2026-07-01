@@ -248,7 +248,6 @@ export class SelectorController {
 			const advisorRoleSel = resolveAdvisorRoleSelection(
 				this.ctx.settings,
 				this.ctx.session.modelRegistry.getAvailable(),
-				this.ctx.session.modelRegistry,
 			);
 			const defaultAdvisorModel = advisorRoleSel?.model;
 			const deps: AdvisorConfigDeps = {

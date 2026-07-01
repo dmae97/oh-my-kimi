@@ -33,9 +33,7 @@ export function createExtensionModelQuery(
 			resolveModelRoleValue(spec, modelRegistry.getAvailable(), {
 				settings,
 				matchPreferences: getModelMatchPreferences(settings),
-				modelRegistry,
 			}).model,
-		family: (model: Model<Api>): string =>
-			modelFamilyToken(modelRegistry.getCanonicalId(model) ?? model.id) || model.provider.toLowerCase(),
+		family: (model: Model<Api>): string => modelFamilyToken(model.id) || model.provider.toLowerCase(),
 	};
 }

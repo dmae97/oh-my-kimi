@@ -14,12 +14,12 @@ import type {
 	SimpleStreamOptions,
 } from "@oh-my-pi/pi-ai";
 import { resolveModelServiceTier, streamSimple } from "@oh-my-pi/pi-ai";
-import { buildModelProviderPriorityRank, type CanonicalModelVariant } from "@oh-my-pi/pi-catalog/identity";
+import { buildModelProviderPriorityRank } from "@oh-my-pi/pi-catalog/identity";
 import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
 import { formatDuration, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import type { ApiKeyResolverModel } from "../config/api-key-resolver";
-import { type CanonicalModelQueryOptions, ModelRegistry } from "../config/model-registry";
+import { ModelRegistry } from "../config/model-registry";
 import {
 	formatModelSelectorValue,
 	formatModelString,
@@ -55,9 +55,6 @@ export interface BenchModelRegistry {
 	getAll(): Model<Api>[];
 	getApiKey(model: Model<Api>, sessionId?: string): Promise<string | undefined>;
 	resolver(model: ApiKeyResolverModel, sessionId?: string): ApiKeyResolver;
-	resolveCanonicalModel?(canonicalId: string, options?: CanonicalModelQueryOptions): Model<Api> | undefined;
-	getCanonicalVariants?(canonicalId: string, options?: CanonicalModelQueryOptions): CanonicalModelVariant[];
-	getCanonicalId?(model: Model<Api>): string | undefined;
 	hasConfiguredAuth?(model: Model<Api>): boolean;
 }
 
@@ -440,13 +437,7 @@ function resolveAuthenticatedAlternative(
 		seen.add(key);
 		if (modelRegistry.hasConfiguredAuth?.(candidate)) authenticated.push(candidate);
 	};
-	// Canonical variants link the same logical model across providers even when
-	// ids differ (e.g. fireworks `gpt-oss-20b` <-> openrouter `openai/gpt-oss-20b`).
-	const canonicalId = modelRegistry.getCanonicalId?.(model);
-	if (canonicalId) {
-		for (const variant of modelRegistry.getCanonicalVariants?.(canonicalId) ?? []) consider(variant.model);
-	}
-	// Same-id fallback for entries outside the canonical index.
+	// Same-id fallback for equivalent entries under providers with configured auth.
 	for (const candidate of modelRegistry.getAll()) {
 		if (candidate.id === model.id) consider(candidate);
 	}

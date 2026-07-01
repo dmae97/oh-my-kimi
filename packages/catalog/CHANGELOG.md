@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Moved canonical model-equivalence (`identity/equivalence`) to a build-only generator script (`scripts/equivalence.ts`); it is no longer part of the runtime bundle and is only used by `gen:models` to backfill null limits, so `models.json` output is unchanged
+
+### Removed
+
+- Removed the runtime canonical-equivalence surface from `identity`: deleted `identity/selection` (`resolveCanonicalVariant`, `buildCanonicalModelOrder`, `CanonicalVariantPreferences`), dropped the `identity/equivalence` re-export from the barrel, and removed `getBundledCanonicalReferenceData` from `identity/bundled`
+
 ## [16.2.11] - 2026-07-01
 
 ### Fixed

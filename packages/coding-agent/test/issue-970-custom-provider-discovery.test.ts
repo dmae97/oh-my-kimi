@@ -35,7 +35,6 @@ async function createSelector(state: ProviderDiscoveryState): Promise<ModelSelec
 		getAvailable: () => [],
 		getAll: () => [],
 		getDiscoverableProviders: () => [state.provider],
-		getCanonicalModelSelections: () => [],
 		getProviderDiscoveryState: () => state,
 	} as unknown as ModelRegistry;
 	const ui = { requestRender: vi.fn() } as unknown as TUI;
@@ -50,7 +49,6 @@ async function createSelector(state: ProviderDiscoveryState): Promise<ModelSelec
 	);
 	await Bun.sleep(0);
 	installTestTheme();
-	selector.handleInput("\x1b[C");
 	selector.handleInput("\x1b[C");
 	await Bun.sleep(0);
 	return selector;

@@ -1,6 +1,9 @@
-import type { Api, Model } from "../types";
-import { getBracketStrippedModelIdCandidates, getLongestModelLikeIdSegment, getModelLikeIdSegments } from "./id";
-import { CANONICAL_TRAILING_MARKER_PATTERN } from "./markers";
+import {
+	getBracketStrippedModelIdCandidates,
+	getLongestModelLikeIdSegment,
+	getModelLikeIdSegments,
+} from "../src/identity/id";
+import type { Api, Model } from "../src/types";
 
 export type CanonicalModelSource = "override" | "bundled" | "heuristic" | "fallback";
 
@@ -45,7 +48,33 @@ interface ResolvedCanonicalModel {
 	source: CanonicalModelSource;
 }
 
-const TRAILING_MARKER_PATTERN = CANONICAL_TRAILING_MARKER_PATTERN;
+// Canonical-id trailing markers (routing/quantization/effort suffixes that do
+// not change model identity). `search` is intentionally excluded — canonical
+// coalescing treats e.g. `sonar-pro-search` as distinct from `sonar-pro`. This
+// is build-only (generator) code, so the vocabulary lives here rather than in
+// the runtime `identity/markers` module.
+const CANONICAL_TRAILING_MARKERS = [
+	"thinking",
+	"customtools",
+	"high",
+	"low",
+	"medium",
+	"minimal",
+	"xhigh",
+	"free",
+	"cloud",
+	"exacto",
+	"nitro",
+	"original",
+	"optimized",
+	"nvfp4",
+	"fp8",
+	"fp4",
+	"bf16",
+	"int8",
+	"int4",
+] as const;
+const TRAILING_MARKER_PATTERN = new RegExp(`[-:](?:${CANONICAL_TRAILING_MARKERS.join("|")})$`, "i");
 const WRAPPER_PREFIXES = ["duo-chat-"] as const;
 
 const EMPTY_COMPILED_EQUIVALENCE: CompiledEquivalenceConfig = {

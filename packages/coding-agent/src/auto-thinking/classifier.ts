@@ -74,7 +74,7 @@ export async function classifyDifficulty(
 }
 
 async function classifyOnline(input: string, deps: ClassifyDifficultyDeps): Promise<Effort> {
-	const resolved = resolveRoleSelection(["tiny", "smol"], deps.settings, deps.registry.getAvailable(), deps.registry);
+	const resolved = resolveRoleSelection(["tiny", "smol"], deps.settings, deps.registry.getAvailable());
 	const model = resolved?.model;
 	if (!model) {
 		throw new Error("auto-thinking: no tiny/smol model available for classification");

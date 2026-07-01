@@ -59,8 +59,6 @@ function emptyStream(): AssistantMessageEventStream {
 interface FakeRegistryOptions {
 	models: Model<Api>[];
 	authedProviders: string[];
-	canonicalId?: (model: Model<Api>) => string | undefined;
-	canonicalVariants?: Record<string, Model<Api>[]>;
 }
 
 function fakeRegistry(opts: FakeRegistryOptions): BenchModelRegistry {
@@ -70,16 +68,6 @@ function fakeRegistry(opts: FakeRegistryOptions): BenchModelRegistry {
 		hasConfiguredAuth: model => authed.has(model.provider),
 		getApiKey: async model => (authed.has(model.provider) ? "sk-test" : undefined),
 		resolver: () => (() => Promise.resolve("sk-test")) as unknown as ApiKeyResolver,
-		getCanonicalId: opts.canonicalId,
-		getCanonicalVariants: opts.canonicalVariants
-			? canonicalId =>
-					(opts.canonicalVariants?.[canonicalId] ?? []).map(model => ({
-						canonicalId,
-						selector: `${model.provider}/${model.id}`,
-						model,
-						source: "bundled" as const,
-					}))
-			: undefined,
 	};
 }
 
@@ -121,24 +109,20 @@ describe("bench credential-aware provider selection", () => {
 		expect(stderr).toContain("openrouter/openai/gpt-oss-20b");
 	});
 
-	it("redirects across providers whose local ids differ, via canonical variants", async () => {
-		// Bare `gpt-oss-20b` resolves to fireworks (unauthed) by flat-id match; the
-		// only authenticated equivalent is openrouter under a *different* local id,
-		// so the swap must travel through the canonical variant index.
-		const fireworks = fakeModel("fireworks", "gpt-oss-20b");
-		const openrouter = fakeModel("openrouter", "openai/gpt-oss-20b");
+	it("does not redirect across providers whose local ids differ", async () => {
+		// Bare `gpt-oss-20b` resolves to fireworks (unauthed) by flat-id match.
+		// The authenticated openrouter entry has a different local id, so it is
+		// not considered an equivalent fallback.
 		const registry = fakeRegistry({
-			models: [fireworks, openrouter],
+			models: [fakeModel("fireworks", "gpt-oss-20b"), fakeModel("openrouter", "openai/gpt-oss-20b")],
 			authedProviders: ["openrouter"],
-			canonicalId: model => (model === fireworks || model === openrouter ? "gpt-oss-20b" : undefined),
-			canonicalVariants: { "gpt-oss-20b": [fireworks, openrouter] },
 		});
 
-		const { summary, stderr } = await runBench("gpt-oss-20b", registry);
+		const { summary } = await runBench("gpt-oss-20b", registry);
 
-		expect(summary.models[0].model).toBe("openrouter/openai/gpt-oss-20b");
-		expect(summary.failures).toBe(0);
-		expect(stderr).toContain('no credentials for "fireworks"');
+		expect(summary.models[0].model).toBe("fireworks/gpt-oss-20b");
+		expect(summary.failures).toBe(1);
+		expect(summary.models[0].results[0]).toMatchObject({ ok: false });
 	});
 
 	it("honors an explicitly pinned provider even without credentials", async () => {

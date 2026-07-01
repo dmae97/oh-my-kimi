@@ -2108,11 +2108,7 @@ export class AgentSession {
 					continue;
 				}
 			} else {
-				const sel = resolveAdvisorRoleSelection(
-					this.settings,
-					this.#modelRegistry.getAvailable(),
-					this.#modelRegistry,
-				);
+				const sel = resolveAdvisorRoleSelection(this.settings, this.#modelRegistry.getAvailable());
 				if (!sel) {
 					logger.debug("advisor enabled but no model assigned to the 'advisor' role; advisor inactive", {
 						advisor: config.name,
@@ -8245,7 +8241,6 @@ export class AgentSession {
 			const resolved = resolveModelRoleValue(roleModelStr, availableModels, {
 				settings: this.settings,
 				matchPreferences,
-				modelRegistry: this.#modelRegistry,
 			});
 			if (!resolved.model) continue;
 
@@ -8386,7 +8381,7 @@ export class AgentSession {
 		const all = this.#modelRegistry.getAvailable();
 		const patterns = this.settings.get("enabledModels");
 		if (!patterns || patterns.length === 0) return all;
-		return filterAvailableModelsByEnabledPatterns(all, patterns, this.#modelRegistry);
+		return filterAvailableModelsByEnabledPatterns(all, patterns);
 	}
 
 	// =========================================================================
@@ -10800,7 +10795,6 @@ export class AgentSession {
 		return resolveModelRoleValue(roleModelStr, availableModels, {
 			settings: this.settings,
 			matchPreferences: getModelMatchPreferences(this.settings),
-			modelRegistry: this.#modelRegistry,
 		});
 	}
 

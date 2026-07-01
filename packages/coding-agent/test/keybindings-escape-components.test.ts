@@ -78,7 +78,6 @@ describe("component escape bindings", () => {
 		const modelRegistry = {
 			getAll: () => [model],
 			getDiscoverableProviders: () => [],
-			getCanonicalModelSelections: () => [],
 		} as unknown as ModelRegistry;
 		const ui = {
 			requestRender: vi.fn(),

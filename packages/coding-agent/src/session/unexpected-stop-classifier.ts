@@ -64,7 +64,7 @@ export async function classifyUnexpectedStop(
 }
 
 async function classifyOnline(text: string, deps: ClassifyUnexpectedStopDeps): Promise<boolean | undefined> {
-	const resolved = resolveRoleSelection(["tiny", "smol"], deps.settings, deps.registry.getAvailable(), deps.registry);
+	const resolved = resolveRoleSelection(["tiny", "smol"], deps.settings, deps.registry.getAvailable());
 	const model = resolved?.model;
 	if (!model) {
 		throw new Error("unexpected-stop: no tiny/smol model available for classification");

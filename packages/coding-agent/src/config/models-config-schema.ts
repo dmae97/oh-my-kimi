@@ -273,30 +273,8 @@ const ProviderConfigSchema = type({
 	return true;
 });
 
-const EquivalenceConfigSchema = type({
-	"overrides?": { "[string]": "string" },
-	"exclude?": "string[]",
-}).narrow((value, ctx) => {
-	if (value.overrides !== undefined) {
-		for (const [, v] of Object.entries(value.overrides)) {
-			if (typeof v === "string" && v.length === 0) {
-				return ctx.mustBe("overrides values non-empty strings");
-			}
-		}
-	}
-	if (value.exclude !== undefined && Array.isArray(value.exclude)) {
-		for (const item of value.exclude) {
-			if (typeof item === "string" && item.length === 0) {
-				return ctx.mustBe("exclude items non-empty strings");
-			}
-		}
-	}
-	return true;
-});
-
 export const ModelsConfigSchema = type({
 	"providers?": { "[string]": ProviderConfigSchema },
-	"equivalence?": EquivalenceConfigSchema,
 });
 
 export type ModelsConfig = typeof ModelsConfigSchema.infer;

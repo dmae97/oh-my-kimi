@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed the `equivalence` key (`overrides`/`exclude`) from `models.yml`/`models.json` provider config; canonical-alias grouping no longer exists so the field is inert
+
+### Changed
+
+- Simplified model selection and matching by removing the canonical-alias grouping/resolution layer. `ModelRegistry` no longer exposes `getCanonicalId`, `getCanonicalVariants`, `getCanonicalModels`, `getCanonicalModelSelections`, or `resolveCanonicalModel`; the resolver's matching pipeline (`parseModelPattern`, `resolveModelRoleValue`, `resolveRoleSelection`, `resolveModelScope`, `resolveCliModel`, `filterAvailableModelsByEnabledPatterns`) resolves bare/`provider/id`/glob patterns directly without a canonical index
+- Bare model ids in `--model`, `modelRoles`, and `enabledModels` resolve via exact/flat-id + provider-preference matching instead of cross-spelling canonical coalescing
+- Cold start no longer builds the catalog-wide canonical index (the `inlineToolDescriptors: auto` Gemini check now classifies the raw model id directly), removing that work from the first-paint path
+- Modified bench CLI auth fallback to match identical model IDs instead of routing via a canonical equivalence index
+
+### Removed
+
+- Removed the coalesced canonical model view (the "CANONICAL" tab in the interactive model selector and the `omp models canonical` subcommand)
+
 ### Fixed
 
 - Fixed the write tool not streaming execution progress to the TUI while files are being written.

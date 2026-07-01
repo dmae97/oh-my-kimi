@@ -10,7 +10,7 @@ export default class Models extends Command {
 
 	static args = {
 		action: Args.string({
-			description: "ls (default) | find | refresh | canonical | <provider>",
+			description: "ls (default) | find | refresh | <provider>",
 			required: false,
 		}),
 		pattern: Args.string({
@@ -40,7 +40,6 @@ export default class Models extends Command {
 		`# List one provider's models (any provider name works)\n  ${APP_NAME} models openai-codex`,
 		`# Find models by substring\n  ${APP_NAME} models find minimax`,
 		`# Force a fresh catalog fetch (replaces rm -rf ~/.omp/models.db)\n  ${APP_NAME} models refresh`,
-		`# Show the coalesced canonical model view\n  ${APP_NAME} models canonical`,
 		`# Machine-readable output\n  ${APP_NAME} models --json`,
 	];
 

@@ -4,8 +4,8 @@
  * Layering:
  * - `matchModel` is the single matching engine. Order: exact `provider/id`
  *   reference (with variant-alias and OpenRouter routed/date fallbacks) →
- *   exact canonical id → exact bare id → retired variant alias →
- *   provider-scoped fuzzy → substring with alias-vs-dated pick.
+ *   exact bare id → retired variant alias → provider-scoped fuzzy → substring
+ *   with alias-vs-dated pick.
  * - `parseModelPatternWithContext`/`parseModelPattern` layer the selector
  *   grammar on top: trailing `:level` thinking suffixes (`splitThinkingSuffix`)
  *   and `@upstream` provider routing (`splitUpstreamRouting`).
@@ -105,13 +105,6 @@ function splitThinkingSuffix(
 	if (colonIdx <= minColonIndex) return { base: pattern };
 	const level = parseThinkingSuffix(pattern.slice(colonIdx + 1), options);
 	return level ? { base: pattern.slice(0, colonIdx), level } : { base: pattern };
-}
-
-function hasExactModelPattern(pattern: string, availableModels: readonly Model<Api>[]): boolean {
-	const normalized = pattern.toLowerCase();
-	return availableModels.some(
-		model => model.id.toLowerCase() === normalized || `${model.provider}/${model.id}`.toLowerCase() === normalized,
-	);
 }
 
 function matchingGlobModels(pattern: string, availableModels: readonly Model<Api>[]): Model<Api>[] {
@@ -444,11 +437,8 @@ export interface ModelMatchPreferences {
 	deprioritizeProviders?: string[];
 }
 
-export type CanonicalModelRegistry = Partial<
-	Pick<ModelRegistry, "resolveCanonicalModel" | "getCanonicalVariants" | "getCanonicalId">
->;
-export type ModelLookupRegistry = Pick<ModelRegistry, "getAvailable"> & Partial<CanonicalModelRegistry>;
-type CliModelRegistry = Pick<ModelRegistry, "getAll"> & Partial<CanonicalModelRegistry>;
+export type ModelLookupRegistry = Pick<ModelRegistry, "getAvailable">;
+type CliModelRegistry = Pick<ModelRegistry, "getAll">;
 type InitialModelRegistry = Pick<ModelRegistry, "getAvailable" | "find">;
 type RestorableModelRegistry = Pick<ModelRegistry, "getAvailable" | "find" | "getApiKey">;
 
@@ -579,7 +569,6 @@ function includeSyntheticAllowedModels(available: Model<Api>[], allowedModels: I
 
 /**
  * Find an exact explicit provider/model match.
- * Bare model ids are handled separately so canonical ids can coalesce variants.
  */
 function findExactModelReferenceMatch(modelReference: string, availableModels: Model<Api>[]): Model<Api> | undefined {
 	const trimmedReference = modelReference.trim();
@@ -597,51 +586,24 @@ function findExactModelReferenceMatch(modelReference: string, availableModels: M
 	}
 	return undefined;
 }
-
-function findExactCanonicalModelMatch(
-	modelReference: string,
-	availableModels: Model<Api>[],
-	modelRegistry: CanonicalModelRegistry | undefined,
-): Model<Api> | undefined {
-	if (!modelRegistry) {
-		return undefined;
-	}
-	const trimmedReference = modelReference.trim();
-	if (!trimmedReference || trimmedReference.includes("/")) {
-		return undefined;
-	}
-	return modelRegistry.resolveCanonicalModel?.(trimmedReference, {
-		availableOnly: false,
-		candidates: availableModels,
-	});
-}
-
 /**
  * The single model-matching engine. Tries, in order:
  * 1. exact `provider/id` reference (variant-alias and OpenRouter routed/date
  *    fallbacks included),
-
- * 2. exact canonical id (coalesces provider variants),
- * 3. exact bare id (preference-ranked),
- * 4. retired effort-tier variant alias (collapsed catalog entries),
- * 5. provider-scoped fuzzy match,
- * 6. substring match with the alias-vs-dated pick.
+ * 2. exact bare id (preference-ranked),
+ * 3. retired effort-tier variant alias (collapsed catalog entries),
+ * 4. provider-scoped fuzzy match,
+ * 5. substring match with the alias-vs-dated pick.
  * Returns the matched model or undefined if no match found.
  */
 function matchModel(
 	modelPattern: string,
 	availableModels: Model<Api>[],
 	context: ModelPreferenceContext,
-	options?: { modelRegistry?: CanonicalModelRegistry },
 ): Model<Api> | undefined {
 	const exactRefMatch = findExactModelReferenceMatch(modelPattern, availableModels);
 	if (exactRefMatch) {
 		return exactRefMatch;
-	}
-	// Exact canonical ids coalesce provider variants before bare-id matching.
-	const exactCanonicalMatch = findExactCanonicalModelMatch(modelPattern, availableModels, options?.modelRegistry);
-	if (exactCanonicalMatch) {
-		return exactCanonicalMatch;
 	}
 
 	// Exact ID match (case-insensitive) — this must happen before provider-scoped
@@ -773,10 +735,10 @@ function parseModelPatternWithContext(
 	pattern: string,
 	availableModels: Model<Api>[],
 	context: ModelPreferenceContext,
-	options?: { allowInvalidThinkingSelectorFallback?: boolean; modelRegistry?: CanonicalModelRegistry },
+	options?: { allowInvalidThinkingSelectorFallback?: boolean },
 ): ParsedModelResult {
 	// Try exact match first
-	const exactMatch = matchModel(pattern, availableModels, context, options);
+	const exactMatch = matchModel(pattern, availableModels, context);
 	if (exactMatch) {
 		return { model: exactMatch, thinkingLevel: undefined, warning: undefined, explicitThinkingLevel: false };
 	}
@@ -830,7 +792,7 @@ export function parseModelPattern(
 	pattern: string,
 	availableModels: Model<Api>[],
 	preferences?: ModelMatchPreferences,
-	options?: { allowInvalidThinkingSelectorFallback?: boolean; modelRegistry?: CanonicalModelRegistry },
+	options?: { allowInvalidThinkingSelectorFallback?: boolean },
 ): ParsedModelResult {
 	const context = buildPreferenceContext(availableModels, preferences);
 	const direct = parseModelPatternWithContext(pattern, availableModels, context, options);
@@ -1035,7 +997,7 @@ export interface ResolvedModelRoleValue {
 export function resolveModelRoleValue(
 	roleValue: string | undefined,
 	availableModels: Model<Api>[],
-	options?: { settings?: Settings; matchPreferences?: ModelMatchPreferences; modelRegistry?: CanonicalModelRegistry },
+	options?: { settings?: Settings; matchPreferences?: ModelMatchPreferences },
 ): ResolvedModelRoleValue {
 	if (!roleValue) {
 		return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning: undefined };
@@ -1054,9 +1016,7 @@ export function resolveModelRoleValue(
 	let warning: string | undefined;
 	const matchPreferences = mergeModelMatchPreferences(options?.settings, options?.matchPreferences);
 	for (const effectivePattern of effectivePatterns) {
-		const resolved = parseModelPattern(effectivePattern, availableModels, matchPreferences, {
-			modelRegistry: options?.modelRegistry,
-		});
+		const resolved = parseModelPattern(effectivePattern, availableModels, matchPreferences);
 		if (resolved.model) {
 			return {
 				model: resolved.model,
@@ -1121,7 +1081,6 @@ export function resolveModelFromString(
 	value: string,
 	available: Model<Api>[],
 	matchPreferences?: ModelMatchPreferences,
-	modelRegistry?: CanonicalModelRegistry,
 ): Model<Api> | undefined {
 	const exact = available.find(model => `${model.provider}/${model.id}` === value);
 	if (exact) return exact;
@@ -1133,7 +1092,7 @@ export function resolveModelFromString(
 		const parsedExact = available.find(model => model.provider === parsed.provider && model.id === parsed.id);
 		if (parsedExact) return parsedExact;
 	}
-	return parseModelPattern(value, available, matchPreferences, { modelRegistry }).model;
+	return parseModelPattern(value, available, matchPreferences).model;
 }
 
 /**
@@ -1144,9 +1103,8 @@ export function resolveModelFromSettings(options: {
 	availableModels: Model<Api>[];
 	matchPreferences?: ModelMatchPreferences;
 	roleOrder?: readonly ModelRole[];
-	modelRegistry?: CanonicalModelRegistry;
 }): Model<Api> | undefined {
-	const { settings, availableModels, matchPreferences, roleOrder, modelRegistry } = options;
+	const { settings, availableModels, matchPreferences, roleOrder } = options;
 	const roles = roleOrder ?? MODEL_ROLE_IDS;
 	let sawConfiguredProviderQualifiedRole = false;
 	for (const role of roles) {
@@ -1156,7 +1114,7 @@ export function resolveModelFromSettings(options: {
 		if (expanded.includes("/")) {
 			sawConfiguredProviderQualifiedRole = true;
 		}
-		const resolved = resolveModelFromString(expanded, availableModels, matchPreferences, modelRegistry);
+		const resolved = resolveModelFromString(expanded, availableModels, matchPreferences);
 		if (resolved) return resolved;
 	}
 	return sawConfiguredProviderQualifiedRole ? undefined : availableModels[0];
@@ -1177,7 +1135,6 @@ export function resolveModelOverride(
 		const { model, thinkingLevel, explicitThinkingLevel } = resolveModelRoleValue(pattern, availableModels, {
 			settings,
 			matchPreferences,
-			modelRegistry,
 		});
 		if (model) {
 			return { model, thinkingLevel, explicitThinkingLevel };
@@ -1250,14 +1207,12 @@ export function resolveRoleSelection(
 	roles: readonly string[],
 	settings: Settings,
 	availableModels: Model<Api>[],
-	modelRegistry?: CanonicalModelRegistry,
 ): { model: Model<Api>; thinkingLevel?: ThinkingLevel } | undefined {
 	const matchPreferences = getModelMatchPreferences(settings);
 	for (const role of roles) {
 		const resolved = resolveModelRoleValue(settings.getModelRole(role), availableModels, {
 			settings,
 			matchPreferences,
-			modelRegistry,
 		});
 		if (resolved.model) {
 			return { model: resolved.model, thinkingLevel: resolved.thinkingLevel };
@@ -1277,35 +1232,12 @@ export function resolveRoleSelection(
 export function resolveAdvisorRoleSelection(
 	settings: Settings,
 	availableModels: Model<Api>[],
-	modelRegistry?: CanonicalModelRegistry,
 ): { model: Model<Api>; thinkingLevel?: ThinkingLevel } | undefined {
 	const resolved = resolveModelRoleValue(`${PREFIX_MODEL_ROLE}advisor`, availableModels, {
 		settings,
 		matchPreferences: getModelMatchPreferences(settings),
-		modelRegistry,
 	});
 	return resolved.model ? { model: resolved.model, thinkingLevel: resolved.thinkingLevel } : undefined;
-}
-
-function resolveExactCanonicalScopePattern(
-	pattern: string,
-	modelRegistry: Pick<ModelRegistry, "getCanonicalVariants">,
-	availableModels: Model<Api>[],
-): { models: Model<Api>[]; thinkingLevel?: ThinkingLevel; explicitThinkingLevel: boolean } | undefined {
-	if (pattern.endsWith(":max") && hasExactModelPattern(pattern, availableModels)) {
-		return undefined;
-	}
-	const { base: canonicalId, level: thinkingLevel } = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS);
-	const explicitThinkingLevel = thinkingLevel !== undefined;
-
-	const variants = modelRegistry
-		.getCanonicalVariants(canonicalId, { availableOnly: true, candidates: availableModels })
-		.map(variant => variant.model);
-	if (variants.length === 0) {
-		return undefined;
-	}
-
-	return { models: variants, thinkingLevel, explicitThinkingLevel };
 }
 
 /**
@@ -1321,7 +1253,7 @@ function resolveExactCanonicalScopePattern(
  */
 export async function resolveModelScope(
 	patterns: string[],
-	modelRegistry: Pick<ModelRegistry, "getAvailable" | "getCanonicalVariants">,
+	modelRegistry: Pick<ModelRegistry, "getAvailable">,
 	preferences?: ModelMatchPreferences,
 ): Promise<ScopedModel[]> {
 	const availableModels = modelRegistry.getAvailable();
@@ -1360,19 +1292,10 @@ export async function resolveModelScope(
 			continue;
 		}
 
-		const exactCanonical = resolveExactCanonicalScopePattern(pattern, modelRegistry, availableModels);
-		if (exactCanonical) {
-			for (const model of exactCanonical.models) {
-				addScopedModel(model, exactCanonical.thinkingLevel, exactCanonical.explicitThinkingLevel);
-			}
-			continue;
-		}
-
 		const { model, thinkingLevel, warning, explicitThinkingLevel } = parseModelPatternWithContext(
 			pattern,
 			availableModels,
 			context,
-			{ modelRegistry },
 		);
 
 		if (warning) {
@@ -1403,7 +1326,7 @@ export async function resolveModelScope(
  * falling back to the global default (see issue #1022).
  */
 export async function resolveAllowedModels(
-	modelRegistry: Pick<ModelRegistry, "getAvailable" | "getCanonicalVariants">,
+	modelRegistry: Pick<ModelRegistry, "getAvailable">,
 	settings: Settings | undefined,
 	preferences?: ModelMatchPreferences,
 ): Promise<Model<Api>[]> {
@@ -1429,7 +1352,6 @@ export async function resolveAllowedModels(
  * `enabledModels` scope semantics as startup resolution:
  *
  * - Glob selectors match `provider/modelId` and bare model id
- * - Exact canonical ids expand to all available concrete variants
  * - Exact `provider/modelId`, bare ids, provider-scoped fuzzy, and substring selectors
  *   resolve through the shared model-pattern matcher
  * - Optional `:thinkingLevel` suffixes are stripped only when valid
@@ -1442,7 +1364,6 @@ export async function resolveAllowedModels(
 export function filterAvailableModelsByEnabledPatterns(
 	available: Model<Api>[],
 	patterns: readonly string[],
-	registry: Pick<ModelRegistry, "getCanonicalVariants">,
 ): Model<Api>[] {
 	if (patterns.length === 0) return available;
 
@@ -1460,15 +1381,7 @@ export function filterAvailableModelsByEnabledPatterns(
 			continue;
 		}
 
-		const exactCanonical = resolveExactCanonicalScopePattern(pattern, registry, available);
-		if (exactCanonical) {
-			for (const model of exactCanonical.models) {
-				addAllowed(model);
-			}
-			continue;
-		}
-
-		const { model } = parseModelPatternWithContext(pattern, available, context, { modelRegistry: registry });
+		const { model } = parseModelPatternWithContext(pattern, available, context);
 		if (model) {
 			addAllowed(model);
 		}
@@ -1533,21 +1446,6 @@ export function resolveCliModel(options: {
 		// "zai/glm-5" on provider "vercel-ai-gateway" wins over provider "zai"
 		// with id "glm-5", because Array.find returns the first catalog hit.
 		let exact = findExactModelReferenceMatch(trimmedModel, availableModels);
-		if (!exact && !trimmedModel.includes(":")) {
-			// CLI flags address the full catalog, so unlike the engine's canonical
-			// step this lookup is unrestricted; the `:`-guard defers suffixed
-			// selectors (thinking levels, ollama-style ids) to the grammar below.
-			const canonicalMatch = modelRegistry.resolveCanonicalModel?.(trimmedModel, { availableOnly: false });
-			if (canonicalMatch) {
-				return {
-					model: canonicalMatch,
-					selector: modelRegistry.getCanonicalId?.(canonicalMatch) ?? trimmedModel,
-					warning: undefined,
-					thinkingLevel: undefined,
-					error: undefined,
-				};
-			}
-		}
 		if (!exact) {
 			// Flat exact id (or full selector) by catalog order: CLI resolution
 			// stays deterministic across runs regardless of usage-based ranking.
@@ -1601,7 +1499,6 @@ export function resolveCliModel(options: {
 	const candidates = provider ? availableModels.filter(model => model.provider === provider) : availableModels;
 	const { model, thinkingLevel, warning, upstream } = parseModelPattern(pattern, candidates, preferences, {
 		allowInvalidThinkingSelectorFallback: false,
-		modelRegistry,
 	});
 
 	if (!model) {
@@ -1616,15 +1513,6 @@ export function resolveCliModel(options: {
 	}
 
 	let selector = provider ? formatModelString(model) : undefined;
-	if (!provider) {
-		const canonicalCandidate = splitThinkingSuffix(pattern).base;
-		if (!canonicalCandidate.includes("/")) {
-			const canonicalResolved = modelRegistry.resolveCanonicalModel?.(canonicalCandidate, { availableOnly: false });
-			if (canonicalResolved && canonicalResolved.provider === model.provider && canonicalResolved.id === model.id) {
-				selector = modelRegistry.getCanonicalId?.(canonicalResolved) ?? canonicalCandidate;
-			}
-		}
-	}
 	if (selector !== undefined && upstream) {
 		selector = `${selector}@${upstream}`;
 	}
@@ -1801,7 +1689,7 @@ export async function findSmolModel(
 
 	// 1. Try saved model from settings
 	if (savedModel) {
-		const match = resolveModelFromString(savedModel, availableModels, undefined, modelRegistry);
+		const match = resolveModelFromString(savedModel, availableModels, undefined);
 		if (match) return match;
 	}
 
@@ -1812,7 +1700,7 @@ export async function findSmolModel(
 		if (providerMatch) return providerMatch;
 
 		// Try exact match first
-		const exactMatch = parseModelPattern(pattern, availableModels, undefined, { modelRegistry }).model;
+		const exactMatch = parseModelPattern(pattern, availableModels, undefined).model;
 		if (exactMatch) return exactMatch;
 
 		// Try fuzzy match (substring)
@@ -1841,14 +1729,14 @@ export async function findSlowModel(
 
 	// 1. Try saved model from settings
 	if (savedModel) {
-		const match = resolveModelFromString(savedModel, availableModels, undefined, modelRegistry);
+		const match = resolveModelFromString(savedModel, availableModels, undefined);
 		if (match) return match;
 	}
 
 	// 2. Try priority chain
 	for (const pattern of MODEL_PRIO.slow) {
 		// Try exact match first
-		const exactMatch = parseModelPattern(pattern, availableModels, undefined, { modelRegistry }).model;
+		const exactMatch = parseModelPattern(pattern, availableModels, undefined).model;
 		if (exactMatch) return exactMatch;
 
 		// Try fuzzy match (substring)

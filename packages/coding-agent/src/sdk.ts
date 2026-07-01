@@ -1244,7 +1244,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		resolveModelRoleValue(settings.getModelRole("default"), allowedModels, {
 			settings,
 			matchPreferences: modelMatchPreferences,
-			modelRegistry,
 		}),
 	);
 	let model = options.model;
@@ -1946,9 +1945,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		if (!model && options.modelPattern) {
 			const availableModels = modelRegistry.getAll();
 			const matchPreferences = getModelMatchPreferences(settings);
-			const { model: resolved } = parseModelPattern(options.modelPattern, availableModels, matchPreferences, {
-				modelRegistry,
-			});
+			const { model: resolved } = parseModelPattern(options.modelPattern, availableModels, matchPreferences);
 			if (resolved) {
 				model = resolved;
 				modelFallbackMessage = undefined;
@@ -1978,7 +1975,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				const reResolvedRoleSpec = resolveModelRoleValue(settings.getModelRole("default"), fallbackCandidates, {
 					settings,
 					matchPreferences: modelMatchPreferences,
-					modelRegistry,
 				});
 				if (reResolvedRoleSpec.model) {
 					defaultRoleSpec = reResolvedRoleSpec;
@@ -2179,10 +2175,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// `auto` enforces the per-model policy (inline for Gemini, off otherwise);
 		// like the rest of the prune machinery this is fixed for the session, so a
 		// mid-session model switch keeps the start-time decision.
-		const inlineToolDescriptors = shouldInlineToolDescriptors(
-			settings.get("inlineToolDescriptors"),
-			model ? (modelRegistry.getCanonicalId(model) ?? model.id) : undefined,
-		);
+		const inlineToolDescriptors = shouldInlineToolDescriptors(settings.get("inlineToolDescriptors"), model?.id);
 		const eagerTasks = settings.get("task.eager") !== "default";
 		const eagerTasksAlways = settings.get("task.eager") === "always";
 		const intentField = $flag("PI_INTENT_TRACING", settings.get("tools.intentTracing")) ? INTENT_FIELD : undefined;

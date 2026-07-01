@@ -14,13 +14,13 @@ import {
 	parseKnownModel,
 	semverEqual,
 } from "../src/identity/classify";
-import { buildCanonicalModelIndex, buildCanonicalReferenceData } from "../src/identity/equivalence";
 import { isMimoModelIdOrName } from "../src/identity/family";
 import { getLongestModelLikeIdSegment } from "../src/identity/id";
 import { buildModelReferenceIndex, resolveModelReference } from "../src/identity/reference";
 import { resolveModelThinking } from "../src/model-thinking";
 import type { Api, Model, ModelSpec } from "../src/types";
 import { isVariantCollapsedSpec } from "../src/variant-collapse";
+import { buildCanonicalModelIndex, buildCanonicalReferenceData } from "./equivalence";
 
 const CLOUDFLARE_AI_GATEWAY_BASE_URL = "https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/anthropic";
 
