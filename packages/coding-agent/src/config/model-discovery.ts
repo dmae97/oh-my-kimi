@@ -626,10 +626,7 @@ export async function discoverOpenAIModelsList(
 				// Cap the reference's output limit at the discovered context
 				// window so an ID collision with a larger bundled model can
 				// never request more tokens than the local runtime advertises.
-				maxTokens: Math.min(
-					reference?.maxTokens ?? discoveryDefaultMaxTokens(providerConfig.api),
-					contextWindow,
-				),
+				maxTokens: Math.min(reference?.maxTokens ?? discoveryDefaultMaxTokens(providerConfig.api), contextWindow),
 				headers,
 				compat: {
 					supportsStore: false,
