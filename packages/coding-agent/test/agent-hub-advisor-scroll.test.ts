@@ -396,6 +396,43 @@ describe("AgentTranscriptViewer", () => {
 		}
 	});
 
+	it("surfaces an oversized remote transcript error after existing rows", async () => {
+		const header = `${JSON.stringify({
+			type: "session",
+			version: CURRENT_SESSION_VERSION,
+			id: "adv",
+			timestamp: TS,
+			cwd: "/tmp",
+		})}\n`;
+		const before = `${header}${messageLine("a0", "BEFORE_OVERSIZED")}\n`;
+		const beforeSize = Buffer.byteLength(before, "utf-8");
+		const error = "transcript entry exceeds transcript fetch cap (4194304 bytes)";
+		const calls: number[] = [];
+		const remote: AgentHubRemote = {
+			chat: () => {},
+			kill: () => {},
+			revive: () => {},
+			readTranscript: async (_id: string, fromByte: number) => {
+				calls.push(fromByte);
+				if (fromByte === 0) return { text: before, newSize: beforeSize };
+				return { text: "", newSize: fromByte, error };
+			},
+		};
+		const viewer = makeViewer("", remote);
+		try {
+			await Bun.sleep(650);
+			const body = viewer
+				.render(80)
+				.map(l => Bun.stripANSI(l))
+				.join("\n");
+			expect(body).toContain("BEFORE_OVERSIZED");
+			expect(body).toContain(error);
+			expect(calls.filter(offset => offset === beforeSize).length).toBe(1);
+		} finally {
+			viewer.dispose();
+		}
+	});
+
 	it("drops stale rendered rows when the host transcript rotates", async () => {
 		const header = `${JSON.stringify({
 			type: "session",

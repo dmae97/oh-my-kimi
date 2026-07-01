@@ -548,7 +548,11 @@ export class AgentTranscriptViewer implements Component {
 
 		const headerLines = this.#headerLines(ref?.status, ref?.kind, ref?.parentId);
 		const footerLines = this.#footerLines();
-		const noticeLine = this.#notice ? ` ${theme.fg("error", this.#notice)}` : undefined;
+		const noticeLine = this.#notice
+			? ` ${theme.fg("error", this.#notice)}`
+			: this.#remoteError && !this.#builder.isEmpty
+				? ` ${theme.fg("error", this.#remoteError)}`
+				: undefined;
 		const editorLines = this.#editor ? this.#editor.render(innerWidth) : [];
 
 		// Chrome: top border + header rows + divider border + (notice) + editor + footer + bottom border.
