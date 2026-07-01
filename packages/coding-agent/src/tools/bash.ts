@@ -29,7 +29,12 @@ import { checkBashInterception } from "./bash-interceptor";
 import { canUseInteractiveBashPty } from "./bash-pty-selection";
 import { expandInternalUrls, type InternalUrlExpansionOptions } from "./bash-skill-urls";
 import { invalidateGithubCacheForBashCommand } from "./gh-cache-invalidation";
-import { formatStyledTruncationWarning, stripRawOutputArtifactNotice, type OutputMeta, stripOutputNotice } from "./output-meta";
+import {
+	formatStyledTruncationWarning,
+	type OutputMeta,
+	stripOutputNotice,
+	stripRawOutputArtifactNotice,
+} from "./output-meta";
 import { resolveToCwd } from "./path-utils";
 import { capPreviewLines, formatToolWorkingDirectory, previewWindowRows, replaceTabs } from "./render-utils";
 import { ToolAbortError, ToolError } from "./tool-errors";
@@ -291,7 +296,6 @@ function formatWallTimeNotice(wallTimeMs: number): string {
 function formatExitCodeNotice(exitCode: number): string {
 	return `Command exited with code ${exitCode}`;
 }
-
 
 /**
  * Strip the trailing occurrence of `notice` (plus a single surrounding newline
