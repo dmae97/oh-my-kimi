@@ -18,6 +18,9 @@
 ### Fixed
 
 - Fixed the advisor docs and system prompt still describing a hard read-only observer after `WATCHDOG.yml` `tools:` grants were opened to every built-in tool (including `edit`, `write`, `bash`, `eval`, `browser`). `docs/advisor-watchdog.md` now documents the `WATCHDOG.yml` roster format, the default `read`/`grep`/`glob` grant, and the safety implications of broadening the grant; the advisor system prompt no longer asserts read-only access. ([#4044](https://github.com/can1357/oh-my-pi/issues/4044))
+### Fixed
+
+- Fixed long streaming previews for `write` (`content`), `edit` (`input`), and `eval` (`code`) updating in throttle-sized chunks by decoding the streamed string arguments incrementally between full JSON re-parses. ([#4043](https://github.com/can1357/oh-my-pi/issues/4043))
 
 ## [16.2.12] - 2026-07-01
 

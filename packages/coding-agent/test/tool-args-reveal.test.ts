@@ -34,11 +34,18 @@ function drain(frames: number): void {
 	}
 }
 
-function jsonTarget(options: { fullArgs?: Record<string, unknown>; exposeRawPartialJson?: boolean } = {}) {
+function jsonTarget(
+	options: {
+		fullArgs?: Record<string, unknown>;
+		exposeRawPartialJson?: boolean;
+		streamingStringKeys?: readonly string[];
+	} = {},
+) {
 	return {
 		rawInput: false,
 		exposeRawPartialJson: options.exposeRawPartialJson ?? false,
 		fullArgs: options.fullArgs ?? {},
+		streamingStringKeys: options.streamingStringKeys,
 	};
 }
 
@@ -134,6 +141,67 @@ describe("tool args reveal", () => {
 		expect(component.frames.length).toBeGreaterThan(1);
 		const secondPartial = partialOf(component.frames[1]);
 		expect(secondPartial.length - firstPartial.length).toBeGreaterThanOrEqual(STREAMING_JSON_PARSE_MIN_GROWTH);
+	});
+
+	it("refreshes parsed write content on raw-prefix frames below the JSON parse throttle", () => {
+		vi.useFakeTimers();
+		const { component, controller } = makeController();
+		const initialContent = "x".repeat(STREAMING_JSON_PARSE_MIN_GROWTH + 24);
+		const appendedJsonContent = "line 1\\nline 2\\n";
+		const appendedContent = "line 1\nline 2\n";
+		const initial = `{"path":"a.ts","content":"${initialContent}`;
+		const next = `${initial}${appendedJsonContent}`;
+
+		const renderArgs = controller.setTarget(
+			"call-1",
+			initial,
+			jsonTarget({ exposeRawPartialJson: true, streamingStringKeys: ["content"] }),
+		);
+		expect(renderArgs.content).toBe(initialContent);
+		controller.bind("call-1", component);
+
+		controller.setTarget(
+			"call-1",
+			next,
+			jsonTarget({ exposeRawPartialJson: true, streamingStringKeys: ["content"] }),
+		);
+		drain(20);
+
+		const latest = component.frames.at(-1);
+		expect(latest).toBeDefined();
+		expect(partialOf(latest!)).toBe(next);
+		expect(latest!.content).toBe(`${initialContent}${appendedContent}`);
+	});
+
+	it("extracts multiple string keys concurrently across throttled JSON parses", () => {
+		vi.useFakeTimers();
+		const { component, controller } = makeController();
+		// Two long fields (edit-style `input`, write-style `content`) inside the
+		// same JSON. A sub-throttle append must refresh BOTH decoded values on the
+		// next reveal frame — proving the extractor generalizes past `content`.
+		const initialInput = "y".repeat(STREAMING_JSON_PARSE_MIN_GROWTH + 8);
+		const initialContent = "x".repeat(STREAMING_JSON_PARSE_MIN_GROWTH + 16);
+		const initial = `{"input":"${initialInput}","content":"${initialContent}`;
+		const appendedContent = "tail";
+		const next = `${initial}${appendedContent}`;
+
+		const streamingStringKeys = ["input", "content"];
+		const renderArgs = controller.setTarget(
+			"call-1",
+			initial,
+			jsonTarget({ exposeRawPartialJson: true, streamingStringKeys }),
+		);
+		expect(renderArgs.input).toBe(initialInput);
+		expect(renderArgs.content).toBe(initialContent);
+		controller.bind("call-1", component);
+
+		controller.setTarget("call-1", next, jsonTarget({ exposeRawPartialJson: true, streamingStringKeys }));
+		drain(20);
+
+		const latest = component.frames.at(-1);
+		expect(latest).toBeDefined();
+		expect(latest!.input).toBe(initialInput);
+		expect(latest!.content).toBe(`${initialContent}${appendedContent}`);
 	});
 
 	it("passes the full target through untouched when smoothing is disabled", () => {
