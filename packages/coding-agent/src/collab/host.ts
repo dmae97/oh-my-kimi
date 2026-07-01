@@ -94,7 +94,8 @@ function isWireSessionEntry(entry: StoredSessionEntry): entry is StoredSessionEn
 }
 const CONNECT_TIMEOUT_MS = 15_000;
 /** Max bytes served per fetch-transcript reply (guest re-requests from `newSize`). */
-const TRANSCRIPT_READ_CAP = 4 * 1024 * 1024;
+export const TRANSCRIPT_READ_CAP = 4 * 1024 * 1024;
+const TRANSCRIPT_ENTRY_TOO_LARGE_ERROR = `transcript entry exceeds transcript fetch cap (${TRANSCRIPT_READ_CAP} bytes)`;
 /**
  * Soft byte cap per `snapshot-chunk` frame. The first MB of a snapshot takes
  * ~3s through the default relay, so a 512 KB chunk lands well under the
@@ -584,7 +585,11 @@ export class CollabHost {
 			if (!reachedEof) {
 				// Trim to the last complete JSONL line so no line or UTF-8 char is split.
 				const lastNewline = slice.lastIndexOf(0x0a);
-				slice = slice.subarray(0, lastNewline >= 0 ? lastNewline + 1 : 0);
+				if (lastNewline < 0) {
+					reply("", fromByte, TRANSCRIPT_ENTRY_TOO_LARGE_ERROR);
+					return;
+				}
+				slice = slice.subarray(0, lastNewline + 1);
 			}
 			reply(slice.toString("utf-8"), reachedEof ? stat.size : fromByte + slice.byteLength);
 		} catch (err) {
