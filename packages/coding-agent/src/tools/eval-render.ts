@@ -775,4 +775,19 @@ export const evalToolRenderer = {
 	// below the first cell. Expanded output is top-anchored enough for the
 	// transcript to commit its settled prefix.
 	provisionalPendingPreview: "collapsed",
+	// Partial-result chrome is NOT byte-stable: `renderAgentProgressEvents`
+	// inserts/removes each subagent's current-tool line as it starts/stops a
+	// tool, and ticks status icon/stats/duration on already-rendered rows,
+	// while `options.isPartial` holds for the whole eval() cell (agent
+	// progress ticks never carry an `async` completed/failed state, so
+	// `event-controller.ts` keeps `isPartial: true` throughout). If this
+	// block were commit-stable during that churn, `deriveLiveCommitState`'s
+	// stable-prefix ratchet would promote agent rows that keep mutating (a
+	// "slow ticker", see transcript-container.ts) into native scrollback,
+	// and the tui resync's "duplication, never loss" contract would
+	// repeatedly re-show the frame tail under a heavy concurrent
+	// `agent()`/`parallel()` fan-out — the overlapping/duplicated tree rows
+	// seen when many subagents run at once. Once the cell settles
+	// (`isPartial === false`) the block is commit-stable again.
+	provisionalPartialResult: true,
 };
