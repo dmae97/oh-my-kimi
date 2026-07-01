@@ -739,10 +739,10 @@ export async function getOrCreateClient(
 			proc.kill();
 			const message = err instanceof Error ? err.message : String(err);
 			// Negative-cache deterministic failures. Timeouts under a
-			// caller-shortened deadline (warmup/writethrough) are not cached —
-			// the server may simply be slow and a later call with the full
-			// deadline can still succeed.
-			if (!(initTimeoutMs !== undefined && message.includes("timed out"))) {
+			// caller-shortened deadline (warmup/writethrough) and caller-signal
+			// aborts are transient — the server may simply be slow or the user may
+			// have cancelled, so a later call with a fresh deadline should retry.
+			if (!signal?.aborted && !(initTimeoutMs !== undefined && message.includes("timed out"))) {
 				initFailures.set(key, { at: Date.now(), message });
 			}
 			throw err;

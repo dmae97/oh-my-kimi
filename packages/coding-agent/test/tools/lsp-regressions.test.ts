@@ -2292,6 +2292,33 @@ describe("lsp regressions", () => {
 			}
 		});
 
+		it("does not negative-cache caller-aborted initialize attempts", async () => {
+			installFakeLsp(() => {});
+
+			const tempDir = TempDir.createSync("@omp-lsp-init-abort-cache-");
+			try {
+				const controller = new AbortController();
+				const timer = setTimeout(() => controller.abort(), 100);
+				const config: ServerConfig = {
+					command: "fake-lsp-init-abort-cache",
+					fileTypes: ["ts"],
+					rootMarkers: [],
+				};
+
+				await expect(
+					lspClient.getOrCreateClient(config, tempDir.path(), undefined, controller.signal),
+				).rejects.toBeInstanceOf(Error);
+				clearTimeout(timer);
+
+				await expect(lspClient.getOrCreateClient(config, tempDir.path(), 25)).rejects.not.toThrow(
+					"failed to initialize recently",
+				);
+			} finally {
+				await lspClient.shutdownAll();
+				tempDir.removeSync();
+			}
+		});
+
 		it("bounds a wedged notification flush on the caller signal and tears down the client", async () => {
 			// Custom fake: stdin.flush is gated by a controllable promise so we
 			// can simulate a server that stopped draining stdin AFTER init has
