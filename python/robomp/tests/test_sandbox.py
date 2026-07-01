@@ -5,7 +5,9 @@ import platform
 import signal
 import stat
 import subprocess
+import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -508,7 +510,7 @@ def test_chown_workspace_runs_chown_and_chmod_as_root_on_linux(tmp_path: Path, m
     monkeypatch.setattr("robomp.sandbox.os.geteuid", lambda: 0)
     monkeypatch.setattr(
         "robomp.sandbox.subprocess.run",
-        lambda cmd, *, check: calls.append((cmd, check)),
+        lambda cmd, *, check, timeout=None: calls.append((cmd, check)),
     )
 
     _chown_workspace(tmp_path, 2001)
@@ -530,7 +532,7 @@ def test_chown_workspace_makes_workspace_slot_owned(tmp_path: Path, monkeypatch:
     file_path.chmod(0o777)
     owned: dict[Path, tuple[int, int]] = {}
 
-    def fake_run(cmd: list[str], *, check: bool) -> None:
+    def fake_run(cmd: list[str], *, check: bool, timeout: float | None = None) -> None:
         assert check
         if cmd[:2] == ["chown", "-R"]:
             uid_text, gid_text = cmd[2].split(":", 1)
@@ -1104,6 +1106,41 @@ def test_remove_workspace(tmp_path: Path, upstream_repo: Path) -> None:
     assert not ws.root.exists()
 
 
+def test_remove_workspace_prunes_pool_after_failed_worktree_remove(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    mgr = SandboxManager(tmp_path)
+    # Create a real repo_dir on disk so `repo_dir.exists()` is True on entry.
+    ws_root = mgr.workspace_root("o/r", 7)
+    repo_dir = ws_root / "repo"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    pool = mgr.pool_path("o/r")
+
+    calls: list[tuple[list[str], object]] = []
+
+    def fake_safe_run(cmd, **k):
+        calls.append((list(cmd), k.get("cwd")))
+        # The `worktree remove` "times out" (124) and does NOT delete repo_dir,
+        # so the code must fall back to rmtree + prune. `prune` succeeds (0).
+        if cmd[:3] == ["git", "worktree", "remove"]:
+            return subprocess.CompletedProcess(cmd, 124, "", "timed out")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr("robomp.sandbox._safe_run", fake_safe_run)
+
+    mgr.remove_workspace(repo="o/r", number=7)
+
+    cmds = [c for c, _ in calls]
+    # The dangling registration must have been pruned, in the correct pool.
+    assert ["git", "worktree", "prune"] in cmds, (
+        "remove_workspace did not prune pool metadata after a failed worktree remove"
+    )
+    prune_idx = next(i for i, (c, _) in enumerate(calls) if c == ["git", "worktree", "prune"])
+    assert calls[prune_idx][1] == pool, "prune did not run in the repo's pool dir"
+    # And the remove was attempted first (ordering: remove before prune).
+    remove_idx = next(i for i, (c, _) in enumerate(calls) if c[:3] == ["git", "worktree", "remove"])
+    assert remove_idx < prune_idx
+    # The real checkout dir was cleaned up.
+    assert not repo_dir.exists()
+
 def test_redact_credentials_strips_userinfo() -> None:
     from robomp.sandbox import redact_credentials
 
@@ -1301,9 +1338,7 @@ def test_run_git_injects_safe_directory_and_subprocess_identity(
     assert captured["umask"] == 0o002
 
 
-def test_run_git_scopes_token_and_scrubs_parent_auth_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_git_scopes_token_and_scrubs_parent_auth_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from robomp.git_ops import AUTH_ENV_VAR, _run_git
 
     captured: dict[str, object] = {}
@@ -1649,3 +1684,248 @@ def test_ensure_workspace_cache_miss_is_silent_noop(tmp_path: Path, upstream_rep
     # Cache is empty so the workspace ends up identical to the no-cache case.
     assert ws.repo_dir.is_dir()
     assert not (ws.repo_dir / "packages" / "natives" / "native").exists()
+
+
+def test_repo_lock_is_per_repo_identity(tmp_path: Path) -> None:
+    mgr = SandboxManager(tmp_path)
+    assert mgr._repo_lock("o/r") is mgr._repo_lock("o/r")
+    assert mgr._repo_lock("o/r") is not mgr._repo_lock("o/r2")
+
+
+def test_repo_lock_serializes_same_repo(tmp_path: Path) -> None:
+    # Deterministic: while one thread holds the repo lock, a probe from a
+    # DIFFERENT thread must fail to acquire the SAME repo's lock non-blockingly.
+    mgr = SandboxManager(tmp_path)
+    held = threading.Event()
+    release = threading.Event()
+    probe_result: dict[str, bool] = {}
+
+    def holder() -> None:
+        with mgr._repo_lock("o/r"):
+            held.set()
+            assert release.wait(2.0), "probe never completed"
+
+    def probe() -> None:
+        assert held.wait(2.0), "holder never acquired the lock"
+        lock = mgr._repo_lock("o/r")
+        got = lock.acquire(blocking=False)
+        probe_result["acquired"] = got
+        if got:
+            lock.release()
+        release.set()
+
+    th = threading.Thread(target=holder)
+    tp = threading.Thread(target=probe)
+    th.start()
+    tp.start()
+    th.join(3.0)
+    tp.join(3.0)
+    # Same repo, held cross-thread -> non-blocking acquire MUST fail.
+    assert probe_result.get("acquired") is False, (
+        "same-repo lock was acquirable from another thread while held (did not serialize)"
+    )
+
+
+def test_repo_lock_allows_distinct_repos_to_overlap(tmp_path: Path) -> None:
+    # Deterministic: holding one repo's lock must NOT block acquiring a
+    # DIFFERENT repo's lock from another thread.
+    mgr = SandboxManager(tmp_path)
+    held = threading.Event()
+    release = threading.Event()
+    probe_result: dict[str, bool] = {}
+
+    def holder() -> None:
+        with mgr._repo_lock("o/a"):
+            held.set()
+            assert release.wait(2.0), "probe never completed"
+
+    def probe() -> None:
+        assert held.wait(2.0), "holder never acquired the lock"
+        lock = mgr._repo_lock("o/b")
+        got = lock.acquire(blocking=False)
+        probe_result["acquired"] = got
+        if got:
+            lock.release()
+        release.set()
+
+    th = threading.Thread(target=holder)
+    tp = threading.Thread(target=probe)
+    th.start()
+    tp.start()
+    th.join(3.0)
+    tp.join(3.0)
+    # Distinct repos -> the other lock is free -> non-blocking acquire succeeds.
+    assert probe_result.get("acquired") is True, (
+        "distinct-repo lock was NOT acquirable while an unrelated repo's lock was held"
+    )
+
+
+def test_ensure_workspace_acquires_repo_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    mgr = SandboxManager(tmp_path)
+    mgr.natives_cache = None
+    real = threading.RLock()
+    events: list[str | tuple[str, str]] = []
+
+    class Rec:
+        def __enter__(self) -> Rec:
+            events.append("acquire")
+            real.acquire()
+            return self
+
+        def __exit__(self, *a: object) -> bool:
+            real.release()
+            events.append("release")
+            return False
+
+    def fake_lock(repo: str) -> Rec:
+        events.append(("lock", repo))
+        return Rec()
+
+    monkeypatch.setattr(mgr, "_repo_lock", fake_lock)
+    mgr.transport = SimpleNamespace(
+        clone_pool=lambda **k: None,
+        fetch_pool=lambda **k: None,
+        fetch_base_ref=lambda **k: None,
+        fetch_pr_head=lambda **k: None,
+    )  # type: ignore
+    ok = subprocess.CompletedProcess(["x"], 0, "", "")
+    monkeypatch.setattr("robomp.sandbox._run", lambda *a, **k: ok)
+    monkeypatch.setattr("robomp.sandbox._safe_run", lambda *a, **k: ok)
+    monkeypatch.setattr("robomp.sandbox._chown_workspace", lambda *a, **k: None)
+    monkeypatch.setattr("robomp.sandbox._share_git_metadata_with_slots", lambda *a, **k: None)
+    monkeypatch.setattr("robomp.sandbox._provision_runtime_dirs", lambda *a, **k: None)
+
+    ws = mgr.ensure_workspace(
+        repo="o/r",
+        number=1,
+        title="t",
+        clone_url="https://x/o/r.git",
+        default_branch="main",
+        author_name="n",
+        author_email="e@e",
+        slot_uid=None,
+    )
+    assert ("lock", "o/r") in events
+    assert events.count("acquire") == 1
+    assert events.count("release") == 1
+    assert ws.repo_full_name == "o/r"
+
+
+def test_remove_workspace_acquires_repo_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    mgr = SandboxManager(tmp_path)
+    events: list[str | tuple[str, str]] = []
+    real = threading.RLock()
+
+    class Rec:
+        def __enter__(self) -> Rec:
+            events.append("acquire")
+            real.acquire()
+            return self
+
+        def __exit__(self, *a: object) -> bool:
+            real.release()
+            events.append("release")
+            return False
+
+    monkeypatch.setattr(mgr, "_repo_lock", lambda repo: (events.append(("lock", repo)), Rec())[1])
+    # ws_root does not exist -> remove_workspace just no-ops inside the lock
+    mgr.remove_workspace(repo="o/r", number=99)
+    assert ("lock", "o/r") in events
+    assert events.count("acquire") == 1 and events.count("release") == 1
+
+
+def test_safe_run_timeout_returns_124(monkeypatch: pytest.MonkeyPatch) -> None:
+    import robomp.sandbox as s
+
+    def boom(*a: object, **k: object) -> subprocess.CompletedProcess:
+        cmd = a[0] if a else k.get("args", ["git"])
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=1)  # type: ignore
+
+    monkeypatch.setattr("robomp.sandbox.subprocess.run", boom)
+    r = s._safe_run(["git", "status"])
+    assert r.returncode == 124
+
+
+def test_run_timeout_raises_git_command_error_124(monkeypatch: pytest.MonkeyPatch) -> None:
+    import robomp.sandbox as s
+
+    def boom(*a: object, **k: object) -> subprocess.CompletedProcess:
+        cmd = a[0] if a else k.get("args", ["git"])
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=1)  # type: ignore
+
+    monkeypatch.setattr("robomp.sandbox.subprocess.run", boom)
+    with pytest.raises(s.GitCommandError) as exc:
+        s._run(["git", "status"])
+    assert exc.value.returncode == 124
+
+
+def test_ensure_workspace_raises_when_local_branch_probe_times_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    mgr = SandboxManager(tmp_path)
+    mgr.natives_cache = None
+    mgr.transport = SimpleNamespace(
+        clone_pool=lambda **k: None,
+        fetch_pool=lambda **k: None,
+        fetch_base_ref=lambda **k: None,
+        fetch_pr_head=lambda **k: None,
+    )  # type: ignore
+
+    def fake_safe_run(cmd: list[str], **k: object) -> subprocess.CompletedProcess[str]:
+        if "rev-parse" in cmd and cmd[-1].startswith("refs/heads/"):
+            return subprocess.CompletedProcess(cmd, 124, "", "timed out")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr("robomp.sandbox._safe_run", fake_safe_run)
+    monkeypatch.setattr("robomp.sandbox._run", lambda *a, **k: subprocess.CompletedProcess(["x"], 0, "", ""))
+    monkeypatch.setattr("robomp.sandbox._chown_workspace", lambda *a, **k: None)
+    monkeypatch.setattr("robomp.sandbox._share_git_metadata_with_slots", lambda *a, **k: None)
+    monkeypatch.setattr("robomp.sandbox._provision_runtime_dirs", lambda *a, **k: None)
+
+    with pytest.raises(GitCommandError):
+        mgr.ensure_workspace(
+            repo="o/r",
+            number=1,
+            title="t",
+            clone_url="https://x/o/r.git",
+            default_branch="main",
+            author_name="n",
+            author_email="e@e",
+            existing_branch="feature/x",
+            slot_uid=None,
+        )
+
+
+def test_ensure_workspace_raises_when_remote_branch_probe_times_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    mgr = SandboxManager(tmp_path)
+    mgr.natives_cache = None
+    mgr.transport = SimpleNamespace(
+        clone_pool=lambda **k: None,
+        fetch_pool=lambda **k: None,
+        fetch_base_ref=lambda **k: None,
+        fetch_pr_head=lambda **k: None,
+    )  # type: ignore
+
+    def fake_safe_run(cmd: list[str], **k: object) -> subprocess.CompletedProcess[str]:
+        if "rev-parse" in cmd and cmd[-1].startswith("refs/heads/"):
+            return subprocess.CompletedProcess(cmd, 128, "", "")
+        if "rev-parse" in cmd and cmd[-1].startswith("refs/remotes/origin/"):
+            return subprocess.CompletedProcess(cmd, 124, "", "timed out")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr("robomp.sandbox._safe_run", fake_safe_run)
+    monkeypatch.setattr("robomp.sandbox._run", lambda *a, **k: subprocess.CompletedProcess(["x"], 0, "", ""))
+    monkeypatch.setattr("robomp.sandbox._chown_workspace", lambda *a, **k: None)
+    monkeypatch.setattr("robomp.sandbox._share_git_metadata_with_slots", lambda *a, **k: None)
+    monkeypatch.setattr("robomp.sandbox._provision_runtime_dirs", lambda *a, **k: None)
+
+    with pytest.raises(GitCommandError):
+        mgr.ensure_workspace(
+            repo="o/r",
+            number=1,
+            title="t",
+            clone_url="https://x/o/r.git",
+            default_branch="main",
+            author_name="n",
+            author_email="e@e",
+            existing_branch="feature/x",
+            slot_uid=None,
+        )

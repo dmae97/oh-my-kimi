@@ -47,6 +47,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -298,16 +299,31 @@ class LocalGitTransport:
 # ---------- low-level helpers retained for callers expecting old shape ----------
 
 
-def _safe_run(cmd: list[str], *, cwd: Path | None = None, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+_DEFAULT_SANDBOX_SUBPROCESS_TIMEOUT = 120.0
+
+
+def _safe_run(
+    cmd: list[str],
+    *,
+    cwd: Path | None = None,
+    timeout: float | None = _DEFAULT_SANDBOX_SUBPROCESS_TIMEOUT,
+    **kwargs: Any,
+) -> subprocess.CompletedProcess[str]:
     """Run without raising; caller decides on returncode. Credentials are redacted from any captured output."""
-    proc = subprocess.run(
-        cmd,
-        cwd=str(cwd) if cwd else None,
-        check=False,
-        capture_output=True,
-        text=True,
-        **kwargs,
-    )
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(cwd) if cwd else None,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            **kwargs,
+        )
+    except subprocess.TimeoutExpired as exc:
+        out = redact_credentials(exc.stdout or "") if isinstance(exc.stdout, str) else ""
+        err = redact_credentials(exc.stderr or "") if isinstance(exc.stderr, str) else ""
+        return subprocess.CompletedProcess(cmd, 124, out, f"{err}\ntimed out after {timeout:.0f}s")
     if proc.stdout:
         proc.stdout = redact_credentials(proc.stdout)
     if proc.stderr:
@@ -315,15 +331,24 @@ def _safe_run(cmd: list[str], *, cwd: Path | None = None, **kwargs: Any) -> subp
     return proc
 
 
-def _run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+def _run(
+    cmd: list[str],
+    *,
+    cwd: Path | None = None,
+    timeout: float | None = _DEFAULT_SANDBOX_SUBPROCESS_TIMEOUT,
+) -> subprocess.CompletedProcess[str]:
     """Legacy raising helper (still used by a sandbox test). Forwards to subprocess.run."""
-    proc = subprocess.run(
-        cmd,
-        cwd=str(cwd) if cwd else None,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(cwd) if cwd else None,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GitCommandError(cmd, 124, "", f"git timed out after {timeout:.0f}s") from exc
     if proc.returncode != 0:
         raise GitCommandError(cmd, proc.returncode, proc.stdout, proc.stderr)
     return proc
@@ -607,8 +632,16 @@ def _chown_workspace(ws_root: Path, slot_uid: int | None) -> None:
         return
     uid = slot_uid if slot_uid is not None else os.geteuid()
     gid = slot_uid if slot_uid is not None else os.getegid()
-    subprocess.run(["chown", "-R", f"{uid}:{gid}", str(ws_root)], check=True)
-    subprocess.run(["chmod", "-R", "u=rwX,g=rwX,o=", str(ws_root)], check=True)
+    subprocess.run(
+        ["chown", "-R", f"{uid}:{gid}", str(ws_root)],
+        check=True,
+        timeout=_DEFAULT_SANDBOX_SUBPROCESS_TIMEOUT,
+    )
+    subprocess.run(
+        ["chmod", "-R", "u=rwX,g=rwX,o=", str(ws_root)],
+        check=True,
+        timeout=_DEFAULT_SANDBOX_SUBPROCESS_TIMEOUT,
+    )
 
 
 # ---------- SandboxManager ----------
@@ -634,6 +667,16 @@ class SandboxManager:
         self.natives_cache = natives_cache
         root.mkdir(parents=True, exist_ok=True)
         self.pool.mkdir(parents=True, exist_ok=True)
+        self._repo_locks: dict[str, threading.RLock] = {}
+        self._repo_locks_guard = threading.Lock()
+
+    def _repo_lock(self, repo: str) -> threading.RLock:
+        with self._repo_locks_guard:
+            lock = self._repo_locks.get(repo)
+            if lock is None:
+                lock = threading.RLock()
+                self._repo_locks[repo] = lock
+            return lock
 
     # ---- pool ----
     def pool_path(self, repo: str) -> Path:
@@ -696,121 +739,130 @@ class SandboxManager:
         slot_uid: int | None = None,
     ) -> Workspace:
         """Create or resume a per-issue worktree."""
-        if pr_head is not None and existing_branch is not None:
-            raise ValueError("ensure_workspace accepts either pr_head or existing_branch, not both")
-        pool = self.ensure_clone(repo=repo, clone_url=clone_url, default_branch=default_branch)
-        ws_root = self.workspace_root(repo, number)
-        repo_dir = ws_root / "repo"
-        session_dir = ws_root / ".omp-session"
-        context_dir = ws_root / "context"
-        artifacts_dir = ws_root / "artifacts"
-        for path in (ws_root, session_dir, context_dir, context_dir / "repro", artifacts_dir):
-            path.mkdir(parents=True, exist_ok=True)
+        with self._repo_lock(repo):
+            if pr_head is not None and existing_branch is not None:
+                raise ValueError("ensure_workspace accepts either pr_head or existing_branch, not both")
+            pool = self.ensure_clone(repo=repo, clone_url=clone_url, default_branch=default_branch)
+            ws_root = self.workspace_root(repo, number)
+            repo_dir = ws_root / "repo"
+            session_dir = ws_root / ".omp-session"
+            context_dir = ws_root / "context"
+            artifacts_dir = ws_root / "artifacts"
+            for path in (ws_root, session_dir, context_dir, context_dir / "repro", artifacts_dir):
+                path.mkdir(parents=True, exist_ok=True)
 
-        branch = (
-            f"review/pr-{pr_head}"
-            if pr_head is not None
-            else existing_branch
-            or make_branch(
-                issue_number=number,
-                title=title,
-                seed=f"{repo}#{number}",
+            branch = (
+                f"review/pr-{pr_head}"
+                if pr_head is not None
+                else existing_branch
+                or make_branch(
+                    issue_number=number,
+                    title=title,
+                    seed=f"{repo}#{number}",
+                )
             )
-        )
 
-        repo_exists = (repo_dir / ".git").exists()
-        workspace_prepared = False
-        slot_git_kwargs = _slot_subprocess_kwargs(slot_uid)
-        slot_git_env: dict[str, str] | None = None
-        if repo_exists:
-            # Existing workspaces are already slot-owned from the previous run.
-            # Refresh pool-side group bits, then hand the tree to the current
-            # slot before running any git command inside the worktree; root's
-            # uid-0 bypass does not bypass git's safe.directory ownership check.
-            _share_git_metadata_with_slots(repo_dir, slot_uid)
-            _provision_runtime_dirs(ws_root)
-            _chown_workspace(ws_root, slot_uid)
-            workspace_prepared = True
-        if not repo_exists:
-            if pr_head is not None:
-                self.transport.fetch_pr_head(repo=repo, pool_dir=pool, pr_number=pr_head)
-                _run(["git", "worktree", "add", "--detach", str(repo_dir), "FETCH_HEAD"], cwd=pool)
-            else:
-                # Make sure the requested start point exists locally (best-effort).
-                # For follow-ups on an existing PR, `existing_branch` is the remote
-                # head branch we need to amend; starting from default would silently
-                # lose the PR's current commits if the local pool branch is absent.
-                self.transport.fetch_base_ref(repo=repo, pool_dir=pool, ref=existing_branch or default_branch)
-                check = _safe_run(["git", "rev-parse", "--verify", f"refs/heads/{branch}"], cwd=pool)
-                if check.returncode == 0:
-                    _run(["git", "worktree", "add", str(repo_dir), branch], cwd=pool)
+            repo_exists = (repo_dir / ".git").exists()
+            workspace_prepared = False
+            slot_git_kwargs = _slot_subprocess_kwargs(slot_uid)
+            slot_git_env: dict[str, str] | None = None
+            if repo_exists:
+                # Existing workspaces are already slot-owned from the previous run.
+                # Refresh pool-side group bits, then hand the tree to the current
+                # slot before running any git command inside the worktree; root's
+                # uid-0 bypass does not bypass git's safe.directory ownership check.
+                _share_git_metadata_with_slots(repo_dir, slot_uid)
+                _provision_runtime_dirs(ws_root)
+                _chown_workspace(ws_root, slot_uid)
+                workspace_prepared = True
+            if not repo_exists:
+                if pr_head is not None:
+                    self.transport.fetch_pr_head(repo=repo, pool_dir=pool, pr_number=pr_head)
+                    _run(["git", "worktree", "add", "--detach", str(repo_dir), "FETCH_HEAD"], cwd=pool)
                 else:
-                    start_point = f"origin/{default_branch}"
-                    if existing_branch:
-                        remote = _safe_run(
-                            ["git", "rev-parse", "--verify", f"refs/remotes/origin/{existing_branch}"],
+                    # Make sure the requested start point exists locally (best-effort).
+                    # For follow-ups on an existing PR, `existing_branch` is the remote
+                    # head branch we need to amend; starting from default would silently
+                    # lose the PR's current commits if the local pool branch is absent.
+                    self.transport.fetch_base_ref(repo=repo, pool_dir=pool, ref=existing_branch or default_branch)
+                    probe = ["git", "rev-parse", "--verify", f"refs/heads/{branch}"]
+                    check = _safe_run(probe, cwd=pool)
+                    if check.returncode == 124:
+                        # A timed-out probe is indeterminate, not "branch absent".
+                        # Falling through would create the worktree from the wrong
+                        # start point; fail instead so the event retries.
+                        raise GitCommandError(probe, check.returncode, check.stdout, check.stderr)
+                    if check.returncode == 0:
+                        _run(["git", "worktree", "add", str(repo_dir), branch], cwd=pool)
+                    else:
+                        start_point = f"origin/{default_branch}"
+                        if existing_branch:
+                            remote_probe = ["git", "rev-parse", "--verify", f"refs/remotes/origin/{existing_branch}"]
+                            remote = _safe_run(remote_probe, cwd=pool)
+                            if remote.returncode == 124:
+                                # Same: an indeterminate probe must not silently fall
+                                # back to origin/default and lose the PR's commits.
+                                raise GitCommandError(remote_probe, remote.returncode, remote.stdout, remote.stderr)
+                            if remote.returncode == 0:
+                                start_point = f"origin/{existing_branch}"
+                        _run(
+                            [
+                                "git",
+                                "worktree",
+                                "add",
+                                "-b",
+                                branch,
+                                str(repo_dir),
+                                start_point,
+                            ],
                             cwd=pool,
                         )
-                        if remote.returncode == 0:
-                            start_point = f"origin/{existing_branch}"
-                    _run(
-                        [
-                            "git",
-                            "worktree",
-                            "add",
-                            "-b",
+            else:
+                slot_git_env = _git_env_for_repo(repo_dir)
+                current = _safe_run(
+                    ["git", "symbolic-ref", "--quiet", "--short", "HEAD"],
+                    cwd=repo_dir,
+                    env=slot_git_env,
+                    **slot_git_kwargs,
+                )
+                if current.returncode == 0 and current.stdout.strip():
+                    branch = current.stdout.strip()
+                    if existing_branch is not None and existing_branch != branch:
+                        log.warning(
+                            "workspace branch mapping %r differs from checked-out branch %r; using checkout",
+                            existing_branch,
                             branch,
-                            str(repo_dir),
-                            start_point,
-                        ],
-                        cwd=pool,
-                    )
-        else:
-            slot_git_env = _git_env_for_repo(repo_dir)
-            current = _safe_run(
-                ["git", "symbolic-ref", "--quiet", "--short", "HEAD"],
-                cwd=repo_dir,
-                env=slot_git_env,
-                **slot_git_kwargs,
-            )
-            if current.returncode == 0 and current.stdout.strip():
-                branch = current.stdout.strip()
-                if existing_branch is not None and existing_branch != branch:
-                    log.warning(
-                        "workspace branch mapping %r differs from checked-out branch %r; using checkout",
-                        existing_branch,
-                        branch,
-                    )
-        if not workspace_prepared:
+                        )
+            if not workspace_prepared:
+                _share_git_metadata_with_slots(repo_dir, slot_uid)
+                _provision_runtime_dirs(ws_root)
+                _chown_workspace(ws_root, slot_uid)
+            if slot_git_env is None:
+                slot_git_env = _git_env_for_repo(repo_dir)
+            # Identity is set on the worktree's shared config; idempotent. Run as
+            # the slot after the chown so git never trips over safe.directory.
+            for command in (["git", "config", "user.email", author_email], ["git", "config", "user.name", author_name]):
+                proc = _safe_run(command, cwd=repo_dir, env=slot_git_env, **slot_git_kwargs)
+                if proc.returncode != 0:
+                    raise GitCommandError(command, proc.returncode, proc.stdout, proc.stderr)
             _share_git_metadata_with_slots(repo_dir, slot_uid)
-            _provision_runtime_dirs(ws_root)
-            _chown_workspace(ws_root, slot_uid)
-        if slot_git_env is None:
-            slot_git_env = _git_env_for_repo(repo_dir)
-        # Identity is set on the worktree's shared config; idempotent. Run as
-        # the slot after the chown so git never trips over safe.directory.
-        for command in (["git", "config", "user.email", author_email], ["git", "config", "user.name", author_name]):
-            proc = _safe_run(command, cwd=repo_dir, env=slot_git_env, **slot_git_kwargs)
-            if proc.returncode != 0:
-                raise GitCommandError(command, proc.returncode, proc.stdout, proc.stderr)
-        _share_git_metadata_with_slots(repo_dir, slot_uid)
-        workspace = Workspace(
-            root=ws_root,
-            repo_dir=repo_dir,
-            session_dir=session_dir,
-            context_dir=context_dir,
-            artifacts_dir=artifacts_dir,
-            branch=branch,
-            repo_full_name=repo,
-            issue_number=number,
-        )
-        # Best-effort: hardlink pre-built natives in if we've cached this
-        # source state before. Runs AFTER the slot chown so the cache inode
-        # keeps its `root:omp` ownership (the slot reads through group `omp`);
-        # write-temp + rename in the napi build replaces with a new inode if
-        # the agent rebuilds, so the cached file is never mutated.
-        self._populate_natives_cache(workspace, slot_uid=slot_uid)
-        return workspace
+            workspace = Workspace(
+                root=ws_root,
+                repo_dir=repo_dir,
+                session_dir=session_dir,
+                context_dir=context_dir,
+                artifacts_dir=artifacts_dir,
+                branch=branch,
+                repo_full_name=repo,
+                issue_number=number,
+            )
+            # Best-effort: hardlink pre-built natives in if we've cached this
+            # source state before. Runs AFTER the slot chown so the cache inode
+            # keeps its `root:omp` ownership (the slot reads through group `omp`);
+            # write-temp + rename in the napi build replaces with a new inode if
+            # the agent rebuilds, so the cached file is never mutated.
+            self._populate_natives_cache(workspace, slot_uid=slot_uid)
+            return workspace
 
     def _populate_natives_cache(self, workspace: Workspace, *, slot_uid: int | None = None) -> None:
         """Try to hardlink cached pi-natives artifacts into the worktree.
@@ -838,7 +890,7 @@ class SandboxManager:
         # produces natives, so creating the dir is correct.
         try:
             key = natives_compute_key(workspace.repo_dir)
-        except (subprocess.CalledProcessError, RuntimeError, OSError) as exc:
+        except (subprocess.SubprocessError, RuntimeError, OSError) as exc:
             log.debug(
                 "natives_cache key compute failed",
                 extra={"workspace": workspace.workspace_key, "err": redact_credentials(str(exc))},
@@ -895,15 +947,22 @@ class SandboxManager:
                 )
 
     def remove_workspace(self, *, repo: str, number: int) -> None:
-        ws_root = self.workspace_root(repo, number)
-        repo_dir = ws_root / "repo"
-        if repo_dir.exists():
-            pool = self.pool_path(repo)
-            _safe_run(["git", "worktree", "remove", "--force", str(repo_dir)], cwd=pool)
+        with self._repo_lock(repo):
+            ws_root = self.workspace_root(repo, number)
+            repo_dir = ws_root / "repo"
             if repo_dir.exists():
-                shutil.rmtree(repo_dir, ignore_errors=True)
-        if ws_root.exists():
-            shutil.rmtree(ws_root, ignore_errors=True)
+                pool = self.pool_path(repo)
+                _safe_run(["git", "worktree", "remove", "--force", str(repo_dir)], cwd=pool)
+                if repo_dir.exists():
+                    # `git worktree remove` did not clean up (nonzero exit, incl. a
+                    # 124 timeout). Delete the checkout ourselves, then prune the
+                    # pool's now-dangling worktree registration so a later
+                    # `git worktree add` for the same path does not trip on stale
+                    # metadata.
+                    shutil.rmtree(repo_dir, ignore_errors=True)
+                    _safe_run(["git", "worktree", "prune"], cwd=pool)
+            if ws_root.exists():
+                shutil.rmtree(ws_root, ignore_errors=True)
 
 
 __all__ = [

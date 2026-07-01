@@ -1,0 +1,123 @@
+import asyncio
+import threading
+from types import SimpleNamespace
+
+import pytest
+
+from robomp import tasks
+from robomp.github_client import IssueInfo, RepoInfo
+
+
+async def test_triage_issue_keeps_event_loop_live_while_workspace_setup_blocks(db, settings, monkeypatch, tmp_path):
+    async def _resolve_repo_and_issue(_github, _payload):
+        repo = RepoInfo(
+            full_name="octo/widget",
+            default_branch="main",
+            clone_url="https://x/octo/widget.git",
+            private=False,
+        )
+        issue = IssueInfo(
+            repo="octo/widget",
+            number=1,
+            title="bug",
+            body="b",
+            state="open",
+            author="alice",
+            labels=(),
+            is_pull_request=False,
+        )
+        return repo, issue
+
+    monkeypatch.setattr(tasks, "_resolve_repo_and_issue", _resolve_repo_and_issue)
+
+    async def _no_closing(*a, **k):
+        return ()
+
+    github = SimpleNamespace(list_closing_pull_requests=_no_closing)
+
+    entered = threading.Event()
+    release = threading.Event()
+    captured: dict[str, object] = {}
+
+    def _blocking_ensure(**_kwargs):
+        entered.set()
+        # True ONLY if a concurrent coroutine set `release` while we blocked here.
+        # Blocks a WORKER THREAD (via to_thread) in the fixed code; blocks the
+        # LOOP itself in the broken code.
+        captured["release_seen_in_time"] = release.wait(1.0)
+        return SimpleNamespace(branch="farm/x/y", session_dir=str(tmp_path / "sess"))
+
+    sandbox = SimpleNamespace(natives_cache=None, ensure_workspace=_blocking_ensure)
+
+    async def _noop_run_task(**_kwargs):
+        return None
+
+    monkeypatch.setattr(tasks, "run_task", _noop_run_task)
+
+    async def _releaser():
+        # Waits (off-loop) until ensure_workspace has actually started, then
+        # releases it. This coroutine can ONLY make progress if the event loop
+        # is live while ensure_workspace is blocking.
+        await asyncio.to_thread(entered.wait, 1.0)
+        assert entered.is_set(), "ensure_workspace never started"
+        release.set()
+
+    triage_task = asyncio.create_task(
+        tasks.triage_issue(
+            settings=settings,
+            db=db,
+            github=github,
+            sandbox=sandbox,
+            git_transport=SimpleNamespace(),
+            payload={},
+            delivery_id="d1",
+        )
+    )
+    releaser_task = asyncio.create_task(_releaser())
+
+    await asyncio.wait_for(triage_task, timeout=3.0)
+    await asyncio.wait_for(releaser_task, timeout=1.0)
+
+    assert captured.get("release_seen_in_time") is True, (
+        "event loop was frozen during ensure_workspace: the concurrent releaser "
+        "could not run, so release.wait timed out (this is the pre-fix hang)"
+    )
+
+
+async def test_run_workspace_op_drains_thread_before_propagating_cancel():
+    started = threading.Event()
+    proceed = threading.Event()
+    finished = threading.Event()
+
+    def slow_op(**_kwargs):
+        started.set()
+        # Block on the worker thread until the test releases us.
+        assert proceed.wait(2.0), "proceed was never set — test bug"
+        finished.set()
+        return "done"
+
+    task = asyncio.create_task(tasks._run_workspace_op(slow_op))
+    # Wait (off-loop) until the worker thread is actually running.
+    await asyncio.to_thread(started.wait, 1.0)
+    assert started.is_set()
+
+    # Cancel the AWAITING coroutine while the thread is mid-flight.
+    task.cancel()
+    # Let the loop deliver the cancellation into the helper's drain loop.
+    await asyncio.sleep(0.05)
+
+    try:
+        # The thread must NOT have been abandoned: it is still blocked on
+        # `proceed`, so `finished` is not set and the task has not resolved yet.
+        assert not finished.is_set(), "thread finished before we released it — impossible unless abandoned"
+        assert not task.done(), "helper propagated cancel before the thread completed (thread abandoned)"
+    finally:
+        # Always release the worker, even if an assert above fails, so a failed
+        # run cannot leave a blocked thread leaking into later tests.
+        proceed.set()
+
+    # The helper must now let the thread finish, THEN raise CancelledError.
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    # Deterministic in the fixed helper: the thread completed before the cancel propagated.
+    assert finished.is_set(), "thread did not complete before cancellation propagated"

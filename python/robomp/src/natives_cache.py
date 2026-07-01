@@ -152,6 +152,7 @@ def compute_key(repo_dir: Path, *, target: str | None = None) -> str:
         capture_output=True,
         check=True,
         env=_git_safe_directory_env(repo_dir),
+        timeout=120.0,
     )
     lines = proc.stdout.splitlines()
     if len(lines) != len(CACHE_KEY_PATHS):
