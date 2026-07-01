@@ -162,6 +162,9 @@
 ### Fixed
 
 - Fixed `task.maxConcurrency` and `task.maxRecursionDepth` being silently exceeded by sub-spawn paths. (1) The session-scoped spawn semaphore was sized from the setting only on first use and never re-read, so lowering the cap mid-session left every later spawn running against the old ceiling — `TaskTool.#getSpawnSemaphore` now `resize()`s the live semaphore against the current setting on every acquire. (2) The task tool description never surfaced the cap to the model, so a model handed `task.maxConcurrency=1` could still emit oversized `tasks[]` batches that piled up behind the semaphore; `task.md` now renders a `Concurrency cap` directive whenever the setting is bounded. (3) The eval `agent()` bridge gated only against the hardcoded `EVAL_AGENT_MAX_DEPTH=3` ceiling and ignored `task.maxRecursionDepth`, so a user-tightened recursion limit (e.g. `0`/"None", `1`/"Single") still let cell-spawned subagents recurse up to depth 3; the bridge now mirrors the task tool's `canSpawnAtDepth` gate, clamped by the hard ceiling. ([#3895](https://github.com/can1357/oh-my-pi/issues/3895))
+### Fixed
+
+- Fixed user-invoked skills not identifying themselves as the invoked skill or exposing their skill directory for relative path resolution across typed, steered, follow-up, interrupted/resumed, ACP, and RPC skill command paths.
 
 ## [16.2.8] - 2026-06-30
 

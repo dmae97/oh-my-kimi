@@ -1410,7 +1410,8 @@ describe("ACP agent", () => {
 	it("executes skill commands through custom skill messages", async () => {
 		const harness = await createHarness();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
-		const session = harness.findSession(created.sessionId)!;
+		const session = harness.findSession(created.sessionId);
+		if (!session) throw new Error("expected ACP session to exist after newSession");
 		const skillDir = path.join(harness.cwdA, ".skills", "sample");
 		const skillPath = path.join(skillDir, "SKILL.md");
 		await fs.promises.mkdir(skillDir, { recursive: true });
@@ -1433,10 +1434,14 @@ describe("ACP agent", () => {
 
 		expect(session.promptCalls).toEqual([]);
 		expect(session.customMessages).toHaveLength(1);
-		expect(session.customMessages[0]!.customType).toBe("skill-prompt");
-		expect(session.customMessages[0]!.content).toContain("# Sample\nDo work.");
-		expect(session.customMessages[0]!.content).toContain(`Skill: ${skillPath}`);
-		expect(session.customMessages[0]!.content).toContain("User: extra context");
+		const customMessage = session.customMessages[0];
+		if (!customMessage) throw new Error("expected ACP skill prompt custom message");
+		expect(customMessage.customType).toBe("skill-prompt");
+		expect(customMessage.content).toContain("# Sample\nDo work.");
+		expect(customMessage.content).toContain('The user has invoked the "sample" skill');
+		expect(customMessage.content).toContain(`[Skill directory: ${skillDir}]`);
+		expect(customMessage.content).toMatch(/[Rr]esolve any relative paths/);
+		expect(customMessage.content).toContain("User: extra context");
 
 		harness.abortController.abort();
 		await Bun.sleep(0);
