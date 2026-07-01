@@ -171,7 +171,6 @@ export class ExtensionUiController {
 				// Reset and update status line
 				this.ctx.statusLine.invalidate();
 				this.ctx.statusLine.resetActiveTime();
-				this.ctx.updateEditorTopBorder();
 				this.ctx.ui.requestRender();
 
 				// Clear UI state

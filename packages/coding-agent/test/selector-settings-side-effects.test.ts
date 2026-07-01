@@ -18,11 +18,9 @@ afterEach(() => {
 describe("selector setting side effects", () => {
 	it("refreshes the status line when git integration changes at runtime", () => {
 		const updateSettings = vi.fn();
-		const updateEditorTopBorder = vi.fn();
 		const requestRender = vi.fn();
 		const controller = new SelectorController({
 			statusLine: { updateSettings },
-			updateEditorTopBorder,
 			ui: { requestRender },
 		} as unknown as ConstructorParameters<typeof SelectorController>[0]);
 
@@ -36,23 +34,21 @@ describe("selector setting side effects", () => {
 				rightSegments: Settings.instance.get("statusLine.rightSegments"),
 			}),
 		);
-		expect(updateEditorTopBorder).toHaveBeenCalledTimes(1);
+		// The setting-change side effect is a single render request — the lazy
+		// top-border provider rebuilds during paint (#4145).
 		expect(requestRender).toHaveBeenCalledTimes(1);
 	});
 
-	it("invalidates UI and updates editor top border when tui.tight changes", () => {
+	it("invalidates the UI and requests a repaint when tui.tight changes", () => {
 		const invalidate = vi.fn();
-		const updateEditorTopBorder = vi.fn();
 		const requestRender = vi.fn();
 		const controller = new SelectorController({
 			ui: { invalidate, requestRender },
-			updateEditorTopBorder,
 		} as unknown as ConstructorParameters<typeof SelectorController>[0]);
 
 		controller.handleSettingChange("tui.tight", true);
 
 		expect(invalidate).toHaveBeenCalledTimes(1);
-		expect(updateEditorTopBorder).toHaveBeenCalledTimes(1);
 		expect(requestRender).toHaveBeenCalledTimes(1);
 	});
 });

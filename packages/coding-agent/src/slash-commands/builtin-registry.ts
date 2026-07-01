@@ -69,7 +69,7 @@ export interface TuiBuiltinSlashCommand extends BuiltinSlashCommand {
 
 function refreshStatusLine(ctx: InteractiveModeContext): void {
 	ctx.statusLine.invalidate();
-	ctx.updateEditorTopBorder();
+	ctx.ui.requestRender();
 	ctx.ui.requestRender();
 }
 

@@ -625,7 +625,7 @@ export class CollabGuestLink {
 		setSessionTerminalTitle(this.#ctx.sessionManager.getSessionName(), this.#ctx.sessionManager.getCwd());
 		this.#ctx.statusLine.invalidate();
 		this.#ctx.statusLine.resetActiveTime();
-		this.#ctx.updateEditorTopBorder();
+		this.#ctx.ui.requestRender();
 		this.#ctx.updateEditorBorderColor();
 		this.#ctx.renderInitialMessages({ clearTerminalHistory: true });
 		await this.#ctx.reloadTodos();

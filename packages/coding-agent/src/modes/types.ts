@@ -297,7 +297,6 @@ export interface InteractiveModeContext {
 	getUserMessageText(message: Message): string;
 	findLastAssistantMessage(): AssistantMessage | undefined;
 	extractAssistantText(message: AssistantMessage): string;
-	updateEditorTopBorder(): void;
 	/** Refresh the running-subagents status badge from the active local or collab registry. */
 	syncRunningSubagentBadge(): void;
 	updateEditorBorderColor(): void;

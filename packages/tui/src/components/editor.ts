@@ -467,8 +467,12 @@ export class Editor implements Component, Focusable {
 	onAutocompleteCancel?: () => void;
 	disableSubmit: boolean = false;
 
-	// Custom top border (for status line integration)
+	// Custom top border (for status line integration). Either an eager `content`
+	// (set once, reused every frame) or a `provider` that recomputes lazily just
+	// before the editor paints — the second form lets the host coalesce
+	// per-event rebuilds down to one per rendered frame (see #4145).
 	#topBorderContent?: EditorTopBorder;
+	#topBorderProvider?: (availableWidth: number) => EditorTopBorder | undefined;
 	#borderVisible = true;
 
 	constructor(theme: EditorTheme) {
@@ -483,9 +487,28 @@ export class Editor implements Component, Focusable {
 	/**
 	 * Set custom content for the top border (e.g., status line).
 	 * Pass undefined to use the default plain border.
+	 *
+	 * Eager: the passed value is cached and reused every frame. Callers that
+	 * mutate status upstream must recompute and call this again. Prefer
+	 * {@link setTopBorderProvider} for high-frequency updates — it collapses
+	 * per-event rebuilds to one per painted frame.
 	 */
 	setTopBorder(content: EditorTopBorder | undefined): void {
 		this.#topBorderContent = content;
+	}
+
+	/**
+	 * Install a lazy provider invoked once per editor render with the current
+	 * `availableWidth`. Overrides any eager content set via {@link setTopBorder}
+	 * — pass `undefined` to detach and fall back to the eager slot.
+	 *
+	 * Use this when the top border derives from state that mutates far faster
+	 * than the render cadence (session events, streaming, subagent updates).
+	 * The TUI already throttles renders, so a provider is invoked at most once
+	 * per frame and never does wasted work between paints.
+	 */
+	setTopBorderProvider(provider: ((availableWidth: number) => EditorTopBorder | undefined) | undefined): void {
+		this.#topBorderProvider = provider;
 	}
 
 	/**
@@ -806,8 +829,12 @@ export class Editor implements Component, Focusable {
 		if (borderVisible) {
 			// Render top border: ╭─ [status content] ────────────────╮
 			const topFillWidth = Math.max(0, width - borderWidth * 2);
-			if (this.#topBorderContent) {
-				const { content, width: statusWidth } = this.#topBorderContent;
+			// Provider (lazy) wins over eager content — a host that installs both
+			// wants the coalesced path; falling back to eager keeps existing
+			// setTopBorder callers working unchanged.
+			const topBorder = this.#topBorderProvider ? this.#topBorderProvider(topFillWidth) : this.#topBorderContent;
+			if (topBorder) {
+				const { content, width: statusWidth } = topBorder;
 				if (statusWidth <= topFillWidth) {
 					// Status fits - add fill after it
 					const fillWidth = topFillWidth - statusWidth;

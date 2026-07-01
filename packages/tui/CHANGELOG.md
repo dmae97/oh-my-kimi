@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `Editor.setTopBorderProvider()` so hosts can install a lazy top-border builder that runs once per painted frame instead of eagerly rebuilding after every state change. Falls back to the existing `setTopBorder()` slot when no provider is registered.
+
+### Fixed
+
+- Added adaptive render backpressure: a frame that overruns the 30 fps cadence now inflates the following frame's delay to at most twice its own cost (capped at 200 ms), preventing the render loop from busy-looping when a slow paint would otherwise fire the next frame at `setTimeout(0)`. ([#4145](https://github.com/can1357/oh-my-pi/issues/4145))
+
 ## [16.2.12] - 2026-07-01
 
 ### Fixed

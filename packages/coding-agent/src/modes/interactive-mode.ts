@@ -645,7 +645,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#syncEditorMaxHeight();
 		this.#resizeHandler = () => {
 			this.#syncEditorMaxHeight();
-			this.updateEditorTopBorder();
+			this.ui.requestRender();
 		};
 		process.stdout.on("resize", this.#resizeHandler);
 		try {
@@ -662,6 +662,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.editorContainer.addChild(this.editor);
 		this.statusLine = new StatusLineComponent(session);
 		this.statusLine.setAutoCompactEnabled(session.autoCompactionEnabled);
+		// Lazy provider — the top border rebuild coalesces to at most one
+		// invocation per painted frame instead of firing on every session event
+		// (#4145). The TUI throttles renders at ~30fps, so a long-running eval
+		// spraying events no longer runs `getTopBorder` synchronously in the
+		// hot path where the render never gets to paint the result.
+		this.editor.setTopBorderProvider(availableWidth => this.statusLine.getTopBorder(availableWidth));
 
 		this.hideThinkingBlock = settings.get("hideThinkingBlock");
 		this.proseOnlyThinking = settings.get("proseOnlyThinking");
@@ -975,14 +981,12 @@ export class InteractiveMode implements InteractiveModeContext {
 			onTerminalAppearanceChange(mode);
 		});
 
-		// Set up git branch watcher
+		// A branch change (checkout, worktree switch, `git switch`) invalidates
+		// the status-line git segments; the lazy top-border provider picks up
+		// the fresh branch on the next painted frame.
 		this.statusLine.watchBranch(() => {
-			this.updateEditorTopBorder();
 			this.ui.requestRender();
 		});
-
-		// Initial top border update
-		this.updateEditorTopBorder();
 	}
 
 	/** Reload the title-generation system prompt override for the provided working directory. */
@@ -1059,7 +1063,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.session.refreshSshTool({ activateIfAvailable: true });
 		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
 		this.statusLine.invalidate();
-		this.updateEditorTopBorder();
+		this.ui.requestRender();
 	}
 
 	async getUserInput(): Promise<SubmittedUserInput> {
@@ -1200,7 +1204,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.loopLimit = undefined;
 		this.#cancelLoopAutoSubmit();
 		this.statusLine.setLoopModeStatus(undefined);
-		this.updateEditorTopBorder();
 		this.ui.requestRender();
 		if (wasEnabled) {
 			this.showStatus(message);
@@ -1231,7 +1234,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.loopPrompt = undefined;
 		this.loopLimit = createLoopLimitRuntime(parsed.limit);
 		this.statusLine.setLoopModeStatus({ enabled: true });
-		this.updateEditorTopBorder();
 		this.ui.requestRender();
 		const limitSuffix = parsed.limit ? ` Limited to ${describeLoopLimit(parsed.limit)}.` : "";
 		const remainingSuffix = this.loopLimit ? ` ${describeLoopLimitRuntime(this.loopLimit)}.` : "";
@@ -1452,7 +1454,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			const base = this.editor.borderColor;
 			this.editor.borderColor = (str: string) => `\x1b[2m${base(str)}\x1b[22m`;
 		}
-		this.updateEditorTopBorder();
 		this.ui.requestRender();
 	}
 
@@ -1469,13 +1470,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		const count = countRunningSubagentBadgeAgents(registry);
 		this.statusLine.setSubagentCount(count);
-		this.updateEditorTopBorder();
-	}
-
-	updateEditorTopBorder(): void {
-		const availableWidth = this.editor.getTopBorderAvailableWidth(this.ui.terminal.columns);
-		const topBorder = this.statusLine.getTopBorder(availableWidth);
-		this.editor.setTopBorder(topBorder);
+		this.ui.requestRender();
 	}
 
 	rebuildChatFromMessages(): void {
@@ -1806,7 +1801,6 @@ export class InteractiveMode implements InteractiveModeContext {
 					}
 				: undefined;
 		this.statusLine.setPlanModeStatus(status);
-		this.updateEditorTopBorder();
 		this.ui.requestRender();
 	}
 
@@ -1816,7 +1810,6 @@ export class InteractiveMode implements InteractiveModeContext {
 				? { enabled: this.goalModeEnabled, paused: this.goalModePaused }
 				: undefined;
 		this.statusLine.setGoalModeStatus(status);
-		this.updateEditorTopBorder();
 		this.ui.requestRender();
 	}
 
@@ -3348,6 +3341,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.requestRender();
 		};
 		nextEditor.setShimmerRepaintHandler(() => this.ui.requestComponentRender(this.editor));
+		nextEditor.setTopBorderProvider(availableWidth => this.statusLine.getTopBorder(availableWidth));
 		nextEditor.setMaxHeight(this.#computeEditorMaxHeight());
 		if (this.historyStorage) {
 			nextEditor.setHistoryStorage(this.historyStorage);
@@ -3367,7 +3361,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		});
 
 		this.updateEditorBorderColor();
-		this.updateEditorTopBorder();
 		this.ui.requestRender();
 	}
 
@@ -3767,7 +3760,6 @@ export class InteractiveMode implements InteractiveModeContext {
 				} else {
 					this.#cleanupMicAnimation();
 				}
-				this.updateEditorTopBorder();
 				this.ui.requestRender();
 			},
 		});

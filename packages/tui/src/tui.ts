@@ -923,8 +923,23 @@ export class TUI extends Container {
 	#renderTimer: RenderTimer | undefined;
 	#renderScheduler: RenderScheduler;
 	#lastRenderAt = 0;
+	/**
+	 * Wall-clock cost of the most recent `#doRender()` call. Used by
+	 * `#scheduleRender` to inflate the next render delay proportionally so a
+	 * spike of slow frames (large transcript diffs, huge assistant text wrap,
+	 * component-tree walks) does not busy-loop the CPU: the throttle would
+	 * otherwise collapse to zero once `elapsed >= MIN_RENDER_INTERVAL_MS` and
+	 * fire the next frame immediately (see #4145).
+	 */
+	#lastFrameCostMs = 0;
 	static readonly #MIN_RENDER_INTERVAL_MS = 1000 / 30;
 	static readonly #INPUT_RENDER_GRACE_MS = TUI.#MIN_RENDER_INTERVAL_MS;
+	/**
+	 * Cap on the adaptive floor derived from `#lastFrameCostMs`. Bounds the UI
+	 * responsiveness at ~5 fps under sustained heavy renders — anything slower
+	 * feels dead to the user and no longer justifies further CPU savings.
+	 */
+	static readonly #MAX_ADAPTIVE_RENDER_MS = 200;
 	#inputRenderGraceUntilMs = 0;
 	// Pane-reflow settle window for tmux/screen/zellij. The host process gets
 	// SIGWINCH (and `process.stdout` already reports the new geometry) before
@@ -1831,8 +1846,7 @@ export class TUI extends Container {
 		this.#prepareForcedRender(!isMultiplexerSession());
 		this.#resizeEventPending = true;
 		this.#renderRequested = false;
-		this.#lastRenderAt = this.#renderScheduler.now();
-		this.#doRender();
+		this.#executeRender();
 	}
 
 	requestRender(force = false, options?: RenderRequestOptions): void {
@@ -1863,8 +1877,7 @@ export class TUI extends Container {
 					return;
 				}
 				this.#renderRequested = false;
-				this.#lastRenderAt = this.#renderScheduler.now();
-				this.#doRender();
+				this.#executeRender();
 			});
 			return;
 		}
@@ -2085,8 +2098,7 @@ export class TUI extends Container {
 			this.#ghosttyInitialImageDelayTimer = undefined;
 			this.#ghosttyInitialImageDelayDone = true;
 			if (this.#stopped) return;
-			this.#lastRenderAt = this.#renderScheduler.now();
-			this.#doRender();
+			this.#executeRender();
 			if (this.#renderRequested) this.#scheduleRender();
 		}, delayMs);
 		return true;
@@ -2114,20 +2126,39 @@ export class TUI extends Container {
 		const now = this.#renderScheduler.now();
 		const elapsed = now - this.#lastRenderAt;
 		const cadenceDelay = Math.max(0, TUI.#MIN_RENDER_INTERVAL_MS - elapsed);
+		// Adaptive backpressure — target ~50% render duty cycle: the next frame
+		// starts no sooner than `last_frame_end + last_frame_cost`, i.e.
+		// `last_frame_start + 2 × last_frame_cost`. So `elapsed` (which counts
+		// from the last frame's start) must already exceed twice the cost
+		// before we allow the follow-up render to fire. Capped so a
+		// pathological one-off spike doesn't lock the UI (#4145).
+		const adaptiveFloor = Math.min(TUI.#MAX_ADAPTIVE_RENDER_MS, this.#lastFrameCostMs * 2);
+		const adaptiveDelay = Math.max(0, adaptiveFloor - elapsed);
 		const inputGraceDelay = Math.max(0, this.#inputRenderGraceUntilMs - now);
-		const delay = Math.max(cadenceDelay, inputGraceDelay);
+		const delay = Math.max(cadenceDelay, adaptiveDelay, inputGraceDelay);
 		this.#renderTimer = this.#renderScheduler.scheduleRender(() => {
 			this.#renderTimer = undefined;
 			if (this.#stopped || !this.#renderRequested) {
 				return;
 			}
 			this.#renderRequested = false;
-			this.#lastRenderAt = this.#renderScheduler.now();
-			this.#doRender();
+			this.#executeRender();
 			if (this.#renderRequested) {
 				this.#scheduleRender();
 			}
 		}, delay);
+	}
+
+	/**
+	 * Wrap `#doRender()` so every path records the wall-clock frame cost that
+	 * feeds adaptive backpressure. Set `#lastRenderAt` first (some render code
+	 * reads it re-entrantly) and compute the cost once the paint returns.
+	 */
+	#executeRender(): void {
+		const start = this.#renderScheduler.now();
+		this.#lastRenderAt = start;
+		this.#doRender();
+		this.#lastFrameCostMs = this.#renderScheduler.now() - start;
 	}
 
 	#handleInput(data: string): void {
@@ -3277,8 +3308,7 @@ export class TUI extends Container {
 	#requestResizeViewportPaint(): void {
 		if (this.#stopped) return;
 		this.#renderRequested = false;
-		this.#lastRenderAt = this.#renderScheduler.now();
-		this.#doRender();
+		this.#executeRender();
 		if (this.#renderRequested) this.#scheduleRender();
 	}
 
