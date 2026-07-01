@@ -291,14 +291,25 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
 				hadAnyChanges = false;
 			} else {
 				const normalized = patchText.endsWith("\n") ? patchText : `${patchText}\n`;
-				changesApplied = await git.patch.canApplyText(repoRoot, normalized, { threeWay: true });
-				hadAnyChanges = false;
-				if (changesApplied) {
-					try {
-						await git.patch.applyText(repoRoot, normalized, { threeWay: true });
-						hadAnyChanges = true;
-					} catch {
-						changesApplied = false;
+				// Idempotence: if the reverse patch applies cleanly the target state is
+				// already present. Reverse-check reads without touching the worktree, so
+				// a conflicting patch cannot be misdetected as a no-op — unlike
+				// `--3way --check`, which exits 0 even when the real apply would write
+				// conflict markers and unmerged index entries.
+				const alreadyApplied = await git.patch.canApplyText(repoRoot, normalized, { reverse: true });
+				if (alreadyApplied) {
+					changesApplied = true;
+					hadAnyChanges = false;
+				} else {
+					changesApplied = await git.patch.canApplyText(repoRoot, normalized);
+					hadAnyChanges = false;
+					if (changesApplied) {
+						try {
+							await git.patch.applyText(repoRoot, normalized);
+							hadAnyChanges = true;
+						} catch {
+							changesApplied = false;
+						}
 					}
 				}
 			}
