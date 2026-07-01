@@ -1588,11 +1588,16 @@ export const stash = {
 	async showPatch(cwd: string): Promise<string> {
 		return (await tryText(cwd, ["stash", "show", "-p", "--binary", "stash@{0}"], { readOnly: true })) ?? "";
 	},
+	/** Return untracked paths stored in the top stash entry. */
+	async untrackedFiles(cwd: string): Promise<string[]> {
+		const output = await tryText(cwd, ["ls-tree", "-r", "-z", "--name-only", "stash@{0}^3"], { readOnly: true });
+		return output?.split("\0").filter(Boolean) ?? [];
+	},
 	/**
 	 * Attempt to restore the top stash entry. On success returns `true` and
 	 * git drops the stash entry. On conflict returns `false`, leaves the stash
-	 * entry preserved for manual resolution, and guarantees the repo's index
-	 * has no unmerged entries when this call returns.
+	 * entry preserved for manual resolution, and guarantees the failed restore
+	 * leaves no unmerged index entries or partially-restored untracked files.
 	 *
 	 * The historical raw `pop` catches the failure in a `finally` block and
 	 * only logs — it leaves `.git/index` with stage 1/2/3 unmerged entries
@@ -1610,6 +1615,7 @@ export const stash = {
 		if (workingPatch.trim() && !(await patch.canApplyText(cwd, workingPatch, { threeWay: true }))) {
 			return false;
 		}
+		const restoredUntracked = await stash.untrackedFiles(cwd);
 		try {
 			await stash.pop(cwd, options);
 			return true;
@@ -1617,13 +1623,22 @@ export const stash = {
 			// Preflight can still miss mode-only or delete/modify conflicts. If
 			// the pop left unmerged entries, wipe them: HEAD holds the merged
 			// state so `reset --hard HEAD` restores a clean index and working
-			// tree without losing the cherry-picked commits. The stash entry
-			// is preserved by git on failed pop, so the user's WIP is still
-			// recoverable via `git stash pop`.
+			// tree without losing the cherry-picked commits. A failed pop can
+			// still restore unrelated untracked files before exiting while
+			// preserving the stash entry, so clean only the untracked paths
+			// recorded in that stash. The user's WIP remains recoverable via
+			// `git stash pop`.
 			try {
 				await reset(cwd, { hard: true });
 			} catch {
 				/* best-effort cleanup — do not mask the primary conflict */
+			}
+			if (restoredUntracked.length > 0) {
+				try {
+					await clean(cwd, { paths: restoredUntracked });
+				} catch {
+					/* best-effort cleanup — do not mask the primary conflict */
+				}
 			}
 			return false;
 		}

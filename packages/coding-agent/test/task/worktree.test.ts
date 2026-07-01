@@ -15,6 +15,7 @@ import {
 	parseIsolationMode,
 } from "@oh-my-pi/pi-coding-agent/task/worktree";
 import * as jj from "@oh-my-pi/pi-coding-agent/utils/jj";
+import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
 import * as natives from "@oh-my-pi/pi-natives";
 import { removeWithRetries, setWorktreesDir } from "@oh-my-pi/pi-utils";
 
@@ -278,6 +279,34 @@ describe("worktree isolation helpers", () => {
 				const delta = await captureDeltaPatch(repo, baseline);
 				expect(delta.rootPatch).not.toContain("diff --cc");
 				expect(delta.rootPatch).toContain("+downstream edit");
+			});
+
+			it("removes untracked files partially restored before failed stash pop exits", async () => {
+				// Force the fallback branch: preflight would normally refuse this
+				// pop before Git can restore anything, but mode/delete edge cases can
+				// still pass preflight and fail during the actual stash pop. Git can
+				// restore unrelated untracked files before reporting the tracked
+				// conflict, so the fallback must clean those restored paths too.
+				vi.spyOn(git.patch, "canApplyText").mockResolvedValue(true);
+				await fs.writeFile(path.join(repo, "merged.txt"), "user wip\n");
+				await fs.writeFile(path.join(repo, "note.txt"), "untracked wip\n");
+
+				const result = await mergeTaskBranches(repo, [{ branchName: TASK_BRANCH, taskId: "task-1" }]);
+
+				const [status, unmerged, stashList, headContent] = await Promise.all([
+					runGit(repo, ["status", "--porcelain=v1"]),
+					runGit(repo, ["ls-files", "--unmerged"]),
+					runGit(repo, ["stash", "list"]),
+					fs.readFile(path.join(repo, "merged.txt"), "utf8"),
+				]);
+
+				expect(result.merged).toEqual([TASK_BRANCH]);
+				expect(result.failed).toEqual([]);
+				expect(result.stashConflict).toBeDefined();
+				expect(unmerged).toBe("");
+				expect(status).toBe("");
+				expect(headContent).toBe("task branch change\n");
+				expect(stashList).toContain("omp-task-merge");
 			});
 
 			it("commits isolated edits when parent dirt only changes nearby context", async () => {
