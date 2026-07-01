@@ -557,7 +557,33 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		const isStreamingArgs = !this.#argsComplete && (isEditLikeToolName(this.#toolName) || this.#toolName === "write");
 		const isBackgroundAsyncRunning =
 			(this.#result?.details as { async?: { state?: string } } | undefined)?.async?.state === "running";
-		const isLivePartialTool = this.#isPartial && this.#toolName !== "todo" && !isBackgroundAsyncRunning;
+		const renderer = toolRenderers[this.#toolName] as
+			| {
+					animatedPendingPreview?: boolean | ((args: unknown) => boolean);
+					animatedPartialResult?: boolean | ((args: unknown) => boolean);
+			  }
+			| undefined;
+		const pendingAnimation = renderer?.animatedPendingPreview;
+		const partialAnimation = renderer?.animatedPartialResult;
+		const pendingCallConsumesSpinner =
+			this.#result === undefined &&
+			(renderer === undefined
+				? !this.#tool?.renderCall
+				: typeof pendingAnimation === "function"
+					? pendingAnimation(this.#args)
+					: pendingAnimation === true);
+		const partialResultConsumesSpinner =
+			this.#result !== undefined &&
+			(renderer === undefined
+				? !this.#tool?.renderResult
+				: typeof partialAnimation === "function"
+					? partialAnimation(this.#args)
+					: partialAnimation === true);
+		const isLivePartialTool =
+			this.#isPartial &&
+			this.#toolName !== "todo" &&
+			!isBackgroundAsyncRunning &&
+			(pendingCallConsumesSpinner || partialResultConsumesSpinner);
 		const needsSpinner = isStreamingArgs || isLivePartialTool || this.#displaceableByToolName === "job";
 		if (needsSpinner && !this.#spinnerInterval) {
 			const frameCount = theme.spinnerFrames.length;

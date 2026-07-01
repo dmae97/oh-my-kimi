@@ -261,6 +261,7 @@ function formatSshCommandLines(command: string, uiTheme: Theme): string[] {
 }
 
 export const sshToolRenderer = {
+	animatedPendingPreview: true,
 	renderCall(args: SshRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 		const host = args.host || "…";
 		const command = args.command ?? "";

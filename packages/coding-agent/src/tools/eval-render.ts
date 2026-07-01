@@ -489,6 +489,8 @@ function formatCellOutputLines(
 }
 
 export const evalToolRenderer = {
+	animatedPendingPreview: true,
+	animatedPartialResult: true,
 	renderCall(args: EvalRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 		const cells = getRenderCells(args);
 

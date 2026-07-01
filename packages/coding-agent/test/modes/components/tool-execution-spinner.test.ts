@@ -70,6 +70,27 @@ describe("ToolExecutionComponent live preview spinners", () => {
 		}
 	});
 
+	it("does not tick headerless bash pending previews", () => {
+		vi.useFakeTimers();
+		const requestRender = vi.fn();
+		const component = new ToolExecutionComponent(
+			"bash",
+			{ command: "sleep 600" },
+			{},
+			undefined,
+			{ requestRender } as unknown as TUI,
+			process.cwd(),
+		);
+
+		try {
+			requestRender.mockClear();
+			vi.advanceTimersByTime(500);
+			expect(requestRender).not.toHaveBeenCalled();
+		} finally {
+			component.stopAnimation();
+		}
+	});
+
 	it("does not tick detached async bash result snapshots", () => {
 		vi.useFakeTimers();
 		const requestRender = vi.fn();

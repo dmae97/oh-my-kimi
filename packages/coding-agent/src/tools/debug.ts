@@ -583,6 +583,7 @@ function summarizeDebugCall(args: DebugRenderArgs): string {
 }
 
 export const debugToolRenderer = {
+	animatedPartialResult: true,
 	renderCall(args: DebugRenderArgs, _options: RenderResultOptions, theme: Theme): Component {
 		const text = renderStatusLine({ icon: "pending", title: "Debug", description: summarizeDebugCall(args) }, theme);
 		return new Text(text, 0, 0);

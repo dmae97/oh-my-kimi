@@ -63,6 +63,17 @@ export type ToolRenderer = {
 	 * with the final render and may commit like any settled stream.
 	 */
 	provisionalPartialResult?: boolean;
+	/**
+	 * Whether the renderer's pending-call path visibly consumes
+	 * `options.spinnerFrame`. Used to avoid scheduling repaint ticks for live
+	 * partial calls whose bytes cannot change between spinner frames.
+	 */
+	animatedPendingPreview?: boolean | ((args: unknown) => boolean);
+	/**
+	 * Whether the renderer's partial-result path visibly consumes
+	 * `options.spinnerFrame`.
+	 */
+	animatedPartialResult?: boolean | ((args: unknown) => boolean);
 };
 
 export const toolRenderers: Record<string, ToolRenderer> = {
