@@ -30,6 +30,9 @@
 ### Added
 
 - Added optional AgentTool.matcherPaths(args) and AgentTool.matcherEntries(args) hooks to allow tools to surface target file paths and isolate file evaluations for path-scoped stream matchers (e.g., when handling multi-file payloads or embedded paths in streamed arguments).
+### Fixed
+
+- Fixed intent tracing injection for closed union tool schemas so provider validation accepts `i` inside each variant. ([#3645](https://github.com/can1357/oh-my-pi/issues/3645))
 
 ### Removed
 
