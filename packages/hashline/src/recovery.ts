@@ -168,6 +168,20 @@ function validateDuplicateAnchorContext(
 	return checked;
 }
 
+function validateUniqueAnchorContext(
+	line: number,
+	mapped: number,
+	previousLines: readonly string[],
+	lineMap: ReadonlyMap<number, number>,
+	anchorLines: ReadonlySet<number>,
+): boolean {
+	const offset = mapped - line;
+	const after = nearestContextLine(line, 1, anchorLines, previousLines.length);
+	if (after !== undefined) return lineMap.get(after) === after + offset;
+	const before = nearestContextLine(line, -1, anchorLines, previousLines.length);
+	return before !== undefined && lineMap.get(before) === before + offset;
+}
+
 function validateRemappedAnchorContext(
 	previousText: string,
 	currentText: string,
@@ -181,7 +195,12 @@ function validateRemappedAnchorContext(
 	for (const line of anchorLines) {
 		const mapped = lineMap.get(line);
 		if (mapped === undefined) return false;
-		if (!lineIsDuplicated(previousLines, line) && !lineIsDuplicated(currentLines, mapped)) continue;
+		if (!lineIsDuplicated(previousLines, line) && !lineIsDuplicated(currentLines, mapped)) {
+			if (!validateUniqueAnchorContext(line, mapped, previousLines, lineMap, anchorLines)) {
+				return false;
+			}
+			continue;
+		}
 		if (!validateDuplicateAnchorContext(line, mapped, previousLines, lineMap, anchorLines)) {
 			return false;
 		}

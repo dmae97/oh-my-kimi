@@ -139,4 +139,22 @@ describe("Recovery — session-chain replay anchor-content gate", () => {
 
 		expect(recovered).toBeNull();
 	});
+
+	it("refuses unique-line remaps when following context no longer matches", () => {
+		const store = new InMemorySnapshotStore();
+		const v0Text = lines("L1", "L2", "L3", "L4", "T", "L6");
+		const h0 = store.record(PATH, v0Text);
+		const v1Text = lines("X", "L1", "L2", "L3", "L4", "T", "T_CHANGED", "L6");
+		store.record(PATH, v1Text);
+		const { edits } = parsePatch("SWAP 5.=5:\n+MODEL");
+
+		const recovered = new Recovery(store).tryRecover({
+			path: PATH,
+			currentText: v1Text,
+			fileHash: h0,
+			edits,
+		});
+
+		expect(recovered).toBeNull();
+	});
 });
