@@ -22,8 +22,30 @@
  */
 
 import type { AssistantMessage, TextContent, ThinkingContent, ToolCall } from "../types";
+import {
+	clearStreamingPartialJson,
+	getStreamingPartialJson,
+	type StreamingPartialJsonCarrier,
+	setStreamingPartialJson,
+} from "./block-symbols";
 import { AssistantMessageEventStream } from "./event-stream";
 import { StreamMarkupHealing, type StreamMarkupHealingEvent } from "./stream-markup-healing";
+
+type StreamingToolCall = ToolCall & StreamingPartialJsonCarrier;
+
+function cloneToolCall(source: StreamingToolCall): StreamingToolCall {
+	const block: StreamingToolCall = { ...source, arguments: source.arguments };
+	const partialJson = getStreamingPartialJson(source);
+	if (partialJson !== undefined) setStreamingPartialJson(block, partialJson);
+	return block;
+}
+
+function syncToolCall(target: StreamingToolCall, source: StreamingToolCall): void {
+	Object.assign(target, source);
+	const partialJson = getStreamingPartialJson(source);
+	if (partialJson === undefined) clearStreamingPartialJson(target);
+	else setStreamingPartialJson(target, partialJson);
+}
 
 /**
  * Wrap a provider stream so leaked reasoning fences are healed into thinking
@@ -55,12 +77,14 @@ export function wrapLeakedThinkingStream(inner: AssistantMessageEventStream): As
 					case "toolcall_start": {
 						projector ??= new LeakedThinkingProjector(out, event.partial);
 						const block = event.partial.content[event.contentIndex];
-						projector.toolStart(event.contentIndex, block?.type === "toolCall" ? block.name : "");
+						projector.toolStart(event.contentIndex, block?.type === "toolCall" ? block : undefined);
 						break;
 					}
-					case "toolcall_delta":
-						projector?.toolDelta(event.contentIndex, event.delta);
+					case "toolcall_delta": {
+						const block = event.partial.content[event.contentIndex];
+						projector?.toolDelta(event.contentIndex, event.delta, block?.type === "toolCall" ? block : undefined);
 						break;
+					}
 					case "toolcall_end":
 						projector?.toolEnd(event.contentIndex, event.toolCall);
 						break;
@@ -111,7 +135,7 @@ class LeakedThinkingProjector {
 	/** Latest non-undefined text signature seen, stamped onto held-back text flushed later. */
 	#lastTextSignature: string | undefined;
 	/** Forwarded native tool calls, keyed by the inner stream's `contentIndex`. */
-	#toolBlocks = new Map<number, { index: number }>();
+	#toolBlocks = new Map<number, { index: number; block: StreamingToolCall }>();
 
 	constructor(out: AssistantMessageEventStream, seed: AssistantMessage) {
 		this.#out = out;
@@ -136,29 +160,39 @@ class LeakedThinkingProjector {
 	}
 
 	/** Forward a native tool call's start, releasing any held-back text first. */
-	toolStart(srcIndex: number, name: string): void {
+	toolStart(srcIndex: number, source: StreamingToolCall | undefined): void {
+		if (!source) return;
 		this.#apply(this.#healer.flushEvents(), this.#lastTextSignature);
 		this.#closeText();
 		this.#closeThinking();
-		const block: ToolCall = { type: "toolCall", id: "", name, arguments: {} };
+		const block = cloneToolCall(source);
 		this.#partial.content.push(block);
 		const index = this.#partial.content.length - 1;
-		this.#toolBlocks.set(srcIndex, { index });
+		this.#toolBlocks.set(srcIndex, { index, block });
 		this.#out.push({ type: "toolcall_start", contentIndex: index, partial: this.#partial });
 	}
 
-	toolDelta(srcIndex: number, delta: string): void {
-		const entry = this.#toolBlocks.get(srcIndex);
+	toolDelta(srcIndex: number, delta: string, source: StreamingToolCall | undefined): void {
+		let entry = this.#toolBlocks.get(srcIndex);
+		if (!entry && source) {
+			this.toolStart(srcIndex, source);
+			entry = this.#toolBlocks.get(srcIndex);
+		}
 		if (!entry) return;
+		if (source) syncToolCall(entry.block, source);
 		this.#out.push({ type: "toolcall_delta", contentIndex: entry.index, delta, partial: this.#partial });
 	}
 
 	toolEnd(srcIndex: number, toolCall: ToolCall): void {
 		const entry = this.#toolBlocks.get(srcIndex);
 		if (entry) {
-			const block = this.#partial.content[entry.index] as ToolCall;
-			Object.assign(block, toolCall);
-			this.#out.push({ type: "toolcall_end", contentIndex: entry.index, toolCall: block, partial: this.#partial });
+			syncToolCall(entry.block, toolCall);
+			this.#out.push({
+				type: "toolcall_end",
+				contentIndex: entry.index,
+				toolCall: entry.block,
+				partial: this.#partial,
+			});
 			this.#toolBlocks.delete(srcIndex);
 			return;
 		}
@@ -166,7 +200,7 @@ class LeakedThinkingProjector {
 		this.#apply(this.#healer.flushEvents(), this.#lastTextSignature);
 		this.#closeText();
 		this.#closeThinking();
-		const block: ToolCall = { ...toolCall };
+		const block = cloneToolCall(toolCall);
 		this.#partial.content.push(block);
 		const index = this.#partial.content.length - 1;
 		this.#out.push({ type: "toolcall_start", contentIndex: index, partial: this.#partial });

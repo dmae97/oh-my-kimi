@@ -10,6 +10,7 @@ import type {
 	ThinkingContent,
 	ToolCall,
 } from "@oh-my-pi/pi-ai/types";
+import { getStreamingPartialJson, setStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { wrapLeakedThinkingStream } from "@oh-my-pi/pi-ai/utils/leaked-thinking-stream";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -58,6 +59,36 @@ function texts(message: AssistantMessage): string[] {
 
 function thinks(message: AssistantMessage): ThinkingContent[] {
 	return message.content.filter((b): b is ThinkingContent => b.type === "thinking");
+}
+
+type ToolSnapshot = {
+	type: "toolcall_start" | "toolcall_delta" | "toolcall_end";
+	id: string;
+	name: string;
+	arguments: Record<string, unknown>;
+	partialJson: string | undefined;
+	delta?: string;
+};
+
+async function nextToolSnapshot(iterator: AsyncIterator<AssistantMessageEvent>): Promise<ToolSnapshot> {
+	for (;;) {
+		const next = await iterator.next();
+		if (next.done) throw new Error("stream ended before a tool-call event");
+		const event = next.value;
+		if (event.type !== "toolcall_start" && event.type !== "toolcall_delta" && event.type !== "toolcall_end") {
+			continue;
+		}
+		const block = event.partial.content[event.contentIndex];
+		if (block?.type !== "toolCall") throw new Error("tool-call event did not point at a toolCall block");
+		return {
+			type: event.type,
+			id: block.id,
+			name: block.name,
+			arguments: JSON.parse(JSON.stringify(block.arguments)) as Record<string, unknown>,
+			partialJson: getStreamingPartialJson(block),
+			...(event.type === "toolcall_delta" ? { delta: event.delta } : {}),
+		};
+	}
 }
 
 describe("wrapLeakedThinkingStream", () => {
@@ -191,6 +222,68 @@ describe("wrapLeakedThinkingStream", () => {
 		expect(thinks(result).every(b => b.thinkingSignature === undefined)).toBe(true);
 		const calls = result.content.filter((b): b is ToolCall => b.type === "toolCall");
 		expect(calls[0]?.thoughtSignature).toBe("tsig");
+	});
+
+	it("preserves native tool-call ids and streamed partial JSON while healing", async () => {
+		const inner = new AssistantMessageEventStream();
+		const out = wrapLeakedThinkingStream(inner);
+		const iterator = out[Symbol.asyncIterator]();
+		const call: ToolCall = {
+			type: "toolCall",
+			id: "toolu_real",
+			name: "Bash",
+			arguments: {},
+		};
+		setStreamingPartialJson(call, "");
+		const partial = msg({ content: [call], stopReason: "toolUse" });
+		inner.push({ type: "start", partial });
+
+		const startPromise = nextToolSnapshot(iterator);
+		inner.push({ type: "toolcall_start", contentIndex: 0, partial });
+		const start = await startPromise;
+
+		setStreamingPartialJson(call, '{"command":"echo hi');
+		const deltaPromise = nextToolSnapshot(iterator);
+		inner.push({
+			type: "toolcall_delta",
+			contentIndex: 0,
+			delta: '{"command":"echo hi',
+			partial,
+		});
+		const delta = await deltaPromise;
+
+		call.arguments = { command: "echo hi" };
+		setStreamingPartialJson(call, '{"command":"echo hi"}');
+		const endPromise = nextToolSnapshot(iterator);
+		inner.push({ type: "toolcall_end", contentIndex: 0, toolCall: call, partial });
+		const end = await endPromise;
+		inner.push({ type: "done", reason: "toolUse", message: partial });
+		await out.result();
+
+		expect([start, delta, end]).toEqual([
+			{
+				type: "toolcall_start",
+				id: "toolu_real",
+				name: "Bash",
+				arguments: {},
+				partialJson: "",
+			},
+			{
+				type: "toolcall_delta",
+				id: "toolu_real",
+				name: "Bash",
+				arguments: {},
+				partialJson: '{"command":"echo hi',
+				delta: '{"command":"echo hi',
+			},
+			{
+				type: "toolcall_end",
+				id: "toolu_real",
+				name: "Bash",
+				arguments: { command: "echo hi" },
+				partialJson: '{"command":"echo hi"}',
+			},
+		]);
 	});
 
 	it("heals a fence that only appears in the terminal message (no prior text deltas)", async () => {

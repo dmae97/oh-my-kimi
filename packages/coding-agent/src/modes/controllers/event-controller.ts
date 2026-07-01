@@ -72,11 +72,6 @@ export class EventController {
 	// emits one read per completion — does not break it, so a run of consecutive
 	// reads collapses into one group even across completion boundaries.
 	#lastVisibleBlockCount = 0;
-	// Bumped on each assistant message_start. Scopes the placeholder key for a
-	// not-yet-id'd streamed tool block (see the toolCall loop) so a sealed,
-	// undeleted pending entry from an aborted message can never be reused by the
-	// next message's same content index.
-	#streamTurnNonce = 0;
 	#renderedCustomMessages = new Set<string>();
 	#lastIntent: string | undefined = undefined;
 	#backgroundToolCallIds = new Set<string>();
@@ -406,7 +401,6 @@ export class EventController {
 			this.ctx.ui.requestRender();
 		} else if (event.message.role === "assistant") {
 			this.#lastVisibleBlockCount = 0;
-			this.#streamTurnNonce++;
 			this.ctx.streamingComponent = createAssistantMessageComponent(this.ctx);
 			this.ctx.streamingMessage = event.message;
 			this.ctx.chatContainer.addChild(this.ctx.streamingComponent);
@@ -613,14 +607,9 @@ export class EventController {
 			if (this.ctx.streamingMessage.content.some(content => content.type === "toolCall")) {
 				this.ctx.streamingComponent.markTranscriptBlockFinalized();
 			}
-			for (const [contentIndex, content] of this.ctx.streamingMessage.content.entries()) {
+			for (const content of this.ctx.streamingMessage.content) {
 				if (content.type !== "toolCall") continue;
 				if (content.name === "read") {
-					// Read groups key by the real id (one group spans several reads),
-					// and the owned-dialect parser delivers id + args together when
-					// the call closes, so a parseable target without an id never
-					// occurs here. Defer if it somehow does.
-					if (!content.id) continue;
 					if (!readArgsHaveTarget(content.arguments)) {
 						// Args still streaming — defer until path is parseable so we can route to the
 						// read group (regular files) vs ToolExecutionComponent (internal URLs).
@@ -643,26 +632,6 @@ export class EventController {
 					// Internal URL read falls through to ToolExecutionComponent below.
 				}
 
-				// The owned-dialect tool parser (text-based tool calls for OAuth
-				// Anthropic / OpenAI) appends a tool block when it detects the call
-				// opening and only fills `id` + arguments once the call's text
-				// closes — so the live preview must stream while `content.id` is "".
-				// Key the preview by stable content position until the id lands,
-				// then migrate the pending entry + reveal state onto the real id
-				// (so `tool_execution_*`, which always carries the real id, matches
-				// the same component instead of orphaning a blank card). Native
-				// structured tool calls — every Gemini call, and Anthropic/OpenAI
-				// function calls — carry the id from the first frame, so
-				// `pendingKey === content.id` throughout and the migration no-ops.
-				const streamKey = `\u0000stream:${this.#streamTurnNonce}:${contentIndex}`;
-				const pendingKey = content.id || streamKey;
-				if (content.id && this.ctx.pendingTools.has(streamKey)) {
-					const migrated = this.ctx.pendingTools.get(streamKey);
-					this.ctx.pendingTools.delete(streamKey);
-					if (migrated) this.ctx.pendingTools.set(pendingKey, migrated);
-					this.#toolArgsReveal.rekey(streamKey, pendingKey);
-				}
-
 				// Preserve the raw partial JSON only for renderers that need to surface fields before the JSON object closes.
 				// Bash uses this to show inline env assignments during streaming instead of popping them in at completion.
 				// While the JSON is still open, ToolArgsRevealController paces the
@@ -674,16 +643,16 @@ export class EventController {
 				const rawInput = content.customWireName !== undefined;
 				const tool = this.ctx.viewSession.getToolByName(content.name);
 				if (partialJson) {
-					renderArgs = this.#toolArgsReveal.setTarget(pendingKey, partialJson, {
+					renderArgs = this.#toolArgsReveal.setTarget(content.id, partialJson, {
 						rawInput,
 						exposeRawPartialJson: exposesRawPartialJson(content.name, rawInput, tool),
 						fullArgs: content.arguments,
 					});
 				} else {
-					this.#toolArgsReveal.finish(pendingKey);
+					this.#toolArgsReveal.finish(content.id);
 					renderArgs = content.arguments;
 				}
-				if (!this.ctx.pendingTools.has(pendingKey)) {
+				if (!this.ctx.pendingTools.has(content.id)) {
 					this.#resolveDisplaceablePoll(content.name);
 					this.#resetReadGroup();
 					const component = new ToolExecutionComponent(
@@ -702,13 +671,13 @@ export class EventController {
 					);
 					component.setExpanded(this.ctx.toolOutputExpanded);
 					this.ctx.chatContainer.addChild(component);
-					this.ctx.pendingTools.set(pendingKey, component);
-					this.#toolArgsReveal.bind(pendingKey, component);
+					this.ctx.pendingTools.set(content.id, component);
+					this.#toolArgsReveal.bind(content.id, component);
 				} else {
-					const component = this.ctx.pendingTools.get(pendingKey);
+					const component = this.ctx.pendingTools.get(content.id);
 					if (component) {
 						component.updateArgs(renderArgs, content.id);
-						this.#toolArgsReveal.bind(pendingKey, component);
+						this.#toolArgsReveal.bind(content.id, component);
 					}
 				}
 			}

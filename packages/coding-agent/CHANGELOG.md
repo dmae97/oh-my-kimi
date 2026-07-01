@@ -20,6 +20,7 @@
 ### Fixed
 
 - Fixed the write tool not streaming execution progress to the TUI while files are being written.
+- Fixed live tool-call argument previews disappearing while arguments stream, restoring direct rendering from provider-preserved partial JSON instead of empty-id placeholder migration.
 - Fixed the LSP tool ignoring timeouts and abort signals during cold-starts and notification writes, preventing hung processes.
 - Fixed the browser tool leaking Chromium/Puppeteer processes when operations were aborted or when an agent session was disposed.
 - Added a 30-second timeout (configurable via extensionHandlerTimeoutMs) to extension tool call handlers to prevent hung third-party extensions from blocking execution, and fixed a timer leak that kept the CLI alive.
