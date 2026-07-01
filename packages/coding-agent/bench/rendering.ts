@@ -137,7 +137,7 @@ try {
 		let steps = 0;
 		while (revealed < total) {
 			revealed = Math.min(total, revealed + nextStep(total - revealed));
-			component.updateContent(buildDisplayMessage(full, revealed, false, countOf, sliceOf));
+			component.updateContent(buildDisplayMessage(full, revealed, false, true, countOf, sliceOf));
 			component.render(WIDTH);
 			steps++;
 		}
@@ -169,7 +169,7 @@ try {
 		let steps = 0;
 		while (revealed < total) {
 			revealed = Math.min(total, revealed + nextStep(total - revealed));
-			component.updateContent(buildDisplayMessage(full, revealed, false, countOf, sliceOf));
+			component.updateContent(buildDisplayMessage(full, revealed, false, true, countOf, sliceOf));
 			component.render(WIDTH);
 			steps++;
 		}
