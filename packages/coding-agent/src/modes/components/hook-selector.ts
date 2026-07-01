@@ -147,9 +147,7 @@ class OutlinedList extends Container {
 				const pad = Math.max(0, innerWidth - visibleWidth(wrappedLine));
 				const filled = `${wrappedLine}${padding(pad)}`;
 				const painted = row.highlight ? paintSelectedRow(filled) : filled;
-				content.push(
-					`${borderColor(theme.boxRound.vertical)}${painted}${borderColor(theme.boxRound.vertical)}`,
-				);
+				content.push(`${borderColor(theme.boxRound.vertical)}${painted}${borderColor(theme.boxRound.vertical)}`);
 			}
 		}
 		return [horizontal, ...content, horizontal];
