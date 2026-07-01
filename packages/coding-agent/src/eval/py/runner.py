@@ -26,14 +26,16 @@ when installed.
 
 from __future__ import annotations
 
-import asyncio
 import ast
-import contextvars
+import asyncio
 import base64
 import builtins
+import codecs
+import contextvars
 import inspect
 import io
 import json
+import locale
 import os
 import re
 import runpy
@@ -45,7 +47,7 @@ import threading
 import time
 import traceback
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # ---------------------------------------------------------------------------
 # Frame writer
@@ -396,6 +398,78 @@ def _emit_status(op: str, **data: Any) -> None:
         return
     _emit({"type": "display", "id": rid, "bundle": bundle})
 
+_SHELL_READ_CHUNK_BYTES = 8192
+_SHELL_RESULT_CAPTURE_CHARS = 1024 * 1024
+_PIP_LINE_SCAN_CHARS = 64 * 1024
+
+
+def _process_output_decoder() -> codecs.IncrementalDecoder:
+    encoding = locale.getpreferredencoding(False) or "utf-8"
+    return codecs.getincrementaldecoder(encoding)(errors="strict")
+
+
+def _stream_process_output(proc: subprocess.Popen, on_text: Callable[[str], None] | None = None) -> None:
+    assert proc.stdout is not None
+    decoder = _process_output_decoder()
+    while True:
+        chunk = os.read(proc.stdout.fileno(), _SHELL_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        text = decoder.decode(chunk)
+        if text:
+            sys.stdout.write(text)
+            sys.stdout.flush()
+            if on_text is not None:
+                on_text(text)
+    tail = decoder.decode(b"", final=True)
+    if tail:
+        sys.stdout.write(tail)
+        sys.stdout.flush()
+        if on_text is not None:
+            on_text(tail)
+
+
+class _BoundedTextCapture:
+    def __init__(self, max_chars: int) -> None:
+        self._remaining = max_chars
+        self._parts: list[str] = []
+
+    def add(self, text: str) -> None:
+        if self._remaining <= 0:
+            return
+        part = text[: self._remaining]
+        self._parts.append(part)
+        self._remaining -= len(part)
+
+    def text(self) -> str:
+        return "".join(self._parts)
+
+
+class _BoundedLineScanner:
+    def __init__(self, max_chars: int, on_line: Callable[[str], None]) -> None:
+        self._max_chars = max_chars
+        self._on_line = on_line
+        self._partial = ""
+
+    def add(self, text: str) -> None:
+        data = self._partial + text
+        lines = data.splitlines(keepends=True)
+        if not lines:
+            return
+        if lines[-1].endswith(("\n", "\r")):
+            self._partial = ""
+        else:
+            self._partial = lines.pop()
+        for line in lines:
+            self._on_line(line)
+        if len(self._partial) > self._max_chars:
+            self._partial = self._partial[-self._max_chars :]
+
+    def finish(self) -> None:
+        if self._partial:
+            self._on_line(self._partial)
+            self._partial = ""
+
 
 @line_magic("pip")
 def _magic_pip(args: str) -> None:
@@ -405,19 +479,20 @@ def _magic_pip(args: str) -> None:
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
     )
     installed_packages: list[str] = []
-    assert proc.stdout is not None
-    for raw_line in proc.stdout:
-        sys.stdout.write(raw_line)
+
+    def scan_pip_line(raw_line: str) -> None:
         m = re.search(r"Successfully installed\s+(.+)$", raw_line)
         if m:
             for token in m.group(1).split():
                 # Token is name-version; drop the version suffix.
                 pkg = token.rsplit("-", 1)[0]
                 installed_packages.append(pkg.replace("_", "-"))
+
+    scanner = _BoundedLineScanner(_PIP_LINE_SCAN_CHARS, scan_pip_line)
+    _stream_process_output(proc, scanner.add)
+    scanner.finish()
     proc.wait()
     if installed_packages:
         import importlib
@@ -599,12 +674,8 @@ def _run_shell_body(body: str, *, shell_arg: str) -> int:
         [shell_arg, "-c", body],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
     )
-    assert proc.stdout is not None
-    for raw_line in proc.stdout:
-        sys.stdout.write(raw_line)
+    _stream_process_output(proc)
     proc.wait()
     return proc.returncode
 
@@ -640,16 +711,16 @@ class _ShellResult(list):
 
 
 def __omp_shell(cmd: str) -> _ShellResult:
-    proc = subprocess.run(
+    proc = subprocess.Popen(
         cmd,
         shell=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True,
     )
-    if proc.stdout:
-        sys.stdout.write(proc.stdout)
-    lines = [line for line in (proc.stdout or "").splitlines()]
+    capture = _BoundedTextCapture(_SHELL_RESULT_CAPTURE_CHARS)
+    _stream_process_output(proc, capture.add)
+    proc.wait()
+    lines = [line for line in capture.text().splitlines()]
     return _ShellResult(lines, proc.returncode)
 
 
