@@ -307,19 +307,24 @@ mod tests {
 	type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static>;
 
 	/// Suppress the default panic hook for a single `catch_unwind`, so injected
-	/// panic tests don't dump backtraces onto the test output. Restored on
-	/// drop, and idempotent under nested guards. `panic::set_hook` is process-
-	/// global; parallel tests running their own hooks may briefly see the
-	/// noop, which is acceptable for these fast synchronous tests.
+	/// panic tests don't dump backtraces onto the test output.
+	///
+	/// [`std::panic::set_hook`] is process-global, so `SilenceHook` holds
+	/// [`crate::testing::lock_panic_hook`] for the entire take → set → run →
+	/// restore window. Without that lock, two parallel tests could interleave
+	/// their hook swaps and permanently install the noop hook, muting crash
+	/// diagnostics for every later test in the crate.
 	struct SilenceHook {
-		prev: Option<PanicHook>,
+		prev:   Option<PanicHook>,
+		_guard: std::sync::MutexGuard<'static, ()>,
 	}
 
 	impl SilenceHook {
 		fn new() -> Self {
+			let guard = crate::testing::lock_panic_hook();
 			let prev = std::panic::take_hook();
 			std::panic::set_hook(Box::new(|_| {}));
-			Self { prev: Some(prev) }
+			Self { prev: Some(prev), _guard: guard }
 		}
 	}
 

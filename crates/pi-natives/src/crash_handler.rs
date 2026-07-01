@@ -389,6 +389,10 @@ mod tests {
 
 	#[test]
 	fn blocking_task_panic_scope_restores_after_unwind() {
+		// `std::panic::set_hook` is process-global; serialize the swap with
+		// every other hook-mutating test so a parallel take/set cannot pin the
+		// noop hook as the global default (see `crate::testing`).
+		let _hook_guard = crate::testing::lock_panic_hook();
 		let prev = std::panic::take_hook();
 		std::panic::set_hook(Box::new(|_| {}));
 		let unwound = std::panic::catch_unwind(|| blocking_task_panic_scope(|| panic!("boom")));
@@ -397,6 +401,7 @@ mod tests {
 		assert!(unwound.is_err(), "panic propagated to catch_unwind");
 		assert_eq!(panic_disposition(), PanicDisposition::Fatal);
 	}
+
 	#[test]
 	fn alloc_report_contains_size_alignment_and_backtrace() {
 		let layout = Layout::from_size_align(7714, 8).unwrap();
