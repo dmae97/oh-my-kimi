@@ -103,6 +103,44 @@ describe("Python runner shell output streaming", () => {
 		expect(stdout.join("")).toContain("return=0 lines=['first', 'second']");
 	});
 
+	it("caps !cmd output and captured result by line count with a truncation notice", async () => {
+		const child = [
+			"import sys",
+			"sys.stdout.write(('x' + chr(10)) * 3100)",
+			"sys.stdout.flush()",
+		].join(";");
+		const frames = await runCell(
+			[
+				`result = !${pythonPath} -c ${shellQuote(child)}`,
+				"print('captured=' + str(len(result)) + ' return=' + str(result.returncode))",
+			].join("\n"),
+		);
+		const stdout = frames.filter(frame => frame.type === "stdout").map(frame => frame.data).join("");
+
+		expect(stdout).toContain("[output truncated: shell helper exceeded");
+		expect(stdout).toContain("captured=3000 return=0");
+		expect(stdout).not.toContain("captured=3100");
+	});
+
+	it("caps newline-free !cmd output by bytes with a truncation notice", async () => {
+		const child = [
+			"import sys",
+			"sys.stdout.write('z' * (1024 * 1024 + 17))",
+			"sys.stdout.flush()",
+		].join(";");
+		const frames = await runCell(
+			[
+				`result = !${pythonPath} -c ${shellQuote(child)}`,
+				"print('capturedChars=' + str(len(result.n)) + ' return=' + str(result.returncode))",
+			].join("\n"),
+		);
+		const stdout = frames.filter(frame => frame.type === "stdout").map(frame => frame.data).join("");
+
+		expect(stdout).toContain("[output truncated: shell helper exceeded");
+		expect(stdout).toContain("capturedChars=1048576 return=0");
+		expect(stdout).not.toContain("capturedChars=1048593");
+	});
+
 	it("streams newline-free %%bash output without waiting for EOF", async () => {
 		const child = [
 			"import sys,time",

@@ -28,6 +28,7 @@
 
 - Fixed MCP stdio `request()` hanging past its configured timeout when the child subprocess stopped draining stdin. The method awaited `stdin.write()`/`flush()` before returning the deferred, so a full pipe would park the async function above `return promise`, past the timeout timer and abort handler, orphaning the deferred rejection and hanging the caller forever. Write and flush now dispatch synchronously — sync `EPIPE` throws still reject immediately, and async EPIPE rejections route into the same `reject()` — leaving the returned promise free to settle from the response, timer, abort signal, or read-loop transport-close. ([#3945](https://github.com/can1357/oh-my-pi/issues/3945))
 - Fixed Python eval shell helpers buffering child-process output until exit or newline by streaming fixed-size chunks from `!cmd`, `%%bash`, and `%pip`. ([#3950](https://github.com/can1357/oh-my-pi/issues/3950))
+- Fixed Python eval shell helpers buffering child-process output until exit or newline by streaming fixed-size chunks and truncating oversized `!cmd`, `%%bash`, and `%pip` output with a notice. ([#3950](https://github.com/can1357/oh-my-pi/issues/3950))
 
 ## [16.2.10] - 2026-06-30
 
