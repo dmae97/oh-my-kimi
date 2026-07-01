@@ -90,13 +90,18 @@ export async function mapWithConcurrencyLimit<T, R>(
  * immediately — matching `task.maxConcurrency = 0`'s "Unlimited" semantics in the
  * settings UI ([#3305](https://github.com/can1357/oh-my-pi/issues/3305)).
  */
+export function normalizeConcurrencyLimit(max: number): number {
+	const normalizedMax = Number.isFinite(max) ? Math.trunc(max) : 0;
+	return normalizedMax > 0 ? normalizedMax : 0;
+}
+
 export class Semaphore {
 	#max: number;
 	#current = 0;
 	#queue: Array<() => void> = [];
 
 	constructor(max: number) {
-		const normalizedMax = Number.isFinite(max) ? Math.trunc(max) : 0;
+		const normalizedMax = normalizeConcurrencyLimit(max);
 		this.#max = normalizedMax > 0 ? normalizedMax : Number.POSITIVE_INFINITY;
 	}
 
@@ -155,7 +160,7 @@ export class Semaphore {
 	 * never push concurrency past the cap (issue #3464 review feedback).
 	 */
 	resize(max: number): void {
-		const normalizedMax = Number.isFinite(max) ? Math.trunc(max) : 0;
+		const normalizedMax = normalizeConcurrencyLimit(max);
 		this.#max = normalizedMax > 0 ? normalizedMax : Number.POSITIVE_INFINITY;
 		while (this.#current < this.#max) {
 			const next = this.#queue.shift();

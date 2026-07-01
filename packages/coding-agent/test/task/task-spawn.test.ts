@@ -12,7 +12,7 @@
  * test/task/task-schema.test.ts.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
+import { type AsyncJob, AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -312,7 +312,6 @@ describe("task spawn routing", () => {
 
 		// First is still running (and holding the only slot under the new cap),
 		// so Second is parked at the semaphore — queued, not running.
-		await Bun.sleep(20);
 		expect(started).toEqual(["First"]);
 		expect(secondJob.queued).toBe(true);
 
@@ -324,6 +323,59 @@ describe("task spawn routing", () => {
 
 		gates.get("Second")!.resolve();
 		await secondJob.promise;
+	});
+
+	it("applies a lowered maxConcurrency to work already queued in the semaphore", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [taskAgent],
+			projectAgentsDir: null,
+		});
+		const started: string[] = [];
+		const gates = new Map<string, Deferred>();
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			const id = options.id ?? "?";
+			started.push(id);
+			const gate = deferred();
+			gates.set(id, gate);
+			await gate.promise;
+			return makeResult(id);
+		});
+
+		const manager = createManager();
+		const settings = Settings.isolated({ "task.maxConcurrency": 4 });
+		const tool = await TaskTool.create({
+			cwd: "/tmp",
+			hasUI: false,
+			settings,
+			getSessionFile: () => null,
+			getSessionSpawns: () => "*",
+			asyncJobManager: manager,
+		} as unknown as ToolSession);
+
+		const jobs: AsyncJob[] = [];
+		for (const id of ["First", "Second", "Third", "Fourth", "Fifth"]) {
+			const result = await tool.execute(`tc-${id}`, { agent: "task", id, assignment: `Work ${id}.` } as TaskParams);
+			jobs.push(manager.getJob(result.details!.async!.jobId)!);
+		}
+		const fifthJob = jobs[4]!;
+
+		await pollUntil(() => started.length === 4);
+		expect([...started].sort()).toEqual(["First", "Fourth", "Second", "Third"]);
+		expect(fifthJob.queued).toBe(true);
+
+		settings.override("task.maxConcurrency", 1);
+		gates.get("First")!.resolve();
+		await jobs[0]!.promise;
+		await Promise.resolve();
+		expect([...started].sort()).toEqual(["First", "Fourth", "Second", "Third"]);
+		expect(fifthJob.queued).toBe(true);
+
+		for (const id of ["Second", "Third", "Fourth"]) gates.get(id)!.resolve();
+		await pollUntil(() => started.length === 5);
+		expect([...started].sort()).toEqual(["Fifth", "First", "Fourth", "Second", "Third"]);
+
+		gates.get("Fifth")!.resolve();
+		await Promise.all(jobs.map(job => job.promise));
 	});
 
 	it("surfaces task.maxConcurrency in the tool description so the model can self-throttle", async () => {
@@ -339,8 +391,10 @@ describe("task spawn routing", () => {
 		const fanoutTool = await TaskTool.create(createSession({ settings: { "task.maxConcurrency": 4 } }));
 		expect(fanoutTool.description).toContain("At most 4 subagents");
 
-		// `0` = Unlimited in the settings UI; the prompt must NOT advertise a cap.
-		const unboundedTool = await TaskTool.create(createSession({ settings: { "task.maxConcurrency": 0 } }));
-		expect(unboundedTool.description).not.toContain("Concurrency cap");
+		// `0` = Unlimited in the settings UI; fractional values truncate to 0.
+		for (const maxConcurrency of [0, 0.5]) {
+			const unboundedTool = await TaskTool.create(createSession({ settings: { "task.maxConcurrency": maxConcurrency } }));
+			expect(unboundedTool.description).not.toContain("Concurrency cap");
+		}
 	});
 });
