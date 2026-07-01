@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	type GenerateBranchSummaryOptions,
 	generateBranchSummary,
+	prepareBranchEntries,
 	type SessionEntry,
 } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, Model, Usage } from "@oh-my-pi/pi-ai";
@@ -136,5 +137,57 @@ describe("branch summarization", () => {
 
 		expect(capturedPrompt).toContain("BRANCH_ONLY_FACT_4076=enabled");
 		expect(capturedPrompt).not.toContain("NO_MATCH_SENTINEL_4076");
+	});
+
+	test("useless tool results do not consume the token budget", () => {
+		const uselessBlob = "USELESS_".repeat(4000);
+		const entries: SessionEntry[] = [
+			{
+				type: "message",
+				id: "user-1",
+				parentId: null,
+				timestamp: new Date(0).toISOString(),
+				message: { role: "user", content: "OLDER_USEFUL_FACT_4076", timestamp: 0 },
+			},
+			{
+				type: "message",
+				id: "assistant-1",
+				parentId: "user-1",
+				timestamp: new Date(1).toISOString(),
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "call-search", name: "search", arguments: { pattern: "absent" } }],
+					api: "mock",
+					provider: "mock",
+					model: "mock-model",
+					usage: ZERO_USAGE,
+					stopReason: "toolUse",
+					timestamp: 1,
+				},
+			},
+			{
+				type: "message",
+				id: "tool-1",
+				parentId: "assistant-1",
+				timestamp: new Date(2).toISOString(),
+				message: {
+					role: "toolResult",
+					toolCallId: "call-search",
+					toolName: "search",
+					content: [{ type: "text", text: uselessBlob }],
+					isError: false,
+					useless: true,
+					timestamp: 2,
+				},
+			},
+		];
+
+		// Budget tight enough that the useless blob alone would blow it out.
+		const { messages } = prepareBranchEntries(entries, 100);
+
+		const userMessages = messages.filter((m): m is Extract<typeof m, { role: "user" }> => m.role === "user");
+		expect(userMessages).toHaveLength(1);
+		expect(userMessages[0].content).toBe("OLDER_USEFUL_FACT_4076");
+		expect(messages.some(m => m.role === "toolResult")).toBe(false);
 	});
 });
