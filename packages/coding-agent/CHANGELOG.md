@@ -41,6 +41,9 @@
 ### Fixed
 
 - Fixed explicit `provider/model:auto` entries in `modelRoles` collapsing to `inherit` in the model selector and losing their auto state on reload; the `:auto` selector is now preserved as an explicit thinking level end to end ([#4128](https://github.com/can1357/oh-my-pi/issues/4128)).
+### Fixed
+
+- Fixed the `<workstation>` block rendering `Kernel: unknown` on macOS 15+, which caused the model to display the wrong OS glyph, by falling back to `<type> <release>` (e.g. `Darwin 25.5.0`) when `os.version()` returns `"unknown"` or an empty string ([#4141](https://github.com/can1357/oh-my-pi/issues/4141)).
 
 ## [16.2.12] - 2026-07-01
 

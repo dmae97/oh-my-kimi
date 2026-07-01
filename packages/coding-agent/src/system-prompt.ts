@@ -249,6 +249,20 @@ async function getCachedGpu(): Promise<string | undefined> {
 	await logger.time("getCachedGpu:saveGpuCache", saveGpuCache, { gpu });
 	return gpu ?? undefined;
 }
+/**
+ * Kernel identity for the workstation block. Prefers the uname build string
+ * from `os.version()`, but Bun on macOS 15+ (Darwin 24/25) returns the literal
+ * `"unknown"` when `uv_os_uname()`'s `version` field is empty — which surfaces
+ * `Kernel: unknown` in the system prompt and makes the model misidentify the
+ * host as Windows (#4141). Fall back to `<type> <release>` (uname -s + -r) so
+ * macOS is always tagged as `Darwin <release>` and Linux keeps its build info.
+ */
+function getKernelIdentity(): string {
+	const version = os.version()?.trim();
+	if (version && version.toLowerCase() !== "unknown") return version;
+	return `${os.type()} ${os.release()}`.trim();
+}
+
 function getEnvironmentInfo(gpu: string | undefined): Array<{ label: string; value: string }> {
 	let cpuModel: string | undefined;
 	try {
@@ -259,7 +273,7 @@ function getEnvironmentInfo(gpu: string | undefined): Array<{ label: string; val
 	const entries: Array<{ label: string; value: string | undefined }> = [
 		{ label: "OS", value: `${os.platform()} ${os.release()}` },
 		{ label: "Distro", value: os.type() },
-		{ label: "Kernel", value: os.version() },
+		{ label: "Kernel", value: getKernelIdentity() },
 		{ label: "Arch", value: os.arch() },
 		{ label: "CPU", value: cpuModel },
 		{ label: "GPU", value: gpu },
