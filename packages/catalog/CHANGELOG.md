@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed CoreWeave Serverless Inference project-header detection so blank `OpenAI-Project` overrides do not block `COREWEAVE_PROJECT` fallback.
+
 ## [16.2.12] - 2026-07-01
 
 ### Breaking Changes

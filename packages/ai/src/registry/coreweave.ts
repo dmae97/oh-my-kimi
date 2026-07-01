@@ -6,13 +6,13 @@ import type { OAuthLoginCallbacks } from "./oauth/types";
 import type { ProviderDefinition } from "./types";
 
 const PROJECT_SETUP_INSTRUCTIONS =
-	"Create or select a CoreWeave Serverless Inference project, set COREWEAVE_PROJECT=<team>/<project> for the OpenAI-Project header, then copy your API key from account settings";
+	"Create or select a CoreWeave Serverless Inference project, add export COREWEAVE_PROJECT=<team>/<project> to your shell startup file (for example ~/.zshrc, ~/.bashrc, or your shell's profile/rc file) for the OpenAI-Project header, then copy your API key from account settings";
 
 function requireCoreWeaveProjectHeaders(): Record<string, string> {
 	const headers = coreWeaveProjectHeaders($env);
 	if (!headers) {
 		throw new AIError.ConfigurationError(
-			"CoreWeave Serverless Inference requires OpenAI-Project. Set COREWEAVE_PROJECT=<team>/<project> before running /login coreweave.",
+			"CoreWeave Serverless Inference requires OpenAI-Project. Set COREWEAVE_PROJECT=<team>/<project> before running /login coreweave. To persist it, add export COREWEAVE_PROJECT=<team>/<project> to your shell startup file, such as ~/.zshrc, ~/.bashrc, or your shell's profile/rc file.",
 		);
 	}
 	return headers;

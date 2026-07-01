@@ -55,6 +55,9 @@ describe("CoreWeave Serverless Inference login", () => {
 
 		expect(apiKey).toBe("coreweave-test-key");
 		expect(authMessages[0]).toContain("COREWEAVE_PROJECT=<team>/<project>");
+		expect(authMessages[0]).toContain("~/.zshrc");
+		expect(authMessages[0]).toContain("~/.bashrc");
+		expect(authMessages[0]).toContain("your shell's profile/rc file");
 		expect(authMessages[0]).toContain("OpenAI-Project");
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
@@ -71,12 +74,13 @@ describe("CoreWeave Serverless Inference login", () => {
 			});
 		});
 
-		await expect(
-			loginCoreWeave({
-				onPrompt: async () => "coreweave-test-key",
-				fetch: fetchMock,
-			}),
-		).rejects.toThrow("Set COREWEAVE_PROJECT=<team>/<project>");
+		const login = loginCoreWeave({
+			onPrompt: async () => "coreweave-test-key",
+			fetch: fetchMock,
+		});
+
+		await expect(login).rejects.toThrow("Set COREWEAVE_PROJECT=<team>/<project>");
+		await expect(login).rejects.toThrow("your shell's profile/rc file");
 		expect(fetchMock).toHaveBeenCalledTimes(0);
 	});
 
