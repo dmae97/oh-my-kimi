@@ -2265,6 +2265,12 @@ export class AgentSession {
 			// Mirror the SDK's provider-shaping options (streamFn/onPayload/...,
 			// providerSessionState, promptCacheKey, transformProviderContext) so each
 			// advisor's requests cache, route, and obfuscate like the main turn.
+			// `promptCacheKey` preserves an explicitly pinned provider cache key
+			// unchanged so tan/shared-session advisor calls read the exact shard the
+			// parent turn populated, while keeping only `sessionId` advisor-scoped;
+			// sessions without a pinned key fall back to the advisor session id for
+			// stable advisor-local caching (see can1357/oh-my-pi#3639).
+			const advisorPromptCacheKey = this.agent.promptCacheKey ?? advisorSessionId;
 			const advisorAgent = new Agent({
 				initialState: {
 					systemPrompt,
@@ -2274,7 +2280,7 @@ export class AgentSession {
 				},
 				appendOnlyContext,
 				sessionId: advisorSessionId,
-				promptCacheKey: advisorSessionId,
+				promptCacheKey: advisorPromptCacheKey,
 				providerSessionState: this.#providerSessionState,
 				preferWebsockets: this.#preferWebsockets,
 				getApiKey: requestModel => this.#modelRegistry.resolver(requestModel, advisorSessionId),

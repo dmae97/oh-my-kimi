@@ -99,9 +99,12 @@ describe("AgentSession advisor provider-options parity", () => {
 		// Anthropic fast-mode fallbacks consistent across the two agents.
 		expect(advisor.providerSessionState).toBe(session.providerSessionState);
 
-		// Stable cache key on the advisor session id pins consecutive advisor
-		// turns to the same OpenAI Responses cache shard.
+		// Stable advisor-scoped cache key keeps consecutive advisor turns on the
+		// same OpenAI Responses shard. With no parent `providerPromptCacheKey`
+		// the main agent's effective key is just its `sessionId`, so the
+		// advisor's derived key matches its own `${sessionId}-advisor`.
 		expect(advisor.sessionId).toMatch(/-advisor$/);
+		expect(advisor.promptCacheKey).toBe(`${mainAgent.sessionId}-advisor`);
 		expect(advisor.promptCacheKey).toBe(advisor.sessionId);
 	});
 
@@ -159,9 +162,44 @@ describe("AgentSession advisor provider-options parity", () => {
 		expect(opts.onPayload).toBe(onPayload);
 
 		// Cache routing identity threaded through into the actual stream call.
+		// Without a parent `providerPromptCacheKey`, advisor's effective key
+		// collapses to `${main.sessionId}-advisor` which equals its sessionId.
 		expect(opts.sessionId).toBe(advisor.sessionId);
 		expect(opts.promptCacheKey).toBe(advisor.sessionId);
 		expect(opts.providerSessionState).toBe(session.providerSessionState);
 		expect(opts.preferWebsockets).toBe(true);
+	});
+
+	it("reuses the main agent's providerPromptCacheKey unchanged so tan/shared sessions stay on the parent shard", () => {
+		// Regression for codex-connector review on #3640: when the SDK pins
+		// `agent.promptCacheKey` (tan/shared-session callers do this to share
+		// the parent provider cache while keeping a distinct providerSessionId),
+		// the advisor MUST pass that key through unchanged or it cannot read the
+		// exact shard populated by the parent turn.
+		const parentPromptCacheKey = "tan-parent-cache-key";
+		const mainAgent = new Agent({
+			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+			promptCacheKey: parentPromptCacheKey,
+		});
+		session = new AgentSession({
+			agent: mainAgent,
+			sessionManager,
+			settings: settings(),
+			modelRegistry,
+			advisorReadOnlyTools: [],
+		});
+		session.settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+
+		const advisor = session.getAdvisorAgent();
+		if (!advisor) throw new Error("Expected advisor agent to be live");
+
+		// Explicit provider cache keys are shared byte-for-byte with the parent
+		// live turn; only the provider session id stays advisor-scoped.
+		expect(advisor.promptCacheKey).toBe(parentPromptCacheKey);
+		// Session id is still advisor-scoped so credential stickiness and the
+		// advisor's session-keyed telemetry stay distinct from the parent.
+		expect(advisor.sessionId).toMatch(/-advisor$/);
+		expect(advisor.sessionId).not.toBe(advisor.promptCacheKey);
 	});
 });
