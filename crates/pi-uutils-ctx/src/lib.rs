@@ -183,6 +183,22 @@ pub fn stdin_is_search_input() -> bool {
 	})
 }
 
+/// Returns true when the host has asked the active scope to cancel (e.g. on
+/// shell `abort`/`timeout`). uutils utilities running long internal loops —
+/// recursive directory walks in particular — poll this so cancellation is
+/// observed without waiting for stdin or for the whole work item to finish.
+///
+/// Returns false when no scope is installed; the cancel flag itself is the
+/// same one observed by [`CtxStdin::read`].
+#[must_use]
+pub fn is_cancelled() -> bool {
+	CTX.with(|c| {
+		c.borrow()
+			.as_ref()
+			.is_some_and(|ctx| ctx.cancel.load(Ordering::Relaxed))
+	})
+}
+
 macro_rules! ctx_writer {
 	($name:ident, $field:ident, $doc:literal) => {
 		#[doc = $doc]

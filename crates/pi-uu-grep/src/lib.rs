@@ -453,7 +453,13 @@ fn search_dir<W: Write>(
 	let mut any = false;
 	let had_error_state = std::cell::Cell::new(*had_error);
 	let walk = request.for_each_entry_with_heartbeat(
-		|| Ok::<(), io::Error>(()),
+		|| {
+			if pi_uutils_ctx::is_cancelled() {
+				Err(io::Error::from(io::ErrorKind::Interrupted))
+			} else {
+				Ok::<(), io::Error>(())
+			}
+		},
 		|entry: pi_walker::EntryMeta<'_>| {
 			if opts.quiet && any {
 				return Ok(pi_walker::WalkDecision::Stop);
@@ -499,6 +505,13 @@ fn search_dir<W: Write>(
 	*had_error |= had_error_state.get();
 	match walk {
 		Ok(pi_walker::WalkStatus::Complete | pi_walker::WalkStatus::Stopped) => any,
+		Err(pi_walker::WalkError::Interrupted(_)) if pi_uutils_ctx::is_cancelled() => {
+			// Harness cancellation (shell abort/timeout). The shell wrapper
+			// overrides the exit code, so stay silent and let the walk unwind
+			// without injecting a spurious diagnostic on the command's stderr.
+			*had_error = true;
+			any
+		},
 		Err(pi_walker::WalkError::Interrupted(err)) => {
 			*had_error = true;
 			if !opts.no_messages {
@@ -641,12 +654,18 @@ pub fn run(argv: Vec<OsString>) -> i32 {
 	let mut any_match = false;
 	let mut had_error = false;
 
+	let mut processed_operand = false;
 	for f in &files {
 		// -q: once something matched, exit immediately; the status is settled
 		// below. Checked at the top so the stdin `continue` path stops too.
 		if opts.quiet && any_match {
 			break;
 		}
+		if processed_operand && pi_uutils_ctx::is_cancelled() {
+			had_error = true;
+			break;
+		}
+		processed_operand = true;
 		// stdin
 		if f.as_os_str() == OsStr::new("-") {
 			let name: Option<&[u8]> = if show_names {
@@ -669,6 +688,10 @@ pub fn run(argv: Vec<OsString>) -> i32 {
 						let _ = writeln!(pi_uutils_ctx::stderr(), "grep: (standard input): {e}");
 					}
 				},
+			}
+			if pi_uutils_ctx::is_cancelled() {
+				had_error = true;
+				break;
 			}
 			continue;
 		}
@@ -729,6 +752,10 @@ pub fn run(argv: Vec<OsString>) -> i32 {
 					let _ = writeln!(pi_uutils_ctx::stderr(), "grep: {}: {e}", f.to_string_lossy());
 				}
 			},
+		}
+		if pi_uutils_ctx::is_cancelled() {
+			had_error = true;
+			break;
 		}
 	}
 
@@ -865,5 +892,78 @@ mod tests {
 			stdout.contains("grep") && stdout.contains("pi-uu-grep"),
 			"version output should identify the builtin, got: {stdout:?}"
 		);
+	}
+
+	/// Run `grep` with a pre-set cancel flag, mirroring how the shell wrapper
+	/// flips the flag when an abort/timeout fires while the blocking task is
+	/// still walking. Returns `(exit, stdout, stderr)`.
+	fn run_grep_cancelled(args: &[&str], cwd: &Path) -> (i32, String, String) {
+		let out = Arc::new(Mutex::new(Vec::new()));
+		let err = Arc::new(Mutex::new(Vec::new()));
+		let io = ScopeIo {
+			stdin:                 Box::new(io::empty()),
+			stdin_fd:              None,
+			stdin_is_search_input: false,
+			stdout:                Box::new(SharedBuf(Arc::clone(&out))),
+			stderr:                Box::new(SharedBuf(Arc::clone(&err))),
+			cwd:                   cwd.to_path_buf(),
+			env:                   HashMap::new(),
+			cancel:                Arc::new(AtomicBool::new(true)),
+		};
+		let argv: Vec<OsString> = std::iter::once("grep")
+			.chain(args.iter().copied())
+			.map(OsString::from)
+			.collect();
+		let code = scope(io, || run(argv));
+		let stdout = String::from_utf8(out.lock().clone()).expect("utf8 stdout");
+		let stderr = String::from_utf8(err.lock().clone()).expect("utf8 stderr");
+		(code, stdout, stderr)
+	}
+
+	#[test]
+	fn recursive_search_observes_scope_cancellation() {
+		// Regression for #3933: recursive grep used to pass a no-op heartbeat to
+		// pi_walker, so directory walks ignored the uutils cancel flag and the
+		// shell-side abort/timeout waited for the whole tree to be scanned.
+		// The walk must now bail out before scanning any file when the flag is
+		// already set, and it must do so without printing an "interrupted"
+		// diagnostic — the shell wrapper owns the user-visible status.
+		let tree = std::env::temp_dir().join(format!(
+			"pi-uu-grep-cancel-{}-{}",
+			std::process::id(),
+			std::time::SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)
+				.map(|d| d.as_nanos())
+				.unwrap_or(0)
+		));
+		std::fs::create_dir_all(&tree).expect("temp tree should be created");
+		let walk_root = tree.join("walk-root");
+		std::fs::create_dir_all(&walk_root).expect("walk root should be created");
+		std::fs::write(walk_root.join("haystack.txt"), "match-me\n")
+			.expect("walked file should be written");
+		let later_file = tree.join("later.txt");
+		std::fs::write(&later_file, "match-me\n").expect("later file should be written");
+
+		let (code, stdout, stderr) = run_grep_cancelled(
+			&[
+				"-r",
+				"match-me",
+				walk_root.to_str().expect("utf8 path"),
+				later_file.to_str().expect("utf8 path"),
+			],
+			&tree,
+		);
+
+		// Walker must have observed the heartbeat before visiting the file,
+		// and the operand loop must not continue into the later regular file
+		// after cancellation is observed.
+		assert!(stdout.is_empty(), "cancelled walk should not output matches: {stdout:?}");
+		assert!(
+			stderr.is_empty(),
+			"cancelled walk should stay silent — diagnostic is the shell's job: {stderr:?}"
+		);
+		assert_eq!(code, 2, "interrupted directory walk should report had_error (exit 2)");
+
+		let _ = std::fs::remove_dir_all(&tree);
 	}
 }
