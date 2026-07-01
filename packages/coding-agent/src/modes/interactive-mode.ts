@@ -90,7 +90,12 @@ import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compa
 	type: "text",
 };
 import type { AgentRegistry } from "../registry/agent-registry";
-import type { AgentSession, AgentSessionEvent, ResolvedRoleModel } from "../session/agent-session";
+import {
+	SHUTDOWN_CONSOLIDATE_BUDGET_MS,
+	type AgentSession,
+	type AgentSessionEvent,
+	type ResolvedRoleModel,
+} from "../session/agent-session";
 import type { CompactMode } from "../session/compact-modes";
 import { HistoryStorage } from "../session/history-storage";
 import type { SessionContext } from "../session/session-context";
@@ -789,7 +794,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			getDraftText: () => this.editor.getText(),
 			beginDispose: () => this.session.beginDispose(),
 			saveDraft: text => this.sessionManager.saveDraft(text),
-			disposeSession: () => this.session.dispose(),
+			disposeSession: () => this.session.dispose({ mnemopiConsolidateTimeoutMs: SHUTDOWN_CONSOLIDATE_BUDGET_MS }),
 		});
 		this.#cleanupUnsubscribe = postmortem.register("session-teardown", () => this.#signalTeardown!());
 
@@ -3319,7 +3324,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.#signalTeardown) {
 			await this.#signalTeardown();
 		} else {
-			await this.session.dispose();
+			await this.session.dispose({ mnemopiConsolidateTimeoutMs: SHUTDOWN_CONSOLIDATE_BUDGET_MS });
 		}
 
 		// Do not force a final render during teardown: disposed session/UI state can

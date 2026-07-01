@@ -446,17 +446,18 @@ const UNEXPECTED_STOP_TIMEOUT_MS = 4000;
 const EMPTY_STOP_MAX_RETRIES = 3;
 const RETRY_BACKOFF_MAX_DELAY_MS = 8_000;
 /**
- * Cap how long {@link AgentSession.dispose} waits for
- * `MnemopiSessionState.dispose()` to finish its consolidate pass on the
- * user-visible `/quit` / `/exit` shutdown path. Consolidate fires fresh
- * LLM fact extractions, each a 1–3 s round-trip, so an unbounded await
- * stalled `/quit` for many seconds even on minimal-activity sessions
- * (issue #3641). Anything still in flight when the budget elapses is
- * detached to the background; the SQLite handles close once it settles.
- * Per-turn `maybeRetainOnAgentEnd` already retained earlier turns, so
- * the worst case is losing episodic promotion for the LAST few turns.
+ * Budget for callers on the user-visible `/quit` / `/exit` shutdown path that
+ * want to cap how long they wait for `MnemopiSessionState.dispose()` to finish
+ * its consolidate pass. Consolidate fires fresh LLM fact extractions, each a
+ * 1–3 s round-trip, so interactive shutdown passes this budget to keep the
+ * UI responsive. Callers that keep the process/session host alive must omit it
+ * so dispose still awaits the full consolidate-then-close pipeline.
  */
-const SHUTDOWN_CONSOLIDATE_BUDGET_MS = 1_500;
+export const SHUTDOWN_CONSOLIDATE_BUDGET_MS = 1_500;
+
+export interface AgentSessionDisposeOptions {
+	mnemopiConsolidateTimeoutMs?: number;
+}
 
 type CompactionCheckResult = Readonly<{
 	deferredHandoff: boolean;
@@ -5327,12 +5328,12 @@ export class AgentSession {
 	 * double-drain the owned `AsyncJobManager` (issue #4080).
 	 */
 	#disposeCall?: Promise<void>;
-	dispose(): Promise<void> {
-		if (!this.#disposeCall) this.#disposeCall = this.#doDispose();
+	dispose(options: AgentSessionDisposeOptions = {}): Promise<void> {
+		if (!this.#disposeCall) this.#disposeCall = this.#doDispose(options);
 		return this.#disposeCall;
 	}
 
-	async #doDispose(): Promise<void> {
+	async #doDispose(options: AgentSessionDisposeOptions = {}): Promise<void> {
 		this.beginDispose();
 		this.#recordSessionExit("dispose");
 		this.#cancelExitRecorder?.();
@@ -5449,7 +5450,7 @@ export class AgentSession {
 		this.setHindsightSessionState(undefined);
 		hindsightState?.dispose();
 		const mnemopiState = setMnemopiSessionState(this, undefined);
-		await mnemopiState?.dispose({ timeoutMs: SHUTDOWN_CONSOLIDATE_BUDGET_MS });
+		await mnemopiState?.dispose({ timeoutMs: options.mnemopiConsolidateTimeoutMs });
 		// Tear down the embeddings subprocess AFTER mnemopi state.dispose:
 		// consolidate-on-dispose may still call `embed()` to store the final
 		// memories, and that round-trips through the worker we are about to
