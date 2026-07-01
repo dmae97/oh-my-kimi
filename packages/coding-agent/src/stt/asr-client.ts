@@ -132,9 +132,7 @@ export class SttClient {
 	#refed = false;
 	#spawnWorker: () => RefCountedWorkerHandle<SttWorkerInbound, SttWorkerOutbound>;
 
-	constructor(
-		spawnWorker: () => RefCountedWorkerHandle<SttWorkerInbound, SttWorkerOutbound> = spawnSttWorker,
-	) {
+	constructor(spawnWorker: () => RefCountedWorkerHandle<SttWorkerInbound, SttWorkerOutbound> = spawnSttWorker) {
 		this.#spawnWorker = spawnWorker;
 	}
 
