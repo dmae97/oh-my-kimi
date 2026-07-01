@@ -190,7 +190,7 @@ async function writeMessage(
 	}
 	const content = JSON.stringify(message);
 	sink.write(`Content-Length: ${Buffer.byteLength(content, "utf-8")}\r\n\r\n${content}`);
-	const flush = sink.flush();
+	const flush = Promise.resolve(sink.flush());
 	if (!signal) {
 		await flush;
 		return;
@@ -213,7 +213,7 @@ async function writeMessage(
 			signal.removeEventListener("abort", onAbort);
 			resolve();
 		},
-		err => {
+		(err: unknown) => {
 			signal.removeEventListener("abort", onAbort);
 			reject(err);
 		},
