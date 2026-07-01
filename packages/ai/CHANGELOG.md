@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added opt-in support for Anthropic's server-side fallback beta chain (`server-side-fallback-2026-06-01`) on the `anthropic-messages` provider. When `AnthropicOptions.fallbacks` is set, the request carries the `fallbacks` field and the beta header, and the response parser honors mid-stream `fallback` content blocks and `usage.iterations` — promoting the served model on a `fallback_message` iteration and pricing per-attempt at the served model's cache-read rate for the fallback attempt's input tokens (per the [fallback billing cookbook §4](https://platform.claude.com/cookbook/fable-5-fallback-billing-guide)). Non-Anthropic providers and non-opted-in requests are fully inert. `transformMessages` centrally drops persisted `fallback` blocks on cross-provider hops and non-official Anthropic replays so a stored fallback turn never wedges downstream converters. `SimpleStreamOptions.fallbacks` and `AssistantMessage.content` now include the fallback surface. ([#4177](https://github.com/can1357/oh-my-pi/issues/4177))
+
 ### Changed
 
 - Clarified CoreWeave Serverless Inference login instructions to persist `COREWEAVE_PROJECT` in the user's shell startup file.

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Anthropic fallback content block support in agent-loop assistant-message snapshotting so the block round-trips through session persistence and IRC event fanout unchanged. ([#4177](https://github.com/can1357/oh-my-pi/issues/4177))
+
 ### Fixed
 
 - Fixed an issue where skipped tool results in queued messages were incorrectly treated as completed work, preventing necessary retries.
