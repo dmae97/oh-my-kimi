@@ -17,7 +17,17 @@
 
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { ToolExample } from "@oh-my-pi/pi-ai";
-import { type Component, Markdown, type MarkdownTheme, renderInlineMarkdown, TERMINAL, Text } from "@oh-my-pi/pi-tui";
+import {
+	type Component,
+	Ellipsis,
+	Markdown,
+	type MarkdownTheme,
+	renderInlineMarkdown,
+	TERMINAL,
+	Text,
+	truncateToWidth,
+	visibleWidth,
+} from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type as arkType } from "arktype";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
@@ -142,19 +152,145 @@ interface CustomInputContext {
 	markableCount: number;
 }
 
+/** Hard caps for the editor title rendered while the user types an `Other`
+ *  custom answer. {@link HookEditorComponent} renders the title via a single
+ *  `Text` child stacked above the prompt editor with no `maxVisible` windowing,
+ *  so the title MUST fit a normal terminal:
+ *  - {@link MAX_CUSTOM_INPUT_OPTION_ROWS}: at most this many option-row entries
+ *    survive {@link pickCustomInputOptionWindow}, regardless of total options.
+ *  - {@link MAX_CUSTOM_INPUT_TITLE_ROWS}: hard cap on rendered title rows after
+ *    every line is pre-truncated to one row at the live terminal width. Sized
+ *    so a 24-row terminal still has space for the input row, hint, and chrome.
+ */
+const MAX_CUSTOM_INPUT_OPTION_ROWS = 8;
+const MAX_CUSTOM_INPUT_TITLE_ROWS = 16;
+const MIN_CUSTOM_INPUT_CONTENT_WIDTH = 20;
+/** Subtracted from the terminal width to leave room for the surrounding
+ *  `Text(... padX=1)` padding + DynamicBorder vertical chrome. */
+const CUSTOM_INPUT_CHROME_COLUMNS = 4;
+const CUSTOM_INPUT_DESCRIPTION_INDENT = "    ";
+
+function customInputContentWidth(): number {
+	const cols = process.stdout.columns ?? 80;
+	return Math.max(MIN_CUSTOM_INPUT_CONTENT_WIDTH, cols - CUSTOM_INPUT_CHROME_COLUMNS);
+}
+
+function clampLineToWidth(line: string, width: number): string {
+	if (visibleWidth(line) <= width) return line;
+	return truncateToWidth(line, width, Ellipsis.Unicode);
+}
+
+function flattenDescription(text: string): string {
+	return text.replace(/\s+/g, " ").trim();
+}
+
 function getSelectOptionDescription(option: ExtensionUISelectItem): string | undefined {
 	return typeof option === "string" ? undefined : option.description;
 }
 
-function formatCustomInputTitle(
+interface CustomInputOptionGap {
+	total: number;
+	checked: number;
+}
+
+interface CustomInputOptionWindow {
+	indices: number[];
+	gapBefore: Map<number, CustomInputOptionGap>;
+}
+
+/** Window the option list so the title stays bounded. Required rows are the
+ *  selected `Other` row and the first option as an anchor; checked rows fill
+ *  the remaining budget before unselected leading rows. Hidden checked options
+ *  are summarized in gap markers so the rendered option-row count still never
+ *  exceeds {@link MAX_CUSTOM_INPUT_OPTION_ROWS}. */
+function pickCustomInputOptionWindow(
+	total: number,
+	selectedIndex: number,
+	checked: ReadonlySet<number>,
+): CustomInputOptionWindow {
+	if (total === 0) return { indices: [], gapBefore: new Map() };
+	if (total <= MAX_CUSTOM_INPUT_OPTION_ROWS) {
+		return {
+			indices: Array.from({ length: total }, (_, i) => i),
+			gapBefore: new Map(),
+		};
+	}
+	const keep = new Set<number>();
+	const addIfRoom = (index: number) => {
+		if (index >= 0 && index < total && keep.size < MAX_CUSTOM_INPUT_OPTION_ROWS) {
+			keep.add(index);
+		}
+	};
+	addIfRoom(selectedIndex);
+	addIfRoom(0);
+	for (const i of [...checked].sort((a, b) => a - b)) {
+		addIfRoom(i);
+	}
+	for (let i = 0; i < total && keep.size < MAX_CUSTOM_INPUT_OPTION_ROWS; i++) {
+		addIfRoom(i);
+	}
+	const indices = [...keep].sort((a, b) => a - b);
+	const gapBefore = new Map<number, CustomInputOptionGap>();
+	const countCheckedBetween = (startInclusive: number, endExclusive: number): number => {
+		let count = 0;
+		for (const i of checked) {
+			if (i >= startInclusive && i < endExclusive) count++;
+		}
+		return count;
+	};
+	let prev = -1;
+	for (const idx of indices) {
+		if (idx > prev + 1) {
+			gapBefore.set(idx, {
+				total: idx - prev - 1,
+				checked: countCheckedBetween(prev + 1, idx),
+			});
+		}
+		prev = idx;
+	}
+	if (prev < total - 1) {
+		gapBefore.set(total, {
+			total: total - 1 - prev,
+			checked: countCheckedBetween(prev + 1, total),
+		});
+	}
+	return { indices, gapBefore };
+}
+
+interface CustomInputRow {
+	text: string;
+	/** Lower priority drops first when over budget; negative values are pinned
+	 *  and never dropped (question, blank, option labels, gap markers, prompt). */
+	priority: number;
+}
+
+function buildCustomInputRows(
 	question: string,
 	options: ExtensionUISelectItem[],
 	context: CustomInputContext,
-): string {
+	contentWidth: number,
+): CustomInputRow[] {
 	const selectedIndex = options.findIndex(option => getSelectOptionLabel(option) === OTHER_OPTION);
-	const lines = [question, ""];
 	const checked = new Set(context.checkedIndices ?? []);
-	for (let index = 0; index < options.length; index++) {
+	const window = pickCustomInputOptionWindow(options.length, selectedIndex, checked);
+	const rows: CustomInputRow[] = [];
+	rows.push({ text: clampLineToWidth(question, contentWidth), priority: -1 });
+	rows.push({ text: "", priority: -1 });
+
+	const emitGap = (gap: CustomInputOptionGap) => {
+		const checkedSuffix = gap.checked > 0 ? `, ${gap.checked} checked` : "";
+		rows.push({
+			text: clampLineToWidth(
+				`    … ${gap.total} more option${gap.total === 1 ? "" : "s"}${checkedSuffix} …`,
+				contentWidth,
+			),
+			priority: -1,
+		});
+	};
+
+	for (const index of window.indices) {
+		const gap = window.gapBefore.get(index);
+		if (gap !== undefined) emitGap(gap);
 		const option = options[index]!;
 		const label = getSelectOptionLabel(option);
 		const isSelected = index === selectedIndex;
@@ -167,12 +303,54 @@ function formatCustomInputTitle(
 					: isSelected
 						? `${theme.nav.cursor} `
 						: "  ";
-		lines.push(prefix + label);
+		rows.push({ text: clampLineToWidth(prefix + label, contentWidth), priority: -1 });
 		const description = getSelectOptionDescription(option);
-		if (description) lines.push(`    ${description}`);
+		if (description) {
+			const flat = flattenDescription(description);
+			if (flat) {
+				rows.push({
+					text: clampLineToWidth(`${CUSTOM_INPUT_DESCRIPTION_INDENT}${flat}`, contentWidth),
+					// Selected (Other) carries no description; favor checked rows
+					// when budget pressure forces description rows to be dropped.
+					priority: isSelected ? 2 : checked.has(index) ? 1 : 0,
+				});
+			}
+		}
 	}
-	lines.push("", "Enter your response:");
-	return lines.join("\n");
+
+	const trailingGap = window.gapBefore.get(options.length);
+	if (trailingGap !== undefined) emitGap(trailingGap);
+	rows.push({ text: "", priority: -1 });
+	rows.push({ text: "Enter your response:", priority: -1 });
+	return rows;
+}
+
+function applyCustomInputRowBudget(rows: CustomInputRow[], budget: number): CustomInputRow[] {
+	if (rows.length <= budget) return rows;
+	// Drop droppable rows lowest priority first; on ties, drop later rows first
+	// so the user still sees the earliest options' descriptions.
+	const droppable = rows
+		.map((row, index) => ({ row, index }))
+		.filter(entry => entry.row.priority >= 0)
+		.sort((a, b) => a.row.priority - b.row.priority || b.index - a.index);
+	const removed = new Set<number>();
+	for (const { index } of droppable) {
+		if (rows.length - removed.size <= budget) break;
+		removed.add(index);
+	}
+	return rows.filter((_, i) => !removed.has(i));
+}
+
+function formatCustomInputTitle(
+	question: string,
+	options: ExtensionUISelectItem[],
+	context: CustomInputContext,
+): string {
+	const contentWidth = customInputContentWidth();
+	const rows = buildCustomInputRows(question, options, context, contentWidth);
+	return applyCustomInputRowBudget(rows, MAX_CUSTOM_INPUT_TITLE_ROWS)
+		.map(row => row.text)
+		.join("\n");
 }
 
 // =============================================================================
