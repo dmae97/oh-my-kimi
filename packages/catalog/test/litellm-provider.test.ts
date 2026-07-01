@@ -367,6 +367,11 @@ describe("LiteLLM provider discovery", () => {
 								tool_call: true,
 								limit: { context: 64_000, output: 8_000 },
 							},
+							"minimax-m3": {
+								name: "MiniMax M3 (3x usage)",
+								tool_call: true,
+								limit: { context: 262_144, output: 8_192 },
+							},
 						},
 					},
 				});
@@ -381,7 +386,7 @@ describe("LiteLLM provider discovery", () => {
 				return new Response("{}", { status: 404 });
 			}
 			if (url === "http://primary:4000/v1/models") {
-				return Response.json({ data: [{ id: "deepseek-v4-flash" }] });
+				return Response.json({ data: [{ id: "deepseek-v4-flash" }, { id: "minimax-m3" }] });
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		}) as FetchImpl;
@@ -400,6 +405,12 @@ describe("LiteLLM provider discovery", () => {
 			name: "DeepSeek V4 Flash",
 			contextWindow: 64_000,
 			maxTokens: 8_000,
+		});
+		expect(models?.find(model => model.id === "minimax-m3")).toMatchObject({
+			id: "minimax-m3",
+			name: "MiniMax M3",
+			contextWindow: 262_144,
+			maxTokens: 8_192,
 		});
 	});
 });
