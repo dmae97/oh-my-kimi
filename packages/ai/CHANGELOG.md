@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed cross-turn tool-call loops going undetected by adding a guard for consecutive identical tool calls. ([#3971](https://github.com/can1357/oh-my-pi/issues/3971))
+
 ## [16.2.11] - 2026-07-01
 
 ### Fixed

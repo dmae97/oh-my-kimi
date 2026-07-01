@@ -115,6 +115,7 @@ import {
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { GeminiHeaderRunDetector, isGeminiThinkingModel } from "@oh-my-pi/pi-ai/utils/thinking-loop";
+import { type RepeatedToolCallDetection, ToolCallLoopGuard } from "@oh-my-pi/pi-ai/utils/tool-call-loop-guard";
 import { isFireworksFastModelId, toFireworksBaseModelId } from "@oh-my-pi/pi-catalog/fireworks-model-id";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
@@ -251,6 +252,7 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 };
 import sideChannelNoToolsReminder from "../prompts/system/side-channel-no-tools.md" with { type: "text" };
 import thinkingLoopRedirectTemplate from "../prompts/system/thinking-loop-redirect.md" with { type: "text" };
+import toolCallLoopRedirectTemplate from "../prompts/system/tool-call-loop-redirect.md" with { type: "text" };
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
 import ttsrToolReminderTemplate from "../prompts/system/ttsr-tool-reminder.md" with { type: "text" };
 import unexpectedStopRetryTemplate from "../prompts/system/unexpected-stop-retry.md" with { type: "text" };
@@ -350,6 +352,7 @@ const GEMINI_TOOL_REMINDER_TYPE = "gemini-tool-call-reminder";
 /** `customType` for the hidden redirect notice injected into a turn retried after a
  *  thinking/response loop. Steers the model off the repeated content; never displayed. */
 const THINKING_LOOP_REDIRECT_TYPE = "thinking-loop-redirect";
+const TOOL_CALL_LOOP_REDIRECT_TYPE = "tool-call-loop-redirect";
 
 // A side-channel assistant response is signed for the hidden prompt/history that
 // produced it. If we persist that response under a different user turn, native
@@ -1554,6 +1557,8 @@ export class AgentSession {
 	 *  `#geminiHeaderGuardActive`); undefined for non-Gemini models or when the
 	 *  guard is off. Fed thinking deltas in the assistant-message interceptor. */
 	#geminiHeaderDetector: GeminiHeaderRunDetector | undefined;
+	#toolCallLoopGuard: ToolCallLoopGuard | undefined;
+	#toolCallLoopGuardSettingsKey: string | undefined;
 	#promptInFlightCount = 0;
 	#abortInProgress = false;
 	// Wire-level agent_end emission deferred until #promptInFlightCount drops to 0.
@@ -1847,6 +1852,13 @@ export class AgentSession {
 			if (rewindReport) {
 				this.#pendingRewindReport = undefined;
 				await this.#applyRewind(rewindReport, messages);
+			}
+			if (context?.message.role === "assistant") {
+				const detection = this.#activeToolCallLoopGuard()?.recordTurn({
+					message: context.message,
+					toolResults: context.toolResults,
+				});
+				if (detection) this.#maybeInjectToolCallLoopRedirect(messages, detection);
 			}
 			this.#advisorPrimaryTurnsCompleted++;
 			if (this.#advisors.length > 0) {
@@ -4297,6 +4309,58 @@ export class AgentSession {
 		this.#streamingEditCheckedLineCounts.clear();
 		this.#streamingEditPrecheckedToolCallIds.clear();
 		this.#streamingEditFileCache.clear();
+	}
+
+	#activeToolCallLoopGuard(): ToolCallLoopGuard | undefined {
+		if (this.settings.get("model.toolCallLoopGuard.enabled") !== true) {
+			this.#toolCallLoopGuard = undefined;
+			this.#toolCallLoopGuardSettingsKey = undefined;
+			return undefined;
+		}
+
+		const threshold = this.settings.get("model.toolCallLoopGuard.threshold");
+		const exemptTools = this.settings
+			.get("model.toolCallLoopGuard.exemptTools")
+			.filter((tool): tool is string => typeof tool === "string" && tool.length > 0);
+		const settingsKey = `${threshold}:${JSON.stringify(exemptTools)}`;
+		if (!this.#toolCallLoopGuard || this.#toolCallLoopGuardSettingsKey !== settingsKey) {
+			this.#toolCallLoopGuard = new ToolCallLoopGuard({ threshold, exemptTools });
+			this.#toolCallLoopGuardSettingsKey = settingsKey;
+		}
+		return this.#toolCallLoopGuard;
+	}
+
+	#maybeInjectToolCallLoopRedirect(messages: AgentMessage[], detection: RepeatedToolCallDetection): void {
+		const content = prompt.render(toolCallLoopRedirectTemplate, {
+			tool_name: detection.toolName,
+			count: detection.count,
+			arguments_summary: detection.argumentsSummary,
+			result_summary: detection.resultSummary || "(no text result)",
+		});
+		const details = {
+			toolName: detection.toolName,
+			count: detection.count,
+			argumentsSummary: detection.argumentsSummary,
+			resultSummary: detection.resultSummary,
+		};
+		logger.warn("cross-turn tool-call loop detected", {
+			toolName: detection.toolName,
+			count: detection.count,
+		});
+		const redirectMessage: CustomMessage = {
+			role: "custom",
+			customType: TOOL_CALL_LOOP_REDIRECT_TYPE,
+			content,
+			display: false,
+			details,
+			attribution: "agent",
+			timestamp: Date.now(),
+		};
+		messages.push(redirectMessage);
+		if (this.agent.state.messages !== messages) {
+			this.agent.appendMessage(redirectMessage);
+		}
+		this.sessionManager.appendCustomMessageEntry(TOOL_CALL_LOOP_REDIRECT_TYPE, content, false, details, "agent");
 	}
 
 	/**
