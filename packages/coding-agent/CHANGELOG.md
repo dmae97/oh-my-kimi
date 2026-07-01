@@ -12,6 +12,9 @@
 - Fixed high memory usage in multi-target ast_grep searches by only retaining the final page window while preserving exact match and file counts.
 - Fixed async job manager disposal and task cancellation handling to properly release session semaphores when aborted.
 - Updated and expanded omp:// documentation coverage for managed memory, skill tools, image/speech generation, and package CLIs.
+### Fixed
+
+- Fixed Python eval shell helpers buffering child-process output until exit or newline by streaming fixed-size chunks from `!cmd`, `%%bash`, and `%pip`. ([#3950](https://github.com/can1357/oh-my-pi/issues/3950))
 
 ## [16.2.10] - 2026-06-30
 
