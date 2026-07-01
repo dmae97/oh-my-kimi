@@ -47,6 +47,17 @@ function stalledBody(bytes: Uint8Array[] = []): ReadableStream<Uint8Array> {
 	});
 }
 
+function delayedBody(chunks: Array<{ atMs: number; bytes: Uint8Array }>): ReadableStream<Uint8Array> {
+	return new ReadableStream<Uint8Array>({
+		start(controller) {
+			for (const chunk of chunks) {
+				setTimeout(() => controller.enqueue(chunk.bytes), chunk.atMs);
+			}
+			setTimeout(() => controller.close(), Math.max(...chunks.map(chunk => chunk.atMs)) + 1);
+		},
+	});
+}
+
 function fakeResponse(events: AssistantMessageEvent[], init: ResponseInit = {}): Response {
 	return new Response(fakeBody(sseBytes(events)), {
 		status: 200,
@@ -319,6 +330,33 @@ describe("streamPiNative event flow", () => {
 
 		await expect(stream.result()).rejects.toThrow(/next event/);
 	});
+
+	it("does not time out a healthy pi-native stream that keeps making semantic progress", async () => {
+		const final = baseAssistant({ content: [{ type: "text", text: "hello world" }] });
+		const chunks = [
+			{ atMs: 0, bytes: sseEventBytes({ type: "start", partial: baseAssistant() }) },
+			{ atMs: 15, bytes: sseEventBytes({ type: "text_delta", contentIndex: 0, delta: "hello", partial: final }) },
+			{ atMs: 35, bytes: sseEventBytes({ type: "text_delta", contentIndex: 0, delta: " world", partial: final }) },
+			{ atMs: 55, bytes: sseEventBytes({ type: "done", reason: "stop", message: final }) },
+		];
+		const fetchImpl: FetchImpl = (async () =>
+			new Response(delayedBody(chunks), {
+				status: 200,
+				headers: { "Content-Type": "text/event-stream" },
+			})) as FetchImpl;
+
+		const stream = streamPiNative(fakeModel(), baseContext, {
+			apiKey: "k",
+			fetch: fetchImpl,
+			streamFirstEventTimeoutMs: 40,
+			streamIdleTimeoutMs: 30,
+		});
+
+		const result = await stream.result();
+		expect(result.stopReason).toBe("stop");
+		expect(result.content).toEqual([{ type: "text", text: "hello world" }]);
+	});
+
 	it("synthesizes a terminal `done` when the SSE stream closes silently", async () => {
 		// Models the gateway dropping mid-stream — without this synthetic terminator,
 		// `.result()` would hang forever.
