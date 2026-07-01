@@ -101,7 +101,12 @@ function migrateCacheSchema(db: Database): void {
 	} finally {
 		stmt.finalize();
 	}
-	db.run("UPDATE model_cache SET version = ? WHERE version = 2", [CACHE_SCHEMA_VERSION]);
+	// Delete rows written under any older schema so they cannot be reused. The
+	// legacy `UPDATE ... WHERE version = 2` migration silently promoted the very
+	// first cache version to whatever the current one is, defeating every
+	// subsequent invalidation (see #4146: pre-V2 Codex rows kept the legacy
+	// compaction path even after CACHE_SCHEMA_VERSION was bumped).
+	db.run("DELETE FROM model_cache WHERE version <> ?", [CACHE_SCHEMA_VERSION]);
 }
 
 export function readModelCache<TApi extends Api>(

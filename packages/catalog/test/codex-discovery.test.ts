@@ -111,4 +111,59 @@ describe("Codex model discovery", () => {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
 	});
+
+	it("does not silently promote legacy v2 Codex cache rows to the current schema", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-codex-v2-cache-"));
+		const dbPath = path.join(tempDir, "models.db");
+		try {
+			// Seed a v2 row directly, mirroring the shape written by very old
+			// installs before schema versioning stabilized. The migration must NOT
+			// resurrect it as the current version — that would keep the pre-V2
+			// compaction metadata alive across cache-schema bumps.
+			const seed = new Database(dbPath, { create: true });
+			try {
+				seed.run(`
+					CREATE TABLE model_cache (
+						provider_id TEXT PRIMARY KEY,
+						version INTEGER NOT NULL,
+						updated_at INTEGER NOT NULL,
+						authoritative INTEGER NOT NULL DEFAULT 0,
+						static_fingerprint TEXT NOT NULL DEFAULT '',
+						models TEXT NOT NULL
+					)
+				`);
+				seed.run(
+					"INSERT INTO model_cache (provider_id, version, updated_at, authoritative, static_fingerprint, models) VALUES (?, 2, ?, 1, '', '[]')",
+					["openai-codex", Date.now()],
+				);
+			} finally {
+				seed.close();
+			}
+
+			let fetched = false;
+			await resolveProviderModels<"openai-codex-responses">({
+				providerId: "openai-codex",
+				staticModels: [],
+				dynamicModelsAuthoritative: true,
+				cacheDbPath: dbPath,
+				fetchDynamicModels: async () => {
+					fetched = true;
+					return [];
+				},
+			});
+			expect(fetched).toBe(true);
+
+			const inspect = new Database(dbPath, { readonly: true });
+			try {
+				const row = inspect
+					.query<{ version: number }, [string]>("SELECT version FROM model_cache WHERE provider_id = ?")
+					.get("openai-codex");
+				expect(row?.version).not.toBe(2);
+			} finally {
+				inspect.close();
+			}
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
 });
