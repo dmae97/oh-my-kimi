@@ -963,8 +963,8 @@ async function realpathOrSelfUncached(p: string): Promise<string> {
  * wherever it physically lives (a `../src` sibling, a symlinked sub-tree, …).
  * This mirrors the module set the old temp-dir mirror tracked, minus the copy.
  */
-async function collectExtensionModules(entryRealPath: string): Promise<Set<string>> {
-	const modules = new Set<string>();
+async function collectExtensionModules(entryRealPath: string): Promise<Map<string, string>> {
+	const modules = new Map<string, string>();
 	const queue = [entryRealPath];
 	while (queue.length > 0) {
 		const file = queue.pop();
@@ -977,7 +977,7 @@ async function collectExtensionModules(entryRealPath: string): Promise<Set<strin
 		} catch {
 			continue;
 		}
-		modules.add(file);
+		modules.set(file, source);
 		const dir = path.dirname(file);
 		for (const match of source.matchAll(EXTENSION_GRAPH_SPECIFIER_REGEX)) {
 			const specifier = match[1];
@@ -1013,13 +1013,21 @@ async function ensureExtensionGraphHook(entryRealPath: string): Promise<void> {
 	hookedExtensionEntries.add(entryRealPath);
 
 	const modules = await collectExtensionModules(entryRealPath);
-	const alternation = [...modules].map(escapeRegExp).join("|");
+	const alternation = [...modules.keys()].map(escapeRegExp).join("|");
 	const filter = new RegExp(`^(?:${alternation})$`);
 	Bun.plugin({
 		name: `omp:legacy-pi-ext:${Bun.hash(entryRealPath).toString(36)}`,
 		setup(build) {
 			build.onLoad({ filter, namespace: "file" }, async args => {
-				const raw = await Bun.file(args.path).text();
+				const cached = modules.get(args.path);
+				let raw: string;
+				if (cached !== undefined) {
+					// consume-once: preserves ?mtime edit-pickup for the re-imported entry
+					modules.delete(args.path);
+					raw = cached;
+				} else {
+					raw = await Bun.file(args.path).text();
+				}
 				return { contents: await rewriteLegacyExtensionSource(raw, args.path), loader: getLoader(args.path) };
 			});
 		},
