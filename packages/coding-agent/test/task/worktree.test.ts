@@ -14,8 +14,8 @@ import {
 	mergeTaskBranches,
 	parseIsolationMode,
 } from "@oh-my-pi/pi-coding-agent/task/worktree";
-import * as jj from "@oh-my-pi/pi-coding-agent/utils/jj";
 import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
+import * as jj from "@oh-my-pi/pi-coding-agent/utils/jj";
 import * as natives from "@oh-my-pi/pi-natives";
 import { removeWithRetries, setWorktreesDir } from "@oh-my-pi/pi-utils";
 
