@@ -11,10 +11,10 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
  * silently discards unsigned thought content (a replayed `thought:true` part is
  * neither recalled nor influences generation). `transformMessages` therefore
  * demotes the reasoning to a `text` block so it survives as conversation
- * context, wrapping it in the TARGET model's own canonical thinking-block
- * dialect (e.g. a ```thinking fence for Gemini) so it reads as reasoning in
- * that model's idiom instead of bare prose the model might mimic.
- *
+ * context, usually wrapping it in the TARGET model's own canonical
+ * thinking-block dialect (e.g. a ```thinking fence for Gemini). Claude Fable is
+ * the exception: it receives markdown-italic assistant prose so replayed
+ * reasoning does not look like an extraction request it should continue.
  * Same-model continuations keep the native `thinking` block untouched.
  */
 const REASONING = "The user wants the Paris weather; I will call get_weather with city=Paris.";
@@ -59,6 +59,20 @@ function anthropicThinkingTurn(): AssistantMessage {
 		},
 		stopReason: "stop",
 		timestamp: 0,
+	};
+}
+
+/** A prior assistant turn authored by a Gemini model: foreign thinking + a text reply. */
+function geminiThinkingTurn(): AssistantMessage {
+	return {
+		...anthropicThinkingTurn(),
+		api: "google-generative-ai",
+		provider: "google",
+		model: "gemini-3-pro-preview",
+		content: [
+			{ type: "thinking", thinking: REASONING, thinkingSignature: "google-sig" },
+			{ type: "text", text: "Checking the forecast." },
+		],
 	};
 }
 
@@ -112,6 +126,51 @@ describe("transformMessages cross-provider thinking demotion → canonical diale
 		// Reasoning is still preserved inside the neutral block.
 		expect(text).toContain("<think>");
 		expect(text).toContain(REASONING);
+	});
+
+	it("renders demoted foreign reasoning for Claude Fable as markdown italic assistant text", () => {
+		const fable = makeModel("anthropic-messages", "anthropic", "claude-fable-5");
+		const assistant = transformedAssistant([user("weather in Paris?"), geminiThinkingTurn()], fable);
+
+		expect(assistant.content.some(b => b.type === "thinking")).toBe(false);
+
+		const first = assistant.content[0];
+		expect(first?.type).toBe("text");
+		const text = first && first.type === "text" ? first.text : "";
+		expect(text).toBe(`_Hmm. ${REASONING}_\n`);
+		expect(text).not.toContain("<thinking>");
+		expect(text).not.toContain("</thinking>");
+		expect(text).not.toContain("<think>");
+		expect(text).not.toContain("</think>");
+
+		const reply = assistant.content[1];
+		expect(reply?.type).toBe("text");
+		expect(reply && reply.type === "text" ? reply.text : "").toBe("Checking the forecast.");
+	});
+
+	it("keeps canonical Anthropic thinking tags for non-Fable Anthropic targets", () => {
+		const targets = [
+			{ name: "Claude Opus", id: "claude-opus-4-8" },
+			{ name: "Claude Mythos", id: "claude-mythos-5" },
+		] as const;
+
+		for (const target of targets) {
+			const model = makeModel("anthropic-messages", "anthropic", target.id);
+			const assistant = transformedAssistant(
+				[user(`weather in Paris for ${target.name}?`), geminiThinkingTurn()],
+				model,
+			);
+
+			expect(assistant.content.some(b => b.type === "thinking")).toBe(false);
+
+			const first = assistant.content[0];
+			expect(first?.type).toBe("text");
+			const text = first && first.type === "text" ? first.text : "";
+			expect(text).toBe(`${getDialectDefinition("anthropic").renderThinking(REASONING)}\n`);
+			expect(text).toContain("<thinking>");
+			expect(text).toContain("</thinking>");
+			expect(text).not.toContain("_Hmm.");
+		}
 	});
 
 	it("keeps the native thinking block for a same-provider/same-model continuation", () => {

@@ -265,6 +265,50 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 		expect(priorBlocks.find(b => b.type === "redacted_thinking")).toBeUndefined();
 	});
 
+	it("demotes invalid official Anthropic prior signatures to Fable markdown prose after a model switch", () => {
+		// official Anthropic → official Fable, with the signed turn no longer
+		// latest. The source signature is bound to the issuing Anthropic model,
+		// so replaying it after the switch must not emit native thinking or
+		// Anthropic/Kimi-style thinking tags that Fable treats as visible text.
+		const target = makeAnthropicModel({
+			provider: "anthropic",
+			id: "claude-fable-5",
+			name: "Claude Fable 5",
+			baseUrl: "https://api.anthropic.com",
+		});
+		const reasoning = "Need to preserve the plan while switching models.";
+		const messages: Message[] = [
+			makeUser("Read the project notes"),
+			makeAssistant(
+				[
+					{ type: "thinking", thinking: reasoning, thinkingSignature: "sig_sonnet" },
+					{ type: "toolCall", id: "toolu_prior", name: "read", arguments: { path: "NOTES.md" } },
+				],
+				{ provider: "anthropic", model: "claude-sonnet-4-6" },
+			),
+			toolResult("toolu_prior", "notes body"),
+			makeAssistant([{ type: "text", text: "I found the relevant notes." }], {
+				provider: "anthropic",
+				model: "claude-fable-5",
+				stopReason: "stop",
+			}),
+			makeUser("Continue from those notes."),
+		];
+
+		const params = convertAnthropicMessages(messages, target, false);
+		const assistants = params.filter(p => p.role === "assistant");
+		expect(assistants).toHaveLength(2);
+		const priorBlocks = assistants[0].content as WireBlock[];
+		const text = priorBlocks.find(b => b.type === "text") as WireTextBlock | undefined;
+		expect(text?.text).toBe(renderDemotedThinking("claude-fable-5", reasoning));
+		expect(text?.text).toBe(`_Hmm. ${reasoning}_\n`);
+		expect(text?.text).not.toContain("<thinking>");
+		expect(text?.text).not.toContain("</thinking>");
+		expect(text?.text).not.toContain("<think>");
+		expect(text?.text).not.toContain("</think>");
+		expect(priorBlocks.find(b => b.type === "thinking")).toBeUndefined();
+	});
+
 	it("strips official Anthropic source signatures on cross-model replay to a 3p target", () => {
 		// official Anthropic → 3p. Anthropic's signature is bound to the
 		// issuing model+session, so the 3p target cannot reverify or
