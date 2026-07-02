@@ -93,8 +93,10 @@ function makeRenderCtx(transcript: SessionContext): { ctx: InteractiveModeContex
 		},
 		addMessageToChat: (message: AgentMessage, options?: { populateHistory?: boolean }) =>
 			helpers.addMessageToChat(message, options),
-		renderSessionContext: (context: SessionContext, options?: { updateFooter?: boolean; populateHistory?: boolean }) =>
-			helpers.renderSessionContext(context, options),
+		renderSessionContext: (
+			context: SessionContext,
+			options?: { updateFooter?: boolean; populateHistory?: boolean },
+		) => helpers.renderSessionContext(context, options),
 		showStatus: vi.fn(),
 	} as unknown as InteractiveModeContext;
 	helpers = new UiHelpers(ctx);
@@ -112,7 +114,12 @@ function cursorTurn(): AgentMessage[] {
 		content: [
 			{ type: "text", text: "Reading and listing:" },
 			{ type: "toolCall", id: "tc-read", name: "read", arguments: { path: "src/foo.ts" } },
-			{ type: "toolCall", id: "tc-bash", name: "bash", arguments: { command: "ls -1", cwd: undefined, timeout: undefined } },
+			{
+				type: "toolCall",
+				id: "tc-bash",
+				name: "bash",
+				arguments: { command: "ls -1", cwd: undefined, timeout: undefined },
+			},
 		],
 		api: "cursor-agent",
 		provider: "cursor",
