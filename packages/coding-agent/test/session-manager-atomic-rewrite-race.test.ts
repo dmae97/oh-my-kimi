@@ -69,6 +69,73 @@ class DetachingRewriteStorage extends MemorySessionStorage {
 	}
 }
 
+class CloseGatedRewriteStorage extends MemorySessionStorage {
+	readonly closeStarted = Promise.withResolvers<void>();
+	readonly allowClose = Promise.withResolvers<void>();
+	readonly writeStarted = Promise.withResolvers<void>();
+	readonly allowWrite = Promise.withResolvers<void>();
+	readonly detachedLines: string[] = [];
+	writerOpens = 0;
+	guardRejections = 0;
+	readonly #detachables = new Set<DetachableWriter>();
+
+	override openWriter(
+		path: string,
+		options?: { flags?: "a" | "w"; onError?: (err: Error) => void },
+	): SessionStorageWriter {
+		this.writerOpens++;
+		const inner = super.openWriter(path, options);
+		const closeStarted = this.closeStarted;
+		const allowClose = this.allowClose;
+		const detachedLines = this.detachedLines;
+		const detachables = this.#detachables;
+		let detached = false;
+		const writer: DetachableWriter = {
+			async append(line: string): Promise<void> {
+				if (detached) {
+					detachedLines.push(line);
+					return;
+				}
+				await inner.append(line);
+			},
+			async flush(): Promise<void> {
+				await inner.flush();
+			},
+			isOpen(): boolean {
+				return inner.isOpen();
+			},
+			async close(): Promise<void> {
+				closeStarted.resolve();
+				await allowClose.promise;
+				detachables.delete(writer);
+				await inner.close();
+			},
+			getError(): Error | undefined {
+				return inner.getError();
+			},
+			detach(): void {
+				detached = true;
+			},
+		};
+		detachables.add(writer);
+		return writer;
+	}
+
+	override async writeTextAtomic(path: string, content: string, options?: WriteTextAtomicOptions): Promise<void> {
+		this.writeStarted.resolve();
+		await this.allowWrite.promise;
+		if (options?.commitGuard && !options.commitGuard()) {
+			this.guardRejections++;
+			return;
+		}
+		// Emulate the Windows post-EPERM fallback: writers opened against the
+		// pre-replacement target end up attached to the moved-aside file after
+		// this call returns, so their future appends are detached from `path`.
+		for (const w of this.#detachables) w.detach();
+		this.writeTextSync(path, content);
+	}
+}
+
 describe("SessionManager atomic rewrite race", () => {
 	it("keeps post-compaction appends on the current JSONL path", async () => {
 		const storage = new DetachingRewriteStorage();
@@ -240,6 +307,67 @@ describe("SessionManager atomic rewrite race", () => {
 		expect(afterRelease).toContain('"customType":"session_exit"');
 		expect(afterRelease).toContain("newer summary");
 		expect(storage.guardRejections).toBeGreaterThanOrEqual(1);
+		expect(storage.detachedLines).toEqual([]);
+	});
+});
+
+describe("SessionManager atomic rewrite fence spans writer.close()", () => {
+	it("blocks a fresh writer from opening while an in-flight rewrite awaits writer.close()", async () => {
+		const storage = new CloseGatedRewriteStorage();
+		const sessionManager = SessionManager.create("/cwd", "/sessions", storage);
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected built-in anthropic model");
+
+		// Seed an assistant message so the session materializes on disk without
+		// opening a persistent writer (cold-path #rewriteSynchronously).
+		sessionManager.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "seed response" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+		await sessionManager.flush();
+		// Second append takes the hot path and opens a persistent writer that
+		// the atomic rewrite task must close before publishing the replacement.
+		sessionManager.appendMessage({ role: "user", content: "before rewrite", timestamp: Date.now() });
+		await sessionManager.flush();
+		const opensBeforeRewrite = storage.writerOpens;
+		expect(opensBeforeRewrite).toBeGreaterThan(0);
+
+		// Schedule an atomic rewrite; the task opens by closing the current
+		// writer, which parks on the fake's close gate. The fence must be active
+		// throughout the entire close-yield window so no fresh writer opens.
+		const rewrite = sessionManager.rewriteEntries();
+		await storage.closeStarted.promise;
+
+		sessionManager.appendMessage({ role: "user", content: "during close", timestamp: Date.now() });
+		sessionManager.appendCustomEntry("during_close_custom", { reason: "guard" });
+		// Pre-fix, #appendToSessionFile would take the hot path and call
+		// storage.openWriter here; the writer would then be caught by the pending
+		// writeTextAtomic detachment. Fence keeps writerOpens flat.
+		expect(storage.writerOpens).toBe(opensBeforeRewrite);
+
+		storage.allowClose.resolve();
+		storage.allowWrite.resolve();
+		await rewrite;
+		await sessionManager.flush();
+
+		const sessionFile = sessionManager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected session file");
+		const content = await storage.readText(sessionFile);
+		expect(content).toContain("during close");
+		expect(content).toContain('"customType":"during_close_custom"');
 		expect(storage.detachedLines).toEqual([]);
 	});
 });

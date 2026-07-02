@@ -559,12 +559,13 @@ export class SessionManager {
 
 	/**
 	 * Rewrite the whole file atomically (temp-write + rename, EPERM-safe) on the
-	 * disk chain. The body is serialized after the writer is closed. Appends that
-	 * arrive while the storage backend is replacing the path are fenced out of the
-	 * append hot path and force the rewrite task to loop with a fresh body before
-	 * it resolves. Passes a `commitGuard` to the storage layer so a synchronous
-	 * rewrite (`flushSync` → `#rewriteSynchronously`) that supersedes this task
-	 * cannot be overwritten by the stale body serialized before it ran.
+	 * disk chain. The body is serialized after the writer is closed. The fence
+	 * is enabled BEFORE `#closeWriterHandle()` and stays active until the last
+	 * atomic publish returns, so a sync append landing in the close-yield window
+	 * cannot open a fresh writer that the pending replacement would then detach
+	 * from the current JSONL path. A `commitGuard` also prevents a superseding
+	 * synchronous rewrite from being overwritten by the stale body serialized
+	 * before it ran.
 	 */
 	async #rewriteAtomically(): Promise<void> {
 		if (!this.#persist || !this.#sessionFile) return;
@@ -572,25 +573,25 @@ export class SessionManager {
 		const startEpoch = this.#diskEpoch;
 		await this.#scheduleDiskWork(
 			async () => {
-				do {
-					this.#atomicRewriteDirty = false;
-					await this.#closeWriterHandle();
-					const sessionFile = this.#sessionFile;
-					if (!sessionFile) return;
-					if (this.#diskEpoch !== startEpoch) return;
-					this.#atomicRewriteActive = true;
-					try {
+				this.#atomicRewriteActive = true;
+				try {
+					do {
+						this.#atomicRewriteDirty = false;
+						await this.#closeWriterHandle();
+						const sessionFile = this.#sessionFile;
+						if (!sessionFile) return;
+						if (this.#diskEpoch !== startEpoch) return;
 						await this.#storage.writeTextAtomic(sessionFile, this.#fileBody(), {
 							commitGuard: () => this.#diskEpoch === startEpoch,
 						});
-					} finally {
-						this.#atomicRewriteActive = false;
-					}
-					if (this.#diskEpoch !== startEpoch) return;
-				} while (this.#atomicRewriteDirty);
-				this.#fileIsCurrent = true;
-				this.#rewriteRequired = false;
-				this.#hasTitleSlot = true;
+						if (this.#diskEpoch !== startEpoch) return;
+					} while (this.#atomicRewriteDirty);
+					this.#fileIsCurrent = true;
+					this.#rewriteRequired = false;
+					this.#hasTitleSlot = true;
+				} finally {
+					this.#atomicRewriteActive = false;
+				}
 			},
 			{ epoch: startEpoch },
 		);
@@ -668,10 +669,15 @@ export class SessionManager {
 					await this.#storage.updateSessionTitle(sessionFile, update);
 					if (this.#diskEpoch === epoch) this.#fileIsCurrent = true;
 				} catch {
-					await this.#closeWriterHandle();
-					await this.#storage.writeTextAtomic(sessionFile, this.#fileBody(), {
-						commitGuard: () => this.#diskEpoch === epoch,
-					});
+					this.#atomicRewriteActive = true;
+					try {
+						await this.#closeWriterHandle();
+						await this.#storage.writeTextAtomic(sessionFile, this.#fileBody(), {
+							commitGuard: () => this.#diskEpoch === epoch,
+						});
+					} finally {
+						this.#atomicRewriteActive = false;
+					}
 					if (this.#diskEpoch !== epoch) return;
 					this.#clearDiskError();
 					this.#fileIsCurrent = true;
