@@ -197,10 +197,7 @@ describe("normalizeGeneratedTitle source-aware casing", () => {
 		// `ALL ERROR HANDLING` is a shouty run; even if the model title-cased one
 		// of them, the acronym map is empty for shouty sources.
 		expect(
-			normalizeGeneratedTitle(
-				"Unify Error handling across the codebase",
-				"unify ALL ERROR HANDLING everywhere",
-			),
+			normalizeGeneratedTitle("Unify Error handling across the codebase", "unify ALL ERROR HANDLING everywhere"),
 		).toBe("Unify Error handling across the codebase");
 	});
 
