@@ -8,8 +8,6 @@ import { modelMatchesHost } from "../hosts";
 import {
 	hasOpus47ApiRestrictions,
 	isAnthropicFableOrMythosModel,
-	isAnthropicNamespacedModelId,
-	isClaudeModelId,
 	supportsMidConversationSystemMessages,
 } from "../identity/family";
 import type { ModelSpec, ResolvedAnthropicCompat } from "../types";
@@ -38,15 +36,27 @@ function matchesKimiK27CodeFamily(spec: ModelSpec<"anthropic-messages">): boolea
 	return spec.id === "kimi-for-coding" && /k2\.?7 code/i.test(spec.name ?? "");
 }
 
-const CLAUDE_MODEL_TEXT_PATTERN = /\bclaude\b/i;
+const CLOUDFLARE_ANTHROPIC_GATEWAY_URL_MARKER = /gateway\.ai\.cloudflare\.com\/.+\/anthropic(?:\/|$)/i;
+const VERTEX_ANTHROPIC_URL_MARKER = /aiplatform\.googleapis\.com\/.+\/publishers\/anthropic\//i;
 
-function isLikelyAnthropicSigningModel(spec: ModelSpec<"anthropic-messages">): boolean {
-	return (
-		isClaudeModelId(spec.id) ||
-		isAnthropicNamespacedModelId(spec.id) ||
-		CLAUDE_MODEL_TEXT_PATTERN.test(spec.id) ||
-		CLAUDE_MODEL_TEXT_PATTERN.test(spec.name ?? "")
-	);
+/**
+ * Cloudflare AI Gateway's `/anthropic` route forwards to signature-enforcing
+ * Anthropic (same failure class as GitHub Copilot #2851 / ZenMux #4192).
+ * Detection is by baseUrl marker rather than provider id: users routinely
+ * declare `provider: "custom"` (or other free-form ids) in `models.yml` for
+ * their own Cloudflare gateway account.
+ */
+function isCloudflareAnthropicGateway(baseUrl?: string): boolean {
+	return baseUrl !== undefined && CLOUDFLARE_ANTHROPIC_GATEWAY_URL_MARKER.test(baseUrl);
+}
+
+/**
+ * Google Vertex's `publishers/anthropic/models/…:streamRawPredict` route
+ * proxies Claude through Google's identity layer and returns full thinking
+ * signatures, so it is a SIGNING endpoint.
+ */
+function isVertexAnthropicRoute(baseUrl?: string): boolean {
+	return baseUrl !== undefined && VERTEX_ANTHROPIC_URL_MARKER.test(baseUrl);
 }
 
 /** Build the resolved anthropic-messages compat record for a model spec. */
@@ -88,27 +98,25 @@ export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): Res
 		requiresThinkingEnabled,
 		// Official Anthropic and Anthropic-compatible signing proxies enforce
 		// signature-based thinking-chain integrity, so unsigned thinking blocks
-		// must stay text there. Generic opaque third-party
-		// `anthropic-messages` reasoning endpoints keep the historical native
-		// replay default (#2005); likely Claude/Anthropic proxy configs default
-		// signed-safe (#4297), because sending `signature: ""` to a signing
-		// endpoint 400s with `Invalid signature in thinking`.
+		// must stay text there. Every other `anthropic-messages` reasoning
+		// endpoint replays unsigned thinking natively so the reasoning chain
+		// survives continuation and doesn't destabilize the next tool-call
+		// arguments (#2005, #2257, #2265, #3288, #3433, #3434). Opaque custom
+		// signing proxies remain the reporter's responsibility to mark with
+		// `compat.replayUnsignedThinking: false`; the transport surfaces a
+		// pointed remediation the first time the signing 400 fires (#4297).
 		//
-		// Known non-signing Anthropic-messages hosts keep the native replay path
-		// regardless of model naming: Z.AI, DeepSeek family, Umans
-		// (`api.code.umans.ai`) and MiniMax's Anthropic routes
-		// (`api.minimax.io/anthropic`, `api.minimaxi.com/anthropic`). Other
-		// endpoints can still override explicitly via
-		// `compat.replayUnsignedThinking`.
+		// Known signing Anthropic-messages hosts (Copilot, ZenMux, Cloudflare
+		// AI Gateway `/anthropic`, Google Vertex `publishers/anthropic`) are
+		// excluded automatically because they can be recognised by provider id
+		// or baseUrl marker.
 		replayUnsignedThinking:
 			!official &&
 			!isCopilot &&
 			!isZenmux &&
-			(isZai ||
-				modelMatchesHost(spec, "deepseekFamily") ||
-				modelMatchesHost(spec, "umans") ||
-				modelMatchesHost(spec, "minimax") ||
-				(Boolean(spec.reasoning) && !isLikelyAnthropicSigningModel(spec))),
+			!isCloudflareAnthropicGateway(baseUrl) &&
+			!isVertexAnthropicRoute(baseUrl) &&
+			Boolean(spec.reasoning),
 		escapeBuiltinToolNames: modelMatchesHost(spec, "umans"),
 	};
 	applyCompatOverrides(compat, spec.compat);

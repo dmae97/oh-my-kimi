@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an actionable remediation hint on the Anthropic `400 Invalid `signature` in `thinking` block` error for custom `anthropic-messages` providers that have not overridden `compat.replayUnsignedThinking`, naming the provider and the exact `models.yml` knob to flip. ([#4297](https://github.com/can1357/oh-my-pi/issues/4297))
+
 ## [16.3.1] - 2026-07-02
 
 ### Changed

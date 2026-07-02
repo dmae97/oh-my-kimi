@@ -57,9 +57,9 @@ describe("#4192 anthropic compat: zenmux is a signing endpoint", () => {
 		expect(compat.replayUnsignedThinking).toBe(false);
 	});
 
-	it("demotes unsigned thinking for generic custom Claude proxy endpoints by default", () => {
+	it("still replays unsigned thinking for generic non-official reasoning endpoints (#2005, no regression)", () => {
 		const compat = buildAnthropicCompat(spec({ provider: "custom", baseUrl: "https://llm.example.com/anthropic" }));
-		expect(compat.replayUnsignedThinking).toBe(false);
+		expect(compat.replayUnsignedThinking).toBe(true);
 	});
 
 	it("still degrades unsigned thinking to text for official Anthropic", () => {

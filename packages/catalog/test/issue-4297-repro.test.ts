@@ -18,12 +18,20 @@ function spec(overrides: Partial<ModelSpec<"anthropic-messages">> = {}): ModelSp
 	} as ModelSpec<"anthropic-messages">;
 }
 
-describe("#4297 custom anthropic-messages provider signing default", () => {
-	it("demotes unsigned thinking for custom Claude proxy providers by default", () => {
-		expect(buildAnthropicCompat(spec()).replayUnsignedThinking).toBe(false);
+describe("#4297 anthropic-messages replay-unsigned-thinking classification", () => {
+	it("keeps native replay on opaque custom reasoning endpoints (no name detection)", () => {
+		// The reporter's custom Claude proxy is indistinguishable from a
+		// non-signing third-party reasoning endpoint at config time — the
+		// default must not walk back #2005's native replay for the 3p
+		// majority.
+		expect(buildAnthropicCompat(spec()).replayUnsignedThinking).toBe(true);
 	});
 
-	it("demotes unsigned thinking for custom Cloudflare Claude proxy providers by default", () => {
+	it("keeps native replay on a Cloudflare-internal Claude gateway that is not the AI Gateway route", () => {
+		// `opencode.cloudflare.dev/anthropic` (issue #4297 comment) is a
+		// private Cloudflare Workers deployment, not `gateway.ai.cloudflare.com`.
+		// Opaque custom signing proxy — user marks it with the compat override
+		// and the transport surfaces the actionable error before then.
 		expect(
 			buildAnthropicCompat(
 				spec({
@@ -33,19 +41,36 @@ describe("#4297 custom anthropic-messages provider signing default", () => {
 					baseUrl: "https://opencode.cloudflare.dev/anthropic",
 				}),
 			).replayUnsignedThinking,
-		).toBe(false);
-	});
-
-	it("keeps native unsigned-thinking replay for opaque custom reasoning endpoints by default", () => {
-		expect(
-			buildAnthropicCompat(spec({ id: "reasoning-model", name: "Reasoning Anthropic-Compatible Model" }))
-				.replayUnsignedThinking,
 		).toBe(true);
 	});
 
-	it("allows non-signing custom providers to opt into replaying unsigned thinking", () => {
-		expect(buildAnthropicCompat(spec({ compat: { replayUnsignedThinking: true } })).replayUnsignedThinking).toBe(
-			true,
+	it("demotes unsigned thinking on the Cloudflare AI Gateway `/anthropic` route (known signing host)", () => {
+		expect(
+			buildAnthropicCompat(
+				spec({
+					provider: "cloudflare-ai-gateway",
+					baseUrl: "https://gateway.ai.cloudflare.com/v1/acct123/gate/anthropic",
+				}),
+			).replayUnsignedThinking,
+		).toBe(false);
+	});
+
+	it("demotes unsigned thinking on Google Vertex's publishers/anthropic route (known signing host)", () => {
+		expect(
+			buildAnthropicCompat(
+				spec({
+					provider: "google-vertex",
+					baseUrl:
+						"https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/publishers/anthropic/models/claude-sonnet-4@20250514:streamRawPredict",
+					id: "claude-sonnet-4@20250514",
+				}),
+			).replayUnsignedThinking,
+		).toBe(false);
+	});
+
+	it("honors explicit `compat.replayUnsignedThinking: false` on custom signing proxies", () => {
+		expect(buildAnthropicCompat(spec({ compat: { replayUnsignedThinking: false } })).replayUnsignedThinking).toBe(
+			false,
 		);
 	});
 
@@ -57,19 +82,19 @@ describe("#4297 custom anthropic-messages provider signing default", () => {
 	});
 
 	it("preserves native unsigned-thinking replay for MiniMax's Anthropic-messages proxies", () => {
-		const compat = buildAnthropicCompat(
-			spec({ provider: "minimax", baseUrl: "https://api.minimax.io/anthropic", id: "minimax-m2" }),
-		);
-		expect(compat.replayUnsignedThinking).toBe(true);
+		expect(
+			buildAnthropicCompat(
+				spec({ provider: "minimax", baseUrl: "https://api.minimax.io/anthropic", id: "minimax-m2" }),
+			).replayUnsignedThinking,
+		).toBe(true);
+		expect(
+			buildAnthropicCompat(
+				spec({ provider: "minimax-cn", baseUrl: "https://api.minimaxi.com/anthropic", id: "minimax-m2" }),
+			).replayUnsignedThinking,
+		).toBe(true);
+	});
 
-		const compatCn = buildAnthropicCompat(
-			spec({ provider: "minimax-cn", baseUrl: "https://api.minimaxi.com/anthropic", id: "minimax-m2" }),
-		);
-		expect(compatCn.replayUnsignedThinking).toBe(true);
-
-		const compatCnMirror = buildAnthropicCompat(
-			spec({ provider: "minimax-cn", baseUrl: "https://mirror.example.com/anthropic", id: "minimax-m2" }),
-		);
-		expect(compatCnMirror.replayUnsignedThinking).toBe(true);
+	it("still demotes unsigned thinking on non-reasoning custom endpoints", () => {
+		expect(buildAnthropicCompat(spec({ reasoning: false })).replayUnsignedThinking).toBe(false);
 	});
 });

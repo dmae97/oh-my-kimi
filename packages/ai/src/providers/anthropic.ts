@@ -1644,6 +1644,32 @@ function calculateFallbackTurnCost(
 	return true;
 }
 
+/**
+ * Detects the Anthropic `400 Invalid `signature` in `thinking` block` failure
+ * a signing proxy returns when a stripped/unsigned prior thinking block is
+ * replayed as `signature: ""`. Exported for the compat tests.
+ */
+const INVALID_THINKING_SIGNATURE_PATTERN = /invalid\s+`?signature`?\s+in\s+`?thinking`?\s+block/i;
+export function isInvalidThinkingSignatureError(message: string): boolean {
+	return INVALID_THINKING_SIGNATURE_PATTERN.test(message);
+}
+
+/**
+ * Prepend a pointed remediation to Anthropic's `Invalid signature in thinking
+ * block` 400 when the model looks like an unmarked custom signing proxy
+ * (opaque baseUrl, `spec.reasoning: true`, no explicit
+ * `compat.replayUnsignedThinking` override). The default is native replay for
+ * the 3p reasoning majority (#2005); this hint turns the misconfigured-proxy
+ * case into a one-line fix instead of a silent retry loop (#4297).
+ */
+export function maybeAddReplayUnsignedThinkingHint(model: Model<"anthropic-messages">, message: string): string {
+	if (!isInvalidThinkingSignatureError(message)) return message;
+	if (model.compat.officialEndpoint) return message;
+	if (model.compatConfig?.replayUnsignedThinking !== undefined) return message;
+	const hint = `Provider "${model.provider}" looks like an Anthropic-compatible signing proxy: it rejected a replayed unsigned thinking block. Set \`compat.replayUnsignedThinking: false\` under \`providers.${model.provider}\` in your models.yml and retry. See https://github.com/can1357/oh-my-pi/issues/4297.`;
+	return `${hint}\n\n${message}`;
+}
+
 const streamAnthropicOnce = (
 	model: Model<"anthropic-messages">,
 	context: Context,
@@ -2468,7 +2494,7 @@ const streamAnthropicOnce = (
 			output.stopReason = result.stopReason;
 			output.errorStatus = result.status;
 			output.errorId = result.id;
-			output.errorMessage = result.message;
+			output.errorMessage = maybeAddReplayUnsignedThinkingHint(model, result.message);
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "error", reason: output.stopReason, error: output });

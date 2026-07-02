@@ -42,7 +42,6 @@ function makeAnthropicModel(overrides: Partial<ModelSpec<"anthropic-messages">> 
 		maxTokens: 8_192,
 		contextWindow: 200_000,
 		reasoning: true,
-		compat: { replayUnsignedThinking: true },
 		...overrides,
 	} as ModelSpec<"anthropic-messages">);
 }
@@ -230,7 +229,6 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 			provider: "anthropic",
 			id: "claude-sonnet-4-6",
 			baseUrl: "https://api.anthropic.com",
-			compat: { replayUnsignedThinking: false },
 		});
 		const messages: Message[] = [
 			makeUser("Summarize README"),
@@ -276,7 +274,6 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 			id: "claude-fable-5",
 			name: "Claude Fable 5",
 			baseUrl: "https://api.anthropic.com",
-			compat: { replayUnsignedThinking: false },
 		});
 		const reasoning = "Need to preserve the plan while switching models.";
 		const messages: Message[] = [
@@ -325,7 +322,6 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 				id: modelCase.id,
 				name: modelCase.name,
 				baseUrl: "https://api.anthropic.com",
-				compat: { replayUnsignedThinking: false },
 			});
 			const reasoning = `Need to inspect the layout before editing with ${modelCase.id}.`;
 			const toolCallId = `toolu_${modelCase.id.replaceAll("-", "_")}`;

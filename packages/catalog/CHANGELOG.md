@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed likely Claude/Anthropic custom `anthropic-messages` signing proxies to default unsigned-thinking replay off, avoiding empty thinking signatures while preserving native replay for opaque third-party reasoning endpoints and known non-signing hosts (Z.AI, DeepSeek, Umans, MiniMax). ([#4297](https://github.com/can1357/oh-my-pi/issues/4297))
+- Extended the `anthropic-messages` signing-endpoint recognition to Cloudflare AI Gateway (`gateway.ai.cloudflare.com/**/anthropic`) and Google Vertex (`aiplatform.googleapis.com/**/publishers/anthropic/…`), so those known signing hosts default to demoted unsigned thinking without walking back the settled 3p reasoning-replay default. ([#4297](https://github.com/can1357/oh-my-pi/issues/4297))
 
 ## [16.3.1] - 2026-07-02
 
