@@ -28,8 +28,9 @@ const CLAUDE_FABLE_ID = /(?:^|[./])claude[-.]fable(?:[-.]|$)/i;
 export function renderDemotedThinking(modelId: string, text: string): string {
 	if (!text) return "";
 	text = text.toWellFormed();
+	const canonicalId = bareModelId(modelId);
 	const dialect = preferredDialect(modelId);
-	if (CLAUDE_FABLE_ID.test(bareModelId(modelId))) return `_Hmm. ${text}_\n`;
+	if (CLAUDE_FABLE_ID.test(canonicalId)) return `_Hmm. ${text}_\n`;
 	if (dialect === "harmony" || dialect === "gemma") return `<think>\n${text}\n</think>\n`;
 	return `${getDialectDefinition(dialect).renderThinking(text)}\n`;
 }

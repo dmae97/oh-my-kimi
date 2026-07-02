@@ -344,9 +344,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 			if (!assistant) throw new Error("expected assistant wire message");
 			const blocks = assistant.content as WireBlock[];
 			const textBlocks = blocks.filter((b): b is WireTextBlock => b.type === "text");
-			expect(textBlocks.every(block => block.text !== renderDemotedThinking(modelCase.id, reasoning))).toBe(true);
-			expect(textBlocks.every(block => !block.text.startsWith("_Hmm."))).toBe(true);
-			expect(textBlocks.every(block => !block.text.includes("<thinking>"))).toBe(true);
+			expect(textBlocks).toHaveLength(0);
 			expect(blocks.find(b => b.type === "thinking")).toBeUndefined();
 			const toolUse = blocks.find(b => b.type === "tool_use") as WireToolUseBlock | undefined;
 			expect(toolUse?.id).toBe(toolCallId);
