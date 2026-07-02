@@ -8483,12 +8483,10 @@ export class AgentSession {
 	/**
 	 * Set model directly.
 	 * Validates that a credential source is configured (synchronously, without
-	 * refreshing OAuth or running command-backed key programs). The active
-	 * session switches by default; when `currentContextTokens` is provided and
-	 * exceeds the refreshed candidate's context window, the live switch is
-	 * skipped while role persistence still runs. Returns whether the active
-	 * model actually switched, computed against the refreshed metadata so
-	 * dynamic providers (e.g. llama.cpp) honor their post-load contextWindow.
+	 * refreshing OAuth or running command-backed key programs). Active switches
+	 * always take effect; if the current transcript is too large for the target
+	 * model, the next prompt's compaction/error path owns that recovery instead
+	 * of leaving the session pinned to the old model.
 	 * @throws Error if no API key available for the model
 	 */
 	async setModel(
@@ -8508,27 +8506,14 @@ export class AgentSession {
 
 		const targetModel = await this.#modelRegistry.refreshSelectedModelMetadata(model);
 
-		const currentContextTokens = options?.currentContextTokens ?? 0;
-		const targetContextWindow = targetModel.contextWindow ?? 0;
-		const switched = !(
-			currentContextTokens > 0 &&
-			targetContextWindow > 0 &&
-			currentContextTokens > targetContextWindow
-		);
-
-		if (switched) {
-			this.#clearActiveRetryFallback();
-			this.#setModelWithProviderSessionReset(targetModel);
-			this.sessionManager.appendModelChange(`${targetModel.provider}/${targetModel.id}`, role);
-		}
+		this.#clearActiveRetryFallback();
+		this.#setModelWithProviderSessionReset(targetModel);
+		this.sessionManager.appendModelChange(`${targetModel.provider}/${targetModel.id}`, role);
 		if (options?.persist) {
 			this.settings.setModelRole(
 				role,
 				this.#formatRoleModelValue(role, targetModel, options.selector, options.thinkingLevel),
 			);
-		}
-		if (!switched) {
-			return { switched: false };
 		}
 		this.settings.getStorage()?.recordModelUsage(`${targetModel.provider}/${targetModel.id}`);
 
