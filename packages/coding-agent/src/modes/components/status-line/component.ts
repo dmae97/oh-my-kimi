@@ -120,10 +120,9 @@ function messageFingerprint(msg: AgentMessage): string {
 					if (typeof b.name === "string") textLen += b.name.length;
 					if (b.arguments !== undefined) {
 						try {
-							textLen +=
-								JSON.stringify(b.arguments, (_key, value) =>
-									typeof value === "bigint" ? value.toString() : value,
-								)?.length ?? 0;
+							textLen += JSON.stringify(b.arguments, (_key, value) =>
+								typeof value === "bigint" ? value.toString() : value,
+							).length;
 						} catch {
 							textLen += String(b.arguments).length;
 						}
