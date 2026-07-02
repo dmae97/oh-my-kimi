@@ -3,17 +3,18 @@ import { bareModelId, parseAnthropicModel } from "@oh-my-pi/pi-catalog/identity"
 import { toNumber } from "@oh-my-pi/pi-catalog/utils";
 import * as AIError from "../error";
 import { claudeCodeVersion } from "../providers/anthropic";
-import type {
-	CredentialRankingContext,
-	CredentialRankingStrategy,
-	UsageAmount,
-	UsageFetchContext,
-	UsageFetchParams,
-	UsageLimit,
-	UsageProvider,
-	UsageReport,
-	UsageStatus,
-	UsageWindow,
+import {
+	type CredentialRankingContext,
+	type CredentialRankingStrategy,
+	resolveUsedFraction,
+	type UsageAmount,
+	type UsageFetchContext,
+	type UsageFetchParams,
+	type UsageLimit,
+	type UsageProvider,
+	type UsageReport,
+	type UsageStatus,
+	type UsageWindow,
 } from "../usage";
 import { isRecord } from "../utils";
 
@@ -62,7 +63,7 @@ interface ParsedUsageBucket {
 	utilization?: number;
 	resetsAt?: number;
 }
-type ClaudeUnifiedWindow = "5h" | "7d";
+type ClaudeUnifiedWindow = "5h" | "7d" | "7d_oi";
 type ClaudeModelKind = "opus" | "sonnet" | "fable" | "mythos";
 
 interface ClaudeUsageResponse {
@@ -213,7 +214,11 @@ function hasUsageData(payload: ClaudeUsageResponse): boolean {
 }
 
 function isRetryableStatus(status: number): boolean {
-	return AIError.isTransientStatus(status);
+	// Exclude 429: the usage endpoint is informational and rate-limited per
+	// source IP, so retrying a rate_limit_error inside a single fetch can't
+	// succeed and only deepens the throttle (3 attempts per poll). Fall through
+	// to the caller's failure cool-down and retry on the next poll instead.
+	return AIError.isTransientStatus(status) && status !== 429;
 }
 
 function isAbortError(error: unknown, signal?: AbortSignal): boolean {
@@ -444,9 +449,13 @@ function buildScopedWeeklyUsageLimits(entries: readonly ParsedApiLimitEntry[]): 
 	return limits;
 }
 
-export function parseClaudeRateLimitHeaders(headers: Record<string, string>, now = Date.now()): UsageReport | null {
+export function parseClaudeRateLimitHeaders(
+	headers: Record<string, string>,
+	now = Date.now(),
+): UsageReport | null {
 	const fiveHour = parseUnifiedWindow(headers, "5h");
 	const sevenDay = parseUnifiedWindow(headers, "7d");
+	const modelScopedSevenDay = parseUnifiedWindow(headers, "7d_oi");
 	const limits = [
 		buildUsageLimit({
 			id: "anthropic:5h",
@@ -467,6 +476,16 @@ export function parseClaudeRateLimitHeaders(headers: Record<string, string>, now
 			bucket: sevenDay,
 			provider: "anthropic",
 			shared: true,
+		}),
+		buildUsageLimit({
+			id: "anthropic:7d:fable",
+			label: "Claude 7 Day (Fable)",
+			windowId: "7d",
+			windowLabel: "7 Day",
+			durationMs: SEVEN_DAYS_MS,
+			bucket: modelScopedSevenDay,
+			provider: "anthropic",
+			tier: "fable",
 		}),
 	].filter((limit): limit is UsageLimit => limit !== null);
 
@@ -598,10 +617,54 @@ function scopeClaudeLimitsForModel(report: UsageReport, context: CredentialRanki
 	);
 }
 
+function rankingUsedFraction(limit: UsageLimit): number {
+	const fraction = resolveUsedFraction(limit);
+	if (typeof fraction !== "number" || !Number.isFinite(fraction)) return 0.5;
+	return Math.min(Math.max(fraction, 0), 1);
+}
+
+function rankingDrainRate(limit: UsageLimit, nowMs: number): number {
+	const usedFraction = rankingUsedFraction(limit);
+	const durationMs = limit.window?.durationMs ?? SEVEN_DAYS_MS;
+	if (!Number.isFinite(durationMs) || durationMs <= 0) return usedFraction;
+	const resetAt = limit.window?.resetsAt;
+	if (typeof resetAt !== "number" || !Number.isFinite(resetAt)) return usedFraction;
+	const remainingWindowMs = resetAt - nowMs;
+	const clampedRemainingWindowMs = Math.min(Math.max(remainingWindowMs, 0), durationMs);
+	const elapsedMs = durationMs - clampedRemainingWindowMs;
+	if (elapsedMs <= 0) return usedFraction;
+	const elapsedHours = elapsedMs / (60 * 60 * 1000);
+	if (!Number.isFinite(elapsedHours) || elapsedHours <= 0) return usedFraction;
+	return usedFraction / elapsedHours;
+}
+
+function morePressuredLimit(
+	left: UsageLimit | undefined,
+	right: UsageLimit | undefined,
+	nowMs: number,
+): UsageLimit | undefined {
+	if (!left) return right;
+	if (!right) return left;
+	const leftDrainRate = rankingDrainRate(left, nowMs);
+	const rightDrainRate = rankingDrainRate(right, nowMs);
+	if (rightDrainRate !== leftDrainRate) return rightDrainRate > leftDrainRate ? right : left;
+	return rankingUsedFraction(right) > rankingUsedFraction(left) ? right : left;
+}
+
+function findClaudeSecondaryLimit(
+	report: UsageReport,
+	context: CredentialRankingContext | undefined,
+): UsageLimit | undefined {
+	const nowMs = Date.now();
+	return scopeClaudeLimitsForModel(report, context)
+		.filter(limit => limit.scope.windowId === "7d" || limit.window?.id === "7d")
+		.reduce<UsageLimit | undefined>((selected, limit) => morePressuredLimit(selected, limit, nowMs), undefined);
+}
+
 export const claudeRankingStrategy: CredentialRankingStrategy = {
-	findWindowLimits(report) {
-		const primary = report.limits.find(l => l.id === "anthropic:5h");
-		const secondary = report.limits.find(l => l.id === "anthropic:7d");
+	findWindowLimits(report, context) {
+		const primary = report.limits.find(limit => limit.id === "anthropic:5h");
+		const secondary = findClaudeSecondaryLimit(report, context);
 		return { primary, secondary };
 	},
 	scopeLimits: scopeClaudeLimitsForModel,

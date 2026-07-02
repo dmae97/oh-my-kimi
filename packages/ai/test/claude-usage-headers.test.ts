@@ -310,6 +310,59 @@ describe("claude usage request headers", () => {
 });
 
 describe("claude ranking strategy", () => {
+	function usageLimit(args: {
+		id: string;
+		windowId: "5h" | "7d";
+		usedFraction: number;
+		tier?: "fable";
+		durationMs?: number;
+		resetsAt?: number;
+	}): UsageLimit {
+		const used = args.usedFraction * 100;
+		return {
+			id: args.id,
+			label:
+				args.tier === "fable" ? "Claude 7 Day (Fable)" : `Claude ${args.windowId === "5h" ? "5 Hour" : "7 Day"}`,
+			scope: {
+				provider: "anthropic",
+				windowId: args.windowId,
+				...(args.tier ? { tier: args.tier } : { shared: true }),
+			},
+			window: {
+				id: args.windowId,
+				label: args.windowId === "5h" ? "5 Hour" : "7 Day",
+				...(args.durationMs !== undefined ? { durationMs: args.durationMs } : {}),
+				...(args.resetsAt !== undefined ? { resetsAt: args.resetsAt } : {}),
+			},
+			amount: {
+				used,
+				limit: 100,
+				remaining: 100 - used,
+				usedFraction: args.usedFraction,
+				remainingFraction: 1 - args.usedFraction,
+				unit: "percent",
+			},
+			status: "ok",
+		};
+	}
+
+	function usageReportWithWeeklyCaps(args: { sharedWeeklyUsed: number; fableWeeklyUsed: number }): UsageReport {
+		return {
+			provider: "anthropic",
+			fetchedAt: Date.now(),
+			limits: [
+				usageLimit({ id: "anthropic:5h", windowId: "5h", usedFraction: 0.2 }),
+				usageLimit({ id: "anthropic:7d", windowId: "7d", usedFraction: args.sharedWeeklyUsed }),
+				usageLimit({
+					id: "anthropic:7d:fable",
+					windowId: "7d",
+					usedFraction: args.fableWeeklyUsed,
+					tier: "fable",
+				}),
+			],
+		};
+	}
+
 	it("scopes credential gating to shared umbrella limits plus the requested model tier", () => {
 		const limits: UsageLimit[] = [
 			{
@@ -381,5 +434,64 @@ describe("claude ranking strategy", () => {
 		expect(claudeRankingStrategy.blockScope?.({ modelId: "claude-mythos-5" })).toBe("tier:mythos");
 		expect(claudeRankingStrategy.blockScope?.({ modelId: "claude-opus-4-8" })).toBeUndefined();
 		expect(claudeRankingStrategy.blockScope?.({})).toBeUndefined();
+	});
+
+	it("uses the Fable weekly cap as secondary when it is more used than the shared weekly cap", () => {
+		const report = usageReportWithWeeklyCaps({ sharedWeeklyUsed: 0.18, fableWeeklyUsed: 0.64 });
+
+		const windows = claudeRankingStrategy.findWindowLimits(report, { modelId: "claude-fable-5" });
+
+		expect(windows.secondary?.id).toBe("anthropic:7d:fable");
+		expect(windows.secondary?.amount.usedFraction).toBe(0.64);
+	});
+
+	it("ranks the Fable weekly secondary by drain pressure instead of raw used fraction", () => {
+		const now = Date.now();
+		const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+		const hourMs = 60 * 60 * 1000;
+		const report: UsageReport = {
+			provider: "anthropic",
+			fetchedAt: now,
+			limits: [
+				usageLimit({ id: "anthropic:5h", windowId: "5h", usedFraction: 0.2 }),
+				usageLimit({
+					id: "anthropic:7d",
+					windowId: "7d",
+					usedFraction: 0.4,
+					durationMs: sevenDaysMs,
+					resetsAt: now + 160 * hourMs,
+				}),
+				usageLimit({
+					id: "anthropic:7d:fable",
+					windowId: "7d",
+					usedFraction: 0.9,
+					tier: "fable",
+					durationMs: sevenDaysMs,
+					resetsAt: now + hourMs,
+				}),
+			],
+		};
+
+		const windows = claudeRankingStrategy.findWindowLimits(report, { modelId: "claude-fable-5" });
+
+		expect(windows.secondary?.id).toBe("anthropic:7d");
+		expect(windows.secondary?.amount.usedFraction).toBe(0.4);
+	});
+
+	it("keeps Fable weekly caps out of Opus and unscoped secondary ranking", () => {
+		const report = usageReportWithWeeklyCaps({ sharedWeeklyUsed: 0.18, fableWeeklyUsed: 0.64 });
+
+		expect(claudeRankingStrategy.findWindowLimits(report, { modelId: "claude-opus-4-8" }).secondary?.id).toBe(
+			"anthropic:7d",
+		);
+		expect(claudeRankingStrategy.findWindowLimits(report).secondary?.id).toBe("anthropic:7d");
+	});
+
+	it("keeps the shared weekly cap as secondary for Fable when it is the more used cap", () => {
+		const report = usageReportWithWeeklyCaps({ sharedWeeklyUsed: 0.74, fableWeeklyUsed: 0.31 });
+
+		expect(claudeRankingStrategy.findWindowLimits(report, { modelId: "claude-fable-5" }).secondary?.id).toBe(
+			"anthropic:7d",
+		);
 	});
 });

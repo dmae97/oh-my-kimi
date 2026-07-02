@@ -606,17 +606,18 @@ function createClaudeLimit(args: {
 	durationMs: number;
 	usedFraction: number;
 	resetInMs: number;
+	tier?: "fable";
 }): UsageLimit {
 	const clamped = Math.min(Math.max(args.usedFraction, 0), 1);
 	const used = clamped * 100;
-	const label = args.key === "5h" ? "Claude 5 Hour" : "Claude 7 Day";
+	const label = args.key === "5h" ? "Claude 5 Hour" : args.tier === "fable" ? "Claude 7 Day (Fable)" : "Claude 7 Day";
 	return {
-		id: `anthropic:${args.key}`,
+		id: args.tier ? `anthropic:${args.key}:${args.tier}` : `anthropic:${args.key}`,
 		label,
 		scope: {
 			provider: "anthropic",
 			windowId: args.key,
-			shared: true,
+			...(args.tier ? { tier: args.tier } : { shared: true }),
 		},
 		window: {
 			id: args.key,
@@ -640,24 +641,37 @@ function createClaudeUsageReport(args: {
 	accountId: string;
 	primary: { usedFraction: number; resetInMs: number };
 	secondary: { usedFraction: number; resetInMs: number };
+	fableSecondary?: { usedFraction: number; resetInMs: number };
 }): UsageReport {
-	return {
-		provider: "anthropic",
-		fetchedAt: Date.now(),
-		limits: [
-			createClaudeLimit({
-				key: "5h",
-				durationMs: FIVE_HOUR_MS,
-				usedFraction: args.primary.usedFraction,
-				resetInMs: args.primary.resetInMs,
-			}),
+	const limits = [
+		createClaudeLimit({
+			key: "5h",
+			durationMs: FIVE_HOUR_MS,
+			usedFraction: args.primary.usedFraction,
+			resetInMs: args.primary.resetInMs,
+		}),
+		createClaudeLimit({
+			key: "7d",
+			durationMs: WEEK_MS,
+			usedFraction: args.secondary.usedFraction,
+			resetInMs: args.secondary.resetInMs,
+		}),
+	];
+	if (args.fableSecondary) {
+		limits.push(
 			createClaudeLimit({
 				key: "7d",
 				durationMs: WEEK_MS,
-				usedFraction: args.secondary.usedFraction,
-				resetInMs: args.secondary.resetInMs,
+				usedFraction: args.fableSecondary.usedFraction,
+				resetInMs: args.fableSecondary.resetInMs,
+				tier: "fable",
 			}),
-		],
+		);
+	}
+	return {
+		provider: "anthropic",
+		fetchedAt: Date.now(),
+		limits,
 		metadata: { accountId: args.accountId },
 	};
 }
@@ -888,6 +902,37 @@ describe("AuthStorage claude oauth ranking", () => {
 		const counts = await countApiKeySelections(authStorage, "anthropic", "weighted-claude-three");
 		expect(countFor(counts, "api-acct-slow")).toBeGreaterThan(countFor(counts, "api-acct-medium"));
 		expect(countFor(counts, "api-acct-slow")).toBeGreaterThan(countFor(counts, "api-acct-fast"));
+	});
+
+	test("selects the account with lower Fable weekly usage for Claude Fable requests", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+
+		await authStorage.set("anthropic", [
+			{ type: "oauth", ...createCredential("acct-a", "a@example.com") },
+			{ type: "oauth", ...createCredential("acct-b", "b@example.com") },
+		]);
+
+		usageByAccount.set(
+			"acct-a",
+			createClaudeUsageReport({
+				accountId: "acct-a",
+				primary: { usedFraction: 0.2, resetInMs: 4 * HOUR_MS },
+				secondary: { usedFraction: 0.1, resetInMs: 6 * 24 * HOUR_MS },
+				fableSecondary: { usedFraction: 0.85, resetInMs: 6 * 24 * HOUR_MS },
+			}),
+		);
+		usageByAccount.set(
+			"acct-b",
+			createClaudeUsageReport({
+				accountId: "acct-b",
+				primary: { usedFraction: 0.2, resetInMs: 4 * HOUR_MS },
+				secondary: { usedFraction: 0.7, resetInMs: 6 * 24 * HOUR_MS },
+				fableSecondary: { usedFraction: 0.2, resetInMs: 6 * 24 * HOUR_MS },
+			}),
+		);
+
+		const apiKey = await authStorage.getApiKey("anthropic", undefined, { modelId: "claude-fable-5" });
+		expect(apiKey).toBe("api-acct-b");
 	});
 
 	test("single credential works without ranking", async () => {

@@ -4,8 +4,16 @@
 
 ### Added
 
+- Added support for overlaying Anthropic per-tier usage limits onto cached usage reports
+- Improved Anthropic credential ranking by using drain-rate pressure for weekly usage limits
+
 - Added Claude Fable weekly usage tracking to the Anthropic usage provider: the OAuth usage endpoint's new generic `limits` array is parsed for model-scoped weekly windows (`kind: "weekly_scoped"`), so `omp usage`, `/usage`, and usage history now surface a separate `Claude 7 Day (Fable)` row (id `anthropic:7d:fable`) alongside the shared 5h/7d windows — mirroring how Codex Spark rows are tracked. The `session`/`weekly_all` entries also backfill the shared 5h/7d windows if the legacy `five_hour`/`seven_day` buckets ever go null (as `seven_day_opus`/`seven_day_sonnet` already have).
 - Added `scopeLimits`/`blockScope` to the Anthropic credential-ranking strategy so an exhausted Fable/Mythos weekly cap no longer blocks the whole OAuth credential: credential-wide exhaustion gating now considers only shared umbrella windows plus the requested model family's own scoped cap, and reactive usage-limit blocks for Fable/Mythos requests land in a per-tier backoff scope (mirroring the Antigravity per-counter precedent).
+
+### Fixed
+
+- Fixed Anthropic OAuth usage reporting to stop retrying on 429 rate-limit errors
+- Fixed usage cache to correctly persist null values during cold-start failure backoff windows
 
 ## [16.3.1] - 2026-07-02
 
