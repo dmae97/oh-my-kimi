@@ -58,10 +58,8 @@ COPY --parents \
     crates/*/Cargo.toml \
     /pi/
 
-# Layer 2 — hydrate only the native addon build graph. A full workspace install
-# pulls optional/dev ONNX runtimes that the Rust build never uses and makes the
-# Docker layer depend on large platform tarballs.
-RUN bun install --filter @oh-my-pi/pi-natives --frozen-lockfile --ignore-scripts
+# Layer 2 — hydrate node_modules from the manifests above.
+RUN bun install --frozen-lockfile --ignore-scripts
 
 # Layer 3 — full source. `Dockerfile.dockerignore` keeps target/, node_modules/,
 # dist/, runs/, editor noise, etc. out of the context. node_modules from Layer 2

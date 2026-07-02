@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Defer session_stop extension hooks while agent-owned background jobs are still in progress
+
+- Stop-time settle passes now treat a yield with background async jobs (async `bash`/`task` spawns) owned by the agent — still running or with undelivered results — as a scheduling pause instead of a terminal stop: the incomplete-todo reminder stays silent and the `session_stop` hook pass is deferred, both firing at the settle reached once the session is fully idle. Async-result delivery re-wakes the loop, so neither pass is lost.
+
 ### Fixed
 
 - Improved reliability of edits when file snapshots share identical 16-bit hash tags
