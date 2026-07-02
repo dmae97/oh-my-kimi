@@ -823,14 +823,9 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 
 	#resetDisplayForResultTopologyChange(hadNoResult: boolean, wasPartialResult: boolean, isPartial: boolean): void {
 		const firstResultReplacesStreamedPlaceholder =
-			hadNoResult &&
-			this.#renderedStreamedPlaceholderCall &&
-			this.#rendererFlag("forceFirstResultViewportRepaint");
+			hadNoResult && this.#renderedStreamedPlaceholderCall && this.#rendererFlag("forceFirstResultViewportRepaint");
 		const provisionalResultSettled =
-			!hadNoResult &&
-			wasPartialResult &&
-			!isPartial &&
-			this.#rendererFlag("forceResultViewportRepaintOnSettle");
+			!hadNoResult && wasPartialResult && !isPartial && this.#rendererFlag("forceResultViewportRepaintOnSettle");
 		if (firstResultReplacesStreamedPlaceholder || provisionalResultSettled) {
 			this.#ui.resetDisplay();
 		}
