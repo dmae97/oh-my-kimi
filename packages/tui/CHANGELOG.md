@@ -6,6 +6,7 @@
 
 - Fixed the modifyOtherKeys keyboard fallback enabling on unknown SSH terminals, avoiding broken Shift input in iOS SSH clients such as Redock ([#4325](https://github.com/can1357/oh-my-pi/issues/4325)).
 - Fixed native scrollback repair for audited transcript rows that were offered below a still-live block, preventing lower finalized rows from duplicating when the live block grows ([#4326](https://github.com/can1357/oh-my-pi/issues/4326)).
+- Fixed destructive editing keys (`Ctrl+W`, `Ctrl+U`, `Ctrl+K`, `Alt+Backspace`, `Alt+D`) and paste/yank leaving the autocomplete popup active with a stale prefix; `Tab` and `Enter` on the file-path branch would then insert the outdated selection into the newly edited buffer. Every text-mutating path now refreshes autocomplete like backspace/forward-delete already do, and the `Tab`/`Enter`+file-path acceptance now applies the same staleness guard the `Enter`+slash path uses, so a stale popup silently cancels instead of corrupting the input ([#4295](https://github.com/can1357/oh-my-pi/issues/4295)).
 
 ## [16.3.0] - 2026-07-02
 
