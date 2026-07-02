@@ -157,6 +157,9 @@
 - Fixed the incomplete-todo reminder drifting to the bottom of the screen and piling up as dozens of duplicate copies in native scrollback. The reminder rendered in a dedicated anchored live-region container (`todoReminderContainer`) pinned above the editor, so it re-rendered in place every frame and — being taller than the viewport on short terminals while the subagent/job HUD churned below it — had its top rows committed to scrollback again on each reflow. It is now committed once into the transcript as a regular block (the same path TTSR notifications use), so it stays anchored in history where it fired.
 - Fixed subagent frontmatter `thinkingLevel` being overridden by `modelRoles.task` model suffixes. ([#3915](https://github.com/can1357/oh-my-pi/issues/3915))
 - Fixed Ruff LSP auto-detection for Windows Python virtualenvs by checking `.venv/Scripts`, `venv/Scripts`, and `.env/Scripts` before falling back to PATH. ([#3916](https://github.com/can1357/oh-my-pi/issues/3916))
+### Fixed
+
+- Fixed `discoverAgents()` skipping `agents/` subdirectories inside OMP extension packages, so agents shipped by `omp plugin install`-ed npm plugins (e.g. `loom`) and `--extension`/`extensions:` settings roots now load the same way their sibling `skills/`, `hooks/`, `tools/` directories already do. The new scan goes through `listOmpExtensionRoots`, so Claude marketplace installs continue to flow through the `claude-plugins` provider without being double-counted. ([#3920](https://github.com/can1357/oh-my-pi/issues/3920))
 
 ## [16.2.9] - 2026-06-30
 
