@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Delete pre-created shell snapshot file when snapshot creation fails ([#4236](https://github.com/can1357/oh-my-pi/issues/4236))
+
+
 ## [16.3.0] - 2026-07-02
 
 ### Added
