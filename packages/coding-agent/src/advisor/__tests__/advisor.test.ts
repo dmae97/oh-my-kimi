@@ -164,6 +164,39 @@ describe("advisor", () => {
 			expect(md).toContain("[irc]");
 			expect(md).not.toContain("<primary-context");
 		});
+
+		it("omits hidden non-primary custom messages while keeping visible custom messages", () => {
+			const hiddenPrelude = {
+				role: "custom",
+				customType: "eager-task-prelude",
+				content: "<system-reminder>Task delegation is enabled",
+				display: false,
+				timestamp: 1,
+			} as AgentMessage;
+			const hiddenHookMessage = {
+				role: "hookMessage",
+				customType: "hidden-hook-reminder",
+				content: "Hidden hook reminder should never reach advisor history",
+				display: false,
+				timestamp: 2,
+			} as AgentMessage;
+			const visibleCustom = {
+				role: "custom",
+				customType: "visible-status",
+				content: "Visible custom update",
+				display: true,
+				timestamp: 3,
+			} as AgentMessage;
+
+			const md = formatSessionHistoryMarkdown([hiddenPrelude, hiddenHookMessage, visibleCustom], { expandPrimaryContext: true });
+
+			expect(md).toContain("[visible-status] Visible custom update");
+			expect(md).not.toContain("eager-task-prelude");
+			expect(md).not.toContain("system-reminder");
+			expect(md).not.toContain("Task delegation");
+			expect(md).not.toContain("hidden-hook-reminder");
+			expect(md).not.toContain("Hidden hook reminder");
+		});
 	});
 
 	describe("formatSessionHistoryMarkdown expandEditDiffs", () => {

@@ -355,6 +355,7 @@ export function formatSessionHistoryMarkdown(messages: unknown[], opts?: History
 			case "custom":
 			case "hookMessage": {
 				const custom = msg as CustomMessage | HookMessage;
+				if (custom.display === false && !PRIMARY_CONTEXT_CUSTOM_TYPES.has(custom.customType)) break;
 				if (opts?.expandPrimaryContext && PRIMARY_CONTEXT_CUSTOM_TYPES.has(custom.customType)) {
 					const text = contentToText(custom.content).trim();
 					if (text) {
