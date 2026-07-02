@@ -32,3 +32,38 @@ pub fn lock_panic_hook() -> MutexGuard<'static, ()> {
 		.lock()
 		.unwrap_or_else(|poisoned| poisoned.into_inner())
 }
+
+/// Boxed panic hook signature, factored out so the [`SilenceHook`] wrapper
+/// stays readable — matches [`std::panic::take_hook`]'s return type.
+type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static>;
+
+/// Suppress the global panic hook for the guard's lifetime, so injected panic
+/// tests don't dump backtraces (or persist crash reports) onto the test run.
+///
+/// [`std::panic::set_hook`] is process-global, so `SilenceHook` holds
+/// [`lock_panic_hook`] for the entire take → set → run → restore window.
+/// Without that lock, two parallel tests could interleave their hook swaps and
+/// permanently install the noop hook, muting crash diagnostics for every later
+/// test in the crate.
+pub struct SilenceHook {
+	prev:   Option<PanicHook>,
+	_guard: MutexGuard<'static, ()>,
+}
+
+impl SilenceHook {
+	#[allow(clippy::new_without_default, reason = "Default acquiring a global lock would surprise")]
+	pub fn new() -> Self {
+		let guard = lock_panic_hook();
+		let prev = std::panic::take_hook();
+		std::panic::set_hook(Box::new(|_| {}));
+		Self { prev: Some(prev), _guard: guard }
+	}
+}
+
+impl Drop for SilenceHook {
+	fn drop(&mut self) {
+		if let Some(prev) = self.prev.take() {
+			std::panic::set_hook(prev);
+		}
+	}
+}

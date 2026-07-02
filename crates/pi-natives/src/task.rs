@@ -183,7 +183,8 @@ where
 		// edge and force-abort the host under Rust's stabilized C-unwind rules
 		// (RFC 2945, stable since 1.81). The crash handler scope tells the
 		// global panic hook this panic is about to be caught and mapped to a
-		// `GenericFailure`, so it must not emit a native crash report.
+		// `GenericFailure`, so it downgrades the report to a disk-only crash
+		// log — no stderr dump, no default-hook chaining.
 		match catch_unwind(AssertUnwindSafe(move || {
 			crate::crash_handler::blocking_task_panic_scope(move || work(cancel_token))
 		})) {
@@ -191,7 +192,7 @@ where
 			Err(payload) => {
 				// Extract the message BEFORE touching the payload's destructor:
 				// disposal is the one remaining step that can panic again.
-				let message = panic_payload_message(&*payload);
+				let message = crate::crash_handler::panic_payload(&*payload);
 				dispose_panic_payload(payload);
 				Err(Error::new(
 					Status::GenericFailure,
@@ -206,20 +207,6 @@ where
 	}
 }
 
-/// Extract a printable message from a panic payload captured by
-/// [`std::panic::catch_unwind`]. Handles the two shapes `panic!` produces —
-/// `&'static str` (literal) and `String` (formatted) — and degrades to a
-/// sentinel for arbitrary `panic_any` payloads.
-fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
-	if let Some(s) = payload.downcast_ref::<&'static str>() {
-		(*s).to_owned()
-	} else if let Some(s) = payload.downcast_ref::<String>() {
-		s.clone()
-	} else {
-		String::from("<non-string panic payload>")
-	}
-}
-
 /// Dispose of a caught panic payload without any possibility of a second
 /// unwind escaping this frame.
 ///
@@ -229,10 +216,10 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
 /// cross the same non-`C-unwind` FFI edge the surrounding [`catch_unwind`]
 /// exists to guard — force-aborting the host and defeating the recovery. The
 /// drop is therefore attempted under its own [`catch_unwind`], inside a
-/// crash-handler scope so the global hook stays silent for a panic we are
-/// about to swallow.
+/// crash-handler scope so the global hook records at most a disk-only crash
+/// log for a panic we are about to swallow.
 ///
-/// SAFETY: if the destructor panics, the *secondary* payload is
+/// Leak rationale: if the destructor panics, the *secondary* payload is
 /// [`std::mem::forget`]-ten instead of dropped — dropping it could panic
 /// again, unwinding out of this frame after the guard already fired once.
 /// Leaking one payload on this pathological path is a bounded, acceptable
@@ -334,40 +321,7 @@ mod tests {
 	//! past this method.
 
 	use super::*;
-
-	/// Boxed panic hook signature, factored out so the [`SilenceHook`] wrapper
-	/// stays readable — matches [`std::panic::take_hook`]'s return type.
-	type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static>;
-
-	/// Suppress the default panic hook for a single `catch_unwind`, so injected
-	/// panic tests don't dump backtraces onto the test output.
-	///
-	/// [`std::panic::set_hook`] is process-global, so `SilenceHook` holds
-	/// [`crate::testing::lock_panic_hook`] for the entire take → set → run →
-	/// restore window. Without that lock, two parallel tests could interleave
-	/// their hook swaps and permanently install the noop hook, muting crash
-	/// diagnostics for every later test in the crate.
-	struct SilenceHook {
-		prev:   Option<PanicHook>,
-		_guard: std::sync::MutexGuard<'static, ()>,
-	}
-
-	impl SilenceHook {
-		fn new() -> Self {
-			let guard = crate::testing::lock_panic_hook();
-			let prev = std::panic::take_hook();
-			std::panic::set_hook(Box::new(|_| {}));
-			Self { prev: Some(prev), _guard: guard }
-		}
-	}
-
-	impl Drop for SilenceHook {
-		fn drop(&mut self) {
-			if let Some(prev) = self.prev.take() {
-				std::panic::set_hook(prev);
-			}
-		}
-	}
+	use crate::testing::SilenceHook;
 
 	fn blocking_task<T, F>(tag: &'static str, work: F) -> Blocking<T>
 	where

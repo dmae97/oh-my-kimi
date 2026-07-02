@@ -10,9 +10,11 @@
 //! see issue #2211 ("Windows crash: Rust allocator failure after tasklist.exe
 //! popup"). The cdylib builds with `panic = "unwind"`, so a panic in vendored
 //! uutils code unwinds to the shell boundary and is recovered as a failed
-//! command; such recoverable panics are logged to disk only, while fatal
-//! crashes (allocation failure, or panics with no active uutils scope) still
-//! get the stderr dump + process exit. Either way the record stays diagnosable.
+//! command, and a panic in a `task::blocking` worker is caught at the napi
+//! boundary and surfaces as a rejected JS Promise; such recoverable panics are
+//! logged to disk only, while fatal crashes (allocation failure, or panics
+//! with no active recovery scope) still get the stderr dump + process exit.
+//! Either way the record stays diagnosable.
 //!
 //! Notes:
 //! - Backtraces are captured via [`Backtrace::force_capture`], so they work
@@ -66,9 +68,13 @@ thread_local! {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PanicDisposition {
+	/// No recovery boundary is active: persist the report, echo it to stderr,
+	/// and chain to the default hook (which ends the process).
 	Fatal,
+	/// The panic will be caught and mapped to a failed command / rejected
+	/// Promise: persist the report to the crash log for diagnosis, but keep
+	/// stderr quiet and do not chain to the default hook.
 	LoggedRecoverable,
-	SilentRecoverable,
 }
 
 /// Install the panic and allocation-error hooks. Idempotent.
@@ -76,7 +82,6 @@ pub fn install() {
 	INSTALL.call_once(|| {
 		let prev_panic = std::panic::take_hook();
 		std::panic::set_hook(Box::new(move |info| match panic_disposition() {
-			PanicDisposition::SilentRecoverable => {},
 			PanicDisposition::LoggedRecoverable => {
 				let report = format_panic_report(info);
 				persist(&report, CrashKind::Panic, false);
@@ -108,8 +113,10 @@ pub fn install() {
 ///
 /// The global panic hook checks this thread-local scope before reporting a
 /// panic. When a blocking worker closure panics, [`std::panic::catch_unwind`]
-/// will turn it into a rejected JS Promise, so the hook must not emit a crash
-/// report or chain to the default hook while this scope is active.
+/// will turn it into a rejected JS Promise, so the hook downgrades the panic
+/// to [`PanicDisposition::LoggedRecoverable`]: the report (location +
+/// backtrace) is still persisted to the crash log, but nothing is echoed to
+/// stderr and the default hook is not chained.
 pub(crate) fn blocking_task_panic_scope<R>(f: impl FnOnce() -> R) -> R {
 	struct Guard;
 
@@ -129,9 +136,7 @@ fn blocking_task_panic_scope_active() -> bool {
 }
 
 fn panic_disposition() -> PanicDisposition {
-	if blocking_task_panic_scope_active() {
-		PanicDisposition::SilentRecoverable
-	} else if pi_uutils_ctx::is_active() {
+	if blocking_task_panic_scope_active() || pi_uutils_ctx::is_active() {
 		PanicDisposition::LoggedRecoverable
 	} else {
 		PanicDisposition::Fatal
@@ -209,7 +214,12 @@ fn write_alloc_failure_line(mut out: impl std::io::Write, size: usize) {
 	let _ = out.write_all(b" bytes failed\n");
 }
 
-fn panic_payload(payload: &(dyn std::any::Any + Send)) -> String {
+/// Extract a printable message from a panic payload captured by
+/// [`std::panic::catch_unwind`] or handed to the panic hook. Handles the two
+/// shapes `panic!` produces — `&'static str` (literal) and `String`
+/// (formatted) — and degrades to a sentinel for arbitrary
+/// [`panic_any`](std::panic::panic_any) payloads.
+pub(crate) fn panic_payload(payload: &(dyn std::any::Any + Send)) -> String {
 	if let Some(s) = payload.downcast_ref::<&'static str>() {
 		(*s).to_owned()
 	} else if let Some(s) = payload.downcast_ref::<String>() {
@@ -221,8 +231,9 @@ fn panic_payload(payload: &(dyn std::any::Any + Send)) -> String {
 
 fn persist(report: &str, kind: CrashKind, echo_stderr: bool) {
 	// Echo to stderr so the user sees something even when the file write fails
-	// (read-only home, missing $HOME, …). Suppressed for recoverable uutils
-	// panics, which surface as a failed command instead of a crash.
+	// (read-only home, missing $HOME, …). Suppressed for recoverable panics
+	// (uutils shell boundary, `task::blocking` workers), which surface as a
+	// failed command / rejected Promise instead of a crash.
 	if echo_stderr {
 		let _ = writeln!(std::io::stderr(), "{report}");
 	}
@@ -379,24 +390,20 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn blocking_task_panic_scope_silences_crash_reporting() {
+	fn blocking_task_panic_scope_downgrades_to_logged_recoverable() {
 		assert_eq!(panic_disposition(), PanicDisposition::Fatal);
 		blocking_task_panic_scope(|| {
-			assert_eq!(panic_disposition(), PanicDisposition::SilentRecoverable);
+			assert_eq!(panic_disposition(), PanicDisposition::LoggedRecoverable);
 		});
 		assert_eq!(panic_disposition(), PanicDisposition::Fatal);
 	}
 
 	#[test]
 	fn blocking_task_panic_scope_restores_after_unwind() {
-		// `std::panic::set_hook` is process-global; serialize the swap with
-		// every other hook-mutating test so a parallel take/set cannot pin the
-		// noop hook as the global default (see `crate::testing`).
-		let _hook_guard = crate::testing::lock_panic_hook();
-		let prev = std::panic::take_hook();
-		std::panic::set_hook(Box::new(|_| {}));
+		// Silence the process-global hook for the injected panic (and serialize
+		// the swap with every other hook-mutating test — see `crate::testing`).
+		let _silence = crate::testing::SilenceHook::new();
 		let unwound = std::panic::catch_unwind(|| blocking_task_panic_scope(|| panic!("boom")));
-		std::panic::set_hook(prev);
 
 		assert!(unwound.is_err(), "panic propagated to catch_unwind");
 		assert_eq!(panic_disposition(), PanicDisposition::Fatal);
