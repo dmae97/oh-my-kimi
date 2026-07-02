@@ -306,6 +306,54 @@ describe("Patcher seen-line provenance", () => {
 		expect(fs.get(PATH)).toBe("l1\nl2\nl3\nL4\nl5\n");
 	});
 
+	it("reveals the actual line content in the rejection and unblocks a same-tag retry", async () => {
+		const fs = new InMemoryFilesystem([[PATH, CONTENT]]);
+		const snapshots = new InMemorySnapshotStore();
+		// Read only surfaced lines 1-2; anchor line 4 is unseen.
+		const tag = snapshots.record(PATH, CONTENT, [1, 2]);
+		const patcher = new Patcher({ fs, snapshots });
+
+		let message: string | undefined;
+		try {
+			await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 4.=4:\n+L4`));
+		} catch (err) {
+			message = (err as Error).message;
+		}
+		expect(message).toMatch(/never displayed \(it showed/);
+		expect(message).toContain("Actual file content at those lines:");
+		expect(message).toContain("4:l4");
+		expect(fs.get(PATH)).toBe(CONTENT);
+
+		// The revealed line joins the snapshot's seen set, so a straight retry
+		// with the same [path#tag] header applies — no extra read required.
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 4.=4:\n+L4`));
+		expect(result.sections[0]?.op).toBe("update");
+		expect(fs.get(PATH)).toBe("l1\nl2\nl3\nL4\nl5\n");
+	});
+
+	it("truncates the reveal at the cap and directs the tail back to a range re-read", async () => {
+		const bigContent = `${Array.from({ length: 200 }, (_, i) => `l${i + 1}`).join("\n")}\n`;
+		const fs = new InMemoryFilesystem([[PATH, bigContent]]);
+		const snapshots = new InMemorySnapshotStore();
+		const tag = snapshots.record(PATH, bigContent, [1]);
+		const patcher = new Patcher({ fs, snapshots });
+
+		// Anchor 60 unseen lines — over the 40-line inline reveal cap.
+		const dels = Array.from({ length: 60 }, (_, i) => `DEL ${100 + i}`).join("\n");
+		let message: string | undefined;
+		try {
+			await patcher.apply(Patch.parse(`[${PATH}#${tag}]\n${dels}`));
+		} catch (err) {
+			message = (err as Error).message;
+		}
+		expect(message).toContain("Preview of the actual file content at the first 40 unseen line(s)");
+		expect(message).toContain("100:l100");
+		expect(message).toContain("139:l139");
+		expect(message).not.toContain("140:l140");
+		expect(message).toMatch(new RegExp(`${PATH}:100-159`));
+		expect(fs.get(PATH)).toBe(bigContent);
+	});
+
 	it("skips the check when no seen lines were recorded (absent → allow)", async () => {
 		const fs = new InMemoryFilesystem([[PATH, CONTENT]]);
 		const snapshots = new InMemorySnapshotStore();

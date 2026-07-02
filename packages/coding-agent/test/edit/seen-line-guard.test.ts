@@ -169,6 +169,66 @@ describe("read → edit seen-line guard", () => {
 		expect(edited).toContain("\tconfigure_gpio();\n\tbeep_3k8hz_on();\n\tk_sleep(K_MSEC(300));\n\tbeep_3k8hz_off();");
 		expect(edited).not.toContain("\tbeep_3k8hz_on();\n\tline_1289();\n\tk_sleep(K_MSEC(300));");
 	});
+
+	it("reveals the actual line content in the rejection and unblocks a same-tag retry", async () => {
+		const file = path.join(tmpDir, "notes.txt");
+		await Bun.write(file, CONTENT);
+		const session = createSession(tmpDir);
+
+		const read = await new ReadTool(session).execute("r1", { path: `${file}:1-3` });
+		const tag = tagFromOutput(resultText(read));
+
+		let message: string | undefined;
+		try {
+			await executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 10.=12:\n+X10\n+X11\n+X12`, session));
+		} catch (err) {
+			message = (err as Error).message;
+		}
+		// Rejection surfaces the ACTUAL file content at the unseen anchor lines.
+		expect(message).toMatch(/never displayed \(it showed/);
+		expect(message).toContain("Actual file content at those lines:");
+		expect(message).toContain("10:line 10");
+		expect(message).toContain("11:line 11");
+		expect(message).toContain("12:line 12");
+		// Snapshot text preserved verbatim — the reject is still a no-op on disk.
+		expect(await Bun.file(file).text()).toBe(CONTENT);
+
+		// The revealed lines are now in the snapshot's seen set, so a straight
+		// retry with the same `[path#tag]` header succeeds without a re-read.
+		await executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 10.=12:\n+X10\n+X11\n+X12`, session));
+		const after = await Bun.file(file).text();
+		expect(after).toContain("X10\nX11\nX12");
+		expect(after).not.toContain("line 10");
+	});
+
+	it("keeps the re-read fallback when the anchor set exceeds the inline reveal cap", async () => {
+		const file = path.join(tmpDir, "long.txt");
+		const lines = Array.from({ length: 200 }, (_, i) => `line ${i + 1}`);
+		await Bun.write(file, `${lines.join("\n")}\n`);
+		const session = createSession(tmpDir);
+
+		// Partial read of the head — seenLines = 1..3 only.
+		const read = await new ReadTool(session).execute("r1", { path: `${file}:1-3` });
+		const tag = tagFromOutput(resultText(read));
+
+		// Anchor 60 unseen lines — deliberately over the 40-line cap.
+		const dels = Array.from({ length: 60 }, (_, i) => `DEL ${100 + i}`).join("\n");
+		let message: string | undefined;
+		try {
+			await executeHashlineSingle(execOptions(`[long.txt#${tag}]\n${dels}`, session));
+		} catch (err) {
+			message = (err as Error).message;
+		}
+		expect(message).toMatch(/never displayed \(it showed/);
+		// Only the first cap-worth of lines are revealed.
+		expect(message).toContain("Preview of the actual file content at the first 40 unseen line(s)");
+		expect(message).toContain("100:line 100");
+		expect(message).toContain("139:line 139");
+		expect(message).not.toContain("140:line 140");
+		// Guidance directs at a range re-read of the FULL anchor range.
+		expect(message).toMatch(/long\.txt:100-159/);
+		expect(await Bun.file(file).text()).toBe(`${lines.join("\n")}\n`);
+	});
 });
 
 describe("search → edit seen-line guard", () => {

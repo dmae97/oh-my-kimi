@@ -33,6 +33,7 @@ import {
 	HEADTAIL_DRIFT_WARNING,
 	missingSnapshotTagMessage,
 	pathRecoveredFromTagMessage,
+	type RevealedLine,
 	unseenLinesMessage,
 } from "./messages";
 import { MismatchError } from "./mismatch";
@@ -40,6 +41,16 @@ import { detectLineEnding, type LineEnding, normalizeToLF, restoreLineEndings, s
 import { Recovery, type RecoveryResult } from "./recovery";
 import type { Snapshot, SnapshotStore } from "./snapshots";
 import type { ApplyResult, BlockResolution, BlockResolver, Edit, FileOp } from "./types";
+
+/**
+ * Upper bound on the number of unseen anchor lines whose actual file content
+ * we inline into a rejection error (see {@link Patcher.assertSeenLines}). Big
+ * enough to fit the common "edit a whole function body" retry path in one
+ * message, small enough to keep the error human-readable when the model
+ * over-anchors and to preserve the "re-read first" fallback for genuinely
+ * blind wide edits (only the revealed prefix gets merged into `seenLines`).
+ */
+const SEEN_LINE_REVEAL_CAP = 40;
 
 export interface PatcherOptions {
 	/** Storage backend used for all reads and writes. */
@@ -486,13 +497,35 @@ export class Patcher {
 	 * externally minted or aged out), so the edit applies as before. Only runs
 	 * on the no-drift path, where anchor line numbers index the tagged content
 	 * 1:1.
+	 *
+	 * The rejection inlines the actual file content at the unseen anchor lines
+	 * (from `matchedSnapshot.text`, which by definition equals the live
+	 * normalized content) and merges those lines into the snapshot's
+	 * seen-line set, so a straight retry with the same `[path#tag]` header
+	 * succeeds without a follow-up range read — the content the model
+	 * receives in the error IS proof it has now seen those lines. Ranges
+	 * beyond {@link SEEN_LINE_REVEAL_CAP} still bounce back to a range
+	 * re-read for the remainder; only the revealed prefix is merged.
 	 */
 	#assertSeenLines(section: PatchSection, expected: string, matchedSnapshot: Snapshot | null): void {
 		const seen = matchedSnapshot?.seenLines;
 		if (!seen || seen.size === 0) return;
 		const unseen = section.collectAnchorLines().filter(line => !seen.has(line));
 		if (unseen.length === 0) return;
-		throw new Error(unseenLinesMessage(section.path, unseen, expected));
+		const sourceLines = matchedSnapshot?.text.split("\n") ?? [];
+		const revealed: RevealedLine[] = [];
+		const revealCount = Math.min(unseen.length, SEEN_LINE_REVEAL_CAP);
+		for (let i = 0; i < revealCount; i++) {
+			const line = unseen[i];
+			// Out-of-range anchors are caught by parse/apply with a better
+			// message; skip them here so they never join the revealed set or
+			// the seen-line merge.
+			if (line < 1 || line > sourceLines.length) continue;
+			revealed.push({ line, text: sourceLines[line - 1] ?? "" });
+		}
+		const truncated = unseen.length > revealed.length;
+		for (const { line } of revealed) seen.add(line);
+		throw new Error(unseenLinesMessage(section.path, unseen, expected, { lines: revealed, truncated }));
 	}
 	#mismatchError(
 		section: PatchSection,
