@@ -657,6 +657,84 @@ describe("agentLoop with AgentMessage", () => {
 		expect(errorTurn.errorMessage).toBe("rate_limit_error");
 	});
 
+	it("labels the synthetic tool result for a provider-error turn as not-executed and preserves the upstream error", async () => {
+		const toolSchema = type({ value: "string" });
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "edit",
+			label: "Edit",
+			description: "Edit tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				return {
+					content: [{ type: "text", text: `edited: ${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [{ type: "toolCall", id: "tool-1", name: "edit", arguments: { value: "hello" } }],
+					stopReason: "error",
+					errorMessage: "Codex websocket transport error: websocket closed (1000)",
+				},
+			],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("edit thing")], context, config, undefined, mock.stream);
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const messages = await stream.result();
+
+		expect(messages.map(m => m.role)).toEqual(["user", "assistant", "toolResult"]);
+		const toolResult = messages[2] as ToolResultMessage;
+		expect(toolResult.isError).toBe(true);
+
+		const text = toolResult.content
+			.filter((c): c is { type: "text"; text: string } => c.type === "text")
+			.map(c => c.text)
+			.join("");
+		// The message must make it obvious the local tool never ran — this is the
+		// bug in #4321: the previous wording ("Tool execution failed due to an
+		// error: <upstream>") was indistinguishable from a real local tool
+		// failure.
+		expect(text).not.toContain("Tool execution failed due to an error");
+		expect(text.toLowerCase()).toContain("not executed");
+		expect(text.toLowerCase()).toContain("provider");
+		expect(text).toContain("Codex websocket transport error: websocket closed (1000)");
+
+		// Structured details on the synthetic result let downstream consumers
+		// (UI, telemetry, ACP) distinguish it from a real tool failure without
+		// string-matching the content.
+		const details = toolResult.details as {
+			__synthetic?: boolean;
+			source?: string;
+			executed?: boolean;
+			upstreamError?: string;
+		};
+		expect(details.__synthetic).toBe(true);
+		expect(details.source).toBe("assistant_stop_error");
+		expect(details.executed).toBe(false);
+		expect(details.upstreamError).toBe("Codex websocket transport error: websocket closed (1000)");
+
+		const endEvent = events.find(
+			(e): e is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+				e.type === "tool_execution_end" && e.toolCallId === "tool-1",
+		);
+		expect(endEvent).toBeDefined();
+		expect(endEvent?.isError).toBe(true);
+		// The event's result carries the same discriminator so the UI can
+		// render "provider transport failed, tool not executed" instead of a
+		// generic "Edit tool failed" panel.
+		expect(endEvent?.result?.details?.__synthetic).toBe(true);
+		expect(endEvent?.result?.details?.source).toBe("assistant_stop_error");
+		expect(endEvent?.result?.details?.executed).toBe(false);
+	});
+
 	it("recovers completed custom-wire tool calls after stream_read_error", async () => {
 		const executedParams: Array<{ value: string }> = [];
 		const toolSchema = type({ value: "string" });

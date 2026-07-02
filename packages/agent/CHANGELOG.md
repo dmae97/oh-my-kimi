@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed synthetic tool results emitted when an assistant turn ends with `stopReason: "error"` after a tool call was already streamed being surfaced by the CLI as if the local tool had failed. The placeholder result now reads "Tool call was not executed because the provider stream ended with an error before the tool could run: <upstream>" and carries a `SyntheticToolResultDetails` discriminator (`{ __synthetic: true, source: "assistant_stop_error", executed: false, upstreamError }`) on both the `ToolResultMessage` and the `tool_execution_end` event, so downstream UI/telemetry can distinguish provider-transport failures (e.g. Codex websocket close) from real local tool failures without string-matching ([#4321](https://github.com/can1357/oh-my-pi/issues/4321)).
+
 ## [16.3.0] - 2026-07-02
 
 ### Added
