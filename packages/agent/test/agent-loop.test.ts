@@ -2733,7 +2733,7 @@ describe("agentLoop kCursorExecResolved (issue #4348)", () => {
 				executeCalls += 1;
 				return {
 					content: [{ type: "text", text: `local run: ${params.command}` }],
-					details: {},
+					details: { command: params.command },
 				};
 			},
 		};
@@ -2822,7 +2822,10 @@ describe("agentLoop kCursorExecResolved (issue #4348)", () => {
 			parameters: toolSchema,
 			async execute(_id, params) {
 				executed.push(params.value);
-				return { content: [{ type: "text", text: `echoed: ${params.value}` }], details: {} };
+				return {
+					content: [{ type: "text", text: `echoed: ${params.value}` }],
+					details: { value: params.value },
+				};
 			},
 		};
 
