@@ -568,14 +568,17 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		const pendingCallConsumesSpinner =
 			this.#result === undefined &&
 			(renderer === undefined
-				? !this.#tool?.renderCall
+				? // Only the generic #formatToolExecution fallback consumes the frame;
+					// a custom renderCall/renderResult pair routes through the custom
+					// branch whose pending label is a static tool-name Text.
+					!this.#tool?.renderCall && !this.#tool?.renderResult
 				: typeof pendingAnimation === "function"
 					? pendingAnimation(this.#args)
 					: pendingAnimation === true);
 		const partialResultConsumesSpinner =
 			this.#result !== undefined &&
 			(renderer === undefined
-				? !this.#tool?.renderResult
+				? !this.#tool?.renderCall && !this.#tool?.renderResult
 				: typeof partialAnimation === "function"
 					? partialAnimation(this.#args)
 					: partialAnimation === true);

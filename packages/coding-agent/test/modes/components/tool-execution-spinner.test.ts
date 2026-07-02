@@ -121,4 +121,49 @@ describe("ToolExecutionComponent live preview spinners", () => {
 			component.stopAnimation();
 		}
 	});
+
+	it("does not tick github pending previews whose Text is materialized per rebuild", () => {
+		vi.useFakeTimers();
+		const requestRender = vi.fn();
+		const component = new ToolExecutionComponent(
+			"github",
+			{ op: "run_watch", run: "12345" },
+			{},
+			undefined,
+			{ requestRender } as unknown as TUI,
+			process.cwd(),
+		);
+
+		try {
+			requestRender.mockClear();
+			vi.advanceTimersByTime(500);
+			expect(requestRender).not.toHaveBeenCalled();
+		} finally {
+			component.stopAnimation();
+		}
+	});
+
+	it("does not tick custom tools whose pending label is a static tool-name Text", () => {
+		vi.useFakeTimers();
+		const requestRender = vi.fn();
+		// A renderResult-only custom tool renders the static tool-name label
+		// while pending, so the spinner interval must not start.
+		const tool = { name: "ext_tool", renderResult: () => undefined };
+		const component = new ToolExecutionComponent(
+			"ext_tool",
+			{ input: 1 },
+			{},
+			tool as never,
+			{ requestRender } as unknown as TUI,
+			process.cwd(),
+		);
+
+		try {
+			requestRender.mockClear();
+			vi.advanceTimersByTime(500);
+			expect(requestRender).not.toHaveBeenCalled();
+		} finally {
+			component.stopAnimation();
+		}
+	});
 });

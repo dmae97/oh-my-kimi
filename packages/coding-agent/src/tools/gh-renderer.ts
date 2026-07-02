@@ -416,7 +416,9 @@ function renderWatchCall(args: GithubToolRenderArgs, options: RenderResultOption
 }
 
 export const githubToolRenderer = {
-	animatedPendingPreview: true,
+	// No animatedPendingPreview: renderCall materializes plain Text components
+	// once per display rebuild (no render closure), so a live spinner interval
+	// would request 30fps repaints while the visible glyph stays frozen.
 	renderCall(args: GithubToolRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 		const op = typeof args.op === "string" && args.op.trim().length > 0 ? args.op.trim() : undefined;
 		if (op === "run_watch") {
