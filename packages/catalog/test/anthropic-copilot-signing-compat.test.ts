@@ -41,9 +41,9 @@ describe("#2851 anthropic compat: github-copilot is a signing endpoint", () => {
 		expect(compat.replayUnsignedThinking).toBe(false);
 	});
 
-	it("still replays unsigned thinking for generic non-official reasoning endpoints (#2005, no regression)", () => {
+	it("demotes unsigned thinking for generic custom reasoning endpoints by default", () => {
 		const compat = buildAnthropicCompat(spec({ provider: "custom", baseUrl: "https://llm.example.com/anthropic" }));
-		expect(compat.replayUnsignedThinking).toBe(true);
+		expect(compat.replayUnsignedThinking).toBe(false);
 	});
 
 	it("still degrades unsigned thinking to text for official Anthropic", () => {

@@ -73,26 +73,16 @@ export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): Res
 		// into a class that reads `.id`.
 		requiresToolResultId: isZai,
 		requiresThinkingEnabled,
-		// Official Anthropic enforces signature-based thinking-chain integrity, so
-		// unsigned thinking blocks must stay text there. Anthropic-compatible
-		// reasoning endpoints commonly emit unsigned thinking blocks while still
-		// expecting them back as `type: "thinking"` on continuation; demoting them
-		// loses the reasoning chain and can destabilize the next tool-call
-		// arguments (#2005). Known non-signing hosts (Z.AI, DeepSeek) are also
-		// preserved for compatibility.
+		// Official Anthropic and Anthropic-compatible signing endpoints enforce
+		// signature-based thinking-chain integrity, so unsigned thinking blocks
+		// must stay text there. Custom `anthropic-messages` providers default to
+		// the signed-safe behavior: sending `signature: ""` to a signing endpoint
+		// 400s, while demoting unsigned thinking to text is accepted.
 		//
-		// GitHub Copilot's `anthropic-messages` proxy and ZenMux's Anthropic route
-		// are excluded: both forward to signature-enforcing Anthropic and return
-		// full thinking signatures, so they are SIGNING endpoints. Replaying a
-		// stripped/unsigned thinking block as `signature: ""` there 400s the whole
-		// request ("Invalid signature") — most visibly when a checkpoint/branch-
-		// return turn's end_turn-bound signature is stripped on replay (issues
-		// #2851, #4192). Treating them like official Anthropic degrades such
-		// blocks to text instead, which the API accepts.
-		replayUnsignedThinking:
-			!isCopilot &&
-			!isZenmux &&
-			(isZai || modelMatchesHost(spec, "deepseekFamily") || (spec.reasoning && !official)),
+		// Known non-signing hosts (Z.AI, DeepSeek) are preserved for compatibility;
+		// other non-signing custom gateways can opt in via
+		// `compat.replayUnsignedThinking: true`.
+		replayUnsignedThinking: !isCopilot && !isZenmux && (isZai || modelMatchesHost(spec, "deepseekFamily")),
 		escapeBuiltinToolNames: modelMatchesHost(spec, "umans"),
 	};
 	applyCompatOverrides(compat, spec.compat);
