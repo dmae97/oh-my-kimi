@@ -429,7 +429,17 @@ const patchStrategy: EditStreamingStrategy<PatchArgs> = {
 
 interface HashlineArgs {
 	input?: string;
+	_input?: string;
 	__partialJson?: string;
+}
+
+/**
+ * Text payload of a hashline edit call. The public schema declares `input`, but
+ * streaming sees the raw model output before validation coerces aliases, so a
+ * provider that emits the legacy `_input` key still previews correctly.
+ */
+function hashlineEditText(args: HashlineArgs | undefined): string | undefined {
+	return args?.input ?? args?._input;
 }
 
 /**
@@ -513,7 +523,8 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 		return args;
 	},
 	async computeDiffPreview(args, ctx) {
-		if (typeof args.input !== "string" || args.input.length === 0) return null;
+		const input = hashlineEditText(args);
+		if (typeof input !== "string" || input.length === 0) return null;
 		// Unlike apply_patch, hashline previews flow through `applyPartialTo`,
 		// whose streaming-tolerant parser (`parsePatchStreaming` → `endStreaming`)
 		// drops a payload-less trailing op and projects a partially-typed payload
@@ -521,7 +532,6 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 		// would instead strip the sole payload of a single-op `replace`/`insert`
 		// for almost the entire stream, collapsing the preview to "No changes" and
 		// rendering a blank box. Feed the raw in-flight text straight through.
-		const input = args.input;
 		ctx.signal.throwIfAborted();
 
 		let sections: readonly HashlineInputSection[];
@@ -579,19 +589,19 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 		return "";
 	},
 	matcherDigest(args) {
-		const input = args?.input;
+		const input = hashlineEditText(args);
 		if (typeof input !== "string") return undefined;
 		// Body rows are `+TEXT`; headers and op lines are grammar, never content.
 		return extractAddedLines(input, false);
 	},
 	matcherPaths(args) {
-		const input = args?.input;
+		const input = hashlineEditText(args);
 		if (typeof input !== "string" || input.length === 0) return undefined;
 		const paths = extractHashlineHeaderPaths(input);
 		return paths.length > 0 ? paths : undefined;
 	},
 	matcherEntries(args) {
-		const input = args?.input;
+		const input = hashlineEditText(args);
 		if (typeof input !== "string" || input.length === 0) return undefined;
 		const entries = splitHashlinePerFile(input);
 		return entries.length > 0 ? entries : undefined;

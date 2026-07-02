@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Improved input detection for edit tool summary and body views
+
 ## [16.3.1] - 2026-07-02
 
 ### Changed

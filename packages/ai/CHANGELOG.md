@@ -6,19 +6,16 @@
 
 - Added support for overlaying Anthropic per-tier usage limits onto cached usage reports
 - Improved Anthropic credential ranking by using drain-rate pressure for weekly usage limits
-
 - Added Claude Fable weekly usage tracking to the Anthropic usage provider: the OAuth usage endpoint's new generic `limits` array is parsed for model-scoped weekly windows (`kind: "weekly_scoped"`), so `omp usage`, `/usage`, and usage history now surface a separate `Claude 7 Day (Fable)` row (id `anthropic:7d:fable`) alongside the shared 5h/7d windows — mirroring how Codex Spark rows are tracked. The `session`/`weekly_all` entries also backfill the shared 5h/7d windows if the legacy `five_hour`/`seven_day` buckets ever go null (as `seven_day_opus`/`seven_day_sonnet` already have).
 - Added `scopeLimits`/`blockScope` to the Anthropic credential-ranking strategy so an exhausted Fable/Mythos weekly cap no longer blocks the whole OAuth credential: credential-wide exhaustion gating now considers only shared umbrella windows plus the requested model family's own scoped cap, and reactive usage-limit blocks for Fable/Mythos requests land in a per-tier backoff scope (mirroring the Antigravity per-counter precedent).
 
 ### Fixed
 
+- Improved robustness of single-argument tool calls by automatically remapping mislabeled string arguments
+
 - Fixed Anthropic OAuth usage reporting to stop retrying on 429 rate-limit errors
 - Fixed usage cache to correctly persist null values during cold-start failure backoff windows
-### Fixed
-
 - Fixed cursor-agent persisted transcripts losing tool-call structure by synthesizing `toolCall` content blocks for exec-channel native tools (`bash`/`read`/`write`/`grep`/`ls`/`delete`/`lsp`), so replay pairs each tool result with its call instead of rendering header-less tool output beneath the last assistant text ([#4348](https://github.com/can1357/oh-my-pi/issues/4348)).
-### Fixed
-
 - Fixed OpenAI-compatible streaming usage parsing to prefer non-zero nested cached token counts when root `cached_tokens` is zero ([#4337](https://github.com/can1357/oh-my-pi/issues/4337)).
 - Fixed cursor-agent persisted transcripts losing tool-call structure by synthesizing `toolCall` content blocks for exec-channel native tools (`bash`/`read`/`write`/`grep`/`ls`/`delete`/`lsp`), so replay pairs each tool result with its call instead of rendering header-less tool output beneath the last assistant text ([#4348](https://github.com/can1357/oh-my-pi/issues/4348)). Synthesized blocks carry a new `kCursorExecResolved` symbol marker so the shared agent loop skips executing them a second time.
 

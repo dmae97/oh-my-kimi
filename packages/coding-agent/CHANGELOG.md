@@ -4,18 +4,15 @@
 
 ### Changed
 
-- Defer session_stop extension hooks while agent-owned background jobs are still in progress
+- Removed `_input` as a supported alias for the `edit` tool input field
 
+- Defer session_stop extension hooks while agent-owned background jobs are still in progress
 - Stop-time settle passes now treat a yield with background async jobs (async `bash`/`task` spawns) owned by the agent — still running or with undelivered results — as a scheduling pause instead of a terminal stop: the incomplete-todo reminder stays silent and the `session_stop` hook pass is deferred, both firing at the settle reached once the session is fully idle. Async-result delivery re-wakes the loop, so neither pass is lost.
 
 ### Fixed
 
 - Improved reliability of edits when file snapshots share identical 16-bit hash tags
-### Fixed
-
 - Fixed ACP `terminal/create` sending the bash tool's full shell line in `command` with no `args`, which broke spec-conformant clients that spawn `command`+`args` directly (no implicit shell) — any command containing a space, pipe, `&&`, redirect, or `$(...)` failed with `ENOENT` and the agent silently degraded to read-only tools. The bash tool now wraps the shell line before calling `clientBridge.createTerminal`, reusing the same shell binary + args the local `bash-executor` resolves via `settings.getShellConfig()` (Git Bash / `bash.exe` on Windows, `$SHELL` with `sh` fallback on POSIX) so bash semantics — `$VAR`, `$(...)`, `source`, POSIX quoting, `-l` — are preserved on both platforms. ([#4333](https://github.com/can1357/oh-my-pi/issues/4333))
-### Fixed
-
 - Fixed inference worker subprocesses (TTS, STT, tiny-model, mnemopi embeddings) discarding stderr, which left every unexpected exit — most visibly the local Kokoro TTS worker's recurring `exit code 7` crash loop — undiagnosable from the parent's logs. `createWorkerSubprocess` now pipes stderr without starting a live read while the worker is idle, then drains the stream after `onExit`, emits captured lines to `logger.debug` under an `<exitLabel> stderr` message, and keeps the last 16 KiB in a bounded ring that gets appended to the `Error` surfaced through `onError`. The exit surface is synchronized with the post-exit drain via `SpawnedSubprocess.stderrDrained`, so the full native trace shows up on the `tts: worker error` line without reintroducing event-loop liveness from unref'd workers. ([#4324](https://github.com/can1357/oh-my-pi/issues/4324))
 
 ## [16.3.2] - 2026-07-02

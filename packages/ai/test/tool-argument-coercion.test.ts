@@ -1823,4 +1823,68 @@ describe("Tool argument coercion", () => {
 			expect(result).toEqual({ op: "done", count: 2 });
 		});
 	});
+
+	describe("single-string-field coercion", () => {
+		it("remaps a different string field to the single required string field when target is absent", () => {
+			const tool: Tool = {
+				name: "single-arg",
+				description: "",
+				parameters: z.object({ input: z.string() }),
+			};
+			const result = validateToolArguments(tool, {
+				type: "toolCall",
+				id: "c1",
+				name: "single-arg",
+				arguments: { _input: "hello payload" },
+			}) as { input: string };
+			expect(result).toEqual({ input: "hello payload" });
+		});
+
+		it("leaves arguments alone when the target field is present but has the wrong type", () => {
+			const tool: Tool = {
+				name: "single-arg",
+				description: "",
+				parameters: z.object({ input: z.string() }),
+			};
+			const result = validateToolArguments(tool, {
+				type: "toolCall",
+				id: "c2",
+				name: "single-arg",
+				arguments: { input: 123, _input: "hello" },
+			}) as { input: string };
+			expect(result.input).toBe("123");
+		});
+
+		it("does not remap when the schema has multiple fields", () => {
+			const tool: Tool = {
+				name: "multi-arg",
+				description: "",
+				parameters: z.object({ input: z.string(), path: z.string() }),
+			};
+			expect(() =>
+				validateToolArguments(tool, {
+					type: "toolCall",
+					id: "c3",
+					name: "multi-arg",
+					arguments: { other: "hello", path: "file.ts" },
+				}),
+			).toThrow();
+		});
+
+		it("does not remap when there is no string candidate", () => {
+			const tool: Tool = {
+				name: "single-arg",
+				description: "",
+				parameters: z.object({ input: z.string() }),
+			};
+			expect(() =>
+				validateToolArguments(tool, {
+					type: "toolCall",
+					id: "c4",
+					name: "single-arg",
+					arguments: { other: 123 },
+				}),
+			).toThrow();
+		});
+	});
 });

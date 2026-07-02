@@ -13,7 +13,7 @@ type ToolArgsRevealComponent = {
 // patch/replace `edits[].diff`) still fall through to the throttled parse.
 const STREAMING_STRING_KEYS_BY_TOOL: Record<string, readonly string[]> = {
 	write: ["content"],
-	edit: ["input"],
+	edit: ["input", "_input"],
 	eval: ["code"],
 };
 
