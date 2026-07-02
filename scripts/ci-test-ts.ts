@@ -627,30 +627,36 @@ export function extractFailingTests(output: string): FailingTest[] {
 // without per-test markers (no parseable failures) the raw log is replayed as a
 // fallback in quiet mode. The banner repeats below so it stays visible whether
 // you scroll to the top or the bottom of the failures.
+export function formatChunkFailure(failure: ChunkOutcome, replayOutput: boolean): string {
+	const lines: string[] = [];
+	lines.push(
+		"",
+		style.bold(style.red(`✗ ${failure.label} (exit ${failure.exitCode})`)),
+		style.dim(`$ ${failure.command}`),
+	);
+	const failing = extractFailingTests(failure.output);
+	// Fully attributed only when every failure carries its own bun block;
+	// otherwise (no markers, or a marker with no preceding frame — timeouts,
+	// crashes) name what we can and replay the raw log so no error is lost.
+	const fullyAttributed = failing.length > 0 && failing.every(test => test.detail.length > 0);
+	for (const test of failing) {
+		lines.push("", `  ${style.red("✗")} ${style.bold(test.name)}`);
+		// Flush-left and verbatim so bun's caret/diff alignment is preserved.
+		if (replayOutput && fullyAttributed) {
+			lines.push(test.detail);
+		}
+	}
+	if (replayOutput && !fullyAttributed && failure.output.trim().length > 0) {
+		lines.push("", failure.output.trimEnd());
+	}
+	return lines.join("\n");
+}
+
 export function formatFailureReport(failures: ChunkOutcome[], total: number, replayOutput: boolean): string {
 	const header = `${failures.length} of ${total} test chunk(s) FAILED`;
 	const lines: string[] = ["", style.bold(style.red(`━━━ ${header} ━━━`))];
 	for (const failure of failures) {
-		lines.push(
-			"",
-			style.bold(style.red(`✗ ${failure.label} (exit ${failure.exitCode})`)),
-			style.dim(`$ ${failure.command}`),
-		);
-		const failing = extractFailingTests(failure.output);
-		// Fully attributed only when every failure carries its own bun block;
-		// otherwise (no markers, or a marker with no preceding frame — timeouts,
-		// crashes) name what we can and replay the raw log so no error is lost.
-		const fullyAttributed = failing.length > 0 && failing.every(test => test.detail.length > 0);
-		for (const test of failing) {
-			lines.push("", `  ${style.red("✗")} ${style.bold(test.name)}`);
-			// Flush-left and verbatim so bun's caret/diff alignment is preserved.
-			if (replayOutput && fullyAttributed) {
-				lines.push(test.detail);
-			}
-		}
-		if (replayOutput && !fullyAttributed && failure.output.trim().length > 0) {
-			lines.push("", failure.output.trimEnd());
-		}
+		lines.push(formatChunkFailure(failure, replayOutput));
 	}
 	lines.push("", style.red(header));
 	return lines.join("\n");
@@ -757,7 +763,11 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 				output: `${stdout.text}${stderr.text}${timedOut ? `\n[watchdog] chunk exceeded ${Math.round(chunkTimeoutMs() / 1000)}s; killed with SIGKILL (OMP_TEST_CHUNK_TIMEOUT to change)\n` : ""}`,
 			};
 			if (quiet) {
-				process.stdout.write(`${formatProgressLine(outcome)}\n`);
+				let msg = `${formatProgressLine(outcome)}\n`;
+				if (exitCode !== 0 || timedOut) {
+					msg += `${formatChunkFailure(outcome, true)}\n`;
+				}
+				process.stdout.write(msg);
 			} else {
 				const status = exitCode === 0 ? "ok" : `FAILED exit ${exitCode}`;
 				process.stdout.write(
@@ -773,14 +783,13 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 	const runStartedAt = performance.now();
 	await Promise.all(Array.from({ length: concurrency }, () => worker()));
 
-	if (failures.length > 0) {
-		process.stdout.write(`${formatFailureReport(failures, commands.length, quiet)}\n`);
-	}
 	if (quiet) {
 		const totalSeconds = (performance.now() - runStartedAt) / 1000;
 		process.stdout.write(
 			`${formatSummaryFooter(commands.length - failures.length, failures.length, totalSeconds)}\n`,
 		);
+	} else if (failures.length > 0) {
+		process.stdout.write(style.bold(style.red(`\n${failures.length} of ${commands.length} test chunk(s) FAILED\n`)));
 	}
 	if (failures.length > 0) {
 		process.exitCode = 1;

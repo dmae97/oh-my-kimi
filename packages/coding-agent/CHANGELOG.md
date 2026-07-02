@@ -16,7 +16,6 @@
 
 - Fixed race conditions and potential hangs during agent startup by improving process lifecycle management
 - Fixed RpcClient startup errors intermittently losing the child's stderr (e.g. the "Unknown provider" message) by waiting for the process to exit — and its stderr to fully drain — before reporting a failed start; also fixed an unhandled rejection when the agent process is killed before becoming ready
-
 - Improved reliability of file edits when snapshots share identical hash tags
 - Fixed terminal creation in ACP by properly wrapping shell commands and arguments, resolving execution failures (such as ENOENT errors) on Windows and POSIX platforms
 - Fixed inference worker subprocesses (such as TTS, STT, and embeddings) discarding stderr, ensuring unexpected crashes and exit traces are properly captured and surfaced in logs
