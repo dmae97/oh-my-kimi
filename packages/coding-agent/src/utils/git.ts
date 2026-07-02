@@ -1750,6 +1750,69 @@ export const stash = {
 		if (options?.index) args.push("--index");
 		await runEffect(cwd, args);
 	},
+	/**
+	 * Return the working-tree patch that `stash@{0}` would apply, in a form
+	 * that `git apply --check` can consume. Empty string when no stash entry
+	 * exists or the stash contains no diffable working-tree changes.
+	 */
+	async showPatch(cwd: string): Promise<string> {
+		return (await tryText(cwd, ["stash", "show", "-p", "--binary", "stash@{0}"], { readOnly: true })) ?? "";
+	},
+	/** Return untracked paths stored in the top stash entry. */
+	async untrackedFiles(cwd: string): Promise<string[]> {
+		const output = await tryText(cwd, ["ls-tree", "-r", "-z", "--name-only", "stash@{0}^3"], { readOnly: true });
+		return output?.split("\0").filter(Boolean) ?? [];
+	},
+	/**
+	 * Attempt to restore the top stash entry. On success returns `true` and
+	 * git drops the stash entry. On conflict returns `false`, leaves the stash
+	 * entry preserved for manual resolution, and guarantees the failed restore
+	 * leaves no unmerged index entries or partially-restored untracked files.
+	 *
+	 * The historical raw `pop` catches the failure in a `finally` block and
+	 * only logs — it leaves `.git/index` with stage 1/2/3 unmerged entries
+	 * that survive indefinitely, corrupting every subsequent overlay-isolated
+	 * task that reads through this repo's `.git/`. See issue #4175.
+	 */
+	async tryPop(cwd: string, options?: { index?: boolean }): Promise<boolean> {
+		// Preflight: `git stash pop` internally does a 3-way merge, so a plain
+		// `git apply --check` is too strict — it rejects hunks whose context
+		// drifted from HEAD even when 3-way merge would resolve them cleanly.
+		// Match pop's semantics with `--3way --check`, which succeeds iff the
+		// patch either applies directly or merges without conflict against
+		// the patch's `index abc..def` base blobs.
+		const workingPatch = await stash.showPatch(cwd);
+		if (workingPatch.trim() && !(await patch.canApplyText(cwd, workingPatch, { threeWay: true }))) {
+			return false;
+		}
+		const restoredUntracked = await stash.untrackedFiles(cwd);
+		try {
+			await stash.pop(cwd, options);
+			return true;
+		} catch {
+			// Preflight can still miss mode-only or delete/modify conflicts. If
+			// the pop left unmerged entries, wipe them: HEAD holds the merged
+			// state so `reset --hard HEAD` restores a clean index and working
+			// tree without losing the cherry-picked commits. A failed pop can
+			// still restore unrelated untracked files before exiting while
+			// preserving the stash entry, so clean only the untracked paths
+			// recorded in that stash. The user's WIP remains recoverable via
+			// `git stash pop`.
+			try {
+				await reset(cwd, { hard: true });
+			} catch {
+				/* best-effort cleanup — do not mask the primary conflict */
+			}
+			if (restoredUntracked.length > 0) {
+				try {
+					await clean(cwd, { includeIgnored: true, literalPathspecs: true, paths: restoredUntracked });
+				} catch {
+					/* best-effort cleanup — do not mask the primary conflict */
+				}
+			}
+			return false;
+		}
+	},
 };
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1819,9 +1882,18 @@ export async function reset(
 
 export async function clean(
 	cwd: string,
-	options: { ignoredOnly?: boolean; paths?: readonly string[]; signal?: AbortSignal } = {},
+	options: {
+		ignoredOnly?: boolean;
+		includeIgnored?: boolean;
+		literalPathspecs?: boolean;
+		paths?: readonly string[];
+		signal?: AbortSignal;
+	} = {},
 ): Promise<void> {
-	const args = ["clean", options.ignoredOnly ? "-fdX" : "-fd"];
+	const args = [options.literalPathspecs ? "--literal-pathspecs" : undefined, "clean"].filter(
+		(arg): arg is string => arg !== undefined,
+	);
+	args.push(options.ignoredOnly ? "-fdX" : options.includeIgnored ? "-fdx" : "-fd");
 	if (options.paths?.length) args.push("--", ...options.paths);
 	await runEffect(cwd, args, { signal: options.signal });
 }

@@ -65,6 +65,9 @@
 - Fixed transcript rebuilds (theme change, /shake, focus replay) showing stale streamed write/edit/eval content by sharing the partial-JSON decode between the live streaming path and every rebuild path.
 - Fixed an explicitly configured compaction.reserveTokens equal to the built-in default being silently replaced by the proportional small-window fallback; the setting now defaults to unset and explicit values are always honored.
 - Fixed user-configured LiteLLM discovery providers keeping stale reseller display-name suffixes for up to 24 hours after upgrade by invalidating the warm model cache.
+### Fixed
+
+- Fixed `mergeTaskBranches` and `applyNestedPatches` leaving stage 1/2/3 unmerged entries in `.git/index` when the post-merge stash pop conflicted with the cherry-picked HEAD. The corrupted index survived indefinitely and every subsequent overlay-isolated task inherited it through the lower layer, causing `captureRepoDeltaPatch` to emit `diff --cc` output that `git apply` rejects with "No valid patches in input". The stash restore now runs behind a 3-way preflight check (`git apply --3way --check`) and a `reset --hard HEAD` cleanup fallback; the stash entry is preserved for manual recovery on conflict, and the merged commits still land on HEAD. ([#4175](https://github.com/can1357/oh-my-pi/issues/4175))
 
 ## [16.2.13] - 2026-07-01
 
