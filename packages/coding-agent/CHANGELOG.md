@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed ACP `terminal/create` sending the bash tool's full shell line in `command` with no `args`, which broke spec-conformant clients that spawn `command`+`args` directly (no implicit shell) — any command containing a space, pipe, `&&`, redirect, or `$(...)` failed with `ENOENT` and the agent silently degraded to read-only tools. The bash tool now wraps the shell line before calling `clientBridge.createTerminal`, sending `{ command: "/bin/sh", args: ["-c", line] }` on POSIX and `{ command: "cmd.exe", args: ["/d", "/s", "/c", line] }` on Windows. ([#4333](https://github.com/can1357/oh-my-pi/issues/4333))
+
 ## [16.3.2] - 2026-07-02
 
 ### Breaking Changes

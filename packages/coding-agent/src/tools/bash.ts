@@ -47,6 +47,34 @@ const BASH_ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const DEFAULT_AUTO_BACKGROUND_THRESHOLD_MS = 60_000;
 
 /**
+ * Shape a shell command line for an ACP-conformant `terminal/create` request.
+ *
+ * ACP's `command` field is documented as the executable and `args` as its
+ * argv tail (see https://agentclientprotocol.com/protocol/v1/terminals), so a
+ * spec-conformant client `spawn(command, args)`s them directly — no implicit
+ * shell. A raw `bash` tool line ("git status && echo x | head") therefore has
+ * to be wrapped in an explicit shell invocation, otherwise the client tries
+ * to spawn the whole line as argv[0] and fails with `ENOENT` for anything
+ * containing a space, pipe, `&&`, redirect, or `$(...)`.
+ *
+ * The agent host's `process.platform` is used as a proxy for the client's
+ * platform — the near-universal ACP deployment shape is the editor spawning
+ * omp as a co-hosted subprocess. `/bin/sh` is the POSIX baseline; `cmd.exe`
+ * lives on `%PATH%` on all Windows hosts. `/d /s /c` for cmd matches Node's
+ * own `child_process.spawn({ shell: true })` convention: `/s` preserves the
+ * whole shell line as a single argv element on the receiving end.
+ */
+export function wrapShellLineForClientTerminal(line: string): {
+	command: string;
+	args: string[];
+} {
+	if (process.platform === "win32") {
+		return { command: "cmd.exe", args: ["/d", "/s", "/c", line] };
+	}
+	return { command: "/bin/sh", args: ["-c", line] };
+}
+
+/**
  * Bash patterns flagged as safety critical for approval policy.
  *
  * Kept intentionally tight — the cost of a false negative is data loss or a compromised host,
@@ -842,8 +870,10 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 		// Skip when pty=true (PTY needs the local terminal UI).
 		if (clientBridge?.capabilities.terminal && clientBridge.createTerminal && !pty) {
 			const bridgeWallTimeStart = performance.now();
+			const shellSpawn = wrapShellLineForClientTerminal(command);
 			const handle = await clientBridge.createTerminal({
-				command,
+				command: shellSpawn.command,
+				args: shellSpawn.args,
 				cwd: commandCwd,
 				env: resolvedEnv
 					? Object.entries(resolvedEnv).map(([name, value]) => ({ name, value: value as string }))

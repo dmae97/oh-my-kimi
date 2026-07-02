@@ -60,10 +60,18 @@ describe("BashTool ACP terminal routing", () => {
 			updates.push(update as { details?: { terminalId?: string } });
 		});
 
-		// createTerminal must be called with the expanded command
+		// createTerminal must be called with the ACP-shaped shell wrap so
+		// spec-conformant clients that spawn `command` directly (no implicit
+		// shell) can still run shell lines with spaces, pipes, `&&`, etc.
 		expect(createSpy).toHaveBeenCalledTimes(1);
 		const params = createSpy.mock.calls[0]![0];
-		expect(params.command).toBe("echo hi");
+		if (process.platform === "win32") {
+			expect(params.command).toBe("cmd.exe");
+			expect(params.args).toEqual(["/d", "/s", "/c", "echo hi"]);
+		} else {
+			expect(params.command).toBe("/bin/sh");
+			expect(params.args).toEqual(["-c", "echo hi"]);
+		}
 
 		// The first onUpdate must carry the terminalId so the editor can embed it
 		expect(updates.length).toBeGreaterThanOrEqual(1);
@@ -78,6 +86,41 @@ describe("BashTool ACP terminal routing", () => {
 
 		// The handle must always be released
 		expect(releaseSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("wraps shell metacharacters into args instead of packing them into command", async () => {
+		// Regression for #4333: a bash line with `&&`, pipes, or spaces must not
+		// be sent as raw `command` (spec-conformant ACP clients spawn command+args
+		// directly and would ENOENT the whole line as argv[0]).
+		const handle: ClientBridgeTerminalHandle = {
+			terminalId: "term-shell-wrap",
+			waitForExit: async () => ({ exitCode: 0, signal: null }),
+			currentOutput: async () => ({ output: "", truncated: false }),
+			kill: async () => {},
+			release: async () => {},
+		};
+		const bridge: ClientBridge = {
+			capabilities: { terminal: true },
+			createTerminal: async () => handle,
+		};
+		const createSpy = spyOn(bridge, "createTerminal");
+
+		const line = "git status && echo x | head";
+		const tool = new BashTool(makeSession(bridge));
+		await tool.execute("call-shell-wrap", { command: line });
+
+		expect(createSpy).toHaveBeenCalledTimes(1);
+		const params = createSpy.mock.calls[0]![0];
+		if (process.platform === "win32") {
+			expect(params.command).toBe("cmd.exe");
+			expect(params.args).toEqual(["/d", "/s", "/c", line]);
+		} else {
+			expect(params.command).toBe("/bin/sh");
+			expect(params.args).toEqual(["-c", line]);
+		}
+		// `args` must actually be present — the bug was omitting it entirely.
+		expect(params.args).toBeDefined();
+		expect(params.args?.length).toBeGreaterThan(0);
 	});
 
 	it("releases the client terminal when final output retrieval fails", async () => {
