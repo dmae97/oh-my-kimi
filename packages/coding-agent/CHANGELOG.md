@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed SSH tool hanging indefinitely on unreachable or wedged hosts: the pre-command `runSshSync` / `runSshCaptureSync` helpers (used by `ensureConnection` / `probeHostInfo`) previously invoked `ssh` through the Bun shell with no timeout or abort signal and sat outside the `SshTool.execute` command-timeout wrapper. They now run through `ptree.exec` with a 30s bound and `allowNonZero`/`allowAbort`, returning a failure result instead of blocking forever. ([#4232](https://github.com/can1357/oh-my-pi/issues/4232))
+
 ## [16.3.1] - 2026-07-02
 
 ### Breaking Changes
