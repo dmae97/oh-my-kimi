@@ -47,11 +47,17 @@ function readDirCached(dir: string): fs.Dirent[] {
 /**
  * `Dirent.isDirectory()` reports the entry type, not the link target, so a
  * `statSync` fallback is still needed for symlinks that point at a directory.
- * Every other entry is classified without a syscall.
+ * Some filesystems (NFS, FUSE, older SMB) report `UV_DIRENT_UNKNOWN` — every
+ * `isX()` returns false — so those entries also fall back to `statSync` rather
+ * than being silently dropped from the results.
  */
 function entryIsDirectory(dir: string, entry: fs.Dirent): boolean {
 	if (entry.isDirectory()) return true;
-	if (!entry.isSymbolicLink()) return false;
+	// Fast reject only for entry types we can confidently identify as non-directory.
+	if (entry.isFile() || entry.isBlockDevice() || entry.isCharacterDevice() || entry.isFIFO() || entry.isSocket()) {
+		return false;
+	}
+	// Symlink (need target type) or unknown (filesystem didn't provide a type) — stat to find out.
 	try {
 		return fs.statSync(path.join(dir, entry.name)).isDirectory();
 	} catch {

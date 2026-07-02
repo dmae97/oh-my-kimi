@@ -194,4 +194,44 @@ describe("MoveOverlay", () => {
 			await fsp.rm(bulk, { recursive: true, force: true });
 		}
 	});
+
+	it("classifies unknown-type Dirents via statSync fallback", async () => {
+		// Regression: filesystems that report UV_DIRENT_UNKNOWN return Dirents
+		// whose isDirectory()/isFile()/isSymbolicLink() all report false. Those
+		// entries must fall back to statSync so /move still lists real
+		// directories on NFS/FUSE/older SMB.
+		const unknownFs = await fsp.mkdtemp(path.join(os.tmpdir(), "omp-move-overlay-unknown-"));
+		try {
+			const realDir = path.join(unknownFs, "real-dir");
+			const realFile = path.join(unknownFs, "real-file.txt");
+			fs.mkdirSync(realDir);
+			fs.writeFileSync(realFile, "x");
+
+			const fakeDirent = (name: string): fs.Dirent =>
+				({
+					name,
+					isDirectory: () => false,
+					isFile: () => false,
+					isSymbolicLink: () => false,
+					isBlockDevice: () => false,
+					isCharacterDevice: () => false,
+					isFIFO: () => false,
+					isSocket: () => false,
+				}) as fs.Dirent;
+			const readdirSpy = spyOn(fs, "readdirSync").mockReturnValue([
+				fakeDirent("real-dir"),
+				fakeDirent("real-file.txt"),
+			] as never);
+			try {
+				const overlay = new MoveOverlay(unknownFs, () => {});
+				const text = strip(overlay.render(80));
+				expect(text).toContain("real-dir/");
+				expect(text).not.toContain("real-file.txt");
+			} finally {
+				readdirSpy.mockRestore();
+			}
+		} finally {
+			await fsp.rm(unknownFs, { recursive: true, force: true });
+		}
+	});
 });
