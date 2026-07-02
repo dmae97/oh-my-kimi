@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Memoize copy-selector preview highlight so keyboard navigation does not re-highlight the whole preview every render ([#4238](https://github.com/can1357/oh-my-pi/issues/4238))
+
+
 ## [16.3.0] - 2026-07-02
 
 ### Added
