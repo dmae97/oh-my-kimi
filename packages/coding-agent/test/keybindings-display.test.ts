@@ -38,8 +38,8 @@ describe("getDefaultPasteImageKeys", () => {
 		expect(getDefaultPasteImageKeys("win32")).toEqual(["ctrl+v", "alt+v"]);
 	});
 
-	it("uses Ctrl+V as the image-paste shortcut on non-Windows platforms", () => {
+	it("adds the macOS Command key event to Ctrl+V for image paste", () => {
 		expect(getDefaultPasteImageKeys("linux")).toEqual(["ctrl+v"]);
-		expect(getDefaultPasteImageKeys("darwin")).toEqual(["ctrl+v"]);
+		expect(getDefaultPasteImageKeys("darwin")).toEqual(["ctrl+v", "super+v"]);
 	});
 });

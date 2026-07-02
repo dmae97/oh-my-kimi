@@ -1,5 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { setKittyProtocolActive } from "@oh-my-pi/pi-tui/keys";
 import { $ } from "bun";
+import { getDefaultPasteImageKeys } from "../../config/keybindings";
 import { getEditorTheme, initTheme } from "../theme/theme";
 import {
 	CustomEditor,
@@ -122,6 +124,24 @@ describe("CustomEditor bracketed path paste", () => {
 
 		expect(editor.getText()).toBe("/tmp/report.csv");
 		expect(imagePathCalls).toBe(0);
+	});
+});
+describe("CustomEditor configured paste image keys", () => {
+	it("routes Ghostty Cmd+V kitty key events through the macOS image-paste default", () => {
+		const { editor } = makeEditor();
+		const onPasteImage = vi.fn();
+		editor.onPasteImage = onPasteImage;
+		editor.setActionKeys("app.clipboard.pasteImage", getDefaultPasteImageKeys("darwin"));
+		setKittyProtocolActive(true);
+
+		try {
+			editor.handleInput("\x1b[118;9u");
+		} finally {
+			setKittyProtocolActive(false);
+		}
+
+		expect(onPasteImage).toHaveBeenCalledTimes(1);
+		expect(editor.getText()).toBe("");
 	});
 });
 
