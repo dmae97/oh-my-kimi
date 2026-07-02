@@ -14,6 +14,8 @@
 
 ### Fixed
 
+- Fixed TUI loading animation sometimes failing to render during interactive mode status updates
+
 - Fixed race conditions and potential hangs during agent startup by improving process lifecycle management
 - Fixed RpcClient startup errors intermittently losing the child's stderr (e.g. the "Unknown provider" message) by waiting for the process to exit — and its stderr to fully drain — before reporting a failed start; also fixed an unhandled rejection when the agent process is killed before becoming ready
 - Improved reliability of file edits when snapshots share identical hash tags
