@@ -137,7 +137,6 @@ describe("executeBash", () => {
 		expect(result.output.trim()).toBe(tempDir);
 	});
 
-
 	it("honors symlinked cwd requests in persistent shells", async () => {
 		if (process.platform === "win32") {
 			return;

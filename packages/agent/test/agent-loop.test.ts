@@ -1258,6 +1258,75 @@ describe("agentLoop with AgentMessage", () => {
 		).toBe(true);
 	});
 
+	it("keeps legacy steering queued until the injection boundary when no non-consuming peek exists", async () => {
+		const toolSchema = type({ value: "string" });
+		const executed: string[] = [];
+		let steerReady = false;
+		let steeringDrained = false;
+		const steeringMessage = createUserMessage("queued steering");
+
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			concurrency: "exclusive",
+			async execute(_toolCallId, params) {
+				executed.push(params.value);
+				if (params.value === "first") steerReady = true;
+				return {
+					content: [{ type: "text", text: `ok:${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [
+						{ type: "toolCall", id: "tool-1", name: "echo", arguments: { value: "first" } },
+						{ type: "toolCall", id: "tool-2", name: "echo", arguments: { value: "second" } },
+					],
+				},
+				{ content: ["done"] },
+			],
+		});
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			interruptMode: "immediate",
+			// Legacy integrations may only have the consuming dequeue. The
+			// mid-batch poll must not call it; the boundary below owns the drain.
+			getSteeringMessages: async () => {
+				if (steerReady && !steeringDrained) {
+					steeringDrained = true;
+					return [steeringMessage];
+				}
+				return [];
+			},
+		};
+
+		const events: AgentEvent[] = [];
+		for await (const event of agentLoop([createUserMessage("start")], context, config, undefined, mock.stream)) {
+			events.push(event);
+		}
+
+		expect(executed).toEqual(["first", "second"]);
+		expect(steeringDrained).toBe(true);
+		expect(
+			events.some(
+				e => e.type === "message_start" && e.message.role === "user" && e.message.content === "queued steering",
+			),
+		).toBe(true);
+		expect(
+			mock.calls[1]?.context.messages.some(
+				m => m.role === "user" && typeof m.content === "string" && m.content === "queued steering",
+			),
+		).toBe(true);
+	});
+
 	it("does not abort a non-interruptible foreground tool when only IRC is queued", async () => {
 		const toolSchema = type({});
 		let ircReady = false;
