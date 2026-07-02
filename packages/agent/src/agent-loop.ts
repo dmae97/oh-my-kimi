@@ -26,6 +26,7 @@ import {
 	wrapInbandToolStream,
 } from "@oh-my-pi/pi-ai/dialect";
 import * as AIError from "@oh-my-pi/pi-ai/error";
+import { type CursorExecResolvedCarrier, kCursorExecResolved } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import {
 	createHarmonyAuditEvent,
 	detectHarmonyLeakInAssistantMessage,
@@ -910,7 +911,13 @@ async function runLoopBody(
 					// Create placeholder tool results for any tool calls in the aborted message
 					// This maintains the tool_use/tool_result pairing that the API requires
 					type ToolCallContent = Extract<AssistantMessage["content"][number], { type: "toolCall" }>;
-					const toolCalls = message.content.filter((c): c is ToolCallContent => c.type === "toolCall");
+					// Cursor exec-resolved blocks already have their toolResult buffered
+					// for out-of-band emission; a placeholder aborted result here would
+					// pair a duplicate to the same toolCallId (issue #4348 codex review).
+					const toolCalls = message.content.filter(
+						(c): c is ToolCallContent =>
+							c.type === "toolCall" && (c as CursorExecResolvedCarrier)[kCursorExecResolved] !== true,
+					);
 					const toolResults: ToolResultMessage[] = [];
 					for (const toolCall of toolCalls) {
 						const result = createAbortedToolResult(toolCall, stream, message.stopReason, message.errorMessage);
@@ -949,7 +956,15 @@ async function runLoopBody(
 				// trailing tool_use may be truncated with incomplete arguments — those calls
 				// are abandoned below. (`error`/`aborted` already returned above.)
 				type ToolCallContent = Extract<AssistantMessage["content"][number], { type: "toolCall" }>;
-				const toolCalls = message.content.filter((c): c is ToolCallContent => c.type === "toolCall");
+				// A Cursor exec-channel synthesized `toolCall` block carries
+				// `kCursorExecResolved` because Cursor already executed the tool
+				// server-side (via the bridge) and buffered the result for
+				// out-of-band emission — running it here again would duplicate the
+				// same side-effecting call (issue #4348 review by @chatgpt-codex-connector).
+				const toolCalls = message.content.filter(
+					(c): c is ToolCallContent =>
+						c.type === "toolCall" && (c as CursorExecResolvedCarrier)[kCursorExecResolved] !== true,
+				);
 				const runnableStop = message.stopReason === "toolUse" || message.stopReason === "stop";
 				hasMoreToolCalls = runnableStop && toolCalls.length > 0;
 
@@ -1685,7 +1700,13 @@ async function executeToolCalls(
 		afterToolCall,
 	} = config;
 	type ToolCallContent = Extract<AssistantMessage["content"][number], { type: "toolCall" }>;
-	const toolCalls = assistantMessage.content.filter((c): c is ToolCallContent => c.type === "toolCall");
+	// Defensive: the outer loop already filters exec-resolved blocks before
+	// deciding to invoke `executeToolCalls`, but skip them here too so the
+	// guarantee lives with the code that would re-run the tool.
+	const toolCalls = assistantMessage.content.filter(
+		(c): c is ToolCallContent =>
+			c.type === "toolCall" && (c as CursorExecResolvedCarrier)[kCursorExecResolved] !== true,
+	);
 	const emittedToolResults: ToolResultMessage[] = [];
 	const toolCallInfos = toolCalls.map(call => ({ id: call.id, name: call.name }));
 	const batchId = `${assistantMessage.timestamp ?? Date.now()}_${toolCalls[0]?.id ?? "batch"}`;

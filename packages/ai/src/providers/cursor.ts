@@ -133,6 +133,7 @@ import type {
 import { normalizeSystemPrompts } from "../utils";
 import {
 	clearStreamingPartialJson,
+	kCursorExecResolved,
 	kStreamingBlockIndex,
 	kStreamingBlockKind,
 	kStreamingLastParseLen,
@@ -629,6 +630,7 @@ export type ToolCallState = ToolCall & {
 	[kStreamingPartialJson]?: string;
 	[kStreamingLastParseLen]?: number;
 	[kStreamingBlockKind]: "mcp" | "todo" | "cursor-exec";
+	[kCursorExecResolved]?: true;
 };
 
 export interface BlockState {
@@ -2082,6 +2084,12 @@ function endCurrentThinkingBlock(
  * `renderSessionContext`, so they render as header-less `⎿` lines beneath the
  * last text block instead of proper tool components (issue #4348).
  *
+ * The block is stamped with {@link kCursorExecResolved} so the shared
+ * `agent-loop.ts` execution pass skips it — Cursor's server-driven exec
+ * channel already ran the tool via the bridge and buffered the result, so
+ * treating this block as runnable would re-execute the same side-effecting
+ * tool a second time.
+ *
  * Exported for tests to exercise ordering with adjacent text/thinking blocks.
  */
 export function synthesizeCursorExecToolCall(
@@ -2101,6 +2109,7 @@ export function synthesizeCursorExecToolCall(
 		arguments: args,
 		[kStreamingBlockIndex]: output.content.length,
 		[kStreamingBlockKind]: "cursor-exec",
+		[kCursorExecResolved]: true,
 	};
 	output.content.push(block);
 	const idx = output.content.length - 1;

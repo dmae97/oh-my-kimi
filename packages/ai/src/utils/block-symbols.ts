@@ -30,3 +30,19 @@ export const kStreamingArgumentsDone = Symbol("provider.block.argumentsDone");
 
 /** Classifies Cursor's in-flight tool-call kind without leaking provider-private state. */
 export const kStreamingBlockKind = Symbol("provider.block.kind");
+
+/**
+ * Marks a `toolCall` content block that Cursor's exec channel already
+ * executed server-side (via the coding-agent bridge) and whose result is
+ * buffered separately for emission via the assistant-loop stream.
+ *
+ * `agent-loop.ts` MUST skip execution of blocks carrying this marker —
+ * treating them as a fresh runnable tool call would run the same
+ * side-effecting tool (bash, write, delete, …) a second time. Symbol-keyed
+ * so it never persists across the JSONL round-trip, where rebuild instead
+ * pairs the block with its already-persisted `toolResult` message by id.
+ */
+export const kCursorExecResolved = Symbol("provider.block.cursorExecResolved");
+
+/** Carries the resolved marker without exposing a string-keyed property. */
+export type CursorExecResolvedCarrier = object & { [kCursorExecResolved]?: true };
