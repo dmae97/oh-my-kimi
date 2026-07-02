@@ -383,6 +383,10 @@ export class SessionManager {
 	#diskFailureLogged = false;
 	/** Bumped on every sync rewrite / chain reset so stale queued tasks become no-ops. */
 	#diskEpoch = 0;
+	/** True while an atomic full-file replacement can detach append handles opened to the old path. */
+	#atomicRewriteActive = false;
+	/** Set by synchronous appends that land while an atomic replacement is active. */
+	#atomicRewriteDirty = false;
 
 	#artifactManager: ArtifactManager | null = null;
 	#artifactManagerSessionFile: string | null = null;
@@ -555,8 +559,10 @@ export class SessionManager {
 
 	/**
 	 * Rewrite the whole file atomically (temp-write + rename, EPERM-safe) on the
-	 * disk chain. The body is serialized inside the task — after the writer is
-	 * closed — so entries appended before the task runs are included.
+	 * disk chain. The body is serialized after the writer is closed. Appends that
+	 * arrive while the storage backend is replacing the path are fenced out of the
+	 * append hot path and force the rewrite task to loop with a fresh body before
+	 * it resolves.
 	 */
 	async #rewriteAtomically(): Promise<void> {
 		if (!this.#persist || !this.#sessionFile) return;
@@ -564,10 +570,18 @@ export class SessionManager {
 		const epoch = this.#diskEpoch;
 		await this.#scheduleDiskWork(
 			async () => {
-				await this.#closeWriterHandle();
-				const sessionFile = this.#sessionFile;
-				if (!sessionFile) return;
-				await this.#storage.writeTextAtomic(sessionFile, this.#fileBody());
+				do {
+					this.#atomicRewriteDirty = false;
+					await this.#closeWriterHandle();
+					const sessionFile = this.#sessionFile;
+					if (!sessionFile) return;
+					this.#atomicRewriteActive = true;
+					try {
+						await this.#storage.writeTextAtomic(sessionFile, this.#fileBody());
+					} finally {
+						this.#atomicRewriteActive = false;
+					}
+				} while (this.#atomicRewriteDirty);
 				this.#fileIsCurrent = true;
 				this.#rewriteRequired = false;
 				this.#hasTitleSlot = true;
@@ -588,6 +602,15 @@ export class SessionManager {
 			return;
 		}
 
+		// Atomic replacement window: the old path may be moved aside underneath
+		// any newly-opened append handle (Windows EPERM fallback). Do not open a
+		// writer here; the active rewrite loops and serializes a fresh full body.
+		if (this.#atomicRewriteActive) {
+			this.#fileIsCurrent = false;
+			this.#rewriteRequired = true;
+			this.#atomicRewriteDirty = true;
+			return;
+		}
 		// Cold/divergent: not on disk yet, or in-memory entries diverged from the
 		// file → rewrite the whole file synchronously and keep going.
 		if (!this.#fileIsCurrent || this.#rewriteRequired) {
