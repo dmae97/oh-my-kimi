@@ -126,21 +126,29 @@ export declare class Shell {
 }
 
 /**
- * Install the bounded Tokio runtime napi-rs adopts for async exports.
+ * Install the bounded Tokio runtime napi-rs adopts for async exports and the
+ * bounded Rayon global pool used by native parallel iterators.
  *
  * The JS loader calls this exactly once, synchronously, right *after* `dlopen`
- * returns and *before* any async native runs — never from `#[module_init]`.
- * Building a multi-thread runtime eagerly spawns worker threads, and doing
- * that during module init (while the dynamic-loader lock is held) deadlocks on
- * some hosts: a fresh worker blocks acquiring the loader lock that the init
- * thread still owns. napi-rs only materializes its runtime on the first async
- * call (`RT` is a `LazyLock`) and `create_custom_tokio_runtime` merely records
- * the runtime in a `OnceLock`, so installing it post-load is still honored.
- * Without it napi builds its own default (one worker per CPU, spawned eagerly)
- * which aborts the process (`os error 1455`) on a memory-constrained Windows
- * host before any JS error can surface; [`create_windows_napi_tokio_runtime`]
- * pre-flights the spawn instead. If no runtime can be built we leave napi-rs
- * to its default. Idempotent.
+ * returns and *before* any async native or parallel iterator runs — never from
+ * `#[module_init]`. Building a multi-thread runtime eagerly spawns worker
+ * threads, and doing that during module init (while the dynamic-loader lock is
+ * held) deadlocks on some hosts: a fresh worker blocks acquiring the loader
+ * lock that the init thread still owns. napi-rs only materializes its runtime
+ * on the first async call (`RT` is a `LazyLock`) and
+ * `create_custom_tokio_runtime` merely records the runtime in a `OnceLock`, so
+ * installing it post-load is still honored.
+ *
+ * Without the Tokio override napi builds its own default (one worker per CPU,
+ * spawned eagerly), which aborts the process (`os error 1455`) on a
+ * memory-constrained Windows host before any JS error can surface;
+ * [`create_windows_napi_tokio_runtime`] pre-flights the spawn instead. Rayon
+ * has the same one-thread-per-core lazy default, so [`configure_rayon_pool`]
+ * installs a probed global pool before `count_tokens` or vendored `sort` can
+ * trigger it across a N-API nounwind boundary. If no worker thread is
+ * spawnable, patched Rayon callsites stay sequential rather than registering a
+ * current-thread-only global pool that cannot steal work from later native
+ * calls. Idempotent.
  */
 export declare function __ompInstallTokioRuntime(): void
 
@@ -478,9 +486,9 @@ export declare function copyToClipboard(text: string): void
  * Count tokens in `input`.
  *
  * `input` may be a single string or an array of strings; an array returns
- * the sum across all elements (encoded in parallel via rayon). Always
- * returns a single token total — use this for any aggregate budget question
- * without paying a per-element napi crossing.
+ * the sum across all elements (encoded in parallel via rayon when the global
+ * pool is available). Always returns a single token total — use this for any
+ * aggregate budget question without paying a per-element napi crossing.
  *
  * Uses ordinary encoding (no special-token handling), which is the right
  * choice for measuring user/model content rather than wire-protocol tokens.
