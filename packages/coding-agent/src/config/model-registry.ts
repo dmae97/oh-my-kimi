@@ -264,25 +264,36 @@ interface CustomModelsResult {
 	found: boolean;
 }
 
-const commandValueCache = new Map<string, string | undefined>();
+const commandValueCache = new Map<string, string>();
+// Failed `!command` resolutions (non-zero exit, empty stdout) are negative-cached
+// with a TTL instead of forever: a transient failure (locked password manager,
+// network hiccup) must not disable the key until process restart, but re-running
+// the command on every resolution would restore the execSync storm this cache
+// exists to prevent. One probe per TTL window bounds both.
+const COMMAND_FAILURE_RETRY_MS = 30_000;
+const commandFailureRetryAt = new Map<string, number>();
 
 function isCommandConfigValue(valueConfig: string | undefined): valueConfig is string {
 	return valueConfig?.startsWith("!") === true;
 }
 
 function resolveCommandConfig(command: string): string | undefined {
-	if (commandValueCache.has(command)) return commandValueCache.get(command);
+	const cached = commandValueCache.get(command);
+	if (cached !== undefined) return cached;
+	const retryAt = commandFailureRetryAt.get(command);
+	if (retryAt !== undefined && Date.now() < retryAt) return undefined;
 	try {
 		const stdout = execSync(command, { encoding: "utf8", timeout: 10_000, windowsHide: true });
 		const trimmed = stdout.trim();
 		if (trimmed.length === 0) {
-			commandValueCache.set(command, undefined);
+			commandFailureRetryAt.set(command, Date.now() + COMMAND_FAILURE_RETRY_MS);
 			return undefined;
 		}
+		commandFailureRetryAt.delete(command);
 		commandValueCache.set(command, trimmed);
 		return trimmed;
 	} catch {
-		commandValueCache.set(command, undefined);
+		commandFailureRetryAt.set(command, Date.now() + COMMAND_FAILURE_RETRY_MS);
 		return undefined;
 	}
 }
