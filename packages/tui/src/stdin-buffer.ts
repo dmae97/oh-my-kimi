@@ -61,7 +61,6 @@ const MAX_STRING_SEQ_BYTES = 16 * 1024 * 1024;
 // Matched only when the trailing byte is a valid terminator, so the regex
 // runs at most once per resolved report — never inside the growth loop.
 const SGR_MOUSE_COMPLETE = /^<\d+;\d+;\d+[Mm]$/;
-const DIGITS_ONLY = /^\d+$/;
 
 /**
  * Resolve the exclusive-end index of the escape sequence starting at `pos`
@@ -95,15 +94,16 @@ function resolveEscapeEnd(buffer: string, pos: number, length: number, resumeSea
 				// Old-style X10 mouse: ESC [ M + 3 arbitrary bytes.
 				if (buffer.charCodeAt(pos + 2) === 0x4d /* M */) {
 					if (pos + 6 <= length) return pos + 6;
-					return length - pos >= MAX_CSI_BYTES ? -2 : -1;
+					// Fewer than 6 bytes buffered is always under MAX_CSI_BYTES,
+					// so this is a plain "wait for more", never a cap flush.
+					return -1;
 				}
 				const capEnd = Math.min(length, pos + MAX_CSI_BYTES);
 				const isSgrMouse = buffer.charCodeAt(pos + 2) === 0x3c /* < */;
-				// Resume from where the last call gave up. `-1` preserves the
-				// safety window used by OSC/DCS/APC; CSI has no multi-byte
-				// terminator, but keeping the same rule avoids a fencepost gap.
-				let i = Math.max(pos + 2, resumeSearchFrom - 1);
-				if (i < pos + 2) i = pos + 2;
+				// No resume hint for CSI: `extractCompleteSequences` records
+				// hints only for OSC/DCS/APC. A partial CSI rescans from its
+				// head, bounded by the tight MAX_CSI_BYTES cap.
+				let i = pos + 2;
 				while (i < capEnd) {
 					const code = buffer.charCodeAt(i);
 					if (code >= 0x40 && code <= 0x7e) {
@@ -117,8 +117,6 @@ function resolveEscapeEnd(buffer: string, pos: number, length: number, resumeSea
 							}
 							const payload = buffer.slice(pos + 2, i + 1);
 							if (SGR_MOUSE_COMPLETE.test(payload)) return i + 1;
-							const parts = payload.slice(1, -1).split(";");
-							if (parts.length === 3 && parts.every(p => DIGITS_ONLY.test(p))) return i + 1;
 							// Malformed body ending in M/m — keep scanning for a
 							// real terminator. Bounded by capEnd.
 							i++;

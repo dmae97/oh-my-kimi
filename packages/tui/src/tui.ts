@@ -3277,22 +3277,39 @@ export class TUI extends Container {
 	): void {
 		this.#fullRedrawCount += 1;
 		const { chunkTo, windowTop } = options;
-		const paintFrame = new Array<string>(chunkTo + height);
-		for (let i = 0; i < chunkTo; i++) paintFrame[i] = frame[i] ?? "";
-		for (let screenRow = 0; screenRow < height; screenRow++) {
-			paintFrame[chunkTo + screenRow] = window[screenRow] ?? "";
-		}
-		let untruncatedPaintCursorPos: { row: number; col: number } | null = null;
+		// Map the frame-space cursor into paint space: committed-prefix rows
+		// keep their index, visible-window rows land after the prefix, and a
+		// cursor in neither region (hidden behind the overlay gap) hides.
+		let paintCursorPos: { row: number; col: number } | null = null;
 		if (cursorPos !== null) {
 			if (cursorPos.row < chunkTo) {
-				untruncatedPaintCursorPos = cursorPos;
+				paintCursorPos = cursorPos;
 			} else if (cursorPos.row >= windowTop && cursorPos.row < windowTop + height) {
-				untruncatedPaintCursorPos = { row: chunkTo + cursorPos.row - windowTop, col: cursorPos.col };
+				paintCursorPos = { row: chunkTo + cursorPos.row - windowTop, col: cursorPos.col };
 			}
 		}
-		const paint = this.#truncateLargeConptyFrame(paintFrame, width, height, untruncatedPaintCursorPos);
-		const paintLines = paint.lines;
-		const paintCursorPos = paint.cursorPos;
+		// ConPTY hosts bound the replay: merge prefix + window into one array
+		// so #truncateLargeConptyFrame can measure the payload and retain only
+		// the tail. Gated on the host check — everywhere else the merge would
+		// copy a pointer per committed row (a 50k-row session = 50k-entry
+		// array per resize step / theme change / session replace) just to be
+		// returned unchanged. `paintLines` stays null unless truncation
+		// actually rewrote the replay.
+		let paintLines: string[] | null = null;
+		let paintLineCount = chunkTo + height;
+		if (isConPTYHosted()) {
+			const merged = new Array<string>(chunkTo + height);
+			for (let i = 0; i < chunkTo; i++) merged[i] = frame[i] ?? "";
+			for (let screenRow = 0; screenRow < height; screenRow++) {
+				merged[chunkTo + screenRow] = window[screenRow] ?? "";
+			}
+			const paint = this.#truncateLargeConptyFrame(merged, width, height, paintCursorPos);
+			if (paint.lines !== merged) {
+				paintLines = paint.lines;
+				paintLineCount = paint.lines.length;
+				paintCursorPos = paint.cursorPos;
+			}
+		}
 		let buffer = this.#paintBeginSequence + this.#leaveResizeAltSequence() + purgeSequence;
 		if (options.clearScrollback) {
 			buffer += "\x1b[2J\x1b[H\x1b[3J";
@@ -3309,21 +3326,41 @@ export class TUI extends Container {
 		// DECCARA fills optimize only the rows that stay visible; history-bound
 		// rows are written as full styled strings (their background must
 		// survive in scrollback, which DECCARA cannot reach).
-		const visibleStart = Math.max(0, paintLines.length - height);
+		const visibleStart = Math.max(0, paintLineCount - height);
 		let fillSequence = "";
 		let visibleTexts: string[] | null = null;
-		if (this.#deccaraFillsEnabled() && visibleStart < paintLines.length) {
-			const visible = new Array<string>(paintLines.length - visibleStart);
-			for (let k = 0; k < visible.length; k++) visible[k] = paintLines[visibleStart + k] ?? "";
+		if (this.#deccaraFillsEnabled() && visibleStart < paintLineCount) {
+			// Untruncated, the visible slice is exactly the caller's window
+			// (visibleStart === chunkTo) — reuse it rather than copying;
+			// planDeccaraFills fills its own `texts` and never mutates input.
+			let visible = window;
+			if (paintLines !== null) {
+				visible = new Array<string>(paintLineCount - visibleStart);
+				for (let k = 0; k < visible.length; k++) visible[k] = paintLines[visibleStart + k] ?? "";
+			}
 			const plan = planDeccaraFills(visible, width);
 			visibleTexts = plan.texts;
 			fillSequence = plan.sequence;
 		}
-		for (let i = 0; i < paintLines.length; i++) {
-			if (i > 0) buffer += "\r\n";
-			buffer += this.#terminalLine(
-				visibleTexts && i >= visibleStart ? visibleTexts[i - visibleStart] : (paintLines[i] ?? ""),
-			);
+		if (paintLines === null) {
+			// Common path: emit straight from the source arrays (the
+			// pre-merge two-loop form); byte-identical to replaying the
+			// merged array.
+			for (let i = 0; i < chunkTo; i++) {
+				if (i > 0) buffer += "\r\n";
+				buffer += this.#terminalLine(frame[i] ?? "");
+			}
+			for (let screenRow = 0; screenRow < height; screenRow++) {
+				if (chunkTo + screenRow > 0) buffer += "\r\n";
+				buffer += this.#terminalLine(visibleTexts ? (visibleTexts[screenRow] ?? "") : (window[screenRow] ?? ""));
+			}
+		} else {
+			for (let i = 0; i < paintLines.length; i++) {
+				if (i > 0) buffer += "\r\n";
+				buffer += this.#terminalLine(
+					visibleTexts && i >= visibleStart ? visibleTexts[i - visibleStart] : (paintLines[i] ?? ""),
+				);
+			}
 		}
 		buffer += fillSequence;
 		// Park the hardware cursor at real content bottom, not the padded
@@ -3333,8 +3370,8 @@ export class TUI extends Container {
 		const parkUp = height - contentRows;
 		if (parkUp > 0) buffer += `\x1b[${parkUp}A`;
 		const contentBottomRow = windowTop + contentRows - 1;
-		const paintContentBottomRow = Math.max(0, paintLines.length - 1 - parkUp);
-		const cursorControl = this.#cursorControlSequence(paintCursorPos, paintLines.length, paintContentBottomRow);
+		const paintContentBottomRow = Math.max(0, paintLineCount - 1 - parkUp);
+		const cursorControl = this.#cursorControlSequence(paintCursorPos, paintLineCount, paintContentBottomRow);
 		buffer += cursorControl.seq;
 		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
