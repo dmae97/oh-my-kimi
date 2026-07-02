@@ -369,9 +369,7 @@ describe("ModelRegistry", () => {
 			const calls: Array<{
 				provider: string;
 				sessionId: string | undefined;
-				options:
-					| { baseUrl?: string; modelId?: string; forceRefresh?: boolean; signal?: AbortSignal }
-					| undefined;
+				options: { baseUrl?: string; modelId?: string; forceRefresh?: boolean; signal?: AbortSignal } | undefined;
 			}> = [];
 			const originalGetApiKey = authStorage.getApiKey.bind(authStorage);
 			authStorage.getApiKey = async (
@@ -394,7 +392,10 @@ describe("ModelRegistry", () => {
 				},
 			});
 
-			const resolved = await registry.resolver(model, sessionId)({
+			const resolved = await registry.resolver(
+				model,
+				sessionId,
+			)({
 				lastChance: false,
 				error: undefined,
 				signal: undefined,

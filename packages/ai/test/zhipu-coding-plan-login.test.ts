@@ -13,7 +13,8 @@ describe("zhipu coding plan login", () => {
 				"Content-Type": "application/json",
 				Authorization: "Bearer zhipu-key",
 			});
-			validationBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
+			validationBody =
+				typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
 			return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
