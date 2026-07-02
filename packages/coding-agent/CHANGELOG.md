@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Parallelize SYSTEM.md, APPEND_SYSTEM.md, and TITLE_SYSTEM.md resolution at startup ([#4247](https://github.com/can1357/oh-my-pi/issues/4247))
+
+
 ## [16.3.0] - 2026-07-02
 
 ### Added
