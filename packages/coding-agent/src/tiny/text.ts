@@ -191,49 +191,101 @@ export function normalizeGeneratedTitle(value: string | null | undefined, source
  * Reconcile a generated title's casing against the user's own message.
  *
  * The title prompt asks for sentence case, but small title models still mangle
- * casing two ways: they sprout stray interior capitals on ordinary words
- * (`daemon` → `dAemon`) and they flatten proper nouns the user cares about
- * (`TinyVMM` → `tinyvmm`). The user's message is the source of truth, so per
- * title token:
+ * casing three ways: they sprout stray interior capitals on ordinary words
+ * (`daemon` → `dAemon`), they flatten proper nouns the user cased distinctively
+ * (`TinyVMM` → `tinyvmm`), and they title-case ALL-CAPS acronyms as if they
+ * were sentence words (`CNPG` → `Cnpg`). The user's message is the source of
+ * truth, so per title token:
  *  1. typed verbatim in the message → keep it (the user established the casing);
  *  2. else the message has the same word with *distinctive* mixed casing
  *     (`TinyVMM`, `iOS`, `IDs`) → adopt the user's casing (restoration);
- *  3. else it's a camelCase artifact (lowercase word + stray interior capital,
+ *  3. else the model produced a plain title-cased artifact (`Cnpg`) whose
+ *     lowercased form is an ALL-CAPS acronym in a non-shouty source → restore
+ *     the source acronym;
+ *  4. else it's a camelCase artifact (lowercase word + stray interior capital,
  *     `dAemon`) the user never wrote → lowercase it;
- *  4. else leave it — preserves model-cased proper nouns like `GitHub`, `OAuth`.
+ *  5. else leave it — preserves model-cased proper nouns like `GitHub`, `OAuth`.
  *
- * Restoration is limited to distinctively *mixed*-cased source tokens: a sentence
- * that merely *starts* with `For` can't force a mid-title `for` to `For`, and
- * emphatic all-caps (`ALL ERROR HANDLING`) is never re-shouted over sentence case.
+ * Restoration is limited to avoid two failure modes: a sentence that merely
+ * *starts* with `For` can't force a mid-title `for` to `For` (distinctive
+ * requires interior mixed casing), and emphatic all-caps input (`ALL ERROR
+ * HANDLING`, `FIX the BUG NOW`) is never re-shouted — see {@link isShoutySource}.
+ * ALL-CAPS restoration also requires the model to have produced a title-cased
+ * shape (`Cnpg`), never a lowercase one, so we don't re-shout an isolated
+ * single-word emphasis (`WORK`) that the model correctly de-shouted.
  */
 function reconcileTitleCasing(title: string, sourceText: string): string {
 	const verbatim = new Set<string>();
 	const distinctive = new Map<string, string>();
+	const acronyms = new Map<string, string>();
+	const shouty = isShoutySource(sourceText);
 	for (const [token] of sourceText.matchAll(TITLE_WORD)) {
 		verbatim.add(token);
 		if (isDistinctiveCasing(token)) {
 			const lower = token.toLowerCase();
 			if (!distinctive.has(lower)) distinctive.set(lower, token);
+		} else if (!shouty && isAllCapsAcronym(token)) {
+			const lower = token.toLowerCase();
+			if (!acronyms.has(lower)) acronyms.set(lower, token);
 		}
 	}
 	return title.replace(TITLE_WORD, token => {
 		if (verbatim.has(token)) return token;
-		const restored = distinctive.get(token.toLowerCase());
+		const lower = token.toLowerCase();
+		const restored = distinctive.get(lower);
 		if (restored) return restored;
-		return isCamelArtifact(token) ? token.toLowerCase() : token;
+		if (isTitleCasedArtifact(token)) {
+			const acronym = acronyms.get(lower);
+			if (acronym) return acronym;
+		}
+		return isCamelArtifact(token) ? lower : token;
 	});
 }
 
 /** Mixed-case identifier the user cased deliberately (`TinyVMM`, `iOS`, `IDs`):
  *  an interior/repeated capital plus at least one lowercase letter. Only these
- *  are restored when the model flattens them.
- *
- *  Pure all-caps is intentionally excluded. The model preserves its own acronyms
- *  verbatim regardless, so restoring all-caps from the source would only ever
- *  re-shout emphatic input (`ALL ERROR HANDLING`, `FIX THE BUG`) over the
- *  sentence case the prompt asks for. */
+ *  are restored when the model flattens them. */
 function isDistinctiveCasing(token: string): boolean {
 	return /\p{Ll}/u.test(token) && /\p{L}\p{Lu}/u.test(token);
+}
+
+/** Multi-letter ALL-CAPS token in the source (`CNPG`, `API`, `JWT`). Candidate
+ *  for acronym restoration; whether it's actually restored depends on
+ *  {@link isShoutySource} (skips restoration on shouty input) and on the model
+ *  having produced a {@link isTitleCasedArtifact} (`Cnpg`) — never a lowercase
+ *  form, so isolated emphasis (`WORK` → model `work`) is left alone. */
+function isAllCapsAcronym(token: string): boolean {
+	const letters = token.match(/\p{L}/gu);
+	if (!letters || letters.length < 2) return false;
+	return !/\p{Ll}/u.test(token);
+}
+
+/** Plain title-cased word (`Cnpg`, `Etl`): starts uppercase, has one-or-more
+ *  lowercase letters, no interior uppercase. This is the artifact a title model
+ *  produces when it sentence-cases an unfamiliar ALL-CAPS acronym; PascalCase
+ *  proper nouns like `GitHub`/`OAuth` have an interior capital and are
+ *  excluded so we don't misidentify them. */
+function isTitleCasedArtifact(token: string): boolean {
+	if (!/^\p{Lu}/u.test(token)) return false;
+	if (!/\p{Ll}/u.test(token)) return false;
+	return !/\p{Lu}/u.test(token.slice(1));
+}
+
+/** True when the source text is shouting — ≥2 consecutive multi-letter
+ *  ALL-CAPS tokens (`FIX the BUG NOW` has `BUG NOW`; `ALL ERROR HANDLING`
+ *  has all three adjacent). Acronym restoration is disabled for shouty input
+ *  so we don't re-shout emphatic prose the model correctly de-shouted. */
+function isShoutySource(sourceText: string): boolean {
+	let run = 0;
+	for (const [token] of sourceText.matchAll(TITLE_WORD)) {
+		if (isAllCapsAcronym(token)) {
+			run += 1;
+			if (run >= 2) return true;
+		} else {
+			run = 0;
+		}
+	}
+	return false;
 }
 
 /** A lowercase word carrying a stray interior capital (`dAemon`, `cReate`): the
