@@ -257,6 +257,7 @@ import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" w
 import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool-decision-reminder.md" with {
 	type: "text",
 };
+import rewindReportTemplate from "../prompts/system/rewind-report.md" with { type: "text" };
 import sideChannelNoToolsReminder from "../prompts/system/side-channel-no-tools.md" with { type: "text" };
 import thinkingLoopRedirectTemplate from "../prompts/system/thinking-loop-redirect.md" with { type: "text" };
 import toolCallLoopRedirectTemplate from "../prompts/system/tool-call-loop-redirect.md" with { type: "text" };
@@ -297,7 +298,7 @@ import {
 import { assertEditableFile } from "../tools/auto-generated-guard";
 import { releaseTabsForOwner } from "../tools/browser/tab-supervisor";
 import { normalizeToolNames } from "../tools/builtin-names";
-import type { CheckpointState } from "../tools/checkpoint";
+import type { CheckpointState, CompletedRewindState } from "../tools/checkpoint";
 import { outputMeta, wrapToolWithMetaNotice } from "../tools/output-meta";
 import { normalizeLocalScheme, resolveToCwd } from "../tools/path-utils";
 import { isAutoQaEnabled } from "../tools/report-tool-issue";
@@ -1695,6 +1696,7 @@ export class AgentSession {
 	#pruneToolDescriptions = false;
 	#checkpointState: CheckpointState | undefined = undefined;
 	#pendingRewindReport: string | undefined = undefined;
+	#lastCompletedRewind: CompletedRewindState | undefined = undefined;
 	#rewoundToolResultIds = new Set<string>();
 	#lastSuccessfulYieldToolCallId: string | undefined = undefined;
 	/**
@@ -3537,6 +3539,7 @@ export class AgentSession {
 						startedAt: details?.startedAt ?? new Date().toISOString(),
 					};
 					this.#pendingRewindReport = undefined;
+					this.#lastCompletedRewind = undefined;
 				}
 				if (toolName === "rewind" && !isError && this.#checkpointState) {
 					const detailReport = typeof details?.report === "string" ? details.report.trim() : "";
@@ -6676,9 +6679,15 @@ export class AgentSession {
 		return this.#checkpointState;
 	}
 
+	getLastCompletedRewind(): CompletedRewindState | undefined {
+		return this.#lastCompletedRewind;
+	}
+
 	setCheckpointState(state: CheckpointState | undefined): void {
 		this.#checkpointState = state;
-		if (!state) {
+		if (state) {
+			this.#lastCompletedRewind = undefined;
+		} else {
 			this.#pendingRewindReport = undefined;
 		}
 	}
@@ -10409,8 +10418,16 @@ export class AgentSession {
 			});
 			this.sessionManager.branchWithSummary(null, report, { startedAt: checkpointState.startedAt });
 		}
-		const details = { startedAt: checkpointState.startedAt, rewoundAt: new Date().toISOString() };
-		this.sessionManager.appendCustomMessageEntry("rewind-report", report, false, details, "agent");
+		const rewoundAt = new Date().toISOString();
+		const details = { startedAt: checkpointState.startedAt, rewoundAt };
+		this.sessionManager.appendCustomMessageEntry(
+			"rewind-report",
+			prompt.render(rewindReportTemplate, { report }),
+			false,
+			details,
+			"agent",
+		);
+		this.#lastCompletedRewind = { report, startedAt: checkpointState.startedAt, rewoundAt };
 
 		if (activeMessages) {
 			for (const message of activeMessages) {

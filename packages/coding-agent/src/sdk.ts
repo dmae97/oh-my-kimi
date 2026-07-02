@@ -1577,6 +1577,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			activateDiscoveredTools: toolNames => session.activateDiscoveredTools(toolNames),
 			getCheckpointState: () => session.getCheckpointState(),
 			setCheckpointState: state => session.setCheckpointState(state ?? undefined),
+			getLastCompletedRewind: () => session.getLastCompletedRewind(),
 			getToolChoiceQueue: () => session.toolChoiceQueue,
 			buildToolChoice: name => {
 				const m = session.model;
