@@ -458,10 +458,17 @@ export class PluginManager {
 				stderr: "pipe",
 				windowsHide: true,
 			});
-			const installExit = await installProc.exited;
+			// Drain stdout+stderr concurrently with proc.exited. Awaiting exited
+			// before reading either pipe risks a >64 KiB OS-pipe-buffer deadlock
+			// once bun install prints enough progress; even where Bun currently
+			// buffers eagerly, doing this leaks unbounded memory.
+			const [installExit, , installStderr] = await Promise.all([
+				installProc.exited,
+				new Response(installProc.stdout).text(),
+				new Response(installProc.stderr).text(),
+			]);
 			if (installExit !== 0) {
-				const stderr = await new Response(installProc.stderr).text();
-				throw new Error(`bun install failed: ${stderr}`);
+				throw new Error(`bun install failed: ${installStderr}`);
 			}
 			// Resolve actual package name. npm specs encode the name (strip version);
 			// git specs do not, so diff plugins/package.json deps to find the new entry.
@@ -508,10 +515,14 @@ export class PluginManager {
 					stderr: "pipe",
 					windowsHide: true,
 				});
-				const updateExit = await updateProc.exited;
+				// Same drain-concurrent-with-exit pattern as the bun install above.
+				const [updateExit, , updateStderr] = await Promise.all([
+					updateProc.exited,
+					new Response(updateProc.stdout).text(),
+					new Response(updateProc.stderr).text(),
+				]);
 				if (updateExit !== 0) {
-					const stderr = await new Response(updateProc.stderr).text();
-					throw new Error(`bun update ${actualName} failed: ${stderr}`);
+					throw new Error(`bun update ${actualName} failed: ${updateStderr}`);
 				}
 			}
 
@@ -608,7 +619,13 @@ export class PluginManager {
 			windowsHide: true,
 		});
 
-		const exitCode = await proc.exited;
+		// Drain both pipes concurrently with proc.exited to avoid a pipe-buffer
+		// deadlock if bun uninstall floods stdout/stderr.
+		const [exitCode] = await Promise.all([
+			proc.exited,
+			new Response(proc.stdout).text(),
+			new Response(proc.stderr).text(),
+		]);
 		if (exitCode !== 0) {
 			throw new Error(`npm uninstall failed for ${name}`);
 		}
@@ -1007,7 +1024,14 @@ export class PluginManager {
 				stderr: "pipe",
 				windowsHide: true,
 			});
-			return (await proc.exited) === 0;
+			// Drain pipes concurrently with proc.exited; otherwise a chatty
+			// bun install can block on a full OS pipe buffer.
+			const [exit] = await Promise.all([
+				proc.exited,
+				new Response(proc.stdout).text(),
+				new Response(proc.stderr).text(),
+			]);
+			return exit === 0;
 		} catch {
 			return false;
 		}

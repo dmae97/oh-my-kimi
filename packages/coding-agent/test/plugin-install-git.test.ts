@@ -272,6 +272,64 @@ describe("PluginManager.install with git sources", () => {
 		expect(spawnedCommands).toEqual([["bun", "install", "github:foo/bar"]]);
 	});
 
+	test("drains stdout/stderr concurrently with proc.exited (pipe-buffer deadlock, #4230)", async () => {
+		// Model the OS-pipe semantics that caused the deadlock: `exited` cannot
+		// resolve until both pipes have been read. If PluginManager.install
+		// awaits `exited` before starting to drain either stream, this test
+		// hangs — which we catch with Promise.race + a short timeout.
+		await Bun.write(
+			pluginsPkgJson,
+			JSON.stringify({ name: "omp-plugins", private: true, dependencies: {} }, null, 2),
+		);
+
+		const makeGatedStream = (payload: string): { stream: ReadableStream<Uint8Array>; drained: Promise<void> } => {
+			const { promise: drained, resolve: onDrained } = Promise.withResolvers<void>();
+			const stream = new ReadableStream<Uint8Array>({
+				pull(controller) {
+					controller.enqueue(new TextEncoder().encode(payload));
+					controller.close();
+					onDrained();
+				},
+			});
+			return { stream, drained };
+		};
+
+		vi.spyOn(Bun, "spawn").mockImplementation(((cmd: string[]) => {
+			expect(cmd).toEqual(["bun", "install", "github:foo/bar"]);
+			const { stream: stdout, drained: stdoutDrained } = makeGatedStream("progress\n");
+			const { stream: stderr, drained: stderrDrained } = makeGatedStream("");
+			const exited = Promise.all([stdoutDrained, stderrDrained]).then(async () => {
+				await Bun.write(
+					pluginsPkgJson,
+					JSON.stringify(
+						{
+							name: "omp-plugins",
+							private: true,
+							dependencies: { "real-name": "github:foo/bar" },
+						},
+						null,
+						2,
+					),
+				);
+				const installedDir = path.join(pluginsNodeModules, "real-name");
+				await fs.mkdir(installedDir, { recursive: true });
+				await Bun.write(
+					path.join(installedDir, "package.json"),
+					JSON.stringify({ name: "real-name", version: "0.1.0" }, null, 2),
+				);
+				return 0;
+			});
+			return { pid: 1, stdout, stderr, exited } as Subprocess;
+		}) as typeof Bun.spawn);
+
+		const mgr = new PluginManager(tmpRoot);
+		const installed = await Promise.race([
+			mgr.install("github:foo/bar"),
+			new Promise<never>((_, reject) => setTimeout(() => reject(new Error("install deadlocked")), 2000)),
+		]);
+		expect(installed.name).toBe("real-name");
+	});
+
 	test("rejects git specs containing shell metacharacters", async () => {
 		const mgr = new PluginManager(tmpRoot);
 		await expect(mgr.install("github:foo/bar; rm -rf /")).rejects.toThrow(/Invalid characters in plugin source/);

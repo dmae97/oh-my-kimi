@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed a pipe-buffer deadlock hazard in plugin install/uninstall paths: `PluginManager.install`, `PluginManager.uninstall`, `PluginManager.#fixMissingPlugin`, the git-refresh `bun update` step, the legacy `installer.ts` install/uninstall helpers, and the bundled-registry generator's `formatInPlace` all awaited `proc.exited` before draining stdout/stderr. Verbose `bun install`/`bun uninstall`/`biome check` output above the ~64 KiB OS pipe buffer could block the child on `write(2)` while the parent blocked on exit, and even under Bun's current eager buffering this leaked unbounded bytes into memory. Each site now drains both pipes concurrently with `proc.exited` via `Promise.all`. ([#4230](https://github.com/can1357/oh-my-pi/issues/4230))
+
 ## [16.3.1] - 2026-07-02
 
 ### Breaking Changes
