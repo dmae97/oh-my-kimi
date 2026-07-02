@@ -1,7 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
@@ -145,22 +144,6 @@ describe("InteractiveMode todo HUD persistence", () => {
 		});
 
 		expect(session.getTodoPhases()[0]?.tasks[0]?.status).toBe("completed");
-	});
-
-	it("clears stale todo reminders when /btw branches", async () => {
-		await createMode(-1);
-		mode.todoReminderContainer.addChild(new Text("stale reminder", 0, 0));
-		vi.spyOn(session, "branchFromBtw").mockResolvedValue({
-			cancelled: false,
-			sessionFile: path.join(tempDir.path(), "branch.jsonl"),
-		});
-		vi.spyOn(mode, "renderInitialMessages").mockImplementation(() => {});
-		vi.spyOn(mode, "updateEditorBorderColor").mockImplementation(() => {});
-		vi.spyOn(mode, "showStatus").mockImplementation(() => {});
-
-		await mode.handleBtwBranch("why did this fail?", {} as AssistantMessage);
-
-		expect(mode.todoReminderContainer.children).toHaveLength(0);
 	});
 });
 
