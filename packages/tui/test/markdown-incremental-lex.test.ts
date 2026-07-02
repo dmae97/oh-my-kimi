@@ -41,6 +41,28 @@ function assertIdenticalGrowth(full: string, width = 60, step = 13): void {
 	expect(streamLines).toEqual(renderCold(full, width));
 }
 
+/** Same as {@link assertIdenticalGrowth} but with a TRANSIENT streaming instance,
+ *  which activates Markdown's render-prefix cache (the transient path caches
+ *  content lines for the stable lex-prefix tokens and re-renders only the tail).
+ *  The split render must still be byte-identical to a cold full render at every
+ *  step — a faster-but-divergent split is a regression. */
+function assertIdenticalGrowthTransient(full: string, width = 60, step = 13): void {
+	const streaming = new Markdown("", 0, 0, THEME);
+	streaming.transientRenderCache = true;
+	for (let len = 1; len <= full.length; len += step) {
+		const slice = full.slice(0, len);
+		clearRenderCache();
+		streaming.setText(slice);
+		const streamLines = streaming.render(width);
+		const oracle = renderCold(slice, width);
+		expect(streamLines).toEqual(oracle);
+	}
+	clearRenderCache();
+	streaming.setText(full);
+	const streamLines = streaming.render(width);
+	expect(streamLines).toEqual(renderCold(full, width));
+}
+
 const PROSE =
 	"Para one with **bold** and _italic_ words and a `code span` for flavor.\n\n" +
 	"Para two continues the document with more sentences so the lexer has real\n" +
@@ -92,6 +114,18 @@ describe("Markdown incremental streaming lex (E2)", () => {
 
 	it("mixed multi-section corpus growth is byte-identical", () => {
 		assertIdenticalGrowth(MIXED, 80, 29);
+	});
+
+	it("transient render-prefix cache: prose split render is byte-identical", () => {
+		assertIdenticalGrowthTransient(PROSE);
+	});
+
+	it("transient render-prefix cache: fenced code split render is byte-identical", () => {
+		assertIdenticalGrowthTransient(FENCED);
+	});
+
+	it("transient render-prefix cache: mixed multi-section split render is byte-identical", () => {
+		assertIdenticalGrowthTransient(MIXED, 80, 29);
 	});
 
 	it("a width change mid-stream still matches a cold render at the new width", () => {
@@ -180,6 +214,23 @@ describe("Markdown incremental streaming lex (E2)", () => {
 		expect(replaced).toEqual(
 			renderCold("## Different\n\nCompletely new content replacing the old buffer entirely.\n", 60),
 		);
+	});
+
+	it("a transient non-append replacement with no block boundary is not served stale prefix lines", () => {
+		// Regression: the render-prefix cache guards on #streamPrefixText, which
+		// #freezeStablePrefix leaves untouched when the new text has no freezable
+		// "\n\n" boundary. Without clearing it on the fallback path, a transient
+		// replacement by single-line content emitted the OLD prefix's rendered lines.
+		const streaming = new Markdown("", 0, 0, THEME);
+		streaming.transientRenderCache = true;
+		clearRenderCache();
+		streaming.setText("# First document\n\nOriginal body paragraph one.\n\nOriginal body paragraph two.\n");
+		streaming.render(60);
+		// Replace with unrelated single-line content — no "\n\n" boundary to freeze.
+		clearRenderCache();
+		streaming.setText("a flat replacement with no double newline at all");
+		const replaced = streaming.render(60);
+		expect(replaced).toEqual(renderCold("a flat replacement with no double newline at all", 60));
 	});
 
 	it("CRLF text (fallback path) renders identically to a cold lex", () => {
