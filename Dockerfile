@@ -168,10 +168,8 @@ FROM pi-base AS pi-runtime
 ENV PI_ROOT=/pi
 WORKDIR /pi
 
-# Install only the CLI runtime graph. Docker images run the source checkout via
-# Bun, but they do not need workspace devDependencies or optional local-inference
-# packages; those native ONNX stacks are loaded only by features that request
-# them explicitly.
+# Same manifests-only layered install pattern as natives-builder — `bun install`
+# only re-runs when a package.json / lockfile changes.
 COPY --parents \
     package.json bun.lock bunfig.toml \
     patches/*.patch \
@@ -181,7 +179,7 @@ COPY --parents \
     python/robomp/web/package.json \
     /pi/
 
-RUN bun install --filter @oh-my-pi/pi-coding-agent --production --omit optional --frozen-lockfile --ignore-scripts
+RUN bun install --frozen-lockfile --ignore-scripts
 
 # Pi source. `Dockerfile.dockerignore` keeps **/node_modules out of the context
 # so stale isolated-linker symlinks from a host install can't shadow the
