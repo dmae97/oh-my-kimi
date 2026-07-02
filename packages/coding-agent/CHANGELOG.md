@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed status-line PR lookup wedging the segment indefinitely when `gh pr view` stalled (keychain prompt, network hang, auth deadlock). The lookup now routes through `git.github.run` with `AbortSignal.timeout(GIT_COMMAND_TIMEOUT_MS)`, inheriting the non-interactive `gh` environment and enforcing the standard 5-minute deadline instead of leaking the child ([#4234](https://github.com/can1357/oh-my-pi/issues/4234)).
+
 ## [16.3.1] - 2026-07-02
 
 ### Breaking Changes
