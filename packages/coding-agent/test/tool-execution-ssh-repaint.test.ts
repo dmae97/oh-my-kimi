@@ -91,7 +91,11 @@ describe("ToolExecutionComponent SSH repaint seams", () => {
 			expect(plainBuffer(term).some(row => row.includes("SSH: […]"))).toBe(true);
 			expect(plainBuffer(term).some(row => row.includes("$ …"))).toBe(true);
 
-			component.updateArgs({ host: "router", command: "uptime", __partialJson: '{"host":"router","command":"uptime"}' });
+			component.updateArgs({
+				host: "router",
+				command: "uptime",
+				__partialJson: '{"host":"router","command":"uptime"}',
+			});
 			component.setArgsComplete();
 			tui.requestRender();
 			await drain(scheduler, term);
@@ -116,13 +120,7 @@ describe("ToolExecutionComponent SSH repaint seams", () => {
 		const term = new VirtualTerminal(90, 8, 1_000);
 		const scheduler = new StressRenderScheduler();
 		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
-		const component = new ToolExecutionComponent(
-			"ssh",
-			{ host: "router", command: "uptime" },
-			{},
-			undefined,
-			tui,
-		);
+		const component = new ToolExecutionComponent("ssh", { host: "router", command: "uptime" }, {}, undefined, tui);
 		components.push(component);
 		tui.addChild(component);
 		tui.addChild(new Footer(5));
