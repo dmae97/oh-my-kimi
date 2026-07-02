@@ -245,8 +245,17 @@ fn git_capture(cwd: &Path, args: &[&str]) -> IsoResult<Vec<u8>> {
 }
 
 fn git_apply(cwd: &Path, patch: &[u8], extra: &[&str]) -> IsoResult<()> {
-	use std::io::Write as _;
-	let mut child = std::process::Command::new("git")
+	git_apply_with_program(Path::new("git"), cwd, patch, extra)
+}
+
+fn git_apply_with_program(
+	program: &Path,
+	cwd: &Path,
+	patch: &[u8],
+	extra: &[&str],
+) -> IsoResult<()> {
+	use std::io::{Read as _, Write as _};
+	let mut child = std::process::Command::new(program)
 		.arg("-C")
 		.arg(cwd)
 		.args(["apply", "--binary", "--whitespace=nowarn"])
@@ -264,26 +273,39 @@ fn git_apply(cwd: &Path, patch: &[u8], extra: &[&str]) -> IsoResult<()> {
 				IsoError::other(format!("spawn git apply: {err}"))
 			}
 		})?;
-	{
-		let stdin = child
+	let mut stderr = child
+		.stderr
+		.take()
+		.ok_or_else(|| IsoError::other("git apply: child stderr was not piped".to_string()))?;
+	let stderr_reader = std::thread::Builder::new()
+		.name("pi-iso-git-apply-stderr".to_string())
+		.spawn(move || {
+			let mut bytes = Vec::new();
+			stderr.read_to_end(&mut bytes).map(|_| bytes)
+		})
+		.map_err(|err| IsoError::other(format!("spawn git apply stderr reader: {err}")))?;
+	let write_result = {
+		let mut stdin = child
 			.stdin
-			.as_mut()
+			.take()
 			.ok_or_else(|| IsoError::other("git apply: child stdin was not piped".to_string()))?;
-		stdin
-			.write_all(patch)
-			.map_err(|err| IsoError::other(format!("write patch to git apply: {err}")))?;
-	}
-	let output = child
-		.wait_with_output()
+		let result = stdin.write_all(patch);
+		drop(stdin);
+		result
+	};
+	let status = child
+		.wait()
 		.map_err(|err| IsoError::other(format!("wait git apply: {err}")))?;
-	if output.status.success() {
+	let stderr = stderr_reader
+		.join()
+		.map_err(|_| IsoError::other("wait git apply: stderr reader panicked".to_string()))?
+		.map_err(|err| IsoError::other(format!("read git apply stderr: {err}")))?;
+	if status.success() {
+		write_result.map_err(|err| IsoError::other(format!("write patch to git apply: {err}")))?;
 		return Ok(());
 	}
-	let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-	Err(IsoError::other(format!(
-		"git apply (exit {}): {stderr}",
-		output.status.code().unwrap_or(-1)
-	)))
+	let stderr = String::from_utf8_lossy(&stderr).trim().to_string();
+	Err(IsoError::other(format!("git apply (exit {}): {stderr}", status.code().unwrap_or(-1))))
 }
 
 /// Copy a single path (regular file, symlink, or directory) from `src`
@@ -458,4 +480,68 @@ fn filetime_set(path: &Path, mtime: std::time::SystemTime) -> std::io::Result<()
 #[cfg(not(any(unix, windows)))]
 fn filetime_set(_path: &Path, _mtime: std::time::SystemTime) -> std::io::Result<()> {
 	Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+	use std::{
+		fs,
+		path::{Path, PathBuf},
+		sync::atomic::{AtomicU64, Ordering},
+		time::{SystemTime, UNIX_EPOCH},
+	};
+
+	use super::*;
+
+	struct TempDirGuard(PathBuf);
+
+	impl TempDirGuard {
+		fn new() -> Self {
+			static COUNTER: AtomicU64 = AtomicU64::new(0);
+			let nanos = SystemTime::now()
+				.duration_since(UNIX_EPOCH)
+				.expect("system time should be after epoch")
+				.as_nanos();
+			let dir = std::env::temp_dir().join(format!(
+				"pi-iso-rcopy-test-{}-{nanos}-{}",
+				std::process::id(),
+				COUNTER.fetch_add(1, Ordering::Relaxed)
+			));
+			fs::create_dir_all(&dir).expect("create temp test directory");
+			Self(dir)
+		}
+
+		fn path(&self) -> &Path {
+			&self.0
+		}
+	}
+
+	impl Drop for TempDirGuard {
+		fn drop(&mut self) {
+			let _ = fs::remove_dir_all(&self.0);
+		}
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn git_apply_drains_stderr_while_writing_stdin() {
+		use std::os::unix::fs::PermissionsExt as _;
+
+		let root = TempDirGuard::new();
+		let fake_git = root.path().join("git");
+		fs::write(
+			&fake_git,
+			"#!/bin/sh\nprintf 'simulated apply failure\\n' >&2\nyes x | head -c 4194304 >&2\ncat \
+			 >/dev/null\nexit 42\n",
+		)
+		.expect("write fake git");
+		fs::set_permissions(&fake_git, fs::Permissions::from_mode(0o755))
+			.expect("make fake git executable");
+
+		let patch = vec![b'p'; 4 * 1024 * 1024];
+		let err = git_apply_with_program(&fake_git, root.path(), &patch, &[])
+			.expect_err("fake git apply should fail after consuming stdin");
+		let message = err.to_string();
+		assert!(message.starts_with("git apply (exit 42): simulated apply failure"));
+	}
 }
