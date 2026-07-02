@@ -431,6 +431,18 @@ export function transformMessages<TApi extends Api>(
 						if (!sanitized.thinkingSignature && (!sanitized.thinking || sanitized.thinking.trim() === "")) {
 							return [];
 						}
+						// Same-model Anthropic replay to a signature-enforcing endpoint
+						// cannot natively replay unsigned thinking, but this is not a
+						// dialect transition. Do not demote it into the target model's
+						// textual thinking dialect; that fallback is reserved for real
+						// model/provider transitions where native replay is impossible.
+						if (
+							isSameModel &&
+							isOfficialAnthropicTarget &&
+							(!sanitized.thinkingSignature || sanitized.thinkingSignature.trim() === "")
+						) {
+							return [];
+						}
 						return sanitized;
 					}
 					// Cross-API target: same-model replay keeps signatures untouched

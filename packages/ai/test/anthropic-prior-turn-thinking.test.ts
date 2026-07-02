@@ -309,6 +309,50 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 		expect(priorBlocks.find(b => b.type === "thinking")).toBeUndefined();
 	});
 
+	it("does not demote same-model official Anthropic unsigned thinking to text", () => {
+		// Same-model Anthropic replay is not a dialect transition. If a committed
+		// tool-use turn lacks a usable thinking signature, the native thinking block
+		// is unreplayable, but serializing it as target-dialect text would
+		// incorrectly apply the cross-model fallback intended for real transitions.
+		for (const modelCase of [
+			{ id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+			{ id: "claude-fable-5", name: "Claude Fable 5" },
+		]) {
+			const target = makeAnthropicModel({
+				provider: "anthropic",
+				id: modelCase.id,
+				name: modelCase.name,
+				baseUrl: "https://api.anthropic.com",
+			});
+			const reasoning = `Need to inspect the layout before editing with ${modelCase.id}.`;
+			const toolCallId = `toolu_${modelCase.id.replaceAll("-", "_")}`;
+			const messages: Message[] = [
+				makeUser("Fix the layout"),
+				makeAssistant(
+					[
+						{ type: "thinking", thinking: reasoning, thinkingSignature: "" },
+						{ type: "toolCall", id: toolCallId, name: "read", arguments: { path: "src/view.ts" } },
+					],
+					{ provider: "anthropic", model: modelCase.id },
+				),
+				toolResult(toolCallId, "view body"),
+				makeUser("Continue."),
+			];
+
+			const params = convertAnthropicMessages(messages, target, false);
+			const assistant = params.find(p => p.role === "assistant");
+			if (!assistant) throw new Error("expected assistant wire message");
+			const blocks = assistant.content as WireBlock[];
+			const textBlocks = blocks.filter((b): b is WireTextBlock => b.type === "text");
+			expect(textBlocks.every(block => block.text !== renderDemotedThinking(modelCase.id, reasoning))).toBe(true);
+			expect(textBlocks.every(block => !block.text.startsWith("_Hmm."))).toBe(true);
+			expect(textBlocks.every(block => !block.text.includes("<thinking>"))).toBe(true);
+			expect(blocks.find(b => b.type === "thinking")).toBeUndefined();
+			const toolUse = blocks.find(b => b.type === "tool_use") as WireToolUseBlock | undefined;
+			expect(toolUse?.id).toBe(toolCallId);
+		}
+	});
+
 	it("strips official Anthropic source signatures on cross-model replay to a 3p target", () => {
 		// official Anthropic → 3p. Anthropic's signature is bound to the
 		// issuing model+session, so the 3p target cannot reverify or
