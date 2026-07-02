@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed GitLab Duo Workflow post-start REST setup fetches (`ensureGitLabDuoWorkflowSettings`, `discoverGitLabDuoWorkflowProject`, `resolveGitLabDuoWorkflowNumericProjectId`, `requestGitLabDuoWorkflowDirectAccess`, `createGitLabDuoWorkflow`, `fetchGitLabDuoWorkflowAvailableModels`, `stopGitLabDuoWorkflow`) missing `signal`/timeout parameters, which could leave the stream without a terminal event when a fetch stalled ([#4227](https://github.com/can1357/oh-my-pi/issues/4227)).
+
 ## [16.3.1] - 2026-07-02
 
 ### Changed

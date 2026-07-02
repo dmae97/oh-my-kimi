@@ -1781,6 +1781,147 @@ describe("GitLab Duo Workflow WebSocket state machine", () => {
 		expect(extractHttpStatusFromError({ message: result.errorMessage })).toBe(403);
 	});
 
+	it("aborts stalled REST setup fetches when the caller cancels the request", async () => {
+		// Every setup endpoint stalls FOREVER unless the request signal aborts it. Before
+		// the fix the setup fetches ignored `options.signal`, so a caller cancel could
+		// not unblock them and the stream would emit `start` and hang without a `done`
+		// or `error` event — the reported #4227 hang.
+		const stalledEndpoints: string[] = [];
+		const fetchImpl: FetchImpl = (input: string | URL | Request, init?: RequestInit) => {
+			const url = String(input);
+			stalledEndpoints.push(url);
+			return new Promise<Response>((_resolve, reject) => {
+				const signal = init?.signal;
+				if (!signal) {
+					reject(new Error(`no signal on ${url}`));
+					return;
+				}
+				const onAbort = (): void => {
+					reject(signal.reason ?? new DOMException("aborted", "AbortError"));
+				};
+				if (signal.aborted) {
+					onAbort();
+					return;
+				}
+				signal.addEventListener("abort", onAbort, { once: true });
+			});
+		};
+
+		const controller = new AbortController();
+		const stream = streamGitLabDuoWorkflow(model, context, {
+			apiKey: "[REDACTED]",
+			rootNamespaceId: "gid://gitlab/Group/1",
+			fetch: fetchImpl,
+			signal: controller.signal,
+		});
+
+		// Give the setup path one microtask hop to reach the first fetch, then cancel.
+		await Bun.sleep(5);
+		expect(stalledEndpoints.length).toBeGreaterThan(0);
+		controller.abort(new Error("caller cancelled"));
+
+		const result = await stream.result();
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage ?? "").not.toBe("");
+	});
+
+	it("bounds each REST setup fetch with an abort signal even when the caller passes none", async () => {
+		// The reported hang can happen with no caller signal at all: the provider must
+		// still install its own absolute-deadline signal on every setup fetch so a
+		// stalled endpoint cannot leave the stream without a terminal event. Assert
+		// that every REST setup endpoint receives a real AbortSignal on its RequestInit.
+		const capturedSignals = new Map<string, AbortSignal | undefined>();
+		// (method, endpoint-kind) keys distinguish the settings PUT on /api/v4/groups/
+		// from the catalog's discovery GET on the same path.
+		const keyKinds: readonly { method: string; kind: string }[] = [
+			{ method: "POST", kind: "/api/graphql" },
+			{ method: "POST", kind: "/api/v4/ai/duo_workflows/direct_access" },
+			{ method: "POST", kind: "/api/v4/ai/duo_workflows/workflows" },
+			{ method: "GET", kind: "/api/v4/projects/" },
+			{ method: "PUT", kind: "/api/v4/groups/" },
+		];
+		const fetchImpl: FetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+			const url = String(input);
+			const method = init?.method ?? "GET";
+			for (const { method: m, kind } of keyKinds) {
+				const key = `${m} ${kind}`;
+				if (method === m && url.includes(kind) && !capturedSignals.has(key)) {
+					capturedSignals.set(key, init?.signal ?? undefined);
+				}
+			}
+			if (url.includes("/api/graphql")) {
+				return new Response(
+					JSON.stringify({
+						data: {
+							aiChatAvailableModels: {
+								defaultModel: { name: "Claude", ref: "claude_sonnet_4_6_vertex" },
+								selectableModels: [],
+								pinnedModel: null,
+							},
+						},
+					}),
+					{ status: 200 },
+				);
+			}
+			if (url.includes("/api/v4/ai/duo_workflows/direct_access")) {
+				return new Response(JSON.stringify({ gitlab_rails: { token: "rails-token" } }), { status: 200 });
+			}
+			if (url.includes("/api/v4/ai/duo_workflows/workflows/")) {
+				return new Response("{}", { status: 200 });
+			}
+			if (url.includes("/api/v4/ai/duo_workflows/workflows")) {
+				return new Response(JSON.stringify({ id: "workflow-signal-check" }), { status: 200 });
+			}
+			if (url.includes("/api/v4/projects/")) {
+				return new Response(JSON.stringify({ id: "42" }), { status: 200 });
+			}
+			if (url.includes("/api/v4/groups/")) {
+				return new Response("{}", { status: 200 });
+			}
+			return new Response("{}", { status: 404 });
+		};
+		const webSocketFactory: GitLabDuoWorkflowWebSocketFactory = () => {
+			const socket: GitLabDuoWorkflowWebSocketLike = {
+				onopen: null,
+				onmessage: null,
+				onerror: null,
+				onclose: null,
+				send() {},
+				close() {},
+			};
+			queueMicrotask(() => {
+				socket.onopen?.(new Event("open"));
+				socket.onmessage?.(new MessageEvent("message", { data: JSON.stringify({ status: "INPUT_REQUIRED" }) }));
+			});
+			return socket;
+		};
+
+		await streamGitLabDuoWorkflow(
+			// Fresh baseUrl + apiKey so the per-account settings cache in the provider does
+			// not skip the settings PUT (making the /api/v4/groups/ endpoint unobserved).
+			{ ...model, baseUrl: "https://gitlab.rest-signal-check.example.com" } as Model<"gitlab-duo-agent">,
+			context,
+			{
+				apiKey: "rest-signal-check-key",
+				// A namespace + project path forces the runtime through all three REST
+				// fetches beyond direct_access + create: settings PUT (groups), project GET
+				// (projects), available models (graphql).
+				rootNamespaceId: "gid://gitlab/Group/1",
+				projectPath: "group/project",
+				fetch: fetchImpl,
+				webSocketFactory,
+			},
+		).result();
+
+		// Every setup fetch we exercised must carry a real AbortSignal. `undefined` would
+		// mean the timeout regression is back.
+		for (const { method, kind } of keyKinds) {
+			const key = `${method} ${kind}`;
+			const signal = capturedSignals.get(key);
+			expect(signal, `expected ${key} fetch to carry an AbortSignal`).toBeInstanceOf(AbortSignal);
+		}
+	});
+
 	it("preserves the 401 status for an Unauthorized direct_access body so the credential can rotate", async () => {
 		const fetchImpl: FetchImpl = async (input: string | URL | Request) => {
 			const url = String(input);

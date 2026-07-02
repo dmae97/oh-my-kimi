@@ -48,6 +48,20 @@ const GITLAB_DUO_WORKFLOW_CLIENT_TYPE = "node-websocket";
  */
 const GITLAB_DUO_WORKFLOW_IDLE_TIMEOUT_MS = 90_000;
 /**
+ * Absolute deadline (ms) for each REST setup fetch (`ensureGitLabDuoWorkflowSettings`,
+ * `discoverGitLabDuoWorkflowProject`, `resolveGitLabDuoWorkflowNumericProjectId`,
+ * `requestGitLabDuoWorkflowDirectAccess`, `createGitLabDuoWorkflow`,
+ * `fetchGitLabDuoWorkflowAvailableModels`, `stopGitLabDuoWorkflow`).
+ *
+ * `streamGitLabDuoWorkflow` pushes its `start` event before these calls run and the
+ * `gitlab-duo-agent` bypass in `streamSimple` skips the `register-builtins`
+ * `iterateWithIdleTimeout` wrapper, so a stalled setup fetch would otherwise leave
+ * the stream with no terminal event. 30s covers healthy p99 for every REST endpoint
+ * the workflow touches while still surfacing a real stall as a provider error;
+ * matches the OAuth `TOKEN_REQUEST_TIMEOUT_MS` used by sibling GitLab flows.
+ */
+const GITLAB_DUO_WORKFLOW_REST_TIMEOUT_MS = 30_000;
+/**
  * How many times a single stream may restart on a FRESH workflow after the server
  * reports its per-workflow step (graph-recursion) limit. Long OMP tool-call loops
  * legitimately overrun the cap; each restart resets the budget. Bounded so a task
@@ -913,6 +927,19 @@ export function gitLabDuoWorkflowErrorText(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+// Absolute-deadline signal for one REST setup fetch (`fetch`, `direct_access`, etc.).
+// The caller's abort signal — when present — is folded in with `AbortSignal.any`, so
+// either the request being cancelled OR the local timeout aborts the fetch. Called
+// per-fetch so each REST call gets its OWN fresh budget; a shared timeout would race
+// several fetches on the same clock and starve the later ones after the first spent
+// the whole budget. The workflow's `start` event already streamed before any of
+// these calls run, so an unbounded fetch would leave the assistant stream with no
+// terminal event — see {@link GITLAB_DUO_WORKFLOW_REST_TIMEOUT_MS}.
+function gitLabDuoWorkflowRestSignal(callerSignal?: AbortSignal): AbortSignal {
+	const timeoutSignal = AbortSignal.timeout(GITLAB_DUO_WORKFLOW_REST_TIMEOUT_MS);
+	return callerSignal ? AbortSignal.any([callerSignal, timeoutSignal]) : timeoutSignal;
+}
+
 async function readGitLabDuoWorkflowResponseErrorMessage(response: Response): Promise<string | undefined> {
 	try {
 		const payload: unknown = await response.json();
@@ -1074,7 +1101,7 @@ async function runGitLabDuoWorkflow(
 			// success or 4xx). A transient network error / 5xx returns false so a later
 			// turn retries instead of permanently skipping the PUT on a namespace whose
 			// flags are still off.
-			if (await ensureGitLabDuoWorkflowSettings(fetchImpl, baseUrl, apiKey, restNamespaceId)) {
+			if (await ensureGitLabDuoWorkflowSettings(fetchImpl, baseUrl, apiKey, restNamespaceId, options.signal)) {
 				markGitLabDuoWorkflowSettingsEnsured(apiKey, baseUrl, options.cwd);
 			}
 		}
@@ -1089,7 +1116,7 @@ async function runGitLabDuoWorkflow(
 			!configuredProjectPath && !configuredProjectId && isGitLabDuoWorkflowInlineFlow(workflowDefinition)
 				? namespaceSelection.projectPath
 					? { path: namespaceSelection.projectPath }
-					: await discoverGitLabDuoWorkflowProject(fetchImpl, baseUrl, apiKey, restNamespaceId)
+					: await discoverGitLabDuoWorkflowProject(fetchImpl, baseUrl, apiKey, restNamespaceId, options.signal)
 				: undefined;
 		if (discoveredProject) {
 			traceGitLabDuoWorkflow("project.discover", {
@@ -1111,7 +1138,7 @@ async function runGitLabDuoWorkflow(
 		const webSocketProjectId =
 			projectId ??
 			(projectPath
-				? await resolveGitLabDuoWorkflowNumericProjectId(fetchImpl, baseUrl, apiKey, projectPath)
+				? await resolveGitLabDuoWorkflowNumericProjectId(fetchImpl, baseUrl, apiKey, projectPath, options.signal)
 				: undefined);
 		const workflowConnection: GitLabDuoWorkflowDirectAccessConnection = options.workflowToken
 			? { token: options.workflowToken, headers: {}, serviceEndpoint: false }
@@ -1122,6 +1149,7 @@ async function runGitLabDuoWorkflow(
 					rootNamespaceId,
 					restProjectId,
 					workflowDefinition,
+					options.signal,
 				);
 		const workflowId =
 			options.workflowId ??
@@ -1135,7 +1163,13 @@ async function runGitLabDuoWorkflow(
 				workflowDefinition,
 				options.signal,
 			));
-		const availableModels = await fetchGitLabDuoWorkflowAvailableModels(fetchImpl, baseUrl, apiKey, rootNamespaceId);
+		const availableModels = await fetchGitLabDuoWorkflowAvailableModels(
+			fetchImpl,
+			baseUrl,
+			apiKey,
+			rootNamespaceId,
+			options.signal,
+		);
 		const selectedModelIdentifier = selectGitLabDuoWorkflowModelRef(model.id, availableModels);
 		// A `toolChoice: "none"` side-request (e.g. handoff keeps live tool definitions
 		// in the cache prefix but disables tool use) must not advertise the tools to
@@ -1466,6 +1500,7 @@ async function fetchGitLabDuoWorkflowAvailableModels(
 	baseUrl: string,
 	apiKey: string,
 	rootNamespaceId: string,
+	signal?: AbortSignal,
 ): Promise<GitLabAvailableModelsPayload | undefined> {
 	try {
 		const response = await fetchImpl(gitLabApiUrl(baseUrl, "/api/graphql"), {
@@ -1478,12 +1513,16 @@ async function fetchGitLabDuoWorkflowAvailableModels(
 				query: GITLAB_DUO_WORKFLOW_AVAILABLE_MODELS_QUERY,
 				variables: { rootNamespaceId: toGitLabGraphQLNamespaceId(rootNamespaceId) },
 			}),
+			signal: gitLabDuoWorkflowRestSignal(signal),
 		});
 		if (!response.ok) return undefined;
 		const payload: unknown = await response.json();
 		const models = getRecord(getRecord(payload, "data"), "aiChatAvailableModels");
 		return parseGitLabAvailableModelsPayload(models);
 	} catch {
+		// Timeout (AbortSignal.timeout) surfaces as an AbortError here; matches the pre-fix
+		// transient-network behavior (undefined -> caller falls back to defaults), so a
+		// stalled models fetch degrades rather than hanging the whole stream.
 		return undefined;
 	}
 }
@@ -1513,6 +1552,7 @@ async function resolveGitLabDuoWorkflowNumericProjectId(
 	baseUrl: string,
 	apiKey: string,
 	projectPath: string,
+	signal?: AbortSignal,
 ): Promise<string | undefined> {
 	try {
 		const response = await fetchImpl(gitLabApiUrl(baseUrl, `/api/v4/projects/${encodeURIComponent(projectPath)}`), {
@@ -1521,11 +1561,15 @@ async function resolveGitLabDuoWorkflowNumericProjectId(
 				Authorization: `Bearer ${apiKey}`,
 				"content-type": "application/json",
 			},
+			signal: gitLabDuoWorkflowRestSignal(signal),
 		});
 		if (!response.ok) return undefined;
 		const payload: unknown = await response.json();
 		return getRecordString(payload, "id");
 	} catch {
+		// Timeout / abort behaves like a transient network fault: undefined leaves the
+		// caller to fall back to the workflow's namespace-only routing rather than block
+		// the stream on a hanging project lookup.
 		return undefined;
 	}
 }
@@ -1549,6 +1593,7 @@ async function discoverGitLabDuoWorkflowProject(
 	baseUrl: string,
 	apiKey: string,
 	restNamespaceId: string,
+	signal?: AbortSignal,
 ): Promise<GitLabDuoWorkflowDiscoveredProject | undefined> {
 	const query = "per_page=1&min_access_level=30&order_by=last_activity_at&sort=desc";
 	const endpoints = [
@@ -1563,6 +1608,7 @@ async function discoverGitLabDuoWorkflowProject(
 					Authorization: `Bearer ${apiKey}`,
 					"content-type": "application/json",
 				},
+				signal: gitLabDuoWorkflowRestSignal(signal),
 			});
 			if (!response.ok) continue;
 			const payload: unknown = await response.json();
@@ -1570,7 +1616,10 @@ async function discoverGitLabDuoWorkflowProject(
 			const id = getRecordString(first, "id");
 			const path = getRecordString(first, "path_with_namespace");
 			if (id && path) return { id, path };
-		} catch {}
+		} catch {
+			// Timeout/abort on one endpoint: fall through to the next fallback rather than
+			// aborting discovery. Each endpoint gets its own fresh REST budget.
+		}
 	}
 	return undefined;
 }
@@ -1582,7 +1631,12 @@ async function requestGitLabDuoWorkflowDirectAccess(
 	rootNamespaceId: string,
 	projectId?: string,
 	workflowDefinition: GitLabDuoWorkflowDefinition = GITLAB_DUO_WORKFLOW_DEFINITION,
+	signal?: AbortSignal,
 ): Promise<GitLabDuoWorkflowDirectAccessConnection> {
+	// A timeout here throws `AbortError`/`TimeoutError` (per `AbortSignal.timeout`),
+	// which surfaces through the outer `streamGitLabDuoWorkflow` catch as a real
+	// stream `error` event — matching the existing HTTP-error path rather than the
+	// swallowed best-effort helpers (settings ensure / project discovery / models).
 	const response = await fetchImpl(gitLabApiUrl(baseUrl, "/api/v4/ai/duo_workflows/direct_access"), {
 		method: "POST",
 		headers: {
@@ -1590,6 +1644,7 @@ async function requestGitLabDuoWorkflowDirectAccess(
 			"content-type": "application/json",
 		},
 		body: JSON.stringify(buildGitLabDuoWorkflowDirectAccessBody(rootNamespaceId, projectId, workflowDefinition)),
+		signal: gitLabDuoWorkflowRestSignal(signal),
 	});
 	traceGitLabDuoWorkflow("direct_access.response", {
 		status: response.status,
@@ -1654,7 +1709,7 @@ async function createGitLabDuoWorkflow(
 			"content-type": "application/json",
 		},
 		body: JSON.stringify(body),
-		signal,
+		signal: gitLabDuoWorkflowRestSignal(signal),
 	});
 	traceGitLabDuoWorkflow("workflow.create.response", {
 		status: response.status,
@@ -1686,14 +1741,30 @@ async function stopGitLabDuoWorkflow(
 	apiKey: string,
 	workflowId: string,
 ): Promise<void> {
-	await fetchImpl(gitLabApiUrl(baseUrl, `/api/v4/ai/duo_workflows/workflows/${encodeURIComponent(workflowId)}`), {
-		method: "PATCH",
-		headers: {
-			Authorization: `Bearer ${apiKey}`,
-			"content-type": "application/json",
-		},
-		body: JSON.stringify(buildGitLabDuoWorkflowStopBody()),
-	});
+	// Stop rides a FRESH timeout signal, deliberately decoupled from `options.signal`
+	// (see the `finally` block in `runGitLabDuoWorkflow`): a run cancelled by the
+	// caller must still fire the server-side stop, but a stalled PATCH here would
+	// otherwise leave the `runGitLabDuoWorkflow` promise unresolved forever — the
+	// bounded budget keeps cleanup best-effort in both directions.
+	try {
+		await fetchImpl(gitLabApiUrl(baseUrl, `/api/v4/ai/duo_workflows/workflows/${encodeURIComponent(workflowId)}`), {
+			method: "PATCH",
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+				"content-type": "application/json",
+			},
+			body: JSON.stringify(buildGitLabDuoWorkflowStopBody()),
+			signal: gitLabDuoWorkflowRestSignal(),
+		});
+	} catch (error) {
+		// Server-side stop is best-effort: a timeout / network fault must not reject
+		// the caller (the local stream already emitted its terminal event). Trace and
+		// swallow so the enclosing `finally` never surfaces a spurious rejection.
+		traceGitLabDuoWorkflow("workflow.stop_error", {
+			workflowId,
+			error: gitLabDuoWorkflowErrorText(error),
+		});
+	}
 }
 
 // Body the group PUT carries to turn on exactly the three flags the inline MCP-only
@@ -1721,6 +1792,7 @@ async function ensureGitLabDuoWorkflowSettings(
 	baseUrl: string,
 	apiKey: string,
 	restNamespaceId: string,
+	signal?: AbortSignal,
 ): Promise<boolean> {
 	// Returns whether the attempt was DEFINITIVE (so the caller may stop retrying):
 	// any HTTP response — 2xx (flags now on) or 4xx (insufficient rights / no such
@@ -1735,6 +1807,7 @@ async function ensureGitLabDuoWorkflowSettings(
 				"content-type": "application/json",
 			},
 			body: JSON.stringify(buildGitLabDuoWorkflowSettingsBody()),
+			signal: gitLabDuoWorkflowRestSignal(signal),
 		});
 		traceGitLabDuoWorkflow("settings.ensure", { status: response.status, ok: response.ok });
 		return response.status < 500;
