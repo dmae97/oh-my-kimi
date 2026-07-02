@@ -56,6 +56,9 @@
 ### Fixed
 
 - Fixed SSH streamed placeholders and provisional partial frames leaving stale pending rows in the TUI viewport or native scrollback. ([#4314](https://github.com/can1357/oh-my-pi/issues/4314))
+### Fixed
+
+- Fixed Gemini web_search to honor `providers.webSearchGeminiModel` / `GEMINI_SEARCH_MODEL` for both OAuth and Developer API grounding requests. ([#4312](https://github.com/can1357/oh-my-pi/issues/4312))
 
 ## [16.3.1] - 2026-07-02
 
