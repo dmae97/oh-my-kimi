@@ -222,17 +222,18 @@ describe("EventController IRC expiry", () => {
 		await controller.handleEvent({ type: "irc_message", message });
 
 		expect(chatContainer.children).toHaveLength(2);
-		// handleEvent now requests a repaint up front so the lazy top-border
-		// provider can flush the latest status-line state (#4145); the IRC
-		// handler adds a second request when it mounts the card.
-		expect(requestRender).toHaveBeenCalledTimes(2);
+		// One requestRender from the IRC handler mounting the card. The blanket
+		// pre-render that `handleEvent` used to fire before every dispatch was
+		// removed in #4353 (it doubled the paint rate during streaming and did no
+		// visible work beyond what the handlers already trigger).
+		expect(requestRender).toHaveBeenCalledTimes(1);
 
 		vi.advanceTimersByTime(9_999);
 		expect(chatContainer.children).toHaveLength(2);
 
 		vi.advanceTimersByTime(1);
 		expect(chatContainer.children).toHaveLength(1);
-		expect(requestRender).toHaveBeenCalledTimes(3);
+		expect(requestRender).toHaveBeenCalledTimes(2);
 	});
 
 	it("keeps a card whose rows may already be committed (no live block above)", async () => {
@@ -293,6 +294,6 @@ describe("EventController IRC expiry", () => {
 		vi.advanceTimersByTime(10_000);
 
 		expect(chatContainer.children).toHaveLength(1);
-		expect(requestRender).toHaveBeenCalledTimes(2);
+		expect(requestRender).toHaveBeenCalledTimes(1);
 	});
 });
