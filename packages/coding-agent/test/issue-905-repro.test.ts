@@ -85,3 +85,57 @@ test("omp models surfaces extension-registered providers (issue #905)", async ()
 		authStorage.close();
 	}
 });
+
+test("omp models prints invalid models.yml schema errors before listing output", async () => {
+	const modelsPath = tmp.join("invalid-models.yml");
+	await fs.writeFile(
+		modelsPath,
+		`providers:
+  myprovider:
+    baseUrl: http://localhost:8000/v1
+    api: openai-completions
+    auth: none
+    compat:
+      thinkingFormat: deepseek
+    models:
+      - id: my-model
+        name: My Model
+        reasoning: false
+        input: [text]
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+        contextWindow: 8192
+        maxTokens: 4096
+`,
+	);
+
+	const authStorage = await AuthStorage.create(":memory:");
+	try {
+		const modelRegistry = new ModelRegistry(authStorage, modelsPath);
+
+		const captured: string[] = [];
+		const originalWrite = process.stdout.write;
+		Reflect.set(process.stdout, "write", (chunk: string | Uint8Array) => {
+			captured.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+			return true;
+		});
+
+		try {
+			await runModelsListing({
+				modelRegistry,
+				cwd: tmp.path(),
+				action: "ls",
+				pattern: "myprovider",
+				disableExtensionDiscovery: true,
+			});
+		} finally {
+			process.stdout.write = originalWrite;
+		}
+
+		const output = captured.join("");
+		expect(output).toContain("Warning: models.yml validation failed — custom providers disabled");
+		expect(output).toContain("providers.myprovider.compat.thinkingFormat");
+		expect(output).toContain("deepseek");
+	} finally {
+		authStorage.close();
+	}
+});

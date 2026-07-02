@@ -80,6 +80,8 @@
 
 ### Fixed
 
+- Fixed `models.yml` schema validation failures being treated as valid config data, so invalid custom provider files now surface a warning instead of silently dropping all custom providers. ([#4305](https://github.com/can1357/oh-my-pi/issues/4305))
+
 - Fixed stuttering/latency in speech by running synthesis chunks through the player gaplessly
 - Fixed race condition causing EPIPE errors and broken pipes during speech playback
 - Fixed interrupted speech audio by ensuring segments queue and drain in order
