@@ -216,6 +216,13 @@ describe("normalizeGeneratedTitle source-aware casing", () => {
 		).toBe("Unify Error handling across the codebase");
 	});
 
+	it("does not treat caseless scripts as shouting (CJK source still restores acronyms)", () => {
+		// `修复`/`集群故障` carry no letter case at all; they must not register as
+		// consecutive ALL-CAPS emphasis, otherwise every CJK message marks the
+		// source shouty and silently disables acronym restoration.
+		expect(normalizeGeneratedTitle("Cnpg 集群修复", "修复 CNPG 集群故障")).toBe("CNPG 集群修复");
+	});
+
 	it("does not misidentify PascalCase proper nouns as acronyms", () => {
 		// The model produced `GitHub` from a source that also has the acronym
 		// `API`; `GitHub` has interior uppercase so it's NOT a title-cased

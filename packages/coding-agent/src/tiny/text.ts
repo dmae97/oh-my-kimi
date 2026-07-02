@@ -291,11 +291,13 @@ function isAllCapsAcronym(token: string): boolean {
 
 /** Multi-letter ALL-CAPS word in the source. Used for shout detection, not for
  *  acronym restoration — shouted English words (`FIX`, `WORK`) still count as
- *  shouty even though they are not restorable acronyms. */
+ *  shouty even though they are not restorable acronyms. Requires an actual
+ *  uppercase letter so caseless scripts (CJK) never register as shouting and
+ *  disable acronym restoration for those messages. */
 function isAllCapsWord(token: string): boolean {
 	const letters = token.match(/\p{L}/gu);
 	if (!letters || letters.length < 2) return false;
-	return !/\p{Ll}/u.test(token);
+	return /\p{Lu}/u.test(token) && !/\p{Ll}/u.test(token);
 }
 
 /** Plain title-cased word (`Cnpg`, `Etl`): starts uppercase, has one-or-more
