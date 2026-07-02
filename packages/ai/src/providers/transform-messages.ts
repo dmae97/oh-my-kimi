@@ -432,15 +432,13 @@ export function transformMessages<TApi extends Api>(
 							return [];
 						}
 						// Same-model Anthropic replay to a signature-enforcing endpoint
-						// cannot natively replay unsigned thinking, but this is not a
-						// dialect transition. Do not demote it into the target model's
-						// textual thinking dialect; that fallback is reserved for real
-						// model/provider transitions where native replay is impossible.
-						if (
-							isSameModel &&
-							isOfficialAnthropicTarget &&
-							(!sanitized.thinkingSignature || sanitized.thinkingSignature.trim() === "")
-						) {
+						// cannot natively replay thinking blocks whose source explicitly
+						// recorded an empty signature, but this is not a dialect
+						// transition. Do not demote that sentinel into the target model's
+						// textual thinking dialect; keep demotion for signatures stripped
+						// by the untrustworthy-turn recovery above and for literal thinking
+						// envelopes that never carried a signature field.
+						if (isSameModel && isOfficialAnthropicTarget && sanitized.thinkingSignature?.trim() === "") {
 							return [];
 						}
 						return sanitized;
