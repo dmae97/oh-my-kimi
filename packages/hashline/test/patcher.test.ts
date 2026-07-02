@@ -371,6 +371,49 @@ describe("Patcher seen-line provenance", () => {
 		expect(fs.get(PATH)).toBe(bigContent);
 	});
 
+	it("column-clips wide revealed lines, keeps the merge gate closed, and stays anchored across retries", async () => {
+		// Minified-bundle-style single wide line at anchor 2. Anchor 3 is a
+		// short line so we can see the width truncation applied only where
+		// needed. The 4KB cap is comfortably over SEEN_LINE_REVEAL_MAX_COLUMNS.
+		const wide = "a".repeat(4096);
+		const wideContent = `l1\n${wide}\nl3\nl4\n`;
+		const fs = new InMemoryFilesystem([[PATH, wideContent]]);
+		const snapshots = new InMemorySnapshotStore();
+		const tag = snapshots.record(PATH, wideContent, [1]);
+		const patcher = new Patcher({ fs, snapshots });
+
+		let message: string | undefined;
+		try {
+			await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 2.=3:\n+X\n+Y`));
+		} catch (err) {
+			message = (err as Error).message;
+		}
+		expect(message).toContain("Preview of the actual file content at the first 2 unseen line(s)");
+		// Line 2 is clipped at 512 chars + ellipsis; the full 4KB never leaks
+		// into the error preview.
+		expect(message).toMatch(/2:a{512}…/);
+		expect(message).not.toContain("a".repeat(513));
+		// Short line surfaces verbatim.
+		expect(message).toContain("3:l3");
+		// Guidance routes to a range re-read.
+		expect(message).toMatch(new RegExp(`${PATH}:2-3`));
+		expect(fs.get(PATH)).toBe(wideContent);
+
+		// A straight retry STILL rejects: column-truncated reveals must not
+		// merge into seenLines, otherwise the model would land the edit
+		// having only seen the first 512 chars of a >4KB line.
+		let retryMessage: string | undefined;
+		try {
+			await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 2.=3:\n+X\n+Y`));
+		} catch (err) {
+			retryMessage = (err as Error).message;
+		}
+		expect(retryMessage).toContain("Preview of the actual file content at the first 2 unseen line(s)");
+		expect(retryMessage).toMatch(/2:a{512}…/);
+		expect(retryMessage).not.toContain("a".repeat(513));
+		expect(fs.get(PATH)).toBe(wideContent);
+	});
+
 	it("skips the check when no seen lines were recorded (absent → allow)", async () => {
 		const fs = new InMemoryFilesystem([[PATH, CONTENT]]);
 		const snapshots = new InMemorySnapshotStore();
