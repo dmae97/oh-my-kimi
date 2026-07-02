@@ -65,6 +65,15 @@ export interface SessionStorage {
 	unlink(path: string): Promise<void>;
 	deleteSessionWithArtifacts(sessionPath: string): Promise<void>;
 	openWriter(path: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }): SessionStorageWriter;
+	/**
+	 * Wait for every backing write scheduled by this storage to become durably
+	 * visible. Sync backends (file, memory) return immediately because their
+	 * writes complete in-body; async backends (Redis/SQL via
+	 * {@link IndexedSessionStorage}) await their per-path queues so a caller
+	 * driving a graceful shutdown does not exit while a fire-and-forget
+	 * `writeTextSync` publish is still on the wire.
+	 */
+	drain(): Promise<void>;
 }
 
 // FinalizationRegistry to clean up leaked file descriptors
@@ -376,6 +385,12 @@ export class FileSessionStorage implements SessionStorage {
 
 	unlink(path: string): Promise<void> {
 		return fs.promises.unlink(path);
+	}
+
+	drain(): Promise<void> {
+		// File writes complete synchronously in-body via fs.writeFileSync /
+		// fs.renameSync, so there is no queued work to await.
+		return Promise.resolve();
 	}
 
 	openWriter(path: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }): SessionStorageWriter {
@@ -706,6 +721,10 @@ export class MemorySessionStorage implements SessionStorage {
 		return Promise.resolve();
 	}
 	deleteSessionWithArtifacts(_sessionPath: string): Promise<void> {
+		return Promise.resolve();
+	}
+
+	drain(): Promise<void> {
 		return Promise.resolve();
 	}
 

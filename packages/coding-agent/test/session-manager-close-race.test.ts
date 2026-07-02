@@ -117,6 +117,9 @@ class CloseHoldingStorage implements SessionStorage {
 	deleteSessionWithArtifacts(sessionPath: string): Promise<void> {
 		return this.#inner.deleteSessionWithArtifacts(sessionPath);
 	}
+	drain(): Promise<void> {
+		return this.#inner.drain();
+	}
 }
 
 /** Drive microtasks while releasing every parked close until `promise` settles. */

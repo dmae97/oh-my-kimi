@@ -6,6 +6,7 @@ import {
 	type SessionStorageWriter,
 	type WriteTextAtomicOptions,
 } from "@oh-my-pi/pi-coding-agent/session/session-storage";
+import type { SessionTitleUpdate } from "@oh-my-pi/pi-coding-agent/session/session-title-slot";
 
 interface DetachableWriter extends SessionStorageWriter {
 	detach(): void;
@@ -369,5 +370,91 @@ describe("SessionManager atomic rewrite fence spans writer.close()", () => {
 		expect(content).toContain("during close");
 		expect(content).toContain('"customType":"during_close_custom"');
 		expect(storage.detachedLines).toEqual([]);
+	});
+});
+
+class TitleFallbackPausingStorage extends MemorySessionStorage {
+	readonly writeStarted = Promise.withResolvers<void>();
+	readonly allowWrite = Promise.withResolvers<void>();
+	writeTextAtomicCalls = 0;
+	failNextUpdateTitle = false;
+
+	override async updateSessionTitle(path: string, update: SessionTitleUpdate): Promise<void> {
+		if (this.failNextUpdateTitle) {
+			this.failNextUpdateTitle = false;
+			throw new Error("updateSessionTitle forced failure");
+		}
+		return super.updateSessionTitle(path, update);
+	}
+
+	override async writeTextAtomic(path: string, content: string, options?: WriteTextAtomicOptions): Promise<void> {
+		this.writeTextAtomicCalls += 1;
+		this.writeStarted.resolve();
+		await this.allowWrite.promise;
+		if (options?.commitGuard && !options.commitGuard()) return;
+		this.writeTextSync(path, content);
+	}
+}
+
+describe("SessionManager title-change fallback fenced-append durability", () => {
+	it("loops on the dirty flag so fenced appends during the fallback rewrite persist", async () => {
+		const storage = new TitleFallbackPausingStorage();
+		const sessionManager = SessionManager.create("/cwd", "/sessions", storage);
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected built-in anthropic model");
+
+		// Materialize the session on disk with a title slot present so a later
+		// setSessionName takes the append-then-updateSessionTitle try branch
+		// instead of the up-front #rewriteAtomically fallback.
+		sessionManager.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "seed response" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+		await sessionManager.flush();
+		await sessionManager.setSessionName("initial title", "user", "seed");
+		await sessionManager.flush();
+		expect(storage.writeTextAtomicCalls).toBe(0);
+
+		// Force the try branch to fail so the catch runs the atomic-rewrite loop.
+		storage.failNextUpdateTitle = true;
+		const rename = sessionManager.setSessionName("second title", "user", "test");
+		await storage.writeStarted.promise;
+
+		// Fenced appends during the paused fallback rewrite: pre-fix these
+		// would be marked dirty and dropped from the serialized body because
+		// the fallback never looped on that flag.
+		sessionManager.appendMessage({
+			role: "user",
+			content: "during title fallback",
+			timestamp: Date.now(),
+		});
+		sessionManager.appendCustomEntry("during_title_fallback_custom", { reason: "test" });
+
+		storage.allowWrite.resolve();
+		await rename;
+		await sessionManager.flush();
+
+		const sessionFile = sessionManager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected session file");
+		const content = await storage.readText(sessionFile);
+		expect(content).toContain('"title":"second title"');
+		expect(content).toContain("during title fallback");
+		expect(content).toContain('"customType":"during_title_fallback_custom"');
+		// Loop must have executed at least twice: first pass paused, dirty from
+		// the fenced appends triggers a second pass that includes them.
+		expect(storage.writeTextAtomicCalls).toBeGreaterThanOrEqual(2);
 	});
 });
