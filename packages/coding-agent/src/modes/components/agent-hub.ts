@@ -68,16 +68,23 @@ function statusBadge(status: AgentStatus): string {
 	}
 }
 
-function registerPersistedSubagents(registry: AgentRegistry, sessionFile: string | null | undefined): void {
+async function registerPersistedSubagents(
+	registry: AgentRegistry,
+	sessionFile: string | null | undefined,
+): Promise<void> {
 	if (!sessionFile?.endsWith(".jsonl")) return;
 	const root = sessionFile.slice(0, -6);
-	registerPersistedSubagentsFromDir(registry, root, undefined);
+	await registerPersistedSubagentsFromDir(registry, root, undefined);
 }
 
-function registerPersistedSubagentsFromDir(registry: AgentRegistry, dir: string, parentId: string | undefined): void {
+async function registerPersistedSubagentsFromDir(
+	registry: AgentRegistry,
+	dir: string,
+	parentId: string | undefined,
+): Promise<void> {
 	let entries: fs.Dirent[];
 	try {
-		entries = fs.readdirSync(dir, { withFileTypes: true });
+		entries = await fs.promises.readdir(dir, { withFileTypes: true });
 	} catch {
 		return;
 	}
@@ -126,7 +133,7 @@ function registerPersistedSubagentsFromDir(registry: AgentRegistry, dir: string,
 				status: "parked",
 			});
 		}
-		registerPersistedSubagentsFromDir(registry, path.join(dir, id), id);
+		await registerPersistedSubagentsFromDir(registry, path.join(dir, id), id);
 	}
 }
 
@@ -192,6 +199,8 @@ export class AgentHubOverlayComponent extends Container {
 	#unsubscribers: Array<() => void> = [];
 	#ageTimer: NodeJS.Timeout | undefined;
 	#remote: AgentHubRemote | undefined;
+	/** Resolves after persisted historical subagents have been registered and rows refreshed. */
+	readonly persistedSubagentsReady: Promise<void>;
 
 	// Table state
 	#rows: AgentRef[] = [];
@@ -247,7 +256,16 @@ export class AgentHubOverlayComponent extends Container {
 		this.#ageTimer = setInterval(() => this.#requestRender(), AGE_TICK_MS);
 		this.#ageTimer.unref?.();
 
-		if (!this.#remote) registerPersistedSubagents(this.#registry, deps.sessionFile);
+		this.persistedSubagentsReady = this.#remote
+			? Promise.resolve()
+			: registerPersistedSubagents(this.#registry, deps.sessionFile)
+					.catch((error: unknown) => {
+						logger.warn("Failed to register persisted subagents", { error });
+					})
+					.then(() => {
+						this.#refreshRows();
+					})
+					.finally(() => this.#requestRender());
 		this.#refreshRows();
 	}
 

@@ -106,6 +106,7 @@ describe("Agent hub Enter activation", () => {
 			focusAgent: async () => {},
 			sessionFile,
 		});
+		await hub.persistedSubagentsReady;
 
 		const rendered = Bun.stripANSI(hub.render(120).join("\n"));
 		expect(rendered).toContain("Worker");

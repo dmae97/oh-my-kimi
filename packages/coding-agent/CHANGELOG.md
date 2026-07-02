@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Load persisted Agent Hub subagents asynchronously to avoid blocking the TUI on synchronous directory walks ([#4239](https://github.com/can1357/oh-my-pi/issues/4239))
+
+
 ## [16.3.0] - 2026-07-02
 
 ### Added
