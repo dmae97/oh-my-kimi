@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- Fixed stalled network calls in `omp update`, Hindsight recall, and Smithery registry lookup by adding fetch timeouts. ([#4229](https://github.com/can1357/oh-my-pi/issues/4229))
 - Fixed stuttering/latency in speech by running synthesis chunks through the player gaplessly
 - Fixed race condition causing EPIPE errors and broken pipes during speech playback
 - Fixed interrupted speech audio by ensuring segments queue and drain in order
