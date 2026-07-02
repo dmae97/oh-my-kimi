@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { ResponseCreateParamsStreaming, ResponseInput } from "@oh-my-pi/pi-ai/providers/openai-responses-wire";
+import type { ResponseCreateParamsStreaming } from "@oh-my-pi/pi-ai/providers/openai-responses-wire";
 import {
 	applyChatCompletionsCompatPolicy,
 	applyResponsesCompatPolicy,
@@ -82,7 +82,6 @@ describe("OpenAI compat policy", () => {
 		};
 		const chatBody = chatParams();
 		const responseBody = responsesParams();
-		const responseInput: ResponseInput = [];
 
 		applyChatCompletionsCompatPolicy(
 			chatBody,
@@ -93,7 +92,6 @@ describe("OpenAI compat policy", () => {
 		);
 		applyResponsesCompatPolicy(
 			responseBody,
-			responseInput,
 			resolveOpenAICompatPolicy(responsesModel(compat), { endpoint: "responses", disableReasoning: true }),
 			undefined,
 		);
@@ -106,7 +104,6 @@ describe("OpenAI compat policy", () => {
 		const compat: OpenAICompat = { omitReasoningEffort: true };
 		const chatBody = chatParams();
 		const responseBody = responsesParams();
-		const responseInput: ResponseInput = [];
 
 		applyChatCompletionsCompatPolicy(
 			chatBody,
@@ -114,7 +111,6 @@ describe("OpenAI compat policy", () => {
 		);
 		applyResponsesCompatPolicy(
 			responseBody,
-			responseInput,
 			resolveOpenAICompatPolicy(responsesModel(compat), { endpoint: "responses", reasoning: Effort.High }),
 			undefined,
 		);
@@ -123,28 +119,17 @@ describe("OpenAI compat policy", () => {
 		expect(responseBody.reasoning).toBeUndefined();
 	});
 
-	it("uses a non-budget fallback prompt for Responses no-reasoning compat", () => {
-		const compat: OpenAICompat = { requiresReasoningSuppressionPrompt: true };
+	it("leaves Responses input unchanged when reasoning is not requested", () => {
 		const responseBody = responsesParams();
-		const responseInput: ResponseInput = [];
 
-		const appended = applyResponsesCompatPolicy(
+		applyResponsesCompatPolicy(
 			responseBody,
-			responseInput,
-			resolveOpenAICompatPolicy(responsesModel(compat), { endpoint: "responses" }),
+			resolveOpenAICompatPolicy(responsesModel({}), { endpoint: "responses" }),
 			undefined,
 		);
 
-		expect(appended).toBe(1);
-		expect(responseInput.at(-1)).toEqual({
-			role: "developer",
-			content: [
-				{
-					type: "input_text",
-					text: "Keep internal reasoning brief. Continue following the task and use tools normally.",
-				},
-			],
-		});
+		expect(responseBody.reasoning).toBeUndefined();
+		expect(responseBody.input).toEqual([]);
 	});
 
 	it("exposes reasoning replay constraints independent of endpoint", () => {

@@ -76,7 +76,6 @@ import {
 } from "./github-copilot-headers";
 import type { ChatCompletionCreateParamsStreaming } from "./openai-chat-wire";
 import type { InputItem } from "./openai-codex/request-transformer";
-import responsesReasoningSuppressionPrompt from "./openai-responses-reasoning-suppression.md" with { type: "text" };
 import type {
 	ResponseContentPartAddedEvent,
 	ResponseCreateParamsStreaming,
@@ -2404,8 +2403,6 @@ export function applyCommonResponsesSamplingParams<P extends CommonResponsesPara
 	applyOpenAIServiceTier(params, options?.serviceTier, model.provider);
 }
 
-const RESPONSES_REASONING_SUPPRESSION_PROMPT = responsesReasoningSuppressionPrompt.trim();
-
 type ReasoningOptions = {
 	reasoning?: string;
 	reasoningSummary?: "auto" | "detailed" | "concise" | null;
@@ -2420,12 +2417,11 @@ export interface ApplyResponsesCompatPolicyOptions {
 
 export function applyResponsesCompatPolicy<P extends ResponseCreateParamsStreaming>(
 	params: P,
-	messages: ResponseInput,
 	policy: OpenAICompatPolicy,
 	options: ApplyResponsesCompatPolicyOptions | undefined,
-): number {
+): void {
 	const reasoning = policy.reasoning;
-	if (!reasoning.modelSupported) return 0;
+	if (!reasoning.modelSupported) return;
 	if (reasoning.includeEncryptedReasoning) {
 		const include = params.include ?? [];
 		if (!include.includes("reasoning.encrypted_content")) include.push("reasoning.encrypted_content");
@@ -2435,7 +2431,7 @@ export function applyResponsesCompatPolicy<P extends ResponseCreateParamsStreami
 	if (reasoning.disabled) {
 		if (reasoning.disableMode === "openrouter-enabled-false") {
 			params.reasoning = { enabled: false } as P["reasoning"];
-			return 0;
+			return;
 		}
 		if (
 			reasoning.disableMode === "lowest-effort" &&
@@ -2445,16 +2441,9 @@ export function applyResponsesCompatPolicy<P extends ResponseCreateParamsStreami
 			type ReasoningParam = NonNullable<ResponseCreateParamsStreaming["reasoning"]>;
 			params.reasoning = { effort: reasoning.wireEffort as ReasoningParam["effort"] } as P["reasoning"] &
 				ReasoningParam;
-			return 0;
+			return;
 		}
-		if (policy.compat.requiresReasoningSuppressionPrompt && reasoning.requestedEffort === undefined) {
-			messages.push({
-				role: "developer",
-				content: [{ type: "input_text", text: RESPONSES_REASONING_SUPPRESSION_PROMPT }],
-			});
-			return 1;
-		}
-		return 0;
+		return;
 	}
 
 	if (reasoning.requestedEffort !== undefined || options?.reasoningSummary !== undefined) {
@@ -2463,7 +2452,7 @@ export function applyResponsesCompatPolicy<P extends ResponseCreateParamsStreami
 				type ReasoningParam = NonNullable<ResponseCreateParamsStreaming["reasoning"]>;
 				params.reasoning = { summary: options.reasoningSummary || "auto" } as P["reasoning"] & ReasoningParam;
 			}
-			return 0;
+			return;
 		}
 
 		const requested = reasoning.requestedEffort ?? "medium";
@@ -2476,17 +2465,8 @@ export function applyResponsesCompatPolicy<P extends ResponseCreateParamsStreami
 			reasoningParams.summary = options?.reasoningSummary || "auto";
 		}
 		params.reasoning = reasoningParams as P["reasoning"];
-		return 0;
+		return;
 	}
-
-	if (policy.compat.requiresReasoningSuppressionPrompt) {
-		messages.push({
-			role: "developer",
-			content: [{ type: "input_text", text: RESPONSES_REASONING_SUPPRESSION_PROMPT }],
-		});
-		return 1;
-	}
-	return 0;
 }
 
 /**
@@ -2497,14 +2477,12 @@ export function applyResponsesReasoningParams<P extends ResponseCreateParamsStre
 	params: P,
 	model: Model<"openai-responses" | "azure-openai-responses" | "openai-codex-responses">,
 	options: ReasoningOptions | undefined,
-	messages: ResponseInput,
 	mapEffort?: (effort: string) => string,
 	includeEncryptedReasoning?: boolean,
 	omitReasoningEffort?: boolean,
-): number {
+): void {
 	return applyResponsesCompatPolicy(
 		params,
-		messages,
 		resolveOpenAICompatPolicy(model, {
 			endpoint: "responses",
 			reasoning: options?.reasoning,

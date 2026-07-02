@@ -24,26 +24,11 @@ function createCodexToken(accountId: string): string {
 	return `${header}.${payload}.signature`;
 }
 
-/**
- * Returns the bundled `gpt-5-mini` model with `compat.requiresReasoningSuppressionPrompt`
- * cleared so it doesn't trigger the GPT-5 no-reasoning developer-message
- * fallback injected by `applyResponsesReasoningParams`. The fallback is
- * exercised by its own targeted tests; these history-replay tests assert raw payload shape and
- * should stay independent of it.
- */
 function getOpenAIReasoningModel(
 	provider: Parameters<typeof getBundledModel>[0],
 	id: string,
 ): Model<"openai-responses"> {
-	const base = getBundledModel(provider, id) as Model<"openai-responses">;
-	// Override both views: `compat` for direct use, `compatConfig` so tests
-	// that rebuild via `buildModel({ ..., compat: model.compatConfig })` keep
-	// the override through re-resolution.
-	return {
-		...base,
-		compat: { ...base.compat, requiresReasoningSuppressionPrompt: false },
-		compatConfig: { ...base.compatConfig, requiresReasoningSuppressionPrompt: false },
-	};
+	return getBundledModel(provider, id) as Model<"openai-responses">;
 }
 
 const preservedHistoryItems = [

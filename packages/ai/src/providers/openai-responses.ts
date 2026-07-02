@@ -166,8 +166,8 @@ interface OpenAIResponsesProviderSessionState
 
 interface OpenAIResponsesChainState {
 	/**
-	 * Wire params of the last successful turn, with per-turn trailing
-	 * scaffolding stripped from `input` (never carries previous_response_id).
+	 * Wire params of the last successful turn; never carries
+	 * `previous_response_id`.
 	 */
 	lastParams?: OpenAIResponsesSamplingParams;
 	lastResponseId?: string;
@@ -256,30 +256,19 @@ interface OpenAIResponsesChainedParams {
  * (same options, strict history prefix), chain via `previous_response_id` +
  * delta-only `input`; otherwise break the chain and replay the full transcript.
  *
- * The prefix check runs on the wire form of the conversation arguments alone:
- * per-turn trailing scaffolding is excluded from both sides and re-appended to
- * the delta, so a decoration that trails every request can never masquerade as
- * a history mutation.
+ * The prefix check runs on the wire form of the conversation arguments, so
+ * history mutations or option changes force a full replay.
  */
 function buildOpenAIResponsesChainedParams(
 	params: OpenAIResponsesSamplingParams,
-	trailingScaffoldingItems: number,
 	chain: OpenAIResponsesChainState,
 ): OpenAIResponsesChainedParams {
-	const historyParams =
-		trailingScaffoldingItems > 0 && Array.isArray(params.input)
-			? { ...params, input: params.input.slice(0, params.input.length - trailingScaffoldingItems) }
-			: params;
 	const deltaInput = chain.canAppend
-		? buildResponsesDeltaInput(chain.lastParams, chain.lastResponseItems, historyParams)
+		? buildResponsesDeltaInput(chain.lastParams, chain.lastResponseItems, params)
 		: null;
 	if (deltaInput && deltaInput.length > 0 && chain.lastResponseId) {
-		const scaffolding =
-			historyParams !== params && Array.isArray(params.input)
-				? params.input.slice(params.input.length - trailingScaffoldingItems)
-				: [];
 		return {
-			params: { ...params, previous_response_id: chain.lastResponseId, input: [...deltaInput, ...scaffolding] },
+			params: { ...params, previous_response_id: chain.lastResponseId, input: deltaInput },
 			previousResponseId: chain.lastResponseId,
 		};
 	}
@@ -416,9 +405,7 @@ const streamOpenAIResponsesOnce = (
 			const strictToolsScope = getOpenAIStrictToolsScope(model, baseUrl);
 			const builtParams = buildParams(model, context, options, providerSessionState, strictToolsScope);
 			const params = builtParams.params;
-			const { trailingScaffoldingItems } = builtParams;
 			let activeParams = params;
-			let activeTrailingScaffoldingItems = trailingScaffoldingItems;
 			const resolvedBaseUrl = (baseUrl ?? "https://api.openai.com/v1").replace(/\/+$/, "");
 			const requestReasoningEffortFallbacks = new Map<string, OpenAIReasoningEffortFallback>();
 			const attemptedReasoningEffortFallbacks = new Set<string>();
@@ -448,9 +435,7 @@ const streamOpenAIResponsesOnce = (
 			}
 			applyReasoningEffortFallbackForRequest(params);
 			let chained: OpenAIResponsesChainedParams =
-				chainState && !chainState.disabled
-					? buildOpenAIResponsesChainedParams(params, trailingScaffoldingItems, chainState)
-					: { params };
+				chainState && !chainState.disabled ? buildOpenAIResponsesChainedParams(params, chainState) : { params };
 			sentPreviousResponseId = chained.previousResponseId;
 			const idleTimeoutMs =
 				options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs(model.compat.streamIdleTimeoutMs);
@@ -589,11 +574,7 @@ const streamOpenAIResponsesOnce = (
 						if (chainState && !chainState.disabled) fallbackParams.store = true;
 						let fallbackChained: OpenAIResponsesChainedParams =
 							chainState && !chainState.disabled
-								? buildOpenAIResponsesChainedParams(
-										fallbackParams,
-										fallbackBuilt.trailingScaffoldingItems,
-										chainState,
-									)
+								? buildOpenAIResponsesChainedParams(fallbackParams, chainState)
 								: { params: fallbackParams };
 						sentPreviousResponseId = fallbackChained.previousResponseId;
 						fallbackChained = {
@@ -603,7 +584,6 @@ const streamOpenAIResponsesOnce = (
 						chained = fallbackChained;
 						rawRequestDump.body = chained.params;
 						activeParams = fallbackParams;
-						activeTrailingScaffoldingItems = fallbackBuilt.trailingScaffoldingItems;
 						activeStrictToolsApplied = fallbackBuilt.strictToolsApplied;
 						continue;
 					}
@@ -646,7 +626,6 @@ const streamOpenAIResponsesOnce = (
 					chained = { params: retryParams };
 					rawRequestDump.body = retryParams;
 					activeParams = currentParams;
-					activeTrailingScaffoldingItems = currentBuilt.trailingScaffoldingItems;
 					activeStrictToolsApplied = currentBuilt.strictToolsApplied;
 				}
 			}
@@ -710,14 +689,7 @@ const streamOpenAIResponsesOnce = (
 			output.providerPayload = createOpenAIResponsesHistoryPayload(model.provider, nativeOutputItems);
 			if (providerSessionState) providerSessionState.nativeHistoryReplayWarmed = true;
 			if (chainState) {
-				chainState.lastParams = structuredCloneJSON(
-					activeTrailingScaffoldingItems > 0 && Array.isArray(activeParams.input)
-						? {
-								...activeParams,
-								input: activeParams.input.slice(0, activeParams.input.length - activeTrailingScaffoldingItems),
-							}
-						: activeParams,
-				);
+				chainState.lastParams = structuredCloneJSON(activeParams);
 				if (output.responseId) {
 					chainState.lastResponseId = output.responseId;
 					chainState.lastResponseItems = sanitizeOpenAIResponsesHistoryItemsForReplay(
@@ -790,7 +762,7 @@ export function buildParams(
 	providerSessionState: OpenAIResponsesProviderSessionState | undefined,
 	strictToolsScope?: OpenAIStrictToolsScope,
 	disableStrictToolsOverride = false,
-): { params: OpenAIResponsesSamplingParams; trailingScaffoldingItems: number; strictToolsApplied: boolean } {
+): { params: OpenAIResponsesSamplingParams; strictToolsApplied: boolean } {
 	const policy = resolveOpenAICompatPolicy(model, {
 		endpoint: "responses",
 		reasoning: options?.reasoning,
@@ -914,7 +886,7 @@ export function buildParams(
 		filterReasoningHistory: options?.filterReasoningHistory,
 		omitReasoningEffort: options?.omitReasoningEffort,
 	});
-	const trailingScaffoldingItems = applyResponsesCompatPolicy(params, messages, reasoningPolicy, {
+	applyResponsesCompatPolicy(params, reasoningPolicy, {
 		reasoningSummary: options?.reasoningSummary,
 		mapEffort: effort =>
 			model.compat.reasoningEffortMap?.[effort as NonNullable<OpenAIResponsesOptions["reasoning"]>] ??
@@ -926,7 +898,7 @@ export function buildParams(
 
 	applyOpenAIExtraBody(params, options?.extraBody);
 
-	return { params, trailingScaffoldingItems, strictToolsApplied };
+	return { params, strictToolsApplied };
 }
 
 /**

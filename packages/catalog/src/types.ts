@@ -324,14 +324,6 @@ export interface OpenAICompat {
 	strictResponsesPairing?: boolean;
 	/** Whether the Responses API accepts the `detail: "original"` image hint. Default: auto-detected (false for GitHub Copilot, which rejects it with a 400). */
 	supportsImageDetailOriginal?: boolean;
-	/**
-	 * Append a trailing no-reasoning developer item when the caller did not
-	 * request reasoning, suppressing default reasoning on models that cannot
-	 * disable it via request params (Responses APIs only; see
-	 * https://community.openai.com/t/need-reasoning-false-option-for-gpt-5/1351588/7).
-	 * The prompt must not look like an execution or tool budget. Default: auto-detected (GPT-5-family model names).
-	 */
-	requiresReasoningSuppressionPrompt?: boolean;
 	/** Whether streamed reasoning deltas for the same field may repeat the full cumulative text snapshot. Default: false. */
 	reasoningDeltasMayBeCumulative?: boolean;
 	/** Strip leaked DeepSeek chat-template special tokens from visible content deltas. Default: auto-detected. */
@@ -557,7 +549,6 @@ export type ResolvedOpenAICompat = ResolvedOpenAISharedCompat &
 			| "thinkingKeep"
 			| "strictResponsesPairing"
 			| "supportsImageDetailOriginal"
-			| "requiresReasoningSuppressionPrompt"
 			| "enableGeminiThinkingLoopGuard"
 			| "whenThinking"
 		>
@@ -581,7 +572,6 @@ export interface ResolvedOpenAIResponsesCompat extends ResolvedOpenAISharedCompa
 	supportsLongPromptCacheRetention: boolean;
 	strictResponsesPairing: boolean;
 	supportsImageDetailOriginal: boolean;
-	requiresReasoningSuppressionPrompt: boolean;
 	supportsObfuscationOptOut: boolean;
 	streamIdleTimeoutMs?: number;
 }

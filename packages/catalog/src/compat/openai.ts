@@ -593,8 +593,6 @@ interface OpenAIResponsesSpecLike {
  * as well as URL — bundled `azure` models carry no baseUrl (the deployment host
  * is per-resource, resolved at runtime) — while OpenAI/Copilot developer-role
  * and prompt-cache detection stay URL-keyed, as the historical call sites were.
- * The GPT-5 reasoning-suppression prompt keys on the model name, matching the
- * historical request-time check.
  */
 export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): ResolvedOpenAIResponsesCompat {
 	const baseUrl = spec.baseUrl ?? "";
@@ -626,7 +624,6 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 		// or base-URL host (mirroring the Anthropic compat builder) so a model
 		// pointed at the Copilot host under a different provider id still clamps.
 		supportsImageDetailOriginal: !modelMatchesHost({ provider: spec.provider, baseUrl }, "githubCopilot"),
-		requiresReasoningSuppressionPrompt: spec.name.toLowerCase().startsWith("gpt-5"),
 		reasoningEffortMap: {},
 		supportsReasoningParams: true,
 		thinkingFormat,
@@ -693,7 +690,6 @@ function pickResponsesOnly(compat: ResolvedOpenAIResponsesCompat): ResponsesOnly
 		supportsLongPromptCacheRetention: compat.supportsLongPromptCacheRetention,
 		strictResponsesPairing: compat.strictResponsesPairing,
 		supportsImageDetailOriginal: compat.supportsImageDetailOriginal,
-		requiresReasoningSuppressionPrompt: compat.requiresReasoningSuppressionPrompt,
 		supportsObfuscationOptOut: compat.supportsObfuscationOptOut,
 	} satisfies ResponsesOnlyCompat;
 }

@@ -97,12 +97,10 @@ describe("openai-responses stateful chaining", () => {
 		expect(JSON.stringify(deltaInput)).not.toContain("Answer 1");
 	});
 
-	it("keeps chaining when the GPT-5 no-reasoning scaffolding trails every request", async () => {
+	it("chains turns without appending an extra no-reasoning developer item", async () => {
 		const sentRequests: Array<Record<string, unknown>> = [];
 		const fetchMock = createCapturingFetch(sentRequests);
 		const providerSessionState = new Map<string, ProviderSessionState>();
-		// No reasoning option: applyResponsesReasoningParams appends trailing
-		// no-reasoning scaffolding to every request's input.
 		const options = {
 			apiKey: "test-key",
 			sessionId: "stateful-no-reasoning-session",
@@ -118,8 +116,10 @@ describe("openai-responses stateful chaining", () => {
 			options,
 		).result();
 		expect(firstResponse.stopReason).toBe("stop");
-		const firstInput = sentRequests[0]?.input as unknown[];
-		expect(JSON.stringify(firstInput.at(-1))).toContain("Keep internal reasoning brief");
+		const firstInput = sentRequests[0]?.input as Array<{ role?: string }>;
+		expect(firstInput).toHaveLength(2);
+		expect(firstInput[0]?.role).toBe("developer");
+		expect(firstInput[1]?.role).toBe("user");
 
 		const secondResponse = await streamOpenAIResponses(
 			model,
@@ -131,14 +131,12 @@ describe("openai-responses stateful chaining", () => {
 		).result();
 		expect(secondResponse.stopReason).toBe("stop");
 
-		// The trailing scaffolding is excluded from the prefix check and re-sent
-		// with the delta: [new user item, fallback item].
 		expect(sentRequests).toHaveLength(2);
 		expect(sentRequests[1]?.previous_response_id).toBe("resp_1");
 		const deltaInput = sentRequests[1]?.input as Array<{ role?: string }>;
-		expect(deltaInput).toHaveLength(2);
+		expect(deltaInput).toHaveLength(1);
 		expect(deltaInput[0]?.role).toBe("user");
-		expect(JSON.stringify(deltaInput[1])).toContain("Keep internal reasoning brief");
+		expect(JSON.stringify(deltaInput)).toContain("Second question");
 	});
 
 	it("replays the full transcript when history mutates", async () => {

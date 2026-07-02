@@ -89,25 +89,3 @@ describe("resolveOpenAIResponsesCompat supportsDeveloperRole", () => {
 		expect(buildOpenAIResponsesCompat(model).supportsDeveloperRole).toBe(true);
 	});
 });
-
-describe("buildOpenAIResponsesCompat requiresReasoningSuppressionPrompt", () => {
-	it("auto-detects GPT-5-family model names case-insensitively", () => {
-		const model = { provider: "openai", name: "GPT-5 Mini", baseUrl: "https://api.openai.com/v1" };
-		expect(buildOpenAIResponsesCompat(model).requiresReasoningSuppressionPrompt).toBe(true);
-	});
-
-	it("stays off for non-GPT-5 model names", () => {
-		const model = { provider: "openai", name: "o4-mini", baseUrl: "https://api.openai.com/v1" };
-		expect(buildOpenAIResponsesCompat(model).requiresReasoningSuppressionPrompt).toBe(false);
-	});
-
-	it("honors an explicit compat override on a GPT-5 model", () => {
-		const model = {
-			provider: "openai",
-			name: "GPT-5 Mini",
-			baseUrl: "https://api.openai.com/v1",
-			compat: { requiresReasoningSuppressionPrompt: false },
-		};
-		expect(buildOpenAIResponsesCompat(model).requiresReasoningSuppressionPrompt).toBe(false);
-	});
-});

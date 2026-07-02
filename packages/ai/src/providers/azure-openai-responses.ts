@@ -376,7 +376,7 @@ function buildParams(
 		}
 	}
 
-	applyResponsesReasoningParams(params, model, options, messages);
+	applyResponsesReasoningParams(params, model, options);
 
 	return params;
 }
