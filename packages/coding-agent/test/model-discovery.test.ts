@@ -898,10 +898,10 @@ describe("ModelRegistry runtime discovery", () => {
 				);
 			}
 			if (url === "http://127.0.0.1:8080/props") {
-				return new Response(
-					JSON.stringify({ default_generation_settings: { params: {}, n_ctx: 0 } }),
-					{ status: 200, headers: { "Content-Type": "application/json" } },
-				);
+				return new Response(JSON.stringify({ default_generation_settings: { params: {}, n_ctx: 0 } }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
@@ -914,7 +914,6 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(refreshed.maxTokens).toBe(16384);
 		expect(registry.find("llama.cpp", "cold-preset")?.contextWindow).toBe(16384);
 	});
-
 
 	test("llama.cpp selected model refresh patches newly loaded meta n_ctx and unlimited output limit", async () => {
 		writeModelCache(
