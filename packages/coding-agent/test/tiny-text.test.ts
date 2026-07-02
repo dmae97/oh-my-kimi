@@ -187,6 +187,18 @@ describe("normalizeGeneratedTitle source-aware casing", () => {
 		expect(normalizeGeneratedTitle("make it work", "just make it WORK already")).toBe("make it work");
 	});
 
+	it("does not restore a single emphatic ALL-CAPS word from sentence-case title start", () => {
+		// Normal sentence capitalization produces `Fix`/`Work` at title start.
+		// Those words have no acronym signal, so they must not be restored as
+		// `FIX`/`WORK` just because the source had one emphasized word.
+		expect(normalizeGeneratedTitle("Fix login crash", "FIX login crash")).toBe("Fix login crash");
+		expect(normalizeGeneratedTitle("Work around bug", "please WORK around the bug")).toBe("Work around bug");
+	});
+
+	it("restores common vowel-bearing technical acronyms via the acronym allowlist", () => {
+		expect(normalizeGeneratedTitle("Api timeout", "API timeout")).toBe("API timeout");
+	});
+
 	it("still declines to restore ALL-CAPS when the source is shouty", () => {
 		// `FIX the BUG NOW` has BUG↔NOW consecutive → shouty. Even though the
 		// model title-cased `Fix` at the start, we must not restore `FIX`.

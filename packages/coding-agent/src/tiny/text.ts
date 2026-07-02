@@ -152,6 +152,33 @@ const FILLER_TITLE_TOKENS = new Set<string>([
 ]);
 
 const TITLE_WORD = /[\p{L}\p{N}]+/gu;
+const COMMON_TITLE_ACRONYMS = new Set<string>([
+	"API",
+	"CLI",
+	"CPU",
+	"CRUD",
+	"CSS",
+	"DNS",
+	"GPU",
+	"HTML",
+	"HTTP",
+	"HTTPS",
+	"ID",
+	"JSON",
+	"LLM",
+	"REST",
+	"SDK",
+	"SSH",
+	"TCP",
+	"TLS",
+	"TUI",
+	"UI",
+	"URI",
+	"URL",
+	"UX",
+	"XML",
+	"YAML",
+]);
 
 /**
  * True when a first user message is too low-signal to title (greeting, ack,
@@ -200,19 +227,18 @@ export function normalizeGeneratedTitle(value: string | null | undefined, source
  *  2. else the message has the same word with *distinctive* mixed casing
  *     (`TinyVMM`, `iOS`, `IDs`) → adopt the user's casing (restoration);
  *  3. else the model produced a plain title-cased artifact (`Cnpg`) whose
- *     lowercased form is an ALL-CAPS acronym in a non-shouty source → restore
- *     the source acronym;
+ *     lowercased form is a likely ALL-CAPS acronym in a non-shouty source
+ *     (`CNPG`, `API`, `ETL`) → restore the source acronym;
  *  4. else it's a camelCase artifact (lowercase word + stray interior capital,
  *     `dAemon`) the user never wrote → lowercase it;
  *  5. else leave it — preserves model-cased proper nouns like `GitHub`, `OAuth`.
  *
- * Restoration is limited to avoid two failure modes: a sentence that merely
+ * Restoration is limited to avoid three failure modes: a sentence that merely
  * *starts* with `For` can't force a mid-title `for` to `For` (distinctive
- * requires interior mixed casing), and emphatic all-caps input (`ALL ERROR
- * HANDLING`, `FIX the BUG NOW`) is never re-shouted — see {@link isShoutySource}.
- * ALL-CAPS restoration also requires the model to have produced a title-cased
- * shape (`Cnpg`), never a lowercase one, so we don't re-shout an isolated
- * single-word emphasis (`WORK`) that the model correctly de-shouted.
+ * requires interior mixed casing); emphatic all-caps input (`ALL ERROR
+ * HANDLING`, `FIX the BUG NOW`) is never re-shouted — see {@link isShoutySource};
+ * and ordinary all-caps English words (`FIX`, `WORK`, `BUG`) are not treated as
+ * restorable acronyms unless they carry a stronger acronym signal.
  */
 function reconcileTitleCasing(title: string, sourceText: string): string {
 	const verbatim = new Set<string>();
@@ -249,12 +275,23 @@ function isDistinctiveCasing(token: string): boolean {
 	return /\p{Ll}/u.test(token) && /\p{L}\p{Lu}/u.test(token);
 }
 
-/** Multi-letter ALL-CAPS token in the source (`CNPG`, `API`, `JWT`). Candidate
- *  for acronym restoration; whether it's actually restored depends on
- *  {@link isShoutySource} (skips restoration on shouty input) and on the model
- *  having produced a {@link isTitleCasedArtifact} (`Cnpg`) — never a lowercase
- *  form, so isolated emphasis (`WORK` → model `work`) is left alone. */
+/** Multi-letter ALL-CAPS source token with a stronger acronym signal than a
+ *  plain emphasized word. Consonant-only tokens (`CNPG`, `SQL`, `JWT`) are
+ *  restored, digit-bearing identifiers are restored, and common technical
+ *  acronyms (`API`, `JSON`, `URL`) are allowlisted. Ordinary emphasized words
+ *  (`FIX`, `WORK`, `BUG`) contain vowels and are not restored from source. */
 function isAllCapsAcronym(token: string): boolean {
+	if (!isAllCapsWord(token)) return false;
+	const upper = token.toUpperCase();
+	if (COMMON_TITLE_ACRONYMS.has(upper)) return true;
+	if (/\p{N}/u.test(token)) return true;
+	return !/[AEIOU]/.test(upper);
+}
+
+/** Multi-letter ALL-CAPS word in the source. Used for shout detection, not for
+ *  acronym restoration — shouted English words (`FIX`, `WORK`) still count as
+ *  shouty even though they are not restorable acronyms. */
+function isAllCapsWord(token: string): boolean {
 	const letters = token.match(/\p{L}/gu);
 	if (!letters || letters.length < 2) return false;
 	return !/\p{Ll}/u.test(token);
@@ -278,7 +315,7 @@ function isTitleCasedArtifact(token: string): boolean {
 function isShoutySource(sourceText: string): boolean {
 	let run = 0;
 	for (const [token] of sourceText.matchAll(TITLE_WORD)) {
-		if (isAllCapsAcronym(token)) {
+		if (isAllCapsWord(token)) {
 			run += 1;
 			if (run >= 2) return true;
 		} else {
