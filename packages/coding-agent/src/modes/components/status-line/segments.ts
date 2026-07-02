@@ -379,7 +379,7 @@ const tokenRateSegment: StatusLineSegment = {
 		const { tokensPerSecond } = ctx.usageStats;
 		if (!tokensPerSecond) return { content: "", visible: false };
 
-		const content = withIcon(theme.icon.output, `${tokensPerSecond.toFixed(1)}/s`);
+		const content = withIcon(theme.icon.throughput, `${tokensPerSecond.toFixed(1)}/s`);
 		return { content: theme.fg("statusLineOutput", content), visible: true };
 	},
 };
@@ -498,7 +498,7 @@ const cacheReadSegment: StatusLineSegment = {
 		const { cacheRead } = ctx.usageStats;
 		if (!cacheRead) return { content: "", visible: false };
 
-		const parts = [theme.icon.cache, theme.icon.output, formatNumber(cacheRead)].filter(Boolean);
+		const parts = [theme.icon.cache, formatNumber(cacheRead)].filter(Boolean);
 		const content = parts.join(" ");
 		return { content: theme.fg("statusLineSpend", content), visible: true };
 	},
@@ -510,7 +510,7 @@ const cacheWriteSegment: StatusLineSegment = {
 		const { cacheWrite } = ctx.usageStats;
 		if (!cacheWrite) return { content: "", visible: false };
 
-		const parts = [theme.icon.cache, theme.icon.input, formatNumber(cacheWrite)].filter(Boolean);
+		const parts = [theme.icon.cache, formatNumber(cacheWrite)].filter(Boolean);
 		const content = parts.join(" ");
 		return { content: theme.fg("statusLineOutput", content), visible: true };
 	},

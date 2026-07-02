@@ -307,6 +307,47 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 	});
 });
 
+describe("UiHelpers.renderSessionContext — error-stop tool calls", () => {
+	it("keeps the synthetic assistant error result instead of replaying a later tool result", async () => {
+		await Settings.init({ inMemory: true });
+		const transcript = transcriptWith([
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "error-tool",
+						name: "eval",
+						arguments: { language: "py", code: "raise RuntimeError('boom')" },
+					},
+				],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude-sonnet",
+				usage: emptyUsage,
+				stopReason: "error",
+				errorMessage: "synthetic assistant stop error",
+				timestamp: 1,
+			},
+			{
+				role: "toolResult",
+				toolCallId: "error-tool",
+				toolName: "eval",
+				content: [{ type: "text", text: "late tool result must not replace the assistant stop error" }],
+				isError: false,
+				timestamp: 2,
+			},
+		]);
+		const { ctx, chatContainer } = makeRenderCtx(transcript);
+
+		new UiHelpers(ctx).renderInitialMessages();
+
+		const rendered = Bun.stripANSI(chatContainer.render(120).join("\n"));
+		expect(rendered).toContain("synthetic assistant stop error");
+		expect(rendered).not.toContain("late tool result must not replace the assistant stop error");
+	});
+});
+
 describe("UiHelpers.renderSessionContext — mid-stream tool call rebuild", () => {
 	it("decodes streamed write content from partialJson, not the provider's stale parsed arguments", async () => {
 		// A transcript rebuild (theme change, settings edit, focus replay) can land

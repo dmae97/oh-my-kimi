@@ -297,12 +297,16 @@ export class UiHelpers {
 		// read run so the row sits under it. Mirrors the live path, where the read
 		// group is created during streaming and the row is appended below it.
 		let pendingUsage: Usage | undefined;
+		let pendingUsageDuration: number | undefined;
+		let pendingUsageTtft: number | undefined;
 		const flushPendingUsage = () => {
 			if (!pendingUsage) return;
 			readGroup?.seal();
 			readGroup = null;
-			this.ctx.chatContainer.addChild(createUsageRowBlock(pendingUsage));
+			this.ctx.chatContainer.addChild(createUsageRowBlock(pendingUsage, pendingUsageDuration, pendingUsageTtft));
 			pendingUsage = undefined;
+			pendingUsageDuration = undefined;
+			pendingUsageTtft = undefined;
 		};
 		// Rebuild-time mirror of the event controller's displaceable-poll
 		// bookkeeping: a `job` poll that found every watched job still running is
@@ -455,6 +459,8 @@ export class UiHelpers {
 					}
 				}
 				pendingUsage = this.ctx.settings.get("display.showTokenUsage") ? message.usage : undefined;
+				pendingUsageDuration = message.duration;
+				pendingUsageTtft = message.ttft;
 			} else if (message.role === "toolResult") {
 				const pendingReadComponent = this.ctx.pendingTools.get(message.toolCallId);
 				const isReadGroupResult =

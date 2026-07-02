@@ -786,7 +786,9 @@ export class EventController {
 			this.#lastAssistantComponent = this.ctx.streamingComponent;
 			this.#lastAssistantComponent.markTranscriptBlockFinalized();
 			if (settings.get("display.showTokenUsage")) {
-				this.ctx.chatContainer.addChild(createUsageRowBlock(event.message.usage));
+				this.ctx.chatContainer.addChild(
+					createUsageRowBlock(event.message.usage, event.message.duration, event.message.ttft),
+				);
 			}
 			this.ctx.streamingComponent = undefined;
 			this.ctx.streamingMessage = undefined;

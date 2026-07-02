@@ -115,6 +115,7 @@ export type SymbolKey =
 	| "icon.cacheMiss"
 	| "icon.input"
 	| "icon.output"
+	| "icon.throughput"
 	| "icon.host"
 	| "icon.session"
 	| "icon.package"
@@ -319,6 +320,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"icon.cacheMiss": "⊘",
 	"icon.input": "⤵",
 	"icon.output": "⤴",
+	"icon.throughput": "⚡",
 	"icon.host": "🖥",
 	"icon.session": "🆔",
 	"icon.package": "📦",
@@ -597,6 +599,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.input": "\uf090",
 	// pick:  | alt:  →
 	"icon.output": "\uf08b",
+	// pick:  (nf-fa-tachometer) | alt:  ⚡ ↬
+	"icon.throughput": "\uf0e4",
 	// pick:  | alt:  
 	"icon.host": "\uf109",
 	// pick:  | alt:  
@@ -827,10 +831,11 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"icon.ghost": "@",
 	"icon.agents": "AG",
 	"icon.job": "bg",
+	"icon.output": "out:",
+	"icon.throughput": "tok/s:",
 	"icon.cache": "cache",
 	"icon.cacheMiss": "!",
 	"icon.input": "in:",
-	"icon.output": "out:",
 	"icon.host": "host",
 	"icon.session": "id",
 	"icon.package": "[P]",
@@ -1820,6 +1825,7 @@ export class Theme {
 			cacheMiss: this.#symbols["icon.cacheMiss"],
 			input: this.#symbols["icon.input"],
 			output: this.#symbols["icon.output"],
+			throughput: this.#symbols["icon.throughput"],
 			host: this.#symbols["icon.host"],
 			session: this.#symbols["icon.session"],
 			package: this.#symbols["icon.package"],
