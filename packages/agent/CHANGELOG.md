@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed cursor-agent assistant messages containing native tool calls being split on text length and duplicating text blocks on replay, by emitting the assistant message as-is followed by buffered tool results and pairing them by `toolCallId` in the transcript rebuild ([#4348](https://github.com/can1357/oh-my-pi/issues/4348)).
+
 ## [16.3.0] - 2026-07-02
 
 ### Added
