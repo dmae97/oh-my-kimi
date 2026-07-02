@@ -744,4 +744,168 @@ describe("commitToBranch preserves agent commits", () => {
 		const result = await commitToBranch(isolation, baseline, "empty", undefined);
 		expect(result).toBeNull();
 	});
+
+	// Regression: #4136. Baseline WIP made captureRepoDeltaPatch record hunks
+	// against `HEAD + WIP`; commitPatchToBranchWorktree then failed to apply
+	// those hunks to a fresh worktree pinned at HEAD when the WIP-side file was
+	// missing from HEAD's index (untracked WIP files, staged-new WIP files) or
+	// when --3way couldn't resolve the overlap. Each scenario below reproduced
+	// the failure before the fix.
+	describe("with baseline WIP overlapping the agent's changes (#4136)", () => {
+		async function seedWipFileFromParent(destRoot: string, relPath: string): Promise<void> {
+			await fs.mkdir(path.join(destRoot, path.dirname(relPath)), { recursive: true });
+			await fs.copyFile(path.join(parent, relPath), path.join(destRoot, relPath));
+		}
+
+		it("commits an agent-only delta via --3way when WIP and agent modify unrelated hunks of the same tracked file", async () => {
+			const fixture = "src/foo.py";
+			const head = Array.from({ length: 40 }, (_, i) => `# line ${i + 1}\n`).join("");
+			await fs.mkdir(path.join(parent, "src"), { recursive: true });
+			await fs.writeFile(path.join(parent, fixture), head);
+			await gitr(parent, ["add", "."]);
+			await gitr(parent, ["commit", "-q", "-m", "add fixture"]);
+
+			// Isolation must be re-cloned so the fixture is present in HEAD.
+			await fs.rm(isolation, { recursive: true, force: true });
+			await gitr(parent, ["clone", "-q", "--no-hardlinks", "--local", parent, isolation]);
+			await gitr(isolation, ["config", "user.email", "agent@example.com"]);
+			await gitr(isolation, ["config", "user.name", "Agent User"]);
+
+			// Parent WIP: change line 10 (unstaged edit to an existing tracked file).
+			const wipLines = head.split("\n");
+			wipLines[9] = "# line 10 thinkingLevel: medium";
+			await fs.writeFile(path.join(parent, fixture), wipLines.join("\n"));
+			await seedWipFileFromParent(isolation, fixture);
+
+			// Agent modifies line 30, far from the WIP change.
+			const agentLines = wipLines.slice();
+			agentLines[29] = "# line 30 def new_func()";
+			await fs.writeFile(path.join(isolation, fixture), agentLines.join("\n"));
+
+			const baseline = await captureBaseline(parent);
+			const result = await commitToBranch(isolation, baseline, "wip-tracked-file", undefined);
+			expect(result?.branchName).toBe("omp/task/wip-tracked-file");
+
+			const branchDiff = await gitr(parent, ["show", "--pretty=format:", result!.branchName!]);
+			expect(branchDiff).toContain("+# line 30 def new_func()");
+			// --3way must subtract the WIP change from the commit; only the
+			// agent's line 30 edit belongs on the task branch.
+			expect(branchDiff).not.toContain("thinkingLevel: medium");
+		});
+
+		it("commits an untracked WIP file that the agent modifies inside isolation", async () => {
+			// Parent WIP: add a new untracked file the agent also touches.
+			await fs.mkdir(path.join(parent, "src"), { recursive: true });
+			await fs.writeFile(path.join(parent, "src/new.py"), "WIP header\nunchanged\n");
+			await fs.mkdir(path.join(isolation, "src"), { recursive: true });
+			await fs.copyFile(path.join(parent, "src/new.py"), path.join(isolation, "src/new.py"));
+
+			// Agent extends the file inside isolation.
+			await fs.writeFile(path.join(isolation, "src/new.py"), "WIP header\nagent-edit\n");
+
+			const baseline = await captureBaseline(parent);
+			expect(baseline.root.untracked).toContain("src/new.py");
+			const result = await commitToBranch(isolation, baseline, "wip-untracked", undefined);
+			expect(result?.branchName).toBe("omp/task/wip-untracked");
+
+			const branchDiff = await gitr(parent, ["show", "--pretty=format:", result!.branchName!]);
+			expect(branchDiff).toContain("new file mode");
+			expect(branchDiff).toContain("src/new.py");
+			expect(branchDiff).toContain("+WIP header");
+			expect(branchDiff).toContain("+agent-edit");
+		});
+
+		it("commits a staged-new WIP file that the agent modifies inside isolation", async () => {
+			// Parent WIP: stage a new file that isn't yet in HEAD.
+			await fs.writeFile(path.join(parent, "notes.md"), "l1\nl2\nl3\n");
+			await gitr(parent, ["add", "notes.md"]);
+			await fs.copyFile(path.join(parent, "notes.md"), path.join(isolation, "notes.md"));
+			await gitr(isolation, ["add", "notes.md"]);
+
+			// Agent edits the staged-new file.
+			await fs.writeFile(path.join(isolation, "notes.md"), "l1\nl2 agent\nl3\n");
+
+			const baseline = await captureBaseline(parent);
+			expect(baseline.root.staged).toContain("new file mode");
+			const result = await commitToBranch(isolation, baseline, "wip-staged-new", undefined);
+			expect(result?.branchName).toBe("omp/task/wip-staged-new");
+
+			const branchDiff = await gitr(parent, ["show", "--pretty=format:", result!.branchName!]);
+			expect(branchDiff).toContain("new file mode");
+			expect(branchDiff).toContain("notes.md");
+			expect(branchDiff).toContain("+l2 agent");
+		});
+
+		it("does not leak WIP-only files into the branch commit when the agent leaves them untouched", async () => {
+			// Parent WIP: touch two files. The agent only edits `wanted.py`;
+			// `wip-only.py` must not appear in the branch commit at all.
+			await fs.mkdir(path.join(parent, "src"), { recursive: true });
+			await fs.writeFile(path.join(parent, "src/wanted.py"), "unchanged\n");
+			await fs.writeFile(path.join(parent, "src/wip-only.py"), "unchanged\n");
+			await gitr(parent, ["add", "."]);
+			await gitr(parent, ["commit", "-q", "-m", "seed"]);
+			await fs.rm(isolation, { recursive: true, force: true });
+			await gitr(parent, ["clone", "-q", "--no-hardlinks", "--local", parent, isolation]);
+			await gitr(isolation, ["config", "user.email", "agent@example.com"]);
+			await gitr(isolation, ["config", "user.name", "Agent User"]);
+
+			await fs.writeFile(path.join(parent, "src/wip-only.py"), "wip edit\n");
+			await fs.writeFile(path.join(parent, "src/wanted.py"), "wip mixed\n");
+			await fs.copyFile(path.join(parent, "src/wip-only.py"), path.join(isolation, "src/wip-only.py"));
+			await fs.copyFile(path.join(parent, "src/wanted.py"), path.join(isolation, "src/wanted.py"));
+			// Untracked WIP file the agent also does not touch.
+			await fs.writeFile(path.join(parent, "user-wip.txt"), "user wip\n");
+			await fs.copyFile(path.join(parent, "user-wip.txt"), path.join(isolation, "user-wip.txt"));
+
+			// Agent only extends `wanted.py`; leaves `wip-only.py` and
+			// `user-wip.txt` alone.
+			await fs.writeFile(path.join(isolation, "src/wanted.py"), "wip mixed\nagent line\n");
+
+			const baseline = await captureBaseline(parent);
+			const result = await commitToBranch(isolation, baseline, "wip-filter", undefined);
+			expect(result?.branchName).toBe("omp/task/wip-filter");
+
+			const files = (await gitr(parent, ["show", "--name-only", "--pretty=format:", result!.branchName!]))
+				.split("\n")
+				.filter(Boolean);
+			// Only the agent-touched file lands on the branch — no WIP-only files.
+			expect(files).toEqual(["src/wanted.py"]);
+		});
+
+		it("still seeds WIP when the agent commits only baseline WIP and leaves the real edit uncommitted", async () => {
+			// Regression for the review on #4140: `agentCommits.length` alone
+			// hid this case — the agent had commits, but every filtered patch
+			// collapsed to empty (they only replayed baseline WIP via `git
+			// add -A`), so tmpDir was still pinned at baselineSha and the
+			// leftover patch still carried HEAD+WIP context.
+			await fs.mkdir(path.join(parent, "src"), { recursive: true });
+			// Parent WIP: untracked file the agent will also modify. The
+			// no-tracked-in-HEAD trigger from #4136 is the sharpest way to
+			// prove the WIP-seeded fallback fires.
+			await fs.writeFile(path.join(parent, "src/new.py"), "WIP header\nunchanged\n");
+
+			// Agent replays baseline WIP as a commit (`git add -A`), then makes
+			// the real edit uncommitted. `agentCommits.length` = 1, but the
+			// filtered commit patch is empty because it's identical to the
+			// baseline dirty tree.
+			await fs.mkdir(path.join(isolation, "src"), { recursive: true });
+			await fs.copyFile(path.join(parent, "src/new.py"), path.join(isolation, "src/new.py"));
+			await gitr(isolation, ["add", "-A"]);
+			await gitr(isolation, ["commit", "-q", "-m", "chore: capture baseline"]);
+
+			// Real, uncommitted agent edit on top of the WIP file.
+			await fs.writeFile(path.join(isolation, "src/new.py"), "WIP header\nagent-edit\n");
+
+			const baseline = await captureBaseline(parent);
+			expect(baseline.root.untracked).toContain("src/new.py");
+			const result = await commitToBranch(isolation, baseline, "wip-only-commit", undefined);
+			expect(result?.branchName).toBe("omp/task/wip-only-commit");
+
+			const branchDiff = await gitr(parent, ["show", "--pretty=format:", result!.branchName!]);
+			expect(branchDiff).toContain("new file mode");
+			expect(branchDiff).toContain("src/new.py");
+			expect(branchDiff).toContain("+WIP header");
+			expect(branchDiff).toContain("+agent-edit");
+		});
+	});
 });

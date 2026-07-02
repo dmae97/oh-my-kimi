@@ -1919,6 +1919,14 @@ export const ls = {
 		return ls.files(cwd, { others: true, excludeStandard: true, signal });
 	},
 
+	/** List paths present in a ref, optionally filtered to specific paths. */
+	async tree(cwd: string, ref: string, files: readonly string[] = [], signal?: AbortSignal): Promise<string[]> {
+		const args = ["ls-tree", "--name-only", "-r", "-z", ref];
+		if (files.length > 0) args.push("--", ...files);
+		const raw = await runText(cwd, args, { readOnly: true, signal });
+		return raw.split("\0").filter(entry => entry.length > 0);
+	},
+
 	/** List submodule paths (recursive). */
 	async submodules(cwd: string, signal?: AbortSignal): Promise<string[]> {
 		const output = await git(cwd, ["submodule", "--quiet", "foreach", "--recursive", "echo $sm_path"], {
