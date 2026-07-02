@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed macOS SSHFS mount detection to skip remounting an already-mounted remote when `mountpoint` is unavailable. ([#4319](https://github.com/can1357/oh-my-pi/issues/4319))
+
 ## [16.3.1] - 2026-07-02
 
 ### Breaking Changes
