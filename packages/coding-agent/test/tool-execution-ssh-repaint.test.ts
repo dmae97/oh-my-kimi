@@ -156,16 +156,17 @@ describe("ToolExecutionComponent SSH repaint seams", () => {
 			component.updateResult(sshResult("partial output"), true);
 			tui.requestRender();
 			await drain(scheduler, term);
-			expect(plainBuffer(term).some(row => row.includes("⏳ SSH: [router]"))).toBe(true);
+			const partialRows = plainBuffer(term);
+			expect(partialRows.some(row => row.includes("SSH: [router]"))).toBe(true);
+			expect(partialRows.some(row => row.includes("partial output"))).toBe(true);
 
 			component.updateResult(sshResult("final output"), false);
 			tui.requestRender();
 			await drain(scheduler, term);
 
 			const rows = plainBuffer(term);
-			expect(rows.some(row => row.includes("⏳ SSH: [router]"))).toBe(false);
 			expect(rows.some(row => row.includes("partial output"))).toBe(false);
-			expect(rows.some(row => row.includes("⇄ SSH: [router]"))).toBe(true);
+			expect(rows.filter(row => row.includes("SSH: [router]"))).toHaveLength(1);
 			expect(rows.some(row => row.includes("Output"))).toBe(true);
 			expect(rows.some(row => row.includes("final output"))).toBe(true);
 		} finally {

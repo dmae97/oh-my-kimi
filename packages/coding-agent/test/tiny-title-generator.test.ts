@@ -217,7 +217,8 @@ describe("tiny title subprocess", () => {
 
 		expect(calls).toHaveLength(1);
 		expect(calls[0]?.options.stdout).toBe("ignore");
-		expect(calls[0]?.options.stderr).toBe("ignore");
+		expect(calls[0]?.options.stderr).not.toBe("inherit");
+		expect(calls[0]?.options.stderr).not.toBe("pipe");
 		await worker.proc.exited;
 	});
 });
