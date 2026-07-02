@@ -95,4 +95,48 @@ describe("zenmux provider support", () => {
 		expect(openai?.baseUrl).toBe("https://zenmux.ai/api/v1");
 		expect(openai?.cost.output).toBe(10);
 	});
+
+	test("discovers models without an API key and sends no Authorization header", async () => {
+		delete Bun.env.ZENMUX_API_KEY;
+		let sentHeaders: RequestInit["headers"];
+		const fetchMock: FetchImpl = vi.fn(
+			async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+				sentHeaders = init?.headers;
+				return new Response(
+					JSON.stringify({
+						data: [
+							{
+								id: "anthropic/claude-fable-5-free",
+								display_name: "Anthropic: Claude Fable 5 (Free)",
+								owned_by: "anthropic",
+								input_modalities: ["text", "image"],
+								capabilities: { reasoning: true },
+								context_length: 200000,
+								pricings: {
+									prompt: [{ value: 0, unit: "perMTokens", currency: "USD" }],
+									completion: [{ value: 0, unit: "perMTokens", currency: "USD" }],
+								},
+							},
+						],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			},
+		);
+
+		const options = zenmuxModelManagerOptions({ fetch: fetchMock });
+		expect(options.fetchDynamicModels).toBeDefined();
+
+		const models = await options.fetchDynamicModels?.();
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://zenmux.ai/api/v1/models",
+			expect.objectContaining({ method: "GET" }),
+		);
+		expect(sentHeaders).not.toHaveProperty("Authorization");
+
+		const free = models?.find(model => model.id === "anthropic/claude-fable-5-free");
+		expect(free?.api).toBe("anthropic-messages");
+		expect(free?.baseUrl).toBe("https://zenmux.ai/api/anthropic");
+		expect(free?.cost.input).toBe(0);
+	});
 });
