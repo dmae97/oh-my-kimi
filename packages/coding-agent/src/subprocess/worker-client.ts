@@ -64,7 +64,7 @@ export interface RefCountedWorkerHandle<Inbound, Outbound> extends WorkerHandle<
 
 /** The raw spawned subprocess plus the parent-side fan-out sets. */
 export interface SpawnedSubprocess<Outbound> {
-	proc: Subprocess<"ignore", "ignore", "ignore">;
+	proc: Subprocess<"ignore", "ignore", "pipe">;
 	inbound: Set<(message: Outbound) => void>;
 	errors: Set<(error: Error) => void>;
 	/**
@@ -74,7 +74,22 @@ export interface SpawnedSubprocess<Outbound> {
 	 * worker error so callers don't await forever.
 	 */
 	intentionalExit: { value: boolean };
+	/**
+	 * Resolves when the piped stderr stream has fully drained (EOF or a
+	 * torn-down pipe). `onExit` waits on this before surfacing the crash so
+	 * the exit-error carries the *whole* tail, not whatever happened to be
+	 * flushed before the exit event fired. Tests can await it deterministically
+	 * instead of racing wall-clock timers.
+	 */
+	stderrDrained: Promise<void>;
 }
+
+/**
+ * Bound on the tail of worker stderr surfaced with a crash. Sized to comfortably
+ * hold a full ONNX Runtime/glibc traceback (a few KiB) without letting a chatty
+ * native runtime OOM the parent on repeated warnings.
+ */
+const STDERR_TAIL_LIMIT_BYTES = 16 * 1024;
 
 export interface WorkerSpawnCommand {
 	cmd: string[];
@@ -126,11 +141,15 @@ export function workerEnvFromParent(overlay?: Record<string, string>): Record<st
 }
 
 /**
- * Spawn an inference worker subprocess and wire its IPC fan-out. The child
- * inherits no stdio (native model runtimes may otherwise print progress or
- * decoded text and corrupt the chat scrollback) and is `unref`'d outside `bun
- * test` so an idle worker never blocks process exit. `exitLabel` prefixes the
- * worker-error message surfaced for an unexpected (non-intentional) exit.
+ * Spawn an inference worker subprocess and wire its IPC fan-out. Stdio is
+ * captured (stderr piped, stdout ignored) so native runtimes can't corrupt the
+ * chat scrollback while the crash reason still reaches the parent: stderr is
+ * drained live to `logger.debug` and the last {@link STDERR_TAIL_LIMIT_BYTES}
+ * are appended to the `onExit` error so `tts/mnemopi/…: worker error` lines
+ * carry the actual stack instead of a bare exit code (issue #4324). The child
+ * is `unref`'d outside `bun test` so an idle worker never blocks process exit.
+ * `exitLabel` prefixes the worker-error message surfaced for an unexpected
+ * (non-intentional) exit.
  */
 export function createWorkerSubprocess<Outbound>(options: {
 	spawnCommand: WorkerSpawnCommand;
@@ -140,13 +159,20 @@ export function createWorkerSubprocess<Outbound>(options: {
 	const inbound = new Set<(message: Outbound) => void>();
 	const errors = new Set<(error: Error) => void>();
 	const intentionalExit = { value: false };
+	const stderrTail = new StderrTail(STDERR_TAIL_LIMIT_BYTES);
+	// `drainStderr` needs `proc.stderr`, which we get back from Bun.spawn — so
+	// the promise is created lazily and forwarded through this resolver. The
+	// resolver stays pending until the drain finishes, so `onExit` can chain
+	// off it safely even if the exit event races the pipe.
+	const drainReady = Promise.withResolvers<Promise<void>>();
+	const stderrDrained = drainReady.promise.then(p => p);
 	const proc = Bun.spawn({
 		cmd: options.spawnCommand.cmd,
 		cwd: options.spawnCommand.cwd,
 		env: options.env,
 		stdin: "ignore",
 		stdout: "ignore",
-		stderr: "ignore",
+		stderr: "pipe",
 		serialization: "advanced",
 		windowsHide: true,
 		ipc(message) {
@@ -160,15 +186,110 @@ export function createWorkerSubprocess<Outbound>(options: {
 			// requests so callers don't await forever.
 			if (exitCode === null && intentionalExit.value) return;
 			const reason = exitCode !== null ? `code ${exitCode}` : `signal ${signalCode ?? "unknown"}`;
-			const err = new Error(`${options.exitLabel} exited with ${reason}`);
-			for (const handler of errors) handler(err);
+			// The stderr pipe is independent of the exit event — reading the
+			// tail synchronously here races the drain and would land us right
+			// back at the diagnostics gap this fix exists to close. Wait for
+			// EOF, then surface the full tail. `.finally` guarantees an error
+			// even if drain rejects (it never does — it swallows).
+			void stderrDrained.finally(() => {
+				const suffix = stderrTail.suffix();
+				const err = new Error(`${options.exitLabel} exited with ${reason}${suffix}`);
+				for (const handler of errors) handler(err);
+			});
 		},
 	});
+	drainReady.resolve(drainStderr(proc.stderr, options.exitLabel, stderrTail));
 	// Don't keep the parent event loop alive on an idle worker; the dispose
 	// path calls `terminate()` explicitly. Bun's test runner starves IPC for
 	// unref'd subprocesses, so keep it referenced only under tests.
 	if (!isBunTestRuntime()) proc.unref();
-	return { proc, inbound, errors, intentionalExit };
+	return { proc, inbound, errors, intentionalExit, stderrDrained };
+}
+
+/**
+ * Bounded buffer of the *tail* of a stderr stream. Appended chunks are
+ * concatenated and truncated from the front once they exceed `limit`, so the
+ * final `suffix()` always reflects the most recent output — where native
+ * crash tracebacks land.
+ */
+class StderrTail {
+	#chunks: Uint8Array[] = [];
+	#bytes = 0;
+	constructor(readonly limit: number) {}
+
+	append(chunk: Uint8Array): void {
+		if (chunk.length === 0) return;
+		this.#chunks.push(chunk);
+		this.#bytes += chunk.length;
+		while (this.#bytes > this.limit && this.#chunks.length > 1) {
+			const head = this.#chunks.shift();
+			if (head) this.#bytes -= head.length;
+		}
+		if (this.#bytes > this.limit && this.#chunks.length === 1) {
+			const only = this.#chunks[0];
+			const start = only.length - this.limit;
+			this.#chunks[0] = only.subarray(start);
+			this.#bytes = this.limit;
+		}
+	}
+
+	/** Human-readable trailer for an exit error, or `""` when nothing was captured. */
+	suffix(): string {
+		if (this.#bytes === 0) return "";
+		const merged = new Uint8Array(this.#bytes);
+		let offset = 0;
+		for (const chunk of this.#chunks) {
+			merged.set(chunk, offset);
+			offset += chunk.length;
+		}
+		const text = new TextDecoder().decode(merged).replace(/\s+$/u, "");
+		if (text.length === 0) return "";
+		return `: ${text}`;
+	}
+}
+
+/**
+ * Drain a worker's stderr stream: forward each decoded line to `logger.debug`
+ * for live visibility, and record every chunk in `tail` so the eventual exit
+ * error can carry the most recent output. Never rejects — a stream teardown
+ * before/after `onExit` must not fault the parent.
+ */
+async function drainStderr(
+	stream: ReadableStream<Uint8Array> | number | undefined | null,
+	exitLabel: string,
+	tail: StderrTail,
+): Promise<void> {
+	if (!stream || typeof stream === "number") return;
+	const reader = stream.getReader();
+	const decoder = new TextDecoder();
+	let carry = "";
+	try {
+		while (true) {
+			const { value, done } = await reader.read();
+			if (done) break;
+			if (!value || value.length === 0) continue;
+			tail.append(value);
+			carry += decoder.decode(value, { stream: true });
+			let newline = carry.indexOf("\n");
+			while (newline !== -1) {
+				const line = carry.slice(0, newline).replace(/\r$/u, "");
+				carry = carry.slice(newline + 1);
+				if (line.length > 0) logger.debug(`${exitLabel} stderr`, { line });
+				newline = carry.indexOf("\n");
+			}
+		}
+		const rest = carry + decoder.decode();
+		if (rest.length > 0) logger.debug(`${exitLabel} stderr`, { line: rest.replace(/\r$/u, "") });
+	} catch {
+		// Stream closed under us (worker died, terminate() SIGKILL, pipe torn
+		// down before we finished reading). The exit path handles surfacing.
+	} finally {
+		try {
+			reader.releaseLock();
+		} catch {
+			// Reader already released.
+		}
+	}
 }
 
 /**
