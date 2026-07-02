@@ -77,6 +77,9 @@
 ### Fixed
 
 - Fixed the DAP client hanging forever when the debug adapter's stdin stops draining. `writeMessage` now races the flush against a 30 s cap and adapter exit and disposes the client on either failure, and `sendRequest` fires the write in the background with a passive unhandled-rejection guard so the request-timer error is never orphaned before the caller subscribes. Socket-mode spawn helpers (`#spawnSocketUnix`, `#spawnSocketClientAddr`) now kill the detached adapter process when the readiness/connect race fails, closing an orphan-process leak on socket connect timeouts ([#4233](https://github.com/can1357/oh-my-pi/issues/4233)).
+### Fixed
+
+- Fixed status-line PR lookup wedging the segment indefinitely when `gh pr view` stalled (keychain prompt, network hang, auth deadlock). The lookup now routes through `git.github.run` with `AbortSignal.timeout(GIT_COMMAND_TIMEOUT_MS)`, inheriting the non-interactive `gh` environment and enforcing the standard 5-minute deadline instead of leaking the child ([#4234](https://github.com/can1357/oh-my-pi/issues/4234)).
 
 ## [16.3.1] - 2026-07-02
 
