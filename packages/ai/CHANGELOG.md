@@ -4,30 +4,19 @@
 
 ### Added
 
-- Added support for overlaying Anthropic per-tier usage limits onto cached usage reports
-- Improved Anthropic credential ranking by using drain-rate pressure for weekly usage limits
-- Added Claude Fable weekly usage tracking to the Anthropic usage provider: the OAuth usage endpoint's new generic `limits` array is parsed for model-scoped weekly windows (`kind: "weekly_scoped"`), so `omp usage`, `/usage`, and usage history now surface a separate `Claude 7 Day (Fable)` row (id `anthropic:7d:fable`) alongside the shared 5h/7d windows — mirroring how Codex Spark rows are tracked. The `session`/`weekly_all` entries also backfill the shared 5h/7d windows if the legacy `five_hour`/`seven_day` buckets ever go null (as `seven_day_opus`/`seven_day_sonnet` already have).
-- Added `scopeLimits`/`blockScope` to the Anthropic credential-ranking strategy so an exhausted Fable/Mythos weekly cap no longer blocks the whole OAuth credential: credential-wide exhaustion gating now considers only shared umbrella windows plus the requested model family's own scoped cap, and reactive usage-limit blocks for Fable/Mythos requests land in a per-tier backoff scope (mirroring the Antigravity per-counter precedent).
+- Added comprehensive tracking and credential-ranking support for Anthropic per-tier and weekly usage limits, including Claude Fable weekly caps. This prevents a single exhausted model-scoped cap from blocking the entire OAuth credential and improves credential selection based on drain-rate pressure.
 
 ### Fixed
 
-- Improved robustness of single-argument tool calls by automatically remapping mislabeled string arguments
-
-- Fixed Anthropic OAuth usage reporting to stop retrying on 429 rate-limit errors
-- Fixed usage cache to correctly persist null values during cold-start failure backoff windows
-- Fixed cursor-agent persisted transcripts losing tool-call structure by synthesizing `toolCall` content blocks for exec-channel native tools (`bash`/`read`/`write`/`grep`/`ls`/`delete`/`lsp`), so replay pairs each tool result with its call instead of rendering header-less tool output beneath the last assistant text ([#4348](https://github.com/can1357/oh-my-pi/issues/4348)).
-- Fixed OpenAI-compatible streaming usage parsing to prefer non-zero nested cached token counts when root `cached_tokens` is zero ([#4337](https://github.com/can1357/oh-my-pi/issues/4337)).
-- Fixed cursor-agent persisted transcripts losing tool-call structure by synthesizing `toolCall` content blocks for exec-channel native tools (`bash`/`read`/`write`/`grep`/`ls`/`delete`/`lsp`), so replay pairs each tool result with its call instead of rendering header-less tool output beneath the last assistant text ([#4348](https://github.com/can1357/oh-my-pi/issues/4348)). Synthesized blocks carry a new `kCursorExecResolved` symbol marker so the shared agent loop skips executing them a second time.
-- Added a runtime signing-endpoint auto-detect on `anthropic-messages`: when an unmarked custom proxy returns `400 Invalid `signature` in `thinking` block`, the transport demotes every unsigned thinking block in the request, retries once, and pins the (baseUrl, modelId) as signing in the provider session state so subsequent turns skip the round-trip. The successful assistant message surfaces `disabledFeatures: ["unsigned-thinking-replay"]` so UIs can prompt the user to persist the change with `compat.replayUnsignedThinking: false` in `models.yml`. Includes an actionable remediation hint on the raw `400` when the auto-retry can't run. ([#4297](https://github.com/can1357/oh-my-pi/issues/4297))
-### Fixed
-
-- Fixed GitLab Duo Workflow post-start REST setup fetches (`ensureGitLabDuoWorkflowSettings`, `discoverGitLabDuoWorkflowProject`, `resolveGitLabDuoWorkflowNumericProjectId`, `requestGitLabDuoWorkflowDirectAccess`, `createGitLabDuoWorkflow`, `fetchGitLabDuoWorkflowAvailableModels`, `stopGitLabDuoWorkflow`) missing `signal`/timeout parameters, which could leave the stream without a terminal event when a fetch stalled ([#4227](https://github.com/can1357/oh-my-pi/issues/4227)).
-### Fixed
-
-- Fixed Cursor proxy tunnel setup hanging indefinitely before stream start by adding abort and timeout handling. ([#4226](https://github.com/can1357/oh-my-pi/issues/4226))
-### Fixed
-
-- Fixed Devin Connect streaming reader accepting corrupt frame lengths and buffering unbounded data before the idle-timeout wrapper aborted, by capping payloads at 16 MiB and throwing a `ProviderResponseError({ kind: "envelope" })` as soon as an oversize length prefix is decoded ([#4228](https://github.com/can1357/oh-my-pi/issues/4228)).
+- Improved robustness of single-argument tool calls by automatically remapping mislabeled string arguments.
+- Fixed Anthropic OAuth usage reporting to stop retrying on 429 rate-limit errors.
+- Fixed usage cache to correctly persist null values during cold-start failure backoff windows.
+- Fixed cursor-agent persisted transcripts losing tool-call structure for native execution tools, ensuring replayed tool results are correctly paired with their corresponding calls.
+- Fixed OpenAI-compatible streaming usage parsing to prefer non-zero nested cached token counts when the root cached_tokens value is zero.
+- Added automatic detection and remediation for custom proxies returning signature errors on Anthropic thinking blocks, allowing the client to automatically retry with unsigned blocks and prompt the user to adjust their configuration.
+- Fixed potential hangs in GitLab Duo Workflow setup by adding proper timeout and abort signal handling to REST fetches.
+- Fixed Cursor proxy tunnel setup hanging indefinitely by adding abort and timeout handling.
+- Fixed Devin Connect streaming reader vulnerability to corrupt frame lengths by capping payloads at 16 MiB and throwing an envelope error immediately.
 
 ## [16.3.1] - 2026-07-02
 

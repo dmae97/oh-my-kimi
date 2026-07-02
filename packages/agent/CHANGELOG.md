@@ -4,14 +4,13 @@
 
 ### Changed
 
-- Support dynamic model resolution to enable seamless mid-run model switching
+- Enabled dynamic model resolution to support seamless mid-run model switching.
+
 ### Fixed
 
-- Fixed cursor-agent assistant messages containing native tool calls being split on text length and duplicating text blocks on replay, by emitting the assistant message as-is followed by buffered tool results and pairing them by `toolCallId` in the transcript rebuild ([#4348](https://github.com/can1357/oh-my-pi/issues/4348)).
-- Fixed cursor-agent exec-channel tools being executed a second time by the shared agent loop after Cursor's server-side execution: `agent-loop.ts` now skips `toolCall` blocks stamped with the `kCursorExecResolved` marker so `bash`/`write`/`delete`/etc. run once ([#4348](https://github.com/can1357/oh-my-pi/issues/4348)).
-### Fixed
-
-- Fixed synthetic tool results emitted when an assistant turn ends with `stopReason: "error"` after a tool call was already streamed being surfaced by the CLI as if the local tool had failed. The placeholder result now reads "Tool call was not executed because the provider stream ended with an error before the tool could run: <upstream>" and carries a `SyntheticToolResultDetails` discriminator (`{ __synthetic: true, source: "assistant_stop_error", executed: false, upstreamError }`) on both the `ToolResultMessage` and the `tool_execution_end` event, so downstream UI/telemetry can distinguish provider-transport failures (e.g. Codex websocket close) from real local tool failures without string-matching ([#4321](https://github.com/can1357/oh-my-pi/issues/4321)).
+- Fixed an issue in the Cursor agent where assistant messages containing native tool calls could duplicate text blocks on replay.
+- Fixed a bug where Cursor agent exec-channel tools (such as bash, write, and delete) were executed a second time after server-side execution.
+- Improved error handling for tool calls interrupted by upstream provider stream errors, distinguishing transport/provider failures from local tool execution failures in the CLI, events, and messages.
 
 ## [16.3.0] - 2026-07-02
 

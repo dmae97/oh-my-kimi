@@ -2,18 +2,17 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Extended Anthropic-compatible signing-endpoint recognition to Cloudflare AI Gateway, Google Vertex, AWS Bedrock, and Azure AI Inference / Foundry to ensure consistent reasoning-replay and signature-stripping behavior, and exposed ResolvedAnthropicCompat.signingEndpoint in the public API.
+- Fixed Zhipu Coding Plan runtime discovery to prioritize account-scoped model lists over bundled fallback models, preventing routing errors for valid non-z.ai keys.
+
 ## [16.3.2] - 2026-07-02
 
 ### Fixed
 
 - Fixed ZenMux model discovery to run without a `ZENMUX_API_KEY`, so newly published ZenMux models (for example `anthropic/claude-fable-5-free`) auto-update into the runtime `models.db` cache instead of waiting on a regenerated `models.json`.
 - Fixed ZenMux runtime discovery to query the `/api/v1/models` endpoint even when the resolved provider base URL points at the Anthropic-compatible route, so discovery no longer requests a non-existent `/api/anthropic/models` path.
-### Fixed
-
-- Extended the `anthropic-messages` signing-endpoint recognition to Cloudflare AI Gateway (`gateway.ai.cloudflare.com/**/anthropic`), Google Vertex (`aiplatform.googleapis.com/**/publishers/anthropic/…`), AWS Bedrock (`bedrock-runtime.<region>.amazonaws.com`), and Azure AI Inference / Foundry (`<res>.(inference|services).ai.azure.com`), and exposed the classification as `ResolvedAnthropicCompat.signingEndpoint` so both the replay-unsigned-thinking default and the cross-model signature-stripping path stay consistent on those hosts without walking back the settled 3p reasoning-replay default. ([#4297](https://github.com/can1357/oh-my-pi/issues/4297))
-### Fixed
-
-- Fixed Zhipu Coding Plan runtime discovery so account-scoped model lists replace bundled fallback models, preventing valid non-z.ai keys from being routed to unavailable GLM variants. ([#4296](https://github.com/can1357/oh-my-pi/issues/4296))
 
 ## [16.3.1] - 2026-07-02
 

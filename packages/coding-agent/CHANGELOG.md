@@ -2,24 +2,35 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed _input as a supported alias for the edit tool input field
+
 ### Changed
 
-- Removed `_input` as a supported alias for the `edit` tool input field
-
-- Defer session_stop extension hooks while agent-owned background jobs are still in progress
-- Stop-time settle passes now treat a yield with background async jobs (async `bash`/`task` spawns) owned by the agent — still running or with undelivered results — as a scheduling pause instead of a terminal stop: the incomplete-todo reminder stays silent and the `session_stop` hook pass is deferred, both firing at the settle reached once the session is fully idle. Async-result delivery re-wakes the loop, so neither pass is lost.
+- Deferred session_stop extension hooks and incomplete-todo reminders until all agent-owned background jobs (such as async bash or task spawns) are fully idle
 
 ### Fixed
 
-- Improved reliability of edits when file snapshots share identical 16-bit hash tags
-- Fixed ACP `terminal/create` sending the bash tool's full shell line in `command` with no `args`, which broke spec-conformant clients that spawn `command`+`args` directly (no implicit shell) — any command containing a space, pipe, `&&`, redirect, or `$(...)` failed with `ENOENT` and the agent silently degraded to read-only tools. The bash tool now wraps the shell line before calling `clientBridge.createTerminal`, reusing the same shell binary + args the local `bash-executor` resolves via `settings.getShellConfig()` (Git Bash / `bash.exe` on Windows, `$SHELL` with `sh` fallback on POSIX) so bash semantics — `$VAR`, `$(...)`, `source`, POSIX quoting, `-l` — are preserved on both platforms. ([#4333](https://github.com/can1357/oh-my-pi/issues/4333))
-- Fixed inference worker subprocesses (TTS, STT, tiny-model, mnemopi embeddings) discarding stderr, which left every unexpected exit — most visibly the local Kokoro TTS worker's recurring `exit code 7` crash loop — undiagnosable from the parent's logs. `createWorkerSubprocess` now pipes stderr without starting a live read while the worker is idle, then drains the stream after `onExit`, emits captured lines to `logger.debug` under an `<exitLabel> stderr` message, and keeps the last 16 KiB in a bounded ring that gets appended to the `Error` surfaced through `onError`. The exit surface is synchronized with the post-exit drain via `SpawnedSubprocess.stderrDrained`, so the full native trace shows up on the `tts: worker error` line without reintroducing event-loop liveness from unref'd workers. ([#4324](https://github.com/can1357/oh-my-pi/issues/4324))
-### Fixed
-
-- Fixed Windows session tail loss after atomic compaction rewrites by fencing append writers during full-file replacement and gating the atomic publish on a `commitGuard` that the storage backend checks synchronously before rename, so a concurrent `flushSync` (Ctrl+C / session-exit) is not overwritten by the stale body serialized before it ran. Covers post-compaction prompts, tool results, title changes, and exit diagnostics on the current JSONL path ([#4338](https://github.com/can1357/oh-my-pi/issues/4338)).
-### Fixed
-
-- Fixed transcript native-scrollback boundaries so finalized content below a live block is offered while still audited, preventing stale lower-row duplication when the live block grows ([#4326](https://github.com/can1357/oh-my-pi/issues/4326)).
+- Improved reliability of file edits when snapshots share identical hash tags
+- Fixed terminal creation in ACP by properly wrapping shell commands and arguments, resolving execution failures (such as ENOENT errors) on Windows and POSIX platforms
+- Fixed inference worker subprocesses (such as TTS, STT, and embeddings) discarding stderr, ensuring unexpected crashes and exit traces are properly captured and surfaced in logs
+- Fixed potential session data loss on Windows during atomic compaction rewrites by preventing concurrent writes from overwriting the session file during exit or compaction
+- Fixed transcript scrollback boundaries to prevent duplicate rows from appearing when live blocks grow
+- Fixed macOS SSHFS mount detection to avoid redundant remounting attempts when the mountpoint is unavailable
+- Fixed SSH streamed placeholders and partial frames leaving stale rows in the TUI viewport and scrollback
+- Fixed Gemini web search to correctly honor the configured search model (providers.webSearchGeminiModel or GEMINI_SEARCH_MODEL) for both OAuth and Developer API grounding requests
+- Fixed omp install rejecting valid npm package specifications
+- Improved MCP OAuth reauthorization error messages when dynamic client registration is closed, directing users to configure client credentials
+- Fixed omp update -l to correctly support the plugin-update shorthand for upgrading marketplace plugins
+- Fixed /advisor on command to correctly rebuild the advisor runtime and bind to the newly configured model
+- Fixed edit tool failures on large source files after a structural-summary read by automatically merging unseen anchor lines into the snapshot
+- Fixed potential hangs and process leaks in the Debug Adapter Protocol (DAP) client by introducing write timeouts and ensuring detached adapter processes are terminated on connection failures
+- Fixed status-line GitHub PR lookup hangs by enforcing a command timeout
+- Fixed potential pipe-buffer deadlocks during plugin installation, uninstallation, and updates by concurrently draining stdout and stderr
+- Fixed SSH tool hangs on unreachable hosts by enforcing a 30-second timeout on pre-command connection and host probes
+- Fixed models.yml schema validation to surface warnings for invalid custom provider configurations instead of silently ignoring them
+- Fixed potential network hangs in omp update, Hindsight recall, and Smithery registry lookups by adding fetch timeouts
 
 ## [16.3.2] - 2026-07-02
 
@@ -50,42 +61,6 @@
 - Fixed the assistant-message streaming fast path dropping the transient flag, which disabled the transient render path (code-highlight skip and streaming prefix caches) on every same-shape streaming tick. In-flight renders now correctly skip per-tick syntax highlighting; highlighting applies once at message finalization.
 - Fixed hidden goal-mode todo context: phase names and task text are now sanitized before prompt injection (no raw newlines or control characters forging extra context lines), and the block is only rendered with tool-accurate guidance when the `todo` tool is active or discoverable instead of unconditionally instructing the agent to call an unavailable tool.
 - Fixed custom tool loading treating `process.exit()` from a tool module's import or factory as a host process exit instead of a recoverable load failure. Custom tools now load under the shared extension exit guard, so an exiting tool is skipped with a load error while remaining tools still load ([#1704](https://github.com/can1357/oh-my-pi/issues/1704)).
-### Fixed
-
-- Fixed macOS SSHFS mount detection to skip remounting an already-mounted remote when `mountpoint` is unavailable. ([#4319](https://github.com/can1357/oh-my-pi/issues/4319))
-### Fixed
-
-- Fixed SSH streamed placeholders and provisional partial frames leaving stale pending rows in the TUI viewport or native scrollback. ([#4314](https://github.com/can1357/oh-my-pi/issues/4314))
-### Fixed
-
-- Fixed Gemini web_search to honor `providers.webSearchGeminiModel` / `GEMINI_SEARCH_MODEL` for both OAuth and Developer API grounding requests. ([#4312](https://github.com/can1357/oh-my-pi/issues/4312))
-### Fixed
-
-- Fixed `omp install npm:<package>` rejecting Pi package specs before Bun could resolve them. ([#4310](https://github.com/can1357/oh-my-pi/issues/4310))
-### Fixed
-
-- Fixed MCP OAuth reauth surfacing an opaque `OAuth provider requires client_id` error when the provider closes dynamic client registration (e.g. Figma, which 403s all unlisted clients per the MCP catalog). The error now names the DCR endpoint + HTTP status and directs users to configure `oauth.clientId`/`oauth.clientSecret` on the server entry ([#4307](https://github.com/can1357/oh-my-pi/issues/4307)).
-### Fixed
-
-- Fixed `omp update -l` rejecting the documented plugin-update shorthand instead of upgrading installed marketplace plugins. ([#4304](https://github.com/can1357/oh-my-pi/issues/4304))
-### Fixed
-
-- Fixed explicit `/advisor on` to rebuild the live advisor runtime after `modelRoles.advisor` changes so it rebinds to the newly configured model. ([#4302](https://github.com/can1357/oh-my-pi/issues/4302))
-### Fixed
-
-- Fixed `edit` frequently failing with `never displayed (it showed a partial range, a search hit, or a folded summary)` after a structural-summary `read` on a >100-line source file: the rejection now inlines the actual file content at the unseen anchor lines and merges them into the snapshot's `seenLines` set, so a straight edit retry with the same `[path#tag]` header succeeds instead of demanding a follow-up range re-read. Wide (over 40-line) anchor ranges still fall back to a range re-read for the tail. ([#4224](https://github.com/can1357/oh-my-pi/issues/4224))
-### Fixed
-
-- Fixed the DAP client hanging forever when the debug adapter's stdin stops draining. `writeMessage` now races the flush against a 30 s cap and adapter exit and disposes the client on either failure, and `sendRequest` fires the write in the background with a passive unhandled-rejection guard so the request-timer error is never orphaned before the caller subscribes. Socket-mode spawn helpers (`#spawnSocketUnix`, `#spawnSocketClientAddr`) now kill the detached adapter process when the readiness/connect race fails, closing an orphan-process leak on socket connect timeouts ([#4233](https://github.com/can1357/oh-my-pi/issues/4233)).
-### Fixed
-
-- Fixed status-line PR lookup wedging the segment indefinitely when `gh pr view` stalled (keychain prompt, network hang, auth deadlock). The lookup now routes through `git.github.run` with `AbortSignal.timeout(GIT_COMMAND_TIMEOUT_MS)`, inheriting the non-interactive `gh` environment and enforcing the standard 5-minute deadline instead of leaking the child ([#4234](https://github.com/can1357/oh-my-pi/issues/4234)).
-### Fixed
-
-- Fixed a pipe-buffer deadlock hazard in plugin install/uninstall paths: `PluginManager.install`, `PluginManager.uninstall`, `PluginManager.#fixMissingPlugin`, the git-refresh `bun update` step, the legacy `installer.ts` install/uninstall helpers, and the bundled-registry generator's `formatInPlace` all awaited `proc.exited` before draining stdout/stderr. Verbose `bun install`/`bun uninstall`/`biome check` output above the ~64 KiB OS pipe buffer could block the child on `write(2)` while the parent blocked on exit, and even under Bun's current eager buffering this leaked unbounded bytes into memory. Each site now drains both pipes concurrently with `proc.exited` via `Promise.all`. ([#4230](https://github.com/can1357/oh-my-pi/issues/4230))
-### Fixed
-
-- Fixed SSH tool hanging indefinitely on unreachable or wedged hosts: the pre-command `runSshSync` / `runSshCaptureSync` helpers (used by `ensureConnection` / `probeHostInfo`) previously invoked `ssh` through the Bun shell with no timeout or abort signal and sat outside the `SshTool.execute` command-timeout wrapper. They now run through `ptree.exec` with a 30s bound and `allowNonZero`/`allowAbort`, returning a failure result instead of blocking forever. ([#4232](https://github.com/can1357/oh-my-pi/issues/4232))
 
 ## [16.3.1] - 2026-07-02
 
@@ -104,9 +79,6 @@
 
 ### Fixed
 
-- Fixed `models.yml` schema validation failures being treated as valid config data, so invalid custom provider files now surface a warning instead of silently dropping all custom providers. ([#4305](https://github.com/can1357/oh-my-pi/issues/4305))
-
-- Fixed stalled network calls in `omp update`, Hindsight recall, and Smithery registry lookup by adding fetch timeouts. ([#4229](https://github.com/can1357/oh-my-pi/issues/4229))
 - Fixed stuttering/latency in speech by running synthesis chunks through the player gaplessly
 - Fixed race condition causing EPIPE errors and broken pipes during speech playback
 - Fixed interrupted speech audio by ensuring segments queue and drain in order
