@@ -17,6 +17,9 @@
 ### Fixed
 
 - Fixed cursor-agent persisted transcripts losing tool-call structure by synthesizing `toolCall` content blocks for exec-channel native tools (`bash`/`read`/`write`/`grep`/`ls`/`delete`/`lsp`), so replay pairs each tool result with its call instead of rendering header-less tool output beneath the last assistant text ([#4348](https://github.com/can1357/oh-my-pi/issues/4348)).
+### Fixed
+
+- Fixed OpenAI-compatible streaming usage parsing to prefer non-zero nested cached token counts when root `cached_tokens` is zero ([#4337](https://github.com/can1357/oh-my-pi/issues/4337)).
 
 ## [16.3.1] - 2026-07-02
 
