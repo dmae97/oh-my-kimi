@@ -110,6 +110,13 @@ const TRANSCRIPT_ENTRY_TOO_LARGE_ERROR = `transcript entry exceeds transcript fe
  * ship in a chunk of their own.
  */
 const SNAPSHOT_CHUNK_BYTES = 512 * 1024;
+/**
+ * Outcome of {@link CollabHost.requestGuestUi}. `answered` carries the guest's
+ * response (an `undefined` value is a genuine guest cancel); `unavailable`
+ * means the collab channel went away (teardown, relay drop) or the request was
+ * aborted before any guest answered — callers MUST NOT treat it as a cancel.
+ */
+export type CollabGuestUiResult = { kind: "answered"; value: CollabUiResponseValue } | { kind: "unavailable" };
 
 export class CollabHost {
 	#ctx: InteractiveModeContext;
@@ -123,7 +130,7 @@ export class CollabHost {
 	#unsubscribe?: () => void;
 	#peers = new Map<number, { name: string; canWrite: boolean }>();
 	#uiReqSeq = 0;
-	#pendingUi = new Map<number, { request: CollabUiRequest; resolve(value: CollabUiResponseValue): void }>();
+	#pendingUi = new Map<number, { request: CollabUiRequest; settle(result: CollabGuestUiResult): void }>();
 	#lastStateJson = "";
 	#stateDebounce: Timer | null = null;
 	#streamingInterval: Timer | null = null;
@@ -163,24 +170,24 @@ export class CollabHost {
 		return list;
 	}
 
-	requestGuestUi(request: CollabUiRequestDraft, signal?: AbortSignal): Promise<CollabUiResponseValue> | null {
+	requestGuestUi(request: CollabUiRequestDraft, signal?: AbortSignal): Promise<CollabGuestUiResult> | null {
 		if (!this.#socket || !this.#hasWritablePeers()) return null;
 		const reqId = ++this.#uiReqSeq;
 		const fullRequest: CollabUiRequest = { ...request, reqId };
-		const { promise, resolve } = Promise.withResolvers<CollabUiResponseValue>();
+		const { promise, resolve } = Promise.withResolvers<CollabGuestUiResult>();
 		let settled = false;
-		const settle = (value: CollabUiResponseValue): void => {
+		const settle = (result: CollabGuestUiResult): void => {
 			if (settled) return;
 			settled = true;
 			signal?.removeEventListener("abort", onAbort);
 			this.#pendingUi.delete(reqId);
 			this.#sendWritablePeers({ t: "ui-request-end", reqId });
-			resolve(value);
+			resolve(result);
 		};
-		const onAbort = (): void => settle(undefined);
-		if (signal?.aborted) return Promise.resolve(undefined);
+		const onAbort = (): void => settle({ kind: "unavailable" });
+		if (signal?.aborted) return Promise.resolve({ kind: "unavailable" });
 		signal?.addEventListener("abort", onAbort, { once: true });
-		this.#pendingUi.set(reqId, { request: fullRequest, resolve: settle });
+		this.#pendingUi.set(reqId, { request: fullRequest, settle });
 		this.#sendWritablePeers({ t: "ui-request", request: fullRequest });
 		return promise;
 	}
@@ -302,7 +309,7 @@ export class CollabHost {
 		this.#agentsDebounce = null;
 		clearInterval(this.#streamingInterval ?? undefined);
 		this.#streamingInterval = null;
-		for (const pending of this.#pendingUi.values()) pending.resolve(undefined);
+		for (const pending of this.#pendingUi.values()) pending.settle({ kind: "unavailable" });
 		this.#pendingUi.clear();
 		this.#peers.clear();
 		this.#socket?.close();
@@ -455,7 +462,7 @@ export class CollabHost {
 			this.#rejectReadOnly("responding to ask", fromPeer);
 			return;
 		}
-		this.#pendingUi.get(reqId)?.resolve(value);
+		this.#pendingUi.get(reqId)?.settle({ kind: "answered", value });
 	}
 
 	#handlePrompt(text: string, images: ImageContent[] | undefined, fromPeer: number): void {

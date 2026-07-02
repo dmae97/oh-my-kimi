@@ -44,16 +44,6 @@ function toWireSelectOptions(options: ExtensionUISelectItem[]): CollabUiSelectIt
 	);
 }
 
-function mergeAbortSignals(first: AbortSignal | undefined, second: AbortSignal): AbortSignal {
-	if (!first) return second;
-	if (first.aborted) return first;
-	const controller = new AbortController();
-	const abort = (): void => controller.abort();
-	first.addEventListener("abort", abort, { once: true });
-	second.addEventListener("abort", abort, { once: true });
-	return controller.signal;
-}
-
 export class ExtensionUiController {
 	#extensionTerminalInputUnsubscribers = new Set<() => void>();
 	#hookWidgetsAbove = new Map<string, ExtensionUiComponent>();
@@ -589,20 +579,33 @@ export class ExtensionUiController {
 		);
 	}
 
+	/**
+	 * Race the local hook dialog against a mirrored guest ask. First *answer*
+	 * wins and cancels the other side. A remote `unavailable` settlement
+	 * (collab teardown, relay drop, abort) is NOT an answer: the local dialog
+	 * keeps running — the host user may be mid-keystroke in it — and its
+	 * eventual result is returned.
+	 */
 	async #raceCollabDialog(
 		request: CollabUiRequestDraft,
 		signal: AbortSignal | undefined,
-		local: (signal: AbortSignal) => Promise<string | undefined>,
+		local: (signal: AbortSignal | undefined) => Promise<string | undefined>,
 	): Promise<string | undefined> {
 		const host = this.ctx.collabHost;
-		if (!host) return local(signal ?? new AbortController().signal);
+		if (!host) return local(signal);
 		const localAbort = new AbortController();
 		const remoteAbort = new AbortController();
-		const remote = host.requestGuestUi(request, mergeAbortSignals(signal, remoteAbort.signal));
-		if (!remote) return local(signal ?? new AbortController().signal);
-		const localSignal = mergeAbortSignals(signal, localAbort.signal);
-		const localWinner = local(localSignal).then((value): CollabDialogWinner => ({ source: "local", value }));
-		const remoteWinner = remote.then((value): CollabDialogWinner => ({ source: "remote", value }));
+		const remote = host.requestGuestUi(
+			request,
+			signal ? AbortSignal.any([signal, remoteAbort.signal]) : remoteAbort.signal,
+		);
+		if (!remote) return local(signal);
+		const localWinner = local(signal ? AbortSignal.any([signal, localAbort.signal]) : localAbort.signal).then(
+			(value): CollabDialogWinner => ({ source: "local", value }),
+		);
+		const remoteWinner: Promise<CollabDialogWinner> = remote.then(result =>
+			result.kind === "answered" ? { source: "remote", value: result.value } : localWinner,
+		);
 		const winner = await Promise.race([localWinner, remoteWinner]);
 		if (winner.source === "remote") localAbort.abort();
 		else remoteAbort.abort();

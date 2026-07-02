@@ -11,125 +11,16 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { importRoomKey } from "@oh-my-pi/pi-coding-agent/collab/crypto";
 import { CollabHost } from "@oh-my-pi/pi-coding-agent/collab/host";
-import {
-	COLLAB_PROTO,
-	type CollabFrame,
-	parseCollabLink,
-	rewriteEnvelopePeer,
-	unpackEnvelope,
-} from "@oh-my-pi/pi-coding-agent/collab/protocol";
+import { COLLAB_PROTO, type CollabFrame, parseCollabLink } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import { installInMemoryRelay, uninstallInMemoryRelay } from "./helpers/in-memory-relay";
 
-// ── In-memory transport ────────────────────────────────────────────────────
-// FakeWebSocket + InMemoryRelay replace the real Bun.serve relay and loopback
-// WebSocket. They mirror the production relay's forwarding contract exactly
-// (4-byte peerId envelope routing, peer-joined/peer-left control frames) but
-// deliver every frame on a microtask with zero network or timer latency. Real
-// CollabSocket / CollabHost run unchanged on top, so sealing, enveloping, the
-// hello→welcome handshake, and read-only enforcement are all exercised.
-
-/** Active relay the fake transport routes through; set for the lifetime of this file. */
-let activeRelay: InMemoryRelay | null = null;
-
-class FakeWebSocket {
-	static readonly CONNECTING = 0;
-	static readonly OPEN = 1;
-	static readonly CLOSING = 2;
-	static readonly CLOSED = 3;
-
-	binaryType = "blob";
-	readyState: number = FakeWebSocket.CONNECTING;
-	readonly role: "host" | "guest";
-	peerId = 0;
-	onopen: (() => void) | null = null;
-	onmessage: ((event: { data: unknown }) => void) | null = null;
-	onerror: (() => void) | null = null;
-	onclose: ((event: { code: number; reason: string }) => void) | null = null;
-	readonly #relay: InMemoryRelay;
-
-	constructor(url: string) {
-		const relay = activeRelay;
-		if (!relay) throw new Error("FakeWebSocket: no active in-memory relay");
-		this.#relay = relay;
-		this.role = new URL(url).searchParams.get("role") === "host" ? "host" : "guest";
-		queueMicrotask(() => {
-			if (this.readyState !== FakeWebSocket.CONNECTING) return;
-			this.readyState = FakeWebSocket.OPEN;
-			relay.connect(this);
-			this.onopen?.();
-		});
-	}
-
-	send(data: Uint8Array): void {
-		if (this.readyState !== FakeWebSocket.OPEN) return;
-		// Snapshot: the relay rewrites the peerId in place, and the sender may
-		// reuse the buffer once send() returns.
-		const bytes = new Uint8Array(data);
-		queueMicrotask(() => this.#relay.forward(this, bytes));
-	}
-
-	close(_code?: number): void {
-		if (this.readyState === FakeWebSocket.CLOSED) return;
-		this.readyState = FakeWebSocket.CLOSED;
-		this.#relay.disconnect(this);
-		queueMicrotask(() => this.onclose?.({ code: 1000, reason: "closed" }));
-	}
-
-	/** Relay → this socket: a binary frame, delivered as ArrayBuffer (binaryType "arraybuffer"). */
-	deliver(bytes: Uint8Array): void {
-		if (this.readyState !== FakeWebSocket.OPEN) return;
-		const copy = new Uint8Array(bytes);
-		queueMicrotask(() => this.onmessage?.({ data: copy.buffer }));
-	}
-
-	/** Relay → this socket: a JSON control message. */
-	deliverControl(json: string): void {
-		if (this.readyState !== FakeWebSocket.OPEN) return;
-		queueMicrotask(() => this.onmessage?.({ data: json }));
-	}
-}
-
-/** Single-room in-memory relay mirroring the production forwarding contract. */
-class InMemoryRelay {
-	#host: FakeWebSocket | null = null;
-	readonly #guests = new Map<number, FakeWebSocket>();
-	#nextPeerId = 1;
-
-	connect(ws: FakeWebSocket): void {
-		if (ws.role === "host") {
-			this.#host = ws;
-			return;
-		}
-		ws.peerId = this.#nextPeerId++;
-		this.#guests.set(ws.peerId, ws);
-		this.#host?.deliverControl(JSON.stringify({ t: "peer-joined", peer: ws.peerId }));
-	}
-
-	forward(from: FakeWebSocket, bytes: Uint8Array): void {
-		if (from.role === "host") {
-			const envelope = unpackEnvelope(bytes);
-			if (!envelope) return;
-			if (envelope.peerId === 0) {
-				for (const guest of this.#guests.values()) guest.deliver(bytes);
-			} else {
-				this.#guests.get(envelope.peerId)?.deliver(bytes);
-			}
-			return;
-		}
-		rewriteEnvelopePeer(bytes, from.peerId);
-		this.#host?.deliver(bytes);
-	}
-
-	disconnect(ws: FakeWebSocket): void {
-		if (ws.role === "host") {
-			if (this.#host === ws) this.#host = null;
-			return;
-		}
-		this.#guests.delete(ws.peerId);
-		this.#host?.deliverControl(JSON.stringify({ t: "peer-left", peer: ws.peerId }));
-	}
-}
+// In-memory transport: FakeWebSocket + InMemoryRelay (see ./helpers/in-memory-relay)
+// replace the real Bun.serve relay and loopback WebSocket with a zero-latency
+// microtask transport. Real CollabSocket / CollabHost run unchanged on top, so
+// sealing, enveloping, the hello→welcome handshake, and read-only enforcement
+// are all exercised.
 
 interface HostHarness {
 	ctx: InteractiveModeContext;
@@ -250,14 +141,12 @@ async function joinAsGuest(link: string, name: string, writeTokenOverride?: stri
 // step; it is identical across all three tests (none mutate host config), so it
 // runs once. Per-test guest state is reset in afterEach.
 
-const RealWebSocket = globalThis.WebSocket;
 const guestCleanups: (() => void)[] = [];
 let harness: HostHarness;
 let host: CollabHost;
 
 beforeAll(async () => {
-	globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
-	activeRelay = new InMemoryRelay();
+	installInMemoryRelay();
 	harness = makeHostContext();
 	host = new CollabHost(harness.ctx);
 	// Port is irrelevant: the fake transport routes by the `role` query param.
@@ -273,8 +162,7 @@ afterEach(() => {
 afterAll(async () => {
 	// Restore the real transport first so the global is clean even if stop() throws;
 	// the host's socket holds its own FakeWebSocket/relay refs, so teardown still works.
-	globalThis.WebSocket = RealWebSocket;
-	activeRelay = null;
+	uninstallInMemoryRelay();
 	await host.stop("test done");
 });
 
@@ -336,7 +224,7 @@ describe("collab read-only links", () => {
 		expect(request.request).toMatchObject({ kind: "select", title: "Continue?", options: ["Yes"] });
 
 		guest.socket.send({ t: "ui-response", reqId: request.request.reqId, value: "Yes" });
-		expect(await pending).toBe("Yes");
+		expect(await pending).toEqual({ kind: "answered", value: "Yes" });
 		const end = await guest.nextFrame();
 		expect(end).toEqual({ t: "ui-request-end", reqId: request.request.reqId });
 	});
@@ -360,7 +248,7 @@ describe("collab read-only links", () => {
 		expect(replayed).toEqual(firstRequest);
 
 		secondGuest.socket.send({ t: "ui-response", reqId: firstRequest.request.reqId, value: "late" });
-		expect(await pending).toBe("late");
+		expect(await pending).toEqual({ kind: "answered", value: "late" });
 	});
 
 	it("treats a forged write token as read-only", async () => {
