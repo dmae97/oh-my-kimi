@@ -150,7 +150,8 @@ const fn git_null_path() -> &'static str {
 async fn git_run(cwd: &Path, args: &[&str]) -> IsoResult<Vec<u8>> {
 	let output = git_spawn(cwd, args).await?;
 	if !output.status.success() {
-		let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+		let stderr = String::from_utf8_lossy(&output.stderr);
+		let stderr = stderr.trim();
 		return Err(IsoError::other(format!(
 			"git {} (exit {}): {stderr}",
 			args.join(" "),
@@ -170,7 +171,8 @@ async fn git_run_allow_exit1(cwd: &Path, args: &[&str]) -> IsoResult<Vec<u8>> {
 	if output.status.success() || output.status.code() == Some(1) {
 		return Ok(output.stdout);
 	}
-	let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	let stderr = stderr.trim();
 	Err(IsoError::other(format!(
 		"git {} (exit {}): {stderr}",
 		args.join(" "),
