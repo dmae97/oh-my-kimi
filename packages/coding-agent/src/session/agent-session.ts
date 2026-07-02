@@ -1636,7 +1636,7 @@ export class AgentSession {
 	#turnIndex = 0;
 	#messageEndPersistenceTail: Promise<void> = Promise.resolve();
 	#pendingMessageEndPersistence = new Map<string, Promise<void>>();
-	#persistedMessageKeys: Set<string> | undefined;
+	#persistedMessageKeys: { anchor: string; keys: Set<string> } | undefined;
 
 	#skills: Skill[];
 	#skillWarnings: SkillWarning[];
@@ -3151,12 +3151,18 @@ export class AgentSession {
 	 * Index every message entry on the current branch by persistence key, so
 	 * the mid-run-compaction planner can ask "is this turn message already on
 	 * the branch?" in O(1). The set is memoized through the current leaf path
-	 * and invalidated when session/branch navigation changes that path.
+	 * and validated at use time against a (session file, leaf id) anchor.
 	 *
 	 * The mid-run ordering check uses key identity alone: same-key content
 	 * variants are one logical message at this boundary, because otherwise a
 	 * display-side rewrite can make the assistant look missing after its tool
 	 * results have already persisted.
+	 *
+	 * Coherency is anchor-based, not invalidation-based: every branch mutation
+	 * (rewind, branch switch, new session, custom-entry append) changes the
+	 * session manager's leaf id or session file, so `#ensurePersistedMessageKeys`
+	 * detects staleness itself and rebuilds. No mutation call site has to
+	 * remember to invalidate anything.
 	 *
 	 * Pre-#3629 the equivalent was `sessionManager.getBranch()` called twice
 	 * per turn message, each call rebuilding the path via O(n²) `unshift` and
@@ -3168,15 +3174,18 @@ export class AgentSession {
 		return this.#ensurePersistedMessageKeys();
 	}
 
-	#invalidatePersistedMessageKeys(): void {
-		this.#persistedMessageKeys = undefined;
+	#persistedMessageKeysAnchor(): string {
+		return `${this.sessionManager.getSessionFile() ?? ""}\u0000${this.sessionManager.getLeafId() ?? ""}`;
 	}
 
 	#ensurePersistedMessageKeys(): Set<string> {
-		if (this.#persistedMessageKeys === undefined) {
-			this.#persistedMessageKeys = this.#buildPersistedMessageKeySet();
+		const anchor = this.#persistedMessageKeysAnchor();
+		let cache = this.#persistedMessageKeys;
+		if (cache === undefined || cache.anchor !== anchor) {
+			cache = { anchor, keys: this.#buildPersistedMessageKeySet() };
+			this.#persistedMessageKeys = cache;
 		}
-		return this.#persistedMessageKeys;
+		return cache.keys;
 	}
 
 	#buildPersistedMessageKeySet(): Set<string> {
@@ -3236,9 +3245,17 @@ export class AgentSession {
 			message.toolName === "rewind" &&
 			this.#rewoundToolResultIds.delete(message.toolCallId);
 		if (!skipPersistedRewindResult) {
+			// Only extend the cache incrementally when it was fresh for the branch
+			// this append lands on; otherwise leave it stale so the next use-time
+			// anchor check rebuilds it.
+			const cache = this.#persistedMessageKeys;
+			const wasFresh = cache !== undefined && cache.anchor === this.#persistedMessageKeysAnchor();
 			this.sessionManager.appendMessage(message);
 			const key = sessionMessagePersistenceKey(message);
-			if (key && this.#persistedMessageKeys) this.#persistedMessageKeys.add(key);
+			if (wasFresh && cache && key) {
+				cache.keys.add(key);
+				cache.anchor = this.#persistedMessageKeysAnchor();
+			}
 		}
 	}
 
@@ -8371,7 +8388,7 @@ export class AgentSession {
 			await this.sessionManager.flush();
 		}
 		await this.sessionManager.newSession(options);
-		this.#invalidatePersistedMessageKeys();
+
 		this.#clearCheckpointRuntimeState();
 		this.setTodoPhases([]);
 		this.#freshProviderSessionId = undefined;
@@ -9784,7 +9801,7 @@ export class AgentSession {
 			await this.sessionManager.flush();
 			this.#cancelOwnAsyncJobs();
 			await this.sessionManager.newSession(previousSessionFile ? { parentSession: previousSessionFile } : undefined);
-			this.#invalidatePersistedMessageKeys();
+
 			this.#clearCheckpointRuntimeState();
 			// agent.reset() clears the core steering/follow-up queues. Preserve any queued
 			// steers/follow-ups (RPC/SDK steer()/followUp() issued during the handoff, or a
@@ -10468,10 +10485,8 @@ export class AgentSession {
 		}
 		if (branchEntry.parentId === null) {
 			this.sessionManager.resetLeaf();
-			this.#invalidatePersistedMessageKeys();
 		} else {
 			this.sessionManager.branch(branchEntry.parentId);
-			this.#invalidatePersistedMessageKeys();
 		}
 	}
 
@@ -10537,7 +10552,7 @@ export class AgentSession {
 			});
 			this.sessionManager.branchWithSummary(null, report, { startedAt: checkpointState.startedAt });
 		}
-		this.#invalidatePersistedMessageKeys();
+
 		const rewoundAt = new Date().toISOString();
 		const details = { report, startedAt: checkpointState.startedAt, rewoundAt };
 		this.sessionManager.appendCustomMessageEntry(
@@ -14283,10 +14298,8 @@ export class AgentSession {
 
 		if (!selectedEntry.parentId) {
 			await this.sessionManager.newSession({ parentSession: previousSessionFile });
-			this.#invalidatePersistedMessageKeys();
 		} else {
 			this.sessionManager.createBranchedSession(selectedEntry.parentId);
-			this.#invalidatePersistedMessageKeys();
 		}
 		this.#rehydrateCheckpointRewindState();
 		this.#syncTodoPhasesFromBranch();
@@ -14375,7 +14388,7 @@ export class AgentSession {
 		this.#cancelOwnAsyncJobs();
 
 		this.sessionManager.createBranchedSession(leafId);
-		this.#invalidatePersistedMessageKeys();
+
 		this.#rehydrateCheckpointRewindState();
 		this.sessionManager.appendMessage({
 			role: "user",
@@ -14559,16 +14572,14 @@ export class AgentSession {
 		if (summaryText) {
 			// Create summary at target position (can be null for root)
 			const summaryId = this.sessionManager.branchWithSummary(newLeafId, summaryText, summaryDetails, fromExtension);
-			this.#invalidatePersistedMessageKeys();
+
 			summaryEntry = this.sessionManager.getEntry(summaryId) as BranchSummaryEntry;
 		} else if (newLeafId === null) {
 			// No summary, navigating to root - reset leaf
 			this.sessionManager.resetLeaf();
-			this.#invalidatePersistedMessageKeys();
 		} else {
 			// No summary, navigating to non-root
 			this.sessionManager.branch(newLeafId);
-			this.#invalidatePersistedMessageKeys();
 		}
 
 		// Update agent state — build display context to populate agent messages.
