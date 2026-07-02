@@ -276,6 +276,7 @@ import {
 	AUTO_THINKING,
 	type ConfiguredThinkingLevel,
 	clampAutoThinkingEffort,
+	concreteThinkingLevel,
 	parseConfiguredThinkingLevel,
 	resolveProvisionalAutoLevel,
 	resolveThinkingLevelForModel,
@@ -327,6 +328,7 @@ import {
 	collectPendingToolCalls,
 	SESSION_EXIT_CUSTOM_TYPE,
 	type SessionExitData,
+	summarizeToolArguments,
 	TOOL_EXECUTION_START_CUSTOM_TYPE,
 	type ToolExecutionStartData,
 } from "./exit-diagnostics";
@@ -491,6 +493,18 @@ const COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION: CompactionCheckResult = {
 	continuationScheduled: false,
 	automaticContinuationBlocked: true,
 };
+
+/**
+ * User-facing notice for a compaction dead end: maintenance freed too little
+ * to retry safely. `remedies` names the recovery actions available on the
+ * emitting path (the shake-rescue path can additionally offer `/shake images`).
+ */
+function compactionDeadEndWarning(remedies: string): string {
+	return (
+		"Compaction freed too little context to make progress — pausing automatic maintenance to avoid a compaction loop. " +
+		`The most recent turn alone is too large to reduce further; ${remedies} or switch to a larger-context model.`
+	);
+}
 
 /**
  * Per-turn prune cache window. A tool result whose all-message suffix exceeds
@@ -932,7 +946,7 @@ function parseRetryFallbackSelector(
 		raw: trimmed,
 		provider: parsed.provider,
 		id: parsed.id,
-		thinkingLevel: parsed.thinkingLevel === AUTO_THINKING ? undefined : parsed.thinkingLevel,
+		thinkingLevel: concreteThinkingLevel(parsed.thinkingLevel),
 	};
 }
 
@@ -1341,22 +1355,6 @@ type ScheduledAgentContinueOptions = {
 	shouldContinue?: () => boolean;
 	onSkip?: (reason: AgentContinueSkipReason) => void;
 	onError?: () => void;
-};
-
-type AssistantContextRemovalResult = {
-	reason: string;
-	removed: boolean;
-	beforeLength: number;
-	afterLength: number;
-	lastRole: AgentMessage["role"] | undefined;
-	candidateTimestamp: number;
-	lastTimestamp: number | undefined;
-	candidateProvider: string;
-	lastProvider: string | undefined;
-	candidateModel: string;
-	lastModel: string | undefined;
-	candidateStopReason: AssistantMessage["stopReason"];
-	lastStopReason: AssistantMessage["stopReason"] | undefined;
 };
 
 const REPLAN_TITLE_CONTEXT_TURN_LIMIT = 6;
@@ -2217,7 +2215,7 @@ export class AgentSession {
 			if (config.model) {
 				const resolved = resolveModelOverride([config.model], this.#modelRegistry, this.settings);
 				model = resolved.model;
-				thinkingLevel = resolved.thinkingLevel === AUTO_THINKING ? undefined : resolved.thinkingLevel;
+				thinkingLevel = concreteThinkingLevel(resolved.thinkingLevel);
 				if (!model) {
 					this.emitNotice("warning", `Advisor "${config.name}": no model matched "${config.model}"`, "advisor");
 					continue;
@@ -2231,7 +2229,7 @@ export class AgentSession {
 					continue;
 				}
 				model = sel.model;
-				thinkingLevel = sel.thinkingLevel === AUTO_THINKING ? undefined : sel.thinkingLevel;
+				thinkingLevel = concreteThinkingLevel(sel.thinkingLevel);
 			}
 			const advisorModel = model;
 			const advisorName = config.name;
@@ -2916,9 +2914,12 @@ export class AgentSession {
 		const data: ToolExecutionStartData = {
 			toolCallId: event.toolCallId,
 			toolName: event.toolName,
-			args: event.args,
 			startedAt: new Date().toISOString(),
 		};
+		// The assistant message already persists the full arguments; store only
+		// the command/path projection the resume warning renders.
+		const args = summarizeToolArguments(event.args);
+		if (args) data.args = args;
 		if (event.intent) data.intent = event.intent;
 		this.sessionManager.appendCustomEntry(TOOL_EXECUTION_START_CUSTOM_TYPE, data);
 	}
@@ -2950,7 +2951,10 @@ export class AgentSession {
 		try {
 			this.sessionManager.appendCustomEntry(SESSION_EXIT_CUSTOM_TYPE, data);
 			this.sessionManager.flushSync();
-			logger.warn("Session exit recorded", {
+			// Only pending tool calls or an abnormal teardown are noteworthy; a
+			// clean dispose logs at debug so routine exits don't read as problems.
+			const exitLog = pendingToolCalls.length > 0 || kind !== "normal" ? logger.warn : logger.debug;
+			exitLog("Session exit recorded", {
 				sessionId: this.sessionManager.getSessionId(),
 				sessionFile: this.sessionManager.getSessionFile(),
 				reason,
@@ -3854,31 +3858,8 @@ export class AgentSession {
 		this.#trackPostPromptTask(scheduled);
 	}
 
-	#agentContinueState(options: ScheduledAgentContinueOptions | undefined, signal: AbortSignal | undefined) {
-		const messages = this.agent.state.messages;
-		return {
-			signalAborted: signal?.aborted === true,
-			disposed: this.#isDisposed,
-			compacting: this.isCompacting,
-			handoff: this.isGeneratingHandoff,
-			generation: this.#promptGeneration,
-			expectedGeneration: options?.generation,
-			messageCount: messages.length,
-			lastRole: messages.at(-1)?.role,
-			steeringQueueLength: this.agent.peekSteeringQueue().length,
-			followUpQueueLength: this.agent.peekFollowUpQueue().length,
-		};
-	}
-
-	#skipAgentContinue(
-		reason: AgentContinueSkipReason,
-		options: ScheduledAgentContinueOptions | undefined,
-		signal: AbortSignal | undefined,
-	): void {
-		logger.debug("agent.continue skipped after scheduling", {
-			reason,
-			...this.#agentContinueState(options, signal),
-		});
+	#skipAgentContinue(reason: AgentContinueSkipReason, options: ScheduledAgentContinueOptions | undefined): void {
+		logger.debug("agent.continue skipped after scheduling", { reason });
 		options?.onSkip?.(reason);
 	}
 
@@ -3891,28 +3872,26 @@ export class AgentSession {
 				// reset. The first-class fix is in #checkCompaction/the agent_end handler,
 				// but this guard catches anything that bypasses that path.
 				if (signal.aborted || this.#isDisposed || this.isCompacting || this.isGeneratingHandoff) {
-					this.#skipAgentContinue("session-unavailable", options, signal);
+					this.#skipAgentContinue("session-unavailable", options);
 					return;
 				}
 				if (options?.shouldContinue && !options.shouldContinue()) {
-					this.#skipAgentContinue("should-continue-false", options, signal);
+					this.#skipAgentContinue("should-continue-false", options);
 					return;
 				}
 				this.#beginInFlight();
 				try {
 					await this.#maybeRestoreRetryFallbackPrimary();
 					if (signal.aborted || this.#isDisposed) {
-						this.#skipAgentContinue("post-restore-unavailable", options, signal);
+						this.#skipAgentContinue("post-restore-unavailable", options);
 						return;
 					}
-					logger.debug("agent.continue starting after scheduling", this.#agentContinueState(options, signal));
 					await this.agent.continue();
 				} catch (error) {
 					logger.warn("agent.continue failed after scheduling", {
 						error: error instanceof Error ? error.message : String(error),
 						stack: error instanceof Error ? error.stack : undefined,
 					});
-					logger.debug("agent.continue failed state after scheduling", this.#agentContinueState(options, signal));
 					options?.onError?.();
 				} finally {
 					this.#endInFlight();
@@ -3921,7 +3900,7 @@ export class AgentSession {
 			{
 				delayMs: options?.delayMs,
 				generation: options?.generation,
-				onSkip: reason => this.#skipAgentContinue(reason, options, undefined),
+				onSkip: reason => this.#skipAgentContinue(reason, options),
 			},
 		);
 	}
@@ -10231,32 +10210,24 @@ export class AgentSession {
 	#removeAssistantMessageFromActiveContext(
 		assistantMessage: AssistantMessage,
 		reason = "assistant-context-cleanup",
-	): AssistantContextRemovalResult {
+	): void {
 		const messages = this.agent.state.messages;
-		const beforeLength = messages.length;
 		const lastMessage = messages[messages.length - 1];
 		const lastAssistant: AssistantMessage | undefined = lastMessage?.role === "assistant" ? lastMessage : undefined;
-		const removed = lastAssistant !== undefined && this.#isSameAssistantMessage(lastAssistant, assistantMessage);
-		if (removed) {
+		if (lastAssistant !== undefined && this.#isSameAssistantMessage(lastAssistant, assistantMessage)) {
 			this.agent.replaceMessages(messages.slice(0, -1));
+			return;
 		}
-		const result: AssistantContextRemovalResult = {
+		// A miss means the failed turn is still in active context (or was never
+		// there); log just enough to explain why the identity check failed.
+		logger.debug("agent active context assistant removal missed", {
 			reason,
-			removed,
-			beforeLength,
-			afterLength: this.agent.state.messages.length,
 			lastRole: lastMessage?.role,
 			candidateTimestamp: assistantMessage.timestamp,
 			lastTimestamp: lastAssistant?.timestamp,
-			candidateProvider: assistantMessage.provider,
-			lastProvider: lastAssistant?.provider,
-			candidateModel: assistantMessage.model,
-			lastModel: lastAssistant?.model,
 			candidateStopReason: assistantMessage.stopReason,
 			lastStopReason: lastAssistant?.stopReason,
-		};
-		logger.debug("agent active context assistant removal", result);
-		return result;
+		});
 	}
 
 	/**
@@ -11813,7 +11784,7 @@ export class AgentSession {
 				if (noProgressDeadEnd) {
 					this.emitNotice(
 						"warning",
-						"Compaction freed too little context to make progress — pausing automatic maintenance to avoid a compaction loop. The most recent turn alone is too large to reduce further; shrink it (e.g. clear large tool output) or switch to a larger-context model.",
+						compactionDeadEndWarning("shrink it (e.g. clear large tool output)"),
 						"compaction",
 					);
 				}
@@ -12229,7 +12200,7 @@ export class AgentSession {
 			if (noProgressDeadEnd) {
 				this.emitNotice(
 					"warning",
-					"Compaction freed too little context to make progress — pausing automatic maintenance to avoid a compaction loop. The most recent turn alone is too large to reduce further; clear large tool output, run `/shake images` to drop attached images, or switch to a larger-context model.",
+					compactionDeadEndWarning("clear large tool output, run `/shake images` to drop attached images,"),
 					"compaction",
 				);
 			}

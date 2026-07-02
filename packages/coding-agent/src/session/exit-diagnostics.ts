@@ -4,11 +4,22 @@ import type { SessionEntry } from "./session-entries";
 export const TOOL_EXECUTION_START_CUSTOM_TYPE = "tool_execution_start";
 export const SESSION_EXIT_CUSTOM_TYPE = "session_exit";
 
+/**
+ * Compact projection of tool-call arguments persisted with the start marker.
+ * The assistant message already carries the full arguments; this exists only
+ * so `appendArgumentSummary` can name the command/path in resume warnings
+ * without duplicating whole argument payloads into the session JSONL.
+ */
+export interface ToolArgumentSummary {
+	command?: string;
+	path?: string;
+}
+
 /** Persisted marker written before a tool implementation starts running. */
 export interface ToolExecutionStartData {
 	toolCallId: string;
 	toolName: string;
-	args?: unknown;
+	args?: ToolArgumentSummary;
 	intent?: string;
 	startedAt: string;
 }
@@ -52,6 +63,31 @@ function isToolCallContent(value: unknown): value is ToolCallContent {
 	return value.type === "toolCall" && (typeof value.name === "string" || typeof value.id === "string");
 }
 
+/** Character cap for each summarized argument field. */
+const ARGUMENT_SUMMARY_MAX_CHARS = 200;
+
+function truncateSummaryField(value: string): string {
+	return value.length > ARGUMENT_SUMMARY_MAX_CHARS ? `${value.slice(0, ARGUMENT_SUMMARY_MAX_CHARS)}…` : value;
+}
+
+/**
+ * Project full tool-call arguments down to the fields the pending-tool-call
+ * resume warning actually renders (`command`/`path`), truncated. Returns
+ * `undefined` when the arguments carry neither, so callers can omit `args`
+ * entirely instead of persisting an empty object.
+ */
+export function summarizeToolArguments(args: unknown): ToolArgumentSummary | undefined {
+	if (!isObject(args)) return undefined;
+	const summary: ToolArgumentSummary = {};
+	if (typeof args.command === "string" && args.command.length > 0) {
+		summary.command = truncateSummaryField(args.command);
+	}
+	if (typeof args.path === "string" && args.path.length > 0) {
+		summary.path = truncateSummaryField(args.path);
+	}
+	return summary.command !== undefined || summary.path !== undefined ? summary : undefined;
+}
+
 function readToolExecutionStart(entry: SessionEntry): ToolExecutionStartData | undefined {
 	if (entry.type !== "custom" || entry.customType !== TOOL_EXECUTION_START_CUSTOM_TYPE) return undefined;
 	const data = entry.data;
@@ -63,7 +99,11 @@ function readToolExecutionStart(entry: SessionEntry): ToolExecutionStartData | u
 		toolName: data.toolName,
 		startedAt,
 	};
-	if ("args" in data) result.args = data.args;
+	// Legacy sessions persisted full argument objects; project them down.
+	if ("args" in data) {
+		const args = summarizeToolArguments(data.args);
+		if (args) result.args = args;
+	}
 	if (typeof data.intent === "string") result.intent = data.intent;
 	return result;
 }
@@ -94,7 +134,9 @@ function applyToolExecutionStart(pending: Map<string, PendingToolCallRecord>, ma
 	const existing = pending.get(marker.toolCallId);
 	if (existing) {
 		existing.startedAt = marker.startedAt;
-		existing.args = marker.args;
+		// The assistant message carries the full arguments; the marker only has
+		// the command/path projection. Keep the richer copy when present.
+		existing.args ??= marker.args;
 		if (marker.intent) existing.intent = marker.intent;
 		return;
 	}
