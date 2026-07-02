@@ -2,16 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed ZenMux model discovery to run without a `ZENMUX_API_KEY`, so newly published ZenMux models (for example `anthropic/claude-fable-5-free`) auto-update into the runtime `models.db` cache instead of waiting on a regenerated `models.json`.
+- Fixed ZenMux runtime discovery to query the `/api/v1/models` endpoint even when the resolved provider base URL points at the Anthropic-compatible route, so discovery no longer requests a non-existent `/api/anthropic/models` path.
+
 ## [16.3.1] - 2026-07-02
 
 ### Removed
 
 - Removed reasoning suppression prompt logic for GPT-5 models
-
-### Fixed
-
-- Fixed ZenMux model discovery to run without a `ZENMUX_API_KEY`, so newly published ZenMux models (for example `anthropic/claude-fable-5-free`) auto-update into the runtime `models.db` cache instead of waiting on a regenerated `models.json`.
-- Fixed ZenMux runtime discovery to query the `/api/v1/models` endpoint even when the resolved provider base URL points at the Anthropic-compatible route, so discovery no longer requests a non-existent `/api/anthropic/models` path.
 
 ## [16.3.0] - 2026-07-02
 
