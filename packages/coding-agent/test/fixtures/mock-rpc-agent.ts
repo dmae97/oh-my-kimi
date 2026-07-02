@@ -7,13 +7,11 @@
  * Used by rpc-client lifecycle tests that need to exercise start/stop/start
  * without booting the full agent runtime (which requires provider credentials).
  */
-import * as readline from "node:readline";
-
 process.stdout.write(`${JSON.stringify({ type: "ready" })}\n`);
 
-const rl = readline.createInterface({ input: process.stdin });
-rl.on("line", raw => {
-	if (!raw) return;
+// Bun's `console` is an AsyncIterable over stdin lines.
+for await (const raw of console) {
+	if (!raw) continue;
 	try {
 		const frame = JSON.parse(raw) as Record<string, unknown>;
 		if (frame && typeof frame === "object" && typeof frame.type === "string") {
@@ -31,5 +29,5 @@ rl.on("line", raw => {
 	} catch {
 		// ignore parse errors — the test harness sends well-formed frames.
 	}
-});
-rl.on("close", () => process.exit(0));
+}
+process.exit(0);
