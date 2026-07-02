@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import threading
 from types import SimpleNamespace
 
@@ -121,3 +122,37 @@ async def test_run_workspace_op_drains_thread_before_propagating_cancel():
         await task
     # Deterministic in the fixed helper: the thread completed before the cancel propagated.
     assert finished.is_set(), "thread did not complete before cancellation propagated"
+
+
+async def test_run_workspace_op_logs_worker_exception_on_concurrent_cancel(caplog):
+    started = threading.Event()
+    proceed = threading.Event()
+    boom = RuntimeError("git exploded")
+
+    def failing_op(**_kwargs):
+        started.set()
+        assert proceed.wait(2.0), "proceed was never set — test bug"
+        raise boom
+
+    task = asyncio.create_task(tasks._run_workspace_op(failing_op))
+    await asyncio.to_thread(started.wait, 1.0)
+    assert started.is_set()
+
+    # Cancel the caller while the worker is still blocked (mid-flight), so the
+    # helper enters its cancel-drain loop and is awaiting the shielded inner.
+    task.cancel()
+    await asyncio.sleep(0.05)
+
+    with caplog.at_level(logging.WARNING, logger="robomp.tasks"):
+        # Release the worker so inner completes WITH an exception while the
+        # helper is draining -> the drain's `await shield(inner)` re-raises boom,
+        # breaks the loop, and the guarded log.warning must fire.
+        proceed.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings, "worker exception during cancel was not logged"
+    assert any(r.exc_info and r.exc_info[1] is boom for r in warnings), (
+        "the worker's exception was not attached to the warning"
+    )

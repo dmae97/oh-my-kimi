@@ -819,12 +819,18 @@ class SandboxManager:
                         )
             else:
                 slot_git_env = _git_env_for_repo(repo_dir)
+                symref = ["git", "symbolic-ref", "--quiet", "--short", "HEAD"]
                 current = _safe_run(
-                    ["git", "symbolic-ref", "--quiet", "--short", "HEAD"],
+                    symref,
                     cwd=repo_dir,
                     env=slot_git_env,
                     **slot_git_kwargs,
                 )
+                if current.returncode == 124:
+                    # A timed-out probe is indeterminate, not "detached HEAD".
+                    # Silently keeping the caller-supplied branch could mismatch
+                    # the real checkout; fail so the event retries.
+                    raise GitCommandError(symref, current.returncode, current.stdout, current.stderr)
                 if current.returncode == 0 and current.stdout.strip():
                     branch = current.stdout.strip()
                     if existing_branch is not None and existing_branch != branch:

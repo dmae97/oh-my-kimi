@@ -24,6 +24,7 @@ from robomp.git_ops import (
     fetch_ref as git_fetch_ref,
 )
 from robomp.sandbox import (
+    _DEFAULT_SANDBOX_SUBPROCESS_TIMEOUT,
     SandboxManager,
     Workspace,
     _chown_workspace,
@@ -508,10 +509,12 @@ def test_chown_workspace_runs_chown_and_chmod_as_root_on_linux(tmp_path: Path, m
 
     monkeypatch.setattr("robomp.sandbox.platform.system", lambda: "Linux")
     monkeypatch.setattr("robomp.sandbox.os.geteuid", lambda: 0)
-    monkeypatch.setattr(
-        "robomp.sandbox.subprocess.run",
-        lambda cmd, *, check, timeout=None: calls.append((cmd, check)),
-    )
+
+    def fake_run(cmd, *, check, timeout):
+        assert timeout == _DEFAULT_SANDBOX_SUBPROCESS_TIMEOUT
+        calls.append((cmd, check))
+
+    monkeypatch.setattr("robomp.sandbox.subprocess.run", fake_run)
 
     _chown_workspace(tmp_path, 2001)
 
@@ -532,8 +535,9 @@ def test_chown_workspace_makes_workspace_slot_owned(tmp_path: Path, monkeypatch:
     file_path.chmod(0o777)
     owned: dict[Path, tuple[int, int]] = {}
 
-    def fake_run(cmd: list[str], *, check: bool, timeout: float | None = None) -> None:
+    def fake_run(cmd: list[str], *, check: bool, timeout: float) -> None:
         assert check
+        assert timeout == _DEFAULT_SANDBOX_SUBPROCESS_TIMEOUT
         if cmd[:2] == ["chown", "-R"]:
             uid_text, gid_text = cmd[2].split(":", 1)
             root = Path(cmd[3])
@@ -1916,6 +1920,48 @@ def test_ensure_workspace_raises_when_remote_branch_probe_times_out(tmp_path: Pa
     monkeypatch.setattr("robomp.sandbox._chown_workspace", lambda *a, **k: None)
     monkeypatch.setattr("robomp.sandbox._share_git_metadata_with_slots", lambda *a, **k: None)
     monkeypatch.setattr("robomp.sandbox._provision_runtime_dirs", lambda *a, **k: None)
+
+    with pytest.raises(GitCommandError):
+        mgr.ensure_workspace(
+            repo="o/r",
+            number=1,
+            title="t",
+            clone_url="https://x/o/r.git",
+            default_branch="main",
+            author_name="n",
+            author_email="e@e",
+            existing_branch="feature/x",
+            slot_uid=None,
+        )
+
+
+def test_ensure_workspace_raises_when_symbolic_ref_probe_times_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mgr = SandboxManager(tmp_path)
+    mgr.natives_cache = None
+    mgr.transport = SimpleNamespace(
+        clone_pool=lambda **k: None,
+        fetch_pool=lambda **k: None,
+        fetch_base_ref=lambda **k: None,
+        fetch_pr_head=lambda **k: None,
+    )  # type: ignore
+
+    # Force the repo_exists=True branch: the worktree already has a .git.
+    repo_dir = mgr.workspace_root("o/r", 1) / "repo"
+    (repo_dir / ".git").mkdir(parents=True)
+
+    def fake_safe_run(cmd: list[str], **k: object) -> subprocess.CompletedProcess[str]:
+        if cmd[:2] == ["git", "symbolic-ref"]:
+            return subprocess.CompletedProcess(cmd, 124, "", "timed out")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr("robomp.sandbox._safe_run", fake_safe_run)
+    monkeypatch.setattr("robomp.sandbox._run", lambda *a, **k: subprocess.CompletedProcess(["x"], 0, "", ""))
+    monkeypatch.setattr("robomp.sandbox._chown_workspace", lambda *a, **k: None)
+    monkeypatch.setattr("robomp.sandbox._share_git_metadata_with_slots", lambda *a, **k: None)
+    monkeypatch.setattr("robomp.sandbox._provision_runtime_dirs", lambda *a, **k: None)
+    monkeypatch.setattr("robomp.sandbox._git_env_for_repo", lambda *a, **k: {})
 
     with pytest.raises(GitCommandError):
         mgr.ensure_workspace(

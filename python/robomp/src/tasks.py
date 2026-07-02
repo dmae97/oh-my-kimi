@@ -54,6 +54,12 @@ async def _run_workspace_op(func: Callable[..., _T], /, **kwargs: object) -> _T:
                 continue
             except BaseException:
                 break
+        if not inner.cancelled() and inner.exception() is not None:
+            log.warning(
+                "workspace op %s raised during caller cancellation",
+                getattr(func, "__name__", func),
+                exc_info=inner.exception(),
+            )
         raise
 
 
