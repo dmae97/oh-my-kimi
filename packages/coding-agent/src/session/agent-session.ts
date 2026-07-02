@@ -360,6 +360,8 @@ import { classifyUnexpectedStop, isUnexpectedStopCandidate } from "./unexpected-
 import { YieldQueue } from "./yield-queue";
 
 const SESSION_STOP_CONTINUATION_CAP = 8;
+const PLAN_MODE_REMINDER_MAX = 3;
+const PLAN_DECISION_TOOLS = new Set(["ask", "resolve"]);
 
 /**
  * Mutating tool results (`bash`/`eval`/`edit`/`write`/`ast_edit`) without the
@@ -1589,6 +1591,8 @@ export class AgentSession {
 	/** Mid-run nudges fired this prompt cycle; capped by
 	 *  {@link MID_RUN_TODO_NUDGE_MAX_PER_CYCLE}, reset with the counter above. */
 	#midRunNudgeCount = 0;
+	#planModeReminderCount = 0;
+	#planModeReminderAwaitingProgress = false;
 	#todoPhases: TodoPhase[] = [];
 	#replanTitleRefreshInFlight: Promise<void> | undefined = undefined;
 	/** Resolved TITLE_SYSTEM.md override applied to every automatic session-title
@@ -1863,6 +1867,21 @@ export class AgentSession {
 		const records = [...this.#pendingIrcInterrupts, ...this.#pendingIrcAsides];
 		this.#pendingIrcInterrupts = [];
 		this.#pendingIrcAsides = [];
+		if (this.#planModeState?.enabled) {
+			// Plan mode: fold stranded IRC asides into context without waking an
+			// autonomous turn. Convergence to ask/resolve stays user-driven.
+			for (const record of records) {
+				this.agent.appendMessage(record);
+				this.sessionManager.appendCustomMessageEntry(
+					record.customType,
+					record.content,
+					record.display,
+					record.details,
+					record.attribution ?? "agent",
+				);
+			}
+			return;
+		}
 		this.#wakeForIrc(records);
 	}
 
@@ -2523,6 +2542,20 @@ export class AgentSession {
 			return;
 		}
 		this.#recordAdvisorInterruptDelivered();
+		if (this.#planModeState?.enabled) {
+			// Plan mode: record advice visibly in context but never wake an
+			// autonomous turn — only user-driven turns converge on ask/resolve.
+			this.#preserveAdvisorCard({
+				role: "custom",
+				customType: "advisor",
+				content,
+				display: true,
+				attribution: "agent",
+				details,
+				timestamp: Date.now(),
+			});
+			return;
+		}
 		void this.sendCustomMessage(
 			{ customType: "advisor", content, display: true, attribution: "agent", details },
 			{ deliverAs: "steer", triggerTurn: true },
@@ -3423,6 +3456,11 @@ export class AgentSession {
 			} else {
 				await this.#goalRuntime.onToolCompleted(event.toolName);
 			}
+			this.#planModeReminderAwaitingProgress = false;
+			if (this.#isPlanDecisionTool(event.toolName)) {
+				this.#planModeReminderCount = 0;
+				this.#planModeReminderAwaitingProgress = false;
+			}
 		}
 		if (event.type === "tool_execution_end" && event.toolName === "yield" && !event.isError) {
 			this.#lastSuccessfulYieldToolCallId = event.toolCallId;
@@ -3842,6 +3880,11 @@ export class AgentSession {
 			}
 			if (msg.stopReason !== "error") {
 				if (this.#enforceRewindBeforeYield()) {
+					await emitAgentEndNotification();
+					return;
+				}
+				const planModeContinuationScheduled = await this.#enforcePlanModeDecisionAtSettle();
+				if (planModeContinuationScheduled) {
 					await emitAgentEndNotification();
 					return;
 				}
@@ -6686,6 +6729,9 @@ export class AgentSession {
 		if (state?.enabled) {
 			this.#planReferenceSent = false;
 			this.#planReferencePath = state.planFilePath;
+		} else {
+			this.#planModeReminderCount = 0;
+			this.#planModeReminderAwaitingProgress = false;
 		}
 	}
 
@@ -7181,6 +7227,8 @@ export class AgentSession {
 		// Agent-initiated synthetic prompts (auto-continue, plan, reminders) do not.
 		if (options?.userInitiated ?? !options?.synthetic) {
 			this.#advisorAutoResumeSuppressed = false;
+			this.#planModeReminderCount = 0;
+			this.#planModeReminderAwaitingProgress = false;
 		}
 
 		// If streaming, queue via steer() or followUp() based on option
@@ -7250,9 +7298,6 @@ export class AgentSession {
 			// Clean up residual eager-todo directive if the prompt never consumed it
 			// (e.g., compaction aborted, validation failed).
 			this.#toolChoiceQueue.removeByLabel("eager-todo");
-		}
-		if (!options?.synthetic) {
-			await this.#enforcePlanModeToolDecision();
 		}
 		return true;
 	}
@@ -10552,41 +10597,67 @@ export class AgentSession {
 		this.#checkpointState = undefined;
 		this.#pendingRewindReport = undefined;
 	}
-	async #enforcePlanModeToolDecision(): Promise<void> {
+	#isPlanDecisionTool(name: string): boolean {
+		return PLAN_DECISION_TOOLS.has(name);
+	}
+
+	async #enforcePlanModeDecisionAtSettle(): Promise<boolean> {
 		if (!this.#planModeState?.enabled) {
-			return;
+			return false;
 		}
 		const assistantMessage = this.#findLastAssistantMessage();
 		if (!assistantMessage) {
-			return;
+			return false;
 		}
 		if (assistantMessage.stopReason === "error" || assistantMessage.stopReason === "aborted") {
-			return;
+			return false;
 		}
 
-		const calledRequiredTool = assistantMessage.content.some(
-			content => content.type === "toolCall" && (content.name === "ask" || content.name === "resolve"),
+		const calledDecisionTool = assistantMessage.content.some(
+			content => content.type === "toolCall" && this.#isPlanDecisionTool(content.name),
 		);
-		if (calledRequiredTool) {
-			return;
+		if (calledDecisionTool) {
+			this.#planModeReminderCount = 0;
+			this.#planModeReminderAwaitingProgress = false;
+			return false;
+		}
+
+		const hasToolCall = assistantMessage.content.some(content => content.type === "toolCall");
+		if (hasToolCall) {
+			return false;
+		}
+		if (this.#planModeReminderAwaitingProgress) {
+			return false;
+		}
+		if (this.#planModeReminderCount >= PLAN_MODE_REMINDER_MAX) {
+			logger.debug("Plan mode convergence: reminder cap reached; yielding to user");
+			return false;
 		}
 		const hasRequiredTools = this.#toolRegistry.has("ask") && this.#toolRegistry.has("resolve");
 		if (!hasRequiredTools) {
 			logger.warn("Plan mode enforcement skipped because ask/resolve tools are unavailable", {
 				activeToolNames: this.agent.state.tools.map(tool => tool.name),
 			});
-			return;
+			return false;
 		}
 
+		this.#planModeReminderCount++;
+		this.#planModeReminderAwaitingProgress = true;
+		this.#toolChoiceQueue.pushOnce("required", { label: "plan-mode-decision" });
 		const reminder = prompt.render(planModeToolDecisionReminderPrompt, {
 			askToolName: "ask",
 		});
+		const reminderMessage: Message = {
+			role: "developer",
+			content: [{ type: "text", text: reminder }],
+			attribution: "agent",
+			timestamp: Date.now(),
+		};
 
-		await this.prompt(reminder, {
-			synthetic: true,
-			expandPromptTemplates: false,
-			toolChoice: "required",
-		});
+		this.agent.appendMessage(reminderMessage);
+		this.sessionManager.appendMessage(reminderMessage);
+		this.#scheduleAgentContinue({ generation: this.#promptGeneration });
+		return true;
 	}
 
 	/**
@@ -10732,6 +10803,13 @@ export class AgentSession {
 		// the user wanted exactly that tool, not a follow-up nag about incomplete todos.
 		const lastServedLabel = this.#toolChoiceQueue.consumeLastServedLabel();
 		if (lastServedLabel === "user-force") {
+			return false;
+		}
+
+		// Plan mode owns convergence via #enforcePlanModeDecisionAtSettle (remind →
+		// cap → yield). Todo reminders must not re-wake a turn the cap intends to
+		// yield to the user. The label is already consumed above, so no leak.
+		if (this.#planModeState?.enabled) {
 			return false;
 		}
 
@@ -13728,6 +13806,18 @@ export class AgentSession {
 				this.#pendingIrcInterrupts.push(record);
 			}
 			if (autoReply) void this.#runIrcAutoReply(msg);
+			return "injected";
+		}
+		// Plan mode: record into context but do not wake an autonomous turn.
+		if (this.#planModeState?.enabled) {
+			this.agent.appendMessage(record);
+			this.sessionManager.appendCustomMessageEntry(
+				record.customType,
+				record.content,
+				record.display,
+				record.details,
+				record.attribution ?? "agent",
+			);
 			return "injected";
 		}
 		// Idle: wake a real turn so the recipient responds (shared with the stranded-aside resume).
