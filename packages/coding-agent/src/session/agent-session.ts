@@ -1636,6 +1636,7 @@ export class AgentSession {
 	#turnIndex = 0;
 	#messageEndPersistenceTail: Promise<void> = Promise.resolve();
 	#pendingMessageEndPersistence = new Map<string, Promise<void>>();
+	#persistedMessageKeys: Set<string> | undefined;
 
 	#skills: Skill[];
 	#skillWarnings: SkillWarning[];
@@ -3149,7 +3150,8 @@ export class AgentSession {
 	/**
 	 * Index every message entry on the current branch by persistence key, so
 	 * the mid-run-compaction planner can ask "is this turn message already on
-	 * the branch?" in O(1) instead of re-walking the branch per check.
+	 * the branch?" in O(1). The set is memoized through the current leaf path
+	 * and invalidated when session/branch navigation changes that path.
 	 *
 	 * The mid-run ordering check uses key identity alone: same-key content
 	 * variants are one logical message at this boundary, because otherwise a
@@ -3163,6 +3165,21 @@ export class AgentSession {
 	 * `ui.loop-blocked` warnings in the bug report.
 	 */
 	#indexPersistedMessageKeys(): Set<string> {
+		return this.#ensurePersistedMessageKeys();
+	}
+
+	#invalidatePersistedMessageKeys(): void {
+		this.#persistedMessageKeys = undefined;
+	}
+
+	#ensurePersistedMessageKeys(): Set<string> {
+		if (this.#persistedMessageKeys === undefined) {
+			this.#persistedMessageKeys = this.#buildPersistedMessageKeySet();
+		}
+		return this.#persistedMessageKeys;
+	}
+
+	#buildPersistedMessageKeySet(): Set<string> {
 		const keys = new Set<string>();
 		for (const entry of this.sessionManager.getBranch()) {
 			if (entry.type !== "message") continue;
@@ -3174,20 +3191,16 @@ export class AgentSession {
 
 	/**
 	 * True when {@link message} is structurally identical to a message already
-	 * appended to the current branch. Pairs a fast persistence-key lookup with
-	 * a content-equality fallback so two logically distinct messages that
-	 * happen to collide on the cheap key (e.g. two assistant turns at the same
-	 * millisecond with `undefined` responseId) still count as DISTINCT.
+	 * appended to the current branch. Uses the current branch's memoized
+	 * persistence-key cache for the common missing-key case, and only walks the
+	 * branch to verify content when a key hit could be a rare collision.
 	 */
 	#sessionMessageAlreadyPersisted(message: AgentMessage): boolean {
 		const key = sessionMessagePersistenceKey(message);
 		if (key === undefined) return false;
+		const keys = this.#ensurePersistedMessageKeys();
+		if (!keys.has(key)) return false;
 		const branch = this.sessionManager.getBranch();
-		// Reverse walk: recently-appended entries are at the tail, so the common
-		// "is the message I just emitted already in the branch?" lookup short-
-		// circuits in O(1) hot, O(branch) cold. Cheap-key compare for every
-		// entry; content compare only when the cheap check matches, so the
-		// expensive `JSON.stringify(content)` path stays off the hot loop.
 		for (let index = branch.length - 1; index >= 0; index--) {
 			const entry = branch[index];
 			if (entry.type !== "message") continue;
@@ -3224,6 +3237,8 @@ export class AgentSession {
 			this.#rewoundToolResultIds.delete(message.toolCallId);
 		if (!skipPersistedRewindResult) {
 			this.sessionManager.appendMessage(message);
+			const key = sessionMessagePersistenceKey(message);
+			if (key && this.#persistedMessageKeys) this.#persistedMessageKeys.add(key);
 		}
 	}
 
@@ -8356,6 +8371,7 @@ export class AgentSession {
 			await this.sessionManager.flush();
 		}
 		await this.sessionManager.newSession(options);
+		this.#invalidatePersistedMessageKeys();
 		this.#clearCheckpointRuntimeState();
 		this.setTodoPhases([]);
 		this.#freshProviderSessionId = undefined;
@@ -9768,6 +9784,7 @@ export class AgentSession {
 			await this.sessionManager.flush();
 			this.#cancelOwnAsyncJobs();
 			await this.sessionManager.newSession(previousSessionFile ? { parentSession: previousSessionFile } : undefined);
+			this.#invalidatePersistedMessageKeys();
 			this.#clearCheckpointRuntimeState();
 			// agent.reset() clears the core steering/follow-up queues. Preserve any queued
 			// steers/follow-ups (RPC/SDK steer()/followUp() issued during the handoff, or a
@@ -10451,8 +10468,10 @@ export class AgentSession {
 		}
 		if (branchEntry.parentId === null) {
 			this.sessionManager.resetLeaf();
+			this.#invalidatePersistedMessageKeys();
 		} else {
 			this.sessionManager.branch(branchEntry.parentId);
+			this.#invalidatePersistedMessageKeys();
 		}
 	}
 
@@ -10518,6 +10537,7 @@ export class AgentSession {
 			});
 			this.sessionManager.branchWithSummary(null, report, { startedAt: checkpointState.startedAt });
 		}
+		this.#invalidatePersistedMessageKeys();
 		const rewoundAt = new Date().toISOString();
 		const details = { report, startedAt: checkpointState.startedAt, rewoundAt };
 		this.sessionManager.appendCustomMessageEntry(
@@ -14263,8 +14283,10 @@ export class AgentSession {
 
 		if (!selectedEntry.parentId) {
 			await this.sessionManager.newSession({ parentSession: previousSessionFile });
+			this.#invalidatePersistedMessageKeys();
 		} else {
 			this.sessionManager.createBranchedSession(selectedEntry.parentId);
+			this.#invalidatePersistedMessageKeys();
 		}
 		this.#rehydrateCheckpointRewindState();
 		this.#syncTodoPhasesFromBranch();
@@ -14353,6 +14375,7 @@ export class AgentSession {
 		this.#cancelOwnAsyncJobs();
 
 		this.sessionManager.createBranchedSession(leafId);
+		this.#invalidatePersistedMessageKeys();
 		this.#rehydrateCheckpointRewindState();
 		this.sessionManager.appendMessage({
 			role: "user",
@@ -14536,13 +14559,16 @@ export class AgentSession {
 		if (summaryText) {
 			// Create summary at target position (can be null for root)
 			const summaryId = this.sessionManager.branchWithSummary(newLeafId, summaryText, summaryDetails, fromExtension);
+			this.#invalidatePersistedMessageKeys();
 			summaryEntry = this.sessionManager.getEntry(summaryId) as BranchSummaryEntry;
 		} else if (newLeafId === null) {
 			// No summary, navigating to root - reset leaf
 			this.sessionManager.resetLeaf();
+			this.#invalidatePersistedMessageKeys();
 		} else {
 			// No summary, navigating to non-root
 			this.sessionManager.branch(newLeafId);
+			this.#invalidatePersistedMessageKeys();
 		}
 
 		// Update agent state — build display context to populate agent messages.
