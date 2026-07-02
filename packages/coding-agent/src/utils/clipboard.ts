@@ -17,10 +17,7 @@ import { logger } from "@oh-my-pi/pi-utils";
  *   exits with a non-zero status. Callers rely on this to fall through to the
  *   outer catch and return an empty string / empty list.
  */
-async function spawnCapture(
-	cmd: string[],
-	options: { input?: string; timeoutMs?: number } = {},
-): Promise<string> {
+async function spawnCapture(cmd: string[], options: { input?: string; timeoutMs?: number } = {}): Promise<string> {
 	const timeoutMs = options.timeoutMs ?? 2000;
 	const proc = Bun.spawn(cmd, {
 		stdout: "pipe",
