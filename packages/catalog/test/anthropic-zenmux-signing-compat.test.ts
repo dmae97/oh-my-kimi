@@ -38,7 +38,9 @@ describe("#4192 anthropic compat: zenmux is a signing endpoint", () => {
 	});
 
 	it("also excludes the free tier (anthropic/claude-sonnet-5-free)", () => {
-		const compat = buildAnthropicCompat(spec({ id: "anthropic/claude-sonnet-5-free", name: "Claude Sonnet 5 (Free)" }));
+		const compat = buildAnthropicCompat(
+			spec({ id: "anthropic/claude-sonnet-5-free", name: "Claude Sonnet 5 (Free)" }),
+		);
 		expect(compat.replayUnsignedThinking).toBe(false);
 	});
 
