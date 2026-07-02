@@ -18,7 +18,7 @@ import type { AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agen
 import type { TSchema } from "@oh-my-pi/pi-ai";
 import { Text } from "@oh-my-pi/pi-tui";
 import { parseFrontmatter as parseOmpFrontmatter } from "@oh-my-pi/pi-utils";
-import { Settings } from "../config/settings";
+import { type SettingPath, Settings } from "../config/settings";
 import { EditTool } from "../edit";
 import {
 	DEFAULT_MAX_BYTES,
@@ -45,6 +45,8 @@ const LEGACY_READ_ONLY_TOOL_NAMES = ["read", "grep", "find", "ls"] as const;
 type LegacyCodingToolName = (typeof LEGACY_CODING_TOOL_NAMES)[number];
 type LegacyRegistryToolName = LegacyCodingToolName | "grep" | "glob";
 type LegacyBuiltinToolDefinition = ToolDefinition & { [LEGACY_BUILTIN_TOOL_MARKER]: true };
+
+type LegacySettingOverrides = Partial<Record<SettingPath, unknown>>;
 
 interface LegacyThemeLike {
 	fg(color: string, text: string): string;
@@ -79,10 +81,18 @@ export interface BashToolOptions {
 }
 
 export interface ReadToolOptions {
+	/** Auto-resize large images; maps onto the `images.autoResize` setting. Default: true. */
 	autoResizeImages?: boolean;
 }
 
 export interface GrepToolOptions {
+	/**
+	 * Unsupported. The historical grep operations seam (isDirectory/readFile for
+	 * context lines) never delegated the search itself — ripgrep always ran
+	 * locally — and the built-in native grep tool exposes no filesystem seam at
+	 * all. Supplying operations throws at tool creation instead of silently
+	 * searching the local filesystem.
+	 */
 	operations?: unknown;
 }
 
@@ -123,7 +133,6 @@ const legacyGrepSchema = Type.Object({
 	ignoreCase: Type.Optional(Type.Boolean({ description: "Case-insensitive search" })),
 	literal: Type.Optional(Type.Boolean({ description: "Treat pattern as a literal string" })),
 	context: Type.Optional(Type.Number({ description: "Context lines" })),
-	limit: Type.Optional(Type.Number({ description: "Maximum matches" })),
 });
 
 const legacyFindSchema = Type.Object({
@@ -149,18 +158,22 @@ function markToolDefinition<TParams extends TSchema, TDetails>(
 	return tool;
 }
 
-function legacyToolSession(cwd: string): ToolSession {
+function legacyToolSession(cwd: string, settingOverrides?: LegacySettingOverrides): ToolSession {
 	return {
 		cwd,
 		hasUI: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => null,
-		settings: Settings.isolated(),
+		settings: Settings.isolated(settingOverrides),
 	};
 }
 
-function createRegistryTool(cwd: string, name: LegacyRegistryToolName): Tool {
-	const session = legacyToolSession(cwd);
+function createRegistryTool(
+	cwd: string,
+	name: LegacyRegistryToolName,
+	settingOverrides?: LegacySettingOverrides,
+): Tool {
+	const session = legacyToolSession(cwd, settingOverrides);
 	switch (name) {
 		case "bash":
 			return new BashTool(session);
@@ -337,10 +350,6 @@ async function executeLegacyBashOperations(
 	}
 }
 
-function createLegacyTool(_cwd: string, definition: ToolDefinition): ToolDefinition {
-	return definition;
-}
-
 /** Parse frontmatter using the historical Pi package-root helper. */
 export interface ParsedFrontmatter<T extends Record<string, unknown> = Record<string, unknown>> {
 	frontmatter: T;
@@ -368,8 +377,12 @@ export function defineTool<TParams extends TSchema = TSchema, TDetails = unknown
 }
 
 /** Create the legacy read tool definition. */
-export function createReadToolDefinition(cwd: string, _options?: ReadToolOptions): ToolDefinition {
-	const tool = createRegistryTool(cwd, "read");
+export function createReadToolDefinition(cwd: string, options?: ReadToolOptions): ToolDefinition {
+	const tool = createRegistryTool(
+		cwd,
+		"read",
+		options?.autoResizeImages === undefined ? undefined : { "images.autoResize": options.autoResizeImages },
+	);
 	return markToolDefinition({
 		name: "read",
 		label: "Read",
@@ -392,7 +405,7 @@ export function createReadToolDefinition(cwd: string, _options?: ReadToolOptions
 
 /** Create the legacy read tool. */
 export function createReadTool(cwd: string, options?: ReadToolOptions): ToolDefinition {
-	return createLegacyTool(cwd, createReadToolDefinition(cwd, options));
+	return createReadToolDefinition(cwd, options);
 }
 
 /** Create the legacy bash tool definition. */
@@ -441,11 +454,19 @@ export function createBashToolDefinition(cwd: string, options?: BashToolOptions)
 
 /** Create the legacy bash tool. */
 export function createBashTool(cwd: string, options?: BashToolOptions): ToolDefinition {
-	return createLegacyTool(cwd, createBashToolDefinition(cwd, options));
+	return createBashToolDefinition(cwd, options);
 }
 
 /** Create the legacy grep tool definition. */
-export function createGrepToolDefinition(cwd: string, _options?: GrepToolOptions): ToolDefinition {
+export function createGrepToolDefinition(cwd: string, options?: GrepToolOptions): ToolDefinition {
+	if (options?.operations) {
+		throw new Error(
+			"Legacy GrepToolOptions.operations is not supported: the built-in grep tool searches the local " +
+				"filesystem natively and exposes no pluggable filesystem seam (the historical seam only customized " +
+				"context-line reads; the search itself always ran locally). Register a custom grep tool via " +
+				"defineTool() instead of passing operations to createGrepTool()/createGrepToolDefinition().",
+		);
+	}
 	const tool = createRegistryTool(cwd, "grep");
 	return markToolDefinition({
 		name: "grep",
@@ -465,7 +486,17 @@ export function createGrepToolDefinition(cwd: string, _options?: GrepToolOptions
 			const pattern = booleanField(params, "literal") ? escapeRegexLiteral(rawPattern) : rawPattern;
 			const searchPath = stringField(params, "path") ?? ".";
 			const glob = stringField(params, "glob");
-			return tool.execute(
+			const context = numberField(params, "context");
+			// The new grep reads context from settings fixed at construction; build a
+			// per-call tool when the model passes an explicit legacy `context`.
+			const grepTool =
+				context === undefined
+					? tool
+					: createRegistryTool(cwd, "grep", {
+							"grep.contextBefore": Math.max(0, Math.floor(context)),
+							"grep.contextAfter": Math.max(0, Math.floor(context)),
+						});
+			return grepTool.execute(
 				toolCallId,
 				{
 					pattern,
@@ -481,7 +512,7 @@ export function createGrepToolDefinition(cwd: string, _options?: GrepToolOptions
 
 /** Create the legacy grep tool. */
 export function createGrepTool(cwd: string, options?: GrepToolOptions): ToolDefinition {
-	return createLegacyTool(cwd, createGrepToolDefinition(cwd, options));
+	return createGrepToolDefinition(cwd, options);
 }
 
 /** Create the legacy find tool definition. */
@@ -537,7 +568,7 @@ export function createFindToolDefinition(cwd: string, options?: FindToolOptions)
 
 /** Create the legacy find tool. */
 export function createFindTool(cwd: string, options?: FindToolOptions): ToolDefinition {
-	return createLegacyTool(cwd, createFindToolDefinition(cwd, options));
+	return createFindToolDefinition(cwd, options);
 }
 
 /** Create the legacy ls tool definition. */
@@ -582,7 +613,7 @@ export function createLsToolDefinition(cwd: string, options?: LsToolOptions): To
 
 /** Create the legacy ls tool. */
 export function createLsTool(cwd: string, options?: LsToolOptions): ToolDefinition {
-	return createLegacyTool(cwd, createLsToolDefinition(cwd, options));
+	return createLsToolDefinition(cwd, options);
 }
 
 /** Create legacy read, bash, edit, and write tools. */

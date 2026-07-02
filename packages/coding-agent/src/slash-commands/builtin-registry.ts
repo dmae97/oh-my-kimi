@@ -72,7 +72,6 @@ export interface TuiBuiltinSlashCommand extends BuiltinSlashCommand {
 function refreshStatusLine(ctx: InteractiveModeContext): void {
 	ctx.statusLine.invalidate();
 	ctx.ui.requestRender();
-	ctx.ui.requestRender();
 }
 
 /** `/fast status` label for the active model: "on" when its family is priority, else "off". */

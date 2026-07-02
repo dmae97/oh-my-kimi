@@ -2664,7 +2664,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		// plan-approved prompt is the source of the reference injection.
 		this.session.markPlanReferenceSent();
 		const planModePrompt = prompt.render(planModeApprovedPrompt, {
-			planContent,
 			planFilePath: options.planFilePath,
 			contextPreserved: options.preserveContext === true,
 		});

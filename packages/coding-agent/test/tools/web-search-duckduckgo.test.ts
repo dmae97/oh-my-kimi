@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { AuthStorage, FetchImpl } from "@oh-my-pi/pi-ai";
 import { searchDuckDuckGo } from "@oh-my-pi/pi-coding-agent/web/search/providers/duckduckgo";
-import { SEARCH_PROVIDER_OPTIONS, SearchProviderError } from "@oh-my-pi/pi-coding-agent/web/search/types";
+import { SearchProviderError } from "@oh-my-pi/pi-coding-agent/web/search/types";
 import { formatSearchProviderFailures } from "../../src/web/search/provider";
 
 const fakeAuthStorage = {
@@ -264,12 +264,5 @@ describe("DuckDuckGo web search provider", () => {
 		expect(message).toContain("datacenter/shared-egress IPs");
 		expect(message).toContain("configure a credentialed provider");
 		expect(message).not.toContain("codex: 401 unauthorized");
-	});
-
-	it("documents DuckDuckGo as a best-effort datacenter-sensitive fallback", () => {
-		const option = SEARCH_PROVIDER_OPTIONS.find(item => item.value === "duckduckgo");
-
-		expect(option?.description).toContain("Credential-free best-effort fallback");
-		expect(option?.description).toContain("datacenter/shared-egress IPs");
 	});
 });

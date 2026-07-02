@@ -124,6 +124,11 @@ export const AUTO_THINKING = "auto" as const;
 /** A thinking selector as configured by the user — a concrete level or `auto`. */
 export type ConfiguredThinkingLevel = ThinkingLevel | typeof AUTO_THINKING;
 
+/** Maps the session-level `auto` sentinel to `undefined`; concrete levels pass through. */
+export function concreteThinkingLevel(level: ConfiguredThinkingLevel | undefined): ThinkingLevel | undefined {
+	return level === AUTO_THINKING ? undefined : level;
+}
+
 /** Metadata used to render the `auto` selector value alongside concrete levels. */
 export interface ConfiguredThinkingLevelMetadata {
 	value: ConfiguredThinkingLevel;

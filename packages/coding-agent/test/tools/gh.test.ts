@@ -855,6 +855,8 @@ describe("github tool", () => {
 			expect(runGit(remoteFixture.repoRoot, ["remote", "get-url", "forksrc"])).toBe(remoteFixture.forkBare);
 		});
 		it("does not depend on localized git remote-add stderr for existing remotes", async () => {
+			// The shim is a bash script resolved via `which`; neither exists on Windows.
+			if (process.platform === "win32") return;
 			const originalPath = process.env.PATH;
 			const fakeBin = await fs.mkdtemp(path.join(os.tmpdir(), "omp-fake-git-"));
 			const realGitResult = Bun.spawnSync(["which", "git"], { stdout: "pipe", stderr: "pipe" });

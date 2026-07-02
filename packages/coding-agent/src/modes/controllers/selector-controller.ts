@@ -157,7 +157,6 @@ export class SelectorController {
 						const result = await previewTheme(themeName);
 						if (result.success) {
 							this.ctx.statusLine.invalidate();
-							this.ctx.ui.requestRender();
 							this.ctx.ui.invalidate();
 							this.ctx.ui.requestRender();
 						}

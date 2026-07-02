@@ -32,6 +32,7 @@ import MODEL_PRIO from "../priority.json" with { type: "json" };
 import {
 	AUTO_THINKING,
 	type ConfiguredThinkingLevel,
+	concreteThinkingLevel,
 	parseThinkingLevel,
 	resolveThinkingLevelForModel,
 } from "../thinking";
@@ -136,12 +137,9 @@ function resolveGlobScopePattern(
 	// Coerce the `auto` sentinel to a concrete-only view so scope callers stay
 	// typed on `ThinkingLevel` and `enabledModels: [\"openai/*:auto\"]` doesn't
 	// pin a stray per-model level.
-	const concrete = (level: ConfiguredThinkingLevel | undefined): ThinkingLevel | undefined =>
-		level === AUTO_THINKING ? undefined : level;
-
 	const strictSuffix = splitThinkingSuffix(pattern);
 	if (strictSuffix.level !== undefined) {
-		const thinkingLevel = concrete(strictSuffix.level);
+		const thinkingLevel = concreteThinkingLevel(strictSuffix.level);
 		return {
 			models: matchingGlobModels(strictSuffix.base, availableModels),
 			thinkingLevel,
@@ -155,7 +153,7 @@ function resolveGlobScopePattern(
 		if (literalMatches.length > 0) {
 			return { models: literalMatches, thinkingLevel: undefined, explicitThinkingLevel: false };
 		}
-		const thinkingLevel = concrete(maxSuffix.level);
+		const thinkingLevel = concreteThinkingLevel(maxSuffix.level);
 		return {
 			models: matchingGlobModels(maxSuffix.base, availableModels),
 			thinkingLevel,
