@@ -10117,6 +10117,48 @@ export class AgentSession {
 			}
 			return COMPACTION_CHECK_NONE;
 		}
+		// A context promotion can land while the failing call is already in
+		// flight (or on a run whose loop predates the switch): the overflow
+		// error then arrives stamped with the pre-promotion model while
+		// `this.model` is already the promoted target. The sameModel guard
+		// above deliberately ignores stale foreign-model errors, but this
+		// state is not stale — recover exactly like the promotion path:
+		// drop the dead turn and retry on the already-promoted model. Gated
+		// narrowly on "current model IS the failed model's promotion target
+		// with a strictly larger window" so genuinely stale errors from
+		// old user-switched models keep surfacing untouched.
+		if (
+			!sameModel &&
+			autoContinue &&
+			!errorIsFromBeforeCompaction &&
+			assistantMessage.stopReason === "error" &&
+			this.model &&
+			contextWindow > 0 &&
+			this.settings.getGroup("contextPromotion").enabled
+		) {
+			const failedModel = this.#modelRegistry.find(assistantMessage.provider, assistantMessage.model);
+			const failedWindow = failedModel?.contextWindow ?? 0;
+			const promotionTarget = failedModel
+				? this.#resolveContextPromotionConfiguredTarget(failedModel, this.#modelRegistry.getAvailable())
+				: undefined;
+			if (
+				failedModel &&
+				failedWindow > 0 &&
+				contextWindow > failedWindow &&
+				promotionTarget &&
+				modelsAreEqual(promotionTarget, this.model) &&
+				AIError.isContextOverflow(assistantMessage, failedWindow)
+			) {
+				this.#removeAssistantMessageFromActiveContext(assistantMessage);
+				await this.#dropPersistedAssistantTurn(assistantMessage);
+				logger.debug("Overflow on pre-promotion model; retrying on promoted model", {
+					failed: `${assistantMessage.provider}/${assistantMessage.model}`,
+					current: `${this.model.provider}/${this.model.id}`,
+				});
+				this.#scheduleAgentContinue({ delayMs: 100, generation });
+				return COMPACTION_CHECK_CONTINUATION;
+			}
+		}
 
 		// Case 3: Output-side incomplete — `response.incomplete` from OpenAI Responses
 		// (and Codex) maps to stopReason === "length". The model burned its

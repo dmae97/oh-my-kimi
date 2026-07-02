@@ -449,10 +449,7 @@ function buildScopedWeeklyUsageLimits(entries: readonly ParsedApiLimitEntry[]): 
 	return limits;
 }
 
-export function parseClaudeRateLimitHeaders(
-	headers: Record<string, string>,
-	now = Date.now(),
-): UsageReport | null {
+export function parseClaudeRateLimitHeaders(headers: Record<string, string>, now = Date.now()): UsageReport | null {
 	const fiveHour = parseUnifiedWindow(headers, "5h");
 	const sevenDay = parseUnifiedWindow(headers, "7d");
 	const modelScopedSevenDay = parseUnifiedWindow(headers, "7d_oi");

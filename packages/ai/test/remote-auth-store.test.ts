@@ -9,8 +9,8 @@ import {
 	RemoteAuthCredentialStore,
 	startAuthBroker,
 } from "@oh-my-pi/pi-ai/auth-broker";
-import type { UsageLimit, UsageReport } from "@oh-my-pi/pi-ai/usage";
 import * as oauthUtils from "@oh-my-pi/pi-ai/registry/oauth";
+import type { UsageLimit, UsageReport } from "@oh-my-pi/pi-ai/usage";
 import { removeWithRetries } from "../../utils/src/temp";
 
 function requireLimit(report: UsageReport, id: string): UsageLimit {

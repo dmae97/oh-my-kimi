@@ -1131,7 +1131,7 @@ async function emitHarmonyAudit(
 		createHarmonyAuditEvent({
 			action,
 			detection: interruption.detection,
-			model: config.model,
+			model: config.getModel?.() ?? config.model,
 			retryN,
 			removed: interruption.removed,
 		}),
@@ -1155,6 +1155,11 @@ async function streamAssistantResponse(
 	hostToolChoice?: ToolChoice,
 	forcedToolChoice?: ToolChoice,
 ): Promise<AssistantMessage> {
+	// Re-resolve the model per provider call (like `getReasoning`): mid-run
+	// model switches — context promotion, retry fallback — must apply on the
+	// next call instead of the run silently finishing on the stale model
+	// captured at run start.
+	const model = config.getModel?.() ?? config.model;
 	// Apply context transform if configured (AgentMessage[] → AgentMessage[])
 	let messages = context.messages;
 	if (config.transformContext) {
@@ -1163,10 +1168,10 @@ async function streamAssistantResponse(
 
 	// Convert to LLM-compatible messages (AgentMessage[] → Message[])
 	const llmMessages = await config.convertToLlm(messages);
-	const normalizedMessages = normalizeMessagesForProvider(llmMessages, config.model);
+	const normalizedMessages = normalizeMessagesForProvider(llmMessages, model);
 
 	const ownedDialect: Dialect | undefined = config.dialect ?? resolveOwnedDialectFromEnv(Bun.env.PI_DIALECT);
-	const exampleDialect = ownedDialect ?? preferredDialect(config.model.id);
+	const exampleDialect = ownedDialect ?? preferredDialect(model.id);
 	// Owned/in-band dialects carry the catalog in the prompt as text and send no
 	// native `tools`, so description pruning only applies to native tool calling.
 	const pruneToolDescriptions = !!config.pruneToolDescriptions && !ownedDialect;
@@ -1188,7 +1193,7 @@ async function streamAssistantResponse(
 		};
 	}
 	if (config.transformProviderContext) {
-		llmContext = await config.transformProviderContext(llmContext, config.model);
+		llmContext = await config.transformProviderContext(llmContext, model);
 	}
 
 	// Owned tool calling: take tool calls away from the provider and run them
@@ -1212,8 +1217,8 @@ async function streamAssistantResponse(
 	// `getServiceTier` is authoritative when present (replaces the static tier
 	// for both the wire request and telemetry), so callers can scope priority
 	// per model without touching the shared session `serviceTier`.
-	const effectiveServiceTier = config.getServiceTier ? config.getServiceTier(config.model) : config.serviceTier;
-	const harmonyMitigationEnabled = isHarmonyLeakMitigationTarget(config.model);
+	const effectiveServiceTier = config.getServiceTier ? config.getServiceTier(model) : config.serviceTier;
+	const harmonyMitigationEnabled = isHarmonyLeakMitigationTarget(model);
 	const harmonyAbortController = harmonyMitigationEnabled ? new AbortController() : undefined;
 	const requestSignal = harmonyAbortController
 		? signal
@@ -1235,13 +1240,13 @@ async function streamAssistantResponse(
 			: providerAbortSignals.length === 1
 				? providerAbortSignals[0]!
 				: AbortSignal.any(providerAbortSignals);
-	const requestApiKey = (config.getApiKey ? await config.getApiKey(config.model) : undefined) ?? config.apiKey;
+	const requestApiKey = (config.getApiKey ? await config.getApiKey(model) : undefined) ?? config.apiKey;
 	const resolvedApiKey = await resolveApiKeyOnce(requestApiKey, finalRequestSignal);
 	const apiKey = isApiKeyResolver(requestApiKey) ? seedApiKeyResolver(resolvedApiKey, requestApiKey) : requestApiKey;
 
 	// Re-resolve metadata after credential selection so the per-request value
 	// reflects the credential actually used, not the snapshot from AgentLoopConfig construction.
-	const resolvedMetadata = config.metadataResolver ? config.metadataResolver(config.model.provider) : config.metadata;
+	const resolvedMetadata = config.metadataResolver ? config.metadataResolver(model.provider) : config.metadata;
 	const effectiveTemperature =
 		harmonyRetryAttempt > 0 && config.temperature !== undefined ? config.temperature + 0.05 : config.temperature;
 	// Owned tool calling sends no native tools, so any tool_choice would error.
@@ -1254,7 +1259,7 @@ async function streamAssistantResponse(
 
 	const chatStepNumber = stepCounter.count;
 	stepCounter.count += 1;
-	const chatSpan = startChatSpan(telemetry, config.model, {
+	const chatSpan = startChatSpan(telemetry, model, {
 		parent: invokeAgentSpan,
 		stepNumber: chatStepNumber,
 		request: {
@@ -1287,13 +1292,13 @@ async function streamAssistantResponse(
 			stepNumber: chatStepNumber,
 			serviceTier: effectiveServiceTier,
 			responseHeaders: capturedHeaders,
-			baseUrl: config.model.baseUrl,
+			baseUrl: model.baseUrl,
 		});
 	};
 
 	try {
 		return await runInActiveSpan(chatSpan, async () => {
-			let response = await streamFunction(config.model, llmContext, {
+			let response = await streamFunction(model, llmContext, {
 				...config,
 				apiKey,
 				metadata: resolvedMetadata,
@@ -1513,7 +1518,7 @@ async function streamAssistantResponse(
 		failChatSpan(telemetry, chatSpan, {
 			errorObject: err,
 			responseHeaders: capturedHeaders,
-			baseUrl: config.model.baseUrl,
+			baseUrl: model.baseUrl,
 		});
 		throw err;
 	}
@@ -1614,6 +1619,7 @@ function emitAbortedAssistantMessage(
 	stream: EventStream<AgentEvent, AgentMessage[]>,
 	requestSignal: AbortSignal | undefined,
 ): AssistantMessage {
+	const model = config.getModel?.() ?? config.model;
 	const errorMessage = abortReasonText(requestSignal);
 	const errorId =
 		errorMessage === "Request was aborted"
@@ -1624,9 +1630,9 @@ function emitAbortedAssistantMessage(
 		: {
 				role: "assistant",
 				content: [],
-				api: config.model.api,
-				provider: config.model.provider,
-				model: config.model.id,
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
 				usage: {
 					input: 0,
 					output: 0,
