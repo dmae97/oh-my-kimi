@@ -25,11 +25,10 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
  * The signature policy is a second axis: official Anthropic cryptographically
  * binds signatures to its key+session+model, so cross-model signatures must
  * be stripped (and matching redacted siblings dropped) whenever either side
- * of the replay is official Anthropic. Third-party endpoints (Z.AI, DeepSeek,
- * custom anthropic-messages providers) treat signatures as opaque
- * continuation hints they pass through unchanged, so 3p ↔ 3p replays
- * preserve them as-is to keep the reasoning chain signed for the next
- * turn (#2265).
+ * of the replay is official Anthropic. Unsigned-replay third-party fixtures
+ * treat signatures as opaque continuation hints they pass through unchanged,
+ * so 3p ↔ 3p replays preserve them as-is to keep the reasoning chain signed
+ * for the next turn (#2265).
  */
 function makeAnthropicModel(overrides: Partial<ModelSpec<"anthropic-messages">> = {}): Model<"anthropic-messages"> {
 	return buildModel({
@@ -43,6 +42,7 @@ function makeAnthropicModel(overrides: Partial<ModelSpec<"anthropic-messages">> 
 		maxTokens: 8_192,
 		contextWindow: 200_000,
 		reasoning: true,
+		compat: { replayUnsignedThinking: true },
 		...overrides,
 	} as ModelSpec<"anthropic-messages">);
 }
@@ -230,6 +230,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 			provider: "anthropic",
 			id: "claude-sonnet-4-6",
 			baseUrl: "https://api.anthropic.com",
+			compat: { replayUnsignedThinking: false },
 		});
 		const messages: Message[] = [
 			makeUser("Summarize README"),
@@ -275,6 +276,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 			id: "claude-fable-5",
 			name: "Claude Fable 5",
 			baseUrl: "https://api.anthropic.com",
+			compat: { replayUnsignedThinking: false },
 		});
 		const reasoning = "Need to preserve the plan while switching models.";
 		const messages: Message[] = [
@@ -323,6 +325,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 				id: modelCase.id,
 				name: modelCase.name,
 				baseUrl: "https://api.anthropic.com",
+				compat: { replayUnsignedThinking: false },
 			});
 			const reasoning = `Need to inspect the layout before editing with ${modelCase.id}.`;
 			const toolCallId = `toolu_${modelCase.id.replaceAll("-", "_")}`;
