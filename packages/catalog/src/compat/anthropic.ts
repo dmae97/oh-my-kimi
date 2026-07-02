@@ -8,6 +8,8 @@ import { modelMatchesHost } from "../hosts";
 import {
 	hasOpus47ApiRestrictions,
 	isAnthropicFableOrMythosModel,
+	isAnthropicNamespacedModelId,
+	isClaudeModelId,
 	supportsMidConversationSystemMessages,
 } from "../identity/family";
 import type { ModelSpec, ResolvedAnthropicCompat } from "../types";
@@ -34,6 +36,17 @@ const KIMI_K27_CODE_MODEL_PATTERN = /(?:^|\/)kimi[-._]?k2(?:[._-]?|p)7[-._]?code
 function matchesKimiK27CodeFamily(spec: ModelSpec<"anthropic-messages">): boolean {
 	if (KIMI_K27_CODE_MODEL_PATTERN.test(spec.id)) return true;
 	return spec.id === "kimi-for-coding" && /k2\.?7 code/i.test(spec.name ?? "");
+}
+
+const CLAUDE_MODEL_TEXT_PATTERN = /\bclaude\b/i;
+
+function isLikelyAnthropicSigningModel(spec: ModelSpec<"anthropic-messages">): boolean {
+	return (
+		isClaudeModelId(spec.id) ||
+		isAnthropicNamespacedModelId(spec.id) ||
+		CLAUDE_MODEL_TEXT_PATTERN.test(spec.id) ||
+		CLAUDE_MODEL_TEXT_PATTERN.test(spec.name ?? "")
+	);
 }
 
 /** Build the resolved anthropic-messages compat record for a model spec. */
@@ -75,24 +88,27 @@ export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): Res
 		requiresThinkingEnabled,
 		// Official Anthropic and Anthropic-compatible signing proxies enforce
 		// signature-based thinking-chain integrity, so unsigned thinking blocks
-		// must stay text there. Generic `anthropic-messages` proxies default to
-		// that signed-safe behavior (#4297): sending `signature: ""` to a signing
-		// endpoint 400s with `Invalid signature in thinking`, while demoting the
-		// block to text is always accepted.
+		// must stay text there. Generic opaque third-party
+		// `anthropic-messages` reasoning endpoints keep the historical native
+		// replay default (#2005); likely Claude/Anthropic proxy configs default
+		// signed-safe (#4297), because sending `signature: ""` to a signing
+		// endpoint 400s with `Invalid signature in thinking`.
 		//
 		// Known non-signing Anthropic-messages hosts keep the native replay path
-		// so the reasoning chain survives continuation (#2005): Z.AI, DeepSeek
-		// family, Umans (`api.code.umans.ai`) and MiniMax's Anthropic routes
+		// regardless of model naming: Z.AI, DeepSeek family, Umans
+		// (`api.code.umans.ai`) and MiniMax's Anthropic routes
 		// (`api.minimax.io/anthropic`, `api.minimaxi.com/anthropic`). Other
-		// non-signing custom gateways opt in via
-		// `compat.replayUnsignedThinking: true`.
+		// endpoints can still override explicitly via
+		// `compat.replayUnsignedThinking`.
 		replayUnsignedThinking:
+			!official &&
 			!isCopilot &&
 			!isZenmux &&
 			(isZai ||
 				modelMatchesHost(spec, "deepseekFamily") ||
 				modelMatchesHost(spec, "umans") ||
-				modelMatchesHost(spec, "minimax")),
+				modelMatchesHost(spec, "minimax") ||
+				(Boolean(spec.reasoning) && !isLikelyAnthropicSigningModel(spec))),
 		escapeBuiltinToolNames: modelMatchesHost(spec, "umans"),
 	};
 	applyCompatOverrides(compat, spec.compat);

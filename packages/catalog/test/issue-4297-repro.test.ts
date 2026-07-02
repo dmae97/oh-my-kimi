@@ -23,6 +23,26 @@ describe("#4297 custom anthropic-messages provider signing default", () => {
 		expect(buildAnthropicCompat(spec()).replayUnsignedThinking).toBe(false);
 	});
 
+	it("demotes unsigned thinking for custom Cloudflare Claude proxy providers by default", () => {
+		expect(
+			buildAnthropicCompat(
+				spec({
+					id: "cf-anthropic/claude-opus-4-8",
+					name: "Claude Opus 4.8",
+					provider: "cf-anthropic",
+					baseUrl: "https://opencode.cloudflare.dev/anthropic",
+				}),
+			).replayUnsignedThinking,
+		).toBe(false);
+	});
+
+	it("keeps native unsigned-thinking replay for opaque custom reasoning endpoints by default", () => {
+		expect(
+			buildAnthropicCompat(spec({ id: "reasoning-model", name: "Reasoning Anthropic-Compatible Model" }))
+				.replayUnsignedThinking,
+		).toBe(true);
+	});
+
 	it("allows non-signing custom providers to opt into replaying unsigned thinking", () => {
 		expect(buildAnthropicCompat(spec({ compat: { replayUnsignedThinking: true } })).replayUnsignedThinking).toBe(
 			true,
