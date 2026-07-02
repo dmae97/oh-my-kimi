@@ -139,7 +139,7 @@ describe("OpenAI tool strict mode", () => {
 		expect(payload.tools?.[0]?.function?.strict).toBeUndefined();
 	});
 
-	it("keeps loose yield schemas non-strict for openai-completions", async () => {
+	it("preserves explicit strict:false on the wire for openai-completions", async () => {
 		const model: Model<"openai-completions"> = {
 			...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
 			api: "openai-completions",
@@ -152,8 +152,28 @@ describe("OpenAI tool strict mode", () => {
 		};
 		const fn = payload.tools?.[0]?.function;
 
-		expect(fn?.strict).toBeUndefined();
+		// #4336: `strict: false` from the tool author is semantically distinct from
+		// omitted `strict` on some backends and MUST survive to the wire.
+		expect(fn?.strict).toBe(false);
 		expect(getYieldDataSchema(fn?.parameters).additionalProperties).toBe(true);
+	});
+
+	it("omits explicit strict:false for openai-completions when compat disables the strict field", async () => {
+		const model: Model<"openai-completions"> = buildModel({
+			...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
+			api: "openai-completions",
+			compat: { supportsStrictMode: false } satisfies OpenAICompat,
+		} as ModelSpec<"openai-completions">);
+
+		const payload = (await captureCompletionsPayload(model, {
+			...testContext,
+			tools: [looseYieldTool],
+		})) as {
+			tools?: Array<{ function?: { strict?: boolean } }>;
+		};
+		// `supportsStrictMode: false` providers reject the `strict` key entirely,
+		// so the explicit `false` MUST still be suppressed.
+		expect(payload.tools?.[0]?.function?.strict).toBeUndefined();
 	});
 
 	it("sends strict=true for openai-completions tool schemas on GitHub Copilot", async () => {
@@ -206,6 +226,26 @@ describe("OpenAI tool strict mode", () => {
 		const payload = (await captureCompletionsPayload(model, context)) as {
 			tools?: Array<{ function?: { strict?: boolean } }>;
 		};
+		expect(payload.tools).toHaveLength(2);
+		expect(payload.tools?.every(tool => tool.function?.strict === undefined)).toBe(true);
+	});
+
+	it("keeps strict uniformly absent when all_strict collapses on an explicit strict:false tool", async () => {
+		const model: Model<"openai-completions"> = buildModel({
+			...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
+			api: "openai-completions",
+			compat: { toolStrictMode: "all_strict" } satisfies OpenAICompat,
+		} as ModelSpec<"openai-completions">);
+		const payload = (await captureCompletionsPayload(model, {
+			...testContext,
+			tools: [testTool, looseYieldTool],
+		})) as {
+			tools?: Array<{ function?: { strict?: boolean } }>;
+		};
+
+		// #4336: preserving explicit `false` MUST NOT leak into the all_strict →
+		// none collapse — providers that reject mixed strict values still get a
+		// uniformly absent flag.
 		expect(payload.tools).toHaveLength(2);
 		expect(payload.tools?.every(tool => tool.function?.strict === undefined)).toBe(true);
 	});
@@ -601,7 +641,7 @@ describe("OpenAI tool strict mode", () => {
 		expect(payload.tools?.[0]?.strict).toBe(true);
 	});
 
-	it("keeps loose yield schemas non-strict for openai-responses", async () => {
+	it("preserves explicit strict:false on the wire for openai-responses", async () => {
 		const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
 		const payload = (await captureResponsesPayload(model, {
 			...testContext,
@@ -611,7 +651,9 @@ describe("OpenAI tool strict mode", () => {
 		};
 		const tool = payload.tools?.[0];
 
-		expect(tool?.strict).toBeUndefined();
+		// #4336: authors who opt out via `tool.strict === false` see the flag land
+		// on the wire so backends that distinguish it from omission behave correctly.
+		expect(tool?.strict).toBe(false);
 		expect(getYieldDataSchema(tool?.parameters).additionalProperties).toBe(true);
 	});
 

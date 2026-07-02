@@ -987,7 +987,11 @@ export function convertTools(
 			name: tool.name,
 			description: tool.description || "",
 			parameters,
-			...(effectiveStrict && { strict: true }),
+			// `strict: false` and an omitted `strict` are NOT equivalent for every
+			// OpenAI-compat backend — some over-fill optional args when the flag is
+			// absent (#4336). Preserve the author's explicit `false`; only emit
+			// `true` when strict enforcement actually succeeded.
+			...(effectiveStrict ? { strict: true } : tool.strict === false ? { strict: false } : {}),
 		} as OpenAITool);
 	}
 	return out;

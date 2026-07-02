@@ -3311,7 +3311,10 @@ export function convertOpenAICodexResponsesTools(
 			name: tool.name,
 			description: tool.description || "",
 			parameters,
-			...(effectiveStrict && { strict: true }),
+			// See openai-responses.ts::convertTools — explicit `strict: false` is
+			// preserved on the wire because some backends distinguish it from
+			// omitted (#4336). `strict: true` still requires enforcement success.
+			...(effectiveStrict ? { strict: true } : tool.strict === false ? { strict: false } : {}),
 		};
 	});
 }

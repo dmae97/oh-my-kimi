@@ -128,6 +128,53 @@ describe("openai-codex tool schemas", () => {
 			},
 		});
 	});
+
+	it("preserves explicit strict:false on the wire (#4336)", () => {
+		const tools: Tool[] = [
+			{
+				name: "search",
+				description: "Search",
+				strict: false,
+				parameters: {
+					type: "object",
+					additionalProperties: false,
+					properties: {
+						name: { type: "string" },
+						target: { type: "string" },
+					},
+					required: ["name"],
+				},
+			},
+		];
+
+		const converted = convertOpenAICodexResponsesTools(tools, createCodexModel("gpt-5.5"));
+
+		// Author-set `strict: false` MUST survive to the wire so backends that
+		// distinguish it from an omitted flag stop over-filling optional args.
+		expect(converted[0]).toMatchObject({ type: "function", name: "search", strict: false });
+	});
+
+	it("omits strict when the tool leaves it unset (#4336)", () => {
+		const tools: Tool[] = [
+			{
+				name: "search",
+				description: "Search",
+				parameters: {
+					type: "object",
+					additionalProperties: false,
+					properties: { name: { type: "string" } },
+					required: ["name"],
+				},
+			},
+		];
+
+		const converted = convertOpenAICodexResponsesTools(tools, createCodexModel("gpt-5.5"));
+		const payload = converted[0] as { strict?: boolean };
+
+		// Codex responses only enforces strict when the tool opts in; leaving
+		// `strict` unset MUST NOT synthesize the field either way.
+		expect(payload.strict).toBeUndefined();
+	});
 });
 
 describe("openai-codex request transformer", () => {

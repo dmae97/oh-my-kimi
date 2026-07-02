@@ -53,6 +53,7 @@ When strict mode is requested (`strict=true` at call site), the schema MUST sati
 
 6. **Provider payload strict flag must match effective strictness**
    - Callers MUST send `strict: true` only if enforcement succeeded (`effectiveStrict === true`).
+   - Callers MUST preserve an author's explicit `tool.strict === false` on the wire so that `strict: false` and omitted `strict` remain distinguishable — some OpenAI-compat backends over-fill optional fields when the flag is absent but respect it when set to `false` (#4336). Exception: the `openai-completions` path emits explicit `false` only in `toolStrictMode === "mixed"` with `compat.supportsStrictMode !== false`, because the `all_strict → none` collapse and providers that reject the `strict` key rely on uniform absence.
 
 ---
 
