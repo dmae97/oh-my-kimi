@@ -84,6 +84,9 @@
 - Fixed `/shake` and mid-stream chat rebuilds erasing active LLM output.
 - Fixed Tavily web search to retry without recency filters if no content is returned.
 - Fixed user-configured LiteLLM discovery providers keeping stale reseller display-name suffixes for up to 24 hours after upgrade by invalidating the warm model cache.
+### Fixed
+
+- Fixed live tool preview spinners staying pinned to their first frame for `eval` and shell-style renderers. ([#4170](https://github.com/can1357/oh-my-pi/issues/4170))
 
 ## [16.2.13] - 2026-07-01
 

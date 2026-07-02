@@ -416,6 +416,7 @@ function renderWatchCall(args: GithubToolRenderArgs, options: RenderResultOption
 }
 
 export const githubToolRenderer = {
+	animatedPendingPreview: true,
 	renderCall(args: GithubToolRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 		const op = typeof args.op === "string" && args.op.trim().length > 0 ? args.op.trim() : undefined;
 		if (op === "run_watch") {

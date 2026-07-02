@@ -334,6 +334,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		// so keep their horizontal padding even when the user enables tight layout.
 		this.setIgnoreTight(true);
 
+		this.#updateSpinnerAnimation();
 		this.#updateDisplay();
 		this.#schedulePreviewDiff();
 	}
@@ -546,21 +547,44 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	}
 
 	/**
-	 * Start or stop spinner animation for result states that visibly tick.
+	 * Start or stop spinner animation for live states that visibly tick.
 	 */
 	#updateSpinnerAnimation(): void {
-		// Spinner for: task tool with partial result, edit/write while args
-		// streaming, or a still-running job poll. Todo snapshots stay live for
-		// displacement but should remain visually static.
+		// Live partial tool blocks stay repaintable until a terminal result seals
+		// them. Todo snapshots and detached background tool progress are deliberate
+		// static exceptions because their rows can be superseded or committed to
+		// scrollback while later updates continue elsewhere.
 		const isStreamingArgs = !this.#argsComplete && (isEditLikeToolName(this.#toolName) || this.#toolName === "write");
 		const isBackgroundAsyncRunning =
 			(this.#result?.details as { async?: { state?: string } } | undefined)?.async?.state === "running";
-		const isBackgroundAsyncTask = this.#toolName === "task" && isBackgroundAsyncRunning;
-		const isPartialTask = this.#isPartial && this.#toolName === "task" && !isBackgroundAsyncTask;
-		// Detached async task progress rows are static now; progress snapshots
-		// still call #maybeFreezeBackgroundTask before applying so rows settle
-		// once the block leaves the live region.
-		const needsSpinner = isStreamingArgs || isPartialTask || this.#displaceableByToolName === "job";
+		const renderer = toolRenderers[this.#toolName] as
+			| {
+					animatedPendingPreview?: boolean | ((args: unknown) => boolean);
+					animatedPartialResult?: boolean | ((args: unknown) => boolean);
+			  }
+			| undefined;
+		const pendingAnimation = renderer?.animatedPendingPreview;
+		const partialAnimation = renderer?.animatedPartialResult;
+		const pendingCallConsumesSpinner =
+			this.#result === undefined &&
+			(renderer === undefined
+				? !this.#tool?.renderCall
+				: typeof pendingAnimation === "function"
+					? pendingAnimation(this.#args)
+					: pendingAnimation === true);
+		const partialResultConsumesSpinner =
+			this.#result !== undefined &&
+			(renderer === undefined
+				? !this.#tool?.renderResult
+				: typeof partialAnimation === "function"
+					? partialAnimation(this.#args)
+					: partialAnimation === true);
+		const isLivePartialTool =
+			this.#isPartial &&
+			this.#toolName !== "todo" &&
+			!isBackgroundAsyncRunning &&
+			(pendingCallConsumesSpinner || partialResultConsumesSpinner);
+		const needsSpinner = isStreamingArgs || isLivePartialTool || this.#displaceableByToolName === "job";
 		if (needsSpinner && !this.#spinnerInterval) {
 			const frameCount = theme.spinnerFrames.length;
 			const frame = sharedSpinnerFrame(frameCount);
@@ -1172,8 +1196,14 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	 */
 	#formatToolExecution(contentWidth: number): string {
 		const lines: string[] = [];
-		const icon = this.#isPartial ? "pending" : this.#result?.isError ? "error" : "done";
-		lines.push(renderStatusLine({ icon, title: this.#toolLabel }, theme));
+		const icon = this.#isPartial
+			? this.#spinnerFrame !== undefined
+				? "running"
+				: "pending"
+			: this.#result?.isError
+				? "error"
+				: "done";
+		lines.push(renderStatusLine({ icon, spinnerFrame: this.#spinnerFrame, title: this.#toolLabel }, theme));
 
 		const argsObject = this.#args && typeof this.#args === "object" ? (this.#args as Record<string, unknown>) : null;
 		if (!this.#expanded && argsObject && Object.keys(argsObject).length > 0) {

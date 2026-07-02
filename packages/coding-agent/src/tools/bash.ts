@@ -1151,22 +1151,30 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 		renderCall(args: TArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 			const renderArgs = toBashRenderArgs(args, config);
 			const cmdLines = formatBashCommandLines(renderArgs, uiTheme);
-			const header =
-				config.showHeader === false
-					? undefined
-					: renderStatusLine({ icon: "pending", title: config.resolveTitle(args, options) }, uiTheme);
 			const outputBlock = new CachedOutputBlock();
 			return markFramedBlockComponent({
-				render: (width: number): readonly string[] =>
-					outputBlock.render(
+				render: (width: number): readonly string[] => {
+					const header =
+						config.showHeader === false
+							? undefined
+							: renderStatusLine(
+									{
+										icon: options.spinnerFrame !== undefined ? "running" : "pending",
+										spinnerFrame: options.spinnerFrame,
+										title: config.resolveTitle(args, options),
+									},
+									uiTheme,
+								);
+					return outputBlock.render(
 						{
 							header,
-							state: "pending",
+							state: options.spinnerFrame !== undefined ? "running" : "pending",
 							sections: [{ lines: capPreviewLines(cmdLines, uiTheme, { expanded: options.expanded }) }],
 							width,
 						},
 						uiTheme,
-					),
+					);
+				},
 				invalidate: () => {
 					outputBlock.invalidate();
 				},
