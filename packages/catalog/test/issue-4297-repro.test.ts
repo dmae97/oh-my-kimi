@@ -45,27 +45,29 @@ describe("#4297 anthropic-messages replay-unsigned-thinking classification", () 
 	});
 
 	it("demotes unsigned thinking on the Cloudflare AI Gateway `/anthropic` route (known signing host)", () => {
-		expect(
-			buildAnthropicCompat(
-				spec({
-					provider: "cloudflare-ai-gateway",
-					baseUrl: "https://gateway.ai.cloudflare.com/v1/acct123/gate/anthropic",
-				}),
-			).replayUnsignedThinking,
-		).toBe(false);
+		const compat = buildAnthropicCompat(
+			spec({
+				provider: "cloudflare-ai-gateway",
+				baseUrl: "https://gateway.ai.cloudflare.com/v1/acct123/gate/anthropic",
+			}),
+		);
+		expect(compat.replayUnsignedThinking).toBe(false);
+		expect(compat.signingEndpoint).toBe(true);
+		expect(compat.officialEndpoint).toBe(false);
 	});
 
 	it("demotes unsigned thinking on Google Vertex's publishers/anthropic route (known signing host)", () => {
-		expect(
-			buildAnthropicCompat(
-				spec({
-					provider: "google-vertex",
-					baseUrl:
-						"https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/publishers/anthropic/models/claude-sonnet-4@20250514:streamRawPredict",
-					id: "claude-sonnet-4@20250514",
-				}),
-			).replayUnsignedThinking,
-		).toBe(false);
+		const compat = buildAnthropicCompat(
+			spec({
+				provider: "google-vertex",
+				baseUrl:
+					"https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/publishers/anthropic/models/claude-sonnet-4@20250514:streamRawPredict",
+				id: "claude-sonnet-4@20250514",
+			}),
+		);
+		expect(compat.replayUnsignedThinking).toBe(false);
+		expect(compat.signingEndpoint).toBe(true);
+		expect(compat.officialEndpoint).toBe(false);
 	});
 
 	it("honors explicit `compat.replayUnsignedThinking: false` on custom signing proxies", () => {

@@ -76,8 +76,11 @@ export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): Res
 	// (issue #4192).
 	const isZenmux = modelMatchesHost(spec, "zenmux");
 	const requiresThinkingEnabled = modelMatchesHost(spec, "moonshotNative") && matchesKimiK27CodeFamily(spec);
+	const signingEndpoint =
+		official || isCopilot || isZenmux || isCloudflareAnthropicGateway(baseUrl) || isVertexAnthropicRoute(baseUrl);
 	const compat: ResolvedAnthropicCompat = {
 		officialEndpoint: official,
+		signingEndpoint,
 		disableStrictTools: false,
 		disableAdaptiveThinking: false,
 		supportsEagerToolInputStreaming: !isCopilot,
@@ -110,13 +113,7 @@ export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): Res
 		// AI Gateway `/anthropic`, Google Vertex `publishers/anthropic`) are
 		// excluded automatically because they can be recognised by provider id
 		// or baseUrl marker.
-		replayUnsignedThinking:
-			!official &&
-			!isCopilot &&
-			!isZenmux &&
-			!isCloudflareAnthropicGateway(baseUrl) &&
-			!isVertexAnthropicRoute(baseUrl) &&
-			Boolean(spec.reasoning),
+		replayUnsignedThinking: !signingEndpoint && Boolean(spec.reasoning),
 		escapeBuiltinToolNames: modelMatchesHost(spec, "umans"),
 	};
 	applyCompatOverrides(compat, spec.compat);

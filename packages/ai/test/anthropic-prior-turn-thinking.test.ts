@@ -421,4 +421,91 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 		expect(thinking?.thinking).toBe("openai chain-of-thought");
 		expect(thinking?.signature).toBe("");
 	});
+
+	it("strips stale cross-model signatures when the target is a Cloudflare AI Gateway Anthropic proxy (#4297)", () => {
+		// cf-anthropic gateway forwards to signature-enforcing Anthropic but
+		// resolves `officialEndpoint: false`. A prior Claude Sonnet 4.6 turn's
+		// signature is bound to the source model+session, so replaying it to
+		// Claude Opus 4.8 on the same gateway would 400 with `Invalid signature
+		// in thinking block`. Signature stripping must key off the
+		// `signingEndpoint` classification, not `officialEndpoint`.
+		const target = makeAnthropicModel({
+			provider: "cloudflare-ai-gateway",
+			id: "cf-anthropic/claude-opus-4-8",
+			name: "Claude Opus 4.8 via Cloudflare AI Gateway",
+			baseUrl: "https://gateway.ai.cloudflare.com/v1/acct/gate/anthropic",
+		});
+		const messages: Message[] = [
+			makeUser("Summarize README"),
+			makeAssistant(
+				[
+					{ type: "thinking", thinking: "prior reasoning", thinkingSignature: "sig_prior" },
+					{ type: "toolCall", id: "toolu_prior", name: "read", arguments: { path: "README.md" } },
+				],
+				{ provider: "cloudflare-ai-gateway", model: "cf-anthropic/claude-sonnet-4-6" },
+			),
+			toolResult("toolu_prior", "README body"),
+			makeAssistant(
+				[
+					{ type: "thinking", thinking: "opus latest", thinkingSignature: "sig_latest" },
+					{ type: "text", text: "summary" },
+				],
+				{ provider: "cloudflare-ai-gateway", model: "cf-anthropic/claude-opus-4-8", stopReason: "stop" },
+			),
+			makeUser("Translate"),
+		];
+
+		const params = convertAnthropicMessages(messages, target, false);
+		const assistants = params.filter(p => p.role === "assistant");
+		const priorBlocks = assistants[0].content as WireBlock[];
+		const thinking = priorBlocks.find(b => b.type === "thinking") as WireThinkingBlock | undefined;
+		// Signature-only replay is unsafe on a signing target with a stale
+		// (cross-model) source signature — that's the whole 400 failure class.
+		// The transform strips the signature (so `signingEndpoint` demotes the
+		// unsigned block to text) and no stale `sig_prior` reaches the wire.
+		expect(thinking).toBeUndefined();
+		const text = priorBlocks.find(b => b.type === "text") as WireTextBlock | undefined;
+		expect(text?.text).toContain("prior reasoning");
+		const wireBlobs = JSON.stringify(priorBlocks);
+		expect(wireBlobs).not.toContain("sig_prior");
+	});
+
+	it("strips stale cross-model signatures on Google Vertex publishers/anthropic (#4297)", () => {
+		const target = makeAnthropicModel({
+			provider: "google-vertex",
+			id: "claude-opus-4-8@20260215",
+			name: "Claude Opus 4.8 via Vertex",
+			baseUrl:
+				"https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/publishers/anthropic/models/claude-opus-4-8@20260215:streamRawPredict",
+		});
+		const messages: Message[] = [
+			makeUser("Summarize README"),
+			makeAssistant(
+				[
+					{ type: "thinking", thinking: "sonnet reasoning", thinkingSignature: "sig_sonnet" },
+					{ type: "toolCall", id: "toolu_prior", name: "read", arguments: { path: "README.md" } },
+				],
+				{ provider: "google-vertex", model: "claude-sonnet-4-6@20260101" },
+			),
+			toolResult("toolu_prior", "README body"),
+			makeAssistant(
+				[
+					{ type: "thinking", thinking: "opus latest", thinkingSignature: "sig_latest" },
+					{ type: "text", text: "summary" },
+				],
+				{ provider: "google-vertex", model: "claude-opus-4-8@20260215", stopReason: "stop" },
+			),
+			makeUser("Translate"),
+		];
+
+		const params = convertAnthropicMessages(messages, target, false);
+		const assistants = params.filter(p => p.role === "assistant");
+		const priorBlocks = assistants[0].content as WireBlock[];
+		const thinking = priorBlocks.find(b => b.type === "thinking") as WireThinkingBlock | undefined;
+		expect(thinking).toBeUndefined();
+		const text = priorBlocks.find(b => b.type === "text") as WireTextBlock | undefined;
+		expect(text?.text).toContain("sonnet reasoning");
+		const wireBlobs = JSON.stringify(priorBlocks);
+		expect(wireBlobs).not.toContain("sig_sonnet");
+	});
 });
