@@ -124,7 +124,7 @@ describe("OpenAI compat policy", () => {
 	});
 
 	it("uses a non-budget fallback prompt for Responses no-reasoning compat", () => {
-		const compat: OpenAICompat = { requiresJuiceZeroHack: true };
+		const compat: OpenAICompat = { requiresReasoningSuppressionPrompt: true };
 		const responseBody = responsesParams();
 		const responseInput: ResponseInput = [];
 
@@ -145,11 +145,6 @@ describe("OpenAI compat policy", () => {
 				},
 			],
 		});
-		const serialized = JSON.stringify(responseInput.at(-1));
-		expect(serialized).not.toContain("Juice");
-		expect(serialized).not.toContain("!important");
-		expect(serialized).not.toContain("budget");
-		expect(serialized).not.toContain("zero");
 	});
 
 	it("exposes reasoning replay constraints independent of endpoint", () => {

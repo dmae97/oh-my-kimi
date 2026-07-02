@@ -1514,7 +1514,11 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 					msgId = unsignedTextBlocks === 0 ? `msg_${msgIndex}` : `msg_${msgIndex}_${unsignedTextBlocks}`;
 					unsignedTextBlocks += 1;
 				}
-			} else if (!preserveMessageIds && !hasReplayableReasoningItem && msgId.startsWith("msg_")) {
+			} else if (!preserveMessageIds && !hasReplayableReasoningItem) {
+				// Without the matching reasoning item the server rejects replayed
+				// item ids (#4173) — drop them regardless of shape, including
+				// legacy plain-string signatures that would otherwise fall into
+				// the >64-char hash branch and fabricate a bogus msg_ id.
 				msgId = undefined;
 			} else if (msgId.length > 64) {
 				msgId = `msg_${Bun.hash(msgId).toString(36)}`;
@@ -2443,7 +2447,7 @@ export function applyResponsesCompatPolicy<P extends ResponseCreateParamsStreami
 				ReasoningParam;
 			return 0;
 		}
-		if (policy.compat.requiresJuiceZeroHack && reasoning.requestedEffort === undefined) {
+		if (policy.compat.requiresReasoningSuppressionPrompt && reasoning.requestedEffort === undefined) {
 			messages.push({
 				role: "developer",
 				content: [{ type: "input_text", text: RESPONSES_REASONING_SUPPRESSION_PROMPT }],
@@ -2475,7 +2479,7 @@ export function applyResponsesCompatPolicy<P extends ResponseCreateParamsStreami
 		return 0;
 	}
 
-	if (policy.compat.requiresJuiceZeroHack) {
+	if (policy.compat.requiresReasoningSuppressionPrompt) {
 		messages.push({
 			role: "developer",
 			content: [{ type: "input_text", text: RESPONSES_REASONING_SUPPRESSION_PROMPT }],

@@ -16,8 +16,6 @@
 - Fixed Xiaomi MiMo API key validation to use the supported `mimo-v2.5` model.
 - Fixed certificate verification errors for custom gateways behind private CA bundles by applying `NODE_EXTRA_CA_CERTS` to all provider fetches (including OpenAI-compatible, Codex, Ollama, Azure, and Google).
 - Fixed Claude Fable demoted-thinking replay to use markdown-italic assistant prose instead of `<thinking>` tags, avoiding reasoning-extraction-shaped context after model switches.
-### Fixed
-
 - Fixed OpenAI Responses replay emitting locally rebuilt assistant item IDs without their required reasoning items, preventing `function_call` / `message` replay 400s from poisoned history. ([#4173](https://github.com/can1357/oh-my-pi/issues/4173))
 
 ## [16.2.13] - 2026-07-01

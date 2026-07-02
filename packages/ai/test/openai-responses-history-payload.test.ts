@@ -25,7 +25,7 @@ function createCodexToken(accountId: string): string {
 }
 
 /**
- * Returns the bundled `gpt-5-mini` model with `compat.requiresJuiceZeroHack`
+ * Returns the bundled `gpt-5-mini` model with `compat.requiresReasoningSuppressionPrompt`
  * cleared so it doesn't trigger the GPT-5 no-reasoning developer-message
  * fallback injected by `applyResponsesReasoningParams`. The fallback is
  * exercised by its own targeted tests; these history-replay tests assert raw payload shape and
@@ -41,8 +41,8 @@ function getOpenAIReasoningModel(
 	// the override through re-resolution.
 	return {
 		...base,
-		compat: { ...base.compat, requiresJuiceZeroHack: false },
-		compatConfig: { ...base.compatConfig, requiresJuiceZeroHack: false },
+		compat: { ...base.compat, requiresReasoningSuppressionPrompt: false },
+		compatConfig: { ...base.compatConfig, requiresReasoningSuppressionPrompt: false },
 	};
 }
 
@@ -680,6 +680,97 @@ describe("OpenAI responses history payload", () => {
 				role: "assistant",
 				content: [{ type: "output_text", text: "Legacy answer", annotations: [] }],
 				status: "completed",
+			},
+			{ role: "user", content: [{ type: "input_text", text: "follow-up" }] },
+		]);
+	});
+
+	it("omits long non-msg legacy signature IDs when rebuilding fallback replay history without reasoning", async () => {
+		const legacySignature = `item_${"copilot/legacy+opaque=".repeat(8)}`;
+		const context: Context = {
+			messages: [
+				{ role: "user", content: "first user", timestamp: Date.now() },
+				{
+					role: "assistant",
+					content: [{ type: "text", text: "Legacy answer", textSignature: legacySignature }],
+					api: "openai-responses",
+					provider: "openai",
+					model: "gpt-5-mini",
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "stop",
+					timestamp: Date.now(),
+				},
+				{ role: "user", content: "follow-up", timestamp: Date.now() },
+			],
+		};
+		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
+		const payload = (await captureResponsesPayload(model, context)) as { input?: unknown[] };
+		expect(payload.input).toEqual([
+			{ role: "user", content: [{ type: "input_text", text: "first user" }] },
+			{
+				type: "message",
+				role: "assistant",
+				content: [{ type: "output_text", text: "Legacy answer", annotations: [] }],
+				status: "completed",
+			},
+			{ role: "user", content: [{ type: "input_text", text: "follow-up" }] },
+		]);
+	});
+
+	it("keeps hashed long legacy signature IDs when the replayed turn carries its reasoning item", async () => {
+		const legacySignature = `item_${"copilot/legacy+opaque=".repeat(8)}`;
+		const context: Context = {
+			messages: [
+				{ role: "user", content: "first user", timestamp: Date.now() },
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "thinking",
+							thinking: "",
+							thinkingSignature: JSON.stringify({
+								type: "reasoning",
+								id: "rs_keep",
+								encrypted_content: "enc_keep",
+							}),
+						},
+						{ type: "text", text: "Signed answer", textSignature: legacySignature },
+					],
+					api: "openai-responses",
+					provider: "openai",
+					model: "gpt-5-mini",
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "stop",
+					timestamp: Date.now(),
+				},
+				{ role: "user", content: "follow-up", timestamp: Date.now() },
+			],
+		};
+		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
+		const payload = (await captureResponsesPayload(model, context)) as { input?: unknown[] };
+		expect(payload.input).toEqual([
+			{ role: "user", content: [{ type: "input_text", text: "first user" }] },
+			{ type: "reasoning", id: "rs_keep", encrypted_content: "enc_keep" },
+			{
+				type: "message",
+				role: "assistant",
+				content: [{ type: "output_text", text: "Signed answer", annotations: [] }],
+				status: "completed",
+				id: `msg_${Bun.hash(legacySignature).toString(36)}`,
 			},
 			{ role: "user", content: [{ type: "input_text", text: "follow-up" }] },
 		]);
