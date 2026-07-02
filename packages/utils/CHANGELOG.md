@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Fixed `parseJsonWithRepair` failing tool calls whose streamed arguments contain an unquoted string value (e.g. `{"paths": packages/foo/*, "i": "…"}`). Final parsing now recovers such barewords in object/array value position as strings, terminating at `,` / `}` / `]` / newline. Recovery deliberately refuses anything that could mask real structure or bad data — truncated values, tokens containing `"` / `{` / `[` or a key-like `:` (URL `://` and Windows `:\` colons stay literal), and non-finite atoms (`NaN`, `Infinity`, `undefined`) — and streaming partial parses still roll back unfinished barewords instead of committing them.
 
 ## [16.3.0] - 2026-07-02
 

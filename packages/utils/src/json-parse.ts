@@ -50,6 +50,18 @@ const KEYWORDS: readonly (readonly [string, unknown])[] = [
 ];
 
 /**
+ * JS-only atoms never recovered as bareword strings — a tool must not execute
+ * with a non-finite or undefined argument masquerading as a string.
+ */
+const NON_RECOVERABLE_BAREWORDS: Record<string, true> = {
+	NaN: true,
+	Infinity: true,
+	"-Infinity": true,
+	"+Infinity": true,
+	undefined: true,
+};
+
+/**
  * Sentinel returned by partial-mode value parsing when an atomic value
  * (number / keyword) is incomplete at the streaming edge, so the enclosing
  * object/array rolls back to the last valid prefix instead of committing junk.
@@ -157,7 +169,10 @@ export function repairJson(json: string): string {
  * - Python literals `True` / `False` / `None` and JS `NaN` / `Infinity`;
  * - raw control characters and invalid `\x` escapes inside strings (kept literally);
  * - unescaped quotes inside strings — a quote only closes a string when followed
- *   by a value terminator, recovering apostrophes such as `'it's'`.
+ *   by a value terminator, recovering apostrophes such as `'it's'`;
+ * - unquoted string values in object/array value position (strict mode only) —
+ *   an unrecognized bareword such as `{"paths": packages/foo/*}` is recovered as
+ *   a string up to the next `,` / `}` / `]` / newline.
  *
  * In `partial` mode an unterminated string/object/array (or a value cut off at
  * end-of-input) is auto-closed with whatever was parsed so far — for streaming.
@@ -182,7 +197,7 @@ class RelaxedJson {
 			if (this.#partial) return undefined;
 			throw new SyntaxError("Unexpected end of JSON input");
 		}
-		const value = this.#value();
+		const value = this.#value(false);
 		if (value === INCOMPLETE) return undefined;
 		this.#ws();
 		if (!this.#partial && this.#i < this.#n) {
@@ -218,7 +233,7 @@ class RelaxedJson {
 		}
 	}
 
-	#value(): unknown {
+	#value(allowBareword: boolean): unknown {
 		const s = this.#s;
 		const c = s[this.#i];
 		if (c === "{") return this.#object();
@@ -231,7 +246,7 @@ class RelaxedJson {
 			// NaN guard (strict throw / partial rollback) like other bad tokens.
 			return this.#number();
 		}
-		return this.#keyword();
+		return this.#keyword(allowBareword);
 	}
 
 	#object(): Record<string, unknown> {
@@ -267,7 +282,7 @@ class RelaxedJson {
 				if (this.#partial) return out;
 				throw new SyntaxError("Expected value after ':'");
 			}
-			const value = this.#value();
+			const value = this.#value(true);
 			if (value === INCOMPLETE) return out;
 			out[key] = value;
 			this.#ws();
@@ -303,7 +318,7 @@ class RelaxedJson {
 				this.#i++;
 				continue;
 			}
-			const value = this.#value();
+			const value = this.#value(true);
 			if (value === INCOMPLETE) return out;
 			out.push(value);
 			this.#ws();
@@ -468,7 +483,7 @@ class RelaxedJson {
 		return num;
 	}
 
-	#keyword(): unknown {
+	#keyword(allowBareword: boolean): unknown {
 		const s = this.#s;
 		const i = this.#i;
 		for (const [word, value] of KEYWORDS) {
@@ -485,7 +500,46 @@ class RelaxedJson {
 			this.#i = this.#n;
 			return INCOMPLETE;
 		}
+		if (allowBareword) return this.#bareword();
 		throw new SyntaxError(`Unexpected token at position ${this.#i}`);
+	}
+
+	/**
+	 * Strict-mode recovery of an unquoted string value, e.g.
+	 * `{"paths": packages/foo/*}`: consume until `,` / `}` / `]` / newline and
+	 * trim trailing whitespace. Recovery still throws — so a final parse never
+	 * accepts a half-formed or non-finite argument — when the token:
+	 * - hits end-of-input before a delimiter (truncated value);
+	 * - contains a `"`, `{`, `[`, or a key-like `:` — this parser accepts
+	 *   unquoted keys, so a missed comma (`{"a": foo "b": 1}`, `{a: foo b: 1}`)
+	 *   would otherwise silently swallow the following field. A colon followed
+	 *   by `/` or `\` stays literal so URL and Windows-path values recover;
+	 * - is a non-finite atom ({@link NON_RECOVERABLE_BAREWORDS}).
+	 */
+	#bareword(): string {
+		const s = this.#s;
+		const start = this.#i;
+		let i = start;
+		while (i < this.#n) {
+			const cc = s.charCodeAt(i);
+			if (cc === 0x2c /* , */ || cc === 0x7d /* } */ || cc === 0x5d /* ] */ || cc === 0x0a || cc === 0x0d) break;
+			if (
+				cc === QUOTE ||
+				cc === 0x7b /* { */ ||
+				cc === 0x5b /* [ */ ||
+				(cc === 0x3a /* : */ && s.charCodeAt(i + 1) !== 0x2f /* / */ && s.charCodeAt(i + 1) !== 0x5c) /* \ */
+			) {
+				throw new SyntaxError(`Unexpected token at position ${start}`);
+			}
+			i++;
+		}
+		if (i >= this.#n) throw new SyntaxError(`Unexpected token at position ${start}`);
+		let end = i;
+		while (end > start && isWhitespace(s.charCodeAt(end - 1))) end--;
+		const word = s.slice(start, end);
+		if (NON_RECOVERABLE_BAREWORDS[word]) throw new SyntaxError(`Unexpected token at position ${start}`);
+		this.#i = i;
+		return word;
 	}
 }
 
