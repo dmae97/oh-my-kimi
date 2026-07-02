@@ -86,20 +86,22 @@ export function formatPluginSpec(spec: ParsedPluginSpec): string {
 }
 
 /**
- * Extract the base package name without version specifier.
+ * Extract the dependency key from an npm package specifier.
  * Used for path lookups after npm install.
  *
  * @example
  * extractPackageName("lodash@4.17.21") // "lodash"
  * extractPackageName("@scope/pkg@1.0.0") // "@scope/pkg"
  * extractPackageName("@scope/pkg") // "@scope/pkg"
+ * extractPackageName("npm:lodash") // "lodash"
  */
 export function extractPackageName(specifier: string): string {
+	const npmSpecifier = specifier.replace(/^npm:/i, "");
 	// Handle scoped packages: @scope/name@version -> @scope/name
-	if (specifier.startsWith("@")) {
-		const match = specifier.match(/^(@[^/]+\/[^@]+)/);
-		return match ? match[1] : specifier;
+	if (npmSpecifier.startsWith("@")) {
+		const match = npmSpecifier.match(/^(@[^/]+\/[^@]+)/);
+		return match ? match[1] : npmSpecifier;
 	}
 	// Unscoped: name@version -> name
-	return specifier.replace(/@[^@]+$/, "");
+	return npmSpecifier.replace(/@[^@]+$/, "");
 }

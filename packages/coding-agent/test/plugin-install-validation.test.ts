@@ -68,6 +68,45 @@ describe("PluginManager.install load validation", () => {
 		await removeWithRetries(tmpRoot);
 	});
 
+	test("installs npm protocol specs with the resolved package name", async () => {
+		vi.spyOn(Bun, "spawn").mockImplementation(((cmd: string[]) => {
+			expect(cmd).toEqual(["bun", "install", "npm:pi-figma-remote-auth"]);
+
+			const prepare = (async () => {
+				await Bun.write(
+					pluginsPkgJson,
+					JSON.stringify(
+						{
+							name: "omp-plugins",
+							private: true,
+							dependencies: { "pi-figma-remote-auth": "npm:pi-figma-remote-auth" },
+						},
+						null,
+						2,
+					),
+				);
+				await writePluginPackage(pluginsNodeModules, "pi-figma-remote-auth", {
+					version: "1.2.3",
+					source:
+						'export default function(pi) { pi.registerCommand("figma-auth", { handler: async () => {} }); }\n',
+				});
+			})();
+
+			return {
+				pid: 1,
+				stdout: emptyStream(),
+				stderr: emptyStream(),
+				exited: prepare.then(() => 0),
+			} as Subprocess;
+		}) as typeof Bun.spawn);
+
+		const result = await new PluginManager(tmpRoot).install("npm:pi-figma-remote-auth");
+
+		expect(result.name).toBe("pi-figma-remote-auth");
+		expect(result.version).toBe("1.2.3");
+		expect(result.path).toBe(path.join(pluginsNodeModules, "pi-figma-remote-auth"));
+	});
+
 	test("rejects an install whose extension entry cannot resolve its dependencies", async () => {
 		vi.spyOn(Bun, "spawn").mockImplementation(((cmd: string[]) => {
 			expect(cmd).toEqual(["bun", "install", "broken-plugin"]);
