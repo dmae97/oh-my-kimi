@@ -148,6 +148,13 @@ type OpenAICompletionsCompletionTokenDetails = {
 	reasoning_tokens?: unknown;
 };
 
+function firstPositiveNumber(...values: unknown[]): number {
+	for (const value of values) {
+		if (typeof value === "number" && value > 0) return value;
+	}
+	return 0;
+}
+
 /**
  * Normalize tool call ID for Mistral.
  * Mistral requires tool IDs to be exactly 9 alphanumeric characters (a-z, A-Z, 0-9).
@@ -1558,11 +1565,7 @@ export function parseChunkUsage(
 	const accounting = calculateOpenAIUsageAccounting({
 		promptTokens: typeof promptTokens === "number" ? promptTokens : 0,
 		outputTokens,
-		cachedTokens:
-			(typeof cachedTokens === "number" ? cachedTokens : undefined) ??
-			(typeof promptCacheHitTokens === "number" ? promptCacheHitTokens : undefined) ??
-			(typeof promptTokenCachedTokens === "number" ? promptTokenCachedTokens : undefined) ??
-			0,
+		cachedTokens: firstPositiveNumber(cachedTokens, promptCacheHitTokens, promptTokenCachedTokens),
 		reasoningTokens: typeof completionReasoningTokens === "number" ? completionReasoningTokens : 0,
 		cacheWriteOpenRouter: typeof cacheWriteTokens === "number" ? cacheWriteTokens : undefined,
 		cacheWriteDeepSeek: typeof promptCacheMissTokens === "number" ? promptCacheMissTokens : undefined,

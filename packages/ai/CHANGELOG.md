@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed OpenAI-compatible streaming usage parsing to prefer non-zero nested cached token counts when root `cached_tokens` is zero ([#4337](https://github.com/can1357/oh-my-pi/issues/4337)).
+
 ## [16.3.1] - 2026-07-02
 
 ### Changed
