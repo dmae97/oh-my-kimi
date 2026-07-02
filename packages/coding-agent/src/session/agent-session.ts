@@ -414,13 +414,25 @@ function completedRewindFromEntry(entry: SessionEntry): CompletedRewindState | u
 	return report.length > 0 ? { report, startedAt, rewoundAt } : undefined;
 }
 
-function isSuccessfulCheckpointEntry(entry: SessionEntry): boolean {
+function isSuccessfulCheckpointEntry(entry: SessionEntry): entry is SessionMessageEntry & {
+	message: { role: "toolResult"; toolName: "checkpoint"; isError?: false };
+} {
 	return (
 		entry.type === "message" &&
 		entry.message.role === "toolResult" &&
 		entry.message.toolName === "checkpoint" &&
 		entry.message.isError !== true
 	);
+}
+
+function checkpointStartedAtFromEntry(entry: SessionEntry): string | undefined {
+	if (!isSuccessfulCheckpointEntry(entry)) return undefined;
+	const details = entry.message.details;
+	if (details && typeof details === "object") {
+		const startedAt = stringProperty(details, "startedAt");
+		if (startedAt) return startedAt;
+	}
+	return entry.timestamp;
 }
 
 // A side-channel assistant response is signed for the hidden prompt/history that
@@ -2150,7 +2162,7 @@ export class AgentSession {
 		this.#advisorEnabled = this.settings.get("advisor.enabled") as boolean;
 		if (this.#advisorEnabled) this.#buildAdvisorRuntime();
 
-		this.#rehydrateLastCompletedRewind();
+		this.#rehydrateCheckpointRewindState();
 
 		// Always subscribe to agent events for internal handling
 		// (session persistence, hooks, auto-compaction, retry logic)
@@ -6726,15 +6738,47 @@ export class AgentSession {
 		this.#rewoundToolResultIds.clear();
 	}
 
-	#rehydrateLastCompletedRewind(): void {
+	/**
+	 * Rebuild checkpoint/rewind runtime state from the current branch. Handles two
+	 * cases surfaced by session resume, `switchSession()` reloading the same file,
+	 * and tree navigation:
+	 *   - The branch's most recent checkpoint has already been rewound → restore
+	 *     `#lastCompletedRewind` so a repeat `rewind` call receives the
+	 *     "checkpoint already completed" recovery guidance.
+	 *   - The branch's most recent checkpoint has NOT been rewound (e.g. the run
+	 *     was aborted between `checkpoint` and `rewind`) → restore
+	 *     `#checkpointState` so the next `rewind` call can complete the
+	 *     checkpoint instead of failing with "No active checkpoint".
+	 */
+	#rehydrateCheckpointRewindState(): void {
 		this.#clearCheckpointRuntimeState();
 		let completed: CompletedRewindState | undefined;
+		let pending: { entryId: string; startedAt: string; messageCount: number } | undefined;
+		let messageCount = 0;
 		for (const entry of this.sessionManager.getBranch()) {
+			if (entry.type === "message") messageCount++;
 			if (isSuccessfulCheckpointEntry(entry)) {
 				completed = undefined;
+				pending = {
+					entryId: entry.id,
+					startedAt: checkpointStartedAtFromEntry(entry) ?? entry.timestamp,
+					messageCount,
+				};
 				continue;
 			}
-			completed = completedRewindFromEntry(entry) ?? completed;
+			const completedFromEntry = completedRewindFromEntry(entry);
+			if (completedFromEntry) {
+				completed = completedFromEntry;
+				pending = undefined;
+			}
+		}
+		if (pending) {
+			this.#checkpointState = {
+				checkpointEntryId: pending.entryId,
+				startedAt: pending.startedAt,
+				checkpointMessageCount: pending.messageCount,
+			};
+			return;
 		}
 		this.#lastCompletedRewind = completed;
 	}
@@ -14042,7 +14086,7 @@ export class AgentSession {
 				this.#didSessionMessagesChange(previousSessionContext.messages, sessionContext.messages);
 			const fallbackSelectedMCPToolNames = this.#getSessionDefaultSelectedMCPToolNames(sessionPath);
 			await this.#restoreMCPSelectionsForSessionContext(sessionContext, { fallbackSelectedMCPToolNames });
-			this.#rehydrateLastCompletedRewind();
+			this.#rehydrateCheckpointRewindState();
 
 			// Emit session_switch event to hooks
 			if (this.#extensionRunner) {
@@ -14253,7 +14297,7 @@ export class AgentSession {
 		} else {
 			this.sessionManager.createBranchedSession(selectedEntry.parentId);
 		}
-		this.#rehydrateLastCompletedRewind();
+		this.#rehydrateCheckpointRewindState();
 		this.#syncTodoPhasesFromBranch();
 		this.#freshProviderSessionId = undefined;
 		this.#syncAgentSessionId();
@@ -14340,7 +14384,7 @@ export class AgentSession {
 		this.#cancelOwnAsyncJobs();
 
 		this.sessionManager.createBranchedSession(leafId);
-		this.#rehydrateLastCompletedRewind();
+		this.#rehydrateCheckpointRewindState();
 		this.sessionManager.appendMessage({
 			role: "user",
 			content: [{ type: "text", text: question }],
@@ -14537,7 +14581,7 @@ export class AgentSession {
 		const displayContext = deobfuscateSessionContext(stateContext, this.#obfuscator);
 		await this.#restoreMCPSelectionsForSessionContext(displayContext);
 		this.agent.replaceMessages(displayContext.messages);
-		this.#rehydrateLastCompletedRewind();
+		this.#rehydrateCheckpointRewindState();
 		this.#resetAdvisorSessionState();
 		this.#syncTodoPhasesFromBranch();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
