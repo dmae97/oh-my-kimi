@@ -234,7 +234,12 @@ export class IndexedSessionStorage implements SessionStorage {
 		}
 	}
 
-	writeTextAtomic(path: string, content: string): Promise<void> {
+	writeTextAtomic(
+		path: string,
+		content: string,
+		options?: import("./session-storage").WriteTextAtomicOptions,
+	): Promise<void> {
+		if (options?.commitGuard && !options.commitGuard()) return Promise.resolve();
 		return this.writeText(path, content);
 	}
 

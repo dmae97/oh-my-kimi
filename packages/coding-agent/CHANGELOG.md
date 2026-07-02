@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed Windows session tail loss after atomic compaction rewrites by fencing append writers during full-file replacement so post-compaction prompts, tool results, title changes, and exit diagnostics persist to the current JSONL path ([#4338](https://github.com/can1357/oh-my-pi/issues/4338)).
+- Fixed Windows session tail loss after atomic compaction rewrites by fencing append writers during full-file replacement and gating the atomic publish on a `commitGuard` that the storage backend checks synchronously before rename, so a concurrent `flushSync` (Ctrl+C / session-exit) is not overwritten by the stale body serialized before it ran. Covers post-compaction prompts, tool results, title changes, and exit diagnostics on the current JSONL path ([#4338](https://github.com/can1357/oh-my-pi/issues/4338)).
 
 ## [16.3.2] - 2026-07-02
 

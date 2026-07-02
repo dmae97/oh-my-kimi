@@ -1,7 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { MemorySessionStorage, type SessionStorageWriter } from "@oh-my-pi/pi-coding-agent/session/session-storage";
+import {
+	MemorySessionStorage,
+	type SessionStorageWriter,
+	type WriteTextAtomicOptions,
+} from "@oh-my-pi/pi-coding-agent/session/session-storage";
 
 interface DetachableWriter extends SessionStorageWriter {
 	detach(): void;
@@ -11,6 +15,8 @@ class DetachingRewriteStorage extends MemorySessionStorage {
 	readonly detachedLines: string[] = [];
 	readonly rewriteStarted = Promise.withResolvers<void>();
 	readonly allowRewrite = Promise.withResolvers<void>();
+	pausedRewrites = 0;
+	guardRejections = 0;
 	readonly #writers = new Set<DetachableWriter>();
 
 	openWriter(path: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }): SessionStorageWriter {
@@ -50,9 +56,14 @@ class DetachingRewriteStorage extends MemorySessionStorage {
 		return writer;
 	}
 
-	async writeTextAtomic(path: string, content: string): Promise<void> {
+	override async writeTextAtomic(path: string, content: string, options?: WriteTextAtomicOptions): Promise<void> {
+		this.pausedRewrites++;
 		this.rewriteStarted.resolve();
 		await this.allowRewrite.promise;
+		if (options?.commitGuard && !options.commitGuard()) {
+			this.guardRejections++;
+			return;
+		}
 		for (const writer of this.#writers) writer.detach();
 		this.writeTextSync(path, content);
 	}
@@ -169,5 +180,66 @@ describe("SessionManager atomic rewrite race", () => {
 			),
 		).toBe(true);
 		expect(reloaded.getSessionName()).toBe("Post rewrite title");
+	});
+
+	it("flushSync during an in-flight atomic rewrite durably publishes the exit record", async () => {
+		const storage = new DetachingRewriteStorage();
+		const sessionManager = SessionManager.create("/cwd", "/sessions", storage);
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected built-in anthropic model");
+
+		sessionManager.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "seed response" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+		await sessionManager.flush();
+		sessionManager.appendMessage({ role: "user", content: "before compaction", timestamp: Date.now() });
+		await sessionManager.flush();
+
+		const firstKeptEntryId = sessionManager.getBranch()[0]?.id;
+		if (!firstKeptEntryId) throw new Error("Expected seeded branch entry");
+		sessionManager.appendCompaction("older summary", "older", firstKeptEntryId, 100);
+		await sessionManager.flush();
+		// Second compaction elides the first, scheduling a full-file rewrite that
+		// parks inside the fake storage until we release it.
+		sessionManager.appendCompaction("newer summary", "newer", firstKeptEntryId, 80);
+		await storage.rewriteStarted.promise;
+
+		// Simulate a Ctrl+C teardown: append a session_exit custom entry (fenced
+		// because the atomic rewrite is active) and flushSync it.
+		sessionManager.appendCustomEntry("session_exit", { reason: "sigterm", kind: "signal" });
+		expect(() => sessionManager.flushSync()).not.toThrow();
+
+		const sessionFile = sessionManager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected session file");
+		const afterFlush = await storage.readText(sessionFile);
+		expect(afterFlush).toContain('"customType":"session_exit"');
+		expect(afterFlush).toContain("newer summary");
+
+		// Release the in-flight atomic rewrite. Its commitGuard MUST reject the
+		// stale body serialized before flushSync bumped the disk epoch; otherwise
+		// the async publish would overwrite the durable exit record.
+		storage.allowRewrite.resolve();
+		await Promise.resolve();
+		await Promise.resolve();
+
+		const afterRelease = await storage.readText(sessionFile);
+		expect(afterRelease).toContain('"customType":"session_exit"');
+		expect(afterRelease).toContain("newer summary");
+		expect(storage.guardRejections).toBeGreaterThanOrEqual(1);
+		expect(storage.detachedLines).toEqual([]);
 	});
 });

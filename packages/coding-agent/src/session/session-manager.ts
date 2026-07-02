@@ -562,12 +562,14 @@ export class SessionManager {
 	 * disk chain. The body is serialized after the writer is closed. Appends that
 	 * arrive while the storage backend is replacing the path are fenced out of the
 	 * append hot path and force the rewrite task to loop with a fresh body before
-	 * it resolves.
+	 * it resolves. Passes a `commitGuard` to the storage layer so a synchronous
+	 * rewrite (`flushSync` → `#rewriteSynchronously`) that supersedes this task
+	 * cannot be overwritten by the stale body serialized before it ran.
 	 */
 	async #rewriteAtomically(): Promise<void> {
 		if (!this.#persist || !this.#sessionFile) return;
 
-		const epoch = this.#diskEpoch;
+		const startEpoch = this.#diskEpoch;
 		await this.#scheduleDiskWork(
 			async () => {
 				do {
@@ -575,18 +577,22 @@ export class SessionManager {
 					await this.#closeWriterHandle();
 					const sessionFile = this.#sessionFile;
 					if (!sessionFile) return;
+					if (this.#diskEpoch !== startEpoch) return;
 					this.#atomicRewriteActive = true;
 					try {
-						await this.#storage.writeTextAtomic(sessionFile, this.#fileBody());
+						await this.#storage.writeTextAtomic(sessionFile, this.#fileBody(), {
+							commitGuard: () => this.#diskEpoch === startEpoch,
+						});
 					} finally {
 						this.#atomicRewriteActive = false;
 					}
+					if (this.#diskEpoch !== startEpoch) return;
 				} while (this.#atomicRewriteDirty);
 				this.#fileIsCurrent = true;
 				this.#rewriteRequired = false;
 				this.#hasTitleSlot = true;
 			},
-			{ epoch },
+			{ epoch: startEpoch },
 		);
 	}
 
@@ -660,10 +666,13 @@ export class SessionManager {
 				try {
 					await this.#appendWriter().append(line);
 					await this.#storage.updateSessionTitle(sessionFile, update);
-					this.#fileIsCurrent = true;
+					if (this.#diskEpoch === epoch) this.#fileIsCurrent = true;
 				} catch {
 					await this.#closeWriterHandle();
-					await this.#storage.writeTextAtomic(sessionFile, this.#fileBody());
+					await this.#storage.writeTextAtomic(sessionFile, this.#fileBody(), {
+						commitGuard: () => this.#diskEpoch === epoch,
+					});
+					if (this.#diskEpoch !== epoch) return;
 					this.#clearDiskError();
 					this.#fileIsCurrent = true;
 					this.#rewriteRequired = false;
