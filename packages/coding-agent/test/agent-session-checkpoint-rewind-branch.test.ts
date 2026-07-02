@@ -131,6 +131,21 @@ function createToolSession(overrides: Partial<ToolSession> = {}): ToolSession {
 	};
 }
 
+function rewindToolForSession(session: AgentSession): RewindTool {
+	return new RewindTool(
+		createToolSession({
+			getCheckpointState: () => session.getCheckpointState(),
+			getLastCompletedRewind: () => session.getLastCompletedRewind(),
+		}),
+	);
+}
+
+async function expectNoActiveCheckpointError(session: AgentSession): Promise<void> {
+	await expect(rewindToolForSession(session).execute("repeat_rewind", { report: "retry" })).rejects.toThrow(
+		"No active checkpoint. Create a checkpoint before calling rewind.",
+	);
+}
+
 describe("AgentSession checkpoint rewind branch context", () => {
 	it("rebuilds active history through branch_summary before the post-rewind assistant turn", async () => {
 		const report = "findings: kept checkpoint; risks: stale signed thinking";
@@ -256,6 +271,59 @@ describe("AgentSession checkpoint rewind branch context", () => {
 		);
 	});
 
+	it("clears completed rewind state when starting a new session", async () => {
+		const harness = await createHarness([
+			{
+				content: [{ type: "toolCall", id: "call_checkpoint", name: "checkpoint", arguments: { goal: "inspect" } }],
+				stopReason: "toolUse",
+			},
+			{
+				content: [{ type: "toolCall", id: "call_rewind", name: "rewind", arguments: { report: "findings" } }],
+				stopReason: "toolUse",
+			},
+			{
+				content: ["DONE"],
+				stopReason: "stop",
+			},
+		]);
+
+		await harness.session.prompt("investigate with a checkpoint");
+		expect(harness.session.getLastCompletedRewind()).toBeDefined();
+
+		await harness.session.newSession();
+
+		expect(harness.session.getLastCompletedRewind()).toBeUndefined();
+		await expectNoActiveCheckpointError(harness.session);
+	});
+
+	it("rehydrates completed rewind state from the branched path", async () => {
+		const harness = await createHarness([
+			{
+				content: [{ type: "toolCall", id: "call_checkpoint", name: "checkpoint", arguments: { goal: "inspect" } }],
+				stopReason: "toolUse",
+			},
+			{
+				content: [{ type: "toolCall", id: "call_rewind", name: "rewind", arguments: { report: "findings" } }],
+				stopReason: "toolUse",
+			},
+			{
+				content: ["DONE"],
+				stopReason: "stop",
+			},
+		]);
+
+		await harness.session.prompt("investigate with a checkpoint");
+		expect(harness.session.getLastCompletedRewind()).toBeDefined();
+		const userEntry = harness.session.sessionManager
+			.getEntries()
+			.find(entry => entry.type === "message" && entry.message.role === "user");
+		if (!userEntry) throw new Error("Expected user entry for branch");
+
+		await harness.session.branch(userEntry.id);
+
+		expect(harness.session.getLastCompletedRewind()).toBeUndefined();
+		await expectNoActiveCheckpointError(harness.session);
+	});
 	it("tells the model to continue when rewind is repeated after completion", async () => {
 		const tool = new RewindTool(
 			createToolSession({
@@ -269,6 +337,86 @@ describe("AgentSession checkpoint rewind branch context", () => {
 
 		await expect(tool.execute("repeat_rewind", { report: "retry" })).rejects.toThrow(
 			"Checkpoint already completed; continue from the retained rewind report instead of calling rewind again.",
+		);
+	});
+
+	it("rehydrates active checkpoint state when resuming a session with no rewind yet", async () => {
+		const startedAt = "2026-01-01T00:00:00.000Z";
+		const harness = await createHarness([
+			{
+				content: [{ type: "toolCall", id: "call_checkpoint", name: "checkpoint", arguments: { goal: "inspect" } }],
+				stopReason: "toolUse",
+			},
+			{
+				content: [{ type: "toolCall", id: "call_rewind", name: "rewind", arguments: { report: "findings" } }],
+				stopReason: "toolUse",
+			},
+			{
+				content: ["DONE"],
+				stopReason: "stop",
+			},
+		]);
+		await harness.session.prompt("investigate with a checkpoint");
+		const originalCompleted = harness.session.getLastCompletedRewind();
+		expect(originalCompleted).toBeDefined();
+
+		// Simulate "run aborted between checkpoint and rewind" by branching to the
+		// checkpoint entry itself — the rewind and its rewind-report entry drop off
+		// the active branch, leaving the checkpoint tool result as the leaf.
+		const branch = harness.session.sessionManager.getBranch();
+		const checkpointEntry = branch.find(
+			entry =>
+				entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "checkpoint",
+		);
+		if (!checkpointEntry) throw new Error("Expected checkpoint tool result entry");
+		harness.session.sessionManager.branch(checkpointEntry.id);
+
+		const reloadedMock = createMockModel({ responses: [] });
+		const reloadedSettings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.enabled": false,
+			"todo.enabled": false,
+			"todo.eager": "default",
+			"todo.reminders": false,
+		});
+		reloadedSettings.setModelRole("default", `${reloadedMock.provider}/${reloadedMock.id}`);
+		const reloadedTools = [checkpointTool as AgentTool, rewindTool as AgentTool];
+		const reloadedAgent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model: reloadedMock,
+				systemPrompt: ["Test"],
+				tools: reloadedTools,
+				messages: harness.session.sessionManager.buildSessionContext().messages,
+			},
+			convertToLlm,
+			streamFn: reloadedMock.stream,
+		});
+		const reloadedSession = new AgentSession({
+			agent: reloadedAgent,
+			sessionManager: harness.session.sessionManager,
+			settings: reloadedSettings,
+			modelRegistry: new ModelRegistry(
+				harness.authStorage,
+				path.join(harness.tempDir.path(), "models-reloaded.yml"),
+			),
+			toolRegistry: new Map(reloadedTools.map(tool => [tool.name, tool])),
+		});
+		harness.extraSessions.push(reloadedSession);
+
+		const restored = reloadedSession.getCheckpointState();
+		expect(restored).toBeDefined();
+		expect(restored?.checkpointEntryId).toBe(checkpointEntry.id);
+		expect(restored?.startedAt).toBe(startedAt);
+		expect(reloadedSession.getLastCompletedRewind()).toBeUndefined();
+
+		// The rewind tool must accept the request now that the active checkpoint
+		// has been re-hydrated — previously this threw "No active checkpoint".
+		const rewindResult = await rewindToolForSession(reloadedSession).execute("call_rewind_after_resume", {
+			report: "post-resume findings",
+		});
+		expect(rewindResult.content.some(part => part.type === "text" && part.text.includes("Rewind requested"))).toBe(
+			true,
 		);
 	});
 });

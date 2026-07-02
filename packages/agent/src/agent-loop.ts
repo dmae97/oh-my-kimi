@@ -1723,10 +1723,8 @@ async function executeToolCalls(
 	const checkSteering = async (): Promise<void> => {
 		// `signal` (external/user abort) is checked separately from the internal
 		// abort controllers: once the run is externally aborted it is unwinding
-		// and the interrupt would be redundant. Once an IRC/steering interrupt has
-		// already fired, do not poll again — especially not through a consuming
-		// legacy steering getter.
-		if (!shouldInterruptImmediately || interruptState.triggered || signal?.aborted) {
+		// and the interrupt would be redundant.
+		if (!shouldInterruptImmediately || signal?.aborted) {
 			return;
 		}
 		// Mid-batch steering detection must be non-consuming. If a direct
@@ -1739,12 +1737,16 @@ async function executeToolCalls(
 		if (steeringQueued) {
 			// User steering upgrades an in-flight IRC interrupt: it aborts the
 			// shared signal so foreground tools stop as they do for a user Esc.
+			// Idempotent — a second steer poll after the abort is a no-op.
 			if (!steeringAbortController.signal.aborted) {
 				interruptState.triggered = true;
 				steeringAbortController.abort();
 			}
 			return;
 		}
+		// IRC only fires once: a peer interrupt already recorded on interruptState
+		// must not re-abort, and (unlike steering above) never re-consume a queue.
+		if (interruptState.triggered) return;
 		if (hasIrcInterrupts && (await hasIrcInterrupts())) {
 			// Peer IRC only aborts interruptible waits: a foreground bash / write
 			// mid-execution keeps running so we never leave partial side effects.
