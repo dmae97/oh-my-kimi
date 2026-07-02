@@ -340,6 +340,7 @@ function buildParams(
 		systemRole,
 		includeThinkingSignatures: true,
 		developerStringContent: true,
+		preserveAssistantMessageIds: true,
 	});
 
 	const params: AzureOpenAIResponsesSamplingParams = {

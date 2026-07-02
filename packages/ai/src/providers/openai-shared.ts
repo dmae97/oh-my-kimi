@@ -1347,6 +1347,8 @@ export interface BuildResponsesInputOptions<TApi extends Api> {
 	includeThinkingSignatures?: boolean;
 	developerStringContent?: boolean;
 	repairOrphanOutputs?: boolean;
+	/** Preserve assistant message item IDs from text signatures during fallback replay. */
+	preserveAssistantMessageIds?: boolean;
 }
 
 export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInputOptions<TApi>): ResponseInput {
@@ -1435,6 +1437,7 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 				knownCallIds,
 				includeThinkingSignatures,
 				customCallIds,
+				options.preserveAssistantMessageIds,
 			);
 			if (outputItems.length === 0) continue;
 			messages.push(...outputItems);
@@ -1478,6 +1481,7 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 	knownCallIds: Set<string>,
 	includeThinkingSignatures = true,
 	customCallIds?: Set<string>,
+	preserveMessageIds = false,
 ): ResponseInput {
 	const outputItems: ResponseInput = [];
 	let unsignedTextBlocks = 0;
@@ -1510,7 +1514,7 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 					msgId = unsignedTextBlocks === 0 ? `msg_${msgIndex}` : `msg_${msgIndex}_${unsignedTextBlocks}`;
 					unsignedTextBlocks += 1;
 				}
-			} else if (!hasReplayableReasoningItem && msgId.startsWith("msg_")) {
+			} else if (!preserveMessageIds && !hasReplayableReasoningItem && msgId.startsWith("msg_")) {
 				msgId = undefined;
 			} else if (msgId.length > 64) {
 				msgId = `msg_${Bun.hash(msgId).toString(36)}`;
