@@ -159,6 +159,13 @@ async function executeSearch(
 		antigravityEndpointMode = undefined;
 	}
 
+	let geminiModel: string | undefined;
+	try {
+		geminiModel = settings.get("providers.webSearchGeminiModel");
+	} catch {
+		geminiModel = undefined;
+	}
+
 	const failures: Array<{ provider: SearchProvider; error: unknown }> = [];
 	let lastProvider = providers[0];
 	for (const provider of providers) {
@@ -176,6 +183,7 @@ async function executeSearch(
 				authStorage,
 				sessionId,
 				antigravityEndpointMode,
+				geminiModel,
 			});
 
 			if (!hasRenderableSearchContent(response)) {

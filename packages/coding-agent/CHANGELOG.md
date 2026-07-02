@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Gemini web_search to honor `providers.webSearchGeminiModel` / `GEMINI_SEARCH_MODEL` for both OAuth and Developer API grounding requests. ([#4312](https://github.com/can1357/oh-my-pi/issues/4312))
+
 ## [16.3.1] - 2026-07-02
 
 ### Breaking Changes

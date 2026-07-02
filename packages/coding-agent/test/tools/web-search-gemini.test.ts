@@ -7,6 +7,9 @@ const SSE_RESPONSE =
 	'data: {"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"Gemini answer"}]}}],"modelVersion":"gemini-2.5-flash"}}\n\n';
 const DEVELOPER_SSE_RESPONSE =
 	'data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Developer answer"}]},"groundingMetadata":{"webSearchQueries":["latest Bun version"],"groundingChunks":[{"web":{"uri":"https://bun.sh","title":"Bun"}}],"groundingSupports":[{"segment":{"text":"Developer answer"},"groundingChunkIndices":[0]}]}}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":4,"totalTokenCount":7},"modelVersion":"gemini-2.5-flash"}\n\n';
+const DEVELOPER_SSE_RESPONSE_WITHOUT_MODEL =
+	'data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Developer answer"}]},"groundingMetadata":{"webSearchQueries":["latest Bun version"],"groundingChunks":[{"web":{"uri":"https://bun.sh","title":"Bun"}}],"groundingSupports":[{"segment":{"text":"Developer answer"},"groundingChunkIndices":[0]}]}}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":4,"totalTokenCount":7}}\n\n';
+const ORIGINAL_GEMINI_SEARCH_MODEL = Bun.env.GEMINI_SEARCH_MODEL;
 
 type CapturedRequest = {
 	url: string;
@@ -64,6 +67,11 @@ describe("searchGemini tools serialization", () => {
 
 	afterEach(() => {
 		capturedRequest = null;
+		if (ORIGINAL_GEMINI_SEARCH_MODEL === undefined) {
+			delete Bun.env.GEMINI_SEARCH_MODEL;
+		} else {
+			Bun.env.GEMINI_SEARCH_MODEL = ORIGINAL_GEMINI_SEARCH_MODEL;
+		}
 	});
 
 	function makeParams(query: string) {
@@ -102,6 +110,48 @@ describe("searchGemini tools serialization", () => {
 			usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
 		});
 	});
+
+	it("uses configured developer API model and reports it when modelVersion is absent", async () => {
+		const fetchMock = mockGeminiFetch(DEVELOPER_SSE_RESPONSE_WITHOUT_MODEL);
+		const response = await searchGemini({
+			...makeParams("developer api configured"),
+			authStorage: apiKeyAuthStorage,
+			geminiModel: "gemini-3.5-flash",
+			fetch: fetchMock,
+		});
+
+		expect(capturedRequest?.url).toBe(
+			"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:streamGenerateContent?alt=sse",
+		);
+		expect(response.model).toBe("gemini-3.5-flash");
+	});
+
+	it("uses configured OAuth model in the Cloud Code request body", async () => {
+		const fetchMock = mockGeminiFetch();
+		await searchGemini({
+			...makeParams("oauth configured"),
+			geminiModel: "gemini-3.5-flash",
+			fetch: fetchMock,
+		});
+
+		expect(capturedRequest?.body).toMatchObject({
+			model: "gemini-3.5-flash",
+		});
+	});
+
+	it("lets GEMINI_SEARCH_MODEL override the configured Gemini model", async () => {
+		Bun.env.GEMINI_SEARCH_MODEL = "gemini-2.5-pro";
+		const fetchMock = mockGeminiFetch();
+		await searchGemini({
+			...makeParams("env configured"),
+			geminiModel: "gemini-3.5-flash",
+			fetch: fetchMock,
+		});
+
+		expect(capturedRequest?.body).toMatchObject({
+			model: "gemini-2.5-pro",
+		});
+	});
 	it("sends default googleSearch tool when no passthrough payloads are provided", async () => {
 		const fetchMock = mockGeminiFetch();
 		await searchGemini({ ...makeParams("default tools"), fetch: fetchMock });
@@ -109,6 +159,9 @@ describe("searchGemini tools serialization", () => {
 		expect(capturedRequest).not.toBeNull();
 		expect(capturedRequest?.body?.request).toMatchObject({
 			tools: [{ googleSearch: {} }],
+		});
+		expect(capturedRequest?.body).toMatchObject({
+			model: "gemini-2.5-flash",
 		});
 	});
 
