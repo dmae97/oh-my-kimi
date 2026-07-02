@@ -958,13 +958,15 @@ class SandboxManager:
             repo_dir = ws_root / "repo"
             if repo_dir.exists():
                 pool = self.pool_path(repo)
-                _safe_run(["git", "worktree", "remove", "--force", str(repo_dir)], cwd=pool)
-                if repo_dir.exists():
-                    # `git worktree remove` did not clean up (nonzero exit, incl. a
-                    # 124 timeout). Delete the checkout ourselves, then prune the
-                    # pool's now-dangling worktree registration so a later
-                    # `git worktree add` for the same path does not trip on stale
-                    # metadata.
+                removed = _safe_run(["git", "worktree", "remove", "--force", str(repo_dir)], cwd=pool)
+                if removed.returncode != 0:
+                    # A failed `git worktree remove` (nonzero exit, incl. a 124
+                    # timeout) may have deleted the checkout but left the pool's
+                    # worktree registration dangling, or vice versa. Delete any
+                    # leftover checkout ourselves, then prune the dangling pool
+                    # registration so a later `git worktree add` for the same path
+                    # does not trip on stale metadata. `repo_dir.exists()` is not a
+                    # reliable proxy: a killed remove can clear the checkout first.
                     shutil.rmtree(repo_dir, ignore_errors=True)
                     _safe_run(["git", "worktree", "prune"], cwd=pool)
             if ws_root.exists():

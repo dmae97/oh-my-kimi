@@ -1145,6 +1145,42 @@ def test_remove_workspace_prunes_pool_after_failed_worktree_remove(tmp_path: Pat
     # The real checkout dir was cleaned up.
     assert not repo_dir.exists()
 
+
+def test_remove_workspace_prunes_when_failed_remove_already_deleted_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The reviewer's case: `git worktree remove` deletes the checkout dir but is
+    # killed (124) before clearing the pool's worktree registration. `repo_dir`
+    # is gone by the time we check, so a guard on `repo_dir.exists()` would skip
+    # the prune and leave dangling metadata; guarding on the return code must not.
+    mgr = SandboxManager(tmp_path)
+    ws_root = mgr.workspace_root("o/r", 9)
+    repo_dir = ws_root / "repo"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    pool = mgr.pool_path("o/r")
+
+    calls: list[tuple[list[str], object]] = []
+
+    def fake_safe_run(cmd, **k):
+        calls.append((list(cmd), k.get("cwd")))
+        if cmd[:3] == ["git", "worktree", "remove"]:
+            # Simulate git deleting the checkout, then dying before it could
+            # unregister the worktree from the pool.
+            repo_dir.rmdir()
+            return subprocess.CompletedProcess(cmd, 124, "", "timed out")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr("robomp.sandbox._safe_run", fake_safe_run)
+
+    mgr.remove_workspace(repo="o/r", number=9)
+
+    cmds = [c for c, _ in calls]
+    assert ["git", "worktree", "prune"] in cmds, (
+        "prune was skipped after a failed remove that had already deleted the checkout"
+    )
+    prune_idx = next(i for i, (c, _) in enumerate(calls) if c == ["git", "worktree", "prune"])
+    assert calls[prune_idx][1] == pool, "prune did not run in the repo's pool dir"
+
 def test_redact_credentials_strips_userinfo() -> None:
     from robomp.sandbox import redact_credentials
 
