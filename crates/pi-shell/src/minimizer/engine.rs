@@ -62,7 +62,6 @@ pub fn mode_for(command: &str, config: &MinimizerConfig) -> MinimizerMode {
 }
 
 /// Return true when the command should be captured for minimization.
-#[allow(dead_code, reason = "test-only API surface")]
 #[must_use]
 pub fn should_minimize(command: &str, config: &MinimizerConfig) -> bool {
 	!matches!(mode_for(command, config), MinimizerMode::None)
@@ -484,14 +483,12 @@ fn record_unknown_command(_command: &str) {
 
 /// Total number of commands that fell through `apply` without any matching
 /// filter. Useful for a "coverage gap" indicator in telemetry dashboards.
-#[allow(dead_code, reason = "test-only API surface")]
 pub fn unknown_command_count() -> u64 {
 	UNKNOWN_COMMAND_COUNT.load(Ordering::Relaxed)
 }
 
 /// Reset the unknown-command counter (intended for tests).
 #[doc(hidden)]
-#[allow(dead_code, reason = "test-only API surface")]
 pub fn reset_unknown_command_count() {
 	UNKNOWN_COMMAND_COUNT.store(0, Ordering::Relaxed);
 }
@@ -512,7 +509,6 @@ fn builtin_pipelines() -> &'static PipelineRegistry {
 }
 
 /// Expose the built-in registry's inline tests for the verify CLI surface.
-#[allow(dead_code, reason = "test-only API surface")]
 #[must_use]
 pub fn verify_builtin_filters() -> Vec<pipeline::TestOutcome> {
 	pipeline::run_tests(builtin_pipelines())

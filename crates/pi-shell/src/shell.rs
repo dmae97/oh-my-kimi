@@ -1159,15 +1159,13 @@ async fn run_shell_command_once(
 
 	if !reader_finished {
 		reader_cancel.cancel();
-		if let Ok(res) = time::timeout(READER_SHUTDOWN_TIMEOUT, &mut reader_handle).await {
-			if let Ok(output) = res
-				&& let Ok(output) = output
-			{
-				reader_output = Some(output);
-			}
-		} else {
-			reader_handle.abort();
-			let _ = reader_handle.await;
+		match time::timeout(READER_SHUTDOWN_TIMEOUT, &mut reader_handle).await {
+			Ok(Ok(Ok(output))) => reader_output = Some(output),
+			Ok(_) => {},
+			Err(_) => {
+				reader_handle.abort();
+				let _ = reader_handle.await;
+			},
 		}
 	}
 	cancel_bridge.abort();
