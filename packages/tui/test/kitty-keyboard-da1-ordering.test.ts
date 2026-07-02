@@ -19,11 +19,12 @@ class ModalProbe implements Component {
 		return ["modal"];
 	}
 }
+const originalSshConnection = Bun.env.SSH_CONNECTION;
 const originalSshTty = Bun.env.SSH_TTY;
 const originalSshClient = Bun.env.SSH_CLIENT;
 const originalTerminalId = TERMINAL.id;
 
-function restoreEnv(name: "SSH_TTY" | "SSH_CLIENT", value: string | undefined): void {
+function restoreEnv(name: "SSH_CONNECTION" | "SSH_TTY" | "SSH_CLIENT", value: string | undefined): void {
 	if (value === undefined) {
 		delete Bun.env[name];
 		return;
@@ -37,6 +38,7 @@ describe("ProcessTerminal kitty keyboard progressive-enhancement ordering", () =
 	afterEach(() => {
 		harness?.dispose();
 		harness = undefined;
+		restoreEnv("SSH_CONNECTION", originalSshConnection);
 		restoreEnv("SSH_TTY", originalSshTty);
 		restoreEnv("SSH_CLIENT", originalSshClient);
 		Object.defineProperty(TERMINAL, "id", { value: originalTerminalId, configurable: true });
@@ -91,8 +93,9 @@ describe("ProcessTerminal kitty keyboard progressive-enhancement ordering", () =
 		expect(out).not.toContain("\x1b[>1u");
 	});
 
-	it("skips modifyOtherKeys fallback for unknown SSH terminals", async () => {
-		Bun.env.SSH_TTY = "/dev/pts/3";
+	it("skips modifyOtherKeys fallback for SSH_CONNECTION-only unknown terminals", async () => {
+		Bun.env.SSH_CONNECTION = "192.0.2.10 54321 192.0.2.20 22";
+		delete Bun.env.SSH_TTY;
 		delete Bun.env.SSH_CLIENT;
 		Object.defineProperty(TERMINAL, "id", { value: "base", configurable: true });
 		harness = createProcessTerminalRenderHarness(100, 30);
