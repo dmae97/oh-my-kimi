@@ -1,5 +1,10 @@
 import { toError } from "@oh-my-pi/pi-utils";
-import type { SessionStorage, SessionStorageStat, SessionStorageWriter } from "./session-storage";
+import type {
+	SessionStorage,
+	SessionStorageStat,
+	SessionStorageWriter,
+	WriteTextAtomicOptions,
+} from "./session-storage";
 import {
 	overlayTitleSlotContent,
 	overlayTitleSlotPrefix,
@@ -234,8 +239,40 @@ export class IndexedSessionStorage implements SessionStorage {
 		}
 	}
 
-	writeTextAtomic(path: string, content: string): Promise<void> {
-		return this.writeText(path, content);
+	async writeTextAtomic(path: string, content: string, options?: WriteTextAtomicOptions): Promise<void> {
+		const commitGuard = options?.commitGuard;
+		if (commitGuard && !commitGuard()) return;
+		await this.#awaitPath(path);
+		// A concurrent flushSync (writeTextSync) may have taken over during the
+		// awaitPath yield and bumped the epoch. Re-check before touching the
+		// index or enqueueing the backend publish.
+		if (commitGuard && !commitGuard()) return;
+		const previous = this.#index.get(path);
+		const mtimeMs = this.#allocMtimeMs();
+		const title = titleUpdateFromSlot(parseTitleSlotFromContent(content));
+		this.#setIndex(path, byteLength(content), mtimeMs, title ?? null);
+		try {
+			await this.#enqueuePath(
+				path,
+				async () => {
+					// Final guard immediately before the backend actually publishes.
+					// If a concurrent writer has advanced the index past our
+					// optimistic entry, leave that newer state alone; otherwise
+					// restore the pre-write snapshot so readers do not observe a
+					// body we never wrote.
+					if (commitGuard && !commitGuard()) {
+						const current = this.#index.get(path);
+						if (current?.mtimeMs === mtimeMs) this.#restoreIndex(path, previous);
+						return;
+					}
+					await this.#backend.writeFull(path, content, mtimeMs, title);
+				},
+				{ trackDrain: false },
+			);
+		} catch (err) {
+			this.#restoreIndex(path, previous);
+			throw toError(err);
+		}
 	}
 
 	async rename(src: string, dst: string): Promise<void> {

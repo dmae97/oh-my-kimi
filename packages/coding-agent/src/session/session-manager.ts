@@ -383,6 +383,17 @@ export class SessionManager {
 	#diskFailureLogged = false;
 	/** Bumped on every sync rewrite / chain reset so stale queued tasks become no-ops. */
 	#diskEpoch = 0;
+	/**
+	 * Epoch of the in-flight atomic rewrite, or `null` when no rewrite is running.
+	 * The fence in {@link #appendToSessionFile} only applies while this matches
+	 * `#diskEpoch`: once a synchronous rewrite (`flushSync` → `#rewriteSynchronously`)
+	 * bumps the epoch, the pending atomic publish is guaranteed to abandon via
+	 * its `commitGuard`, and appends can safely take the hot path against the
+	 * freshly-published file.
+	 */
+	#atomicRewriteFenceEpoch: number | null = null;
+	/** Set by synchronous appends that land while an atomic replacement is active. */
+	#atomicRewriteDirty = false;
 
 	#artifactManager: ArtifactManager | null = null;
 	#artifactManagerSessionFile: string | null = null;
@@ -555,25 +566,63 @@ export class SessionManager {
 
 	/**
 	 * Rewrite the whole file atomically (temp-write + rename, EPERM-safe) on the
-	 * disk chain. The body is serialized inside the task — after the writer is
-	 * closed — so entries appended before the task runs are included.
+	 * disk chain. The body is serialized after the writer is closed. The fence
+	 * is enabled BEFORE `#closeWriterHandle()` and stays active until the last
+	 * atomic publish returns, so a sync append landing in the close-yield window
+	 * cannot open a fresh writer that the pending replacement would then detach
+	 * from the current JSONL path. A `commitGuard` also prevents a superseding
+	 * synchronous rewrite from being overwritten by the stale body serialized
+	 * before it ran.
 	 */
 	async #rewriteAtomically(): Promise<void> {
 		if (!this.#persist || !this.#sessionFile) return;
 
-		const epoch = this.#diskEpoch;
+		const startEpoch = this.#diskEpoch;
 		await this.#scheduleDiskWork(
 			async () => {
+				if (await this.#runFencedAtomicRewrite(startEpoch)) {
+					this.#fileIsCurrent = true;
+					this.#rewriteRequired = false;
+					this.#hasTitleSlot = true;
+				}
+			},
+			{ epoch: startEpoch },
+		);
+	}
+
+	/**
+	 * Shared fenced atomic-rewrite loop used by `#rewriteAtomically` and the
+	 * `#persistTitleChangeEntry` fallback. Holds `#atomicRewriteActive` across
+	 * the writer close and the full-file replace, and loops on
+	 * `#atomicRewriteDirty` so any fenced append that lands during the rewrite
+	 * is captured before the task resolves. Returns `false` when the disk epoch
+	 * moved (a superseding synchronous rewrite has taken over) so callers skip
+	 * their post-publish state updates.
+	 */
+	async #runFencedAtomicRewrite(epoch: number): Promise<boolean> {
+		this.#atomicRewriteFenceEpoch = epoch;
+		try {
+			do {
+				this.#atomicRewriteDirty = false;
 				await this.#closeWriterHandle();
 				const sessionFile = this.#sessionFile;
-				if (!sessionFile) return;
-				await this.#storage.writeTextAtomic(sessionFile, this.#fileBody());
-				this.#fileIsCurrent = true;
-				this.#rewriteRequired = false;
-				this.#hasTitleSlot = true;
-			},
-			{ epoch },
-		);
+				if (!sessionFile) return false;
+				if (this.#diskEpoch !== epoch) return false;
+				await this.#storage.writeTextAtomic(sessionFile, this.#fileBody(), {
+					commitGuard: () => this.#diskEpoch === epoch,
+				});
+				if (this.#diskEpoch !== epoch) return false;
+			} while (this.#atomicRewriteDirty);
+			return true;
+		} finally {
+			// Only relinquish the fence if we still own it. A superseding
+			// synchronous rewrite (`flushSync` → `#rewriteSynchronously`) may
+			// have reset `#diskTail`, scheduled a fresh atomic task at the new
+			// epoch, and that task may have taken ownership of the fence while
+			// this stale rewrite was still awaiting storage. Clearing it here
+			// unconditionally would strand appends during the newer publish.
+			if (this.#atomicRewriteFenceEpoch === epoch) this.#atomicRewriteFenceEpoch = null;
+		}
 	}
 
 	#appendToSessionFile(entry: SessionEntry): void {
@@ -588,6 +637,19 @@ export class SessionManager {
 			return;
 		}
 
+		// Atomic replacement window: the old path may be moved aside underneath
+		// any newly-opened append handle (Windows EPERM fallback). Do not open a
+		// writer here; the active rewrite loops and serializes a fresh full body.
+		// A superseding synchronous rewrite bumps `#diskEpoch`, at which point
+		// the pending atomic publish is guaranteed to abandon via its
+		// `commitGuard`, so appends can (and must) take the hot path so they
+		// don't strand in memory while `close()` returns without a rewrite.
+		if (this.#atomicRewriteFenceEpoch !== null && this.#atomicRewriteFenceEpoch === this.#diskEpoch) {
+			this.#fileIsCurrent = false;
+			this.#rewriteRequired = true;
+			this.#atomicRewriteDirty = true;
+			return;
+		}
 		// Cold/divergent: not on disk yet, or in-memory entries diverged from the
 		// file → rewrite the whole file synchronously and keep going.
 		if (!this.#fileIsCurrent || this.#rewriteRequired) {
@@ -637,10 +699,9 @@ export class SessionManager {
 				try {
 					await this.#appendWriter().append(line);
 					await this.#storage.updateSessionTitle(sessionFile, update);
-					this.#fileIsCurrent = true;
+					if (this.#diskEpoch === epoch) this.#fileIsCurrent = true;
 				} catch {
-					await this.#closeWriterHandle();
-					await this.#storage.writeTextAtomic(sessionFile, this.#fileBody());
+					if (!(await this.#runFencedAtomicRewrite(epoch))) return;
 					this.#clearDiskError();
 					this.#fileIsCurrent = true;
 					this.#rewriteRequired = false;
@@ -1049,6 +1110,10 @@ export class SessionManager {
 		await this.#scheduleDiskWork(async () => {
 			if (this.#writer?.isOpen()) await this.#writer.flush();
 		});
+		// Drain any fire-and-forget backing writes (e.g. `writeTextSync` queued
+		// on IndexedSessionStorage during `flushSync`) so callers relying on
+		// flush() see the write durably visible to readers.
+		await this.#storage.drain();
 		if (this.#diskFailure) throw this.#diskFailure;
 	}
 
@@ -1078,6 +1143,10 @@ export class SessionManager {
 			if (hadWriter || (this.#sessionFile && this.#storage.existsSync(this.#sessionFile)))
 				this.#fileIsCurrent = true;
 		});
+		// Wait for any queued backing writes (IndexedSessionStorage per-path
+		// tail) to become durable so a graceful shutdown does not exit while
+		// a fire-and-forget publish is still on the wire.
+		await this.#storage.drain();
 		if (this.#diskFailure) throw this.#diskFailure;
 	}
 

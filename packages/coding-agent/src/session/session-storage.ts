@@ -28,6 +28,18 @@ export interface SessionStorageWriter {
 	getError(): Error | undefined;
 }
 
+/**
+ * Optional guard applied by {@link SessionStorage.writeTextAtomic}. The
+ * backend MUST call `commitGuard()` synchronously immediately before it makes
+ * the staged content visible at `path`. If it returns `false`, the staged
+ * write is discarded and the target is left untouched. Backends MUST NOT
+ * yield between calling the guard and publishing the write, so a concurrent
+ * synchronous rewrite that took over cannot be overwritten by a stale body.
+ */
+export interface WriteTextAtomicOptions {
+	commitGuard?: () => boolean;
+}
+
 export interface SessionStorage {
 	ensureDirSync(dir: string): void;
 	existsSync(path: string): boolean;
@@ -48,11 +60,20 @@ export interface SessionStorage {
 	/** Read the requested UTF-8 byte windows from the head and tail of the file. */
 	readTextSlices(path: string, prefixBytes: number, suffixBytes: number): Promise<[string, string]>;
 	writeText(path: string, content: string): Promise<void>;
-	writeTextAtomic(path: string, content: string): Promise<void>;
+	writeTextAtomic(path: string, content: string, options?: WriteTextAtomicOptions): Promise<void>;
 	rename(path: string, nextPath: string): Promise<void>;
 	unlink(path: string): Promise<void>;
 	deleteSessionWithArtifacts(sessionPath: string): Promise<void>;
 	openWriter(path: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }): SessionStorageWriter;
+	/**
+	 * Wait for every backing write scheduled by this storage to become durably
+	 * visible. Sync backends (file, memory) return immediately because their
+	 * writes complete in-body; async backends (Redis/SQL via
+	 * {@link IndexedSessionStorage}) await their per-path queues so a caller
+	 * driving a graceful shutdown does not exit while a fire-and-forget
+	 * `writeTextSync` publish is still on the wire.
+	 */
+	drain(): Promise<void>;
 }
 
 // FinalizationRegistry to clean up leaked file descriptors
@@ -229,53 +250,107 @@ export class FileSessionStorage implements SessionStorage {
 		await Bun.write(path, content, { createPath: true });
 	}
 
-	async writeTextAtomic(fpath: string, content: string): Promise<void> {
+	async writeTextAtomic(fpath: string, content: string, options?: WriteTextAtomicOptions): Promise<void> {
 		const dir = path.resolve(fpath, "..");
 		const tempPath = path.join(dir, `.${path.basename(fpath)}.${Snowflake.next()}.tmp`);
 		await fs.promises.mkdir(dir, { recursive: true });
 		try {
 			await fs.promises.writeFile(tempPath, content);
-			try {
-				await this.rename(tempPath, fpath);
-				return;
-			} catch (err) {
-				if (!hasFsCode(err, "EPERM")) throw toError(err);
-				await this.#replaceSessionFileAfterEperm(tempPath, fpath, err);
-				return;
-			}
 		} catch (err) {
-			try {
-				await this.unlink(tempPath);
-			} catch (cleanupErr) {
-				if (!isEnoent(cleanupErr)) {
-					logger.warn("Failed to remove session rewrite temp file", {
-						sessionFile: fpath,
-						tempPath,
-						error: toError(cleanupErr).message,
-					});
-				}
-			}
+			this.#discardTemp(tempPath, fpath);
 			throw toError(err);
+		}
+		// Guard-check + rename MUST NOT be separated by an await. A concurrent
+		// synchronous rewrite (flushSync -> #rewriteSynchronously) can otherwise
+		// publish a fresh body between the check and the rename, and this stale
+		// staged body would overwrite it. Sync rename closes that window.
+		if (options?.commitGuard && !options.commitGuard()) {
+			this.#discardTemp(tempPath, fpath);
+			return;
+		}
+		try {
+			this.renameSync(tempPath, fpath);
+			return;
+		} catch (err) {
+			if (!hasFsCode(err, "EPERM")) {
+				this.#discardTemp(tempPath, fpath);
+				throw toError(err);
+			}
+			try {
+				this.#replaceSessionFileAfterEpermSync(tempPath, fpath, err, options?.commitGuard);
+			} catch (fallbackErr) {
+				this.#discardTemp(tempPath, fpath);
+				throw fallbackErr;
+			}
 		}
 	}
 
-	async #replaceSessionFileAfterEperm(tempPath: string, targetPath: string, renameError: unknown): Promise<void> {
+	/**
+	 * Sync rename hook. Split from `rename` so `writeTextAtomic` can perform its
+	 * guard-then-publish step without a yield, and so tests can inject
+	 * Windows-style EPERM at the sync layer used by the atomic path.
+	 */
+	renameSync(source: string, target: string): void {
+		fs.renameSync(source, target);
+	}
+
+	#discardTemp(tempPath: string, targetPath: string): void {
+		try {
+			fs.unlinkSync(tempPath);
+		} catch (err) {
+			if (!isEnoent(err)) {
+				logger.warn("Failed to remove session rewrite temp file", {
+					sessionFile: targetPath,
+					tempPath,
+					error: toError(err).message,
+				});
+			}
+		}
+	}
+
+	#replaceSessionFileAfterEpermSync(
+		tempPath: string,
+		targetPath: string,
+		renameError: unknown,
+		commitGuard?: () => boolean,
+	): void {
 		const dir = path.resolve(targetPath, "..");
 		const backupPath = path.join(dir, `${path.basename(targetPath)}.${Snowflake.next()}.bak`);
 		try {
-			await this.rename(targetPath, backupPath);
+			this.renameSync(targetPath, backupPath);
 		} catch (moveAsideError) {
 			if (isEnoent(moveAsideError)) {
-				await this.rename(tempPath, targetPath);
+				if (commitGuard && !commitGuard()) {
+					this.#discardTemp(tempPath, targetPath);
+					return;
+				}
+				this.renameSync(tempPath, targetPath);
 				return;
 			}
 			throw toError(renameError);
 		}
+		if (commitGuard && !commitGuard()) {
+			// A concurrent synchronous rewrite published a fresh body between the
+			// move-aside and this point. Restore the moved-aside file so we do
+			// not overwrite it with our staged (stale) body, and drop the temp
+			// so `writeTextAtomic`'s "discard on abandon" contract holds.
+			try {
+				this.renameSync(backupPath, targetPath);
+			} catch (restoreErr) {
+				logger.warn("Failed to restore backup after commitGuard rejection", {
+					sessionFile: targetPath,
+					backupPath,
+					error: toError(restoreErr).message,
+				});
+			}
+			this.#discardTemp(tempPath, targetPath);
+			return;
+		}
 		try {
-			await this.rename(tempPath, targetPath);
+			this.renameSync(tempPath, targetPath);
 		} catch (replaceError) {
 			try {
-				await this.rename(backupPath, targetPath);
+				this.renameSync(backupPath, targetPath);
 			} catch (rollbackErr) {
 				const rollbackError = toError(rollbackErr);
 				throw new Error(
@@ -288,7 +363,7 @@ export class FileSessionStorage implements SessionStorage {
 			throw toError(replaceError);
 		}
 		try {
-			await this.unlink(backupPath);
+			fs.unlinkSync(backupPath);
 		} catch (err) {
 			if (!isEnoent(err)) {
 				logger.warn("Failed to remove session rewrite backup", {
@@ -310,6 +385,12 @@ export class FileSessionStorage implements SessionStorage {
 
 	unlink(path: string): Promise<void> {
 		return fs.promises.unlink(path);
+	}
+
+	drain(): Promise<void> {
+		// File writes complete synchronously in-body via fs.writeFileSync /
+		// fs.renameSync, so there is no queued work to await.
+		return Promise.resolve();
 	}
 
 	openWriter(path: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }): SessionStorageWriter {
@@ -621,7 +702,8 @@ export class MemorySessionStorage implements SessionStorage {
 		return Promise.resolve();
 	}
 
-	writeTextAtomic(path: string, content: string): Promise<void> {
+	writeTextAtomic(path: string, content: string, options?: WriteTextAtomicOptions): Promise<void> {
+		if (options?.commitGuard && !options.commitGuard()) return Promise.resolve();
 		this.writeTextSync(path, content);
 		return Promise.resolve();
 	}
@@ -639,6 +721,10 @@ export class MemorySessionStorage implements SessionStorage {
 		return Promise.resolve();
 	}
 	deleteSessionWithArtifacts(_sessionPath: string): Promise<void> {
+		return Promise.resolve();
+	}
+
+	drain(): Promise<void> {
 		return Promise.resolve();
 	}
 
