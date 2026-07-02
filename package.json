@@ -107,7 +107,7 @@
     "build:native": "bun --cwd=packages/natives run build",
     "test": "bun scripts/ci-test-ts.ts local",
     "test:ts": "bun scripts/ci-test-ts.ts local-ts",
-    "test:scripts": "bun test scripts/ci-concurrency.test.ts scripts/ci-release-notes.test.ts scripts/ci-test-ts.test.ts",
+    "test:scripts": "bun test scripts/ci-concurrency.test.ts scripts/ci-release-notes.test.ts scripts/link-omp.test.ts",
     "test:rs": "bun scripts/run-rs-task.ts test:rs",
     "check": "bun run --parallel check:ts check:rs",
     "check:ts": "bun run check:tools && bun run --workspaces --if-present check",

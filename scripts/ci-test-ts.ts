@@ -105,11 +105,13 @@ const localOnlyWorkspacePackages = ["packages/mnemopi", "python/robomp/web"];
 
 // Repo-level script tests. CI's `workspace` bucket only runs the concurrency
 // regression (it's the GHA-config guard that must gate merges); a local full run
-// also exercises the release-notes and runner-output tests.
+// also exercises the release-notes and link-omp tests. (A `ci-test-ts.test.ts`
+// entry used to sit here but the file never existed — bun silently ignores
+// unmatched filters when at least one other filter matches.)
 const repoScriptTests = [
 	"scripts/ci-concurrency.test.ts",
 	"scripts/ci-release-notes.test.ts",
-	"scripts/ci-test-ts.test.ts",
+	"scripts/link-omp.test.ts",
 ];
 
 const codingAgentNativePathPatterns = [
