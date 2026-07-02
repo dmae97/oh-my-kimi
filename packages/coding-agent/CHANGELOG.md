@@ -2,10 +2,27 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **Settings:** `hooks` and `customTools` arrays replaced with single `extensions` array
+- **CLI:** `--hook` and `--tool` flags replaced with `--extension` / `-e`
+- **Directories:** `hooks/`, `tools/` → `extensions/`; `commands/` → `prompts/`
+- **Types:** See type renames above
+- **SDK:** See SDK migration above
+
 ### Added
 
 - Added `providers.anthropic.serverSideFallback` (default off; UI in the "Model → Retry & Fallback" group). When enabled, Claude Fable 5 / Mythos 5 requests carry `fallbacks: [{ model: "claude-opus-4-8" }]` via Anthropic's server-side-fallback beta chain so classifier-blocked turns are retried on Opus 4.8 without breaking the current call. Opt-in only — leaving it off preserves the pre-fallback behavior. ([#4177](https://github.com/can1357/oh-my-pi/issues/4177))
 - Added `task.softRequestBudgetNotice` (default off) to opt into the subagent soft-budget wrap-up steering notice while keeping the 1.5x graceful abort guard active.
+- Added `WebSearchProviderError` class with HTTP status for actionable provider error messages
+- Hook API: `ctx.ui.setTitle(title)` allows hooks to set the terminal window/tab title ([#446](https://github.com/badlogic/pi-mono/pull/446) by [@aliou](https://github.com/aliou))
+- Configurable double-escape action: choose whether double-escape with empty editor opens `/tree` (default) or `/branch`. Configure via `/settings` or `doubleEscapeAction` in settings.json ([#404](https://github.com/badlogic/pi-mono/issues/404))
+- Vertex AI provider (`google-vertex`): access Gemini models via Google Cloud Vertex AI using Application Default Credentials ([#300](https://github.com/badlogic/pi-mono/pull/300) by [@default-anton](https://github.com/default-anton))
+- Built-in provider overrides in `models.json`: override just `baseUrl` to route a built-in provider through a proxy while keeping all its models, or define `models` to fully replace the provider ([#406](https://github.com/badlogic/pi-mono/pull/406) by [@yevhen](https://github.com/yevhen))
+- Automatic image resizing: images larger than 2000x2000 are resized for better model compatibility. Original dimensions are injected into the prompt. Controlled via `/settings` or `images.autoResize` in settings.json. ([#402](https://github.com/badlogic/pi-mono/pull/402) by [@mitsuhiko](https://github.com/mitsuhiko))
+- Alt+Enter keybind to queue follow-up messages while agent is streaming
+- `Theme` and `ThemeColor` types now exported for hooks using `ctx.ui.custom()`
+- Terminal window title now displays "pi - dirname" to identify which project session you're in ([#407](https://github.com/badlogic/pi-mono/pull/407) by [@kaofelix](https://github.com/kaofelix))
 
 ### Changed
 
@@ -14,13 +31,34 @@
 - Improved TUI responsiveness and reduced CPU usage during long-running tool sessions by throttling status-line redraws and optimizing subagent persistence checks.
 - Updated the advisor system prompt and documentation to accurately reflect WATCHDOG.yml tool grants.
 - Improved DuckDuckGo web search error clarity and documented datacenter/shared-egress limitations in provider settings.
+- Changed `isAutoresearchShCommand()` to use proper command-line argument parsing instead of regex, improving accuracy for complex shell invocations
+- Changed autoresearch initialization prompt to display collected tradeoff metrics in the setup summary
+- Changed `command-initialize.md` template to include guidance on preflight requirements, comparability invariants, and marking measurement-critical files as off-limits
+- Changed `command-initialize.md` to instruct users to write or update `autoresearch.program.md` with durable heuristics and repo-specific strategy
+- Changed autoresearch resume guidance to emphasize continuing on the current protected branch rather than switching branches
+- Changed autoresearch prompt to clarify that `autoresearch.md` holds durable conclusions while `autoresearch.ideas.md` is the scratch backlog
+- Changed autoresearch prompt guidance to require stable measurement harness and fixed benchmark inputs unless intentionally starting a new segment
+- Changed autoresearch prompt to recommend keeping equal or near-equal results when they materially simplify implementation
+- Changed `init_experiment` to reset pending run state (checks, duration, ASI, artifact directory) when initializing a new segment
+- Changed `log_experiment` to set `autoResumeArmed` flag after successfully logging a run to enable auto-resume on next agent turn
+- Changed `run_experiment` to set `autoResumeArmed` flag and update dashboard after completing a run
+- Changed auto-resume logic to only prompt when a new pending run exists or when `autoResumeArmed` is explicitly set, preventing duplicate prompts
+- Changed path normalization in contract validation to use `path.posix.normalize()` for consistent path handling
+- Extended extension `registerProvider()` typing with OAuth provider support and source-aware registration metadata.
+- Extensions can have their own `package.json` with dependencies (resolved via jiti)
+- Documentation: `docs/hooks.md` and `docs/custom-tools.md` merged into `docs/extensions.md`
+- Examples: `examples/hooks/` and `examples/custom-tools/` merged into `examples/extensions/`
+- README: Extensions section expanded with custom tools, commands, events, state persistence, shortcuts, flags, and UI examples
+- SDK: `customTools` option now accepts `ToolDefinition[]` directly (simplified from `Array<{ path?, tool }>`)
+- SDK: `extensions` option accepts `ExtensionFactory[]` for inline extensions
+- SDK: `additionalExtensionPaths` replaces both `additionalHookPaths` and `additionalCustomToolPaths`
+- Editor component now uses word wrapping instead of character-level wrapping for better readability ([#382](https://github.com/badlogic/pi-mono/pull/382) by [@nickseelert](https://github.com/nickseelert))
 
 ### Fixed
 
 - Fixed transcript rebuilds preserving synthetic assistant stop errors for tool calls instead of letting later tool results replace them.
 - Fixed sequential patch/edit failures leaving dirty buffers in multi-file edits by flushing the LSP writethrough queue upfront on early abort paths
 - Fixed the subagent task preview erroneously showing "ctrl+o: Expand" hints on output lines capped inside the already-expanded view
-
 - Fixed the cross-file write batching regression in `apply_patch` multi-file operations by reverting to flushing only on the last file write or explicitly on early failure paths, and refactored error counting to use clean booleans.
 - Fixed collab teardown (`/collab stop`, unrecoverable relay drop) cancelling a hook selector/editor the host user was actively typing in: teardown resolved pending guest asks the same way as a guest cancel, so the mirrored race dismissed the local dialog and dropped its input. Teardown now settles guest asks as `unavailable`, and the local dialog keeps running and wins with its eventual answer.
 - Fixed RPC mode deferred shutdown (`pi.shutdown()`) killing the process while a background-dispatched `bash` command was still running: the response frame is now written before exit, and a shutdown requested mid-bash fires once the command settles even when no further client frames arrive.
@@ -46,7 +84,7 @@
 - Fixed /copy code and /copy cmd commands being treated as normal prompts instead of copying the requested blocks.
 - Fixed interactive bash status line not updating after directory changes (cd).
 - Fixed session title refreshes ignoring user TITLE_SYSTEM.md overrides during replans, and prevented auto-generated titles from incorrectly preserving all-caps text from user messages.
-- Fixed the live todo HUD going stale during long tool-use loops by adding mid-run reminders for incomplete items.
+- Fixed the live todo HUD going stale during long tool-use loops via a hidden mid-run reconciliation hint. The hint is model-only (never rendered in the TUI or transcript), fires only after sustained mutating work (`bash`/`eval`/`edit`/`write`/`ast_edit` results — read-only exploration never counts), and is capped at two per prompt cycle, separate from the stop-time incomplete-todo reminder ladder.
 - Fixed /shake and mid-stream chat rebuilds erasing active LLM output.
 - Fixed RpcClient failing to restart after being stopped or failing on initial startup.
 - Fixed /collab web guests being unable to answer ask tool questions by routing host UI requests through writable collab peers.
@@ -74,7 +112,7 @@
 - Improved robustness of MCP authentication error detection and header-based server discovery.
 - Fixed reliable detection of 401/403 authorization failures during Smithery commands and HTTP RPCs.
 - Improved streaming preview responsiveness for write, edit, and eval tools by decoding streamed string arguments incrementally.
-- Added retry-path diagnostics for assistant-tail removal and scheduled continuations after transient provider errors.
+- Fixed retry handling after transient provider errors: the failed assistant tail is restored before the rescheduled continuation, and skipped continuations carry their skip reason.
 - Fixed CJK history rendering issues across repeated compactions.
 - Fixed user-invoked skills failing to identify themselves or resolve relative paths across various execution paths.
 - Fixed type errors introduced by the merge sweep: restored the ask row-budget priority field, narrowed dereferenced schema property access, and updated stale test API usage.
@@ -85,6 +123,17 @@
 - Fixed user-configured LiteLLM discovery providers keeping stale reseller display-name suffixes for up to 24 hours after upgrade by invalidating the warm model cache.
 - Fixed `mergeTaskBranches` and `applyNestedPatches` leaving stage 1/2/3 unmerged entries in `.git/index` when the post-merge stash pop conflicted with the cherry-picked HEAD. The corrupted index survived indefinitely and every subsequent overlay-isolated task inherited it through the lower layer, causing `captureRepoDeltaPatch` to emit `diff --cc` output that `git apply` rejects with "No valid patches in input". The stash restore now runs behind a 3-way preflight check (`git apply --3way --check`) and a `reset --hard HEAD` cleanup fallback; the stash entry is preserved for manual recovery on conflict, and the merged commits still land on HEAD. ([#4175](https://github.com/can1357/oh-my-pi/issues/4175))
 - Fixed macOS `Command+V` image pastes in Ghostty by binding the Kitty `super+v` key event to the image-paste action alongside `Ctrl+V`. ([#4178](https://github.com/can1357/oh-my-pi/issues/4178))
+- Fixed a rare Bun GC segfault (exit 133) during model discovery: every discovery fetch armed an uncancellable `AbortSignal.timeout(...)` whose timer outlived the request (instantly against a mocked or fast endpoint). The pending timer fired later — sometimes during an unrelated allocation or test teardown — set the signal's abort `reason`, and crashed JSC's concurrent garbage collector while it marked the wrapped reason (`JSAbortSignal::visitAdditionalChildren`). Discovery now runs each fetch under a `withTimeoutSignal` helper that clears the backing timer the instant the operation settles, so the signal is never left armed on the heap.
+- Fixed boundary duplication warnings to always display when replacement lines match the next surviving line, even when auto-correction is disabled
+- Fixed secondary metrics validation to properly reject missing configured metrics and new metrics without force flag
+- Fixed ASI data cloning to prevent prototype pollution attacks by filtering reserved property names
+- Fixed CLI `--api-key` handling for deferred model resolution by applying runtime API key overrides after extension model selection.
+- Fixed extension provider registration cleanup to remove stale source-scoped custom API/OAuth providers across extension reloads.
+- Edit tool diff not displaying in TUI due to race condition between async preview computation and tool execution
+- `/model` selector now opens instantly instead of waiting for OAuth token refresh. Token refresh is deferred until a model is actually used.
+- Shift+Space, Shift+Backspace, and Shift+Delete now work correctly in Kitty-protocol terminals (Kitty, WezTerm, etc.) instead of being silently ignored ([#411](https://github.com/badlogic/pi-mono/pull/411) by [@nathyong](https://github.com/nathyong))
+- `AgentSession.prompt()` now throws if called while the agent is already streaming, preventing race conditions. Use `steer()` or `followUp()` to queue messages during streaming.
+- Ctrl+C now works like Escape in selector components, so mashing Ctrl+C will eventually close the program ([#400](https://github.com/badlogic/pi-mono/pull/400) by [@mitsuhiko](https://github.com/mitsuhiko))
 
 ## [16.2.13] - 2026-07-01
 
@@ -92,7 +141,6 @@
 
 - Fixed `models.yml` remote compaction schema support for V2 streaming endpoint fields. ([#4146](https://github.com/can1357/oh-my-pi/issues/4146))
 - Fixed the SSH tool to reject `cwd` values of `~` and `~/...` before sending guaranteed-bad quoted tilde paths to remote POSIX shells. ([#4002](https://github.com/can1357/oh-my-pi/issues/4002))
-- Status line token throughput segment now uses a dedicated tachometer icon (`icon.throughput`) instead of reusing the output arrow; cache read/write segments use a single database icon instead of stacking input/output arrows alongside it.
 
 ## [16.2.12] - 2026-07-01
 
@@ -481,7 +529,7 @@
 
 ### Fixed
 
-- Fixed Ctrl+Z hanging the terminal after any tool call had run: the TUI tore down (`ui.stop()`) but the process kept running in `Sl+` state, leaving the user with a dead terminal recoverable only via `kill -9`. The embedded `brush-core` shell behind every bash tool call installs a tokio SIGTSTP listener on `Process::wait` (`crates/vendor/brush-core/src/sys/unix/signal.rs::tstp_signal_listener` → `tokio::signal::unix::signal(SIGTSTP)`); per tokio's contract, the first call for a SignalKind permanently replaces the kernel-default handler for the lifetime of the process. So the first bash invocation — even `/usr/bin/true` — silently overrode SIGTSTP's "stop" default, and `InputController.handleCtrlZ`'s subsequent `process.kill(0, "SIGTSTP")` was swallowed by tokio. The handler now sends `SIGSTOP` (uncatchable, unblockable, unignorable) to the foreground process group, so the kernel parks omp regardless of installed handlers and the shell sees the whole job stop even when omp runs behind a wrapper (`npx`, `pnpm exec`, `bunx`, …) or as one stage of a pipeline. MCP stdio servers now spawn detached into their own session — they're insulated both from terminal job-control signals (which used to stop their process trees and leave the JSONL read loop blocked on silent pipes) and from the new pgid=0 suspend itself ([#3461](https://github.com/can1357/oh-my-pi/issues/3461)).
+- Fixed Ctrl+Z hanging the terminal after any tool call had run: the TUI tore down (`ui.stop()`) but the process kept running in `Sl+` state, leaving the user with a dead terminal recoverable only via `kill -9`. The embedded `brush-core` shell behind every bash tool call installs a tokio SIGTSTP listener on `Process::wait` (`crates/brush-core-vendored/src/sys/unix/signal.rs::tstp_signal_listener` → `tokio::signal::unix::signal(SIGTSTP)`); per tokio's contract, the first call for a SignalKind permanently replaces the kernel-default handler for the lifetime of the process. So the first bash invocation — even `/usr/bin/true` — silently overrode SIGTSTP's "stop" default, and `InputController.handleCtrlZ`'s subsequent `process.kill(0, "SIGTSTP")` was swallowed by tokio. The handler now sends `SIGSTOP` (uncatchable, unblockable, unignorable) to the foreground process group, so the kernel parks omp regardless of installed handlers and the shell sees the whole job stop even when omp runs behind a wrapper (`npx`, `pnpm exec`, `bunx`, …) or as one stage of a pipeline. MCP stdio servers now spawn detached into their own session — they're insulated both from terminal job-control signals (which used to stop their process trees and leave the JSONL read loop blocked on silent pipes) and from the new pgid=0 suspend itself ([#3461](https://github.com/can1357/oh-my-pi/issues/3461)).
 - Fixed image-only composer submissions while the agent is streaming being treated as empty input, which dropped the image or aborted the active turn when another message was queued. Pending pasted images now count as submit content for Enter and Ctrl+Enter follow-ups. ([#3467](https://github.com/can1357/oh-my-pi/issues/3467))
 - Fixed `omp gallery --state` accepting lifecycle tokens that did not match displayed state labels and rendering unknown state values as `· undefined`; displayed labels now work as aliases, invalid values fail with a valid-token list, and failed gallery fixtures visibly render failures. ([#3473](https://github.com/can1357/oh-my-pi/issues/3473))
 - Fixed the bash tool's snapshotted `mise()` shell function dying with `command: command not found:` because `$__MISE_EXE` was empty in the replay shell. `generateSnapshotScript` captured the function via `declare -f`/`typeset -f` but only ever re-exported `PATH`, so every other env var the rc file set (notably the `*_EXE` sidecar `mise activate` exports) was lost; the function body then expanded `command "$__MISE_EXE" "$@"` to `command "" …` and died with exit 127. The snapshot script now scans captured function bodies for `$VAR` / `${VAR…}` references and re-emits `export NAME='value'` for each referenced var that is currently set (with a denylist for shell-internal names like `PATH`/`HOME`/`BASH_*`/`LC_*` plus a likely-secret denylist for `*TOKEN*`/`*SECRET*`/`*API_KEY*`/`*PASSWORD*`/`*PRIVATE_KEY*`/`*ACCESS_KEY*`/`*CREDENTIAL*`/`*SESSION_KEY*`), the snapshot script `umask 077`s itself and the JS caller chmods the snapshot file/dir to `0600`/`0700` so the new export pass can't leak secrets into a shared tmp dir. Fixes mise, asdf shims, direnv-style helpers, and other activation idioms that pair a function with a helper env var. `getShellConfigFile` now also honours `env.HOME` (falling back to `os.homedir()`) so sandboxed callers can target a non-default rc. ([#3470](https://github.com/can1357/oh-my-pi/issues/3470))
@@ -3377,12 +3425,6 @@
 ### Fixed
 
 - Fixed `RULES.md` not being injected. The documented sticky-rules file at `~/.omp/agent/RULES.md` and `<repo>/.omp/RULES.md` was never read by any discovery provider; only `.omp/rules/*.md` was scanned. The native provider now loads both as always-apply rules so they re-attach every turn as documented ([#1266](https://github.com/can1357/oh-my-pi/issues/1266)).
-
-## [15.2.1] - 2026-05-21
-
-### Added
-
-- Added `.omp-plugin/marketplace.json` as a preferred marketplace catalog path. `fetchMarketplace` now searches `.omp-plugin/marketplace.json` before `.claude-plugin/marketplace.json` for every local and cloned source. Lets a single marketplace repository publish a tool-specific catalog (e.g. an omp-only superset of a shared Claude Code marketplace) without forcing the omp/Claude distinction into per-plugin tagging. Mirrors the `package.json#omp.extensions` precedence pattern; the `.claude-plugin/marketplace.json` fallback keeps every existing marketplace loading unchanged.
 
 ## [15.2.1] - 2026-05-21
 
@@ -11490,6 +11532,72 @@ pi --extension ./safety.ts -e ./todo.ts
 ### Changed
 
 - Expanded keybinding documentation to list all 32 supported symbol keys with notes on ctrl+symbol behavior ([#450](https://github.com/badlogic/pi-mono/pull/450) by [@kaofelix](https://github.com/kaofelix))
+
+## [0.34.0] - 2026-01-04
+
+### Added
+
+- Hook API: `before_agent_start` handlers can now return `systemPromptAppend` to dynamically append text to the system prompt for that turn. Multiple hooks' appends are concatenated.
+- Hook API: `before_agent_start` handlers can now return multiple messages (all are injected, not just the first)
+- New example hook: `tools.ts` - Interactive `/tools` command to enable/disable tools with session persistence
+- New example hook: `pirate.ts` - Demonstrates `systemPromptAppend` to make the agent speak like a pirate
+- Tool registry now contains all built-in tools (read, bash, edit, write, grep, find, ls) even when `--tools` limits the initially active set. Hooks can enable any tool from the registry via `pi.setActiveTools()`.
+- System prompt now automatically rebuilds when tools change via `setActiveTools()`, updating tool descriptions and guidelines to match the new tool set
+- Hook errors now display full stack traces for easier debugging
+
+### Changed
+
+- Removed image placeholders after copy & paste, replaced with inserting image file paths directly. ([#442](https://github.com/badlogic/pi-mono/pull/442) by [@mitsuhiko](https://github.com/mitsuhiko))
+
+### Fixed
+
+- Fixed potential text decoding issues in bash executor by using streaming TextDecoder instead of Buffer.toString()
+- External editor (Ctrl-G) now shows full pasted content instead of `[paste #N ...]` placeholders ([#444](https://github.com/badlogic/pi-mono/pull/444) by [@aliou](https://github.com/aliou))
+
+## [0.33.0] - 2026-01-04
+
+### Breaking Changes
+
+- **Key detection functions removed from `@mariozechner/pi-tui`**: All `isXxx()` key detection functions (`isEnter()`, `isEscape()`, `isCtrlC()`, etc.) have been removed. Use `matchesKey(data, keyId)` instead (e.g., `matchesKey(data, "enter")`, `matchesKey(data, "ctrl+c")`). This affects hooks and custom tools that use `ctx.ui.custom()` with keyboard input handling. ([#405](https://github.com/badlogic/pi-mono/pull/405))
+
+### Added
+
+- Clipboard image paste support via `Ctrl+V`. Images are saved to a temp file and attached to the message. Works on macOS, Windows, and Linux (X11). ([#419](https://github.com/badlogic/pi-mono/issues/419))
+- Configurable keybindings via `~/.pi/agent/keybindings.json`. All keyboard shortcuts (editor navigation, deletion, app actions like model cycling, etc.) can now be customized. Supports multiple bindings per action. ([#405](https://github.com/badlogic/pi-mono/pull/405) by [@hjanuschka](https://github.com/hjanuschka))
+- `/quit` and `/exit` slash commands to gracefully exit the application. Unlike double Ctrl+C, these properly await hook and custom tool cleanup handlers before exiting. ([#426](https://github.com/badlogic/pi-mono/pull/426) by [@ben-vargas](https://github.com/ben-vargas))
+
+### Fixed
+
+- Subagent example README referenced incorrect filename `subagent.ts` instead of `index.ts` ([#427](https://github.com/badlogic/pi-mono/pull/427) by [@Whamp](https://github.com/Whamp))
+
+## [0.32.3] - 2026-01-03
+
+### Fixed
+
+- `--list-models` no longer shows Google Vertex AI models without explicit authentication configured
+- JPEG/GIF/WebP images not displaying in terminals using Kitty graphics protocol (Kitty, Ghostty, WezTerm). The protocol requires PNG format, so non-PNG images are now converted before display.
+- Version check URL typo preventing update notifications from working ([#423](https://github.com/badlogic/pi-mono/pull/423) by [@skuridin](https://github.com/skuridin))
+- Large images exceeding Anthropic's 5MB limit now retry with progressive quality/size reduction ([#424](https://github.com/badlogic/pi-mono/pull/424) by [@mitsuhiko](https://github.com/mitsuhiko))
+
+## [0.32.2] - 2026-01-03
+
+### Added
+
+- `$ARGUMENTS` syntax for custom slash commands as alternative to `$@` for all arguments joined. Aligns with patterns used by Claude, Codex, and OpenCode. Both syntaxes remain fully supported. ([#418](https://github.com/badlogic/pi-mono/pull/418) by [@skuridin](https://github.com/skuridin))
+
+### Changed
+
+- **Slash commands and hook commands now work during streaming**: Previously, using a slash command or hook command while the agent was streaming would crash with "Agent is already processing". Now:
+  - Hook commands execute immediately (they manage their own LLM interaction via `pi.sendMessage()`)
+  - File-based slash commands are expanded and queued via steer/followUp
+  - `steer()` and `followUp()` now expand file-based slash commands and error on hook commands (hook commands cannot be queued)
+  - `prompt()` accepts new `streamingBehavior` option (`"steer"` or `"followUp"`) to specify queueing behavior during streaming
+  - RPC `prompt` command now accepts optional `streamingBehavior` field
+  ([#420](https://github.com/badlogic/pi-mono/issues/420))
+
+### Fixed
+
+- Slash command argument substitution now processes positional arguments (`$1`, `$2`, etc.) before all-arguments (`$@`, `$ARGUMENTS`) to prevent recursive substitution when argument values contain dollar-digit patterns like `$100`. ([#418](https://github.com/badlogic/pi-mono/pull/418) by [@skuridin](https://github.com/skuridin))
 
 ## [0.32.1] - 2026-01-03
 

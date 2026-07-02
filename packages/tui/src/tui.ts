@@ -2836,6 +2836,7 @@ export class TUI extends Container {
 			}
 			window = this.#prepareLinesArray(window, width);
 		}
+		const cursorTrackingLineCount = hasVisibleOverlay ? Math.max(frame.length, windowTop + height) : frame.length;
 
 		const intent: RenderIntent = fullPaint
 			? { kind: "fullPaint", clearScrollback: replaceRequested || geometryRebuild ? !isMultiplexerSession() : false }
@@ -2866,6 +2867,7 @@ export class TUI extends Container {
 				clearScrollback: intent.clearScrollback,
 				chunkTo,
 				windowTop,
+				cursorTrackingLineCount,
 			});
 			this.#committedPrefix = rawFrame.slice(0, chunkTo);
 			this.#updateCommittedAuditRows(
@@ -2892,6 +2894,7 @@ export class TUI extends Container {
 			prevHardwareCursorRow,
 			forceWindowRewrite: this.#forceViewportRepaintOnNextRender || (geometryChanged && resizeRepaintsInPlace()),
 			repaintVirtualScrollInPlace: hasVisibleOverlay,
+			cursorTrackingLineCount,
 		});
 		for (let i = this.#committedPrefix.length; i < chunkTo; i++) {
 			this.#committedPrefix.push(rawFrame[i] ?? "");
@@ -3273,10 +3276,15 @@ export class TUI extends Container {
 		cursorPos: { row: number; col: number } | null,
 		purgeSequence: string,
 		imageTransmitBuffer: string,
-		options: { clearScrollback: boolean; chunkTo: number; windowTop: number },
+		options: {
+			clearScrollback: boolean;
+			chunkTo: number;
+			windowTop: number;
+			cursorTrackingLineCount: number;
+		},
 	): void {
 		this.#fullRedrawCount += 1;
-		const { chunkTo, windowTop } = options;
+		const { chunkTo, windowTop, cursorTrackingLineCount } = options;
 		// Map the frame-space cursor into paint space: committed-prefix rows
 		// keep their index, visible-window rows land after the prefix, and a
 		// cursor in neither region (hidden behind the overlay gap) hides.
@@ -3376,7 +3384,9 @@ export class TUI extends Container {
 		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
 
-		const committedCursorState = paintCursorPos ? this.#targetHardwareCursorState(cursorPos, frame.length) : null;
+		const committedCursorState = paintCursorPos
+			? this.#targetHardwareCursorState(cursorPos, cursorTrackingLineCount)
+			: null;
 		const committedCursor = committedCursorState
 			? {
 					toRow: committedCursorState.row,
@@ -3646,6 +3656,7 @@ export class TUI extends Container {
 			prevHardwareCursorRow: number;
 			forceWindowRewrite: boolean;
 			repaintVirtualScrollInPlace: boolean;
+			cursorTrackingLineCount: number;
 		},
 	): void {
 		const {
@@ -3655,6 +3666,7 @@ export class TUI extends Container {
 			prevHardwareCursorRow,
 			forceWindowRewrite,
 			repaintVirtualScrollInPlace,
+			cursorTrackingLineCount,
 		} = options;
 		const chunkFrom = this.#committedRows;
 		const chunkLength = chunkTo - chunkFrom;
@@ -3706,7 +3718,7 @@ export class TUI extends Container {
 					}
 					cursorFromRow = windowTop + lastChanged;
 				}
-				const cursorControl = this.#cursorControlSequence(cursorPos, frame.length, cursorFromRow);
+				const cursorControl = this.#cursorControlSequence(cursorPos, cursorTrackingLineCount, cursorFromRow);
 				buffer += cursorControl.seq;
 				buffer += this.#paintEndSequence;
 				this.terminal.write(buffer);
@@ -3717,16 +3729,17 @@ export class TUI extends Container {
 			}
 		}
 
-		// In-window diff: nothing commits. While an overlay is visible, commits
-		// are frozen; if the underlying windowTop moves, repaint in place rather
-		// than falling through to a seam rewrite that would scroll native history
-		// without appending to the commit tape.
-		const virtualScrollRewrite = repaintVirtualScrollInPlace && scroll !== 0;
-		if (chunkLength === 0 && (scroll === 0 || virtualScrollRewrite)) {
-			if (forceWindowRewrite || virtualScrollRewrite) this.#fullRedrawCount += 1;
-			let firstChanged = forceWindowRewrite || virtualScrollRewrite ? 0 : -1;
-			let lastChanged = forceWindowRewrite || virtualScrollRewrite ? height - 1 : -1;
-			if (!forceWindowRewrite && !virtualScrollRewrite) {
+		// In-window diff: nothing commits. While an overlay is visible, repaint
+		// the full viewport in place from a top-clamped cursor origin. Overlay
+		// cursor-only frames can leave the tracked row behind the physical cursor;
+		// a relative partial rewrite from that stale origin can CRLF on the bottom
+		// row and scroll native history without appending to the commit tape.
+		const overlayInPlaceRewrite = repaintVirtualScrollInPlace;
+		if (chunkLength === 0 && (scroll === 0 || overlayInPlaceRewrite)) {
+			if (forceWindowRewrite || overlayInPlaceRewrite) this.#fullRedrawCount += 1;
+			let firstChanged = forceWindowRewrite || overlayInPlaceRewrite ? 0 : -1;
+			let lastChanged = forceWindowRewrite || overlayInPlaceRewrite ? height - 1 : -1;
+			if (!forceWindowRewrite && !overlayInPlaceRewrite) {
 				const comparable = previousWindow.length === height;
 				for (let r = 0; r < height; r++) {
 					if (comparable && (window[r] ?? "") === (previousWindow[r] ?? "")) continue;
@@ -3736,13 +3749,13 @@ export class TUI extends Container {
 			}
 			if (firstChanged === -1) {
 				if (purgeSequence.length > 0) this.terminal.write(purgeSequence);
-				this.#writeCursorPosition(cursorPos, frame.length);
+				this.#writeCursorPosition(cursorPos, cursorTrackingLineCount);
 				this.#previousWidth = width;
 				this.#previousHeight = height;
 				return;
 			}
 			let buffer = this.#paintBeginSequence + purgeSequence;
-			if (virtualScrollRewrite) {
+			if (overlayInPlaceRewrite) {
 				// The cursor tracker can be stale after overlay-only frames. A large
 				// CUU clamps at the viewport top without using absolute cursor home,
 				// so the following full-window rewrite cannot overflow the bottom.
@@ -3777,7 +3790,7 @@ export class TUI extends Container {
 				buffer += `\x1b[${lastChanged - contentBottomScreenRow}A`;
 				cursorFromRow = contentBottomRow;
 			}
-			const cursorControl = this.#cursorControlSequence(cursorPos, frame.length, cursorFromRow);
+			const cursorControl = this.#cursorControlSequence(cursorPos, cursorTrackingLineCount, cursorFromRow);
 			buffer += cursorControl.seq;
 			buffer += this.#paintEndSequence;
 			this.terminal.write(buffer);
@@ -3807,7 +3820,7 @@ export class TUI extends Container {
 		}
 		const parkUp = height - 1 - (contentBottomRow - windowTop);
 		if (parkUp > 0) buffer += `\x1b[${parkUp}A`;
-		const cursorControl = this.#cursorControlSequence(cursorPos, frame.length, contentBottomRow);
+		const cursorControl = this.#cursorControlSequence(cursorPos, cursorTrackingLineCount, contentBottomRow);
 		buffer += cursorControl.seq;
 		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);

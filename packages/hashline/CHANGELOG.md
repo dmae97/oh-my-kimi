@@ -9,6 +9,9 @@
 - Fixed recovery and edit-preview paths still treating a 16-bit snapshot tag as exact identity after collision-aware retention landed: ambiguous colliding tags now fall through to recovery/rejection (`byHashExact`) instead of applying anchors against the most-recent collider.
 - Reduced stale-anchor remap validation from quadratic to linear: duplicate-line detection and anchor-neighbor context are now precomputed once per pass instead of scanning the whole file per anchor.
 - Fixed hashline edit guidance for Markdown list rows by teaching `+- item` escaping in the model prompt and minus-row parser error. ([#4179](https://github.com/can1357/oh-my-pi/issues/4179))
+- Auto-repaired one-sided multi-line boundary echoes by dropping delimiter-neutral duplicated boundary lines and emitted a boundary-echo warning
+- Parser now treats a leading `\` on inline payload bodies as the payload delimiter, matching standalone payload rows.
+- Restored the warning emitted when escaped indented payload rows (`\\    TEXT`) are accepted as payload delimiters.
 
 ## [16.2.8] - 2026-06-30
 
