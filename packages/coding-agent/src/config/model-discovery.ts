@@ -158,6 +158,15 @@ type LlamaCppDiscoveredModelRuntimeMetadata = {
 type LlamaCppModelListEntry = {
 	id: string;
 	runtimeContextWindow?: number;
+	/**
+	 * `--ctx-size` extracted from the entry's `status.args` (rendered CLI arg
+	 * vector) or `status.preset` INI. Populated for llama-server router-mode
+	 * presets so unloaded models surface the user's configured window instead
+	 * of falling through to the 128K default — the router-level `/props`
+	 * reports a dummy `n_ctx: 0` and `meta.n_ctx` is only merged in after a
+	 * child instance loads (issue #4190).
+	 */
+	configuredContextWindow?: number;
 	trainingContextWindow?: number;
 };
 
@@ -274,8 +283,58 @@ function parseLlamaCppModelList(payload: unknown): LlamaCppModelListEntry[] {
 		if (!isRecord(item) || typeof item.id !== "string" || !item.id) {
 			return [];
 		}
-		return [{ id: item.id, ...extractLlamaCppModelContextWindows(item) }];
+		return [
+			{
+				id: item.id,
+				...extractLlamaCppModelContextWindows(item),
+				configuredContextWindow: extractLlamaCppConfiguredContextWindow(item),
+			},
+		];
 	});
+}
+
+// llama-server's `to_args()` renders the long form `--ctx-size` (never `-c`),
+// but tolerate the short form and the embedded `--flag=value` shape so a
+// hand-rolled forwarder cannot silently downgrade the discovered window.
+const LLAMA_CPP_CTX_SIZE_FLAGS = new Set(["--ctx-size", "-c"]);
+
+function extractLlamaCppCtxSizeFromArgs(value: unknown): number | undefined {
+	if (!Array.isArray(value)) {
+		return undefined;
+	}
+	for (let i = 0; i < value.length; i++) {
+		const raw = value[i];
+		if (typeof raw !== "string") continue;
+		const eq = raw.indexOf("=");
+		const flag = eq >= 0 ? raw.slice(0, eq) : raw;
+		if (!LLAMA_CPP_CTX_SIZE_FLAGS.has(flag)) continue;
+		const rawValue = eq >= 0 ? raw.slice(eq + 1) : value[i + 1];
+		const parsed = toPositiveNumberOrUndefined(rawValue);
+		if (parsed !== undefined) return parsed;
+	}
+	return undefined;
+}
+
+// `common_preset::to_ini()` emits one option per line as `<long-arg-without-dashes> = <value>`,
+// so `ctx-size = 8192` is the exact wire form (issue #4190).
+function extractLlamaCppCtxSizeFromIni(value: unknown): number | undefined {
+	if (typeof value !== "string") {
+		return undefined;
+	}
+	const match = value.match(/(?:^|\n)\s*ctx-size\s*=\s*(-?\d+)\s*(?:$|\n)/);
+	return match ? toPositiveNumberOrUndefined(match[1]) : undefined;
+}
+
+function extractLlamaCppConfiguredContextWindow(item: Record<string, unknown>): number | undefined {
+	const status = item.status;
+	if (!isRecord(status)) {
+		return undefined;
+	}
+	const fromArgs = extractLlamaCppCtxSizeFromArgs(status.args);
+	if (fromArgs !== undefined) {
+		return fromArgs;
+	}
+	return extractLlamaCppCtxSizeFromIni(status.preset);
 }
 
 function extractLlamaCppInputCapabilities(payload: Record<string, unknown>): ("text" | "image")[] | undefined {
@@ -473,6 +532,7 @@ export async function discoverLlamaCppModels(
 		if (!id) continue;
 		const contextWindow =
 			item.runtimeContextWindow ??
+			item.configuredContextWindow ??
 			serverMetadata?.contextWindow ??
 			item.trainingContextWindow ??
 			DISCOVERY_DEFAULT_CONTEXT_WINDOW;
@@ -529,7 +589,11 @@ export async function discoverLlamaCppModelRuntimeMetadata(
 		if (!entry) {
 			return undefined;
 		}
-		const contextWindow = entry.runtimeContextWindow ?? serverMetadata?.contextWindow ?? entry.trainingContextWindow;
+		const contextWindow =
+			entry.runtimeContextWindow ??
+			entry.configuredContextWindow ??
+			serverMetadata?.contextWindow ??
+			entry.trainingContextWindow;
 		if (contextWindow === undefined) {
 			return undefined;
 		}

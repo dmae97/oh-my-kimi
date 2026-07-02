@@ -773,6 +773,148 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(registry.find("llama.cpp", "ctx-train")?.contextWindow).toBe(65536);
 		expect(registry.find("llama.cpp", "unloaded")?.contextWindow).toBe(128000);
 	});
+	test("llama.cpp router discovery reads --ctx-size from each preset's status.args and status.preset", async () => {
+		// llama-server in router mode advertises each preset via /v1/models but
+		// meta.n_ctx / n_ctx_train are only populated after the child instance
+		// loads. Router-level /props returns a dummy n_ctx: 0. Without the
+		// status.args / status.preset fallbacks every preset would collapse to
+		// the 128k global default (issue #4190).
+		const fetchMock: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:8080/models") {
+				return new Response(
+					JSON.stringify({
+						object: "list",
+						data: [
+							{
+								id: "long-preset",
+								object: "model",
+								status: {
+									value: "unloaded",
+									args: ["--model", "/models/l.gguf", "--ctx-size", "65536"],
+									preset: "[long-preset]\nmodel = /models/l.gguf\nctx-size = 65536\n\n",
+								},
+								source: "preset",
+							},
+							{
+								id: "short-preset",
+								object: "model",
+								status: {
+									value: "unloaded",
+									args: ["--model", "/models/s.gguf", "-c", "8192"],
+								},
+								source: "preset",
+							},
+							{
+								id: "ini-only-preset",
+								object: "model",
+								status: {
+									value: "unloaded",
+									preset: "[ini-only-preset]\nmodel = /models/i.gguf\nctx-size = 32768\n\n",
+								},
+								source: "preset",
+							},
+							{
+								id: "explicit-model-default",
+								object: "model",
+								// --ctx-size 0 means "loaded from model"; must NOT surface as 0.
+								status: {
+									value: "unloaded",
+									args: ["--model", "/models/d.gguf", "--ctx-size", "0"],
+								},
+								source: "preset",
+							},
+						],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url === "http://127.0.0.1:8080/props") {
+				// Verbatim shape of get_router_props() — n_ctx: 0 dummy.
+				return new Response(
+					JSON.stringify({
+						role: "router",
+						max_instances: 4,
+						models_autoload: true,
+						model_alias: "llama-server",
+						model_path: "none",
+						default_generation_settings: { params: {}, n_ctx: 0 },
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refresh();
+		expect(registry.find("llama.cpp", "long-preset")?.contextWindow).toBe(65536);
+		expect(registry.find("llama.cpp", "short-preset")?.contextWindow).toBe(8192);
+		expect(registry.find("llama.cpp", "ini-only-preset")?.contextWindow).toBe(32768);
+		// `--ctx-size 0` falls through past the configured hint to the global default.
+		expect(registry.find("llama.cpp", "explicit-model-default")?.contextWindow).toBe(128000);
+	});
+
+	test("llama.cpp router preset refresh honors --ctx-size when the child hasn't been loaded yet", async () => {
+		// Reporter's workflow: `/model` picks a preset. On its very first switch
+		// the child hasn't been spawned yet (meta.n_ctx absent), but the
+		// configured window is still what the user wants surfaced.
+		writeModelCache(
+			"llama.cpp",
+			Date.now(),
+			[
+				buildModel({
+					id: "cold-preset",
+					name: "cold-preset",
+					provider: "llama.cpp",
+					api: "openai-responses",
+					baseUrl: "http://127.0.0.1:8080",
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 128000,
+					maxTokens: 32768,
+				}),
+			],
+			true,
+			"",
+			cacheDbPath,
+		);
+		const fetchMock: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:8080/models") {
+				return new Response(
+					JSON.stringify({
+						data: [
+							{
+								id: "cold-preset",
+								status: {
+									value: "unloaded",
+									args: ["--model", "/models/c.gguf", "--ctx-size", "16384"],
+								},
+							},
+						],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url === "http://127.0.0.1:8080/props") {
+				return new Response(
+					JSON.stringify({ default_generation_settings: { params: {}, n_ctx: 0 } }),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const stale = registry.find("llama.cpp", "cold-preset");
+		if (!stale) throw new Error("cached llama.cpp model missing");
+		expect(stale.contextWindow).toBe(128000);
+		const refreshed = await registry.refreshSelectedModelMetadata(stale);
+		expect(refreshed.contextWindow).toBe(16384);
+		expect(refreshed.maxTokens).toBe(16384);
+		expect(registry.find("llama.cpp", "cold-preset")?.contextWindow).toBe(16384);
+	});
+
 
 	test("llama.cpp selected model refresh patches newly loaded meta n_ctx and unlimited output limit", async () => {
 		writeModelCache(
