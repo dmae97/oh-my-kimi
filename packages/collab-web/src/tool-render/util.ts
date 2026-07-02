@@ -41,6 +41,32 @@ export function shortenPath(p: string): string {
 	return p;
 }
 
+/**
+ * Search scope for display: the current `path` argument (else the legacy
+ * `paths`), normalized from a single string, a JSON-encoded string array
+ * (`'["a.ts","b.ts"]'`), or an actual array into a flat `string[]`. Mirrors the
+ * coding-agent `toPathList` so web cards render the same scope the tool searched.
+ */
+export function scopePaths(args: Record<string, unknown>): string[] {
+	const raw = args.path ?? args.paths;
+	if (typeof raw === "string") {
+		const trimmed = raw.trim();
+		if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+			try {
+				const parsed: unknown = JSON.parse(trimmed);
+				if (Array.isArray(parsed) && parsed.every((p): p is string => typeof p === "string")) {
+					return parsed;
+				}
+			} catch {
+				// Not valid JSON — treat the whole string as one path.
+			}
+		}
+		return [raw];
+	}
+	if (Array.isArray(raw)) return raw.filter((p): p is string => typeof p === "string");
+	return [];
+}
+
 export function truncate(s: string, maxLen = 100): string {
 	return s.length <= maxLen ? s : `${s.slice(0, maxLen)}…`;
 }

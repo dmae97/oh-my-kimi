@@ -11,7 +11,7 @@ Structural code search via ast-grep.
 - C++ expression-statement calls need trailing `;`: `ns::doThing($ARG);`, `$CALLEE($ARG);`
 - TS declarations/methods — tolerate unknown annotations: `async function $NAME($$$ARGS): $_ { $$$BODY }` or `class $_ { method($ARG: $_): $_ { $$$BODY } }`
 - Declaration forms are distinct shapes — `function foo`, method `foo()`, `const foo = () => {}`; search the right form before concluding absence
-- Loosest existence check: `pat: "executeBash"` with narrow `paths`
+- Loosest existence check: `pat: "executeBash"` with narrow `path`
 </instruction>
 
 <output>
@@ -19,7 +19,7 @@ Structural code search via ast-grep.
 </output>
 
 <critical>
-- AVOID repo-root scans — narrow `paths` first
-- Parse issues = query failure, not absence: fix the pattern or tighten `paths` before concluding "no matches"
+- AVOID repo-root scans — narrow `path` first
+- Parse issues = query failure, not absence: fix the pattern or tighten `path` before concluding "no matches"
 - Broad cross-subsystem exploration: you SHOULD use the Task tool + explore subagent first
 </critical>

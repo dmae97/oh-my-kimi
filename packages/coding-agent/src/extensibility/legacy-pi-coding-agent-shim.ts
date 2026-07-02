@@ -500,7 +500,7 @@ export function createGrepToolDefinition(cwd: string, options?: GrepToolOptions)
 				toolCallId,
 				{
 					pattern,
-					paths: glob ? joinLegacyGlob(searchPath, glob) : searchPath,
+					path: glob ? joinLegacyGlob(searchPath, glob) : searchPath,
 					case: booleanField(params, "ignoreCase") ? false : undefined,
 				},
 				signal,
@@ -558,7 +558,7 @@ export function createFindToolDefinition(cwd: string, options?: FindToolOptions)
 			}
 			return tool.execute(
 				toolCallId,
-				{ paths: [joinLegacyGlob(searchPath, pattern)], hidden: true, gitignore: true, limit },
+				{ path: joinLegacyGlob(searchPath, pattern), hidden: true, gitignore: true, limit },
 				signal,
 				onUpdate,
 			);

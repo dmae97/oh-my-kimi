@@ -26,6 +26,7 @@ import {
 	partitionExistingPaths,
 	resolveExplicitFindPatterns,
 	resolveToCwd,
+	toPathList,
 } from "./path-utils";
 import {
 	createCachedComponent,
@@ -38,11 +39,9 @@ import { ToolAbortError, ToolError, throwIfAborted } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
 const findSchema = type({
-	paths: type("string")
-		.describe("glob including search path")
-		.array()
-		.atLeastLength(1)
-		.describe("globs including search paths"),
+	"path?": type("string").describe(
+		'glob, file, or directory to search — a single path or a semicolon-delimited list ("src/**/*.ts; test/**/*.ts"). Omitted -> searches the workspace root (".")',
+	),
 	"hidden?": type("boolean").describe("include hidden files"),
 	"gitignore?": type("boolean").describe("respect gitignore"),
 	"limit?": type("number").describe("max results"),
@@ -110,19 +109,19 @@ export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
 	readonly examples: readonly ToolExample<typeof findSchema.infer>[] = [
 		{
 			caption: "Glob files",
-			call: { paths: ["src/**/*.ts"] },
+			call: { path: "src/**/*.ts" },
 		},
 		{
-			caption: "Multiple targets — separate array elements",
-			call: { paths: ["src/**/*.ts", "test/**/*.ts"] },
+			caption: "Multiple targets — semicolon-delimited list",
+			call: { path: "src/**/*.ts; test/**/*.ts" },
 		},
 		{
 			caption: "Glob gitignored files like .env",
-			call: { paths: [".env*"], gitignore: false },
+			call: { path: ".env*", gitignore: false },
 		},
 		{
 			caption: "Glob directories matching a name (returns both files and dirs; directories are suffixed with `/`)",
-			call: { paths: ["**/tests"] },
+			call: { path: "**/tests" },
 		},
 	];
 	readonly strict = true;
@@ -144,13 +143,15 @@ export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
 		onUpdate?: AgentToolUpdateCallback<GlobToolDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<GlobToolDetails>> {
-		const { paths, limit, hidden, gitignore } = params;
+		const { path: pathInput, limit, hidden, gitignore } = params;
 
 		return untilAborted(signal, async () => {
 			const formatScopePath = (targetPath: string): string => formatPathRelativeToCwd(targetPath, this.session.cwd);
+			const scopedPaths = toPathList(pathInput);
+			const effectivePaths = scopedPaths.length > 0 ? scopedPaths : ["."];
 			const rawPatternInputs = this.#customOps
-				? paths
-				: await expandDelimitedPathEntries(paths, this.session.cwd, { splitter: parseFindPattern });
+				? effectivePaths
+				: await expandDelimitedPathEntries(effectivePaths, this.session.cwd, { splitter: parseFindPattern });
 			const rawPatterns = rawPatternInputs.map(input => normalizePathLikeInput(input).replace(/\\/g, "/"));
 			const internalRouter = InternalUrlRouter.instance();
 			const normalizedPatterns: string[] = [];
@@ -180,7 +181,7 @@ export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
 				normalizedPatterns.push(resource.sourcePath);
 			}
 			if (normalizedPatterns.some(pattern => pattern.length === 0)) {
-				throw new ToolError("`paths` must contain non-empty globs or paths");
+				throw new ToolError("`path` must contain non-empty globs or paths");
 			}
 
 			// Tolerate missing entries in a multi-path call: skip ones whose base
@@ -468,12 +469,15 @@ export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
 // =============================================================================
 
 interface GlobRenderArgs {
+	path?: string | string[];
+	/** Legacy pre-`path` argument name; kept so historical transcripts still render a scope. */
 	paths?: string | string[];
 	limit?: number;
 }
 
-function formatGlobRenderPaths(paths: GlobRenderArgs["paths"]): string | undefined {
-	return Array.isArray(paths) ? paths.join(", ") : paths;
+function formatGlobRenderPaths(args: GlobRenderArgs | undefined): string | undefined {
+	const list = toPathList(args?.path ?? args?.paths);
+	return list.length > 0 ? list.join(", ") : undefined;
 }
 
 const COLLAPSED_LIST_LIMIT = PREVIEW_LIMITS.COLLAPSED_ITEMS;
@@ -493,7 +497,7 @@ export const globToolRenderer = {
 				icon: "pending",
 				title: "Glob",
 				titleColor: "toolTitle",
-				description: formatGlobRenderPaths(args.paths) || "*",
+				description: formatGlobRenderPaths(args) || "*",
 				meta,
 			},
 			uiTheme,
@@ -533,7 +537,7 @@ export const globToolRenderer = {
 					iconOverride: globStatusIcon(uiTheme),
 					title: "Glob",
 					titleColor: "toolTitle",
-					description: formatGlobRenderPaths(args?.paths),
+					description: formatGlobRenderPaths(args),
 					meta: [formatCount("file", lines.length)],
 				},
 				uiTheme,
@@ -573,7 +577,7 @@ export const globToolRenderer = {
 					icon: "warning",
 					title: "Glob",
 					titleColor: "toolTitle",
-					description: formatGlobRenderPaths(args?.paths),
+					description: formatGlobRenderPaths(args),
 					meta: ["0 files"],
 				},
 				uiTheme,
@@ -590,7 +594,7 @@ export const globToolRenderer = {
 				...(truncated ? { icon: "warning" as const } : { iconOverride: globStatusIcon(uiTheme) }),
 				title: "Glob",
 				titleColor: "toolTitle",
-				description: formatGlobRenderPaths(args?.paths),
+				description: formatGlobRenderPaths(args),
 				meta,
 			},
 			uiTheme,

@@ -41,7 +41,7 @@ describe("advisor", () => {
 							type: "toolCall",
 							id: "search-timeout",
 							name: "grep",
-							arguments: { pattern: "needle", paths: ["packages/coding-agent/src"] },
+							arguments: { pattern: "needle", path: "packages/coding-agent/src" },
 						},
 					],
 					timestamp: 1,

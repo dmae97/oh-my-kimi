@@ -180,7 +180,7 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 		const searchPath = args.glob ? `${args.path || "."}/${args.glob}` : args.path || ".";
 		const toolResultMessage = await executeTool(this.options, "grep", toolCallId, {
 			pattern: args.pattern,
-			paths: [searchPath],
+			path: searchPath,
 			case: args.caseInsensitive === true ? false : undefined,
 		});
 		return toolResultMessage;

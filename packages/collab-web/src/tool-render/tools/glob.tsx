@@ -2,18 +2,12 @@
 import type { ReactNode } from "react";
 import { Badge, Badges, InvalidArg, Note, ResultText } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
-import { detailsRecord, display, isRecord, num, shortenPath, str, truncate } from "../util";
-
-/** `args.paths` accepts one glob or an array; anything else is invalid. */
-function joinedGlobs(paths: unknown): string | null {
-	if (typeof paths === "string") return shortenPath(paths);
-	if (Array.isArray(paths)) return paths.map(p => shortenPath(display(p))).join(", ");
-	return null;
-}
+import { detailsRecord, isRecord, num, scopePaths, shortenPath, str, truncate } from "../util";
 
 function Summary({ args }: ToolRenderProps): ReactNode {
-	const globs = joinedGlobs(args.paths);
-	if (globs === null && args.paths !== undefined) return <InvalidArg what="paths" />;
+	const raw = args.path ?? args.paths;
+	if (raw !== undefined && typeof raw !== "string" && !Array.isArray(raw)) return <InvalidArg what="path" />;
+	const globs = scopePaths(args).map(shortenPath).join(", ");
 	return <span className="tv-pattern">{truncate(globs || "*", 120)}</span>;
 }
 

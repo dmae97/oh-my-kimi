@@ -2,7 +2,7 @@ Greps files using regex.
 
 <instruction>
 - Rust regex (RE2-style) — no lookaround/backreferences; use line anchors or post-filters instead of (?!…)/(?<!…).
-- `paths`: SHOULD scope to known paths (e.g. `["src","tests"]`).
+- `path`: SHOULD scope to a known path (e.g. `src`); pass several as a delimited list (`src; tests`).
 - Cross-line patterns detected from literal `\n` or `\\n` in `pattern`.
 </instruction>
 

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Updated the glob, grep, and ast_grep tool cards to read the new single `path` argument, falling back to the legacy `paths` array so historical transcripts still render their search scope.
+
 ## [16.3.0] - 2026-07-02
 
 ### Fixed

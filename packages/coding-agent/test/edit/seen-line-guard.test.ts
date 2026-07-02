@@ -205,7 +205,7 @@ describe("search → edit seen-line guard", () => {
 		await Bun.write(file, `${lines.join("\n")}\n`);
 		const session = searchSession(tmpDir);
 
-		const search = await new GrepTool(session).execute("s1", { pattern: "NEEDLE", paths: [file] });
+		const search = await new GrepTool(session).execute("s1", { pattern: "NEEDLE", path: file });
 		const tag = tagFromOutput(resultText(search));
 
 		const seen = getFileSnapshotStore(session).byHash(canonicalSnapshotKey(file), tag)?.seenLines;
@@ -223,7 +223,7 @@ describe("search → edit seen-line guard", () => {
 		await Bun.write(file, `${lines.join("\n")}\n`);
 		const session = searchSession(tmpDir);
 
-		const search = await new GrepTool(session).execute("s1", { pattern: "NEEDLE", paths: [file] });
+		const search = await new GrepTool(session).execute("s1", { pattern: "NEEDLE", path: file });
 		const tag = tagFromOutput(resultText(search));
 
 		await expect(executeHashlineSingle(execOptions(`[code.txt#${tag}]\nSWAP 8.=8:\n+X`, session))).rejects.toThrow(

@@ -2,7 +2,7 @@
 import type { ReactNode } from "react";
 import { Badge, Badges, CodeBlock, InvalidArg, Kv, KvGrid, Output, PathText, ResultText } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
-import { detailsRecord, normalizeWs, num, str, truncate } from "../util";
+import { detailsRecord, normalizeWs, num, scopePaths, str, truncate } from "../util";
 
 /** `pat` is a string in the current schema, an array on the legacy wire. */
 function patternsOf(args: Record<string, unknown>): string[] {
@@ -11,16 +11,9 @@ function patternsOf(args: Record<string, unknown>): string[] {
 	return [];
 }
 
-/** Current schema sends `paths: string[]`; legacy sent a single `path`. */
-function pathsOf(args: Record<string, unknown>): string[] {
-	if (Array.isArray(args.paths)) return args.paths.filter((p): p is string => typeof p === "string");
-	const single = str(args.path);
-	return single ? [single] : [];
-}
-
 function Summary({ args }: ToolRenderProps): ReactNode {
 	const patterns = patternsOf(args);
-	const paths = pathsOf(args);
+	const paths = scopePaths(args);
 	const lang = str(args.lang);
 	return (
 		<>
@@ -35,7 +28,7 @@ function Summary({ args }: ToolRenderProps): ReactNode {
 
 function Body({ args, result }: ToolRenderProps): ReactNode {
 	const patterns = patternsOf(args);
-	const paths = pathsOf(args);
+	const paths = scopePaths(args);
 	const lang = str(args.lang);
 	const glob = str(args.glob);
 	const sel = str(args.sel);

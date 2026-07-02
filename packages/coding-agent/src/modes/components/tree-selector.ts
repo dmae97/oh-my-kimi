@@ -15,7 +15,7 @@ import type { TreeFilterMode } from "../../config/settings-schema";
 import { theme } from "../../modes/theme/theme";
 import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../../modes/utils/keybinding-matchers";
 import type { SessionTreeNode } from "../../session/session-entries";
-import { toPathList } from "../../tools/grep";
+import { toPathList } from "../../tools/path-utils";
 import { shortenPath } from "../../tools/render-utils";
 import { canonicalizeMessage } from "../../utils/thinking-display";
 import { DynamicBorder } from "./dynamic-border";
@@ -753,8 +753,15 @@ class TreeList implements Component {
 				return `[grep: /${pattern}/ in ${shortenPath(scope)}]`;
 			}
 			case "glob": {
-				const paths = Array.isArray(args.paths) ? args.paths.join(", ") : String(args.pattern || ".");
-				return `[glob: ${shortenPath(paths)}]`;
+				const globInput =
+					typeof args.path === "string"
+						? args.path
+						: typeof args.paths === "string" || Array.isArray(args.paths)
+							? args.paths
+							: undefined;
+				const paths = toPathList(globInput);
+				const scope = paths.length > 0 ? paths.join(", ") : ".";
+				return `[glob: ${shortenPath(scope)}]`;
 			}
 			case "ls": {
 				const path = shortenPath(String(args.path || "."));

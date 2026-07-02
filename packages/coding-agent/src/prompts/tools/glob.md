@@ -1,7 +1,7 @@
 Globs files and directories via fast pattern matching, any codebase size.
 
 <instruction>
-- `paths`: array of globs, files, or directories.
+- `path`: a glob, file, or directory. Search several at once by passing a semicolon-delimited list (`src/**/*.ts; test/**/*.ts`).
 - `gitignore` (default `true`) hides `.gitignore` matches. Set `gitignore: false` to find `.env*`, `*.log`, fresh build outputs, or anything your repo ignores.
 - `hidden` (default `true`); combine with `gitignore: false` to surface dotfiles also gitignored.
 </instruction>

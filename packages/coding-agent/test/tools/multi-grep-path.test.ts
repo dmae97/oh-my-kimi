@@ -62,8 +62,8 @@ describe.skipIf(isWindows)("search with omitted paths", () => {
 		const tool = tools.find(entry => entry.name === "grep");
 		if (!tool) throw new Error("Missing grep tool");
 
-		// Callers that omit `paths` would otherwise be rejected at schema
-		// validation with `paths: Invalid input` and never run. Omission must
+		// Callers that omit `path` would otherwise be rejected at schema
+		// validation with `path: Invalid input` and never run. Omission must
 		// degrade to a workspace-root scan rather than fail the tool call.
 		const result = await tool.execute("search-default-paths", { pattern: "default-needle" });
 
@@ -73,14 +73,14 @@ describe.skipIf(isWindows)("search with omitted paths", () => {
 		expect(details?.fileCount).toBe(1);
 	});
 
-	it("defaults to the workspace root when paths is an empty array", async () => {
+	it("defaults to the workspace root when path is an empty JSON array", async () => {
 		const tools = await createTools(createTestSession(cwd));
 		const tool = tools.find(entry => entry.name === "grep");
 		if (!tool) throw new Error("Missing grep tool");
 
 		const result = await tool.execute("search-empty-paths", {
 			pattern: "default-needle",
-			paths: [],
+			path: "[]",
 		});
 
 		expect(getText(result)).toContain("default-needle here");
@@ -115,7 +115,7 @@ describe.skipIf(isWindows)("search across unrelated filesystem trees", () => {
 		const start = performance.now();
 		const result = await tool.execute("search-cross-tree", {
 			pattern: "shared-needle",
-			paths: [dirA, dirB],
+			path: `${dirA}; ${dirB}`,
 		});
 		const durationMs = performance.now() - start;
 
@@ -208,7 +208,7 @@ describe.skipIf(isWindows)("search with explicit walker-pruned file targets", ()
 
 		const result = await tool.execute("search-git-config", {
 			pattern: "followTags",
-			paths: [".", ".git/config"],
+			path: ".; .git/config",
 		});
 		const details = result.details as { matchCount?: number; files?: string[] } | undefined;
 		expect(getText(result)).toContain("followTags = true");
@@ -225,7 +225,7 @@ describe.skipIf(isWindows)("search with explicit walker-pruned file targets", ()
 
 		const result = await tool.execute("search-overlap", {
 			pattern: "needle-dup",
-			paths: [".", "src/a.ts"],
+			path: ".; src/a.ts",
 		});
 		const details = result.details as { matchCount?: number } | undefined;
 		expect(details?.matchCount).toBe(1);

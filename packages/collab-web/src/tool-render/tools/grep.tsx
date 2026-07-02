@@ -2,20 +2,12 @@
 import type { ReactNode } from "react";
 import { Badge, Badges, InvalidArg, Note, ResultText } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
-import { detailsRecord, num, resultTextOf, shortenPath, str } from "../util";
+import { detailsRecord, num, resultTextOf, scopePaths, shortenPath, str } from "../util";
 
-/** Grep targets: current `paths` (string | string[]) or legacy `path`. */
+/** Grep scope: current `path` (string, delimited, or JSON array) or legacy `paths`; defaults to workspace root. */
 function pathsOf(args: Record<string, unknown>): string[] {
-	const raw = args.paths ?? args.path;
-	if (typeof raw === "string") return [shortenPath(raw)];
-	if (Array.isArray(raw)) {
-		const out: string[] = [];
-		for (const p of raw) {
-			if (typeof p === "string") out.push(shortenPath(p));
-		}
-		if (out.length) return out;
-	}
-	return ["."];
+	const list = scopePaths(args).map(shortenPath);
+	return list.length ? list : ["."];
 }
 
 /** Flag badges covering current and legacy arg dialects. */

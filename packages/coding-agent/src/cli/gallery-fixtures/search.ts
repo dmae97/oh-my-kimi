@@ -9,7 +9,7 @@ export const searchFixtures: Record<string, GalleryFixture> = {
 		},
 		args: {
 			pattern: "useState",
-			paths: ["packages/tui/src"],
+			path: "packages/tui/src",
 		},
 		result: {
 			content: [
@@ -160,7 +160,7 @@ export const searchFixtures: Record<string, GalleryFixture> = {
 		},
 		args: {
 			pat: "useState($A)",
-			paths: ["packages/tui/src/components"],
+			path: "packages/tui/src/components",
 		},
 		result: {
 			content: [

@@ -221,7 +221,7 @@ describe.skipIf(!SSH_OK)("ssh:// through the real read/grep/write tools (localho
 	it("GrepTool reports matches under the ssh:// URL with no scratch-temp leak", async () => {
 		mockEmptyHosts();
 		const tool = new GrepTool(createSession());
-		const result = await tool.execute("s", { pattern: "beta", paths: [`ssh://localhost${TMP}/read.txt`] });
+		const result = await tool.execute("s", { pattern: "beta", path: `ssh://localhost${TMP}/read.txt` });
 		const out = textOf(result);
 		expect(out).toContain("beta");
 		// The resource is reported under its ssh:// URL, not a local scratch path.

@@ -182,8 +182,8 @@ export const fsFixtures: Record<string, GalleryFixture> = {
 	glob: {
 		label: "Glob",
 		// Streaming: glob half-typed, no limit yet.
-		streamingArgs: { paths: ["packages/coding-agent/src/tools/*-render"] },
-		args: { paths: ["packages/coding-agent/src/**/*.test.ts"], limit: 50 },
+		streamingArgs: { path: "packages/coding-agent/src/tools/*-render" },
+		args: { path: "packages/coding-agent/src/**/*.test.ts", limit: 50 },
 		result: {
 			content: [
 				{

@@ -30,7 +30,7 @@ describe("ast_grep parse errors", () => {
 
 			const result = await tool!.execute("ast-grep-parse", {
 				pat: "someUnlikelyCall($A)",
-				paths: [filePath],
+				path: filePath,
 			});
 
 			const text = result.content.find(content => content.type === "text")?.text ?? "";
@@ -61,7 +61,7 @@ describe("ast_grep parse errors", () => {
 
 			const result = await tool!.execute("ast-grep-parse-cap", {
 				pat: "someUnlikelyCall($A)",
-				paths: [tempDir],
+				path: tempDir,
 			});
 
 			const text = result.content.find(content => content.type === "text")?.text ?? "";
@@ -95,7 +95,7 @@ describe("ast_grep parse errors", () => {
 
 			const result = await tool!.execute("ast-grep-glob", {
 				pat: "providerOptions",
-				paths: [`${packagesDir}/pkg-*/src/**/*.ts`],
+				path: `${packagesDir}/pkg-*/src/**/*.ts`,
 			});
 
 			const text = result.content.find(content => content.type === "text")?.text ?? "";
@@ -132,7 +132,7 @@ describe("ast_grep parse errors", () => {
 
 			const result = await tool!.execute("ast-grep-multi-page", {
 				pat: "marker($A)",
-				paths: [lateDir, earlyDir],
+				path: `${lateDir}; ${earlyDir}`,
 			});
 
 			const text = result.content.find(content => content.type === "text")?.text ?? "";
@@ -164,7 +164,7 @@ describe("ast_grep parse errors", () => {
 
 			const result = await tool!.execute("ast-grep-tlaplus", {
 				pat: "Inc",
-				paths: [filePath],
+				path: filePath,
 			});
 
 			const text = result.content.find(content => content.type === "text")?.text ?? "";
