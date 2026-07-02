@@ -163,6 +163,64 @@ describe("normalizeGeneratedTitle source-aware casing", () => {
 		// All-caps restoration is dropped, but the model's own casing passes through.
 		expect(normalizeGeneratedTitle("fix the API timeout", "fix the api timeout")).toBe("fix the API timeout");
 	});
+
+	it("restores an ALL-CAPS acronym the model title-cased at the start of the title", () => {
+		// Reporter's case (#4220): the model produces `Cnpg` when sentence-casing
+		// the user's `CNPG` — we must recover the acronym from the source.
+		expect(normalizeGeneratedTitle("Cnpg consolidation", "Session about CNPG consolidation")).toBe(
+			"CNPG consolidation",
+		);
+	});
+
+	it("restores an ALL-CAPS acronym alongside a distinctive mixed-case proper noun", () => {
+		// Model title-cased both `PostgreSQL` and `CNPG`; distinctive path restores
+		// `PostgreSQL`, the new acronym path restores `CNPG`.
+		expect(normalizeGeneratedTitle("Set up postgresql and Cnpg", "Set up PostgreSQL and CNPG")).toBe(
+			"Set up PostgreSQL and CNPG",
+		);
+	});
+
+	it("does not restore an ALL-CAPS acronym the model lowercased (leaves emphasis alone)", () => {
+		// Lowercase model output could equally be `WORK`-style emphasis correctly
+		// de-shouted. Restoration requires the model to produce a title-cased
+		// artifact so we never re-shout an isolated single-word emphasis.
+		expect(normalizeGeneratedTitle("make it work", "just make it WORK already")).toBe("make it work");
+	});
+
+	it("does not restore a single emphatic ALL-CAPS word from sentence-case title start", () => {
+		// Normal sentence capitalization produces `Fix`/`Work` at title start.
+		// Those words have no acronym signal, so they must not be restored as
+		// `FIX`/`WORK` just because the source had one emphasized word.
+		expect(normalizeGeneratedTitle("Fix login crash", "FIX login crash")).toBe("Fix login crash");
+		expect(normalizeGeneratedTitle("Work around bug", "please WORK around the bug")).toBe("Work around bug");
+	});
+
+	it("restores common vowel-bearing technical acronyms via the acronym allowlist", () => {
+		expect(normalizeGeneratedTitle("Api timeout", "API timeout")).toBe("API timeout");
+	});
+
+	it("still declines to restore ALL-CAPS when the source is shouty", () => {
+		// `FIX the BUG NOW` has BUG↔NOW consecutive → shouty. Even though the
+		// model title-cased `Fix` at the start, we must not restore `FIX`.
+		expect(normalizeGeneratedTitle("Fix the bug now", "FIX the BUG NOW")).toBe("Fix the bug now");
+	});
+
+	it("declines acronym restoration when three source ALL-CAPS run consecutively", () => {
+		// `ALL ERROR HANDLING` is a shouty run; even if the model title-cased one
+		// of them, the acronym map is empty for shouty sources.
+		expect(
+			normalizeGeneratedTitle("Unify Error handling across the codebase", "unify ALL ERROR HANDLING everywhere"),
+		).toBe("Unify Error handling across the codebase");
+	});
+
+	it("does not misidentify PascalCase proper nouns as acronyms", () => {
+		// The model produced `GitHub` from a source that also has the acronym
+		// `API`; `GitHub` has interior uppercase so it's NOT a title-cased
+		// artifact and must pass through untouched.
+		expect(normalizeGeneratedTitle("Fix GitHub Api rate limit", "fix the GitHub API rate limit")).toBe(
+			"Fix GitHub API rate limit",
+		);
+	});
 });
 
 describe("isLowSignalTitleInput", () => {
