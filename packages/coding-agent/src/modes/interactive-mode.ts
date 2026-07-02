@@ -336,8 +336,10 @@ const MODEL_CYCLE_TRACK_CLEAR_MS = 4000;
 
 /**
  * Build the anchored subagent HUD block: a bold accent "Subagents" header plus
- * one hooked row per running agent in the same `Id: description` shape the
+ * one tree row per running agent in the same `Id: description` shape the
  * inline task rows use (muted task preview when no description was given).
+ * Layout mirrors the Todos HUD exactly: unindented header, then
+ * `renderTreeList` rows (dim connectors) shifted right by one space.
  * Only detached background spawns are listed: a sync task call blocks the
  * parent turn and its inline tool block already renders progress live, and
  * eval `agent()` spawns are rendered by their own eval cell tree.
@@ -349,29 +351,32 @@ export function renderSubagentHudLines(sessions: ObservableSession[], columns: n
 	);
 	if (running.length === 0) return [];
 
-	const indent = "  ";
-	const hook = theme.tree.hook;
 	const dot = theme.styledSymbol("status.done", "accent");
-	const lines = ["", indent + theme.bold(theme.fg("accent", "Subagents"))];
-	running.forEach((session, index) => {
-		const prefix = `${indent}${index === 0 ? hook : " "} `;
-		const displayId = formatTaskId(session.id);
-		let line = `${prefix}${dot} ${theme.fg("accent", theme.bold(displayId))}`;
-		const description = session.description?.trim() || session.progress?.description?.trim();
-		if (description) {
-			const budget = Math.max(TRUNCATE_LENGTHS.SHORT, columns - visibleWidth(prefix) - visibleWidth(displayId) - 6);
-			line += `${theme.fg("accent", ":")} ${theme.fg("accent", truncateToWidth(replaceTabs(description), budget))}`;
-		} else {
-			// No spawn description: fall back to a muted task preview, same as
-			// the inline task rows when a row has no label.
-			const taskPreview = session.progress?.task?.trim();
-			if (taskPreview) {
-				line += ` ${theme.fg("muted", truncateToWidth(replaceTabs(taskPreview), TRUNCATE_LENGTHS.SHORT))}`;
-			}
-		}
-		lines.push(line);
-	});
-	return lines;
+	const rows = renderTreeList(
+		{
+			items: running,
+			expanded: true,
+			renderItem: session => {
+				const displayId = formatTaskId(session.id);
+				let line = `${dot} ${theme.fg("accent", theme.bold(displayId))}`;
+				const description = session.description?.trim() || session.progress?.description?.trim();
+				if (description) {
+					const budget = Math.max(TRUNCATE_LENGTHS.SHORT, columns - visibleWidth(displayId) - 10);
+					line += `${theme.fg("accent", ":")} ${theme.fg("accent", truncateToWidth(replaceTabs(description), budget))}`;
+				} else {
+					// No spawn description: fall back to a muted task preview, same as
+					// the inline task rows when a row has no label.
+					const taskPreview = session.progress?.task?.trim();
+					if (taskPreview) {
+						line += ` ${theme.fg("muted", truncateToWidth(replaceTabs(taskPreview), TRUNCATE_LENGTHS.SHORT))}`;
+					}
+				}
+				return line;
+			},
+		},
+		theme,
+	);
+	return ["", theme.bold(theme.fg("accent", "Subagents")), ...rows.map(line => ` ${line}`)];
 }
 
 export class InteractiveMode implements InteractiveModeContext {
