@@ -45,6 +45,7 @@ const rewindTool: AgentTool<typeof rewindSchema, { report: string; rewound: bool
 type Harness = {
 	session: AgentSession;
 	authStorage: AuthStorage;
+	extraSessions: AgentSession[];
 	tempDir: TempDir;
 };
 
@@ -53,6 +54,9 @@ const activeHarnesses: Harness[] = [];
 afterEach(async () => {
 	while (activeHarnesses.length > 0) {
 		const harness = activeHarnesses.pop();
+		for (const extraSession of harness?.extraSessions ?? []) {
+			await extraSession.dispose();
+		}
 		await harness?.session.dispose();
 		harness?.authStorage.close();
 		harness?.tempDir.removeSync();
@@ -99,7 +103,7 @@ async function createHarness(responses: MockResponse[]): Promise<Harness & { moc
 		modelRegistry,
 		toolRegistry: new Map(tools.map(tool => [tool.name, tool])),
 	});
-	const harness = { session, authStorage, tempDir };
+	const harness = { session, authStorage, tempDir, extraSessions: [] };
 	activeHarnesses.push(harness);
 	return { ...harness, mock };
 }
@@ -183,6 +187,73 @@ describe("AgentSession checkpoint rewind branch context", () => {
 		const finalThinking = finalAssistant.content.find((block): block is ThinkingContent => block.type === "thinking");
 		expect(finalThinking?.thinking).toBe("answer after rewind");
 		expect(finalThinking?.thinkingSignature).toBe("sig_after_rewind");
+	});
+
+	it("rehydrates completed rewind state from the retained report on resume", async () => {
+		const report = "findings: retained after resume";
+		const harness = await createHarness([
+			{
+				content: [{ type: "toolCall", id: "call_checkpoint", name: "checkpoint", arguments: { goal: "inspect" } }],
+				stopReason: "toolUse",
+			},
+			{
+				content: [{ type: "toolCall", id: "call_rewind", name: "rewind", arguments: { report } }],
+				stopReason: "toolUse",
+			},
+			{
+				content: ["DONE"],
+				stopReason: "stop",
+			},
+		]);
+
+		await harness.session.prompt("investigate with a checkpoint");
+
+		const reloadedMock = createMockModel({ responses: [] });
+		const reloadedSettings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.enabled": false,
+			"todo.enabled": false,
+			"todo.eager": "default",
+			"todo.reminders": false,
+		});
+		reloadedSettings.setModelRole("default", `${reloadedMock.provider}/${reloadedMock.id}`);
+		const reloadedTools = [checkpointTool as AgentTool, rewindTool as AgentTool];
+		const reloadedAgent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model: reloadedMock,
+				systemPrompt: ["Test"],
+				tools: reloadedTools,
+				messages: harness.session.sessionManager.buildSessionContext().messages,
+			},
+			convertToLlm,
+			streamFn: reloadedMock.stream,
+		});
+		const reloadedSession = new AgentSession({
+			agent: reloadedAgent,
+			sessionManager: harness.session.sessionManager,
+			settings: reloadedSettings,
+			modelRegistry: new ModelRegistry(
+				harness.authStorage,
+				path.join(harness.tempDir.path(), "models-reloaded.yml"),
+			),
+			toolRegistry: new Map(reloadedTools.map(tool => [tool.name, tool])),
+		});
+		harness.extraSessions.push(reloadedSession);
+
+		expect(reloadedSession.getLastCompletedRewind()).toEqual({
+			report,
+			startedAt: "2026-01-01T00:00:00.000Z",
+			rewoundAt: expect.any(String),
+		});
+		const tool = new RewindTool(
+			createToolSession({
+				getLastCompletedRewind: () => reloadedSession.getLastCompletedRewind(),
+			}),
+		);
+		await expect(tool.execute("repeat_rewind", { report: "retry" })).rejects.toThrow(
+			"Checkpoint already completed; continue from the retained rewind report instead of calling rewind again.",
+		);
 	});
 
 	it("tells the model to continue when rewind is repeated after completion", async () => {

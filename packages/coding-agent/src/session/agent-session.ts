@@ -64,7 +64,6 @@ import {
 	renderHandoffPrompt,
 	resolveBudgetReserveTokens,
 	resolveThresholdTokens,
-	type SessionEntry,
 	type SessionMessageEntry,
 	type ShakeConfig,
 	type ShakeRegion,
@@ -351,7 +350,7 @@ import {
 import type { BuildSessionContextOptions, SessionContext } from "./session-context";
 import { getLatestCompactionEntry, getRestorableSessionModels } from "./session-context";
 import { formatSessionDumpText } from "./session-dump-format";
-import type { BranchSummaryEntry, CompactionEntry, NewSessionOptions } from "./session-entries";
+import type { BranchSummaryEntry, CompactionEntry, NewSessionOptions, SessionEntry } from "./session-entries";
 import { EPHEMERAL_MODEL_CHANGE_ROLE } from "./session-entries";
 import { formatSessionHistoryMarkdown } from "./session-history-format";
 import { cleanupEmptyMoveSession, type SessionManager } from "./session-manager";
@@ -399,6 +398,49 @@ const GEMINI_TOOL_REMINDER_TYPE = "gemini-tool-call-reminder";
  *  thinking/response loop. Steers the model off the repeated content; never displayed. */
 const THINKING_LOOP_REDIRECT_TYPE = "thinking-loop-redirect";
 const TOOL_CALL_LOOP_REDIRECT_TYPE = "tool-call-loop-redirect";
+
+function customMessageContentText(content: string | (TextContent | ImageContent)[]): string {
+	if (typeof content === "string") return content;
+	const parts: string[] = [];
+	for (const part of content) {
+		if (part.type === "text") parts.push(part.text);
+	}
+	return parts.join("\n");
+}
+
+function stringProperty(value: object, key: string): string | undefined {
+	const field = Object.getOwnPropertyDescriptor(value, key)?.value;
+	return typeof field === "string" ? field : undefined;
+}
+
+function reportFromRewindReportContent(content: string): string {
+	const marker = "\nReport:\n";
+	const index = content.lastIndexOf(marker);
+	const report = index >= 0 ? content.slice(index + marker.length) : content;
+	return report.trim();
+}
+
+function completedRewindFromEntry(entry: SessionEntry): CompletedRewindState | undefined {
+	if (entry.type !== "custom_message" || entry.customType !== "rewind-report") return undefined;
+	const details = entry.details;
+	if (!details || typeof details !== "object") return undefined;
+	const startedAt = stringProperty(details, "startedAt");
+	const rewoundAt = stringProperty(details, "rewoundAt");
+	if (!startedAt || !rewoundAt) return undefined;
+	const report =
+		stringProperty(details, "report")?.trim() ||
+		reportFromRewindReportContent(customMessageContentText(entry.content));
+	return report.length > 0 ? { report, startedAt, rewoundAt } : undefined;
+}
+
+function isSuccessfulCheckpointEntry(entry: SessionEntry): boolean {
+	return (
+		entry.type === "message" &&
+		entry.message.role === "toolResult" &&
+		entry.message.toolName === "checkpoint" &&
+		entry.message.isError !== true
+	);
+}
 
 // A side-channel assistant response is signed for the hidden prompt/history that
 // produced it. If we persist that response under a different user turn, native
@@ -2126,6 +2168,8 @@ export class AgentSession {
 
 		this.#advisorEnabled = this.settings.get("advisor.enabled") as boolean;
 		if (this.#advisorEnabled) this.#buildAdvisorRuntime();
+
+		this.#rehydrateLastCompletedRewind();
 
 		// Always subscribe to agent events for internal handling
 		// (session persistence, hooks, auto-compaction, retry logic)
@@ -6673,6 +6717,18 @@ export class AgentSession {
 		this.agent.setTools(activeTools);
 	}
 
+	#rehydrateLastCompletedRewind(): void {
+		let completed: CompletedRewindState | undefined;
+		for (const entry of this.sessionManager.getBranch()) {
+			if (isSuccessfulCheckpointEntry(entry)) {
+				completed = undefined;
+				continue;
+			}
+			completed = completedRewindFromEntry(entry) ?? completed;
+		}
+		this.#lastCompletedRewind = completed;
+	}
+
 	getCheckpointState(): CheckpointState | undefined {
 		return this.#checkpointState;
 	}
@@ -10412,7 +10468,7 @@ export class AgentSession {
 			this.sessionManager.branchWithSummary(null, report, { startedAt: checkpointState.startedAt });
 		}
 		const rewoundAt = new Date().toISOString();
-		const details = { startedAt: checkpointState.startedAt, rewoundAt };
+		const details = { report, startedAt: checkpointState.startedAt, rewoundAt };
 		this.sessionManager.appendCustomMessageEntry(
 			"rewind-report",
 			prompt.render(rewindReportTemplate, { report }),
@@ -13928,6 +13984,8 @@ export class AgentSession {
 			? this.#getSessionDefaultSelectedMCPToolNames(previousSessionFile)
 			: undefined;
 
+		const previousLastCompletedRewind = this.#lastCompletedRewind;
+
 		this.agent.clearAllQueues();
 		this.#pendingNextTurnMessages = [];
 		this.#scheduledHiddenNextTurnGeneration = undefined;
@@ -13947,6 +14005,7 @@ export class AgentSession {
 				this.#didSessionMessagesChange(previousSessionContext.messages, sessionContext.messages);
 			const fallbackSelectedMCPToolNames = this.#getSessionDefaultSelectedMCPToolNames(sessionPath);
 			await this.#restoreMCPSelectionsForSessionContext(sessionContext, { fallbackSelectedMCPToolNames });
+			this.#rehydrateLastCompletedRewind();
 
 			// Emit session_switch event to hooks
 			if (this.#extensionRunner) {
@@ -14088,6 +14147,7 @@ export class AgentSession {
 			this.agent.replaceQueues(previousSteeringMessages, previousFollowUpMessages);
 			this.#pendingNextTurnMessages = previousPendingNextTurnMessages;
 			this.#scheduledHiddenNextTurnGeneration = previousScheduledHiddenNextTurnGeneration;
+			this.#lastCompletedRewind = previousLastCompletedRewind;
 			if (previousModel) {
 				this.agent.setModel(previousModel);
 			}
@@ -14438,6 +14498,7 @@ export class AgentSession {
 		const displayContext = deobfuscateSessionContext(stateContext, this.#obfuscator);
 		await this.#restoreMCPSelectionsForSessionContext(displayContext);
 		this.agent.replaceMessages(displayContext.messages);
+		this.#rehydrateLastCompletedRewind();
 		this.#resetAdvisorSessionState();
 		this.#syncTodoPhasesFromBranch();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
