@@ -74,6 +74,9 @@
 ### Fixed
 
 - Fixed `edit` frequently failing with `never displayed (it showed a partial range, a search hit, or a folded summary)` after a structural-summary `read` on a >100-line source file: the rejection now inlines the actual file content at the unseen anchor lines and merges them into the snapshot's `seenLines` set, so a straight edit retry with the same `[path#tag]` header succeeds instead of demanding a follow-up range re-read. Wide (over 40-line) anchor ranges still fall back to a range re-read for the tail. ([#4224](https://github.com/can1357/oh-my-pi/issues/4224))
+### Fixed
+
+- Fixed the DAP client hanging forever when the debug adapter's stdin stops draining. `writeMessage` now races the flush against a 30 s cap and adapter exit and disposes the client on either failure, and `sendRequest` fires the write in the background with a passive unhandled-rejection guard so the request-timer error is never orphaned before the caller subscribes. Socket-mode spawn helpers (`#spawnSocketUnix`, `#spawnSocketClientAddr`) now kill the detached adapter process when the readiness/connect race fails, closing an orphan-process leak on socket connect timeouts ([#4233](https://github.com/can1357/oh-my-pi/issues/4233)).
 
 ## [16.3.1] - 2026-07-02
 
