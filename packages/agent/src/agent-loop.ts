@@ -156,6 +156,8 @@ function snapshotAssistantContentBlock(block: AssistantContentBlock): AssistantC
 			return { ...block };
 		case "redactedThinking":
 			return { ...block };
+		case "fallback":
+			return { ...block, from: { ...block.from }, to: { ...block.to } };
 		case "toolCall":
 			return { ...block, arguments: structuredCloneJSON(block.arguments) };
 	}

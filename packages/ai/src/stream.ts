@@ -1371,6 +1371,7 @@ function mapOptionsForApi<TApi extends Api>(
 		onSseEvent: options?.onSseEvent,
 		execHandlers: options?.execHandlers,
 		fetch: options?.fetch,
+		fallbacks: options?.fallbacks,
 	};
 
 	switch (model.api) {

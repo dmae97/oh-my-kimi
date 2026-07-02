@@ -121,4 +121,59 @@ describe("createSettingsAwareStreamFn", () => {
 		expect(options?.loopGuard?.enabled).toBe(false);
 		expect(options?.loopGuard?.checkAssistantContent).toBe(true);
 	});
+	describe("providers.anthropic.serverSideFallback (opt-in)", () => {
+		const stubFableModel = {
+			api: "anthropic-messages",
+			provider: "anthropic",
+			id: "claude-fable-5",
+		} as unknown as Model;
+		const stubOpusModel = {
+			api: "anthropic-messages",
+			provider: "anthropic",
+			id: "claude-opus-4-8",
+		} as unknown as Model;
+
+		it("stays off by default: no fallbacks injected on any model", () => {
+			const settings = Settings.isolated({});
+			const { fn: base, calls } = captureBase();
+			const wrapped = createSettingsAwareStreamFn(settings, base);
+
+			wrapped(stubFableModel, stubContext, { apiKey: "k" });
+
+			expect(calls[0]?.options?.fallbacks).toBeUndefined();
+		});
+
+		it("injects Opus 4.8 fallback for Fable when the setting is on", () => {
+			const settings = Settings.isolated({ "providers.anthropic.serverSideFallback": true });
+			const { fn: base, calls } = captureBase();
+			const wrapped = createSettingsAwareStreamFn(settings, base);
+
+			wrapped(stubFableModel, stubContext, { apiKey: "k" });
+
+			expect(calls[0]?.options?.fallbacks).toEqual([{ model: "claude-opus-4-8" }]);
+		});
+
+		it("does NOT inject fallbacks on non-Fable/Mythos Anthropic models even when the setting is on", () => {
+			const settings = Settings.isolated({ "providers.anthropic.serverSideFallback": true });
+			const { fn: base, calls } = captureBase();
+			const wrapped = createSettingsAwareStreamFn(settings, base);
+
+			wrapped(stubOpusModel, stubContext, { apiKey: "k" });
+
+			expect(calls[0]?.options?.fallbacks).toBeUndefined();
+		});
+
+		it("caller-supplied fallbacks always win over the settings default", () => {
+			const settings = Settings.isolated({ "providers.anthropic.serverSideFallback": true });
+			const { fn: base, calls } = captureBase();
+			const wrapped = createSettingsAwareStreamFn(settings, base);
+
+			wrapped(stubFableModel, stubContext, {
+				apiKey: "k",
+				fallbacks: [{ model: "claude-sonnet-5" }],
+			});
+
+			expect(calls[0]?.options?.fallbacks).toEqual([{ model: "claude-sonnet-5" }]);
+		});
+	});
 });
