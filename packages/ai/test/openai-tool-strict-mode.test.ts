@@ -430,14 +430,14 @@ describe("OpenAI tool strict mode", () => {
 			maxTokens: 131_072,
 		} as ModelSpec<"openai-responses">);
 		const providerSessionState = new Map<string, ProviderSessionState>();
-		const strictFlags: boolean[][] = [];
+		const strictFlags: Array<Array<boolean | undefined>> = [];
 		let attempt = 0;
 		const fetchMock: FetchImpl = Object.assign(
 			async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 				attempt += 1;
 				const bodyText = typeof init?.body === "string" ? init.body : "";
 				const payload = JSON.parse(bodyText) as { tools?: Array<{ strict?: boolean }> };
-				strictFlags.push((payload.tools ?? []).map(tool => tool.strict === true));
+				strictFlags.push((payload.tools ?? []).map(tool => tool.strict));
 				if (attempt === 1) {
 					return new Response(
 						JSON.stringify({
@@ -507,11 +507,18 @@ describe("OpenAI tool strict mode", () => {
 			{ preconnect: fetch.preconnect },
 		);
 
-		const result = await streamOpenAIResponses(model, testContext, {
-			apiKey: "test-key",
-			providerSessionState,
-			fetch: fetchMock,
-		}).result();
+		const result = await streamOpenAIResponses(
+			model,
+			{
+				...testContext,
+				tools: [testTool, looseYieldTool],
+			},
+			{
+				apiKey: "test-key",
+				providerSessionState,
+				fetch: fetchMock,
+			},
+		).result();
 
 		const text = result.content
 			.filter((block): block is { type: "text"; text: string } => block.type === "text")
@@ -522,7 +529,10 @@ describe("OpenAI tool strict mode", () => {
 		// the done message (mirrors the completions path).
 		expect(result.errorMessage).toBeUndefined();
 		expect(text).toBe("Recovered");
-		expect(strictFlags).toEqual([[true], [false]]);
+		expect(strictFlags).toEqual([
+			[true, false],
+			[undefined, undefined],
+		]);
 	});
 
 	it("does not disable OpenRouter Anthropic strict tools for unrelated invalid requests", async () => {
@@ -655,6 +665,24 @@ describe("OpenAI tool strict mode", () => {
 		// on the wire so backends that distinguish it from omission behave correctly.
 		expect(tool?.strict).toBe(false);
 		expect(getYieldDataSchema(tool?.parameters).additionalProperties).toBe(true);
+	});
+
+	it("omits explicit strict:false for openai-responses when compat disables the strict field", async () => {
+		const model = buildModel({
+			...(getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">),
+			api: "openai-responses",
+			compat: { supportsStrictMode: false } satisfies OpenAICompat,
+		} as ModelSpec<"openai-responses">);
+
+		const payload = (await captureResponsesPayload(model, {
+			...testContext,
+			tools: [looseYieldTool],
+		})) as {
+			tools?: Array<{ strict?: boolean }>;
+		};
+		// Some Responses-compatible providers reject the `strict` key entirely;
+		// disabling strict mode must keep even author-set `false` off the wire.
+		expect(payload.tools?.[0]?.strict).toBeUndefined();
 	});
 
 	it("sends strict=true for openai-responses tool schemas on GitHub Copilot", async () => {
