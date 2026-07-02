@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.0] - 2026-07-02
+
 ### Added
 
 - Added opt-in support for Anthropic's server-side fallback beta (server-side-fallback-2026-06-01) on the anthropic-messages provider, including support for AnthropicOptions.fallbacks and automatic filtering of fallback blocks during cross-provider message transformations.
@@ -14,7 +16,6 @@
 ### Fixed
 
 - Fixed an issue where same-model Anthropic message replays incorrectly demoted unsigned thinking into textual content during API calls
-
 - Fixed a performance issue where broker usage fetch failures were not cached, causing redundant network requests when the broker is offline.
 - Fixed Xiaomi MiMo API key validation to use the supported mimo-v2.5 model.
 - Fixed certificate verification errors for custom gateways behind private CA bundles by ensuring NODE_EXTRA_CA_CERTS is respected across all provider fetches.

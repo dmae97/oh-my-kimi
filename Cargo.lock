@@ -2014,9 +2014,9 @@ dependencies = [
 
 [[package]]
 name = "inotify-sys"
-version = "0.1.5"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e05c02b5e89bff3b946cedeca278abc628fe811e604f027c45a8aa3cf793d0eb"
+checksum = "6fda9741ca16536952da2ecaa6105c2f4653fa6f0724681df6d2414c4106d0b0"
 dependencies = [
  "libc",
 ]
@@ -2934,7 +2934,7 @@ dependencies = [
 
 [[package]]
 name = "pi-ast"
-version = "16.2.13"
+version = "16.3.0"
 dependencies = [
  "anyhow",
  "ast-grep-core",
@@ -3004,7 +3004,7 @@ dependencies = [
 
 [[package]]
 name = "pi-iso"
-version = "16.2.13"
+version = "16.3.0"
 dependencies = [
  "async-trait",
  "libc",
@@ -3016,7 +3016,7 @@ dependencies = [
 
 [[package]]
 name = "pi-natives"
-version = "16.2.13"
+version = "16.3.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3068,7 +3068,7 @@ dependencies = [
 
 [[package]]
 name = "pi-shell"
-version = "16.2.13"
+version = "16.3.0"
 dependencies = [
  "anyhow",
  "brush-builtins",
@@ -3117,7 +3117,7 @@ dependencies = [
 
 [[package]]
 name = "pi-walker"
-version = "16.2.13"
+version = "16.3.0"
 dependencies = [
  "dashmap",
  "globset",

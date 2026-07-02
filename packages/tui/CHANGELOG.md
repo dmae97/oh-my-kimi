@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.0] - 2026-07-02
+
 ### Fixed
 
 - Fixed a potential event loop hang when processing oversized, unterminated terminal escape sequences (OSC/DCS/APC).

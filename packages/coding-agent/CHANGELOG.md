@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.0] - 2026-07-02
+
 ### Added
 
 - Added `providers.anthropic.serverSideFallback` configuration option to opt into Anthropic's server-side-fallback beta chain, allowing Claude requests to automatically retry on alternative models when blocked by classifiers.

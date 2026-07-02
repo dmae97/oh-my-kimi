@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.0] - 2026-07-02
+
 ### Breaking Changes
 
 - Renamed the `requiresJuiceZeroHack` compatibility flag to `requiresReasoningSuppressionPrompt` (affecting `OpenAICompat` and `ResolvedOpenAIResponsesCompat`) and removed the unused `"juice-zero-developer-message"` member from `OpenAIReasoningDisableMode`.

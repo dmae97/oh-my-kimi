@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.0] - 2026-07-02
+
 ### Changed
 
 - Significantly improved performance on large files by optimizing stale-anchor remap validation.

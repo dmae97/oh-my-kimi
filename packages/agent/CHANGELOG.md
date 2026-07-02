@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.0] - 2026-07-02
+
 ### Added
 
 - Added support for Anthropic fallback content blocks in agent-loop assistant messages, ensuring they are preserved across session persistence and event fanout.
