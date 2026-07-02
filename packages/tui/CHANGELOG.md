@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed the modifyOtherKeys keyboard fallback enabling on unknown SSH terminals, avoiding broken Shift input in iOS SSH clients such as Redock ([#4325](https://github.com/can1357/oh-my-pi/issues/4325)).
+- Fixed native scrollback repair for audited transcript rows that were offered below a still-live block, preventing lower finalized rows from duplicating when the live block grows ([#4326](https://github.com/can1357/oh-my-pi/issues/4326)).
 
 ## [16.3.0] - 2026-07-02
 

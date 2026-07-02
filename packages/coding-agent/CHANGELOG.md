@@ -17,6 +17,9 @@
 ### Fixed
 
 - Fixed Windows session tail loss after atomic compaction rewrites by fencing append writers during full-file replacement and gating the atomic publish on a `commitGuard` that the storage backend checks synchronously before rename, so a concurrent `flushSync` (Ctrl+C / session-exit) is not overwritten by the stale body serialized before it ran. Covers post-compaction prompts, tool results, title changes, and exit diagnostics on the current JSONL path ([#4338](https://github.com/can1357/oh-my-pi/issues/4338)).
+### Fixed
+
+- Fixed transcript native-scrollback boundaries so finalized content below a live block is offered while still audited, preventing stale lower-row duplication when the live block grows ([#4326](https://github.com/can1357/oh-my-pi/issues/4326)).
 
 ## [16.3.2] - 2026-07-02
 
