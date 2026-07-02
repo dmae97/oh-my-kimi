@@ -2755,18 +2755,27 @@ export class TUI extends Container {
 		let committedRowsResynced = false;
 		// Audit covers [0, auditRows) and the forced suffix [durableRows,
 		// committedRows); the durable middle [auditRows, durableRows) is exempt
-		// (in-place drift). Two reasons to run the audit this frame:
+		// (in-place drift). Three reasons to run the audit this frame:
 		//  - the stable prefix does not cover every audited row (auditUpper); or
 		//  - a forced-overflow row this frame became durable/permanent
-		//    (committedPrefixDurableRows < hardAuditEnd): the barrier above it
-		//    finalized, so its committed bytes must be re-checked even though the
-		//    stable prefix says nothing moved — a stale committed copy there would
-		//    silently drop the row. The hard scan in findCommittedPrefixResync
-		//    covers [durableRows, hardAuditEnd) in full (no tail-sample miss).
+		//    (committedPrefixDurableRows < min(committed, durableBoundary)): the
+		//    barrier above it finalized, so its committed bytes must be re-checked
+		//    even though the stable prefix says nothing moved — a stale committed
+		//    copy there would silently drop the row; or
+		//  - a forced-overflow row this frame joined the offered zone
+		//    (committedPrefixOfferRows < min(committed, offerBoundary)): a
+		//    finalized sibling under a live block asks for destructive-replay
+		//    repair, so a single-row shift there must be caught even if
+		//    tail-sample tolerance would otherwise skip it.
+		// The hard scan in findCommittedPrefixResync covers [durableRows,
+		// hardAuditEnd) in full (no tail-sample miss).
 		const auditUpper =
 			this.#committedPrefixDurableRows < this.#committedRows ? this.#committedRows : this.#committedPrefixAuditRows;
-		const hardAuditEnd = Math.min(this.#committedRows, durableBoundary);
-		const needHardAudit = this.#committedPrefixDurableRows < hardAuditEnd;
+		const durableHardEnd = Math.min(this.#committedRows, durableBoundary);
+		const offerHardEnd = Math.min(this.#committedRows, offerBoundary);
+		const hardAuditEnd = Math.max(durableHardEnd, offerHardEnd);
+		const needHardAudit =
+			this.#committedPrefixDurableRows < durableHardEnd || this.#committedPrefixOfferRows < offerHardEnd;
 		let repairOfferedScrollback = false;
 		const auditRan =
 			this.#hasEverRendered &&
@@ -2777,7 +2786,7 @@ export class TUI extends Container {
 			const committedRowsBeforeAudit = this.#committedRows;
 			const offeredRowsBeforeAudit = this.#committedPrefixOfferRows;
 			const durableRowsBeforeAudit = this.#committedPrefixDurableRows;
-			this.#auditCommittedPrefix(rawFrame, durableBoundary);
+			this.#auditCommittedPrefix(rawFrame, hardAuditEnd);
 			committedRowsResynced = this.#committedRows !== committedRowsBeforeAudit;
 			repairOfferedScrollback =
 				offeredRowsBeforeAudit > durableRowsBeforeAudit &&
@@ -3027,10 +3036,15 @@ export class TUI extends Container {
 			resliced || preDurableRows >= preCommittedRows || hardAudited
 				? Math.min(committed, durableBoundary)
 				: Math.min(preDurableRows, committed);
-		const offerRows =
-			resliced || preOfferRows >= preCommittedRows
-				? Math.min(committed, offerBoundary)
-				: Math.min(preOfferRows, committed);
+		// offerRows may EXTEND to include forced-overflow rows within a
+		// newly-visible offerBoundary — unlike auditRows/durableRows, retroactive
+		// promotion is safe: both offered and forced-overflow zones stay
+		// audited; offered only switches divergence repair from tolerant recommit
+		// to destructive replay (stronger, not weaker). A dropped offerBoundary
+		// still keeps the durability rule via `preOfferRows` (never demote
+		// already-offered rows to forced-overflow).
+		const offerCap = Math.min(committed, offerBoundary);
+		const offerRows = resliced ? offerCap : Math.max(Math.min(preOfferRows, committed), offerCap);
 		this.#committedPrefixAuditRows = auditRows;
 		this.#committedPrefixDurableRows = Math.max(auditRows, durableRows);
 		this.#committedPrefixOfferRows = Math.max(this.#committedPrefixDurableRows, offerRows);

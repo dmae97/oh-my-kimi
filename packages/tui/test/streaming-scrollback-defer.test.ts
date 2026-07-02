@@ -994,6 +994,60 @@ describe("scrollback commit gap — commit-unstable barriers", () => {
 		}
 	});
 
+	it("promotes forced-overflow rows to offered when the offer boundary appears after commit", async () => {
+		if (process.platform === "win32") return;
+		const term = new VirtualTerminal(20, 4);
+		overrideProbe(term, undefined);
+		const tui = new TUI(term);
+		const root = new SeamComponent();
+
+		try {
+			tui.addChild(root);
+			tui.start();
+			await settle(term);
+			const writes = capture(term);
+
+			// Phase 1: only the live barrier overflows the viewport. Rows scroll
+			// off as forced-overflow (no offer boundary).
+			const f1 = rows("live-", 10);
+			root.lines = f1;
+			root.liveStart = 0;
+			root.offerSafe = undefined;
+			tui.requestRender();
+			await settle(term);
+			const commitAfterF1 = term.getScrollBuffer().length;
+			expect(commitAfterF1).toBeGreaterThan(0);
+
+			// Phase 2: finalized siblings are appended below the still-live block;
+			// the component now reports an offer boundary covering the whole frame.
+			// The engine must retroactively classify the already-committed rows
+			// under the offer boundary as offered so the next divergence takes the
+			// destructive-replay repair path, not tolerant recommit.
+			const f2 = [...rows("live-", 10), ...rows("tail-", 5)];
+			root.lines = f2;
+			root.liveStart = 0;
+			root.offerSafe = f2.length;
+			tui.requestRender();
+			await settle(term);
+
+			// Phase 3: live block grows by one row, shifting the whole tail up.
+			const f3 = [...rows("live-", 11), ...rows("tail-", 5)];
+			root.lines = f3;
+			root.liveStart = 0;
+			root.offerSafe = f3.length;
+			tui.requestRender();
+			await settle(term);
+
+			const buffer = term.getScrollBuffer().map(line => line.trimEnd());
+			for (const row of rows("tail-", 5)) {
+				expect(buffer.filter(line => line === row)).toHaveLength(1);
+			}
+			expect(eraseScrollbackCount(writes)).toBeGreaterThan(0);
+		} finally {
+			tui.stop();
+		}
+	});
+
 	it("does not lose a single-row finalize edit above an unchanged tail (reviewer repro)", async () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(20, 4);
