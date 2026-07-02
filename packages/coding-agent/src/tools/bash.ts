@@ -47,6 +47,33 @@ const BASH_ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const DEFAULT_AUTO_BACKGROUND_THRESHOLD_MS = 60_000;
 
 /**
+ * Shape a shell command line for an ACP-conformant `terminal/create` request.
+ *
+ * ACP's `command` field is documented as the executable and `args` as its
+ * argv tail (see https://agentclientprotocol.com/protocol/v1/terminals), so a
+ * spec-conformant client `spawn(command, args)`s them directly — no implicit
+ * shell. A raw `bash` tool line ("git status && echo x | head") therefore has
+ * to be wrapped in an explicit shell invocation, otherwise the client tries
+ * to spawn the whole line as argv[0] and fails with `ENOENT` for anything
+ * containing a space, pipe, `&&`, redirect, or `$(...)`.
+ *
+ * The wrap reuses the same shell binary + args the local `bash-executor` would
+ * pick via `settings.getShellConfig()` — Git Bash / `bash.exe` on Windows,
+ * `$SHELL` (bash/zsh) with the `sh` fallback on POSIX — so the ACP path
+ * preserves `bash` tool semantics (`$VAR`, `$(...)`, `source`, POSIX quoting,
+ * `-l`) instead of dropping to `cmd.exe` on Windows. The agent host's shell
+ * path is used as a proxy for the client's, matching the near-universal
+ * ACP deployment shape of an editor spawning omp as a co-hosted subprocess.
+ */
+export function wrapShellLineForClientTerminal(
+	line: string,
+	shellConfig: { shell: string; args: string[]; prefix?: string | undefined },
+): { command: string; args: string[] } {
+	const finalLine = shellConfig.prefix ? `${shellConfig.prefix} ${line}` : line;
+	return { command: shellConfig.shell, args: [...shellConfig.args, finalLine] };
+}
+
+/**
  * Bash patterns flagged as safety critical for approval policy.
  *
  * Kept intentionally tight — the cost of a false negative is data loss or a compromised host,
@@ -842,8 +869,10 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 		// Skip when pty=true (PTY needs the local terminal UI).
 		if (clientBridge?.capabilities.terminal && clientBridge.createTerminal && !pty) {
 			const bridgeWallTimeStart = performance.now();
+			const shellSpawn = wrapShellLineForClientTerminal(command, this.session.settings.getShellConfig());
 			const handle = await clientBridge.createTerminal({
-				command,
+				command: shellSpawn.command,
+				args: shellSpawn.args,
 				cwd: commandCwd,
 				env: resolvedEnv
 					? Object.entries(resolvedEnv).map(([name, value]) => ({ name, value: value as string }))
