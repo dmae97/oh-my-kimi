@@ -167,7 +167,11 @@ describe("runSubprocess request guards", () => {
 	it("injects exactly one steering notice when the soft budget is crossed", async () => {
 		// Budget 4: steer fires at request 4 and must not repeat at request 5
 		// (still below the 1.5x hard stop of 6).
-		const settings = Settings.isolated({ "task.maxRuntimeMs": 0, "task.softRequestBudget": 4 });
+		const settings = Settings.isolated({
+			"task.maxRuntimeMs": 0,
+			"task.softRequestBudget": 4,
+			"task.softRequestBudgetNotice": true,
+		});
 		const handle = createFakeSession({
 			events: [
 				assistantMessageEnd("1"),
@@ -190,10 +194,67 @@ describe("runSubprocess request guards", () => {
 		expect(handle.steerCalls[0].options?.deliverAs).toBe("steer");
 	});
 
-	it("aborts the run gracefully at 1.5x the soft budget", async () => {
-		// Budget 2: steer at 2, hard stop at 3. The session hangs so only the
-		// budget abort can release it.
-		const settings = Settings.isolated({ "task.maxRuntimeMs": 0, "task.softRequestBudget": 2 });
+	it("does not inject a steering notice by default when the soft request budget is crossed", async () => {
+		// Budget 4 is crossed at request 4, but notices default off; the run is
+		// still below the 1.5x hard stop of 6 and should complete without steer.
+		const settings = Settings.isolated({
+			"task.maxRuntimeMs": 0,
+			"task.softRequestBudget": 4,
+		});
+		const handle = createFakeSession({
+			events: [
+				assistantMessageEnd("1"),
+				assistantMessageEnd("2"),
+				assistantMessageEnd("3"),
+				assistantMessageEnd("4"),
+				assistantMessageEnd("5"),
+				yieldToolEnd(),
+			],
+		});
+		mockCreateAgentSession(handle.session);
+
+		const result = await runSubprocess({ ...baseOptions, id: "subagent-steer-disabled", settings });
+
+		expect(result.requests).toBe(5);
+		expect(result.aborted).toBe(false);
+		expect(handle.steerCalls).toEqual([]);
+	});
+
+	it("still aborts at 1.5x the soft budget when budget notices are disabled", async () => {
+		// Budget 2: notice would normally fire at 2, but the hard stop at 3 must
+		// remain active even with the notice disabled.
+		const settings = Settings.isolated({
+			"task.maxRuntimeMs": 0,
+			"task.softRequestBudget": 2,
+			"task.softRequestBudgetNotice": false,
+		});
+		const handle = createFakeSession({
+			hang: true,
+			events: [
+				assistantMessageEnd("", { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15 }),
+				assistantMessageEnd("", { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15 }),
+				assistantMessageEnd("", { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15 }),
+			],
+		});
+		mockCreateAgentSession(handle.session);
+
+		const result = await runSubprocess({ ...baseOptions, id: "subagent-hard-stop-notice-disabled", settings });
+
+		expect(result.aborted).toBe(true);
+		expect(result.exitCode).toBe(1);
+		expect(result.abortReason).toContain("request budget exceeded");
+		expect(handle.abortCalls()).toBeGreaterThanOrEqual(1);
+		expect(handle.steerCalls).toEqual([]);
+	});
+
+	it("aborts the run gracefully at 1.5x the soft budget with notices enabled", async () => {
+		// Budget 2: with notices enabled, steer at 2 and hard stop at 3. The
+		// session hangs so only the budget abort can release it.
+		const settings = Settings.isolated({
+			"task.maxRuntimeMs": 0,
+			"task.softRequestBudget": 2,
+			"task.softRequestBudgetNotice": true,
+		});
 		const handle = createFakeSession({
 			hang: true,
 			events: [
