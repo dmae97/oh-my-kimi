@@ -46,4 +46,3 @@ export const kCursorExecResolved = Symbol("provider.block.cursorExecResolved");
 
 /** Carries the resolved marker without exposing a string-keyed property. */
 export type CursorExecResolvedCarrier = object & { [kCursorExecResolved]?: true };
-
