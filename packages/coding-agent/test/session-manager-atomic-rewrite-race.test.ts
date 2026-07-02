@@ -458,3 +458,76 @@ describe("SessionManager title-change fallback fenced-append durability", () => 
 		expect(storage.writeTextAtomicCalls).toBeGreaterThanOrEqual(2);
 	});
 });
+
+describe("SessionManager fence relaxes when flushSync supersedes the atomic rewrite", () => {
+	it("routes post-flushSync appends onto the hot path so they land on disk before close()", async () => {
+		const storage = new DetachingRewriteStorage();
+		const sessionManager = SessionManager.create("/cwd", "/sessions", storage);
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected built-in anthropic model");
+
+		// Materialize a session on disk so subsequent rewrites are meaningful.
+		sessionManager.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "seed response" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+		await sessionManager.flush();
+		sessionManager.appendMessage({ role: "user", content: "before rewrite", timestamp: Date.now() });
+		await sessionManager.flush();
+
+		// Schedule an atomic rewrite that parks inside writeTextAtomic.
+		const rewrite = sessionManager.rewriteEntries();
+		await storage.rewriteStarted.promise;
+
+		// (1) Append X1 while the fence epoch is still current: fenced into memory
+		// and captured by flushSync's #fileBody() below.
+		sessionManager.appendCustomEntry("during_active_atomic", { data: "X1" });
+
+		// (2) flushSync supersedes the pending atomic (bumps #diskEpoch) and
+		// publishes a synchronous body containing X1.
+		expect(() => sessionManager.flushSync()).not.toThrow();
+
+		// (3) Post-flushSync append MUST take the hot path: pre-fix, the fence
+		// stayed active and this entry was only marked dirty, then dropped when
+		// the pending atomic returned false and close() published nothing.
+		sessionManager.appendMessage({
+			role: "user",
+			content: "post_flush_sync_prompt",
+			timestamp: Date.now(),
+		});
+		sessionManager.appendCustomEntry("post_flush_sync_custom", { data: "X2" });
+
+		const sessionFile = sessionManager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected session file");
+		const midFlight = await storage.readText(sessionFile);
+		expect(midFlight).toContain('"customType":"during_active_atomic"');
+		expect(midFlight).toContain("post_flush_sync_prompt");
+		expect(midFlight).toContain('"customType":"post_flush_sync_custom"');
+
+		// Release the paused atomic rewrite. Its commitGuard MUST reject — a
+		// stale publish now would clobber the hot-path appends written above.
+		storage.allowRewrite.resolve();
+		await rewrite;
+		await sessionManager.close();
+
+		const afterClose = await storage.readText(sessionFile);
+		expect(afterClose).toContain('"customType":"during_active_atomic"');
+		expect(afterClose).toContain("post_flush_sync_prompt");
+		expect(afterClose).toContain('"customType":"post_flush_sync_custom"');
+		expect(storage.guardRejections).toBeGreaterThanOrEqual(1);
+		expect(storage.detachedLines).toEqual([]);
+	});
+});

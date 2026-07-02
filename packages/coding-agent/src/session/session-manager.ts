@@ -383,8 +383,15 @@ export class SessionManager {
 	#diskFailureLogged = false;
 	/** Bumped on every sync rewrite / chain reset so stale queued tasks become no-ops. */
 	#diskEpoch = 0;
-	/** True while an atomic full-file replacement can detach append handles opened to the old path. */
-	#atomicRewriteActive = false;
+	/**
+	 * Epoch of the in-flight atomic rewrite, or `null` when no rewrite is running.
+	 * The fence in {@link #appendToSessionFile} only applies while this matches
+	 * `#diskEpoch`: once a synchronous rewrite (`flushSync` → `#rewriteSynchronously`)
+	 * bumps the epoch, the pending atomic publish is guaranteed to abandon via
+	 * its `commitGuard`, and appends can safely take the hot path against the
+	 * freshly-published file.
+	 */
+	#atomicRewriteFenceEpoch: number | null = null;
 	/** Set by synchronous appends that land while an atomic replacement is active. */
 	#atomicRewriteDirty = false;
 
@@ -593,7 +600,7 @@ export class SessionManager {
 	 * their post-publish state updates.
 	 */
 	async #runFencedAtomicRewrite(epoch: number): Promise<boolean> {
-		this.#atomicRewriteActive = true;
+		this.#atomicRewriteFenceEpoch = epoch;
 		try {
 			do {
 				this.#atomicRewriteDirty = false;
@@ -608,7 +615,7 @@ export class SessionManager {
 			} while (this.#atomicRewriteDirty);
 			return true;
 		} finally {
-			this.#atomicRewriteActive = false;
+			this.#atomicRewriteFenceEpoch = null;
 		}
 	}
 
@@ -627,7 +634,11 @@ export class SessionManager {
 		// Atomic replacement window: the old path may be moved aside underneath
 		// any newly-opened append handle (Windows EPERM fallback). Do not open a
 		// writer here; the active rewrite loops and serializes a fresh full body.
-		if (this.#atomicRewriteActive) {
+		// A superseding synchronous rewrite bumps `#diskEpoch`, at which point
+		// the pending atomic publish is guaranteed to abandon via its
+		// `commitGuard`, so appends can (and must) take the hot path so they
+		// don't strand in memory while `close()` returns without a rewrite.
+		if (this.#atomicRewriteFenceEpoch !== null && this.#atomicRewriteFenceEpoch === this.#diskEpoch) {
 			this.#fileIsCurrent = false;
 			this.#rewriteRequired = true;
 			this.#atomicRewriteDirty = true;
