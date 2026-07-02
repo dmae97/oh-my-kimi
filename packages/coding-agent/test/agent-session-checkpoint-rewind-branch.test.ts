@@ -345,9 +345,7 @@ describe("AgentSession checkpoint rewind branch context", () => {
 		const startedAt = "2026-01-01T00:00:00.000Z";
 		const harness = await createHarness([
 			{
-				content: [
-					{ type: "toolCall", id: "call_checkpoint", name: "checkpoint", arguments: { goal: "inspect" } },
-				],
+				content: [{ type: "toolCall", id: "call_checkpoint", name: "checkpoint", arguments: { goal: "inspect" } }],
 				stopReason: "toolUse",
 			},
 			{
@@ -368,7 +366,8 @@ describe("AgentSession checkpoint rewind branch context", () => {
 		// the active branch, leaving the checkpoint tool result as the leaf.
 		const branch = harness.session.sessionManager.getBranch();
 		const checkpointEntry = branch.find(
-			entry => entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "checkpoint",
+			entry =>
+				entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "checkpoint",
 		);
 		if (!checkpointEntry) throw new Error("Expected checkpoint tool result entry");
 		harness.session.sessionManager.branch(checkpointEntry.id);
@@ -417,6 +416,8 @@ describe("AgentSession checkpoint rewind branch context", () => {
 		const rewindResult = await rewindToolForSession(reloadedSession).execute("call_rewind_after_resume", {
 			report: "post-resume findings",
 		});
-		expect(rewindResult.content.some(part => part.type === "text" && part.text.includes("Rewind requested"))).toBe(true);
+		expect(rewindResult.content.some(part => part.type === "text" && part.text.includes("Rewind requested"))).toBe(
+			true,
+		);
 	});
 });
