@@ -3,6 +3,7 @@ import {
 	type BlockState,
 	mergeCursorMcpToolCallArgs,
 	processInteractionUpdate,
+	synthesizeCursorExecToolCall,
 	type ToolCallState,
 	type UsageState,
 } from "@oh-my-pi/pi-ai/providers/cursor";
@@ -321,6 +322,84 @@ describe("processInteractionUpdate args_text_delta handling", () => {
 			agent: "task",
 			tasks: [{ assignment: "do A" }, { assignment: "do B" }],
 			context: "ctx",
+		});
+	});
+});
+
+describe("synthesizeCursorExecToolCall (issue #4348)", () => {
+	it("closes preceding text/thinking blocks before opening the synthesized toolCall", () => {
+		const h = newHarness();
+
+		pushTextDelta(h, "reading ");
+		synthesizeCursorExecToolCall(h.output, h.stream, h.state, "call-read", "read", { path: "src/foo.ts" });
+
+		expect(h.output.content.map(b => b.type)).toEqual(["text", "toolCall"]);
+		expect(h.output.content[0]).toMatchObject({ type: "text", text: "reading " });
+		expect(h.output.content[1]).toMatchObject({
+			type: "toolCall",
+			id: "call-read",
+			name: "read",
+			arguments: { path: "src/foo.ts" },
+		});
+		// text_end fires before toolcall_start so the preceding text block finalizes;
+		// toolcall_end fires immediately after — exec-channel args arrive complete,
+		// so no partial-JSON streaming is needed for the synthesized block.
+		expect(h.captured.map(e => e.type)).toEqual([
+			"text_start",
+			"text_delta",
+			"text_end",
+			"toolcall_start",
+			"toolcall_end",
+		]);
+		expect(h.state.currentTextBlock).toBeNull();
+		expect(h.state.currentToolCall).toBeNull();
+	});
+
+	it("preserves interleaving order across text ↔ tool ↔ text", () => {
+		const h = newHarness();
+
+		pushTextDelta(h, "planning ");
+		synthesizeCursorExecToolCall(h.output, h.stream, h.state, "t1", "read", { path: "a.txt" });
+		pushTextDelta(h, "then ");
+		synthesizeCursorExecToolCall(h.output, h.stream, h.state, "t2", "bash", {
+			command: "echo hi",
+			cwd: undefined,
+			timeout: undefined,
+		});
+		pushTextDelta(h, "done");
+
+		expect(h.output.content.map(b => b.type)).toEqual(["text", "toolCall", "text", "toolCall", "text"]);
+		const [t1, tc1, t2, tc2, t3] = h.output.content;
+		expect(t1).toMatchObject({ type: "text", text: "planning " });
+		expect(tc1).toMatchObject({ type: "toolCall", id: "t1", name: "read" });
+		expect(t2).toMatchObject({ type: "text", text: "then " });
+		expect(tc2).toMatchObject({
+			type: "toolCall",
+			id: "t2",
+			name: "bash",
+			arguments: { command: "echo hi", cwd: undefined, timeout: undefined },
+		});
+		expect(t3).toMatchObject({ type: "text", text: "done" });
+	});
+
+	it("emits toolcall events at the exact index the block occupies in content", () => {
+		const h = newHarness();
+
+		pushTextDelta(h, "pre");
+		synthesizeCursorExecToolCall(h.output, h.stream, h.state, "call-1", "grep", {
+			pattern: "foo",
+			path: ".",
+			case: undefined,
+		});
+
+		const toolStart = h.captured.find(e => e.type === "toolcall_start");
+		const toolEnd = h.captured.find(e => e.type === "toolcall_end");
+		// Text block sits at index 0; synthesized toolCall at index 1.
+		expect(toolStart).toMatchObject({ type: "toolcall_start", contentIndex: 1 });
+		expect(toolEnd).toMatchObject({
+			type: "toolcall_end",
+			contentIndex: 1,
+			toolCall: { id: "call-1", name: "grep" },
 		});
 	});
 });
