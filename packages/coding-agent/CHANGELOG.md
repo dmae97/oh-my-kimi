@@ -83,6 +83,9 @@
 ### Fixed
 
 - Fixed a pipe-buffer deadlock hazard in plugin install/uninstall paths: `PluginManager.install`, `PluginManager.uninstall`, `PluginManager.#fixMissingPlugin`, the git-refresh `bun update` step, the legacy `installer.ts` install/uninstall helpers, and the bundled-registry generator's `formatInPlace` all awaited `proc.exited` before draining stdout/stderr. Verbose `bun install`/`bun uninstall`/`biome check` output above the ~64 KiB OS pipe buffer could block the child on `write(2)` while the parent blocked on exit, and even under Bun's current eager buffering this leaked unbounded bytes into memory. Each site now drains both pipes concurrently with `proc.exited` via `Promise.all`. ([#4230](https://github.com/can1357/oh-my-pi/issues/4230))
+### Fixed
+
+- Fixed SSH tool hanging indefinitely on unreachable or wedged hosts: the pre-command `runSshSync` / `runSshCaptureSync` helpers (used by `ensureConnection` / `probeHostInfo`) previously invoked `ssh` through the Bun shell with no timeout or abort signal and sat outside the `SshTool.execute` command-timeout wrapper. They now run through `ptree.exec` with a 30s bound and `allowNonZero`/`allowAbort`, returning a failure result instead of blocking forever. ([#4232](https://github.com/can1357/oh-my-pi/issues/4232))
 
 ## [16.3.1] - 2026-07-02
 
