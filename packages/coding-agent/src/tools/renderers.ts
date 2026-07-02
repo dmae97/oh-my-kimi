@@ -63,6 +63,19 @@ export type ToolRenderer = {
 	 * with the final render and may commit like any settled stream.
 	 */
 	provisionalPartialResult?: boolean;
+	/**
+	 * Whether replacing a streamed pending placeholder with the first result
+	 * requires a full viewport repaint. Use for merged renderers whose pending
+	 * streamed args may have committed placeholder rows that the result render
+	 * re-anchors instead of preserving.
+	 */
+	forceFirstResultViewportRepaint?: boolean;
+	/**
+	 * Whether settling a provisional partial result into the final render requires
+	 * a full viewport repaint. Use when the result renderer changes chrome or
+	 * frame topology at `options.isPartial: true -> false`.
+	 */
+	forceResultViewportRepaintOnSettle?: boolean;
 };
 
 export const toolRenderers: Record<string, ToolRenderer> = {

@@ -281,6 +281,9 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	// history, so progress renders static gray and further partial snapshots are
 	// dropped (see #maybeFreezeBackgroundTask).
 	#backgroundTaskFrozen = false;
+	// Set once this instance rendered a pending call from streamed raw JSON for a
+	// renderer that replaces that placeholder with a re-anchored first result.
+	#renderedStreamedPlaceholderCall = false;
 	#renderState: {
 		spinnerFrame?: number;
 		expanded: boolean;
@@ -484,6 +487,8 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		if (isPartial && this.#toolName === "task" && this.#maybeFreezeBackgroundTask()) {
 			return;
 		}
+		const hadNoResult = this.#result === undefined;
+		const wasPartialResult = this.#result !== undefined && this.#isPartial;
 		this.#result = result;
 		this.#resultVersion++;
 		this.#isPartial = isPartial;
@@ -495,6 +500,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		this.#updateSpinnerAnimation();
 		this.#updateTodoStrikeAnimation();
 		this.#updateDisplay();
+		this.#resetDisplayForResultTopologyChange(hadNoResult, wasPartialResult, isPartial);
 		// Convert non-PNG images to PNG for Kitty protocol (async)
 		this.#maybeConvertImagesForKitty();
 	}
@@ -803,6 +809,33 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		this.#displayBuilt = true;
 	}
 
+	#rendererFlag(name: "forceFirstResultViewportRepaint" | "forceResultViewportRepaintOnSettle"): boolean {
+		const toolValue = (this.#tool as Record<string, unknown> | undefined)?.[name];
+		const rendererValue = toolRenderers[this.#toolName]?.[name];
+		return toolValue === true || (toolValue === undefined && rendererValue === true);
+	}
+
+	#rememberStreamedPlaceholderCall(renderArgs: unknown): void {
+		if (!this.#rendererFlag("forceFirstResultViewportRepaint")) return;
+		if (partialJsonOf(renderArgs) === undefined) return;
+		this.#renderedStreamedPlaceholderCall = true;
+	}
+
+	#resetDisplayForResultTopologyChange(hadNoResult: boolean, wasPartialResult: boolean, isPartial: boolean): void {
+		const firstResultReplacesStreamedPlaceholder =
+			hadNoResult &&
+			this.#renderedStreamedPlaceholderCall &&
+			this.#rendererFlag("forceFirstResultViewportRepaint");
+		const provisionalResultSettled =
+			!hadNoResult &&
+			wasPartialResult &&
+			!isPartial &&
+			this.#rendererFlag("forceResultViewportRepaintOnSettle");
+		if (firstResultReplacesStreamedPlaceholder || provisionalResultSettled) {
+			this.#ui.resetDisplay();
+		}
+	}
+
 	// Viewport-/settings-dependent image sizing folded into the memo key only when
 	// the last rebuild actually emitted images, so a terminal resize re-shapes an
 	// image-bearing result (to rescale it) without re-shaping every image-free
@@ -846,7 +879,9 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			if (shouldRenderCall) {
 				if (tool.renderCall) {
 					try {
-						const callComponent = tool.renderCall(this.#getCallArgsForRender(), this.#renderState, theme);
+						const callArgs = this.#getCallArgsForRender();
+						this.#rememberStreamedPlaceholderCall(callArgs);
+						const callComponent = tool.renderCall(callArgs, this.#renderState, theme);
 						if (callComponent) this.#contentBox.addChild(callComponent as Component);
 					} catch (err) {
 						logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
@@ -980,7 +1015,9 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 				if (shouldRenderCall) {
 					// Render call component
 					try {
-						const callComponent = renderer.renderCall(this.#getCallArgsForRender(), this.#renderState, theme);
+						const callArgs = this.#getCallArgsForRender();
+						this.#rememberStreamedPlaceholderCall(callArgs);
+						const callComponent = renderer.renderCall(callArgs, this.#renderState, theme);
 						if (callComponent) this.#contentBox.addChild(callComponent);
 					} catch (err) {
 						logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });

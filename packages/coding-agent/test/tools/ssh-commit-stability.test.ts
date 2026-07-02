@@ -17,7 +17,7 @@ import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/componen
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { TUI } from "@oh-my-pi/pi-tui";
 
-const uiStub = { requestRender() {} } as unknown as TUI;
+const uiStub = { requestRender() {}, resetDisplay() {} } as unknown as TUI;
 
 function makeSshComponent() {
 	return new ToolExecutionComponent("ssh", { host: "sccpu", command: "uptime" }, {}, undefined, uiStub);
