@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Evict purged image keys from `ImageBudget` to prevent unbounded map growth ([#4250](https://github.com/can1357/oh-my-pi/issues/4250))
+
+
 ## [16.3.0] - 2026-07-02
 
 ### Fixed
