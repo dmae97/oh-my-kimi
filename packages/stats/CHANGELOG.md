@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a Tools tab to the `omp stats` dashboard (`/#/tools`): per-tool call counts, error rates, result/argument payload sizes, per-model breakdown, and a stacked calls-over-time chart. Token and cost columns attribute each invoking turn's real provider usage evenly across that turn's tool calls. Existing databases re-parse sessions once on the next sync to backfill historical tool calls.
+
 ## [16.2.7] - 2026-06-30
 
 ### Fixed

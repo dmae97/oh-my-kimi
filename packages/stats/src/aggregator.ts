@@ -17,10 +17,15 @@ import {
 	getStatsByFolder,
 	getStatsByModel,
 	getTimeSeries,
+	getToolStats,
+	getToolStatsByModel,
+	getToolTimeSeries,
 	initDb,
 	insertMessageStats,
+	insertToolCalls,
 	insertUserMessageStats,
 	setFileOffset,
+	updateToolResults,
 	updateUserMessageLinks,
 } from "./db";
 import { getSessionEntry, listAllSessionFiles, type ParseSessionResult, parseSessionFile } from "./parser";
@@ -29,7 +34,7 @@ import type { SyncWorkerRequest, SyncWorkerResponse } from "./sync-worker";
 // hidden argv mode, so the compiled binary and npm bundle only need one
 // JavaScript entry. Standalone source `omp-stats` keeps using this package's
 // own sync-worker source file.
-import type { BehaviorDashboardStats, DashboardStats, MessageStats, RequestDetails } from "./types";
+import type { BehaviorDashboardStats, DashboardStats, MessageStats, RequestDetails, ToolDashboardStats } from "./types";
 
 /**
  * Apply a freshly parsed result to the database. Runs entirely on the
@@ -39,6 +44,8 @@ function applyParseResult(sessionFile: string, lastModified: number, result: Par
 	if (result.stats.length > 0) insertMessageStats(result.stats);
 	if (result.userStats.length > 0) insertUserMessageStats(result.userStats);
 	if (result.userLinks.length > 0) updateUserMessageLinks(result.userLinks);
+	if (result.toolCalls.length > 0) insertToolCalls(result.toolCalls);
+	if (result.toolResults.length > 0) updateToolResults(result.toolResults);
 	setFileOffset(sessionFile, result.newOffset, lastModified);
 	return result.stats.length + result.userStats.length;
 }
@@ -476,5 +483,19 @@ export async function getBehaviorDashboardStats(range?: string | null): Promise<
 		overall: getBehaviorOverall(cutoff),
 		byModel: getBehaviorByModel(cutoff),
 		behaviorSeries: getBehaviorTimeSeries(cutoff),
+	};
+}
+
+/**
+ * Get the tools dashboard payload: per-tool totals, per-(tool, model)
+ * breakdown, and the call time series (bucketed like the model series).
+ */
+export async function getToolDashboardStats(range?: string | null): Promise<ToolDashboardStats> {
+	await initDb();
+	const { modelSeriesDays, modelSeriesBucketMs, cutoff } = getTimeRangeConfig(range);
+	return {
+		byTool: getToolStats(cutoff ?? undefined),
+		byToolModel: getToolStatsByModel(cutoff ?? undefined),
+		series: getToolTimeSeries(modelSeriesDays, cutoff, modelSeriesBucketMs),
 	};
 }

@@ -8,6 +8,7 @@ import type {
 	FolderStats,
 	ModelPerformancePoint,
 	TimeRange,
+	ToolUsageStats,
 } from "../types";
 
 /** Fixed display order for the agent-token-share breakdown. */
@@ -229,5 +230,22 @@ export function buildFolderRows(folders: FolderStats[]): FolderRowView[] {
 		...f,
 		costPercentage: maxCost > 0 ? (f.totalCost / maxCost) * 100 : 0,
 		requestsPercentage: maxRequests > 0 ? (f.totalRequests / maxRequests) * 100 : 0,
+	}));
+}
+
+/** Table row for the Tools route: usage stats plus derived rates/shares. */
+export interface ToolRowView extends ToolUsageStats {
+	/** errors / calls (0 for zero calls). */
+	errorRate: number;
+	/** Calls relative to the busiest tool, 0-100, for the share bar. */
+	callsPercentage: number;
+}
+
+export function buildToolRows(tools: ToolUsageStats[]): ToolRowView[] {
+	const maxCalls = tools.reduce((max, t) => Math.max(max, t.calls), 0);
+	return tools.map(t => ({
+		...t,
+		errorRate: t.calls > 0 ? t.errors / t.calls : 0,
+		callsPercentage: maxCalls > 0 ? (t.calls / maxCalls) * 100 : 0,
 	}));
 }

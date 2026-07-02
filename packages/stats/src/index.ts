@@ -8,6 +8,7 @@ import { startServer } from "./server";
 
 export {
 	getDashboardStats,
+	getToolDashboardStats,
 	getTotalMessageCount,
 	type SyncOptions,
 	type SyncProgress,
@@ -32,6 +33,10 @@ export type {
 	ModelStats,
 	ModelTimeSeriesPoint,
 	TimeSeriesPoint,
+	ToolDashboardStats,
+	ToolModelStats,
+	ToolTimeSeriesPoint,
+	ToolUsageStats,
 } from "./types";
 
 /**

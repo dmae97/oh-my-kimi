@@ -8,6 +8,7 @@ import type {
 	OverviewStats,
 	RequestDetails,
 	TimeRange,
+	ToolDashboardStats,
 } from "./types";
 
 const API_BASE = "/api";
@@ -91,4 +92,11 @@ export async function getGainDashboardStats(
 	const params = new URLSearchParams({ range });
 	if (project) params.set("project", project);
 	return fetchJson<GainDashboardStats>(`${API_BASE}/stats/gain?${params}`, { signal });
+}
+
+export async function getToolDashboardStats(
+	range: TimeRange = "24h",
+	signal?: AbortSignal,
+): Promise<ToolDashboardStats> {
+	return fetchJson<ToolDashboardStats>(`${API_BASE}/stats/tools?range=${encodeURIComponent(range)}`, { signal });
 }

@@ -6,6 +6,7 @@ import {
 	getPriorityPremiumRequests,
 	resolveModelServiceTier,
 	type ServiceTierByFamily,
+	type ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
 import { getSessionsDir, isEnoent } from "@oh-my-pi/pi-utils";
 import type {
@@ -14,6 +15,8 @@ import type {
 	SessionEntry,
 	SessionMessageEntry,
 	SessionServiceTierChangeEntry,
+	ToolCallStats,
+	ToolResultLink,
 	UserMessageLink,
 	UserMessageStats,
 } from "./types";
@@ -83,6 +86,14 @@ function isUserMessage(entry: SessionEntry): entry is SessionMessageEntry {
  */
 function isServiceTierChange(entry: SessionEntry): entry is SessionServiceTierChangeEntry {
 	return entry.type === "service_tier_change";
+}
+
+/**
+ * Check if an entry is a tool-result message.
+ */
+function isToolResultMessage(entry: SessionEntry): entry is SessionMessageEntry {
+	if (entry.type !== "message") return false;
+	return (entry as SessionMessageEntry).message?.role === "toolResult";
 }
 
 /**
@@ -171,6 +182,66 @@ function extractStats(
 	};
 }
 
+/**
+ * Extract one {@link ToolCallStats} per `toolCall` content block of an
+ * assistant message. Returns an empty array for turns without tool calls.
+ */
+function extractToolCalls(
+	sessionFile: string,
+	folder: string,
+	entry: SessionMessageEntry,
+	agentType: AgentType,
+): ToolCallStats[] {
+	const msg = entry.message as AssistantMessage;
+	if (msg?.role !== "assistant" || !Array.isArray(msg.content)) return [];
+
+	const blocks = msg.content.filter(block => block.type === "toolCall");
+	if (blocks.length === 0) return [];
+
+	return blocks.map(block => {
+		let argsChars = 0;
+		try {
+			argsChars = JSON.stringify(block.arguments ?? {}).length;
+		} catch {
+			// Non-serializable arguments (shouldn't happen in persisted JSONL); size unknown.
+		}
+		return {
+			sessionFile,
+			entryId: entry.id,
+			toolCallId: block.id,
+			folder,
+			toolName: block.name,
+			model: msg.model,
+			provider: msg.provider,
+			timestamp: msg.timestamp,
+			agentType,
+			callsInTurn: blocks.length,
+			argsChars,
+		};
+	});
+}
+
+/**
+ * Build the result linkage for a `toolResult` entry: text characters fed back
+ * into context plus the error flag, keyed to the originating call.
+ */
+function extractToolResultLink(sessionFile: string, entry: SessionMessageEntry): ToolResultLink | null {
+	const msg = entry.message as ToolResultMessage;
+	if (msg.role !== "toolResult" || typeof msg.toolCallId !== "string" || msg.toolCallId.length === 0) return null;
+	let resultChars = 0;
+	if (Array.isArray(msg.content)) {
+		for (const block of msg.content) {
+			if (block.type === "text" && typeof block.text === "string") resultChars += block.text.length;
+		}
+	}
+	return {
+		sessionFile,
+		toolCallId: msg.toolCallId,
+		resultChars,
+		isError: msg.isError === true,
+	};
+}
+
 const LF = 0x0a;
 const CR = 0x0d;
 const jsonLineDecoder = new TextDecoder();
@@ -241,6 +312,8 @@ export interface ParseSessionResult {
 	stats: MessageStats[];
 	userStats: UserMessageStats[];
 	userLinks: UserMessageLink[];
+	toolCalls: ToolCallStats[];
+	toolResults: ToolResultLink[];
 	newOffset: number;
 }
 export async function parseSessionFile(sessionPath: string, fromOffset = 0): Promise<ParseSessionResult> {
@@ -248,7 +321,8 @@ export async function parseSessionFile(sessionPath: string, fromOffset = 0): Pro
 	try {
 		bytes = await Bun.file(sessionPath).bytes();
 	} catch (err) {
-		if (isEnoent(err)) return { stats: [], userStats: [], userLinks: [], newOffset: fromOffset };
+		if (isEnoent(err))
+			return { stats: [], userStats: [], userLinks: [], toolCalls: [], toolResults: [], newOffset: fromOffset };
 		throw err;
 	}
 
@@ -257,6 +331,8 @@ export async function parseSessionFile(sessionPath: string, fromOffset = 0): Pro
 	const stats: MessageStats[] = [];
 	const userStats: UserMessageStats[] = [];
 	const userLinks: UserMessageLink[] = [];
+	const toolCalls: ToolCallStats[] = [];
+	const toolResults: ToolResultLink[] = [];
 	const userByEntryId = new Map<string, UserMessageStats>();
 	const start = Math.max(0, Math.min(fromOffset, bytes.length));
 	const unprocessed = bytes.subarray(start);
@@ -278,9 +354,15 @@ export async function parseSessionFile(sessionPath: string, fromOffset = 0): Pro
 			}
 			continue;
 		}
+		if (isToolResultMessage(entry)) {
+			const link = extractToolResultLink(sessionPath, entry);
+			if (link) toolResults.push(link);
+			continue;
+		}
 		if (isAssistantMessage(entry)) {
 			const msgStats = extractStats(sessionPath, folder, entry, currentServiceTier, agentType);
 			if (msgStats) stats.push(msgStats);
+			toolCalls.push(...extractToolCalls(sessionPath, folder, entry, agentType));
 			// Link assistant's responding model back to the user message it answered.
 			const parentId = (entry as SessionMessageEntry).parentId;
 			if (parentId) {
@@ -303,7 +385,7 @@ export async function parseSessionFile(sessionPath: string, fromOffset = 0): Pro
 		}
 	}
 
-	return { stats, userStats, userLinks, newOffset: start + read };
+	return { stats, userStats, userLinks, toolCalls, toolResults, newOffset: start + read };
 }
 
 /**
