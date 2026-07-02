@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.2] - 2026-07-02
+
 ### Fixed
 
 - Fixed ZenMux model discovery to run without a `ZENMUX_API_KEY`, so newly published ZenMux models (for example `anthropic/claude-fable-5-free`) auto-update into the runtime `models.db` cache instead of waiting on a regenerated `models.json`.

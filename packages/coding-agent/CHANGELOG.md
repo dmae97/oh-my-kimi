@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.2] - 2026-07-02
+
 ### Breaking Changes
 
 - Changed search tool `paths` parameter to a single semicolon-delimited `path` string parameter
