@@ -2891,6 +2891,7 @@ export class TUI extends Container {
 			prevWindowTop,
 			prevHardwareCursorRow,
 			forceWindowRewrite: this.#forceViewportRepaintOnNextRender || (geometryChanged && resizeRepaintsInPlace()),
+			repaintVirtualScrollInPlace: hasVisibleOverlay,
 		});
 		for (let i = this.#committedPrefix.length; i < chunkTo; i++) {
 			this.#committedPrefix.push(rawFrame[i] ?? "");
@@ -3607,9 +3608,11 @@ export class TUI extends Container {
 			prevWindowTop: number;
 			prevHardwareCursorRow: number;
 			forceWindowRewrite: boolean;
+			repaintVirtualScrollInPlace: boolean;
 		},
 	): void {
-		const { chunkTo, windowTop, prevWindowTop, prevHardwareCursorRow, forceWindowRewrite } = options;
+		const { chunkTo, windowTop, prevWindowTop, prevHardwareCursorRow, forceWindowRewrite, repaintVirtualScrollInPlace } =
+			options;
 		const chunkFrom = this.#committedRows;
 		const chunkLength = chunkTo - chunkFrom;
 		const scroll = windowTop - prevWindowTop;
@@ -3671,12 +3674,16 @@ export class TUI extends Container {
 			}
 		}
 
-		// In-window diff: nothing scrolls, nothing commits.
-		if (chunkLength === 0 && scroll === 0) {
-			if (forceWindowRewrite) this.#fullRedrawCount += 1;
-			let firstChanged = forceWindowRewrite ? 0 : -1;
-			let lastChanged = forceWindowRewrite ? height - 1 : -1;
-			if (!forceWindowRewrite) {
+		// In-window diff: nothing commits. While an overlay is visible, commits
+		// are frozen; if the underlying windowTop moves, repaint in place rather
+		// than falling through to a seam rewrite that would scroll native history
+		// without appending to the commit tape.
+		const virtualScrollRewrite = repaintVirtualScrollInPlace && scroll !== 0;
+		if (chunkLength === 0 && (scroll === 0 || virtualScrollRewrite)) {
+			if (forceWindowRewrite || virtualScrollRewrite) this.#fullRedrawCount += 1;
+			let firstChanged = forceWindowRewrite || virtualScrollRewrite ? 0 : -1;
+			let lastChanged = forceWindowRewrite || virtualScrollRewrite ? height - 1 : -1;
+			if (!forceWindowRewrite && !virtualScrollRewrite) {
 				const comparable = previousWindow.length === height;
 				for (let r = 0; r < height; r++) {
 					if (comparable && (window[r] ?? "") === (previousWindow[r] ?? "")) continue;
@@ -3692,9 +3699,16 @@ export class TUI extends Container {
 				return;
 			}
 			let buffer = this.#paintBeginSequence + purgeSequence;
-			const rowDelta = firstChanged - currentScreenRow;
-			if (rowDelta > 0) buffer += `\x1b[${rowDelta}B`;
-			else if (rowDelta < 0) buffer += `\x1b[${-rowDelta}A`;
+			if (virtualScrollRewrite) {
+				// The cursor tracker can be stale after overlay-only frames. A large
+				// CUU clamps at the viewport top without using absolute cursor home,
+				// so the following full-window rewrite cannot overflow the bottom.
+				if (height > 1) buffer += `\x1b[${height - 1}A`;
+			} else {
+				const rowDelta = firstChanged - currentScreenRow;
+				if (rowDelta > 0) buffer += `\x1b[${rowDelta}B`;
+				else if (rowDelta < 0) buffer += `\x1b[${-rowDelta}A`;
+			}
 			buffer += "\r";
 			// DECCARA-optimize the contiguous rewritten range (visible rows
 			// only; rectangles are absolute screen rows).
@@ -3724,6 +3738,7 @@ export class TUI extends Container {
 			buffer += cursorControl.seq;
 			buffer += this.#paintEndSequence;
 			this.terminal.write(buffer);
+			this.#windowTopRow = windowTop;
 			this.#commit(frame, window, width, height, cursorControl);
 			return;
 		}
