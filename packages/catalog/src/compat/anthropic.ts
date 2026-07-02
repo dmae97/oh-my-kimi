@@ -38,6 +38,8 @@ function matchesKimiK27CodeFamily(spec: ModelSpec<"anthropic-messages">): boolea
 
 const CLOUDFLARE_ANTHROPIC_GATEWAY_URL_MARKER = /gateway\.ai\.cloudflare\.com\/.+\/anthropic(?:\/|$)/i;
 const VERTEX_ANTHROPIC_URL_MARKER = /aiplatform\.googleapis\.com\/.+\/publishers\/anthropic\//i;
+const BEDROCK_ANTHROPIC_URL_MARKER = /(?:^|\/\/|\.)bedrock-runtime\.[a-z0-9-]+\.amazonaws\.com/i;
+const AZURE_ANTHROPIC_URL_MARKER = /(?:^|\/\/|\.)[a-z0-9-]+\.(?:inference|services)\.ai\.azure\.com/i;
 
 /**
  * Cloudflare AI Gateway's `/anthropic` route forwards to signature-enforcing
@@ -59,6 +61,27 @@ function isVertexAnthropicRoute(baseUrl?: string): boolean {
 	return baseUrl !== undefined && VERTEX_ANTHROPIC_URL_MARKER.test(baseUrl);
 }
 
+/**
+ * AWS Bedrock's Anthropic route (`bedrock-runtime.<region>.amazonaws.com`)
+ * forwards Claude requests through Anthropic's signature protocol. Users can
+ * front Bedrock with a custom `anthropic-messages` provider entry in
+ * `models.yml`; the URL marker makes those signing by default without
+ * requiring a provider-id list.
+ */
+function isBedrockAnthropicRoute(baseUrl?: string): boolean {
+	return baseUrl !== undefined && BEDROCK_ANTHROPIC_URL_MARKER.test(baseUrl);
+}
+
+/**
+ * Azure AI Inference / Foundry Anthropic route
+ * (`<resource>.inference.ai.azure.com`, `<resource>.services.ai.azure.com`).
+ * Fronts Claude behind Azure identity and enforces Anthropic signatures on
+ * replay.
+ */
+function isAzureAnthropicRoute(baseUrl?: string): boolean {
+	return baseUrl !== undefined && AZURE_ANTHROPIC_URL_MARKER.test(baseUrl);
+}
+
 /** Build the resolved anthropic-messages compat record for a model spec. */
 export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): ResolvedAnthropicCompat {
 	const baseUrl = spec.baseUrl;
@@ -77,7 +100,13 @@ export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): Res
 	const isZenmux = modelMatchesHost(spec, "zenmux");
 	const requiresThinkingEnabled = modelMatchesHost(spec, "moonshotNative") && matchesKimiK27CodeFamily(spec);
 	const signingEndpoint =
-		official || isCopilot || isZenmux || isCloudflareAnthropicGateway(baseUrl) || isVertexAnthropicRoute(baseUrl);
+		official ||
+		isCopilot ||
+		isZenmux ||
+		isCloudflareAnthropicGateway(baseUrl) ||
+		isVertexAnthropicRoute(baseUrl) ||
+		isBedrockAnthropicRoute(baseUrl) ||
+		isAzureAnthropicRoute(baseUrl);
 	const compat: ResolvedAnthropicCompat = {
 		officialEndpoint: official,
 		signingEndpoint,
@@ -110,9 +139,11 @@ export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): Res
 		// pointed remediation the first time the signing 400 fires (#4297).
 		//
 		// Known signing Anthropic-messages hosts (Copilot, ZenMux, Cloudflare
-		// AI Gateway `/anthropic`, Google Vertex `publishers/anthropic`) are
-		// excluded automatically because they can be recognised by provider id
-		// or baseUrl marker.
+		// AI Gateway `/anthropic`, Google Vertex `publishers/anthropic`, AWS
+		// Bedrock `bedrock-runtime.<region>.amazonaws.com`, and Azure
+		// AI Inference / Foundry `<res>.(inference|services).ai.azure.com`)
+		// are excluded automatically because they can be recognised by provider
+		// id or baseUrl marker.
 		replayUnsignedThinking: !signingEndpoint && Boolean(spec.reasoning),
 		escapeBuiltinToolNames: modelMatchesHost(spec, "umans"),
 	};

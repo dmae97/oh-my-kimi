@@ -70,6 +70,32 @@ describe("#4297 anthropic-messages replay-unsigned-thinking classification", () 
 		expect(compat.officialEndpoint).toBe(false);
 	});
 
+	it("demotes unsigned thinking on AWS Bedrock's anthropic runtime (known signing host)", () => {
+		const compat = buildAnthropicCompat(
+			spec({
+				provider: "custom-bedrock",
+				baseUrl:
+					"https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-opus-4-8-v1:0/invoke-with-response-stream",
+				id: "anthropic.claude-opus-4-8-v1:0",
+			}),
+		);
+		expect(compat.replayUnsignedThinking).toBe(false);
+		expect(compat.signingEndpoint).toBe(true);
+		expect(compat.officialEndpoint).toBe(false);
+	});
+
+	it("demotes unsigned thinking on Azure AI Inference / Foundry Anthropic routes (known signing host)", () => {
+		for (const baseUrl of [
+			"https://my-project.inference.ai.azure.com/anthropic/v1",
+			"https://foundry-project.services.ai.azure.com/anthropic/v1",
+		]) {
+			const compat = buildAnthropicCompat(spec({ provider: "custom-azure", baseUrl }));
+			expect(compat.replayUnsignedThinking).toBe(false);
+			expect(compat.signingEndpoint).toBe(true);
+			expect(compat.officialEndpoint).toBe(false);
+		}
+	});
+
 	it("honors explicit `compat.replayUnsignedThinking: false` on custom signing proxies", () => {
 		expect(buildAnthropicCompat(spec({ compat: { replayUnsignedThinking: false } })).replayUnsignedThinking).toBe(
 			false,
