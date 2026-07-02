@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getPluginsDir, getPluginsLockfile, isEnoent } from "@oh-my-pi/pi-utils";
 import { getConfigDirPaths } from "../../config";
-import { resolveActiveProjectRegistryPath } from "../../discovery/helpers";
+import { registerPluginCacheInvalidator, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import { installLegacyPiSpecifierShim } from "./legacy-pi-compat";
 import { normalizePluginRuntimeConfig } from "./runtime-config";
 import type { InstalledPlugin, PluginManifest, PluginRuntimeConfig, ProjectPluginOverrides } from "./types";
@@ -19,6 +19,18 @@ export interface ScopedInstalledPlugin extends InstalledPlugin {
 }
 
 installLegacyPiSpecifierShim();
+
+const enabledPluginsCache = new Map<string, Promise<ScopedInstalledPlugin[]>>();
+
+function enabledPluginsCacheKey(cwd: string, home?: string): string {
+	return `${path.resolve(cwd)}\0${home === undefined ? "" : path.resolve(home)}`;
+}
+
+function clearEnabledPluginsCache(): void {
+	enabledPluginsCache.clear();
+}
+
+registerPluginCacheInvalidator(clearEnabledPluginsCache);
 
 // =============================================================================
 // Runtime Config Loading
@@ -163,6 +175,23 @@ async function collectPluginsAtRoot(
  */
 export async function getEnabledPlugins(cwd: string, opts: { home?: string } = {}): Promise<ScopedInstalledPlugin[]> {
 	const { home } = opts;
+	const cacheKey = enabledPluginsCacheKey(cwd, home);
+	const cached = enabledPluginsCache.get(cacheKey);
+	if (cached) return cached;
+
+	const loadPromise = loadEnabledPlugins(cwd, home);
+	enabledPluginsCache.set(cacheKey, loadPromise);
+	try {
+		return await loadPromise;
+	} catch (err) {
+		if (enabledPluginsCache.get(cacheKey) === loadPromise) {
+			enabledPluginsCache.delete(cacheKey);
+		}
+		throw err;
+	}
+}
+
+async function loadEnabledPlugins(cwd: string, home?: string): Promise<ScopedInstalledPlugin[]> {
 	const projectOverrides = await loadProjectOverrides(cwd);
 
 	const userRoot = getPluginsDir(home);
