@@ -17,6 +17,7 @@
 ### Fixed
 
 - Fixed subagent HUD layout and tree rendering in the TUI to align correctly with other HUD panels
+- Fixed session persistence corrupting Anthropic signed thinking blocks: the generic 500K-character truncation cap could shorten a large `thinking` string while leaving its cryptographic signature intact, so replaying or resuming the session sent a signature that no longer matched the text and the provider rejected it with an HTTP 400. Signed `thinking` blocks and encrypted `redactedThinking` blobs are now persisted verbatim (all-or-nothing); unsigned thinking and plain text remain truncatable for size control.
 
 - Fixed several issues with the `apply_patch` and edit tools, including preventing dirty buffers on early aborts, rejecting overwrites of pre-existing files, stopping at the first failing file in multi-file operations, and pruning extremely large file snapshots to prevent session inflation.
 - Fixed process termination (SIGTERM, SIGHUP, uncaught exceptions) to ensure editor drafts are saved, sessions shut down cleanly, and background jobs are cleaned up.

@@ -76,6 +76,21 @@ function truncateForPersistence(obj: unknown, blobStore: BlobStore, key?: string
 	if (shouldExternalizeImagePayload(obj, key)) {
 		return { ...obj, data: externalizeImageDataSync(blobStore, obj.data, obj.mimeType) };
 	}
+	// Signed/encrypted reasoning is bound to its exact bytes: a truncated `thinking`
+	// no longer matches its signature and a truncated `redacted_thinking` blob is
+	// undecryptable, so the provider 400s the replay. Persist these verbatim — never
+	// truncate, externalize, or descend. Unsigned thinking (e.g. an interrupted
+	// stream) has no such binding and stays truncatable for size control.
+	if (typeof obj === "object" && "type" in obj) {
+		const signedThinking =
+			obj.type === "thinking" &&
+			"thinkingSignature" in obj &&
+			typeof obj.thinkingSignature === "string" &&
+			obj.thinkingSignature.length > 0;
+		const redacted =
+			obj.type === "redactedThinking" && "data" in obj && typeof obj.data === "string" && obj.data.length > 0;
+		if (signedThinking || redacted) return obj;
+	}
 
 	if (typeof obj === "string") {
 		if (key === "image_url" && isImageDataUrl(obj)) {

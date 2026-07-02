@@ -94,3 +94,86 @@ describe("session reasoning-signature dedup", () => {
 		expect(thinking.thinkingSignature).toBe(signature);
 	});
 });
+
+describe("session atomic reasoning persistence", () => {
+	const truncationNotice = "[Session persistence truncated large content]";
+
+	it("preserves an oversized signed thinking block and its signature verbatim", () => {
+		using tempDir = TempDir.createSync("@pi-session-atomic-thinking-");
+		const blobStore = new BlobStore(tempDir.path());
+
+		const message = persistedAssistant(
+			assistantEntry([{ type: "thinking", thinking: "x".repeat(600_000), thinkingSignature: "sig-abc" }], undefined),
+			blobStore,
+		);
+
+		const thinking = message.content[0];
+		if (thinking?.type !== "thinking") throw new Error("Expected thinking block");
+		expect(thinking.thinking).toHaveLength(600_000);
+		expect(thinking.thinking.endsWith(truncationNotice)).toBe(false);
+		expect(thinking.thinkingSignature).toBe("sig-abc");
+	});
+
+	it("preserves an oversized redactedThinking blob verbatim", () => {
+		using tempDir = TempDir.createSync("@pi-session-atomic-redacted-");
+		const blobStore = new BlobStore(tempDir.path());
+
+		const message = persistedAssistant(
+			assistantEntry([{ type: "redactedThinking", data: "r".repeat(600_000) }], undefined),
+			blobStore,
+		);
+
+		const redactedThinking = message.content[0];
+		if (redactedThinking?.type !== "redactedThinking") throw new Error("Expected redactedThinking block");
+		expect(redactedThinking.data).toHaveLength(600_000);
+		expect(redactedThinking.data.endsWith(truncationNotice)).toBe(false);
+	});
+
+	it("still truncates oversized UNSIGNED thinking and text blocks", () => {
+		using tempDir = TempDir.createSync("@pi-session-atomic-unsigned-");
+		const blobStore = new BlobStore(tempDir.path());
+
+		const message = persistedAssistant(
+			assistantEntry(
+				[
+					{ type: "thinking", thinking: "y".repeat(600_000) },
+					{ type: "text", text: "z".repeat(600_000) },
+				],
+				undefined,
+			),
+			blobStore,
+		);
+
+		const thinking = message.content[0];
+		if (thinking?.type !== "thinking") throw new Error("Expected thinking block");
+		expect(thinking.thinking.length).toBeLessThan(600_000);
+		expect(thinking.thinking.endsWith(truncationNotice)).toBe(true);
+
+		const text = message.content[1];
+		if (text?.type !== "text") throw new Error("Expected text block");
+		expect(text.text.length).toBeLessThan(600_000);
+		expect(text.text.endsWith(truncationNotice)).toBe(true);
+	});
+
+	it("survives a full JSONL string round-trip for signed thinking", () => {
+		using tempDir = TempDir.createSync("@pi-session-atomic-roundtrip-");
+		const blobStore = new BlobStore(tempDir.path());
+		const entry = assistantEntry(
+			[{ type: "thinking", thinking: "x".repeat(600_000), thinkingSignature: "sig-abc" }],
+			undefined,
+		);
+
+		const persistedEntry = prepareEntryForPersistence(entry, blobStore);
+		const line = JSON.stringify(persistedEntry);
+		const reparsed = JSON.parse(line);
+		if (reparsed.type !== "message" || reparsed.message.role !== "assistant") {
+			throw new Error("Expected reparsed assistant message");
+		}
+
+		const thinking = reparsed.message.content[0];
+		if (thinking?.type !== "thinking") throw new Error("Expected thinking block");
+		expect(thinking.thinking).toHaveLength(600_000);
+		expect(thinking.thinking.endsWith(truncationNotice)).toBe(false);
+		expect(thinking.thinkingSignature).toBe("sig-abc");
+	});
+});
