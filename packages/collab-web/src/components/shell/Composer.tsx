@@ -1,6 +1,6 @@
 import { SendHorizontal, Square } from "lucide-react";
 import type { KeyboardEvent, ReactNode } from "react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import type { GuestClient, GuestSnapshot } from "../../lib/client";
 
 export interface ComposerProps {
@@ -13,39 +13,80 @@ const LINE_PX = 20;
 const PAD_Y = 16;
 const MAX_ROWS = 8;
 
-function optionLabel(option: string | { label: string }): string {
-	return typeof option === "string" ? option : option.label;
+function autosize(el: HTMLTextAreaElement | null): void {
+	if (!el) return;
+	el.style.height = "0px";
+	const max = MAX_ROWS * LINE_PX + PAD_Y;
+	el.style.height = `${Math.max(LINE_PX + PAD_Y, Math.min(el.scrollHeight, max))}px`;
+	el.style.overflowY = el.scrollHeight > max ? "auto" : "hidden";
+}
+
+interface AskEditorProps {
+	prefill: string | undefined;
+	onSubmit(value: string): void;
+}
+
+/**
+ * Editor ask input. Rendered with `key={reqId}` so a new request remounts it with a fresh
+ * draft seeded from `prefill`, while re-sends of the same request never clobber a half-typed
+ * draft. Submits verbatim — whitespace-only responses are intentional.
+ */
+function AskEditor({ prefill, onSubmit }: AskEditorProps): ReactNode {
+	const [draft, setDraft] = useState(prefill ?? "");
+	const taRef = useRef<HTMLTextAreaElement | null>(null);
+
+	useLayoutEffect(() => {
+		autosize(taRef.current);
+	}, [draft]);
+
+	const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
+		if (e.key === "Enter" && !e.shiftKey) {
+			e.preventDefault();
+			onSubmit(draft);
+		}
+	};
+
+	return (
+		<div className="sh-composer-inner">
+			<textarea
+				ref={taRef}
+				className="sh-composer-input"
+				value={draft}
+				onChange={e => setDraft(e.target.value)}
+				onKeyDown={onKeyDown}
+				placeholder="type your response…"
+				rows={1}
+				spellCheck={false}
+			/>
+			<div className="sh-composer-actions">
+				<button
+					type="button"
+					className="sh-btn sh-btn-primary"
+					onClick={() => onSubmit(draft)}
+					title="submit response"
+				>
+					<SendHorizontal size={12} /> <span className="sh-btn-label">Submit</span>
+				</button>
+			</div>
+		</div>
+	);
 }
 
 export function Composer({ client, snapshot }: ComposerProps): ReactNode {
 	const [text, setText] = useState("");
-	const [uiDraft, setUiDraft] = useState(
-		snapshot.uiRequest?.kind === "editor" ? (snapshot.uiRequest.prefill ?? "") : "",
-	);
 	const taRef = useRef<HTMLTextAreaElement | null>(null);
 
 	const live = snapshot.phase === "live";
 	const readOnly = snapshot.readOnly;
 	const uiRequest = snapshot.uiRequest;
-	const uiRequestPrefill = uiRequest?.kind === "editor" ? uiRequest.prefill : undefined;
 	const canPrompt = live && !readOnly;
 	const busy = snapshot.working || (snapshot.state?.isStreaming ?? false);
 	const queued = snapshot.state?.queuedMessageCount ?? 0;
 	const canSend = canPrompt && text.trim().length > 0;
-	const canSubmitUiDraft = canPrompt && uiRequest?.kind === "editor";
-
-	useEffect(() => {
-		setUiDraft(uiRequest?.kind === "editor" ? (uiRequestPrefill ?? "") : "");
-	}, [uiRequest?.reqId, uiRequest?.kind, uiRequestPrefill]);
 
 	useLayoutEffect(() => {
-		const el = taRef.current;
-		if (!el) return;
-		el.style.height = "0px";
-		const max = MAX_ROWS * LINE_PX + PAD_Y;
-		el.style.height = `${Math.max(LINE_PX + PAD_Y, Math.min(el.scrollHeight, max))}px`;
-		el.style.overflowY = el.scrollHeight > max ? "auto" : "hidden";
-	}, [text, uiDraft, uiRequest?.reqId]);
+		autosize(taRef.current);
+	}, [text, uiRequest?.reqId]);
 
 	const send = useCallback((): void => {
 		const trimmed = text.trim();
@@ -54,23 +95,10 @@ export function Composer({ client, snapshot }: ComposerProps): ReactNode {
 		setText("");
 	}, [client, live, readOnly, text]);
 
-	const submitUiDraft = useCallback((): void => {
-		if (!canPrompt || uiRequest?.kind !== "editor") return;
-		client.sendUiResponse(uiRequest.reqId, uiDraft);
-		setUiDraft("");
-	}, [canPrompt, client, uiDraft, uiRequest]);
-
 	const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
 		if (e.key === "Enter" && !e.shiftKey) {
 			e.preventDefault();
 			send();
-		}
-	};
-
-	const onUiKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
-		if (e.key === "Enter" && !e.shiftKey) {
-			e.preventDefault();
-			submitUiDraft();
 		}
 	};
 
@@ -81,7 +109,7 @@ export function Composer({ client, snapshot }: ComposerProps): ReactNode {
 				{uiRequest.kind === "select" ? (
 					<div className="sh-ask-options">
 						{uiRequest.options.map((option, index) => {
-							const label = optionLabel(option);
+							const label = typeof option === "string" ? option : option.label;
 							const checked = uiRequest.checkedIndices?.includes(index) ?? false;
 							return (
 								<button
@@ -104,29 +132,11 @@ export function Composer({ client, snapshot }: ComposerProps): ReactNode {
 						})}
 					</div>
 				) : (
-					<div className="sh-composer-inner">
-						<textarea
-							ref={taRef}
-							className="sh-composer-input"
-							value={uiDraft}
-							onChange={e => setUiDraft(e.target.value)}
-							onKeyDown={onUiKeyDown}
-							placeholder="type your response…"
-							rows={1}
-							spellCheck={false}
-						/>
-						<div className="sh-composer-actions">
-							<button
-								type="button"
-								className="sh-btn sh-btn-primary"
-								onClick={submitUiDraft}
-								disabled={!canSubmitUiDraft}
-								title="submit response"
-							>
-								<SendHorizontal size={12} /> <span className="sh-btn-label">Submit</span>
-							</button>
-						</div>
-					</div>
+					<AskEditor
+						key={uiRequest.reqId}
+						prefill={uiRequest.prefill}
+						onSubmit={value => client.sendUiResponse(uiRequest.reqId, value)}
+					/>
 				)}
 				<div className="sh-composer-actions sh-ask-actions">
 					<button type="button" className="sh-btn" onClick={() => client.sendUiResponse(uiRequest.reqId)}>

@@ -63,7 +63,17 @@ describe("Composer host UI requests", () => {
 			<Composer client={client} snapshot={snapshot({ reqId: 3, kind: "editor", title: "Other", prefill: "   " })} />,
 		);
 
-		expect(html).toContain('title="submit response"');
-		expect(html).not.toMatch(/title="submit response"[^>]*disabled/);
+		const submit = { found: false, disabled: false };
+		new HTMLRewriter()
+			.on('button[title="submit response"]', {
+				element(el) {
+					submit.found = true;
+					submit.disabled = el.hasAttribute("disabled");
+				},
+			})
+			.transform(html);
+
+		expect(submit.found).toBe(true);
+		expect(submit.disabled).toBe(false);
 	});
 });
