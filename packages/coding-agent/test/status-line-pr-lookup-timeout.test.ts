@@ -100,8 +100,10 @@ afterEach(() => {
 
 describe("StatusLineComponent PR lookup timeout guard", () => {
 	it("routes gh pr view through git.github.run with a bounded abort signal", async () => {
-		const { promise: ghCalled, resolve: markGhCalled } =
-			Promise.withResolvers<{ args: readonly string[]; signal: AbortSignal | undefined }>();
+		const { promise: ghCalled, resolve: markGhCalled } = Promise.withResolvers<{
+			args: readonly string[];
+			signal: AbortSignal | undefined;
+		}>();
 		const { promise: ghUnblock, resolve: releaseGh } = Promise.withResolvers<void>();
 
 		vi.spyOn(git.github, "run").mockImplementation(async (_cwd, args, signal) => {
