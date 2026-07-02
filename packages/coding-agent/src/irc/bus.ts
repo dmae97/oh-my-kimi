@@ -8,10 +8,11 @@
  * agents receive the message as a non-interrupting aside at the next step
  * boundary (see AgentSession.deliverIrcMessage). Replies are real turns by
  * the recipient, observed via `wait` — with one exception: when the sender
- * awaits a reply and the recipient is mid-turn with async execution
- * disabled, the recipient session generates an ephemeral side-channel
- * auto-reply (it may be blocked in a synchronous task spawn whose batch
- * includes the sender, so a real turn could never happen in time).
+ * awaits a reply and the recipient cannot run a real reply turn in time
+ * (mid-turn with async execution disabled — possibly blocked in a
+ * synchronous task spawn whose batch includes the sender — or idle in plan
+ * mode, where autonomous wake turns are suppressed), the recipient session
+ * generates an ephemeral side-channel auto-reply.
  */
 
 import { logger, Snowflake } from "@oh-my-pi/pi-utils";

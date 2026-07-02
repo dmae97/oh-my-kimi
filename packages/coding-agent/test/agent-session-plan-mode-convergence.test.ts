@@ -16,7 +16,8 @@ import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { IrcMessage } from "@oh-my-pi/pi-coding-agent/irc/bus";
+import { IrcBus, type IrcMessage } from "@oh-my-pi/pi-coding-agent/irc/bus";
+import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -68,6 +69,7 @@ interface PlanHarness {
 	session: AgentSession;
 	mock: MockModel;
 	advisorMock?: MockModel;
+	sideMock?: MockModel;
 }
 
 describe("AgentSession plan-mode convergence", () => {
@@ -92,7 +94,7 @@ describe("AgentSession plan-mode convergence", () => {
 
 	async function createPlanSession(
 		responses: MockResponse[],
-		options?: { advisorResponses?: MockResponse[] },
+		options?: { advisorResponses?: MockResponse[]; sideResponses?: MockResponse[] },
 	): Promise<PlanHarness> {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected bundled anthropic model to exist");
@@ -122,6 +124,13 @@ describe("AgentSession plan-mode convergence", () => {
 			advisorStreamFn = advisorMock.stream;
 		}
 
+		let sideMock: MockModel | undefined;
+		let sideStreamFn: StreamFn | undefined;
+		if (options?.sideResponses) {
+			sideMock = createMockModel({ responses: options.sideResponses });
+			sideStreamFn = sideMock.stream;
+		}
+
 		const created = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),
@@ -138,10 +147,11 @@ describe("AgentSession plan-mode convergence", () => {
 			builtInToolNames: ["ask", "resolve", "read"],
 			advisorTools: [],
 			advisorStreamFn,
+			sideStreamFn,
 		});
 		created.setPlanModeState({ enabled: true, planFilePath: "local://PLAN.md" });
 		session = created;
-		return { session: created, mock, advisorMock };
+		return { session: created, mock, advisorMock, sideMock };
 	}
 
 	it("T1: an advisor concern does not wake the primary in plan mode", async () => {
@@ -184,6 +194,35 @@ describe("AgentSession plan-mode convergence", () => {
 		);
 		expect(sawIrc).toBe(true);
 		expect(harness.mock.calls.length).toBe(0);
+	});
+
+	it("T2b: an awaited idle IRC message gets a side-channel auto-reply without waking a turn", async () => {
+		const harness = await createPlanSession([], {
+			sideResponses: [{ content: ["still planning — full reply once the plan settles"] }],
+		});
+		const registry = AgentRegistry.global();
+		registry.register({ id: "peer", displayName: "peer", kind: "sub", session: null, status: "running" });
+		try {
+			const bus = IrcBus.global();
+			// Park the sender's reply waiter first (timeout 0 = no wall-clock timer;
+			// a broken auto-reply path fails via the test runner's own timeout).
+			const replyPromise = bus.wait("peer", { from: "me" }, 0);
+			const msg: IrcMessage = { id: "m2", from: "peer", to: "me", body: "blocked on you — status?", ts: Date.now() };
+
+			const outcome = await harness.session.deliverIrcMessage(msg, { expectsReply: true });
+			expect(outcome).toBe("injected");
+
+			// The ephemeral side-channel turn answered the sender for real.
+			const reply = await replyPromise;
+			expect(reply?.replyTo).toBe("m2");
+			expect(reply?.body).toContain("still planning");
+			expect(harness.sideMock?.calls.length).toBe(1);
+			// The primary loop never woke: no model call, no assistant turn.
+			expect(harness.mock.calls.length).toBe(0);
+			expect(harness.session.agent.state.messages.some(m => m.role === "assistant")).toBe(false);
+		} finally {
+			registry.unregister("peer");
+		}
 	});
 
 	it("T3a: convergence reminders are bounded by the cap, then yield to the user", async () => {
