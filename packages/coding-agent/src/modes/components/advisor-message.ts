@@ -7,7 +7,7 @@ import {
 	type ToolUIColor,
 	wrapTextWithAnsi,
 } from "../../tools/render-utils";
-import { Ellipsis, renderStatusLine, truncateToWidth } from "../../tui";
+import { Ellipsis, truncateToWidth } from "../../tui";
 import type { Theme } from "../theme/theme";
 
 const COLLAPSED_NOTES = 3;
@@ -42,8 +42,10 @@ function severityColor(severity: AdvisorSeverity | undefined): ToolUIColor {
 
 /**
  * Display-only transcript card for advisor notes injected into the primary
- * session. Mirrors the IRC card's glyph + quote-border conventions so passive
- * advice reads as a distinct, non-interrupting aside rather than a user turn.
+ * session. Styled as a distinct voice so notes never blend into thinking
+ * output (whose `thinkingText` color equals `toolOutput` in most themes):
+ * a bold `customMessageLabel` header tag (skill-card convention), a heavy
+ * rail tinted per-note severity, and the note body on the default text color.
  */
 export function createAdvisorMessageCard(
 	details: AdvisorMessageDetails | undefined,
@@ -58,9 +60,9 @@ export function createAdvisorMessageCard(
 	return createCachedComponent(
 		getExpanded,
 		(width, expanded) => {
-			const glyph = uiTheme.styledSymbol("status.info", "accent");
-			const lines = [renderStatusLine({ iconOverride: glyph, title: "Advisor", meta }, uiTheme)];
-			const quote = uiTheme.fg("dim", uiTheme.md.quoteBorder);
+			const tag = uiTheme.fg("customMessageLabel", uiTheme.bold(`${uiTheme.status.info} Advisor`));
+			const lines = [`${tag} ${uiTheme.fg("dim", meta.join(uiTheme.sep.dot))}`];
+			const railGlyph = uiTheme.symbol("advisor.rail");
 			const shown = expanded ? notes : notes.slice(0, COLLAPSED_NOTES);
 			for (const entry of shown) {
 				const badge = entry.severity
@@ -72,8 +74,8 @@ export function createAdvisorMessageCard(
 					entry.advisor && entry.advisor !== "default"
 						? `${uiTheme.fg("dim", `[${replaceTabs(entry.advisor)}]`)} `
 						: "";
-				const quotePrefix = `  ${quote} `;
-				const quoteWidth = visibleWidth(quotePrefix);
+				const rail = uiTheme.fg(severityColor(entry.severity), railGlyph);
+				const quoteWidth = visibleWidth(`  ${railGlyph} `);
 				const badgeWidth = visibleWidth(badge);
 				const whoWidth = visibleWidth(who);
 				const w1 = Math.max(10, Math.min(NOTE_LINE_WIDTH, width) - quoteWidth - badgeWidth - whoWidth);
@@ -92,12 +94,13 @@ export function createAdvisorMessageCard(
 
 				bodyLines.forEach((line, index) => {
 					const prefix = index === 0 ? `${badge}${who}` : "";
-					lines.push(`  ${quote} ${prefix}${uiTheme.fg("toolOutput", replaceTabs(line))}`);
+					lines.push(`  ${rail} ${prefix}${uiTheme.fg("customMessageText", replaceTabs(line))}`);
 				});
 			}
 			const hidden = notes.length - shown.length;
 			if (hidden > 0) {
-				lines.push(`  ${quote} ${uiTheme.fg("dim", `… +${hidden} more ${hidden === 1 ? "note" : "notes"}`)}`);
+				const rail = uiTheme.fg("dim", railGlyph);
+				lines.push(`  ${rail} ${uiTheme.fg("dim", `… +${hidden} more ${hidden === 1 ? "note" : "notes"}`)}`);
 			}
 			return lines.map(line => truncateToWidth(line, width, Ellipsis.Unicode));
 		},

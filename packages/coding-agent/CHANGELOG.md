@@ -8,7 +8,10 @@
 
 ### Changed
 
+- Refined advisor note card visuals with a dedicated rail character and bold label headers
+
 - Deferred session_stop extension hooks and incomplete-todo reminders until all agent-owned background jobs (such as async bash or task spawns) are fully idle
+- Restyled the advisor note card so notes no longer blend into thinking output: bold label-tag header, heavier severity-tinted rail, and note body on the default text color instead of thinking-gray
 
 ### Fixed
 
