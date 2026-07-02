@@ -1,6 +1,5 @@
 import { describe, expect, it } from "bun:test";
 import { create, toBinary } from "@bufbuild/protobuf";
-import * as AIError from "@oh-my-pi/pi-ai/error";
 import { streamDevin } from "@oh-my-pi/pi-ai/providers/devin";
 import type { Context, Model } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -40,10 +39,7 @@ function corruptFrameHeader(advertisedLen: number): Uint8Array {
 
 describe("streamDevin frame length cap", () => {
 	it("rejects a frame advertising a payload above the 16 MiB cap without buffering it", async () => {
-		const authPayload = toBinary(
-			GetUserJwtResponseSchema,
-			create(GetUserJwtResponseSchema, { userJwt: "jwt" }),
-		);
+		const authPayload = toBinary(GetUserJwtResponseSchema, create(GetUserJwtResponseSchema, { userJwt: "jwt" }));
 		// 32 MiB advertised — twice the cap, well below UINT32_MAX so the
 		// concat-forever bug would silently swallow it on the vulnerable branch.
 		const header = corruptFrameHeader(32 * 1024 * 1024);
@@ -81,10 +77,7 @@ describe("streamDevin frame length cap", () => {
 	});
 
 	it("carries the envelope diagnostic on the error event and finalized message", async () => {
-		const authPayload = toBinary(
-			GetUserJwtResponseSchema,
-			create(GetUserJwtResponseSchema, { userJwt: "jwt" }),
-		);
+		const authPayload = toBinary(GetUserJwtResponseSchema, create(GetUserJwtResponseSchema, { userJwt: "jwt" }));
 		const header = corruptFrameHeader(64 * 1024 * 1024);
 
 		const fetchImpl = (async (input: string | URL | Request) => {
