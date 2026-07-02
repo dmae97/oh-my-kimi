@@ -1904,11 +1904,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 			extensionsResult.runtime.pendingProviderRegistrations = [];
 		}
-		// Discover runtime (extension) provider catalogs now that they are
-		// registered. The startup refreshInBackground() ran before extensions
-		// loaded, so dynamic extension providers are only discovered here. Runs in
-		// the background (cache-aware) so startup is never blocked on the fetch; the
-		// model list re-renders when the catalog arrives, like other dynamic providers.
+		// Hydrate cached runtime (extension) provider catalogs before model
+		// resolution. Dynamic-only providers have no synchronous registration side
+		// effect, so a cold --model/provider resume must see the same fresh SQLite
+		// cache that `omp models find` uses before the online refresh continues in
+		// the background.
+		await modelRegistry.refreshRuntimeProviders("offline");
+		// Continue runtime discovery in the background (cache-aware) so startup is
+		// only blocked on local cache reads, not provider network fetches.
 		void modelRegistry.refreshRuntimeProviders().catch(error => {
 			logger.warn("runtime provider discovery failed", {
 				error: error instanceof Error ? error.message : String(error),
