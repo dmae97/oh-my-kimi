@@ -69,6 +69,15 @@ const DEVIN_DEFAULT_STOP_PATTERNS = ["<|user|>", "<|bot|>", "<|context_request|>
 /** Connect streaming framing: flag byte bit 0x01 = gzip payload, 0x02 = end-of-stream JSON trailers. */
 const CONNECT_COMPRESSED_FLAG = 0x01;
 const CONNECT_END_STREAM_FLAG = 0x02;
+/**
+ * Hard upper bound on a single Connect frame payload. The 4-byte length prefix
+ * is otherwise attacker-controlled (up to `2**32 - 1`), so a malicious or buggy
+ * peer could force {@link streamDevin}'s reader to buffer gigabytes via
+ * `Buffer.concat` before the idle-timeout wrapper aborts. Well above any
+ * legitimate Cascade response but tight enough that a corrupt length prefix
+ * fails fast instead of consuming memory.
+ */
+const MAX_CONNECT_FRAME_PAYLOAD = 16 * 1024 * 1024;
 
 export const streamDevin: StreamFunction<"devin-agent"> = (
 	model: Model<"devin-agent">,
@@ -201,6 +210,12 @@ export const streamDevin: StreamFunction<"devin-agent"> = (
 				while (pending.length >= 5) {
 					const flag = pending[0];
 					const len = pending.readUInt32BE(1);
+					if (len > MAX_CONNECT_FRAME_PAYLOAD) {
+						throw new AIError.ProviderResponseError(
+							`Devin Connect frame length ${len} exceeds ${MAX_CONNECT_FRAME_PAYLOAD}-byte cap`,
+							{ provider: model.provider, kind: "envelope" },
+						);
+					}
 					if (pending.length < 5 + len) break;
 					const payload = pending.subarray(5, 5 + len);
 					pending = pending.subarray(5 + len);
