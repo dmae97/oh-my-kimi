@@ -229,6 +229,32 @@ describe("read → edit seen-line guard", () => {
 		expect(message).toMatch(/long\.txt:100-159/);
 		expect(await Bun.file(file).text()).toBe(`${lines.join("\n")}\n`);
 	});
+
+	it("does not mark column-clipped read lines as seen", async () => {
+		// A 4KB single line — the read tool's column cap (default 512 chars)
+		// clips this into `<prefix>…` in the numbered output. The clipped line
+		// number MUST stay out of the tag's seenLines, or a subsequent edit
+		// anchored there would slip past the seen-line guard having seen only
+		// the first 512 chars.
+		const file = path.join(tmpDir, "wide.txt");
+		const wide = "a".repeat(4096);
+		const content = `head\n${wide}\nfoot\n`;
+		await Bun.write(file, content);
+		const session = createSession(tmpDir);
+
+		const read = await new ReadTool(session).execute("r1", { path: `${file}:2` });
+		const tag = tagFromOutput(resultText(read));
+
+		const seen = getFileSnapshotStore(session).byHash(canonicalSnapshotKey(file), tag)?.seenLines;
+		expect(seen?.has(2)).toBe(false);
+
+		// A straight edit anchored at the clipped line 2 is still rejected —
+		// the seen-line guard fires because the model only saw the prefix.
+		await expect(
+			executeHashlineSingle(execOptions(`[wide.txt#${tag}]\nSWAP 2.=2:\n+REPLACED`, session)),
+		).rejects.toThrow(/never displayed \(it showed/);
+		expect(await Bun.file(file).text()).toBe(content);
+	});
 });
 
 describe("search → edit seen-line guard", () => {
