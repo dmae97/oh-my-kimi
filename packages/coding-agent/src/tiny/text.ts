@@ -159,6 +159,7 @@ const COMMON_TITLE_ACRONYMS = new Set<string>([
 	"CRUD",
 	"CSS",
 	"DNS",
+	"ETL",
 	"GPU",
 	"HTML",
 	"HTTP",
