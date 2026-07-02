@@ -531,3 +531,151 @@ describe("SessionManager fence relaxes when flushSync supersedes the atomic rewr
 		expect(storage.detachedLines).toEqual([]);
 	});
 });
+
+interface PauseHandle {
+	started: PromiseWithResolvers<void>;
+	allow: PromiseWithResolvers<void>;
+}
+
+class SequencedRewriteStorage extends MemorySessionStorage {
+	readonly detachedLines: string[] = [];
+	readonly pauses: PauseHandle[] = [];
+	guardRejections = 0;
+	writerOpens = 0;
+	pauseCount = 0;
+	#calls = 0;
+	readonly #writers = new Set<DetachableWriter>();
+
+	override openWriter(
+		path: string,
+		options?: { flags?: "a" | "w"; onError?: (err: Error) => void },
+	): SessionStorageWriter {
+		this.writerOpens++;
+		const inner = super.openWriter(path, options);
+		const writers = this.#writers;
+		const detachedLines = this.detachedLines;
+		let detached = false;
+		const writer: DetachableWriter = {
+			async append(line: string): Promise<void> {
+				if (detached) {
+					detachedLines.push(line);
+					return;
+				}
+				await inner.append(line);
+			},
+			async flush(): Promise<void> {
+				await inner.flush();
+			},
+			isOpen(): boolean {
+				return inner.isOpen();
+			},
+			async close(): Promise<void> {
+				writers.delete(writer);
+				await inner.close();
+			},
+			getError(): Error | undefined {
+				return inner.getError();
+			},
+			detach(): void {
+				detached = true;
+			},
+		};
+		writers.add(writer);
+		return writer;
+	}
+
+	override async writeTextAtomic(path: string, content: string, options?: WriteTextAtomicOptions): Promise<void> {
+		const index = this.#calls++;
+		if (index < this.pauseCount) {
+			const pause: PauseHandle = {
+				started: Promise.withResolvers<void>(),
+				allow: Promise.withResolvers<void>(),
+			};
+			this.pauses.push(pause);
+			pause.started.resolve();
+			await pause.allow.promise;
+		}
+		if (options?.commitGuard && !options.commitGuard()) {
+			this.guardRejections++;
+			return;
+		}
+		for (const w of this.#writers) w.detach();
+		this.writeTextSync(path, content);
+	}
+}
+
+describe("SessionManager fence handoff across superseded rewrites", () => {
+	it("preserves the newer fence when a stale rewrite unwinds after flushSync", async () => {
+		const storage = new SequencedRewriteStorage();
+		storage.pauseCount = 2;
+		const sessionManager = SessionManager.create("/cwd", "/sessions", storage);
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected built-in anthropic model");
+
+		sessionManager.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "seed response" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+		await sessionManager.flush();
+		sessionManager.appendMessage({ role: "user", content: "before rewrite", timestamp: Date.now() });
+		await sessionManager.flush();
+		expect(storage.writerOpens).toBeGreaterThan(0);
+
+		// Stale rewrite parks at pauses[0]. Fence epoch = 0.
+		const stale = sessionManager.rewriteEntries();
+		while (storage.pauses.length < 1) await Promise.resolve();
+		await storage.pauses[0].started.promise;
+
+		// A fenced append flips fileIsCurrent so flushSync actually publishes,
+		// bumping the epoch to 1 with the fenced entry captured in the body.
+		sessionManager.appendCustomEntry("during_stale", { data: "X1" });
+		expect(() => sessionManager.flushSync()).not.toThrow();
+
+		// Newer rewrite scheduled at epoch=1. Parks at pauses[1]. Fence epoch = 1.
+		const newer = sessionManager.rewriteEntries();
+		while (storage.pauses.length < 2) await Promise.resolve();
+		await storage.pauses[1].started.promise;
+
+		const opensBeforeUnwind = storage.writerOpens;
+
+		// Release the stale rewrite. Its `finally` MUST NOT clear the newer
+		// fence — pre-fix an unconditional reset stranded the newer rewrite's
+		// epoch bookkeeping so subsequent appends took the hot path and were
+		// then detached by the newer publish.
+		storage.pauses[0].allow.resolve();
+		for (let i = 0; i < 20; i++) await Promise.resolve();
+
+		// Sync append during the newer rewrite: MUST still be fenced.
+		sessionManager.appendCustomEntry("during_newer", { data: "X2" });
+		expect(storage.writerOpens).toBe(opensBeforeUnwind);
+
+		// Release the newer rewrite. Its dirty-loop second iteration is not
+		// paused (pauseCount=2) and captures X2 into the published body.
+		storage.pauses[1].allow.resolve();
+
+		await stale;
+		await newer;
+		await sessionManager.close();
+
+		const sessionFile = sessionManager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected session file");
+		const content = await storage.readText(sessionFile);
+		expect(content).toContain('"customType":"during_stale"');
+		expect(content).toContain('"customType":"during_newer"');
+		expect(storage.guardRejections).toBeGreaterThanOrEqual(1);
+		expect(storage.detachedLines).toEqual([]);
+	});
+});

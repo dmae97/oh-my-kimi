@@ -615,7 +615,13 @@ export class SessionManager {
 			} while (this.#atomicRewriteDirty);
 			return true;
 		} finally {
-			this.#atomicRewriteFenceEpoch = null;
+			// Only relinquish the fence if we still own it. A superseding
+			// synchronous rewrite (`flushSync` → `#rewriteSynchronously`) may
+			// have reset `#diskTail`, scheduled a fresh atomic task at the new
+			// epoch, and that task may have taken ownership of the fence while
+			// this stale rewrite was still awaiting storage. Clearing it here
+			// unconditionally would strand appends during the newer publish.
+			if (this.#atomicRewriteFenceEpoch === epoch) this.#atomicRewriteFenceEpoch = null;
 		}
 	}
 
