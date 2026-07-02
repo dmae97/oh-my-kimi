@@ -6,6 +6,10 @@
 
 - Added comprehensive tracking and credential-ranking support for Anthropic per-tier and weekly usage limits, including Claude Fable weekly caps. This prevents a single exhausted model-scoped cap from blocking the entire OAuth credential and improves credential selection based on drain-rate pressure.
 
+### Changed
+
+- Updated Claude Fable reasoning replay to use bare text instead of wrapped thinking tags
+
 ### Fixed
 
 - Improved robustness of single-argument tool calls by automatically remapping mislabeled string arguments.

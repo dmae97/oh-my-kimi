@@ -300,7 +300,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 		const priorBlocks = assistants[0].content as WireBlock[];
 		const text = priorBlocks.find(b => b.type === "text") as WireTextBlock | undefined;
 		expect(text?.text).toBe(renderDemotedThinking("claude-fable-5", reasoning));
-		expect(text?.text).toBe(`_Hmm. ${reasoning}_\n`);
+		expect(text?.text).toBe(reasoning);
 		expect(text?.text).not.toContain("<thinking>");
 		expect(text?.text).not.toContain("</thinking>");
 		expect(text?.text).not.toContain("<think>");

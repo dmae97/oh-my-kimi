@@ -275,7 +275,7 @@ describe("openai-completions compatibility", () => {
 		// Regression: thinking+text replay used to call `.unshift` on the string
 		// content set above (TypeError). Both blocks must survive as one string.
 		expect(typeof assistant.content).toBe("string");
-		expect(assistant.content).toBe(`${renderDemotedThinking(model.id, "chain of thought")}final answer`);
+		expect(assistant.content).toBe(`${renderDemotedThinking(model.id, "chain of thought")} final answer`);
 	});
 
 	it("emits thinking-only assistant content as a plain string when requiresThinkingAsText is set", () => {
