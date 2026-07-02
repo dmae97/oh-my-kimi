@@ -96,6 +96,14 @@ export interface ApplyPatchOptions {
 	fuzzyThreshold?: number;
 	allowFuzzy?: boolean;
 	fs?: FileSystem;
+	/**
+	 * Permit `op: "create"` to replace an existing file (full-file overwrite).
+	 * The JSON `patch` edit mode sanctions create-as-overwrite for major
+	 * restructures (see prompts/tools/patch.md); the Codex `apply_patch`
+	 * envelope documents `*** Add File` as strictly non-overwriting and must
+	 * leave this unset.
+	 */
+	allowCreateOverwrite?: boolean;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -455,8 +463,8 @@ function trimCommonContext(oldLines: string[], newLines: string[]): HunkVariant 
 }
 
 function collapseConsecutiveSharedLines(oldLines: string[], newLines: string[]): HunkVariant | undefined {
-	const newLineSet = new Set(newLines);
-	const shared = new Set(oldLines.filter(line => newLineSet.has(line)));
+	const newSet = new Set(newLines);
+	const shared = new Set(oldLines.filter(line => newSet.has(line)));
 	const collapse = (lines: string[]): string[] => {
 		const out: string[] = [];
 		let i = 0;
@@ -481,31 +489,31 @@ function collapseConsecutiveSharedLines(oldLines: string[], newLines: string[]):
 }
 
 function collapseRepeatedBlocks(oldLines: string[], newLines: string[]): HunkVariant | undefined {
-	const newLineSet = new Set(newLines);
-	const shared = new Set(oldLines.filter(line => newLineSet.has(line)));
+	const newSet = new Set(newLines);
+	const shared = new Set(oldLines.filter(line => newSet.has(line)));
 	const collapse = (lines: string[]): string[] => {
 		const output = [...lines];
 		let changed = false;
 		let i = 0;
 		while (i < output.length) {
 			let collapsed = false;
-			for (let size = Math.floor((output.length - i) / 2); size >= 2; size--) {
-				const first = output.slice(i, i + size);
-				const second = output.slice(i + size, i + size * 2);
-				if (first.length !== second.length || first.length === 0) continue;
-				if (!first.every(line => shared.has(line))) continue;
-				let same = true;
-				for (let idx = 0; idx < size; idx++) {
-					if (first[idx] !== second[idx]) {
-						same = false;
+			// Only blocks whose lines are all shared are collapsible; if the first line
+			// is not shared no size can match, so skip the size search entirely.
+			if (shared.has(output[i])) {
+				for (let size = Math.floor((output.length - i) / 2); size >= 2; size--) {
+					let same = true;
+					for (let idx = 0; idx < size; idx++) {
+						if (output[i + idx] !== output[i + size + idx] || !shared.has(output[i + idx])) {
+							same = false;
+							break;
+						}
+					}
+					if (same) {
+						output.splice(i + size, size);
+						changed = true;
+						collapsed = true;
 						break;
 					}
-				}
-				if (same) {
-					output.splice(i + size, size);
-					changed = true;
-					collapsed = true;
-					break;
 				}
 			}
 			if (!collapsed) {
@@ -1481,6 +1489,7 @@ async function applyNormalizedPatch(input: PatchInput, options: ApplyPatchOption
 		fs = defaultFileSystem,
 		fuzzyThreshold = DEFAULT_FUZZY_THRESHOLD,
 		allowFuzzy = true,
+		allowCreateOverwrite = false,
 	} = options;
 
 	const resolvePath = (p: string): string => resolveToCwd(p, cwd);
@@ -1492,12 +1501,31 @@ async function applyNormalizedPatch(input: PatchInput, options: ApplyPatchOption
 		if (destPath === absolutePath) {
 			throw new ApplyPatchError("rename path is the same as source path");
 		}
+		// The `*** Move to` / rename contract is strictly non-overwriting:
+		// reject before the update path reads or writes anything, so both
+		// source and pre-existing destination remain untouched. Callers who
+		// really need to replace the destination must delete it in an
+		// earlier hunk.
+		if (await fs.exists(destPath)) {
+			throw new ApplyPatchError(`Cannot rename ${input.path} to ${input.rename}: destination already exists.`);
+		}
 	}
 
 	// Handle CREATE operation
 	if (op === "create") {
 		if (!input.diff) {
 			throw new ApplyPatchError("Create operation requires diff (file content)");
+		}
+		// The `*** Add File` contract of the apply_patch envelope is strictly
+		// non-overwriting: reject before mkdir/write so pre-existing content
+		// stays intact and the caller can re-issue as an explicit
+		// `*** Update File` (or a delete+add pair) if overwrite is genuinely
+		// intended. The JSON `patch` mode opts out via `allowCreateOverwrite`,
+		// where `op: "create"` doubles as a sanctioned full-file overwrite.
+		if (!allowCreateOverwrite && (await fs.exists(absolutePath))) {
+			throw new ApplyPatchError(
+				`Cannot create ${input.path}: file already exists. Use *** Update File to modify it in place.`,
+			);
 		}
 		// Strip + prefixes if present (handles diffs formatted as additions)
 		const normalizedContent = normalizeCreateContent(input.diff);
@@ -1604,7 +1632,7 @@ export async function previewPatch(input: PatchInput, options: ApplyPatchOptions
 export async function computePatchDiff(
 	input: PatchInput,
 	cwd: string,
-	options?: { fuzzyThreshold?: number; allowFuzzy?: boolean },
+	options?: { fuzzyThreshold?: number; allowFuzzy?: boolean; allowCreateOverwrite?: boolean },
 ): Promise<
 	| {
 			diff: string;
@@ -1619,6 +1647,7 @@ export async function computePatchDiff(
 			cwd,
 			fuzzyThreshold: options?.fuzzyThreshold,
 			allowFuzzy: options?.allowFuzzy,
+			allowCreateOverwrite: options?.allowCreateOverwrite,
 		});
 		const oldContent = result.change.oldContent ?? "";
 		const newContent = result.change.newContent ?? "";
@@ -1658,6 +1687,8 @@ export interface ExecutePatchSingleOptions {
 	batchRequest?: LspBatchRequest;
 	allowFuzzy: boolean;
 	fuzzyThreshold: number;
+	/** See {@link ApplyPatchOptions.allowCreateOverwrite}; set by the JSON `patch` mode only. */
+	allowCreateOverwrite?: boolean;
 	writethrough: WritethroughCallback;
 	beginDeferredDiagnosticsForPath: (path: string) => WritethroughDeferredHandle;
 }
@@ -1765,6 +1796,7 @@ export async function executePatchSingle(
 		batchRequest,
 		allowFuzzy,
 		fuzzyThreshold,
+		allowCreateOverwrite,
 		writethrough,
 		beginDeferredDiagnosticsForPath,
 	} = options;
@@ -1810,6 +1842,7 @@ export async function executePatchSingle(
 		fs: patchFileSystem,
 		fuzzyThreshold,
 		allowFuzzy,
+		allowCreateOverwrite,
 	});
 
 	// Post-write verification: only meaningful for in-place updates where the

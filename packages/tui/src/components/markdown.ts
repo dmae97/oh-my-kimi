@@ -769,6 +769,26 @@ function codespanSwatch(code: string, glyph: string): string {
 	return colorSwatch(match[1], glyph);
 }
 
+interface RenderSignature {
+	width: number;
+	paddingX: number;
+	paddingY: number;
+	codeBlockIndent: number;
+	themeId: number;
+	defaultTextStyleId: number;
+	imageProtocol: string;
+	hyperlinks: boolean;
+	textSizing: boolean;
+	bgColorProbe: string;
+	headingProbe: string;
+}
+
+interface StreamPrefixLineCache extends RenderSignature {
+	text: string;
+	tokenCount: number;
+	lines: readonly string[];
+}
+
 export class Markdown implements Component {
 	#text: string;
 	#paddingX: number; // Left/right padding
@@ -796,21 +816,7 @@ export class Markdown implements Component {
 	// tokenization, so this cache is independent of the render caches above.
 	#streamPrefixText?: string;
 	#streamPrefixTokens?: Token[];
-
-	// Streaming render-prefix cache: content lines (post-render, post-wrap,
-	// post-margin) for the stable prefix tokens, extended incrementally as the
-	// frozen lex prefix grows. Only the transient (in-flight streaming) render
-	// path uses it — finalized renders use the L2 module cache. The lex cache
-	// above already avoids re-tokenizing the stable prefix; this also avoids
-	// re-rendering + re-wrapping + re-margining it, so each streaming tick pays
-	// O(changed tail) instead of O(whole rendered prefix). NOT reset by
-	// invalidate() (setText calls it every append); reset lazily on a key
-	// mismatch, a content-identity mismatch (frozen prefix replaced), or when
-	// the frozen prefix vanishes (non-append edit / finalize).
-	#rpKey?: string;
-	#rpFrozenText?: string;
-	#rpTokenCount = 0;
-	#rpLines?: string[];
+	#streamPrefixLineCache?: StreamPrefixLineCache;
 
 	#ignoreTight = false;
 
@@ -844,6 +850,7 @@ export class Markdown implements Component {
 			// outlives the content it indexed.
 			this.#streamPrefixText = undefined;
 			this.#streamPrefixTokens = undefined;
+			this.#streamPrefixLineCache = undefined;
 		}
 		this.invalidate();
 	}
@@ -883,23 +890,16 @@ export class Markdown implements Component {
 		) {
 			const tailTokens = markdownParser.lexer(text.slice(prefix.length));
 			const tokens = [...prefixTokens, ...tailTokens];
-			this.#freezeStablePrefix(text, tokens);
+			this.#freezeStablePrefix(text, tokens, { preserveExisting: true });
 			return tokens;
 		}
 		const tokens = markdownParser.lexer(text);
 		if (canStream) {
-			// Full lex (non-append edit or cold start): drop any previously-frozen
-			// prefix first. Otherwise #freezeStablePrefix — which only writes when it
-			// finds a freezable boundary — would leave a STALE #streamPrefixText from
-			// the previous text. The render-prefix cache guards on #streamPrefixText,
-			// so a stale value here emits stale prefix lines (correctness regression
-			// on transient non-append replacements with no block boundary).
-			this.#streamPrefixText = undefined;
-			this.#streamPrefixTokens = undefined;
-			this.#freezeStablePrefix(text, tokens);
+			this.#freezeStablePrefix(text, tokens, { preserveExisting: false });
 		} else {
 			this.#streamPrefixText = undefined;
 			this.#streamPrefixTokens = undefined;
+			this.#streamPrefixLineCache = undefined;
 		}
 		return tokens;
 	}
@@ -909,7 +909,7 @@ export class Markdown implements Component {
 	// render re-lexes only the unfrozen tail. Caller guarantees no CR / no
 	// reference definitions, so each token's `raw` is a verbatim slice of `text`
 	// and the summed offsets address `text` exactly.
-	#freezeStablePrefix(text: string, tokens: Token[]): void {
+	#freezeStablePrefix(text: string, tokens: Token[], opts: { preserveExisting: boolean }): void {
 		let pos = 0;
 		let frozenEnd = 0;
 		let frozenCount = 0;
@@ -938,74 +938,15 @@ export class Markdown implements Component {
 			if (next !== 0x20 /* space */ && next !== 0x0a /* \n */) {
 				this.#streamPrefixText = text.slice(0, frozenEnd);
 				this.#streamPrefixTokens = tokens.slice(0, frozenCount);
+				return;
 			}
 		}
-	}
 
-	/**
-	 * Render tokens[start..end) to fully-styled, wrapped, margin-padded content
-	 * lines (everything except top/bottom padding). Mirrors the render→wrap→margin
-	 * pipeline but scoped to a token range. Safe to split at complete-token
-	 * boundaries: the wrap pass is stateless per line, and the margin pass's
-	 * `previousLineWasOsc66` fold always ends `false` after a complete token
-	 * (every OSC 66 sized heading is immediately followed by its structural empty
-	 * row), so concatenating per-range output is byte-identical to a single
-	 * whole-text pass. This is what lets the streaming render-prefix cache reuse
-	 * stable-prefix content lines and re-render only the tail.
-	 */
-	#renderTokenRange(
-		tokens: Token[],
-		start: number,
-		end: number,
-		contentWidth: number,
-		width: number,
-		leftMargin: string,
-		rightMargin: string,
-		bgFn: ((text: string) => string) | undefined,
-	): string[] {
-		const renderedLines: string[] = [];
-		for (let i = start; i < end; i++) {
-			const tokenLines = this.#renderToken(tokens[i]!, contentWidth, tokens[i + 1]?.type);
-			for (let j = 0; j < tokenLines.length; j++) renderedLines.push(tokenLines[j]!);
+		if (!opts.preserveExisting) {
+			this.#streamPrefixText = undefined;
+			this.#streamPrefixTokens = undefined;
+			this.#streamPrefixLineCache = undefined;
 		}
-		// Wrap (image/OSC66 lines bypass wrapping — would corrupt escape seqs).
-		const wrappedLines: string[] = [];
-		for (const line of renderedLines) {
-			if (TERMINAL.isImageLine(line) || isOsc66Line(line)) {
-				wrappedLines.push(line);
-			} else {
-				wrappedLines.push(...wrapTextWithAnsi(line, contentWidth));
-			}
-		}
-		const contentLines: string[] = [];
-		let previousLineWasOsc66 = false;
-		for (let k = 0; k < wrappedLines.length; k++) {
-			const line = wrappedLines[k]!;
-			// The first empty row after a scale>1 OSC 66 heading is structural:
-			// it reserves the lower cells of the multicell glyphs. Do not pad or
-			// background-fill it — real spaces there can interact with Kitty's
-			// multicell overwrite rules during the first paint.
-			if (previousLineWasOsc66 && line === "") {
-				contentLines.push("");
-				previousLineWasOsc66 = false;
-				continue;
-			}
-			if (TERMINAL.isImageLine(line) || isOsc66Line(line)) {
-				contentLines.push(line);
-				previousLineWasOsc66 = isOsc66Line(line);
-				continue;
-			}
-			previousLineWasOsc66 = false;
-			const lineWithMargins = leftMargin + line + rightMargin;
-			if (bgFn) {
-				contentLines.push(applyBackgroundToLine(lineWithMargins, width, bgFn));
-			} else {
-				const visibleLen = visibleWidth(lineWithMargins);
-				const paddingNeeded = Math.max(0, width - visibleLen);
-				contentLines.push(lineWithMargins + padding(paddingNeeded));
-			}
-		}
-		return contentLines;
 	}
 
 	render(width: number): readonly string[] {
@@ -1031,6 +972,7 @@ export class Markdown implements Component {
 
 		// Replace tabs with 3 spaces for consistent rendering
 		const normalizedText = replaceTabs(this.#text);
+		const signature = this.#renderSignature(width, paddingX);
 
 		// L2: module-level LRU — survives component disposal/recreation across
 		// session-tree navigations. Key encodes every dimension that affects the
@@ -1046,9 +988,7 @@ export class Markdown implements Component {
 		// by MarkdownTheme and is one of the most styling-sensitive entries.
 		let cacheKey: string | undefined;
 		if (!this.transientRenderCache) {
-			const bgColorProbe = this.#defaultTextStyle?.bgColor ? this.#defaultTextStyle.bgColor("\x01") : "";
-			const headingProbe = this.#theme.heading("");
-			cacheKey = `${normalizedText}\x00${width}\x00${paddingX}\x00${this.#paddingY}\x00${this.#codeBlockIndent}\x00${objectId(this.#theme)}\x00${this.#defaultTextStyle ? objectId(this.#defaultTextStyle) : -1}\x00${TERMINAL.imageProtocol ?? ""}\x00${TERMINAL.hyperlinks ? 1 : 0}\x00${TERMINAL.textSizing ? 1 : 0}\x00${bgColorProbe}\x00${headingProbe}`;
+			cacheKey = this.#renderCacheKey(normalizedText, signature);
 			const cached = renderCache.get(cacheKey);
 			if (cached !== undefined) {
 				// Populate L1 so subsequent calls from this instance are O(1) map lookup.
@@ -1061,95 +1001,10 @@ export class Markdown implements Component {
 
 		// Parse markdown to HTML-like tokens
 		const tokens = this.#lexTokens(normalizedText);
-
-		// Margins/background shared by every content line.
-		const leftMargin = padding(paddingX);
-		const rightMargin = padding(paddingX);
-		const bgFn = this.#defaultTextStyle?.bgColor;
-		const transient = this.transientRenderCache;
-		const frozenPrefixText = this.#streamPrefixText;
-		const frozenCount = transient ? (this.#streamPrefixTokens?.length ?? 0) : 0;
-		const cacheableCount = Math.max(0, frozenCount - 1);
-		let contentLines: string[];
-		if (transient && cacheableCount > 0 && frozenPrefixText !== undefined) {
-			const bgColorProbe = this.#defaultTextStyle?.bgColor ? this.#defaultTextStyle.bgColor("\x01") : "";
-			const headingProbe = this.#theme.heading("");
-			// Include the same style-output probes as the L2 key: cached prefix lines
-			// are already styled/backgrounded, so a theme/bgColor function that changes
-			// output without changing object identity must invalidate them.
-			const rpKey = `${width}\x00${paddingX}\x00${this.#codeBlockIndent}\x00${objectId(this.#theme)}\x00${this.#defaultTextStyle ? objectId(this.#defaultTextStyle) : -1}\x00${TERMINAL.imageProtocol ?? ""}\x00${TERMINAL.hyperlinks ? 1 : 0}\x00${TERMINAL.textSizing ? 1 : 0}\x00${bgColorProbe}\x00${headingProbe}`;
-			if (this.#rpKey !== rpKey || !this.#rpLines) {
-				this.#rpKey = rpKey;
-				this.#rpTokenCount = 0;
-				this.#rpLines = [];
-				this.#rpFrozenText = undefined;
-			}
-			// Content-identity guard: a non-append edit re-freezes a DIFFERENT prefix
-			// that may still startsWith/count-match the old one. Reject unless the
-			// current frozen text still has the cached one as a verbatim prefix.
-			if (this.#rpFrozenText !== undefined && !frozenPrefixText.startsWith(this.#rpFrozenText)) {
-				this.#rpTokenCount = 0;
-				this.#rpLines.length = 0;
-			}
-			this.#rpFrozenText = frozenPrefixText;
-			// The prefix can't shrink under append-only growth; guard anyway.
-			if (this.#rpTokenCount > cacheableCount) {
-				this.#rpTokenCount = 0;
-				this.#rpLines.length = 0;
-			}
-			// Extend the cached prefix to cover [0..cacheableCount).
-			if (this.#rpTokenCount < cacheableCount) {
-				const ext = this.#renderTokenRange(
-					tokens,
-					this.#rpTokenCount,
-					cacheableCount,
-					contentWidth,
-					width,
-					leftMargin,
-					rightMargin,
-					bgFn,
-				);
-				for (let i = 0; i < ext.length; i++) this.#rpLines!.push(ext[i]!);
-				this.#rpTokenCount = cacheableCount;
-			}
-			// Render the tail [cacheableCount .. end) fresh each tick.
-			const tail = this.#renderTokenRange(
-				tokens,
-				cacheableCount,
-				tokens.length,
-				contentWidth,
-				width,
-				leftMargin,
-				rightMargin,
-				bgFn,
-			);
-			contentLines = this.#rpLines!.length > 0 ? [...this.#rpLines!, ...tail] : tail;
-		} else {
-			// No frozen prefix yet (early ticks), non-transient, or post-finalize:
-			// full render and drop any stale prefix cache.
-			this.#rpKey = undefined;
-			this.#rpFrozenText = undefined;
-			this.#rpTokenCount = 0;
-			this.#rpLines = undefined;
-			contentLines = this.#renderTokenRange(
-				tokens,
-				0,
-				tokens.length,
-				contentWidth,
-				width,
-				leftMargin,
-				rightMargin,
-				bgFn,
-			);
-		}
-
-		// Add top/bottom padding (empty lines)
-		const emptyLine = padding(width);
-		const emptyLines: string[] = [];
-		for (let i = 0; i < this.#paddingY; i++) {
-			const line = bgFn ? applyBackgroundToLine(emptyLine, width, bgFn) : emptyLine;
-			emptyLines.push(line);
-		}
+		const contentLines = this.transientRenderCache
+			? this.#renderStreamingContentLines(tokens, normalizedText, signature, contentWidth)
+			: this.#renderContentLines(tokens, 0, tokens.length, contentWidth, signature);
+		const emptyLines = this.#renderEmptyPaddingLines(signature);
 
 		// Combine top padding, content, and bottom padding
 		const rawResult = [...emptyLines, ...contentLines, ...emptyLines];
@@ -1169,6 +1024,168 @@ export class Markdown implements Component {
 		}
 
 		return result;
+	}
+
+	#renderSignature(width: number, paddingX: number): RenderSignature {
+		const bgColorProbe = this.#defaultTextStyle?.bgColor ? this.#defaultTextStyle.bgColor("\x01") : "";
+		const headingProbe = this.#theme.heading("");
+		return {
+			width,
+			paddingX,
+			paddingY: this.#paddingY,
+			codeBlockIndent: this.#codeBlockIndent,
+			themeId: objectId(this.#theme),
+			defaultTextStyleId: this.#defaultTextStyle ? objectId(this.#defaultTextStyle) : -1,
+			imageProtocol: TERMINAL.imageProtocol ?? "",
+			hyperlinks: TERMINAL.hyperlinks,
+			textSizing: TERMINAL.textSizing,
+			bgColorProbe,
+			headingProbe,
+		};
+	}
+
+	#renderCacheKey(normalizedText: string, signature: RenderSignature): string {
+		return `${normalizedText}\x00${signature.width}\x00${signature.paddingX}\x00${signature.paddingY}\x00${signature.codeBlockIndent}\x00${signature.themeId}\x00${signature.defaultTextStyleId}\x00${signature.imageProtocol}\x00${signature.hyperlinks ? 1 : 0}\x00${signature.textSizing ? 1 : 0}\x00${signature.bgColorProbe}\x00${signature.headingProbe}`;
+	}
+
+	#renderStreamingContentLines(
+		tokens: Token[],
+		normalizedText: string,
+		signature: RenderSignature,
+		contentWidth: number,
+	): string[] {
+		const frozenText = this.#streamPrefixText;
+		const frozenTokenCount = this.#streamPrefixTokens?.length ?? 0;
+		if (frozenText === undefined || frozenTokenCount === 0 || !normalizedText.startsWith(frozenText)) {
+			return this.#renderContentLines(tokens, 0, tokens.length, contentWidth, signature);
+		}
+
+		const contentLines: string[] = [];
+		const reusablePrefix = this.#matchingStreamPrefixLineCache(normalizedText, frozenText, signature);
+		let renderedUntil = 0;
+		if (reusablePrefix && reusablePrefix.tokenCount <= frozenTokenCount) {
+			contentLines.push(...reusablePrefix.lines);
+			renderedUntil = reusablePrefix.tokenCount;
+		}
+
+		if (renderedUntil < frozenTokenCount) {
+			contentLines.push(
+				...this.#renderContentLines(tokens, renderedUntil, frozenTokenCount, contentWidth, signature),
+			);
+			renderedUntil = frozenTokenCount;
+		}
+
+		this.#streamPrefixLineCache = {
+			...signature,
+			text: frozenText,
+			tokenCount: frozenTokenCount,
+			lines: contentLines.slice(),
+		};
+
+		if (renderedUntil < tokens.length) {
+			contentLines.push(...this.#renderContentLines(tokens, renderedUntil, tokens.length, contentWidth, signature));
+		}
+
+		return contentLines;
+	}
+
+	#matchingStreamPrefixLineCache(
+		normalizedText: string,
+		frozenText: string,
+		signature: RenderSignature,
+	): StreamPrefixLineCache | undefined {
+		const cache = this.#streamPrefixLineCache;
+		if (!cache) return undefined;
+		if (!normalizedText.startsWith(cache.text) || !frozenText.startsWith(cache.text)) return undefined;
+		if (cache.width !== signature.width) return undefined;
+		if (cache.paddingX !== signature.paddingX) return undefined;
+		if (cache.paddingY !== signature.paddingY) return undefined;
+		if (cache.codeBlockIndent !== signature.codeBlockIndent) return undefined;
+		if (cache.themeId !== signature.themeId) return undefined;
+		if (cache.defaultTextStyleId !== signature.defaultTextStyleId) return undefined;
+		if (cache.imageProtocol !== signature.imageProtocol) return undefined;
+		if (cache.hyperlinks !== signature.hyperlinks) return undefined;
+		if (cache.textSizing !== signature.textSizing) return undefined;
+		if (cache.bgColorProbe !== signature.bgColorProbe) return undefined;
+		if (cache.headingProbe !== signature.headingProbe) return undefined;
+		return cache;
+	}
+
+	#renderContentLines(
+		tokens: Token[],
+		start: number,
+		end: number,
+		contentWidth: number,
+		signature: RenderSignature,
+	): string[] {
+		const renderedLines: string[] = [];
+		for (let i = start; i < end; i++) {
+			const token = tokens[i];
+			const nextToken = tokens[i + 1];
+			renderedLines.push(...this.#renderToken(token, contentWidth, nextToken?.type));
+		}
+
+		const wrappedLines: string[] = [];
+		for (const line of renderedLines) {
+			// Skip wrapping for image protocol lines and OSC 66 sized headings
+			// (would corrupt escape sequences / split the indivisible sized span).
+			if (TERMINAL.isImageLine(line) || isOsc66Line(line)) {
+				wrappedLines.push(line);
+			} else {
+				wrappedLines.push(...wrapTextWithAnsi(line, contentWidth));
+			}
+		}
+
+		const leftMargin = padding(signature.paddingX);
+		const rightMargin = padding(signature.paddingX);
+		const bgFn = this.#defaultTextStyle?.bgColor;
+		const contentLines: string[] = [];
+		let previousLineWasOsc66 = false;
+
+		for (const line of wrappedLines) {
+			// The first empty row after a scale>1 OSC 66 heading is structural:
+			// it reserves the lower cells occupied by the multicell glyphs. Do
+			// not pad or background-fill it, because real spaces on that row can
+			// interact with Kitty's multicell overwrite rules during the first
+			// paint. Leave it as a cursor-only newline.
+			if (previousLineWasOsc66 && line === "") {
+				contentLines.push("");
+				previousLineWasOsc66 = false;
+				continue;
+			}
+
+			// Image lines and OSC 66 sized headings must be output raw - no margins or background
+			if (TERMINAL.isImageLine(line) || isOsc66Line(line)) {
+				contentLines.push(line);
+				previousLineWasOsc66 = isOsc66Line(line);
+				continue;
+			}
+
+			previousLineWasOsc66 = false;
+			const lineWithMargins = leftMargin + line + rightMargin;
+
+			if (bgFn) {
+				contentLines.push(applyBackgroundToLine(lineWithMargins, signature.width, bgFn));
+			} else {
+				// No background - just pad to width
+				const visibleLen = visibleWidth(lineWithMargins);
+				const paddingNeeded = Math.max(0, signature.width - visibleLen);
+				contentLines.push(lineWithMargins + padding(paddingNeeded));
+			}
+		}
+
+		return contentLines;
+	}
+
+	#renderEmptyPaddingLines(signature: RenderSignature): string[] {
+		const emptyLine = padding(signature.width);
+		const emptyLines: string[] = [];
+		const bgFn = this.#defaultTextStyle?.bgColor;
+		for (let i = 0; i < signature.paddingY; i++) {
+			const line = bgFn ? applyBackgroundToLine(emptyLine, signature.width, bgFn) : emptyLine;
+			emptyLines.push(line);
+		}
+		return emptyLines;
 	}
 
 	/**

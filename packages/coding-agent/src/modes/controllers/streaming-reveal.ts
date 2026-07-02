@@ -11,6 +11,7 @@ export const CATCHUP_FRAMES = 8;
 type AssistantContentBlock = AssistantMessage["content"][number];
 type DisplayThinkingContentBlock = Extract<AssistantContentBlock, { type: "thinking" }> & { rawThinking?: string };
 type StreamingRevealComponent = Pick<AssistantMessageComponent, "updateContent">;
+type GraphemeSlicer = (index: number, text: string, units: number) => string;
 
 type StreamingRevealControllerOptions = {
 	getSmoothStreaming(): boolean;
@@ -44,16 +45,29 @@ function countGraphemesFrom(text: string, start: number): { count: number; tailS
 	}
 	return { count, tailStart };
 }
+/** Segment `text` from code-unit offset `start`, walking up to `clusters`
+ *  graphemes. Returns the code-unit END of the final cluster walked, its START
+ *  (`lastStart`), and how many clusters were found (`count` may be less than
+ *  `clusters` if the suffix is shorter than requested). */
+function segmentFrom(text: string, start: number, clusters: number): { end: number; lastStart: number; count: number } {
+	let count = 0;
+	let lastStart = start;
+	let end = start;
+	for (const seg of getSegmenter().segment(start === 0 ? text : text.slice(start))) {
+		count += 1;
+		lastStart = start + seg.index;
+		end = start + seg.index + seg.segment.length;
+		if (count >= clusters) break;
+	}
+	return { end, lastStart, count };
+}
 
 /** Memoizes per-block grapheme counts across reveal ticks. Streaming blocks only
  *  grow by appending, and an append can only alter the final grapheme cluster of
  *  the previous text, so only the suffix from that cluster needs re-segmenting. */
 export class BlockUnitCounter {
 	#entries = new Map<number, { text: string; count: number; tailStart: number }>();
-	// Per-block slice cursor: the code-unit offset of the `units`-th grapheme and
-	// the start of that final grapheme cluster, so a reveal tick resumes from the
-	// boundary cluster instead of re-segmenting from offset 0.
-	#sliceEntries = new Map<number, { text: string; units: number; offset: number; lastStart: number }>();
+	#sliceEntries = new Map<number, { text: string; units: number; end: number; lastStart: number }>();
 
 	count(index: number, text: string): number {
 		const entry = this.#entries.get(index);
@@ -71,79 +85,31 @@ export class BlockUnitCounter {
 		return full.count;
 	}
 
-	/** Slice `text` to its first `units` graphemes, resuming from the cached
-	 *  boundary cluster when `text` is unchanged or has only grown (append-only,
-	 *  the streaming case). The reveal position advances monotonically while the
-	 *  target text is fixed or appending, so each tick segments only the new
-	 *  graphemes rather than the whole revealed prefix. */
-	slice(index: number, text: string, units: number): string {
-		if (units <= 0 || text.length === 0) return "";
-		const e = this.#sliceEntries.get(index);
-		if (e !== undefined && text.startsWith(e.text)) {
-			if (text === e.text && units === e.units) {
-				// Exact cache hit — text unchanged, so the cached offset is valid.
-				return e.offset >= text.length ? text : text.slice(0, e.offset);
-			}
-			if (units >= e.units) {
-				// Text unchanged or only appended, and the reveal point hasn't moved
-				// backward. Resume from the boundary cluster: an append can EXTEND that
-				// final cluster (e.g. "a" → "a\u0301"), so even an unchanged unit count
-				// must re-segment it rather than trust a now-stale offset.
-				return this.#advanceSlice(index, text, units, e);
-			}
-			// units < e.units: reveal shrank (rare, e.g. a resync clamp) — re-segment.
-		}
-		return this.#fullSlice(index, text, units);
-	}
-
-	/** Extend the cached slice (e.units graphemes) to `units` by segmenting only
-	 *  from the boundary cluster start. An append can extend that final cluster,
-	 *  so the first segment from `lastStart` is re-counted (mirroring `count`'s
-	 *  tailStart logic) rather than blindly trusting e.offset. */
-	#advanceSlice(
-		index: number,
-		text: string,
-		units: number,
-		e: { text: string; units: number; offset: number; lastStart: number },
-	): string {
-		const base = e.lastStart;
-		if (base >= text.length) return text;
-		const tail = base === 0 ? text : text.slice(base);
-		// Grapheme #e.units is the first segment from `base`; reach through #units.
-		const need = units - e.units + 1;
-		let consumed = 0;
-		let segStart = 0;
-		let segEnd = 0;
-		for (const seg of getSegmenter().segment(tail)) {
-			segStart = seg.index;
-			segEnd = seg.index + seg.segment.length;
-			if (++consumed >= need) break;
-		}
-		if (consumed === 0) return text;
-		const actualUnits = e.units - 1 + consumed;
-		const newOffset = base + segEnd;
-		const newLastStart = base + segStart;
-		this.#sliceEntries.set(index, { text, units: actualUnits, offset: newOffset, lastStart: newLastStart });
-		return newOffset >= text.length ? text : text.slice(0, newOffset);
-	}
-
-	#fullSlice(index: number, text: string, units: number): string {
-		let count = 0;
-		let segStart = 0;
-		let segEnd = 0;
-		for (const seg of getSegmenter().segment(text)) {
-			count++;
-			segStart = seg.index;
-			segEnd = seg.index + seg.segment.length;
-			if (count >= units) break;
-		}
-		this.#sliceEntries.set(index, { text, units: count, offset: segEnd, lastStart: segStart });
-		return segEnd === 0 || segEnd >= text.length ? text : text.slice(0, segEnd);
-	}
-
 	reset(): void {
 		this.#entries.clear();
 		this.#sliceEntries.clear();
+	}
+	/** Slice `text` to its first `units` graphemes. Memoized across reveal ticks:
+	 *  streaming blocks grow only by appending and the reveal target advances
+	 *  monotonically, so a previously sliced prefix is reused and only the suffix
+	 *  from the boundary cluster is re-segmented. Only an exact (text, units) hit
+	 *  skips segmentation entirely — an append can extend the boundary cluster, so
+	 *  the incremental path still re-segments from that cluster's start. */
+	slice(index: number, text: string, units: number): string {
+		if (units <= 0 || text.length === 0) return "";
+		const entry = this.#sliceEntries.get(index);
+		if (entry !== undefined && entry.text === text && entry.units === units) {
+			return entry.end >= text.length ? text : text.slice(0, entry.end);
+		}
+		if (entry !== undefined && (entry.text === text || text.startsWith(entry.text)) && units >= entry.units) {
+			const extra = units - entry.units + 1;
+			const seg = segmentFrom(text, entry.lastStart, extra);
+			this.#sliceEntries.set(index, { text, units, end: seg.end, lastStart: seg.lastStart });
+			return seg.end >= text.length ? text : text.slice(0, seg.end);
+		}
+		const seg = segmentFrom(text, 0, units);
+		this.#sliceEntries.set(index, { text, units, end: seg.end, lastStart: seg.lastStart });
+		return seg.end >= text.length ? text : text.slice(0, seg.end);
 	}
 }
 
@@ -180,7 +146,7 @@ function revealTextBlock(
 	remaining: number,
 	units: number,
 	index: number,
-	sliceOf: (index: number, text: string, units: number) => string,
+	sliceOf: GraphemeSlicer,
 ): AssistantContentBlock {
 	if (remaining <= 0) return block.text.length === 0 ? block : { ...block, text: "" };
 	if (remaining >= units) return block;
@@ -192,7 +158,7 @@ function revealThinkingBlock(
 	remaining: number,
 	units: number,
 	index: number,
-	sliceOf: (index: number, text: string, units: number) => string,
+	sliceOf: GraphemeSlicer,
 ): AssistantContentBlock {
 	if (remaining <= 0) return block.thinking.length === 0 ? block : { ...block, thinking: "" };
 	if (remaining >= units) return block;
@@ -205,8 +171,7 @@ export function buildDisplayMessage(
 	hideThinking: boolean,
 	proseOnly = true,
 	countOf: (index: number, text: string) => number = (_index, text) => countGraphemes(text),
-	sliceOf: (index: number, text: string, units: number) => string = (_index, text, units) =>
-		sliceGraphemes(text, units),
+	sliceOf: GraphemeSlicer = (_index, text, units) => sliceGraphemes(text, units),
 ): AssistantMessage {
 	let remaining = Math.max(0, Math.floor(revealed));
 	const content: AssistantContentBlock[] = [];
@@ -264,6 +229,16 @@ export class StreamingRevealController {
 		this.#getProseOnlyThinking = options.getProseOnlyThinking;
 		this.#requestRender = options.requestRender;
 	}
+	#build(target: AssistantMessage, revealed: number): AssistantMessage {
+		return buildDisplayMessage(
+			target,
+			revealed,
+			this.#hideThinkingBlock,
+			this.#proseOnlyThinking,
+			this.#countOf,
+			this.#sliceOf,
+		);
+	}
 
 	begin(component: StreamingRevealComponent, message: AssistantMessage): void {
 		this.stop();
@@ -275,17 +250,7 @@ export class StreamingRevealController {
 		this.#smoothStreaming = this.#getSmoothStreaming();
 		if (!this.#smoothStreaming) {
 			const total = this.#visibleUnits(message);
-			component.updateContent(
-				buildDisplayMessage(
-					message,
-					total,
-					this.#hideThinkingBlock,
-					this.#proseOnlyThinking,
-					this.#countOf,
-					this.#sliceOf,
-				),
-				{ transient: true },
-			);
+			component.updateContent(this.#build(message, total), { transient: true });
 			return;
 		}
 		const total = this.#visibleUnits(message);
@@ -293,19 +258,9 @@ export class StreamingRevealController {
 			// A tool call is a transcript-order boundary: finish any leading
 			// assistant text before EventController renders the separate tool card.
 			this.#revealed = total;
-			component.updateContent(
-				buildDisplayMessage(
-					message,
-					this.#revealed,
-					this.#hideThinkingBlock,
-					this.#proseOnlyThinking,
-					this.#countOf,
-					this.#sliceOf,
-				),
-				{
-					transient: true,
-				},
-			);
+			component.updateContent(this.#build(message, this.#revealed), {
+				transient: true,
+			});
 			return;
 		}
 		this.#renderCurrent();
@@ -320,17 +275,7 @@ export class StreamingRevealController {
 		if (!this.#component) return;
 		if (!this.#smoothStreaming) {
 			const total = this.#visibleUnits(message);
-			this.#component.updateContent(
-				buildDisplayMessage(
-					message,
-					total,
-					this.#hideThinkingBlock,
-					this.#proseOnlyThinking,
-					this.#countOf,
-					this.#sliceOf,
-				),
-				{ transient: true },
-			);
+			this.#component.updateContent(this.#build(message, total), { transient: true });
 			return;
 		}
 		const total = this.#visibleUnits(message);
@@ -339,19 +284,9 @@ export class StreamingRevealController {
 			// assistant text before EventController renders the separate tool card.
 			this.#revealed = total;
 			this.#stopTimer();
-			this.#component.updateContent(
-				buildDisplayMessage(
-					message,
-					this.#revealed,
-					this.#hideThinkingBlock,
-					this.#proseOnlyThinking,
-					this.#countOf,
-					this.#sliceOf,
-				),
-				{
-					transient: true,
-				},
-			);
+			this.#component.updateContent(this.#build(message, this.#revealed), {
+				transient: true,
+			});
 			return;
 		}
 		if (this.#revealed > total) {
@@ -408,17 +343,7 @@ export class StreamingRevealController {
 		// Every controller render is an in-flight streaming snapshot, even when
 		// smooth reveal has temporarily caught up to the current target. The
 		// message_end handler performs the only stable non-transient render.
-		this.#component.updateContent(
-			buildDisplayMessage(
-				this.#target,
-				this.#revealed,
-				this.#hideThinkingBlock,
-				this.#proseOnlyThinking,
-				this.#countOf,
-				this.#sliceOf,
-			),
-			{ transient: true },
-		);
+		this.#component.updateContent(this.#build(this.#target, this.#revealed), { transient: true });
 	}
 
 	#syncTimer(total = this.#target ? this.#visibleUnits(this.#target) : 0): void {
@@ -456,19 +381,9 @@ export class StreamingRevealController {
 			return;
 		}
 		this.#revealed = Math.min(total, this.#revealed + nextStep(total - this.#revealed));
-		component.updateContent(
-			buildDisplayMessage(
-				target,
-				this.#revealed,
-				this.#hideThinkingBlock,
-				this.#proseOnlyThinking,
-				this.#countOf,
-				this.#sliceOf,
-			),
-			{
-				transient: true,
-			},
-		);
+		component.updateContent(this.#build(target, this.#revealed), {
+			transient: true,
+		});
 		this.#requestRender();
 		if (this.#revealed >= total) {
 			this.#stopTimer();

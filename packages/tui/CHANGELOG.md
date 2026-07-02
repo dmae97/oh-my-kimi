@@ -2,9 +2,42 @@
 
 ## [Unreleased]
 
-### Changed
+## [16.3.0] - 2026-07-02
 
-- Markdown transient (streaming) renders now cache the rendered content lines for the stable streaming-lex prefix and re-render only the changed tail each tick, reducing per-frame render cost from O(whole revealed message) to O(delta). Output is byte-identical to the full pipeline.
+### Fixed
+
+- Fixed a potential event loop hang when processing oversized, unterminated terminal escape sequences (OSC/DCS/APC).
+- Fixed an issue where large Windows terminal session restores could get truncated mid-frame during ConPTY full-paint resume.
+
+## [16.2.13] - 2026-07-01
+
+### Fixed
+
+- Fixed fuzzy-search filtering for CJK and other non-ASCII queries by preserving Unicode letters and numbers during query normalization ([#4114](https://github.com/can1357/oh-my-pi/issues/4114)).
+
+## [16.2.12] - 2026-07-01
+
+### Fixed
+
+- Optimized streaming markdown rendering to reuse already-rendered prefix lines and only render new content deltas, improving performance and reducing redraw flicker.
+
+## [16.2.10] - 2026-06-30
+
+### Fixed
+
+- Fixed mid-prompt `/skill:<name>` autocomplete acceptance wiping the user's draft. The autocomplete now inserts the `/skill:<name> ` token at the cursor (replacing only the partial `/sk` slash token) and preserves prose typed before and after it, so a user can compose a prompt and reach for a skill without losing their train of thought ([#3913](https://github.com/can1357/oh-my-pi/issues/3913)).
+
+## [16.2.9] - 2026-06-30
+
+### Added
+
+- Added `Editor.submit()` to allow programmatic composer submission, enabling integration with speech input and other automated flows.
+
+## [16.2.7] - 2026-06-30
+
+### Fixed
+
+- Fixed an issue where a fast double-Escape keypress was swallowed and ignored, preventing double-escape gestures and subsequent Escape key handlers from firing.
 
 ## [16.2.3] - 2026-06-28
 
@@ -565,7 +598,7 @@
 
 ### Changed
 
-- Changed native-scrollback safety defaults to treat unknown POSIX, SSH, and multiplexer-shaped terminals as ED3-risk for passive rendering; checkpoint replay now requires a positive at-tail viewport proof instead of assuming prompt submit makes host scrollback safe ([#1799](https://github.com/can1357/oh-my-pi/issues/1799)).
+- Changed native-scrollback safety defaults to treat unknown POSIX, SSH, and multiplexer-shaped terminals as ED3-risk for passive rendering; checkpoint replay now requires a positive at-tail viewport proof instead of assuming prompt submit makes host scrollback safe.
 - Changed synchronized-output defaults to a conservative opt-in profile: DEC 2026 paint wrappers stay disabled for remote/multiplexer/VTE/unknown terminals unless explicitly forced, while the autowrap guards remain active.
 
 ### Fixed
