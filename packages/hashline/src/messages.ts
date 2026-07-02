@@ -54,7 +54,7 @@ export const BARE_BODY_AUTO_PIPED_WARNING =
 
 /** Unified-diff-style `-` row in a hunk body. */
 export const MINUS_ROW_REJECTED =
-	"`-` rows are not valid; the range already names the lines being changed. For a literal `-` line, write `+-…`.";
+	"`-` rows are not valid; the range already names the lines being changed. For Markdown bullets or other literal `-` lines, prefix the literal row with `+`: `+- item`.";
 
 /** Replace hunk with no body. */
 export const EMPTY_REPLACE = `\`SWAP N${HL_RANGE_SEP}M:\` needs at least one \`+TEXT\` body row. To delete lines, use \`DEL N${HL_RANGE_SEP}M\`.`;

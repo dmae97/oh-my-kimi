@@ -8,6 +8,7 @@
 - Fixed tracking of edit anchors when earlier in-session insertions or deletions shift unchanged target lines.
 - Fixed recovery and edit-preview paths still treating a 16-bit snapshot tag as exact identity after collision-aware retention landed: ambiguous colliding tags now fall through to recovery/rejection (`byHashExact`) instead of applying anchors against the most-recent collider.
 - Reduced stale-anchor remap validation from quadratic to linear: duplicate-line detection and anchor-neighbor context are now precomputed once per pass instead of scanning the whole file per anchor.
+- Fixed hashline edit guidance for Markdown list rows by teaching `+- item` escaping in the model prompt and minus-row parser error. ([#4179](https://github.com/can1357/oh-my-pi/issues/4179))
 
 ## [16.2.8] - 2026-06-30
 

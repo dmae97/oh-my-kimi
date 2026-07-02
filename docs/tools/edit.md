@@ -43,7 +43,7 @@ Patch language inside `input`:
   - Every body row is `+TEXT`; `+` alone adds a blank line.
   - `DEL` never has body rows.
   - There is no repeat row kind. To keep a line, leave it out of every range; split edits into multiple hunks when needed.
-  - `-` rows are invalid. Literal text beginning with `-` or `+` must be written as `+-text` / `++text`.
+  - `-` rows are invalid. Literal Markdown bullets or text beginning with `-` / `+` must be written as `+- item` / `++ item`.
 
 Anchors come from `read`/`grep` output. `read` emits a `[PATH#TAG]` header from the session snapshot store and lines as `LINE:TEXT`; copy the header into the edit section and copy only the line number into hunk headers.
 
@@ -165,7 +165,7 @@ DEL 20
 - Stray payload line:
   - `line N: payload line has no preceding hunk header. Use \`SWAP N.=M:\`, \`DEL N.=M\`, or \`INS.PRE|POST|HEAD|TAIL:\` above the body. Got "...".`
 - Minus row:
-  - ``line N: `-` rows are not valid; the range already names the lines being changed. For a literal `-` line, write `+-…`.``
+  - ``line N: `-` rows are not valid; the range already names the lines being changed. For Markdown bullets or other literal `-` lines, prefix the literal row with `+`: `+- item`.``
 - Empty body-bearing hunk:
   - `line N: \`INS\` needs at least one \`+TEXT\` body row.`
   - `line N: \`SWAP.BLK N:\` needs at least one \`+TEXT\` body row. To delete a block, use \`DEL.BLK N\`.`
