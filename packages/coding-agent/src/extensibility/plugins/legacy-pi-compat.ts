@@ -1005,10 +1005,14 @@ async function collectExtensionModules(entryRealPath: string): Promise<Map<strin
  * so the filter is an exact-path alternation of the graph's realpaths — it
  * never matches the host, other extensions, `node_modules` deps, or unrelated
  * project source.
+ *
+ * Returns the collected path→source map on first install so the caller can
+ * drop entries the initial import never consumed; `undefined` when the hook
+ * was already installed.
  */
-async function ensureExtensionGraphHook(entryRealPath: string): Promise<void> {
+async function ensureExtensionGraphHook(entryRealPath: string): Promise<Map<string, string> | undefined> {
 	if (hookedExtensionEntries.has(entryRealPath)) {
-		return;
+		return undefined;
 	}
 	hookedExtensionEntries.add(entryRealPath);
 
@@ -1032,6 +1036,7 @@ async function ensureExtensionGraphHook(entryRealPath: string): Promise<void> {
 			});
 		},
 	});
+	return modules;
 }
 
 /**
@@ -1050,9 +1055,16 @@ export async function loadLegacyPiModule(resolvedPath: string): Promise<unknown>
 	// `bun link`/pnpm installs) so the rewrite filter matches the path Bun
 	// actually hands the hook.
 	const entryRealPath = await realpathOrSelf(path.resolve(resolvedPath));
-	await ensureExtensionGraphHook(entryRealPath);
-	// `?mtime` busts Bun's module cache so repeat loads pick up edited source.
-	return import(`${toImportSpecifier(entryRealPath)}?mtime=${Date.now()}`);
+	const pendingSources = await ensureExtensionGraphHook(entryRealPath);
+	try {
+		// `?mtime` busts Bun's module cache so repeat loads pick up edited source.
+		return await import(`${toImportSpecifier(entryRealPath)}?mtime=${Date.now()}`);
+	} finally {
+		// Drop whatever the initial import didn't consume: graph modules only
+		// reached by lazy dynamic imports must be read from disk at their actual
+		// import time, not served from this load-time snapshot.
+		pendingSources?.clear();
+	}
 }
 
 function getLoader(path: string): "js" | "jsx" | "ts" | "tsx" {

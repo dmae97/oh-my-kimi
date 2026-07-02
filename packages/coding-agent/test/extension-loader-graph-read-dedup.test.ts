@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, type Mock, spyOn } from "b
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
+import { loadLegacyPiModule } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/legacy-pi-compat";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import type { BunFile } from "bun";
 
@@ -97,5 +98,33 @@ export default function(pi) {
 		for (let i = 0; i < numModules; i++) {
 			checkReadCount(path.join(extDir, `mod-${i}.ts`));
 		}
+	});
+
+	it("should read graph modules skipped by the initial import from disk at import time", async () => {
+		const cwd = tempDir.absolute();
+		const extDir = path.join(cwd, "ext");
+		fs.mkdirSync(extDir, { recursive: true });
+
+		const lazyPath = path.join(extDir, "lazy.ts");
+		fs.writeFileSync(lazyPath, `export const value = "before";\n`, "utf-8");
+
+		// The fixture's dynamic import is the loading boundary under test: the
+		// graph scan collects `./lazy.ts` at load time, but nothing imports it
+		// until `readLazy()` runs.
+		const entryPath = path.join(extDir, "index.ts");
+		const entryContent = `export async function readLazy(): Promise<string> {
+	const mod = await import("./lazy.ts");
+	return mod.value;
+}
+`;
+		fs.writeFileSync(entryPath, entryContent, "utf-8");
+
+		const ns = (await loadLegacyPiModule(entryPath)) as { readLazy(): Promise<string> };
+
+		// Edit the module after load but before its first import: the loader
+		// must serve the on-disk content, not a stale load-time snapshot.
+		fs.writeFileSync(lazyPath, `export const value = "after";\n`, "utf-8");
+
+		expect(await ns.readLazy()).toBe("after");
 	});
 });
