@@ -2934,7 +2934,7 @@ dependencies = [
 
 [[package]]
 name = "pi-ast"
-version = "16.3.0"
+version = "16.3.1"
 dependencies = [
  "anyhow",
  "ast-grep-core",
@@ -3004,7 +3004,7 @@ dependencies = [
 
 [[package]]
 name = "pi-iso"
-version = "16.3.0"
+version = "16.3.1"
 dependencies = [
  "async-trait",
  "libc",
@@ -3016,7 +3016,7 @@ dependencies = [
 
 [[package]]
 name = "pi-natives"
-version = "16.3.0"
+version = "16.3.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3068,7 +3068,7 @@ dependencies = [
 
 [[package]]
 name = "pi-shell"
-version = "16.3.0"
+version = "16.3.1"
 dependencies = [
  "anyhow",
  "brush-builtins",
@@ -3117,7 +3117,7 @@ dependencies = [
 
 [[package]]
 name = "pi-walker"
-version = "16.3.0"
+version = "16.3.1"
 dependencies = [
  "dashmap",
  "globset",

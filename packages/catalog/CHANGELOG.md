@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.1] - 2026-07-02
+
 ### Removed
 
 - Removed reasoning suppression prompt logic for GPT-5 models

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.1] - 2026-07-02
+
 ### Changed
 
 - Removed automated injection of reasoning suppression prompts in OpenAI responses
