@@ -842,7 +842,13 @@ export class Markdown implements Component {
 		this.#codeBlockIndent = Math.max(0, Math.floor(codeBlockIndent));
 	}
 
-	setText(text: string): void {
+	setText(text: string): boolean {
+		// Equality guard: streaming re-emits identical text on ticks that carried
+		// no delta (throttled provider frames, reconciled tool-execution updates).
+		// Without this, the caller-side `#cachedLines` gets thrown away and the
+		// full lex + wrap runs per re-emit — one of the top CPU hotspots during
+		// streaming (issue #4353). Mirrors `Text.setText`'s guard.
+		if (text === this.#text) return false;
 		this.#text = text;
 		if (!text.trim()) {
 			// Blank replacement: render() early-returns before #lexTokens can see
@@ -853,6 +859,7 @@ export class Markdown implements Component {
 			this.#streamPrefixLineCache = undefined;
 		}
 		this.invalidate();
+		return true;
 	}
 
 	invalidate(): void {

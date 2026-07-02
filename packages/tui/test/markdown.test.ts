@@ -1533,6 +1533,23 @@ describe("Markdown.render reference stability", () => {
 		expect(md.render(40)).toBe(after);
 	});
 
+	it("skips invalidation when setText receives the same string (streaming re-emit guard)", () => {
+		// #4353: streaming re-emits identical text on ticks with no visible delta
+		// (throttled provider frames, reconciled tool-execution updates). Without
+		// the equality guard, every re-emit would drop `#cachedLines` and force a
+		// full lex + wrap — one of the top CPU hotspots during streaming. The
+		// guard mirrors `Text.setText`.
+		const md = new Markdown("streamed content", 1, 0, defaultMarkdownTheme);
+		const before = md.render(40);
+		const changed = md.setText("streamed content");
+		expect(changed).toBe(false);
+		expect(md.render(40)).toBe(before);
+
+		const changedAgain = md.setText("new content");
+		expect(changedAgain).toBe(true);
+		expect(md.render(40)).not.toBe(before);
+	});
+
 	it("returns a different reference per width, each with correctly fitted rows", () => {
 		const md = new Markdown("Width sentinel content", 1, 0, defaultMarkdownTheme);
 		const narrow = md.render(30);

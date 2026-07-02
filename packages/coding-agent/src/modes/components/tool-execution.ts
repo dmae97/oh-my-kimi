@@ -182,12 +182,14 @@ export interface ToolExecutionHandle {
 	setExpanded(expanded: boolean): void;
 }
 
-/** Drive pending-tool redraws at 30fps for live tool headers and displaceable
- * poll blocks. The TUI throttles at the same cadence, and static frames diff to
- * a no-op redraw at ~zero cost. */
-export const SPINNER_RENDER_INTERVAL_MS = 1000 / 30;
-/** Advance the spinner glyph at its classic ~12.5fps step, decoupled from the
- * render cadence (mirrors `Loader`). */
+/** Redraw live tool blocks at the spinner's glyph-advance rate. Rendering more
+ * often produced identical frames — the previous 30fps cadence emitted ~2.4
+ * paints per glyph step, and although the terminal I/O layer dedupes those, the
+ * compose pipeline still ran end-to-end per frame (issue #4353). Matching the
+ * render tick to the glyph tick halves the paints during tool execution with no
+ * visible change. */
+export const SPINNER_RENDER_INTERVAL_MS = 80;
+/** Advance the spinner glyph at its classic ~12.5fps step (mirrors `Loader`). */
 export const SPINNER_GLYPH_ADVANCE_MS = 80;
 
 /** Phase-locked spinner glyph index shared by every live tool block so parallel
