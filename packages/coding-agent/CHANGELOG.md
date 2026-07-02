@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed malformed `pi.sendMessage` custom-message payloads persisting bare session entries that crashed every later resume before provider calls. ([#4345](https://github.com/can1357/oh-my-pi/issues/4345))
+
 ## [16.3.2] - 2026-07-02
 
 ### Breaking Changes

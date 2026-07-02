@@ -24,7 +24,7 @@ import { HookInputComponent } from "../../modes/components/hook-input";
 import { HookSelectorComponent, type HookSelectorSlider } from "../../modes/components/hook-selector";
 import { getAvailableThemesWithPaths, getThemeByName, setTheme, type Theme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext, InteractiveSelectorDialogOptions } from "../../modes/types";
-import { USER_INTERRUPT_LABEL } from "../../session/messages";
+import { normalizeCustomMessagePayload, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { setSessionTerminalTitle, setTerminalTitle } from "../../utils/title-generator";
 
 const MAX_WIDGET_LINES = 10;
@@ -106,9 +106,10 @@ export class ExtensionUiController {
 		const actions: ExtensionActions = {
 			sendMessage: (message, options) => {
 				const wasStreaming = this.ctx.session.isStreaming;
+				const normalized = normalizeCustomMessagePayload(message);
 				this.ctx.session
-					.sendCustomMessage(message, options)
-					.then(() => this.#applyCustomMessageDisplay(wasStreaming, message.display))
+					.sendCustomMessage(normalized, options)
+					.then(() => this.#applyCustomMessageDisplay(wasStreaming, normalized.display))
 					.catch((err: unknown) => {
 						this.ctx.showError(
 							`Extension sendMessage failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -342,9 +343,10 @@ export class ExtensionUiController {
 		const actions: ExtensionActions = {
 			sendMessage: (message, options) => {
 				const wasStreaming = this.ctx.session.isStreaming;
+				const normalized = normalizeCustomMessagePayload(message);
 				this.ctx.session
-					.sendCustomMessage(message, options)
-					.then(() => this.#applyCustomMessageDisplay(wasStreaming, message.display))
+					.sendCustomMessage(normalized, options)
+					.then(() => this.#applyCustomMessageDisplay(wasStreaming, normalized.display))
 					.catch((err: unknown) => {
 						const errorText = `Extension sendMessage failed: ${err instanceof Error ? err.message : String(err)}`;
 						this.ctx.showError(errorText);

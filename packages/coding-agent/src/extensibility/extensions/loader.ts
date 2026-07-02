@@ -18,7 +18,7 @@ import type { ExecOptions } from "../../exec/exec";
 import { execCommand } from "../../exec/exec";
 // Runtime self-reference: dereference this namespace only inside loader functions to keep the index.ts cycle safe.
 import * as PiCodingAgent from "../../index";
-import type { CustomMessage } from "../../session/messages";
+import type { CustomMessagePayload } from "../../session/messages";
 import { EventBus } from "../../utils/event-bus";
 import { installLegacyPiSpecifierShim, loadLegacyPiModule } from "../plugins/legacy-pi-compat";
 import { getAllPluginExtensionPaths } from "../plugins/loader";
@@ -203,7 +203,7 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 	}
 
 	sendMessage<T = unknown>(
-		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
+		message: CustomMessagePayload<T>,
 		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
 	): void {
 		this.runtime.sendMessage(message, options);
