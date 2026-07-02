@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Capped docs.rs gunzip decompressed size at 256 MB to prevent zip-bomb OOM crashes ([#4249](https://github.com/can1357/oh-my-pi/issues/4249))
+
+
 ## [16.3.0] - 2026-07-02
 
 ### Added
