@@ -2,6 +2,7 @@ export * from "./downloader";
 export * from "./models";
 export * from "./runtime";
 export * from "./speakable";
+export * from "./speech-enhancer";
 export * from "./tts-client";
 export * from "./tts-protocol";
 export * from "./tts-worker";

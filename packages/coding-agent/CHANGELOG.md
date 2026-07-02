@@ -6,13 +6,24 @@
 
 - Changed the `grep`, `glob`, and `ast_grep` tools to take a single optional `path` argument instead of a `paths` array. `path` accepts one path or a semicolon-delimited list (`src; tests`); omitting it searches the workspace root (`.`). Multi-path search, delimited expansion, and internal-URL scopes are unchanged. (`ast_edit` continues to take `paths`.)
 
+### Added
+
+- Added `speech.enhanced` setting to rewrite assistant output into natural spoken prose
+
+- Added `speech.enhanced` setting: assistant output is rewritten into natural spoken prose by the tiny/smol model before synthesis — code blocks become one-clause descriptions, links speak their label or site name, numbers and symbols read naturally, lists become flowing sentences. Blocks are rewritten fence-aware and coalesced (bounded to two concurrent completions); any failed or timed-out rewrite falls back to the mechanical cleanup so speech never blocks on the model.
+
 ### Changed
 
 - Redesigned speech vocalization for low latency and clean spoken content. Assistant markdown now runs through a speakable-text pipeline before synthesis: code blocks and tables are silent, links speak their label, bare URLs speak their host, inline-code ticks/emphasis/heading/bullet markers are stripped, and long file paths collapse to their basename. Segmentation is now parent-side and emits at sentence boundaries immediately (the previous engine-side splitter held each sentence until the next one arrived), with clause-level cuts for long sentences and an idle flush when generation stalls mid-sentence. macOS gains a gapless streaming playback backend (ffmpeg AudioToolbox, sox fallback) instead of spawning `afplay` per sentence.
 
 ### Fixed
 
+- Fixed stuttering/latency in speech by running synthesis chunks through the player gaplessly
+- Fixed race condition causing EPIPE errors and broken pipes during speech playback
+- Fixed interrupted speech audio by ensuring segments queue and drain in order
+
 - Fixed speech vocalization starting only after the entire reply was synthesized: ONNX inference blocks the TTS worker's event loop, so per-segment IPC audio chunks queued unflushed and arrived in one burst. Streaming sends now drain the IPC channel before the next segment's inference, cutting time-to-first-audio to ~1.5s regardless of reply length.
+- Fixed an unhandled `EPIPE: broken pipe, write` rejection at the end of speech playback: the streaming player's `stop()` raced an un-awaited `FileSink.end()` against the backend SIGKILL, and mid-session writes never awaited the flush. Writes now await the flush (so a dead backend is detected and the chunk replays on the next candidate or the per-file path) and `stop()` swallows the expected teardown rejection.
 
 ## [16.3.0] - 2026-07-02
 

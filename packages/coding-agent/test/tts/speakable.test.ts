@@ -11,12 +11,18 @@ function speak(...deltas: string[]): { pushed: string[][]; all: string[] } {
 
 describe("SpeakableStream code fences", () => {
 	it("silences a fenced block while speaking the prose around it", () => {
-		const { all } = speak("Here is the code:\n```ts\nconst x = 1;\nconsole.log(x);\n```\nAnd that is all of it now.\n");
+		const { all } = speak(
+			"Here is the code:\n```ts\nconst x = 1;\nconsole.log(x);\n```\nAnd that is all of it now.\n",
+		);
 		expect(all).toEqual(["Here is the code:", "And that is all of it now."]);
 	});
 
 	it("silences a block whose opening and closing fences are split across deltas", () => {
-		const { pushed, all } = speak("Intro line here.\n``", "`ts\nconst hidden = 42;\n``", "`\nOutro after code block.\n");
+		const { pushed, all } = speak(
+			"Intro line here.\n``",
+			"`ts\nconst hidden = 42;\n``",
+			"`\nOutro after code block.\n",
+		);
 		expect(pushed[0]).toEqual(["Intro line here."]);
 		expect(pushed[1]).toEqual([]);
 		expect(all).toEqual(["Intro line here.", "Outro after code block."]);
@@ -39,8 +45,16 @@ describe("SpeakableStream links and URLs", () => {
 	});
 
 	it.each([
-		["bare https URL speaks only the host", "Repo lives at https://github.com/foo/bar?x for now.\n", "Repo lives at github.com for now."],
-		["www URL speaks the host without the www prefix or path", "Visit www.example.com/path when you can.\n", "Visit example.com when you can."],
+		[
+			"bare https URL speaks only the host",
+			"Repo lives at https://github.com/foo/bar?x for now.\n",
+			"Repo lives at github.com for now.",
+		],
+		[
+			"www URL speaks the host without the www prefix or path",
+			"Visit www.example.com/path when you can.\n",
+			"Visit example.com when you can.",
+		],
 	])("%s", (_name, input, spoken) => {
 		expect(speak(input).all).toEqual([spoken]);
 	});
@@ -48,10 +62,26 @@ describe("SpeakableStream links and URLs", () => {
 
 describe("SpeakableStream inline markup and line markers", () => {
 	it.each([
-		["inline code speaks the identifier without ticks", "Call `parseConfig` before use today.\n", ["Call parseConfig before use today."]],
-		["bold, italic, and strikethrough markers are stripped", "This **bold** and *ital* and ~~struck~~ text stays.\n", ["This bold and ital and struck text stays."]],
-		["heading markers are stripped but the title speaks", "## Release Notes\nBody text follows here.\n", ["Release Notes", "Body text follows here."]],
-		["bullet markers are stripped", "- item one is ready\n- item two is ready\n", ["item one is ready", "item two is ready"]],
+		[
+			"inline code speaks the identifier without ticks",
+			"Call `parseConfig` before use today.\n",
+			["Call parseConfig before use today."],
+		],
+		[
+			"bold, italic, and strikethrough markers are stripped",
+			"This **bold** and *ital* and ~~struck~~ text stays.\n",
+			["This bold and ital and struck text stays."],
+		],
+		[
+			"heading markers are stripped but the title speaks",
+			"## Release Notes\nBody text follows here.\n",
+			["Release Notes", "Body text follows here."],
+		],
+		[
+			"bullet markers are stripped",
+			"- item one is ready\n- item two is ready\n",
+			["item one is ready", "item two is ready"],
+		],
 		["numbered list markers speak as a numeric prefix", "1. First\n", ["1, First"]],
 	])("%s", (_name, input, spoken) => {
 		expect(speak(input).all).toEqual(spoken);
@@ -121,10 +151,18 @@ describe("SpeakableStream segment length cap", () => {
 
 describe("SpeakableStream abbreviations", () => {
 	it.each([
-		['"e.g. " near the start does not end the first segment', "See e.g. the docs for more. ", "See e.g. the docs for more."],
+		[
+			'"e.g. " near the start does not end the first segment',
+			"See e.g. the docs for more. ",
+			"See e.g. the docs for more.",
+		],
 		// The abbreviation here sits past the first-segment minimum, so only the
 		// abbreviation guard (not the length floor) prevents a cut after "e.g. ".
-		['"e.g. " past the minimum cut length still does not split the sentence', "See the docs e.g. the guide for more info. ", "See the docs e.g. the guide for more info."],
+		[
+			'"e.g. " past the minimum cut length still does not split the sentence',
+			"See the docs e.g. the guide for more info. ",
+			"See the docs e.g. the guide for more info.",
+		],
 	])("%s", (_name, input, spoken) => {
 		const stream = new SpeakableStream();
 		expect(stream.push(input)).toEqual([spoken]);

@@ -4491,6 +4491,17 @@ export const SETTINGS_SCHEMA = {
 			],
 		},
 	},
+	"speech.enhanced": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "providers",
+			group: "Services",
+			label: "Enhanced Speech Rewriting",
+			description:
+				"Rewrite assistant output into natural spoken prose with the tiny/smol model before synthesis (describes code, drops links and markdown). Falls back to mechanical cleanup on failure",
+		},
+	},
 	"speech.voice": {
 		type: "enum",
 		values: TTS_LOCAL_VOICE_VALUES,

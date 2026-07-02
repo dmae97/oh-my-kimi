@@ -149,7 +149,10 @@ export class StreamingAudioPlayer {
 		this.#abortController.abort();
 		this.#signal();
 		try {
-			this.#sink?.end();
+			// end() flushes asynchronously; the SIGKILL below races it, so a broken
+			// pipe here is expected — swallow the rejection (it otherwise surfaces
+			// as an unhandled EPIPE right as speech ends).
+			void Promise.resolve(this.#sink?.end()).catch(() => {});
 		} catch {}
 		try {
 			this.#proc?.kill("SIGKILL");
@@ -217,7 +220,7 @@ export class StreamingAudioPlayer {
 						await Bun.sleep((ahead - LEAD_SECONDS) * 1000);
 						if (this.#stopped) return;
 					}
-					if (this.#writeStream(chunk)) {
+					if (await this.#writeStream(chunk)) {
 						this.#writtenSec += chunk.length / this.#sampleRate;
 						continue;
 					}
@@ -225,7 +228,7 @@ export class StreamingAudioPlayer {
 					// (or the file path) and replay this exact chunk so nothing is
 					// dropped.
 					this.#mode = this.#spawnStream() ? "stream" : "file";
-					if (this.#mode === "stream" && this.#writeStream(chunk)) {
+					if (this.#mode === "stream" && (await this.#writeStream(chunk))) {
 						this.#writtenSec += chunk.length / this.#sampleRate;
 					} else {
 						this.#mode = "file";
@@ -264,13 +267,17 @@ export class StreamingAudioPlayer {
 		return promise;
 	}
 
-	/** Write one chunk into the backend's stdin; false when the sink is gone or broken. */
-	#writeStream(pcm: Float32Array): boolean {
+	/**
+	 * Write one chunk into the backend's stdin and await the flush — a broken
+	 * pipe rejects here (not as an unhandled rejection later), so the caller
+	 * can replay the exact chunk on the next backend.
+	 */
+	async #writeStream(pcm: Float32Array): Promise<boolean> {
 		const sink = this.#sink;
 		if (!sink) return false;
 		try {
 			sink.write(this.#bytes(pcm));
-			sink.flush();
+			await sink.flush();
 			return true;
 		} catch (error) {
 			logger.debug("tts: streaming write failed", {
