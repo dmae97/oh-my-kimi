@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Effort } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { ModelRegistry, type ProviderConfigInput } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentSession, type ExtensionFactory } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -58,6 +58,27 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		});
 	};
 
+	const dynamicOnlyProviderConfig: ProviderConfigInput = {
+		baseUrl: "https://runtime.example.com/v1",
+		apiKey: "RUNTIME_KEY",
+		api: "openai-completions",
+		fetchDynamicModels: async () => [
+			{
+				id: "cached-runtime-model",
+				name: "Cached Runtime Model",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 128000,
+				maxTokens: 8192,
+			},
+		],
+	};
+
+	const dynamicOnlyProviderExtension: ExtensionFactory = pi => {
+		pi.registerProvider("runtime-provider", dynamicOnlyProviderConfig);
+	};
+
 	async function buildSessionOptions(modelPattern: string) {
 		// Pass an explicit ModelRegistry so createAgentSession skips its implicit
 		// ModelRegistry.refreshInBackground() — a network model-discovery pass
@@ -94,6 +115,42 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		expect(session.model?.provider).toBe("runtime-provider");
 		expect(session.model?.id).toBe("runtime-model");
 		expect(modelFallbackMessage).toBeUndefined();
+	});
+
+	test("resolves explicit dynamic-only modelPattern from fresh runtime cache", async () => {
+		const authStorage = await AuthStorage.create(path.join(tempDir, "dynamic-auth.db"));
+		authStoragesToClose.push(authStorage);
+		const modelsPath = path.join(tempDir, "models.yml");
+		const primerRegistry = new ModelRegistry(authStorage, modelsPath);
+		primerRegistry.registerProvider("runtime-provider", dynamicOnlyProviderConfig, "ext://runtime");
+		await primerRegistry.refreshRuntimeProviders("online");
+		const modelRegistry = new ModelRegistry(authStorage, modelsPath);
+
+		const { session, modelFallbackMessage } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			authStorage,
+			modelRegistry,
+			sessionManager: SessionManager.inMemory(),
+			disableExtensionDiscovery: true,
+			extensions: [dynamicOnlyProviderExtension],
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+			modelPattern: "runtime-provider/cached-runtime-model",
+		});
+
+		try {
+			expect(session.model?.provider).toBe("runtime-provider");
+			expect(session.model?.id).toBe("cached-runtime-model");
+			expect(modelFallbackMessage).toBeUndefined();
+		} finally {
+			await session.dispose();
+		}
 	});
 
 	test("does not silently fallback when explicit modelPattern is unresolved", async () => {
