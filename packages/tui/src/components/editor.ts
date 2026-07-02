@@ -2883,21 +2883,20 @@ export class Editor implements Component, Focusable {
 	#autocompletePrefixMatchesCursorText(currentTextBeforeCursor: string): boolean {
 		if (currentTextBeforeCursor === this.#autocompletePrefix) return true;
 
-		if (currentTextBeforeCursor.endsWith(this.#autocompletePrefix)) return true;
-
 		if (findLeadingSlashCommandStart(this.#autocompletePrefix) !== null) {
 			const currentLeadingStart = findLeadingSlashCommandStart(currentTextBeforeCursor);
 			if (currentLeadingStart !== null) {
 				const token = currentTextBeforeCursor.slice(currentLeadingStart);
 				if (!token.includes(" ") && !token.slice(1).includes("/")) return true;
 			}
+			return false;
 		}
 
 		if (this.#autocompletePrefix.startsWith("@")) {
 			return /(?:^|\s)@[^\s]*$/.test(currentTextBeforeCursor);
 		}
 
-		return false;
+		return currentTextBeforeCursor.endsWith(this.#autocompletePrefix);
 	}
 
 	#isSlashCommandNameAutocompleteSelection(): boolean {
