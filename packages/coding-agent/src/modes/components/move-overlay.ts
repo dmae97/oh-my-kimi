@@ -29,18 +29,33 @@ const OVERLAY_WIDTH = 68;
 
 /** TTL for the directory listing cache (ms). */
 const DIR_CACHE_TTL = 500;
-const dirCache = new Map<string, { time: number; entries: string[] }>();
+const dirCache = new Map<string, { time: number; entries: fs.Dirent[] }>();
 
-function readDirCached(dir: string): string[] {
+function readDirCached(dir: string): fs.Dirent[] {
 	const now = Date.now();
 	const cached = dirCache.get(dir);
 	if (cached && now - cached.time < DIR_CACHE_TTL) return cached.entries;
 	try {
-		const entries = fs.readdirSync(dir);
+		const entries = fs.readdirSync(dir, { withFileTypes: true });
 		dirCache.set(dir, { time: now, entries });
 		return entries;
 	} catch {
 		return [];
+	}
+}
+
+/**
+ * `Dirent.isDirectory()` reports the entry type, not the link target, so a
+ * `statSync` fallback is still needed for symlinks that point at a directory.
+ * Every other entry is classified without a syscall.
+ */
+function entryIsDirectory(dir: string, entry: fs.Dirent): boolean {
+	if (entry.isDirectory()) return true;
+	if (!entry.isSymbolicLink()) return false;
+	try {
+		return fs.statSync(path.join(dir, entry.name)).isDirectory();
+	} catch {
+		return false;
 	}
 }
 
@@ -76,17 +91,13 @@ export function resolveExistingDirectory(input: string, cwd: string): string | n
 
 function listChildDirectories(dirPath: string, max: number, includeHidden = false): DirEntry[] {
 	const results: DirEntry[] = [];
-	const names = readDirCached(dirPath);
-	for (const name of names) {
+	const entries = readDirCached(dirPath);
+	for (const entry of entries) {
 		if (results.length >= max) break;
+		const { name } = entry;
 		if (!includeHidden && name.startsWith(".")) continue;
-		const full = path.join(dirPath, name);
-		try {
-			if (!fs.statSync(full).isDirectory()) continue;
-		} catch {
-			continue;
-		}
-		results.push({ value: full, label: `${name}/` });
+		if (!entryIsDirectory(dirPath, entry)) continue;
+		results.push({ value: path.join(dirPath, name), label: `${name}/` });
 	}
 	results.sort((a, b) => a.label.localeCompare(b.label));
 	return results;
@@ -118,19 +129,14 @@ function searchDirectories(prefix: string, cwd: string, max: number): DirEntry[]
 
 	const lower = query.toLowerCase();
 	const results: DirEntry[] = [];
-	const names = readDirCached(baseDir);
-	for (const name of names) {
+	const entries = readDirCached(baseDir);
+	for (const entry of entries) {
 		if (results.length >= max) break;
+		const { name } = entry;
 		if (!includeHidden && name.startsWith(".")) continue;
-		const full = path.join(baseDir, name);
-		try {
-			if (!fs.statSync(full).isDirectory()) continue;
-		} catch {
-			continue;
-		}
-		if (!query || name.toLowerCase().includes(lower)) {
-			results.push({ value: full, label: `${name}/` });
-		}
+		if (query && !name.toLowerCase().includes(lower)) continue;
+		if (!entryIsDirectory(baseDir, entry)) continue;
+		results.push({ value: path.join(baseDir, name), label: `${name}/` });
 	}
 	return results;
 }
