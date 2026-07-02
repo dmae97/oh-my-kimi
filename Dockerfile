@@ -58,8 +58,10 @@ COPY --parents \
     crates/*/Cargo.toml \
     /pi/
 
-# Layer 2 — hydrate node_modules from the manifests above.
-RUN bun install --frozen-lockfile --ignore-scripts
+# Layer 2 — hydrate only the native addon build graph. A full workspace install
+# pulls optional/dev ONNX runtimes that the Rust build never uses and makes the
+# Docker layer depend on large platform tarballs.
+RUN bun install --filter @oh-my-pi/pi-natives --frozen-lockfile --ignore-scripts
 
 # Layer 3 — full source. `Dockerfile.dockerignore` keeps target/, node_modules/,
 # dist/, runs/, editor noise, etc. out of the context. node_modules from Layer 2
@@ -166,8 +168,10 @@ FROM pi-base AS pi-runtime
 ENV PI_ROOT=/pi
 WORKDIR /pi
 
-# Same manifests-only layered install pattern as natives-builder — `bun install`
-# only re-runs when a package.json / lockfile changes.
+# Install only the CLI runtime graph. Docker images run the source checkout via
+# Bun, but they do not need workspace devDependencies or optional local-inference
+# packages; those native ONNX stacks are loaded only by features that request
+# them explicitly.
 COPY --parents \
     package.json bun.lock bunfig.toml \
     patches/*.patch \
@@ -177,7 +181,7 @@ COPY --parents \
     python/robomp/web/package.json \
     /pi/
 
-RUN bun install --frozen-lockfile --ignore-scripts
+RUN bun install --filter @oh-my-pi/pi-coding-agent --production --omit optional --frozen-lockfile --ignore-scripts
 
 # Pi source. `Dockerfile.dockerignore` keeps **/node_modules out of the context
 # so stale isolated-linker symlinks from a host install can't shadow the
