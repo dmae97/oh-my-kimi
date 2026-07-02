@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `omp update -l` rejecting the documented plugin-update shorthand instead of upgrading installed marketplace plugins. ([#4304](https://github.com/can1357/oh-my-pi/issues/4304))
+
 ## [16.3.1] - 2026-07-02
 
 ### Breaking Changes
