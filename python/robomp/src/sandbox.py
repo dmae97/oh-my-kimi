@@ -354,6 +354,30 @@ def _run(
     return proc
 
 
+def _worktree_add(add_cmd: list[str], *, pool: Path, repo_dir: Path) -> None:
+    """Run `git worktree add`, cleaning partial state on failure.
+
+    A worktree-add killed mid-operation (the 120s `_run` timeout surfaces as
+    GitCommandError 124, or any nonzero git failure) can leave a partial
+    checkout at `repo_dir` and/or a dangling pool worktree registration. Left
+    behind, the event retry hits stale metadata and fails again on the same
+    path. Best-effort remove the checkout and prune the pool, then re-raise so the
+    retry starts from a clean path. If the prune itself fails (incl. a 124
+    timeout), raise that instead — chained from the add error — since a
+    dangling registration left behind is exactly what poisons the retry.
+    """
+    try:
+        _run(add_cmd, cwd=pool)
+    except GitCommandError as add_err:
+        shutil.rmtree(repo_dir, ignore_errors=True)
+        pruned = _safe_run(["git", "worktree", "prune"], cwd=pool)
+        if pruned.returncode != 0:
+            raise GitCommandError(
+                ["git", "worktree", "prune"], pruned.returncode, pruned.stdout, pruned.stderr
+            ) from add_err
+        raise
+
+
 _SHARED_OMP_GID = 2000
 
 
@@ -710,10 +734,17 @@ class SandboxManager:
     def _reset_origin_url(repo_dir: Path, clone_url: str) -> None:
         """`git remote set-url origin <clone_url>` if origin exists and differs.
 
-        Best-effort: silent no-op on failure (probe `get-url` first so we don't
-        spam logs on first-time clones where origin isn't configured yet).
+        Best-effort: silent no-op on a "no origin" failure (probe `get-url`
+        first so we don't spam logs on first-time clones). A timed-out probe
+        (124) is indeterminate and raises instead — see below.
         """
         probe = _safe_run(["git", "remote", "get-url", "origin"], cwd=repo_dir)
+        if probe.returncode == 124:
+            # A timed-out probe is indeterminate: we cannot tell whether origin
+            # embeds a legacy credential that must be rewritten before fetch.
+            # Fail closed so the event retries rather than fetching against a
+            # possibly-credentialed origin.
+            raise GitCommandError(["git", "remote", "get-url", "origin"], probe.returncode, probe.stdout, probe.stderr)
         if probe.returncode != 0:
             return
         if probe.stdout.strip() == clone_url:
@@ -778,7 +809,11 @@ class SandboxManager:
             if not repo_exists:
                 if pr_head is not None:
                     self.transport.fetch_pr_head(repo=repo, pool_dir=pool, pr_number=pr_head)
-                    _run(["git", "worktree", "add", "--detach", str(repo_dir), "FETCH_HEAD"], cwd=pool)
+                    _worktree_add(
+                        ["git", "worktree", "add", "--detach", str(repo_dir), "FETCH_HEAD"],
+                        pool=pool,
+                        repo_dir=repo_dir,
+                    )
                 else:
                     # Make sure the requested start point exists locally (best-effort).
                     # For follow-ups on an existing PR, `existing_branch` is the remote
@@ -793,7 +828,11 @@ class SandboxManager:
                         # start point; fail instead so the event retries.
                         raise GitCommandError(probe, check.returncode, check.stdout, check.stderr)
                     if check.returncode == 0:
-                        _run(["git", "worktree", "add", str(repo_dir), branch], cwd=pool)
+                        _worktree_add(
+                            ["git", "worktree", "add", str(repo_dir), branch],
+                            pool=pool,
+                            repo_dir=repo_dir,
+                        )
                     else:
                         start_point = f"origin/{default_branch}"
                         if existing_branch:
@@ -805,17 +844,10 @@ class SandboxManager:
                                 raise GitCommandError(remote_probe, remote.returncode, remote.stdout, remote.stderr)
                             if remote.returncode == 0:
                                 start_point = f"origin/{existing_branch}"
-                        _run(
-                            [
-                                "git",
-                                "worktree",
-                                "add",
-                                "-b",
-                                branch,
-                                str(repo_dir),
-                                start_point,
-                            ],
-                            cwd=pool,
+                        _worktree_add(
+                            ["git", "worktree", "add", "-b", branch, str(repo_dir), start_point],
+                            pool=pool,
+                            repo_dir=repo_dir,
                         )
             else:
                 slot_git_env = _git_env_for_repo(repo_dir)
@@ -956,19 +988,38 @@ class SandboxManager:
         with self._repo_lock(repo):
             ws_root = self.workspace_root(repo, number)
             repo_dir = ws_root / "repo"
-            if repo_dir.exists():
-                pool = self.pool_path(repo)
-                removed = _safe_run(["git", "worktree", "remove", "--force", str(repo_dir)], cwd=pool)
-                if removed.returncode != 0:
-                    # A failed `git worktree remove` (nonzero exit, incl. a 124
-                    # timeout) may have deleted the checkout but left the pool's
-                    # worktree registration dangling, or vice versa. Delete any
-                    # leftover checkout ourselves, then prune the dangling pool
-                    # registration so a later `git worktree add` for the same path
-                    # does not trip on stale metadata. `repo_dir.exists()` is not a
-                    # reliable proxy: a killed remove can clear the checkout first.
-                    shutil.rmtree(repo_dir, ignore_errors=True)
-                    _safe_run(["git", "worktree", "prune"], cwd=pool)
+            pool = self.pool_path(repo)
+            # `repo_dir.exists()` is not a reliable proxy for "nothing to clean
+            # up in the pool": a worktree-add or a prior remove killed mid-flight
+            # can leave the checkout gone but the pool's worktree registration
+            # dangling, which fails the next `git worktree add` for this path.
+            # Only run git in a REAL pool clone: `ensure_clone` mkdir's the pool
+            # dir BEFORE cloning, so a failed first clone can leave a non-git dir
+            # here, and `git worktree prune` in it would error. Mirror
+            # `ensure_clone`'s own `.git`/`HEAD` validity check.
+            if (pool / ".git").exists() or (pool / "HEAD").exists():
+                needs_prune = False
+                if repo_dir.exists():
+                    removed = _safe_run(["git", "worktree", "remove", "--force", str(repo_dir)], cwd=pool)
+                    if removed.returncode != 0:
+                        shutil.rmtree(repo_dir, ignore_errors=True)
+                        needs_prune = True
+                elif ws_root.exists():
+                    # Checkout gone but the workspace root remains -> a prior op
+                    # was killed mid-flight and may have left a dangling
+                    # registration. A fully-cleaned workspace has no ws_root, so
+                    # a plain repeat close prunes nothing.
+                    needs_prune = True
+                if needs_prune:
+                    pruned = _safe_run(["git", "worktree", "prune"], cwd=pool)
+                    if pruned.returncode != 0:
+                        # Prune is the step that clears the dangling registration.
+                        # If it fails (incl. a 124 timeout), report it so the
+                        # cleanup event retries instead of recording success with
+                        # stale metadata still blocking the next add.
+                        raise GitCommandError(
+                            ["git", "worktree", "prune"], pruned.returncode, pruned.stdout, pruned.stderr
+                        )
             if ws_root.exists():
                 shutil.rmtree(ws_root, ignore_errors=True)
 

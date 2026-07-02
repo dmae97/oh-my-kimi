@@ -102,19 +102,30 @@ async def test_run_workspace_op_drains_thread_before_propagating_cancel():
     await asyncio.to_thread(started.wait, 1.0)
     assert started.is_set()
 
-    # Cancel the AWAITING coroutine while the thread is mid-flight.
-    task.cancel()
-    # Let the loop deliver the cancellation into the helper's drain loop.
-    await asyncio.sleep(0.05)
+    async def pump(turns: int = 20) -> None:
+        # Deterministically advance the loop without a wall-clock sleep: each
+        # sleep(0) drains the ready queue, so a DETACHING (pre-fix) helper would
+        # resolve `task` within these turns. A draining helper keeps it pending
+        # while the worker thread is still blocked on `proceed`.
+        for _ in range(turns):
+            await asyncio.sleep(0)
 
+    # Cancel the AWAITING coroutine while the thread is mid-flight, then a SECOND
+    # time while it is still blocked. The repeated cancel must land on the drain
+    # loop's re-`await` and be swallowed by its `continue` branch, NOT abandon
+    # the thread. The whole sequence runs under try/finally so any failed assert
+    # still releases the worker and cannot leak a blocked thread into later tests.
     try:
-        # The thread must NOT have been abandoned: it is still blocked on
-        # `proceed`, so `finished` is not set and the task has not resolved yet.
+        task.cancel()
+        await pump()
+        assert not task.done(), "helper propagated the first cancel before the thread completed (thread abandoned)"
+        task.cancel()
+        await pump()
+        # The thread is still blocked on `proceed`, so it has not finished and
+        # the task has not resolved despite two cancels.
         assert not finished.is_set(), "thread finished before we released it — impossible unless abandoned"
-        assert not task.done(), "helper propagated cancel before the thread completed (thread abandoned)"
+        assert not task.done(), "helper abandoned the thread after a repeated cancel"
     finally:
-        # Always release the worker, even if an assert above fails, so a failed
-        # run cannot leave a blocked thread leaking into later tests.
         proceed.set()
 
     # The helper must now let the thread finish, THEN raise CancelledError.
