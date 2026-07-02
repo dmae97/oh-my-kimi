@@ -29,6 +29,7 @@
 - Fixed `/copy code` and `/copy cmd` commands being treated as normal prompts instead of copying the requested blocks.
 - Fixed legacy tool compatibility issues for `createReadTool`, `createGrepTool`, and extension validation failures for `omp install pi-lean-ctx`.
 - Improved robustness of MCP authentication error detection, Smithery command authorization failures, and streaming preview responsiveness for write, edit, and eval tools.
+- Fixed llama.cpp router/preset mode reporting 128k context in the status bar for every preset picked from `/model` regardless of the preset's configured `--ctx-size`. The router-level `/v1/models` only carries `meta.n_ctx` after a preset's child instance is loaded, and router `/props` reports a dummy `n_ctx: 0`, so cold-picked presets fell through to the 128k discovery default. Discovery now also reads `--ctx-size` (or `-c`) from each entry's `status.args` rendered CLI vector and, as a fallback, `ctx-size = N` from `status.preset` INI; the same fallback applies on the runtime refresh that runs when `/model` switches to a preset ([#4190](https://github.com/can1357/oh-my-pi/issues/4190)).
 
 ## [16.2.13] - 2026-07-01
 
