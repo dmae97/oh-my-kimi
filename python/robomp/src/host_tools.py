@@ -668,11 +668,24 @@ def _repair_commit_message_escapes(bindings: ToolBindings, args: Mapping[str, An
     Rebuilds ``origin/<base>..HEAD`` with ``git commit-tree``, preserving
     every tree, parent topology, identity, and date — only messages change.
     Safe against already-pushed commits: the push transport uses
-    ``--force-with-lease``. Best effort: any git failure leaves the branch
-    untouched (the push proceeds with the ugly message rather than being
-    blocked on cosmetics), and the branch ref only moves via a compare-and-
-    swap ``update-ref`` at the very end.
+    ``--force-with-lease``. Once a broken message is detected the repair is
+    mandatory — a git failure mid-rewrite refuses the push (the branch ref
+    itself only ever moves via the compare-and-swap ``update-ref`` at the
+    very end, so a refusal never leaves partial state).
     """
+
+    def fail(step: str, proc: subprocess.CompletedProcess[str]) -> NoReturn:
+        err = (proc.stderr or proc.stdout).strip() or f"exit {proc.returncode}"
+        msg = (
+            f"refusing to push: commit messages contain literal `\\n` escapes and the "
+            f"automatic repair failed at `{step}`: {err}\n"
+            "Reword the affected commits yourself (`git rebase -i origin/"
+            + bindings.repo.default_branch
+            + "`, real newlines via `git commit -F <file>` or multiple `-m` flags) and retry."
+        )
+        _audit(bindings, tool_name, args, error=msg)
+        _raise_command(msg)
+
     base = bindings.repo.default_branch
     rev_list = _run_repo_command(bindings, ["git", "rev-list", "--reverse", f"origin/{base}..HEAD"])
     if rev_list.returncode != 0:
@@ -685,6 +698,8 @@ def _repair_commit_message_escapes(bindings: ToolBindings, args: Mapping[str, An
     for sha in shas:
         show = _run_repo_command(bindings, ["git", "log", "-1", "--format=%B", sha])
         if show.returncode != 0:
+            if repaired:
+                fail("git log", show)
             return
         message = show.stdout
         fixed = _repair_message_escapes(message)
@@ -703,10 +718,10 @@ def _repair_commit_message_escapes(bindings: ToolBindings, args: Mapping[str, An
             ["git", "log", "-1", "--format=%T%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%cn%x1f%ce%x1f%cI", sha],
         )
         if meta.returncode != 0:
-            return
+            fail("git log", meta)
         fields = meta.stdout.strip("\n").split("\x1f")
         if len(fields) != 8:
-            return
+            fail("git log", meta)
         tree, parents_raw, a_name, a_email, a_date, c_name, c_email, c_date = fields
         parents_old = parents_raw.split()
         parents_new = [rewritten.get(p, p) for p in parents_old]
@@ -730,7 +745,7 @@ def _repair_commit_message_escapes(bindings: ToolBindings, args: Mapping[str, An
             },
         )
         if made.returncode != 0 or not made.stdout.strip():
-            return
+            fail("git commit-tree", made)
         rewritten[sha] = made.stdout.strip()
 
     old_head, new_head = shas[-1], rewritten[shas[-1]]
@@ -739,11 +754,7 @@ def _repair_commit_message_escapes(bindings: ToolBindings, args: Mapping[str, An
         ["git", "update-ref", "-m", "robomp: repaired commit message escapes", "HEAD", new_head, old_head],
     )
     if update.returncode != 0:
-        log.warning(
-            "commit message escape repair failed at update-ref",
-            extra={"issue": bindings.issue_key, "err": (update.stderr or update.stdout).strip()},
-        )
-        return
+        fail("git update-ref", update)
     _audit(bindings, tool_name, args, result={"repaired_commit_messages": [sha[:12] for sha in repaired]})
     log.info(
         "repaired commit message escapes",
