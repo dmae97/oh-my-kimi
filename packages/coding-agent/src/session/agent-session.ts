@@ -6719,7 +6719,15 @@ export class AgentSession {
 		this.agent.setTools(activeTools);
 	}
 
+	#clearCheckpointRuntimeState(): void {
+		this.#checkpointState = undefined;
+		this.#pendingRewindReport = undefined;
+		this.#lastCompletedRewind = undefined;
+		this.#rewoundToolResultIds.clear();
+	}
+
 	#rehydrateLastCompletedRewind(): void {
+		this.#clearCheckpointRuntimeState();
 		let completed: CompletedRewindState | undefined;
 		for (const entry of this.sessionManager.getBranch()) {
 			if (isSuccessfulCheckpointEntry(entry)) {
@@ -8308,6 +8316,7 @@ export class AgentSession {
 			await this.sessionManager.flush();
 		}
 		await this.sessionManager.newSession(options);
+		this.#clearCheckpointRuntimeState();
 		this.setTodoPhases([]);
 		this.#freshProviderSessionId = undefined;
 		this.#syncAgentSessionId();
@@ -9718,6 +9727,7 @@ export class AgentSession {
 			await this.sessionManager.flush();
 			this.#cancelOwnAsyncJobs();
 			await this.sessionManager.newSession(previousSessionFile ? { parentSession: previousSessionFile } : undefined);
+			this.#clearCheckpointRuntimeState();
 			// agent.reset() clears the core steering/follow-up queues. Preserve any queued
 			// steers/follow-ups (RPC/SDK steer()/followUp() issued during the handoff, or a
 			// pre-loader TUI steer) so they survive into the post-handoff session instead of
@@ -14243,6 +14253,7 @@ export class AgentSession {
 		} else {
 			this.sessionManager.createBranchedSession(selectedEntry.parentId);
 		}
+		this.#rehydrateLastCompletedRewind();
 		this.#syncTodoPhasesFromBranch();
 		this.#freshProviderSessionId = undefined;
 		this.#syncAgentSessionId();
@@ -14329,6 +14340,7 @@ export class AgentSession {
 		this.#cancelOwnAsyncJobs();
 
 		this.sessionManager.createBranchedSession(leafId);
+		this.#rehydrateLastCompletedRewind();
 		this.sessionManager.appendMessage({
 			role: "user",
 			content: [{ type: "text", text: question }],
