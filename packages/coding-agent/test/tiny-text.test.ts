@@ -197,9 +197,7 @@ describe("normalizeGeneratedTitle source-aware casing", () => {
 
 	it("restores common vowel-bearing technical acronyms via the acronym allowlist", () => {
 		expect(normalizeGeneratedTitle("Api timeout", "API timeout")).toBe("API timeout");
-		expect(normalizeGeneratedTitle("Etl pipeline cleanup", "clean up the ETL pipeline")).toBe(
-			"ETL pipeline cleanup",
-		);
+		expect(normalizeGeneratedTitle("Etl pipeline cleanup", "clean up the ETL pipeline")).toBe("ETL pipeline cleanup");
 	});
 
 	it("still declines to restore ALL-CAPS when the source is shouty", () => {

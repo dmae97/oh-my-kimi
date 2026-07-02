@@ -13794,8 +13794,7 @@ export class AgentSession {
 		// ends), or idle in plan mode (autonomous wake turns are suppressed).
 		const planModeIdle = !this.isStreaming && this.#planModeState?.enabled === true;
 		const autoReply =
-			(opts?.expectsReply ?? false) &&
-			((this.isStreaming && !this.settings.get("async.enabled")) || planModeIdle);
+			(opts?.expectsReply ?? false) && ((this.isStreaming && !this.settings.get("async.enabled")) || planModeIdle);
 		const record: CustomMessage = {
 			role: "custom",
 			customType: "irc:incoming",
