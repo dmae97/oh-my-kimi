@@ -1,4 +1,14 @@
+import { type FetchImpl, wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
+
 export { isRecord } from "@oh-my-pi/pi-utils";
+
+/**
+ * Fetch implementation for catalog discovery probes: the caller's override
+ * when given, otherwise global fetch wrapped for `NODE_EXTRA_CA_CERTS`.
+ */
+export function discoveryFetch(override?: FetchImpl): FetchImpl {
+	return override ?? wrapFetchForExtraCa(fetch);
+}
 
 export function toNumber(value: unknown): number | undefined {
 	if (typeof value === "number" && Number.isFinite(value)) {

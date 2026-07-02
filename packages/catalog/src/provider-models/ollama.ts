@@ -1,8 +1,9 @@
-import { fetchWithRetry, wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
+import { fetchWithRetry } from "@oh-my-pi/pi-utils";
 import { Effort } from "../effort";
 import { isGlm52ReasoningEffortModelId } from "../identity/family";
 import type { ModelManagerOptions } from "../model-manager";
 import type { FetchImpl, ThinkingConfig } from "../types";
+import { discoveryFetch } from "../utils";
 import { createBundledReferenceMap, createReferenceResolver } from "./bundled-references";
 
 export interface OllamaCloudModelManagerConfig {
@@ -75,7 +76,7 @@ async function fetchShowMetadata(
 	baseUrl: string,
 	apiKey: string,
 	model: string,
-	fetchImpl: FetchImpl = wrapFetchForExtraCa(fetch),
+	fetchImpl: FetchImpl = discoveryFetch(),
 ): Promise<OllamaShowResponse | undefined> {
 	const response = await fetchImpl(`${baseUrl}/api/show`, {
 		method: "POST",
@@ -107,7 +108,7 @@ export function ollamaCloudModelManagerOptions(
 			const response = await fetchWithRetry(`${baseUrl}/api/tags`, {
 				method: "GET",
 				headers: createCloudHeaders(apiKey),
-				fetch: config?.fetch ?? wrapFetchForExtraCa(fetch),
+				fetch: discoveryFetch(config?.fetch),
 				defaultDelayMs: OLLAMA_RETRY_DELAYS_MS,
 			});
 			if (!response.ok) {

@@ -1,7 +1,7 @@
-import { type FetchImpl, wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
+import type { FetchImpl } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 import type { ModelSpec } from "../types";
-import { isRecord } from "../utils";
+import { discoveryFetch, isRecord } from "../utils";
 import { CODEX_BASE_URL, OPENAI_HEADER_VALUES, OPENAI_HEADERS } from "../wire/codex";
 
 const DEFAULT_MODEL_LIST_PATHS = ["/codex/models", "/models"] as const;
@@ -82,7 +82,7 @@ export interface CodexModelDiscoveryResult {
  * Returns `{ models: [] }` when a route succeeds but yields no usable models.
  */
 export async function fetchCodexModels(options: CodexModelDiscoveryOptions): Promise<CodexModelDiscoveryResult | null> {
-	const fetchFn = options.fetchFn ?? wrapFetchForExtraCa(fetch);
+	const fetchFn = discoveryFetch(options.fetchFn);
 	const baseUrl = normalizeBaseUrl(options.baseUrl);
 	const paths = normalizePaths(options.paths);
 	const headers = buildCodexHeaders(options);
