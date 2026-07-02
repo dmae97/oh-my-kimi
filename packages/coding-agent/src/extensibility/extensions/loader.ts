@@ -521,10 +521,17 @@ export async function discoverExtensionPaths(
 		}
 	};
 
-	// 1. Discover extension modules via capability API (native .omp/.pi only)
-	const discovered = await loadCapability<ExtensionModule>(extensionModuleCapability.id, loadOptions);
+	// 1. Discover extension modules via capability API (native .omp/.pi only).
+	// Scope the load to the native provider — the extension-module capability
+	// also has claude/codex/gemini/opencode providers, and their items were
+	// discarded here anyway (see #4198). The provider filter skips the walk
+	// entirely instead of running four foreign directory scans and dropping
+	// the results.
+	const discovered = await loadCapability<ExtensionModule>(extensionModuleCapability.id, {
+		...loadOptions,
+		providers: ["native"],
+	});
 	for (const ext of discovered.items) {
-		if (ext._source.provider !== "native") continue;
 		addPath(ext.path);
 	}
 
