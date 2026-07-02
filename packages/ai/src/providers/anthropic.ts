@@ -1660,7 +1660,7 @@ function calculateFallbackTurnCost(
  * a signing proxy returns when a stripped/unsigned prior thinking block is
  * replayed as `signature: ""`. Exported for the compat tests.
  */
-const INVALID_THINKING_SIGNATURE_PATTERN = /invalid\s+`?signature`?\s+in\s+`?thinking`?\s+block/i;
+const INVALID_THINKING_SIGNATURE_PATTERN = /invalid\s+`?signature`?\s+in\s+`?thinking`?(?:\s+block)?/i;
 export function isInvalidThinkingSignatureError(message: string): boolean {
 	return INVALID_THINKING_SIGNATURE_PATTERN.test(message);
 }
