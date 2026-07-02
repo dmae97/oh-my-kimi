@@ -71,6 +71,9 @@
 ### Fixed
 
 - Fixed explicit `/advisor on` to rebuild the live advisor runtime after `modelRoles.advisor` changes so it rebinds to the newly configured model. ([#4302](https://github.com/can1357/oh-my-pi/issues/4302))
+### Fixed
+
+- Fixed `edit` frequently failing with `never displayed (it showed a partial range, a search hit, or a folded summary)` after a structural-summary `read` on a >100-line source file: the rejection now inlines the actual file content at the unseen anchor lines and merges them into the snapshot's `seenLines` set, so a straight edit retry with the same `[path#tag]` header succeeds instead of demanding a follow-up range re-read. Wide (over 40-line) anchor ranges still fall back to a range re-read for the tail. ([#4224](https://github.com/can1357/oh-my-pi/issues/4224))
 
 ## [16.3.1] - 2026-07-02
 

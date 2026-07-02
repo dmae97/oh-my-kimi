@@ -9,6 +9,9 @@
 ### Changed
 
 - Improved robustness of patch application by resolving 16-bit snapshot tag collisions to the most recent version rather than rejecting them.
+### Fixed
+
+- Fixed frequent `hashline` edit rejections after a structural-summary read (default for parseable code >100 lines) by inlining the actual file content at the unseen anchor lines into the `never displayed (it showed a partial range, a search hit, or a folded summary)` error and merging those lines into the snapshot's `seenLines` set — a straight retry with the same `[path#tag]` header now succeeds instead of requiring a separate range re-read. Anchor ranges over the 40-line inline reveal cap still bounce back to the range re-read for the remainder. ([#4224](https://github.com/can1357/oh-my-pi/issues/4224))
 
 ## [16.3.0] - 2026-07-02
 

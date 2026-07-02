@@ -223,21 +223,66 @@ function formatLineRanges(lines: readonly number[]): string {
 	return parts.join(", ");
 }
 
+/** One anchored line whose actual content is being surfaced in an error message. */
+export interface RevealedLine {
+	line: number;
+	text: string;
+}
+
+/**
+ * Content preview handed to {@link unseenLinesMessage}. `lines` are the
+ * unseen anchor lines whose actual file content we surface inline (from the
+ * tagged snapshot the caller matched). `truncated` = true means the anchor
+ * range exceeded the inline reveal cap; the caller only revealed a prefix
+ * and the remaining unseen lines still require a range re-read.
+ */
+export interface UnseenLinesReveal {
+	lines: readonly RevealedLine[];
+	truncated: boolean;
+}
+
 /**
  * An anchored edit referenced lines the read that minted the cited tag never
  * displayed (a partial range, or a structural summary that collapsed bodies).
  * Editing lines you have not read is the off-by-memory failure that mangles
- * files; reject and make the model re-read those exact lines first.
+ * files. When `reveal.lines` is non-empty, the caller has already inlined the
+ * actual file content at those lines and merged them into the snapshot's
+ * seen-line set, so the message points the model at a straight retry with the
+ * same `[path#tag]` header; when the reveal is empty or truncated, the
+ * message falls back to instructing a range re-read.
  */
-export function unseenLinesMessage(sectionPath: string, unseenLines: readonly number[], tag: string): string {
+export function unseenLinesMessage(
+	sectionPath: string,
+	unseenLines: readonly number[],
+	tag: string,
+	reveal: UnseenLinesReveal = { lines: [], truncated: false },
+): string {
 	const ranges = formatLineRanges(unseenLines);
 	const selector = ranges.replace(/, /g, ",");
-	return (
+	const header =
 		`This edit anchors to lines ${ranges} of ${sectionPath} that ` +
 		`${HL_FILE_PREFIX}${sectionPath}${HL_FILE_HASH_SEP}${tag}${HL_FILE_SUFFIX} never displayed (it showed a ` +
-		`partial range, a search hit, or a folded summary). Re-read them in full first with a ranged read like ` +
-		`\`${sectionPath}:${selector}\` — it skips summarization and mints a fresh tag (a plain re-read just re-folds ` +
-		`them) — then re-issue the edit.`
+		`partial range, a search hit, or a folded summary).`;
+	if (reveal.lines.length === 0) {
+		return (
+			`${header} Re-read them in full first with a ranged read like ` +
+			`\`${sectionPath}:${selector}\` — it skips summarization and mints a fresh tag (a plain re-read just re-folds ` +
+			`them) — then re-issue the edit.`
+		);
+	}
+	const preview = reveal.lines.map(({ line, text }) => `  ${formatNumberedLine(line, text)}`).join("\n");
+	if (reveal.truncated) {
+		return (
+			`${header} Preview of the actual file content at the first ${reveal.lines.length} unseen line(s):\n${preview}\n` +
+			`The range exceeds the inline preview cap — re-read the remainder with \`${sectionPath}:${selector}\` before ` +
+			`re-issuing the edit.`
+		);
+	}
+	return (
+		`${header} Actual file content at those lines:\n${preview}\n` +
+		`Verify the content matches what you intend to touch, then re-issue the edit with the same ` +
+		`${HL_FILE_PREFIX}path${HL_FILE_HASH_SEP}tag${HL_FILE_SUFFIX} header — a straight retry now succeeds without a re-read. ` +
+		`If the content does NOT match, fix your line numbers.`
 	);
 }
 
