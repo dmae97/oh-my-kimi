@@ -18,7 +18,7 @@ import { getAllPluginToolPaths } from "../../extensibility/plugins/loader";
 // Runtime self-reference: dereference this namespace only inside loader functions to keep the index.ts cycle safe.
 import * as PiCodingAgent from "../../index";
 import * as typebox from "../typebox";
-import { createNoOpUIContext, resolvePath } from "../utils";
+import { createNoOpUIContext, resolvePath, withExitGuard } from "../utils";
 import type { CustomToolAPI, CustomToolFactory, LoadedCustomTool, ToolLoadError } from "./types";
 
 /**
@@ -45,14 +45,14 @@ async function loadTool(
 	}
 
 	try {
-		const module = await import(resolvedPath);
+		const module = await withExitGuard(() => import(resolvedPath));
 		const factory = (module.default ?? module) as CustomToolFactory;
 
 		if (typeof factory !== "function") {
 			return { tools: null, error: { path: toolPath, error: "Tool must export a default function", source } };
 		}
 
-		const toolResult = await factory(sharedApi);
+		const toolResult = await withExitGuard(async () => factory(sharedApi));
 		const toolsArray = Array.isArray(toolResult) ? toolResult : [toolResult];
 
 		const loadedTools: LoadedCustomTool[] = toolsArray.map(tool => ({
