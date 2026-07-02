@@ -71,6 +71,8 @@ export class DapClient {
 	#eventHandlers = new Map<string, Set<DapEventHandler>>();
 	#anyEventHandlers = new Set<DapEventHandler>();
 	#reverseRequestHandlers = new Map<string, DapReverseRequestHandler>();
+	#adapterExited = false;
+	#pendingWriteExitRejectors = new Set<() => void>();
 
 	constructor(
 		adapter: DapResolvedAdapter,
@@ -84,6 +86,10 @@ export class DapClient {
 		this.#readable = options?.readable ?? (proc.stdout as ReadableStream<Uint8Array>);
 		this.#writeSink = options?.writeSink ?? proc.stdin;
 		this.#socket = options?.socket;
+		this.proc.exited.then(
+			() => this.#rejectPendingWritesForExit(),
+			() => this.#rejectPendingWritesForExit(),
+		);
 	}
 
 	static async spawn({ adapter, cwd, socketReadyTimeoutMs }: DapSpawnOptions): Promise<DapClient> {
@@ -417,6 +423,10 @@ export class DapClient {
 		const flushResult = this.#writeSink.flush();
 		if (!(flushResult instanceof Promise)) return;
 
+		if (this.#adapterExited) {
+			throw new Error(`DAP adapter ${this.adapter.name} exited before write completed`);
+		}
+
 		const { promise: guardPromise, reject: guardReject, resolve: guardResolve } = Promise.withResolvers<void>();
 		const timer = setTimeout(
 			() =>
@@ -425,13 +435,10 @@ export class DapClient {
 				),
 			WRITE_MESSAGE_TIMEOUT_MS,
 		);
-		// If the adapter exits mid-write, fail fast rather than blocking forever
-		// on a stdin that will never drain. `proc.exited` may resolve normally
-		// (clean exit) or reject (non-zero); either way the write is doomed.
-		const onExit = () => {
+		const rejectOnExit = () => {
 			guardReject(new Error(`DAP adapter ${this.adapter.name} exited before write completed`));
 		};
-		this.proc.exited.then(onExit, onExit);
+		this.#pendingWriteExitRejectors.add(rejectOnExit);
 
 		try {
 			await Promise.race([flushResult, guardPromise]);
@@ -442,9 +449,18 @@ export class DapClient {
 			throw error;
 		} finally {
 			clearTimeout(timer);
-			// Release the guard so any late onExit call becomes a no-op.
+			this.#pendingWriteExitRejectors.delete(rejectOnExit);
+			// Release the guard so any late timeout callback becomes a no-op.
 			guardResolve();
 		}
+	}
+
+	#rejectPendingWritesForExit(): void {
+		this.#adapterExited = true;
+		for (const reject of this.#pendingWriteExitRejectors) {
+			reject();
+		}
+		this.#pendingWriteExitRejectors.clear();
 	}
 
 	async dispose(): Promise<void> {
