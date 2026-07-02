@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed custom tool discovery treating `process.exit()` from an imported tool module as a host process exit instead of a recoverable tool load failure ([#1704](https://github.com/can1357/oh-my-pi/issues/1704)).
+- Fixed custom tool loading treating `process.exit()` from a tool module's import or factory as a host process exit instead of a recoverable load failure. Custom tools now load under the shared extension exit guard, so an exiting tool is skipped with a load error while remaining tools still load ([#1704](https://github.com/can1357/oh-my-pi/issues/1704)).
 
 ## [15.8.0] - 2026-06-02
 

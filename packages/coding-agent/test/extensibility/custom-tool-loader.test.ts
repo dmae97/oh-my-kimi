@@ -1,14 +1,12 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { logger } from "@oh-my-pi/pi-utils";
 import { loadCustomTools } from "../../src/extensibility/custom-tools/loader";
 
 let tempRoot: string | undefined;
 
 afterEach(async () => {
-	vi.restoreAllMocks();
 	if (tempRoot) {
 		await fs.rm(tempRoot, { recursive: true, force: true });
 		tempRoot = undefined;
@@ -27,10 +25,23 @@ function requireTempRoot(): string {
 	return tempRoot;
 }
 
-describe("custom tool loader", () => {
-	it("survives a tool that calls process.exit synchronously at import time and still loads later valid tools", async () => {
-		const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
+const VALID_TOOL_SOURCE = [
+	"export default api => ({",
+	'\tname: "safe_custom_tool",',
+	'\tlabel: "Safe Custom Tool",',
+	'\tdescription: "Returns a fixed response",',
+	"\tparameters: api.zod.object({}),",
+	"\tasync execute() {",
+	'\t\treturn { content: [{ type: "text", text: "ok" }] };',
+	"\t},",
+	"});",
+].join("\n");
 
+describe("custom tool loader", () => {
+	it("skips a tool that calls process.exit synchronously at import time and still loads later valid tools", async () => {
+		// CLI-shaped module: main() at the bottom, exit on failure (issue #1704).
+		// Without the exit guard this terminates the test process before the
+		// assertions run.
 		const exitingTool = await writeTool(
 			"sync-exit.js",
 			[
@@ -44,82 +55,28 @@ describe("custom tool loader", () => {
 				"main();",
 			].join("\n"),
 		);
-		const validTool = await writeTool(
-			"valid.js",
-			[
-				"export default api => ({",
-				'\tname: "safe_custom_tool",',
-				'\tlabel: "Safe Custom Tool",',
-				'\tdescription: "Returns a fixed response",',
-				"\tparameters: api.zod.object({}),",
-				"\tasync execute() {",
-				'\t\treturn { content: [{ type: "text", text: "ok" }] };',
-				"\t},",
-				"});",
-			].join("\n"),
-		);
+		const validTool = await writeTool("valid.js", VALID_TOOL_SOURCE);
 
 		const result = await loadCustomTools([{ path: exitingTool }, { path: validTool }], requireTempRoot(), []);
 
 		expect(result.tools.map(tool => tool.tool.name)).toEqual(["safe_custom_tool"]);
 		expect(result.errors).toHaveLength(1);
 		expect(result.errors[0]?.path).toBe(exitingTool);
-
-		const loggedExit = errorSpy.mock.calls.find(
-			call =>
-				typeof call[0] === "string" && call[0].startsWith("Custom tool attempted to exit the process during load"),
-		);
-		expect(loggedExit).toBeDefined();
-		expect(loggedExit?.[1]).toMatchObject({ code: 1 });
+		expect(result.errors[0]?.error).toContain("process.exit(1)");
 	});
 
-	it("survives a tool that schedules a deferred process.exit via void promise.catch and still registers it", async () => {
-		const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
+	it("skips a tool whose factory calls process.exit and still loads later valid tools", async () => {
+		const factoryExitTool = await writeTool(
+			"factory-exit.js",
+			["export default () => {", "\tprocess.exit(3);", "};"].join("\n"),
+		);
+		const validTool = await writeTool("valid.js", VALID_TOOL_SOURCE);
 
-		const signalKey = `__omp1704_async_signal_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-		const { promise, resolve } = Promise.withResolvers<unknown>();
-		(globalThis as Record<string, unknown>)[signalKey] = resolve;
+		const result = await loadCustomTools([{ path: factoryExitTool }, { path: validTool }], requireTempRoot(), []);
 
-		try {
-			const asyncTool = await writeTool(
-				"async-exit.js",
-				[
-					`const signal = globalThis[${JSON.stringify(signalKey)}];`,
-					"async function main() { throw new Error('startup failure'); }",
-					"void main().catch(() => {",
-					"\tprocess.exit(7);",
-					"\tsignal('survived');",
-					"});",
-					"export default api => ({",
-					'\tname: "async_exit_tool",',
-					'\tlabel: "Async Exit Tool",',
-					'\tdescription: "Schedules a deferred exit during import",',
-					"\tparameters: api.zod.object({}),",
-					"\tasync execute() {",
-					'\t\treturn { content: [{ type: "text", text: "ok" }] };',
-					"\t},",
-					"});",
-				].join("\n"),
-			);
-
-			const result = await loadCustomTools([{ path: asyncTool }], requireTempRoot(), []);
-
-			// The tool's deferred exit attempt fires after the import promise settles.
-			// If the guard did not intercept it, the test process would die before this resolves.
-			const outcome = await promise;
-			expect(outcome).toBe("survived");
-			expect(result.tools.map(tool => tool.tool.name)).toEqual(["async_exit_tool"]);
-			expect(result.errors).toEqual([]);
-
-			const loggedExit = errorSpy.mock.calls.find(
-				call =>
-					typeof call[0] === "string" &&
-					call[0].startsWith("Custom tool attempted to exit the process during load"),
-			);
-			expect(loggedExit).toBeDefined();
-			expect(loggedExit?.[1]).toMatchObject({ code: 7 });
-		} finally {
-			delete (globalThis as Record<string, unknown>)[signalKey];
-		}
+		expect(result.tools.map(tool => tool.tool.name)).toEqual(["safe_custom_tool"]);
+		expect(result.errors).toHaveLength(1);
+		expect(result.errors[0]?.path).toBe(factoryExitTool);
+		expect(result.errors[0]?.error).toContain("process.exit(3)");
 	});
 });

@@ -15,66 +15,8 @@ import { execCommand } from "../../exec/exec";
 import type { HookUIContext } from "../../extensibility/hooks/types";
 import { getAllPluginToolPaths } from "../../extensibility/plugins/loader";
 import * as typebox from "../typebox";
-import { createNoOpUIContext, resolvePath } from "../utils";
+import { createNoOpUIContext, resolvePath, withExitGuard } from "../utils";
 import type { CustomToolAPI, CustomToolFactory, LoadedCustomTool, ToolLoadError } from "./types";
-
-/**
- * Depth counter for the surrounding `loadCustomTools` batch. While greater
- * than zero, any `process.exit()` call is logged and dropped instead of
- * terminating the host. The batch stays open through every awaited
- * `loadTool` and through the microtask drain that happens at each `await`
- * point, so deferred exits scheduled by a tool's import or factory (for
- * example `void main().catch(() => process.exit(1))`) fire while the guard
- * is still active.
- */
-let activeBatchDepth = 0;
-/** Captured reference to the original `process.exit`, set when the guard is first installed. */
-let originalProcessExit: typeof process.exit | null = null;
-
-/**
- * Install a permanent `process.exit` interceptor on the first custom tool load.
- *
- * The interceptor logs and drops any `process.exit` call made while a batch is
- * open (`activeBatchDepth > 0`). Outside the batch window the call delegates
- * to the original `process.exit` so omp's own shutdown paths behave normally.
- *
- * The guard is intentionally never restored: tool-scheduled microtask work
- * runs across `await` points inside the batch (Bun's dynamic import body runs
- * on a separate microtask), and once installed the wrapper costs one extra
- * function call per exit. It does *not* attempt to catch exits scheduled by
- * `setTimeout`/`queueMicrotask` that fire after the batch has resolved —
- * those require process isolation, which is out of scope here.
- */
-function installExitGuardOnce(): void {
-	if (originalProcessExit !== null) return;
-	const captured = process.exit;
-	originalProcessExit = captured;
-	const guarded: typeof process.exit = code => {
-		if (activeBatchDepth > 0) {
-			logger.error("Custom tool attempted to exit the process during load; call ignored", { code });
-			return undefined as never;
-		}
-		return captured(code);
-	};
-	process.exit = guarded;
-}
-
-/**
- * Run a `loadCustomTools` batch under the exit guard. Sync exits from a
- * tool's import body or factory and async microtask follow-ups scheduled
- * during the batch are both intercepted while the batch is open, because the
- * microtask drain at each `await` point happens before the surrounding batch
- * promise resolves.
- */
-async function withCustomToolBatch<T>(operation: () => Promise<T>): Promise<T> {
-	installExitGuardOnce();
-	activeBatchDepth++;
-	try {
-		return await operation();
-	} finally {
-		activeBatchDepth--;
-	}
-}
 
 /**
  * Load a single tool module using native Bun import.
@@ -100,14 +42,14 @@ async function loadTool(
 	}
 
 	try {
-		const module = await import(resolvedPath);
+		const module = await withExitGuard(() => import(resolvedPath));
 		const factory = (module.default ?? module) as CustomToolFactory;
 
 		if (typeof factory !== "function") {
 			return { tools: null, error: { path: toolPath, error: "Tool must export a default function", source } };
 		}
 
-		const toolResult = await factory(sharedApi);
+		const toolResult = await withExitGuard(async () => factory(sharedApi));
 		const toolsArray = Array.isArray(toolResult) ? toolResult : [toolResult];
 
 		const loadedTools: LoadedCustomTool[] = toolsArray.map(tool => ({
@@ -236,7 +178,7 @@ export async function loadCustomTools(
 		builtInToolNames,
 		pushPendingAction,
 	);
-	await withCustomToolBatch(() => loader.load(pathsWithSources));
+	await loader.load(pathsWithSources);
 	return {
 		tools: loader.tools,
 		errors: loader.errors,
