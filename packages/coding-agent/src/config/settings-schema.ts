@@ -3630,6 +3630,17 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"ask.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			group: "Available Tools",
+			label: "Ask",
+			description: "Enable the ask tool for interactive user questions",
+		},
+	},
+
 	"browser.enabled": {
 		type: "boolean",
 		default: true,

@@ -113,6 +113,37 @@ export interface ExtensionUISelectOption {
 
 export type ExtensionUISelectItem = string | ExtensionUISelectOption;
 
+export interface ExtensionAskDialogOption {
+	label: string;
+	description?: string;
+	preview?: string;
+}
+
+export interface ExtensionAskDialogQuestion {
+	id: string;
+	question: string;
+	header?: string;
+	options: ExtensionAskDialogOption[];
+	multi?: boolean;
+	recommended?: number;
+}
+
+export interface ExtensionAskDialogResultItem {
+	id: string;
+	question: string;
+	options: string[];
+	multi: boolean;
+	selectedOptions: string[];
+	customInput?: string;
+	note?: string;
+	timedOut?: boolean;
+}
+
+export interface ExtensionAskDialogResult {
+	kind: "submit";
+	results: ExtensionAskDialogResultItem[];
+}
+
 export function getExtensionUISelectOptionLabel(option: ExtensionUISelectItem): string {
 	return typeof option === "string" ? option : option.label;
 }
@@ -185,6 +216,12 @@ export interface ExtensionUIContext {
 
 	/** Show a text input dialog. */
 	input(title: string, placeholder?: string, dialogOptions?: ExtensionUIDialogOptions): Promise<string | undefined>;
+
+	/** Show the rich ask dialog when the interactive TUI surface is available. */
+	askDialog?(
+		questions: ExtensionAskDialogQuestion[],
+		dialogOptions?: ExtensionUIDialogOptions,
+	): Promise<ExtensionAskDialogResult | undefined>;
 
 	/** Show a notification to the user. */
 	notify(message: string, type?: "info" | "warning" | "error"): void;

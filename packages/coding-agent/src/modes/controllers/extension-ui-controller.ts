@@ -5,6 +5,9 @@ import { KeybindingsManager } from "../../config/keybindings";
 import type {
 	CompactOptions,
 	ExtensionActions,
+	ExtensionAskDialogQuestion,
+	ExtensionAskDialogResult,
+	ExtensionAskDialogResultItem,
 	ExtensionCommandContextActions,
 	ExtensionContextActions,
 	ExtensionError,
@@ -19,6 +22,7 @@ import type {
 } from "../../extensibility/extensions";
 import { getSessionSlashCommands } from "../../extensibility/extensions/get-commands-handler";
 import { createExtensionModelQuery } from "../../extensibility/extensions/model-api";
+import { AskDialogComponent } from "../../modes/components/ask-dialog";
 import { HookEditorComponent } from "../../modes/components/hook-editor";
 import { HookInputComponent } from "../../modes/components/hook-input";
 import { HookSelectorComponent, type HookSelectorSlider } from "../../modes/components/hook-selector";
@@ -28,10 +32,18 @@ import { USER_INTERRUPT_LABEL } from "../../session/messages";
 import { setSessionTerminalTitle, setTerminalTitle } from "../../utils/title-generator";
 
 const MAX_WIDGET_LINES = 10;
+const ASK_OTHER_OPTION = "Other (type your own)";
+const ASK_CHAT_OPTION = "Chat about this";
+const ASK_NEXT_OPTION = "Next →";
 
 interface CollabDialogWinner {
 	source: "local" | "remote";
 	value: string | undefined;
+}
+
+interface CollabAskDialogWinner {
+	source: "local" | "remote";
+	value: ExtensionAskDialogResult | undefined;
 }
 
 function toWireSelectOptions(options: ExtensionUISelectItem[]): CollabUiSelectItem[] {
@@ -64,6 +76,7 @@ export class ExtensionUiController {
 			select: (title, options, dialogOptions) => this.showCollabAwareSelector(title, options, dialogOptions),
 			confirm: (title, message, _dialogOptions) => this.showHookConfirm(title, message),
 			input: (title, placeholder, dialogOptions) => this.showHookInput(title, placeholder, dialogOptions),
+			askDialog: (questions, dialogOptions) => this.showAskDialog(questions, dialogOptions),
 			notify: (message, type) => this.showHookNotify(message, type),
 			onTerminalInput: handler => this.addExtensionTerminalInputListener(handler),
 			setStatus: (key, text) => this.setHookStatus(key, text),
@@ -579,6 +592,107 @@ export class ExtensionUiController {
 		);
 	}
 
+	async showAskDialog(
+		questions: ExtensionAskDialogQuestion[],
+		dialogOptions?: ExtensionUIDialogOptions,
+	): Promise<ExtensionAskDialogResult | undefined> {
+		const host = this.ctx.collabHost;
+		if (!host) return this.#showLocalAskDialog(questions, dialogOptions);
+		const localAbort = new AbortController();
+		const remoteAbort = new AbortController();
+		const parentSignal = dialogOptions?.signal;
+		const localSignal = parentSignal ? AbortSignal.any([parentSignal, localAbort.signal]) : localAbort.signal;
+		const remoteSignal = parentSignal ? AbortSignal.any([parentSignal, remoteAbort.signal]) : remoteAbort.signal;
+		const localWinner = this.#showLocalAskDialog(questions, { ...dialogOptions, signal: localSignal }).then(
+			(value): CollabAskDialogWinner => ({ source: "local", value }),
+		);
+		const remoteWinner: Promise<CollabAskDialogWinner> = this.#runGuestAskDialog(questions, remoteSignal).then(
+			result => (result === "unavailable" ? localWinner : { source: "remote", value: result }),
+		);
+		const winner = await Promise.race([localWinner, remoteWinner]);
+		if (winner.source === "remote") localAbort.abort();
+		else remoteAbort.abort();
+		return winner.value;
+	}
+
+	#showLocalAskDialog(
+		questions: ExtensionAskDialogQuestion[],
+		dialogOptions?: ExtensionUIDialogOptions,
+	): Promise<ExtensionAskDialogResult | undefined> {
+		return this.#presentDialog<ExtensionAskDialogResult>(dialogOptions?.signal, settle => {
+			let askDialog: AskDialogComponent | undefined;
+			let promptEditor: HookEditorComponent | undefined;
+			let promptResolve: ((value: string | undefined) => void) | undefined;
+			let closed = false;
+
+			const restoreAskDialog = (): void => {
+				if (closed || !askDialog) return;
+				this.ctx.editorContainer.clear();
+				this.ctx.editorContainer.addChild(askDialog);
+				this.ctx.ui.setFocus(askDialog);
+				this.ctx.ui.requestRender();
+			};
+
+			const finishPrompt = (value: string | undefined): void => {
+				const resolvePrompt = promptResolve;
+				promptResolve = undefined;
+				promptEditor = undefined;
+				restoreAskDialog();
+				resolvePrompt?.(value);
+			};
+
+			const promptForText = (title: string, prefill?: string): Promise<string | undefined> => {
+				if (closed) return Promise.resolve(undefined);
+				const { promise, resolve } = Promise.withResolvers<string | undefined>();
+				promptResolve = resolve;
+				promptEditor = new HookEditorComponent(
+					this.ctx.ui,
+					title,
+					prefill,
+					value => finishPrompt(value),
+					() => finishPrompt(undefined),
+					{ promptStyle: true },
+				);
+				this.ctx.editorContainer.clear();
+				this.ctx.editorContainer.addChild(promptEditor);
+				this.ctx.ui.setFocus(promptEditor);
+				this.ctx.ui.requestRender();
+				return promise;
+			};
+
+			askDialog = new AskDialogComponent(
+				questions,
+				{
+					onSubmit: result => settle(result),
+					onCancel: () => settle(undefined),
+					onChat: () => settle(undefined),
+					onPrompt: promptForText,
+				},
+				{
+					timeout: dialogOptions?.timeout,
+					onTimeout: dialogOptions?.onTimeout,
+					tui: this.ctx.ui,
+				},
+			);
+			this.ctx.editorContainer.clear();
+			this.ctx.editorContainer.addChild(askDialog);
+			this.ctx.ui.setFocus(askDialog);
+			this.ctx.ui.requestRender();
+
+			return () => {
+				closed = true;
+				askDialog?.dispose();
+				promptResolve?.(undefined);
+				promptResolve = undefined;
+				promptEditor = undefined;
+				this.ctx.editorContainer.clear();
+				this.ctx.editorContainer.addChild(this.ctx.editor);
+				this.ctx.ui.setFocus(this.ctx.editor);
+				this.ctx.ui.requestRender();
+			};
+		});
+	}
+
 	/**
 	 * Race the local hook dialog against a mirrored guest ask. First *answer*
 	 * wins and cancels the other side. A remote `unavailable` settlement
@@ -610,6 +724,114 @@ export class ExtensionUiController {
 		if (winner.source === "remote") localAbort.abort();
 		else remoteAbort.abort();
 		return winner.value;
+	}
+
+	async #runGuestAskDialog(
+		questions: ExtensionAskDialogQuestion[],
+		signal: AbortSignal,
+	): Promise<ExtensionAskDialogResult | "unavailable" | undefined> {
+		const results: ExtensionAskDialogResultItem[] = [];
+		for (const question of questions) {
+			const result = await this.#runGuestAskQuestion(question, signal);
+			if (result === "unavailable" || result === undefined) return result;
+			results.push(result);
+		}
+		return { kind: "submit", results };
+	}
+
+	async #runGuestAskQuestion(
+		question: ExtensionAskDialogQuestion,
+		signal: AbortSignal,
+	): Promise<ExtensionAskDialogResultItem | "unavailable" | undefined> {
+		const selected = new Set<string>();
+		let customInput: string | undefined;
+		const baseOptions: CollabUiSelectItem[] = question.options.map(option =>
+			option.description?.trim() ? { label: option.label, description: option.description.trim() } : option.label,
+		);
+		if (question.multi) {
+			while (true) {
+				const checkedIndices = question.options
+					.map((option, index) => (selected.has(option.label) ? index : -1))
+					.filter(index => index >= 0);
+				const choice = await this.#requestGuestUiString(
+					{
+						kind: "select",
+						title: question.question,
+						options: [...baseOptions, ASK_OTHER_OPTION, ASK_NEXT_OPTION, ASK_CHAT_OPTION],
+						selectionMarker: "checkbox",
+						checkedIndices,
+						markableCount: question.options.length,
+						helpText: "up/down navigate  enter toggle  Next → continue  esc cancel",
+					},
+					signal,
+				);
+				if (choice === "unavailable" || choice === undefined) return choice;
+				if (choice === ASK_CHAT_OPTION) return undefined;
+				if (choice === ASK_NEXT_OPTION) break;
+				if (choice === ASK_OTHER_OPTION) {
+					const input = await this.#requestGuestUiString(
+						{ kind: "editor", title: `Custom answer: ${question.question}` },
+						signal,
+					);
+					if (input === "unavailable" || input === undefined) return input;
+					customInput = input;
+					break;
+				}
+				if (selected.has(choice)) selected.delete(choice);
+				else selected.add(choice);
+			}
+		} else {
+			const recommended =
+				typeof question.recommended === "number" && Number.isInteger(question.recommended)
+					? question.recommended
+					: 0;
+			const initialIndex = Math.max(0, Math.min(recommended, Math.max(0, question.options.length - 1)));
+			const choice = await this.#requestGuestUiString(
+				{
+					kind: "select",
+					title: question.question,
+					options: [...baseOptions, ASK_OTHER_OPTION, ASK_CHAT_OPTION],
+					initialIndex,
+					selectionMarker: "radio",
+					markableCount: question.options.length,
+					helpText: "up/down navigate  enter select  esc cancel",
+				},
+				signal,
+			);
+			if (choice === "unavailable" || choice === undefined) return choice;
+			if (choice === ASK_CHAT_OPTION) return undefined;
+			if (choice === ASK_OTHER_OPTION) {
+				const input = await this.#requestGuestUiString(
+					{ kind: "editor", title: `Custom answer: ${question.question}` },
+					signal,
+				);
+				if (input === "unavailable" || input === undefined) return input;
+				customInput = input;
+			} else {
+				selected.add(choice);
+			}
+		}
+		return {
+			id: question.id,
+			question: question.question,
+			options: question.options.map(option => option.label),
+			multi: question.multi ?? false,
+			selectedOptions: question.options.map(option => option.label).filter(label => selected.has(label)),
+			customInput,
+		};
+	}
+
+	async #requestGuestUiString(
+		request: CollabUiRequestDraft,
+		signal: AbortSignal,
+	): Promise<string | "unavailable" | undefined> {
+		const host = this.ctx.collabHost;
+		if (!host) return "unavailable";
+		const remote = host.requestGuestUi(request, signal);
+		if (!remote) return "unavailable";
+		const result = await remote;
+		if (result.kind === "unavailable") return "unavailable";
+		return typeof result.value === "string" ? result.value : undefined;
 	}
 
 	/**
@@ -914,11 +1136,11 @@ export class ExtensionUiController {
 	 * the current dialog and hands the surface to the next queued request. A request
 	 * whose signal aborts before its turn resolves `undefined` and is never shown.
 	 */
-	#presentDialog(
+	#presentDialog<T = string>(
 		signal: AbortSignal | undefined,
-		present: (settle: (value: string | undefined) => void) => () => void,
-	): Promise<string | undefined> {
-		const { promise, resolve, reject } = Promise.withResolvers<string | undefined>();
+		present: (settle: (value: T | undefined) => void) => () => void,
+	): Promise<T | undefined> {
+		const { promise, resolve, reject } = Promise.withResolvers<T | undefined>();
 		let settled = false;
 		let started = false;
 		let hide: (() => void) | undefined;
@@ -927,7 +1149,7 @@ export class ExtensionUiController {
 			settle(undefined);
 		}
 
-		const settle = (value: string | undefined): void => {
+		const settle = (value: T | undefined): void => {
 			if (settled) return;
 			settled = true;
 			signal?.removeEventListener("abort", onAbort);
