@@ -1413,7 +1413,13 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					}
 					if (hashContext?.tag) {
 						const absoluteFilePath = path.resolve(this.session.cwd, relativePath);
-						recordSeenLinesFromBody(this.session, absoluteFilePath, hashContext.tag, modelOut.join("\n"), clippedLines);
+						recordSeenLinesFromBody(
+							this.session,
+							absoluteFilePath,
+							hashContext.tag,
+							modelOut.join("\n"),
+							clippedLines,
+						);
 					}
 					return { model: modelOut, display: displayOut };
 				};

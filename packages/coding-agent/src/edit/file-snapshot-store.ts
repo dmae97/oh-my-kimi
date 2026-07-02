@@ -149,7 +149,6 @@ export function recordSeenLinesFromBody(
 	excludedLines?: ReadonlySet<number>,
 ): void {
 	const parsed = parseSeenLinesFromHashlineBody(body);
-	const filtered =
-		excludedLines && excludedLines.size > 0 ? parsed.filter(line => !excludedLines.has(line)) : parsed;
+	const filtered = excludedLines && excludedLines.size > 0 ? parsed.filter(line => !excludedLines.has(line)) : parsed;
 	recordSeenLines(session, absolutePath, tag, filtered);
 }
