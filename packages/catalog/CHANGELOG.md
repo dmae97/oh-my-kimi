@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed custom `anthropic-messages` providers to default unsigned-thinking replay off, avoiding empty thinking signatures on Anthropic signing proxies. ([#4297](https://github.com/can1357/oh-my-pi/issues/4297))
+- Fixed custom `anthropic-messages` providers to default unsigned-thinking replay off, avoiding empty thinking signatures on Anthropic signing proxies while preserving native replay for the known non-signing hosts (Z.AI, DeepSeek, Umans, MiniMax). ([#4297](https://github.com/can1357/oh-my-pi/issues/4297))
 
 ## [16.3.1] - 2026-07-02
 

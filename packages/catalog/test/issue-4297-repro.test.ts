@@ -28,4 +28,23 @@ describe("#4297 custom anthropic-messages provider signing default", () => {
 			true,
 		);
 	});
+
+	it("preserves native unsigned-thinking replay for the Umans coding-plan anthropic proxy", () => {
+		const compat = buildAnthropicCompat(
+			spec({ provider: "umans", baseUrl: "https://api.code.umans.ai/anthropic", id: "glm-5.2" }),
+		);
+		expect(compat.replayUnsignedThinking).toBe(true);
+	});
+
+	it("preserves native unsigned-thinking replay for MiniMax's Anthropic-messages proxies", () => {
+		const compat = buildAnthropicCompat(
+			spec({ provider: "minimax", baseUrl: "https://api.minimax.io/anthropic", id: "minimax-m2" }),
+		);
+		expect(compat.replayUnsignedThinking).toBe(true);
+
+		const compatCn = buildAnthropicCompat(
+			spec({ provider: "minimax-cn", baseUrl: "https://api.minimaxi.com/anthropic", id: "minimax-m2" }),
+		);
+		expect(compatCn.replayUnsignedThinking).toBe(true);
+	});
 });

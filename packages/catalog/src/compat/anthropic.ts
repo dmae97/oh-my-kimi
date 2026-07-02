@@ -73,16 +73,26 @@ export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): Res
 		// into a class that reads `.id`.
 		requiresToolResultId: isZai,
 		requiresThinkingEnabled,
-		// Official Anthropic and Anthropic-compatible signing endpoints enforce
+		// Official Anthropic and Anthropic-compatible signing proxies enforce
 		// signature-based thinking-chain integrity, so unsigned thinking blocks
-		// must stay text there. Custom `anthropic-messages` providers default to
-		// the signed-safe behavior: sending `signature: ""` to a signing endpoint
-		// 400s, while demoting unsigned thinking to text is accepted.
+		// must stay text there. Generic `anthropic-messages` proxies default to
+		// that signed-safe behavior (#4297): sending `signature: ""` to a signing
+		// endpoint 400s with `Invalid signature in thinking`, while demoting the
+		// block to text is always accepted.
 		//
-		// Known non-signing hosts (Z.AI, DeepSeek) are preserved for compatibility;
-		// other non-signing custom gateways can opt in via
+		// Known non-signing Anthropic-messages hosts keep the native replay path
+		// so the reasoning chain survives continuation (#2005): Z.AI, DeepSeek
+		// family, Umans (`api.code.umans.ai`) and MiniMax's Anthropic routes
+		// (`api.minimax.io/anthropic`, `api.minimaxi.com/anthropic`). Other
+		// non-signing custom gateways opt in via
 		// `compat.replayUnsignedThinking: true`.
-		replayUnsignedThinking: !isCopilot && !isZenmux && (isZai || modelMatchesHost(spec, "deepseekFamily")),
+		replayUnsignedThinking:
+			!isCopilot &&
+			!isZenmux &&
+			(isZai ||
+				modelMatchesHost(spec, "deepseekFamily") ||
+				modelMatchesHost(spec, "umans") ||
+				modelMatchesHost(spec, "minimax")),
 		escapeBuiltinToolNames: modelMatchesHost(spec, "umans"),
 	};
 	applyCompatOverrides(compat, spec.compat);
