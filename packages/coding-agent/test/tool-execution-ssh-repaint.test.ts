@@ -50,30 +50,55 @@ describe("ToolExecutionComponent SSH repaint seams", () => {
 		return { component, resetDisplay };
 	}
 
-	it("forces a viewport repaint when a streamed SSH placeholder receives its first result", () => {
+	it("forces a viewport repaint when a painted streamed SSH placeholder receives its first result", () => {
 		const { component, resetDisplay } = makeComponent({ __partialJson: '{"host"' });
+		// A paint has to land for the placeholder to actually reach the terminal.
+		component.render(80);
 
 		component.updateResult(sshResult("partial output"), true);
 
 		expect(resetDisplay).toHaveBeenCalledTimes(1);
 	});
 
-	it("does not repaint complete SSH args on the first result", () => {
-		const { component, resetDisplay } = makeComponent({ host: "router", command: "uptime" });
+	it("does not repaint when the streamed placeholder never reaches the terminal", () => {
+		const { component, resetDisplay } = makeComponent({ __partialJson: '{"host"' });
+		// The placeholder shape was built in memory but never painted — a
+		// resetDisplay here would wipe scrollback for a shape the user never saw.
 
 		component.updateResult(sshResult("partial output"), true);
 
 		expect(resetDisplay).not.toHaveBeenCalled();
 	});
 
-	it("forces a viewport repaint when a provisional SSH partial result settles", () => {
+	it("does not repaint complete SSH args on the first result", () => {
+		const { component, resetDisplay } = makeComponent({ host: "router", command: "uptime" });
+		component.render(80);
+
+		component.updateResult(sshResult("partial output"), true);
+
+		expect(resetDisplay).not.toHaveBeenCalled();
+	});
+
+	it("forces a viewport repaint when a painted provisional SSH partial result settles", () => {
 		const { component, resetDisplay } = makeComponent({ host: "router", command: "uptime" });
 		component.updateResult(sshResult("partial output"), true);
+		component.render(80);
 		resetDisplay.mockClear();
 
 		component.updateResult(sshResult("final output"), false);
 
 		expect(resetDisplay).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not repaint when the provisional partial result never reaches the terminal", () => {
+		const { component, resetDisplay } = makeComponent({ host: "router", command: "uptime" });
+		component.updateResult(sshResult("partial output"), true);
+		// No render() between the partial and the final update — the provisional
+		// frame never reached the terminal, so no reset should fire.
+
+		component.updateResult(sshResult("final output"), false);
+
+		expect(resetDisplay).not.toHaveBeenCalled();
 	});
 
 	it("removes streamed SSH placeholder rows from the terminal buffer when the first result arrives", async () => {

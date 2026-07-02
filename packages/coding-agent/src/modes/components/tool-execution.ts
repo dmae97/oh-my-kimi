@@ -281,9 +281,14 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	// history, so progress renders static gray and further partial snapshots are
 	// dropped (see #maybeFreezeBackgroundTask).
 	#backgroundTaskFrozen = false;
-	// Set once this instance rendered a pending call from streamed raw JSON for a
-	// renderer that replaces that placeholder with a re-anchored first result.
-	#renderedStreamedPlaceholderCall = false;
+	// Set on each `render()` when the last painted shape carried the streamed
+	// SSH-style placeholder / partial-result chrome. Reset gates key off these
+	// so a topology-changing update that lands before the shape reaches the
+	// terminal never triggers a full-viewport replay (which on direct terminals
+	// wipes native scrollback and flashes the user's history — reviewer note on
+	// PR #4315).
+	#placeholderShapePainted = false;
+	#partialResultShapePainted = false;
 	#renderState: {
 		spinnerFrame?: number;
 		expanded: boolean;
@@ -489,6 +494,10 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		}
 		const hadNoResult = this.#result === undefined;
 		const wasPartialResult = this.#result !== undefined && this.#isPartial;
+		const placeholderPainted = this.#placeholderShapePainted;
+		const partialResultPainted = this.#partialResultShapePainted;
+		this.#placeholderShapePainted = false;
+		this.#partialResultShapePainted = false;
 		this.#result = result;
 		this.#resultVersion++;
 		this.#isPartial = isPartial;
@@ -500,7 +509,11 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		this.#updateSpinnerAnimation();
 		this.#updateTodoStrikeAnimation();
 		this.#updateDisplay();
-		this.#resetDisplayForResultTopologyChange(hadNoResult, wasPartialResult, isPartial);
+		this.#resetDisplayForResultTopologyChange(
+			hadNoResult && placeholderPainted,
+			wasPartialResult && partialResultPainted,
+			isPartial,
+		);
 		// Convert non-PNG images to PNG for Kitty protocol (async)
 		this.#maybeConvertImagesForKitty();
 	}
@@ -815,20 +828,41 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		return toolValue === true || (toolValue === undefined && rendererValue === true);
 	}
 
-	#rememberStreamedPlaceholderCall(renderArgs: unknown): void {
-		if (!this.#rendererFlag("forceFirstResultViewportRepaint")) return;
-		if (partialJsonOf(renderArgs) === undefined) return;
-		this.#renderedStreamedPlaceholderCall = true;
+	/**
+	 * True while the last painted shape uses the streamed placeholder path
+	 * (`⏳ SSH: […]` / `$ …`) — the render call ran with `__partialJson` args
+	 * and no result. Kept as a per-paint fact so a topology-changing update
+	 * that lands before the placeholder reaches the terminal skips the reset.
+	 */
+	#isPlaceholderShapeAtRender(): boolean {
+		if (this.#result !== undefined) return false;
+		if (!this.#rendererFlag("forceFirstResultViewportRepaint")) return false;
+		return partialJsonOf(this.#args) !== undefined;
 	}
 
-	#resetDisplayForResultTopologyChange(hadNoResult: boolean, wasPartialResult: boolean, isPartial: boolean): void {
+	#resetDisplayForResultTopologyChange(
+		firstResultAfterPlaceholderPaint: boolean,
+		partialResultPaintedBeforeSettle: boolean,
+		isPartial: boolean,
+	): void {
 		const firstResultReplacesStreamedPlaceholder =
-			hadNoResult && this.#renderedStreamedPlaceholderCall && this.#rendererFlag("forceFirstResultViewportRepaint");
+			firstResultAfterPlaceholderPaint && this.#rendererFlag("forceFirstResultViewportRepaint");
 		const provisionalResultSettled =
-			!hadNoResult && wasPartialResult && !isPartial && this.#rendererFlag("forceResultViewportRepaintOnSettle");
+			partialResultPaintedBeforeSettle && !isPartial && this.#rendererFlag("forceResultViewportRepaintOnSettle");
 		if (firstResultReplacesStreamedPlaceholder || provisionalResultSettled) {
 			this.#ui.resetDisplay();
 		}
+	}
+
+	override render(width: number): readonly string[] {
+		const lines = super.render(width);
+		// Update the paint-tracking flags after `super.render(width)` — the
+		// override runs on every compose the parent Container performs, so a
+		// frame that never gets composed leaves the flags false and prevents a
+		// spurious `resetDisplay()`.
+		this.#placeholderShapePainted = this.#isPlaceholderShapeAtRender();
+		this.#partialResultShapePainted = this.#result !== undefined && this.#isPartial;
+		return lines;
 	}
 
 	// Viewport-/settings-dependent image sizing folded into the memo key only when
@@ -875,7 +909,6 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 				if (tool.renderCall) {
 					try {
 						const callArgs = this.#getCallArgsForRender();
-						this.#rememberStreamedPlaceholderCall(callArgs);
 						const callComponent = tool.renderCall(callArgs, this.#renderState, theme);
 						if (callComponent) this.#contentBox.addChild(callComponent as Component);
 					} catch (err) {
@@ -1011,7 +1044,6 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 					// Render call component
 					try {
 						const callArgs = this.#getCallArgsForRender();
-						this.#rememberStreamedPlaceholderCall(callArgs);
 						const callComponent = renderer.renderCall(callArgs, this.#renderState, theme);
 						if (callComponent) this.#contentBox.addChild(callComponent);
 					} catch (err) {
