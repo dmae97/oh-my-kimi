@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed explicit `/advisor on` to rebuild the live advisor runtime after `modelRoles.advisor` changes so it rebinds to the newly configured model. ([#4302](https://github.com/can1357/oh-my-pi/issues/4302))
+
 ## [16.3.1] - 2026-07-02
 
 ### Breaking Changes

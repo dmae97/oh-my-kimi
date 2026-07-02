@@ -15187,6 +15187,7 @@ export class AgentSession {
 	setAdvisorEnabled(enabled: boolean): boolean {
 		this.#advisorEnabled = enabled;
 		if (enabled) {
+			if (this.#advisors.length > 0) this.#stopAdvisorRuntime();
 			return this.#buildAdvisorRuntime(true);
 		}
 		this.#stopAdvisorRuntime();

@@ -15,15 +15,20 @@ describe("AgentSession advisor toggle", () => {
 	let authStorage: AuthStorage;
 	let modelRegistry: ModelRegistry;
 	let model: Model;
+	let replacementModel: Model;
 
 	beforeAll(async () => {
 		sharedDir = TempDir.createSync("@pi-advisor-toggle-shared-");
 		authStorage = await AuthStorage.create(path.join(sharedDir.path(), "testauth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.setRuntimeApiKey("openai", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const replacement = getBundledModel("openai", "gpt-4o-mini");
 		if (!bundled) throw new Error("Expected built-in anthropic model to exist");
+		if (!replacement) throw new Error("Expected built-in OpenAI model to exist");
 		model = bundled;
+		replacementModel = replacement;
 	});
 
 	afterAll(async () => {
@@ -78,6 +83,19 @@ describe("AgentSession advisor toggle", () => {
 		expect(session.isAdvisorActive()).toBe(true);
 		expect(session.isAdvisorEnabled()).toBe(true);
 		expect(session.formatAdvisorStatus()).toContain("Advisor is enabled (anthropic/claude-sonnet-4-5)");
+	});
+
+	it("explicit enable rebuilds the runtime when the advisor role changes", () => {
+		session.settings.setModelRole("advisor", `${model.provider}/${model.id}`);
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		expect(session.getAdvisorAgent()?.state.model.provider).toBe(model.provider);
+		expect(session.getAdvisorAgent()?.state.model.id).toBe(model.id);
+
+		session.settings.setModelRole("advisor", `${replacementModel.provider}/${replacementModel.id}`);
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+
+		expect(session.getAdvisorAgent()?.state.model.provider).toBe(replacementModel.provider);
+		expect(session.getAdvisorAgent()?.state.model.id).toBe(replacementModel.id);
 	});
 
 	it("explicit enable overrides default-off setting for the session only", () => {
