@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Codex (ChatGPT subscription) support to `generate_image`. The tool now resolves a connected `openai-codex` OAuth credential and drives OpenAI's hosted `image_generation` tool through the ChatGPT backend (`chatgpt.com/backend-api/codex/responses`, `chatgpt-account-id` header) **independent of the active chat model** — so image generation works on a ChatGPT/Codex subscription with no metered `OPENAI_API_KEY`, even when the active model is Claude/Gemini/etc. A new `providers.image: "openai-codex"` option forces it; `auto` now auto-detects a connected subscription (priority: active GPT image tool > Codex subscription > Antigravity > xAI > OpenRouter > Gemini), and the `openai` preference falls back to it when no `OPENAI_API_KEY`/active GPT model is present.
+- Added an optional `provider` parameter to `generate_image` (`auto` | `openai` | `openai-codex` | `antigravity` | `xai` | `gemini` | `openrouter`) that overrides the `providers.image` setting **for a single request** — so "generate this using gemini / codex / xai" routes per-call without changing the global setting. Absent → the `providers.image` setting applies, unchanged; the named provider uses the same resolution semantics (falls back to auto-detect if it has no credentials). File: `tools/image-gen.ts` (`imageProviderSchema`, `findImageApiKey` `preference` arg).
+
 ## [16.3.8] - 2026-07-05
 
 ### Fixed

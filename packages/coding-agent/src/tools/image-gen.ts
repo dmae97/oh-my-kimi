@@ -45,7 +45,7 @@ const IMAGE_SYSTEM_INSTRUCTION =
 	"You are an AI image generator. Generate images based on user descriptions. Focus on creating high-quality, visually appealing images that match the user's request.";
 
 export type ImageProvider = "antigravity" | "gemini" | "openai" | "openai-codex" | "openrouter" | "xai";
-export type ImageProviderPreference = Exclude<ImageProvider, "openai-codex"> | "auto";
+export type ImageProviderPreference = ImageProvider | "auto";
 
 interface ImageApiKey {
 	provider: ImageProvider;
@@ -57,7 +57,16 @@ interface ImageApiKey {
 const COMMON_IMAGE_ASPECT_RATIOS = ["1:1", "3:4", "4:3", "9:16", "16:9"] as const;
 const XAI_IMAGE_ASPECT_RATIOS = [...COMMON_IMAGE_ASPECT_RATIOS, "3:2", "2:3"] as const;
 const COMMON_IMAGE_ASPECT_RATIO_SET = new Set<string>(COMMON_IMAGE_ASPECT_RATIOS);
-const IMAGE_PROVIDER_PREFERENCES = new Set<string>(["auto", "antigravity", "gemini", "openai", "openrouter", "xai"]);
+const IMAGE_PROVIDER_CHOICES = [
+	"auto",
+	"antigravity",
+	"gemini",
+	"openai",
+	"openai-codex",
+	"openrouter",
+	"xai",
+] as const;
+const IMAGE_PROVIDER_PREFERENCES = new Set<string>(IMAGE_PROVIDER_CHOICES);
 
 const responseModalitySchema = type('"IMAGE" | "TEXT"');
 
@@ -69,6 +78,10 @@ const inputImageSchema = type({
 	"data?": type("string").describe("base64 image data"),
 	"mime_type?": type("string").describe("mime type"),
 });
+
+const imageProviderSchema = type
+	.enumerated(...IMAGE_PROVIDER_CHOICES)
+	.describe("image provider for this request; overrides the providers.image setting (default: use the setting)");
 
 export const imageGenSchema = type({
 	subject: type("string").describe("main subject"),
@@ -82,6 +95,7 @@ export const imageGenSchema = type({
 	"aspect_ratio?": aspectRatioSchema,
 	"image_size?": imageSizeSchema,
 	"input?": inputImageSchema.array().describe("input images"),
+	"provider?": imageProviderSchema,
 });
 export type ImageGenParams = typeof imageGenSchema.infer;
 export type GeminiResponseModality = typeof responseModalitySchema.infer;
@@ -547,37 +561,92 @@ async function findOpenAIHostedImageCredentials(
 	};
 }
 
+// Codex (ChatGPT subscription) chat models that carry OpenAI's hosted
+// `image_generation` tool. Priority: newest general model first, then Codex
+// variants; any available openai-codex hosted-image model is the last resort.
+const CODEX_IMAGE_MODEL_PRIORITY = ["gpt-5.5", "gpt-5.4", "gpt-5.1", "gpt-5", "gpt-5-codex"] as const;
+
+function resolveDefaultCodexImageModel(modelRegistry: ModelRegistry): Model | undefined {
+	for (const id of CODEX_IMAGE_MODEL_PRIORITY) {
+		const model = modelRegistry.find("openai-codex", id);
+		if (model && isOpenAIHostedImageModel(model)) return model;
+	}
+	return modelRegistry.getAll().find(model => model.provider === "openai-codex" && isOpenAIHostedImageModel(model));
+}
+
+/**
+ * Codex subscription (ChatGPT OAuth) image credentials — engages OpenAI's hosted
+ * `image_generation` tool through a CONNECTED Codex account, independent of the
+ * active chat model. This is what lets image generation run on a ChatGPT
+ * subscription (no metered OPENAI_API_KEY) even when the active model is, e.g.,
+ * Claude. The active-model-is-codex case is already served by
+ * {@link findOpenAIHostedImageCredentials}, so it is skipped here to avoid a
+ * duplicate resolution.
+ */
+async function findCodexSubscriptionImageCredentials(
+	modelRegistry: ModelRegistry | undefined,
+	activeModel: Model | undefined,
+	sessionId?: string,
+): Promise<ImageApiKey | null> {
+	if (!modelRegistry) return null;
+	if (isOpenAIHostedImageModel(activeModel) && getOpenAIHostedImageProvider(activeModel) === "openai-codex") {
+		return null;
+	}
+	// Only when a Codex / ChatGPT subscription is actually connected.
+	const token = await modelRegistry.getApiKeyForProvider("openai-codex", sessionId);
+	if (!token) return null;
+	const model = resolveDefaultCodexImageModel(modelRegistry);
+	if (!model) return null;
+	const apiKey = await modelRegistry.getApiKey(model, sessionId);
+	if (!isAuthenticated(apiKey)) return null;
+	return { provider: "openai-codex", apiKey, model };
+}
+
 async function findImageApiKey(
 	modelRegistry?: ModelRegistry,
 	activeModel?: Model,
 	sessionId?: string,
+	preference: ImageProviderPreference = preferredImageProvider,
 ): Promise<ImageApiKey | null> {
-	// If a specific provider is preferred, try it first.
-	if (preferredImageProvider === "openai") {
+	// If a specific provider is preferred — a per-request `provider` override or
+	// the providers.image setting — try it first, then fall through to auto-detect.
+	if (preference === "openai-codex") {
+		// Explicit: use a connected Codex (ChatGPT subscription) account's hosted
+		// image_generation tool — no metered OPENAI_API_KEY, any active chat model.
+		const codex = await findCodexSubscriptionImageCredentials(modelRegistry, activeModel, sessionId);
+		if (codex) return codex;
+		// Fall through to auto-detect if the subscription is not connected.
+	} else if (preference === "openai") {
 		const openAI = await findOpenAIHostedImageCredentials(modelRegistry, activeModel, sessionId);
 		if (openAI) return openAI;
+		const codex = await findCodexSubscriptionImageCredentials(modelRegistry, activeModel, sessionId);
+		if (codex) return codex;
 		// Fall through to auto-detect if preferred provider key not found.
-	} else if (preferredImageProvider === "antigravity" && modelRegistry) {
+	} else if (preference === "antigravity" && modelRegistry) {
 		const antigravity = await findAntigravityCredentials(modelRegistry, sessionId);
 		if (antigravity) return antigravity;
 		// Fall through to auto-detect if preferred provider key not found.
-	} else if (preferredImageProvider === "gemini") {
+	} else if (preference === "gemini") {
 		const gemini = await findGeminiImageCredentials(modelRegistry, sessionId);
 		if (gemini) return gemini;
 		// Fall through to auto-detect if preferred provider key not found.
-	} else if (preferredImageProvider === "openrouter") {
+	} else if (preference === "openrouter") {
 		const openRouter = await findOpenRouterImageCredentials(modelRegistry, sessionId);
 		if (openRouter) return openRouter;
 		// Fall through to auto-detect if preferred provider key not found.
-	} else if (preferredImageProvider === "xai") {
+	} else if (preference === "xai") {
 		const xai = await findXAIImageCredentials(modelRegistry);
 		if (xai) return xai;
 		// Fall through to auto-detect if preferred provider key not found.
 	}
 
-	// Auto-detect: GPT hosted image generation, then Antigravity, xAI, OpenRouter, Gemini.
+	// Auto-detect: active GPT hosted image tool, then a connected Codex
+	// subscription, then Antigravity, xAI, OpenRouter, Gemini.
 	const openAI = await findOpenAIHostedImageCredentials(modelRegistry, activeModel, sessionId);
 	if (openAI) return openAI;
+
+	const codexSubscription = await findCodexSubscriptionImageCredentials(modelRegistry, activeModel, sessionId);
+	if (codexSubscription) return codexSubscription;
 
 	if (modelRegistry) {
 		const antigravity = await findAntigravityCredentials(modelRegistry, sessionId);
@@ -1041,10 +1110,10 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 	async execute(_toolCallId, params, _onUpdate, ctx, signal) {
 		return untilAborted(signal, async () => {
 			const sessionId = ctx.sessionManager.getSessionId();
-			const apiKey = await findImageApiKey(ctx.modelRegistry, ctx.model, sessionId);
+			const apiKey = await findImageApiKey(ctx.modelRegistry, ctx.model, sessionId, params.provider);
 			if (!apiKey) {
 				throw new Error(
-					"No image API credentials found. Use a GPT Responses/Codex model with OpenAI credentials, login with google-antigravity or xAI Grok OAuth, or set XAI_API_KEY, OPENROUTER_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY.",
+					"No image API credentials found. Connect a Codex (ChatGPT) subscription, use a GPT Responses/Codex model with OpenAI credentials, log in with google-antigravity or xAI Grok OAuth, or set OPENAI_API_KEY, XAI_API_KEY, OPENROUTER_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY.",
 				);
 			}
 

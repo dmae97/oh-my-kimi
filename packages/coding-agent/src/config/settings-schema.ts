@@ -4370,7 +4370,7 @@ export const SETTINGS_SCHEMA = {
 	},
 	"providers.image": {
 		type: "enum",
-		values: ["auto", "openai", "antigravity", "xai", "gemini", "openrouter"] as const,
+		values: ["auto", "openai", "openai-codex", "antigravity", "xai", "gemini", "openrouter"] as const,
 		default: "auto",
 		ui: {
 			tab: "providers",
@@ -4381,9 +4381,20 @@ export const SETTINGS_SCHEMA = {
 				{
 					value: "auto",
 					label: "Auto",
-					description: "Priority: GPT model image tool > Antigravity > xAI > OpenRouter > Gemini",
+					description:
+						"Priority: GPT model image tool > Codex subscription > Antigravity > xAI > OpenRouter > Gemini",
 				},
-				{ value: "openai", label: "OpenAI", description: "Uses the active GPT Responses/Codex model" },
+				{
+					value: "openai",
+					label: "OpenAI",
+					description:
+						"OPENAI_API_KEY (gpt-image-2) or active GPT model; falls back to a connected Codex subscription",
+				},
+				{
+					value: "openai-codex",
+					label: "OpenAI Codex (ChatGPT)",
+					description: "Uses a connected Codex / ChatGPT subscription — no OPENAI_API_KEY needed",
+				},
 				{
 					value: "antigravity",
 					label: "Antigravity",
