@@ -3,6 +3,7 @@ import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
+import { isOfficialAnthropicApiUrl } from "@oh-my-pi/pi-catalog/compat/anthropic";
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { isVertexExpressOpenAIUrl, isVertexRawPredictUrl } from "@oh-my-pi/pi-catalog/hosts";
 import {
@@ -13,6 +14,7 @@ import {
 	resolveWireModelId,
 } from "@oh-my-pi/pi-catalog/model-thinking";
 import { CATALOG_PROVIDERS, type ProviderCatalogEntry } from "@oh-my-pi/pi-catalog/provider-models";
+import { CODEX_BASE_URL } from "@oh-my-pi/pi-catalog/wire/codex";
 import { $env, $pickenv, getConfigRootDir, isEnoent, logger, withExtraCaFetch } from "@oh-my-pi/pi-utils";
 import { getCustomApi } from "./api-registry";
 import { AUTH_RETRY_STEPS, isApiKeyResolver, resolveRetryKey } from "./auth-retry";
@@ -71,6 +73,7 @@ import type {
 	ToolChoice,
 } from "./types";
 import { AssistantMessageEventStream } from "./utils/event-stream";
+import { isFoundryEnabled } from "./utils/foundry";
 import { wrapLeakedThinkingStream } from "./utils/leaked-thinking-stream";
 import { wrapFetchForProxy } from "./utils/proxy";
 import { withRequestDebugFetch } from "./utils/request-debug";
@@ -82,6 +85,61 @@ function isGoogleVertexAuthenticatedModel(model: Model<Api>): boolean {
 		((model.api === "openai-completions" && isVertexExpressOpenAIUrl(model.baseUrl)) ||
 			(model.api === "anthropic-messages" && isVertexRawPredictUrl(model.baseUrl)))
 	);
+}
+
+/**
+ * Whether {@link model} is an official first-party endpoint whose stream needs
+ * no leaked-thinking healing — the official Anthropic API and the official
+ * OpenAI / OpenAI-Codex endpoints return structured thinking blocks and never
+ * leak reasoning idioms into the visible text channel.
+ *
+ * The gate is provider id **and** official endpoint URL: pointing
+ * `provider: "anthropic"` (or `openai`) at a custom proxy via `models.yml`
+ * still routes through {@link wrapLeakedThinkingStream}, since a third-party
+ * gateway may well leak. URL checks are strict (exact origin / path boundary
+ * or parsed hostname) — a substring match would accept lookalikes like
+ * `https://api.openai.com.evil/`. Anthropic Foundry (`CLAUDE_CODE_USE_FOUNDRY`)
+ * dispatches an empty `baseUrl` to an enterprise gateway, so it is never exempt.
+ */
+function isLeakedThinkingHealExempt(model: Model<Api>): boolean {
+	switch (model.provider) {
+		case "anthropic":
+			// Mirror resolveAnthropicBaseUrl: Foundry redirects an empty baseUrl to
+			// FOUNDRY_BASE_URL, so exempt only when the effective endpoint is official.
+			return isOfficialAnthropicApiUrl((isFoundryEnabled() && $env.FOUNDRY_BASE_URL?.trim()) || model.baseUrl);
+		case "openai":
+			return isOfficialOpenAIApiUrl(model.baseUrl);
+		case "openai-codex":
+			return isOfficialCodexApiUrl(model.baseUrl);
+		default:
+			return false;
+	}
+}
+
+/** Strict official-OpenAI endpoint check; missing baseUrl defaults to `api.openai.com`. */
+function isOfficialOpenAIApiUrl(baseUrl: string | undefined): boolean {
+	if (!baseUrl) return true;
+	try {
+		return new URL(baseUrl).hostname === "api.openai.com";
+	} catch {
+		return false;
+	}
+}
+
+/** Strict official-Codex endpoint check; exact origin or a path boundary after {@link CODEX_BASE_URL}. */
+function isOfficialCodexApiUrl(baseUrl: string | undefined): boolean {
+	if (!baseUrl) return true;
+	const lower = baseUrl.toLowerCase().replace(/\/+$/, "");
+	return lower === CODEX_BASE_URL || lower.startsWith(`${CODEX_BASE_URL}/`);
+}
+
+/**
+ * Apply live leaked-thinking healing unless {@link model} is an official
+ * first-party endpoint ({@link isLeakedThinkingHealExempt}), which emits
+ * structured thinking and needs no healing.
+ */
+function healLeakedThinking(model: Model<Api>, inner: AssistantMessageEventStream): AssistantMessageEventStream {
+	return isLeakedThinkingHealExempt(model) ? inner : wrapLeakedThinkingStream(inner);
 }
 
 type ProviderInFlightLease = {
@@ -502,9 +560,10 @@ function withProviderInFlightLimit<TOptions extends Pick<StreamOptions, "signal"
 ): AssistantMessageEventStream {
 	// Leaked-thinking healing folds in here — the one shared provider-dispatch
 	// chokepoint — so the loop guard (which wraps this) sees healed events and all
-	// six provider exits are covered by one wrap. Healing is idempotent.
+	// provider exits are covered by one wrap. Official first-party providers are
+	// exempt (see `healLeakedThinking`); healing is otherwise idempotent.
 	const limit = resolveProviderInFlightLimit(model.provider, options);
-	if (limit === undefined) return wrapLeakedThinkingStream(dispatch());
+	if (limit === undefined) return healLeakedThinking(model, dispatch());
 
 	const outer = new AssistantMessageEventStream();
 	void (async () => {
@@ -524,7 +583,7 @@ function withProviderInFlightLimit<TOptions extends Pick<StreamOptions, "signal"
 			if (options?.signal?.aborted) {
 				throw options.signal.reason ?? new AIError.AbortError("Provider request aborted before dispatch");
 			}
-			const inner = wrapLeakedThinkingStream(dispatch());
+			const inner = healLeakedThinking(model, dispatch());
 			try {
 				for await (const event of inner) {
 					outer.push(event);
@@ -1110,7 +1169,8 @@ export function streamSimple<TApi extends Api>(
 	// GitLab Duo Workflow - IDE workflow protocol + WebSocket action bridge
 	if (model.api === "gitlab-duo-agent") {
 		// Does not route through withProviderInFlightLimit, so heal explicitly.
-		return wrapLeakedThinkingStream(
+		return healLeakedThinking(
+			model,
 			streamGitLabDuoWorkflow(model as Model<"gitlab-duo-agent">, context, {
 				...requestOptions,
 				apiKey,

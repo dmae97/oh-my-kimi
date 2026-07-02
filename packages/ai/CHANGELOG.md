@@ -8,6 +8,8 @@
 
 ### Changed
 
+- Skip leaked-thinking stream healing for official first-party Anthropic, OpenAI, and Codex endpoints
+
 - Updated CoreWeave Serverless Inference login instructions to clarify persisting `COREWEAVE_PROJECT` in shell startup files.
 
 ### Fixed
