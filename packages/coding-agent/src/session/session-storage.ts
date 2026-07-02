@@ -311,7 +311,10 @@ export class FileSessionStorage implements SessionStorage {
 			this.renameSync(targetPath, backupPath);
 		} catch (moveAsideError) {
 			if (isEnoent(moveAsideError)) {
-				if (commitGuard && !commitGuard()) return;
+				if (commitGuard && !commitGuard()) {
+					this.#discardTemp(tempPath, targetPath);
+					return;
+				}
 				this.renameSync(tempPath, targetPath);
 				return;
 			}
@@ -320,7 +323,8 @@ export class FileSessionStorage implements SessionStorage {
 		if (commitGuard && !commitGuard()) {
 			// A concurrent synchronous rewrite published a fresh body between the
 			// move-aside and this point. Restore the moved-aside file so we do
-			// not overwrite it with our staged (stale) body.
+			// not overwrite it with our staged (stale) body, and drop the temp
+			// so `writeTextAtomic`'s "discard on abandon" contract holds.
 			try {
 				this.renameSync(backupPath, targetPath);
 			} catch (restoreErr) {
@@ -330,6 +334,7 @@ export class FileSessionStorage implements SessionStorage {
 					error: toError(restoreErr).message,
 				});
 			}
+			this.#discardTemp(tempPath, targetPath);
 			return;
 		}
 		try {

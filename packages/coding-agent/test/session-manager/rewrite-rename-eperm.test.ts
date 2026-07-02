@@ -136,6 +136,93 @@ describe("SessionManager rewrite EPERM rollback failure", () => {
 	});
 });
 
+describe("FileSessionStorage.writeTextAtomic commitGuard cleanup", () => {
+	let sessionDir: string;
+
+	beforeEach(async () => {
+		sessionDir = await fsp.mkdtemp(path.join(os.tmpdir(), "omp-guard-cleanup-"));
+	});
+
+	afterEach(async () => {
+		await fsp.rm(sessionDir, { recursive: true, force: true });
+	});
+
+	async function listTempFiles(): Promise<string[]> {
+		const names = await fsp.readdir(sessionDir);
+		return names.filter(name => name.endsWith(".tmp"));
+	}
+
+	it("discards the staged temp when commitGuard rejects on the direct rename path", async () => {
+		const storage = new FileSessionStorage();
+		const target = path.join(sessionDir, "session.jsonl");
+		await storage.writeTextAtomic(target, "existing\n", { commitGuard: () => false });
+		expect(await listTempFiles()).toEqual([]);
+		expect(await Bun.file(target).exists()).toBe(false);
+	});
+
+	it("discards the staged temp when the EPERM move-aside fallback's commitGuard rejects", async () => {
+		let epermAttempted = false;
+		let guardCalls = 0;
+		class EpermThenGuardStorage extends FileSessionStorage {
+			override renameSync(source: string, targetPath: string): void {
+				if (source.includes(".tmp") && targetPath.endsWith(".jsonl") && !epermAttempted) {
+					epermAttempted = true;
+					throw new FsCodeError("EPERM", `EPERM: operation not permitted, rename '${source}' -> '${targetPath}'`);
+				}
+				super.renameSync(source, targetPath);
+			}
+		}
+		const storage = new EpermThenGuardStorage();
+		const target = path.join(sessionDir, "session.jsonl");
+		await fsp.writeFile(target, "seed\n");
+
+		await storage.writeTextAtomic(target, "next\n", {
+			commitGuard: () => {
+				guardCalls += 1;
+				// First call (before primary rename): pass so we hit EPERM.
+				// Second call (inside EPERM fallback, after move-aside): reject.
+				return guardCalls === 1;
+			},
+		});
+
+		expect(epermAttempted).toBe(true);
+		expect(guardCalls).toBe(2);
+		expect(await listTempFiles()).toEqual([]);
+		// Backup was restored, so target still holds the seed content.
+		expect(await Bun.file(target).text()).toBe("seed\n");
+		const backups = (await fsp.readdir(sessionDir)).filter(name => name.endsWith(".bak"));
+		expect(backups).toEqual([]);
+	});
+
+	it("discards the staged temp when the ENOENT move-aside branch's commitGuard rejects", async () => {
+		let epermAttempted = false;
+		let guardCalls = 0;
+		class EpermMissingTargetStorage extends FileSessionStorage {
+			override renameSync(source: string, targetPath: string): void {
+				if (source.includes(".tmp") && targetPath.endsWith(".jsonl") && !epermAttempted) {
+					epermAttempted = true;
+					throw new FsCodeError("EPERM", `EPERM: operation not permitted, rename '${source}' -> '${targetPath}'`);
+				}
+				super.renameSync(source, targetPath);
+			}
+		}
+		const storage = new EpermMissingTargetStorage();
+		const target = path.join(sessionDir, "session.jsonl");
+		// Target does not exist, so the move-aside step raises ENOENT.
+		await storage.writeTextAtomic(target, "next\n", {
+			commitGuard: () => {
+				guardCalls += 1;
+				return guardCalls === 1;
+			},
+		});
+
+		expect(epermAttempted).toBe(true);
+		expect(guardCalls).toBe(2);
+		expect(await listTempFiles()).toEqual([]);
+		expect(await Bun.file(target).exists()).toBe(false);
+	});
+});
+
 describe("recoverOrphanedBackups", () => {
 	it("promotes an orphaned <basename>.jsonl.<snowflake>.bak back to the primary path when the primary is missing", async () => {
 		const storage = new MemorySessionStorage();
