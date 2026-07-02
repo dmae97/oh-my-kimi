@@ -4,16 +4,14 @@
 
 ### Breaking Changes
 
-- Renamed the `requiresJuiceZeroHack` compat flag to `requiresReasoningSuppressionPrompt` (in `OpenAICompat` and `ResolvedOpenAIResponsesCompat`) and dropped the unused `"juice-zero-developer-message"` member from `OpenAIReasoningDisableMode`: the `# Juice: 0` wire hack is gone; the flag now gates the no-reasoning suppression prompt.
+- Renamed the `requiresJuiceZeroHack` compatibility flag to `requiresReasoningSuppressionPrompt` (affecting `OpenAICompat` and `ResolvedOpenAIResponsesCompat`) and removed the unused `"juice-zero-developer-message"` member from `OpenAIReasoningDisableMode`.
 
 ### Fixed
 
-- Fixed the Xiaomi provider's default model to use the supported mimo-v2.5 model.
-- Fixed model discovery (`/models` probes) failing behind private-CA gateways: the discovery fetch fallback now honors `NODE_EXTRA_CA_CERTS`, matching provider chat requests. The models.dev metadata fetch and Ollama native `/api/tags`+`/api/show` probes, missed by the original sweep, now use the same wrapped fetch.
-- Fixed CoreWeave Serverless Inference project-header detection to ensure blank OpenAI-Project overrides do not block the COREWEAVE_PROJECT fallback.
-- Fixed LiteLLM MiniMax M3 discovery to remove reseller-only (3x usage) display suffixes.
-- Fixed users with a warm LiteLLM model cache keeping stale reseller display-name suffixes for up to 24 hours by bumping the cache namespace to rich-v2.
-- Updated the Responses compatibility flag documentation to clarify the no-reasoning fallback behavior.
+- Fixed the Xiaomi provider's default model to use the supported `mimo-v2.5` model.
+- Fixed model discovery probes (including Ollama and metadata fetches) failing behind private-CA gateways by ensuring they honor `NODE_EXTRA_CA_CERTS`.
+- Fixed CoreWeave Serverless Inference project-header detection to ensure blank OpenAI-Project overrides do not block the `COREWEAVE_PROJECT` fallback.
+- Fixed LiteLLM MiniMax M3 discovery to remove reseller-only display suffixes, and invalidated the model cache to ensure stale suffixes are cleared immediately.
 
 ## [16.2.13] - 2026-07-01
 

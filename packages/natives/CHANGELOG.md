@@ -4,16 +4,12 @@
 
 ### Added
 
-- Added `workingDir` to `ShellRunResult` to allow hosts to synchronize the session's current working directory without executing a hidden probe command.
+- Added workingDir to ShellRunResult to allow hosts to synchronize the session's current working directory without executing a hidden probe command.
 
 ### Fixed
 
-- Fixed an issue where panics in native worker tasks (such as grep, AST parsing, globbing, workspace listing, HTML-to-markdown conversion, fuzzy finding, and clipboard image reading) would abort the host process instead of properly rejecting the returned JavaScript Promise. Panics recovered this way are recorded in the native crash log (disk only, no stderr noise) so real native bugs still leave a diagnostic artifact.
-- Fixed the blocking-task panic recovery itself aborting the host when a panic payload's own destructor panics; the message is extracted first and the payload disposed without unwinding across the FFI boundary.
-- Fixed a crash on Windows under low memory/commit charge conditions when spawning worker threads for token counting or sorting operations.
-- Fixed shipped Linux native addons failing to load with `version 'GLIBC_2.39' not found` on distributions older than Ubuntu 24.04. After native builds moved onto the Ubuntu 24.04 (glibc 2.39) self-hosted runner, the x64 addon was a plain host build that linked the runner's glibc and the arm64 cross-build floated up to GLIBC_2.30; the `linux-x64` (baseline + modern) and `linux-arm64` addons are now built through `cargo-zigbuild` against a pinned glibc 2.17 floor, restoring portability to any glibc ≥ 2.17 (CentOS 7 / Ubuntu 14.04 era).
-- Fixed Linux native builds hard-failing when `RUSTC_WRAPPER=sccache` points at an unavailable shared cache backend. The native build script now retries the `napi` build once without the sccache wrapper after a cache-storage startup failure, so install smoke tests and local fallback builds can proceed while preserving the cached fast path when the backend is healthy.
-- Fixed shell cancellation cleanup failing to reap child processes inside containers whose guest kernel was built without `CONFIG_PROC_CHILDREN` (e.g. some Kata/microVM guests): the Linux descendant walk relied solely on `/proc/<pid>/task/<tid>/children`, which does not exist there, so `children()` / `live_descendants()` returned empty and termination waves never reached the children. It now falls back to scanning `/proc` and grouping by parent pid (the primitive the macOS path already uses) when no `children` file is readable, keeping the cheap per-task fast path on kernels that support it.
+- Fixed an issue where panics in native worker tasks (such as grep, AST parsing, globbing, workspace listing, HTML-to-markdown conversion, fuzzy finding, and clipboard image reading) would abort the host process instead of properly rejecting the returned JavaScript Promise.
+- Fixed a crash on Windows under low memory or commit charge conditions when spawning worker threads for token counting or sorting operations.
 
 ## [16.2.11] - 2026-07-01
 

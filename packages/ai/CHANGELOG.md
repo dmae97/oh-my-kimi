@@ -4,19 +4,19 @@
 
 ### Added
 
-- Added opt-in support for Anthropic's server-side fallback beta chain (`server-side-fallback-2026-06-01`) on the `anthropic-messages` provider. When `AnthropicOptions.fallbacks` is set, the request carries the `fallbacks` field and the beta header, and the response parser honors mid-stream `fallback` content blocks and `usage.iterations` — promoting the served model on a `fallback_message` iteration and pricing per-attempt at the served model's cache-read rate for the fallback attempt's input tokens (per the [fallback billing cookbook §4](https://platform.claude.com/cookbook/fable-5-fallback-billing-guide)). Non-Anthropic providers and non-opted-in requests are fully inert. `transformMessages` centrally drops persisted `fallback` blocks on cross-provider hops and non-official Anthropic replays so a stored fallback turn never wedges downstream converters. `SimpleStreamOptions.fallbacks` and `AssistantMessage.content` now include the fallback surface. ([#4177](https://github.com/can1357/oh-my-pi/issues/4177))
+- Added opt-in support for Anthropic's server-side fallback beta (`server-side-fallback-2026-06-01`) on the `anthropic-messages` provider, including support for `AnthropicOptions.fallbacks`, mid-stream fallback content blocks, fallback billing/usage iterations, and automatic filtering of fallback blocks during cross-provider message transformations.
 
 ### Changed
 
-- Clarified CoreWeave Serverless Inference login instructions to persist `COREWEAVE_PROJECT` in the user's shell startup file.
+- Updated CoreWeave Serverless Inference login instructions to clarify persisting `COREWEAVE_PROJECT` in shell startup files.
 
 ### Fixed
 
-- Fixed an issue where broker usage fetch failures were not cached, causing sequential ranking passes to repeatedly hit the broker when it is down.
+- Fixed an issue where broker usage fetch failures were not cached, causing redundant network requests during sequential ranking passes when the broker is offline.
 - Fixed Xiaomi MiMo API key validation to use the supported `mimo-v2.5` model.
-- Fixed certificate verification errors for custom gateways behind private CA bundles by applying `NODE_EXTRA_CA_CERTS` to all provider fetches (including OpenAI-compatible, Codex, Ollama, Azure, and Google).
-- Fixed Claude Fable demoted-thinking replay to use markdown-italic assistant prose instead of `<thinking>` tags, avoiding reasoning-extraction-shaped context after model switches.
-- Fixed OpenAI Responses replay emitting locally rebuilt assistant item IDs without their required reasoning items, preventing `function_call` / `message` replay 400s from poisoned history. ([#4173](https://github.com/can1357/oh-my-pi/issues/4173))
+- Fixed certificate verification errors for custom gateways behind private CA bundles by ensuring `NODE_EXTRA_CA_CERTS` is respected across all provider fetches (including OpenAI-compatible, Codex, Ollama, Azure, and Google).
+- Fixed Claude Fable demoted-thinking replay to use markdown-italic assistant prose instead of `<thinking>` tags, preventing context issues after model switches.
+- Fixed OpenAI Responses replay errors (400 Bad Request) caused by missing reasoning items in locally rebuilt assistant item IDs during history replay.
 
 ## [16.2.13] - 2026-07-01
 

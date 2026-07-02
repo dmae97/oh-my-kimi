@@ -2,139 +2,33 @@
 
 ## [Unreleased]
 
-### Breaking Changes
-
-- **Settings:** `hooks` and `customTools` arrays replaced with single `extensions` array
-- **CLI:** `--hook` and `--tool` flags replaced with `--extension` / `-e`
-- **Directories:** `hooks/`, `tools/` → `extensions/`; `commands/` → `prompts/`
-- **Types:** See type renames above
-- **SDK:** See SDK migration above
-
 ### Added
 
-- Added `providers.anthropic.serverSideFallback` (default off; UI in the "Model → Retry & Fallback" group). When enabled, Claude Fable 5 / Mythos 5 requests carry `fallbacks: [{ model: "claude-opus-4-8" }]` via Anthropic's server-side-fallback beta chain so classifier-blocked turns are retried on Opus 4.8 without breaking the current call. Opt-in only — leaving it off preserves the pre-fallback behavior. ([#4177](https://github.com/can1357/oh-my-pi/issues/4177))
-- Added `task.softRequestBudgetNotice` (default off) to opt into the subagent soft-budget wrap-up steering notice while keeping the 1.5x graceful abort guard active.
-- Added `WebSearchProviderError` class with HTTP status for actionable provider error messages
-- Hook API: `ctx.ui.setTitle(title)` allows hooks to set the terminal window/tab title ([#446](https://github.com/badlogic/pi-mono/pull/446) by [@aliou](https://github.com/aliou))
-- Configurable double-escape action: choose whether double-escape with empty editor opens `/tree` (default) or `/branch`. Configure via `/settings` or `doubleEscapeAction` in settings.json ([#404](https://github.com/badlogic/pi-mono/issues/404))
-- Vertex AI provider (`google-vertex`): access Gemini models via Google Cloud Vertex AI using Application Default Credentials ([#300](https://github.com/badlogic/pi-mono/pull/300) by [@default-anton](https://github.com/default-anton))
-- Built-in provider overrides in `models.json`: override just `baseUrl` to route a built-in provider through a proxy while keeping all its models, or define `models` to fully replace the provider ([#406](https://github.com/badlogic/pi-mono/pull/406) by [@yevhen](https://github.com/yevhen))
-- Automatic image resizing: images larger than 2000x2000 are resized for better model compatibility. Original dimensions are injected into the prompt. Controlled via `/settings` or `images.autoResize` in settings.json. ([#402](https://github.com/badlogic/pi-mono/pull/402) by [@mitsuhiko](https://github.com/mitsuhiko))
-- Alt+Enter keybind to queue follow-up messages while agent is streaming
-- `Theme` and `ThemeColor` types now exported for hooks using `ctx.ui.custom()`
-- Terminal window title now displays "pi - dirname" to identify which project session you're in ([#407](https://github.com/badlogic/pi-mono/pull/407) by [@kaofelix](https://github.com/kaofelix))
+- Added `providers.anthropic.serverSideFallback` configuration option to opt into Anthropic's server-side-fallback beta chain, allowing Claude Fable 5 / Mythos 5 requests to automatically retry on Opus 4.8 when blocked by classifiers.
+- Added `task.softRequestBudgetNotice` configuration option to enable subagent soft-budget wrap-up steering notices while keeping the graceful abort guard active.
 
 ### Changed
 
-- Updated the tester subagent prompt to explicitly forbid testing default configuration values and allow skipping tests entirely for trivial changes
-- Optimized session loading and rendering performance, including a 10x speedup for smooth streaming reveals on large messages, 35% faster session resumes for large files using native streaming JSONL parsing, and reduced overhead for edit-patch fallbacks.
+- Significantly optimized session loading and rendering performance, including a 10x speedup for streaming reveals on large messages, 35% faster session resumes for large files using native streaming JSONL parsing, and reduced overhead for edit-patch fallbacks.
 - Improved TUI responsiveness and reduced CPU usage during long-running tool sessions by throttling status-line redraws and optimizing subagent persistence checks.
-- Updated the advisor system prompt and documentation to accurately reflect WATCHDOG.yml tool grants.
+- Updated the tester subagent prompt to allow skipping tests for trivial changes.
 - Improved DuckDuckGo web search error clarity and documented datacenter/shared-egress limitations in provider settings.
-- Changed `isAutoresearchShCommand()` to use proper command-line argument parsing instead of regex, improving accuracy for complex shell invocations
-- Changed autoresearch initialization prompt to display collected tradeoff metrics in the setup summary
-- Changed `command-initialize.md` template to include guidance on preflight requirements, comparability invariants, and marking measurement-critical files as off-limits
-- Changed `command-initialize.md` to instruct users to write or update `autoresearch.program.md` with durable heuristics and repo-specific strategy
-- Changed autoresearch resume guidance to emphasize continuing on the current protected branch rather than switching branches
-- Changed autoresearch prompt to clarify that `autoresearch.md` holds durable conclusions while `autoresearch.ideas.md` is the scratch backlog
-- Changed autoresearch prompt guidance to require stable measurement harness and fixed benchmark inputs unless intentionally starting a new segment
-- Changed autoresearch prompt to recommend keeping equal or near-equal results when they materially simplify implementation
-- Changed `init_experiment` to reset pending run state (checks, duration, ASI, artifact directory) when initializing a new segment
-- Changed `log_experiment` to set `autoResumeArmed` flag after successfully logging a run to enable auto-resume on next agent turn
-- Changed `run_experiment` to set `autoResumeArmed` flag and update dashboard after completing a run
-- Changed auto-resume logic to only prompt when a new pending run exists or when `autoResumeArmed` is explicitly set, preventing duplicate prompts
-- Changed path normalization in contract validation to use `path.posix.normalize()` for consistent path handling
-- Extended extension `registerProvider()` typing with OAuth provider support and source-aware registration metadata.
-- Extensions can have their own `package.json` with dependencies (resolved via jiti)
-- Documentation: `docs/hooks.md` and `docs/custom-tools.md` merged into `docs/extensions.md`
-- Examples: `examples/hooks/` and `examples/custom-tools/` merged into `examples/extensions/`
-- README: Extensions section expanded with custom tools, commands, events, state persistence, shortcuts, flags, and UI examples
-- SDK: `customTools` option now accepts `ToolDefinition[]` directly (simplified from `Array<{ path?, tool }>`)
-- SDK: `extensions` option accepts `ExtensionFactory[]` for inline extensions
-- SDK: `additionalExtensionPaths` replaces both `additionalHookPaths` and `additionalCustomToolPaths`
-- Editor component now uses word wrapping instead of character-level wrapping for better readability ([#382](https://github.com/badlogic/pi-mono/pull/382) by [@nickseelert](https://github.com/nickseelert))
 
 ### Fixed
 
-- Fixed transcript rebuilds preserving synthetic assistant stop errors for tool calls instead of letting later tool results replace them.
-- Fixed sequential patch/edit failures leaving dirty buffers in multi-file edits by flushing the LSP writethrough queue upfront on early abort paths
-- Fixed the subagent task preview erroneously showing "ctrl+o: Expand" hints on output lines capped inside the already-expanded view
-- Fixed the cross-file write batching regression in `apply_patch` multi-file operations by reverting to flushing only on the last file write or explicitly on early failure paths, and refactored error counting to use clean booleans.
-- Fixed collab teardown (`/collab stop`, unrecoverable relay drop) cancelling a hook selector/editor the host user was actively typing in: teardown resolved pending guest asks the same way as a guest cancel, so the mirrored race dismissed the local dialog and dropped its input. Teardown now settles guest asks as `unavailable`, and the local dialog keeps running and wins with its eventual answer.
-- Fixed RPC mode deferred shutdown (`pi.shutdown()`) killing the process while a background-dispatched `bash` command was still running: the response frame is now written before exit, and a shutdown requested mid-bash fires once the command settles even when no further client frames arrive.
-- Fixed collab-guest transcript viewer rendering host-delivered errors raw: multi-line stacks broke the frame's row accounting and absolute host paths leaked to guests; errors are now collapsed to one sanitized, truncated row.
-- Fixed streaming tool-arg previews capturing string fields (e.g. `content`) from nested objects and injecting them as top-level args mid-stream; only top-level keys are read incrementally now.
-- Fixed post-rewind context to tell the agent the checkpoint completed and to make repeat `rewind` calls recover with guidance instead of a bare no-checkpoint error. ([#4187](https://github.com/can1357/oh-my-pi/issues/4187))
-- Fixed task.maxConcurrency being breachable when a queued spawn was cancelled: the spawn path could release a semaphore permit it never acquired, letting a later task start while the cap was saturated.
-- Fixed session exit diagnostics recording signal and crash exits (SIGTERM, SIGHUP, uncaught exceptions) as a normal "dispose": the postmortem teardown now threads the real reason into session disposal.
-- Fixed the subagent yield-label guard ignoring JTD discriminator (oneOf) output schemas, which let stale incremental labels pass into successful results when final validation was skipped after retries.
-- Fixed grep/ast_grep search scopes rejecting `www.` and collapsed-scheme (`https:/host`) URL spellings that the read tool accepts; unresolvable URL-shaped scopes now fail with an explicit external-URL error instead of "Path not found".
-- Fixed model discovery ignoring `NODE_EXTRA_CA_CERTS`: the model registry's default fetch now applies the extra-CA wrapper, so `/models` probes work behind private-CA gateways like provider chat requests.
-- Fixed ctrl+p role-model cycling getting stuck on one transition and skipping every other role: a session-branch traversal regression returned entries leaf-to-root, so the cycle (and session model restore) read the oldest recorded model change instead of the newest.
-- Fixed ctrl+p cycling from a stale slot after the model was switched through another surface (alt+m, /model, retry fallback): the recorded role is now trusted only while its resolved model is still the active model, falling back to matching by model.
-- Fixed the `apply_patch` envelope to reject `*** Add File` / `*** Move to` targeting a pre-existing file upfront instead of silently overwriting it. The JSON `patch` mode's `op: "create"` intentionally remains the documented full-file overwrite (rename stays non-overwriting in both modes).
-- Fixed multi-file apply_patch to stop at the first failing file, surface applied vs. skipped paths, and correctly report the error to the agent loop.
-- Fixed process termination (SIGTERM, SIGHUP, uncaught exceptions) skipping editor draft saves, session shutdown events, and background job cleanup.
-- Fixed /quit and /exit commands blocking session closure by introducing a shutdown budget and backgrounding remaining tasks.
-- Fixed git and GitHub CLI subprocesses hanging on interactive prompts by forcing non-interactive environments, adding timeouts, and capping output.
-- Fixed RPC mode abort_bash being blocked by running bash commands by dispatching bash in the background.
-- Fixed task.maxConcurrency and task.maxRecursionDepth limits being bypassed by sub-spawn paths, ensuring limits are dynamically resized and respected.
-- Fixed the edit tool inflating session files by pruning extremely large file snapshots from tool-result details.
-- Fixed edit-tool Markdown list guidance so hashline parser errors and the model-facing prompt teach `+- item` escaping instead of steering agents toward full-file `write` fallbacks. ([#4179](https://github.com/can1357/oh-my-pi/issues/4179))
-- Fixed workstation OS detection rendering "Kernel: unknown" on macOS 15+.
-- Fixed /copy code and /copy cmd commands being treated as normal prompts instead of copying the requested blocks.
-- Fixed interactive bash status line not updating after directory changes (cd).
-- Fixed session title refreshes ignoring user TITLE_SYSTEM.md overrides during replans, and prevented auto-generated titles from incorrectly preserving all-caps text from user messages.
-- Fixed the live todo HUD going stale during long tool-use loops via a hidden mid-run reconciliation hint. The hint is model-only (never rendered in the TUI or transcript), fires only after sustained mutating work (`bash`/`eval`/`edit`/`write`/`ast_edit` results — read-only exploration never counts), and is capped at two per prompt cycle, separate from the stop-time incomplete-todo reminder ladder.
-- Fixed /shake and mid-stream chat rebuilds erasing active LLM output.
-- Fixed RpcClient failing to restart after being stopped or failing on initial startup.
-- Fixed /collab web guests being unable to answer ask tool questions by routing host UI requests through writable collab peers.
-- Fixed search and AST tools accepting external read URLs by materializing fetched URL text through the read cache before path resolution.
-- Fixed Tavily web search to retry without recency filters if no content is returned.
-- Fixed extension validation failures for omp install pi-lean-ctx by exposing legacy tool factories.
-- Fixed legacy `createReadTool`/`createReadToolDefinition` ignoring `autoResizeImages`; the option now maps onto the `images.autoResize` setting of the underlying read tool.
-- Fixed legacy `createGrepTool`/`createGrepToolDefinition` silently ignoring options: an explicit `context` parameter is now forwarded to the built-in grep (as symmetric before/after context), the unsupported `limit` parameter is no longer advertised in the tool schema, and supplying legacy `operations` throws a descriptive error at creation time instead of silently searching the local filesystem.
-- Fixed visibility of the focused option in the multi-select ask picker on certain color themes.
-- Fixed TUI row overlapping and duplication in the eval tool's live subagent progress tree under heavy concurrency.
-- Fixed session resumes after silent exits by recording pre-tool start markers and shutdown diagnostics.
-- Fixed status-line redraw crashes when tool-call arguments contain BigInt values.
-- Fixed terminal scrollback rows retaining old colors after theme switches.
-- Fixed Esc key behavior in the TUI to clear unrecoverable input instead of preserving drafts.
-- Fixed marketplace-installed plugins appearing redundantly in both the npm list and the extension status provider.
-- Fixed parent and peer IRC message delivery delays.
-- Fixed provider/model:auto entries in modelRoles collapsing to inherit and losing their auto state on reload.
-- Fixed plan execution prompts to avoid embedding the full plan, referencing the local plan file instead.
-- Fixed subagent live progress leaking raw tool output into the parent TUI.
-- Fixed eval subagents with custom output schemas receiving stale incremental yield labels.
-- Fixed hidden-thinking live status rows rendering as glyph-only lines by adding a persistent label.
-- Fixed /compact summary divider placement to keep it in the live scrollable region.
-- Fixed the time_spent status-line segment ticking continuously during idle sessions.
-- Fixed browser tool schema validation to require the code argument for run calls.
-- Improved robustness of MCP authentication error detection and header-based server discovery.
-- Fixed reliable detection of 401/403 authorization failures during Smithery commands and HTTP RPCs.
-- Improved streaming preview responsiveness for write, edit, and eval tools by decoding streamed string arguments incrementally.
-- Fixed retry handling after transient provider errors: the failed assistant tail is restored before the rescheduled continuation, and skipped continuations carry their skip reason.
-- Fixed CJK history rendering issues across repeated compactions.
-- Fixed user-invoked skills failing to identify themselves or resolve relative paths across various execution paths.
-- Fixed type errors introduced by the merge sweep: restored the ask row-budget priority field, narrowed dereferenced schema property access, and updated stale test API usage.
-- Fixed git clone and fetch being killed by the 5-minute local-command timeout; network transfers now use a separate 30-minute deadline, overridable per call.
-- Fixed the TUI collab guest (omp join) silently dropping host ask/selector UI requests; they now present through the standard dialog flow and round-trip responses, with cancellation and resync replay handled.
-- Fixed transcript rebuilds (theme change, /shake, focus replay) showing stale streamed write/edit/eval content by sharing the partial-JSON decode between the live streaming path and every rebuild path.
-- Fixed an explicitly configured compaction.reserveTokens equal to the built-in default being silently replaced by the proportional small-window fallback; the setting now defaults to unset and explicit values are always honored.
-- Fixed user-configured LiteLLM discovery providers keeping stale reseller display-name suffixes for up to 24 hours after upgrade by invalidating the warm model cache.
-- Fixed `mergeTaskBranches` and `applyNestedPatches` leaving stage 1/2/3 unmerged entries in `.git/index` when the post-merge stash pop conflicted with the cherry-picked HEAD. The corrupted index survived indefinitely and every subsequent overlay-isolated task inherited it through the lower layer, causing `captureRepoDeltaPatch` to emit `diff --cc` output that `git apply` rejects with "No valid patches in input". The stash restore now runs behind a 3-way preflight check (`git apply --3way --check`) and a `reset --hard HEAD` cleanup fallback; the stash entry is preserved for manual recovery on conflict, and the merged commits still land on HEAD. ([#4175](https://github.com/can1357/oh-my-pi/issues/4175))
-- Fixed macOS `Command+V` image pastes in Ghostty by binding the Kitty `super+v` key event to the image-paste action alongside `Ctrl+V`. ([#4178](https://github.com/can1357/oh-my-pi/issues/4178))
-- Fixed a rare Bun GC segfault (exit 133) during model discovery: every discovery fetch armed an uncancellable `AbortSignal.timeout(...)` whose timer outlived the request (instantly against a mocked or fast endpoint). The pending timer fired later — sometimes during an unrelated allocation or test teardown — set the signal's abort `reason`, and crashed JSC's concurrent garbage collector while it marked the wrapped reason (`JSAbortSignal::visitAdditionalChildren`). Discovery now runs each fetch under a `withTimeoutSignal` helper that clears the backing timer the instant the operation settles, so the signal is never left armed on the heap.
-- Fixed boundary duplication warnings to always display when replacement lines match the next surviving line, even when auto-correction is disabled
-- Fixed secondary metrics validation to properly reject missing configured metrics and new metrics without force flag
-- Fixed ASI data cloning to prevent prototype pollution attacks by filtering reserved property names
-- Fixed CLI `--api-key` handling for deferred model resolution by applying runtime API key overrides after extension model selection.
-- Fixed extension provider registration cleanup to remove stale source-scoped custom API/OAuth providers across extension reloads.
-- Edit tool diff not displaying in TUI due to race condition between async preview computation and tool execution
-- `/model` selector now opens instantly instead of waiting for OAuth token refresh. Token refresh is deferred until a model is actually used.
-- Shift+Space, Shift+Backspace, and Shift+Delete now work correctly in Kitty-protocol terminals (Kitty, WezTerm, etc.) instead of being silently ignored ([#411](https://github.com/badlogic/pi-mono/pull/411) by [@nathyong](https://github.com/nathyong))
-- `AgentSession.prompt()` now throws if called while the agent is already streaming, preventing race conditions. Use `steer()` or `followUp()` to queue messages during streaming.
-- Ctrl+C now works like Escape in selector components, so mashing Ctrl+C will eventually close the program ([#400](https://github.com/badlogic/pi-mono/pull/400) by [@mitsuhiko](https://github.com/mitsuhiko))
+- Fixed several issues with the `apply_patch` and edit tools, including preventing dirty buffers on early aborts, rejecting overwrites of pre-existing files, stopping at the first failing file in multi-file operations, and pruning extremely large file snapshots to prevent session inflation.
+- Fixed process termination (SIGTERM, SIGHUP, uncaught exceptions) to ensure editor drafts are saved, sessions shut down cleanly, and background jobs are cleaned up.
+- Fixed `/quit` and `/exit` commands blocking session closure by introducing a shutdown budget and backgrounding remaining tasks.
+- Fixed git clone and fetch operations being killed prematurely by applying a separate 30-minute deadline for network transfers instead of the standard 5-minute local-command timeout.
+- Fixed git index corruption issues in `mergeTaskBranches` and `applyNestedPatches` when post-merge stash pops conflicted with the cherry-picked HEAD.
+- Fixed collaboration (`/collab`) issues, including preventing teardowns from cancelling active host dialogs, sanitizing host-delivered errors for guests, and ensuring guest UI requests are correctly routed and rendered.
+- Fixed RPC mode deferred shutdown (`pi.shutdown()`) and `abort_bash` commands from being blocked by active background bash processes.
+- Fixed model discovery ignoring `NODE_EXTRA_CA_CERTS` and resolved a rare Bun garbage collection segfault during discovery.
+- Fixed `task.maxConcurrency` and `task.maxRecursionDepth` limits being bypassed by sub-spawn paths or when queued spawns were cancelled.
+- Fixed various TUI and rendering issues, including macOS Ghostty `Command+V` image pasting, CJK history rendering across compactions, status-line redraw crashes with BigInt values, and overlapping rows in the subagent progress tree.
+- Fixed `/copy code` and `/copy cmd` commands being treated as normal prompts instead of copying the requested blocks.
+- Fixed legacy tool compatibility issues for `createReadTool`, `createGrepTool`, and extension validation failures for `omp install pi-lean-ctx`.
+- Improved robustness of MCP authentication error detection, Smithery command authorization failures, and streaming preview responsiveness for write, edit, and eval tools.
 
 ## [16.2.13] - 2026-07-01
 
