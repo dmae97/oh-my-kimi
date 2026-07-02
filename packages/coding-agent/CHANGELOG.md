@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Cache failed `!command` config resolutions and time out extension dynamic model fetches after 15s ([#4237](https://github.com/can1357/oh-my-pi/issues/4237))
+
+
 ## [16.3.0] - 2026-07-02
 
 ### Added

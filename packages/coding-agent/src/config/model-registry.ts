@@ -48,6 +48,13 @@ const STARTUP_MODEL_CACHE_PROVIDER_IDS: readonly string[] = [
 // packages/ai/src/registry/lm-studio.ts, and packages/ai/src/registry/vllm.ts.
 const LOCAL_PROVIDER_PLACEHOLDERS = new Set<string>(["llama-cpp-local", "lm-studio-local", "vllm-local"]);
 
+/**
+ * Hard bound for extension-provided fetchDynamicModels to prevent indefinite hangs
+ * during runtime provider discovery. Uses a cancellable manual timer (not AbortSignal.timeout)
+ * so a successful fast path does not leave an armed timeout signal for concurrent GC.
+ */
+const RUNTIME_DYNAMIC_MODEL_FETCH_TIMEOUT_MS = 15_000;
+
 import type { ApiKeyResolver, FetchImpl } from "@oh-my-pi/pi-ai";
 import { registerOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oauth/types";
@@ -79,6 +86,24 @@ export function isAuthenticated(apiKey: string | undefined | null): apiKey is st
 
 function isDiscoveryBearerApiKey(apiKey: string | undefined | null): apiKey is string {
 	return isAuthenticated(apiKey) && !LOCAL_PROVIDER_PLACEHOLDERS.has(apiKey);
+}
+
+/**
+ * Wraps an extension-provided fetchDynamicModels call with a hard timeout.
+ * Uses a cancellable manual timer (not AbortSignal.timeout) so that a fast
+ * successful path does not leave an armed timeout signal for concurrent GC.
+ * The inner fetcher does not receive a signal (extension contract has none).
+ */
+async function withRuntimeDynamicModelsTimeout<T>(timeoutMs: number, run: () => Promise<T>): Promise<T> {
+	const { promise: timeoutPromise, reject: timeoutReject } = Promise.withResolvers<never>();
+	const timer = setTimeout(() => {
+		timeoutReject(new Error(`fetchDynamicModels timed out after ${timeoutMs}ms`));
+	}, timeoutMs);
+	try {
+		return await Promise.race([run(), timeoutPromise]);
+	} finally {
+		clearTimeout(timer);
+	}
 }
 
 /** Provider override config (baseUrl, headers, apiKey, compat, transport) without custom models */
@@ -239,22 +264,25 @@ interface CustomModelsResult {
 	found: boolean;
 }
 
-const commandValueCache = new Map<string, string>();
+const commandValueCache = new Map<string, string | undefined>();
 
 function isCommandConfigValue(valueConfig: string | undefined): valueConfig is string {
 	return valueConfig?.startsWith("!") === true;
 }
 
 function resolveCommandConfig(command: string): string | undefined {
-	const cached = commandValueCache.get(command);
-	if (cached !== undefined) return cached;
+	if (commandValueCache.has(command)) return commandValueCache.get(command);
 	try {
 		const stdout = execSync(command, { encoding: "utf8", timeout: 10_000, windowsHide: true });
 		const trimmed = stdout.trim();
-		if (trimmed.length === 0) return undefined;
+		if (trimmed.length === 0) {
+			commandValueCache.set(command, undefined);
+			return undefined;
+		}
 		commandValueCache.set(command, trimmed);
 		return trimmed;
 	} catch {
+		commandValueCache.set(command, undefined);
 		return undefined;
 	}
 }
@@ -2134,7 +2162,9 @@ export class ModelRegistry {
 				fetchDynamicModels: async () => {
 					const apiKey = await this.#peekApiKeyForProvider(providerName);
 					const resolvedKey = isAuthenticated(apiKey) ? apiKey : undefined;
-					const modelDefs = await fetcher(resolvedKey);
+					const modelDefs = await withRuntimeDynamicModelsTimeout(RUNTIME_DYNAMIC_MODEL_FETCH_TIMEOUT_MS, () =>
+						fetcher(resolvedKey),
+					);
 					const results: Model<Api>[] = [];
 					for (const modelDef of modelDefs) {
 						const overlay = buildCustomModelOverlay(
