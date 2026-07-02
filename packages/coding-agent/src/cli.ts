@@ -173,14 +173,20 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
  * worker is idle, and hard-kills the process on parent `disconnect`.
  */
 async function runIpcSubprocessWorker<In, Out>(
-	start: (transport: { send(message: Out): void; onMessage(handler: (message: In) => void): () => void }) => void,
+	start: (transport: {
+		send(message: Out): void;
+		sendAndFlush(message: Out): Promise<void>;
+		onMessage(handler: (message: In) => void): () => void;
+	}) => void,
 ): Promise<void> {
 	const { promise: shuttingDown, resolve: shutdown } = Promise.withResolvers<void>();
+	type IpcSend = (this: NodeJS.Process, message: unknown, callback?: (error: Error | null) => void) => boolean;
+	// `process.send` only exists when spawned with an IPC channel; the parent
+	// always spawns us that way. If it's missing, the parent vanished and
+	// there's no one to talk to.
+	const ipcSend = (): IpcSend | undefined => (process as NodeJS.Process & { send?: IpcSend }).send;
 	const send = (message: Out): void => {
-		// `process.send` only exists when spawned with an IPC channel; the
-		// parent always spawns us that way. If it's missing, the parent
-		// vanished and there's no one to talk to.
-		const sender = (process as NodeJS.Process & { send?: (m: unknown) => boolean }).send;
+		const sender = ipcSend();
 		if (!sender) {
 			shutdown();
 			return;
@@ -191,8 +197,24 @@ async function runIpcSubprocessWorker<In, Out>(
 			shutdown();
 		}
 	};
+	const sendAndFlush = (message: Out): Promise<void> => {
+		const sender = ipcSend();
+		if (!sender) {
+			shutdown();
+			return Promise.resolve();
+		}
+		const { promise, resolve } = Promise.withResolvers<void>();
+		try {
+			sender.call(process, message, () => resolve());
+		} catch {
+			shutdown();
+			resolve();
+		}
+		return promise;
+	};
 	start({
 		send,
+		sendAndFlush,
 		onMessage(handler) {
 			const wrap = (data: unknown): void => handler(data as In);
 			process.on("message", wrap);

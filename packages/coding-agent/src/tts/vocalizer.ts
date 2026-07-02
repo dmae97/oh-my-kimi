@@ -2,12 +2,17 @@
  * Streaming assistant speech-vocalization.
  *
  * The vocalizer turns the assistant's STREAMING output into spoken audio as a
- * side effect of the normal turn. Text deltas are streamed *straight into the
- * TTS engine* ({@link Vocalizer.pushDelta} → the worker's incremental text
- * input): the engine splits the running text at sentence boundaries and emits
- * one audio chunk per sentence, which a single {@link StreamingAudioPlayer}
- * plays back gaplessly. So the assistant starts speaking sentence 1 while later
- * sentences are still being generated — low latency, never overlapping.
+ * side effect of the normal turn. Text deltas run through a
+ * {@link SpeakableStream} — which drops code/tables/markup, speaks link labels
+ * and URL hosts instead of raw URLs, and cuts speakable segments the moment a
+ * boundary appears — and each ready segment is pushed to the TTS worker, which
+ * synthesizes it into one audio chunk. A single {@link StreamingAudioPlayer}
+ * plays the chunks back gaplessly, so the assistant starts speaking the first
+ * clause while later sentences are still being generated.
+ *
+ * An idle timer covers generation stalls: when no delta arrives for
+ * {@link IDLE_FLUSH_MS} (tool call, thinking block) the buffered partial
+ * sentence is spoken rather than held silent.
  *
  * Overspeech control:
  * - {@link clear} stops playback instantly (kills the player) and aborts
@@ -25,8 +30,12 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import { settings } from "../config/settings";
 import { DEFAULT_TTS_VOICE } from "./models";
+import { SpeakableStream } from "./speakable";
 import { createStreamingPlayer, DUCK_GAIN } from "./streaming-player";
 import { type TtsStreamHandle, ttsClient } from "./tts-client";
+
+/** Quiet time on the delta stream before the buffered partial is spoken. */
+const IDLE_FLUSH_MS = 1000;
 
 export interface VocalizerPlayer {
 	start(sampleRate: number): void;
@@ -39,6 +48,10 @@ export interface VocalizerPlayer {
 export class Vocalizer {
 	/** Open stream session for the current utterance; null when none is active. */
 	#handle: TtsStreamHandle | null = null;
+	/** Markdown → speakable-segment transform for the current utterance. */
+	#speakable: SpeakableStream | null = null;
+	/** Fires when the delta stream goes quiet mid-sentence; speaks the partial. */
+	#idleTimer: NodeJS.Timeout | null = null;
 	/** Aborts the in-flight session on {@link clear}; replaced per session. */
 	#abort: AbortController | null = null;
 	/** The current session's player; stopped on {@link clear}, gain-tracked for ducking. */
@@ -54,22 +67,30 @@ export class Vocalizer {
 	}
 
 	/**
-	 * Stream a delta of assistant text into the engine. No-op when vocalization
-	 * is disabled. The engine buffers the running text and emits audio for each
-	 * complete sentence; the trailing partial is flushed by {@link flush}.
+	 * Stream a delta of assistant text into the pipeline. No-op when
+	 * vocalization is disabled. The synthesis session (worker, player) is only
+	 * opened once the first speakable segment exists, so a reply that
+	 * normalizes to silence (pure code, tables, URLs) costs nothing. The
+	 * trailing partial is flushed by {@link flush} or the idle timer.
 	 */
 	pushDelta(text: string): void {
 		if (!settings.get("speech.enabled")) return;
 		if (!text) return;
-		this.#ensureSession().push(text);
+		this.#speakable ??= new SpeakableStream();
+		this.#pushSegments(this.#speakable.push(text));
+		this.#armIdleFlush(this.#speakable);
 	}
 
 	/**
-	 * Close the current input stream (call at message/turn end). The engine
-	 * flushes its trailing partial as a final chunk; the player keeps draining
-	 * queued audio until it completes.
+	 * Close the current input stream (call at message/turn end). Drains the
+	 * trailing partial as final segments; the player keeps draining queued
+	 * audio until it completes.
 	 */
 	flush(): void {
+		this.#clearIdleTimer();
+		const speakable = this.#speakable;
+		this.#speakable = null;
+		if (speakable) this.#pushSegments(speakable.flush());
 		this.#handle?.end();
 		this.#handle = null;
 	}
@@ -79,9 +100,7 @@ export class Vocalizer {
 	 * message): stream it in and immediately close the input. No-op when disabled.
 	 */
 	speak(text: string): void {
-		if (!settings.get("speech.enabled")) return;
-		if (!text) return;
-		this.#ensureSession().push(text);
+		this.pushDelta(text);
 		this.flush();
 	}
 
@@ -90,6 +109,8 @@ export class Vocalizer {
 	 * synthesis (new turn / user message / Esc interrupt). Audio stops at once.
 	 */
 	clear(): void {
+		this.#clearIdleTimer();
+		this.#speakable = null;
 		this.#handle = null;
 		this.#abort?.abort();
 		this.#abort = null;
@@ -114,9 +135,17 @@ export class Vocalizer {
 		return this.#chain;
 	}
 
+	/** Feed ready segments to the synthesizer, opening the session lazily. */
+	#pushSegments(segments: string[]): void {
+		if (segments.length === 0) return;
+		const handle = this.#ensureSession();
+		for (const segment of segments) handle.push(segment);
+	}
+
 	/**
-	 * Open a streaming-synthesis session lazily on the first delta and chain its
-	 * playback after any prior session's, so sequential utterances never overlap.
+	 * Open a streaming-synthesis session lazily on the first speakable segment
+	 * and chain its playback after any prior session's, so sequential
+	 * utterances never overlap.
 	 */
 	#ensureSession(): TtsStreamHandle {
 		if (this.#handle) return this.#handle;
@@ -131,6 +160,28 @@ export class Vocalizer {
 		this.#player = player;
 		this.#chain = this.#chain.then(() => this.#play(handle, player, abort.signal));
 		return handle;
+	}
+
+	/**
+	 * (Re)arm the stall timer: if no delta arrives for {@link IDLE_FLUSH_MS},
+	 * speak the buffered partial sentence instead of holding it through a tool
+	 * call or thinking block. No-op by the time it fires if the utterance moved on.
+	 */
+	#armIdleFlush(speakable: SpeakableStream): void {
+		this.#clearIdleTimer();
+		const timer = setTimeout(() => {
+			this.#idleTimer = null;
+			if (this.#speakable !== speakable) return;
+			this.#pushSegments(speakable.flushIdle());
+		}, IDLE_FLUSH_MS);
+		timer.unref?.();
+		this.#idleTimer = timer;
+	}
+
+	#clearIdleTimer(): void {
+		if (this.#idleTimer === null) return;
+		clearTimeout(this.#idleTimer);
+		this.#idleTimer = null;
 	}
 
 	/** Feed each synthesized sentence into the player in arrival order; abort stops it. */

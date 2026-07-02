@@ -42,7 +42,7 @@ export interface TtsStreamOptions {
 	signal?: AbortSignal;
 }
 
-/** One synthesized sentence of a streaming session, in emission order. */
+/** One synthesized segment of a streaming session, in emission order. */
 export interface TtsAudioChunk {
 	index: number;
 	text: string;
@@ -51,10 +51,10 @@ export interface TtsAudioChunk {
 }
 
 /**
- * A live streaming-synthesis session. Feed text incrementally with {@link push}
- * and close the input with {@link end}; `chunks` yields each synthesized
- * sentence's audio as soon as it is ready, then completes once the worker
- * finishes draining the closed input.
+ * A live streaming-synthesis session. Feed complete speakable segments with
+ * {@link push} (the worker synthesizes each push as-is) and close the input
+ * with {@link end}; `chunks` yields each segment's audio as soon as it is
+ * ready, then completes once the worker finishes draining the closed input.
  */
 export interface TtsStreamHandle {
 	push(text: string): void;
@@ -239,11 +239,12 @@ export class TtsClient {
 	}
 
 	/**
-	 * Open a streaming-synthesis session. Text is fed incrementally through the
-	 * returned handle's `push`/`end`; audio is emitted one synthesized sentence at
-	 * a time via `chunks`, so playback can begin before the full text is known.
-	 * Returns an inert handle (immediately-ended `chunks`) for unknown models or
-	 * an already-aborted signal, and fails the iterator if the worker cannot spawn.
+	 * Open a streaming-synthesis session. Complete speakable segments are fed
+	 * through the returned handle's `push`/`end`; audio is emitted one segment
+	 * at a time via `chunks`, so playback can begin before the full text is
+	 * known. Returns an inert handle (immediately-ended `chunks`) for unknown
+	 * models or an already-aborted signal, and fails the iterator if the worker
+	 * cannot spawn.
 	 */
 	synthesizeStream(modelKey: string, options: TtsStreamOptions = {}): TtsStreamHandle {
 		if (!isTtsLocalModelKey(modelKey) || options.signal?.aborted) {

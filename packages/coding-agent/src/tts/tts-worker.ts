@@ -39,20 +39,6 @@ type KokoroDevice = "cpu" | "wasm" | "webgpu";
 /** A loaded Kokoro voice synthesizer (subset of `kokoro-js`'s `KokoroTTS`). */
 interface KokoroTtsInstance {
 	generate(text: string, options: { voice: string }): Promise<RawAudio>;
-	stream(
-		text: string | TextSplitterStreamInstance,
-		options: { voice: string },
-	): AsyncGenerator<{ text: string; phonemes: string; audio: RawAudio }, void, void>;
-}
-
-/**
- * Incremental text source for {@link KokoroTtsInstance.stream} (subset of
- * `kokoro-js`'s `TextSplitterStream`). Text pushed at any time is split into
- * complete sentences; `close` flushes the trailing buffer and ends the stream.
- */
-interface TextSplitterStreamInstance {
-	push(...texts: string[]): void;
-	close(): void;
 }
 
 /** `KokoroTTS` static surface used to load a model from the Hugging Face Hub. */
@@ -67,7 +53,6 @@ interface KokoroRuntime {
 			},
 		): Promise<KokoroTtsInstance>;
 	};
-	TextSplitterStream: new () => TextSplitterStreamInstance;
 }
 
 /**
@@ -96,15 +81,18 @@ const kokoroRuntime = new MemoizedRuntime<KokoroRuntime>();
 
 /**
  * In-flight streaming sessions keyed by request id. A session is created on
- * `stream-start` and torn down when its generator finishes. Text pushed before
- * the model finishes loading is held in `buffered` and flushed into the splitter
- * once it exists; pushes after that go straight to the live splitter.
+ * `stream-start` and torn down when its run loop finishes. Each `stream-push`
+ * carries one complete speakable segment (the parent's `SpeakableStream` does
+ * all splitting and normalization); segments queue here and the run loop
+ * synthesizes them in arrival order, waking via `wake` when idle.
  */
 interface StreamSession {
 	modelKey: TtsLocalModelKey;
 	voice: string | undefined;
-	buffered: string[];
-	splitter: TextSplitterStreamInstance | null;
+	/** Speakable segments awaiting synthesis, in arrival order. */
+	queue: string[];
+	/** Resolves the run loop's idle wait when a push/end/cancel arrives. */
+	wake: (() => void) | null;
 	ended: boolean;
 	cancelled: boolean;
 }
@@ -316,43 +304,51 @@ async function handleQueuedRequest(
 }
 
 /**
- * Drive one streaming session to completion: load the model, create the
- * splitter, flush any text pushed before the model was ready, then emit one
- * `audio-chunk` per synthesized sentence followed by a single `stream-done`.
- * Serialized through {@link synthesizeQueue} so it never interleaves model
- * access with a batch synthesize/download.
+ * Drive one streaming session to completion: load the model, then synthesize
+ * each queued segment in arrival order — one `audio-chunk` per segment,
+ * followed by a single `stream-done`. Chunk sends are drained before the next
+ * segment's inference (see the comment at the send site). Serialized through
+ * {@link synthesizeQueue} so it never interleaves model access with a batch
+ * synthesize/download.
  */
 async function runStreamSession(transport: TtsTransport, id: string, session: StreamSession): Promise<void> {
 	try {
 		if (session.cancelled) return;
-		const runtime = await loadKokoroRuntime(transport, id, session.modelKey);
-		if (session.cancelled) return;
 		const synthesizer = await loadModel(session.modelKey, transport, id);
 		if (session.cancelled) return;
 		const spec = getTtsLocalModelSpec(session.modelKey);
-		const splitter = new runtime.TextSplitterStream();
-		// Flush buffered text before exposing the splitter so a push racing this
-		// block can't slip ahead of the already-queued fragments.
-		for (const text of session.buffered) {
-			if (session.cancelled) return;
-			splitter.push(text);
-		}
-		session.buffered = [];
-		session.splitter = splitter;
-		if (session.ended || session.cancelled) splitter.close();
 		const voice = resolveTtsVoice(session.modelKey, session.voice);
 		let index = 0;
-		for await (const chunk of synthesizer.stream(splitter, { voice })) {
+		while (!session.cancelled) {
+			const segment = session.queue.shift();
+			if (segment === undefined) {
+				if (session.ended) break;
+				const { promise, resolve } = Promise.withResolvers<void>();
+				session.wake = resolve;
+				// Re-check after arming: a push/end/cancel racing the empty shift.
+				if (session.queue.length > 0 || session.ended || session.cancelled) {
+					session.wake = null;
+					resolve();
+				}
+				await promise;
+				continue;
+			}
+			const output = await synthesizer.generate(segment, { voice });
 			if (session.cancelled) break;
-			const audio = Array.isArray(chunk.audio.audio) ? chunk.audio.audio[0] : chunk.audio.audio;
+			const audio = Array.isArray(output.audio) ? output.audio[0] : output.audio;
 			if (!audio) continue;
-			transport.send({
+			// Drain the IPC write before the next segment's inference: ONNX
+			// blocks this event loop for seconds at a time, so a fire-and-forget
+			// send would sit in the pipe queue until the session ends and every
+			// chunk would arrive in one burst (long silence, then all segments
+			// at once) instead of streaming per-segment.
+			await transport.sendAndFlush({
 				type: "audio-chunk",
 				id,
 				index: index++,
-				text: chunk.text,
+				text: segment,
 				pcm: audio,
-				sampleRate: chunk.audio.sampling_rate || spec?.sampleRate || 24_000,
+				sampleRate: output.sampling_rate || spec?.sampleRate || 24_000,
 			});
 		}
 		if (!session.cancelled) transport.send({ type: "stream-done", id });
@@ -370,8 +366,8 @@ function startStreamSession(
 	const session: StreamSession = {
 		modelKey: message.modelKey,
 		voice: message.voice,
-		buffered: [],
-		splitter: null,
+		queue: [],
+		wake: null,
 		ended: false,
 		cancelled: false,
 	};
@@ -382,26 +378,33 @@ function startStreamSession(
 	);
 }
 
+/** Wake the session's run loop if it is parked on an empty queue. */
+function wakeStreamSession(session: StreamSession): void {
+	const wake = session.wake;
+	session.wake = null;
+	wake?.();
+}
+
 function pushToStreamSession(id: string, text: string): void {
 	const session = streamSessions.get(id);
 	if (!session || session.cancelled) return;
-	if (session.splitter) session.splitter.push(text);
-	else session.buffered.push(text);
+	session.queue.push(text);
+	wakeStreamSession(session);
 }
 
 function endStreamSession(id: string): void {
 	const session = streamSessions.get(id);
 	if (!session || session.cancelled) return;
 	session.ended = true;
-	session.splitter?.close();
+	wakeStreamSession(session);
 }
 
 function cancelStreamSession(id: string): void {
 	const session = streamSessions.get(id);
 	if (!session) return;
 	session.cancelled = true;
-	session.buffered = [];
-	session.splitter?.close();
+	session.queue.length = 0;
+	wakeStreamSession(session);
 	streamSessions.delete(id);
 }
 

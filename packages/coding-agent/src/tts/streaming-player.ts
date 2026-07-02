@@ -4,14 +4,17 @@
  * Replaces the spawn-`afplay`-per-sentence approach (a fresh process per chunk
  * meant audible gaps, per-spawn latency, and no way to interrupt a clip mid-play)
  * with a single persistent player process fed raw 32-bit-float mono PCM over
- * stdin. Chunks are queued and drained by one writer so sentences play back to
+ * stdin. Chunks are queued and drained by one writer so segments play back to
  * back; writes are paced to stay only {@link LEAD_SECONDS} ahead of realtime so
  * ducking and stop take effect promptly instead of after seconds of buffered
  * audio. {@link StreamingAudioPlayer.stop} kills the process for instant silence.
  *
- * Where no streaming backend exists (Windows, or macOS without the bundled
- * ffmpeg), it degrades to the per-file {@link playAudioFile} path so speech still
- * works — just without gapless playback or mid-clip interruption.
+ * Where no streaming backend exists (Windows, or a host without ffmpeg/sox), it
+ * degrades to the per-file {@link playAudioFile} path so speech still works —
+ * just without gapless playback or mid-clip interruption. A backend that spawns
+ * but dies early (e.g. an ffmpeg built without its platform audio device) is
+ * detected via its exit and the session downgrades to per-file playback without
+ * dropping the chunk being played.
  */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -41,8 +44,7 @@ export interface StreamingPlayerLookup {
  * and plays it to the default output device. An empty list means no streaming
  * backend is available and the caller should fall back to per-file playback.
  *
- * - darwin: none; `afplay` is file-only, so macOS uses the interruptible
- *   per-file fallback.
+ * - darwin: `ffmpeg` (AudioToolbox output device) → sox's `play` (coreaudio).
  * - linux/other POSIX: `ffmpeg` (`-f pulse` then `-f alsa`) → `paplay`/`aplay`
  *   raw fallbacks.
  * - win32: none (PowerShell `SoundPlayer` is file-only).
@@ -57,7 +59,19 @@ export function streamingPlayerCommandsFor(
 	const rate = String(sampleRate > 0 ? sampleRate : DEFAULT_SAMPLE_RATE);
 	const input = ["-loglevel", "error", "-nostdin", "-f", "f32le", "-ar", rate, "-ac", "1", "-i", "pipe:0"];
 
-	if (platform === "darwin") return [];
+	if (platform === "darwin") {
+		const commands: PlayerCommand[] = [];
+		const ffmpegBin = ffmpeg();
+		if (ffmpegBin) commands.push({ cmd: ffmpegBin, args: [...input, "-f", "audiotoolbox", "default"] });
+		const play = which("play");
+		if (play) {
+			commands.push({
+				cmd: play,
+				args: ["-q", "-t", "raw", "-e", "floating-point", "-b", "32", "-r", rate, "-c", "1", "-"],
+			});
+		}
+		return commands;
+	}
 	if (platform === "win32") {
 		return [];
 	}
@@ -87,6 +101,8 @@ export class StreamingAudioPlayer {
 	#mode: "stream" | "file" = "file";
 	#proc: Subprocess<"pipe", "ignore", "ignore"> | null = null;
 	#sink: FileSink | null = null;
+	/** Streaming backends not yet tried; consumed head-first by {@link #spawnStream}. */
+	#candidates: PlayerCommand[] | null = null;
 	#writtenSec = 0;
 	#startedAt = 0;
 	#started = false;
@@ -140,20 +156,37 @@ export class StreamingAudioPlayer {
 		} catch {}
 	}
 
+	/**
+	 * Spawn the next untried streaming backend; false once the list is
+	 * exhausted. A backend that spawns but dies early (e.g. an ffmpeg built
+	 * without this platform's audio output device) would otherwise swallow PCM
+	 * into a dead pipe, so its exit advances to the next candidate — or to
+	 * per-file playback — and #writeStream's failure path replays the
+	 * in-flight chunk.
+	 */
 	#spawnStream(): boolean {
-		for (const command of streamingPlayerCommandsFor(process.platform, this.#sampleRate)) {
+		this.#candidates ??= streamingPlayerCommandsFor(process.platform, this.#sampleRate);
+		for (let command = this.#candidates.shift(); command; command = this.#candidates.shift()) {
+			const { cmd, args } = command;
 			try {
-				const proc = Bun.spawn([command.cmd, ...command.args], {
+				const proc = Bun.spawn([cmd, ...args], {
 					stdin: "pipe",
 					stdout: "ignore",
 					stderr: "ignore",
 				});
 				this.#proc = proc;
 				this.#sink = proc.stdin;
+				void proc.exited.then(code => {
+					if (this.#proc !== proc || this.#stopped || this.#inputClosed) return;
+					logger.debug("tts: streaming backend exited early; trying next backend", { cmd, code });
+					this.#proc = null;
+					this.#sink = null;
+					this.#mode = this.#spawnStream() ? "stream" : "file";
+				});
 				return true;
 			} catch (error) {
 				logger.debug("tts: streaming player spawn failed", {
-					cmd: command.cmd,
+					cmd,
 					error: error instanceof Error ? error.message : String(error),
 				});
 			}
@@ -184,8 +217,20 @@ export class StreamingAudioPlayer {
 						await Bun.sleep((ahead - LEAD_SECONDS) * 1000);
 						if (this.#stopped) return;
 					}
-					this.#writeStream(chunk);
-					this.#writtenSec += chunk.length / this.#sampleRate;
+					if (this.#writeStream(chunk)) {
+						this.#writtenSec += chunk.length / this.#sampleRate;
+						continue;
+					}
+					// Backend died mid-write: move to the next streaming candidate
+					// (or the file path) and replay this exact chunk so nothing is
+					// dropped.
+					this.#mode = this.#spawnStream() ? "stream" : "file";
+					if (this.#mode === "stream" && this.#writeStream(chunk)) {
+						this.#writtenSec += chunk.length / this.#sampleRate;
+					} else {
+						this.#mode = "file";
+						await this.#playFile(chunk);
+					}
 				} else {
 					await this.#playFile(chunk);
 				}
@@ -219,16 +264,19 @@ export class StreamingAudioPlayer {
 		return promise;
 	}
 
-	#writeStream(pcm: Float32Array): void {
+	/** Write one chunk into the backend's stdin; false when the sink is gone or broken. */
+	#writeStream(pcm: Float32Array): boolean {
 		const sink = this.#sink;
-		if (!sink) return;
+		if (!sink) return false;
 		try {
 			sink.write(this.#bytes(pcm));
 			sink.flush();
+			return true;
 		} catch (error) {
 			logger.debug("tts: streaming write failed", {
 				error: error instanceof Error ? error.message : String(error),
 			});
+			return false;
 		}
 	}
 
