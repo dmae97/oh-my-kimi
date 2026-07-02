@@ -3138,10 +3138,13 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		if (choice === "Approve and execute" || choice === "Approve and compact context" || choice === keepContextLabel) {
 			try {
-				// Prefer in-overlay edits (already in memory) over a disk re-read; the
-				// `onPlanEdited` write is fire-and-forget, so reading the file here could
-				// race ahead of it.
+				// Prefer in-overlay edits (already in memory) over a disk re-read. The
+				// overlay mirrors edits as they happen, and approval awaits one final
+				// write so the durable plan file and synthetic prompt carry the same text.
 				const latestPlanContent = editedContent ?? (await this.#readPlanFile(planFilePath));
+				if (editedContent !== undefined) {
+					await Bun.write(this.#resolvePlanFilePath(planFilePath), editedContent);
+				}
 				if (!latestPlanContent) {
 					this.showError(`Plan file not found at ${planFilePath}`);
 					return;

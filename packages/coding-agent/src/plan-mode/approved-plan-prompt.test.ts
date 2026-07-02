@@ -10,7 +10,7 @@ const PLAN_FILE_PATH = "local://durable-plan.md";
 const PLAN_SENTINEL = "SENTINEL_HEADROOM_COMPRESSED_PLAN_CONTENT";
 
 describe("approved plan execution prompts", () => {
-	it("loads the approved plan from the durable local file instead of embedding content", () => {
+	it("requires reading the durable plan file without inlining plan content", () => {
 		const approved = prompt.render(planModeApprovedPrompt, {
 			planContent: PLAN_SENTINEL,
 			planFilePath: PLAN_FILE_PATH,
@@ -26,6 +26,8 @@ describe("approved plan execution prompts", () => {
 
 		for (const rendered of [approved, reference, compact]) {
 			expect(rendered).toContain(PLAN_FILE_PATH);
+		}
+		for (const rendered of [approved, reference, compact]) {
 			expect(rendered).not.toContain(PLAN_SENTINEL);
 		}
 		expect(approved).toContain("MUST read `local://durable-plan.md`");

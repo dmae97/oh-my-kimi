@@ -3611,8 +3611,14 @@ export class TUI extends Container {
 			repaintVirtualScrollInPlace: boolean;
 		},
 	): void {
-		const { chunkTo, windowTop, prevWindowTop, prevHardwareCursorRow, forceWindowRewrite, repaintVirtualScrollInPlace } =
-			options;
+		const {
+			chunkTo,
+			windowTop,
+			prevWindowTop,
+			prevHardwareCursorRow,
+			forceWindowRewrite,
+			repaintVirtualScrollInPlace,
+		} = options;
 		const chunkFrom = this.#committedRows;
 		const chunkLength = chunkTo - chunkFrom;
 		const scroll = windowTop - prevWindowTop;
