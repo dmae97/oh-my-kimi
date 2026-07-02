@@ -9,11 +9,12 @@
 ### Changed
 
 - Refined advisor note card visuals with a dedicated rail character and bold label headers
-
 - Deferred session_stop extension hooks and incomplete-todo reminders until all agent-owned background jobs (such as async bash or task spawns) are fully idle
 - Restyled the advisor note card so notes no longer blend into thinking output: bold label-tag header, heavier severity-tinted rail, and note body on the default text color instead of thinking-gray
 
 ### Fixed
+
+- Fixed race conditions and potential hangs during agent startup by improving process lifecycle management
 
 - Improved reliability of file edits when snapshots share identical hash tags
 - Fixed terminal creation in ACP by properly wrapping shell commands and arguments, resolving execution failures (such as ENOENT errors) on Windows and POSIX platforms
