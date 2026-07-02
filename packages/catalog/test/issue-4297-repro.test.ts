@@ -46,5 +46,10 @@ describe("#4297 custom anthropic-messages provider signing default", () => {
 			spec({ provider: "minimax-cn", baseUrl: "https://api.minimaxi.com/anthropic", id: "minimax-m2" }),
 		);
 		expect(compatCn.replayUnsignedThinking).toBe(true);
+
+		const compatCnMirror = buildAnthropicCompat(
+			spec({ provider: "minimax-cn", baseUrl: "https://mirror.example.com/anthropic", id: "minimax-m2" }),
+		);
+		expect(compatCnMirror.replayUnsignedThinking).toBe(true);
 	});
 });

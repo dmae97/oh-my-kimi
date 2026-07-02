@@ -51,7 +51,7 @@ export const KNOWN_HOSTS = {
 	fireworks: { urlMarkers: ["fireworks.ai"] },
 	groq: { providers: ["groq"], urlMarkers: ["api.groq.com"] },
 	minimax: {
-		providers: ["minimax", "minimax-code", "minimax-code-cn"],
+		providers: ["minimax", "minimax-cn", "minimax-code", "minimax-code-cn"],
 		urlMarkers: ["api.minimax.io", "api.minimaxi.com"],
 	},
 	qwenPortal: { providers: ["qwen-portal"], urlMarkers: ["portal.qwen.ai"] },
