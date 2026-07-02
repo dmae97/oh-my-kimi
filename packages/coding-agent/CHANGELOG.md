@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Abort underlying MCP call when proxy tool timeout fires ([#4242](https://github.com/can1357/oh-my-pi/issues/4242))
+
+
 ## [16.3.0] - 2026-07-02
 
 ### Added
