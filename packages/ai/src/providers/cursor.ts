@@ -147,6 +147,8 @@ import { toolWireSchema } from "../utils/schema/wire";
 export const CURSOR_API_URL = "https://api2.cursor.sh";
 export const CURSOR_CLIENT_VERSION = "cli-2026.01.09-231024f";
 
+const CURSOR_PROXY_TUNNEL_TIMEOUT_MS = 30_000;
+
 const conversationStateCache = new Map<string, ConversationStateStructure>();
 const conversationBlobStores = new Map<string, Map<string, Uint8Array>>();
 
@@ -392,7 +394,10 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 
 			const proxyUrl = shouldBypassProxy(new URL(baseUrl)) ? undefined : getProxyForProvider(model.provider);
 			if (proxyUrl) {
-				const tlsSocket = await connectProxiedSocket(proxyUrl, baseUrl);
+				const tlsSocket = await connectProxiedSocket(proxyUrl, baseUrl, {
+					signal: options?.signal,
+					timeoutMs: CURSOR_PROXY_TUNNEL_TIMEOUT_MS,
+				});
 				h2Client = http2.connect(baseUrl, {
 					createConnection: () => tlsSocket,
 				});

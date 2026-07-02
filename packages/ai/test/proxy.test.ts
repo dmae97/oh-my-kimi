@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import * as net from "node:net";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 import {
+	connectProxiedSocket,
 	getProxyForProvider,
 	isLocalOrMetadataHost,
 	shouldBypassProxy,
@@ -8,6 +11,55 @@ import {
 } from "@oh-my-pi/pi-ai/utils/proxy";
 
 const PROXY = "http://127.0.0.1:24560";
+
+interface SilentProxyServer {
+	url: string;
+	accepted: Promise<net.Socket>;
+	close(): Promise<void>;
+}
+
+async function createSilentProxyServer(): Promise<SilentProxyServer> {
+	const sockets = new Set<net.Socket>();
+	const accepted = Promise.withResolvers<net.Socket>();
+	const server = net.createServer(socket => {
+		sockets.add(socket);
+		socket.once("close", () => sockets.delete(socket));
+		accepted.resolve(socket);
+	});
+
+	const listening = Promise.withResolvers<void>();
+	const onError = (error: Error): void => listening.reject(error);
+	server.once("error", onError);
+	server.listen(0, "127.0.0.1", () => {
+		server.off("error", onError);
+		listening.resolve();
+	});
+	await listening.promise;
+
+	const address = server.address();
+	if (!address || typeof address === "string") throw new Error("expected TCP listener address");
+
+	return {
+		url: `http://127.0.0.1:${address.port}`,
+		accepted: accepted.promise,
+		async close() {
+			for (const socket of sockets) socket.destroy();
+			const closed = Promise.withResolvers<void>();
+			server.close(error => {
+				if (error) closed.reject(error);
+				else closed.resolve();
+			});
+			await closed.promise;
+		},
+	};
+}
+
+async function waitForSocketClose(socket: net.Socket): Promise<void> {
+	if (socket.destroyed) return;
+	const closed = Promise.withResolvers<void>();
+	socket.once("close", () => closed.resolve());
+	await closed.promise;
+}
 
 const isProxyEnvKey = (k: string): boolean => k.startsWith("PI_PROXY") || k === "NO_PROXY" || k === "no_proxy";
 
@@ -185,5 +237,48 @@ describe("wrapFetchForProxy", () => {
 		await wrapFetchForProxy(fetch, "wrap-badurl")("not a url");
 		expect(calls).toHaveLength(1);
 		expect(calls[0].proxy).toBeUndefined();
+	});
+});
+
+describe("connectProxiedSocket", () => {
+	it("times out and closes a proxy tunnel that never sends a CONNECT response", async () => {
+		const proxy = await createSilentProxyServer();
+		try {
+			const result = await connectProxiedSocket(proxy.url, "https://cursor.example", { timeoutMs: 20 }).then(
+				() => "resolved",
+				error => error,
+			);
+
+			expect(result).toBeInstanceOf(AIError.StreamTimeoutError);
+			const socket = await proxy.accepted;
+			await waitForSocketClose(socket);
+			expect(socket.destroyed).toBe(true);
+		} finally {
+			await proxy.close();
+		}
+	});
+
+	it("aborts and closes an in-progress proxy tunnel when the caller aborts", async () => {
+		const proxy = await createSilentProxyServer();
+		try {
+			const controller = new AbortController();
+			const pending = connectProxiedSocket(proxy.url, "https://cursor.example", {
+				signal: controller.signal,
+				timeoutMs: 1_000,
+			}).then(
+				() => "resolved",
+				error => error,
+			);
+			const socket = await proxy.accepted;
+
+			controller.abort();
+			const result = await pending;
+
+			expect(result).toBeInstanceOf(AIError.AbortError);
+			await waitForSocketClose(socket);
+			expect(socket.destroyed).toBe(true);
+		} finally {
+			await proxy.close();
+		}
 	});
 });

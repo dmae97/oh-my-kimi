@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Cursor proxy tunnel setup hanging indefinitely before stream start by adding abort and timeout handling. ([#4226](https://github.com/can1357/oh-my-pi/issues/4226))
+
 ## [16.3.1] - 2026-07-02
 
 ### Changed
