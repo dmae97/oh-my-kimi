@@ -341,13 +341,18 @@ export function transformMessages<TApi extends Api>(
 			const isLatestSurvivingAssistant = index === latestSurvivingAssistantIndex;
 			// Signature policy is a second axis. Anthropic cryptographically
 			// binds reasoning signatures to its key+session+model, so cross-model
-			// signatures must be stripped whenever official Anthropic is on
-			// either end of the replay:
-			//   * official → 3p: the 3p target can't reverify the signature;
-			//     keeping it leaks private continuation metadata for no benefit.
-			//   * 3p → official: official rejects a foreign signature outright.
-			//   * official → official cross-model: the new model rejects the
-			//     previous model's signature.
+			// signatures must be stripped whenever a signing Anthropic endpoint
+			// is on either end of the replay:
+			//   * official Anthropic (source): the 3p target can't reverify a
+			//     foreign signature and keeping it leaks continuation metadata
+			//     for no benefit.
+			//   * signing Anthropic (target): official Anthropic, GitHub Copilot,
+			//     ZenMux, Cloudflare AI Gateway `/anthropic`, and Google Vertex
+			//     `publishers/anthropic/…` all forward to signature-enforcing
+			//     Anthropic. Any stale/cross-model signature on the wire triggers
+			//     `400 Invalid signature in thinking block` — same failure class
+			//     whether `officialEndpoint` is true or the endpoint is one of
+			//     the known signing proxies (#4297).
 			// 3p ↔ 3p replays preserve signatures because compatible providers
 			// (Z.AI, DeepSeek, custom `models.yaml` providers) treat them as
 			// opaque continuation hints rather than verified material; stripping
@@ -358,8 +363,8 @@ export function transformMessages<TApi extends Api>(
 			// a custom proxy via `models.yaml` will see signatures stripped, the
 			// conservative direction (degraded reasoning, not broken requests).
 			const isOfficialAnthropicSource = isAnthropicReplay && assistantMsg.provider === "anthropic";
-			const isOfficialAnthropicTarget = isAnthropicTarget && model.compat.officialEndpoint;
-			const officialAnthropicInvolved = isOfficialAnthropicSource || isOfficialAnthropicTarget;
+			const isSigningAnthropicTarget = isAnthropicTarget && model.compat.signingEndpoint;
+			const signingAnthropicInvolved = isOfficialAnthropicSource || isSigningAnthropicTarget;
 			// Compatible Anthropic-messages reasoning targets that accept
 			// unsigned thinking natively (Z.AI, DeepSeek, the generic
 			// `reasoning && !official` case in the compat builder). Used to keep
@@ -421,7 +426,7 @@ export function transformMessages<TApi extends Api>(
 						if (
 							!isLatestSurvivingAssistant &&
 							!isSameModel &&
-							officialAnthropicInvolved &&
+							signingAnthropicInvolved &&
 							sanitized.thinkingSignature
 						) {
 							sanitized = { ...sanitized, thinkingSignature: undefined };
@@ -438,7 +443,7 @@ export function transformMessages<TApi extends Api>(
 						// textual thinking dialect; keep demotion for signatures stripped
 						// by the untrustworthy-turn recovery above and for literal thinking
 						// envelopes that never carried a signature field.
-						if (isSameModel && isOfficialAnthropicTarget && sanitized.thinkingSignature?.trim() === "") {
+						if (isSameModel && isSigningAnthropicTarget && sanitized.thinkingSignature?.trim() === "") {
 							return [];
 						}
 						return sanitized;

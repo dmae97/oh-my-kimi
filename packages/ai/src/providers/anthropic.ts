@@ -329,15 +329,26 @@ const ANTHROPIC_PROVIDER_SESSION_STATE_KEY = "anthropic-messages";
 type AnthropicProviderSessionState = ProviderSessionState & {
 	strictToolsDisabled: boolean;
 	fastModeDisabled: boolean;
+	/**
+	 * Runtime-learned: this endpoint returned `400 Invalid signature in
+	 * thinking block` for a replayed unsigned thinking block, so it must be
+	 * treated as a signing proxy from now on. All subsequent requests demote
+	 * unsigned thinking to text for this (baseUrl, modelId), same behavior as
+	 * an explicit `compat.replayUnsignedThinking: false`. Cleared on session
+	 * close.
+	 */
+	replayUnsignedThinkingDisabled: boolean;
 };
 
 function createAnthropicProviderSessionState(): AnthropicProviderSessionState {
 	const state: AnthropicProviderSessionState = {
 		strictToolsDisabled: false,
 		fastModeDisabled: false,
+		replayUnsignedThinkingDisabled: false,
 		close: () => {
 			state.strictToolsDisabled = false;
 			state.fastModeDisabled = false;
+			state.replayUnsignedThinkingDisabled = false;
 		},
 	};
 	return state;
@@ -1644,6 +1655,32 @@ function calculateFallbackTurnCost(
 	return true;
 }
 
+/**
+ * Detects the Anthropic `400 Invalid `signature` in `thinking` block` failure
+ * a signing proxy returns when a stripped/unsigned prior thinking block is
+ * replayed as `signature: ""`. Exported for the compat tests.
+ */
+const INVALID_THINKING_SIGNATURE_PATTERN = /invalid\s+`?signature`?\s+in\s+`?thinking`?(?:\s+block)?/i;
+export function isInvalidThinkingSignatureError(message: string): boolean {
+	return INVALID_THINKING_SIGNATURE_PATTERN.test(message);
+}
+
+/**
+ * Prepend a pointed remediation to Anthropic's `Invalid signature in thinking
+ * block` 400 when the model looks like an unmarked custom signing proxy
+ * (opaque baseUrl, `spec.reasoning: true`, no explicit
+ * `compat.replayUnsignedThinking` override). The default is native replay for
+ * the 3p reasoning majority (#2005); this hint turns the misconfigured-proxy
+ * case into a one-line fix instead of a silent retry loop (#4297).
+ */
+export function maybeAddReplayUnsignedThinkingHint(model: Model<"anthropic-messages">, message: string): string {
+	if (!isInvalidThinkingSignatureError(message)) return message;
+	if (model.compat.officialEndpoint) return message;
+	if (model.compatConfig?.replayUnsignedThinking !== undefined) return message;
+	const hint = `Provider "${model.provider}" looks like an Anthropic-compatible signing proxy: it rejected a replayed unsigned thinking block. Set \`compat.replayUnsignedThinking: false\` under \`providers.${model.provider}\` in your models.yml and retry. See https://github.com/can1357/oh-my-pi/issues/4297.`;
+	return `${hint}\n\n${message}`;
+}
+
 const streamAnthropicOnce = (
 	model: Model<"anthropic-messages">,
 	context: Context,
@@ -1698,6 +1735,7 @@ const streamAnthropicOnce = (
 			let disableStrictTools =
 				(providerSessionState?.strictToolsDisabled ?? false) || (model.compat?.disableStrictTools ?? false);
 			let dropFastMode = providerSessionState?.fastModeDisabled ?? false;
+			let forceDemoteUnsignedThinking = providerSessionState?.replayUnsignedThinkingDisabled ?? false;
 			const mergedCallerHeaders = mergeHeaders(model.headers, options?.headers);
 			const umansGatewayWebSearchHeader = getUmansWebSearchHeader(model, mergedCallerHeaders);
 
@@ -1808,6 +1846,7 @@ const streamAnthropicOnce = (
 					options,
 					disableStrictTools,
 					umansGatewayWebSearchHeader !== undefined,
+					forceDemoteUnsignedThinking,
 				);
 				if (disableStrictTools) {
 					dropAnthropicStrictTools(nextParams);
@@ -2378,6 +2417,39 @@ const streamAnthropicOnce = (
 						continue;
 					}
 					if (
+						!forceDemoteUnsignedThinking &&
+						firstTokenTime === undefined &&
+						!streamedReplayUnsafeContent &&
+						isInvalidThinkingSignatureError(
+							streamFailure instanceof Error ? streamFailure.message : String(streamFailure),
+						)
+					) {
+						logger.warn(
+							"anthropic: signing proxy detected (Invalid signature in thinking block), demoting unsigned thinking and retrying",
+							{
+								provider: model.provider,
+								model: model.id,
+								baseUrl,
+								error: streamFailure instanceof Error ? streamFailure.message : String(streamFailure),
+							},
+						);
+						if (providerSessionState) {
+							providerSessionState.replayUnsignedThinkingDisabled = true;
+						}
+						forceDemoteUnsignedThinking = true;
+						params = await prepareParams();
+						providerRetryAttempt = 0;
+						output.content.length = 0;
+						output.model = model.id;
+						output.responseId = undefined;
+						output.errorMessage = undefined;
+						output.providerPayload = undefined;
+						output.usage = createEmptyUsage(copilotDynamicHeaders?.premiumRequests);
+						output.stopReason = "stop";
+						firstTokenTime = undefined;
+						continue;
+					}
+					if (
 						!dropFastMode &&
 						model.provider === "anthropic" &&
 						options?.serviceTier === "priority" &&
@@ -2453,6 +2525,9 @@ const streamAnthropicOnce = (
 			if (dropFastMode && model.provider === "anthropic" && options?.serviceTier === "priority") {
 				output.disabledFeatures = [...(output.disabledFeatures ?? []), "priority"];
 			}
+			if (forceDemoteUnsignedThinking && model.compat.replayUnsignedThinking) {
+				output.disabledFeatures = [...(output.disabledFeatures ?? []), "unsigned-thinking-replay"];
+			}
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -2468,7 +2543,7 @@ const streamAnthropicOnce = (
 			output.stopReason = result.stopReason;
 			output.errorStatus = result.status;
 			output.errorId = result.id;
-			output.errorMessage = result.message;
+			output.errorMessage = maybeAddReplayUnsignedThinkingHint(model, result.message);
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
@@ -3025,7 +3100,16 @@ function buildParams(
 	options?: AnthropicOptions,
 	disableStrictTools = false,
 	useUmansGatewayWebSearch = false,
+	forceDemoteUnsignedThinking = false,
 ): MessageCreateParamsStreaming {
+	// A session-scoped auto-demote (learned from a live signing 400) clones the
+	// resolved compat with `replayUnsignedThinking: false` so every subsequent
+	// downstream read (convertAnthropicMessages, transformMessages) sees the
+	// demoted default without mutating the shared `model` reference.
+	const effectiveModel =
+		forceDemoteUnsignedThinking && model.compat.replayUnsignedThinking
+			? { ...model, compat: { ...model.compat, replayUnsignedThinking: false } }
+			: model;
 	const { cacheControl } = getCacheControl(model, options?.cacheRetention, isOAuthToken);
 
 	// Pre-compute system blocks so they occupy the right slot in the serialized body.
@@ -3151,7 +3235,7 @@ function buildParams(
 	// metadata → max_tokens → thinking → context_management → output_config → stream.
 	const params: MessageCreateParamsStreaming = {
 		model: options?.requestModelId ?? model.requestModelId ?? model.id,
-		messages: convertAnthropicMessages(context.messages, model, isOAuthToken, {
+		messages: convertAnthropicMessages(context.messages, effectiveModel, isOAuthToken, {
 			serverSideFallbackEnabled: !!options?.fallbacks?.length,
 		}),
 		...(systemBlocks && { system: systemBlocks }),

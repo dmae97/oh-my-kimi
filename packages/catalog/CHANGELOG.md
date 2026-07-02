@@ -8,6 +8,9 @@
 
 - Fixed ZenMux model discovery to run without a `ZENMUX_API_KEY`, so newly published ZenMux models (for example `anthropic/claude-fable-5-free`) auto-update into the runtime `models.db` cache instead of waiting on a regenerated `models.json`.
 - Fixed ZenMux runtime discovery to query the `/api/v1/models` endpoint even when the resolved provider base URL points at the Anthropic-compatible route, so discovery no longer requests a non-existent `/api/anthropic/models` path.
+### Fixed
+
+- Extended the `anthropic-messages` signing-endpoint recognition to Cloudflare AI Gateway (`gateway.ai.cloudflare.com/**/anthropic`), Google Vertex (`aiplatform.googleapis.com/**/publishers/anthropic/…`), AWS Bedrock (`bedrock-runtime.<region>.amazonaws.com`), and Azure AI Inference / Foundry (`<res>.(inference|services).ai.azure.com`), and exposed the classification as `ResolvedAnthropicCompat.signingEndpoint` so both the replay-unsigned-thinking default and the cross-model signature-stripping path stay consistent on those hosts without walking back the settled 3p reasoning-replay default. ([#4297](https://github.com/can1357/oh-my-pi/issues/4297))
 
 ## [16.3.1] - 2026-07-02
 
