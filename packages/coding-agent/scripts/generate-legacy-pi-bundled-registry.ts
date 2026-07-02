@@ -332,9 +332,15 @@ async function formatInPlace(targets: readonly string[]): Promise<void> {
 		stdout: "pipe",
 		stderr: "pipe",
 	});
-	const exit = await proc.exited;
+	// Drain both pipes concurrently with proc.exited to avoid a pipe-buffer
+	// deadlock — biome check can emit thousands of lines when it rewrites the
+	// generated registry, easily exceeding the ~64 KiB OS pipe buffer.
+	const [exit, , stderr] = await Promise.all([
+		proc.exited,
+		new Response(proc.stdout).text(),
+		new Response(proc.stderr).text(),
+	]);
 	if (exit !== 0) {
-		const stderr = await new Response(proc.stderr).text();
 		throw new Error(`biome check --write failed (exit ${exit}): ${stderr}`);
 	}
 }
