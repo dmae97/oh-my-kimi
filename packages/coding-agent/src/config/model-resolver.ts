@@ -840,7 +840,12 @@ export function parseModelPattern(
 	preferences?: ModelMatchPreferences,
 	options?: { allowInvalidThinkingSelectorFallback?: boolean },
 ): ParsedModelResult {
-	return matchPatternWithContext(pattern, availableModels, buildPreferenceContext(availableModels, preferences), options);
+	return matchPatternWithContext(
+		pattern,
+		availableModels,
+		buildPreferenceContext(availableModels, preferences),
+		options,
+	);
 }
 
 const PREFIX_MODEL_ROLE = "pi/";
