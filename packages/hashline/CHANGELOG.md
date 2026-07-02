@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed `SnapshotStore.byHashExact`; consumers resolve tags via `byHash`, which returns the most recently recorded version on a collision.
+
+### Changed
+
+- Improved robustness of patch application by resolving 16-bit snapshot tag collisions to the most recent version rather than rejecting them.
+
 ## [16.3.0] - 2026-07-02
 
 ### Changed

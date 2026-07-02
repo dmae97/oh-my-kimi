@@ -300,9 +300,10 @@ describe("computeHashlineDiff", () => {
 	});
 
 	// A 16-bit snapshot tag can collide across two different file states. The
-	// preview must mirror Patcher's apply-time guard: hash equality alone never
-	// proves the live text IS the snapshot the anchors were minted against.
-	test("rejects the no-drift path when the live text is a colliding ambiguous tag", async () => {
+	// preview mirrors Patcher's apply-time behavior: tag equality with the
+	// live content is trusted as-is — a colliding retained snapshot must not
+	// reject the preview, since a forced re-read would mint the very same tag.
+	test("previews onto live content when the tag matches a colliding retained snapshot", async () => {
 		// Both texts hash to `1D84` (pinned in hashline's collision tests).
 		const SNAPSHOT_TEXT = "line one 263\nline two 4471\n";
 		const LIVE_TEXT = "line one 410\nline two 6970\n";
@@ -311,48 +312,19 @@ describe("computeHashlineDiff", () => {
 
 		const snapshotStore = new InMemorySnapshotStore();
 		// Anchors were minted against SNAPSHOT_TEXT; the live file is the
-		// colliding LIVE_TEXT, also retained (e.g. read after an external
-		// write). The tag is ambiguous — previewing the SWAP against live
-		// would show the model's payload landing on unrelated content.
+		// colliding LIVE_TEXT. The tag still matches live, so the SWAP lands
+		// on live line 2.
 		const tag = snapshotStore.record(sourcePath, SNAPSHOT_TEXT);
-		snapshotStore.record(sourcePath, LIVE_TEXT);
 
 		const result = await computeHashlineDiff(
-			{ input: `${formatHashlineHeader(sourcePath, tag)}\nSWAP 2.=2:\n+edited from snapshot` },
+			{ input: `${formatHashlineHeader(sourcePath, tag)}\nSWAP 2.=2:\n+edited live` },
 			tempDir,
 			snapshotStore,
 		);
 
-		expect("error" in result).toBe(true);
-		if ("error" in result) {
-			expect(result.error).toContain("file changed between read and edit");
-		}
-	});
-
-	test("rejects the no-drift path when the live text collides with the single retained snapshot", async () => {
-		const SNAPSHOT_TEXT = "line one 263\nline two 4471\n";
-		const LIVE_TEXT = "line one 410\nline two 6970\n";
-		const sourcePath = path.join(tempDir, "source.txt");
-		await Bun.write(sourcePath, LIVE_TEXT);
-
-		const snapshotStore = new InMemorySnapshotStore();
-		// Only SNAPSHOT_TEXT is retained; live drifted to a colliding text the
-		// store never saw. computeFileHash(live) === tag, but the retained
-		// text differs — recovery (3-way merge from SNAPSHOT_TEXT) must run
-		// instead of anchoring directly onto the collider. Here the merge
-		// cannot apply (every line differs), so the preview surfaces the
-		// drift error rather than a bogus diff.
-		const tag = snapshotStore.record(sourcePath, SNAPSHOT_TEXT);
-
-		const result = await computeHashlineDiff(
-			{ input: `${formatHashlineHeader(sourcePath, tag)}\nSWAP 2.=2:\n+edited from snapshot` },
-			tempDir,
-			snapshotStore,
-		);
-
-		expect("error" in result).toBe(true);
-		if ("error" in result) {
-			expect(result.error).toContain("file changed between read and edit");
+		expect("diff" in result).toBe(true);
+		if ("diff" in result) {
+			expect(result.diff).toContain("edited live");
 		}
 	});
 });

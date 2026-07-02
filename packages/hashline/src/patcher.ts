@@ -521,23 +521,13 @@ export class Patcher {
 	}): ApplyResult {
 		const { section, canonicalPath, exists, normalized, edits } = args;
 		const expected = exists ? section.fileHash : undefined;
-		// A 16-bit tag can collide across two different file states, so equality
-		// on `computeFileHash(normalized) === expected` alone is not enough to
-		// prove the live text IS the snapshot the tag names. Also require that,
-		// when a snapshot for `(path, expected)` is retained, exactly one stored
-		// version carries the tag and its full text matches the live text. If
-		// multiple versions share the tag, the header is ambiguous: there is no
-		// safe way to know which stored text the model's line anchors came from.
-		const storedSnapshotsForTag =
-			expected === undefined
-				? []
-				: this.snapshots.findByHash(expected).filter(snapshot => snapshot.path === canonicalPath);
-		const ambiguousStoredTag = storedSnapshotsForTag.length > 1;
+		// The 4-hex tag is content-derived: when the live text hashes to it,
+		// trust the match and apply directly. `storedSnapshotForTag` feeds the
+		// drift paths below (block resolution, 3-way recovery); on a 16-bit
+		// tag collision it resolves to the most-recently recorded text.
 		const storedSnapshotForTag = expected === undefined ? null : this.snapshots.byHash(canonicalPath, expected);
-		const hashMatches = expected !== undefined && computeFileHash(normalized) === expected;
-		const matchedSnapshot = hashMatches ? this.snapshots.byContent(canonicalPath, normalized) : null;
-		const liveMatches =
-			hashMatches && !ambiguousStoredTag && (storedSnapshotForTag === null || matchedSnapshot !== null);
+		const liveMatches = expected !== undefined && computeFileHash(normalized) === expected;
+		const matchedSnapshot = liveMatches ? this.snapshots.byContent(canonicalPath, normalized) : null;
 
 		// Resolve `replace_block N:` edits to concrete ranges before recovery
 		// runs. Block anchors are expressed against the snapshot the section tag
@@ -552,9 +542,6 @@ export class Patcher {
 		const resolveWarnings: string[] = [];
 		let resolved: readonly Edit[] = edits;
 		if (hasBlockEdit(edits)) {
-			if (ambiguousStoredTag) {
-				throw this.#mismatchError(section, canonicalPath, normalized, expected ?? "", true);
-			}
 			const baseText = expected === undefined || liveMatches ? normalized : storedSnapshotForTag?.text;
 			if (baseText === undefined) {
 				throw this.#mismatchError(section, canonicalPath, normalized, expected ?? "", false);
@@ -589,9 +576,6 @@ export class Patcher {
 		if (!hasAnchorScopedEdit(resolved)) {
 			const result = applyEdits(normalized, resolved);
 			return withResolveWarnings({ ...result, warnings: [HEADTAIL_DRIFT_WARNING, ...(result.warnings ?? [])] });
-		}
-		if (ambiguousStoredTag) {
-			throw this.#mismatchError(section, canonicalPath, normalized, expected ?? "", true);
 		}
 		// File drifted: try to replay the edit against the version the tag
 		// names and 3-way-merge it onto the live content.

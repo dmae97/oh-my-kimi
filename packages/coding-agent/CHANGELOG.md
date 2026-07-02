@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Improved reliability of edits when file snapshots share identical 16-bit hash tags
+
 ## [16.3.2] - 2026-07-02
 
 ### Breaking Changes

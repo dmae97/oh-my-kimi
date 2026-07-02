@@ -151,25 +151,5 @@ describe("InMemorySnapshotStore", () => {
 			expect(store.byContent(PATH, COLLIDE_A)?.seenLines).toEqual(new Set([1, 2]));
 			expect(store.byContent(PATH, COLLIDE_B)).toBeNull();
 		});
-
-		it("byHashExact returns the single retained collider, or null when the tag is ambiguous", () => {
-			const store = new InMemorySnapshotStore();
-			expect(store.byHashExact(PATH, computeFileHash(COLLIDE_A))).toBeNull();
-
-			const tag = store.record(PATH, COLLIDE_A);
-			// Exactly one retained text for the tag → safe to resolve.
-			expect(store.byHashExact(PATH, tag)?.text).toBe(COLLIDE_A);
-
-			store.record(PATH, COLLIDE_B);
-			// Two distinct texts now share the tag: there is no way to know
-			// which one a section's anchors were minted against, so the
-			// collision-safe lookup must refuse while byHash still surfaces
-			// the most-recent collider.
-			expect(store.byHashExact(PATH, tag)).toBeNull();
-			expect(store.byHash(PATH, tag)?.text).toBe(COLLIDE_B);
-			// Other paths and unknown tags stay null.
-			expect(store.byHashExact(OTHER, tag)).toBeNull();
-			expect(store.byHashExact(PATH, tag === "0000" ? "FFFF" : "0000")).toBeNull();
-		});
 	});
 });
