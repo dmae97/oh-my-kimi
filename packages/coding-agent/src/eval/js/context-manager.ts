@@ -509,11 +509,14 @@ function wrapBunWorker(worker: Worker): WorkerHandle {
 			const onError = (event: ErrorEvent): void => handler(errorFromWorkerEvent(event));
 			const onMessageError = (event: MessageEvent): void =>
 				handler(new ToolError(`JS eval worker message error: ${String(event.data)}`));
+			const onClose = (): void => handler(new Error("JS eval worker exited"));
 			worker.addEventListener("error", onError);
 			worker.addEventListener("messageerror", onMessageError);
+			worker.addEventListener("close", onClose);
 			return () => {
 				worker.removeEventListener("error", onError);
 				worker.removeEventListener("messageerror", onMessageError);
+				worker.removeEventListener("close", onClose);
 			};
 		},
 		async close() {
