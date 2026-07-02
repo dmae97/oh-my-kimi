@@ -162,7 +162,7 @@ function parsePathSpecs(rawEntries: readonly string[]): GrepPathSpec[] {
 			// `:conflicts:1-1`) instead of silently widening the search or dropping a chunk.
 			if (!isReadSelectorGrammar(internalSplit.sel)) {
 				throw new ToolError(
-					`paths entry "${entry}" has an invalid selector ":${internalSplit.sel}" — use ":N-M" line ranges, ":raw"/":conflicts", a range plus ":raw", or percent-encode a literal ":" as %3A`,
+					`path entry "${entry}" has an invalid selector ":${internalSplit.sel}" — use ":N-M" line ranges, ":raw"/":conflicts", a range plus ":raw", or percent-encode a literal ":" as %3A`,
 				);
 			}
 			specs.push({ original: entry, clean: internalSplit.path, ranges: selectorLineRanges(internalSplit.sel) });
@@ -175,7 +175,7 @@ function parsePathSpecs(rawEntries: readonly string[]): GrepPathSpec[] {
 			const parsed = parseLineRanges(split.sel);
 			if (!parsed) {
 				throw new ToolError(
-					`paths entry "${entry}" — only line-range selectors like ":50-100" are supported (no ":raw"/":conflicts")`,
+					`path entry "${entry}" — only line-range selectors like ":50-100" are supported (no ":raw"/":conflicts")`,
 				);
 			}
 			if (hasGlobPathChars(split.path)) {
@@ -952,7 +952,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 						trackImmutableSources: true,
 						surfaceExactFilePaths: true,
 						fanOutFileTargets: true,
-						multipathStatHint: " (`paths` entries must each exist relative to cwd)",
+						multipathStatHint: " (`path` list entries must each exist relative to cwd)",
 						settings: this.session.settings,
 						signal,
 						localProtocolOptions: this.session.localProtocolOptions,
@@ -1027,7 +1027,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 							? ` (archive members were not searchable: ${archiveUnreadable.join(", ")})`
 							: "";
 					throw new ToolError(
-						`Path not found: ${missingPaths.join(", ")}; pass each path as its own array element${archiveHint}`,
+						`Path not found: ${missingPaths.join(", ")}; list each target in the semicolon-delimited \`path\`${archiveHint}`,
 					);
 				}
 				const baseDisplayMode = resolveFileDisplayMode(this.session);

@@ -62,7 +62,7 @@ describe("search tools with external URL paths", () => {
 
 		const result = await tool!.execute("search-url", {
 			pattern: "remote needle",
-			paths: ["https://example.com/notes.txt"],
+			path: "https://example.com/notes.txt",
 		});
 
 		const text = resultText(result);
@@ -78,7 +78,7 @@ describe("search tools with external URL paths", () => {
 
 		const result = await tool!.execute("search-url-range", {
 			pattern: "outside|remote needle",
-			paths: ["https://example.com/notes.txt:2-2"],
+			path: "https://example.com/notes.txt:2-2",
 		});
 
 		const text = resultText(result);
@@ -109,7 +109,7 @@ describe("search tools with external URL paths", () => {
 
 		const result = await tool!.execute("ast-grep-url", {
 			pat: "remoteNeedle",
-			paths: ["https://example.com/snippet.ts"],
+			path: "https://example.com/snippet.ts",
 		});
 
 		const text = resultText(result);
@@ -125,7 +125,7 @@ describe("search tools with external URL paths", () => {
 
 		const result = await tool!.execute("search-url-www", {
 			pattern: "remote needle",
-			paths: ["www.example.com/notes.txt"],
+			path: "www.example.com/notes.txt",
 		});
 
 		expect(resultText(result)).toContain("remote needle");
@@ -140,7 +140,7 @@ describe("search tools with external URL paths", () => {
 
 		const result = await tool!.execute("search-url-collapsed", {
 			pattern: "remote needle",
-			paths: ["https:/example.com/notes.txt"],
+			path: "https:/example.com/notes.txt",
 		});
 
 		expect(resultText(result)).toContain("remote needle");
@@ -157,7 +157,7 @@ describe("search tools with external URL paths", () => {
 
 		const result = await tool!.execute("search-local-dir", {
 			pattern: "local needle",
-			paths: ["www.example.com"],
+			path: "www.example.com",
 		});
 
 		expect(resultText(result)).toContain("local needle");
@@ -174,7 +174,7 @@ describe("search tools with external URL paths", () => {
 
 		const result = await tool!.execute("search-local-rel", {
 			pattern: "local needle",
-			paths: ["src/notes.txt"],
+			path: "src/notes.txt",
 		});
 
 		expect(resultText(result)).toContain("local needle");
@@ -190,7 +190,7 @@ describe("search tools with external URL paths", () => {
 		await expect(
 			tool!.execute("search-url-ftp", {
 				pattern: "needle",
-				paths: ["ftp://example.com/notes.txt"],
+				path: "ftp://example.com/notes.txt",
 			}),
 		).rejects.toThrow("Cannot search external URL");
 	});

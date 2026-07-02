@@ -99,7 +99,7 @@ describe("ssh:// tools are exec-gated through the production approval wrapper", 
 		).rejects.toThrow(APPROVAL_RE);
 		const ok = await tool("grep").execute(
 			"s-local",
-			{ pattern: "hello", paths: ["."] },
+			{ pattern: "hello", path: "." },
 			undefined,
 			undefined,
 			ctx("always-ask"),

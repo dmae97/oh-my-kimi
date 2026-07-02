@@ -71,7 +71,7 @@ describe("tool path root alias", () => {
 
 		const result = await tool.execute("search-root-alias", {
 			pattern: "root-alias-needle",
-			paths: ["/"],
+			path: "/",
 		});
 		const details = result.details as { scopePath?: string } | undefined;
 
@@ -100,7 +100,7 @@ describe("tool path root alias", () => {
 		if (!tool) throw new Error("Missing find tool");
 
 		const result = await tool.execute("find-root-alias", {
-			paths: ["/"],
+			path: "/",
 		});
 		const details = result.details as { scopePath?: string } | undefined;
 		const text = getText(result);
@@ -118,7 +118,7 @@ describe("tool path root alias", () => {
 
 		const result = await tool.execute("ast-grep-root-alias", {
 			pat: "rootAliasSymbol",
-			paths: ["/**/*.ts"],
+			path: "/**/*.ts",
 		});
 		const details = result.details as { scopePath?: string } | undefined;
 
