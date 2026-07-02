@@ -645,6 +645,7 @@ class SeamComponent implements Component, NativeScrollbackLiveRegion {
 	liveStart: number | undefined;
 	commitSafe: number | undefined;
 	snapSafe: number | undefined;
+	offerSafe: number | undefined;
 
 	invalidate(): void {}
 
@@ -662,6 +663,9 @@ class SeamComponent implements Component, NativeScrollbackLiveRegion {
 
 	getNativeScrollbackSnapshotSafeEnd(): number | undefined {
 		return this.snapSafe;
+	}
+	getNativeScrollbackOfferSafeEnd(): number | undefined {
+		return this.offerSafe;
 	}
 }
 
@@ -949,6 +953,42 @@ describe("scrollback commit gap — commit-unstable barriers", () => {
 			expect(buffer).toContain("card-0");
 			expect(buffer).toContain("card-1");
 			expect(eraseScrollbackCount(writes)).toBe(0);
+		} finally {
+			tui.stop();
+		}
+	});
+
+	it("repairs offered finalized tail rows when a live block above grows", async () => {
+		if (process.platform === "win32") return;
+		const term = new VirtualTerminal(20, 5);
+		overrideProbe(term, undefined);
+		const tui = new TUI(term);
+		const root = new SeamComponent();
+
+		try {
+			tui.addChild(root);
+			tui.start();
+			await settle(term);
+			const writes = capture(term);
+
+			const f1 = ["live-0", ...rows("tail-", 10)];
+			root.lines = f1;
+			root.liveStart = 0;
+			root.snapSafe = 1;
+			root.offerSafe = f1.length;
+			tui.requestRender();
+			await settle(term);
+
+			const f2 = ["live-0", "live-1", ...rows("tail-", 10)];
+			root.lines = f2;
+			root.offerSafe = f2.length;
+			tui.requestRender();
+			await settle(term);
+
+			const buffer = term.getScrollBuffer().map(line => line.trimEnd());
+			expect(buffer).toEqual(f2);
+			for (const row of rows("tail-", 10)) expect(buffer.filter(line => line === row)).toHaveLength(1);
+			expect(eraseScrollbackCount(writes)).toBeGreaterThan(0);
 		} finally {
 			tui.stop();
 		}

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed native scrollback repair for audited transcript rows that were offered below a still-live block, preventing lower finalized rows from duplicating when the live block grows ([#4326](https://github.com/can1357/oh-my-pi/issues/4326)).
+
 ## [16.3.0] - 2026-07-02
 
 ### Fixed

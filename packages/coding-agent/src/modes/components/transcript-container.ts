@@ -443,6 +443,10 @@ export class TranscriptContainer
 	// drift after commit; the engine commits them audit-exempt. Provisional
 	// (commit-unstable) blocks never extend it.
 	#nativeScrollbackSnapshotSafeEnd: number | undefined;
+	// Local line index through which lower finalized siblings are safe to OFFER to
+	// native scrollback while still audited. Unlike snapshotSafeEnd, rows below a
+	// live block are not durable: growth above them must repair stale history.
+	#nativeScrollbackOfferSafeEnd: number | undefined;
 	// Persistent assembled transcript rows. Rows before the stable floor are
 	// byte-identical to the previous render; rows at/after it were re-pushed.
 	#lines: string[] = [];
@@ -489,6 +493,10 @@ export class TranscriptContainer
 
 	getNativeScrollbackSnapshotSafeEnd(): number | undefined {
 		return this.#nativeScrollbackSnapshotSafeEnd;
+	}
+
+	getNativeScrollbackOfferSafeEnd(): number | undefined {
+		return this.#nativeScrollbackOfferSafeEnd;
 	}
 
 	/**
@@ -583,6 +591,7 @@ export class TranscriptContainer
 		this.#nativeScrollbackLiveRegionStart = undefined;
 		this.#nativeScrollbackCommitSafeEnd = undefined;
 		this.#nativeScrollbackSnapshotSafeEnd = undefined;
+		this.#nativeScrollbackOfferSafeEnd = undefined;
 
 		const count = this.children.length;
 
@@ -629,6 +638,10 @@ export class TranscriptContainer
 		// liveStartIndex; empty leading blocks (or a separator) must not claim it
 		// early.
 		let liveRecorded = false;
+		// Prefix boundary for finalized siblings rendered below the first live
+		// block. These rows may be offered to native scrollback, but they cannot
+		// extend snapshotSafeEnd because a live block above can still move them.
+		let offerSafeEnd: number | undefined;
 		// Frame row cursor: rows emitted (reused or pushed) so far.
 		let row = 0;
 		let stableRows = 0;
@@ -770,6 +783,9 @@ export class TranscriptContainer
 				// rows around as it grows, so the run closes there.
 				if (!(finalized && safeLength >= contribution.length)) commitSafeOpen = false;
 			}
+			if (i > liveStartIndex && finalized) {
+				offerSafeEnd = blockStart + contribution.length;
+			}
 
 			segments[i] = {
 				component: child,
@@ -788,6 +804,7 @@ export class TranscriptContainer
 		// Trailing shrink: blocks removed from the tail leave stale rows behind
 		// when every surviving segment was reused.
 		if (lines.length !== row) lines.length = row;
+		this.#nativeScrollbackOfferSafeEnd = offerSafeEnd;
 		this.#segments = segments;
 		this.#stableRowsFloor = Math.min(stableFloorBefore, stableRows, row);
 		return lines;

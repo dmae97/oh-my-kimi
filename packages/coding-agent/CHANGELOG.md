@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed transcript native-scrollback boundaries so finalized content below a live block is offered while still audited, preventing stale lower-row duplication when the live block grows ([#4326](https://github.com/can1357/oh-my-pi/issues/4326)).
+
 ## [16.3.2] - 2026-07-02
 
 ### Breaking Changes
