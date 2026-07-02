@@ -1230,6 +1230,36 @@ describe("ModelRegistry", () => {
 			expect(nonexistent.getError()).toBeUndefined();
 		});
 
+		test("invalid models config exposes schema errors instead of silently dropping providers", () => {
+			writeRawModelsJson({
+				myprovider: {
+					baseUrl: "http://localhost:8000/v1",
+					api: "openai-completions",
+					auth: "none",
+					compat: { thinkingFormat: "deepseek" },
+					models: [
+						{
+							id: "my-model",
+							name: "My Model",
+							reasoning: false,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 8192,
+							maxTokens: 4096,
+						},
+					],
+				},
+			});
+
+			const invalid = new ModelRegistry(authStorage, modelsJsonPath);
+			const error = invalid.getError();
+
+			expect(error?.message).toContain("Failed to load config file models, Schema error");
+			expect(error?.message).toContain("providers.myprovider.compat.thinkingFormat");
+			expect(error?.message).toContain("deepseek");
+			expect(invalid.find("myprovider", "my-model")).toBeUndefined();
+		});
+
 		test("model override can change cost fields partially", () => {
 			const sonnet = getModelsForProvider(costPartial, "openrouter").find(m => m.id === "anthropic/claude-sonnet-4");
 			// Input cost should be overridden
