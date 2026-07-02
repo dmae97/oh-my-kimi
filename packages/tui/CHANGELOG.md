@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.3] - 2026-07-02
+
 ### Fixed
 
 - Fixed keyboard fallback behavior (modifyOtherKeys) on unknown SSH terminals, resolving broken Shift input in iOS SSH clients like Redock.

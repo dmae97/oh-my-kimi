@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.3] - 2026-07-02
+
 ### Fixed
 
 - Extended Anthropic-compatible signing-endpoint recognition to Cloudflare AI Gateway, Google Vertex, AWS Bedrock, and Azure AI Inference / Foundry to ensure consistent reasoning-replay and signature-stripping behavior, and exposed ResolvedAnthropicCompat.signingEndpoint in the public API.

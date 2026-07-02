@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.3] - 2026-07-02
+
 ### Changed
 
 - Enabled dynamic model resolution to support seamless mid-run model switching.

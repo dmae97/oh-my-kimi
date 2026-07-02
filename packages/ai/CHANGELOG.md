@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.3] - 2026-07-02
+
 ### Added
 
 - Added comprehensive tracking and credential-ranking support for Anthropic per-tier and weekly usage limits, including Claude Fable weekly caps. This prevents a single exhausted model-scoped cap from blocking the entire OAuth credential and improves credential selection based on drain-rate pressure.
