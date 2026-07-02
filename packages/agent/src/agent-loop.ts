@@ -2131,11 +2131,7 @@ async function executeToolCalls(
  */
 export interface SyntheticToolResultDetails {
 	__synthetic: true;
-	source:
-		| "assistant_stop_aborted"
-		| "assistant_stop_error"
-		| "assistant_stop_skipped"
-		| "assistant_stop_length";
+	source: "assistant_stop_aborted" | "assistant_stop_error" | "assistant_stop_skipped" | "assistant_stop_length";
 	executed: false;
 	upstreamError?: string;
 }
