@@ -10,6 +10,7 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { RewindTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 const checkpointSchema = z.object({ goal: z.string() });
@@ -115,6 +116,16 @@ function expectLastAssistant(messages: AgentMessage[]): AssistantMessage {
 	if (message?.role !== "assistant") throw new Error("Expected last message to be assistant");
 	return message;
 }
+function createToolSession(overrides: Partial<ToolSession> = {}): ToolSession {
+	return {
+		cwd: "/tmp/test",
+		hasUI: true,
+		getSessionFile: () => null,
+		getSessionSpawns: () => "*",
+		settings: Settings.isolated(),
+		...overrides,
+	};
+}
 
 describe("AgentSession checkpoint rewind branch context", () => {
 	it("rebuilds active history through branch_summary before the post-rewind assistant turn", async () => {
@@ -153,6 +164,13 @@ describe("AgentSession checkpoint rewind branch context", () => {
 		);
 		expect(summaryIndex).toBeGreaterThan(-1);
 		expect(reportIndex).toBeGreaterThan(summaryIndex);
+		const reportMessage = finalCall.context.messages[reportIndex];
+		if (!reportMessage) throw new Error("Expected rewind report context");
+		const reportText = messageText(reportMessage);
+		expect(reportText).toContain("Checkpoint completed.");
+		expect(reportText).toContain("Do not call `rewind` again");
+		expect(reportText).toContain(report);
+
 		expect(
 			finalCall.context.messages.some(message => message.role === "toolResult" && message.toolName === "rewind"),
 		).toBe(false);
@@ -165,5 +183,21 @@ describe("AgentSession checkpoint rewind branch context", () => {
 		const finalThinking = finalAssistant.content.find((block): block is ThinkingContent => block.type === "thinking");
 		expect(finalThinking?.thinking).toBe("answer after rewind");
 		expect(finalThinking?.thinkingSignature).toBe("sig_after_rewind");
+	});
+
+	it("tells the model to continue when rewind is repeated after completion", async () => {
+		const tool = new RewindTool(
+			createToolSession({
+				getLastCompletedRewind: () => ({
+					report: "findings retained",
+					startedAt: "2026-01-01T00:00:00.000Z",
+					rewoundAt: "2026-01-01T00:01:00.000Z",
+				}),
+			}),
+		);
+
+		await expect(tool.execute("repeat_rewind", { report: "retry" })).rejects.toThrow(
+			"Checkpoint already completed; continue from the retained rewind report instead of calling rewind again.",
+		);
 	});
 });

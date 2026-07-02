@@ -64,6 +64,7 @@
 - Fixed RPC mode deferred shutdown (`pi.shutdown()`) killing the process while a background-dispatched `bash` command was still running: the response frame is now written before exit, and a shutdown requested mid-bash fires once the command settles even when no further client frames arrive.
 - Fixed collab-guest transcript viewer rendering host-delivered errors raw: multi-line stacks broke the frame's row accounting and absolute host paths leaked to guests; errors are now collapsed to one sanitized, truncated row.
 - Fixed streaming tool-arg previews capturing string fields (e.g. `content`) from nested objects and injecting them as top-level args mid-stream; only top-level keys are read incrementally now.
+- Fixed post-rewind context to tell the agent the checkpoint completed and to make repeat `rewind` calls recover with guidance instead of a bare no-checkpoint error. ([#4187](https://github.com/can1357/oh-my-pi/issues/4187))
 - Fixed task.maxConcurrency being breachable when a queued spawn was cancelled: the spawn path could release a semaphore permit it never acquired, letting a later task start while the cap was saturated.
 - Fixed session exit diagnostics recording signal and crash exits (SIGTERM, SIGHUP, uncaught exceptions) as a normal "dispose": the postmortem teardown now threads the real reason into session disposal.
 - Fixed the subagent yield-label guard ignoring JTD discriminator (oneOf) output schemas, which let stale incremental labels pass into successful results when final validation was skipped after retries.

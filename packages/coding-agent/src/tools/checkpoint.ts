@@ -17,6 +17,15 @@ export interface CheckpointState {
 	startedAt: string;
 }
 
+export interface CompletedRewindState {
+	/** Report retained after a successful rewind. */
+	report: string;
+	/** Timestamp for the checkpoint that was rewound. */
+	startedAt: string;
+	/** Timestamp when the rewind completed. */
+	rewoundAt: string;
+}
+
 const checkpointSchema = type({
 	goal: type("string").describe("investigation goal"),
 });
@@ -123,7 +132,12 @@ export class RewindTool implements AgentTool<typeof rewindSchema, RewindToolDeta
 			throw new ToolError("Checkpoint not available in subagents.");
 		}
 		if (!this.session.getCheckpointState?.()) {
-			throw new ToolError("No active checkpoint.");
+			if (this.session.getLastCompletedRewind?.()) {
+				throw new ToolError(
+					"Checkpoint already completed; continue from the retained rewind report instead of calling rewind again.",
+				);
+			}
+			throw new ToolError("No active checkpoint. Create a checkpoint before calling rewind.");
 		}
 		const report = params.report.trim();
 		if (report.length === 0) {
