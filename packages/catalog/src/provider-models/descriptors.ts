@@ -458,9 +458,10 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "zhipu-coding-plan",
-		defaultModel: "glm-5.2",
+		defaultModel: "glm-5.1",
 		envVars: ["ZHIPU_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => zhipuCodingPlanModelManagerOptions(config),
+		dynamicModelsAuthoritative: true,
 		catalogDiscovery: { label: "Zhipu Coding Plan" },
 	},
 ] as const satisfies readonly ProviderCatalogEntry[];

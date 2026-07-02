@@ -1283,6 +1283,7 @@ export function zhipuCodingPlanModelManagerOptions(
 	const baseUrl = config?.baseUrl ?? "https://open.bigmodel.cn/api/coding/paas/v4";
 	return {
 		providerId: "zhipu-coding-plan",
+		dynamicModelsAuthoritative: true,
 		...(apiKey && {
 			fetchDynamicModels: () =>
 				fetchOpenAICompatibleModels({
