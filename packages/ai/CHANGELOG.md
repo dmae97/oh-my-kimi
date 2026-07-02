@@ -22,6 +22,9 @@
 ### Fixed
 
 - Fixed GitLab Duo Workflow post-start REST setup fetches (`ensureGitLabDuoWorkflowSettings`, `discoverGitLabDuoWorkflowProject`, `resolveGitLabDuoWorkflowNumericProjectId`, `requestGitLabDuoWorkflowDirectAccess`, `createGitLabDuoWorkflow`, `fetchGitLabDuoWorkflowAvailableModels`, `stopGitLabDuoWorkflow`) missing `signal`/timeout parameters, which could leave the stream without a terminal event when a fetch stalled ([#4227](https://github.com/can1357/oh-my-pi/issues/4227)).
+### Fixed
+
+- Fixed Cursor proxy tunnel setup hanging indefinitely before stream start by adding abort and timeout handling. ([#4226](https://github.com/can1357/oh-my-pi/issues/4226))
 
 ## [16.3.1] - 2026-07-02
 
