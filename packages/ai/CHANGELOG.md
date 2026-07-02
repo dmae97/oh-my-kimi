@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed cursor-agent persisted transcripts losing tool-call structure by synthesizing `toolCall` content blocks for exec-channel native tools (`bash`/`read`/`write`/`grep`/`ls`/`delete`/`lsp`), so replay pairs each tool result with its call instead of rendering header-less tool output beneath the last assistant text ([#4348](https://github.com/can1357/oh-my-pi/issues/4348)).
+- Fixed cursor-agent persisted transcripts losing tool-call structure by synthesizing `toolCall` content blocks for exec-channel native tools (`bash`/`read`/`write`/`grep`/`ls`/`delete`/`lsp`), so replay pairs each tool result with its call instead of rendering header-less tool output beneath the last assistant text ([#4348](https://github.com/can1357/oh-my-pi/issues/4348)). Synthesized blocks carry a new `kCursorExecResolved` symbol marker so the shared agent loop skips executing them a second time.
 
 ## [16.3.1] - 2026-07-02
 

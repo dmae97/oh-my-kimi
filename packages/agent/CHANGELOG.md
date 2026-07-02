@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed cursor-agent assistant messages containing native tool calls being split on text length and duplicating text blocks on replay, by emitting the assistant message as-is followed by buffered tool results and pairing them by `toolCallId` in the transcript rebuild ([#4348](https://github.com/can1357/oh-my-pi/issues/4348)).
+- Fixed cursor-agent exec-channel tools being executed a second time by the shared agent loop after Cursor's server-side execution: `agent-loop.ts` now skips `toolCall` blocks stamped with the `kCursorExecResolved` marker so `bash`/`write`/`delete`/etc. run once ([#4348](https://github.com/can1357/oh-my-pi/issues/4348)).
 
 ## [16.3.0] - 2026-07-02
 
