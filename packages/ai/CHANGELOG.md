@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Devin Connect streaming reader accepting corrupt frame lengths and buffering unbounded data before the idle-timeout wrapper aborted, by capping payloads at 16 MiB and throwing a `ProviderResponseError({ kind: "envelope" })` as soon as an oversize length prefix is decoded ([#4228](https://github.com/can1357/oh-my-pi/issues/4228)).
+
 ## [16.3.1] - 2026-07-02
 
 ### Changed
