@@ -631,6 +631,71 @@ describe("mcp oauth flow", () => {
 		expect(registrationCalled).toBe(false);
 	});
 
+	// Issue #4307: Figma's DCR endpoint 403s every request (only catalog-approved
+	// clients may connect). The old flow swallowed the 403 and threw a bare
+	// "OAuth provider requires client_id" with no way for the user to see that
+	// DCR was tried and rejected. The rewritten error must name the endpoint and
+	// status and point at the `oauth.clientId` workaround.
+	it("surfaces DCR endpoint and status when registration is rejected", async () => {
+		const fetchImpl: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "https://www.figma.com/.well-known/oauth-authorization-server") {
+				return new Response(
+					JSON.stringify({ registration_endpoint: "https://api.figma.com/v1/oauth/mcp/register" }),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url === "https://api.figma.com/v1/oauth/mcp/register") {
+				return new Response("Forbidden", { status: 403 });
+			}
+			if (url.startsWith("https://www.figma.com/oauth/mcp?")) {
+				return new Response("Parameter client_id is required", { status: 400 });
+			}
+			throw new Error(`Unexpected fetch: ${url}`);
+		};
+		const flow = new MCPOAuthFlow(
+			{
+				authorizationUrl: "https://www.figma.com/oauth/mcp",
+				tokenUrl: "https://api.figma.com/v1/oauth/token",
+				fetch: fetchImpl,
+			},
+			{},
+		);
+
+		await expect(flow.generateAuthUrl("state", "http://127.0.0.1:53190/callback")).rejects.toThrow(
+			/dynamic client registration was rejected \(POST https:\/\/api\.figma\.com\/v1\/oauth\/mcp\/register → HTTP 403 — Forbidden\).*oauth\.clientId/s,
+		);
+	});
+
+	it("names the missing-DCR case when no registration endpoint is advertised", async () => {
+		const fetchImpl: FetchImpl = async input => {
+			const url = String(input);
+			// Well-known metadata exists but omits `registration_endpoint`.
+			if (url === "https://provider.example/.well-known/oauth-authorization-server") {
+				return new Response(JSON.stringify({ issuer: "https://provider.example" }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			if (url.startsWith("https://provider.example/authorize?")) {
+				return new Response("client_id is required", { status: 400 });
+			}
+			throw new Error(`Unexpected fetch: ${url}`);
+		};
+		const flow = new MCPOAuthFlow(
+			{
+				authorizationUrl: "https://provider.example/authorize",
+				tokenUrl: "https://provider.example/token",
+				fetch: fetchImpl,
+			},
+			{},
+		);
+
+		await expect(flow.generateAuthUrl("state", "http://127.0.0.1:53191/callback")).rejects.toThrow(
+			/no dynamic-client-registration endpoint was advertised.*oauth\.clientId/s,
+		);
+	});
+
 	it("accepts pasted redirect URLs through manual input", async () => {
 		let tokenRequestBody = "";
 		let manualAuthUrl = "";

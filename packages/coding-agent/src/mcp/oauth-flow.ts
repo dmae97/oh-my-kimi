@@ -79,6 +79,31 @@ function hasOAuthScope(scopes: string | null | undefined, scope: string): boolea
 	return !!scopes && scopes.split(/\s+/).includes(scope);
 }
 
+/**
+ * Trim a DCR failure body / thrown error message to a single, short line the
+ * caller can splice into an error string. `undefined` when nothing salvageable
+ * remains after stripping whitespace.
+ */
+function truncateDetail(raw: string | undefined): string | undefined {
+	if (!raw) return undefined;
+	const firstLine = raw.split(/\r?\n/, 1)[0]?.trim();
+	if (!firstLine) return undefined;
+	return firstLine.length > 200 ? `${firstLine.slice(0, 200)}…` : firstLine;
+}
+
+/**
+ * Read the response body of a rejected DCR request as a short diagnostic
+ * string. Never throws — the caller is already building an error and cannot
+ * afford to trade the actual failure for a "read body" one.
+ */
+async function readRegistrationFailureDetail(response: Response): Promise<string | undefined> {
+	try {
+		return truncateDetail(await response.text());
+	} catch {
+		return undefined;
+	}
+}
+
 function isLoopbackHostname(hostname: string): boolean {
 	return hostname === "localhost" || hostname === "127.0.0.1";
 }
@@ -294,6 +319,22 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	#codeVerifier?: string;
 	#fetch: FetchImpl;
 	#resource?: string;
+	/**
+	 * Details of a rejected dynamic client-registration attempt. Populated by
+	 * {@link #tryRegisterClient} when the provider advertises a registration
+	 * endpoint but returns a non-2xx / throws (e.g. Figma's DCR endpoint 403s
+	 * every request because only catalog-approved clients may connect). Reused
+	 * by {@link #missingClientIdError} to explain why the fallback probe now
+	 * requires a manually configured `oauth.clientId`, replacing the opaque
+	 * "OAuth provider requires client_id" message.
+	 */
+	#registrationFailure?: {
+		endpoint: string;
+		/** HTTP status returned by the endpoint; `0` when the request threw. */
+		status: number;
+		/** First line of the response body (or thrown error message), trimmed. */
+		detail?: string;
+	};
 
 	constructor(
 		private config: MCPOAuthConfig,
@@ -507,6 +548,13 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 
 	/**
 	 * Try OAuth dynamic client registration when provider requires a client_id.
+	 *
+	 * Records rejection details on {@link #registrationFailure} so that when
+	 * DCR is intentionally closed (Figma's `mcp:connect` endpoint returns 403 to
+	 * every unlisted client — see https://developers.figma.com/docs/figma-mcp-server/,
+	 * "Only clients listed in the Figma MCP Catalog can connect"), the fallback
+	 * probe surfaces a message that names the endpoint and status instead of
+	 * the historical opaque "OAuth provider requires client_id".
 	 */
 	async #tryRegisterClient(redirectUri: string): Promise<void> {
 		const registrationEndpoint = await this.#resolveRegistrationEndpoint();
@@ -530,7 +578,14 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 				}),
 			});
 
-			if (!response.ok) return;
+			if (!response.ok) {
+				this.#registrationFailure = {
+					endpoint: registrationEndpoint,
+					status: response.status,
+					detail: await readRegistrationFailureDetail(response),
+				};
+				return;
+			}
 
 			const data = (await response.json()) as {
 				client_id?: string;
@@ -543,8 +598,14 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 			if (data.client_secret && data.client_secret.trim() !== "") {
 				this.#registeredClientSecret = data.client_secret;
 			}
-		} catch {
-			// Ignore registration failures and continue without client registration.
+		} catch (error) {
+			// Distinguish real transport/parse failures from a benign no-DCR
+			// response so #missingClientIdError can surface what went wrong.
+			this.#registrationFailure = {
+				endpoint: registrationEndpoint,
+				status: 0,
+				detail: error instanceof Error ? truncateDetail(error.message) : undefined,
+			};
 		}
 	}
 
@@ -609,7 +670,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 			if (response.status < 400) return;
 			const body = await response.text();
 			if (/client[_-]?id/i.test(body) && /(required|missing|invalid)/i.test(body)) {
-				throw new Error("OAuth provider requires client_id");
+				throw this.#missingClientIdError();
 			}
 		} catch (error) {
 			if (error instanceof Error && /client[_-]?id/i.test(error.message)) {
@@ -617,6 +678,34 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 			}
 			// Ignore network/probe failures to avoid blocking flows that still work.
 		}
+	}
+
+	/**
+	 * Build the error thrown when the authorize probe confirms the provider
+	 * demands a `client_id`. When dynamic client registration was attempted and
+	 * rejected (e.g. Figma's 403 for unlisted clients), fold the endpoint + HTTP
+	 * status into the message and point the user at the manual `oauth.clientId`
+	 * workaround. Refs issue #4307.
+	 */
+	#missingClientIdError(): Error {
+		const failure = this.#registrationFailure;
+		const manualHint =
+			"Configure `oauth.clientId` (and `oauth.clientSecret` if the flow needs one) on the MCP server entry in mcp.json.";
+		if (!failure) {
+			return new Error(
+				`OAuth provider requires client_id, and no dynamic-client-registration endpoint was advertised. ${manualHint}`,
+			);
+		}
+		const outcome =
+			failure.status > 0
+				? `HTTP ${failure.status}${failure.detail ? ` — ${failure.detail}` : ""}`
+				: failure.detail
+					? `network error — ${failure.detail}`
+					: "network error";
+		return new Error(
+			`OAuth provider requires client_id, and dynamic client registration was rejected ` +
+				`(POST ${failure.endpoint} → ${outcome}). The server likely restricts registration to pre-approved clients. ${manualHint}`,
+		);
 	}
 }
 
