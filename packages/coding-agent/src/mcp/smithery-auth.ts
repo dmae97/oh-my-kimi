@@ -2,9 +2,11 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { getAgentDir } from "@oh-my-pi/pi-utils/dirs";
+import { withTimeoutSignal } from "../utils/fetch-timeout";
 
 const SMITHERY_AUTH_FILENAME = "smithery.json";
 const SMITHERY_URL = process.env.SMITHERY_URL || "https://smithery.ai";
+const SMITHERY_AUTH_TIMEOUT_MS = 10_000;
 
 type SmitheryCliAuthSession = {
 	sessionId: string;
@@ -38,6 +40,7 @@ export function getSmitheryLoginUrl(): string {
 export async function createSmitheryCliAuthSession(): Promise<SmitheryCliAuthSession> {
 	const response = await fetch(`${SMITHERY_URL}/api/auth/cli/session`, {
 		method: "POST",
+		signal: withTimeoutSignal(SMITHERY_AUTH_TIMEOUT_MS),
 	});
 	if (!response.ok) {
 		throw new Error(`Failed to create Smithery auth session: ${response.status} ${response.statusText}`);

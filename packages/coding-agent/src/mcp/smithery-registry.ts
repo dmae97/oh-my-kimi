@@ -328,7 +328,7 @@ async function fetchServerDetails(
 
 async function fetchServerDetailsFromEntry(
 	entry: SmitherySearchEntry,
-	options?: { apiKey?: string },
+	options?: { apiKey?: string; signal?: AbortSignal },
 ): Promise<SmitheryServerDetails | null> {
 	const candidates = resolveDetailPathCandidates(entry);
 	for (const candidate of candidates) {
@@ -336,6 +336,7 @@ async function fetchServerDetailsFromEntry(
 			const details = await fetchServerDetails(candidate, options);
 			if (details) return details;
 		} catch (error) {
+			if (options?.signal?.aborted) throw error;
 			logger.debug("Smithery detail fetch candidate failed", { candidate, error: String(error) });
 		}
 	}
@@ -466,10 +467,14 @@ export async function searchSmitheryRegistry(
 	const results = await Promise.all(
 		uniqueEntries.map(async entry => {
 			try {
-				const details = await fetchServerDetailsFromEntry(entry, { apiKey: options?.apiKey });
+				const details = await fetchServerDetailsFromEntry(entry, {
+					apiKey: options?.apiKey,
+					signal: options?.signal,
+				});
 				if (!details) return null;
 				return toSearchResult(entry, details);
 			} catch (error) {
+				if (options?.signal?.aborted) throw error;
 				detailFailures.push({
 					identity: getEntryIdentityKey(entry) ?? entry.id ?? "unknown",
 					error: String(error),
