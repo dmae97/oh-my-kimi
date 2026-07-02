@@ -193,6 +193,31 @@ describe("tool args reveal", () => {
 		expect(latest!.content).toBe(`${initialContent}${appendedContent}`);
 	});
 
+	it("ignores streaming string keys nested below the top level", () => {
+		vi.useFakeTimers();
+		const { controller } = makeController({ smooth: false });
+		const streamingStringKeys = ["content"];
+
+		// Prefix ends inside the nested object: the nested "content" key must
+		// NOT be captured and injected as a top-level preview arg.
+		const nestedOnly = `{"meta":{"content":"NESTED"`;
+		const first = controller.setTarget("call-1", nestedOnly, jsonTarget({ streamingStringKeys }));
+		expect(first.content).toBeUndefined();
+
+		// Growth past the nested object: the real top-level key must be captured.
+		const full = `${nestedOnly}"},"content":"real"}`;
+		const second = controller.setTarget("call-1", full, jsonTarget({ streamingStringKeys }));
+		expect(second.content).toBe("real");
+
+		// Reverse order: a nested duplicate arriving AFTER the top-level key must
+		// not reset/overwrite the captured top-level value. Extractor values are
+		// merged over the parsed args, so a depth-blind capture would win here.
+		const reversed = `{"content":"real","meta":{"content":"NESTED"}}`;
+		const decoded = decodeStreamedToolArgs(reversed, { rawInput: false, streamingStringKeys });
+		expect(decoded.content).toBe("real");
+		expect(decoded.meta).toEqual({ content: "NESTED" });
+	});
+
 	it("decodes the full received buffer, unpaced, when smoothing is disabled", () => {
 		vi.useFakeTimers();
 		const requestRender = vi.fn();

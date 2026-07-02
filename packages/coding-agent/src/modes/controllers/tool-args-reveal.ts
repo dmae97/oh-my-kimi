@@ -64,6 +64,10 @@ class StreamingJsonStringExtractor {
 	readonly #keys: Set<string>;
 	#source = "";
 	#offset = 0;
+	/** `{`/`[` nesting outside strings. Candidate keys match only at depth 1 —
+	 *  the top level of the args object — so a nested object's key (e.g.
+	 *  `{"meta":{"content":…}}`) is never captured as a streamed top-level arg. */
+	#depth = 0;
 	#state: StreamingJsonStringExtractorState = "scan";
 	#candidate = "";
 	#candidateEscaped = false;
@@ -82,6 +86,7 @@ class StreamingJsonStringExtractor {
 	reset(): void {
 		this.#source = "";
 		this.#offset = 0;
+		this.#depth = 0;
 		this.#state = "scan";
 		this.#candidate = "";
 		this.#candidateEscaped = false;
@@ -129,6 +134,10 @@ class StreamingJsonStringExtractor {
 			this.#candidateEscaped = false;
 			this.#candidateUnicode = "";
 			this.#state = "candidate";
+		} else if (ch === "{" || ch === "[") {
+			this.#depth++;
+		} else if (ch === "}" || ch === "]") {
+			this.#depth--;
 		}
 		this.#offset++;
 	}
@@ -154,7 +163,7 @@ class StreamingJsonStringExtractor {
 			return;
 		}
 		if (ch === '"') {
-			this.#matchedKey = this.#keys.has(this.#candidate) ? this.#candidate : undefined;
+			this.#matchedKey = this.#depth === 1 && this.#keys.has(this.#candidate) ? this.#candidate : undefined;
 			this.#state = "afterCandidate";
 			this.#offset++;
 			return;
