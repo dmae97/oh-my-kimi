@@ -359,6 +359,59 @@ describe("ModelRegistry", () => {
 				else Bun.env.OPENAI_API_KEY = originalOpenAiKey;
 			}
 		});
+		test("zhipu-coding-plan glm-5.2 chat resolves the zhipu credential with model-scoped hints", async () => {
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const model = registry.find("zhipu-coding-plan", "glm-5.2");
+			if (!model) throw new Error("expected bundled zhipu-coding-plan/glm-5.2 model");
+			await authStorage.set("zhipu-coding-plan", { type: "api_key", key: "zhipu-domestic-key" });
+			await authStorage.set("zai", { type: "api_key", key: "zai-international-key" });
+
+			const calls: Array<{
+				provider: string;
+				sessionId: string | undefined;
+				options:
+					| { baseUrl?: string; modelId?: string; forceRefresh?: boolean; signal?: AbortSignal }
+					| undefined;
+			}> = [];
+			const originalGetApiKey = authStorage.getApiKey.bind(authStorage);
+			authStorage.getApiKey = async (
+				provider: string,
+				sessionId?: string,
+				options?: { baseUrl?: string; modelId?: string; forceRefresh?: boolean; signal?: AbortSignal },
+			): Promise<string | undefined> => {
+				calls.push({ provider, sessionId, options });
+				return originalGetApiKey(provider, sessionId, options);
+			};
+
+			const sessionId = "session-zhipu-auth-path";
+			await expect(registry.getApiKey(model, sessionId)).resolves.toBe("zhipu-domestic-key");
+			expect(calls.at(-1)).toEqual({
+				provider: "zhipu-coding-plan",
+				sessionId,
+				options: {
+					baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+					modelId: "glm-5.2",
+				},
+			});
+
+			const resolved = await registry.resolver(model, sessionId)({
+				lastChance: false,
+				error: undefined,
+				signal: undefined,
+			});
+			expect(resolved).toBe("zhipu-domestic-key");
+			expect(calls.at(-1)).toEqual({
+				provider: "zhipu-coding-plan",
+				sessionId,
+				options: {
+					baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+					modelId: "glm-5.2",
+					forceRefresh: undefined,
+					signal: undefined,
+				},
+			});
+		});
+
 		test("baseUrl-only override does not affect other providers", () => {
 			const googleModels = getModelsForProvider(anthropicProxy, "google");
 			// Google models should still have their original baseUrl
@@ -2039,6 +2092,20 @@ describe("ModelRegistry", () => {
 
 			expect(syntheticModels.map(model => model.id)).toEqual(["hf:zai-org/GLM-5.1"]);
 			expect(registry.find("synthetic", "hf:moonshotai/Kimi-K2.5")).toBeUndefined();
+		});
+
+		test("does not re-add bundled Zhipu Coding Plan models after account discovery", async () => {
+			authStorage.setRuntimeApiKey("zhipu-coding-plan", "zhipu-test-key");
+			const fetchMock = mockOpenAiCompatibleModels("https://open.bigmodel.cn/api/coding/paas/v4/models", [
+				"glm-5.1",
+			]);
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+
+			await registry.refreshProvider("zhipu-coding-plan", "online");
+			const zhipuModels = getModelsForProvider(registry, "zhipu-coding-plan");
+
+			expect(zhipuModels.map(model => model.id)).toEqual(["glm-5.1"]);
+			expect(registry.find("zhipu-coding-plan", "glm-5.2")).toBeUndefined();
 		});
 
 		test("keeps bundled google-vertex fallback when cached project catalog is non-authoritative", () => {

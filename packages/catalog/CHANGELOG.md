@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Zhipu Coding Plan runtime discovery so account-scoped model lists replace bundled fallback models, preventing valid non-z.ai keys from being routed to unavailable GLM variants. ([#4296](https://github.com/can1357/oh-my-pi/issues/4296))
+
 ## [16.3.1] - 2026-07-02
 
 ### Removed
