@@ -644,7 +644,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// unless the user opts in, and never emits raw escapes on other terminals.
 		setTerminalTextSizing(settings.get("tui.textSizing") && TERMINAL.textSizing);
 		this.chatContainer = new TranscriptContainer();
-		this.pendingMessagesContainer = new Container();
+		this.pendingMessagesContainer = new AnchoredLiveContainer();
 		this.statusContainer = new AnchoredLiveContainer();
 		this.todoContainer = new AnchoredLiveContainer();
 		this.subagentContainer = new AnchoredLiveContainer();

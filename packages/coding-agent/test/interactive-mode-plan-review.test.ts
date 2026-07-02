@@ -18,7 +18,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SILENT_ABORT_MARKER, USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { AUTO_THINKING } from "@oh-my-pi/pi-coding-agent/thinking";
-import { setKeybindings } from "@oh-my-pi/pi-tui";
+import { setKeybindings, Text } from "@oh-my-pi/pi-tui";
 import { formatNumber, TempDir } from "@oh-my-pi/pi-utils";
 
 /**
@@ -129,6 +129,16 @@ describe("InteractiveMode plan review rendering", () => {
 		currentTempDir?.removeSync();
 		setKeybindings(KeybindingsManager.inMemory());
 		resetSettingsForTest();
+	});
+
+	it("keeps queued-message rows in the live region instead of native scrollback", () => {
+		const liveRegion = mode.pendingMessagesContainer as {
+			getNativeScrollbackLiveRegionStart?: () => number | undefined;
+		};
+
+		expect(liveRegion.getNativeScrollbackLiveRegionStart?.()).toBeUndefined();
+		mode.pendingMessagesContainer.addChild(new Text("Queued: follow-up"));
+		expect(liveRegion.getNativeScrollbackLiveRegionStart?.()).toBe(0);
 	});
 
 	it("exits empty plan mode without confirmation", async () => {
