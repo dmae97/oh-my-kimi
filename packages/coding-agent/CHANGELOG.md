@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed MCP OAuth reauth surfacing an opaque `OAuth provider requires client_id` error when the provider closes dynamic client registration (e.g. Figma, which 403s all unlisted clients per the MCP catalog). The error now names the DCR endpoint + HTTP status and directs users to configure `oauth.clientId`/`oauth.clientSecret` on the server entry ([#4307](https://github.com/can1357/oh-my-pi/issues/4307)).
+
 ## [16.3.1] - 2026-07-02
 
 ### Breaking Changes
