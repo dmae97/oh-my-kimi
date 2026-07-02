@@ -393,7 +393,9 @@ const patchStrategy: EditStreamingStrategy<PatchArgs> = {
 		const result = await computePatchDiff(
 			{ path: args.path, op: first.op ?? "update", rename: first.rename, diff: first.diff },
 			ctx.cwd,
-			{ fuzzyThreshold: ctx.fuzzyThreshold, allowFuzzy: ctx.allowFuzzy },
+			// Match the apply path: JSON-mode `op: "create"` is a sanctioned
+			// full-file overwrite, so the preview must not reject it either.
+			{ fuzzyThreshold: ctx.fuzzyThreshold, allowFuzzy: ctx.allowFuzzy, allowCreateOverwrite: true },
 		);
 		ctx.signal.throwIfAborted();
 		return [toPerFilePreview(args.path, result)];

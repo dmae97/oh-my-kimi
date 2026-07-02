@@ -96,6 +96,14 @@ export interface ApplyPatchOptions {
 	fuzzyThreshold?: number;
 	allowFuzzy?: boolean;
 	fs?: FileSystem;
+	/**
+	 * Permit `op: "create"` to replace an existing file (full-file overwrite).
+	 * The JSON `patch` edit mode sanctions create-as-overwrite for major
+	 * restructures (see prompts/tools/patch.md); the Codex `apply_patch`
+	 * envelope documents `*** Add File` as strictly non-overwriting and must
+	 * leave this unset.
+	 */
+	allowCreateOverwrite?: boolean;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1481,6 +1489,7 @@ async function applyNormalizedPatch(input: PatchInput, options: ApplyPatchOption
 		fs = defaultFileSystem,
 		fuzzyThreshold = DEFAULT_FUZZY_THRESHOLD,
 		allowFuzzy = true,
+		allowCreateOverwrite = false,
 	} = options;
 
 	const resolvePath = (p: string): string => resolveToCwd(p, cwd);
@@ -1507,11 +1516,13 @@ async function applyNormalizedPatch(input: PatchInput, options: ApplyPatchOption
 		if (!input.diff) {
 			throw new ApplyPatchError("Create operation requires diff (file content)");
 		}
-		// The `*** Add File` / create contract is strictly non-overwriting:
-		// reject before mkdir/write so pre-existing content stays intact and
-		// the caller can re-issue as an explicit `*** Update File` (or a
-		// delete+add pair) if overwrite is genuinely intended.
-		if (await fs.exists(absolutePath)) {
+		// The `*** Add File` contract of the apply_patch envelope is strictly
+		// non-overwriting: reject before mkdir/write so pre-existing content
+		// stays intact and the caller can re-issue as an explicit
+		// `*** Update File` (or a delete+add pair) if overwrite is genuinely
+		// intended. The JSON `patch` mode opts out via `allowCreateOverwrite`,
+		// where `op: "create"` doubles as a sanctioned full-file overwrite.
+		if (!allowCreateOverwrite && (await fs.exists(absolutePath))) {
 			throw new ApplyPatchError(
 				`Cannot create ${input.path}: file already exists. Use *** Update File to modify it in place.`,
 			);
@@ -1621,7 +1632,7 @@ export async function previewPatch(input: PatchInput, options: ApplyPatchOptions
 export async function computePatchDiff(
 	input: PatchInput,
 	cwd: string,
-	options?: { fuzzyThreshold?: number; allowFuzzy?: boolean },
+	options?: { fuzzyThreshold?: number; allowFuzzy?: boolean; allowCreateOverwrite?: boolean },
 ): Promise<
 	| {
 			diff: string;
@@ -1636,6 +1647,7 @@ export async function computePatchDiff(
 			cwd,
 			fuzzyThreshold: options?.fuzzyThreshold,
 			allowFuzzy: options?.allowFuzzy,
+			allowCreateOverwrite: options?.allowCreateOverwrite,
 		});
 		const oldContent = result.change.oldContent ?? "";
 		const newContent = result.change.newContent ?? "";
@@ -1675,6 +1687,8 @@ export interface ExecutePatchSingleOptions {
 	batchRequest?: LspBatchRequest;
 	allowFuzzy: boolean;
 	fuzzyThreshold: number;
+	/** See {@link ApplyPatchOptions.allowCreateOverwrite}; set by the JSON `patch` mode only. */
+	allowCreateOverwrite?: boolean;
 	writethrough: WritethroughCallback;
 	beginDeferredDiagnosticsForPath: (path: string) => WritethroughDeferredHandle;
 }
@@ -1782,6 +1796,7 @@ export async function executePatchSingle(
 		batchRequest,
 		allowFuzzy,
 		fuzzyThreshold,
+		allowCreateOverwrite,
 		writethrough,
 		beginDeferredDiagnosticsForPath,
 	} = options;
@@ -1827,6 +1842,7 @@ export async function executePatchSingle(
 		fs: patchFileSystem,
 		fuzzyThreshold,
 		allowFuzzy,
+		allowCreateOverwrite,
 	});
 
 	// Post-write verification: only meaningful for in-place updates where the
