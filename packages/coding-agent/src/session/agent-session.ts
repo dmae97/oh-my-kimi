@@ -6732,6 +6732,9 @@ export class AgentSession {
 		} else {
 			this.#planModeReminderCount = 0;
 			this.#planModeReminderAwaitingProgress = false;
+			// Drop any unconsumed forced decision so a post-plan execution turn
+			// does not inherit a stale `required` tool choice.
+			this.#toolChoiceQueue.removeByLabel("plan-mode-decision");
 		}
 	}
 
@@ -7229,6 +7232,9 @@ export class AgentSession {
 			this.#advisorAutoResumeSuppressed = false;
 			this.#planModeReminderCount = 0;
 			this.#planModeReminderAwaitingProgress = false;
+			// A user turn owns the next decision; drop a queued forced choice from
+			// a reminder continuation this prompt just preempted.
+			this.#toolChoiceQueue.removeByLabel("plan-mode-decision");
 		}
 
 		// If streaming, queue via steer() or followUp() based on option
@@ -10656,7 +10662,12 @@ export class AgentSession {
 
 		this.agent.appendMessage(reminderMessage);
 		this.sessionManager.appendMessage(reminderMessage);
-		this.#scheduleAgentContinue({ generation: this.#promptGeneration });
+		this.#scheduleAgentContinue({
+			generation: this.#promptGeneration,
+			// If the continuation never runs (new prompt, dispose, compaction,
+			// handoff), the forced choice must not leak onto an unrelated turn.
+			onSkip: () => this.#toolChoiceQueue.removeByLabel("plan-mode-decision"),
+		});
 		return true;
 	}
 
@@ -13758,24 +13769,33 @@ export class AgentSession {
 	 *
 	 * - mid-turn → queued on the aside channel and folded in at the next step
 	 *   boundary (non-interrupting, like async-result deliveries) → "injected";
+	 * - idle in plan mode → appended into context without waking an autonomous
+	 *   turn (convergence stays user-driven) → "injected";
 	 * - idle → starts a real turn with the message so the recipient wakes
 	 *   → "woken".
 	 *
 	 * Never blocks on the recipient's turn: the wake turn is fire-and-forget.
 	 *
-	 * When the sender expects a reply (`send await:true`) and this session is
-	 * mid-turn with async execution disabled, the next step boundary may be
-	 * gated on the sender's own batch finishing (blocking task spawns), so a
-	 * real reply turn can never happen in time. In that case an ephemeral
-	 * side-channel auto-reply is generated from the current context (the old
-	 * `respondAsBackground` path) and sent back over the bus on this agent's
-	 * behalf.
+	 * When the sender expects a reply (`send await:true`) and this session
+	 * cannot produce a real reply turn in time — mid-turn with async execution
+	 * disabled (the next step boundary may be gated on the sender's own batch
+	 * finishing), or idle in plan mode (wake turns are suppressed) — an
+	 * ephemeral side-channel auto-reply is generated from the current context
+	 * (the old `respondAsBackground` path) and sent back over the bus on this
+	 * agent's behalf.
 	 */
 	async deliverIrcMessage(msg: IrcMessage, opts?: { expectsReply?: boolean }): Promise<"injected" | "woken"> {
 		if (this.#isDisposed) {
 			throw new Error("Recipient session is disposed.");
 		}
-		const autoReply = (opts?.expectsReply ?? false) && this.isStreaming && !this.settings.get("async.enabled");
+		// Auto-reply eligibility: the sender is blocked on an answer and this
+		// session cannot produce a real reply turn in time — either mid-turn with
+		// async execution disabled (no step boundary until the sender's own batch
+		// ends), or idle in plan mode (autonomous wake turns are suppressed).
+		const planModeIdle = !this.isStreaming && this.#planModeState?.enabled === true;
+		const autoReply =
+			(opts?.expectsReply ?? false) &&
+			((this.isStreaming && !this.settings.get("async.enabled")) || planModeIdle);
 		const record: CustomMessage = {
 			role: "custom",
 			customType: "irc:incoming",
@@ -13818,6 +13838,7 @@ export class AgentSession {
 				record.details,
 				record.attribution ?? "agent",
 			);
+			if (autoReply) void this.#runIrcAutoReply(msg);
 			return "injected";
 		}
 		// Idle: wake a real turn so the recipient responds (shared with the stranded-aside resume).
