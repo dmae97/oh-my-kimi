@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added an actionable remediation hint on the Anthropic `400 Invalid `signature` in `thinking` block` error for custom `anthropic-messages` providers that have not overridden `compat.replayUnsignedThinking`, naming the provider and the exact `models.yml` knob to flip. ([#4297](https://github.com/can1357/oh-my-pi/issues/4297))
+- Added a runtime signing-endpoint auto-detect on `anthropic-messages`: when an unmarked custom proxy returns `400 Invalid `signature` in `thinking` block`, the transport demotes every unsigned thinking block in the request, retries once, and pins the (baseUrl, modelId) as signing in the provider session state so subsequent turns skip the round-trip. The successful assistant message surfaces `disabledFeatures: ["unsigned-thinking-replay"]` so UIs can prompt the user to persist the change with `compat.replayUnsignedThinking: false` in `models.yml`. Includes an actionable remediation hint on the raw `400` when the auto-retry can't run. ([#4297](https://github.com/can1357/oh-my-pi/issues/4297))
 
 ## [16.3.1] - 2026-07-02
 
