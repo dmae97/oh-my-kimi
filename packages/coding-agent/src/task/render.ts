@@ -14,6 +14,7 @@ import { formatContextUsage } from "../modes/components/status-line/context-thre
 import { getMarkdownTheme, type Theme } from "../modes/theme/theme";
 import { stripGeneratedOutputNotice, stripRawOutputArtifactNotice } from "../tools/output-meta";
 import {
+	capPreviewLines,
 	formatBadge,
 	formatDuration,
 	formatExpandHint,
@@ -485,14 +486,6 @@ function sanitizeRecentOutput(output: string): string {
 		break;
 	}
 	return text;
-}
-
-function capRecentOutputForPreview(output: string, maxRows: number): string {
-	const lines = output.split("\n");
-	if (lines.length <= maxRows) return output;
-	const visible = maxRows <= 1 ? [] : lines.slice(lines.length - (maxRows - 1));
-	const hidden = lines.length - visible.length;
-	return [`… ${hidden} earlier ${hidden === 1 ? "line" : "lines"}`, ...visible].join("\n");
 }
 
 function renderOutputSection(
@@ -1062,10 +1055,14 @@ function renderAgentProgress(
 	// Expanded view: recent output and tools
 	if (expanded && progress.status === "running") {
 		const previewRows = previewWindowRows();
-		const output = capRecentOutputForPreview(
-			sanitizeRecentOutput([...progress.recentOutput].reverse().join("\n")),
-			previewRows,
-		);
+		const output = capPreviewLines(
+			sanitizeRecentOutput([...progress.recentOutput].reverse().join("\n")).split("\n"),
+			theme,
+			{
+				max: previewRows,
+				expandHint: false,
+			},
+		).join("\n");
 		lines.push(...renderOutputSection(output, continuePrefix, expanded, theme, 2, previewRows));
 	}
 

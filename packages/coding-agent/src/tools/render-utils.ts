@@ -222,19 +222,21 @@ export function previewWindowRows(): number {
  * (ctrl+o) uncaps it.
  *
  * `prefix` (raw, e.g. a dim tree gutter) is prepended to the marker line so
- * nested previews stay aligned.
+ * nested previews stay aligned. `expandHint: false` drops the "ctrl+o: Expand"
+ * suffix for callers that cap even inside the expanded view (task recent
+ * output), where the hint would point the wrong way.
  */
 export function capPreviewLines(
 	lines: string[],
 	theme: Theme,
-	options: { max?: number; expanded?: boolean; prefix?: string } = {},
+	options: { max?: number; expanded?: boolean; prefix?: string; expandHint?: boolean } = {},
 ): string[] {
 	if (options.expanded) return lines;
 	const max = options.max ?? previewWindowRows();
 	if (lines.length <= max) return lines;
 	const visible = max <= 1 ? [] : lines.slice(lines.length - (max - 1));
 	const hidden = lines.length - visible.length;
-	const hint = formatExpandHint(theme, false, true);
+	const hint = options.expandHint === false ? "" : formatExpandHint(theme, false, true);
 	const marker = `… ${hidden} earlier ${pluralize("line", hidden)}${hint ? ` ${hint}` : ""}`;
 	return [`${options.prefix ?? ""}${theme.fg("dim", marker)}`, ...visible];
 }

@@ -246,7 +246,9 @@ async function executeSinglePathEntries(
 	path: string,
 	runs: ((batchRequest: LspBatchRequest | undefined) => Promise<AgentToolResult<EditToolDetails>>)[],
 	outerBatchRequest: LspBatchRequest | undefined,
-	onUpdate?: (partialResult: AgentToolResult<EditToolDetails, TInput>) => void,
+	onUpdate: ((partialResult: AgentToolResult<EditToolDetails, TInput>) => void) | undefined,
+	cwd: string,
+	signal: AbortSignal | undefined,
 ): Promise<AgentToolResult<EditToolDetails, TInput>> {
 	if (runs.length === 1) {
 		return runs[0](outerBatchRequest);
@@ -255,7 +257,7 @@ async function executeSinglePathEntries(
 	const contentTexts: string[] = [];
 	const diffTexts: string[] = [];
 	let firstChangedLine: number | undefined;
-	let errorCount = 0;
+	let hasError = false;
 	let metadataPath: string | undefined;
 	let hasFirstOldText = false;
 	let firstOldText: string | undefined;
@@ -306,10 +308,13 @@ async function executeSinglePathEntries(
 						`; re-read the file and re-issue only the failed and unapplied entries.`,
 				);
 			}
-			errorCount++;
+			hasError = true;
 			// Stop at the first failure: later entries were authored against
 			// line numbers/content that assumed this entry succeeded, and
 			// applying them after a failure compounds the damage.
+			if (outerBatchRequest?.flush) {
+				await flushLspWritethroughBatch(outerBatchRequest.id, cwd, signal);
+			}
 			break;
 		}
 
@@ -320,7 +325,7 @@ async function executeSinglePathEntries(
 					diff: diffTexts.join("\n"),
 					firstChangedLine,
 				},
-				...(errorCount > 0 ? { isError: true } : {}),
+				...(hasError ? { isError: true } : {}),
 			});
 		}
 	}
@@ -342,7 +347,7 @@ async function executeSinglePathEntries(
 		// renderer takes the error branch instead of falling through to the
 		// streaming-edit preview (which displays the *proposed* diff and looks
 		// indistinguishable from success).
-		...(errorCount > 0 ? { isError: true } : {}),
+		...(hasError ? { isError: true } : {}),
 	};
 }
 
@@ -547,7 +552,7 @@ export class EditTool implements AgentTool<TInput> {
 								beginDeferredDiagnosticsForPath: p => tool.#beginDeferredDiagnosticsForPath(p),
 							}),
 					);
-					return executeSinglePathEntries(path, runs, batchRequest, onUpdate);
+					return executeSinglePathEntries(path, runs, batchRequest, onUpdate, tool.session.cwd, signal);
 				},
 			},
 			apply_patch: {
@@ -636,7 +641,7 @@ export class EditTool implements AgentTool<TInput> {
 								beginDeferredDiagnosticsForPath: p => tool.#beginDeferredDiagnosticsForPath(p),
 							}),
 					);
-					return executeSinglePathEntries(path, runs, batchRequest, onUpdate);
+					return executeSinglePathEntries(path, runs, batchRequest, onUpdate, tool.session.cwd, signal);
 				},
 			},
 		}[this.mode];

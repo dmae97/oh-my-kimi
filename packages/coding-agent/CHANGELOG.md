@@ -10,7 +10,6 @@
 ### Changed
 
 - Updated the tester subagent prompt to explicitly forbid testing default configuration values and allow skipping tests entirely for trivial changes
-
 - Optimized session loading and rendering performance, including a 10x speedup for smooth streaming reveals on large messages, 35% faster session resumes for large files using native streaming JSONL parsing, and reduced overhead for edit-patch fallbacks.
 - Improved TUI responsiveness and reduced CPU usage during long-running tool sessions by throttling status-line redraws and optimizing subagent persistence checks.
 - Updated the advisor system prompt and documentation to accurately reflect WATCHDOG.yml tool grants.
@@ -18,6 +17,10 @@
 
 ### Fixed
 
+- Fixed sequential patch/edit failures leaving dirty buffers in multi-file edits by flushing the LSP writethrough queue upfront on early abort paths
+- Fixed the subagent task preview erroneously showing "ctrl+o: Expand" hints on output lines capped inside the already-expanded view
+
+- Fixed the cross-file write batching regression in `apply_patch` multi-file operations by reverting to flushing only on the last file write or explicitly on early failure paths, and refactored error counting to use clean booleans.
 - Fixed collab teardown (`/collab stop`, unrecoverable relay drop) cancelling a hook selector/editor the host user was actively typing in: teardown resolved pending guest asks the same way as a guest cancel, so the mirrored race dismissed the local dialog and dropped its input. Teardown now settles guest asks as `unavailable`, and the local dialog keeps running and wins with its eventual answer.
 - Fixed RPC mode deferred shutdown (`pi.shutdown()`) killing the process while a background-dispatched `bash` command was still running: the response frame is now written before exit, and a shutdown requested mid-bash fires once the command settles even when no further client frames arrive.
 - Fixed collab-guest transcript viewer rendering host-delivered errors raw: multi-line stacks broke the frame's row accounting and absolute host paths leaked to guests; errors are now collapsed to one sanitized, truncated row.
