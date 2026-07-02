@@ -453,7 +453,8 @@ export const CATALOG_PROVIDERS = [
 		defaultModel: "anthropic/claude-opus-4.8",
 		envVars: ["ZENMUX_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => zenmuxModelManagerOptions(config),
-		catalogDiscovery: { label: "ZenMux" },
+		allowUnauthenticated: true,
+		catalogDiscovery: { label: "ZenMux", allowUnauthenticated: true },
 	},
 	{
 		id: "zhipu-coding-plan",
