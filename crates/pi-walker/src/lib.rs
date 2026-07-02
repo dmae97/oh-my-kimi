@@ -314,10 +314,9 @@ impl WalkFilter {
 	}
 
 	fn accepts_path(&self, relative_path: &str) -> bool {
-		match &self.glob {
-			Some(glob) => glob.is_match(relative_path),
-			None => true,
-		}
+		self.glob
+			.as_ref()
+			.is_none_or(|glob| glob.is_match(relative_path))
 	}
 
 	fn accepts_collected(&self, entry: &CollectedEntry) -> bool {
@@ -362,12 +361,13 @@ impl WalkFilter {
 		}) {
 			return WalkDecision::Skip;
 		}
-		match self.kind {
-			WalkFilterKind::All => {},
-			WalkFilterKind::Files if meta.file_type == FileType::File => {},
-			WalkFilterKind::Files => return WalkDecision::Skip,
-			WalkFilterKind::Dirs if meta.file_type == FileType::Dir => {},
-			WalkFilterKind::Dirs => return WalkDecision::Skip,
+		let accepts_kind = match self.kind {
+			WalkFilterKind::All => true,
+			WalkFilterKind::Files => meta.file_type == FileType::File,
+			WalkFilterKind::Dirs => meta.file_type == FileType::Dir,
+		};
+		if !accepts_kind {
+			return WalkDecision::Skip;
 		}
 		if self.accepts_path(meta.relative_path) {
 			WalkDecision::Include
@@ -2038,21 +2038,16 @@ impl<H> WalkContext<'_, H> {
 		V: EntryVisitor,
 		H: FnMut() -> std::result::Result<(), V::Error>,
 	{
-		let identity = if self.options.follow_links == FollowLinks::Always {
-			directory_identity(dir).ok()
-		} else {
-			None
-		};
-		if let Some(id) = &identity {
-			self.symlink_ancestors.push(id.clone());
-		}
-
-		let result = self.walk_dir_inner(dir, relative_dir, depth, ignore_state, visitor);
-
-		if identity.is_some() {
+		if self.options.follow_links == FollowLinks::Always
+			&& let Ok(identity) = directory_identity(dir)
+		{
+			self.symlink_ancestors.push(identity);
+			let result = self.walk_dir_inner(dir, relative_dir, depth, ignore_state, visitor);
 			self.symlink_ancestors.pop();
+			return result;
 		}
-		result
+
+		self.walk_dir_inner(dir, relative_dir, depth, ignore_state, visitor)
 	}
 
 	fn walk_dir_inner<V>(
@@ -2068,26 +2063,15 @@ impl<H> WalkContext<'_, H> {
 		H: FnMut() -> std::result::Result<(), V::Error>,
 	{
 		let mut raw_entries = Vec::new();
-		match self.options.order {
-			WalkOrder::Path => {
-				match platform::read_dir_entries(dir, self.options.detail, |entry| {
-					raw_entries.push(entry.into_owned());
-					Ok(ReadDirControl::Continue)
-				}) {
-					Ok(_) => {},
-					Err(err) => return handle_read_dir_error(dir, err, self.options, visitor),
-				}
-				raw_entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
-			},
-			WalkOrder::Unordered => {
-				match platform::read_dir_entries(dir, self.options.detail, |entry| {
-					raw_entries.push(entry.into_owned());
-					Ok(ReadDirControl::Continue)
-				}) {
-					Ok(_) => {},
-					Err(err) => return handle_read_dir_error(dir, err, self.options, visitor),
-				}
-			},
+		match platform::read_dir_entries(dir, self.options.detail, |entry| {
+			raw_entries.push(entry.into_owned());
+			Ok(ReadDirControl::Continue)
+		}) {
+			Ok(_) => {},
+			Err(err) => return handle_read_dir_error(dir, err, self.options, visitor),
+		}
+		if self.options.order == WalkOrder::Path {
+			raw_entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
 		}
 
 		for entry in raw_entries {
@@ -2150,7 +2134,7 @@ impl<H> WalkContext<'_, H> {
 							}
 						}
 						return Err(WalkError::InvalidData {
-							path:    absolute.clone(),
+							path:    absolute,
 							message: err.to_string(),
 						});
 					},
@@ -2222,7 +2206,7 @@ impl<H> WalkContext<'_, H> {
 								continue;
 							}
 							return Err(WalkError::InvalidData {
-								path:    absolute.clone(),
+								path:    absolute,
 								message: "filesystem loop detected".to_string(),
 							});
 						}
@@ -2245,7 +2229,7 @@ impl<H> WalkContext<'_, H> {
 							}
 						}
 						return Err(WalkError::InvalidData {
-							path:    absolute.clone(),
+							path:    absolute,
 							message: err.to_string(),
 						});
 					},
