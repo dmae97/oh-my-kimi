@@ -19,6 +19,9 @@
 - Fixed OpenAI-compatible streaming usage parsing to prefer non-zero nested cached token counts when root `cached_tokens` is zero ([#4337](https://github.com/can1357/oh-my-pi/issues/4337)).
 - Fixed cursor-agent persisted transcripts losing tool-call structure by synthesizing `toolCall` content blocks for exec-channel native tools (`bash`/`read`/`write`/`grep`/`ls`/`delete`/`lsp`), so replay pairs each tool result with its call instead of rendering header-less tool output beneath the last assistant text ([#4348](https://github.com/can1357/oh-my-pi/issues/4348)). Synthesized blocks carry a new `kCursorExecResolved` symbol marker so the shared agent loop skips executing them a second time.
 - Added a runtime signing-endpoint auto-detect on `anthropic-messages`: when an unmarked custom proxy returns `400 Invalid `signature` in `thinking` block`, the transport demotes every unsigned thinking block in the request, retries once, and pins the (baseUrl, modelId) as signing in the provider session state so subsequent turns skip the round-trip. The successful assistant message surfaces `disabledFeatures: ["unsigned-thinking-replay"]` so UIs can prompt the user to persist the change with `compat.replayUnsignedThinking: false` in `models.yml`. Includes an actionable remediation hint on the raw `400` when the auto-retry can't run. ([#4297](https://github.com/can1357/oh-my-pi/issues/4297))
+### Fixed
+
+- Fixed GitLab Duo Workflow post-start REST setup fetches (`ensureGitLabDuoWorkflowSettings`, `discoverGitLabDuoWorkflowProject`, `resolveGitLabDuoWorkflowNumericProjectId`, `requestGitLabDuoWorkflowDirectAccess`, `createGitLabDuoWorkflow`, `fetchGitLabDuoWorkflowAvailableModels`, `stopGitLabDuoWorkflow`) missing `signal`/timeout parameters, which could leave the stream without a terminal event when a fetch stalled ([#4227](https://github.com/can1357/oh-my-pi/issues/4227)).
 
 ## [16.3.1] - 2026-07-02
 
