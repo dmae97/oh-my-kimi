@@ -53,6 +53,9 @@
 ### Fixed
 
 - Fixed macOS SSHFS mount detection to skip remounting an already-mounted remote when `mountpoint` is unavailable. ([#4319](https://github.com/can1357/oh-my-pi/issues/4319))
+### Fixed
+
+- Fixed SSH streamed placeholders and provisional partial frames leaving stale pending rows in the TUI viewport or native scrollback. ([#4314](https://github.com/can1357/oh-my-pi/issues/4314))
 
 ## [16.3.1] - 2026-07-02
 
