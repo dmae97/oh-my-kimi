@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed destructive editing keys (`Ctrl+W`, `Ctrl+U`, `Ctrl+K`, `Alt+Backspace`, `Alt+D`) and paste/yank leaving the autocomplete popup active with a stale prefix; `Tab` and `Enter` on the file-path branch would then insert the outdated selection into the newly edited buffer. Every text-mutating path now refreshes autocomplete like backspace/forward-delete already do, and the `Tab`/`Enter`+file-path acceptance now applies the same staleness guard the `Enter`+slash path uses, so a stale popup silently cancels instead of corrupting the input ([#4295](https://github.com/can1357/oh-my-pi/issues/4295)).
+
 ## [16.3.0] - 2026-07-02
 
 ### Fixed
