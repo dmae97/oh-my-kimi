@@ -1,10 +1,11 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
+import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -35,6 +36,7 @@ describe("AgentSession context promotion", () => {
 		if (session) {
 			await session.dispose();
 		}
+		vi.restoreAllMocks();
 	});
 
 	function createOverflowMessage(
@@ -446,6 +448,67 @@ describe("AgentSession context promotion", () => {
 
 		expect(session.model?.provider).toBe(sparkModel.provider);
 		expect(session.model?.id).toBe(sparkModel.id);
+	});
+
+	it("falls back to LLM compaction when snapcompact cannot run during overflow recovery", async () => {
+		const model = modelRegistry.find("openai-codex", "gpt-5.3-codex-spark");
+		if (!model) {
+			throw new Error("Expected codex spark model to exist");
+		}
+		const settings = Settings.isolated({
+			"compaction.enabled": true,
+			"compaction.strategy": "snapcompact",
+			"compaction.keepRecentTokens": 1,
+			"compaction.thresholdPercent": -1,
+			"contextPromotion.enabled": false,
+		});
+		const compactSpy = vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
+			summary: "fallback summary",
+			shortSummary: undefined,
+			firstKeptEntryId: preparation.firstKeptEntryId,
+			tokensBefore: preparation.tokensBefore,
+			details: {},
+		}));
+
+		const agent = new Agent({
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		session.sessionManager.appendMessage(createUserMessage("old context ".repeat(80_000)));
+		session.sessionManager.appendMessage(createAssistantMessage(model, "old response"));
+		session.sessionManager.appendMessage(createUserMessage("current request"));
+		session.agent.replaceMessages(session.sessionManager.buildSessionContext().messages);
+		const events: Array<Extract<AgentSessionEvent, { type: "auto_compaction_end" }>> = [];
+		const compactionDone = Promise.withResolvers<void>();
+		session.subscribe(event => {
+			if (event.type === "auto_compaction_end") {
+				events.push(event);
+				compactionDone.resolve();
+			}
+		});
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+
+		const overflowMessage = createOverflowMessage(model);
+		session.agent.emitExternalEvent({ type: "message_end", message: overflowMessage });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [overflowMessage] });
+
+		await compactionDone.promise;
+
+		expect(compactSpy).toHaveBeenCalledTimes(1);
+		expect(events[0]?.errorMessage).toBeUndefined();
+		expect(events[0]?.willRetry).toBe(true);
+		await waitFor(() => continueSpy.mock.calls.length === 1);
+		expect(session.sessionManager.getEntries().some(entry => entry.type === "compaction")).toBe(true);
 	});
 
 	it("promotes to a larger-context model on response.incomplete (length stop)", async () => {
