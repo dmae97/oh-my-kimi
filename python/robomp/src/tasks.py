@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Callable, Mapping
+from typing import Any, TypeVar
 
 from robomp import persona
 from robomp.config import Settings
@@ -22,6 +23,44 @@ from robomp.sandbox import GitTransport, SandboxManager
 from robomp.worker import DirectiveInfo, TaskInputs, ThreadMessage, run_task
 
 log = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
+
+
+async def _run_workspace_op(func: Callable[..., _T], /, **kwargs: object) -> _T:
+    """Offload a blocking sandbox workspace op to a worker thread, uncancellably.
+
+    Workspace setup/teardown (git clone/fetch, worktree add/remove, chown) is
+    blocking, so it runs off the event loop via a thread. Unlike a bare
+    ``await asyncio.to_thread(...)``, cancelling the awaiting coroutine here does
+    NOT detach the still-running thread: the thread holds the per-repo lock and
+    owns the slot mid-setup, and ``_run_event``'s ``finally`` reaps/releases that
+    slot on cancellation. If the await detached, the reaped slot could be reused
+    while the thread is still touching it. So on cancellation we drain the thread
+    to completion before propagating, gating the caller's ``finally`` behind the
+    thread. The inner subprocesses are timeout-bounded, so completion is assured.
+    """
+    inner = asyncio.ensure_future(asyncio.to_thread(func, **kwargs))
+    try:
+        return await asyncio.shield(inner)
+    except asyncio.CancelledError:
+        # A repeated cancel can interrupt even a shielded await, so loop until
+        # the thread is actually done; swallow the inner's own outcome and
+        # re-raise the cancellation the caller expects.
+        while not inner.done():
+            try:
+                await asyncio.shield(inner)
+            except asyncio.CancelledError:
+                continue
+            except BaseException:
+                break
+        if not inner.cancelled() and inner.exception() is not None:
+            log.warning(
+                "workspace op %s raised during caller cancellation",
+                getattr(func, "__name__", func),
+                exc_info=inner.exception(),
+            )
+        raise
 
 
 def _comment_from_payload(payload: Mapping[str, Any]) -> CommentInfo:
@@ -267,7 +306,8 @@ async def triage_issue(
             return
     db.upsert_issue(key=key, repo=repo.full_name, number=issue.number, state="reproducing")
     clone_url = repo.clone_url
-    workspace = sandbox.ensure_workspace(
+    workspace = await _run_workspace_op(
+        sandbox.ensure_workspace,
         repo=repo.full_name,
         number=issue.number,
         title=issue.title,
@@ -341,7 +381,8 @@ async def review_pr(
         )
 
     db.upsert_issue(key=key, repo=repo.full_name, number=pr_number, state="reviewing", pr_number=pr_number)
-    workspace = sandbox.ensure_workspace(
+    workspace = await _run_workspace_op(
+        sandbox.ensure_workspace,
         repo=repo.full_name,
         number=pr_number,
         title=issue.title,
@@ -406,7 +447,8 @@ async def handle_comment(
         # first and executes the directive in the same RPC turn.
         log.info("directive bootstrap", extra={"key": key, "author": directive.author})
         db.upsert_issue(key=key, repo=repo.full_name, number=issue.number, state="reproducing")
-        workspace = sandbox.ensure_workspace(
+        workspace = await _run_workspace_op(
+            sandbox.ensure_workspace,
             repo=repo.full_name,
             number=issue.number,
             title=issue.title,
@@ -456,9 +498,10 @@ async def handle_comment(
         # Maintainer reopen: tear down stale workspace, reset state, branch
         # afresh from default. The old branch may have been merged/deleted.
         log.info("directive reopen", extra={"key": key, "from_state": existing.state, "author": directive.author})
-        sandbox.remove_workspace(repo=repo.full_name, number=issue.number)
+        await _run_workspace_op(sandbox.remove_workspace, repo=repo.full_name, number=issue.number)
         db.upsert_issue(key=key, repo=repo.full_name, number=issue.number, state="reproducing")
-        workspace = sandbox.ensure_workspace(
+        workspace = await _run_workspace_op(
+            sandbox.ensure_workspace,
             repo=repo.full_name,
             number=issue.number,
             title=issue.title,
@@ -493,7 +536,8 @@ async def handle_comment(
         await run_task(task_kind="handle_comment", inputs=inputs, comment=comment, directive=directive)
         return
 
-    workspace = sandbox.ensure_workspace(
+    workspace = await _run_workspace_op(
+        sandbox.ensure_workspace,
         repo=repo.full_name,
         number=issue.number,
         title=issue.title,
@@ -567,7 +611,8 @@ async def handle_review(
         log.warning("review fetch failed", extra={"err": str(exc)})
         return
     clone_url = repo.clone_url
-    workspace = sandbox.ensure_workspace(
+    workspace = await _run_workspace_op(
+        sandbox.ensure_workspace,
         repo=repo.full_name,
         number=issue.number,
         title=issue.title,
@@ -677,7 +722,7 @@ async def handle_pr_conversation(
             "directive reopen (pr)",
             extra={"key": issue_row.key, "from_state": issue_row.state, "author": directive.author},
         )
-        sandbox.remove_workspace(repo=issue_row.repo, number=issue_row.number)
+        await _run_workspace_op(sandbox.remove_workspace, repo=issue_row.repo, number=issue_row.number)
         db.upsert_issue(key=issue_row.key, repo=issue_row.repo, number=issue_row.number, state="reproducing")
         issue_row = db.get_issue(issue_row.key) or issue_row
     # Bare @mention with no request body — the route stashes an empty
@@ -713,7 +758,8 @@ async def handle_pr_conversation(
         if existing_branch is None and not (directive and issue_row.state == "reproducing"):
             log.info("skip: pr-conversation PR missing branch mapping", extra={"repo": repo_full, "pr": pr_number})
             return
-    workspace = sandbox.ensure_workspace(
+    workspace = await _run_workspace_op(
+        sandbox.ensure_workspace,
         repo=repo.full_name,
         number=issue.number,
         title=issue.title,
@@ -797,7 +843,7 @@ async def cleanup_workspace(
         issue_row = db.get_issue(issue_key(repo_full, number))
     if issue_row is None:
         return
-    sandbox.remove_workspace(repo=issue_row.repo, number=issue_row.number)
+    await _run_workspace_op(sandbox.remove_workspace, repo=issue_row.repo, number=issue_row.number)
     db.set_issue_state(issue_row.key, target_state)
     log.info("cleanup", extra={"key": issue_row.key, "state": target_state})
 
