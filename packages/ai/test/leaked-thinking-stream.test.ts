@@ -446,10 +446,14 @@ describe("leaked thinking healing through stream()", () => {
 	it("splits a leaked fence for a non-official anthropic-messages endpoint", async () => {
 		// A third-party gateway reusing the anthropic-messages wire format may leak,
 		// so the central wrapper still heals when the endpoint is not official.
-		const result = await stream(anthropicModel({ provider: "z-ai", baseUrl: "https://api.z.ai/api/anthropic" }), context, {
-			apiKey: "test",
-			fetch: anthropicLeakFetch(leaked),
-		}).result();
+		const result = await stream(
+			anthropicModel({ provider: "zai", baseUrl: "https://api.z.ai/api/anthropic" }),
+			context,
+			{
+				apiKey: "test",
+				fetch: anthropicLeakFetch(leaked),
+			},
+		).result();
 
 		expect(result.content.map(b => b.type)).toEqual(["thinking", "text"]);
 		const thinking = thinks(result)

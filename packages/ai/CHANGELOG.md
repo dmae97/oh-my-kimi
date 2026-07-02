@@ -4,21 +4,20 @@
 
 ### Added
 
-- Added opt-in support for Anthropic's server-side fallback beta (`server-side-fallback-2026-06-01`) on the `anthropic-messages` provider, including support for `AnthropicOptions.fallbacks`, mid-stream fallback content blocks, fallback billing/usage iterations, and automatic filtering of fallback blocks during cross-provider message transformations.
+- Added opt-in support for Anthropic's server-side fallback beta (server-side-fallback-2026-06-01) on the anthropic-messages provider, including support for AnthropicOptions.fallbacks and automatic filtering of fallback blocks during cross-provider message transformations.
 
 ### Changed
 
-- Skip leaked-thinking stream healing for official first-party Anthropic, OpenAI, and Codex endpoints
-
-- Updated CoreWeave Serverless Inference login instructions to clarify persisting `COREWEAVE_PROJECT` in shell startup files.
+- Improved stream healing for official first-party endpoints (Anthropic, OpenAI, and OpenAI Codex) by skipping leaked-thinking healing, preventing misfires on legitimate code blocks while maintaining healing for third-party gateways and custom base URLs.
+- Updated CoreWeave Serverless Inference login instructions to clarify persisting COREWEAVE_PROJECT in shell startup files.
 
 ### Fixed
 
-- Fixed an issue where broker usage fetch failures were not cached, causing redundant network requests during sequential ranking passes when the broker is offline.
-- Fixed Xiaomi MiMo API key validation to use the supported `mimo-v2.5` model.
-- Fixed certificate verification errors for custom gateways behind private CA bundles by ensuring `NODE_EXTRA_CA_CERTS` is respected across all provider fetches (including OpenAI-compatible, Codex, Ollama, Azure, and Google).
-- Fixed Claude Fable demoted-thinking replay to use markdown-italic assistant prose instead of `<thinking>` tags, preventing context issues after model switches.
-- Fixed OpenAI Responses replay errors (400 Bad Request) caused by missing reasoning items in locally rebuilt assistant item IDs during history replay.
+- Fixed a performance issue where broker usage fetch failures were not cached, causing redundant network requests when the broker is offline.
+- Fixed Xiaomi MiMo API key validation to use the supported mimo-v2.5 model.
+- Fixed certificate verification errors for custom gateways behind private CA bundles by ensuring NODE_EXTRA_CA_CERTS is respected across all provider fetches.
+- Fixed Claude Fable demoted-thinking replay to use markdown-italic assistant prose instead of <thinking> tags, preventing context issues after model switches.
+- Fixed OpenAI Responses replay errors (400 Bad Request) caused by missing reasoning items during history replay.
 
 ## [16.2.13] - 2026-07-01
 

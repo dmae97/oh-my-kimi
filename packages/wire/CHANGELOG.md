@@ -4,11 +4,11 @@
 
 ### Breaking Changes
 
-- Upgraded the collaboration protocol (COLLAB_PROTO) to version 3. Guests using version 2 are now rejected during the handshake with a protocol-mismatch error due to new interactive UI request/response requirements.
+- Upgraded the collaboration protocol to version 3. Guests using version 2 will now be rejected during the handshake with a protocol-mismatch error.
 
 ### Added
 
-- Added collaboration UI request and response frames, enabling browser guests to respond to interactive prompts initiated by the host.
+- Added support for interactive UI request and response frames, enabling browser guests to respond to prompts initiated by the host.
 
 ## [16.1.8] - 2026-06-20
 

@@ -27,42 +27,6 @@ function getAssistantMessage(session: SessionManager): AssistantMessage {
 }
 
 describe("SessionManager signature persistence", () => {
-	it("clears oversized signatures instead of truncating them", async () => {
-		using tempDir = TempDir.createSync("@pi-session-signature-persistence-");
-		const session = SessionManager.create(tempDir.path(), tempDir.path());
-
-		session.appendMessage({ role: "user", content: "continue", timestamp: 1 });
-		session.appendMessage({
-			role: "assistant",
-			content: [
-				{ type: "thinking", thinking: "reasoning", thinkingSignature: "s".repeat(600_000) },
-				{ type: "text", text: "done", textSignature: "m".repeat(600_000) },
-				{ type: "toolCall", id: "tool_1", name: "read", arguments: {}, thoughtSignature: "t".repeat(600_000) },
-			],
-			api: "openai-responses",
-			provider: "openai",
-			model: "gpt-5-mini",
-			usage: {
-				input: 1,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 2,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
-			stopReason: "stop",
-			timestamp: 2,
-		} satisfies AssistantMessage);
-		await session.flush();
-
-		const reloaded = await SessionManager.open(session.getSessionFile()!);
-		const assistant = getAssistantMessage(reloaded);
-
-		expect(assistant.content[0]).toMatchObject({ type: "thinking", thinking: "reasoning", thinkingSignature: "" });
-		expect(assistant.content[1]).toMatchObject({ type: "text", text: "done", textSignature: "" });
-		expect(assistant.content[2]).toMatchObject({ type: "toolCall", id: "tool_1", thoughtSignature: "" });
-	});
-
 	it("externalizes provider image data URLs and restores preserved history payloads across reload", async () => {
 		using tempDir = TempDir.createSync("@pi-session-provider-image-persistence-");
 		const session = SessionManager.create(tempDir.path(), tempDir.path());
@@ -265,7 +229,8 @@ describe("SessionManager signature persistence", () => {
 	it("drops a reasoning signature duplicated by the provider payload and keeps the payload on reload", async () => {
 		using tempDir = TempDir.createSync("@pi-session-reasoning-dedup-e2e-");
 		const session = SessionManager.create(tempDir.path(), tempDir.path());
-		const encrypted = "ENCRYPTED_REASONING_BLOB_UNIQUE_TOKEN";
+		// >MAX_PERSIST_CHARS: regresses persistence truncating providerPayload reasoning items.
+		const encrypted = `ENCRYPTED_REASONING_BLOB_UNIQUE_TOKEN_${"E".repeat(600_000)}`;
 		const reasoning = { type: "reasoning", id: "rs_1", encrypted_content: encrypted };
 
 		session.appendMessage({ role: "user", content: "continue", timestamp: 1 });

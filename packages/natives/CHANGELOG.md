@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added workingDir to ShellRunResult to allow hosts to synchronize the session's current working directory without executing a hidden probe command.
+- Added `workingDir` to `ShellRunResult` to allow hosts to synchronize the session's current working directory without executing a hidden probe command.
 
 ### Fixed
 

@@ -297,6 +297,30 @@ describe("openai-completions wire-quirk compat detection", () => {
 		expect(buildOpenAICompat(completionsSpec()).dropThinkingWhenReasoningEffort).toBe(false);
 	});
 
+	it("disables the leaked-markup healer for the official OpenAI endpoint only", () => {
+		// Official OpenAI returns structured reasoning and never leaks fences, so
+		// the provider-local healer stays off; every other OpenAI-compatible host
+		// keeps the default "thinking" healer, and Kimi/DSML keep their grammars.
+		expect(
+			buildOpenAICompat(completionsSpec({ provider: "openai", baseUrl: "https://api.openai.com/v1" }))
+				.streamMarkupHealingPattern,
+		).toBeUndefined();
+		expect(
+			buildOpenAICompat(completionsSpec({ provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1" }))
+				.streamMarkupHealingPattern,
+		).toBe("thinking");
+		// A lookalike host under the openai provider id is NOT the official endpoint.
+		expect(
+			buildOpenAICompat(completionsSpec({ provider: "openai", baseUrl: "https://api.openai.com.evil/v1" }))
+				.streamMarkupHealingPattern,
+		).toBe("thinking");
+		expect(
+			buildOpenAICompat(
+				completionsSpec({ provider: "moonshot", id: "kimi-k2", baseUrl: "https://api.moonshot.ai/v1" }),
+			).streamMarkupHealingPattern,
+		).toBe("kimi");
+	});
+
 	it("derives Responses obfuscation opt-out and wire mode per surface", () => {
 		expect(
 			buildOpenAIResponsesCompat({

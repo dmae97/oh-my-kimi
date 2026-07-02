@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed a potential event loop hang caused by processing oversized, unterminated terminal escape sequences (OSC/DCS/APC).
+- Fixed a potential event loop hang when processing oversized, unterminated terminal escape sequences (OSC/DCS/APC).
 - Fixed an issue where large Windows terminal session restores could get truncated mid-frame during ConPTY full-paint resume.
 
 ## [16.2.13] - 2026-07-01

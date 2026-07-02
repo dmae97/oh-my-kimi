@@ -8,10 +8,11 @@
 
 ### Fixed
 
-- Fixed the Xiaomi provider's default model to use the supported `mimo-v2.5` model.
-- Fixed model discovery probes (including Ollama and metadata fetches) failing behind private-CA gateways by ensuring they honor `NODE_EXTRA_CA_CERTS`.
+- Fixed stream markup healing pattern misfires by disabling the healer on the official OpenAI endpoint.
+- Updated the Xiaomi provider's default model to the supported `mimo-v2.5` model.
+- Fixed model discovery probes (including Ollama and metadata fetches) failing behind private-CA gateways by ensuring they honor the `NODE_EXTRA_CA_CERTS` environment variable.
 - Fixed CoreWeave Serverless Inference project-header detection to ensure blank OpenAI-Project overrides do not block the `COREWEAVE_PROJECT` fallback.
-- Fixed LiteLLM MiniMax M3 discovery to remove reseller-only display suffixes, and invalidated the model cache to ensure stale suffixes are cleared immediately.
+- Fixed LiteLLM MiniMax M3 discovery to remove reseller-only display suffixes and invalidated the model cache to clear stale suffixes immediately.
 
 ## [16.2.13] - 2026-07-01
 

@@ -99,7 +99,8 @@ function isGoogleVertexAuthenticatedModel(model: Model<Api>): boolean {
  * gateway may well leak. URL checks are strict (exact origin / path boundary
  * or parsed hostname) — a substring match would accept lookalikes like
  * `https://api.openai.com.evil/`. Anthropic Foundry (`CLAUDE_CODE_USE_FOUNDRY`)
- * dispatches an empty `baseUrl` to an enterprise gateway, so it is never exempt.
+ * redirects an empty `baseUrl` to `FOUNDRY_BASE_URL`, so the check runs against
+ * that effective endpoint — exempt only when it resolves to the official host.
  */
 function isLeakedThinkingHealExempt(model: Model<Api>): boolean {
 	switch (model.provider) {

@@ -246,6 +246,35 @@ describe("openai-completions leaked thinking healing", () => {
 	});
 });
 
+describe("official OpenAI leaked thinking healing exemption", () => {
+	// The official OpenAI endpoint returns structured reasoning and never leaks
+	// fences, so neither the provider-local healer nor the central
+	// wrapLeakedThinkingStream wrap runs — a ` ```thinking ` block the model chose
+	// to write must stay verbatim visible text. Routed through stream() (not the
+	// provider directly) so both gates are exercised.
+	const officialOpenAI = getBundledModel("openai", "gpt-5.5");
+	const completionsModel = buildModel({
+		...officialOpenAI,
+		api: "openai-completions",
+	});
+
+	it("leaves a leaked fence intact for the official OpenAI endpoint", async () => {
+		const leaked = "```thinking\nWeigh the options.\n```\nFinal answer.";
+		const result = await stream(completionsModel, baseContext(), {
+			apiKey: "test",
+			fetch: mockFetch([
+				chunk(completionsModel.id, { content: leaked }),
+				chunk(completionsModel.id, {}, "stop"),
+				"[DONE]",
+			]),
+		}).result();
+
+		expect(result.content.map(b => b.type)).toEqual(["text"]);
+		expect(result.content.filter((b): b is ThinkingContent => b.type === "thinking")).toHaveLength(0);
+		expect(result.content.map(b => (b.type === "text" ? b.text : "")).join("")).toBe(leaked);
+	});
+});
+
 describe("google-gemini-cli leaked thinking healing", () => {
 	it("lifts a leaked Gemini thinking fence before a native tool call", async () => {
 		const model = geminiCliModel();

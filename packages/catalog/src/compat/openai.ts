@@ -117,18 +117,37 @@ function resolveReasoningDisableMode(
 /**
  * Pick the leaked-markup healer for an OpenAI-compatible visible-text stream.
  * Kimi chat-template tokens and DeepSeek DSML envelopes need their dedicated
- * tool-call grammars; every other model defaults to `"thinking"`. All patterns
- * run the generic thinking healer, so leaked reasoning idioms (e.g. a Gemini
- * ` ```thinking ` fence on OpenRouter) are always recovered from `delta.content`.
+ * tool-call grammars. Every other OpenAI-compatible model defaults to
+ * `"thinking"` so leaked reasoning idioms (e.g. a Gemini ` ```thinking ` fence
+ * on OpenRouter) are recovered from `delta.content` — **except** the official
+ * OpenAI endpoint (`provider: "openai"` + `api.openai.com`), which returns
+ * structured reasoning and never leaks, so it heals nothing (returns
+ * `undefined`) to avoid misfiring on legitimate fenced content.
  */
-function detectStreamMarkupHealingPattern(provider: string, modelId: string): OpenAIStreamMarkupHealingPattern {
+function detectStreamMarkupHealingPattern(
+	provider: string,
+	modelId: string,
+	baseUrl: string,
+): OpenAIStreamMarkupHealingPattern | undefined {
 	if (provider === "kimi-code" || provider === "moonshot" || /kimi[-/_.]?k2/i.test(modelId)) {
 		return "kimi";
 	}
 	if (isDeepseekModelIdOrName(modelId) && DSML_HEALING_PROVIDERS.has(provider)) {
 		return "dsml";
 	}
+	if (isOfficialOpenAIEndpoint(provider, baseUrl)) return undefined;
 	return "thinking";
+}
+
+/** Strict official-OpenAI check: provider id `openai` and an `api.openai.com` host (missing baseUrl defaults there). */
+function isOfficialOpenAIEndpoint(provider: string, baseUrl: string): boolean {
+	if (provider !== "openai") return false;
+	if (!baseUrl) return true;
+	try {
+		return new URL(baseUrl).hostname === "api.openai.com";
+	} catch {
+		return false;
+	}
 }
 
 /**
@@ -517,7 +536,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		streamIdleTimeoutMs,
 		stripDeepseekSpecialTokens:
 			isDeepseekModelIdOrName(spec.id) && (provider === "nvidia" || provider === "deepseek"),
-		streamMarkupHealingPattern: detectStreamMarkupHealingPattern(provider, spec.id),
+		streamMarkupHealingPattern: detectStreamMarkupHealingPattern(provider, spec.id, baseUrl),
 		reasoningDeltasMayBeCumulative:
 			MINIMAX_PROVIDER_OR_ID_PATTERN.test(provider) || MINIMAX_PROVIDER_OR_ID_PATTERN.test(spec.id),
 		emptyLengthFinishIsContextError: provider === "ollama",
@@ -646,7 +665,7 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 		supportsObfuscationOptOut: isOpenAIUrl || spec.provider === "openai",
 		stripDeepseekSpecialTokens:
 			Boolean(id) && isDeepseekModelIdOrName(id) && (spec.provider === "nvidia" || spec.provider === "deepseek"),
-		streamMarkupHealingPattern: id ? detectStreamMarkupHealingPattern(spec.provider, id) : undefined,
+		streamMarkupHealingPattern: id ? detectStreamMarkupHealingPattern(spec.provider, id, baseUrl) : undefined,
 		reasoningDeltasMayBeCumulative:
 			MINIMAX_PROVIDER_OR_ID_PATTERN.test(spec.provider) || (id ? MINIMAX_PROVIDER_OR_ID_PATTERN.test(id) : false),
 		emptyLengthFinishIsContextError: spec.provider === "ollama",

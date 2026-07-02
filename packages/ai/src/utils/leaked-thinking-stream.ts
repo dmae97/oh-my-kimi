@@ -3,11 +3,15 @@
  *
  * Some providers emit their canonical reasoning idioms (` ```thinking `,
  * `<think>`, Gemma/Harmony channels, …) into the *visible* text stream instead
- * of a structured thinking part. {@link wrapLeakedThinkingStream} re-projects any
+ * of a structured thinking part. {@link wrapLeakedThinkingStream} re-projects a
  * provider stream into a fresh {@link AssistantMessageEventStream}, splitting the
- * leaked fences out into proper `thinking` blocks *live* as deltas arrive — so
- * every provider gets the same healing, not just the three with provider-local
- * {@link StreamMarkupHealing} loops.
+ * leaked fences out into proper `thinking` blocks *live* as deltas arrive.
+ *
+ * Applied to every provider stream *except* official first-party endpoints
+ * (the official Anthropic API and the official OpenAI / OpenAI-Codex endpoints),
+ * which return structured thinking and never leak — `healLeakedThinking` in
+ * `../stream.ts` gates the wrap so the healer cannot misfire on legitimate
+ * fenced content those models emit as visible text.
  *
  * The healing is idempotent: a second pass over already-clean text finds no
  * fences, so wrapping a provider that already heals (or wrapping twice) is a

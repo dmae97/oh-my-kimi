@@ -8,8 +8,7 @@
 
 ### Fixed
 
-- Fixed an issue where legacy steering messages were prematurely consumed and dropped during in-flight tool execution polls
-
+- Fixed an issue where legacy steering messages were prematurely consumed and dropped during in-flight tool execution polls.
 - Fixed an issue where skipped tool results in queued messages were incorrectly treated as completed, preventing necessary retries.
 - Improved branch summaries to preserve informative tool results from abandoned branches while filtering out redundant output.
 - Fixed interruptible tool waits to properly abort on host-provided IRC interrupts in addition to user steering.

@@ -4,7 +4,7 @@
 
 ### Changed
 
-- Optimized stale-anchor remap validation from quadratic to linear complexity, significantly improving performance on large files.
+- Significantly improved performance on large files by optimizing stale-anchor remap validation.
 
 ### Fixed
 

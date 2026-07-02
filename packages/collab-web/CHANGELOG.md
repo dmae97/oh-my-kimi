@@ -5,8 +5,8 @@
 ### Fixed
 
 - Fixed missing response controls for "ask" questions in the mobile collaboration web UI.
-- Fixed an issue where re-sending the same editor "ask" request would clear a guest's in-progress draft response.
-- Fixed infinite retry loops in the agent transcript drawer when encountering terminal errors, ensuring the error is displayed and polling stops.
+- Fixed an issue where re-sending an editor "ask" request would clear a guest's in-progress draft response.
+- Fixed infinite retry loops in the agent transcript drawer by ensuring terminal errors are displayed and polling stops.
 - Fixed a delay in displaying pre-welcome connection errors (such as protocol version rejections), allowing the session to terminate immediately with the host's error reason.
 
 ## [16.2.0] - 2026-06-27
