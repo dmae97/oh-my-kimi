@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { Agent } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -96,6 +96,20 @@ describe("AgentSession advisor toggle", () => {
 
 		expect(session.getAdvisorAgent()?.state.model.provider).toBe(replacementModel.provider);
 		expect(session.getAdvisorAgent()?.state.model.id).toBe(replacementModel.id);
+	});
+
+	it("keeps explicit enable idempotent when the advisor config is unchanged", () => {
+		session.settings.setModelRole("advisor", `${model.provider}/${model.id}`);
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		const advisor = session.getAdvisorAgent();
+		if (!advisor) throw new Error("Expected advisor agent to be live");
+		const historyMessage: AgentMessage = { role: "user", content: "prior advisor context", timestamp: 1 };
+		advisor.state.messages.push(historyMessage);
+
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+
+		expect(session.getAdvisorAgent()).toBe(advisor);
+		expect(session.getAdvisorAgent()?.state.messages).toEqual([historyMessage]);
 	});
 
 	it("explicit enable overrides default-off setting for the session only", () => {

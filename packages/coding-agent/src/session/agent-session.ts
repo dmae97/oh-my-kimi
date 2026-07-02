@@ -965,6 +965,18 @@ interface ActiveAdvisor {
 	agentUnsubscribe?: () => void;
 	model: Model;
 	thinkingLevel: ThinkingLevel;
+	/** Stable key for the resolved runtime inputs that require a rebuild to change. */
+	signature: string;
+}
+
+/** Resolved advisor config ready to instantiate as an {@link ActiveAdvisor}. */
+interface AdvisorRuntimeDescriptor {
+	config: AdvisorConfig;
+	name: string;
+	slug: string;
+	model: Model;
+	thinkingLevel: ThinkingLevel;
+	signature: string;
 }
 
 export interface FreshSessionResult {
@@ -2247,32 +2259,10 @@ export class AgentSession {
 		}
 	}
 
-	#buildAdvisorRuntime(seedToCurrent = false): boolean {
-		if (this.#isDisposed) return false;
-		if (this.#advisors.length > 0) return true;
-		if (!this.#advisorEnabled) return false;
-		if (this.#agentKind !== "main" && !this.settings.get("advisor.subagents")) return false;
-
-		// The lone implicit "default" advisor (slug "") reproduces the legacy
-		// single-advisor path: the `advisor` role model + `__advisor.jsonl`.
+	#resolveAdvisorRuntimeDescriptors(emitWarnings: boolean): AdvisorRuntimeDescriptor[] {
 		const legacy = !this.#advisorConfigs?.length;
 		const roster: AdvisorConfig[] = legacy ? [{ name: "default" }] : this.#advisorConfigs!;
-
-		// Advisor service tier (`tier.advisor`): "none" (default) runs the advisor
-		// on standard processing; "inherit" tracks the session's live per-family
-		// tiers per request (like the main agent, including /fast toggles); a
-		// concrete value is broadcast across families and applied to the advisor
-		// model's family. One value for all advisors.
-		const advisorTierSetting = this.settings.get("tier.advisor");
-		const advisorTierMap =
-			advisorTierSetting === "inherit"
-				? undefined
-				: serviceTierForAllFamilies(serviceTierSettingToTier(advisorTierSetting));
-		const advisorServiceTierResolver = (model: Model): ServiceTier | undefined =>
-			advisorTierSetting === "inherit"
-				? this.#effectiveServiceTier(model)
-				: resolveModelServiceTier(advisorTierMap, model);
-
+		const descriptors: AdvisorRuntimeDescriptor[] = [];
 		const usedSlugs = new Set<string>();
 		for (const config of roster) {
 			let slug = legacy ? "" : slugifyAdvisorName(config.name);
@@ -2293,23 +2283,84 @@ export class AgentSession {
 				model = resolved.model;
 				thinkingLevel = concreteThinkingLevel(resolved.thinkingLevel);
 				if (!model) {
-					this.emitNotice("warning", `Advisor "${config.name}": no model matched "${config.model}"`, "advisor");
+					if (emitWarnings) {
+						this.emitNotice("warning", `Advisor "${config.name}": no model matched "${config.model}"`, "advisor");
+					}
 					continue;
 				}
 			} else {
 				const sel = resolveAdvisorRoleSelection(this.settings, this.#modelRegistry.getAvailable());
 				if (!sel) {
-					logger.debug("advisor enabled but no model assigned to the 'advisor' role; advisor inactive", {
-						advisor: config.name,
-					});
+					if (emitWarnings) {
+						logger.debug("advisor enabled but no model assigned to the 'advisor' role; advisor inactive", {
+							advisor: config.name,
+						});
+					}
 					continue;
 				}
 				model = sel.model;
 				thinkingLevel = concreteThinkingLevel(sel.thinkingLevel);
 			}
-			const advisorModel = model;
-			const advisorName = config.name;
 			const advisorThinkingLevel = thinkingLevel ?? ThinkingLevel.Medium;
+			descriptors.push({
+				config,
+				name: config.name,
+				slug,
+				model,
+				thinkingLevel: advisorThinkingLevel,
+				signature: this.#advisorRuntimeSignature(config, slug, model, advisorThinkingLevel),
+			});
+		}
+		return descriptors;
+	}
+
+	#advisorRuntimeSignature(config: AdvisorConfig, slug: string, model: Model, thinkingLevel: ThinkingLevel): string {
+		const tools = config.tools?.length ? config.tools.join("\u001e") : "";
+		const instructions = config.instructions?.trim() ?? "";
+		return [config.name, slug, model.provider, model.id, thinkingLevel, tools, instructions].join("\u001f");
+	}
+
+	#advisorRuntimeMatchesCurrentConfig(): boolean {
+		const descriptors = this.#resolveAdvisorRuntimeDescriptors(false);
+		if (descriptors.length !== this.#advisors.length) return false;
+		for (let i = 0; i < descriptors.length; i++) {
+			if (descriptors[i].signature !== this.#advisors[i].signature) return false;
+		}
+		return true;
+	}
+
+	#buildAdvisorRuntime(seedToCurrent = false): boolean {
+		if (this.#isDisposed) return false;
+		if (this.#advisors.length > 0) return true;
+		if (!this.#advisorEnabled) return false;
+		if (this.#agentKind !== "main" && !this.settings.get("advisor.subagents")) return false;
+
+		const descriptors = this.#resolveAdvisorRuntimeDescriptors(true);
+
+		// Advisor service tier (`tier.advisor`): "none" (default) runs the advisor
+		// on standard processing; "inherit" tracks the session's live per-family
+		// tiers per request (like the main agent, including /fast toggles); a
+		// concrete value is broadcast across families and applied to the advisor
+		// model's family. One value for all advisors.
+		const advisorTierSetting = this.settings.get("tier.advisor");
+		const advisorTierMap =
+			advisorTierSetting === "inherit"
+				? undefined
+				: serviceTierForAllFamilies(serviceTierSettingToTier(advisorTierSetting));
+		const advisorServiceTierResolver = (model: Model): ServiceTier | undefined =>
+			advisorTierSetting === "inherit"
+				? this.#effectiveServiceTier(model)
+				: resolveModelServiceTier(advisorTierMap, model);
+
+		for (const descriptor of descriptors) {
+			const {
+				config,
+				slug,
+				model: advisorModel,
+				name: advisorName,
+				thinkingLevel: advisorThinkingLevel,
+				signature,
+			} = descriptor;
 
 			const emissionGuard = new AdvisorEmissionGuard();
 			const adviseTool = new AdviseTool((note, severity) => this.#routeAdvice(advisorRef, note, severity));
@@ -2435,6 +2486,7 @@ export class AgentSession {
 				recorderClosed: Promise.resolve(),
 				model: advisorModel,
 				thinkingLevel: advisorThinkingLevel,
+				signature,
 			};
 			this.#attachAdvisorRecorderFeed(advisorRef);
 			if (seedToCurrent) runtime.seedTo(this.agent.state.messages.length);
@@ -15187,7 +15239,7 @@ export class AgentSession {
 	setAdvisorEnabled(enabled: boolean): boolean {
 		this.#advisorEnabled = enabled;
 		if (enabled) {
-			if (this.#advisors.length > 0) this.#stopAdvisorRuntime();
+			if (this.#advisors.length > 0 && !this.#advisorRuntimeMatchesCurrentConfig()) this.#stopAdvisorRuntime();
 			return this.#buildAdvisorRuntime(true);
 		}
 		this.#stopAdvisorRuntime();
