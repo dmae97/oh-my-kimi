@@ -352,6 +352,23 @@ describe("Patcher seen-line provenance", () => {
 		expect(message).not.toContain("140:l140");
 		expect(message).toMatch(new RegExp(`${PATH}:100-159`));
 		expect(fs.get(PATH)).toBe(bigContent);
+
+		// A straight retry of the same over-cap patch STILL rejects: the
+		// truncated reveal must not merge its prefix into seenLines, or the
+		// model could split a blind over-cap edit into <=cap-line retries and
+		// slip past the range-re-read gate. The reveal window stays anchored
+		// at the head (100..139), never advancing to the tail across retries.
+		let retryMessage: string | undefined;
+		try {
+			await patcher.apply(Patch.parse(`[${PATH}#${tag}]\n${dels}`));
+		} catch (err) {
+			retryMessage = (err as Error).message;
+		}
+		expect(retryMessage).toContain("Preview of the actual file content at the first 40 unseen line(s)");
+		expect(retryMessage).toContain("100:l100");
+		expect(retryMessage).toContain("139:l139");
+		expect(retryMessage).not.toContain("140:l140");
+		expect(fs.get(PATH)).toBe(bigContent);
 	});
 
 	it("skips the check when no seen lines were recorded (absent → allow)", async () => {

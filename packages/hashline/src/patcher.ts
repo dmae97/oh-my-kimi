@@ -500,12 +500,16 @@ export class Patcher {
 	 *
 	 * The rejection inlines the actual file content at the unseen anchor lines
 	 * (from `matchedSnapshot.text`, which by definition equals the live
-	 * normalized content) and merges those lines into the snapshot's
-	 * seen-line set, so a straight retry with the same `[path#tag]` header
-	 * succeeds without a follow-up range read — the content the model
-	 * receives in the error IS proof it has now seen those lines. Ranges
-	 * beyond {@link SEEN_LINE_REVEAL_CAP} still bounce back to a range
-	 * re-read for the remainder; only the revealed prefix is merged.
+	 * normalized content) so the model can verify what it was about to touch.
+	 * When the reveal covers EVERY unseen anchor line (`truncated === false`)
+	 * those lines also merge into the snapshot's seen-line set, so a straight
+	 * retry with the same `[path#tag]` header succeeds without a follow-up
+	 * range read — the content the model received in the error IS proof it
+	 * has now seen those lines. When the anchor range exceeds
+	 * {@link SEEN_LINE_REVEAL_CAP} (`truncated === true`), NO lines merge:
+	 * the message keeps the range-re-read guidance intact and the model
+	 * cannot piecewise-reveal its way past the guard across multiple retries
+	 * (over-cap retry → tail reveal → next retry applies).
 	 */
 	#assertSeenLines(section: PatchSection, expected: string, matchedSnapshot: Snapshot | null): void {
 		const seen = matchedSnapshot?.seenLines;
@@ -518,13 +522,18 @@ export class Patcher {
 		for (let i = 0; i < revealCount; i++) {
 			const line = unseen[i];
 			// Out-of-range anchors are caught by parse/apply with a better
-			// message; skip them here so they never join the revealed set or
-			// the seen-line merge.
+			// message; skip them here so they never join the revealed set.
 			if (line < 1 || line > sourceLines.length) continue;
 			revealed.push({ line, text: sourceLines[line - 1] ?? "" });
 		}
 		const truncated = unseen.length > revealed.length;
-		for (const { line } of revealed) seen.add(line);
+		// Only merge when the reveal covered every unseen anchor line: a
+		// truncated reveal that merged its prefix would let the model split a
+		// blind edit into <=SEEN_LINE_REVEAL_CAP-line retries and land it
+		// without ever running the required range re-read.
+		if (!truncated) {
+			for (const { line } of revealed) seen.add(line);
+		}
 		throw new Error(unseenLinesMessage(section.path, unseen, expected, { lines: revealed, truncated }));
 	}
 	#mismatchError(
