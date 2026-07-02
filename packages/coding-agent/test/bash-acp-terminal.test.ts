@@ -24,6 +24,13 @@ function makeSession(bridge: ClientBridge): ToolSession {
 			getBashInterceptorRules() {
 				return [];
 			},
+			getShellConfig() {
+				// Fixed bash shell keeps the wrap assertions cross-platform: the fix
+				// must reuse the resolved shell (Git Bash on Windows, `$SHELL` on
+				// POSIX) instead of collapsing to `cmd.exe` — that's the contract
+				// this test defends.
+				return { shell: "/bin/bash", args: ["-l", "-c"], env: {}, prefix: undefined };
+			},
 		},
 		getClientBridge: () => bridge,
 	} as unknown as ToolSession;
@@ -60,18 +67,14 @@ describe("BashTool ACP terminal routing", () => {
 			updates.push(update as { details?: { terminalId?: string } });
 		});
 
-		// createTerminal must be called with the ACP-shaped shell wrap so
-		// spec-conformant clients that spawn `command` directly (no implicit
-		// shell) can still run shell lines with spaces, pipes, `&&`, etc.
+		// createTerminal must send the resolved bash shell + `-l -c <line>` so
+		// spec-conformant ACP clients that spawn `command` directly (no implicit
+		// shell) still get bash semantics — never `cmd.exe`, which would break
+		// `$VAR`, `$(...)`, `source`, and POSIX quoting on Windows.
 		expect(createSpy).toHaveBeenCalledTimes(1);
 		const params = createSpy.mock.calls[0]![0];
-		if (process.platform === "win32") {
-			expect(params.command).toBe("cmd.exe");
-			expect(params.args).toEqual(["/d", "/s", "/c", "echo hi"]);
-		} else {
-			expect(params.command).toBe("/bin/sh");
-			expect(params.args).toEqual(["-c", "echo hi"]);
-		}
+		expect(params.command).toBe("/bin/bash");
+		expect(params.args).toEqual(["-l", "-c", "echo hi"]);
 
 		// The first onUpdate must carry the terminalId so the editor can embed it
 		expect(updates.length).toBeGreaterThanOrEqual(1);
@@ -111,13 +114,8 @@ describe("BashTool ACP terminal routing", () => {
 
 		expect(createSpy).toHaveBeenCalledTimes(1);
 		const params = createSpy.mock.calls[0]![0];
-		if (process.platform === "win32") {
-			expect(params.command).toBe("cmd.exe");
-			expect(params.args).toEqual(["/d", "/s", "/c", line]);
-		} else {
-			expect(params.command).toBe("/bin/sh");
-			expect(params.args).toEqual(["-c", line]);
-		}
+		expect(params.command).toBe("/bin/bash");
+		expect(params.args).toEqual(["-l", "-c", line]);
 		// `args` must actually be present — the bug was omitting it entirely.
 		expect(params.args).toBeDefined();
 		expect(params.args?.length).toBeGreaterThan(0);
