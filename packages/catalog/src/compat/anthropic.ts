@@ -144,7 +144,7 @@ export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): Res
 		// AI Inference / Foundry `<res>.(inference|services).ai.azure.com`)
 		// are excluded automatically because they can be recognised by provider
 		// id or baseUrl marker.
-		replayUnsignedThinking: !signingEndpoint && Boolean(spec.reasoning),
+		replayUnsignedThinking: !signingEndpoint && (Boolean(spec.reasoning) || modelMatchesHost(spec, "deepseekFamily")),
 		escapeBuiltinToolNames: modelMatchesHost(spec, "umans"),
 	};
 	applyCompatOverrides(compat, spec.compat);
