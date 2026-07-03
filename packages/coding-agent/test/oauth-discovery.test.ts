@@ -215,6 +215,22 @@ describe("resource_metadata chain", () => {
 		expect(auth.resourceMetadataUrl).toBe("https://gateway.example.com/jit/.well-known/oauth-protected-resource");
 	});
 
+	it("merges challenge scopes into oauth endpoints when the JSON body omits them", () => {
+		const error = new Error(
+			'HTTP 403: {"error":"insufficient_scope","oauth":{"authorization_url":"https://auth.example.com/oauth/auth","token_url":"https://auth.example.com/oauth/token"}} [WWW-Authenticate: Bearer error="insufficient_scope", scope="jit"]',
+		);
+
+		const auth = analyzeAuthError(error);
+		expect(auth.requiresAuth).toBe(true);
+		expect(auth.authType).toBe("oauth");
+		expect(auth.scopes).toBe("jit");
+		// Callers on the JSON-body path use `authResult.oauth` directly and skip
+		// discovery — the merged scope must land on the returned endpoints.
+		expect(auth.oauth?.scopes).toBe("jit");
+		expect(auth.oauth?.authorizationUrl).toBe("https://auth.example.com/oauth/auth");
+		expect(auth.oauth?.tokenUrl).toBe("https://auth.example.com/oauth/token");
+	});
+
 	it("carries scopes_supported from resource metadata into discovered auth-server endpoints", async () => {
 		const fetchImpl = mockFetch((input: FetchInput) => {
 			const url = String(input);

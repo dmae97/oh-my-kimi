@@ -217,13 +217,19 @@ export function analyzeAuthError(error: Error, serverUrl?: string): AuthDetectio
 	const challengeScopes = extractOAuthChallengeScopes(error);
 
 	if (oauth) {
+		const mergedScopes = oauth.scopes ?? challengeScopes;
+		// Callers on the JSON-error-body path use `authResult.oauth` directly and
+		// skip `discoverOAuthEndpoints`; without merging the challenge scope back
+		// into the returned endpoints, `/mcp reauth` and `/mcp add` still mint a
+		// scope-less grant when the challenge advertised `scope="…"`.
+		const mergedOAuth: OAuthEndpoints = mergedScopes === oauth.scopes ? oauth : { ...oauth, scopes: mergedScopes };
 		return {
 			requiresAuth: true,
 			authType: "oauth",
-			oauth,
+			oauth: mergedOAuth,
 			authServerUrl,
 			resourceMetadataUrl,
-			scopes: oauth.scopes ?? challengeScopes,
+			scopes: mergedScopes,
 			message: "Server requires OAuth authentication. Launching authorization flow...",
 		};
 	}
