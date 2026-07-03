@@ -82,13 +82,17 @@ describe("read tool large artifact handling", () => {
 		expect(output).not.toContain("line-400");
 	});
 
-	it("allows bounded raw artifact chunks", async () => {
+	it("keeps bounded raw artifact chunks verbatim (no workflow notice appended)", async () => {
 		const result = await tool.execute("call-raw-range", { path: "artifact://0:raw:1-2" });
 		const output = getTextOutput(result);
 
 		expect(output).toStartWith("line-001");
 		expect(output).toContain("line-002");
 		expect(output).not.toContain("line-400");
+		// Raw chunks must stay verbatim so copy/paste workflows do not eat the
+		// workflow notice into the artifact bytes.
+		expect(output).not.toContain("Artifact storage:");
+		expect(output).not.toContain("artifact://0:raw:N-M");
 	});
 
 	it("shortens artifact paths under the user's home dir instead of leaking the absolute path", async () => {

@@ -8,6 +8,8 @@ import {
 	registerArtifactsDir,
 	resetRegisteredArtifactDirsForTests,
 } from "@oh-my-pi/pi-coding-agent/internal-urls/registry-helpers";
+import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls/router";
+import { resolveToolSearchScope } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 
 /**
  * Path-only callers (search/grep, bash URL expansion) only need the artifact's
@@ -67,5 +69,40 @@ describe("artifact:// path-only resolution", () => {
 		} finally {
 			unregisterSmall();
 		}
+	});
+});
+
+describe("resolveToolSearchScope handles large artifacts via pathOnly", () => {
+	let testDir: string;
+	let artifactDir: string;
+	let unregister: (() => void) | undefined;
+
+	beforeEach(async () => {
+		testDir = await fs.mkdtemp(path.join(os.tmpdir(), "artifact-scope-"));
+		artifactDir = path.join(testDir, "session");
+		await fs.mkdir(artifactDir, { recursive: true });
+		const bytes = Buffer.alloc(9 * 1024 * 1024, 65);
+		await Bun.write(path.join(artifactDir, "0.mcp.log"), bytes);
+		resetRegisteredArtifactDirsForTests();
+		unregister = registerArtifactsDir(artifactDir);
+		InternalUrlRouter.resetForTests();
+	});
+
+	afterEach(async () => {
+		unregister?.();
+		resetRegisteredArtifactDirsForTests();
+		InternalUrlRouter.resetForTests();
+		await fs.rm(testDir, { recursive: true, force: true });
+	});
+
+	it("resolves ast_grep/ast_edit search scope to the backing file for large artifacts", async () => {
+		const scope = await resolveToolSearchScope({
+			rawPaths: ["artifact://0"],
+			cwd: testDir,
+			internalUrlAction: "search",
+		});
+		// Scope resolution must reach the artifact's real path without going through
+		// InternalUrlRouter's inline-content cap.
+		expect(scope.searchPath).toBe(path.join(artifactDir, "0.mcp.log"));
 	});
 });

@@ -1201,6 +1201,10 @@ export async function resolveToolSearchScope(opts: ToolScopeOptions): Promise<To
 			signal: opts.signal,
 			localProtocolOptions: opts.localProtocolOptions,
 			skills: opts.skills,
+			// Tool-scope resolution only needs `sourcePath`; skip content
+			// materialization so large artifacts (or any handler that separates
+			// path from content) stay searchable without OOM risk.
+			pathOnly: true,
 		});
 		if (!resource.sourcePath) {
 			throw new ToolError(`Cannot ${internalUrlAction} internal URL without a backing file: ${rawPath}`);

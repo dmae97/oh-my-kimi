@@ -2859,7 +2859,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			if (read.bridgeResult) return read.bridgeResult;
 			if (read.displayContent) details.displayContent = read.displayContent;
 			let text = read.outputText;
-			if (artifact.size > MAX_ARTIFACT_RAW_INLINE_BYTES) {
+			if (!rawSelector && artifact.size > MAX_ARTIFACT_RAW_INLINE_BYTES) {
 				text = text
 					? `${text}\n\n[${this.#formatArtifactWorkflowNotice(artifact, artifactUrl)}]`
 					: this.#formatArtifactWorkflowNotice(artifact, artifactUrl);
@@ -2983,7 +2983,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			}
 		}
 
-		if (artifact.size > MAX_ARTIFACT_RAW_INLINE_BYTES) {
+		if (!rawSelector && artifact.size > MAX_ARTIFACT_RAW_INLINE_BYTES) {
 			outputText += `\n\n[${this.#formatArtifactWorkflowNotice(artifact, artifactUrl)}]`;
 		}
 		if (displayContent) details.displayContent = displayContent;
