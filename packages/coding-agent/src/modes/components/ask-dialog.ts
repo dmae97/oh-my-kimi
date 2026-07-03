@@ -39,6 +39,30 @@ const SIDE_BY_SIDE_LIST_MIN_WIDTH = 30;
 const SIDE_BY_SIDE_GAP_WIDTH = 3;
 const MAX_HEADER_CHIP_WIDTH = 16;
 const PREVIEW_HEADER = "Preview";
+/** Maximum number of title lines shown in the prompt editor overlay, so a
+ *  long or multi-line question cannot push the input row off-screen. Mirrors
+ *  the bounded-title pattern from the legacy ask path without its option-window
+ *  coupling. */
+const MAX_PROMPT_TITLE_ROWS = 3;
+/** Border (2) + padX (2) columns consumed by the HookEditor chrome. */
+const PROMPT_TITLE_CHROME_COLUMNS = 4;
+
+function promptTitleContentWidth(): number {
+	const cols = process.stdout.columns ?? 80;
+	return Math.max(1, cols - PROMPT_TITLE_CHROME_COLUMNS);
+}
+
+/** Bound a prompt editor title to a fixed row/width budget so long or
+ *  multi-line questions stay usable inside the small prompt overlay. */
+export function boundPromptTitle(prefix: string, question: string): string {
+	const width = promptTitleContentWidth();
+	const flat = normalizedInlineInput(`${prefix}${question}`);
+	const wrapped = wrapTextWithAnsi(flat, width);
+	if (wrapped.length <= MAX_PROMPT_TITLE_ROWS) return wrapped.join("\n");
+	const kept = wrapped.slice(0, MAX_PROMPT_TITLE_ROWS - 1);
+	const last = truncateToWidth(wrapped[MAX_PROMPT_TITLE_ROWS - 1] ?? "", width, Ellipsis.Unicode);
+	return [...kept, last].join("\n");
+}
 
 interface AskDialogCallbacks {
 	onSubmit(result: ExtensionAskDialogResult): void;
@@ -324,6 +348,9 @@ export class AskDialogComponent implements Component {
 
 	handleInput(keyData: string): void {
 		if (this.#closed || this.#promptActive) return;
+		// Reset the inactivity countdown on any key that reaches past the
+		// closed/prompt guards, matching HookSelector/HookInput semantics.
+		this.#countdown?.reset();
 		if (matchesSelectCancel(keyData)) {
 			this.#finishCancel();
 			return;
@@ -549,7 +576,10 @@ export class AskDialogComponent implements Component {
 	): Promise<void> {
 		this.#promptActive = true;
 		try {
-			const input = await this.callbacks.onPrompt(`Custom answer: ${question.question}`, state.customInput);
+			const input = await this.callbacks.onPrompt(
+				boundPromptTitle("Custom answer: ", question.question),
+				state.customInput,
+			);
 			if (input === undefined || this.#closed) return;
 			state.customInput = input;
 			if (!question.multi) {
@@ -571,7 +601,10 @@ export class AskDialogComponent implements Component {
 	): Promise<void> {
 		this.#promptActive = true;
 		try {
-			const input = await this.callbacks.onPrompt(`Note for ${rowItem.label}: ${question.question}`, state.note);
+			const input = await this.callbacks.onPrompt(
+				boundPromptTitle(`Note for ${rowItem.label}: `, question.question),
+				state.note,
+			);
 			if (input === undefined || this.#closed) return;
 			state.note = input;
 			state.noteRowKey = rowItem.key;
@@ -636,7 +669,6 @@ export class AskDialogComponent implements Component {
 		const scrollView = new ScrollView(allLines, {
 			height: rows,
 			scrollbar: "auto",
-			totalRows: allLines.length,
 			theme: { track: t => theme.fg("muted", t), thumb: t => theme.fg("accent", t) },
 		});
 		scrollView.setScrollOffset(state.scrollOffset);
@@ -710,7 +742,6 @@ export class AskDialogComponent implements Component {
 		const scrollView = new ScrollView(allLines, {
 			height: rows,
 			scrollbar: "auto",
-			totalRows: allLines.length,
 			theme: { track: t => theme.fg("muted", t), thumb: t => theme.fg("accent", t) },
 		});
 		scrollView.setScrollOffset(this.#submitScrollOffset);

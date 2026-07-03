@@ -22,7 +22,7 @@ import type {
 } from "../../extensibility/extensions";
 import { getSessionSlashCommands } from "../../extensibility/extensions/get-commands-handler";
 import { createExtensionModelQuery } from "../../extensibility/extensions/model-api";
-import { AskDialogComponent } from "../../modes/components/ask-dialog";
+import { AskDialogComponent, boundPromptTitle } from "../../modes/components/ask-dialog";
 import { HookEditorComponent } from "../../modes/components/hook-editor";
 import { HookInputComponent } from "../../modes/components/hook-input";
 import { HookSelectorComponent, type HookSelectorSlider } from "../../modes/components/hook-selector";
@@ -770,7 +770,7 @@ export class ExtensionUiController {
 				if (choice === ASK_NEXT_OPTION) break;
 				if (choice === ASK_OTHER_OPTION) {
 					const input = await this.#requestGuestUiString(
-						{ kind: "editor", title: `Custom answer: ${question.question}` },
+						{ kind: "editor", title: boundPromptTitle("Custom answer: ", question.question) },
 						signal,
 					);
 					if (input === "unavailable" || input === undefined) return input;
@@ -802,7 +802,7 @@ export class ExtensionUiController {
 			if (choice === ASK_CHAT_OPTION) return undefined;
 			if (choice === ASK_OTHER_OPTION) {
 				const input = await this.#requestGuestUiString(
-					{ kind: "editor", title: `Custom answer: ${question.question}` },
+					{ kind: "editor", title: boundPromptTitle("Custom answer: ", question.question) },
 					signal,
 				);
 				if (input === "unavailable" || input === undefined) return input;

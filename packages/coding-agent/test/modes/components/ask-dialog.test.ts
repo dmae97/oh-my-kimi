@@ -735,4 +735,174 @@ describe("AskDialogComponent", () => {
 		expect(result.note).toBe("why B");
 		expect(result.timedOut).toBe(true);
 	});
+
+	it("resets the inactivity countdown on user input after the closed/prompt guard", () => {
+		vi.useFakeTimers();
+		const onTimeout = vi.fn();
+		const onSubmit = vi.fn();
+		const questions: ExtensionAskDialogQuestion[] = [
+			{
+				id: "q1",
+				question: "Choose one?",
+				options: [{ label: "Option A" }, { label: "Option B" }],
+			},
+		];
+
+		const component = new AskDialogComponent(
+			questions,
+			{ onSubmit, onCancel: vi.fn(), onChat: vi.fn(), onPrompt: vi.fn() },
+			{ timeout: 5000, onTimeout },
+		);
+
+		// Advance most of the timeout window.
+		vi.advanceTimersByTime(4000);
+		expect(onTimeout).not.toHaveBeenCalled();
+
+		// User input (DOWN) should reset the countdown.
+		component.handleInput(DOWN);
+
+		// Advancing past the *original* deadline must NOT fire the timeout —
+		// the reset moved the deadline forward by the interaction.
+		vi.advanceTimersByTime(2000);
+		expect(onTimeout).not.toHaveBeenCalled();
+
+		// Advancing the remaining time after the reset DOES fire.
+		vi.advanceTimersByTime(3000);
+		expect(onTimeout).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not reset the countdown while a prompt is active", async () => {
+		vi.useFakeTimers();
+		const deferred = Promise.withResolvers<string | undefined>();
+		const onPrompt = vi.fn().mockReturnValue(deferred.promise);
+		const onTimeout = vi.fn();
+		const questions: ExtensionAskDialogQuestion[] = [
+			{
+				id: "q1",
+				question: "Choose one?",
+				options: [{ label: "Option A" }],
+			},
+		];
+
+		const component = new AskDialogComponent(
+			questions,
+			{ onSubmit: vi.fn(), onCancel: vi.fn(), onChat: vi.fn(), onPrompt },
+			{ timeout: 5000, onTimeout },
+		);
+
+		// Open the custom-input prompt (DOWN to "Other", ENTER).
+		component.handleInput(DOWN);
+		component.handleInput(ENTER);
+		expect(onPrompt).toHaveBeenCalledTimes(1);
+
+		// While the prompt is pending, input is guarded — no reset.
+		component.handleInput(DOWN);
+		vi.advanceTimersByTime(5000);
+		// Timeout is deferred during prompt, not fired.
+		expect(onTimeout).not.toHaveBeenCalled();
+
+		deferred.resolve("answer");
+		await Promise.resolve();
+		await Promise.resolve();
+	});
+
+	it("bounds custom input prompt title for long multi-line questions", async () => {
+		const onPrompt = vi.fn().mockReturnValue(Promise.resolve("custom"));
+		const longQuestion = "This is a very long question ".repeat(20);
+		const questions: ExtensionAskDialogQuestion[] = [
+			{
+				id: "q1",
+				question: longQuestion,
+				options: [{ label: "Option A" }],
+			},
+		];
+
+		const component = new AskDialogComponent(questions, {
+			onSubmit: vi.fn(),
+			onCancel: vi.fn(),
+			onChat: vi.fn(),
+			onPrompt,
+		});
+
+		// Navigate to "Other" and press Enter to trigger the custom prompt.
+		component.handleInput(DOWN);
+		component.handleInput(ENTER);
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(onPrompt).toHaveBeenCalledTimes(1);
+		const title = onPrompt.mock.calls[0][0] as string;
+		const lines = title.split("\n");
+		// Title must be bounded to at most MAX_PROMPT_TITLE_ROWS lines.
+		expect(lines.length).toBeLessThanOrEqual(3);
+		// Each line must fit within the terminal content width.
+		for (const line of lines) {
+			expect(stripVTControlCharacters(line).length).toBeLessThanOrEqual((process.stdout.columns ?? 80) - 4);
+		}
+		// Must contain the prefix and a truncation indicator on the last line.
+		expect(stripVTControlCharacters(title)).toContain("Custom answer:");
+	});
+
+	it("bounds note prompt title for long multi-line questions", async () => {
+		const onPrompt = vi.fn().mockReturnValue(Promise.resolve("note"));
+		const longQuestion = "Multi\nline\nquestion ".repeat(30);
+		const questions: ExtensionAskDialogQuestion[] = [
+			{
+				id: "q1",
+				question: longQuestion,
+				options: [{ label: "Option A" }],
+			},
+		];
+
+		const component = new AskDialogComponent(questions, {
+			onSubmit: vi.fn(),
+			onCancel: vi.fn(),
+			onChat: vi.fn(),
+			onPrompt,
+		});
+
+		// Press 'n' on the highlighted option to trigger the note prompt.
+		component.handleInput("n");
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(onPrompt).toHaveBeenCalledTimes(1);
+		const title = onPrompt.mock.calls[0][0] as string;
+		const lines = title.split("\n");
+		// Title must be bounded to at most MAX_PROMPT_TITLE_ROWS lines.
+		expect(lines.length).toBeLessThanOrEqual(3);
+		// The multi-line question must be flattened (no raw newlines expanding rows).
+		expect(stripVTControlCharacters(title)).toContain("Note for Option A:");
+	});
+
+	it("scrolls question rows when cursor moves below the viewport", () => {
+		// Use many options so the rendered list overflows a small body.
+		const options = Array.from({ length: 30 }, (_, i) => ({ label: `Option ${String(i + 1).padStart(2, "0")}` }));
+		const questions: ExtensionAskDialogQuestion[] = [{ id: "q1", question: "Pick one?", options }];
+
+		const component = new AskDialogComponent(questions, {
+			onSubmit: vi.fn(),
+			onCancel: vi.fn(),
+			onChat: vi.fn(),
+			onPrompt: vi.fn(),
+		});
+
+		// Render at a narrow width / small height to force overflow.
+		// The body height is derived from process.stdout.rows; we render at
+		// width 60 and inspect the visible content.
+		const renderAt = (width: number): string => stripVTControlCharacters(component.render(width).join("\n"));
+
+		// Initial render: first options visible, last options not.
+		const initial = renderAt(60);
+		expect(initial).toContain("Option 01");
+		expect(initial).not.toContain("Option 30");
+
+		// Move cursor down past the viewport boundary to trigger scrolling.
+		for (let i = 0; i < 28; i++) component.handleInput(DOWN);
+
+		const scrolled = renderAt(60);
+		// After scrolling, early options should be gone and later ones visible.
+		expect(scrolled).not.toContain("Option 01");
+		expect(scrolled).toContain("Option 29");
+	});
 });
