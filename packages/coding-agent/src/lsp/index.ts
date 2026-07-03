@@ -1116,10 +1116,15 @@ async function runLspWritethrough(
 	const writeContent = async (value: string) => (file ? file.write(value) : Bun.write(dst, value));
 	const getWritePromise = once(() => writeContent(finalContent));
 	let writeNotified = false;
-	const notifyWriteCommitted = async () => {
+	const notifyWriteCommitted = async (notifySignal: AbortSignal | undefined = signal) => {
 		if (writeNotified) return;
 		writeNotified = true;
-		await notifyWorkspaceWatchedFiles(cwd, [{ filePath: dst, type: changeType }], signal);
+		try {
+			await notifyWorkspaceWatchedFiles(cwd, [{ filePath: dst, type: changeType }], notifySignal);
+		} catch (error) {
+			if (notifySignal?.aborted && !signal?.aborted) return;
+			throw error;
+		}
 	};
 	if (servers.length === 0) {
 		await getWritePromise();
@@ -1139,6 +1144,7 @@ async function runLspWritethrough(
 	let diagnostics: FileDiagnosticsResult | undefined;
 	let timedOut = false;
 	let synced = false;
+	let operationSignal: AbortSignal | undefined;
 	try {
 		const timeoutSignal = AbortSignal.timeout(5_000);
 		timeoutSignal.addEventListener(
@@ -1148,7 +1154,7 @@ async function runLspWritethrough(
 			},
 			{ once: true },
 		);
-		const operationSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+		operationSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 		await untilAborted(operationSignal, async () => {
 			if (useCustomFormatter) {
 				// Custom linters (e.g. Biome CLI) require on-disk input.
@@ -1156,7 +1162,7 @@ async function runLspWritethrough(
 				finalContent = await formatContent(dst, content, cwd, customLinterServers, operationSignal);
 				formatter = finalContent !== content ? FileFormatResult.FORMATTED : FileFormatResult.UNCHANGED;
 				await writeContent(finalContent);
-				await notifyWriteCommitted();
+				await notifyWriteCommitted(operationSignal);
 				await syncFileContent(dst, finalContent, cwd, lspServers, operationSignal);
 			} else {
 				// 1. Sync original content to LSP servers
@@ -1175,7 +1181,7 @@ async function runLspWritethrough(
 
 				// 4. Write to disk
 				await getWritePromise();
-				await notifyWriteCommitted();
+				await notifyWriteCommitted(operationSignal);
 			}
 
 			if (enableDiagnostics) {
@@ -1204,7 +1210,7 @@ async function runLspWritethrough(
 			}
 		}
 		await getWritePromise();
-		await notifyWriteCommitted();
+		await notifyWriteCommitted(operationSignal);
 	}
 
 	if (synced && enableDiagnostics) {

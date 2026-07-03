@@ -139,13 +139,15 @@ describe("LSP diagnostics freshness", () => {
 		const tsUri = fileToUri(tsPath);
 		const client = createClient(tempDir.path(), TEST_SERVER);
 		const events: string[] = [];
+		const notifySignals: Array<AbortSignal | undefined> = [];
 
 		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined });
 		vi.spyOn(lspConfig, "getServersForFile").mockImplementation((_config, filePath) =>
 			filePath.endsWith(".module.scss") ? [] : [["test-lsp", TEST_SERVER]],
 		);
 		vi.spyOn(lspClient, "getOrCreateClient").mockResolvedValue(client);
-		vi.spyOn(lspClient, "notifyWorkspaceWatchedFiles").mockImplementation(async (_cwd, changes) => {
+		vi.spyOn(lspClient, "notifyWorkspaceWatchedFiles").mockImplementation(async (_cwd, changes, notifySignal) => {
+			notifySignals.push(notifySignal);
 			for (const change of changes) {
 				events.push(`watched:${path.basename(change.filePath)}:${change.type}`);
 			}
@@ -171,6 +173,7 @@ describe("LSP diagnostics freshness", () => {
 
 		expect(result?.summary).toBe("no issues");
 		expect(events[0]).toBe(`watched:probe.module.scss:${lspClient.FileChangeType.Created}`);
+		expect(notifySignals.some(signal => signal instanceof AbortSignal)).toBe(true);
 		expect(events).toContain("sync:probe.tsx");
 	});
 
