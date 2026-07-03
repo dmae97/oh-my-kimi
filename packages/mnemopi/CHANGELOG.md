@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- Exposed `RecallOptions.contentPreviewChars` so hosts can raise or disable the per-result content preview cap that `recall()` enforces. Default remains 500; pass `0` to return full content.
+- Added `RecallResult.truncated` and `RecallResult.full_length` so callers can tell a clipped preview apart from a short row without inspecting the trailing marker. ([#4443](https://github.com/can1357/oh-my-pi/issues/4443))
+
+### Fixed
+
+- Recall previews now mark clipped content with a trailing `…` character instead of slicing at exactly 500 characters mid-word with no marker. The `factLine` used by the enhanced-context sandwich (200-char cap) gets the same treatment. Agents can now tell a full memory apart from a preview and know when to fetch the full row via `Mnemopi.get(id)` before overwriting content ([#4443](https://github.com/can1357/oh-my-pi/issues/4443)).
+
 ## [16.2.2] - 2026-06-27
 
 ### Fixed

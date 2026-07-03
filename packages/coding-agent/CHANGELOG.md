@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- `read memory://<id>` now resolves under the mnemopi backend to the full memory row (working or episodic), wrapped in a YAML-frontmatter header carrying bank, store, source, timestamp, importance, and veracity. Bridges the read gap that made `memory_edit update` a blind overwrite: recall previews are clipped (see the mnemopi changelog), so an agent could not inspect the tail it was about to replace. The URI grammar is now `memory://root[/…]` for the file-backed summary and `memory://<memory-id>` for any mnemopi id in scope. Errors are also clearer — "Mnemopi memory `<id>` not found in any scoped bank" replaces the "memories not enabled" message when a lookup misses under an active mnemopi session ([#4443](https://github.com/can1357/oh-my-pi/issues/4443)).
+
+### Changed
+
+- Updated the `recall` and `memory_edit` tool prompts to document the truncation marker (`…`, `truncated: true`, `full_length`) and to require `read memory://<id>` before any `memory_edit update` on a truncated preview.
+
 ## [16.3.4] - 2026-07-03
 
 ### Fixed

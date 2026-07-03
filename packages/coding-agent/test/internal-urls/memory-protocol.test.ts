@@ -4,10 +4,19 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { getMemoryRoot } from "@oh-my-pi/pi-coding-agent/memories";
+import {
+	loadMnemopi,
+	loadMnemopiCore,
+	MnemopiSessionState,
+	setMnemopiSessionState,
+} from "@oh-my-pi/pi-coding-agent/mnemopi/state";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { getAgentDir, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+import { getAgentDir, removeWithRetries, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 
+// Mnemopi state is loaded lazily; preload so `new MnemopiSessionState(...)` can
+// resolve the module synchronously in the fixtures below.
+await Promise.all([loadMnemopi(), loadMnemopiCore()]);
 interface MemoryFixture {
 	cwd: string;
 	memoryRoot: string;
@@ -83,11 +92,11 @@ describe("MemoryProtocolHandler", () => {
 		});
 	});
 
-	it("throws for unknown memory namespace", async () => {
+	it("throws for unknown memory namespace when no mnemopi backend is active", async () => {
 		await withMemoryFixture(async () => {
 			const router = InternalUrlRouter.instance();
 			await expect(router.resolve("memory://other/memory_summary.md")).rejects.toThrow(
-				"Unknown memory namespace: other. Supported: root",
+				/Unknown memory namespace: other\. Supported: root/,
 			);
 		});
 	});
@@ -125,6 +134,115 @@ describe("MemoryProtocolHandler", () => {
 			const router = InternalUrlRouter.instance();
 			await expect(router.resolve("memory://root/linked/secret.md")).rejects.toThrow(
 				"memory:// URL escapes memory root",
+			);
+		});
+	});
+});
+
+interface MnemopiFixture {
+	state: MnemopiSessionState;
+	dbDir: TempDir;
+}
+
+async function withMnemopiSession(
+	fn: (fixture: MnemopiFixture) => Promise<void>,
+	options: { bank?: string } = {},
+): Promise<void> {
+	const dbDir = TempDir.createSync(`memory-protocol-mnemopi-${Date.now()}-`);
+	const bank = options.bank ?? "test-bank";
+	const config = {
+		dbPath: dbDir.join("mnemopi.db"),
+		bank,
+		autoRecall: false,
+		autoRetain: false,
+		polyphonicRecall: false,
+		enhancedRecall: false,
+		proactiveLinking: false,
+		retainEveryNTurns: 3,
+		recallLimit: 10,
+		recallContextTurns: 1,
+		recallMaxQueryChars: 800,
+		injectionTokenLimit: 1024,
+		debug: false,
+		providerOptions: {
+			noEmbeddings: true,
+			llm: false,
+		},
+		llmMode: "none" as const,
+	} as unknown as ConstructorParameters<typeof MnemopiSessionState>[0]["config"];
+	const session = {
+		sessionId: "test-mnemopi",
+		sessionManager: {
+			getEntries: () => [],
+			getCwd: () => dbDir.path(),
+			getArtifactsDir: () => null,
+			getSessionId: () => "test-mnemopi",
+		},
+		emitNotice: () => {},
+		getHindsightSessionState: () => undefined,
+	} as unknown as AgentSession;
+	const state = new MnemopiSessionState({ sessionId: "test-mnemopi", config, session });
+	setMnemopiSessionState(session, state);
+	AgentRegistry.global().register({
+		id: "test-mnemopi",
+		displayName: "test-mnemopi",
+		kind: "main",
+		session,
+		sessionFile: null,
+	});
+	try {
+		await fn({ state, dbDir });
+	} finally {
+		await state.dispose({ consolidate: false });
+		await dbDir.remove();
+	}
+}
+
+describe("MemoryProtocolHandler — mnemopi bridge (issue #4443)", () => {
+	beforeEach(() => {
+		AgentRegistry.resetGlobalForTests();
+		InternalUrlRouter.resetForTests();
+	});
+
+	afterEach(() => {
+		AgentRegistry.resetGlobalForTests();
+		InternalUrlRouter.resetForTests();
+	});
+
+	it("resolves memory://<id> to the full mnemopi memory row", async () => {
+		await withMnemopiSession(async ({ state }) => {
+			const head = "Decision record: the deploy pipeline uses blue-green cutover. ";
+			const body = "Detail sentence about rollout invariants. ".repeat(20);
+			const tail = "CRITICAL-TAIL: rollback requires restoring the previous DNS weight map first.";
+			const full = `${head}${body}${tail}`;
+			const id = state.rememberInScope(full, { importance: 0.9 });
+			expect(id).toBeTruthy();
+
+			const router = InternalUrlRouter.instance();
+			const resource = await router.resolve(`memory://${id}`);
+
+			expect(resource.contentType).toBe("text/markdown");
+			expect(resource.content).toContain("CRITICAL-TAIL");
+			expect(resource.content).toContain(`id: ${id}`);
+			expect(resource.content).toContain("bank: test-bank");
+			expect(resource.content).toContain("store: working");
+		});
+	});
+
+	it("throws a clear error when the mnemopi id is not stored in any scoped bank", async () => {
+		await withMnemopiSession(async () => {
+			const router = InternalUrlRouter.instance();
+			await expect(router.resolve("memory://deadbeefdeadbeef")).rejects.toThrow(
+				/Mnemopi memory deadbeefdeadbeef not found/,
+			);
+		});
+	});
+
+	it("routes memory://root to the file-backed summary even when mnemopi is active", async () => {
+		await withMnemopiSession(async () => {
+			const router = InternalUrlRouter.instance();
+			await expect(router.resolve("memory://root")).rejects.toThrow(
+				"Memory artifacts are not available for this project yet. Run a session with memories enabled first.",
 			);
 		});
 	});
