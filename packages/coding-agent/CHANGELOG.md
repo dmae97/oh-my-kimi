@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed approve-and-compact discarding operator turns queued during compaction and surfacing `Failed to finalize approved plan: Agent is already processing`. `flushCompactionQueue` fires any queued user turn (fire-and-forget) before `#approvePlan` returns, so the previous abort-then-`prompt()` shape aborted the queued turn AND still raced into `AgentBusyError`. `#approvePlan` now queues the plan-approved directive as a synthetic follow-up (`session.followUp(text, undefined, { synthetic: true })`) whenever the session is streaming, and catches a racing `AgentBusyError` from `prompt()` with the same fallback. `AgentSession.followUp()` gained a `{ synthetic, expandPromptTemplates, attribution }` option so the finalize path lands the hidden execution directive as an agent-attributed developer message. ([#4358](https://github.com/can1357/oh-my-pi/issues/4358))
+
 ## [16.3.3] - 2026-07-02
 
 ### Breaking Changes
