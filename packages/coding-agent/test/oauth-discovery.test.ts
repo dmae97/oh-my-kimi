@@ -3,6 +3,7 @@ import {
 	analyzeAuthError,
 	discoverOAuthEndpoints,
 	extractMcpAuthServerUrl,
+	extractOAuthChallengeScopes,
 } from "@oh-my-pi/pi-coding-agent/mcp/oauth-discovery";
 import { type FetchInput, mockFetch } from "./helpers/fetch-mock";
 
@@ -200,6 +201,105 @@ describe("resource_metadata chain", () => {
 		expect(auth.resourceMetadataUrl).toBe(
 			"https://gateway.example.com/my-service/.well-known/oauth-protected-resource",
 		);
+	});
+
+	it("extracts scope= from insufficient_scope challenge alongside resource_metadata", () => {
+		const error = new Error(
+			'HTTP 403: {"error":"insufficient_scope","required":["jit"]} [WWW-Authenticate: Bearer error="insufficient_scope", scope="jit", resource_metadata="https://gateway.example.com/jit/.well-known/oauth-protected-resource"]',
+		);
+
+		expect(extractOAuthChallengeScopes(error)).toBe("jit");
+		const auth = analyzeAuthError(error);
+		expect(auth.requiresAuth).toBe(true);
+		expect(auth.scopes).toBe("jit");
+		expect(auth.resourceMetadataUrl).toBe("https://gateway.example.com/jit/.well-known/oauth-protected-resource");
+	});
+
+	it("carries scopes_supported from resource metadata into discovered auth-server endpoints", async () => {
+		const fetchImpl = mockFetch((input: FetchInput) => {
+			const url = String(input);
+
+			if (url === "https://gateway.example.com/my-service/.well-known/oauth-protected-resource") {
+				return new Response(
+					JSON.stringify({
+						authorization_servers: ["https://sso.example.com"],
+						resource: "https://gateway.example.com",
+						scopes_supported: ["k8s.logging-mcp-server", "k8s.annotations"],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+
+			if (url === "https://sso.example.com/.well-known/oauth-authorization-server") {
+				return new Response(
+					JSON.stringify({
+						issuer: "https://sso.example.com",
+						authorization_endpoint: "https://sso.example.com/oauth/auth",
+						token_endpoint: "https://sso.example.com/oauth/token",
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+
+			return new Response("not found", { status: 404 });
+		});
+
+		const oauth = await discoverOAuthEndpoints(
+			"https://gateway.example.com/my-service/mcp",
+			undefined,
+			"https://gateway.example.com/my-service/.well-known/oauth-protected-resource",
+			{ fetch: fetchImpl },
+		);
+
+		expect(oauth).toEqual({
+			authorizationUrl: "https://sso.example.com/oauth/auth",
+			tokenUrl: "https://sso.example.com/oauth/token",
+			scopes: "k8s.logging-mcp-server k8s.annotations",
+			resource: "https://gateway.example.com",
+		});
+	});
+
+	it("threads challenge-derived scopes into endpoints discovered via resource metadata", async () => {
+		const fetchImpl = mockFetch((input: FetchInput) => {
+			const url = String(input);
+
+			if (url === "https://gateway.example.com/jit/.well-known/oauth-protected-resource") {
+				return new Response(
+					JSON.stringify({
+						authorization_servers: ["https://sso.example.com"],
+						resource: "https://gateway.example.com",
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+
+			if (url === "https://sso.example.com/.well-known/oauth-authorization-server") {
+				return new Response(
+					JSON.stringify({
+						issuer: "https://sso.example.com",
+						authorization_endpoint: "https://sso.example.com/oauth/auth",
+						token_endpoint: "https://sso.example.com/oauth/token",
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+
+			return new Response("not found", { status: 404 });
+		});
+
+		const oauth = await discoverOAuthEndpoints(
+			"https://gateway.example.com/jit/mcp",
+			undefined,
+			"https://gateway.example.com/jit/.well-known/oauth-protected-resource",
+			{ fetch: fetchImpl, protectedScopes: "jit" },
+		);
+
+		expect(oauth).toMatchObject({
+			authorizationUrl: "https://sso.example.com/oauth/auth",
+			tokenUrl: "https://sso.example.com/oauth/token",
+			scopes: "jit",
+			resource: "https://gateway.example.com",
+		});
 	});
 
 	it("follows resource_metadata URL to discover authorization servers", async () => {

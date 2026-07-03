@@ -1009,6 +1009,7 @@ export class MCPAddWizard extends Container {
 							this.#state.url,
 							authResult.authServerUrl,
 							authResult.resourceMetadataUrl,
+							{ protectedScopes: authResult.scopes },
 						);
 					} catch {
 						// Ignore discovery failures and fallback to manual auth.
