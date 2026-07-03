@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `calculateContextTokens` including provider orchestration tokens in context sizing, which could trigger premature auto-compaction and context promotion on Codex/Fugu turns with sizable provider-side orchestration. ([#4469](https://github.com/can1357/oh-my-pi/issues/4469))
+
 ## [16.3.3] - 2026-07-02
 
 ### Changed
