@@ -31,7 +31,7 @@ import { type Rule, ruleCapability, setActiveRules } from "./capability/rule";
 import { bucketRules } from "./capability/rule-buckets";
 import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode";
 import { shouldInlineToolDescriptors } from "./config/inline-tool-descriptors-mode";
-import { ModelRegistry } from "./config/model-registry";
+import { isAuthenticated, kNoAuth, ModelRegistry } from "./config/model-registry";
 import {
 	formatModelString,
 	getModelMatchPreferences,
@@ -394,6 +394,8 @@ export interface CreateAgentSessionOptions {
 	/** Raw model pattern(s) (e.g. from --model CLI flag) to resolve after extensions load.
 	 * Used when model lookup is deferred because extension-provided models aren't registered yet. */
 	modelPattern?: string | string[];
+	/** Authenticated fallback selector for deferred subagent model patterns. */
+	modelPatternAuthFallback?: string;
 	/** Thinking selector. Default: from settings, else unset */
 	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Models available for cycling (Ctrl+P in interactive mode) */
@@ -1967,26 +1969,43 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const availableModels = modelRegistry.getAll();
 			const matchPreferences = getModelMatchPreferences(settings);
 			for (const pattern of deferredModelPatterns) {
-				const {
-					model: resolved,
-					thinkingLevel: patternThinkingLevel,
-					explicitThinkingLevel,
-				} = parseModelPattern(pattern, availableModels, matchPreferences);
-				if (!resolved) continue;
-				model = resolved;
-				modelFallbackMessage = undefined;
-				if (explicitThinkingLevel) {
-					restoredSessionThinkingLevel = patternThinkingLevel;
+				const primary = parseModelPattern(pattern, availableModels, matchPreferences);
+				if (!primary.model) continue;
+				let selectedModel = primary.model;
+				let selectedThinkingLevel = primary.thinkingLevel;
+				let selectedExplicitThinkingLevel = primary.explicitThinkingLevel;
+				if (options.modelPatternAuthFallback) {
+					const primaryKey = await modelRegistry.getApiKey(primary.model);
+					if (primaryKey !== kNoAuth && !isAuthenticated(primaryKey)) {
+						const fallback = parseModelPattern(
+							options.modelPatternAuthFallback,
+							availableModels,
+							matchPreferences,
+						);
+						if (fallback.model) {
+							const fallbackKey = await modelRegistry.getApiKey(fallback.model);
+							if (isAuthenticated(fallbackKey)) {
+								selectedModel = fallback.model;
+								selectedThinkingLevel = fallback.thinkingLevel;
+								selectedExplicitThinkingLevel = fallback.explicitThinkingLevel;
+							}
+						}
+					}
 				}
-				thinkingLevel = pickInitialThinkingLevel(resolved);
+				model = selectedModel;
+				modelFallbackMessage = undefined;
+				if (selectedExplicitThinkingLevel) {
+					restoredSessionThinkingLevel = selectedThinkingLevel;
+				}
+				thinkingLevel = pickInitialThinkingLevel(selectedModel);
 				autoThinking = thinkingLevel === AUTO_THINKING;
 				effectiveThinkingLevel = concreteThinkingLevel(thinkingLevel);
 				effectiveThinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
 					autoThinking
-						? resolveProvisionalAutoLevel(resolved)
-						: resolveThinkingLevelForModel(resolved, effectiveThinkingLevel),
+						? resolveProvisionalAutoLevel(selectedModel)
+						: resolveThinkingLevelForModel(selectedModel, effectiveThinkingLevel),
 				);
-				preconnectModelHost(resolved.baseUrl);
+				preconnectModelHost(selectedModel.baseUrl);
 				break;
 			}
 			if (!model) {

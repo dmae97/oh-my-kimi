@@ -2162,6 +2162,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				settings: subagentSettings,
 				model,
 				modelPattern: model || modelOverride === undefined ? undefined : modelPatterns,
+				modelPatternAuthFallback:
+					model || modelOverride === undefined ? undefined : options.parentActiveModelPattern,
 				thinkingLevel: effectiveThinkingLevel,
 				toolNames,
 				outputSchema,

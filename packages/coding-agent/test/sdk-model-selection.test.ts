@@ -21,6 +21,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 	});
 
 	afterEach(() => {
+		vi.restoreAllMocks();
 		for (const authStorage of authStoragesToClose) {
 			authStorage.close();
 		}
@@ -160,6 +161,49 @@ describe("createAgentSession deferred model pattern resolution", () => {
 
 		expect(session.model).toBeUndefined();
 		expect(modelFallbackMessage).toBe('Model "missing-provider/missing-model" not found');
+	});
+
+	test("uses auth fallback when deferred subagent modelPattern resolves without working credentials", async () => {
+		const parentModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!parentModel) {
+			throw new Error("Expected bundled anthropic parent model");
+		}
+		const authStorage = await AuthStorage.create(path.join(tempDir, "fallback-auth.db"));
+		authStoragesToClose.push(authStorage);
+		authStorage.setRuntimeApiKey(parentModel.provider, "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "fallback-models.yml"));
+		const getApiKeySpy = vi.spyOn(modelRegistry, "getApiKey").mockImplementation(async requested => {
+			if (requested.provider === "runtime-provider") return undefined;
+			if (requested.provider === parentModel.provider) return "test-key";
+			return undefined;
+		});
+		const { session, modelFallbackMessage } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			authStorage,
+			modelRegistry,
+			sessionManager: SessionManager.inMemory(),
+			disableExtensionDiscovery: true,
+			extensions: [providerExtension],
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+			modelPattern: "runtime-provider/runtime-model",
+			modelPatternAuthFallback: `${parentModel.provider}/${parentModel.id}`,
+		});
+
+		try {
+			expect(session.model?.provider).toBe(parentModel.provider);
+			expect(session.model?.id).toBe(parentModel.id);
+			expect(modelFallbackMessage).toBeUndefined();
+		} finally {
+			await session.dispose();
+			getApiKeySpy.mockRestore();
+		}
 	});
 
 	test("does not apply default role thinking override when modelPattern is explicit", async () => {

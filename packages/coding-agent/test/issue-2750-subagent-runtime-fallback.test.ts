@@ -153,10 +153,12 @@ describe("subagent runtime model resolution", () => {
 		const defaultModel = model("zai", "glm-5.2");
 		let childModel: Model | undefined;
 		let childModelPattern: unknown;
+		let childModelPatternAuthFallback: unknown;
 		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
 			if (!options) throw new Error("Expected createAgentSession options");
 			childModel = options.model;
 			childModelPattern = options.modelPattern;
+			childModelPatternAuthFallback = options.modelPatternAuthFallback;
 			return { session: createYieldingSession(), extensionsResult: {}, setToolUIContext: () => {} } as never;
 		});
 
@@ -168,6 +170,7 @@ describe("subagent runtime model resolution", () => {
 			index: 0,
 			id: "issue-4421",
 			modelOverride: ["openai-codex/gpt-5.5:auto"],
+			parentActiveModelPattern: "openai-codex/gpt-5.5",
 			settings: Settings.isolated(),
 			modelRegistry: {
 				refresh: async () => {},
@@ -179,5 +182,6 @@ describe("subagent runtime model resolution", () => {
 
 		expect(childModel).toBeUndefined();
 		expect(childModelPattern).toEqual(["openai-codex/gpt-5.5:auto"]);
+		expect(childModelPatternAuthFallback).toBe("openai-codex/gpt-5.5");
 	});
 });
