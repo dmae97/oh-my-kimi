@@ -1213,6 +1213,7 @@ export async function runRpcMode(
 								id: Snowflake.next() as string,
 								method: "open_url",
 								url: info.url,
+								launchUrl: info.launchUrl,
 								instructions: info.instructions,
 							} as RpcExtensionUIRequest);
 						},

@@ -222,8 +222,17 @@ async function runLocalLogin(provider: OAuthProvider): Promise<void> {
 		// for non-paste-code providers, so this is defense-in-depth on the same gate.
 		const usesManualInput = PASTE_CODE_LOGIN_PROVIDERS.has(provider);
 		await storage.login(provider, {
-			onAuth({ url, instructions }) {
-				process.stdout.write(`\nOpen this URL in your browser:\n${url}\n`);
+			onAuth({ url, launchUrl, instructions }) {
+				process.stdout.write("\nOpen this URL in your browser:\n");
+				// Advertise the short launch URL first when the flow exposes one — it
+				// survives narrow terminals that would truncate the trailing
+				// `code_challenge_method=S256` (or worse, drop `state`/`code_challenge`
+				// entirely) from the full authorize URL. The full URL still prints
+				// beneath it so headless callers can capture it programmatically.
+				if (launchUrl && launchUrl !== url) {
+					process.stdout.write(`${launchUrl}\n(redirects to)\n`);
+				}
+				process.stdout.write(`${url}\n`);
 				if (instructions) process.stdout.write(`${instructions}\n`);
 				process.stdout.write("\n");
 			},

@@ -1117,9 +1117,10 @@ export class SelectorController {
 		const useManualInput = PASTE_CODE_LOGIN_PROVIDERS.has(providerId);
 		try {
 			await this.ctx.session.modelRegistry.authStorage.login(providerId as OAuthProvider, {
-				onAuth: (info: { url: string; instructions?: string }) => {
+				onAuth: (info: { url: string; launchUrl?: string; instructions?: string }) => {
+					const copyTarget = info.launchUrl ?? info.url;
 					const block = new TranscriptBlock();
-					block.addChild(new Text(theme.fg("dim", info.url), 1, 0));
+					block.addChild(new Text(theme.fg("dim", copyTarget), 1, 0));
 					const hyperlink = `\x1b]8;;${info.url}\x07Click here to login\x1b]8;;\x07`;
 					block.addChild(new Text(theme.fg("accent", hyperlink), 1, 0));
 					if (info.instructions) {

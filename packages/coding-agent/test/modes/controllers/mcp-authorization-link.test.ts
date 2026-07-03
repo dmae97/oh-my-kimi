@@ -37,4 +37,22 @@ describe("MCPAuthorizationLinkPrompt", () => {
 		expect(plainLines[1]).toContain("Click here to authorize");
 		expect(plainLines[2]).toBe(` Copy URL: ${LONG_AUTH_URL}`);
 	});
+
+	it("advertises the launch URL as the copy target while keeping OSC 8 pointing at the full URL", () => {
+		const launchUrl = "http://localhost:14570/launch";
+		const lines = new MCPAuthorizationLinkPrompt(LONG_AUTH_URL, launchUrl).render(80);
+		const plainLines = lines.map(line => stripVTControlCharacters(line));
+
+		expect(lines).toHaveLength(3);
+		// OSC 8 hyperlink still carries the full URL — click-through targets
+		// the provider directly on terminals that support the escape.
+		expect(extractLinkUri(lines[1])).toBe(LONG_AUTH_URL);
+		expect(plainLines[1]).toContain("Click here to authorize");
+		// Copy target is the short loopback URL. Terminals that don't render
+		// OSC 8, and every copy-paste operation, hit this line — and it must
+		// survive viewport truncation without dropping OAuth parameters like
+		// `code_challenge_method=S256`.
+		expect(plainLines[2]).toBe(` Copy URL: ${launchUrl}`);
+		expect(plainLines[2].length).toBeLessThan(50);
+	});
 });

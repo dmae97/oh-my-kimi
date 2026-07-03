@@ -189,7 +189,11 @@ export class SignInTab implements SetupTab {
 			await this.#authStorage.login(providerId as OAuthProvider, {
 				signal: this.#loginAbort.signal,
 				onAuth: info => {
-					this.#authUrl = info.url;
+					// Store the short launch URL when available; the setup wizard
+					// renders `#authUrl` as a plain text row (no OSC 8 hyperlink), so
+					// the copy/display target must survive viewport truncation. The
+					// browser is still launched against the full URL.
+					this.#authUrl = info.launchUrl ?? info.url;
 					this.#statusLines = [];
 					if (info.instructions) {
 						this.#statusLines.push(theme.fg("warning", info.instructions));

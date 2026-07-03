@@ -132,4 +132,51 @@ describe("openPath", () => {
 		expect(spawnSyncSpy).not.toHaveBeenCalled();
 		expect(spawnCalls.map(call => call.cmd)).toEqual([["xdg-open", existingLinuxPath]]);
 	});
+
+	it("resolves rundll32 through %SystemRoot% so a broken machine PATH cannot silence the opener", () => {
+		setPlatform("win32");
+		const originalSystemRoot = process.env.SystemRoot;
+		process.env.SystemRoot = "D:\\CustomWindows";
+		try {
+			const spawnCalls: SpawnCall[] = [];
+			spySpawn(spawnCalls);
+
+			openPath("https://mcp.linear.app/authorize?state=xyz&code_challenge_method=S256");
+
+			expect(spawnCalls).toHaveLength(1);
+			const [call] = spawnCalls;
+			// Absolute rundll32 path — bare `rundll32` was the whole bug on Windows
+			// boxes where the machine PATH no longer references System32.
+			expect(call?.cmd[0]).toBe("D:\\CustomWindows\\System32\\rundll32.exe");
+			// Handler + URL forwarded verbatim as a single argv slot so `&` in the
+			// query string cannot be interpreted as a shell separator.
+			expect(call?.cmd.slice(1)).toEqual([
+				"url.dll,FileProtocolHandler",
+				"https://mcp.linear.app/authorize?state=xyz&code_challenge_method=S256",
+			]);
+		} finally {
+			if (originalSystemRoot === undefined) delete process.env.SystemRoot;
+			else process.env.SystemRoot = originalSystemRoot;
+		}
+	});
+
+	it("falls back to C:\\Windows for rundll32 when SystemRoot is unset", () => {
+		setPlatform("win32");
+		const originalSystemRoot = process.env.SystemRoot;
+		const originalSystemRootLower = process.env.SYSTEMROOT;
+		delete process.env.SystemRoot;
+		delete process.env.SYSTEMROOT;
+		try {
+			const spawnCalls: SpawnCall[] = [];
+			spySpawn(spawnCalls);
+
+			openPath("https://example.com");
+
+			expect(spawnCalls).toHaveLength(1);
+			expect(spawnCalls[0]?.cmd[0]).toBe("C:\\Windows\\System32\\rundll32.exe");
+		} finally {
+			if (originalSystemRoot !== undefined) process.env.SystemRoot = originalSystemRoot;
+			if (originalSystemRootLower !== undefined) process.env.SYSTEMROOT = originalSystemRootLower;
+		}
+	});
 });

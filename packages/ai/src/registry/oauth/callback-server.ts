@@ -17,6 +17,14 @@ import type { OAuthController, OAuthCredentials } from "./types";
 const DEFAULT_TIMEOUT = 300_000;
 const DEFAULT_HOSTNAME = "localhost";
 const CALLBACK_PATH = "/callback";
+/**
+ * Path served by {@link OAuthCallbackFlow} that 302-redirects to the pending
+ * authorization URL. Kept out of {@link OAuthCallbackFlowOptions} because it
+ * lives on the loopback callback server alongside {@link CALLBACK_PATH} and
+ * must never clash with a provider-registered redirect URI (all known
+ * providers register `/callback`-shaped paths).
+ */
+const LAUNCH_PATH = "/launch";
 
 export type CallbackResult = { code: string; state: string };
 
@@ -54,6 +62,14 @@ export abstract class OAuthCallbackFlow {
 	allowPortFallback: boolean;
 	#callbackResolve?: (result: CallbackResult) => void;
 	#callbackReject?: (error: string) => void;
+	/**
+	 * Authorization URL the `/launch` route currently redirects to. Set by
+	 * {@link login} after {@link generateAuthUrl} and before {@link OAuthController.onAuth}
+	 * fires, cleared when the server stops. `undefined` before the flow reaches
+	 * that point and after it finishes, so `/launch` returns 503 rather than
+	 * a stale URL.
+	 */
+	#pendingAuthUrl?: string;
 
 	constructor(
 		ctrl: OAuthController,
@@ -120,7 +136,7 @@ export abstract class OAuthCallbackFlow {
 		this.#throwIfCancelled();
 
 		// Start callback server first to get actual redirect URI
-		const { server, redirectUri } = await this.#startCallbackServer(state);
+		const { server, redirectUri, launchUrl } = await this.#startCallbackServer(state);
 
 		try {
 			this.#throwIfCancelled();
@@ -128,8 +144,14 @@ export abstract class OAuthCallbackFlow {
 			const { url: authUrl, instructions } = await this.generateAuthUrl(state, redirectUri);
 			this.#throwIfCancelled();
 
+			// Publish the auth URL to the `/launch` route BEFORE handing it to
+			// callers. `onAuth` immediately renders a UI that advertises the
+			// launch URL as a copy target, so `/launch` must already resolve if
+			// the user clicks/pastes it during the same render pass.
+			this.#pendingAuthUrl = authUrl;
+
 			// Notify controller that auth is ready
-			this.ctrl.onAuth?.({ url: authUrl, instructions });
+			this.ctrl.onAuth?.({ url: authUrl, launchUrl, instructions });
 			this.ctrl.onProgress?.("Waiting for browser authentication...");
 
 			// Wait for callback or manual input
@@ -140,6 +162,7 @@ export abstract class OAuthCallbackFlow {
 
 			return await this.exchangeToken(code, state, redirectUri);
 		} finally {
+			this.#pendingAuthUrl = undefined;
 			server.stop();
 		}
 	}
@@ -147,14 +170,21 @@ export abstract class OAuthCallbackFlow {
 	/**
 	 * Start callback server, trying preferred port first, falling back to random.
 	 */
-	async #startCallbackServer(expectedState: string): Promise<{ server: Bun.Server<unknown>; redirectUri: string }> {
+	async #startCallbackServer(
+		expectedState: string,
+	): Promise<{ server: Bun.Server<unknown>; redirectUri: string; launchUrl: string }> {
 		try {
 			const server = this.#createServer(this.preferredPort, expectedState);
+			// `preferredPort: 0` opts into a random port — read the actual bound
+			// port from the server so both the redirect URI and launch URL point at
+			// a reachable socket, not the sentinel.
+			const actualPort = this.#resolveServerPort(server);
+			const launchUrl = this.#launchUrlFor(actualPort);
 			if (this.redirectUri) {
-				return { server, redirectUri: this.redirectUri };
+				return { server, redirectUri: this.redirectUri, launchUrl };
 			}
-			const redirectUri = `http://${this.callbackHostname}:${this.preferredPort}${this.callbackPath}`;
-			return { server, redirectUri };
+			const redirectUri = `http://${this.callbackHostname}:${actualPort}${this.callbackPath}`;
+			return { server, redirectUri, launchUrl };
 		} catch (cause) {
 			if (this.redirectUri) {
 				throw new AIError.ConfigurationError(
@@ -169,11 +199,37 @@ export abstract class OAuthCallbackFlow {
 				);
 			}
 			const server = this.#createServer(0, expectedState);
-			const actualPort = server.port;
+			const actualPort = this.#resolveServerPort(server);
 			const redirectUri = `http://${this.callbackHostname}:${actualPort}${this.callbackPath}`;
+			const launchUrl = this.#launchUrlFor(actualPort);
 			this.ctrl.onProgress?.(`Preferred port ${this.preferredPort} unavailable, using port ${actualPort}`);
-			return { server, redirectUri };
+			return { server, redirectUri, launchUrl };
 		}
+	}
+
+	/**
+	 * Read the numeric port a callback server bound to. `Bun.Server.port` is
+	 * declared `number | undefined` because Unix-socket servers have no port,
+	 * but every callback flow uses TCP; a missing port here indicates a
+	 * configuration error rather than a fallback case.
+	 */
+	#resolveServerPort(server: Bun.Server<unknown>): number {
+		const port = server.port;
+		if (typeof port !== "number") {
+			throw new AIError.ConfigurationError(
+				"OAuth callback server bound to a non-TCP endpoint; expected a numeric port. Check `oauth.callbackPort`/`oauth.redirectUri`.",
+			);
+		}
+		return port;
+	}
+
+	/**
+	 * Build the `/launch` URL served by the callback server bound to `port`.
+	 * Kept short (~30 chars) so UIs can advertise it as a viewport-truncation-safe
+	 * copy target for the full authorization URL.
+	 */
+	#launchUrlFor(port: number): string {
+		return `http://${this.callbackHostname}:${port}${LAUNCH_PATH}`;
 	}
 
 	/**
@@ -190,10 +246,21 @@ export abstract class OAuthCallbackFlow {
 	}
 
 	/**
-	 * Handle OAuth callback HTTP request.
+	 * Handle OAuth callback HTTP request. Two routes on the same loopback server:
+	 * - `callbackPath` (default `/callback`) — the provider redirect target.
+	 * - `LAUNCH_PATH` (`/launch`) — 302 to the pending authorization URL so
+	 *   viewport-safe copy targets can survive TUI truncation.
 	 */
 	#handleCallback(req: Request, expectedState: string): Response {
 		const url = new URL(req.url);
+
+		if (url.pathname === LAUNCH_PATH) {
+			const pending = this.#pendingAuthUrl;
+			if (!pending) {
+				return new Response("OAuth launch URL is no longer active", { status: 503 });
+			}
+			return Response.redirect(pending, 302);
+		}
 
 		if (url.pathname !== this.callbackPath) {
 			return new Response("Not Found", { status: 404 });

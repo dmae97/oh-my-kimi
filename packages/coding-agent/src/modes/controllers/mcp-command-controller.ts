@@ -43,6 +43,7 @@ import {
 import type { MCPAuthConfig, MCPServerConfig, MCPServerConnection } from "../../mcp/types";
 import { shortenPath } from "../../tools/render-utils";
 import { urlHyperlinkAlways } from "../../tui";
+import { copyToClipboard } from "../../utils/clipboard";
 import { openPath } from "../../utils/open";
 import { ChatBlock } from "../components/chat-block";
 import { MCPAddWizard } from "../components/mcp-add-wizard";
@@ -73,22 +74,33 @@ function raceAbortSignal<T>(promise: Promise<T>, signal: AbortSignal, createErro
 	});
 }
 
-/** Renders the MCP OAuth fallback URL without hard-wrapping the copy target. */
+/**
+ * Renders the MCP OAuth fallback URL without hard-wrapping the copy target.
+ *
+ * When the flow's callback server hosts a `/launch` short URL (`launchUrl`),
+ * that is advertised as the copy target instead of the full authorization
+ * URL: a Linear-shaped authorize URL routinely exceeds 260 columns, and the
+ * TUI silently truncates any composed row wider than the viewport — dropping
+ * trailing OAuth parameters like `code_challenge_method=S256`. The OSC 8
+ * hyperlink still carries the full URL for terminals that support it.
+ */
 export class MCPAuthorizationLinkPrompt implements Component {
-	readonly #url: string;
+	readonly #fullUrl: string;
+	readonly #copyTarget: string;
 
-	constructor(url: string) {
-		this.#url = url;
+	constructor(url: string, launchUrl?: string) {
+		this.#fullUrl = url;
+		this.#copyTarget = launchUrl ?? url;
 	}
 
 	invalidate(): void {}
 
 	render(_width: number): readonly string[] {
-		const link = urlHyperlinkAlways(this.#url, "Click here to authorize");
+		const link = urlHyperlinkAlways(this.#fullUrl, "Click here to authorize");
 		return [
 			` ${theme.fg("success", "Open authorization URL:")}`,
 			` ${theme.fg("accent", link)}`,
-			` ${theme.fg("muted", `Copy URL: ${replaceTabs(this.#url)}`)}`,
+			` ${theme.fg("muted", `Copy URL: ${replaceTabs(this.#copyTarget)}`)}`,
 		];
 	}
 }
@@ -689,7 +701,7 @@ export class MCPCommandController {
 					stripSameOriginResource: opts?.stripSameOriginResource,
 				},
 				{
-					onAuth: (info: { url: string; instructions?: string }) => {
+					onAuth: (info: { url: string; launchUrl?: string; instructions?: string }) => {
 						// Show auth URL prominently in chat as one block
 						const block = new TranscriptBlock();
 						this.ctx.present(block);
@@ -707,24 +719,23 @@ export class MCPCommandController {
 						block.addChild(new Text(theme.fg("muted", MCP_MANUAL_LOGIN_TIP), 1, 0));
 						block.addChild(new Spacer(1));
 						block.addChild(new Text(theme.fg("accent", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"), 1, 0));
-						// Try to open browser automatically
-						try {
-							openPath(info.url);
-
-							// Show confirmation that browser should open
-							block.addChild(new Spacer(1));
-							block.addChild(new Text(theme.fg("success", "→ Opening browser automatically..."), 1, 0));
-							block.addChild(new Spacer(1));
-							block.addChild(new Text(theme.fg("muted", "Alternative if browser did not open:"), 1, 0));
-							block.addChild(new MCPAuthorizationLinkPrompt(info.url));
-							this.ctx.ui.requestRender();
-						} catch (_error) {
-							// Show error if browser doesn't open
-							block.addChild(new Spacer(1));
-							block.addChild(new Text(theme.fg("warning", "→ Could not open browser automatically"), 1, 0));
-							block.addChild(new MCPAuthorizationLinkPrompt(info.url));
-							this.ctx.ui.requestRender();
-						}
+						// `openPath` is best-effort — it logs spawn failures but never
+						// throws, so we always render the copy-URL fallback beneath the
+						// "attempting to open browser" line and no earlier try/catch is
+						// worth keeping.
+						openPath(info.url);
+						const copyTarget = info.launchUrl ?? info.url;
+						// Stage the copy target on the clipboard via OSC 52 (same
+						// pattern the setup wizard uses). Best-effort: falls back to
+						// the visible "Copy URL:" line whether or not the terminal
+						// honors OSC 52.
+						void copyToClipboard(copyTarget).catch(() => {});
+						block.addChild(new Spacer(1));
+						block.addChild(new Text(theme.fg("success", "→ Attempting to open browser..."), 1, 0));
+						block.addChild(new Spacer(1));
+						block.addChild(new Text(theme.fg("muted", "Alternative if browser did not open:"), 1, 0));
+						block.addChild(new MCPAuthorizationLinkPrompt(info.url, info.launchUrl));
+						this.ctx.ui.requestRender();
 					},
 					onProgress: (message: string) => {
 						this.ctx.present([new Spacer(1), new Text(theme.fg("muted", message), 1, 0)]);

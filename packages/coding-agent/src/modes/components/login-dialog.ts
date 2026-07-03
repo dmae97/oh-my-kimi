@@ -68,12 +68,20 @@ export class LoginDialogComponent extends Container {
 	}
 
 	/**
-	 * Called by onAuth callback - show URL and optional instructions
+	 * Called by the OAuth `onAuth` callback. Renders the copy target on its own
+	 * row and attaches an OSC 8 hyperlink carrying the full URL so terminals
+	 * that support it can click-through even when the copy target is truncated.
+	 *
+	 * `launchUrl` (when present) is a short loopback URL that 302s to `url`.
+	 * Preferred as the copy target because viewport truncation on a long
+	 * authorize URL silently drops trailing OAuth query parameters — e.g.
+	 * `code_challenge_method=S256`.
 	 */
-	showAuth(url: string, instructions?: string): void {
+	showAuth(url: string, instructions?: string, launchUrl?: string): void {
+		const copyTarget = launchUrl ?? url;
 		this.#contentContainer.clear();
 		this.#contentContainer.addChild(new Spacer(1));
-		this.#contentContainer.addChild(new Text(theme.fg("accent", url), 1, 0));
+		this.#contentContainer.addChild(new Text(theme.fg("accent", copyTarget), 1, 0));
 
 		const clickHint = process.platform === "darwin" ? "Cmd+click to open" : "Ctrl+click to open";
 		const hyperlink = `\x1b]8;;${url}\x07${clickHint}\x1b]8;;\x07`;
