@@ -24,6 +24,37 @@ describe("Tool argument whitespace normalization", () => {
 		expect(result).toEqual({ op: "init", items: ["Fix RNG divergence"] });
 	});
 
+	it("trims trailing whitespace from enum and const strings behind local JSON Schema refs", () => {
+		const tool: Tool = {
+			name: "todo",
+			description: "",
+			parameters: {
+				type: "object",
+				properties: {
+					op: { $ref: "#/$defs/Op" },
+					view: { $ref: "#/definitions/View" },
+				},
+				required: ["op", "view"],
+				additionalProperties: false,
+				$defs: {
+					Op: { enum: ["init", "done"] },
+				},
+				definitions: {
+					View: { const: "summary" },
+				},
+			},
+		};
+
+		const result = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-json-schema-ref-enum-newline",
+			name: "todo",
+			arguments: { op: "init\n", view: "summary\n" },
+		});
+
+		expect(result).toEqual({ op: "init", view: "summary" });
+	});
+
 	it("strips trailing newlines from path fields on read-like tools", () => {
 		const tool: Tool = {
 			name: "read",

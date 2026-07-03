@@ -835,21 +835,60 @@ function normalizeOptionalNullsForSchema(
 	return { value: changed ? nextValue : value, changed };
 }
 
-function normalizeEnumStringWhitespace(schema: unknown, value: unknown): { value: unknown; changed: boolean } {
+function decodeJsonPointerToken(token: string): string {
+	return token.replace(/~1/g, "/").replace(/~0/g, "~");
+}
+
+function resolveLocalJsonSchemaRef(root: unknown, ref: string): unknown | undefined {
+	if (ref === "#") return root;
+	if (!ref.startsWith("#/")) return undefined;
+	let current: unknown = root;
+	for (const rawToken of ref.slice(2).split("/")) {
+		const token = decodeJsonPointerToken(rawToken);
+		if (current === null || typeof current !== "object") return undefined;
+		current = (current as Record<string, unknown>)[token];
+	}
+	return current;
+}
+
+function normalizeEnumStringWhitespace(
+	schema: unknown,
+	value: unknown,
+	root: unknown = schema,
+	refs: ReadonlySet<string> = new Set(),
+): { value: unknown; changed: boolean } {
 	if (value === null || value === undefined) return { value, changed: false };
 	if (schema === null || typeof schema !== "object") return { value, changed: false };
 
 	const schemaObject = schema as Record<string, unknown>;
+	const ref = schemaObject.$ref;
+	if (typeof ref === "string") {
+		if (refs.has(ref)) return { value, changed: false };
+		const resolved = resolveLocalJsonSchemaRef(root, ref);
+		if (resolved === undefined) return { value, changed: false };
+		return normalizeEnumStringWhitespace(resolved, value, root, new Set([...refs, ref]));
+	}
+
+	const branchMatches = (branch: unknown, candidate: unknown): boolean => {
+		if (branch !== null && typeof branch === "object") {
+			const branchRef = (branch as Record<string, unknown>).$ref;
+			if (typeof branchRef === "string" && !refs.has(branchRef)) {
+				const resolved = resolveLocalJsonSchemaRef(root, branchRef);
+				if (resolved !== undefined) return branchMatchesSchema(resolved, candidate);
+			}
+		}
+		return branchMatchesSchema(branch, candidate);
+	};
 
 	const normalizeAnyOfLike = (keyword: "anyOf" | "oneOf"): { value: unknown; changed: boolean } => {
 		const branches = schemaObject[keyword];
 		if (!Array.isArray(branches)) return { value, changed: false };
-		if (branches.some(branch => branchMatchesSchema(branch, value))) return { value, changed: false };
+		if (branches.some(branch => branchMatches(branch, value))) return { value, changed: false };
 
 		for (const branch of branches) {
-			const normalized = normalizeEnumStringWhitespace(branch, value);
+			const normalized = normalizeEnumStringWhitespace(branch, value, root, refs);
 			if (!normalized.changed) continue;
-			if (branchMatchesSchema(branch, normalized.value)) return normalized;
+			if (branchMatches(branch, normalized.value)) return normalized;
 		}
 		return { value, changed: false };
 	};
@@ -864,7 +903,7 @@ function normalizeEnumStringWhitespace(schema: unknown, value: unknown): { value
 		let changed = false;
 		let nextValue: unknown = value;
 		for (const branch of schemaObject.allOf) {
-			const normalized = normalizeEnumStringWhitespace(branch, nextValue);
+			const normalized = normalizeEnumStringWhitespace(branch, nextValue, root, refs);
 			if (!normalized.changed) continue;
 			nextValue = normalized.value;
 			changed = true;
@@ -895,7 +934,7 @@ function normalizeEnumStringWhitespace(schema: unknown, value: unknown): { value
 		let changed = false;
 		let nextValue = value;
 		for (let i = 0; i < value.length; i += 1) {
-			const normalized = normalizeEnumStringWhitespace(itemSchema, value[i]);
+			const normalized = normalizeEnumStringWhitespace(itemSchema, value[i], root, refs);
 			if (!normalized.changed) continue;
 			if (!changed) {
 				nextValue = [...value];
@@ -916,7 +955,7 @@ function normalizeEnumStringWhitespace(schema: unknown, value: unknown): { value
 	let nextValue = valueObject;
 	for (const [key, propertySchema] of Object.entries(propsObject)) {
 		if (!(key in nextValue)) continue;
-		const normalized = normalizeEnumStringWhitespace(propertySchema, nextValue[key]);
+		const normalized = normalizeEnumStringWhitespace(propertySchema, nextValue[key], root, refs);
 		if (!normalized.changed) continue;
 		if (!changed) {
 			nextValue = { ...nextValue };
