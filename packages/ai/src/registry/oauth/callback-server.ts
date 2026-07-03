@@ -169,17 +169,21 @@ export abstract class OAuthCallbackFlow {
 
 	/**
 	 * Start callback server, trying preferred port first, falling back to random.
+	 * `launchUrl` is `undefined` when the caller configured `callbackPath` to
+	 * collide with {@link LAUNCH_PATH} — the callback handler resolves the real
+	 * callback in that case, so advertising a self-redirecting URL would be
+	 * incorrect.
 	 */
 	async #startCallbackServer(
 		expectedState: string,
-	): Promise<{ server: Bun.Server<unknown>; redirectUri: string; launchUrl: string }> {
+	): Promise<{ server: Bun.Server<unknown>; redirectUri: string; launchUrl: string | undefined }> {
 		try {
 			const server = this.#createServer(this.preferredPort, expectedState);
 			// `preferredPort: 0` opts into a random port — read the actual bound
 			// port from the server so both the redirect URI and launch URL point at
 			// a reachable socket, not the sentinel.
 			const actualPort = this.#resolveServerPort(server);
-			const launchUrl = this.#launchUrlFor(actualPort);
+			const launchUrl = this.#launchUrlIfSafe(actualPort);
 			if (this.redirectUri) {
 				return { server, redirectUri: this.redirectUri, launchUrl };
 			}
@@ -201,7 +205,7 @@ export abstract class OAuthCallbackFlow {
 			const server = this.#createServer(0, expectedState);
 			const actualPort = this.#resolveServerPort(server);
 			const redirectUri = `http://${this.callbackHostname}:${actualPort}${this.callbackPath}`;
-			const launchUrl = this.#launchUrlFor(actualPort);
+			const launchUrl = this.#launchUrlIfSafe(actualPort);
 			this.ctrl.onProgress?.(`Preferred port ${this.preferredPort} unavailable, using port ${actualPort}`);
 			return { server, redirectUri, launchUrl };
 		}
@@ -224,11 +228,23 @@ export abstract class OAuthCallbackFlow {
 	}
 
 	/**
-	 * Build the `/launch` URL served by the callback server bound to `port`.
-	 * Kept short (~30 chars) so UIs can advertise it as a viewport-truncation-safe
-	 * copy target for the full authorization URL.
+	 * Build the `/launch` URL served by the callback server bound to `port`, or
+	 * `undefined` when the configured `callbackPath` (or a `redirectUri` whose
+	 * pathname resolves to {@link LAUNCH_PATH}) would collide with the launch
+	 * route. Kept short (~30 chars) so UIs can advertise it as a
+	 * viewport-truncation-safe copy target for the full authorization URL.
 	 */
-	#launchUrlFor(port: number): string {
+	#launchUrlIfSafe(port: number): string | undefined {
+		if (this.callbackPath === LAUNCH_PATH) return undefined;
+		if (this.redirectUri) {
+			try {
+				if (new URL(this.redirectUri).pathname === LAUNCH_PATH) return undefined;
+			} catch {
+				// A non-parseable redirectUri (e.g. `vscode://...` handled elsewhere)
+				// can't collide with an HTTP `/launch` route — fall through and
+				// advertise the launch URL against the loopback server.
+			}
+		}
 		return `http://${this.callbackHostname}:${port}${LAUNCH_PATH}`;
 	}
 
@@ -248,21 +264,26 @@ export abstract class OAuthCallbackFlow {
 	/**
 	 * Handle OAuth callback HTTP request. Two routes on the same loopback server:
 	 * - `callbackPath` (default `/callback`) — the provider redirect target.
-	 * - `LAUNCH_PATH` (`/launch`) — 302 to the pending authorization URL so
+	 * - {@link LAUNCH_PATH} (`/launch`) — 302 to the pending authorization URL so
 	 *   viewport-safe copy targets can survive TUI truncation.
+	 *
+	 * `callbackPath` wins any collision: an OMP config that pins the provider
+	 * redirect at `/launch` (via `oauth.callbackPath` or a loopback
+	 * `oauth.redirectUri`) must resolve the callback normally rather than
+	 * self-redirect. `#startCallbackServer` also suppresses `launchUrl` in that
+	 * case, so the launch route is never advertised when it would collide.
 	 */
 	#handleCallback(req: Request, expectedState: string): Response {
 		const url = new URL(req.url);
 
-		if (url.pathname === LAUNCH_PATH) {
-			const pending = this.#pendingAuthUrl;
-			if (!pending) {
-				return new Response("OAuth launch URL is no longer active", { status: 503 });
-			}
-			return Response.redirect(pending, 302);
-		}
-
 		if (url.pathname !== this.callbackPath) {
+			if (url.pathname === LAUNCH_PATH) {
+				const pending = this.#pendingAuthUrl;
+				if (!pending) {
+					return new Response("OAuth launch URL is no longer active", { status: 503 });
+				}
+				return Response.redirect(pending, 302);
+			}
 			return new Response("Not Found", { status: 404 });
 		}
 

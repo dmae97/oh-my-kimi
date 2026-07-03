@@ -113,4 +113,73 @@ describe("OAuthCallbackFlow /launch route", () => {
 		abort.abort("test done");
 		await login;
 	});
+
+	it("suppresses launchUrl and routes /launch to the callback handler when callbackPath is /launch", async () => {
+		const abort = new AbortController();
+		const authFired = Promise.withResolvers<OAuthAuthInfo>();
+		const flow = new LaunchProbeFlow(
+			{
+				onAuth: info => {
+					authFired.resolve(info);
+				},
+				signal: abort.signal,
+			},
+			// Caller pins the provider redirect at `/launch` — an OMP config
+			// setting `oauth.callbackPath: "/launch"` or a matching
+			// `oauth.redirectUri`. Callback resolution MUST win the route
+			// collision, and no self-redirecting launchUrl should be advertised.
+			{ preferredPort: 0, allowPortFallback: true, callbackPath: "/launch" },
+		);
+		const login = flow.login().catch(() => undefined) as Promise<void>;
+		const info = await authFired.promise;
+
+		// Contract — no launchUrl surfaced when it would collide.
+		expect(info.launchUrl).toBeUndefined();
+
+		// Contract — a provider redirect to `/launch?code=…&state=…` resolves the
+		// real callback rather than self-redirecting to the authorize URL.
+		const authUrl = new URL(info.url);
+		const redirectUri = authUrl.searchParams.get("redirect_uri");
+		expect(redirectUri).toMatch(/^http:\/\/localhost:\d+\/launch$/);
+		const state = authUrl.searchParams.get("state") ?? "";
+		const callbackResponse = await fetch(`${redirectUri}?code=test-code&state=${encodeURIComponent(state)}`, {
+			redirect: "manual",
+		});
+		// Callback handler responds with the templated HTML page (200), never a 302.
+		expect(callbackResponse.status).toBe(200);
+		expect(callbackResponse.headers.get("content-type")).toContain("text/html");
+
+		abort.abort("test done");
+		await login;
+	});
+
+	it("suppresses launchUrl even when only redirectUri (not callbackPath) resolves to /launch", async () => {
+		const abort = new AbortController();
+		const authFired = Promise.withResolvers<OAuthAuthInfo>();
+		const flow = new LaunchProbeFlow(
+			{
+				onAuth: info => {
+					authFired.resolve(info);
+				},
+				signal: abort.signal,
+			},
+			{
+				preferredPort: 0,
+				allowPortFallback: true,
+				// Base-class caller: `redirectUri` pinned at `/launch` while
+				// `callbackPath` stays at the default. `MCPOAuthFlow` normally
+				// derives `callbackPath` from `redirectUri.pathname`, but the
+				// base class doesn't, and the launchUrl guard must still catch
+				// the collision defensively.
+				redirectUri: "http://localhost:14599/launch",
+			},
+		);
+		const login = flow.login().catch(() => undefined) as Promise<void>;
+		const info = await authFired.promise;
+
+		expect(info.launchUrl).toBeUndefined();
+
+		abort.abort("test done");
+		await login;
+	});
 });
