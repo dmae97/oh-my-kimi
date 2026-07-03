@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed plan-mode "Approve and compact context" leaking the internal plan-distillation prompt through the public `customInstructions` field on the `session_before_compact` extension hook. The guidance now rides through a private `CompactOptions.internalGuidance` channel that native summarization sees but extensions do not, so hooks treating `customInstructions` as user focus no longer produce query-biased compactions of plan-mode boilerplate ([#4359](https://github.com/can1357/oh-my-pi/issues/4359)).
+
 ## [16.3.3] - 2026-07-02
 
 ### Breaking Changes

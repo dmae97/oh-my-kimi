@@ -294,6 +294,18 @@ export interface CompactOptions {
 	 * subcommands: `soft` | `remote` | `snapcompact`). Omitted = configured behavior.
 	 */
 	mode?: CompactMode;
+	/**
+	 * Internal summarizer guidance — piped only to native summarization, never
+	 * exposed as `customInstructions` on the `session_before_compact` extension
+	 * hook. Used by plan-mode "Approve and compact context" so extensions that
+	 * treat `customInstructions` as user focus don't mistake plan-mode
+	 * boilerplate for the operator's intent (issue #4359).
+	 *
+	 * When both `customInstructions` and `internalGuidance` are set, the
+	 * summarizer uses `internalGuidance`; the hook still sees only the public
+	 * `customInstructions`.
+	 */
+	internalGuidance?: string;
 }
 
 /**
