@@ -179,6 +179,40 @@ describe("formatUsageBreakdown", () => {
 		expect(text).not.toContain("need:");
 	});
 
+	it("marks sibling provider limits that an account did not report", () => {
+		const providerReports = [
+			makeReport("anthropic", "account-a@example.test", [
+				makeLimit({ id: "Claude 5 Hour", usedFraction: 0.2, durationMs: FIVE_HOURS, windowId: "5 Hour" }),
+				makeLimit({ id: "Claude 7 Day", usedFraction: 0.4, durationMs: SEVEN_DAYS, windowId: "7 Day" }),
+			]),
+			makeReport("anthropic", "account-b@example.test", [
+				makeLimit({ id: "Claude 5 Hour", usedFraction: 0.3, durationMs: FIVE_HOURS, windowId: "5 Hour" }),
+				makeLimit({ id: "Claude 7 Day", usedFraction: 0.5, durationMs: SEVEN_DAYS, windowId: "7 Day" }),
+				makeLimit({
+					id: "Claude 7 Day (Fable)",
+					usedFraction: 0.6,
+					durationMs: SEVEN_DAYS,
+					windowId: "7 Day (Fable)",
+				}),
+			]),
+		];
+
+		const text = stripVTControlCharacters(formatUsageBreakdown(providerReports, [], Date.now()));
+
+		const accountAStart = text.indexOf("account-a@example.test");
+		const accountBStart = text.indexOf("account-b@example.test");
+		expect(text).toContain("Anthropic");
+		expect(accountAStart).toBeGreaterThan(-1);
+		expect(accountBStart).toBeGreaterThan(accountAStart);
+
+		const accountASection = text.slice(accountAStart, accountBStart);
+		const accountBSection = text.slice(accountBStart);
+		expect(accountASection).toContain("Claude 7 Day (Fable)");
+		expect(accountASection).toContain("not reported");
+		expect(accountBSection).toContain("Claude 7 Day (Fable)");
+		expect(accountBSection).toContain("60.0% used");
+	});
+
 	it("redacts account labels through the provided map without leaking the originals", () => {
 		const redaction = buildRedactionMap(["dummy.primary@example.test", "dummy.secondary@example.test"]);
 		const text = stripVTControlCharacters(formatUsageBreakdown(reports, accounts, Date.now(), redaction));
