@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed large legacy snapcompact archives being rehydrated into active resumed-session context, avoiding Bun Worker crashes on oversized archived frame payloads ([#4470](https://github.com/can1357/oh-my-pi/issues/4470)).
+
 ## [16.3.4] - 2026-07-03
 
 ### Fixed
