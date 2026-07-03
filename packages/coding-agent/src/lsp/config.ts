@@ -201,6 +201,21 @@ export function hasRootMarkers(cwd: string, markers: string[]): boolean {
 	return false;
 }
 
+/**
+ * Check whether any ancestor directory of a file is an LSP project root.
+ */
+export function hasRootMarkerAncestor(filePath: string, markers: string[]): boolean {
+	if (markers.length === 0) return false;
+
+	let dir = path.dirname(path.resolve(filePath));
+	while (true) {
+		if (hasRootMarkers(dir, markers)) return true;
+		const parent = path.dirname(dir);
+		if (parent === dir) return false;
+		dir = parent;
+	}
+}
+
 // =============================================================================
 // Local Binary Resolution
 // =============================================================================
