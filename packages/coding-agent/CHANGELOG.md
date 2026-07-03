@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed session title generation, commit-message generation, speech-enhancer rewrites, and the online auto-thinking and unexpected-stop classifiers silently truncating on non-reasoning-flagged models that still emit thinking output (e.g. Qwen3 served via llama.cpp) by always sizing the completion budget for backends that ignore `disableReasoning` ([#4355](https://github.com/can1357/oh-my-pi/issues/4355))
+
 ## [16.3.3] - 2026-07-02
 
 ### Breaking Changes

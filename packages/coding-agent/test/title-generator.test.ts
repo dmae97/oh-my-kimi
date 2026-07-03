@@ -258,6 +258,36 @@ describe("title generator", () => {
 		expect(maxTokens).toBeGreaterThanOrEqual(1024);
 	});
 
+	// Regression for #4355: a model catalogued with `reasoning: false` that
+	// still emits thinking (e.g. Qwen3 via llama.cpp) must get the same
+	// reasoning-safe budget, otherwise the forced `set_title` tool call is
+	// truncated before it can be emitted.
+	it("uses a reasoning-safe output budget even when the model declares reasoning: false", async () => {
+		const baseModel = getModelOrThrow("claude-sonnet-4-5");
+		const model = { ...baseModel, reasoning: false } as Model<Api>;
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [
+				{
+					type: "toolCall",
+					id: "call-title",
+					name: "set_title",
+					arguments: { title: "Budget Title" },
+				},
+			],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"Investigate the resolver",
+			createRegistry(model),
+			createSettings(model),
+		);
+		const maxTokens = (completeSimpleMock.mock.calls[0]?.[2] as { maxTokens?: number } | undefined)?.maxTokens;
+
+		expect(title).toBe("Budget Title");
+		expect(maxTokens).toBeGreaterThanOrEqual(1024);
+	});
+
 	it("strips code blocks from the message sent to the model", async () => {
 		const model = getModelOrThrow("claude-sonnet-4-5");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
