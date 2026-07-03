@@ -55,6 +55,25 @@ describe("Tool argument whitespace normalization", () => {
 		expect(result).toEqual({ op: "init", view: "summary" });
 	});
 
+	it("trims enum strings inside tuple prefix items", () => {
+		const tool: Tool = {
+			name: "tuple-op",
+			description: "",
+			parameters: z.object({
+				args: z.tuple([z.enum(["init"])]),
+			}),
+		};
+
+		const result = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-tuple-enum-newline",
+			name: "tuple-op",
+			arguments: { args: ["init\n"] },
+		});
+
+		expect(result).toEqual({ args: ["init"] });
+	});
+
 	it("strips trailing newlines from path fields on read-like tools", () => {
 		const tool: Tool = {
 			name: "read",
@@ -75,7 +94,7 @@ describe("Tool argument whitespace normalization", () => {
 		expect(result).toEqual({ path: "examples/multi_observation.py:36-55" });
 	});
 
-	it("strips trailing whitespace from every entry in a path array", () => {
+	it("strips trailing line terminators but preserves ordinary spaces in path arrays", () => {
 		const tool: Tool = {
 			name: "search",
 			description: "",
@@ -97,8 +116,29 @@ describe("Tool argument whitespace normalization", () => {
 
 		expect(result).toEqual({
 			pattern: "TODO",
-			paths: ["src/foo.ts", "src/bar.ts"],
+			paths: ["src/foo.ts", "src/bar.ts "],
 		});
+	});
+
+	it("trims path line terminators after stringified array coercion", () => {
+		const tool: Tool = {
+			name: "search",
+			description: "",
+			parameters: z.object({
+				paths: z.union([z.string(), z.array(z.string())]),
+			}),
+		};
+
+		const result = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-search-stringified-paths-newline",
+			name: "search",
+			arguments: {
+				paths: JSON.stringify(["src/foo.ts\n", "src/bar.ts "]),
+			},
+		});
+
+		expect(result).toEqual({ paths: ["src/foo.ts", "src/bar.ts "] });
 	});
 
 	it("leaves trailing newlines on content-carrying fields intact", () => {
@@ -119,6 +159,27 @@ describe("Tool argument whitespace normalization", () => {
 		});
 
 		expect(result).toEqual({ path: "docs/foo.md", content: "hello\n" });
+	});
+
+	it("does not trim identifier-looking fields nested under content payloads", () => {
+		const tool: Tool = {
+			name: "http",
+			description: "",
+			parameters: z.object({
+				body: z.object({
+					title: z.string(),
+				}),
+			}),
+		};
+
+		const result = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-body-title-space",
+			name: "http",
+			arguments: { body: { title: "Draft \n" } },
+		});
+
+		expect(result).toEqual({ body: { title: "Draft \n" } });
 	});
 
 	it("trims trailing whitespace from title fields while keeping code content", () => {

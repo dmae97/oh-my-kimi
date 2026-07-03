@@ -927,20 +927,34 @@ function normalizeEnumStringWhitespace(
 	}
 
 	if (Array.isArray(value)) {
-		const itemSchema = schemaObject.items;
-		if (itemSchema === null || typeof itemSchema !== "object" || Array.isArray(itemSchema)) {
-			return { value, changed: false };
-		}
 		let changed = false;
 		let nextValue = value;
-		for (let i = 0; i < value.length; i += 1) {
-			const normalized = normalizeEnumStringWhitespace(itemSchema, value[i], root, refs);
-			if (!normalized.changed) continue;
-			if (!changed) {
-				nextValue = [...value];
-				changed = true;
+		const prefixItems = schemaObject.prefixItems;
+		if (Array.isArray(prefixItems)) {
+			for (let i = 0; i < value.length && i < prefixItems.length; i += 1) {
+				const itemSchema = prefixItems[i];
+				const normalized = normalizeEnumStringWhitespace(itemSchema, value[i], root, refs);
+				if (!normalized.changed) continue;
+				if (!changed) {
+					nextValue = [...value];
+					changed = true;
+				}
+				nextValue[i] = normalized.value;
 			}
-			nextValue[i] = normalized.value;
+		}
+
+		const itemSchema = schemaObject.items;
+		if (itemSchema !== null && typeof itemSchema === "object" && !Array.isArray(itemSchema)) {
+			for (let i = 0; i < value.length; i += 1) {
+				if (Array.isArray(prefixItems) && i < prefixItems.length) continue;
+				const normalized = normalizeEnumStringWhitespace(itemSchema, nextValue[i], root, refs);
+				if (!normalized.changed) continue;
+				if (!changed) {
+					nextValue = [...value];
+					changed = true;
+				}
+				nextValue[i] = normalized.value;
+			}
 		}
 		return { value: changed ? nextValue : value, changed };
 	}
@@ -972,18 +986,19 @@ function normalizeEnumStringWhitespace(
 //
 // LLMs sometimes emit tool arguments with a trailing newline dangling off a
 // short identifier — a path, URL, or a display label like `title`. These
-// values are never legitimately terminated by whitespace, so we strip trailing
-// whitespace from string values on the well-known keys below before the tool
-// ever sees them. Content-carrying properties (`content`, `input`, `body`,
-// `text`, `command`, `code`) are intentionally NOT trimmed so genuine trailing
-// newlines survive on writes, patches, shell commands, and eval snippets.
+// values are never legitimately terminated by line breaks, so we strip trailing
+// line terminators from string values on the well-known keys below before the
+// tool ever sees them. Content-carrying properties (`content`, `input`, `body`,
+// `text`, `command`, `code`) are intentionally not traversed or trimmed so
+// genuine trailing whitespace survives on writes, patches, shell commands, and
+// eval snippets.
 // ============================================================================
 
 /**
  * Property names whose values are treated as short identifiers — filesystem
  * paths, URLs, URIs, or display labels. The trim only fires on strings sitting
- * under one of these keys, so `content: "line1\n"` on `write` and `code:
- * "console.log('hi')\n"` on `eval` keep their trailing whitespace intact.
+ * under one of these keys, so `path: "docs/report "` still targets the file
+ * whose name ends in a space.
  */
 const IDENTIFIER_STRING_KEYS: ReadonlySet<string> = new Set([
 	"path",
@@ -998,16 +1013,18 @@ const IDENTIFIER_STRING_KEYS: ReadonlySet<string> = new Set([
 	"label",
 ]);
 
-const TRAILING_WHITESPACE_RE = /\s+$/;
+const CONTENT_CARRYING_KEYS: ReadonlySet<string> = new Set(["content", "input", "body", "text", "command", "code"]);
 
-function trimTrailingWhitespaceString(input: string): string {
-	if (!TRAILING_WHITESPACE_RE.test(input)) return input;
-	return input.replace(TRAILING_WHITESPACE_RE, "");
+const TRAILING_LINE_TERMINATOR_RE = /[\r\n]+$/;
+
+function trimTrailingLineTerminators(input: string): string {
+	if (!TRAILING_LINE_TERMINATOR_RE.test(input)) return input;
+	return input.replace(TRAILING_LINE_TERMINATOR_RE, "");
 }
 
 function trimIdentifierStringLeaf(input: unknown): unknown {
 	if (typeof input === "string") {
-		const trimmed = trimTrailingWhitespaceString(input);
+		const trimmed = trimTrailingLineTerminators(input);
 		return trimmed === input ? input : trimmed;
 	}
 	if (Array.isArray(input)) {
@@ -1016,7 +1033,7 @@ function trimIdentifierStringLeaf(input: unknown): unknown {
 		for (let i = 0; i < input.length; i += 1) {
 			const item = input[i];
 			if (typeof item !== "string") continue;
-			const trimmed = trimTrailingWhitespaceString(item);
+			const trimmed = trimTrailingLineTerminators(item);
 			if (trimmed === item) continue;
 			if (!changed) {
 				next = input.slice();
@@ -1030,10 +1047,10 @@ function trimIdentifierStringLeaf(input: unknown): unknown {
 }
 
 /**
- * Recursively strip trailing whitespace from string values whose property key
- * matches {@link IDENTIFIER_STRING_KEYS}. Runs by property name only
+ * Recursively strip trailing line terminators from string values whose property
+ * key matches {@link IDENTIFIER_STRING_KEYS}. Runs by property name only
  * (schema-agnostic) so it fires uniformly across Zod, ArkType, and plain JSON
- * Schema tools.
+ * Schema tools while preserving nested payloads under content-carrying keys.
  */
 function normalizeIdentifierStringWhitespace(value: unknown): { value: unknown; changed: boolean } {
 	if (Array.isArray(value)) {
@@ -1058,6 +1075,7 @@ function normalizeIdentifierStringWhitespace(value: unknown): { value: unknown; 
 	let out: Record<string, unknown> = source;
 	for (const [key, entry] of Object.entries(source)) {
 		let nextEntry = entry;
+		if (CONTENT_CARRYING_KEYS.has(key)) continue;
 		if (IDENTIFIER_STRING_KEYS.has(key)) {
 			const trimmed = trimIdentifierStringLeaf(entry);
 			if (trimmed !== entry) nextEntry = trimmed;
@@ -1751,6 +1769,12 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 		changed = true;
 	}
 
+	const identifierStringNormalizationAfterArray = normalizeIdentifierStringWhitespace(normalizedArgs);
+	if (identifierStringNormalizationAfterArray.changed) {
+		normalizedArgs = identifierStringNormalizationAfterArray.value;
+		changed = true;
+	}
+
 	// Single-argument tools (e.g. `edit`): if the model put the lone required
 	// string under a different key, adopt the first string field as that key.
 	const singleStringNorm = normalizeSingleStringField(json, normalizedArgs);
@@ -1800,6 +1824,11 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 		const stringEncodedArrayNormPass = normalizeStringEncodedArrayUnions(json, normalizedArgs);
 		if (stringEncodedArrayNormPass.changed) {
 			normalizedArgs = stringEncodedArrayNormPass.value;
+		}
+
+		const identifierStringNormalizationAfterArrayPass = normalizeIdentifierStringWhitespace(normalizedArgs);
+		if (identifierStringNormalizationAfterArrayPass.changed) {
+			normalizedArgs = identifierStringNormalizationAfterArrayPass.value;
 		}
 
 		// Re-run single-string remap: `coerceArgsFromIssues` may have just
