@@ -387,7 +387,11 @@ export class AskDialogComponent implements Component {
 		const height = Math.max(12, process.stdout.rows || 40);
 		const innerWidth = Math.max(1, width - 4);
 		const headerLines = this.#renderHeader(innerWidth);
-		const fixedRows = 1 + headerLines.length + 1 + 1 + 1;
+		// topBorder(1) + header(N) + divider(1) + divider(1) + footer(1) +
+		// bottomBorder(1) = N + 5 fixed rows outside the body. Without the
+		// bottomBorder term the dialog overflowed the viewport by one row
+		// (PRRT_kwDOQxs0bc6OFbDY).
+		const fixedRows = 1 + headerLines.length + 1 + 1 + 1 + 1;
 		const bodyRows = Math.max(MIN_BODY_ROWS, height - fixedRows);
 		const bodyLines = this.#isSubmitTab()
 			? this.#renderSubmitBody(innerWidth, bodyRows)

@@ -760,15 +760,26 @@ export class ExtensionUiController {
 				const checkedIndices = question.options
 					.map((option, index) => (selected.has(option.label) ? index : -1))
 					.filter(index => index >= 0);
+				// Mirror the local dialog's Next gating: omit the Next option until
+				// at least one option is checked or a custom answer exists, so a
+				// guest cannot submit an empty multi-select result
+				// (PRRT_kwDOQxs0bc6OFbDW). The remote select has no "disabled" row
+				// concept, so we omit rather than dim it.
+				const hasAnswer = selected.size > 0 || customInput !== undefined;
+				const options = [...baseOptions, ASK_OTHER_OPTION];
+				if (hasAnswer) options.push(ASK_NEXT_OPTION);
+				options.push(ASK_CHAT_OPTION);
 				const choice = await this.#requestGuestUiString(
 					{
 						kind: "select",
 						title: question.question,
-						options: [...baseOptions, ASK_OTHER_OPTION, ASK_NEXT_OPTION, ASK_CHAT_OPTION],
+						options,
 						selectionMarker: "checkbox",
 						checkedIndices,
 						markableCount: question.options.length,
-						helpText: "up/down navigate  enter toggle  Next → continue  esc cancel",
+						helpText: hasAnswer
+							? "up/down navigate  enter toggle  Next → continue  esc cancel"
+							: "up/down navigate  enter toggle  esc cancel",
 					},
 					signal,
 				);

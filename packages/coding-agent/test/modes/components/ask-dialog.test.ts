@@ -1118,4 +1118,28 @@ describe("AskDialogComponent", () => {
 		expect(onSubmit).toHaveBeenCalledTimes(1);
 		expect(onSubmit.mock.calls[0][0].results[0].selectedOptions).toEqual(["Option A"]);
 	});
+
+	it("rendered dialog height fits within the viewport (bottom border included)", () => {
+		// PRRT_kwDOQxs0bc6OFbDY: the fixed-row budget must account for the
+		// bottom border too. Before the fix, fixedRows omitted bottomBorder(1),
+		// so the dialog rendered height+1 lines — overflowing the viewport by
+		// one row. After the fix, total lines <= height.
+		const questions: ExtensionAskDialogQuestion[] = [
+			{
+				id: "q1",
+				question: "Pick one?",
+				options: [{ label: "Option A" }, { label: "Option B" }],
+				multi: true,
+			},
+		];
+		const component = new AskDialogComponent(questions, {
+			onSubmit: vi.fn(),
+			onCancel: vi.fn(),
+			onChat: vi.fn(),
+			onPrompt: vi.fn(),
+		});
+		const height = Math.max(12, process.stdout.rows || 40);
+		const lines = component.render(80);
+		expect(lines.length).toBeLessThanOrEqual(height);
+	});
 });
