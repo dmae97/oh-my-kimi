@@ -105,7 +105,7 @@ describe("MCPAuthorizationLinkPrompt", () => {
 
 		// Wrapping puts the label on its own row followed by continuation
 		// chunks with a single-space indent.
-		const labelRow = plainLines.findIndex(line => line === ` ${COPY_URL_LABEL}`);
+		const labelRow = plainLines.indexOf(` ${COPY_URL_LABEL}`);
 		expect(labelRow).toBeGreaterThanOrEqual(0);
 
 		// Chunks reassemble to the URL byte-for-byte — the trailing
