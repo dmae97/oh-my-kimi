@@ -614,6 +614,23 @@ function scopeClaudeLimitsForModel(report: UsageReport, context: CredentialRanki
 	);
 }
 
+/**
+ * Exclude Fable and Mythos tier weekly caps from proactive hard-blocking
+ * (gating) because they are notoriously unreliable (they report 100% exhausted
+ * while the account can still serve requests). They stay available for ranking
+ * pressure in findWindowLimits via scopeClaudeLimitsForModel.
+ */
+function scopeClaudeLimitsForModelHardBlock(
+	report: UsageReport,
+	context: CredentialRankingContext | undefined,
+): UsageLimit[] {
+	const kind = getClaudeModelKind(context);
+	const excludeHardBlock = kind === "fable" || kind === "mythos";
+	return report.limits.filter(
+		limit => limit.scope.shared === true || (kind !== undefined && limit.scope.tier === kind && !excludeHardBlock),
+	);
+}
+
 function rankingUsedFraction(limit: UsageLimit): number {
 	const fraction = resolveUsedFraction(limit);
 	if (typeof fraction !== "number" || !Number.isFinite(fraction)) return 0.5;
@@ -664,7 +681,7 @@ export const claudeRankingStrategy: CredentialRankingStrategy = {
 		const secondary = findClaudeSecondaryLimit(report, context);
 		return { primary, secondary };
 	},
-	scopeLimits: scopeClaudeLimitsForModel,
+	scopeLimits: scopeClaudeLimitsForModelHardBlock,
 	/**
 	 * Fable/Mythos usage-limit errors map to tier-local weekly counters. Scope
 	 * reactive backoff blocks for those tiers, mirroring the per-counter

@@ -428,7 +428,6 @@ describe("claude ranking strategy", () => {
 		expect(scopeLimits(report, { modelId: "claude-fable-5" }).map(limit => limit.id)).toEqual([
 			"anthropic:5h",
 			"anthropic:7d",
-			"anthropic:7d:fable",
 		]);
 		expect(claudeRankingStrategy.blockScope?.({ modelId: "claude-fable-5" })).toBe("tier:fable");
 		expect(claudeRankingStrategy.blockScope?.({ modelId: "claude-mythos-5" })).toBe("tier:mythos");
