@@ -75,6 +75,8 @@ export interface GoogleSharedStreamOptions extends StreamOptions {
 		budgetTokens?: number;
 		level?: GoogleThinkingLevel;
 	};
+	/** Request that Google omit human-readable thought summaries while still allowing internal reasoning. */
+	hideThinkingSummary?: boolean;
 	/** Gemini/Vertex serving tier (`flex`/`priority`); other values are omitted. */
 	serviceTier?: ServiceTier;
 	/**
@@ -859,7 +861,7 @@ export function buildGoogleGenerateContentParams<T extends "google-generative-ai
 	}
 
 	if (options.thinking?.enabled && model.reasoning) {
-		const cfg: ThinkingConfig = { includeThoughts: true };
+		const cfg: ThinkingConfig = { includeThoughts: !options.hideThinkingSummary };
 		if (options.thinking.level !== undefined) {
 			// GoogleThinkingLevel mirrors the SDK's `ThinkingLevel` string enum values 1:1.
 			cfg.thinkingLevel = options.thinking.level as ThinkingLevel;

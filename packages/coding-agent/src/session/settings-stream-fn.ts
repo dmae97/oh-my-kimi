@@ -66,6 +66,7 @@ export function createSettingsAwareStreamFn(settings: Settings, base: StreamFn =
 				checkAssistantContent: settings.get("model.loopGuard.checkAssistantContent"),
 				...streamOptions?.loopGuard,
 			},
+			hideThinkingSummary: streamOptions?.hideThinkingSummary ?? settings.get("omitThinking"),
 			...(fallbacks !== undefined ? { fallbacks } : {}),
 		};
 		return base(model, context, merged);

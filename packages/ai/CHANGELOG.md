@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Google Gemini hidden-thinking-summary requests so direct Google and Cloud Code Assist providers keep the requested reasoning tier while sending `includeThoughts: false`.
+
 ## [16.3.5] - 2026-07-04
 
 ### Added

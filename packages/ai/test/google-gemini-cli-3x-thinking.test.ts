@@ -7,6 +7,7 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 interface GeminiCliThinkingConfig {
 	thinkingLevel?: string;
 	thinkingBudget?: number;
+	includeThoughts?: boolean;
 }
 
 interface CapturedRequestBody {
@@ -65,6 +66,25 @@ describe("google-gemini-cli Gemini 3.x thinking mapping", () => {
 		const thinking = extractThinking(requestBody);
 		expect(thinking?.thinkingLevel).toBe("HIGH");
 		expect(thinking?.thinkingBudget).toBeUndefined();
+	});
+
+	it("keeps Cloud Code Assist reasoning enabled when only summaries are hidden", async () => {
+		let requestBody: string | undefined;
+		const fetchMock = createFetchMock(body => {
+			requestBody = body;
+		});
+
+		const stream = streamSimple(createModel("gemini-3.1-pro-preview"), context, {
+			apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
+			reasoning: Effort.High,
+			hideThinkingSummary: true,
+			fetch: fetchMock,
+		});
+		await stream.result();
+
+		const thinking = extractThinking(requestBody);
+		expect(thinking?.includeThoughts).toBe(false);
+		expect(thinking?.thinkingLevel).toBe("HIGH");
 	});
 
 	it("rejects unsupported gemini-3.1-pro-preview efforts instead of promoting them", () => {
