@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed published `.d.ts` being unconsumable under `moduleResolution: "node16" | "nodenext"`: the declaration emit ran under Bundler resolution and left relative re-exports extensionless (`export * from "./sdk"`), so a NodeNext consumer failed to resolve the package root (`TS2834`/`TS2305`). The publish pipeline now rewrites emitted relative specifiers to explicit `.js` extensions across every package's `dist/types`.
+
 ## [16.3.4] - 2026-07-03
 
 ### Fixed
