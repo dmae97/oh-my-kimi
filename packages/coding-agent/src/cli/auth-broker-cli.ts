@@ -224,15 +224,17 @@ async function runLocalLogin(provider: OAuthProvider): Promise<void> {
 		await storage.login(provider, {
 			onAuth({ url, launchUrl, instructions }) {
 				process.stdout.write("\nOpen this URL in your browser:\n");
-				// Advertise the short launch URL first when the flow exposes one — it
-				// survives narrow terminals that would truncate the trailing
-				// `code_challenge_method=S256` (or worse, drop `state`/`code_challenge`
-				// entirely) from the full authorize URL. The full URL still prints
-				// beneath it so headless callers can capture it programmatically.
-				if (launchUrl && launchUrl !== url) {
-					process.stdout.write(`${launchUrl}\n(redirects to)\n`);
-				}
+				// Full URL first so the CLI works from any machine, including SSH
+				// sessions where a `launchUrl` (loopback `/launch` on the OMP
+				// host) would resolve against the caller's browser and fail.
+				// Headless capture is unaffected: it reads the first URL line.
 				process.stdout.write(`${url}\n`);
+				if (launchUrl && launchUrl !== url) {
+					// Local shortcut for the machine running OMP. Terminals or
+					// screen-scrapers narrower than the full URL still get an
+					// unbroken copy target here.
+					process.stdout.write(`Local shortcut (this machine only): ${launchUrl}\n`);
+				}
 				if (instructions) process.stdout.write(`${instructions}\n`);
 				process.stdout.write("\n");
 			},

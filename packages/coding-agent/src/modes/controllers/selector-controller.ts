@@ -1118,11 +1118,18 @@ export class SelectorController {
 		try {
 			await this.ctx.session.modelRegistry.authStorage.login(providerId as OAuthProvider, {
 				onAuth: (info: { url: string; launchUrl?: string; instructions?: string }) => {
-					const copyTarget = info.launchUrl ?? info.url;
 					const block = new TranscriptBlock();
-					block.addChild(new Text(theme.fg("dim", copyTarget), 1, 0));
+					// Full URL first: works from any machine, including SSH boxes
+					// where the OMP-hosted `launchUrl` would resolve against the
+					// user's local browser and fail.
+					block.addChild(new Text(theme.fg("dim", info.url), 1, 0));
 					const hyperlink = `\x1b]8;;${info.url}\x07Click here to login\x1b]8;;\x07`;
 					block.addChild(new Text(theme.fg("accent", hyperlink), 1, 0));
+					if (info.launchUrl && info.launchUrl !== info.url) {
+						block.addChild(
+							new Text(theme.fg("dim", `Local shortcut (this machine only): ${info.launchUrl}`), 1, 0),
+						);
+					}
 					if (info.instructions) {
 						block.addChild(new Spacer(1));
 						block.addChild(new Text(theme.fg("warning", info.instructions), 1, 0));

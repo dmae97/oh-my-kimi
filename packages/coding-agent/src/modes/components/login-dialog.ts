@@ -68,24 +68,30 @@ export class LoginDialogComponent extends Container {
 	}
 
 	/**
-	 * Called by the OAuth `onAuth` callback. Renders the copy target on its own
-	 * row and attaches an OSC 8 hyperlink carrying the full URL so terminals
-	 * that support it can click-through even when the copy target is truncated.
-	 *
-	 * `launchUrl` (when present) is a short loopback URL that 302s to `url`.
-	 * Preferred as the copy target because viewport truncation on a long
-	 * authorize URL silently drops trailing OAuth query parameters — e.g.
-	 * `code_challenge_method=S256`.
+	 * Called by the OAuth `onAuth` callback. Renders the full authorization URL
+	 * as the primary copy target — that works from any machine, including
+	 * SSH/WSL/headless sessions where the OMP-hosted `launchUrl` would resolve
+	 * against the user's local browser and fail. When `launchUrl` is present it
+	 * is offered as an additional local shortcut so narrow local terminals still
+	 * have a truncation-safe copy target (viewport clipping on a long authorize
+	 * URL silently drops trailing OAuth query parameters — e.g.
+	 * `code_challenge_method=S256`). The OSC 8 hyperlink carries the full URL
+	 * for terminals that support click-through.
 	 */
 	showAuth(url: string, instructions?: string, launchUrl?: string): void {
-		const copyTarget = launchUrl ?? url;
 		this.#contentContainer.clear();
 		this.#contentContainer.addChild(new Spacer(1));
-		this.#contentContainer.addChild(new Text(theme.fg("accent", copyTarget), 1, 0));
+		this.#contentContainer.addChild(new Text(theme.fg("accent", url), 1, 0));
 
 		const clickHint = process.platform === "darwin" ? "Cmd+click to open" : "Ctrl+click to open";
 		const hyperlink = `\x1b]8;;${url}\x07${clickHint}\x1b]8;;\x07`;
 		this.#contentContainer.addChild(new Text(theme.fg("dim", hyperlink), 1, 0));
+
+		if (launchUrl && launchUrl !== url) {
+			this.#contentContainer.addChild(
+				new Text(theme.fg("dim", `Local shortcut (this machine only): ${launchUrl}`), 1, 0),
+			);
+		}
 
 		if (instructions) {
 			this.#contentContainer.addChild(new Spacer(1));

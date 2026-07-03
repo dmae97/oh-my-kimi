@@ -38,21 +38,42 @@ describe("MCPAuthorizationLinkPrompt", () => {
 		expect(plainLines[2]).toBe(` Copy URL: ${LONG_AUTH_URL}`);
 	});
 
-	it("advertises the launch URL as the copy target while keeping OSC 8 pointing at the full URL", () => {
+	it("keeps the full URL as the primary Copy URL: target so SSH/headless sessions can complete the flow", () => {
 		const launchUrl = "http://localhost:14570/launch";
 		const lines = new MCPAuthorizationLinkPrompt(LONG_AUTH_URL, launchUrl).render(80);
 		const plainLines = lines.map(line => stripVTControlCharacters(line));
 
-		expect(lines).toHaveLength(3);
+		// Full URL is the primary copy target — it resolves from any browser,
+		// including one on a laptop that SSH'd into the OMP host. `launchUrl`
+		// as primary would resolve against the caller's local machine (no OMP
+		// listening) and fail before ever reaching the provider.
+		expect(plainLines[2]).toBe(` Copy URL: ${LONG_AUTH_URL}`);
+
 		// OSC 8 hyperlink still carries the full URL — click-through targets
 		// the provider directly on terminals that support the escape.
 		expect(extractLinkUri(lines[1])).toBe(LONG_AUTH_URL);
 		expect(plainLines[1]).toContain("Click here to authorize");
-		// Copy target is the short loopback URL. Terminals that don't render
-		// OSC 8, and every copy-paste operation, hit this line — and it must
-		// survive viewport truncation without dropping OAuth parameters like
-		// `code_challenge_method=S256`.
-		expect(plainLines[2]).toBe(` Copy URL: ${launchUrl}`);
-		expect(plainLines[2].length).toBeLessThan(50);
+	});
+
+	it("advertises launchUrl as an additional local shortcut so narrow local terminals have a truncation-safe copy target", () => {
+		const launchUrl = "http://localhost:14570/launch";
+		const lines = new MCPAuthorizationLinkPrompt(LONG_AUTH_URL, launchUrl).render(80);
+		const plainLines = lines.map(line => stripVTControlCharacters(line));
+
+		// Extra row beneath `Copy URL:` carries the short launch URL. Users on
+		// narrow local terminals whose `Copy URL:` line got clipped
+		// mid-`code_challenge_method=S256` can copy this row instead — it
+		// fits in any reasonable viewport.
+		expect(lines).toHaveLength(4);
+		expect(plainLines[3]).toBe(` Local shortcut (this machine only): ${launchUrl}`);
+		expect(plainLines[3].length).toBeLessThan(70);
+	});
+
+	it("omits the local-shortcut row when launchUrl is absent or identical to the full URL", () => {
+		const withoutLaunch = new MCPAuthorizationLinkPrompt(LONG_AUTH_URL).render(80);
+		expect(withoutLaunch).toHaveLength(3);
+
+		const withRedundantLaunch = new MCPAuthorizationLinkPrompt(LONG_AUTH_URL, LONG_AUTH_URL).render(80);
+		expect(withRedundantLaunch).toHaveLength(3);
 	});
 });

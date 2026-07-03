@@ -75,33 +75,38 @@ function raceAbortSignal<T>(promise: Promise<T>, signal: AbortSignal, createErro
 }
 
 /**
- * Renders the MCP OAuth fallback URL without hard-wrapping the copy target.
- *
- * When the flow's callback server hosts a `/launch` short URL (`launchUrl`),
- * that is advertised as the copy target instead of the full authorization
- * URL: a Linear-shaped authorize URL routinely exceeds 260 columns, and the
- * TUI silently truncates any composed row wider than the viewport — dropping
- * trailing OAuth parameters like `code_challenge_method=S256`. The OSC 8
- * hyperlink still carries the full URL for terminals that support it.
+ * Renders the MCP OAuth fallback URL. Always shows the full authorization URL
+ * as the primary `Copy URL:` target — that works from any machine, including
+ * SSH/WSL/headless sessions where the OMP-hosted `/launch` loopback URL would
+ * resolve against the user's local browser and fail. When the flow's callback
+ * server hosts a short `launchUrl`, it is offered as an additional local
+ * shortcut so narrow local terminals still have a truncation-safe copy target
+ * (a Linear-shaped authorize URL routinely exceeds 260 columns, and the TUI
+ * silently truncates any composed row wider than the viewport). The OSC 8
+ * hyperlink continues to carry the full URL for terminals that support it.
  */
 export class MCPAuthorizationLinkPrompt implements Component {
 	readonly #fullUrl: string;
-	readonly #copyTarget: string;
+	readonly #launchUrl: string | undefined;
 
 	constructor(url: string, launchUrl?: string) {
 		this.#fullUrl = url;
-		this.#copyTarget = launchUrl ?? url;
+		this.#launchUrl = launchUrl && launchUrl !== url ? launchUrl : undefined;
 	}
 
 	invalidate(): void {}
 
 	render(_width: number): readonly string[] {
 		const link = urlHyperlinkAlways(this.#fullUrl, "Click here to authorize");
-		return [
+		const lines: string[] = [
 			` ${theme.fg("success", "Open authorization URL:")}`,
 			` ${theme.fg("accent", link)}`,
-			` ${theme.fg("muted", `Copy URL: ${replaceTabs(this.#copyTarget)}`)}`,
+			` ${theme.fg("muted", `Copy URL: ${replaceTabs(this.#fullUrl)}`)}`,
 		];
+		if (this.#launchUrl) {
+			lines.push(` ${theme.fg("muted", `Local shortcut (this machine only): ${replaceTabs(this.#launchUrl)}`)}`);
+		}
+		return lines;
 	}
 }
 
@@ -724,12 +729,14 @@ export class MCPCommandController {
 						// "attempting to open browser" line and no earlier try/catch is
 						// worth keeping.
 						openPath(info.url);
-						const copyTarget = info.launchUrl ?? info.url;
-						// Stage the copy target on the clipboard via OSC 52 (same
-						// pattern the setup wizard uses). Best-effort: falls back to
-						// the visible "Copy URL:" line whether or not the terminal
-						// honors OSC 52.
-						void copyToClipboard(copyTarget).catch(() => {});
+						// Stage the FULL authorization URL on the clipboard via OSC 52.
+						// The full URL works from any machine (unlike `launchUrl`, which
+						// only resolves against the OMP host), and OSC 52 is a
+						// wire-level protocol — the terminal writes it to the user's
+						// LOCAL clipboard even when OMP is on a remote SSH box.
+						// Best-effort: falls back to the visible copy-URL rows below
+						// whether or not the terminal honors OSC 52.
+						void copyToClipboard(info.url).catch(() => {});
 						block.addChild(new Spacer(1));
 						block.addChild(new Text(theme.fg("success", "→ Attempting to open browser..."), 1, 0));
 						block.addChild(new Spacer(1));
