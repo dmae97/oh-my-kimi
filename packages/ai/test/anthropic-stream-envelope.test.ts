@@ -646,7 +646,9 @@ describe("anthropic stream envelope handling", () => {
 		// the reasoning_extraction classifier flags `<thinking>` tags in prior
 		// turn history for the whole Claude family, so replaying the unwrapped
 		// reasoning as wrapped text would just re-introduce the same leak.
-		expect(replayAssistant?.content).toEqual([{ type: "text", text: "Check logs before accepting container health." }]);
+		expect(replayAssistant?.content).toEqual([
+			{ type: "text", text: "Check logs before accepting container health." },
+		]);
 	});
 	it("preserves signed thinking bytes when no literal thinking envelope is present", async () => {
 		const signedThinking = "\nCheck logs before accepting container health.\n";
