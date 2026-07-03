@@ -116,6 +116,22 @@ interface MnemopiStoredMemoryRow {
 	session_id?: unknown;
 }
 
+type MnemopiRetentionMessage = { role: string; content: string };
+
+function sliceUnretainedMessages(
+	messages: MnemopiRetentionMessage[],
+	lastRetainedTurn: number,
+): MnemopiRetentionMessage[] {
+	if (lastRetainedTurn <= 0) return messages;
+	let userTurns = 0;
+	for (let index = 0; index < messages.length; index++) {
+		if (messages[index].role !== "user") continue;
+		userTurns++;
+		if (userTurns > lastRetainedTurn) return messages.slice(index);
+	}
+	return [];
+}
+
 export function getMnemopiSessionState(session: AgentSession | undefined): MnemopiSessionState | undefined {
 	return session ? (session as AgentSessionWithMnemopiState)[kMnemopiSessionState] : undefined;
 }
@@ -339,7 +355,10 @@ export class MnemopiSessionState {
 		const flat = extractMessages(this.session.sessionManager);
 		const userTurns = flat.filter(message => message.role === "user").length;
 		if (userTurns - this.lastRetainedTurn < this.config.retainEveryNTurns) return;
-		await this.retainMessages(flat, `${this.sessionId}-${Date.now()}`);
+		await this.retainMessages(
+			sliceUnretainedMessages(flat, this.lastRetainedTurn),
+			`${this.sessionId}-${Date.now()}`,
+		);
 		this.lastRetainedTurn = userTurns;
 	}
 
