@@ -27,7 +27,7 @@
 | `timeout` | `number` | No | Timeout in seconds. Default `300`; clamped to `1..3600` by `clampTimeout("bash", ...)`. |
 | `cwd` | `string` | No | Working directory, resolved against `session.cwd` via `resolveToCwd`. Must exist and be a directory. |
 | `pty` | `boolean` | No | Request PTY mode. Default `false`. PTY is used only when `pty: true`, `PI_NO_PTY !== "1"`, and the tool context has a UI. |
-| `async` | `boolean` | No | Background execution request. Present only when `async.enabled` is true for the session. Returns immediately with a job id instead of waiting. |
+| `async` | `boolean` | No | Background execution request. Present only when `async.enabled` is true for the session. Returns immediately with a job id instead of waiting; it does not extend the effective `timeout`, so jobs are still killed after the clamped `1..3600` second budget. |
 
 ## Outputs
 The tool returns a single `text` content block plus optional `details`.

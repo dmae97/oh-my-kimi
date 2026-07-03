@@ -132,10 +132,12 @@ async function saveBashOriginalArtifact(session: ToolSession, originalText: stri
 	}
 }
 
+const BASH_TIMEOUT_DESCRIPTION = `timeout in seconds; clamped to ${TOOL_TIMEOUTS.bash.min}-${TOOL_TIMEOUTS.bash.max}`;
+
 const bashSchemaBase = type({
 	command: type("string").describe("command to execute"),
 	"env?": type({ "[string]": "string" }).describe("extra env vars"),
-	"timeout?": type("number").describe("timeout in seconds"),
+	"timeout?": type("number").describe(BASH_TIMEOUT_DESCRIPTION),
 	"cwd?": type("string").describe("working directory"),
 	"pty?": type("boolean").describe("run in pty mode"),
 });
@@ -143,7 +145,7 @@ const bashSchemaBase = type({
 const bashSchemaWithAsync = type({
 	command: "string",
 	"env?": { "[string]": "string" },
-	"timeout?": "number",
+	"timeout?": type("number").describe(BASH_TIMEOUT_DESCRIPTION),
 	"cwd?": "string",
 	"pty?": "boolean",
 	"async?": type("boolean").describe("run in background"),

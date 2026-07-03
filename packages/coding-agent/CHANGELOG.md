@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Documented the bash tool timeout clamp in the model-facing schema and prompt so callers know `async` jobs remain capped at 3600 seconds ([#4408](https://github.com/can1357/oh-my-pi/issues/4408)).
+
 ## [16.3.4] - 2026-07-03
 
 ### Fixed

@@ -288,6 +288,24 @@ describe("tool schema validation (post-sanitization)", () => {
 		expect(description).toContain("pr://123");
 	});
 
+	it("bash schema and prompt advertise the timeout clamp", async () => {
+		const session = createTestSession();
+		session.settings.set("async.enabled", true);
+		const tools = await createTools(session);
+		const bashTool = tools.find(tool => tool.name === "bash");
+		if (!bashTool?.parameters) throw new Error("bash tool parameters missing");
+
+		const schema = toolWireSchema(bashTool) as {
+			properties?: { timeout?: { description?: string } };
+		};
+		const timeoutDescription = schema.properties?.timeout?.description ?? "";
+
+		expect(timeoutDescription).toContain("clamped");
+		expect(timeoutDescription).toContain("1-3600");
+		expect(bashTool.description).toContain("clamped to `1..3600`");
+		expect(bashTool.description).toContain("does NOT extend the timeout");
+	});
+
 	it("hidden tools also have valid sanitized schemas", async () => {
 		const session = createTestSession();
 
