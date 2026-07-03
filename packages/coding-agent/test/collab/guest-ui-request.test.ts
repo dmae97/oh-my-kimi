@@ -713,3 +713,45 @@ describe("collab host dialog vs teardown (#4049 follow-up)", () => {
 		}
 	});
 });
+
+// ── Guest ask "unavailable" literal answer (#4375: tagged guest results) ────
+//
+// A guest may legitimately answer with the literal string "unavailable" (e.g.
+// a status option). The old `#requestGuestUiString` flattened
+// `CollabGuestUiResult` to `string | "unavailable" | undefined`, so that answer
+// collided with the transport-unavailable sentinel and cancelled the whole ask
+// instead of recording the answer. `CollabHost.requestGuestUi` already returns
+// a tagged `CollabGuestUiResult`; this test pins the wire-level contract: a
+// guest "unavailable" answer is `{ kind: "answered", value: "unavailable" }`,
+// not `{ kind: "unavailable" }`.
+
+describe("guest ask unavailable literal answer (#4375)", () => {
+	it("preserves a guest answer of 'unavailable' as answered, not transport-unavailable", async () => {
+		const ctx = makeHostContext();
+		const host = new CollabHost(ctx);
+		await host.start("ws://localhost:8787");
+		ctx.collabHost = host;
+		try {
+			const guest = await joinRawGuest(host.link, COLLAB_PROTO);
+			const welcome = await guest.nextFrame();
+			if (welcome.t !== "welcome") throw new Error(`expected welcome, got ${welcome.t}`);
+
+			const pending = host.requestGuestUi({
+				kind: "select",
+				title: "Status?",
+				options: ["available", "unavailable", "busy"],
+			});
+			if (!pending) throw new Error("expected writable guest UI request");
+			const request = await guest.nextFrame();
+			if (request.t !== "ui-request") throw new Error(`expected ui-request, got ${request.t}`);
+			// Guest answers with the literal string "unavailable" — this must be
+			// treated as a real answer, not a transport-unavailable sentinel.
+			guest.socket.send({ t: "ui-response", reqId: request.request.reqId, value: "unavailable" });
+			const result = await pending;
+			expect(result).toEqual({ kind: "answered", value: "unavailable" });
+			guest.socket.close();
+		} finally {
+			await host.stop("test done");
+		}
+	});
+});

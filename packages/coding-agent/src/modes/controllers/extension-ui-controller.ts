@@ -45,6 +45,12 @@ interface CollabAskDialogWinner {
 	source: "local" | "remote";
 	value: ExtensionAskDialogResult | undefined;
 }
+/** Tagged result from a guest UI request, distinguishing a real answer (even
+ *  one whose literal value is "unavailable"), an explicit guest cancel, and a
+ *  transport-unavailable sentinel (collab teardown / abort). Replaces the old
+ *  `string | "unavailable" | undefined` channel that let a guest answer of
+ *  "unavailable" collide with the transport sentinel. */
+type GuestUiResult = { kind: "answered"; value: string } | { kind: "cancelled" } | { kind: "unavailable" };
 
 function toWireSelectOptions(options: ExtensionUISelectItem[]): CollabUiSelectItem[] {
 	return options.map(option =>
@@ -766,20 +772,24 @@ export class ExtensionUiController {
 					},
 					signal,
 				);
-				if (choice === "unavailable" || choice === undefined) return choice;
-				if (choice === ASK_CHAT_OPTION) return "chat";
-				if (choice === ASK_NEXT_OPTION) break;
-				if (choice === ASK_OTHER_OPTION) {
+				if (choice.kind === "unavailable") return "unavailable";
+				if (choice.kind === "cancelled") return undefined;
+				if (choice.value === ASK_CHAT_OPTION) return "chat";
+				if (choice.value === ASK_NEXT_OPTION) break;
+				if (choice.value === ASK_OTHER_OPTION) {
 					const input = await this.#requestGuestUiString(
 						{ kind: "editor", title: boundPromptTitle("Custom answer: ", question.question) },
 						signal,
 					);
-					if (input === "unavailable" || input === undefined) return input;
-					customInput = input;
+					if (input.kind === "unavailable") return "unavailable";
+					// Guest cancelled the Other editor: keep the ask open and
+					// return to the option list instead of cancelling the whole ask.
+					if (input.kind === "cancelled") continue;
+					customInput = input.value;
 					break;
 				}
-				if (selected.has(choice)) selected.delete(choice);
-				else selected.add(choice);
+				if (selected.has(choice.value)) selected.delete(choice.value);
+				else selected.add(choice.value);
 			}
 		} else {
 			const recommended =
@@ -787,29 +797,36 @@ export class ExtensionUiController {
 					? question.recommended
 					: 0;
 			const initialIndex = Math.max(0, Math.min(recommended, Math.max(0, question.options.length - 1)));
-			const choice = await this.#requestGuestUiString(
-				{
-					kind: "select",
-					title: question.question,
-					options: [...baseOptions, ASK_OTHER_OPTION, ASK_CHAT_OPTION],
-					initialIndex,
-					selectionMarker: "radio",
-					markableCount: question.options.length,
-					helpText: "up/down navigate  enter select  esc cancel",
-				},
-				signal,
-			);
-			if (choice === "unavailable" || choice === undefined) return choice;
-			if (choice === ASK_CHAT_OPTION) return "chat";
-			if (choice === ASK_OTHER_OPTION) {
-				const input = await this.#requestGuestUiString(
-					{ kind: "editor", title: boundPromptTitle("Custom answer: ", question.question) },
+			while (true) {
+				const choice = await this.#requestGuestUiString(
+					{
+						kind: "select",
+						title: question.question,
+						options: [...baseOptions, ASK_OTHER_OPTION, ASK_CHAT_OPTION],
+						initialIndex,
+						selectionMarker: "radio",
+						markableCount: question.options.length,
+						helpText: "up/down navigate  enter select  esc cancel",
+					},
 					signal,
 				);
-				if (input === "unavailable" || input === undefined) return input;
-				customInput = input;
-			} else {
-				selected.add(choice);
+				if (choice.kind === "unavailable") return "unavailable";
+				if (choice.kind === "cancelled") return undefined;
+				if (choice.value === ASK_CHAT_OPTION) return "chat";
+				if (choice.value === ASK_OTHER_OPTION) {
+					const input = await this.#requestGuestUiString(
+						{ kind: "editor", title: boundPromptTitle("Custom answer: ", question.question) },
+						signal,
+					);
+					if (input.kind === "unavailable") return "unavailable";
+					// Guest cancelled the Other editor: re-show the select list
+					// instead of cancelling the whole ask.
+					if (input.kind === "cancelled") continue;
+					customInput = input.value;
+				} else {
+					selected.add(choice.value);
+				}
+				break;
 			}
 		}
 		return {
@@ -822,17 +839,14 @@ export class ExtensionUiController {
 		};
 	}
 
-	async #requestGuestUiString(
-		request: CollabUiRequestDraft,
-		signal: AbortSignal,
-	): Promise<string | "unavailable" | undefined> {
+	async #requestGuestUiString(request: CollabUiRequestDraft, signal: AbortSignal): Promise<GuestUiResult> {
 		const host = this.ctx.collabHost;
-		if (!host) return "unavailable";
+		if (!host) return { kind: "unavailable" };
 		const remote = host.requestGuestUi(request, signal);
-		if (!remote) return "unavailable";
+		if (!remote) return { kind: "unavailable" };
 		const result = await remote;
-		if (result.kind === "unavailable") return "unavailable";
-		return typeof result.value === "string" ? result.value : undefined;
+		if (result.kind === "unavailable") return { kind: "unavailable" };
+		return typeof result.value === "string" ? { kind: "answered", value: result.value } : { kind: "cancelled" };
 	}
 
 	/**

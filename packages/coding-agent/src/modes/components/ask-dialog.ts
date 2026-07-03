@@ -47,6 +47,10 @@ const PREVIEW_HEADER = "Preview";
 const MAX_PROMPT_TITLE_ROWS = 3;
 /** Border (2) + padX (2) columns consumed by the HookEditor chrome. */
 const PROMPT_TITLE_CHROME_COLUMNS = 4;
+/** Maximum number of wrapped lines for an in-body question header, so a long
+ *  or multi-line question cannot push the option list off-screen. Mirrors the
+ *  row-cap pattern used by boundPromptTitle for the prompt editor overlay. */
+const MAX_HEADER_ROWS = 4;
 
 function promptTitleContentWidth(): number {
 	const cols = process.stdout.columns ?? 80;
@@ -96,6 +100,11 @@ interface QuestionRow {
 	key: string;
 	label: string;
 	optionIndex: number | undefined;
+	/** When true the row is rendered dimmed and Enter/Space on it is ignored.
+	 *  Used to gate the Next row on a single-question multi-select until at
+	 *  least one option or custom input is chosen, so pressing Next cannot
+	 *  submit an empty result. */
+	disabled: boolean;
 }
 
 interface SubmitRow {
@@ -137,7 +146,14 @@ function renderQuestionTitle(question: ExtensionAskDialogQuestion, index: number
 	const titleWidth = Math.max(1, width - visibleWidth(chip));
 	const wrapped = wrapTextWithAnsi(questionText, titleWidth);
 	if (wrapped.length === 0) return [chip.trimEnd()];
-	return wrapped.map((line, lineIndex) =>
+	const capped =
+		wrapped.length <= MAX_HEADER_ROWS
+			? wrapped
+			: [
+					...wrapped.slice(0, MAX_HEADER_ROWS - 1),
+					truncateToWidth(wrapped.slice(MAX_HEADER_ROWS - 1).join(" "), titleWidth, Ellipsis.Unicode),
+				];
+	return capped.map((line, lineIndex) =>
 		lineIndex === 0 ? `${chip}${line}` : `${padding(visibleWidth(chip))}${line}`,
 	);
 }
@@ -271,10 +287,10 @@ function renderRowLabel(
 	const checked = isOption
 		? state.selectedOptions.has(stripRecommendedSuffix(rowItem.label))
 		: isOther && state.customInput !== undefined;
-	const color = selected ? "accent" : checked ? "toolOutput" : "text";
+	const color = rowItem.disabled ? "dim" : selected ? "accent" : checked ? "toolOutput" : "text";
 	const marker =
 		isOption || isOther ? `${theme.fg(checked ? "success" : "dim", optionMarker(question, checked))} ` : "  ";
-	const cursor = selected ? theme.fg("accent", `${theme.nav.cursor} `) : "  ";
+	const cursor = selected && !rowItem.disabled ? theme.fg("accent", `${theme.nav.cursor} `) : "  ";
 	const label = renderInlineMarkdown(rowItem.label, mdTheme, t => theme.fg(color, t));
 	const noteMarker = state.note && state.noteRowKey === rowItem.key ? theme.fg("success", "  ✎ note") : "";
 	const firstLine = `${cursor}${marker}${label}${noteMarker}`;
@@ -450,15 +466,20 @@ export class AskDialogComponent implements Component {
 	}
 
 	#questionRows(question: ExtensionAskDialogQuestion): QuestionRow[] {
+		const state = this.#states[this.#currentQuestionIndex()];
+		const hasAnswer = !!state && (state.selectedOptions.size > 0 || state.customInput !== undefined);
+		const nextDisabled = !!question.multi && this.questions.length === 1 && !hasAnswer;
 		const rows: QuestionRow[] = question.options.map((option, index) => ({
 			kind: "option",
 			key: `option:${index}`,
 			label: this.#optionLabel(question, option.label, index),
 			optionIndex: index,
+			disabled: false,
 		}));
-		rows.push({ kind: "other", key: "other", label: OTHER_OPTION, optionIndex: undefined });
-		if (question.multi) rows.push({ kind: "next", key: "next", label: NEXT_OPTION, optionIndex: undefined });
-		rows.push({ kind: "chat", key: "chat", label: CHAT_ABOUT_THIS_OPTION, optionIndex: undefined });
+		rows.push({ kind: "other", key: "other", label: OTHER_OPTION, optionIndex: undefined, disabled: false });
+		if (question.multi)
+			rows.push({ kind: "next", key: "next", label: NEXT_OPTION, optionIndex: undefined, disabled: nextDisabled });
+		rows.push({ kind: "chat", key: "chat", label: CHAT_ABOUT_THIS_OPTION, optionIndex: undefined, disabled: false });
 		return rows;
 	}
 
@@ -504,6 +525,7 @@ export class AskDialogComponent implements Component {
 			return;
 		}
 		if (rowItem.kind === "next") {
+			if (rowItem.disabled) return;
 			this.#advanceAfterQuestion();
 			return;
 		}

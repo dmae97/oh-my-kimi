@@ -603,10 +603,21 @@ describe("AskDialogComponent", () => {
 		component.handleInput(DOWN);
 		component.handleInput(DOWN);
 		component.handleInput(DOWN);
+		// Next is disabled when nothing is selected (single-question multi-select),
+		// so Enter on it must NOT submit an empty result.
+		component.handleInput(ENTER);
+		expect(onSubmit).not.toHaveBeenCalled();
+
+		// Re-select an option to re-enable Next, then submit.
+		component.handleInput("\x1b[A"); // UP to Other
+		component.handleInput("\x1b[A"); // UP to Option B
+		component.handleInput(SPACE);
+		component.handleInput(DOWN);
+		component.handleInput(DOWN);
 		component.handleInput(ENTER);
 
 		expect(onSubmit).toHaveBeenCalledTimes(1);
-		expect(onSubmit.mock.calls[0][0].results[0].selectedOptions).toEqual([]);
+		expect(onSubmit.mock.calls[0][0].results[0].selectedOptions).toEqual(["Option B"]);
 		expect(onSubmit.mock.calls[0][0].results[0].note).toBeUndefined();
 	});
 
@@ -991,5 +1002,120 @@ describe("AskDialogComponent", () => {
 		// After scrolling, early options should be gone and later ones visible.
 		expect(scrolled).not.toContain("Option 01");
 		expect(scrolled).toContain("Option 29");
+	});
+
+	it("single-question multi-select: Next is disabled until an option is selected", () => {
+		const onSubmit = vi.fn();
+		const onCancel = vi.fn();
+		const questions: ExtensionAskDialogQuestion[] = [
+			{
+				id: "q1",
+				question: "Choose multiple?",
+				options: [{ label: "Option A" }, { label: "Option B" }],
+				multi: true,
+			},
+		];
+
+		const component = new AskDialogComponent(questions, {
+			onSubmit,
+			onCancel,
+			onChat: vi.fn(),
+			onPrompt: vi.fn(),
+		});
+
+		// Row order: [0]=A, [1]=B, [2]=Other, [3]=Next, [4]=Chat
+		// Navigate to Next (3 DOWNs) and press Enter — must NOT submit empty.
+		component.handleInput(DOWN);
+		component.handleInput(DOWN);
+		component.handleInput(DOWN);
+		component.handleInput(ENTER);
+		expect(onSubmit).not.toHaveBeenCalled();
+
+		// The Next row should be rendered dimmed (disabled) when nothing is selected.
+		const output = render(component);
+		expect(output).toContain("Next");
+
+		// Select Option A, then Next becomes enabled and submits.
+		component.handleInput("\x1b[A"); // UP to Other
+		component.handleInput("\x1b[A"); // UP to Option B
+		component.handleInput("\x1b[A"); // UP to Option A
+		component.handleInput(SPACE);
+		component.handleInput(DOWN);
+		component.handleInput(DOWN);
+		component.handleInput(DOWN);
+		component.handleInput(ENTER);
+
+		expect(onSubmit).toHaveBeenCalledTimes(1);
+		expect(onSubmit.mock.calls[0][0].results[0].selectedOptions).toEqual(["Option A"]);
+	});
+
+	it("bounds in-body question header for long multi-line questions", () => {
+		const onSubmit = vi.fn();
+		const longQuestion = "This is a very long question ".repeat(30);
+		const questions: ExtensionAskDialogQuestion[] = [
+			{
+				id: "q1",
+				question: longQuestion,
+				options: [{ label: "Option A" }, { label: "Option B" }],
+			},
+		];
+
+		const component = new AskDialogComponent(questions, {
+			onSubmit,
+			onCancel: vi.fn(),
+			onChat: vi.fn(),
+			onPrompt: vi.fn(),
+		});
+
+		// The rendered body must not blow out with the full 30-line question.
+		// The header is capped to MAX_HEADER_ROWS lines.
+		const output = render(component);
+		// The question text should appear but be truncated — verify it does
+		// not contain the full repeated text (30 copies would be ~870 chars).
+		expect(output).toContain("This is a very long question");
+		// Count occurrences of the repeated phrase — should be far fewer than 30.
+		const matches = output.match(/This is a very long question/g);
+		expect(matches?.length ?? 0).toBeLessThan(10);
+	});
+
+	it("Other editor cancel returns to the option list without submitting", async () => {
+		const onPrompt = vi.fn().mockReturnValue(Promise.resolve(undefined));
+		const onSubmit = vi.fn();
+		const onCancel = vi.fn();
+		const questions: ExtensionAskDialogQuestion[] = [
+			{
+				id: "q1",
+				question: "Choose one?",
+				options: [{ label: "Option A" }, { label: "Option B" }],
+			},
+		];
+
+		const component = new AskDialogComponent(questions, {
+			onSubmit,
+			onCancel,
+			onChat: vi.fn(),
+			onPrompt,
+		});
+
+		// Navigate to "Other" and press Enter to open the custom input prompt.
+		component.handleInput(DOWN);
+		component.handleInput(DOWN);
+		component.handleInput(ENTER);
+		await Promise.resolve();
+		await Promise.resolve();
+
+		// The prompt was cancelled (returns undefined). The dialog must stay
+		// open — no submit, no cancel.
+		expect(onPrompt).toHaveBeenCalledTimes(1);
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(onCancel).not.toHaveBeenCalled();
+
+		// The dialog should still be usable: select Option A and submit.
+		component.handleInput("\x1b[A"); // UP to Option B
+		component.handleInput("\x1b[A"); // UP to Option A
+		component.handleInput(ENTER);
+
+		expect(onSubmit).toHaveBeenCalledTimes(1);
+		expect(onSubmit.mock.calls[0][0].results[0].selectedOptions).toEqual(["Option A"]);
 	});
 });
