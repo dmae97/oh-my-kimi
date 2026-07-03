@@ -1,5 +1,5 @@
 import * as fs from "node:fs/promises";
-import path from "node:path";
+import * as path from "node:path";
 import { formatPathRelativeToCwd } from "../tools/path-utils";
 import { ToolError } from "../tools/tool-errors";
 import type {
@@ -48,6 +48,17 @@ export function applyTextEditsToString(content: string, edits: TextEdit[]): stri
 function comparePosition(a: Position, b: Position): number {
 	return a.line === b.line ? a.character - b.character : a.line - b.line;
 }
+function positionsEqual(a: Position, b: Position): boolean {
+	return a.line === b.line && a.character === b.character;
+}
+
+function rangesEqual(a: Range, b: Range): boolean {
+	return positionsEqual(a.start, b.start) && positionsEqual(a.end, b.end);
+}
+
+function isEmptyRange(range: Range): boolean {
+	return positionsEqual(range.start, range.end);
+}
 
 function formatRange(range: Range): string {
 	return `${range.start.line + 1}:${range.start.character + 1}-${range.end.line + 1}:${range.end.character + 1}`;
@@ -63,6 +74,8 @@ export function rangesOverlap(a: Range, b: Range): boolean {
  * Equal start positions tiebreak by original array index descending so that,
  * applied bottom-up, inserts at the same position land in array order
  * (LSP spec: the order of edits in the array defines the order in the result).
+ * Byte-identical non-empty range edits are idempotent, so duplicate server
+ * output is collapsed before overlap validation.
  */
 export function sortAndValidateTextEdits(edits: TextEdit[]): TextEdit[] {
 	const sorted = edits
@@ -77,21 +90,29 @@ export function sortAndValidateTextEdits(edits: TextEdit[]): TextEdit[] {
 			return b.index - a.index;
 		})
 		.map(entry => entry.edit);
+	const unique: TextEdit[] = [];
+	for (const edit of sorted) {
+		const prev = unique[unique.length - 1];
+		if (prev && !isEmptyRange(edit.range) && rangesEqual(prev.range, edit.range) && prev.newText === edit.newText) {
+			continue;
+		}
+		unique.push(edit);
+	}
 
 	// Detect overlapping ranges: in reverse-sorted order, each edit's start
 	// must be >= the next edit's end. If not, the edits would clobber each other
-	// once applied bottom-up (typically a multi-server rename with stale positions).
-	for (let i = 0; i < sorted.length - 1; i++) {
-		const later = sorted[i].range;
-		const earlier = sorted[i + 1].range;
+	// once applied bottom-up.
+	for (let i = 0; i < unique.length - 1; i++) {
+		const later = unique[i].range;
+		const earlier = unique[i + 1].range;
 		if (comparePosition(earlier.end, later.start) > 0) {
 			throw new ToolError(
-				`overlapping LSP edits: ${formatRange(earlier)} conflicts with ${formatRange(later)}; multi-server rename produced inconsistent edits`,
+				`overlapping LSP edits: ${formatRange(earlier)} conflicts with ${formatRange(later)}; LSP produced inconsistent edits`,
 			);
 		}
 	}
 
-	return sorted;
+	return unique;
 }
 
 /**
