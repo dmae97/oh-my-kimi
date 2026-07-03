@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
 import { getMemoryRoot } from "../memories";
-import { getMnemopiSessionState, type MnemopiScopedMemoryHit } from "../mnemopi/state";
+import { getMnemopiSessionState, type MnemopiScopedMemoryHit, type MnemopiSessionState } from "../mnemopi/state";
 import { AgentRegistry } from "../registry/agent-registry";
 import { buildDirectoryResource } from "./filesystem-resource";
 import { validateRelativePath } from "./skill-protocol";
@@ -133,9 +133,9 @@ async function tryResolveInRoot(url: InternalUrl, memoryRoot: string): Promise<I
  * canonical (non-aliased) state per bank set so `memory://<id>` resolves in
  * one pass regardless of how many subagents are alive.
  */
-function mnemopiSessionStatesFromRegistry(): ReturnType<typeof getMnemopiSessionState>[] {
+function mnemopiSessionStatesFromRegistry(): MnemopiSessionState[] {
 	const seen = new Set<unknown>();
-	const states: ReturnType<typeof getMnemopiSessionState>[] = [];
+	const states: MnemopiSessionState[] = [];
 	for (const ref of AgentRegistry.global().list()) {
 		const session = ref.session;
 		if (!session) continue;
