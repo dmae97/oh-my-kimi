@@ -1909,7 +1909,6 @@ export async function processResponsesStream<TApi extends Api>(
 		return false;
 	};
 
-
 	const lookupOpenToolCallAlias = (
 		event: { output_index?: number; item_id?: string },
 		type: "function_call" | "custom_tool_call",
