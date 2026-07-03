@@ -33,7 +33,9 @@ import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode
 import { shouldInlineToolDescriptors } from "./config/inline-tool-descriptors-mode";
 import { isAuthenticated, kNoAuth, ModelRegistry } from "./config/model-registry";
 import {
+	formatModelSelectorValue,
 	formatModelString,
+	formatModelStringWithRouting,
 	getModelMatchPreferences,
 	parseModelPattern,
 	parseModelString,
@@ -396,6 +398,8 @@ export interface CreateAgentSessionOptions {
 	modelPattern?: string | string[];
 	/** Authenticated fallback selector for deferred subagent model patterns. */
 	modelPatternAuthFallback?: string;
+	/** Role name used to install retry fallbacks after deferred subagent patterns resolve. */
+	modelPatternFallbackRole?: string;
 	/** Thinking selector. Default: from settings, else unset */
 	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Models available for cycling (Ctrl+P in interactive mode) */
@@ -1968,12 +1972,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		if (!model && deferredModelPatterns.length > 0) {
 			const availableModels = modelRegistry.getAll();
 			const matchPreferences = getModelMatchPreferences(settings);
-			for (const pattern of deferredModelPatterns) {
+			for (let patternIndex = 0; patternIndex < deferredModelPatterns.length; patternIndex += 1) {
+				const pattern = deferredModelPatterns[patternIndex];
 				const primary = parseModelPattern(pattern, availableModels, matchPreferences);
 				if (!primary.model) continue;
 				let selectedModel = primary.model;
 				let selectedThinkingLevel = primary.thinkingLevel;
 				let selectedExplicitThinkingLevel = primary.explicitThinkingLevel;
+				let authFallbackUsed = false;
 				if (options.modelPatternAuthFallback) {
 					const primaryKey = await modelRegistry.getApiKey(primary.model);
 					if (primaryKey !== kNoAuth && !isAuthenticated(primaryKey)) {
@@ -1988,8 +1994,50 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 								selectedModel = fallback.model;
 								selectedThinkingLevel = fallback.thinkingLevel;
 								selectedExplicitThinkingLevel = fallback.explicitThinkingLevel;
+								authFallbackUsed = true;
 							}
 						}
+					}
+				}
+				if (!authFallbackUsed && options.modelPatternFallbackRole) {
+					const primarySelector = formatModelSelectorValue(
+						formatModelStringWithRouting(primary.model),
+						primary.thinkingLevel,
+					);
+					const seenSelectors = new Set<string>([primarySelector]);
+					const fallbackSelectors: string[] = [];
+					for (const fallbackPattern of deferredModelPatterns.slice(patternIndex + 1)) {
+						const fallback = parseModelPattern(fallbackPattern, availableModels, matchPreferences);
+						if (!fallback.model) continue;
+						const fallbackSelector = formatModelSelectorValue(
+							formatModelStringWithRouting(fallback.model),
+							fallback.thinkingLevel,
+						);
+						if (seenSelectors.has(fallbackSelector)) continue;
+						seenSelectors.add(fallbackSelector);
+						fallbackSelectors.push(fallbackSelector);
+					}
+					if (fallbackSelectors.length > 0) {
+						const modelRoles: Record<string, string> = {};
+						const existingRoles = settings.getModelRoles();
+						for (const role in existingRoles) {
+							const selector = existingRoles[role];
+							if (selector) {
+								modelRoles[role] = selector;
+							}
+						}
+						modelRoles[options.modelPatternFallbackRole] = primarySelector;
+						settings.override("modelRoles", modelRoles);
+						const fallbackChains: Record<string, string[]> = {
+							[options.modelPatternFallbackRole]: fallbackSelectors,
+						};
+						const existingFallbackChains = settings.get("retry.fallbackChains");
+						for (const role in existingFallbackChains) {
+							if (role !== options.modelPatternFallbackRole) {
+								fallbackChains[role] = existingFallbackChains[role];
+							}
+						}
+						settings.override("retry.fallbackChains", fallbackChains);
 					}
 				}
 				model = selectedModel;

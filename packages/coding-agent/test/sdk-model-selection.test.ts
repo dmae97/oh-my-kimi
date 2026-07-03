@@ -80,7 +80,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		pi.registerProvider("runtime-provider", dynamicOnlyProviderConfig);
 	};
 
-	async function buildSessionOptions(modelPattern: string) {
+	async function buildSessionOptions(modelPattern: string | string[]) {
 		// Pass an explicit ModelRegistry so createAgentSession skips its implicit
 		// ModelRegistry.refreshInBackground() — a network model-discovery pass
 		// (~250ms/session) that contributes nothing here: the model resolves from
@@ -203,6 +203,24 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		} finally {
 			await session.dispose();
 			getApiKeySpy.mockRestore();
+		}
+	});
+
+	test("installs fallback chain for remaining deferred subagent modelPattern candidates", async () => {
+		const { session } = await createAgentSession({
+			...(await buildSessionOptions(["runtime-provider/runtime-model", "runtime-provider/runtime-reasoning-model"])),
+			modelPatternFallbackRole: "subagent:deferred",
+		});
+
+		try {
+			expect(session.model?.provider).toBe("runtime-provider");
+			expect(session.model?.id).toBe("runtime-model");
+			expect(session.settings.getModelRole("subagent:deferred")).toBe("runtime-provider/runtime-model");
+			expect(session.settings.get("retry.fallbackChains")["subagent:deferred"]).toEqual([
+				"runtime-provider/runtime-reasoning-model",
+			]);
+		} finally {
+			await session.dispose();
 		}
 	});
 
