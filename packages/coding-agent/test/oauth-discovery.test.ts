@@ -4,6 +4,7 @@ import {
 	discoverOAuthEndpoints,
 	extractMcpAuthServerUrl,
 	extractOAuthChallengeScopes,
+	fetchResourceMetadataScopes,
 } from "@oh-my-pi/pi-coding-agent/mcp/oauth-discovery";
 import { type FetchInput, mockFetch } from "./helpers/fetch-mock";
 
@@ -229,6 +230,53 @@ describe("resource_metadata chain", () => {
 		expect(auth.oauth?.scopes).toBe("jit");
 		expect(auth.oauth?.authorizationUrl).toBe("https://auth.example.com/oauth/auth");
 		expect(auth.oauth?.tokenUrl).toBe("https://auth.example.com/oauth/token");
+	});
+
+	it("fetches scopes from resource_metadata when JSON body endpoints omit them", async () => {
+		const fetchImpl = mockFetch((input: FetchInput) => {
+			const url = String(input);
+
+			if (url === "https://gateway.example.com/jit/.well-known/oauth-protected-resource") {
+				return new Response(
+					JSON.stringify({
+						authorization_servers: ["https://auth.example.com"],
+						resource: "https://gateway.example.com",
+						scopes_supported: ["jit", "read"],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+
+			return new Response("not found", { status: 404 });
+		});
+
+		const scopes = await fetchResourceMetadataScopes(
+			"https://gateway.example.com/jit/.well-known/oauth-protected-resource",
+			{ fetch: fetchImpl },
+		);
+		expect(scopes).toBe("jit read");
+	});
+
+	it("returns undefined when resource_metadata fetch fails or lacks scopes", async () => {
+		const notFound = mockFetch(() => new Response("not found", { status: 404 }));
+		const emptyMeta = mockFetch(
+			() =>
+				new Response(JSON.stringify({ authorization_servers: ["https://auth.example.com"] }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+		);
+
+		expect(
+			await fetchResourceMetadataScopes("https://gateway.example.com/x/.well-known/oauth-protected-resource", {
+				fetch: notFound,
+			}),
+		).toBeUndefined();
+		expect(
+			await fetchResourceMetadataScopes("https://gateway.example.com/x/.well-known/oauth-protected-resource", {
+				fetch: emptyMeta,
+			}),
+		).toBeUndefined();
 	});
 
 	it("carries scopes_supported from resource metadata into discovered auth-server endpoints", async () => {

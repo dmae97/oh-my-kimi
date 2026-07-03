@@ -303,6 +303,50 @@ function issuerMatchesBase(metadataIssuer: unknown, baseUrl: string): boolean {
 }
 
 /**
+ * Read space-separated OAuth scopes off a metadata document. Accepts either
+ * an array (RFC 8414 `scopes_supported`) or a space-separated string
+ * (`scopes` / `scope`), matching what MCP gateways emit under
+ * `/.well-known/oauth-*`.
+ */
+function readMetadataScopes(metadata: Record<string, unknown>): string | undefined {
+	if (Array.isArray(metadata.scopes_supported)) {
+		const joined = metadata.scopes_supported.filter((scope): scope is string => typeof scope === "string").join(" ");
+		if (joined) return joined;
+	}
+	if (typeof metadata.scopes === "string" && metadata.scopes.trim() !== "") return metadata.scopes;
+	if (typeof metadata.scope === "string" && metadata.scope.trim() !== "") return metadata.scope;
+	return undefined;
+}
+
+/**
+ * Fetch the RFC 9728 protected-resource metadata document at
+ * {@link resourceMetadataUrl} and return any scopes it advertises. Used by
+ * `/mcp add` / `/mcp reauth` on the JSON-error-body path, where the caller
+ * already holds usable OAuth endpoints but the required scopes live only in
+ * the advertised protected-resource metadata — a case `discoverOAuthEndpoints`
+ * normally handles but that path is skipped when the body carried endpoints.
+ * Returns `undefined` on any error or when no scopes are advertised.
+ */
+export async function fetchResourceMetadataScopes(
+	resourceMetadataUrl: string,
+	opts?: { fetch?: FetchImpl },
+): Promise<string | undefined> {
+	const fetchImpl: FetchImpl = opts?.fetch ?? fetch;
+	try {
+		const resp = await fetchImpl(resourceMetadataUrl, {
+			method: "GET",
+			headers: { Accept: "application/json" },
+			redirect: "follow",
+		});
+		if (!resp.ok) return undefined;
+		const meta = (await resp.json()) as Record<string, unknown>;
+		return readMetadataScopes(meta);
+	} catch {
+		return undefined;
+	}
+}
+
+/**
  * Try to discover OAuth endpoints by querying the server's well-known endpoints.
  * This is a fallback when error responses don't include OAuth metadata.
  */
@@ -326,20 +370,6 @@ export async function discoverOAuthEndpoints(
 
 	let protectedResource = opts?.protectedResource;
 	let protectedScopes = opts?.protectedScopes;
-	// Read space-separated scopes off a metadata document. Accepts an array
-	// (RFC 8414 `scopes_supported`) or a space-separated string (`scopes` /
-	// `scope`), matching what MCP gateways emit in `/.well-known/oauth-*`.
-	const readMetadataScopes = (metadata: Record<string, unknown>): string | undefined => {
-		if (Array.isArray(metadata.scopes_supported)) {
-			const joined = metadata.scopes_supported
-				.filter((scope): scope is string => typeof scope === "string")
-				.join(" ");
-			if (joined) return joined;
-		}
-		if (typeof metadata.scopes === "string" && metadata.scopes.trim() !== "") return metadata.scopes;
-		if (typeof metadata.scope === "string" && metadata.scope.trim() !== "") return metadata.scope;
-		return undefined;
-	};
 	const addDiscoveryBase = (url: string | undefined, issuerCandidate: boolean): void => {
 		if (!url || visitedAuthServers.has(url)) return;
 		urlsToQuery.push({ url, issuerCandidate });
