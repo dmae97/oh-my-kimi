@@ -125,6 +125,8 @@ const FACT_QUERY_FILLER_WORDS = new Set([
 ]);
 
 const FACT_CLITIC_FRAGMENTS = new Set(["d", "ll", "m", "re", "s", "t", "ve"]);
+const FLAT_FACT_SEARCH_NOISE = new Set(["entity", "fact"]);
+
 
 function nowIso(): string {
 	return new Date().toISOString();
@@ -1016,7 +1018,7 @@ export async function recallEnhanced(
 		updateRecallCounts: false,
 	});
 	if (options.includeFacts === true) {
-		const facts = factRecall(beam, query, Math.min(3, topK));
+		const facts = factRecall(beam, query, factRecallLimit(topK));
 		results.push(...facts);
 	}
 	results.sort((left, right) => (right.score ?? 0) - (left.score ?? 0));
@@ -1025,17 +1027,33 @@ export async function recallEnhanced(
 	return finalResults;
 }
 
+function factRecallLimit(topK: number): number {
+	const requested = Math.max(0, Math.floor(topK));
+	if (requested === 0) return 0;
+	return Math.max(1, Math.ceil(requested / 2));
+}
+
 function sandwichOrder(results: readonly RecallResult[]): {
 	high: RecallResult[];
 	medium: RecallResult[];
 	closing: RecallResult[];
 } {
 	const scored = [...results].sort((left, right) => (right.score ?? 0) - (left.score ?? 0));
-	const high = scored.filter(r => (r.score ?? 0) > 0.7).slice(0, 3);
-	const medium = scored.filter(r => (r.score ?? 0) > 0.3 && (r.score ?? 0) <= 0.7).slice(0, 5);
-	const closing = scored.filter(r => !high.includes(r)).slice(0, 3);
-	return { high, medium, closing: closing.length > 0 ? closing : high.slice(0, 2) };
+	const high = scored.slice(0, 3);
+	const medium = scored.slice(high.length, high.length + 5);
+	const closing = scored.slice(high.length + medium.length, high.length + medium.length + 3);
+	return { high, medium, closing };
 }
+function factSearchableText(subject: string, predicate: string, object: string): string {
+	const objectText = object.trim();
+	if (objectText.length === 0) return `${subject} ${predicate}`.trim();
+	const structuralParts = [subject, predicate].filter(part => {
+		const token = part.trim().toLowerCase();
+		return token.length > 0 && !FLAT_FACT_SEARCH_NOISE.has(token);
+	});
+	return [...structuralParts, objectText].join(" ").trim();
+}
+
 
 function factLine(result: RecallResult): string {
 	const content = result.content.slice(0, 200).trim();
@@ -1137,7 +1155,7 @@ export function factRecall(beam: BeamMemoryState, query: string, topK = 30): Fac
 			const object = asString(row.object);
 			const confidence = asNumber(row.confidence, 0.5);
 			const content = object.length > 0 ? object : `${subject} ${predicate}`.trim();
-			const searchable = `${subject} ${predicate} ${object}`.trim();
+			const searchable = factSearchableText(subject, predicate, object);
 			const queryGroups = factExpandedTokenGroups(query, searchable);
 			const queryTokens = tokensFromGroups(queryGroups);
 			const lexical =
@@ -1168,6 +1186,7 @@ export function factRecall(beam: BeamMemoryState, query: string, topK = 30): Fac
 			};
 			return result;
 		})
+		.filter(result => (result.score ?? 0) > 0)
 		.sort((left, right) => (right.score ?? 0) - (left.score ?? 0))
 		.slice(0, topK);
 }
