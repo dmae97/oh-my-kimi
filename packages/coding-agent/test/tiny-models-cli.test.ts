@@ -75,4 +75,40 @@ describe("tiny-models download model resolution", () => {
 
 		expect(output.join("")).toContain("Failed to download LFM2 700M: runtime install failed.");
 	});
+
+	it("prints actionable CUDA provider diagnostics from worker errors", async () => {
+		const output: string[] = [];
+		const isTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+		const diagnostic = [
+			"Error: Failed to load ONNX Runtime CUDA execution provider",
+			"ONNX Runtime CUDA diagnostics:",
+			"  PI_TINY_DEVICE=cuda requested CUDAExecutionProvider",
+			"  side runtime: /home/user/.omp/cache/tiny-title-runtime/transformers-test/node_modules",
+			"  cause: libcudnn.so.9: cannot open shared object file",
+		].join("\n");
+		Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
+		spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+			output.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
+			return true;
+		});
+		spyOn(tinyTitleClient, "downloadModel").mockResolvedValue({
+			ok: false,
+			error: diagnostic,
+		});
+
+		try {
+			await expect(runTinyModelsCommand({ action: "download", model: "lfm2-700m", flags: {} })).rejects.toThrow(
+				"One or more tiny title models failed to download",
+			);
+		} finally {
+			if (isTtyDescriptor) Object.defineProperty(process.stdout, "isTTY", isTtyDescriptor);
+			else Reflect.deleteProperty(process.stdout, "isTTY");
+		}
+
+		const text = output.join("");
+		expect(text).toContain("Failed to download LFM2 700M:");
+		expect(text).toContain("PI_TINY_DEVICE=cuda");
+		expect(text).toContain("libcudnn.so.9");
+		expect(text).toContain("tiny-title-runtime");
+	});
 });
