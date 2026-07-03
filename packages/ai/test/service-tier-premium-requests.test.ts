@@ -25,6 +25,8 @@ const fireworks = m("fireworks", "openai-completions", "qwen3");
 const orOpenAI = m("openrouter", "openai-responses", "openai/gpt-5.5");
 const orGoogle = m("openrouter", "openai-completions", "google/gemini-3-flash");
 const orAnthropic = m("openrouter", "openai-completions", "anthropic/claude-opus-4-6");
+const customOpenAI = m("custom-relay", "openai-completions", "gpt-5.5");
+const customCodex = m("custom-relay", "openai-codex-responses", "gpt-5.5");
 
 describe("serviceTierFamily", () => {
 	it("classifies first-party providers by provider/api", () => {
@@ -35,6 +37,11 @@ describe("serviceTierFamily", () => {
 		expect(serviceTierFamily(gemini)).toBe("google");
 		expect(serviceTierFamily(vertexGemini)).toBe("google");
 		expect(serviceTierFamily(fireworks)).toBeUndefined();
+	});
+
+	it("classifies OpenAI-compatible custom providers by api", () => {
+		expect(serviceTierFamily(customOpenAI)).toBe("openai");
+		expect(serviceTierFamily(customCodex)).toBe("openai");
 	});
 
 	it("classifies OpenRouter models by id namespace", () => {
@@ -51,6 +58,7 @@ describe("resolveModelServiceTier", () => {
 		expect(resolveModelServiceTier(tiers, openai)).toBe("priority");
 		expect(resolveModelServiceTier(tiers, gemini)).toBe("flex");
 		expect(resolveModelServiceTier(tiers, orAnthropic)).toBe("priority");
+		expect(resolveModelServiceTier(tiers, customCodex)).toBe("priority");
 		expect(resolveModelServiceTier(tiers, fireworks)).toBeUndefined(); // no family
 		expect(resolveModelServiceTier(undefined, openai)).toBeUndefined();
 		expect(resolveModelServiceTier({ google: "priority" }, openai)).toBeUndefined();
@@ -66,6 +74,9 @@ describe("shouldSendServiceTier", () => {
 			expect(shouldSendServiceTier("default", p)).toBe(false);
 			expect(shouldSendServiceTier("auto", p)).toBe(false);
 		}
+		expect(shouldSendServiceTier("priority", customCodex)).toBe(true);
+		expect(shouldSendServiceTier("scale", customOpenAI)).toBe(true);
+		expect(shouldSendServiceTier("default", customOpenAI)).toBe(false);
 	});
 
 	it("sends flex/priority on direct Google, priority-only on Vertex (no scale)", () => {
@@ -97,6 +108,7 @@ describe("realizesPriorityServiceTier", () => {
 		expect(realizesPriorityServiceTier("priority", fireworks)).toBe(true);
 		expect(realizesPriorityServiceTier("priority", orOpenAI)).toBe(true);
 		expect(realizesPriorityServiceTier("priority", orGoogle)).toBe(true);
+		expect(realizesPriorityServiceTier("priority", customCodex)).toBe(true);
 	});
 
 	it("does not realize priority where the wire drops it", () => {

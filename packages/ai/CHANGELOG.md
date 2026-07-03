@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed custom OpenAI-compatible relays serving OpenAI model ids so service-tier resolution can classify them as OpenAI-family targets for fast mode ([#4386](https://github.com/can1357/oh-my-pi/issues/4386)).
+
 ## [16.3.3] - 2026-07-02
 
 ### Added
