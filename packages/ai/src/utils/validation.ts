@@ -928,6 +928,110 @@ function normalizeEnumStringWhitespace(schema: unknown, value: unknown): { value
 }
 
 // ============================================================================
+// Path-like string trailing-whitespace normalization (LLM quirk).
+// ============================================================================
+//
+// LLMs sometimes emit tool arguments with a trailing newline dangling off a
+// path/URL — the artifact of a token boundary or a JSON stream heuristic. Path
+// values are never legitimately terminated by whitespace, so we strip trailing
+// whitespace from string values on well-known path/URL properties before the
+// tool ever sees them. Content-carrying properties (`content`, `input`, `body`,
+// `text`, `command`) are excluded so genuine trailing newlines survive.
+// ============================================================================
+
+/**
+ * Property names whose values are treated as filesystem paths, URLs, or URIs.
+ * The trim only fires on strings sitting under one of these keys, so
+ * `content: "line1\n"` on `write` and similar content-carrying fields keep
+ * their trailing whitespace intact.
+ */
+const PATH_LIKE_KEYS: ReadonlySet<string> = new Set([
+	"path",
+	"paths",
+	"file",
+	"file_path",
+	"filePath",
+	"filepath",
+	"url",
+	"uri",
+]);
+
+const TRAILING_WHITESPACE_RE = /\s+$/;
+
+function trimTrailingWhitespaceString(input: string): string {
+	if (!TRAILING_WHITESPACE_RE.test(input)) return input;
+	return input.replace(TRAILING_WHITESPACE_RE, "");
+}
+
+function trimPathLikeStringLeaf(input: unknown): unknown {
+	if (typeof input === "string") {
+		const trimmed = trimTrailingWhitespaceString(input);
+		return trimmed === input ? input : trimmed;
+	}
+	if (Array.isArray(input)) {
+		let changed = false;
+		let next = input;
+		for (let i = 0; i < input.length; i += 1) {
+			const item = input[i];
+			if (typeof item !== "string") continue;
+			const trimmed = trimTrailingWhitespaceString(item);
+			if (trimmed === item) continue;
+			if (!changed) {
+				next = input.slice();
+				changed = true;
+			}
+			next[i] = trimmed;
+		}
+		return changed ? next : input;
+	}
+	return input;
+}
+
+/**
+ * Recursively strip trailing whitespace from string values whose property key
+ * matches {@link PATH_LIKE_KEYS}. Runs by property name only (schema-agnostic)
+ * so it fires uniformly across Zod, ArkType, and plain JSON Schema tools.
+ */
+function normalizePathLikeFieldWhitespace(value: unknown): { value: unknown; changed: boolean } {
+	if (Array.isArray(value)) {
+		let changed = false;
+		let next = value;
+		for (let i = 0; i < value.length; i += 1) {
+			const normalized = normalizePathLikeFieldWhitespace(value[i]);
+			if (!normalized.changed) continue;
+			if (!changed) {
+				next = [...value];
+				changed = true;
+			}
+			next[i] = normalized.value;
+		}
+		return { value: changed ? next : value, changed };
+	}
+
+	if (value === null || typeof value !== "object") return { value, changed: false };
+
+	const source = value as Record<string, unknown>;
+	let changed = false;
+	let out: Record<string, unknown> = source;
+	for (const [key, entry] of Object.entries(source)) {
+		let nextEntry = entry;
+		if (PATH_LIKE_KEYS.has(key)) {
+			const trimmed = trimPathLikeStringLeaf(entry);
+			if (trimmed !== entry) nextEntry = trimmed;
+		}
+		const nested = normalizePathLikeFieldWhitespace(nextEntry);
+		if (nested.changed) nextEntry = nested.value;
+		if (nextEntry === entry) continue;
+		if (!changed) {
+			out = { ...source };
+			changed = true;
+		}
+		out[key] = nextEntry;
+	}
+	return { value: changed ? out : value, changed };
+}
+
+// ============================================================================
 // Double-encoded object-key normalization (LLM quirk).
 // ============================================================================
 //
@@ -1583,6 +1687,16 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 		changed = true;
 	}
 
+	// Strip trailing whitespace from string values on well-known path/URL
+	// property names. Some models tack a newline onto a path arg from stream
+	// artifacts; downstream tools then either fail to stat the target or
+	// annotate a "corrected from" hint the model misreads as tool corruption.
+	const pathLikeNormalization = normalizePathLikeFieldWhitespace(normalizedArgs);
+	if (pathLikeNormalization.changed) {
+		normalizedArgs = pathLikeNormalization.value;
+		changed = true;
+	}
+
 	// Then re-shape JSON-stringified arrays whose schema accepts both string
 	// and array (e.g. `paths: string | string[]`). Without this, zod accepts
 	// the literal `'["a","b"]'` as a string and downstream tools treat it as
@@ -1628,6 +1742,11 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 		const enumStringNormalizationPass = normalizeEnumStringWhitespace(json, normalizedArgs);
 		if (enumStringNormalizationPass.changed) {
 			normalizedArgs = enumStringNormalizationPass.value;
+		}
+
+		const pathLikeNormalizationPass = normalizePathLikeFieldWhitespace(normalizedArgs);
+		if (pathLikeNormalizationPass.changed) {
+			normalizedArgs = pathLikeNormalizationPass.value;
 		}
 
 		// Re-run the union-string coercion because `coerceArgsFromIssues` may
