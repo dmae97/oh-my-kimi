@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed tool-call validation to trim schema-matching enum values with stray surrounding whitespace before dispatch ([#4461](https://github.com/can1357/oh-my-pi/issues/4461)).
+
 ## [16.3.4] - 2026-07-03
 
 ### Added

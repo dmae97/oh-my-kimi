@@ -835,6 +835,98 @@ function normalizeOptionalNullsForSchema(
 	return { value: changed ? nextValue : value, changed };
 }
 
+function normalizeEnumStringWhitespace(schema: unknown, value: unknown): { value: unknown; changed: boolean } {
+	if (value === null || value === undefined) return { value, changed: false };
+	if (schema === null || typeof schema !== "object") return { value, changed: false };
+
+	const schemaObject = schema as Record<string, unknown>;
+
+	const normalizeAnyOfLike = (keyword: "anyOf" | "oneOf"): { value: unknown; changed: boolean } => {
+		const branches = schemaObject[keyword];
+		if (!Array.isArray(branches)) return { value, changed: false };
+		if (branches.some(branch => branchMatchesSchema(branch, value))) return { value, changed: false };
+
+		for (const branch of branches) {
+			const normalized = normalizeEnumStringWhitespace(branch, value);
+			if (!normalized.changed) continue;
+			if (branchMatchesSchema(branch, normalized.value)) return normalized;
+		}
+		return { value, changed: false };
+	};
+
+	const anyOfNormalization = normalizeAnyOfLike("anyOf");
+	if (anyOfNormalization.changed) return anyOfNormalization;
+
+	const oneOfNormalization = normalizeAnyOfLike("oneOf");
+	if (oneOfNormalization.changed) return oneOfNormalization;
+
+	if (Array.isArray(schemaObject.allOf)) {
+		let changed = false;
+		let nextValue: unknown = value;
+		for (const branch of schemaObject.allOf) {
+			const normalized = normalizeEnumStringWhitespace(branch, nextValue);
+			if (!normalized.changed) continue;
+			nextValue = normalized.value;
+			changed = true;
+		}
+		if (changed) return { value: nextValue, changed: true };
+	}
+
+	if (typeof value === "string") {
+		const trimmed = value.trim();
+		if (trimmed !== value) {
+			const enumValues = schemaObject.enum;
+			if (Array.isArray(enumValues) && !enumValues.includes(value) && enumValues.includes(trimmed)) {
+				return { value: trimmed, changed: true };
+			}
+			const constValue = schemaObject.const;
+			if (typeof constValue === "string" && trimmed === constValue) {
+				return { value: trimmed, changed: true };
+			}
+		}
+		return { value, changed: false };
+	}
+
+	if (Array.isArray(value)) {
+		const itemSchema = schemaObject.items;
+		if (itemSchema === null || typeof itemSchema !== "object" || Array.isArray(itemSchema)) {
+			return { value, changed: false };
+		}
+		let changed = false;
+		let nextValue = value;
+		for (let i = 0; i < value.length; i += 1) {
+			const normalized = normalizeEnumStringWhitespace(itemSchema, value[i]);
+			if (!normalized.changed) continue;
+			if (!changed) {
+				nextValue = [...value];
+				changed = true;
+			}
+			nextValue[i] = normalized.value;
+		}
+		return { value: changed ? nextValue : value, changed };
+	}
+
+	if (typeof value !== "object") return { value, changed: false };
+	const properties = schemaObject.properties;
+	if (!properties || typeof properties !== "object") return { value, changed: false };
+
+	const propsObject = properties as Record<string, unknown>;
+	const valueObject = value as Record<string, unknown>;
+	let changed = false;
+	let nextValue = valueObject;
+	for (const [key, propertySchema] of Object.entries(propsObject)) {
+		if (!(key in nextValue)) continue;
+		const normalized = normalizeEnumStringWhitespace(propertySchema, nextValue[key]);
+		if (!normalized.changed) continue;
+		if (!changed) {
+			nextValue = { ...nextValue };
+			changed = true;
+		}
+		nextValue[key] = normalized.value;
+	}
+	return { value: changed ? nextValue : valueObject, changed };
+}
+
 // ============================================================================
 // Double-encoded object-key normalization (LLM quirk).
 // ============================================================================
@@ -1485,6 +1577,12 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 		changed = true;
 	}
 
+	const enumStringNormalization = normalizeEnumStringWhitespace(json, normalizedArgs);
+	if (enumStringNormalization.changed) {
+		normalizedArgs = enumStringNormalization.value;
+		changed = true;
+	}
+
 	// Then re-shape JSON-stringified arrays whose schema accepts both string
 	// and array (e.g. `paths: string | string[]`). Without this, zod accepts
 	// the literal `'["a","b"]'` as a string and downstream tools treat it as
@@ -1525,6 +1623,11 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 		const nullNormalization = normalizeOptionalNullsForSchema(json, normalizedArgs);
 		if (nullNormalization.changed) {
 			normalizedArgs = nullNormalization.value;
+		}
+
+		const enumStringNormalizationPass = normalizeEnumStringWhitespace(json, normalizedArgs);
+		if (enumStringNormalizationPass.changed) {
+			normalizedArgs = enumStringNormalizationPass.value;
 		}
 
 		// Re-run the union-string coercion because `coerceArgsFromIssues` may
