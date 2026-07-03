@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed LSP diagnostics staleness after harness-authored file writes by sending watched-file change notifications to running language servers before edit-time diagnostics are read ([#4459](https://github.com/can1357/oh-my-pi/issues/4459)).
+
 ## [16.3.4] - 2026-07-03
 
 ### Fixed
