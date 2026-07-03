@@ -123,13 +123,17 @@ describe("Anthropic abandoned/aborted tool-use replay", () => {
 		expect(blocks.some(b => b.type === "tool_use")).toBe(true);
 	});
 
-	it("downgrades historical end_turn(stop) tool-use thinking to text so the continuation stays wire-valid", () => {
+	it("drops historical end_turn(stop) tool-use thinking so the continuation stays wire-valid", () => {
 		const blocks = assistantBlocks(buildHistoryWithLaterAssistant("stop", "sig_valid"));
 		expectNoUnsignedThinking(blocks);
-		// Signature stripped (historical abandoned tool-use) -> encoder downgrades to text.
+		// Signature stripped (historical same-model abandoned tool-use) -> the thinking block is
+		// dropped entirely, never demoted to text. Demotion would trip the reasoning_extraction
+		// classifier; the reasoning is the model's own prior chain and is not replayed as prose.
 		expect(blocks.some(b => b.type === "thinking")).toBe(false);
-		expect(blocks.some(b => b.type === "text" && b.text?.includes("deliberating"))).toBe(true);
-		// tool_use is preserved so it still pairs with the appended tool_result.
+		expect(blocks.some(b => b.type === "text" && b.text?.includes("deliberating"))).toBe(false);
+		// The turn's other content survives (visible text + tool_use), so the tool_use still pairs
+		// with the appended tool_result and the continuation stays wire-valid.
+		expect(blocks.some(b => b.type === "text" && b.text === "I'll check the weather.")).toBe(true);
 		expect(blocks.some(b => b.type === "tool_use")).toBe(true);
 	});
 
@@ -156,7 +160,10 @@ describe("Anthropic abandoned/aborted tool-use replay", () => {
 		expectNoUnsignedThinking(blocks);
 		expect(blocks.some(b => b.type === "thinking" && b.signature === "sig_done")).toBe(true);
 		expect(blocks.some(b => b.type === "thinking" && b.signature === "trunc")).toBe(false);
-		expect(blocks.some(b => b.type === "text" && b.text === "<thinking>\nnow decide\n</thinking>")).toBe(true);
+		// The stripped mid-stream block is dropped entirely, not demoted to text: same-model replay
+		// to signature-enforcing Anthropic never emits demoted thinking (it would trip the
+		// reasoning_extraction classifier). Only the earlier fully-signed block replays natively.
+		expect(blocks.some(b => b.type === "text" && b.text?.includes("now decide"))).toBe(false);
 		expect(blocks.some(b => b.type === "tool_use")).toBe(true);
 	});
 

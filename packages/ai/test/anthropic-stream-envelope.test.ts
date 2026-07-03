@@ -641,10 +641,15 @@ describe("anthropic stream envelope handling", () => {
 			model,
 			false,
 		);
+		// The unwrapped thinking block carries no signature. On same-model replay to
+		// signature-enforcing Anthropic an unsigned thinking block is dropped entirely — it cannot
+		// replay natively (a "" signature 400s) and must not be demoted to text (demotion trips the
+		// reasoning_extraction classifier). It was this turn's only content, so the whole assistant
+		// message falls away, leaving just the two surrounding user turns with no leaked reasoning.
 		const replayAssistant = replayParams.find(param => param.role === "assistant");
-		expect(replayAssistant?.content).toEqual([
-			{ type: "text", text: "<thinking>\nCheck logs before accepting container health.\n</thinking>" },
-		]);
+		expect(replayAssistant).toBeUndefined();
+		expect(replayParams.map(param => param.role)).toEqual(["user", "user"]);
+		expect(replayParams.every(param => !JSON.stringify(param.content).includes("Check logs"))).toBe(true);
 	});
 	it("preserves signed thinking bytes when no literal thinking envelope is present", async () => {
 		const signedThinking = "\nCheck logs before accepting container health.\n";
