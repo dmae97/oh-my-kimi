@@ -928,24 +928,25 @@ function normalizeEnumStringWhitespace(schema: unknown, value: unknown): { value
 }
 
 // ============================================================================
-// Path-like string trailing-whitespace normalization (LLM quirk).
+// Identifier-string trailing-whitespace normalization (LLM quirk).
 // ============================================================================
 //
 // LLMs sometimes emit tool arguments with a trailing newline dangling off a
-// path/URL — the artifact of a token boundary or a JSON stream heuristic. Path
+// short identifier — a path, URL, or a display label like `title`. These
 // values are never legitimately terminated by whitespace, so we strip trailing
-// whitespace from string values on well-known path/URL properties before the
-// tool ever sees them. Content-carrying properties (`content`, `input`, `body`,
-// `text`, `command`) are excluded so genuine trailing newlines survive.
+// whitespace from string values on the well-known keys below before the tool
+// ever sees them. Content-carrying properties (`content`, `input`, `body`,
+// `text`, `command`, `code`) are intentionally NOT trimmed so genuine trailing
+// newlines survive on writes, patches, shell commands, and eval snippets.
 // ============================================================================
 
 /**
- * Property names whose values are treated as filesystem paths, URLs, or URIs.
- * The trim only fires on strings sitting under one of these keys, so
- * `content: "line1\n"` on `write` and similar content-carrying fields keep
- * their trailing whitespace intact.
+ * Property names whose values are treated as short identifiers — filesystem
+ * paths, URLs, URIs, or display labels. The trim only fires on strings sitting
+ * under one of these keys, so `content: "line1\n"` on `write` and `code:
+ * "console.log('hi')\n"` on `eval` keep their trailing whitespace intact.
  */
-const PATH_LIKE_KEYS: ReadonlySet<string> = new Set([
+const IDENTIFIER_STRING_KEYS: ReadonlySet<string> = new Set([
 	"path",
 	"paths",
 	"file",
@@ -954,6 +955,8 @@ const PATH_LIKE_KEYS: ReadonlySet<string> = new Set([
 	"filepath",
 	"url",
 	"uri",
+	"title",
+	"label",
 ]);
 
 const TRAILING_WHITESPACE_RE = /\s+$/;
@@ -963,7 +966,7 @@ function trimTrailingWhitespaceString(input: string): string {
 	return input.replace(TRAILING_WHITESPACE_RE, "");
 }
 
-function trimPathLikeStringLeaf(input: unknown): unknown {
+function trimIdentifierStringLeaf(input: unknown): unknown {
 	if (typeof input === "string") {
 		const trimmed = trimTrailingWhitespaceString(input);
 		return trimmed === input ? input : trimmed;
@@ -989,15 +992,16 @@ function trimPathLikeStringLeaf(input: unknown): unknown {
 
 /**
  * Recursively strip trailing whitespace from string values whose property key
- * matches {@link PATH_LIKE_KEYS}. Runs by property name only (schema-agnostic)
- * so it fires uniformly across Zod, ArkType, and plain JSON Schema tools.
+ * matches {@link IDENTIFIER_STRING_KEYS}. Runs by property name only
+ * (schema-agnostic) so it fires uniformly across Zod, ArkType, and plain JSON
+ * Schema tools.
  */
-function normalizePathLikeFieldWhitespace(value: unknown): { value: unknown; changed: boolean } {
+function normalizeIdentifierStringWhitespace(value: unknown): { value: unknown; changed: boolean } {
 	if (Array.isArray(value)) {
 		let changed = false;
 		let next = value;
 		for (let i = 0; i < value.length; i += 1) {
-			const normalized = normalizePathLikeFieldWhitespace(value[i]);
+			const normalized = normalizeIdentifierStringWhitespace(value[i]);
 			if (!normalized.changed) continue;
 			if (!changed) {
 				next = [...value];
@@ -1015,11 +1019,11 @@ function normalizePathLikeFieldWhitespace(value: unknown): { value: unknown; cha
 	let out: Record<string, unknown> = source;
 	for (const [key, entry] of Object.entries(source)) {
 		let nextEntry = entry;
-		if (PATH_LIKE_KEYS.has(key)) {
-			const trimmed = trimPathLikeStringLeaf(entry);
+		if (IDENTIFIER_STRING_KEYS.has(key)) {
+			const trimmed = trimIdentifierStringLeaf(entry);
 			if (trimmed !== entry) nextEntry = trimmed;
 		}
-		const nested = normalizePathLikeFieldWhitespace(nextEntry);
+		const nested = normalizeIdentifierStringWhitespace(nextEntry);
 		if (nested.changed) nextEntry = nested.value;
 		if (nextEntry === entry) continue;
 		if (!changed) {
@@ -1687,13 +1691,14 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 		changed = true;
 	}
 
-	// Strip trailing whitespace from string values on well-known path/URL
-	// property names. Some models tack a newline onto a path arg from stream
-	// artifacts; downstream tools then either fail to stat the target or
-	// annotate a "corrected from" hint the model misreads as tool corruption.
-	const pathLikeNormalization = normalizePathLikeFieldWhitespace(normalizedArgs);
-	if (pathLikeNormalization.changed) {
-		normalizedArgs = pathLikeNormalization.value;
+	// Strip trailing whitespace from string values on well-known
+	// identifier-like property names (paths, URLs, titles). Some models tack
+	// a newline onto a short-identifier arg from stream artifacts; downstream
+	// tools then either fail to stat the target or annotate a "corrected
+	// from" hint the model misreads as tool corruption.
+	const identifierStringNormalization = normalizeIdentifierStringWhitespace(normalizedArgs);
+	if (identifierStringNormalization.changed) {
+		normalizedArgs = identifierStringNormalization.value;
 		changed = true;
 	}
 
@@ -1744,9 +1749,9 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 			normalizedArgs = enumStringNormalizationPass.value;
 		}
 
-		const pathLikeNormalizationPass = normalizePathLikeFieldWhitespace(normalizedArgs);
-		if (pathLikeNormalizationPass.changed) {
-			normalizedArgs = pathLikeNormalizationPass.value;
+		const identifierStringNormalizationPass = normalizeIdentifierStringWhitespace(normalizedArgs);
+		if (identifierStringNormalizationPass.changed) {
+			normalizedArgs = identifierStringNormalizationPass.value;
 		}
 
 		// Re-run the union-string coercion because `coerceArgsFromIssues` may

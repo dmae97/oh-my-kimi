@@ -89,4 +89,33 @@ describe("Tool argument whitespace normalization", () => {
 
 		expect(result).toEqual({ path: "docs/foo.md", content: "hello\n" });
 	});
+
+	it("trims trailing whitespace from title fields while keeping code content", () => {
+		const tool: Tool = {
+			name: "eval",
+			description: "",
+			parameters: z.object({
+				language: z.enum(["py", "js", "rb", "jl"]),
+				code: z.string(),
+				title: z.string().optional(),
+			}),
+		};
+
+		const result = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-eval-title-newline",
+			name: "eval",
+			arguments: {
+				language: "js\n",
+				title: "read multi_observation lines 36-100\n",
+				code: "console.log('hi')\n",
+			},
+		});
+
+		expect(result).toEqual({
+			language: "js",
+			title: "read multi_observation lines 36-100",
+			code: "console.log('hi')\n",
+		});
+	});
 });

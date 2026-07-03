@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed tool-call validation to strip stray trailing whitespace on schema-matching enum values and on well-known path/URL fields (`path`, `paths`, `file`, `file_path`, `url`, `uri`) before dispatch, keeping content-carrying fields (`content`, `input`, etc.) intact ([#4461](https://github.com/can1357/oh-my-pi/issues/4461)).
+- Fixed tool-call validation to strip stray trailing whitespace on schema-matching enum values and on well-known identifier fields (`path`, `paths`, `file`, `file_path`, `url`, `uri`, `title`, `label`) before dispatch, keeping content-carrying fields (`content`, `input`, `code`, `command`, etc.) intact ([#4461](https://github.com/can1357/oh-my-pi/issues/4461)).
 
 ## [16.3.4] - 2026-07-03
 
