@@ -67,4 +67,30 @@ describe("tiny runtime CUDA provider repair", () => {
 		expect(diagnostic).toContain("CUDA runtime reports no CUDA-capable device");
 		expect(diagnostic).toContain("make the NVIDIA GPU visible to this process/session");
 	});
+
+	it("surfaces a deferred sidecar install failure through the CUDA diagnostics helper", async () => {
+		if (process.platform !== "linux" || process.arch !== "x64") return;
+		const runtimeDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-tiny-runtime-install-"));
+		tempDirs.push(runtimeDir);
+		const packageDir = path.join(runtimeDir, "node_modules", "onnxruntime-node");
+		await Bun.write(
+			path.join(packageDir, "package.json"),
+			JSON.stringify({ name: "onnxruntime-node", version: "1.24.3", main: "dist/index.js" }),
+		);
+		await Bun.write(path.join(packageDir, "dist", "index.js"), "module.exports = {};\n");
+
+		const diagnostic = await formatOnnxRuntimeCudaDiagnostics(
+			{
+				__ompRuntimeNodeModules: path.join(runtimeDir, "node_modules"),
+				__ompCudaRepairError:
+					"Failed to install ONNX Runtime CUDA provider binaries: connect ENETUNREACH api.nuget.org",
+			},
+			"cuda",
+			new Error("OrtSessionOptionsAppendExecutionProvider_Cuda: Failed to load shared library"),
+		);
+
+		expect(diagnostic).toContain("ONNX Runtime CUDA provider install failed");
+		expect(diagnostic).toContain("ENETUNREACH");
+		expect(diagnostic).toContain("CPU inference remained available");
+	});
 });
