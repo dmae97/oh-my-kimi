@@ -13962,9 +13962,17 @@ export class AgentSession {
 				continue;
 			}
 			if (event.type === "done") {
+				// A well-formed provider "done" event carries `content: AssistantContentBlock[]`,
+				// but a proxy/wrapper (custom extension providers, gateway-wrapped OAuth streams,
+				// see #4323) can hand back a message whose `content` was dropped or replaced with
+				// `undefined`. Downstream `.content.filter` at the sanitize step below would then
+				// crash the recap turn with `TypeError: undefined is not an object (evaluating
+				// 'H.content.filter')`. Normalize to `[]` so the recap surfaces an empty reply
+				// instead of turning a malformed side-channel response into a session-mute crash.
+				const rawContent = Array.isArray(event.message.content) ? event.message.content : [];
 				assistantMessage = this.#obfuscator?.hasSecrets()
-					? { ...event.message, content: deobfuscateAssistantContent(this.#obfuscator, event.message.content) }
-					: event.message;
+					? { ...event.message, content: deobfuscateAssistantContent(this.#obfuscator, rawContent) }
+					: { ...event.message, content: rawContent };
 				break;
 			}
 			if (event.type === "error") {
@@ -13998,7 +14006,7 @@ export class AgentSession {
 	#buildEphemeralSnapshot(promptText: string): AgentMessage[] {
 		const messages = [...this.messages];
 		const streaming = this.agent.state.streamMessage;
-		if (streaming && streaming.role === "assistant") {
+		if (streaming && streaming.role === "assistant" && Array.isArray(streaming.content)) {
 			const preservedBlocks: AssistantMessage["content"] = [];
 			// Preserve thinking blocks: DeepSeek-class encoders replay them as
 			// `reasoning_content` and reject the request (HTTP 400) when the field
