@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.4] - 2026-07-03
+
 ### Added
 
 - Added Baseten as a supported model provider
