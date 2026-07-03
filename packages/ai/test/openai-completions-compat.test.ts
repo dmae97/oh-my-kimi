@@ -654,10 +654,7 @@ describe("openai-completions compatibility", () => {
 		}).result();
 
 		const calls = result.content.filter(content => content.type === "toolCall");
-		expect(calls.map(call => call.arguments)).toEqual([
-			{ command: "echo hello" },
-			{ command: "echo goodbye" },
-		]);
+		expect(calls.map(call => call.arguments)).toEqual([{ command: "echo hello" }, { command: "echo goodbye" }]);
 	});
 
 	it("falls through zero cached-token candidates to later non-zero usage fields", () => {
