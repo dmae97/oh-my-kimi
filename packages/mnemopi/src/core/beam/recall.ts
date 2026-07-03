@@ -507,6 +507,8 @@ function buildWhere(
 
 const MEMORY_COLUMNS =
 	"id, content, source, timestamp, session_id, importance, metadata_json, veracity, memory_type, recall_count, last_recalled, valid_until, superseded_by, scope, author_id, author_type, channel_id, event_date, event_date_precision, temporal_tags";
+const WORKING_MEMORY_COLUMNS =
+	"id, content, embed_text, source, timestamp, session_id, importance, metadata_json, veracity, memory_type, recall_count, last_recalled, valid_until, superseded_by, scope, author_id, author_type, channel_id, event_date, event_date_precision, temporal_tags";
 const EPISODIC_COLUMNS = `${MEMORY_COLUMNS}, rowid, summary_of, tier`;
 
 function ftsRows(
@@ -624,7 +626,7 @@ function fetchCandidates(
 	if (idsOrRowids.length === 0) return [];
 	const table = tierLabel === "working" ? "working_memory" : "episodic_memory";
 	const keyColumn = tierLabel === "working" ? "id" : "rowid";
-	const columns = tierLabel === "working" ? MEMORY_COLUMNS : EPISODIC_COLUMNS;
+	const columns = tierLabel === "working" ? WORKING_MEMORY_COLUMNS : EPISODIC_COLUMNS;
 	const { where, params } = buildWhere(beam, "m", options);
 	const rows = queryAll(
 		beam,
@@ -662,7 +664,7 @@ function fallbackCandidates(
 	options: RecallOptionsInternal,
 ): MemoryCandidate[] {
 	const table = tierLabel === "working" ? "working_memory" : "episodic_memory";
-	const columns = tierLabel === "working" ? MEMORY_COLUMNS : EPISODIC_COLUMNS;
+	const columns = tierLabel === "working" ? WORKING_MEMORY_COLUMNS : EPISODIC_COLUMNS;
 	const { where, params } = buildWhere(beam, "", options);
 	const rows = queryAll(beam, `SELECT ${columns} FROM ${table} WHERE ${where} ORDER BY timestamp DESC LIMIT ?`, [
 		...params,
@@ -684,10 +686,11 @@ function scoreCandidate(
 	options: RecallOptionsInternal,
 ): RecallResult | null {
 	const content = asString(candidate.row.content);
+	const searchableContent = asString(candidate.row.embed_text) || content;
 	const lexical =
 		queryGroups.length > 0
-			? lexicalGroupRelevance(queryGroups, content, normalizedQueryLower)
-			: lexicalRelevance(queryTokens, content, normalizedQueryLower);
+			? lexicalGroupRelevance(queryGroups, searchableContent, normalizedQueryLower)
+			: lexicalRelevance(queryTokens, searchableContent, normalizedQueryLower);
 	const minRel = minimumRelevance(queryTokens);
 	if (lexical < minRel && candidate.signals.dense < 0.65) return null;
 	const [vecWeight, ftsWeight, importanceWeight] = weights;
@@ -732,7 +735,7 @@ function scoreCandidate(
 		const tierWeight = degradationTier === 1 ? 1 : degradationTier === 2 ? 0.85 : 0.7;
 		score *= tierWeight;
 	}
-	score *= veracityWeight * currentContentAdjustment(content, options.currentSensitive === true);
+	score *= veracityWeight * currentContentAdjustment(searchableContent, options.currentSensitive === true);
 	const result: RecallResult = {
 		...candidate.row,
 		id: asString(candidate.row.id),

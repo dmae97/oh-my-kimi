@@ -120,6 +120,8 @@ describe("issue #1832 — embedding write/read coverage", () => {
 			]);
 			expect(memory.conn.query("SELECT id FROM fts_working WHERE fts_working MATCH ?").all("role")).toEqual([]);
 			expect(JSON.parse(readEmbeddings(memory)[0]?.embedding_json ?? "[]")).toEqual([1, 0, 0, 0]);
+			const ftsOnlyRecall = await memory.recall("clean", 5, { queryEmbedding: null });
+			expect(ftsOnlyRecall[0]).toMatchObject({ id, content: raw });
 		} finally {
 			memory.close();
 		}
