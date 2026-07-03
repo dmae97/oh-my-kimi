@@ -1744,10 +1744,7 @@ export const cherryPick = Object.assign(
 		 * later commits in the range still deserve to land.
 		 */
 		isEmptyError(err: unknown): boolean {
-			return (
-				err instanceof GitCommandError &&
-				/the previous cherry-pick is now empty/i.test(err.result.stderr)
-			);
+			return err instanceof GitCommandError && /the previous cherry-pick is now empty/i.test(err.result.stderr);
 		},
 	},
 );
