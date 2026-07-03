@@ -129,6 +129,11 @@ export interface RememberOptions {
 	 * as user `Instruction:` memories.
 	 */
 	extractText?: string;
+	/**
+	 * Override the text passed to embeddings and FTS indexing. Stored `content`
+	 * remains unchanged; when unset, embeddings and FTS use `content`.
+	 */
+	embedText?: string;
 	veracity?: Veracity;
 	memoryType?: string;
 	scope?: MemoryScope;

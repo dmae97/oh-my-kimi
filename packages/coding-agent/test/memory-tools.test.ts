@@ -473,7 +473,7 @@ describe("Mnemopi backend lifecycle", () => {
 		expect(state.lastRetainedTurn).toBe(4);
 	});
 
-	it("retains the full transcript but extracts facts from user-authored turns only", async () => {
+	it("retains the full transcript but extracts and embeds clean projections", async () => {
 		const state = registerMnemopiState(makeMnemopiConfig(), { cwd: "/work/project-alpha" });
 		const rememberSpy = vi.spyOn(state, "rememberInScope").mockReturnValue("memory-id");
 
@@ -496,6 +496,11 @@ describe("Mnemopi backend lifecycle", () => {
 		expect(options.extractText).toContain("I always prefer tabs");
 		expect(options.extractText).toContain("I never use semicolons");
 		expect(options.extractText).not.toContain("parser never initializes");
+		expect(options.embedText).toContain("I always prefer tabs");
+		expect(options.embedText).toContain("parser never initializes");
+		expect(options.embedText).toContain("I never use semicolons");
+		expect(options.embedText).not.toContain("[role:");
+		expect(options.embedText).not.toContain(":end]");
 	});
 
 	it("registers subagent aliases from parent Mnemopi state without Hindsight", async () => {

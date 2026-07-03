@@ -26,6 +26,7 @@ export function initBeam(db: Database): void {
 		CREATE TABLE IF NOT EXISTS working_memory (
 			id TEXT PRIMARY KEY,
 			content TEXT NOT NULL,
+			embed_text TEXT DEFAULT NULL,
 			source TEXT,
 			timestamp TEXT,
 			session_id TEXT DEFAULT 'default',
@@ -105,6 +106,7 @@ export function initBeam(db: Database): void {
 	addColumnIfMissing(db, "working_memory", "veracity", "TEXT DEFAULT 'unknown'");
 	addColumnIfMissing(db, "episodic_memory", "veracity", "TEXT DEFAULT 'unknown'");
 	addColumnIfMissing(db, "working_memory", "memory_type", "TEXT DEFAULT 'unknown'");
+	addColumnIfMissing(db, "working_memory", "embed_text", "TEXT DEFAULT NULL");
 	addColumnIfMissing(db, "episodic_memory", "memory_type", "TEXT DEFAULT 'unknown'");
 	addColumnIfMissing(db, "episodic_memory", "binary_vector", "BLOB");
 	const consolidatedAtAdded = addColumnIfMissing(db, "working_memory", "consolidated_at", "TEXT");
@@ -150,16 +152,17 @@ export function initBeam(db: Database): void {
 			INSERT INTO fts_episodes(fts_episodes, rowid, content) VALUES ('delete', old.rowid, old.content);
 			INSERT INTO fts_episodes(rowid, content) VALUES (new.rowid, new.content);
 		END`,
+		"DROP TRIGGER IF EXISTS wm_ai",
 		`CREATE TRIGGER IF NOT EXISTS wm_ai AFTER INSERT ON working_memory BEGIN
-			INSERT INTO fts_working(id, content) VALUES (new.id, new.content);
+			INSERT INTO fts_working(id, content) VALUES (new.id, COALESCE(new.embed_text, new.content));
 		END`,
 		`CREATE TRIGGER IF NOT EXISTS wm_ad AFTER DELETE ON working_memory BEGIN
 			DELETE FROM fts_working WHERE id = old.id;
 		END`,
 		"DROP TRIGGER IF EXISTS wm_au",
-		`CREATE TRIGGER IF NOT EXISTS wm_au AFTER UPDATE OF content ON working_memory BEGIN
+		`CREATE TRIGGER IF NOT EXISTS wm_au AFTER UPDATE OF content, embed_text ON working_memory BEGIN
 			DELETE FROM fts_working WHERE id = old.id;
-			INSERT INTO fts_working(id, content) VALUES (new.id, new.content);
+			INSERT INTO fts_working(id, content) VALUES (new.id, COALESCE(new.embed_text, new.content));
 		END`,
 	]);
 
