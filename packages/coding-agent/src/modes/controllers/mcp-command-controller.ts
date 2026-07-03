@@ -75,14 +75,52 @@ function raceAbortSignal<T>(promise: Promise<T>, signal: AbortSignal, createErro
 }
 
 /**
+ * Minimum column budget for URL wrapping. Below this the terminal is
+ * effectively unusable, but we still emit chunks so no character is silently
+ * dropped and the user can widen and reflow.
+ */
+const MCP_AUTH_MIN_WRAP_WIDTH = 16;
+
+/**
+ * Wrap `url` into rows that each fit inside `width`, prefixed by a shared
+ * single-column indent so nested composition doesn't touch column 0. When the
+ * label + URL fit on one line, returns a single row; otherwise puts the label
+ * on its own row and slices the URL into fixed-width chunks. URL chunks are
+ * plain code points — browsers strip whitespace when pasted into the address
+ * bar, so a multi-row selection copies back to the intact URL.
+ */
+function wrapUrlRows(label: string, url: string, width: number): string[] {
+	const indent = " ";
+	const sanitized = replaceTabs(url);
+	const effective = Math.max(MCP_AUTH_MIN_WRAP_WIDTH, Math.trunc(width));
+	const inlineWidth = indent.length + label.length + 1 + sanitized.length;
+	if (inlineWidth <= effective) {
+		return [`${indent}${theme.fg("muted", `${label} ${sanitized}`)}`];
+	}
+	const chunkWidth = Math.max(1, effective - indent.length);
+	const rows: string[] = [`${indent}${theme.fg("muted", label)}`];
+	for (let i = 0; i < sanitized.length; i += chunkWidth) {
+		rows.push(`${indent}${theme.fg("muted", sanitized.slice(i, i + chunkWidth))}`);
+	}
+	return rows;
+}
+
+/**
  * Renders the MCP OAuth fallback URL. Always shows the full authorization URL
  * as the primary `Copy URL:` target — that works from any machine, including
  * SSH/WSL/headless sessions where the OMP-hosted `/launch` loopback URL would
- * resolve against the user's local browser and fail. When the flow's callback
- * server hosts a short `launchUrl`, it is offered as an additional local
- * shortcut so narrow local terminals still have a truncation-safe copy target
- * (a Linear-shaped authorize URL routinely exceeds 260 columns, and the TUI
- * silently truncates any composed row wider than the viewport). The OSC 8
+ * resolve against the user's local browser and fail.
+ *
+ * The render is `width`-aware: on any viewport narrower than the composed row
+ * ({@link TUI#prepareLine} truncates anything wider with `Ellipsis.Omit`, no
+ * marker), the URL is hard-wrapped into width-fitted rows so the primary copy
+ * target can never silently lose trailing OAuth parameters — the failure mode
+ * that motivated #4418 in the first place. Browsers strip whitespace when a
+ * multi-row selection is pasted into the address bar, so the reassembled URL
+ * is byte-identical to what we rendered.
+ *
+ * When the flow's callback server hosts a short `launchUrl`, it is offered
+ * as an additional local shortcut for wide-terminal local users. The OSC 8
  * hyperlink continues to carry the full URL for terminals that support it.
  */
 export class MCPAuthorizationLinkPrompt implements Component {
@@ -96,15 +134,15 @@ export class MCPAuthorizationLinkPrompt implements Component {
 
 	invalidate(): void {}
 
-	render(_width: number): readonly string[] {
+	render(width: number): readonly string[] {
 		const link = urlHyperlinkAlways(this.#fullUrl, "Click here to authorize");
 		const lines: string[] = [
 			` ${theme.fg("success", "Open authorization URL:")}`,
 			` ${theme.fg("accent", link)}`,
-			` ${theme.fg("muted", `Copy URL: ${replaceTabs(this.#fullUrl)}`)}`,
+			...wrapUrlRows("Copy URL:", this.#fullUrl, width),
 		];
 		if (this.#launchUrl) {
-			lines.push(` ${theme.fg("muted", `Local shortcut (this machine only): ${replaceTabs(this.#launchUrl)}`)}`);
+			lines.push(...wrapUrlRows("Local shortcut (this machine only):", this.#launchUrl, width));
 		}
 		return lines;
 	}
