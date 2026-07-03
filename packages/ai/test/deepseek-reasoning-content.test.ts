@@ -356,7 +356,9 @@ describe("DeepSeek reasoning_content tool-call replay", () => {
 			const assistant = findOpenAICompletionAssistantWireMessage(messages);
 			expect(assistant).toBeDefined();
 			expect(assistant?.reasoning_content).toBe("");
-			expect(assistant?.content).toBe(`${renderDemotedThinking(model.id, "Need to preserve cross-api reasoning.")}\n`);
+			expect(assistant?.content).toBe(
+				`${renderDemotedThinking(model.id, "Need to preserve cross-api reasoning.")}\n`,
+			);
 		});
 		it("falls through to empty-string when thinking block has opaque signature and empty text", () => {
 			const model = deepseekModel({
