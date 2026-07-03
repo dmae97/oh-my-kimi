@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed OpenAI Responses/Codex orchestration token accounting so provider-side orchestration tokens stay billable and included in totals without appearing as ordinary uncached prompt input. ([#4469](https://github.com/can1357/oh-my-pi/issues/4469))
+
 ## [16.3.4] - 2026-07-03
 
 ### Added

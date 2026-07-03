@@ -998,6 +998,10 @@ export class StatusLineComponent implements Component {
 			output: 0,
 			cacheRead: 0,
 			cacheWrite: 0,
+			totalTokens: 0,
+			orchestrationInput: 0,
+			orchestrationOutput: 0,
+			orchestrationCacheRead: 0,
 			premiumRequests: 0,
 			cost: 0,
 		};

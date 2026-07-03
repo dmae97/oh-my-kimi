@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed session/status usage totals to preserve provider-reported orchestration tokens separately from ordinary input and cache-hit buckets. ([#4469](https://github.com/can1357/oh-my-pi/issues/4469))
+
 ## [16.3.4] - 2026-07-03
 
 ### Fixed

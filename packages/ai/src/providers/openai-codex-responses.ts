@@ -1531,8 +1531,15 @@ class CodexStreamProcessor {
 						input_tokens?: number;
 						output_tokens?: number;
 						total_tokens?: number;
-						input_tokens_details?: { cached_tokens?: number };
-						output_tokens_details?: { reasoning_tokens?: number };
+						input_tokens_details?: {
+							cached_tokens?: number;
+							orchestration_input_tokens?: number;
+							orchestration_input_cached_tokens?: number;
+						};
+						output_tokens_details?: {
+							reasoning_tokens?: number;
+							orchestration_output_tokens?: number;
+						};
 					};
 					status?: string;
 					service_tier?: ServiceTier | "default";

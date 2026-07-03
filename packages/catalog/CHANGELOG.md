@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed usage cost calculation to include provider orchestration token sidecars without forcing those tokens into normal input/output/cache buckets. ([#4469](https://github.com/can1357/oh-my-pi/issues/4469))
+
 ## [16.3.4] - 2026-07-03
 
 ### Added

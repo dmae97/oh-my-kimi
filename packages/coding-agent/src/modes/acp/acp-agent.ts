@@ -1823,6 +1823,10 @@ export class AcpAgent implements Agent {
 			output: usage.output,
 			cacheRead: usage.cacheRead,
 			cacheWrite: usage.cacheWrite,
+			totalTokens: usage.totalTokens,
+			orchestrationInput: usage.orchestrationInput,
+			orchestrationOutput: usage.orchestrationOutput,
+			orchestrationCacheRead: usage.orchestrationCacheRead,
 			premiumRequests: usage.premiumRequests,
 			cost: usage.cost,
 		};
@@ -1833,7 +1837,7 @@ export class AcpAgent implements Agent {
 		const outputTokens = Math.max(0, current.output - previous.output);
 		const cachedReadTokens = Math.max(0, current.cacheRead - previous.cacheRead);
 		const cachedWriteTokens = Math.max(0, current.cacheWrite - previous.cacheWrite);
-		const totalTokens = inputTokens + outputTokens + cachedReadTokens + cachedWriteTokens;
+		const totalTokens = Math.max(0, current.totalTokens - previous.totalTokens);
 
 		if (totalTokens === 0) {
 			return undefined;

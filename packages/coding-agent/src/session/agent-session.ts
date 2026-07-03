@@ -14869,6 +14869,7 @@ export class AgentSession {
 		let totalCacheRead = 0;
 		let totalReasoning = 0;
 		let totalCacheWrite = 0;
+		let totalTokens = 0;
 		let totalCost = 0;
 		let totalPremiumRequests = 0;
 
@@ -14889,6 +14890,7 @@ export class AgentSession {
 				totalReasoning += assistantMsg.usage.reasoningTokens ?? 0;
 				totalCacheRead += assistantMsg.usage.cacheRead;
 				totalCacheWrite += assistantMsg.usage.cacheWrite;
+				totalTokens += assistantMsg.usage.totalTokens;
 				totalPremiumRequests += assistantMsg.usage.premiumRequests ?? 0;
 				totalCost += assistantMsg.usage.cost.total;
 			}
@@ -14901,6 +14903,7 @@ export class AgentSession {
 					totalReasoning += usage.reasoningTokens ?? 0;
 					totalCacheRead += usage.cacheRead;
 					totalCacheWrite += usage.cacheWrite;
+					totalTokens += usage.totalTokens;
 					totalPremiumRequests += usage.premiumRequests ?? 0;
 					totalCost += usage.cost.total;
 				}
@@ -14921,7 +14924,7 @@ export class AgentSession {
 				reasoning: totalReasoning,
 				cacheRead: totalCacheRead,
 				cacheWrite: totalCacheWrite,
-				total: totalInput + totalOutput + totalCacheRead + totalCacheWrite,
+				total: totalTokens,
 			},
 			cost: totalCost,
 			premiumRequests: totalPremiumRequests,
@@ -15567,6 +15570,7 @@ export class AgentSession {
 		let reasoning = 0;
 		let cacheRead = 0;
 		let cacheWrite = 0;
+		let totalTokens = 0;
 		let cost = 0;
 		let user = 0;
 		let assistant = 0;
@@ -15580,6 +15584,7 @@ export class AgentSession {
 				reasoning += assistantMsg.usage.reasoningTokens ?? 0;
 				cacheRead += assistantMsg.usage.cacheRead;
 				cacheWrite += assistantMsg.usage.cacheWrite;
+				totalTokens += assistantMsg.usage.totalTokens;
 				cost += assistantMsg.usage.cost.total;
 			}
 		}
@@ -15588,7 +15593,7 @@ export class AgentSession {
 			model,
 			contextWindow: model.contextWindow ?? 0,
 			contextTokens,
-			tokens: { input, output, reasoning, cacheRead, cacheWrite, total: input + output + cacheRead + cacheWrite },
+			tokens: { input, output, reasoning, cacheRead, cacheWrite, total: totalTokens },
 			cost,
 			messages: { user, assistant, total: messages.length },
 		};
