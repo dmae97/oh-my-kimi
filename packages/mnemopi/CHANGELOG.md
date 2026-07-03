@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed background LLM fact extraction preserving extractor categories so `instructions`, `preferences`, `timelines`, and `kg` triples populate their MEMORIA tables and graph triples instead of being flattened into generic `fact/entity` rows. ([#4389](https://github.com/can1357/oh-my-pi/issues/4389))
+
 ## [16.2.2] - 2026-06-27
 
 ### Fixed

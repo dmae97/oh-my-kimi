@@ -5,9 +5,9 @@ import { toUtcIso } from "../../util/datetime";
 import { generateId } from "../../util/ids";
 import { currentEmbeddingModel, embeddingsDisabled } from "../embeddings";
 import { EpisodicGraph } from "../episodic-graph";
-import { extractFactsSafe } from "../extraction";
+import { countExtractedFactCategories, extractFactCategoriesSafe } from "../extraction";
 import { getMnemopiRuntimeOptions, withMnemopiRuntimeOptions } from "../runtime-options";
-import { storeFactStrings } from "./consolidate";
+import { storeExtractedFactCategories } from "./consolidate";
 import { type EmbedItem, scheduleEmbedding, vecAvailable, vecInsert } from "./helpers";
 import type {
 	BeamEvent,
@@ -223,9 +223,9 @@ function proactiveLinkIfEnabled(
  */
 async function runFactExtraction(beam: BeamMemoryState, memoryId: string, content: string): Promise<void> {
 	try {
-		const facts = await extractFactsSafe(content);
-		if (facts.length === 0) return;
-		storeFactStrings(beam, facts, 0, memoryId);
+		const extracted = await extractFactCategoriesSafe(content);
+		if (countExtractedFactCategories(extracted) === 0) return;
+		storeExtractedFactCategories(beam, extracted, 0, memoryId);
 		invalidateCaches(beam);
 	} catch {
 		// Background fact extraction is best-effort and never surfaces to the caller.
