@@ -207,6 +207,14 @@ export function shimmerSegments(segments: readonly ShimmerSegment[], theme: Shim
 	const time = Date.now();
 	const intensityFn = mode === "kitt" ? kittIntensity : classicIntensity;
 
+	// Fast-path window: outside `[bandLo, bandHi]` the intensity is guaranteed
+	// zero (tier "low"), so we can skip `intensityFn` + `tierFor` entirely for
+	// the prefix/suffix of every segment. On the typical ~60-char working
+	// message the classic band spans ~12 cells, so ~80% of the per-char loop
+	// disappears — the intensity call and the tier compare were the residual
+	// per-frame cost after #4353 removed the allocation hotspot (issue #4377).
+	const { lo: bandLo, hi: bandHi } = activeBand(mode, time, total);
+
 	let out = "";
 	let index = 0;
 	for (const { text, palette } of perSeg) {
@@ -224,7 +232,7 @@ export function shimmerSegments(segments: readonly ShimmerSegment[], theme: Shim
 				const c2 = text.charCodeAt(i + 1);
 				if (c2 >= 0xdc00 && c2 <= 0xdfff) step = 2;
 			}
-			const tier = tierFor(intensityFn(time, index, total));
+			const tier: Tier = index < bandLo || index > bandHi ? "low" : tierFor(intensityFn(time, index, total));
 			if (tier !== runTier) {
 				if (runTier !== null && runEnd > runStart) {
 					const seq = compiled[runTier];
@@ -243,6 +251,34 @@ export function shimmerSegments(segments: readonly ShimmerSegment[], theme: Shim
 		}
 	}
 	return out;
+}
+
+/**
+ * Sweep window (code-point indices) outside which the intensity is guaranteed
+ * zero for `mode` at `time` over `total` cells. Widening the window is safe —
+ * the per-char intensity call still runs inside the window and reports 0 for
+ * off-band code points — but narrower windows skip more of the per-char loop.
+ */
+function activeBand(mode: "classic" | "kitt", time: number, total: number): { lo: number; hi: number } {
+	if (mode === "classic") {
+		const period = total + CLASSIC_PADDING * 2;
+		const pos = ((time / 1000) * SHIMMER_SPEED_CELLS_PER_S) % period;
+		return {
+			lo: pos - CLASSIC_PADDING - CLASSIC_BAND_HALF_WIDTH,
+			hi: pos - CLASSIC_PADDING + CLASSIC_BAND_HALF_WIDTH,
+		};
+	}
+	const range = total - 1;
+	if (range <= 0) return { lo: 0, hi: total };
+	const cycleCells = 2 * range;
+	const sweep = ((time / 1000) * SHIMMER_SPEED_CELLS_PER_S) % cycleCells;
+	const goingRight = sweep < range;
+	const head = goingRight ? sweep : cycleCells - sweep;
+	// The trail always lies behind the head for the current direction — chars
+	// ahead of the head are dark. See {@link kittIntensity} for the exact rule.
+	return goingRight
+		? { lo: head - KITT_HEAD_HALF - KITT_TRAIL_LEN, hi: head + KITT_HEAD_HALF }
+		: { lo: head - KITT_HEAD_HALF, hi: head + KITT_HEAD_HALF + KITT_TRAIL_LEN };
 }
 
 function countCodePoints(text: string): number {

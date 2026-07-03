@@ -13,6 +13,12 @@ class RecordingArgsComponent {
 	updateArgs(args: unknown): void {
 		this.frames.push(args as Record<string, unknown>);
 	}
+
+	// Component protocol stub — the reveal controller hands the component
+	// straight to `requestComponentRender`, which only exercises identity.
+	render(): readonly string[] {
+		return [];
+	}
 }
 
 function makeController(options: { smooth?: boolean; requestRender?: () => void } = {}) {
@@ -53,6 +59,27 @@ function rawTarget() {
 describe("tool args reveal", () => {
 	afterEach(() => {
 		vi.useRealTimers();
+	});
+
+	it("passes the bound component to requestRender on each rendered tick", () => {
+		// Each entry's component reference is handed to `requestRender` so the
+		// caller scopes the render to that tool block's subtree via
+		// `TUI.requestComponentRender` (issue #4377).
+		vi.useFakeTimers();
+		const requestRender = vi.fn();
+		const { component, controller } = makeController({ requestRender });
+		const content = "x".repeat(400);
+		const target = `{"path":"a.ts","content":"${content}"}`;
+
+		controller.setTarget("call-1", target.slice(0, 12), jsonTarget({ exposeRawPartialJson: true }));
+		controller.bind("call-1", component);
+		controller.setTarget("call-1", target, jsonTarget({ exposeRawPartialJson: true }));
+		drain(80);
+
+		expect(requestRender).toHaveBeenCalled();
+		for (const call of requestRender.mock.calls) {
+			expect(call[0]).toBe(component);
+		}
 	});
 
 	it("reveals what already arrived on the first setTarget call", () => {

@@ -66,3 +66,65 @@ describe("shimmerText", () => {
 		expect(Bun.stripANSI(rendered)).toBe("🎉🌟✨🚀");
 	});
 });
+
+describe("shimmerText band fast-path", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	// The band fast-path (issue #4377) skips the per-char intensity check for
+	// code points outside the sweep window and coalesces them into a single
+	// low-tier run. These tests guard the boundary math: an off-band char must
+	// paint muted (dim), while an on-band char (t chosen so the band crest sits
+	// on the middle of the string) must paint the crest color.
+
+	it("paints code points outside the band in the muted low tier", () => {
+		vi.spyOn(settingsModule, "isSettingsInitialized").mockReturnValue(false);
+		// pos = (333/1000)*30 ≈ 10 = CLASSIC_PADDING, band centered on index 0.
+		// Index 30 is well outside the ±6 half-width -> must be low ("dim").
+		vi.spyOn(Date, "now").mockReturnValue(333);
+
+		const text = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+		const rendered = shimmerText(text, testTheme, {
+			low: "dim",
+			mid: { ansi: "\x1b[38;2;12;34;56m" },
+			high: { ansi: "\x1b[38;2;12;34;56m" },
+			bold: true,
+		});
+
+		// Off-band chars sit inside a `\x1b[2m…` (dim) sequence — the crest color
+		// never reaches them.
+		expect(rendered.split("Z")[0]).toContain("\x1b[2m");
+		// Visible payload is preserved verbatim.
+		expect(Bun.stripANSI(rendered)).toBe(text);
+	});
+
+	it("keeps the crest color when the band sweeps across the string", () => {
+		vi.spyOn(settingsModule, "isSettingsInitialized").mockReturnValue(false);
+		// pos = (833/1000)*30 ≈ 25; band centers on index (25 - CLASSIC_PADDING) = 15.
+		vi.spyOn(Date, "now").mockReturnValue(833);
+
+		const text = "abcdefghijklmnopqrstuvwxyz0123456789";
+		const rendered = shimmerText(text, testTheme, {
+			low: "dim",
+			mid: { ansi: "\x1b[38;2;12;34;56m" },
+			high: { ansi: "\x1b[38;2;12;34;56m" },
+			bold: true,
+		});
+
+		// The crest color must appear somewhere: the band overlaps [9, 21].
+		expect(rendered).toContain("\x1b[38;2;12;34;56m");
+		expect(Bun.stripANSI(rendered)).toBe(text);
+	});
+
+	it("handles a surrogate pair straddling the band boundary atomically", () => {
+		// Regression: a naïve fast-path that indexes by UTF-16 units would split
+		// the surrogate pair when the boundary falls between the two halves,
+		// dropping a lone high-surrogate byte into an ANSI run.
+		vi.spyOn(settingsModule, "isSettingsInitialized").mockReturnValue(false);
+		vi.spyOn(Date, "now").mockReturnValue(333);
+
+		const rendered = shimmerText("......😀......", testTheme);
+		expect(Bun.stripANSI(rendered)).toBe("......😀......");
+	});
+});

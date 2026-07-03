@@ -167,7 +167,7 @@ export interface ToolExecutionOptions {
 	liveRegion?: TranscriptLiveRegionProbe;
 }
 
-export interface ToolExecutionHandle {
+export interface ToolExecutionHandle extends Component {
 	updateArgs(args: any, toolCallId?: string): void;
 	updateResult(
 		result: {
@@ -622,7 +622,10 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 				const frameCount = theme.spinnerFrames.length;
 				this.#spinnerFrame = sharedSpinnerFrame(frameCount, now);
 				this.#renderState.spinnerFrame = this.#spinnerFrame;
-				this.#ui.requestRender();
+				// Component-scoped: a spinner tick only changes this tool block, so
+				// the TUI reuses every other root subtree instead of walking the
+				// whole tree (issue #4377).
+				this.#ui.requestComponentRender(this);
 			}, SPINNER_RENDER_INTERVAL_MS);
 		} else if (!needsSpinner && this.#spinnerInterval) {
 			clearInterval(this.#spinnerInterval);
@@ -679,7 +682,9 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 				this.#spinnerFrame = nextFrame;
 				this.#renderState.spinnerFrame = nextFrame;
 			}
-			this.#ui.requestRender();
+			// Component-scoped: strike animation only mutates this tool block's
+			// glyph, so the TUI reuses every other root subtree (issue #4377).
+			this.#ui.requestComponentRender(this);
 		}, 65);
 	}
 
