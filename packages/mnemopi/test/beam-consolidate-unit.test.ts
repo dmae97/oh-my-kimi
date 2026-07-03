@@ -193,6 +193,32 @@ describe("beam consolidation free functions", () => {
 		expect(row?.original_chars).toBeGreaterThan(512);
 		expect(row?.max_chars).toBe(512);
 	});
+
+	it("sleep consolidates embedText projections instead of raw working content", () => {
+		const beam = trackedState();
+		const raw =
+			"[role: user]\nI always prefer tabs\n[user:end]\n\n[role: assistant]\nthe parser never initializes\n[assistant:end]";
+		const clean = "I always prefer tabs\n\nthe parser never initializes";
+		beam.db.run(
+			`INSERT INTO working_memory
+			 (id, content, embed_text, source, timestamp, session_id, importance, veracity, scope, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			["wm-projected", raw, clean, "coding-agent-transcript", oldIso(), "s1", 0.7, "unknown", "session", oldIso()],
+		);
+
+		const result = sleep(beam, false);
+		const row = beam.db.query("SELECT content FROM episodic_memory WHERE source = 'sleep_consolidation'").get() as {
+			content: string;
+		} | null;
+
+		expect(result.status).toBe("consolidated");
+		expect(row?.content).toContain("I always prefer tabs");
+		expect(row?.content).toContain("the parser never initializes");
+		expect(row?.content).not.toContain("[role:");
+		expect(row?.content).not.toContain(":end]");
+		expect(beam.db.query("SELECT rowid FROM fts_episodes WHERE fts_episodes MATCH ?").all("tabs")).toHaveLength(1);
+		expect(beam.db.query("SELECT rowid FROM fts_episodes WHERE fts_episodes MATCH ?").all("role")).toEqual([]);
+	});
 	it("sleep splits capped source groups without dropping row ids", () => {
 		const beam = trackedState();
 		beam.config.maxEpisodeChars = 100;

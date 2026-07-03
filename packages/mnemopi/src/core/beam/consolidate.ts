@@ -896,7 +896,7 @@ function eligibleWorkingRows(beam: BeamMemoryState, sessionId: string): Row[] {
 	return asRows(
 		beam.db
 			.query(
-				`SELECT id, content, source, timestamp, importance, metadata_json, scope, valid_until, veracity
+				`SELECT id, COALESCE(embed_text, content) AS content, source, timestamp, importance, metadata_json, scope, valid_until, veracity
 		 FROM working_memory
 		 WHERE COALESCE(session_id, 'default') = ? AND timestamp < ? AND consolidated_at IS NULL
 		 ORDER BY timestamp ASC LIMIT ?`,
