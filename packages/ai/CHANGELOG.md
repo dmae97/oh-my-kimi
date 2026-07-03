@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed prior-turn reasoning demotion for Anthropic Claude models by generalizing the Fable-only bare-prose branch to the whole Anthropic dialect, so cross-model replays to Opus, Sonnet, Haiku, and Mythos no longer emit `<thinking>` tags that Anthropic's reasoning_extraction classifier flags as visible reasoning leakage ([#4430](https://github.com/can1357/oh-my-pi/issues/4430)).
+
 ## [16.3.4] - 2026-07-03
 
 ### Added

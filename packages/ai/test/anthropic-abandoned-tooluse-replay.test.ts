@@ -156,7 +156,10 @@ describe("Anthropic abandoned/aborted tool-use replay", () => {
 		expectNoUnsignedThinking(blocks);
 		expect(blocks.some(b => b.type === "thinking" && b.signature === "sig_done")).toBe(true);
 		expect(blocks.some(b => b.type === "thinking" && b.signature === "trunc")).toBe(false);
-		expect(blocks.some(b => b.type === "text" && b.text === "<thinking>\nnow decide\n</thinking>")).toBe(true);
+		// Anthropic-dialect demotion of unsigned prior thinking is bare prose
+		// (the reasoning_extraction classifier flags `<thinking>` tags across the
+		// whole Claude family, not just Fable).
+		expect(blocks.some(b => b.type === "text" && b.text === "now decide")).toBe(true);
 		expect(blocks.some(b => b.type === "tool_use")).toBe(true);
 	});
 
