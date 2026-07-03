@@ -101,6 +101,20 @@ export class ArtifactProtocolHandler implements ProtocolHandler {
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
 		const artifact = await resolveArtifactFile(url, context);
+
+		// Path-only callers (search/grep, bash URL expansion) never touch the
+		// artifact bytes. Return the resource shape so those flows keep working
+		// on artifacts of any size — only content materialization is gated.
+		if (context?.pathOnly) {
+			return {
+				url: url.href,
+				content: "",
+				contentType: "text/plain",
+				size: artifact.size,
+				sourcePath: artifact.path,
+			};
+		}
+
 		if (artifact.size > MAX_INLINE_ARTIFACT_BYTES) {
 			throw new Error(
 				`Artifact ${artifact.id} is ${artifact.size} bytes; full internal resolution is blocked. Use read selectors such as artifact://${artifact.id}:1-3000 or artifact://${artifact.id}:raw:1-3000, and use the artifact file path for search/copy workflows: ${artifact.path}`,
