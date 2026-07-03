@@ -240,6 +240,25 @@ async function persistNestedPatches(
 	return written;
 }
 
+/**
+ * Assemble the "captured X preserved at Y" recovery hint appended to
+ * isolated-run failure messages. Persists nested-repo patches to
+ * `artifactsDir` when present so their paths can be surfaced. Returns an
+ * empty string when the result carries no salvageable artifacts.
+ */
+async function buildIsolationRecoveryHint(result: SingleResult, artifactsDir: string): Promise<string> {
+	const parts: string[] = [];
+	if (result.patchPath) parts.push(`Captured patch preserved at ${result.patchPath}.`);
+	if (result.branchName) parts.push(`Captured branch preserved as ${result.branchName}.`);
+	if (result.nestedPatches?.length) {
+		const nestedPaths = await persistNestedPatches(artifactsDir, result.id, result.nestedPatches);
+		parts.push(
+			`Captured nested repository patches (${result.nestedPatches.length}) preserved at: ${nestedPaths.join(", ")}.`,
+		);
+	}
+	return parts.length > 0 ? ` ${parts.join(" ")}` : "";
+}
+
 function plainIsolationSummary(summary: string): string {
 	return summary.replace(/<\/?system-notification>/g, "").trim();
 }
@@ -481,7 +500,9 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 		})();
 
 		if (result.exitCode !== 0 || result.error || result.aborted) {
-			throw new ToolError(buildSubagentFailureMessage(agentName, result));
+			const failureMessage = buildSubagentFailureMessage(agentName, result);
+			const recoveryHint = isIsolated ? await buildIsolationRecoveryHint(result, artifactsDir) : "";
+			throw new ToolError(`${failureMessage}${recoveryHint}`);
 		}
 
 		let mergeSummary = "";
@@ -497,16 +518,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 				changesApplied = outcome.changesApplied;
 				if (outcome.changesApplied === false) {
 					const summaryText = outcome.summary.trim();
-					const recoveryParts: string[] = [];
-					if (result.patchPath) recoveryParts.push(`Captured patch preserved at ${result.patchPath}.`);
-					if (result.branchName) recoveryParts.push(`Captured branch preserved as ${result.branchName}.`);
-					if (result.nestedPatches?.length) {
-						const nestedPaths = await persistNestedPatches(artifactsDir, result.id, result.nestedPatches);
-						recoveryParts.push(
-							`Captured nested repository patches (${result.nestedPatches.length}) preserved at: ${nestedPaths.join(", ")}.`,
-						);
-					}
-					const recoveryHint = recoveryParts.length > 0 ? ` ${recoveryParts.join(" ")}` : "";
+					const recoveryHint = await buildIsolationRecoveryHint(result, artifactsDir);
 					throw new ToolError(
 						`agent() isolated apply failed for ${result.id}${summaryText ? `: ${summaryText}` : ""}${recoveryHint}`,
 					);
@@ -522,14 +534,10 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 				});
 				mergeSummary += nestedSummary;
 				if (structured && nestedSummary.trim()) {
-					const recoveryParts: string[] = [];
-					if (result.nestedPatches?.length) {
-						const nestedPaths = await persistNestedPatches(artifactsDir, result.id, result.nestedPatches);
-						recoveryParts.push(
-							`Captured nested repository patches (${result.nestedPatches.length}) preserved at: ${nestedPaths.join(", ")}.`,
-						);
-					}
-					const recoveryHint = recoveryParts.length > 0 ? ` ${recoveryParts.join(" ")}` : "";
+					const recoveryHint = await buildIsolationRecoveryHint(
+						{ ...result, patchPath: undefined, branchName: undefined },
+						artifactsDir,
+					);
 					throw new ToolError(
 						`agent() isolated nested patch apply failed for ${result.id}: ${plainIsolationSummary(nestedSummary)}${recoveryHint}`,
 					);
