@@ -1895,6 +1895,20 @@ export async function processResponsesStream<TApi extends Api>(
 			candidate.block[kStreamingPartialJson].trim().length > 0
 		);
 	};
+	const hasLaterUnfinishedFunctionCall = (start: number): boolean => {
+		for (let index = start + 1; index < openItemsInOrder.length; index++) {
+			const candidate = openItemsInOrder[index];
+			if (
+				candidate?.item.type === "function_call" &&
+				candidate.block.type === "toolCall" &&
+				!candidate.block[kStreamingArgumentsDone]
+			) {
+				return true;
+			}
+		}
+		return false;
+	};
+
 
 	const lookupOpenToolCallAlias = (
 		event: { output_index?: number; item_id?: string },
@@ -1928,13 +1942,14 @@ export async function processResponsesStream<TApi extends Api>(
 	}): StreamingItem | undefined => {
 		if (hasOpenItemKey(event)) return lookupOpenToolCallAlias(event, "function_call");
 		let skippedStartedCandidate = false;
-		for (const candidate of openItemsInOrder) {
+		for (let index = 0; index < openItemsInOrder.length; index++) {
+			const candidate = openItemsInOrder[index]!;
 			if (
 				candidate.item.type === "function_call" &&
 				candidate.block.type === "toolCall" &&
 				!candidate.block[kStreamingArgumentsDone]
 			) {
-				if (shouldAdvanceIdentifierlessFunctionDelta(event, candidate)) {
+				if (shouldAdvanceIdentifierlessFunctionDelta(event, candidate) && hasLaterUnfinishedFunctionCall(index)) {
 					skippedStartedCandidate = true;
 					continue;
 				}

@@ -373,6 +373,43 @@ describe("processResponsesStream: parallel function_call items", () => {
 		expect(deltas.map(delta => delta.contentIndex)).toEqual([0, 1]);
 	});
 
+	test("keeps brace-prefixed chunks on a single identifierless function call", async () => {
+		const output = makeOutput();
+		const emitted: EmittedEvent[] = [];
+		const stream = { push: (e: unknown) => emitted.push(e as EmittedEvent), end: () => {} } as never;
+
+		await processResponsesStream(
+			makeStream([
+				{
+					type: "response.output_item.added",
+					item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "bash", arguments: "" },
+				},
+				{
+					type: "response.function_call_arguments.delta",
+					delta: '{"command":"echo ',
+				},
+				{
+					type: "response.function_call_arguments.delta",
+					delta: '{1..3}"}',
+				},
+				{
+					type: "response.output_item.done",
+					item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "bash", arguments: "" },
+				},
+			]),
+			output,
+			stream,
+			makeModel(),
+		);
+
+		const [block] = output.content;
+		if (block?.type !== "toolCall") throw new Error("expected toolCall");
+		expect(block.arguments).toEqual({ command: "echo {1..3}" });
+
+		const deltas = emitted.filter(e => e.type === "toolcall_delta") as Array<{ contentIndex: number }>;
+		expect(deltas.map(delta => delta.contentIndex)).toEqual([0, 0]);
+	});
+
 	test("routes deltas by item.call_id when llama.cpp omits item.id and output_index (issue #2015)", async () => {
 		// llama.cpp's `to_json_oaicompat_resp` (tools/server/server-task.cpp) emits a
 		// function_call's `output_item.added` with only `item.call_id` — no `item.id`,
