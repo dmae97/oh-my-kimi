@@ -157,8 +157,12 @@ describe("Anthropic abandoned/aborted tool-use replay", () => {
 		expect(blocks.some(b => b.type === "thinking" && b.signature === "sig_done")).toBe(true);
 		expect(blocks.some(b => b.type === "thinking" && b.signature === "trunc")).toBe(false);
 		// Anthropic-dialect demotion of unsigned prior thinking is bare prose
-		// (the reasoning_extraction classifier flags `<thinking>` tags across the
-		// whole Claude family, not just Fable).
+		// (the reasoning_extraction classifier flags `<thinking>` tags across
+		// the whole Claude family, not just Fable). No trailing terminator on
+		// the anthropic-messages wire path: convertAnthropicMessages emits
+		// text blocks as separate wire blocks (no flatten), so the paragraph
+		// terminator lives only on the cross-API demotion in transform-messages
+		// where downstream openai-completions flattens adjacent text.
 		expect(blocks.some(b => b.type === "text" && b.text === "now decide")).toBe(true);
 		expect(blocks.some(b => b.type === "tool_use")).toBe(true);
 	});

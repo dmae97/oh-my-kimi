@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed prior-turn reasoning demotion for Anthropic Claude models by generalizing the Fable-only bare-prose branch to the whole Anthropic dialect, so cross-model replays to Opus, Sonnet, Haiku, and Mythos no longer emit `<thinking>` tags that Anthropic's reasoning_extraction classifier flags as visible reasoning leakage. Also extended the Claude-id fallback classifier to Bedrock cross-region inference profiles (`us.anthropic.claude-…`, `eu.anthropic.claude-…`, etc.) so Haiku dotted profiles route to the Anthropic dialect, and separated demoted-thinking from the following visible answer in the openai-completions flatten path so bare Anthropic-dialect reasoning no longer runs into the reply text ([#4430](https://github.com/can1357/oh-my-pi/issues/4430)).
+- Fixed prior-turn reasoning demotion for Anthropic Claude models by generalizing the Fable-only bare-prose branch to the whole Anthropic dialect, so cross-model replays to Opus, Sonnet, Haiku, and Mythos no longer emit `<thinking>` tags that Anthropic's reasoning_extraction classifier flags as visible reasoning leakage. Also extended the Claude-id fallback classifier to Bedrock cross-region inference profiles (`us.anthropic.claude-…`, `eu.anthropic.claude-…`, etc.) so Haiku dotted profiles route to the Anthropic dialect, and appended a paragraph terminator to the demoted-thinking text block itself so bare Anthropic-dialect reasoning no longer runs into the following visible-answer block when the openai-completions convert path flattens adjacent text (without corrupting ordinary multi-block visible text from bridges, imported transcripts, or streaming chunk splits) ([#4430](https://github.com/can1357/oh-my-pi/issues/4430)).
 
 ## [16.3.4] - 2026-07-03
 

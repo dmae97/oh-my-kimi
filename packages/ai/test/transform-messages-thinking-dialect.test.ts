@@ -100,7 +100,7 @@ describe("transformMessages cross-provider thinking demotion → canonical diale
 		expect(first?.type).toBe("text");
 		// Demoted reasoning is wrapped in Gemini's canonical thinking fence.
 		expect(first && first.type === "text" ? first.text : "").toBe(
-			getDialectDefinition("gemini").renderThinking(REASONING),
+			`${getDialectDefinition("gemini").renderThinking(REASONING)}\n`,
 		);
 		expect(first && first.type === "text" ? first.text : "").toContain("```thinking");
 		// The original reply text survives as its own block, after the fence.
@@ -120,7 +120,7 @@ describe("transformMessages cross-provider thinking demotion → canonical diale
 		const first = assistant.content[0];
 		expect(first?.type).toBe("text");
 		const text = first && first.type === "text" ? first.text : "";
-		expect(text).toBe(renderDemotedThinking("gpt-5", REASONING));
+		expect(text).toBe(`${renderDemotedThinking("gpt-5", REASONING)}\n`);
 		// No harmony chat-template control tokens leaked, and the unsafe native
 		// renderThinking output was explicitly NOT used.
 		expect(text).not.toContain("<|");
@@ -163,8 +163,8 @@ describe("transformMessages cross-provider thinking demotion → canonical diale
 			const first = assistant.content[0];
 			expect(first?.type).toBe("text");
 			const text = first && first.type === "text" ? first.text : "";
-			expect(text).toBe(REASONING);
-			expect(text).toBe(renderDemotedThinking(target.id, REASONING));
+			expect(text).toBe(`${REASONING}\n`);
+			expect(text).toBe(`${renderDemotedThinking(target.id, REASONING)}\n`);
 			expect(text).not.toContain("<thinking>");
 			expect(text).not.toContain("</thinking>");
 			expect(text).not.toContain("<think>");

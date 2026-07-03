@@ -476,9 +476,18 @@ export function transformMessages<TApi extends Api>(
 					// TARGET model's own canonical thinking-block dialect (e.g. a ```thinking
 					// fence for Gemini) so it reads as reasoning rather than bare prose the
 					// model might mimic.
+					// Self-terminate the demoted text with a paragraph break so the
+					// bare Anthropic-dialect output (or any dialect's wrapped output
+					// whose closing tag isn't a natural word boundary) can't collide
+					// with the following visible-text block when a downstream consumer
+					// flattens adjacent text blocks (openai-completions convert). The
+					// terminator lives on the demoted block itself, so it targets the
+					// demoted-thinking boundary only — ordinary adjacent text blocks
+					// stitched from streaming / bridges / imported transcripts stay
+					// byte-identical on flatten.
 					return {
 						type: "text" as const,
-						text: renderDemotedThinking(model.id, sanitized.thinking),
+						text: `${renderDemotedThinking(model.id, sanitized.thinking)}\n`,
 					};
 				}
 

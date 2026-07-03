@@ -233,14 +233,11 @@ describe("openai-completions compatibility", () => {
 			throw new Error("assistant message missing");
 		}
 		expect(typeof assistant.content).toBe("string");
-		// Distinct text blocks are joined with `\n` — see the flatten path in
-		// openai-completions.ts. Streaming accumulates chunks into a single
-		// block, so multi-block content represents semantically separate
-		// segments (a demoted-thinking block followed by the visible answer,
-		// or a text block flanking a tool call). Bare Anthropic-dialect
-		// demoted reasoning has no self-terminator, so the join site MUST
-		// insert one to keep the two segments from running together.
-		expect(assistant.content).toBe("hello\n world");
+		// Ordinary adjacent text blocks (bridge stitching, imported transcripts,
+		// streaming chunk splits) preserve their original byte sequence on
+		// flatten. The demoted-thinking separator lives on the demoted block
+		// itself (transform-messages), so it targets that boundary only.
+		expect(assistant.content).toBe("hello world");
 	});
 
 	it("prepends thinking text to string assistant content when requiresThinkingAsText is set", () => {
@@ -1370,7 +1367,7 @@ describe("kimi model detection via detectCompat", () => {
 		const payload = (await promise) as { messages: Array<Record<string, unknown>> };
 		const assistant = payload.messages.find(m => m.role === "assistant");
 		expect(assistant).toBeDefined();
-		expect(assistant?.content).toBe(renderDemotedThinking(model.id, "Need to preserve cross-api reasoning."));
+		expect(assistant?.content).toBe(`${renderDemotedThinking(model.id, "Need to preserve cross-api reasoning.")}\n`);
 		expect(assistant?.reasoning_content).toBe("");
 		expect(assistant?.reasoning).toBeUndefined();
 		expect(assistant?.reasoning_text).toBeUndefined();

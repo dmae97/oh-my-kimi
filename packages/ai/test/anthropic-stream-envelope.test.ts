@@ -645,7 +645,11 @@ describe("anthropic stream envelope handling", () => {
 		// Anthropic-dialect demotion of unsigned prior thinking is bare prose —
 		// the reasoning_extraction classifier flags `<thinking>` tags in prior
 		// turn history for the whole Claude family, so replaying the unwrapped
-		// reasoning as wrapped text would just re-introduce the same leak.
+		// reasoning as wrapped text would just re-introduce the same leak. No
+		// trailing terminator on the anthropic-messages wire path:
+		// convertAnthropicMessages emits text blocks as separate wire blocks
+		// (no flatten), so the paragraph terminator lives only on the
+		// cross-API demotion in transform-messages.
 		expect(replayAssistant?.content).toEqual([
 			{ type: "text", text: "Check logs before accepting container health." },
 		]);
