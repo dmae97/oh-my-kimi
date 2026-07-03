@@ -52,6 +52,13 @@ describe("structured extraction", () => {
 		expect(parseFacts("NO_FACTS")).toEqual([]);
 	});
 
+	it("treats a valid empty structured extraction as no facts", () => {
+		expect(parseFacts('{"facts": [], "instructions": [], "preferences": [], "timelines": [], "kg": []}')).toEqual([]);
+		expect(
+			parseFacts('```json\n{"facts": [], "instructions": [], "preferences": [], "timelines": [], "kg": []}\n```'),
+		).toEqual([]);
+	});
+
 	it("uses deterministic heuristic extraction when no LLM is configured", async () => {
 		process.env.MNEMOPI_LLM_ENABLED = "false";
 		const facts = await extractFactsSafe("My name is Ada. I work at Example Corp and I prefer dark mode.");
