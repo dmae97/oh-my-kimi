@@ -316,6 +316,63 @@ describe("processResponsesStream: parallel function_call items", () => {
 		expect(byCallId.get("call_b")?.toolCall.arguments).toEqual({ command: "printf b" });
 	});
 
+	test("routes identifierless argument deltas to sibling calls when a new JSON object starts", async () => {
+		const output = makeOutput();
+		const emitted: EmittedEvent[] = [];
+		const stream = { push: (e: unknown) => emitted.push(e as EmittedEvent), end: () => {} } as never;
+
+		const argsA = JSON.stringify({ command: "echo hello" });
+		const argsB = JSON.stringify({ command: "echo goodbye" });
+
+		await processResponsesStream(
+			makeStream([
+				{
+					type: "response.output_item.added",
+					output_index: 0,
+					item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "bash", arguments: "" },
+				},
+				{
+					type: "response.output_item.added",
+					output_index: 1,
+					item: { type: "function_call", id: "fc_b", call_id: "call_b", name: "bash", arguments: "" },
+				},
+				{
+					type: "response.function_call_arguments.delta",
+					delta: '{"command":"echo hello\n',
+				},
+				{
+					type: "response.function_call_arguments.delta",
+					delta: argsB,
+				},
+				{
+					type: "response.output_item.done",
+					output_index: 0,
+					item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "bash", arguments: argsA },
+				},
+				{
+					type: "response.output_item.done",
+					output_index: 1,
+					item: { type: "function_call", id: "fc_b", call_id: "call_b", name: "bash", arguments: argsB },
+				},
+			]),
+			output,
+			stream,
+			makeModel(),
+		);
+
+		const [blockA, blockB] = output.content;
+		if (blockA?.type !== "toolCall" || blockB?.type !== "toolCall") throw new Error("expected toolCalls");
+		expect(blockA.arguments).toEqual({ command: "echo hello" });
+		expect(blockB.arguments).toEqual({ command: "echo goodbye" });
+		expect(String(blockA.arguments.command)).not.toContain('{"command');
+
+		const deltas = emitted.filter(e => e.type === "toolcall_delta") as Array<{
+			delta: string;
+			contentIndex: number;
+		}>;
+		expect(deltas.map(delta => delta.contentIndex)).toEqual([0, 1]);
+	});
+
 	test("routes deltas by item.call_id when llama.cpp omits item.id and output_index (issue #2015)", async () => {
 		// llama.cpp's `to_json_oaicompat_resp` (tools/server/server-task.cpp) emits a
 		// function_call's `output_item.added` with only `item.call_id` — no `item.id`,

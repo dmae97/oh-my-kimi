@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed identifierless parallel OpenAI-compatible tool-call argument streams so sibling bash JSON cannot bleed into the first command.
+
 ## [16.3.4] - 2026-07-03
 
 ### Added

@@ -1874,6 +1874,28 @@ export async function processResponsesStream<TApi extends Api>(
 	};
 	const hasOpenItemKey = (event: { output_index?: number; item_id?: string }): boolean =>
 		typeof event.output_index === "number" || event.item_id !== undefined;
+	const startsJsonObjectDelta = (delta: unknown): boolean => {
+		if (typeof delta !== "string") return false;
+		for (let index = 0; index < delta.length; index++) {
+			const code = delta.charCodeAt(index);
+			if (code === 0x09 || code === 0x0a || code === 0x0d || code === 0x20) continue;
+			return code === 0x7b;
+		}
+		return false;
+	};
+	const shouldAdvanceIdentifierlessFunctionDelta = (
+		event: { output_index?: number; item_id?: string; delta?: unknown },
+		candidate: StreamingItem,
+	): boolean => {
+		return (
+			!hasOpenItemKey(event) &&
+			startsJsonObjectDelta(event.delta) &&
+			candidate.item.type === "function_call" &&
+			candidate.block.type === "toolCall" &&
+			candidate.block[kStreamingPartialJson].trim().length > 0
+		);
+	};
+
 	const lookupOpenToolCallAlias = (
 		event: { output_index?: number; item_id?: string },
 		type: "function_call" | "custom_tool_call",
@@ -1902,17 +1924,24 @@ export async function processResponsesStream<TApi extends Api>(
 	const lookupOpenFunctionCallItem = (event: {
 		output_index?: number;
 		item_id?: string;
+		delta?: unknown;
 	}): StreamingItem | undefined => {
 		if (hasOpenItemKey(event)) return lookupOpenToolCallAlias(event, "function_call");
+		let skippedStartedCandidate = false;
 		for (const candidate of openItemsInOrder) {
 			if (
 				candidate.item.type === "function_call" &&
 				candidate.block.type === "toolCall" &&
 				!candidate.block[kStreamingArgumentsDone]
 			) {
+				if (shouldAdvanceIdentifierlessFunctionDelta(event, candidate)) {
+					skippedStartedCandidate = true;
+					continue;
+				}
 				return candidate;
 			}
 		}
+		if (skippedStartedCandidate && startsJsonObjectDelta(event.delta)) return undefined;
 		return lastOpenItem?.item.type === "function_call" ? lastOpenItem : undefined;
 	};
 	const closeOpenItem = (
@@ -2150,9 +2179,11 @@ export async function processResponsesStream<TApi extends Api>(
 				const block = entry?.block.type === "toolCall" ? entry.block : undefined;
 				const args = block?.[kStreamingArgumentsDone]
 					? block.arguments
-					: block?.[kStreamingPartialJson]
-						? parseStreamingJson(block[kStreamingPartialJson])
-						: parseStreamingJson(item.arguments || "{}");
+					: item.arguments
+						? parseStreamingJson(item.arguments)
+						: block?.[kStreamingPartialJson]
+							? parseStreamingJson(block[kStreamingPartialJson])
+							: parseStreamingJson("{}");
 				const toolCall: ToolCall = {
 					type: "toolCall",
 					id: encodeResponsesToolCallId(item.call_id, item.id),
