@@ -2,10 +2,16 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { applyEligibleNestedPatches, mergeIsolatedChanges } from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
+import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
+import {
+	applyEligibleNestedPatches,
+	mergeIsolatedChanges,
+	runIsolatedSubprocess,
+} from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
 import type { SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
 import * as worktreeModule from "@oh-my-pi/pi-coding-agent/task/worktree";
 import * as gitModule from "@oh-my-pi/pi-coding-agent/utils/git";
+import * as natives from "@oh-my-pi/pi-natives";
 import { $ } from "bun";
 
 function result(overrides: Partial<SingleResult> = {}): SingleResult {
@@ -64,6 +70,77 @@ async function seedFooRepo(finalContent: string): Promise<{ repoRoot: string; pa
 	return { repoRoot, patchPath };
 }
 
+describe("runIsolatedSubprocess", () => {
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		await Promise.all(tempRoots.splice(0).map(tempRoot => fs.rm(tempRoot, { force: true, recursive: true })));
+	});
+
+	it("preserves branch-mode output as a patch when branch transfer fails", async () => {
+		const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-isolation-run-"));
+		tempRoots.push(repoRoot);
+		const isolationDir = path.join(repoRoot, "isolated");
+		const artifactsDir = path.join(repoRoot, "artifacts");
+		const baseline = {
+			root: {
+				repoRoot,
+				headCommit: "base",
+				staged: "",
+				unstaged: "",
+				untracked: [],
+				untrackedPatch: "",
+			},
+			nested: [],
+		};
+		const rootPatch = "diff --git a/task.txt b/task.txt\n--- a/task.txt\n+++ b/task.txt\n@@ -1 +1 @@\n-old\n+new\n";
+
+		vi.spyOn(worktreeModule, "ensureIsolation").mockResolvedValue({
+			mergedDir: isolationDir,
+			backend: natives.IsoBackendKind.Rcopy,
+			fellBack: false,
+			fallbackReason: null,
+		});
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(result({ id: "PreserveBranchFailure" }));
+		vi.spyOn(worktreeModule, "commitToBranch").mockRejectedValue(new Error("remote: object corrupt"));
+		const captureSpy = vi.spyOn(worktreeModule, "captureDeltaPatch").mockResolvedValue({
+			rootPatch,
+			nestedPatches: [],
+		});
+		const cleanupSpy = vi.spyOn(worktreeModule, "cleanupIsolation").mockResolvedValue();
+		const deleteSpy = vi.spyOn(gitModule.branch, "tryDelete").mockResolvedValue(true);
+
+		const outcome = await runIsolatedSubprocess({
+			baseOptions: {
+				cwd: repoRoot,
+				agent: {
+					name: "task",
+					description: "Task agent",
+					systemPrompt: "test",
+					source: "bundled",
+				},
+				task: "Do work",
+				index: 0,
+				id: "PreserveBranchFailure",
+			},
+			context: { repoRoot, baseline },
+			preferredBackend: undefined,
+			agentId: "PreserveBranchFailure",
+			mergeMode: "branch",
+			artifactsDir,
+			buildFailureResult: err => result({ exitCode: 1, error: String(err) }),
+		});
+
+		const patchPath = path.join(artifactsDir, "PreserveBranchFailure.patch");
+		expect(outcome.error).toContain("Merge failed: remote: object corrupt");
+		expect(outcome.patchPath).toBe(patchPath);
+		expect(await Bun.file(patchPath).text()).toBe(rootPatch);
+		expect(outcome.nestedPatches).toEqual([]);
+		expect(captureSpy).toHaveBeenCalledWith(isolationDir, baseline);
+		expect(deleteSpy).toHaveBeenCalledWith(repoRoot, "omp/task/PreserveBranchFailure");
+		expect(cleanupSpy).toHaveBeenCalledTimes(1);
+	});
+});
+
 describe("mergeIsolatedChanges", () => {
 	afterEach(async () => {
 		vi.restoreAllMocks();
@@ -94,6 +171,7 @@ describe("mergeIsolatedChanges", () => {
 			mergeMode: "branch",
 			result: result({
 				error: "Merge failed: git apply --3way failed for task dirty-context: conflict",
+				patchPath: "/repo/artifacts/dirty-context.patch",
 			}),
 		});
 
@@ -103,6 +181,7 @@ describe("mergeIsolatedChanges", () => {
 		expect(outcome.mergedBranchForNestedPatches).toBe(false);
 		expect(outcome.summary).toContain("Branch merge failed before a task branch could be created");
 		expect(outcome.summary).toContain("git apply --3way failed");
+		expect(outcome.summary).toContain("/repo/artifacts/dirty-context.patch");
 		expect(outcome.summary).not.toContain("No changes to apply");
 	});
 

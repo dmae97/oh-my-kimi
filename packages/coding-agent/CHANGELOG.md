@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserved isolated branch-mode task output as a patch artifact when `commitToBranch` fails before the task branch can be transferred, preventing committed subagent work from being destroyed with the isolation worktree ([#4437](https://github.com/can1357/oh-my-pi/issues/4437)).
+
 ## [16.3.4] - 2026-07-03
 
 ### Fixed
