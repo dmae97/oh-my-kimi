@@ -1733,7 +1733,7 @@ class LspFileSystem implements FileSystem {
 		const finalContent = await serializeEditFileText(path, path, content);
 
 		// Route through ACP bridge when available; skips internal artifacts and local:// paths.
-		if (await routeWriteThroughBridge(this.session, this.requestedPath, path, finalContent)) {
+		if (await routeWriteThroughBridge(this.session, this.requestedPath, path, finalContent, this.signal)) {
 			return;
 		}
 

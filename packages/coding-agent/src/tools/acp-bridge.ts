@@ -55,6 +55,7 @@ export async function routeWriteThroughBridge(
 	requestedPath: string,
 	absolutePath: string,
 	content: string,
+	signal?: AbortSignal,
 ): Promise<boolean> {
 	if (!shouldRouteWriteThroughBridge(session, requestedPath, absolutePath)) return false;
 
@@ -68,7 +69,7 @@ export async function routeWriteThroughBridge(
 		throw new ToolError(error instanceof Error ? error.message : String(error));
 	}
 	if (session.enableLsp ?? true) {
-		await notifyWorkspaceWatchedFiles(session.cwd, [{ filePath: absolutePath, type: changeType }]);
+		await notifyWorkspaceWatchedFiles(session.cwd, [{ filePath: absolutePath, type: changeType }], signal);
 	}
 	invalidateFsScanAfterWrite(absolutePath);
 	session.bumpFileMutationVersion?.(absolutePath);

@@ -198,7 +198,7 @@ export class HashlineFilesystem extends Filesystem {
 		const finalContent = await serializeEditFileText(absolutePath, relativePath, content);
 
 		// Route through ACP bridge when available; skips internal artifacts.
-		if (await routeWriteThroughBridge(this.session, relativePath, absolutePath, finalContent)) {
+		if (await routeWriteThroughBridge(this.session, relativePath, absolutePath, finalContent, this.#signal)) {
 			this.#diagnosticsByPath.set(relativePath, undefined);
 			return { text: finalContent };
 		}
