@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added support for Baseten as an AI provider
+
 ## [16.3.3] - 2026-07-02
 
 ### Added

@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Baseten as a supported model provider
+- Added support for new models from Baseten, including DeepSeek V4 Pro and Kimi series
+- Added new Devin agent models: Claude 5 Fable variants
+- Added new Github Copilot models: Kimi K2.7 Code and MAI-Code-1-Flash
+- Added Poolside Laguna XS 2.1 models via Kilo and OpenRouter providers
+- Added support for Claude Fable 5 (Free) via Zenmux provider
+
+### Changed
+
+- Updated priority ordering to include Baseten
+- Updated pricing and limits for various existing models in the catalog
+
 ## [16.3.3] - 2026-07-02
 
 ### Fixed
