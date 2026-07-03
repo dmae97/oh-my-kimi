@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added rich interactive ask dialogs with headers, previews, notes, chat redirect, and ask.enabled gating ([#4186](https://github.com/can1357/oh-my-pi/issues/4186)).
+
 ## [16.3.3] - 2026-07-02
 
 ### Breaking Changes
