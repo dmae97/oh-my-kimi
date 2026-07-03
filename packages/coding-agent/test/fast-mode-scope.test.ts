@@ -71,9 +71,9 @@ describe("/fast targets the current model's service-tier family", () => {
 	it("enables priority for a custom OpenAI-compatible relay serving an OpenAI model", async () => {
 		const session = await createSessionForModel(
 			buildModel({
-				id: "gpt-5.5",
-				name: "GPT-5.5 Relay",
-				api: "openai-codex-responses",
+				id: "o4-mini",
+				name: "O4 Mini Relay",
+				api: "openai-responses",
 				provider: "custom-relay",
 				baseUrl: "https://relay.example/v1",
 				reasoning: true,

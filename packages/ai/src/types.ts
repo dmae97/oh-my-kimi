@@ -19,7 +19,7 @@ import type {
 	WriteResult,
 } from "@oh-my-pi/pi-catalog/discovery/cursor-gen/agent_pb";
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
-import { parseKnownModel } from "@oh-my-pi/pi-catalog/identity/classify";
+import { isOpenAIModelId } from "@oh-my-pi/pi-catalog/identity/family";
 import type { Api, FetchImpl, KnownApi, Model, Provider, ThinkingBudgets, Usage } from "@oh-my-pi/pi-catalog/types";
 import type { Type } from "arktype";
 import type { ZodType, z } from "zod/v4";
@@ -142,7 +142,7 @@ function isOpenAIServiceTierApi(api: Api | undefined): boolean {
 }
 
 function isOpenAIServiceTierModel(model: ServiceTierModel): boolean {
-	return isOpenAIServiceTierApi(model.api) && parseKnownModel(model.id).family === "openai";
+	return isOpenAIServiceTierApi(model.api) && isOpenAIModelId(model.id);
 }
 
 /**

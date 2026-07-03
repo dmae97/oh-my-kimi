@@ -27,6 +27,12 @@ const orGoogle = m("openrouter", "openai-completions", "google/gemini-3-flash");
 const orAnthropic = m("openrouter", "openai-completions", "anthropic/claude-opus-4-6");
 const customOpenAI = m("custom-relay", "openai-completions", "gpt-5.5");
 const customCodex = m("custom-relay", "openai-codex-responses", "gpt-5.5");
+const customOpenAIAliases = [
+	m("custom-relay", "openai-responses", "gpt-4o"),
+	m("custom-relay", "openai-responses", "o3"),
+	m("custom-relay", "openai-responses", "o4-mini"),
+	m("custom-relay", "openai-responses", "codex-mini-latest"),
+];
 
 describe("serviceTierFamily", () => {
 	it("classifies first-party providers by provider/api", () => {
@@ -42,6 +48,9 @@ describe("serviceTierFamily", () => {
 	it("classifies OpenAI-compatible custom providers by api", () => {
 		expect(serviceTierFamily(customOpenAI)).toBe("openai");
 		expect(serviceTierFamily(customCodex)).toBe("openai");
+		for (const model of customOpenAIAliases) {
+			expect(serviceTierFamily(model)).toBe("openai");
+		}
 	});
 
 	it("classifies OpenRouter models by id namespace", () => {
@@ -77,6 +86,9 @@ describe("shouldSendServiceTier", () => {
 		expect(shouldSendServiceTier("priority", customCodex)).toBe(true);
 		expect(shouldSendServiceTier("scale", customOpenAI)).toBe(true);
 		expect(shouldSendServiceTier("default", customOpenAI)).toBe(false);
+		for (const model of customOpenAIAliases) {
+			expect(shouldSendServiceTier("priority", model)).toBe(true);
+		}
 	});
 
 	it("sends flex/priority on direct Google, priority-only on Vertex (no scale)", () => {
@@ -109,6 +121,9 @@ describe("realizesPriorityServiceTier", () => {
 		expect(realizesPriorityServiceTier("priority", orOpenAI)).toBe(true);
 		expect(realizesPriorityServiceTier("priority", orGoogle)).toBe(true);
 		expect(realizesPriorityServiceTier("priority", customCodex)).toBe(true);
+		for (const model of customOpenAIAliases) {
+			expect(realizesPriorityServiceTier("priority", model)).toBe(true);
+		}
 	});
 
 	it("does not realize priority where the wire drops it", () => {
