@@ -314,7 +314,8 @@ impl WalkFilter {
 	}
 
 	fn accepts_path(&self, relative_path: &str) -> bool {
-		self.glob
+		self
+			.glob
 			.as_ref()
 			.is_none_or(|glob| glob.is_match(relative_path))
 	}

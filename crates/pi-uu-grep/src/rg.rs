@@ -927,11 +927,12 @@ fn process_file<W: Write>(
 	opts: &SearchOptions,
 	out: &mut W,
 ) -> SearchOutcome {
-	match File::open(path).and_then(|file| process_reader(matcher, searcher, file, display, opts, out)) {
+	match File::open(path)
+		.and_then(|file| process_reader(matcher, searcher, file, display, opts, out))
+	{
 		Ok(any_match) => SearchOutcome { any_match, had_error: false },
-		Err(err) => SearchOutcome {
-			any_match: false,
-			had_error: report_path_error(display, path, err, opts),
+		Err(err) => {
+			SearchOutcome { any_match: false, had_error: report_path_error(display, path, err, opts) }
 		},
 	}
 }
