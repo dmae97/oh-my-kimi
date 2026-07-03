@@ -2161,6 +2161,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				modelRegistry,
 				settings: subagentSettings,
 				model,
+				modelPattern: model || modelOverride === undefined ? undefined : modelPatterns,
 				thinkingLevel: effectiveThinkingLevel,
 				toolNames,
 				outputSchema,

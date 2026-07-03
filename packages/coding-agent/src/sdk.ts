@@ -391,9 +391,9 @@ export interface CreateAgentSessionOptions {
 
 	/** Model to use. Default: from settings, else first available */
 	model?: Model;
-	/** Raw model pattern string (e.g. from --model CLI flag) to resolve after extensions load.
+	/** Raw model pattern(s) (e.g. from --model CLI flag) to resolve after extensions load.
 	 * Used when model lookup is deferred because extension-provided models aren't registered yet. */
-	modelPattern?: string;
+	modelPattern?: string | string[];
 	/** Thinking selector. Default: from settings, else unset */
 	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Models available for cycling (Ctrl+P in interactive mode) */
@@ -1245,7 +1245,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const hasThinkingEntry = existingBranch.some(entry => entry.type === "thinking_level_change");
 	const hasServiceTierEntry = existingBranch.some(entry => entry.type === "service_tier_change");
 
-	const hasExplicitModel = options.model !== undefined || options.modelPattern !== undefined;
+	const deferredModelPatterns = Array.isArray(options.modelPattern)
+		? options.modelPattern.map(pattern => pattern.trim()).filter(Boolean)
+		: options.modelPattern?.trim()
+			? [options.modelPattern.trim()]
+			: [];
+	const hasExplicitModel = options.model !== undefined || deferredModelPatterns.length > 0;
 	const modelMatchPreferences = getModelMatchPreferences(settings);
 	const allowedModels = await logger.time("resolveAllowedModels", () =>
 		resolveAllowedModels(modelRegistry, settings, modelMatchPreferences),
@@ -1957,23 +1962,46 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				}
 			}
 		}
-		// Resolve deferred --model pattern now that extension models are registered.
-		if (!model && options.modelPattern) {
+		// Resolve deferred --model/subagent patterns now that extension models are registered.
+		if (!model && deferredModelPatterns.length > 0) {
 			const availableModels = modelRegistry.getAll();
 			const matchPreferences = getModelMatchPreferences(settings);
-			const { model: resolved } = parseModelPattern(options.modelPattern, availableModels, matchPreferences);
-			if (resolved) {
+			for (const pattern of deferredModelPatterns) {
+				const {
+					model: resolved,
+					thinkingLevel: patternThinkingLevel,
+					explicitThinkingLevel,
+				} = parseModelPattern(pattern, availableModels, matchPreferences);
+				if (!resolved) continue;
 				model = resolved;
 				modelFallbackMessage = undefined;
-			} else {
-				modelFallbackMessage = `Model "${options.modelPattern}" not found`;
+				if (explicitThinkingLevel) {
+					restoredSessionThinkingLevel = patternThinkingLevel;
+				}
+				thinkingLevel = pickInitialThinkingLevel(resolved);
+				autoThinking = thinkingLevel === AUTO_THINKING;
+				effectiveThinkingLevel = concreteThinkingLevel(thinkingLevel);
+				effectiveThinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
+					autoThinking
+						? resolveProvisionalAutoLevel(resolved)
+						: resolveThinkingLevelForModel(resolved, effectiveThinkingLevel),
+				);
+				preconnectModelHost(resolved.baseUrl);
+				break;
+			}
+			if (!model) {
+				const requested =
+					deferredModelPatterns.length === 1
+						? `"${deferredModelPatterns[0]}"`
+						: `one of ${deferredModelPatterns.map(pattern => `"${pattern}"`).join(", ")}`;
+				modelFallbackMessage = `Model ${requested} not found`;
 			}
 		}
 
 		// Fall back to first available model with a valid API key, honoring the
 		// path-scoped `enabledModels` allow-list when configured. Skip when the
 		// user explicitly requested a model via --model that wasn't found.
-		if (!model && !options.modelPattern) {
+		if (!model && deferredModelPatterns.length === 0) {
 			// Re-resolve the allowed set: extension factories above may have
 			// registered providers/models that weren't visible at startup.
 			const fallbackCandidates = await resolveAllowedModels(modelRegistry, settings, modelMatchPreferences);

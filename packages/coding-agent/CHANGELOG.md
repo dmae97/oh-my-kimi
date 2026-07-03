@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed task-class subagents dropping unresolved explicit model-role selectors before startup, preventing `modelRoles.task` from silently falling through to an unrelated available provider model ([#4421](https://github.com/can1357/oh-my-pi/issues/4421)).
+
 ## [16.3.4] - 2026-07-03
 
 ### Fixed
