@@ -51,6 +51,20 @@ describe("tiny runtime CUDA provider repair", () => {
 		}
 	});
 
+	it("repairs CUDA sidecars for generic accelerated device requests", async () => {
+		if (process.platform !== "linux" || process.arch !== "x64") return;
+		for (const device of ["auto", "gpu"] as const) {
+			const runtimeDir = await makeRuntimeWithOnnxInstallScript();
+
+			await ensureOnnxRuntimeCudaProviders(runtimeDir, device);
+
+			const binDir = path.join(runtimeDir, "node_modules", "onnxruntime-node", "bin", "napi-v6", "linux", "x64");
+			for (const file of CUDA_PROVIDER_FILES) {
+				expect(await Bun.file(path.join(binDir, file)).exists()).toBe(true);
+			}
+		}
+	});
+
 	it("reports CUDA device visibility failures after provider sidecars exist", async () => {
 		if (process.platform !== "linux" || process.arch !== "x64") return;
 		const runtimeDir = await makeRuntimeWithOnnxInstallScript();

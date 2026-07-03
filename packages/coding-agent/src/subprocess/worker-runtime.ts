@@ -173,7 +173,12 @@ export async function installSharpStubResolver(runtimeDir: string): Promise<stri
 }
 
 function shouldInstallOnnxRuntimeCudaProviders(device: string | undefined): boolean {
-	return process.platform === "linux" && process.arch === "x64" && device?.trim().toLowerCase() === "cuda";
+	const normalized = device?.trim().toLowerCase();
+	return (
+		process.platform === "linux" &&
+		process.arch === "x64" &&
+		(normalized === "cuda" || normalized === "gpu" || normalized === "auto")
+	);
 }
 
 async function missingOnnxRuntimeCudaProviderFiles(binDir: string): Promise<string[]> {
