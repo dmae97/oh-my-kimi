@@ -43,6 +43,21 @@ describe("isClaudeModelId", () => {
 		expect(isClaudeModelId("anthropic/claude.3")).toBe(true);
 		expect(isClaudeModelId("my-claudius")).toBe(false);
 	});
+	test("matches dotted Bedrock cross-region inference profile ids for Claude kinds not enumerated in parseAnthropicModel", () => {
+		// `parseAnthropicModel` only classifies opus/sonnet/fable/mythos, so a
+		// Haiku Bedrock profile (`us.anthropic.claude-haiku-…`) slips past its
+		// regex and MUST still classify as Claude via this fallback so
+		// `modelFamilyToken`/`preferredDialect` route it to the Anthropic
+		// dialect instead of falling through to XML.
+		expect(isClaudeModelId("us.anthropic.claude-haiku-4-5-20251001-v1:0")).toBe(true);
+		expect(isClaudeModelId("eu.anthropic.claude-haiku-4-5-20251001-v1:0")).toBe(true);
+		expect(isClaudeModelId("global.anthropic.claude-haiku-4-5-20251001-v1:0")).toBe(true);
+		expect(isClaudeModelId("au.anthropic.claude-haiku-4-5-20251001-v1:0")).toBe(true);
+		// Non-Claude names that happen to contain "claude" as a substring
+		// stay unmatched — no `.` / `/` / start delimiter before `claude-`.
+		expect(isClaudeModelId("subclaudian")).toBe(false);
+		expect(isClaudeModelId("claudius-5")).toBe(false);
+	});
 });
 
 describe("supportsAdaptiveThinkingDisplay", () => {
@@ -209,6 +224,14 @@ describe("modelFamilyToken", () => {
 	test("folds aggregator mirrors and namespace prefixes onto the lineage", () => {
 		expect(modelFamilyToken("anthropic/claude-opus-4.8")).toBe("anthropic");
 		expect(modelFamilyToken("openrouter/anthropic/claude-opus-4-8")).toBe("anthropic");
+	});
+
+	test("classifies Bedrock cross-region profile ids for Claude kinds not enumerated in parseAnthropicModel", () => {
+		// `parseAnthropicModel` doesn't know `haiku`, so this exercises the
+		// isClaudeModelId fallback specifically for dotted Bedrock profiles.
+		expect(modelFamilyToken("us.anthropic.claude-haiku-4-5-20251001-v1:0")).toBe("anthropic");
+		expect(modelFamilyToken("eu.anthropic.claude-haiku-4-5-20251001-v1:0")).toBe("anthropic");
+		expect(modelFamilyToken("global.anthropic.claude-haiku-4-5-20251001-v1:0")).toBe("anthropic");
 	});
 
 	test("classifies non-first-party families", () => {

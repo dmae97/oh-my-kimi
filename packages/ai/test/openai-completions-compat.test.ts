@@ -233,7 +233,14 @@ describe("openai-completions compatibility", () => {
 			throw new Error("assistant message missing");
 		}
 		expect(typeof assistant.content).toBe("string");
-		expect(assistant.content).toBe("hello world");
+		// Distinct text blocks are joined with `\n` — see the flatten path in
+		// openai-completions.ts. Streaming accumulates chunks into a single
+		// block, so multi-block content represents semantically separate
+		// segments (a demoted-thinking block followed by the visible answer,
+		// or a text block flanking a tool call). Bare Anthropic-dialect
+		// demoted reasoning has no self-terminator, so the join site MUST
+		// insert one to keep the two segments from running together.
+		expect(assistant.content).toBe("hello\n world");
 	});
 
 	it("prepends thinking text to string assistant content when requiresThinkingAsText is set", () => {

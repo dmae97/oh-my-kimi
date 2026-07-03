@@ -1778,7 +1778,11 @@ export function convertMessages(
 				// Always send assistant content as a plain string. Some OpenAI-compatible
 				// backends mirror array-of-text-block payloads back to the model literally,
 				// causing recursive nested content in subsequent turns.
-				assistantMsg.content = nonEmptyTextBlocks.map(b => b.text.toWellFormed()).join("");
+				// Separate distinct text blocks with a newline: for Anthropic-dialect
+				// targets `renderDemotedThinking` returns bare prose (no trailing
+				// delimiter), so a demoted-thinking block would otherwise run into the
+				// following visible-answer block ("reasoningfinal answer").
+				assistantMsg.content = nonEmptyTextBlocks.map(b => b.text.toWellFormed()).join("\n");
 			}
 
 			// Handle thinking blocks
