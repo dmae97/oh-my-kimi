@@ -689,10 +689,7 @@ describe("openai-completions compatibility", () => {
 					{
 						index: 0,
 						delta: {
-							tool_calls: [
-								{ function: { arguments: "}" } },
-								{ function: { arguments: "}" } },
-							],
+							tool_calls: [{ function: { arguments: "}" } }, { function: { arguments: "}" } }],
 						},
 					},
 				],

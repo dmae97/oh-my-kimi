@@ -1112,8 +1112,7 @@ const streamOpenAICompletionsOnce = (
 							// opening chunk that carries per-entry names, or a continuation whose
 							// entries are argument-only. Either way, route by array offset so
 							// sibling calls stay isolated.
-							const unkeyedBatchedArrayEntry =
-								toolCalls.length > 1 && streamIndex === undefined && !toolCall.id;
+							const unkeyedBatchedArrayEntry = toolCalls.length > 1 && streamIndex === undefined && !toolCall.id;
 							let block = streamIndex !== undefined ? toolCallBlockByIndex.get(streamIndex) : undefined;
 							if (!block && toolCall.id) {
 								block = pendingToolCallBlocks.find(candidate => candidate.id === toolCall.id);
