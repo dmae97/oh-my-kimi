@@ -382,6 +382,7 @@ describe("AskDialogComponent", () => {
 		component.handleInput(ENTER);
 
 		expect(onChat).toHaveBeenCalledTimes(1);
+		expect(onChat.mock.calls[0][0]).toEqual({ kind: "chat" });
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
@@ -417,8 +418,8 @@ describe("AskDialogComponent", () => {
 		// 1: Chat about this
 		component.handleInput(DOWN);
 		component.handleInput(ENTER);
-
 		expect(onChat).toHaveBeenCalledTimes(1);
+		expect(onChat.mock.calls[0][0]).toEqual({ kind: "chat" });
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
@@ -455,6 +456,92 @@ describe("AskDialogComponent", () => {
 
 		expect(onSubmit).toHaveBeenCalledTimes(1);
 		expect(onSubmit.mock.calls[0][0].results[0].note).toBe("My Custom Note");
+	});
+
+	it("note prefill is empty when editing a different row after noting another option", async () => {
+		const onPrompt = vi.fn();
+		const onSubmit = vi.fn();
+		const questions: ExtensionAskDialogQuestion[] = [
+			{
+				id: "q1",
+				question: "Choose one?",
+				options: [{ label: "Option A" }, { label: "Option B" }],
+			},
+		];
+
+		const component = new AskDialogComponent(questions, {
+			onSubmit,
+			onCancel: vi.fn(),
+			onChat: vi.fn(),
+			onPrompt,
+		});
+
+		// Cursor starts on Option A. Add a note for A.
+		onPrompt.mockReturnValueOnce(Promise.resolve("Note for A"));
+		component.handleInput("n");
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(onPrompt).toHaveBeenCalledTimes(1);
+		expect(onPrompt.mock.calls[0][0]).toBe("Note for Option A: Choose one?");
+		// No prior note → prefill is undefined.
+		expect(onPrompt.mock.calls[0][1]).toBeUndefined();
+
+		// Move down to Option B and open its note.
+		component.handleInput(DOWN);
+		onPrompt.mockReturnValueOnce(Promise.resolve("Note for B"));
+		component.handleInput("n");
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(onPrompt).toHaveBeenCalledTimes(2);
+		// Prefill for Option B must be undefined — not the note from Option A.
+		expect(onPrompt.mock.calls[1][1]).toBeUndefined();
+
+		// Move back up to Option A and re-open its note.
+		component.handleInput("\x1b[A"); // UP
+		onPrompt.mockReturnValueOnce(Promise.resolve("Updated note"));
+		component.handleInput("n");
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(onPrompt).toHaveBeenCalledTimes(3);
+		// Note now belongs to Option B, so re-editing Option A starts empty.
+		expect(onPrompt.mock.calls[2][1]).toBeUndefined();
+	});
+
+	it("note prefill reuses the existing note when re-editing the same row", async () => {
+		const onPrompt = vi.fn();
+		const questions: ExtensionAskDialogQuestion[] = [
+			{
+				id: "q1",
+				question: "Choose one?",
+				options: [{ label: "Option A" }],
+			},
+		];
+
+		const component = new AskDialogComponent(questions, {
+			onSubmit: vi.fn(),
+			onCancel: vi.fn(),
+			onChat: vi.fn(),
+			onPrompt,
+		});
+
+		// Add a note on Option A.
+		onPrompt.mockReturnValueOnce(Promise.resolve("My note"));
+		component.handleInput("n");
+		await Promise.resolve();
+		await Promise.resolve();
+
+		// Re-open the note on the same row (cursor still on Option A).
+		onPrompt.mockReturnValueOnce(Promise.resolve("Updated note"));
+		component.handleInput("n");
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(onPrompt).toHaveBeenCalledTimes(2);
+		// Same row → prefill reuses the existing note.
+		expect(onPrompt.mock.calls[1][1]).toBe("My note");
 	});
 
 	it("omits a note when a single-select answer changes to a different option", async () => {

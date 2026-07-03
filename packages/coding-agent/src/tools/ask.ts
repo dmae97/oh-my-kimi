@@ -107,6 +107,10 @@ export interface AskToolDetails {
 	timedOut?: boolean;
 	/** Multi-part question mode */
 	results?: QuestionResult[];
+	/** Chat redirect: the user chose "Chat about this" instead of answering. */
+	chatRedirect?: boolean;
+	/** Questions surfaced when chatRedirect is true. */
+	questions?: string[];
 }
 
 interface AskOption {
@@ -857,6 +861,18 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 					context.abort();
 					throw new ToolAbortError("Ask tool was cancelled by the user");
 				}
+				if (richResult.kind === "chat") {
+					const questionText = params.questions.map(q => q.question).join("\n");
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: `User chose to chat about this instead of answering.\n\nQuestions asked:\n${questionText}`,
+							},
+						],
+						details: { chatRedirect: true, questions: params.questions.map(q => q.question) },
+					};
+				}
 				if (richResult.results.length !== params.questions.length) {
 					throw new Error("Ask dialog returned a result count that does not match the requested questions");
 				}
@@ -1284,6 +1300,19 @@ export const askToolRenderer = {
 			const header = renderStatusLine({ icon: "warning", title: "Ask" }, uiTheme);
 			const body = fallback ? `\n${uiTheme.fg("dim", fallback)}` : "";
 			return new Text(`${header}${body}`, 0, 0);
+		}
+
+		// Chat redirect: user chose "Chat about this" instead of answering.
+		if (details.chatRedirect) {
+			const header = renderStatusLine({ icon: "info", title: "Ask", meta: ["chat redirect"] }, uiTheme);
+			const questions = details.questions ?? [];
+			return framedBlock(uiTheme, width => ({
+				header,
+				sections: questions.length > 0 ? [{ lines: questions.flatMap(q => md(q, width)) }] : [],
+				state: "warning",
+				borderColor: "borderMuted",
+				width,
+			}));
 		}
 
 		// Multi-part results: one divider-labelled section per question.

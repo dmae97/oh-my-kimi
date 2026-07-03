@@ -17,9 +17,10 @@ import {
 	wrapTextWithAnsi,
 } from "@oh-my-pi/pi-tui";
 import type {
+	ExtensionAskDialogChatResult,
 	ExtensionAskDialogQuestion,
-	ExtensionAskDialogResult,
 	ExtensionAskDialogResultItem,
+	ExtensionAskDialogSubmitResult,
 } from "../../extensibility/extensions";
 import { getTabBarTheme } from "../shared";
 import { getMarkdownTheme, highlightCode, theme } from "../theme/theme";
@@ -65,9 +66,9 @@ export function boundPromptTitle(prefix: string, question: string): string {
 }
 
 interface AskDialogCallbacks {
-	onSubmit(result: ExtensionAskDialogResult): void;
+	onSubmit(result: ExtensionAskDialogSubmitResult): void;
 	onCancel(): void;
-	onChat(): void;
+	onChat(result: ExtensionAskDialogChatResult): void;
 	onPrompt(title: string, prefill?: string): Promise<string | undefined>;
 }
 
@@ -603,7 +604,7 @@ export class AskDialogComponent implements Component {
 		try {
 			const input = await this.callbacks.onPrompt(
 				boundPromptTitle(`Note for ${rowItem.label}: `, question.question),
-				state.note,
+				state.noteRowKey === rowItem.key ? state.note : undefined,
 			);
 			if (input === undefined || this.#closed) return;
 			state.note = input;
@@ -840,7 +841,7 @@ export class AskDialogComponent implements Component {
 		if (this.#closed) return;
 		this.#closed = true;
 		this.#countdown?.dispose();
-		this.callbacks.onChat();
+		this.callbacks.onChat({ kind: "chat" });
 	}
 
 	#buildResults(): ExtensionAskDialogResultItem[] {

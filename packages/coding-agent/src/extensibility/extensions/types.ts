@@ -139,10 +139,19 @@ export interface ExtensionAskDialogResultItem {
 	timedOut?: boolean;
 }
 
-export interface ExtensionAskDialogResult {
+export interface ExtensionAskDialogSubmitResult {
 	kind: "submit";
 	results: ExtensionAskDialogResultItem[];
 }
+
+/** Chat-redirect result: the user chose "Chat about this" instead of
+ *  answering. Distinct from `undefined` (cancel) so AskTool can hand off to
+ *  the chat loop rather than aborting. */
+export interface ExtensionAskDialogChatResult {
+	kind: "chat";
+}
+
+export type ExtensionAskDialogResult = ExtensionAskDialogSubmitResult | ExtensionAskDialogChatResult;
 
 export function getExtensionUISelectOptionLabel(option: ExtensionUISelectItem): string {
 	return typeof option === "string" ? option : option.label;

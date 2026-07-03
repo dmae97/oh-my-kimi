@@ -665,7 +665,7 @@ export class ExtensionUiController {
 				{
 					onSubmit: result => settle(result),
 					onCancel: () => settle(undefined),
-					onChat: () => settle(undefined),
+					onChat: () => settle({ kind: "chat" }),
 					onPrompt: promptForText,
 				},
 				{
@@ -734,6 +734,7 @@ export class ExtensionUiController {
 		for (const question of questions) {
 			const result = await this.#runGuestAskQuestion(question, signal);
 			if (result === "unavailable" || result === undefined) return result;
+			if (result === "chat") return { kind: "chat" };
 			results.push(result);
 		}
 		return { kind: "submit", results };
@@ -742,7 +743,7 @@ export class ExtensionUiController {
 	async #runGuestAskQuestion(
 		question: ExtensionAskDialogQuestion,
 		signal: AbortSignal,
-	): Promise<ExtensionAskDialogResultItem | "unavailable" | undefined> {
+	): Promise<ExtensionAskDialogResultItem | "chat" | "unavailable" | undefined> {
 		const selected = new Set<string>();
 		let customInput: string | undefined;
 		const baseOptions: CollabUiSelectItem[] = question.options.map(option =>
@@ -766,7 +767,7 @@ export class ExtensionUiController {
 					signal,
 				);
 				if (choice === "unavailable" || choice === undefined) return choice;
-				if (choice === ASK_CHAT_OPTION) return undefined;
+				if (choice === ASK_CHAT_OPTION) return "chat";
 				if (choice === ASK_NEXT_OPTION) break;
 				if (choice === ASK_OTHER_OPTION) {
 					const input = await this.#requestGuestUiString(
@@ -799,7 +800,7 @@ export class ExtensionUiController {
 				signal,
 			);
 			if (choice === "unavailable" || choice === undefined) return choice;
-			if (choice === ASK_CHAT_OPTION) return undefined;
+			if (choice === ASK_CHAT_OPTION) return "chat";
 			if (choice === ASK_OTHER_OPTION) {
 				const input = await this.#requestGuestUiString(
 					{ kind: "editor", title: boundPromptTitle("Custom answer: ", question.question) },

@@ -1619,6 +1619,28 @@ describe("AskTool rich ask dialog", () => {
 		expect(abort).toHaveBeenCalledTimes(1);
 	});
 
+	it("returns chat redirect result when askDialog returns kind chat", async () => {
+		const tool = new AskTool(createSession());
+		const abort = vi.fn();
+		const askDialog = vi.fn().mockResolvedValue({ kind: "chat" });
+		const context = createContext({ askDialog, abort });
+
+		const result = await tool.execute(
+			"call-rich-dialog-chat",
+			{
+				questions: [{ id: "q1", question: "Q1?", options: [{ label: "Option A" }] }],
+			},
+			undefined,
+			undefined,
+			context,
+		);
+
+		expect(abort).not.toHaveBeenCalled();
+		expect(result.details).toEqual({ chatRedirect: true, questions: ["Q1?"] });
+		expect(result.content[0]?.type).toBe("text");
+		expect((result.content[0] as { text: string }).text).toContain("chat about this");
+	});
+
 	it("ignores preview and header in degraded select path", async () => {
 		const tool = new AskTool(createSession());
 		const select = vi.fn().mockResolvedValue("Option A");
