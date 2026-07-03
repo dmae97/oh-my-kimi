@@ -89,6 +89,27 @@ describe("/fast targets the current model's service-tier family", () => {
 		expect(session.isFastModeActive()).toBe(true);
 	});
 
+	it("leaves Fireworks models on the dedicated Fireworks tier control", async () => {
+		const session = await createSessionForModel(
+			buildModel({
+				id: "gpt-oss-120b",
+				name: "GPT OSS 120B",
+				api: "openai-completions",
+				provider: "fireworks",
+				baseUrl: "https://api.fireworks.ai/inference/v1",
+				reasoning: true,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 128_000,
+				maxTokens: 64_000,
+			}),
+		);
+		expect(session.setFastMode(true)).toBe(false);
+		expect(session.serviceTierByFamily).toEqual({});
+		expect(session.isFastModeEnabled()).toBe(false);
+		expect(session.isFastModeActive()).toBe(false);
+	});
+
 	it("clears only the current model's family when disabled", async () => {
 		const session = await createSession("anthropic", "claude-sonnet-4-5");
 		session.setFastMode(true);

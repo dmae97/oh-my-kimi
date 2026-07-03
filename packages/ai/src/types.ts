@@ -141,8 +141,14 @@ function isOpenAIServiceTierApi(api: Api | undefined): boolean {
 	return api === "openai-completions" || api === "openai-responses" || api === "openai-codex-responses";
 }
 
+function hasDedicatedServiceTierControl(provider: Provider | undefined): boolean {
+	return provider === "fireworks";
+}
+
 function isOpenAIServiceTierModel(model: ServiceTierModel): boolean {
-	return isOpenAIServiceTierApi(model.api) && isOpenAIModelId(model.id);
+	return (
+		!hasDedicatedServiceTierControl(model.provider) && isOpenAIServiceTierApi(model.api) && isOpenAIModelId(model.id)
+	);
 }
 
 /**
@@ -153,8 +159,7 @@ function isOpenAIServiceTierModel(model: ServiceTierModel): boolean {
  * `openai/`); Claude on Bedrock/Vertex (api `anthropic-messages`) is the
  * anthropic family even though its provider is `amazon-bedrock`/`google-vertex`.
  * Custom OpenAI-compatible relays that serve OpenAI model ids are OpenAI family
- * too: their provider id is user-defined, but their wire API still accepts
- * OpenAI `service_tier`.
+ * too unless that provider owns a separate tier control such as Fireworks.
  */
 export function serviceTierFamily(model: ServiceTierModel): ServiceTierFamily | undefined {
 	const provider = model.provider;

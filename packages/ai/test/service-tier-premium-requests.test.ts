@@ -22,6 +22,7 @@ const vertexClaude = m("google-vertex", "anthropic-messages", "claude-opus-4-6")
 const gemini = m("google", "google-generative-ai", "gemini-3-flash");
 const vertexGemini = m("google-vertex", "google-vertex", "gemini-3-flash");
 const fireworks = m("fireworks", "openai-completions", "qwen3");
+const fireworksOpenAI = m("fireworks", "openai-completions", "gpt-oss-120b");
 const orOpenAI = m("openrouter", "openai-responses", "openai/gpt-5.5");
 const orGoogle = m("openrouter", "openai-completions", "google/gemini-3-flash");
 const orAnthropic = m("openrouter", "openai-completions", "anthropic/claude-opus-4-6");
@@ -43,6 +44,7 @@ describe("serviceTierFamily", () => {
 		expect(serviceTierFamily(gemini)).toBe("google");
 		expect(serviceTierFamily(vertexGemini)).toBe("google");
 		expect(serviceTierFamily(fireworks)).toBeUndefined();
+		expect(serviceTierFamily(fireworksOpenAI)).toBeUndefined();
 	});
 
 	it("classifies OpenAI-compatible custom providers by api", () => {
@@ -69,6 +71,7 @@ describe("resolveModelServiceTier", () => {
 		expect(resolveModelServiceTier(tiers, orAnthropic)).toBe("priority");
 		expect(resolveModelServiceTier(tiers, customCodex)).toBe("priority");
 		expect(resolveModelServiceTier(tiers, fireworks)).toBeUndefined(); // no family
+		expect(resolveModelServiceTier(tiers, fireworksOpenAI)).toBeUndefined(); // dedicated provider tier
 		expect(resolveModelServiceTier(undefined, openai)).toBeUndefined();
 		expect(resolveModelServiceTier({ google: "priority" }, openai)).toBeUndefined();
 	});
@@ -147,6 +150,7 @@ describe("getPriorityPremiumRequests", () => {
 		expect(getPriorityPremiumRequests("priority", orOpenAI)).toBe(0); // OpenRouter bills its own way
 		expect(getPriorityPremiumRequests("priority", vertexClaude)).toBe(0); // not realized
 		expect(getPriorityPremiumRequests("priority", fireworks)).toBe(0); // realized but not Copilot-premium
+		expect(getPriorityPremiumRequests("priority", fireworksOpenAI)).toBe(0); // dedicated provider tier
 		expect(getPriorityPremiumRequests("flex", openai)).toBe(0);
 		expect(getPriorityPremiumRequests(undefined, openai)).toBe(0);
 	});
