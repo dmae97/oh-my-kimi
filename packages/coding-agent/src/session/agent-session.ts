@@ -9901,6 +9901,16 @@ export class AgentSession {
 
 			// Start a new session
 			const previousSessionFile = this.sessionFile;
+			if (this.#extensionRunner?.hasHandlers("session_before_switch")) {
+				const result = (await this.#extensionRunner.emit({
+					type: "session_before_switch",
+					reason: "handoff",
+				})) as SessionBeforeSwitchResult | undefined;
+
+				if (result?.cancel) {
+					return undefined;
+				}
+			}
 			await this.sessionManager.flush();
 			this.#cancelOwnAsyncJobs();
 			await this.sessionManager.newSession(previousSessionFile ? { parentSession: previousSessionFile } : undefined);
@@ -9956,6 +9966,13 @@ export class AgentSession {
 			this.agent.replaceMessages(sessionContext.messages);
 			this.#resetAllAdvisorRuntimes();
 			this.#syncTodoPhasesFromBranch();
+			if (this.#extensionRunner) {
+				await this.#extensionRunner.emit({
+					type: "session_switch",
+					reason: "handoff",
+					previousSessionFile,
+				});
+			}
 
 			return { document: handoffText, savedPath };
 		} catch (error) {

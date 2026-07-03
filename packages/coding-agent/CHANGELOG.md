@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `/handoff` and auto-handoff skipping extension lifecycle hooks by emitting `session_switch` with `reason: "handoff"` before replacing the outgoing session ([#4434](https://github.com/can1357/oh-my-pi/issues/4434)).
+
 ## [16.3.4] - 2026-07-03
 
 ### Fixed
