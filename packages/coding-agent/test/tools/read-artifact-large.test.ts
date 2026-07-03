@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -89,5 +89,19 @@ describe("read tool large artifact handling", () => {
 		expect(output).toStartWith("line-001");
 		expect(output).toContain("line-002");
 		expect(output).not.toContain("line-400");
+	});
+
+	it("shortens artifact paths under the user's home dir instead of leaking the absolute path", async () => {
+		const homeSpy = spyOn(os, "homedir").mockReturnValue(testDir);
+		try {
+			const result = await tool.execute("call-raw-home", { path: "artifact://0:raw" });
+			const output = getTextOutput(result);
+			// artifactDir sits under the (mocked) home, so shortenPath rewrites the
+			// prefix to `~` — the notice must NOT leak the absolute artifact path.
+			expect(output).toContain(`~${path.sep}session`);
+			expect(output).not.toContain(artifactDir);
+		} finally {
+			homeSpy.mockRestore();
+		}
 	});
 });
