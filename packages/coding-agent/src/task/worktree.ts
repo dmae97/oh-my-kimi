@@ -855,18 +855,40 @@ export async function mergeTaskBranches(
 				try {
 					const target = baseSha ? `${baseSha}..${branchName}` : branchName;
 					await git.cherryPick(repoRoot, target);
-				} catch (err) {
+				} catch (initialErr) {
+					// Empty cherry-picks are not conflicts: a commit whose net
+					// effect is already on HEAD (redundant change, or 3-way
+					// merge auto-resolved to HEAD) leaves the sequencer stopped
+					// with a "The previous cherry-pick is now empty" message.
+					// Advance past every consecutive empty with `--skip` so the
+					// remaining non-redundant commits in the range still land.
+					// A genuine conflict (unmerged files, no "now empty"
+					// message) falls through to the abort path below.
+					let cursor: unknown = initialErr;
+					while (git.cherryPick.isEmptyError(cursor)) {
+						try {
+							await git.cherryPick.skip(repoRoot);
+							cursor = undefined;
+							break;
+						} catch (skipErr) {
+							cursor = skipErr;
+						}
+					}
+					if (cursor === undefined) {
+						merged.push(branchName);
+						continue;
+					}
 					try {
 						await git.cherryPick.abort(repoRoot);
 					} catch {
 						/* no state to abort */
 					}
 					const stderr =
-						err instanceof git.GitCommandError
-							? err.result.stderr.trim()
-							: err instanceof Error
-								? err.message
-								: String(err);
+						cursor instanceof git.GitCommandError
+							? cursor.result.stderr.trim()
+							: cursor instanceof Error
+								? cursor.message
+								: String(cursor);
 					failed.push(branchName);
 					conflictResult = {
 						merged,
