@@ -127,7 +127,6 @@ const FACT_QUERY_FILLER_WORDS = new Set([
 const FACT_CLITIC_FRAGMENTS = new Set(["d", "ll", "m", "re", "s", "t", "ve"]);
 const FLAT_FACT_SEARCH_NOISE = new Set(["entity", "fact"]);
 
-
 function nowIso(): string {
 	return new Date().toISOString();
 }
@@ -1053,7 +1052,6 @@ function factSearchableText(subject: string, predicate: string, object: string):
 	});
 	return [...structuralParts, objectText].join(" ").trim();
 }
-
 
 function factLine(result: RecallResult): string {
 	const content = result.content.slice(0, 200).trim();
