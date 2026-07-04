@@ -84,7 +84,7 @@ mod imp {
 
 	use parking_lot::Mutex;
 
-	use crate::{IsoError, IsoResult, ProbeResult};
+	use crate::{IsoError, IsoResult, ProbeResult, command_failed};
 
 	#[derive(Clone, Copy)]
 	enum MountFlavor {
@@ -258,11 +258,11 @@ mod imp {
 		if output.status.success() {
 			return Ok(());
 		}
-		let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-		Err(IsoError::other(format!(
-			"fuse-overlayfs mount failed (exit {}): {stderr}",
-			output.status.code().unwrap_or(-1)
-		)))
+		Err(command_failed(
+			"fuse-overlayfs mount failed",
+			output.status.code().unwrap_or(-1),
+			&output.stderr,
+		))
 	}
 
 	fn fuse_umount(merged: &Path) -> IsoResult<()> {

@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 
-use crate::{BackendKind, IsoError, IsoResult, IsolationBackend, ProbeResult};
+use crate::{BackendKind, IsoError, IsoResult, IsolationBackend, ProbeResult, command_failed};
 
 pub struct RcopyBackend;
 
@@ -140,12 +140,7 @@ fn git_worktree_add(lower: &Path, merged: &Path) -> IsoResult<()> {
 	if output.status.success() {
 		return Ok(());
 	}
-	let stderr = String::from_utf8_lossy(&output.stderr);
-	let stderr = stderr.trim();
-	Err(IsoError::other(format!(
-		"git worktree add (exit {}): {stderr}",
-		output.status.code().unwrap_or(-1)
-	)))
+	Err(command_failed("git worktree add", output.status.code().unwrap_or(-1), &output.stderr))
 }
 
 fn git_worktree_remove(merged: &Path) -> IsoResult<()> {
@@ -162,12 +157,7 @@ fn git_worktree_remove(merged: &Path) -> IsoResult<()> {
 	if output.status.success() {
 		return Ok(());
 	}
-	let stderr = String::from_utf8_lossy(&output.stderr);
-	let stderr = stderr.trim();
-	Err(IsoError::other(format!(
-		"git worktree remove (exit {}): {stderr}",
-		output.status.code().unwrap_or(-1)
-	)))
+	Err(command_failed("git worktree remove", output.status.code().unwrap_or(-1), &output.stderr))
 }
 
 /// Replicate `lower`'s live working tree on top of a freshly-checked-out
@@ -236,13 +226,11 @@ fn git_capture(cwd: &Path, args: &[&str]) -> IsoResult<Vec<u8>> {
 			}
 		})?;
 	if !output.status.success() {
-		let stderr = String::from_utf8_lossy(&output.stderr);
-		let stderr = stderr.trim();
-		return Err(IsoError::other(format!(
-			"git {} (exit {}): {stderr}",
-			args.join(" "),
-			output.status.code().unwrap_or(-1)
-		)));
+		return Err(command_failed(
+			format_args!("git {}", args.join(" ")),
+			output.status.code().unwrap_or(-1),
+			&output.stderr,
+		));
 	}
 	Ok(output.stdout)
 }
@@ -307,9 +295,7 @@ fn git_apply_with_program(
 		write_result.map_err(|err| IsoError::other(format!("write patch to git apply: {err}")))?;
 		return Ok(());
 	}
-	let stderr = String::from_utf8_lossy(&stderr);
-	let stderr = stderr.trim();
-	Err(IsoError::other(format!("git apply (exit {}): {stderr}", status.code().unwrap_or(-1))))
+	Err(command_failed("git apply", status.code().unwrap_or(-1), &stderr))
 }
 
 /// Copy a single path (regular file, symlink, or directory) from `src`

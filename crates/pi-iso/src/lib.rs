@@ -208,6 +208,20 @@ impl std::error::Error for IsoError {}
 
 pub type IsoResult<T> = Result<T, IsoError>;
 
+/// Build the [`IsoError::Other`] for a failed external command, rendered as
+/// `<what> (exit <code>): <trimmed stderr>`.
+///
+/// `stderr` is decoded lossily. `code` is preformatted by the caller so
+/// per-site conventions for signal deaths (`-1` vs `?`) are preserved.
+pub(crate) fn command_failed(
+	what: impl fmt::Display,
+	code: impl fmt::Display,
+	stderr: &[u8],
+) -> IsoError {
+	let stderr = String::from_utf8_lossy(stderr);
+	IsoError::other(format!("{what} (exit {code}): {}", stderr.trim()))
+}
+
 /// Backend contract.
 ///
 /// `lower` is the read-only source tree; `merged` is the destination where
