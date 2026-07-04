@@ -450,14 +450,15 @@ describe("Mnemopi backend lifecycle", () => {
 		tempDbPath = undefined;
 	});
 
-	it("auto-retain uses the cumulative transcript turn count", async () => {
+	it("auto-retain stores only the not-yet-retained suffix", async () => {
 		const entries = Array.from({ length: 4 }, (_, index) => ({
 			type: "message",
 			message: { role: "user", content: `turn ${index + 1}` },
 		}));
-		const state = registerMnemopiState(makeMnemopiConfig({ retainEveryNTurns: 4 }), {
+		const state = registerMnemopiState(makeMnemopiConfig({ retainEveryNTurns: 2 }), {
 			cwd: "/work/project-alpha",
 		});
+		state.lastRetainedTurn = 2;
 		(state.session.sessionManager as { getEntries: () => unknown[] }).getEntries = () => entries;
 		const retainSpy = vi.spyOn(state, "retainMessages").mockResolvedValue();
 
@@ -465,8 +466,6 @@ describe("Mnemopi backend lifecycle", () => {
 
 		expect(retainSpy).toHaveBeenCalledTimes(1);
 		expect(retainSpy.mock.calls[0][0]).toEqual([
-			{ role: "user", content: "turn 1" },
-			{ role: "user", content: "turn 2" },
 			{ role: "user", content: "turn 3" },
 			{ role: "user", content: "turn 4" },
 		]);
