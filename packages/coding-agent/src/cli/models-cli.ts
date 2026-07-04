@@ -84,6 +84,14 @@ function writeLine(line = ""): void {
 	process.stdout.write(`${line}\n`);
 }
 
+function writeModelsConfigError(error: Error): void {
+	writeLine(chalk.yellow("Warning: models.yml validation failed — custom providers disabled"));
+	for (const line of error.message.split("\n")) {
+		writeLine(`  ${line}`);
+	}
+	writeLine();
+}
+
 function formatLimit(n: number | null): string {
 	return n === null ? "-" : formatNumber(n);
 }
@@ -187,10 +195,21 @@ function renderProviderModels(
 		}
 	}
 
+	const configError = modelRegistry.getError();
+
 	if (json) {
+		if (configError) {
+			process.stderr.write(
+				`Warning: models.yml validation failed — custom providers disabled\n${configError.message}\n`,
+			);
+		}
 		const output: ModelsJson = { models: filtered.slice().sort(byProviderThenId).map(toModelJson) };
 		writeLine(JSON.stringify(output));
 		return;
+	}
+
+	if (configError) {
+		writeModelsConfigError(configError);
 	}
 
 	if (available.length === 0) {

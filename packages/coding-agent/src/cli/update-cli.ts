@@ -12,6 +12,7 @@ import { $which, APP_NAME, isEnoent, VERSION } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import chalk from "chalk";
 import { theme } from "../modes/theme/theme";
+import { isTimeoutError, withTimeoutSignal } from "../utils/fetch-timeout";
 
 const REPO = "can1357/oh-my-pi";
 const PACKAGE = "@oh-my-pi/pi-coding-agent";
@@ -29,6 +30,8 @@ const MISE_TOOL = "github:can1357/oh-my-pi";
  * See #1686.
  */
 const NPM_REGISTRY = "https://registry.npmjs.org/";
+const RELEASE_METADATA_TIMEOUT_MS = 30_000;
+const BINARY_DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
 
 /**
  * Core native addon package. Bumped in lock-step with {@link PACKAGE} so the
@@ -82,7 +85,7 @@ export interface BinaryReplacementOptions {
  * Parse update subcommand arguments.
  * Returns undefined if not an update command.
  */
-export function parseUpdateArgs(args: string[]): { force: boolean; check: boolean } | undefined {
+export function parseUpdateArgs(args: string[]): { force: boolean; check: boolean; plugins: boolean } | undefined {
 	if (args.length === 0 || args[0] !== "update") {
 		return undefined;
 	}
@@ -90,6 +93,7 @@ export function parseUpdateArgs(args: string[]): { force: boolean; check: boolea
 	return {
 		force: args.includes("--force") || args.includes("-f"),
 		check: args.includes("--check") || args.includes("-c"),
+		plugins: args.includes("--plugins") || args.includes("-l"),
 	};
 }
 
@@ -239,7 +243,17 @@ async function resolveUpdateTarget(): Promise<UpdateTarget> {
  * Uses npm instead of GitHub API to avoid unauthenticated rate limiting.
  */
 async function getLatestRelease(): Promise<ReleaseInfo> {
-	const response = await fetch(`${NPM_REGISTRY}${PACKAGE}/latest`);
+	let response: Response;
+	try {
+		response = await fetch(`${NPM_REGISTRY}${PACKAGE}/latest`, {
+			signal: withTimeoutSignal(RELEASE_METADATA_TIMEOUT_MS),
+		});
+	} catch (err) {
+		if (isTimeoutError(err)) {
+			throw new Error("Timed out fetching release info after 30s", { cause: err });
+		}
+		throw err;
+	}
 	if (!response.ok) {
 		throw new Error(`Failed to fetch release info: ${response.statusText}`);
 	}
@@ -832,7 +846,18 @@ async function updateViaBinaryAt(targetPath: string, expectedVersion: string): P
 	const backupPath = `${targetPath}.${Date.now()}.${process.pid}.bak`;
 	console.log(chalk.dim(`Downloading ${binaryName}…`));
 
-	const response = await fetch(url, { redirect: "follow" });
+	let response: Response;
+	try {
+		response = await fetch(url, {
+			redirect: "follow",
+			signal: withTimeoutSignal(BINARY_DOWNLOAD_TIMEOUT_MS),
+		});
+	} catch (err) {
+		if (isTimeoutError(err)) {
+			throw new Error("Timed out downloading release binary after 15 minutes", { cause: err });
+		}
+		throw err;
+	}
 	if (!response.ok || !response.body) {
 		throw new Error(`Download failed: ${response.statusText}`);
 	}
@@ -914,12 +939,14 @@ ${chalk.bold("Usage:")}
   ${APP_NAME} update [options]
 
 ${chalk.bold("Options:")}
-  -c, --check   Check for updates without installing
-  -f, --force   Force reinstall even if up to date
+  -c, --check     Check for updates without installing
+  -f, --force     Force reinstall even if up to date
+  -l, --plugins   Update installed plugins
 
 ${chalk.bold("Examples:")}
-  ${APP_NAME} update           Update to latest version
-  ${APP_NAME} update --check   Check if updates are available
-  ${APP_NAME} update --force   Force reinstall
+  ${APP_NAME} update              Update to latest version
+  ${APP_NAME} update --check      Check if updates are available
+  ${APP_NAME} update --force      Force reinstall
+  ${APP_NAME} update -l           Update installed plugins
 `);
 }

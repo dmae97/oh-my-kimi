@@ -17,6 +17,14 @@ import type {
 interface DapSpawnOptions {
 	adapter: DapResolvedAdapter;
 	cwd: string;
+	/**
+	 * Cap on how long the socket-mode helpers wait for the adapter to open its
+	 * socket (unix) or dial back into our listener (TCP). Exposed for tests;
+	 * production callers rely on the default.
+	 *
+	 * @internal
+	 */
+	socketReadyTimeoutMs?: number;
 }
 
 /** Minimal write interface shared by Bun.FileSink and Bun TCP sockets. */
@@ -29,13 +37,14 @@ type DapEventHandler = (body: unknown, event: DapEventMessage) => void | Promise
 type DapReverseRequestHandler = (args: unknown) => unknown | Promise<unknown>;
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
-
-async function writeMessage(sink: DapWriteSink, message: DapRequestMessage | DapResponseMessage): Promise<void> {
-	const content = JSON.stringify(message);
-	sink.write(`Content-Length: ${Buffer.byteLength(content, "utf-8")}\r\n\r\n`);
-	sink.write(content);
-	await sink.flush();
-}
+/**
+ * Hard cap on a single message write. A wedged adapter stdin used to hang the
+ * whole client forever; on hitting this cap the client disposes itself so the
+ * next request fails fast instead of piling more work onto a broken adapter.
+ */
+const WRITE_MESSAGE_TIMEOUT_MS = 30_000;
+/** Default wait for socket-mode adapters to become reachable. */
+const SOCKET_READY_TIMEOUT_MS = 10_000;
 
 function toErrorMessage(value: unknown): string {
 	if (value instanceof Error) return value.message;
@@ -62,6 +71,8 @@ export class DapClient {
 	#eventHandlers = new Map<string, Set<DapEventHandler>>();
 	#anyEventHandlers = new Set<DapEventHandler>();
 	#reverseRequestHandlers = new Map<string, DapReverseRequestHandler>();
+	#adapterExited = false;
+	#pendingWriteExitRejectors = new Set<() => void>();
 
 	constructor(
 		adapter: DapResolvedAdapter,
@@ -75,11 +86,15 @@ export class DapClient {
 		this.#readable = options?.readable ?? (proc.stdout as ReadableStream<Uint8Array>);
 		this.#writeSink = options?.writeSink ?? proc.stdin;
 		this.#socket = options?.socket;
+		this.proc.exited.then(
+			() => this.#rejectPendingWritesForExit(),
+			() => this.#rejectPendingWritesForExit(),
+		);
 	}
 
-	static async spawn({ adapter, cwd }: DapSpawnOptions): Promise<DapClient> {
+	static async spawn({ adapter, cwd, socketReadyTimeoutMs }: DapSpawnOptions): Promise<DapClient> {
 		if (adapter.connectMode === "socket") {
-			return DapClient.#spawnSocket({ adapter, cwd });
+			return DapClient.#spawnSocket({ adapter, cwd, socketReadyTimeoutMs });
 		}
 		// Merge non-interactive env and start in a new session (detached → setsid)
 		// so the adapter process tree has no controlling terminal. Without this,
@@ -108,17 +123,18 @@ export class DapClient {
 	 * Linux: connect to a unix domain socket via --listen=unix:<path>
 	 * macOS/other: the adapter dials into our TCP listener via --client-addr
 	 */
-	static async #spawnSocket({ adapter, cwd }: DapSpawnOptions): Promise<DapClient> {
+	static async #spawnSocket({ adapter, cwd, socketReadyTimeoutMs }: DapSpawnOptions): Promise<DapClient> {
 		const env = {
 			...Bun.env,
 			...NON_INTERACTIVE_ENV,
 		};
+		const timeoutMs = socketReadyTimeoutMs ?? SOCKET_READY_TIMEOUT_MS;
 		const isLinux = process.platform === "linux";
 
 		if (isLinux) {
-			return DapClient.#spawnSocketUnix({ adapter, cwd, env });
+			return DapClient.#spawnSocketUnix({ adapter, cwd, env, timeoutMs });
 		}
-		return DapClient.#spawnSocketClientAddr({ adapter, cwd, env });
+		return DapClient.#spawnSocketClientAddr({ adapter, cwd, env, timeoutMs });
 	}
 
 	/** Linux: spawn adapter with --listen=unix:<path>, then connect to the socket. */
@@ -126,10 +142,12 @@ export class DapClient {
 		adapter,
 		cwd,
 		env,
+		timeoutMs,
 	}: {
 		adapter: DapResolvedAdapter;
 		cwd: string;
 		env: Record<string, string | undefined>;
+		timeoutMs: number;
 	}): Promise<DapClient> {
 		const socketPath = `/tmp/dap-${adapter.name}-${Date.now()}-${Math.random().toString(36).slice(2)}.sock`;
 		const proc = ptree.spawn([adapter.resolvedCommand, ...adapter.args, `--listen=unix:${socketPath}`], {
@@ -139,13 +157,23 @@ export class DapClient {
 			detached: true,
 		});
 
-		await waitForCondition(() => isUnixSocketReady(socketPath), 10_000, proc);
-
-		const { readable, writeSink, socket } = await connectSocket({ unix: socketPath });
-		const client = new DapClient(adapter, cwd, proc, { readable, writeSink, socket });
-		proc.exited.then(() => client.#handleProcessExit());
-		void client.#startMessageReader();
-		return client;
+		// If waitForCondition throws (timeout, or adapter exited early) or the
+		// socket connect fails, we must not leak the detached adapter process.
+		try {
+			await waitForCondition(() => isUnixSocketReady(socketPath), timeoutMs, proc);
+			const { readable, writeSink, socket } = await connectSocket({ unix: socketPath });
+			const client = new DapClient(adapter, cwd, proc, { readable, writeSink, socket });
+			proc.exited.then(() => client.#handleProcessExit());
+			void client.#startMessageReader();
+			return client;
+		} catch (error) {
+			try {
+				proc.kill();
+			} catch {
+				/* proc may already be dead */
+			}
+			throw error;
+		}
 	}
 
 	/** macOS/other: listen on a random TCP port, spawn adapter with --client-addr, accept connection. */
@@ -153,10 +181,12 @@ export class DapClient {
 		adapter,
 		cwd,
 		env,
+		timeoutMs,
 	}: {
 		adapter: DapResolvedAdapter;
 		cwd: string;
 		env: Record<string, string | undefined>;
+		timeoutMs: number;
 	}): Promise<DapClient> {
 		const { promise: connPromise, resolve: resolveConn } = Promise.withResolvers<Bun.Socket<undefined>>();
 
@@ -182,25 +212,32 @@ export class DapClient {
 			detached: true,
 		});
 
-		// Wait for dlv to connect (with timeout)
-		let rawSocket: Bun.Socket<undefined>;
+		// Wait for the adapter to dial back. On timeout (or any other failure
+		// before we've wired up the client) kill `proc` — otherwise the detached
+		// adapter process is orphaned.
 		const { promise: timeoutPromise, reject: rejectTimeout } = Promise.withResolvers<never>();
 		const connectTimeout = setTimeout(
-			() => rejectTimeout(new Error(`${adapter.name} did not connect within 10s`)),
-			10_000,
+			() => rejectTimeout(new Error(`${adapter.name} did not connect within ${timeoutMs}ms`)),
+			timeoutMs,
 		);
 		try {
-			rawSocket = await Promise.race([connPromise, timeoutPromise]);
+			const rawSocket = await Promise.race([connPromise, timeoutPromise]);
+			const { readable, writeSink, socket } = wrapBunSocket(rawSocket);
+			const client = new DapClient(adapter, cwd, proc, { readable, writeSink, socket });
+			proc.exited.then(() => client.#handleProcessExit());
+			void client.#startMessageReader();
+			return client;
+		} catch (error) {
+			try {
+				proc.kill();
+			} catch {
+				/* proc may already be dead */
+			}
+			throw error;
 		} finally {
 			clearTimeout(connectTimeout);
 			server.stop();
 		}
-
-		const { readable, writeSink, socket } = wrapBunSocket(rawSocket);
-		const client = new DapClient(adapter, cwd, proc, { readable, writeSink, socket });
-		proc.exited.then(() => client.#handleProcessExit());
-		void client.#startMessageReader();
-		return client;
 	}
 
 	get capabilities(): DapCapabilities | undefined {
@@ -309,6 +346,12 @@ export class DapClient {
 			arguments: args,
 		};
 		const { promise, resolve, reject } = Promise.withResolvers<TBody>();
+		// Suppress "unhandled rejection" if the request timer or abort fires
+		// before the caller's `await` subscribes — e.g. while #writeMessage is
+		// still racing a wedged stdin flush. The caller's own `await` still
+		// receives the rejection normally; this handler is a passive guard.
+		promise.catch(() => {});
+
 		let timeout: NodeJS.Timeout | undefined;
 		const cleanup = () => {
 			if (timeout) clearTimeout(timeout);
@@ -342,13 +385,15 @@ export class DapClient {
 			},
 		});
 		this.#lastActivity = Date.now();
-		try {
-			await writeMessage(this.#writeSink, request);
-		} catch (error) {
+		// Fire the write in the background. Awaiting it here would let a wedged
+		// stdin flush block the caller's `timeoutMs`; if it fails, propagate the
+		// failure into `promise` — the timer or abort may still win the race.
+		void this.#writeMessage(request).catch(error => {
+			if (!this.#pendingRequests.has(requestSeq)) return;
 			this.#pendingRequests.delete(requestSeq);
 			cleanup();
-			throw error;
-		}
+			reject(error);
+		});
 		return promise;
 	}
 
@@ -362,7 +407,60 @@ export class DapClient {
 			...(message ? { message } : {}),
 			...(body !== undefined ? { body } : {}),
 		};
-		await writeMessage(this.#writeSink, response);
+		await this.#writeMessage(response);
+	}
+
+	/**
+	 * Framed write to the adapter, bounded by {@link WRITE_MESSAGE_TIMEOUT_MS}
+	 * and by adapter exit. Without this bound a wedged adapter stdin used to
+	 * hang the whole client forever. On timeout or exit-before-flush the client
+	 * disposes itself and rethrows.
+	 */
+	async #writeMessage(message: DapRequestMessage | DapResponseMessage): Promise<void> {
+		const content = JSON.stringify(message);
+		this.#writeSink.write(`Content-Length: ${Buffer.byteLength(content, "utf-8")}\r\n\r\n`);
+		this.#writeSink.write(content);
+		const flushResult = this.#writeSink.flush();
+		if (!(flushResult instanceof Promise)) return;
+
+		if (this.#adapterExited) {
+			throw new Error(`DAP adapter ${this.adapter.name} exited before write completed`);
+		}
+
+		const { promise: guardPromise, reject: guardReject, resolve: guardResolve } = Promise.withResolvers<void>();
+		const timer = setTimeout(
+			() =>
+				guardReject(
+					new Error(`DAP adapter ${this.adapter.name} write timed out after ${WRITE_MESSAGE_TIMEOUT_MS}ms`),
+				),
+			WRITE_MESSAGE_TIMEOUT_MS,
+		);
+		const rejectOnExit = () => {
+			guardReject(new Error(`DAP adapter ${this.adapter.name} exited before write completed`));
+		};
+		this.#pendingWriteExitRejectors.add(rejectOnExit);
+
+		try {
+			await Promise.race([flushResult, guardPromise]);
+		} catch (error) {
+			// The client is now known-broken. Kick off dispose in the background;
+			// callers will see subsequent sendRequest calls fail fast.
+			void this.dispose();
+			throw error;
+		} finally {
+			clearTimeout(timer);
+			this.#pendingWriteExitRejectors.delete(rejectOnExit);
+			// Release the guard so any late timeout callback becomes a no-op.
+			guardResolve();
+		}
+	}
+
+	#rejectPendingWritesForExit(): void {
+		this.#adapterExited = true;
+		for (const reject of this.#pendingWriteExitRejectors) {
+			reject();
+		}
+		this.#pendingWriteExitRejectors.clear();
 	}
 
 	async dispose(): Promise<void> {

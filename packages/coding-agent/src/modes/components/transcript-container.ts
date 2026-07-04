@@ -443,6 +443,10 @@ export class TranscriptContainer
 	// drift after commit; the engine commits them audit-exempt. Provisional
 	// (commit-unstable) blocks never extend it.
 	#nativeScrollbackSnapshotSafeEnd: number | undefined;
+	// Local line index through which lower finalized siblings are safe to OFFER to
+	// native scrollback while still audited. Unlike snapshotSafeEnd, rows below a
+	// live block are not durable: growth above them must repair stale history.
+	#nativeScrollbackOfferSafeEnd: number | undefined;
 	// Persistent assembled transcript rows. Rows before the stable floor are
 	// byte-identical to the previous render; rows at/after it were re-pushed.
 	#lines: string[] = [];
@@ -489,6 +493,10 @@ export class TranscriptContainer
 
 	getNativeScrollbackSnapshotSafeEnd(): number | undefined {
 		return this.#nativeScrollbackSnapshotSafeEnd;
+	}
+
+	getNativeScrollbackOfferSafeEnd(): number | undefined {
+		return this.#nativeScrollbackOfferSafeEnd;
 	}
 
 	/**
@@ -583,6 +591,7 @@ export class TranscriptContainer
 		this.#nativeScrollbackLiveRegionStart = undefined;
 		this.#nativeScrollbackCommitSafeEnd = undefined;
 		this.#nativeScrollbackSnapshotSafeEnd = undefined;
+		this.#nativeScrollbackOfferSafeEnd = undefined;
 
 		const count = this.children.length;
 
@@ -629,6 +638,14 @@ export class TranscriptContainer
 		// liveStartIndex; empty leading blocks (or a separator) must not claim it
 		// early.
 		let liveRecorded = false;
+		// Prefix boundary for finalized siblings rendered below the first live
+		// block. These rows may be offered to native scrollback, but they cannot
+		// extend snapshotSafeEnd because a live block above can still move them.
+		let offerSafeEnd: number | undefined;
+		// Offer rows must be a contiguous finalized run below the first live
+		// block. A later live/provisional block can still push rows below it, so
+		// finalized siblings after that barrier must stay forced-overflow.
+		let offerSafeOpen = true;
 		// Frame row cursor: rows emitted (reused or pushed) so far.
 		let row = 0;
 		let stableRows = 0;
@@ -701,6 +718,7 @@ export class TranscriptContainer
 			// everything below it.
 			if (contribution.length === 0) {
 				if (i >= liveStartIndex && commitSafeOpen && !finalized) commitSafeOpen = false;
+				if (i > liveStartIndex && !finalized) offerSafeOpen = false;
 				if (chainStable && !(reusable && previous.rowCount === 0 && previous.startRow === row)) {
 					chainStable = false;
 					lines.length = row;
@@ -770,6 +788,13 @@ export class TranscriptContainer
 				// rows around as it grows, so the run closes there.
 				if (!(finalized && safeLength >= contribution.length)) commitSafeOpen = false;
 			}
+			if (i > liveStartIndex) {
+				if (offerSafeOpen && finalized) {
+					offerSafeEnd = blockStart + contribution.length;
+				} else if (!finalized) {
+					offerSafeOpen = false;
+				}
+			}
 
 			segments[i] = {
 				component: child,
@@ -788,6 +813,7 @@ export class TranscriptContainer
 		// Trailing shrink: blocks removed from the tail leave stale rows behind
 		// when every surviving segment was reused.
 		if (lines.length !== row) lines.length = row;
+		this.#nativeScrollbackOfferSafeEnd = offerSafeEnd;
 		this.#segments = segments;
 		this.#stableRowsFloor = Math.min(stableFloorBefore, stableRows, row);
 		return lines;

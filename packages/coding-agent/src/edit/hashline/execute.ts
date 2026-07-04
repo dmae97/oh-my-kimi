@@ -1,6 +1,6 @@
 /**
  * Coding-agent runner that drives the hashline {@link Patcher} on behalf of
- * the `edit` tool. Converts a `{input}` tool-call payload into a
+ * the `edit` tool. Converts an `{input}` tool-call payload into a
  * fully-applied patch, wraps the result in the agent's
  * {@link AgentToolResult} shape, and attaches LSP diagnostics + `outputMeta`
  * for the renderer.

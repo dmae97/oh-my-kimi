@@ -25,11 +25,10 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
  * The signature policy is a second axis: official Anthropic cryptographically
  * binds signatures to its key+session+model, so cross-model signatures must
  * be stripped (and matching redacted siblings dropped) whenever either side
- * of the replay is official Anthropic. Third-party endpoints (Z.AI, DeepSeek,
- * custom anthropic-messages providers) treat signatures as opaque
- * continuation hints they pass through unchanged, so 3p ↔ 3p replays
- * preserve them as-is to keep the reasoning chain signed for the next
- * turn (#2265).
+ * of the replay is official Anthropic. Unsigned-replay third-party fixtures
+ * treat signatures as opaque continuation hints they pass through unchanged,
+ * so 3p ↔ 3p replays preserve them as-is to keep the reasoning chain signed
+ * for the next turn (#2265).
  */
 function makeAnthropicModel(overrides: Partial<ModelSpec<"anthropic-messages">> = {}): Model<"anthropic-messages"> {
 	return buildModel({
@@ -301,7 +300,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 		const priorBlocks = assistants[0].content as WireBlock[];
 		const text = priorBlocks.find(b => b.type === "text") as WireTextBlock | undefined;
 		expect(text?.text).toBe(renderDemotedThinking("claude-fable-5", reasoning));
-		expect(text?.text).toBe(`_Hmm. ${reasoning}_\n`);
+		expect(text?.text).toBe(reasoning);
 		expect(text?.text).not.toContain("<thinking>");
 		expect(text?.text).not.toContain("</thinking>");
 		expect(text?.text).not.toContain("<think>");
@@ -421,5 +420,92 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 		const thinking = priorBlocks.find(b => b.type === "thinking") as WireThinkingBlock | undefined;
 		expect(thinking?.thinking).toBe("openai chain-of-thought");
 		expect(thinking?.signature).toBe("");
+	});
+
+	it("strips stale cross-model signatures when the target is a Cloudflare AI Gateway Anthropic proxy (#4297)", () => {
+		// cf-anthropic gateway forwards to signature-enforcing Anthropic but
+		// resolves `officialEndpoint: false`. A prior Claude Sonnet 4.6 turn's
+		// signature is bound to the source model+session, so replaying it to
+		// Claude Opus 4.8 on the same gateway would 400 with `Invalid signature
+		// in thinking block`. Signature stripping must key off the
+		// `signingEndpoint` classification, not `officialEndpoint`.
+		const target = makeAnthropicModel({
+			provider: "cloudflare-ai-gateway",
+			id: "cf-anthropic/claude-opus-4-8",
+			name: "Claude Opus 4.8 via Cloudflare AI Gateway",
+			baseUrl: "https://gateway.ai.cloudflare.com/v1/acct/gate/anthropic",
+		});
+		const messages: Message[] = [
+			makeUser("Summarize README"),
+			makeAssistant(
+				[
+					{ type: "thinking", thinking: "prior reasoning", thinkingSignature: "sig_prior" },
+					{ type: "toolCall", id: "toolu_prior", name: "read", arguments: { path: "README.md" } },
+				],
+				{ provider: "cloudflare-ai-gateway", model: "cf-anthropic/claude-sonnet-4-6" },
+			),
+			toolResult("toolu_prior", "README body"),
+			makeAssistant(
+				[
+					{ type: "thinking", thinking: "opus latest", thinkingSignature: "sig_latest" },
+					{ type: "text", text: "summary" },
+				],
+				{ provider: "cloudflare-ai-gateway", model: "cf-anthropic/claude-opus-4-8", stopReason: "stop" },
+			),
+			makeUser("Translate"),
+		];
+
+		const params = convertAnthropicMessages(messages, target, false);
+		const assistants = params.filter(p => p.role === "assistant");
+		const priorBlocks = assistants[0].content as WireBlock[];
+		const thinking = priorBlocks.find(b => b.type === "thinking") as WireThinkingBlock | undefined;
+		// Signature-only replay is unsafe on a signing target with a stale
+		// (cross-model) source signature — that's the whole 400 failure class.
+		// The transform strips the signature (so `signingEndpoint` demotes the
+		// unsigned block to text) and no stale `sig_prior` reaches the wire.
+		expect(thinking).toBeUndefined();
+		const text = priorBlocks.find(b => b.type === "text") as WireTextBlock | undefined;
+		expect(text?.text).toContain("prior reasoning");
+		const wireBlobs = JSON.stringify(priorBlocks);
+		expect(wireBlobs).not.toContain("sig_prior");
+	});
+
+	it("strips stale cross-model signatures on Google Vertex publishers/anthropic (#4297)", () => {
+		const target = makeAnthropicModel({
+			provider: "google-vertex",
+			id: "claude-opus-4-8@20260215",
+			name: "Claude Opus 4.8 via Vertex",
+			baseUrl:
+				"https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/publishers/anthropic/models/claude-opus-4-8@20260215:streamRawPredict",
+		});
+		const messages: Message[] = [
+			makeUser("Summarize README"),
+			makeAssistant(
+				[
+					{ type: "thinking", thinking: "sonnet reasoning", thinkingSignature: "sig_sonnet" },
+					{ type: "toolCall", id: "toolu_prior", name: "read", arguments: { path: "README.md" } },
+				],
+				{ provider: "google-vertex", model: "claude-sonnet-4-6@20260101" },
+			),
+			toolResult("toolu_prior", "README body"),
+			makeAssistant(
+				[
+					{ type: "thinking", thinking: "opus latest", thinkingSignature: "sig_latest" },
+					{ type: "text", text: "summary" },
+				],
+				{ provider: "google-vertex", model: "claude-opus-4-8@20260215", stopReason: "stop" },
+			),
+			makeUser("Translate"),
+		];
+
+		const params = convertAnthropicMessages(messages, target, false);
+		const assistants = params.filter(p => p.role === "assistant");
+		const priorBlocks = assistants[0].content as WireBlock[];
+		const thinking = priorBlocks.find(b => b.type === "thinking") as WireThinkingBlock | undefined;
+		expect(thinking).toBeUndefined();
+		const text = priorBlocks.find(b => b.type === "text") as WireTextBlock | undefined;
+		expect(text?.text).toContain("sonnet reasoning");
+		const wireBlobs = JSON.stringify(priorBlocks);
+		expect(wireBlobs).not.toContain("sig_sonnet");
 	});
 });

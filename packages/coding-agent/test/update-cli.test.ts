@@ -1,20 +1,25 @@
-import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as pluginCli from "@oh-my-pi/pi-coding-agent/cli/plugin-cli";
+import * as updateCli from "@oh-my-pi/pi-coding-agent/cli/update-cli";
 import {
 	buildBunInstallArgs,
 	buildHomebrewUpdateArgs,
 	buildMiseForceInstallArgs,
 	buildMiseUpgradeArgs,
+	parseUpdateArgs,
 	pruneBunInstallCache,
 	replaceBinaryForUpdate,
 	resolveBunGlobalNodeModulesDirFromLocations,
 	resolveUpdateMethodForTest,
 	sweepStaleBackups,
 } from "@oh-my-pi/pi-coding-agent/cli/update-cli";
+import Update from "@oh-my-pi/pi-coding-agent/commands/update";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import type { CliConfig } from "@oh-my-pi/pi-utils/cli";
 
 const tempDirs: string[] = [];
 
@@ -25,7 +30,43 @@ async function makeTempDir(): Promise<string> {
 }
 
 afterEach(async () => {
+	vi.restoreAllMocks();
 	await Promise.all(tempDirs.splice(0).map(dir => removeWithRetries(dir)));
+});
+const TEST_CONFIG: CliConfig = {
+	bin: "omp",
+	version: "0.0.0-test",
+	commands: new Map(),
+};
+
+describe("update command plugin dispatch", () => {
+	it("routes -l to plugin upgrade instead of the app updater", async () => {
+		const pluginSpy = spyOn(pluginCli, "runPluginCommand").mockResolvedValue(undefined);
+		const updateSpy = spyOn(updateCli, "runUpdateCommand").mockResolvedValue(undefined);
+
+		const command = new Update(["-l"], TEST_CONFIG);
+		await command.run();
+
+		expect(pluginSpy).toHaveBeenCalledWith({ action: "upgrade", args: [], flags: {} });
+		expect(updateSpy).not.toHaveBeenCalled();
+	});
+
+	it("keeps normal update flags on the app updater path", async () => {
+		const pluginSpy = spyOn(pluginCli, "runPluginCommand").mockResolvedValue(undefined);
+		const updateSpy = spyOn(updateCli, "runUpdateCommand").mockResolvedValue(undefined);
+
+		const command = new Update(["--check", "--force"], TEST_CONFIG);
+		await command.run();
+
+		expect(updateSpy).toHaveBeenCalledWith({ force: true, check: true });
+		expect(pluginSpy).not.toHaveBeenCalled();
+	});
+});
+
+describe("parseUpdateArgs", () => {
+	it("preserves the legacy plugin update shorthand", () => {
+		expect(parseUpdateArgs(["update", "-l"])).toEqual({ force: false, check: false, plugins: true });
+	});
 });
 describe("update-cli install target detection", () => {
 	it("uses bun update when prioritized omp is inside bun global bin", () => {

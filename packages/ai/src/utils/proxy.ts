@@ -162,11 +162,26 @@ export function wrapFetchForProxy(fetchImpl: FetchImpl, provider: string): Fetch
 	return wrapped;
 }
 
+export interface ConnectProxiedSocketOptions {
+	/** Caller cancellation for the proxy TCP/TLS handshake and CONNECT tunnel. */
+	signal?: AbortSignal;
+	/** Maximum wall-clock time to establish the final TLS tunnel. Disabled when absent or non-positive. */
+	timeoutMs?: number;
+}
+
 /**
  * Tunnel a socket connection through an HTTP CONNECT proxy.
  * This is used specifically to wrap Node's `http2.connect(baseUrl, { createConnection })` for Cursor.
  */
-export async function connectProxiedSocket(proxyUrlStr: string, targetUrlStr: string): Promise<tls.TLSSocket> {
+export async function connectProxiedSocket(
+	proxyUrlStr: string,
+	targetUrlStr: string,
+	options?: ConnectProxiedSocketOptions,
+): Promise<tls.TLSSocket> {
+	if (options?.signal?.aborted) {
+		throw new AIError.AbortError("Proxy tunnel aborted");
+	}
+
 	const proxyUrl = new URL(proxyUrlStr);
 	const targetUrl = new URL(targetUrlStr);
 
@@ -179,23 +194,73 @@ export async function connectProxiedSocket(proxyUrlStr: string, targetUrlStr: st
 
 	const { promise, resolve, reject } = Promise.withResolvers<tls.TLSSocket>();
 
-	let rawSocket: net.Socket;
-	if (useProxySsl) {
-		rawSocket = tls.connect({
-			host: proxyHost,
-			port: proxyPort,
-		});
-	} else {
-		rawSocket = net.connect({
-			host: proxyHost,
-			port: proxyPort,
-		});
-	}
-
-	rawSocket.once("error", reject);
-
 	const readyEvent = useProxySsl ? "secureConnect" : "connect";
-	rawSocket.once(readyEvent, () => {
+	let rawSocket: net.Socket | undefined;
+	let tunnelSocket: tls.TLSSocket | undefined;
+	let timeout: NodeJS.Timeout | undefined;
+	let responseData = "";
+	let settled = false;
+
+	const cleanup = (): void => {
+		if (timeout) {
+			clearTimeout(timeout);
+			timeout = undefined;
+		}
+		options?.signal?.removeEventListener("abort", onAbort);
+		rawSocket?.off("error", onRawError);
+		rawSocket?.off(readyEvent, onProxyReady);
+		rawSocket?.off("data", onProxyData);
+		tunnelSocket?.off("secureConnect", onTunnelReady);
+		tunnelSocket?.off("error", onTunnelError);
+	};
+	const destroyInProgress = (): void => {
+		tunnelSocket?.destroy();
+		rawSocket?.destroy();
+	};
+	const rejectOnce = (error: Error): void => {
+		if (settled) return;
+		settled = true;
+		cleanup();
+		destroyInProgress();
+		reject(error);
+	};
+	const resolveOnce = (socket: tls.TLSSocket): void => {
+		if (settled) return;
+		settled = true;
+		cleanup();
+		resolve(socket);
+	};
+	const onAbort = (): void => rejectOnce(new AIError.AbortError("Proxy tunnel aborted"));
+	const onRawError = (error: Error): void => rejectOnce(error);
+	const onTunnelError = (error: Error): void => rejectOnce(error);
+	const onTunnelReady = (): void => {
+		if (!tunnelSocket) return;
+		resolveOnce(tunnelSocket);
+	};
+	const onProxyData = (chunk: Buffer): void => {
+		if (!rawSocket) return;
+		responseData += chunk.toString("binary");
+		if (!responseData.includes("\r\n\r\n")) return;
+
+		rawSocket.off("data", onProxyData);
+		rawSocket.off("error", onRawError);
+
+		const firstLine = responseData.split("\r\n")[0];
+		if (!firstLine.includes(" 200 ")) {
+			rejectOnce(new AIError.ValidationError(`Proxy tunnel failed: ${firstLine}`));
+			return;
+		}
+
+		tunnelSocket = tls.connect({
+			socket: rawSocket,
+			servername: targetHost,
+			ALPNProtocols: ["h2"],
+		});
+		tunnelSocket.once("secureConnect", onTunnelReady);
+		tunnelSocket.once("error", onTunnelError);
+	};
+	const onProxyReady = (): void => {
+		if (!rawSocket) return;
 		let connectReq = `CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\n` + `Host: ${targetHost}:${targetPort}\r\n`;
 
 		if (proxyUrl.username || proxyUrl.password) {
@@ -207,34 +272,29 @@ export async function connectProxiedSocket(proxyUrlStr: string, targetUrlStr: st
 		connectReq += "\r\n";
 
 		rawSocket.write(connectReq);
+		rawSocket.on("data", onProxyData);
+	};
 
-		let responseData = "";
-		const onData = (chunk: Buffer) => {
-			responseData += chunk.toString("binary");
-			if (responseData.includes("\r\n\r\n")) {
-				rawSocket.off("data", onData);
-				rawSocket.off("error", reject);
+	options?.signal?.addEventListener("abort", onAbort, { once: true });
+	if (options?.timeoutMs !== undefined && Number.isFinite(options.timeoutMs) && options.timeoutMs > 0) {
+		const timeoutMs = Math.trunc(options.timeoutMs);
+		timeout = setTimeout(() => {
+			rejectOnce(new AIError.StreamTimeoutError(`Proxy tunnel timed out after ${timeoutMs}ms`));
+		}, timeoutMs);
+		timeout.unref?.();
+	}
 
-				const firstLine = responseData.split("\r\n")[0];
-				if (firstLine.includes(" 200 ")) {
-					const tlsSocket = tls.connect({
-						socket: rawSocket,
-						servername: targetHost,
-						ALPNProtocols: ["h2"],
-					});
-
-					tlsSocket.once("secureConnect", () => {
-						resolve(tlsSocket);
-					});
-					tlsSocket.once("error", reject);
-				} else {
-					rawSocket.destroy();
-					reject(new AIError.ValidationError(`Proxy tunnel failed: ${firstLine}`));
-				}
-			}
-		};
-		rawSocket.on("data", onData);
-	});
+	rawSocket = useProxySsl
+		? tls.connect({
+				host: proxyHost,
+				port: proxyPort,
+			})
+		: net.connect({
+				host: proxyHost,
+				port: proxyPort,
+			});
+	rawSocket.once("error", onRawError);
+	rawSocket.once(readyEvent, onProxyReady);
 
 	return promise;
 }

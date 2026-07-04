@@ -95,10 +95,9 @@ describe("transformMessages cross-provider thinking demotion → canonical diale
 		// canonical thinking dialect, ahead of the original reply text.
 		const first = assistant.content[0];
 		expect(first?.type).toBe("text");
-		// Demoted reasoning is wrapped in Gemini's canonical thinking fence and
-		// carries a trailing newline so it never glues to the reply text.
+		// Demoted reasoning is wrapped in Gemini's canonical thinking fence.
 		expect(first && first.type === "text" ? first.text : "").toBe(
-			`${getDialectDefinition("gemini").renderThinking(REASONING)}\n`,
+			getDialectDefinition("gemini").renderThinking(REASONING),
 		);
 		expect(first && first.type === "text" ? first.text : "").toContain("```thinking");
 		// The original reply text survives as its own block, after the fence.
@@ -128,7 +127,7 @@ describe("transformMessages cross-provider thinking demotion → canonical diale
 		expect(text).toContain(REASONING);
 	});
 
-	it("renders demoted foreign reasoning for Claude Fable as markdown italic assistant text", () => {
+	it("renders demoted foreign reasoning for Claude Fable as bare assistant prose (no _Hmm./thinking wrapper)", () => {
 		const fable = makeModel("anthropic-messages", "anthropic", "claude-fable-5");
 		const assistant = transformedAssistant([user("weather in Paris?"), geminiThinkingTurn()], fable);
 
@@ -137,11 +136,12 @@ describe("transformMessages cross-provider thinking demotion → canonical diale
 		const first = assistant.content[0];
 		expect(first?.type).toBe("text");
 		const text = first && first.type === "text" ? first.text : "";
-		expect(text).toBe(`_Hmm. ${REASONING}_\n`);
+		expect(text).toBe(REASONING);
 		expect(text).not.toContain("<thinking>");
 		expect(text).not.toContain("</thinking>");
 		expect(text).not.toContain("<think>");
 		expect(text).not.toContain("</think>");
+		expect(text).not.toContain("_Hmm.");
 
 		const reply = assistant.content[1];
 		expect(reply?.type).toBe("text");
@@ -166,7 +166,7 @@ describe("transformMessages cross-provider thinking demotion → canonical diale
 			const first = assistant.content[0];
 			expect(first?.type).toBe("text");
 			const text = first && first.type === "text" ? first.text : "";
-			expect(text).toBe(`${getDialectDefinition("anthropic").renderThinking(REASONING)}\n`);
+			expect(text).toBe(getDialectDefinition("anthropic").renderThinking(REASONING));
 			expect(text).toContain("<thinking>");
 			expect(text).toContain("</thinking>");
 			expect(text).not.toContain("_Hmm.");

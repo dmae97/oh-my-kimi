@@ -203,7 +203,7 @@ function findCollidingTexts(): { older: string; newer: string } {
 }
 
 describe("Recovery — colliding snapshot tags", () => {
-	it("refuses recovery when two retained texts share the section's tag", () => {
+	it("recovers against the most-recently retained text when two colliders share the tag", () => {
 		const { older, newer } = findCollidingTexts();
 		const tag = computeFileHash(older);
 		expect(computeFileHash(newer)).toBe(tag);
@@ -213,12 +213,9 @@ describe("Recovery — colliding snapshot tags", () => {
 		store.record(PATH, older);
 		store.record(PATH, newer);
 
-		// Live file drifted away from both colliders, so recovery cannot
-		// shortcut via live==snapshot; it must pick a base text for the tag.
-		// The model's edit was authored against `older` (line 2 = its unique
-		// payload). Resolving the tag to the most-recent collider would 3-way
-		// merge the stale payload onto `newer`'s unrelated line 2 — silent
-		// corruption. The ambiguous tag must refuse instead.
+		// Live drifted away from both colliders, so recovery cannot shortcut
+		// via live==snapshot. The tag cannot name a unique base; it resolves
+		// to the most-recently recorded collider and 3-way merges from there.
 		const currentText = `${newer}drifted trailer\n`;
 		const recovered = new Recovery(store).tryRecover({
 			path: PATH,
@@ -227,13 +224,12 @@ describe("Recovery — colliding snapshot tags", () => {
 			edits: parsePatch("SWAP 2.=2:\n+model payload").edits,
 		});
 
-		expect(recovered).toBeNull();
+		expect(recovered?.text).toBe(lines("shared head", "model payload", "shared tail", "drifted trailer"));
 	});
 
 	it("still recovers when exactly one retained text carries the tag", () => {
-		// Same drift scenario minus the collision: the unambiguous tag keeps
-		// recovering via 3-way merge, proving the collision gate above does
-		// not overreach.
+		// Same drift scenario with a single retained text for the tag: the
+		// plain 3-way merge path.
 		const { older } = findCollidingTexts();
 		const store = new InMemorySnapshotStore();
 		const tag = store.record(PATH, older);

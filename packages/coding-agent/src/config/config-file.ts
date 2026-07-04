@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
-import type { Type } from "arktype";
+import { ArkErrors, type Type } from "arktype";
 import { JSONC, YAML } from "bun";
 
 /** Minimal subset of the AJV ConfigSchemaError shape this module actually relies on. */
@@ -220,11 +220,11 @@ export class ConfigFile<T> implements IConfigFile<T> {
 			}
 
 			const checked = this.schema(parsed);
-			if (checked instanceof Error) {
-				const schemaErrors: ConfigSchemaError[] = [];
-				// arktype errors are Error instances with a message property
-				// Extract the error message as a single schema error
-				schemaErrors.push({ instancePath: "root", message: checked.message });
+			if (checked instanceof ArkErrors) {
+				const schemaErrors: ConfigSchemaError[] = checked.map(error => ({
+					instancePath: error.path.length === 0 ? "root" : error.path.join("."),
+					message: error.problem,
+				}));
 				const error = new ConfigError(this.id, schemaErrors);
 				logger.warn("Failed to parse config file", { path: this.path(), error });
 				return this.#storeCache({ error, status: "error" });

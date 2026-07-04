@@ -10,17 +10,22 @@ const CLAUDE_FABLE_ID = /(?:^|[./])claude[-.]fable(?:[-.]|$)/i;
  * replayed unsigned `thought` part is schema-accepted but silently discarded —
  * neither recalled nor influencing generation).
  *
- * Fable is the exception: replaying prior reasoning inside `<thinking>` /
- * `antml:thinking`-style assistant text is treated as a reasoning-extraction
- * attempt and can train the next turn to leak thoughts, so Fable receives the
- * reasoning as markdown-italic assistant prose instead. Harmony and Gemma are
- * also exceptions: their `renderThinking` emits chat-template control tokens
- * (`<|channel|>analysis`, `<|channel>thought`) that must not appear inside a
- * structured native message, so they fall back to a plain `<think>` block. Every
- * other dialect's thinking form is inline-safe XML tags or a markdown fence.
+ * Fable is the exception: Anthropic's `reasoning_extraction` classifier blocks
+ * requests that replay prior reasoning inside `<thinking>` / `antml:thinking`
+ * tags OR the older `_Hmm. …_` italic envelope — it reads the wrapped
+ * chain-of-thought as an attempt to duplicate model outputs and refuses the
+ * whole turn. Fable therefore receives prior reasoning as bare assistant prose:
+ * no tag, no `_Hmm.` wrapper, no trailing newline.
+ * Heat is cumulative (block count and early-conversation position also raise
+ * it), so this lowers per-block signal but does not license unbounded replay.
+ * Harmony and Gemma are also exceptions: their `renderThinking` emits
+ * chat-template control tokens (`<|channel|>analysis`, `<|channel>thought`)
+ * that must not appear inside a structured native message, so they fall back to
+ * a plain `<think>` block. Every other dialect's thinking form is inline-safe
+ * XML tags or a markdown fence.
  *
- * The result ends with a trailing newline so the block stays separated from the
- * turn's reply text when the wire encoder concatenates parts.
+ * The result does not append a delimiter; callers that flatten adjacent blocks
+ * into a single string must insert their own separator.
  *
  * Distinct from {@link DialectDefinition.renderThinking}, which targets the
  * owned-dialect *text transport* where those control tokens are legal.
@@ -30,7 +35,7 @@ export function renderDemotedThinking(modelId: string, text: string): string {
 	text = text.toWellFormed();
 	const canonicalId = bareModelId(modelId);
 	const dialect = preferredDialect(modelId);
-	if (CLAUDE_FABLE_ID.test(canonicalId)) return `_Hmm. ${text}_\n`;
-	if (dialect === "harmony" || dialect === "gemma") return `<think>\n${text}\n</think>\n`;
-	return `${getDialectDefinition(dialect).renderThinking(text)}\n`;
+	if (CLAUDE_FABLE_ID.test(canonicalId)) return text;
+	if (dialect === "harmony" || dialect === "gemma") return `<think>\n${text}\n</think>`;
+	return getDialectDefinition(dialect).renderThinking(text);
 }

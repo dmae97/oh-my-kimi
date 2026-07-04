@@ -41,4 +41,28 @@ describe("shimmerText", () => {
 		expect(rendered).toContain("\x1b[38;2;12;34;56m");
 		expect(Bun.stripANSI(rendered)).toBe("x");
 	});
+
+	it("shimmers a mixed BMP + surrogate-pair message correctly (issue #4353 refactor)", () => {
+		// #4353 replaced `Array.from(seg.text)` with in-place UTF-16 iteration to
+		// drop the per-frame allocation that dominated the shimmer render cost.
+		// A surrogate-pair emoji must still count as one code point (the band
+		// index) and stay atomic in the output — an off-by-one would either
+		// double-count the pair (mispositioning the band) or emit one lone
+		// high-surrogate byte inside an ANSI run.
+		vi.spyOn(settingsModule, "isSettingsInitialized").mockReturnValue(false);
+		vi.spyOn(Date, "now").mockReturnValue(0);
+
+		const rendered = shimmerText("a😀b", testTheme);
+		// Strip ANSI: the visible payload must be the exact input, preserving the
+		// surrogate pair intact.
+		expect(Bun.stripANSI(rendered)).toBe("a😀b");
+	});
+
+	it("shimmers an all-emoji message without dropping any code point", () => {
+		vi.spyOn(settingsModule, "isSettingsInitialized").mockReturnValue(false);
+		vi.spyOn(Date, "now").mockReturnValue(0);
+
+		const rendered = shimmerText("🎉🌟✨🚀", testTheme);
+		expect(Bun.stripANSI(rendered)).toBe("🎉🌟✨🚀");
+	});
 });

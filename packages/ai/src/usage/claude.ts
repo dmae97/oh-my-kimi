@@ -1,17 +1,20 @@
 import { scheduler } from "node:timers/promises";
+import { bareModelId, parseAnthropicModel } from "@oh-my-pi/pi-catalog/identity";
 import { toNumber } from "@oh-my-pi/pi-catalog/utils";
 import * as AIError from "../error";
 import { claudeCodeVersion } from "../providers/anthropic";
-import type {
-	CredentialRankingStrategy,
-	UsageAmount,
-	UsageFetchContext,
-	UsageFetchParams,
-	UsageLimit,
-	UsageProvider,
-	UsageReport,
-	UsageStatus,
-	UsageWindow,
+import {
+	type CredentialRankingContext,
+	type CredentialRankingStrategy,
+	resolveUsedFraction,
+	type UsageAmount,
+	type UsageFetchContext,
+	type UsageFetchParams,
+	type UsageLimit,
+	type UsageProvider,
+	type UsageReport,
+	type UsageStatus,
+	type UsageWindow,
 } from "../usage";
 import { isRecord } from "../utils";
 
@@ -60,13 +63,37 @@ interface ParsedUsageBucket {
 	utilization?: number;
 	resetsAt?: number;
 }
-type ClaudeUnifiedWindow = "5h" | "7d";
+type ClaudeUnifiedWindow = "5h" | "7d" | "7d_oi";
+type ClaudeModelKind = "opus" | "sonnet" | "fable" | "mythos";
 
 interface ClaudeUsageResponse {
 	five_hour?: ClaudeUsageBucket | null;
 	seven_day?: ClaudeUsageBucket | null;
 	seven_day_opus?: ClaudeUsageBucket | null;
 	seven_day_sonnet?: ClaudeUsageBucket | null;
+	limits?: unknown;
+}
+
+interface ClaudeApiLimitModelScope {
+	display_name?: string | null;
+}
+
+interface ClaudeApiLimitScope {
+	model?: ClaudeApiLimitModelScope | null;
+}
+
+interface ClaudeApiLimitEntry {
+	kind?: string;
+	percent?: unknown;
+	resets_at?: string | null;
+	scope?: ClaudeApiLimitScope | null;
+	is_active?: boolean;
+}
+
+interface ParsedApiLimitEntry {
+	kind: string;
+	bucket: ParsedUsageBucket;
+	displayName?: string;
 }
 
 type ClaudeUsagePayload = {
@@ -89,6 +116,43 @@ function parseBucket(bucket: unknown): ParsedUsageBucket | undefined {
 	}
 	return { utilization, resetsAt };
 }
+
+function getApiLimitDisplayName(scope: unknown): string | undefined {
+	if (!isRecord(scope)) return undefined;
+	const model = scope.model;
+	if (!isRecord(model)) return undefined;
+	const displayName = model.display_name;
+	return typeof displayName === "string" && displayName.trim() ? displayName.trim() : undefined;
+}
+
+/**
+ * Anthropic kept the legacy account-wide buckets populated, but as of
+ * 2026-07-02 the legacy per-model weekly buckets (`seven_day_opus` /
+ * `seven_day_sonnet`) are permanently null. Model-scoped weekly caps now arrive
+ * only through generic `limits[]` entries (`kind: "weekly_scoped"`) with the
+ * model family named by `scope.model.display_name`.
+ */
+function parseApiLimitEntries(raw: unknown): ParsedApiLimitEntry[] {
+	if (!Array.isArray(raw)) return [];
+	const entries: ParsedApiLimitEntry[] = [];
+	for (const rawEntry of raw) {
+		if (!isRecord(rawEntry)) continue;
+		const entry = rawEntry as ClaudeApiLimitEntry;
+		if (typeof entry.kind !== "string") continue;
+		if (entry.is_active === false) continue;
+		const utilization = toNumber(entry.percent);
+		const resetsAt = parseIsoTime(typeof entry.resets_at === "string" ? entry.resets_at : undefined);
+		if (utilization === undefined && resetsAt === undefined) continue;
+		const displayName = getApiLimitDisplayName(entry.scope);
+		entries.push({
+			kind: entry.kind,
+			bucket: { utilization, resetsAt },
+			...(displayName ? { displayName } : {}),
+		});
+	}
+	return entries;
+}
+
 function parseUnifiedWindow(
 	headers: Record<string, string>,
 	window: ClaudeUnifiedWindow,
@@ -144,12 +208,17 @@ function hasUsageData(payload: ClaudeUsageResponse): boolean {
 		parseBucket(payload.five_hour)?.utilization !== undefined ||
 		parseBucket(payload.seven_day)?.utilization !== undefined ||
 		parseBucket(payload.seven_day_opus)?.utilization !== undefined ||
-		parseBucket(payload.seven_day_sonnet)?.utilization !== undefined
+		parseBucket(payload.seven_day_sonnet)?.utilization !== undefined ||
+		parseApiLimitEntries(payload.limits).some(entry => entry.bucket.utilization !== undefined)
 	);
 }
 
 function isRetryableStatus(status: number): boolean {
-	return AIError.isTransientStatus(status);
+	// Exclude 429: the usage endpoint is informational and rate-limited per
+	// source IP, so retrying a rate_limit_error inside a single fetch can't
+	// succeed and only deepens the throttle (3 attempts per poll). Fall through
+	// to the caller's failure cool-down and retry on the next poll instead.
+	return AIError.isTransientStatus(status) && status !== 429;
 }
 
 function isAbortError(error: unknown, signal?: AbortSignal): boolean {
@@ -334,8 +403,8 @@ function buildUsageLimit(args: {
 		scope: {
 			provider: args.provider,
 			windowId: args.windowId,
-			tier: args.tier,
-			shared: args.shared,
+			...(args.tier !== undefined ? { tier: args.tier } : {}),
+			...(args.shared !== undefined ? { shared: args.shared } : {}),
 		},
 		window,
 		amount,
@@ -343,9 +412,47 @@ function buildUsageLimit(args: {
 	};
 }
 
+function slugifyClaudeLimitDisplayName(displayName: string): string {
+	return displayName
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "");
+}
+
+/**
+ * Scoped weekly rows are per-model-family counters, not account-wide windows.
+ * They deliberately leave `scope.shared` unset so credential-wide exhaustion
+ * gating only considers the shared umbrella windows; an exhausted Fable weekly
+ * cap must not block Opus or Sonnet requests on the same credential.
+ */
+function buildScopedWeeklyUsageLimits(entries: readonly ParsedApiLimitEntry[]): UsageLimit[] {
+	const seenSlugs = new Set<string>();
+	const limits: UsageLimit[] = [];
+	for (const entry of entries) {
+		if (entry.kind !== "weekly_scoped" || !entry.displayName) continue;
+		const slug = slugifyClaudeLimitDisplayName(entry.displayName);
+		if (!slug || seenSlugs.has(slug)) continue;
+		seenSlugs.add(slug);
+		const limit = buildUsageLimit({
+			id: `anthropic:7d:${slug}`,
+			label: `Claude 7 Day (${entry.displayName})`,
+			windowId: "7d",
+			windowLabel: "7 Day",
+			durationMs: SEVEN_DAYS_MS,
+			bucket: entry.bucket,
+			provider: "anthropic",
+			tier: slug,
+		});
+		if (limit) limits.push(limit);
+	}
+	return limits;
+}
+
 export function parseClaudeRateLimitHeaders(headers: Record<string, string>, now = Date.now()): UsageReport | null {
 	const fiveHour = parseUnifiedWindow(headers, "5h");
 	const sevenDay = parseUnifiedWindow(headers, "7d");
+	const modelScopedSevenDay = parseUnifiedWindow(headers, "7d_oi");
 	const limits = [
 		buildUsageLimit({
 			id: "anthropic:5h",
@@ -366,6 +473,16 @@ export function parseClaudeRateLimitHeaders(headers: Record<string, string>, now
 			bucket: sevenDay,
 			provider: "anthropic",
 			shared: true,
+		}),
+		buildUsageLimit({
+			id: "anthropic:7d:fable",
+			label: "Claude 7 Day (Fable)",
+			windowId: "7d",
+			windowLabel: "7 Day",
+			durationMs: SEVEN_DAYS_MS,
+			bucket: modelScopedSevenDay,
+			provider: "anthropic",
+			tier: "fable",
 		}),
 	].filter((limit): limit is UsageLimit => limit !== null);
 
@@ -394,8 +511,10 @@ async function fetchClaudeUsage(params: UsageFetchParams, ctx: UsageFetchContext
 	if (!payloadResult || !isRecord(payloadResult.payload)) return null;
 	const { payload, orgId } = payloadResult;
 
-	const fiveHour = parseBucket(payload.five_hour);
-	const sevenDay = parseBucket(payload.seven_day);
+	const apiLimitEntries = parseApiLimitEntries(payload.limits);
+	const fiveHour = parseBucket(payload.five_hour) ?? apiLimitEntries.find(entry => entry.kind === "session")?.bucket;
+	const sevenDay =
+		parseBucket(payload.seven_day) ?? apiLimitEntries.find(entry => entry.kind === "weekly_all")?.bucket;
 	const sevenDayOpus = parseBucket(payload.seven_day_opus);
 	const sevenDaySonnet = parseBucket(payload.seven_day_sonnet);
 
@@ -440,6 +559,7 @@ async function fetchClaudeUsage(params: UsageFetchParams, ctx: UsageFetchContext
 			provider: "anthropic",
 			tier: "sonnet",
 		}),
+		...buildScopedWeeklyUsageLimits(apiLimitEntries),
 	].filter((limit): limit is UsageLimit => limit !== null);
 
 	if (limits.length === 0) return null;
@@ -475,11 +595,101 @@ export const claudeUsageProvider: UsageProvider = {
 	supports: params => params.provider === "anthropic" && params.credential.type === "oauth",
 };
 
+function getClaudeModelKind(context: CredentialRankingContext | undefined): ClaudeModelKind | undefined {
+	const modelId = context?.modelId;
+	if (!modelId) return undefined;
+	return parseAnthropicModel(bareModelId(modelId))?.kind;
+}
+
+/**
+ * Claude model-scoped rows are only relevant to the matching model family.
+ * Credential-wide exhaustion checks stay on shared umbrella windows unless the
+ * request model parses to a concrete Anthropic kind, preventing a Fable cap from
+ * suppressing unrelated Opus/Sonnet traffic.
+ */
+function scopeClaudeLimitsForModel(report: UsageReport, context: CredentialRankingContext | undefined): UsageLimit[] {
+	const kind = getClaudeModelKind(context);
+	return report.limits.filter(
+		limit => limit.scope.shared === true || (kind !== undefined && limit.scope.tier === kind),
+	);
+}
+
+/**
+ * Exclude Fable and Mythos tier weekly caps from proactive hard-blocking
+ * (gating) because they are notoriously unreliable (they report 100% exhausted
+ * while the account can still serve requests). They stay available for ranking
+ * pressure in findWindowLimits via scopeClaudeLimitsForModel.
+ */
+function scopeClaudeLimitsForModelHardBlock(
+	report: UsageReport,
+	context: CredentialRankingContext | undefined,
+): UsageLimit[] {
+	const kind = getClaudeModelKind(context);
+	const excludeHardBlock = kind === "fable" || kind === "mythos";
+	return report.limits.filter(
+		limit => limit.scope.shared === true || (kind !== undefined && limit.scope.tier === kind && !excludeHardBlock),
+	);
+}
+
+function rankingUsedFraction(limit: UsageLimit): number {
+	const fraction = resolveUsedFraction(limit);
+	if (typeof fraction !== "number" || !Number.isFinite(fraction)) return 0.5;
+	return Math.min(Math.max(fraction, 0), 1);
+}
+
+function rankingDrainRate(limit: UsageLimit, nowMs: number): number {
+	const usedFraction = rankingUsedFraction(limit);
+	const durationMs = limit.window?.durationMs ?? SEVEN_DAYS_MS;
+	if (!Number.isFinite(durationMs) || durationMs <= 0) return usedFraction;
+	const resetAt = limit.window?.resetsAt;
+	if (typeof resetAt !== "number" || !Number.isFinite(resetAt)) return usedFraction;
+	const remainingWindowMs = resetAt - nowMs;
+	const clampedRemainingWindowMs = Math.min(Math.max(remainingWindowMs, 0), durationMs);
+	const elapsedMs = durationMs - clampedRemainingWindowMs;
+	if (elapsedMs <= 0) return usedFraction;
+	const elapsedHours = elapsedMs / (60 * 60 * 1000);
+	if (!Number.isFinite(elapsedHours) || elapsedHours <= 0) return usedFraction;
+	return usedFraction / elapsedHours;
+}
+
+function morePressuredLimit(
+	left: UsageLimit | undefined,
+	right: UsageLimit | undefined,
+	nowMs: number,
+): UsageLimit | undefined {
+	if (!left) return right;
+	if (!right) return left;
+	const leftDrainRate = rankingDrainRate(left, nowMs);
+	const rightDrainRate = rankingDrainRate(right, nowMs);
+	if (rightDrainRate !== leftDrainRate) return rightDrainRate > leftDrainRate ? right : left;
+	return rankingUsedFraction(right) > rankingUsedFraction(left) ? right : left;
+}
+
+function findClaudeSecondaryLimit(
+	report: UsageReport,
+	context: CredentialRankingContext | undefined,
+): UsageLimit | undefined {
+	const nowMs = Date.now();
+	return scopeClaudeLimitsForModel(report, context)
+		.filter(limit => limit.scope.windowId === "7d" || limit.window?.id === "7d")
+		.reduce<UsageLimit | undefined>((selected, limit) => morePressuredLimit(selected, limit, nowMs), undefined);
+}
+
 export const claudeRankingStrategy: CredentialRankingStrategy = {
-	findWindowLimits(report) {
-		const primary = report.limits.find(l => l.id === "anthropic:5h");
-		const secondary = report.limits.find(l => l.id === "anthropic:7d");
+	findWindowLimits(report, context) {
+		const primary = report.limits.find(limit => limit.id === "anthropic:5h");
+		const secondary = findClaudeSecondaryLimit(report, context);
 		return { primary, secondary };
+	},
+	scopeLimits: scopeClaudeLimitsForModelHardBlock,
+	/**
+	 * Fable/Mythos usage-limit errors map to tier-local weekly counters. Scope
+	 * reactive backoff blocks for those tiers, mirroring the per-counter
+	 * precedent in packages/ai/src/usage/google-antigravity.ts:466-497.
+	 */
+	blockScope(context) {
+		const kind = getClaudeModelKind(context);
+		return kind === "fable" || kind === "mythos" ? `tier:${kind}` : undefined;
 	},
 	windowDefaults: { primaryMs: 5 * 60 * 60 * 1000, secondaryMs: 7 * 24 * 60 * 60 * 1000 },
 };

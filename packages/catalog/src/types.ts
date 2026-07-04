@@ -592,6 +592,17 @@ export type ResolvedAnthropicCompat = Required<AnthropicCompat> & {
 	 * env headers, and cache-TTL shaping without per-request URL parsing.
 	 */
 	officialEndpoint: boolean;
+	/**
+	 * The configured endpoint enforces Anthropic's signature protocol on
+	 * replayed thinking blocks — either the official API itself or a proxy
+	 * that forwards to it (GitHub Copilot, ZenMux, Cloudflare AI Gateway's
+	 * `/anthropic` route, Google Vertex's `publishers/anthropic/…`).
+	 * Downstream transforms strip stale cross-model thinking signatures on
+	 * these endpoints so the signing proxy doesn't 400 with
+	 * `Invalid signature in thinking block` (#4297). Superset of
+	 * {@link officialEndpoint}.
+	 */
+	signingEndpoint: boolean;
 };
 
 /**

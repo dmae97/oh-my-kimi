@@ -37,14 +37,14 @@ body = "Markdown comment body."
 number = "Optional issue/PR override. Defaults to the inbound thread."
 
 [gh_push_branch]
-description = "Push the workspace branch to origin. Pre-publish gate (when the repo defines them): `bun run fix` → auto-commit any formatter diff as `style: bun run fix` → `bun check`. On `bun check` failure, fix the cause and retry. Pre-existing breakage on `main` against the same paths NOT caused by your diff → retry with `skip_checks=true` and document the bypass in the follow-up comment. Dirty-tree gate runs unconditionally."
+description = "Push the workspace branch to origin. Pre-publish gate (when the repo defines them): `bun run fix` → amend any formatter diff into your HEAD commit → `bun check`. On `bun check` failure, fix the cause and retry. Pre-existing breakage on `main` against the same paths NOT caused by your diff → retry with `skip_checks=true` and document the bypass in the follow-up comment. Dirty-tree gate runs unconditionally. Commit messages carrying shell-literal `\\n` escapes are rewritten to real newlines before the push."
 
 [gh_push_branch.parameters]
 branch = "Optional branch override; defaults to the workspace branch."
 skip_checks = "Bypass `bun run fix` + `bun check`. Use ONLY after verifying (e.g. `git diff origin/<default>..HEAD` against the failing paths) the failure exists on `main` and is NOT caused by your diff. Dirty-tree gate still runs — commit everything first."
 
 [gh_open_pr]
-description = "Open a PR from the workspace branch using the four-section body template. Same pre-publish gate as `gh_push_branch`: `bun run fix` → auto-commit formatter diff as `style: bun run fix` → `bun check`. On failure, fix and retry. Pre-existing `main` breakage NOT caused by your diff → `skip_checks=true` and document the bypass in the PR's `## Verification` section."
+description = "Open a PR from the workspace branch using the four-section body template. Same pre-publish gate as `gh_push_branch`: `bun run fix` → amend formatter diff into HEAD → `bun check`. On failure, fix and retry. Pre-existing `main` breakage NOT caused by your diff → `skip_checks=true` and document the bypass in the PR's `## Verification` section."
 
 [gh_open_pr.parameters]
 body = "Markdown body. MUST contain the four template sections in order: `## Repro`, `## Cause`, `## Fix`, `## Verification`."

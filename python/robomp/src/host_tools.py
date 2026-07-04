@@ -56,7 +56,6 @@ _AGENT_HOME = Path("/srv/agent-home")
 _PRE_PR_FIX_TIMEOUT_SECONDS = 600.0
 _PRE_PR_CHECK_TIMEOUT_SECONDS = 600.0
 _PRE_PR_CHECK_MAX_OUTPUT = 12_000
-_PRE_PR_FIX_COMMIT_SUBJECT = "style: bun run fix"
 
 
 @dataclass(slots=True)
@@ -228,8 +227,12 @@ def _run_repo_command(
     cmd: list[str] | tuple[str, ...],
     *,
     timeout: float | None = None,
+    extra_env: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run a repo-local command with agent-equivalent permissions and env."""
+    env = _repo_command_env(bindings)
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(
         list(cmd),
         cwd=str(bindings.workspace.repo_dir),
@@ -237,7 +240,7 @@ def _run_repo_command(
         capture_output=True,
         text=True,
         timeout=timeout,
-        env=_repo_command_env(bindings),
+        env=env,
         **_slot_subprocess_kwargs(bindings.slot_uid),
     )
 
@@ -347,12 +350,18 @@ def _run_pre_publish_bun_fix(
     stage: str,
     skip_checks: bool = False,
 ) -> None:
-    """Run `bun run fix` then commit any working-tree diff as the bot.
+    """Run `bun run fix` then amend any working-tree diff into HEAD.
 
     Silently no-ops when the repository does not define a `scripts.fix`
-    entry. Anything the formatter touches gets folded into a fresh
-    `style: bun run fix` commit so the downstream cleanliness gate sees a
-    pristine worktree.
+    entry. Anything the formatter touches gets amended into the agent's HEAD
+    commit so the downstream cleanliness gate sees a pristine worktree
+    without littering PR history with standalone `style:` commits. Amending
+    an already-pushed HEAD is safe: the push transport uses
+    `--force-with-lease`, which exists precisely to recover from local
+    history rewrites. When there is no commit that may safely absorb the
+    diff — HEAD sits on `origin/<base>` (pre-existing formatter drift) or is
+    foreign-authored — the tool refuses with instructions instead of
+    guessing.
 
     `tool_name` is the host tool calling this (audit attribution).
     `stage` is the human-readable verb used in error wording — "open PR"
@@ -367,7 +376,7 @@ def _run_pre_publish_bun_fix(
     if not _has_bun_script(bindings.workspace.repo_dir, "fix"):
         return
     # Dirty-tree gate BEFORE the formatter so any pre-existing uncommitted
-    # edit isn't silently swept into the `style: bun run fix` commit by the
+    # edit isn't silently swept into the formatter amend by the
     # `git add -A` below. The agent owns the worktree end-to-end; any diff
     # not already in a commit is a workflow bug it must resolve before we
     # mutate the tree further.
@@ -378,8 +387,8 @@ def _run_pre_publish_bun_fix(
             f"refusing to {stage}: dirty worktree before `bun run fix`.\n  "
             f"{dirty}\n"
             "Commit (or `git stash`) every change before invoking the formatter — "
-            "anything left uncommitted would be folded into the `style: bun run fix` "
-            "commit and silently land in the PR."
+            "anything left uncommitted would be amended into your HEAD commit "
+            "and silently land in the PR."
         )
         _audit(bindings, tool_name, args, error=msg)
         _raise_command(msg)
@@ -422,28 +431,48 @@ def _run_pre_publish_bun_fix(
     if not status.stdout.strip():
         return
 
+    # The formatter produced a diff. Fold it into the agent's HEAD commit —
+    # but only when HEAD is a bot-authored commit not already on the base
+    # branch. Amending a commit `origin/<base>` contains would rewrite
+    # shared history; amending a foreign-authored commit would bury our
+    # diff in someone else's work.
+    base = bindings.repo.default_branch
+    ahead = _run_repo_command(bindings, ["git", "rev-list", "-n", "1", f"origin/{base}..HEAD"])
+    if ahead.returncode != 0 or not ahead.stdout.strip():
+        msg = (
+            f"refusing to {stage}: `bun run fix` changed files, but there is no commit of "
+            f"yours to fold them into — the checkout matches `origin/{base}`, so the "
+            f"formatter drift pre-exists on `{base}`. Inspect with `git status` / `git diff`; "
+            "either commit the formatter output yourself or discard it "
+            "(`git checkout -- . && git clean -fd`) and retry with `skip_checks=true`, "
+            "documenting the bypass."
+        )
+        _audit(bindings, tool_name, args, error=msg)
+        _raise_command(msg)
+    head_identity = _run_repo_command(bindings, ["git", "log", "-1", "--format=%an%x1f%ae", "HEAD"])
+    if head_identity.returncode != 0 or head_identity.stdout.strip("\n").split("\x1f") != [
+        bindings.author_name,
+        bindings.author_email,
+    ]:
+        author = head_identity.stdout.strip("\n").replace("\x1f", " <") + ">"
+        msg = (
+            f"refusing to {stage}: `bun run fix` changed files, but HEAD is authored by "
+            f"{author} — refusing to fold the formatter diff into a foreign commit. "
+            "Fix the identity first (`git commit --amend --reset-author --no-edit`) and retry."
+        )
+        _audit(bindings, tool_name, args, error=msg)
+        _raise_command(msg)
+
     add = _run_repo_command(bindings, ["git", "add", "-A"])
     if add.returncode != 0:
         err = (add.stderr or add.stdout).strip()
         msg = f"refusing to {stage}: `git add -A` failed after `bun run fix`: {err}"
         _audit(bindings, tool_name, args, error=msg)
         _raise_command(msg)
-    commit = _run_repo_command(
-        bindings,
-        [
-            "git",
-            "-c",
-            f"user.email={bindings.author_email}",
-            "-c",
-            f"user.name={bindings.author_name}",
-            "commit",
-            "-m",
-            _PRE_PR_FIX_COMMIT_SUBJECT,
-        ],
-    )
+    commit = _run_repo_command(bindings, ["git", "commit", "--amend", "--no-edit"])
     if commit.returncode != 0:
         err = (commit.stderr or commit.stdout).strip()
-        msg = f"refusing to {stage}: failed to commit `bun run fix` changes: {err}"
+        msg = f"refusing to {stage}: failed to amend `bun run fix` changes into HEAD: {err}"
         _audit(bindings, tool_name, args, error=msg)
         _raise_command(msg)
 
@@ -610,6 +639,129 @@ def _build_post_comment(bindings: ToolBindings) -> HostTool[Any, Any]:
     )
 
 
+def _repair_message_escapes(message: str) -> str | None:
+    """Convert shell-literal ``\\n`` escapes in a commit message to newlines.
+
+    Agents regularly run ``git commit -m 'subject\\n\\nbody'`` with single
+    quotes, recording the two-character backslash-n sequence instead of a
+    newline — the message then renders as one line of ``\\n``-littered text on
+    GitHub. Escapes inside backtick code spans (`` `\\n` ``) are genuine
+    content and are preserved.
+
+    Returns the repaired message, or ``None`` when nothing needs repair.
+    """
+    if "\\n" not in message:
+        return None
+    parts = message.split("`")
+    changed = False
+    for i in range(0, len(parts), 2):  # even indexes sit outside code spans
+        fixed = parts[i].replace("\\r\\n", "\n").replace("\\n", "\n")
+        if fixed != parts[i]:
+            parts[i] = fixed
+            changed = True
+    return "`".join(parts) if changed else None
+
+
+def _repair_commit_message_escapes(bindings: ToolBindings, args: Mapping[str, Any], *, tool_name: str) -> None:
+    """Rewrite unpushed commits whose messages carry literal ``\\n`` escapes.
+
+    Rebuilds ``origin/<base>..HEAD`` with ``git commit-tree``, preserving
+    every tree, parent topology, identity, and date — only messages change.
+    Safe against already-pushed commits: the push transport uses
+    ``--force-with-lease``. Once a broken message is detected the repair is
+    mandatory — a git failure mid-rewrite refuses the push (the branch ref
+    itself only ever moves via the compare-and-swap ``update-ref`` at the
+    very end, so a refusal never leaves partial state).
+    """
+
+    def fail(step: str, proc: subprocess.CompletedProcess[str]) -> NoReturn:
+        err = (proc.stderr or proc.stdout).strip() or f"exit {proc.returncode}"
+        msg = (
+            f"refusing to push: commit messages contain literal `\\n` escapes and the "
+            f"automatic repair failed at `{step}`: {err}\n"
+            "Reword the affected commits yourself (`git rebase -i origin/"
+            + bindings.repo.default_branch
+            + "`, real newlines via `git commit -F <file>` or multiple `-m` flags) and retry."
+        )
+        _audit(bindings, tool_name, args, error=msg)
+        _raise_command(msg)
+
+    base = bindings.repo.default_branch
+    rev_list = _run_repo_command(bindings, ["git", "rev-list", "--reverse", f"origin/{base}..HEAD"])
+    if rev_list.returncode != 0:
+        return
+    shas = rev_list.stdout.split()
+    if not shas:
+        return
+    messages: dict[str, str] = {}
+    repaired: list[str] = []
+    for sha in shas:
+        show = _run_repo_command(bindings, ["git", "log", "-1", "--format=%B", sha])
+        if show.returncode != 0:
+            if repaired:
+                fail("git log", show)
+            return
+        message = show.stdout
+        fixed = _repair_message_escapes(message)
+        if fixed is not None:
+            message = fixed
+            repaired.append(sha)
+        messages[sha] = message
+    if not repaired:
+        return
+
+    needs_fix = set(repaired)
+    rewritten: dict[str, str] = {}
+    for sha in shas:
+        meta = _run_repo_command(
+            bindings,
+            ["git", "log", "-1", "--format=%T%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%cn%x1f%ce%x1f%cI", sha],
+        )
+        if meta.returncode != 0:
+            fail("git log", meta)
+        fields = meta.stdout.strip("\n").split("\x1f")
+        if len(fields) != 8:
+            fail("git log", meta)
+        tree, parents_raw, a_name, a_email, a_date, c_name, c_email, c_date = fields
+        parents_old = parents_raw.split()
+        parents_new = [rewritten.get(p, p) for p in parents_old]
+        if sha not in needs_fix and parents_new == parents_old:
+            rewritten[sha] = sha
+            continue
+        cmd = ["git", "commit-tree", tree]
+        for parent in parents_new:
+            cmd += ["-p", parent]
+        cmd += ["-m", messages[sha].rstrip("\n")]
+        made = _run_repo_command(
+            bindings,
+            cmd,
+            extra_env={
+                "GIT_AUTHOR_NAME": a_name,
+                "GIT_AUTHOR_EMAIL": a_email,
+                "GIT_AUTHOR_DATE": a_date,
+                "GIT_COMMITTER_NAME": c_name,
+                "GIT_COMMITTER_EMAIL": c_email,
+                "GIT_COMMITTER_DATE": c_date,
+            },
+        )
+        if made.returncode != 0 or not made.stdout.strip():
+            fail("git commit-tree", made)
+        rewritten[sha] = made.stdout.strip()
+
+    old_head, new_head = shas[-1], rewritten[shas[-1]]
+    update = _run_repo_command(
+        bindings,
+        ["git", "update-ref", "-m", "robomp: repaired commit message escapes", "HEAD", new_head, old_head],
+    )
+    if update.returncode != 0:
+        fail("git update-ref", update)
+    _audit(bindings, tool_name, args, result={"repaired_commit_messages": [sha[:12] for sha in repaired]})
+    log.info(
+        "repaired commit message escapes",
+        extra={"issue": bindings.issue_key, "commits": [sha[:12] for sha in repaired]},
+    )
+
+
 def _guarded_push_branch(bindings: ToolBindings, args: Mapping[str, Any], tool_name: str, branch: str) -> str:
     if bindings.review_mode:
         msg = "refusing to push: PR review worktrees are read-only."
@@ -622,6 +774,9 @@ def _guarded_push_branch(bindings: ToolBindings, args: Mapping[str, Any], tool_n
     # Re-pin the configured identity right before push (cheap; idempotent).
     _run_repo_command(bindings, ["git", "config", "user.email", bindings.author_email])
     _run_repo_command(bindings, ["git", "config", "user.name", bindings.author_name])
+    # Cosmetic repair BEFORE the head snapshot: commits whose messages carry
+    # shell-literal `\n` escapes are rewritten in place (message-only).
+    _repair_commit_message_escapes(bindings, args, tool_name=tool_name)
     repo_dir_path = bindings.workspace.repo_dir
     head_proc = _run_repo_command(bindings, ["git", "rev-parse", "HEAD"])
     if head_proc.returncode != 0:

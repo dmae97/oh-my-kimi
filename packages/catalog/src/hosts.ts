@@ -47,6 +47,7 @@ export const KNOWN_HOSTS = {
 	xai: { providers: ["xai"], urlMarkers: ["api.x.ai"] },
 	mistral: { providers: ["mistral"], urlMarkers: ["mistral.ai"] },
 	together: { providers: ["together"], urlMarkers: ["api.together.xyz"] },
+	baseten: { providers: ["baseten"], urlMarkers: ["baseten.co"] },
 	/** URL-only on purpose: the `fireworks`/`firepass` providers route per-model and not every model is Fireworks-shaped. */
 	fireworks: { urlMarkers: ["fireworks.ai"] },
 	groq: { providers: ["groq"], urlMarkers: ["api.groq.com"] },

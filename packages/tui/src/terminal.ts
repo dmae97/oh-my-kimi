@@ -35,6 +35,11 @@ export function resolveHangulCompatibilityJamoWidthFromTerminalIdentity(
 	return "platform";
 }
 
+function shouldEnableModifyOtherKeysFallback(env: NodeJS.ProcessEnv = Bun.env): boolean {
+	if (!env.SSH_CONNECTION && !env.SSH_TTY && !env.SSH_CLIENT) return true;
+	return TERMINAL.id !== "base" && TERMINAL.id !== "trueColor";
+}
+
 /**
  * Maximum encoded UTF-8 bytes per `process.stdout.write` call on Windows.
  *
@@ -840,13 +845,13 @@ export class ProcessTerminal implements Terminal {
 						break;
 					}
 					case "keyboard": {
-						// Keyboard probe sentinel: kitty reply never arrived → fall back to modifyOtherKeys.
-						if (!this.#kittyProtocolActive && !this.#modifyOtherKeysActive && this.#modifyOtherKeysTimeout) {
+						// Keyboard probe sentinel: kitty reply never arrived → fall back to modifyOtherKeys
+						// only where the resolved terminal is known enough to tolerate it.
+						if (this.#modifyOtherKeysTimeout) {
 							clearTimeout(this.#modifyOtherKeysTimeout);
 							this.#modifyOtherKeysTimeout = undefined;
-							this.#safeWrite("\x1b[>4;2m");
-							this.#modifyOtherKeysActive = true;
 						}
+						this.#enableModifyOtherKeysFallback();
 						break;
 					}
 					case "osc99Probe": {
@@ -1054,6 +1059,13 @@ export class ProcessTerminal implements Terminal {
 		}
 	}
 
+	#enableModifyOtherKeysFallback(): void {
+		if (this.#kittyProtocolActive || this.#modifyOtherKeysActive) return;
+		if (!shouldEnableModifyOtherKeysFallback()) return;
+		this.#safeWrite("\x1b[>4;2m");
+		this.#modifyOtherKeysActive = true;
+	}
+
 	/**
 	 * Query terminal for Kitty keyboard protocol support and enable if available.
 	 *
@@ -1073,11 +1085,7 @@ export class ProcessTerminal implements Terminal {
 		this.#safeWrite("\x1b[?u\x1b[c");
 		this.#modifyOtherKeysTimeout = setTimeout(() => {
 			this.#modifyOtherKeysTimeout = undefined;
-			if (this.#kittyProtocolActive || this.#modifyOtherKeysActive) {
-				return;
-			}
-			this.#safeWrite("\x1b[>4;2m");
-			this.#modifyOtherKeysActive = true;
+			this.#enableModifyOtherKeysFallback();
 		}, 150);
 	}
 

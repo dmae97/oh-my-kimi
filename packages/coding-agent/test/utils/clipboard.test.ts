@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { readImageFromClipboard, readMacFileUrlsFromClipboard } from "@oh-my-pi/pi-coding-agent/utils/clipboard";
+import {
+	readImageFromClipboard,
+	readMacFileUrlsFromClipboard,
+	readTextFromClipboard,
+} from "@oh-my-pi/pi-coding-agent/utils/clipboard";
 import * as native from "@oh-my-pi/pi-natives";
 import type { Subprocess } from "bun";
 
@@ -189,36 +193,94 @@ describe("readImageFromClipboard dispatch", () => {
 describe("readMacFileUrlsFromClipboard", () => {
 	it("returns an empty list on non-darwin platforms without spawning osascript", async () => {
 		setPlatform("linux");
-		const cp = await import("node:child_process");
-		const execSpy = vi.spyOn(cp, "execSync");
+		const spawnSpy = vi.spyOn(Bun, "spawn");
 
 		expect(await readMacFileUrlsFromClipboard()).toEqual([]);
-		expect(execSpy).not.toHaveBeenCalled();
+		expect(spawnSpy).not.toHaveBeenCalled();
 	});
 
 	it("splits osascript output into one path per non-empty line on darwin", async () => {
 		setPlatform("darwin");
-		const cp = await import("node:child_process");
-		const execSpy = vi
-			.spyOn(cp, "execSync")
-			.mockReturnValue("/Users/me/Pictures/photo.png\n/Users/me/Pictures/clip.jpg\n\n");
+		const calls: SpawnCall[] = [];
+		spyPowershell(calls, "/Users/me/Pictures/photo.png\n/Users/me/Pictures/clip.jpg\n\n");
 
 		const paths = await readMacFileUrlsFromClipboard();
 
 		expect(paths).toEqual(["/Users/me/Pictures/photo.png", "/Users/me/Pictures/clip.jpg"]);
-		expect(execSpy).toHaveBeenCalledTimes(1);
-		const [cmd, options] = execSpy.mock.calls[0] ?? [];
-		expect(cmd).toBe("osascript -");
-		expect((options as { input?: string } | undefined)?.input).toContain("«class furl»");
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.cmd).toEqual(["osascript", "-"]);
+		// AppleScript payload is piped as stdin; the fix uses Bun.spawn with a
+		// Buffer so the child receives it without blocking the event loop.
+		const stdin = calls[0]?.options.stdin;
+		expect(Buffer.isBuffer(stdin)).toBe(true);
+		expect((stdin as Buffer).toString("utf8")).toContain("«class furl»");
 	});
 
-	it("returns an empty list when osascript throws (e.g. binary missing)", async () => {
+	it("returns an empty list when osascript exits non-zero (e.g. binary missing)", async () => {
 		setPlatform("darwin");
-		const cp = await import("node:child_process");
-		vi.spyOn(cp, "execSync").mockImplementation(() => {
-			throw new Error("osascript: command not found");
-		});
+		spyPowershell([], "", 127);
 
 		expect(await readMacFileUrlsFromClipboard()).toEqual([]);
+	});
+});
+
+describe("readTextFromClipboard", () => {
+	it("returns pbpaste stdout on darwin without touching execSync", async () => {
+		setPlatform("darwin");
+		const calls: SpawnCall[] = [];
+		spyPowershell(calls, "hello from pbpaste");
+
+		expect(await readTextFromClipboard()).toBe("hello from pbpaste");
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.cmd).toEqual(["pbpaste"]);
+	});
+
+	it("returns an empty string when the subprocess exits non-zero", async () => {
+		setPlatform("darwin");
+		spyPowershell([], "", 1);
+
+		expect(await readTextFromClipboard()).toBe("");
+	});
+
+	it("keeps the event loop responsive while the clipboard tool runs (#4235)", async () => {
+		setPlatform("darwin");
+
+		// Simulate a slow pbpaste: its stdout stream only emits after a real
+		// setTimeout, so the event loop must be free during the read. Under the
+		// pre-fix execSync path, this would spin the child synchronously and
+		// starve every setInterval tick.
+		const DELAY_MS = 80;
+		const slowProc = {
+			pid: 1,
+			stdout: new ReadableStream<Uint8Array>({
+				async start(controller) {
+					await Bun.sleep(DELAY_MS);
+					controller.enqueue(new TextEncoder().encode("payload"));
+					controller.close();
+				},
+			}),
+			stderr: streamOf(""),
+			exitCode: 0,
+			exited: (async () => {
+				await Bun.sleep(DELAY_MS);
+				return 0;
+			})(),
+			kill: () => true,
+		} as unknown as Subprocess;
+		vi.spyOn(Bun, "spawn").mockReturnValue(slowProc);
+
+		let ticks = 0;
+		const timer = setInterval(() => {
+			ticks += 1;
+		}, 10);
+		try {
+			const text = await readTextFromClipboard();
+			expect(text).toBe("payload");
+		} finally {
+			clearInterval(timer);
+		}
+		// If the read blocked the loop, ticks would stay at 0. A yielding
+		// implementation fires several ticks in the ~80ms window.
+		expect(ticks).toBeGreaterThanOrEqual(2);
 	});
 });

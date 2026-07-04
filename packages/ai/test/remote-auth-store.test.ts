@@ -10,7 +10,14 @@ import {
 	startAuthBroker,
 } from "@oh-my-pi/pi-ai/auth-broker";
 import * as oauthUtils from "@oh-my-pi/pi-ai/registry/oauth";
+import type { UsageLimit, UsageReport } from "@oh-my-pi/pi-ai/usage";
 import { removeWithRetries } from "../../utils/src/temp";
+
+function requireLimit(report: UsageReport, id: string): UsageLimit {
+	const limit = report.limits.find(candidate => candidate.id === id);
+	if (!limit) throw new Error(`expected ${id} limit`);
+	return limit;
+}
 
 const ANTHROPIC_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"] as const;
 const savedEnv: Partial<Record<(typeof ANTHROPIC_ENV)[number], string | undefined>> = {};
@@ -256,6 +263,199 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 		const retried = await remoteStore.fetchUsageReports();
 		expect(retried).toBeNull();
 		expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+		remoteStore.close();
+	});
+
+	test("ingestUsageReport overlays only the matching Anthropic report and getUsageReport returns the overlaid Fable row", async () => {
+		const brokerClient = new AuthBrokerClient({ url: handle!.url, token });
+		const remoteStore = new RemoteAuthCredentialStore({
+			client: brokerClient,
+			initialSnapshot: {
+				generation: 0,
+				generatedAt: 0,
+				serverNowMs: 0,
+				refresher: { enabled: false, intervalMs: 0, skewMs: 0, nextSweepInMs: Number.MAX_SAFE_INTEGER },
+				credentials: [],
+			},
+		});
+		const now = Date.now();
+
+		const reportForA: UsageReport = {
+			provider: "anthropic",
+			fetchedAt: now - 20_000,
+			limits: [
+				{
+					id: "anthropic:5h",
+					label: "Claude 5 Hour",
+					scope: { provider: "anthropic", windowId: "5h", shared: true },
+					window: { id: "5h", label: "5 Hour" },
+					amount: { used: 42, limit: 100, usedFraction: 0.42, unit: "percent" },
+					status: "ok",
+				},
+				{
+					id: "anthropic:7d",
+					label: "Claude 7 Day",
+					scope: { provider: "anthropic", windowId: "7d", shared: true },
+					window: { id: "7d", label: "7 Day" },
+					amount: { used: 84, limit: 100, usedFraction: 0.84, unit: "percent" },
+					status: "ok",
+				},
+				{
+					id: "anthropic:7d:fable",
+					label: "Claude 7 Day (Fable)",
+					scope: { provider: "anthropic", windowId: "7d", tier: "fable" },
+					window: { id: "7d", label: "7 Day" },
+					amount: { used: 11, limit: 100, usedFraction: 0.11, unit: "percent" },
+					status: "ok",
+				},
+				{
+					id: "anthropic:7d:opus",
+					label: "Claude 7 Day (Opus)",
+					scope: { provider: "anthropic", windowId: "7d", tier: "opus" },
+					window: { id: "7d", label: "7 Day" },
+					amount: { used: 12, limit: 100, usedFraction: 0.12, unit: "percent" },
+					status: "ok",
+				},
+			],
+			metadata: { accountId: "account-a", email: "a@example.com" },
+		};
+		const reportForB: UsageReport = {
+			provider: "anthropic",
+			fetchedAt: now - 10_000,
+			limits: [
+				{
+					id: "anthropic:7d:fable",
+					label: "Claude 7 Day (Fable)",
+					scope: { provider: "anthropic", windowId: "7d", tier: "fable" },
+					window: { id: "7d", label: "7 Day" },
+					amount: { used: 13, limit: 100, usedFraction: 0.13, unit: "percent" },
+					status: "ok",
+				},
+			],
+			metadata: { accountId: "account-b", email: "b@example.com" },
+		};
+		const fetchSpy = vi
+			.spyOn(brokerClient, "fetchUsage")
+			.mockResolvedValue({ generatedAt: now, reports: [reportForA, reportForB] });
+
+		const credA = {
+			type: "oauth" as const,
+			access: "ax",
+			refresh: REMOTE_REFRESH_SENTINEL,
+			expires: now + 60_000,
+			accountId: "account-a",
+			email: "a@example.com",
+		};
+		const credB = { ...credA, access: "bx", accountId: "account-b", email: "b@example.com" };
+		const overlay: UsageReport = {
+			provider: "anthropic",
+			fetchedAt: now,
+			limits: [
+				{
+					id: "anthropic:7d:fable",
+					label: "Claude 7 Day (Fable)",
+					scope: { provider: "anthropic", windowId: "7d", tier: "fable" },
+					window: { id: "7d", label: "7 Day", resetsAt: 1_780_617_600_000 },
+					amount: {
+						used: 61,
+						limit: 100,
+						usedFraction: 0.61,
+						remainingFraction: 0.39,
+						unit: "percent",
+					},
+					status: "ok",
+				},
+			],
+			metadata: { accountId: "account-a", email: "a@example.com", headersUpdatedAt: 1_780_000_000_000 },
+		};
+
+		expect(remoteStore.ingestUsageReport("anthropic", credA, overlay)).toBe(true);
+
+		const reports = await remoteStore.fetchUsageReports();
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+		expect(reports).not.toBeNull();
+		const reportA = reports?.find(report => report.metadata?.accountId === "account-a");
+		const reportB = reports?.find(report => report.metadata?.accountId === "account-b");
+		if (!reportA || !reportB) throw new Error("expected anthropic reports for both broker accounts");
+
+		expect(reportA.metadata?.email).toBe("a@example.com");
+		expect(reportA.metadata?.headersUpdatedAt).toBe(1_780_000_000_000);
+		expect(reportA.limits.filter(limit => limit.id === "anthropic:7d:fable")).toHaveLength(1);
+		expect(requireLimit(reportA, "anthropic:5h").amount.used).toBe(42);
+		expect(requireLimit(reportA, "anthropic:7d").amount.used).toBe(84);
+		expect(requireLimit(reportA, "anthropic:7d:opus").amount.used).toBe(12);
+		const overlaidFable = requireLimit(reportA, "anthropic:7d:fable");
+		expect(overlaidFable.amount.used).toBe(61);
+		expect(overlaidFable.amount.usedFraction).toBeCloseTo(0.61);
+		expect(overlaidFable.window?.resetsAt).toBe(1_780_617_600_000);
+
+		expect(reportB.metadata?.email).toBe("b@example.com");
+		expect(reportB.metadata?.headersUpdatedAt).toBeUndefined();
+		expect(requireLimit(reportB, "anthropic:7d:fable").amount.used).toBe(13);
+
+		const perCredA = await remoteStore.getUsageReport("anthropic", credA);
+		const perCredB = await remoteStore.getUsageReport("anthropic", credB);
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+		expect(perCredA).not.toBeNull();
+		expect(perCredB).not.toBeNull();
+		expect(requireLimit(perCredA!, "anthropic:7d:fable").amount.used).toBe(61);
+		expect(requireLimit(perCredB!, "anthropic:7d:fable").amount.used).toBe(13);
+
+		remoteStore.close();
+	});
+
+	test("fetchUsageReports keeps a broker failure null even when a client overlay exists", async () => {
+		const brokerClient = new AuthBrokerClient({ url: handle!.url, token });
+		const remoteStore = new RemoteAuthCredentialStore({
+			client: brokerClient,
+			initialSnapshot: {
+				generation: 0,
+				generatedAt: 0,
+				serverNowMs: 0,
+				refresher: { enabled: false, intervalMs: 0, skewMs: 0, nextSweepInMs: Number.MAX_SAFE_INTEGER },
+				credentials: [],
+			},
+		});
+		const fetchSpy = vi.spyOn(brokerClient, "fetchUsage").mockRejectedValue(new Error("broker offline"));
+		const now = Date.now();
+		const cred = {
+			type: "oauth" as const,
+			access: "ax",
+			refresh: REMOTE_REFRESH_SENTINEL,
+			expires: now + 60_000,
+			accountId: "account-a",
+			email: "a@example.com",
+		};
+		const overlay: UsageReport = {
+			provider: "anthropic",
+			fetchedAt: now,
+			limits: [
+				{
+					id: "anthropic:7d:fable",
+					label: "Claude 7 Day (Fable)",
+					scope: { provider: "anthropic", windowId: "7d", tier: "fable" },
+					window: { id: "7d", label: "7 Day" },
+					amount: { used: 61, limit: 100, usedFraction: 0.61, remainingFraction: 0.39, unit: "percent" },
+					status: "ok",
+				},
+			],
+			metadata: { accountId: "account-a", email: "a@example.com", headersUpdatedAt: 1_780_000_000_000 },
+		};
+
+		expect(remoteStore.ingestUsageReport("anthropic", cred, overlay)).toBe(true);
+
+		const first = await remoteStore.fetchUsageReports();
+		expect(first).toBeNull();
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+		const perCred = await remoteStore.getUsageReport("anthropic", cred);
+		expect(perCred).not.toBeNull();
+		expect(requireLimit(perCred!, "anthropic:7d:fable").amount.used).toBe(61);
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+		const second = await remoteStore.fetchUsageReports();
+		expect(second).toBeNull();
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
 
 		remoteStore.close();
 	});

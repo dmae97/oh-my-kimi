@@ -20,6 +20,7 @@ const DEFAULT_MODEL_PROVIDER_ORDER = [
 	// High-quality aggregators / hosted inference providers.
 	"fireworks",
 	"cerebras",
+	"baseten",
 	"openrouter",
 	"aimlapi",
 	"together",

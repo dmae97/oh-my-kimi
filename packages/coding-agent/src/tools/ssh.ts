@@ -402,4 +402,12 @@ export const sshToolRenderer = {
 	// land below and strand a duplicate pending header above the final frame
 	// ([#3177](https://github.com/can1357/oh-my-pi/issues/3177)).
 	provisionalPartialResult: true,
+	// Streamed args can initially render the SSH placeholder (`⏳ SSH: […]` /
+	// `$ …`), then the first partial result inserts the `Output` section and
+	// re-anchors the frame. Force a full repaint at that seam so placeholder rows
+	// do not survive in viewport/native scrollback.
+	forceFirstResultViewportRepaint: true,
+	// The provisional pending-result frame settles into the final `⇄ SSH: [host]`
+	// frame, so clear/replay the viewport at that topology flip too.
+	forceResultViewportRepaintOnSettle: true,
 };

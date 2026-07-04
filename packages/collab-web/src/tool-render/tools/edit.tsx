@@ -92,7 +92,7 @@ function fileEntry(d: Record<string, unknown>): FileEntry {
 }
 
 function Summary({ args, result }: ToolRenderProps): ReactNode {
-	const input = str(args.input);
+	const input = str(args.input) ?? str(args._input);
 	const paths = input ? inputPaths(input) : [];
 	const argPath = str(args.file_path) ?? str(args.path);
 	if (paths.length === 0 && argPath) paths.push(argPath);
@@ -187,7 +187,7 @@ function FileSection({ entry, fallbackPath }: { entry: FileEntry; fallbackPath?:
 }
 
 function Body({ args, result }: ToolRenderProps): ReactNode {
-	const input = str(args.input);
+	const input = str(args.input) ?? str(args._input);
 	const details = detailsRecord(result);
 	const perFile: FileEntry[] = [];
 	if (details && Array.isArray(details.perFileResults)) {
@@ -232,7 +232,7 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 				</KvGrid>
 			)}
 			{input !== null && input.length > 0 && <Output text={input} variant="code" maxLines={10} title="input" />}
-			{input === null && args.input !== undefined && <InvalidArg what="input" />}
+			{input === null && (args.input !== undefined || args._input !== undefined) && <InvalidArg what="input" />}
 		</>
 	);
 }

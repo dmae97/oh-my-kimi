@@ -10,7 +10,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { loadEntriesFromFile } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
+import { FileSessionStorage, type WriteTextAtomicOptions } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import type { SessionTitleUpdate } from "@oh-my-pi/pi-coding-agent/session/session-title-slot";
 import { getConfigRootDir, removeSyncWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 
@@ -31,9 +31,9 @@ class CountingTitleSlotStorage extends FileSessionStorage {
 		super.writeTextSync(filePath, content);
 	}
 
-	override async writeTextAtomic(filePath: string, content: string): Promise<void> {
+	override async writeTextAtomic(filePath: string, content: string, options?: WriteTextAtomicOptions): Promise<void> {
 		this.atomicWrites++;
-		await super.writeTextAtomic(filePath, content);
+		await super.writeTextAtomic(filePath, content, options);
 	}
 
 	resetCounts(): void {

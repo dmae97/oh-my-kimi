@@ -84,6 +84,7 @@ import {
 	writeLastChangelogVersion,
 } from "./utils/changelog";
 import { EventBus } from "./utils/event-bus";
+import { withTimeoutSignal } from "./utils/fetch-timeout";
 
 type RunAcpMode = (createSession: AcpSessionFactory) => Promise<never>;
 type RunPrintMode = (session: AgentSession, options: PrintModeOptions) => Promise<void>;
@@ -102,7 +103,9 @@ async function checkForNewVersion(currentVersion: string): Promise<string | unde
 		return;
 	}
 	try {
-		const response = await fetch("https://registry.npmjs.org/@oh-my-pi/pi-coding-agent/latest");
+		const response = await fetch("https://registry.npmjs.org/@oh-my-pi/pi-coding-agent/latest", {
+			signal: withTimeoutSignal(5_000),
+		});
 		if (!response.ok) return undefined;
 
 		const data = (await response.json()) as { version?: string };
@@ -1383,6 +1386,9 @@ export async function runRootCommand(
 		}
 
 		if (!isInteractive && !session.model) {
+			if (modelRegistryError) {
+				process.stderr.write(`${chalk.red(modelRegistryError.message)}\n\n`);
+			}
 			if (modelFallbackMessage) {
 				process.stderr.write(`${chalk.red(modelFallbackMessage)}\n`);
 			} else {

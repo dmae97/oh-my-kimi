@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { buildOpenAICompat } from "@oh-my-pi/pi-catalog/compat/openai";
+import { DEFAULT_MODEL_PER_PROVIDER } from "@oh-my-pi/pi-catalog/provider-models";
 import { zhipuCodingPlanModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import type { FetchImpl, ModelSpec } from "@oh-my-pi/pi-catalog/types";
 
@@ -58,6 +59,13 @@ function zhipuGlm52ByOfficialBaseUrl(): ModelSpec<"openai-completions"> {
 		baseUrl: "https://open.bigmodel.cn/api/paas/v4",
 	};
 }
+
+describe("zhipu-coding-plan descriptor", () => {
+	it("defaults to the same Zhipu-hosted model used by login validation", () => {
+		expect(DEFAULT_MODEL_PER_PROVIDER["zhipu-coding-plan"]).toBe("glm-5.1");
+		expect(DEFAULT_MODEL_PER_PROVIDER.zai).toBe("glm-5.2");
+	});
+});
 
 describe("openai-completions compat — zhipu-coding-plan branch", () => {
 	it("forces zai thinking format and disables reasoning_effort before GLM-5.2", () => {
@@ -127,6 +135,7 @@ describe("zhipu-coding-plan model discovery", () => {
 
 		const options = zhipuCodingPlanModelManagerOptions({ apiKey: "test-key", fetch: mockFetch });
 		expect(typeof options.fetchDynamicModels).toBe("function");
+		expect(options.dynamicModelsAuthoritative).toBe(true);
 		const models = await options.fetchDynamicModels?.();
 
 		expect(requestedUrl).toBe("https://open.bigmodel.cn/api/coding/paas/v4/models");

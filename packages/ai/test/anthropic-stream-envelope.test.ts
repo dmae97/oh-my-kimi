@@ -643,7 +643,7 @@ describe("anthropic stream envelope handling", () => {
 		);
 		const replayAssistant = replayParams.find(param => param.role === "assistant");
 		expect(replayAssistant?.content).toEqual([
-			{ type: "text", text: "<thinking>\nCheck logs before accepting container health.\n</thinking>\n" },
+			{ type: "text", text: "<thinking>\nCheck logs before accepting container health.\n</thinking>" },
 		]);
 	});
 	it("preserves signed thinking bytes when no literal thinking envelope is present", async () => {

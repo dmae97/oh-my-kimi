@@ -36,6 +36,52 @@ function matchesKimiK27CodeFamily(spec: ModelSpec<"anthropic-messages">): boolea
 	return spec.id === "kimi-for-coding" && /k2\.?7 code/i.test(spec.name ?? "");
 }
 
+const CLOUDFLARE_ANTHROPIC_GATEWAY_URL_MARKER = /gateway\.ai\.cloudflare\.com\/.+\/anthropic(?:\/|$)/i;
+const VERTEX_ANTHROPIC_URL_MARKER = /aiplatform\.googleapis\.com\/.+\/publishers\/anthropic\//i;
+const BEDROCK_ANTHROPIC_URL_MARKER = /(?:^|\/\/|\.)bedrock-runtime\.[a-z0-9-]+\.amazonaws\.com/i;
+const AZURE_ANTHROPIC_URL_MARKER = /(?:^|\/\/|\.)[a-z0-9-]+\.(?:inference|services)\.ai\.azure\.com/i;
+
+/**
+ * Cloudflare AI Gateway's `/anthropic` route forwards to signature-enforcing
+ * Anthropic (same failure class as GitHub Copilot #2851 / ZenMux #4192).
+ * Detection is by baseUrl marker rather than provider id: users routinely
+ * declare `provider: "custom"` (or other free-form ids) in `models.yml` for
+ * their own Cloudflare gateway account.
+ */
+function isCloudflareAnthropicGateway(baseUrl?: string): boolean {
+	return baseUrl !== undefined && CLOUDFLARE_ANTHROPIC_GATEWAY_URL_MARKER.test(baseUrl);
+}
+
+/**
+ * Google Vertex's `publishers/anthropic/models/…:streamRawPredict` route
+ * proxies Claude through Google's identity layer and returns full thinking
+ * signatures, so it is a SIGNING endpoint.
+ */
+function isVertexAnthropicRoute(baseUrl?: string): boolean {
+	return baseUrl !== undefined && VERTEX_ANTHROPIC_URL_MARKER.test(baseUrl);
+}
+
+/**
+ * AWS Bedrock's Anthropic route (`bedrock-runtime.<region>.amazonaws.com`)
+ * forwards Claude requests through Anthropic's signature protocol. Users can
+ * front Bedrock with a custom `anthropic-messages` provider entry in
+ * `models.yml`; the URL marker makes those signing by default without
+ * requiring a provider-id list.
+ */
+function isBedrockAnthropicRoute(baseUrl?: string): boolean {
+	return baseUrl !== undefined && BEDROCK_ANTHROPIC_URL_MARKER.test(baseUrl);
+}
+
+/**
+ * Azure AI Inference / Foundry Anthropic route
+ * (`<resource>.inference.ai.azure.com`, `<resource>.services.ai.azure.com`).
+ * Fronts Claude behind Azure identity and enforces Anthropic signatures on
+ * replay.
+ */
+function isAzureAnthropicRoute(baseUrl?: string): boolean {
+	return baseUrl !== undefined && AZURE_ANTHROPIC_URL_MARKER.test(baseUrl);
+}
+
 /** Build the resolved anthropic-messages compat record for a model spec. */
 export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): ResolvedAnthropicCompat {
 	const baseUrl = spec.baseUrl;
@@ -53,8 +99,17 @@ export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): Res
 	// (issue #4192).
 	const isZenmux = modelMatchesHost(spec, "zenmux");
 	const requiresThinkingEnabled = modelMatchesHost(spec, "moonshotNative") && matchesKimiK27CodeFamily(spec);
+	const signingEndpoint =
+		official ||
+		isCopilot ||
+		isZenmux ||
+		isCloudflareAnthropicGateway(baseUrl) ||
+		isVertexAnthropicRoute(baseUrl) ||
+		isBedrockAnthropicRoute(baseUrl) ||
+		isAzureAnthropicRoute(baseUrl);
 	const compat: ResolvedAnthropicCompat = {
 		officialEndpoint: official,
+		signingEndpoint,
 		disableStrictTools: false,
 		disableAdaptiveThinking: false,
 		supportsEagerToolInputStreaming: !isCopilot,
@@ -73,26 +128,23 @@ export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): Res
 		// into a class that reads `.id`.
 		requiresToolResultId: isZai,
 		requiresThinkingEnabled,
-		// Official Anthropic enforces signature-based thinking-chain integrity, so
-		// unsigned thinking blocks must stay text there. Anthropic-compatible
-		// reasoning endpoints commonly emit unsigned thinking blocks while still
-		// expecting them back as `type: "thinking"` on continuation; demoting them
-		// loses the reasoning chain and can destabilize the next tool-call
-		// arguments (#2005). Known non-signing hosts (Z.AI, DeepSeek) are also
-		// preserved for compatibility.
+		// Official Anthropic and Anthropic-compatible signing proxies enforce
+		// signature-based thinking-chain integrity, so unsigned thinking blocks
+		// must stay text there. Every other `anthropic-messages` reasoning
+		// endpoint replays unsigned thinking natively so the reasoning chain
+		// survives continuation and doesn't destabilize the next tool-call
+		// arguments (#2005, #2257, #2265, #3288, #3433, #3434). Opaque custom
+		// signing proxies remain the reporter's responsibility to mark with
+		// `compat.replayUnsignedThinking: false`; the transport surfaces a
+		// pointed remediation the first time the signing 400 fires (#4297).
 		//
-		// GitHub Copilot's `anthropic-messages` proxy and ZenMux's Anthropic route
-		// are excluded: both forward to signature-enforcing Anthropic and return
-		// full thinking signatures, so they are SIGNING endpoints. Replaying a
-		// stripped/unsigned thinking block as `signature: ""` there 400s the whole
-		// request ("Invalid signature") — most visibly when a checkpoint/branch-
-		// return turn's end_turn-bound signature is stripped on replay (issues
-		// #2851, #4192). Treating them like official Anthropic degrades such
-		// blocks to text instead, which the API accepts.
-		replayUnsignedThinking:
-			!isCopilot &&
-			!isZenmux &&
-			(isZai || modelMatchesHost(spec, "deepseekFamily") || (spec.reasoning && !official)),
+		// Known signing Anthropic-messages hosts (Copilot, ZenMux, Cloudflare
+		// AI Gateway `/anthropic`, Google Vertex `publishers/anthropic`, AWS
+		// Bedrock `bedrock-runtime.<region>.amazonaws.com`, and Azure
+		// AI Inference / Foundry `<res>.(inference|services).ai.azure.com`)
+		// are excluded automatically because they can be recognised by provider
+		// id or baseUrl marker.
+		replayUnsignedThinking: !signingEndpoint && (Boolean(spec.reasoning) || modelMatchesHost(spec, "deepseekFamily")),
 		escapeBuiltinToolNames: modelMatchesHost(spec, "umans"),
 	};
 	applyCompatOverrides(compat, spec.compat);

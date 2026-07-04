@@ -657,6 +657,84 @@ describe("agentLoop with AgentMessage", () => {
 		expect(errorTurn.errorMessage).toBe("rate_limit_error");
 	});
 
+	it("labels the synthetic tool result for a provider-error turn as not-executed and preserves the upstream error", async () => {
+		const toolSchema = type({ value: "string" });
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "edit",
+			label: "Edit",
+			description: "Edit tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				return {
+					content: [{ type: "text", text: `edited: ${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [{ type: "toolCall", id: "tool-1", name: "edit", arguments: { value: "hello" } }],
+					stopReason: "error",
+					errorMessage: "Codex websocket transport error: websocket closed (1000)",
+				},
+			],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("edit thing")], context, config, undefined, mock.stream);
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const messages = await stream.result();
+
+		expect(messages.map(m => m.role)).toEqual(["user", "assistant", "toolResult"]);
+		const toolResult = messages[2] as ToolResultMessage;
+		expect(toolResult.isError).toBe(true);
+
+		const text = toolResult.content
+			.filter((c): c is { type: "text"; text: string } => c.type === "text")
+			.map(c => c.text)
+			.join("");
+		// The message must make it obvious the local tool never ran — this is the
+		// bug in #4321: the previous wording ("Tool execution failed due to an
+		// error: <upstream>") was indistinguishable from a real local tool
+		// failure.
+		expect(text).not.toContain("Tool execution failed due to an error");
+		expect(text.toLowerCase()).toContain("not executed");
+		expect(text.toLowerCase()).toContain("provider");
+		expect(text).toContain("Codex websocket transport error: websocket closed (1000)");
+
+		// Structured details on the synthetic result let downstream consumers
+		// (UI, telemetry, ACP) distinguish it from a real tool failure without
+		// string-matching the content.
+		const details = toolResult.details as {
+			__synthetic?: boolean;
+			source?: string;
+			executed?: boolean;
+			upstreamError?: string;
+		};
+		expect(details.__synthetic).toBe(true);
+		expect(details.source).toBe("assistant_stop_error");
+		expect(details.executed).toBe(false);
+		expect(details.upstreamError).toBe("Codex websocket transport error: websocket closed (1000)");
+
+		const endEvent = events.find(
+			(e): e is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+				e.type === "tool_execution_end" && e.toolCallId === "tool-1",
+		);
+		expect(endEvent).toBeDefined();
+		expect(endEvent?.isError).toBe(true);
+		// The event's result carries the same discriminator so the UI can
+		// render "provider transport failed, tool not executed" instead of a
+		// generic "Edit tool failed" panel.
+		expect(endEvent?.result?.details?.__synthetic).toBe(true);
+		expect(endEvent?.result?.details?.source).toBe("assistant_stop_error");
+		expect(endEvent?.result?.details?.executed).toBe(false);
+	});
+
 	it("recovers completed custom-wire tool calls after stream_read_error", async () => {
 		const executedParams: Array<{ value: string }> = [];
 		const toolSchema = type({ value: "string" });
@@ -2715,5 +2793,203 @@ describe("agentLoop streaming snapshots", () => {
 		// ...and that snapshot is an independent deep clone of the live streaming
 		// partial, never the mutable partial object itself.
 		expect(update.message).not.toBe(livePartial);
+	});
+});
+
+describe("agentLoop kCursorExecResolved (issue #4348)", () => {
+	it("skips execute for a toolCall block marked as already run by Cursor's exec channel", async () => {
+		const { kCursorExecResolved } = await import("@oh-my-pi/pi-ai/utils/block-symbols");
+
+		const toolSchema = type({ command: "string" });
+		let executeCalls = 0;
+		const tool: AgentTool<typeof toolSchema, { command: string }> = {
+			name: "bash",
+			label: "Bash",
+			description: "Run shell commands",
+			parameters: toolSchema,
+			async execute(_id, params) {
+				executeCalls += 1;
+				return {
+					content: [{ type: "text", text: `local run: ${params.command}` }],
+					details: { command: params.command },
+				};
+			},
+		};
+
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+		};
+
+		// Simulate the shape the Cursor provider now emits after
+		// `synthesizeCursorExecToolCall`: a `toolCall` content block stamped
+		// with `kCursorExecResolved` because the server-driven exec channel
+		// already ran the tool. `agent-loop.ts` MUST NOT invoke `tool.execute`
+		// again — that would double-execute bash/write/delete/etc. and append a
+		// second `toolResult` with the same `toolCallId`.
+		const streamFn = () => {
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const resolvedBlock = {
+					type: "toolCall" as const,
+					id: "cursor-exec-tc-1",
+					name: "bash",
+					arguments: { command: "rm -rf /tmp/cursor-once" },
+					[kCursorExecResolved]: true as const,
+				};
+				const finalMessage: AssistantMessage = {
+					role: "assistant",
+					content: [{ type: "text", text: "Ran the command." }, resolvedBlock],
+					api: "cursor-agent",
+					provider: "cursor",
+					model: "cursor-composer-2.5",
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "stop",
+					timestamp: Date.now(),
+				};
+				stream.push({ type: "start", partial: finalMessage });
+				stream.push({ type: "done", reason: "stop", message: finalMessage });
+			});
+			return stream;
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("run bash")], context, config, undefined, streamFn);
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		// Tool MUST NOT have been executed — Cursor already ran it server-side.
+		expect(executeCalls).toBe(0);
+
+		// No `tool_execution_start`/`tool_execution_end` from agent-loop —
+		// those live-events belong to the bridge that already ran the tool.
+		const startFromLoop = events.find(e => e.type === "tool_execution_start");
+		const endFromLoop = events.find(e => e.type === "tool_execution_end");
+		expect(startFromLoop).toBeUndefined();
+		expect(endFromLoop).toBeUndefined();
+
+		// And no duplicate `toolResult` message emitted for the resolved block:
+		// the buffered result flows via the Agent-class path, not agent-loop.
+		const orphanToolResult = events.find(
+			(e): e is Extract<AgentEvent, { type: "message_end" }> =>
+				e.type === "message_end" && e.message.role === "toolResult",
+		);
+		expect(orphanToolResult).toBeUndefined();
+	});
+
+	it("still runs a normal, unmarked toolCall block in the same turn", async () => {
+		// Guards against the filter over-matching: a mixed turn where only
+		// SOME blocks are Cursor-resolved must still execute the unmarked one.
+		const { kCursorExecResolved } = await import("@oh-my-pi/pi-ai/utils/block-symbols");
+
+		const toolSchema = type({ value: "string" });
+		const executed: string[] = [];
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_id, params) {
+				executed.push(params.value);
+				return {
+					content: [{ type: "text", text: `echoed: ${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+		};
+
+		let turn = 0;
+		const streamFn = () => {
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				if (turn++ === 0) {
+					const resolvedBlock = {
+						type: "toolCall" as const,
+						id: "resolved-1",
+						name: "bash",
+						arguments: { command: "true" },
+						[kCursorExecResolved]: true as const,
+					};
+					const runnableBlock = {
+						type: "toolCall" as const,
+						id: "runnable-1",
+						name: "echo",
+						arguments: { value: "hi" },
+					};
+					const partial: AssistantMessage = {
+						role: "assistant",
+						content: [resolvedBlock, runnableBlock],
+						api: "cursor-agent",
+						provider: "cursor",
+						model: "cursor-composer-2.5",
+						usage: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						stopReason: "toolUse",
+						timestamp: Date.now(),
+					};
+					stream.push({ type: "start", partial });
+					stream.push({ type: "done", reason: "toolUse", message: partial });
+				} else {
+					// Second turn: replay `done` closes the loop.
+					const partial: AssistantMessage = {
+						role: "assistant",
+						content: [{ type: "text", text: "finished" }],
+						api: "cursor-agent",
+						provider: "cursor",
+						model: "cursor-composer-2.5",
+						usage: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						stopReason: "stop",
+						timestamp: Date.now(),
+					};
+					stream.push({ type: "start", partial });
+					stream.push({ type: "done", reason: "stop", message: partial });
+				}
+			});
+			return stream;
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("mixed")], context, config, undefined, streamFn);
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		expect(executed).toEqual(["hi"]);
+
+		const executionStarts = events.filter(e => e.type === "tool_execution_start");
+		// Exactly one execution: the unmarked `echo` block. The resolved
+		// `bash` block is passed through untouched.
+		expect(executionStarts).toHaveLength(1);
+		if (executionStarts[0]?.type !== "tool_execution_start") throw new Error("expected tool_execution_start");
+		expect(executionStarts[0].toolCallId).toBe("runnable-1");
+		expect(executionStarts[0].toolName).toBe("echo");
 	});
 });

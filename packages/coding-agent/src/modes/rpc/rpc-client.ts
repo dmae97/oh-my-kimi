@@ -256,18 +256,19 @@ export class RpcClient {
 			args.push(...this.options.args);
 		}
 
-		this.#process = ptree.spawn(["bun", cliPath, ...args], {
+		const child = ptree.spawn(["bun", cliPath, ...args], {
 			cwd: this.options.cwd,
 			env: { ...Bun.env, ...this.options.env },
 			stdin: "pipe",
 		});
+		this.#process = child;
 
 		// Wait for the "ready" signal or process exit
 		const { promise: readyPromise, resolve: readyResolve, reject: readyReject } = Promise.withResolvers<void>();
 		let readySettled = false;
 
 		// Process lines in background, intercepting the ready signal
-		const lines = readJsonl(this.#process.stdout, this.#abortController.signal);
+		const lines = readJsonl(child.stdout, this.#abortController.signal);
 		void (async () => {
 			for await (const line of lines) {
 				if (!readySettled && isRecord(line) && line.type === "ready") {
@@ -277,10 +278,16 @@ export class RpcClient {
 				}
 				this.#handleLine(line);
 			}
-			// Stream ended without ready signal — process exited
+			// Stream ended without the ready signal — the child exited or is
+			// exiting. Defer to the exit handler below: ptree resolves
+			// `exited` only after stderr is fully drained (nonzero exits), so
+			// rejecting here would snapshot a partial stderr tail and lose
+			// the actual startup error.
+			if (readySettled) return;
+			await child.exited.catch(() => {});
 			if (!readySettled) {
 				readySettled = true;
-				readyReject(new Error(`Agent process exited before ready. Stderr: ${this.#process?.peekStderr() ?? ""}`));
+				readyReject(new Error(`Agent process exited before ready. Stderr: ${child.peekStderr()}`));
 			}
 		})().catch((err: Error) => {
 			if (!readySettled) {
@@ -290,22 +297,26 @@ export class RpcClient {
 		});
 
 		// Also race against process exit (in case stdout closes before we read it)
-		void this.#process.exited.then((exitCode: number) => {
-			if (!readySettled) {
+		void child.exited.then(
+			(exitCode: number) => {
+				if (readySettled) return;
 				readySettled = true;
-				readyReject(
-					new Error(`Agent process exited with code ${exitCode}. Stderr: ${this.#process?.peekStderr() ?? ""}`),
-				);
-			}
-		});
+				readyReject(new Error(`Agent process exited with code ${exitCode}. Stderr: ${child.peekStderr()}`));
+			},
+			(err: Error) => {
+				// Killed or reaped without an exit code (e.g. stop() during
+				// startup); surface it instead of leaking an unhandled rejection.
+				if (readySettled) return;
+				readySettled = true;
+				readyReject(new Error(`Agent process exited before ready. Stderr: ${child.peekStderr()}`, { cause: err }));
+			},
+		);
 
 		// Timeout to prevent hanging forever
 		const readyTimeout = this.#startTimeout(30000, () => {
 			if (readySettled) return;
 			readySettled = true;
-			readyReject(
-				new Error(`Timeout waiting for agent to become ready. Stderr: ${this.#process?.peekStderr() ?? ""}`),
-			);
+			readyReject(new Error(`Timeout waiting for agent to become ready. Stderr: ${child.peekStderr()}`));
 		});
 
 		try {
@@ -318,12 +329,14 @@ export class RpcClient {
 			// state so the caller (or a retry via start() again) does not
 			// leak the abandoned process (issue #4079).
 			try {
-				this.#process?.kill();
+				child.kill();
 			} catch {
 				// best-effort cleanup
 			}
 			this.#abortController.abort();
-			this.#process = null;
+			if (this.#process === child) {
+				this.#process = null;
+			}
 			throw err;
 		} finally {
 			clearTimeout(readyTimeout);

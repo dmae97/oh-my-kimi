@@ -148,9 +148,12 @@ The integration test spawns a real `omp --mode rpc` against an
 - Pre-push gates (`gh_push_branch`): branch matches the workspace
   branch, working tree clean, every commit on
   `origin/<default>..HEAD` carries `ROBOMP_GIT_AUTHOR_NAME` +
-  `ROBOMP_GIT_AUTHOR_EMAIL`.
+  `ROBOMP_GIT_AUTHOR_EMAIL`. Commit messages carrying shell-literal
+  `\n` escapes (agents quoting `git commit -m 'a\n\nb'`) are rewritten
+  to real newlines — message-only, trees/identities/dates preserved.
 - Pre-PR gates (`gh_open_pr`): when the repo defines them, `bun run fix`
-  runs first (any diff auto-committed as `style: bun run fix`) and then
+  runs first (any diff amended into the agent's HEAD commit — no
+  standalone `style:` noise commits) and then
   `bun check`. A failing `bun check` returns to the agent as
   `RpcCommandError` for iteration.
 - `gh_open_pr` validates `## Repro` / `## Cause` / `## Fix` /

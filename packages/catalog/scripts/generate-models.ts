@@ -187,7 +187,11 @@ function applyGlobalModelsDevFallback(
 	const providerScopedKeys = new Set(modelsDevModels.map(model => `${model.provider}/${model.id}`));
 	const globalReferences = createGlobalModelsDevReferenceMap(modelsDevModels);
 	return models.map(model => {
-		if (providerScopedKeys.has(`${model.provider}/${model.id}`) || model.provider === "devin") {
+		if (
+			providerScopedKeys.has(`${model.provider}/${model.id}`) ||
+			model.provider === "devin" ||
+			model.provider === "baseten"
+		) {
 			return model;
 		}
 		const reference = globalReferences.get(model.id);

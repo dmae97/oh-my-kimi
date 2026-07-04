@@ -392,11 +392,10 @@ export class Recovery {
 	 */
 	tryRecover(args: RecoveryArgs): RecoveryResult | null {
 		const { path, currentText, fileHash, edits } = args;
-		// Collision-safe lookup: when two retained texts share the 16-bit tag
-		// there is no way to know which one the model's anchors were minted
-		// against — replaying against the wrong collider would land the edit
-		// on unrelated content. Refuse and let the caller reject (re-read).
-		const snapshot = this.store.byHashExact(path, fileHash);
+		// When two retained texts collide on the 16-bit tag, resolve to the
+		// most-recently recorded one; a wrong pick can only land if one of the
+		// merge/remap/session-chain strategies below applies it cleanly.
+		const snapshot = this.store.byHash(path, fileHash);
 		if (!snapshot) return null;
 		const isHead = isHeadSnapshot(this.store.head(path), snapshot);
 		const recoveryWarning = isHead ? RECOVERY_EXTERNAL_WARNING : RECOVERY_SESSION_CHAIN_WARNING;

@@ -1,7 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { $which, getRemoteHostDir, getSshControlDir, isEnoent, logger, postmortem } from "@oh-my-pi/pi-utils";
-import { $ } from "bun";
+import { $which, getRemoteHostDir, getSshControlDir, isEnoent, logger, postmortem, ptree } from "@oh-my-pi/pi-utils";
 import { buildSshTarget, sanitizeHostName } from "./utils";
 
 export interface SSHConnectionTarget {
@@ -116,19 +115,53 @@ function buildCommonArgs(host: SSHConnectionTarget, options?: SSHArgsOptions): s
 	return args;
 }
 
-async function runSshSync(args: string[]): Promise<{ exitCode: number | null; stderr: string }> {
-	const result = await $`ssh ${args}`.quiet().nothrow();
-	return { exitCode: result.exitCode, stderr: result.stderr.toString().trim() };
+/**
+ * Per-call timeout for the pre-command SSH setup/probe helpers. These sit on
+ * the `ensureHostInfo` → `probeHostInfo` / `ensureConnection` path that runs
+ * *before* `SshTool.execute` applies the user-provided command timeout, so an
+ * unreachable host or wedged control-master would otherwise hang forever
+ * (#4232). `allowNonZero`/`allowAbort` keep the "return a failure result"
+ * contract that these helpers had under `.quiet().nothrow()`.
+ */
+const SSH_HELPER_TIMEOUT_MS = 30_000;
+
+async function runSshSync(
+	args: string[],
+	timeoutMs = SSH_HELPER_TIMEOUT_MS,
+): Promise<{ exitCode: number | null; stderr: string }> {
+	const result = await ptree.exec(["ssh", ...args], {
+		timeout: timeoutMs,
+		allowNonZero: true,
+		allowAbort: true,
+		stderr: "full",
+	});
+	return { exitCode: result.exitCode, stderr: result.stderr.trim() };
 }
 
-async function runSshCaptureSync(args: string[]): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
-	const result = await $`ssh ${args}`.quiet().nothrow();
+async function runSshCaptureSync(
+	args: string[],
+	timeoutMs = SSH_HELPER_TIMEOUT_MS,
+): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
+	const result = await ptree.exec(["ssh", ...args], {
+		timeout: timeoutMs,
+		allowNonZero: true,
+		allowAbort: true,
+		stderr: "full",
+	});
 	return {
 		exitCode: result.exitCode,
-		stdout: result.stdout.toString().trim(),
-		stderr: result.stderr.toString().trim(),
+		stdout: result.stdout.trim(),
+		stderr: result.stderr.trim(),
 	};
 }
+
+/**
+ * Test-only surface for exercising the pre-command SSH helpers against a
+ * fake `ssh` binary with a shortened timeout. External code MUST NOT depend
+ * on this — call `ensureConnection` / `ensureHostInfo` instead.
+ * @internal
+ */
+export const _sshHelpersForTests = { runSshSync, runSshCaptureSync };
 
 function ensureSshBinary(): void {
 	if (!$which("ssh")) {

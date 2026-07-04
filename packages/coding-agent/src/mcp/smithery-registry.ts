@@ -1,7 +1,9 @@
 import { logger } from "@oh-my-pi/pi-utils";
+import { isTimeoutError, withTimeoutSignal } from "../utils/fetch-timeout";
 import type { MCPServerConfig } from "./types";
 
 const SMITHERY_REGISTRY_BASE_URL = "https://registry.smithery.ai";
+const SMITHERY_REGISTRY_TIMEOUT_MS = 10_000;
 
 type SmitherySearchEntry = {
 	id?: string;
@@ -106,6 +108,7 @@ export interface SmitherySearchOptions {
 	limit?: number;
 	apiKey?: string;
 	includeSemantic?: boolean;
+	signal?: AbortSignal;
 }
 
 export class SmitheryRegistryError extends Error {
@@ -307,13 +310,17 @@ function createConfig(
 	};
 }
 
-async function fetchServerDetails(path: string, options?: { apiKey?: string }): Promise<SmitheryServerDetails | null> {
+async function fetchServerDetails(
+	path: string,
+	options?: { apiKey?: string; signal?: AbortSignal },
+): Promise<SmitheryServerDetails | null> {
 	const headers = new Headers();
 	if (options?.apiKey) {
 		headers.set("Authorization", `Bearer ${options.apiKey}`);
 	}
 	const response = await fetch(`${SMITHERY_REGISTRY_BASE_URL}/servers/${path}`, {
 		headers,
+		signal: withTimeoutSignal(SMITHERY_REGISTRY_TIMEOUT_MS, options?.signal),
 	});
 	if (!response.ok) return null;
 	return (await response.json()) as SmitheryServerDetails;
@@ -321,7 +328,7 @@ async function fetchServerDetails(path: string, options?: { apiKey?: string }): 
 
 async function fetchServerDetailsFromEntry(
 	entry: SmitherySearchEntry,
-	options?: { apiKey?: string },
+	options?: { apiKey?: string; signal?: AbortSignal },
 ): Promise<SmitheryServerDetails | null> {
 	const candidates = resolveDetailPathCandidates(entry);
 	for (const candidate of candidates) {
@@ -329,6 +336,7 @@ async function fetchServerDetailsFromEntry(
 			const details = await fetchServerDetails(candidate, options);
 			if (details) return details;
 		} catch (error) {
+			if (options?.signal?.aborted) throw error;
 			logger.debug("Smithery detail fetch candidate failed", { candidate, error: String(error) });
 		}
 	}
@@ -411,7 +419,18 @@ export async function searchSmitheryRegistry(
 		url.searchParams.set("q", query);
 		url.searchParams.set("pageSize", String(pageSize));
 		if (page > 1) url.searchParams.set("page", String(page));
-		const response = await fetch(url.toString(), { headers });
+		let response: Response;
+		try {
+			response = await fetch(url.toString(), {
+				headers,
+				signal: withTimeoutSignal(SMITHERY_REGISTRY_TIMEOUT_MS, options?.signal),
+			});
+		} catch (err) {
+			if (isTimeoutError(err)) {
+				throw new SmitheryRegistryError("Smithery search timed out after 10s", 0);
+			}
+			throw err;
+		}
 		if (!response.ok) {
 			throw new SmitheryRegistryError(`Smithery search failed with status ${response.status}`, response.status);
 		}
@@ -448,10 +467,14 @@ export async function searchSmitheryRegistry(
 	const results = await Promise.all(
 		uniqueEntries.map(async entry => {
 			try {
-				const details = await fetchServerDetailsFromEntry(entry, { apiKey: options?.apiKey });
+				const details = await fetchServerDetailsFromEntry(entry, {
+					apiKey: options?.apiKey,
+					signal: options?.signal,
+				});
 				if (!details) return null;
 				return toSearchResult(entry, details);
 			} catch (error) {
+				if (options?.signal?.aborted) throw error;
 				detailFailures.push({
 					identity: getEntryIdentityKey(entry) ?? entry.id ?? "unknown",
 					error: String(error),

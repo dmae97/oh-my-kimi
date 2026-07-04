@@ -180,12 +180,16 @@ export function shimmerSegments(segments: readonly ShimmerSegment[], theme: Shim
 	const mode = resolveMode();
 
 	// Pre-scan: total code-point count (positions the band) and resolved palette.
+	// The per-segment string is kept verbatim — iterating UTF-16 units with a
+	// surrogate-pair guard produces the same code points as `Array.from(text)`
+	// at zero per-frame allocation (previously the #1 hotspot at ~10% of profiled
+	// CPU during streaming — the working message is shimmered every animation
+	// frame at 30fps and `Array.from` reallocated the code-point array each tick).
 	let total = 0;
-	const perSeg: { chars: string[]; palette: ShimmerPalette }[] = [];
+	const perSeg: { text: string; palette: ShimmerPalette }[] = [];
 	for (const seg of segments) {
-		const chars = Array.from(seg.text);
-		total += chars.length;
-		perSeg.push({ chars, palette: seg.palette ?? DEFAULT_SHIMMER_PALETTE });
+		total += countCodePoints(seg.text);
+		perSeg.push({ text: seg.text, palette: seg.palette ?? DEFAULT_SHIMMER_PALETTE });
 	}
 	if (total === 0) return "";
 
@@ -193,9 +197,9 @@ export function shimmerSegments(segments: readonly ShimmerSegment[], theme: Shim
 	// tier so the working line stays legible without movement.
 	if (mode === "disabled") {
 		let out = "";
-		for (const { chars, palette } of perSeg) {
+		for (const { text, palette } of perSeg) {
 			const seq = compile(theme, palette).mid;
-			out += `${seq.open}${chars.join("")}${seq.close}`;
+			out += `${seq.open}${text}${seq.close}`;
 		}
 		return out;
 	}
@@ -205,29 +209,59 @@ export function shimmerSegments(segments: readonly ShimmerSegment[], theme: Shim
 
 	let out = "";
 	let index = 0;
-	for (const { chars, palette } of perSeg) {
+	for (const { text, palette } of perSeg) {
 		const compiled = compile(theme, palette);
 		let runTier: Tier | null = null;
-		let runBuf = "";
-		for (let i = 0; i < chars.length; i++) {
+		let runStart = 0;
+		let runEnd = 0;
+		let i = 0;
+		while (i < text.length) {
+			// Detect a surrogate pair so a single code point (e.g. an emoji) stays
+			// atomic; the band position is measured in code points, not UTF-16 units.
+			const c = text.charCodeAt(i);
+			let step = 1;
+			if (c >= 0xd800 && c <= 0xdbff && i + 1 < text.length) {
+				const c2 = text.charCodeAt(i + 1);
+				if (c2 >= 0xdc00 && c2 <= 0xdfff) step = 2;
+			}
 			const tier = tierFor(intensityFn(time, index, total));
 			if (tier !== runTier) {
-				if (runTier !== null) {
+				if (runTier !== null && runEnd > runStart) {
 					const seq = compiled[runTier];
-					out += `${seq.open}${runBuf}${seq.close}`;
-					runBuf = "";
+					out += `${seq.open}${text.slice(runStart, runEnd)}${seq.close}`;
 				}
 				runTier = tier;
+				runStart = i;
 			}
-			runBuf += chars[i];
+			runEnd = i + step;
 			index++;
+			i += step;
 		}
-		if (runTier !== null && runBuf.length > 0) {
+		if (runTier !== null && runEnd > runStart) {
 			const seq = compiled[runTier];
-			out += `${seq.open}${runBuf}${seq.close}`;
+			out += `${seq.open}${text.slice(runStart, runEnd)}${seq.close}`;
 		}
 	}
 	return out;
+}
+
+function countCodePoints(text: string): number {
+	let n = 0;
+	let i = 0;
+	while (i < text.length) {
+		const c = text.charCodeAt(i);
+		if (c >= 0xd800 && c <= 0xdbff && i + 1 < text.length) {
+			const c2 = text.charCodeAt(i + 1);
+			if (c2 >= 0xdc00 && c2 <= 0xdfff) {
+				i += 2;
+				n++;
+				continue;
+			}
+		}
+		i++;
+		n++;
+	}
+	return n;
 }
 
 export function shimmerText(text: string, theme: ShimmerTheme, palette?: ShimmerPalette): string {

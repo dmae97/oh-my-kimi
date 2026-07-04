@@ -302,9 +302,13 @@ export class EventController {
 			await this.ctx.init();
 		}
 
-		this.ctx.statusLine.invalidate();
-		this.ctx.ui.requestRender();
-
+		// Each handler explicitly requests a render (or leaves it out, when it
+		// changed nothing visible). A blanket pre-render fired on every event —
+		// including the ~hundreds of `message_update` deltas per streaming turn —
+		// doubled the paint rate: the pre-render's frame fires while the handler
+		// is awaiting, then the handler's own final requestRender schedules a
+		// second identical frame. Removing it lets the render cadence follow real
+		// state changes rather than event volume (issue #4353).
 		const run = this.#handlers[event.type] as (e: AgentSessionEvent) => Promise<void>;
 		await run(event);
 	}

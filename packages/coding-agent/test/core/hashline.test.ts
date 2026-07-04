@@ -306,11 +306,7 @@ describe("hashlineEditParamsSchema — payload shape", () => {
 	}
 
 	it("declares only `input` as the model-facing field", () => {
-		// Create an arktype schema that mirrors hashlineEditParamsSchema structure
-		const testSchema = type({
-			input: "string",
-		});
-		const jsonSchema = getJsonSchema(testSchema) as {
+		const jsonSchema = getJsonSchema(hashlineEditParamsSchema) as {
 			properties?: Record<string, unknown>;
 			required?: string[];
 		};
@@ -327,12 +323,11 @@ describe("hashlineEditParamsSchema — payload shape", () => {
 		expect(result.success).toBe(true);
 	});
 
-	it("accepts `_input` as a provider-emitted alias for `input`", () => {
+	it("rejects `_input` as an alias for `input`", () => {
 		const result = arkSafeParse(hashlineEditParamsSchema, {
 			_input: `[x.ts]\nINS.HEAD:\n${repl("x")}`,
 		});
-		expect(result.success).toBe(true);
-		if (result.success) expect(result.data.input).toBe(`[x.ts]\nINS.HEAD:\n${repl("x")}`);
+		expect(result.success).toBe(false);
 	});
 
 	it("still requires `input`", () => {

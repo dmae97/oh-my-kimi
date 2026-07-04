@@ -60,7 +60,7 @@ export function normalizeToolEventInput(toolName: string, input: Record<string, 
 	if (toolName !== "edit" || stringField(input, "path")) return input;
 
 	// Hashline edit mode: the only authoritative target list is the parsed
-	// `¶PATH#TAG` headers inside `input`/`_input`. Trusting a passthrough
+	// `¶PATH#TAG` headers inside the patch. Trusting a passthrough
 	// `_path` here would let a model-supplied field override the real edit
 	// target and bypass extension gates that allowlist by path.
 	const rawInput = stringField(input, "input") ?? stringField(input, "_input");

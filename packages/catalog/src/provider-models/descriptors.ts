@@ -12,6 +12,7 @@ import {
 	aimlApiModelManagerOptions,
 	alibabaCodingPlanModelManagerOptions,
 	anthropicModelManagerOptions,
+	basetenModelManagerOptions,
 	cerebrasModelManagerOptions,
 	cloudflareAiGatewayModelManagerOptions,
 	coreWeaveModelManagerOptions,
@@ -72,6 +73,14 @@ export const CATALOG_PROVIDERS = [
 		envVars: ["ALIBABA_CODING_PLAN_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => alibabaCodingPlanModelManagerOptions(config),
 		catalogDiscovery: { label: "Alibaba Coding Plan" },
+	},
+	{
+		id: "baseten",
+		defaultModel: "moonshotai/Kimi-K2.7-Code",
+		envVars: ["BASETEN_API_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) => basetenModelManagerOptions(config),
+		dynamicModelsAuthoritative: true,
+		catalogDiscovery: { label: "Baseten" },
 	},
 	{
 		id: "amazon-bedrock",
@@ -458,9 +467,10 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "zhipu-coding-plan",
-		defaultModel: "glm-5.2",
+		defaultModel: "glm-5.1",
 		envVars: ["ZHIPU_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => zhipuCodingPlanModelManagerOptions(config),
+		dynamicModelsAuthoritative: true,
 		catalogDiscovery: { label: "Zhipu Coding Plan" },
 	},
 ] as const satisfies readonly ProviderCatalogEntry[];

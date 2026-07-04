@@ -7,8 +7,9 @@
  *   2. With a stale-but-good entry, a failure serves the previous value
  *      (cached for a short cool-down) instead of dropping the credential
  *      from the report.
- *   3. Without a previous value, a failure returns null and DOES NOT cache —
- *      the next poll retries on the next request.
+ *   3. Without a previous value (a cold failure), a failure caches `null` for
+ *      the failure backoff window — a repeat poll within the window is served
+ *      from cache (no refetch); the entry expires and the next poll retries.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import {
@@ -170,12 +171,21 @@ function makeTieredReport(account: string): UsageReport {
 	};
 }
 
-function usageHeaders(fiveHour: string, sevenDay: string): Record<string, string> {
+function usageHeaders(fiveHour: string, sevenDay: string, sevenDayModelScoped?: string): Record<string, string> {
 	return {
 		"anthropic-ratelimit-unified-5h-utilization": fiveHour,
 		"anthropic-ratelimit-unified-5h-reset": "1780405800",
+		"anthropic-ratelimit-unified-5h-status": "allowed",
 		"anthropic-ratelimit-unified-7d-utilization": sevenDay,
 		"anthropic-ratelimit-unified-7d-reset": "1780531200",
+		"anthropic-ratelimit-unified-7d-status": "allowed",
+		...(sevenDayModelScoped === undefined
+			? {}
+			: {
+					"anthropic-ratelimit-unified-7d_oi-utilization": sevenDayModelScoped,
+					"anthropic-ratelimit-unified-7d_oi-reset": "1780617600",
+					"anthropic-ratelimit-unified-7d_oi-status": "allowed",
+				}),
 	};
 }
 
@@ -219,21 +229,28 @@ describe("AuthStorage usage cache: last-good failure fallback", () => {
 		expect(calls).toBe(1);
 	});
 
-	it("does NOT cache a failure when no previous good value exists — retries next poll", async () => {
+	it("caches null on a cold failure for the backoff window, then retries after it expires", async () => {
 		let calls = 0;
 		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async () => {
 			calls += 1;
 			return null;
 		});
 
+		// First poll: cold fetch fails → caches null for the backoff window.
 		const first = anthropicReports(await storage.fetchUsageReports());
 		expect(first).toHaveLength(0);
 		expect(calls).toBe(1);
 
+		// Second poll within the window: served from the cold-null cache — no refetch.
 		const second = anthropicReports(await storage.fetchUsageReports());
-		// No previous value → no cache write → retry on next poll.
-		expect(calls).toBe(2);
+		expect(calls).toBe(1);
 		expect(second).toHaveLength(0);
+
+		// Expire the backoff entry → the next poll refetches (and fails again).
+		expireCachePayloads(store);
+		const third = anthropicReports(await storage.fetchUsageReports());
+		expect(calls).toBe(2);
+		expect(third).toHaveLength(0);
 	});
 
 	it("serves last-good value through a failure cycle", async () => {
@@ -431,6 +448,85 @@ describe("AuthStorage usage cache: header ingestion", () => {
 		expect(requireLimit(mergedReport, "anthropic:5h").amount.used).toBe(5);
 		expect(requireLimit(mergedReport, "anthropic:7d").amount.used).toBe(90);
 		expect(requireLimit(mergedReport, "anthropic:7d:opus").amount.used).toBe(12);
+	});
+	it("replaces the cached Fable weekly row by id when broker headers carry the weekly overage bucket", async () => {
+		const realReport: UsageReport = {
+			provider: "anthropic",
+			fetchedAt: Date.now() - 10_000,
+			limits: [
+				{
+					id: "anthropic:5h",
+					label: "Claude 5 Hour",
+					scope: { provider: "anthropic", windowId: "5h", shared: true },
+					window: { id: "5h", label: "5 Hour" },
+					amount: { used: 42, limit: 100, usedFraction: 0.42, unit: "percent" },
+					status: "ok",
+				},
+				{
+					id: "anthropic:7d",
+					label: "Claude 7 Day",
+					scope: { provider: "anthropic", windowId: "7d", shared: true },
+					window: { id: "7d", label: "7 Day" },
+					amount: { used: 84, limit: 100, usedFraction: 0.84, unit: "percent" },
+					status: "ok",
+				},
+				{
+					id: "anthropic:7d:fable",
+					label: "Claude 7 Day (Fable)",
+					scope: { provider: "anthropic", windowId: "7d", tier: "fable" },
+					window: { id: "7d", label: "7 Day" },
+					amount: { used: 11, limit: 100, usedFraction: 0.11, unit: "percent" },
+					status: "ok",
+				},
+				{
+					id: "anthropic:7d:opus",
+					label: "Claude 7 Day (Opus)",
+					scope: { provider: "anthropic", windowId: "7d", tier: "opus" },
+					window: { id: "7d", label: "7 Day" },
+					amount: { used: 12, limit: 100, usedFraction: 0.12, unit: "percent" },
+					status: "ok",
+				},
+			],
+			metadata: {
+				email: "a@example.com",
+				accountId: "account-a@example.com",
+				endpoint: "https://api.anthropic.com/api/oauth/usage",
+			},
+		};
+		let calls = 0;
+		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async () => {
+			calls += 1;
+			return realReport;
+		});
+
+		const initialReport = requireAnthropicReport(await storage.fetchUsageReports());
+		expect(requireLimit(initialReport, "anthropic:7d:fable").amount.used).toBe(11);
+		expect(calls).toBe(1);
+
+		expect(await storage.getApiKey("anthropic", "fable-session")).toBe("oat-1");
+		expect(
+			storage.ingestUsageHeaders("anthropic", usageHeaders("0.05", "0.9", "0.61"), {
+				sessionId: "fable-session",
+			}),
+		).toBe(true);
+
+		const mergedReport = requireAnthropicReport(await storage.fetchUsageReports());
+		expect(calls).toBe(1);
+		expect(mergedReport.limits.filter(limit => limit.id === "anthropic:7d:fable")).toHaveLength(1);
+		expect(requireLimit(mergedReport, "anthropic:5h").amount.used).toBe(5);
+		expect(requireLimit(mergedReport, "anthropic:7d").amount.used).toBe(90);
+		expect(requireLimit(mergedReport, "anthropic:7d:opus").amount.used).toBe(12);
+
+		const fable = requireLimit(mergedReport, "anthropic:7d:fable");
+		expect(fable.label).toBe("Claude 7 Day (Fable)");
+		expect(fable.scope.provider).toBe("anthropic");
+		expect(fable.scope.windowId).toBe("7d");
+		expect(fable.scope.tier).toBe("fable");
+		expect(fable.scope.shared).toBeUndefined();
+		expect(fable.window?.resetsAt).toBe(1780617600 * 1000);
+		expect(fable.amount.used).toBeCloseTo(61);
+		expect(fable.amount.usedFraction).toBeCloseTo(0.61);
+		expect(fable.amount.remainingFraction).toBeCloseTo(0.39);
 	});
 });
 

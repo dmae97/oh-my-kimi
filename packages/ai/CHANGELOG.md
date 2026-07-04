@@ -5,6 +5,41 @@
 ### Fixed
 
 - Preserved explicit `tool.strict === false` on OpenAI-family function tool payloads (openai-responses, openai-codex-responses, openai-completions) so backends that distinguish `strict: false` from an omitted flag stop over-filling optional arguments ([#4336](https://github.com/can1357/oh-my-pi/issues/4336)).
+## [16.3.4] - 2026-07-03
+
+### Added
+
+- Added support for Baseten as an AI provider
+
+### Changed
+
+- Improved Claude usage reliability by removing proactive hard-blocking for Fable and Mythos tiers
+
+### Fixed
+
+- Fixed Anthropic OAuth account rotation to exclude unreliable model-scoped Fable/Mythos weekly caps from proactive hard-blocking, ensuring they act only as ranking priority hints while still allowing reactive 429-fallback to rotate and reach serviceable siblings.
+
+## [16.3.3] - 2026-07-02
+
+### Added
+
+- Added comprehensive tracking and credential-ranking support for Anthropic per-tier and weekly usage limits, including Claude Fable weekly caps. This prevents a single exhausted model-scoped cap from blocking the entire OAuth credential and improves credential selection based on drain-rate pressure.
+
+### Changed
+
+- Updated Claude Fable reasoning replay to use bare text instead of wrapped thinking tags
+
+### Fixed
+
+- Improved robustness of single-argument tool calls by automatically remapping mislabeled string arguments.
+- Fixed Anthropic OAuth usage reporting to stop retrying on 429 rate-limit errors.
+- Fixed usage cache to correctly persist null values during cold-start failure backoff windows.
+- Fixed cursor-agent persisted transcripts losing tool-call structure for native execution tools, ensuring replayed tool results are correctly paired with their corresponding calls.
+- Fixed OpenAI-compatible streaming usage parsing to prefer non-zero nested cached token counts when the root cached_tokens value is zero.
+- Added automatic detection and remediation for custom proxies returning signature errors on Anthropic thinking blocks, allowing the client to automatically retry with unsigned blocks and prompt the user to adjust their configuration.
+- Fixed potential hangs in GitLab Duo Workflow setup by adding proper timeout and abort signal handling to REST fetches.
+- Fixed Cursor proxy tunnel setup hanging indefinitely by adding abort and timeout handling.
+- Fixed Devin Connect streaming reader vulnerability to corrupt frame lengths by capping payloads at 16 MiB and throwing an envelope error immediately.
 
 ## [16.3.1] - 2026-07-02
 

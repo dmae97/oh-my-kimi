@@ -25,10 +25,11 @@ import { type AuthBrokerClient, AuthBrokerStreamUnsupportedError } from "./clien
 import type { RefresherSchedule, SnapshotEntry, SnapshotResponse, SnapshotStreamEvent } from "./types";
 
 /**
- * Client-side TTL for the aggregate `/v1/usage` response. Set below the
- * broker server's own 30s usage cache so we typically pick up the broker's
- * cached value instead of re-walking the network — but high enough to absorb
- * the parallel fan-out from `#rankOAuthSelections` into a single round-trip.
+ * Client-side TTL for the aggregate `/v1/usage` response. The broker dedups
+ * upstream `/usage` hits via AuthStorage's 5-minute per-credential cache plus
+ * single-flight, so this short client TTL mainly folds the parallel fan-out
+ * from `#rankOAuthSelections` into a single round-trip — a ranking pass issues
+ * one broker call instead of N.
  */
 const USAGE_CACHE_TTL_MS = 15_000;
 const WAIT_THRESHOLD_MS = 1_000;
@@ -68,6 +69,47 @@ interface UsageCacheEntry {
 	fetchedAt: number;
 }
 
+function usageOverlayKey(
+	provider: Provider,
+	ids: { accountId?: string; email?: string; projectId?: string },
+): string | undefined {
+	const accountId = ids.accountId?.trim().toLowerCase();
+	if (accountId) return `${provider}\0account:${accountId}`;
+	const email = ids.email?.trim().toLowerCase();
+	if (email) return `${provider}\0email:${email}`;
+	const projectId = ids.projectId?.trim().toLowerCase();
+	if (projectId) return `${provider}\0project:${projectId}`;
+	return undefined;
+}
+
+function mergeUsageReports(base: UsageReport, overlay: UsageReport): UsageReport {
+	const overlayLimitsById = new Map(overlay.limits.map(limit => [limit.id, limit]));
+	const limits = [];
+	for (const limit of base.limits) {
+		const replacement = overlayLimitsById.get(limit.id);
+		if (replacement) {
+			limits.push(replacement);
+			overlayLimitsById.delete(limit.id);
+		} else {
+			limits.push(limit);
+		}
+	}
+	for (const limit of overlayLimitsById.values()) limits.push(limit);
+	const overlayMetadata = (overlay.metadata ?? {}) as Record<string, unknown>;
+	return {
+		...base,
+		fetchedAt: Math.max(base.fetchedAt, overlay.fetchedAt),
+		limits,
+		metadata: {
+			...overlayMetadata,
+			...(base.metadata ?? {}),
+			...(overlayMetadata.headersUpdatedAt !== undefined
+				? { headersUpdatedAt: overlayMetadata.headersUpdatedAt }
+				: {}),
+		},
+	};
+}
+
 export interface RemoteAuthCredentialStoreOptions {
 	client: AuthBrokerClient;
 	/**
@@ -94,6 +136,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	#snapshot: SnapshotResponse = emptySnapshot();
 	#snapshotReceivedAt = Date.now();
 	#generation = 0;
+	#usageOverlays: Map<string, UsageReport> = new Map();
 	#backgroundAbort = new AbortController();
 	#cache: Map<string, CacheEntry> = new Map();
 	#usageCache?: UsageCacheEntry;
@@ -515,14 +558,15 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	 * residential laptop is, so all credentials surface every cycle.
 	 */
 	async fetchUsageReports(signal?: AbortSignal): Promise<UsageReport[] | null> {
-		return this.#raceWithSignal(this.#loadUsageReports(), signal);
+		const reports = await this.#raceWithSignal(this.#loadUsageReports(), signal);
+		return reports ? this.#applyUsageOverlays(reports) : null;
 	}
 
 	/**
 	 * Per-credential usage hook consumed by `AuthStorage.#getUsageReport`. Pulls
 	 * the aggregate broker `/v1/usage` once and serves all callers from the
-	 * same response (coalesced + cached), then matches the credential to a
-	 * report by provider + identity (accountId / email / projectId).
+	 * same response (coalesced + cached), then overlays any client-observed
+	 * header hints for the matching credential.
 	 *
 	 * The broker already aggregates with its own 30s TTL on the server side; our
 	 * 15s client TTL is below that so we usually re-use the broker's cache too.
@@ -533,8 +577,47 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		signal?: AbortSignal,
 	): Promise<UsageReport | null> {
 		const reports = await this.#raceWithSignal(this.#loadUsageReports(), signal);
-		if (!reports) return null;
-		return matchUsageReport(reports, provider, credential);
+		const matched = reports ? matchUsageReport(reports, provider, credential) : null;
+		const overlay = this.#getActiveUsageOverlay(provider, credential);
+		if (matched && overlay) return mergeUsageReports(matched, overlay);
+		return overlay ?? matched;
+	}
+
+	ingestUsageReport(provider: Provider, credential: OAuthCredential, report: UsageReport): boolean {
+		const key = usageOverlayKey(provider, credential);
+		if (!key) return false;
+		const activeOverlay = this.#getActiveUsageOverlay(provider, credential);
+		this.#usageOverlays.set(key, activeOverlay ? mergeUsageReports(activeOverlay, report) : report);
+		return true;
+	}
+
+	#getActiveUsageOverlay(provider: Provider, credential: OAuthCredential): UsageReport | undefined {
+		const key = usageOverlayKey(provider, credential);
+		if (!key) return undefined;
+		const overlay = this.#usageOverlays.get(key);
+		if (!overlay) return undefined;
+		if (Date.now() - overlay.fetchedAt >= USAGE_CACHE_TTL_MS) {
+			this.#usageOverlays.delete(key);
+			return undefined;
+		}
+		return overlay;
+	}
+
+	#applyUsageOverlays(reports: UsageReport[]): UsageReport[] {
+		const overlays = [...this.#usageOverlays.values()].filter(
+			overlay => Date.now() - overlay.fetchedAt < USAGE_CACHE_TTL_MS,
+		);
+		if (overlays.length === 0) return reports;
+		const merged = [...reports];
+		for (const overlay of overlays) {
+			const matchIndex = findMatchingReportIndex(merged, overlay);
+			if (matchIndex === -1) {
+				merged.push(overlay);
+			} else {
+				merged[matchIndex] = mergeUsageReports(merged[matchIndex]!, overlay);
+			}
+		}
+		return merged;
 	}
 
 	/**
@@ -597,6 +680,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		this.#closed = true;
 		this.#backgroundAbort.abort();
 		this.#cache.clear();
+		this.#usageOverlays.clear();
 	}
 }
 
@@ -621,6 +705,22 @@ function matchUsageReport(reports: UsageReport[], provider: Provider, credential
 		if (reportMatchesIdentity(report, accountId, email, projectId)) return report;
 	}
 	return null;
+}
+
+function findMatchingReportIndex(reports: UsageReport[], overlay: UsageReport): number {
+	const candidates = reports
+		.map((report, index) => ({ report, index }))
+		.filter(candidate => candidate.report.provider === overlay.provider);
+	if (candidates.length === 0) return -1;
+	if (candidates.length === 1) return candidates[0]!.index;
+	const metadata = (overlay.metadata ?? {}) as Record<string, unknown>;
+	const accountId = readMetadataString(metadata, "accountId")?.toLowerCase();
+	const email = readMetadataString(metadata, "email")?.toLowerCase();
+	const projectId = readMetadataString(metadata, "projectId")?.toLowerCase();
+	for (const candidate of candidates) {
+		if (reportMatchesIdentity(candidate.report, accountId, email, projectId)) return candidate.index;
+	}
+	return -1;
 }
 
 function reportMatchesIdentity(

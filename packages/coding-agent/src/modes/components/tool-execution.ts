@@ -182,12 +182,14 @@ export interface ToolExecutionHandle {
 	setExpanded(expanded: boolean): void;
 }
 
-/** Drive pending-tool redraws at 30fps for live tool headers and displaceable
- * poll blocks. The TUI throttles at the same cadence, and static frames diff to
- * a no-op redraw at ~zero cost. */
-export const SPINNER_RENDER_INTERVAL_MS = 1000 / 30;
-/** Advance the spinner glyph at its classic ~12.5fps step, decoupled from the
- * render cadence (mirrors `Loader`). */
+/** Redraw live tool blocks at the spinner's glyph-advance rate. Rendering more
+ * often produced identical frames — the previous 30fps cadence emitted ~2.4
+ * paints per glyph step, and although the terminal I/O layer dedupes those, the
+ * compose pipeline still ran end-to-end per frame (issue #4353). Matching the
+ * render tick to the glyph tick halves the paints during tool execution with no
+ * visible change. */
+export const SPINNER_RENDER_INTERVAL_MS = 80;
+/** Advance the spinner glyph at its classic ~12.5fps step (mirrors `Loader`). */
 export const SPINNER_GLYPH_ADVANCE_MS = 80;
 
 /** Phase-locked spinner glyph index shared by every live tool block so parallel
@@ -281,6 +283,14 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	// history, so progress renders static gray and further partial snapshots are
 	// dropped (see #maybeFreezeBackgroundTask).
 	#backgroundTaskFrozen = false;
+	// Set on each `render()` when the last painted shape carried the streamed
+	// SSH-style placeholder / partial-result chrome. Reset gates key off these
+	// so a topology-changing update that lands before the shape reaches the
+	// terminal never triggers a full-viewport replay (which on direct terminals
+	// wipes native scrollback and flashes the user's history — reviewer note on
+	// PR #4315).
+	#placeholderShapePainted = false;
+	#partialResultShapePainted = false;
 	#renderState: {
 		spinnerFrame?: number;
 		expanded: boolean;
@@ -485,6 +495,12 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		if (isPartial && this.#toolName === "task" && this.#maybeFreezeBackgroundTask()) {
 			return;
 		}
+		const hadNoResult = this.#result === undefined;
+		const wasPartialResult = this.#result !== undefined && this.#isPartial;
+		const placeholderPainted = this.#placeholderShapePainted;
+		const partialResultPainted = this.#partialResultShapePainted;
+		this.#placeholderShapePainted = false;
+		this.#partialResultShapePainted = false;
 		this.#result = result;
 		this.#resultVersion++;
 		this.#isPartial = isPartial;
@@ -496,6 +512,11 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		this.#updateSpinnerAnimation();
 		this.#updateTodoStrikeAnimation();
 		this.#updateDisplay();
+		this.#resetDisplayForResultTopologyChange(
+			hadNoResult && placeholderPainted,
+			wasPartialResult && partialResultPainted,
+			isPartial,
+		);
 		// Convert non-PNG images to PNG for Kitty protocol (async)
 		this.#maybeConvertImagesForKitty();
 	}
@@ -830,6 +851,49 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		this.#displayBuilt = true;
 	}
 
+	#rendererFlag(name: "forceFirstResultViewportRepaint" | "forceResultViewportRepaintOnSettle"): boolean {
+		const toolValue = (this.#tool as Record<string, unknown> | undefined)?.[name];
+		const rendererValue = toolRenderers[this.#toolName]?.[name];
+		return toolValue === true || (toolValue === undefined && rendererValue === true);
+	}
+
+	/**
+	 * True while the last painted shape uses the streamed placeholder path
+	 * (`⏳ SSH: […]` / `$ …`) — the render call ran with `__partialJson` args
+	 * and no result. Kept as a per-paint fact so a topology-changing update
+	 * that lands before the placeholder reaches the terminal skips the reset.
+	 */
+	#isPlaceholderShapeAtRender(): boolean {
+		if (this.#result !== undefined) return false;
+		if (!this.#rendererFlag("forceFirstResultViewportRepaint")) return false;
+		return partialJsonOf(this.#args) !== undefined;
+	}
+
+	#resetDisplayForResultTopologyChange(
+		firstResultAfterPlaceholderPaint: boolean,
+		partialResultPaintedBeforeSettle: boolean,
+		isPartial: boolean,
+	): void {
+		const firstResultReplacesStreamedPlaceholder =
+			firstResultAfterPlaceholderPaint && this.#rendererFlag("forceFirstResultViewportRepaint");
+		const provisionalResultSettled =
+			partialResultPaintedBeforeSettle && !isPartial && this.#rendererFlag("forceResultViewportRepaintOnSettle");
+		if (firstResultReplacesStreamedPlaceholder || provisionalResultSettled) {
+			this.#ui.resetDisplay();
+		}
+	}
+
+	override render(width: number): readonly string[] {
+		const lines = super.render(width);
+		// Update the paint-tracking flags after `super.render(width)` — the
+		// override runs on every compose the parent Container performs, so a
+		// frame that never gets composed leaves the flags false and prevents a
+		// spurious `resetDisplay()`.
+		this.#placeholderShapePainted = this.#isPlaceholderShapeAtRender();
+		this.#partialResultShapePainted = this.#result !== undefined && this.#isPartial;
+		return lines;
+	}
+
 	// Viewport-/settings-dependent image sizing folded into the memo key only when
 	// the last rebuild actually emitted images, so a terminal resize re-shapes an
 	// image-bearing result (to rescale it) without re-shaping every image-free
@@ -873,7 +937,8 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			if (shouldRenderCall) {
 				if (tool.renderCall) {
 					try {
-						const callComponent = tool.renderCall(this.#getCallArgsForRender(), this.#renderState, theme);
+						const callArgs = this.#getCallArgsForRender();
+						const callComponent = tool.renderCall(callArgs, this.#renderState, theme);
 						if (callComponent) this.#contentBox.addChild(callComponent as Component);
 					} catch (err) {
 						logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
@@ -1007,7 +1072,8 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 				if (shouldRenderCall) {
 					// Render call component
 					try {
-						const callComponent = renderer.renderCall(this.#getCallArgsForRender(), this.#renderState, theme);
+						const callArgs = this.#getCallArgsForRender();
+						const callComponent = renderer.renderCall(callArgs, this.#renderState, theme);
 						if (callComponent) this.#contentBox.addChild(callComponent);
 					} catch (err) {
 						logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });

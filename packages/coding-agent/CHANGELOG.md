@@ -2,6 +2,50 @@
 
 ## [Unreleased]
 
+## [16.3.4] - 2026-07-03
+
+### Fixed
+
+- Fixed `omp usage` hiding sibling-only limits such as Claude 7 Day (Fable) on accounts whose current report omitted that scoped bucket; the account now renders an explicit `not reported` row instead of looking like the usage refresh skipped the column.
+
+## [16.3.3] - 2026-07-02
+
+### Breaking Changes
+
+- Removed _input as a supported alias for the edit tool input field
+
+### Changed
+
+- Refined advisor note card visuals with a dedicated rail character and bold label headers
+- Deferred session_stop extension hooks and incomplete-todo reminders until all agent-owned background jobs (such as async bash or task spawns) are fully idle
+- Restyled the advisor note card so notes no longer blend into thinking output: bold label-tag header, heavier severity-tinted rail, and note body on the default text color instead of thinking-gray
+
+### Fixed
+
+- Fixed TUI loading animation sometimes failing to render during interactive mode status updates
+- Fixed race conditions and potential hangs during agent startup by improving process lifecycle management
+- Fixed RpcClient startup errors intermittently losing the child's stderr (e.g. the "Unknown provider" message) by waiting for the process to exit — and its stderr to fully drain — before reporting a failed start; also fixed an unhandled rejection when the agent process is killed before becoming ready
+- Improved reliability of file edits when snapshots share identical hash tags
+- Fixed terminal creation in ACP by properly wrapping shell commands and arguments, resolving execution failures (such as ENOENT errors) on Windows and POSIX platforms
+- Fixed inference worker subprocesses (such as TTS, STT, and embeddings) discarding stderr, ensuring unexpected crashes and exit traces are properly captured and surfaced in logs
+- Fixed potential session data loss on Windows during atomic compaction rewrites by preventing concurrent writes from overwriting the session file during exit or compaction
+- Fixed transcript scrollback boundaries to prevent duplicate rows from appearing when live blocks grow
+- Fixed macOS SSHFS mount detection to avoid redundant remounting attempts when the mountpoint is unavailable
+- Fixed SSH streamed placeholders and partial frames leaving stale rows in the TUI viewport and scrollback
+- Fixed Gemini web search to correctly honor the configured search model (providers.webSearchGeminiModel or GEMINI_SEARCH_MODEL) for both OAuth and Developer API grounding requests
+- Fixed omp install rejecting valid npm package specifications
+- Improved MCP OAuth reauthorization error messages when dynamic client registration is closed, directing users to configure client credentials
+- Fixed omp update -l to correctly support the plugin-update shorthand for upgrading marketplace plugins
+- Fixed /advisor on command to correctly rebuild the advisor runtime and bind to the newly configured model
+- Fixed edit tool failures on large source files after a structural-summary read by automatically merging unseen anchor lines into the snapshot
+- Fixed potential hangs and process leaks in the Debug Adapter Protocol (DAP) client by introducing write timeouts and ensuring detached adapter processes are terminated on connection failures
+- Fixed status-line GitHub PR lookup hangs by enforcing a command timeout
+- Fixed potential pipe-buffer deadlocks during plugin installation, uninstallation, and updates by concurrently draining stdout and stderr
+- Fixed SSH tool hangs on unreachable hosts by enforcing a 30-second timeout on pre-command connection and host probes
+- Fixed models.yml schema validation to surface warnings for invalid custom provider configurations instead of silently ignoring them
+- Fixed potential network hangs in omp update, Hindsight recall, and Smithery registry lookups by adding fetch timeouts
+- Reduced TUI CPU overhead during streaming and idle waits by dropping the redundant pre-render on every session event, iterating shimmer text in place instead of allocating a code-point array per animation frame, and coalescing the live-tool spinner render cadence to its glyph-advance rate ([#4353](https://github.com/can1357/oh-my-pi/issues/4353)).
+
 ## [16.3.2] - 2026-07-02
 
 ### Breaking Changes

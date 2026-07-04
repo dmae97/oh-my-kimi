@@ -115,9 +115,7 @@ export function parseFacts(rawOutput: string | null | undefined): string[] {
 						}
 					}
 				}
-				if (out.length > 0) {
-					return out.slice(0, 5);
-				}
+				return out.slice(0, 5);
 			}
 		} catch {
 			const matches = [...raw.matchAll(/"([^"]{10,})"/g)].map(m => m[1]).filter((v): v is string => v !== undefined);

@@ -114,6 +114,7 @@ interface EditRenderArgs {
 	newText?: string;
 	patch?: string;
 	input?: string;
+	_input?: string;
 	all?: boolean;
 	// Patch mode fields
 	op?: Operation;
@@ -600,10 +601,11 @@ function getHashlineInputRenderSummary(
 	args: EditRenderArgs,
 	editMode: EditMode | undefined,
 ): HashlineInputRenderSummary | undefined {
-	if (editMode !== "hashline" || typeof args.input !== "string") {
+	const input = args.input ?? args._input;
+	if (editMode !== "hashline" || typeof input !== "string") {
 		return undefined;
 	}
-	return { entries: getHashlineInputSections(args.input) };
+	return { entries: getHashlineInputSections(input) };
 }
 
 function getApplyPatchRenderSummary(

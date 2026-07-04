@@ -324,6 +324,14 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * the next model call instead of waiting for the next prompt.
 	 */
 	getReasoning?: () => Effort | undefined;
+	/**
+	 * Dynamic model override, resolved once per LLM call. When set, each
+	 * provider call re-reads the model (like {@link getReasoning}) so mid-run
+	 * model switches — context promotion, retry fallback — apply on the next
+	 * call instead of the run finishing on the stale model captured at
+	 * run-loop start. Falls back to the static {@link model} when unset.
+	 */
+	getModel?: () => Model;
 
 	/**
 	 * Dynamic reasoning-disable override, resolved per LLM call. When set,

@@ -434,7 +434,9 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 		stdout: "inherit",
 		stderr: "inherit",
 	});
+	const killTimer = setTimeout(() => proc.kill("SIGKILL"), chunkTimeoutMs());
 	const exitCode = await proc.exited;
+	clearTimeout(killTimer);
 	if (exitCode !== 0) {
 		throw new Error(`${testCommand.label} failed with exit code ${exitCode}: ${renderedCommand}`);
 	}
@@ -443,14 +445,43 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 // Child env shared by every spawned test process: the parent env with all CI
 // credential / cloud-config variables scrubbed (see SCRUBBED_ENV_* above) and
 // GITHUB_ACTIONS cleared so suites resolve only against their own fixtures.
+//
+// GC knobs (both needed — they gate different JSC mechanisms):
+// - `BUN_JSC_useConcurrentGC=0` stops the collector from marking concurrently
+//   with the mutator (868789972, an earlier GC crash under bun test).
+// - `BUN_JSC_numberOfGCMarkers=1` removes the ParallelHelperPool marker
+//   threads. Bun 1.3.14 segfaults/aborts inside parallel marking
+//   (`DOMGCOutputConstraint::executeImplImpl` → `visitOutputConstraints` on a
+//   dead cell; also "Pure virtual function called!") on heap-heavy
+//   coding-agent chunks (~1.3GB RSS, native ghostty-vt cells). Repro: UI
+//   bucket chunk crashed ~25% of runs with `BUN_JSC_forceRAMSize=256MB`,
+//   0/10 with markers=1, at zero measured wall-time cost. useConcurrentGC=0
+//   alone did not prevent it — the crash predates this knob.
 function buildChildEnv(): Record<string, string | undefined> {
-	const env: Record<string, string | undefined> = { ...Bun.env, GITHUB_ACTIONS: "", BUN_JSC_useConcurrentGC: "0" };
+	const env: Record<string, string | undefined> = {
+		...Bun.env,
+		GITHUB_ACTIONS: "",
+		BUN_JSC_useConcurrentGC: "0",
+		BUN_JSC_numberOfGCMarkers: "1",
+	};
 	for (const key of Object.keys(env)) {
 		if (isScrubbedEnvVar(key)) {
 			delete env[key];
 		}
 	}
 	return env;
+}
+
+// Per-chunk watchdog. A bun child that wedges (e.g. the panic handler
+// deadlocking after a GC crash) would otherwise stall the whole run: the
+// parallel path awaits the child's stdout/stderr pipes, which stay open as
+// long as the wedged process — or any grandchild that inherited them — lives.
+// After this many seconds the child is SIGKILLed and reported as a failure.
+// Override with OMP_TEST_CHUNK_TIMEOUT (seconds).
+function chunkTimeoutMs(): number {
+	const raw = Number(Bun.env.OMP_TEST_CHUNK_TIMEOUT?.trim());
+	if (Number.isFinite(raw) && raw >= 1) return raw * 1000;
+	return 600_000;
 }
 
 // The standard `CI` signal is authoritative. In CI each bucket is its own
@@ -596,30 +627,36 @@ export function extractFailingTests(output: string): FailingTest[] {
 // without per-test markers (no parseable failures) the raw log is replayed as a
 // fallback in quiet mode. The banner repeats below so it stays visible whether
 // you scroll to the top or the bottom of the failures.
+export function formatChunkFailure(failure: ChunkOutcome, replayOutput: boolean): string {
+	const lines: string[] = [];
+	lines.push(
+		"",
+		style.bold(style.red(`✗ ${failure.label} (exit ${failure.exitCode})`)),
+		style.dim(`$ ${failure.command}`),
+	);
+	const failing = extractFailingTests(failure.output);
+	// Fully attributed only when every failure carries its own bun block;
+	// otherwise (no markers, or a marker with no preceding frame — timeouts,
+	// crashes) name what we can and replay the raw log so no error is lost.
+	const fullyAttributed = failing.length > 0 && failing.every(test => test.detail.length > 0);
+	for (const test of failing) {
+		lines.push("", `  ${style.red("✗")} ${style.bold(test.name)}`);
+		// Flush-left and verbatim so bun's caret/diff alignment is preserved.
+		if (replayOutput && fullyAttributed) {
+			lines.push(test.detail);
+		}
+	}
+	if (replayOutput && !fullyAttributed && failure.output.trim().length > 0) {
+		lines.push("", failure.output.trimEnd());
+	}
+	return lines.join("\n");
+}
+
 export function formatFailureReport(failures: ChunkOutcome[], total: number, replayOutput: boolean): string {
 	const header = `${failures.length} of ${total} test chunk(s) FAILED`;
 	const lines: string[] = ["", style.bold(style.red(`━━━ ${header} ━━━`))];
 	for (const failure of failures) {
-		lines.push(
-			"",
-			style.bold(style.red(`✗ ${failure.label} (exit ${failure.exitCode})`)),
-			style.dim(`$ ${failure.command}`),
-		);
-		const failing = extractFailingTests(failure.output);
-		// Fully attributed only when every failure carries its own bun block;
-		// otherwise (no markers, or a marker with no preceding frame — timeouts,
-		// crashes) name what we can and replay the raw log so no error is lost.
-		const fullyAttributed = failing.length > 0 && failing.every(test => test.detail.length > 0);
-		for (const test of failing) {
-			lines.push("", `  ${style.red("✗")} ${style.bold(test.name)}`);
-			// Flush-left and verbatim so bun's caret/diff alignment is preserved.
-			if (replayOutput && fullyAttributed) {
-				lines.push(test.detail);
-			}
-		}
-		if (replayOutput && !fullyAttributed && failure.output.trim().length > 0) {
-			lines.push("", failure.output.trimEnd());
-		}
+		lines.push(formatChunkFailure(failure, replayOutput));
 	}
 	lines.push("", style.red(header));
 	return lines.join("\n");
@@ -632,7 +669,7 @@ export function formatFailureReport(failures: ChunkOutcome[], total: number, rep
 // at the end; `--full` streams every chunk's output inline as it completes. All
 // failures are collected and reported together instead of failing fast, so one
 // run surfaces every broken chunk and exits non-zero without a runner stack trace.
-async function runTestCommandsInParallel(commands: TestCommand[], concurrency: number): Promise<void> {
+export async function runTestCommandsInParallel(commands: TestCommand[], concurrency: number): Promise<void> {
 	const env = buildChildEnv();
 	const queue = [...commands];
 	const failures: ChunkOutcome[] = [];
@@ -641,6 +678,45 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 		`Running ${commands.length} test command(s), up to ${concurrency} in parallel ` +
 			`(OMP_TEST_CONCURRENCY=<n>|all to change).`,
 	);
+
+	// Incremental, cancellable drain into a mutable sink, so a watchdog-killed
+	// chunk still reports whatever the child managed to print before it wedged.
+	function drainInto(
+		stream: ReadableStream<Uint8Array>,
+		sink: { text: string },
+	): { done: Promise<void>; cancel: () => void } {
+		const decoder = new TextDecoder();
+		const reader = stream.getReader();
+		const done = (async () => {
+			try {
+				for (;;) {
+					const { done: ended, value } = await reader.read();
+					if (ended) break;
+					sink.text += decoder.decode(value, { stream: true });
+				}
+			} catch {
+				// cancelled or broken pipe — keep what was captured
+			}
+			sink.text += decoder.decode();
+		})();
+		return { done, cancel: () => void reader.cancel().catch(() => {}) };
+	}
+
+	// Wait for `promise` at most `ms`; resolves `true` when it settled in time.
+	// Never rejects.
+	async function settleWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
+		const { promise: expired, resolve } = Promise.withResolvers<boolean>();
+		const timer = setTimeout(() => resolve(false), ms);
+		const settled = await Promise.race([
+			promise.then(
+				() => true,
+				() => true,
+			),
+			expired,
+		]);
+		clearTimeout(timer);
+		return settled;
+	}
 
 	async function worker(): Promise<void> {
 		for (;;) {
@@ -656,28 +732,49 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 				stdout: "pipe",
 				stderr: "pipe",
 			});
-			const [stdout, stderr, exitCode] = await Promise.all([
-				new Response(proc.stdout as ReadableStream<Uint8Array>).text(),
-				new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
-				proc.exited,
-			]);
+			const stdout = { text: "" };
+			const stderr = { text: "" };
+			const stdoutDrain = drainInto(proc.stdout as ReadableStream<Uint8Array>, stdout);
+			const stderrDrain = drainInto(proc.stderr as ReadableStream<Uint8Array>, stderr);
+			const drains = Promise.all([stdoutDrain.done, stderrDrain.done]);
+			// Watchdog: a wedged child (e.g. bun's panic handler deadlocking
+			// after a GC crash) would otherwise hang this worker forever.
+			let timedOut = false;
+			const killTimer = setTimeout(() => {
+				timedOut = true;
+				proc.kill("SIGKILL");
+			}, chunkTimeoutMs());
+			const exitCode = await proc.exited;
+			clearTimeout(killTimer);
+			// Cap the post-exit drain: a leaked grandchild that inherited the
+			// pipes keeps them open indefinitely, and a pending read would keep
+			// the runner's event loop alive — cancel the readers instead.
+			if (!(await settleWithin(drains, 5000))) {
+				stdoutDrain.cancel();
+				stderrDrain.cancel();
+				await drains;
+			}
 			completed += 1;
 			const outcome: ChunkOutcome = {
 				label: testCommand.label,
 				command: renderedCommand,
 				exitCode,
 				seconds: (performance.now() - startedAt) / 1000,
-				output: `${stdout}${stderr}`,
+				output: `${stdout.text}${stderr.text}${timedOut ? `\n[watchdog] chunk exceeded ${Math.round(chunkTimeoutMs() / 1000)}s; killed with SIGKILL (OMP_TEST_CHUNK_TIMEOUT to change)\n` : ""}`,
 			};
 			if (quiet) {
-				process.stdout.write(`${formatProgressLine(outcome)}\n`);
+				let msg = `${formatProgressLine(outcome)}\n`;
+				if (exitCode !== 0 || timedOut) {
+					msg += `${formatChunkFailure(outcome, true)}\n`;
+				}
+				process.stdout.write(msg);
 			} else {
 				const status = exitCode === 0 ? "ok" : `FAILED exit ${exitCode}`;
 				process.stdout.write(
 					`\n==> [${completed}/${commands.length}] ${testCommand.label} (${status}, ${outcome.seconds.toFixed(1)}s)\n$ ${renderedCommand}\n${outcome.output}`,
 				);
 			}
-			if (exitCode !== 0) {
+			if (exitCode !== 0 || timedOut) {
 				failures.push(outcome);
 			}
 		}
@@ -686,14 +783,13 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 	const runStartedAt = performance.now();
 	await Promise.all(Array.from({ length: concurrency }, () => worker()));
 
-	if (failures.length > 0) {
-		process.stdout.write(`${formatFailureReport(failures, commands.length, quiet)}\n`);
-	}
 	if (quiet) {
 		const totalSeconds = (performance.now() - runStartedAt) / 1000;
 		process.stdout.write(
 			`${formatSummaryFooter(commands.length - failures.length, failures.length, totalSeconds)}\n`,
 		);
+	} else if (failures.length > 0) {
+		process.stdout.write(style.bold(style.red(`\n${failures.length} of ${commands.length} test chunk(s) FAILED\n`)));
 	}
 	if (failures.length > 0) {
 		process.exitCode = 1;
