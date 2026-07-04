@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed cmux-backend `browser({action:"run"})` calls crashing the entire process with an unhandled rejection when the tab was released mid-run (e.g. a sibling subagent calling `browser({action:"close", all:true})` or a session-scoped tab reap). `runInTabWithSnapshot` in `tab-supervisor.ts` always creates a `Promise.withResolvers()` triple so `releaseTab` can signal in-flight runs, but the cmux branch awaits `runCmuxCode(...)` directly and never awaits/`.catch`es the local promise. When `releaseTab` rejected that orphaned promise ("Tab ... was closed"), Bun surfaced it as an unhandled rejection and the top-level handler tore the whole session down, killing every other tab and subagent sharing it. Attaching a no-op `.catch(() => undefined)` to the promise immediately after creation neutralizes the orphan without affecting the worker branch, which still awaits the same promise via `raceWithTimeout` ([#4499](https://github.com/can1357/oh-my-pi/issues/4499)).
+
 ## [16.3.5] - 2026-07-04
 
 ### Fixed
