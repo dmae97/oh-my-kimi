@@ -265,24 +265,23 @@ function parseResponse(response: XAIResponsesResponse, resultCap: number): Searc
 }
 
 /**
- * Prefer a dedicated `xai-oauth` credential when the user has one, otherwise
- * resolve `xai` directly. Gating on `hasNonEnvCredential("xai-oauth")` (plus
- * `XAI_OAUTH_TOKEN`) is deliberate: `AuthStorage.hasAuth("xai-oauth")` also
- * fires when only `XAI_API_KEY` is set, because the catalog maps `xai-oauth`
- * to `["XAI_OAUTH_TOKEN", "XAI_API_KEY"]`. Without this narrower gate, an
- * `xai-oauth`-preferring wrapper would return `XAI_API_KEY` before an
- * explicit `xai` runtime/config credential ever ran, and web_search would
- * ignore/mis-bill against the wrong xAI account.
+ * Prefer `xai-oauth` only when its resolver cannot be shadowed by the shared
+ * `XAI_API_KEY` fallback before reaching a lower-priority dedicated source.
  */
-function hasDedicatedXAIOAuth(authStorage: AuthStorage): boolean {
-	return authStorage.hasNonEnvCredential("xai-oauth") || Boolean($env.XAI_OAUTH_TOKEN);
+function shouldPreferXAIOAuth(authStorage: AuthStorage): boolean {
+	if ($env.XAI_OAUTH_TOKEN) return true;
+
+	const origin = authStorage.getCredentialOrigin("xai-oauth");
+	if (!origin || origin.kind === "env") return false;
+	if ((origin.kind === "api_key" || origin.kind === "fallback") && $env.XAI_API_KEY) return false;
+	return true;
 }
 
 function resolveXAIWebSearchApiKey(params: SearchParams): ApiKeyResolver {
 	const xaiResolver = params.authStorage.resolver("xai", {
 		sessionId: params.sessionId,
 	});
-	if (!hasDedicatedXAIOAuth(params.authStorage)) {
+	if (!shouldPreferXAIOAuth(params.authStorage)) {
 		return xaiResolver;
 	}
 
@@ -314,7 +313,7 @@ export class XAIProvider extends SearchProvider {
 	readonly label = "xAI";
 
 	isAvailable(authStorage: AuthStorage): boolean {
-		return hasDedicatedXAIOAuth(authStorage) || authStorage.hasAuth("xai");
+		return shouldPreferXAIOAuth(authStorage) || authStorage.hasAuth("xai");
 	}
 
 	search(params: SearchParams): Promise<SearchResponse> {
