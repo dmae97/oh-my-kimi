@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Cursor provider: reject `grepArgs` frames with an empty `pattern` at the exec dispatch (returning an actionable, glob-aware `GrepResult.error`) instead of surfacing the coding-agent grep tool's bare "Pattern must not be empty" and persisting a synthesized tool-call block whose pattern rendered as `?` in the TUI ([#4574](https://github.com/can1357/oh-my-pi/issues/4574)).
+
 ## [16.3.6] - 2026-07-04
 
 ### Added

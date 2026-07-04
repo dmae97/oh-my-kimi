@@ -1111,6 +1111,17 @@ async function handleExecServerMessage(
 		case "grepArgs": {
 			const args = execMsg.message.value;
 			if (!args.toolCallId) args.toolCallId = crypto.randomUUID();
+			// Cursor's model sometimes emits `grepArgs` with an empty `pattern` and a
+			// non-empty `glob`, expecting grep to list files matching the glob. Reject
+			// that up front with an actionable error so the model retries with a real
+			// regex or switches to `ls`/`read`, instead of the local grep tool
+			// surfacing a bare "Pattern must not be empty" (issue #4574) after the
+			// synthesized block has already been persisted with a placeholder pattern.
+			const emptyPatternError = emptyGrepPatternRejection(args.pattern, args.glob);
+			if (emptyPatternError !== null) {
+				sendExecClientMessage(h2Request, execMsg, "grepResult", buildGrepErrorResult(emptyPatternError));
+				return;
+			}
 			// Mirror the coding-agent bridge's arg mapping so live UI (from
 			// `tool_execution_start`) and rebuilt transcript (from this block)
 			// display identical args.
@@ -1833,6 +1844,31 @@ function buildGrepErrorResult(error: string) {
 			value: create(GrepErrorSchema, { error }),
 		},
 	});
+}
+
+/**
+ * Reject a Cursor exec-channel `grepArgs` frame whose `pattern` is empty or
+ * whitespace-only. Returns an actionable error message when the pattern is
+ * unusable (with a `glob`-aware hint when the model likely meant to list
+ * files), or `null` when the pattern is valid and grep should run.
+ *
+ * Exported for tests. Cursor's model sometimes sends `pattern=""` together
+ * with a non-empty `glob`, expecting grep to enumerate matching files; the
+ * downstream coding-agent `grep` tool rejects that with a bare "Pattern must
+ * not be empty", which the TUI renders as `?` in the tool preview (issue
+ * #4574). Handling it at the Cursor exec dispatch keeps the synthesized
+ * `toolCall` block off the persisted assistant message and gives the model a
+ * specific recovery hint.
+ */
+export function emptyGrepPatternRejection(pattern: string | undefined, glob: string | undefined): string | null {
+	if (pattern && pattern.trim().length > 0) return null;
+	if (glob && glob.length > 0) {
+		return (
+			`grep pattern is required (received an empty pattern). To list files matching "${glob}", ` +
+			`pass a non-empty regex (e.g. ".") and set path to that glob, or use the ls/read tool instead.`
+		);
+	}
+	return "grep pattern is required (received an empty pattern).";
 }
 
 function buildDiagnosticsResultFromToolResult(path: string, toolResult: ToolResultMessage) {
