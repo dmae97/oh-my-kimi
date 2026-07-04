@@ -329,8 +329,7 @@ export class EventController {
 
 	#trackRetrySupersededAssistantComponent(component: AssistantMessageComponent | undefined): void {
 		if (!component) return;
-		const persistenceKey =
-			typeof component.messagePersistenceKey === "function" ? component.messagePersistenceKey() : undefined;
+		const persistenceKey = component.messagePersistenceKey();
 		if (persistenceKey) this.#retrySupersededAssistantComponents.set(persistenceKey, component);
 		if (!this.#retrySupersededAssistantQueue.includes(component)) {
 			this.#retrySupersededAssistantQueue.push(component);
@@ -351,8 +350,7 @@ export class EventController {
 		while (this.#retrySupersededAssistantQueue.length > 0) {
 			const component = this.#retrySupersededAssistantQueue.shift();
 			if (!component) continue;
-			const key =
-				typeof component.messagePersistenceKey === "function" ? component.messagePersistenceKey() : undefined;
+			const key = component.messagePersistenceKey();
 			if (key && this.#retrySupersededAssistantComponents.get(key) !== component) continue;
 			if (key) this.#retrySupersededAssistantComponents.delete(key);
 			return component;
