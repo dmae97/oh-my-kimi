@@ -1134,6 +1134,37 @@ export class SessionManager {
 		if (this.#diskFailure) throw this.#diskFailure;
 	}
 
+	/**
+	 * If the session never carried a real user/assistant message and has no
+	 * saved draft (nothing for `--resume` to reattach to), drop the on-disk
+	 * file and its artifacts directory. Guards against zombie metadata-only
+	 * sessions from a draft-then-clear-then-close cycle: `saveDraft(text)`
+	 * calls `ensureOnDisk()` to materialize the JSONL so the sidecar has a
+	 * parent, and a subsequent `saveDraft("")` only unlinks the sidecar —
+	 * the load-path flips `#fileIsCurrent`/`#forceFileCreation` to `true`,
+	 * so `#shouldHaveSessionFile()` can no longer prune the file itself.
+	 */
+	async #dropIfEmptyAndNoDraft(): Promise<void> {
+		const sessionFile = this.#sessionFile;
+		if (!sessionFile || !this.#storage.existsSync(sessionFile)) return;
+		const hasRealMessages = this.#entries.some(
+			e => e.type === "message" && (e.message.role === "user" || e.message.role === "assistant"),
+		);
+		if (hasRealMessages) return;
+		const draftPath = this.#draftPath();
+		if (draftPath && this.#storage.existsSync(draftPath)) return;
+		try {
+			await this.#storage.deleteSessionWithArtifacts(sessionFile);
+			this.#fileIsCurrent = false;
+			this.#forceFileCreation = false;
+			this.#hasTitleSlot = false;
+		} catch (err) {
+			if (!isEnoent(err)) {
+				logger.warn("Failed to drop empty session on close", { sessionFile, error: String(err) });
+			}
+		}
+	}
+
 	/** Flush, then close the append writer. */
 	async close(): Promise<void> {
 		if (!this.#persist) return;
@@ -1143,6 +1174,7 @@ export class SessionManager {
 			if (hadWriter || (this.#sessionFile && this.#storage.existsSync(this.#sessionFile)))
 				this.#fileIsCurrent = true;
 		});
+		await this.#dropIfEmptyAndNoDraft();
 		// Wait for any queued backing writes (IndexedSessionStorage per-path
 		// tail) to become durable so a graceful shutdown does not exit while
 		// a fire-and-forget publish is still on the wire.
