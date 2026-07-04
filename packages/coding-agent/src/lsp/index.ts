@@ -31,7 +31,7 @@ import {
 	waitForProjectLoaded,
 } from "./client";
 import { getLinterClient } from "./clients";
-import { getServersForFile, type LspConfig, loadConfig } from "./config";
+import { getServersForFile, hasRootMarkerAncestor, type LspConfig, loadConfig } from "./config";
 import {
 	applyTextEdits,
 	applyTextEditsToString,
@@ -355,6 +355,41 @@ function limitDiagnosticMessages(messages: string[]): string[] {
 		return messages;
 	}
 	return messages.slice(0, DIAGNOSTIC_MESSAGE_LIMIT);
+}
+
+const ORPHAN_TYPESCRIPT_PROJECT_DIAGNOSTIC_CODES: Record<number, true> = {
+	1375: true,
+	1378: true,
+	2307: true,
+	2580: true,
+	2591: true,
+	2792: true,
+	2867: true,
+};
+
+function diagnosticCodeNumber(diagnostic: Diagnostic): number | null {
+	if (typeof diagnostic.code === "number") return diagnostic.code;
+	if (typeof diagnostic.code === "string" && /^\d+$/.test(diagnostic.code)) return Number(diagnostic.code);
+	return null;
+}
+function isTypeScriptProjectDiagnostic(serverName: string, diagnostic: Diagnostic): boolean {
+	if (diagnostic.source !== "typescript" && !serverName.toLowerCase().includes("typescript")) {
+		return false;
+	}
+	const code = diagnosticCodeNumber(diagnostic);
+	return code !== null && ORPHAN_TYPESCRIPT_PROJECT_DIAGNOSTIC_CODES[code] === true;
+}
+
+function filterOrphanProjectDiagnostics(
+	absolutePath: string,
+	serverName: string,
+	serverConfig: ServerConfig,
+	diagnostics: Diagnostic[],
+): Diagnostic[] {
+	if (!serverConfig.rootMarkers.length || hasRootMarkerAncestor(absolutePath, serverConfig.rootMarkers)) {
+		return diagnostics;
+	}
+	return diagnostics.filter(diagnostic => !isTypeScriptProjectDiagnostic(serverName, diagnostic));
 }
 
 const LOCATION_CONTEXT_LINES = 1;
@@ -709,7 +744,7 @@ async function getDiagnosticsForFile(
 			if (serverConfig.createClient) {
 				const linterClient = getLinterClient(serverName, serverConfig, cwd);
 				const diagnostics = await linterClient.lint(absolutePath);
-				return { serverName, diagnostics };
+				return { serverName, serverConfig, diagnostics };
 			}
 
 			// Default: use LSP
@@ -728,14 +763,21 @@ async function getDiagnosticsForFile(
 				minVersion,
 				expectedDocumentVersion,
 			});
-			return { serverName, diagnostics };
+			return { serverName, serverConfig, diagnostics };
 		}),
 	);
 
 	for (const result of results) {
 		if (result.status === "fulfilled") {
 			serverNames.push(result.value.serverName);
-			allDiagnostics.push(...result.value.diagnostics);
+			allDiagnostics.push(
+				...filterOrphanProjectDiagnostics(
+					absolutePath,
+					result.value.serverName,
+					result.value.serverConfig,
+					result.value.diagnostics,
+				),
+			);
 		}
 	}
 
