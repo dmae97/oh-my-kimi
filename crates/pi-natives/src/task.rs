@@ -395,9 +395,7 @@ mod tests {
 			self
 				.dropped
 				.store(true, std::sync::atomic::Ordering::SeqCst);
-			if !std::thread::panicking() {
-				panic!("DropBomb detonated in drop");
-			}
+			assert!(std::thread::panicking(), "DropBomb detonated in drop");
 		}
 	}
 
