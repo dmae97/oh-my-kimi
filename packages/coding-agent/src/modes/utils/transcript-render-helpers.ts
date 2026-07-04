@@ -10,7 +10,6 @@ import { formatBytes, formatDuration } from "@oh-my-pi/pi-utils";
 import {
 	type CustomMessage,
 	type FileMentionMessage,
-	isSilentAbort,
 	resolveAbortLabel,
 	shouldRenderAbortReason,
 } from "../../session/messages";
@@ -157,8 +156,8 @@ function sanitizeRecoveredRetryNote(note: string): string {
 
 /**
  * Resolve the turn-ending assistant error presentation, if any.
- * Silent aborts yield no label. Recovered auto-retry errors collapse to a
- * single non-error note; terminal errors keep the full red presentation.
+ * Silent and user-interrupt aborts yield no label. Recovered auto-retry errors
+ * collapse to a single non-error note; terminal errors keep the full red presentation.
  */
 export function resolveAssistantErrorPresentation(
 	message: AssistantAgentMessage,
@@ -172,7 +171,7 @@ export function resolveAssistantErrorPresentation(
 		};
 	}
 	if (message.stopReason === "aborted") {
-		if (isSilentAbort(message)) return { kind: "none" };
+		if (!shouldRenderAbortReason(message)) return { kind: "none" };
 		return { kind: "full", text: resolveAbortLabel(message, retryAttempt), isError: true };
 	}
 	if (message.stopReason === "error") {
