@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Esc no longer stopping TTS audio playback once the assistant reply had finished streaming; queued Kokoro (and remote) audio kept reading past the response's end because `vocalizer.clear()` only fired from the aborted-stream cascade. Esc now silences a still-audible vocalizer as its first action (ahead of the `tree`/`branch` double-Esc gesture); a second Esc keeps its previous behavior. ([#4521](https://github.com/can1357/oh-my-pi/issues/4521))
+
 ## [16.3.6] - 2026-07-04
 
 ### Changed
