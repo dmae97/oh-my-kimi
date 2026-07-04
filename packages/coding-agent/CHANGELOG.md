@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the `snapcompact.shape` settings UI to expose `silver16-bw` and updated snapcompact renderability warnings to report unsupported glyphs instead of a misleading non-ASCII rate. ([#4486](https://github.com/can1357/oh-my-pi/issues/4486))
+
 ## [16.3.5] - 2026-07-04
 
 ### Fixed

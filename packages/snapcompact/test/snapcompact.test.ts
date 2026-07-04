@@ -372,15 +372,45 @@ describe("shape resolution", () => {
 		expect(snapcompact.isShape({ ...snapcompact.SHAPES.openai, imageDetail: "original" })).toBe(true);
 	});
 
-	it("keeps selected shapes while Silver fallback covers non-Latin glyphs", () => {
-		const text = "こんにちは 你好 안녕";
+	it("keeps bitmap shapes render-safe via Silver fallback while CJK-heavy auto archives use Silver", () => {
+		const cjkHeavyText = "こんにちは 你好 안녕 世界 한국어";
+		const silver = snapcompact.resolveShape({ api: "anthropic-messages" }, "silver16-bw");
+
+		expect(snapcompact.scanRenderability(cjkHeavyText).isSafe).toBe(true);
+		expect(snapcompact.scanRenderability(cjkHeavyText, { shape: silver }).isSafe).toBe(true);
+		expect(snapcompact.normalize(cjkHeavyText)).toBe(cjkHeavyText);
+		expect(snapcompact.normalize(cjkHeavyText, { shape: silver })).toBe(cjkHeavyText);
+		expect(snapcompact.resolveShapeForText(cjkHeavyText, { api: "anthropic-messages" }, "auto")).toEqual(silver);
+	});
+
+	it("keeps ASCII-heavy auto archives on the provider/model shape", () => {
+		const model = { api: "openai-responses" as const, id: "gpt-5.5" };
+		const expected = snapcompact.resolveShape(model, "auto");
+		const actual = snapcompact.resolveShapeForText(
+			"function render(value: string) { return value.trim().toLowerCase(); }",
+			model,
+			"auto",
+		);
+
+		expect(actual).toEqual(expected);
+		expect(actual.font).not.toBe("silver");
+	});
+
+	it("respects explicit non-auto variants even for CJK-heavy text", () => {
+		const model = { api: "anthropic-messages" as const };
+		const expected = snapcompact.resolveShape(model, "8on16-bw");
+		const actual = snapcompact.resolveShapeForText("こんにちは 你好 안녕 世界 한국어", model, "8on16-bw");
+
+		expect(actual).toEqual(expected);
+		expect(actual.font).not.toBe("silver");
+	});
+
+	it("reports unsupported CJK ideographs unsafe even with the Silver shape selected", () => {
 		const silver = snapcompact.resolveShape(undefined, "silver16-bw");
-		expect(snapcompact.scanRenderability(text).isSafe).toBe(true);
-		expect(snapcompact.scanRenderability(text, { shape: silver }).isSafe).toBe(true);
-		expect(snapcompact.normalize(text)).toBe(text);
-		expect(snapcompact.normalize(text, { shape: silver })).toBe(text);
-		expect(snapcompact.resolveShapeForText(text).font).not.toBe("silver");
-		expect(snapcompact.resolveShapeForText("plain ascii").font).not.toBe("silver");
+		const res = snapcompact.scanRenderability("\u{31350}".repeat(12), { shape: silver });
+
+		expect(res.isSafe).toBe(false);
+		expect(res.unrenderableRatio).toBe(1);
 	});
 
 	it("images forwards the per-frame detail hint", () => {

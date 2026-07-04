@@ -385,15 +385,39 @@ export function resolveShape(model?: ShapeTarget, variant?: ShapeVariantName | "
 	return priceShape(ideal?.frameSize ? { ...base, frameSize: ideal.frameSize } : base, family);
 }
 
+const CJK_HEAVY_MIN_WIDE_CHARS = 8;
+const CJK_HEAVY_WIDE_RATIO = 0.25;
+
+function isCjkHeavyText(text: string): boolean {
+	const chars = normalizedInputChars(text);
+	let graphicChars = 0;
+	let wideChars = 0;
+	for (const ch of chars) {
+		if (ch === " " || ch === DIM_ON || ch === DIM_OFF || ch === NEWLINE_GLYPH) continue;
+		const cp = ch.codePointAt(0);
+		if (cp === undefined || UNRENDERABLE.test(ch)) continue;
+		graphicChars++;
+		if (isWideCodePoint(cp)) wideChars++;
+	}
+	return wideChars >= CJK_HEAVY_MIN_WIDE_CHARS && wideChars / graphicChars >= CJK_HEAVY_WIDE_RATIO;
+}
+
 /**
- * Pick the frame shape for `text` without changing the selected shape.
- *
- * Glyph-level Silver fallback happens during normalization/rendering, so this
- * helper exists for callers that need a text-aware API name while preserving
- * explicit and provider-selected shapes.
+ * Pick the frame shape for `text`. Explicit variants remain forced. Auto first
+ * resolves the model/provider default, then selects the Silver CJK grid when
+ * the default font cannot safely render the text or wide CJK glyphs dominate
+ * the transcript and Silver can render it safely.
  */
-export function resolveShapeForText(_text: string, model?: ShapeTarget, variant?: ShapeVariantName | "auto"): Shape {
-	return resolveShape(model, variant);
+export function resolveShapeForText(text: string, model?: ShapeTarget, variant?: ShapeVariantName | "auto"): Shape {
+	const shape = resolveShape(model, variant);
+	if (variant && variant !== "auto") return shape;
+	const silver = resolveShape(model, "silver16-bw");
+	if (!scanRenderability(text, { shape }).isSafe) {
+		return scanRenderability(text, { shape: silver }).isSafe ? silver : shape;
+	}
+	return shape.font !== "silver" && isCjkHeavyText(text) && scanRenderability(text, { shape: silver }).isSafe
+		? silver
+		: shape;
 }
 
 // ============================================================================
