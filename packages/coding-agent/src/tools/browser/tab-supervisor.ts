@@ -48,6 +48,16 @@ export interface PendingRun {
 	session: ToolSession;
 	signal?: AbortSignal;
 	toolCalls: Map<string, AbortController>;
+	/**
+	 * Fires when `releaseTab` closes the tab out from under an in-flight run
+	 * (sibling `browser close --all`, session-scoped reap, etc.). Composed
+	 * into the cmux run's signal so `wait(...)`, cmux socket calls, and the
+	 * facade proxies unwind promptly instead of blocking to the run's
+	 * timeout. `pending.reject` still fires first so the awaiting caller
+	 * sees the tab-close error immediately; `closeAc` propagates the
+	 * cancellation into the still-running `runCmuxCode` body (issue #4499).
+	 */
+	closeAc?: AbortController;
 }
 
 interface TabSessionBase<TBrowser extends BrowserHandle = BrowserHandle> {
@@ -380,23 +390,47 @@ async function runInTabWithSnapshot(
 	if (tab.pending.size > 0) throw new ToolError(`Tab ${JSON.stringify(name)} is busy`);
 	const id = Snowflake.next();
 	const { promise, resolve, reject } = Promise.withResolvers<RunResultOk>();
+	// `releaseTab` calls `pending.reject(closeError)` when the tab dies
+	// out from under an in-flight run (sibling `browser close --all`,
+	// session-scoped reap, etc.). Both backends below MUST end up awaiting
+	// this same `promise` so:
+	//   1. The caller sees `Tab ... was closed` immediately instead of
+	//      blocking to the run's timeout, and
+	//   2. `reject(...)` always has an attached handler — a zero-consumer
+	//      rejection would fire `unhandledRejection` and the CLI's
+	//      top-level handler would tear the whole session down, killing
+	//      every other tab and subagent sharing the process (issue #4499).
+	// The cmux branch also composes `closeAc.signal` into the run's abort
+	// signal so `wait(...)`, cmux socket calls, and the facade proxies
+	// unwind promptly when the tab is closed — otherwise a `wait(60_000)`
+	// with no in-flight socket request would keep `runCmuxCode` blocked
+	// until timeout even after the tab is gone.
+	const closeAc = new AbortController();
 	const pending: PendingRun = {
 		resolve,
 		reject,
 		session: opts.session ?? ({} as ToolSession),
 		signal: opts.signal,
 		toolCalls: new Map(),
+		closeAc,
 	};
 	tab.pending.set(id, pending);
 	if (tab.backend === "cmux") {
+		const runSignal = opts.signal ? AbortSignal.any([opts.signal, closeAc.signal]) : closeAc.signal;
 		try {
-			return await runCmuxCode(tab.cmuxTab, {
+			// `runCmuxCode.then(resolve, reject)` publishes the run's real
+			// outcome to `promise`, but `releaseTab` may have already
+			// rejected it — `Promise.withResolvers` settles on the first
+			// call and later resolve/reject are no-ops, so the tab-close
+			// error still wins the race.
+			runCmuxCode(tab.cmuxTab, {
 				code: opts.code,
 				timeoutMs: opts.timeoutMs,
-				signal: opts.signal,
+				signal: runSignal,
 				session: pending.session,
 				snapshot,
-			});
+			}).then(resolve, reject);
+			return await promise;
 		} finally {
 			tab.pending.delete(id);
 		}
@@ -460,6 +494,16 @@ export async function releaseTab(name: string, opts: ReleaseTabOptions = {}): Pr
 			} catch {}
 		}
 		for (const ctrl of pending.toolCalls.values()) ctrl.abort(closeError);
+		// Propagate the closure into the cmux run's abort signal so
+		// `wait(...)`, in-flight cmux socket calls, and the facade proxies
+		// unwind promptly. Firing this BEFORE `pending.reject` means
+		// `runCmuxCode` finishes with `ToolAbortError` and its `.then(reject)`
+		// is a no-op — `promise` still settles with the tab-close error via
+		// the `reject` call below. Without it, a run that isn't currently
+		// making a socket request (e.g. `await wait(60_000)`) would keep
+		// `runCmuxCode` blocked until timeout even after `pending.reject`
+		// unblocked the caller (issue #4499 review feedback).
+		pending.closeAc?.abort(closeError);
 		pending.reject(closeError);
 	}
 	tab.pending.clear();
