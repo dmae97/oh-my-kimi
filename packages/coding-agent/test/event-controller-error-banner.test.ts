@@ -60,6 +60,8 @@ function createFixture(streamingMessage?: AssistantMessage) {
 		markTranscriptBlockFinalized: vi.fn(),
 		setErrorPinned: vi.fn(),
 		setHideThinkingBlock: vi.fn((hide: boolean) => componentCalls.push(`hide:${hide}`)),
+		messagePersistenceKey: vi.fn(() => "test-persistence-key"),
+		applyRetryRecovery: vi.fn(),
 	};
 	const showPinnedError = vi.fn();
 	const clearPinnedError = vi.fn();

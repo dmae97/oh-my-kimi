@@ -245,6 +245,10 @@ describe("EventController IRC expiry", () => {
 		await controller.handleEvent({ type: "irc_message", message });
 		expect(chatContainer.children).toHaveLength(1);
 
+		// Render the container and commit its rows to simulate entering native scrollback
+		const lines = chatContainer.render(80);
+		chatContainer.setNativeScrollbackCommittedRows(lines.length);
+
 		// Everything above the card is finalized, so its rows may already be in
 		// native scrollback. Removing it would be an interior deletion of the
 		// committed prefix — the engine repairs that by recommitting everything

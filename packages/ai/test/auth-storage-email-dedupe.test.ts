@@ -431,7 +431,7 @@ describe("AuthStorage openai-codex email dedupe", () => {
 		const freshDbPath = path.join(tempDir, "fresh-schema-agent.db");
 		const freshStore = await SqliteAuthCredentialStore.open(freshDbPath);
 		try {
-			expect(readAuthSchemaVersion(freshDbPath)).toBe(4);
+			expect(readAuthSchemaVersion(freshDbPath)).toBe(5);
 			expect(readTableSql(freshDbPath, "auth_credentials")).not.toContain("unixepoch(");
 			expect(readTableSql(freshDbPath, "auth_credentials")).toContain("strftime('%s','now')");
 		} finally {
@@ -449,7 +449,7 @@ describe("AuthStorage openai-codex email dedupe", () => {
 				id INTEGER PRIMARY KEY CHECK (id = 1),
 				version INTEGER NOT NULL
 			);
-			INSERT INTO auth_schema_version(id, version) VALUES (1, 5);
+			INSERT INTO auth_schema_version(id, version) VALUES (1, 6);
 			CREATE TABLE auth_credentials (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				provider TEXT NOT NULL,
@@ -465,7 +465,7 @@ describe("AuthStorage openai-codex email dedupe", () => {
 
 		const reopenedStore = await SqliteAuthCredentialStore.open(futureDbPath);
 		try {
-			expect(readAuthSchemaVersion(futureDbPath)).toBe(5);
+			expect(readAuthSchemaVersion(futureDbPath)).toBe(6);
 		} finally {
 			reopenedStore.close();
 		}
@@ -491,7 +491,7 @@ describe("AuthStorage openai-codex email dedupe", () => {
 			const reopened = await SqliteAuthCredentialStore.open(reopenDbPath);
 			try {
 				expect(reopened.listAuthCredentials("openai")).toHaveLength(1);
-				expect(readAuthSchemaVersion(reopenDbPath)).toBe(4);
+				expect(readAuthSchemaVersion(reopenDbPath)).toBe(5);
 			} finally {
 				reopened.close();
 			}
@@ -547,7 +547,7 @@ describe("AuthStorage openai-codex email dedupe", () => {
 
 		const migratedStore = await SqliteAuthCredentialStore.open(legacyDbPath);
 		try {
-			expect(readAuthSchemaVersion(legacyDbPath)).toBe(4);
+			expect(readAuthSchemaVersion(legacyDbPath)).toBe(5);
 			expect(readTableSql(legacyDbPath, "auth_credentials")).not.toContain("unixepoch(");
 			expect(readTableSql(legacyDbPath, "auth_credentials")).toContain("strftime('%s','now')");
 			expect(readStoredIdentityRows(legacyDbPath, "openai-codex")).toEqual([

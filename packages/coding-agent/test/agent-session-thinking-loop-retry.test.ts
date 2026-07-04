@@ -181,7 +181,9 @@ describe("AgentSession thinking-loop retry", () => {
 		expect(calls).toEqual(["openrouter/google/gemini-3.5-flash", "openrouter/google/gemini-3.5-flash"]);
 		expect(retryStartEvents).toHaveLength(1);
 		expect(AIError.is(retryStartEvents[0].errorId, AIError.Flag.ThinkingLoop)).toBe(true);
-		expect(retryEndEvents).toEqual([{ type: "auto_retry_end", success: true, attempt: 1 }]);
+		expect(retryEndEvents).toHaveLength(1);
+		expect(retryEndEvents[0]).toMatchObject({ type: "auto_retry_end", success: true, attempt: 1 });
+		expect(retryEndEvents[0].recoveredErrors).toBeArray();
 		const assistants = session.agent.state.messages.filter(
 			(message): message is AssistantMessage => message.role === "assistant",
 		);
