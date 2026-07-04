@@ -28,7 +28,7 @@
  *    from PR #4502.)
  */
 
-import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import type { CmuxKind } from "@oh-my-pi/pi-coding-agent/tools/browser/cmux/rpc";
 import { CmuxSocketClient } from "@oh-my-pi/pi-coding-agent/tools/browser/cmux/socket-client";
 import { acquireBrowser } from "@oh-my-pi/pi-coding-agent/tools/browser/registry";
@@ -68,7 +68,11 @@ async function drainAllTabs(): Promise<void> {
 
 describe("browser tab-supervisor — cmux tab close mid-run (#4499)", () => {
 	afterEach(async () => {
-		await drainAllTabs();
+		try {
+			await drainAllTabs();
+		} finally {
+			vi.restoreAllMocks();
+		}
 	});
 
 	it("releaseTab() during an in-flight cmux run rejects the run and never emits unhandledRejection", async () => {
