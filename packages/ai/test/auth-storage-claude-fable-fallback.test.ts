@@ -5,7 +5,7 @@ import {
 	AuthStorage,
 	type StoredAuthCredential,
 } from "@oh-my-pi/pi-ai/auth-storage";
-import type { UsageReport } from "@oh-my-pi/pi-ai/usage";
+import type { UsageLimit, UsageReport } from "@oh-my-pi/pi-ai/usage";
 import * as claudeUsage from "@oh-my-pi/pi-ai/usage/claude";
 
 interface ObservableStore extends AuthCredentialStore {
@@ -83,7 +83,11 @@ function baseReport(email: string): UsageReport {
 	};
 }
 
-function withFable(report: UsageReport, usedFraction: number): UsageReport {
+function withFable(
+	report: UsageReport,
+	usedFraction: number,
+	options: { resetsAt?: number; status?: UsageLimit["status"] } = {},
+): UsageReport {
 	return {
 		...report,
 		limits: [
@@ -92,9 +96,13 @@ function withFable(report: UsageReport, usedFraction: number): UsageReport {
 				id: "anthropic:7d:fable",
 				label: "Claude 7 Day (Fable)",
 				scope: { provider: "anthropic", windowId: "7d", tier: "fable" },
-				window: { id: "7d", label: "7 Day" },
+				window: {
+					id: "7d",
+					label: "7 Day",
+					...(options.resetsAt === undefined ? {} : { resetsAt: options.resetsAt }),
+				},
 				amount: { used: usedFraction * 100, limit: 100, usedFraction, unit: "percent" },
-				status: usedFraction >= 1 ? "exhausted" : "ok",
+				status: options.status ?? (usedFraction >= 1 ? "exhausted" : "ok"),
 			},
 		],
 	};
@@ -133,10 +141,10 @@ describe("AuthStorage Claude Fable tier fallback", () => {
 	});
 
 	it("does not block OAuth credentials just because the Fable tier is not reported", async () => {
-		// All three credentials lack a Fable-specific bucket. Per the user's
-		// intent, unknown headroom is not treated as exhausted; the selector
-		// still picks the first credential in hashed order and lets the live
-		// request decide if the account can serve Fable.
+		// All three credentials lack a Fable-specific bucket. Unknown headroom is
+		// not treated as exhausted; the selector still picks the first credential
+		// in hashed order and lets the live request decide if the account can
+		// serve Fable.
 		const reportsByAccess: Record<string, UsageReport> = {
 			"oat-1": baseReport("a@example.com"),
 			"oat-2": baseReport("b@example.com"),
@@ -149,13 +157,108 @@ describe("AuthStorage Claude Fable tier fallback", () => {
 			return reportsByAccess[access] ?? null;
 		});
 
-		// With Fable tier excluded from proactive hard blocks, it should still select the first available key.
+		// Unknown Fable headroom is not a proactive hard block.
 		const key = await storage.getApiKey("anthropic", "session-3", { modelId: "claude-fable-5" });
 
 		expect(key).toBe("oat-1");
 	});
 
-	it("uses explicit exhausted Fable tier rows as ranking hints instead of hard blockers", async () => {
+	it("skips a Fable credential only when the exhausted tier row has a future reset", async () => {
+		const now = Date.now();
+		const reportsByAccess: Record<string, UsageReport> = {
+			"oat-1": withFable(baseReport("a@example.com"), 1.0, { resetsAt: now + 3_600_000 }),
+			"oat-2": withFable(baseReport("b@example.com"), 0.4, { resetsAt: now + 3_600_000 }),
+			"oat-3": withFable(baseReport("c@example.com"), 0.4, { resetsAt: now + 3_600_000 }),
+		};
+
+		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async params => {
+			const access = params.credential.type === "oauth" ? params.credential.accessToken : undefined;
+			if (!access) return null;
+			return reportsByAccess[access] ?? null;
+		});
+
+		const key = await storage.getApiKey("anthropic", "session-3", { modelId: "claude-fable-5" });
+
+		expect(key).toBe("oat-2");
+	});
+
+	it("keeps a full Fable tier row eligible when the reset timestamp is missing", async () => {
+		const now = Date.now();
+		const reportsByAccess: Record<string, UsageReport> = {
+			"oat-1": withFable(baseReport("a@example.com"), 1.0),
+			"oat-2": withFable(baseReport("b@example.com"), 1.0, { resetsAt: now + 3_600_000 }),
+			"oat-3": withFable(baseReport("c@example.com"), 1.0, { resetsAt: now + 3_600_000 }),
+		};
+
+		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async params => {
+			const access = params.credential.type === "oauth" ? params.credential.accessToken : undefined;
+			if (!access) return null;
+			return reportsByAccess[access] ?? null;
+		});
+
+		const key = await storage.getApiKey("anthropic", "session-3", { modelId: "claude-fable-5" });
+
+		expect(key).toBe("oat-1");
+	});
+
+	it("keeps a full Fable tier row eligible when the reset timestamp is already elapsed", async () => {
+		const now = Date.now();
+		const reportsByAccess: Record<string, UsageReport> = {
+			"oat-1": withFable(baseReport("a@example.com"), 1.0, { resetsAt: now - 1 }),
+			"oat-2": withFable(baseReport("b@example.com"), 1.0, { resetsAt: now + 3_600_000 }),
+			"oat-3": withFable(baseReport("c@example.com"), 1.0, { resetsAt: now + 3_600_000 }),
+		};
+
+		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async params => {
+			const access = params.credential.type === "oauth" ? params.credential.accessToken : undefined;
+			if (!access) return null;
+			return reportsByAccess[access] ?? null;
+		});
+
+		const key = await storage.getApiKey("anthropic", "session-3", { modelId: "claude-fable-5" });
+
+		expect(key).toBe("oat-1");
+	});
+
+	it("keeps a near-cap Fable tier row eligible even with a future reset timestamp", async () => {
+		const now = Date.now();
+		const reportsByAccess: Record<string, UsageReport> = {
+			"oat-1": withFable(baseReport("a@example.com"), 0.97, { resetsAt: now + 3_600_000 }),
+			"oat-2": withFable(baseReport("b@example.com"), 1.0, { resetsAt: now + 3_600_000 }),
+			"oat-3": withFable(baseReport("c@example.com"), 1.0, { resetsAt: now + 3_600_000 }),
+		};
+
+		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async params => {
+			const access = params.credential.type === "oauth" ? params.credential.accessToken : undefined;
+			if (!access) return null;
+			return reportsByAccess[access] ?? null;
+		});
+
+		const key = await storage.getApiKey("anthropic", "session-3", { modelId: "claude-fable-5" });
+
+		expect(key).toBe("oat-1");
+	});
+
+	it("treats exhausted status plus a future reset as a confirmed Fable hard block", async () => {
+		const now = Date.now();
+		const reportsByAccess: Record<string, UsageReport> = {
+			"oat-1": withFable(baseReport("a@example.com"), 0.97, { resetsAt: now + 3_600_000, status: "exhausted" }),
+			"oat-2": withFable(baseReport("b@example.com"), 0.4, { resetsAt: now + 3_600_000 }),
+			"oat-3": withFable(baseReport("c@example.com"), 0.4, { resetsAt: now + 3_600_000 }),
+		};
+
+		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async params => {
+			const access = params.credential.type === "oauth" ? params.credential.accessToken : undefined;
+			if (!access) return null;
+			return reportsByAccess[access] ?? null;
+		});
+
+		const key = await storage.getApiKey("anthropic", "session-3", { modelId: "claude-fable-5" });
+
+		expect(key).toBe("oat-2");
+	});
+
+	it("uses unconfirmed exhausted Fable tier rows as ranking hints instead of hard blockers", async () => {
 		const reportsByAccess: Record<string, UsageReport> = {
 			"oat-1": withFable(baseReport("a@example.com"), 1.0),
 			"oat-2": withFable(baseReport("b@example.com"), 1.0),
@@ -173,7 +276,7 @@ describe("AuthStorage Claude Fable tier fallback", () => {
 		expect(key).toBe("oat-3");
 	});
 
-	it("rotates after a live Fable 429 even when sibling Fable tier rows are exhausted", async () => {
+	it("rotates after a live Fable 429 when sibling Fable tier rows are unconfirmed", async () => {
 		const reportsByAccess: Record<string, UsageReport> = {
 			"oat-1": withFable(baseReport("a@example.com"), 1.0),
 			"oat-2": withFable(baseReport("b@example.com"), 1.0),
@@ -195,6 +298,40 @@ describe("AuthStorage Claude Fable tier fallback", () => {
 		const retryKey = await storage.getApiKey("anthropic", "session-3", { modelId: "claude-fable-5" });
 		expect(retryKey).not.toBe(firstKey);
 		expect(["oat-2", "oat-3"]).toContain(retryKey as string);
+	});
+
+	it("extends a live Fable rate-limit block to the confirmed Fable reset", async () => {
+		const startNow = Date.now();
+		let now = startNow;
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+		const fableReset = startNow + 10 * 60_000;
+		const reportsByAccess: Record<string, UsageReport> = {
+			"oat-1": withFable(baseReport("a@example.com"), 1.0, { resetsAt: fableReset }),
+			"oat-2": withFable(baseReport("b@example.com"), 0.2, { resetsAt: fableReset }),
+			"oat-3": withFable(baseReport("c@example.com"), 0.2, { resetsAt: fableReset }),
+		};
+
+		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async params => {
+			const access = params.credential.type === "oauth" ? params.credential.accessToken : undefined;
+			if (!access) return null;
+			return reportsByAccess[access] ?? null;
+		});
+
+		const firstKey = await storage.getApiKey("anthropic", "session-3");
+		expect(firstKey).toBe("oat-1");
+
+		const result = await storage.markUsageLimitReached("anthropic", "session-3", {
+			modelId: "claude-fable-5",
+			retryAfterMs: 1_000,
+		});
+		expect(result.switched).toBe(true);
+
+		reportsByAccess["oat-1"] = withFable(baseReport("a@example.com"), 0.2, { resetsAt: fableReset });
+		store.cache.clear();
+		now = startNow + 60_001;
+
+		const retryKey = await storage.getApiKey("anthropic", "session-3", { modelId: "claude-fable-5" });
+		expect(retryKey).toBe("oat-2");
 	});
 
 	it("still blocks OAuth credentials with exhausted shared Anthropic limits", async () => {

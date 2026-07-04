@@ -615,20 +615,40 @@ function scopeClaudeLimitsForModel(report: UsageReport, context: CredentialRanki
 }
 
 /**
- * Exclude Fable and Mythos tier weekly caps from proactive hard-blocking
- * (gating) because they are notoriously unreliable (they report 100% exhausted
- * while the account can still serve requests). They stay available for ranking
- * pressure in findWindowLimits via scopeClaudeLimitsForModel.
+ * A Fable/Mythos weekly row is trusted for gating only at full exhaustion
+ * (server `exhausted` status or used fraction >= 1) with a live reset
+ * timestamp. Anything below that stays untrusted: the counters are
+ * notoriously unreliable short of the cap (they report high utilization
+ * while the account can still serve requests).
+ */
+function isConfirmedExhaustedTierRow(limit: UsageLimit, nowMs: number): boolean {
+	const resetsAt = limit.window?.resetsAt;
+	if (typeof resetsAt !== "number" || !Number.isFinite(resetsAt) || resetsAt <= nowMs) return false;
+	if (limit.status === "exhausted") return true;
+	const fraction = resolveUsedFraction(limit);
+	return typeof fraction === "number" && fraction >= 1;
+}
+
+/**
+ * Scope limits for proactive hard-blocking (gating). Fable and Mythos tier
+ * weekly caps participate only when {@link isConfirmedExhaustedTierRow}
+ * confirms them, so a confirmed-dead account is skipped up front and a
+ * reactive 429 block extends to the tier reset in markUsageLimitReached,
+ * while unconfirmed rows remain ranking pressure only via
+ * scopeClaudeLimitsForModel.
  */
 function scopeClaudeLimitsForModelHardBlock(
 	report: UsageReport,
 	context: CredentialRankingContext | undefined,
 ): UsageLimit[] {
 	const kind = getClaudeModelKind(context);
-	const excludeHardBlock = kind === "fable" || kind === "mythos";
-	return report.limits.filter(
-		limit => limit.scope.shared === true || (kind !== undefined && limit.scope.tier === kind && !excludeHardBlock),
-	);
+	const requireConfirmedTierRow = kind === "fable" || kind === "mythos";
+	const nowMs = Date.now();
+	return report.limits.filter(limit => {
+		if (limit.scope.shared === true) return true;
+		if (kind === undefined || limit.scope.tier !== kind) return false;
+		return !requireConfirmedTierRow || isConfirmedExhaustedTierRow(limit, nowMs);
+	});
 }
 
 function rankingUsedFraction(limit: UsageLimit): number {

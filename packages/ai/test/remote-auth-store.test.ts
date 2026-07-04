@@ -6,11 +6,15 @@ import { AuthStorage, REMOTE_REFRESH_SENTINEL, SqliteAuthCredentialStore } from 
 import {
 	AuthBrokerClient,
 	type AuthBrokerServerHandle,
+	type CredentialBlockResponse,
+	type FetchSnapshotResult,
 	RemoteAuthCredentialStore,
 	startAuthBroker,
 } from "@oh-my-pi/pi-ai/auth-broker";
+import { snapshotResponseSchema } from "@oh-my-pi/pi-ai/auth-broker/wire-schemas";
 import * as oauthUtils from "@oh-my-pi/pi-ai/registry/oauth";
 import type { UsageLimit, UsageReport } from "@oh-my-pi/pi-ai/usage";
+import { type } from "arktype";
 import { removeWithRetries } from "../../utils/src/temp";
 
 function requireLimit(report: UsageReport, id: string): UsageLimit {
@@ -265,6 +269,110 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 		expect(fetchSpy).toHaveBeenCalledTimes(2);
 
 		remoteStore.close();
+	});
+
+	test("snapshot wire schema accepts entries with and without credential blocks", () => {
+		const futureBlock = Date.now() + 60_000;
+		const validated = snapshotResponseSchema({
+			generation: 1,
+			generatedAt: Date.now(),
+			serverNowMs: Date.now(),
+			refresher: { enabled: false, intervalMs: 0, skewMs: 0, nextSweepInMs: Number.MAX_SAFE_INTEGER },
+			credentials: [
+				{
+					id: 1,
+					provider: "anthropic",
+					credential: {
+						type: "oauth",
+						access: "access-without-blocks",
+						refresh: REMOTE_REFRESH_SENTINEL,
+						expires: futureBlock,
+						accountId: "account-without-blocks",
+						email: "without-blocks@example.com",
+					},
+					identityKey: "email:without-blocks@example.com",
+					rotatesInMs: null,
+				},
+				{
+					id: 2,
+					provider: "anthropic",
+					credential: {
+						type: "oauth",
+						access: "access-with-blocks",
+						refresh: REMOTE_REFRESH_SENTINEL,
+						expires: futureBlock,
+						accountId: "account-with-blocks",
+						email: "with-blocks@example.com",
+					},
+					identityKey: "email:with-blocks@example.com",
+					rotatesInMs: null,
+					blocks: [{ providerKey: "anthropic:oauth", blockScope: "tier:fable", blockedUntilMs: futureBlock }],
+				},
+			],
+		});
+
+		expect(validated).not.toBeInstanceOf(type.errors);
+		if (validated instanceof type.errors) throw new Error("expected valid snapshot");
+		expect(validated.credentials[0]!.blocks).toBeUndefined();
+		expect(validated.credentials[1]!.blocks).toEqual([
+			{ providerKey: "anthropic:oauth", blockScope: "tier:fable", blockedUntilMs: futureBlock },
+		]);
+	});
+
+	test("RemoteAuthCredentialStore reads snapshot blocks and applies upserts before broker acknowledgement", () => {
+		const futureBlock = Date.now() + 60_000;
+		const laterBlock = futureBlock + 60_000;
+		const brokerClient = new AuthBrokerClient({ url: "http://127.0.0.1:9", token: "unused" });
+		const fetchSnapshotPending = Promise.withResolvers<FetchSnapshotResult>();
+		vi.spyOn(brokerClient, "fetchSnapshot").mockReturnValue(fetchSnapshotPending.promise);
+		const upsertPending = Promise.withResolvers<CredentialBlockResponse>();
+		const upsertSpy = vi.spyOn(brokerClient, "upsertCredentialBlock").mockReturnValue(upsertPending.promise);
+		const remoteStore = new RemoteAuthCredentialStore({
+			client: brokerClient,
+			streamSnapshots: false,
+			initialSnapshot: {
+				generation: 1,
+				generatedAt: Date.now(),
+				serverNowMs: Date.now(),
+				refresher: { enabled: false, intervalMs: 0, skewMs: 0, nextSweepInMs: Number.MAX_SAFE_INTEGER },
+				credentials: [
+					{
+						id: 7,
+						provider: "anthropic",
+						credential: {
+							type: "oauth",
+							access: "remote-access",
+							refresh: REMOTE_REFRESH_SENTINEL,
+							expires: futureBlock,
+							accountId: "remote-account",
+							email: "remote@example.com",
+						},
+						identityKey: "email:remote@example.com",
+						rotatesInMs: null,
+						blocks: [{ providerKey: "anthropic:oauth", blockScope: "tier:fable", blockedUntilMs: futureBlock }],
+					},
+				],
+			},
+		});
+		try {
+			expect(remoteStore.getCredentialBlock(7, "anthropic:oauth", "tier:fable")).toBe(futureBlock);
+
+			remoteStore.upsertCredentialBlock({
+				credentialId: 7,
+				providerKey: "anthropic:oauth",
+				blockScope: "tier:fable",
+				blockedUntilMs: laterBlock,
+			});
+
+			expect(remoteStore.getCredentialBlock(7, "anthropic:oauth", "tier:fable")).toBe(laterBlock);
+			expect(upsertSpy).toHaveBeenCalledWith(7, {
+				providerKey: "anthropic:oauth",
+				blockScope: "tier:fable",
+				blockedUntilMs: laterBlock,
+			});
+		} finally {
+			remoteStore.close();
+		}
 	});
 
 	test("ingestUsageReport overlays only the matching Anthropic report and getUsageReport returns the overlaid Fable row", async () => {

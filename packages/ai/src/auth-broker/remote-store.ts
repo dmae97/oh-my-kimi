@@ -16,13 +16,20 @@ import {
 	type OAuthCredential,
 	REMOTE_REFRESH_SENTINEL,
 	type StoredAuthCredential,
+	type StoredCredentialBlock,
 } from "../auth-storage";
 import * as AIError from "../error";
 import type { OAuthCredentials } from "../registry/oauth/types";
 import type { Provider } from "../types";
 import type { UsageReport } from "../usage";
 import { type AuthBrokerClient, AuthBrokerStreamUnsupportedError } from "./client";
-import type { RefresherSchedule, SnapshotEntry, SnapshotResponse, SnapshotStreamEvent } from "./types";
+import type {
+	CredentialBlockSnapshot,
+	RefresherSchedule,
+	SnapshotEntry,
+	SnapshotResponse,
+	SnapshotStreamEvent,
+} from "./types";
 
 /**
  * Client-side TTL for the aggregate `/v1/usage` response. The broker dedups
@@ -37,6 +44,31 @@ const MAX_WAIT_MS = 5_000;
 const BACKGROUND_WAIT_MS = 30_000;
 const BACKGROUND_BACKOFF_INITIAL_MS = 500;
 const BACKGROUND_BACKOFF_MAX_MS = 30_000;
+
+function compareCredentialBlockSnapshots(a: CredentialBlockSnapshot, b: CredentialBlockSnapshot): number {
+	const provider = a.providerKey.localeCompare(b.providerKey);
+	if (provider !== 0) return provider;
+	const scope = a.blockScope.localeCompare(b.blockScope);
+	if (scope !== 0) return scope;
+	return a.blockedUntilMs - b.blockedUntilMs;
+}
+
+function toCredentialBlockSnapshot(block: StoredCredentialBlock): CredentialBlockSnapshot {
+	return {
+		providerKey: block.providerKey,
+		blockScope: block.blockScope,
+		blockedUntilMs: block.blockedUntilMs,
+	};
+}
+
+function credentialEntryWithBlocks(
+	entry: AuthCredentialSnapshotEntry,
+	blocks: readonly CredentialBlockSnapshot[] | undefined,
+): SnapshotEntry {
+	const incoming: SnapshotEntry = { ...entry, rotatesInMs: null };
+	if (blocks && blocks.length > 0) incoming.blocks = [...blocks].sort(compareCredentialBlockSnapshots);
+	return incoming;
+}
 
 function emptySnapshot(): SnapshotResponse {
 	return {
@@ -169,13 +201,17 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	#applySnapshot(snapshot: SnapshotResponse, generation: number): void {
-		this.#snapshot = snapshot;
+		const nowMs = Date.now();
+		this.#snapshot = {
+			...snapshot,
+			credentials: snapshot.credentials.map(entry => this.#normalizeSnapshotEntryBlocks(entry, nowMs)),
+		};
 		this.#generation = generation;
-		this.#snapshotReceivedAt = Date.now();
+		this.#snapshotReceivedAt = nowMs;
 		const onSnapshot = this.#onSnapshot;
 		if (!onSnapshot) return;
 		try {
-			onSnapshot(snapshot, generation);
+			onSnapshot(this.#snapshot, generation);
 		} catch (error) {
 			logger.debug("auth-broker snapshot callback failed", { error: String(error) });
 		}
@@ -266,11 +302,12 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		generation: number,
 		serverNowMs: number,
 	): void {
-		const index = this.#snapshot.credentials.findIndex(candidate => candidate.id === entry.id);
+		const incoming = this.#normalizeSnapshotEntryBlocks(entry, Date.now());
+		const index = this.#snapshot.credentials.findIndex(candidate => candidate.id === incoming.id);
 		const credentials =
 			index === -1
-				? [...this.#snapshot.credentials, entry]
-				: this.#snapshot.credentials.map((candidate, i) => (i === index ? entry : candidate));
+				? [...this.#snapshot.credentials, incoming]
+				: this.#snapshot.credentials.map((candidate, i) => (i === index ? incoming : candidate));
 		this.#snapshot = { ...this.#snapshot, generation, serverNowMs, refresher, credentials };
 		this.#generation = generation;
 		this.#snapshotReceivedAt = Date.now();
@@ -302,6 +339,76 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			});
 		}
 		return out;
+	}
+
+	getCredentialBlock(credentialId: number, providerKey: string, blockScope: string): number | undefined {
+		const nowMs = Date.now();
+		this.cleanExpiredCredentialBlocks(nowMs);
+		const entry = this.#snapshot.credentials.find(candidate => candidate.id === credentialId);
+		if (!entry?.blocks) return undefined;
+		const block = entry.blocks.find(
+			candidate => candidate.providerKey === providerKey && candidate.blockScope === blockScope,
+		);
+		if (!block || block.blockedUntilMs <= nowMs) return undefined;
+		return block.blockedUntilMs;
+	}
+
+	listCredentialBlocks(credentialIds: readonly number[]): StoredCredentialBlock[] {
+		const nowMs = Date.now();
+		this.cleanExpiredCredentialBlocks(nowMs);
+		const ids = new Set(credentialIds);
+		const blocks: StoredCredentialBlock[] = [];
+		for (const entry of this.#snapshot.credentials) {
+			if (!ids.has(entry.id) || !entry.blocks) continue;
+			for (const block of entry.blocks) {
+				if (block.blockedUntilMs <= nowMs) continue;
+				blocks.push({
+					credentialId: entry.id,
+					providerKey: block.providerKey,
+					blockScope: block.blockScope,
+					blockedUntilMs: block.blockedUntilMs,
+				});
+			}
+		}
+		blocks.sort((a, b) => a.credentialId - b.credentialId || compareCredentialBlockSnapshots(a, b));
+		return blocks;
+	}
+
+	upsertCredentialBlock(block: StoredCredentialBlock): void {
+		this.#upsertSnapshotBlock(block);
+		const body = toCredentialBlockSnapshot(block);
+		void this.#client
+			.upsertCredentialBlock(block.credentialId, body)
+			.then(() => {
+				this.#maybeRefreshSnapshot("credential block");
+			})
+			.catch(error => {
+				logger.warn("auth-broker credential block propagation failed", {
+					id: block.credentialId,
+					providerKey: block.providerKey,
+					blockScope: block.blockScope,
+					error: String(error),
+				});
+			});
+	}
+
+	deleteCredentialBlocks(credentialId: number): void {
+		this.#deleteSnapshotBlocks(credentialId);
+		void this.#client
+			.deleteCredentialBlocks(credentialId)
+			.then(() => {
+				this.#maybeRefreshSnapshot("credential blocks delete");
+			})
+			.catch(error => {
+				logger.warn("auth-broker credential blocks delete propagation failed", {
+					id: credentialId,
+					error: String(error),
+				});
+			});
+	}
+
+	cleanExpiredCredentialBlocks(nowMs: number): void {
+		this.#pruneExpiredCredentialBlocks(nowMs);
 	}
 
 	/**
@@ -459,13 +566,19 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		// `entries` is the broker's authoritative post-upsert list of rows for
 		// `provider`. Drop our existing rows for the same provider and splice in
 		// the fresh set — preserving every other provider's rows in place.
+		const existingBlocks = new Map(
+			this.#snapshot.credentials
+				.filter(entry => entry.provider === provider && entry.blocks !== undefined)
+				.map(entry => [entry.id, entry.blocks] as const),
+		);
 		const others = this.#snapshot.credentials.filter(entry => entry.provider !== provider);
-		const incoming = entries.map(entry => ({ ...entry, rotatesInMs: null }));
+		const incoming = entries.map(entry => credentialEntryWithBlocks(entry, existingBlocks.get(entry.id)));
 		this.#snapshot = { ...this.#snapshot, credentials: [...others, ...incoming] };
 	}
 	#applyCredentialEntry(entry: AuthCredentialSnapshotEntry): void {
-		const incoming = { ...entry, rotatesInMs: null };
 		const index = this.#snapshot.credentials.findIndex(candidate => candidate.id === entry.id);
+		const existingBlocks = index === -1 ? undefined : this.#snapshot.credentials[index]?.blocks;
+		const incoming = credentialEntryWithBlocks(entry, existingBlocks);
 		if (index === -1) {
 			this.#snapshot = { ...this.#snapshot, credentials: [...this.#snapshot.credentials, incoming] };
 			return;
@@ -483,6 +596,73 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	#removeCredentialById(id: number): void {
 		const next = this.#snapshot.credentials.filter(entry => entry.id !== id);
 		this.#snapshot = { ...this.#snapshot, credentials: next };
+	}
+
+	#normalizeSnapshotEntryBlocks(entry: SnapshotEntry, nowMs: number): SnapshotEntry {
+		if (!entry.blocks || entry.blocks.length === 0) return entry;
+		const blocks = entry.blocks
+			.filter(block => block.blockedUntilMs > nowMs)
+			.map(block => ({
+				providerKey: block.providerKey,
+				blockScope: block.blockScope,
+				blockedUntilMs: block.blockedUntilMs,
+			}))
+			.sort(compareCredentialBlockSnapshots);
+		if (blocks.length > 0) return { ...entry, blocks };
+		const next: SnapshotEntry = { ...entry };
+		delete next.blocks;
+		return next;
+	}
+
+	#upsertSnapshotBlock(block: StoredCredentialBlock): void {
+		const index = this.#snapshot.credentials.findIndex(entry => entry.id === block.credentialId);
+		if (index === -1) return;
+		const entry = this.#snapshot.credentials[index]!;
+		const incoming = toCredentialBlockSnapshot(block);
+		const blocks = entry.blocks ? [...entry.blocks] : [];
+		const blockIndex = blocks.findIndex(
+			candidate => candidate.providerKey === incoming.providerKey && candidate.blockScope === incoming.blockScope,
+		);
+		if (blockIndex === -1) {
+			blocks.push(incoming);
+		} else {
+			const existing = blocks[blockIndex]!;
+			blocks[blockIndex] = {
+				...existing,
+				blockedUntilMs: Math.max(existing.blockedUntilMs, incoming.blockedUntilMs),
+			};
+		}
+		blocks.sort(compareCredentialBlockSnapshots);
+		const credentials = [...this.#snapshot.credentials];
+		credentials[index] = { ...entry, blocks };
+		this.#snapshot = { ...this.#snapshot, credentials };
+	}
+
+	#deleteSnapshotBlocks(credentialId: number): void {
+		const index = this.#snapshot.credentials.findIndex(entry => entry.id === credentialId);
+		if (index === -1) return;
+		const entry = this.#snapshot.credentials[index]!;
+		if (!entry.blocks || entry.blocks.length === 0) return;
+		const next: SnapshotEntry = { ...entry };
+		delete next.blocks;
+		const credentials = [...this.#snapshot.credentials];
+		credentials[index] = next;
+		this.#snapshot = { ...this.#snapshot, credentials };
+	}
+
+	#pruneExpiredCredentialBlocks(nowMs: number): void {
+		let changed = false;
+		const credentials = this.#snapshot.credentials.map(entry => {
+			if (!entry.blocks || entry.blocks.length === 0) return entry;
+			const blocks = entry.blocks.filter(block => block.blockedUntilMs > nowMs);
+			if (blocks.length === entry.blocks.length) return entry;
+			changed = true;
+			if (blocks.length > 0) return { ...entry, blocks };
+			const next: SnapshotEntry = { ...entry };
+			delete next.blocks;
+			return next;
+		});
+		if (changed) this.#snapshot = { ...this.#snapshot, credentials };
 	}
 
 	/**

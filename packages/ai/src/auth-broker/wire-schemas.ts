@@ -69,6 +69,13 @@ export const credentialSnapshotEntrySchema = type({
 	identityKey: "string | null",
 });
 
+export const credentialBlockSnapshotSchema = type({
+	"+": "reject",
+	providerKey: type("string").atLeastLength(1),
+	blockScope: "string",
+	blockedUntilMs: "number",
+});
+
 export const snapshotEntrySchema = type({
 	"+": "reject",
 	id: "number.integer",
@@ -76,6 +83,7 @@ export const snapshotEntrySchema = type({
 	credential: snapshotCredentialSchema,
 	identityKey: "string | null",
 	rotatesInMs: "number | null",
+	"blocks?": credentialBlockSnapshotSchema.array(),
 });
 
 export const refresherScheduleSchema = type({
@@ -231,6 +239,20 @@ export const credentialDisableRequestSchema = type({
 });
 
 export const credentialDisableResponseSchema = type({
+	"+": "reject",
+	ok: "boolean",
+});
+
+// ─── Credential blocks ──────────────────────────────────────────────────────
+
+export const credentialBlockRequestSchema = credentialBlockSnapshotSchema;
+
+export const credentialBlockResponseSchema = type({
+	"+": "reject",
+	ok: "boolean",
+});
+
+export const credentialBlocksDeleteResponseSchema = type({
 	"+": "reject",
 	ok: "boolean",
 });
