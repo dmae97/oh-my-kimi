@@ -685,19 +685,19 @@ describe("OpenAI tool strict mode", () => {
 		expect(payload.tools?.[0]?.strict).toBeUndefined();
 	});
 
-	it("preserves explicit strict:false for openai-responses when compat leaves supportsStrictMode unresolved (#4527)", async () => {
-		// Mirrors the openai-completions `supportsStrictMode !== false` gate: a
-		// caller-constructed Model whose compat carries no `supportsStrictMode`
-		// (falsy under the pre-fix truthy check) must still preserve
-		// `strict: false` on the wire, so the two provider paths agree.
-		const bundled = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
-		const model: Model<"openai-responses"> = {
-			...bundled,
-			compat: {
-				...bundled.compat,
-				supportsStrictMode: undefined as unknown as boolean,
-			},
-		};
+	it("preserves explicit strict:false for buildModel-resolved openai-responses compat (#4527)", async () => {
+		const model = buildModel({
+			id: "deepseek-chat",
+			name: "DeepSeek Chat via Responses",
+			api: "openai-responses",
+			provider: "deepseek",
+			baseUrl: "https://api.deepseek.com/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 8192,
+		} as ModelSpec<"openai-responses">);
 
 		const payload = (await captureResponsesPayload(model, {
 			...testContext,
@@ -706,6 +706,7 @@ describe("OpenAI tool strict mode", () => {
 			tools?: Array<{ strict?: boolean }>;
 		};
 
+		expect(model.compat.supportsStrictMode).toBe(true);
 		expect(payload.tools?.[0]?.strict).toBe(false);
 	});
 
