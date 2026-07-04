@@ -2658,8 +2658,7 @@ mod tests {
 
 		for index in 0..300 {
 			let path =
-				root
-					.join(format!("dir_{:02}/nested_{:02}/file_{index:03}.txt", index % 12, index % 5));
+				root.join(format!("dir_{:02}/nested_{:02}/file_{index:03}.txt", index % 12, index % 5));
 			let content = if index % 3 == 0 {
 				format!("before {index}\nneedle {index}\nafter {index}\n")
 			} else {
