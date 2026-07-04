@@ -1135,8 +1135,9 @@ export function sanitizeSchemaForOllama(schema: JsonObject): JsonObject {
 		}
 
 		if (typeAlternatives) {
-			const existingAnyOf = output.anyOf;
-			output.anyOf = Array.isArray(existingAnyOf) ? [...typeAlternatives, ...existingAnyOf] : typeAlternatives;
+			const existingAllOf = output.allOf;
+			const typeUnion = { anyOf: typeAlternatives };
+			output.allOf = Array.isArray(existingAllOf) ? [typeUnion, ...existingAllOf] : [typeUnion];
 		}
 
 		return changed ? output : value;
