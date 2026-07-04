@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Ollama/Ollama Cloud tool requests failing with HTTP 400 by normalizing boolean subschemas, boolean `additionalProperties`/`unevaluatedProperties`, and nullable `type` arrays before serializing tool parameters. ([#4488](https://github.com/can1357/oh-my-pi/issues/4488))
+
 ## [16.3.5] - 2026-07-04
 
 ### Added

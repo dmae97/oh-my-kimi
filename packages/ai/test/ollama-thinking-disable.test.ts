@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { AssistantMessage, Context, ToolResultMessage, Usage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, Context, Tool, ToolResultMessage, Usage } from "@oh-my-pi/pi-ai";
 import { streamOllama } from "@oh-my-pi/pi-ai/providers/ollama";
 import { NON_VISION_IMAGE_PLACEHOLDER } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -10,15 +10,25 @@ interface OllamaChatMessagePayload {
 	images?: unknown;
 }
 
+interface OllamaToolPayload {
+	function?: {
+		parameters?: Record<string, unknown>;
+	};
+}
+
 interface OllamaChatRequestPayload {
 	think?: unknown;
 	messages?: OllamaChatMessagePayload[];
+	tools?: OllamaToolPayload[];
 }
 
 function isOllamaChatRequestPayload(value: unknown): value is OllamaChatRequestPayload {
 	if (value === null || typeof value !== "object") return false;
-	const payload = value as { messages?: unknown };
-	return payload.messages === undefined || Array.isArray(payload.messages);
+	const payload = value as { messages?: unknown; tools?: unknown };
+	return (
+		(payload.messages === undefined || Array.isArray(payload.messages)) &&
+		(payload.tools === undefined || Array.isArray(payload.tools))
+	);
 }
 
 const emptyUsage: Usage = {
@@ -69,6 +79,62 @@ describe("Ollama chat thinking controls", () => {
 		}).result();
 
 		expect(payload?.think).toBe(false);
+	});
+
+	it("normalizes tool schemas for Ollama's Go parser", async () => {
+		let payload: OllamaChatRequestPayload | undefined;
+		const fetchMock = async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+			const parsed: unknown = JSON.parse(String(init?.body));
+			if (!isOllamaChatRequestPayload(parsed)) {
+				throw new Error("Expected Ollama payload object");
+			}
+			payload = parsed;
+			return new Response('{"message":{"content":"ok"},"done":true,"prompt_eval_count":1,"eval_count":1}\n', {
+				status: 200,
+			});
+		};
+		const tool: Tool = {
+			name: "schema_probe",
+			description: "probe schema normalization",
+			parameters: {
+				type: "object",
+				properties: {
+					anything: {},
+					nullableName: { type: ["string", "null"] },
+					list: { type: "array", items: {} },
+					union: { anyOf: [{}, { type: "string" }] },
+					nested: {
+						type: "object",
+						properties: { value: { type: "string" } },
+						additionalProperties: false,
+					},
+				},
+				required: ["anything", "nullableName", "list", "union", "nested"],
+				additionalProperties: false,
+			},
+		};
+		const context: Context = {
+			messages: [{ role: "user", content: "hola", timestamp: 0 }],
+			tools: [tool],
+		};
+
+		await streamOllama(createReasoningOllamaModel(), context, {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
+
+		const parameters = payload?.tools?.[0]?.function?.parameters;
+		if (!parameters || typeof parameters.properties !== "object" || parameters.properties === null) {
+			throw new Error("Expected Ollama tool parameters with properties");
+		}
+		const properties = parameters.properties as Record<string, Record<string, unknown>>;
+
+		expect(Object.hasOwn(parameters, "additionalProperties")).toBe(false);
+		expect(properties.anything).toEqual({});
+		expect(properties.nullableName?.type).toBe("string");
+		expect(properties.list?.items).toEqual({});
+		expect(properties.union?.anyOf).toEqual([{}, { type: "string" }]);
+		expect(Object.hasOwn(properties.nested, "additionalProperties")).toBe(false);
 	});
 	it("sends mid-conversation developer messages as user turns for llama.cpp cache reuse", async () => {
 		let payload: OllamaChatRequestPayload | undefined;

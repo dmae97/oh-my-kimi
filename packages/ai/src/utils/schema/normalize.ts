@@ -1015,6 +1015,111 @@ export function normalizeSchemaForMoonshot(value: unknown): unknown {
 }
 
 // ---------------------------------------------------------------------------
+// Ollama — Go schema parser compatibility
+// ---------------------------------------------------------------------------
+
+const OLLAMA_SCHEMA_ARRAY_KEYS = new Set(["anyOf", "oneOf", "allOf", "prefixItems"]);
+const OLLAMA_SCHEMA_MAP_KEYS = new Set([
+	"properties",
+	"patternProperties",
+	"dependencies",
+	"dependentSchemas",
+	"$defs",
+	"definitions",
+]);
+const OLLAMA_SCHEMA_VALUE_KEYS = new Set([
+	"items",
+	"additionalItems",
+	"contains",
+	"contentSchema",
+	"propertyNames",
+	"if",
+	"then",
+	"else",
+	"not",
+	"additionalProperties",
+	"unevaluatedItems",
+	"unevaluatedProperties",
+]);
+
+/**
+ * Rewrites standard JSON Schema forms that Ollama's Go `/api/chat` tool parser
+ * cannot unmarshal into its object-shaped `Schema` struct.
+ */
+export function sanitizeSchemaForOllama(schema: JsonObject): JsonObject {
+	const cache = new WeakMap<JsonObject, unknown>();
+	const normalizeNode = (value: unknown): unknown => {
+		if (typeof value === "boolean") {
+			return value ? {} : { type: "object", properties: {} };
+		}
+		if (!isJsonObject(value)) {
+			if (!Array.isArray(value)) return value;
+			let changed = false;
+			const output = value.map(item => {
+				const next = normalizeNode(item);
+				if (next !== item) changed = true;
+				return next;
+			});
+			return changed ? output : value;
+		}
+
+		const cached = cache.get(value);
+		if (cached) return cached;
+
+		const output: JsonObject = {};
+		cache.set(value, output);
+
+		let changed = false;
+		for (const key in value) {
+			if (!Object.hasOwn(value, key)) continue;
+			const child = value[key];
+			if ((key === "additionalProperties" || key === "unevaluatedProperties") && typeof child === "boolean") {
+				changed = true;
+				continue;
+			}
+			if (key === "type" && Array.isArray(child)) {
+				const variants = child.filter((entry): entry is string => typeof entry === "string");
+				const nonNull = variants.filter(entry => entry !== "null");
+				output.type = nonNull[0] ?? variants[0] ?? child[0];
+				changed = true;
+				continue;
+			}
+
+			let next = child;
+			if (OLLAMA_SCHEMA_MAP_KEYS.has(key) && isJsonObject(child)) {
+				let mapChanged = false;
+				const mapOutput: JsonObject = {};
+				for (const childKey in child) {
+					if (!Object.hasOwn(child, childKey)) continue;
+					const mapChild = child[childKey];
+					const normalizedChild = normalizeNode(mapChild);
+					if (normalizedChild !== mapChild) mapChanged = true;
+					mapOutput[childKey] = normalizedChild;
+				}
+				next = mapChanged ? mapOutput : child;
+			} else if (OLLAMA_SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(child)) {
+				let arrayChanged = false;
+				const arrayOutput = child.map(item => {
+					const normalizedItem = normalizeNode(item);
+					if (normalizedItem !== item) arrayChanged = true;
+					return normalizedItem;
+				});
+				next = arrayChanged ? arrayOutput : child;
+			} else if (OLLAMA_SCHEMA_VALUE_KEYS.has(key)) {
+				next = normalizeNode(child);
+			}
+			if (next !== child) changed = true;
+			output[key] = next;
+		}
+
+		const result = changed ? output : value;
+		cache.set(value, result);
+		return result;
+	};
+	return normalizeNode(schema) as JsonObject;
+}
+
+// ---------------------------------------------------------------------------
 // OpenAI Responses — schema-valued normalization
 // ---------------------------------------------------------------------------
 
