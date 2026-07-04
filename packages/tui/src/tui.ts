@@ -212,11 +212,6 @@ export interface OverlayFocusOwner {
  * dropped row or an audit re-anchor spray. Provisional live blocks (collapsing
  * tool/edit previews whose head is a throwaway tail window) omit it. Defaults to
  * `commitSafeEnd ?? liveRegionStart` when absent.
- * `getNativeScrollbackOfferSafeEnd` optionally reports the deepest prefix row
- * that may physically enter native scrollback while still remaining audited.
- * This is for finalized lower siblings under a live block: the rows may scroll
- * off, but a later live-block insertion above them must trigger repair instead
- * of becoming durable audit-exempt history.
  *
  * When several root children report a seam in the same frame, the topmost
  * one (and its commit-safe / snapshot-safe extension) defines the boundary:
@@ -227,7 +222,6 @@ export interface NativeScrollbackLiveRegion {
 	getNativeScrollbackLiveRegionStart(): number | undefined;
 	getNativeScrollbackCommitSafeEnd?(): number | undefined;
 	getNativeScrollbackSnapshotSafeEnd?(): number | undefined;
-	getNativeScrollbackOfferSafeEnd?(): number | undefined;
 }
 
 export interface NativeScrollbackCommittedRows {
@@ -255,10 +249,6 @@ function getNativeScrollbackCommitSafeEnd(component: Component): number | undefi
 
 function getNativeScrollbackSnapshotSafeEnd(component: Component): number | undefined {
 	return (component as Component & Partial<NativeScrollbackLiveRegion>).getNativeScrollbackSnapshotSafeEnd?.();
-}
-
-function getNativeScrollbackOfferSafeEnd(component: Component): number | undefined {
-	return (component as Component & Partial<NativeScrollbackLiveRegion>).getNativeScrollbackOfferSafeEnd?.();
 }
 
 /**
@@ -638,7 +628,6 @@ interface FrameSegment {
 	liveLocalStart?: number;
 	commitLocalEnd?: number;
 	snapshotLocalEnd?: number;
-	offerLocalEnd?: number;
 }
 
 /** Depth-first identity search through `Container`-shaped children. */
@@ -1020,27 +1009,23 @@ export class TUI extends Container {
 	// #auditCommittedPrefix). Holds references to component-cached strings, so
 	// the audit is a pointer walk in the common case.
 	#committedPrefix: string[] = [];
-	// The committed prefix [0, committedRows) splits into four zones by three
-	// monotone marks auditRows ≤ durableRows ≤ offerRows ≤ committedRows:
+	// The committed prefix [0, committedRows) splits into three audit zones by
+	// two monotone marks auditRows ≤ durableRows ≤ committedRows:
 	//   [0, auditRows)              BYTE-STABLE — audited (re-anchor on any shift).
 	//   [auditRows, durableRows)    DURABLE snapshot — exempt: rows may drift in
 	//       place (a streaming table widening) without re-anchoring, so their
 	//       expected drift never sprays duplicate snapshots.
-	//   [durableRows, offerRows)    OFFERED — audited: rows were allowed into
-	//       native scrollback while a live block above could still shift them.
-	//       A mismatch here requires a destructive replay, not a duplicate tail.
-	//   [offerRows, committedRows)  FORCED-overflow — audited: rows committed
+	//   [durableRows, committedRows) FORCED-overflow — audited: rows committed
 	//       only because they scrolled above the window under a commit-unstable
 	//       barrier; auditing them re-anchors (duplication, never loss) when the
 	//       barrier later shifts/finalizes/removes, instead of stranding a stale
 	//       prefix that silently drops the rows beneath it.
-	// Marks re-base on a wholesale re-slice (full paint / shrink / geometry) and
-	// otherwise advance per the persistence rules in #updateCommittedAuditRows.
+	// Both marks re-base on a wholesale re-slice (full paint / shrink / geometry)
+	// and otherwise advance per the persistence rules in #updateCommittedAuditRows.
 	// #auditCommittedPrefix audits [0, committedRows) skipping the exempt window
 	// [auditRows, durableRows).
 	#committedPrefixAuditRows = 0;
 	#committedPrefixDurableRows = 0;
-	#committedPrefixOfferRows = 0;
 	// Frame row currently mapped to screen row 0. Monotonic between full
 	// paints: a shrink never re-exposes scrolled-off rows (they cannot be
 	// un-scrolled without rewriting history); live rows repaint at fixed
@@ -1051,7 +1036,6 @@ export class TUI extends Container {
 	#nativeScrollbackLiveRegionStart: number | undefined;
 	#nativeScrollbackCommitSafeEnd: number | undefined;
 	#nativeScrollbackSnapshotSafeEnd: number | undefined;
-	#nativeScrollbackOfferSafeEnd: number | undefined;
 	#fullRedrawCount = 0;
 	// Caps how many inline images render as live graphics; older ones fall back
 	// to text via a purge + full redraw. Cap is configured by the host app.
@@ -1171,7 +1155,6 @@ export class TUI extends Container {
 		this.#nativeScrollbackLiveRegionStart = undefined;
 		this.#nativeScrollbackCommitSafeEnd = undefined;
 		this.#nativeScrollbackSnapshotSafeEnd = undefined;
-		this.#nativeScrollbackOfferSafeEnd = undefined;
 		const children = this.children;
 		const previousSegments = this.#frameSegments;
 		const segments: FrameSegment[] = new Array(children.length);
@@ -1194,14 +1177,12 @@ export class TUI extends Container {
 			let liveLocalStart: number | undefined;
 			let commitLocalEnd: number | undefined;
 			let snapshotLocalEnd: number | undefined;
-			let offerLocalEnd: number | undefined;
 			let reported: number | undefined;
 			if (reuse) {
 				childLines = previous.lines;
 				liveLocalStart = previous.liveLocalStart;
 				commitLocalEnd = previous.commitLocalEnd;
 				snapshotLocalEnd = previous.snapshotLocalEnd;
-				offerLocalEnd = previous.offerLocalEnd;
 			} else {
 				// Feed the engine's committed-row claim (from the previous frame's
 				// emit) before rendering so the child can skip re-deriving blocks
@@ -1230,13 +1211,6 @@ export class TUI extends Container {
 							? Math.max(snapshotFloor, Math.min(childLines.length, Math.trunc(snapshotSafeEnd)))
 							: childLines.length;
 					}
-					const offerSafeEnd = getNativeScrollbackOfferSafeEnd(child);
-					if (offerSafeEnd !== undefined) {
-						const offerFloor = snapshotLocalEnd ?? commitLocalEnd ?? liveLocalStart;
-						offerLocalEnd = Number.isFinite(offerSafeEnd)
-							? Math.max(offerFloor, Math.min(childLines.length, Math.trunc(offerSafeEnd)))
-							: childLines.length;
-					}
 				}
 				// Consume the stability report unconditionally for implementers:
 				// reading re-bases the component's baseline to the state this
@@ -1259,9 +1233,6 @@ export class TUI extends Container {
 				}
 				if (snapshotLocalEnd !== undefined) {
 					this.#nativeScrollbackSnapshotSafeEnd = offset + snapshotLocalEnd;
-				}
-				if (offerLocalEnd !== undefined) {
-					this.#nativeScrollbackOfferSafeEnd = offset + offerLocalEnd;
 				}
 			}
 			if (chainStable) {
@@ -1293,7 +1264,6 @@ export class TUI extends Container {
 				liveLocalStart,
 				commitLocalEnd,
 				snapshotLocalEnd,
-				offerLocalEnd,
 			};
 			offset += childLines.length;
 		}
@@ -2694,7 +2664,6 @@ export class TUI extends Container {
 		const liveRegionStart = this.#nativeScrollbackLiveRegionStart;
 		const commitSafeEnd = this.#nativeScrollbackCommitSafeEnd;
 		const snapshotSafeEnd = this.#nativeScrollbackSnapshotSafeEnd;
-		const offerSafeEnd = this.#nativeScrollbackOfferSafeEnd;
 
 		// Commit boundaries (also used by the window/commit math in section 3),
 		// hoisted above the audit gate because the resync needs byteStableBoundary
@@ -2702,27 +2671,22 @@ export class TUI extends Container {
 		// The commit floor is windowTop in every non-frozen path (see chunkTo), so
 		// whatever scrolls above the window is committed — never committed nowhere
 		// AND painted nowhere (the loss bug). The boundaries no longer gate the
-		// commit; they define audit and repair spans. byteStableBoundary: rows below
+		// commit; they define the audit-exempt span. byteStableBoundary: rows below
 		// it are byte-stable (never re-layout), audited. durableBoundary: rows in
 		// [byteStableBoundary, durableBoundary) are durable — permanent on scroll-off
 		// but may drift in place (a streaming table re-aligning), committed
-		// audit-EXEMPT. offerBoundary: rows in [durableBoundary, offerBoundary)
-		// were explicitly allowed to enter native scrollback while remaining
-		// audited; if they later shift, the stale physical history is repaired by a
-		// destructive replay instead of duplicate recommit. Rows at/beyond
-		// offerBoundary committed only because they scrolled above the window (a
-		// commit-unstable barrier over a long tail) are forced-overflow rows:
-		// audited, so a later shift/finalize/removal re-anchors (duplication, never
-		// loss) instead of stranding a stale prefix. Built on the finalized prefix
-		// (live-region start); the whole frame when the root reports no seam (shell
-		// semantics: whatever scrolls is final).
+		// audit-EXEMPT. Rows at/beyond durableBoundary committed only because they
+		// scrolled above the window (a commit-unstable barrier over a long tail) are
+		// forced-overflow rows: audited, so a later shift/finalize/removal re-anchors
+		// (duplication, never loss) instead of stranding a stale prefix. Built on the
+		// finalized prefix (live-region start); the whole frame when the root reports
+		// no seam (shell semantics: whatever scrolls is final).
 		const frameLength = rawFrame.length;
 		const byteStableBoundary = Math.max(0, Math.min(frameLength, commitSafeEnd ?? liveRegionStart ?? frameLength));
 		const durableBoundary = Math.max(
 			byteStableBoundary,
 			Math.min(frameLength, snapshotSafeEnd ?? byteStableBoundary),
 		);
-		const offerBoundary = Math.max(durableBoundary, Math.min(frameLength, offerSafeEnd ?? durableBoundary));
 
 		// 2. Transition state captured before any emitter runs.
 		const prevWindowTop = this.#windowTopRow;
@@ -2755,28 +2719,18 @@ export class TUI extends Container {
 		let committedRowsResynced = false;
 		// Audit covers [0, auditRows) and the forced suffix [durableRows,
 		// committedRows); the durable middle [auditRows, durableRows) is exempt
-		// (in-place drift). Three reasons to run the audit this frame:
+		// (in-place drift). Two reasons to run the audit this frame:
 		//  - the stable prefix does not cover every audited row (auditUpper); or
 		//  - a forced-overflow row this frame became durable/permanent
-		//    (committedPrefixDurableRows < min(committed, durableBoundary)): the
-		//    barrier above it finalized, so its committed bytes must be re-checked
-		//    even though the stable prefix says nothing moved — a stale committed
-		//    copy there would silently drop the row; or
-		//  - a forced-overflow row this frame joined the offered zone
-		//    (committedPrefixOfferRows < min(committed, offerBoundary)): a
-		//    finalized sibling under a live block asks for destructive-replay
-		//    repair, so a single-row shift there must be caught even if
-		//    tail-sample tolerance would otherwise skip it.
-		// The hard scan in findCommittedPrefixResync covers [durableRows,
-		// hardAuditEnd) in full (no tail-sample miss).
+		//    (committedPrefixDurableRows < hardAuditEnd): the barrier above it
+		//    finalized, so its committed bytes must be re-checked even though the
+		//    stable prefix says nothing moved — a stale committed copy there would
+		//    silently drop the row. The hard scan in findCommittedPrefixResync
+		//    covers [durableRows, hardAuditEnd) in full (no tail-sample miss).
 		const auditUpper =
 			this.#committedPrefixDurableRows < this.#committedRows ? this.#committedRows : this.#committedPrefixAuditRows;
-		const durableHardEnd = Math.min(this.#committedRows, durableBoundary);
-		const offerHardEnd = Math.min(this.#committedRows, offerBoundary);
-		const hardAuditEnd = Math.max(durableHardEnd, offerHardEnd);
-		const needHardAudit =
-			this.#committedPrefixDurableRows < durableHardEnd || this.#committedPrefixOfferRows < offerHardEnd;
-		let repairOfferedScrollback = false;
+		const hardAuditEnd = Math.min(this.#committedRows, durableBoundary);
+		const needHardAudit = this.#committedPrefixDurableRows < hardAuditEnd;
 		const auditRan =
 			this.#hasEverRendered &&
 			!geometryChanged &&
@@ -2784,21 +2738,14 @@ export class TUI extends Container {
 			(this.#renderStablePrefixRows < auditUpper || needHardAudit);
 		if (auditRan) {
 			const committedRowsBeforeAudit = this.#committedRows;
-			const offeredRowsBeforeAudit = this.#committedPrefixOfferRows;
-			const durableRowsBeforeAudit = this.#committedPrefixDurableRows;
-			this.#auditCommittedPrefix(rawFrame, hardAuditEnd);
+			this.#auditCommittedPrefix(rawFrame, durableBoundary);
 			committedRowsResynced = this.#committedRows !== committedRowsBeforeAudit;
-			repairOfferedScrollback =
-				offeredRowsBeforeAudit > durableRowsBeforeAudit &&
-				committedRowsResynced &&
-				this.#committedRows < offeredRowsBeforeAudit;
 		}
 		// Committed-prefix state this frame's commit math extends from (post-audit).
 		// Drives the audit-rows / durable-rows caps recomputed after the emit.
 		const preCommitRows = this.#committedRows;
 		const preCommitAuditRows = this.#committedPrefixAuditRows;
 		const preCommitDurableRows = this.#committedPrefixDurableRows;
-		const preCommitOfferRows = this.#committedPrefixOfferRows;
 
 		// 3. Window and commit math (lengths only; content prepared below).
 		let hasVisibleOverlay = false;
@@ -2816,7 +2763,7 @@ export class TUI extends Container {
 		// place, because an ED3 rewrap is unsafe (pane scrollback / alt-screen
 		// feedback loop), so committed history keeps its old wrap.
 		const firstPaint = !this.#hasEverRendered;
-		const replaceRequested = this.#clearScrollbackOnNextRender || repairOfferedScrollback;
+		const replaceRequested = this.#clearScrollbackOnNextRender;
 		const geometryRebuild = geometryChanged && !resizeRepaintsInPlace();
 		const fullPaint = firstPaint || replaceRequested || geometryRebuild;
 		let windowTop: number;
@@ -2928,10 +2875,8 @@ export class TUI extends Container {
 				preCommitRows,
 				preCommitAuditRows,
 				preCommitDurableRows,
-				preCommitOfferRows,
 				byteStableBoundary,
 				durableBoundary,
-				offerBoundary,
 				false,
 			);
 			this.#clearScrollbackOnNextRender = false;
@@ -2959,10 +2904,8 @@ export class TUI extends Container {
 			preCommitRows,
 			preCommitAuditRows,
 			preCommitDurableRows,
-			preCommitOfferRows,
 			byteStableBoundary,
 			durableBoundary,
-			offerBoundary,
 			auditRan,
 		);
 	}
@@ -2989,7 +2932,6 @@ export class TUI extends Container {
 		this.#committedRows = resyncTo;
 		this.#committedPrefixAuditRows = Math.min(this.#committedPrefixAuditRows, resyncTo);
 		this.#committedPrefixDurableRows = Math.min(this.#committedPrefixDurableRows, resyncTo);
-		this.#committedPrefixOfferRows = Math.min(this.#committedPrefixOfferRows, resyncTo);
 		prefix.length = resyncTo;
 		if ($flag("PI_DEBUG_REDRAW")) {
 			const msg = `[${new Date().toISOString()}] commit resync: committed prefix diverged at row ${resyncTo}; recommitting\n`;
@@ -3002,24 +2944,21 @@ export class TUI extends Container {
 	 * #committedPrefixAuditRows field doc for the three audit zones).
 	 *
 	 * auditRows tracks the byte-stable boundary; durableRows the durable snapshot
-	 * boundary; offerRows the deepest explicit audited-offer boundary. A wholesale
-	 * re-slice (full paint / shrink / geometry) re-bases each mark from the
-	 * current frame. An incremental extend keeps a mark once a row past it has
-	 * committed (mark < committed): a later RISE in a boundary (a table finalizing)
-	 * must neither pull already-committed stale snapshots back under the
-	 * byte-stable cap nor retroactively exempt forced-overflow rows already
-	 * audited. durableRows is floored at auditRows; offerRows is floored at
-	 * durableRows.
+	 * boundary. A wholesale re-slice (full paint / shrink / geometry) re-bases
+	 * each mark from the current frame (min(committed, boundary)). An incremental
+	 * extend keeps a mark once a row past it has committed (mark < committed): a
+	 * later RISE in a boundary (a table finalizing) must neither pull
+	 * already-committed stale snapshots back under the byte-stable cap nor
+	 * retroactively exempt forced-overflow rows already audited. durableRows is
+	 * floored at auditRows so the exempt window can never invert.
 	 */
 	#updateCommittedAuditRows(
 		resliced: boolean,
 		preCommittedRows: number,
 		preAuditRows: number,
 		preDurableRows: number,
-		preOfferRows: number,
 		byteStableBoundary: number,
 		durableBoundary: number,
-		offerBoundary: number,
 		hardAudited: boolean,
 	): void {
 		const committed = this.#committedRows;
@@ -3036,18 +2975,8 @@ export class TUI extends Container {
 			resliced || preDurableRows >= preCommittedRows || hardAudited
 				? Math.min(committed, durableBoundary)
 				: Math.min(preDurableRows, committed);
-		// offerRows may EXTEND to include forced-overflow rows within a
-		// newly-visible offerBoundary — unlike auditRows/durableRows, retroactive
-		// promotion is safe: both offered and forced-overflow zones stay
-		// audited; offered only switches divergence repair from tolerant recommit
-		// to destructive replay (stronger, not weaker). A dropped offerBoundary
-		// still keeps the durability rule via `preOfferRows` (never demote
-		// already-offered rows to forced-overflow).
-		const offerCap = Math.min(committed, offerBoundary);
-		const offerRows = resliced ? offerCap : Math.max(Math.min(preOfferRows, committed), offerCap);
 		this.#committedPrefixAuditRows = auditRows;
 		this.#committedPrefixDurableRows = Math.max(auditRows, durableRows);
-		this.#committedPrefixOfferRows = Math.max(this.#committedPrefixDurableRows, offerRows);
 	}
 
 	/**
