@@ -835,6 +835,263 @@ function normalizeOptionalNullsForSchema(
 	return { value: changed ? nextValue : value, changed };
 }
 
+function decodeJsonPointerToken(token: string): string {
+	return token.replace(/~1/g, "/").replace(/~0/g, "~");
+}
+
+function resolveLocalJsonSchemaRef(root: unknown, ref: string): unknown | undefined {
+	if (ref === "#") return root;
+	if (!ref.startsWith("#/")) return undefined;
+	let current: unknown = root;
+	for (const rawToken of ref.slice(2).split("/")) {
+		const token = decodeJsonPointerToken(rawToken);
+		if (current === null || typeof current !== "object") return undefined;
+		current = (current as Record<string, unknown>)[token];
+	}
+	return current;
+}
+
+function normalizeEnumStringWhitespace(
+	schema: unknown,
+	value: unknown,
+	root: unknown = schema,
+	refs: ReadonlySet<string> = new Set(),
+): { value: unknown; changed: boolean } {
+	if (value === null || value === undefined) return { value, changed: false };
+	if (schema === null || typeof schema !== "object") return { value, changed: false };
+
+	const schemaObject = schema as Record<string, unknown>;
+	const ref = schemaObject.$ref;
+	if (typeof ref === "string") {
+		if (refs.has(ref)) return { value, changed: false };
+		const resolved = resolveLocalJsonSchemaRef(root, ref);
+		if (resolved === undefined) return { value, changed: false };
+		return normalizeEnumStringWhitespace(resolved, value, root, new Set([...refs, ref]));
+	}
+
+	const branchMatches = (branch: unknown, candidate: unknown): boolean => {
+		if (branch !== null && typeof branch === "object") {
+			const branchRef = (branch as Record<string, unknown>).$ref;
+			if (typeof branchRef === "string" && !refs.has(branchRef)) {
+				const resolved = resolveLocalJsonSchemaRef(root, branchRef);
+				if (resolved !== undefined) return branchMatchesSchema(resolved, candidate);
+			}
+		}
+		return branchMatchesSchema(branch, candidate);
+	};
+
+	const normalizeAnyOfLike = (keyword: "anyOf" | "oneOf"): { value: unknown; changed: boolean } => {
+		const branches = schemaObject[keyword];
+		if (!Array.isArray(branches)) return { value, changed: false };
+		if (branches.some(branch => branchMatches(branch, value))) return { value, changed: false };
+
+		for (const branch of branches) {
+			const normalized = normalizeEnumStringWhitespace(branch, value, root, refs);
+			if (!normalized.changed) continue;
+			if (branchMatches(branch, normalized.value)) return normalized;
+		}
+		return { value, changed: false };
+	};
+
+	const anyOfNormalization = normalizeAnyOfLike("anyOf");
+	if (anyOfNormalization.changed) return anyOfNormalization;
+
+	const oneOfNormalization = normalizeAnyOfLike("oneOf");
+	if (oneOfNormalization.changed) return oneOfNormalization;
+
+	if (Array.isArray(schemaObject.allOf)) {
+		let changed = false;
+		let nextValue: unknown = value;
+		for (const branch of schemaObject.allOf) {
+			const normalized = normalizeEnumStringWhitespace(branch, nextValue, root, refs);
+			if (!normalized.changed) continue;
+			nextValue = normalized.value;
+			changed = true;
+		}
+		if (changed) return { value: nextValue, changed: true };
+	}
+
+	if (typeof value === "string") {
+		const trimmed = value.trim();
+		if (trimmed !== value) {
+			const enumValues = schemaObject.enum;
+			if (Array.isArray(enumValues) && !enumValues.includes(value) && enumValues.includes(trimmed)) {
+				return { value: trimmed, changed: true };
+			}
+			const constValue = schemaObject.const;
+			if (typeof constValue === "string" && trimmed === constValue) {
+				return { value: trimmed, changed: true };
+			}
+		}
+		return { value, changed: false };
+	}
+
+	if (Array.isArray(value)) {
+		let changed = false;
+		let nextValue = value;
+		const prefixItems = schemaObject.prefixItems;
+		if (Array.isArray(prefixItems)) {
+			for (let i = 0; i < value.length && i < prefixItems.length; i += 1) {
+				const itemSchema = prefixItems[i];
+				const normalized = normalizeEnumStringWhitespace(itemSchema, value[i], root, refs);
+				if (!normalized.changed) continue;
+				if (!changed) {
+					nextValue = [...value];
+					changed = true;
+				}
+				nextValue[i] = normalized.value;
+			}
+		}
+
+		const itemSchema = schemaObject.items;
+		if (itemSchema !== null && typeof itemSchema === "object" && !Array.isArray(itemSchema)) {
+			for (let i = 0; i < value.length; i += 1) {
+				if (Array.isArray(prefixItems) && i < prefixItems.length) continue;
+				const normalized = normalizeEnumStringWhitespace(itemSchema, nextValue[i], root, refs);
+				if (!normalized.changed) continue;
+				if (!changed) {
+					nextValue = [...value];
+					changed = true;
+				}
+				nextValue[i] = normalized.value;
+			}
+		}
+		return { value: changed ? nextValue : value, changed };
+	}
+
+	if (typeof value !== "object") return { value, changed: false };
+	const properties = schemaObject.properties;
+	if (!properties || typeof properties !== "object") return { value, changed: false };
+
+	const propsObject = properties as Record<string, unknown>;
+	const valueObject = value as Record<string, unknown>;
+	let changed = false;
+	let nextValue = valueObject;
+	for (const [key, propertySchema] of Object.entries(propsObject)) {
+		if (!(key in nextValue)) continue;
+		const normalized = normalizeEnumStringWhitespace(propertySchema, nextValue[key], root, refs);
+		if (!normalized.changed) continue;
+		if (!changed) {
+			nextValue = { ...nextValue };
+			changed = true;
+		}
+		nextValue[key] = normalized.value;
+	}
+	return { value: changed ? nextValue : valueObject, changed };
+}
+
+// ============================================================================
+// Identifier-string trailing-whitespace normalization (LLM quirk).
+// ============================================================================
+//
+// LLMs sometimes emit tool arguments with a trailing newline dangling off a
+// short identifier — a path, URL, or a display label like `title`. These
+// values are never legitimately terminated by line breaks, so we strip trailing
+// line terminators from string values on the well-known keys below before the
+// tool ever sees them. Content-carrying properties (`content`, `input`, `body`,
+// `text`, `command`, `code`) are intentionally not traversed or trimmed so
+// genuine trailing whitespace survives on writes, patches, shell commands, and
+// eval snippets.
+// ============================================================================
+
+/**
+ * Property names whose values are treated as short identifiers — filesystem
+ * paths, URLs, URIs, or display labels. The trim only fires on strings sitting
+ * under one of these keys, so `path: "docs/report "` still targets the file
+ * whose name ends in a space.
+ */
+const IDENTIFIER_STRING_KEYS: ReadonlySet<string> = new Set([
+	"path",
+	"paths",
+	"file",
+	"file_path",
+	"filePath",
+	"filepath",
+	"url",
+	"uri",
+	"title",
+	"label",
+]);
+
+const CONTENT_CARRYING_KEYS: ReadonlySet<string> = new Set(["content", "input", "body", "text", "command", "code"]);
+
+const TRAILING_LINE_TERMINATOR_RE = /[\r\n]+$/;
+
+function trimTrailingLineTerminators(input: string): string {
+	if (!TRAILING_LINE_TERMINATOR_RE.test(input)) return input;
+	return input.replace(TRAILING_LINE_TERMINATOR_RE, "");
+}
+
+function trimIdentifierStringLeaf(input: unknown): unknown {
+	if (typeof input === "string") {
+		const trimmed = trimTrailingLineTerminators(input);
+		return trimmed === input ? input : trimmed;
+	}
+	if (Array.isArray(input)) {
+		let changed = false;
+		let next = input;
+		for (let i = 0; i < input.length; i += 1) {
+			const item = input[i];
+			if (typeof item !== "string") continue;
+			const trimmed = trimTrailingLineTerminators(item);
+			if (trimmed === item) continue;
+			if (!changed) {
+				next = input.slice();
+				changed = true;
+			}
+			next[i] = trimmed;
+		}
+		return changed ? next : input;
+	}
+	return input;
+}
+
+/**
+ * Recursively strip trailing line terminators from string values whose property
+ * key matches {@link IDENTIFIER_STRING_KEYS}. Runs by property name only
+ * (schema-agnostic) so it fires uniformly across Zod, ArkType, and plain JSON
+ * Schema tools while preserving nested payloads under content-carrying keys.
+ */
+function normalizeIdentifierStringWhitespace(value: unknown): { value: unknown; changed: boolean } {
+	if (Array.isArray(value)) {
+		let changed = false;
+		let next = value;
+		for (let i = 0; i < value.length; i += 1) {
+			const normalized = normalizeIdentifierStringWhitespace(value[i]);
+			if (!normalized.changed) continue;
+			if (!changed) {
+				next = [...value];
+				changed = true;
+			}
+			next[i] = normalized.value;
+		}
+		return { value: changed ? next : value, changed };
+	}
+
+	if (value === null || typeof value !== "object") return { value, changed: false };
+
+	const source = value as Record<string, unknown>;
+	let changed = false;
+	let out: Record<string, unknown> = source;
+	for (const [key, entry] of Object.entries(source)) {
+		let nextEntry = entry;
+		if (CONTENT_CARRYING_KEYS.has(key)) continue;
+		if (IDENTIFIER_STRING_KEYS.has(key)) {
+			const trimmed = trimIdentifierStringLeaf(entry);
+			if (trimmed !== entry) nextEntry = trimmed;
+		}
+		const nested = normalizeIdentifierStringWhitespace(nextEntry);
+		if (nested.changed) nextEntry = nested.value;
+		if (nextEntry === entry) continue;
+		if (!changed) {
+			out = { ...source };
+			changed = true;
+		}
+		out[key] = nextEntry;
+	}
+	return { value: changed ? out : value, changed };
+}
+
 // ============================================================================
 // Double-encoded object-key normalization (LLM quirk).
 // ============================================================================
@@ -1485,6 +1742,23 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 		changed = true;
 	}
 
+	const enumStringNormalization = normalizeEnumStringWhitespace(json, normalizedArgs);
+	if (enumStringNormalization.changed) {
+		normalizedArgs = enumStringNormalization.value;
+		changed = true;
+	}
+
+	// Strip trailing whitespace from string values on well-known
+	// identifier-like property names (paths, URLs, titles). Some models tack
+	// a newline onto a short-identifier arg from stream artifacts; downstream
+	// tools then either fail to stat the target or annotate a "corrected
+	// from" hint the model misreads as tool corruption.
+	const identifierStringNormalization = normalizeIdentifierStringWhitespace(normalizedArgs);
+	if (identifierStringNormalization.changed) {
+		normalizedArgs = identifierStringNormalization.value;
+		changed = true;
+	}
+
 	// Then re-shape JSON-stringified arrays whose schema accepts both string
 	// and array (e.g. `paths: string | string[]`). Without this, zod accepts
 	// the literal `'["a","b"]'` as a string and downstream tools treat it as
@@ -1492,6 +1766,12 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 	const stringEncodedArrayNorm = normalizeStringEncodedArrayUnions(json, normalizedArgs);
 	if (stringEncodedArrayNorm.changed) {
 		normalizedArgs = stringEncodedArrayNorm.value;
+		changed = true;
+	}
+
+	const identifierStringNormalizationAfterArray = normalizeIdentifierStringWhitespace(normalizedArgs);
+	if (identifierStringNormalizationAfterArray.changed) {
+		normalizedArgs = identifierStringNormalizationAfterArray.value;
 		changed = true;
 	}
 
@@ -1527,6 +1807,16 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 			normalizedArgs = nullNormalization.value;
 		}
 
+		const enumStringNormalizationPass = normalizeEnumStringWhitespace(json, normalizedArgs);
+		if (enumStringNormalizationPass.changed) {
+			normalizedArgs = enumStringNormalizationPass.value;
+		}
+
+		const identifierStringNormalizationPass = normalizeIdentifierStringWhitespace(normalizedArgs);
+		if (identifierStringNormalizationPass.changed) {
+			normalizedArgs = identifierStringNormalizationPass.value;
+		}
+
 		// Re-run the union-string coercion because `coerceArgsFromIssues` may
 		// have just unwrapped a JSON-stringified object at the root or inside a
 		// nested field — exposing `string | string[]` descendants the initial
@@ -1534,6 +1824,11 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 		const stringEncodedArrayNormPass = normalizeStringEncodedArrayUnions(json, normalizedArgs);
 		if (stringEncodedArrayNormPass.changed) {
 			normalizedArgs = stringEncodedArrayNormPass.value;
+		}
+
+		const identifierStringNormalizationAfterArrayPass = normalizeIdentifierStringWhitespace(normalizedArgs);
+		if (identifierStringNormalizationAfterArrayPass.changed) {
+			normalizedArgs = identifierStringNormalizationAfterArrayPass.value;
 		}
 
 		// Re-run single-string remap: `coerceArgsFromIssues` may have just
