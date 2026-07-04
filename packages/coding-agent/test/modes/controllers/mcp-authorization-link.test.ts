@@ -24,20 +24,6 @@ const LONG_AUTH_URL =
 const LINEAR_AUTH_URL = `https://mcp.linear.app/authorize?response_type=code&client_id=abcdefghij0123456789ABCDEFGHIJ0123456789&redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fcallback&scope=read%20write%20mcp%3Aall&state=0123456789abcdef0123456789abcdef&code_challenge=5MlkJfN2GhX9uP0rQ7sT8vB1oCwDeFgHiJkLmNoPqRsTuVwXyZ&code_challenge_method=S256`;
 
 /**
- * Extract the trailing URL text from a rendered "Copy URL:" line — either the
- * inline form (`" Copy URL: <url>"`) or an indented continuation chunk
- * (`" <chunk>"`).
- */
-function urlPayload(plainLine: string, label?: string): string {
-	if (label && plainLine.startsWith(` ${label} `)) {
-		return plainLine.slice(` ${label} `.length);
-	}
-	if (label && plainLine === ` ${label}`) return "";
-	// Continuation chunk: single leading space.
-	return plainLine.startsWith(" ") ? plainLine.slice(1) : plainLine;
-}
-
-/**
  * Reassemble the copy-URL rows for `label` into a single string, mirroring what
  * a browser would produce when a multi-row selection is pasted into its
  * address bar (whitespace stripped between chunks). Returns "" if the label
