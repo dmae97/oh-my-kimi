@@ -44,26 +44,6 @@ export type ToolRenderer = {
 	/** Render without background box, inline in the response flow */
 	inline?: boolean;
 	/**
-	 * Whether pending-call rows are provisional: useful on screen while a tool is
-	 * streaming, but not durable transcript history. `true` means every pending
-	 * shape is provisional. `"collapsed"` means only the collapsed pending shape
-	 * is provisional; expanded rendering is top-anchored/append-shaped enough to
-	 * let the transcript commit its settled prefix. Absent = the pending preview
-	 * streams rows the result render preserves.
-	 */
-	provisionalPendingPreview?: boolean | "collapsed";
-	/**
-	 * Whether the partial-result render is provisional: chrome rows (header
-	 * glyph, frame state) that change between `options.isPartial === true` and
-	 * the final result render. When `true`, the block is treated as
-	 * commit-unstable while a partial result is in flight, so the
-	 * stable-prefix ratchet in `deriveLiveCommitState` cannot promote the
-	 * partial chrome to native scrollback only to have the final render strand
-	 * it above the settled frame. Absent = the partial render is byte-stable
-	 * with the final render and may commit like any settled stream.
-	 */
-	provisionalPartialResult?: boolean;
-	/**
 	 * Whether the renderer's pending-call path visibly consumes
 	 * `options.spinnerFrame`. Used to avoid scheduling repaint ticks for live
 	 * partial calls whose bytes cannot change between spinner frames.

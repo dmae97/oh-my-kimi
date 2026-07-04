@@ -98,87 +98,44 @@ describe("AssistantMessageComponent mermaid markdown", () => {
 	});
 });
 
-describe("AssistantMessageComponent reflowing-markdown commit stability", () => {
-	// A streaming reply is built empty then fed via updateContent (the live path);
-	// passing a message to the constructor would mark it finalized.
-	it("is commit-unstable while a streaming reply still carries a mermaid fence", () => {
+describe("AssistantMessageComponent settled-row commit boundary", () => {
+	function renderStreamingMarkdown(markdown: string): AssistantMessageComponent {
 		const component = new AssistantMessageComponent();
-		component.updateContent(createAssistantMessage("Here is the flow:\n\n```mermaid\nflowchart TD\n  A-->B"));
-		expect(component.isTranscriptBlockCommitStable()).toBe(false);
-	});
+		component.updateContent(createAssistantMessage(markdown), { transient: true });
+		component.render(80);
+		return component;
+	}
 
-	it("becomes commit-stable once the mermaid reply finalizes", () => {
-		const component = new AssistantMessageComponent();
-		component.updateContent(createAssistantMessage("```mermaid\nflowchart TD\n  A-->B\n```"));
-		expect(component.isTranscriptBlockCommitStable()).toBe(false);
-		component.markTranscriptBlockFinalized();
-		expect(component.isTranscriptBlockCommitStable()).toBe(true);
-	});
-
-	it("stays commit-stable for a streaming reply without a mermaid fence", () => {
-		const component = new AssistantMessageComponent();
-		component.updateContent(createAssistantMessage("A long normal reply.\n\n- one\n- two\n\nMore prose follows."));
-		expect(component.isTranscriptBlockCommitStable()).toBe(true);
-	});
-
-	it("does not trip on prose that mentions a mermaid fence inline", () => {
-		const component = new AssistantMessageComponent();
-		component.updateContent(createAssistantMessage("Wrap the diagram in a ```mermaid block to render it."));
-		expect(component.isTranscriptBlockCommitStable()).toBe(true);
-	});
-
-	it("is commit-unstable for intro prose followed by a streaming mermaid tail", () => {
-		const component = new AssistantMessageComponent();
-		component.updateContent(
-			createAssistantMessage("Intro prose above the diagram.\n\n```mermaid\nflowchart TD\n  A-->B"),
+	it("exposes frozen paragraph rows for streaming prose", () => {
+		const component = renderStreamingMarkdown(
+			"First paragraph is already byte-stable.\n\nSecond paragraph is still streaming tokens",
 		);
-		expect(component.isTranscriptBlockCommitStable()).toBe(false);
+
+		expect(component.getTranscriptBlockSettledRows()).toBeGreaterThan(0);
 	});
 
-	it("is commit-unstable while a streaming reply still renders a GFM table", () => {
-		const component = new AssistantMessageComponent();
-		component.updateContent(createAssistantMessage("Results:\n\n| Name | Score |\n| --- | --- |\n| a | 1 |"));
-		expect(component.isTranscriptBlockCommitStable()).toBe(false);
+	it("exposes zero settled rows for reflowing markdown while streaming", () => {
+		for (const markdown of [
+			"Here is the flow:\n\n```mermaid\nflowchart TD\n  A-->B",
+			"```mermaid\nflowchart TD\n  A-->B\n```",
+			"Results:\n\n| Name | Score |\n| --- | --- |\n| a | 1 |",
+		]) {
+			const component = renderStreamingMarkdown(markdown);
+
+			expect(component.getTranscriptBlockSettledRows()).toBe(0);
+		}
 	});
 
-	it("becomes commit-stable once a table reply finalizes", () => {
-		const component = new AssistantMessageComponent();
-		component.updateContent(createAssistantMessage("| Name | Score |\n| --- | --- |\n| a | 1 |\n| b | 2 |"));
-		expect(component.isTranscriptBlockCommitStable()).toBe(false);
-		component.markTranscriptBlockFinalized();
-		expect(component.isTranscriptBlockCommitStable()).toBe(true);
-	});
+	it("exposes zero settled rows after a reflowing block finalizes", () => {
+		for (const markdown of [
+			"```mermaid\nflowchart TD\n  A-->B\n```",
+			"| Name | Score |\n| --- | --- |\n| a | 1 |\n| b | 2 |",
+		]) {
+			const component = renderStreamingMarkdown(markdown);
+			component.markTranscriptBlockFinalized();
 
-	it("stays commit-stable for pipe-heavy prose with no table delimiter row", () => {
-		const component = new AssistantMessageComponent();
-		component.updateContent(
-			createAssistantMessage("Weigh cost | benefit | risk before deciding, and note `a || b` short-circuits."),
-		);
-		expect(component.isTranscriptBlockCommitStable()).toBe(true);
-	});
-
-	it("stays commit-stable for a streaming table header before its delimiter row arrives", () => {
-		// Header alone is just a paragraph with pipes — Markdown lays out no table,
-		// and nothing re-flows, until the delimiter row streams in.
-		const component = new AssistantMessageComponent();
-		component.updateContent(createAssistantMessage("| Name | Score |"));
-		expect(component.isTranscriptBlockCommitStable()).toBe(true);
-	});
-
-	it("stays commit-stable for a fenced code block containing a table delimiter", () => {
-		// A shell snippet with pipes and dashes inside a code fence is literal text,
-		// not a reflowing table, so a long code-heavy reply still commits normally.
-		const component = new AssistantMessageComponent();
-		component.updateContent(createAssistantMessage("Run it:\n\n```sh\necho '| --- | --- |'\ncat data | sort\n```"));
-		expect(component.isTranscriptBlockCommitStable()).toBe(true);
-	});
-
-	it("stays commit-stable for a mermaid fence shown as example content inside a code block", () => {
-		const component = new AssistantMessageComponent();
-		component.updateContent(
-			createAssistantMessage("Example:\n\n````md\n```mermaid\nflowchart TD\n  A-->B\n```\n````"),
-		);
-		expect(component.isTranscriptBlockCommitStable()).toBe(true);
+			expect(component.getTranscriptBlockSettledRows()).toBe(0);
+		}
 	});
 });
 

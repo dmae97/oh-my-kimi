@@ -65,6 +65,15 @@ export class BashExecutionComponent extends Container {
 	}
 
 	/**
+	 * Transcript finalization contract (see `FinalizableBlock`): the collapsed
+	 * streaming preview rewrites its tail window every chunk, so the block must
+	 * stay out of native scrollback until the command completes.
+	 */
+	isTranscriptBlockFinalized(): boolean {
+		return this.#status !== "running";
+	}
+
+	/**
 	 * Set whether the output is expanded (shows full output) or collapsed (preview only).
 	 */
 	setExpanded(expanded: boolean): void {

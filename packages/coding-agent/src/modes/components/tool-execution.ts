@@ -697,12 +697,12 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	/**
 	 * Standalone harnesses may mount a tool component directly under `TUI`
 	 * instead of inside `TranscriptContainer`. In that shape the component must
-	 * report its own live-region seam for provisional previews, or the core
-	 * renderer treats it like shell output and commits tail-window edit/eval/bash
-	 * previews to immutable native scrollback before the result replaces them.
+	 * report its own live-region seam while unfinalized, or the core renderer
+	 * treats it like shell output and commits still-mutating preview rows to
+	 * immutable native scrollback before the result replaces them.
 	 */
 	getNativeScrollbackLiveRegionStart(): number | undefined {
-		return !this.isTranscriptBlockFinalized() && !this.isTranscriptBlockCommitStable() ? 0 : undefined;
+		return this.isTranscriptBlockFinalized() ? undefined : 0;
 	}
 
 	/**
@@ -724,52 +724,6 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		// continues while it runs and would otherwise pin an unbounded live region);
 		// a foreground tool streaming partial output stays live until it finishes.
 		return (this.#result.details as { async?: { state?: string } } | undefined)?.async?.state === "running";
-	}
-
-	/**
-	 * Whether this still-live block's settled rows may enter native scrollback
-	 * (see `FinalizableBlock.isTranscriptBlockCommitStable`). Renderers classify
-	 * pending views by durability instead of by tool name: a provisional view is
-	 * allowed to be useful on screen, but finalization may replace or re-anchor
-	 * it wholesale, so committing any of its rows would strand stale preview
-	 * bytes in immutable scrollback. Non-provisional views stream rows whose
-	 * committed prefix survives the remaining transitions.
-	 */
-	isTranscriptBlockCommitStable(): boolean {
-		if (this.#displaceableByToolName) return false;
-		if (this.isTranscriptBlockFinalized()) return true;
-		// `provisionalPendingPreview` describes only the PENDING call preview
-		// (`renderCall`, before any result): the result render may re-anchor it
-		// wholesale, so its rows must never commit. Once a (streaming partial)
-		// result exists the result renderer is usually the live shape — its body
-		// is top-anchored and grows append-only, and `deriveLiveCommitState`
-		// gates per-row durability — so the block is commit-stable like any
-		// settled stream. Gating the flag on the pending phase is what keeps a
-		// collapsed streaming eval/bash/ssh whose box outgrows the viewport from
-		// stranding its head: while commit-unstable its scrolled-off top
-		// committed nowhere and repainted nowhere, so it read as truncated until
-		// ctrl+o (expanded) flipped it stable.
-		//
-		// Renderers whose partial-result chrome (header glyph, frame state)
-		// differs from the final result render set `provisionalPartialResult`
-		// to opt out of stream-commit while `isPartial` holds: the ratchet
-		// would otherwise promote the stable partial chrome to native scrollback
-		// after `STABLE_PREFIX_COMMIT_FRAMES` and leave it stranded above the
-		// final frame once the chrome flips. Once the result settles
-		// (`isPartial === false`) the block is commit-stable again.
-		if (this.#result !== undefined) {
-			if (this.#isPartial) {
-				const tool = this.#tool as { provisionalPartialResult?: boolean } | undefined;
-				const provisionalPartialResult =
-					tool?.provisionalPartialResult ?? toolRenderers[this.#toolName]?.provisionalPartialResult;
-				if (provisionalPartialResult) return false;
-			}
-			return true;
-		}
-		const tool = this.#tool as { provisionalPendingPreview?: boolean | "collapsed" } | undefined;
-		const provisionalPendingPreview =
-			tool?.provisionalPendingPreview ?? toolRenderers[this.#toolName]?.provisionalPendingPreview;
-		return provisionalPendingPreview !== true && (provisionalPendingPreview !== "collapsed" || this.#expanded);
 	}
 
 	/**

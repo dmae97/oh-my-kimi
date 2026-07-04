@@ -61,6 +61,15 @@ export class EvalExecutionComponent extends Container {
 		this.#contentContainer.addChild(this.#loader);
 	}
 
+	/**
+	 * Transcript finalization contract (see `FinalizableBlock`): the collapsed
+	 * streaming preview rewrites its tail window every chunk, so the block must
+	 * stay out of native scrollback until the cell completes.
+	 */
+	isTranscriptBlockFinalized(): boolean {
+		return this.#status !== "running";
+	}
+
 	setExpanded(expanded: boolean): void {
 		this.#expanded = expanded;
 		this.#updateDisplay();

@@ -386,22 +386,6 @@ export const sshToolRenderer = {
 		});
 	},
 	mergeCallAndResult: true,
-	// Pending call preview can re-anchor wholesale when the final result inserts
-	// the `Output` section, so no pending SSH rows may commit to native
-	// scrollback — even when expanded. The expanded pending shape was previously
-	// allowed to commit, which left two visible shapes in native scrollback once
-	// the result settled: a stale `⏳ SSH: [host]` header above the final frame,
-	// and the pending `╰──╯` footer reused in-place as the new `├── Output ──┤`
-	// separator with a fresh footer pushed below it.
-	provisionalPendingPreview: true,
-	// Partial-result chrome (pending icon and frame state) differs from the
-	// final SSH glyph/state, so the block stays commit-unstable while
-	// `options.isPartial` holds. Without this, a long-running SSH command's
-	// stable pending header would be promoted by the stable-prefix ratchet and
-	// committed to native scrollback, then the final render's SSH glyph would
-	// land below and strand a duplicate pending header above the final frame
-	// ([#3177](https://github.com/can1357/oh-my-pi/issues/3177)).
-	provisionalPartialResult: true,
 	// Streamed args can initially render the SSH placeholder (`⏳ SSH: […]` /
 	// `$ …`), then the first partial result inserts the `Output` section and
 	// re-anchors the frame. Force a full repaint at that seam so placeholder rows

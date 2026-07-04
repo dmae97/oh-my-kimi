@@ -67,15 +67,12 @@ class StaticBlock implements Component {
 	}
 }
 
-// A still-live predecessor (e.g. a parallel tool that is still running): being
-// non-finalized closes the transcript's commit-safe run, so the streaming tool
-// below it commits as forced-overflow — the path that sprayed.
+// A still-live predecessor (e.g. a parallel tool that is still running) pins the
+// transcript commit boundary, so rows below it stay repaintable until the
+// predecessor finalizes.
 class LiveBarrier extends StaticBlock {
 	isTranscriptBlockFinalized(): boolean {
 		return false;
-	}
-	isTranscriptBlockCommitStable(): boolean {
-		return true;
 	}
 }
 
