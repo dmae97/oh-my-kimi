@@ -60,6 +60,43 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		expect(mod.html).toBe("<html>PLAN-UI</html>");
 	});
 
+	it("reloads an edited entry module without polluting fileURLToPath-derived paths", async () => {
+		const entrySource = (version: string): string =>
+			[
+				'import { readFileSync } from "node:fs";',
+				'import { fileURLToPath } from "node:url";',
+				'import * as path from "node:path";',
+				"export const entryPath = fileURLToPath(import.meta.url);",
+				"const here = path.dirname(entryPath);",
+				`export const version = ${JSON.stringify(version)};`,
+				'export const asset = readFileSync(path.join(here, "marker.txt"), "utf8");',
+				"export default function (pi) { void pi; }",
+			].join("\n");
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "mtime-reload-ext", version: "1.0.0" }),
+			"marker.txt": "asset-ok",
+			"index.ts": entrySource("v1"),
+		});
+		const entry = path.join(dir, "index.ts");
+		const expectedEntryPath = await fs.realpath(entry);
+
+		const first = (await loadLegacyPiModule(entry)) as { version: string; entryPath: string; asset: string };
+		expect(first.version).toBe("v1");
+		expect(first.entryPath).toBe(expectedEntryPath);
+		expect(first.asset).toBe("asset-ok");
+
+		const firstStat = await fs.stat(entry);
+		await fs.writeFile(entry, entrySource("v2"), "utf8");
+		const bumpedMtime = new Date(Math.ceil(firstStat.mtimeMs) + 2_000);
+		await fs.utimes(entry, bumpedMtime, bumpedMtime);
+
+		const second = (await loadLegacyPiModule(entry)) as { version: string; entryPath: string; asset: string };
+		expect(second.version).toBe("v2");
+		expect(second.entryPath).toBe(expectedEntryPath);
+		expect(second.entryPath.includes("?")).toBe(false);
+		expect(second.asset).toBe("asset-ok");
+	});
+
 	it("resolves a .css sibling of a relatively-imported submodule", async () => {
 		const dir = await writePackage({
 			"package.json": JSON.stringify({ name: "multi-file-ext", version: "1.0.0" }),

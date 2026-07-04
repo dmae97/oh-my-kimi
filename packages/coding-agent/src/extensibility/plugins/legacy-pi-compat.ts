@@ -1018,21 +1018,22 @@ async function ensureExtensionGraphHook(entryRealPath: string): Promise<Map<stri
 
 	const modules = await collectExtensionModules(entryRealPath);
 	const alternation = [...modules.keys()].map(escapeRegExp).join("|");
-	const filter = new RegExp(`^(?:${alternation})$`);
+	const filter = new RegExp(`^(?:${alternation})(?:\\?mtime=\\d+)?$`);
 	Bun.plugin({
 		name: `omp:legacy-pi-ext:${Bun.hash(entryRealPath).toString(36)}`,
 		setup(build) {
 			build.onLoad({ filter, namespace: "file" }, async args => {
-				const cached = modules.get(args.path);
+				const sourcePath = args.path.replace(/\?mtime=\d+$/, "");
+				const cached = modules.get(sourcePath);
 				let raw: string;
 				if (cached !== undefined) {
 					// consume-once: preserves ?mtime edit-pickup for the re-imported entry
-					modules.delete(args.path);
+					modules.delete(sourcePath);
 					raw = cached;
 				} else {
-					raw = await Bun.file(args.path).text();
+					raw = await Bun.file(sourcePath).text();
 				}
-				return { contents: await rewriteLegacyExtensionSource(raw, args.path), loader: getLoader(args.path) };
+				return { contents: await rewriteLegacyExtensionSource(raw, sourcePath), loader: getLoader(sourcePath) };
 			});
 		},
 	});
@@ -1057,8 +1058,15 @@ export async function loadLegacyPiModule(resolvedPath: string): Promise<unknown>
 	const entryRealPath = await realpathOrSelf(path.resolve(resolvedPath));
 	const pendingSources = await ensureExtensionGraphHook(entryRealPath);
 	try {
-		// `?mtime` busts Bun's module cache so repeat loads pick up edited source.
-		return await import(`${toImportSpecifier(entryRealPath)}?mtime=${Date.now()}`);
+		// Dynamic import is required: legacy extension entry paths are user/plugin supplied at runtime.
+		// On POSIX, use the raw filesystem path so Bun keys the `?mtime`
+		// suffix as part of the module identity; Bun ignores query strings on
+		// `file://` specifiers, which would serve stale edited source.
+		const entrySpecifier =
+			process.platform === "win32" || isBundledVirtualSpecifier(entryRealPath)
+				? toImportSpecifier(entryRealPath)
+				: entryRealPath;
+		return await import(`${entrySpecifier}?mtime=${Date.now()}`);
 	} finally {
 		// Drop whatever the initial import didn't consume: graph modules only
 		// reached by lazy dynamic imports must be read from disk at their actual

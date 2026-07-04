@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed legacy Pi extension reloads on POSIX so `loadLegacyPiModule` imports the entry through a cache-busting filesystem path and re-imports edited source in the same process. ([#4565](https://github.com/can1357/oh-my-pi/issues/4565))
+
 ## [16.3.6] - 2026-07-04
 
 ### Changed
