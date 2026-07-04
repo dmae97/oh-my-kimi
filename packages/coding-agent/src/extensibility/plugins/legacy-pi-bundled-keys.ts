@@ -779,7 +779,6 @@ export const BUNDLED_PI_REGISTRY_KEYS: ReadonlySet<string> = new Set([
 	"@oh-my-pi/pi-coding-agent/tools/ast-edit",
 	"@oh-my-pi/pi-coding-agent/tools/ast-grep",
 	"@oh-my-pi/pi-coding-agent/tools/auto-generated-guard",
-	"@oh-my-pi/pi-coding-agent/tools/bash-command-fixup",
 	"@oh-my-pi/pi-coding-agent/tools/bash-interactive",
 	"@oh-my-pi/pi-coding-agent/tools/bash-interceptor",
 	"@oh-my-pi/pi-coding-agent/tools/bash-pty-selection",
