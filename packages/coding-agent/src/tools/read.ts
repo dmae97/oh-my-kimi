@@ -37,6 +37,7 @@ import { normalizeToLF } from "../edit/normalize";
 import { isNotebookPath, readEditableNotebookText } from "../edit/notebook";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { InternalUrlRouter, resolveLocalUrlToFile } from "../internal-urls";
+import { type ResolvedArtifactFile, resolveArtifactFile } from "../internal-urls/artifact-protocol";
 import { parseInternalUrl } from "../internal-urls/parse";
 import type { InternalUrl } from "../internal-urls/types";
 import { getLanguageFromPath, type Theme } from "../modes/theme/theme";
@@ -151,6 +152,7 @@ const CONVERTIBLE_EXTENSIONS = new Set([".pdf", ".doc", ".docx", ".ppt", ".pptx"
 
 const MAX_SUMMARY_BYTES = 2 * 1024 * 1024;
 const MAX_SUMMARY_LINES = 20_000;
+const MAX_ARTIFACT_RAW_INLINE_BYTES = DEFAULT_MAX_BYTES;
 /**
  * Per-line column cap for file reads. Lines wider than the value of
  * `tools.outputMaxColumns` are ellipsis-truncated at display time; the file
@@ -1519,6 +1521,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		displayMode: { hashLines: boolean; lineNumbers: boolean },
 		suffixResolution: { from: string; to: string } | undefined,
 		signal: AbortSignal | undefined,
+		allowBridge = true,
 	): Promise<{
 		outputText: string;
 		columnTruncated: number;
@@ -1528,7 +1531,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const rawSelector = isRawSelector(parsed);
 
 		// ACP bridge first — the editor's in-memory buffer is source of truth.
-		const bridgePromise = this.#routeReadThroughBridge(absolutePath);
+		const bridgePromise = allowBridge ? this.#routeReadThroughBridge(absolutePath) : undefined;
 		if (bridgePromise !== undefined) {
 			try {
 				const bridgeText = await bridgePromise;
@@ -2802,6 +2805,197 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		return toolResult<ReadToolDetails>(details).text(summary).sourcePath(absolutePath).done();
 	}
 
+	#formatArtifactWorkflowNotice(artifact: ResolvedArtifactFile, artifactUrl: string): string {
+		const displayPath = shortenPath(artifact.path);
+		return `Artifact storage: ${displayPath} (${formatBytes(artifact.size)}). Use ${artifactUrl}:N-M to page, ${artifactUrl}:raw:N-M for verbatim chunks, and the artifact file path for search/copy workflows.`;
+	}
+
+	#formatRawArtifactBlockedNotice(artifact: ResolvedArtifactFile, artifactUrl: string): string {
+		const displayPath = shortenPath(artifact.path);
+		return `Unbounded raw read blocked for ${artifactUrl} (${formatBytes(
+			artifact.size,
+		)}). Reading the whole artifact verbatim can exhaust memory. Use ${artifactUrl}:raw:1-3000 for bounded verbatim chunks, ${artifactUrl}:1-3000 for numbered exploration, and the artifact file path for search/copy workflows: ${displayPath}`;
+	}
+
+	async #readArtifactFile(
+		url: InternalUrl,
+		parsedSel: ParsedSelector,
+		signal?: AbortSignal,
+	): Promise<AgentToolResult<ReadToolDetails>> {
+		const artifact = await resolveArtifactFile(url, {
+			cwd: this.session.cwd,
+			settings: this.session.settings,
+			signal,
+			localProtocolOptions: this.session.localProtocolOptions,
+			skills: this.session.skills,
+		});
+		const artifactUrl = `artifact://${artifact.id}`;
+		const details: ReadToolDetails = {
+			resolvedPath: artifact.path,
+			contentType: "text/plain",
+		};
+
+		if (parsedSel.kind === "raw" && artifact.size > MAX_ARTIFACT_RAW_INLINE_BYTES) {
+			return toolResult<ReadToolDetails>(details)
+				.text(this.#formatRawArtifactBlockedNotice(artifact, artifactUrl))
+				.sourcePath(artifact.path)
+				.sourceInternal(url.href)
+				.done();
+		}
+
+		const rawSelector = isRawSelector(parsedSel);
+		const displayMode = resolveFileDisplayMode(this.session, { raw: rawSelector, immutable: true });
+		if (isMultiRange(parsedSel) && parsedSel.kind === "lines") {
+			const read = await this.#readLocalFileMultiRange(
+				artifact.path,
+				parsedSel.ranges,
+				artifact.size,
+				parsedSel,
+				displayMode,
+				undefined,
+				signal,
+				false,
+			);
+			if (read.bridgeResult) return read.bridgeResult;
+			if (read.displayContent) details.displayContent = read.displayContent;
+			let text = read.outputText;
+			if (!rawSelector && artifact.size > MAX_ARTIFACT_RAW_INLINE_BYTES) {
+				text = text
+					? `${text}\n\n[${this.#formatArtifactWorkflowNotice(artifact, artifactUrl)}]`
+					: this.#formatArtifactWorkflowNotice(artifact, artifactUrl);
+			}
+			const resultBuilder = toolResult<ReadToolDetails>(details)
+				.text(text)
+				.sourcePath(artifact.path)
+				.sourceInternal(url.href);
+			if (read.columnTruncated > 0) resultBuilder.limits({ columnMax: read.columnTruncated });
+			return resultBuilder.done();
+		}
+
+		const { offset, limit } = selToOffsetLimit(parsedSel);
+		const requestedStart = offset ? Math.max(0, offset - 1) : 0;
+		const expandStart = offset !== undefined && offset > 1;
+		const expandEnd = limit !== undefined;
+		const leadingContext = expandStart ? Math.min(requestedStart, RANGE_LEADING_CONTEXT_LINES) : 0;
+		const trailingContext = expandEnd ? RANGE_TRAILING_CONTEXT_LINES : 0;
+		const startLine = requestedStart - leadingContext;
+		const startLineDisplay = startLine + 1;
+		const effectiveLimit = limit ?? this.#defaultLimit;
+		const maxLinesToCollect = Math.min(effectiveLimit + leadingContext + trailingContext, DEFAULT_MAX_LINES);
+		const selectedLineLimit = effectiveLimit + leadingContext + trailingContext;
+		const maxBytesForRead = Math.max(DEFAULT_MAX_BYTES, maxLinesToCollect * 512);
+		const streamResult = await streamLinesFromFile(
+			artifact.path,
+			startLine,
+			maxLinesToCollect,
+			maxBytesForRead,
+			selectedLineLimit,
+			signal,
+			artifact.size > SNAPSHOT_MAX_BYTES,
+		);
+		const {
+			lines: collectedLines,
+			totalFileLines,
+			collectedBytes,
+			stoppedByByteLimit,
+			firstLinePreview,
+			firstLineByteLength,
+			reachedEof,
+		} = streamResult;
+
+		if (requestedStart >= totalFileLines) {
+			const suggestion =
+				totalFileLines === 0
+					? "The artifact is empty."
+					: `Use ${artifactUrl}:1 to read from the start, or ${artifactUrl}:${totalFileLines} to read the last line.`;
+			return toolResult<ReadToolDetails>(details)
+				.text(`Line ${requestedStart + 1} is beyond end of artifact (${totalFileLines} lines total). ${suggestion}`)
+				.sourcePath(artifact.path)
+				.sourceInternal(url.href)
+				.done();
+		}
+
+		const shouldAddLineNumbers = rawSelector ? false : displayMode.hashLines ? false : displayMode.lineNumbers;
+		const selectedContent = collectedLines.join("\n");
+		const totalSelectedLines = totalFileLines - startLine;
+		const wasTruncated = collectedLines.length < totalSelectedLines || stoppedByByteLimit;
+		const firstLineExceedsLimit = firstLineByteLength !== undefined && firstLineByteLength > maxBytesForRead;
+		const truncation: TruncationResult = {
+			content: selectedContent,
+			truncated: wasTruncated,
+			truncatedBy: stoppedByByteLimit ? "bytes" : wasTruncated ? "lines" : undefined,
+			totalLines: totalSelectedLines,
+			totalBytes: collectedBytes,
+			outputLines: collectedLines.length,
+			outputBytes: collectedBytes,
+			lastLinePartial: false,
+			firstLineExceedsLimit,
+		};
+
+		let displayContent: { text: string; startLine: number; lineNumbers?: Array<number | null> } | undefined;
+		const formatText = (text: string, startNum: number): string => {
+			const lineCount = countTextLines(text);
+			displayContent = {
+				text,
+				startLine: startNum,
+				lineNumbers: Array.from({ length: lineCount }, (_, i) => startNum + i),
+			};
+			return formatTextWithMode(text, startNum, false, shouldAddLineNumbers);
+		};
+
+		let outputText: string;
+		let truncationInfo:
+			| { result: TruncationResult; options: { direction: "head"; startLine?: number; totalFileLines?: number } }
+			| undefined;
+		if (truncation.firstLineExceedsLimit) {
+			const firstLineBytes = firstLineByteLength ?? 0;
+			const snippet = firstLinePreview ?? { text: "", bytes: 0 };
+			outputText =
+				snippet.text.length > 0
+					? formatText(snippet.text, startLineDisplay)
+					: `[Line ${startLineDisplay} is ${formatBytes(
+							firstLineBytes,
+						)}, exceeds ${formatBytes(maxBytesForRead)} limit. Unable to display a valid UTF-8 snippet.]`;
+			truncationInfo = {
+				result: truncation,
+				options: {
+					direction: "head",
+					startLine: startLineDisplay,
+					totalFileLines: reachedEof ? totalFileLines : undefined,
+				},
+			};
+		} else {
+			outputText = formatText(truncation.content, startLineDisplay);
+			if (truncation.truncated) {
+				truncationInfo = {
+					result: truncation,
+					options: {
+						direction: "head",
+						startLine: startLineDisplay,
+						totalFileLines: reachedEof ? totalFileLines : undefined,
+					},
+				};
+			} else if (startLine + collectedLines.length < totalFileLines || !reachedEof) {
+				const nextOffset = startLine + collectedLines.length + 1;
+				outputText += reachedEof
+					? `\n\n[${totalFileLines - (startLine + collectedLines.length)} more lines in artifact. Use ${artifactUrl}:${nextOffset} to continue]`
+					: `\n\n[More lines in artifact (${formatBytes(artifact.size)} total; not scanned to EOF). Use ${artifactUrl}:${nextOffset} to continue]`;
+			}
+		}
+
+		if (!rawSelector && artifact.size > MAX_ARTIFACT_RAW_INLINE_BYTES) {
+			outputText += `\n\n[${this.#formatArtifactWorkflowNotice(artifact, artifactUrl)}]`;
+		}
+		if (displayContent) details.displayContent = displayContent;
+		if (truncationInfo) details.truncation = truncationInfo.result;
+		const resultBuilder = toolResult<ReadToolDetails>(details)
+			.text(outputText)
+			.sourcePath(artifact.path)
+			.sourceInternal(url.href);
+		if (truncationInfo) resultBuilder.truncation(truncationInfo.result, truncationInfo.options);
+		return resultBuilder.done();
+	}
+
 	/**
 	 * Handle internal URLs (agent://, artifact://, memory://, skill://, rule://, local://, mcp://).
 	 * Supports pagination via offset/limit but rejects them when query extraction is used.
@@ -2828,6 +3022,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			const queryParam = urlMeta.searchParams.get("q");
 			const hasQueryExtraction = queryParam !== null && queryParam !== "";
 			hasExtraction = hasPathExtraction || hasQueryExtraction;
+		}
+		if (scheme === "artifact") {
+			return this.#readArtifactFile(urlMeta, parsedSel, signal);
 		}
 
 		// local:// files are real on-disk paths. Detect image files and emit a

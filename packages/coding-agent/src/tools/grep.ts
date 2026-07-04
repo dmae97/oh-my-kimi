@@ -750,6 +750,11 @@ async function resolveInternalSearchInputs(opts: {
 		localProtocolOptions: opts.localProtocolOptions,
 		skills: opts.skills,
 		skipDirectoryListing: true,
+		// Try path-only first so large artifacts (and any other handler that
+		// separates path from content) resolve without materializing bytes.
+		// Handlers that ignore the flag still return content, and virtual
+		// resources without a sourcePath fall through to a second resolve.
+		pathOnly: true,
 	};
 
 	for (let idx = 0; idx < paths.length; idx++) {
@@ -764,7 +769,7 @@ async function resolveInternalSearchInputs(opts: {
 		if (hasGlobPathChars(globTarget)) {
 			throw new ToolError(`Glob patterns are not supported for internal URLs: ${rawPath}`);
 		}
-		const resource = await internalRouter.resolve(rawPath, context);
+		let resource = await internalRouter.resolve(rawPath, context);
 		// A directory listing with no backing local path (e.g. a remote ssh:// dir)
 		// has no real contents to grep — searching its listing text would be
 		// misleading. Local/skill/vault dir resources set `sourcePath` and skip this.
@@ -781,8 +786,20 @@ async function resolveInternalSearchInputs(opts: {
 			continue;
 		}
 
+		// No sourcePath: this handler needs its content materialized so the
+		// virtual expansion can search it. Re-resolve without pathOnly.
+		if (context.pathOnly) {
+			resource = await internalRouter.resolve(rawPath, { ...context, pathOnly: false });
+		}
+
 		const ranges = opts.pathSpecs[idx]?.ranges;
-		const expanded = await expandVirtualInternalResource(rawPath, resource, internalRouter, context, ranges);
+		const expanded = await expandVirtualInternalResource(
+			rawPath,
+			resource,
+			internalRouter,
+			{ ...context, pathOnly: false },
+			ranges,
+		);
 		virtualInputIndexes.add(idx);
 		for (const virtual of expanded) {
 			virtualResources.push(virtual);
