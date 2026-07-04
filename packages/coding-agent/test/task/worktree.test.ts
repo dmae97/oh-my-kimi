@@ -398,6 +398,104 @@ describe("worktree isolation helpers", () => {
 				expect(delta.rootPatch).not.toContain("baseline dirty change");
 				expect(delta.rootPatch).not.toContain("preexisting.txt");
 			});
+
+			// Regression for #4438: cherry-picking a range where an intermediate
+			// commit becomes empty (redundant with HEAD, or 3-way merged to HEAD)
+			// used to abort the whole range and mark the branch failed, dropping
+			// every remaining commit. The fixup here restores merged.txt to the
+			// content the shared fixture branch already established on HEAD, so
+			// the sequencer stops with "The previous cherry-pick is now empty".
+			// The follow-up commit contains real, non-overlapping work that MUST
+			// still land.
+			it("auto-skips empty cherry-picks so remaining commits in the range still land", async () => {
+				const REDUNDANT_BRANCH = "task/redundant-then-real";
+				await runGit(repo, ["checkout", "-q", "-b", REDUNDANT_BRANCH, initialSha]);
+				const branchBase = await runGit(repo, ["rev-parse", "HEAD"]);
+				// This commit sets merged.txt to the exact content TASK_BRANCH
+				// establishes on HEAD. Once TASK_BRANCH is cherry-picked, the
+				// 3-way merge for this commit sees theirs == ours == target,
+				// resolves to HEAD, and stops the sequencer with the "The
+				// previous cherry-pick is now empty" message.
+				await fs.writeFile(path.join(repo, "merged.txt"), "task branch change\n");
+				await runGit(repo, ["commit", "-q", "-am", "redundant: same as task branch tip"]);
+				// A non-overlapping follow-up that MUST land even though the
+				// preceding commit collapsed to empty.
+				await fs.writeFile(path.join(repo, "downstream.txt"), "unrelated follow-up\n");
+				await runGit(repo, ["add", "downstream.txt"]);
+				await runGit(repo, ["commit", "-q", "-m", "unrelated follow-up commit"]);
+				await runGit(repo, ["checkout", "-q", BASE_BRANCH]);
+				try {
+					const result = await mergeTaskBranches(repo, [
+						{ branchName: TASK_BRANCH, taskId: "task-1" },
+						{ branchName: REDUNDANT_BRANCH, taskId: "task-2", baseSha: branchBase },
+					]);
+
+					const [status, unmerged, mergedContent, downstreamContent, log] = await Promise.all([
+						runGit(repo, ["status", "--porcelain=v1"]),
+						runGit(repo, ["ls-files", "--unmerged"]),
+						fs.readFile(path.join(repo, "merged.txt"), "utf8"),
+						fs.readFile(path.join(repo, "downstream.txt"), "utf8"),
+						runGit(repo, ["log", "--pretty=%s", `${initialSha}..HEAD`]),
+					]);
+
+					expect(result).toEqual({ failed: [], merged: [TASK_BRANCH, REDUNDANT_BRANCH] });
+					// No cherry-pick sequencer state, no unmerged entries: the
+					// skip advanced cleanly.
+					expect(status).toBe("");
+					expect(unmerged).toBe("");
+					// TASK_BRANCH landed and the empty commit did NOT re-land it
+					// as a duplicate.
+					expect(mergedContent).toBe("task branch change\n");
+					expect(downstreamContent).toBe("unrelated follow-up\n");
+					const subjects = log.split("\n").filter(Boolean);
+					expect(subjects).toContain("unrelated follow-up commit");
+					expect(subjects).toContain("task-change");
+					// The redundant commit MUST NOT survive in history as a
+					// duplicate no-op.
+					expect(subjects).not.toContain("redundant: same as task branch tip");
+				} finally {
+					await cleanupTaskBranches(repo, [REDUNDANT_BRANCH]);
+				}
+			});
+
+			// A genuine content conflict (unmerged files, no "now empty" hint)
+			// must NOT be misclassified as empty. The branch stays in `failed`
+			// and the sequencer aborts cleanly — no lingering cherry-pick state,
+			// no unmerged index entries.
+			it("still aborts on genuine cherry-pick conflicts", async () => {
+				const CONFLICT_BRANCH = "task/genuine-conflict";
+				await runGit(repo, ["checkout", "-q", "-b", CONFLICT_BRANCH, initialSha]);
+				const branchBase = await runGit(repo, ["rev-parse", "HEAD"]);
+				await fs.writeFile(path.join(repo, "merged.txt"), "incompatible edit\n");
+				await runGit(repo, ["commit", "-q", "-am", "incompatible merged.txt edit"]);
+				await runGit(repo, ["checkout", "-q", BASE_BRANCH]);
+				try {
+					const result = await mergeTaskBranches(repo, [
+						{ branchName: TASK_BRANCH, taskId: "task-1" },
+						{ branchName: CONFLICT_BRANCH, taskId: "task-2", baseSha: branchBase },
+					]);
+
+					const [status, unmerged, cherryPickHeadExit] = await Promise.all([
+						runGit(repo, ["status", "--porcelain=v1"]),
+						runGit(repo, ["ls-files", "--unmerged"]),
+						runGit(repo, ["rev-parse", "--verify", "--quiet", "CHERRY_PICK_HEAD"]).then(
+							() => 0,
+							() => 1,
+						),
+					]);
+
+					expect(result.merged).toEqual([TASK_BRANCH]);
+					expect(result.failed).toEqual([CONFLICT_BRANCH]);
+					expect(result.conflict).toContain(CONFLICT_BRANCH);
+					// No stuck sequencer, no unmerged entries: the abort cleaned
+					// up after itself.
+					expect(status).toBe("");
+					expect(unmerged).toBe("");
+					expect(cherryPickHeadExit).toBe(1);
+				} finally {
+					await cleanupTaskBranches(repo, [CONFLICT_BRANCH]);
+				}
+			});
 		});
 	});
 });
