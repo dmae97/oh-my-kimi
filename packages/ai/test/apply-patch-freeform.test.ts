@@ -176,7 +176,9 @@ describe("convertTools: freeform emission", () => {
 		}>;
 
 		const items = out.parameters.properties.operations.items;
-		expect(out.strict).toBeUndefined();
+		// Author-set `strict: false` MUST survive to the wire (#4336) — providers
+		// distinguish it from an omitted flag when generating optional-arg values.
+		expect(out.strict).toBe(false);
 		expect(items.oneOf).toBeUndefined();
 		expect(items.anyOf).toEqual(unionBranches);
 	});

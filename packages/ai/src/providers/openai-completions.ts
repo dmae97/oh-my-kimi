@@ -2115,6 +2115,17 @@ function convertTools(
 	return {
 		tools: adaptedTools.map(({ tool, baseParameters, parameters, strict }) => {
 			const includeStrict = toolStrictMode === "all_strict" || (toolStrictMode === "mixed" && strict);
+			// `strict: false` is semantically distinct from omitted `strict` on some
+			// backends: with it absent, optional properties may be over-filled with
+			// placeholder values (#4336). Preserve the author's explicit `false`,
+			// but only in "mixed" mode against a provider that understands the
+			// field — the `all_strict → none` collapse and `supportsStrictMode:
+			// false` paths deliberately keep the wire flag uniformly absent.
+			const includeExplicitFalse =
+				!includeStrict &&
+				tool.strict === false &&
+				toolStrictMode === "mixed" &&
+				compat.supportsStrictMode !== false;
 			const wireParameters = includeStrict ? parameters : baseParameters;
 			return {
 				type: "function",
@@ -2128,7 +2139,7 @@ function convertTools(
 							? (normalizeSchemaForMoonshot(wireParameters) as Record<string, unknown>)
 							: wireParameters,
 					// Only include strict if provider supports it. Some reject unknown fields.
-					...(includeStrict && { strict: true }),
+					...(includeStrict ? { strict: true } : includeExplicitFalse ? { strict: false } : {}),
 				},
 			};
 		}),
