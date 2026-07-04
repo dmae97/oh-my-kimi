@@ -238,7 +238,7 @@ smallvec = { version = "1.15.1", features = [
 xxhash-rust = { version = "0.8", features = ["xxh64"] }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Memory Management & Allocators
+# Memory Mapping
 # ──────────────────────────────────────────────────────────────────────────────
 memmap2 = "0.9"
 

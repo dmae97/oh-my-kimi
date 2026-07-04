@@ -8,22 +8,31 @@
 
 mod cache;
 
+#[cfg(not(unix))]
+use std::ffi::OsString;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
 use std::{
 	borrow::Cow,
+	cell::{Cell, RefCell},
 	cmp::Ordering,
 	convert::Infallible,
-	ffi::{OsStr, OsString},
+	ffi::OsStr,
 	fmt,
 	hash::{Hash, Hasher},
 	io,
 	path::{Path, PathBuf},
-	sync::Arc,
+	sync::{
+		Arc, Mutex,
+		atomic::{AtomicBool, Ordering as AtomicOrdering},
+	},
 };
 
 pub use cache::{
 	cache_ttl_ms, classify_file_type, contains_component, empty_recheck_ms, invalidate_all,
 	invalidate_path, invalidate_path_string, max_cache_entries, normalize_relative_path,
-	parallel_for_each, resolve_search_path, should_parallelize, should_skip_path, walk_workers,
+	parallel_for_each, parallel_for_each_init, resolve_search_path, should_parallelize,
+	should_skip_path, walk_workers,
 };
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 
@@ -1043,6 +1052,30 @@ impl WalkRequest {
 		Ok(stats)
 	}
 
+	/// Visit accepted regular-file candidates using an unordered parallel walk.
+	///
+	/// This is a files-only API for consumers that own their output ordering.
+	/// Candidates may be delivered in any order. [`WalkOptions::order`],
+	/// [`WalkRequest::visit_order`], [`WalkOptions::emit_root`], and
+	/// [`WalkRequest::limit`] are ignored. Directory-open errors are skipped
+	/// with grep-style semantics instead of being delivered to visitors.
+	///
+	/// [`ParallelWalkControl::Stop`] sets a shared stop flag; workers check that
+	/// flag before reading each directory and while processing directory
+	/// entries, then the method returns [`WalkStatus::Stopped`] after in-flight
+	/// work winds down. If a sink or heartbeat returns an error, the first
+	/// error wins and is returned as [`WalkError::Interrupted`].
+	pub fn for_each_file_candidate_parallel<E>(
+		&self,
+		sink: impl Fn(&FileCandidate) -> std::result::Result<ParallelWalkControl, E> + Send + Sync,
+		heartbeat: impl Fn() -> std::result::Result<(), E> + Send + Sync,
+	) -> std::result::Result<WalkStatus, WalkError<E>>
+	where
+		E: Send,
+	{
+		run_file_candidate_parallel(self, &sink, &heartbeat)
+	}
+
 	fn collect_with_rank_and_limit<E, H>(
 		&self,
 		rank: Option<WalkRank>,
@@ -1189,6 +1222,464 @@ where
 	parallel_for_each(candidates, operation)
 }
 
+/// Execute work for regular-file candidates with per-worker state.
+pub fn execute_candidates_init<S, E>(
+	candidates: &[FileCandidate],
+	init: impl Fn() -> S + Send + Sync,
+	operation: impl Fn(&mut S, &FileCandidate) -> std::result::Result<(), E> + Send + Sync,
+) -> std::result::Result<(), E>
+where
+	S: Send,
+	E: Send,
+{
+	parallel_for_each_init(candidates, init, operation)
+}
+
+struct SerialCandidateVisitor<'a, S> {
+	filter: &'a WalkFilter,
+	sink:   &'a S,
+}
+
+impl<E, S> EntryVisitor for SerialCandidateVisitor<'_, S>
+where
+	S: Fn(&FileCandidate) -> std::result::Result<ParallelWalkControl, E> + Sync,
+{
+	type Error = E;
+
+	fn visit(&mut self, _entry: Entry<'_>) -> std::result::Result<WalkControl, Self::Error> {
+		Ok(WalkControl::Continue)
+	}
+
+	fn visit_pre_decided(
+		&mut self,
+		entry: Entry<'_>,
+	) -> std::result::Result<WalkControl, Self::Error> {
+		if entry.file_type != FileType::File {
+			return Ok(WalkControl::Continue);
+		}
+		let candidate = FileCandidate {
+			path:     entry.path.to_path_buf(),
+			relative: entry.relative.to_string(),
+			mtime:    entry.mtime,
+			size:     entry.size,
+		};
+		match (self.sink)(&candidate)? {
+			ParallelWalkControl::Continue => Ok(WalkControl::Continue),
+			ParallelWalkControl::Stop => Ok(WalkControl::Quit),
+		}
+	}
+
+	fn decide_pre_descend(
+		&mut self,
+		meta: &EntryMeta<'_>,
+	) -> std::result::Result<PreDescendDecision, Self::Error> {
+		let is_dir = meta.file_type == FileType::Dir;
+		Ok(match self.filter.stream_decision(meta) {
+			WalkDecision::Include => {
+				PreDescendDecision { emit: true, descend: is_dir, stop: false }
+			},
+			WalkDecision::Skip => {
+				PreDescendDecision { emit: false, descend: is_dir, stop: false }
+			},
+			WalkDecision::SkipDescend => {
+				PreDescendDecision { emit: false, descend: false, stop: false }
+			},
+			WalkDecision::Stop => PreDescendDecision { emit: false, descend: false, stop: true },
+		})
+	}
+}
+
+struct ParallelWalkContext {
+	root:    PathBuf,
+	options: WalkOptions,
+	filter:  WalkFilter,
+	matcher: FastIgnore,
+}
+
+struct ParallelWalkShared<'a, E, S, H> {
+	stop:      AtomicBool,
+	error:     Mutex<Option<E>>,
+	sink:      &'a S,
+	heartbeat: &'a H,
+}
+
+impl<'a, E, S, H> ParallelWalkShared<'a, E, S, H> {
+	const fn new(sink: &'a S, heartbeat: &'a H) -> Self {
+		Self { stop: AtomicBool::new(false), error: Mutex::new(None), sink, heartbeat }
+	}
+
+	fn request_stop(&self) {
+		self.stop.store(true, AtomicOrdering::Release);
+	}
+
+	fn should_stop(&self) -> bool {
+		self.stop.load(AtomicOrdering::Acquire)
+	}
+
+	fn record_error(&self, error: E) {
+		let mut slot = match self.error.lock() {
+			Ok(slot) => slot,
+			Err(poisoned) => poisoned.into_inner(),
+		};
+		if slot.is_none() {
+			*slot = Some(error);
+		}
+		self.request_stop();
+	}
+
+	fn take_error(&self) -> Option<E> {
+		match self.error.lock() {
+			Ok(mut slot) => slot.take(),
+			Err(poisoned) => poisoned.into_inner().take(),
+		}
+	}
+}
+
+thread_local! {
+	static PARALLEL_HEARTBEAT_COUNTER: Cell<usize> = const { Cell::new(0) };
+	static PARALLEL_SCRATCH_POOL: RefCell<Vec<DirScratch>> = const { RefCell::new(Vec::new()) };
+}
+
+fn should_use_parallel_file_candidate_walk(options: WalkOptions) -> bool {
+	walk_workers() > 1 && options.follow_links == FollowLinks::Never && !options.same_file_system
+}
+
+fn run_file_candidate_parallel<E, S, H>(
+	request: &WalkRequest,
+	sink: &S,
+	heartbeat: &H,
+) -> std::result::Result<WalkStatus, WalkError<E>>
+where
+	E: Send,
+	S: Fn(&FileCandidate) -> std::result::Result<ParallelWalkControl, E> + Sync,
+	H: Fn() -> std::result::Result<(), E> + Sync,
+{
+	let mut options = request.effective_options();
+	if options.min_depth > options.max_depth {
+		return Ok(WalkStatus::Complete);
+	}
+	heartbeat().map_err(WalkError::Interrupted)?;
+	if !should_use_parallel_file_candidate_walk(options) {
+		return run_file_candidate_serial(request, options, sink, heartbeat);
+	}
+
+	options.cache = false;
+	let Some(root_entry) = root_entry(&request.root, options.detail, options.follow_links)? else {
+		return Ok(WalkStatus::Complete);
+	};
+	let context = ParallelWalkContext {
+		root: request.root.clone(),
+		options,
+		filter: request.filter.clone(),
+		matcher: FastIgnore::new(options.use_gitignore),
+	};
+	let root_ignore = context.matcher.root_state(&context.root);
+	let shared = ParallelWalkShared::new(sink, heartbeat);
+
+	if root_entry.file_type == FileType::File && options.min_depth == 0 {
+		emit_parallel_root_file(&context, &shared, &root_entry);
+	}
+	if root_entry.file_type == FileType::Dir && options.max_depth > 0 && !shared.should_stop() {
+		let root_dir = context.root.clone();
+		cache::with_walk_pool(|| {
+			rayon::scope(|scope| {
+				scope.spawn(|scope| {
+					walk_parallel_dir(
+						scope,
+						&context,
+						&shared,
+						root_dir,
+						String::new(),
+						0,
+						root_ignore,
+						false,
+					);
+				});
+			});
+		});
+	}
+
+	if let Some(error) = shared.take_error() {
+		Err(WalkError::Interrupted(error))
+	} else if shared.should_stop() {
+		Ok(WalkStatus::Stopped)
+	} else {
+		Ok(WalkStatus::Complete)
+	}
+}
+
+fn run_file_candidate_serial<E, S, H>(
+	request: &WalkRequest,
+	mut options: WalkOptions,
+	sink: &S,
+	heartbeat: &H,
+) -> std::result::Result<WalkStatus, WalkError<E>>
+where
+	S: Fn(&FileCandidate) -> std::result::Result<ParallelWalkControl, E> + Sync,
+	H: Fn() -> std::result::Result<(), E> + Sync,
+{
+	options.cache = false;
+	options.order = WalkOrder::Unordered;
+	options.contents_first = false;
+	options.emit_root = true;
+	options.directory_errors = DirectoryErrorMode::Visit;
+	let mut visitor = SerialCandidateVisitor { filter: &request.filter, sink };
+	walk_entries(&request.root, options, &mut visitor, heartbeat)
+}
+
+fn emit_parallel_root_file<E, S, H>(
+	context: &ParallelWalkContext,
+	shared: &ParallelWalkShared<'_, E, S, H>,
+	root_entry: &RootEntry,
+) where
+	E: Send,
+	S: Fn(&FileCandidate) -> std::result::Result<ParallelWalkControl, E> + Sync,
+	H: Fn() -> std::result::Result<(), E> + Sync,
+{
+	let meta = EntryMeta {
+		root:          &context.root,
+		absolute_path: Cow::Borrowed(context.root.as_path()),
+		relative_path: "",
+		file_type:     FileType::File,
+		mtime:         root_entry.mtime,
+		size:          root_entry.size,
+		depth:         0,
+	};
+	match context.filter.stream_decision(&meta) {
+		WalkDecision::Include => {
+			let candidate = FileCandidate {
+				path:     context.root.clone(),
+				relative: String::new(),
+				mtime:    root_entry.mtime,
+				size:     root_entry.size,
+			};
+			let _ = emit_parallel_candidate(shared, &candidate);
+		},
+		WalkDecision::Stop => shared.request_stop(),
+		WalkDecision::Skip | WalkDecision::SkipDescend => {},
+	}
+}
+
+fn take_parallel_scratch() -> DirScratch {
+	let mut scratch = PARALLEL_SCRATCH_POOL
+		.with(|pool| pool.borrow_mut().pop())
+		.unwrap_or_default();
+	scratch.clear_listing();
+	scratch
+}
+
+fn recycle_parallel_scratch(mut scratch: DirScratch) {
+	scratch.clear_listing();
+	PARALLEL_SCRATCH_POOL.with(|pool| pool.borrow_mut().push(scratch));
+}
+
+fn parallel_heartbeat<E, S, H>(shared: &ParallelWalkShared<'_, E, S, H>) -> bool
+where
+	E: Send,
+	H: Fn() -> std::result::Result<(), E> + Sync,
+{
+	if shared.should_stop() {
+		return false;
+	}
+	let should_call = PARALLEL_HEARTBEAT_COUNTER.with(|counter| {
+		let visited = counter.get();
+		if visited == 0 || visited >= HEARTBEAT_INTERVAL {
+			counter.set(1);
+			true
+		} else {
+			counter.set(visited + 1);
+			false
+		}
+	});
+	if !should_call {
+		return true;
+	}
+	match (shared.heartbeat)() {
+		Ok(()) => true,
+		Err(error) => {
+			shared.record_error(error);
+			false
+		},
+	}
+}
+
+fn emit_parallel_candidate<E, S, H>(
+	shared: &ParallelWalkShared<'_, E, S, H>,
+	candidate: &FileCandidate,
+) -> bool
+where
+	E: Send,
+	S: Fn(&FileCandidate) -> std::result::Result<ParallelWalkControl, E> + Sync,
+{
+	match (shared.sink)(candidate) {
+		Ok(ParallelWalkControl::Continue) => true,
+		Ok(ParallelWalkControl::Stop) => {
+			shared.request_stop();
+			false
+		},
+		Err(error) => {
+			shared.record_error(error);
+			false
+		},
+	}
+}
+
+fn walk_parallel_dir<'scope, E, S, H>(
+	scope: &rayon::Scope<'scope>,
+	context: &'scope ParallelWalkContext,
+	shared: &'scope ParallelWalkShared<'_, E, S, H>,
+	dir: PathBuf,
+	relative_dir: String,
+	depth: usize,
+	ignore_state: Arc<IgnoreState>,
+	derive_ignore_from_entries: bool,
+) where
+	E: Send + 'scope,
+	S: Fn(&FileCandidate) -> std::result::Result<ParallelWalkControl, E> + Sync + 'scope,
+	H: Fn() -> std::result::Result<(), E> + Sync + 'scope,
+{
+	if shared.should_stop() {
+		return;
+	}
+	let mut scratch = take_parallel_scratch();
+	let ignore_entries = match collect_directory_entries(
+		&dir,
+		context.options.detail,
+		&mut scratch,
+		&context.matcher,
+		derive_ignore_from_entries,
+	) {
+		Ok(ignore_entries) => ignore_entries,
+		Err(ReadDirError::Io(_) | ReadDirError::Walk(WalkError::InvalidData { .. })) => {
+			recycle_parallel_scratch(scratch);
+			return;
+		},
+		Err(ReadDirError::Walk(WalkError::Interrupted(error))) => {
+			shared.record_error(error);
+			recycle_parallel_scratch(scratch);
+			return;
+		},
+	};
+	let dir_ignore = context.matcher.state_from_entries(
+		&ignore_state,
+		&dir,
+		ignore_entries,
+		derive_ignore_from_entries,
+	);
+	let mut absolute = dir;
+	let mut relative = relative_dir;
+
+	for index in 0..scratch.entries.len() {
+		if !parallel_heartbeat(shared) {
+			break;
+		}
+		let entry = &scratch.entries[index];
+		let name = scratch.name(entry);
+		if is_dot_entry(name) {
+			continue;
+		}
+		if !context.options.include_hidden && is_hidden_name(name) {
+			continue;
+		}
+		if (context.options.skip_git && is_git_name(name))
+			|| (context.options.skip_node_modules && is_node_modules_name(name))
+		{
+			continue;
+		}
+
+		let name_str = entry_name(name);
+		if name_str.is_empty() {
+			continue;
+		}
+		let next_depth = depth + 1;
+		if next_depth > context.options.max_depth {
+			continue;
+		}
+
+		let relative_len = relative.len();
+		absolute.push(name);
+		push_relative_name(&mut relative, &name_str);
+		let is_dir = entry.file_type == FileType::Dir;
+		if !context.matcher.is_ignored(&dir_ignore, &absolute, is_dir) {
+			let decision = {
+				let meta = EntryMeta {
+					root:          &context.root,
+					absolute_path: Cow::Borrowed(absolute.as_path()),
+					relative_path: &relative,
+					file_type:     entry.file_type,
+					mtime:         entry.mtime,
+					size:          entry.size,
+					depth:         next_depth,
+				};
+				context.filter.stream_decision(&meta)
+			};
+			match decision {
+				WalkDecision::Include => {
+					if entry.file_type == FileType::File && next_depth >= context.options.min_depth {
+						let candidate = FileCandidate {
+							path:     absolute.clone(),
+							relative: relative.clone(),
+							mtime:    entry.mtime,
+							size:     entry.size,
+						};
+						if !emit_parallel_candidate(shared, &candidate) {
+							absolute.pop();
+							relative.truncate(relative_len);
+							break;
+						}
+					}
+					if is_dir && next_depth < context.options.max_depth && !shared.should_stop() {
+						let child_dir = absolute.clone();
+						let child_relative = relative.clone();
+						let child_ignore = Arc::clone(&dir_ignore);
+						scope.spawn(move |scope| {
+							walk_parallel_dir(
+								scope,
+								context,
+								shared,
+								child_dir,
+								child_relative,
+								next_depth,
+								child_ignore,
+								true,
+							);
+						});
+					}
+				},
+				WalkDecision::Skip => {
+					if is_dir && next_depth < context.options.max_depth && !shared.should_stop() {
+						let child_dir = absolute.clone();
+						let child_relative = relative.clone();
+						let child_ignore = Arc::clone(&dir_ignore);
+						scope.spawn(move |scope| {
+							walk_parallel_dir(
+								scope,
+								context,
+								shared,
+								child_dir,
+								child_relative,
+								next_depth,
+								child_ignore,
+								true,
+							);
+						});
+					}
+				},
+				WalkDecision::SkipDescend => {},
+				WalkDecision::Stop => {
+					shared.request_stop();
+					absolute.pop();
+					relative.truncate(relative_len);
+					break;
+				},
+			}
+		}
+		absolute.pop();
+		relative.truncate(relative_len);
+	}
+	recycle_parallel_scratch(scratch);
+}
+
 /// Visitor decision for streaming traversal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WalkControl {
@@ -1207,6 +1698,15 @@ pub enum WalkStatus {
 	Complete,
 	/// The visitor stopped traversal early.
 	Stopped,
+}
+
+/// Control returned by unordered parallel file-candidate sinks.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ParallelWalkControl {
+	/// Continue walking and delivering candidates.
+	Continue,
+	/// Stop all workers as promptly as possible.
+	Stop,
 }
 
 /// Owned entry returned by [`collect_entries`].
@@ -1732,21 +2232,88 @@ struct RawDirEntry<'a> {
 	size:      Option<f64>,
 }
 
-struct OwnedDirEntry {
+#[cfg(unix)]
+struct DirEntryRecord {
+	name_start: usize,
+	name_len:   usize,
+	file_type:  FileType,
+	mtime:      Option<f64>,
+	size:       Option<f64>,
+}
+
+#[cfg(not(unix))]
+struct DirEntryRecord {
 	name:      OsString,
 	file_type: FileType,
 	mtime:     Option<f64>,
 	size:      Option<f64>,
 }
 
-impl RawDirEntry<'_> {
-	fn into_owned(self) -> OwnedDirEntry {
-		OwnedDirEntry {
-			name:      self.name.into_owned(),
-			file_type: self.file_type,
-			mtime:     self.mtime,
-			size:      self.size,
-		}
+#[derive(Default)]
+struct DirScratch {
+	entries:     Vec<DirEntryRecord>,
+	#[cfg(unix)]
+	name_bytes:  Vec<u8>,
+	read_buffer: Vec<u8>,
+}
+
+impl DirScratch {
+	fn clear_listing(&mut self) {
+		self.entries.clear();
+		#[cfg(unix)]
+		self.name_bytes.clear();
+	}
+
+	#[cfg(unix)]
+	fn push(&mut self, entry: RawDirEntry<'_>) {
+		let name_os: &OsStr = entry.name.as_ref();
+		let name = name_os.as_bytes();
+		let name_start = self.name_bytes.len();
+		self.name_bytes.extend_from_slice(name);
+		self.entries.push(DirEntryRecord {
+			name_start,
+			name_len: name.len(),
+			file_type: entry.file_type,
+			mtime: entry.mtime,
+			size: entry.size,
+		});
+	}
+
+	#[cfg(not(unix))]
+	fn push(&mut self, entry: RawDirEntry<'_>) {
+		self.entries.push(DirEntryRecord {
+			name:      entry.name.into_owned(),
+			file_type: entry.file_type,
+			mtime:     entry.mtime,
+			size:      entry.size,
+		});
+	}
+
+	#[cfg(unix)]
+	fn sort_by_name(&mut self) {
+		let names = &self.name_bytes;
+		self.entries.sort_unstable_by(|left, right| {
+			let left_name = &names[left.name_start..left.name_start + left.name_len];
+			let right_name = &names[right.name_start..right.name_start + right.name_len];
+			left_name.cmp(right_name)
+		});
+	}
+
+	#[cfg(not(unix))]
+	fn sort_by_name(&mut self) {
+		self
+			.entries
+			.sort_unstable_by(|left, right| left.name.cmp(&right.name));
+	}
+
+	#[cfg(unix)]
+	fn name<'a>(&'a self, entry: &DirEntryRecord) -> &'a OsStr {
+		OsStr::from_bytes(&self.name_bytes[entry.name_start..entry.name_start + entry.name_len])
+	}
+
+	#[cfg(not(unix))]
+	fn name<'a>(&'a self, entry: &'a DirEntryRecord) -> &'a OsStr {
+		&entry.name
 	}
 }
 
@@ -1908,6 +2475,9 @@ where
 		root_device,
 		symlink_ancestors: SymlinkAncestorStack::default(),
 		matcher,
+		absolute_path: root.to_path_buf(),
+		relative_path: String::new(),
+		scratch_pool: Vec::new(),
 		visited: 0,
 		heartbeat,
 	};
@@ -1921,6 +2491,9 @@ struct WalkContext<'a, H> {
 	root_device:       Option<u64>,
 	symlink_ancestors: SymlinkAncestorStack,
 	matcher:           FastIgnore,
+	absolute_path:     PathBuf,
+	relative_path:     String,
+	scratch_pool:      Vec<DirScratch>,
 	visited:           usize,
 	heartbeat:         H,
 }
@@ -1992,7 +2565,7 @@ impl<H> WalkContext<'_, H> {
 		let stopped =
 			if root_entry.file_type == FileType::Dir && self.options.max_depth > 0 && decision.descend
 			{
-				self.walk_dir(root, "", 0, root_ignore, visitor)?
+				self.walk_dir(0, root_ignore, false, visitor)?
 			} else {
 				false
 			};
@@ -2027,12 +2600,34 @@ impl<H> WalkContext<'_, H> {
 		Ok(WalkStatus::Complete)
 	}
 
+	fn take_scratch(&mut self) -> DirScratch {
+		let mut scratch = self.scratch_pool.pop().unwrap_or_default();
+		scratch.clear_listing();
+		scratch
+	}
+
+	fn recycle_scratch(&mut self, mut scratch: DirScratch) {
+		scratch.clear_listing();
+		self.scratch_pool.push(scratch);
+	}
+
+	fn push_entry_path(&mut self, name: &OsStr, name_str: &str) -> usize {
+		let relative_len = self.relative_path.len();
+		self.absolute_path.push(name);
+		push_relative_name(&mut self.relative_path, name_str);
+		relative_len
+	}
+
+	fn pop_entry_path(&mut self, relative_len: usize) {
+		self.relative_path.truncate(relative_len);
+		self.absolute_path.pop();
+	}
+
 	fn walk_dir<V>(
 		&mut self,
-		dir: &Path,
-		relative_dir: &str,
 		depth: usize,
 		ignore_state: &Arc<IgnoreState>,
+		derive_ignore_from_entries: bool,
 		visitor: &mut V,
 	) -> std::result::Result<bool, WalkError<V::Error>>
 	where
@@ -2040,49 +2635,62 @@ impl<H> WalkContext<'_, H> {
 		H: FnMut() -> std::result::Result<(), V::Error>,
 	{
 		if self.options.follow_links == FollowLinks::Always
-			&& let Ok(identity) = directory_identity(dir)
+			&& let Ok(identity) = directory_identity(&self.absolute_path)
 		{
 			self.symlink_ancestors.push(identity);
-			let result = self.walk_dir_inner(dir, relative_dir, depth, ignore_state, visitor);
+			let result = self.walk_dir_inner(depth, ignore_state, derive_ignore_from_entries, visitor);
 			self.symlink_ancestors.pop();
 			return result;
 		}
 
-		self.walk_dir_inner(dir, relative_dir, depth, ignore_state, visitor)
+		self.walk_dir_inner(depth, ignore_state, derive_ignore_from_entries, visitor)
 	}
 
 	fn walk_dir_inner<V>(
 		&mut self,
-		dir: &Path,
-		relative_dir: &str,
 		depth: usize,
 		ignore_state: &Arc<IgnoreState>,
+		derive_ignore_from_entries: bool,
 		visitor: &mut V,
 	) -> std::result::Result<bool, WalkError<V::Error>>
 	where
 		V: EntryVisitor,
 		H: FnMut() -> std::result::Result<(), V::Error>,
 	{
-		let mut raw_entries = Vec::new();
-		match platform::read_dir_entries(dir, self.options.detail, |entry| {
-			raw_entries.push(entry.into_owned());
-			Ok(ReadDirControl::Continue)
-		}) {
-			Ok(_) => {},
-			Err(err) => return handle_read_dir_error(dir, err, self.options, visitor),
-		}
+		let mut scratch = self.take_scratch();
+		let ignore_entries = match collect_directory_entries(
+			&self.absolute_path,
+			self.options.detail,
+			&mut scratch,
+			&self.matcher,
+			derive_ignore_from_entries,
+		) {
+			Ok(ignore_entries) => ignore_entries,
+			Err(err) => {
+				let dir = self.absolute_path.clone();
+				self.recycle_scratch(scratch);
+				return handle_read_dir_error(&dir, err, self.options, visitor);
+			},
+		};
 		if self.options.order == WalkOrder::Path {
-			raw_entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+			scratch.sort_by_name();
 		}
+		let dir_ignore = self.matcher.state_from_entries(
+			ignore_state,
+			&self.absolute_path,
+			ignore_entries,
+			derive_ignore_from_entries,
+		);
 
-		for entry in raw_entries {
+		for index in 0..scratch.entries.len() {
 			if self.visited == 0 || self.visited >= HEARTBEAT_INTERVAL {
 				self.visited = 0;
 				(self.heartbeat)().map_err(WalkError::Interrupted)?;
 			}
 			self.visited += 1;
 
-			let name = entry.name.as_ref();
+			let entry = &scratch.entries[index];
+			let name = scratch.name(entry);
 			if is_dot_entry(name) {
 				continue;
 			}
@@ -2099,212 +2707,276 @@ impl<H> WalkContext<'_, H> {
 			if name_str.is_empty() {
 				continue;
 			}
-			let relative = join_relative_path(relative_dir, &name_str);
 			let next_depth = depth + 1;
 			if next_depth > self.options.max_depth {
 				continue;
 			}
 
-			let absolute = dir.join(Path::new(name));
-			let mut file_type = entry.file_type;
-			let mut mtime = entry.mtime;
-			let mut size = entry.size;
-			let mut is_dir = entry.file_type == FileType::Dir;
-			let mut descend = is_dir;
-			let mut followed_symlink_dir = false;
-			let followed_metadata = if entry.file_type == FileType::Symlink
-				&& self.options.follow_links == FollowLinks::Always
-			{
-				match std::fs::metadata(&absolute) {
-					Ok(metadata) => Some(metadata),
-					Err(err) => {
-						if self.options.directory_errors == DirectoryErrorMode::SkipSkippable
-							&& is_skippable_directory_error(&err)
-						{
-							continue;
-						}
-						if self.options.directory_errors == DirectoryErrorMode::Visit {
-							match visitor
-								.visit_directory_error(DirectoryError { path: &absolute, error: &err })
-								.map_err(WalkError::Interrupted)?
-							{
-								WalkControl::Quit => return Ok(true),
-								WalkControl::SkipDescend | WalkControl::Continue => {
-									continue;
-								},
-							}
-						}
-						return Err(WalkError::InvalidData {
-							path:    absolute,
-							message: err.to_string(),
-						});
-					},
-				}
-			} else {
-				None
-			};
-
-			if let Some(target_metadata) = followed_metadata.as_ref() {
-				let Some(target_file_type) = file_type_from_metadata(target_metadata) else {
-					continue;
-				};
-				file_type = target_file_type;
-				if target_file_type == FileType::Dir {
-					is_dir = true;
-					descend = true;
-					followed_symlink_dir = true;
-				} else {
-					is_dir = false;
-					descend = false;
-				}
-				if self.options.detail == WalkDetail::Full {
-					if target_file_type == FileType::File {
-						size = Some(target_metadata.len() as f64);
-					} else {
-						size = None;
-					}
-					mtime = target_metadata
-						.modified()
-						.ok()
-						.and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-						.map(|duration| duration.as_millis() as f64);
-				}
-			}
-
-			if self.matcher.is_ignored(ignore_state, &absolute, is_dir) {
-				continue;
-			}
-
-			if !is_effective_path_on_root_file_system(
-				&absolute,
+			let relative_len = self.push_entry_path(name, &name_str);
+			let entry_result = self.walk_current_entry(
+				name,
+				entry.file_type,
+				entry.mtime,
+				entry.size,
 				next_depth,
-				self.options.follow_links,
-				self.root_device,
-				followed_metadata.as_ref(),
-			) {
-				continue;
+				&dir_ignore,
+				visitor,
+			);
+			self.pop_entry_path(relative_len);
+			if entry_result? {
+				self.recycle_scratch(scratch);
+				return Ok(true);
 			}
+		}
 
-			if followed_symlink_dir && descend {
-				match directory_identity(&absolute) {
-					Ok(target_id) => {
-						if self.symlink_ancestors.contains(&target_id) {
-							let loop_err = io::Error::other("filesystem loop detected");
-							if self.options.directory_errors == DirectoryErrorMode::Visit {
-								match visitor
-									.visit_directory_error(DirectoryError {
-										path:  &absolute,
-										error: &loop_err,
-									})
-									.map_err(WalkError::Interrupted)?
-								{
-									WalkControl::Quit => return Ok(true),
-									WalkControl::SkipDescend | WalkControl::Continue => {
-										continue;
-									},
-								}
-							} else if self.options.directory_errors == DirectoryErrorMode::SkipSkippable {
-								continue;
-							}
-							return Err(WalkError::InvalidData {
-								path:    absolute,
-								message: "filesystem loop detected".to_string(),
-							});
-						}
-					},
-					Err(err) => {
-						if self.options.directory_errors == DirectoryErrorMode::SkipSkippable
-							&& is_skippable_directory_error(&err)
+		self.recycle_scratch(scratch);
+		Ok(false)
+	}
+
+	fn walk_current_entry<V>(
+		&mut self,
+		name: &OsStr,
+		entry_file_type: FileType,
+		entry_mtime: Option<f64>,
+		entry_size: Option<f64>,
+		next_depth: usize,
+		dir_ignore: &Arc<IgnoreState>,
+		visitor: &mut V,
+	) -> std::result::Result<bool, WalkError<V::Error>>
+	where
+		V: EntryVisitor,
+		H: FnMut() -> std::result::Result<(), V::Error>,
+	{
+		let mut file_type = entry_file_type;
+		let mut mtime = entry_mtime;
+		let mut size = entry_size;
+		let mut is_dir = entry_file_type == FileType::Dir;
+		let mut descend = is_dir;
+		let mut followed_symlink_dir = false;
+		let followed_metadata = if entry_file_type == FileType::Symlink
+			&& self.options.follow_links == FollowLinks::Always
+		{
+			match std::fs::metadata(&self.absolute_path) {
+				Ok(metadata) => Some(metadata),
+				Err(err) => {
+					if self.options.directory_errors == DirectoryErrorMode::SkipSkippable
+						&& is_skippable_directory_error(&err)
+					{
+						return Ok(false);
+					}
+					if self.options.directory_errors == DirectoryErrorMode::Visit {
+						match visitor
+							.visit_directory_error(DirectoryError {
+								path:  &self.absolute_path,
+								error: &err,
+							})
+							.map_err(WalkError::Interrupted)?
 						{
-							continue;
+							WalkControl::Quit => return Ok(true),
+							WalkControl::SkipDescend | WalkControl::Continue => {
+								return Ok(false);
+							},
 						}
+					}
+					return Err(WalkError::InvalidData {
+						path:    self.absolute_path.clone(),
+						message: err.to_string(),
+					});
+				},
+			}
+		} else {
+			None
+		};
+
+		if let Some(target_metadata) = followed_metadata.as_ref() {
+			let Some(target_file_type) = file_type_from_metadata(target_metadata) else {
+				return Ok(false);
+			};
+			file_type = target_file_type;
+			if target_file_type == FileType::Dir {
+				is_dir = true;
+				descend = true;
+				followed_symlink_dir = true;
+			} else {
+				is_dir = false;
+				descend = false;
+			}
+			if self.options.detail == WalkDetail::Full {
+				if target_file_type == FileType::File {
+					size = Some(target_metadata.len() as f64);
+				} else {
+					size = None;
+				}
+				mtime = target_metadata
+					.modified()
+					.ok()
+					.and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+					.map(|duration| duration.as_millis() as f64);
+			}
+		}
+
+		if self
+			.matcher
+			.is_ignored(dir_ignore, &self.absolute_path, is_dir)
+		{
+			return Ok(false);
+		}
+
+		if !is_effective_path_on_root_file_system(
+			&self.absolute_path,
+			next_depth,
+			self.options.follow_links,
+			self.root_device,
+			followed_metadata.as_ref(),
+		) {
+			return Ok(false);
+		}
+
+		if followed_symlink_dir && descend {
+			match directory_identity(&self.absolute_path) {
+				Ok(target_id) => {
+					if self.symlink_ancestors.contains(&target_id) {
+						let loop_err = io::Error::other("filesystem loop detected");
 						if self.options.directory_errors == DirectoryErrorMode::Visit {
 							match visitor
-								.visit_directory_error(DirectoryError { path: &absolute, error: &err })
+								.visit_directory_error(DirectoryError {
+									path:  &self.absolute_path,
+									error: &loop_err,
+								})
 								.map_err(WalkError::Interrupted)?
 							{
 								WalkControl::Quit => return Ok(true),
 								WalkControl::SkipDescend | WalkControl::Continue => {
-									continue;
+									return Ok(false);
 								},
 							}
+						} else if self.options.directory_errors == DirectoryErrorMode::SkipSkippable {
+							return Ok(false);
 						}
 						return Err(WalkError::InvalidData {
-							path:    absolute,
-							message: err.to_string(),
+							path:    self.absolute_path.clone(),
+							message: "filesystem loop detected".to_string(),
 						});
-					},
-				}
+					}
+				},
+				Err(err) => {
+					if self.options.directory_errors == DirectoryErrorMode::SkipSkippable
+						&& is_skippable_directory_error(&err)
+					{
+						return Ok(false);
+					}
+					if self.options.directory_errors == DirectoryErrorMode::Visit {
+						match visitor
+							.visit_directory_error(DirectoryError {
+								path:  &self.absolute_path,
+								error: &err,
+							})
+							.map_err(WalkError::Interrupted)?
+						{
+							WalkControl::Quit => return Ok(true),
+							WalkControl::SkipDescend | WalkControl::Continue => {
+								return Ok(false);
+							},
+						}
+					}
+					return Err(WalkError::InvalidData {
+						path:    self.absolute_path.clone(),
+						message: err.to_string(),
+					});
+				},
 			}
+		}
 
+		let decision = {
 			let meta = EntryMeta {
 				root: self.root_path,
-				absolute_path: Cow::Borrowed(&absolute),
-				relative_path: &relative,
+				absolute_path: Cow::Borrowed(self.absolute_path.as_path()),
+				relative_path: &self.relative_path,
 				file_type,
 				mtime,
 				size,
 				depth: next_depth,
 			};
-
-			let decision = visitor
+			visitor
 				.decide_pre_descend(&meta)
-				.map_err(WalkError::Interrupted)?;
-			if decision.stop {
-				return Ok(true);
+				.map_err(WalkError::Interrupted)?
+		};
+		if decision.stop {
+			return Ok(true);
+		}
+
+		if !self.options.contents_first && decision.emit && next_depth >= self.options.min_depth {
+			match visitor
+				.visit_pre_decided(Entry {
+					path: self.absolute_path.as_path(),
+					relative: &self.relative_path,
+					name,
+					file_type,
+					mtime,
+					size,
+					depth: next_depth,
+				})
+				.map_err(WalkError::Interrupted)?
+			{
+				WalkControl::Quit => return Ok(true),
+				WalkControl::SkipDescend => return Ok(false),
+				WalkControl::Continue => {},
 			}
+		}
 
-			if !self.options.contents_first && decision.emit && next_depth >= self.options.min_depth {
-				match visitor
-					.visit_pre_decided(Entry {
-						path: &absolute,
-						relative: &relative,
-						name: entry.name.as_ref(),
-						file_type,
-						mtime,
-						size,
-						depth: next_depth,
-					})
-					.map_err(WalkError::Interrupted)?
-				{
-					WalkControl::Quit => return Ok(true),
-					WalkControl::SkipDescend => continue,
-					WalkControl::Continue => {},
-				}
-			}
+		let child_stopped = if descend && next_depth < self.options.max_depth && decision.descend {
+			self.walk_dir(next_depth, dir_ignore, true, visitor)?
+		} else {
+			false
+		};
 
-			let child_stopped = if descend && next_depth < self.options.max_depth && decision.descend {
-				let child_ignore = self.matcher.child_state(ignore_state, &absolute);
-				self.walk_dir(&absolute, &relative, next_depth, &child_ignore, visitor)?
-			} else {
-				false
-			};
+		if child_stopped {
+			return Ok(true);
+		}
 
-			if child_stopped {
-				return Ok(true);
-			}
-
-			if self.options.contents_first && decision.emit && next_depth >= self.options.min_depth {
-				match visitor
-					.visit_pre_decided(Entry {
-						path: &absolute,
-						relative: &relative,
-						name: entry.name.as_ref(),
-						file_type,
-						mtime,
-						size,
-						depth: next_depth,
-					})
-					.map_err(WalkError::Interrupted)?
-				{
-					WalkControl::Quit => return Ok(true),
-					WalkControl::SkipDescend | WalkControl::Continue => {},
-				}
+		if self.options.contents_first && decision.emit && next_depth >= self.options.min_depth {
+			match visitor
+				.visit_pre_decided(Entry {
+					path: self.absolute_path.as_path(),
+					relative: &self.relative_path,
+					name,
+					file_type,
+					mtime,
+					size,
+					depth: next_depth,
+				})
+				.map_err(WalkError::Interrupted)?
+			{
+				WalkControl::Quit => return Ok(true),
+				WalkControl::SkipDescend | WalkControl::Continue => {},
 			}
 		}
 
 		Ok(false)
 	}
+}
+
+fn collect_directory_entries<E>(
+	dir: &Path,
+	detail: WalkDetail,
+	scratch: &mut DirScratch,
+	matcher: &FastIgnore,
+	derive_ignore_from_entries: bool,
+) -> std::result::Result<IgnoreEntryNames, ReadDirError<E>> {
+	scratch.clear_listing();
+	let mut ignore_entries = IgnoreEntryNames::default();
+	let track_ignore_entries = derive_ignore_from_entries && matcher.use_gitignore;
+	let mut read_buffer = std::mem::take(&mut scratch.read_buffer);
+	let result = platform::read_dir_entries(dir, detail, &mut read_buffer, |entry| {
+		if track_ignore_entries {
+			ignore_entries.record(entry.name.as_ref(), entry.file_type);
+		}
+		scratch.push(entry);
+		Ok(ReadDirControl::Continue)
+	});
+	scratch.read_buffer = read_buffer;
+	result?;
+	Ok(ignore_entries)
 }
 /// Return whether [`WalkDetail::Full`] provides file sizes without per-entry
 /// metadata syscalls on this platform.
@@ -2318,11 +2990,43 @@ struct IgnoreState {
 	gitignore_matcher:   Option<ignore::gitignore::Gitignore>,
 	git_exclude_matcher: Option<ignore::gitignore::Gitignore>,
 	has_git:             bool,
+	chain_has_matchers:  bool,
+	any_git:             bool,
 }
 
 struct FastIgnore {
 	global:        Option<ignore::gitignore::Gitignore>,
 	use_gitignore: bool,
+}
+
+#[derive(Clone, Copy, Default)]
+struct IgnoreEntryNames {
+	ignore_file:    bool,
+	gitignore_file: bool,
+	git_dir:        bool,
+	repo_marker:    bool,
+}
+
+impl IgnoreEntryNames {
+	fn record(&mut self, name: &OsStr, file_type: FileType) {
+		if matches!(file_type, FileType::File | FileType::Symlink) {
+			if name == OsStr::new(".ignore") {
+				self.ignore_file = true;
+			} else if name == OsStr::new(".gitignore") {
+				self.gitignore_file = true;
+			}
+		}
+		if name == OsStr::new(".git") {
+			self.git_dir = true;
+			self.repo_marker = true;
+		} else if name == OsStr::new(".jj") {
+			self.repo_marker = true;
+		}
+	}
+
+	const fn has_relevant(self) -> bool {
+		self.ignore_file || self.gitignore_file || self.git_dir || self.repo_marker
+	}
 }
 
 fn has_repo_marker(dir: &Path) -> bool {
@@ -2342,16 +3046,66 @@ impl IgnoreState {
 	fn build(dir: &Path, parent: Option<Arc<Self>>) -> Arc<Self> {
 		let has_git = has_repo_marker(dir);
 		let git_exclude = dir.join(".git/info/exclude");
-		Arc::new(Self {
+		Self::new(
 			parent,
-			ignore_matcher: load_gitignore(dir, &dir.join(".ignore")),
-			gitignore_matcher: load_gitignore(dir, &dir.join(".gitignore")),
-			git_exclude_matcher: if has_git {
+			load_gitignore(dir, &dir.join(".ignore")),
+			load_gitignore(dir, &dir.join(".gitignore")),
+			if has_git {
 				load_gitignore(dir, &git_exclude)
 			} else {
 				None
 			},
 			has_git,
+		)
+	}
+
+	fn build_from_entry_names(dir: &Path, parent: &Arc<Self>, names: IgnoreEntryNames) -> Arc<Self> {
+		if !names.has_relevant() {
+			return Arc::clone(parent);
+		}
+		let git_exclude = dir.join(".git/info/exclude");
+		Self::new(
+			Some(Arc::clone(parent)),
+			if names.ignore_file {
+				load_gitignore(dir, &dir.join(".ignore"))
+			} else {
+				None
+			},
+			if names.gitignore_file {
+				load_gitignore(dir, &dir.join(".gitignore"))
+			} else {
+				None
+			},
+			if names.git_dir {
+				load_gitignore(dir, &git_exclude)
+			} else {
+				None
+			},
+			names.repo_marker,
+		)
+	}
+
+	fn new(
+		parent: Option<Arc<Self>>,
+		ignore_matcher: Option<ignore::gitignore::Gitignore>,
+		gitignore_matcher: Option<ignore::gitignore::Gitignore>,
+		git_exclude_matcher: Option<ignore::gitignore::Gitignore>,
+		has_git: bool,
+	) -> Arc<Self> {
+		let parent_has_matchers = parent
+			.as_ref()
+			.is_some_and(|parent| parent.chain_has_matchers);
+		let parent_has_git = parent.as_ref().is_some_and(|parent| parent.any_git);
+		let has_matchers =
+			ignore_matcher.is_some() || gitignore_matcher.is_some() || git_exclude_matcher.is_some();
+		Arc::new(Self {
+			parent,
+			ignore_matcher,
+			gitignore_matcher,
+			git_exclude_matcher,
+			has_git,
+			chain_has_matchers: has_matchers || parent_has_matchers,
+			any_git: has_git || parent_has_git,
 		})
 	}
 
@@ -2393,9 +3147,15 @@ impl FastIgnore {
 		IgnoreState::build(root, IgnoreState::build_parents(root, self.use_gitignore))
 	}
 
-	fn child_state(&self, parent: &Arc<IgnoreState>, abs_dir: &Path) -> Arc<IgnoreState> {
-		if self.use_gitignore {
-			IgnoreState::build(abs_dir, Some(Arc::clone(parent)))
+	fn state_from_entries(
+		&self,
+		parent: &Arc<IgnoreState>,
+		dir: &Path,
+		names: IgnoreEntryNames,
+		derive_ignore_from_entries: bool,
+	) -> Arc<IgnoreState> {
+		if self.use_gitignore && derive_ignore_from_entries {
+			IgnoreState::build_from_entry_names(dir, parent, names)
 		} else {
 			Arc::clone(parent)
 		}
@@ -2406,33 +3166,40 @@ impl FastIgnore {
 			return false;
 		}
 
-		let any_git = Self::has_git_state(state);
+		let any_git = state.any_git;
+		let global_matcher_applies = any_git && self.global.is_some();
+		if !state.chain_has_matchers && !global_matcher_applies {
+			return false;
+		}
+
 		let mut saw_git = false;
 		let mut ignore_match = ignore::Match::None;
 		let mut gitignore_match = ignore::Match::None;
 		let mut git_exclude_match = ignore::Match::None;
 
-		let mut current = Some(state.as_ref());
-		while let Some(frame) = current {
-			if ignore_match.is_none()
-				&& let Some(matcher) = &frame.ignore_matcher
-			{
-				ignore_match = matcher.matched(path, is_dir);
+		if state.chain_has_matchers {
+			let mut current = Some(state.as_ref());
+			while let Some(frame) = current {
+				if ignore_match.is_none()
+					&& let Some(matcher) = &frame.ignore_matcher
+				{
+					ignore_match = matcher.matched(path, is_dir);
+				}
+				if gitignore_match.is_none()
+					&& let Some(matcher) = &frame.gitignore_matcher
+				{
+					gitignore_match = matcher.matched(path, is_dir);
+				}
+				if any_git
+					&& !saw_git
+					&& git_exclude_match.is_none()
+					&& let Some(matcher) = &frame.git_exclude_matcher
+				{
+					git_exclude_match = matcher.matched(path, is_dir);
+				}
+				saw_git = saw_git || frame.has_git;
+				current = frame.parent.as_deref();
 			}
-			if gitignore_match.is_none()
-				&& let Some(matcher) = &frame.gitignore_matcher
-			{
-				gitignore_match = matcher.matched(path, is_dir);
-			}
-			if any_git
-				&& !saw_git
-				&& git_exclude_match.is_none()
-				&& let Some(matcher) = &frame.git_exclude_matcher
-			{
-				git_exclude_match = matcher.matched(path, is_dir);
-			}
-			saw_git = saw_git || frame.has_git;
-			current = frame.parent.as_deref();
 		}
 		match ignore_match {
 			ignore::Match::Ignore(_) => return true,
@@ -2455,17 +3222,6 @@ impl FastIgnore {
 				ignore::Match::Whitelist(_) => return false,
 				ignore::Match::None => {},
 			}
-		}
-		false
-	}
-
-	fn has_git_state(state: &Arc<IgnoreState>) -> bool {
-		let mut current = Some(state.as_ref());
-		while let Some(frame) = current {
-			if frame.has_git {
-				return true;
-			}
-			current = frame.parent.as_deref();
 		}
 		false
 	}
@@ -2522,8 +3278,10 @@ fn is_node_modules_name(name: &OsStr) -> bool {
 	name == OsStr::new("node_modules")
 }
 
-fn entry_name(name: &OsStr) -> String {
-	name.to_string_lossy().into_owned()
+fn entry_name(name: &OsStr) -> Cow<'_, str> {
+	name
+		.to_str()
+		.map_or_else(|| name.to_string_lossy(), Cow::Borrowed)
 }
 
 #[cfg(unix)]
@@ -2545,16 +3303,11 @@ fn is_hidden_name(name: &OsStr) -> bool {
 		.is_some_and(|value| value.as_bytes().first() == Some(&b'.'))
 }
 
-fn join_relative_path(parent: &str, name: &str) -> String {
-	if parent.is_empty() {
-		name.to_string()
-	} else {
-		let mut path = String::with_capacity(parent.len() + 1 + name.len());
-		path.push_str(parent);
-		path.push('/');
-		path.push_str(name);
-		path
+fn push_relative_name(relative: &mut String, name: &str) {
+	if !relative.is_empty() {
+		relative.push('/');
 	}
+	relative.push_str(name);
 }
 
 fn mtime_millis(seconds: i64, nanos: i64) -> Option<f64> {
@@ -2579,6 +3332,11 @@ mod platform {
 		FileType, RawDirEntry, ReadDirControl, ReadDirError, WalkDetail, WalkError, mtime_millis,
 	};
 
+	/// `getattrlistbulk` can return data length in the same batch, but
+	/// requesting full-detail attributes (size + mtime) measurably slows the
+	/// bulk scan (~+50% walk time on APFS), which outweighs saving one fstat
+	/// per opened file. Benchmarked via `perf_walk_collect_full_detail` vs
+	/// minimal detail.
 	pub const CHEAP_SIZE_HINTS: bool = false;
 
 	const BUFFER_SIZE: usize = 256 * 1024;
@@ -2598,6 +3356,7 @@ mod platform {
 	pub fn read_dir_entries<F, E>(
 		path: &Path,
 		detail: WalkDetail,
+		buffer: &mut Vec<u8>,
 		mut emit: F,
 	) -> std::result::Result<ReadDirControl, ReadDirError<E>>
 	where
@@ -2618,7 +3377,9 @@ mod platform {
 			attrs.fileattr |= libc::ATTR_FILE_DATALENGTH;
 		}
 
-		let mut buffer = vec![0u8; BUFFER_SIZE];
+		if buffer.len() != BUFFER_SIZE {
+			buffer.resize(BUFFER_SIZE, 0);
+		}
 		loop {
 			// SAFETY: `fd` is an open directory descriptor, `attrs` points to a valid
 			// attrlist for the duration of the call, and `buffer` is writable.
@@ -2902,13 +3663,16 @@ mod platform {
 	pub fn read_dir_entries<F, E>(
 		path: &Path,
 		detail: WalkDetail,
+		buffer: &mut Vec<u8>,
 		mut emit: F,
 	) -> std::result::Result<ReadDirControl, ReadDirError<E>>
 	where
 		F: FnMut(RawDirEntry<'_>) -> std::result::Result<ReadDirControl, WalkError<E>>,
 	{
 		let fd = open_dir(path)?;
-		let mut buffer = vec![0u8; BUFFER_SIZE];
+		if buffer.len() != BUFFER_SIZE {
+			buffer.resize(BUFFER_SIZE, 0);
+		}
 		loop {
 			// SAFETY: `fd` is an open directory descriptor and `buffer` is writable.
 			let read = unsafe {
@@ -3184,13 +3948,16 @@ mod platform {
 	pub fn read_dir_entries<F, E>(
 		path: &Path,
 		detail: WalkDetail,
+		buffer: &mut Vec<u8>,
 		mut emit: F,
 	) -> std::result::Result<ReadDirControl, ReadDirError<E>>
 	where
 		F: FnMut(RawDirEntry<'_>) -> std::result::Result<ReadDirControl, WalkError<E>>,
 	{
 		let handle = open_dir(path)?;
-		let mut buffer = vec![0u8; BUFFER_SIZE];
+		if buffer.len() != BUFFER_SIZE {
+			buffer.resize(BUFFER_SIZE, 0);
+		}
 		let mut restart = true;
 
 		loop {
@@ -3325,6 +4092,7 @@ mod platform {
 	pub fn read_dir_entries<F, E>(
 		path: &Path,
 		detail: WalkDetail,
+		_buffer: &mut Vec<u8>,
 		mut emit: F,
 	) -> std::result::Result<ReadDirControl, ReadDirError<E>>
 	where
