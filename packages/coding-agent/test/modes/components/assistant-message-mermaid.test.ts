@@ -114,16 +114,25 @@ describe("AssistantMessageComponent settled-row commit boundary", () => {
 		expect(component.getTranscriptBlockSettledRows()).toBeGreaterThan(0);
 	});
 
-	it("exposes zero settled rows for reflowing markdown while streaming", () => {
+	it("exposes zero settled rows for Mermaid while streaming", () => {
 		for (const markdown of [
 			"Here is the flow:\n\n```mermaid\nflowchart TD\n  A-->B",
 			"```mermaid\nflowchart TD\n  A-->B\n```",
-			"Results:\n\n| Name | Score |\n| --- | --- |\n| a | 1 |",
 		]) {
 			const component = renderStreamingMarkdown(markdown);
 
 			expect(component.getTranscriptBlockSettledRows()).toBe(0);
 		}
+	});
+
+	it("keeps a streaming table in the unsettled tail", () => {
+		const component = renderStreamingMarkdown("Results:\n\n| Name | Score |\n| --- | --- |\n| a | 1 |");
+		const renderedRows = component.render(80);
+		const settledRows = component.getTranscriptBlockSettledRows();
+
+		expect(settledRows).toBeGreaterThan(0);
+		expect(settledRows).toBeLessThan(renderedRows.length);
+		expect(Bun.stripANSI(renderedRows.slice(settledRows).join("\n"))).toContain("Name");
 	});
 
 	it("exposes zero settled rows after a reflowing block finalizes", () => {

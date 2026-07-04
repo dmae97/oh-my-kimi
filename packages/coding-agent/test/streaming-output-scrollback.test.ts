@@ -1,4 +1,6 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
 import { TranscriptContainer } from "@oh-my-pi/pi-coding-agent/modes/components/transcript-container";
 import { theme as activeTheme, initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
@@ -93,6 +95,70 @@ function stubStdoutRows(rows: number): void {
 	Object.defineProperty(process.stdout, "rows", { configurable: true, value: rows });
 }
 
+function makeAssistantMessage(content: AssistantMessage["content"], output = 0): AssistantMessage {
+	return {
+		role: "assistant",
+		content,
+		api: "anthropic-messages",
+		provider: "anthropic",
+		model: "claude-sonnet-4-5",
+		usage: {
+			input: 0,
+			output,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: output,
+			reasoningTokens: output,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "stop",
+		timestamp: Date.now(),
+	};
+}
+
+function streamingPrefixes(text: string, step: number): string[] {
+	const prefixes: string[] = [];
+	for (let end = Math.min(step, text.length); end < text.length; end += step) {
+		prefixes.push(text.slice(0, end));
+	}
+	prefixes.push(text);
+	return prefixes;
+}
+
+async function settleFrame(term: VirtualTerminal): Promise<void> {
+	// These integration tests use the production TUI scheduler rather than the
+	// drainable unit-test scheduler, so the frame timer must elapse for the real
+	// differential renderer to write to the Ghostty-backed terminal.
+	const nextTick = Promise.withResolvers<void>();
+	process.nextTick(nextTick.resolve);
+	await nextTick.promise;
+	await Bun.sleep(45);
+	await term.flush();
+}
+
+function plainScrollBuffer(term: VirtualTerminal): string[] {
+	return term.getScrollBuffer().map(row => Bun.stripANSI(row).trimEnd());
+}
+
+function makeEvalProbeResult(output: string, status: "running" | "complete") {
+	return {
+		content: [{ type: "text" as const, text: output }],
+		details: {
+			language: "js" as const,
+			languages: ["js" as const],
+			cells: [
+				{
+					index: 0,
+					code: "for (const line of probeLines) console.log(line);",
+					language: "js" as const,
+					output,
+					status,
+				},
+			],
+		},
+		isError: false,
+	};
+}
 describe("streaming tool output never sprays duplicate scrollback banners", () => {
 	beforeAll(async () => {
 		await initTheme();
@@ -159,4 +225,133 @@ describe("streaming tool output never sprays duplicate scrollback banners", () =
 		expect(lines.length).toBeLessThanOrEqual(previewWindowRows() + 10);
 		expect(lines.map(line => Bun.stripANSI(line)).join("\n")).toContain("ctrl+o");
 	});
+
+	test("streams live assistant thinking and answer rows into native scrollback before finalize", async () => {
+		const rows = 8;
+		stubStdoutRows(rows);
+		const term = new VirtualTerminal(60, rows);
+		Object.defineProperty(term, "isNativeViewportAtBottom", { configurable: true, value: () => undefined });
+		const tui = new TUI(term);
+		const transcript = new TranscriptContainer();
+		const assistant = new AssistantMessageComponent(undefined, false);
+		transcript.addChild(assistant);
+		tui.addChild(transcript);
+
+		const thinking = Array.from(
+			{ length: 6 },
+			(_, i) => `Thinking paragraph ${i} streaming with plenty of words to wrap here.`,
+		).join("\n\n");
+		const text = Array.from(
+			{ length: 10 },
+			(_, i) => `Answer paragraph ${i} with enough content to occupy a full row or two.`,
+		).join("\n\n");
+		const fullContent: AssistantMessage["content"] = [
+			{ type: "thinking", thinking },
+			{ type: "text", text },
+		];
+
+		try {
+			tui.start();
+			await settleFrame(term);
+
+			for (const partialThinking of streamingPrefixes(thinking, 300)) {
+				assistant.updateContent(makeAssistantMessage([{ type: "thinking", thinking: partialThinking }]), {
+					transient: true,
+				});
+				tui.requestRender();
+				await settleFrame(term);
+			}
+
+			for (const partialText of streamingPrefixes(text, 300)) {
+				assistant.updateContent(
+					makeAssistantMessage([
+						{ type: "thinking", thinking },
+						{ type: "text", text: partialText },
+					]),
+					{ transient: true },
+				);
+				tui.requestRender();
+				await settleFrame(term);
+			}
+
+			const midStreamRows = plainScrollBuffer(term);
+			expect(midStreamRows.some(row => row.includes("Thinking paragraph 0"))).toBe(true);
+			expect(midStreamRows.some(row => row.includes("Answer paragraph 0 "))).toBe(true);
+
+			assistant.updateContent(makeAssistantMessage(fullContent), { transient: false });
+			assistant.markTranscriptBlockFinalized();
+			for (let i = 0; i < 2; i++) {
+				tui.requestRender();
+				await settleFrame(term);
+			}
+
+			const finalRows = plainScrollBuffer(term);
+			expect(finalRows.filter(row => row.includes("Thinking paragraph 0"))).toHaveLength(1);
+			expect(finalRows.filter(row => row.includes("Answer paragraph 0 "))).toHaveLength(1);
+		} finally {
+			assistant.dispose();
+			tui.stop();
+			await term.flush();
+		}
+	}, 30_000);
+
+	test("expanded live eval output records painted rows without spraying after settle", async () => {
+		const rows = 8;
+		stubStdoutRows(rows);
+		const term = new VirtualTerminal(60, rows);
+		const tui = new TUI(term);
+		const transcript = new TranscriptContainer();
+		const component = new ToolExecutionComponent(
+			"eval",
+			{ code: "probeLines.forEach(console.log)", language: "js" },
+			{},
+			undefined,
+			tui,
+		);
+		transcript.addChild(component);
+		tui.addChild(transcript);
+		const probeLines = Array.from({ length: 30 }, (_, i) => `probe-line-${i}`);
+		const output = probeLines.join("\n");
+
+		try {
+			tui.start();
+			await settleFrame(term);
+
+			component.updateResult(makeEvalProbeResult(output, "running"), true);
+			component.setExpanded(true);
+			for (let i = 0; i < 3; i++) {
+				tui.requestRender();
+				await settleFrame(term);
+			}
+
+			const midRunRows = plainScrollBuffer(term);
+			expect(midRunRows.some(row => row.includes("probe-line-0"))).toBe(true);
+
+			component.updateResult(makeEvalProbeResult(output, "complete"), false);
+			for (let i = 0; i < 2; i++) {
+				tui.requestRender();
+				await settleFrame(term);
+			}
+
+			const settledRows = plainScrollBuffer(term);
+			for (const line of probeLines) {
+				expect(settledRows.some(row => row.includes(line))).toBe(true);
+			}
+			const settledTape = settledRows.join("\n");
+			const settledLength = settledRows.length;
+
+			for (let i = 0; i < 2; i++) {
+				tui.requestRender();
+				await settleFrame(term);
+			}
+
+			const repeatedRows = plainScrollBuffer(term);
+			expect(repeatedRows).toHaveLength(settledLength);
+			expect(repeatedRows.join("\n")).toBe(settledTape);
+		} finally {
+			component.stopAnimation();
+			tui.stop();
+			await term.flush();
+		}
+	}, 30_000);
 });

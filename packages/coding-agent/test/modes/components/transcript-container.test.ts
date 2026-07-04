@@ -632,6 +632,43 @@ describe("TranscriptContainer isBlockInLiveRegion", () => {
 	});
 });
 
+describe("TranscriptContainer isBlockUncommitted", () => {
+	it("returns true for a block that has never rendered", () => {
+		const container = new TranscriptContainer();
+		const block = new MutableBlock(["not painted yet"]);
+		container.addChild(block);
+
+		expect(container.isBlockUncommitted(block)).toBe(true);
+	});
+
+	it("tracks whether committed rows have reached a rendered block", () => {
+		const container = new TranscriptContainer();
+		container.addChild(new MutableBlock(["history"]));
+		const block = new MutableBlock(["target-0", "target-1"]);
+		container.addChild(block);
+
+		expect(container.render(40)).toEqual(["history", "", "target-0", "target-1"]);
+		container.setNativeScrollbackCommittedRows(1);
+		expect(container.isBlockUncommitted(block)).toBe(true);
+
+		container.setNativeScrollbackCommittedRows(3);
+		expect(container.isBlockUncommitted(block)).toBe(false);
+	});
+
+	it("keeps empty-render blocks uncommitted after committed rows advance", () => {
+		const container = new TranscriptContainer();
+		container.addChild(new MutableBlock(["history"]));
+		const empty = new MutableBlock([]);
+		container.addChild(empty);
+		container.addChild(new MutableBlock(["tail"]));
+
+		expect(container.render(40)).toEqual(["history", "", "tail"]);
+		expect(container.isBlockUncommitted(empty)).toBe(true);
+		container.setNativeScrollbackCommittedRows(100);
+		expect(container.isBlockUncommitted(empty)).toBe(true);
+	});
+});
+
 describe("TranscriptContainer renderViewportTail", () => {
 	const W = 40;
 	// Four two-row blocks. A full render joins them with one blank separator:

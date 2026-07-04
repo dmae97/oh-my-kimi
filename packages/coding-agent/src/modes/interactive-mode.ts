@@ -930,6 +930,17 @@ export class InteractiveMode implements InteractiveModeContext {
 		pushTerminalTitle();
 		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
 		this.updateEditorBorderColor();
+		// Single side-effect point for title changes: every setSessionName caller
+		// (first-input titling, /rename, extension renames, plan seeding, replan
+		// refresh) gets the terminal title + accent updates from here. Registered
+		// before initHooksAndCustomTools/#reconcileModeFromSession/#enterPlanMode —
+		// all of which can reach setSessionName during init.
+		this.#eventBusUnsubscribers.push(
+			this.sessionManager.onSessionNameChanged(() => {
+				setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
+				this.#handleSessionAccentInputsChanged();
+			}),
+		);
 		this.#syncEditorMaxHeight();
 		this.isInitialized = true;
 		this.ui.requestRender(true);
@@ -985,13 +996,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#eventBusUnsubscribers.push(
 			this.session.subscribe(event => {
 				void this.#handleGoalSessionEvent(event);
-			}),
-			this.sessionManager.onSessionNameChanged(() => {
-				// Single side-effect point for title changes: every setSessionName
-				// caller (first-input titling, /rename, plan seeding, replan refresh)
-				// gets the terminal title + accent updates from here.
-				setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
-				this.#handleSessionAccentInputsChanged();
 			}),
 			onStatusLineSessionAccentChanged(() => {
 				this.#syncStatusLineSettings();
