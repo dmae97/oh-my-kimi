@@ -31,6 +31,18 @@ describe("write streaming preview honors Ctrl+O expansion", () => {
 		return new ToolExecutionComponent("write", { file_path: "/tmp/foo.ts", content }, {}, undefined, uiStub);
 	}
 
+	async function getUiTheme() {
+		if (!initialized) {
+			await themeModule.initTheme();
+			initialized = true;
+		}
+		const uiTheme = (await themeModule.getThemeByName("dark")) ?? (await themeModule.getThemeByName("light"));
+		if (!uiTheme) {
+			throw new Error("expected an initialized theme");
+		}
+		return uiTheme;
+	}
+
 	it("collapses a streaming write to a bounded tail and lifts the cap on expand", async () => {
 		// 40 lines > WRITE_STREAMING_PREVIEW_LINES (12): the head must be hidden
 		// while collapsed and the streaming edge (tail) kept visible.
@@ -85,6 +97,45 @@ describe("write streaming preview honors Ctrl+O expansion", () => {
 		options.spinnerFrame = 1;
 		component.render(120);
 		expect(highlightSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("coerces truthy non-string content for pending write previews", async () => {
+		const uiTheme = await getUiTheme();
+		const runtimeContent = ["object first\r\nobject second"];
+
+		const component = writeToolRenderer.renderCall(
+			{ path: "/tmp/runtime-content.ts", content: runtimeContent },
+			{ expanded: true, isPartial: true, spinnerFrame: 0 },
+			uiTheme,
+		);
+
+		const rendered = stripAnsi(component.render(120).join("\n"));
+		expect(rendered).toContain("object first");
+		expect(rendered).toContain("object second");
+		expect(rendered).toMatch(/\b2 object second\b/);
+		expect(rendered).not.toContain("\r");
+	});
+
+	it("coerces truthy non-string content for merged write results", async () => {
+		const uiTheme = await getUiTheme();
+		const runtimeContent = ["merged first\r\nmerged second"];
+
+		const component = writeToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "Wrote /tmp/runtime-content.ts" }],
+				details: { resolvedPath: "/tmp/runtime-content.ts" },
+			},
+			{ expanded: true, isPartial: false },
+			uiTheme,
+			{ path: "/tmp/runtime-content.ts", content: runtimeContent },
+		);
+
+		const rendered = stripAnsi(component.render(120).join("\n"));
+		expect(rendered).toContain("merged first");
+		expect(rendered).toContain("merged second");
+		expect(rendered).toContain("2 lines");
+		expect(rendered).toMatch(/\b2 merged second\b/);
+		expect(rendered).not.toContain("\r");
 	});
 
 	it("renders execution progress as a partial result without diagnostics", async () => {
