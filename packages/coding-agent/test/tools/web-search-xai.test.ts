@@ -111,17 +111,12 @@ describe("xAI web search provider", () => {
 	});
 
 	it.each([
-		["limit", { limit: 6 }, { max_search_results: 6 }],
-		["numSearchResults", { numSearchResults: 7 }, { max_search_results: 7 }],
-		["limit and numSearchResults", { limit: 2, numSearchResults: 50 }, { max_search_results: 30 }],
-		["recency", { recency: "week" }, { from_date: "2026-06-19", to_date: "2026-06-26" }],
-		[
-			"limit, numSearchResults, and recency",
-			{ limit: 0, numSearchResults: 30, recency: "day" },
-			{ max_search_results: 30, from_date: "2026-06-25", to_date: "2026-06-26" },
-		],
-	] as const)("maps %s to xAI search_parameters", async (_caseName, searchParams, expectedSearchParameters) => {
-		setSystemTime(new Date("2026-06-26T12:34:56.000Z"));
+		["limit", { limit: 6 }],
+		["numSearchResults", { numSearchResults: 7 }],
+		["recency", { recency: "week" }],
+		["limit, numSearchResults, and recency", { limit: 0, numSearchResults: 30, recency: "day" }],
+		["oversized numSearchResults", { numSearchResults: 99 }],
+	] as const)("keeps %s local instead of sending xAI search_parameters", async (_caseName, searchParams) => {
 		const capture = captureFetch({ id: "resp_agent_tools", model: "grok-4.3", output_text: "xAI answer" });
 
 		await searchXAI({
@@ -132,8 +127,8 @@ describe("xAI web search provider", () => {
 		expect(capture.capturedRequest).not.toBeNull();
 		const body = capture.capturedRequest?.body;
 		expect(body?.tools).toEqual([{ type: "web_search" }]);
-		expect(body?.search_parameters).toEqual(expectedSearchParameters);
-		expect(Object.keys(body ?? {}).sort()).toEqual(["input", "model", "search_parameters", "tools"]);
+		expect(body).not.toHaveProperty("search_parameters");
+		expect(Object.keys(body ?? {}).sort()).toEqual(["input", "model", "tools"]);
 	});
 
 	it("rejects deprecated live-search 410 responses without retrying", async () => {
@@ -159,11 +154,8 @@ describe("xAI web search provider", () => {
 		expect(capture.capturedRequests).toHaveLength(1);
 		const body = capture.capturedRequests[0]?.body;
 		expect(body?.tools).toEqual([{ type: "web_search" }]);
-		expect(body?.search_parameters).toEqual({
-			max_search_results: 5,
-			from_date: expect.any(String),
-			to_date: expect.any(String),
-		});
+		expect(body).not.toHaveProperty("search_parameters");
+		expect(Object.keys(body ?? {}).sort()).toEqual(["input", "model", "tools"]);
 	});
 
 	it("maps output_text, URL citation annotations, top-level citations, id, model, usage, and auth mode", async () => {
@@ -317,8 +309,8 @@ describe("xAI web search provider", () => {
 		expect(capture.capturedRequest).not.toBeNull();
 		const body = capture.capturedRequest?.body;
 		expect(body?.tools).toEqual([{ type: "web_search" }]);
-		expect(body?.search_parameters).toEqual({ max_search_results: 30 });
-		expect(Object.keys(body ?? {}).sort()).toEqual(["input", "model", "search_parameters", "tools"]);
+		expect(body).not.toHaveProperty("search_parameters");
+		expect(Object.keys(body ?? {}).sort()).toEqual(["input", "model", "tools"]);
 	});
 
 	it("caps parsed sources and citations locally without changing Agent Tools request shape", async () => {
@@ -385,8 +377,8 @@ describe("xAI web search provider", () => {
 		expect(capture.capturedRequest).not.toBeNull();
 		const body = capture.capturedRequest?.body;
 		expect(body?.tools).toEqual([{ type: "web_search" }]);
-		expect(body?.search_parameters).toEqual({ max_search_results: 4 });
-		expect(Object.keys(body ?? {}).sort()).toEqual(["input", "model", "search_parameters", "tools"]);
+		expect(body).not.toHaveProperty("search_parameters");
+		expect(Object.keys(body ?? {}).sort()).toEqual(["input", "model", "tools"]);
 	});
 
 	it("uses numSearchResults before limit for the local xAI output cap", async () => {
@@ -429,8 +421,8 @@ describe("xAI web search provider", () => {
 		expect(capture.capturedRequest).not.toBeNull();
 		const body = capture.capturedRequest?.body;
 		expect(body?.tools).toEqual([{ type: "web_search" }]);
-		expect(body?.search_parameters).toEqual({ max_search_results: 3 });
-		expect(Object.keys(body ?? {}).sort()).toEqual(["input", "model", "search_parameters", "tools"]);
+		expect(body).not.toHaveProperty("search_parameters");
+		expect(Object.keys(body ?? {}).sort()).toEqual(["input", "model", "tools"]);
 	});
 
 	it("falls back to output content parts when output_text is absent", async () => {

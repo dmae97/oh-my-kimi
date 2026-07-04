@@ -12,6 +12,8 @@
 
 ### Fixed
 
+- Fixed xAI `web_search` sending unsupported request-level `search_parameters` to the Responses Agent Tools API; result counts are now enforced locally without adding deprecated live-search date bounds. ([#4537](https://github.com/can1357/oh-my-pi/issues/4537))
+
 - Fixed raw `read` ranges not contributing to edit seen-line provenance, so re-reading an anchor range with `:raw` now unblocks hashline edits without adding non-raw line prefixes.
 - Fixed replan-driven session title refresh updating the statusline but not the terminal window title: terminal-title updates now fire from the session-name-changed listener, so every `setSessionName` path (first-input titling, `/rename`, plan seeding, replan refresh) sets the OSC title consistently.
 - Fixed user-interrupt aborts rendering the persisted `Interrupted by user` label in assistant transcripts; replay and live views now suppress that redundant line again while preserving generic/custom abort labels.
