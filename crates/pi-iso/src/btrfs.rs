@@ -220,15 +220,17 @@ mod imp {
 	}
 
 	fn command_message(stderr: &[u8], stdout: &[u8]) -> String {
-		let stderr = String::from_utf8_lossy(stderr).trim().to_string();
+		let stderr = String::from_utf8_lossy(stderr);
+		let stderr = stderr.trim();
 		if !stderr.is_empty() {
-			return stderr;
+			return stderr.to_owned();
 		}
-		let stdout = String::from_utf8_lossy(stdout).trim().to_string();
+		let stdout = String::from_utf8_lossy(stdout);
+		let stdout = stdout.trim();
 		if stdout.is_empty() {
 			"no command output".to_string()
 		} else {
-			stdout
+			stdout.to_owned()
 		}
 	}
 

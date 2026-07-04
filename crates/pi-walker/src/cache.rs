@@ -128,10 +128,7 @@ where
 	E: Send,
 {
 	if !should_parallelize(items.len()) {
-		for item in items {
-			operation(item)?;
-		}
-		return Ok(());
+		return items.iter().try_for_each(operation);
 	}
 	with_walk_pool(|| items.par_iter().try_for_each(operation))
 }

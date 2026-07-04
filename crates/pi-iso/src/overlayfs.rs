@@ -138,16 +138,12 @@ mod imp {
 
 		match kernel_mount(&merged, &opts) {
 			Ok(()) => {
-				ACTIVE_MOUNTS
-					.lock()
-					.insert(merged.clone(), MountFlavor::Kernel);
+				ACTIVE_MOUNTS.lock().insert(merged, MountFlavor::Kernel);
 				Ok(())
 			},
 			Err(err) if err.is_unavailable() => {
 				fuse_mount(&lower, &upper, &work, &merged)?;
-				ACTIVE_MOUNTS
-					.lock()
-					.insert(merged.clone(), MountFlavor::Fuse);
+				ACTIVE_MOUNTS.lock().insert(merged, MountFlavor::Fuse);
 				Ok(())
 			},
 			Err(err) => Err(err),

@@ -42,7 +42,6 @@ pub struct MinimizerOutput {
 	/// Byte length of the captured buffer before minimization.
 	pub input_bytes:   usize,
 	/// Byte length of `text` after minimization.
-	#[allow(dead_code, reason = "test-only API surface")]
 	pub output_bytes:  usize,
 	/// Label for the dispatch path that produced this output (e.g. `"git"`,
 	/// `"pipeline:gradle"`, or `"passthrough"`). For non-rewrite misses, this
@@ -111,7 +110,6 @@ impl MinimizerOutput {
 	}
 
 	/// Byte count saved by this filter (0 for passthrough).
-	#[allow(dead_code, reason = "test-only API surface")]
 	#[must_use]
 	pub const fn bytes_saved(&self) -> usize {
 		self.input_bytes.saturating_sub(self.output_bytes)

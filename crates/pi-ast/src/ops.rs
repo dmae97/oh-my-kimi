@@ -2,10 +2,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 use ast_grep_core::{
-	MatchStrictness, Position,
+	MatchStrictness,
 	matcher::{Pattern, PatternError},
 	source::Edit,
-	tree_sitter::{LanguageExt, StrDoc},
+	tree_sitter::LanguageExt,
 };
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
@@ -148,11 +148,12 @@ pub fn collect_matches(source: &str, language: SupportLang, patterns: &[Pattern]
 			let start = matched.start_pos();
 			let end = matched.end_pos();
 			let range = matched.range();
+			let node = matched.get_node();
 			matches.push(AstMatch {
 				line:       start.line() + 1,
-				column:     char_column(start, matched.get_node()) + 1,
+				column:     start.column(node) + 1,
 				end_line:   end.line() + 1,
-				end_column: char_column(end, matched.get_node()) + 1,
+				end_column: end.column(node) + 1,
 				byte_start: range.start,
 				byte_end:   range.end,
 				text:       matched.text().into_owned(),
@@ -204,9 +205,9 @@ pub fn apply_edits(content: &str, edits: &[Edit<String>]) -> Result<String> {
 		if end > output.len() || start > end {
 			return Err(anyhow!("Computed edit range is out of bounds"));
 		}
-		let replacement = String::from_utf8(edit.inserted_text.clone())
+		let replacement = std::str::from_utf8(&edit.inserted_text)
 			.map_err(|err| anyhow!("Replacement text is not valid UTF-8: {err}"))?;
-		output.replace_range(start..end, &replacement);
+		output.replace_range(start..end, replacement);
 	}
 	Ok(output)
 }
@@ -266,10 +267,6 @@ fn build_globset(patterns: &[String]) -> Result<GlobSet, std::io::Error> {
 #[must_use]
 pub fn has_glob_syntax(pattern: &str) -> bool {
 	pattern.contains('*') || pattern.contains('?') || pattern.contains('[')
-}
-
-fn char_column(position: Position, node: &ast_grep_core::Node<'_, StrDoc<SupportLang>>) -> usize {
-	position.column(node)
 }
 
 fn compile_rust_contextual_pattern(pattern: &str) -> Option<Pattern> {

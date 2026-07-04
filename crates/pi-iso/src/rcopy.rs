@@ -140,7 +140,8 @@ fn git_worktree_add(lower: &Path, merged: &Path) -> IsoResult<()> {
 	if output.status.success() {
 		return Ok(());
 	}
-	let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	let stderr = stderr.trim();
 	Err(IsoError::other(format!(
 		"git worktree add (exit {}): {stderr}",
 		output.status.code().unwrap_or(-1)
@@ -161,7 +162,8 @@ fn git_worktree_remove(merged: &Path) -> IsoResult<()> {
 	if output.status.success() {
 		return Ok(());
 	}
-	let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	let stderr = stderr.trim();
 	Err(IsoError::other(format!(
 		"git worktree remove (exit {}): {stderr}",
 		output.status.code().unwrap_or(-1)
@@ -234,7 +236,8 @@ fn git_capture(cwd: &Path, args: &[&str]) -> IsoResult<Vec<u8>> {
 			}
 		})?;
 	if !output.status.success() {
-		let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+		let stderr = String::from_utf8_lossy(&output.stderr);
+		let stderr = stderr.trim();
 		return Err(IsoError::other(format!(
 			"git {} (exit {}): {stderr}",
 			args.join(" "),
@@ -304,7 +307,8 @@ fn git_apply_with_program(
 		write_result.map_err(|err| IsoError::other(format!("write patch to git apply: {err}")))?;
 		return Ok(());
 	}
-	let stderr = String::from_utf8_lossy(&stderr).trim().to_string();
+	let stderr = String::from_utf8_lossy(&stderr);
+	let stderr = stderr.trim();
 	Err(IsoError::other(format!("git apply (exit {}): {stderr}", status.code().unwrap_or(-1))))
 }
 
@@ -422,7 +426,7 @@ fn filetime_set(path: &Path, mtime: std::time::SystemTime) -> std::io::Result<()
 	use std::os::unix::ffi::OsStrExt;
 	let dur = mtime
 		.duration_since(std::time::UNIX_EPOCH)
-		.map_err(|err| std::io::Error::other(err.to_string()))?;
+		.map_err(std::io::Error::other)?;
 	let times =
 		[libc::timespec { tv_sec: dur.as_secs() as libc::time_t, tv_nsec: 0 }, libc::timespec {
 			tv_sec:  dur.as_secs() as libc::time_t,

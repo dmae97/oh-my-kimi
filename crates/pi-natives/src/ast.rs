@@ -543,8 +543,9 @@ fn normalize_pattern_list(patterns: Option<Vec<String>>) -> Result<Vec<String>> 
 		if pattern.is_empty() {
 			continue;
 		}
-		if seen.insert(pattern.to_string()) {
-			normalized.push(pattern.to_string());
+		let owned = pattern.to_string();
+		if seen.insert(owned.clone()) {
+			normalized.push(owned);
 		}
 	}
 	if normalized.is_empty() {
