@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed empty assistant turns rendering orphaned token-usage badges in live and rebuilt transcripts. ([#4532](https://github.com/can1357/oh-my-pi/issues/4532))
+
 ## [16.3.6] - 2026-07-04
 
 ### Changed
