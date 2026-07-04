@@ -379,7 +379,7 @@ const tokenRateSegment: StatusLineSegment = {
 		const { tokensPerSecond } = ctx.usageStats;
 		if (!tokensPerSecond) return { content: "", visible: false };
 
-		const content = withIcon(theme.icon.throughput, `${tokensPerSecond.toFixed(1)}/s`);
+		const content = withIcon(theme.icon.throughput, `${tokensPerSecond.toFixed(1)} tok/s`);
 		return { content: theme.fg("statusLineOutput", content), visible: true };
 	},
 };
