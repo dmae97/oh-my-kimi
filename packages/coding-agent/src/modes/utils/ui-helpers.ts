@@ -317,7 +317,11 @@ export class UiHelpers {
 			const previous = waitingPoll;
 			if (!previous) return;
 			waitingPoll = null;
-			if (nextToolName === "job" && previous.isDisplaceableBlock()) {
+			if (
+				nextToolName === "job" &&
+				previous.isDisplaceableBlock() &&
+				this.ctx.chatContainer.isBlockUncommitted(previous)
+			) {
 				this.ctx.chatContainer.removeChild(previous);
 			}
 			// Sealing freezes the block and stops the waiting-poll spinner that
@@ -334,7 +338,9 @@ export class UiHelpers {
 			}
 			if (previous.canBeDisplacedBy(nextToolName)) {
 				todoSnapshot = null;
-				this.ctx.chatContainer.removeChild(previous);
+				if (this.ctx.chatContainer.isBlockUncommitted(previous)) {
+					this.ctx.chatContainer.removeChild(previous);
+				}
 				previous.seal();
 				return;
 			}

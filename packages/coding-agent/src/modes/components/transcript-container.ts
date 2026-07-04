@@ -111,22 +111,20 @@ const EMPTY_TAIL: readonly string[] = [];
 
 /**
  * Transcript container that renders every block's current content each frame
- * and reports the native-scrollback commit boundary
+ * and reports the native-scrollback exactness boundary
  * (`NativeScrollbackLiveRegion`): the frame row below which every rendered
  * row is final. The boundary covers the leading run of finalized blocks plus
  * the first still-live block's declared settled rows
- * ({@link FinalizableBlock.getTranscriptBlockSettledRows}); the engine
- * commits rows to native scrollback only above it.
+ * ({@link FinalizableBlock.getTranscriptBlockSettledRows}). Rows below it
+ * commit to native scrollback as exact, audited content; rows above it that
+ * scroll off the window commit as frozen visual snapshots the engine never
+ * re-anchors or recommits (the tape records what was on screen).
  *
- * The engine never rewrites committed history: rows above the boundary that
- * have entered the tape keep whatever bytes they were committed with ("let
- * the history be"), while the visible window always repaints from each
- * block's latest render — a late tool result, a post-finalize error pin, or
- * an expand toggle is always reflected on screen. Blocks that are still
- * mutating (an unfinalized tool, a streaming assistant message) stay at/below
- * the boundary so their rows do not enter history while they can still
- * change; when the live region outgrows the viewport its undeclared rows
- * scroll into a deferred gap and reach history, in order, once they settle.
+ * The engine never rewrites committed history: rows that have entered the
+ * tape keep whatever bytes they were committed with ("let the history be"),
+ * while the visible window always repaints from each block's latest render —
+ * a late tool result, a post-finalize error pin, or an expand toggle is
+ * always reflected on screen while it remains in the window.
  *
  * Assembly is incremental: the returned array is persistent and mutated in
  * place. Each block's render is still called every frame, but a block whose
@@ -188,33 +186,30 @@ export class TranscriptContainer
 	}
 
 	/**
-	 * Whether `component` sits below a still-mutating block — i.e. inside the
-	 * live region, where its rows cannot have been committed to native
-	 * scrollback yet (commits are prefix-only and stop at the first
-	 * still-live block). Callers that retract ephemeral blocks (IRC cards)
-	 * must check this: removing a block whose rows may already be in history
-	 * is an interior deletion of the committed prefix, which the engine can
-	 * only repair by recommitting everything below it — duplication.
+	 * Whether none of `component`'s rows (per the most recent render) have
+	 * entered native scrollback. Callers that retract ephemeral blocks (IRC
+	 * cards, displaceable todo/job snapshots) must check this: removing a
+	 * block whose rows are already on the tape is an interior deletion of
+	 * committed history the engine cannot express — the block must be sealed
+	 * in place as history instead. A component that has never rendered has no
+	 * committed rows and is safely removable.
 	 */
-	isWithinLiveRegion(component: Component): boolean {
-		const index = this.children.indexOf(component);
-		if (index < 0) return false;
-		for (let i = 0; i < index; i++) {
-			if (!isBlockFinalized(this.children[i]!)) return true;
+	isBlockUncommitted(component: Component): boolean {
+		for (const segment of this.#segments) {
+			if (segment.component !== component) continue;
+			return segment.rowCount === 0 || segment.startRow >= this.#committedRows;
 		}
-		return false;
+		return true;
 	}
 
 	/**
 	 * Whether `component` is inside the live (repaintable) region exactly as
 	 * {@link render} computes it: at/after the first still-mutating block, or
-	 * the transcript tail when every block has finalized. Unlike
-	 * {@link isWithinLiveRegion} (strictly below a still-mutating block, i.e.
-	 * guaranteed-uncommitted), this also counts the trailing block that anchors
-	 * the live region. Self-animating finalized blocks (a detached task's
-	 * shimmering progress rows) poll this to stop animating — and settle on
-	 * static bytes — the moment they sit above the seam, where their rows
-	 * become commit-eligible native-scrollback history.
+	 * the transcript tail when every block has finalized. Self-animating
+	 * finalized blocks (a detached task's shimmering progress rows) poll this
+	 * to stop animating — and settle on static bytes — the moment they sit
+	 * above the seam, where their rows become commit-eligible native-scrollback
+	 * history.
 	 */
 	isBlockInLiveRegion(component: Component): boolean {
 		const children = this.children;

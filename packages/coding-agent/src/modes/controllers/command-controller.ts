@@ -1029,9 +1029,6 @@ export class CommandController {
 				return;
 			}
 			const name = this.ctx.sessionManager.getSessionName()!;
-			setSessionTerminalTitle(name, this.ctx.sessionManager.getCwd());
-			this.ctx.statusLine.invalidate();
-			this.ctx.updateEditorBorderColor();
 			this.ctx.showStatus(`Session renamed to "${name}".`);
 		} catch (err) {
 			this.ctx.showError(`Rename failed: ${err instanceof Error ? err.message : String(err)}`);
