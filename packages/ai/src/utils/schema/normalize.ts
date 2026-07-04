@@ -1086,6 +1086,7 @@ export function sanitizeSchemaForOllama(schema: JsonObject): JsonObject {
 
 		let changed = false;
 		const output: JsonObject = {};
+		let typeAlternatives: JsonObject[] | undefined;
 		for (const key in value) {
 			if (!Object.hasOwn(value, key)) continue;
 			const child = value[key];
@@ -1095,8 +1096,13 @@ export function sanitizeSchemaForOllama(schema: JsonObject): JsonObject {
 			}
 			if (key === "type" && Array.isArray(child)) {
 				const variants = child.filter((entry): entry is string => typeof entry === "string");
-				const nonNull = variants.filter(entry => entry !== "null");
-				output.type = nonNull[0] ?? variants[0] ?? child[0];
+				const uniqueVariants = [...new Set(variants)];
+				const nonNull = uniqueVariants.filter(entry => entry !== "null");
+				if (nonNull.length <= 1) {
+					output.type = nonNull[0] ?? uniqueVariants[0] ?? child[0];
+				} else {
+					typeAlternatives = uniqueVariants.map(entry => ({ type: entry }));
+				}
 				changed = true;
 				continue;
 			}
@@ -1126,6 +1132,11 @@ export function sanitizeSchemaForOllama(schema: JsonObject): JsonObject {
 			}
 			if (next !== child) changed = true;
 			output[key] = next;
+		}
+
+		if (typeAlternatives) {
+			const existingAnyOf = output.anyOf;
+			output.anyOf = Array.isArray(existingAnyOf) ? [...typeAlternatives, ...existingAnyOf] : typeAlternatives;
 		}
 
 		return changed ? output : value;

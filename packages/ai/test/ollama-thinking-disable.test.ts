@@ -101,6 +101,8 @@ describe("Ollama chat thinking controls", () => {
 				properties: {
 					anything: {},
 					nullableName: { type: ["string", "null"] },
+					stringOrNumber: { type: ["string", "number"] },
+					objectOrArray: { type: ["object", "array"] },
 					list: { type: "array", items: {} },
 					union: { anyOf: [{}, { type: "string" }] },
 					nested: {
@@ -109,7 +111,7 @@ describe("Ollama chat thinking controls", () => {
 						additionalProperties: false,
 					},
 				},
-				required: ["anything", "nullableName", "list", "union", "nested"],
+				required: ["anything", "nullableName", "stringOrNumber", "objectOrArray", "list", "union", "nested"],
 				additionalProperties: false,
 			},
 		};
@@ -143,6 +145,10 @@ describe("Ollama chat thinking controls", () => {
 		expect(Object.hasOwn(parameters, "additionalProperties")).toBe(false);
 		expect(properties.anything).toEqual(widenedOpen);
 		expect(properties.nullableName?.type).toBe("string");
+		expect(properties.stringOrNumber?.anyOf).toEqual([{ type: "string" }, { type: "number" }]);
+		expect(Object.hasOwn(properties.stringOrNumber, "type")).toBe(false);
+		expect(properties.objectOrArray?.anyOf).toEqual([{ type: "object" }, { type: "array" }]);
+		expect(Object.hasOwn(properties.objectOrArray, "type")).toBe(false);
 		expect(properties.list?.items).toEqual(widenedOpen);
 		expect(properties.union?.anyOf).toEqual([widenedOpen, { type: "string" }]);
 		expect(Object.hasOwn(properties.nested, "additionalProperties")).toBe(false);
