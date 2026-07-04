@@ -155,6 +155,9 @@ describe("markit converters", () => {
 
 	it("reads PDF text after inline image binary data containing delimiter bytes", async () => {
 		const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-pdf-inline-home-"));
+		const homeRoot = path.parse(homeDir).root;
+		const homeDrive = homeRoot.endsWith(path.sep) ? homeRoot.slice(0, -1) : homeRoot;
+		const homePath = homeDir.slice(homeDrive.length) || path.sep;
 		try {
 			const pdfPath = path.join(
 				import.meta.dir,
@@ -168,7 +171,12 @@ describe("markit converters", () => {
 				stderr: "pipe",
 				env: {
 					...process.env,
+					APPDATA: path.join(homeDir, "AppData", "Roaming"),
 					HOME: homeDir,
+					HOMEDRIVE: homeDrive,
+					HOMEPATH: homePath,
+					LOCALAPPDATA: path.join(homeDir, "AppData", "Local"),
+					USERPROFILE: homeDir,
 					NO_COLOR: "1",
 					OMP_PROFILE: "",
 					PI_CODING_AGENT_DIR: path.join(homeDir, ".omp", "agent"),
