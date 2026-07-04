@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `/model` search escaping the active provider tab and silently letting a same-named model from a different provider be persisted as the default role. `#filterModels` no longer auto-switches to the `ALL` tab when a query is typed inside a provider tab; results and Enter stay scoped to the selected provider. Empty results now name the active tab and point at `ALL` as the explicit escape. ([#4522](https://github.com/can1357/oh-my-pi/issues/4522))
+
 ## [16.3.6] - 2026-07-04
 
 ### Changed
