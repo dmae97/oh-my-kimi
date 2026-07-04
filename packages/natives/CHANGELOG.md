@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.6] - 2026-07-04
+
 ### Changed
 
 - Rewrote native `grep` directory search to stream while the tree is walked: a work-stealing parallel traversal feeds searchers directly, and content-mode match budgets now terminate the walk itself instead of only the search. Limited searches keep deterministic path-ordered first pages at every budget size via windowed commits, with oversized files still deferred behind normal-sized results.

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.6] - 2026-07-04
+
 ### Added
 
 - Added `Markdown.getLastRenderSettledRows()`: the rendered frozen-token-prefix row count of the most recent streaming render, exposed (hard-monotone per text lineage) for native-scrollback commit gating. Frozen-prefix code blocks now syntax-highlight during streaming renders so settled rows stay byte-stable across finalize.
