@@ -398,12 +398,13 @@ function extractSegmentsFromContentStream(raw: string, pageNumber: number): Segm
 
 /**
  * Fast tokenizer for PDF content streams.
- * Splits on whitespace, skipping comments and string literals.
+ * Splits on whitespace, skipping comments, string literals, and inline image payloads.
  */
 function tokenizeContentStream(raw: string): string[] {
 	const tokens: string[] = [];
 	const len = raw.length;
 	let i = 0;
+	let inInlineImage = false;
 	while (i < len) {
 		const ch = raw.charCodeAt(i);
 		// Skip whitespace
@@ -449,6 +450,12 @@ function tokenizeContentStream(raw: string): string[] {
 			i += 2;
 			continue;
 		}
+		// Skip stray closing delimiters from malformed streams. They cannot start
+		// a token, so leaving i unchanged would spin forever.
+		if (ch === 41 || ch === 62) {
+			i++;
+			continue;
+		}
 		// Regular token: read until whitespace or delimiter
 		const start = i;
 		while (i < len) {
@@ -457,7 +464,24 @@ function tokenizeContentStream(raw: string): string[] {
 			i++;
 		}
 		if (i > start) {
-			tokens.push(raw.substring(start, i));
+			const token = raw.substring(start, i);
+			tokens.push(token);
+			if (token === "BI") {
+				inInlineImage = true;
+			} else if (token === "ID" && inInlineImage) {
+				while (i < len && raw.charCodeAt(i) <= 32) i++;
+				while (i < len) {
+					const c = raw.charCodeAt(i);
+					const prev = i === 0 ? 32 : raw.charCodeAt(i - 1);
+					const next = i + 2 >= len ? 32 : raw.charCodeAt(i + 2);
+					if (c === 69 && raw.charCodeAt(i + 1) === 73 && prev <= 32 && next <= 32) {
+						i += 2;
+						break;
+					}
+					i++;
+				}
+				inInlineImage = false;
+			}
 		}
 	}
 	return tokens;

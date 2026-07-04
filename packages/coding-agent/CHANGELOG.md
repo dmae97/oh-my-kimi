@@ -13,6 +13,7 @@
 ### Fixed
 
 - Fixed raw `read` ranges not contributing to edit seen-line provenance, so re-reading an anchor range with `:raw` now unblocks hashline edits without adding non-raw line prefixes.
+- Fixed `omp read` hanging on PDFs whose inline-image binary payload contains delimiter-looking bytes, while preserving text and table extraction after the image. ([#4512](https://github.com/can1357/oh-my-pi/issues/4512))
 - Fixed replan-driven session title refresh updating the statusline but not the terminal window title: terminal-title updates now fire from the session-name-changed listener, so every `setSessionName` path (first-input titling, `/rename`, plan seeding, replan refresh) sets the OSC title consistently.
 - Fixed user-interrupt aborts rendering the persisted `Interrupted by user` label in assistant transcripts; replay and live views now suppress that redundant line again while preserving generic/custom abort labels.
 - Fixed streamed assistant text and thinking disappearing from terminal scrollback while a long turn ran, and Ctrl+O-expanded tool results showing up half-rendered above the viewport: everything that scrolls off the window now reaches native scrollback (exact bytes for settled content, a frozen what-you-saw snapshot for still-running blocks, repaired at most once when the block finalizes). Streaming eval/bash boxes no longer spray duplicated stale copies; user-initiated `!`/`$` execution blocks report a finalization contract.
