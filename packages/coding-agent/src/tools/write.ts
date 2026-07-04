@@ -974,7 +974,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 interface WriteRenderArgs {
 	path?: string;
 	file_path?: string;
-	content?: string;
+	content?: unknown;
 }
 
 const WRITE_PREVIEW_LINES = 6;
@@ -990,8 +990,14 @@ function formatLineCountSuffix(lineCount: number, uiTheme: Theme): string {
 	return uiTheme.fg("dim", ` · ${lineCount} line${lineCount === 1 ? "" : "s"}`);
 }
 
-function normalizeDisplayText(text: string): string {
-	return text.replace(/\r/g, "");
+function normalizeDisplayText(text: unknown): string {
+	let displayText = "";
+	if (typeof text === "string") {
+		displayText = text;
+	} else if (text !== undefined && text !== null) {
+		displayText = String(text);
+	}
+	return displayText.replace(/\r/g, "");
 }
 
 /**
@@ -1098,11 +1104,12 @@ export const writeToolRenderer = {
 			},
 			uiTheme,
 		);
+		const content = normalizeDisplayText(args.content);
 		const streamingCache = createRenderedStringCache();
 		return framedBlock(uiTheme, width => {
-			const body = args.content
+			const body = content
 				? formatStreamingContent(
-						args.content,
+						content,
 						Boolean(options?.expanded),
 						lang,
 						uiTheme,
@@ -1130,7 +1137,7 @@ export const writeToolRenderer = {
 	): Component {
 		const rawPath = args?.file_path || args?.path || "";
 		const filePath = shortenPath(rawPath);
-		const fileContent = args?.content || "";
+		const fileContent = normalizeDisplayText(args?.content);
 		const lang = getLanguageFromPath(rawPath);
 		const langIcon = uiTheme.fg("muted", uiTheme.getLangIcon(lang));
 		// The header shows the cwd-relative path but links to the absolute path the
