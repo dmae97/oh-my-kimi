@@ -1,10 +1,10 @@
-Runs bash in a shell session — terminal ops: git, bun, cargo, python.
+Runs commands in the embedded shell — terminal ops: git, bun, cargo, python.
 
 # When to use bash — and when not to
 
-Bash invokes **real binaries** with simple args. It is NOT a scripting surface.
+The shell invokes **real binaries** with simple args. It is NOT full GNU Bash.
 
-Use bash ONLY for: a single binary call, or one short pipeline that COMPUTES a fact (`wc -l`, `sort | uniq -c`, `comm`, `diff`, a checksum, `git status`).
+Use bash ONLY for: a single binary call, or one short pipeline that COMPUTES a fact and does not depend on shell-specific regex/quoting (`wc -l`, `sort | uniq -c`, `comm`, `diff`, a checksum, `git status`).
 
 Anything below → `eval` cell, not bash:
 - Inline interpreter scripts (`-e`/`-c`/`--eval`) when an eval runtime exists for that language
@@ -13,6 +13,7 @@ Anything below → `eval` cell, not bash:
 - Pipelines with more than two stages, or stages that need control flow or quote/JSON escaping
 - Multiline commands, `&&`-chains mixing control flow
 - Quote/JSON escaping that fights the shell
+- GNU grep BRE extensions are not guaranteed: `\|` / `\b` may not mean alternation/word-boundary. Use `grep -E 'json|tool'`, the built-in `grep` tool with `pattern: "json|tool"`, or `eval` for exact text processing.
 
 <instruction>
 - `cwd` sets the working dir, not `cd dir && …`
@@ -22,13 +23,14 @@ Anything below → `eval` cell, not bash:
 - `;` only when later commands should run despite earlier failures
 - Multiple bash calls per message run concurrently. NEVER split order-dependent commands across parallel calls — chain with `&&` in one call.
 - Internal URIs (`skill://`, `agent://`, …) auto-resolve to FS paths
+- Need exact pipeline semantics (`cmd | head`, multi-stage filtering) or output truncation? Prefer `eval` and process the stream directly.
 {{#if asyncEnabled}}
 - `async: true` for long-running commands when you don't need immediate output: returns a background job ID; result delivered as a follow-up.
 {{/if}}
 </instruction>
 
 <critical>
-- Bash invokes real binaries with simple args; it is NOT a scripting surface. Loops, conditionals, heredocs, inline interpreter scripts (`-e`/`-c`/`--eval`) when an eval runtime exists, several piped stages, or quote/JSON escaping mean you're writing a program → use `eval` cells: restartable, stateful, and free of shell-quoting traps.
+- The embedded shell invokes real binaries with simple args; it is NOT full GNU Bash. Loops, conditionals, heredocs, inline interpreter scripts (`-e`/`-c`/`--eval`) when an eval runtime exists, several piped stages, exact pipeline semantics, or quote/JSON escaping mean you're writing a program → use `eval` cells: restartable, stateful, and free of shell-quoting traps.
 </critical>
 
 <output>
