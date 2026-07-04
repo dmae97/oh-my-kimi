@@ -9,8 +9,8 @@ import { VirtualTerminal } from "./virtual-terminal";
 
 class Transcript implements Component, NativeScrollbackLiveRegion {
 	lines: string[] = [];
+	/** Declared-final boundary: rows above it may enter native scrollback. */
 	seam = 0;
-	safeEnd: number | undefined;
 
 	invalidate(): void {}
 
@@ -20,10 +20,6 @@ class Transcript implements Component, NativeScrollbackLiveRegion {
 
 	getNativeScrollbackLiveRegionStart(): number | undefined {
 		return this.seam;
-	}
-
-	getNativeScrollbackCommitSafeEnd(): number | undefined {
-		return this.safeEnd;
 	}
 }
 
@@ -58,29 +54,27 @@ describe("abort-collapse gap regression", () => {
 
 		// 20 finalized rows + live block streaming.
 		transcript.lines = [...rows("hist-", 20), ...rows("live-", 4)];
-		transcript.seam = 20;
-		transcript.safeEnd = 20; // nothing sealed yet
+		transcript.seam = 20; // nothing of the live block declared final yet
 
 		try {
 			tui.start();
 			await scheduler.drain(term);
 
-			// Stream: live block grows, sealed prefix advances behind the tail.
+			// Stream: live block grows, its declared-final prefix advances behind
+			// the tail (a streaming reply's settled markdown prefix).
 			for (let grow = 8; grow <= 24; grow += 4) {
 				transcript.lines = [...rows("hist-", 20), ...rows("live-", grow)];
-				transcript.seam = 20;
-				transcript.safeEnd = 20 + grow - 2; // sealed prefix trails by 2
+				transcript.seam = 20 + grow - 2; // declared-final prefix trails by 2
 				tui.requestRender();
 				await scheduler.drain(term);
 			}
 
-			// ABORT: the live block collapses after some of its append-only prefix
-			// reached native scrollback. The viewport should pull the short tail
-			// back down instead of pinning the editor near the top with blank rows
-			// underneath.
+			// ABORT: the live block collapses after some of its declared-final
+			// prefix reached native scrollback. The viewport should pull the short
+			// tail back down instead of pinning the editor near the top with blank
+			// rows underneath.
 			transcript.lines = [...rows("hist-", 20), "aborted!", "interrupted"];
 			transcript.seam = 22;
-			transcript.safeEnd = 22;
 			tui.requestRender();
 			await scheduler.drain(term);
 

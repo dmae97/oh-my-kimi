@@ -2,10 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `Markdown.getLastRenderSettledRows()`: the rendered frozen-token-prefix row count of the most recent streaming render, exposed (hard-monotone per text lineage) for native-scrollback commit gating. Frozen-prefix code blocks now syntax-highlight during streaming renders so settled rows stay byte-stable across finalize.
+
 ### Changed
 
-- Simplified native scrollback logic to use a single finality boundary
-- Optimized committed prefix auditing by removing exempt-zone tracking
+- Simplified native scrollback logic to use a single finality boundary: `NativeScrollbackLiveRegion` is now one method (`getNativeScrollbackLiveRegionStart`), and the engine commits a row only when the seam declares it final. Live rows that scroll above the viewport are deferred (never force-committed) and backfill history in order once they settle — a still-mutating block can no longer strand a stale copy in immutable scrollback. `getNativeScrollbackCommitSafeEnd`/`getNativeScrollbackSnapshotSafeEnd` are removed.
+- Optimized committed prefix auditing by removing exempt-zone tracking: the audit is single-zone (tail sample + first-divergence re-anchor) and runs only when the composed frame's stable prefix does not cover the committed rows.
+
+### Fixed
+
+- Fixed live tool/eval preview boxes duplicating into native scrollback mid-run (a collapsed streaming preview's head was force-committed when it scrolled above the viewport, and the next re-layout re-anchored and recommitted the whole box below the stale copy).
 
 ## [16.3.5] - 2026-07-04
 

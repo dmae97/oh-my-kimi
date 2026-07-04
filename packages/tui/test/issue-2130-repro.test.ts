@@ -41,10 +41,7 @@ class StreamingLiveRegion implements Component, NativeScrollbackLiveRegion {
 	}
 
 	getNativeScrollbackLiveRegionStart(): number | undefined {
-		return 0;
-	}
-
-	getNativeScrollbackCommitSafeEnd(): number | undefined {
+		// Append-only stream: every rendered row is declared final.
 		return this.#lines.length;
 	}
 }

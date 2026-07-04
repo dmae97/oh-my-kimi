@@ -41,8 +41,9 @@ class LineList implements Component {
 
 /**
  * Minimal append-only live region. Models the real omp setup where
- * `TranscriptContainer` wraps an `AssistantMessageComponent` that reports
- * itself as `isTranscriptBlockAppendOnly() === true`.
+ * `TranscriptContainer` wraps a streaming `AssistantMessageComponent` whose
+ * rendered rows are all declared final (settled) as they stream, so its
+ * scrolled-off head commits to pane history mid-stream.
  */
 class StreamingLiveRegion implements Component, NativeScrollbackLiveRegion {
 	#lines: string[];
@@ -62,10 +63,6 @@ class StreamingLiveRegion implements Component, NativeScrollbackLiveRegion {
 	}
 
 	getNativeScrollbackLiveRegionStart(): number | undefined {
-		return 0;
-	}
-
-	getNativeScrollbackCommitSafeEnd(): number | undefined {
 		return this.#lines.length;
 	}
 }
