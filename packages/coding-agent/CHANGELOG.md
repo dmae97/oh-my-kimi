@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `pi/<role>` model resolution crashing on YAML list-valued `modelRoles` entries by normalizing string arrays the same way as comma-separated strings. ([#4492](https://github.com/can1357/oh-my-pi/issues/4492))
+
 ## [16.3.5] - 2026-07-04
 
 ### Fixed
