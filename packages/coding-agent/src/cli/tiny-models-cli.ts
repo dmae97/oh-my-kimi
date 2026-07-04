@@ -35,12 +35,19 @@ function writeLine(text = ""): void {
 	process.stdout.write(`${text}\n`);
 }
 
+const ACTIONABLE_DOWNLOAD_ERROR_LINE = /PI_TINY_|CUDA|cuDNN|cudnn|libcudnn|tiny-title-runtime|onnxruntime-node/i;
+
 function downloadErrorSummary(error: string | undefined): string | undefined {
-	return error
-		?.split(/\r?\n/)
-		.map(line => line.trim())
-		.find(line => line.length > 0)
-		?.replace(/^Error:\s*/, "");
+	const lines =
+		error
+			?.split(/\r?\n/)
+			.map(line => line.trim().replace(/^Error:\s*/, ""))
+			.filter(line => line.length > 0) ?? [];
+	const first = lines[0];
+	if (!first) return undefined;
+	const details = lines.slice(1).filter(line => ACTIONABLE_DOWNLOAD_ERROR_LINE.test(line));
+	if (details.length === 0) return first;
+	return [first, ...details].join("\n");
 }
 
 export function resolveModels(model: string | undefined): TinyLocalModelKey[] {
