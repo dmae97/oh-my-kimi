@@ -146,10 +146,18 @@ function isAssistantEntry(entry: SessionEntry): boolean {
 }
 
 function isDraftOnlyMetadataEntry(entry: SessionEntry): boolean {
+	// Startup-recorded selector state that does not survive as user intent
+	// once the draft is cleared. `mode_change` covers the `plan.defaultOnStartup`
+	// path (interactive-mode.ts enters plan mode before draft restoration) and
+	// `/plan` toggles that leave the session otherwise empty; entries carrying
+	// real conversation state — messages, compactions, branch summaries,
+	// custom/custom_message, session_init, labels, title/tool selection — never
+	// reach this branch and always keep the file resumable.
 	switch (entry.type) {
 		case "model_change":
 		case "thinking_level_change":
 		case "service_tier_change":
+		case "mode_change":
 			return true;
 		default:
 			return false;
