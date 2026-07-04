@@ -611,7 +611,7 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 
 	const compat: ResolvedOpenAIResponsesCompat = {
 		supportsDeveloperRole: isAzure || isOpenAIUrl || hostMatchesUrl(baseUrl, "githubCopilot"),
-		supportsStrictMode: detectStrictModeSupport(spec.provider, baseUrl),
+		supportsStrictMode: isAzure || detectStrictModeSupport(spec.provider, baseUrl),
 		supportsReasoningEffort: spec.provider !== "xai-oauth" || isGrokReasoningEffortCapable(id),
 		supportsLongPromptCacheRetention: isOpenAIUrl,
 		// Azure OpenAI and GitHub Copilot Responses paths require tool results
