@@ -145,6 +145,17 @@ function isAssistantEntry(entry: SessionEntry): boolean {
 	return entry.type === "message" && entry.message.role === "assistant";
 }
 
+function isDraftOnlyMetadataEntry(entry: SessionEntry): boolean {
+	switch (entry.type) {
+		case "model_change":
+		case "thinking_level_change":
+		case "service_tier_change":
+			return true;
+		default:
+			return false;
+	}
+}
+
 function orderedByTimestamp(a: SessionTreeNode, b: SessionTreeNode): number {
 	return new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime();
 }
@@ -317,6 +328,7 @@ interface SessionManagerStateSnapshot {
 	hasTitleSlot: boolean;
 	onDisk: boolean;
 	needsRewrite: boolean;
+	draftOnlySessionCleanupArmed: boolean;
 	header: SessionHeader;
 	entries: SessionEntry[];
 }
@@ -363,6 +375,12 @@ export class SessionManager {
 	#rewriteRequired = false;
 	/** Lazy gate crossed (ensureOnDisk / loaded file): every entry must persist from now on. */
 	#forceFileCreation = false;
+	/**
+	 * Armed only when this manager observed a draft sidecar lifecycle that
+	 * materialized an otherwise metadata-only session file. Explicit
+	 * ensureOnDisk() callers (ACP session/new, handoff) must survive close().
+	 */
+	#draftOnlySessionCleanupArmed = false;
 
 	/**
 	 * Collab replication tap: invoked for every appended entry with the
@@ -748,6 +766,7 @@ export class SessionManager {
 		this.#fileIsCurrent = false;
 		this.#rewriteRequired = false;
 		this.#forceFileCreation = false;
+		this.#draftOnlySessionCleanupArmed = false;
 		this.#turnBudgetTotal = null;
 		this.#turnBudgetHard = false;
 		this.#turnOutputBaseline = 0;
@@ -856,6 +875,7 @@ export class SessionManager {
 			sessionFile: this.#sessionFile,
 			onDisk: this.#fileIsCurrent,
 			needsRewrite: this.#rewriteRequired,
+			draftOnlySessionCleanupArmed: this.#draftOnlySessionCleanupArmed,
 			// Snapshot header + entries by reference: switch/reload replaces the
 			// active header/array wholesale, so rollback needs no deep clone.
 			header: this.#header,
@@ -874,6 +894,7 @@ export class SessionManager {
 		this.#fileIsCurrent = snapshot.onDisk;
 		this.#rewriteRequired = snapshot.needsRewrite;
 		this.#forceFileCreation = snapshot.onDisk;
+		this.#draftOnlySessionCleanupArmed = snapshot.draftOnlySessionCleanupArmed;
 		this.#applyEntries(snapshot.header, [...snapshot.entries]);
 		this.#sessionName = snapshot.sessionName;
 		this.#titleSource = snapshot.titleSource;
@@ -890,6 +911,7 @@ export class SessionManager {
 	async setSessionFile(sessionFile: string): Promise<void> {
 		await this.#drainAndCloseWriter();
 		this.#clearDiskError();
+		this.#draftOnlySessionCleanupArmed = false;
 
 		const resolvedSessionFile = path.resolve(sessionFile);
 		this.#sessionFile = resolvedSessionFile;
@@ -985,6 +1007,7 @@ export class SessionManager {
 		this.#fileIsCurrent = false;
 		this.#rewriteRequired = false;
 		this.#forceFileCreation = true;
+		this.#draftOnlySessionCleanupArmed = false;
 		this.#artifactManager = null;
 		this.#artifactManagerSessionFile = null;
 		this.#rememberBreadcrumb(this.#cwd, this.#sessionFile);
@@ -1135,22 +1158,15 @@ export class SessionManager {
 	}
 
 	/**
-	 * If the session never carried a real user/assistant message and has no
-	 * saved draft (nothing for `--resume` to reattach to), drop the on-disk
-	 * file and its artifacts directory. Guards against zombie metadata-only
-	 * sessions from a draft-then-clear-then-close cycle: `saveDraft(text)`
-	 * calls `ensureOnDisk()` to materialize the JSONL so the sidecar has a
-	 * parent, and a subsequent `saveDraft("")` only unlinks the sidecar —
-	 * the load-path flips `#fileIsCurrent`/`#forceFileCreation` to `true`,
-	 * so `#shouldHaveSessionFile()` can no longer prune the file itself.
+	 * Drop only session files that this manager saw materialized for a draft and
+	 * that still contain no durable conversation or extension state. Explicit
+	 * ensureOnDisk() records (ACP session/new, handoff) stay resumable.
 	 */
 	async #dropIfEmptyAndNoDraft(): Promise<void> {
+		if (!this.#draftOnlySessionCleanupArmed) return;
 		const sessionFile = this.#sessionFile;
 		if (!sessionFile || !this.#storage.existsSync(sessionFile)) return;
-		const hasRealMessages = this.#entries.some(
-			e => e.type === "message" && (e.message.role === "user" || e.message.role === "assistant"),
-		);
-		if (hasRealMessages) return;
+		if (!this.#entries.every(isDraftOnlyMetadataEntry)) return;
 		const draftPath = this.#draftPath();
 		if (draftPath && this.#storage.existsSync(draftPath)) return;
 		try {
@@ -1158,6 +1174,7 @@ export class SessionManager {
 			this.#fileIsCurrent = false;
 			this.#forceFileCreation = false;
 			this.#hasTitleSlot = false;
+			this.#draftOnlySessionCleanupArmed = false;
 		} catch (err) {
 			if (!isEnoent(err)) {
 				logger.warn("Failed to drop empty session on close", { sessionFile, error: String(err) });
@@ -1267,8 +1284,14 @@ export class SessionManager {
 			return;
 		}
 
+		const sessionFile = this.#sessionFile;
+		const draftWillMaterializeMetadataOnlyFile =
+			sessionFile !== undefined &&
+			!this.#storage.existsSync(sessionFile) &&
+			this.#entries.every(isDraftOnlyMetadataEntry);
 		// Force the header onto disk so resume can find the file this draft attaches to.
 		await this.ensureOnDisk();
+		if (draftWillMaterializeMetadataOnlyFile) this.#draftOnlySessionCleanupArmed = true;
 		await this.#storage.writeText(draftPath, text);
 	}
 
@@ -1289,6 +1312,7 @@ export class SessionManager {
 		} catch (err) {
 			if (!isEnoent(err)) throw err;
 		}
+		if (this.#entries.every(isDraftOnlyMetadataEntry)) this.#draftOnlySessionCleanupArmed = true;
 
 		return draft;
 	}

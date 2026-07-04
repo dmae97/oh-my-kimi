@@ -35,6 +35,26 @@ describe("SessionManager close() drops empty metadata-only sessions", () => {
 		expect(await fileExists(sessionFile)).toBe(false);
 	});
 
+	it("drops a resumed draft-only session after consumeDraft removes the sidecar", async () => {
+		using tempDir = TempDir.createSync("@pi-session-close-drop-resumed-draft-");
+		const firstRun = SessionManager.create(tempDir.path(), tempDir.path());
+		firstRun.appendModelChange("hai-proxy/anthropic--claude-4.6-opus");
+		await firstRun.saveDraft("resume me");
+
+		const sessionFile = firstRun.getSessionFile();
+		if (!sessionFile) throw new Error("Expected persistent session file");
+		await firstRun.close();
+		expect(await fileExists(sessionFile)).toBe(true);
+
+		const resumed = SessionManager.create(tempDir.path(), tempDir.path());
+		await resumed.setSessionFile(sessionFile);
+		expect(await resumed.consumeDraft()).toBe("resume me");
+		await resumed.saveDraft("");
+		await resumed.close();
+
+		expect(await fileExists(sessionFile)).toBe(false);
+	});
+
 	// A draft still on disk at close time is the whole reason the session
 	// file was materialized in the first place (`--resume` needs to find
 	// this session's file to reattach the draft). Never drop it.
@@ -63,6 +83,33 @@ describe("SessionManager close() drops empty metadata-only sessions", () => {
 		session.appendMessage({ role: "user", content: "hello", timestamp: 1 });
 		await session.saveDraft("draft that will be cleared");
 		await session.saveDraft("");
+
+		const sessionFile = session.getSessionFile();
+		if (!sessionFile) throw new Error("Expected persistent session file");
+
+		await session.close();
+
+		expect(await fileExists(sessionFile)).toBe(true);
+	});
+
+	it("keeps an explicitly ensured empty session discoverable after close", async () => {
+		using tempDir = TempDir.createSync("@pi-session-close-keep-explicit-empty-");
+		const session = SessionManager.create(tempDir.path(), tempDir.path());
+		await session.ensureOnDisk();
+
+		const sessionFile = session.getSessionFile();
+		if (!sessionFile) throw new Error("Expected persistent session file");
+
+		await session.close();
+
+		expect(await fileExists(sessionFile)).toBe(true);
+	});
+
+	it("keeps a handoff custom message even before the next user turn", async () => {
+		using tempDir = TempDir.createSync("@pi-session-close-keep-handoff-");
+		const session = SessionManager.create(tempDir.path(), tempDir.path());
+		session.appendCustomMessageEntry("handoff", "handoff context", true, undefined, "agent");
+		await session.ensureOnDisk();
 
 		const sessionFile = session.getSessionFile();
 		if (!sessionFile) throw new Error("Expected persistent session file");
