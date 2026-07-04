@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Updated transcript streaming logic to support custom settled row declarations for scrollback
+
 ## [16.3.5] - 2026-07-04
 
 ### Fixed

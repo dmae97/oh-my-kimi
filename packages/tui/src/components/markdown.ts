@@ -817,6 +817,21 @@ export class Markdown implements Component {
 	#streamPrefixText?: string;
 	#streamPrefixTokens?: Token[];
 	#streamPrefixLineCache?: StreamPrefixLineCache;
+	// Rows of the most recent render() that are settled — top padding plus the
+	// rendered frozen token prefix — exposed via getLastRenderSettledRows()
+	// for native-scrollback commit gating.
+	#lastRenderSettledRows = 0;
+	// Frozen-prefix text backing the last non-zero settled exposure. Settled
+	// rows are declared final downstream, so a render whose frozen text no
+	// longer extends this prefix (a rewind / wholesale rewrite) resets the
+	// exposure to 0 and re-earns it — the exposure is hard-monotone within a
+	// text lineage.
+	#settledExposedText?: string;
+	// True while #renderStreamingContentLines renders the frozen token range:
+	// frozen code blocks highlight even in transient mode so their bytes match
+	// the finalized render (they render once into the prefix line cache, so
+	// the FFI cost is amortized); the volatile tail stays unhighlighted.
+	#renderingFrozenPrefix = false;
 
 	#ignoreTight = false;
 
@@ -857,6 +872,7 @@ export class Markdown implements Component {
 			this.#streamPrefixText = undefined;
 			this.#streamPrefixTokens = undefined;
 			this.#streamPrefixLineCache = undefined;
+			this.#settledExposedText = undefined;
 		}
 		this.invalidate();
 		return true;
@@ -876,6 +892,19 @@ export class Markdown implements Component {
 		if (this.#transientRenderCache === next) return;
 		this.#transientRenderCache = next;
 		this.invalidate();
+	}
+
+	/**
+	 * Rows at the top of the most recent render() (top padding + rendered
+	 * frozen-token prefix) whose bytes are settled: byte-stable at this
+	 * width/theme for as long as the text keeps growing append-only. Hosts
+	 * feed this to transcript commit gating (see the coding agent's
+	 * `FinalizableBlock.getTranscriptBlockSettledRows`). 0 outside streaming
+	 * (`transientRenderCache`) mode, after a text rewind (re-earned on the new
+	 * lineage), and on cache-served non-streaming renders.
+	 */
+	getLastRenderSettledRows(): number {
+		return this.#lastRenderSettledRows;
 	}
 
 	// Lex `text` into block tokens, reusing the frozen stable prefix when the text
@@ -964,6 +993,10 @@ export class Markdown implements Component {
 		if (this.#cachedLines && this.#cachedText === this.#text && this.#cachedWidth === width) {
 			return this.#cachedLines;
 		}
+
+		// Recomputed below by the streaming path; every other path (cache-served,
+		// empty text, non-streaming full render) exposes no settled rows.
+		this.#lastRenderSettledRows = 0;
 
 		// Calculate available width for content (subtract horizontal padding)
 		const paddingX = this.#ignoreTight ? this.#paddingX : getPaddingX(this.#paddingX);
@@ -1076,9 +1109,16 @@ export class Markdown implements Component {
 		}
 
 		if (renderedUntil < frozenTokenCount) {
-			contentLines.push(
-				...this.#renderContentLines(tokens, renderedUntil, frozenTokenCount, contentWidth, signature),
-			);
+			// Frozen tokens render with full fidelity (syntax highlighting on)
+			// so these cached rows byte-match the finalized render.
+			this.#renderingFrozenPrefix = true;
+			try {
+				contentLines.push(
+					...this.#renderContentLines(tokens, renderedUntil, frozenTokenCount, contentWidth, signature),
+				);
+			} finally {
+				this.#renderingFrozenPrefix = false;
+			}
 			renderedUntil = frozenTokenCount;
 		}
 
@@ -1088,6 +1128,19 @@ export class Markdown implements Component {
 			tokenCount: frozenTokenCount,
 			lines: contentLines.slice(),
 		};
+
+		// Settled exposure (hard-monotone): these rows are declared final to
+		// the host, so expose them only while the frozen text still extends
+		// the previously exposed prefix; a rewind resets to 0 and re-earns on
+		// the rewritten lineage.
+		if (contentLines.length > 0) {
+			if (this.#settledExposedText === undefined || frozenText.startsWith(this.#settledExposedText)) {
+				this.#settledExposedText = frozenText;
+				this.#lastRenderSettledRows = signature.paddingY + contentLines.length;
+			} else {
+				this.#settledExposedText = undefined;
+			}
+		}
 
 		if (renderedUntil < tokens.length) {
 			contentLines.push(...this.#renderContentLines(tokens, renderedUntil, tokens.length, contentWidth, signature));
@@ -1361,7 +1414,7 @@ export class Markdown implements Component {
 
 				const codeIndent = padding(this.#codeBlockIndent);
 				lines.push(this.#theme.codeBlockBorder(`\`\`\`${token.lang || ""}`));
-				if (this.#theme.highlightCode && !this.transientRenderCache) {
+				if (this.#theme.highlightCode && (!this.transientRenderCache || this.#renderingFrozenPrefix)) {
 					const highlightedLines = this.#theme.highlightCode(token.text, token.lang);
 					for (const hlLine of highlightedLines) {
 						lines.push(`${codeIndent}${hlLine}`);
@@ -1751,7 +1804,7 @@ export class Markdown implements Component {
 				// Code block in list item
 				const codeIndent = padding(this.#codeBlockIndent);
 				lines.push({ text: this.#theme.codeBlockBorder(`\`\`\`${token.lang || ""}`), nested: false });
-				if (this.#theme.highlightCode && !this.transientRenderCache) {
+				if (this.#theme.highlightCode && (!this.transientRenderCache || this.#renderingFrozenPrefix)) {
 					const highlightedLines = this.#theme.highlightCode(token.text, token.lang);
 					for (const hlLine of highlightedLines) {
 						lines.push({ text: `${codeIndent}${hlLine}`, nested: false });

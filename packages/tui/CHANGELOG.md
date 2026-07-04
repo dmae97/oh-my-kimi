@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Simplified native scrollback logic to use a single finality boundary
+- Optimized committed prefix auditing by removing exempt-zone tracking
+
 ## [16.3.5] - 2026-07-04
 
 ### Fixed
