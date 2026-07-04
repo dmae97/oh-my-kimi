@@ -2,9 +2,10 @@
  * Minimal TUI implementation with differential rendering.
  *
  * Append-only render contract: rows committed to native scrollback are
- * immutable. All mutation is confined to the visible window; rows enter
- * history exactly once, in order, when the component-reported commit boundary
- * (`NativeScrollbackLiveRegion`) says they are final. ED3 (`CSI 3 J`) is
+ * immutable — the tape is the terminal's visual record. Whatever scrolls
+ * above the window enters history exactly once, in order: as exact-final
+ * bytes when the component seam (`NativeScrollbackLiveRegion`) declared them
+ * final, else as a frozen snapshot of what was on screen. ED3 (`CSI 3 J`) is
  * emitted only for gesture-driven replays (session replace, resize,
  * resetDisplay) where snapping the viewport is acceptable. The engine never
  * probes or guesses the terminal's scroll position, and the hot path clamps
@@ -187,15 +188,15 @@ export interface OverlayFocusOwner {
  * rendered rows can still change reports, after each render, the local line
  * index where that mutable suffix begins. Rows above the boundary are declared
  * FINAL — byte-stable at the current width for the component's lifetime — and
- * are the only rows the engine commits to native scrollback. Rows at/after the
- * boundary repaint in place inside the visible window; if they scroll above
- * the window top before finalizing they are neither painted nor committed (a
- * deferred gap, invisible until the boundary passes it) and enter history
- * later, in order. A root that reports no seam commits everything that
- * scrolls (shell semantics).
+ * commit to native scrollback as exact, audited content. Rows at/after the
+ * boundary repaint in place inside the visible window; when they scroll above
+ * the window top they still commit — the tape records what was on screen —
+ * but as frozen visual snapshots that are permanently audit-exempt: later
+ * re-layout of their source never re-anchors or recommits them. A root that
+ * reports no seam commits everything that scrolls as final (shell semantics).
  *
  * When several root children report a seam in the same frame, the topmost one
- * defines the boundary: commits are prefix-only, so everything below the
+ * defines the boundary: exactness is prefix-only, so everything below the
  * first seam is already excluded.
  */
 export interface NativeScrollbackLiveRegion {
@@ -771,25 +772,27 @@ const RESYNC_TAIL_SAMPLES = 8;
  * re-anchor the commit index when it does not. Returns the resync row index,
  * or -1 when no resync is needed.
  *
- * Committed rows are declared-final by the component seam, so divergence is a
- * contract violation (a budget-demoted image collapsing to its text fallback,
- * a TTSR rewind truncating a sealed block) — rare by construction. The check
- * exploits the asymmetry between the two mutation classes: an in-place
- * edit/restyle of a committed row disturbs only the touched rows (alignment
- * below stays intact; the stale copy in history is the long-accepted
- * artifact), while an insertion/deletion shifts EVERY row below it. Up to 8
- * non-blank rows within the last 24 committed rows are compared SGR-stripped
- * (theme changes stay quiet), tolerating a SINGLE mismatch: aligned ⇒ no
- * resync; misaligned ⇒ resync at the first non-equivalent committed row — the
- * stale copy stays in history and rows recommit from there (duplication,
- * never loss) instead of silently dropping the rows beneath a stale prefix.
+ * Zones (verifiedTo ≤ finalTo ≤ prefix.length):
+ *   [0, verifiedTo)         VERIFIED exact rows — sampled with tolerance.
+ *   [verifiedTo, finalTo)   NEWLY-FINAL rows — frozen visual snapshots whose
+ *       source just became declared-final (the block finalized / a barrier
+ *       cleared). Hard-scanned in FULL with no tolerance: any content change
+ *       (a pending header settling, a preview replaced by its result, a tail
+ *       shifting up after a barrier removal) re-anchors so the final content
+ *       recommits below the frozen snapshot — duplication, never loss —
+ *       instead of being committed nowhere and painted nowhere.
+ *   [finalTo, prefix.length) FROZEN visual snapshots of still-live rows —
+ *       exempt: their drift is expected (a collapsing preview, a ticking
+ *       progress tree) and must never spray re-anchors mid-run.
  *
- * The single-mismatch tolerance is load-bearing for roots that report NO seam
- * (shell semantics): an animated row that already scrolled into history would
- * otherwise re-anchor on every glyph tick and spray a duplicate snapshot per
- * frame. Seam-reporting components never commit legitimately-mutating rows,
- * so for them the tolerance can only leave a single stale row in history —
- * the bounded, long-accepted artifact.
+ * The verified zone's sampled check exploits the asymmetry between the two
+ * mutation classes: an in-place edit/restyle disturbs only the touched rows
+ * (alignment below stays intact; the stale copy in history is the accepted
+ * artifact), while an insertion/deletion shifts EVERY row below it. Up to 8
+ * non-blank rows within the last 24 verified rows are compared SGR-stripped
+ * (theme changes stay quiet), tolerating a SINGLE mismatch. The tolerance is
+ * load-bearing for roots that report NO seam: an animated row already in
+ * history would otherwise re-anchor on every glyph tick.
  *
  * Highly repetitive tails (identical filler rows) can mask a shift in the tail
  * sample, in which case the skipped rows are content-identical to the committed
@@ -799,37 +802,52 @@ const RESYNC_TAIL_SAMPLES = 8;
 export function findCommittedPrefixResync(
 	frame: readonly string[],
 	prefix: readonly string[],
-	auditTo: number = prefix.length,
+	verifiedTo: number = prefix.length,
+	finalTo: number = verifiedTo,
 ): number {
-	const committed = Math.min(prefix.length, Math.max(0, Math.trunc(auditTo)));
-	if (committed === 0) return -1;
-	if (frame.length >= committed) {
-		// Tail sample: walk up from the commit boundary until LOOKBACK rows or
-		// SAMPLES non-blank comparisons.
-		let samples = 0;
-		let mismatches = 0;
-		for (let j = 1; j <= committed && j <= RESYNC_TAIL_LOOKBACK && samples < RESYNC_TAIL_SAMPLES; j++) {
-			const idx = committed - j;
-			const row = frame[idx]!;
-			const old = prefix[idx]!;
-			if (row === old) {
-				if (!isBlankRow(row)) samples++;
-				continue;
+	const verified = Math.min(prefix.length, Math.max(0, Math.trunc(verifiedTo)));
+	const hardEnd = Math.min(prefix.length, Math.max(verified, Math.trunc(finalTo)));
+	if (hardEnd === 0) return -1;
+	if (frame.length >= hardEnd) {
+		// 1. Hard scan: frozen snapshots whose source just became final. Full
+		// scan, no tolerance — a finalized row that changed must re-anchor.
+		let hardMismatch = false;
+		for (let i = verified; i < hardEnd; i++) {
+			if (!rowsEquivalent(frame[i]!, prefix[i]!)) {
+				hardMismatch = true;
+				break;
 			}
-			if (isBlankRow(row) && isBlankRow(old)) continue;
-			samples++;
-			if (!rowsEquivalent(row, old)) mismatches++;
 		}
-		// No signal (all-blank tail) or at most one edited row: aligned.
-		if (samples === 0 || mismatches <= 1) return -1;
+		if (!hardMismatch) {
+			// 2. Tail sample over the verified zone (only when the hard scan is
+			// clean): walk up from its end until LOOKBACK rows or SAMPLES
+			// non-blank comparisons.
+			let samples = 0;
+			let mismatches = 0;
+			for (let j = 1; j <= verified && j <= RESYNC_TAIL_LOOKBACK && samples < RESYNC_TAIL_SAMPLES; j++) {
+				const idx = verified - j;
+				const row = frame[idx]!;
+				const old = prefix[idx]!;
+				if (row === old) {
+					if (!isBlankRow(row)) samples++;
+					continue;
+				}
+				if (isBlankRow(row) && isBlankRow(old)) continue;
+				samples++;
+				if (!rowsEquivalent(row, old)) mismatches++;
+			}
+			// No signal (all-blank tail) or at most one edited row: aligned.
+			if (samples === 0 || mismatches <= 1) return -1;
+		}
 	}
-	// Misaligned (tail-sample shift, or the frame no longer covers the
-	// prefix): re-anchor at the first row whose content changed.
-	const limit = Math.min(committed, frame.length);
+	// Misaligned (hard mismatch, tail-sample shift, or the frame no longer
+	// covers the checked zones): re-anchor at the first row whose content
+	// changed.
+	const limit = Math.min(hardEnd, frame.length);
 	for (let i = 0; i < limit; i++) {
 		if (!rowsEquivalent(frame[i]!, prefix[i]!)) return i;
 	}
-	return limit < committed ? limit : -1;
+	return limit < hardEnd ? limit : -1;
 }
 
 /**
@@ -935,16 +953,31 @@ export class TUI extends Container {
 	#cursorEndSequence = this.#synchronizedOutputEnabled ? CURSOR_END : CURSOR_END_NO_SYNC;
 	// Rows of the current frame physically committed to the terminal tape
 	// (native scrollback or scrolled past the window top). Immutable by
-	// contract: the engine never rewrites them, and components keep mutable
-	// rows below the `NativeScrollbackLiveRegion` boundary so they never get
-	// here while they can still change.
+	// contract: the engine never rewrites them. Rows below
+	// #committedPrefixAuditRows entered as exact-final bytes (the component
+	// seam declared them); rows at/after it are frozen visual snapshots that
+	// scrolled off the window top while still live.
 	#committedRows = 0;
 	// Raw rows mirroring [0, #committedRows) — the engine's claim of what it
-	// committed, audited each ordinary frame against the current render to
-	// detect components re-laying-out committed content (see
-	// #auditCommittedPrefix). Holds references to component-cached strings, so
-	// the audit is a pointer walk in the common case.
+	// committed. The audited prefix [0, #committedPrefixAuditRows) is checked
+	// each ordinary frame against the current render to detect components
+	// re-laying-out declared-final content (see #auditCommittedPrefix). Holds
+	// references to component-cached strings, so the audit is a pointer walk
+	// in the common case.
 	#committedPrefix: string[] = [];
+	// Rows of the committed prefix that were HARD-VERIFIED as exact-final
+	// bytes (committed below the exactness boundary, or frozen snapshots that
+	// passed the one-time strict scan when the boundary rose past them). Rows
+	// in [#committedPrefixAuditRows, #committedRows) are frozen visual
+	// snapshots of still-live content — the terminal's record of what was on
+	// screen when it scrolled off — and are audit-exempt while their source
+	// remains live, so a collapsing preview never sprays re-anchors mid-run.
+	// When the exactness boundary rises past them (the block finalized), they
+	// are strict-scanned exactly once: unchanged rows join the verified zone,
+	// a divergence re-anchors so the final content recommits below the frozen
+	// snapshot (duplication, never loss). Re-based on full paints / shrinks /
+	// geometry frames.
+	#committedPrefixAuditRows = 0;
 	// Frame row currently mapped to screen row 0. Monotonic between full
 	// paints: a shrink never re-exposes scrolled-off rows (they cannot be
 	// un-scrolled without rewriting history); live rows repaint at fixed
@@ -2550,13 +2583,12 @@ export class TUI extends Container {
 		const cursorMarkers = this.#frameCursorMarkers;
 		const liveRegionStart = this.#nativeScrollbackLiveRegionStart;
 
-		// Commit boundary (used by the window/commit math in section 3), hoisted
-		// above the audit gate. Rows below it are declared FINAL by the
-		// component seam — the only rows eligible to enter native scrollback;
-		// the whole frame is eligible when the root reports no seam (shell
-		// semantics: whatever scrolls is final). Live rows that scroll above
-		// the window are NOT committed: they wait, unpainted, and enter history
-		// in order once the boundary passes them.
+		// Exactness boundary (used by the audit-zone math below). Rows below it
+		// are declared FINAL by the component seam: when they commit, they enter
+		// the audited zone (byte-exact, repairable on violation). Rows above it
+		// that scroll off the window commit as frozen visual snapshots (see
+		// #committedPrefixAuditRows). The whole frame is final when the root
+		// reports no seam (shell semantics).
 		const frameLength = rawFrame.length;
 		const finalBoundary = Math.max(0, Math.min(frameLength, liveRegionStart ?? frameLength));
 
@@ -2575,33 +2607,67 @@ export class TUI extends Container {
 			(resizeEventOccurred && this.#previousHeight > 0);
 		const geometryChanged = widthChanged || heightChanged;
 
-		// Committed-prefix audit: rows below the commit index are physically in
-		// terminal history and must never re-layout. When a component violates
-		// that — a budget-demoted image collapsing to its one-line fallback, a
-		// TTSR rewind truncating a block whose sealed prefix already committed —
-		// keeping the old index would silently skip that many rows of
-		// everything below (content loss). Re-anchor at the divergence instead:
-		// the stale copy stays in history and rows recommit from there —
-		// duplication, never loss. Skipped on geometry frames (a rewrap
-		// legitimately reflows every row; the mux branch re-bases the prefix
-		// and non-mux geometry replays from scratch), and skipped when the
-		// composed frame's stable prefix covers every committed row — bytes
-		// that provably did not change since the last (aligned) frame cannot
-		// have diverged.
+		// Committed-prefix audit. Rows below the audit mark are hard-verified
+		// exact bytes; rows between the mark and the current exactness boundary
+		// are frozen snapshots whose source JUST became final and must be
+		// verified once (a pending header settling, a barrier clearing above a
+		// shifted tail); rows past the boundary are still-live frozen snapshots,
+		// exempt so a collapsing preview can never spray re-anchors mid-run. A
+		// divergence re-anchors and recommits — duplication, never loss —
+		// instead of silently skipping rows (committed nowhere, painted
+		// nowhere). Skipped on geometry frames (a rewrap legitimately reflows
+		// every row), and skipped when the composed frame's stable prefix
+		// covers every verified row and no rows newly became final.
 		let committedRowsResynced = false;
-		// Run the audit only when the composed frame's stable prefix does not
-		// already cover every committed row — bytes that provably did not
-		// change since the last (aligned) frame cannot have diverged.
+		const newlyFinalEnd = Math.min(this.#committedRows, finalBoundary);
+		// The exactness boundary can RETREAT (a markdown rewind, a mermaid fence
+		// appearing, a fast-path reset re-opening a block): rows verified under
+		// the old boundary have a live source again. Demote them to frozen
+		// snapshots instead of auditing content that is expected to change —
+		// their committed bytes stay as the visual record, and the next boundary
+		// rise strict-verifies them once like any other frozen row.
+		if (this.#committedPrefixAuditRows > newlyFinalEnd) {
+			this.#committedPrefixAuditRows = newlyFinalEnd;
+		}
 		const auditRan =
 			this.#hasEverRendered &&
 			!geometryChanged &&
 			!this.#clearScrollbackOnNextRender &&
-			this.#renderStablePrefixRows < this.#committedRows;
+			(this.#renderStablePrefixRows < this.#committedPrefixAuditRows ||
+				newlyFinalEnd > this.#committedPrefixAuditRows);
 		if (auditRan) {
 			const committedRowsBeforeAudit = this.#committedRows;
-			this.#auditCommittedPrefix(rawFrame);
+			this.#auditCommittedPrefix(rawFrame, newlyFinalEnd);
 			committedRowsResynced = this.#committedRows !== committedRowsBeforeAudit;
 		}
+		// A frame that shrank below the committed row count collapsed content
+		// that was already recorded (a live suffix collapsing on abort/result).
+		// Re-base the commit index at the first divergence against the recorded
+		// prefix — frozen snapshots included; a collapse is precisely when the
+		// record and the frame part ways — so the surviving exact prefix stays
+		// recognized and is never re-shown or re-committed. Only genuinely new
+		// content repaints below it.
+		if (!geometryChanged && !this.#clearScrollbackOnNextRender && frameLength < this.#committedRows) {
+			const limit = Math.min(this.#committedRows, frameLength);
+			let diverged = limit;
+			for (let i = 0; i < limit; i++) {
+				if (!rowsEquivalent(rawFrame[i]!, this.#committedPrefix[i]!)) {
+					diverged = i;
+					break;
+				}
+			}
+			if (diverged < this.#committedRows) {
+				this.#committedRows = diverged;
+				this.#committedPrefixAuditRows = Math.min(this.#committedPrefixAuditRows, diverged);
+				this.#committedPrefix.length = diverged;
+				committedRowsResynced = true;
+			}
+		}
+		// Committed-prefix state this frame's commit math extends from
+		// (post-audit): drives the audit-mark advance after the emit.
+		const preCommitRows = this.#committedRows;
+		const preAuditRows = this.#committedPrefixAuditRows;
+		let committedPrefixResliced = false;
 
 		// 3. Window and commit math (lengths only; content prepared below).
 		let hasVisibleOverlay = false;
@@ -2625,8 +2691,9 @@ export class TUI extends Container {
 		let windowTop: number;
 		let chunkTo: number;
 		if (fullPaint) {
+			committedPrefixResliced = true;
 			windowTop = Math.max(0, frameLength - height);
-			chunkTo = Math.min(windowTop, finalBoundary);
+			chunkTo = windowTop;
 		} else if (
 			frameLength <= this.#committedRows ||
 			(committedRowsResynced &&
@@ -2643,8 +2710,9 @@ export class TUI extends Container {
 			// stale committed copy stays in native history; duplicating a few rows
 			// is preferable to a live editor gap and matches the existing
 			// "duplication, never loss" resync contract.
+			committedPrefixResliced = true;
 			windowTop = Math.max(0, frameLength - height);
-			chunkTo = Math.min(windowTop, finalBoundary);
+			chunkTo = windowTop;
 			this.#committedRows = chunkTo;
 			this.#committedPrefix = rawFrame.slice(0, chunkTo);
 		} else {
@@ -2655,17 +2723,17 @@ export class TUI extends Container {
 			// multiplexer resize the pane reflowed its own history; committed
 			// rows keep their old wrap there, same as any shell output.
 			windowTop = Math.max(this.#committedRows, frameLength - height, 0);
-			// Overlays freeze commits: composited rows must never enter
-			// history, and the hidden gap backfills via the chunk once the
-			// overlay closes. A multiplexer resize also commits nothing — the
-			// pane keeps its own (old-wrap) history — and re-bases the audit
-			// prefix at the new width so the accepted wrap drift does not read
-			// as a violation on the next ordinary frame.
-			chunkTo =
-				hasVisibleOverlay || geometryChanged
-					? this.#committedRows
-					: Math.max(this.#committedRows, Math.min(windowTop, finalBoundary));
+			// Whatever scrolls above the window commits — the tape is the visual
+			// record; nothing that was painted may vanish. Overlays freeze
+			// commits: composited rows must never enter history, and the hidden
+			// gap backfills via the chunk once the overlay closes. A multiplexer
+			// resize also commits nothing — the pane keeps its own (old-wrap)
+			// history — and re-bases the audit prefix at the new width so the
+			// accepted wrap drift does not read as a violation on the next
+			// ordinary frame.
+			chunkTo = hasVisibleOverlay || geometryChanged ? this.#committedRows : windowTop;
 			if (geometryChanged) {
+				committedPrefixResliced = true;
 				this.#committedPrefix = rawFrame.slice(0, this.#committedRows);
 			}
 		}
@@ -2725,6 +2793,7 @@ export class TUI extends Container {
 				cursorTrackingLineCount,
 			});
 			this.#committedPrefix = rawFrame.slice(0, chunkTo);
+			this.#committedPrefixAuditRows = Math.min(chunkTo, finalBoundary);
 			this.#clearScrollbackOnNextRender = false;
 			this.#hasEverRendered = true;
 			if (!firstPaint && frameLength > height) this.#armPostFullPaintSettle();
@@ -2745,21 +2814,32 @@ export class TUI extends Container {
 		for (let i = this.#committedPrefix.length; i < chunkTo; i++) {
 			this.#committedPrefix.push(rawFrame[i] ?? "");
 		}
+		// Audit-mark advance. A re-slice re-bases it outright. Otherwise it may
+		// advance to the exactness boundary only when this frame verified the
+		// newly-final span (auditRan hard-scans it) or no such span existed —
+		// rows committed this frame below the boundary are fresh exact bytes.
+		if (committedPrefixResliced || auditRan || preAuditRows >= Math.min(preCommitRows, finalBoundary)) {
+			this.#committedPrefixAuditRows = Math.min(this.#committedRows, finalBoundary);
+		} else {
+			this.#committedPrefixAuditRows = Math.min(preAuditRows, this.#committedRows);
+		}
 	}
 
 	/**
-	 * Detect committed-prefix violations and re-anchor the commit index at the
-	 * first moved row, so subsequent rows recommit instead of being skipped:
-	 * the stale copy stays in history — duplication, never loss. Pure in-place
-	 * restyles keep their alignment and are left alone (stale styling in
-	 * history was always the accepted artifact).
+	 * Detect committed-prefix violations (see {@link findCommittedPrefixResync}
+	 * for the zone semantics) and re-anchor the commit index at the first moved
+	 * row, so subsequent rows recommit instead of being skipped: the stale copy
+	 * stays in history — duplication, never loss. Pure in-place restyles keep
+	 * their alignment and are left alone (stale styling in history was always
+	 * the accepted artifact).
 	 */
-	#auditCommittedPrefix(rawFrame: readonly string[]): void {
+	#auditCommittedPrefix(rawFrame: readonly string[], newlyFinalEnd: number): void {
 		const prefix = this.#committedPrefix;
 		if (prefix.length === 0) return;
-		const resyncTo = findCommittedPrefixResync(rawFrame, prefix);
+		const resyncTo = findCommittedPrefixResync(rawFrame, prefix, this.#committedPrefixAuditRows, newlyFinalEnd);
 		if (resyncTo < 0) return;
 		this.#committedRows = resyncTo;
+		this.#committedPrefixAuditRows = Math.min(this.#committedPrefixAuditRows, resyncTo);
 		prefix.length = resyncTo;
 		if ($flag("PI_DEBUG_REDRAW")) {
 			const msg = `[${new Date().toISOString()}] commit resync: committed prefix diverged at row ${resyncTo}; recommitting\n`;
@@ -3519,7 +3599,7 @@ export class TUI extends Container {
 
 		// In-window diff: nothing commits. Rewrite in place when the window slid
 		// without a commit — an overlay visible (composited rows must never enter
-		// history), or the window sliding over a deferred live gap / pulling back
+		// history), a commit-frozen geometry frame, or the window pulling back
 		// down after a shrink. Overlay cursor-only frames can also leave the
 		// tracked row behind the physical cursor; a relative partial rewrite from
 		// that stale origin can CRLF on the bottom row and scroll native history

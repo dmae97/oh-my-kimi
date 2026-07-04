@@ -8,12 +8,13 @@
 
 ### Changed
 
-- Simplified native scrollback logic to use a single finality boundary: `NativeScrollbackLiveRegion` is now one method (`getNativeScrollbackLiveRegionStart`), and the engine commits a row only when the seam declares it final. Live rows that scroll above the viewport are deferred (never force-committed) and backfill history in order once they settle — a still-mutating block can no longer strand a stale copy in immutable scrollback. `getNativeScrollbackCommitSafeEnd`/`getNativeScrollbackSnapshotSafeEnd` are removed.
-- Optimized committed prefix auditing by removing exempt-zone tracking: the audit is single-zone (tail sample + first-divergence re-anchor) and runs only when the composed frame's stable prefix does not cover the committed rows.
+- Rewrote the native-scrollback commit law around a visual-record model: whatever scrolls above the viewport enters history exactly once, in order — nothing painted ever vanishes. `NativeScrollbackLiveRegion` is now a single method (`getNativeScrollbackLiveRegionStart`) reporting an exactness boundary: rows below it commit as exact audited bytes; rows above it commit as frozen visual snapshots that are audit-exempt while their source stays live and strict-verified exactly once when the boundary passes them (a divergence recommits the final content below the frozen fragment — duplication, never loss). `getNativeScrollbackCommitSafeEnd`/`getNativeScrollbackSnapshotSafeEnd` and the heuristic promotion machinery they fed are removed.
+- Simplified committed-prefix auditing to one hard-verified mark deriving three zones (verified/newly-final/frozen); a frame that shrinks below the committed row count re-bases at the first divergence against the recorded prefix so a collapsing live suffix never re-shows or re-commits already-recorded rows.
 
 ### Fixed
 
-- Fixed live tool/eval preview boxes duplicating into native scrollback mid-run (a collapsed streaming preview's head was force-committed when it scrolled above the viewport, and the next re-layout re-anchored and recommitted the whole box below the stale copy).
+- Fixed live tool/eval preview boxes spraying duplicated stale copies into native scrollback mid-run: a still-live block's scrolled rows are now frozen visual snapshots that never re-anchor while it runs; at most one repair happens at finalize.
+- Fixed streamed content vanishing above the viewport mid-turn: scrolled-off rows always reach native scrollback (as exact bytes for declared-final content, as visual snapshots otherwise) instead of being deferred invisibly.
 
 ## [16.3.5] - 2026-07-04
 
