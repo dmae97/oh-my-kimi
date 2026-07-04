@@ -540,13 +540,16 @@ fn normalize_pattern_list(patterns: Option<Vec<String>>) -> Result<Vec<String>> 
 	let mut seen = BTreeSet::new();
 	for raw in patterns.unwrap_or_default() {
 		let pattern = raw.trim();
-		if pattern.is_empty() {
+		if pattern.is_empty() || seen.contains(pattern) {
 			continue;
 		}
-		let owned = pattern.to_string();
-		if seen.insert(owned.clone()) {
-			normalized.push(owned);
-		}
+		let owned = if pattern.len() == raw.len() {
+			raw
+		} else {
+			pattern.to_string()
+		};
+		seen.insert(owned.clone());
+		normalized.push(owned);
 	}
 	if normalized.is_empty() {
 		return Err(Error::from_reason(
