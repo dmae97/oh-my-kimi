@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+
+### Fixed
+
+- Fixed TTSR stream interrupts so only the tool call whose stream matched a rule receives the rule-named abort result; sibling tool-call placeholders now use a neutral abort reason ([#2783](https://github.com/can1357/oh-my-pi/issues/2783)).
 ## [16.0.1] - 2026-06-15
 
 ### Breaking Changes

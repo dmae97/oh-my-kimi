@@ -755,7 +755,7 @@ describe("AgentSession TTSR resume gate", () => {
 		expect(session.isStreaming).toBe(false);
 	});
 
-	it("labels aborted tool placeholders with the TTSR rule reason", async () => {
+	it("labels only the matching aborted tool placeholder with the TTSR rule reason", async () => {
 		collapseSchedulerSettleDelays();
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		let streamCallCount = 0;
@@ -769,7 +769,13 @@ describe("AgentSession TTSR resume gate", () => {
 		});
 		ttsrManager.addRule(testRule);
 
-		const toolCallContent: ToolCall = {
+		const readToolCallContent: ToolCall = {
+			type: "toolCall",
+			id: "call_innocent_read",
+			name: "read",
+			arguments: { path: "history://Eval1WithSkill" },
+		};
+		const matchedToolCallContent: ToolCall = {
 			type: "toolCall",
 			id: "call_ttsr_abort_reason",
 			name: "mock_edit",
@@ -778,7 +784,7 @@ describe("AgentSession TTSR resume gate", () => {
 
 		const makeToolCallMsg = (stopReason: "toolUse" | "aborted" = "toolUse"): AssistantMessage => ({
 			role: "assistant",
-			content: [toolCallContent],
+			content: [readToolCallContent, matchedToolCallContent],
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "mock",
@@ -818,10 +824,10 @@ describe("AgentSession TTSR resume gate", () => {
 							);
 						}
 						stream.push({ type: "start", partial });
-						stream.push({ type: "toolcall_start", contentIndex: 0, partial });
+						stream.push({ type: "toolcall_start", contentIndex: 1, partial });
 						stream.push({
 							type: "toolcall_delta",
-							contentIndex: 0,
+							contentIndex: 1,
 							delta: 'let val = result.unwrap("oops")',
 							partial,
 						});
@@ -843,22 +849,22 @@ describe("AgentSession TTSR resume gate", () => {
 
 		await session.prompt("Write some Rust code");
 
-		const toolResult = sessionManager
+		const toolResults = sessionManager
 			.getEntries()
-			.find(
-				entry =>
-					entry.type === "message" &&
-					entry.message.role === "toolResult" &&
-					entry.message.toolCallId === toolCallContent.id,
-			);
-		expect(toolResult?.type).toBe("message");
-		const text =
-			toolResult?.type === "message" && toolResult.message.role === "toolResult"
-				? (toolResult.message.content.find((part): part is { type: "text"; text: string } => part.type === "text")
-						?.text ?? "")
-				: "";
-		expect(text).toContain("Tool execution was aborted: TTSR matched rule: no-unwrap");
-		expect(text).not.toContain("Request was aborted");
+			.filter(entry => entry.type === "message" && entry.message.role === "toolResult")
+			.map(entry => (entry.type === "message" && entry.message.role === "toolResult" ? entry.message : undefined))
+			.filter(message => message !== undefined);
+		const toolResultText = (toolCallId: string): string =>
+			toolResults
+				.find(message => message.toolCallId === toolCallId)
+				?.content.find((part): part is { type: "text"; text: string } => part.type === "text")?.text ?? "";
+
+		const readText = toolResultText(readToolCallContent.id);
+		const matchedText = toolResultText(matchedToolCallContent.id);
+		expect(readText).toContain("Tool execution was aborted: TTSR interrupt on another tool call");
+		expect(readText).not.toContain("TTSR matched rule: no-unwrap");
+		expect(matchedText).toContain("Tool execution was aborted: TTSR matched rule: no-unwrap");
+		expect(matchedText).not.toContain("Request was aborted");
 	});
 
 	it("relativizes the rule file path in the TTSR interrupt injection (no absolute leak)", async () => {
