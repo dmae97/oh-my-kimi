@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the hidden workflowz eval notice describing eval-spawned agent recursion as a fixed depth of 3 instead of the configurable `task.maxRecursionDepth` default of 2 with an eval hard cap of 3. ([#4493](https://github.com/can1357/oh-my-pi/issues/4493))
+
 ## [16.3.5] - 2026-07-04
 
 ### Fixed
