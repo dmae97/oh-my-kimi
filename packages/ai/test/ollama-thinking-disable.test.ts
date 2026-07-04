@@ -129,11 +129,22 @@ describe("Ollama chat thinking controls", () => {
 		}
 		const properties = parameters.properties as Record<string, Record<string, unknown>>;
 
+		const widenedOpen = {
+			anyOf: [
+				{ type: "string" },
+				{ type: "number" },
+				{ type: "boolean" },
+				{ type: "object" },
+				{ type: "array" },
+				{ type: "null" },
+			],
+		};
+
 		expect(Object.hasOwn(parameters, "additionalProperties")).toBe(false);
-		expect(properties.anything).toEqual({});
+		expect(properties.anything).toEqual(widenedOpen);
 		expect(properties.nullableName?.type).toBe("string");
-		expect(properties.list?.items).toEqual({});
-		expect(properties.union?.anyOf).toEqual([{}, { type: "string" }]);
+		expect(properties.list?.items).toEqual(widenedOpen);
+		expect(properties.union?.anyOf).toEqual([widenedOpen, { type: "string" }]);
 		expect(Object.hasOwn(properties.nested, "additionalProperties")).toBe(false);
 	});
 	it("sends mid-conversation developer messages as user turns for llama.cpp cache reuse", async () => {

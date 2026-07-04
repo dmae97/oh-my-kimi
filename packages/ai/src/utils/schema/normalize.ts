@@ -1043,15 +1043,36 @@ const OLLAMA_SCHEMA_VALUE_KEYS = new Set([
 ]);
 
 /**
+ * Widened stand-in for a `true` / `{}` subschema in an Ollama-bound tool.
+ *
+ * `toolWireSchema()` normalizes empty schemas to boolean `true` upstream so
+ * grammar-constrained samplers (llama.cpp, etc.) don't treat `{}` as
+ * "generate an empty object" (issue #1179). Ollama's Go tool parser can't
+ * unmarshal a boolean into its object-shaped `Schema` struct, so this
+ * sanitizer replaces every open subschema with an explicit union of every
+ * primitive JSON type. Both invariants survive: the wire has no boolean
+ * subschema (Go accepts it), and llama.cpp's grammar sees a real value
+ * union rather than a closed empty object.
+ */
+const OLLAMA_OPEN_SUBSCHEMA_WIDENING = Object.freeze({
+	anyOf: [
+		{ type: "string" },
+		{ type: "number" },
+		{ type: "boolean" },
+		{ type: "object" },
+		{ type: "array" },
+		{ type: "null" },
+	],
+});
+
+/**
  * Rewrites standard JSON Schema forms that Ollama's Go `/api/chat` tool parser
  * cannot unmarshal into its object-shaped `Schema` struct.
  */
 export function sanitizeSchemaForOllama(schema: JsonObject): JsonObject {
-	const cache = new WeakMap<JsonObject, unknown>();
 	const normalizeNode = (value: unknown): unknown => {
-		if (typeof value === "boolean") {
-			return value ? {} : { type: "object", properties: {} };
-		}
+		if (value === true) return OLLAMA_OPEN_SUBSCHEMA_WIDENING;
+		if (value === false) return { not: OLLAMA_OPEN_SUBSCHEMA_WIDENING };
 		if (!isJsonObject(value)) {
 			if (!Array.isArray(value)) return value;
 			let changed = false;
@@ -1063,13 +1084,8 @@ export function sanitizeSchemaForOllama(schema: JsonObject): JsonObject {
 			return changed ? output : value;
 		}
 
-		const cached = cache.get(value);
-		if (cached) return cached;
-
-		const output: JsonObject = {};
-		cache.set(value, output);
-
 		let changed = false;
+		const output: JsonObject = {};
 		for (const key in value) {
 			if (!Object.hasOwn(value, key)) continue;
 			const child = value[key];
@@ -1112,9 +1128,7 @@ export function sanitizeSchemaForOllama(schema: JsonObject): JsonObject {
 			output[key] = next;
 		}
 
-		const result = changed ? output : value;
-		cache.set(value, result);
-		return result;
+		return changed ? output : value;
 	};
 	return normalizeNode(schema) as JsonObject;
 }
