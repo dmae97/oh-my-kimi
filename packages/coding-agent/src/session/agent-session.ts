@@ -8678,6 +8678,7 @@ export class AgentSession {
 
 		const targetModel = await this.#modelRegistry.refreshSelectedModelMetadata(model);
 
+		this.#modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
 		this.#clearActiveRetryFallback();
 		this.#setModelWithProviderSessionReset(targetModel);
 		this.sessionManager.appendModelChange(`${targetModel.provider}/${targetModel.id}`, role);
@@ -8715,6 +8716,7 @@ export class AgentSession {
 
 		const targetModel = await this.#modelRegistry.refreshSelectedModelMetadata(model);
 
+		this.#modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
 		this.#clearActiveRetryFallback();
 		this.#setModelWithProviderSessionReset(targetModel);
 		this.sessionManager.appendModelChange(
@@ -8874,6 +8876,7 @@ export class AgentSession {
 		const next = scopedModels[nextIndex];
 
 		// Apply model
+		this.#modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(next.model));
 		this.#clearActiveRetryFallback();
 		this.#setModelWithProviderSessionReset(next.model);
 		this.sessionManager.appendModelChange(`${next.model.provider}/${next.model.id}`);
@@ -8904,6 +8907,7 @@ export class AgentSession {
 			throw new Error(`No API key for ${nextModel.provider}/${nextModel.id}`);
 		}
 
+		this.#modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(nextModel));
 		this.#clearActiveRetryFallback();
 		this.#setModelWithProviderSessionReset(nextModel);
 		this.sessionManager.appendModelChange(`${nextModel.provider}/${nextModel.id}`);

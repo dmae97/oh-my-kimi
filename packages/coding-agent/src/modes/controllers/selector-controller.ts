@@ -593,13 +593,27 @@ export class SelectorController {
 				this.ctx.settings,
 				this.ctx.session.modelRegistry,
 				this.ctx.session.scopedModels,
-				async (model, role, thinkingLevel, selector) => {
+				async (model, role, thinkingLevel, selector, action) => {
 					// `auto` is session-global: never baked into a per-role model value
 					// (it can't round-trip through `model:<level>`). Apply it to the session
 					// separately and persist via `defaultThinkingLevel`.
 					const isAuto = thinkingLevel === AUTO_THINKING;
 					const concreteThinking = isAuto ? undefined : thinkingLevel;
+					const selectorValue = selector ?? `${model.provider}/${model.id}`;
 					try {
+						if (action === "retryFallback" && role !== null) {
+							const fallbackSelector = formatModelSelectorValue(selectorValue, concreteThinking);
+							const fallbackChains = this.ctx.settings.get("retry.fallbackChains");
+							const chain = fallbackChains[role] ?? [];
+							this.ctx.settings.set("retry.fallbackChains", {
+								...fallbackChains,
+								[role]: [fallbackSelector, ...chain.filter(existing => existing !== fallbackSelector)],
+							});
+							const roleInfo = getRoleInfo(role, settings);
+							const roleLabel = roleInfo?.name ?? role;
+							this.ctx.showStatus(`${roleLabel} fallback model: ${fallbackSelector}`);
+							return;
+						}
 						if (role === null) {
 							// Temporary: update agent state but don't persist the model to settings
 							await this.ctx.session.setModelTemporary(model);
