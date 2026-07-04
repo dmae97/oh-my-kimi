@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed legacy Pi extension reloads on POSIX so `loadLegacyPiModule` imports the entry through a cache-busting filesystem path and re-imports edited source in the same process. ([#4565](https://github.com/can1357/oh-my-pi/issues/4565))
+- Fixed legacy Pi extension reloads on POSIX so `loadLegacyPiModule` imports the entry through a cache-busting filesystem path and threads the current load's `?mtime` tag through the extension source graph — relative `./helper.ts` siblings, `#alias/*` package-imports, and extension-local bare deps all rekey per reload, so same-process re-imports pick up edits across the whole graph. ([#4565](https://github.com/can1357/oh-my-pi/issues/4565))
 
 ## [16.3.6] - 2026-07-04
 

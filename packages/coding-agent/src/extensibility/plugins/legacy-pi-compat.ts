@@ -479,8 +479,19 @@ const TYPEBOX_IMPORT_SPECIFIER_REGEX = /((?:from\s+|import\s+|import\s*\(\s*)["'
  * or compiled-mode virtual specifiers. Relative siblings and built-in modules
  * are left untouched so Bun resolves them from the extension's real on-disk
  * location.
+ *
+ * When `mtimeTag` is provided, extension-owned graph specifiers (relative
+ * `./`/`../`, package `#alias/*`, and extension-local bare deps) also carry a
+ * `?mtime=<tag>` cache-bust so Bun rekeys them on same-process reloads. Host
+ * package rewrites (legacy `@(scope)/pi-*`, TypeBox shim) always emit
+ * `file://` URLs because they resolve to in-process host code that never
+ * changes between reloads.
  */
-async function rewriteLegacyExtensionSource(source: string, importerPath: string): Promise<string> {
+async function rewriteLegacyExtensionSource(
+	source: string,
+	importerPath: string,
+	mtimeTag: string | null = null,
+): Promise<string> {
 	const withPi = rewriteLegacyPiImports(source);
 	// When the TypeBox shim is missing (release build dropped the entrypoint —
 	// issue #3414), leave bare specifiers untouched so Bun resolves a real
@@ -493,12 +504,48 @@ async function rewriteLegacyExtensionSource(source: string, importerPath: string
 					`${prefix}${toImportSpecifier(TYPEBOX_SHIM_PATH)}${suffix}`,
 			)
 		: withPi;
-	return rewriteExtensionBareImports(await rewriteExtensionPackageImports(withTypeBox, importerPath), importerPath);
+	const withPkg = await rewriteExtensionPackageImports(withTypeBox, importerPath, mtimeTag);
+	const withBare = await rewriteExtensionBareImports(withPkg, importerPath, mtimeTag);
+	if (!mtimeTag) {
+		return withBare;
+	}
+	return withBare.replace(
+		RELATIVE_GRAPH_IMPORT_SPECIFIER_REGEX,
+		(_match, prefix: string, specifier: string, suffix: string) => `${prefix}${specifier}?mtime=${mtimeTag}${suffix}`,
+	);
 }
 
 /** Test seam for compiled-binary legacy extension source rewriting. */
-export async function __rewriteLegacyExtensionSourceForTests(source: string, importerPath: string): Promise<string> {
-	return rewriteLegacyExtensionSource(source, importerPath);
+export async function __rewriteLegacyExtensionSourceForTests(
+	source: string,
+	importerPath: string,
+	mtimeTag: string | null = null,
+): Promise<string> {
+	return rewriteLegacyExtensionSource(source, importerPath, mtimeTag);
+}
+
+// Match relative graph specifiers so their `./foo.ts` /`../foo` targets get a
+// `?mtime=<tag>` cache-bust suffix without disturbing already-rewritten
+// `file://` URLs or bare/host specifiers.
+const RELATIVE_GRAPH_IMPORT_SPECIFIER_REGEX = /((?:from\s+|import\s+|import\s*\(\s*)["'])(\.\.?\/[^"'?\s]*)(["'])/g;
+
+/**
+ * Build the import specifier for a graph-resolved absolute path. POSIX
+ * emits a bare filesystem path with an optional `?mtime=<tag>` (Bun keys
+ * query strings for bare-path specifiers), so same-process extension
+ * reloads pick up edits to package-alias (`#foo/*`) and extension-local
+ * bare deps. Windows and bundled virtual specifiers keep the current
+ * `file://` / virtual form — Bun ignores queries on `file://` URLs, so
+ * cache-bust does not reach Windows extensions until Bun changes that.
+ */
+function toGraphImportSpecifier(resolvedPath: string, mtimeTag: string | null): string {
+	if (isBundledVirtualSpecifier(resolvedPath)) {
+		return resolvedPath;
+	}
+	if (process.platform === "win32" || !mtimeTag) {
+		return url.pathToFileURL(stripWindowsExtendedLengthPathPrefix(resolvedPath)).href;
+	}
+	return `${stripWindowsExtendedLengthPathPrefix(resolvedPath)}?mtime=${mtimeTag}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -688,7 +735,11 @@ async function resolvePackageImportSpecifier(specifier: string, importerPath: st
 
 const PACKAGE_IMPORT_SPECIFIER_REGEX = /((?:from\s+|import\s+|import\s*\(\s*)["'])(#[^"'()\s]+)(["'])/g;
 
-async function rewriteExtensionPackageImports(source: string, importerPath: string): Promise<string> {
+async function rewriteExtensionPackageImports(
+	source: string,
+	importerPath: string,
+	mtimeTag: string | null = null,
+): Promise<string> {
 	let rewritten = "";
 	let lastIndex = 0;
 	for (const match of source.matchAll(PACKAGE_IMPORT_SPECIFIER_REGEX)) {
@@ -702,7 +753,7 @@ async function rewriteExtensionPackageImports(source: string, importerPath: stri
 		if (!resolved) continue;
 
 		rewritten += source.slice(lastIndex, matchIndex);
-		rewritten += `${prefix}${toImportSpecifier(resolved)}${suffix}`;
+		rewritten += `${prefix}${toGraphImportSpecifier(resolved, mtimeTag)}${suffix}`;
 		lastIndex = matchIndex + fullMatch.length;
 	}
 
@@ -899,7 +950,11 @@ async function resolveExtensionBareDependencyUncached(specifier: string, importe
 	return resolveNodePackageDependency(specifier, importerPath);
 }
 
-async function rewriteExtensionBareImports(source: string, importerPath: string): Promise<string> {
+async function rewriteExtensionBareImports(
+	source: string,
+	importerPath: string,
+	mtimeTag: string | null = null,
+): Promise<string> {
 	let rewritten = "";
 	let lastIndex = 0;
 	for (const match of source.matchAll(BARE_EXTENSION_IMPORT_SPECIFIER_REGEX)) {
@@ -913,7 +968,7 @@ async function rewriteExtensionBareImports(source: string, importerPath: string)
 		if (!resolved) continue;
 
 		rewritten += source.slice(lastIndex, matchIndex);
-		rewritten += `${prefix}${toImportSpecifier(resolved)}${suffix}`;
+		rewritten += `${prefix}${toGraphImportSpecifier(resolved, mtimeTag)}${suffix}`;
 		lastIndex = matchIndex + fullMatch.length;
 	}
 
@@ -1023,7 +1078,9 @@ async function ensureExtensionGraphHook(entryRealPath: string): Promise<Map<stri
 		name: `omp:legacy-pi-ext:${Bun.hash(entryRealPath).toString(36)}`,
 		setup(build) {
 			build.onLoad({ filter, namespace: "file" }, async args => {
-				const sourcePath = args.path.replace(/\?mtime=\d+$/, "");
+				const queryIndex = args.path.indexOf("?mtime=");
+				const sourcePath = queryIndex >= 0 ? args.path.slice(0, queryIndex) : args.path;
+				const mtimeTag = queryIndex >= 0 ? args.path.slice(queryIndex + "?mtime=".length) : null;
 				const cached = modules.get(sourcePath);
 				let raw: string;
 				if (cached !== undefined) {
@@ -1033,7 +1090,10 @@ async function ensureExtensionGraphHook(entryRealPath: string): Promise<Map<stri
 				} else {
 					raw = await Bun.file(sourcePath).text();
 				}
-				return { contents: await rewriteLegacyExtensionSource(raw, sourcePath), loader: getLoader(sourcePath) };
+				return {
+					contents: await rewriteLegacyExtensionSource(raw, sourcePath, mtimeTag),
+					loader: getLoader(sourcePath),
+				};
 			});
 		},
 	});

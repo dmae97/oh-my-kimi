@@ -97,6 +97,46 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		expect(second.asset).toBe("asset-ok");
 	});
 
+	it("reloads an edited relative helper module on same-process re-import", async () => {
+		const entrySource = (version: string): string =>
+			[
+				'import { fileURLToPath } from "node:url";',
+				'import { H } from "./helper.ts";',
+				"export { H };",
+				"export const entryPath = fileURLToPath(import.meta.url);",
+				`export const entryVersion = ${JSON.stringify(version)};`,
+				"export default function (pi) { void pi; }",
+			].join("\n");
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "helper-mtime-reload-ext", version: "1.0.0" }),
+			"index.ts": entrySource("v1"),
+			"helper.ts": 'export const H = "v1";\n',
+		});
+		const entry = path.join(dir, "index.ts");
+		const helper = path.join(dir, "helper.ts");
+		const expectedEntryPath = await fs.realpath(entry);
+
+		const first = (await loadLegacyPiModule(entry)) as { entryVersion: string; H: string; entryPath: string };
+		expect(first.entryVersion).toBe("v1");
+		expect(first.H).toBe("v1");
+		expect(first.entryPath).toBe(expectedEntryPath);
+
+		const firstEntryStat = await fs.stat(entry);
+		const firstHelperStat = await fs.stat(helper);
+		await fs.writeFile(entry, entrySource("v2"), "utf8");
+		await fs.writeFile(helper, 'export const H = "v2";\n', "utf8");
+		const bumpedEntryMtime = new Date(Math.ceil(firstEntryStat.mtimeMs) + 2_000);
+		const bumpedHelperMtime = new Date(Math.ceil(firstHelperStat.mtimeMs) + 2_000);
+		await fs.utimes(entry, bumpedEntryMtime, bumpedEntryMtime);
+		await fs.utimes(helper, bumpedHelperMtime, bumpedHelperMtime);
+
+		const second = (await loadLegacyPiModule(entry)) as { entryVersion: string; H: string; entryPath: string };
+		expect(second.entryVersion).toBe("v2");
+		expect(second.H).toBe("v2");
+		expect(second.entryPath).toBe(expectedEntryPath);
+		expect(second.entryPath.includes("?")).toBe(false);
+	});
+
 	it("resolves a .css sibling of a relatively-imported submodule", async () => {
 		const dir = await writePackage({
 			"package.json": JSON.stringify({ name: "multi-file-ext", version: "1.0.0" }),
