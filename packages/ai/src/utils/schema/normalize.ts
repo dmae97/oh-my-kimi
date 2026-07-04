@@ -1015,6 +1015,137 @@ export function normalizeSchemaForMoonshot(value: unknown): unknown {
 }
 
 // ---------------------------------------------------------------------------
+// Ollama — Go schema parser compatibility
+// ---------------------------------------------------------------------------
+
+const OLLAMA_SCHEMA_ARRAY_KEYS = new Set(["anyOf", "oneOf", "allOf", "prefixItems"]);
+const OLLAMA_SCHEMA_MAP_KEYS = new Set([
+	"properties",
+	"patternProperties",
+	"dependencies",
+	"dependentSchemas",
+	"$defs",
+	"definitions",
+]);
+const OLLAMA_SCHEMA_VALUE_KEYS = new Set([
+	"items",
+	"additionalItems",
+	"contains",
+	"contentSchema",
+	"propertyNames",
+	"if",
+	"then",
+	"else",
+	"not",
+	"additionalProperties",
+	"unevaluatedItems",
+	"unevaluatedProperties",
+]);
+
+/**
+ * Widened stand-in for a `true` / `{}` subschema in an Ollama-bound tool.
+ *
+ * `toolWireSchema()` normalizes empty schemas to boolean `true` upstream so
+ * grammar-constrained samplers (llama.cpp, etc.) don't treat `{}` as
+ * "generate an empty object" (issue #1179). Ollama's Go tool parser can't
+ * unmarshal a boolean into its object-shaped `Schema` struct, so this
+ * sanitizer replaces every open subschema with an explicit union of every
+ * primitive JSON type. Both invariants survive: the wire has no boolean
+ * subschema (Go accepts it), and llama.cpp's grammar sees a real value
+ * union rather than a closed empty object.
+ */
+const OLLAMA_OPEN_SUBSCHEMA_WIDENING = Object.freeze({
+	anyOf: [
+		{ type: "string" },
+		{ type: "number" },
+		{ type: "boolean" },
+		{ type: "object" },
+		{ type: "array" },
+		{ type: "null" },
+	],
+});
+
+/**
+ * Rewrites standard JSON Schema forms that Ollama's Go `/api/chat` tool parser
+ * cannot unmarshal into its object-shaped `Schema` struct.
+ */
+export function sanitizeSchemaForOllama(schema: JsonObject): JsonObject {
+	const normalizeNode = (value: unknown): unknown => {
+		if (value === true) return OLLAMA_OPEN_SUBSCHEMA_WIDENING;
+		if (value === false) return { not: OLLAMA_OPEN_SUBSCHEMA_WIDENING };
+		if (!isJsonObject(value)) {
+			if (!Array.isArray(value)) return value;
+			let changed = false;
+			const output = value.map(item => {
+				const next = normalizeNode(item);
+				if (next !== item) changed = true;
+				return next;
+			});
+			return changed ? output : value;
+		}
+
+		let changed = false;
+		const output: JsonObject = {};
+		let typeAlternatives: JsonObject[] | undefined;
+		for (const key in value) {
+			if (!Object.hasOwn(value, key)) continue;
+			const child = value[key];
+			if ((key === "additionalProperties" || key === "unevaluatedProperties") && typeof child === "boolean") {
+				changed = true;
+				continue;
+			}
+			if (key === "type" && Array.isArray(child)) {
+				const variants = child.filter((entry): entry is string => typeof entry === "string");
+				const uniqueVariants = [...new Set(variants)];
+				const nonNull = uniqueVariants.filter(entry => entry !== "null");
+				if (nonNull.length <= 1) {
+					output.type = nonNull[0] ?? uniqueVariants[0] ?? child[0];
+				} else {
+					typeAlternatives = uniqueVariants.map(entry => ({ type: entry }));
+				}
+				changed = true;
+				continue;
+			}
+
+			let next = child;
+			if (OLLAMA_SCHEMA_MAP_KEYS.has(key) && isJsonObject(child)) {
+				let mapChanged = false;
+				const mapOutput: JsonObject = {};
+				for (const childKey in child) {
+					if (!Object.hasOwn(child, childKey)) continue;
+					const mapChild = child[childKey];
+					const normalizedChild = normalizeNode(mapChild);
+					if (normalizedChild !== mapChild) mapChanged = true;
+					mapOutput[childKey] = normalizedChild;
+				}
+				next = mapChanged ? mapOutput : child;
+			} else if (OLLAMA_SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(child)) {
+				let arrayChanged = false;
+				const arrayOutput = child.map(item => {
+					const normalizedItem = normalizeNode(item);
+					if (normalizedItem !== item) arrayChanged = true;
+					return normalizedItem;
+				});
+				next = arrayChanged ? arrayOutput : child;
+			} else if (OLLAMA_SCHEMA_VALUE_KEYS.has(key)) {
+				next = normalizeNode(child);
+			}
+			if (next !== child) changed = true;
+			output[key] = next;
+		}
+
+		if (typeAlternatives) {
+			const existingAllOf = output.allOf;
+			const typeUnion = { anyOf: typeAlternatives };
+			output.allOf = Array.isArray(existingAllOf) ? [typeUnion, ...existingAllOf] : [typeUnion];
+		}
+
+		return changed ? output : value;
+	};
+	return normalizeNode(schema) as JsonObject;
+}
+
+// ---------------------------------------------------------------------------
 // OpenAI Responses — schema-valued normalization
 // ---------------------------------------------------------------------------
 
