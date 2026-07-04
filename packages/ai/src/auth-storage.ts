@@ -16,7 +16,13 @@ import * as AIError from "./error";
 import { isUsageLimitOutcome } from "./error/rate-limit";
 import { getProviderDefinition, PASTE_CODE_LOGIN_PROVIDERS } from "./registry";
 import { getOAuthApiKey, getOAuthProvider, refreshOAuthToken } from "./registry/oauth";
-import type { OAuthController, OAuthCredentials, OAuthProvider, OAuthProviderId } from "./registry/oauth/types";
+import type {
+	OAuthAuthInfo,
+	OAuthController,
+	OAuthCredentials,
+	OAuthProvider,
+	OAuthProviderId,
+} from "./registry/oauth/types";
 import { getEnvApiKey, getEnvApiKeyName } from "./stream";
 import type { Provider } from "./types";
 import type {
@@ -1863,7 +1869,7 @@ export class AuthStorage {
 		provider: OAuthProviderId,
 		ctrl: OAuthController & {
 			/** onAuth is required by auth-storage but optional in OAuthController */
-			onAuth: (info: { url: string; instructions?: string }) => void;
+			onAuth: (info: OAuthAuthInfo) => void;
 			/** onPrompt is required for some providers (github-copilot, openai-codex) */
 			onPrompt: (prompt: { message: string; placeholder?: string }) => Promise<string>;
 		},
