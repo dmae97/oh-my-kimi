@@ -647,6 +647,23 @@ export interface DeveloperMessage {
 	timestamp: number; // Unix timestamp in milliseconds
 }
 
+export type AssistantRetryRecoveryKind = "credential" | "model" | "wait" | "plain";
+
+export interface AssistantRetryRecovery {
+	kind: "auto-retry";
+	status: "recovered";
+	attempt: number;
+	recoveredAt: string;
+	recovery: AssistantRetryRecoveryKind;
+	note: string;
+	supersededBy?: {
+		timestamp: number;
+		responseId?: string;
+		provider: string;
+		model: string;
+	};
+}
+
 export interface ContextSnapshot {
 	promptTokens: number; // authoritative provider prompt/input tokens
 	nonMessageTokens: number; // estimated non-message total at send time
@@ -660,6 +677,7 @@ export interface AssistantMessage {
 	provider: Provider;
 	model: string;
 	contextSnapshot?: ContextSnapshot;
+	retryRecovery?: AssistantRetryRecovery;
 	responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
 	/**
 	 * Name of the upstream provider an aggregator routed this request to, as

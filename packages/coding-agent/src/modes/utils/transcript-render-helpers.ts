@@ -7,8 +7,15 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { type Component, Text } from "@oh-my-pi/pi-tui";
 import { formatBytes, formatDuration } from "@oh-my-pi/pi-utils";
-import { type CustomMessage, type FileMentionMessage, isSilentAbort, resolveAbortLabel } from "../../session/messages";
+import {
+	type CustomMessage,
+	type FileMentionMessage,
+	isSilentAbort,
+	resolveAbortLabel,
+	shouldRenderAbortReason,
+} from "../../session/messages";
 import { createIrcMessageCard } from "../../tools/irc";
+import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/render-utils";
 import { canonicalizeMessage } from "../../utils/thinking-display";
 import { TranscriptBlock } from "../components/transcript-container";
 import { theme } from "../theme/theme";
@@ -138,20 +145,41 @@ export function normalizeToolArgs(args: unknown): Record<string, unknown> {
 	return args && typeof args === "object" && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
 }
 
+export type AssistantErrorPresentation =
+	| { kind: "none" }
+	| { kind: "full"; text: string; isError: true }
+	| { kind: "compact-recovered"; text: string; isError: false };
+
+function sanitizeRecoveredRetryNote(note: string): string {
+	const normalized = replaceTabs(note).replace(/\s+/g, " ").trim();
+	return truncateToWidth(normalized || "retried", TRUNCATE_LENGTHS.CONTENT);
+}
+
 /**
- * Resolve the inline error label, if any, for a turn-ending assistant message.
- * Silent aborts yield no label. `retryAttempt` tunes the abort label wording.
+ * Resolve the turn-ending assistant error presentation, if any.
+ * Silent aborts yield no label. Recovered auto-retry errors collapse to a
+ * single non-error note; terminal errors keep the full red presentation.
  */
-export function resolveAssistantErrorMessage(
+export function resolveAssistantErrorPresentation(
 	message: AssistantAgentMessage,
 	retryAttempt = 0,
-): { hasErrorStop: boolean; errorMessage: string | null } {
-	const isAbortedSilently = message.stopReason === "aborted" && isSilentAbort(message);
-	const hasErrorStop = !isAbortedSilently && (message.stopReason === "aborted" || message.stopReason === "error");
-	const errorMessage = hasErrorStop
-		? message.stopReason === "aborted"
-			? resolveAbortLabel(message, retryAttempt)
-			: message.errorMessage || "Error"
-		: null;
-	return { hasErrorStop, errorMessage };
+): AssistantErrorPresentation {
+	if (message.retryRecovery?.status === "recovered") {
+		return {
+			kind: "compact-recovered",
+			text: sanitizeRecoveredRetryNote(message.retryRecovery.note),
+			isError: false,
+		};
+	}
+	if (message.stopReason === "aborted") {
+		if (isSilentAbort(message)) return { kind: "none" };
+		return { kind: "full", text: resolveAbortLabel(message, retryAttempt), isError: true };
+	}
+	if (message.stopReason === "error") {
+		return { kind: "full", text: message.errorMessage || "Error", isError: true };
+	}
+	if (message.errorMessage && shouldRenderAbortReason(message)) {
+		return { kind: "full", text: message.errorMessage, isError: true };
+	}
+	return { kind: "none" };
 }

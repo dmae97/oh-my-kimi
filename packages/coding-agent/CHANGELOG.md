@@ -4,7 +4,14 @@
 
 ### Changed
 
-- Updated transcript streaming logic to support custom settled row declarations for scrollback
+- Updated transcript streaming logic to support custom settled row declarations for scrollback: `TranscriptContainer` reports one declared-final boundary (finalized blocks plus the first live block's `getTranscriptBlockSettledRows()`, fed by markdown's frozen-token prefix for streaming replies). The heuristic commit machinery (`deriveLiveCommitState` append-only detection, stable-prefix ratchet, volatile cooldowns, rewrite floors), `isTranscriptBlockCommitStable`, and the per-renderer `provisionalPendingPreview`/`provisionalPartialResult` flags are all removed — a block is either finalized (fully committable) or live (commits nothing beyond its declared settled rows).
+- Recovered auto-retry errors now compact in the transcript: once a retry succeeds, the superseded error rows (e.g. Anthropic `429 rate_limit_error` during account rotation) render as a single dim note like `rate-limited; switched account; retried` across live view, rebuilds, resume, and subagent/collab transcript views, and are excluded from model context on session resume. Terminal (unrecovered) errors keep full error rendering. The persisted marker is `retryRecovery` on the assistant message and `auto_retry_end` success events carry additive `recoveredErrors` data.
+
+### Fixed
+
+- Fixed raw `read` ranges not contributing to edit seen-line provenance, so re-reading an anchor range with `:raw` now unblocks hashline edits without adding non-raw line prefixes.
+- Fixed streaming eval/bash tool boxes rendering duplicated stale copies into terminal scrollback while running: provisional preview rows never enter history now, and user-initiated `!`/`$` execution blocks report a finalization contract so their collapsed streaming previews stay repaintable until the command completes.
+- Fixed turn-ending provider errors rendering with a doubled blank gap above the `Error:` block (caller and error block each added a spacer).
 
 ## [16.3.5] - 2026-07-04
 

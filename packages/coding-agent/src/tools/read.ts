@@ -334,6 +334,24 @@ function contiguousLineNumbers(startLine: number, count: number): number[] {
 	return lines;
 }
 
+function lineNumbersFromSpans(spans: readonly { startLine: number; endLine: number }[]): number[] {
+	const lines: number[] = [];
+	for (const span of spans) {
+		for (let line = span.startLine; line <= span.endLine; line++) lines.push(line);
+	}
+	return lines;
+}
+
+function recordInMemorySeenLines(
+	session: ToolSession,
+	absolutePath: string | undefined,
+	fullText: string,
+	seenLines: readonly number[] | undefined,
+): void {
+	if (!absolutePath || !path.isAbsolute(absolutePath) || !seenLines || seenLines.length === 0) return;
+	getFileSnapshotStore(session).record(canonicalSnapshotKey(absolutePath), normalizeToLF(fullText), seenLines);
+}
+
 function lineNumbersFromEntries(entries: readonly LineEntry[]): number[] {
 	const lines: number[] = [];
 	for (const entry of entries) {
@@ -1319,6 +1337,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				: undefined;
 		let emittedHashlineHeader = false;
 		let seenLines: number[] | undefined;
+		let rawSeenLines: number[] | undefined;
 		const formatText = (content: string, startNum: number): string => {
 			const lineCount = countTextLines(content);
 			details.displayContent = {
@@ -1382,10 +1401,12 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		} else if (truncation.truncated) {
 			const outputLines = truncation.outputLines ?? countTextLines(truncation.content);
 			const endLineDisplay = startLineDisplay + Math.max(0, outputLines - 1);
-			outputText =
-				options.raw === true
-					? formatText(truncation.content, startLineDisplay)
-					: formatLineEntries(buildLineEntries(endLineDisplay), startLineDisplay);
+			if (options.raw === true) {
+				rawSeenLines = contiguousLineNumbers(startLineDisplay, outputLines);
+				outputText = formatText(truncation.content, startLineDisplay);
+			} else {
+				outputText = formatLineEntries(buildLineEntries(endLineDisplay), startLineDisplay);
+			}
 			details.truncation = truncation;
 			truncationInfo = {
 				result: truncation,
@@ -1395,20 +1416,27 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			const remaining = allLines.length - (startLine + userLimitedLines);
 			const nextOffset = startLine + userLimitedLines + 1;
 
-			outputText =
-				options.raw === true
-					? formatText(selectedContent, startLineDisplay)
-					: formatLineEntries(buildLineEntries(endLine), startLineDisplay);
+			if (options.raw === true) {
+				rawSeenLines = contiguousLineNumbers(startLineDisplay, userLimitedLines);
+				outputText = formatText(selectedContent, startLineDisplay);
+			} else {
+				outputText = formatLineEntries(buildLineEntries(endLine), startLineDisplay);
+			}
 			outputText += `\n\n[${remaining} more lines in ${options.entityLabel}. Use :${nextOffset} to continue]`;
 		} else {
-			outputText =
-				options.raw === true
-					? formatText(truncation.content, startLineDisplay)
-					: formatLineEntries(buildLineEntries(endLine), startLineDisplay);
+			if (options.raw === true) {
+				rawSeenLines = contiguousLineNumbers(startLineDisplay, endLine - startLine);
+				outputText = formatText(truncation.content, startLineDisplay);
+			} else {
+				outputText = formatLineEntries(buildLineEntries(endLine), startLineDisplay);
+			}
 		}
 
 		if (hashContext?.tag && options.sourcePath && seenLines) {
 			recordSeenLines(this.session, options.sourcePath, hashContext.tag, seenLines);
+		}
+		if (options.raw === true && options.sourcePath && options.immutable !== true && rawSeenLines) {
+			recordInMemorySeenLines(this.session, options.sourcePath, text, rawSeenLines);
 		}
 		resultBuilder.text(outputText);
 		if (truncationInfo) {
@@ -1502,6 +1530,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			notices.length > 0 ? (outputText ? `${outputText}\n${notices.join("\n")}` : notices.join("\n")) : outputText;
 		if (hashContext?.tag && options.sourcePath && seenLines) {
 			recordSeenLines(this.session, options.sourcePath, hashContext.tag, seenLines);
+		}
+		if (options.raw === true && options.sourcePath && options.immutable !== true && visibleSpans.length > 0) {
+			recordInMemorySeenLines(this.session, options.sourcePath, text, lineNumbersFromSpans(visibleSpans));
 		}
 		resultBuilder.text(finalText);
 		return resultBuilder.done();
@@ -1615,14 +1646,16 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				}
 				if (cloned) displayLines = cloned;
 			}
-			const endLine = range.startLine + Math.max(0, displayLines.length - 1);
-			visibleSpans.push({ startLine: range.startLine, endLine });
-			for (let i = 0; i < displayLines.length; i++) {
-				displayLineByNumber.set(range.startLine + i, displayLines[i] ?? "");
-			}
-			if (!fullLines || rawSelector) {
-				const blockText = displayLines.join("\n");
-				blocks.push(formatTextWithMode(blockText, range.startLine, shouldAddHashLines, shouldAddLineNumbers));
+			if (displayLines.length > 0) {
+				const endLine = range.startLine + displayLines.length - 1;
+				visibleSpans.push({ startLine: range.startLine, endLine });
+				for (let i = 0; i < displayLines.length; i++) {
+					displayLineByNumber.set(range.startLine + i, displayLines[i] ?? "");
+				}
+				if (!fullLines || rawSelector) {
+					const blockText = displayLines.join("\n");
+					blocks.push(formatTextWithMode(blockText, range.startLine, shouldAddHashLines, shouldAddLineNumbers));
+				}
 			}
 		}
 
@@ -1662,6 +1695,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				recordSeenLinesFromBody(this.session, absolutePath, tag, outputText, clippedLines);
 				outputText = `${formatReadHashlineHeader(formatPathRelativeToCwd(absolutePath, this.session.cwd), tag)}\n${outputText}`;
 			}
+		} else if (rawSelector && visibleSpans.length > 0) {
+			const rawSeenLines = lineNumbersFromSpans(visibleSpans);
+			if (rawSeenLines.length > 0) await recordFileSnapshot(this.session, absolutePath, rawSeenLines);
 		}
 		if (notices.length > 0) {
 			outputText = outputText ? `${outputText}\n${notices.join("\n")}` : notices.join("\n");
@@ -2668,6 +2704,13 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 					if (hashContext?.tag) {
 						recordSeenLinesFromBody(this.session, absolutePath, hashContext.tag, outputText, clippedLines);
+					}
+					if (rawSelector && !firstLineExceedsLimit && collectedLines.length > 0) {
+						await recordFileSnapshot(
+							this.session,
+							absolutePath,
+							contiguousLineNumbers(startLineDisplay, collectedLines.length),
+						);
 					}
 
 					if (capturedDisplayContent) {

@@ -18,6 +18,7 @@ import type { SessionTreeNode } from "../../session/session-entries";
 import { toPathList } from "../../tools/path-utils";
 import { shortenPath } from "../../tools/render-utils";
 import { canonicalizeMessage } from "../../utils/thinking-display";
+import { resolveAssistantErrorPresentation } from "../utils/transcript-render-helpers";
 import { DynamicBorder } from "./dynamic-border";
 import { centeredWindow, contentRowWidth, renderScrollableList } from "./selector-helpers";
 
@@ -615,15 +616,20 @@ class TreeList implements Component {
 					const content = normalize(this.#extractContent(msgWithContent.content));
 					result = theme.fg("dim", "developer: ") + theme.fg("muted", content);
 				} else if (role === "assistant") {
+					const presentation = resolveAssistantErrorPresentation(msg);
+					if (presentation.kind === "compact-recovered") {
+						result = theme.fg("success", "assistant: ") + theme.fg("dim", presentation.text);
+						break;
+					}
 					const msgWithContent = msg as { content?: unknown; stopReason?: string; errorMessage?: string };
 					const textContent = normalize(this.#extractContent(msgWithContent.content));
 					if (textContent) {
 						result = theme.fg("success", "assistant: ") + textContent;
+					} else if (presentation.kind === "full") {
+						result =
+							theme.fg("success", "assistant: ") + theme.fg("error", normalize(presentation.text).slice(0, 80));
 					} else if (msgWithContent.stopReason === "aborted") {
 						result = theme.fg("success", "assistant: ") + theme.fg("muted", "(aborted)");
-					} else if (msgWithContent.errorMessage) {
-						const errMsg = normalize(msgWithContent.errorMessage).slice(0, 80);
-						result = theme.fg("success", "assistant: ") + theme.fg("error", errMsg);
 					} else {
 						result = theme.fg("success", "assistant: ") + theme.fg("muted", "(no content)");
 					}

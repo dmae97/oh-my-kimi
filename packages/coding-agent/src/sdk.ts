@@ -993,6 +993,7 @@ function createCustomToolsExtension(tools: CustomTool[]): ExtensionFactory {
 					success: event.success,
 					attempt: event.attempt,
 					finalError: event.finalError,
+					recoveredErrors: event.recoveredErrors,
 				},
 				ctx,
 			),

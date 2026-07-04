@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { type ExecuteHashlineSingleOptions, executeHashlineSingle } from "@oh-my-pi/pi-coding-agent/edit";
 import { canonicalSnapshotKey, getFileSnapshotStore } from "@oh-my-pi/pi-coding-agent/edit/file-snapshot-store";
+import { DEFAULT_MAX_BYTES } from "@oh-my-pi/pi-coding-agent/session/streaming-output";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
@@ -123,6 +124,84 @@ describe("read → edit seen-line guard", () => {
 		expect(await Bun.file(file).text()).toContain("EDITED");
 	});
 
+	it("records raw single-range reads as seen without emitting a hashline header", async () => {
+		const file = path.join(tmpDir, "notes.txt");
+		await Bun.write(file, CONTENT);
+		const session = createSession(tmpDir);
+		const store = getFileSnapshotStore(session);
+		const tag = store.record(canonicalSnapshotKey(file), CONTENT, [1]);
+
+		const read = await new ReadTool(session).execute("r1", { path: `${file}:raw:4-6` });
+		const text = resultText(read);
+		expect(text).not.toMatch(HEADER);
+		expect(text).toContain("line 4\nline 5\nline 6");
+		expect(text).not.toContain("4:line 4");
+
+		const seen = store.byHash(canonicalSnapshotKey(file), tag)?.seenLines;
+		expect(seen?.has(4)).toBe(true);
+		expect(seen?.has(5)).toBe(true);
+		expect(seen?.has(6)).toBe(true);
+		expect(seen?.has(10)).toBe(false);
+
+		await executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 5.=5:\n+RAW EDITED`, session));
+		const edited = await Bun.file(file).text();
+		expect(edited).toContain("line 4\nRAW EDITED\nline 6");
+		expect(edited).not.toContain("line 5");
+	});
+
+	it("records every raw multi-range line and rejects anchors outside those ranges", async () => {
+		const file = path.join(tmpDir, "notes.txt");
+		await Bun.write(file, CONTENT);
+		const session = createSession(tmpDir);
+		const store = getFileSnapshotStore(session);
+		const tag = store.record(canonicalSnapshotKey(file), CONTENT, [12]);
+
+		const read = await new ReadTool(session).execute("r1", { path: `${file}:raw:2-3,7-8` });
+		const text = resultText(read);
+		expect(text).not.toMatch(HEADER);
+		expect(text).toBe("line 2\nline 3\n\n…\n\nline 7\nline 8");
+
+		const seen = store.byHash(canonicalSnapshotKey(file), tag)?.seenLines;
+		expect(seen?.has(2)).toBe(true);
+		expect(seen?.has(3)).toBe(true);
+		expect(seen?.has(7)).toBe(true);
+		expect(seen?.has(8)).toBe(true);
+		expect(seen?.has(5)).toBe(false);
+
+		await expect(
+			executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 5.=5:\n+OUTSIDE`, session)),
+		).rejects.toThrow(/never displayed \(it showed/);
+		expect(await Bun.file(file).text()).toBe(CONTENT);
+
+		await executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 7.=7:\n+RAW RANGE EDITED`, session));
+		const edited = await Bun.file(file).text();
+		expect(edited).toContain("line 6\nRAW RANGE EDITED\nline 8");
+		expect(edited).not.toContain("line 7");
+	});
+
+	it("does not mark a raw multi-range line as seen when the byte cap prevents full output", async () => {
+		const file = path.join(tmpDir, "wide-raw.txt");
+		const hugeLine = "x".repeat(DEFAULT_MAX_BYTES + 1);
+		const content = `${hugeLine}\nline 2\n\nline 4\n`;
+		await Bun.write(file, content);
+		const session = createSession(tmpDir);
+		const store = getFileSnapshotStore(session);
+		const tag = store.record(canonicalSnapshotKey(file), content, [4]);
+
+		const read = await new ReadTool(session).execute("r1", { path: `${file}:raw:1-1,3-3` });
+		expect(resultText(read)).toBe("");
+
+		const seen = store.byHash(canonicalSnapshotKey(file), tag)?.seenLines;
+		expect(seen?.has(1)).toBe(false);
+		expect(seen?.has(3)).toBe(true);
+		expect(seen?.has(4)).toBe(true);
+
+		await expect(
+			executeHashlineSingle(execOptions(`[wide-raw.txt#${tag}]\nSWAP 1.=1:\n+REPLACED`, session)),
+		).rejects.toThrow(/never displayed \(it showed/);
+		expect(await Bun.file(file).text()).toBe(content);
+	});
+
 	it("merges displayed lines from ACP bridge range reads into existing provenance", async () => {
 		const file = path.join(tmpDir, "notes.txt");
 		await Bun.write(file, CONTENT);
@@ -137,6 +216,28 @@ describe("read → edit seen-line guard", () => {
 		expect(seen?.has(2)).toBe(true);
 		await executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nINS.POST 2:\n+EDITED`, session));
 		expect(await Bun.file(file).text()).toContain("line 2\nEDITED");
+	});
+
+	it("marks raw ACP bridge blank-line reads as seen without hashline output", async () => {
+		const file = path.join(tmpDir, "notes.txt");
+		const content = "";
+		await Bun.write(file, content);
+		const session = createBridgeSession(tmpDir, content);
+		const store = getFileSnapshotStore(session);
+		const tag = store.record(canonicalSnapshotKey(file), content, [2]);
+
+		const read = await new ReadTool(session).execute("r1", { path: `${file}:raw:1-1` });
+		const text = resultText(read);
+		expect(text).not.toMatch(HEADER);
+		expect(text).not.toContain("1:");
+		expect(text).toBe("");
+
+		const seen = store.byHash(canonicalSnapshotKey(file), tag)?.seenLines;
+		expect(seen?.has(1)).toBe(true);
+		expect(seen?.has(2)).toBe(true);
+
+		await executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 1.=1:\n+RAW BLANK EDITED`, session));
+		expect(await Bun.file(file).text()).toBe("RAW BLANK EDITED");
 	});
 
 	it("merges displayed lines from ACP bridge multi-range reads into existing provenance", async () => {

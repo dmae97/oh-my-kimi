@@ -84,6 +84,8 @@ export class EventController {
 	// restored when the banner clears at the next `agent_start` (see
 	// #handleMessageEnd / #handleAgentStart).
 	#pinnedErrorComponent: AssistantMessageComponent | undefined = undefined;
+	#retrySupersededAssistantComponents = new Map<string, AssistantMessageComponent>();
+	#retrySupersededAssistantQueue: AssistantMessageComponent[] = [];
 	#idleCompactionTimer?: NodeJS.Timeout;
 	#idleRecapTimer?: NodeJS.Timeout;
 	// In-flight ephemeral recap turn; aborted by #cancelIdleRecap when any
@@ -323,6 +325,42 @@ export class EventController {
 		if (!this.#terminalProgressActive) return;
 		this.ctx.ui.terminal.setProgress(false);
 		this.#terminalProgressActive = false;
+	}
+
+	#trackRetrySupersededAssistantComponent(component: AssistantMessageComponent | undefined): void {
+		if (!component) return;
+		const persistenceKey = component.messagePersistenceKey();
+		if (persistenceKey) this.#retrySupersededAssistantComponents.set(persistenceKey, component);
+		if (!this.#retrySupersededAssistantQueue.includes(component)) {
+			this.#retrySupersededAssistantQueue.push(component);
+		}
+	}
+
+	#takeRetrySupersededAssistantComponent(persistenceKey: string | undefined): AssistantMessageComponent | undefined {
+		if (persistenceKey) {
+			const component = this.#retrySupersededAssistantComponents.get(persistenceKey);
+			if (component) {
+				this.#retrySupersededAssistantComponents.delete(persistenceKey);
+				this.#retrySupersededAssistantQueue = this.#retrySupersededAssistantQueue.filter(
+					item => item !== component,
+				);
+				return component;
+			}
+		}
+		while (this.#retrySupersededAssistantQueue.length > 0) {
+			const component = this.#retrySupersededAssistantQueue.shift();
+			if (!component) continue;
+			const key = component.messagePersistenceKey();
+			if (key && this.#retrySupersededAssistantComponents.get(key) !== component) continue;
+			if (key) this.#retrySupersededAssistantComponents.delete(key);
+			return component;
+		}
+		return undefined;
+	}
+
+	#clearRetrySupersededAssistantComponents(): void {
+		this.#retrySupersededAssistantComponents.clear();
+		this.#retrySupersededAssistantQueue = [];
 	}
 
 	async #handleAgentStart(_event: Extract<AgentSessionEvent, { type: "agent_start" }>): Promise<void> {
@@ -1219,6 +1257,7 @@ export class EventController {
 	}
 
 	async #handleAutoRetryStart(event: Extract<AgentSessionEvent, { type: "auto_retry_start" }>): Promise<void> {
+		this.#trackRetrySupersededAssistantComponent(this.#lastAssistantComponent);
 		this.#stopWorkingLoader();
 		this.ctx.statusContainer.clear();
 		if (AIError.is(event.errorId, AIError.Flag.ThinkingLoop)) {
@@ -1246,7 +1285,21 @@ export class EventController {
 			this.ctx.retryLoader = undefined;
 			this.ctx.statusContainer.clear();
 		}
-		if (!event.success) {
+		if (event.success) {
+			let appliedRecovered = false;
+			for (const recovered of event.recoveredErrors ?? []) {
+				const component = this.#takeRetrySupersededAssistantComponent(recovered.persistenceKey);
+				if (!component) continue;
+				component.applyRetryRecovery(recovered.retryRecovery);
+				if (this.#pinnedErrorComponent === component) this.#pinnedErrorComponent = undefined;
+				appliedRecovered = true;
+			}
+			if (appliedRecovered || (event.recoveredErrors?.length ?? 0) > 0) {
+				this.ctx.clearPinnedError();
+			}
+			this.#clearRetrySupersededAssistantComponents();
+		} else {
+			this.#clearRetrySupersededAssistantComponents();
 			this.ctx.showError(`Retry failed after ${event.attempt} attempts: ${event.finalError || "Unknown error"}`);
 		}
 		this.#ensureWorkingLoaderWhileStreaming();

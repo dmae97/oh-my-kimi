@@ -81,6 +81,8 @@ import type { ProtectedToolMatcher } from "@oh-my-pi/pi-agent-core/compaction/to
 import type {
 	AssistantMessage,
 	AssistantMessageEvent,
+	AssistantRetryRecovery,
+	AssistantRetryRecoveryKind,
 	Context,
 	ImageContent,
 	Message,
@@ -219,6 +221,7 @@ import { createExtensionModelQuery } from "../extensibility/extensions/model-api
 import type { CompactOptions, ContextUsage } from "../extensibility/extensions/types";
 import { ExtensionToolWrapper } from "../extensibility/extensions/wrapper";
 import type { HookCommandContext } from "../extensibility/hooks/types";
+import type { RecoveredRetryError } from "../extensibility/shared-events";
 import type { Skill, SkillWarning } from "../extensibility/skills";
 import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
 import { GoalRuntime } from "../goals/runtime";
@@ -497,7 +500,13 @@ export type AgentSessionEvent =
 			errorMessage: string;
 			errorId?: number;
 	  }
-	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
+	| {
+			type: "auto_retry_end";
+			success: boolean;
+			attempt: number;
+			finalError?: string;
+			recoveredErrors?: RecoveredRetryError[];
+	  }
 	| { type: "retry_fallback_applied"; from: string; to: string; role: string }
 	| { type: "retry_fallback_succeeded"; model: string; role: string }
 	| { type: "ttsr_triggered"; rules: Rule[] }
@@ -1425,6 +1434,13 @@ type MessageEndPersistenceSlot = {
 	persist: (persistMessage: () => void) => Promise<void>;
 	release: () => void;
 };
+type PendingRecoveredRetryError = {
+	entryId: string;
+	persistenceKey: string;
+	recovery: AssistantRetryRecoveryKind;
+	attempt: number;
+	note: string;
+};
 
 type PostPromptSkipReason = "aborted" | "stale-generation";
 
@@ -1581,6 +1597,7 @@ export class AgentSession {
 	#retryPromise: Promise<void> | undefined = undefined;
 	#retryResolve: (() => void) | undefined = undefined;
 	#activeRetryFallback: ActiveRetryFallbackState | undefined = undefined;
+	#pendingRecoveredRetryErrors: PendingRecoveredRetryError[] = [];
 	// Todo completion reminder state
 	#todoReminderCount = 0;
 	/**
@@ -3663,11 +3680,14 @@ export class AgentSession {
 							role: this.#activeRetryFallback.role,
 						});
 					}
+					const recoveredErrors = await this.#markPendingRecoveredRetryErrors(assistantMsg);
 					await this.#emitSessionEvent({
 						type: "auto_retry_end",
 						success: true,
 						attempt: this.#retryAttempt,
+						recoveredErrors,
 					});
+					this.#clearPendingRecoveredRetryErrors();
 					this.#retryAttempt = 0;
 				}
 				if (assistantMsg.provider === "opencode-go") {
@@ -5337,6 +5357,7 @@ export class AgentSession {
 				success: event.success,
 				attempt: event.attempt,
 				finalError: event.finalError,
+				recoveredErrors: event.recoveredErrors,
 			});
 		} else if (event.type === "ttsr_triggered") {
 			await this.#extensionRunner.emit({ type: "ttsr_triggered", rules: event.rules });
@@ -10386,6 +10407,126 @@ export class AgentSession {
 		return undefined;
 	}
 
+	#clearPendingRecoveredRetryErrors(): void {
+		this.#pendingRecoveredRetryErrors = [];
+	}
+
+	#retryRecoveryKind(
+		id: number,
+		switchedCredential: boolean,
+		switchedModel: boolean,
+		delayMs: number,
+	): AssistantRetryRecoveryKind {
+		if (switchedCredential) return "credential";
+		if (switchedModel) return "model";
+		if (AIError.is(id, AIError.Flag.UsageLimit) && delayMs > 0) return "wait";
+		return "plain";
+	}
+
+	#retryRecoveryNote(recovery: AssistantRetryRecoveryKind, rateLimited: boolean): string {
+		const parts: string[] = [];
+		if (rateLimited) {
+			parts.push("rate-limited");
+		} else if (recovery === "plain") {
+			parts.push("error");
+		}
+		if (recovery === "credential") {
+			parts.push("switched account");
+		} else if (recovery === "model") {
+			parts.push("switched model");
+		} else if (recovery === "wait") {
+			parts.push("waited");
+		}
+		parts.push("retried");
+		return parts.join("; ");
+	}
+
+	async #recordPendingRecoveredRetryError(
+		message: AssistantMessage,
+		id: number,
+		options: { switchedCredential: boolean; switchedModel: boolean; delayMs: number },
+	): Promise<void> {
+		await this.#waitForSessionMessagePersistence(message);
+		const persistenceKey = sessionMessagePersistenceKey(message);
+		if (!persistenceKey) return;
+		let branchEntry: SessionEntry | undefined;
+		for (const entry of this.sessionManager.getBranch().slice().reverse()) {
+			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+			if (sessionMessagePersistenceKey(entry.message) !== persistenceKey) continue;
+			if (!sameMessageContent(entry.message, message) && !this.#isSameAssistantMessage(entry.message, message)) {
+				continue;
+			}
+			branchEntry = entry;
+			break;
+		}
+		if (!branchEntry) return;
+		if (this.#pendingRecoveredRetryErrors.some(error => error.entryId === branchEntry.id)) return;
+		const rateLimited = AIError.is(id, AIError.Flag.UsageLimit);
+		const recovery = this.#retryRecoveryKind(id, options.switchedCredential, options.switchedModel, options.delayMs);
+		const note = this.#retryRecoveryNote(recovery, rateLimited);
+		this.#pendingRecoveredRetryErrors.push({
+			entryId: branchEntry.id,
+			persistenceKey,
+			recovery,
+			attempt: this.#retryAttempt,
+			note,
+		});
+	}
+
+	async #markPendingRecoveredRetryErrors(supersedingMessage: AssistantMessage): Promise<RecoveredRetryError[]> {
+		if (this.#pendingRecoveredRetryErrors.length === 0) return [];
+		const branch = this.sessionManager.getBranch();
+		const branchById = new Map<string, SessionEntry>();
+		for (const entry of branch) {
+			branchById.set(entry.id, entry);
+		}
+		const recoveredAt = new Date().toISOString();
+		const supersededBy: AssistantRetryRecovery["supersededBy"] = {
+			timestamp: supersedingMessage.timestamp,
+			provider: supersedingMessage.provider,
+			model: supersedingMessage.model,
+		};
+		if (supersedingMessage.responseId) {
+			supersededBy.responseId = supersedingMessage.responseId;
+		}
+		const recoveredErrors: RecoveredRetryError[] = [];
+		for (const pending of this.#pendingRecoveredRetryErrors) {
+			let entry = branchById.get(pending.entryId);
+			if (entry?.type !== "message" || entry.message.role !== "assistant") {
+				entry = branch
+					.slice()
+					.reverse()
+					.find(
+						candidate =>
+							candidate.type === "message" &&
+							candidate.message.role === "assistant" &&
+							sessionMessagePersistenceKey(candidate.message) === pending.persistenceKey,
+					);
+			}
+			if (entry?.type !== "message" || entry.message.role !== "assistant") continue;
+			const retryRecovery: AssistantRetryRecovery = {
+				kind: "auto-retry",
+				status: "recovered",
+				attempt: pending.attempt,
+				recoveredAt,
+				recovery: pending.recovery,
+				note: pending.note,
+				supersededBy,
+			};
+			entry.message.retryRecovery = retryRecovery;
+			recoveredErrors.push({
+				entryId: entry.id,
+				persistenceKey: pending.persistenceKey,
+				note: retryRecovery.note,
+				retryRecovery,
+			});
+		}
+		if (recoveredErrors.length > 0) {
+			await this.sessionManager.rewriteEntries();
+		}
+		return recoveredErrors;
+	}
+
 	async #handleEmptyAssistantStop(assistantMessage: AssistantMessage): Promise<boolean> {
 		if (!this.#isEmptyAssistantStop(assistantMessage)) {
 			this.#emptyStopRetryCount = 0;
@@ -10406,6 +10547,7 @@ export class AgentSession {
 					attempt: this.#retryAttempt,
 					finalError: "Assistant returned empty stop after retry cap",
 				});
+				this.#clearPendingRecoveredRetryErrors();
 				this.#retryAttempt = 0;
 			}
 			this.#resolveRetry();
@@ -13265,6 +13407,7 @@ export class AgentSession {
 				attempt: this.#retryAttempt - 1,
 				finalError: message.errorMessage,
 			});
+			this.#clearPendingRecoveredRetryErrors();
 			this.#retryAttempt = 0;
 			this.#resolveRetry(); // Resolve so waitForRetry() completes
 			return false;
@@ -13384,9 +13527,12 @@ export class AgentSession {
 				attempt,
 				finalError: `Provider requested ${delayMs}ms wait, exceeds retry.maxDelayMs (${maxDelayMs}ms). Original error: ${errorMessage}`,
 			});
+			this.#clearPendingRecoveredRetryErrors();
 			this.#resolveRetry();
 			return false;
 		}
+
+		await this.#recordPendingRecoveredRetryError(message, id, { switchedCredential, switchedModel, delayMs });
 
 		await this.#emitSessionEvent({
 			type: "auto_retry_start",
@@ -13425,6 +13571,7 @@ export class AgentSession {
 				attempt,
 				finalError: "Retry cancelled",
 			});
+			this.#clearPendingRecoveredRetryErrors();
 			this.#resolveRetry();
 			return false;
 		}

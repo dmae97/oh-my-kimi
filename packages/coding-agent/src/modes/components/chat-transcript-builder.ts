@@ -33,7 +33,7 @@ import {
 	buildFileMentionBlock,
 	buildIrcMessageCard,
 	normalizeToolArgs,
-	resolveAssistantErrorMessage,
+	resolveAssistantErrorPresentation,
 } from "../utils/transcript-render-helpers";
 import { createAdvisorMessageCard } from "./advisor-message";
 import { AssistantMessageComponent } from "./assistant-message";
@@ -293,7 +293,9 @@ export class ChatTranscriptBuilder {
 			this.#readGroup = null;
 		}
 
-		const { hasErrorStop, errorMessage } = resolveAssistantErrorMessage(message);
+		const errorPresentation = resolveAssistantErrorPresentation(message);
+		const hasErrorStop = errorPresentation.kind === "full";
+		const errorMessage = hasErrorStop ? errorPresentation.text : null;
 
 		for (const content of message.content) {
 			if (content.type !== "toolCall") continue;
