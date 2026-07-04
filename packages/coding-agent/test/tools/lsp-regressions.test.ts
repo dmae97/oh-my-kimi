@@ -8,7 +8,11 @@ import { LspTool } from "@oh-my-pi/pi-coding-agent/lsp";
 import * as lspClient from "@oh-my-pi/pi-coding-agent/lsp/client";
 import * as lspConfig from "@oh-my-pi/pi-coding-agent/lsp/config";
 import { getServersForFile, type LspConfig, loadConfig } from "@oh-my-pi/pi-coding-agent/lsp/config";
-import { applyTextEditsToString, applyWorkspaceEdit } from "@oh-my-pi/pi-coding-agent/lsp/edits";
+import {
+	applyTextEditsToString,
+	applyWorkspaceEdit,
+	sortAndValidateTextEdits,
+} from "@oh-my-pi/pi-coding-agent/lsp/edits";
 import { renderCall, renderResult } from "@oh-my-pi/pi-coding-agent/lsp/render";
 import type {
 	CodeAction,
@@ -1817,6 +1821,35 @@ describe("lsp regressions", () => {
 		} finally {
 			tempDir.removeSync();
 		}
+	});
+
+	it("dedupes byte-identical non-empty text edits before overlap validation", () => {
+		const edit = {
+			range: { start: { line: 9, character: 55 }, end: { line: 9, character: 62 } },
+			newText: "./megaMenu",
+		};
+
+		expect(sortAndValidateTextEdits([edit, { ...edit }])).toEqual([edit]);
+		expect(
+			applyTextEditsToString("import x from './menu';\n", [
+				{
+					range: { start: { line: 0, character: 15 }, end: { line: 0, character: 21 } },
+					newText: "./megaMenu",
+				},
+				{
+					range: { start: { line: 0, character: 15 }, end: { line: 0, character: 21 } },
+					newText: "./megaMenu",
+				},
+			]),
+		).toBe("import x from './megaMenu';\n");
+	});
+
+	it("keeps byte-identical zero-width inserts because they are not idempotent", () => {
+		const result = applyTextEditsToString("abc", [
+			{ range: { start: { line: 0, character: 1 }, end: { line: 0, character: 1 } }, newText: "X" },
+			{ range: { start: { line: 0, character: 1 }, end: { line: 0, character: 1 } }, newText: "X" },
+		]);
+		expect(result).toBe("aXXbc");
 	});
 
 	it("applies equal-position inserts in array order", () => {
