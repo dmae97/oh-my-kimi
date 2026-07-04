@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed custom `openai-codex-responses` providers with opaque proxy/API keys failing before dispatch when no ChatGPT `chatgpt_account_id` claim exists; Codex requests now omit `chatgpt-account-id` when it cannot be derived. ([#4526](https://github.com/can1357/oh-my-pi/issues/4526))
+
 ## [16.3.6] - 2026-07-04
 
 ### Added
