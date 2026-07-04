@@ -34,8 +34,10 @@ interface BrowserRenderContext {
 }
 
 function describeBrowser(args: BrowserRenderArgs, details: BrowserToolDetails | undefined): string | undefined {
-	if (args.app?.cdp_url) return `connected ${args.app.cdp_url}`;
-	if (args.app?.path) return `spawned ${shortenPath(args.app.path)}`;
+	const cdpUrl = typeof args.app?.cdp_url === "string" ? args.app.cdp_url : "";
+	if (cdpUrl) return `connected ${cdpUrl}`;
+	const appPath = typeof args.app?.path === "string" ? args.app.path : "";
+	if (appPath) return `spawned ${shortenPath(appPath)}`;
 	if (args.app?.cmux !== false && (args.app?.cmux === true || args.app?.surface)) {
 		return args.app.surface ? `cmux ${args.app.surface}` : "cmux";
 	}
@@ -92,7 +94,7 @@ function renderRunCell(
 	const status = cellStatus(options.isPartial, isError);
 
 	const titleParts: string[] = [tabLabel(args, details)];
-	const url = details?.url ?? args.url;
+	const url = typeof details?.url === "string" ? details.url : typeof args.url === "string" ? args.url : "";
 	if (url) titleParts.push(shortenPath(url));
 	const browserDesc = describeBrowser(args, details);
 	if (browserDesc) titleParts.push(browserDesc);
@@ -165,7 +167,7 @@ function renderOpenOrCloseLine(
 	const meta: string[] = [];
 	const browserDesc = describeBrowser(args, details);
 	if (browserDesc) meta.push(browserDesc);
-	const url = details?.url ?? args.url;
+	const url = typeof details?.url === "string" ? details.url : typeof args.url === "string" ? args.url : "";
 	if (url) meta.push(shortenPath(url));
 
 	const header =

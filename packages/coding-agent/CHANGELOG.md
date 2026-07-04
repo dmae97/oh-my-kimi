@@ -12,6 +12,7 @@
 
 ### Fixed
 
+- Fixed tool-call renderers crashing the TUI when providers send array/object `path` arguments before schema validation can report the invalid call back to the model. ([#4525](https://github.com/can1357/oh-my-pi/issues/4525))
 - Fixed raw `read` ranges not contributing to edit seen-line provenance, so re-reading an anchor range with `:raw` now unblocks hashline edits without adding non-raw line prefixes.
 - Fixed replan-driven session title refresh updating the statusline but not the terminal window title: terminal-title updates now fire from the session-name-changed listener, so every `setSessionName` path (first-input titling, `/rename`, plan seeding, replan refresh) sets the OSC title consistently.
 - Fixed user-interrupt aborts rendering the persisted `Interrupted by user` label in assistant transcripts; replay and live views now suppress that redundant line again while preserving generic/custom abort labels.

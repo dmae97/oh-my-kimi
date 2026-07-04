@@ -3254,8 +3254,8 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 // =============================================================================
 
 interface ReadRenderArgs {
-	path?: string;
-	file_path?: string;
+	path?: unknown;
+	file_path?: unknown;
 	sel?: string;
 	// Legacy fields from old schema — tolerated for in-flight tool calls during transition
 	offset?: number;
@@ -3320,11 +3320,12 @@ function formatReadPathLink(
 
 export const readToolRenderer = {
 	renderCall(args: ReadRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
-		if (isReadableUrlPath(args.file_path || args.path || "")) {
-			return renderReadUrlCall(args, _options, uiTheme);
+		const rawPath =
+			typeof args.file_path === "string" ? args.file_path : typeof args.path === "string" ? args.path : "";
+		if (isReadableUrlPath(rawPath)) {
+			return renderReadUrlCall({ path: rawPath, raw: args.raw }, _options, uiTheme);
 		}
 
-		const rawPath = args.file_path || args.path || "";
 		const offset = args.offset;
 		const limit = args.limit;
 
@@ -3346,7 +3347,9 @@ export const readToolRenderer = {
 		args?: ReadRenderArgs,
 	): Component {
 		const urlDetails = result.details as ReadUrlToolDetails | undefined;
-		if (urlDetails?.kind === "url" || isReadableUrlPath(args?.file_path || args?.path || "")) {
+		const rawPathForKind =
+			typeof args?.file_path === "string" ? args.file_path : typeof args?.path === "string" ? args.path : "";
+		if (urlDetails?.kind === "url" || isReadableUrlPath(rawPathForKind)) {
 			return renderReadUrlResult(
 				result as {
 					content: Array<{ type: string; text?: string }>;
@@ -3361,7 +3364,8 @@ export const readToolRenderer = {
 		if (result.isError) {
 			const rawErrorText = result.content?.find(c => c.type === "text")?.text ?? "";
 			const errorText = (rawErrorText || "Unknown error").replace(/^Error:\s*/, "");
-			const rawPath = args?.file_path || args?.path || "";
+			const rawPath =
+				typeof args?.file_path === "string" ? args.file_path : typeof args?.path === "string" ? args.path : "";
 			const filePath =
 				formatReadPathLink(rawPath, { offset: args?.offset, sourcePath: readSourceFsPath(result.details) }) ||
 				shortenPath(rawPath);
@@ -3388,7 +3392,8 @@ export const readToolRenderer = {
 		// echo next to the styled warning line below.
 		const contentText = details?.displayContent?.text ?? stripOutputNotice(rawText, details?.meta);
 		const imageContent = result.content?.find(c => c.type === "image");
-		const rawPath = args?.file_path || args?.path || "";
+		const rawPath =
+			typeof args?.file_path === "string" ? args.file_path : typeof args?.path === "string" ? args.path : "";
 		const renderPath = splitReadRenderPath(rawPath);
 		const lang = getLanguageFromPath(renderPath.path);
 
