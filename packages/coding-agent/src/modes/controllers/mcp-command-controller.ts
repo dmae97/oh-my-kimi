@@ -8,7 +8,13 @@ import { type Component, replaceTabs, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { getMCPConfigPath, getProjectDir } from "@oh-my-pi/pi-utils";
 import type { SourceMeta } from "../../capability/types";
 import { expandEnvVarsDeep } from "../../discovery/helpers";
-import { analyzeAuthError, discoverOAuthEndpoints, loadAllMCPConfigs, MCPManager } from "../../mcp";
+import {
+	analyzeAuthError,
+	discoverOAuthEndpoints,
+	fetchResourceMetadataScopes,
+	loadAllMCPConfigs,
+	MCPManager,
+} from "../../mcp";
 import { connectToServer, disconnectServer, listTools } from "../../mcp/client";
 import {
 	addMCPServer,
@@ -506,10 +512,17 @@ export class MCPCommandController {
 									finalConfig.url,
 									authResult.authServerUrl,
 									authResult.resourceMetadataUrl,
+									{ protectedScopes: authResult.scopes },
 								);
 							} catch {
 								// Ignore discovery error and handle below.
 							}
+						}
+						if (oauth && !oauth.scopes && authResult.resourceMetadataUrl) {
+							// JSON-error-body path skips `discoverOAuthEndpoints`; fetch the
+							// advertised protected-resource metadata for the required scopes.
+							const scopes = await fetchResourceMetadataScopes(authResult.resourceMetadataUrl);
+							if (scopes) oauth = { ...oauth, scopes };
 						}
 
 						if (!oauth) {
@@ -1010,7 +1023,15 @@ export class MCPCommandController {
 		let oauth = authResult.authType === "oauth" ? (authResult.oauth ?? null) : null;
 
 		if (!oauth && (config.type === "http" || config.type === "sse") && config.url) {
-			oauth = await discoverOAuthEndpoints(config.url, authResult.authServerUrl, authResult.resourceMetadataUrl);
+			oauth = await discoverOAuthEndpoints(config.url, authResult.authServerUrl, authResult.resourceMetadataUrl, {
+				protectedScopes: authResult.scopes,
+			});
+		}
+		if (oauth && !oauth.scopes && authResult.resourceMetadataUrl) {
+			// JSON-error-body path skips `discoverOAuthEndpoints`; fetch the
+			// advertised protected-resource metadata for the required scopes.
+			const scopes = await fetchResourceMetadataScopes(authResult.resourceMetadataUrl);
+			if (scopes) oauth = { ...oauth, scopes };
 		}
 
 		if (!oauth) {

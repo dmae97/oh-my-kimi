@@ -15,7 +15,7 @@ import {
 } from "@oh-my-pi/pi-tui";
 import { getMCPConfigPath, getProjectDir } from "@oh-my-pi/pi-utils";
 import { validateServerName } from "../../mcp/config-writer";
-import { analyzeAuthError, discoverOAuthEndpoints } from "../../mcp/oauth-discovery";
+import { analyzeAuthError, discoverOAuthEndpoints, fetchResourceMetadataScopes } from "../../mcp/oauth-discovery";
 import type { MCPHttpServerConfig, MCPServerConfig, MCPSseServerConfig, MCPStdioServerConfig } from "../../mcp/types";
 import { shortenPath } from "../../tools/render-utils";
 import { theme } from "../theme/theme";
@@ -1009,10 +1009,18 @@ export class MCPAddWizard extends Container {
 							this.#state.url,
 							authResult.authServerUrl,
 							authResult.resourceMetadataUrl,
+							{ protectedScopes: authResult.scopes },
 						);
 					} catch {
 						// Ignore discovery failures and fallback to manual auth.
 					}
+				}
+				if (oauth && !oauth.scopes && authResult.resourceMetadataUrl) {
+					// JSON-error-body path skips `discoverOAuthEndpoints` when the body
+					// already carries endpoints, so scopes advertised only in the
+					// protected-resource metadata document never reach the grant.
+					const scopes = await fetchResourceMetadataScopes(authResult.resourceMetadataUrl);
+					if (scopes) oauth = { ...oauth, scopes };
 				}
 
 				if (oauth) {
