@@ -61,6 +61,8 @@ export interface RememberInput extends MemoryInput {
 	readonly extract_entities?: boolean;
 	readonly extractText?: string | null;
 	readonly extract_text?: string | null;
+	readonly embedText?: string | null;
+	readonly embed_text?: string | null;
 	readonly trustTier?: string | null;
 	readonly trust_tier?: string | null;
 	readonly memoryType?: string | null;
@@ -83,6 +85,12 @@ export interface RememberFacadeOptions {
 	 */
 	readonly extractText?: string | null;
 	readonly extract_text?: string | null;
+	/**
+	 * Override the text passed to embeddings and FTS indexing. Stored content
+	 * remains unchanged; when unset, embeddings and FTS use stored content.
+	 */
+	readonly embedText?: string | null;
+	readonly embed_text?: string | null;
 	readonly trustTier?: string | null;
 	readonly trust_tier?: string | null;
 	readonly timestamp?: string | Date | null;
@@ -148,6 +156,7 @@ type FacadeRememberOptions = {
 	extractEntities: boolean;
 	extract: boolean;
 	extractText: string | undefined;
+	embedText: string | undefined;
 	trustTier: string | undefined;
 	veracity: string | undefined;
 	memoryType: string | undefined;
@@ -270,6 +279,7 @@ function toRememberOptions(input: string | RememberInput, options: RememberFacad
 	const timestamp = normalizeDate(options.timestamp ?? memory?.timestamp);
 	const extractText =
 		options.extractText ?? options.extract_text ?? memory?.extractText ?? memory?.extract_text ?? null;
+	const embedText = options.embedText ?? options.embed_text ?? memory?.embedText ?? memory?.embed_text ?? null;
 	const rememberOptions: FacadeRememberOptions = {
 		source: options.source ?? memory?.source ?? "conversation",
 		importance: options.importance ?? memory?.importance ?? 0.5,
@@ -284,6 +294,7 @@ function toRememberOptions(input: string | RememberInput, options: RememberFacad
 			false,
 		extract: options.extract ?? memory?.extract ?? false,
 		extractText: extractText ?? undefined,
+		embedText: embedText ?? undefined,
 		trustTier: options.trustTier ?? options.trust_tier ?? memory?.trustTier ?? memory?.trust_tier ?? undefined,
 		veracity: options.veracity ?? memory?.veracity ?? undefined,
 		memoryType: options.memoryType ?? options.memory_type ?? memory?.memoryType ?? memory?.memory_type ?? undefined,

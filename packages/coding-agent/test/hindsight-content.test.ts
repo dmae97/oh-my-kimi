@@ -5,6 +5,7 @@ import {
 	formatMemories,
 	type HindsightMessage,
 	hasSubstantiveContent,
+	prepareEmbeddableRetentionTranscript,
 	prepareRetentionTranscript,
 	prepareUserRetentionTranscript,
 	sliceLastTurnsByUserBoundary,
@@ -214,6 +215,22 @@ describe("prepareRetentionTranscript", () => {
 		expect(transcript).toContain("[role: user]\nI always prefer tabs\n[user:end]");
 		expect(transcript).toContain("I never use semicolons");
 		expect(transcript).not.toContain("panel never initializes");
+		expect(transcript).not.toContain("<memories>");
+	});
+
+	it("formats marker-free transcripts for embedding and FTS", () => {
+		const messages: HindsightMessage[] = [
+			{ role: "user", content: "I always prefer tabs" },
+			{ role: "assistant", content: "the parser never initializes" },
+			{ role: "user", content: "<memories>old</memories>\nI never use semicolons" },
+		];
+		const { transcript, messageCount } = prepareEmbeddableRetentionTranscript(messages);
+		expect(messageCount).toBe(3);
+		expect(transcript).toContain("I always prefer tabs");
+		expect(transcript).toContain("the parser never initializes");
+		expect(transcript).toContain("I never use semicolons");
+		expect(transcript).not.toContain("[role:");
+		expect(transcript).not.toContain(":end]");
 		expect(transcript).not.toContain("<memories>");
 	});
 });

@@ -93,6 +93,40 @@ describe("issue #1832 — embedding write/read coverage", () => {
 		});
 	});
 
+	it("remember() uses embedText for embeddings and FTS while preserving stored content", async () => {
+		const embeddedTexts: string[] = [];
+		const provider = async function* (texts: readonly string[]) {
+			embeddedTexts.push(...texts);
+			yield texts.map(text => (text.includes("clean projection") ? [1, 0, 0, 0] : [0, 1, 0, 0]));
+		};
+		const memory = new Mnemopi({
+			db: new Database(":memory:"),
+			embeddings: { provider },
+		});
+		try {
+			const raw =
+				"[role: user]\nI always prefer tabs\n[user:end]\n\n[role: assistant]\nthe parser never initializes\n[assistant:end]";
+			const id = memory.remember(raw, {
+				source: "coding-agent-transcript",
+				memoryType: "episode",
+				embedText: "clean projection about parser",
+			});
+			await memory.flushExtractions();
+
+			expect(memory.get(id)).toMatchObject({ content: raw });
+			expect(embeddedTexts).toEqual(["clean projection about parser"]);
+			expect(memory.conn.query("SELECT id FROM fts_working WHERE fts_working MATCH ?").all("clean")).toEqual([
+				{ id },
+			]);
+			expect(memory.conn.query("SELECT id FROM fts_working WHERE fts_working MATCH ?").all("role")).toEqual([]);
+			expect(JSON.parse(readEmbeddings(memory)[0]?.embedding_json ?? "[]")).toEqual([1, 0, 0, 0]);
+			const ftsOnlyRecall = await memory.recall("clean", 5, { queryEmbedding: null });
+			expect(ftsOnlyRecall[0]).toMatchObject({ id, content: raw });
+		} finally {
+			memory.close();
+		}
+	});
+
 	it("rememberBatch() writes one embedding row per item in a single provider call", async () => {
 		await withFakeMemory(async (memory, calls) => {
 			const ids = inScope(memory, () =>
