@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed empty assistant turns rendering orphaned token-usage badges in live and rebuilt transcripts. ([#4532](https://github.com/can1357/oh-my-pi/issues/4532))
+- Fixed token-usage badges disappearing on session resume for empty automated assistant turns; live and resume paths now share the same billed-usage predicate so a turn that consumed tokens keeps its badge on both surfaces, and only genuinely zero-usage turns suppress the row. ([#4532](https://github.com/can1357/oh-my-pi/issues/4532))
 
 ## [16.3.6] - 2026-07-04
 

@@ -29,7 +29,7 @@ import type { SessionMessageEntry } from "../../session/session-entries";
 import { theme } from "../theme/theme";
 import {
 	assistantHasVisibleContent,
-	assistantShouldRenderUsageRow,
+	assistantUsageIsBilled,
 	buildAsyncResultBlock,
 	buildFileMentionBlock,
 	buildIrcMessageCard,
@@ -358,10 +358,7 @@ export class ChatTranscriptBuilder {
 		}
 
 		this.#pendingUsage =
-			settings.get("display.showTokenUsage") &&
-			assistantShouldRenderUsageRow(message, { hideThinkingBlock, proseOnlyThinking })
-				? message.usage
-				: undefined;
+			settings.get("display.showTokenUsage") && assistantUsageIsBilled(message.usage) ? message.usage : undefined;
 		this.#pendingUsageDuration = message.duration;
 		this.#pendingUsageTtft = message.ttft;
 	}

@@ -1,58 +1,38 @@
 import { describe, expect, it } from "bun:test";
 import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
-import { assistantShouldRenderUsageRow } from "./transcript-render-helpers";
+import { assistantUsageIsBilled } from "./transcript-render-helpers";
 
-const billedUsage: Usage = {
-	input: 321,
-	output: 65,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 386,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
-interface AssistantMessageOverrides {
-	stopReason?: AssistantMessage["stopReason"];
-	errorMessage?: string;
-}
-
-function assistantMessage(
-	content: AssistantMessage["content"],
-	overrides: AssistantMessageOverrides = {},
-): AssistantMessage {
+function usage(overrides: Partial<Usage> = {}): Usage {
 	return {
-		role: "assistant",
-		content,
-		api: "anthropic-messages",
-		provider: "anthropic",
-		model: "claude-sonnet-4-5",
-		usage: billedUsage,
-		stopReason: overrides.stopReason ?? "stop",
-		errorMessage: overrides.errorMessage,
-		timestamp: 1,
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 0,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		...overrides,
 	};
 }
 
-describe("assistantShouldRenderUsageRow", () => {
-	it("suppresses token usage rows for empty assistant text", () => {
-		expect(assistantShouldRenderUsageRow(assistantMessage([{ type: "text", text: "" }]))).toBe(false);
-		expect(assistantShouldRenderUsageRow(assistantMessage([{ type: "text", text: "   \n\t" }]))).toBe(false);
+describe("assistantUsageIsBilled", () => {
+	it("suppresses the token badge only for turns that consumed nothing", () => {
+		expect(assistantUsageIsBilled(usage())).toBe(false);
 	});
 
-	it("keeps token usage rows anchored to visible assistant text", () => {
-		expect(assistantShouldRenderUsageRow(assistantMessage([{ type: "text", text: "Visible answer." }]))).toBe(true);
+	it("preserves cost transparency for empty replies whose prompt still cost input tokens", () => {
+		expect(assistantUsageIsBilled(usage({ input: 321 }))).toBe(true);
+		expect(assistantUsageIsBilled(usage({ output: 0, cacheRead: 512 }))).toBe(true);
+		expect(assistantUsageIsBilled(usage({ cacheWrite: 128 }))).toBe(true);
+		expect(assistantUsageIsBilled(usage({ premiumRequests: 1 }))).toBe(true);
 	});
 
-	it("keeps token usage rows anchored to tool calls and terminal errors", () => {
-		expect(
-			assistantShouldRenderUsageRow(
-				assistantMessage([{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "README.md" } }]),
-			),
-		).toBe(true);
-		expect(
-			assistantShouldRenderUsageRow(
-				assistantMessage([{ type: "text", text: "" }], { stopReason: "error", errorMessage: "provider failed" }),
-			),
-		).toBe(true);
+	// Documents the live/resume parity contract for #4532: both paths ask
+	// `assistantUsageIsBilled` about `message.usage`, so an empty automated
+	// reply that still cost input tokens renders identically on both surfaces.
+	it("matches whether the assistant carrier renders visible content", () => {
+		const emptyBilledMessage: Pick<AssistantMessage, "usage"> = { usage: usage({ input: 321 }) };
+		const emptyFreeMessage: Pick<AssistantMessage, "usage"> = { usage: usage() };
+		expect(assistantUsageIsBilled(emptyBilledMessage.usage)).toBe(true);
+		expect(assistantUsageIsBilled(emptyFreeMessage.usage)).toBe(false);
 	});
 });

@@ -15,20 +15,12 @@ import {
 } from "../../session/messages";
 import { createIrcMessageCard } from "../../tools/irc";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/render-utils";
-import { canonicalizeMessage, formatThinkingForDisplay, hasDisplayableThinking } from "../../utils/thinking-display";
+import { canonicalizeMessage } from "../../utils/thinking-display";
 import { TranscriptBlock } from "../components/transcript-container";
 import { theme } from "../theme/theme";
 
 type CustomOrHookMessage = Extract<AgentMessage, { role: "custom" | "hookMessage" }>;
 type AssistantAgentMessage = Extract<AgentMessage, { role: "assistant" }>;
-type ThinkingContentBlock = Extract<AssistantAgentMessage["content"][number], { type: "thinking" }>;
-/** Transcript visibility flags needed to decide whether a usage row has an anchor. */
-export interface AssistantUsageRowRenderOptions {
-	/** Whether thinking blocks are hidden in this transcript surface. */
-	hideThinkingBlock?: boolean;
-	/** Whether raw thinking should be prose-collapsed before visibility checks. */
-	proseOnlyThinking?: boolean;
-}
 
 /**
  * Render an `async-result` custom message (a completed background bash/task job,
@@ -144,34 +136,6 @@ export function assistantHasVisibleContent(message: AssistantAgentMessage): bool
 	);
 }
 
-function thinkingBlockVisible(block: ThinkingContentBlock, proseOnlyThinking: boolean): boolean {
-	const rawThinking = "rawThinking" in block && typeof block.rawThinking === "string" ? block.rawThinking : undefined;
-	const formatted =
-		rawThinking !== undefined ? block.thinking : formatThinkingForDisplay(block.thinking, proseOnlyThinking);
-	return hasDisplayableThinking(rawThinking ?? block.thinking, formatted);
-}
-
-/**
- * Whether a completed assistant turn has a visible transcript anchor for its
- * token-usage row. Empty text-only turns suppress the row so hidden automated
- * prompts cannot leave orphaned token badges.
- */
-export function assistantShouldRenderUsageRow(
-	message: AssistantAgentMessage,
-	options: AssistantUsageRowRenderOptions = {},
-): boolean {
-	const hideThinkingBlock = options.hideThinkingBlock ?? false;
-	const proseOnlyThinking = options.proseOnlyThinking ?? true;
-	const errorPresentation = resolveAssistantErrorPresentation(message);
-	if (errorPresentation.kind !== "none") return true;
-	return message.content.some(content => {
-		if (content.type === "toolCall") return true;
-		if (content.type === "text") return Boolean(canonicalizeMessage(content.text));
-		if (content.type === "thinking") return !hideThinkingBlock && thinkingBlockVisible(content, proseOnlyThinking);
-		return false;
-	});
-}
-
 /**
  * Normalize raw tool-call arguments to a plain record, collapsing non-object or
  * array values to an empty object.
@@ -217,4 +181,18 @@ export function resolveAssistantErrorPresentation(
 		return { kind: "full", text: message.errorMessage, isError: true };
 	}
 	return { kind: "none" };
+}
+
+/**
+ * Whether an assistant turn's `usage` reflects work the operator was billed
+ * for. Empty automated turns from providers that emit `usage: 0` collapse to
+ * `false`, but any input, output, cache, or premium request keeps the row so
+ * cost transparency survives — the live path and the resume/rebuild path
+ * agree turn-by-turn.
+ */
+export function assistantUsageIsBilled(usage: AssistantAgentMessage["usage"]): boolean {
+	if (usage.input > 0 || usage.output > 0) return true;
+	if (usage.cacheRead > 0 || usage.cacheWrite > 0) return true;
+	if ((usage.premiumRequests ?? 0) > 0) return true;
+	return false;
 }

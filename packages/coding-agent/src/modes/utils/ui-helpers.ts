@@ -50,7 +50,7 @@ import { buildSkillCommandPrompt, invokeSkillCommandFromText, isKnownSkillComman
 import { createAssistantMessageComponent } from "./interactive-context-helpers";
 import {
 	assistantHasVisibleContent,
-	assistantShouldRenderUsageRow,
+	assistantUsageIsBilled,
 	buildAsyncResultBlock,
 	buildFileMentionBlock,
 	buildIrcMessageCard,
@@ -465,11 +465,7 @@ export class UiHelpers {
 					}
 				}
 				pendingUsage =
-					this.ctx.settings.get("display.showTokenUsage") &&
-					assistantShouldRenderUsageRow(message, {
-						hideThinkingBlock: this.ctx.effectiveHideThinkingBlock,
-						proseOnlyThinking: this.ctx.proseOnlyThinking,
-					})
+					this.ctx.settings.get("display.showTokenUsage") && assistantUsageIsBilled(message.usage)
 						? message.usage
 						: undefined;
 				pendingUsageDuration = message.duration;
