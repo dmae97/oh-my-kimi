@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed provider gateway `quota insufficient` / `额度不足` errors being classified as generic 403 failures instead of usage-limit errors.
+
 ## [16.3.6] - 2026-07-04
 
 ### Added
