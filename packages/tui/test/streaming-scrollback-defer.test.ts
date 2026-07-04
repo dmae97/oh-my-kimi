@@ -7,22 +7,20 @@ import {
 } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
-// Law-encoding suite for gated native-scrollback commits.
+// Law-encoding suite for native-scrollback commits.
 //
-// The engine commits a row to native scrollback only when the component seam
-// declares it FINAL (`getNativeScrollbackLiveRegionStart`). Live rows that
-// scroll above the window are neither painted nor committed — a deferred gap —
-// and enter history later, in order, exactly once, when the boundary passes
-// them. A root with no seam commits everything that scrolls (shell semantics).
-// Consequences pinned here:
-//   ► a volatile live block leaves NO trace on the tape until it finalizes —
-//     no stale preview copies, ever;
-//   ► an append-only stream that declares its rendered rows final commits its
-//     scrolled-off head mid-stream;
-//   ► removing/collapsing/replacing a live block backfills the tape with the
-//     final content only;
-//   ► a declared-final row that later mutates is a contract violation the
-//     audit repairs by re-anchoring once (duplication, never loss).
+// The tape is the terminal's visual record: whatever scrolls above the window
+// enters history exactly once, in order. The component seam
+// (`getNativeScrollbackLiveRegionStart`) classifies HOW a row commits:
+//   ► below the boundary — exact-final bytes, hard-verified, audited;
+//   ► above the boundary — a frozen snapshot of what was on screen, exempt
+//     from re-anchoring while its source stays live (a collapsing preview can
+//     never spray duplicates mid-run);
+//   ► when the boundary rises past frozen snapshots (the block finalized, a
+//     barrier cleared), they are strict-scanned exactly once: a divergence
+//     re-anchors and recommits the final content below the frozen snapshot —
+//     duplication, never loss; rows are never committed-nowhere-and-painted-
+//     nowhere.
 
 class LineList implements Component {
 	#lines: string[];
@@ -43,8 +41,8 @@ class LineList implements Component {
 }
 
 /**
- * Live block with a settable declared-final boundary:
- *   0         — nothing final (a volatile tool preview);
+ * Live block with a settable exactness boundary:
+ *   0         — nothing declared final (a volatile tool preview);
  *   Infinity  — everything rendered so far is final (an append-only streaming
  *               reply; the engine clamps to the rendered length);
  *   undefined — no seam (finalized block / plain shell content).
@@ -169,7 +167,7 @@ function restoreTerminalEnv(saved: Record<string, string | undefined>): void {
 	}
 }
 
-describe("streaming scrollback defer", () => {
+describe("streaming scrollback — visual record", () => {
 	let savedTerminalEnv: Record<string, string | undefined> = {};
 	beforeEach(() => {
 		savedTerminalEnv = saveTerminalEnv();
@@ -179,7 +177,7 @@ describe("streaming scrollback defer", () => {
 		savedTerminalEnv = {};
 	});
 
-	it("defers a volatile live block's rows and commits them once on finalize", async () => {
+	it("records a volatile live block's scrolled rows and never duplicates them on finalize", async () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(20, 4);
 		overrideProbe(term, undefined);
@@ -199,19 +197,20 @@ describe("streaming scrollback defer", () => {
 			tui.requestRender();
 			await settle(term);
 
-			// The live block overflows the 4-row viewport, but none of its rows
-			// are declared final: the finalized prefix commits, the window shows
-			// the live tail, and the overflowed head (think-0/think-1) sits in
-			// the deferred gap — on the tape NOWHERE yet. No ED3.
+			// The live block's head scrolls above the 4-row viewport and is
+			// recorded as a frozen snapshot — nothing that was painted vanishes.
 			expect(eraseScrollbackCount(writes)).toBe(0);
-			expect(tape(term)).toEqual([...rows("prior-", 12), "think-2", "think-3", "think-4", "think-5"]);
+			expect(tape(term)).toEqual([...rows("prior-", 12), ...rows("think-", 6)]);
 
+			// Append-only growth: recorded rows are byte-identical, so nothing
+			// re-anchors; the new tail just extends.
 			live.setLines(rows("think-", 8));
 			tui.requestRender();
 			await settle(term);
-			expect(tape(term)).toEqual([...rows("prior-", 12), "think-4", "think-5", "think-6", "think-7"]);
+			expect(tape(term)).toEqual([...rows("prior-", 12), ...rows("think-", 8)]);
 
-			// Finalize: the seam clears and the deferred head backfills in order.
+			// Finalize: the recorded snapshots match the final render, so the
+			// one-time strict verification passes and NOTHING recommits.
 			live.seam = undefined;
 			tui.requestRender();
 			await settle(term);
@@ -219,23 +218,16 @@ describe("streaming scrollback defer", () => {
 			const buffer = tape(term);
 			expect(eraseScrollbackCount(writes)).toBe(0);
 			expect(buffer).toEqual([...rows("prior-", 12), ...rows("think-", 8)]);
-			// Exactly once: no duplicate copies of any live row.
-			for (const row of rows("think-", 8)) {
-				expect(buffer.filter(line => line === row)).toHaveLength(1);
-			}
 		} finally {
 			tui.stop();
 		}
 	});
 
-	it("defers a tall all-live block's scrolled head and commits it in order on finalize", async () => {
+	it("records a tall all-live block's scrolled head", async () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(20, 4);
 		overrideProbe(term, undefined);
 		const tui = new TUI(term);
-		// The only block is live with nothing declared final: rows that scroll
-		// above the viewport wait in the deferred gap instead of entering
-		// immutable history as a mutable preview.
 		const live = new SeamLineList([]);
 
 		try {
@@ -249,30 +241,28 @@ describe("streaming scrollback defer", () => {
 			tui.requestRender();
 			await settle(term);
 
-			// Nothing committed: the tape is exactly the visible window.
+			// tool-0..tool-5 scrolled above the 4-row viewport and are recorded;
+			// tool-6..tool-9 stay in the viewport. Nothing is lost.
 			expect(eraseScrollbackCount(writes)).toBe(0);
-			expect(tape(term)).toEqual(["tool-6", "tool-7", "tool-8", "tool-9"]);
+			expect(tape(term)).toEqual(rows("tool-", 10));
 
 			live.seam = undefined;
 			tui.requestRender();
 			await settle(term);
-
-			// The deferred head backfills in frame order, exactly once.
-			expect(eraseScrollbackCount(writes)).toBe(0);
 			expect(tape(term)).toEqual(rows("tool-", 10));
 		} finally {
 			tui.stop();
 		}
 	});
 
-	it("commits the scrolled-off head of an append-only live block mid-stream", async () => {
+	it("commits an append-only declared-final block's scrolled head as exact rows", async () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(20, 4);
 		overrideProbe(term, undefined);
 		const tui = new TUI(term);
 		// An append-only streaming reply declares every rendered row final
-		// (Infinity clamps to the rendered length), so its scrolled-off head
-		// reaches native scrollback mid-stream instead of waiting for finalize.
+		// (Infinity clamps to the rendered length): its scrolled-off head enters
+		// the verified zone and never needs a finalize-time repair.
 		const live = new SeamLineList([]);
 		live.seam = Number.POSITIVE_INFINITY;
 
@@ -289,12 +279,17 @@ describe("streaming scrollback defer", () => {
 
 			expect(eraseScrollbackCount(writes)).toBe(0);
 			expect(tape(term)).toEqual(rows("text-", 10));
+
+			live.seam = undefined;
+			tui.requestRender();
+			await settle(term);
+			expect(tape(term)).toEqual(rows("text-", 10));
 		} finally {
 			tui.stop();
 		}
 	});
 
-	it("leaves no stale copy when a volatile live block is replaced wholesale", async () => {
+	it("repairs a wholesale-replaced live block once at finalize — full result, single stale fragment", async () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(24, 4);
 		overrideProbe(term, undefined);
@@ -314,38 +309,48 @@ describe("streaming scrollback defer", () => {
 			tui.requestRender();
 			await settle(term);
 
+			// Head recorded as frozen snapshots.
+			expect(tape(term)).toEqual([...rows("prior-", 12), ...rows("pending-stale-", 10)]);
+
+			// Wholesale replace while still live: frozen snapshots are exempt —
+			// no mid-run re-anchor, no spray. The tape keeps the recorded head;
+			// the window shows the fresh tail.
 			live.setLines(rows("running-fresh-", 10));
 			tui.requestRender();
 			await settle(term);
+			expect(tape(term)).toEqual([
+				...rows("prior-", 12),
+				...rows("pending-stale-", 6),
+				...rows("running-fresh-", 10).slice(6),
+			]);
 
+			// Finalize: the one-time strict verification catches the divergence
+			// and recommits the final content below the frozen fragment. Every
+			// fresh row is on the tape (no loss); the stale fragment appears
+			// exactly once (no spray).
 			live.seam = undefined;
 			tui.requestRender();
 			await settle(term);
 
-			// The provisional preview never touched the tape: after the wholesale
-			// replace + finalize, history holds only the final content — no
-			// stranded pending-stale fragment, no ED3, nothing lost.
 			const buffer = tape(term);
 			expect(eraseScrollbackCount(writes)).toBe(0);
-			expect(buffer).toEqual([...rows("prior-", 12), ...rows("running-fresh-", 10)]);
-			expect(buffer.some(line => line.startsWith("pending-stale-"))).toBe(false);
+			expect(buffer).toEqual([...rows("prior-", 12), ...rows("pending-stale-", 6), ...rows("running-fresh-", 10)]);
 		} finally {
 			tui.stop();
 		}
 	});
 
-	it("keeps the topmost live seam when a lower sibling also reports one", async () => {
+	it("keeps the topmost seam when a lower sibling also reports one", async () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(24, 4);
 		overrideProbe(term, undefined);
 		const tui = new TUI(term);
 		const sealed = new LineList(rows("prior-", 12));
-		// Volatile live transcript block: nothing declared final.
 		const live = new SeamLineList([]);
-		// Status loader below the transcript: also reports a seam. Commits are
+		// Status loader below the transcript: also reports a seam. Exactness is
 		// prefix-only, so the engine must keep the TOPMOST seam — letting the
-		// lower sibling's seam win would move the boundary past the transcript's
-		// still-mutable rows.
+		// lower sibling's seam win would verify the transcript's still-mutable
+		// rows as final.
 		const loader = new SeamLineList(["Working..."]);
 
 		try {
@@ -361,14 +366,6 @@ describe("streaming scrollback defer", () => {
 			tui.requestRender();
 			await settle(term);
 
-			// Boundary stops at the transcript block: only the sealed prefix is on
-			// the tape (plus the visible window).
-			expect(tape(term).filter(line => line.startsWith("pending-stale-"))).toEqual(
-				tape(term)
-					.slice(-4)
-					.filter(line => line.startsWith("pending-stale-")),
-			);
-
 			live.setLines(rows("running-fresh-", 10));
 			tui.requestRender();
 			await settle(term);
@@ -377,12 +374,13 @@ describe("streaming scrollback defer", () => {
 			tui.requestRender();
 			await settle(term);
 
-			// The transcript's final content commits; the loader (still live)
-			// stays out of history at the tape bottom.
 			const buffer = tape(term);
 			expect(eraseScrollbackCount(writes)).toBe(0);
-			expect(buffer).toEqual([...rows("prior-", 12), ...rows("running-fresh-", 10), "Working..."]);
-			expect(buffer.some(line => line.startsWith("pending-stale-"))).toBe(false);
+			// Full fresh content present in order (no loss), stale head fragment
+			// exactly once (no spray), loader still live at the bottom.
+			expect(contiguousAt(buffer, rows("running-fresh-", 10))).toHaveLength(1);
+			expect(buffer.filter(line => line.startsWith("pending-stale-"))).toEqual(rows("pending-stale-", 7));
+			expect(buffer.at(-1)).toBe("Working...");
 		} finally {
 			tui.stop();
 		}
@@ -402,9 +400,6 @@ describe("streaming scrollback defer", () => {
 
 			const writes = capture(term);
 
-			// Grow content past the viewport — without a live-region seam the
-			// scrolled-off rows commit to native history as they pass the seam
-			// (shell semantics): exactly once, in frame order, with no ED3.
 			const frame1 = [...rows("init-", 10), ...rows("stream-", 30), "prompt"];
 			component.setLines(frame1);
 			tui.requestRender();
@@ -420,8 +415,6 @@ describe("streaming scrollback defer", () => {
 					.at(-1),
 			).toBe("prompt");
 
-			// Grow further — history extends append-only: still no ED3, no
-			// duplicates, and previously committed rows are untouched.
 			const frame2 = [...rows("init-", 10), ...rows("stream-", 50), "prompt"];
 			component.setLines(frame2);
 			tui.requestRender();
@@ -476,9 +469,6 @@ describe("streaming scrollback defer", () => {
 		const term = new VirtualTerminal(20, 4);
 		overrideProbe(term, undefined);
 		const tui = new TUI(term);
-		// Sealed prefix above a live block: growth commits the sealed rows to
-		// native scrollback; a later collapse must not repaint them back into the
-		// viewport (which would duplicate them in history with no ED3 to erase).
 		const sealed = new LineList(rows("prior-", 12));
 		const live = new SeamLineList([]);
 
@@ -490,15 +480,14 @@ describe("streaming scrollback defer", () => {
 
 			const writes = capture(term);
 
-			// Live block overflows the viewport — sealed prefix commits once.
 			live.setLines(rows("think-", 30));
 			tui.requestRender();
 			await settle(term);
 			expect(term.getScrollBuffer().filter(line => line.startsWith("prior-"))).toEqual(rows("prior-", 12));
 
 			// Live block collapses to its compact result. The bottom-anchored
-			// viewport would re-expose committed sealed rows; the pin must clamp the
-			// repaint to the committed boundary instead of duplicating them.
+			// viewport would re-expose committed sealed rows; the pin must clamp
+			// the repaint to the committed boundary instead of duplicating them.
 			live.setLines(["done"]);
 			tui.requestRender();
 			await settle(term);
@@ -524,7 +513,6 @@ describe("streaming scrollback defer", () => {
 
 			const writes = capture(term);
 
-			// No live-region seam yet: shell semantics commit the scrolled rows.
 			sealed.setLines([...rows("base-", 12), ...rows("transient-", 30)]);
 			tui.requestRender();
 			await settle(term);
@@ -561,8 +549,6 @@ describe("streaming scrollback defer", () => {
 
 			const writes = capture(term);
 
-			// Stream past the viewport: scrolled rows commit to history in
-			// order (shell semantics) and no ED3 fires.
 			component.setLines([...rows("stream-", 30), "prompt"]);
 			tui.requestRender();
 			await settle(term);
@@ -602,8 +588,6 @@ describe("streaming scrollback defer", () => {
 			tui.start();
 			await settle(term);
 
-			// Grow well past the 4-row viewport: the declared-final body lets the
-			// engine commit the scrolled-off head to native scrollback.
 			probe.setLines(rows("out-", 12));
 			tui.requestRender();
 			await settle(term);
@@ -620,15 +604,15 @@ describe("streaming scrollback defer", () => {
 		}
 	});
 
-	it("never commits intermediate layouts of a re-laying-out live block", async () => {
+	it("never re-anchors a re-laying-out live block mid-run, repairs once at finalize", async () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(20, 4);
 		overrideProbe(term, undefined);
 		const tui = new TUI(term);
 		// A block that rewrites an interior row every frame (a streaming table
-		// re-aligning its columns) declares nothing final. Under the old
-		// heuristic law its head force-committed and every drift risked a
-		// duplicate-snapshot spray; now nothing enters history until finalize.
+		// re-aligning, a collapsing preview). Its scrolled rows are frozen
+		// snapshots: drift never sprays re-anchors; the single strict scan at
+		// finalize recommits the final form once.
 		const live = new SeamLineList([]);
 
 		try {
@@ -646,19 +630,28 @@ describe("streaming scrollback defer", () => {
 				await settle(term);
 			}
 
-			// Mid-stream: the tape is exactly the visible window — zero snapshots
-			// of any intermediate layout.
-			expect(tape(term)).toEqual(["tbl-8", "tbl-9", "tbl-10", "tbl-11"]);
+			// Mid-run: exactly the scrolled snapshots + the grid — one copy each,
+			// no spray despite nine drift frames.
+			const streaming = tape(term);
+			expect(streaming).toHaveLength(12);
+			expect(streaming.filter(line => line.startsWith("tbl-1 ")).length).toBe(1);
 
 			live.seam = undefined;
 			tui.requestRender();
 			await settle(term);
 
-			// Finalize commits the FINAL layout exactly once.
-			const final = rows("tbl-", 12);
-			final[1] = "tbl-1 [w12]";
+			// Finalize: one repair recommits the final layout below the frozen
+			// snapshot; the final form of the drifted row is on the tape.
+			const buffer = tape(term);
 			expect(eraseScrollbackCount(writes)).toBe(0);
-			expect(tape(term)).toEqual(final);
+			expect(buffer.join("\n")).toContain("tbl-1 [w12]");
+			// Bounded: 8 snapshots + one repair recommit (7 rows) + 4 grid rows.
+			expect(buffer.length).toBeLessThanOrEqual(19);
+
+			// Stability: identical follow-up frames must not grow the tape.
+			tui.requestRender();
+			await settle(term);
+			expect(tape(term)).toEqual(buffer);
 		} finally {
 			tui.stop();
 		}
@@ -672,8 +665,7 @@ describe("streaming scrollback defer", () => {
 		// The block declares its whole body final, commits, then violates the
 		// contract by rewriting TWO committed rows (alignment breaks, so the
 		// tail-sample tolerance cannot absorb it). The audit re-anchors and
-		// recommits — duplication, never loss — and stays quiet on the frames
-		// after the violation (no per-frame spray).
+		// recommits — duplication, never loss — and stays quiet afterwards.
 		const live = new SeamLineList(rows("row-", 12));
 		live.seam = Number.POSITIVE_INFINITY;
 
@@ -691,11 +683,9 @@ describe("streaming scrollback defer", () => {
 			await settle(term);
 
 			const afterViolation = tape(term);
-			// No loss: the edited rows reached the tape in final form.
 			expect(afterViolation).toContain("row-5 [edited]");
 			expect(afterViolation).toContain("row-6 [edited]");
 
-			// Stability: identical follow-up frames must not grow the tape.
 			for (let i = 0; i < 5; i++) {
 				tui.requestRender();
 				await settle(term);
@@ -708,7 +698,7 @@ describe("streaming scrollback defer", () => {
 	});
 });
 
-describe("scrollback commit gap — deferred live barriers", () => {
+describe("scrollback commit gap — live barriers", () => {
 	let savedTerminalEnv: Record<string, string | undefined> = {};
 	beforeEach(() => {
 		savedTerminalEnv = saveTerminalEnv();
@@ -718,7 +708,7 @@ describe("scrollback commit gap — deferred live barriers", () => {
 		savedTerminalEnv = {};
 	});
 
-	it("defers everything under a pending barrier and backfills when it clears (S5/S6)", async () => {
+	it("does not drop the tail when a pending barrier above it is removed (S5/S6)", async () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(20, 4);
 		overrideProbe(term, undefined);
@@ -732,23 +722,24 @@ describe("scrollback commit gap — deferred live barriers", () => {
 			const writes = capture(term);
 
 			// Small pending barrier above a long finalized tail, overflowing the
-			// 4-row viewport. The seam at 0 defers the whole frame.
+			// 4-row viewport. Scrolled rows are recorded as frozen snapshots.
 			root.setLines(["[tool pending]", ...rows("ans-", 8)]);
 			root.seam = 0;
 			tui.requestRender();
 			await settle(term);
-			expect(tape(term)).toEqual(rows("ans-", 8).slice(-4));
+			expect(tape(term)).toEqual(["[tool pending]", ...rows("ans-", 8)]);
 
-			// Barrier removed (agent moved past the tool): the tail commits in
-			// order; the pending row never existed on the tape.
+			// Barrier removed: the tail shifts up. The one-time strict scan
+			// catches the shift and recommits — every ans row survives, in order,
+			// contiguous at the tape bottom.
 			root.setLines(rows("ans-", 8));
 			root.seam = undefined;
 			tui.requestRender();
 			await settle(term);
 
 			const buffer = tape(term);
-			expect(buffer).toEqual(rows("ans-", 8));
-			expect(buffer).not.toContain("[tool pending]");
+			expect(buffer.slice(-8)).toEqual(rows("ans-", 8));
+			expect(buffer.filter(line => line === "[tool pending]")).toHaveLength(1);
 			expect(term.getViewport().map(line => line.trimEnd())).toEqual(rows("ans-", 8).slice(-4));
 			expect(eraseScrollbackCount(writes)).toBe(0);
 		} finally {
@@ -756,7 +747,7 @@ describe("scrollback commit gap — deferred live barriers", () => {
 		}
 	});
 
-	it("commits only the result when a provisional preview is replaced (S4)", async () => {
+	it("does not drop result rows when a provisional preview is replaced by its result (S4)", async () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(20, 4);
 		overrideProbe(term, undefined);
@@ -769,21 +760,25 @@ describe("scrollback commit gap — deferred live barriers", () => {
 			await settle(term);
 			const writes = capture(term);
 
-			root.setLines(rows("preview-", 10));
+			const preview = rows("preview-", 10);
+			root.setLines(preview);
 			root.seam = 0;
 			tui.requestRender();
 			await settle(term);
-			expect(tape(term)).toEqual(rows("preview-", 10).slice(-4));
+			expect(tape(term)).toEqual(preview);
 
-			root.setLines(rows("result-", 9));
+			const result = rows("result-", 9);
+			root.setLines(result);
 			root.seam = undefined;
 			tui.requestRender();
 			await settle(term);
 
 			const buffer = tape(term);
-			expect(buffer).toEqual(rows("result-", 9));
-			expect(buffer.some(line => line.startsWith("preview-"))).toBe(false);
-			expect(term.getViewport().map(line => line.trimEnd())).toEqual(rows("result-", 9).slice(-4));
+			// Full result contiguous at the bottom; the recorded preview head
+			// stays above it as the visual record — once, no spray.
+			expect(buffer.slice(-9)).toEqual(result);
+			expect(contiguousAt(buffer, result)).toHaveLength(1);
+			expect(term.getViewport().map(line => line.trimEnd())).toEqual(result.slice(-4));
 			expect(eraseScrollbackCount(writes)).toBe(0);
 		} finally {
 			tui.stop();
@@ -803,14 +798,16 @@ describe("scrollback commit gap — deferred live barriers", () => {
 			await settle(term);
 			const writes = capture(term);
 
-			// 3-row barrier over an 8-row tail (len 11), overflowing. All deferred.
-			root.setLines([...rows("bar-", 3), ...rows("tail-", 8)]);
+			const f1 = [...rows("bar-", 3), ...rows("tail-", 8)];
+			root.setLines(f1);
 			root.seam = 0;
 			tui.requestRender();
 			await settle(term);
+			expect(tape(term)).toEqual(f1);
 
-			// Barrier collapses to 1 row and finalizes: the whole final frame — and
-			// only the final frame — reaches the tape.
+			// Barrier collapses to 1 row but the frame stays longer than the
+			// committed prefix (NOT the shrink-into-prefix branch); the strict
+			// scan must catch the upward tail shift.
 			const f2 = ["bar-collapsed", ...rows("tail-", 8)];
 			root.setLines(f2);
 			root.seam = undefined;
@@ -818,8 +815,7 @@ describe("scrollback commit gap — deferred live barriers", () => {
 			await settle(term);
 
 			const buffer = tape(term);
-			expect(buffer).toEqual(f2);
-			expect(buffer.some(line => line.startsWith("bar-") && line !== "bar-collapsed")).toBe(false);
+			expect(buffer.slice(-9)).toEqual(f2);
 			expect(term.getViewport().map(line => line.trimEnd())).toEqual(f2.slice(-4));
 			expect(eraseScrollbackCount(writes)).toBe(0);
 		} finally {
@@ -832,9 +828,6 @@ describe("scrollback commit gap — deferred live barriers", () => {
 		const term = new VirtualTerminal(20, 5);
 		overrideProbe(term, undefined);
 		const tui = new TUI(term);
-		// Realistic transcript shape: a still-live barrier block above a finalized
-		// tail block. The topmost seam (the barrier at row 0) gates the boundary,
-		// so the finalized tail below it is deferred too (commits are prefix-only).
 		const barrier = new SeamLineList(["[tool pending]"]);
 		const tail = new LineList(rows("out-", 10));
 
@@ -845,20 +838,21 @@ describe("scrollback commit gap — deferred live barriers", () => {
 			await settle(term);
 			const writes = capture(term);
 
-			// Force overflow: 11 rows over a 5-row viewport. Nothing commits.
+			// Force overflow: 11 rows over a 5-row viewport. Scrolled rows are
+			// recorded (frozen — the topmost seam is at the barrier).
 			tui.requestRender();
 			await settle(term);
-			expect(tape(term)).toEqual(rows("out-", 10).slice(-5));
+			expect(tape(term)).toEqual(["[tool pending]", ...rows("out-", 10)]);
 
-			// Remove the barrier. The tail commits as one contiguous in-order run;
-			// the pending row never reached the tape.
+			// Remove the barrier. The tail shifts up by one row; the strict scan
+			// recommits so every out-* row remains, in order, contiguous at the
+			// tape bottom.
 			tui.removeChild(barrier);
 			tui.requestRender();
 			await settle(term);
 
 			const buffer = tape(term);
-			expect(buffer).toEqual(rows("out-", 10));
-			expect(buffer).not.toContain("[tool pending]");
+			expect(buffer.slice(-10)).toEqual(rows("out-", 10));
 			expect(term.getViewport().map(line => line.trimEnd())).toEqual(rows("out-", 10).slice(-5));
 			expect(eraseScrollbackCount(writes)).toBe(0);
 		} finally {
@@ -878,16 +872,15 @@ describe("scrollback commit gap — deferred live barriers", () => {
 			tui.start();
 			await settle(term);
 
-			// Pending barrier above a tail that grows every frame, overflowing
-			// further each tick; the barrier defers every row.
 			for (let n = 1; n <= 20; n++) {
-				root.setLines(["[pending]", ...rows("row-", n)]);
+				const frame = ["[pending]", ...rows("row-", n)];
+				root.setLines(frame);
 				root.seam = 0;
 				tui.requestRender();
 				await settle(term);
+				// Visual record mid-run: everything that scrolled is on the tape.
+				expect(tape(term)).toEqual(frame);
 			}
-			// Nothing has committed across 20 overflowing frames.
-			expect(tape(term)).toEqual(rows("row-", 20).slice(-5));
 
 			const final = rows("row-", 20);
 			root.setLines(final);
@@ -896,21 +889,20 @@ describe("scrollback commit gap — deferred live barriers", () => {
 			await settle(term);
 
 			const buffer = tape(term);
-			expect(buffer).toEqual(final);
-			expect(buffer).not.toContain("[pending]");
-			expect(term.getViewport().map(line => line.trimEnd())).toEqual(rows("row-", 20).slice(-5));
+			expect(buffer.slice(-20)).toEqual(final);
+			expect(buffer.filter(line => line === "[pending]")).toHaveLength(1);
+			expect(term.getViewport().map(line => line.trimEnd())).toEqual(final.slice(-5));
 		} finally {
 			tui.stop();
 		}
 	});
 
-	it("commits a declared-final prose head once under a volatile tail and live card", async () => {
+	it("commits a declared-final prose head exactly, with zero finalize repair", async () => {
 		if (process.platform === "win32") return;
-		// Coexistence case: a streaming block whose settled head is declared
-		// final (the transcript's settled-prefix path) while its last row
-		// re-wraps in place every frame and a still-live card renders below.
-		// The head must commit exactly once — no per-drift spray — and the
-		// volatile tail + card stay off the tape until finalize.
+		// A streaming block whose settled head is declared final (the
+		// transcript's settled-prefix path) while its last row re-wraps in place
+		// and a live card renders below. The head commits as verified exact rows
+		// — so finalize needs NO repair and the tape never duplicates a byte.
 		const term = new VirtualTerminal(20, 4);
 		overrideProbe(term, undefined);
 		const tui = new TUI(term);
@@ -932,27 +924,23 @@ describe("scrollback commit gap — deferred live barriers", () => {
 			}
 
 			const streaming = tape(term);
-			// The declared head committed exactly once.
 			expect(contiguousAt(streaming, ["prose-0", "prose-1", "prose-2"])).toHaveLength(1);
-			// The volatile row and the live card are only in the visible window.
-			expect(streaming.filter(line => line === "card-0")).toHaveLength(1);
-			expect(streaming.at(-2)).toBe("card-0");
 
 			root.seam = undefined;
 			tui.requestRender();
 			await settle(term);
 
+			// Zero repair: the tape is byte-identical to the streaming state.
 			const buffer = tape(term);
-			const final = rows("prose-", 8);
-			final[7] = "prose-7 [w11]";
-			expect(buffer).toEqual([...final, "card-0", "card-1"]);
+			expect(buffer).toEqual(streaming);
+			expect(contiguousAt(buffer, ["prose-0", "prose-1", "prose-2"])).toHaveLength(1);
 			expect(eraseScrollbackCount(writes)).toBe(0);
 		} finally {
 			tui.stop();
 		}
 	});
 
-	it("shows the finalize edit of a deferred row instead of a stale committed copy", async () => {
+	it("does not lose a single-row finalize edit above an unchanged tail (#4124)", async () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(20, 4);
 		overrideProbe(term, undefined);
@@ -965,16 +953,17 @@ describe("scrollback commit gap — deferred live barriers", () => {
 			await settle(term);
 			const writes = capture(term);
 
-			// Pending barrier row above an unchanged tail, overflowing. Deferred.
-			root.setLines(["preview", ...rows("tail-", 8)]);
+			const f1 = ["preview", ...rows("tail-", 8)];
+			root.setLines(f1);
 			root.seam = 0;
 			tui.requestRender();
 			await settle(term);
+			expect(tape(term)).toEqual(f1);
 
-			// Finalize: ONLY row 0 changes (preview → result). Under the old
-			// force-commit law the stale "preview" sat in history and only a
-			// full-suffix hard scan recovered "result"; now the row was deferred,
-			// so the tape simply receives the final content.
+			// Finalize: ONLY row 0 changes (preview → result); the whole tail is
+			// byte-identical. The tail-sample tolerance alone would eat the single
+			// mismatch and "result" would never reach the tape; the strict scan of
+			// the newly-final span forces the recommit.
 			const f2 = ["result", ...rows("tail-", 8)];
 			root.setLines(f2);
 			root.seam = undefined;
@@ -982,16 +971,16 @@ describe("scrollback commit gap — deferred live barriers", () => {
 			await settle(term);
 
 			const buffer = tape(term);
-			expect(buffer).toEqual(f2);
-			expect(buffer).not.toContain("preview");
+			expect(buffer).toContain("result");
 			expect(buffer.filter(line => line === "result")).toHaveLength(1);
+			expect(term.getViewport().map(line => line.trimEnd())).toEqual(f2.slice(-4));
 			expect(eraseScrollbackCount(writes)).toBe(0);
 		} finally {
 			tui.stop();
 		}
 	});
 
-	it("shows the finalize edit far above a long unchanged tail (deep backfill)", async () => {
+	it("does not lose a single-row finalize edit far above a long unchanged tail (deep tail)", async () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(20, 4);
 		overrideProbe(term, undefined);
@@ -1004,23 +993,21 @@ describe("scrollback commit gap — deferred live barriers", () => {
 			await settle(term);
 			const writes = capture(term);
 
-			// The changed row ends up ~30 rows above the window at finalize —
-			// far outside the audit's 24-row tail-sample lookback. Deferral makes
-			// that irrelevant: the backfill emits the final bytes directly.
+			// The changed row sits ~30 rows above the commit boundary with an
+			// unchanged tail — far outside the 24-row tail-sample lookback, so
+			// only the FULL scan of the newly-final span catches it.
 			root.setLines(["preview", ...rows("tail-", 30)]);
 			root.seam = 0;
 			tui.requestRender();
 			await settle(term);
 
-			const f2 = ["result", ...rows("tail-", 30)];
-			root.setLines(f2);
+			root.setLines(["result", ...rows("tail-", 30)]);
 			root.seam = undefined;
 			tui.requestRender();
 			await settle(term);
 
 			const buffer = tape(term);
-			expect(buffer).toEqual(f2);
-			expect(buffer).not.toContain("preview");
+			expect(buffer).toContain("result");
 			expect(buffer.filter(line => line === "result")).toHaveLength(1);
 			expect(eraseScrollbackCount(writes)).toBe(0);
 		} finally {
