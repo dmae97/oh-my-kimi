@@ -987,10 +987,11 @@ function escapeRegExp(value: string): string {
 // native Bun resolutions.
 const EXTENSION_GRAPH_SPECIFIER_REGEX = /(?:from\s+|import\s+|import\s*\(\s*)["']((?:\.\.?\/|#)[^"']+)["']/g;
 
-// Extension entry realpaths that already have a load-time rewrite hook
-// installed. Each `Bun.plugin()` registration is process-global and permanent,
-// so we register at most one hook per entry.
-const hookedExtensionEntries = new Set<string>();
+// Extension source realpaths already covered by an installed load-time hook for
+// each entry. `Bun.plugin()` registrations are process-global and permanent, so
+// reloads install supplemental hooks only for modules added to the graph since
+// the previous load.
+const extensionGraphHookModules = new Map<string, Set<string>>();
 
 /** Resolve symlinks in a path, falling back to the input if realpath fails. */
 async function realpathOrSelf(p: string): Promise<string> {
@@ -1053,29 +1054,18 @@ async function collectExtensionModules(entryRealPath: string): Promise<Map<strin
 }
 
 /**
- * Install a `Bun.plugin()` `onLoad` hook scoped to exactly the modules in an
- * extension's source graph, so their legacy `@(scope)/pi-*`, bare
- * `@sinclair/typebox`, and local package-import aliases are rewritten at load
- * time. A runtime `onLoad` cannot fall through (Bun requires a result object),
- * so the filter is an exact-path alternation of the graph's realpaths — it
- * never matches the host, other extensions, `node_modules` deps, or unrelated
- * project source.
- *
- * Returns the collected path→source map on first install so the caller can
- * drop entries the initial import never consumed; `undefined` when the hook
- * was already installed.
+ * Install a `Bun.plugin()` `onLoad` hook scoped to a set of extension-owned
+ * source modules. Runtime `onLoad` cannot fall through (Bun requires a result
+ * object), so every hook uses an exact-path alternation for modules known to be
+ * part of this entry's graph; reloads add supplemental hooks for newly
+ * discovered modules instead of widening an existing filter to unrelated files.
  */
-async function ensureExtensionGraphHook(entryRealPath: string): Promise<Map<string, string> | undefined> {
-	if (hookedExtensionEntries.has(entryRealPath)) {
-		return undefined;
-	}
-	hookedExtensionEntries.add(entryRealPath);
-
-	const modules = await collectExtensionModules(entryRealPath);
+function installExtensionGraphHook(entryRealPath: string, modules: Map<string, string>): void {
 	const alternation = [...modules.keys()].map(escapeRegExp).join("|");
 	const filter = new RegExp(`^(?:${alternation})(?:\\?mtime=\\d+)?$`);
+	const hookId = Bun.hash(`${entryRealPath}\0${[...modules.keys()].join("\0")}`).toString(36);
 	Bun.plugin({
-		name: `omp:legacy-pi-ext:${Bun.hash(entryRealPath).toString(36)}`,
+		name: `omp:legacy-pi-ext:${hookId}`,
 		setup(build) {
 			build.onLoad({ filter, namespace: "file" }, async args => {
 				const queryIndex = args.path.indexOf("?mtime=");
@@ -1097,7 +1087,39 @@ async function ensureExtensionGraphHook(entryRealPath: string): Promise<Map<stri
 			});
 		},
 	});
-	return modules;
+}
+
+/**
+ * Ensure every currently reachable extension source module has a load-time
+ * rewrite hook. The entry graph can grow across reloads, so each call collects
+ * the current graph and registers hooks for paths not covered by earlier loads.
+ *
+ * Returns the newly collected path→source map so the caller can drop entries
+ * the import never consumed; `undefined` when no new modules were discovered.
+ */
+async function ensureExtensionGraphHook(entryRealPath: string): Promise<Map<string, string> | undefined> {
+	const currentModules = await collectExtensionModules(entryRealPath);
+	let hookedModules = extensionGraphHookModules.get(entryRealPath);
+	if (!hookedModules) {
+		hookedModules = new Set<string>();
+		extensionGraphHookModules.set(entryRealPath, hookedModules);
+	}
+
+	const pendingModules = new Map<string, string>();
+	for (const [modulePath, source] of currentModules) {
+		if (!hookedModules.has(modulePath)) {
+			pendingModules.set(modulePath, source);
+		}
+	}
+	if (pendingModules.size === 0) {
+		return undefined;
+	}
+
+	installExtensionGraphHook(entryRealPath, pendingModules);
+	for (const modulePath of pendingModules.keys()) {
+		hookedModules.add(modulePath);
+	}
+	return pendingModules;
 }
 
 /**

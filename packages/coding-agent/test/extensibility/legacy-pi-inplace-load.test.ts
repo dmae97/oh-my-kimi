@@ -137,6 +137,69 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		expect(second.entryPath.includes("?")).toBe(false);
 	});
 
+	it("reloads modules added to the relative import graph after the first load", async () => {
+		const entrySource = (version: string, includeHelper: boolean): string =>
+			[
+				'import { fileURLToPath } from "node:url";',
+				includeHelper ? 'export { leafValue } from "./helper.ts";' : "",
+				"export const entryPath = fileURLToPath(import.meta.url);",
+				`export const entryVersion = ${JSON.stringify(version)};`,
+				"export default function (pi) { void pi; }",
+			]
+				.filter(Boolean)
+				.join("\n");
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "expanding-graph-reload-ext", version: "1.0.0" }),
+			"index.ts": entrySource("v1", false),
+		});
+		const entry = path.join(dir, "index.ts");
+		const helper = path.join(dir, "helper.ts");
+		const leaf = path.join(dir, "leaf.ts");
+		const expectedEntryPath = await fs.realpath(entry);
+
+		const first = (await loadLegacyPiModule(entry)) as { entryVersion: string; entryPath: string };
+		expect(first.entryVersion).toBe("v1");
+		expect(first.entryPath).toBe(expectedEntryPath);
+
+		const firstEntryStat = await fs.stat(entry);
+		const firstGraphMtime = new Date(Math.ceil(firstEntryStat.mtimeMs) + 2_000);
+		await fs.writeFile(entry, entrySource("v2", true), "utf8");
+		await fs.writeFile(helper, 'export { leafValue } from "./leaf.ts";\n', "utf8");
+		await fs.writeFile(leaf, 'export const leafValue = "leaf-v1";\n', "utf8");
+		await fs.utimes(entry, firstGraphMtime, firstGraphMtime);
+		await fs.utimes(helper, firstGraphMtime, firstGraphMtime);
+		await fs.utimes(leaf, firstGraphMtime, firstGraphMtime);
+
+		const second = (await loadLegacyPiModule(entry)) as {
+			entryVersion: string;
+			entryPath: string;
+			leafValue: string;
+		};
+		expect(second.entryVersion).toBe("v2");
+		expect(second.leafValue).toBe("leaf-v1");
+		expect(second.entryPath).toBe(expectedEntryPath);
+		expect(second.entryPath.includes("?")).toBe(false);
+
+		const secondEntryStat = await fs.stat(entry);
+		const secondLeafStat = await fs.stat(leaf);
+		await fs.writeFile(entry, entrySource("v3", true), "utf8");
+		await fs.writeFile(leaf, 'export const leafValue = "leaf-v2";\n', "utf8");
+		const bumpedEntryMtime = new Date(Math.ceil(secondEntryStat.mtimeMs) + 2_000);
+		const bumpedLeafMtime = new Date(Math.ceil(secondLeafStat.mtimeMs) + 2_000);
+		await fs.utimes(entry, bumpedEntryMtime, bumpedEntryMtime);
+		await fs.utimes(leaf, bumpedLeafMtime, bumpedLeafMtime);
+
+		const third = (await loadLegacyPiModule(entry)) as {
+			entryVersion: string;
+			entryPath: string;
+			leafValue: string;
+		};
+		expect(third.entryVersion).toBe("v3");
+		expect(third.leafValue).toBe("leaf-v2");
+		expect(third.entryPath).toBe(expectedEntryPath);
+		expect(third.entryPath.includes("?")).toBe(false);
+	});
+
 	it("resolves a .css sibling of a relatively-imported submodule", async () => {
 		const dir = await writePackage({
 			"package.json": JSON.stringify({ name: "multi-file-ext", version: "1.0.0" }),
