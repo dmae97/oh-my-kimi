@@ -880,7 +880,6 @@ export class ExtensionUiController {
 
 	async #updateSessionName(name: string): Promise<void> {
 		await this.ctx.sessionManager.setSessionName(name, "user");
-		setSessionTerminalTitle(this.ctx.sessionManager.getSessionName(), this.ctx.sessionManager.getCwd());
 	}
 
 	#sendExtensionUserMessage: SendUserMessageHandler = (content, options) => {

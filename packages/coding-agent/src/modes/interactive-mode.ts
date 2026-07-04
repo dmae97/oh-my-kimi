@@ -987,6 +987,10 @@ export class InteractiveMode implements InteractiveModeContext {
 				void this.#handleGoalSessionEvent(event);
 			}),
 			this.sessionManager.onSessionNameChanged(() => {
+				// Single side-effect point for title changes: every setSessionName
+				// caller (first-input titling, /rename, plan seeding, replan refresh)
+				// gets the terminal title + accent updates from here.
+				setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
 				this.#handleSessionAccentInputsChanged();
 			}),
 			onStatusLineSessionAccentChanged(() => {
@@ -2658,11 +2662,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// when the user has already chosen a name (preserveContext paths).
 		const seededName = humanizePlanTitle(options.title);
 		if (seededName && !this.sessionManager.getSessionName()) {
-			const applied = await this.sessionManager.setSessionName(seededName, "auto");
-			if (applied) {
-				setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
-				this.updateEditorBorderColor();
-			}
+			await this.sessionManager.setSessionName(seededName, "auto");
 		}
 
 		// markPlanReferenceSent fires only on the dispatch path so the synthetic
