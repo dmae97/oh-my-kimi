@@ -33,11 +33,16 @@ function makeAuthStorage(credentials: string | FakeAuthCredentials | undefined) 
 			};
 		},
 		hasAuth(provider: string) {
-			let credentialExists = false;
 			if (provider === "xai-oauth" || provider === "xai") {
-				credentialExists = Boolean(credentialsByProvider[provider]);
+				return Boolean(credentialsByProvider[provider]);
 			}
-			return credentialExists;
+			return false;
+		},
+		hasNonEnvCredential(provider: string) {
+			if (provider === "xai-oauth" || provider === "xai") {
+				return Boolean(credentialsByProvider[provider]);
+			}
+			return false;
 		},
 	} as unknown as AuthStorage;
 }
@@ -166,6 +171,47 @@ describe("xAI web search provider", () => {
 		});
 
 		expect(provider.isAvailable(authStorage)).toBe(true);
+	});
+
+	it("routes through xai when only XAI_API_KEY is set and an xai credential exists", async () => {
+		const capture = captureFetch({
+			id: "resp_xai_env_only",
+			model: "grok-4.3",
+			output_text: "xAI env answer",
+		});
+		const originalOAuthToken = Bun.env.XAI_OAUTH_TOKEN;
+		const originalApiKey = Bun.env.XAI_API_KEY;
+		delete Bun.env.XAI_OAUTH_TOKEN;
+		Bun.env.XAI_API_KEY = "shared-xai-env-key";
+		try {
+			await searchXAI(makeParams(capture.fetchMock, makeAuthStorage({ xai: "explicit-xai-runtime-key" })));
+		} finally {
+			if (originalOAuthToken === undefined) delete Bun.env.XAI_OAUTH_TOKEN;
+			else Bun.env.XAI_OAUTH_TOKEN = originalOAuthToken;
+			if (originalApiKey === undefined) delete Bun.env.XAI_API_KEY;
+			else Bun.env.XAI_API_KEY = originalApiKey;
+		}
+
+		expect(capture.capturedRequest).not.toBeNull();
+		expect(capture.capturedRequest?.headers).toMatchObject({
+			Authorization: "Bearer explicit-xai-runtime-key",
+		});
+	});
+
+	it("does not report xAI available when only XAI_API_KEY is set", () => {
+		const provider = new XAIProvider();
+		const originalOAuthToken = Bun.env.XAI_OAUTH_TOKEN;
+		const originalApiKey = Bun.env.XAI_API_KEY;
+		delete Bun.env.XAI_OAUTH_TOKEN;
+		Bun.env.XAI_API_KEY = "shared-xai-env-key";
+		try {
+			expect(provider.isAvailable(makeAuthStorage(undefined))).toBe(false);
+		} finally {
+			if (originalOAuthToken === undefined) delete Bun.env.XAI_OAUTH_TOKEN;
+			else Bun.env.XAI_OAUTH_TOKEN = originalOAuthToken;
+			if (originalApiKey === undefined) delete Bun.env.XAI_API_KEY;
+			else Bun.env.XAI_API_KEY = originalApiKey;
+		}
 	});
 
 	it("omits search_parameters for minimal web_search requests", async () => {

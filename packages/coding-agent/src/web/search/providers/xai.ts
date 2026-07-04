@@ -1,4 +1,5 @@
 import { type ApiKey, type ApiKeyResolver, type AuthStorage, withAuth } from "@oh-my-pi/pi-ai";
+import { $env } from "@oh-my-pi/pi-utils";
 import type { SearchCitation, SearchResponse, SearchSource, SearchUsage } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import { clampNumResults } from "../utils";
@@ -263,11 +264,25 @@ function parseResponse(response: XAIResponsesResponse, resultCap: number): Searc
 	};
 }
 
+/**
+ * Prefer a dedicated `xai-oauth` credential when the user has one, otherwise
+ * resolve `xai` directly. Gating on `hasNonEnvCredential("xai-oauth")` (plus
+ * `XAI_OAUTH_TOKEN`) is deliberate: `AuthStorage.hasAuth("xai-oauth")` also
+ * fires when only `XAI_API_KEY` is set, because the catalog maps `xai-oauth`
+ * to `["XAI_OAUTH_TOKEN", "XAI_API_KEY"]`. Without this narrower gate, an
+ * `xai-oauth`-preferring wrapper would return `XAI_API_KEY` before an
+ * explicit `xai` runtime/config credential ever ran, and web_search would
+ * ignore/mis-bill against the wrong xAI account.
+ */
+function hasDedicatedXAIOAuth(authStorage: AuthStorage): boolean {
+	return authStorage.hasNonEnvCredential("xai-oauth") || Boolean($env.XAI_OAUTH_TOKEN);
+}
+
 function resolveXAIWebSearchApiKey(params: SearchParams): ApiKeyResolver {
 	const xaiResolver = params.authStorage.resolver("xai", {
 		sessionId: params.sessionId,
 	});
-	if (!params.authStorage.hasAuth("xai-oauth")) {
+	if (!hasDedicatedXAIOAuth(params.authStorage)) {
 		return xaiResolver;
 	}
 
@@ -299,7 +314,7 @@ export class XAIProvider extends SearchProvider {
 	readonly label = "xAI";
 
 	isAvailable(authStorage: AuthStorage): boolean {
-		return authStorage.hasAuth("xai-oauth") || authStorage.hasAuth("xai");
+		return hasDedicatedXAIOAuth(authStorage) || authStorage.hasAuth("xai");
 	}
 
 	search(params: SearchParams): Promise<SearchResponse> {
