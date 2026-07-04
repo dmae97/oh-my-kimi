@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed xAI `web_search` to use `xai-oauth` credentials before falling back to `xai` API-key credentials, and to treat xAI OAuth as available in provider selection. ([#4536](https://github.com/can1357/oh-my-pi/issues/4536))
+
 ## [16.3.6] - 2026-07-04
 
 ### Changed

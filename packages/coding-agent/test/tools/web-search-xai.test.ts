@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, setSystemTime, vi } from "bun:test";
 import type { AuthStorage, FetchImpl } from "@oh-my-pi/pi-ai";
-import { searchXAI } from "@oh-my-pi/pi-coding-agent/web/search/providers/xai";
+import { searchXAI, XAIProvider } from "@oh-my-pi/pi-coding-agent/web/search/providers/xai";
 import { SearchProviderError } from "@oh-my-pi/pi-coding-agent/web/search/types";
 
 type CapturedRequest = {
@@ -10,15 +10,34 @@ type CapturedRequest = {
 	body: Record<string, unknown> | null;
 };
 
-function makeAuthStorage(apiKey: string | undefined) {
+type FakeAuthProvider = "xai" | "xai-oauth";
+type FakeAuthCredentials = Partial<Record<FakeAuthProvider, string>>;
+
+function makeAuthStorage(credentials: string | FakeAuthCredentials | undefined) {
+	const credentialsByProvider: FakeAuthCredentials = {};
+	if (typeof credentials === "string") {
+		credentialsByProvider.xai = credentials;
+	} else if (credentials !== undefined) {
+		Object.assign(credentialsByProvider, credentials);
+	}
+
 	return {
-		resolver(provider: string, options?: { sessionId?: string }) {
-			expect(provider).toBe("xai");
+		resolver(provider: string, options?: { sessionId?: string; baseUrl?: string; modelId?: string }) {
 			expect(options?.sessionId).toBe("session-xai-test");
-			return async () => apiKey;
+			const credentialProvider = provider === "xai-oauth" || provider === "xai" ? provider : undefined;
+			return async () => {
+				if (credentialProvider === undefined) {
+					return undefined;
+				}
+				return credentialsByProvider[credentialProvider];
+			};
 		},
 		hasAuth(provider: string) {
-			return provider === "xai" && Boolean(apiKey);
+			let credentialExists = false;
+			if (provider === "xai-oauth" || provider === "xai") {
+				credentialExists = Boolean(credentialsByProvider[provider]);
+			}
+			return credentialExists;
 		},
 	} as unknown as AuthStorage;
 }
@@ -97,6 +116,56 @@ describe("xAI web search provider", () => {
 		});
 		expect(capture.capturedRequest?.body?.tools).toEqual([{ type: "web_search" }]);
 		expect(capture.capturedRequest?.body).not.toHaveProperty("search_parameters");
+	});
+
+	it("uses dedicated xAI OAuth credentials for Responses API bearer auth", async () => {
+		const capture = captureFetch({ id: "resp_xai_oauth", model: "grok-4.3", output_text: "xAI OAuth answer" });
+
+		await searchXAI(
+			makeParams(
+				capture.fetchMock,
+				makeAuthStorage({
+					"xai-oauth": "test-xai-oauth-token",
+				}),
+			),
+		);
+
+		expect(capture.capturedRequest).not.toBeNull();
+		expect(capture.capturedRequest?.headers).toMatchObject({
+			Authorization: "Bearer test-xai-oauth-token",
+		});
+	});
+
+	it("prefers dedicated xAI OAuth credentials over xAI API keys", async () => {
+		const capture = captureFetch({
+			id: "resp_xai_oauth_priority",
+			model: "grok-4.3",
+			output_text: "xAI OAuth answer",
+		});
+
+		await searchXAI(
+			makeParams(
+				capture.fetchMock,
+				makeAuthStorage({
+					"xai-oauth": "test-xai-oauth-token",
+					xai: "test-xai-api-key",
+				}),
+			),
+		);
+
+		expect(capture.capturedRequest).not.toBeNull();
+		expect(capture.capturedRequest?.headers).toMatchObject({
+			Authorization: "Bearer test-xai-oauth-token",
+		});
+	});
+
+	it("reports available when only dedicated xAI OAuth credentials exist", () => {
+		const provider = new XAIProvider();
+		const authStorage = makeAuthStorage({
+			"xai-oauth": "test-xai-oauth-token",
+		});
+
+		expect(provider.isAvailable(authStorage)).toBe(true);
 	});
 
 	it("omits search_parameters for minimal web_search requests", async () => {
@@ -482,7 +551,7 @@ describe("xAI web search provider", () => {
 		const fetchMock = vi.fn(() => Promise.resolve(new Response("{}", { status: 200 }))) as unknown as FetchImpl;
 
 		try {
-			await searchXAI(makeParams(fetchMock, makeAuthStorage(undefined)));
+			await searchXAI(makeParams(fetchMock, makeAuthStorage({})));
 			expect.unreachable("missing xAI credentials should reject");
 		} catch (error) {
 			expect(error).toBeInstanceOf(Error);
