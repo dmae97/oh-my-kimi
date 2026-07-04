@@ -685,6 +685,30 @@ describe("OpenAI tool strict mode", () => {
 		expect(payload.tools?.[0]?.strict).toBeUndefined();
 	});
 
+	it("preserves explicit strict:false for openai-responses when compat leaves supportsStrictMode unresolved (#4527)", async () => {
+		// Mirrors the openai-completions `supportsStrictMode !== false` gate: a
+		// caller-constructed Model whose compat carries no `supportsStrictMode`
+		// (falsy under the pre-fix truthy check) must still preserve
+		// `strict: false` on the wire, so the two provider paths agree.
+		const bundled = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
+		const model: Model<"openai-responses"> = {
+			...bundled,
+			compat: {
+				...bundled.compat,
+				supportsStrictMode: undefined as unknown as boolean,
+			},
+		};
+
+		const payload = (await captureResponsesPayload(model, {
+			...testContext,
+			tools: [looseYieldTool],
+		})) as {
+			tools?: Array<{ strict?: boolean }>;
+		};
+
+		expect(payload.tools?.[0]?.strict).toBe(false);
+	});
+
 	it("sends strict=true for openai-responses tool schemas on GitHub Copilot", async () => {
 		const model = getBundledModel("github-copilot", "gpt-5-mini") as Model<"openai-responses">;
 

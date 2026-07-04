@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Aligned the `openai-responses` strict-mode gate with `openai-completions` so an explicit `tool.strict === false` survives to the wire under the same `compat.supportsStrictMode !== false` semantic on both provider paths — previously the Responses builder's truthier check let a caller-authored Model whose compat didn't materialize `supportsStrictMode` drop `strict: false`, diverging from the sibling completions payload for the same backend ([#4527](https://github.com/can1357/oh-my-pi/issues/4527)).
+
 ## [16.3.6] - 2026-07-04
 
 ### Added
