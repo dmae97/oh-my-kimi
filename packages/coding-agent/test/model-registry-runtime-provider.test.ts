@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -38,6 +38,7 @@ describe("ModelRegistry runtime provider registration", () => {
 	});
 
 	afterEach(() => {
+		vi.useRealTimers();
 		clearCustomApis();
 		for (const sourceId of sourceIds) {
 			unregisterOAuthProviders(sourceId);
@@ -87,6 +88,14 @@ describe("ModelRegistry runtime provider registration", () => {
 		expectProviderHeader(registry, providerName, headerName, expectedValue);
 		await registry.refreshProvider(providerName, "offline");
 		expectProviderHeader(registry, providerName, headerName, expectedValue);
+	}
+
+	async function drainMicrotasksUntil(predicate: () => boolean, errorMessage: string): Promise<void> {
+		for (let i = 0; i < 1000; i++) {
+			if (predicate()) return;
+			await Promise.resolve();
+		}
+		throw new Error(errorMessage);
 	}
 
 	async function expectModelTransportAcrossRefresh(
@@ -250,6 +259,46 @@ describe("ModelRegistry runtime provider registration", () => {
 			endpoint: modelEndpoint,
 			model: "model-compact",
 		});
+	});
+
+	test("refreshRuntimeProviders times out extension fetchDynamicModels that never resolves", async () => {
+		vi.useFakeTimers();
+		const hangingFetch = Promise.withResolvers<readonly NonNullable<ProviderConfigInput["models"]>[number][]>();
+		registry.registerProvider(
+			"hanging-runtime-provider",
+			{
+				baseUrl: "https://runtime.example.com/v1",
+				apiKey: "RUNTIME_KEY",
+				api: "openai-completions",
+				fetchDynamicModels: () => hangingFetch.promise,
+			},
+			"ext://runtime",
+		);
+
+		const baselineTimers = vi.getTimerCount();
+		let outcome: "resolved" | "rejected" | undefined;
+		const refresh = registry.refreshRuntimeProviders("online").then(
+			() => {
+				outcome = "resolved";
+			},
+			error => {
+				outcome = "rejected";
+				throw error;
+			},
+		);
+
+		await drainMicrotasksUntil(
+			() => vi.getTimerCount() > baselineTimers,
+			"dynamic fetch timeout timer was not armed",
+		);
+		expect(outcome).toBeUndefined();
+		vi.advanceTimersByTime(14_999);
+		await Promise.resolve();
+		expect(outcome).toBeUndefined();
+		vi.advanceTimersByTime(1);
+		await refresh;
+		expect(outcome).toBe("resolved");
+		expect(registry.find("hanging-runtime-provider", "any-model")).toBeUndefined();
 	});
 
 	test("registerProvider preserves explicit thinking and backfills wire facts", () => {
