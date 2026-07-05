@@ -200,6 +200,9 @@
 ### Fixed
 
 - Surface unexpected JS eval worker exit via close listener to prevent silent hangs on worker death ([#4244](https://github.com/can1357/oh-my-pi/issues/4244))
+### Changed
+
+- Memoize copy-selector preview highlight so keyboard navigation does not re-highlight the whole preview every render ([#4238](https://github.com/can1357/oh-my-pi/issues/4238))
 
 
 ## [16.3.0] - 2026-07-02
