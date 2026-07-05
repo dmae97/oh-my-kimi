@@ -188,8 +188,9 @@ describe("Agent hub double-← gating", () => {
 		resetSettingsForTest();
 	});
 
-	function setup(agents: AgentRegistry) {
+	function setup(agents: AgentRegistry, sessionFile: string | null = null) {
 		let shown: AgentHubOverlayComponent | undefined;
+		const shownReady = Promise.withResolvers<AgentHubOverlayComponent>();
 		const editor = {};
 		const ctx = {
 			keybindings: { getKeys: () => [] },
@@ -201,17 +202,20 @@ describe("Agent hub double-← gating", () => {
 			editorContainer: {
 				clear: () => {},
 				addChild: (child: unknown) => {
-					if (child !== editor) shown = child as AgentHubOverlayComponent;
+					if (child !== editor) {
+						shown = child as AgentHubOverlayComponent;
+						shownReady.resolve(shown);
+					}
 				},
 			},
 			collabGuest: { agentRegistry: agents, hubRemote: undefined },
 			focusAgentSession: async () => {},
 			session: { getToolByName: () => undefined, extensionRunner: undefined },
-			sessionManager: { getCwd: () => TEST_CWD, getSessionFile: () => null },
+			sessionManager: { getCwd: () => TEST_CWD, getSessionFile: () => sessionFile },
 			hideThinkingBlock: false,
 		};
 		const controller = new SelectorController(ctx as unknown as InteractiveModeContext);
-		return { controller, shown: () => shown };
+		return { controller, shown: () => shown, shownReady: shownReady.promise };
 	}
 
 	function registerWorker(agents: AgentRegistry) {
@@ -252,6 +256,24 @@ describe("Agent hub double-← gating", () => {
 
 		expect(shown()).toBeDefined();
 		shown()!.dispose();
+	});
+
+	it("requireContent opens the hub after persisted subagents load", async () => {
+		using tempDir = TempDir.createSync("@omp-agent-hub-require-content-");
+		const sessionFile = path.join(tempDir.path(), "main.jsonl");
+		const workerSessionFile = path.join(tempDir.path(), "main", "Worker.jsonl");
+		await Bun.write(sessionFile, "");
+		await Bun.write(workerSessionFile, "");
+		const agents = new AgentRegistry();
+		const { controller, shown, shownReady } = setup(agents, sessionFile);
+
+		controller.showAgentHub(new SessionObserverRegistry(), { requireContent: true });
+
+		expect(shown()).toBeUndefined();
+		const shownHub = await shownReady;
+		expect(shownHub).toBeDefined();
+		expect(agents.get("Worker")?.sessionFile).toBe(workerSessionFile);
+		shownHub!.dispose();
 	});
 
 	it("the explicit hub key opens the empty roster even with no subagents", () => {

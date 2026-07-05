@@ -270,9 +270,9 @@ export class AgentHubOverlayComponent extends Container {
 	}
 
 	/**
-	 * Whether the table view has no agents to show (every registered agent except
-	 * Main, after the persisted-subagent scan in the constructor). The double-←
-	 * gesture reads this to stay inert when there is nothing to open.
+	 * Whether the current table view has no agents to show (every registered agent
+	 * except Main). Persisted historical rows may arrive later; callers that need
+	 * those included must wait for {@link persistedSubagentsReady} first.
 	 */
 	get isEmpty(): boolean {
 		return this.#rows.length === 0;
