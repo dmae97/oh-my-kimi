@@ -806,11 +806,13 @@ async function buildSessionOptions(
 
 	// Auto-discover SYSTEM.md if no CLI system prompt provided
 	const systemPromptSource = parsed.systemPrompt ?? discoverSystemPromptFile();
-	const resolvedSystemPrompt = await resolvePromptInput(systemPromptSource, "system prompt");
 	const appendPromptSource = parsed.appendSystemPrompt ?? discoverAppendSystemPromptFile();
-	const resolvedAppendPrompt = await resolvePromptInput(appendPromptSource, "append system prompt");
 	const titleSystemPromptSource = discoverTitleSystemPromptFile();
-	const titleSystemPrompt = await resolvePromptInput(titleSystemPromptSource, "title system prompt");
+	const [resolvedSystemPrompt, resolvedAppendPrompt, titleSystemPrompt] = await Promise.all([
+		resolvePromptInput(systemPromptSource, "system prompt"),
+		resolvePromptInput(appendPromptSource, "append system prompt"),
+		resolvePromptInput(titleSystemPromptSource, "title system prompt"),
+	]);
 
 	if (sessionManager) {
 		options.sessionManager = sessionManager;

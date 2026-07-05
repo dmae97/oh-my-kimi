@@ -193,6 +193,9 @@
 ### Fixed
 
 - Capped docs.rs gunzip decompressed size at 256 MB to prevent zip-bomb OOM crashes ([#4249](https://github.com/can1357/oh-my-pi/issues/4249))
+### Changed
+
+- Parallelize SYSTEM.md, APPEND_SYSTEM.md, and TITLE_SYSTEM.md resolution at startup ([#4247](https://github.com/can1357/oh-my-pi/issues/4247))
 
 
 ## [16.3.0] - 2026-07-02
