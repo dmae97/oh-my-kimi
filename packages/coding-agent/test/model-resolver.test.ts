@@ -730,6 +730,21 @@ describe("resolveAgentModelPatterns", () => {
 		expect(result).toEqual(["anthropic/claude-sonnet-4-5:high"]);
 	});
 
+	test("accepts YAML list values for configured task role patterns", () => {
+		const settings = Settings.isolated({
+			modelRoles: {
+				task: ["anthropic/claude-sonnet-4-6", "zai/glm-5.2:high"],
+			},
+		});
+
+		const result = resolveAgentModelPatterns({
+			agentModel: "pi/task",
+			settings,
+		});
+
+		expect(result).toEqual(["anthropic/claude-sonnet-4-6", "zai/glm-5.2:high"]);
+	});
+
 	test("uses default for unconfigured smol, slow, and designer agent roles before priority defaults", () => {
 		const settings = Settings.isolated({
 			modelRoles: { default: "local/llama" },
