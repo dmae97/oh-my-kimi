@@ -251,6 +251,155 @@ function splitTerminalLines(text: string): string[] {
 	return lines;
 }
 
+// ---------------------------------------------------------------------------
+// Tree-guide hanging wrap
+//
+// Models routinely emit box-drawing trees ("├── item") inside plain
+// paragraphs — directory layouts, decision trees. The lexer sees those lines
+// as ordinary prose, so the generic wrap pass restarts wrapped continuations
+// at column 0 and visually shears the tree apart (doubly fast for CJK text,
+// where every glyph is two cells wide). Mirror the guide semantics of
+// `tree(1)` / rich.tree instead: wrap the node text within the cells that
+// remain after the guide prefix, and indent every continuation row under the
+// node text — branch glyphs swap to their pass-through form (`├` → `│`,
+// `└` → blank) so the rails of still-open ancestors stay visually joined.
+// ---------------------------------------------------------------------------
+
+/** Continuation glyph for each guide character a tree prefix may contain. */
+const TREE_GUIDE_CONTINUATION: Record<string, string> = {
+	"│": "│",
+	"┃": "┃",
+	"║": "║",
+	"├": "│",
+	"┣": "┃",
+	"╠": "║",
+	"└": " ",
+	"┗": " ",
+	"╚": " ",
+	"╰": " ",
+	"─": " ",
+	"━": " ",
+	"═": " ",
+	" ": " ",
+};
+
+/** Cheap pre-gate: any guide glyph at all. The structural test is TREE_BRANCH_CONNECTOR_RE. */
+const TREE_GUIDE_ANCHOR_RE = /[│┃║├┣╠└┗╚╰]/;
+
+/**
+ * A prefix qualifies as tree-shaped only when a branch/corner glyph is
+ * immediately followed by a horizontal connector (`├──`, `└─`, `╰──`, …).
+ * A lone rail or branch glyph used as prose ("│ is the Unicode vertical box
+ * drawing glyph…") never qualifies, so such paragraphs keep the plain wrap.
+ */
+const TREE_BRANCH_CONNECTOR_RE = /[├┣╠└┗╚╰][─━═]/;
+
+/** Below this many content cells a hanging wrap degenerates; keep the plain wrap. */
+const MIN_TREE_CONTENT_WIDTH = 8;
+
+const SGR_SEQUENCE_STICKY = /\x1b\[[0-9;:]*m/y;
+const SGR_SEQUENCE_GLOBAL = /\x1b\[[0-9;:]*m/g;
+
+/**
+ * Everything before the last full SGR reset is dead state — drop it so the
+ * re-played `carry` stays bounded by the paragraph's live style run instead
+ * of its whole code history.
+ */
+function compactSgrCarry(carry: string): string {
+	const shortReset = carry.lastIndexOf("\x1b[m");
+	const longReset = carry.lastIndexOf("\x1b[0m");
+	const cut = Math.max(shortReset === -1 ? -1 : shortReset + 3, longReset === -1 ? -1 : longReset + 4);
+	return cut === -1 ? carry : carry.slice(cut);
+}
+
+interface TreeGuidePrefix {
+	/** Index of the first char past the guide run (start of the node text). */
+	end: number;
+	/** SGR sequences interleaved with the guides, in order (zero visible width). */
+	codes: string;
+	/** Guide characters with SGR stripped, exactly as they appear on screen. */
+	guides: string;
+}
+
+/**
+ * Match the leading box-drawing guide run of a rendered line (e.g. `│   ├── `),
+ * tolerating interleaved SGR styling. Returns undefined unless the run
+ * contains a branch glyph joined to a horizontal connector and node text
+ * follows, so dash art, indented prose, and lone glyphs used as prose are
+ * never treated as a tree.
+ */
+function matchTreeGuidePrefix(line: string): TreeGuidePrefix | undefined {
+	let codes = "";
+	let guides = "";
+	let i = 0;
+	while (i < line.length) {
+		if (line.charCodeAt(i) === 0x1b) {
+			SGR_SEQUENCE_STICKY.lastIndex = i;
+			const match = SGR_SEQUENCE_STICKY.exec(line);
+			if (!match) break;
+			codes += match[0];
+			i = SGR_SEQUENCE_STICKY.lastIndex;
+			continue;
+		}
+		const char = line[i]!;
+		if (!(char in TREE_GUIDE_CONTINUATION)) break;
+		guides += char;
+		i++;
+	}
+	if (i >= line.length || !TREE_BRANCH_CONNECTOR_RE.test(guides)) return undefined;
+	return { end: i, codes, guides };
+}
+
+/**
+ * Hanging wrap for box-drawing tree lines inside prose block text.
+ *
+ * Returns undefined when no line needs the treatment, so paragraphs without
+ * overflowing tree lines keep their exact current render. When a paragraph
+ * does hang, its lines are returned pre-split and style-self-contained: the
+ * SGR state open at each line start is re-played onto that line (`carry`),
+ * because the caller's wrap pass — which normally carries SGR state across
+ * the newlines of a single entry — no longer sees them as one entry.
+ */
+function hangWrapTreeGuideLines(text: string, width: number): string[] | undefined {
+	if (width < MIN_TREE_CONTENT_WIDTH || !TREE_GUIDE_ANCHOR_RE.test(text)) return undefined;
+
+	const sourceLines = text.split("\n");
+	const hangs = (line: string): TreeGuidePrefix | undefined => {
+		if (visibleWidth(line) <= width) return undefined;
+		const prefix = matchTreeGuidePrefix(line);
+		if (!prefix) return undefined;
+		if (width - visibleWidth(prefix.guides) < MIN_TREE_CONTENT_WIDTH) return undefined;
+		return prefix;
+	};
+	if (!sourceLines.some(line => hangs(line) !== undefined)) return undefined;
+
+	const out: string[] = [];
+	let carry = "";
+	for (const line of sourceLines) {
+		const prefix = hangs(line);
+		if (!prefix) {
+			out.push(carry ? carry + line : line);
+			carry = compactSgrCarry(carry + (line.match(SGR_SEQUENCE_GLOBAL)?.join("") ?? ""));
+			continue;
+		}
+		// Re-play the SGR state ahead of the node text so the wrapper carries
+		// it onto every continuation row; the codes are zero-width, so measured
+		// row widths are unaffected.
+		const activeCodes = carry + prefix.codes;
+		const rows = wrapTextWithAnsi(activeCodes + line.slice(prefix.end), width - visibleWidth(prefix.guides));
+		let hang = "";
+		for (const guide of prefix.guides) hang += TREE_GUIDE_CONTINUATION[guide] ?? " ";
+		const hangShortfall = visibleWidth(prefix.guides) - visibleWidth(hang);
+		if (hangShortfall > 0) hang += padding(hangShortfall);
+		out.push(carry + line.slice(0, prefix.end) + rows[0]!.slice(activeCodes.length));
+		for (let i = 1; i < rows.length; i++) {
+			out.push(activeCodes + hang + rows[i]!);
+		}
+		carry = compactSgrCarry(carry + (line.match(SGR_SEQUENCE_GLOBAL)?.join("") ?? ""));
+	}
+	return out;
+}
+
 class StrictStrikethroughTokenizer extends Tokenizer {
 	override del(src: string): Tokens.Del | undefined {
 		const match = STRICT_STRIKETHROUGH_REGEX.exec(src);
@@ -1383,7 +1532,7 @@ export class Markdown implements Component {
 					break;
 				}
 				const paragraphText = this.#renderInlineTokens(token.tokens || [], styleContext);
-				lines.push(paragraphText);
+				lines.push(...(hangWrapTreeGuideLines(paragraphText, width) ?? [paragraphText]));
 				// Don't add spacing if next token is space or list
 				if (nextTokenType && nextTokenType !== "list" && nextTokenType !== "space") {
 					lines.push("");

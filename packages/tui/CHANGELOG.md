@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed submitted slash-command arguments treating `@` file-reference tokens as prompt-composer autocomplete triggers when the command does not define argument completions. ([#4600](https://github.com/can1357/oh-my-pi/issues/4600))
+- Fixed box-drawing tree lines (`├── item` — directory layouts, decision trees) in prose shearing apart when they wrap: continuation rows now hang under the node text with ancestor rails carried through (`├` → `│`, `└` → blank) instead of restarting at column 0. Applies to prose paragraphs (including inside blockquotes) only when a line with a branch-connector prefix (`├──`, `└─`, …) actually overflows; fitting lines, non-tree prose, and code blocks render byte-for-byte as before.
 
 ## [16.3.6] - 2026-07-04
 
