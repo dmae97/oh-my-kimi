@@ -203,6 +203,9 @@
 ### Changed
 
 - Memoize copy-selector preview highlight so keyboard navigation does not re-highlight the whole preview every render ([#4238](https://github.com/can1357/oh-my-pi/issues/4238))
+### Changed
+
+- Load persisted Agent Hub subagents asynchronously to avoid blocking the TUI on synchronous directory walks ([#4239](https://github.com/can1357/oh-my-pi/issues/4239))
 
 
 ## [16.3.0] - 2026-07-02
