@@ -9,10 +9,12 @@
 ### Changed
 
 - Updated the `recall` and `memory_edit` tool prompts to document the truncation marker (`…`, `truncated: true`, `full_length`) and to require `read memory://<id>` before any `memory_edit update` on a truncated preview.
+- Parallelize SYSTEM.md, APPEND_SYSTEM.md, and TITLE_SYSTEM.md resolution at startup ([#4247](https://github.com/can1357/oh-my-pi/issues/4247))
 
 ### Fixed
 
 - Fixed macOS Backspace on empty search not deleting sessions in the `/resume` picker; Fn+Backspace terminals that deliver `\x7f` instead of `\e[3~` now reach the delete confirmation dialog. ([#4580](https://github.com/can1357/oh-my-pi/pull/4580) by [@JagravNaik](https://github.com/JagravNaik))
+- Fixed queued follow-up message rows leaking into native terminal scrollback during live repaints; the pending-messages container is now an anchored live region. ([#4362](https://github.com/can1357/oh-my-pi/issues/4362))
 - Fixed `/rename` title arguments treating `#` prompt-action tokens as autocomplete triggers instead of literal session title text. ([#4600](https://github.com/can1357/oh-my-pi/issues/4600))
 - Fixed empty session `.jsonl` files accumulating in `~/.omp/agent/sessions/<cwd>/` after a draft-then-clear exit cycle. `SessionManager.saveDraft(text)` materializes the session file so the draft sidecar has a parent; a subsequent `saveDraft("")` unlinked the sidecar but left the metadata-only JSONL behind (title slot + session header + startup selector entries, ~500–750 B), and `#shouldHaveSessionFile()` could no longer prune it once `#fileIsCurrent`/`#forceFileCreation` were latched. `SessionManager.close()` now drops only draft-owned metadata-only sessions with no saved draft sidecar to reattach to, while keeping real conversations, meaningful non-message entries such as handoff custom messages, explicit `ensureOnDisk()` sessions, drafts still pending for `--resume`, and never-materialized sessions untouched ([#4571](https://github.com/can1357/oh-my-pi/issues/4571)).
 - Fixed the advisor being disabled for the entire session when the advisor role resolves to a reasoning model that exposes no controllable effort surface (Devin `devin/glm-5-2*`: `reasoning: true`, `thinking: undefined` — Cascade routes by sibling model id rather than a wire param). `#resolveAdvisorRuntimeDescriptors` in `packages/coding-agent/src/session/agent-session.ts` used to hardcode `ThinkingLevel.Medium`, which tripped `requireSupportedEffort` on the first advisor prompt with `Thinking effort medium is not supported by devin/glm-5-2. Supported efforts:` (empty list). The advisor descriptor now clamps the requested effort against the resolved model via `resolveThinkingLevelForModel` and forwards no explicit effort when the model has no controllable efforts — matching the `auto`-path fix (`clampAutoThinkingEffort`) and the Autonomous Memory stage fix (`clampThinkingLevelForModel`). Explicit `:off` still disables reasoning, and models that support `medium` (e.g. Anthropic) keep receiving it ([#4579](https://github.com/can1357/oh-my-pi/issues/4579)).
@@ -43,6 +45,16 @@
 - Fixed LSP diagnostics staleness after harness-authored file writes by sending watched-file change notifications to running language servers before edit-time diagnostics are read ([#4459](https://github.com/can1357/oh-my-pi/issues/4459)).
 - Documented the bash tool timeout clamp in the model-facing schema and prompt so callers know `async` jobs remain capped at 3600 seconds ([#4408](https://github.com/can1357/oh-my-pi/issues/4408)).
 - Fixed `/fast on` for custom OpenAI-compatible providers serving OpenAI models, and report unsupported models as unavailable instead of claiming fast mode was enabled ([#4386](https://github.com/can1357/oh-my-pi/issues/4386)).
+- Fixed extension `pasteToEditor` / `setEditorText` prompt mutations leaving the editor visually stale until the next keypress by scheduling an editor repaint after each extension-driven mutation. ([#4341](https://github.com/can1357/oh-my-pi/issues/4341))
+- Fixed session title generation, commit-message generation, speech-enhancer rewrites, and the online auto-thinking and unexpected-stop classifiers silently truncating on non-reasoning-flagged models that still emit thinking output (e.g. Qwen3 served via llama.cpp) by always sizing the completion budget for backends that ignore `disableReasoning` ([#4355](https://github.com/can1357/oh-my-pi/issues/4355))
+- Further reduced TUI CPU during streaming and live tool calls by scoping timer-driven reveal/spinner renders to the changed subtree (streaming reveal, tool-args reveal, tool-execution spinner, todo strike animation) instead of forcing a full-tree walk at 30fps, interning the working-message shimmer palette so the compiled-ANSI cache hits between animation frames, and adding a band fast-path to `shimmerSegments` that coalesces off-band code points into a single low-tier run ([#4377](https://github.com/can1357/oh-my-pi/issues/4377))
+- Fixed approve-and-compact discarding operator turns queued during compaction and surfacing `Failed to finalize approved plan: Agent is already processing`. `flushCompactionQueue` fires any queued user turn (fire-and-forget) before `#approvePlan` returns, so the previous abort-then-`prompt()` shape aborted the queued turn AND still raced into `AgentBusyError`. `#approvePlan` now queues the plan-approved directive as a synthetic follow-up (`session.followUp(text, undefined, { synthetic: true })`) whenever the session is streaming, and catches a racing `AgentBusyError` from `prompt()` with the same fallback. `AgentSession.followUp()` gained a `{ synthetic, expandPromptTemplates, attribution }` option so the finalize path lands the hidden execution directive as an agent-attributed developer message. ([#4358](https://github.com/can1357/oh-my-pi/issues/4358))
+- Fixed plan-mode "Approve and compact context" leaking the internal plan-distillation prompt through the public `customInstructions` field on the `session_before_compact` extension hook. The guidance now rides through a private `CompactOptions.internalGuidance` channel that native summarization sees but extensions do not, so hooks treating `customInstructions` as user focus no longer produce query-biased compactions of plan-mode boilerplate ([#4359](https://github.com/can1357/oh-my-pi/issues/4359)).
+- Fixed malformed `pi.sendMessage` custom-message payloads persisting bare session entries that crashed every later resume before provider calls. ([#4345](https://github.com/can1357/oh-my-pi/issues/4345))
+- Hid internal `display: false` session-update reminders from compact history/advisor transcripts while preserving hidden image descriptions that provide the text transcript for attached images.
+- Fixed idle recap crashing with `TypeError: undefined is not an object (evaluating 'H.content.filter')` after a run poisoned the transcript with eight `session_stop` block-decision continuations. `runEphemeralTurn` now normalizes the provider "done" event's `message.content` to `[]` when a wrapper/proxy stream drops it, and `#buildEphemeralSnapshot` skips its streaming-partial preservation branch when the in-flight assistant carries no content array. Prevents a single side-channel malformation from turning a subsequent idle recap into a session-mute crash. ([#4323](https://github.com/can1357/oh-my-pi/issues/4323))
+- Apply WebSocket send backpressure with ordered drain retry to prevent unbounded `bufferedAmount` growth ([#4248](https://github.com/can1357/oh-my-pi/issues/4248))
+- Capped docs.rs gunzip decompressed size at 256 MB to prevent zip-bomb OOM crashes ([#4249](https://github.com/can1357/oh-my-pi/issues/4249))
 
 ## [16.3.6] - 2026-07-04
 
@@ -79,27 +91,12 @@
 - Fixed ACP `terminal/create` sending the bash tool's full shell line in `command` with no `args`, which broke spec-conformant clients that spawn `command`+`args` directly (no implicit shell) — any command containing a space, pipe, `&&`, redirect, or `$(...)` failed with `ENOENT` and the agent silently degraded to read-only tools. The bash tool now wraps the shell line before calling `clientBridge.createTerminal`, reusing the same shell binary + args the local `bash-executor` resolves via `settings.getShellConfig()` (Git Bash / `bash.exe` on Windows, `$SHELL` with `sh` fallback on POSIX) so bash semantics — `$VAR`, `$(...)`, `source`, POSIX quoting, `-l` — are preserved on both platforms. ([#4333](https://github.com/can1357/oh-my-pi/issues/4333))
 - Fixed inference worker subprocesses (TTS, STT, tiny-model, mnemopi embeddings) discarding stderr, which left every unexpected exit — most visibly the local Kokoro TTS worker's recurring `exit code 7` crash loop — undiagnosable from the parent's logs. `createWorkerSubprocess` now pipes stderr without starting a live read while the worker is idle, then drains the stream after `onExit`, emits captured lines to `logger.debug` under an `<exitLabel> stderr` message, and keeps the last 16 KiB in a bounded ring that gets appended to the `Error` surfaced through `onError`. The exit surface is synchronized with the post-exit drain via `SpawnedSubprocess.stderrDrained`, so the full native trace shows up on the `tts: worker error` line without reintroducing event-loop liveness from unref'd workers. ([#4324](https://github.com/can1357/oh-my-pi/issues/4324))
 - Fixed Windows session tail loss after atomic compaction rewrites by fencing append writers during full-file replacement and gating the atomic publish on a `commitGuard` that the storage backend checks synchronously before rename, so a concurrent `flushSync` (Ctrl+C / session-exit) is not overwritten by the stale body serialized before it ran. Covers post-compaction prompts, tool results, title changes, and exit diagnostics on the current JSONL path ([#4338](https://github.com/can1357/oh-my-pi/issues/4338)).
-### Fixed
-
-- Fixed extension `pasteToEditor` / `setEditorText` prompt mutations leaving the editor visually stale until the next keypress by scheduling an editor repaint after each extension-driven mutation. ([#4341](https://github.com/can1357/oh-my-pi/issues/4341))
 
 ## [16.3.4] - 2026-07-03
 
 ### Fixed
 
 - Fixed `omp usage` hiding sibling-only limits such as Claude 7 Day (Fable) on accounts whose current report omitted that scoped bucket; the account now renders an explicit `not reported` row instead of looking like the usage refresh skipped the column.
-### Fixed
-
-- Fixed session title generation, commit-message generation, speech-enhancer rewrites, and the online auto-thinking and unexpected-stop classifiers silently truncating on non-reasoning-flagged models that still emit thinking output (e.g. Qwen3 served via llama.cpp) by always sizing the completion budget for backends that ignore `disableReasoning` ([#4355](https://github.com/can1357/oh-my-pi/issues/4355))
-### Fixed
-
-- Further reduced TUI CPU during streaming and live tool calls by scoping timer-driven reveal/spinner renders to the changed subtree (streaming reveal, tool-args reveal, tool-execution spinner, todo strike animation) instead of forcing a full-tree walk at 30fps, interning the working-message shimmer palette so the compiled-ANSI cache hits between animation frames, and adding a band fast-path to `shimmerSegments` that coalesces off-band code points into a single low-tier run ([#4377](https://github.com/can1357/oh-my-pi/issues/4377))
-### Fixed
-
-- Fixed approve-and-compact discarding operator turns queued during compaction and surfacing `Failed to finalize approved plan: Agent is already processing`. `flushCompactionQueue` fires any queued user turn (fire-and-forget) before `#approvePlan` returns, so the previous abort-then-`prompt()` shape aborted the queued turn AND still raced into `AgentBusyError`. `#approvePlan` now queues the plan-approved directive as a synthetic follow-up (`session.followUp(text, undefined, { synthetic: true })`) whenever the session is streaming, and catches a racing `AgentBusyError` from `prompt()` with the same fallback. `AgentSession.followUp()` gained a `{ synthetic, expandPromptTemplates, attribution }` option so the finalize path lands the hidden execution directive as an agent-attributed developer message. ([#4358](https://github.com/can1357/oh-my-pi/issues/4358))
-### Fixed
-
-- Fixed plan-mode "Approve and compact context" leaking the internal plan-distillation prompt through the public `customInstructions` field on the `session_before_compact` extension hook. The guidance now rides through a private `CompactOptions.internalGuidance` channel that native summarization sees but extensions do not, so hooks treating `customInstructions` as user focus no longer produce query-biased compactions of plan-mode boilerplate ([#4359](https://github.com/can1357/oh-my-pi/issues/4359)).
 
 ## [16.3.3] - 2026-07-02
 
@@ -138,13 +135,6 @@
 - Fixed models.yml schema validation to surface warnings for invalid custom provider configurations instead of silently ignoring them
 - Fixed potential network hangs in omp update, Hindsight recall, and Smithery registry lookups by adding fetch timeouts
 - Reduced TUI CPU overhead during streaming and idle waits by dropping the redundant pre-render on every session event, iterating shimmer text in place instead of allocating a code-point array per animation frame, and coalescing the live-tool spinner render cadence to its glyph-advance rate ([#4353](https://github.com/can1357/oh-my-pi/issues/4353)).
-### Fixed
-
-- Fixed malformed `pi.sendMessage` custom-message payloads persisting bare session entries that crashed every later resume before provider calls. ([#4345](https://github.com/can1357/oh-my-pi/issues/4345))
-- Fixed extension `pasteToEditor` / `setEditorText` prompt mutations leaving the editor visually stale until the next keypress by scheduling an editor repaint after each extension-driven mutation. ([#4341](https://github.com/can1357/oh-my-pi/issues/4341))
-### Fixed
-
-- Hid internal `display: false` session-update reminders from compact history/advisor transcripts while preserving hidden image descriptions that provide the text transcript for attached images.
 
 ## [16.3.2] - 2026-07-02
 
@@ -175,7 +165,6 @@
 - Fixed the assistant-message streaming fast path dropping the transient flag, which disabled the transient render path (code-highlight skip and streaming prefix caches) on every same-shape streaming tick. In-flight renders now correctly skip per-tick syntax highlighting; highlighting applies once at message finalization.
 - Fixed hidden goal-mode todo context: phase names and task text are now sanitized before prompt injection (no raw newlines or control characters forging extra context lines), and the block is only rendered with tool-accurate guidance when the `todo` tool is active or discoverable instead of unconditionally instructing the agent to call an unavailable tool.
 - Fixed custom tool loading treating `process.exit()` from a tool module's import or factory as a host process exit instead of a recoverable load failure. Custom tools now load under the shared extension exit guard, so an exiting tool is skipped with a load error while remaining tools still load ([#1704](https://github.com/can1357/oh-my-pi/issues/1704)).
-- Fixed idle recap crashing with `TypeError: undefined is not an object (evaluating 'H.content.filter')` after a run poisoned the transcript with eight `session_stop` block-decision continuations. `runEphemeralTurn` now normalizes the provider "done" event's `message.content` to `[]` when a wrapper/proxy stream drops it, and `#buildEphemeralSnapshot` skips its streaming-partial preservation branch when the in-flight assistant carries no content array. Prevents a single side-channel malformation from turning a subsequent idle recap into a session-mute crash. ([#4323](https://github.com/can1357/oh-my-pi/issues/4323))
 
 ## [16.3.1] - 2026-07-02
 
@@ -199,16 +188,6 @@
 - Fixed interrupted speech audio by ensuring segments queue and drain in order
 - Fixed speech vocalization starting only after the entire reply was synthesized: ONNX inference blocks the TTS worker's event loop, so per-segment IPC audio chunks queued unflushed and arrived in one burst. Streaming sends now drain the IPC channel before the next segment's inference, cutting time-to-first-audio to ~1.5s regardless of reply length.
 - Fixed an unhandled `EPIPE: broken pipe, write` rejection at the end of speech playback: the streaming player's `stop()` raced an un-awaited `FileSink.end()` against the backend SIGKILL, and mid-session writes never awaited the flush. Writes now await the flush (so a dead backend is detected and the chunk replays on the next candidate or the per-file path) and `stop()` swallows the expected teardown rejection.
-### Fixed
-
-- Apply WebSocket send backpressure with ordered drain retry to prevent unbounded `bufferedAmount` growth ([#4248](https://github.com/can1357/oh-my-pi/issues/4248))
-### Fixed
-
-- Capped docs.rs gunzip decompressed size at 256 MB to prevent zip-bomb OOM crashes ([#4249](https://github.com/can1357/oh-my-pi/issues/4249))
-### Changed
-
-- Parallelize SYSTEM.md, APPEND_SYSTEM.md, and TITLE_SYSTEM.md resolution at startup ([#4247](https://github.com/can1357/oh-my-pi/issues/4247))
-
 
 ## [16.3.0] - 2026-07-02
 

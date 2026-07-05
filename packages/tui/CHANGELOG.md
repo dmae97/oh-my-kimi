@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed submitted slash-command arguments treating `@` file-reference tokens as prompt-composer autocomplete triggers when the command does not define argument completions. ([#4600](https://github.com/can1357/oh-my-pi/issues/4600))
+- Evict purged image keys from `ImageBudget` to prevent unbounded map growth ([#4250](https://github.com/can1357/oh-my-pi/issues/4250))
 
 ## [16.3.6] - 2026-07-04
 
@@ -36,8 +37,6 @@
 - Fixed a native scrollback rendering bug where finalized transcript rows below an active block would duplicate when the active block expanded.
 - Fixed autocomplete popups remaining active with stale suggestions after destructive text editing (such as Ctrl+W, Ctrl+U, Ctrl+K, Alt+Backspace, Alt+D, paste, or yank), preventing input corruption when pressing Tab or Enter.
 - Skipped Markdown re-lex + re-wrap when `setText` receives the identical text, mirroring the equality guard on `Text.setText` — cuts one of the top streaming CPU hotspots when providers re-emit unchanged content ([#4353](https://github.com/can1357/oh-my-pi/issues/4353)).
-- Evict purged image keys from `ImageBudget` to prevent unbounded map growth ([#4250](https://github.com/can1357/oh-my-pi/issues/4250))
-
 
 ## [16.3.0] - 2026-07-02
 
