@@ -289,6 +289,24 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			expect(output).toContain("escaped literal needle");
 		});
 
+		it("searches a literal file whose name contains a semicolon and selector-shaped tail (`a;b:1-2`)", async () => {
+			// Semicolon is the delimited-path separator; without a raw-literal
+			// probe in `splitDelimitedPathEntry`, expandDelimitedPathEntries would
+			// split `a;b:1-2` into `["a", "b:1-2"]` before grep saw the literal file.
+			const literal = path.join(tmpDir, "a;b:1-2");
+			await Bun.write(literal, "delimited literal needle\n");
+
+			const tool = new GrepTool(createSession());
+			const result = await tool.execute("grep-literal-semicolon-selector", {
+				pattern: "needle",
+				path: literal,
+			});
+			const output = getText(result);
+
+			expect(output).toContain("delimited literal needle");
+			expect(output).not.toMatch(/not found/i);
+		});
+
 		it("searches a literal file that looks like an archive selector (`data.zip:1-2`)", async () => {
 			// The base archive exists too; grep must not rematerialize the raw
 			// literal path as archive `data.zip` plus phantom member `1-2`.

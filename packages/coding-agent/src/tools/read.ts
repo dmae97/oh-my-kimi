@@ -2118,8 +2118,8 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		_toolContext?: AgentToolContext,
 	): Promise<AgentToolResult<ReadToolDetails>> {
 		let { path: readPath } = params;
-		const explicitSelector = params.selector?.trim();
-		const explicitParsedSelector = explicitSelector === undefined ? undefined : parseSel(explicitSelector);
+		let explicitSelector = params.selector?.trim();
+		let explicitParsedSelector = explicitSelector === undefined ? undefined : parseSel(explicitSelector);
 		if (
 			params.selector !== undefined &&
 			(explicitSelector === undefined || explicitSelector.length === 0 || explicitParsedSelector?.kind === "none")
@@ -2221,10 +2221,16 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					skills: this.session.skills,
 				});
 				if (localFile) {
-					readPath =
-						explicitSelector !== undefined || internalTarget.sel === undefined
-							? localFile.path
-							: `${localFile.path}:${internalTarget.sel}`;
+					readPath = localFile.path;
+					// Promote the URL-embedded selector into the explicit-selector state so
+					// downstream literal-preferring routing does NOT re-split the synthesized
+					// `${localFile.path}:${sel}` string — a sibling literal file at that name
+					// would otherwise shadow the intended local:// URL selector semantics
+					// (issue #4618 reviewer feedback on c493d12).
+					if (explicitSelector === undefined && internalTarget.sel !== undefined) {
+						explicitSelector = internalTarget.sel;
+						explicitParsedSelector = parsed;
+					}
 				} else {
 					return this.#handleInternalUrl(internalTarget.path, parsed, signal);
 				}

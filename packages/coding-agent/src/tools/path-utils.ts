@@ -709,7 +709,12 @@ export async function splitDelimitedPathEntry(
 	const normalizedEntry = normalizePathLikeInput(entry);
 	if (!hasTopLevelPathDelimiter(normalizedEntry)) return null;
 	if (isInternalUrlPath(normalizedEntry)) return null;
-
+	// A real POSIX file may contain the delimiter and a selector-shaped tail
+	// (`a;b:1-2`, `a b:1-2`). Preserve the raw entry whenever the full literal
+	// resolves — or is only ambiguous — so downstream literal-preferring
+	// splitters see it before delimiter expansion peels or splits (issue #4618
+	// reviewer feedback: delimited expansion ran before the literal check).
+	if ((await probeLiteralPathExists(normalizedEntry, cwd)) !== "missing") return null;
 	const splitter = options.splitter ?? parseSearchPath;
 	const peeledEntry = splitPathAndSel(normalizedEntry).path;
 	if (!hasGlobPathChars(peeledEntry) && (await delimitedPathPartResolves(normalizedEntry, cwd, splitter))) {
