@@ -1722,21 +1722,37 @@ impl SpawnRegistry {
 	}
 }
 
-/// Drop registry entries whose pinned process *and* process group are both
-/// gone: with neither still-live, they contribute nothing to the next
-/// termination wave and only pin an owned OS handle for no reason. A pgid-only
-/// entry (observer failed to pin the process but the group is still alive) is
-/// retained so `build_targets` can still signal the group.
+/// Drop registry entries whose pinned process, process group, and — on
+/// Windows — descendant tree are all gone. With nothing still-live the entry
+/// contributes nothing to the next termination wave and only pins an owned OS
+/// handle for no reason.
+///
+/// The platform split matters because Windows has no process groups. On Unix
+/// a child reparented onto init keeps its pgid, so a live pgid still catches
+/// grandchildren whose immediate parent exited. On Windows there is no
+/// reparenting and no pgid, so we probe the descendant tree directly through
+/// the still-open pinned handle — dropping that handle would release the pid
+/// slot, letting a recycled pid make future Toolhelp walks unsafe (issue
+/// #4605) and orphaning any leftover child from the next cancellation wave.
 fn prune_exited(spawned: &mut Vec<SpawnedProcess>) {
 	spawned.retain(|entry| {
-		let process_live = entry
-			.process
-			.as_ref()
-			.is_some_and(|process| process.status() == ProcessStatus::Running);
-		let group_live = entry
+		if let Some(process) = &entry.process {
+			if process.status() == ProcessStatus::Running {
+				return true;
+			}
+			// Windows-only: root exited but the pinned handle still keeps its
+			// pid reserved, so `live_descendants` walks the *original* subtree
+			// via Toolhelp. If any child is still running we must keep the
+			// entry — closing the handle would both release the pid (racing
+			// pid reuse) and strand the surviving child.
+			#[cfg(target_os = "windows")]
+			if !process.live_descendants().is_empty() {
+				return true;
+			}
+		}
+		entry
 			.pgid
-			.is_some_and(|pgid| pgid > 0 && process_group_alive(pgid));
-		process_live || group_live
+			.is_some_and(|pgid| pgid > 0 && process_group_alive(pgid))
 	});
 }
 
