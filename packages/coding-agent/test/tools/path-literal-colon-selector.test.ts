@@ -16,6 +16,8 @@ function getText(result: { content: Array<{ type: string; text?: string }> }): s
 		.join("\n");
 }
 
+const EMPTY_ZIP_EOCD = new Uint8Array([0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+
 // Regression: filenames whose tail matches the read-tool selector grammar
 // (e.g. `test:1-2`, `log:raw`) used to be shredded by `splitPathAndSel` before
 // either tool checked the filesystem — see issue #4618. Both `read` and `grep`
@@ -134,10 +136,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			const baseArchive = path.join(tmpDir, "data.zip");
 			// Empty zip bytes — the file just needs to stat as a real archive so
 			// the archive resolver would happily accept it.
-			await Bun.write(
-				baseArchive,
-				new Uint8Array([0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
-			);
+			await Bun.write(baseArchive, EMPTY_ZIP_EOCD);
 			const literal = path.join(tmpDir, "data.zip:1-2");
 			await Bun.write(literal, "literal archive-shaped file\n");
 
@@ -183,6 +182,24 @@ describe("literal colon filename resolution (issue #4618)", () => {
 
 			expect(output).toContain("needle");
 			expect(output).not.toMatch(/not found/i);
+		});
+
+		it("searches a literal file that looks like an archive selector (`data.zip:1-2`)", async () => {
+			// The base archive exists too; grep must not rematerialize the raw
+			// literal path as archive `data.zip` plus phantom member `1-2`.
+			const baseArchive = path.join(tmpDir, "data.zip");
+			await Bun.write(baseArchive, EMPTY_ZIP_EOCD);
+			const literal = path.join(tmpDir, "data.zip:1-2");
+			await Bun.write(literal, "literal archive needle\n");
+
+			const tool = new GrepTool(createSession());
+			const result = await tool.execute("grep-literal-zip-selector", {
+				pattern: "needle",
+				path: literal,
+			});
+			const output = getText(result);
+
+			expect(output).toContain("literal archive needle");
 		});
 
 		it("preserves `:N-M` line-range filtering when the literal file does not exist", async () => {

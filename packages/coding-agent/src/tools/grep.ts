@@ -53,6 +53,7 @@ import {
 	resolveToolSearchScope,
 	selectorLineRanges,
 	splitInternalUrlSel,
+	splitPathAndSel,
 	splitPathAndSelPreferringLiteral,
 	toPathList,
 } from "./path-utils";
@@ -119,6 +120,7 @@ const SEARCH_GREP_TIMEOUT_MS = 30_000;
 interface GrepPathSpec {
 	original: string;
 	clean: string;
+	literalFilesystemMatch?: boolean;
 	ranges?: [LineRange, ...LineRange[]];
 }
 
@@ -170,7 +172,9 @@ async function parsePathSpecs(rawEntries: readonly string[], cwd: string): Promi
 		}
 		// Prefer a literal filesystem match when one exists — a real file named
 		// `test:1-2` outranks the `:1-2` selector interpretation (issue #4618).
+		const strictSplit = splitPathAndSel(entry);
 		const split = await splitPathAndSelPreferringLiteral(entry, cwd);
+		const literalFilesystemMatch = strictSplit.sel !== undefined && split.sel === undefined;
 		let clean = entry;
 		let ranges: [LineRange, ...LineRange[]] | undefined;
 		if (split.sel) {
@@ -186,7 +190,7 @@ async function parsePathSpecs(rawEntries: readonly string[], cwd: string): Promi
 			clean = split.path;
 			ranges = parsed;
 		}
-		specs.push({ original: entry, clean, ranges });
+		specs.push({ original: entry, clean, literalFilesystemMatch, ranges });
 	}
 	return specs;
 }
@@ -222,7 +226,7 @@ function matchAbsolutePath(matchPath: string, searchPath: string): string {
  * cleanup hook the caller MUST invoke in a `finally`.
  */
 async function resolveArchiveSearchPaths(
-	paths: string[],
+	pathSpecs: readonly GrepPathSpec[],
 	cwd: string,
 ): Promise<{
 	resolvedPaths: string[];
@@ -231,17 +235,18 @@ async function resolveArchiveSearchPaths(
 	unreadable: string[];
 	cleanup: () => Promise<void>;
 }> {
-	const resolvedPaths = paths.slice();
+	const resolvedPaths = pathSpecs.map(spec => spec.clean);
 	const displayMap = new Map<string, string>();
 	const displaySet = new Set<string>();
 	const unreadable: string[] = [];
 	let tempDir: string | undefined;
 	const archiveCache = new Map<string, ArchiveReader>();
 
-	for (let idx = 0; idx < paths.length; idx++) {
-		const entry = paths[idx];
+	for (let idx = 0; idx < pathSpecs.length; idx++) {
+		const spec = pathSpecs[idx];
+		if (!spec || spec.literalFilesystemMatch) continue;
+		const entry = spec.clean;
 		const candidates = parseArchivePathCandidates(entry);
-		// Longest archive prefix first; we want the one whose member portion is non-empty.
 		const member = candidates.find(c => c.subPath !== "" && c.archivePath !== entry);
 		if (!member) continue;
 
@@ -900,7 +905,6 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 			const effectivePaths = scopedPaths.length > 0 ? scopedPaths : ["."];
 			const rawEntries = await expandDelimitedPathEntries(effectivePaths, this.session.cwd);
 			const pathSpecs = await parsePathSpecs(rawEntries, this.session.cwd);
-			const paths = pathSpecs.map(spec => spec.clean);
 			const materializedExternalPaths = new Map<string, string>();
 			const materializeExternalUrlForSearch = async (rawPath: string) => {
 				const target = parseReadUrlTarget(rawPath);
@@ -919,7 +923,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 				displaySet: archiveDisplaySet,
 				unreadable: archiveUnreadable,
 				cleanup: cleanupArchiveScratch,
-			} = await resolveArchiveSearchPaths(paths, this.session.cwd);
+			} = await resolveArchiveSearchPaths(pathSpecs, this.session.cwd);
 			try {
 				const internalResolution = await resolveInternalSearchInputs({
 					pathSpecs,
