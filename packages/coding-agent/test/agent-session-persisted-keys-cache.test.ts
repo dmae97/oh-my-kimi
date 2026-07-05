@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -86,6 +86,32 @@ describe("AgentSession persistence-keys cache", () => {
 
 		const count2 = sessionManager.getBranch().filter(e => e.type === "message").length;
 		expect(count2).toBe(1);
+	});
+
+	it("caches missing-key checks across a growing branch", async () => {
+		const getBranch = spyOn(sessionManager, "getBranch");
+
+		try {
+			for (let i = 0; i < 25; i++) {
+				const msg: AgentMessage = {
+					role: "user",
+					content: [{ type: "text", text: `Cache perf ${i}` }],
+					timestamp: 2000 + i,
+				};
+				session.agent.emitExternalEvent({ type: "message_end", message: msg });
+				await sessionManager.flush();
+				for (let spin = 0; spin < 5; spin++) {
+					await Promise.resolve();
+				}
+			}
+
+			expect(getBranch).toHaveBeenCalledTimes(1);
+		} finally {
+			getBranch.mockRestore();
+		}
+
+		const entries = sessionManager.getBranch().filter(e => e.type === "message");
+		expect(entries.length).toBe(25);
 	});
 
 	it("reflects the NEW branch after a rewind (stale cache would wrongly skip)", async () => {
