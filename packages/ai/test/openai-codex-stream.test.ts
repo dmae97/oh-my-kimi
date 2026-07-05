@@ -277,6 +277,98 @@ describe("openai-codex streaming", () => {
 		]);
 	});
 
+	it("omits chatgpt account headers for opaque custom provider API keys", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const context = createCodexTestContext();
+		const model: Model<"openai-codex-responses"> = buildModel({
+			id: "gpt-5.4-mini",
+			name: "GPT-5.4 mini",
+			api: "openai-codex-responses",
+			provider: "codex-proxy",
+			baseUrl: "http://127.0.0.1:2455/backend-api/codex",
+			reasoning: true,
+			preferWebsockets: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 272000,
+			maxTokens: 128000,
+		});
+		let requestHeaders: Headers | undefined;
+		let requestUrl: string | undefined;
+		let requestCount = 0;
+		const fetchMock: FetchImpl = async (input, init) => {
+			requestCount += 1;
+			requestUrl = input instanceof Request ? input.url : input.toString();
+			requestHeaders = init?.headers instanceof Headers ? init.headers : new Headers(init?.headers);
+			return new Response(createCompletedCodexSse("pong"), {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		};
+
+		const result = await streamOpenAICodexResponses(model, context, {
+			apiKey: "opaque-proxy-key",
+			fetch: fetchMock,
+		}).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(requestCount).toBe(1);
+		expect(requestUrl).toBe("http://127.0.0.1:2455/backend-api/codex/responses");
+		expect(requestHeaders?.get("Authorization")).toBe("Bearer opaque-proxy-key");
+		expect(requestHeaders?.has("chatgpt-account-id")).toBe(false);
+		expect(requestHeaders?.get("OpenAI-Beta")).toBe("responses=experimental");
+		expect(requestHeaders?.get("originator")).toBe("pi");
+	});
+
+	it("omits chatgpt account headers on opaque custom provider websockets", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		let capturedHeaders: WsHeaders | undefined;
+		class OpaqueKeyWebSocket extends MockWebSocket {
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				capturedHeaders = options?.headers;
+				expect(url).toBe("ws://127.0.0.1:2455/backend-api/codex/responses");
+				this.scheduleOpen();
+			}
+
+			send(): void {
+				this.emitCodexResponse({ messageId: "msg_opaque", responseId: "resp_opaque", text: "pong" });
+			}
+		}
+		Object.defineProperty(globalThis, "WebSocket", {
+			configurable: true,
+			writable: true,
+			value: OpaqueKeyWebSocket,
+		});
+		const model: Model<"openai-codex-responses"> = buildModel({
+			id: "gpt-5.4-mini",
+			name: "GPT-5.4 mini",
+			api: "openai-codex-responses",
+			provider: "codex-proxy",
+			baseUrl: "http://127.0.0.1:2455/backend-api/codex",
+			reasoning: true,
+			preferWebsockets: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 272000,
+			maxTokens: 128000,
+		});
+
+		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			apiKey: "opaque-proxy-key",
+			sessionId: "opaque-ws-session",
+			providerSessionState: new Map<string, ProviderSessionState>(),
+		}).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(capturedHeaders?.authorization).toBe("Bearer opaque-proxy-key");
+		expect(capturedHeaders?.["chatgpt-account-id"]).toBeUndefined();
+		expect(capturedHeaders?.["openai-beta"]).toBe("responses_websockets=2026-02-06");
+		expect(capturedHeaders?.originator).toBe("pi");
+	});
+
 	it("sends an async onPayload replacement body", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());

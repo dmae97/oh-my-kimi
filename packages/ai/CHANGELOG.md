@@ -9,6 +9,7 @@
 - Fixed GitHub Copilot OpenAI Responses replay persisting hidden-empty assistant turns as native history, preventing reasoning-only empty completions from poisoning later requests with stale assistant summaries. ([#4597](https://github.com/can1357/oh-my-pi/issues/4597))
 - Fixed provider gateway `quota insufficient` / `额度不足` errors being classified as generic 403 failures instead of usage-limit errors.
 - Aligned the `openai-responses` strict-mode gate and resolved strict-support detection with `openai-completions` so buildModel-created OpenAI-compatible Responses models (for example DeepSeek-family endpoints) preserve an author-set `tool.strict === false` on the wire unless `compat.supportsStrictMode` is explicitly `false` ([#4527](https://github.com/can1357/oh-my-pi/issues/4527)).
+- Fixed custom `openai-codex-responses` providers with opaque proxy/API keys failing before dispatch when no ChatGPT `chatgpt_account_id` claim exists; Codex requests now omit `chatgpt-account-id` when it cannot be derived. ([#4526](https://github.com/can1357/oh-my-pi/issues/4526))
 
 ## [16.3.6] - 2026-07-04
 
