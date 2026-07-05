@@ -714,7 +714,7 @@ export interface DefaultResourceLoaderOptions {
 	noThemes?: boolean;
 	noContextFiles?: boolean;
 	systemPrompt?: string;
-	appendSystemPrompt?: string[];
+	appendSystemPrompt?: string | string[];
 	extensionsOverride?: (base: LoadExtensionsResult) => LoadExtensionsResult;
 	skillsOverride?: (base: { skills: Skill[]; diagnostics: ResourceDiagnostic[] }) => {
 		skills: Skill[];
@@ -763,7 +763,7 @@ interface ResolvedLoaderState {
 	cwd: string;
 	agentDir: string;
 	settingsPromise?: Promise<Settings>;
-	eventBus?: EventBus;
+	eventBus: EventBus;
 	extensionFactories: ExtensionFactory[];
 	noExtensions: boolean;
 	additionalExtensionPaths: string[];
@@ -805,7 +805,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 			cwd,
 			agentDir,
 			settingsPromise: options.settingsManager ? Promise.resolve(options.settingsManager) : undefined,
-			eventBus: options.eventBus,
+			eventBus: options.eventBus ?? new EventBus(),
 			extensionFactories: options.extensionFactories ?? [],
 			noExtensions: options.noExtensions ?? false,
 			additionalExtensionPaths: options.additionalExtensionPaths ?? [],
@@ -867,7 +867,10 @@ export class DefaultResourceLoader implements ResourceLoader {
 				this.#loadExtensions(settings),
 				options.noSkills
 					? Promise.resolve({ skills: [], warnings: [] })
-					: discoverSkills(cwd, agentDir, settings.getGroup("skills")),
+					: discoverSkills(cwd, agentDir, {
+							...settings.getGroup("skills"),
+							disabledExtensions: settings.get("disabledExtensions") ?? [],
+						}),
 				this.#loadAdditionalSkills(),
 				options.noPromptTemplates ? Promise.resolve([]) : discoverPromptTemplates(cwd, agentDir),
 				this.#loadAdditionalPromptTemplates(),
@@ -917,7 +920,9 @@ export class DefaultResourceLoader implements ResourceLoader {
 			? options.systemPromptOverride(baseSystemPrompt)
 			: baseSystemPrompt;
 
-		const baseAppend = options.appendSystemPrompt ?? [];
+		const appendSource = options.appendSystemPrompt;
+		const baseAppend =
+			typeof appendSource === "string" ? [appendSource] : Array.isArray(appendSource) ? appendSource : [];
 		this.#appendSystemPrompt = options.appendSystemPromptOverride
 			? options.appendSystemPromptOverride(baseAppend)
 			: baseAppend;
@@ -932,7 +937,6 @@ export class DefaultResourceLoader implements ResourceLoader {
 			return { extensions: [], errors: [], runtime: new ExtensionRuntime() };
 		}
 
-		const bus = eventBus ?? new EventBus();
 		const paths = await discoverSessionExtensionPaths(
 			{
 				disableExtensionDiscovery: noExtensions,
@@ -942,12 +946,12 @@ export class DefaultResourceLoader implements ResourceLoader {
 			settings,
 		);
 
-		const result = await loadExtensions(paths, cwd, bus);
+		const result = await loadExtensions(paths, cwd, eventBus);
 		for (let i = 0; i < extensionFactories.length; i++) {
 			const loaded = await loadExtensionFromFactory(
 				extensionFactories[i],
 				cwd,
-				bus,
+				eventBus,
 				result.runtime,
 				`<inline-loader-${i}>`,
 			);
@@ -961,8 +965,11 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const diagnostics: ResourceDiagnostic[] = [];
 
 		for (const resourcePath of this.#state.additionalSkillPaths) {
+			const resolvedPath = path.isAbsolute(resourcePath)
+				? resourcePath
+				: path.resolve(this.#state.cwd, resourcePath);
 			const skillDir =
-				path.basename(resourcePath).toLowerCase() === "skill.md" ? path.dirname(resourcePath) : resourcePath;
+				path.basename(resolvedPath).toLowerCase() === "skill.md" ? path.dirname(resolvedPath) : resolvedPath;
 			try {
 				const result = await loadSkillsFromDir({
 					dir: skillDir,
@@ -980,7 +987,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 				diagnostics.push({
 					type: "warning",
 					message: `Failed to load additional skill path: ${err instanceof Error ? err.message : String(err)}`,
-					path: resourcePath,
+					path: resolvedPath,
 				});
 			}
 		}
@@ -993,29 +1000,32 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const diagnostics: ResourceDiagnostic[] = [];
 
 		for (const resourcePath of this.#state.additionalPromptTemplatePaths) {
+			const resolvedPath = path.isAbsolute(resourcePath)
+				? resourcePath
+				: path.resolve(this.#state.cwd, resourcePath);
 			const files: string[] = [];
 			try {
-				const stat = await fs.stat(resourcePath);
+				const stat = await fs.stat(resolvedPath);
 				if (stat.isDirectory()) {
 					const glob = new Bun.Glob("**/*.md");
-					for await (const entry of glob.scan({ cwd: resourcePath, absolute: false, onlyFiles: true })) {
-						files.push(path.join(resourcePath, entry));
+					for await (const entry of glob.scan({ cwd: resolvedPath, absolute: false, onlyFiles: true })) {
+						files.push(path.join(resolvedPath, entry));
 					}
 					files.sort();
-				} else if (resourcePath.toLowerCase().endsWith(".md")) {
-					files.push(resourcePath);
+				} else if (resolvedPath.toLowerCase().endsWith(".md")) {
+					files.push(resolvedPath);
 				} else {
 					diagnostics.push({
 						type: "warning",
 						message: "Additional prompt template path is neither a directory nor a Markdown file",
-						path: resourcePath,
+						path: resolvedPath,
 					});
 				}
 			} catch (err) {
 				diagnostics.push({
 					type: "warning",
 					message: `Failed to inspect additional prompt template path: ${err instanceof Error ? err.message : String(err)}`,
-					path: resourcePath,
+					path: resolvedPath,
 				});
 				continue;
 			}
@@ -1066,7 +1076,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		cwd: string;
 		agentDir: string;
 		settingsPromise?: Promise<Settings>;
-		eventBus?: EventBus;
+		eventBus: EventBus;
 		extensionsResult: LoadExtensionsResult;
 		skills: Skill[];
 		prompts: PromptTemplate[];

@@ -98,7 +98,7 @@ describe("DefaultResourceLoader.reload() (issue #4567)", () => {
 		expect(loader.getThemes().themes).toEqual([]);
 		expect(loader.getAgentsFiles().agentsFiles).toEqual([]);
 	});
-	it("loads explicit additional skills and prompt templates before override callbacks when discovery is disabled", async () => {
+	it("loads relative additional skills and prompt templates before override callbacks when discovery is disabled", async () => {
 		const tmp = await mkTempCwd("omp-legacy-default-resource-loader-additional-paths-");
 		const skillName = "issue-4567-explicit-skill";
 		const skillDescription = "Loaded from an explicit additionalSkillPaths directory";
@@ -131,8 +131,8 @@ describe("DefaultResourceLoader.reload() (issue #4567)", () => {
 			noPromptTemplates: true,
 			noThemes: true,
 			noContextFiles: true,
-			additionalSkillPaths: [skillRoot],
-			additionalPromptTemplatePaths: [promptDir],
+			additionalSkillPaths: ["extra-skills"],
+			additionalPromptTemplatePaths: ["extra-prompts"],
 			skillsOverride: base => {
 				skillsOverrideSawExplicit = base.skills.some(
 					skill =>
@@ -210,6 +210,11 @@ describe("createAgentSession({ resourceLoader }) (issue #4567)", () => {
 		// confuse anyone reading the SDK call site and (b) prove the shim is
 		// not actually translating the option.
 		expect("resourceLoader" in forwarded ? forwarded.resourceLoader : undefined).toBeUndefined();
+
+		// The loader owns the event bus used while loading extensions. Forwarding
+		// that same bus keeps extension event traffic on the session-visible bus
+		// instead of marooning loader-created extensions on a private bus.
+		expect(forwarded.eventBus).toBeDefined();
 
 		// The reload's already-loaded extension snapshot is routed through
 		// the SDK's `preloadedExtensions` seam. Skipping this branch is
