@@ -575,6 +575,87 @@ describe("OpenAI responses history payload", () => {
 		expect(containsAssistantOutputText(payload.input, "generic assistant that should be rebuilt")).toBe(true);
 	});
 
+	it("does not replay GitHub Copilot hidden-empty assistant native or fallback history into the next request", async () => {
+		const hiddenEmptyNativeItems = [
+			{ type: "reasoning", encrypted_content: "enc_hidden_empty" },
+			{
+				type: "message",
+				role: "assistant",
+				status: "completed",
+				content: [{ type: "output_text", text: "", annotations: [] }],
+			},
+		];
+		const followUp = "continue after hidden empty assistant turn";
+		const context: Context = {
+			messages: [
+				{
+					...makeAssistantMessage(hiddenEmptyNativeItems, false, "github-copilot", "gpt-5.4"),
+					content: [
+						{ type: "text", text: "" },
+						{
+							type: "thinking",
+							thinking: "",
+							thinkingSignature: JSON.stringify({
+								type: "reasoning",
+								id: "rs_hidden_empty_fallback",
+								encrypted_content: "enc_hidden_empty_fallback",
+							}),
+						},
+					],
+				},
+				{ role: "user", content: followUp, timestamp: Date.now() },
+			],
+		};
+		const model = getBundledModel("github-copilot", "gpt-5.4") as Model<"openai-responses">;
+		const payload = (await captureResponsesPayload(model, context)) as { input?: unknown[] };
+
+		expect(containsUserInputText(payload.input, followUp)).toBe(true);
+		expect(findResponsesInputItem(payload.input, "reasoning")).toBeUndefined();
+		expect(containsAssistantOutputText(payload.input, "")).toBe(false);
+	});
+
+	it("does not replay GitHub Copilot hidden-empty assistant fallback on cold provider session state", async () => {
+		const hiddenEmptyNativeItems = [
+			{ type: "reasoning", encrypted_content: "enc_hidden_empty_cold" },
+			{
+				type: "message",
+				role: "assistant",
+				status: "completed",
+				content: [{ type: "output_text", text: "", annotations: [] }],
+			},
+		];
+		const followUp = "continue after hidden empty assistant turn (cold)";
+		const context: Context = {
+			messages: [
+				{
+					...makeAssistantMessage(hiddenEmptyNativeItems, false, "github-copilot", "gpt-5.4"),
+					content: [
+						{ type: "text", text: "" },
+						{
+							type: "thinking",
+							thinking: "",
+							thinkingSignature: JSON.stringify({
+								type: "reasoning",
+								id: "rs_hidden_empty_cold_fallback",
+								encrypted_content: "enc_hidden_empty_cold_fallback",
+							}),
+						},
+					],
+				},
+				{ role: "user", content: followUp, timestamp: Date.now() },
+			],
+		};
+		const model = getBundledModel("github-copilot", "gpt-5.4") as Model<"openai-responses">;
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const payload = (await captureResponsesPayload(model, context, providerSessionState)) as {
+			input?: unknown[];
+		};
+
+		expect(containsUserInputText(payload.input, followUp)).toBe(true);
+		expect(findResponsesInputItem(payload.input, "reasoning")).toBeUndefined();
+		expect(containsAssistantOutputText(payload.input, "")).toBe(false);
+	});
+
 	it("builds up history incrementally from multiple assistant messages", async () => {
 		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
 		const payload = (await captureResponsesPayload(model, incrementalContext)) as { input?: unknown[] };

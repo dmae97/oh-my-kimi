@@ -20,7 +20,7 @@ import {
 	createOpenAIResponsesHistoryPayload,
 	normalizeSystemPrompts,
 	resolveCacheRetention,
-	sanitizeOpenAIResponsesHistoryItemsForReplay,
+	sanitizeOpenAIResponsesAssistantHistoryItemsForReplay,
 } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import { withEmptyCompletionRetry } from "../utils/empty-completion-retry";
@@ -687,22 +687,27 @@ const streamOpenAIResponsesOnce = (
 			}
 
 			output.providerPayload = createOpenAIResponsesHistoryPayload(model.provider, nativeOutputItems);
-			if (providerSessionState) providerSessionState.nativeHistoryReplayWarmed = true;
-			if (chainState) {
-				chainState.lastParams = structuredCloneJSON(activeParams);
-				if (output.responseId) {
-					chainState.lastResponseId = output.responseId;
-					chainState.lastResponseItems = sanitizeOpenAIResponsesHistoryItemsForReplay(
-						structuredCloneJSON(nativeOutputItems),
-					);
-					chainState.canAppend = true;
-					// Only a successful CHAINED completion clears the stale counter — a
-					// full-context success must not mask categorical rejection.
-					if (sentPreviousResponseId) chainState.staleFailures = 0;
-				} else {
-					// Without a response id the append baseline cannot be trusted.
-					chainState.canAppend = false;
+			const replayableResponseItems = sanitizeOpenAIResponsesAssistantHistoryItemsForReplay(
+				structuredCloneJSON(nativeOutputItems),
+			);
+			if (replayableResponseItems) {
+				if (providerSessionState) providerSessionState.nativeHistoryReplayWarmed = true;
+				if (chainState) {
+					chainState.lastParams = structuredCloneJSON(activeParams);
+					if (output.responseId) {
+						chainState.lastResponseId = output.responseId;
+						chainState.lastResponseItems = replayableResponseItems;
+						chainState.canAppend = true;
+						// Only a successful CHAINED completion clears the stale counter — a
+						// full-context success must not mask categorical rejection.
+						if (sentPreviousResponseId) chainState.staleFailures = 0;
+					} else {
+						// Without a response id the append baseline cannot be trusted.
+						chainState.canAppend = false;
+					}
 				}
+			} else if (chainState) {
+				resetOpenAIResponsesChainState(chainState);
 			}
 
 			output.duration = performance.now() - startTime;

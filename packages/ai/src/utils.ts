@@ -3,6 +3,7 @@ import type { ResponseInput, ResponseInputItem } from "./providers/openai-respon
 import type { CacheRetention, OpenAIResponsesHistoryPayload, ProviderPayload } from "./types";
 
 type OpenAIResponsesReplayItem = ResponseInput[number];
+const NON_WHITESPACE_RE = /\S/;
 
 export { isRecord } from "@oh-my-pi/pi-utils";
 export function normalizeSystemPrompts(systemPrompt: readonly string[] | string | undefined | null): string[] {
@@ -70,6 +71,83 @@ export function sanitizeOpenAIResponsesHistoryItemsForReplay(items: Array<Record
 		const sanitized = sanitizeOpenAIResponsesHistoryItemForReplay(item, normalizedCallIds);
 		return sanitized ? [sanitized] : [];
 	});
+}
+
+/**
+ * Sanitize assistant-native Responses history for replay.
+ *
+ * Returns `undefined` for hidden-empty turns that only contain reasoning and an
+ * empty assistant message, allowing callers to rebuild visible transcript
+ * history instead of replaying stale native state.
+ */
+export function sanitizeOpenAIResponsesAssistantHistoryItemsForReplay(
+	items: Array<Record<string, unknown>>,
+): ResponseInput | undefined {
+	const sanitized = sanitizeOpenAIResponsesHistoryItemsForReplay(items);
+	let hasReplayableAssistantOutput = false;
+
+	for (const item of sanitized) {
+		if (item.type === "function_call" || item.type === "custom_tool_call" || item.type === "image_generation_call") {
+			hasReplayableAssistantOutput = true;
+			break;
+		}
+		if (item.type !== "message" || item.role !== "assistant") continue;
+		if (typeof item.content === "string") {
+			if (NON_WHITESPACE_RE.test(item.content)) {
+				hasReplayableAssistantOutput = true;
+				break;
+			}
+			continue;
+		}
+		for (const part of item.content) {
+			if (part.type === "output_text" && NON_WHITESPACE_RE.test(part.text)) {
+				hasReplayableAssistantOutput = true;
+				break;
+			}
+			if (part.type === "refusal" && NON_WHITESPACE_RE.test(part.refusal)) {
+				hasReplayableAssistantOutput = true;
+				break;
+			}
+		}
+		if (hasReplayableAssistantOutput) break;
+	}
+
+	return hasReplayableAssistantOutput ? sanitized : undefined;
+}
+
+/**
+ * Drop hidden-only fallback assistant replay after a native Responses snapshot is rejected.
+ */
+export function sanitizeOpenAIResponsesAssistantFallbackItemsForReplay(items: ResponseInput): ResponseInput {
+	const sanitized: ResponseInput = [];
+
+	for (const item of items) {
+		if (item.type === "reasoning") continue;
+		if (item.type !== "message" || item.role !== "assistant") {
+			sanitized.push(item);
+			continue;
+		}
+
+		let hasVisibleText = false;
+		if (typeof item.content === "string") {
+			hasVisibleText = NON_WHITESPACE_RE.test(item.content);
+		} else {
+			for (const part of item.content) {
+				if (part.type === "output_text" && NON_WHITESPACE_RE.test(part.text)) {
+					hasVisibleText = true;
+					break;
+				}
+				if (part.type === "refusal" && NON_WHITESPACE_RE.test(part.refusal)) {
+					hasVisibleText = true;
+					break;
+				}
+			}
+		}
+
+		if (hasVisibleText) sanitized.push(item);
+	}
+
+	return sanitized;
 }
 
 function sanitizeOpenAIResponsesHistoryItemForReplay(
