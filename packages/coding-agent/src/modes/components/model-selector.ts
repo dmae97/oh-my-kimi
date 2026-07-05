@@ -704,29 +704,22 @@ export class ModelSelectorComponent extends Container {
 	#filterModels(query: string): void {
 		const activeProviderId = this.#getActiveProviderId();
 
-		let baseModels = this.#allModels;
-		if (activeProviderId) {
-			baseModels = this.#allModels.filter(m => m.provider === activeProviderId);
-		}
+		const baseModels = activeProviderId
+			? this.#allModels.filter(m => m.provider === activeProviderId)
+			: this.#allModels;
 
 		if (query.trim()) {
-			// If user is searching from a provider tab, auto-switch to ALL to show global provider results.
-			if (activeProviderId) {
-				this.#activeTabIndex = 0;
-				if (this.#tabBar && this.#tabBar.getActiveIndex() !== 0) {
-					this.#tabBar.setActiveIndex(0);
-					return;
-				}
-				this.#updateTabBar();
-				baseModels = this.#allModels;
-			}
-
 			// Match against the displayed "provider/id" string so the user can
 			// type what they see: bare names (`mimo`, `kimi`), provider prefixes
 			// (`openrouter`), or scoped queries (`openrouter/mimo`) all flow
 			// through the same fuzzy matcher. The score is biased by provider-
 			// prefix length, so re-sort by MRU/version afterwards; skip role
 			// rank so a weakly matching default doesn't trump a stronger match.
+			//
+			// Search stays scoped to the active provider tab. Auto-escaping to
+			// ALL on non-empty queries used to let the user pick a same-named
+			// model from a different provider and silently persist it under
+			// their default role — see issue #4522.
 			const fuzzyMatches = fuzzyFilter(baseModels, query, ({ id, provider }) => `${provider}/${id}`);
 			this.#sortModels(fuzzyMatches, { skipRoleRank: true });
 			this.#filteredModels = fuzzyMatches;
@@ -891,8 +884,15 @@ export class ModelSelectorComponent extends Container {
 				this.#listContainer.addChild(new Text(theme.fg("error", line), 0, 0));
 			}
 		} else if (visibleItems.length === 0) {
-			const statusMessage = this.#getProviderEmptyStateMessage();
-			this.#listContainer.addChild(new Text(theme.fg("muted", statusMessage ?? "  No matching models"), 0, 0));
+			const providerStatus = this.#getProviderEmptyStateMessage();
+			const activeProviderId = this.#getActiveProviderId();
+			const searching = this.#searchInput.getValue().trim().length > 0;
+			const message =
+				providerStatus ??
+				(searching && activeProviderId
+					? `  No matching models in ${formatProviderTabLabel(activeProviderId)}. Switch to ALL to search every provider.`
+					: "  No matching models");
+			this.#listContainer.addChild(new Text(theme.fg("muted", message), 0, 0));
 		} else {
 			const selected = visibleItems[this.#selectedIndex];
 			if (!selected) {
