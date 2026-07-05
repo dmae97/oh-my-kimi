@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import * as ai from "@oh-my-pi/pi-ai";
 import { Effort, type Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import {
@@ -132,6 +133,45 @@ describe("auto thinking classifier helpers", () => {
 		} finally {
 			fixture.cleanup();
 		}
+	});
+
+	it("uses a reasoning-safe online classifier budget when the catalog disables reasoning", async () => {
+		const baseModel = getBundledModel("anthropic", "claude-sonnet-4-6");
+		if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.6 model");
+		const classifierModel = { ...baseModel, reasoning: false };
+		const settings = {
+			get(path: string) {
+				if (path === "providers.autoThinkingModel") return "online";
+				return undefined;
+			},
+			getModelRole(role: string) {
+				return role === "smol" ? `${classifierModel.provider}/${classifierModel.id}` : undefined;
+			},
+			getStorage() {
+				return undefined;
+			},
+		} as never;
+		const registry = {
+			getAvailable: () => [classifierModel],
+			getApiKey: async () => "test-key",
+			resolver: () => async () => "test-key",
+		} as never;
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "high" }],
+		} as never);
+
+		const effort = await classifyDifficulty("add validation around the retry path", {
+			settings,
+			registry,
+			model: baseModel,
+		});
+		const options = completeSimpleMock.mock.calls[0]?.[2] as
+			| { disableReasoning?: boolean; maxTokens?: number }
+			| undefined;
+
+		expect(effort).toBe(Effort.High);
+		expect(options).toMatchObject({ disableReasoning: true, maxTokens: 1024 });
 	});
 
 	it("clamps auto effort to model support while never resolving below low", () => {

@@ -1,5 +1,49 @@
-import { describe, expect, it } from "bun:test";
-import { BlockAccumulator } from "@oh-my-pi/pi-coding-agent/tts/speech-enhancer";
+import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as ai from "@oh-my-pi/pi-ai";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { BlockAccumulator, SpeechEnhancer } from "@oh-my-pi/pi-coding-agent/tts/speech-enhancer";
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
+
+describe("SpeechEnhancer rewriting", () => {
+	it("uses a reasoning-safe rewrite budget when the catalog disables reasoning", async () => {
+		const baseModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.5 model");
+		const model = { ...baseModel, reasoning: false };
+		const settings = {
+			get() {
+				return undefined;
+			},
+			getModelRole(role: string) {
+				return role === "tiny" ? `${model.provider}/${model.id}` : undefined;
+			},
+			getStorage() {
+				return undefined;
+			},
+		} as never;
+		const registry = {
+			getAvailable: () => [model],
+			getApiKey: async () => "test-key",
+			resolver: () => async () => "test-key",
+		} as never;
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "Spoken text" }],
+		} as never);
+
+		const rewritten = await new SpeechEnhancer({ settings, registry, sessionId: "session-1" }).rewrite(
+			"**Spoken text**",
+		);
+		const options = completeSimpleMock.mock.calls[0]?.[2] as
+			| { disableReasoning?: boolean; maxTokens?: number }
+			| undefined;
+
+		expect(rewritten).toBe("Spoken text");
+		expect(options).toMatchObject({ disableReasoning: true, maxTokens: 1536 });
+	});
+});
 
 /** Push each delta in order; returns blocks completed by pushes plus the flush tail. */
 function feed(...deltas: string[]): { blocks: string[]; tail: string | null } {

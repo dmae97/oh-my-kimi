@@ -1,6 +1,9 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import * as ai from "@oh-my-pi/pi-ai";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import {
+	classifyUnexpectedStop,
 	isUnexpectedStopCandidate,
 	parseUnexpectedStopClassification,
 } from "@oh-my-pi/pi-coding-agent/session/unexpected-stop-classifier";
@@ -19,6 +22,10 @@ function makeAssistantMessage(options: {
 		timestamp: Date.now(),
 	} as unknown as AssistantMessage;
 }
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
 describe("isUnexpectedStopCandidate", () => {
 	it("returns true for a text-only stop", () => {
@@ -68,6 +75,47 @@ describe("isUnexpectedStopCandidate", () => {
 			content: [],
 		});
 		expect(isUnexpectedStopCandidate(message)).toBe(false);
+	});
+});
+
+describe("classifyUnexpectedStop", () => {
+	it("uses a reasoning-safe online classifier budget when the catalog disables reasoning", async () => {
+		const baseModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.5 model");
+		const model = { ...baseModel, reasoning: false };
+		const settings = {
+			get(path: string) {
+				if (path === "providers.unexpectedStopModel") return "online";
+				return undefined;
+			},
+			getModelRole(role: string) {
+				return role === "smol" ? `${model.provider}/${model.id}` : undefined;
+			},
+			getStorage() {
+				return undefined;
+			},
+		} as never;
+		const registry = {
+			getAvailable: () => [model],
+			getApiKey: async () => "test-key",
+			resolver: () => async () => "test-key",
+		} as never;
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "YES" }],
+		} as never);
+
+		const result = await classifyUnexpectedStop("I will continue with the next command.", {
+			settings,
+			registry,
+			sessionId: "session-1",
+		});
+		const options = completeSimpleMock.mock.calls[0]?.[2] as
+			| { disableReasoning?: boolean; maxTokens?: number }
+			| undefined;
+
+		expect(result).toBe(true);
+		expect(options).toMatchObject({ disableReasoning: true, maxTokens: 1024 });
 	});
 });
 

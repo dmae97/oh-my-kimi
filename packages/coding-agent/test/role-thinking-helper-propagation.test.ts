@@ -59,6 +59,28 @@ describe("role thinking helper propagation", () => {
 		});
 	});
 
+	it("keeps the commit budget reasoning-safe when the catalog disables reasoning", async () => {
+		const model = { ...getModelOrThrow("claude-sonnet-4-5"), reasoning: false };
+		const settings = createSettings({
+			smol: `${model.provider}/${model.id}`,
+		});
+		const registry = {
+			getAvailable: () => [model],
+			getApiKey: async () => "test-key",
+			resolver: vi.fn(() => async () => "test-key"),
+		};
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "end_turn",
+			content: [{ type: "text", text: "fix qwen title budget" }],
+		} as never);
+
+		const message = await generateCommitMessage(`diff --git a/x b/x\n+change\n`, registry as never, settings);
+		expect(message).toBe("fix qwen title budget");
+		expect(completeSimpleMock.mock.calls[0]?.[2]).toMatchObject({
+			maxTokens: 1024,
+		});
+	});
+
 	it("disables reasoning for title generation even when smol role has thinking", async () => {
 		const model = getModelOrThrow("claude-sonnet-4-5");
 		const settings = createSettings({
