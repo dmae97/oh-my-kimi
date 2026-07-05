@@ -65,6 +65,7 @@ export class ImageBudget {
 	#requestRender: () => void;
 	#nextId = nextImageIdSeed();
 	#keyToId = new Map<string, number>();
+	#idToKey = new Map<number, string>();
 	/** Display-order image ids observed during the in-flight pass. */
 	#passIds: number[] = [];
 	/**
@@ -132,6 +133,7 @@ export class ImageBudget {
 			const id = this.#nextId;
 			this.#nextId = (this.#nextId + 1) & 0xffffff || 1;
 			this.#keyToId.set(key, id);
+			this.#idToKey.set(id, key);
 			return id;
 		}
 		const id = this.#nextId;
@@ -163,11 +165,15 @@ export class ImageBudget {
 	 */
 	observe(imageId: number): boolean {
 		if (this.#stablePass) {
-			return this.#cap > 0 && this.#suppressedIds.has(imageId);
+			const suppressed = this.#cap > 0 && this.#suppressedIds.has(imageId);
+			if (suppressed) this.#forgetKeyForId(imageId);
+			return suppressed;
 		}
 		const index = this.#passIds.length;
 		this.#passIds.push(imageId);
-		return this.#cap > 0 && index < this.#planned;
+		const suppressed = this.#cap > 0 && index < this.#planned;
+		if (suppressed) this.#forgetKeyForId(imageId);
+		return suppressed;
 	}
 
 	/**
@@ -185,12 +191,7 @@ export class ImageBudget {
 				this.#purgeIds.push(id);
 				// d=I frees the data too, so the image must re-transmit if it returns.
 				this.#transmitted.delete(id);
-				for (const [k, v] of this.#keyToId) {
-					if (v === id) {
-						this.#keyToId.delete(k);
-						break;
-					}
-				}
+				this.#forgetKeyForId(id);
 			}
 			this.#onTerminal = this.#planned;
 			this.#applyingReset = false;
@@ -221,6 +222,7 @@ export class ImageBudget {
 		this.#purgeIds = [];
 		this.#pendingTransmits = [];
 		this.#keyToId.clear();
+		this.#idToKey.clear();
 		return ids;
 	}
 
@@ -279,6 +281,13 @@ export class ImageBudget {
 		if (this.#transmitted.size === 0 && this.#pendingTransmits.length === 0) return;
 		this.#transmitted.clear();
 		this.#pendingTransmits = [];
+	}
+
+	#forgetKeyForId(id: number): void {
+		const key = this.#idToKey.get(id);
+		if (key === undefined) return;
+		this.#idToKey.delete(id);
+		if (this.#keyToId.get(key) === id) this.#keyToId.delete(key);
 	}
 
 	#reconcile(total: number): void {

@@ -178,6 +178,38 @@ describe("ImageBudget", () => {
 		expect(budget.acquireId("keyC")).toBe(id3);
 	});
 
+	it("evicts keys reacquired for images that remain suppressed", () => {
+		const budget = new ImageBudget(2, () => {});
+		const oldId = budget.acquireId("keyA");
+		const id2 = budget.acquireId("keyB");
+		const id3 = budget.acquireId("keyC");
+
+		budget.beginPass();
+		budget.observe(oldId);
+		budget.observe(id2);
+		budget.observe(id3);
+		budget.endPass();
+
+		budget.beginPass();
+		budget.observe(oldId);
+		budget.observe(id2);
+		budget.observe(id3);
+		expect(budget.endPass()).toBe(true);
+		expect([...budget.takePurgeIds()]).toEqual([oldId]);
+
+		const suppressedId = budget.acquireId("keyA");
+		expect(suppressedId).not.toBe(oldId);
+
+		budget.beginPass();
+		expect(budget.observe(suppressedId)).toBe(true);
+		expect(budget.observe(id2)).toBe(false);
+		expect(budget.observe(id3)).toBe(false);
+		expect(budget.endPass()).toBe(false);
+		expect([...budget.takePurgeIds()]).toEqual([]);
+
+		expect(budget.acquireId("keyA")).not.toBe(suppressedId);
+	});
+
 	it("clears all keys from the map on takeAllTransmittedIds", () => {
 		const budget = new ImageBudget(3, () => {});
 		const id1 = budget.acquireId("keyA");
