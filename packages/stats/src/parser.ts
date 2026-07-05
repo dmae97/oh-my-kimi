@@ -8,7 +8,7 @@ import {
 	type ServiceTierByFamily,
 	type ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
-import { getSessionsDir, isEnoent } from "@oh-my-pi/pi-utils";
+import { getSessionsDir, isEnoent, readLines } from "@oh-my-pi/pi-utils";
 import type {
 	AgentType,
 	MessageStats,
@@ -432,19 +432,16 @@ export async function listAllSessionFiles(): Promise<string[]> {
  * Find a specific entry in a session file.
  */
 export async function getSessionEntry(sessionPath: string, entryId: string): Promise<SessionEntry | null> {
-	let bytes: Uint8Array;
 	try {
-		bytes = await Bun.file(sessionPath).bytes();
+		for await (const line of readLines(Bun.file(sessionPath).stream())) {
+			const entry = parseJsonLine(line, 0, line.length);
+			if (entry && "id" in entry && entry.id === entryId) {
+				return entry;
+			}
+		}
 	} catch (err) {
 		if (isEnoent(err)) return null;
 		throw err;
-	}
-
-	const { entries } = parseSessionEntriesLenient(bytes);
-	for (const entry of entries) {
-		if ("id" in entry && entry.id === entryId) {
-			return entry;
-		}
 	}
 	return null;
 }
