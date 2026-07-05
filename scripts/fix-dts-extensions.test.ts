@@ -91,6 +91,28 @@ describe("fixDtsFile", () => {
 		expect(await read(root, "named.d.ts")).toBe('export type { A } from "./sdk.js";\n');
 	});
 
+	it("rewrites inline import type references", async () => {
+		const inlineImport = "import" + '("./types")';
+		const inlineExpected = "import" + '("./types.js")';
+		const root = await makeTree({
+			"types.d.ts": "export type Thing = number;\n",
+			"index.d.ts": `export declare const typed: ${inlineImport}.Thing;\n`,
+		});
+		const count = await fixDtsFile(path.join(root, "index.d.ts"));
+		expect(count).toBe(1);
+		expect(await read(root, "index.d.ts")).toBe(`export declare const typed: ${inlineExpected}.Thing;\n`);
+	});
+
+	it("rewrites relative declare module specifiers", async () => {
+		const root = await makeTree({
+			"types.d.ts": "export interface Custom {}\n",
+			"augment.d.ts": 'declare module "./types" {\n\tinterface CustomMessages {}\n}\n',
+		});
+		const count = await fixDtsFile(path.join(root, "augment.d.ts"));
+		expect(count).toBe(1);
+		expect(await read(root, "augment.d.ts")).toBe('declare module "./types.js" {\n\tinterface CustomMessages {}\n}\n');
+	});
+
 	it("leaves a file of bare and already-suffixed specifiers byte-for-byte unchanged", async () => {
 		const source =
 			'export * from "@oh-my-pi/pi-tui";\n' +

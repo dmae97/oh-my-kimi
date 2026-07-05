@@ -23,9 +23,10 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-// Matches the specifier in `from "…"` / `import "…"` / `export … from "…"`.
+// Matches relative module specifiers in generated declaration import/export forms:
+//   from "…", import "…", import("…"), and declare module "…".
 // Captures the quote-enclosed module string; we filter to relative ones below.
-const SPECIFIER_RE = /((?:from|import)\s*)("|')(\.[^"']*)(\2)/g;
+const SPECIFIER_RE = /(\b(?:from|import|module)\b\s*(?:\(\s*)?)("|')(\.[^"']*)(\2)/g;
 
 /** Resolve an extensionless relative specifier to its `.js` runtime form,
  *  given the directory of the importing `.d.ts`. Returns null to leave as-is. */
