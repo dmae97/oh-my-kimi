@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- `read memory://<id>` now resolves under the mnemopi backend to the full memory row (working or episodic), wrapped in a YAML-frontmatter header carrying bank, store, source, timestamp, importance, and veracity. Bridges the read gap that made `memory_edit update` a blind overwrite: recall previews are clipped (see the mnemopi changelog), so an agent could not inspect the tail it was about to replace. The URI grammar is now `memory://root[/…]` for the file-backed summary and `memory://<memory-id>` for any mnemopi id in scope. Errors are also clearer — "Mnemopi memory `<id>` not found in any scoped bank" replaces the "memories not enabled" message when a lookup misses under an active mnemopi session ([#4443](https://github.com/can1357/oh-my-pi/issues/4443)).
+
+### Changed
+
+- Updated the `recall` and `memory_edit` tool prompts to document the truncation marker (`…`, `truncated: true`, `full_length`) and to require `read memory://<id>` before any `memory_edit update` on a truncated preview.
+
 ### Fixed
 
 - Fixed macOS Backspace on empty search not deleting sessions in the `/resume` picker; Fn+Backspace terminals that deliver `\x7f` instead of `\e[3~` now reach the delete confirmation dialog. ([#4580](https://github.com/can1357/oh-my-pi/pull/4580) by [@JagravNaik](https://github.com/JagravNaik))
@@ -28,6 +36,13 @@
 - Fixed the `snapcompact.shape` settings UI to expose `silver16-bw` and updated snapcompact renderability warnings to report unsupported glyphs instead of a misleading non-ASCII rate. ([#4486](https://github.com/can1357/oh-my-pi/issues/4486))
 - Fixed session/status usage totals to preserve provider-reported orchestration tokens separately from ordinary input and cache-hit buckets. ([#4469](https://github.com/can1357/oh-my-pi/issues/4469))
 - Fixed published `.d.ts` being unconsumable under `moduleResolution: "node16" | "nodenext"`: the declaration emit ran under Bundler resolution and left relative re-exports extensionless (`export * from "./sdk"`), so a NodeNext consumer failed to resolve the package root (`TS2834`/`TS2305`). The publish pipeline now rewrites emitted relative specifiers to explicit `.js` extensions across every package's `dist/types`.
+- Fixed `omitThinking` settings propagation so settings-aware streams request hidden thinking summaries when users explicitly enable the option.
+- Preserved isolated branch-mode task output as a patch artifact when `commitToBranch` fails before the task branch can be transferred, and surfaced the captured patch path (plus any nested patches) through the eval `agent()` failure message so callers can recover the work instead of losing it with the isolation worktree ([#4437](https://github.com/can1357/oh-my-pi/issues/4437)).
+- Fixed task-class subagents dropping unresolved explicit model-role selectors before startup, preventing `modelRoles.task` from silently falling through to an unrelated available provider model ([#4421](https://github.com/can1357/oh-my-pi/issues/4421)).
+- Fixed large legacy snapcompact archives being rehydrated into active resumed-session context, avoiding Bun Worker crashes on oversized archived frame payloads ([#4470](https://github.com/can1357/oh-my-pi/issues/4470)).
+- Fixed LSP diagnostics staleness after harness-authored file writes by sending watched-file change notifications to running language servers before edit-time diagnostics are read ([#4459](https://github.com/can1357/oh-my-pi/issues/4459)).
+- Documented the bash tool timeout clamp in the model-facing schema and prompt so callers know `async` jobs remain capped at 3600 seconds ([#4408](https://github.com/can1357/oh-my-pi/issues/4408)).
+- Fixed `/fast on` for custom OpenAI-compatible providers serving OpenAI models, and report unsupported models as unavailable instead of claiming fast mode was enabled ([#4386](https://github.com/can1357/oh-my-pi/issues/4386)).
 
 ## [16.3.6] - 2026-07-04
 
@@ -46,7 +61,6 @@
 - Fixed turn-ending provider errors rendering with a doubled blank gap above the `Error:` block (caller and error block each added a spacer).
 - Fixed the write tool renderer crashing when persisted runtime content is a truthy non-string value; rendering now coerces display content before Windows CR normalization. ([#4495](https://github.com/can1357/oh-my-pi/issues/4495))
 - Fixed cmux-backend `browser({action:"run"})` calls crashing the entire process with an unhandled rejection when the tab was released mid-run (e.g. a sibling subagent calling `browser({action:"close", all:true})` or a session-scoped tab reap). `runInTabWithSnapshot` in `tab-supervisor.ts` creates a `Promise.withResolvers()` triple so `releaseTab` can signal in-flight runs, but the cmux branch used to await `runCmuxCode(...)` directly and never awaited the local promise. When `releaseTab` rejected that orphaned promise ("Tab ... was closed"), Bun surfaced it as an unhandled rejection and the top-level handler tore the whole session down, killing every other tab and subagent sharing it. Both backends now await the same `promise` (so `pending.reject` always has an attached handler AND the caller sees `Tab "..." was closed` immediately instead of blocking to the run's timeout), and a new `pending.closeAc` is composed into the cmux run's abort signal so `wait(...)`, in-flight cmux socket calls, and the facade proxies unwind promptly when the tab is closed rather than leaking to their own timeout ([#4499](https://github.com/can1357/oh-my-pi/issues/4499)).
-- Fixed `omitThinking` settings propagation so settings-aware streams request hidden thinking summaries when users explicitly enable the option.
 
 ## [16.3.5] - 2026-07-04
 
@@ -65,25 +79,12 @@
 - Fixed ACP `terminal/create` sending the bash tool's full shell line in `command` with no `args`, which broke spec-conformant clients that spawn `command`+`args` directly (no implicit shell) — any command containing a space, pipe, `&&`, redirect, or `$(...)` failed with `ENOENT` and the agent silently degraded to read-only tools. The bash tool now wraps the shell line before calling `clientBridge.createTerminal`, reusing the same shell binary + args the local `bash-executor` resolves via `settings.getShellConfig()` (Git Bash / `bash.exe` on Windows, `$SHELL` with `sh` fallback on POSIX) so bash semantics — `$VAR`, `$(...)`, `source`, POSIX quoting, `-l` — are preserved on both platforms. ([#4333](https://github.com/can1357/oh-my-pi/issues/4333))
 - Fixed inference worker subprocesses (TTS, STT, tiny-model, mnemopi embeddings) discarding stderr, which left every unexpected exit — most visibly the local Kokoro TTS worker's recurring `exit code 7` crash loop — undiagnosable from the parent's logs. `createWorkerSubprocess` now pipes stderr without starting a live read while the worker is idle, then drains the stream after `onExit`, emits captured lines to `logger.debug` under an `<exitLabel> stderr` message, and keeps the last 16 KiB in a bounded ring that gets appended to the `Error` surfaced through `onError`. The exit surface is synchronized with the post-exit drain via `SpawnedSubprocess.stderrDrained`, so the full native trace shows up on the `tts: worker error` line without reintroducing event-loop liveness from unref'd workers. ([#4324](https://github.com/can1357/oh-my-pi/issues/4324))
 - Fixed Windows session tail loss after atomic compaction rewrites by fencing append writers during full-file replacement and gating the atomic publish on a `commitGuard` that the storage backend checks synchronously before rename, so a concurrent `flushSync` (Ctrl+C / session-exit) is not overwritten by the stale body serialized before it ran. Covers post-compaction prompts, tool results, title changes, and exit diagnostics on the current JSONL path ([#4338](https://github.com/can1357/oh-my-pi/issues/4338)).
-- Preserved isolated branch-mode task output as a patch artifact when `commitToBranch` fails before the task branch can be transferred, and surfaced the captured patch path (plus any nested patches) through the eval `agent()` failure message so callers can recover the work instead of losing it with the isolation worktree ([#4437](https://github.com/can1357/oh-my-pi/issues/4437)).
-- Fixed task-class subagents dropping unresolved explicit model-role selectors before startup, preventing `modelRoles.task` from silently falling through to an unrelated available provider model ([#4421](https://github.com/can1357/oh-my-pi/issues/4421)).
-- Fixed large legacy snapcompact archives being rehydrated into active resumed-session context, avoiding Bun Worker crashes on oversized archived frame payloads ([#4470](https://github.com/can1357/oh-my-pi/issues/4470)).
-- Fixed LSP diagnostics staleness after harness-authored file writes by sending watched-file change notifications to running language servers before edit-time diagnostics are read ([#4459](https://github.com/can1357/oh-my-pi/issues/4459)).
-- Documented the bash tool timeout clamp in the model-facing schema and prompt so callers know `async` jobs remain capped at 3600 seconds ([#4408](https://github.com/can1357/oh-my-pi/issues/4408)).
-### Added
-
-- `read memory://<id>` now resolves under the mnemopi backend to the full memory row (working or episodic), wrapped in a YAML-frontmatter header carrying bank, store, source, timestamp, importance, and veracity. Bridges the read gap that made `memory_edit update` a blind overwrite: recall previews are clipped (see the mnemopi changelog), so an agent could not inspect the tail it was about to replace. The URI grammar is now `memory://root[/…]` for the file-backed summary and `memory://<memory-id>` for any mnemopi id in scope. Errors are also clearer — "Mnemopi memory `<id>` not found in any scoped bank" replaces the "memories not enabled" message when a lookup misses under an active mnemopi session ([#4443](https://github.com/can1357/oh-my-pi/issues/4443)).
-
-### Changed
-
-- Updated the `recall` and `memory_edit` tool prompts to document the truncation marker (`…`, `truncated: true`, `full_length`) and to require `read memory://<id>` before any `memory_edit update` on a truncated preview.
 
 ## [16.3.4] - 2026-07-03
 
 ### Fixed
 
 - Fixed `omp usage` hiding sibling-only limits such as Claude 7 Day (Fable) on accounts whose current report omitted that scoped bucket; the account now renders an explicit `not reported` row instead of looking like the usage refresh skipped the column.
-- Fixed `/fast on` for custom OpenAI-compatible providers serving OpenAI models, and report unsupported models as unavailable instead of claiming fast mode was enabled ([#4386](https://github.com/can1357/oh-my-pi/issues/4386)).
 
 ## [16.3.3] - 2026-07-02
 

@@ -11,6 +11,11 @@
 - Aligned the `openai-responses` strict-mode gate and resolved strict-support detection with `openai-completions` so buildModel-created OpenAI-compatible Responses models (for example DeepSeek-family endpoints) preserve an author-set `tool.strict === false` on the wire unless `compat.supportsStrictMode` is explicitly `false` ([#4527](https://github.com/can1357/oh-my-pi/issues/4527)).
 - Fixed custom `openai-codex-responses` providers with opaque proxy/API keys failing before dispatch when no ChatGPT `chatgpt_account_id` claim exists; Codex requests now omit `chatgpt-account-id` when it cannot be derived. ([#4526](https://github.com/can1357/oh-my-pi/issues/4526))
 - Fixed OpenAI Responses/Codex orchestration token accounting so provider-side orchestration tokens stay billable and included in totals without appearing as ordinary uncached prompt input. ([#4469](https://github.com/can1357/oh-my-pi/issues/4469))
+- Fixed Google Gemini hidden-thinking-summary requests so direct Google and Cloud Code Assist providers keep the requested reasoning tier while sending `includeThoughts: false`.
+- Fixed identifierless parallel OpenAI-compatible tool-call argument streams so sibling bash JSON cannot bleed into the first command.
+- Fixed prior-turn reasoning demotion for Anthropic Claude models by generalizing the Fable-only bare-prose branch to the whole Anthropic dialect, so cross-model replays to Opus, Sonnet, Haiku, and Mythos no longer emit `<thinking>` tags that Anthropic's reasoning_extraction classifier flags as visible reasoning leakage. Also extended the Claude-id fallback classifier to Bedrock cross-region inference profiles (`us.anthropic.claude-…`, `eu.anthropic.claude-…`, etc.) so Haiku dotted profiles route to the Anthropic dialect, and appended a paragraph terminator to the demoted-thinking text block itself so bare Anthropic-dialect reasoning no longer runs into the following visible-answer block when the openai-completions convert path flattens adjacent text (without corrupting ordinary multi-block visible text from bridges, imported transcripts, or streaming chunk splits) ([#4430](https://github.com/can1357/oh-my-pi/issues/4430)).
+- Fixed same-model Anthropic thinking replay to drop unsigned prior reasoning blocks instead of demoting them into visible `<thinking>` text, preventing reasoning-extraction refusals. ([#4428](https://github.com/can1357/oh-my-pi/issues/4428))
+- Fixed custom OpenAI-compatible relays serving OpenAI model ids so service-tier resolution can classify them as OpenAI-family targets for fast mode ([#4386](https://github.com/can1357/oh-my-pi/issues/4386)).
 
 ## [16.3.6] - 2026-07-04
 
@@ -22,7 +27,6 @@
 
 - Fixed Anthropic credential selection sampling Fable/Mythos-exhausted accounts on every new session: a Fable/Mythos weekly cap now proactively hard-blocks the credential when confirmed exhausted (server `exhausted` status or used fraction >= 1) with a live `resetsAt`, and a live Fable 429 extends the reactive block to the confirmed tier reset instead of the 60s default. Unconfirmed rows (missing/expired reset, below cap) remain ranking hints only, preserving the false-100% guard.
 - Fixed Ollama/Ollama Cloud tool requests failing with HTTP 400 by rewriting boolean subschemas (`true`/`false`) into a value-widening `anyOf` union of primitive types, stripping boolean `additionalProperties`/`unevaluatedProperties`, and flattening nullable `type` arrays before serializing tool parameters, so unconstrained fields still advertise "any JSON value" to grammar-constrained samplers (llama.cpp) instead of collapsing to an empty object. ([#4488](https://github.com/can1357/oh-my-pi/issues/4488))
-- Fixed Google Gemini hidden-thinking-summary requests so direct Google and Cloud Code Assist providers keep the requested reasoning tier while sending `includeThoughts: false`.
 
 ## [16.3.5] - 2026-07-04
 
@@ -34,9 +38,6 @@
 ### Fixed
 
 - Fixed tool-call validation to strip stray trailing line terminators on schema-matching enum values and on well-known identifier fields (`path`, `paths`, `file`, `file_path`, `url`, `uri`, `title`, `label`) before dispatch, keeping ordinary trailing spaces and content-carrying fields (`content`, `input`, `code`, `command`, etc.) intact ([#4461](https://github.com/can1357/oh-my-pi/issues/4461)).
-- Fixed identifierless parallel OpenAI-compatible tool-call argument streams so sibling bash JSON cannot bleed into the first command.
-- Fixed prior-turn reasoning demotion for Anthropic Claude models by generalizing the Fable-only bare-prose branch to the whole Anthropic dialect, so cross-model replays to Opus, Sonnet, Haiku, and Mythos no longer emit `<thinking>` tags that Anthropic's reasoning_extraction classifier flags as visible reasoning leakage. Also extended the Claude-id fallback classifier to Bedrock cross-region inference profiles (`us.anthropic.claude-…`, `eu.anthropic.claude-…`, etc.) so Haiku dotted profiles route to the Anthropic dialect, and appended a paragraph terminator to the demoted-thinking text block itself so bare Anthropic-dialect reasoning no longer runs into the following visible-answer block when the openai-completions convert path flattens adjacent text (without corrupting ordinary multi-block visible text from bridges, imported transcripts, or streaming chunk splits) ([#4430](https://github.com/can1357/oh-my-pi/issues/4430)).
-- Fixed same-model Anthropic thinking replay to drop unsigned prior reasoning blocks instead of demoting them into visible `<thinking>` text, preventing reasoning-extraction refusals. ([#4428](https://github.com/can1357/oh-my-pi/issues/4428))
 
 ## [16.3.4] - 2026-07-03
 
@@ -51,7 +52,6 @@
 ### Fixed
 
 - Fixed Anthropic OAuth account rotation to exclude unreliable model-scoped Fable/Mythos weekly caps from proactive hard-blocking, ensuring they act only as ranking priority hints while still allowing reactive 429-fallback to rotate and reach serviceable siblings.
-- Fixed custom OpenAI-compatible relays serving OpenAI model ids so service-tier resolution can classify them as OpenAI-family targets for fast mode ([#4386](https://github.com/can1357/oh-my-pi/issues/4386)).
 
 ## [16.3.3] - 2026-07-02
 

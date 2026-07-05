@@ -2,14 +2,6 @@
 
 ## [Unreleased]
 
-## [16.3.5] - 2026-07-04
-
-### Fixed
-
-- Fixed `remember(..., { embedText })` so hosts can store full transcripts while embedding, FTS-indexing, and rebuild-reembedding a marker-free projection. ([#4395](https://github.com/can1357/oh-my-pi/issues/4395))
-### Fixed
-
-- Fixed background LLM fact extraction preserving extractor categories so `instructions`, `preferences`, `timelines`, and `kg` triples populate their MEMORIA tables and graph triples instead of being flattened into generic `fact/entity` rows. ([#4389](https://github.com/can1357/oh-my-pi/issues/4389))
 ### Added
 
 - Exposed `RecallOptions.contentPreviewChars` so hosts can raise or disable the per-result content preview cap that `recall()` enforces. Default remains 500; pass `0` to return full content.
@@ -17,7 +9,14 @@
 
 ### Fixed
 
+- Fixed background LLM fact extraction preserving extractor categories so `instructions`, `preferences`, `timelines`, and `kg` triples populate their MEMORIA tables and graph triples instead of being flattened into generic `fact/entity` rows. ([#4389](https://github.com/can1357/oh-my-pi/issues/4389))
 - Recall previews now mark clipped content with a trailing `…` character instead of slicing at exactly 500 characters mid-word with no marker. The `factLine` used by the enhanced-context sandwich (200-char cap) gets the same treatment. Agents can now tell a full memory apart from a preview and know when to fetch the full row via `Mnemopi.get(id)` before overwriting content ([#4443](https://github.com/can1357/oh-my-pi/issues/4443)).
+
+## [16.3.5] - 2026-07-04
+
+### Fixed
+
+- Fixed `remember(..., { embedText })` so hosts can store full transcripts while embedding, FTS-indexing, and rebuild-reembedding a marker-free projection. ([#4395](https://github.com/can1357/oh-my-pi/issues/4395))
 
 ## [16.2.2] - 2026-06-27
 
