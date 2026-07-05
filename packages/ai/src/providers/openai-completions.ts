@@ -1459,7 +1459,7 @@ function buildParams(
 	if (options?.frequencyPenalty !== undefined) {
 		params.frequency_penalty = options.frequencyPenalty;
 	}
-	applyOpenAIServiceTier(params, options?.serviceTier, model.provider);
+	applyOpenAIServiceTier(params, options?.serviceTier, model);
 
 	if (context.tools?.length) {
 		const builtTools = convertTools(context.tools, initialCompat, toolStrictModeOverride);

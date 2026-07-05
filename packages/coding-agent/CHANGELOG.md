@@ -74,6 +74,7 @@
 ### Fixed
 
 - Fixed `omp usage` hiding sibling-only limits such as Claude 7 Day (Fable) on accounts whose current report omitted that scoped bucket; the account now renders an explicit `not reported` row instead of looking like the usage refresh skipped the column.
+- Fixed `/fast on` for custom OpenAI-compatible providers serving OpenAI models, and report unsupported models as unavailable instead of claiming fast mode was enabled ([#4386](https://github.com/can1357/oh-my-pi/issues/4386)).
 
 ## [16.3.3] - 2026-07-02
 

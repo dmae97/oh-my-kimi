@@ -9,6 +9,7 @@ import {
 	isMinimaxM2FamilyModelId,
 	isMinimaxM3FamilyModelId,
 	isOpenAIGptOssModelId,
+	isOpenAIModelId,
 	isReasoningGlmModelId,
 	modelFamilyToken,
 	supportsAdaptiveThinkingDisplay,
@@ -152,6 +153,14 @@ describe("isOpenAIGptOssModelId", () => {
 		expect(isOpenAIGptOssModelId("gpt-4.1-mini")).toBe(false);
 		expect(isOpenAIGptOssModelId("oss-llm")).toBe(false);
 		expect(isOpenAIGptOssModelId("MiniMax-M2.7")).toBe(false);
+	});
+});
+
+describe("isOpenAIModelId", () => {
+	test("matches current OpenAI ids across GPT, o-series, ChatGPT, and Codex aliases", () => {
+		for (const id of ["gpt-4o", "o3", "o4-mini", "chatgpt-4o-latest", "codex-mini-latest"]) {
+			expect(isOpenAIModelId(id)).toBe(true);
+		}
 	});
 });
 

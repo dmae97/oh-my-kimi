@@ -19,6 +19,7 @@ import type {
 	WriteResult,
 } from "@oh-my-pi/pi-catalog/discovery/cursor-gen/agent_pb";
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { isOpenAIModelId } from "@oh-my-pi/pi-catalog/identity/family";
 import type { Api, FetchImpl, KnownApi, Model, Provider, ThinkingBudgets, Usage } from "@oh-my-pi/pi-catalog/types";
 import type { Type } from "arktype";
 import type { ZodType, z } from "zod/v4";
@@ -134,6 +135,22 @@ export type ServiceTierFamily = "openai" | "anthropic" | "google";
  */
 export type ServiceTierByFamily = Partial<Record<ServiceTierFamily, ServiceTier>>;
 
+type ServiceTierModel = Pick<Model, "provider" | "api" | "id">;
+
+function isOpenAIServiceTierApi(api: Api | undefined): boolean {
+	return api === "openai-completions" || api === "openai-responses" || api === "openai-codex-responses";
+}
+
+function hasDedicatedServiceTierControl(provider: Provider | undefined): boolean {
+	return provider === "fireworks";
+}
+
+function isOpenAIServiceTierModel(model: ServiceTierModel): boolean {
+	return (
+		!hasDedicatedServiceTierControl(model.provider) && isOpenAIServiceTierApi(model.api) && isOpenAIModelId(model.id)
+	);
+}
+
 /**
  * Classify a model into the service-tier family whose knob governs it, or
  * `undefined` when the model exposes no serving-priority control.
@@ -141,8 +158,10 @@ export type ServiceTierByFamily = Partial<Record<ServiceTierFamily, ServiceTier>
  * OpenRouter models are classified by id namespace (`anthropic/`, `google/`,
  * `openai/`); Claude on Bedrock/Vertex (api `anthropic-messages`) is the
  * anthropic family even though its provider is `amazon-bedrock`/`google-vertex`.
+ * Custom OpenAI-compatible relays that serve OpenAI model ids are OpenAI family
+ * too unless that provider owns a separate tier control such as Fireworks.
  */
-export function serviceTierFamily(model: Pick<Model, "provider" | "api" | "id">): ServiceTierFamily | undefined {
+export function serviceTierFamily(model: ServiceTierModel): ServiceTierFamily | undefined {
 	const provider = model.provider;
 	if (provider === "openrouter") {
 		const id = model.id.toLowerCase();
@@ -154,6 +173,7 @@ export function serviceTierFamily(model: Pick<Model, "provider" | "api" | "id">)
 	if (provider === "openai" || provider === "openai-codex") return "openai";
 	if (model.api === "anthropic-messages") return "anthropic";
 	if (provider === "google" || provider === "google-vertex") return "google";
+	if (isOpenAIServiceTierModel(model)) return "openai";
 	return undefined;
 }
 
@@ -179,10 +199,14 @@ export function resolveModelServiceTier(
  */
 export function shouldSendServiceTier(
 	serviceTier: ServiceTier | null | undefined,
-	provider: Provider | undefined,
+	target: Provider | ServiceTierModel | undefined,
 ): boolean {
 	if (!serviceTier) return false;
+	const provider = typeof target === "string" ? target : target?.provider;
 	if (provider === "openai" || provider === "openai-codex" || provider === "openrouter") {
+		return serviceTier === "flex" || serviceTier === "scale" || serviceTier === "priority";
+	}
+	if (typeof target !== "string" && target && isOpenAIServiceTierModel(target)) {
 		return serviceTier === "flex" || serviceTier === "scale" || serviceTier === "priority";
 	}
 	if (provider === "google") {
@@ -213,7 +237,7 @@ export function realizesPriorityServiceTier(
 		return family === "openai" || family === "google";
 	}
 	if (model.api === "anthropic-messages") return false;
-	return shouldSendServiceTier(serviceTier, model.provider);
+	return shouldSendServiceTier(serviceTier, model);
 }
 
 /**

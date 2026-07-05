@@ -39,7 +39,6 @@ import {
 	type MessageAttribution,
 	type Model,
 	OPENAI_MAX_OUTPUT_TOKENS,
-	type Provider,
 	type ServiceTier,
 	type StopReason,
 	type StreamOptions,
@@ -274,9 +273,9 @@ export function resolveOpenAIRequestSetup(
 export function applyOpenAIServiceTier(
 	params: { service_tier?: ServiceTier | null | undefined },
 	serviceTier: ServiceTier | null | undefined,
-	provider: Provider | undefined,
+	model: Pick<Model, "provider" | "api" | "id">,
 ): void {
-	if (!shouldSendServiceTier(serviceTier, provider)) return;
+	if (!shouldSendServiceTier(serviceTier, model)) return;
 	if (serviceTier === "flex" || serviceTier === "scale" || serviceTier === "priority") {
 		params.service_tier = serviceTier;
 	}
@@ -2466,7 +2465,7 @@ type CommonSamplingOptions = Pick<
 export function applyCommonResponsesSamplingParams<P extends CommonResponsesParams>(
 	params: P,
 	options: CommonSamplingOptions | undefined,
-	model: Pick<Model, "provider" | "omitMaxOutputTokens" | "maxTokens">,
+	model: Pick<Model, "provider" | "api" | "id" | "omitMaxOutputTokens" | "maxTokens">,
 ): void {
 	if (options?.maxTokens && !model.omitMaxOutputTokens) {
 		params.max_output_tokens = Math.min(
@@ -2481,7 +2480,7 @@ export function applyCommonResponsesSamplingParams<P extends CommonResponsesPara
 	if (options?.minP !== undefined) params.min_p = options.minP;
 	if (options?.presencePenalty !== undefined) params.presence_penalty = options.presencePenalty;
 	if (options?.repetitionPenalty !== undefined) params.repetition_penalty = options.repetitionPenalty;
-	applyOpenAIServiceTier(params, options?.serviceTier, model.provider);
+	applyOpenAIServiceTier(params, options?.serviceTier, model);
 }
 
 type ReasoningOptions = {

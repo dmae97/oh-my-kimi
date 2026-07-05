@@ -9157,24 +9157,26 @@ export class AgentSession {
 
 	/**
 	 * `/fast on|off` targets the family of the currently selected model: it sets
-	 * (or clears) that family's `priority` tier. Models without a service-tier
-	 * family (Fireworks, or providers with no tier knob) have nothing to toggle.
+	 * (or clears) that family's `priority` tier. Returns `false` when the model
+	 * has no service-tier family, so callers can report that fast mode is
+	 * unavailable instead of claiming success.
 	 */
-	setFastMode(enabled: boolean): void {
+	setFastMode(enabled: boolean): boolean {
 		const family = this.model ? serviceTierFamily(this.model) : undefined;
 		if (!family) {
 			this.emitNotice("info", "The current model has no service-tier control for /fast to toggle.", "priority");
-			return;
+			return false;
 		}
 		if (!enabled) {
 			if (this.#serviceTierByFamily[family] === "priority") this.setServiceTierFamily(family, undefined);
-			return;
+			return true;
 		}
 		this.setServiceTierFamily(family, "priority");
+		return true;
 	}
 
 	toggleFastMode(): boolean {
-		this.setFastMode(!this.isFastModeEnabled());
+		if (!this.setFastMode(!this.isFastModeEnabled())) return false;
 		return this.isFastModeEnabled();
 	}
 

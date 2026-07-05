@@ -118,9 +118,13 @@ export const isOpenAIGptOssModelId = memo((modelId: string): boolean => {
 	return /(^|\/)gpt-oss[-:]/i.test(modelId);
 });
 
-/** OpenAI model ids (gpt-*, o1-*, o3-*, o4-*, or prefixed with openai/). */
+/** OpenAI model ids (gpt-*, chatgpt-*, o1/o3/o4 SKUs, codex-*, or openai/*). */
 export const isOpenAIModelId = memo((modelId: string): boolean => {
-	return /(^|\/)(gpt|o1|o3|o4)[-.]/i.test(modelId) || modelId.toLowerCase().includes("openai/");
+	return (
+		/(^|\/)(?:gpt|chatgpt|codex)[-.]/i.test(modelId) ||
+		/(^|\/)o[134](?:[-.]|$)/i.test(modelId) ||
+		modelId.toLowerCase().includes("openai/")
+	);
 });
 
 /** OpenAI models at or above the gpt-5.4 wire generation, keyed off the parsed version. */
