@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the stale package version metadata so the collab web workspace advertises `16.3.4` instead of the old `15.11.7` pin. ([#4549](https://github.com/can1357/oh-my-pi/issues/4549))
+
 ## [16.3.3] - 2026-07-02
 
 ### Fixed
