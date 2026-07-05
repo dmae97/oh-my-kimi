@@ -205,29 +205,37 @@ interface WorkingMessageAccentCacheKey {
 	sessionAccentEnabled: boolean;
 }
 
+/**
+ * Intern the shimmer palettes for each `WorkingMessageAccent` so `compile()`
+ * inside `shimmerSegments` sees a stable palette object between animation
+ * ticks. Allocating fresh palette literals every frame guaranteed a cache miss
+ * on the Symbol-keyed compiled-ANSI slot and forced `resolveTierAnsi` to walk
+ * every tier open/close for the ~30fps loader redraw (issue #4377).
+ */
+const workingMessagePaletteCache = new WeakMap<WorkingMessageAccent, { main: ShimmerPalette; hint: ShimmerPalette }>();
+
+function workingMessagePalettes(accent: WorkingMessageAccent): { main: ShimmerPalette; hint: ShimmerPalette } {
+	let entry = workingMessagePaletteCache.get(accent);
+	if (!entry) {
+		entry = {
+			main: { low: "dim", mid: { ansi: accent.main }, high: { ansi: accent.main }, bold: true },
+			hint: { low: "dim", mid: { ansi: accent.dim }, high: { ansi: accent.dim } },
+		};
+		workingMessagePaletteCache.set(accent, entry);
+	}
+	return entry;
+}
+
 function renderWorkingMessage(message: string, accent?: WorkingMessageAccent): string {
-	const palette = accent
-		? ({
-				low: "dim",
-				mid: { ansi: accent.main },
-				high: { ansi: accent.main },
-				bold: true,
-			} satisfies ShimmerPalette)
-		: undefined;
+	const palettes = accent ? workingMessagePalettes(accent) : undefined;
+	const palette = palettes?.main;
 	const hint = interruptHint();
 	if (!message.endsWith(hint)) return shimmerText(message, theme, palette);
 	const header = message.slice(0, -hint.length);
-	const hintPalette = accent
-		? ({
-				low: "dim",
-				mid: { ansi: accent.dim },
-				high: { ansi: accent.dim },
-			} satisfies ShimmerPalette)
-		: HINT_SHIMMER_PALETTE;
 	return shimmerSegments(
 		[
 			{ text: header, palette },
-			{ text: hint, palette: hintPalette },
+			{ text: hint, palette: palettes?.hint ?? HINT_SHIMMER_PALETTE },
 		],
 		theme,
 	);

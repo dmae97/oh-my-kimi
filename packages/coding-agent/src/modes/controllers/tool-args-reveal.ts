@@ -1,8 +1,9 @@
+import type { Component } from "@oh-my-pi/pi-tui";
 import { parseStreamingJson, parseStreamingJsonThrottled, STREAMING_JSON_PARSE_MIN_GROWTH } from "@oh-my-pi/pi-utils";
 import { nextStep, STREAMING_REVEAL_FRAME_MS } from "./streaming-reveal";
 
 /** Minimal component surface the reveal pushes frames into. */
-type ToolArgsRevealComponent = {
+type ToolArgsRevealComponent = Component & {
 	updateArgs(args: unknown, toolCallId?: string): void;
 };
 
@@ -25,7 +26,10 @@ export function streamingStringKeysForTool(toolName: string, rawInput: boolean):
 
 type ToolArgsRevealControllerOptions = {
 	getSmoothStreaming(): boolean;
-	requestRender(): void;
+	/** Called after each reveal tick with the component whose subtree changed;
+	 *  callers scope the render to that subtree instead of forcing a full-tree
+	 *  walk at 30fps (issue #4377). */
+	requestRender(component: Component): void;
 };
 
 type StreamingJsonStringExtractorResult = {
@@ -438,7 +442,7 @@ export function decodeStreamedToolArgs(partialJson: string, source: StreamedTool
  */
 export class ToolArgsRevealController {
 	readonly #getSmoothStreaming: () => boolean;
-	readonly #requestRender: () => void;
+	readonly #requestRender: (component: Component) => void;
 	readonly #entries = new Map<string, RevealEntry>();
 	#timer: NodeJS.Timeout | undefined;
 
@@ -560,7 +564,10 @@ export class ToolArgsRevealController {
 
 	#tick(): void {
 		let advanced = false;
-		let rendered = false;
+		// Collect components with changed display args; render each subtree once
+		// per tick even when multiple entries share a component (they don't
+		// today, but the API contract doesn't prevent it).
+		const rendered = new Set<ToolArgsRevealComponent>();
 		for (const [id, entry] of this.#entries) {
 			const backlog = entry.target.length - entry.revealed;
 			if (backlog <= 0 || !entry.component) continue;
@@ -568,12 +575,12 @@ export class ToolArgsRevealController {
 			const display = displayArgsForPrefix(entry, entry.target.slice(0, entry.revealed));
 			if (display.changed) {
 				entry.component.updateArgs(display.args, id);
-				rendered = true;
+				rendered.add(entry.component);
 			}
 			advanced = true;
 		}
 		if (advanced) {
-			if (rendered) this.#requestRender();
+			for (const component of rendered) this.#requestRender(component);
 		} else {
 			// Every entry caught up (or unbound); setTarget restarts on growth.
 			this.#stopTimer();

@@ -91,6 +91,9 @@
 ### Fixed
 
 - Fixed session title generation, commit-message generation, speech-enhancer rewrites, and the online auto-thinking and unexpected-stop classifiers silently truncating on non-reasoning-flagged models that still emit thinking output (e.g. Qwen3 served via llama.cpp) by always sizing the completion budget for backends that ignore `disableReasoning` ([#4355](https://github.com/can1357/oh-my-pi/issues/4355))
+### Fixed
+
+- Further reduced TUI CPU during streaming and live tool calls by scoping timer-driven reveal/spinner renders to the changed subtree (streaming reveal, tool-args reveal, tool-execution spinner, todo strike animation) instead of forcing a full-tree walk at 30fps, interning the working-message shimmer palette so the compiled-ANSI cache hits between animation frames, and adding a band fast-path to `shimmerSegments` that coalesces off-band code points into a single low-tier run ([#4377](https://github.com/can1357/oh-my-pi/issues/4377))
 
 ## [16.3.3] - 2026-07-02
 

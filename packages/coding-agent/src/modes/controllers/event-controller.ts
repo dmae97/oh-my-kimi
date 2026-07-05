@@ -134,11 +134,11 @@ export class EventController {
 			getSmoothStreaming: () => this.ctx.settings.get("display.smoothStreaming"),
 			getHideThinkingBlock: () => this.ctx.effectiveHideThinkingBlock,
 			getProseOnlyThinking: () => this.ctx.proseOnlyThinking,
-			requestRender: () => this.ctx.ui.requestRender(),
+			requestRender: component => this.ctx.ui.requestComponentRender(component),
 		});
 		this.#toolArgsReveal = new ToolArgsRevealController({
 			getSmoothStreaming: () => this.ctx.settings.get("display.smoothStreaming"),
-			requestRender: () => this.ctx.ui.requestRender(),
+			requestRender: component => this.ctx.ui.requestComponentRender(component),
 		});
 		this.#handlers = {
 			agent_start: e => this.#handleAgentStart(e),

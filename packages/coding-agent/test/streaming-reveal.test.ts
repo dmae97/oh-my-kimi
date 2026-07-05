@@ -66,6 +66,13 @@ class RecordingComponent {
 		this.messages.push(message);
 		this.transientFlags.push(opts?.transient);
 	}
+
+	// Component protocol stub — the reveal controller now hands the component
+	// to `requestComponentRender`, which only exercises identity, so returning
+	// an empty rendered frame is sufficient for these tests.
+	render(): readonly string[] {
+		return [];
+	}
 }
 
 function latestMessage(component: RecordingComponent): AssistantMessage {
@@ -297,6 +304,24 @@ describe("streaming reveal", () => {
 		expect(textAt(latestMessage(component), 0)).toBe("abcdefghi");
 		expect(component.messages).toHaveLength(updates);
 		expect(requestRender).toHaveBeenCalledTimes(1);
+	});
+
+	it("passes the bound component to requestRender on each smooth tick", () => {
+		// The controller must hand its component to `requestRender` so the caller
+		// scopes the render to that subtree via `TUI.requestComponentRender`
+		// instead of forcing a full-tree walk at 30fps (issue #4377).
+		vi.useFakeTimers();
+		const requestRender = vi.fn();
+		const { component, controller } = makeController({ requestRender });
+
+		controller.begin(component, makeMessage([{ type: "text", text: "" }]));
+		controller.setTarget(makeMessage([{ type: "text", text: "abcdef" }]));
+		vi.advanceTimersByTime(STREAMING_REVEAL_FRAME_MS);
+
+		expect(requestRender).toHaveBeenCalled();
+		for (const call of requestRender.mock.calls) {
+			expect(call[0]).toBe(component);
+		}
 	});
 });
 
