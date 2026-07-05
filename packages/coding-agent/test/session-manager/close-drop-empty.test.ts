@@ -126,6 +126,26 @@ describe("SessionManager close() drops empty metadata-only sessions", () => {
 		expect(await fileExists(sessionFile)).toBe(true);
 	});
 
+	it("keeps an explicitly ensured empty session after its draft is consumed on resume", async () => {
+		using tempDir = TempDir.createSync("@pi-session-close-keep-explicit-resumed-draft-");
+		const firstRun = SessionManager.create(tempDir.path(), tempDir.path());
+		await firstRun.ensureOnDisk();
+		await firstRun.saveDraft("resume me");
+
+		const sessionFile = firstRun.getSessionFile();
+		if (!sessionFile) throw new Error("Expected persistent session file");
+		await firstRun.close();
+		expect(await fileExists(sessionFile)).toBe(true);
+
+		const resumed = SessionManager.create(tempDir.path(), tempDir.path());
+		await resumed.setSessionFile(sessionFile);
+		expect(await resumed.consumeDraft()).toBe("resume me");
+		await resumed.saveDraft("");
+		await resumed.close();
+
+		expect(await fileExists(sessionFile)).toBe(true);
+	});
+
 	it("keeps a handoff custom message even before the next user turn", async () => {
 		using tempDir = TempDir.createSync("@pi-session-close-keep-handoff-");
 		const session = SessionManager.create(tempDir.path(), tempDir.path());

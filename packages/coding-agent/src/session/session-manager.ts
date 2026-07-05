@@ -73,6 +73,7 @@ import {
 import { type SessionTitleUpdate, serializeTitleSlot } from "./session-title-slot";
 
 const JSONL_SUFFIX_LENGTH = ".jsonl".length;
+const DRAFT_ONLY_SESSION_MARKER = ".draft-only-session";
 const SUPERSEDED_COMPACTION_SUMMARY = "[Superseded compaction summary elided after a newer compaction]";
 const SUPERSEDED_COMPACTION_SHORT_SUMMARY = "Superseded compaction elided";
 
@@ -827,6 +828,32 @@ export class SessionManager {
 		return artifactsDir ? path.join(artifactsDir, "draft.txt") : null;
 	}
 
+	#draftOnlySessionMarkerPath(): string | null {
+		const artifactsDir = this.getArtifactsDir();
+		return artifactsDir ? path.join(artifactsDir, DRAFT_ONLY_SESSION_MARKER) : null;
+	}
+
+	#hasDraftOnlySessionMarker(): boolean {
+		const markerPath = this.#draftOnlySessionMarkerPath();
+		return markerPath !== null && this.#storage.existsSync(markerPath);
+	}
+
+	async #writeDraftOnlySessionMarker(): Promise<void> {
+		const markerPath = this.#draftOnlySessionMarkerPath();
+		if (!markerPath) return;
+		await this.#storage.writeText(markerPath, "");
+	}
+
+	async #clearDraftOnlySessionMarker(): Promise<void> {
+		const markerPath = this.#draftOnlySessionMarkerPath();
+		if (!markerPath) return;
+		try {
+			await this.#storage.unlink(markerPath);
+		} catch (err) {
+			if (!isEnoent(err)) throw err;
+		}
+	}
+
 	#artifactManagerForSession(): ArtifactManager | null {
 		if (this.#adoptedArtifactManager) return this.#adoptedArtifactManager;
 
@@ -1173,10 +1200,17 @@ export class SessionManager {
 	async #dropIfEmptyAndNoDraft(): Promise<void> {
 		if (!this.#draftOnlySessionCleanupArmed) return;
 		const sessionFile = this.#sessionFile;
-		if (!sessionFile || !this.#storage.existsSync(sessionFile)) return;
-		if (!this.#entries.every(isDraftOnlyMetadataEntry)) return;
+		if (!sessionFile || !this.#storage.existsSync(sessionFile)) {
+			this.#draftOnlySessionCleanupArmed = false;
+			return;
+		}
 		const draftPath = this.#draftPath();
 		if (draftPath && this.#storage.existsSync(draftPath)) return;
+		if (!this.#entries.every(isDraftOnlyMetadataEntry)) {
+			await this.#clearDraftOnlySessionMarker();
+			this.#draftOnlySessionCleanupArmed = false;
+			return;
+		}
 		try {
 			await this.#storage.deleteSessionWithArtifacts(sessionFile);
 			this.#fileIsCurrent = false;
@@ -1299,7 +1333,10 @@ export class SessionManager {
 			this.#entries.every(isDraftOnlyMetadataEntry);
 		// Force the header onto disk so resume can find the file this draft attaches to.
 		await this.ensureOnDisk();
-		if (draftWillMaterializeMetadataOnlyFile) this.#draftOnlySessionCleanupArmed = true;
+		if (draftWillMaterializeMetadataOnlyFile) {
+			await this.#writeDraftOnlySessionMarker();
+			this.#draftOnlySessionCleanupArmed = true;
+		}
 		await this.#storage.writeText(draftPath, text);
 	}
 
@@ -1320,7 +1357,8 @@ export class SessionManager {
 		} catch (err) {
 			if (!isEnoent(err)) throw err;
 		}
-		if (this.#entries.every(isDraftOnlyMetadataEntry)) this.#draftOnlySessionCleanupArmed = true;
+		if (this.#entries.every(isDraftOnlyMetadataEntry) && this.#hasDraftOnlySessionMarker())
+			this.#draftOnlySessionCleanupArmed = true;
 
 		return draft;
 	}
