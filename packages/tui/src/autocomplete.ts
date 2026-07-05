@@ -182,6 +182,8 @@ export interface SlashCommand {
 	aliases?: string[];
 	description?: string;
 	argumentHint?: string;
+	/** Whether the command consumes argument text after the command name. False means the full input stays normal prompt text once args are present. */
+	allowArgs?: boolean;
 	/** Dynamic display-only description for slash-command autocomplete. Must be synchronous and side-effect free. */
 	getAutocompleteDescription?: () => string | undefined;
 	// Function to get argument completions for this command
@@ -387,6 +389,72 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		const currentLine = lines[cursorLine] || "";
 		const textBeforeCursor = currentLine.slice(0, cursorCol);
 
+		const leadingSlashStart = findLeadingSlashCommandStart(textBeforeCursor);
+		const trailingSlashStart = findTrailingSlashCommandStart(textBeforeCursor);
+		const hasPromptTextBeforeTrailingSlash =
+			trailingSlashStart !== null &&
+			hasPromptTextBeforeSlash(lines, cursorLine, textBeforeCursor, trailingSlashStart);
+		const hasPromptTextBeforeLeadingSlash =
+			leadingSlashStart !== null && hasPromptTextBeforeSlash(lines, cursorLine, textBeforeCursor, leadingSlashStart);
+		const slashStart = hasPromptTextBeforeTrailingSlash
+			? trailingSlashStart
+			: hasPromptTextBeforeLeadingSlash
+				? null
+				: leadingSlashStart;
+		if (slashStart !== null) {
+			const commandText = textBeforeCursor.slice(slashStart);
+			const spaceIndex = commandText.indexOf(" ");
+			const isMidPromptSkillLookup = hasPromptTextBeforeTrailingSlash;
+
+			if (spaceIndex === -1) {
+				// No space yet - complete command names
+				const prefix = commandText.slice(1); // Remove the "/"
+				const lowerPrefix = prefix.toLowerCase();
+
+				const matches = isMidPromptSkillLookup
+					? buildMidPromptSkillCompletions(this.#commands, lowerPrefix)
+					: buildSlashCommandCompletions(this.#commands, lowerPrefix);
+
+				if (matches.length > 0) {
+					return {
+						items: matches,
+						// Preserve the full text-before-cursor for submitted slash
+						// commands so the editor's Enter-staleness check still applies
+						// completion for `  /sk`. Mid-prompt skill lookup keeps only
+						// the slash token because accepting it replaces the whole draft.
+						prefix: isMidPromptSkillLookup ? commandText : textBeforeCursor,
+					};
+				}
+				if (!isMidPromptSkillLookup) return null;
+				// A mid-prompt slash token with no matching skill may still be an
+				// absolute path (`see /tmp`); fall through to file-path completion.
+			} else if (!isMidPromptSkillLookup) {
+				// Submitted slash commands own their argument text only when the
+				// matched command accepts args. No-arg slash-looking prompts such
+				// as `/settings @file` still fall through to prompt-composer
+				// completions because submit treats them as normal prompt text.
+				const commandName = commandText.slice(1, spaceIndex); // Command without "/"
+				const argumentText = commandText.slice(spaceIndex + 1); // Text after space
+
+				const command = this.#commands.find(cmd => commandMatchesNameOrAlias(cmd, commandName));
+				if (command && (!("allowArgs" in command) || command.allowArgs !== false)) {
+					if (!("getArgumentCompletions" in command) || !command.getArgumentCompletions) {
+						return null; // No argument completion for this command
+					}
+
+					const argumentSuggestions = await command.getArgumentCompletions(argumentText);
+					if (!Array.isArray(argumentSuggestions) || argumentSuggestions.length === 0) {
+						return null;
+					}
+
+					return {
+						items: argumentSuggestions,
+						prefix: argumentText,
+					};
+				}
+			}
+		}
+
 		// Check for @ file reference (fuzzy search) - must be after a delimiter or at start
 		const atPrefix = this.#extractAtPrefix(textBeforeCursor);
 		if (atPrefix) {
@@ -417,62 +485,6 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 				items: suggestions,
 				prefix: atPrefix,
 			};
-		}
-
-		const leadingSlashStart = findLeadingSlashCommandStart(textBeforeCursor);
-		const trailingSlashStart = findTrailingSlashCommandStart(textBeforeCursor);
-		const hasPromptTextBeforeTrailingSlash =
-			trailingSlashStart !== null &&
-			hasPromptTextBeforeSlash(lines, cursorLine, textBeforeCursor, trailingSlashStart);
-		const slashStart = hasPromptTextBeforeTrailingSlash ? trailingSlashStart : leadingSlashStart;
-		if (slashStart !== null) {
-			const commandText = textBeforeCursor.slice(slashStart);
-			const spaceIndex = commandText.indexOf(" ");
-			const isMidPromptSkillLookup = hasPromptTextBeforeTrailingSlash;
-
-			if (spaceIndex === -1) {
-				// No space yet - complete command names
-				const prefix = commandText.slice(1); // Remove the "/"
-				const lowerPrefix = prefix.toLowerCase();
-
-				const matches = isMidPromptSkillLookup
-					? buildMidPromptSkillCompletions(this.#commands, lowerPrefix)
-					: buildSlashCommandCompletions(this.#commands, lowerPrefix);
-
-				if (matches.length > 0) {
-					return {
-						items: matches,
-						// Preserve the full text-before-cursor for submitted slash
-						// commands so the editor's Enter-staleness check still applies
-						// completion for `  /sk`. Mid-prompt skill lookup keeps only
-						// the slash token because accepting it replaces the whole draft.
-						prefix: isMidPromptSkillLookup ? commandText : textBeforeCursor,
-					};
-				}
-				if (!isMidPromptSkillLookup) return null;
-				// A mid-prompt slash token with no matching skill may still be an
-				// absolute path (`see /tmp`); fall through to file-path completion.
-			} else if (!isMidPromptSkillLookup) {
-				// Space found - complete command arguments
-				const commandName = commandText.slice(1, spaceIndex); // Command without "/"
-				const argumentText = commandText.slice(spaceIndex + 1); // Text after space
-
-				const command = this.#commands.find(cmd => commandMatchesNameOrAlias(cmd, commandName));
-				if (!command || !("getArgumentCompletions" in command) || !command.getArgumentCompletions) {
-					return null; // No argument completion for this command
-				}
-
-				const argumentSuggestions = await command.getArgumentCompletions(argumentText);
-				if (!Array.isArray(argumentSuggestions) || argumentSuggestions.length === 0) {
-					return null;
-				}
-
-				return {
-					items: argumentSuggestions,
-					prefix: argumentText,
-				};
-			}
-			if (!isMidPromptSkillLookup) return null;
 		}
 
 		// Check for file paths - triggered by Tab or if we detect a path pattern

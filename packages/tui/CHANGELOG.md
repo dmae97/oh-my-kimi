@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed submitted slash-command arguments treating `@` file-reference tokens as prompt-composer autocomplete triggers when the command does not define argument completions. ([#4600](https://github.com/can1357/oh-my-pi/issues/4600))
+
 ## [16.3.6] - 2026-07-04
 
 ### Added

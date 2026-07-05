@@ -2437,6 +2437,7 @@ export const BUILTIN_SLASH_COMMAND_DEFS: ReadonlyArray<BuiltinSlashCommand> = BU
 	command => ({
 		name: command.name,
 		aliases: command.aliases,
+		allowArgs: command.allowArgs === true,
 		description: command.description,
 		subcommands: command.subcommands,
 		inlineHint: command.inlineHint,

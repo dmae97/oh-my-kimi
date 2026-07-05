@@ -118,6 +118,71 @@ describe("CombinedAutocompleteProvider", () => {
 			expect(result?.prefix).toBe("/tmp");
 			expect(result?.items.map(item => item.value)).toContain("/tmp/");
 		});
+
+		it("treats @ file-reference tokens as literal text inside slash command arguments without completions", async () => {
+			const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "autocomplete-rename-args-"));
+			try {
+				fs.writeFileSync(path.join(baseDir, "copy-target.ts"), "export {};\n");
+				const provider = new CombinedAutocompleteProvider(
+					[{ name: "rename", description: "Rename current session", allowArgs: true }],
+					baseDir,
+				);
+				const line = "/rename repro @";
+				const result = await provider.getSuggestions([line], 0, line.length);
+
+				expect(result).toBeNull();
+			} finally {
+				fs.rmSync(baseDir, { recursive: true, force: true });
+			}
+		});
+
+		it("returns @ file-reference completions for matched slash commands that reject arguments", async () => {
+			const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "autocomplete-settings-args-"));
+			try {
+				fs.writeFileSync(path.join(baseDir, "copy-target.ts"), "export {};\n");
+				const provider = new CombinedAutocompleteProvider(
+					[{ name: "settings", description: "Open settings", allowArgs: false }],
+					baseDir,
+				);
+				const line = "/settings @";
+				const result = await provider.getSuggestions([line], 0, line.length);
+
+				expect(result?.prefix).toBe("@");
+				expect(result?.items.map(item => item.value)).toContain("@copy-target.ts");
+			} finally {
+				fs.rmSync(baseDir, { recursive: true, force: true });
+			}
+		});
+
+		it("returns slash command argument completions instead of @ file references when the command defines them", async () => {
+			const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "autocomplete-rename-args-"));
+			try {
+				fs.writeFileSync(path.join(baseDir, "copy-target.ts"), "export {};\n");
+				const provider = new CombinedAutocompleteProvider(
+					[
+						{
+							name: "rename",
+							description: "Rename current session",
+							allowArgs: true,
+							getArgumentCompletions: argumentPrefix =>
+								argumentPrefix === "repro @"
+									? [{ value: "repro @literal", label: "Keep @ in the title" }]
+									: null,
+						},
+					],
+					baseDir,
+				);
+				const line = "/rename repro @";
+				const result = await provider.getSuggestions([line], 0, line.length);
+
+				expect(result).toEqual({
+					prefix: "repro @",
+					items: [{ value: "repro @literal", label: "Keep @ in the title" }],
+				});
+			} finally {
+				fs.rmSync(baseDir, { recursive: true, force: true });
+			}
+		});
 	});
 	describe("applyCompletion", () => {
 		it("replaces the live slash command prefix when rendered suggestions are stale", () => {
