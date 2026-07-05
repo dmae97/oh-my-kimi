@@ -219,10 +219,11 @@ describe("AgentSession retry fallback", () => {
 		]);
 	});
 
-	it("uses the active initial model as the default fallback primary when the default role is unset", async () => {
+	it("uses the active initial model as the default fallback primary when other role fallback chains are configured", async () => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
-		if (!primaryModel || !fallbackModel) {
+		const otherRoleFallbackModel = getBundledModel("openai", "gpt-4o");
+		if (!primaryModel || !fallbackModel || !otherRoleFallbackModel) {
 			throw new Error("Expected bundled test models to exist");
 		}
 
@@ -235,6 +236,7 @@ describe("AgentSession retry fallback", () => {
 			"retry.maxRetries": 1,
 			"retry.fallbackChains": {
 				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
+				smol: [`${otherRoleFallbackModel.provider}/${otherRoleFallbackModel.id}`],
 			},
 		});
 

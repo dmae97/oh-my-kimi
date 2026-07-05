@@ -13122,10 +13122,7 @@ export class AgentSession {
 		if (
 			Array.isArray(defaultChain) &&
 			defaultChain.length > 0 &&
-			this.#getRetryFallbackPrimarySelector("default") === undefined &&
-			Object.entries(chains).every(
-				([role, chain]) => role === "default" || !Array.isArray(chain) || chain.length === 0,
-			)
+			this.#getRetryFallbackPrimarySelector("default") === undefined
 		) {
 			return "default";
 		}
@@ -13155,11 +13152,7 @@ export class AgentSession {
 			if (
 				Array.isArray(defaultChain) &&
 				defaultChain.length > 0 &&
-				this.#getRetryFallbackPrimarySelector("default") === undefined &&
-				Object.entries(chains).every(
-					([chainRole, roleChain]) =>
-						chainRole === "default" || !Array.isArray(roleChain) || roleChain.length === 0,
-				)
+				this.#getRetryFallbackPrimarySelector("default") === undefined
 			) {
 				const seen = new Set<string>([parsedCurrent.raw]);
 				chain = [parsedCurrent];
