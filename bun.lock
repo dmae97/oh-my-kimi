@@ -121,7 +121,7 @@
     },
     "packages/collab-web": {
       "name": "@oh-my-pi/collab-web",
-      "version": "16.3.4",
+      "version": "16.3.6",
       "dependencies": {
         "@oh-my-pi/pi-wire": "catalog:",
         "lucide-react": "catalog:",
