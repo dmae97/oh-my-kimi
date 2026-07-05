@@ -182,3 +182,17 @@ export function resolveAssistantErrorPresentation(
 	}
 	return { kind: "none" };
 }
+
+/**
+ * Whether an assistant turn's `usage` reflects work the operator was billed
+ * for. Empty automated turns from providers that emit `usage: 0` collapse to
+ * `false`, but any input, output, cache, or premium request keeps the row so
+ * cost transparency survives — the live path and the resume/rebuild path
+ * agree turn-by-turn.
+ */
+export function assistantUsageIsBilled(usage: AssistantAgentMessage["usage"]): boolean {
+	if (usage.input > 0 || usage.output > 0) return true;
+	if (usage.cacheRead > 0 || usage.cacheWrite > 0) return true;
+	if ((usage.premiumRequests ?? 0) > 0) return true;
+	return false;
+}

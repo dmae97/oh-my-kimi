@@ -16,6 +16,7 @@
 - Fixed the status-line token-rate segment rendering as `<number>/s`, which Ghostty auto-detected as a hyperlink on Ctrl+hover. ([#4541](https://github.com/can1357/oh-my-pi/issues/4541))
 - Fixed xAI `web_search` sending unsupported request-level `search_parameters` to the Responses Agent Tools API; result counts are now enforced locally without adding deprecated live-search date bounds. ([#4537](https://github.com/can1357/oh-my-pi/issues/4537))
 - Fixed xAI `web_search` to use `xai-oauth` credentials before falling back to `xai` API-key credentials, and to treat xAI OAuth as available in provider selection. ([#4536](https://github.com/can1357/oh-my-pi/issues/4536))
+- Fixed token-usage badges disappearing on session resume for empty automated assistant turns; live and resume paths now share the same billed-usage predicate so a turn that consumed tokens keeps its badge on both surfaces, and only genuinely zero-usage turns suppress the row. ([#4532](https://github.com/can1357/oh-my-pi/issues/4532))
 
 ## [16.3.6] - 2026-07-04
 

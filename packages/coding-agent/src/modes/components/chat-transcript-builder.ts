@@ -29,6 +29,7 @@ import type { SessionMessageEntry } from "../../session/session-entries";
 import { theme } from "../theme/theme";
 import {
 	assistantHasVisibleContent,
+	assistantUsageIsBilled,
 	buildAsyncResultBlock,
 	buildFileMentionBlock,
 	buildIrcMessageCard,
@@ -270,13 +271,15 @@ export class ChatTranscriptBuilder {
 	}
 
 	#appendAssistantMessage(message: Extract<AgentMessage, { role: "assistant" }>): void {
+		const hideThinkingBlock = this.deps.hideThinkingBlock?.() ?? false;
+		const proseOnlyThinking = this.deps.proseOnlyThinking ? this.deps.proseOnlyThinking() : true;
 		const assistantComponent = new AssistantMessageComponent(
 			message,
-			this.deps.hideThinkingBlock?.() ?? false,
+			hideThinkingBlock,
 			() => this.deps.requestRender(),
 			this.deps.getMessageRenderer ? undefined : [], // placeholder for thinkingRenderers
 			undefined, // placeholder for imageBudget
-			this.deps.proseOnlyThinking ? this.deps.proseOnlyThinking() : true,
+			proseOnlyThinking,
 		);
 		this.container.addChild(assistantComponent);
 
@@ -354,7 +357,8 @@ export class ChatTranscriptBuilder {
 			}
 		}
 
-		this.#pendingUsage = settings.get("display.showTokenUsage") ? message.usage : undefined;
+		this.#pendingUsage =
+			settings.get("display.showTokenUsage") && assistantUsageIsBilled(message.usage) ? message.usage : undefined;
 		this.#pendingUsageDuration = message.duration;
 		this.#pendingUsageTtft = message.ttft;
 	}
