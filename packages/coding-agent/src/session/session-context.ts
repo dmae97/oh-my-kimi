@@ -4,6 +4,50 @@ import * as snapcompact from "@oh-my-pi/snapcompact";
 import { createBranchSummaryMessage, createCompactionSummaryMessage, createCustomMessage } from "./messages";
 import { type CompactionEntry, EPHEMERAL_MODEL_CHANGE_ROLE, type SessionEntry } from "./session-entries";
 
+// #4470 crash artifacts had legacy frames (no shape metadata) with 17 frames,
+// ~306k archive chars, and ~1.5M truncated chars. Current snapcompact frames
+// carry shape metadata; only legacy archives with frame payload risk get this
+// conservative LLM-payload guard, and transcript rendering remains intact.
+const LEGACY_SNAPCOMPACT_FRAME_COUNT_GUARD = 16;
+const LEGACY_SNAPCOMPACT_ARCHIVE_TEXT_GUARD = 250_000;
+const LEGACY_SNAPCOMPACT_TRUNCATED_CHARS_GUARD = 1_000_000;
+
+function hasLegacySnapcompactFrames(archive: snapcompact.Archive): boolean {
+	return archive.frames.some(frame => frame.font === undefined && frame.variant === undefined);
+}
+
+function hasCrashRiskSnapcompactFramePayload(archive: snapcompact.Archive): boolean {
+	return (
+		archive.frames.length >= LEGACY_SNAPCOMPACT_FRAME_COUNT_GUARD ||
+		snapcompact.frameDataBytes(archive.frames) >= snapcompact.FRAME_DATA_BYTES_BUDGET
+	);
+}
+
+function hasCrashRiskSnapcompactArchiveSize(archive: snapcompact.Archive): boolean {
+	return (
+		archive.frames.length >= LEGACY_SNAPCOMPACT_FRAME_COUNT_GUARD ||
+		archive.truncatedChars >= LEGACY_SNAPCOMPACT_TRUNCATED_CHARS_GUARD ||
+		(snapcompact.archiveSourceText(archive)?.length ?? 0) >= LEGACY_SNAPCOMPACT_ARCHIVE_TEXT_GUARD
+	);
+}
+
+function isCrashRiskLegacySnapcompactArchive(archive: snapcompact.Archive): boolean {
+	return (
+		hasLegacySnapcompactFrames(archive) &&
+		hasCrashRiskSnapcompactFramePayload(archive) &&
+		hasCrashRiskSnapcompactArchiveSize(archive)
+	);
+}
+
+function snapcompactHistoryBlockOptions(
+	archive: snapcompact.Archive,
+	options: BuildSessionContextOptions | undefined,
+): snapcompact.HistoryBlockOptions | undefined {
+	if (options?.transcript) return undefined;
+	if (isCrashRiskLegacySnapcompactArchive(archive)) return { maxFrameDataBytes: 0 };
+	return { maxFrameDataBytes: snapcompact.FRAME_DATA_BYTES_BUDGET };
+}
+
 export interface SessionContext {
 	messages: AgentMessage[];
 	thinkingLevel?: string;
@@ -82,10 +126,7 @@ function snapcompactHistoryBlocksForContext(
 	options: BuildSessionContextOptions | undefined,
 ) {
 	if (!archive) return undefined;
-	return snapcompact.historyBlocks(
-		archive,
-		options?.transcript ? undefined : { maxFrameDataBytes: snapcompact.FRAME_DATA_BYTES_BUDGET },
-	);
+	return snapcompact.historyBlocks(archive, snapcompactHistoryBlockOptions(archive, options));
 }
 
 export function buildSessionContext(

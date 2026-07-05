@@ -66,6 +66,7 @@
 - Fixed Windows session tail loss after atomic compaction rewrites by fencing append writers during full-file replacement and gating the atomic publish on a `commitGuard` that the storage backend checks synchronously before rename, so a concurrent `flushSync` (Ctrl+C / session-exit) is not overwritten by the stale body serialized before it ran. Covers post-compaction prompts, tool results, title changes, and exit diagnostics on the current JSONL path ([#4338](https://github.com/can1357/oh-my-pi/issues/4338)).
 - Preserved isolated branch-mode task output as a patch artifact when `commitToBranch` fails before the task branch can be transferred, and surfaced the captured patch path (plus any nested patches) through the eval `agent()` failure message so callers can recover the work instead of losing it with the isolation worktree ([#4437](https://github.com/can1357/oh-my-pi/issues/4437)).
 - Fixed task-class subagents dropping unresolved explicit model-role selectors before startup, preventing `modelRoles.task` from silently falling through to an unrelated available provider model ([#4421](https://github.com/can1357/oh-my-pi/issues/4421)).
+- Fixed large legacy snapcompact archives being rehydrated into active resumed-session context, avoiding Bun Worker crashes on oversized archived frame payloads ([#4470](https://github.com/can1357/oh-my-pi/issues/4470)).
 
 ## [16.3.4] - 2026-07-03
 

@@ -303,6 +303,129 @@ describe("buildSessionContext", () => {
 			expect(transcriptSummary.blocks?.filter(block => block.type === "image")).toHaveLength(2);
 		});
 
+		it("does not rehydrate legacy oversized snapcompact frames into active LLM context (#4470)", () => {
+			const framePayload = "A".repeat(100_000);
+			const archiveText = `Issue #4470 legacy archive source\n${"archived history ".repeat(22_000)}`;
+			const compacted: CompactionEntry = {
+				...compaction("3", "2", "Legacy snapcompact summary", "1"),
+				preserveData: {
+					[snapcompact.PRESERVE_KEY]: {
+						frames: Array.from({ length: 17 }, (_, index) => ({
+							data: framePayload,
+							mimeType: "image/png",
+							cols: 64,
+							rows: 40,
+							chars: 1000 + index,
+						})),
+						totalChars: archiveText.length,
+						truncatedChars: 1_500_000,
+						text: archiveText,
+						textHead: "oldest retained snapcompact archive text",
+						textTail: "newest retained snapcompact archive text",
+					},
+				},
+			};
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "before compact"),
+				msg("2", "1", "assistant", "archived response"),
+				compacted,
+				msg("4", "3", "user", "after resume"),
+			];
+
+			const ctx = buildSessionContext(entries);
+
+			expect(ctx.messages.map(message => message.role)).toEqual(["compactionSummary", "user", "assistant", "user"]);
+			const summary = ctx.messages[0];
+			if (summary?.role !== "compactionSummary") throw new Error("Expected active compaction summary");
+			const blocks = summary.blocks ?? [];
+			expect(summary.summary).toContain("Legacy snapcompact summary");
+			expect(blocks.some(block => block.type === "text" && block.text.includes("oldest retained snapcompact"))).toBe(
+				true,
+			);
+			expect(blocks.some(block => block.type === "text" && block.text.includes("newest retained snapcompact"))).toBe(
+				true,
+			);
+			expect(blocks.filter(block => block.type === "image")).toHaveLength(0);
+			expect(summary.images ?? []).toHaveLength(0);
+
+			const transcript = buildSessionContext(entries, undefined, undefined, { transcript: true });
+			const transcriptSummary = transcript.messages[2];
+			if (transcriptSummary?.role !== "compactionSummary") throw new Error("Expected transcript compaction summary");
+			expect(transcriptSummary.blocks?.filter(block => block.type === "image")).toHaveLength(17);
+		});
+
+		it("keeps current oversized snapcompact frame archives in active LLM context", () => {
+			const framePayload = "A".repeat(100_000);
+			const archiveText = `Current archive source\n${"archived history ".repeat(22_000)}`;
+			const compacted: CompactionEntry = {
+				...compaction("3", "2", "Current snapcompact summary", "1"),
+				preserveData: {
+					[snapcompact.PRESERVE_KEY]: {
+						frames: Array.from({ length: 17 }, (_, index) => ({
+							data: framePayload,
+							mimeType: "image/png",
+							cols: 64,
+							rows: 40,
+							chars: 1000 + index,
+							font: "8x13",
+							variant: "bw",
+							lineRepeat: 1,
+						})),
+						totalChars: archiveText.length,
+						truncatedChars: 1_500_000,
+						text: archiveText,
+						textHead: "current oldest retained text",
+						textTail: "current newest retained text",
+					},
+				},
+			};
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "before compact"),
+				msg("2", "1", "assistant", "archived response"),
+				compacted,
+				msg("4", "3", "user", "after resume"),
+			];
+
+			const ctx = buildSessionContext(entries);
+			const summary = ctx.messages[0];
+			if (summary?.role !== "compactionSummary") throw new Error("Expected active compaction summary");
+			expect(summary.blocks?.filter(block => block.type === "image")).toHaveLength(17);
+		});
+
+		it("keeps small legacy snapcompact frame archives in active LLM context", () => {
+			const archiveText = `Large legacy text-only counter\n${"archived history ".repeat(22_000)}`;
+			const compacted: CompactionEntry = {
+				...compaction("3", "2", "Small legacy snapcompact summary", "1"),
+				preserveData: {
+					[snapcompact.PRESERVE_KEY]: {
+						frames: Array.from({ length: 2 }, (_, index) => ({
+							data: "A".repeat(1000),
+							mimeType: "image/png",
+							cols: 64,
+							rows: 40,
+							chars: 1000 + index,
+						})),
+						totalChars: archiveText.length,
+						truncatedChars: 1_500_000,
+						text: archiveText,
+						textHead: "small legacy oldest retained text",
+						textTail: "small legacy newest retained text",
+					},
+				},
+			};
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "before compact"),
+				msg("2", "1", "assistant", "archived response"),
+				compacted,
+				msg("4", "3", "user", "after resume"),
+			];
+
+			const ctx = buildSessionContext(entries);
+			const summary = ctx.messages[0];
+			if (summary?.role !== "compactionSummary") throw new Error("Expected active compaction summary");
+			expect(summary.blocks?.filter(block => block.type === "image")).toHaveLength(2);
+		});
+
 		it("multiple compactions uses latest", () => {
 			const entries: SessionEntry[] = [
 				msg("1", null, "user", "a"),
