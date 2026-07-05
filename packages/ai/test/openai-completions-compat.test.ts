@@ -233,6 +233,10 @@ describe("openai-completions compatibility", () => {
 			throw new Error("assistant message missing");
 		}
 		expect(typeof assistant.content).toBe("string");
+		// Ordinary adjacent text blocks (bridge stitching, imported transcripts,
+		// streaming chunk splits) preserve their original byte sequence on
+		// flatten. The demoted-thinking separator lives on the demoted block
+		// itself (transform-messages), so it targets that boundary only.
 		expect(assistant.content).toBe("hello world");
 	});
 
@@ -1461,7 +1465,7 @@ describe("kimi model detection via detectCompat", () => {
 		const payload = (await promise) as { messages: Array<Record<string, unknown>> };
 		const assistant = payload.messages.find(m => m.role === "assistant");
 		expect(assistant).toBeDefined();
-		expect(assistant?.content).toBe(renderDemotedThinking(model.id, "Need to preserve cross-api reasoning."));
+		expect(assistant?.content).toBe(`${renderDemotedThinking(model.id, "Need to preserve cross-api reasoning.")}\n`);
 		expect(assistant?.reasoning_content).toBe("");
 		expect(assistant?.reasoning).toBeUndefined();
 		expect(assistant?.reasoning_text).toBeUndefined();

@@ -264,48 +264,66 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 		expect(priorBlocks.find(b => b.type === "redacted_thinking")).toBeUndefined();
 	});
 
-	it("demotes invalid official Anthropic prior signatures to Fable markdown prose after a model switch", () => {
-		// official Anthropic → official Fable, with the signed turn no longer
-		// latest. The source signature is bound to the issuing Anthropic model,
-		// so replaying it after the switch must not emit native thinking or
-		// Anthropic/Kimi-style thinking tags that Fable treats as visible text.
-		const target = makeAnthropicModel({
-			provider: "anthropic",
-			id: "claude-fable-5",
-			name: "Claude Fable 5",
-			baseUrl: "https://api.anthropic.com",
-		});
-		const reasoning = "Need to preserve the plan while switching models.";
-		const messages: Message[] = [
-			makeUser("Read the project notes"),
-			makeAssistant(
-				[
-					{ type: "thinking", thinking: reasoning, thinkingSignature: "sig_sonnet" },
-					{ type: "toolCall", id: "toolu_prior", name: "read", arguments: { path: "NOTES.md" } },
-				],
-				{ provider: "anthropic", model: "claude-sonnet-4-6" },
-			),
-			toolResult("toolu_prior", "notes body"),
-			makeAssistant([{ type: "text", text: "I found the relevant notes." }], {
-				provider: "anthropic",
-				model: "claude-fable-5",
-				stopReason: "stop",
-			}),
-			makeUser("Continue from those notes."),
-		];
+	it("demotes invalid official Anthropic prior signatures to bare Claude prose after a model switch", () => {
+		// official Anthropic → official Anthropic sibling, with the signed turn
+		// no longer latest. The source signature is bound to the issuing
+		// Anthropic model, so replaying it after the switch must not emit
+		// native thinking or `<thinking>` tags — Anthropic's
+		// `reasoning_extraction` classifier flags wrapped chain-of-thought
+		// across the whole Claude family (Fable refuses outright,
+		// Opus/Sonnet/Haiku/Mythos leak it as visible reasoning). Every
+		// Anthropic-dialect target therefore receives bare assistant prose.
+		const cases = [
+			{ id: "claude-opus-4-8", name: "Claude Opus 4.8" },
+			{ id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+			{ id: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
+			{ id: "claude-fable-5", name: "Claude Fable 5" },
+			{ id: "claude-mythos-5", name: "Claude Mythos 5" },
+		] as const;
 
-		const params = convertAnthropicMessages(messages, target, false);
-		const assistants = params.filter(p => p.role === "assistant");
-		expect(assistants).toHaveLength(2);
-		const priorBlocks = assistants[0].content as WireBlock[];
-		const text = priorBlocks.find(b => b.type === "text") as WireTextBlock | undefined;
-		expect(text?.text).toBe(renderDemotedThinking("claude-fable-5", reasoning));
-		expect(text?.text).toBe(reasoning);
-		expect(text?.text).not.toContain("<thinking>");
-		expect(text?.text).not.toContain("</thinking>");
-		expect(text?.text).not.toContain("<think>");
-		expect(text?.text).not.toContain("</think>");
-		expect(priorBlocks.find(b => b.type === "thinking")).toBeUndefined();
+		for (const targetCase of cases) {
+			const target = makeAnthropicModel({
+				provider: "anthropic",
+				id: targetCase.id,
+				name: targetCase.name,
+				baseUrl: "https://api.anthropic.com",
+			});
+			// Source model differs from the target so the transition triggers
+			// signature stripping + demotion. Pick a source with a different
+			// bare id from the target regardless of which target we're on.
+			const sourceModel = targetCase.id === "claude-sonnet-4-6" ? "claude-opus-4-8" : "claude-sonnet-4-6";
+			const reasoning = `Need to preserve the plan while switching to ${targetCase.name}.`;
+			const messages: Message[] = [
+				makeUser("Read the project notes"),
+				makeAssistant(
+					[
+						{ type: "thinking", thinking: reasoning, thinkingSignature: "sig_source" },
+						{ type: "toolCall", id: "toolu_prior", name: "read", arguments: { path: "NOTES.md" } },
+					],
+					{ provider: "anthropic", model: sourceModel },
+				),
+				toolResult("toolu_prior", "notes body"),
+				makeAssistant([{ type: "text", text: "I found the relevant notes." }], {
+					provider: "anthropic",
+					model: targetCase.id,
+					stopReason: "stop",
+				}),
+				makeUser("Continue from those notes."),
+			];
+
+			const params = convertAnthropicMessages(messages, target, false);
+			const assistants = params.filter(p => p.role === "assistant");
+			expect(assistants).toHaveLength(2);
+			const priorBlocks = assistants[0].content as WireBlock[];
+			const text = priorBlocks.find(b => b.type === "text") as WireTextBlock | undefined;
+			expect(text?.text).toBe(renderDemotedThinking(targetCase.id, reasoning));
+			expect(text?.text).toBe(reasoning);
+			expect(text?.text).not.toContain("<thinking>");
+			expect(text?.text).not.toContain("</thinking>");
+			expect(text?.text).not.toContain("<think>");
+			expect(text?.text).not.toContain("</think>");
+			expect(priorBlocks.find(b => b.type === "thinking")).toBeUndefined();
+		}
 	});
 
 	it("does not demote same-model official Anthropic unsigned thinking to text", () => {

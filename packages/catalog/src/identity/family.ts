@@ -41,9 +41,16 @@ export const isKimiK26ModelId = memo((modelId: string): boolean => {
 	return /(^|\/)kimi-k2(?:\.6|p6)(?:[-:]|$)/i.test(modelId);
 });
 
-/** Claude ids in any namespace form (`claude-*`, `vendor/claude.x`). */
+/**
+ * Claude ids in any namespace form: bare (`claude-*`), path-namespaced
+ * (`anthropic/claude.x`), or dot-prefixed (`us.anthropic.claude-…`,
+ * `global.anthropic.claude-…`, `au.anthropic.claude-…` — Bedrock cross-region
+ * inference profiles). Necessary because {@link parseAnthropicModel} only
+ * classifies kinds enumerated in its regex, so any dotted profile whose kind
+ * (e.g. `haiku`) is not enumerated would otherwise slip past this fallback.
+ */
 export const isClaudeModelId = memo((modelId: string): boolean => {
-	return /(^|\/)claude[-.]/i.test(modelId);
+	return /(^|[/.])claude[-.]/i.test(modelId);
 });
 
 /** `anthropic/`-namespaced ids (aggregator catalogs like OpenRouter). */

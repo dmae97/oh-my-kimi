@@ -284,7 +284,7 @@ describe("llama.cpp warm-prefix preservation (#3528)", () => {
 		const found = findAssistantMessage(wire) as Record<string, unknown> | undefined;
 		expect(found?.reasoning_content).toBeUndefined();
 		expect(found?.content).toBe(
-			`${renderDemotedThinking(target.id, "Cross-vendor reasoning chain that must survive the switch.")}Switched-in answer.`,
+			`${renderDemotedThinking(target.id, "Cross-vendor reasoning chain that must survive the switch.")}\nSwitched-in answer.`,
 		);
 		expect("EvAnthropicOpaqueContinuationBlob==" in (found ?? {})).toBe(false);
 	});
