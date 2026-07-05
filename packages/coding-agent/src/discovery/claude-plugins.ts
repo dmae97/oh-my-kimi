@@ -30,14 +30,14 @@ const DISPLAY_NAME = "Claude Code Marketplace";
 const PRIORITY = 70; // Below claude.ts (80) so user .claude/ overrides win
 
 interface ClaudePluginManifest {
-	skills?: string;
-	"slash-commands"?: string;
-	commands?: string;
+	skills?: string | string[];
+	"slash-commands"?: string | string[];
+	commands?: string | string[];
 }
 
 interface ResolvedPluginDir {
-	dir: string;
-	warning?: string;
+	dirs: string[];
+	warnings: string[];
 }
 
 async function readPluginManifest(root: ClaudePluginRoot): Promise<ClaudePluginManifest | null> {
@@ -59,6 +59,19 @@ function isWithinPluginRoot(rootPath: string, targetPath: string): boolean {
 	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+/**
+ * Resolve a manifest-declared directory field to absolute paths within the
+ * plugin root. The Claude plugin manifest allows path fields to be either a
+ * single string or an array of strings
+ * (https://code.claude.com/docs/en/plugins-reference#path-behavior-rules), so
+ * both shapes are normalized here.
+ *
+ * The first `manifestKeys` entry that supplies at least one non-empty path wins
+ * (later keys are ignored — used for the `commands` > `slash-commands` legacy
+ * fallback). When no key is set the plugin's default subdirectory (`fallback`)
+ * is used. Entries that resolve outside the plugin root are dropped with a
+ * warning so misconfigured manifests are visible without traversal escape.
+ */
 async function resolvePluginDir(
 	root: ClaudePluginRoot,
 	manifestKeys: ReadonlyArray<keyof ClaudePluginManifest>,
@@ -67,30 +80,46 @@ async function resolvePluginDir(
 	const manifest = await readPluginManifest(root);
 	const fallbackDir = path.join(root.path, fallback);
 
-	let configured: string | undefined;
+	let configured: string[] | undefined;
 	let matchedKey: keyof ClaudePluginManifest | undefined;
 	for (const key of manifestKeys) {
 		const val = manifest?.[key];
-		if (typeof val === "string" && val.trim()) {
-			configured = val.trim();
+		const candidates: string[] = [];
+		if (typeof val === "string") {
+			const trimmed = val.trim();
+			if (trimmed) candidates.push(trimmed);
+		} else if (Array.isArray(val)) {
+			for (const entry of val) {
+				if (typeof entry !== "string") continue;
+				const trimmed = entry.trim();
+				if (trimmed) candidates.push(trimmed);
+			}
+		}
+		if (candidates.length > 0) {
+			configured = candidates;
 			matchedKey = key;
 			break;
 		}
 	}
 
 	if (configured === undefined) {
-		return { dir: fallbackDir };
+		return { dirs: [fallbackDir], warnings: [] };
 	}
 
-	const resolved = path.resolve(root.path, configured);
-	if (isWithinPluginRoot(root.path, resolved)) {
-		return { dir: resolved };
+	const dirs: string[] = [];
+	const warnings: string[] = [];
+	for (const entry of configured) {
+		const resolved = path.resolve(root.path, entry);
+		if (isWithinPluginRoot(root.path, resolved)) {
+			dirs.push(resolved);
+		} else {
+			warnings.push(
+				`[claude-plugins] Ignoring ${String(matchedKey)} path outside plugin root for ${root.id}: ${entry}`,
+			);
+		}
 	}
 
-	return {
-		dir: fallbackDir,
-		warning: `[claude-plugins] Ignoring ${String(matchedKey)} path outside plugin root for ${root.id}: ${configured}`,
-	};
+	return { dirs, warnings };
 }
 
 // =============================================================================
@@ -104,24 +133,30 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 	warnings.push(...rootWarnings);
 	const results = await Promise.all(
 		roots.map(async root => {
-			const { dir: skillsDir, warning } = await resolvePluginDir(root, ["skills"], "skills");
-			const result = await scanSkillsFromDir(ctx, {
-				dir: skillsDir,
-				providerId: PROVIDER_ID,
-				level: root.scope,
-			});
-			return { root, result, warning };
+			const { dirs: skillsDirs, warnings: resolveWarnings } = await resolvePluginDir(root, ["skills"], "skills");
+			const scanResults = await Promise.all(
+				skillsDirs.map(dir =>
+					scanSkillsFromDir(ctx, {
+						dir,
+						providerId: PROVIDER_ID,
+						level: root.scope,
+					}),
+				),
+			);
+			return { scanResults, resolveWarnings };
 		}),
 	);
-	for (const { result, warning } of results) {
-		if (warning) warnings.push(warning);
+	for (const { scanResults, resolveWarnings } of results) {
+		warnings.push(...resolveWarnings);
 		// Intentionally do NOT prefix skill names with `root.plugin`.
 		// The `plugin:name` format breaks skill:// URL parsing (colons are
 		// ambiguous with port separators) and is unintuitive for callers.
 		// Dedup-by-key in the capability layer already handles name collisions
 		// across providers using priority ordering.
-		items.push(...result.items);
-		if (result.warnings) warnings.push(...result.warnings);
+		for (const result of scanResults) {
+			items.push(...result.items);
+			if (result.warnings) warnings.push(...result.warnings);
+		}
 	}
 	return { items, warnings };
 }
@@ -139,28 +174,38 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 
 	const results = await Promise.all(
 		roots.map(async root => {
-			const { dir: commandsDir, warning } = await resolvePluginDir(root, ["commands", "slash-commands"], "commands");
-			const commandResult = await loadFilesFromDir<SlashCommand>(ctx, commandsDir, PROVIDER_ID, root.scope, {
-				extensions: ["md"],
-				transform: (name, content, filePath, source) => {
-					const cmdName = name.replace(/\.md$/, "");
-					return {
-						name: root.plugin ? `${root.plugin}:${cmdName}` : cmdName,
-						path: filePath,
-						content,
-						level: root.scope,
-						_source: source,
-					};
-				},
-			});
-			return { commandResult, warning };
+			const { dirs: commandsDirs, warnings: resolveWarnings } = await resolvePluginDir(
+				root,
+				["commands", "slash-commands"],
+				"commands",
+			);
+			const commandResults = await Promise.all(
+				commandsDirs.map(dir =>
+					loadFilesFromDir<SlashCommand>(ctx, dir, PROVIDER_ID, root.scope, {
+						extensions: ["md"],
+						transform: (name, content, filePath, source) => {
+							const cmdName = name.replace(/\.md$/, "");
+							return {
+								name: root.plugin ? `${root.plugin}:${cmdName}` : cmdName,
+								path: filePath,
+								content,
+								level: root.scope,
+								_source: source,
+							};
+						},
+					}),
+				),
+			);
+			return { commandResults, resolveWarnings };
 		}),
 	);
 
-	for (const { commandResult, warning } of results) {
-		if (warning) warnings.push(warning);
-		items.push(...commandResult.items);
-		if (commandResult.warnings) warnings.push(...commandResult.warnings);
+	for (const { commandResults, resolveWarnings } of results) {
+		warnings.push(...resolveWarnings);
+		for (const commandResult of commandResults) {
+			items.push(...commandResult.items);
+			if (commandResult.warnings) warnings.push(...commandResult.warnings);
+		}
 	}
 
 	return { items, warnings };
