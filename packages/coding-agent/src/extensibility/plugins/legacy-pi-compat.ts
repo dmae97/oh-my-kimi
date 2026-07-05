@@ -995,6 +995,13 @@ const EXTENSION_GRAPH_SPECIFIER_REGEX = /((?:from\s+|import\s+|import\s*\(\s*)["
 // the previous load.
 const extensionGraphHookModules = new Map<string, Set<string>>();
 
+let legacyPiLoadTag = 0;
+
+function nextLegacyPiLoadTag(): string {
+	legacyPiLoadTag = Math.max(legacyPiLoadTag + 1, Date.now());
+	return String(legacyPiLoadTag);
+}
+
 /** Resolve symlinks in a path, falling back to the input if realpath fails. */
 async function realpathOrSelf(p: string): Promise<string> {
 	const cached = realpathCache.get(p);
@@ -1023,10 +1030,18 @@ async function realpathOrSelfUncached(p: string): Promise<string> {
  */
 async function collectExtensionModules(entryRealPath: string): Promise<Map<string, string>> {
 	const modules = new Map<string, string>();
-	const queue = [entryRealPath];
+	const queuedFollowBareDependencies = new Map<string, boolean>([[entryRealPath, true]]);
+	const queue: Array<{ file: string; followBareDependencies: boolean }> = [
+		{ file: entryRealPath, followBareDependencies: true },
+	];
 	while (queue.length > 0) {
-		const file = queue.pop();
-		if (!file || modules.has(file)) {
+		const item = queue.pop();
+		if (!item) {
+			continue;
+		}
+		const file = item.file;
+		const followBareDependencies = queuedFollowBareDependencies.get(file) ?? item.followBareDependencies;
+		if (modules.has(file)) {
 			continue;
 		}
 		let source: string;
@@ -1037,18 +1052,18 @@ async function collectExtensionModules(entryRealPath: string): Promise<Map<strin
 		}
 		modules.set(file, source);
 		const dir = path.dirname(file);
-		const isDependencyModule = file.includes(`${path.sep}node_modules${path.sep}`);
 		for (const match of source.matchAll(EXTENSION_GRAPH_SPECIFIER_REGEX)) {
 			const specifier = match[2];
 			if (!specifier) continue;
 			try {
 				let resolved: string | null = null;
+				let nextFollowsBareDependencies = followBareDependencies;
 				if (specifier.startsWith(".")) {
 					resolved = await realpathOrSelf(Bun.resolveSync(specifier, dir));
 				} else if (specifier.startsWith("#")) {
 					resolved = await resolvePackageImportSpecifier(specifier, file);
 				} else if (
-					!isDependencyModule &&
+					followBareDependencies &&
 					isBareExtensionDependencySpecifier(specifier) &&
 					!remapLegacyPiSpecifier(specifier) &&
 					specifier !== "typebox" &&
@@ -1064,9 +1079,13 @@ async function collectExtensionModules(entryRealPath: string): Promise<Map<strin
 						dependencyExtension === ".cts" ||
 						((dependencyExtension === ".js" || dependencyExtension === ".jsx") && manifest?.type !== "module");
 					resolved = dependencyEntry && !isCommonJsEntry ? await realpathOrSelf(dependencyEntry) : null;
+					nextFollowsBareDependencies = false;
 				}
 				if (resolved && !modules.has(resolved)) {
-					queue.push(resolved);
+					const queuedFollowsBareDependencies = queuedFollowBareDependencies.get(resolved) ?? false;
+					const mergedFollowsBareDependencies = queuedFollowsBareDependencies || nextFollowsBareDependencies;
+					queuedFollowBareDependencies.set(resolved, mergedFollowsBareDependencies);
+					queue.push({ file: resolved, followBareDependencies: mergedFollowsBareDependencies });
 				}
 			} catch {
 				// Unresolvable import (e.g. a type-only path); skip it.
@@ -1171,7 +1190,7 @@ export async function loadLegacyPiModule(resolvedPath: string): Promise<unknown>
 			process.platform === "win32" || isBundledVirtualSpecifier(entryRealPath)
 				? toImportSpecifier(entryRealPath)
 				: entryRealPath;
-		return await import(`${entrySpecifier}?mtime=${Date.now()}`);
+		return await import(`${entrySpecifier}?mtime=${nextLegacyPiLoadTag()}`);
 	} finally {
 		// Drop whatever the initial import didn't consume: graph modules only
 		// reached by lazy dynamic imports must be read from disk at their actual
