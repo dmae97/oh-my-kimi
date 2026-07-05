@@ -125,6 +125,11 @@ describe("isUsageLimit", () => {
 		expect(isUsageLimit("quota_reached")).toBe(true);
 	});
 
+	it("detects subscription quota insufficient phrasing as usage limit", () => {
+		expect(isUsageLimit("403 订阅额度不足或未配置订阅: subscription quota insufficient, need=14447")).toBe(true);
+		expect(isUsageLimit("quota insufficient")).toBe(true);
+	});
+
 	it("detects OpenAI quota payload codes as credential-rotatable usage limits", () => {
 		for (const message of ["insufficient_quota", "usage_limit_exceeded", "usage_limit_reached"]) {
 			expect(isUsageLimit(message)).toBe(true);
