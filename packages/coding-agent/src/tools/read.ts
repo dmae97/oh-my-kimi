@@ -2206,48 +2206,62 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		// resolution share misses instead of re-globbing the workspace.
 		const suffixCache: SuffixMatchCache = new Map();
 
-		const archivePath = await this.#resolveArchiveReadPath(readPath, suffixCache, signal);
-		if (archivePath) {
-			const archiveSubPath = splitPathAndSel(archivePath.archiveSubPath);
-			const archiveParsed = parseSel(archiveSubPath.sel);
-			return this.#readArchive(
-				readPath,
-				archiveParsed,
-				{ ...archivePath, archiveSubPath: archiveSubPath.path },
-				signal,
-			);
-		}
+		// Prefer a literal filesystem match over the strict `:<sel>` peel so real
+		// POSIX filenames whose tail matches the selector grammar (e.g. `test:1-2`,
+		// `data.zip:1-2`, `notes.db:raw`) win over the structured-path resolvers
+		// below. When the raw path resolves literally on disk AND the strict
+		// splitter would have peeled a selector, the archive / sqlite / pdf-image
+		// dispatchers must decline — otherwise `data.zip:1-2` still opens
+		// `data.zip` and errors on the phantom member (issue #4618).
+		const literalSplit = await splitPathAndSelPreferringLiteral(readPath, this.session.cwd);
+		// Literal wins whenever the strict grammar would have peeled a suffix but
+		// the async splitter decided to keep the raw path (fs.stat succeeded).
+		const rawPathIsLiteral = literalSplit.sel === undefined && splitPathAndSel(readPath).sel !== undefined;
 
-		const sqlitePath = await this.#resolveSqliteReadPath(readPath, suffixCache, signal);
-		if (sqlitePath) {
-			return this.#readSqlite(sqlitePath, signal);
-		}
-
-		const pdfImageMemberPath = splitPdfImageMemberReadPath(readPath);
-		if (pdfImageMemberPath) {
-			let absolutePdfPath = resolveReadPath(pdfImageMemberPath.pdfPath, this.session.cwd);
-			let suffixResolution: { from: string; to: string } | undefined;
-			try {
-				const stat = await Bun.file(absolutePdfPath).stat();
-				if (stat.isDirectory())
-					throw new ToolError(`Path '${pdfImageMemberPath.pdfPath}' is a directory, not a PDF file`);
-			} catch (error) {
-				if (!isNotFoundError(error) || isRemoteMountPath(absolutePdfPath)) throw error;
-				const suffixMatch = await this.#findSuffixMatchCached(suffixCache, pdfImageMemberPath.pdfPath, signal);
-				if (!suffixMatch) throw new ToolError(`Path '${pdfImageMemberPath.pdfPath}' not found`);
-				absolutePdfPath = suffixMatch.absolutePath;
-				suffixResolution = { from: pdfImageMemberPath.pdfPath, to: suffixMatch.displayPath };
+		if (!rawPathIsLiteral) {
+			const archivePath = await this.#resolveArchiveReadPath(readPath, suffixCache, signal);
+			if (archivePath) {
+				const archiveSubPath = splitPathAndSel(archivePath.archiveSubPath);
+				const archiveParsed = parseSel(archiveSubPath.sel);
+				return this.#readArchive(
+					readPath,
+					archiveParsed,
+					{ ...archivePath, archiveSubPath: archiveSubPath.path },
+					signal,
+				);
 			}
-			return this.#readPdfImageMember(
-				absolutePdfPath,
-				pdfImageMemberPath.pdfPath,
-				pdfImageMemberPath.member,
-				suffixResolution,
-				signal,
-			);
+
+			const sqlitePath = await this.#resolveSqliteReadPath(readPath, suffixCache, signal);
+			if (sqlitePath) {
+				return this.#readSqlite(sqlitePath, signal);
+			}
+
+			const pdfImageMemberPath = splitPdfImageMemberReadPath(readPath);
+			if (pdfImageMemberPath) {
+				let absolutePdfPath = resolveReadPath(pdfImageMemberPath.pdfPath, this.session.cwd);
+				let suffixResolution: { from: string; to: string } | undefined;
+				try {
+					const stat = await Bun.file(absolutePdfPath).stat();
+					if (stat.isDirectory())
+						throw new ToolError(`Path '${pdfImageMemberPath.pdfPath}' is a directory, not a PDF file`);
+				} catch (error) {
+					if (!isNotFoundError(error) || isRemoteMountPath(absolutePdfPath)) throw error;
+					const suffixMatch = await this.#findSuffixMatchCached(suffixCache, pdfImageMemberPath.pdfPath, signal);
+					if (!suffixMatch) throw new ToolError(`Path '${pdfImageMemberPath.pdfPath}' not found`);
+					absolutePdfPath = suffixMatch.absolutePath;
+					suffixResolution = { from: pdfImageMemberPath.pdfPath, to: suffixMatch.displayPath };
+				}
+				return this.#readPdfImageMember(
+					absolutePdfPath,
+					pdfImageMemberPath.pdfPath,
+					pdfImageMemberPath.member,
+					suffixResolution,
+					signal,
+				);
+			}
 		}
 
-		const localTarget = await splitPathAndSelPreferringLiteral(readPath, this.session.cwd);
+		const localTarget = literalSplit;
 		const localReadPath = localTarget.path;
 		const parsed = parseSel(localTarget.sel);
 

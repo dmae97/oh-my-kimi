@@ -126,6 +126,46 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			expect(output).not.toContain("line 30");
 			expect(output).not.toContain("line 40");
 		});
+
+		it("reads a literal file that looks like an archive selector (`data.zip:1-2`)", async () => {
+			// A real POSIX file whose name ends in a selector-shaped tail after an
+			// archive extension. The archive resolver would otherwise open `data.zip`
+			// alongside it and error on the phantom member.
+			const baseArchive = path.join(tmpDir, "data.zip");
+			// Empty zip bytes — the file just needs to stat as a real archive so
+			// the archive resolver would happily accept it.
+			await Bun.write(
+				baseArchive,
+				new Uint8Array([0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+			);
+			const literal = path.join(tmpDir, "data.zip:1-2");
+			await Bun.write(literal, "literal archive-shaped file\n");
+
+			const tool = new ReadTool(createSession());
+			const result = await tool.execute("read-literal-zip-selector", { path: literal });
+			const output = getText(result);
+
+			expect(output).toContain("literal archive-shaped file");
+		});
+
+		it("reads a literal file that looks like a sqlite selector (`notes.db:1-2`)", async () => {
+			// A real POSIX file whose base name matches a sqlite-shaped path plus a
+			// selector-shaped tail. The sqlite resolver would misroute this to
+			// `notes.db` and try to open a table named `1-2`.
+			const baseDb = path.join(tmpDir, "notes.db");
+			// SQLite database header (16-byte magic string plus zero-padding).
+			const header = new Uint8Array(4096);
+			header.set(Buffer.from("SQLite format 3\0", "utf-8"), 0);
+			await Bun.write(baseDb, header);
+			const literal = path.join(tmpDir, "notes.db:1-2");
+			await Bun.write(literal, "literal db-shaped file\n");
+
+			const tool = new ReadTool(createSession());
+			const result = await tool.execute("read-literal-db-selector", { path: literal });
+			const output = getText(result);
+
+			expect(output).toContain("literal db-shaped file");
+		});
 	});
 
 	describe("grep tool", () => {
