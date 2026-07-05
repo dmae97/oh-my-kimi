@@ -558,7 +558,7 @@ export async function requestOpenAiRemoteCompaction(
  * local summarization, and context grew unbounded.
  *
  * When `context.model` is provided the chat-completions body is tagged with
- * that model id (llama.cpp requires the field) and `context.apiKey` is
+ * that model's wire id (llama.cpp requires the field) and `context.apiKey` is
  * forwarded as `Authorization: Bearer`. Callers wrap this in `withAuth` so
  * 401s force-refresh through the standard credential rotation policy.
  */
@@ -583,7 +583,7 @@ export async function requestRemoteCompaction(
 
 	const body: Record<string, unknown> = isChatCompletions
 		? {
-				model: opts?.model?.id,
+				model: opts?.model ? resolveOpenAiCompactModel(opts.model) : undefined,
 				messages: [
 					{ role: "system", content: request.systemPrompt },
 					{ role: "user", content: request.prompt },

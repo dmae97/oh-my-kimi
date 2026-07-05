@@ -544,8 +544,10 @@ describe("requestOpenAiRemoteCompaction timeout", () => {
 describe("requestRemoteCompaction wire formats", () => {
 	test("uses OpenAI chat completions format for /chat/completions endpoints", async () => {
 		const model = buildModel({
-			id: "Jackrong/Qwopus3.6-35B-A3B-Coder",
+			id: "catalog-selection-id",
 			name: "Qwopus 3.6 35B-A3B Coder",
+			requestModelId: "provider-wire-id",
+			remoteCompaction: { model: "provider-compact-wire-id" },
 			api: "openai-completions",
 			provider: "local-llama",
 			baseUrl: "http://127.0.0.1:8001/v1",
@@ -577,7 +579,7 @@ describe("requestRemoteCompaction wire formats", () => {
 
 		expect(result).toEqual({ summary: "remote summary" });
 		expect(sentBody).toEqual({
-			model: "Jackrong/Qwopus3.6-35B-A3B-Coder",
+			model: "provider-compact-wire-id",
 			messages: [
 				{ role: "system", content: "summarize" },
 				{ role: "user", content: "<conversation>hello</conversation>" },
@@ -849,8 +851,9 @@ describe("compact() remote compaction failure handling", () => {
 			remoteStreamingV2Enabled: false,
 		};
 		const model = buildModel({
-			id: "Jackrong/Qwopus3.6-35B-A3B-Coder",
+			id: "catalog-selection-id",
 			name: "Qwopus 3.6 35B-A3B Coder",
+			requestModelId: "provider-wire-id",
 			api: "openai-completions",
 			provider: "local-llama",
 			baseUrl: "http://127.0.0.1:8001/v1",
@@ -880,7 +883,7 @@ describe("compact() remote compaction failure handling", () => {
 		expect(completeSpy).not.toHaveBeenCalled();
 		expect(requestBodies).toHaveLength(2);
 		expect(requestBodies[0]).toMatchObject({
-			model: "Jackrong/Qwopus3.6-35B-A3B-Coder",
+			model: "provider-wire-id",
 			messages: [{ role: "system" }, { role: "user", content: expect.stringContaining("long history") }],
 			stream: false,
 		});
