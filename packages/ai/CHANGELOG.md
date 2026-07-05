@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed GitHub Copilot OpenAI Responses replay persisting hidden-empty assistant turns as native history, preventing reasoning-only empty completions from poisoning later requests with stale assistant summaries. ([#4597](https://github.com/can1357/oh-my-pi/issues/4597))
+
 ## [16.3.6] - 2026-07-04
 
 ### Added

@@ -57,6 +57,7 @@ import {
 	normalizeResponsesToolCallId,
 	normalizeSystemPrompts,
 	resolveCacheRetention,
+	sanitizeOpenAIResponsesAssistantHistoryItemsForReplay,
 	sanitizeOpenAIResponsesHistoryItemsForReplay,
 } from "../utils";
 import {
@@ -1417,16 +1418,20 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 					: undefined;
 			const historyItems = providerPayload?.items;
 			if (historyItems) {
-				const sanitizedHistoryItems = sanitizeOpenAIResponsesHistoryItemsForReplay(filterReasoning(historyItems));
-				if (providerPayload?.dt) {
-					messages.push(...sanitizedHistoryItems);
-				} else {
-					messages.splice(0, messages.length, ...sanitizedHistoryItems);
+				const sanitizedHistoryItems = sanitizeOpenAIResponsesAssistantHistoryItemsForReplay(
+					filterReasoning(historyItems),
+				);
+				if (sanitizedHistoryItems) {
+					if (providerPayload?.dt) {
+						messages.push(...sanitizedHistoryItems);
+					} else {
+						messages.splice(0, messages.length, ...sanitizedHistoryItems);
+					}
+					knownCallIds = collectKnownCallIds(messages);
+					for (const id of collectCustomCallIds(messages)) customCallIds.add(id);
+					msgIndex++;
+					continue;
 				}
-				knownCallIds = collectKnownCallIds(messages);
-				for (const id of collectCustomCallIds(messages)) customCallIds.add(id);
-				msgIndex++;
-				continue;
 			}
 
 			const outputItems = convertResponsesAssistantMessage(
