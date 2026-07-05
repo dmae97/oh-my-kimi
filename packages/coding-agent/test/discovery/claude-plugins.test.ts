@@ -859,6 +859,45 @@ describe("listClaudePluginRoots", () => {
 		expect(result.all.find(s => s.name === "extra-skill")).toBeDefined();
 	});
 
+	test("array-form skills entry pointing at a directory containing SKILL.md loads the single skill", async () => {
+		// Per Claude plugins reference: a skills path may point directly at a directory whose
+		// SKILL.md is the skill (frontmatter name → invocation, directory basename → fallback).
+		// Real plugins use `"skills": ["./"]` — that entry must not silently drop the skill.
+		const pluginsDir = path.join(tempDir, ".claude", "plugins");
+		const pluginPath = path.join(tempDir, "plugins", "manifest-skills-self");
+		await fs.mkdir(pluginsDir, { recursive: true });
+		await fs.mkdir(path.join(pluginPath, ".claude-plugin"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, "single"), { recursive: true });
+
+		const registry = {
+			version: 2,
+			plugins: {
+				"manifest-skills-self@market": [
+					{
+						scope: "user",
+						installPath: pluginPath,
+						version: "1.0.0",
+						installedAt: "2025-01-01T00:00:00Z",
+						lastUpdated: "2025-01-01T00:00:00Z",
+					},
+				],
+			},
+		};
+		await fs.writeFile(path.join(pluginsDir, "installed_plugins.json"), JSON.stringify(registry));
+		await fs.writeFile(
+			path.join(pluginPath, ".claude-plugin", "plugin.json"),
+			JSON.stringify({ skills: ["./single"] }),
+		);
+		await fs.writeFile(
+			path.join(pluginPath, "single", "SKILL.md"),
+			"---\nname: solo-skill\ndescription: Solo skill\n---\nBody\n",
+		);
+
+		const result = await loadCapability<Skill>("skills", { cwd: tempDir });
+		expect(result.warnings).toEqual([]);
+		expect(result.all.find(s => s.name === "solo-skill")).toBeDefined();
+	});
+
 	test("manifest commands field replaces default commands/ directory (Claude replace semantics)", async () => {
 		// Per Claude plugins reference "Path behavior rules":
 		// `commands` REPLACES the default `commands/` scan when the manifest key is set.

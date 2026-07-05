@@ -169,6 +169,7 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 						dir,
 						providerId: PROVIDER_ID,
 						level: root.scope,
+						includeSelf: true,
 					}),
 				),
 			);
