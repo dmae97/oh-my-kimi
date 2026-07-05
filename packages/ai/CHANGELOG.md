@@ -10,6 +10,7 @@
 - Fixed provider gateway `quota insufficient` / `额度不足` errors being classified as generic 403 failures instead of usage-limit errors.
 - Aligned the `openai-responses` strict-mode gate and resolved strict-support detection with `openai-completions` so buildModel-created OpenAI-compatible Responses models (for example DeepSeek-family endpoints) preserve an author-set `tool.strict === false` on the wire unless `compat.supportsStrictMode` is explicitly `false` ([#4527](https://github.com/can1357/oh-my-pi/issues/4527)).
 - Fixed custom `openai-codex-responses` providers with opaque proxy/API keys failing before dispatch when no ChatGPT `chatgpt_account_id` claim exists; Codex requests now omit `chatgpt-account-id` when it cannot be derived. ([#4526](https://github.com/can1357/oh-my-pi/issues/4526))
+- Fixed OpenAI Responses/Codex orchestration token accounting so provider-side orchestration tokens stay billable and included in totals without appearing as ordinary uncached prompt input. ([#4469](https://github.com/can1357/oh-my-pi/issues/4469))
 
 ## [16.3.6] - 2026-07-04
 
@@ -32,7 +33,6 @@
 ### Fixed
 
 - Fixed tool-call validation to strip stray trailing line terminators on schema-matching enum values and on well-known identifier fields (`path`, `paths`, `file`, `file_path`, `url`, `uri`, `title`, `label`) before dispatch, keeping ordinary trailing spaces and content-carrying fields (`content`, `input`, `code`, `command`, etc.) intact ([#4461](https://github.com/can1357/oh-my-pi/issues/4461)).
-- Fixed OpenAI Responses/Codex orchestration token accounting so provider-side orchestration tokens stay billable and included in totals without appearing as ordinary uncached prompt input. ([#4469](https://github.com/can1357/oh-my-pi/issues/4469))
 
 ## [16.3.4] - 2026-07-03
 
