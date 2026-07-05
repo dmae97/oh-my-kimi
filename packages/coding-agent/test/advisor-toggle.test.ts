@@ -98,6 +98,18 @@ describe("AgentSession advisor toggle", () => {
 		expect(session.getAdvisorAgent()?.state.model.id).toBe(replacementModel.id);
 	});
 
+	it("refreshes the live advisor when the advisor role setting changes", () => {
+		session.settings.setModelRole("advisor", `${model.provider}/${model.id}`);
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		expect(session.getAdvisorAgent()?.state.model.provider).toBe(model.provider);
+		expect(session.getAdvisorAgent()?.state.model.id).toBe(model.id);
+
+		session.settings.setModelRole("advisor", `${replacementModel.provider}/${replacementModel.id}`);
+
+		expect(session.getAdvisorAgent()?.state.model.provider).toBe(replacementModel.provider);
+		expect(session.getAdvisorAgent()?.state.model.id).toBe(replacementModel.id);
+	});
+
 	it("keeps explicit enable idempotent when the advisor config is unchanged", () => {
 		session.settings.setModelRole("advisor", `${model.provider}/${model.id}`);
 		expect(session.setAdvisorEnabled(true)).toBe(true);
