@@ -23,8 +23,15 @@ const TITLE_MARKER_INSTRUCTION = prompt.render(titleMarkerInstruction);
 const DEFAULT_TERMINAL_TITLE = "π";
 const TERMINAL_TITLE_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
 
-const TITLE_MAX_TOKENS = 30;
-const REASONING_SAFE_MAX_TOKENS = 1024;
+// Cover the "backend ignores `disableReasoning`" case unconditionally: the
+// static `model.reasoning` catalog flag can't distinguish a thinking model that
+// was declared with `reasoning: false` (e.g. Qwen3 served locally via llama.cpp,
+// whose bundled jinja chat template forces `enable_thinking: true`) from one
+// that never emits thinking. `maxTokens` is a hard cap, not a target — the
+// happy-path completion still returns in a handful of tokens, so raising the
+// ceiling costs nothing when thinking is genuinely suppressed and keeps the
+// forced `set_title` tool call reachable when it isn't (issue #4355).
+const TITLE_MAX_TOKENS = 1024;
 const SET_TITLE_TOOL_NAME = "set_title";
 
 const setTitleTool: Tool = {
@@ -212,11 +219,9 @@ export async function generateTitleOnline(
 		// account_uuid rather than the snapshot-at-call-site value.
 		const metadata = metadataResolver?.(model.provider);
 
-		// Title generation is a 3-7 word task, but some reasoning backends ignore
-		// disableReasoning. Keep the normal cheap budget for non-reasoning models
-		// while reserving enough output room for reasoning models to still emit
-		// the forced tool call after any unavoidable thinking tokens.
-		const maxTokens = model.reasoning ? Math.max(TITLE_MAX_TOKENS, REASONING_SAFE_MAX_TOKENS) : TITLE_MAX_TOKENS;
+		// Title generation is a 3-7 word task, but the ceiling has to survive
+		// backends that ignore `disableReasoning` (see TITLE_MAX_TOKENS above).
+		const maxTokens = TITLE_MAX_TOKENS;
 		logger.debug("title-generator: request", { ...modelContext, maxTokens });
 
 		const response = await completeSimple(

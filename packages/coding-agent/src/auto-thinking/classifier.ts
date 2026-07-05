@@ -35,13 +35,14 @@ const DIFFICULTY_SYSTEM_PROMPT = prompt.render(difficultySystemPrompt);
 const MAX_INPUT_CHARS = 6000;
 const HEAD_CHARS = 4000;
 const TAIL_CHARS = 2000;
-/** The online answer is a single word; keep budgets tiny for non-reasoning backends. */
-const ANSWER_MAX_TOKENS = 8;
 /** Local classifiers occasionally need more room for chat-template boilerplate. */
 const LOCAL_ANSWER_MAX_TOKENS = 16;
 /**
- * Reasoning backends ignore `disableReasoning` on some providers, so reserve
- * enough output room for the keyword to still land after unavoidable thinking.
+ * Online classifier budget. Sized to survive backends that ignore
+ * `disableReasoning` (e.g. Qwen3 via llama.cpp catalogued `reasoning: false`
+ * but still emitting thinking): the classifier keyword needs to land after any
+ * unavoidable thinking preamble. `maxTokens` is a hard cap — non-thinking
+ * completions still return in a handful of tokens (issue #4355).
  */
 const REASONING_SAFE_MAX_TOKENS = 1024;
 
@@ -85,7 +86,7 @@ async function classifyOnline(input: string, deps: ClassifyDifficultyDeps): Prom
 	}
 	// Resolve metadata after getApiKey so the session-sticky credential is recorded first.
 	const metadata = deps.metadataResolver?.(model.provider);
-	const maxTokens = model.reasoning ? Math.max(ANSWER_MAX_TOKENS, REASONING_SAFE_MAX_TOKENS) : ANSWER_MAX_TOKENS;
+	const maxTokens = REASONING_SAFE_MAX_TOKENS;
 
 	const response = await completeSimple(
 		model,

@@ -23,10 +23,12 @@ import type { Settings } from "../config/settings";
 import speechRewritePrompt from "../prompts/system/speech-rewrite.md" with { type: "text" };
 
 const SYSTEM_PROMPT = prompt.render(speechRewritePrompt);
-/** Rewrite budget: a paragraph in, a spoken paragraph (usually shorter) out. */
-const ANSWER_MAX_TOKENS = 512;
-/** Reasoning backends may burn tokens before the answer despite `disableReasoning`. */
-const REASONING_SAFE_MAX_TOKENS = 1536;
+// Rewrite budget: a paragraph in, a spoken paragraph (usually shorter) out.
+// Always reserve enough room to survive backends that ignore `disableReasoning`
+// (e.g. Qwen3 via llama.cpp catalogued `reasoning: false` but still emitting
+// thinking). `maxTokens` is a hard cap — non-thinking completions still return
+// in a normal spoken-paragraph budget (issue #4355).
+const ANSWER_MAX_TOKENS = 1536;
 /** Per-block completion deadline before falling back to mechanical cleanup. */
 const REWRITE_TIMEOUT_MS = 6000;
 /** Bound block characters sent to the model (huge diffs/code dumps get elided). */
@@ -89,7 +91,7 @@ export class SpeechEnhancer {
 				},
 				{
 					apiKey: registry.resolver(model, sessionId),
-					maxTokens: model.reasoning ? REASONING_SAFE_MAX_TOKENS : ANSWER_MAX_TOKENS,
+					maxTokens: ANSWER_MAX_TOKENS,
 					disableReasoning: true,
 					metadata,
 					signal: signal ? AbortSignal.any([signal, timeout]) : timeout,

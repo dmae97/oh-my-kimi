@@ -16,8 +16,12 @@ import { concreteThinkingLevel, toReasoningEffort } from "../thinking";
 
 const COMMIT_SYSTEM_PROMPT = prompt.render(commitSystemPrompt);
 const MAX_DIFF_CHARS = 4000;
-const COMMIT_MAX_TOKENS = 60;
-const REASONING_SAFE_MAX_TOKENS = 1024;
+// Cover the "backend ignores `disableReasoning`" case unconditionally: the
+// static `model.reasoning` catalog flag can't distinguish a thinking model
+// declared `reasoning: false` (e.g. Qwen3 served locally via llama.cpp) from
+// one that never emits thinking. `maxTokens` is a hard cap — non-thinking
+// completions still return in a handful of tokens (issue #4355).
+const COMMIT_MAX_TOKENS = 1024;
 
 /** File patterns that should be excluded from commit message generation diffs. */
 const NOISE_SUFFIXES = [".lock", ".lockb", "-lock.json", "-lock.yaml"];
@@ -101,9 +105,7 @@ export async function generateCommitMessage(
 		if (!apiKey) continue;
 
 		try {
-			const maxTokens = candidate.model.reasoning
-				? Math.max(COMMIT_MAX_TOKENS, REASONING_SAFE_MAX_TOKENS)
-				: COMMIT_MAX_TOKENS;
+			const maxTokens = COMMIT_MAX_TOKENS;
 			const response = await completeSimple(
 				candidate.model,
 				{

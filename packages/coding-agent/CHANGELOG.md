@@ -88,6 +88,9 @@
 ### Fixed
 
 - Fixed `omp usage` hiding sibling-only limits such as Claude 7 Day (Fable) on accounts whose current report omitted that scoped bucket; the account now renders an explicit `not reported` row instead of looking like the usage refresh skipped the column.
+### Fixed
+
+- Fixed session title generation, commit-message generation, speech-enhancer rewrites, and the online auto-thinking and unexpected-stop classifiers silently truncating on non-reasoning-flagged models that still emit thinking output (e.g. Qwen3 served via llama.cpp) by always sizing the completion budget for backends that ignore `disableReasoning` ([#4355](https://github.com/can1357/oh-my-pi/issues/4355))
 
 ## [16.3.3] - 2026-07-02
 
