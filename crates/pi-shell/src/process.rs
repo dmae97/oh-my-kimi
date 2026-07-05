@@ -1639,8 +1639,23 @@ struct SpawnedProcess {
 /// after its baseline, including another run's children. Ownership is now
 /// explicit — only processes this run actually spawned are ever signalled.
 #[derive(Default)]
+struct RegistryState {
+	spawned:       Vec<SpawnedProcess>,
+	/// The next `spawned.len()` at which `record` runs a sweep. Bounds sweep
+	/// frequency when the live set stabilizes above the initial threshold:
+	/// without this watermark, every subsequent `record` would find
+	/// `len >= PRUNE_THRESHOLD` true and sweep on every spawn (O(n²) in a
+	/// large-fan-out run like `for i in {1..1000}; do sleep 60 & done`). With
+	/// it, the next sweep only fires once the vec has grown by another
+	/// `PRUNE_THRESHOLD` entries since the previous sweep — restoring true
+	/// amortized O(1) per spawn regardless of how many entries survive each
+	/// sweep.
+	next_sweep_at: usize,
+}
+
+#[derive(Default)]
 pub struct SpawnRegistry {
-	spawned: Mutex<Vec<SpawnedProcess>>,
+	state: Mutex<RegistryState>,
 }
 
 impl SpawnRegistry {
@@ -1649,12 +1664,15 @@ impl SpawnRegistry {
 	/// A shell run that spawns many short-lived external commands (e.g. a bash
 	/// loop invoking a binary per iteration) would otherwise retain one owned
 	/// process handle per spawn — a pidfd on Linux, a `HANDLE` on Windows — for
-	/// the lifetime of the run, exhausting per-process FD/handle limits. When
-	/// the recorded vec grows past this many entries, `record` sweeps out
-	/// entries whose pinned process AND process group are both gone. Cost per
-	/// sweep is `O(N)` (one non-blocking status probe per entry) and a sweep
-	/// runs at most once per this many `record` calls, so the amortized cost
-	/// per spawn is `O(1)` — cheap next to the spawn itself.
+	/// the lifetime of the run, exhausting per-process FD/handle limits.
+	///
+	/// Each sweep costs `O(N)` (one non-blocking status probe per entry, plus
+	/// a Toolhelp descendant walk on Windows for exited roots). The next sweep
+	/// is scheduled `PRUNE_THRESHOLD` further records away — via the
+	/// `next_sweep_at` watermark — so a run that keeps many concurrent
+	/// long-lived children (`for i in {1..1000}; do sleep 60 & done`) does not
+	/// sweep on every spawn just because the vec is already above threshold.
+	/// Amortized cost per spawn stays `O(1)` regardless of the live-set size.
 	const PRUNE_THRESHOLD: usize = 64;
 
 	/// Create an empty registry.
@@ -1671,15 +1689,22 @@ impl SpawnRegistry {
 	/// before we could `Process::from_pid`) the entry becomes a no-op at
 	/// termination time — there is nothing left to signal.
 	///
-	/// Once the recorded vec reaches [`Self::PRUNE_THRESHOLD`], exited entries
-	/// are swept so long-running loops of short external commands cannot
-	/// exhaust the process' FD/handle limit by retaining one owned handle per
-	/// historical spawn.
+	/// Exited entries are swept opportunistically once the recorded vec
+	/// crosses the next-sweep watermark, so long-running loops of short
+	/// external commands cannot exhaust the process' FD/handle limit by
+	/// retaining one owned handle per historical spawn.
 	pub fn record(&self, pgid: Option<i32>, process: Option<Process>) {
-		let mut spawned = self.spawned.lock();
-		spawned.push(SpawnedProcess { process, pgid });
-		if spawned.len() >= Self::PRUNE_THRESHOLD {
-			prune_exited(&mut spawned);
+		let mut state = self.state.lock();
+		state.spawned.push(SpawnedProcess { process, pgid });
+		if state.spawned.len() >= state.next_sweep_at.max(Self::PRUNE_THRESHOLD) {
+			prune_exited(&mut state.spawned);
+			// Schedule the next sweep `PRUNE_THRESHOLD` further records away.
+			// Comparing against the post-sweep live-set size (not the pre-sweep
+			// length) bounds the sweep frequency when many entries survive:
+			// each sweep costs O(N) but now runs at most once per
+			// `PRUNE_THRESHOLD` records, so amortized per-record cost is O(1)
+			// even if the live set stays large.
+			state.next_sweep_at = state.spawned.len() + Self::PRUNE_THRESHOLD;
 		}
 	}
 
@@ -1697,9 +1722,13 @@ impl SpawnRegistry {
 	pub fn build_targets(&self) -> TerminationTargets {
 		let mut targets = TerminationTargets::new();
 		let spawned = {
-			let mut guard = self.spawned.lock();
-			prune_exited(&mut guard);
-			guard.clone()
+			let mut state = self.state.lock();
+			prune_exited(&mut state.spawned);
+			// Reset the watermark to the current live-set size + threshold;
+			// leaving a stale pre-sweep value would misgate the next
+			// record-time sweep.
+			state.next_sweep_at = state.spawned.len() + Self::PRUNE_THRESHOLD;
+			state.spawned.clone()
 		};
 		for entry in spawned {
 			if let Some(process) = entry.process {
@@ -1987,7 +2016,7 @@ mod tests {
 			registry.record(None, pinned);
 		}
 
-		let retained = registry.spawned.lock().len();
+		let retained = registry.state.lock().spawned.len();
 		assert!(
 			retained < SpawnRegistry::PRUNE_THRESHOLD,
 			"pruning must bound retained entries below the sweep threshold once the pinned \
@@ -2001,6 +2030,58 @@ mod tests {
 		assert!(
 			targets.is_empty(),
 			"registry of only-dead entries must produce an empty target set"
+		);
+	}
+
+	/// Regression test for the third review on PR #4606: once the recorded
+	/// vec crosses `PRUNE_THRESHOLD`, subsequent `record` calls must NOT
+	/// sweep on every spawn. Without the `next_sweep_at` watermark, a large
+	/// fan-out run whose live children exceed the threshold turned every
+	/// spawn into an O(N) status probe of the whole retained set.
+	///
+	/// The check reasons about the observable side effect: after N records
+	/// past threshold with entries that CANNOT be pruned (all still live),
+	/// the retained size grows monotonically by exactly N — no sweep runs
+	/// have modified the vec in between. The direct signal of "did a sweep
+	/// happen" is a stable pinned handle count across records.
+	#[cfg(unix)]
+	#[test]
+	fn spawn_registry_watermark_bounds_sweep_frequency() {
+		let self_pid = i32::try_from(std::process::id()).expect("self pid fits in i32");
+		let registry = SpawnRegistry::new();
+
+		// Fill past threshold with entries that are permanently alive
+		// (pinning ourselves) so the pruner has nothing to remove.
+		let fill = SpawnRegistry::PRUNE_THRESHOLD + 10;
+		for _ in 0..fill {
+			registry.record(None, Process::from_pid(self_pid));
+		}
+		let after_fill = registry.state.lock().spawned.len();
+		assert_eq!(
+			after_fill, fill,
+			"live-only entries must not be pruned during warm-up"
+		);
+		let watermark_after_fill = registry.state.lock().next_sweep_at;
+
+		// Every additional record with a live entry must land in the vec
+		// verbatim and — critically — NOT re-enter `prune_exited` until the
+		// vec crosses the freshly scheduled watermark. If the guard were
+		// still `len >= PRUNE_THRESHOLD` (pre-fix), a sweep would fire on
+		// every one of these records.
+		let extra = 20;
+		for _ in 0..extra {
+			registry.record(None, Process::from_pid(self_pid));
+		}
+		let after_extra = registry.state.lock().spawned.len();
+		assert_eq!(
+			after_extra,
+			after_fill + extra,
+			"records with live entries must accumulate without triggering per-spawn sweeps"
+		);
+		assert_eq!(
+			registry.state.lock().next_sweep_at,
+			watermark_after_fill,
+			"watermark must not advance while the vec stays below it — otherwise a sweep ran"
 		);
 	}
 }
