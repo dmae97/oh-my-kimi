@@ -48,4 +48,24 @@ describe("EvalTool timeout semantics", () => {
 		const cell = result.details?.cells?.[0];
 		expect(cell?.exitCode).toBeUndefined();
 	});
+
+	it("reports a dead JS worker instead of waiting for the cell timeout", async () => {
+		const tool = new EvalTool(makeSession());
+		const result = await tool.execute("call-worker-exit", {
+			language: "js",
+			code: "process.exit(0);",
+			timeout: 1,
+		});
+
+		const text = result.content
+			.filter((block): block is { type: "text"; text: string } => block.type === "text")
+			.map(block => block.text)
+			.join("\n");
+		expect(text).toContain("JS eval worker exited");
+		expect(text).not.toContain("timed out");
+
+		const cell = result.details?.cells?.[0];
+		expect(cell?.status).toBe("error");
+		expect(cell?.exitCode).toBe(1);
+	});
 });
