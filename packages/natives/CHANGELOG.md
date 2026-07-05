@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed a Windows regression where an abnormal `omp` exit or bash cancellation could `TerminateProcess` unrelated `pwsh.exe` / `powershell.exe` sessions (including other Cursor terminal tabs). `SpawnRegistry` stored only the raw pid of each brush-spawned child and re-opened it via `Process::from_pid` at cancellation time; between those two moments Windows could recycle a freed pid onto an unrelated PowerShell, and `signal_tree` then walked the wrong subtree via Toolhelp. The observer now pins a stable `Process` handle at spawn time — on Windows the open handle keeps the pid slot reserved, on Linux the pidfd carries identity, on macOS the `(pid, start_time)` triple detects impersonation — so cancellation can only reach children this run actually launched. ([#4605](https://github.com/can1357/oh-my-pi/issues/4605))
+
 ## [16.3.6] - 2026-07-04
 
 ### Changed

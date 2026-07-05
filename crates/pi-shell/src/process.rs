@@ -1571,10 +1571,26 @@ impl TerminationTargets {
 	/// Record a pid. Duplicates are ignored. If the pid is alive, opens
 	/// a stable [`Process`] reference so the descendant tree can be
 	/// killed even if the original pid is reused later.
+	///
+	/// Prefer [`add_process`](Self::add_process) when the caller already holds a
+	/// [`Process`] captured at spawn time: opening by pid here loses the
+	/// original identity if the pid was recycled between the child exiting
+	/// and this call.
 	pub fn add_pid(&mut self, pid: i32) {
 		if self.seen_pids.insert(pid)
 			&& let Some(process) = Process::from_pid(pid)
 		{
+			self.processes.push(process);
+		}
+	}
+
+	/// Record a pre-pinned [`Process`] handle. Duplicates (by pid) are ignored.
+	///
+	/// This is the correct entry point when the caller captured the handle at
+	/// spawn time — the handle already pins OS-level identity, so no `from_pid`
+	/// re-open (and its PID-reuse race) is needed at cancellation time.
+	pub fn add_process(&mut self, process: Process) {
+		if self.seen_pids.insert(process.pid()) {
 			self.processes.push(process);
 		}
 	}
@@ -1599,10 +1615,19 @@ impl TerminationTargets {
 }
 
 /// A single external child reported by the shell's spawn-observer hook.
-#[derive(Debug, Clone, Copy)]
+///
+/// `process` is captured *at spawn time* so its OS-level identity is pinned
+/// before the pid can be recycled. On Windows an open process handle keeps
+/// the pid reserved for the lifetime of the reference; on Linux the pidfd
+/// pins identity; on macOS the recorded `(pid, start_time)` triple detects
+/// impersonation. Storing only the raw pid and re-opening at cancellation
+/// time — as previous versions did — leaked kills onto unrelated processes
+/// that happened to acquire the recycled pid between the child exiting and
+/// the run being cancelled (issue #4605).
+#[derive(Clone)]
 struct SpawnedProcess {
-	pid:  i32,
-	pgid: Option<i32>,
+	process: Option<Process>,
+	pgid:    Option<i32>,
 }
 
 /// Per-run record of the OS processes a single shell command launched,
@@ -1626,24 +1651,37 @@ impl SpawnRegistry {
 	}
 
 	/// Record a freshly spawned child. Called from the spawn-observer hook.
-	pub fn record(&self, pid: i32, pgid: Option<i32>) {
-		self.spawned.lock().push(SpawnedProcess { pid, pgid });
+	///
+	/// The `Process` handle MUST be opened by the caller *immediately* after
+	/// the child's pid becomes visible, so identity is pinned before any race
+	/// with pid recycling can start. When the pin fails (child already exited
+	/// before we could `Process::from_pid`) the entry becomes a no-op at
+	/// termination time — there is nothing left to signal.
+	pub fn record(&self, pgid: Option<i32>, process: Option<Process>) {
+		self.spawned.lock().push(SpawnedProcess { process, pgid });
 	}
 
 	/// Build the kill set from the processes recorded so far. Re-read on every
 	/// signal wave so a child spawned during a grace window — between the
 	/// cancel firing and the next wave — is still reaped.
 	///
-	/// A recorded pid contributes only while alive (`add_pid` opens a stable
-	/// handle, skipping the dead); a recorded pgid contributes only while the
-	/// group still has members, so once the run's whole tree exits the targets
-	/// are empty and the wave loop can stop early.
+	/// A recorded process contributes only while alive; a recorded pgid
+	/// contributes only while the group still has members, so once the run's
+	/// whole tree exits the targets are empty and the wave loop can stop early.
 	#[must_use]
 	pub fn build_targets(&self) -> TerminationTargets {
 		let mut targets = TerminationTargets::new();
 		let spawned = self.spawned.lock().clone();
 		for entry in spawned {
-			targets.add_pid(entry.pid);
+			if let Some(process) = entry.process {
+				targets.add_process(process);
+			}
+			// If the observer failed to pin a handle at spawn time (the child
+			// exited before `Process::from_pid` could open it), the child is
+			// already gone — signalling anything for that pid would either
+			// no-op or, worse, race a recycled pid onto an unrelated process.
+			// Drop the entry entirely rather than reintroduce the pid-reuse
+			// window this whole change exists to close (#4605).
 			if let Some(pgid) = entry.pgid
 				&& pgid > 0
 				&& process_group_alive(pgid)
@@ -1751,5 +1789,84 @@ mod tests {
 			 cancellation cleanup can reach it; this regressed on macOS when the walk relied on the \
 			 broken `proc_listchildpids`",
 		);
+	}
+
+	/// Regression test for issue #4605: `SpawnRegistry` MUST pin a stable
+	/// [`Process`] reference at spawn time rather than defer re-opening the
+	/// pid until termination.
+	///
+	/// Before the fix, `SpawnRegistry` stored only the raw pid; `build_targets`
+	/// called `Process::from_pid` at cancellation time. On Windows pids recycle
+	/// aggressively, so a bash-spawned `pwsh.exe` that had already exited could
+	/// see its pid reassigned to an unrelated PowerShell session (e.g. the
+	/// user's other Cursor terminal). `Process::from_pid` at cancel time would
+	/// happily open that unrelated process, and `signal_tree` would then
+	/// enumerate — and `TerminateProcess` — the entire foreign subtree.
+	///
+	/// This test cannot literally trigger Windows pid recycling from a
+	/// cross-platform Rust test, but it can prove the observable defense: a
+	/// recorded process reference survives the original pid's death (so no
+	/// "look it up again" step exists to be raced), and the registry never
+	/// consults `Process::from_pid` when a handle was pinned at record time.
+	#[cfg(unix)]
+	#[test]
+	fn spawn_registry_pins_identity_at_record_time() {
+		use std::{process::Command, thread, time::Duration};
+
+		let mut child = Command::new("sleep")
+			.arg("30")
+			.spawn()
+			.expect("spawn sleep");
+		let child_pid = i32::try_from(child.id()).expect("child pid fits in i32");
+
+		let registry = SpawnRegistry::new();
+		// Simulate brush's `on_spawn` hook: pin the handle *now*, while the
+		// child is definitely alive, before any race with pid recycling could
+		// start.
+		let pinned = Process::from_pid(child_pid).expect("pin child at record time");
+		registry.record(None, Some(pinned));
+
+		// Kill the child so the pid becomes eligible for reuse.
+		let _ = child.kill();
+		let _ = child.wait();
+
+		// Sanity-check that a fresh `Process::from_pid` against the dead pid
+		// no longer resolves — mirroring the moment on Windows where the pid
+		// could recycle to an unrelated process before cancellation fires.
+		for _ in 0..40 {
+			if Process::from_pid(child_pid).is_none() {
+				break;
+			}
+			thread::sleep(Duration::from_millis(25));
+		}
+
+		let targets = registry.build_targets();
+		assert!(
+			!targets.is_empty(),
+			"SpawnRegistry must retain the pinned handle even after the pid dies; otherwise the \
+			 kill set is either silently empty (misses legitimate targets) or would need to \
+			 re-open by pid (racing with pid reuse — issue #4605)"
+		);
+	}
+
+	/// `TerminationTargets::add_process` must accept a pre-pinned handle
+	/// without going through `Process::from_pid`. This is the API contract
+	/// `SpawnRegistry` relies on to avoid the PID-reuse race.
+	#[cfg(unix)]
+	#[test]
+	fn add_process_bypasses_from_pid_lookup() {
+		let self_pid = i32::try_from(std::process::id()).expect("self pid fits in i32");
+		let pinned = Process::from_pid(self_pid).expect("pin self");
+
+		let mut targets = TerminationTargets::new();
+		targets.add_process(pinned.clone());
+		assert!(!targets.is_empty(), "add_process must record the pinned handle");
+
+		// Adding the same pid again through either entry point must dedupe:
+		// otherwise every wave in `terminate_run` would re-signal the same
+		// tree N times.
+		targets.add_process(pinned);
+		targets.add_pid(self_pid);
+		assert_eq!(targets.processes.len(), 1, "duplicate pids must be deduped");
 	}
 }
