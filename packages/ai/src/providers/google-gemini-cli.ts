@@ -263,6 +263,8 @@ export interface GoogleGeminiCliOptions extends StreamOptions {
 		 */
 		suppress?: { level: GoogleThinkingLevel } | { budget: number };
 	};
+	/** Request that Cloud Code Assist omit human-readable thought summaries while still allowing internal reasoning. */
+	hideThinkingSummary?: boolean;
 	/**
 	 * Upstream wire model id override for collapsed effort-tier variants.
 	 * Serialized as `requestModelId ?? model.requestModelId ?? model.id`.
@@ -1249,7 +1251,7 @@ export function buildRequest(
 	// Thinking config
 	if (options.thinking?.enabled && model.reasoning) {
 		generationConfig.thinkingConfig = {
-			includeThoughts: true,
+			includeThoughts: !options.hideThinkingSummary,
 		};
 		// Gemini 3 models use thinkingLevel, older models use thinkingBudget
 		if (options.thinking.level !== undefined) {

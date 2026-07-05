@@ -83,6 +83,24 @@ describe("Google service tier wire encoding", () => {
 		expect(headers.get("X-Vertex-AI-LLM-Shared-Request-Type")).toBeNull();
 	});
 
+	it("Gemini API omits human-readable thought summaries when requested", async () => {
+		const { fetch, captured } = capturingFetch();
+		await drain(
+			streamGoogle(geminiModel, context, {
+				apiKey: "k",
+				fetch,
+				useInteractionsApi: false,
+				thinking: { enabled: true, level: "HIGH" },
+				hideThinkingSummary: true,
+			}),
+		);
+
+		expect((captured().body.generationConfig as { thinkingConfig?: unknown } | undefined)?.thinkingConfig).toEqual({
+			includeThoughts: false,
+			thinkingLevel: "HIGH",
+		});
+	});
+
 	it("Vertex sends priority via header and omits the body tier field", async () => {
 		const { fetch, captured } = capturingFetch();
 		await drain(streamGoogleVertex(vertexModel, context, { apiKey: "k", serviceTier: "priority", fetch }));
