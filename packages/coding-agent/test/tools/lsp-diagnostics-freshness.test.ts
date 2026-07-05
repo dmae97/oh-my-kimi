@@ -133,6 +133,33 @@ describe("LSP diagnostics freshness", () => {
 		);
 	});
 
+	it("does not start an LSP server just to notify existing clients when write-time features are disabled", async () => {
+		const filePath = path.join(tempDir.path(), "plain.ts");
+		const loadConfig = vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined });
+		const getServers = vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["test-lsp", TEST_SERVER]]);
+		const getOrCreate = vi
+			.spyOn(lspClient, "getOrCreateClient")
+			.mockRejectedValue(new Error("disabled write-time LSP features must not start a server"));
+		const notify = vi.spyOn(lspClient, "notifyWorkspaceWatchedFiles").mockResolvedValue();
+
+		const writethrough = createLspWritethrough(tempDir.path(), {
+			enableFormat: false,
+			enableDiagnostics: false,
+		});
+		const result = await writethrough(filePath, "export const value = 1;\n");
+
+		expect(result).toBeUndefined();
+		expect(await Bun.file(filePath).text()).toBe("export const value = 1;\n");
+		expect(notify).toHaveBeenCalledWith(
+			tempDir.path(),
+			[{ filePath, type: lspClient.FileChangeType.Created }],
+			undefined,
+		);
+		expect(loadConfig).not.toHaveBeenCalled();
+		expect(getServers).not.toHaveBeenCalled();
+		expect(getOrCreate).not.toHaveBeenCalled();
+	});
+
 	it("announces batched sibling writes before syncing the diagnostic target", async () => {
 		const stylesPath = path.join(tempDir.path(), "probe.module.scss");
 		const tsPath = path.join(tempDir.path(), "probe.tsx");

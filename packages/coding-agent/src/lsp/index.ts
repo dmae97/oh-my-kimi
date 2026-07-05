@@ -1151,8 +1151,6 @@ async function runLspWritethrough(
 	},
 ): Promise<FileDiagnosticsResult | undefined> {
 	const { enableFormat, enableDiagnostics } = options;
-	const config = getConfig(cwd);
-	const servers = getServersForFile(config, dst);
 
 	let finalContent = content;
 	const writeContent = async (value: string) => (file ? file.write(value) : Bun.write(dst, value));
@@ -1168,6 +1166,15 @@ async function runLspWritethrough(
 			throw error;
 		}
 	};
+	if (!enableFormat && !enableDiagnostics) {
+		await getWritePromise();
+		await notifyWriteCommitted();
+		return undefined;
+	}
+
+	const config = getConfig(cwd);
+	const servers = getServersForFile(config, dst);
+
 	if (servers.length === 0) {
 		await getWritePromise();
 		await notifyWriteCommitted();
