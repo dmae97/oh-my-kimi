@@ -4,8 +4,8 @@
 
 ### Fixed
 
-- Fixed submitted slash-command arguments treating `@` file-reference tokens as prompt-composer autocomplete triggers when the command does not define argument completions. ([#4600](https://github.com/can1357/oh-my-pi/issues/4600))
-- Evict purged image keys from `ImageBudget` to prevent unbounded map growth ([#4250](https://github.com/can1357/oh-my-pi/issues/4250))
+- Fixed an issue where `@` file-reference tokens in slash-command arguments incorrectly triggered prompt-composer autocompletion when the command did not define argument completions.
+- Fixed a memory leak caused by unbounded map growth in the image budget cache.
 
 ## [16.3.6] - 2026-07-04
 

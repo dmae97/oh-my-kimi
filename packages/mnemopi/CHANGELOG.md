@@ -4,13 +4,13 @@
 
 ### Added
 
-- Exposed `RecallOptions.contentPreviewChars` so hosts can raise or disable the per-result content preview cap that `recall()` enforces. Default remains 500; pass `0` to return full content.
-- Added `RecallResult.truncated` and `RecallResult.full_length` so callers can tell a clipped preview apart from a short row without inspecting the trailing marker. ([#4443](https://github.com/can1357/oh-my-pi/issues/4443))
+- Added `RecallOptions.contentPreviewChars` to allow customizing or disabling the content preview cap (default is 500, set to 0 for full content).
+- Added `RecallResult.truncated` and `RecallResult.full_length` properties to easily identify clipped previews without parsing trailing markers.
 
 ### Fixed
 
-- Fixed background LLM fact extraction preserving extractor categories so `instructions`, `preferences`, `timelines`, and `kg` triples populate their MEMORIA tables and graph triples instead of being flattened into generic `fact/entity` rows. ([#4389](https://github.com/can1357/oh-my-pi/issues/4389))
-- Recall previews now mark clipped content with a trailing `…` character instead of slicing at exactly 500 characters mid-word with no marker. The `factLine` used by the enhanced-context sandwich (200-char cap) gets the same treatment. Agents can now tell a full memory apart from a preview and know when to fetch the full row via `Mnemopi.get(id)` before overwriting content ([#4443](https://github.com/can1357/oh-my-pi/issues/4443)).
+- Fixed background LLM fact extraction to preserve specific extractor categories (`instructions`, `preferences`, `timelines`, and `kg` triples) in MEMORIA tables and graph triples instead of flattening them into generic `fact/entity` rows.
+- Improved recall previews and `factLine` context to append a trailing ellipsis (`…`) when content is clipped, preventing mid-word truncation without a marker.
 
 ## [16.3.5] - 2026-07-04
 

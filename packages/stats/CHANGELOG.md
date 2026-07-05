@@ -4,7 +4,7 @@
 
 ### Changed
 
-- Stream session-entry lookup and cache snapcompact-savings.jsonl reads by mtime/size to avoid repeated full-file scans ([#4251](https://github.com/can1357/oh-my-pi/issues/4251))
+- Optimized session-entry lookup and file reading performance by caching file metadata to avoid repeated full-file scans.
 
 ## [16.3.1] - 2026-07-02
 

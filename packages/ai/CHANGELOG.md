@@ -4,18 +4,17 @@
 
 ### Fixed
 
-- Cursor provider: reject `grepArgs` frames with an empty `pattern` at the exec dispatch (returning an actionable, glob-aware `GrepResult.error`) instead of surfacing the coding-agent grep tool's bare "Pattern must not be empty" and persisting a synthesized tool-call block whose pattern rendered as `?` in the TUI ([#4574](https://github.com/can1357/oh-my-pi/issues/4574)).
-- Fixed Gemini CLI / Antigravity (Google Cloud Code Assist API) incorrectly retrying empty-response failures on non-`STOP` finishReasons (such as safety or recitation blocks) and hiding the specific API error behind a generic "Cloud Code Assist API returned an empty response" message. The provider now breaks early on errors and correctly bubbles up the underlying API error message immediately.
-- Fixed GitHub Copilot OpenAI Responses replay persisting hidden-empty assistant turns as native history, preventing reasoning-only empty completions from poisoning later requests with stale assistant summaries. ([#4597](https://github.com/can1357/oh-my-pi/issues/4597))
-- Fixed provider gateway `quota insufficient` / `额度不足` errors being classified as generic 403 failures instead of usage-limit errors.
-- Aligned the `openai-responses` strict-mode gate and resolved strict-support detection with `openai-completions` so buildModel-created OpenAI-compatible Responses models (for example DeepSeek-family endpoints) preserve an author-set `tool.strict === false` on the wire unless `compat.supportsStrictMode` is explicitly `false` ([#4527](https://github.com/can1357/oh-my-pi/issues/4527)).
-- Fixed custom `openai-codex-responses` providers with opaque proxy/API keys failing before dispatch when no ChatGPT `chatgpt_account_id` claim exists; Codex requests now omit `chatgpt-account-id` when it cannot be derived. ([#4526](https://github.com/can1357/oh-my-pi/issues/4526))
-- Fixed OpenAI Responses/Codex orchestration token accounting so provider-side orchestration tokens stay billable and included in totals without appearing as ordinary uncached prompt input. ([#4469](https://github.com/can1357/oh-my-pi/issues/4469))
-- Fixed Google Gemini hidden-thinking-summary requests so direct Google and Cloud Code Assist providers keep the requested reasoning tier while sending `includeThoughts: false`.
-- Fixed identifierless parallel OpenAI-compatible tool-call argument streams so sibling bash JSON cannot bleed into the first command.
-- Fixed prior-turn reasoning demotion for Anthropic Claude models by generalizing the Fable-only bare-prose branch to the whole Anthropic dialect, so cross-model replays to Opus, Sonnet, Haiku, and Mythos no longer emit `<thinking>` tags that Anthropic's reasoning_extraction classifier flags as visible reasoning leakage. Also extended the Claude-id fallback classifier to Bedrock cross-region inference profiles (`us.anthropic.claude-…`, `eu.anthropic.claude-…`, etc.) so Haiku dotted profiles route to the Anthropic dialect, and appended a paragraph terminator to the demoted-thinking text block itself so bare Anthropic-dialect reasoning no longer runs into the following visible-answer block when the openai-completions convert path flattens adjacent text (without corrupting ordinary multi-block visible text from bridges, imported transcripts, or streaming chunk splits) ([#4430](https://github.com/can1357/oh-my-pi/issues/4430)).
-- Fixed same-model Anthropic thinking replay to drop unsigned prior reasoning blocks instead of demoting them into visible `<thinking>` text, preventing reasoning-extraction refusals. ([#4428](https://github.com/can1357/oh-my-pi/issues/4428))
-- Fixed custom OpenAI-compatible relays serving OpenAI model ids so service-tier resolution can classify them as OpenAI-family targets for fast mode ([#4386](https://github.com/can1357/oh-my-pi/issues/4386)).
+- Fixed Cursor provider handling of empty-pattern grep arguments to return a clear, actionable error instead of a generic error and a broken TUI rendering.
+- Fixed Google Cloud Code Assist API (Antigravity) and Gemini CLI to immediately bubble up underlying API errors (such as safety or recitation blocks) instead of incorrectly retrying and hiding them behind a generic empty-response message.
+- Fixed GitHub Copilot OpenAI Responses replay to prevent empty reasoning-only assistant turns from being persisted in history and poisoning subsequent requests.
+- Fixed classification of provider gateway quota-insufficient errors so they are correctly identified as usage-limit errors rather than generic 403 failures.
+- Fixed OpenAI-compatible Responses models (such as DeepSeek endpoints) to preserve user-configured tool strictness settings unless strict mode is explicitly unsupported.
+- Fixed custom openai-codex-responses providers failing when no ChatGPT account ID claim is present by omitting the header when it cannot be derived.
+- Fixed token accounting for OpenAI Responses and Codex providers to correctly include provider-side orchestration tokens in billing totals without misclassifying them as uncached prompt input.
+- Fixed Google Gemini and Cloud Code Assist providers to preserve the requested reasoning tier when sending requests with hidden thinking summaries.
+- Fixed parallel OpenAI-compatible tool-call streaming to prevent argument data from bleeding across concurrent commands when identifiers are missing.
+- Fixed Anthropic Claude reasoning and thinking replay handling. Same-model replays now drop unsigned prior reasoning blocks to prevent reasoning-extraction refusals, while cross-model replays (including Bedrock cross-region profiles) correctly demote reasoning without emitting raw thinking tags or causing text-flattening formatting issues.
+- Fixed custom OpenAI-compatible relays serving standard OpenAI model IDs to be correctly classified as OpenAI-family targets for fast mode.
 
 ## [16.3.6] - 2026-07-04
 
