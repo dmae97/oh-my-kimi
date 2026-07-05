@@ -41,6 +41,7 @@ import {
 	parseModelString,
 	pickDefaultAvailableModel,
 	resolveAllowedModels,
+	resolveConfiguredModelPatterns,
 	resolveModelRoleValue,
 } from "./config/model-resolver";
 import { loadPromptTemplates as loadPromptTemplatesInternal, type PromptTemplate } from "./config/prompt-templates";
@@ -1969,12 +1970,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				}
 			}
 		}
-		// Resolve deferred --model/subagent patterns now that extension models are registered.
+		// Resolve deferred --model/subagent patterns now that extension models are
+		// registered. Expand role aliases (`pi/smol`) and comma chains to concrete
+		// selectors first so deferred resolution accepts everything the immediate
+		// path (resolveModelOverride → resolveModelRoleValue) accepts.
 		if (!model && deferredModelPatterns.length > 0) {
+			const expandedModelPatterns = resolveConfiguredModelPatterns(deferredModelPatterns, settings);
 			const availableModels = modelRegistry.getAll();
 			const matchPreferences = getModelMatchPreferences(settings);
-			for (let patternIndex = 0; patternIndex < deferredModelPatterns.length; patternIndex += 1) {
-				const pattern = deferredModelPatterns[patternIndex];
+			for (let patternIndex = 0; patternIndex < expandedModelPatterns.length; patternIndex += 1) {
+				const pattern = expandedModelPatterns[patternIndex];
 				const primary = parseModelPattern(pattern, availableModels, matchPreferences);
 				if (!primary.model) continue;
 				let selectedModel = primary.model;
@@ -2007,7 +2012,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					);
 					const seenSelectors = new Set<string>([primarySelector]);
 					const fallbackSelectors: string[] = [];
-					for (const fallbackPattern of deferredModelPatterns.slice(patternIndex + 1)) {
+					for (const fallbackPattern of expandedModelPatterns.slice(patternIndex + 1)) {
 						const fallback = parseModelPattern(fallbackPattern, availableModels, matchPreferences);
 						if (!fallback.model) continue;
 						const fallbackSelector = formatModelSelectorValue(

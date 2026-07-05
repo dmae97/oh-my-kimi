@@ -864,7 +864,7 @@ function getModelRoleAlias(value: string): ModelRole | undefined {
 
 function normalizeModelPatternList(value: string | string[] | undefined): string[] {
 	if (!value) return [];
-	const patterns = Array.isArray(value) ? value : value.split(",");
+	const patterns = Array.isArray(value) ? value.flatMap(pattern => pattern.split(",")) : value.split(",");
 	return patterns.map(pattern => pattern.trim()).filter(Boolean);
 }
 
