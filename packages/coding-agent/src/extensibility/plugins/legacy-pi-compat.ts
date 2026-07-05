@@ -982,10 +982,12 @@ function escapeRegExp(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// Match source modules in an extension graph (relative imports and package
-// `imports` aliases such as `#src/*`). Bare third-party dependencies remain
-// native Bun resolutions.
-const EXTENSION_GRAPH_SPECIFIER_REGEX = /(?:from\s+|import\s+|import\s*\(\s*)["']((?:\.\.?\/|#)[^"']+)["']/g;
+// Match source modules in an extension graph: relative imports, package
+// `imports` aliases such as `#src/*`, and extension-local bare dependency
+// entries. Bare imports inside node_modules dependencies remain native Bun
+// resolutions; once the dependency entry is hooked, its relative children are
+// still collected and rewritten with the reload mtime tag.
+const EXTENSION_GRAPH_SPECIFIER_REGEX = /((?:from\s+|import\s+|import\s*\(\s*)["'])([^"'()\s]+)(["'])/g;
 
 // Extension source realpaths already covered by an installed load-time hook for
 // each entry. `Bun.plugin()` registrations are process-global and permanent, so
@@ -1012,12 +1014,12 @@ async function realpathOrSelfUncached(p: string): Promise<string> {
 }
 
 /**
- * Walk the extension's relative-import graph starting at `entryRealPath`,
- * returning the realpath of every reachable source module. Only relative
- * specifiers (`./`, `../`) are followed — bare and absolute imports are left to
- * Bun's native resolver — so the set is exactly the extension's own source,
- * wherever it physically lives (a `../src` sibling, a symlinked sub-tree, …).
- * This mirrors the module set the old temp-dir mirror tracked, minus the copy.
+ * Walk the extension's import graph starting at `entryRealPath`, returning the
+ * realpath of every reachable source module OMP must rewrite at load time.
+ * Relative imports and package `imports` aliases are always graph-owned.
+ * Extension-local bare dependency entries are also included so their relative
+ * children receive the reload mtime tag; bare imports inside those dependencies
+ * remain native Bun resolutions to avoid taking over full third-party graphs.
  */
 async function collectExtensionModules(entryRealPath: string): Promise<Map<string, string>> {
 	const modules = new Map<string, string>();
@@ -1035,18 +1037,39 @@ async function collectExtensionModules(entryRealPath: string): Promise<Map<strin
 		}
 		modules.set(file, source);
 		const dir = path.dirname(file);
+		const isDependencyModule = file.includes(`${path.sep}node_modules${path.sep}`);
 		for (const match of source.matchAll(EXTENSION_GRAPH_SPECIFIER_REGEX)) {
-			const specifier = match[1];
+			const specifier = match[2];
 			if (!specifier) continue;
 			try {
-				const resolved = specifier.startsWith("#")
-					? await resolvePackageImportSpecifier(specifier, file)
-					: await realpathOrSelf(Bun.resolveSync(specifier, dir));
+				let resolved: string | null = null;
+				if (specifier.startsWith(".")) {
+					resolved = await realpathOrSelf(Bun.resolveSync(specifier, dir));
+				} else if (specifier.startsWith("#")) {
+					resolved = await resolvePackageImportSpecifier(specifier, file);
+				} else if (
+					!isDependencyModule &&
+					isBareExtensionDependencySpecifier(specifier) &&
+					!remapLegacyPiSpecifier(specifier) &&
+					specifier !== "typebox" &&
+					specifier !== "@sinclair/typebox"
+				) {
+					const parsed = splitBarePackageSpecifier(specifier);
+					const packageRoot = parsed ? await findNodePackageRoot(parsed.name, file) : null;
+					const manifest = packageRoot ? await readPackageManifest(packageRoot) : null;
+					const dependencyEntry = manifest ? await resolveExtensionBareDependency(specifier, file) : null;
+					const dependencyExtension = dependencyEntry ? path.extname(dependencyEntry) : null;
+					const isCommonJsEntry =
+						dependencyExtension === ".cjs" ||
+						dependencyExtension === ".cts" ||
+						((dependencyExtension === ".js" || dependencyExtension === ".jsx") && manifest?.type !== "module");
+					resolved = dependencyEntry && !isCommonJsEntry ? await realpathOrSelf(dependencyEntry) : null;
+				}
 				if (resolved && !modules.has(resolved)) {
 					queue.push(resolved);
 				}
 			} catch {
-				// Unresolvable relative import (e.g. a type-only path); skip it.
+				// Unresolvable import (e.g. a type-only path); skip it.
 			}
 		}
 	}

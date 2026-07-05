@@ -137,6 +137,47 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		expect(second.entryPath.includes("?")).toBe(false);
 	});
 
+	it("reloads edited children of an extension-local bare dependency", async () => {
+		const entrySource = (version: string): string =>
+			[
+				'import { depValue } from "localdep";',
+				"export { depValue };",
+				`export const entryVersion = ${JSON.stringify(version)};`,
+				"export default function (pi) { void pi; }",
+			].join("\n");
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "bare-dep-child-reload-ext", version: "1.0.0" }),
+			"node_modules/localdep/package.json": JSON.stringify({
+				name: "localdep",
+				version: "1.0.0",
+				type: "module",
+				main: "index.js",
+			}),
+			"node_modules/localdep/index.js": 'export { depValue } from "./helper.js";\n',
+			"node_modules/localdep/helper.js": 'export const depValue = "dep-v1";\n',
+			"index.ts": entrySource("v1"),
+		});
+		const entry = path.join(dir, "index.ts");
+		const helper = path.join(dir, "node_modules", "localdep", "helper.js");
+
+		const first = (await loadLegacyPiModule(entry)) as { entryVersion: string; depValue: string };
+		expect(first.entryVersion).toBe("v1");
+		expect(first.depValue).toBe("dep-v1");
+
+		const firstEntryStat = await fs.stat(entry);
+		const firstHelperStat = await fs.stat(helper);
+		await fs.writeFile(entry, entrySource("v2"), "utf8");
+		await fs.writeFile(helper, 'export const depValue = "dep-v2";\n', "utf8");
+		const bumpedEntryMtime = new Date(Math.ceil(firstEntryStat.mtimeMs) + 2_000);
+		const bumpedHelperMtime = new Date(Math.ceil(firstHelperStat.mtimeMs) + 2_000);
+		await fs.utimes(entry, bumpedEntryMtime, bumpedEntryMtime);
+		await fs.utimes(helper, bumpedHelperMtime, bumpedHelperMtime);
+
+		const second = (await loadLegacyPiModule(entry)) as { entryVersion: string; depValue: string };
+		expect(second.entryVersion).toBe("v2");
+		expect(second.depValue).toBe("dep-v2");
+	});
+
 	it("reloads modules added to the relative import graph after the first load", async () => {
 		const entrySource = (version: string, includeHelper: boolean): string =>
 			[
