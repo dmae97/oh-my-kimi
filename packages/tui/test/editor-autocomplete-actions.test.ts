@@ -188,6 +188,19 @@ describe("Editor Enter handler sync slash completion", () => {
 		expect(editor.isShowingAutocomplete()).toBe(false);
 	});
 
+	it("does not apply a stale mid-prompt skill suggestion when the live token stops matching", async () => {
+		const editor = createSkillEditor();
+
+		await openMidPromptSkillAutocomplete(editor, "see ");
+		// Race the 100 ms debounce: type a non-skill token before the popup refreshes.
+		editor.handleInput("tmp");
+		editor.handleInput("\t");
+
+		// The stale `skill:security-scan` popup must not rewrite `/tmp` to `/skill:…`.
+		expect(editor.getText()).toBe("see /tmp");
+		expect(editor.isShowingAutocomplete()).toBe(false);
+	});
+
 	it("opens mid-prompt skill autocomplete and inserts the skill token without wiping the draft on Tab", async () => {
 		const editor = new Editor(defaultEditorTheme);
 		editor.setAutocompleteProvider(

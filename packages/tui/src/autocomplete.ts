@@ -276,7 +276,7 @@ function commandMatchesNameOrAlias(cmd: CommandEntry, commandName: string): bool
 	return getCommandAliases(cmd).includes(commandName);
 }
 
-function scoreCommandTextMatch(lowerPrefix: string, lowerTarget: string): number {
+export function scoreCommandTextMatch(lowerPrefix: string, lowerTarget: string): number {
 	if (lowerPrefix.length === 0) return 1;
 	if (lowerPrefix === lowerTarget) return 1000;
 	// Flat score for every prefix match so same-prefix commands keep registry

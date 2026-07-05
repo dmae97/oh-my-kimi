@@ -3,6 +3,7 @@ import {
 	type AutocompleteProvider,
 	findLeadingSlashCommandStart,
 	findTrailingSlashCommandStart,
+	scoreCommandTextMatch,
 } from "../autocomplete";
 import { BracketedPasteHandler, decodeReencodedPasteControls } from "../bracketed-paste";
 import { getKeybindings, type KeybindingsManager } from "../keybindings";
@@ -2902,8 +2903,17 @@ export class Editor implements Component, Focusable {
 			const currentTrailingStart = findTrailingSlashCommandStart(currentTextBeforeCursor);
 			if (currentTrailingStart !== null) {
 				const token = currentTextBeforeCursor.slice(currentTrailingStart);
-				if (!token.includes(" ") && !token.slice(1).includes("/")) return true;
+				if (!token.includes(" ") && !token.slice(1).includes("/")) {
+					// Guard the timing window where the popup was built for an earlier
+					// query (e.g. bare `/`) and the user typed further characters before
+					// the 100 ms debounced refresh fired: accept the stale skill only
+					// when the current query would still surface it. `tmp` after a bare
+					// slash therefore falls through to file completion instead of
+					// rewriting the user's `/tmp` to `/skill:…`.
+					if (scoreCommandTextMatch(token.slice(1).toLowerCase(), item.value.toLowerCase()) > 0) return true;
+				}
 			}
+			return false;
 		}
 
 		if (findLeadingSlashCommandStart(this.#autocompletePrefix) !== null) {
