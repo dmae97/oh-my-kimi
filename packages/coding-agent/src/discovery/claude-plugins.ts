@@ -61,21 +61,33 @@ function isWithinPluginRoot(rootPath: string, targetPath: string): boolean {
 
 /**
  * Resolve a manifest-declared directory field to absolute paths within the
- * plugin root. The Claude plugin manifest allows path fields to be either a
- * single string or an array of strings
- * (https://code.claude.com/docs/en/plugins-reference#path-behavior-rules), so
- * both shapes are normalized here.
+ * plugin root.
  *
- * The first `manifestKeys` entry that supplies at least one non-empty path wins
- * (later keys are ignored — used for the `commands` > `slash-commands` legacy
- * fallback). When no key is set the plugin's default subdirectory (`fallback`)
- * is used. Entries that resolve outside the plugin root are dropped with a
- * warning so misconfigured manifests are visible without traversal escape.
+ * Manifest path fields may be `string` or `string[]`
+ * (https://code.claude.com/docs/en/plugins-reference#path-behavior-rules);
+ * both shapes are normalized here. The first `manifestKeys` entry that
+ * supplies at least one non-empty path wins (later keys are ignored — used for
+ * the `commands` > `slash-commands` legacy fallback).
+ *
+ * `fallback` is the default subdirectory (e.g. `skills/`, `commands/`) and
+ * `includeFallback` controls the Claude-documented merge semantic per field:
+ *
+ * - `skills` **adds to** the default: `fallback` is always scanned, and any
+ *   manifest entries load alongside it. Callers pass `includeFallback: true`.
+ * - `commands` / `slash-commands` **replace** the default: an explicit
+ *   manifest key means the default `commands/` directory is not scanned.
+ *   Callers pass `includeFallback: false` (the manifest itself may still
+ *   list `./commands` explicitly to keep it).
+ *
+ * When no matching key is set, the fallback is used regardless. Entries that
+ * resolve outside the plugin root are dropped with a warning so misconfigured
+ * manifests remain observable and cannot escape via traversal.
  */
 async function resolvePluginDir(
 	root: ClaudePluginRoot,
 	manifestKeys: ReadonlyArray<keyof ClaudePluginManifest>,
 	fallback: string,
+	includeFallback: boolean,
 ): Promise<ResolvedPluginDir> {
 	const manifest = await readPluginManifest(root);
 	const fallbackDir = path.join(root.path, fallback);
@@ -106,17 +118,28 @@ async function resolvePluginDir(
 		return { dirs: [fallbackDir], warnings: [] };
 	}
 
+	// Dedup preserves order: default entry (when included) first, then declared
+	// entries in manifest order. Deduping the paths themselves means a plugin
+	// author can still list `./commands` explicitly when they want the default
+	// alongside extras without producing double-loads.
+	const seen = new Set<string>();
 	const dirs: string[] = [];
 	const warnings: string[] = [];
+	if (includeFallback) {
+		seen.add(fallbackDir);
+		dirs.push(fallbackDir);
+	}
 	for (const entry of configured) {
 		const resolved = path.resolve(root.path, entry);
-		if (isWithinPluginRoot(root.path, resolved)) {
-			dirs.push(resolved);
-		} else {
+		if (!isWithinPluginRoot(root.path, resolved)) {
 			warnings.push(
 				`[claude-plugins] Ignoring ${String(matchedKey)} path outside plugin root for ${root.id}: ${entry}`,
 			);
+			continue;
 		}
+		if (seen.has(resolved)) continue;
+		seen.add(resolved);
+		dirs.push(resolved);
 	}
 
 	return { dirs, warnings };
@@ -133,7 +156,12 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 	warnings.push(...rootWarnings);
 	const results = await Promise.all(
 		roots.map(async root => {
-			const { dirs: skillsDirs, warnings: resolveWarnings } = await resolvePluginDir(root, ["skills"], "skills");
+			const { dirs: skillsDirs, warnings: resolveWarnings } = await resolvePluginDir(
+				root,
+				["skills"],
+				"skills",
+				true,
+			);
 			const scanResults = await Promise.all(
 				skillsDirs.map(dir =>
 					scanSkillsFromDir(ctx, {
@@ -178,6 +206,7 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 				root,
 				["commands", "slash-commands"],
 				"commands",
+				false,
 			);
 			const commandResults = await Promise.all(
 				commandsDirs.map(dir =>

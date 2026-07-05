@@ -771,6 +771,92 @@ describe("listClaudePluginRoots", () => {
 		expect(result.all.find(s => s.name === "alpha")).toBeDefined();
 		expect(result.all.find(s => s.name === "beta")).toBeDefined();
 	});
+
+	test("manifest skills field merges with default skills/ directory (adds, not replaces)", async () => {
+		// Per Claude plugins reference "Path behavior rules":
+		// `skills` adds to the default `skills/` scan; the default is always loaded
+		// alongside any manifest-declared directories.
+		const pluginsDir = path.join(tempDir, ".claude", "plugins");
+		const pluginPath = path.join(tempDir, "plugins", "manifest-skills-merge");
+		await fs.mkdir(pluginsDir, { recursive: true });
+		await fs.mkdir(path.join(pluginPath, ".claude-plugin"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, "skills", "default-skill"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, "extra-skills", "extra-skill"), { recursive: true });
+
+		const registry = {
+			version: 2,
+			plugins: {
+				"manifest-skills-merge@market": [
+					{
+						scope: "user",
+						installPath: pluginPath,
+						version: "1.0.0",
+						installedAt: "2025-01-01T00:00:00Z",
+						lastUpdated: "2025-01-01T00:00:00Z",
+					},
+				],
+			},
+		};
+		await fs.writeFile(path.join(pluginsDir, "installed_plugins.json"), JSON.stringify(registry));
+		await fs.writeFile(
+			path.join(pluginPath, ".claude-plugin", "plugin.json"),
+			JSON.stringify({ skills: ["./extra-skills"] }),
+		);
+		await fs.writeFile(
+			path.join(pluginPath, "skills", "default-skill", "SKILL.md"),
+			"---\nname: default-skill\ndescription: Default skill\n---\nBody\n",
+		);
+		await fs.writeFile(
+			path.join(pluginPath, "extra-skills", "extra-skill", "SKILL.md"),
+			"---\nname: extra-skill\ndescription: Extra skill\n---\nBody\n",
+		);
+
+		const result = await loadCapability<Skill>("skills", { cwd: tempDir });
+		expect(result.warnings).toEqual([]);
+		expect(result.all.find(s => s.name === "default-skill")).toBeDefined();
+		expect(result.all.find(s => s.name === "extra-skill")).toBeDefined();
+	});
+
+	test("manifest commands field replaces default commands/ directory (Claude replace semantics)", async () => {
+		// Per Claude plugins reference "Path behavior rules":
+		// `commands` REPLACES the default `commands/` scan when the manifest key is set.
+		// A plugin that wants both must list `./commands` explicitly.
+		const pluginsDir = path.join(tempDir, ".claude", "plugins");
+		const pluginPath = path.join(tempDir, "plugins", "manifest-commands-replace");
+		await fs.mkdir(pluginsDir, { recursive: true });
+		await fs.mkdir(path.join(pluginPath, ".claude-plugin"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, "commands"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, "admin-commands"), { recursive: true });
+
+		const registry = {
+			version: 2,
+			plugins: {
+				"manifest-commands-replace@market": [
+					{
+						scope: "user",
+						installPath: pluginPath,
+						version: "1.0.0",
+						installedAt: "2025-01-01T00:00:00Z",
+						lastUpdated: "2025-01-01T00:00:00Z",
+					},
+				],
+			},
+		};
+		await fs.writeFile(path.join(pluginsDir, "installed_plugins.json"), JSON.stringify(registry));
+		await fs.writeFile(
+			path.join(pluginPath, ".claude-plugin", "plugin.json"),
+			JSON.stringify({ commands: ["./admin-commands"] }),
+		);
+		// This file lives under the default commands/ dir and MUST NOT load once the
+		// manifest declares `commands` (Claude's documented "replaces default" semantic).
+		await fs.writeFile(path.join(pluginPath, "commands", "default.md"), "Default\n");
+		await fs.writeFile(path.join(pluginPath, "admin-commands", "admin.md"), "Admin\n");
+
+		const result = await loadCapability<SlashCommand>("slash-commands", { cwd: tempDir });
+		expect(result.warnings).toEqual([]);
+		expect(result.all.find(c => c.name === "manifest-commands-replace:admin")).toBeDefined();
+		expect(result.all.find(c => c.name === "manifest-commands-replace:default")).toBeUndefined();
+	});
 });
 
 describe("discoverAgents plugin precedence", () => {
