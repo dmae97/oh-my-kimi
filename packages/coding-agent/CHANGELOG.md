@@ -25,6 +25,7 @@
 
 ### Fixed
 
+- Fixed grep/bash tool guidance so agents use Rust-style `foo|bar` patterns or `grep -E` instead of GNU BRE `\|` assumptions, and avoid bash when exact pipeline semantics are required. ([#4540](https://github.com/can1357/oh-my-pi/issues/4540))
 - Fixed raw `read` ranges not contributing to edit seen-line provenance, so re-reading an anchor range with `:raw` now unblocks hashline edits without adding non-raw line prefixes.
 - Fixed replan-driven session title refresh updating the statusline but not the terminal window title: terminal-title updates now fire from the session-name-changed listener, so every `setSessionName` path (first-input titling, `/rename`, plan seeding, replan refresh) sets the OSC title consistently.
 - Fixed user-interrupt aborts rendering the persisted `Interrupted by user` label in assistant transcripts; replay and live views now suppress that redundant line again while preserving generic/custom abort labels.
