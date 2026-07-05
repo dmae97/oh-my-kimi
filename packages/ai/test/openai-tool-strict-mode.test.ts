@@ -685,6 +685,56 @@ describe("OpenAI tool strict mode", () => {
 		expect(payload.tools?.[0]?.strict).toBeUndefined();
 	});
 
+	it("preserves explicit strict:false for buildModel-resolved openai-responses compat (#4527)", async () => {
+		const model = buildModel({
+			id: "deepseek-chat",
+			name: "DeepSeek Chat via Responses",
+			api: "openai-responses",
+			provider: "deepseek",
+			baseUrl: "https://api.deepseek.com/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 8192,
+		} as ModelSpec<"openai-responses">);
+
+		const payload = (await captureResponsesPayload(model, {
+			...testContext,
+			tools: [looseYieldTool],
+		})) as {
+			tools?: Array<{ strict?: boolean }>;
+		};
+
+		expect(model.compat.supportsStrictMode).toBe(true);
+		expect(payload.tools?.[0]?.strict).toBe(false);
+	});
+
+	it("keeps strict tools enabled for provider-id-only Azure Responses models (#4527)", async () => {
+		// Bundled Azure entries carry `provider: "azure"` with an empty baseUrl,
+		// so URL-only strict detection MUST NOT drop `supportsStrictMode` — the
+		// provider-id branch keeps `strict: true` on the wire for those models.
+		const model = buildModel({
+			id: "codex-mini",
+			name: "Codex Mini via Azure",
+			api: "openai-responses",
+			provider: "azure",
+			baseUrl: "",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 8192,
+		} as ModelSpec<"openai-responses">);
+
+		const payload = (await captureResponsesPayload(model)) as {
+			tools?: Array<{ strict?: boolean }>;
+		};
+
+		expect(model.compat.supportsStrictMode).toBe(true);
+		expect(payload.tools?.[0]?.strict).toBe(true);
+	});
+
 	it("sends strict=true for openai-responses tool schemas on GitHub Copilot", async () => {
 		const model = getBundledModel("github-copilot", "gpt-5-mini") as Model<"openai-responses">;
 

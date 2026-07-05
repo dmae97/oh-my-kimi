@@ -586,13 +586,13 @@ interface OpenAIResponsesSpecLike {
 }
 
 /**
- * Build the resolved Responses-API compat record. The Responses flavor
- * deliberately differs from chat-completions: GitHub Copilot's responses
- * endpoint accepts the `developer` role, while strict tool mode is scoped to
- * first-party OpenAI/Azure/Copilot providers. Azure is detected by provider id
- * as well as URL — bundled `azure` models carry no baseUrl (the deployment host
- * is per-resource, resolved at runtime) — while OpenAI/Copilot developer-role
- * and prompt-cache detection stay URL-keyed, as the historical call sites were.
+ * Build the resolved Responses-API compat record. Most shared OpenAI-compatible
+ * capability defaults intentionally mirror chat-completions, while Responses-
+ * only behavior (developer role, prompt cache, pairing strictness, image detail)
+ * keeps endpoint-specific detection. Azure is detected by provider id as well
+ * as URL — bundled `azure` models carry no baseUrl (the deployment host is per-
+ * resource, resolved at runtime) — while OpenAI/Copilot developer-role and
+ * prompt-cache detection stay URL-keyed, as the historical call sites were.
  */
 export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): ResolvedOpenAIResponsesCompat {
 	const baseUrl = spec.baseUrl ?? "";
@@ -611,8 +611,7 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 
 	const compat: ResolvedOpenAIResponsesCompat = {
 		supportsDeveloperRole: isAzure || isOpenAIUrl || hostMatchesUrl(baseUrl, "githubCopilot"),
-		supportsStrictMode:
-			spec.provider === "openai" || isAzure || spec.provider === "github-copilot" || isOpenRouter || isOpenAIUrl,
+		supportsStrictMode: isAzure || detectStrictModeSupport(spec.provider, baseUrl),
 		supportsReasoningEffort: spec.provider !== "xai-oauth" || isGrokReasoningEffortCapable(id),
 		supportsLongPromptCacheRetention: isOpenAIUrl,
 		// Azure OpenAI and GitHub Copilot Responses paths require tool results

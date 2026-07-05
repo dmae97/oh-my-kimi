@@ -859,7 +859,7 @@ export function buildParams(
 	if (context.tools) {
 		const disableStrictTools =
 			disableStrictToolsOverride || isStrictToolsDisabledForScope(providerSessionState, strictToolsScope);
-		const strictMode = !disableStrictTools && model.compat.supportsStrictMode;
+		const strictMode = !disableStrictTools && model.compat.supportsStrictMode !== false;
 		params.tools = convertTools(context.tools, strictMode, model);
 		strictToolsApplied = params.tools.some(t => (t as { strict?: boolean }).strict === true);
 		if (options?.toolChoice) {
@@ -994,9 +994,12 @@ export function convertTools(
 			parameters,
 			// `strict: false` and an omitted `strict` are NOT equivalent for every
 			// OpenAI-compat backend — some over-fill optional args when the flag is
-			// absent (#4336). Preserve the author's explicit `false` only while the
-			// Responses strict field is enabled; compatibility disables and
-			// strict-schema fallback retries rely on uniformly absent flags.
+			// absent (#4336). Preserve the author's explicit `false` unless the
+			// provider is explicitly known not to understand the field
+			// (`supportsStrictMode: false`) or the strict-schema fallback is
+			// active — both paths rely on a uniformly absent wire flag. Mirrors the
+			// `supportsStrictMode !== false` gate used by openai-completions
+			// (#4527).
 			...(effectiveStrict
 				? { strict: true }
 				: !NO_STRICT && strictMode && tool.strict === false

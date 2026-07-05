@@ -8,6 +8,7 @@
 - Fixed Gemini CLI / Antigravity (Google Cloud Code Assist API) incorrectly retrying empty-response failures on non-`STOP` finishReasons (such as safety or recitation blocks) and hiding the specific API error behind a generic "Cloud Code Assist API returned an empty response" message. The provider now breaks early on errors and correctly bubbles up the underlying API error message immediately.
 - Fixed GitHub Copilot OpenAI Responses replay persisting hidden-empty assistant turns as native history, preventing reasoning-only empty completions from poisoning later requests with stale assistant summaries. ([#4597](https://github.com/can1357/oh-my-pi/issues/4597))
 - Fixed provider gateway `quota insufficient` / `额度不足` errors being classified as generic 403 failures instead of usage-limit errors.
+- Aligned the `openai-responses` strict-mode gate and resolved strict-support detection with `openai-completions` so buildModel-created OpenAI-compatible Responses models (for example DeepSeek-family endpoints) preserve an author-set `tool.strict === false` on the wire unless `compat.supportsStrictMode` is explicitly `false` ([#4527](https://github.com/can1357/oh-my-pi/issues/4527)).
 
 ## [16.3.6] - 2026-07-04
 
