@@ -458,4 +458,52 @@ describe("beam recall free functions", () => {
 		expect(typeof results[0]?.score).toBe("number");
 		expect(results[0]?.explanation).toBeTruthy();
 	});
+
+	it("clips long content with a trailing ellipsis and reports the original length (issue #4443)", async () => {
+		const beam = makeBeam();
+		const head = "Decision record: the deploy pipeline uses blue-green cutover. ";
+		const body = "Detail sentence about rollout invariants. ".repeat(20);
+		const tail = "CRITICAL-TAIL: rollback requires restoring the previous DNS weight map first.";
+		const full = `${head}${body}${tail}`;
+		insertWorking(beam, "wm-long", full, { importance: 0.9 });
+
+		const results = await recall(beam, "deploy pipeline blue-green cutover", 5);
+		const hit = results.find(row => row.id === "wm-long");
+		expect(hit).toBeDefined();
+		expect(hit?.truncated).toBe(true);
+		expect(hit?.full_length).toBe(full.length);
+		expect(hit?.content.length).toBe(500);
+		expect(hit?.content.endsWith("…")).toBe(true);
+		expect(hit?.content.includes("CRITICAL-TAIL")).toBe(false);
+	});
+
+	it("returns short content untouched with truncated=false", async () => {
+		const beam = makeBeam();
+		const short = "quick working note that fits well under the preview cap";
+		insertWorking(beam, "wm-short", short);
+
+		const results = await recall(beam, "quick working note preview cap", 5);
+		const hit = results.find(row => row.id === "wm-short");
+		expect(hit).toBeDefined();
+		expect(hit?.truncated).toBe(false);
+		expect(hit?.full_length).toBe(short.length);
+		expect(hit?.content).toBe(short);
+	});
+
+	it("honours a caller-supplied contentPreviewChars cap and disables clipping when 0", async () => {
+		const beam = makeBeam();
+		const long = "long ".repeat(400).trim();
+		insertWorking(beam, "wm-cap", long);
+
+		const capped = await recall(beam, "long", 3, { contentPreviewChars: 40 });
+		const cappedHit = capped.find(row => row.id === "wm-cap");
+		expect(cappedHit?.content.length).toBe(40);
+		expect(cappedHit?.content.endsWith("…")).toBe(true);
+		expect(cappedHit?.full_length).toBe(long.length);
+
+		const full = await recall(beam, "long", 3, { contentPreviewChars: 0 });
+		const fullHit = full.find(row => row.id === "wm-cap");
+		expect(fullHit?.content).toBe(long);
+		expect(fullHit?.truncated).toBe(false);
+	});
 });

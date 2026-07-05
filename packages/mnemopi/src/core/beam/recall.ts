@@ -69,6 +69,34 @@ const VERACITY_WEIGHTS: Record<string, number> = {
 	false: 0,
 };
 
+/**
+ * Default per-result content preview cap enforced by {@link recall}. Content
+ * longer than this is clipped and the last character replaced with `…` so
+ * callers see the truncation; the full row remains reachable via
+ * `Mnemopi.get()` (and, in the coding-agent, `memory://<id>`). Overridable per
+ * call via {@link RecallOptions.contentPreviewChars}.
+ */
+export const RECALL_CONTENT_PREVIEW_CHARS = 500;
+
+/**
+ * Clip `content` to at most `limit` characters, replacing the tail with `…`
+ * when truncated so agents can distinguish a preview from a full row. Returns
+ * the original string (and `truncated: false`) when the limit is 0/negative or
+ * the content already fits. The single `…` occupies one character of the cap,
+ * so a 500-char cap yields at most 499 real characters plus the marker.
+ */
+export function clipRecallContent(
+	content: string,
+	limit: number = RECALL_CONTENT_PREVIEW_CHARS,
+): { content: string; truncated: boolean; fullLength: number } {
+	const fullLength = content.length;
+	if (limit <= 0 || fullLength <= limit) {
+		return { content, truncated: false, fullLength };
+	}
+	const head = content.slice(0, Math.max(0, limit - 1));
+	return { content: `${head}…`, truncated: true, fullLength };
+}
+
 const DEFAULT_LIMIT = 500;
 const STOP_WORDS = new Set([
 	"a",
@@ -737,10 +765,11 @@ function scoreCandidate(
 		score *= tierWeight;
 	}
 	score *= veracityWeight * currentContentAdjustment(searchableContent, options.currentSensitive === true);
+	const preview = clipRecallContent(content, options.contentPreviewChars ?? RECALL_CONTENT_PREVIEW_CHARS);
 	const result: RecallResult = {
 		...candidate.row,
 		id: asString(candidate.row.id),
-		content: content.slice(0, 500),
+		content: preview.content,
 		source: asNullableString(candidate.row.source),
 		timestamp: asNullableString(candidate.row.timestamp),
 		importance,
@@ -766,6 +795,8 @@ function scoreCandidate(
 			recency_decay: round4(decay),
 			temporal: round4(temporalScore),
 		},
+		truncated: preview.truncated,
+		full_length: preview.fullLength,
 	};
 	return result;
 }
@@ -1058,7 +1089,7 @@ function factSearchableText(subject: string, predicate: string, object: string):
 }
 
 function factLine(result: RecallResult): string {
-	const content = result.content.slice(0, 200).trim();
+	const content = clipRecallContent(result.content.trim(), 200).content;
 	const ts = typeof result.timestamp === "string" && result.timestamp.length > 0 ? result.timestamp.slice(0, 10) : "?";
 	const source = result.source ?? "unknown";
 	const score = result.score ?? result.importance ?? 0;
