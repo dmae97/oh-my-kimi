@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.7] - 2026-07-05
+
 ### Changed
 
 - Optimized session-entry lookup and file reading performance by caching file metadata to avoid repeated full-file scans.

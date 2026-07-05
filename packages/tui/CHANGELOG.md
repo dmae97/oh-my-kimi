@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.7] - 2026-07-05
+
 ### Fixed
 
 - Fixed an issue where `@` file-reference tokens in slash-command arguments incorrectly triggered prompt-composer autocompletion when the command did not define argument completions.

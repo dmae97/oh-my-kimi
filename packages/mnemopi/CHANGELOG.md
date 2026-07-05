@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.7] - 2026-07-05
+
 ### Added
 
 - Added `RecallOptions.contentPreviewChars` to allow customizing or disabling the content preview cap (default is 500, set to 0 for full content).
