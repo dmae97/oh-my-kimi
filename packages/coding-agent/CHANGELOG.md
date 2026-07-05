@@ -10,6 +10,10 @@
 
 - Updated the `recall` and `memory_edit` tool prompts to document the truncation marker (`…`, `truncated: true`, `full_length`) and to require `read memory://<id>` before any `memory_edit update` on a truncated preview.
 - Parallelize SYSTEM.md, APPEND_SYSTEM.md, and TITLE_SYSTEM.md resolution at startup ([#4247](https://github.com/can1357/oh-my-pi/issues/4247))
+- Skip TTSR delta buffering for text/thinking sources when no registered rule can match them ([#4245](https://github.com/can1357/oh-my-pi/issues/4245))
+- Memoize copy-selector preview highlight so keyboard navigation does not re-highlight the whole preview every render ([#4238](https://github.com/can1357/oh-my-pi/issues/4238))
+- Load persisted Agent Hub subagents asynchronously to avoid blocking the TUI on synchronous directory walks ([#4239](https://github.com/can1357/oh-my-pi/issues/4239))
+- Cached persisted message keys in AgentSession to avoid repeated branch walks on every message_end ([#4243](https://github.com/can1357/oh-my-pi/issues/4243)).
 
 ### Fixed
 
@@ -55,6 +59,10 @@
 - Fixed idle recap crashing with `TypeError: undefined is not an object (evaluating 'H.content.filter')` after a run poisoned the transcript with eight `session_stop` block-decision continuations. `runEphemeralTurn` now normalizes the provider "done" event's `message.content` to `[]` when a wrapper/proxy stream drops it, and `#buildEphemeralSnapshot` skips its streaming-partial preservation branch when the in-flight assistant carries no content array. Prevents a single side-channel malformation from turning a subsequent idle recap into a session-mute crash. ([#4323](https://github.com/can1357/oh-my-pi/issues/4323))
 - Apply WebSocket send backpressure with ordered drain retry to prevent unbounded `bufferedAmount` growth ([#4248](https://github.com/can1357/oh-my-pi/issues/4248))
 - Capped docs.rs gunzip decompressed size at 256 MB to prevent zip-bomb OOM crashes ([#4249](https://github.com/can1357/oh-my-pi/issues/4249))
+- Delete pre-created shell snapshot file when snapshot creation fails ([#4236](https://github.com/can1357/oh-my-pi/issues/4236))
+- Abort underlying MCP call when proxy tool timeout fires ([#4242](https://github.com/can1357/oh-my-pi/issues/4242))
+- Surface unexpected JS eval worker exit via close listener to prevent silent hangs on worker death ([#4244](https://github.com/can1357/oh-my-pi/issues/4244))
+- Cache failed `!command` config resolutions and time out extension dynamic model fetches after 15s ([#4237](https://github.com/can1357/oh-my-pi/issues/4237))
 
 ## [16.3.6] - 2026-07-04
 
@@ -188,31 +196,6 @@
 - Fixed interrupted speech audio by ensuring segments queue and drain in order
 - Fixed speech vocalization starting only after the entire reply was synthesized: ONNX inference blocks the TTS worker's event loop, so per-segment IPC audio chunks queued unflushed and arrived in one burst. Streaming sends now drain the IPC channel before the next segment's inference, cutting time-to-first-audio to ~1.5s regardless of reply length.
 - Fixed an unhandled `EPIPE: broken pipe, write` rejection at the end of speech playback: the streaming player's `stop()` raced an un-awaited `FileSink.end()` against the backend SIGKILL, and mid-session writes never awaited the flush. Writes now await the flush (so a dead backend is detected and the chunk replays on the next candidate or the per-file path) and `stop()` swallows the expected teardown rejection.
-### Fixed
-
-- Delete pre-created shell snapshot file when snapshot creation fails ([#4236](https://github.com/can1357/oh-my-pi/issues/4236))
-### Changed
-
-- Skip TTSR delta buffering for text/thinking sources when no registered rule can match them ([#4245](https://github.com/can1357/oh-my-pi/issues/4245))
-### Fixed
-
-- Abort underlying MCP call when proxy tool timeout fires ([#4242](https://github.com/can1357/oh-my-pi/issues/4242))
-### Fixed
-
-- Surface unexpected JS eval worker exit via close listener to prevent silent hangs on worker death ([#4244](https://github.com/can1357/oh-my-pi/issues/4244))
-### Changed
-
-- Memoize copy-selector preview highlight so keyboard navigation does not re-highlight the whole preview every render ([#4238](https://github.com/can1357/oh-my-pi/issues/4238))
-### Changed
-
-- Load persisted Agent Hub subagents asynchronously to avoid blocking the TUI on synchronous directory walks ([#4239](https://github.com/can1357/oh-my-pi/issues/4239))
-### Fixed
-
-- Cache failed `!command` config resolutions and time out extension dynamic model fetches after 15s ([#4237](https://github.com/can1357/oh-my-pi/issues/4237))
-### Changed
-
-- Cached persisted message keys in AgentSession to avoid repeated branch walks on every message_end ([#4243](https://github.com/can1357/oh-my-pi/issues/4243)).
-
 
 ## [16.3.0] - 2026-07-02
 
