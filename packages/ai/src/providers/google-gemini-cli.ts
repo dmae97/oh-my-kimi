@@ -1002,14 +1002,21 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 						}
 
 						const streamed = await streamResponse(currentResponse);
-						if (streamed) {
-							receivedContent = true;
+						if (output.stopReason !== "stop" || streamed) {
+							receivedContent = streamed;
 							break;
 						}
 
 						if (emptyAttempt < MAX_EMPTY_STREAM_RETRIES) {
 							resetOutput();
 						}
+					}
+
+					if (output.stopReason === "aborted" || output.stopReason === "error") {
+						throw new AIError.ProviderResponseError(output.errorMessage ?? "An unknown error occurred", {
+							provider: model.provider,
+							kind: "output",
+						});
 					}
 
 					if (!receivedContent) {

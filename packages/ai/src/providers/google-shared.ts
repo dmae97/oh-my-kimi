@@ -463,7 +463,7 @@ export const EMPTY_STREAM_BASE_DELAY_MS = 500;
 /**
  * Whether a completed Google assistant message carries content worth delivering.
  *
- * A tool call or any non-whitespace text counts as meaningful. An empty/whitespace-only
+ * A tool call, any non-whitespace text, or a non-empty thinking block counts as meaningful. An empty/whitespace-only
  * text part — or thinking that never produced an answer — is the "empty response" failure:
  * delivered as-is the agent loop has nothing to act on and silently halts, so the request
  * must be retried instead of surfaced.
@@ -472,6 +472,7 @@ export function hasMeaningfulGoogleContent(output: AssistantMessage): boolean {
 	for (const block of output.content) {
 		if (block.type === "toolCall") return true;
 		if (block.type === "text" && block.text.trim().length > 0) return true;
+		if (block.type === "thinking" && block.thinking.trim().length > 0) return true;
 	}
 	return false;
 }
