@@ -622,7 +622,13 @@ describe("InteractiveMode plan review rendering", () => {
 		});
 	});
 
-	it("aborts an in-flight turn before dispatching the approved plan instead of surfacing AgentBusyError", async () => {
+	it("queues the approved plan as a synthetic follow-up when a turn is already in flight", async () => {
+		// Regression: the previous fix aborted the in-flight turn and re-dispatched
+		// the plan-approved prompt. When the in-flight turn was an operator turn
+		// queued during compaction and just flushed by `flushCompactionQueue`, that
+		// abort discarded the operator's work. The correct shape is a synthetic
+		// follow-up: land the hidden execution directive behind the in-flight turn
+		// and preserve it.
 		const planFilePath = "local://PLAN.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
 			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
@@ -637,18 +643,13 @@ describe("InteractiveMode plan review rendering", () => {
 			configurable: true,
 			get: () => streaming,
 		});
-		const abortSpy = vi.spyOn(session, "abort").mockImplementation(async () => {
-			// Clear the streaming flag only after an awaited tick, so the test fails
-			// if #approvePlan dispatches the prompt without awaiting abort() — the
-			// real abort() resolves only once the agent loop is idle.
-			await Promise.resolve();
-			streaming = false;
-		});
+		vi.spyOn(session, "abort").mockResolvedValue();
 		const promptSpy = vi.spyOn(session, "prompt").mockImplementation(async (_text, opts) => {
 			if (streaming && !(opts as { streamingBehavior?: string } | undefined)?.streamingBehavior)
 				throw new AgentBusyError();
 			return true;
 		});
+		const followUpSpy = vi.spyOn(session, "followUp").mockResolvedValue();
 		// Simulate a re-stream landing during the overlay, then pick keep-context
 		// (options[2]) — that branch skips clear/compact so `this.session` stays the
 		// instance the spies are on.
@@ -661,9 +662,121 @@ describe("InteractiveMode plan review rendering", () => {
 		await mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
 
 		expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("Failed to finalize approved plan"));
+		expect(promptSpy).not.toHaveBeenCalled();
+		expect(followUpSpy).toHaveBeenCalledTimes(1);
+		const [text, images, options] = followUpSpy.mock.calls[0] as unknown[];
+		expect(isPlanApprovedCall([text, options])).toBe(true);
+		expect(images).toBeUndefined();
+		expect(options).toMatchObject({ synthetic: true });
+		// `handlePlanApproval` aborts once on entry (unrelated to the finalize path);
+		// this test asserts the finalize path routes to followUp instead of prompt.
+	});
+
+	it("falls back to a synthetic follow-up when prompt() races into AgentBusyError", async () => {
+		// Narrow race: `isStreaming` reads false but the fire-and-forget turn queued
+		// by `flushCompactionQueue` flips it true before `session.prompt()` executes.
+		// The core guard throws `AgentBusyError`; the finalize path must catch it and
+		// queue the same synthetic follow-up instead of surfacing the error.
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nbody");
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+
+		Object.defineProperty(session, "isStreaming", {
+			configurable: true,
+			get: () => false,
+		});
+		vi.spyOn(session, "abort").mockResolvedValue();
+		const promptSpy = vi.spyOn(session, "prompt").mockImplementation(async () => {
+			throw new AgentBusyError();
+		});
+		const followUpSpy = vi.spyOn(session, "followUp").mockResolvedValue();
+		vi.spyOn(mode, "showPlanReview").mockImplementation(async (_plan, _title, options) => options[2]);
+		const errorSpy = vi.spyOn(mode, "showError");
+
+		await mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
+
+		expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("Failed to finalize approved plan"));
 		expect(promptSpy).toHaveBeenCalledTimes(1);
 		expect(isPlanApprovedCall(promptSpy.mock.calls[0] as unknown[])).toBe(true);
-		expect(abortSpy).toHaveBeenCalled();
+		expect(followUpSpy).toHaveBeenCalledTimes(1);
+		const [text, images, options] = followUpSpy.mock.calls[0] as unknown[];
+		expect(isPlanApprovedCall([text, options])).toBe(true);
+		expect(images).toBeUndefined();
+		expect(options).toMatchObject({ synthetic: true });
+	});
+
+	it("lands the approved plan behind a user turn queued during approve-and-compact", async () => {
+		// End-to-end contract: choosing "Approve and compact context" runs
+		// `handleCompactCommand`, which after compaction calls `flushCompactionQueue`.
+		// A user turn typed during compaction is fired first via `session.prompt(...,
+		// { streamingBehavior: "followUp" })` (which flips `isStreaming` in the
+		// mock). The finalize path must then land the plan-approved prompt as a
+		// synthetic follow-up — not surface `AgentBusyError` (the previous shape)
+		// and not abort the queued user turn.
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nbody");
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+
+		let streaming = false;
+		Object.defineProperty(session, "isStreaming", {
+			configurable: true,
+			get: () => streaming,
+		});
+		vi.spyOn(session, "abort").mockResolvedValue();
+
+		const calls: { type: "prompt" | "followUp"; text: string; options?: unknown }[] = [];
+		vi.spyOn(session, "prompt").mockImplementation(async (text, opts) => {
+			calls.push({ type: "prompt", text, options: opts });
+			if (text === "queued message") {
+				streaming = true;
+			}
+			if (streaming && !(opts as { streamingBehavior?: string } | undefined)?.streamingBehavior) {
+				throw new AgentBusyError();
+			}
+			return true;
+		});
+		vi.spyOn(session, "followUp").mockImplementation(async (text, _images, options) => {
+			calls.push({ type: "followUp", text, options });
+		});
+
+		// `handleCompactCommand` gates on messageCount >= 2 from `sessionManager.getEntries()`.
+		session.sessionManager.appendMessage({ role: "user", content: "seed one", timestamp: Date.now() - 2 });
+		session.sessionManager.appendMessage({ role: "user", content: "seed two", timestamp: Date.now() - 1 });
+		vi.spyOn(session, "compact").mockImplementation(async () => {
+			// Operator types a follow-up while compaction is running.
+			mode.queueCompactionMessage("queued message", "followUp");
+			return undefined as never;
+		});
+		vi.spyOn(mode, "showPlanReview").mockImplementation(async (_plan, _title, options) => options[1]);
+		const errorSpy = vi.spyOn(mode, "showError");
+
+		await mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
+
+		expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("Failed to finalize approved plan"));
+
+		const queuedIndex = calls.findIndex(c => c.text === "queued message");
+		const planIndex = calls.findIndex(c => isPlanApprovedCall([c.text, c.options]));
+		expect(queuedIndex).toBeGreaterThanOrEqual(0);
+		expect(planIndex).toBeGreaterThan(queuedIndex);
+		expect(calls[planIndex]).toMatchObject({
+			type: "followUp",
+			options: { synthetic: true },
+		});
+		// Queued user turn was preserved (not silently aborted by the old fix).
+		expect(calls[queuedIndex]).toMatchObject({
+			type: "prompt",
+			options: { streamingBehavior: "followUp" },
+		});
 	});
 
 	it("keeps the existing approve-and-execute path clearing the session", async () => {

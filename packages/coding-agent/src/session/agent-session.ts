@@ -849,6 +849,16 @@ export interface PromptOptions {
 	skipCompactionCheck?: boolean;
 }
 
+/** Options for AgentSession.followUp() */
+export interface FollowUpOptions {
+	/** Enqueue as a hidden developer message (agent-attributed by default) instead of a user follow-up. */
+	synthetic?: boolean;
+	/** Whether to expand file-based prompt templates (default: true). */
+	expandPromptTemplates?: boolean;
+	/** Explicit billing/initiator attribution. Defaults to `agent` for synthetic follow-ups. */
+	attribution?: MessageAttribution;
+}
+
 /** Result from a handoff operation. */
 export interface HandoffResult {
 	document: string;
@@ -7836,14 +7846,42 @@ export class AgentSession {
 
 	/**
 	 * Queue a follow-up message to process after the agent would otherwise stop.
+	 * Set `options.synthetic` to enqueue a hidden developer message (agent-attributed
+	 * by default) instead of a user-attributed follow-up; the plan-approval flow
+	 * uses this to land its execution directive behind a queued user turn without
+	 * flipping advisor auto-resume.
 	 */
-	async followUp(text: string, images?: ImageContent[]): Promise<void> {
+	async followUp(text: string, images?: ImageContent[], options?: FollowUpOptions): Promise<void> {
 		if (text.startsWith("/")) {
 			this.#throwIfExtensionCommand(text);
 		}
 
-		const expandedText = expandPromptTemplate(text, [...this.#promptTemplates]);
-		await this.#queueUserMessage(expandedText, images, "followUp");
+		const expandedText =
+			options?.expandPromptTemplates === false ? text : expandPromptTemplate(text, [...this.#promptTemplates]);
+		if (!options?.synthetic) {
+			await this.#queueUserMessage(expandedText, images, "followUp");
+			return;
+		}
+		// Synthetic branch: agent-initiated hidden developer message. Bypass
+		// #queueUserMessage (which clears advisor auto-resume suppression and
+		// enqueues as a user-attributed message) and place the developer message
+		// directly on the follow-up queue.
+		const normalizedImages = await this.#normalizeImagesForModel(images);
+		const content: (TextContent | ImageContent)[] = [{ type: "text", text: expandedText }];
+		if (normalizedImages?.length) {
+			content.push(...normalizedImages);
+		}
+		const imageDescriptionNotice = normalizedImages?.length
+			? await this.#buildImageDescriptionNotice(normalizedImages)
+			: undefined;
+		if (imageDescriptionNotice) this.agent.followUp(imageDescriptionNotice);
+		this.agent.followUp({
+			role: "developer",
+			content,
+			attribution: options.attribution ?? "agent",
+			timestamp: Date.now(),
+		});
+		this.#scheduleIdleQueueDrain();
 	}
 
 	async #queueUserMessage(

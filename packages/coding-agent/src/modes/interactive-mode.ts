@@ -6,6 +6,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
 	type Agent,
+	AgentBusyError,
 	type AgentMessage,
 	type AgentToolResult,
 	EventLoopKeepalive,
@@ -2684,16 +2685,24 @@ export class InteractiveMode implements InteractiveModeContext {
 			planFilePath: options.planFilePath,
 			contextPreserved: options.preserveContext === true,
 		});
-		// The executor's first turn must start on an idle session. The agent may still
-		// be streaming the post-`resolve` continuation (Agent.#emit is fire-and-forget)
-		// or a turn kicked off by the compaction/clear above; prompt() would then throw
-		// AgentBusyError ("Failed to finalize approved plan"). Abort the now-irrelevant
-		// in-flight turn first — abort() bumps the prompt generation and cancels pending
-		// continuations, so nothing re-streams in the synchronous gap before prompt().
+		// A user turn queued during compaction was already fired by
+		// `flushCompactionQueue` before we returned from `handleCompactCommand`; the
+		// old abort-then-prompt path would have discarded that operator turn AND
+		// still surfaced `AgentBusyError` when the queued turn kicked off in the
+		// synchronous gap. Preserve the in-flight work and queue the hidden
+		// execution directive behind it as a synthetic follow-up. If `isStreaming`
+		// flips true between the check and dispatch (the same fire-and-forget race
+		// noted below), catch `AgentBusyError` and fall back to the same queue.
 		if (this.session.isStreaming) {
-			await this.#abortPlanApprovalTurnSilently();
+			await this.session.followUp(planModePrompt, undefined, { synthetic: true });
+			return;
 		}
-		await this.session.prompt(planModePrompt, { synthetic: true });
+		try {
+			await this.session.prompt(planModePrompt, { synthetic: true });
+		} catch (error) {
+			if (!(error instanceof AgentBusyError)) throw error;
+			await this.session.followUp(planModePrompt, undefined, { synthetic: true });
+		}
 	}
 	async #abortPlanApprovalTurnSilently(): Promise<void> {
 		this.session.markPlanInternalAbortPending();
