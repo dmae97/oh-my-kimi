@@ -24,6 +24,7 @@ import {
 	type CustomMessage,
 	type FileMentionMessage,
 	type HookMessage,
+	normalizeCustomMessagePayload,
 	type PythonExecutionMessage,
 	sanitizeRehydratedOpenAIResponsesAssistantMessage,
 	stripInternalDetailsFields,
@@ -1567,20 +1568,21 @@ export class SessionManager {
 	 * @param attribution Who initiated this message for billing/attribution semantics
 	 */
 	appendCustomMessageEntry<T = unknown>(
-		customType: string,
-		content: string | (TextContent | ImageContent)[],
-		display: boolean,
+		customType: string | undefined,
+		content: string | (TextContent | ImageContent)[] | undefined,
+		display: boolean | undefined,
 		details?: T,
-		attribution: MessageAttribution = "agent",
+		attribution: MessageAttribution | undefined = "agent",
 	): string {
+		const normalized = normalizeCustomMessagePayload<T>({ customType, content, display, details, attribution });
 		const entry: CustomMessageEntry<T> = {
 			type: "custom_message",
-			customType,
-			content,
-			display,
+			customType: normalized.customType,
+			content: normalized.content,
+			display: normalized.display,
 			// Drop AgentSession-internal transient fields before disk persistence.
-			details: stripInternalDetailsFields(details),
-			attribution,
+			details: stripInternalDetailsFields(normalized.details),
+			attribution: normalized.attribution,
 			...this.#freshEntryFields(),
 		};
 		this.#recordEntry(entry);

@@ -337,12 +337,14 @@ import {
 import {
 	type BashExecutionMessage,
 	type CustomMessage,
+	type CustomMessagePayload,
 	convertToLlm,
 	demoteInterruptedThinking,
 	INTERRUPTED_THINKING_MESSAGE_TYPE,
 	type InterruptedThinkingDetails,
 	isEmptyErrorTurn,
 	isUserInterruptAbort,
+	normalizeCustomMessagePayload,
 	type PythonExecutionMessage,
 	readQueueChipText,
 	SILENT_ABORT_MARKER,
@@ -7604,15 +7606,22 @@ export class AgentSession {
 					const promptAttribution: "user" | "agent" | undefined =
 						"attribution" in message ? message.attribution : undefined;
 					for (const msg of result.messages) {
+						const normalized = normalizeCustomMessagePayload(msg);
+						const hasExplicitAttribution =
+							msg !== null &&
+							typeof msg === "object" &&
+							!Array.isArray(msg) &&
+							(msg.attribution === "user" || msg.attribution === "agent");
 						messages.push(
 							await this.#normalizeAgentMessageImages({
 								role: "custom",
-								customType: msg.customType,
-								content: msg.content,
-								display: msg.display,
-								details: msg.details,
-								attribution:
-									msg.attribution ?? promptAttribution ?? (message.role === "user" ? "user" : "agent"),
+								customType: normalized.customType,
+								content: normalized.content,
+								display: normalized.display,
+								details: normalized.details,
+								attribution: hasExplicitAttribution
+									? normalized.attribution
+									: (promptAttribution ?? (message.role === "user" ? "user" : "agent")),
 								timestamp: Date.now(),
 							}),
 						);
@@ -8075,26 +8084,26 @@ export class AgentSession {
 	 * use this to avoid acting on a turn that never ran.
 	 */
 	async sendCustomMessage<T = unknown>(
-		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
+		message: CustomMessagePayload<T>,
 		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn"; queueChipText?: string },
 	): Promise<boolean> {
+		const normalizedPayload = normalizeCustomMessagePayload<T>(message);
 		const details =
 			options?.queueChipText && options.deliverAs !== "nextTurn"
 				? ({
-						...((message.details && typeof message.details === "object" ? message.details : {}) as Record<
-							string,
-							unknown
-						>),
+						...((normalizedPayload.details && typeof normalizedPayload.details === "object"
+							? normalizedPayload.details
+							: {}) as Record<string, unknown>),
 						__queueChipText: options.queueChipText,
 					} as T)
-				: message.details;
+				: normalizedPayload.details;
 		const appMessage: CustomMessage<T> = {
 			role: "custom",
-			customType: message.customType,
-			content: message.content,
-			display: message.display,
+			customType: normalizedPayload.customType,
+			content: normalizedPayload.content,
+			display: normalizedPayload.display,
 			details,
-			attribution: message.attribution ?? "agent",
+			attribution: normalizedPayload.attribution,
 			timestamp: Date.now(),
 		};
 		const normalizedAppMessage = await this.#normalizeAgentMessageImages(appMessage);
@@ -8126,9 +8135,9 @@ export class AgentSession {
 			this.sessionManager.appendCustomMessageEntry(
 				normalizedAppMessage.customType,
 				normalizedAppMessage.content,
-				message.display,
-				message.details,
-				message.attribution ?? "agent",
+				normalizedAppMessage.display,
+				normalizedAppMessage.details,
+				normalizedAppMessage.attribution,
 			);
 			return false;
 		}
@@ -8146,9 +8155,9 @@ export class AgentSession {
 		this.sessionManager.appendCustomMessageEntry(
 			normalizedAppMessage.customType,
 			normalizedAppMessage.content,
-			message.display,
-			message.details,
-			message.attribution ?? "agent",
+			normalizedAppMessage.display,
+			normalizedAppMessage.details,
+			normalizedAppMessage.attribution,
 		);
 		return false;
 	}

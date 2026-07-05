@@ -10,7 +10,7 @@ import type { Hook } from "../../discovery";
 import { loadCapability } from "../../discovery";
 // Runtime self-reference: dereference this namespace only inside loader functions to keep the index.ts cycle safe.
 import * as PiCodingAgent from "../../index";
-import type { HookMessage } from "../../session/messages";
+import type { CustomMessagePayload } from "../../session/messages";
 import * as typebox from "../typebox";
 import { resolvePath, withExitGuard } from "../utils";
 import { execCommand } from "./runner";
@@ -25,7 +25,7 @@ type HandlerFn = (...args: unknown[]) => Promise<unknown>;
  * Send message handler type for pi.sendMessage().
  */
 export type SendMessageHandler = <T = unknown>(
-	message: Pick<HookMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
+	message: CustomMessagePayload<T>,
 	options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" },
 ) => void;
 
@@ -97,7 +97,7 @@ async function createHookAPI(
 			handlers.get(event)!.push(handler);
 		},
 		sendMessage<T = unknown>(
-			message: HookMessage<T>,
+			message: CustomMessagePayload<T>,
 			options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" },
 		): void {
 			if (!sendMessageHandler) {

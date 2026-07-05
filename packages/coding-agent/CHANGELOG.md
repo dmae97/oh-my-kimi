@@ -123,6 +123,9 @@
 - Fixed models.yml schema validation to surface warnings for invalid custom provider configurations instead of silently ignoring them
 - Fixed potential network hangs in omp update, Hindsight recall, and Smithery registry lookups by adding fetch timeouts
 - Reduced TUI CPU overhead during streaming and idle waits by dropping the redundant pre-render on every session event, iterating shimmer text in place instead of allocating a code-point array per animation frame, and coalescing the live-tool spinner render cadence to its glyph-advance rate ([#4353](https://github.com/can1357/oh-my-pi/issues/4353)).
+### Fixed
+
+- Fixed malformed `pi.sendMessage` custom-message payloads persisting bare session entries that crashed every later resume before provider calls. ([#4345](https://github.com/can1357/oh-my-pi/issues/4345))
 
 ## [16.3.2] - 2026-07-02
 

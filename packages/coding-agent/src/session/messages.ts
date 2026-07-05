@@ -37,6 +37,23 @@ export const SKILL_PROMPT_MESSAGE_TYPE = "skill-prompt";
 export const LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE = "lsp-late-diagnostic";
 export const BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE = "background-tan-dispatch";
 
+/** Fallback type for extension-injected messages that omit a custom type. */
+export const DEFAULT_CUSTOM_MESSAGE_TYPE = "custom-message";
+
+/** Content shape accepted for extension-injected messages. */
+export type CustomMessageContent = string | (TextContent | ImageContent)[];
+
+/** Public input accepted by `pi.sendMessage` and `AgentSession.sendCustomMessage`. */
+export type CustomMessagePayload<T = unknown> =
+	| string
+	| Partial<Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">>;
+
+/** Custom message payload after applying runtime defaults. */
+export type NormalizedCustomMessagePayload<T = unknown> = Pick<
+	CustomMessage<T>,
+	"customType" | "content" | "display" | "details" | "attribution"
+>;
+
 /** Custom message type for hidden interrupted-thinking continuity context. */
 export const INTERRUPTED_THINKING_MESSAGE_TYPE = "interrupted-thinking";
 
@@ -275,6 +292,59 @@ export function stripInternalDetailsFields<T>(details: T | undefined): T | undef
 	return cleaned as T;
 }
 
+/** True when a persisted or extension-supplied value can be sent as custom-message content. */
+export function isCustomMessageContent(content: unknown): content is CustomMessageContent {
+	return typeof content === "string" || Array.isArray(content);
+}
+
+function normalizeCustomMessageContent(content: unknown): CustomMessageContent {
+	return isCustomMessageContent(content) ? content : "";
+}
+
+function normalizeCustomMessageType(customType: unknown): string {
+	return typeof customType === "string" && customType.length > 0 ? customType : DEFAULT_CUSTOM_MESSAGE_TYPE;
+}
+
+function normalizeCustomMessageAttribution(attribution: unknown): MessageAttribution {
+	return attribution === "user" ? "user" : "agent";
+}
+
+function isCustomMessagePayloadObject<T>(
+	payload: unknown,
+): payload is Partial<Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">> {
+	return payload !== null && typeof payload === "object" && !Array.isArray(payload);
+}
+
+/** Normalizes extension-provided custom message input before it reaches session state or disk. */
+export function normalizeCustomMessagePayload<T = unknown>(
+	payload: CustomMessagePayload<T> | unknown,
+): NormalizedCustomMessagePayload<T> {
+	if (typeof payload === "string") {
+		return {
+			customType: DEFAULT_CUSTOM_MESSAGE_TYPE,
+			content: payload,
+			display: true,
+			attribution: "agent",
+		};
+	}
+	if (!isCustomMessagePayloadObject<T>(payload)) {
+		const content = payload === undefined || payload === null ? "" : String(payload);
+		return {
+			customType: DEFAULT_CUSTOM_MESSAGE_TYPE,
+			content,
+			display: content.length > 0,
+			attribution: "agent",
+		};
+	}
+	return {
+		customType: normalizeCustomMessageType(payload.customType),
+		content: normalizeCustomMessageContent(payload.content),
+		display: typeof payload.display === "boolean" ? payload.display : false,
+		details: payload.details,
+		attribution: normalizeCustomMessageAttribution(payload.attribution),
+	};
+}
+
 function isSteeringUserMessage(message: AgentMessage | undefined): message is UserMessage & { steering: true } {
 	return message?.role === "user" && message.steering === true;
 }
@@ -481,7 +551,7 @@ export interface PythonExecutionMessage {
 export interface CustomMessage<T = unknown> {
 	role: "custom";
 	customType: string;
-	content: string | (TextContent | ImageContent)[];
+	content: CustomMessageContent;
 	display: boolean;
 	details?: T;
 	/** Who initiated this message for billing/attribution semantics. */
@@ -495,7 +565,7 @@ export interface CustomMessage<T = unknown> {
 export interface HookMessage<T = unknown> {
 	role: "hookMessage";
 	customType: string;
-	content: string | (TextContent | ImageContent)[];
+	content: CustomMessageContent;
 	display: boolean;
 	details?: T;
 	/** Who initiated this message for billing/attribution semantics. */
@@ -619,6 +689,7 @@ function isUserInvokedSkillPrompt(message: CustomMessage): boolean {
 }
 
 function convertImageBearingCustomMessage(message: CustomMessage | HookMessage): Message[] | undefined {
+	if (!isCustomMessageContent(message.content)) return undefined;
 	if (typeof message.content === "string") return undefined;
 	const textBlocks = message.content.filter((content): content is TextContent => content.type === "text");
 	const imageBlocks = message.content.filter((content): content is ImageContent => content.type === "image");
@@ -717,6 +788,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 				return out;
 			}
 			case "custom": {
+				if (!isCustomMessageContent(m.content)) return [];
 				if (isUserInvokedSkillPrompt(m)) {
 					return [
 						{
@@ -733,6 +805,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 				return converted ? [converted] : [];
 			}
 			case "hookMessage": {
+				if (!isCustomMessageContent(m.content)) return [];
 				const split = convertImageBearingCustomMessage(m);
 				if (split) return split;
 				const converted = convertMessageToLlm(m);

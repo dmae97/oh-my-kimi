@@ -1,7 +1,13 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { coerceServiceTierByFamily, type ProviderPayload, type ServiceTierByFamily } from "@oh-my-pi/pi-ai";
 import * as snapcompact from "@oh-my-pi/snapcompact";
-import { createBranchSummaryMessage, createCompactionSummaryMessage, createCustomMessage } from "./messages";
+import {
+	createBranchSummaryMessage,
+	createCompactionSummaryMessage,
+	createCustomMessage,
+	isCustomMessageContent,
+	normalizeCustomMessagePayload,
+} from "./messages";
 import { type CompactionEntry, EPHEMERAL_MODEL_CHANGE_ROLE, type SessionEntry } from "./session-entries";
 
 // #4470 crash artifacts had legacy frames (no shape metadata) with 17 frames,
@@ -301,14 +307,16 @@ export function buildSessionContext(
 			}
 			pushMessage(entry.message);
 		} else if (entry.type === "custom_message") {
+			if (!isCustomMessageContent(entry.content)) return;
+			const normalized = normalizeCustomMessagePayload(entry);
 			pushMessage(
 				createCustomMessage(
-					entry.customType,
-					entry.content,
-					entry.display,
-					entry.details,
+					normalized.customType,
+					normalized.content,
+					normalized.display,
+					normalized.details,
 					entry.timestamp,
-					entry.attribution,
+					normalized.attribution,
 				),
 			);
 		} else if (entry.type === "branch_summary" && entry.summary) {
