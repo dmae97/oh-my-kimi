@@ -159,6 +159,20 @@ describe("legacy-pi @(scope)/pi-ai root `Type` remap (issue #1437)", () => {
 		expect(loaded.providers).toBe(getBundledProviders);
 	});
 
+	it("re-exports getBundledModel and getBundledModels from @oh-my-pi/pi-catalog/models", async () => {
+		const loaded = (await loadLegacyPiModule(
+			await writeFixtureExtension(
+				[
+					'import { getBundledModel, getBundledModels } from "@oh-my-pi/pi-ai";',
+					"export const model = getBundledModel;",
+					"export const models = getBundledModels;",
+				].join("\n"),
+			),
+		)) as { model: unknown; models: unknown };
+		expect(loaded.model).toBe(getBundledModel);
+		expect(loaded.models).toBe(getBundledModels);
+	});
+
 	it("exports StringEnum as a schema builder with options support", async () => {
 		const loaded = (await loadLegacyPiModule(
 			await writeFixtureExtension(

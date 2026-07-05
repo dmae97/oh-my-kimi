@@ -81,6 +81,6 @@ export * from "@oh-my-pi/pi-ai";
  * pi-ai names for `getBundledModel`/`getBundledModels`; the remaining symbols
  * kept their names across the move.
  */
-export { calculateCost, getBundledProviders, modelsAreEqual, Type };
+export { calculateCost, getBundledModel, getBundledModels, getBundledProviders, modelsAreEqual, Type };
 export const getModel = getBundledModel;
 export const getModels = getBundledModels;
