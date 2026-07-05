@@ -133,6 +133,9 @@
 
 - Fixed malformed `pi.sendMessage` custom-message payloads persisting bare session entries that crashed every later resume before provider calls. ([#4345](https://github.com/can1357/oh-my-pi/issues/4345))
 - Fixed extension `pasteToEditor` / `setEditorText` prompt mutations leaving the editor visually stale until the next keypress by scheduling an editor repaint after each extension-driven mutation. ([#4341](https://github.com/can1357/oh-my-pi/issues/4341))
+### Fixed
+
+- Hid internal `display: false` session-update reminders from compact history/advisor transcripts while preserving hidden image descriptions that provide the text transcript for attached images.
 
 ## [16.3.2] - 2026-07-02
 
