@@ -15,8 +15,13 @@ describe("isEmptyErrorTurn", () => {
 		expect(isEmptyErrorTurn(turn("error", [{ type: "text", text: "   " }]))).toBe(true);
 	});
 
-	it("keeps error turns that streamed real text or tool calls", () => {
+	it("keeps error turns that streamed real text, reasoning, or tool calls", () => {
 		expect(isEmptyErrorTurn(turn("error", [{ type: "text", text: "partial answer" }]))).toBe(false);
+		expect(isEmptyErrorTurn(turn("error", [{ type: "thinking", thinking: "partial reasoning" }]))).toBe(false);
+		expect(isEmptyErrorTurn(turn("error", [{ type: "thinking", thinking: "", thinkingSignature: "sig" }]))).toBe(
+			false,
+		);
+		expect(isEmptyErrorTurn(turn("error", [{ type: "redactedThinking", data: "encrypted" }]))).toBe(false);
 		expect(isEmptyErrorTurn(turn("error", [{ type: "toolCall", id: "c1", name: "bash", arguments: {} }]))).toBe(
 			false,
 		);

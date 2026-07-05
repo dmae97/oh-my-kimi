@@ -10749,7 +10749,7 @@ export class AgentSession {
 	}
 
 	#restoreFailedAssistantTurn(assistantMessage: AssistantMessage): void {
-		this.sessionManager.appendMessage(assistantMessage);
+		if (!isEmptyErrorTurn(assistantMessage)) this.sessionManager.appendMessage(assistantMessage);
 		const lastMessage = this.agent.state.messages.at(-1);
 		if (
 			lastMessage?.role === "assistant" &&
