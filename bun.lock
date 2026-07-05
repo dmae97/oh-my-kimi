@@ -322,6 +322,9 @@
       },
     },
   },
+  "patchedDependencies": {
+    "@ark/schema@0.56.1": "patches/@ark%2Fschema@0.56.1.patch",
+  },
   "catalog": {
     "@agentclientprotocol/sdk": "0.25.0",
     "@babel/generator": "^7.29.7",
