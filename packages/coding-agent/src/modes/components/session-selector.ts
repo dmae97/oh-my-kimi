@@ -414,15 +414,23 @@ class SessionList implements Component {
 	}
 
 	handleInput(keyData: string): void {
-		// Delete key - request delete confirmation from parent
-		if (matchesKey(keyData, "delete")) {
+		// Delete key — or Backspace on an empty search query — request delete
+		// confirmation from the parent. macOS laptops have no dedicated Forward
+		// Delete key: Fn+Backspace is the only way to send \e[3~, and many macOS
+		// terminals (Terminal.app, some iTerm2 profiles) deliver \x7f for that
+		// combo instead. Regular Backspace on an empty query means "delete
+		// session"; with a typed query it stays bound to the search Input so users
+		// can still edit their filter text.
+		if (
+			matchesKey(keyData, "delete") ||
+			(matchesKey(keyData, "backspace") && this.#searchInput.getValue().length === 0)
+		) {
 			const selected = this.#filteredSessions[this.#selectedIndex];
 			if (selected && this.onDeleteRequest) {
 				this.onDeleteRequest(selected);
 			}
 			return;
 		}
-
 		// Up arrow
 		if (matchesSelectUp(keyData)) {
 			this.#selectedIndex = Math.max(0, this.#selectedIndex - 1);
@@ -702,7 +710,7 @@ export class SessionSelectorComponent extends Container {
 	/** Blank · keybinding hint · bottom border. Rendered by {@link render}. */
 	#footerLines(width: number): string[] {
 		const scopeHint = this.#scope === "all" ? "current folder" : "all projects";
-		const hint = theme.fg("muted", `  [Del delete · Enter select · Tab ${scopeHint} · Esc cancel]`);
+		const hint = theme.fg("muted", `  [Del/⌫ delete · Enter select · Tab ${scopeHint} · Esc cancel]`);
 		return ["", hint, "", ...this.#bottomBorder.render(width)];
 	}
 
