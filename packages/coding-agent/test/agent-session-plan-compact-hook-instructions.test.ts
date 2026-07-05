@@ -43,21 +43,6 @@ type Harness = {
 	summarizerCalls: Array<{ customInstructions: string | undefined }>;
 };
 
-function isTextContentBlock(value: unknown): value is TextContent {
-	if (!value || typeof value !== "object") return false;
-	return (value as TextContent).type === "text" && typeof (value as TextContent).text === "string";
-}
-
-function getMessageText(message: AgentMessage): string {
-	if (!("content" in message)) return "";
-	if (typeof message.content === "string") return message.content;
-	if (!Array.isArray(message.content)) return "";
-	return message.content
-		.filter(isTextContentBlock)
-		.map(content => content.text)
-		.join("\n");
-}
-
 function createAssistantResponse(text: string) {
 	return {
 		role: "assistant" as const,

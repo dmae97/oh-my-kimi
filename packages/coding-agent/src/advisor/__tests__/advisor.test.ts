@@ -188,7 +188,9 @@ describe("advisor", () => {
 				timestamp: 3,
 			} as AgentMessage;
 
-			const md = formatSessionHistoryMarkdown([hiddenPrelude, hiddenHookMessage, visibleCustom], { expandPrimaryContext: true });
+			const md = formatSessionHistoryMarkdown([hiddenPrelude, hiddenHookMessage, visibleCustom], {
+				expandPrimaryContext: true,
+			});
 
 			expect(md).toContain("[visible-status] Visible custom update");
 			expect(md).not.toContain("eager-todo-prelude");
