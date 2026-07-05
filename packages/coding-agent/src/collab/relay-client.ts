@@ -177,8 +177,10 @@ export class CollabSocket {
 		ws.onopen = () => {
 			if (this.#ws !== ws) return;
 			this.#attempt = 0;
-			for (const envelope of this.#pendingSends) ws.send(envelope);
-			this.#pendingSends.length = 0;
+			if (this.#pendingSends.length > 0) {
+				this.#drainPendingSends(ws);
+				if (this.#pendingSends.length > 0) this.#scheduleBackpressureDrain(ws);
+			}
 			this.onOpen?.();
 		};
 		ws.onmessage = (event: MessageEvent) => {
