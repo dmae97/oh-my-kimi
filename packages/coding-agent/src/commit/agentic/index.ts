@@ -268,7 +268,7 @@ async function runSplitCommit(
 		throw new Error(order.error);
 	}
 
-	const stagedDiff = await git.diff(ctx.cwd, { cached: true });
+	const stagedDiff = await git.diff(ctx.cwd, { cached: true, binary: true });
 	await git.stage.reset(ctx.cwd);
 	for (const commitIndex of order) {
 		const commit = plan.commits[commitIndex];
