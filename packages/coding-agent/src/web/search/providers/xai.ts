@@ -1,4 +1,5 @@
-import { type ApiKey, type AuthStorage, withAuth } from "@oh-my-pi/pi-ai";
+import { type ApiKey, type ApiKeyResolver, type AuthStorage, withAuth } from "@oh-my-pi/pi-ai";
+import { $env } from "@oh-my-pi/pi-utils";
 import type { SearchCitation, SearchResponse, SearchSource, SearchUsage } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import { clampNumResults } from "../utils";
@@ -221,11 +222,40 @@ function parseResponse(response: XAIResponsesResponse, resultCap: number): Searc
 	};
 }
 
-/** Execute xAI Responses API web search. */
-export async function searchXAI(params: SearchParams): Promise<SearchResponse> {
-	const keyOrResolver: ApiKey = params.authStorage.resolver("xai", {
+/**
+ * Prefer `xai-oauth` only when its resolver cannot be shadowed by the shared
+ * `XAI_API_KEY` fallback before reaching a lower-priority dedicated source.
+ */
+function shouldPreferXAIOAuth(authStorage: AuthStorage): boolean {
+	if ($env.XAI_OAUTH_TOKEN) return true;
+
+	const origin = authStorage.getCredentialOrigin("xai-oauth");
+	if (!origin || origin.kind === "env") return false;
+	if ((origin.kind === "api_key" || origin.kind === "fallback") && $env.XAI_API_KEY) return false;
+	return true;
+}
+
+function resolveXAIWebSearchApiKey(params: SearchParams): ApiKeyResolver {
+	const xaiResolver = params.authStorage.resolver("xai", {
 		sessionId: params.sessionId,
 	});
+	if (!shouldPreferXAIOAuth(params.authStorage)) {
+		return xaiResolver;
+	}
+
+	const xaiOAuthResolver = params.authStorage.resolver("xai-oauth", {
+		sessionId: params.sessionId,
+	});
+	return async ctx => {
+		const xaiOAuthKey = await xaiOAuthResolver(ctx);
+		if (xaiOAuthKey) return xaiOAuthKey;
+		return xaiResolver(ctx);
+	};
+}
+
+/** Execute xAI Responses API web search. */
+export async function searchXAI(params: SearchParams): Promise<SearchResponse> {
+	const keyOrResolver: ApiKey = resolveXAIWebSearchApiKey(params);
 
 	const resultCap = clampNumResults(params.numSearchResults ?? params.limit, DEFAULT_NUM_RESULTS, MAX_NUM_RESULTS);
 	const response = await withAuth(keyOrResolver, (key: string) => callXAIResponses(key, params), {
@@ -241,7 +271,7 @@ export class XAIProvider extends SearchProvider {
 	readonly label = "xAI";
 
 	isAvailable(authStorage: AuthStorage): boolean {
-		return authStorage.hasAuth("xai");
+		return shouldPreferXAIOAuth(authStorage) || authStorage.hasAuth("xai");
 	}
 
 	search(params: SearchParams): Promise<SearchResponse> {
