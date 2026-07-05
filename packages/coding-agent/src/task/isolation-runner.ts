@@ -37,6 +37,7 @@ import {
 	getRepoRoot,
 	type IsolationHandle,
 	mergeTaskBranches,
+	type NestedRepoPatch,
 	type WorktreeBaseline,
 } from "./worktree";
 
@@ -100,7 +101,7 @@ export interface IsolatedRunOptions {
 	agentId: string;
 	/** Merge mode driving how changes are captured ("branch" commits, "patch" diffs). */
 	mergeMode: "patch" | "branch";
-	/** Output dir for `${agentId}.patch` artifacts (patch mode). */
+	/** Output dir for `${agentId}.patch` artifacts (patch mode and branch-mode commit failures). */
 	artifactsDir: string;
 	/** Human description carried onto the branch commit (branch mode). */
 	description?: string;
@@ -114,12 +115,25 @@ export interface IsolatedRunOptions {
 	buildFailureResult: (err: unknown) => SingleResult;
 }
 
+async function writeIsolationPatch(
+	isolationDir: string,
+	baseline: WorktreeBaseline,
+	artifactsDir: string,
+	agentId: string,
+): Promise<{ patchPath: string; nestedPatches: NestedRepoPatch[] }> {
+	const delta = await captureDeltaPatch(isolationDir, baseline);
+	const patchPath = path.join(artifactsDir, `${agentId}.patch`);
+	await Bun.write(patchPath, delta.rootPatch);
+	return { patchPath, nestedPatches: delta.nestedPatches };
+}
+
 /**
  * Run a subagent inside an isolation worktree and capture its changes.
  *
  * Branch mode: on success, commits the diff onto `omp/task/${agentId}` and
  * returns `branchName` + `nestedPatches`. On commit failure the branch is
- * deleted and `result.error` carries the merge-failure message.
+ * deleted, the still-live isolation diff is written to `${artifactsDir}/${agentId}.patch`,
+ * and `result.error` carries the merge-failure message.
  *
  * Patch mode: on success, writes `${artifactsDir}/${agentId}.patch` and
  * returns `patchPath` + `nestedPatches`.
@@ -162,18 +176,32 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				const branchName = `omp/task/${opts.agentId}`;
 				await git.branch.tryDelete(opts.context.repoRoot, branchName);
 				const msg = mergeErr instanceof Error ? mergeErr.message : String(mergeErr);
-				return { ...result, error: `Merge failed: ${msg}` };
+				try {
+					const patchResult = await writeIsolationPatch(
+						isolationDir,
+						taskBaseline,
+						opts.artifactsDir,
+						opts.agentId,
+					);
+					return {
+						...result,
+						patchPath: patchResult.patchPath,
+						nestedPatches: patchResult.nestedPatches,
+						error: `Merge failed: ${msg}`,
+					};
+				} catch (patchErr) {
+					const patchMsg = patchErr instanceof Error ? patchErr.message : String(patchErr);
+					return { ...result, error: `Merge failed: ${msg}; patch capture failed: ${patchMsg}` };
+				}
 			}
 		}
 		if (result.exitCode === 0) {
 			try {
-				const delta = await captureDeltaPatch(isolationDir, taskBaseline);
-				const patchPath = path.join(opts.artifactsDir, `${opts.agentId}.patch`);
-				await Bun.write(patchPath, delta.rootPatch);
+				const patchResult = await writeIsolationPatch(isolationDir, taskBaseline, opts.artifactsDir, opts.agentId);
 				return {
 					...result,
-					patchPath,
-					nestedPatches: delta.nestedPatches,
+					patchPath: patchResult.patchPath,
+					nestedPatches: patchResult.nestedPatches,
 				};
 			} catch (patchErr) {
 				const msg = patchErr instanceof Error ? patchErr.message : String(patchErr);
@@ -224,8 +252,9 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
 	try {
 		if (mergeMode === "branch") {
 			if (!result.branchName && result.exitCode === 0 && !result.aborted && result.error) {
+				const patchList = result.patchPath ? `\nPatch artifact:\n- ${result.patchPath}` : "";
 				return {
-					summary: `\n\n<system-notification>Branch merge failed before a task branch could be created: ${result.error}\nTask outputs are preserved but changes were not applied.</system-notification>`,
+					summary: `\n\n<system-notification>Branch merge failed before a task branch could be created: ${result.error}\nTask outputs are preserved but changes were not applied.${patchList}</system-notification>`,
 					changesApplied: false,
 					hadAnyChanges: false,
 					mergedBranchForNestedPatches: false,

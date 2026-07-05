@@ -1172,6 +1172,25 @@ describe("runEvalAgent isolation", () => {
 		).rejects.toThrow(/isolated apply failed.*Patch apply failed.*Captured patch preserved at \/artifacts\//s);
 	});
 
+	it("surfaces the preserved patch path when branch-mode transfer fails before merge runs", async () => {
+		mockAgents();
+		mockIsolationContext();
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts =>
+			singleResult(opts.baseOptions, {
+				output: "ran",
+				patchPath: `/artifacts/${opts.agentId}.patch`,
+				error: "Merge failed: remote: garbage at end of loose object '4de7bad'",
+			}),
+		);
+		const mergeSpy = vi.spyOn(isolationRunner, "mergeIsolatedChanges");
+
+		const session = isolatedSession({ "task.isolation.merge": "branch" });
+		await expect(runEvalAgent({ prompt: "scout", isolated: true }, { session })).rejects.toThrow(
+			/Merge failed.*garbage at end of loose object.*Captured patch preserved at \/artifacts\//s,
+		);
+		expect(mergeSpy).not.toHaveBeenCalled();
+	});
+
 	it("throws on apply failure for non-schema callers too instead of burying the warning in text", async () => {
 		mockAgents();
 		mockIsolationContext();
