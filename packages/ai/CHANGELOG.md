@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Gemini CLI / Antigravity (Google Cloud Code Assist API) incorrectly retrying empty-response failures on non-`STOP` finishReasons (such as safety or recitation blocks) and hiding the specific API error behind a generic "Cloud Code Assist API returned an empty response" message. The provider now breaks early on errors and correctly bubbles up the underlying API error message immediately.
+- Fixed Gemini CLI / Antigravity provider treating thinking-only responses (which contain reasoning but no visible text or tool calls) as empty-response failures, causing them to be discarded and retried. Non-empty thinking blocks are now recognized as meaningful content.
 ## [16.3.6] - 2026-07-04
 
 ### Added
