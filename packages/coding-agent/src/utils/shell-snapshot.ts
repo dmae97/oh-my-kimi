@@ -260,6 +260,7 @@ export async function getOrCreateSnapshot(
 	// Generate and execute snapshot script
 	const script = generateSnapshotScript(shell, snapshotPath, rcFile);
 
+	let succeeded = false;
 	try {
 		const snapshotEnv = sanitizeSnapshotEnv(env);
 		const spawnEnv: Record<string, string> = {};
@@ -289,10 +290,19 @@ export async function getOrCreateSnapshot(
 			}
 			scrubSnapshotInPlace(snapshotPath);
 			cachedSnapshotPaths.set(cacheKey, snapshotPath);
+			succeeded = true;
 			return snapshotPath;
 		}
 	} catch {
 		// Snapshot creation failed, proceed without it
+	} finally {
+		if (!succeeded) {
+			try {
+				fs.rmSync(snapshotPath, { force: true });
+			} catch {
+				// best-effort cleanup; force: true ignores ENOENT
+			}
+		}
 	}
 
 	return null;
