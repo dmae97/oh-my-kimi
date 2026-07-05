@@ -153,6 +153,9 @@ export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
 				? effectivePaths
 				: await expandDelimitedPathEntries(effectivePaths, this.session.cwd, { splitter: parseFindPattern });
 			const rawPatterns = rawPatternInputs.map(input => normalizePathLikeInput(input).replace(/\\/g, "/"));
+			if (rawPatterns.some(pattern => /^\/+$/.test(pattern))) {
+				throw new ToolError("Searching from root directory '/' is not allowed");
+			}
 			const internalRouter = InternalUrlRouter.instance();
 			const normalizedPatterns: string[] = [];
 			for (const rawPattern of rawPatterns) {
