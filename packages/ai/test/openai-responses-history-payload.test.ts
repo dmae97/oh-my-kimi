@@ -575,7 +575,7 @@ describe("OpenAI responses history payload", () => {
 		expect(containsAssistantOutputText(payload.input, "generic assistant that should be rebuilt")).toBe(true);
 	});
 
-	it("does not replay GitHub Copilot hidden-empty assistant native history into the next request", async () => {
+	it("does not replay GitHub Copilot hidden-empty assistant native or fallback history into the next request", async () => {
 		const hiddenEmptyNativeItems = [
 			{ type: "reasoning", encrypted_content: "enc_hidden_empty" },
 			{
@@ -590,7 +590,18 @@ describe("OpenAI responses history payload", () => {
 			messages: [
 				{
 					...makeAssistantMessage(hiddenEmptyNativeItems, false, "github-copilot", "gpt-5.4"),
-					content: [],
+					content: [
+						{ type: "text", text: "" },
+						{
+							type: "thinking",
+							thinking: "",
+							thinkingSignature: JSON.stringify({
+								type: "reasoning",
+								id: "rs_hidden_empty_fallback",
+								encrypted_content: "enc_hidden_empty_fallback",
+							}),
+						},
+					],
 				},
 				{ role: "user", content: followUp, timestamp: Date.now() },
 			],

@@ -115,6 +115,41 @@ export function sanitizeOpenAIResponsesAssistantHistoryItemsForReplay(
 	return hasReplayableAssistantOutput ? sanitized : undefined;
 }
 
+/**
+ * Drop hidden-only fallback assistant replay after a native Responses snapshot is rejected.
+ */
+export function sanitizeOpenAIResponsesAssistantFallbackItemsForReplay(items: ResponseInput): ResponseInput {
+	const sanitized: ResponseInput = [];
+
+	for (const item of items) {
+		if (item.type === "reasoning") continue;
+		if (item.type !== "message" || item.role !== "assistant") {
+			sanitized.push(item);
+			continue;
+		}
+
+		let hasVisibleText = false;
+		if (typeof item.content === "string") {
+			hasVisibleText = NON_WHITESPACE_RE.test(item.content);
+		} else {
+			for (const part of item.content) {
+				if (part.type === "output_text" && NON_WHITESPACE_RE.test(part.text)) {
+					hasVisibleText = true;
+					break;
+				}
+				if (part.type === "refusal" && NON_WHITESPACE_RE.test(part.refusal)) {
+					hasVisibleText = true;
+					break;
+				}
+			}
+		}
+
+		if (hasVisibleText) sanitized.push(item);
+	}
+
+	return sanitized;
+}
+
 function sanitizeOpenAIResponsesHistoryItemForReplay(
 	item: Record<string, unknown>,
 	normalizedCallIds: Map<string, string>,
