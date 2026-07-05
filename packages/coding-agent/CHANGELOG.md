@@ -197,6 +197,9 @@
 ### Fixed
 
 - Abort underlying MCP call when proxy tool timeout fires ([#4242](https://github.com/can1357/oh-my-pi/issues/4242))
+### Fixed
+
+- Surface unexpected JS eval worker exit via close listener to prevent silent hangs on worker death ([#4244](https://github.com/can1357/oh-my-pi/issues/4244))
 
 
 ## [16.3.0] - 2026-07-02
