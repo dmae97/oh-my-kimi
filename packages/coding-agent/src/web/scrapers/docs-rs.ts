@@ -399,7 +399,7 @@ export const handleDocsRs: SpecialHandler = async (
 		}
 
 		const compressed = Buffer.concat(chunks);
-		const jsonStr = gunzipSync(compressed).toString("utf-8");
+		const jsonStr = gunzipSync(compressed, { maxOutputLength: 256 * 1024 * 1024 }).toString("utf-8");
 		crate_ = tryParseJson<RustdocCrate>(jsonStr);
 		if (crate_?.index) {
 			await writeCachedRustdocCrate(target, jsonStr);
