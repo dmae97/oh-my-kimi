@@ -1925,6 +1925,8 @@ export async function processResponsesStream<TApi extends Api>(
 		return false;
 	};
 
+	let identifierlessFunctionDeltaTarget: StreamingItem | undefined;
+
 	const lookupOpenToolCallAlias = (
 		event: { output_index?: number; item_id?: string },
 		type: "function_call" | "custom_tool_call",
@@ -1956,6 +1958,22 @@ export async function processResponsesStream<TApi extends Api>(
 		delta?: unknown;
 	}): StreamingItem | undefined => {
 		if (hasOpenItemKey(event)) return lookupOpenToolCallAlias(event, "function_call");
+		const canContinuePreviousIdentifierlessDelta = typeof event.delta === "string";
+		if (canContinuePreviousIdentifierlessDelta && identifierlessFunctionDeltaTarget) {
+			const targetIndex = openItemsInOrder.indexOf(identifierlessFunctionDeltaTarget);
+			const target = targetIndex >= 0 ? openItemsInOrder[targetIndex] : undefined;
+			if (
+				target?.item.type === "function_call" &&
+				target.block.type === "toolCall" &&
+				!target.block[kStreamingArgumentsDone]
+			) {
+				const shouldAdvanceFromTarget =
+					shouldAdvanceIdentifierlessFunctionDelta(event, target) && hasLaterUnfinishedFunctionCall(targetIndex);
+				if (!shouldAdvanceFromTarget) return target;
+			} else {
+				identifierlessFunctionDeltaTarget = undefined;
+			}
+		}
 		let skippedStartedCandidate = false;
 		for (let index = 0; index < openItemsInOrder.length; index++) {
 			const candidate = openItemsInOrder[index]!;
@@ -1968,6 +1986,7 @@ export async function processResponsesStream<TApi extends Api>(
 					skippedStartedCandidate = true;
 					continue;
 				}
+				if (canContinuePreviousIdentifierlessDelta) identifierlessFunctionDeltaTarget = candidate;
 				return candidate;
 			}
 		}
@@ -1996,6 +2015,7 @@ export async function processResponsesStream<TApi extends Api>(
 			const index = openItemsInOrder.indexOf(entry);
 			if (index >= 0) openItemsInOrder.splice(index, 1);
 		}
+		if (entry && identifierlessFunctionDeltaTarget === entry) identifierlessFunctionDeltaTarget = undefined;
 		if (entry && lastOpenItem === entry) lastOpenItem = null;
 	};
 	const contentIndexOf = (block: ThinkingContent | TextContent | StreamingToolCallBlock): number =>

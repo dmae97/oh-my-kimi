@@ -373,6 +373,52 @@ describe("processResponsesStream: parallel function_call items", () => {
 		expect(deltas.map(delta => delta.contentIndex)).toEqual([0, 1]);
 	});
 
+	test("keeps split identifierless sibling argument chunks together", async () => {
+		const output = makeOutput();
+		const emitted: EmittedEvent[] = [];
+		const stream = { push: (e: unknown) => emitted.push(e as EmittedEvent), end: () => {} } as never;
+		const argsA = JSON.stringify({ command: "echo hello" });
+
+		await processResponsesStream(
+			makeStream([
+				{
+					type: "response.output_item.added",
+					output_index: 0,
+					item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "bash", arguments: "" },
+				},
+				{
+					type: "response.output_item.added",
+					output_index: 1,
+					item: { type: "function_call", id: "fc_b", call_id: "call_b", name: "bash", arguments: "" },
+				},
+				{ type: "response.function_call_arguments.delta", delta: argsA },
+				{ type: "response.function_call_arguments.delta", delta: '{"command":"echo ' },
+				{ type: "response.function_call_arguments.delta", delta: 'goodbye"}' },
+				{
+					type: "response.output_item.done",
+					output_index: 0,
+					item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "bash", arguments: argsA },
+				},
+				{
+					type: "response.output_item.done",
+					output_index: 1,
+					item: { type: "function_call", id: "fc_b", call_id: "call_b", name: "bash", arguments: "" },
+				},
+			]),
+			output,
+			stream,
+			makeModel(),
+		);
+
+		const [blockA, blockB] = output.content;
+		if (blockA?.type !== "toolCall" || blockB?.type !== "toolCall") throw new Error("expected toolCalls");
+		expect(blockA.arguments).toEqual({ command: "echo hello" });
+		expect(blockB.arguments).toEqual({ command: "echo goodbye" });
+
+		const deltas = emitted.filter(e => e.type === "toolcall_delta") as Array<{ contentIndex: number }>;
+		expect(deltas.map(delta => delta.contentIndex)).toEqual([0, 1, 1]);
+	});
+
 	test("keeps brace-prefixed chunks on a single identifierless function call", async () => {
 		const output = makeOutput();
 		const emitted: EmittedEvent[] = [];
