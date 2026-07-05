@@ -1684,6 +1684,7 @@ export class AgentSession {
 	#turnIndex = 0;
 	#messageEndPersistenceTail: Promise<void> = Promise.resolve();
 	#pendingMessageEndPersistence = new Map<string, Promise<void>>();
+	#persistedMessageKeys: { anchor: string; keys: Set<string> } | undefined;
 
 	#skills: Skill[];
 	#skillWarnings: SkillWarning[];
@@ -3298,12 +3299,19 @@ export class AgentSession {
 	/**
 	 * Index every message entry on the current branch by persistence key, so
 	 * the mid-run-compaction planner can ask "is this turn message already on
-	 * the branch?" in O(1) instead of re-walking the branch per check.
+	 * the branch?" in O(1). The set is memoized through the current leaf path
+	 * and validated at use time against a (session file, leaf id) anchor.
 	 *
 	 * The mid-run ordering check uses key identity alone: same-key content
 	 * variants are one logical message at this boundary, because otherwise a
 	 * display-side rewrite can make the assistant look missing after its tool
 	 * results have already persisted.
+	 *
+	 * Coherency is anchor-based, not invalidation-based: every branch mutation
+	 * (rewind, branch switch, new session, custom-entry append) changes the
+	 * session manager's leaf id or session file, so `#ensurePersistedMessageKeys`
+	 * detects staleness itself and rebuilds. No mutation call site has to
+	 * remember to invalidate anything.
 	 *
 	 * Pre-#3629 the equivalent was `sessionManager.getBranch()` called twice
 	 * per turn message, each call rebuilding the path via O(n²) `unshift` and
@@ -3312,6 +3320,24 @@ export class AgentSession {
 	 * `ui.loop-blocked` warnings in the bug report.
 	 */
 	#indexPersistedMessageKeys(): Set<string> {
+		return this.#ensurePersistedMessageKeys();
+	}
+
+	#persistedMessageKeysAnchor(): string {
+		return `${this.sessionManager.getSessionFile() ?? ""}\u0000${this.sessionManager.getLeafId() ?? ""}`;
+	}
+
+	#ensurePersistedMessageKeys(): Set<string> {
+		const anchor = this.#persistedMessageKeysAnchor();
+		let cache = this.#persistedMessageKeys;
+		if (cache === undefined || cache.anchor !== anchor) {
+			cache = { anchor, keys: this.#buildPersistedMessageKeySet() };
+			this.#persistedMessageKeys = cache;
+		}
+		return cache.keys;
+	}
+
+	#buildPersistedMessageKeySet(): Set<string> {
 		const keys = new Set<string>();
 		for (const entry of this.sessionManager.getBranch()) {
 			if (entry.type !== "message") continue;
@@ -3323,20 +3349,16 @@ export class AgentSession {
 
 	/**
 	 * True when {@link message} is structurally identical to a message already
-	 * appended to the current branch. Pairs a fast persistence-key lookup with
-	 * a content-equality fallback so two logically distinct messages that
-	 * happen to collide on the cheap key (e.g. two assistant turns at the same
-	 * millisecond with `undefined` responseId) still count as DISTINCT.
+	 * appended to the current branch. Uses the current branch's memoized
+	 * persistence-key cache for the common missing-key case, and only walks the
+	 * branch to verify content when a key hit could be a rare collision.
 	 */
 	#sessionMessageAlreadyPersisted(message: AgentMessage): boolean {
 		const key = sessionMessagePersistenceKey(message);
 		if (key === undefined) return false;
+		const keys = this.#ensurePersistedMessageKeys();
+		if (!keys.has(key)) return false;
 		const branch = this.sessionManager.getBranch();
-		// Reverse walk: recently-appended entries are at the tail, so the common
-		// "is the message I just emitted already in the branch?" lookup short-
-		// circuits in O(1) hot, O(branch) cold. Cheap-key compare for every
-		// entry; content compare only when the cheap check matches, so the
-		// expensive `JSON.stringify(content)` path stays off the hot loop.
 		for (let index = branch.length - 1; index >= 0; index--) {
 			const entry = branch[index];
 			if (entry.type !== "message") continue;
@@ -3373,7 +3395,17 @@ export class AgentSession {
 			message.toolName === "rewind" &&
 			this.#rewoundToolResultIds.delete(message.toolCallId);
 		if (!skipPersistedRewindResult) {
+			// Only extend the cache incrementally when it was fresh for the branch
+			// this append lands on; otherwise leave it stale so the next use-time
+			// anchor check rebuilds it.
+			const cache = this.#persistedMessageKeys;
+			const wasFresh = cache !== undefined && cache.anchor === this.#persistedMessageKeysAnchor();
 			this.sessionManager.appendMessage(message);
+			const key = sessionMessagePersistenceKey(message);
+			if (wasFresh && cache && key) {
+				cache.keys.add(key);
+				cache.anchor = this.#persistedMessageKeysAnchor();
+			}
 		}
 	}
 
@@ -8589,6 +8621,7 @@ export class AgentSession {
 			await this.sessionManager.flush();
 		}
 		await this.sessionManager.newSession(options);
+
 		this.#clearCheckpointRuntimeState();
 		this.setTodoPhases([]);
 		this.#freshProviderSessionId = undefined;
@@ -9996,6 +10029,7 @@ export class AgentSession {
 			await this.sessionManager.flush();
 			this.#cancelOwnAsyncJobs();
 			await this.sessionManager.newSession(previousSessionFile ? { parentSession: previousSessionFile } : undefined);
+
 			this.#clearCheckpointRuntimeState();
 			// agent.reset() clears the core steering/follow-up queues. Preserve any queued
 			// steers/follow-ups (RPC/SDK steer()/followUp() issued during the handoff, or a
@@ -10909,6 +10943,7 @@ export class AgentSession {
 			});
 			this.sessionManager.branchWithSummary(null, report, { startedAt: checkpointState.startedAt });
 		}
+
 		const rewoundAt = new Date().toISOString();
 		const details = { report, startedAt: checkpointState.startedAt, rewoundAt };
 		this.sessionManager.appendCustomMessageEntry(
@@ -14828,6 +14863,7 @@ export class AgentSession {
 		this.#cancelOwnAsyncJobs();
 
 		this.sessionManager.createBranchedSession(leafId);
+
 		this.#rehydrateCheckpointRewindState();
 		this.sessionManager.appendMessage({
 			role: "user",
@@ -15011,6 +15047,7 @@ export class AgentSession {
 		if (summaryText) {
 			// Create summary at target position (can be null for root)
 			const summaryId = this.sessionManager.branchWithSummary(newLeafId, summaryText, summaryDetails, fromExtension);
+
 			summaryEntry = this.sessionManager.getEntry(summaryId) as BranchSummaryEntry;
 		} else if (newLeafId === null) {
 			// No summary, navigating to root - reset leaf

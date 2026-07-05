@@ -209,6 +209,9 @@
 ### Fixed
 
 - Cache failed `!command` config resolutions and time out extension dynamic model fetches after 15s ([#4237](https://github.com/can1357/oh-my-pi/issues/4237))
+### Changed
+
+- Cached persisted message keys in AgentSession to avoid repeated branch walks on every message_end ([#4243](https://github.com/can1357/oh-my-pi/issues/4243)).
 
 
 ## [16.3.0] - 2026-07-02
