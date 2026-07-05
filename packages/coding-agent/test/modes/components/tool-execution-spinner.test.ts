@@ -21,12 +21,13 @@ describe("ToolExecutionComponent live preview spinners", () => {
 	it("animates the eval pending cell while the call is live", () => {
 		vi.useFakeTimers();
 		const requestRender = vi.fn();
+		const requestComponentRender = vi.fn();
 		const component = new ToolExecutionComponent(
 			"eval",
 			{ language: "py", code: "import time\ntime.sleep(10)" },
 			{},
 			undefined,
-			{ requestRender } as unknown as TUI,
+			{ requestRender, requestComponentRender } as unknown as TUI,
 			process.cwd(),
 		);
 
@@ -35,7 +36,8 @@ describe("ToolExecutionComponent live preview spinners", () => {
 			vi.advanceTimersByTime(120);
 			const secondFrame = stripVTControlCharacters(component.render(80).join("\n"));
 
-			expect(requestRender).toHaveBeenCalled();
+			expect(requestComponentRender).toHaveBeenCalledWith(component);
+			expect(requestRender).not.toHaveBeenCalled();
 			expect(firstFrame).toContain("time.sleep(10)");
 			expect(secondFrame).toContain("time.sleep(10)");
 			expect(secondFrame).not.toBe(firstFrame);
@@ -47,12 +49,13 @@ describe("ToolExecutionComponent live preview spinners", () => {
 	it("animates a shell pending header while the call is live", () => {
 		vi.useFakeTimers();
 		const requestRender = vi.fn();
+		const requestComponentRender = vi.fn();
 		const component = new ToolExecutionComponent(
 			"ssh",
 			{ host: "example.test", command: "sleep 10" },
 			{},
 			undefined,
-			{ requestRender } as unknown as TUI,
+			{ requestRender, requestComponentRender } as unknown as TUI,
 			process.cwd(),
 		);
 
@@ -61,7 +64,8 @@ describe("ToolExecutionComponent live preview spinners", () => {
 			vi.advanceTimersByTime(120);
 			const secondFrame = stripVTControlCharacters(component.render(80).join("\n"));
 
-			expect(requestRender).toHaveBeenCalled();
+			expect(requestComponentRender).toHaveBeenCalledWith(component);
+			expect(requestRender).not.toHaveBeenCalled();
 			expect(firstFrame).toContain("sleep 10");
 			expect(secondFrame).toContain("sleep 10");
 			expect(secondFrame).not.toBe(firstFrame);
@@ -73,19 +77,22 @@ describe("ToolExecutionComponent live preview spinners", () => {
 	it("does not tick headerless bash pending previews", () => {
 		vi.useFakeTimers();
 		const requestRender = vi.fn();
+		const requestComponentRender = vi.fn();
 		const component = new ToolExecutionComponent(
 			"bash",
 			{ command: "sleep 600" },
 			{},
 			undefined,
-			{ requestRender } as unknown as TUI,
+			{ requestRender, requestComponentRender } as unknown as TUI,
 			process.cwd(),
 		);
 
 		try {
 			requestRender.mockClear();
+			requestComponentRender.mockClear();
 			vi.advanceTimersByTime(500);
 			expect(requestRender).not.toHaveBeenCalled();
+			expect(requestComponentRender).not.toHaveBeenCalled();
 		} finally {
 			component.stopAnimation();
 		}
@@ -94,12 +101,13 @@ describe("ToolExecutionComponent live preview spinners", () => {
 	it("does not tick detached async bash result snapshots", () => {
 		vi.useFakeTimers();
 		const requestRender = vi.fn();
+		const requestComponentRender = vi.fn();
 		const component = new ToolExecutionComponent(
 			"bash",
 			{ command: "sleep 600", async: true },
 			{},
 			undefined,
-			{ requestRender } as unknown as TUI,
+			{ requestRender, requestComponentRender } as unknown as TUI,
 			process.cwd(),
 		);
 
@@ -115,8 +123,10 @@ describe("ToolExecutionComponent live preview spinners", () => {
 				true,
 			);
 			requestRender.mockClear();
+			requestComponentRender.mockClear();
 			vi.advanceTimersByTime(500);
 			expect(requestRender).not.toHaveBeenCalled();
+			expect(requestComponentRender).not.toHaveBeenCalled();
 		} finally {
 			component.stopAnimation();
 		}
@@ -125,19 +135,22 @@ describe("ToolExecutionComponent live preview spinners", () => {
 	it("does not tick github pending previews whose Text is materialized per rebuild", () => {
 		vi.useFakeTimers();
 		const requestRender = vi.fn();
+		const requestComponentRender = vi.fn();
 		const component = new ToolExecutionComponent(
 			"github",
 			{ op: "run_watch", run: "12345" },
 			{},
 			undefined,
-			{ requestRender } as unknown as TUI,
+			{ requestRender, requestComponentRender } as unknown as TUI,
 			process.cwd(),
 		);
 
 		try {
 			requestRender.mockClear();
+			requestComponentRender.mockClear();
 			vi.advanceTimersByTime(500);
 			expect(requestRender).not.toHaveBeenCalled();
+			expect(requestComponentRender).not.toHaveBeenCalled();
 		} finally {
 			component.stopAnimation();
 		}
@@ -146,6 +159,7 @@ describe("ToolExecutionComponent live preview spinners", () => {
 	it("does not tick custom tools whose pending label is a static tool-name Text", () => {
 		vi.useFakeTimers();
 		const requestRender = vi.fn();
+		const requestComponentRender = vi.fn();
 		// A renderResult-only custom tool renders the static tool-name label
 		// while pending, so the spinner interval must not start.
 		const tool = { name: "ext_tool", renderResult: () => undefined };
@@ -154,14 +168,16 @@ describe("ToolExecutionComponent live preview spinners", () => {
 			{ input: 1 },
 			{},
 			tool as never,
-			{ requestRender } as unknown as TUI,
+			{ requestRender, requestComponentRender } as unknown as TUI,
 			process.cwd(),
 		);
 
 		try {
 			requestRender.mockClear();
+			requestComponentRender.mockClear();
 			vi.advanceTimersByTime(500);
 			expect(requestRender).not.toHaveBeenCalled();
+			expect(requestComponentRender).not.toHaveBeenCalled();
 		} finally {
 			component.stopAnimation();
 		}
