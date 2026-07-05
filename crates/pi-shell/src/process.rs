@@ -1644,6 +1644,19 @@ pub struct SpawnRegistry {
 }
 
 impl SpawnRegistry {
+	/// Amortized-cost threshold for opportunistic pruning of exited entries.
+	///
+	/// A shell run that spawns many short-lived external commands (e.g. a bash
+	/// loop invoking a binary per iteration) would otherwise retain one owned
+	/// process handle per spawn — a pidfd on Linux, a `HANDLE` on Windows — for
+	/// the lifetime of the run, exhausting per-process FD/handle limits. When
+	/// the recorded vec grows past this many entries, `record` sweeps out
+	/// entries whose pinned process AND process group are both gone. Cost per
+	/// sweep is `O(N)` (one non-blocking status probe per entry) and a sweep
+	/// runs at most once per this many `record` calls, so the amortized cost
+	/// per spawn is `O(1)` — cheap next to the spawn itself.
+	const PRUNE_THRESHOLD: usize = 64;
+
 	/// Create an empty registry.
 	#[must_use]
 	pub fn new() -> Self {
@@ -1657,8 +1670,17 @@ impl SpawnRegistry {
 	/// with pid recycling can start. When the pin fails (child already exited
 	/// before we could `Process::from_pid`) the entry becomes a no-op at
 	/// termination time — there is nothing left to signal.
+	///
+	/// Once the recorded vec reaches [`Self::PRUNE_THRESHOLD`], exited entries
+	/// are swept so long-running loops of short external commands cannot
+	/// exhaust the process' FD/handle limit by retaining one owned handle per
+	/// historical spawn.
 	pub fn record(&self, pgid: Option<i32>, process: Option<Process>) {
-		self.spawned.lock().push(SpawnedProcess { process, pgid });
+		let mut spawned = self.spawned.lock();
+		spawned.push(SpawnedProcess { process, pgid });
+		if spawned.len() >= Self::PRUNE_THRESHOLD {
+			prune_exited(&mut spawned);
+		}
 	}
 
 	/// Build the kill set from the processes recorded so far. Re-read on every
@@ -1668,10 +1690,17 @@ impl SpawnRegistry {
 	/// A recorded process contributes only while alive; a recorded pgid
 	/// contributes only while the group still has members, so once the run's
 	/// whole tree exits the targets are empty and the wave loop can stop early.
+	///
+	/// Pruning also runs here so a cancellation cycle sees a compact target
+	/// set even when the record-time threshold hasn't fired yet.
 	#[must_use]
 	pub fn build_targets(&self) -> TerminationTargets {
 		let mut targets = TerminationTargets::new();
-		let spawned = self.spawned.lock().clone();
+		let spawned = {
+			let mut guard = self.spawned.lock();
+			prune_exited(&mut guard);
+			guard.clone()
+		};
 		for entry in spawned {
 			if let Some(process) = entry.process {
 				targets.add_process(process);
@@ -1691,6 +1720,24 @@ impl SpawnRegistry {
 		}
 		targets
 	}
+}
+
+/// Drop registry entries whose pinned process *and* process group are both
+/// gone: with neither still-live, they contribute nothing to the next
+/// termination wave and only pin an owned OS handle for no reason. A pgid-only
+/// entry (observer failed to pin the process but the group is still alive) is
+/// retained so `build_targets` can still signal the group.
+fn prune_exited(spawned: &mut Vec<SpawnedProcess>) {
+	spawned.retain(|entry| {
+		let process_live = entry
+			.process
+			.as_ref()
+			.is_some_and(|process| process.status() == ProcessStatus::Running);
+		let group_live = entry
+			.pgid
+			.is_some_and(|pgid| pgid > 0 && process_group_alive(pgid));
+		process_live || group_live
+	});
 }
 
 /// True when process group `pgid` still has at least one member. `kill(2)`
@@ -1813,39 +1860,52 @@ mod tests {
 	fn spawn_registry_pins_identity_at_record_time() {
 		use std::{process::Command, thread, time::Duration};
 
-		let mut child = Command::new("sleep")
+		// Phase 1: while the child is alive, the pinned handle carries identity
+		// forward into `build_targets` without any `Process::from_pid` re-open
+		// step existing to be raced against pid reuse.
+		let mut long = Command::new("sleep")
 			.arg("30")
 			.spawn()
 			.expect("spawn sleep");
-		let child_pid = i32::try_from(child.id()).expect("child pid fits in i32");
+		let long_pid = i32::try_from(long.id()).expect("child pid fits in i32");
 
 		let registry = SpawnRegistry::new();
-		// Simulate brush's `on_spawn` hook: pin the handle *now*, while the
-		// child is definitely alive, before any race with pid recycling could
-		// start.
-		let pinned = Process::from_pid(child_pid).expect("pin child at record time");
+		let pinned = Process::from_pid(long_pid).expect("pin child at record time");
 		registry.record(None, Some(pinned));
 
-		// Kill the child so the pid becomes eligible for reuse.
-		let _ = child.kill();
-		let _ = child.wait();
+		let live_targets = registry.build_targets();
+		assert!(
+			!live_targets.is_empty(),
+			"a still-live pinned child must appear in the target set — otherwise the \
+			 cancellation cleanup would silently miss it"
+		);
+		let live_pids: Vec<i32> = live_targets.processes.iter().map(Process::pid).collect();
+		assert_eq!(
+			live_pids,
+			vec![long_pid],
+			"target set must come from the pinned handle recorded at spawn time, not a \
+			 re-lookup by pid (which would race pid reuse — issue #4605)"
+		);
 
-		// Sanity-check that a fresh `Process::from_pid` against the dead pid
-		// no longer resolves — mirroring the moment on Windows where the pid
-		// could recycle to an unrelated process before cancellation fires.
+		let _ = long.kill();
+		let _ = long.wait();
+
+		// Phase 2: once the child exits, the registry MUST drop the entry
+		// rather than reintroduce a `Process::from_pid` re-open at kill time.
+		// Poll until pruning sees the pidfd as Exited (kernel-visible within
+		// milliseconds in practice).
+		let mut empty_after_exit = false;
 		for _ in 0..40 {
-			if Process::from_pid(child_pid).is_none() {
+			if registry.build_targets().is_empty() {
+				empty_after_exit = true;
 				break;
 			}
 			thread::sleep(Duration::from_millis(25));
 		}
-
-		let targets = registry.build_targets();
 		assert!(
-			!targets.is_empty(),
-			"SpawnRegistry must retain the pinned handle even after the pid dies; otherwise the \
-			 kill set is either silently empty (misses legitimate targets) or would need to \
-			 re-open by pid (racing with pid reuse — issue #4605)"
+			empty_after_exit,
+			"once the pinned child exits the registry must drop it — re-opening by pid at \
+			 termination time is exactly the pid-reuse race #4605 closes"
 		);
 	}
 
@@ -1868,5 +1928,63 @@ mod tests {
 		targets.add_process(pinned);
 		targets.add_pid(self_pid);
 		assert_eq!(targets.processes.len(), 1, "duplicate pids must be deduped");
+	}
+
+	/// Regression test for the review on PR #4606: a long-running shell
+	/// command that spawns many short-lived external processes must not
+	/// retain one owned handle per historical spawn — that would exhaust
+	/// per-process FD/handle limits (pidfd on Linux, `HANDLE` on Windows).
+	/// The registry MUST prune dead entries once the recorded vec crosses
+	/// the sweep threshold.
+	#[cfg(unix)]
+	#[test]
+	fn spawn_registry_prunes_exited_entries() {
+		use std::{thread, time::Duration};
+
+		let registry = SpawnRegistry::new();
+
+		// Fabricate many recorded-then-exited children by pinning ourselves,
+		// pushing the entry, then immediately treating it as "dead" from the
+		// registry's perspective. To simulate the exit without actually
+		// killing the harness, use `Process::from_pid(1)` for a pid that
+		// (on Linux) is init and never exits — but wrap the recording in a
+		// pattern that guarantees `status()` returns Exited for the pruner:
+		// spawn a tiny child, pin it, wait for exit, then record.
+		for _ in 0..(SpawnRegistry::PRUNE_THRESHOLD * 2) {
+			let mut child = std::process::Command::new("true")
+				.spawn()
+				.expect("spawn true");
+			let pid = i32::try_from(child.id()).expect("child pid fits in i32");
+			let pinned = Process::from_pid(pid);
+			let _ = child.wait();
+			// Give the kernel a moment to mark the pidfd readable so `status()`
+			// reports Exited when the pruner probes.
+			for _ in 0..20 {
+				if pinned
+					.as_ref()
+					.is_some_and(|process| process.status() == ProcessStatus::Exited)
+				{
+					break;
+				}
+				thread::sleep(Duration::from_millis(5));
+			}
+			registry.record(None, pinned);
+		}
+
+		let retained = registry.spawned.lock().len();
+		assert!(
+			retained < SpawnRegistry::PRUNE_THRESHOLD,
+			"pruning must bound retained entries below the sweep threshold once the pinned \
+			 processes have exited; got {retained} retained (threshold {})",
+			SpawnRegistry::PRUNE_THRESHOLD
+		);
+
+		// build_targets sees no live handles → empty target set, matching the
+		// contract that fully-exited registries stop the wave loop early.
+		let targets = registry.build_targets();
+		assert!(
+			targets.is_empty(),
+			"registry of only-dead entries must produce an empty target set"
+		);
 	}
 }
