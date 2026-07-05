@@ -707,7 +707,13 @@ const streamOpenAIResponsesOnce = (
 					}
 				}
 			} else if (chainState) {
-				resetOpenAIResponsesChainState(chainState);
+				// Hidden-empty / fully sanitized successes cannot be used as an append
+				// baseline, but `lastParams` still records the successful wire controls
+				// without re-enabling `previous_response_id` chaining.
+				chainState.canAppend = false;
+				chainState.lastParams = structuredCloneJSON(activeParams);
+				chainState.lastResponseId = undefined;
+				chainState.lastResponseItems = undefined;
 			}
 
 			output.duration = performance.now() - startTime;

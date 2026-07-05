@@ -43,7 +43,7 @@ describe("ToolExecutionComponent SSH repaint seams", () => {
 
 	function makeComponent(args: unknown) {
 		const resetDisplay = vi.fn();
-		const ui = { requestRender() {}, resetDisplay } as unknown as TUI;
+		const ui = { requestRender() {}, requestComponentRender() {}, resetDisplay } as unknown as TUI;
 		const component = new ToolExecutionComponent("ssh", args, {}, undefined, ui);
 		components.push(component);
 		resetDisplay.mockClear();

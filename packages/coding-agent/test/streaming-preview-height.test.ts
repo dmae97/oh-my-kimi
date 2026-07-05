@@ -195,7 +195,7 @@ describe("streaming edit preview height (stable, full tail window)", () => {
 		const bigLines = bigNew.split("\n");
 		const bigPartials = bigLines.map((_v, i) => bigLines.slice(0, i + 1).join("\n"));
 
-		const uiStub = { requestRender() {} } as unknown as TUI;
+		const uiStub = { requestRender() {}, requestComponentRender() {} } as unknown as TUI;
 		const tool = { mode: "replace" } as unknown as AgentTool;
 		const component = new ToolExecutionComponent(
 			"edit",

@@ -2056,11 +2056,11 @@
 		},
 		"claude-opus-4-20250514": {
 			"id": "claude-opus-4-20250514",
-			"name": "Claude Opus 4",
+			"name": "Claude 4 Opus",
 			"api": "openai-completions",
 			"provider": "aimlapi",
 			"baseUrl": "https://api.aimlapi.com/v1",
-			"reasoning": true,
+			"reasoning": false,
 			"input": [
 				"text",
 				"image"
@@ -2072,17 +2072,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 200000,
-			"maxTokens": 32000,
-			"thinking": {
-				"mode": "effort",
-				"efforts": [
-					"minimal",
-					"low",
-					"medium",
-					"high",
-					"xhigh"
-				]
-			}
+			"maxTokens": 32000
 		},
 		"claude-opus-4-5-20251101": {
 			"id": "claude-opus-4-5-20251101",
@@ -2206,7 +2196,27 @@
 		},
 		"claude-sonnet-4-20250514": {
 			"id": "claude-sonnet-4-20250514",
-			"name": "Claude Sonnet 4",
+			"name": "Claude 4 Sonnet",
+			"api": "openai-completions",
+			"provider": "aimlapi",
+			"baseUrl": "https://api.aimlapi.com/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 200000,
+			"maxTokens": 64000
+		},
+		"claude-sonnet-4-5-20250929": {
+			"id": "claude-sonnet-4-5-20250929",
+			"name": "Claude Sonnet 4.5",
 			"api": "openai-completions",
 			"provider": "aimlapi",
 			"baseUrl": "https://api.aimlapi.com/v1",
@@ -2233,26 +2243,6 @@
 					"xhigh"
 				]
 			}
-		},
-		"claude-sonnet-4-5-20250929": {
-			"id": "claude-sonnet-4-5-20250929",
-			"name": "Claude Sonnet 4.5",
-			"api": "openai-completions",
-			"provider": "aimlapi",
-			"baseUrl": "https://api.aimlapi.com/v1",
-			"reasoning": false,
-			"input": [
-				"text",
-				"image"
-			],
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 200000,
-			"maxTokens": 64000
 		},
 		"claude-sonnet-4-6": {
 			"id": "claude-sonnet-4-6",
@@ -11328,11 +11318,11 @@
 		},
 		"claude-opus-4-20250514": {
 			"id": "claude-opus-4-20250514",
-			"name": "Claude Opus 4",
+			"name": "Claude 4 Opus",
 			"api": "anthropic-messages",
 			"provider": "anthropic",
 			"baseUrl": "https://api.anthropic.com",
-			"reasoning": true,
+			"reasoning": false,
 			"input": [
 				"text",
 				"image"
@@ -11344,17 +11334,7 @@
 				"cacheWrite": 18.75
 			},
 			"contextWindow": 200000,
-			"maxTokens": 32000,
-			"thinking": {
-				"mode": "budget",
-				"efforts": [
-					"minimal",
-					"low",
-					"medium",
-					"high",
-					"xhigh"
-				]
-			}
+			"maxTokens": 32000
 		},
 		"claude-opus-4-5": {
 			"id": "claude-opus-4-5",
@@ -11558,11 +11538,11 @@
 		},
 		"claude-sonnet-4-20250514": {
 			"id": "claude-sonnet-4-20250514",
-			"name": "Claude Sonnet 4",
+			"name": "Claude 4 Sonnet",
 			"api": "anthropic-messages",
 			"provider": "anthropic",
 			"baseUrl": "https://api.anthropic.com",
-			"reasoning": true,
+			"reasoning": false,
 			"input": [
 				"text",
 				"image"
@@ -11574,17 +11554,7 @@
 				"cacheWrite": 3.75
 			},
 			"contextWindow": 200000,
-			"maxTokens": 64000,
-			"thinking": {
-				"mode": "budget",
-				"efforts": [
-					"minimal",
-					"low",
-					"medium",
-					"high",
-					"xhigh"
-				]
-			}
+			"maxTokens": 64000
 		},
 		"claude-sonnet-4-5": {
 			"id": "claude-sonnet-4-5",
@@ -11603,7 +11573,7 @@
 				"cacheRead": 0.3,
 				"cacheWrite": 3.75
 			},
-			"contextWindow": 200000,
+			"contextWindow": 1000000,
 			"maxTokens": 64000,
 			"thinking": {
 				"mode": "budget",
@@ -11633,7 +11603,7 @@
 				"cacheRead": 0.3,
 				"cacheWrite": 3.75
 			},
-			"contextWindow": 200000,
+			"contextWindow": 1000000,
 			"maxTokens": 64000,
 			"thinking": {
 				"mode": "budget",
@@ -11664,7 +11634,7 @@
 				"cacheWrite": 3.75
 			},
 			"contextWindow": 1000000,
-			"maxTokens": 64000,
+			"maxTokens": 128000,
 			"thinking": {
 				"mode": "anthropic-adaptive",
 				"efforts": [
@@ -19470,7 +19440,7 @@
 			"name": "Claude Sonnet 4.5",
 			"api": "anthropic-messages",
 			"baseUrl": "https://cloud.gitlab.com/ai/v1/proxy/anthropic/",
-			"reasoning": false,
+			"reasoning": true,
 			"input": [
 				"text",
 				"image"
@@ -19483,7 +19453,17 @@
 			},
 			"contextWindow": 200000,
 			"maxTokens": 64000,
-			"provider": "gitlab-duo"
+			"provider": "gitlab-duo",
+			"thinking": {
+				"mode": "budget",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				]
+			}
 		},
 		"duo-chat-gpt-5-1": {
 			"id": "duo-chat-gpt-5-1",
@@ -71941,9 +71921,9 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.9086,
-				"output": 2.8556,
-				"cacheRead": 0.16874,
+				"input": 0.5740000000000001,
+				"output": 1.804,
+				"cacheRead": 0.1066,
 				"cacheWrite": 0
 			},
 			"contextWindow": 1048576,
@@ -82241,11 +82221,11 @@
 					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			},
 			"compat": {
+				"thinkingFormat": "zai",
 				"reasoningContentField": "reasoning_content",
 				"supportsDeveloperRole": false
 			}
@@ -82274,11 +82254,11 @@
 					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			},
 			"compat": {
+				"thinkingFormat": "zai",
 				"reasoningContentField": "reasoning_content",
 				"supportsDeveloperRole": false
 			}
@@ -82308,11 +82288,11 @@
 					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			},
 			"compat": {
+				"thinkingFormat": "zai",
 				"reasoningContentField": "reasoning_content",
 				"supportsDeveloperRole": false
 			}
@@ -82342,11 +82322,11 @@
 					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			},
 			"compat": {
+				"thinkingFormat": "zai",
 				"reasoningContentField": "reasoning_content",
 				"supportsDeveloperRole": false
 			}

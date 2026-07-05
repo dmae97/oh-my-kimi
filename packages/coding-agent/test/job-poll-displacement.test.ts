@@ -22,7 +22,7 @@ import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import type { SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import type { Component, TUI } from "@oh-my-pi/pi-tui";
 
-const uiStub = { requestRender() {} } as unknown as TUI;
+const uiStub = { requestRender() {}, requestComponentRender() {} } as unknown as TUI;
 
 type JobStatus = "running" | "completed" | "failed" | "cancelled";
 

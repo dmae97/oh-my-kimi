@@ -340,6 +340,8 @@ import {
 	type CustomMessagePayload,
 	convertToLlm,
 	demoteInterruptedThinking,
+	type FileMentionMessage,
+	type HookMessage,
 	INTERRUPTED_THINKING_MESSAGE_TYPE,
 	type InterruptedThinkingDetails,
 	isEmptyErrorTurn,
@@ -3368,6 +3370,26 @@ export class AgentSession {
 		return false;
 	}
 
+	#appendSessionMessage(
+		message:
+			| Message
+			| CustomMessage
+			| HookMessage
+			| BashExecutionMessage
+			| PythonExecutionMessage
+			| FileMentionMessage,
+	): string {
+		const cache = this.#persistedMessageKeys;
+		const wasFresh = cache !== undefined && cache.anchor === this.#persistedMessageKeysAnchor();
+		const entryId = this.sessionManager.appendMessage(message);
+		const key = sessionMessagePersistenceKey(message);
+		if (wasFresh && cache && key) {
+			cache.keys.add(key);
+			cache.anchor = this.#persistedMessageKeysAnchor();
+		}
+		return entryId;
+	}
+
 	#persistSessionMessageIfMissing(message: AgentMessage): void {
 		if (
 			message.role !== "user" &&
@@ -3395,17 +3417,7 @@ export class AgentSession {
 			message.toolName === "rewind" &&
 			this.#rewoundToolResultIds.delete(message.toolCallId);
 		if (!skipPersistedRewindResult) {
-			// Only extend the cache incrementally when it was fresh for the branch
-			// this append lands on; otherwise leave it stale so the next use-time
-			// anchor check rebuilds it.
-			const cache = this.#persistedMessageKeys;
-			const wasFresh = cache !== undefined && cache.anchor === this.#persistedMessageKeysAnchor();
-			this.sessionManager.appendMessage(message);
-			const key = sessionMessagePersistenceKey(message);
-			if (wasFresh && cache && key) {
-				cache.keys.add(key);
-				cache.anchor = this.#persistedMessageKeysAnchor();
-			}
+			this.#appendSessionMessage(message);
 		}
 	}
 
@@ -10516,6 +10528,13 @@ export class AgentSession {
 		this.#pendingRecoveredRetryErrors = [];
 	}
 
+	async #persistRetryLifecycleErrorMessage(message: AssistantMessage): Promise<void> {
+		await this.#waitForSessionMessagePersistence(message);
+		if (!isEmptyErrorTurn(message)) return;
+		if (this.#sessionMessageAlreadyPersisted(message)) return;
+		this.#appendSessionMessage(message);
+	}
+
 	#retryRecoveryKind(
 		id: number,
 		switchedCredential: boolean,
@@ -10551,7 +10570,7 @@ export class AgentSession {
 		id: number,
 		options: { switchedCredential: boolean; switchedModel: boolean; delayMs: number },
 	): Promise<void> {
-		await this.#waitForSessionMessagePersistence(message);
+		await this.#persistRetryLifecycleErrorMessage(message);
 		const persistenceKey = sessionMessagePersistenceKey(message);
 		if (!persistenceKey) return;
 		let branchEntry: SessionEntry | undefined;
@@ -13506,6 +13525,7 @@ export class AgentSession {
 		}
 
 		if (this.#retryAttempt > retrySettings.maxRetries) {
+			await this.#persistRetryLifecycleErrorMessage(message);
 			// Max retries exceeded, emit final failure and reset
 			await this.#emitSessionEvent({
 				type: "auto_retry_end",
@@ -13625,6 +13645,7 @@ export class AgentSession {
 		// can act on it.
 		const maxDelayMs = retrySettings.maxDelayMs;
 		if (maxDelayMs > 0 && delayMs > maxDelayMs && !switchedCredential && !switchedModel) {
+			await this.#persistRetryLifecycleErrorMessage(message);
 			const attempt = this.#retryAttempt;
 			this.#retryAttempt = 0;
 			await this.#emitSessionEvent({

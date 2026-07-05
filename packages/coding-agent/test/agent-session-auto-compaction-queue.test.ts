@@ -97,10 +97,14 @@ describe("AgentSession auto-compaction queue resume", () => {
 			modelRegistry,
 		);
 
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
+		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!bundled) {
 			throw new Error("Expected built-in anthropic model to exist");
 		}
+		// Pin the window and output reservation: the threshold/usage math below is
+		// tuned to a 200k/64k context-full budget and must stay stable across
+		// catalog regenerations.
+		const model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
 
 		const agent = new Agent({
 			initialState: {

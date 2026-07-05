@@ -142,8 +142,12 @@ describe("AgentSession eager prelude re-injection after compaction", () => {
 			predicate: (call: ObservedPromptCall) => boolean;
 			resolve: (call: ObservedPromptCall) => void;
 		}> = [];
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!bundled) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		// Pin the window and output reservation: usage figures below trip the
+		// context-full strategy at a 200k/64k threshold; catalog regeneration must
+		// not shift the headroom math.
+		const model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
 
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), `testauth-${cleanups.length}.db`));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");

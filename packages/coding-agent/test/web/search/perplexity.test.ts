@@ -138,7 +138,7 @@ describe("Perplexity API-key request shape", () => {
 
 		expect(response.relatedQuestions).toBeUndefined();
 	});
-	it("falls back to OpenRouter with the selected API-key config after direct Perplexity fails", async () => {
+	it("falls back to OpenRouter with the selected API-key config after a non-retryable direct Perplexity failure", async () => {
 		process.env.OPENROUTER_API_KEY = "openrouter-test-key";
 		const urls: string[] = [];
 		const bodies: Record<string, unknown>[] = [];
@@ -146,7 +146,7 @@ describe("Perplexity API-key request shape", () => {
 			const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 			urls.push(url);
 			bodies.push(JSON.parse(init?.body as string));
-			if (url === API_URL) return new Response("direct failed", { status: 500 });
+			if (url === API_URL) return new Response("direct failed", { status: 400 });
 			if (url === OPENROUTER_API_URL) return sseResponse(baseResponse());
 			return new Response("not mocked", { status: 500 });
 		};

@@ -309,6 +309,7 @@ export function buildSessionContext(
 		} else if (entry.type === "custom_message") {
 			if (!isCustomMessageContent(entry.content)) return;
 			const normalized = normalizeCustomMessagePayload(entry);
+			const attribution = entry.attribution === undefined ? undefined : normalized.attribution;
 			pushMessage(
 				createCustomMessage(
 					normalized.customType,
@@ -316,7 +317,7 @@ export function buildSessionContext(
 					normalized.display,
 					normalized.details,
 					entry.timestamp,
-					normalized.attribution,
+					attribution,
 				),
 			);
 		} else if (entry.type === "branch_summary" && entry.summary) {

@@ -451,7 +451,7 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	eval: s => new EvalTool(s),
 	ssh: loadSshTool,
 	github: GithubTool.createIf,
-	glob: s => new GlobTool(s),
+	glob: s => new GlobTool(s, { rootPathAlias: true }),
 	grep: s => new GrepTool(s),
 	lsp: LspTool.createIf,
 	inspect_image: s => new InspectImageTool(s),

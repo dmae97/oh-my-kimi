@@ -114,7 +114,7 @@ describe("readToolRenderer hyperlinks", () => {
 
 describe("read ToolExecutionComponent framing", () => {
 	it("renders framed read results inside the standard tool container padding", () => {
-		const uiStub = { requestRender() {} } as unknown as TUI;
+		const uiStub = { requestRender() {}, requestComponentRender() {} } as unknown as TUI;
 		const component = new ToolExecutionComponent("read", { path: "src/example.ts" }, {}, undefined, uiStub);
 		component.updateResult(
 			{

@@ -5,7 +5,12 @@ import {
 } from "../discovery/openai-compatible";
 import { Effort } from "../effort";
 import { FIREWORKS_FAST_SUFFIX, toFireworksPublicModelId } from "../fireworks-model-id";
-import { isGlmVisionModelId, isGrokReasoningEffortCapable, isReasoningGlmModelId } from "../identity/family";
+import {
+	isGlmVisionModelId,
+	isGrokReasoningEffortCapable,
+	isKimiModelId,
+	isReasoningGlmModelId,
+} from "../identity/family";
 import type { ModelManagerOptions } from "../model-manager";
 import { getBundledModels } from "../models";
 import type { Api, FetchImpl, Model, ModelSpec, OpenAICompat, Provider, ThinkingConfig } from "../types";
@@ -1718,6 +1723,36 @@ function readWaferRecord(entry: OpenAICompatibleModelRecord): WaferRecord | unde
 	return raw && typeof raw === "object" ? (raw as WaferRecord) : undefined;
 }
 
+type WaferThinkingFormat = "zai" | "qwen";
+
+export function resolveWaferServerlessThinkingFormat(
+	modelId: string,
+	upstreamProvider: unknown,
+): WaferThinkingFormat | undefined {
+	const upstream = typeof upstreamProvider === "string" ? upstreamProvider.trim().toLowerCase() : "";
+	if (upstream) {
+		if (
+			upstream === "zai" ||
+			upstream === "z.ai" ||
+			upstream === "z-ai" ||
+			upstream.includes("zhipu") ||
+			upstream.includes("moonshot") ||
+			upstream.includes("kimi")
+		) {
+			return "zai";
+		}
+		if (upstream.includes("qwen") || upstream.includes("alibaba") || upstream.includes("dashscope")) {
+			return "qwen";
+		}
+		return undefined;
+	}
+
+	// Older Wafer snapshots (and some endpoint responses) do not carry the
+	// upstream-provider hint. Only GLM/Kimi need a sparse override: qwen and
+	// deepseek IDs are resolved safely by `buildOpenAICompat` from the model id.
+	return isReasoningGlmModelId(modelId.toLowerCase()) || isKimiModelId(modelId) ? "zai" : undefined;
+}
+
 function mapWaferModel(
 	providerId: "wafer-serverless",
 	baseUrl: string,
@@ -1766,11 +1801,9 @@ function mapWaferModel(
 		//   - deepseek → `reasoning_effort` (DeepSeek effort map; the model always
 		//     reasons when invoked, replay of `reasoning_content` is required on
 		//     tool-call turns — both handled by `detectOpenAICompat` from the id).
-		// For unknown upstreams we omit `thinkingFormat` and let the per-id
-		// detection in `detectOpenAICompat` pick a safe default.
-		const upstream = typeof wafer?.provider === "string" ? wafer.provider : undefined;
-		const thinkingFormat: "zai" | "qwen" | undefined =
-			upstream === "zai" || upstream === "moonshotai" ? "zai" : upstream === "qwen" ? "qwen" : undefined;
+		// Unknown upstreams stay unset; missing upstreams fall back only for
+		// model families that cannot be inferred safely from Wafer's host.
+		const thinkingFormat = resolveWaferServerlessThinkingFormat(defaults.id, wafer?.provider);
 		return {
 			...base,
 			compat: {

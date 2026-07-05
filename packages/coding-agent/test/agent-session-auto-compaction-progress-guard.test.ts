@@ -82,10 +82,14 @@ describe("AgentSession auto-compaction progress guard", () => {
 			modelRegistry,
 		);
 
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
+		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!bundled) {
 			throw new Error("Expected built-in anthropic model to exist");
 		}
+		// Pin the window and output reservation: every usage figure below is tuned
+		// to a 200k/64k threshold, so catalog regeneration must not shift the
+		// headroom math.
+		const model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
 
 		const agent = new Agent({
 			initialState: {
