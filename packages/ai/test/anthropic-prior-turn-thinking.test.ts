@@ -415,6 +415,70 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 		}
 	});
 
+	it("drops redacted siblings when same-model unsigned visible thinking is discarded", () => {
+		const target = makeAnthropicModel({
+			provider: "anthropic",
+			id: "claude-sonnet-4-6",
+			baseUrl: "https://api.anthropic.com",
+		});
+		const toolCallId = "toolu_redacted_dropped";
+		const messages: Message[] = [
+			makeUser("Fix the layout"),
+			makeAssistant(
+				[
+					{ type: "thinking", thinking: "Private discarded reasoning.", thinkingSignature: undefined },
+					{ type: "redactedThinking", data: "encrypted-sibling" },
+					{ type: "toolCall", id: toolCallId, name: "read", arguments: { path: "src/view.ts" } },
+				],
+				{ provider: "anthropic", model: "claude-sonnet-4-6" },
+			),
+			toolResult(toolCallId, "view body"),
+			makeUser("Continue."),
+		];
+
+		const params = convertAnthropicMessages(messages, target, false);
+		const assistant = params.find(p => p.role === "assistant");
+		if (!assistant) throw new Error("expected assistant wire message");
+		const blocks = assistant.content as WireBlock[];
+		expect(blocks.find(b => b.type === "thinking")).toBeUndefined();
+		expect(blocks.find(b => b.type === "redacted_thinking")).toBeUndefined();
+		expect(blocks.filter((b): b is WireTextBlock => b.type === "text")).toHaveLength(0);
+		const toolUse = blocks.find(b => b.type === "tool_use") as WireToolUseBlock | undefined;
+		expect(toolUse?.id).toBe(toolCallId);
+	});
+
+	it("keeps redacted siblings when signed same-model thinking survives beside a discarded final block", () => {
+		const target = makeAnthropicModel({
+			provider: "anthropic",
+			id: "claude-sonnet-4-6",
+			baseUrl: "https://api.anthropic.com",
+		});
+		const messages: Message[] = [
+			makeUser("Fix the layout"),
+			makeAssistant(
+				[
+					{ type: "thinking", thinking: "Completed signed reasoning.", thinkingSignature: "sig_complete" },
+					{ type: "redactedThinking", data: "encrypted-complete-sibling" },
+					{ type: "text", text: "Visible anchor." },
+					{ type: "thinking", thinking: "Partial final reasoning.", thinkingSignature: "sig_partial" },
+				],
+				{ provider: "anthropic", model: "claude-sonnet-4-6", stopReason: "error" },
+			),
+			makeUser("Continue."),
+		];
+
+		const params = convertAnthropicMessages(messages, target, false);
+		const assistant = params.find(p => p.role === "assistant");
+		if (!assistant) throw new Error("expected assistant wire message");
+		const blocks = assistant.content as WireBlock[];
+		const thinking = blocks.find(b => b.type === "thinking") as WireThinkingBlock | undefined;
+		expect(thinking?.thinking).toBe("Completed signed reasoning.");
+		expect(thinking?.signature).toBe("sig_complete");
+		const redacted = blocks.find(b => b.type === "redacted_thinking") as WireRedactedBlock | undefined;
+		expect(redacted?.data).toBe("encrypted-complete-sibling");
+		expect(blocks.some(b => b.type === "thinking" && b.thinking === "Partial final reasoning.")).toBe(false);
+	});
+
 	it("strips official Anthropic source signatures on cross-model replay to a 3p target", () => {
 		// official Anthropic → 3p. Anthropic's signature is bound to the
 		// issuing model+session, so the 3p target cannot reverify or

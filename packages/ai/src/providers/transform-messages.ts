@@ -402,6 +402,33 @@ export function transformMessages<TApi extends Api>(
 				assistantMsg.content.some(b => b.type === "toolCall");
 			const lastBlockIndex = assistantMsg.content.length - 1;
 
+			const anthropicVisibleThinkingSurvivesReplay = (
+				candidate: AssistantMessage["content"][number],
+				candidateIndex: number,
+			): boolean => {
+				if (candidate.type !== "thinking") return false;
+				if (!isAnthropicReplay) return false;
+				if (isLatestSurvivingAssistant && abandonedToolUse) return true;
+				const candidateSignatureUntrustworthy =
+					abandonedToolUse || (invalidStopReason && candidateIndex === lastBlockIndex);
+				const replaySignature =
+					candidateSignatureUntrustworthy && candidate.thinkingSignature
+						? undefined
+						: candidate.thinkingSignature;
+				if (!replaySignature && (!candidate.thinking || candidate.thinking.trim() === "")) return false;
+				if (isSameModel && isSigningAnthropicTarget && (!replaySignature || replaySignature.trim() === "")) {
+					return false;
+				}
+				return true;
+			};
+			const hasVisibleAnthropicThinking = assistantMsg.content.some(candidate => candidate.type === "thinking");
+			const dropsAllSameModelVisibleThinking =
+				isAnthropicReplay &&
+				isSameModel &&
+				isSigningAnthropicTarget &&
+				hasVisibleAnthropicThinking &&
+				!assistantMsg.content.some(anthropicVisibleThinkingSurvivesReplay);
+
 			const transformedContent = assistantMsg.content.flatMap((block, blockIndex) => {
 				if (block.type === "thinking") {
 					// Only an aborted/errored turn's final (mid-stream) block can hold a
@@ -497,9 +524,11 @@ export function transformMessages<TApi extends Api>(
 					// Redacted thinking is native-only. Keep it for same-model
 					// signed replay, the latest byte-for-byte Anthropic turn, or
 					// compatible targets that will also emit sibling unsigned
-					// thinking natively. Drop it when the visible thinking was
-					// cross-model stripped and will be demoted to text.
+					// thinking natively. Drop it when the matching visible thinking
+					// was discarded, or when visible thinking was cross-model
+					// stripped and will be demoted to text.
 					if (isAnthropicReplay) {
+						if (dropsAllSameModelVisibleThinking) return [];
 						if (isSameModel || isLatestSurvivingAssistant || replaysUnsignedAnthropicThinking) return block;
 						return [];
 					}
