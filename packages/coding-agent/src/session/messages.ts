@@ -203,6 +203,9 @@ export function isEmptyErrorTurn(message: Pick<AssistantMessage, "stopReason" | 
 				return true;
 			case "fallback":
 				return false;
+			// Unknown/new block kinds count as content: never silently discard a turn.
+			default:
+				return true;
 		}
 	});
 }

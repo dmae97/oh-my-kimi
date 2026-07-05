@@ -412,9 +412,7 @@ export function transformMessages<TApi extends Api>(
 				const candidateSignatureUntrustworthy =
 					abandonedToolUse || (invalidStopReason && candidateIndex === lastBlockIndex);
 				const replaySignature =
-					candidateSignatureUntrustworthy && candidate.thinkingSignature
-						? undefined
-						: candidate.thinkingSignature;
+					candidateSignatureUntrustworthy && candidate.thinkingSignature ? undefined : candidate.thinkingSignature;
 				if (!replaySignature && (!candidate.thinking || candidate.thinking.trim() === "")) return false;
 				if (isSameModel && isSigningAnthropicTarget && (!replaySignature || replaySignature.trim() === "")) {
 					return false;
