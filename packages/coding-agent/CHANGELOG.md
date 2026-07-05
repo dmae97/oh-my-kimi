@@ -67,6 +67,7 @@
 - Preserved isolated branch-mode task output as a patch artifact when `commitToBranch` fails before the task branch can be transferred, and surfaced the captured patch path (plus any nested patches) through the eval `agent()` failure message so callers can recover the work instead of losing it with the isolation worktree ([#4437](https://github.com/can1357/oh-my-pi/issues/4437)).
 - Fixed task-class subagents dropping unresolved explicit model-role selectors before startup, preventing `modelRoles.task` from silently falling through to an unrelated available provider model ([#4421](https://github.com/can1357/oh-my-pi/issues/4421)).
 - Fixed large legacy snapcompact archives being rehydrated into active resumed-session context, avoiding Bun Worker crashes on oversized archived frame payloads ([#4470](https://github.com/can1357/oh-my-pi/issues/4470)).
+- Fixed LSP diagnostics staleness after harness-authored file writes by sending watched-file change notifications to running language servers before edit-time diagnostics are read ([#4459](https://github.com/can1357/oh-my-pi/issues/4459)).
 
 ## [16.3.4] - 2026-07-03
 

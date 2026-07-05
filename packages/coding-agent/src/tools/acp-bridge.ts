@@ -7,6 +7,8 @@
  * URLs) are always written directly to disk — those are OMP-owned and should
  * never be pushed into the editor.
  */
+
+import { FileChangeType, notifyWorkspaceWatchedFiles } from "../lsp/client";
 import type { ToolSession } from ".";
 import { invalidateFsScanAfterWrite } from "./fs-cache-invalidation";
 import { isInternalUrlPath } from "./path-utils";
@@ -53,18 +55,22 @@ export async function routeWriteThroughBridge(
 	requestedPath: string,
 	absolutePath: string,
 	content: string,
+	signal?: AbortSignal,
 ): Promise<boolean> {
 	if (!shouldRouteWriteThroughBridge(session, requestedPath, absolutePath)) return false;
 
 	const bridge = session.getClientBridge?.();
 	if (!bridge?.capabilities.writeTextFile || !bridge.writeTextFile) return false;
 
+	const changeType = (await Bun.file(absolutePath).exists()) ? FileChangeType.Changed : FileChangeType.Created;
 	try {
 		await bridge.writeTextFile({ path: absolutePath, content });
 	} catch (error) {
 		throw new ToolError(error instanceof Error ? error.message : String(error));
 	}
-
+	if (session.enableLsp ?? true) {
+		await notifyWorkspaceWatchedFiles(session.cwd, [{ filePath: absolutePath, type: changeType }], signal);
+	}
 	invalidateFsScanAfterWrite(absolutePath);
 	session.bumpFileMutationVersion?.(absolutePath);
 	return true;

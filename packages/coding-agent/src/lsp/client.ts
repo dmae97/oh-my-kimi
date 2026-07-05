@@ -161,6 +161,10 @@ const CLIENT_CAPABILITIES = {
 				valueSet: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26],
 			},
 		},
+		didChangeWatchedFiles: {
+			dynamicRegistration: true,
+			relativePatternSupport: true,
+		},
 		fileOperations: {
 			dynamicRegistration: false,
 			willCreate: false,
@@ -175,6 +179,19 @@ const CLIENT_CAPABILITIES = {
 		snippetTextEdit: true,
 	},
 };
+
+/** LSP `FileChangeType` values for workspace/didChangeWatchedFiles notifications. */
+export enum FileChangeType {
+	Created = 1,
+	Changed = 2,
+	Deleted = 3,
+}
+
+/** Filesystem change authored by the harness and announced to active LSP clients. */
+export interface WatchedFileChange {
+	filePath: string;
+	type: FileChangeType;
+}
 
 // =============================================================================
 // LSP Message Protocol
@@ -942,6 +959,52 @@ export async function notifySaved(client: LspClient, filePath: string, signal?: 
 		signal,
 	);
 	client.lastActivity = Date.now();
+}
+
+function isPathInsideWorkspace(filePath: string, workspace: string): boolean {
+	const relative = path.relative(workspace, path.resolve(filePath));
+	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+/**
+ * Announce harness-authored filesystem changes to active LSP clients for `cwd`.
+ *
+ * This covers sibling files that are not open text documents, such as generated
+ * CSS modules or type files that another edited document imports immediately.
+ */
+export async function notifyWorkspaceWatchedFiles(
+	cwd: string,
+	changes: readonly WatchedFileChange[],
+	signal?: AbortSignal,
+): Promise<void> {
+	throwIfAborted(signal);
+	if (changes.length === 0) return;
+
+	const workspace = path.resolve(cwd);
+	const activeClients = Array.from(clients.values()).filter(
+		client => client.status === "ready" && path.resolve(client.cwd) === workspace,
+	);
+	if (activeClients.length === 0) return;
+
+	const results = await Promise.allSettled(
+		activeClients.map(async client => {
+			const clientChanges = changes
+				.filter(change => isPathInsideWorkspace(change.filePath, workspace))
+				.map(change => {
+					const uri = fileToUri(change.filePath);
+					client.diagnostics.delete(uri);
+					return { uri, type: change.type };
+				});
+			if (clientChanges.length === 0) return;
+			await sendNotification(client, "workspace/didChangeWatchedFiles", { changes: clientChanges }, signal);
+		}),
+	);
+	throwIfAborted(signal);
+	for (const result of results) {
+		if (result.status === "rejected") {
+			logger.debug("LSP watched-files notification failed", { cwd, error: String(result.reason) });
+		}
+	}
 }
 
 /**

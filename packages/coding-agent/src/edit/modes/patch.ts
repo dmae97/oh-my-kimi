@@ -16,6 +16,7 @@ import {
 	type WritethroughCallback,
 	type WritethroughDeferredHandle,
 } from "../../lsp";
+import { FileChangeType, notifyWorkspaceWatchedFiles } from "../../lsp/client";
 import type { ToolSession } from "../../tools";
 import { routeWriteThroughBridge } from "../../tools/acp-bridge";
 import { assertEditableFile } from "../../tools/auto-generated-guard";
@@ -1732,7 +1733,7 @@ class LspFileSystem implements FileSystem {
 		const finalContent = await serializeEditFileText(path, path, content);
 
 		// Route through ACP bridge when available; skips internal artifacts and local:// paths.
-		if (await routeWriteThroughBridge(this.session, this.requestedPath, path, finalContent)) {
+		if (await routeWriteThroughBridge(this.session, this.requestedPath, path, finalContent, this.signal)) {
 			return;
 		}
 
@@ -1753,6 +1754,13 @@ class LspFileSystem implements FileSystem {
 
 	async delete(path: string): Promise<void> {
 		await this.#getFile(path).unlink();
+		if (this.session.enableLsp ?? true) {
+			await notifyWorkspaceWatchedFiles(
+				this.session.cwd,
+				[{ filePath: path, type: FileChangeType.Deleted }],
+				this.signal,
+			);
+		}
 	}
 
 	async mkdir(path: string): Promise<void> {

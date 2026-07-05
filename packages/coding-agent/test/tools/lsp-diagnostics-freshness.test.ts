@@ -112,6 +112,71 @@ describe("LSP diagnostics freshness", () => {
 		tempDir.removeSync();
 	});
 
+	it("announces watched-file creates even when no server owns the file type", async () => {
+		const filePath = path.join(tempDir.path(), "probe.module.scss");
+		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined });
+		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([]);
+		const notify = vi.spyOn(lspClient, "notifyWorkspaceWatchedFiles").mockResolvedValue();
+
+		const writethrough = createLspWritethrough(tempDir.path(), {
+			enableFormat: false,
+			enableDiagnostics: false,
+		});
+		const result = await writethrough(filePath, ".section {}\n");
+
+		expect(result).toBeUndefined();
+		expect(await Bun.file(filePath).text()).toBe(".section {}\n");
+		expect(notify).toHaveBeenCalledWith(
+			tempDir.path(),
+			[{ filePath, type: lspClient.FileChangeType.Created }],
+			undefined,
+		);
+	});
+
+	it("announces batched sibling writes before syncing the diagnostic target", async () => {
+		const stylesPath = path.join(tempDir.path(), "probe.module.scss");
+		const tsPath = path.join(tempDir.path(), "probe.tsx");
+		const tsUri = fileToUri(tsPath);
+		const client = createClient(tempDir.path(), TEST_SERVER);
+		const events: string[] = [];
+		const notifySignals: Array<AbortSignal | undefined> = [];
+
+		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined });
+		vi.spyOn(lspConfig, "getServersForFile").mockImplementation((_config, filePath) =>
+			filePath.endsWith(".module.scss") ? [] : [["test-lsp", TEST_SERVER]],
+		);
+		vi.spyOn(lspClient, "getOrCreateClient").mockResolvedValue(client);
+		vi.spyOn(lspClient, "notifyWorkspaceWatchedFiles").mockImplementation(async (_cwd, changes, notifySignal) => {
+			notifySignals.push(notifySignal);
+			for (const change of changes) {
+				events.push(`watched:${path.basename(change.filePath)}:${change.type}`);
+			}
+		});
+		vi.spyOn(lspClient, "syncContent").mockImplementation(async (mockClient, syncedFilePath) => {
+			events.push(`sync:${path.basename(syncedFilePath)}`);
+			const syncedUri = fileToUri(syncedFilePath);
+			mockClient.openFiles.set(syncedUri, { version: 1, languageId: "typescript" });
+		});
+		vi.spyOn(lspClient, "notifySaved").mockImplementation(async mockClient => {
+			publishDiagnostics(mockClient, tsUri, [], mockClient.openFiles.get(tsUri)?.version ?? null);
+		});
+
+		const writethrough = createLspWritethrough(tempDir.path(), {
+			enableFormat: false,
+			enableDiagnostics: true,
+		});
+		await writethrough(stylesPath, ".section {}\n", undefined, undefined, { id: "batch", flush: false });
+		const result = await writethrough(tsPath, 'import styles from "./probe.module.scss";\n', undefined, undefined, {
+			id: "batch",
+			flush: true,
+		});
+
+		expect(result?.summary).toBe("no issues");
+		expect(events[0]).toBe(`watched:probe.module.scss:${lspClient.FileChangeType.Created}`);
+		expect(notifySignals.some(signal => signal instanceof AbortSignal)).toBe(true);
+		expect(events).toContain("sync:probe.tsx");
+	});
+
 	it("suppresses stale write diagnostics until the matching document version arrives", async () => {
 		const filePath = path.join(tempDir.path(), "example.ts");
 		const uri = fileToUri(filePath);
