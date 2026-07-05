@@ -22,6 +22,7 @@ import {
 import { parseGitHubCopilotApiKey } from "@oh-my-pi/pi-catalog/wire/github-copilot";
 import {
 	$env,
+	classifyJsonPrefix,
 	extractHttpStatusFromError,
 	logger,
 	parseStreamingJson,
@@ -1902,13 +1903,28 @@ export async function processResponsesStream<TApi extends Api>(
 		event: { output_index?: number; item_id?: string; delta?: unknown },
 		candidate: StreamingItem,
 	): boolean => {
-		return (
-			!hasOpenItemKey(event) &&
-			startsJsonObjectDelta(event.delta) &&
-			candidate.item.type === "function_call" &&
-			candidate.block.type === "toolCall" &&
-			candidate.block[kStreamingPartialJson].trim().length > 0
-		);
+		const delta = event.delta;
+		if (
+			hasOpenItemKey(event) ||
+			typeof delta !== "string" ||
+			!startsJsonObjectDelta(delta) ||
+			candidate.item.type !== "function_call" ||
+			candidate.block.type !== "toolCall"
+		) {
+			return false;
+		}
+		const partial = candidate.block[kStreamingPartialJson];
+		if (partial.trim().length === 0) return false;
+		// A `{`-starting identifierless delta is ambiguous: the opening of a new
+		// sibling call, or continuation bytes inside the candidate's own argument
+		// JSON (`{"command":"echo ` + `{1..3}"}`). Advance only when the candidate
+		// cannot absorb the delta: its buffer is already one complete JSON value,
+		// already unsalvageable (lossy hosts abandon buffers mid-string, leaving
+		// raw control characters strict JSON forbids), or the concatenation would
+		// break it. Otherwise the delta is a legal continuation and must stay.
+		const state = classifyJsonPrefix(partial);
+		if (state !== "prefix") return true;
+		return classifyJsonPrefix(partial + delta) === "invalid";
 	};
 	const hasLaterUnfinishedFunctionCall = (start: number): boolean => {
 		for (let index = start + 1; index < openItemsInOrder.length; index++) {
