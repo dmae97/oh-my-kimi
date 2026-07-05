@@ -1407,23 +1407,26 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 			});
 		} else if (msg.role === "assistant") {
 			const assistantMsg = msg as AssistantMessage;
+			// Providers replay stale native items even when the current request has
+			// disabled native replay (cold session state, filter policy). Consult
+			// the payload sanitizer directly so hidden-empty turns are recognized
+			// on both the warm and cold paths.
 			const providerPayload =
-				options.nativeHistory?.replay &&
-				assistantMsg.api === options.model.api &&
-				assistantMsg.model === options.model.id
+				assistantMsg.api === options.model.api && assistantMsg.model === options.model.id
 					? getOpenAIResponsesHistoryPayload(
 							assistantMsg.providerPayload,
 							options.model.provider,
 							assistantMsg.provider,
 						)
 					: undefined;
+			const nativeReplayEnabled = options.nativeHistory?.replay === true;
 			const historyItems = providerPayload?.items;
 			let suppressHiddenEmptyFallback = false;
 			if (historyItems) {
 				const sanitizedHistoryItems = sanitizeOpenAIResponsesAssistantHistoryItemsForReplay(
 					filterReasoning(historyItems),
 				);
-				if (sanitizedHistoryItems) {
+				if (nativeReplayEnabled && sanitizedHistoryItems) {
 					if (providerPayload?.dt) {
 						messages.push(...sanitizedHistoryItems);
 					} else {
@@ -1434,7 +1437,7 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 					msgIndex++;
 					continue;
 				}
-				suppressHiddenEmptyFallback = true;
+				if (!sanitizedHistoryItems) suppressHiddenEmptyFallback = true;
 			}
 
 			const convertedOutputItems = convertResponsesAssistantMessage(
