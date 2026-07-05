@@ -100,7 +100,7 @@ describe("transformMessages cross-provider thinking demotion → canonical diale
 		expect(first?.type).toBe("text");
 		// Demoted reasoning is wrapped in Gemini's canonical thinking fence.
 		expect(first && first.type === "text" ? first.text : "").toBe(
-			`${getDialectDefinition("gemini").renderThinking(REASONING)}\n`,
+			getDialectDefinition("gemini").renderThinking(REASONING),
 		);
 		expect(first && first.type === "text" ? first.text : "").toContain("```thinking");
 		// The original reply text survives as its own block, after the fence.
@@ -120,11 +120,11 @@ describe("transformMessages cross-provider thinking demotion → canonical diale
 		const first = assistant.content[0];
 		expect(first?.type).toBe("text");
 		const text = first && first.type === "text" ? first.text : "";
-		expect(text).toBe(`${renderDemotedThinking("gpt-5", REASONING)}\n`);
+		expect(text).toBe(renderDemotedThinking("gpt-5", REASONING));
 		// No harmony chat-template control tokens leaked, and the unsafe native
 		// renderThinking output was explicitly NOT used.
 		expect(text).not.toContain("<|");
-		expect(text).not.toBe(`${getDialectDefinition("harmony").renderThinking(REASONING)}\n`);
+		expect(text).not.toBe(getDialectDefinition("harmony").renderThinking(REASONING));
 		// Reasoning is still preserved inside the neutral block.
 		expect(text).toContain("<think>");
 		expect(text).toContain(REASONING);
@@ -163,8 +163,8 @@ describe("transformMessages cross-provider thinking demotion → canonical diale
 			const first = assistant.content[0];
 			expect(first?.type).toBe("text");
 			const text = first && first.type === "text" ? first.text : "";
-			expect(text).toBe(`${REASONING}\n`);
-			expect(text).toBe(`${renderDemotedThinking(target.id, REASONING)}\n`);
+			expect(text).toBe(REASONING);
+			expect(text).toBe(renderDemotedThinking(target.id, REASONING));
 			expect(text).not.toContain("<thinking>");
 			expect(text).not.toContain("</thinking>");
 			expect(text).not.toContain("<think>");
@@ -175,6 +175,50 @@ describe("transformMessages cross-provider thinking demotion → canonical diale
 			expect(reply?.type).toBe("text");
 			expect(reply && reply.type === "text" ? reply.text : "").toBe("Checking the forecast.");
 		}
+	});
+
+	it("trims a demoted block that becomes final after following empty thinking blocks are dropped", () => {
+		const claude = makeModel("anthropic-messages", "anthropic", "claude-sonnet-4-6");
+		const turn: AssistantMessage = {
+			...geminiThinkingTurn(),
+			content: [
+				{ type: "thinking", thinking: `${REASONING}\n`, thinkingSignature: "google-sig" },
+				{ type: "thinking", thinking: " \n\t", thinkingSignature: "" },
+			],
+		};
+
+		const assistant = transformedAssistant([user("weather in Paris?"), turn], claude);
+
+		expect(assistant.content).toHaveLength(1);
+		const first = assistant.content[0];
+		expect(first?.type).toBe("text");
+		const text = first && first.type === "text" ? first.text : "";
+		expect(text).toBe(REASONING);
+		expect(/\s$/.test(text)).toBe(false);
+	});
+
+	it("trimEnds trailing whitespace already present in bare Anthropic-dialect demoted thinking", () => {
+		const claude = makeModel("anthropic-messages", "anthropic", "claude-sonnet-4-6");
+		const reasoningWithTrailingWhitespace = "The plan is complete.\n \t";
+		const turn: AssistantMessage = {
+			...geminiThinkingTurn(),
+			content: [
+				{
+					type: "thinking",
+					thinking: reasoningWithTrailingWhitespace,
+					thinkingSignature: "google-sig",
+				},
+			],
+		};
+
+		const assistant = transformedAssistant([user("weather in Paris?"), turn], claude);
+
+		expect(assistant.content).toHaveLength(1);
+		const first = assistant.content[0];
+		expect(first?.type).toBe("text");
+		const text = first && first.type === "text" ? first.text : "";
+		expect(text).toBe("The plan is complete.");
+		expect(/\s$/.test(text)).toBe(false);
 	});
 
 	it("keeps the native thinking block for a same-provider/same-model continuation", () => {

@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Fixed formatting of demoted reasoning blocks to prevent accidental concatenation with prose
+- Fixed terminal whitespace issues in assistant messages that caused rejections by Anthropic API
+
 - Fixed Cursor provider handling of empty-pattern grep arguments to return a clear, actionable error instead of a generic error and a broken TUI rendering.
 - Fixed Google Cloud Code Assist API (Antigravity) and Gemini CLI to immediately bubble up underlying API errors (such as safety or recitation blocks) instead of incorrectly retrying and hiding them behind a generic empty-response message.
 - Fixed GitHub Copilot OpenAI Responses replay to prevent empty reasoning-only assistant turns from being persisted in history and poisoning subsequent requests.

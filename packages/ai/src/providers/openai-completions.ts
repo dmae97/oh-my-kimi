@@ -29,7 +29,7 @@ import type {
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
-import { kStreamingLastParseLen } from "../utils/block-symbols";
+import { isDemotedThinking, kStreamingLastParseLen } from "../utils/block-symbols";
 import { hasVisibleAssistantContent, withEmptyCompletionRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import type { RawHttpRequestDump } from "../utils/http-inspector";
@@ -1804,14 +1804,20 @@ export function convertMessages(
 				// Always send assistant content as a plain string. Some OpenAI-compatible
 				// backends mirror array-of-text-block payloads back to the model literally,
 				// causing recursive nested content in subsequent turns.
-				// Join without a separator so ordinary adjacent text blocks (bridge
-				// stitching, imported transcripts, streaming chunks) preserve their
-				// original byte sequence. The cross-model demotion path in
-				// transform-messages already appends its own paragraph terminator to
-				// the demoted-thinking text block content, so a bare Anthropic-dialect
-				// reasoning block still separates cleanly from the following visible
-				// answer without corrupting unrelated multi-block content.
-				assistantMsg.content = nonEmptyTextBlocks.map(b => b.text.toWellFormed()).join("");
+				// Join ordinary adjacent text blocks with no separator so bridge
+				// stitching, imported transcripts, and streaming chunks keep their
+				// original byte sequence. Demoted-thinking blocks (kDemotedThinking,
+				// synthesized by transformMessages) are the one exception: bare
+				// Anthropic-dialect reasoning would otherwise glue onto the first word
+				// of the visible answer. Insert a paragraph break after them — only
+				// when another block actually follows, so a trailing demoted block
+				// never ships trailing whitespace.
+				assistantMsg.content = nonEmptyTextBlocks
+					.map((b, i) => {
+						const text = b.text.toWellFormed();
+						return isDemotedThinking(b) && i < nonEmptyTextBlocks.length - 1 ? `${text}\n` : text;
+					})
+					.join("");
 			}
 
 			// Handle thinking blocks

@@ -1,5 +1,6 @@
 import { renderDemotedThinking } from "../dialect/demotion";
 import type { Api, AssistantMessage, Message, Model, ToolCall, ToolResultMessage, UserMessage } from "../types";
+import { isDemotedThinking, kDemotedThinking } from "../utils/block-symbols";
 
 const enum ToolCallStatus {
 	/** A tool result has already been emitted for this tool call; later duplicates must be skipped. */
@@ -503,18 +504,21 @@ export function transformMessages<TApi extends Api>(
 					// TARGET model's own canonical thinking-block dialect (e.g. a ```thinking
 					// fence for Gemini) so it reads as reasoning rather than bare prose the
 					// model might mimic.
-					// Self-terminate the demoted text with a paragraph break so the
+					// Mark the demoted block (symbol-keyed, never serialized) instead of
+					// baking a separator into its text: the openai-completions flatten —
+					// the one consumer that joins adjacent text blocks into a single
+					// string — inserts a paragraph break after marked blocks, so the
 					// bare Anthropic-dialect output (or any dialect's wrapped output
-					// whose closing tag isn't a natural word boundary) can't collide
-					// with the following visible-text block when a downstream consumer
-					// flattens adjacent text blocks (openai-completions convert). The
-					// terminator lives on the demoted block itself, so it targets the
-					// demoted-thinking boundary only — ordinary adjacent text blocks
-					// stitched from streaming / bridges / imported transcripts stay
-					// byte-identical on flatten.
+					// whose closing tag isn't a natural word boundary) can't glue onto
+					// the following visible-text block, while ordinary adjacent text
+					// blocks stitched from streaming / bridges / imported transcripts
+					// stay byte-identical. A separator baked into the block text would
+					// leak to non-flattening targets: Anthropic/Bedrock reject a
+					// terminal assistant message whose text ends with whitespace.
 					return {
 						type: "text" as const,
-						text: `${renderDemotedThinking(model.id, sanitized.thinking)}\n`,
+						text: renderDemotedThinking(model.id, sanitized.thinking),
+						[kDemotedThinking]: true,
 					};
 				}
 
@@ -590,6 +594,18 @@ export function transformMessages<TApi extends Api>(
 
 				return block;
 			});
+
+			// A demoted-thinking block that survived as the message's final block can
+			// still end with the thinking text's own trailing whitespace (bare
+			// Anthropic-dialect demotion copies it verbatim), and Anthropic rejects a
+			// terminal assistant message whose text ends with trailing whitespace
+			// ("final assistant content cannot end with trailing whitespace").
+			// trimEnd() is safe: demoted text is synthesized context, never
+			// byte-exact replay material.
+			const finalBlock = transformedContent[transformedContent.length - 1];
+			if (finalBlock?.type === "text" && isDemotedThinking(finalBlock)) {
+				transformedContent[transformedContent.length - 1] = { ...finalBlock, text: finalBlock.text.trimEnd() };
+			}
 
 			return {
 				...assistantMsg,

@@ -33,11 +33,27 @@ describe("classifyJsonPrefix strict streaming classification", () => {
 		const cases: Array<{ name: string; input: string; expected: "complete" | "prefix" | "invalid" }> = [
 			{ name: "empty buffer waits for a value", input: "", expected: "prefix" },
 			{ name: "whitespace-only buffer waits for a value", input: " \t\n\r", expected: "prefix" },
-			{ name: "object with an unfinished string value is still extendable", input: '{"command":"echo ', expected: "prefix" },
-			{ name: "complete object with brace text inside a string is complete", input: '{"command":"echo {1..3}"}', expected: "complete" },
-			{ name: "complete nested arrays and objects are complete", input: '{"a":[1,{"b":true},null]}', expected: "complete" },
+			{
+				name: "object with an unfinished string value is still extendable",
+				input: '{"command":"echo ',
+				expected: "prefix",
+			},
+			{
+				name: "complete object with brace text inside a string is complete",
+				input: '{"command":"echo {1..3}"}',
+				expected: "complete",
+			},
+			{
+				name: "complete nested arrays and objects are complete",
+				input: '{"a":[1,{"b":true},null]}',
+				expected: "complete",
+			},
 			{ name: "nested array value can stop mid-object", input: '{"a":[1,{"b":', expected: "prefix" },
-			{ name: "raw control character inside a string is invalid", input: '{"command":"echo hello\n', expected: "invalid" },
+			{
+				name: "raw control character inside a string is invalid",
+				input: '{"command":"echo hello\n',
+				expected: "invalid",
+			},
 			{ name: "second top-level value after a complete object is invalid", input: '{"a":1}{', expected: "invalid" },
 			{ name: "brace expansion syntax is not JSON object grammar", input: "{1..3}", expected: "invalid" },
 			{ name: "escape sequence can split after the backslash", input: '{"a":"\\', expected: "prefix" },
