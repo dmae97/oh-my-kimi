@@ -684,9 +684,10 @@ const streamOpenAICompletionsOnce = (
 						body: params,
 						signal: requestSignal,
 						fetch: options?.fetch,
-						// With a first-event watchdog armed, transport retries must
-						// not silently extend the deadline (old SDK `maxRetries: 0`).
-						maxAttempts: requestTimeoutMs === undefined ? undefined : 1,
+						// Transient 408/429/5xx get Retry-After-aware transport retries.
+						// The first-event watchdog above aborts `requestSignal`, which
+						// bounds every attempt and backoff sleep — retries cannot
+						// extend the deadline.
 						onSseEvent: rawSseObserver,
 					});
 					await notifyProviderResponse(options, response, model, requestId);

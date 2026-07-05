@@ -487,9 +487,9 @@ const streamOpenAIResponsesOnce = (
 								body: requestParams,
 								signal: requestSignal,
 								fetch: options?.fetch,
-								// With a first-event watchdog armed, transport retries must
-								// not silently extend the caller's deadline.
-								maxAttempts: requestTimeoutMs !== undefined ? 1 : undefined,
+								// Transient 408/429/5xx get Retry-After-aware transport
+								// retries; the first-event watchdog aborts `requestSignal`,
+								// so retries cannot extend the caller's deadline.
 								onSseEvent: rawSseObserver,
 							});
 							// Disarm the first-event watchdog as soon as headers arrive — a slow

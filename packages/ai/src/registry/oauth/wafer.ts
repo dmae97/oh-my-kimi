@@ -7,7 +7,7 @@
  */
 import { createApiKeyLogin } from "../api-key-login";
 
-const WAFER_AUTH_URL = "https://wafer.ai/dashboard";
+const WAFER_AUTH_URL = "https://app.wafer.ai/usage";
 const WAFER_MODELS_URL = "https://pass.wafer.ai/v1/models";
 
 export const loginWaferServerless = createApiKeyLogin({

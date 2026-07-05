@@ -24,8 +24,11 @@ import type { FetchImpl } from "../types";
 import type { CapturedHttpErrorResponse } from "./http-inspector";
 
 /**
- * Total attempts when the caller has no first-event deadline armed. The
- * removed SDK clients ran `maxRetries: 5`, i.e. 6 requests.
+ * Total attempts (initial + retries). Parity with the removed SDK clients'
+ * `maxRetries: 5`, i.e. 6 requests. Callers arming a first-event watchdog
+ * stay bounded: the watchdog aborts the request `signal`, which
+ * `fetchWithRetry` races on every attempt and every backoff sleep, so
+ * transient 408/429/5xx retries can never extend the caller's deadline.
  */
 const DEFAULT_MAX_ATTEMPTS = 6;
 
@@ -39,12 +42,6 @@ export interface OpenAIStreamRequestInit {
 	body: unknown;
 	signal: AbortSignal;
 	fetch?: FetchImpl;
-	/**
-	 * Total attempts (initial + retries). Defaults to {@link DEFAULT_MAX_ATTEMPTS}.
-	 * Pass `1` when a first-event watchdog is armed so retries cannot silently
-	 * extend the caller's deadline (mirrors the old `maxRetries: 0` hint).
-	 */
-	maxAttempts?: number;
 	/** Raw wire-frame observer (`onSseEvent` debug pipeline). */
 	onSseEvent?: SseEventObserver;
 }
@@ -71,7 +68,7 @@ export async function postOpenAIStream<TEvent>(init: OpenAIStreamRequestInit): P
 		body: JSON.stringify(init.body),
 		signal: init.signal,
 		fetch: init.fetch,
-		maxAttempts: init.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
+		maxAttempts: DEFAULT_MAX_ATTEMPTS,
 		// Bun's native fetch enforces a hard ~300s pre-response timeout (issue #2422).
 		// Cold large-context streams legitimately exceed it; the caller's
 		// `firstEventTimeoutMs`/`AbortSignal` already govern stuck requests.
