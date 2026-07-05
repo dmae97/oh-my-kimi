@@ -110,7 +110,9 @@ describe("fixDtsFile", () => {
 		});
 		const count = await fixDtsFile(path.join(root, "augment.d.ts"));
 		expect(count).toBe(1);
-		expect(await read(root, "augment.d.ts")).toBe('declare module "./types.js" {\n\tinterface CustomMessages {}\n}\n');
+		expect(await read(root, "augment.d.ts")).toBe(
+			'declare module "./types.js" {\n\tinterface CustomMessages {}\n}\n',
+		);
 	});
 
 	it("leaves a file of bare and already-suffixed specifiers byte-for-byte unchanged", async () => {
