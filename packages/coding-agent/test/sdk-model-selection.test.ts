@@ -206,9 +206,45 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		}
 	});
 
+	test("resolves deferred role-alias modelPattern after extension providers register", async () => {
+		const settings = Settings.isolated();
+		settings.setModelRole("smol", "runtime-provider/runtime-model");
+
+		const { session, modelFallbackMessage } = await createAgentSession({
+			...(await buildSessionOptions("pi/smol")),
+			settings,
+		});
+
+		try {
+			expect(session.model?.provider).toBe("runtime-provider");
+			expect(session.model?.id).toBe("runtime-model");
+			expect(modelFallbackMessage).toBeUndefined();
+		} finally {
+			await session.dispose();
+		}
+	});
+
 	test("installs fallback chain for remaining deferred subagent modelPattern candidates", async () => {
 		const { session } = await createAgentSession({
 			...(await buildSessionOptions(["runtime-provider/runtime-model", "runtime-provider/runtime-reasoning-model"])),
+			modelPatternFallbackRole: "subagent:deferred",
+		});
+
+		try {
+			expect(session.model?.provider).toBe("runtime-provider");
+			expect(session.model?.id).toBe("runtime-model");
+			expect(session.settings.getModelRole("subagent:deferred")).toBe("runtime-provider/runtime-model");
+			expect(session.settings.get("retry.fallbackChains")["subagent:deferred"]).toEqual([
+				"runtime-provider/runtime-reasoning-model",
+			]);
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("splits deferred comma-delimited modelPattern and installs fallback chain", async () => {
+		const { session } = await createAgentSession({
+			...(await buildSessionOptions("runtime-provider/runtime-model,runtime-provider/runtime-reasoning-model")),
 			modelPatternFallbackRole: "subagent:deferred",
 		});
 
