@@ -13,7 +13,7 @@ Anything below → `eval` cell, not bash:
 - Pipelines with more than two stages, or stages that need control flow or quote/JSON escaping
 - Multiline commands, `&&`-chains mixing control flow
 - Quote/JSON escaping that fights the shell
-- GNU grep BRE extensions are not guaranteed: `\|` / `\b` may not mean alternation/word-boundary. Use `grep -E 'json|tool'`, the built-in `grep` tool with `pattern: "json|tool"`, or `eval` for exact text processing.
+- GNU grep BRE extensions are not guaranteed in the embedded shell: use `grep -E 'json|tool'` for alternation instead of `grep 'json\|tool'`; use the built-in `grep` tool with `pattern: "json|tool"` (Rust regex, so `\bword\b` works there), or `eval` for exact text processing.
 
 <instruction>
 - `cwd` sets the working dir, not `cd dir && …`

@@ -19,7 +19,7 @@ function makeSession(cwd: string): ToolSession {
 			"bash.autoBackground.enabled": false,
 			"bash.autoBackground.thresholdMs": 60_000,
 			"bashInterceptor.enabled": false,
-			"bash.stripTrailingHeadTail": false,
+			"bash.stripTrailingHeadTail": true,
 			"astGrep.enabled": true,
 			"astEdit.enabled": true,
 			"grep.enabled": true,
@@ -68,27 +68,30 @@ describe("tool regex guidance", () => {
 		expect(description).toContain("Rust");
 		expect(description).toContain("RE2");
 		expectAlternationGuidance(description, "foo|bar", String.raw`foo\|bar`);
+		expect(description).toContain(String.raw`\bword\b`);
 	});
 
-	it("advertises grep -E for shell pipelines that need alternation", () => {
+	it("advertises grep -E for shell commands that need alternation", () => {
 		const description = new BashTool(makeSession("/tmp")).description;
 
 		expect(description).toContain("grep -E 'json|tool'");
 		expectEscapedBreWarning(description, String.raw`\|`);
 	});
 
-	it("runs an extended-grep pipeline through BashTool and returns the first two matching lines", async () => {
+	it("runs an extended-grep command through BashTool", async () => {
 		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-bash-grep-guidance-"));
 		tempDirs.push(cwd);
 		await Bun.write(path.join(cwd, "fixture.txt"), "json contract\ntool description\nignored line\njson later\n");
 
-		const result = await new BashTool(makeSession(cwd)).execute("grep-e-pipeline", {
-			command: "grep -E 'json|tool' fixture.txt | head -n2",
+		const result = await new BashTool(makeSession(cwd)).execute("grep-e-command", {
+			command: "grep -E 'json|tool' fixture.txt",
 		});
 
 		expect(result.isError).toBeUndefined();
-		const outputLines = textOf(result).split("\n");
-		expect(outputLines.slice(0, 2)).toEqual(["json contract", "tool description"]);
-		expect(outputLines).not.toContain("json later");
+		const output = textOf(result);
+		expect(output).toContain("json contract");
+		expect(output).toContain("tool description");
+		expect(output).toContain("json later");
+		expect(output).not.toContain("ignored line");
 	});
 });

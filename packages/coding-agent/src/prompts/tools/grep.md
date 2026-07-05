@@ -1,7 +1,7 @@
 Greps files using regex.
 
 <instruction>
-- Rust regex (RE2-style): alternation is `foo|bar`; GNU BRE escapes like `foo\|bar` / `\b` are NOT special. Use line anchors or post-filters instead of lookaround/backreferences.
+- Rust regex (RE2-style): alternation is `foo|bar`, not GNU BRE-style `foo\|bar`; Rust word boundaries like `\bword\b` are supported. Use line anchors or post-filters instead of lookaround/backreferences.
 - `path`: SHOULD scope to a known path (e.g. `src`); pass several as a delimited list (`src; tests`).
 - Cross-line patterns detected from literal `\n` or `\\n` in `pattern`.
 </instruction>
