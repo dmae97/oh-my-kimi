@@ -32,6 +32,7 @@
 ### Fixed
 
 - Fixed tool-call validation to strip stray trailing line terminators on schema-matching enum values and on well-known identifier fields (`path`, `paths`, `file`, `file_path`, `url`, `uri`, `title`, `label`) before dispatch, keeping ordinary trailing spaces and content-carrying fields (`content`, `input`, `code`, `command`, etc.) intact ([#4461](https://github.com/can1357/oh-my-pi/issues/4461)).
+- Fixed OpenAI Responses/Codex orchestration token accounting so provider-side orchestration tokens stay billable and included in totals without appearing as ordinary uncached prompt input. ([#4469](https://github.com/can1357/oh-my-pi/issues/4469))
 
 ## [16.3.4] - 2026-07-03
 

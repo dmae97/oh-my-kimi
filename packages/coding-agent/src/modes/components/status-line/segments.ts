@@ -362,10 +362,11 @@ const tokenTotalSegment: StatusLineSegment = {
 	id: "token_total",
 	render(ctx) {
 		// Excludes cacheRead: that field re-reads the full cached context every
-		// turn, making the cumulative sum N×context_size. The dedicated cache_read
-		// segment handles cache monitoring; the cost segment handles billing.
-		const { input, output, cacheWrite } = ctx.usageStats;
-		const total = input + output + cacheWrite;
+		// turn, making the cumulative sum N×context_size. Orchestration cache read
+		// follows the same rule; orchestration input/output remain in the total so
+		// provider-side service work is preserved without labeling it prompt input.
+		const { input, output, cacheWrite, orchestrationInput, orchestrationOutput } = ctx.usageStats;
+		const total = input + output + cacheWrite + orchestrationInput + orchestrationOutput;
 		if (!total) return { content: "", visible: false };
 
 		const content = withIcon(theme.icon.tokens, formatNumber(total));

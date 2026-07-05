@@ -93,16 +93,25 @@ export type Provider = string;
 export type ThinkingBudgets = { [key in Effort]?: number };
 
 export interface Usage {
-	/** Non-cached input tokens (matches the bucket the provider bills as new input). */
+	/** Non-cached conversation input tokens (matches the bucket the provider bills as new input). */
 	input: number;
-	/** Total output tokens for the turn, including thinking, assistant text, and tool-call argument tokens. */
+	/** Total conversation output tokens for the turn, including thinking, assistant text, and tool-call argument tokens. */
 	output: number;
-	/** Tokens read from the prompt cache. */
+	/** Conversation tokens read from the prompt cache. */
 	cacheRead: number;
-	/** Tokens written to the prompt cache (cache creation). */
+	/** Conversation tokens written to the prompt cache (cache creation). */
 	cacheWrite: number;
-	/** Sum of input + output + cacheRead + cacheWrite. */
+	/** Sum of input + output + cacheRead + cacheWrite plus provider-side orchestration tokens when reported. */
 	totalTokens: number;
+	/** Provider-side orchestration tokens, billed but not part of the conversation prompt/cache buckets. */
+	orchestration?: {
+		/** Non-cached orchestration input tokens. */
+		input?: number;
+		/** Orchestration tokens read from provider-side cache. */
+		cacheRead?: number;
+		/** Orchestration output tokens. */
+		output?: number;
+	};
 	/** Copilot premium-request counter, when applicable. */
 	premiumRequests?: number;
 	/**

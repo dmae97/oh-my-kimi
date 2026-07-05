@@ -150,12 +150,15 @@ export async function buildUsageReportText(runtime: SlashCommandRuntime): Promis
 	}
 
 	const stats = runtime.session.sessionManager.getUsageStatistics();
+	const orchestrationTokens = stats.orchestrationInput + stats.orchestrationOutput + stats.orchestrationCacheRead;
 	return [
 		"Usage",
 		`Input tokens: ${stats.input}`,
 		`Output tokens: ${stats.output}`,
 		`Cache read tokens: ${stats.cacheRead}`,
 		`Cache write tokens: ${stats.cacheWrite}`,
+		`Total tokens: ${stats.totalTokens}`,
+		...(orchestrationTokens > 0 ? [`Orchestration tokens: ${orchestrationTokens}`] : []),
 		`Premium requests: ${stats.premiumRequests}`,
 		`Cost: $${stats.cost.toFixed(6)}`,
 	].join("\n");

@@ -115,7 +115,18 @@ function resolveBreadcrumbToInteractiveRoot(sessionFile: string): string {
 }
 
 function emptyUsageStatistics(): UsageStatistics {
-	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, premiumRequests: 0, cost: 0 };
+	return {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 0,
+		orchestrationInput: 0,
+		orchestrationOutput: 0,
+		orchestrationCacheRead: 0,
+		premiumRequests: 0,
+		cost: 0,
+	};
 }
 
 function taskUsageFrom(details: unknown): Usage | undefined {
@@ -138,6 +149,10 @@ function addUsage(target: UsageStatistics, usage: Usage | undefined): void {
 	target.output += usage.output;
 	target.cacheRead += usage.cacheRead;
 	target.cacheWrite += usage.cacheWrite;
+	target.totalTokens += usage.totalTokens;
+	target.orchestrationInput += usage.orchestration?.input ?? 0;
+	target.orchestrationOutput += usage.orchestration?.output ?? 0;
+	target.orchestrationCacheRead += usage.orchestration?.cacheRead ?? 0;
 	target.premiumRequests += usage.premiumRequests ?? 0;
 	target.cost += usage.cost.total;
 }

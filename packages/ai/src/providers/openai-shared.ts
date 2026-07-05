@@ -50,6 +50,7 @@ import {
 	type Tool,
 	type ToolCall,
 	type ToolResultMessage,
+	type Usage,
 } from "../types";
 import {
 	getOpenAIResponsesHistoryItems,
@@ -343,6 +344,7 @@ export interface OpenAIUsageAccounting {
 	cacheWrite: number;
 	totalTokens: number;
 	reasoningTokens?: number;
+	orchestration?: Usage["orchestration"];
 }
 
 export function calculateOpenAIUsageAccounting(accounting: OpenAIUsageAccountingInput): OpenAIUsageAccounting {
@@ -2536,19 +2538,42 @@ export function populateResponsesUsageFromResponse(
 	if (!usage) return;
 	const details = usage.input_tokens_details;
 	const outputDetails = usage.output_tokens_details;
+	const reportedInputTokens = usage.input_tokens ?? 0;
+	const reportedOutputTokens = usage.output_tokens ?? 0;
+	const reportedCachedTokens = details?.cached_tokens ?? usage.prompt_cache_hit_tokens ?? 0;
 	const orchestrationInputTokens = details?.orchestration_input_tokens ?? 0;
 	const orchestrationInputCachedTokens = details?.orchestration_input_cached_tokens ?? 0;
 	const orchestrationOutputTokens = outputDetails?.orchestration_output_tokens ?? 0;
+	const reportedTotalTokens = typeof usage.total_tokens === "number" ? usage.total_tokens : undefined;
+	const reportedPrimaryTokens = reportedInputTokens + reportedOutputTokens;
+	const reportedWithSeparateOrchestration =
+		reportedPrimaryTokens + orchestrationInputTokens + orchestrationOutputTokens;
+	const primaryIncludesOrchestration =
+		reportedTotalTokens !== undefined &&
+		orchestrationInputTokens + orchestrationOutputTokens > 0 &&
+		Math.abs(reportedTotalTokens - reportedPrimaryTokens) <=
+			Math.abs(reportedTotalTokens - reportedWithSeparateOrchestration);
+	const orchestrationInputCached = Math.min(orchestrationInputTokens, orchestrationInputCachedTokens);
+	const orchestrationInput = Math.max(0, orchestrationInputTokens - orchestrationInputCached);
 	const accounting = calculateOpenAIUsageAccounting({
-		promptTokens: (usage.input_tokens ?? 0) + orchestrationInputTokens,
-		outputTokens: (usage.output_tokens ?? 0) + orchestrationOutputTokens,
-		cachedTokens: (details?.cached_tokens ?? usage.prompt_cache_hit_tokens ?? 0) + orchestrationInputCachedTokens,
+		promptTokens: Math.max(0, reportedInputTokens - (primaryIncludesOrchestration ? orchestrationInputTokens : 0)),
+		outputTokens: Math.max(0, reportedOutputTokens - (primaryIncludesOrchestration ? orchestrationOutputTokens : 0)),
+		cachedTokens: Math.max(0, reportedCachedTokens - (primaryIncludesOrchestration ? orchestrationInputCached : 0)),
 		reasoningTokens: outputDetails?.reasoning_tokens ?? 0,
 		cacheWriteOpenRouter: details?.cache_write_tokens ?? undefined,
 		cacheWriteDeepSeek: usage.prompt_cache_miss_tokens ?? undefined,
 		hasDeepSeekCacheHitAndMiss:
 			usage.prompt_cache_hit_tokens !== undefined && usage.prompt_cache_miss_tokens !== undefined,
 	});
+	const orchestrationTotal = orchestrationInput + orchestrationInputCached + orchestrationOutputTokens;
+	if (orchestrationTotal > 0) {
+		accounting.orchestration = {
+			...(orchestrationInput > 0 ? { input: orchestrationInput } : {}),
+			...(orchestrationInputCached > 0 ? { cacheRead: orchestrationInputCached } : {}),
+			...(orchestrationOutputTokens > 0 ? { output: orchestrationOutputTokens } : {}),
+		};
+		accounting.totalTokens = reportedTotalTokens ?? accounting.totalTokens + orchestrationTotal;
+	}
 
 	// Wholesale replacement must not drop provider-annotated extras (Copilot
 	// premium-request accounting): the failed/cancelled paths throw right after
