@@ -229,20 +229,32 @@ export abstract class OAuthCallbackFlow {
 
 	/**
 	 * Build the `/launch` URL served by the callback server bound to `port`, or
-	 * `undefined` when the configured `callbackPath` (or a `redirectUri` whose
-	 * pathname resolves to {@link LAUNCH_PATH}) would collide with the launch
-	 * route. Kept short (~30 chars) so UIs can advertise it as a
+	 * `undefined` when it must not be advertised:
+	 * - the configured `callbackPath` (or a `redirectUri` whose pathname
+	 *   resolves to {@link LAUNCH_PATH}) would collide with the launch route;
+	 * - the flow's `redirectUri` never returns to this loopback server: fixed
+	 *   non-loopback hosts, or custom schemes like GitLab Duo's `vscode://`
+	 *   URI — which `new URL` parses without complaint, so a scheme/host check
+	 *   is required, not just the parse failure path. Advertising a localhost
+	 *   `/launch` target for such flows misrepresents the callback endpoint
+	 *   and hands remote users a URL that resolves nowhere.
+	 * Kept short (~30 chars) so UIs can advertise it as a
 	 * viewport-truncation-safe copy target for the full authorization URL.
 	 */
 	#launchUrlIfSafe(port: number): string | undefined {
 		if (this.callbackPath === LAUNCH_PATH) return undefined;
 		if (this.redirectUri) {
 			try {
-				if (new URL(this.redirectUri).pathname === LAUNCH_PATH) return undefined;
+				const parsed = new URL(this.redirectUri);
+				if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
+				if (parsed.hostname !== "localhost" && parsed.hostname !== "127.0.0.1" && parsed.hostname !== "[::1]") {
+					return undefined;
+				}
+				if (parsed.pathname === LAUNCH_PATH) return undefined;
 			} catch {
-				// A non-parseable redirectUri (e.g. `vscode://...` handled elsewhere)
-				// can't collide with an HTTP `/launch` route — fall through and
-				// advertise the launch URL against the loopback server.
+				// A redirectUri even WHATWG URL cannot parse certainly does not
+				// return to this server — never advertise a launch URL for it.
+				return undefined;
 			}
 		}
 		return `http://${this.callbackHostname}:${port}${LAUNCH_PATH}`;

@@ -182,4 +182,61 @@ describe("OAuthCallbackFlow /launch route", () => {
 		abort.abort("test done");
 		await login;
 	});
+
+	it("suppresses launchUrl for custom-scheme redirects that never return to the loopback server", async () => {
+		const abort = new AbortController();
+		const authFired = Promise.withResolvers<OAuthAuthInfo>();
+		const flow = new LaunchProbeFlow(
+			{
+				onAuth: info => {
+					authFired.resolve(info);
+				},
+				signal: abort.signal,
+			},
+			{
+				preferredPort: 0,
+				allowPortFallback: true,
+				// GitLab Duo shape: `new URL` parses this happily (pathname
+				// `/authentication`), so the guard must check scheme/host, not
+				// rely on a parse failure. A localhost /launch copy target for
+				// this flow would misrepresent the callback endpoint and point
+				// remote users at a URL that resolves nowhere.
+				redirectUri: "vscode://gitlab.gitlab-workflow/authentication",
+			},
+		);
+		const login = flow.login().catch(() => undefined) as Promise<void>;
+		const info = await authFired.promise;
+
+		expect(info.launchUrl).toBeUndefined();
+
+		abort.abort("test done");
+		await login;
+	});
+
+	it("suppresses launchUrl for fixed non-loopback HTTP redirects", async () => {
+		const abort = new AbortController();
+		const authFired = Promise.withResolvers<OAuthAuthInfo>();
+		const flow = new LaunchProbeFlow(
+			{
+				onAuth: info => {
+					authFired.resolve(info);
+				},
+				signal: abort.signal,
+			},
+			{
+				preferredPort: 0,
+				allowPortFallback: true,
+				// The provider redirects to a hosted endpoint; this machine's
+				// callback server never sees the redirect, so no launch URL.
+				redirectUri: "https://auth.example.com/oauth/callback",
+			},
+		);
+		const login = flow.login().catch(() => undefined) as Promise<void>;
+		const info = await authFired.promise;
+
+		expect(info.launchUrl).toBeUndefined();
+
+		abort.abort("test done");
+		await login;
+	});
 });
