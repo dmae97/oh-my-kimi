@@ -60,6 +60,187 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		expect(mod.html).toBe("<html>PLAN-UI</html>");
 	});
 
+	it("reloads an edited entry module without polluting fileURLToPath-derived paths", async () => {
+		const entrySource = (version: string): string =>
+			[
+				'import { readFileSync } from "node:fs";',
+				'import { fileURLToPath } from "node:url";',
+				'import * as path from "node:path";',
+				"export const entryPath = fileURLToPath(import.meta.url);",
+				"const here = path.dirname(entryPath);",
+				`export const version = ${JSON.stringify(version)};`,
+				'export const asset = readFileSync(path.join(here, "marker.txt"), "utf8");',
+				"export default function (pi) { void pi; }",
+			].join("\n");
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "mtime-reload-ext", version: "1.0.0" }),
+			"marker.txt": "asset-ok",
+			"index.ts": entrySource("v1"),
+		});
+		const entry = path.join(dir, "index.ts");
+		const expectedEntryPath = await fs.realpath(entry);
+
+		const first = (await loadLegacyPiModule(entry)) as { version: string; entryPath: string; asset: string };
+		expect(first.version).toBe("v1");
+		expect(first.entryPath).toBe(expectedEntryPath);
+		expect(first.asset).toBe("asset-ok");
+
+		const firstStat = await fs.stat(entry);
+		await fs.writeFile(entry, entrySource("v2"), "utf8");
+		const bumpedMtime = new Date(Math.ceil(firstStat.mtimeMs) + 2_000);
+		await fs.utimes(entry, bumpedMtime, bumpedMtime);
+
+		const second = (await loadLegacyPiModule(entry)) as { version: string; entryPath: string; asset: string };
+		expect(second.version).toBe("v2");
+		expect(second.entryPath).toBe(expectedEntryPath);
+		expect(second.entryPath.includes("?")).toBe(false);
+		expect(second.asset).toBe("asset-ok");
+	});
+
+	it("reloads an edited relative helper module on same-process re-import", async () => {
+		const entrySource = (version: string): string =>
+			[
+				'import { fileURLToPath } from "node:url";',
+				'import { H } from "./helper.ts";',
+				"export { H };",
+				"export const entryPath = fileURLToPath(import.meta.url);",
+				`export const entryVersion = ${JSON.stringify(version)};`,
+				"export default function (pi) { void pi; }",
+			].join("\n");
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "helper-mtime-reload-ext", version: "1.0.0" }),
+			"index.ts": entrySource("v1"),
+			"helper.ts": 'export const H = "v1";\n',
+		});
+		const entry = path.join(dir, "index.ts");
+		const helper = path.join(dir, "helper.ts");
+		const expectedEntryPath = await fs.realpath(entry);
+
+		const first = (await loadLegacyPiModule(entry)) as { entryVersion: string; H: string; entryPath: string };
+		expect(first.entryVersion).toBe("v1");
+		expect(first.H).toBe("v1");
+		expect(first.entryPath).toBe(expectedEntryPath);
+
+		const firstEntryStat = await fs.stat(entry);
+		const firstHelperStat = await fs.stat(helper);
+		await fs.writeFile(entry, entrySource("v2"), "utf8");
+		await fs.writeFile(helper, 'export const H = "v2";\n', "utf8");
+		const bumpedEntryMtime = new Date(Math.ceil(firstEntryStat.mtimeMs) + 2_000);
+		const bumpedHelperMtime = new Date(Math.ceil(firstHelperStat.mtimeMs) + 2_000);
+		await fs.utimes(entry, bumpedEntryMtime, bumpedEntryMtime);
+		await fs.utimes(helper, bumpedHelperMtime, bumpedHelperMtime);
+
+		const second = (await loadLegacyPiModule(entry)) as { entryVersion: string; H: string; entryPath: string };
+		expect(second.entryVersion).toBe("v2");
+		expect(second.H).toBe("v2");
+		expect(second.entryPath).toBe(expectedEntryPath);
+		expect(second.entryPath.includes("?")).toBe(false);
+	});
+
+	it("reloads edited children of an extension-local bare dependency", async () => {
+		const entrySource = (version: string): string =>
+			[
+				'import { depValue } from "localdep";',
+				"export { depValue };",
+				`export const entryVersion = ${JSON.stringify(version)};`,
+				"export default function (pi) { void pi; }",
+			].join("\n");
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "bare-dep-child-reload-ext", version: "1.0.0" }),
+			"node_modules/localdep/package.json": JSON.stringify({
+				name: "localdep",
+				version: "1.0.0",
+				type: "module",
+				main: "index.js",
+			}),
+			"node_modules/localdep/index.js": 'export { depValue } from "./helper.js";\n',
+			"node_modules/localdep/helper.js": 'export const depValue = "dep-v1";\n',
+			"index.ts": entrySource("v1"),
+		});
+		const entry = path.join(dir, "index.ts");
+		const helper = path.join(dir, "node_modules", "localdep", "helper.js");
+
+		const first = (await loadLegacyPiModule(entry)) as { entryVersion: string; depValue: string };
+		expect(first.entryVersion).toBe("v1");
+		expect(first.depValue).toBe("dep-v1");
+
+		const firstEntryStat = await fs.stat(entry);
+		const firstHelperStat = await fs.stat(helper);
+		await fs.writeFile(entry, entrySource("v2"), "utf8");
+		await fs.writeFile(helper, 'export const depValue = "dep-v2";\n', "utf8");
+		const bumpedEntryMtime = new Date(Math.ceil(firstEntryStat.mtimeMs) + 2_000);
+		const bumpedHelperMtime = new Date(Math.ceil(firstHelperStat.mtimeMs) + 2_000);
+		await fs.utimes(entry, bumpedEntryMtime, bumpedEntryMtime);
+		await fs.utimes(helper, bumpedHelperMtime, bumpedHelperMtime);
+
+		const second = (await loadLegacyPiModule(entry)) as { entryVersion: string; depValue: string };
+		expect(second.entryVersion).toBe("v2");
+		expect(second.depValue).toBe("dep-v2");
+	});
+
+	it("reloads modules added to the relative import graph after the first load", async () => {
+		const entrySource = (version: string, includeHelper: boolean): string =>
+			[
+				'import { fileURLToPath } from "node:url";',
+				includeHelper ? 'export { leafValue } from "./helper.ts";' : "",
+				"export const entryPath = fileURLToPath(import.meta.url);",
+				`export const entryVersion = ${JSON.stringify(version)};`,
+				"export default function (pi) { void pi; }",
+			]
+				.filter(Boolean)
+				.join("\n");
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "expanding-graph-reload-ext", version: "1.0.0" }),
+			"index.ts": entrySource("v1", false),
+		});
+		const entry = path.join(dir, "index.ts");
+		const helper = path.join(dir, "helper.ts");
+		const leaf = path.join(dir, "leaf.ts");
+		const expectedEntryPath = await fs.realpath(entry);
+
+		const first = (await loadLegacyPiModule(entry)) as { entryVersion: string; entryPath: string };
+		expect(first.entryVersion).toBe("v1");
+		expect(first.entryPath).toBe(expectedEntryPath);
+
+		const firstEntryStat = await fs.stat(entry);
+		const firstGraphMtime = new Date(Math.ceil(firstEntryStat.mtimeMs) + 2_000);
+		await fs.writeFile(entry, entrySource("v2", true), "utf8");
+		await fs.writeFile(helper, 'export { leafValue } from "./leaf.ts";\n', "utf8");
+		await fs.writeFile(leaf, 'export const leafValue = "leaf-v1";\n', "utf8");
+		await fs.utimes(entry, firstGraphMtime, firstGraphMtime);
+		await fs.utimes(helper, firstGraphMtime, firstGraphMtime);
+		await fs.utimes(leaf, firstGraphMtime, firstGraphMtime);
+
+		const second = (await loadLegacyPiModule(entry)) as {
+			entryVersion: string;
+			entryPath: string;
+			leafValue: string;
+		};
+		expect(second.entryVersion).toBe("v2");
+		expect(second.leafValue).toBe("leaf-v1");
+		expect(second.entryPath).toBe(expectedEntryPath);
+		expect(second.entryPath.includes("?")).toBe(false);
+
+		const secondEntryStat = await fs.stat(entry);
+		const secondLeafStat = await fs.stat(leaf);
+		await fs.writeFile(entry, entrySource("v3", true), "utf8");
+		await fs.writeFile(leaf, 'export const leafValue = "leaf-v2";\n', "utf8");
+		const bumpedEntryMtime = new Date(Math.ceil(secondEntryStat.mtimeMs) + 2_000);
+		const bumpedLeafMtime = new Date(Math.ceil(secondLeafStat.mtimeMs) + 2_000);
+		await fs.utimes(entry, bumpedEntryMtime, bumpedEntryMtime);
+		await fs.utimes(leaf, bumpedLeafMtime, bumpedLeafMtime);
+
+		const third = (await loadLegacyPiModule(entry)) as {
+			entryVersion: string;
+			entryPath: string;
+			leafValue: string;
+		};
+		expect(third.entryVersion).toBe("v3");
+		expect(third.leafValue).toBe("leaf-v2");
+		expect(third.entryPath).toBe(expectedEntryPath);
+		expect(third.entryPath.includes("?")).toBe(false);
+	});
+
 	it("resolves a .css sibling of a relatively-imported submodule", async () => {
 		const dir = await writePackage({
 			"package.json": JSON.stringify({ name: "multi-file-ext", version: "1.0.0" }),
