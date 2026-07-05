@@ -16,7 +16,9 @@ const TRY_AGAIN_PATTERN = /try again in\s+~?\s*([0-9.]+)\s*(ms|sec|s|minutes?|mi
  * by the OpenAI Codex and Google Gemini retry helpers.
  *
  * Header sources (checked in order):
+ *  - `retry-after-ms` (milliseconds)
  *  - `Retry-After` (numeric seconds, or HTTP date)
+ *  - `x-ratelimit-reset-ms` (delta ms, or Unix epoch ms/s for large values)
  *  - `x-ratelimit-reset` (Unix epoch seconds)
  *  - `x-ratelimit-reset-after` (seconds)
  *
@@ -31,12 +33,28 @@ const TRY_AGAIN_PATTERN = /try again in\s+~?\s*([0-9.]+)\s*(ms|sec|s|minutes?|mi
 export function extractRetryHint(source: Response | Headers | null | undefined, body?: string): number | undefined {
 	const headers = source instanceof Headers ? source : (source?.headers ?? undefined);
 	if (headers) {
+		const retryAfterMs = headers.get("retry-after-ms");
+		if (retryAfterMs) {
+			const ms = Number(retryAfterMs);
+			if (Number.isFinite(ms) && ms >= 0) return ms;
+		}
 		const retryAfter = headers.get("retry-after");
 		if (retryAfter) {
 			const seconds = Number(retryAfter);
 			if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
 			const parsedDate = Date.parse(retryAfter);
 			if (!Number.isNaN(parsedDate)) return Math.max(0, parsedDate - Date.now());
+		}
+		const rateLimitResetMs = headers.get("x-ratelimit-reset-ms");
+		if (rateLimitResetMs) {
+			const value = Number(rateLimitResetMs);
+			if (Number.isFinite(value) && value > 0) {
+				// > 1e12 → epoch ms; > 1e9 → epoch s; otherwise a delta in ms.
+				const targetMs = value > 1e12 ? value : value > 1e9 ? value * 1000 : undefined;
+				if (targetMs === undefined) return value;
+				const delta = targetMs - Date.now();
+				if (delta > 0) return delta;
+			}
 		}
 		const rateLimitReset = headers.get("x-ratelimit-reset");
 		if (rateLimitReset) {
