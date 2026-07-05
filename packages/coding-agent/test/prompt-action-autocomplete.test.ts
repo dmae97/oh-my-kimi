@@ -111,6 +111,58 @@ describe("prompt action autocomplete", () => {
 		expect(suggestions).toBeNull();
 	});
 
+	it("treats # prompt-action tokens as literal text inside slash command arguments without completions", async () => {
+		const provider = createPromptActionAutocompleteProvider({
+			commands: [{ name: "rename", description: "Rename current session" }],
+			basePath: "/tmp",
+			keybindings: AppKeybindingsManager.inMemory(),
+			copyCurrentLine: () => {},
+			copyPrompt: () => {},
+			undo: () => {},
+			moveCursorToMessageEnd: () => {},
+			moveCursorToMessageStart: () => {},
+			moveCursorToLineStart: () => {},
+			moveCursorToLineEnd: () => {},
+		});
+
+		const line = "/rename repro #copy";
+		const suggestions = await provider.getSuggestions([line], 0, line.length);
+
+		expect(suggestions).toBeNull();
+	});
+
+	it("returns slash command argument completions instead of # prompt actions when the command defines them", async () => {
+		const provider = createPromptActionAutocompleteProvider({
+			commands: [
+				{
+					name: "rename",
+					description: "Rename current session",
+					getArgumentCompletions: argumentPrefix =>
+						argumentPrefix === "repro #copy"
+							? [{ value: "repro #copy-title", label: "Keep #copy in the title" }]
+							: null,
+				},
+			],
+			basePath: "/tmp",
+			keybindings: AppKeybindingsManager.inMemory(),
+			copyCurrentLine: () => {},
+			copyPrompt: () => {},
+			undo: () => {},
+			moveCursorToMessageEnd: () => {},
+			moveCursorToMessageStart: () => {},
+			moveCursorToLineStart: () => {},
+			moveCursorToLineEnd: () => {},
+		});
+
+		const line = "/rename repro #copy";
+		const suggestions = await provider.getSuggestions([line], 0, line.length);
+
+		expect(suggestions).toEqual({
+			prefix: "repro #copy",
+			items: [{ value: "repro #copy-title", label: "Keep #copy in the title" }],
+		});
+	});
+
 	it("delegates trySyncSlashCompletion to CombinedAutocompleteProvider", () => {
 		const provider = createPromptActionAutocompleteProvider({
 			commands: [{ name: "model", description: "Switch AI model" }],

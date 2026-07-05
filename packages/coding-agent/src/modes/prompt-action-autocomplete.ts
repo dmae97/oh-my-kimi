@@ -2,6 +2,7 @@ import {
 	type AutocompleteItem,
 	type AutocompleteProvider,
 	CombinedAutocompleteProvider,
+	findLeadingSlashCommandStart,
 	getKeybindings,
 	type SlashCommand,
 } from "@oh-my-pi/pi-tui";
@@ -111,6 +112,16 @@ export class PromptActionAutocompleteProvider implements AutocompleteProvider {
 	): Promise<{ items: AutocompleteItem[]; prefix: string } | null> {
 		const currentLine = lines[cursorLine] || "";
 		const textBeforeCursor = currentLine.slice(0, cursorCol);
+		const leadingSlashStart = findLeadingSlashCommandStart(textBeforeCursor);
+		const hasPromptTextBeforeCursorLine = lines.slice(0, cursorLine).some(line => (line || "").trim() !== "");
+		const commandText =
+			leadingSlashStart !== null && !hasPromptTextBeforeCursorLine
+				? textBeforeCursor.slice(leadingSlashStart)
+				: null;
+		if (commandText?.includes(" ")) {
+			return this.#baseProvider.getSuggestions(lines, cursorLine, cursorCol);
+		}
+
 		const promptActionPrefix = getPromptActionPrefix(textBeforeCursor);
 		if (promptActionPrefix) {
 			const query = promptActionPrefix.slice(1).toLowerCase();
