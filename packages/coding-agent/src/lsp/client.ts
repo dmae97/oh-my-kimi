@@ -962,11 +962,20 @@ function isPathInsideWorkspace(filePath: string, workspace: string): boolean {
 	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+/** Budget for the one-way watched-files notification: a wedged server that
+ *  stops draining stdin must never hang the filesystem mutation that
+ *  triggered it. Failures degrade to a debug log below. */
+const WATCHED_FILES_NOTIFY_TIMEOUT_MS = 2_000;
+
 /**
  * Announce harness-authored filesystem changes to active LSP clients for `cwd`.
  *
  * This covers sibling files that are not open text documents, such as generated
  * CSS modules or type files that another edited document imports immediately.
+ *
+ * The underlying stdin flush is self-bounded by
+ * {@link WATCHED_FILES_NOTIFY_TIMEOUT_MS}; only an abort of the caller's
+ * `signal` rejects.
  */
 export async function notifyWorkspaceWatchedFiles(
 	cwd: string,
@@ -982,6 +991,8 @@ export async function notifyWorkspaceWatchedFiles(
 	);
 	if (activeClients.length === 0) return;
 
+	const timeoutSignal = AbortSignal.timeout(WATCHED_FILES_NOTIFY_TIMEOUT_MS);
+	const sendSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 	const results = await Promise.allSettled(
 		activeClients.map(async client => {
 			const clientChanges = changes
@@ -992,7 +1003,7 @@ export async function notifyWorkspaceWatchedFiles(
 					return { uri, type: change.type };
 				});
 			if (clientChanges.length === 0) return;
-			await sendNotification(client, "workspace/didChangeWatchedFiles", { changes: clientChanges }, signal);
+			await sendNotification(client, "workspace/didChangeWatchedFiles", { changes: clientChanges }, sendSignal);
 		}),
 	);
 	throwIfAborted(signal);

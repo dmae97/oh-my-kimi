@@ -1162,7 +1162,13 @@ async function runLspWritethrough(
 		try {
 			await notifyWorkspaceWatchedFiles(cwd, [{ filePath: dst, type: changeType }], notifySignal);
 		} catch (error) {
-			if (notifySignal?.aborted && !signal?.aborted) return;
+			if (notifySignal?.aborted && !signal?.aborted) {
+				// The operation budget died mid-notify while the caller is still
+				// live: allow the post-write retry below to re-announce with the
+				// caller's signal (didChangeWatchedFiles is idempotent).
+				writeNotified = false;
+				return;
+			}
 			throw error;
 		}
 	};
@@ -1259,7 +1265,10 @@ async function runLspWritethrough(
 			}
 		}
 		await getWritePromise();
-		await notifyWriteCommitted(operationSignal);
+		// The write above committed even though the operation budget elapsed:
+		// announce it on the caller's signal — the dead `operationSignal` would
+		// abort the notify before it ever reaches the server.
+		await notifyWriteCommitted();
 	}
 
 	if (synced && enableDiagnostics) {

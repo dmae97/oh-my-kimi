@@ -63,6 +63,10 @@ export async function routeWriteThroughBridge(
 	if (!bridge?.capabilities.writeTextFile || !bridge.writeTextFile) return false;
 
 	const changeType = (await Bun.file(absolutePath).exists()) ? FileChangeType.Changed : FileChangeType.Created;
+	// The ACP protocol has no cancellation for fs writes; the most we can do is
+	// refuse to start one after the tool was aborted. Racing the promise would
+	// report failure while the editor still applies the write.
+	signal?.throwIfAborted();
 	try {
 		await bridge.writeTextFile({ path: absolutePath, content });
 	} catch (error) {
