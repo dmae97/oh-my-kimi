@@ -95,11 +95,13 @@ function getPromptActionPrefix(textBeforeCursor: string): string | null {
 }
 
 export class PromptActionAutocompleteProvider implements AutocompleteProvider {
+	#commands: SlashCommand[];
 	#baseProvider: CombinedAutocompleteProvider;
 	#actions: PromptActionDefinition[];
 	#basePath: string;
 
 	constructor(commands: SlashCommand[], basePath: string, actions: PromptActionDefinition[]) {
+		this.#commands = commands;
 		this.#baseProvider = new CombinedAutocompleteProvider(commands, basePath);
 		this.#basePath = basePath;
 		this.#actions = actions;
@@ -118,8 +120,13 @@ export class PromptActionAutocompleteProvider implements AutocompleteProvider {
 			leadingSlashStart !== null && !hasPromptTextBeforeCursorLine
 				? textBeforeCursor.slice(leadingSlashStart)
 				: null;
-		if (commandText?.includes(" ")) {
-			return this.#baseProvider.getSuggestions(lines, cursorLine, cursorCol);
+		const spaceIndex = commandText?.indexOf(" ") ?? -1;
+		if (commandText !== null && spaceIndex !== -1) {
+			const commandName = commandText.slice(1, spaceIndex);
+			const command = this.#commands.find(cmd => cmd.name === commandName || cmd.aliases?.includes(commandName));
+			if (command && (!("allowArgs" in command) || command.allowArgs !== false)) {
+				return this.#baseProvider.getSuggestions(lines, cursorLine, cursorCol);
+			}
 		}
 
 		const promptActionPrefix = getPromptActionPrefix(textBeforeCursor);
