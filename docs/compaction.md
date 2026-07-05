@@ -240,9 +240,9 @@ Prompt selection:
 
 Remote summarization modes:
 
-- If `compaction.remoteEndpoint` is set and remote compaction is enabled, local summary generation POSTs:
-  - `{ systemPrompt, prompt }`
-- Expects JSON containing at least `{ summary }`.
+- If `compaction.remoteEndpoint` is set and remote compaction is enabled, local summary generation POSTs one of two wire formats:
+  - custom omp summarizer endpoints receive `{ systemPrompt, prompt }` and must return JSON containing at least `{ summary }`.
+  - OpenAI-compatible endpoints whose path ends in `/chat/completions` receive `{ model, messages, stream: false }`, where `messages` contains one system prompt and one user prompt. The summary is read from `choices[0].message.content`, which lets self-hosted servers such as llama.cpp and vLLM act as remote compactors without a separate summarizer shim.
 - For OpenAI/OpenAI Codex models, compaction first tries the provider-native `/responses/compact` endpoint when remote compaction is enabled. It preserves provider replacement history in `preserveData.openaiRemoteCompaction` and falls back to local summarization if that native request fails.
 
 ### Handoff generation

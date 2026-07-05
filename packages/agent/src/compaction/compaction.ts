@@ -813,14 +813,17 @@ export async function generateSummary(
 	];
 
 	if (options?.remoteEndpoint) {
-		const remote = await requestRemoteCompaction(
-			options.remoteEndpoint,
-			{
-				systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
-				prompt: promptText,
-			},
-			signal,
-			{ fetch: options.fetch },
+		const endpoint = options.remoteEndpoint;
+		const remote = await withAuth(
+			apiKey,
+			key =>
+				requestRemoteCompaction(
+					endpoint,
+					{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, prompt: promptText },
+					signal,
+					{ fetch: options.fetch, model, apiKey: key },
+				),
+			{ signal, missingKeyMessage: "Remote compaction credentials unavailable" },
 		);
 		return remote.summary;
 	}
@@ -1001,14 +1004,17 @@ async function generateShortSummary(
 	promptText += SHORT_SUMMARY_PROMPT;
 
 	if (options?.remoteEndpoint) {
-		const remote = await requestRemoteCompaction(
-			options.remoteEndpoint,
-			{
-				systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
-				prompt: promptText,
-			},
-			signal,
-			{ fetch: options?.fetch },
+		const endpoint = options.remoteEndpoint;
+		const remote = await withAuth(
+			apiKey,
+			key =>
+				requestRemoteCompaction(
+					endpoint,
+					{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, prompt: promptText },
+					signal,
+					{ fetch: options?.fetch, model, apiKey: key },
+				),
+			{ signal, missingKeyMessage: "Remote compaction credentials unavailable" },
 		);
 		return remote.summary;
 	}
