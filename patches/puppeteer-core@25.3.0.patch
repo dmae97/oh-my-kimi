@@ -1,5 +1,254 @@
+diff --git a/lib/puppeteer/api/ElementHandle.js b/lib/puppeteer/api/ElementHandle.js
+index 81454fe2af73518f7e76f04cbe3a7f170d735fa5..6f9eedb9fc1344901705bc83cb3cf415e6271e28 100644
+--- a/lib/puppeteer/api/ElementHandle.js
++++ b/lib/puppeteer/api/ElementHandle.js
+@@ -102,6 +102,31 @@ import { throwIfDisposed } from '../util/decorators.js';
+ import { _isElementHandle } from './ElementHandleSymbol.js';
+ import { JSHandle } from './JSHandle.js';
+ import { NodeLocator } from './locators/locators.js';
++const MAIN_WORLD_DIRECTIVE = /^\s*(?:(?:\/\/!world=main(?=$|\s))|(?:\/\*!world=main\s*\*\/))/;
++const shouldEvaluateInMainWorld = (pageFunction) => {
++    if (typeof pageFunction !== 'function' && typeof pageFunction !== 'string') {
++        return false;
++    }
++    let source;
++    try {
++        source =
++            typeof pageFunction === 'string'
++                ? pageFunction
++                : Function.prototype.toString.call(pageFunction);
++    }
++    catch {
++        return false;
++    }
++    if (MAIN_WORLD_DIRECTIVE.test(source)) {
++        return true;
++    }
++    if (typeof pageFunction !== 'function') {
++        return false;
++    }
++    const arrowIndex = source.indexOf('=>');
++    const bodyStart = source.indexOf('{', arrowIndex >= 0 ? arrowIndex : 0);
++    return bodyStart >= 0 && MAIN_WORLD_DIRECTIVE.test(source.slice(bodyStart + 1));
++};
+ /**
+  * A given method will have it's `this` replaced with an isolated version of
+  * `this` when decorated with this decorator.
+@@ -299,6 +324,7 @@ let ElementHandle = (() => {
+          * trying to adopt it multiple times
+          */
+         isolatedHandle = __runInitializers(this, _instanceExtraInitializers);
++        mainHandle;
+         /**
+          * @internal
+          */
+@@ -335,19 +361,37 @@ let ElementHandle = (() => {
+         async getProperties() {
+             return await this.handle.getProperties();
+         }
++        async #handleForPageFunction(pageFunction) {
++            const realm = shouldEvaluateInMainWorld(pageFunction) ? this.frame.mainRealm() : this.frame.isolatedRealm();
++            if (this.realm === realm) {
++                return this;
++            }
++            if (realm === this.frame.isolatedRealm()) {
++                if (!this.isolatedHandle) {
++                    this.isolatedHandle = await realm.adoptHandle(this);
++                }
++                return this.isolatedHandle;
++            }
++            if (!this.mainHandle) {
++                this.mainHandle = await realm.adoptHandle(this);
++            }
++            return this.mainHandle;
++        }
+         /**
+          * @internal
+          */
+         async evaluate(pageFunction, ...args) {
++            const handle = await this.#handleForPageFunction(pageFunction);
+             pageFunction = withSourcePuppeteerURLIfNone(this.evaluate.name, pageFunction);
+-            return await this.handle.evaluate(pageFunction, ...args);
++            return await handle.handle.evaluate(pageFunction, ...args);
+         }
+         /**
+          * @internal
+          */
+         async evaluateHandle(pageFunction, ...args) {
++            const handle = await this.#handleForPageFunction(pageFunction);
+             pageFunction = withSourcePuppeteerURLIfNone(this.evaluateHandle.name, pageFunction);
+-            return await this.handle.evaluateHandle(pageFunction, ...args);
++            return await handle.handle.evaluateHandle(pageFunction, ...args);
+         }
+         /**
+          * @internal
+@@ -371,7 +415,7 @@ let ElementHandle = (() => {
+          * @internal
+          */
+         async dispose() {
+-            await Promise.all([this.handle.dispose(), this.isolatedHandle?.dispose()]);
++            await Promise.all([this.handle.dispose(), this.isolatedHandle?.dispose(), this.mainHandle?.dispose()]);
+         }
+         /**
+          * @internal
+@@ -555,15 +599,27 @@ let ElementHandle = (() => {
+         async $$eval(selector, pageFunction, ...args) {
+             const env_2 = { stack: [], error: void 0, hasError: false };
+             try {
++                const mainWorld = shouldEvaluateInMainWorld(pageFunction);
+                 pageFunction = withSourcePuppeteerURLIfNone(this.$$eval.name, pageFunction);
+                 const results = await this.$$(selector);
+-                const elements = __addDisposableResource(env_2, await this.evaluateHandle((_, ...elements) => {
++                const realm = mainWorld ? this.frame.mainRealm() : this.frame.isolatedRealm();
++                const adoptedResults = [];
++                const handlesToDispose = [];
++                for (const result of results) {
++                    handlesToDispose.push(result);
++                    const adopted = result.realm === realm ? result : await realm.adoptHandle(result);
++                    adoptedResults.push(adopted);
++                    if (adopted !== result) {
++                        handlesToDispose.push(adopted);
++                    }
++                }
++                const elements = __addDisposableResource(env_2, await realm.evaluateHandle((...elements) => {
+                     return elements;
+-                }, ...results), false);
++                }, ...adoptedResults), false);
+                 const [result] = await Promise.all([
+                     elements.evaluate(pageFunction, ...args),
+-                    ...results.map(results => {
+-                        return results.dispose();
++                    ...handlesToDispose.map(result => {
++                        return result.dispose();
+                     }),
+                 ]);
+                 return result;
+diff --git a/lib/puppeteer/api/Frame.js b/lib/puppeteer/api/Frame.js
+index 8698d2a5a976b277344fe42e90ffe985bdf0fbd7..01614143cba96055d0f0c22a1eb903d4265ca15f 100644
+--- a/lib/puppeteer/api/Frame.js
++++ b/lib/puppeteer/api/Frame.js
+@@ -119,6 +119,31 @@ export var FrameEvent;
+ export const throwIfDetached = throwIfDisposed(frame => {
+     return `Attempted to use detached Frame '${frame._id}'.`;
+ });
++const MAIN_WORLD_DIRECTIVE = /^\s*(?:(?:\/\/!world=main(?=$|\s))|(?:\/\*!world=main\s*\*\/))/;
++const shouldEvaluateInMainWorld = (pageFunction) => {
++    if (typeof pageFunction !== 'function' && typeof pageFunction !== 'string') {
++        return false;
++    }
++    let source;
++    try {
++        source =
++            typeof pageFunction === 'string'
++                ? pageFunction
++                : Function.prototype.toString.call(pageFunction);
++    }
++    catch {
++        return false;
++    }
++    if (MAIN_WORLD_DIRECTIVE.test(source)) {
++        return true;
++    }
++    if (typeof pageFunction !== 'function') {
++        return false;
++    }
++    const arrowIndex = source.indexOf('=>');
++    const bodyStart = source.indexOf('{', arrowIndex >= 0 ? arrowIndex : 0);
++    return bodyStart >= 0 && MAIN_WORLD_DIRECTIVE.test(source.slice(bodyStart + 1));
++};
+ /**
+  * Represents a DOM frame.
+  *
+@@ -277,12 +302,21 @@ let Frame = (() => {
+             super();
+         }
+         #_document;
++        #_mainDocument;
+         /**
+          * @internal
+          */
+-        #document() {
++        #document(mainWorld = false) {
++            if (mainWorld) {
++                if (!this.#_mainDocument) {
++                    this.#_mainDocument = this.mainRealm().evaluateHandle(() => {
++                        return document;
++                    });
++                }
++                return this.#_mainDocument;
++            }
+             if (!this.#_document) {
+-                this.#_document = this.mainRealm().evaluateHandle(() => {
++                this.#_document = this.isolatedRealm().evaluateHandle(() => {
+                     return document;
+                 });
+             }
+@@ -295,6 +329,7 @@ let Frame = (() => {
+          */
+         clearDocumentHandle() {
+             this.#_document = undefined;
++            this.#_mainDocument = undefined;
+         }
+         /**
+          * @returns The frame element associated with this frame (if any).
+@@ -345,8 +380,9 @@ let Frame = (() => {
+          * See {@link Page.evaluateHandle} for details.
+          */
+         async evaluateHandle(pageFunction, ...args) {
++            const realm = shouldEvaluateInMainWorld(pageFunction) ? this.mainRealm() : this.isolatedRealm();
+             pageFunction = withSourcePuppeteerURLIfNone(this.evaluateHandle.name, pageFunction);
+-            return await this.mainRealm().evaluateHandle(pageFunction, ...args);
++            return await realm.evaluateHandle(pageFunction, ...args);
+         }
+         /**
+          * Behaves identically to {@link Page.evaluate} except it's run within
+@@ -355,8 +391,9 @@ let Frame = (() => {
+          * See {@link Page.evaluate} for details.
+          */
+         async evaluate(pageFunction, ...args) {
++            const realm = shouldEvaluateInMainWorld(pageFunction) ? this.mainRealm() : this.isolatedRealm();
+             pageFunction = withSourcePuppeteerURLIfNone(this.evaluate.name, pageFunction);
+-            return await this.mainRealm().evaluate(pageFunction, ...args);
++            return await realm.evaluate(pageFunction, ...args);
+         }
+         /**
+          * @internal
+@@ -458,9 +495,10 @@ let Frame = (() => {
+          * @returns A promise to the result of the function.
+          */
+         async $eval(selector, pageFunction, ...args) {
++            const mainWorld = shouldEvaluateInMainWorld(pageFunction);
+             pageFunction = withSourcePuppeteerURLIfNone(this.$eval.name, pageFunction);
+             // eslint-disable-next-line @puppeteer/use-using -- This is cached.
+-            const document = await this.#document();
++            const document = await this.#document(mainWorld);
+             return await document.$eval(selector, pageFunction, ...args);
+         }
+         /**
+@@ -498,9 +536,10 @@ let Frame = (() => {
+          * @returns A promise to the result of the function.
+          */
+         async $$eval(selector, pageFunction, ...args) {
++            const mainWorld = shouldEvaluateInMainWorld(pageFunction);
+             pageFunction = withSourcePuppeteerURLIfNone(this.$$eval.name, pageFunction);
+             // eslint-disable-next-line @puppeteer/use-using -- This is cached.
+-            const document = await this.#document();
++            const document = await this.#document(mainWorld);
+             return await document.$$eval(selector, pageFunction, ...args);
+         }
+         /**
+@@ -577,7 +616,8 @@ let Frame = (() => {
+          * @returns the promise which resolve when the `pageFunction` returns a truthy value.
+          */
+         async waitForFunction(pageFunction, options = {}, ...args) {
+-            return await this.mainRealm().waitForFunction(pageFunction, options, ...args);
++            const realm = shouldEvaluateInMainWorld(pageFunction) ? this.mainRealm() : this.isolatedRealm();
++            return await realm.waitForFunction(pageFunction, options, ...args);
+         }
+         /**
+          * The full HTML contents of the frame, including the DOCTYPE.
 diff --git a/lib/puppeteer/cdp/ExecutionContext.js b/lib/puppeteer/cdp/ExecutionContext.js
-index d2cfb72b63070527185c8d2e3b9bf7b19e91baa4..439821d543413ea620833ebe94908fe44e70b836 100644
+index c67098fd6c9f66666ad2b41d5b7dea42e1991833..2a543a09bfbd48bb9c02f085399788e913d0e8e4 100644
 --- a/lib/puppeteer/cdp/ExecutionContext.js
 +++ b/lib/puppeteer/cdp/ExecutionContext.js
 @@ -326,14 +326,19 @@ export class ExecutionContext extends EventEmitter {
@@ -37,8 +286,30 @@ index d2cfb72b63070527185c8d2e3b9bf7b19e91baa4..439821d543413ea620833ebe94908fe4
          let callFunctionOnPromise;
          try {
              callFunctionOnPromise = this.#client.send('Runtime.callFunctionOn', {
+diff --git a/lib/puppeteer/cdp/Frame.js b/lib/puppeteer/cdp/Frame.js
+index 4e27013ad8f9b89ee13913e55bba243cc8bf9662..42c4bf547443aa01955dde6f4e0f4d5385ca3c96 100644
+--- a/lib/puppeteer/cdp/Frame.js
++++ b/lib/puppeteer/cdp/Frame.js
+@@ -276,7 +276,7 @@ let CdpFrame = (() => {
+                 this.#client.send('Runtime.addBinding', {
+                     name: CDP_BINDING_PREFIX + binding.name,
+                 }),
+-                this.evaluate(binding.initSource).catch(debugCatchError),
++                this.mainRealm().evaluate(binding.initSource).catch(debugCatchError),
+             ]);
+         }
+         async removeExposedFunctionBinding(binding) {
+@@ -289,7 +289,7 @@ let CdpFrame = (() => {
+                 this.#client.send('Runtime.removeBinding', {
+                     name: CDP_BINDING_PREFIX + binding.name,
+                 }),
+-                this.evaluate(name => {
++                this.mainRealm().evaluate(name => {
+                     // Removes the dangling Puppeteer binding wrapper.
+                     // @ts-expect-error: In a different context.
+                     globalThis[name] = undefined;
 diff --git a/lib/puppeteer/cdp/FrameManager.js b/lib/puppeteer/cdp/FrameManager.js
-index 23afcd3def20ff2f578bf14692de1c86365e95c8..26925d30746cb83d0322ea8b4e93993ff4a28a8e 100644
+index 2322aa136a47b446e2a7b2c4f0bc751f2fb821d0..2116367ee34bb86948bf956c2afa2f693ce14c96 100644
 --- a/lib/puppeteer/cdp/FrameManager.js
 +++ b/lib/puppeteer/cdp/FrameManager.js
 @@ -13,6 +13,7 @@ import { disposeSymbol } from '../util/disposable.js';
@@ -49,7 +320,7 @@ index 23afcd3def20ff2f578bf14692de1c86365e95c8..26925d30746cb83d0322ea8b4e93993f
  import { isTargetClosedError } from './Connection.js';
  import { CdpDeviceRequestPromptManager } from './DeviceRequestPrompt.js';
  import { ExecutionContext } from './ExecutionContext.js';
-@@ -44,6 +45,10 @@ export class FrameManager extends EventEmitter {
+@@ -43,6 +44,10 @@ export class FrameManager extends EventEmitter {
       * frameNavigated event usually contains the latest information.
       */
      #frameNavigatedReceived = new Set();
@@ -60,7 +331,7 @@ index 23afcd3def20ff2f578bf14692de1c86365e95c8..26925d30746cb83d0322ea8b4e93993f
      #deviceRequestPromptManagerMap = new WeakMap();
      #frameTreeHandled;
      get timeoutSettings() {
-@@ -181,9 +186,18 @@ export class FrameManager extends EventEmitter {
+@@ -191,9 +196,18 @@ export class FrameManager extends EventEmitter {
                      this.#frameTreeHandled?.resolve();
                  }),
                  client.send('Page.setLifecycleEventsEnabled', { enabled: true }),
@@ -82,7 +353,7 @@ index 23afcd3def20ff2f578bf14692de1c86365e95c8..26925d30746cb83d0322ea8b4e93993f
                  ...(frame
                      ? Array.from(this.#scriptsToEvaluateOnNewDocument.values())
                      : []).map(script => {
-@@ -336,6 +350,7 @@ export class FrameManager extends EventEmitter {
+@@ -346,6 +360,7 @@ export class FrameManager extends EventEmitter {
              return;
          }
          frame = new CdpFrame(this, frameId, parentFrameId, session);
@@ -90,7 +361,7 @@ index 23afcd3def20ff2f578bf14692de1c86365e95c8..26925d30746cb83d0322ea8b4e93993f
          this._frameTree.addFrame(frame);
          this.emit(FrameManagerEvent.FrameAttached, frame);
      }
-@@ -366,6 +381,177 @@ export class FrameManager extends EventEmitter {
+@@ -376,6 +391,177 @@ export class FrameManager extends EventEmitter {
          frame._navigated(framePayload);
          this.emit(FrameManagerEvent.FrameNavigated, frame);
          frame.emit(FrameEvent.FrameNavigated, navigationType);
@@ -269,7 +540,7 @@ index 23afcd3def20ff2f578bf14692de1c86365e95c8..26925d30746cb83d0322ea8b4e93993f
      async #createIsolatedWorld(session, name) {
          const key = `${session.id()}:${name}`;
 diff --git a/lib/puppeteer/cdp/IsolatedWorld.js b/lib/puppeteer/cdp/IsolatedWorld.js
-index b0619734a9eeb884f3ac4ffff39b540226aaf818..0ef7ce4616a27ff9aabd0747937b593f28bb36de 100644
+index b0619734a9eeb884f3ac4ffff39b540226aaf818..7e577d8a0200f0201742fd0a471edc9792c35a3f 100644
 --- a/lib/puppeteer/cdp/IsolatedWorld.js
 +++ b/lib/puppeteer/cdp/IsolatedWorld.js
 @@ -21,6 +21,13 @@ export class IsolatedWorld extends Realm {
@@ -307,10 +578,10 @@ index b0619734a9eeb884f3ac4ffff39b540226aaf818..0ef7ce4616a27ff9aabd0747937b593f
          const result = await firstValueFrom(fromEmitterEvent(this.#emitter, 'context').pipe(raceWith(fromEmitterEvent(this.#emitter, 'disposed').pipe(map(() => {
              // The message has to match the CDP message expected by the WaitTask class.
 diff --git a/lib/puppeteer/cdp/WebWorker.js b/lib/puppeteer/cdp/WebWorker.js
-index e3ee6673245e92faa53a028867e7dbb3a1aed089..4fcc9785077ca868fd0fa892b4ec907cd807ed96 100644
+index 3d68f887920ded269eb641273a5a13dee235ae1d..dcdd86c8697c0dbd2dd2162c9a739dd9fa2afc96 100644
 --- a/lib/puppeteer/cdp/WebWorker.js
 +++ b/lib/puppeteer/cdp/WebWorker.js
-@@ -27,9 +27,21 @@ export class CdpWebWorker extends WebWorker {
+@@ -29,9 +29,21 @@ export class CdpWebWorker extends WebWorker {
          this.#targetType = targetType;
          this.#world = new IsolatedWorld(this, new TimeoutSettings(), MAIN_WORLD);
          this.#emitter = new EventEmitter();
@@ -332,22 +603,22 @@ index e3ee6673245e92faa53a028867e7dbb3a1aed089..4fcc9785077ca868fd0fa892b4ec907c
 +            }
 +        })
 +            .catch(debugError);
-         this.#world.emitter.on('consoleapicalled', async (event) => {
-             try {
-                 const values = event.args.map(arg => {
-@@ -61,7 +73,6 @@ export class CdpWebWorker extends WebWorker {
+         this.#client.once('Inspector.workerScriptLoaded', () => {
+             this.#workerLoaded.resolve();
          });
-         // This might fail if the target is closed before we receive all execution contexts.
-         networkManager?.addClient(this.#client).catch(debugError);
--        this.#client.send('Runtime.enable').catch(debugError);
+@@ -68,7 +80,6 @@ export class CdpWebWorker extends WebWorker {
+         networkManager
+             ?.addClient(this.#client)
+             .catch(debugCatchError ?? (() => { }));
+-        this.#client.send('Runtime.enable').catch(debugCatchError ?? (() => { }));
      }
      mainRealm() {
          return this.#world;
 diff --git a/lib/puppeteer/node/ChromeLauncher.js b/lib/puppeteer/node/ChromeLauncher.js
-index 94db7a76f81ecdcff59a620c1fd5b65957e22e68..fdd8de60c97b7c3037c0d7676fabf150e190751c 100644
+index fb7fe66ecb99fd207b99c1e9a9ae00769f0b9a20..af5284b9ee8226e78fa0243ec2f83a631bbaca9d 100644
 --- a/lib/puppeteer/node/ChromeLauncher.js
 +++ b/lib/puppeteer/node/ChromeLauncher.js
-@@ -126,22 +126,12 @@ export class ChromeLauncher extends BrowserLauncher {
+@@ -131,22 +131,12 @@ export class ChromeLauncher extends BrowserLauncher {
          ].filter(feature => {
              return feature !== '';
          });
@@ -375,274 +646,3 @@ index 94db7a76f81ecdcff59a620c1fd5b65957e22e68..fdd8de60c97b7c3037c0d7676fabf150
              ...userDisabledFeatures,
          ]
              .filter(feature => {
-diff --git a/lib/puppeteer/api/Frame.js b/lib/puppeteer/api/Frame.js
---- a/lib/puppeteer/api/Frame.js
-+++ b/lib/puppeteer/api/Frame.js
-@@ -119,6 +119,31 @@
- export const throwIfDetached = throwIfDisposed(frame => {
-     return `Attempted to use detached Frame '${frame._id}'.`;
- });
-+const MAIN_WORLD_DIRECTIVE = /^\s*(?:(?:\/\/!world=main(?=$|\s))|(?:\/\*!world=main\s*\*\/))/;
-+const shouldEvaluateInMainWorld = (pageFunction) => {
-+    if (typeof pageFunction !== 'function' && typeof pageFunction !== 'string') {
-+        return false;
-+    }
-+    let source;
-+    try {
-+        source =
-+            typeof pageFunction === 'string'
-+                ? pageFunction
-+                : Function.prototype.toString.call(pageFunction);
-+    }
-+    catch {
-+        return false;
-+    }
-+    if (MAIN_WORLD_DIRECTIVE.test(source)) {
-+        return true;
-+    }
-+    if (typeof pageFunction !== 'function') {
-+        return false;
-+    }
-+    const arrowIndex = source.indexOf('=>');
-+    const bodyStart = source.indexOf('{', arrowIndex >= 0 ? arrowIndex : 0);
-+    return bodyStart >= 0 && MAIN_WORLD_DIRECTIVE.test(source.slice(bodyStart + 1));
-+};
- /**
-  * Represents a DOM frame.
-  *
-@@ -277,12 +302,21 @@
-             super();
-         }
-         #_document;
-+        #_mainDocument;
-         /**
-          * @internal
-          */
--        #document() {
-+        #document(mainWorld = false) {
-+            if (mainWorld) {
-+                if (!this.#_mainDocument) {
-+                    this.#_mainDocument = this.mainRealm().evaluateHandle(() => {
-+                        return document;
-+                    });
-+                }
-+                return this.#_mainDocument;
-+            }
-             if (!this.#_document) {
--                this.#_document = this.mainRealm().evaluateHandle(() => {
-+                this.#_document = this.isolatedRealm().evaluateHandle(() => {
-                     return document;
-                 });
-             }
-@@ -295,6 +329,7 @@
-          */
-         clearDocumentHandle() {
-             this.#_document = undefined;
-+            this.#_mainDocument = undefined;
-         }
-         /**
-          * @returns The frame element associated with this frame (if any).
-@@ -345,8 +380,9 @@
-          * See {@link Page.evaluateHandle} for details.
-          */
-         async evaluateHandle(pageFunction, ...args) {
-+            const realm = shouldEvaluateInMainWorld(pageFunction) ? this.mainRealm() : this.isolatedRealm();
-             pageFunction = withSourcePuppeteerURLIfNone(this.evaluateHandle.name, pageFunction);
--            return await this.mainRealm().evaluateHandle(pageFunction, ...args);
-+            return await realm.evaluateHandle(pageFunction, ...args);
-         }
-         /**
-          * Behaves identically to {@link Page.evaluate} except it's run within
-@@ -355,8 +391,9 @@
-          * See {@link Page.evaluate} for details.
-          */
-         async evaluate(pageFunction, ...args) {
-+            const realm = shouldEvaluateInMainWorld(pageFunction) ? this.mainRealm() : this.isolatedRealm();
-             pageFunction = withSourcePuppeteerURLIfNone(this.evaluate.name, pageFunction);
--            return await this.mainRealm().evaluate(pageFunction, ...args);
-+            return await realm.evaluate(pageFunction, ...args);
-         }
-         /**
-          * @internal
-@@ -458,9 +495,10 @@
-          * @returns A promise to the result of the function.
-          */
-         async $eval(selector, pageFunction, ...args) {
-+            const mainWorld = shouldEvaluateInMainWorld(pageFunction);
-             pageFunction = withSourcePuppeteerURLIfNone(this.$eval.name, pageFunction);
-             // eslint-disable-next-line @puppeteer/use-using -- This is cached.
--            const document = await this.#document();
-+            const document = await this.#document(mainWorld);
-             return await document.$eval(selector, pageFunction, ...args);
-         }
-         /**
-@@ -498,9 +536,10 @@
-          * @returns A promise to the result of the function.
-          */
-         async $$eval(selector, pageFunction, ...args) {
-+            const mainWorld = shouldEvaluateInMainWorld(pageFunction);
-             pageFunction = withSourcePuppeteerURLIfNone(this.$$eval.name, pageFunction);
-             // eslint-disable-next-line @puppeteer/use-using -- This is cached.
--            const document = await this.#document();
-+            const document = await this.#document(mainWorld);
-             return await document.$$eval(selector, pageFunction, ...args);
-         }
-         /**
-@@ -577,7 +616,8 @@
-          * @returns the promise which resolve when the `pageFunction` returns a truthy value.
-          */
-         async waitForFunction(pageFunction, options = {}, ...args) {
--            return await this.mainRealm().waitForFunction(pageFunction, options, ...args);
-+            const realm = shouldEvaluateInMainWorld(pageFunction) ? this.mainRealm() : this.isolatedRealm();
-+            return await realm.waitForFunction(pageFunction, options, ...args);
-         }
-         /**
-          * The full HTML contents of the frame, including the DOCTYPE.
-diff --git a/lib/puppeteer/cdp/Frame.js b/lib/puppeteer/cdp/Frame.js
---- a/lib/puppeteer/cdp/Frame.js
-+++ b/lib/puppeteer/cdp/Frame.js
-@@ -276,7 +276,7 @@
-                 this.#client.send('Runtime.addBinding', {
-                     name: CDP_BINDING_PREFIX + binding.name,
-                 }),
--                this.evaluate(binding.initSource).catch(debugError),
-+                this.mainRealm().evaluate(binding.initSource).catch(debugError),
-             ]);
-         }
-         async removeExposedFunctionBinding(binding) {
-@@ -289,7 +289,7 @@
-                 this.#client.send('Runtime.removeBinding', {
-                     name: CDP_BINDING_PREFIX + binding.name,
-                 }),
--                this.evaluate(name => {
-+                this.mainRealm().evaluate(name => {
-                     // Removes the dangling Puppeteer binding wrapper.
-                     // @ts-expect-error: In a different context.
-                     globalThis[name] = undefined;
-diff --git a/lib/puppeteer/api/ElementHandle.js b/lib/puppeteer/api/ElementHandle.js
---- a/lib/puppeteer/api/ElementHandle.js
-+++ b/lib/puppeteer/api/ElementHandle.js
-@@ -102,6 +102,31 @@
- import { _isElementHandle } from './ElementHandleSymbol.js';
- import { JSHandle } from './JSHandle.js';
- import { NodeLocator } from './locators/locators.js';
-+const MAIN_WORLD_DIRECTIVE = /^\s*(?:(?:\/\/!world=main(?=$|\s))|(?:\/\*!world=main\s*\*\/))/;
-+const shouldEvaluateInMainWorld = (pageFunction) => {
-+    if (typeof pageFunction !== 'function' && typeof pageFunction !== 'string') {
-+        return false;
-+    }
-+    let source;
-+    try {
-+        source =
-+            typeof pageFunction === 'string'
-+                ? pageFunction
-+                : Function.prototype.toString.call(pageFunction);
-+    }
-+    catch {
-+        return false;
-+    }
-+    if (MAIN_WORLD_DIRECTIVE.test(source)) {
-+        return true;
-+    }
-+    if (typeof pageFunction !== 'function') {
-+        return false;
-+    }
-+    const arrowIndex = source.indexOf('=>');
-+    const bodyStart = source.indexOf('{', arrowIndex >= 0 ? arrowIndex : 0);
-+    return bodyStart >= 0 && MAIN_WORLD_DIRECTIVE.test(source.slice(bodyStart + 1));
-+};
- /**
-  * A given method will have it's `this` replaced with an isolated version of
-  * `this` when decorated with this decorator.
-@@ -299,6 +324,7 @@
-          * trying to adopt it multiple times
-          */
-         isolatedHandle = __runInitializers(this, _instanceExtraInitializers);
-+        mainHandle;
-         /**
-          * @internal
-          */
-@@ -335,19 +361,37 @@
-         async getProperties() {
-             return await this.handle.getProperties();
-         }
-+        async #handleForPageFunction(pageFunction) {
-+            const realm = shouldEvaluateInMainWorld(pageFunction) ? this.frame.mainRealm() : this.frame.isolatedRealm();
-+            if (this.realm === realm) {
-+                return this;
-+            }
-+            if (realm === this.frame.isolatedRealm()) {
-+                if (!this.isolatedHandle) {
-+                    this.isolatedHandle = await realm.adoptHandle(this);
-+                }
-+                return this.isolatedHandle;
-+            }
-+            if (!this.mainHandle) {
-+                this.mainHandle = await realm.adoptHandle(this);
-+            }
-+            return this.mainHandle;
-+        }
-         /**
-          * @internal
-          */
-         async evaluate(pageFunction, ...args) {
-+            const handle = await this.#handleForPageFunction(pageFunction);
-             pageFunction = withSourcePuppeteerURLIfNone(this.evaluate.name, pageFunction);
--            return await this.handle.evaluate(pageFunction, ...args);
-+            return await handle.handle.evaluate(pageFunction, ...args);
-         }
-         /**
-          * @internal
-          */
-         async evaluateHandle(pageFunction, ...args) {
-+            const handle = await this.#handleForPageFunction(pageFunction);
-             pageFunction = withSourcePuppeteerURLIfNone(this.evaluateHandle.name, pageFunction);
--            return await this.handle.evaluateHandle(pageFunction, ...args);
-+            return await handle.handle.evaluateHandle(pageFunction, ...args);
-         }
-         /**
-          * @internal
-@@ -371,7 +415,7 @@
-          * @internal
-          */
-         async dispose() {
--            await Promise.all([this.handle.dispose(), this.isolatedHandle?.dispose()]);
-+            await Promise.all([this.handle.dispose(), this.isolatedHandle?.dispose(), this.mainHandle?.dispose()]);
-         }
-         /**
-          * @internal
-diff --git a/lib/puppeteer/api/ElementHandle.js b/lib/puppeteer/api/ElementHandle.js
---- a/lib/puppeteer/api/ElementHandle.js
-+++ b/lib/puppeteer/api/ElementHandle.js
-@@ -599,15 +599,27 @@
-         async $$eval(selector, pageFunction, ...args) {
-             const env_2 = { stack: [], error: void 0, hasError: false };
-             try {
-+                const mainWorld = shouldEvaluateInMainWorld(pageFunction);
-                 pageFunction = withSourcePuppeteerURLIfNone(this.$$eval.name, pageFunction);
-                 const results = await this.$$(selector);
--                const elements = __addDisposableResource(env_2, await this.evaluateHandle((_, ...elements) => {
-+                const realm = mainWorld ? this.frame.mainRealm() : this.frame.isolatedRealm();
-+                const adoptedResults = [];
-+                const handlesToDispose = [];
-+                for (const result of results) {
-+                    handlesToDispose.push(result);
-+                    const adopted = result.realm === realm ? result : await realm.adoptHandle(result);
-+                    adoptedResults.push(adopted);
-+                    if (adopted !== result) {
-+                        handlesToDispose.push(adopted);
-+                    }
-+                }
-+                const elements = __addDisposableResource(env_2, await realm.evaluateHandle((...elements) => {
-                     return elements;
--                }, ...results), false);
-+                }, ...adoptedResults), false);
-                 const [result] = await Promise.all([
-                     elements.evaluate(pageFunction, ...args),
--                    ...results.map(results => {
--                        return results.dispose();
-+                    ...handlesToDispose.map(result => {
-+                        return result.dispose();
-                     }),
-                 ]);
-                 return result;
