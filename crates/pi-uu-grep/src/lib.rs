@@ -140,7 +140,10 @@ struct Cli {
 	/// (often a pipe consumed by another tool), so injecting ANSI escapes
 	/// would corrupt downstream output. The common `alias grep='grep
 	/// --color=auto'` from distro bashrc files passes through unchanged.
-	#[allow(dead_code, reason = "GNU grep compatibility flag is accepted but intentionally ignored")]
+	#[allow(
+		dead_code,
+		reason = "GNU grep compatibility flag is accepted but intentionally ignored"
+	)]
 	#[arg(
 		long = "color",
 		alias = "colour",
