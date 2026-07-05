@@ -4,6 +4,7 @@ import { ProcessTerminal } from "@oh-my-pi/pi-tui/terminal";
 import {
 	getTerminalInfo,
 	isInsideTmux,
+	isInsideZellij,
 	isOsc99Supported,
 	NotifyProtocol,
 	setOsc99Supported,
@@ -17,6 +18,7 @@ const stdoutIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "i
 const stdinSetRawModeDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "setRawMode");
 const originalOsc99Probe = Bun.env.PI_TUI_OSC99_PROBE;
 const originalTmux = Bun.env.TMUX;
+const originalZellij = Bun.env.ZELLIJ;
 const originalPiNotifications = Bun.env.PI_NOTIFICATIONS;
 const mutableTerminal = TERMINAL as unknown as { notifyProtocol: NotifyProtocol };
 const originalNotifyProtocol = mutableTerminal.notifyProtocol;
@@ -71,6 +73,7 @@ describe("terminal notifications", () => {
 		// Default the suite to the "outside tmux" baseline so probe/format
 		// assertions never see a stray inherited TMUX leaking the DCS wrap in.
 		delete Bun.env.TMUX;
+		delete Bun.env.ZELLIJ;
 		// `PI_NOTIFICATIONS=off` is set in this workspace's CI env, which would
 		// short-circuit `sendNotification` before it writes anything. Clear it
 		// so the delivery-path assertions actually observe stdout writes.
@@ -84,6 +87,7 @@ describe("terminal notifications", () => {
 		mutableTerminal.notifyProtocol = originalNotifyProtocol;
 		restoreEnv("PI_TUI_OSC99_PROBE", originalOsc99Probe);
 		restoreEnv("TMUX", originalTmux);
+		restoreEnv("ZELLIJ", originalZellij);
 		restoreEnv("PI_NOTIFICATIONS", originalPiNotifications);
 		restoreProperty(process.stdin, "isTTY", stdinIsTtyDescriptor);
 		restoreProperty(process.stdout, "isTTY", stdoutIsTtyDescriptor);
@@ -261,6 +265,30 @@ describe("terminal notifications", () => {
 		TERMINAL.sendNotification("ping");
 
 		expect(writes).toEqual(["\x1b]99;;ping\x1b\\"]);
+	});
+
+	it("isInsideZellij reads the ZELLIJ env fresh on each call", () => {
+		expect(isInsideZellij()).toBe(false);
+		Bun.env.ZELLIJ = "0";
+		expect(isInsideZellij()).toBe(true);
+		delete Bun.env.ZELLIJ;
+		expect(isInsideZellij()).toBe(false);
+	});
+
+	it("under Zellij, OSC-protocol sendNotification appends a plain BEL (no DCS wrap)", () => {
+		Bun.env.ZELLIJ = "0";
+		mutableTerminal.notifyProtocol = NotifyProtocol.Osc99;
+		const writes: string[] = [];
+		vi.spyOn(process.stdout, "write").mockImplementation(chunk => {
+			writes.push(typeof chunk === "string" ? chunk : chunk.toString());
+			return true;
+		});
+
+		TERMINAL.sendNotification("ping");
+
+		// Zellij raises its [!] bell flag on a bare BEL; it has no DCS passthrough,
+		// so the OSC (which Zellij drops) is followed by a plain BEL — no wrap.
+		expect(writes).toEqual(["\x1b]99;;ping\x1b\\\x07"]);
 	});
 
 	it("under tmux, the OSC 99 capability probe is wrapped in DCS passthrough", () => {
