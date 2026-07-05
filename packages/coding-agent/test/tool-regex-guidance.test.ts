@@ -19,7 +19,6 @@ function makeSession(cwd: string): ToolSession {
 			"bash.autoBackground.enabled": false,
 			"bash.autoBackground.thresholdMs": 60_000,
 			"bashInterceptor.enabled": false,
-			"bash.stripTrailingHeadTail": true,
 			"astGrep.enabled": true,
 			"astEdit.enabled": true,
 			"grep.enabled": true,
