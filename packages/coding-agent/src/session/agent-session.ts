@@ -9562,11 +9562,11 @@ export class AgentSession {
 					const percent = (renderScan.unrenderableRatio * 100).toFixed(1);
 					this.emitNotice(
 						"warning",
-						`snapcompact disabled: high non-ASCII rate detected (${percent}%). No LLM fallback was attempted.`,
+						`snapcompact disabled: unsupported characters for selected snapcompact font (${percent}%). No LLM fallback was attempted.`,
 						"compaction",
 					);
 					throw new Error(
-						`snapcompact cannot render this conversation locally: high non-ASCII rate detected (${percent}%).`,
+						`snapcompact cannot render this conversation locally: unsupported characters for selected snapcompact font (${percent}%).`,
 					);
 				}
 			}
@@ -12342,7 +12342,7 @@ export class AgentSession {
 			// + a summary message carrying the imaged archive at FRAME_TOKEN_ESTIMATE
 			// per frame; #computeSnapcompactMaxFrames sizes the frame cap from the
 			// live window so we don't run snapcompact just to overflow every threshold
-			// tick. Any local blocker (non-ASCII transcript, kept-history too large,
+			// tick. Any local blocker (unsupported snapcompact glyphs, kept-history too large,
 			// post-render overflow) downgrades auto maintenance to a context-full LLM
 			// summary instead of wedging the session (#3659) — auto runs the default
 			// strategy on the user's behalf, so a fallback that lets the session keep
@@ -12364,11 +12364,11 @@ export class AgentSession {
 				const renderScan = snapcompact.scanRenderability(probeText, { shape });
 				if (!renderScan.isSafe) {
 					const percent = (renderScan.unrenderableRatio * 100).toFixed(1);
-					logger.warn("Snapcompact disabled: high non-ASCII rate detected", {
+					logger.warn("Snapcompact disabled: unsupported characters for selected snapcompact font", {
 						model: this.model?.id,
 						unrenderableRatio: renderScan.unrenderableRatio,
 					});
-					snapcompactBlocker = `snapcompact disabled: high non-ASCII rate detected (${percent}%); using context-full auto-compaction instead.`;
+					snapcompactBlocker = `snapcompact disabled: unsupported characters for selected snapcompact font (${percent}%); using context-full auto-compaction instead.`;
 				} else {
 					const maxFrames = this.#computeSnapcompactMaxFrames(preparation, compactionSettings);
 					if (maxFrames < 1) {

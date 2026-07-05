@@ -147,8 +147,8 @@ describe("AgentSession auto-snapcompact local-blocker fallback", () => {
 		});
 	});
 
-	it("downgrades to context-full when the transcript is too non-ASCII for snapcompact to render", async () => {
-		tempDir = TempDir.createSync("@pi-snapcompact-non-ascii-");
+	it("downgrades to context-full when unsupported glyphs make snapcompact unsafe", async () => {
+		tempDir = TempDir.createSync("@pi-snapcompact-unsupported-glyphs-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		const harness = await createHarness(tempDir, authStorage, {
 			activeModel: { provider: "aimlapi", id: "claude-sonnet-4-5-20250929" },
@@ -167,11 +167,11 @@ describe("AgentSession auto-snapcompact local-blocker fallback", () => {
 		expect(result.action).toBe("context-full");
 		expect(result.errorMessage).toBeUndefined();
 		expect(compactionModule.compact).toHaveBeenCalled();
-		const cjkNotice = harness.notices.find(message =>
-			message.startsWith("snapcompact disabled: high non-ASCII rate detected"),
+		const unsupportedGlyphNotice = harness.notices.find(message =>
+			message.startsWith("snapcompact disabled: unsupported characters for selected snapcompact font"),
 		);
-		expect(cjkNotice).toBeDefined();
-		expect(cjkNotice).toContain("using context-full auto-compaction instead.");
+		expect(unsupportedGlyphNotice).toBeDefined();
+		expect(unsupportedGlyphNotice).toContain("using context-full auto-compaction instead.");
 		expect(harness.sessionManager.getBranch().find(entry => entry.type === "compaction")).toMatchObject({
 			type: "compaction",
 			summary: "compacted",

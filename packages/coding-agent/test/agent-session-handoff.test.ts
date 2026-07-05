@@ -524,7 +524,7 @@ describe("AgentSession handoff", () => {
 			(event): event is Extract<AgentSessionEvent, { type: "notice" }> =>
 				event.type === "notice" &&
 				event.source === "compaction" &&
-				event.message.startsWith("snapcompact disabled: high non-ASCII rate detected"),
+				event.message.startsWith("snapcompact disabled: unsupported characters for selected snapcompact font"),
 		);
 		expect(downgradeNotice?.message).toContain("using context-full auto-compaction instead.");
 	});

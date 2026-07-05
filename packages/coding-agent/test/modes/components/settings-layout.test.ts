@@ -70,6 +70,16 @@ describe("settings layout", () => {
 		});
 	});
 
+	it("exposes every accepted snapcompact shape in the settings submenu", () => {
+		const def = getSettingsForTab("context").find(def => def.path === "snapcompact.shape");
+
+		expect(def?.type).toBe("submenu");
+		if (def?.type !== "submenu") throw new Error("snapcompact.shape should render as a submenu");
+		const values = def.options.map(option => option.value);
+		expect(values).toContain("silver16-bw");
+		expect(values).toEqual([...SETTINGS_SCHEMA["snapcompact.shape"].values]);
+	});
+
 	it("hides advisor dependent settings when advisor is disabled", () => {
 		const advisorDependentPaths: SettingPath[] = ["advisor.subagents", "advisor.syncBacklog", "advisor.immuneTurns"];
 		const advisorDependentPathSet = new Set(advisorDependentPaths);
