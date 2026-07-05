@@ -669,7 +669,10 @@ export function truncateDiffByHunk(
 // Path Utilities
 // =============================================================================
 
-export function shortenPath(filePath: string, homeDir?: string): string {
+export function shortenPath(filePath: unknown, homeDir?: string): string {
+	if (typeof filePath !== "string") {
+		return "";
+	}
 	const home = homeDir ?? os.homedir();
 	if (home && filePath.startsWith(home)) {
 		const suffix = filePath.slice(home.length);

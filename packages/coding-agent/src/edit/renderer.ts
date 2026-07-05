@@ -108,8 +108,8 @@ export interface EditToolDetails {
 // ═══════════════════════════════════════════════════════════════════════════
 
 interface EditRenderArgs {
-	path?: string;
-	file_path?: string;
+	path?: unknown;
+	file_path?: unknown;
 	oldText?: string;
 	newText?: string;
 	patch?: string;
@@ -118,7 +118,7 @@ interface EditRenderArgs {
 	all?: boolean;
 	// Patch mode fields
 	op?: Operation;
-	rename?: string;
+	rename?: unknown;
 	diff?: string;
 	/**
 	 * Computed preview diff (used when tool args don't include a diff, e.g. hashline mode).
@@ -130,9 +130,9 @@ interface EditRenderArgs {
 }
 
 type EditRenderEntry = {
-	path?: string;
-	rename?: string;
-	move?: string;
+	path?: unknown;
+	rename?: unknown;
+	move?: unknown;
 	op?: Operation;
 };
 
@@ -192,8 +192,11 @@ const CALL_TEXT_PREVIEW_LINES = 6;
 const CALL_TEXT_PREVIEW_WIDTH = 80;
 
 /** Extract file path from an edit entry. */
-function filePathFromEditEntry(p: string | undefined): string | undefined {
-	return p ?? undefined;
+function filePathFromEditEntry(p: unknown): string | undefined {
+	if (typeof p !== "string") {
+		return undefined;
+	}
+	return p;
 }
 
 function decodePartialJsonStringFragment(fragment: string): string {
@@ -711,18 +714,20 @@ export const editToolRenderer = {
 		// Extract path from first edit entry when top-level path is absent (new schema)
 		const firstEdit = Array.isArray(editArgs.edits) && editArgs.edits.length > 0 ? editArgs.edits[0] : undefined;
 		const rawPath =
-			editArgs.file_path ||
-			editArgs.path ||
-			filePathFromEditEntry(firstEdit?.path) ||
-			getPartialJsonEditPath(editArgs) ||
-			firstHashlineInputEntry?.path ||
-			firstApplyPatchEntry?.path ||
-			"";
+			typeof editArgs.file_path === "string"
+				? editArgs.file_path
+				: typeof editArgs.path === "string"
+					? editArgs.path
+					: (filePathFromEditEntry(firstEdit?.path) ??
+						getPartialJsonEditPath(editArgs) ??
+						firstHashlineInputEntry?.path ??
+						firstApplyPatchEntry?.path ??
+						"");
 		const rename =
-			editArgs.rename ||
-			firstEdit?.rename ||
-			firstEdit?.move ||
-			firstApplyPatchEntry?.rename ||
+			(typeof editArgs.rename === "string" ? editArgs.rename : undefined) ??
+			filePathFromEditEntry(firstEdit?.rename) ??
+			filePathFromEditEntry(firstEdit?.move) ??
+			firstApplyPatchEntry?.rename ??
 			firstHashlineInputEntry?.rename;
 		const op = editArgs.op || firstEdit?.op || firstApplyPatchEntry?.op || firstHashlineInputEntry?.op;
 		let fileCount = hashlineInputSummary?.entries.length ?? applyPatchSummary?.entries.length ?? 0;
@@ -781,8 +786,9 @@ export const editToolRenderer = {
 		uiTheme: Theme,
 		args?: EditRenderArgs,
 	): Component {
+		const edits = Array.isArray(args?.edits) ? args.edits : undefined;
 		const perFileResults = result.details?.perFileResults;
-		const totalFiles = args?.edits ? countEditFiles(args.edits) : 0;
+		const totalFiles = edits ? countEditFiles(edits) : 0;
 		if (perFileResults && (perFileResults.length > 1 || totalFiles > 1)) {
 			return renderMultiFileResult(perFileResults, totalFiles, options, uiTheme);
 		}
@@ -802,20 +808,26 @@ function renderSingleFileResult(
 ): Component {
 	const details = result.details;
 	const isError = result.isError ?? (details && "isError" in details ? details.isError : false);
-	const firstEdit = args?.edits?.[0];
+	const edits = Array.isArray(args?.edits) ? args.edits : undefined;
+	const firstEdit = edits?.[0];
 	const hashlineInputSummary = getHashlineInputRenderSummary(args ?? {}, options.renderContext?.editMode);
 	const firstHashlineInputEntry = hashlineInputSummary?.entries[0];
-	const moveSource = details && "sourcePath" in details ? details.sourcePath : undefined;
+	const moveSource =
+		details && "sourcePath" in details && typeof details.sourcePath === "string" ? details.sourcePath : undefined;
+	const detailPath = details && "path" in details && typeof details.path === "string" ? details.path : undefined;
 	const rawPath =
-		moveSource ||
-		args?.file_path ||
-		args?.path ||
-		filePathFromEditEntry(firstEdit?.path) ||
-		(details && "path" in details ? details.path : "") ||
-		firstHashlineInputEntry?.path ||
-		"";
+		moveSource ??
+		(typeof args?.file_path === "string"
+			? args.file_path
+			: typeof args?.path === "string"
+				? args.path
+				: (filePathFromEditEntry(firstEdit?.path) ?? detailPath ?? firstHashlineInputEntry?.path ?? ""));
 	const op = args?.op || firstEdit?.op || details?.op;
-	const rename = args?.rename || firstEdit?.rename || firstEdit?.move || details?.move;
+	const rename =
+		(typeof args?.rename === "string" ? args.rename : undefined) ??
+		filePathFromEditEntry(firstEdit?.rename) ??
+		filePathFromEditEntry(firstEdit?.move) ??
+		(details && "move" in details && typeof details.move === "string" ? details.move : undefined);
 
 	const displayErrorText = isError && details && "displayErrorText" in details ? details.displayErrorText : undefined;
 	const errorText = isError
