@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `omp commit` split plans aborting with `Split commit plan missing staged files: <lockfile>` when a lock file was staged alongside its manifest: the model deliberately never sees lock files, so it cannot include them, but the split validator was comparing against the raw staged set. Lock files are now deterministically paired with the commit group touching their sibling manifest (falling back to the last commit), so the validator and the model view agree ([#4632](https://github.com/can1357/oh-my-pi/issues/4632)).
+
 ## [16.3.8] - 2026-07-05
 
 ### Fixed

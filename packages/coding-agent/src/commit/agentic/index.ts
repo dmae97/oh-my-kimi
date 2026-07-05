@@ -13,6 +13,7 @@ import { discoverAuthStorage, discoverContextFiles } from "../../sdk";
 import * as git from "../../utils/git";
 import { type ExistingChangelogEntries, runCommitAgentSession } from "./agent";
 import { generateFallbackProposal } from "./fallback";
+import { assignLockFilesToPlan } from "./lock-files";
 import splitConfirmPrompt from "./prompts/split-confirm.md" with { type: "text" };
 import type { CommitAgentState, CommitProposal, HunkSelector, SplitCommitPlan } from "./state";
 import { computeDependencyOrder } from "./topo-sort";
@@ -230,6 +231,7 @@ async function runSplitCommit(
 		appendFilesToLastCommit(plan, ctx.additionalFiles);
 	}
 	const stagedFiles = await git.diff.changedFiles(ctx.cwd, { cached: true });
+	assignLockFilesToPlan(plan, stagedFiles);
 	const plannedFiles = new Set(plan.commits.flatMap(commit => commit.changes.map(change => change.path)));
 	const missingFiles = stagedFiles.filter(file => !plannedFiles.has(file));
 	if (missingFiles.length > 0) {
