@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Windows browser-launch failures being unobservable: the opener now uses `%SystemRoot%`-resolved PowerShell `Start-Process` (via `-EncodedCommand`) instead of `rundll32`, which exits 0 unconditionally. Failures ShellExecute itself reports — missing target, no handler executable, access denied — now surface as non-zero exits and are logged; the encoded payload also keeps OAuth query strings (`&`-bearing) opaque to shell metacharacter parsing.
+
 ## [16.3.8] - 2026-07-05
 
 ### Fixed
