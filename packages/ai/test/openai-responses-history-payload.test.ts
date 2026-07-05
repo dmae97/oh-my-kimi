@@ -656,6 +656,39 @@ describe("OpenAI responses history payload", () => {
 		expect(containsAssistantOutputText(payload.input, "")).toBe(false);
 	});
 
+	it("preserves native-only assistant response items without visible assistant text", async () => {
+		const followUp = "continue after native-only assistant turn";
+		const context: Context = {
+			messages: [
+				makeAssistantMessage(
+					[
+						{
+							type: "web_search_call",
+							id: "ws_native_only",
+							status: "completed",
+						},
+					],
+					false,
+					"github-copilot",
+					"gpt-5.4",
+				),
+				{ role: "user", content: followUp, timestamp: Date.now() },
+			],
+		};
+		const model = getBundledModel("github-copilot", "gpt-5.4") as Model<"openai-responses">;
+		const payload = await captureResponsesPayload(model, context);
+		const input =
+			payload && typeof payload === "object" && "input" in payload && Array.isArray(payload.input)
+				? payload.input
+				: undefined;
+		const webSearchItem = findResponsesInputItem(input, "web_search_call");
+
+		expect(webSearchItem).toMatchObject({ type: "web_search_call", status: "completed" });
+		expect(webSearchItem?.id).toBeUndefined();
+		expect(containsAssistantOutputText(input, "ignored")).toBe(false);
+		expect(containsUserInputText(input, followUp)).toBe(true);
+	});
+
 	it("builds up history incrementally from multiple assistant messages", async () => {
 		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
 		const payload = (await captureResponsesPayload(model, incrementalContext)) as { input?: unknown[] };

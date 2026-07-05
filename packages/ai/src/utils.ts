@@ -87,11 +87,11 @@ export function sanitizeOpenAIResponsesAssistantHistoryItemsForReplay(
 	let hasReplayableAssistantOutput = false;
 
 	for (const item of sanitized) {
-		if (item.type === "function_call" || item.type === "custom_tool_call" || item.type === "image_generation_call") {
+		if (item.type === "reasoning") continue;
+		if (item.type !== "message" || item.role !== "assistant") {
 			hasReplayableAssistantOutput = true;
 			break;
 		}
-		if (item.type !== "message" || item.role !== "assistant") continue;
 		if (typeof item.content === "string") {
 			if (NON_WHITESPACE_RE.test(item.content)) {
 				hasReplayableAssistantOutput = true;
