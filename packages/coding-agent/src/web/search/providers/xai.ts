@@ -239,6 +239,7 @@ function resolveXAIWebSearchApiKey(params: SearchParams): ApiKeyResolver {
 	const xaiResolver = params.authStorage.resolver("xai", {
 		sessionId: params.sessionId,
 	});
+	const xaiOAuthOrigin = params.authStorage.getCredentialOrigin("xai-oauth");
 	if (!shouldPreferXAIOAuth(params.authStorage)) {
 		return xaiResolver;
 	}
@@ -248,7 +249,14 @@ function resolveXAIWebSearchApiKey(params: SearchParams): ApiKeyResolver {
 	});
 	return async ctx => {
 		const xaiOAuthKey = await xaiOAuthResolver(ctx);
-		if (xaiOAuthKey) return xaiOAuthKey;
+		if (xaiOAuthKey) {
+			const borrowedSharedEnvKey =
+				xaiOAuthOrigin?.kind === "oauth" &&
+				Boolean($env.XAI_API_KEY) &&
+				xaiOAuthKey === $env.XAI_API_KEY &&
+				xaiOAuthKey !== $env.XAI_OAUTH_TOKEN;
+			if (!borrowedSharedEnvKey) return xaiOAuthKey;
+		}
 		return xaiResolver(ctx);
 	};
 }

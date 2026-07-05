@@ -266,6 +266,52 @@ describe("xAI web search provider", () => {
 		});
 	});
 
+	it("falls back to xai when unavailable xai-oauth OAuth resolves to the shared env key", async () => {
+		const capture = captureFetch({
+			id: "resp_xai_oauth_env_fallback",
+			model: "grok-4.3",
+			output_text: "xAI explicit account answer",
+		});
+		const authStorage = {
+			resolver(provider: string, options?: { sessionId?: string; baseUrl?: string; modelId?: string }) {
+				expect(options?.sessionId).toBe("session-xai-test");
+				return async () => {
+					if (provider === "xai-oauth") return Bun.env.XAI_API_KEY;
+					if (provider === "xai") return "explicit-xai-runtime-key";
+					return undefined;
+				};
+			},
+			hasAuth(provider: string) {
+				return provider === "xai-oauth" || provider === "xai";
+			},
+			hasNonEnvCredential(provider: string) {
+				return provider === "xai-oauth" || provider === "xai";
+			},
+			getCredentialOrigin(provider: string) {
+				if (provider === "xai-oauth") return { kind: "oauth" };
+				if (provider === "xai") return { kind: "runtime" };
+				return undefined;
+			},
+		} as unknown as AuthStorage;
+		const originalOAuthToken = Bun.env.XAI_OAUTH_TOKEN;
+		const originalApiKey = Bun.env.XAI_API_KEY;
+		delete Bun.env.XAI_OAUTH_TOKEN;
+		Bun.env.XAI_API_KEY = "shared-xai-env-key";
+		try {
+			await searchXAI(makeParams(capture.fetchMock, authStorage));
+		} finally {
+			if (originalOAuthToken === undefined) delete Bun.env.XAI_OAUTH_TOKEN;
+			else Bun.env.XAI_OAUTH_TOKEN = originalOAuthToken;
+			if (originalApiKey === undefined) delete Bun.env.XAI_API_KEY;
+			else Bun.env.XAI_API_KEY = originalApiKey;
+		}
+
+		expect(capture.capturedRequest).not.toBeNull();
+		expect(capture.capturedRequest?.headers).toMatchObject({
+			Authorization: "Bearer explicit-xai-runtime-key",
+		});
+	});
+
 	it("reports xAI available through xai when only XAI_API_KEY is set", () => {
 		const provider = new XAIProvider();
 		const originalOAuthToken = Bun.env.XAI_OAUTH_TOKEN;
