@@ -48,9 +48,10 @@ describe("workflow keyword highlighting", () => {
 });
 
 describe("workflow notice", () => {
-	it("is a non-empty system notice carrying the eval-fan-out contract", () => {
+	it("is a non-empty system notice carrying the task fan-out contract", () => {
 		expect(WORKFLOW_NOTICE.length).toBeGreaterThan(0);
 		expect(WORKFLOW_NOTICE).toContain("**workflowz** keyword");
-		expect(WORKFLOW_NOTICE).toContain("parallel(");
+		expect(WORKFLOW_NOTICE).toContain("Use the `task` tool for batched fan-out");
+		expect(WORKFLOW_NOTICE).toContain("tasks[]");
 	});
 });

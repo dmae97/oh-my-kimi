@@ -399,15 +399,17 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 		);
 		this.parameters = this.#asyncEnabled ? bashSchemaWithAsync : bashSchemaBase;
 		const evalBackends = resolveEvalBackends(this.session);
+		const isToolActive = (name: string, fallback: boolean): boolean => this.session.isToolActive?.(name) ?? fallback;
 		this.description = prompt.render(bashDescription, {
 			asyncEnabled: this.#asyncEnabled,
 			autoBackgroundEnabled: this.#autoBackgroundEnabled,
 			autoBackgroundThresholdSeconds: Math.max(0, Math.floor(this.#autoBackgroundThresholdMs / 1000)),
-			hasAstGrep: this.session.settings.get("astGrep.enabled"),
-			hasAstEdit: this.session.settings.get("astEdit.enabled"),
-			hasGrep: this.session.settings.get("grep.enabled"),
-			hasGlob: this.session.settings.get("glob.enabled"),
-			hasEval: evalBackends.python || evalBackends.js || evalBackends.ruby || evalBackends.julia,
+			hasAstGrep: isToolActive("ast_grep", this.session.settings.get("astGrep.enabled")),
+			hasAstEdit: isToolActive("ast_edit", this.session.settings.get("astEdit.enabled")),
+			hasGrep: isToolActive("grep", this.session.settings.get("grep.enabled")),
+			hasGlob: isToolActive("glob", this.session.settings.get("glob.enabled")),
+			hasRead: isToolActive("read", true),
+			hasEval: isToolActive("eval", evalBackends.python || evalBackends.js || evalBackends.ruby || evalBackends.julia),
 		});
 	}
 

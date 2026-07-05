@@ -164,6 +164,9 @@ describe("system prompt tool inventory", () => {
 		expect(bash?.description).toContain("purpose-built tool");
 		expect(bash?.description).not.toContain("eval` cell");
 		expect(bash?.description).not.toContain("use `eval` cells");
+		expect(bash?.description).not.toContain("`grep` tool");
+		expect(bash?.description).not.toContain("`ls` → `read`");
+		expect(bash?.description).not.toContain("`find` → the `glob` tool");
 
 		const { systemPrompt } = await buildSystemPrompt({
 			cwd: tempDir,

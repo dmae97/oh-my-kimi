@@ -21,7 +21,7 @@ Use bash ONLY for: a single binary call, or one short pipeline that COMPUTES a f
 - Multiline commands, `&&`-chains mixing control flow
 - Quote/JSON escaping that fights the shell
 {{/if}}
-- GNU grep BRE extensions are not guaranteed in the embedded shell: use `grep -E 'json|tool'` for alternation instead of `grep 'json\|tool'`; use the built-in `grep` tool with `pattern: "json|tool"` (Rust regex, so `\bword\b` works there){{#if hasEval}}, or `eval` for exact text processing{{/if}}.
+{{#if hasGrep}}- GNU grep BRE extensions are not guaranteed in the embedded shell: use `grep -E 'json|tool'` for alternation instead of `grep 'json\|tool'`; use the built-in `grep` tool with `pattern: "json|tool"` (Rust regex, so `\bword\b` works there){{#if hasEval}}, or `eval` for exact text processing{{/if}}.{{else}}- GNU grep BRE extensions are not guaranteed in the embedded shell: use `grep -E 'json|tool'` for alternation instead of `grep 'json\|tool'`{{#if hasEval}}, or use `eval` for exact text processing{{/if}}.{{/if}}
 
 <instruction>
 - `cwd` sets the working dir, not `cd dir && …`
@@ -39,8 +39,8 @@ Use bash ONLY for: a single binary call, or one short pipeline that COMPUTES a f
 
 <critical>
 {{#if hasEval}}- The embedded shell invokes real binaries with simple args; it is NOT full GNU Bash and NOT a scripting surface. Loops, conditionals, heredocs, inline interpreter scripts (`-e`/`-c`/`--eval`) when an eval runtime exists, several piped stages, exact pipeline semantics, or quote/JSON escaping mean you're writing a program → use `eval` cells: restartable, stateful, and free of shell-quoting traps.{{else}}- The embedded shell invokes real binaries with simple args; it is NOT full GNU Bash and NOT a scripting surface. Loops, conditionals, heredocs, inline interpreter scripts, several piped stages, exact pipeline semantics, or quote/JSON escaping mean you're writing a shell program; use a purpose-built tool or checked-in script instead.{{/if}}
-- NEVER shell out to search content or files: `grep/rg` → `grep`.
-- NEVER use `ls` or `find` to list or locate files — `ls` → `read` (a directory path lists entries), `find` → the `glob` tool (globbing). This is non-negotiable, even for a single quick listing.
+{{#if hasGrep}}- NEVER shell out to search content or files: `grep/rg` → `grep`.{{else}}- Avoid shelling out for broad content search; use an active search/read tool when one is available.{{/if}}
+{{#if hasRead}}{{#if hasGlob}}- NEVER use `ls` or `find` to list or locate files — `ls` → `read` (a directory path lists entries), `find` → the `glob` tool (globbing). This is non-negotiable, even for a single quick listing.{{else}}- Prefer `read` for known file and directory reads. Only use shell listing when no file-listing tool is active.{{/if}}{{else}}{{#if hasGlob}}- Prefer `glob` for file discovery; avoid `find` when `glob` is active.{{else}}- If no file read/listing tool is active, keep shell inspection narrow and state that limitation.{{/if}}{{/if}}
 - Avoid head/tail/redirections: stderr already merged; long output auto-truncated, FULL capture kept at `artifact://<id>`.
 </critical>
 

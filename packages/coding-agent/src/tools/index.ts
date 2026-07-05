@@ -224,6 +224,8 @@ export interface ToolSession {
 	getAgentId?: () => string | null;
 	/** Look up a registered tool by name (used by the eval js backend's tool bridge). */
 	getToolByName?: (name: string) => AgentTool | undefined;
+	/** Return whether a built-in tool is active in this turn's tool set. */
+	isToolActive?: (name: string) => boolean;
 	/** Agent registry for IRC routing across live sessions. */
 	agentRegistry?: AgentRegistry;
 	/** Get artifacts directory for artifact:// URLs */
@@ -647,9 +649,15 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 					...(goalModeActive ? ([["goal", HIDDEN_TOOLS.goal]] as const) : []),
 				];
 
+	const activeToolNames = new Set(baseEntries.map(([name]) => name));
+	const toolFactorySession: ToolSession = {
+		...session,
+		isToolActive: name => activeToolNames.has(name),
+	};
+
 	const baseResults = await Promise.all(
 		baseEntries.map(async ([name, factory]) => {
-			const tool = await logger.time(`createTools:${name}`, factory as ToolFactory, session);
+			const tool = await logger.time(`createTools:${name}`, factory as ToolFactory, toolFactorySession);
 			return tool ? wrapToolWithMetaNotice(tool) : null;
 		}),
 	);
