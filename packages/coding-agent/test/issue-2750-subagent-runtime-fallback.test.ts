@@ -60,7 +60,7 @@ function createYieldingSession(): AgentSession {
 	return session as unknown as AgentSession;
 }
 
-describe("issue #2750: subagent runtime model fallback", () => {
+describe("subagent runtime model resolution", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});
@@ -147,5 +147,44 @@ describe("issue #2750: subagent runtime model fallback", () => {
 		});
 
 		expect(childFallbackChains?.["subagent:issue-2750-routed"]).toEqual(["openrouter/z-ai/glm-4.7@fireworks"]);
+	});
+
+	it("defers unresolved explicit subagent model selectors instead of picking an available default", async () => {
+		const defaultModel = model("zai", "glm-5.2");
+		let childModel: Model | undefined;
+		let childModelPattern: unknown;
+		let childModelPatternAuthFallback: unknown;
+		let childModelPatternFallbackRole: unknown;
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+			if (!options) throw new Error("Expected createAgentSession options");
+			childModel = options.model;
+			childModelPattern = options.modelPattern;
+			childModelPatternAuthFallback = options.modelPatternAuthFallback;
+			childModelPatternFallbackRole = options.modelPatternFallbackRole;
+			return { session: createYieldingSession(), extensionsResult: {}, setToolUIContext: () => {} } as never;
+		});
+
+		const agent: AgentDefinition = { name: "task", description: "test", systemPrompt: "test", source: "bundled" };
+		await runSubprocess({
+			cwd: "/tmp",
+			agent,
+			task: "work",
+			index: 0,
+			id: "issue-4421",
+			modelOverride: ["openai-codex/gpt-5.5:auto"],
+			parentActiveModelPattern: "openai-codex/gpt-5.5",
+			settings: Settings.isolated(),
+			modelRegistry: {
+				refresh: async () => {},
+				getAvailable: () => [defaultModel],
+				getApiKey: async () => "test-key",
+			} as never,
+			enableLsp: false,
+		});
+
+		expect(childModel).toBeUndefined();
+		expect(childModelPattern).toEqual(["openai-codex/gpt-5.5:auto"]);
+		expect(childModelPatternAuthFallback).toBe("openai-codex/gpt-5.5");
+		expect(childModelPatternFallbackRole).toBe("subagent:issue-4421");
 	});
 });
