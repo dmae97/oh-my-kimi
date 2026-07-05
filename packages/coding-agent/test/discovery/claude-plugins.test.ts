@@ -693,6 +693,48 @@ describe("listClaudePluginRoots", () => {
 		]);
 	});
 
+	test("reads slash commands from array-form manifest file entries", async () => {
+		// Claude plugins reference allows command paths to be either flat `.md`
+		// files or directories. A manifest-declared commands field still replaces
+		// default `commands/`; plugins that want defaults must list `./commands`.
+		const pluginsDir = path.join(tempDir, ".claude", "plugins");
+		const pluginPath = path.join(tempDir, "plugins", "manifest-commands-files");
+		await fs.mkdir(pluginsDir, { recursive: true });
+		await fs.mkdir(path.join(pluginPath, ".claude-plugin"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, "custom"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, "ops"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, "commands"), { recursive: true });
+
+		const registry = {
+			version: 2,
+			plugins: {
+				"manifest-commands-files@market": [
+					{
+						scope: "user",
+						installPath: pluginPath,
+						version: "1.0.0",
+						installedAt: "2025-01-01T00:00:00Z",
+						lastUpdated: "2025-01-01T00:00:00Z",
+					},
+				],
+			},
+		};
+		await fs.writeFile(path.join(pluginsDir, "installed_plugins.json"), JSON.stringify(registry));
+		await fs.writeFile(
+			path.join(pluginPath, ".claude-plugin", "plugin.json"),
+			JSON.stringify({ commands: ["./custom/deploy.md", "./ops"] }),
+		);
+		await fs.writeFile(path.join(pluginPath, "custom", "deploy.md"), "Deploy\n");
+		await fs.writeFile(path.join(pluginPath, "ops", "rollback.md"), "Rollback\n");
+		await fs.writeFile(path.join(pluginPath, "commands", "default.md"), "Default\n");
+
+		const result = await loadCapability<SlashCommand>("slash-commands", { cwd: tempDir });
+		expect(result.warnings).toEqual([]);
+		expect(result.all.find(c => c.name === "manifest-commands-files:deploy")?.content).toBe("Deploy\n");
+		expect(result.all.find(c => c.name === "manifest-commands-files:rollback")?.content).toBe("Rollback\n");
+		expect(result.all.find(c => c.name === "manifest-commands-files:default")).toBeUndefined();
+	});
+
 	test("array-form commands warns on out-of-root entries while loading valid ones", async () => {
 		const pluginsDir = path.join(tempDir, ".claude", "plugins");
 		const pluginPath = path.join(tempDir, "plugins", "manifest-commands-mixed");

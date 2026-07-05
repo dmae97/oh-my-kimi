@@ -4,6 +4,7 @@
  * Loads configuration from ~/.claude/plugins/cache/ based on installed_plugins.json registry.
  * Priority: 70 (below claude.ts at 80, so user overrides in .claude/ take precedence)
  */
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
 import { registerProvider } from "../capability";
@@ -209,8 +210,31 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 				false,
 			);
 			const commandResults = await Promise.all(
-				commandsDirs.map(dir =>
-					loadFilesFromDir<SlashCommand>(ctx, dir, PROVIDER_ID, root.scope, {
+				commandsDirs.map(async dir => {
+					try {
+						const stats = await fs.stat(dir);
+						if (stats.isFile()) {
+							if (path.extname(dir) !== ".md") return { items: [], warnings: [] };
+							const content = await readFile(dir);
+							if (content === null) return { items: [], warnings: [`Failed to read file: ${dir}`] };
+							const cmdName = path.basename(dir).replace(/\.md$/, "");
+							return {
+								items: [
+									{
+										name: root.plugin ? `${root.plugin}:${cmdName}` : cmdName,
+										path: dir,
+										content,
+										level: root.scope,
+										_source: createSourceMeta(PROVIDER_ID, dir, root.scope),
+									},
+								],
+								warnings: [],
+							};
+						}
+					} catch {
+						// Missing entries behave like missing directories: no items, no warning.
+					}
+					return loadFilesFromDir<SlashCommand>(ctx, dir, PROVIDER_ID, root.scope, {
 						extensions: ["md"],
 						transform: (name, content, filePath, source) => {
 							const cmdName = name.replace(/\.md$/, "");
@@ -222,8 +246,8 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 								_source: source,
 							};
 						},
-					}),
-				),
+					});
+				}),
 			);
 			return { commandResults, resolveWarnings };
 		}),
