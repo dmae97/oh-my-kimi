@@ -18,6 +18,7 @@
 - Fixed xAI `web_search` to use `xai-oauth` credentials before falling back to `xai` API-key credentials, and to treat xAI OAuth as available in provider selection. ([#4536](https://github.com/can1357/oh-my-pi/issues/4536))
 - Fixed token-usage badges disappearing on session resume for empty automated assistant turns; live and resume paths now share the same billed-usage predicate so a turn that consumed tokens keeps its badge on both surfaces, and only genuinely zero-usage turns suppress the row. ([#4532](https://github.com/can1357/oh-my-pi/issues/4532))
 - Fixed `/model` search escaping the active provider tab and silently letting a same-named model from a different provider be persisted as the default role. `#filterModels` no longer auto-switches to the `ALL` tab when a query is typed inside a provider tab; results and Enter stay scoped to the selected provider. Empty results now name the active tab and point at `ALL` as the explicit escape. ([#4522](https://github.com/can1357/oh-my-pi/issues/4522))
+- Fixed Esc no longer stopping TTS audio playback once the assistant reply had finished streaming; queued Kokoro (and remote) audio kept reading past the response's end because `vocalizer.clear()` only fired from the aborted-stream cascade. Esc now silences a still-audible vocalizer as its first action (ahead of the `tree`/`branch` double-Esc gesture); a second Esc keeps its previous behavior. ([#4521](https://github.com/can1357/oh-my-pi/issues/4521))
 
 ## [16.3.6] - 2026-07-04
 

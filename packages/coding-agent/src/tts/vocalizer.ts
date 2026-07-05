@@ -195,6 +195,15 @@ export class Vocalizer {
 		this.#livePlayers.clear();
 	}
 
+	/**
+	 * True while any utterance is still audible or synthesizing — a live
+	 * player, an unfinished stream handle, or an in-flight rewrite is enough.
+	 * Callers (Esc handler) treat this as the "silence me" signal.
+	 */
+	isSpeaking(): boolean {
+		return this.#livePlayers.size > 0 || this.#liveAborts.size > 0 || this.#handle !== null;
+	}
+
 	/** Lower the volume while the user is speaking (push-to-talk), so speech doesn't drown them out. */
 	duck(): void {
 		this.#ducked = true;

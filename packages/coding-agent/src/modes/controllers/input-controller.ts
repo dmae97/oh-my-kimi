@@ -23,6 +23,7 @@ import { isLowSignalTitleInput } from "../../tiny/text";
 import { tinyTitleClient } from "../../tiny/title-client";
 import type { TinyTitleProgressEvent } from "../../tiny/title-protocol";
 import { shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/render-utils";
+import { vocalizer } from "../../tts/vocalizer";
 import {
 	copyToClipboard,
 	readImageFromClipboard,
@@ -390,6 +391,13 @@ export class InputController {
 				// Esc must not destroy an in-progress draft; it only disarms a previous empty-editor Esc.
 				this.ctx.lastEscapeTime = 0;
 				this.#clearStreamingEscapeArm();
+			} else if (vocalizer.isSpeaking()) {
+				// TTS buffers seconds of PCM past the streaming abort, so an Esc
+				// arriving after the model stopped would otherwise fall through to
+				// the double-Esc gesture while Kokoro reads on. Silence first;
+				// tree/branch stays reachable via a second Esc.
+				vocalizer.clear();
+				this.ctx.lastEscapeTime = 0;
 			} else {
 				// Double-interrupt with empty editor triggers /tree, /branch, or nothing based on setting
 				const action = settings.get("doubleEscapeAction");
