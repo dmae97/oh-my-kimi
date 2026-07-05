@@ -315,6 +315,18 @@ export function splitPathAndSel(rawPath: string): { path: string; sel?: string }
 	return { path: basePath, sel };
 }
 
+/** Resolve a read-tool path variant and return it only when it already exists on disk. */
+export async function resolveExistingReadPath(filePath: string, cwd: string): Promise<string | undefined> {
+	const resolved = resolveReadPath(filePath, cwd);
+	try {
+		await fs.promises.stat(resolved);
+		return resolved;
+	} catch (err) {
+		if (isEnoent(err) || isEnotdir(err)) return undefined;
+		return resolved;
+	}
+}
+
 /**
  * Async sibling of {@link splitPathAndSel} that prefers a literal filesystem
  * path over selector interpretation when the raw input exists on disk.
@@ -329,12 +341,9 @@ export async function splitPathAndSelPreferringLiteral(
 ): Promise<{ path: string; sel?: string }> {
 	const strict = splitPathAndSel(rawPath);
 	if (strict.sel === undefined) return strict;
-	try {
-		await fs.promises.stat(resolveReadPath(rawPath, cwd));
-		return { path: rawPath };
-	} catch {
-		return strict;
-	}
+	const resolved = await resolveExistingReadPath(rawPath, cwd);
+	if (resolved !== undefined) return { path: rawPath };
+	return strict;
 }
 
 /**

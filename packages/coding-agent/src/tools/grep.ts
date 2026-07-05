@@ -49,6 +49,7 @@ import {
 	parseLineRanges,
 	pathTargetsSsh,
 	type ResolvedSearchTarget,
+	resolveExistingReadPath,
 	resolveReadPath,
 	resolveToolSearchScope,
 	selectorLineRanges,
@@ -77,6 +78,9 @@ const searchSchema = type({
 	pattern: type("string").describe("regex pattern"),
 	"path?": searchPathEntry.describe(
 		'file, directory, glob, internal URL, or "<file>:<lines>" selector to search; pass several as a semicolon-delimited list ("src; tests"). Omitted -> searches the workspace root (".")',
+	),
+	"selector?": type("string").describe(
+		'line selector without a leading colon (e.g. "50-100", "50+10", "50-100,200-300"); keeps `path` literal when filenames contain colons',
 	),
 	"case?": type("boolean").describe("case-sensitive search"),
 	"gitignore?": type("boolean").describe("respect gitignore"),
@@ -149,9 +153,35 @@ function isReadSelectorGrammar(sel: string): boolean {
 	return lower === "raw" || lower === "conflicts" || parseLineRanges(sel) !== null;
 }
 
-async function parsePathSpecs(rawEntries: readonly string[], cwd: string): Promise<GrepPathSpec[]> {
+async function parsePathSpecs(
+	rawEntries: readonly string[],
+	cwd: string,
+	explicitSelector?: string,
+): Promise<GrepPathSpec[]> {
+	const explicitRanges =
+		explicitSelector === undefined || explicitSelector.length === 0 ? undefined : parseLineRanges(explicitSelector);
+	if (explicitSelector !== undefined && !explicitRanges) {
+		throw new ToolError(
+			`selector "${explicitSelector}" is invalid — use line ranges like "50-100", "50+10", or "50-100,200-300" without a leading colon`,
+		);
+	}
 	const specs: GrepPathSpec[] = [];
 	for (const entry of rawEntries) {
+		if (explicitRanges) {
+			// Separate selector parameter makes `path` deterministic: first try the
+			// exact local filesystem path (with read-path normalization), then let
+			// archive/internal/URL resolution handle non-literal structured paths.
+			const localPath = /^[a-z][a-z0-9+.-]*:\/\//i.test(entry)
+				? undefined
+				: await resolveExistingReadPath(entry, cwd);
+			specs.push({
+				original: entry,
+				clean: localPath ?? entry,
+				literalFilesystemMatch: localPath !== undefined,
+				ranges: explicitRanges,
+			});
+			continue;
+		}
 		// Internal URLs (`artifact://`, `skill://`, …) use the URL-aware splitter,
 		// which peels selector-shaped tails only for selector-capable schemes and
 		// leaves opaque ones (`mcp://`) intact. Unlike filesystem paths, their
@@ -886,7 +916,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 		_onUpdate?: AgentToolUpdateCallback<GrepToolDetails>,
 		_toolContext?: AgentToolContext,
 	): Promise<AgentToolResult<GrepToolDetails>> {
-		const { pattern, path: rawPath, case: caseSensitive, gitignore, skip } = params;
+		const { pattern, path: rawPath, selector, case: caseSensitive, gitignore, skip } = params;
 
 		return untilAborted(signal, async () => {
 			// Preserve the pattern verbatim — leading/trailing whitespace is
@@ -904,7 +934,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 			const scopedPaths = toPathList(rawPath);
 			const effectivePaths = scopedPaths.length > 0 ? scopedPaths : ["."];
 			const rawEntries = await expandDelimitedPathEntries(effectivePaths, this.session.cwd);
-			const pathSpecs = await parsePathSpecs(rawEntries, this.session.cwd);
+			const pathSpecs = await parsePathSpecs(rawEntries, this.session.cwd, selector);
 			const materializedExternalPaths = new Map<string, string>();
 			const materializeExternalUrlForSearch = async (rawPath: string) => {
 				const target = parseReadUrlTarget(rawPath);
