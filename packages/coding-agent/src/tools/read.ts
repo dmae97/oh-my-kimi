@@ -103,6 +103,7 @@ import {
 	splitDelimitedPathEntry,
 	splitInternalUrlSel,
 	splitPathAndSel,
+	splitPathAndSelPreferringLiteral,
 } from "./path-utils";
 import { formatBytes, replaceTabs, shortenPath, wrapBrackets } from "./render-utils";
 import {
@@ -2246,7 +2247,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			);
 		}
 
-		const localTarget = splitPathAndSel(readPath);
+		const localTarget = await splitPathAndSelPreferringLiteral(readPath, this.session.cwd);
 		const localReadPath = localTarget.path;
 		const parsed = parseSel(localTarget.sel);
 

@@ -53,7 +53,7 @@ import {
 	resolveToolSearchScope,
 	selectorLineRanges,
 	splitInternalUrlSel,
-	splitPathAndSel,
+	splitPathAndSelPreferringLiteral,
 	toPathList,
 } from "./path-utils";
 import {
@@ -147,7 +147,7 @@ function isReadSelectorGrammar(sel: string): boolean {
 	return lower === "raw" || lower === "conflicts" || parseLineRanges(sel) !== null;
 }
 
-function parsePathSpecs(rawEntries: readonly string[]): GrepPathSpec[] {
+async function parsePathSpecs(rawEntries: readonly string[], cwd: string): Promise<GrepPathSpec[]> {
 	const specs: GrepPathSpec[] = [];
 	for (const entry of rawEntries) {
 		// Internal URLs (`artifact://`, `skill://`, …) use the URL-aware splitter,
@@ -168,7 +168,9 @@ function parsePathSpecs(rawEntries: readonly string[]): GrepPathSpec[] {
 			specs.push({ original: entry, clean: internalSplit.path, ranges: selectorLineRanges(internalSplit.sel) });
 			continue;
 		}
-		const split = splitPathAndSel(entry);
+		// Prefer a literal filesystem match when one exists — a real file named
+		// `test:1-2` outranks the `:1-2` selector interpretation (issue #4618).
+		const split = await splitPathAndSelPreferringLiteral(entry, cwd);
 		let clean = entry;
 		let ranges: [LineRange, ...LineRange[]] | undefined;
 		if (split.sel) {
@@ -897,7 +899,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 			const scopedPaths = toPathList(rawPath);
 			const effectivePaths = scopedPaths.length > 0 ? scopedPaths : ["."];
 			const rawEntries = await expandDelimitedPathEntries(effectivePaths, this.session.cwd);
-			const pathSpecs = parsePathSpecs(rawEntries);
+			const pathSpecs = await parsePathSpecs(rawEntries, this.session.cwd);
 			const paths = pathSpecs.map(spec => spec.clean);
 			const materializedExternalPaths = new Map<string, string>();
 			const materializeExternalUrlForSearch = async (rawPath: string) => {

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `read` and `grep` refusing to access filesystem paths whose names end in a selector-shaped suffix (e.g. `test:1-2`, `log:raw`) by preferring a literal match over the trailing `:<selector>` peel when the raw path exists on disk ([#4618](https://github.com/can1357/oh-my-pi/issues/4618)).
+
 ## [16.3.7] - 2026-07-05
 
 ### Added

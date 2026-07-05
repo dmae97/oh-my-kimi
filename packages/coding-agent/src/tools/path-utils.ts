@@ -316,6 +316,28 @@ export function splitPathAndSel(rawPath: string): { path: string; sel?: string }
 }
 
 /**
+ * Async sibling of {@link splitPathAndSel} that prefers a literal filesystem
+ * path over selector interpretation when the raw input exists on disk.
+ * Filenames whose tail matches the selector grammar (e.g. `test:1-2`, `log:raw`)
+ * are legal on POSIX; without this the strict splitter peels the tail and both
+ * `read` and `grep` refuse to open the real file (see issue #4618). Mirrors
+ * {@link parseSearchPathPreferringLiteral} for glob-shaped literal paths.
+ */
+export async function splitPathAndSelPreferringLiteral(
+	rawPath: string,
+	cwd: string,
+): Promise<{ path: string; sel?: string }> {
+	const strict = splitPathAndSel(rawPath);
+	if (strict.sel === undefined) return strict;
+	try {
+		await fs.promises.stat(resolveToCwd(rawPath, cwd));
+		return { path: rawPath };
+	} catch {
+		return strict;
+	}
+}
+
+/**
  * Variant of {@link splitPathAndSel} for internal URLs (`scheme://...`).
  *
  * The filesystem-path splitter is intentionally conservative: it refuses to
