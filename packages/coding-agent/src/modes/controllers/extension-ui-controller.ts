@@ -71,9 +71,13 @@ export class ExtensionUiController {
 			setWidget: (key, content, options) => this.setHookWidget(key, content, options),
 			setTitle: title => setTerminalTitle(title),
 			custom: (factory, options) => this.showHookCustom(factory, options),
-			setEditorText: text => this.ctx.editor.setText(text),
+			setEditorText: text => {
+				this.ctx.editor.setText(text);
+				this.ctx.ui.requestRender();
+			},
 			pasteToEditor: text => {
 				this.ctx.editor.handleInput(`\x1b[200~${text}\x1b[201~`);
+				this.ctx.ui.requestRender();
 			},
 			getEditorText: () => this.ctx.editor.getText(),
 			editor: (title, prefill, dialogOptions, editorOptions) =>

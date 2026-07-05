@@ -48,12 +48,36 @@ function stalledBody(bytes: Uint8Array[] = []): ReadableStream<Uint8Array> {
 }
 
 function delayedBody(chunks: Array<{ atMs: number; bytes: Uint8Array }>): ReadableStream<Uint8Array> {
+	let cancelled = false;
+	let timers: NodeJS.Timeout[] = [];
+	const clearTimers = (): void => {
+		for (const timer of timers) clearTimeout(timer);
+		timers = [];
+	};
+
 	return new ReadableStream<Uint8Array>({
 		start(controller) {
+			const schedule = (callback: () => void, delayMs: number): void => {
+				const timer = setTimeout(() => {
+					if (cancelled) return;
+					callback();
+				}, delayMs);
+				timer.unref?.();
+				timers.push(timer);
+			};
+
 			for (const chunk of chunks) {
-				setTimeout(() => controller.enqueue(chunk.bytes), chunk.atMs);
+				schedule(() => controller.enqueue(chunk.bytes), chunk.atMs);
 			}
-			setTimeout(() => controller.close(), Math.max(...chunks.map(chunk => chunk.atMs)) + 1);
+			const closeAtMs = chunks.length === 0 ? 0 : Math.max(...chunks.map(chunk => chunk.atMs)) + 1;
+			schedule(() => {
+				clearTimers();
+				controller.close();
+			}, closeAtMs);
+		},
+		cancel() {
+			cancelled = true;
+			clearTimers();
 		},
 	});
 }
@@ -335,9 +359,9 @@ describe("streamPiNative event flow", () => {
 		const final = baseAssistant({ content: [{ type: "text", text: "hello world" }] });
 		const chunks = [
 			{ atMs: 0, bytes: sseEventBytes({ type: "start", partial: baseAssistant() }) },
-			{ atMs: 15, bytes: sseEventBytes({ type: "text_delta", contentIndex: 0, delta: "hello", partial: final }) },
-			{ atMs: 35, bytes: sseEventBytes({ type: "text_delta", contentIndex: 0, delta: " world", partial: final }) },
-			{ atMs: 55, bytes: sseEventBytes({ type: "done", reason: "stop", message: final }) },
+			{ atMs: 30, bytes: sseEventBytes({ type: "text_delta", contentIndex: 0, delta: "hello", partial: final }) },
+			{ atMs: 70, bytes: sseEventBytes({ type: "text_delta", contentIndex: 0, delta: " world", partial: final }) },
+			{ atMs: 110, bytes: sseEventBytes({ type: "done", reason: "stop", message: final }) },
 		];
 		const fetchImpl: FetchImpl = (async () =>
 			new Response(delayedBody(chunks), {
@@ -348,8 +372,8 @@ describe("streamPiNative event flow", () => {
 		const stream = streamPiNative(fakeModel(), baseContext, {
 			apiKey: "k",
 			fetch: fetchImpl,
-			streamFirstEventTimeoutMs: 40,
-			streamIdleTimeoutMs: 30,
+			streamFirstEventTimeoutMs: 100,
+			streamIdleTimeoutMs: 75,
 		});
 
 		const result = await stream.result();
