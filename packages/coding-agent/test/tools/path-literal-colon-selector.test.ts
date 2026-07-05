@@ -4,7 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { splitPathAndSel, splitPathAndSelPreferringLiteral } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
+import {
+	probeLiteralPathExists,
+	splitPathAndSel,
+	splitPathAndSelPreferringLiteral,
+} from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import { GrepTool } from "../../src/tools/grep";
@@ -80,10 +84,36 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			expect(await splitPathAndSelPreferringLiteral(literal, tmpDir)).toEqual({ path: literal });
 		});
 
+		it("keeps a literal dangling symlink intact (lstat exists even though stat fails)", async () => {
+			const literal = path.join(tmpDir, "test:1-2");
+			await fs.symlink(path.join(tmpDir, "missing-target"), literal);
+
+			expect(await probeLiteralPathExists(literal, tmpDir)).toBe("exists");
+			expect(await splitPathAndSelPreferringLiteral(literal, tmpDir)).toEqual({ path: literal });
+		});
+
 		it("returns the strict split unchanged when there is no selector tail", async () => {
 			expect(await splitPathAndSelPreferringLiteral("plain.txt", tmpDir)).toEqual({
 				path: "plain.txt",
 			});
+		});
+	});
+
+	describe("probeLiteralPathExists", () => {
+		it('returns "missing" for a path that clearly does not exist', async () => {
+			expect(await probeLiteralPathExists(path.join(tmpDir, "never-here:1-2"), tmpDir)).toBe("missing");
+		});
+
+		it('returns "exists" for a regular file', async () => {
+			const literal = path.join(tmpDir, "regular:1-2");
+			await Bun.write(literal, "hi\n");
+			expect(await probeLiteralPathExists(literal, tmpDir)).toBe("exists");
+		});
+
+		it('returns "exists" for a dangling symlink', async () => {
+			const literal = path.join(tmpDir, "dangling:1-2");
+			await fs.symlink(path.join(tmpDir, "nowhere"), literal);
+			expect(await probeLiteralPathExists(literal, tmpDir)).toBe("exists");
 		});
 	});
 

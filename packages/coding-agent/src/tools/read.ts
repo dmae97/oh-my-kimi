@@ -99,7 +99,7 @@ import {
 	type LineRange,
 	parseLineRanges,
 	pathTargetsSsh,
-	resolveExistingReadPath,
+	probeLiteralPathExists,
 	resolveReadPath,
 	splitDelimitedPathEntry,
 	splitInternalUrlSel,
@@ -2249,7 +2249,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				: { path: readPath, sel: explicitSelector };
 		const rawPathIsLiteral =
 			explicitSelector !== undefined
-				? readPath.includes(":") && (await resolveExistingReadPath(readPath, this.session.cwd)) !== undefined
+				? readPath.includes(":") && (await probeLiteralPathExists(readPath, this.session.cwd)) !== "missing"
 				: literalSplit.sel === undefined && splitPathAndSel(readPath).sel !== undefined;
 
 		if (!rawPathIsLiteral) {

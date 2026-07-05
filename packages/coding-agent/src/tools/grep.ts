@@ -48,8 +48,8 @@ import {
 	type LineRange,
 	parseLineRanges,
 	pathTargetsSsh,
+	probeLiteralPathExists,
 	type ResolvedSearchTarget,
-	resolveExistingReadPath,
 	resolveReadPath,
 	resolveToolSearchScope,
 	selectorLineRanges,
@@ -171,13 +171,16 @@ async function parsePathSpecs(
 			// Separate selector parameter makes `path` deterministic: first try the
 			// exact local filesystem path (with read-path normalization), then let
 			// archive/internal/URL resolution handle non-literal structured paths.
-			const localPath = /^[a-z][a-z0-9+.-]*:\/\//i.test(entry)
-				? undefined
-				: await resolveExistingReadPath(entry, cwd);
+			const rawPathHasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(entry);
+			const probe = rawPathHasScheme ? "missing" : await probeLiteralPathExists(entry, cwd);
+			// `"unknown"` covers EACCES/IO where we cannot confirm existence — treat
+			// it as a literal so a real file such as `test:1-2` under an unreadable
+			// parent is never silently reinterpreted as `test` + selector.
+			const literalMatch = probe !== "missing";
 			specs.push({
 				original: entry,
-				clean: localPath ?? entry,
-				literalFilesystemMatch: localPath !== undefined,
+				clean: literalMatch && !rawPathHasScheme ? resolveReadPath(entry, cwd) : entry,
+				literalFilesystemMatch: literalMatch,
 				ranges: explicitRanges,
 			});
 			continue;

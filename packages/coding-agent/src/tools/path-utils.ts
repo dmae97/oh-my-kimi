@@ -315,25 +315,35 @@ export function splitPathAndSel(rawPath: string): { path: string; sel?: string }
 	return { path: basePath, sel };
 }
 
-/** Resolve a read-tool path variant and return it only when it already exists on disk. */
-export async function resolveExistingReadPath(filePath: string, cwd: string): Promise<string | undefined> {
+/**
+ * Three-way probe for whether the exact filesystem entry named by `filePath`
+ * exists. `stat` (used earlier) failed for reasons other than "no such file"
+ * (dangling symlink, `EACCES` on a parent, transient I/O), and each of those
+ * silently reinterpreted a real literal path such as `test:1-2` as `test`
+ * plus selector `1-2` (issue #4618). `lstat` inspects the entry itself, so a
+ * dangling symlink is still detected as present; ambiguous errors resolve to
+ * `"unknown"` so callers keep the raw path instead of guessing.
+ */
+export async function probeLiteralPathExists(filePath: string, cwd: string): Promise<"exists" | "missing" | "unknown"> {
 	const resolved = resolveReadPath(filePath, cwd);
 	try {
-		await fs.promises.stat(resolved);
-		return resolved;
+		await fs.promises.lstat(resolved);
+		return "exists";
 	} catch (err) {
-		if (isEnoent(err) || isEnotdir(err)) return undefined;
-		return resolved;
+		if (isEnoent(err) || isEnotdir(err)) return "missing";
+		return "unknown";
 	}
 }
 
 /**
  * Async sibling of {@link splitPathAndSel} that prefers a literal filesystem
- * path over selector interpretation when the raw input exists on disk.
- * Filenames whose tail matches the selector grammar (e.g. `test:1-2`, `log:raw`)
- * are legal on POSIX; without this the strict splitter peels the tail and both
- * `read` and `grep` refuse to open the real file (see issue #4618). Mirrors
- * {@link parseSearchPathPreferringLiteral} for glob-shaped literal paths.
+ * path over selector interpretation. Filenames whose tail matches the selector
+ * grammar (e.g. `test:1-2`, `log:raw`) are legal on POSIX; without this the
+ * strict splitter peels the tail and both `read` and `grep` refuse to open the
+ * real file (issue #4618). The literal wins on a confirmed `lstat`, and also
+ * on `"unknown"` (`EACCES` on a parent, transient I/O), so an unreachable
+ * literal is never silently reinterpreted as `path + selector`. Only a
+ * definitive `ENOENT`/`ENOTDIR` falls back to the strict split.
  */
 export async function splitPathAndSelPreferringLiteral(
 	rawPath: string,
@@ -341,9 +351,8 @@ export async function splitPathAndSelPreferringLiteral(
 ): Promise<{ path: string; sel?: string }> {
 	const strict = splitPathAndSel(rawPath);
 	if (strict.sel === undefined) return strict;
-	const resolved = await resolveExistingReadPath(rawPath, cwd);
-	if (resolved !== undefined) return { path: rawPath };
-	return strict;
+	const probe = await probeLiteralPathExists(rawPath, cwd);
+	return probe === "missing" ? strict : { path: rawPath };
 }
 
 /**
