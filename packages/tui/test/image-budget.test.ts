@@ -135,6 +135,64 @@ describe("ImageBudget", () => {
 		const budget2 = new ImageBudget();
 		expect(budget1.acquireId()).not.toBe(budget2.acquireId());
 	});
+	it("evicts demoted IDs from the key map so a returned key gets a fresh ID", () => {
+		const budget = new ImageBudget(2, () => {});
+		const id1 = budget.acquireId("keyA");
+		const id2 = budget.acquireId("keyB");
+		const id3 = budget.acquireId("keyC");
+
+		// At cap: only 2 images.
+		budget.beginPass();
+		budget.observe(id1);
+		budget.observe(id2);
+		budget.endPass();
+
+		// acquireId should return the same IDs.
+		expect(budget.acquireId("keyA")).toBe(id1);
+		expect(budget.acquireId("keyB")).toBe(id2);
+
+		// Overflow: observe 3 images.
+		budget.beginPass();
+		budget.observe(id1);
+		budget.observe(id2);
+		budget.observe(id3);
+		budget.endPass(); // schedules demotion of id1
+
+		// The key map should STILL hold id1 because it's not purged until the demotion frame.
+		expect(budget.acquireId("keyA")).toBe(id1);
+
+		// Demotion frame: applies the purge of id1.
+		budget.beginPass();
+		budget.observe(id1);
+		budget.observe(id2);
+		budget.observe(id3);
+		const reset = budget.endPass();
+		expect(reset).toBe(true);
+
+		// id1 was purged. Acquiring "keyA" now yields a fresh ID.
+		const id1Fresh = budget.acquireId("keyA");
+		expect(id1Fresh).not.toBe(id1);
+
+		// The other keys are still intact.
+		expect(budget.acquireId("keyB")).toBe(id2);
+		expect(budget.acquireId("keyC")).toBe(id3);
+	});
+
+	it("clears all keys from the map on takeAllTransmittedIds", () => {
+		const budget = new ImageBudget(3, () => {});
+		const id1 = budget.acquireId("keyA");
+		const id2 = budget.acquireId("keyB");
+
+		// ensure they're in the transmit tracking
+		budget.enqueueTransmit(id1, "TX1");
+		budget.enqueueTransmit(id2, "TX2");
+
+		budget.takeAllTransmittedIds();
+
+		// The keys must yield fresh IDs now.
+		expect(budget.acquireId("keyA")).not.toBe(id1);
+		expect(budget.acquireId("keyB")).not.toBe(id2);
+	});
 
 	it("setCap(0) clears a previously applied demotion threshold", () => {
 		const budget = new ImageBudget(2, () => {});

@@ -185,6 +185,12 @@ export class ImageBudget {
 				this.#purgeIds.push(id);
 				// d=I frees the data too, so the image must re-transmit if it returns.
 				this.#transmitted.delete(id);
+				for (const [k, v] of this.#keyToId) {
+					if (v === id) {
+						this.#keyToId.delete(k);
+						break;
+					}
+				}
 			}
 			this.#onTerminal = this.#planned;
 			this.#applyingReset = false;
@@ -214,6 +220,7 @@ export class ImageBudget {
 		this.#transmitted.clear();
 		this.#purgeIds = [];
 		this.#pendingTransmits = [];
+		this.#keyToId.clear();
 		return ids;
 	}
 
