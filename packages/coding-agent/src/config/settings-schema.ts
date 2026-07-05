@@ -3166,18 +3166,6 @@ export const SETTINGS_SCHEMA = {
 	},
 	"bashInterceptor.patterns": { type: "array", default: DEFAULT_BASH_INTERCEPTOR_RULES },
 
-	"bash.stripTrailingHeadTail": {
-		type: "boolean",
-		default: true,
-		ui: {
-			tab: "shell",
-			group: "Bash",
-			label: "Strip head/tail Pipes",
-			description:
-				"Silently drop trailing `| head`/`| tail` pipes from single-line bash commands. Output is already truncated automatically.",
-		},
-	},
-
 	// Shell output minimizer
 	"shellMinimizer.enabled": {
 		type: "boolean",
