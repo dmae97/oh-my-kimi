@@ -125,7 +125,7 @@ const FACT_QUERY_FILLER_WORDS = new Set([
 ]);
 
 const FACT_CLITIC_FRAGMENTS = new Set(["d", "ll", "m", "re", "s", "t", "ve"]);
-const FLAT_FACT_SEARCH_NOISE = new Set(["entity", "fact"]);
+const FLAT_FACT_SEARCH_NOISE: Record<string, true> = { entity: true, fact: true };
 
 function nowIso(): string {
 	return new Date().toISOString();
@@ -1032,7 +1032,7 @@ export async function recallEnhanced(
 function factRecallLimit(topK: number): number {
 	const requested = Math.max(0, Math.floor(topK));
 	if (requested === 0) return 0;
-	return Math.max(1, Math.ceil(requested / 2));
+	return Math.min(requested, Math.max(3, Math.ceil(requested / 2)));
 }
 
 function sandwichOrder(results: readonly RecallResult[]): {
@@ -1041,7 +1041,8 @@ function sandwichOrder(results: readonly RecallResult[]): {
 	closing: RecallResult[];
 } {
 	const scored = [...results].sort((left, right) => (right.score ?? 0) - (left.score ?? 0));
-	const high = scored.slice(0, 3);
+	const highLimit = scored.length > 0 && scored.length < 4 ? 1 : 3;
+	const high = scored.slice(0, highLimit);
 	const medium = scored.slice(high.length, high.length + 5);
 	const closing = scored.slice(high.length + medium.length, high.length + medium.length + 3);
 	return { high, medium, closing };
@@ -1051,7 +1052,7 @@ function factSearchableText(subject: string, predicate: string, object: string):
 	if (objectText.length === 0) return `${subject} ${predicate}`.trim();
 	const structuralParts = [subject, predicate].filter(part => {
 		const token = part.trim().toLowerCase();
-		return token.length > 0 && !FLAT_FACT_SEARCH_NOISE.has(token);
+		return token.length > 0 && FLAT_FACT_SEARCH_NOISE[token] !== true;
 	});
 	return [...structuralParts, objectText].join(" ").trim();
 }

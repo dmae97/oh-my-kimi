@@ -169,6 +169,21 @@ describe("recall precision regressions", () => {
 		expect(new Set(bullets).size).toBe(bullets.length);
 	});
 
+	it("keeps small enhanced fact recalls filled and split into supporting context", async () => {
+		const beam = makeBeam();
+		const facts = ["redis alpha runs on port 6379", "redis beta handles failover"];
+		storeFactStrings(beam, facts, 0, "repro-source");
+
+		const results = await beam.recallEnhanced("redis", 2, { includeFacts: true });
+		const factContents = results.filter(result => result.tier === "fact").map(result => result.content);
+		expect(factContents.toSorted()).toEqual(facts.toSorted());
+
+		const context = beam.formatContext(results, "bullet");
+		expect(bulletLinesUnder(context, "## Top Facts")).toHaveLength(1);
+		expect(bulletLinesUnder(context, "## Supporting Context")).toHaveLength(1);
+		expect(context).not.toContain("## Recent Signals");
+	});
+
 	it("does not recall flat facts through storage-only fact/entity fields", () => {
 		const beam = makeBeam();
 		storeFactStrings(beam, ["redis cluster runs on port 6379"], 0, "repro-source");
