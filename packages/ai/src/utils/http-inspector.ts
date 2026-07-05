@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { extractHttpStatusFromError, getLogsDir, isBunTestRuntime } from "@oh-my-pi/pi-utils";
+import { getLogsDir, isBunTestRuntime } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error/flags";
 import { isCopilotTransientModelError } from "./retry.js";
 import { formatErrorMessageWithRetryAfter } from "./retry-after.js";
@@ -36,7 +36,7 @@ export function buildHttp400DumpPayload(
 ): RawHttpRequestDump & { errorResponse: { status: number | undefined; message: string } } {
 	return {
 		...sanitizeDump(dump),
-		errorResponse: { status: extractHttpStatusFromError(error), message },
+		errorResponse: { status: AIError.status(error), message },
 	};
 }
 

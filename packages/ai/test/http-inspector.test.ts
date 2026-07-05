@@ -35,6 +35,14 @@ describe("buildHttp400DumpPayload", () => {
 		expect(payload.errorResponse).toEqual({ status: 400, message });
 	});
 
+	it("records the same message-derived status that enables dumping", () => {
+		const message = "400 Bad Request: image exceeds 5 MB limit";
+		const error = new Error(message);
+
+		expect(shouldDumpRejectedRequest(error)).toBe(true);
+		expect(buildHttp400DumpPayload(dump, error, message).errorResponse).toEqual({ status: 400, message });
+	});
+
 	it("redacts sensitive request headers while keeping the rest", () => {
 		const payload = buildHttp400DumpPayload(dump, new HttpError(400, "x"), "x");
 
