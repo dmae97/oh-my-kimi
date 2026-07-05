@@ -191,6 +191,9 @@
 ### Fixed
 
 - Delete pre-created shell snapshot file when snapshot creation fails ([#4236](https://github.com/can1357/oh-my-pi/issues/4236))
+### Changed
+
+- Skip TTSR delta buffering for text/thinking sources when no registered rule can match them ([#4245](https://github.com/can1357/oh-my-pi/issues/4245))
 
 
 ## [16.3.0] - 2026-07-02

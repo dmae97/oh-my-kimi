@@ -77,6 +77,8 @@ export class TtsrManager {
 	/** Last snapshot evaluated for AST conditions, keyed by stream key, to dedupe matcher runs. */
 	readonly #lastAstSnapshots = new Map<string, string>();
 	#messageCount = 0;
+	#canMatchText = false;
+	#canMatchThinking = false;
 
 	constructor(settings?: TtsrSettings) {
 		this.#settings = { ...DEFAULT_SETTINGS, ...settings };
@@ -329,6 +331,8 @@ export class TtsrManager {
 			scope,
 			globalPathGlobs,
 		});
+		if (scope.allowText) this.#canMatchText = true;
+		if (scope.allowThinking) this.#canMatchThinking = true;
 
 		logger.debug("TTSR rule registered", {
 			ruleName: rule.name,
@@ -348,6 +352,12 @@ export class TtsrManager {
 	 * assistant prose, thinking text, and unrelated tool argument streams.
 	 */
 	checkDelta(delta: string, context: TtsrMatchContext): Rule[] {
+		if (context.source === "text" && !this.#canMatchText) {
+			return [];
+		}
+		if (context.source === "thinking" && !this.#canMatchThinking) {
+			return [];
+		}
 		const bufferKey = this.#bufferKey(context);
 		const nextBuffer = `${this.#buffers.get(bufferKey) ?? ""}${delta}`;
 		this.#buffers.set(bufferKey, nextBuffer);
