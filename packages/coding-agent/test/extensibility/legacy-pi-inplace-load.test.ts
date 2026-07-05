@@ -199,8 +199,7 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 			}),
 			"plugins/node_modules/installed-plugin/node_modules/localdep/index.js":
 				'export { depValue } from "./helper.js";\n',
-			"plugins/node_modules/installed-plugin/node_modules/localdep/helper.js":
-				'export const depValue = "dep-v1";\n',
+			"plugins/node_modules/installed-plugin/node_modules/localdep/helper.js": 'export const depValue = "dep-v1";\n',
 			"plugins/node_modules/installed-plugin/index.ts": entrySource("v1"),
 		});
 		const pluginRoot = path.join(dir, "plugins", "node_modules", "installed-plugin");

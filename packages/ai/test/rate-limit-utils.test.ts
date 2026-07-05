@@ -179,7 +179,9 @@ describe("isUsageLimitOutcome", () => {
 	it("rotates on usage-limit message regardless of status", () => {
 		expect(isUsageLimitOutcome(undefined, "usage_limit_reached")).toBe(true);
 		expect(isUsageLimitOutcome(500, "insufficient_quota")).toBe(true);
-		expect(isUsageLimitOutcome(403, "403 订阅额度不足或未配置订阅: subscription quota insufficient, need=14447")).toBe(true);
+		expect(
+			isUsageLimitOutcome(403, "403 订阅额度不足或未配置订阅: subscription quota insufficient, need=14447"),
+		).toBe(true);
 	});
 
 	it("does not rotate on auth/invalid-request statuses with unrelated bodies", () => {
