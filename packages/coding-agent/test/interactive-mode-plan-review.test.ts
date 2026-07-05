@@ -1316,11 +1316,17 @@ describe("InteractiveMode plan review rendering", () => {
 			title: "PLAN",
 		});
 
-		// Compaction was run with the rendered planning-specific custom instruction.
+		// Plan-mode compaction rides through as `internalGuidance` (arg 4) so it
+		// reaches native summarization without leaking into the public
+		// `customInstructions` channel of the `session_before_compact` hook —
+		// extensions there treat that field as user focus (issue #4359).
 		expect(compactSpy).toHaveBeenCalledTimes(1);
-		const [compactInstruction] = compactSpy.mock.calls[0]!;
-		expect(typeof compactInstruction).toBe("string");
-		expect(compactInstruction as string).toContain(planFilePath);
+		const [customInstructions, mode_, beforeFlush, internalGuidance] = compactSpy.mock.calls[0]!;
+		expect(customInstructions).toBeUndefined();
+		expect(mode_).toBeUndefined();
+		expect(typeof beforeFlush).toBe("function");
+		expect(typeof internalGuidance).toBe("string");
+		expect(internalGuidance as string).toContain(planFilePath);
 
 		// Plan-approved synthetic prompt was dispatched.
 		const planApprovedIdx = promptSpy.mock.calls.findIndex(isPlanApprovedCall);

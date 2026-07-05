@@ -9501,7 +9501,11 @@ export class AgentSession {
 		// Modes that produce no LLM summary (snapcompact) have nothing to focus.
 		// Reject focus text loudly so programmatic callers don't silently lose
 		// instructions (the slash path pre-validates via parseCompactArgs).
-		if (compactMode?.rejectsFocus && customInstructions) {
+		// `internalGuidance` counts the same way — plan-mode approval never
+		// combines with a rejects-focus mode, but reject early if a caller ever
+		// wires it up so we don't silently drop the directive on the snapcompact
+		// fallback (issue #4359).
+		if (compactMode?.rejectsFocus && (customInstructions || options?.internalGuidance)) {
 			throw new Error(`/compact ${compactMode.name} does not take focus instructions.`);
 		}
 		const compactionAbortController = new AbortController();
@@ -9582,12 +9586,16 @@ export class AgentSession {
 
 			const compactionPrep = await this.#prepareCompactionFromHooks(preparation, hookCompaction);
 
-			// Strategy honored on manual /compact too. Custom instructions imply a
-			// directed LLM summary; a text-only model cannot read snapcompact frames.
-			// When snapcompact itself was requested, fail locally instead of silently
+			// Strategy honored on manual /compact too. Custom instructions (public
+			// user focus OR internal plan-mode guidance) imply a directed LLM
+			// summary; a text-only model cannot read snapcompact frames. When
+			// snapcompact itself was requested, fail locally instead of silently
 			// converting the "no LLM call" path into a provider-backed summary.
 			const wantsSnapcompact =
-				compactionPrep.kind !== "fromHook" && effectiveSettings.strategy === "snapcompact" && !customInstructions;
+				compactionPrep.kind !== "fromHook" &&
+				effectiveSettings.strategy === "snapcompact" &&
+				!customInstructions &&
+				!options?.internalGuidance;
 			const snapcompactReady = wantsSnapcompact;
 			const snapcompactShapeSetting = this.settings.get("snapcompact.shape");
 			let snapcompactShape: snapcompact.Shape | undefined;
@@ -9720,7 +9728,7 @@ export class AgentSession {
 				try {
 					const result = await this.#compactWithFallbackModel(
 						preparation,
-						customInstructions,
+						options?.internalGuidance ?? customInstructions,
 						compactionAbortController.signal,
 						{
 							promptOverride: this.#obfuscateTextForProvider(compactionPrep.hookPrompt),

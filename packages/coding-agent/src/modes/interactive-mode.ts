@@ -2623,8 +2623,16 @@ export class InteractiveMode implements InteractiveModeContext {
 				// the try/finally is idempotent and kept for the !compactBeforeExecute
 				// branch.
 				this.session.setPlanReferencePath(options.planFilePath);
-				compactOutcome = await this.handleCompactCommand(compactionPrompt, undefined, outcome =>
-					this.#applyDeferredPlanModelTransition(outcome, options.executionModel),
+				// Ride the plan-mode distillation prompt through as `internalGuidance`
+				// so it reaches native summarization without leaking into the public
+				// `customInstructions` channel on `session_before_compact` — extensions
+				// there treat that field as user focus and would query-bias the
+				// summary toward the plan boilerplate (issue #4359).
+				compactOutcome = await this.handleCompactCommand(
+					undefined,
+					undefined,
+					outcome => this.#applyDeferredPlanModelTransition(outcome, options.executionModel),
+					compactionPrompt,
 				);
 			}
 		} finally {
@@ -3921,8 +3929,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		customInstructions?: string,
 		mode?: CompactMode,
 		beforeFlush?: (outcome: CompactionOutcome) => void | Promise<void>,
+		internalGuidance?: string,
 	): Promise<CompactionOutcome> {
-		return this.#commandController.handleCompactCommand(customInstructions, mode, beforeFlush);
+		return this.#commandController.handleCompactCommand(customInstructions, mode, beforeFlush, internalGuidance);
 	}
 
 	handleHandoffCommand(customInstructions?: string): Promise<void> {
