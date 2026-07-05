@@ -330,7 +330,7 @@ export async function splitPathAndSelPreferringLiteral(
 	const strict = splitPathAndSel(rawPath);
 	if (strict.sel === undefined) return strict;
 	try {
-		await fs.promises.stat(resolveToCwd(rawPath, cwd));
+		await fs.promises.stat(resolveReadPath(rawPath, cwd));
 		return { path: rawPath };
 	} catch {
 		return strict;

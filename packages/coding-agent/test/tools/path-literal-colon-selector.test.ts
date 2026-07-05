@@ -56,6 +56,15 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			expect(await splitPathAndSelPreferringLiteral(literal, tmpDir)).toEqual({ path: literal });
 		});
 
+		it("keeps a shell-escaped literal path intact when the resolved file exists", async () => {
+			await fs.mkdir(path.join(tmpDir, "dir"), { recursive: true });
+			await Bun.write(path.join(tmpDir, "dir", "a b:1-2"), "escaped literal\n");
+
+			expect(await splitPathAndSelPreferringLiteral("dir/a\\ b:1-2", tmpDir)).toEqual({
+				path: "dir/a\\ b:1-2",
+			});
+		});
+
 		it("falls back to selector interpretation when the literal path does not exist", async () => {
 			// No file created — the selector split wins because the raw path
 			// cannot be stat'd.
@@ -92,6 +101,17 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			// The strict split would have opened `test` (which doesn't exist)
 			// and thrown "Path 'test' not found".
 			expect(output).not.toMatch(/not found/i);
+		});
+
+		it("reads a shell-escaped literal file whose name ends in a selector-shaped suffix", async () => {
+			await fs.mkdir(path.join(tmpDir, "dir"), { recursive: true });
+			await Bun.write(path.join(tmpDir, "dir", "a b:1-2"), "escaped literal read\n");
+
+			const tool = new ReadTool(createSession());
+			const result = await tool.execute("read-escaped-literal", { path: "dir/a\\ b:1-2" });
+			const output = getText(result);
+
+			expect(output).toContain("escaped literal read");
 		});
 
 		it("prefers a real `foo:1-2` file over interpreting `:1-2` as a range on `foo`", async () => {
@@ -182,6 +202,20 @@ describe("literal colon filename resolution (issue #4618)", () => {
 
 			expect(output).toContain("needle");
 			expect(output).not.toMatch(/not found/i);
+		});
+
+		it("searches a shell-escaped literal file whose name ends in a selector-shaped suffix", async () => {
+			await fs.mkdir(path.join(tmpDir, "dir"), { recursive: true });
+			await Bun.write(path.join(tmpDir, "dir", "a b:1-2"), "escaped literal needle\n");
+
+			const tool = new GrepTool(createSession());
+			const result = await tool.execute("grep-escaped-literal", {
+				pattern: "needle",
+				path: "dir/a\\ b:1-2",
+			});
+			const output = getText(result);
+
+			expect(output).toContain("escaped literal needle");
 		});
 
 		it("searches a literal file that looks like an archive selector (`data.zip:1-2`)", async () => {

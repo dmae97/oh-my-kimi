@@ -175,9 +175,9 @@ async function parsePathSpecs(rawEntries: readonly string[], cwd: string): Promi
 		const strictSplit = splitPathAndSel(entry);
 		const split = await splitPathAndSelPreferringLiteral(entry, cwd);
 		const literalFilesystemMatch = strictSplit.sel !== undefined && split.sel === undefined;
-		let clean = entry;
+		let clean = literalFilesystemMatch ? resolveReadPath(entry, cwd) : entry;
 		let ranges: [LineRange, ...LineRange[]] | undefined;
-		if (split.sel) {
+		if (!literalFilesystemMatch && split.sel) {
 			const parsed = parseLineRanges(split.sel);
 			if (!parsed) {
 				throw new ToolError(
