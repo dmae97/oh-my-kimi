@@ -4,16 +4,11 @@
 
 ### Changed
 
-- Refined behavior metrics to reduce false positives in profanity, yelling, and anguish detection
-- Updated yelling detection to require multi-word caps or elongated shouts for higher accuracy
-- Improved negation detection to exclude determiner uses of "no" and "no-op" compounds
-- Expanded blame and negation detection to include "why did you" and "makes no sense" phrases
-- Re-categorized frustration interjections like "ugh" and "argh" from profanity to anguish
-- Added sad emoticons as a signal for anguish while excluding code-like patterns
-
-### Fixed
-
-- Trimmed behavior-metric false positives, measured against the real message corpus: dot runs (`..`/`...`) no longer count as anguish (they were 82% of hits and almost entirely neutral trail-offs and `{{href...}}`-style placeholders); the profanity list dropped technical-collision words (`dummy`, `blast`, `knob`, `trash`, `crud`, `garbage`, ...) and opinion words (`useless`, `awful`, `hate`, `meh`, ...); plain `ugh`/`argh`/`grr` moved from profanity to anguish (also removing a double count with their elongated forms); yelling now requires multi-word caps or an elongated shout so filenames (`AGENTS.md`) and lone acronyms/env vars don't register; and a bare leading `no` only counts as negation when used as an interjection (`no, i meant`), not a determiner (`no auto start`) or a compound (`no-op`). Recovered measured false negatives in the same pass: sad emoticons (`:(`) score anguish, `why (would|did) you` scores blame, and `makes (no|zero) sense` scores negation. Existing databases re-ingest sessions once on the next sync.
+- Refined behavior metrics to significantly reduce false positives in profanity, yelling, and anguish detection by excluding technical terms (e.g., "dummy", "trash", "garbage"), neutral punctuation (e.g., dot runs), and single-word capitalization (e.g., filenames or environment variables).
+- Re-categorized frustration interjections (such as "ugh", "argh", and "grr") from profanity to anguish.
+- Improved negation and blame detection to exclude determiners (e.g., "no auto start") and compounds (e.g., "no-op") while adding support for phrases like "why did you" and "makes no sense".
+- Added sad emoticons as a signal for anguish while excluding code-like patterns.
+- Triggered a one-time automatic re-ingestion of sessions on the next database sync to apply the updated metrics.
 
 ## [16.3.7] - 2026-07-05
 

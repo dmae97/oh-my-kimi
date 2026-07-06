@@ -4,22 +4,19 @@
 
 ### Added
 
-- Added `--file` flag to `say` command for reading text from files
-- Enabled streaming text synthesis in `say` command for gapless long-form audio
-- Added voice selection validation to `say` command
+- Added a `--file` flag to the `say` command to read input text directly from files.
+- Enabled streaming text synthesis in the `say` command for gapless, long-form audio generation.
+- Added voice selection validation to the `say` command.
 
 ### Changed
 
-- Improved `say` command to output segment count and total duration upon completion
+- Improved the `say` command to display the segment count and total duration upon completion.
+
 ### Fixed
 
-- Fixed llama.cpp selected-model refresh keeping cached local vision models text-only after `/props` reports `modalities.vision: true`, so configuring a local model as the default and vision role now lets image inspection resolve it as image-capable. ([#4654](https://github.com/can1357/oh-my-pi/issues/4654))
-### Fixed
-
-- Fixed `omp commit` split plans aborting with `Split commit plan missing staged files: <lockfile>` when a lock file was staged alongside its manifest: the model deliberately never sees lock files, so it cannot include them, but the split validator was comparing against the raw staged set. Lock files are now deterministically paired with the commit group touching their sibling manifest (falling back to the last commit), so the validator and the model view agree. The split executor also now captures the staged diff with `binary: true`, so binary lock files (e.g. `bun.lockb`) and any other staged binary reapply cleanly after the per-group index reset instead of failing on a `Binary files ... differ` stub ([#4632](https://github.com/can1357/oh-my-pi/issues/4632)).
-### Fixed
-
-- Fixed skill loading so disabling a higher-priority provider no longer drops same-named skills from enabled lower-priority providers.
+- Fixed an issue where local llama.cpp vision models remained text-only after a model refresh, ensuring they are correctly recognized as image-capable when configured as the default or vision role.
+- Fixed `omp commit` split plans aborting when lock files (such as `bun.lockb`) were staged alongside their manifests by correctly pairing lock files with their corresponding commit groups and properly handling binary files during split execution.
+- Fixed skill loading to ensure that disabling a higher-priority provider does not drop same-named skills from enabled lower-priority providers.
 
 ## [16.3.8] - 2026-07-05
 

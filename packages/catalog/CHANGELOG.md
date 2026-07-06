@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed OpenCode Go DeepSeek V4 models to send `max_tokens` instead of `max_completion_tokens`, matching the provider's OpenAI-compatible request shape.
+- Fixed compatibility with OpenCode Go DeepSeek V4 models by sending max_tokens instead of max_completion_tokens to match the provider's API requirements.
 
 ## [16.3.7] - 2026-07-05
 

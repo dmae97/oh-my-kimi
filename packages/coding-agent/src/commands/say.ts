@@ -138,8 +138,7 @@ export default class Say extends Command {
 	#synthesisFailed(model: string): void {
 		process.stderr.write(
 			chalk.red(
-				`error: could not synthesize with local TTS model "${model}". ` +
-					"Run `omp setup speech` to install it.\n",
+				`error: could not synthesize with local TTS model "${model}". Run \`omp setup speech\` to install it.\n`,
 			),
 		);
 	}
