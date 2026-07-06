@@ -308,6 +308,22 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		expect(mod.css).toBe(".x{color:red}");
 	});
 
+	it("leaves JSON import-attribute targets on Bun's native loader", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "json-import-ext", version: "1.0.0" }),
+			"prices.json": JSON.stringify({ input: 0.15 }),
+			"index.ts": [
+				'import prices from "./prices.json" with { type: "json" };',
+				"export const inputPrice = prices.input;",
+				"export default function (pi) { void pi; }",
+			].join("\n"),
+		});
+
+		const mod = (await loadLegacyPiModule(path.join(dir, "index.ts"))) as { inputPrice: number };
+
+		expect(mod.inputPrice).toBe(0.15);
+	});
+
 	it("loads the extension's own node_modules deps natively while remapping legacy pi imports", async () => {
 		const dir = await writePackage({
 			"package.json": JSON.stringify({ name: "dep-ext", version: "1.0.0" }),
