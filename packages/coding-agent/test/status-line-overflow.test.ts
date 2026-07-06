@@ -77,13 +77,27 @@ function createCtx(overrides?: { pathMaxLength?: number; branch?: string | null 
 	};
 }
 
-function createStatusLineSession(sessionName: string) {
+function createStatusLineSession(sessionName: string, modelName?: string) {
+	const model = modelName ? { name: modelName, contextWindow: 128000 } : undefined;
 	return {
-		state: { messages: [] },
+		state: { messages: [], model },
+		messages: [],
+		model: model ?? { contextWindow: 128000 },
+		contextUsageRevision: 0,
+		systemPrompt: [],
+		agent: { state: { tools: [] } },
+		skills: [],
 		isStreaming: false,
+		isAutoThinking: false,
+		autoResolvedThinkingLevel: () => undefined,
+		isAdvisorActive: () => false,
+		isFastModeActive: () => false,
 		getAsyncJobSnapshot: () => ({ running: [] }),
 		getCurrentModel: () => undefined,
 		isFastModeEnabled: () => false,
+		getContextUsage: () => ({ tokens: 0, contextWindow: 128000 }),
+		getGoalModeState: () => null,
+		modelRegistry: { isUsingOAuth: () => false },
 		sessionManager: {
 			getSessionName: () => sessionName,
 			getUsageStatistics: () => ({
@@ -100,6 +114,10 @@ function createStatusLineSession(sessionName: string) {
 			}),
 		},
 	} as unknown as ConstructorParameters<typeof StatusLineComponent>[0];
+}
+
+function stripAnsi(value: string): string {
+	return value.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
 }
 
 describe("status line session accent", () => {
@@ -244,10 +262,17 @@ describe("overflow: path shrinks before git is dropped", () => {
 			}
 		}
 
-		// Left-pop loop (fallback)
+		// Left-segment fallback loop.
+		const leftOverflowDropIndex = (): number => {
+			for (let i = leftSegIds.length - 1; i >= 0; i--) {
+				if (leftSegIds[i] !== "path") return i;
+			}
+			return left.length - 1;
+		};
 		while (groupWidth() > width && left.length > 0) {
-			left.pop();
-			leftSegIds.pop();
+			const dropIdx = leftOverflowDropIndex();
+			left.splice(dropIdx, 1);
+			leftSegIds.splice(dropIdx, 1);
 		}
 
 		return { surviving: [...leftSegIds], contents: [...left] };
@@ -285,18 +310,20 @@ describe("overflow: path shrinks before git is dropped", () => {
 	});
 
 	it("shrinks a short path when maxLength exceeds actual path length", () => {
-		// Short dir name — rendered path is well under maxLength=80
+		// Short dir name — rendered path is well under the configured maxLength.
 		const shortDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-short-"));
 		setProjectDir(shortDir);
 		try {
-			const ctx = createCtx({ pathMaxLength: 80, branch: "feat/long-branch-name" });
+			const maxLength = 160;
+			const ctx = createCtx({ pathMaxLength: maxLength, branch: "feat/long-branch-name" });
 			const fullPath = renderSegment("path", ctx);
 			const fullGit = renderSegment("git", ctx);
 			const pathVW = visibleWidth(fullPath.content);
 			const gitVW = visibleWidth(fullGit.content);
 
-			// Sanity: path is shorter than maxLength — this is the bug scenario
-			expect(pathVW).toBeLessThan(80);
+			// Sanity: path is shorter than maxLength — this is the bug scenario.
+			// macOS temp paths can exceed 80 columns once the path icon is included.
+			expect(pathVW).toBeLessThan(maxLength);
 
 			// Width that fits a shrunken path + git but not the full path + git
 			const tightWidth = Math.floor(pathVW * 0.5) + gitVW + 10;
@@ -336,5 +363,63 @@ describe("overflow: path shrinks before git is dropped", () => {
 		} finally {
 			setProjectDir(tmpDir);
 		}
+	});
+});
+
+describe("overflow: path survives before model", () => {
+	it("drops the model segment before the cwd path when both cannot fit", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-statusline-overflow-"));
+		const cwd = path.join(root, "cwdxyz");
+		fs.mkdirSync(cwd);
+		setProjectDir(cwd);
+
+		const modelName = `MODEL_SHOULD_DROP_${"x".repeat(24)}`;
+		const session = createStatusLineSession("overflow test", modelName);
+		const component = new StatusLineComponent(session);
+		const pathOptions = {
+			abbreviate: false,
+			maxLength: 32,
+			stripWorkPrefix: false,
+		};
+		component.updateSettings({
+			preset: "custom",
+			leftSegments: ["pi", "model", "path"],
+			rightSegments: [],
+			separator: "none",
+			sessionAccent: false,
+			transparent: true,
+			segmentOptions: {
+				model: { showThinkingLevel: false },
+				path: pathOptions,
+			},
+		});
+
+		const ctx = {
+			...createCtx({ pathMaxLength: pathOptions.maxLength }),
+			session,
+			options: {
+				model: { showThinkingLevel: false },
+				path: pathOptions,
+			},
+		} as SegmentContext;
+		const pi = renderSegment("pi", ctx).content;
+		const model = renderSegment("model", ctx).content;
+		const minPath = renderSegment("path", {
+			...ctx,
+			options: { ...ctx.options, path: { ...pathOptions, maxLength: 4 } },
+		}).content;
+		const separatorWidth = visibleWidth(theme.sep.space);
+		const groupWidth = (parts: string[]) =>
+			parts.reduce((sum, part) => sum + visibleWidth(part), 0) +
+			Math.max(0, parts.length - 1) * (separatorWidth + 2) +
+			2;
+		const width = groupWidth([pi, model]) + 1;
+
+		expect(groupWidth([pi, model, minPath])).toBeGreaterThan(width);
+		expect(groupWidth([pi, minPath])).toBeLessThanOrEqual(width);
+
+		const rendered = stripAnsi(component.getTopBorder(width).content);
+		expect(rendered).toContain("xyz");
+		expect(rendered).not.toContain("MODEL_SHOULD_DROP");
 	});
 });
