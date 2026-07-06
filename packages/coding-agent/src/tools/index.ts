@@ -650,14 +650,11 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 				];
 
 	const activeToolNames = new Set(baseEntries.map(([name]) => name));
-	const toolFactorySession: ToolSession = {
-		...session,
-		isToolActive: name => activeToolNames.has(name),
-	};
+	session.isToolActive = name => activeToolNames.has(name);
 
 	const baseResults = await Promise.all(
 		baseEntries.map(async ([name, factory]) => {
-			const tool = await logger.time(`createTools:${name}`, factory as ToolFactory, toolFactorySession);
+			const tool = await logger.time(`createTools:${name}`, factory as ToolFactory, session);
 			return tool ? wrapToolWithMetaNotice(tool) : null;
 		}),
 	);

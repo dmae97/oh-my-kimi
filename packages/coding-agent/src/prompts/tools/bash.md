@@ -31,7 +31,7 @@ Use bash ONLY for: a single binary call, or one short pipeline that COMPUTES a f
 - `;` only when later commands should run despite earlier failures
 - Multiple bash calls per message run concurrently. NEVER split order-dependent commands across parallel calls — chain with `&&` in one call.
 - Internal URIs (`skill://`, `agent://`, …) auto-resolve to FS paths
-- Need exact pipeline semantics (`cmd | head`, multi-stage filtering) or output truncation? Prefer `eval` and process the stream directly.
+{{#if hasEval}}- Need exact pipeline semantics (`cmd | head`, multi-stage filtering) or output truncation? Prefer `eval` and process the stream directly.{{else}}- Need exact pipeline semantics (`cmd | head`, multi-stage filtering) or output truncation? Use a checked-in script, purpose-built tool, or single command that owns the output shape.{{/if}}
 {{#if asyncEnabled}}
 - `async: true` for long-running commands when you don't need immediate output: returns a background job ID; result delivered as a follow-up.
 {{/if}}

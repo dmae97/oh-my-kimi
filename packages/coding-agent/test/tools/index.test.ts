@@ -264,6 +264,15 @@ describe("createTools", () => {
 		expect(names).toEqual(["read", "goal", "resolve"]);
 	});
 
+	it("records active tools on the original session object", async () => {
+		const session = createTestSession();
+
+		await createTools(session, ["bash"]);
+
+		expect(session.isToolActive?.("bash")).toBe(true);
+		expect(session.isToolActive?.("read")).toBe(false);
+	});
+
 	it("includes search_tool_bm25 when MCP tool discovery is enabled and executable", async () => {
 		const session = createTestSession({
 			settings: createSettingsWithOverrides({
