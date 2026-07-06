@@ -3037,6 +3037,7 @@ const LITELLM_RICH_ENDPOINTS = ["/model_group/info", "/v2/model/info", "/model/i
 export const OPENAI_COMPAT_DISCOVERY_DEFAULT_CONTEXT_WINDOW = 128_000;
 export const OPENAI_COMPAT_DISCOVERY_DEFAULT_MAX_TOKENS = 32_768;
 const UNKNOWN_PROXY_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
+const LITELLM_ALL_TEAM_MODELS_ID = "all-team-models";
 
 export function normalizeLiteLLMManagementBaseUrl(baseUrl: string): string {
 	const trimmed = baseUrl.trim().replace(/\/+$/g, "");
@@ -3142,11 +3143,56 @@ function getSupportedOpenAIParams(entry: LiteLLMRichModelEntry): string[] | unde
 	return value.flatMap(item => (typeof item === "string" ? [item] : []));
 }
 
+function isLiteLLMUnusableAggregatePlaceholder(entry: LiteLLMRichModelEntry): boolean {
+	const modelGroup = toNonEmptyString(entry.model_group);
+	if (modelGroup !== LITELLM_ALL_TEAM_MODELS_ID) {
+		return false;
+	}
+	const providers = entry.providers;
+	if (providers !== undefined && (!Array.isArray(providers) || providers.length > 0)) {
+		return false;
+	}
+	const modelName = toNonEmptyString(entry.model_name);
+	if (modelName && modelName !== LITELLM_ALL_TEAM_MODELS_ID) {
+		return false;
+	}
+	const id = toNonEmptyString(entry.id);
+	if (id && id !== LITELLM_ALL_TEAM_MODELS_ID) {
+		return false;
+	}
+	const backendModel = toNonEmptyString(getLiteLLMParams(entry)?.model);
+	if (backendModel && backendModel !== LITELLM_ALL_TEAM_MODELS_ID) {
+		return false;
+	}
+	if (
+		toPositiveNumber(getLiteLLMMetadataValue(entry, "max_input_tokens"), null) !== null ||
+		toPositiveNumber(getLiteLLMMetadataValue(entry, "max_output_tokens"), null) !== null
+	) {
+		return false;
+	}
+	if (
+		getLiteLLMMetadataValue(entry, "supports_vision") === true ||
+		getLiteLLMMetadataValue(entry, "supports_reasoning") === true ||
+		getLiteLLMMetadataValue(entry, "supports_function_calling") === true ||
+		getLiteLLMMetadataValue(entry, "supports_tools") === true
+	) {
+		return false;
+	}
+	const supportedOpenAIParams = getSupportedOpenAIParams(entry);
+	if (supportedOpenAIParams && supportedOpenAIParams.length > 0) {
+		return false;
+	}
+	return true;
+}
+
 function mapLiteLLMRichEntry<TApi extends Api>(
 	entry: LiteLLMRichModelEntry,
 	options: FetchLiteLLMRichModelsOptions<TApi>,
 	runtimeBaseUrl: string,
 ): ModelSpec<TApi> | null {
+	if (isLiteLLMUnusableAggregatePlaceholder(entry)) {
+		return null;
+	}
 	const id = getLiteLLMRichModelId(entry);
 	if (!id) {
 		return null;
@@ -3286,11 +3332,11 @@ export function litellmModelManagerOptions(
 	const baseUrl = config?.baseUrl ?? Bun.env.LITELLM_BASE_URL ?? "http://localhost:4000/v1";
 	return {
 		providerId: "litellm",
-		// rich-v2 invalidates rows cached before reseller usage-suffix stripping
-		// (stale display names like `MiniMax-M3 (3x usage)`); bump the version
-		// whenever the mappers below change, or warm authoritative caches keep
-		// serving pre-change rows for the full TTL.
-		cacheProviderId: `litellm:rich-v2:${Bun.hash(baseUrl).toString(36)}`,
+		// rich-v3 invalidates rows cached before reseller usage-suffix stripping
+		// and placeholder-only `all-team-models` filtering; bump the version whenever
+		// the mappers below change, or warm authoritative caches keep serving
+		// pre-change rows for the full TTL.
+		cacheProviderId: `litellm:rich-v3:${Bun.hash(baseUrl).toString(36)}`,
 		// litellm is a local-only proxy and is never bundled in models.json (that
 		// would leak the machine's localhost catalog). Prefer the proxy's richer
 		// management metadata, then fall back to /v1/models and enrich bare ids
