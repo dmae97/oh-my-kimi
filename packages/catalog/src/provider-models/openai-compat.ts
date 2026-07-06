@@ -3032,6 +3032,11 @@ export interface FetchLiteLLMRichModelsOptions<TApi extends Api> {
 }
 
 type LiteLLMRichModelEntry = Record<string, unknown>;
+type LiteLLMRichEndpointModel<TApi extends Api> = {
+	model: ModelSpec<TApi>;
+	supportsVision: unknown;
+	supportsReasoning: unknown;
+};
 
 const LITELLM_RICH_ENDPOINTS = ["/model_group/info", "/v2/model/info", "/model/info", "/v1/model/info"] as const;
 export const OPENAI_COMPAT_DISCOVERY_DEFAULT_CONTEXT_WINDOW = 128_000;
@@ -3264,7 +3269,7 @@ async function fetchLiteLLMRichEndpoint<TApi extends Api>(
 	managementBaseUrl: string,
 	runtimeBaseUrl: string,
 	signal?: AbortSignal,
-): Promise<ModelSpec<TApi>[] | null> {
+): Promise<{ models: LiteLLMRichEndpointModel<TApi>[]; incompleteVisionMetadata: boolean } | null> {
 	const fetchImpl = discoveryFetch(options.fetch);
 	const requestHeaders: Record<string, string> = {
 		Accept: "application/json",
@@ -3296,17 +3301,29 @@ async function fetchLiteLLMRichEndpoint<TApi extends Api>(
 	if (!entries || entries.length === 0) {
 		return null;
 	}
-	const deduped = new Map<string, ModelSpec<TApi>>();
+	const deduped = new Map<string, LiteLLMRichEndpointModel<TApi>>();
+	let incompleteVisionMetadata = false;
 	for (const entry of entries) {
 		const model = mapLiteLLMRichEntry(entry, options, runtimeBaseUrl);
 		if (model) {
-			deduped.set(model.id, model);
+			const supportsVision = getLiteLLMMetadataValue(entry, "supports_vision");
+			if (supportsVision !== true && supportsVision !== false) {
+				incompleteVisionMetadata = true;
+			}
+			deduped.set(model.id, {
+				model,
+				supportsVision,
+				supportsReasoning: getLiteLLMMetadataValue(entry, "supports_reasoning"),
+			});
 		}
 	}
 	if (deduped.size === 0) {
 		return null;
 	}
-	return Array.from(deduped.values()).sort((left, right) => left.id.localeCompare(right.id));
+	return {
+		models: Array.from(deduped.values()).sort((left, right) => left.model.id.localeCompare(right.model.id)),
+		incompleteVisionMetadata,
+	};
 }
 
 export async function fetchLiteLLMRichModels<TApi extends Api>(
@@ -3318,13 +3335,40 @@ export async function fetchLiteLLMRichModels<TApi extends Api>(
 		return null;
 	}
 	const fetchModels = async (signal?: AbortSignal): Promise<ModelSpec<TApi>[] | null> => {
+		const deduped = new Map<string, LiteLLMRichEndpointModel<TApi>>();
 		for (const endpoint of LITELLM_RICH_ENDPOINTS) {
-			const models = await fetchLiteLLMRichEndpoint(endpoint, options, managementBaseUrl, runtimeBaseUrl, signal);
-			if (models) {
-				return models;
+			const result = await fetchLiteLLMRichEndpoint(endpoint, options, managementBaseUrl, runtimeBaseUrl, signal);
+			if (!result) {
+				continue;
+			}
+			for (const next of result.models) {
+				const existing = deduped.get(next.model.id);
+				if (!existing) {
+					deduped.set(next.model.id, next);
+					continue;
+				}
+				const model = {
+					...existing.model,
+					...next.model,
+					name: next.model.name === next.model.id ? existing.model.name : next.model.name,
+					input:
+						next.supportsVision === true || next.supportsVision === false
+							? next.model.input
+							: existing.model.input,
+					reasoning: typeof next.supportsReasoning === "boolean" ? next.model.reasoning : existing.model.reasoning,
+				};
+				deduped.set(next.model.id, { ...next, model });
+			}
+			if (!result.incompleteVisionMetadata) {
+				break;
 			}
 		}
-		return null;
+		if (deduped.size === 0) {
+			return null;
+		}
+		return Array.from(deduped.values())
+			.map(entry => entry.model)
+			.sort((left, right) => left.id.localeCompare(right.id));
 	};
 	if (options.signal !== undefined) {
 		return fetchModels(options.signal);
@@ -3339,11 +3383,11 @@ export function litellmModelManagerOptions(
 	const baseUrl = config?.baseUrl ?? Bun.env.LITELLM_BASE_URL ?? "http://localhost:4000/v1";
 	return {
 		providerId: "litellm",
-		// rich-v3 invalidates rows cached before reseller usage-suffix stripping
-		// and placeholder-only `all-team-models` filtering; bump the version whenever
-		// the mappers below change, or warm authoritative caches keep serving
-		// pre-change rows for the full TTL.
-		cacheProviderId: `litellm:rich-v3:${Bun.hash(baseUrl).toString(36)}`,
+		// rich-v4 invalidates rows cached before discovery continued past
+		// `/model_group/info` when that endpoint omitted vision metadata; bump the
+		// version whenever the mappers below change, or warm authoritative caches keep
+		// serving pre-change rows for the full TTL.
+		cacheProviderId: `litellm:rich-v4:${Bun.hash(baseUrl).toString(36)}`,
 		// litellm is a local-only proxy and is never bundled in models.json (that
 		// would leak the machine's localhost catalog). Prefer the proxy's richer
 		// management metadata, then fall back to /v1/models and enrich bare ids
