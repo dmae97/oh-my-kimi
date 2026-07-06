@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `--file` flag to `say` command for reading text from files
+- Enabled streaming text synthesis in `say` command for gapless long-form audio
+- Added voice selection validation to `say` command
+
+### Changed
+
+- Improved `say` command to output segment count and total duration upon completion
+
 ## [16.3.8] - 2026-07-05
 
 ### Fixed
