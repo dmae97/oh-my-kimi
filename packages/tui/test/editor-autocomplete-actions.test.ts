@@ -1,4 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
 	type AutocompleteItem,
 	type AutocompleteProvider,
@@ -7,6 +10,17 @@ import {
 } from "@oh-my-pi/pi-tui/autocomplete";
 import { Editor } from "@oh-my-pi/pi-tui/components/editor";
 import { defaultEditorTheme } from "./test-themes";
+
+function onceAutocompleteUpdate(editor: Editor): Promise<void> {
+	const { promise, resolve } = Promise.withResolvers<void>();
+	const previous = editor.onAutocompleteUpdate;
+	editor.onAutocompleteUpdate = () => {
+		editor.onAutocompleteUpdate = previous;
+		previous?.();
+		resolve();
+	};
+	return promise;
+}
 
 class HashActionProvider implements AutocompleteProvider {
 	async getSuggestions(
@@ -78,6 +92,63 @@ describe("Editor slash autocomplete acceptance", () => {
 		editor.handleInput("\t");
 
 		expect(editor.getText()).toBe("/skills:fix-bug ");
+	});
+
+	it("accepts an absolute path completion with Tab when the line has leading whitespace", async () => {
+		const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "editor-absolute-tab-"));
+		try {
+			fs.writeFileSync(path.join(baseDir, "alpha.ts"), "export {};\n");
+			const normalizedBaseDir = baseDir.replace(/\\/g, "/");
+			const prefix = `${normalizedBaseDir}/al`;
+			const completedPath = `${normalizedBaseDir}/alpha.ts`;
+			const editor = new Editor(defaultEditorTheme);
+			editor.setAutocompleteProvider(
+				new CombinedAutocompleteProvider([{ name: "model", description: "Switch model" }], baseDir),
+			);
+
+			editor.setText(`  ${prefix}`);
+			const autocompleteOpened = onceAutocompleteUpdate(editor);
+			editor.handleInput("\t");
+			await autocompleteOpened;
+			expect(editor.isShowingAutocomplete()).toBe(true);
+
+			editor.handleInput("\t");
+
+			expect(editor.getText()).toBe(`  ${completedPath}`);
+		} finally {
+			fs.rmSync(baseDir, { recursive: true, force: true });
+		}
+	});
+
+	it("applies an absolute path selection on Enter without submitting", async () => {
+		const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "editor-absolute-enter-"));
+		try {
+			fs.writeFileSync(path.join(baseDir, "alpha.ts"), "export {};\n");
+			const normalizedBaseDir = baseDir.replace(/\\/g, "/");
+			const prefix = `${normalizedBaseDir}/al`;
+			const completedPath = `${normalizedBaseDir}/alpha.ts`;
+			const editor = new Editor(defaultEditorTheme);
+			editor.setAutocompleteProvider(
+				new CombinedAutocompleteProvider([{ name: "model", description: "Switch model" }], baseDir),
+			);
+			let submitted = "";
+			editor.onSubmit = text => {
+				submitted = text;
+			};
+
+			editor.setText(prefix);
+			const autocompleteOpened = onceAutocompleteUpdate(editor);
+			editor.handleInput("\t");
+			await autocompleteOpened;
+			expect(editor.isShowingAutocomplete()).toBe(true);
+
+			editor.handleInput("\r");
+
+			expect(editor.getText()).toBe(completedPath);
+			expect(submitted).toBe("");
+		} finally {
+			fs.rmSync(baseDir, { recursive: true, force: true });
+		}
 	});
 });
 class SyncSlashProvider implements AutocompleteProvider {

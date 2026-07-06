@@ -425,9 +425,9 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 						prefix: isMidPromptSkillLookup ? commandText : textBeforeCursor,
 					};
 				}
-				if (!isMidPromptSkillLookup) return null;
-				// A mid-prompt slash token with no matching skill may still be an
-				// absolute path (`see /tmp`); fall through to file-path completion.
+				// A slash token with no matching command may still be an absolute
+				// path (`/tmp/fo` at prompt start, `see /tmp` mid-prompt); fall
+				// through to file-path completion.
 			} else if (!isMidPromptSkillLookup) {
 				// Submitted slash commands own their argument text only when the
 				// matched command accepts args. No-arg slash-looking prompts such
@@ -557,7 +557,11 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		// Slash command suggestions can be accepted before the debounced refresh
 		// catches up to newly typed characters. Replace the live command token,
 		// not only the prefix captured when the suggestion list was rendered.
-		if (findLeadingSlashCommandStart(prefix) !== null && leadingSlashStart !== null) {
+		// Absolute-path completions share the leading-slash prefix shape but
+		// insert values starting with `/` (or `"` when quoted); those must take
+		// the path tail below instead of command-style `/<name> ` insertion.
+		const isPathCompletionItem = item.value.startsWith("/") || item.value.startsWith('"');
+		if (findLeadingSlashCommandStart(prefix) !== null && leadingSlashStart !== null && !isPathCompletionItem) {
 			const slashPrefix = textBeforeCursor.slice(leadingSlashStart);
 			if (!slashPrefix.includes(" ") && !slashPrefix.slice(1).includes("/")) {
 				const beforeSlash = currentLine.slice(0, leadingSlashStart);

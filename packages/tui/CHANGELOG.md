@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added support for absolute path autocompletion when no matching slash command is found
+
+### Fixed
+
+- Fixed absolute paths at the start of the prompt (`/tmp/…`, `/Users/…`) getting no autocomplete: the leading slash was parsed as a slash-command token, and with no matching command the provider returned nothing instead of falling through to file-path completion — so Tab did nothing. Accepting an absolute-path suggestion now also takes the path insertion branch (Enter applies without submitting) instead of command-style `/<name> ` insertion.
+
 ## [16.3.7] - 2026-07-05
 
 ### Fixed

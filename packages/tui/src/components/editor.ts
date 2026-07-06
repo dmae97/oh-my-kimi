@@ -1159,10 +1159,12 @@ export class Editor implements Component, Focusable {
 					return;
 				}
 
-				// If Enter was pressed on a slash command, apply completion and submit
+				// If Enter was pressed on a slash command (not an absolute-path
+				// completion sharing the leading-slash prefix), apply and submit
 				if (
 					(kb.matches(data, "tui.input.submit") || data === "\n") &&
-					findLeadingSlashCommandStart(this.#autocompletePrefix) !== null
+					findLeadingSlashCommandStart(this.#autocompletePrefix) !== null &&
+					!this.#selectedCompletionIsPath()
 				) {
 					// Check for stale autocomplete state due to debounce
 					const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";
@@ -2875,7 +2877,10 @@ export class Editor implements Component, Focusable {
 	 *   provider's default slice at `cursorCol - prefix.length` then hits the right span.
 	 * - Slash branch re-anchors when both the prefix and the current text carry a
 	 *   leading slash command and the current slash token is clean (no whitespace or
-	 *   inner slash), matching `applyCompletion`'s slash-branch guard.
+	 *   inner slash), matching `applyCompletion`'s slash-branch guard. It only
+	 *   engages for command-shaped selections: absolute-path completions (`/tmp/fo`
+	 *   via the no-command-match fall-through) share the leading-slash prefix shape
+	 *   but must use the live-suffix path rule so the apply slice stays anchored.
 	 * - `@`-file branch re-anchors via `#extractAtPrefix`; safe when the current text
 	 *   still ends in a whitespace-anchored `@<token>`.
 	 * - Everything else is stale — accepting it would corrupt the buffer (issue #4295).
@@ -2883,7 +2888,7 @@ export class Editor implements Component, Focusable {
 	#autocompletePrefixMatchesCursorText(currentTextBeforeCursor: string): boolean {
 		if (currentTextBeforeCursor === this.#autocompletePrefix) return true;
 
-		if (findLeadingSlashCommandStart(this.#autocompletePrefix) !== null) {
+		if (findLeadingSlashCommandStart(this.#autocompletePrefix) !== null && !this.#selectedCompletionIsPath()) {
 			const currentLeadingStart = findLeadingSlashCommandStart(currentTextBeforeCursor);
 			if (currentLeadingStart !== null) {
 				const token = currentTextBeforeCursor.slice(currentLeadingStart);
@@ -2897,6 +2902,19 @@ export class Editor implements Component, Focusable {
 		}
 
 		return currentTextBeforeCursor.endsWith(this.#autocompletePrefix);
+	}
+
+	/**
+	 * Whether the current popup selection inserts a file path rather than a
+	 * slash command. Leading-slash prefixes are ambiguous: the provider falls
+	 * through to absolute-path completion when no command matches, and those
+	 * item values start with `/` (or `"` when quoted) while command values are
+	 * bare names.
+	 */
+	#selectedCompletionIsPath(): boolean {
+		const selected = this.#autocompleteList?.getSelectedItem();
+		if (!selected) return false;
+		return selected.value.startsWith("/") || selected.value.startsWith('"');
 	}
 
 	#isSlashCommandNameAutocompleteSelection(): boolean {
