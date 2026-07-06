@@ -1294,6 +1294,151 @@ describe("advisor", () => {
 			expect(failures).toHaveLength(2);
 		});
 
+		it("calls onTurnError with state.error before retrying the batch", async () => {
+			const promptInputs: string[] = [];
+			const turnErrors: unknown[] = [];
+			const events: string[] = [];
+			const state: { messages: AgentMessage[]; error?: string } = { messages: [] };
+			let promptCalls = 0;
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptCalls++;
+					promptInputs.push(input);
+					events.push(`prompt:${promptCalls}`);
+					state.error = promptCalls === 1 ? "provider failed" : undefined;
+				},
+				abort: () => {},
+				reset: () => {
+					state.error = undefined;
+				},
+				state,
+			};
+			const messages: AgentMessage[] = [{ role: "user", content: "aaa", timestamp: 1 } as AgentMessage];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+				onTurnError: error => {
+					turnErrors.push(error);
+					events.push(`hook:${error instanceof Error ? error.message : String(error)}`);
+				},
+			};
+			const runtime = new AdvisorRuntime(agent, host, 1);
+
+			runtime.onTurnEnd(messages);
+			await runtime.waitForCatchup(1000, 1);
+
+			expect(promptInputs).toHaveLength(2);
+			expect(turnErrors).toHaveLength(1);
+			const error = turnErrors[0];
+			if (!(error instanceof Error)) throw new Error("expected advisor turn error");
+			expect(error.message).toBe("provider failed");
+			expect(events).toEqual(["prompt:1", "hook:provider failed", "prompt:2"]);
+			expect(runtime.backlog).toBe(0);
+		});
+
+		it("calls onTurnError for each consecutive failure including the dropped third turn", async () => {
+			const promptInputs: string[] = [];
+			const turnErrors: unknown[] = [];
+			const failures: unknown[] = [];
+			const events: string[] = [];
+			const state: { messages: AgentMessage[]; error?: string } = { messages: [] };
+			let promptCalls = 0;
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptCalls++;
+					promptInputs.push(input);
+					events.push(`prompt:${promptCalls}`);
+					state.error = `provider failed ${promptCalls}`;
+				},
+				abort: () => {},
+				reset: () => {
+					state.error = undefined;
+				},
+				state,
+			};
+			const messages: AgentMessage[] = [{ role: "user", content: "aaa", timestamp: 1 } as AgentMessage];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+				onTurnError: error => {
+					turnErrors.push(error);
+					events.push(`hook:${error instanceof Error ? error.message : String(error)}`);
+				},
+				notifyFailure: error => {
+					failures.push(error);
+					events.push(`notify:${error instanceof Error ? error.message : String(error)}`);
+				},
+			};
+			const runtime = new AdvisorRuntime(agent, host, 1);
+
+			runtime.onTurnEnd(messages);
+			await runtime.waitForCatchup(1000, 1);
+
+			expect(promptInputs).toHaveLength(3);
+			expect(turnErrors.map(error => (error instanceof Error ? error.message : String(error)))).toEqual([
+				"provider failed 1",
+				"provider failed 2",
+				"provider failed 3",
+			]);
+			expect(failures).toHaveLength(1);
+			const failure = failures[0];
+			if (!(failure instanceof Error)) throw new Error("expected advisor failure error");
+			expect(failure.message).toBe("provider failed 3");
+			expect(events).toEqual([
+				"prompt:1",
+				"hook:provider failed 1",
+				"prompt:2",
+				"hook:provider failed 2",
+				"prompt:3",
+				"hook:provider failed 3",
+				"notify:provider failed 3",
+			]);
+			expect(runtime.backlog).toBe(0);
+		});
+
+		it("continues retrying when onTurnError rejects", async () => {
+			const promptInputs: string[] = [];
+			const turnErrors: unknown[] = [];
+			const events: string[] = [];
+			const state: { messages: AgentMessage[]; error?: string } = { messages: [] };
+			let promptCalls = 0;
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptCalls++;
+					promptInputs.push(input);
+					events.push(`prompt:${promptCalls}`);
+					state.error = promptCalls === 1 ? "provider failed" : undefined;
+				},
+				abort: () => {},
+				reset: () => {
+					state.error = undefined;
+				},
+				state,
+			};
+			const messages: AgentMessage[] = [{ role: "user", content: "aaa", timestamp: 1 } as AgentMessage];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+				onTurnError: async error => {
+					turnErrors.push(error);
+					events.push(`hook:${error instanceof Error ? error.message : String(error)}`);
+					throw new Error("hook failed");
+				},
+			};
+			const runtime = new AdvisorRuntime(agent, host, 1);
+
+			runtime.onTurnEnd(messages);
+			await runtime.waitForCatchup(1000, 1);
+
+			expect(promptInputs).toHaveLength(2);
+			expect(turnErrors).toHaveLength(1);
+			const error = turnErrors[0];
+			if (!(error instanceof Error)) throw new Error("expected advisor turn error");
+			expect(error.message).toBe("provider failed");
+			expect(events).toEqual(["prompt:1", "hook:provider failed", "prompt:2"]);
+			expect(runtime.backlog).toBe(0);
+		});
+
 		it("rolls advisor state back after each failed prompt so retries don't replay duplicate turns", async () => {
 			// The real `Agent` appends the user batch + a synthetic `stopReason: "error"`
 			// assistant turn before `state.error` is read. Without rollback, the runtime's

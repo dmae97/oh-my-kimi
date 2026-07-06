@@ -108,6 +108,7 @@ import {
 	clearAnthropicFastModeFallback,
 	deriveClaudeDeviceId,
 	Effort,
+	isUsageLimitOutcome,
 	parseRateLimitReason,
 	realizesPriorityServiceTier,
 	resolveModelServiceTier,
@@ -124,6 +125,7 @@ import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { MacOSPowerAssertion } from "@oh-my-pi/pi-natives";
 import {
 	escapeXmlText,
+	extractHttpStatusFromError,
 	extractRetryHint,
 	formatDuration,
 	getAgentDbPath,
@@ -2539,6 +2541,21 @@ export class AgentSession {
 				maintainContext: incomingTokens => this.#maintainAdvisorContext(advisorRef, incomingTokens),
 				obfuscator: this.#obfuscator,
 				beginAdvisorUpdate: () => advisorRef.emissionGuard.beginUpdate(),
+				onTurnError: async error => {
+					// Mirror the auth-gateway's usage-limit remedy: the in-stream a/b/c
+					// auth retry rotates through siblings within one request but never
+					// blocks the LAST failing credential, so without this the advisor
+					// re-picks the same exhausted account every retry. Usage limits
+					// only — other failures keep the plain retry/notify path (never
+					// suspect-mark a credential on a transient advisor error).
+					const message = error instanceof Error ? error.message : String(error);
+					if (!isUsageLimitOutcome(extractHttpStatusFromError(error), message)) return;
+					await this.#modelRegistry.authStorage.markUsageLimitReached(advisorModel.provider, advisorSessionId, {
+						retryAfterMs: extractRetryHint(undefined, message),
+						baseUrl: advisorModel.baseUrl,
+						modelId: advisorModel.id,
+					});
+				},
 				notifyFailure: error => {
 					const message = error instanceof Error ? error.message : String(error);
 					this.emitNotice(
@@ -15535,7 +15552,7 @@ export class AgentSession {
 				lastAttemptAtByAccount: coordinator.lastAttemptAtByAccount,
 			});
 			if (!decision.redeem) {
-				logger.debug("codex-auto-reset: skipped", { reason: decision.reason });
+				logger.debug("codex-auto-reset: skipped", { reason: decision.reason, account: accountKey });
 				return false;
 			}
 			if (shouldPromptCodexAutoRedeem(cfg.autoRedeem) && !(await this.#confirmCodexAutoRedeem(decision))) {
