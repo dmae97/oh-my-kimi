@@ -158,6 +158,7 @@ type LlamaCppDiscoveredModelRuntimeMetadata = {
 
 type LlamaCppModelListEntry = {
 	id: string;
+	input?: ("text" | "image")[];
 	runtimeContextWindow?: number;
 	/**
 	 * `--ctx-size` extracted from the entry's `status.args` (rendered CLI arg
@@ -276,6 +277,20 @@ function extractLlamaCppModelContextWindows(
 	};
 }
 
+function extractLlamaCppModelInputCapabilities(item: Record<string, unknown>): ("text" | "image")[] | undefined {
+	const architecture = item.architecture;
+	if (!isRecord(architecture) || !Array.isArray(architecture.input_modalities)) {
+		return undefined;
+	}
+	const modalities = new Set<string>();
+	for (const modality of architecture.input_modalities) {
+		if (typeof modality === "string") {
+			modalities.add(modality.toLowerCase());
+		}
+	}
+	return modalities.has("image") ? ["text", "image"] : ["text"];
+}
+
 function parseLlamaCppModelList(payload: unknown): LlamaCppModelListEntry[] {
 	if (!isRecord(payload) || !Array.isArray(payload.data)) {
 		return [];
@@ -287,6 +302,7 @@ function parseLlamaCppModelList(payload: unknown): LlamaCppModelListEntry[] {
 		return [
 			{
 				id: item.id,
+				input: extractLlamaCppModelInputCapabilities(item),
 				...extractLlamaCppModelContextWindows(item),
 				configuredContextWindow: extractLlamaCppConfiguredContextWindow(item),
 			},
@@ -545,7 +561,7 @@ export async function discoverLlamaCppModels(
 				provider: providerConfig.provider,
 				baseUrl,
 				reasoning: false,
-				input: serverMetadata?.input ?? ["text"],
+				input: item.input ?? serverMetadata?.input ?? ["text"],
 				imageInputDecoder: "stb",
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow,
@@ -595,7 +611,7 @@ export async function discoverLlamaCppModelRuntimeMetadata(
 			entry.configuredContextWindow ??
 			serverMetadata?.contextWindow ??
 			entry.trainingContextWindow;
-		const input = serverMetadata?.input;
+		const input = entry.input ?? serverMetadata?.input;
 		if (contextWindow === undefined) {
 			return input === undefined ? undefined : { input };
 		}
