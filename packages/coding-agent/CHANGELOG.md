@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed system prompt date rendering to use the host local calendar date instead of UTC.
+
 ## [16.3.8] - 2026-07-05
 
 ### Fixed
