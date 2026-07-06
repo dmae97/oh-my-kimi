@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.10] - 2026-07-06
+
 ### Added
 
 - Added `postmortem.markExpectedCleanupError()` / `postmortem.isExpectedCleanupError()` to tag errors thrown by routine resource teardown; the global `uncaughtException`/`unhandledRejection` handlers downgrade marked errors (walking the `cause` chain) to warnings instead of exiting the process.

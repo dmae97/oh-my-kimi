@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "@oh-my-pi/swarm-extension",
-  "version": "16.3.9",
+  "version": "16.3.10",
   "description": "Swarm orchestration extension for omp",
   "homepage": "https://omp.sh",
   "author": "Derek Rynd",

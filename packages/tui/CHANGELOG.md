@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.10] - 2026-07-06
+
 ### Fixed
 
 - Registered emergency terminal restore with the postmortem fatal path whenever a real terminal starts, so fatal exits restore raw mode/alternate screen on the normal CLI graph (previously the registration was a side effect of a barrel module the CLI never imported).

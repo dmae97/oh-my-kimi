@@ -21,7 +21,7 @@
     },
     "packages/agent": {
       "name": "@oh-my-pi/pi-agent-core",
-      "version": "16.3.9",
+      "version": "16.3.10",
       "dependencies": {
         "@oh-my-pi/pi-ai": "catalog:",
         "@oh-my-pi/pi-catalog": "catalog:",
@@ -39,7 +39,7 @@
     },
     "packages/ai": {
       "name": "@oh-my-pi/pi-ai",
-      "version": "16.3.9",
+      "version": "16.3.10",
       "dependencies": {
         "@bufbuild/protobuf": "catalog:",
         "@oh-my-pi/pi-catalog": "catalog:",
@@ -55,7 +55,7 @@
     },
     "packages/catalog": {
       "name": "@oh-my-pi/pi-catalog",
-      "version": "16.3.9",
+      "version": "16.3.10",
       "dependencies": {
         "@bufbuild/protobuf": "catalog:",
         "@oh-my-pi/pi-utils": "catalog:",
@@ -69,7 +69,7 @@
     },
     "packages/coding-agent": {
       "name": "@oh-my-pi/pi-coding-agent",
-      "version": "16.3.9",
+      "version": "16.3.10",
       "bin": {
         "omp": "src/cli.ts",
       },
@@ -137,7 +137,7 @@
     },
     "packages/hashline": {
       "name": "@oh-my-pi/hashline",
-      "version": "16.3.9",
+      "version": "16.3.10",
       "dependencies": {
         "diff": "catalog:",
         "lru-cache": "catalog:",
@@ -148,7 +148,7 @@
     },
     "packages/mnemopi": {
       "name": "@oh-my-pi/pi-mnemopi",
-      "version": "16.3.9",
+      "version": "16.3.10",
       "bin": {
         "mnemopi": "src/cli.ts",
       },
@@ -174,7 +174,7 @@
     },
     "packages/natives": {
       "name": "@oh-my-pi/pi-natives",
-      "version": "16.3.9",
+      "version": "16.3.10",
       "devDependencies": {
         "@napi-rs/cli": "catalog:",
         "@types/bun": "catalog:",
@@ -182,7 +182,7 @@
     },
     "packages/snapcompact": {
       "name": "@oh-my-pi/snapcompact",
-      "version": "16.3.9",
+      "version": "16.3.10",
       "dependencies": {
         "@oh-my-pi/pi-ai": "catalog:",
         "@oh-my-pi/pi-natives": "catalog:",
@@ -195,7 +195,7 @@
     },
     "packages/stats": {
       "name": "@oh-my-pi/omp-stats",
-      "version": "16.3.9",
+      "version": "16.3.10",
       "bin": {
         "omp-stats": "./src/index.ts",
       },
@@ -221,7 +221,7 @@
     },
     "packages/swarm-extension": {
       "name": "@oh-my-pi/swarm-extension",
-      "version": "16.3.9",
+      "version": "16.3.10",
       "bin": {
         "omp-swarm": "src/cli.ts",
       },
@@ -247,7 +247,7 @@
     },
     "packages/tui": {
       "name": "@oh-my-pi/pi-tui",
-      "version": "16.3.9",
+      "version": "16.3.10",
       "dependencies": {
         "@oh-my-pi/pi-natives": "catalog:",
         "@oh-my-pi/pi-utils": "catalog:",
@@ -288,7 +288,7 @@
     },
     "packages/utils": {
       "name": "@oh-my-pi/pi-utils",
-      "version": "16.3.9",
+      "version": "16.3.10",
       "dependencies": {
         "@oh-my-pi/pi-natives": "catalog:",
         "handlebars": "catalog:",
@@ -301,7 +301,7 @@
     },
     "packages/wire": {
       "name": "@oh-my-pi/pi-wire",
-      "version": "16.3.9",
+      "version": "16.3.10",
       "devDependencies": {
         "@types/bun": "catalog:",
       },
@@ -338,18 +338,18 @@
     "@huggingface/transformers": "^4.2.0",
     "@mozilla/readability": "^0.6.0",
     "@napi-rs/cli": "3.7.0",
-    "@oh-my-pi/hashline": "16.3.9",
-    "@oh-my-pi/omp-stats": "16.3.9",
-    "@oh-my-pi/pi-agent-core": "16.3.9",
-    "@oh-my-pi/pi-ai": "16.3.9",
-    "@oh-my-pi/pi-catalog": "16.3.9",
-    "@oh-my-pi/pi-coding-agent": "16.3.9",
-    "@oh-my-pi/pi-mnemopi": "16.3.9",
-    "@oh-my-pi/pi-natives": "16.3.9",
-    "@oh-my-pi/pi-tui": "16.3.9",
-    "@oh-my-pi/pi-utils": "16.3.9",
-    "@oh-my-pi/pi-wire": "16.3.9",
-    "@oh-my-pi/snapcompact": "16.3.9",
+    "@oh-my-pi/hashline": "16.3.10",
+    "@oh-my-pi/omp-stats": "16.3.10",
+    "@oh-my-pi/pi-agent-core": "16.3.10",
+    "@oh-my-pi/pi-ai": "16.3.10",
+    "@oh-my-pi/pi-catalog": "16.3.10",
+    "@oh-my-pi/pi-coding-agent": "16.3.10",
+    "@oh-my-pi/pi-mnemopi": "16.3.10",
+    "@oh-my-pi/pi-natives": "16.3.10",
+    "@oh-my-pi/pi-tui": "16.3.10",
+    "@oh-my-pi/pi-utils": "16.3.10",
+    "@oh-my-pi/pi-wire": "16.3.10",
+    "@oh-my-pi/snapcompact": "16.3.10",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/context-async-hooks": "^2.7.1",
     "@opentelemetry/exporter-trace-otlp-proto": "^0.218.0",
@@ -1047,7 +1047,7 @@
 
     "electron-to-chromium": ["electron-to-chromium@1.5.385", "", {}, "sha512-78sa/M08MNAYHQfjoWMvOlKQqZ0ElhSm/L5HNUc96VZ3b+KvDVnngFm8sYQy0XrhTRgAhggHr5abA7yTvRdo4Q=="],
 
-    "emnapi": ["emnapi@1.11.1", "", { "peerDependencies": { "node-addon-api": ">= 6.1.0" }, "optionalPeers": ["node-addon-api"] }, "sha512-kSRjhIcxjMFsBqk7ORvoc9aA5SBKDmecrtF5RMcmOTao0kD/zamaxsuTxMI8C1//wGUuvE7a+19pCE7AEhGVnA=="],
+    "emnapi": ["emnapi@1.11.2", "", { "peerDependencies": { "node-addon-api": ">= 6.1.0" }, "optionalPeers": ["node-addon-api"] }, "sha512-iMt/XQc69fFn2EvcU6tm14HmXKwyy0lnABugsQlqp6xFuZIUuO+ONVSg2mz+MTVF8WbC+bic65AvRXdoldALKg=="],
 
     "emoji-regex": ["emoji-regex@10.6.0", "", {}, "sha512-toUI84YS5YmxW219erniWD0CIVOo46xGKColeNQRgOzDorgBi1v4D71/OFzgD9GO2UGKIv1C3Sp8DAn0+j5w7A=="],
 
@@ -1079,7 +1079,7 @@
 
     "fast-wrap-ansi": ["fast-wrap-ansi@0.2.2", "", { "dependencies": { "fast-string-width": "^3.0.2" } }, "sha512-7F2Fl+TjRSenLqlU3UjSH0iyqopqoZIu7eZVpEirP2g1GtWa2G/ecEmBdgz31+Mxr+ELclgg6sokpSFIQiZ02Q=="],
 
-    "fast-xml-builder": ["fast-xml-builder@1.2.0", "", { "dependencies": { "path-expression-matcher": "^1.5.0", "xml-naming": "^0.1.0" } }, "sha512-00aAWieqff+ZJhsXA4g1g7M8k+7AYoMUUHF+/zFb5U6Uv/P0Vl4QZo84/IcufzYalLuEj9928bXN9PbbFzMF0Q=="],
+    "fast-xml-builder": ["fast-xml-builder@1.2.1", "", { "dependencies": { "path-expression-matcher": "^1.5.0", "xml-naming": "^0.1.0" } }, "sha512-tPb5TTWfgfVx5BNSi2xV0eLr89POeXXn0dXIsCJ9m1narrWxeIyx6je9d7Rce/3NyXLbvuQmLkxq+RuxMWejvw=="],
 
     "fast-xml-parser": ["fast-xml-parser@5.9.3", "", { "dependencies": { "@nodable/entities": "^2.2.0", "fast-xml-builder": "^1.2.0", "is-unsafe": "^1.0.1", "path-expression-matcher": "^1.5.0", "strnum": "^2.4.1", "xml-naming": "^0.1.0" }, "bin": { "fxparser": "src/cli/cli.js" } }, "sha512-brCNCeScma/kqa54J4PIDriSSSLssRkuYaUCpvHJulGc3HGI/xxKUCTDcYkAdqJsyb//ydpbxecjC3hB9+tb/g=="],
 

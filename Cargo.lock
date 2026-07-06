@@ -812,9 +812,9 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
 name = "ctor"
-version = "1.0.7"
+version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01334b89b69ff726750c5ce5073fc8bd860e99aa9a8fc5ca11b04730e3aee97a"
+checksum = "fb22e947478ccf9dc44d8922042c677a63fbb88f2cb468521d1145816e5087cb"
 
 [[package]]
 name = "darling"
@@ -2881,7 +2881,7 @@ dependencies = [
 
 [[package]]
 name = "pi-ast"
-version = "16.3.9"
+version = "16.3.10"
 dependencies = [
  "anyhow",
  "ast-grep-core",
@@ -2951,7 +2951,7 @@ dependencies = [
 
 [[package]]
 name = "pi-iso"
-version = "16.3.9"
+version = "16.3.10"
 dependencies = [
  "async-trait",
  "libc",
@@ -2963,7 +2963,7 @@ dependencies = [
 
 [[package]]
 name = "pi-natives"
-version = "16.3.9"
+version = "16.3.10"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3015,7 +3015,7 @@ dependencies = [
 
 [[package]]
 name = "pi-shell"
-version = "16.3.9"
+version = "16.3.10"
 dependencies = [
  "anyhow",
  "brush-builtins",
@@ -3064,7 +3064,7 @@ dependencies = [
 
 [[package]]
 name = "pi-walker"
-version = "16.3.9"
+version = "16.3.10"
 dependencies = [
  "dashmap",
  "globset",
@@ -4168,9 +4168,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-cmake"
-version = "0.7.1"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c1b35d1dd7396d24b3e826bb0f975b915ec7e9125b989d5e9d24ebb6a08509a"
+checksum = "98cd30b7fdc0e09af3b2acaaa2c1b06c81ae31413de911e70dab66e4e8d58a83"
 dependencies = [
  "cc",
  "tree-sitter-language",

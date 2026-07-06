@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.10] - 2026-07-06
+
 ### Fixed
 
 - Fixed Ollama/Ollama Cloud EOS-only completions to retry empty stops with a single output token before the agent loop can halt silently. ([#4659](https://github.com/can1357/oh-my-pi/issues/4659))
