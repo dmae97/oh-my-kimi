@@ -2,7 +2,8 @@ import { afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { Settings } from "../config/settings";
 import { getThemeByName, setThemeInstance, type Theme } from "../modes/theme/theme";
 import { renderResult } from "./render";
-import type { AgentProgress, TaskToolDetails } from "./types";
+import { taskToolRenderer } from "./renderer";
+import type { AgentProgress, SingleResult, TaskToolDetails } from "./types";
 
 const strip = (lines: readonly string[]): string =>
 	lines
@@ -40,6 +41,71 @@ function makeProgress(recentOutput: string[]): AgentProgress {
 		cost: 0,
 		durationMs: 0,
 	};
+}
+
+function makeParentWithNestedProgress(childCount: number): AgentProgress {
+	const children = Array.from(
+		{ length: childCount },
+		(_, index): AgentProgress => ({
+			...makeProgress([]),
+			index,
+			id: `Nested${index + 1}`,
+			task: `nested child ${index + 1}`,
+		}),
+	);
+	return {
+		...makeProgress([]),
+		id: "Parent",
+		task: "parent task",
+		inflightTaskDetails: {
+			projectAgentsDir: null,
+			results: [],
+			totalDurationMs: 1,
+			progress: children,
+		},
+	};
+}
+
+function makeSingleResult(index: number, overrides?: Partial<SingleResult>): SingleResult {
+	return {
+		index,
+		id: `Done${index + 1}`,
+		agent: "task",
+		agentSource: "bundled",
+		task: `finished child ${index + 1}`,
+		exitCode: 0,
+		output: "ok",
+		stderr: "",
+		truncated: false,
+		durationMs: 5,
+		tokens: 0,
+		requests: 1,
+		...overrides,
+	};
+}
+
+function makeParentWithNestedResults(childCount: number): TaskToolDetails {
+	const nested: TaskToolDetails = {
+		projectAgentsDir: null,
+		// Failure on the LAST child in display order (equal durations, index tiebreak):
+		// a plain head-of-list pick would elide it, so its visibility proves the
+		// failure-first selection of `selectCollapsedResults`.
+		results: Array.from({ length: childCount }, (_, index) =>
+			makeSingleResult(index, index === childCount - 1 ? { exitCode: 1, error: "boom" } : undefined),
+		),
+		totalDurationMs: 1,
+	};
+	const parent = makeSingleResult(0, { id: "Parent", extractedToolData: { task: [nested] } });
+	return { projectAgentsDir: null, results: [parent], totalDurationMs: 1 };
+}
+
+function renderResultText(details: TaskToolDetails, expanded: boolean, uiTheme: Theme): string {
+	const component = renderResult(
+		{ content: [{ type: "text", text: "Ran 1 agent" }], details },
+		{ expanded, isPartial: false },
+		uiTheme,
+	);
+	return strip(component.render(120));
 }
 
 function renderProgressText(progress: AgentProgress, expanded: boolean, uiTheme: Theme): string {
@@ -117,5 +183,72 @@ describe("task live progress rendering", () => {
 		const collapsedText = renderProgressText(progress, false, uiTheme);
 		expect(collapsedText).not.toContain("line 1");
 		expect(collapsedText).not.toContain("raw output:");
+	});
+
+	it("caps collapsed nested task progress at four rows plus an elision line", () => {
+		setViewportRows(40);
+		const text = renderProgressText(makeParentWithNestedProgress(6), false, uiTheme);
+
+		expect(text).not.toContain("Nested1");
+		expect(text).not.toContain("Nested2");
+		expect(text).toContain("Nested3");
+		expect(text).toContain("Nested4");
+		expect(text).toContain("Nested5");
+		expect(text).toContain("Nested6");
+		expect(text).toContain("2 more agents");
+	});
+
+	it("shows every nested task progress row when expanded", () => {
+		setViewportRows(40);
+		const text = renderProgressText(makeParentWithNestedProgress(6), true, uiTheme);
+
+		for (let index = 1; index <= 6; index++) {
+			expect(text).toContain(`Nested${index}`);
+		}
+		expect(text).not.toContain("more agents");
+	});
+
+	it("caps collapsed finalized nested task results and keeps the failed child visible", () => {
+		setViewportRows(40);
+		const text = renderResultText(makeParentWithNestedResults(6), false, uiTheme);
+
+		expect(text).toContain("Done6"); // failed child wins a slot despite sorting last
+		expect(text).toContain("2 more agents");
+		const visibleChildren = [1, 2, 3, 4, 5, 6].filter(index => text.includes(`Done${index}`));
+		expect(visibleChildren).toHaveLength(4);
+	});
+
+	it("shows every finalized nested task result when expanded", () => {
+		setViewportRows(40);
+		const text = renderResultText(makeParentWithNestedResults(6), true, uiTheme);
+
+		for (let index = 1; index <= 6; index++) {
+			expect(text).toContain(`Done${index}`);
+		}
+		expect(text).not.toContain("more agents");
+	});
+
+	it("does not request spinner ticks for static partial progress", () => {
+		expect("animatedPartialResult" in taskToolRenderer).toBe(false);
+	});
+
+	it("renders running progress identically across spinner frames", () => {
+		const progress = makeProgress([]);
+		const details: TaskToolDetails = {
+			projectAgentsDir: null,
+			results: [],
+			totalDurationMs: 1,
+			progress: [progress],
+		};
+		const render = (spinnerFrame: number) =>
+			strip(
+				renderResult(
+					{ content: [{ type: "text", text: "Running 1 agent..." }], details },
+					{ expanded: false, isPartial: true, spinnerFrame },
+					uiTheme,
+				).render(120),
+			);
+
+		expect(render(0)).toBe(render(1));
 	});
 });

@@ -1679,10 +1679,16 @@ function renderNestedTaskResults(
 			continue;
 		}
 		const ordered = orderResultsForDisplay(details.results);
-		ordered.forEach((result, index) => {
-			const { prefix, continuePrefix } = nestedMarkers(index === ordered.length - 1, theme);
+		const visible = expanded ? ordered : selectCollapsedResults(ordered);
+		const hiddenCount = ordered.length - visible.length;
+		visible.forEach((result, index) => {
+			const { prefix, continuePrefix } = nestedMarkers(hiddenCount === 0 && index === visible.length - 1, theme);
 			lines.push(...renderAgentResult(result, prefix, continuePrefix, expanded, theme, seen, depth + 1));
 		});
+		if (hiddenCount > 0) {
+			const { prefix } = nestedMarkers(true, theme);
+			lines.push(`${prefix} ${theme.fg("dim", formatMoreItems(hiddenCount, "agent"))}`);
+		}
 		seen.delete(details);
 	}
 	return lines;
@@ -1716,18 +1722,26 @@ function renderNestedTaskTree(
 		const hasResults = Boolean(details.results && details.results.length > 0);
 		if (hasResults) {
 			const ordered = orderResultsForDisplay(details.results);
-			ordered.forEach((result, index) => {
-				const { prefix, continuePrefix } = nestedMarkers(index === ordered.length - 1, theme);
+			const visible = expanded ? ordered : selectCollapsedResults(ordered);
+			const hiddenCount = ordered.length - visible.length;
+			visible.forEach((result, index) => {
+				const { prefix, continuePrefix } = nestedMarkers(hiddenCount === 0 && index === visible.length - 1, theme);
 				lines.push(...renderAgentResult(result, prefix, continuePrefix, expanded, theme, seen, depth + 1));
 			});
+			if (hiddenCount > 0) {
+				const { prefix } = nestedMarkers(true, theme);
+				lines.push(`${prefix} ${theme.fg("dim", formatMoreItems(hiddenCount, "agent"))}`);
+			}
 			seen.delete(details);
 			continue;
 		}
 		const inflight = details.progress;
 		if (inflight && inflight.length > 0) {
 			const ordered = orderProgressForDisplay(inflight);
-			ordered.forEach((prog, index) => {
-				const { prefix, continuePrefix } = nestedMarkers(index === ordered.length - 1, theme);
+			const visible = expanded ? ordered : ordered.slice(Math.max(0, ordered.length - COLLAPSED_AGENT_LIMIT));
+			const hiddenCount = ordered.length - visible.length;
+			visible.forEach((prog, index) => {
+				const { prefix, continuePrefix } = nestedMarkers(hiddenCount === 0 && index === visible.length - 1, theme);
 				lines.push(
 					...renderAgentProgress(
 						prog,
@@ -1742,6 +1756,10 @@ function renderNestedTaskTree(
 					),
 				);
 			});
+			if (hiddenCount > 0) {
+				const { prefix } = nestedMarkers(true, theme);
+				lines.push(`${prefix} ${theme.fg("dim", formatMoreItems(hiddenCount, "agent"))}`);
+			}
 		}
 		seen.delete(details);
 	}

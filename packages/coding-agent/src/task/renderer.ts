@@ -11,5 +11,4 @@ export const taskToolRenderer = {
 	renderCall,
 	renderResult,
 	mergeCallAndResult: true,
-	animatedPartialResult: true,
 } as const;
