@@ -766,6 +766,41 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(llama?.input).toEqual(["text", "image"]);
 	});
 
+	test("llama.cpp discovery marks per-model architecture image modalities as vision-capable", async () => {
+		const fetchMock: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:8080/models") {
+				return new Response(
+					JSON.stringify({
+						data: [
+							{
+								id: "q51q41_mtp_30tps_120k",
+								architecture: {
+									input_modalities: ["text", "image"],
+									output_modalities: ["text"],
+								},
+								meta: { n_ctx: 123904 },
+							},
+						],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url === "http://127.0.0.1:8080/props") {
+				return new Response(JSON.stringify({ default_generation_settings: { n_ctx: 123904 } }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refresh();
+		const llama = registry.find("llama.cpp", "q51q41_mtp_30tps_120k");
+		expect(llama?.contextWindow).toBe(123904);
+		expect(llama?.input).toEqual(["text", "image"]);
+	});
+
 	test("llama.cpp discovery ignores positive props defaults as per-request limits, not hard caps", async () => {
 		const fetchMock: FetchImpl = async input => {
 			const url = String(input);
@@ -1106,6 +1141,70 @@ describe("ModelRegistry runtime discovery", () => {
 		const refreshed = await registry.refreshSelectedModelMetadata(stale);
 		expect(refreshed.input).toEqual(["text", "image"]);
 		expect(registry.find("llama.cpp", "vision-model")?.input).toEqual(["text", "image"]);
+	});
+
+	test("llama.cpp selected model refresh reads image capability from per-model architecture", async () => {
+		writeModelCache(
+			"llama.cpp",
+			Date.now(),
+			[
+				buildModel({
+					id: "router-vision-model",
+					name: "router-vision-model",
+					provider: "llama.cpp",
+					api: "openai-responses",
+					baseUrl: "http://127.0.0.1:8080",
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 128000,
+					maxTokens: 32768,
+				}),
+			],
+			true,
+			"",
+			cacheDbPath,
+		);
+		const fetchMock: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:8080/models") {
+				return new Response(
+					JSON.stringify({
+						data: [
+							{
+								id: "router-vision-model",
+								architecture: {
+									input_modalities: ["text", "image"],
+									output_modalities: ["text"],
+								},
+								meta: { n_ctx: 239104 },
+							},
+						],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url === "http://127.0.0.1:8080/props") {
+				return new Response(
+					JSON.stringify({
+						default_generation_settings: {
+							n_ctx: 239104,
+							params: { max_tokens: -1, n_predict: -1 },
+						},
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const stale = registry.find("llama.cpp", "router-vision-model");
+		if (!stale) throw new Error("cached llama.cpp model missing");
+		expect(stale.input).toEqual(["text"]);
+		const refreshed = await registry.refreshSelectedModelMetadata(stale);
+		expect(refreshed.contextWindow).toBe(239104);
+		expect(refreshed.input).toEqual(["text", "image"]);
+		expect(registry.find("llama.cpp", "router-vision-model")?.input).toEqual(["text", "image"]);
 	});
 
 	test("llama.cpp selected model refresh leaves the cached model untouched when /models no longer lists it", async () => {
