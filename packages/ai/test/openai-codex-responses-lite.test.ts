@@ -5,6 +5,7 @@ import {
 	transformRequestBody,
 } from "@oh-my-pi/pi-ai/providers/openai-codex/request-transformer";
 import {
+	buildTransformedCodexRequestBody,
 	convertCodexResponsesMessages,
 	streamOpenAICodexResponses,
 } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
@@ -266,6 +267,58 @@ describe("openai-codex Responses Lite input shaping", () => {
 
 		const noTools = await transformRequestBody({ model: model.id }, model, { responsesLite: true });
 		expect(noTools.parallel_tool_calls).toBeUndefined();
+	});
+});
+
+describe("openai-codex fresh execution input shaping", () => {
+	it("adds a user continuation when only instructions would be sent", async () => {
+		const model = createCodexModel("gpt-5.1-codex");
+		const body = await buildTransformedCodexRequestBody(
+			model,
+			{
+				systemPrompt: ["You are a helpful assistant.", "Read local://approved-plan.md and execute it."],
+				messages: [],
+			},
+			undefined,
+		);
+
+		expect(body.instructions).toBe("You are a helpful assistant.");
+		expect(body.input).toEqual([
+			{
+				type: "message",
+				role: "developer",
+				content: [{ type: "input_text", text: "Read local://approved-plan.md and execute it." }],
+			},
+			{
+				type: "message",
+				role: "user",
+				content: [{ type: "input_text", text: "Read local://approved-plan.md and execute it." }],
+			},
+		]);
+	});
+
+	it("does not add a continuation when user input is present", async () => {
+		const model = createCodexModel("gpt-5.1-codex");
+		const body = await buildTransformedCodexRequestBody(
+			model,
+			{
+				systemPrompt: ["You are a helpful assistant.", "Read local://approved-plan.md and execute it."],
+				messages: [{ role: "user", content: "Start execution", timestamp: Date.now() }],
+			},
+			undefined,
+		);
+
+		expect(body.input).toEqual([
+			{
+				type: "message",
+				role: "developer",
+				content: [{ type: "input_text", text: "Read local://approved-plan.md and execute it." }],
+			},
+			{
+				role: "user",
+				content: [{ type: "input_text", text: "Start execution" }],
+			},
+		]);
 	});
 });
 
