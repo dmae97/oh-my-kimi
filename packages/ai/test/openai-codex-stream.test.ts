@@ -140,7 +140,14 @@ function encodeWebSocketMessage(value: Record<string, unknown>): Uint8Array {
 type WsHeaders = Record<string, string>;
 type WsEventType = "open" | "message" | "error" | "close";
 
-const DEFAULT_USAGE = {
+type CodexTestUsage = {
+	input_tokens: number;
+	output_tokens: number;
+	total_tokens: number;
+	input_tokens_details: { cached_tokens: number };
+};
+
+const DEFAULT_USAGE: CodexTestUsage = {
 	input_tokens: 5,
 	output_tokens: 3,
 	total_tokens: 8,
@@ -210,8 +217,16 @@ class MockWebSocket {
 		text: string;
 		terminalType?: "response.done" | "response.completed";
 		includeCreated?: boolean;
+		usage?: CodexTestUsage;
 	}): void {
-		const { messageId, responseId, text, terminalType = "response.done", includeCreated = false } = opts;
+		const {
+			messageId,
+			responseId,
+			text,
+			terminalType = "response.done",
+			includeCreated = false,
+			usage = DEFAULT_USAGE,
+		} = opts;
 		if (includeCreated) {
 			this.sendJson({ type: "response.created", response: { id: responseId } });
 		}
@@ -236,7 +251,7 @@ class MockWebSocket {
 			response: {
 				id: responseId,
 				status: "completed",
-				usage: DEFAULT_USAGE,
+				usage,
 			},
 		});
 	}
@@ -2230,7 +2245,7 @@ describe("openai-codex streaming", () => {
 		expect(result.usage.premiumRequests).toBeUndefined();
 	});
 
-	it("sends websocket continuation deltas after prior assistant response items and records stats", async () => {
+	it("records websocket delta request and usage diagnostics", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const payload = Buffer.from(
@@ -2242,6 +2257,12 @@ describe("openai-codex streaming", () => {
 		const fetchMock = vi.fn(async () => {
 			throw new Error("SSE fallback should not be called");
 		});
+		const secondTurnUsage: CodexTestUsage = {
+			input_tokens: 132278,
+			input_tokens_details: { cached_tokens: 124416 },
+			output_tokens: 29,
+			total_tokens: 132307,
+		};
 
 		class DeltaWebSocket extends MockWebSocket {
 			constructor(url: string, options?: { headers?: WsHeaders }) {
@@ -2258,6 +2279,7 @@ describe("openai-codex streaming", () => {
 					text: responseIndex === 1 ? "First answer" : "Second answer",
 					terminalType: "response.completed",
 					includeCreated: true,
+					usage: responseIndex === 2 ? secondTurnUsage : DEFAULT_USAGE,
 				});
 			}
 		}
@@ -2287,6 +2309,7 @@ describe("openai-codex streaming", () => {
 			sessionId: "ws-delta-session",
 			providerSessionState,
 		}).result();
+		expect(firstResponse.stopReason).toBe("stop");
 		const secondContext: Context = {
 			systemPrompt: ["You are a helpful assistant.", "Use concise answers."],
 			messages: [
@@ -2295,12 +2318,13 @@ describe("openai-codex streaming", () => {
 				{ role: "user", content: "Second question", timestamp: Date.now() },
 			],
 		};
-		await streamOpenAICodexResponses(model, secondContext, {
+		const secondResponse = await streamOpenAICodexResponses(model, secondContext, {
 			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-delta-session",
 			providerSessionState,
 		}).result();
+		expect(secondResponse.stopReason).toBe("stop");
 
 		expect(fetchMock).not.toHaveBeenCalled();
 		expect(sentRequests).toHaveLength(2);
@@ -2330,12 +2354,36 @@ describe("openai-codex streaming", () => {
 			sessionId: "ws-delta-session",
 			providerSessionState,
 		});
-		expect(stats).toEqual({
-			fullContextRequests: 1,
-			deltaRequests: 1,
-			lastInputItems: 1,
-			lastDeltaInputItems: 1,
-			lastPreviousResponseId: "resp_1",
+		expect(stats?.fullContextRequests).toBe(1);
+		expect(stats?.deltaRequests).toBe(1);
+		expect(stats?.lastInputItems).toBe(1);
+		expect(stats?.lastDeltaInputItems).toBe(1);
+		expect(stats?.lastPreviousResponseId).toBe("resp_1");
+		expect(stats?.lastTurn?.request).toMatchObject({
+			transport: "websocket",
+			previousResponseIdPresent: true,
+			inputItemCount: 1,
+			inputItemTypes: ["user"],
+			firstInputItemType: "user",
+			canAppendBeforeRequest: true,
+			promptCacheKey: "ws-delta-session",
+		});
+		expect(stats?.lastTurn?.request.inputJsonBytes).toBeGreaterThan(0);
+		expect(stats?.lastTurn?.request.inputJsonBytes).toBeLessThan(1000);
+		expect(stats?.lastTurn?.usage).toEqual({
+			rawInputTokens: 132278,
+			rawCachedTokens: 124416,
+			rawUncachedTokens: 7862,
+			rawOutputTokens: 29,
+			rawTotalTokens: 132307,
+			displayedInputTokens: 7862,
+			displayedOutputTokens: 29,
+			displayedCacheReadTokens: 124416,
+			displayedCacheWriteTokens: 0,
+			displayedTotalTokens: 132307,
+			displayedOrchestrationInputTokens: 0,
+			displayedOrchestrationCacheReadTokens: 0,
+			displayedOrchestrationOutputTokens: 0,
 		});
 	});
 
@@ -2652,7 +2700,7 @@ describe("openai-codex streaming", () => {
 			sessionId: "ws-expired-previous-response-session",
 			providerSessionState,
 		});
-		expect(stats).toEqual({
+		expect(stats).toMatchObject({
 			fullContextRequests: 2,
 			deltaRequests: 1,
 			lastInputItems: (retryInput as unknown[]).length,
