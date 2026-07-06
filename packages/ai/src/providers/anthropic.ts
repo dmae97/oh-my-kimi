@@ -2396,7 +2396,7 @@ const streamAnthropicOnce = (
 					) {
 						// Log-only: the retried turn must not carry an errorMessage on
 						// success (consumers treat its presence as failure).
-						logger.warn("anthropic: strict tool grammar rejected, retrying without strict tools", {
+						logger.warn("anthropic: strict tools rejected, retrying without strict tools", {
 							model: model.id,
 							error: await finalizeErrorMessage(streamFailure, rawRequestDump),
 						});

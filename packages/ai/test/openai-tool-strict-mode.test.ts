@@ -416,6 +416,58 @@ describe("OpenAI tool strict mode", () => {
 		expect(strictFlags).toEqual([[true], [false], [false]]);
 	});
 
+	it("retries non-strict when a gateway rejects structured outputs for the model", async () => {
+		const model = getBundledModel("openrouter", "anthropic/claude-sonnet-4") as Model<"openai-completions">;
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const strictFlags: boolean[][] = [];
+		let attempt = 0;
+		const fetchMock: FetchImpl = Object.assign(
+			async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+				attempt += 1;
+				const bodyText = typeof init?.body === "string" ? init.body : "";
+				const payload = JSON.parse(bodyText) as {
+					tools?: Array<{ function?: { strict?: boolean } }>;
+				};
+				strictFlags.push((payload.tools ?? []).map(tool => tool.function?.strict === true));
+				if (attempt === 1) {
+					return new Response(
+						JSON.stringify({ error: { code: "BadRequest", message: "structured_outputs not supported" } }),
+						{ status: 400, headers: { "content-type": "application/json" } },
+					);
+				}
+				return createSseResponse([
+					{
+						id: "chatcmpl-foundry-retry",
+						object: "chat.completion.chunk",
+						created: 0,
+						model: model.id,
+						choices: [{ index: 0, delta: { content: "Recovered" } }],
+					},
+					{
+						id: "chatcmpl-foundry-retry",
+						object: "chat.completion.chunk",
+						created: 0,
+						model: model.id,
+						choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+					},
+					"[DONE]",
+				]);
+			},
+			{ preconnect: fetch.preconnect },
+		);
+
+		const result = await streamOpenAICompletions(model, testContext, {
+			apiKey: "test-key",
+			providerSessionState,
+			fetch: fetchMock,
+		}).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.content).toContainEqual({ type: "text", text: "Recovered" });
+		expect(strictFlags).toEqual([[true], [false]]);
+	});
+
 	it("clears errorMessage on a successful OpenRouter Anthropic compiled-grammar fallback (responses)", async () => {
 		const model = buildModel({
 			id: "anthropic/claude-sonnet-4",

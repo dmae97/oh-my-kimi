@@ -139,6 +139,14 @@ function createStrictGrammarTooLargeError(): Error {
 	return error;
 }
 
+// Azure Foundry-style rejection: no invalid_request_error wrapper, the gateway
+// just names the missing feature for the hosted model deployment.
+function createStructuredOutputsUnsupportedError(): Error {
+	const error = new Error('400 {"error":{"code":"BadRequest","message":"structured_outputs not supported"}}');
+	(error as Error & { status: number }).status = 400;
+	return error;
+}
+
 function createOtherInvalidRequestError(): Error {
 	const error = new Error(
 		'400 {"type":"error","error":{"type":"invalid_request_error","message":"Some other validation error."},"request_id":"req_test"}',
@@ -1013,6 +1021,45 @@ describe("anthropic stream envelope handling", () => {
 		expect(countEvents(nextEvents, "done")).toBe(1);
 		expect(countEvents(nextEvents, "error")).toBe(0);
 		expect(strictFlags).toEqual([[true], [false], [false]]);
+	});
+
+	it("retries without strict tools when the endpoint rejects structured outputs for the model", async () => {
+		const toolContext: Context = {
+			...context,
+			tools: [
+				{
+					name: "edit",
+					description: "Edit a value",
+					strict: true,
+					parameters: queryObjectSchema,
+				},
+			],
+		};
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const strictFlags: boolean[][] = [];
+		let attempt = 0;
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation((params: unknown) => {
+			attempt += 1;
+			strictFlags.push(getStrictFlags(params));
+			if (attempt === 1) {
+				return createRejectedMockRequest(createStructuredOutputsUnsupportedError()) as never;
+			}
+			return createMockRequest(createTextSuccessEvents("recovered")) as never;
+		});
+
+		const stream = streamAnthropic(model, toolContext, { apiKey: "sk-ant-test", providerSessionState });
+		const events: AssistantMessageEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const result = await stream.result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(result.errorMessage).toBeUndefined();
+		expect(JSON.parse(JSON.stringify(result.content))).toEqual([{ type: "text", text: "recovered" }]);
+		expect(countEvents(events, "error")).toBe(0);
+		expect(strictFlags).toEqual([[true], [false]]);
+		expect(anthropicStrictToolsDisabled(providerSessionState)).toBe(true);
 	});
 
 	it("does not disable strict tools for unrelated Anthropic invalid request errors", async () => {
