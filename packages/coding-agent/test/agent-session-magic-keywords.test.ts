@@ -103,6 +103,22 @@ describe("AgentSession magic keyword settings", () => {
 		]);
 	});
 
+	it("renders workflowz notice for the active task schema", async () => {
+		const created = await createMagicKeywordSession(root);
+		session = created.session;
+		authStorage = created.authStorage;
+		created.settings.set("task.batch", false);
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
+
+		await session.prompt("please workflowz this");
+
+		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{ content?: string; customType?: string }>;
+		const notice = promptMessages.find(message => message.customType === "workflow-notice")?.content ?? "";
+		expect(notice).toContain("once per independent subagent");
+		expect(notice).toContain("Do not pass `context` or `tasks[]`");
+		expect(notice).not.toContain("Call `task` once per independent fan-out batch");
+	});
+
 	it("does not use a disabled ultrathink keyword to force auto thinking", async () => {
 		const created = await createMagicKeywordSession(root);
 		session = created.session;

@@ -237,7 +237,7 @@ import { theme } from "../modes/theme/theme";
 import { parseTurnBudget } from "../modes/turn-budget";
 import { containsUltrathink, ULTRATHINK_NOTICE } from "../modes/ultrathink";
 import { computeNonMessageBreakdown, computeNonMessageTokens } from "../modes/utils/context-usage";
-import { containsWorkflow, WORKFLOW_NOTICE } from "../modes/workflow";
+import { containsWorkflow, renderWorkflowNotice } from "../modes/workflow";
 import { createPlanReadMatcher } from "../plan-mode/plan-protection";
 import type { PlanModeState } from "../plan-mode/state";
 import advisorSystemPrompt from "../prompts/advisor/system.md" with { type: "text" };
@@ -7338,7 +7338,7 @@ export class AgentSession {
 			keywordNotices.push({
 				role: "custom",
 				customType: "workflow-notice",
-				content: WORKFLOW_NOTICE,
+				content: renderWorkflowNotice({ taskBatch: this.settings.get("task.batch") }),
 				display: false,
 				attribution: "user",
 				timestamp,
