@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Effort } from "@oh-my-pi/pi-ai";
+import { Effort, type FetchImpl } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry, type ProviderConfigInput } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -331,6 +333,77 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		} finally {
 			getApiKeySpy.mockRestore();
 			authStorage.close();
+		}
+	});
+
+	test("refreshes cached llama.cpp vision metadata for the startup default model", async () => {
+		const authStorage = await AuthStorage.create(path.join(tempDir, "llama-vision-auth.db"));
+		authStoragesToClose.push(authStorage);
+		const modelsPath = path.join(tempDir, "llama-vision-models.yml");
+		const cacheDbPath = path.join(tempDir, "models.db");
+		const cachedModel = buildModel({
+			id: "vision-model",
+			name: "vision-model",
+			provider: "llama.cpp",
+			api: "openai-responses",
+			baseUrl: "http://127.0.0.1:8080",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 32768,
+		});
+		writeModelCache("llama.cpp", Date.now(), [cachedModel], true, "", cacheDbPath);
+
+		const fetchMock: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:8080/models") {
+				return new Response(
+					JSON.stringify({ data: [{ id: "vision-model", object: "model", meta: { n_ctx: 239104 } }] }),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url === "http://127.0.0.1:8080/props") {
+				return new Response(
+					JSON.stringify({
+						default_generation_settings: {
+							n_ctx: 239104,
+							params: { max_tokens: -1, n_predict: -1 },
+						},
+						modalities: { vision: true },
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const modelRegistry = new ModelRegistry(authStorage, modelsPath, { fetch: fetchMock });
+		const settings = Settings.isolated();
+		settings.setModelRole("default", "llama.cpp/vision-model");
+
+		expect(modelRegistry.find("llama.cpp", "vision-model")?.input).toEqual(["text"]);
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			authStorage,
+			modelRegistry,
+			settings,
+			sessionManager: SessionManager.inMemory(),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+		});
+
+		try {
+			expect(session.model?.input).toEqual(["text", "image"]);
+			expect(modelRegistry.find("llama.cpp", "vision-model")?.input).toEqual(["text", "image"]);
+		} finally {
+			await session.dispose();
 		}
 	});
 

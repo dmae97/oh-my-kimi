@@ -2132,6 +2132,24 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 		}
 
+		if (model) {
+			const selectedModel = model;
+			const refreshedModel = await logger.time("refreshInitialModelMetadata", () =>
+				modelRegistry.refreshSelectedModelMetadata(selectedModel),
+			);
+			if (refreshedModel !== selectedModel) {
+				model = refreshedModel;
+				thinkingLevel = pickInitialThinkingLevel(refreshedModel);
+				autoThinking = thinkingLevel === AUTO_THINKING;
+				effectiveThinkingLevel = concreteThinkingLevel(thinkingLevel);
+				effectiveThinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
+					autoThinking
+						? resolveProvisionalAutoLevel(refreshedModel)
+						: resolveThinkingLevelForModel(refreshedModel, effectiveThinkingLevel),
+				);
+			}
+		}
+
 		// Discover custom commands (TypeScript slash commands)
 		const customCommandsResult: CustomCommandsLoadResult = options.disableExtensionDiscovery
 			? { commands: [], errors: [] }

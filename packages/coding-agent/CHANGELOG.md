@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed startup of cached llama.cpp vision models so the initial default/restored model refreshes `/props` metadata before the session exposes it as text-only.
+
 ## [16.3.9] - 2026-07-06
 
 ### Added
