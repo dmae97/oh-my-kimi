@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed project `.omp/RULES.md` sticky rules being shadowed by user `~/.omp/agent/RULES.md` rules with the same synthesized `RULES` name, so both user and project sticky rules now inject ([#4739](https://github.com/can1357/oh-my-pi/issues/4739)).
+
 ## [16.3.11] - 2026-07-06
 
 ### Changed
