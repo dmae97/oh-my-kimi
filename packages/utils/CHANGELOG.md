@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `postmortem.markExpectedCleanupError()` / `postmortem.isExpectedCleanupError()` to tag errors thrown by routine resource teardown; the global `uncaughtException`/`unhandledRejection` handlers downgrade marked errors (walking the `cause` chain) to warnings instead of exiting the process.
+
+### Fixed
+
+- Bounded postmortem cleanup with a 10s deadline so a hanging cleanup callback can no longer wedge the process indefinitely after a fatal error or signal; the process now always reaches `process.exit`.
+
 ## [16.3.7] - 2026-07-05
 
 ### Added

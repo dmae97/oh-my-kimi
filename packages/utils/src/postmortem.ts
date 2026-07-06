@@ -25,6 +25,7 @@ export enum Reason {
 const callbackList: ((reason: Reason) => Promise<void> | void)[] = [];
 // Tracks cleanup run state (to prevent recursion/reentry issues)
 let cleanupStage: "idle" | "running" | "complete" = "idle";
+const CLEANUP_DEADLINE_MS = 10_000;
 
 /**
  * Internal: runs all registered cleanup callbacks for the given reason.
@@ -49,7 +50,7 @@ function runCleanup(reason: Reason): Promise<void> {
 		return Promise.try(() => callback(reason));
 	});
 
-	return Promise.allSettled(promises).then(results => {
+	const cleanupSettled = Promise.allSettled(promises).then(results => {
 		for (const result of results) {
 			if (result.status === "rejected") {
 				const err = result.reason instanceof Error ? result.reason : new Error(String(result.reason));
@@ -57,6 +58,16 @@ function runCleanup(reason: Reason): Promise<void> {
 			}
 		}
 		cleanupStage = "complete";
+	});
+	const deadline = Promise.withResolvers<void>();
+	const deadlineTimer = setTimeout(() => {
+		logger.error("Cleanup deadline exceeded; proceeding with exit", { reason });
+		cleanupStage = "complete";
+		deadline.resolve();
+	}, CLEANUP_DEADLINE_MS);
+	deadlineTimer.unref();
+	return Promise.race([cleanupSettled, deadline.promise]).finally(() => {
+		clearTimeout(deadlineTimer);
 	});
 }
 
@@ -76,6 +87,38 @@ export function isIpcSendEpipe(err: Error): boolean {
 	const code = (err as { code?: unknown }).code;
 	const syscall = (err as { syscall?: unknown }).syscall;
 	return code === "EPIPE" && syscall === "send";
+}
+
+// Well-known key marking an error as an *expected* teardown artifact (e.g. a
+// browser run-scope abort at normal run end). `Symbol.for` so the marker
+// survives duplicate module instances across bundles/realms.
+const EXPECTED_CLEANUP = Symbol.for("omp.expectedCleanupError");
+
+/**
+ * Mark an error as expected cleanup fallout so the global fatal handlers
+ * downgrade it to a log line instead of tearing down the process. Use for
+ * abort reasons fired by routine resource teardown (browser run end, tab
+ * close) whose rejections may surface on fire-and-forget promises with no
+ * consumer. Returns the same error for inline use at the `abort()` callsite.
+ */
+export function markExpectedCleanupError<T extends object>(reason: T): T {
+	(reason as Record<PropertyKey, unknown>)[EXPECTED_CLEANUP] = true;
+	return reason;
+}
+
+/**
+ * Whether `reason` (or any error in its `cause` chain) was marked via
+ * {@link markExpectedCleanupError}. Walks the chain because the unhandled
+ * reason is often a wrapper (`AbortError`) with the marked abort reason as
+ * its `cause`.
+ */
+export function isExpectedCleanupError(reason: unknown): boolean {
+	let current: unknown = reason;
+	for (let depth = 0; depth < 8 && current !== null && typeof current === "object"; depth++) {
+		if ((current as Record<PropertyKey, unknown>)[EXPECTED_CLEANUP] === true) return true;
+		current = (current as { cause?: unknown }).cause;
+	}
+	return false;
 }
 
 function formatFatalError(label: string, err: Error): string {
@@ -101,6 +144,10 @@ if (isMainThread) {
 			process.stderr.write(`Inspector opened: ${url}\n`);
 		})
 		.on("uncaughtException", async err => {
+			if (isExpectedCleanupError(err)) {
+				logger.warn("Ignoring expected cleanup exception", { err });
+				return;
+			}
 			process.stderr.write(formatFatalError("Uncaught Exception", err));
 			logger.error("Uncaught exception", { err });
 			await runCleanup(Reason.UNCAUGHT_EXCEPTION);
@@ -119,6 +166,10 @@ if (isMainThread) {
 			// its own `onExit`/error path and respawns or disables it. See #2997.
 			if (isIpcSendEpipe(err)) {
 				logger.warn("Ignoring EPIPE from worker IPC send; optional subsystem will self-recover", { err });
+				return;
+			}
+			if (isExpectedCleanupError(reason)) {
+				logger.warn("Ignoring expected cleanup rejection", { err });
 				return;
 			}
 			process.stderr.write(formatFatalError("Unhandled Rejection", err));
