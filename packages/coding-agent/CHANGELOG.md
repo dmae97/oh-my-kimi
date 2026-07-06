@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `get_session_stats` RPC responses to include context-window usage so RPC clients can render context meters.
+
 ## [16.3.9] - 2026-07-06
 
 ### Added
