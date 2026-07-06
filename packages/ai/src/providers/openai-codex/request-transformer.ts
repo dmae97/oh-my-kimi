@@ -230,16 +230,61 @@ export async function transformRequestBody(
 		}
 	}
 
-	if (prompt?.developerMessages && prompt.developerMessages.length > 0 && Array.isArray(body.input)) {
-		const developerMessages = prompt.developerMessages.map(
-			text =>
-				({
+	if (prompt?.developerMessages && prompt.developerMessages.length > 0) {
+		const developerMessages: InputItem[] = prompt.developerMessages.map(text => ({
+			type: "message",
+			role: "developer",
+			content: [{ type: "input_text", text }],
+		}));
+		const input = Array.isArray(body.input) ? body.input : [];
+		body.input = [...developerMessages, ...input];
+	}
+
+	let finalInstruction = prompt?.developerMessages.findLast(text => text.trim().length > 0);
+	if (finalInstruction === undefined && Array.isArray(body.input)) {
+		for (let itemIndex = body.input.length - 1; itemIndex >= 0; itemIndex -= 1) {
+			const item = body.input[itemIndex];
+			if (item.role !== "developer" || !Array.isArray(item.content)) continue;
+			for (let partIndex = item.content.length - 1; partIndex >= 0; partIndex -= 1) {
+				const part = item.content[partIndex];
+				if (
+					part &&
+					typeof part === "object" &&
+					"type" in part &&
+					part.type === "input_text" &&
+					"text" in part &&
+					typeof part.text === "string" &&
+					part.text.trim().length > 0
+				) {
+					finalInstruction = part.text;
+					break;
+				}
+			}
+			if (finalInstruction !== undefined) break;
+		}
+	}
+	if (finalInstruction === undefined && typeof body.instructions === "string" && body.instructions.trim().length > 0) {
+		finalInstruction = body.instructions;
+	}
+	if (finalInstruction !== undefined) {
+		const input = Array.isArray(body.input) ? body.input : [];
+		let hasVisibleInput = false;
+		for (const item of input) {
+			if (item.role !== "developer") {
+				hasVisibleInput = true;
+				break;
+			}
+		}
+		if (!hasVisibleInput) {
+			body.input = [
+				...input,
+				{
 					type: "message",
-					role: "developer",
-					content: [{ type: "input_text", text }],
-				}) as InputItem,
-		);
-		body.input = [...developerMessages, ...body.input];
+					role: "user",
+					content: [{ type: "input_text", text: finalInstruction }],
+				},
+			];
+		}
 	}
 
 	const responsesLite = shouldUseCodexResponsesLite(body, options.responsesLite);
