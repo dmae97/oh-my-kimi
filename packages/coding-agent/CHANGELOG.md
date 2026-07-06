@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed skill loading so disabling a higher-priority provider no longer drops same-named skills from enabled lower-priority providers.
+
 ## [16.3.8] - 2026-07-05
 
 ### Fixed
