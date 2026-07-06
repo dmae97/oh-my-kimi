@@ -590,9 +590,6 @@ fn is_elidable_kind(language: SupportLang, kind: &str) -> bool {
 				| "string"
 		),
 		SupportLang::Lua => matches!(kind, "block" | "table_constructor" | "string"),
-		SupportLang::Perl => {
-			matches!(kind, "block" | "list_expression" | "heredoc_content" | "regexp_content")
-		},
 		SupportLang::Dart => matches!(
 			kind,
 			"block"
@@ -769,7 +766,6 @@ fn is_groupable_kind(language: SupportLang, kind: &str) -> bool {
 		SupportLang::Solidity => kind == "import_directive",
 		SupportLang::Julia => matches!(kind, "import_statement" | "using_statement"),
 		SupportLang::Proto => kind == "import",
-		SupportLang::Perl => kind == "use_statement",
 		SupportLang::Fortran => kind == "use_statement",
 		// Languages where imports either have no run pattern, are wrapped in a
 		// single AST node already covered by `is_elidable_kind` (Kotlin's

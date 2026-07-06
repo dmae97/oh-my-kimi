@@ -355,7 +355,6 @@ tree-sitter-nix = "0.3"
 tree-sitter-objc = "3.0"
 tree-sitter-ocaml = "0.24.2"
 tree-sitter-odin = "1.3"
-tree-sitter-perl = { version = "0.1.0", package = "tree-sitter-perl-next" }
 tree-sitter-php = "0.24"
 tree-sitter-powershell = "0.26.4"
 tree-sitter-proto = "0.4.0"

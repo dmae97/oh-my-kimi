@@ -51,7 +51,6 @@ tree-sitter-nix.workspace = true
 tree-sitter-objc.workspace = true
 tree-sitter-ocaml.workspace = true
 tree-sitter-odin.workspace = true
-tree-sitter-perl.workspace = true
 tree-sitter-php.workspace = true
 tree-sitter-powershell.workspace = true
 tree-sitter-proto.workspace = true
