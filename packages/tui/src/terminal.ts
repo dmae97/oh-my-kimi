@@ -1,6 +1,6 @@
 import { dlopen, FFIType, ptr } from "bun:ffi";
 import * as fs from "node:fs";
-import { $env, isBunTestRuntime, isTerminalHeadless, logger } from "@oh-my-pi/pi-utils";
+import { $env, isBunTestRuntime, isTerminalHeadless, logger, postmortem } from "@oh-my-pi/pi-utils";
 import { setKittyProtocolActive } from "./keys";
 import { StdinBuffer } from "./stdin-buffer";
 import {
@@ -161,6 +161,15 @@ let terminalEverStarted = false;
 // jumps to the viewport home, dropping the parent shell prompt on top of the
 // dead frame after exit.
 let altScreenActive = false;
+let terminalRestoreRegistered = false;
+
+function registerPostmortemTerminalRestore(): void {
+	if (terminalRestoreRegistered) return;
+	terminalRestoreRegistered = true;
+	postmortem.register("terminal-restore", () => {
+		emergencyTerminalRestore();
+	});
+}
 
 /** Record alternate-screen state (called by the TUI on `?1049h`/`?1049l` writes). */
 export function setAltScreenActive(active: boolean): void {
@@ -523,6 +532,7 @@ export class ProcessTerminal implements Terminal {
 		// escapes never reach the developer's terminal during `bun test`.
 		this.#headless = isTerminalHeadless();
 		if (this.#headless) return;
+		registerPostmortemTerminalRestore();
 
 		// Register for emergency cleanup
 		activeTerminal = this;
