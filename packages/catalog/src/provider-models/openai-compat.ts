@@ -3037,7 +3037,11 @@ const LITELLM_RICH_ENDPOINTS = ["/model_group/info", "/v2/model/info", "/model/i
 export const OPENAI_COMPAT_DISCOVERY_DEFAULT_CONTEXT_WINDOW = 128_000;
 export const OPENAI_COMPAT_DISCOVERY_DEFAULT_MAX_TOKENS = 32_768;
 const UNKNOWN_PROXY_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
-const LITELLM_ALL_TEAM_MODELS_ID = "all-team-models";
+const LITELLM_UNUSABLE_SENTINEL_IDS: Record<string, true> = {
+	"all-team-models": true,
+	"all-proxy-models": true,
+	"no-default-models": true,
+};
 
 export function normalizeLiteLLMManagementBaseUrl(baseUrl: string): string {
 	const trimmed = baseUrl.trim().replace(/\/+$/g, "");
@@ -3143,9 +3147,13 @@ function getSupportedOpenAIParams(entry: LiteLLMRichModelEntry): string[] | unde
 	return value.flatMap(item => (typeof item === "string" ? [item] : []));
 }
 
-function isLiteLLMUnusableAggregatePlaceholder(entry: LiteLLMRichModelEntry): boolean {
+function isLiteLLMUnusableSentinelPlaceholder(entry: LiteLLMRichModelEntry): boolean {
 	const modelGroup = toNonEmptyString(entry.model_group);
-	if (modelGroup !== LITELLM_ALL_TEAM_MODELS_ID) {
+	const id = toNonEmptyString(entry.id);
+	if (
+		(modelGroup === undefined || LITELLM_UNUSABLE_SENTINEL_IDS[modelGroup] !== true) &&
+		(id === undefined || LITELLM_UNUSABLE_SENTINEL_IDS[id] !== true)
+	) {
 		return false;
 	}
 	const providers = entry.providers;
@@ -3153,15 +3161,14 @@ function isLiteLLMUnusableAggregatePlaceholder(entry: LiteLLMRichModelEntry): bo
 		return false;
 	}
 	const modelName = toNonEmptyString(entry.model_name);
-	if (modelName && modelName !== LITELLM_ALL_TEAM_MODELS_ID) {
+	if (modelName && LITELLM_UNUSABLE_SENTINEL_IDS[modelName] !== true) {
 		return false;
 	}
-	const id = toNonEmptyString(entry.id);
-	if (id && id !== LITELLM_ALL_TEAM_MODELS_ID) {
+	if (id && LITELLM_UNUSABLE_SENTINEL_IDS[id] !== true) {
 		return false;
 	}
 	const backendModel = toNonEmptyString(getLiteLLMParams(entry)?.model);
-	if (backendModel && backendModel !== LITELLM_ALL_TEAM_MODELS_ID) {
+	if (backendModel && LITELLM_UNUSABLE_SENTINEL_IDS[backendModel] !== true) {
 		return false;
 	}
 	if (
@@ -3190,7 +3197,7 @@ function mapLiteLLMRichEntry<TApi extends Api>(
 	options: FetchLiteLLMRichModelsOptions<TApi>,
 	runtimeBaseUrl: string,
 ): ModelSpec<TApi> | null {
-	if (isLiteLLMUnusableAggregatePlaceholder(entry)) {
+	if (isLiteLLMUnusableSentinelPlaceholder(entry)) {
 		return null;
 	}
 	const id = getLiteLLMRichModelId(entry);

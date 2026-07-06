@@ -4,29 +4,33 @@ import type { FetchImpl } from "@oh-my-pi/pi-catalog/types";
 
 const ORIGINAL_LITELLM_BASE_URL = Bun.env.LITELLM_BASE_URL;
 const MODELS_DEV_URL = "https://models.dev/api.json";
-const ALL_TEAM_MODELS_PLACEHOLDER = {
-	model_group: "all-team-models",
-	model_name: null,
-	providers: [],
-	max_input_tokens: null,
-	max_output_tokens: null,
-	supports_vision: null,
-	supports_reasoning: null,
-	supports_function_calling: null,
-	supported_openai_params: [],
-	litellm_params: {
-		model: null,
+function makeLiteLLMSentinelPlaceholder(modelGroup: string) {
+	return {
+		model_group: modelGroup,
 		model_name: null,
-	},
-	model_info: {
+		providers: [],
 		max_input_tokens: null,
 		max_output_tokens: null,
 		supports_vision: null,
 		supports_reasoning: null,
 		supports_function_calling: null,
 		supported_openai_params: [],
-	},
-} as const;
+		litellm_params: {
+			model: null,
+			model_name: null,
+		},
+		model_info: {
+			max_input_tokens: null,
+			max_output_tokens: null,
+			supports_vision: null,
+			supports_reasoning: null,
+			supports_function_calling: null,
+			supported_openai_params: [],
+		},
+	} as const;
+}
+
+const ALL_TEAM_MODELS_PLACEHOLDER = makeLiteLLMSentinelPlaceholder("all-team-models");
 
 function restoreLiteLLMBaseUrl(): void {
 	if (ORIGINAL_LITELLM_BASE_URL === undefined) {
@@ -243,7 +247,7 @@ describe("LiteLLM provider discovery", () => {
 			if (url === "http://primary:4000/model_group/info") {
 				return Response.json({
 					data: [
-						{ model_group: "no-tools", supports_function_calling: false },
+						{ model_group: "no-tools", providers: ["openai"], supports_function_calling: false },
 						{ model_group: "params-tools", supported_openai_params: ["tools"] },
 					],
 				});
@@ -261,7 +265,11 @@ describe("LiteLLM provider discovery", () => {
 		expect(models?.find(model => model.id === "params-tools")?.supportsTools).toBe(true);
 	});
 
-	test("falls back from all-team-models placeholder to v2 model info", async () => {
+	test.each([
+		["all-team-models"],
+		["all-proxy-models"],
+		["no-default-models"],
+	])("falls back from %s placeholder to v2 model info", async sentinelModelId => {
 		const calls: string[] = [];
 		const fetchMock = vi.fn(async (input: string | URL | Request) => {
 			const url = inputUrl(input);
@@ -270,7 +278,7 @@ describe("LiteLLM provider discovery", () => {
 				return Response.json({});
 			}
 			if (url === "http://primary:4000/model_group/info") {
-				return Response.json({ data: [ALL_TEAM_MODELS_PLACEHOLDER] });
+				return Response.json({ data: [makeLiteLLMSentinelPlaceholder(sentinelModelId)] });
 			}
 			if (url === "http://primary:4000/v2/model/info") {
 				return Response.json({
