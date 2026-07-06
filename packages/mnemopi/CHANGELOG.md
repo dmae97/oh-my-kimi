@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed extractor JSON parsing so object-shaped fact, instruction, preference, and timeline items are unwrapped from known text fields or dropped instead of persisting literal `[object Object]` rows. ([#4649](https://github.com/can1357/oh-my-pi/issues/4649))
+
 ## [16.3.7] - 2026-07-05
 
 ### Added

@@ -85,6 +85,7 @@ function stripFence(raw: string): string {
 const FLAT_FACT_LIMIT = 5;
 const STRUCTURED_CATEGORY_LIMIT = 5;
 const STRING_CATEGORY_KEYS = ["facts", "instructions", "preferences", "timelines"] as const;
+const FACT_TEXT_FIELD_KEYS = ["fact", "text", "content", "value", "statement"] as const;
 
 /** Parsed knowledge-graph edge emitted by the extractor LLM. */
 export interface ExtractedKgTriple {
@@ -118,8 +119,20 @@ function normalizeFactArray(items: unknown): string[] {
 	}
 	const out: string[] = [];
 	for (const item of items) {
-		if (item !== null && item !== undefined && String(item).trim() !== "") {
-			const normalized = normalizeFact(String(item));
+		let text: string | null = null;
+		if (typeof item === "string") {
+			text = item.trim();
+		} else if (isRecord(item)) {
+			for (const key of FACT_TEXT_FIELD_KEYS) {
+				const candidate = item[key];
+				if (typeof candidate === "string" && candidate.trim() !== "") {
+					text = candidate.trim();
+					break;
+				}
+			}
+		}
+		if (text !== null && text !== "") {
+			const normalized = normalizeFact(text);
 			if (normalized !== "") {
 				out.push(normalized);
 				if (out.length >= STRUCTURED_CATEGORY_LIMIT) break;
