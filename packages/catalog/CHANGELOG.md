@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Claude Haiku 4.5 (JP) model support
+- Added tencent/hy3 model support via ZenMux
+
+### Changed
+
+- Updated naming format for various synthetic models to include provider prefix
+- Adjusted context window limit for MiniMax-M3 model
+- Updated pricing for select models
+
 ## [16.3.10] - 2026-07-06
 
 ### Fixed

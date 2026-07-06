@@ -134,7 +134,7 @@ Generate a session name using lowercase `<type>:<primary-objective>`.
 If the message carries no concrete task, output exactly `none`.
 ```
 
-`TITLE_SYSTEM.md` is discovered with the same project-then-user config-directory pattern as `SYSTEM.md` / `APPEND_SYSTEM.md`. When absent, OMP uses the bundled `title-system.md` / `tiny-title-system.md` prompts. When present, the online title path still forces the `set_title` tool call, and the local tiny-model path keeps the `<title>...</title>` wrapper while using this file as the system turn.
+`TITLE_SYSTEM.md` is discovered with the same project-then-user config-directory pattern as `SYSTEM.md` / `APPEND_SYSTEM.md`. When absent, OMP uses the bundled `title-system.md` / `tiny-title-system.md` prompts. When present, both the online title path and the local tiny-model path keep the `<title>...</title>` wrapper while using this file as the system turn.
 
 ### "Replace everything, including project context" — SDK-only
 

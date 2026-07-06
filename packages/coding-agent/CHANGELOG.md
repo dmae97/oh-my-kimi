@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Improved session title generation reliability by moving to marker-based parsing for all models
+
+### Fixed
+
+- Fixed session titles occasionally showing raw `{"title": "..."}` JSON. Online title generation now always uses the `<title>...</title>` marker prompt instead of a forced `set_title` tool call — hosts that ignored or rejected forced `tool_choice` echoed the prompt's JSON example verbatim as the title — and JSON-shaped responses (bare, code-fenced, marker-wrapped, or truncated) are unwrapped to the bare title.
+
 ## [16.3.10] - 2026-07-06
 
 ### Changed
