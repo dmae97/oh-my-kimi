@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.9] - 2026-07-06
+
 ### Added
 
 - Added a `--file` flag to the `say` command to read input text directly from files.

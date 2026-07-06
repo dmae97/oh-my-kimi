@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.9] - 2026-07-06
+
 ### Changed
 
 - Refined behavior metrics to significantly reduce false positives in profanity, yelling, and anguish detection by excluding technical terms (e.g., "dummy", "trash", "garbage"), neutral punctuation (e.g., dot runs), and single-word capitalization (e.g., filenames or environment variables).

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.9] - 2026-07-06
+
 ### Fixed
 
 - Fixed compatibility with OpenCode Go DeepSeek V4 models by sending max_tokens instead of max_completion_tokens to match the provider's API requirements.

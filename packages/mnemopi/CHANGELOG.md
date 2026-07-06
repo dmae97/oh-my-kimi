@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.9] - 2026-07-06
+
 ### Fixed
 
 - Fixed extractor JSON parsing to correctly unwrap object-shaped facts, instructions, preferences, and timeline items from known text fields instead of persisting literal `[object Object]` rows.
