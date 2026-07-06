@@ -11,6 +11,9 @@
 ### Changed
 
 - Improved `say` command to output segment count and total duration upon completion
+### Fixed
+
+- Fixed llama.cpp selected-model refresh keeping cached local vision models text-only after `/props` reports `modalities.vision: true`, so configuring a local model as the default and vision role now lets image inspection resolve it as image-capable. ([#4654](https://github.com/can1357/oh-my-pi/issues/4654))
 
 ## [16.3.8] - 2026-07-05
 

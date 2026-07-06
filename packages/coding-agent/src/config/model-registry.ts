@@ -866,12 +866,13 @@ export class ModelRegistry {
 		if (runtimeMetadata === undefined) {
 			return this.find(model.provider, model.id) ?? model;
 		}
-		const { contextWindow, maxTokens } = runtimeMetadata;
+		const { contextWindow, maxTokens, input } = runtimeMetadata;
 		const current = this.find(model.provider, model.id) ?? model;
 		const override = this.#resolveLiveModelOverride(current);
 		const customModel = this.#resolveLiveCustomModelOverlay(current);
 		const patch: ModelPatch = {};
 		if (
+			contextWindow !== undefined &&
 			override?.contextWindow === undefined &&
 			customModel?.contextWindow === undefined &&
 			current.contextWindow !== contextWindow
@@ -884,15 +885,25 @@ export class ModelRegistry {
 			patch.contextWindow ??
 			current.contextWindow ??
 			contextWindow;
-		const effectiveMaxTokens = Math.min(maxTokens, effectiveContextWindow);
-		if (
-			override?.maxTokens === undefined &&
-			customModel?.maxTokens === undefined &&
-			current.maxTokens !== effectiveMaxTokens
-		) {
-			patch.maxTokens = effectiveMaxTokens;
+		if (maxTokens !== undefined && effectiveContextWindow !== undefined) {
+			const effectiveMaxTokens = Math.min(maxTokens, effectiveContextWindow);
+			if (
+				override?.maxTokens === undefined &&
+				customModel?.maxTokens === undefined &&
+				current.maxTokens !== effectiveMaxTokens
+			) {
+				patch.maxTokens = effectiveMaxTokens;
+			}
 		}
-		if (patch.contextWindow === undefined && patch.maxTokens === undefined) {
+		if (
+			input !== undefined &&
+			override?.input === undefined &&
+			customModel?.input === undefined &&
+			(current.input.length !== input.length || current.input.some((value, index) => value !== input[index]))
+		) {
+			patch.input = input;
+		}
+		if (patch.contextWindow === undefined && patch.maxTokens === undefined && patch.input === undefined) {
 			return current;
 		}
 		const patched = applyModelPatch(current, patch, "merge");

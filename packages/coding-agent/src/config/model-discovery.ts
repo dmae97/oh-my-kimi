@@ -151,8 +151,9 @@ type LlamaCppDiscoveredServerMetadata = {
 };
 
 type LlamaCppDiscoveredModelRuntimeMetadata = {
-	contextWindow: number;
-	maxTokens: number;
+	contextWindow?: number;
+	maxTokens?: number;
+	input?: ("text" | "image")[];
 };
 
 type LlamaCppModelListEntry = {
@@ -594,12 +595,14 @@ export async function discoverLlamaCppModelRuntimeMetadata(
 			entry.configuredContextWindow ??
 			serverMetadata?.contextWindow ??
 			entry.trainingContextWindow;
+		const input = serverMetadata?.input;
 		if (contextWindow === undefined) {
-			return undefined;
+			return input === undefined ? undefined : { input };
 		}
 		return {
 			contextWindow,
 			maxTokens: resolveLlamaCppMaxTokens(contextWindow, serverMetadata?.maxTokens),
+			...(input !== undefined ? { input } : {}),
 		};
 	};
 	try {
