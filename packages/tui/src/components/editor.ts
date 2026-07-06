@@ -422,7 +422,7 @@ export class Editor implements Component, Focusable {
 	#autocompleteState: "regular" | "force" | null = null;
 	#autocompletePrefix: string = "";
 	#autocompleteRequestId: number = 0;
-	#autocompleteMaxVisible: number = 10;
+	#autocompleteMaxVisible: number = 5;
 	onAutocompleteUpdate?: () => void;
 
 	// Paste tracking for large pastes

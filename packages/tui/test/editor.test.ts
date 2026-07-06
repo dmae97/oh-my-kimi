@@ -311,6 +311,7 @@ describe("Editor component", () => {
 
 		it("renders slash-command suggestions as compact item rows", async () => {
 			const editor = new Editor(defaultEditorTheme);
+			editor.setAutocompleteMaxVisible(10);
 			const longDescription =
 				"Plan and execute non-trivial architectural improvements to the codebase without turning each slash command into a multi-line block.";
 			editor.setAutocompleteProvider(

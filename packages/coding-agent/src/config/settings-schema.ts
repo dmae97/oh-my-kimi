@@ -1493,7 +1493,7 @@ export const SETTINGS_SCHEMA = {
 
 	autocompleteMaxVisible: {
 		type: "number",
-		default: 10,
+		default: 5,
 		ui: {
 			tab: "interaction",
 			group: "Input",
@@ -1502,6 +1502,7 @@ export const SETTINGS_SCHEMA = {
 			options: [
 				{ value: "3", label: "3 items" },
 				{ value: "5", label: "5 items" },
+				{ value: "7", label: "7 items" },
 				{ value: "10", label: "10 items" },
 				{ value: "15", label: "15 items" },
 				{ value: "20", label: "20 items" },

@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Kept slash command autocomplete rows compact by truncating descriptions instead of wrapping them into multi-line blocks, and raised the editor's default autocomplete window to 10 items.
+- Kept slash command autocomplete rows compact by truncating descriptions instead of wrapping them into multi-line blocks.
 
 ## [16.3.7] - 2026-07-05
 
