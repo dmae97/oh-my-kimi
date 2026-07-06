@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { logger, Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
+import { logger, postmortem, Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
 import { JsRuntime, type RuntimeHooks } from "../../../eval/js/shared/runtime";
 import type { JsDisplayOutput } from "../../../eval/js/shared/types";
 import { callSessionTool } from "../../../eval/js/tool-bridge";
@@ -1306,7 +1306,11 @@ export async function runCmuxCode(tab: CmuxTab, opts: RunCmuxCodeOptions): Promi
 		if (timeoutSignal.aborted) {
 			reject(new ToolError(`Browser code execution timed out after ${opts.timeoutMs}ms`));
 		} else {
-			reject(new ToolAbortError());
+			reject(
+				signal.reason instanceof ToolAbortError
+					? signal.reason
+					: new ToolAbortError(undefined, { cause: signal.reason }),
+			);
 		}
 	};
 	if (signal.aborted) onAbort();
@@ -1336,7 +1340,7 @@ export async function runCmuxCode(tab: CmuxTab, opts: RunCmuxCodeOptions): Promi
 		return { displays, returnValue: cloneSafe(returnValue), screenshots };
 	} finally {
 		signal.removeEventListener("abort", onAbort);
-		runAc.abort(new ToolAbortError("Browser run ended"));
+		runAc.abort(postmortem.markExpectedCleanupError(new ToolAbortError("Browser run ended")));
 		tab.clearRunContext();
 	}
 }

@@ -1,4 +1,4 @@
-import { getPuppeteerDir, logger, Snowflake, workerHostEntry } from "@oh-my-pi/pi-utils";
+import { getPuppeteerDir, logger, postmortem, Snowflake, workerHostEntry } from "@oh-my-pi/pi-utils";
 import type { Page, Target } from "puppeteer-core";
 import { callSessionTool } from "../../eval/js/tool-bridge";
 import { webpExclusionForModel } from "../../utils/image-loading";
@@ -486,11 +486,11 @@ export async function releaseTab(name: string, opts: ReleaseTabOptions = {}): Pr
 	}
 	const wasAlive = tab.state === "alive";
 	tab.state = "dead";
-	const closeError = new ToolError(`Tab ${JSON.stringify(name)} was closed`);
+	const closeError = postmortem.markExpectedCleanupError(new ToolError(`Tab ${JSON.stringify(name)} was closed`));
 	for (const [id, pending] of tab.pending) {
 		if (tab.backend === "worker") {
 			try {
-				tab.worker.send({ type: "abort", id });
+				tab.worker.send({ type: "abort", id, expectedCleanup: true });
 			} catch {}
 		}
 		for (const ctrl of pending.toolCalls.values()) ctrl.abort(closeError);
@@ -744,7 +744,7 @@ async function forceKillTab(name: string, reason: string): Promise<void> {
 	const tab = tabs.get(name);
 	if (!tab) return;
 	tab.state = "dead";
-	const error = new ToolError(reason);
+	const error = postmortem.markExpectedCleanupError(new ToolError(reason));
 	for (const pending of tab.pending.values()) pending.reject(error);
 	tab.pending.clear();
 	if (tab.backend === "cmux") {

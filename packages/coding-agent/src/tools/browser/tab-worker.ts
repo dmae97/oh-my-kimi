@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
+import { postmortem, Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
 import type { HTMLElement } from "linkedom";
 import type {
 	Browser,
@@ -36,7 +36,7 @@ import {
 	loadPuppeteerInWorker,
 } from "./launch";
 import { extractReadableFromHtml, type ReadableFormat } from "./readable";
-import { waitForBrowserRun } from "./run-cancellation";
+import { markHandled, waitForBrowserRun } from "./run-cancellation";
 import type {
 	Observation,
 	ObservationEntry,
@@ -593,7 +593,12 @@ export class WorkerCore {
 				await this.#run(msg);
 				return;
 			case "abort":
-				if (this.#active?.id === msg.id) this.#active.ac.abort(new ToolAbortError());
+				if (this.#active?.id === msg.id) {
+					const reason = msg.expectedCleanup
+						? postmortem.markExpectedCleanupError(new ToolAbortError())
+						: new ToolAbortError();
+					this.#active.ac.abort(reason);
+				}
 				return;
 			case "tool-reply":
 				this.#deliverToolReply(msg.id, msg.reply);
@@ -732,6 +737,10 @@ export class WorkerCore {
 			});
 			const { promise: cancelRejection, reject: rejectCancel } = Promise.withResolvers<never>();
 			const onCancel = (): void => {
+				const abortError =
+					signal.reason instanceof ToolAbortError
+						? signal.reason
+						: new ToolAbortError(undefined, { cause: signal.reason });
 				if (timeoutSignal.aborted) {
 					const stalled = describeInflight(active.inflight);
 					rejectCancel(
@@ -740,11 +749,14 @@ export class WorkerCore {
 						),
 					);
 				} else {
-					rejectCancel(new ToolAbortError());
+					rejectCancel(abortError);
 				}
 				// Cancel in-flight tool calls so user code's awaited proxies reject promptly.
+				const toolAbort = timeoutSignal.aborted
+					? postmortem.markExpectedCleanupError(new ToolAbortError(undefined, { cause: timeoutSignal.reason }))
+					: abortError;
 				for (const pending of active.pendingTools.values()) {
-					pending.reject(new ToolAbortError());
+					pending.reject(toolAbort);
 				}
 				active.pendingTools.clear();
 			};
@@ -771,7 +783,7 @@ export class WorkerCore {
 			this.#transport.send({ type: "result", id: msg.id, ok: false, error: errorPayload(error) });
 		} finally {
 			if (this.#active?.id === msg.id) this.#active = null;
-			runAc.abort(new ToolAbortError("Browser run ended"));
+			runAc.abort(postmortem.markExpectedCleanupError(new ToolAbortError("Browser run ended")));
 		}
 	}
 
@@ -889,7 +901,7 @@ export class WorkerCore {
 		const waitMs = (explicit?: number): number => resolveWaitTimeout(timeoutMs, explicit);
 		const INF = Number.POSITIVE_INFINITY;
 		const op = <T>(label: string, perOpMs: number, fn: (sig: AbortSignal) => Promise<T>): Promise<T> =>
-			this.#runOp(active, label, signal, perOpMs, fn);
+			markHandled(this.#runOp(active, label, signal, perOpMs, fn));
 		return {
 			name,
 			page,
