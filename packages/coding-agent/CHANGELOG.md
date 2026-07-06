@@ -10,6 +10,9 @@
 ### Fixed
 
 - Fixed high-subagent sessions overwhelming the TUI by bounding the running-subagent HUD and coalescing subagent progress repaint bursts.
+### Fixed
+
+- Fixed skill card headers to render a single space between the `skill` tag and skill name ([#4662](https://github.com/can1357/oh-my-pi/issues/4662)).
 
 ## [16.3.9] - 2026-07-06
 

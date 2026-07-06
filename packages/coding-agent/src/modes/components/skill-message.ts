@@ -50,7 +50,7 @@ export class SkillMessageComponent extends Container {
 
 		// Header: icon-tag + skill name, with the invocation args trailing dimmed.
 		const tag = theme.fg("customMessageLabel", theme.bold(`${theme.icon.extensionSkill} skill`));
-		let header = `${tag}  ${theme.fg("customMessageText", theme.bold(name))}`;
+		let header = `${tag} ${theme.fg("customMessageText", theme.bold(name))}`;
 		if (args) {
 			header += ` ${theme.fg("dim", args)}`;
 		}
