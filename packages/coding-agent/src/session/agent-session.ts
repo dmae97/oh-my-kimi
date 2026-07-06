@@ -933,6 +933,7 @@ export interface SessionStats {
 	};
 	premiumRequests: number;
 	cost: number;
+	contextUsage?: ContextUsage;
 }
 
 /** Advisor statistics for /advisor status command. */
@@ -15222,6 +15223,7 @@ export class AgentSession {
 			},
 			cost: totalCost,
 			premiumRequests: totalPremiumRequests,
+			contextUsage: this.getContextUsage(),
 		};
 	}
 
