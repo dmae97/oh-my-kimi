@@ -3,7 +3,7 @@
  * `focusAgent` dep (session focus proxy) and closes the hub on success; a
  * focus failure keeps the hub open and surfaces the error as a notice.
  */
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
@@ -284,5 +284,67 @@ describe("Agent hub double-← gating", () => {
 
 		expect(shown()).toBeDefined();
 		shown()!.dispose();
+	});
+});
+
+describe("Agent hub data refresh coalescing", () => {
+	beforeAll(() => {
+		initTheme();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+		AgentRegistry.resetGlobalForTests();
+	});
+
+	it("coalesces a synchronous registry burst into one render and refreshes rows", async () => {
+		vi.useFakeTimers();
+		const agents = new AgentRegistry();
+		const observers = new SessionObserverRegistry();
+		const requestRender = vi.fn();
+		const hub = new AgentHubOverlayComponent({
+			observers,
+			hubKeys: [],
+			onDone: () => {},
+			requestRender,
+			registry: agents,
+			irc: new IrcBus(agents),
+			focusAgent: async () => {},
+		});
+
+		try {
+			await hub.persistedSubagentsReady;
+			requestRender.mockClear();
+
+			for (const id of ["BurstA", "BurstB", "BurstC"]) {
+				agents.register({
+					id,
+					displayName: id,
+					kind: "sub",
+					parentId: "Main",
+					session: { subscribe: () => () => {} } as unknown as AgentSession,
+					sessionFile: null,
+					status: "running",
+				});
+			}
+
+			expect(requestRender).not.toHaveBeenCalled();
+			expect(Bun.stripANSI(hub.render(120).join("\n"))).not.toContain("BurstA");
+
+			vi.advanceTimersByTime(99);
+			expect(requestRender).not.toHaveBeenCalled();
+
+			vi.advanceTimersByTime(1);
+			expect(requestRender).toHaveBeenCalledTimes(1);
+
+			const rendered = Bun.stripANSI(hub.render(120).join("\n"));
+			expect(rendered).toContain("BurstA");
+			expect(rendered).toContain("BurstB");
+			expect(rendered).toContain("BurstC");
+		} finally {
+			hub.dispose();
+			vi.useRealTimers();
+		}
 	});
 });

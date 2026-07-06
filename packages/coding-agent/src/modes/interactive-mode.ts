@@ -161,8 +161,11 @@ import {
 } from "./loop-limit";
 import { OAuthManualInputManager } from "./oauth-manual-input";
 import { countRunningSubagentBadgeAgents, getRunningSubagentBadgeRegistry } from "./running-subagent-badge";
-import type { ObservableSession } from "./session-observer-registry";
-import { SessionObserverRegistry } from "./session-observer-registry";
+import {
+	type ObservableSession,
+	type SessionObserverChangeKind,
+	SessionObserverRegistry,
+} from "./session-observer-registry";
 import { createSessionTeardown, type SessionTeardown } from "./session-teardown";
 import { runProviderSetupWizard } from "./setup-wizard/lazy";
 import { interruptHint } from "./shared";
@@ -343,9 +346,12 @@ class AnchoredLiveContainer extends Container implements NativeScrollbackLiveReg
  *  before it auto-clears, mirroring the todo HUD's auto-clear timer. */
 const MODEL_CYCLE_TRACK_CLEAR_MS = 4000;
 
+const SUBAGENT_HUD_VISIBLE_LIMIT = 8;
+const SUBAGENT_OBSERVER_UI_COALESCE_MS = 100;
+
 /**
  * Build the anchored subagent HUD block: a bold accent "Subagents" header plus
- * one tree row per running agent in the same `Id: description` shape the
+ * a bounded set of running-agent rows in the same `Id: description` shape the
  * inline task rows use (muted task preview when no description was given).
  * Layout mirrors the Todos HUD exactly: unindented header, then
  * `renderTreeList` rows (dim connectors) shifted right by one space.
@@ -361,9 +367,11 @@ export function renderSubagentHudLines(sessions: ObservableSession[], columns: n
 	if (running.length === 0) return [];
 
 	const dot = theme.styledSymbol("status.done", "accent");
+	const visible = running.slice(0, SUBAGENT_HUD_VISIBLE_LIMIT);
+	const hiddenCount = running.length - visible.length;
 	const rows = renderTreeList(
 		{
-			items: running,
+			items: visible,
 			expanded: true,
 			renderItem: session => {
 				const displayId = formatTaskId(session.id);
@@ -385,6 +393,9 @@ export function renderSubagentHudLines(sessions: ObservableSession[], columns: n
 		},
 		theme,
 	);
+	if (hiddenCount > 0) {
+		rows.push(theme.fg("dim", `… ${hiddenCount} more running — open Agent Hub for full list`));
+	}
 	return ["", theme.bold(theme.fg("accent", "Subagents")), ...rows.map(line => ` ${line}`)];
 }
 
@@ -588,6 +599,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#observerRegistry: SessionObserverRegistry;
 	#eventBus?: EventBus;
 	#eventBusUnsubscribers: Array<() => void> = [];
+	#observerUiSyncTimer?: NodeJS.Timeout;
+	#observerUiSyncNeedsTodoReconcile = false;
 	#agentRegistryUnsubscribe?: () => void;
 	#agentRegistrySubscriptionTarget?: AgentRegistry;
 	#mcpStatusOrder: string[] = [];
@@ -917,17 +930,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.#observerRegistry.setMainSession(this.sessionManager.getSessionFile() ?? undefined);
 		this.syncRunningSubagentBadge();
-		this.#observerRegistry.onChange(() => {
-			this.syncRunningSubagentBadge();
-			// Auto-checkmark todos whose matching subagent just succeeded, then
-			// re-render so the running override (the static "live" glyph when a
-			// subagent is doing the work for a still-pending todo) updates as
-			// subagents start, finish, or fail.
-			this.#reconcileTodosWithSubagents();
-			this.#syncTodoAutoClearTimer();
-			this.#renderTodoList();
-			this.#renderSubagentList();
-			this.ui.requestRender();
+		this.#observerRegistry.onChange(kind => {
+			this.#scheduleObserverUiSync(kind);
 		});
 
 		// Load initial todos
@@ -1521,19 +1525,18 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	/** Refresh the running-subagents status badge from the active local or collab registry. */
-	syncRunningSubagentBadge(): void {
+	syncRunningSubagentBadge(options: { requestRender?: boolean } = {}): void {
 		const registry = getRunningSubagentBadgeRegistry(this.collabGuest);
 		if (this.#agentRegistrySubscriptionTarget !== registry) {
 			this.#agentRegistryUnsubscribe?.();
 			this.#agentRegistrySubscriptionTarget = registry;
 			this.#agentRegistryUnsubscribe = registry.onChange(() => {
 				this.syncRunningSubagentBadge();
-				this.ui.requestRender();
 			});
 		}
 		const count = countRunningSubagentBadgeAgents(registry);
 		this.statusLine.setSubagentCount(count);
-		this.ui.requestRender();
+		if (options.requestRender !== false) this.ui.requestRender();
 	}
 
 	rebuildChatFromMessages(): void {
@@ -1752,6 +1755,38 @@ export class InteractiveMode implements InteractiveModeContext {
 			phase.tasks.some(task => task.status === "pending" || task.status === "in_progress"),
 		);
 		return active ?? nonEmpty[nonEmpty.length - 1];
+	}
+
+	#scheduleObserverUiSync(kind: SessionObserverChangeKind): void {
+		if (kind !== "progress") {
+			this.#observerUiSyncNeedsTodoReconcile = true;
+		}
+		if (this.#observerUiSyncTimer) return;
+		this.#observerUiSyncTimer = setTimeout(() => {
+			this.#observerUiSyncTimer = undefined;
+			this.#flushObserverUiSync();
+		}, SUBAGENT_OBSERVER_UI_COALESCE_MS);
+		this.#observerUiSyncTimer.unref?.();
+	}
+
+	#flushObserverUiSync(): void {
+		this.syncRunningSubagentBadge({ requestRender: false });
+		if (this.#observerUiSyncNeedsTodoReconcile) {
+			this.#observerUiSyncNeedsTodoReconcile = false;
+			this.#reconcileTodosWithSubagents();
+		}
+		this.#syncTodoAutoClearTimer();
+		this.#renderTodoList();
+		this.#renderSubagentList();
+		this.ui.requestRender();
+	}
+
+	#cancelObserverUiSyncTimer(): void {
+		if (this.#observerUiSyncTimer) {
+			clearTimeout(this.#observerUiSyncTimer);
+			this.#observerUiSyncTimer = undefined;
+		}
+		this.#observerUiSyncNeedsTodoReconcile = false;
 	}
 
 	#renderTodoList(): void {
@@ -3306,6 +3341,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.#cleanupMicAnimation();
 		this.#cancelTodoAutoClearTimer();
+		this.#cancelObserverUiSyncTimer();
 		this.#cancelGoalContinuation();
 		if (this.#sttController) {
 			this.#sttController.dispose();

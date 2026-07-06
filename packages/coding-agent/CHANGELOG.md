@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Limited subagent HUD display to 8 items with a summary for additional running subagents
+- Improved TUI performance by coalescing agent registry and observer UI updates
+
+### Fixed
+
+- Fixed high-subagent sessions overwhelming the TUI by bounding the running-subagent HUD and coalescing subagent progress repaint bursts.
+
 ## [16.3.9] - 2026-07-06
 
 ### Added

@@ -34,6 +34,7 @@ import { DynamicBorder } from "./dynamic-border";
 
 /** Refresh cadence for the relative-time column */
 const AGE_TICK_MS = 5_000;
+const DATA_CHANGE_RENDER_COALESCE_MS = 100;
 /** Double-tap window for the table's left-left "close hub" gesture. */
 const LEFT_TAP_WINDOW_MS = 500;
 
@@ -198,6 +199,7 @@ export class AgentHubOverlayComponent extends Container {
 	#hubKeys: KeyId[];
 	#unsubscribers: Array<() => void> = [];
 	#ageTimer: NodeJS.Timeout | undefined;
+	#dataChangeTimer?: NodeJS.Timeout;
 	#remote: AgentHubRemote | undefined;
 	/** Resolves after persisted historical subagents have been registered and rows refreshed. */
 	readonly persistedSubagentsReady: Promise<void>;
@@ -251,8 +253,8 @@ export class AgentHubOverlayComponent extends Container {
 		this.#expandKeys = deps.expandKeys ?? ["ctrl+o"];
 		this.#focusAgent = deps.focusAgent;
 
-		this.#unsubscribers.push(this.#registry.onChange(() => this.#onDataChange()));
-		this.#unsubscribers.push(this.#observers.onChange(() => this.#onDataChange()));
+		this.#unsubscribers.push(this.#registry.onChange(() => this.#scheduleDataChange()));
+		this.#unsubscribers.push(this.#observers.onChange(() => this.#scheduleDataChange()));
 		this.#ageTimer = setInterval(() => this.#requestRender(), AGE_TICK_MS);
 		this.#ageTimer.unref?.();
 
@@ -284,6 +286,10 @@ export class AgentHubOverlayComponent extends Container {
 		if (this.#ageTimer) {
 			clearInterval(this.#ageTimer);
 			this.#ageTimer = undefined;
+		}
+		if (this.#dataChangeTimer) {
+			clearTimeout(this.#dataChangeTimer);
+			this.#dataChangeTimer = undefined;
 		}
 		this.#closeTranscriptOverlay();
 	}
@@ -354,6 +360,15 @@ export class AgentHubOverlayComponent extends Container {
 	// ========================================================================
 	// Live data plumbing
 	// ========================================================================
+
+	#scheduleDataChange(): void {
+		if (this.#dataChangeTimer) return;
+		this.#dataChangeTimer = setTimeout(() => {
+			this.#dataChangeTimer = undefined;
+			this.#onDataChange();
+		}, DATA_CHANGE_RENDER_COALESCE_MS);
+		this.#dataChangeTimer.unref?.();
+	}
 
 	#onDataChange(): void {
 		this.#refreshRows();

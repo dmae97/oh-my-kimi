@@ -5,13 +5,20 @@
  * block self-clears. Sync task spawns and eval `agent()` spawns are excluded:
  * their progress is already rendered inline (tool block / eval cell).
  */
-import { beforeAll, describe, expect, it } from "bun:test";
-import { renderSubagentHudLines } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as path from "node:path";
+import { Agent } from "@oh-my-pi/pi-agent-core";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { InteractiveMode, renderSubagentHudLines } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import {
 	type ObservableSession,
 	SessionObserverRegistry,
 } from "@oh-my-pi/pi-coding-agent/modes/session-observer-registry";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import {
 	type AgentProgress,
 	type SubagentLifecyclePayload,
@@ -20,6 +27,7 @@ import {
 	TASK_SUBAGENT_PROGRESS_CHANNEL,
 } from "@oh-my-pi/pi-coding-agent/task";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
+import { TempDir } from "@oh-my-pi/pi-utils";
 
 function makeSession(overrides: Partial<ObservableSession> & { id: string }): ObservableSession {
 	return {
@@ -199,5 +207,100 @@ describe("subagent HUD lines", () => {
 		);
 
 		expect(activeIds()).toEqual(["SelectorSurfaces", "BlastRadius", "VariantsSurvey"]);
+	});
+
+	it("renders the first eight active detached subagents and summarizes the rest", () => {
+		const active = Array.from({ length: 10 }, (_, index) =>
+			makeSession({
+				id: `Worker${index}`,
+				description: `job ${index}`,
+			}),
+		);
+
+		const out = render(active, 120);
+
+		for (const session of active.slice(0, 8)) {
+			expect(out).toContain(`${session.id}: ${session.description}`);
+		}
+		for (const session of active.slice(8)) {
+			expect(out).not.toContain(`${session.id}: ${session.description}`);
+		}
+		expect(out).toContain("2 more running");
+	});
+});
+
+describe("InteractiveMode subagent observer UI sync", () => {
+	let tempDir: TempDir;
+	let authStorage: AuthStorage;
+	let session: AgentSession;
+	let mode: InteractiveMode;
+	let eventBus: EventBus;
+
+	beforeAll(async () => {
+		await initTheme();
+	});
+
+	beforeEach(async () => {
+		resetSettingsForTest();
+		tempDir = TempDir.createSync("@pi-subagent-observer-");
+		await Settings.init({
+			inMemory: true,
+			cwd: tempDir.path(),
+			overrides: { "startup.quiet": true },
+		});
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
+		const modelRegistry = new ModelRegistry(authStorage);
+		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
+
+		eventBus = new EventBus();
+		session = new AgentSession({
+			agent: new Agent({
+				initialState: {
+					model,
+					systemPrompt: ["Test"],
+					tools: [],
+					messages: [],
+				},
+			}),
+			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
+			settings: Settings.isolated({ "startup.quiet": true }),
+			modelRegistry,
+		});
+		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, eventBus);
+	});
+
+	afterEach(async () => {
+		mode?.stop();
+		await session?.dispose();
+		authStorage?.close();
+		tempDir?.removeSync();
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+		resetSettingsForTest();
+	});
+
+	it("coalesces a burst of progress observer changes into one HUD rebuild and render request", async () => {
+		await mode.init({ suppressWelcomeIntro: true });
+		const requestRender = vi.spyOn(mode.ui, "requestRender").mockImplementation(() => {});
+		const rebuildHud = vi.spyOn(mode.subagentContainer, "clear");
+		vi.useFakeTimers();
+
+		for (let index = 0; index < 6; index++) {
+			eventBus.emit(
+				TASK_SUBAGENT_PROGRESS_CHANNEL,
+				makeProgressPayload(`BurstAgent${index}`, index, `Burst job ${index}`, true),
+			);
+		}
+
+		await Promise.resolve();
+		vi.runAllTimers();
+		await Promise.resolve();
+
+		const hud = Bun.stripANSI(mode.subagentContainer.render(120).join("\n"));
+		expect(hud).toContain("BurstAgent0: Burst job 0");
+		expect(hud).toContain("BurstAgent5: Burst job 5");
+		expect(rebuildHud).toHaveBeenCalledTimes(1);
+		expect(requestRender).toHaveBeenCalledTimes(1);
 	});
 });
