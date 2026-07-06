@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Detected Azure AI Inference / Foundry Anthropic routes as strict-tool-incompatible so resolved Anthropic compat disables strict tools before request construction ([#4679](https://github.com/can1357/oh-my-pi/issues/4679)).
+
 ## [16.3.9] - 2026-07-06
 
 ### Fixed
