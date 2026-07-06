@@ -1824,12 +1824,18 @@ export class AgentSession {
 	 * Sticky across an in-flight prompt run: a successful `yield` makes the run
 	 * terminal for execution purposes, so any trailing empty/aborted assistant
 	 * stop must NOT trigger empty-stop/unexpected-stop/compaction continuations.
-	 * Cleared in `#promptWithMessage` so the next prompt evaluates cleanly.
+	 * Cleared before every new prompt turn so the next turn evaluates cleanly.
 	 */
 	#yieldTerminationPending = false;
 	#providerSessionState = new Map<string, ProviderSessionState>();
 	#hindsightSessionState: HindsightSessionState | undefined = undefined;
 	readonly rawSseDebugBuffer: RawSseDebugBuffer;
+
+	#resetPromptMaintenanceState(): void {
+		this.#emptyStopRetryCount = 0;
+		this.#unexpectedStopRetryCount = 0;
+		this.#yieldTerminationPending = false;
+	}
 
 	#acquirePowerAssertion(): void {
 		if (process.platform !== "darwin") return;
@@ -1949,6 +1955,7 @@ export class AgentSession {
 		if (parkedFollowUps.length > 0) {
 			this.agent.replaceQueues([...this.agent.peekSteeringQueue()], []);
 		}
+		this.#resetPromptMaintenanceState();
 		this.#beginInFlight();
 		void this.agent
 			.prompt(records)
@@ -7566,12 +7573,7 @@ export class AgentSession {
 			this.#todoReminderAwaitingProgress = false;
 			this.#mutationsSinceLastTodoTouch = 0;
 			this.#midRunNudgeCount = 0;
-			this.#emptyStopRetryCount = 0;
-			this.#unexpectedStopRetryCount = 0;
-			// A new prompt cycle starts: drop any sticky yield-termination from the
-			// previous run so empty-stop / unexpected-stop / compaction maintenance
-			// can evaluate this turn normally.
-			this.#yieldTerminationPending = false;
+			this.#resetPromptMaintenanceState();
 
 			await this.#maybeRestoreRetryFallbackPrimary();
 

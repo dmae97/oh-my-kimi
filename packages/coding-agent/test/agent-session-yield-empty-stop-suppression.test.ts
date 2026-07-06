@@ -14,6 +14,7 @@ import { z } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { IrcMessage } from "@oh-my-pi/pi-coding-agent/irc/bus";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -129,6 +130,13 @@ function reminderMessages(messages: AgentMessage[]): AgentMessage[] {
 	});
 }
 
+function assistantText(messages: AgentMessage[]): string {
+	return messages
+		.filter((message): message is Extract<AgentMessage, { role: "assistant" }> => message.role === "assistant")
+		.flatMap(message => message.content.flatMap(content => (content.type === "text" ? [content.text] : [])))
+		.join("\n");
+}
+
 afterEach(async () => {
 	for (const harness of activeHarnesses.splice(0)) {
 		await harness.session.dispose();
@@ -193,5 +201,35 @@ describe("AgentSession yield empty-stop suppression", () => {
 		// empty-stop reminder injected on the second run.
 		expect(mock.calls).toHaveLength(5);
 		expect(reminderMessages(session.agent.state.messages)).toHaveLength(1);
+	});
+
+	it("treats an idle IRC wake after a yielded run as a fresh turn for empty-stop retry", async () => {
+		const { session, mock } = await createHarness([
+			// Run 1: yield then trailing empty stop. Suppression applies only to this yielded run.
+			yieldCall("first", "call-yield-before-irc"),
+			emptyStop(),
+			// Run 2: an idle IRC wake is a fresh turn, so its empty stop should retry normally.
+			emptyStop(),
+			{ content: ["recovered after IRC retry"], stopReason: "stop" },
+		]);
+
+		await session.prompt("yield first");
+		await session.waitForIdle();
+		expect(mock.calls).toHaveLength(2);
+		expect(reminderMessages(session.agent.state.messages)).toHaveLength(0);
+
+		const outcome = await session.deliverIrcMessage({
+			id: "irc-empty-stop-after-yield",
+			from: "peer",
+			to: "me",
+			body: "ping",
+			ts: Date.now(),
+		} as IrcMessage);
+		expect(outcome).toBe("woken");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(4);
+		expect(reminderMessages(session.agent.state.messages)).toHaveLength(1);
+		expect(assistantText(session.agent.state.messages)).toContain("recovered after IRC retry");
 	});
 });
