@@ -113,6 +113,21 @@ describe("managed-skills discovery", () => {
 		expect(matches[0]?.source).toBe("agents:user");
 	});
 
+	it("does not resurrect disabled home claude user skills as project skills when cwd is under home", async () => {
+		// No repo root marker is created in tempHome/work. A Claude home skill must
+		// stay user-scoped only even while project skills remain enabled by default.
+		await writeSkill(path.join(tempHome, ".claude", "skills"), "home-only", "Disabled claude home skill.");
+		await writeSkill(path.join(tempHome, ".agents", "skills"), "home-only", "Enabled agents fallback.");
+		const { skills } = await loadSkills({
+			cwd: tempCwd,
+			enableClaudeUser: false,
+		});
+		const matches = skills.filter(s => s.name === "home-only");
+		expect(matches).toHaveLength(1);
+		expect(matches[0]?.source).toBe("agents:user");
+		expect(skills.some(s => s.name === "home-only" && s.source === "claude:project")).toBe(false);
+	});
+
 	it("preserves provider priority when duplicate authored providers are both enabled (#4648)", async () => {
 		await writeSkill(path.join(tempHome, ".claude", "skills"), "priority-authored", "Enabled claude.");
 		await writeSkill(path.join(tempHome, ".agents", "skills"), "priority-authored", "Enabled agents.");
