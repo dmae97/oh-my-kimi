@@ -51,6 +51,17 @@ function emptyAttempt(): AssistantMessageEventStream {
 	] as unknown as AssistantMessageEvent[]);
 }
 
+/** start + stop with no visible content and a single EOS output token. */
+function eosOnlyAttempt(): AssistantMessageEventStream {
+	const message = assistant();
+	message.usage.output = 1;
+	message.usage.totalTokens = 1;
+	return streamFromEvents([
+		{ type: "start", partial: message },
+		{ type: "done", reason: "stop", message },
+	] as unknown as AssistantMessageEvent[]);
+}
+
 function contentAttempt(): AssistantMessageEventStream {
 	const message = assistant(["hello"]);
 	return streamFromEvents([
@@ -86,6 +97,23 @@ describe("withEmptyCompletionRetry", () => {
 		expect(events.filter(e => e.type === "start")).toHaveLength(1);
 		expect(events.some(e => e.type === "text_delta")).toBe(true);
 		expect(events.at(-1)?.type).toBe("done");
+		expect(result.content).toEqual([{ type: "text", text: "hello" }]);
+	});
+
+	it("retries an EOS-only empty stop that reports one output token", async () => {
+		let attempts = 0;
+		const waits: number[] = [];
+		const stream = withEmptyCompletionRetry({}, CTX, { providerRetryWait: async ms => void waits.push(ms) }, () => {
+			attempts++;
+			return attempts === 1 ? eosOnlyAttempt() : contentAttempt();
+		});
+
+		const events = await drain(stream);
+		const result = await stream.result();
+
+		expect(attempts).toBe(2);
+		expect(waits).toEqual([500]);
+		expect(events.filter(e => e.type === "start")).toHaveLength(1);
 		expect(result.content).toEqual([{ type: "text", text: "hello" }]);
 	});
 
