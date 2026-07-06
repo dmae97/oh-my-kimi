@@ -668,7 +668,7 @@ const streamOpenAIResponsesOnce = (
 			}
 
 			// Detect premature stream closure: the HTTP stream ended without the
-			// provider sending `response.completed` or `response.incomplete`.
+			// provider sending a recognized terminal response event.
 			// Custom/proxy providers may drop the connection mid-stream; without
 			// this guard the incomplete output is silently surfaced as a successful
 			// "stop".

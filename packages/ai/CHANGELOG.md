@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed OpenAI Responses streams that end with `response.done` being misclassified as premature stream closures.
+
 ## [16.3.10] - 2026-07-06
 
 ### Fixed
