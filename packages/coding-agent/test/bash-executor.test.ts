@@ -406,7 +406,7 @@ exit 64
 		if (process.platform === "win32") {
 			return;
 		}
-		const result = await executeBash("sleep 0.1; echo done", { cwd: tempDir, timeout: 0 });
+		const result = await executeBash("sleep 1.2; echo done", { cwd: tempDir, timeout: 0 });
 		expect(result.cancelled).toBe(false);
 		expect(result.output.trim()).toBe("done");
 	});
