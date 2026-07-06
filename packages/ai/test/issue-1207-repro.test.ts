@@ -24,12 +24,16 @@ function abortedSignal(): AbortSignal {
 	return controller.signal;
 }
 
-async function capturePayload(model: Model<"openai-completions">, tools?: Tool[]): Promise<Record<string, unknown>> {
+async function capturePayload(
+	model: Model<"openai-completions">,
+	tools?: Tool[],
+	reasoning: "minimal" | "xhigh" = "minimal",
+): Promise<Record<string, unknown>> {
 	const { promise, resolve } = Promise.withResolvers<unknown>();
 	streamOpenAICompletions(model, contextWithTools(tools), {
 		apiKey: "test-key",
 		signal: abortedSignal(),
-		reasoning: "minimal",
+		reasoning,
 		toolChoice: "auto",
 		maxTokens: 123,
 		onPayload: payload => resolve(payload),

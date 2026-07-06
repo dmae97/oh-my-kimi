@@ -243,6 +243,32 @@ describe("generated model policies", () => {
 		expect(models[0]?.compat?.supportsToolChoice).toBe(false);
 	});
 
+	it("sets OpenCode Go DeepSeek V4 tool-call request compat", () => {
+		const models: ModelSpec<"openai-completions">[] = [
+			createSpec({
+				id: "deepseek-v4-flash",
+				api: "openai-completions",
+				provider: "opencode-go",
+			}),
+			createSpec({
+				id: "deepseek-v4-pro",
+				api: "openai-completions",
+				provider: "opencode-go",
+			}),
+		];
+
+		applyGeneratedModelPolicies(models);
+
+		for (const model of models) {
+			expect(model.compat).toMatchObject({
+				supportsToolChoice: false,
+				maxTokensField: "max_tokens",
+				reasoningContentField: "reasoning_content",
+				requiresReasoningContentForToolCalls: true,
+			});
+		}
+	});
+
 	it("marks OpenCode Go Kimi K2.7 Code as not supporting forced tool_choice", () => {
 		const models: ModelSpec<"openai-completions">[] = [
 			createSpec({
