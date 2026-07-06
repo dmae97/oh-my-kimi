@@ -190,12 +190,18 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	const disabledSkillNames = new Set(
 		(disabledExtensions ?? []).filter(id => id.startsWith("skill:")).map(id => id.slice(6)),
 	);
-	// Filter skills by source and patterns first
-	const filteredSkills = result.items.filter(capSkill => {
+	// Select authored skills from the pre-dedup superset. `loadCapability`
+	// dedupes before source toggles, so a disabled high-priority provider must
+	// not hide an enabled lower-priority provider with the same skill name.
+	const seenAuthoredSkillNames = new Set<string>();
+	const filteredSkills = result.all.filter(capSkill => {
+		if (capSkill._source.provider === MANAGED_SKILLS_PROVIDER_ID) return false;
 		if (disabledSkillNames.has(capSkill.name)) return false;
 		if (!isSourceEnabled(capSkill._source)) return false;
 		if (matchesIgnorePatterns(capSkill.name)) return false;
 		if (!matchesIncludePatterns(capSkill.name)) return false;
+		if (seenAuthoredSkillNames.has(capSkill.name)) return false;
+		seenAuthoredSkillNames.add(capSkill.name);
 		return true;
 	});
 
@@ -213,9 +219,6 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	// Process skills with resolved paths
 	for (let i = 0; i < filteredSkills.length; i++) {
 		const capSkill = filteredSkills[i];
-		// Managed (auto-learn) skills are resolved dead-last (below) so any
-		// authored skill of the same name — from ANY provider or custom dir — wins.
-		if (capSkill._source.provider === MANAGED_SKILLS_PROVIDER_ID) continue;
 		const resolvedPath = realPaths[i];
 
 		// Skip silently if we've already loaded this exact file (via symlink)

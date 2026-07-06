@@ -167,17 +167,21 @@ async function loadContextFiles(ctx: LoadContext): Promise<LoadResult<ContextFil
 async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 	const userSkillsDir = path.join(getUserClaude(ctx), "skills");
 
-	// Walk up from cwd finding .claude/skills/ in ancestors
+	// Walk up from cwd finding .claude/skills/ in ancestors. Skip $HOME:
+	// that path is already scanned as the Claude user source below, and scanning
+	// it again as project would bypass enableClaudeUser when project skills stay enabled.
 	const projectScans: Promise<LoadResult<Skill>>[] = [];
 	let current = ctx.cwd;
 	while (true) {
-		projectScans.push(
-			scanSkillsFromDir(ctx, {
-				dir: path.join(current, CONFIG_DIR, "skills"),
-				providerId: PROVIDER_ID,
-				level: "project",
-			}),
-		);
+		if (current !== ctx.home) {
+			projectScans.push(
+				scanSkillsFromDir(ctx, {
+					dir: path.join(current, CONFIG_DIR, "skills"),
+					providerId: PROVIDER_ID,
+					level: "project",
+				}),
+			);
+		}
 		if (current === (ctx.repoRoot ?? ctx.home)) break;
 		const parent = path.dirname(current);
 		if (parent === current) break; // filesystem root
