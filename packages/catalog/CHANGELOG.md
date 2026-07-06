@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.11] - 2026-07-06
+
 ### Added
 
 - Added Claude Haiku 4.5 (JP) model support
