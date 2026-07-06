@@ -176,6 +176,52 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		expect(rebuildCount).toBe(baseline + 2);
 	});
 
+	it("updates live active-tool predicates before rebuilding the prompt", async () => {
+		const activeToolNames = new Set(["read", "bash", "grep"]);
+		const readTool = createBasicTool("read", "Read");
+		const bashTool = createBasicTool("bash", "Bash");
+		const grepTool = createBasicTool("grep", "Grep");
+		Object.defineProperty(bashTool, "description", {
+			get: () => (activeToolNames.has("grep") ? "bash sees grep" : "bash hides grep"),
+			enumerable: true,
+			configurable: true,
+		});
+		const toolRegistry = new Map<string, AgentTool>([
+			[readTool.name, readTool],
+			[bashTool.name, bashTool],
+			[grepTool.name, grepTool],
+		]);
+		const agent = new Agent({
+			initialState: {
+				model: createModel(),
+				systemPrompt: ["initial"],
+				tools: [readTool, bashTool, grepTool],
+				messages: [],
+			},
+		});
+		const session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry: {} as never,
+			toolRegistry,
+			setActiveToolNames: names => {
+				activeToolNames.clear();
+				for (const name of names) {
+					activeToolNames.add(name);
+				}
+			},
+			rebuildSystemPrompt: async (_toolNames, tools) => ({
+				systemPrompt: [tools.get("bash")?.description ?? "missing bash"],
+			}),
+		});
+		sessions.push(session);
+
+		await session.setActiveToolsByName(["read", "bash"]);
+
+		expect(agent.state.systemPrompt).toEqual(["bash hides grep"]);
+	});
+
 	it("does not skip when refreshBaseSystemPrompt is called explicitly", async () => {
 		let rebuildCount = 0;
 		const { session } = newSession(async toolNames => {

@@ -226,6 +226,8 @@ export interface ToolSession {
 	getToolByName?: (name: string) => AgentTool | undefined;
 	/** Return whether a built-in tool is active in this turn's tool set. */
 	isToolActive?: (name: string) => boolean;
+	/** Update the active built-in tool predicate when a session changes tools mid-run. */
+	setActiveToolNames?: (names: Iterable<string>) => void;
 	/** Agent registry for IRC routing across live sessions. */
 	agentRegistry?: AgentRegistry;
 	/** Get artifacts directory for artifact:// URLs */
@@ -650,7 +652,11 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 				];
 
 	const activeToolNames = new Set(baseEntries.map(([name]) => name));
-	session.isToolActive = name => activeToolNames.has(name);
+	if (session.setActiveToolNames) {
+		session.setActiveToolNames(activeToolNames);
+	} else {
+		session.isToolActive = name => activeToolNames.has(name);
+	}
 
 	const baseResults = await Promise.all(
 		baseEntries.map(async ([name, factory]) => {
