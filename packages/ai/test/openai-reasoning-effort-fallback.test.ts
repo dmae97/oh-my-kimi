@@ -40,6 +40,17 @@ function createChatSseResponse(): Response {
 function createResponsesSseResponse(id = "resp_reasoning_fallback"): Response {
 	const events = [
 		{
+			type: "response.output_item.added",
+			output_index: 0,
+			item: { type: "message", id: `${id}_msg`, role: "assistant", content: [] },
+		},
+		{ type: "response.output_text.delta", delta: "ok" },
+		{
+			type: "response.output_item.done",
+			output_index: 0,
+			item: { type: "message", id: `${id}_msg`, role: "assistant", content: [{ type: "output_text", text: "ok" }] },
+		},
+		{
 			type: "response.completed",
 			response: {
 				id,
