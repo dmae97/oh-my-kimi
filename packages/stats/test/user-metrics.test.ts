@@ -7,7 +7,7 @@ describe("computeUserMessageMetrics", () => {
 		expect(computeUserMessageMetrics("   \n\t ")).toEqual({ ...EMPTY_USER_METRICS });
 	});
 
-	it("counts a sentence as yelling when >50% of its letters are uppercase", () => {
+	it("counts multi-word caps as yelling when >50% of letters are uppercase", () => {
 		const m = computeUserMessageMetrics("STOP DOING THAT NOW");
 		expect(m.yelling).toBe(1);
 	});
@@ -32,6 +32,13 @@ describe("computeUserMessageMetrics", () => {
 		expect(m.yelling).toBe(0);
 	});
 
+	it("requires multi-word caps or an elongated shout before yelling", () => {
+		expect(computeUserMessageMetrics("Follow AGENTS.md and SYSTEM.md carefully.").yelling).toBe(0);
+		expect(computeUserMessageMetrics("HELLO").yelling).toBe(0);
+		expect(computeUserMessageMetrics("WHAT THE HELL").yelling).toBe(1);
+		expect(computeUserMessageMetrics("CMOOON").yelling).toBe(1);
+	});
+
 	it("matches profanity case-insensitively at word boundaries only", () => {
 		// Regression: prior version used a non-raw template literal so `\b` was
 		// compiled as backspace (U+0008) and the regex matched nothing in real
@@ -41,9 +48,9 @@ describe("computeUserMessageMetrics", () => {
 		expect(computeUserMessageMetrics("import classes from module").profanity).toBe(0);
 	});
 
-	it("counts quality-dismissal vocabulary as profanity", () => {
-		const m = computeUserMessageMetrics("this is garbage, useless and horrible work");
-		expect(m.profanity).toBe(3);
+	it("does not treat technical or opinion vocabulary as profanity", () => {
+		expect(computeUserMessageMetrics("this is garbage, useless and horrible work").profanity).toBe(0);
+		expect(computeUserMessageMetrics("dummy data, blast radius, and config knob").profanity).toBe(0);
 	});
 
 	it("does not count the version-control tool `git` as profanity", () => {
@@ -54,16 +61,35 @@ describe("computeUserMessageMetrics", () => {
 		expect(computeUserMessageMetrics("run git commit then git push").profanity).toBe(0);
 	});
 
-	it("folds drama runs / elongated interjections / dot trails into `anguish`", () => {
-		const m = computeUserMessageMetrics("why!!! seriously??? omg!?!?!?");
-		expect(m.anguish).toBeGreaterThanOrEqual(3);
+	it("counts drama runs and elongated interjections as `anguish` but ignores dot trails", () => {
+		expect(computeUserMessageMetrics("why!!! seriously??? omg!?!?!?").anguish).toBe(3);
+		expect(computeUserMessageMetrics("nooo whyyy").anguish).toBe(2);
 		expect(computeUserMessageMetrics("ok!! sure??").anguish).toBe(0);
+		expect(computeUserMessageMetrics("waiting.. still loading...").anguish).toBe(0);
+	});
+
+	it("scores plain frustration interjections as anguish, not profanity", () => {
+		for (const text of ["ugh", "argh", "grr"]) {
+			const m = computeUserMessageMetrics(text);
+			expect(m.anguish).toBe(1);
+			expect(m.profanity).toBe(0);
+		}
+
+		const elongated = computeUserMessageMetrics("ughh");
+		expect(elongated.anguish).toBe(1);
+		expect(elongated.profanity).toBe(0);
 	});
 
 	it("absorbs shift-key `1` mishits into a single drama burst", () => {
 		expect(computeUserMessageMetrics("what!!!111").anguish).toBeGreaterThanOrEqual(1);
 		expect(computeUserMessageMetrics("are you serious!?!?!??111").anguish).toBeGreaterThanOrEqual(1);
 		expect(computeUserMessageMetrics("port 8111 please").anguish).toBe(0);
+	});
+
+	it("counts sad emoticons as anguish without matching code-like punctuation", () => {
+		expect(computeUserMessageMetrics("nope still same :(").anguish).toBeGreaterThanOrEqual(1);
+		expect(computeUserMessageMetrics(":((").anguish).toBe(1);
+		expect(computeUserMessageMetrics("match foo:(bar) in code").anguish).toBe(0);
 	});
 
 	describe("negation signal", () => {
@@ -73,6 +99,15 @@ describe("computeUserMessageMetrics", () => {
 			expect(computeUserMessageMetrics("nah look at this").negation).toBe(1);
 			expect(computeUserMessageMetrics("wrong file").negation).toBe(1);
 			expect(computeUserMessageMetrics("nvm got it").negation).toBe(1);
+		});
+
+		it("gates bare leading `no` to interjection uses", () => {
+			expect(computeUserMessageMetrics("no extensions to the landing page").negation).toBe(0);
+			expect(computeUserMessageMetrics("no-op change for the flag").negation).toBe(0);
+			expect(computeUserMessageMetrics("no - not that one").negation).toBe(1);
+			expect(computeUserMessageMetrics("no—wait").negation).toBe(1);
+			expect(computeUserMessageMetrics("no i meant the other one").negation).toBe(1);
+			expect(computeUserMessageMetrics("no, wait").negation).toBe(1);
 		});
 
 		it("does not fire on words that share a prefix with negation tokens", () => {
@@ -101,6 +136,12 @@ describe("computeUserMessageMetrics", () => {
 			expect(computeUserMessageMetrics("thats not what i wanted").negation).toBe(1);
 			expect(computeUserMessageMetrics("that's not right").negation).toBe(1);
 			expect(computeUserMessageMetrics("this is not what i meant at all").negation).toBe(1);
+		});
+
+		it("fires on negative sense-making phrases without flagging affirmative sense", () => {
+			expect(computeUserMessageMetrics("ok but this makes no sense").negation).toBe(1);
+			expect(computeUserMessageMetrics("ok but this makes zero sense").negation).toBe(1);
+			expect(computeUserMessageMetrics("the docs explain it well and it makes sense").negation).toBe(0);
 		});
 	});
 
@@ -144,6 +185,13 @@ describe("computeUserMessageMetrics", () => {
 			// `you` alone is too generic - dominated by neutral instructions.
 			expect(computeUserMessageMetrics("can you fix the bug?").blame).toBe(0);
 			expect(computeUserMessageMetrics("could you also add a test").blame).toBe(0);
+		});
+
+		it("fires on blamey why-did-you questions without flagging neutral why questions", () => {
+			expect(computeUserMessageMetrics("why did you list the request as is?").blame).toBe(1);
+			expect(computeUserMessageMetrics("why would u delete the config?").blame).toBe(1);
+			expect(computeUserMessageMetrics("why is this slow").blame).toBe(0);
+			expect(computeUserMessageMetrics("why does it use webpack").blame).toBe(0);
 		});
 
 		it("only fires on `stop X-ing` at sentence start", () => {
