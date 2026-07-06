@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed LiteLLM discovery to fall back to bundled catalog metadata when `models.dev` lacks a model reference, preserving reasoning and thinking support for models such as `glm-5.2`. ([#4695](https://github.com/can1357/oh-my-pi/issues/4695))
+
 ## [16.3.10] - 2026-07-06
 
 ### Fixed
