@@ -52,6 +52,26 @@ describe("structured extraction", () => {
 		expect(parseFacts("NO_FACTS")).toEqual([]);
 	});
 
+	it("unwraps category-specific object facts and drops unrecognized objects", () => {
+		const modelJson = JSON.stringify({
+			facts: [{ fact: "The user prefers tabs over spaces" }, { nested: {} }, "The user likes concise replies."],
+			instructions: [{ instruction: "Always include verification details" }],
+			preferences: [{ preference: "Prefers dark mode" }],
+			timelines: [
+				{ date: "2026-08-01", description: "release" },
+				{ subject: "release", predicate: "on", object: "2026-08-01" },
+			],
+		});
+
+		expect(parseFacts(modelJson)).toEqual([
+			"The user prefers tabs over spaces",
+			"The user likes concise replies",
+			"Always include verification details",
+			"Prefers dark mode",
+			"release 2026-08-01",
+		]);
+	});
+
 	it("treats a valid empty structured extraction as no facts", () => {
 		expect(parseFacts('{"facts": [], "instructions": [], "preferences": [], "timelines": [], "kg": []}')).toEqual([]);
 		expect(
