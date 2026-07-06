@@ -503,6 +503,12 @@ export class Container implements Component {
 		this.#memoLines = undefined;
 	}
 
+	/** Dispose every child, then detach it from this container. */
+	disposeChildren(): void {
+		this.dispose();
+		this.clear();
+	}
+
 	invalidate(): void {
 		this.#memoLines = undefined;
 		for (const child of this.children) {

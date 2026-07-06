@@ -581,7 +581,7 @@ export class UiHelpers {
 		} else {
 			this.ctx.resetTranscript();
 		}
-		this.ctx.pendingMessagesContainer.clear();
+		this.ctx.pendingMessagesContainer.disposeChildren();
 		this.ctx.pendingBashComponents = [];
 		this.ctx.pendingPythonComponents = [];
 
@@ -647,7 +647,7 @@ export class UiHelpers {
 	}
 
 	updatePendingMessagesDisplay(): void {
-		this.ctx.pendingMessagesContainer.clear();
+		this.ctx.pendingMessagesContainer.disposeChildren();
 		const queuedMessages = this.ctx.viewSession.getQueuedMessages() as QueuedMessages;
 
 		const steeringMessages: Array<{ message: string; label: string }> = [];
