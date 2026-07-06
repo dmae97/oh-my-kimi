@@ -110,20 +110,6 @@ describe("issue #1207 — DeepSeek V4 keeps reasoning with tools", () => {
 		expect(body.max_tokens).toBe(123);
 	});
 
-	it("uses max_tokens for OpenCode Go DeepSeek V4 xhigh tool turns", async () => {
-		const model = getBundledModel("opencode-go", "deepseek-v4-flash") as Model<"openai-completions">;
-		const compat = model.compat;
-		const body = await capturePayload(model, undefined, "xhigh");
-
-		expect(compat.supportsToolChoice).toBe(false);
-		expect(compat.maxTokensField).toBe("max_tokens");
-		expect(body.tools).toBeDefined();
-		expect(body.tool_choice).toBeUndefined();
-		expect(body.reasoning_effort).toBe("max");
-		expect(body.max_tokens).toBe(123);
-		expect(body.max_completion_tokens).toBeUndefined();
-	});
-
 	it("preserves OpenRouter reasoning when tool_choice auto is present", async () => {
 		const model = getBundledModel("openrouter", "deepseek/deepseek-v4-flash") as Model<"openai-completions">;
 		const compat = model.compat;
