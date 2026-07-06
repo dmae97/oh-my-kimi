@@ -3115,13 +3115,18 @@ impl IgnoreState {
 		}
 		let mut ancestors = Vec::new();
 		let mut current = root.parent();
+		let mut repo_start = None;
 		while let Some(path) = current {
 			ancestors.push(path);
+			if repo_start.is_none() && has_repo_marker(path) {
+				repo_start = Some(ancestors.len() - 1);
+			}
 			current = path.parent();
 		}
 
+		let repo_start = repo_start?;
 		let mut parent = None;
-		for ancestor in ancestors.into_iter().rev() {
+		for ancestor in ancestors[..=repo_start].iter().rev() {
 			parent = Some(Self::build(ancestor, parent));
 		}
 		parent
@@ -4237,6 +4242,59 @@ mod tests {
 		}
 	}
 
+	fn collect_file_paths(root: &Path, use_gitignore: bool) -> Vec<String> {
+		WalkRequest::from_options(root, WalkOptions { use_gitignore, ..test_options() })
+			.filter(WalkFilter::files_only())
+			.collect()
+			.expect("walk should collect successfully")
+			.entries
+			.into_iter()
+			.map(|entry| entry.path)
+			.collect()
+	}
+
+	#[test]
+	fn parent_ignore_outside_repo_does_not_filter_explicit_root() {
+		let tree = temp_tree("parent-ignore-outside-repo");
+		fs::write(tree.path().join(".gitignore"), "*.nix\n")
+			.expect("parent gitignore should be written");
+		let project = tree.path().join("projects").join("home-manager");
+		fs::create_dir_all(project.join("modules").join("common"))
+			.expect("project modules should be created");
+		fs::write(project.join("flake.nix"), "flake").expect("flake should be written");
+		fs::write(project.join("modules").join("common").join("zsh.nix"), "zsh")
+			.expect("module should be written");
+
+		let paths = collect_file_paths(&project, true);
+
+		assert_eq!(
+			paths,
+			vec!["flake.nix", "modules/common/zsh.nix"],
+			"an explicit non-repo search root must not inherit ignore files from unrelated parents"
+		);
+	}
+
+	#[test]
+	fn repo_parent_ignore_still_filters_subdirectory_root() {
+		let tree = temp_tree("repo-parent-ignore");
+		fs::create_dir_all(tree.path().join(".git")).expect("repo marker should be created");
+		fs::write(tree.path().join(".gitignore"), "*.nix\n")
+			.expect("repo gitignore should be written");
+		let project = tree.path().join("projects").join("home-manager");
+		fs::create_dir_all(project.join("modules").join("common"))
+			.expect("project modules should be created");
+		fs::write(project.join("flake.nix"), "flake").expect("flake should be written");
+		fs::write(project.join("modules").join("common").join("zsh.nix"), "zsh")
+			.expect("module should be written");
+
+		let paths = collect_file_paths(&project, true);
+
+		assert!(
+			paths.is_empty(),
+			"repo-root .gitignore should still apply when walking a subdirectory root, got {paths:?}"
+		);
+	}
+
 	#[test]
 	fn walk_request_files_only_returns_relative_files_and_excludes_directories() {
 		let tree = temp_tree("request-files-only");
@@ -4517,6 +4575,73 @@ mod tests {
 		assert!(
 			!paths.iter().any(|path| path == "ignored.txt"),
 			"collect_entries should exclude .gitignore matches without a .git marker, got: {paths:?}"
+		);
+	}
+
+	#[test]
+	fn collect_entries_ignores_parent_gitignore_above_non_repo_root() {
+		let tree = temp_tree("ancestor-gitignore-non-repo-root");
+		let search_root = tree.path().join("project");
+		fs::create_dir_all(&search_root).expect("explicit search root should be created");
+		fs::write(tree.path().join(".gitignore"), "*.nix\n")
+			.expect("ancestor .gitignore should be written");
+		fs::write(search_root.join("module.nix"), "nix").expect("nix file should be written");
+		fs::write(search_root.join("kept.txt"), "keep").expect("kept file should be written");
+
+		let scan = collect_entries(
+			&search_root,
+			WalkOptions { use_gitignore: true, cache: false, ..test_options() },
+			|| Ok::<(), Infallible>(()),
+		)
+		.expect("collection should not fail");
+		let paths = scan
+			.entries
+			.into_iter()
+			.map(|entry| entry.path)
+			.collect::<Vec<_>>();
+
+		assert!(
+			paths.iter().any(|path| path == "module.nix"),
+			"ancestor .gitignore outside a non-repo explicit root should not hide module.nix, got: \
+			 {paths:?}"
+		);
+		assert!(
+			paths.iter().any(|path| path == "kept.txt"),
+			"sanity check should include kept.txt from the explicit root, got: {paths:?}"
+		);
+	}
+
+	#[test]
+	fn collect_entries_applies_repo_root_gitignore_to_subdirectory_search_root() {
+		let tree = temp_tree("repo-root-gitignore-subdir-root");
+		let search_root = tree.path().join("src");
+		fs::create_dir_all(tree.path().join(".git")).expect("repo marker should be created");
+		fs::create_dir_all(&search_root).expect("explicit search root should be created");
+		fs::write(tree.path().join(".gitignore"), "*.nix\n")
+			.expect("repo-root .gitignore should be written");
+		fs::write(search_root.join("module.nix"), "nix").expect("ignored nix file should be written");
+		fs::write(search_root.join("kept.txt"), "keep").expect("kept file should be written");
+
+		let scan = collect_entries(
+			&search_root,
+			WalkOptions { use_gitignore: true, cache: false, ..test_options() },
+			|| Ok::<(), Infallible>(()),
+		)
+		.expect("collection should not fail");
+		let paths = scan
+			.entries
+			.into_iter()
+			.map(|entry| entry.path)
+			.collect::<Vec<_>>();
+
+		assert!(
+			!paths.iter().any(|path| path == "module.nix"),
+			"repo-root .gitignore should hide module.nix when searching inside that repo, got: \
+			 {paths:?}"
+		);
+		assert!(
+			paths.iter().any(|path| path == "kept.txt"),
+			"repo subdirectory search should still include nonignored files, got: {paths:?}"
 		);
 	}
 
