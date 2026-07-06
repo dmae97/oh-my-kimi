@@ -14122,15 +14122,15 @@ export class AgentSession {
 	// =========================================================================
 
 	/**
-	 * Surfaces (and consumes) pending IRC incoming records before the next model
+	 * Surfaces and consumes pending IRC incoming records before the next model
 	 * step can inject them automatically.
 	 *
-	 * The inbox tool injects the formatted body into the tool result, so the
-	 * model sees it once via the result. Leaving the record in either pending
-	 * IRC queue would deliver it a second time at the next step boundary —
-	 * including on `peek`, which is why peek also drains here.
+	 * Tool results already expose the formatted body to the model. Leaving the
+	 * same record in either pending IRC queue would deliver it a second time at
+	 * the next step boundary — including on `peek`, which is why inbox peeks
+	 * also drain here.
 	 */
-	drainPendingIrcInboxMessages(agentId: string): IrcMessage[] {
+	drainPendingIrcInboxMessages(agentId: string, opts?: { from?: string; limit?: number }): IrcMessage[] {
 		const messages: IrcMessage[] = [];
 		const remainingInterrupts: CustomMessage[] = [];
 		const remainingAsides: CustomMessage[] = [];
@@ -14154,6 +14154,14 @@ export class AgentSession {
 				const body = Reflect.get(details, "message");
 				const replyTo = Reflect.get(details, "replyTo");
 				if (typeof id !== "string" || typeof from !== "string" || typeof body !== "string") {
+					queue.remaining.push(record);
+					continue;
+				}
+				if (opts?.from !== undefined && from !== opts.from) {
+					queue.remaining.push(record);
+					continue;
+				}
+				if (opts?.limit !== undefined && messages.length >= opts.limit) {
 					queue.remaining.push(record);
 					continue;
 				}

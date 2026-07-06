@@ -171,7 +171,7 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 			case "send":
 				return this.#executeSend(registry, senderId, params, signal);
 			case "wait":
-				return this.#executeWait(senderId, params, signal);
+				return this.#executeWait(registry, senderId, params, signal);
 			case "inbox":
 				return this.#executeInbox(registry, senderId, params);
 			default:
@@ -367,8 +367,24 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 		}
 	}
 
-	async #executeWait(senderId: string, params: IrcParams, signal?: AbortSignal): Promise<AgentToolResult<IrcDetails>> {
+	async #executeWait(
+		registry: AgentRegistry,
+		senderId: string,
+		params: IrcParams,
+		signal?: AbortSignal,
+	): Promise<AgentToolResult<IrcDetails>> {
 		const from = params.from?.trim() || undefined;
+		const session = registry.get(senderId)?.session;
+		const pending =
+			typeof session?.drainPendingIrcInboxMessages === "function"
+				? session.drainPendingIrcInboxMessages(senderId, { from, limit: 1 })[0]
+				: undefined;
+		if (pending) {
+			return {
+				content: [{ type: "text", text: formatIncoming(pending) }],
+				details: { op: "wait", from: senderId, waited: pending },
+			};
+		}
 		const timeoutMs = this.#resolveTimeoutMs(params);
 		const waited = await IrcBus.global().wait(senderId, { from }, timeoutMs, signal);
 		if (!waited) {

@@ -611,6 +611,41 @@ describe("IRC", () => {
 			expect(text).toContain("No message");
 		});
 
+		it("op=wait consumes a pending IRC aside before honoring a queued interrupt abort", async () => {
+			const { session } = createRealSession();
+			sessions.push(session);
+			Object.defineProperty(session, "isStreaming", { value: true, configurable: true });
+			registry.register({ id: "0-Running", displayName: "task", kind: "sub", session });
+
+			const delivery = await session.deliverIrcMessage({
+				id: "msg-wait-pending",
+				from: "0-Main",
+				to: "0-Running",
+				body: "queued interrupt note",
+				ts: Date.now(),
+			});
+			expect(delivery).toBe("injected");
+
+			const tool = new IrcTool(makeToolSession(registry, "0-Running"));
+			const controller = new AbortController();
+			controller.abort(new Error("queued IRC interrupt"));
+
+			const result = await tool.execute("call-1", { op: "wait", timeoutMs: 30_000 }, controller.signal);
+
+			expect(result.isError).toBeFalsy();
+			expect(result.details?.waited).toMatchObject({
+				id: "msg-wait-pending",
+				from: "0-Main",
+				to: "0-Running",
+				body: "queued interrupt note",
+			});
+			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+			expect(text).toContain("queued interrupt note");
+
+			const empty = await tool.execute("call-2", { op: "inbox" });
+			expect(empty.details?.inbox).toEqual([]);
+		});
+
 		it("op=inbox drains IRC asides that arrived while the caller was running", async () => {
 			const { session } = createRealSession();
 			sessions.push(session);
