@@ -42,6 +42,8 @@ describe("SkillMessageComponent", () => {
 		// New look: an icon-tagged "skill" header with the name and a single meta line.
 		expect(text).toContain("skill");
 		expect(text).toContain("atomic-commit");
+		expect(text).toContain("skill atomic-commit");
+		expect(text).not.toContain("skill  atomic-commit");
 		expect(text).toContain("88 lines");
 
 		// The card is drawn with an outline.
