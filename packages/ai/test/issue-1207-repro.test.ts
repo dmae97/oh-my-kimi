@@ -24,12 +24,16 @@ function abortedSignal(): AbortSignal {
 	return controller.signal;
 }
 
-async function capturePayload(model: Model<"openai-completions">, tools?: Tool[]): Promise<Record<string, unknown>> {
+async function capturePayload(
+	model: Model<"openai-completions">,
+	tools?: Tool[],
+	reasoning: "minimal" | "xhigh" = "minimal",
+): Promise<Record<string, unknown>> {
 	const { promise, resolve } = Promise.withResolvers<unknown>();
 	streamOpenAICompletions(model, contextWithTools(tools), {
 		apiKey: "test-key",
 		signal: abortedSignal(),
-		reasoning: "minimal",
+		reasoning,
 		toolChoice: "auto",
 		maxTokens: 123,
 		onPayload: payload => resolve(payload),
@@ -104,6 +108,20 @@ describe("issue #1207 — DeepSeek V4 keeps reasoning with tools", () => {
 		expect(body.reasoning_effort).toBe("high");
 		expect(body.thinking).toBeUndefined();
 		expect(body.max_tokens).toBe(123);
+	});
+
+	it("uses max_tokens for OpenCode Go DeepSeek V4 xhigh tool turns", async () => {
+		const model = getBundledModel("opencode-go", "deepseek-v4-flash") as Model<"openai-completions">;
+		const compat = model.compat;
+		const body = await capturePayload(model, undefined, "xhigh");
+
+		expect(compat.supportsToolChoice).toBe(false);
+		expect(compat.maxTokensField).toBe("max_tokens");
+		expect(body.tools).toBeDefined();
+		expect(body.tool_choice).toBeUndefined();
+		expect(body.reasoning_effort).toBe("max");
+		expect(body.max_tokens).toBe(123);
+		expect(body.max_completion_tokens).toBeUndefined();
 	});
 
 	it("preserves OpenRouter reasoning when tool_choice auto is present", async () => {

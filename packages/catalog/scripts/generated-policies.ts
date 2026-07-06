@@ -278,6 +278,7 @@ function applyGeneratedModelPolicy(model: ModelSpec<Api>): void {
 		model.compat = {
 			...(model.compat ?? {}),
 			supportsToolChoice: false,
+			maxTokensField: "max_tokens",
 			reasoningContentField: "reasoning_content",
 			requiresReasoningContentForToolCalls: true,
 		};
