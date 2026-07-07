@@ -3059,8 +3059,8 @@ export class AuthStorage {
 		sessionId: string | undefined,
 		options?: { retryAfterMs?: number; baseUrl?: string; modelId?: string; apiKey?: string; signal?: AbortSignal },
 	): Promise<UsageLimitMarkResult> {
-		let sessionCredential = this.#getSessionCredential(provider, sessionId);
-		if (!sessionCredential && options?.apiKey) {
+		let sessionCredential: { type: AuthCredential["type"]; index: number } | undefined;
+		if (options?.apiKey) {
 			const stored = this.#getStoredCredentials(provider);
 			for (let index = 0; index < stored.length; index++) {
 				const entry = stored[index];
@@ -3070,6 +3070,7 @@ export class AuthStorage {
 				}
 			}
 		}
+		sessionCredential ??= this.#getSessionCredential(provider, sessionId);
 		if (!sessionCredential) return { switched: false };
 
 		const providerKey = this.#getProviderTypeKey(provider, sessionCredential.type);
@@ -4391,7 +4392,7 @@ export class AuthStorage {
 	async rotateSessionCredential(
 		provider: string,
 		sessionId: string | undefined,
-		options?: { error?: unknown; modelId?: string; signal?: AbortSignal },
+		options?: { error?: unknown; modelId?: string; apiKey?: string; signal?: AbortSignal },
 	): Promise<boolean> {
 		const sessionCredential = this.#getSessionCredential(provider, sessionId);
 		if (!sessionCredential) return false;
@@ -4403,6 +4404,7 @@ export class AuthStorage {
 			return (
 				await this.markUsageLimitReached(provider, sessionId, {
 					modelId: options?.modelId,
+					apiKey: options?.apiKey,
 					signal: options?.signal,
 				})
 			).switched;

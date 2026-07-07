@@ -23,6 +23,8 @@ export interface ApiKeyResolveContext {
 	lastChance: boolean;
 	/** The auth error that triggered this re-resolution, or `undefined` on the initial resolve. */
 	error: unknown;
+	/** Bearer used by the failed attempt, when the caller can expose it. */
+	previousKey?: string;
 	/** Caller cancel signal, threaded into any credential refresh / rotation work. */
 	signal?: AbortSignal;
 }
@@ -87,9 +89,10 @@ export async function resolveRetryKey(
 	lastChance: boolean,
 	error: unknown,
 	signal?: AbortSignal,
+	previousKey?: string,
 ): Promise<string | undefined> {
 	try {
-		return (await resolver({ lastChance, error, signal })) || undefined;
+		return (await resolver({ lastChance, error, signal, previousKey })) || undefined;
 	} catch {
 		return undefined;
 	}
@@ -136,7 +139,7 @@ export async function withAuth<T>(
 	}
 
 	for (let i = 0; i < AUTH_RETRY_STEPS.length; i++) {
-		const nextKey = await resolveRetryKey(resolver, AUTH_RETRY_STEPS[i]!, lastError, signal);
+		const nextKey = await resolveRetryKey(resolver, AUTH_RETRY_STEPS[i]!, lastError, signal, lastKey);
 		if (nextKey === undefined || nextKey === lastKey) continue;
 		lastKey = nextKey;
 		try {

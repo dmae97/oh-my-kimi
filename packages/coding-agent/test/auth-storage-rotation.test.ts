@@ -119,4 +119,30 @@ describe("AuthStorage account rotation", () => {
 		expect(result.switched).toBe(true);
 		expect(await authStorage.getApiKey("openai-codex", sessionId)).toBe("api-acct-2");
 	});
+
+	test("usage-limit rotation trusts the failed bearer over stale session stickiness", async () => {
+		await authStorage.set("openai-codex", [
+			{
+				type: "oauth",
+				access: "plus-access",
+				refresh: "plus-refresh",
+				expires: Date.now() + 60_000,
+				accountId: "plus-acct",
+			},
+			{
+				type: "oauth",
+				access: "k12-access",
+				refresh: "k12-refresh",
+				expires: Date.now() + 60_000,
+				accountId: "k12-acct",
+			},
+		]);
+
+		const sessionId = "stale-sticky-session";
+		const stickyKey = await authStorage.getApiKey("openai-codex", sessionId);
+		const failedKey = stickyKey === "api-plus-acct" ? "k12-access" : "plus-access";
+		const result = await authStorage.markUsageLimitReached("openai-codex", sessionId, { apiKey: failedKey });
+		expect(result.switched).toBe(true);
+		expect(await authStorage.getApiKey("openai-codex", sessionId)).toBe(stickyKey);
+	});
 });
