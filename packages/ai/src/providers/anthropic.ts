@@ -3529,6 +3529,40 @@ export function convertAnthropicMessages(
 					});
 				}
 			}
+			// Anthropic's replay validator rejects any non-`tool_use` block that
+			// appears after a `tool_use` inside an assistant turn (400:
+			// "tool_use ids were found without tool_result blocks immediately
+			// after: <id>"). A persisted turn can violate this when a mid-turn
+			// server-side fallback handoff lands after the primary model already
+			// emitted a tool_use — the replayed content is then e.g.
+			// [thinking, text, tool_use, fallback, text, tool_use] — and also for
+			// the older cross-provider [text, tool_use, text] shape (issue #544).
+			// Stable-partition into [...non-tool_use, ...tool_use], preserving each
+			// side's relative order: the non-tool_use chain (thinking → text →
+			// fallback → text) carries thinking signatures and the fallback
+			// boundary marker whose order Anthropic verifies, while tool_use blocks
+			// are unsigned and safe to defer to the tail. Fast-path untouched when
+			// already in order so prompt-cache prefixes stay byte-identical.
+			let sawToolUse = false;
+			let needsPartition = false;
+			for (const block of blocks) {
+				if (block.type === "tool_use") {
+					sawToolUse = true;
+				} else if (sawToolUse) {
+					needsPartition = true;
+					break;
+				}
+			}
+			if (needsPartition) {
+				const nonToolUse: ContentBlockParam[] = [];
+				const toolUse: ContentBlockParam[] = [];
+				for (const block of blocks) {
+					if (block.type === "tool_use") toolUse.push(block);
+					else nonToolUse.push(block);
+				}
+				blocks.length = 0;
+				blocks.push(...nonToolUse, ...toolUse);
+			}
 			if (blocks.length === 0) continue;
 			params.push({
 				role: "assistant",
