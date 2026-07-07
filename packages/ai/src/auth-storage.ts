@@ -3057,9 +3057,19 @@ export class AuthStorage {
 	async markUsageLimitReached(
 		provider: string,
 		sessionId: string | undefined,
-		options?: { retryAfterMs?: number; baseUrl?: string; modelId?: string; signal?: AbortSignal },
+		options?: { retryAfterMs?: number; baseUrl?: string; modelId?: string; apiKey?: string; signal?: AbortSignal },
 	): Promise<UsageLimitMarkResult> {
-		const sessionCredential = this.#getSessionCredential(provider, sessionId);
+		let sessionCredential = this.#getSessionCredential(provider, sessionId);
+		if (!sessionCredential && options?.apiKey) {
+			const stored = this.#getStoredCredentials(provider);
+			for (let index = 0; index < stored.length; index++) {
+				const entry = stored[index];
+				if (entry && (await this.#credentialMatchesApiKey(entry.credential, options.apiKey))) {
+					sessionCredential = { type: entry.credential.type, index };
+					break;
+				}
+			}
+		}
 		if (!sessionCredential) return { switched: false };
 
 		const providerKey = this.#getProviderTypeKey(provider, sessionCredential.type);

@@ -95,4 +95,28 @@ describe("AuthStorage account rotation", () => {
 		const exhaustedFallbackKey = await authStorage.getApiKey("openai-codex", sessionId);
 		expect(exhaustedFallbackKey).toMatch(/^api-acct-/);
 	});
+
+	test("usage-limit rotation can match the failed bearer when session stickiness is missing", async () => {
+		await authStorage.set("openai-codex", [
+			{
+				type: "oauth",
+				access: "access-1",
+				refresh: "refresh-1",
+				expires: Date.now() + 60_000,
+				accountId: "acct-1",
+			},
+			{
+				type: "oauth",
+				access: "access-2",
+				refresh: "refresh-2",
+				expires: Date.now() + 60_000,
+				accountId: "acct-2",
+			},
+		]);
+
+		const sessionId = "missing-sticky-session";
+		const result = await authStorage.markUsageLimitReached("openai-codex", sessionId, { apiKey: "access-1" });
+		expect(result.switched).toBe(true);
+		expect(await authStorage.getApiKey("openai-codex", sessionId)).toBe("api-acct-2");
+	});
 });
