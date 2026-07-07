@@ -1390,12 +1390,14 @@ export class AuthStorage {
 
 		const credentialId = this.#getStoredCredentials(provider)[credentialIndex]?.id;
 		if (credentialId === undefined) return blockedUntil;
-		const persistedGlobalBlockedUntil = this.#readPersistedCredentialBlock(credentialId, providerKey, "");
-		if (
-			persistedGlobalBlockedUntil !== undefined &&
-			(blockedUntil === undefined || persistedGlobalBlockedUntil > blockedUntil)
-		) {
-			blockedUntil = persistedGlobalBlockedUntil;
+		if (!blockScope || provider !== "openai-codex") {
+			const persistedGlobalBlockedUntil = this.#readPersistedCredentialBlock(credentialId, providerKey, "");
+			if (
+				persistedGlobalBlockedUntil !== undefined &&
+				(blockedUntil === undefined || persistedGlobalBlockedUntil > blockedUntil)
+			) {
+				blockedUntil = persistedGlobalBlockedUntil;
+			}
 		}
 		if (blockScope) {
 			const persistedScopedBlockedUntil = this.#readPersistedCredentialBlock(credentialId, providerKey, blockScope);

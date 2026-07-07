@@ -1,6 +1,7 @@
 import type { OAuthAccess } from "./auth-storage";
 import * as AIError from "./error";
 import { isAuthRetryableError } from "./error/auth-classify";
+import { isUsageLimit } from "./error/flags";
 
 /**
  * Context passed to an {@link ApiKeyResolver} on each resolution attempt.
@@ -92,7 +93,8 @@ export async function resolveRetryKey(
 	previousKey?: string,
 ): Promise<string | undefined> {
 	try {
-		return (await resolver({ lastChance, error, signal, previousKey })) || undefined;
+		const rotateSibling = lastChance || (!lastChance && isUsageLimit(error));
+		return (await resolver({ lastChance: rotateSibling, error, signal, previousKey })) || undefined;
 	} catch {
 		return undefined;
 	}

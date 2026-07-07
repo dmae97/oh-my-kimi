@@ -505,6 +505,9 @@ export const openaiCodexUsageProvider: UsageProvider = {
 const FIVE_HOUR_MS = 5 * 60 * 60 * 1000;
 
 export const codexRankingStrategy: CredentialRankingStrategy = {
+	blockScope() {
+		return "shared";
+	},
 	findWindowLimits(report) {
 		const findLimit = (key: "primary" | "secondary"): UsageLimit | undefined => {
 			const direct = report.limits.find(l => l.id === `openai-codex:${key}`);

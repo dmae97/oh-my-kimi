@@ -643,6 +643,52 @@ describe("AuthStorage codex oauth ranking", () => {
 
 		expect(await authStorage.getApiKey("openai-codex", sessionId)).toBe("api-acct-plus");
 	});
+
+	test("ignores legacy global Codex blocks when a scoped quota window has fresh siblings", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+		await authStorage.set("openai-codex", [
+			{ type: "oauth", ...createCredential("acct-k12", "k12@example.com") },
+			{ type: "oauth", ...createCredential("acct-plus", "plus@example.com") },
+		]);
+		usageByAccount.set(
+			"acct-k12",
+			createCodexUsageReport({
+				accountId: "acct-k12",
+				primary: { usedFraction: 1, resetInMs: FIVE_HOUR_MS },
+				secondary: { usedFraction: 1, resetInMs: WEEK_MS },
+			}),
+		);
+		usageByAccount.set(
+			"acct-plus",
+			createCodexUsageReport({
+				accountId: "acct-plus",
+				primary: { usedFraction: 0.2, resetInMs: FIVE_HOUR_MS },
+				secondary: { usedFraction: 0.74, resetInMs: WEEK_MS },
+			}),
+		);
+		const plus = store
+			.listAuthCredentials("openai-codex")
+			.find(row => row.credential.type === "oauth" && row.credential.accountId === "acct-plus");
+		if (!plus || !store.upsertCredentialBlock) throw new Error("missing plus credential row");
+		store.upsertCredentialBlock({
+			credentialId: plus.id,
+			providerKey: "openai-codex:oauth",
+			blockScope: "",
+			blockedUntilMs: Date.now() + WEEK_MS,
+		});
+		const k12 = store
+			.listAuthCredentials("openai-codex")
+			.find(row => row.credential.type === "oauth" && row.credential.accountId === "acct-k12");
+		if (!k12 || !store.upsertCredentialBlock) throw new Error("missing k12 credential row");
+		store.upsertCredentialBlock({
+			credentialId: k12.id,
+			providerKey: "openai-codex:oauth",
+			blockScope: "shared",
+			blockedUntilMs: Date.now() + HOUR_MS,
+		});
+
+		expect(await authStorage.getApiKey("openai-codex", "session-with-legacy-global-block")).toBe("api-acct-plus");
+	});
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
