@@ -3398,12 +3398,21 @@ export class AuthStorage {
 		const checkUsage = strategy !== undefined && (credentials.length > 1 || requiresProModel);
 		const sessionCredential = this.#getSessionCredential(provider, sessionId);
 		const sessionPreferredIndex = sessionCredential?.type === "oauth" ? sessionCredential.index : undefined;
+		const sessionPreferredCredential =
+			sessionPreferredIndex !== undefined
+				? credentials.find(entry => entry.index === sessionPreferredIndex)?.credential
+				: undefined;
+		const sessionPreferredCanRefreshOrUse =
+			sessionPreferredCredential !== undefined &&
+			(sessionPreferredCredential.refresh.trim().length > 0 ||
+				Date.now() + OAUTH_REFRESH_SKEW_MS < sessionPreferredCredential.expires);
 		// Skip ranking only when the session already has a working preferred credential — re-ranking
 		// mid-session causes account switches that cold-start the server-side prompt cache. New sessions
 		// (no preference) and sessions whose preferred is blocked still rank, so we pick the account
 		// with the most headroom proactively and fall back intelligently when rate-limited.
 		const sessionPreferredIsAvailable =
 			sessionPreferredIndex !== undefined &&
+			sessionPreferredCanRefreshOrUse &&
 			!this.#isCredentialBlocked(provider, providerKey, sessionPreferredIndex, blockScope);
 		const shouldRank = checkUsage && (!sessionPreferredIsAvailable || requiresProModel);
 		const rankingOrder = shouldRank && sessionId ? credentials.map((_credential, index) => index) : order;
