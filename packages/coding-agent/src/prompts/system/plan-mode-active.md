@@ -1,7 +1,10 @@
 <critical>
-Plan mode is active. You MUST perform READ-ONLY work only:
-- You NEVER create, edit, or delete files — except the single plan file named below.
+Plan mode is active. You MUST preserve read-only working-tree and system semantics:
+- You NEVER create, edit, delete, or rename working-tree files.
 - You NEVER run state-changing commands (`git commit`, `npm install`, migrations) or make any other system change.
+- `local://` artifacts are session-local planning artifacts. You MAY create or update them when explicitly requested or needed for the plan.
+- You NEVER delete or rename `local://` artifacts.
+- You MUST write the canonical plan to `local://<slug>-plan.md`.
 
 To leave plan mode and implement: call `resolve` with `action: "apply"`, a `reason`, and `extra: { title: "<slug>" }`, where `<slug>` matches your `local://<slug>-plan.md`. The user then picks an execution option and full write access is restored. `<slug>` may contain only letters, numbers, underscores, and hyphens.
 

@@ -415,6 +415,61 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(await Bun.file(resolvedPlanPath).text()).toContain("edited body");
 	});
 
+	it("carries pre-approval local artifacts into the fresh approve-and-execute session", async () => {
+		const planFilePath = "local://handoff-plan.md";
+		const localOptions = {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		};
+		const oldLocalRoot = resolveLocalUrlToPath("local://", localOptions);
+		const oldPlanPath = resolveLocalUrlToPath(planFilePath, localOptions);
+		const oldArtifactPath = resolveLocalUrlToPath("local://handoff/nested/context.txt", localOptions);
+		await fs.mkdir(path.dirname(oldArtifactPath), { recursive: true });
+		await Bun.write(oldArtifactPath, "pre-approval handoff");
+		await Bun.write(oldPlanPath, "# Plan\n\noriginal body\n");
+
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		const planContent = "# Plan\n\nfinal approved body\n";
+		vi.spyOn(mode, "showPlanReview").mockImplementation(async (_plan, _title, _options, dialogOptions) => {
+			dialogOptions?.onPlanEdited?.(planContent);
+			return "Approve and execute";
+		});
+		vi.spyOn(mode, "handleClearCommand").mockImplementation(async () => {
+			await session.sessionManager.newSession();
+		});
+		let artifactAtPrompt = "";
+		let planAtPrompt = "";
+		const prompt = vi.spyOn(session, "prompt").mockImplementation(async () => {
+			const promptArtifactPath = resolveLocalUrlToPath("local://handoff/nested/context.txt", localOptions);
+			const promptPlanPath = resolveLocalUrlToPath(planFilePath, localOptions);
+			artifactAtPrompt = (await Bun.file(promptArtifactPath).exists())
+				? await Bun.file(promptArtifactPath).text()
+				: "<missing>";
+			planAtPrompt = (await Bun.file(promptPlanPath).exists()) ? await Bun.file(promptPlanPath).text() : "<missing>";
+			return undefined as never;
+		});
+
+		expect(await Bun.file(oldArtifactPath).text()).toBe("pre-approval handoff");
+
+		await mode.handlePlanApproval({
+			planFilePath,
+			planExists: true,
+			title: "HANDOFF",
+		});
+
+		const newLocalRoot = resolveLocalUrlToPath("local://", localOptions);
+		const newArtifactPath = resolveLocalUrlToPath("local://handoff/nested/context.txt", localOptions);
+		const newPlanPath = resolveLocalUrlToPath(planFilePath, localOptions);
+		expect(newLocalRoot).not.toBe(oldLocalRoot);
+		expect(await Bun.file(newArtifactPath).text()).toBe("pre-approval handoff");
+		expect(await Bun.file(newPlanPath).text()).toBe(planContent);
+		expect(artifactAtPrompt).toBe("pre-approval handoff");
+		expect(planAtPrompt).toBe(planContent);
+		expect(await Bun.file(oldArtifactPath).text()).toBe("pre-approval handoff");
+		expect(prompt).toHaveBeenCalledWith(expect.any(String), { synthetic: true });
+	});
+
 	it("offers approve-and-keep-context as a distinct plan approval path", async () => {
 		const planFilePath = "local://PLAN.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
