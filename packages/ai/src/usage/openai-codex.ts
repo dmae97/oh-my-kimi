@@ -285,8 +285,6 @@ function buildUsageLimit(args: {
 		label: usageWindow.label,
 		scope: {
 			provider: "openai-codex",
-			accountId: args.accountId,
-			tier: args.planType,
 			windowId: usageWindow.id,
 			shared: true,
 		},
