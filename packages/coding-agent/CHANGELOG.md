@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.12] - 2026-07-08
+
 ### Added
 
 - Added per-advisor on/off toggle (`enabled: false` in `WATCHDOG.yml`): advisors stay in the roster but their runtime is never built — they show `○` in the status line and `/advisor status` rather than disappearing. Existing configs are backward-compatible (defaults to `true` when absent).

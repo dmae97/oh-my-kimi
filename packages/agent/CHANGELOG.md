@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.12] - 2026-07-08
+
 ### Added
 
 - Added per-tool abort metadata so stream-wide aborts can label matching tool-call placeholders separately from unaffected sibling calls ([#2783](https://github.com/can1357/oh-my-pi/issues/2783)).

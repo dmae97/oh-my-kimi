@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "@oh-my-pi/pi-utils",
-  "version": "16.3.11",
+  "version": "16.3.12",
   "description": "Shared utilities for pi packages",
   "homepage": "https://omp.sh",
   "author": "Can Boluk",
