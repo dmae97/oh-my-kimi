@@ -3036,6 +3036,10 @@ type LiteLLMRichEndpointModel<TApi extends Api> = {
 	model: ModelSpec<TApi>;
 	supportsVision: unknown;
 	supportsReasoning: unknown;
+	hasContextWindow: boolean;
+	hasMaxTokens: boolean;
+	hasToolMetadata: boolean;
+	hasSupportedOpenAIParams: boolean;
 };
 
 const LITELLM_RICH_ENDPOINTS = ["/model_group/info", "/v2/model/info", "/model/info", "/v1/model/info"] as const;
@@ -3307,13 +3311,23 @@ async function fetchLiteLLMRichEndpoint<TApi extends Api>(
 		const model = mapLiteLLMRichEntry(entry, options, runtimeBaseUrl);
 		if (model) {
 			const supportsVision = getLiteLLMMetadataValue(entry, "supports_vision");
+			const supportsReasoning = getLiteLLMMetadataValue(entry, "supports_reasoning");
+			const supportsFunctionCalling = getLiteLLMMetadataValue(entry, "supports_function_calling");
+			const supportedOpenAIParams = getSupportedOpenAIParams(entry);
 			if (supportsVision !== true && supportsVision !== false) {
 				incompleteVisionMetadata = true;
 			}
 			deduped.set(model.id, {
 				model,
 				supportsVision,
-				supportsReasoning: getLiteLLMMetadataValue(entry, "supports_reasoning"),
+				supportsReasoning,
+				hasContextWindow: toPositiveNumber(getLiteLLMMetadataValue(entry, "max_input_tokens"), null) !== null,
+				hasMaxTokens: toPositiveNumber(getLiteLLMMetadataValue(entry, "max_output_tokens"), null) !== null,
+				hasToolMetadata:
+					supportsFunctionCalling === true ||
+					supportsFunctionCalling === false ||
+					supportedOpenAIParams !== undefined,
+				hasSupportedOpenAIParams: supportedOpenAIParams !== undefined,
 			});
 		}
 	}
@@ -3341,25 +3355,40 @@ export async function fetchLiteLLMRichModels<TApi extends Api>(
 			if (!result) {
 				continue;
 			}
+			const hadPriorModels = deduped.size > 0;
 			for (const next of result.models) {
 				const existing = deduped.get(next.model.id);
 				if (!existing) {
-					deduped.set(next.model.id, next);
+					if (!hadPriorModels) {
+						deduped.set(next.model.id, next);
+					}
 					continue;
 				}
-				const model = {
+				const model: ModelSpec<TApi> = {
 					...existing.model,
-					...next.model,
 					name: next.model.name === next.model.id ? existing.model.name : next.model.name,
+					contextWindow: next.hasContextWindow ? next.model.contextWindow : existing.model.contextWindow,
+					maxTokens: next.hasMaxTokens ? next.model.maxTokens : existing.model.maxTokens,
 					input:
 						next.supportsVision === true || next.supportsVision === false
 							? next.model.input
 							: existing.model.input,
 					reasoning: typeof next.supportsReasoning === "boolean" ? next.model.reasoning : existing.model.reasoning,
+					compat: next.hasSupportedOpenAIParams ? next.model.compat : existing.model.compat,
 				};
+				if (next.hasToolMetadata) {
+					model.supportsTools = next.model.supportsTools;
+				}
 				deduped.set(next.model.id, { ...next, model });
 			}
-			if (!result.incompleteVisionMetadata) {
+			let hasIncompleteVisionMetadata = false;
+			for (const entry of deduped.values()) {
+				if (entry.supportsVision !== true && entry.supportsVision !== false) {
+					hasIncompleteVisionMetadata = true;
+					break;
+				}
+			}
+			if (!hasIncompleteVisionMetadata) {
 				break;
 			}
 		}

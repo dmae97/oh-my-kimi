@@ -490,14 +490,16 @@ describe("LiteLLM provider discovery", () => {
 						{
 							model_group: "vision-proxy-model",
 							model_name: "Vision Proxy Model",
-							max_input_tokens: 128_000,
-							max_output_tokens: 16_000,
+							max_input_tokens: 64_000,
+							max_output_tokens: 8_000,
 						},
 					],
 				});
 			}
 			if (url === "http://primary:4000/v2/model/info") {
-				return new Response("{}", { status: 404 });
+				return Response.json({
+					data: [{ model_name: "unrelated-v2-model", model_info: { supports_vision: false } }],
+				});
 			}
 			if (url === "http://primary:4000/model/info") {
 				return Response.json({
@@ -506,8 +508,6 @@ describe("LiteLLM provider discovery", () => {
 						{
 							model_name: "vision-proxy-model",
 							model_info: {
-								max_input_tokens: 128_000,
-								max_output_tokens: 16_000,
 								supports_vision: true,
 							},
 						},
@@ -531,12 +531,13 @@ describe("LiteLLM provider discovery", () => {
 		expect(calls).toContain("http://primary:4000/v2/model/info");
 		expect(calls).toContain("http://primary:4000/model/info");
 		expect(calls).not.toContain("http://primary:4000/v1/models");
+		expect(models).toHaveLength(1);
 		expect(models?.find(model => model.id === "vision-proxy-model")).toMatchObject({
 			id: "vision-proxy-model",
 			name: "Vision Proxy Model",
 			input: ["text", "image"],
-			contextWindow: 128_000,
-			maxTokens: 16_000,
+			contextWindow: 64_000,
+			maxTokens: 8_000,
 		});
 	});
 
