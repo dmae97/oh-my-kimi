@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `postmortem.interceptUnhandledRejections()` to register interceptors consulted before an unhandled rejection tears the process down; a consuming interceptor (e.g. the JS eval runtime claiming rejections floated by user cell code) keeps the process alive and owns reporting.
+
 ## [16.3.10] - 2026-07-06
 
 ### Added
