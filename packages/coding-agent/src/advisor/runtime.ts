@@ -111,10 +111,12 @@ export class AdvisorRuntime {
 	#epoch = 0;
 	disposed = false;
 	/** Quota/rate-limit pause state. When `true`, the advisor stops processing
-	 *  turns until {@link #QUOTA_COOLDOWN_MS} elapses, then auto-resumes. */
+	 *  turns and drops new deltas until an explicit {@link reset} clears it
+	 *  (triggered by `/new`, config rebuild, or session restart). There is no
+	 *  timer-based auto-resume: provider quota windows (5h/7d) are far longer
+	 *  than any reasonable timer, and premature retries waste calls and
+	 *  re-trigger the same error. */
 	#quotaExhausted = false;
-	#quotaExhaustedAt = 0;
-	static readonly #QUOTA_COOLDOWN_MS = 5 * 60 * 1000;
 
 	constructor(
 		private readonly agent: AdvisorAgent,
@@ -133,18 +135,7 @@ export class AdvisorRuntime {
 	}
 
 	onTurnEnd(messages?: AgentMessage[]): void {
-		if (this.disposed) return;
-		// Auto-resume after quota cooldown: clear the pause state and let the
-		// advisor process this turn normally. The quota window is assumed to
-		// have reset after the cooldown elapses.
-		if (this.#quotaExhausted) {
-			if (Date.now() - this.#quotaExhaustedAt >= AdvisorRuntime.#QUOTA_COOLDOWN_MS) {
-				this.#quotaExhausted = false;
-				logger.info("advisor quota cooldown elapsed, resuming");
-			} else {
-				return;
-			}
-		}
+		if (this.disposed || this.#quotaExhausted) return;
 		const all = messages ?? this.host.snapshotMessages();
 		this.#latestMessages = all;
 		const render = this.#renderDelta(all);
@@ -407,7 +398,6 @@ export class AdvisorRuntime {
 							logger.debug("advisor onTurnError hook failed", { err: String(hookErr) });
 						}
 						this.#quotaExhausted = true;
-						this.#quotaExhaustedAt = Date.now();
 						this.#consecutiveFailures = 0;
 						this.#failureNotified = false;
 						this.#seenContext.clear();

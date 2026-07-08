@@ -377,6 +377,10 @@ export class CommandController {
 				// Network/auth failure is non-fatal — just skip the quota line.
 			}
 		}
+		// Resolve the active OAuth identity for each advisor's provider so quota
+		// filtering matches the credential actually in use (not sibling accounts).
+		const resolveActiveAdvisorAccount = (provider: string): OAuthAccountIdentity | undefined =>
+			this.ctx.session.modelRegistry.authStorage.getOAuthAccountIdentity(provider, this.ctx.session.sessionId);
 		const nowMs = Date.now();
 		// Roster view: show every configured advisor with its status, even when
 		// none are live (all paused/no-model). The old code returned a generic
@@ -397,7 +401,12 @@ export class CommandController {
 					info += `${theme.fg("dim", "Model:")} ${a.model.provider}/${a.model.id}\n`;
 				}
 				if (a.model && usageReports) {
-					const quota = formatCompactQuota(a.model.provider, usageReports, nowMs);
+					const quota = formatCompactQuota(
+						a.model.provider,
+						usageReports,
+						nowMs,
+						resolveActiveAdvisorAccount(a.model.provider),
+					);
 					if (quota) info += `${theme.fg("dim", quota)}\n`;
 				}
 				if (a.status === "running" || a.status === "quota_exhausted") {
@@ -434,7 +443,12 @@ export class CommandController {
 			info += `${theme.fg("dim", "Model:")} ${model.provider}/${model.id}\n`;
 		}
 		if (model && usageReports) {
-			const quota = formatCompactQuota(model.provider, usageReports, nowMs);
+			const quota = formatCompactQuota(
+				model.provider,
+				usageReports,
+				nowMs,
+				resolveActiveAdvisorAccount(model.provider),
+			);
 			if (quota) {
 				info += `\n${theme.bold("Quota")}\n`;
 				info += `${theme.fg("dim", quota)}\n`;
@@ -1572,9 +1586,16 @@ function resolveResetRange(limits: UsageLimit[], nowMs: number): string | null {
 /**
  * Compact one-line quota summary for a single advisor's provider.
  * Returns `null` when the provider has no usage data.
+ * When `activeAccount` is provided, only limits matching that credential
+ * are shown (mirrors `renderUsageReports`'s account-stickiness filtering).
  * Example output: `Quota: 7d window · 67% used · resets in 3.2d`
  */
-export function formatCompactQuota(provider: string, reports: UsageReport[], nowMs: number): string | null {
+export function formatCompactQuota(
+	provider: string,
+	reports: UsageReport[],
+	nowMs: number,
+	activeAccount?: OAuthAccountIdentity,
+): string | null {
 	const providerReports = reports.filter(r => r.provider === provider);
 	if (providerReports.length === 0) return null;
 	// Group limits by window id so we show BOTH the 5-hour and 7-day windows
@@ -1583,6 +1604,10 @@ export function formatCompactQuota(provider: string, reports: UsageReport[], now
 	const byWindow = new Map<string, { limit: UsageLimit; fraction: number }>();
 	for (const report of providerReports) {
 		for (const limit of report.limits) {
+			// Skip limits that belong to a different credential than the one
+			// the advisor is actually using, so we don't alarm the user with
+			// an exhausted account that isn't theirs.
+			if (activeAccount && !limitMatchesActiveAccount(report, limit, activeAccount)) continue;
 			const fraction = resolveUsedFraction(limit);
 			if (fraction === undefined) continue;
 			const key = limit.window?.id ?? limit.scope.windowId ?? "—";
