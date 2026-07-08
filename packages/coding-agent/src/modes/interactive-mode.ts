@@ -2602,6 +2602,49 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
+	#resolveLocalRoot(): string {
+		return resolveLocalUrlToPath("local://", {
+			getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
+			getSessionId: () => this.sessionManager.getSessionId(),
+		});
+	}
+
+	async #copyLocalArtifactsForFreshSession(sourceRoot: string, destinationRoot: string): Promise<void> {
+		if (sourceRoot === destinationRoot) return;
+
+		let sourceRootStat: { isDirectory(): boolean };
+		try {
+			sourceRootStat = await fs.lstat(sourceRoot);
+		} catch (error) {
+			if (isEnoent(error)) return;
+			throw error;
+		}
+
+		if (!sourceRootStat.isDirectory()) return;
+
+		await fs.mkdir(destinationRoot, { recursive: true });
+		await this.#copyLocalArtifactEntries(sourceRoot, destinationRoot);
+	}
+
+	async #copyLocalArtifactEntries(sourceDir: string, destinationDir: string): Promise<void> {
+		const entries = await fs.readdir(sourceDir, { withFileTypes: true });
+		for (const entry of entries) {
+			const sourcePath = path.join(sourceDir, entry.name);
+			const destinationPath = path.join(destinationDir, entry.name);
+
+			if (entry.isDirectory()) {
+				await fs.mkdir(destinationPath, { recursive: true });
+				await this.#copyLocalArtifactEntries(sourcePath, destinationPath);
+				continue;
+			}
+
+			if (entry.isFile()) {
+				await fs.mkdir(path.dirname(destinationPath), { recursive: true });
+				await fs.copyFile(sourcePath, destinationPath);
+			}
+		}
+	}
+
 	async #approvePlan(
 		planContent: string,
 		options: {
@@ -2632,14 +2675,16 @@ export class InteractiveMode implements InteractiveModeContext {
 			});
 
 			if (!options.preserveContext) {
+				const oldLocalRoot = this.#resolveLocalRoot();
 				await this.handleClearCommand();
-				// The new session has a fresh local:// root — persist the approved plan there
-				// so `local://<slug>-plan.md` resolves correctly in the execution session.
+				const newLocalRoot = this.#resolveLocalRoot();
+				await this.#copyLocalArtifactsForFreshSession(oldLocalRoot, newLocalRoot);
 				const newLocalPath = resolveLocalUrlToPath(options.planFilePath, {
 					getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
 					getSessionId: () => this.sessionManager.getSessionId(),
 				});
-				await Bun.write(newLocalPath, planContent);
+				await fs.mkdir(path.dirname(newLocalPath), { recursive: true });
+				await fs.writeFile(newLocalPath, planContent);
 			} else if (options.compactBeforeExecute) {
 				// Distill the plan-mode transcript before the execution turn is queued so
 				// the plan-approved synthetic prompt lands as a fresh cache anchor.

@@ -22,6 +22,7 @@
 
 - Fixed bash internal-URL expansion so unresolved literal `memory://` / `skill://` text stays verbatim instead of aborting command execution ([#4737](https://github.com/can1357/oh-my-pi/issues/4737)).
 - Fixed `agent://<id>` (and the `output()` eval helper) failing with `Not found` for a subagent spawned by another subagent (any spawn chain 2+ levels deep). `artifactsDirsFromRegistry` scanned only each ref's adopted (root-wide) `ArtifactManager` dir, but a subagent's own children are written one level deeper under its `sessionFile`-derived dir — so a live, addressable nested peer's output was unresolvable. The resolver now collects both candidate dirs per registered agent. ([#4650](https://github.com/can1357/oh-my-pi/issues/4650))
+- Fixed plan mode to document `local://` artifacts as writable session-local planning files and to carry every pre-approval `local://` artifact into the fresh session created by Approve and Execute.
 
 ## [16.3.11] - 2026-07-06
 
