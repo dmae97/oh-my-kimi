@@ -288,7 +288,7 @@ describe("tool schema validation (post-sanitization)", () => {
 		expect(description).toContain("pr://123");
 	});
 
-	it("bash schema and prompt advertise the timeout clamp", async () => {
+	it("bash schema and prompt advertise the timeout clamp and zero-disable", async () => {
 		const session = createTestSession();
 		session.settings.set("async.enabled", true);
 		const tools = await createTools(session);
@@ -302,8 +302,9 @@ describe("tool schema validation (post-sanitization)", () => {
 
 		expect(timeoutDescription).toContain("clamped");
 		expect(timeoutDescription).toContain("1-3600");
-		expect(bashTool.description).toContain("clamped to `1..3600`");
-		expect(bashTool.description).toContain("does NOT extend the timeout");
+		expect(timeoutDescription).toContain("0 disables the command deadline");
+		expect(bashTool.description).toContain("nonzero values are clamped to `1..3600`");
+		expect(bashTool.description).toContain("does NOT extend a nonzero timeout");
 	});
 
 	it("hidden tools also have valid sanitized schemas", async () => {
