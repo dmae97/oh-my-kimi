@@ -5,6 +5,8 @@
 ### Fixed
 
 - Fixed LiteLLM discovery stopping at `/model_group/info` when that endpoint omitted `supports_vision`; it now continues to `/model/info` and preserves `model_info.supports_vision=true` for vision-capable proxy models. ([#4747](https://github.com/can1357/oh-my-pi/issues/4747))
+- Fixed LiteLLM discovery to fall back to bundled catalog metadata when `models.dev` lacks a model reference, preserving reasoning and thinking support for models such as `glm-5.2`. ([#4695](https://github.com/can1357/oh-my-pi/issues/4695))
+- Detected Azure AI Inference / Foundry Anthropic routes as strict-tool-incompatible so resolved Anthropic compat disables strict tools before request construction ([#4679](https://github.com/can1357/oh-my-pi/issues/4679)).
 
 ## [16.3.11] - 2026-07-06
 
@@ -18,18 +20,12 @@
 - Updated naming format for various synthetic models to include provider prefix
 - Adjusted context window limit for MiniMax-M3 model
 - Updated pricing for select models
-### Fixed
-
-- Fixed LiteLLM discovery to fall back to bundled catalog metadata when `models.dev` lacks a model reference, preserving reasoning and thinking support for models such as `glm-5.2`. ([#4695](https://github.com/can1357/oh-my-pi/issues/4695))
 
 ## [16.3.10] - 2026-07-06
 
 ### Fixed
 
 - Fixed LiteLLM rich discovery to ignore unusable sentinel placeholders and continue to `/v2/model/info` for real models. ([#4655](https://github.com/can1357/oh-my-pi/issues/4655))
-### Fixed
-
-- Detected Azure AI Inference / Foundry Anthropic routes as strict-tool-incompatible so resolved Anthropic compat disables strict tools before request construction ([#4679](https://github.com/can1357/oh-my-pi/issues/4679)).
 
 ## [16.3.9] - 2026-07-06
 

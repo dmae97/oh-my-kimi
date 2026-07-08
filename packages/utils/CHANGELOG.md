@@ -5,6 +5,7 @@
 ### Added
 
 - Added `postmortem.interceptUnhandledRejections()` to register interceptors consulted before an unhandled rejection tears the process down; a consuming interceptor (e.g. the JS eval runtime claiming rejections floated by user cell code) keeps the process alive and owns reporting.
+
 ### Fixed
 
 - Fixed child shell environment filtering to drop launch-directory `.env.local` values that Bun auto-loaded before OMP starts command shells. ([#4723](https://github.com/can1357/oh-my-pi/issues/4723))
