@@ -1106,7 +1106,13 @@ export function streamSimple<TApi extends Api>(
 				// Caller aborted between attempts: don't mint a fresh token or fire
 				// another doomed request — emit the captured failure instead.
 				if (signal?.aborted) break;
-				const nextKey = await resolveRetryKey(apiKeyResolver, AUTH_RETRY_STEPS[step]!, failure.error, signal);
+				const nextKey = await resolveRetryKey(
+					apiKeyResolver,
+					AUTH_RETRY_STEPS[step]!,
+					failure.error,
+					signal,
+					lastKey,
+				);
 				if (nextKey === undefined || nextKey === lastKey) continue;
 				lastKey = nextKey;
 				const isLastStep = step === AUTH_RETRY_STEPS.length - 1;
