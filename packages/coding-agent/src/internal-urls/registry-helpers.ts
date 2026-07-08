@@ -20,11 +20,13 @@ export function resetRegisteredArtifactDirsForTests(): void {
 /**
  * Snapshot of artifacts dirs for every registered session, deduped.
  *
- * Prefers `sessionManager.getArtifactsDir()` because subagents adopt their
- * parent's `ArtifactManager` and report the parent's dir there; dedup then
- * collapses parent + N subagents (the whole agent tree) to one entry. Falls
- * back to the raw session file (with the `.jsonl` suffix stripped) when no
- * live session reference is attached.
+ * Collects TWO candidate dirs per ref, because a subagent reads from its
+ * adopted (root-wide) `ArtifactManager.dir` but its own children are written
+ * one level deeper, under `sessionFile.slice(0, -6)` (`task/index.ts`). A
+ * depth-2+ subagent's output therefore lives in the write-time dir, not the
+ * adopted one, so `agent://` must scan both or it 404s a live nested peer.
+ * `addDir` dedup collapses the depth-0 case (both formulas agree) back to a
+ * single entry.
  */
 export function artifactsDirsFromRegistry(): string[] {
 	const dirs: string[] = [];
@@ -33,7 +35,8 @@ export function artifactsDirsFromRegistry(): string[] {
 		if (!dirs.includes(dir)) dirs.push(dir);
 	};
 	for (const ref of AgentRegistry.global().list()) {
-		addDir(ref.session?.sessionManager.getArtifactsDir() ?? (ref.sessionFile ? ref.sessionFile.slice(0, -6) : null));
+		addDir(ref.session?.sessionManager.getArtifactsDir());
+		if (ref.sessionFile) addDir(ref.sessionFile.slice(0, -6));
 	}
 	for (const dir of extraArtifactsDirs) addDir(dir);
 	return dirs;
