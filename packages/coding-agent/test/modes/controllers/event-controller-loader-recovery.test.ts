@@ -32,6 +32,9 @@ function createContext(options: { terminalProgress?: boolean } = {}) {
 		clear() {
 			children.length = 0;
 		},
+		disposeChildren() {
+			children.length = 0;
+		},
 		addChild(child: unknown) {
 			children.push(child);
 		},

@@ -765,8 +765,8 @@ describe("AuthStorage OAuth login upgrade and multi-account coexistence", () => 
 			});
 
 			expect(authStorage.listStoredCredentials("nvidia").map(entry => entry.credential)).toEqual([
-				{ type: "api_key", key: "nvapi-first" },
-				{ type: "api_key", key: "nvapi-second" },
+				{ type: "api_key", key: "nvapi-first", source: "login" },
+				{ type: "api_key", key: "nvapi-second", source: "login" },
 			]);
 
 			const selectedKeys = new Set<string>();

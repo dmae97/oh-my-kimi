@@ -27,7 +27,7 @@ function createContext() {
 		retryLoader: undefined,
 		streamingComponent: undefined,
 		streamingMessage: undefined,
-		statusContainer: { clear: vi.fn() },
+		statusContainer: { clear: vi.fn(), disposeChildren: vi.fn() },
 		chatContainer: { removeChild: vi.fn() },
 		flushPendingModelSwitch: vi.fn(async () => {}),
 		editor: { getText: () => "" },
