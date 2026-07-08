@@ -29,15 +29,20 @@ export const DEFAULT_VIEWPORT = { width: 1365, height: 768, deviceScaleFactor: 1
  * connection dropped, etc.).
  */
 export const BROWSER_PROTOCOL_TIMEOUT_MS = 60_000;
+const ENABLE_AUTOMATION_FLAG = "--enable-automation";
 // Automation-tell launch flags that puppeteer-core adds by default. We suppress
 // them via `ignoreDefaultArgs` (the supported escape hatch) to mirror xxxx's
-// chromiumSwitches patch. `--enable-automation` is the loudest: it sets
+// chromiumSwitches patch. `--enable-automation` is the loudest: it normally sets
 // navigator.webdriver=true and shows the "controlled by automated software" infobar.
+// Edge is the launch-stability exception: it can exit before CDP opens when this
+// default flag is stripped, so Edge keeps Puppeteer's flag while our explicit
+// `--disable-blink-features=AutomationControlled` launch arg still handles
+// navigator.webdriver.
 // `ignoreDefaultArgs` does exact-string matching, so each entry must be a flag that
 // puppeteer emits verbatim. The default `--disable-features=...` string can't be
 // matched this way; it is neutralized in the puppeteer-core patch (ChromeLauncher).
 const STEALTH_IGNORE_DEFAULT_ARGS = [
-	"--enable-automation",
+	ENABLE_AUTOMATION_FLAG,
 	"--disable-extensions",
 	"--disable-default-apps",
 	"--disable-component-extensions-with-background-pages",
@@ -47,6 +52,23 @@ const STEALTH_IGNORE_DEFAULT_ARGS = [
 	"--disable-ipc-flooding-protection",
 	"--metrics-recording-only",
 ];
+
+function isMicrosoftEdgeExecutable(executablePath: string | undefined): boolean {
+	if (!executablePath) return false;
+	const normalizedPath = executablePath.replaceAll("\\", "/").toLowerCase();
+	const executableName = normalizedPath.slice(normalizedPath.lastIndexOf("/") + 1);
+	return (
+		executableName === "msedge.exe" ||
+		executableName === "microsoft edge" ||
+		executableName.startsWith("microsoft-edge")
+	);
+}
+
+function stealthIgnoreDefaultArgs(executablePath: string | undefined): string[] {
+	if (!isMicrosoftEdgeExecutable(executablePath)) return [...STEALTH_IGNORE_DEFAULT_ARGS];
+	return STEALTH_IGNORE_DEFAULT_ARGS.filter(arg => arg !== ENABLE_AUTOMATION_FLAG);
+}
+
 const STEALTH_ACCEPT_LANGUAGE = "en-US,en";
 
 const USER_AGENT_TARGET_TIMEOUT_MS = 5_000;
@@ -282,12 +304,13 @@ export async function launchHeadlessBrowser(opts: LaunchHeadlessOptions): Promis
 	if (ignoreCert === "true" || ignoreCert === "1" || ignoreCert === "yes" || ignoreCert === "on") {
 		launchArgs.push("--ignore-certificate-errors");
 	}
+	const executablePath = await ensureChromiumExecutable();
 	return await puppeteer.launch({
 		headless: opts.headless,
 		defaultViewport: opts.headless ? initialViewport : null,
-		executablePath: await ensureChromiumExecutable(),
+		executablePath,
 		args: launchArgs,
-		ignoreDefaultArgs: [...STEALTH_IGNORE_DEFAULT_ARGS],
+		ignoreDefaultArgs: stealthIgnoreDefaultArgs(executablePath),
 		protocolTimeout: BROWSER_PROTOCOL_TIMEOUT_MS,
 	});
 }
@@ -735,6 +758,10 @@ export async function applyStealthPatches(
 	await configureUserAgentTargets(browser, targetState);
 	state.browserSession = targetState.browserSession;
 	await injectStealthScripts(page);
+}
+
+export function stealthIgnoreDefaultArgsForTest(executablePath: string | undefined): string[] {
+	return stealthIgnoreDefaultArgs(executablePath);
 }
 
 export function targetSupportsUserAgentOverrideForTest(target: Target): boolean {
