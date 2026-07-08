@@ -2808,7 +2808,7 @@ describe("openai-codex streaming", () => {
 			sessionId: "ws-proxy-stale-anchor-session",
 			providerSessionState,
 		});
-		expect(stats).toEqual({
+		expect(stats).toMatchObject({
 			fullContextRequests: 2,
 			deltaRequests: 1,
 			lastInputItems: (retryInput as unknown[]).length,

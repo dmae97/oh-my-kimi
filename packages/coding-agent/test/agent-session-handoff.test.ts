@@ -1420,6 +1420,7 @@ describe("AgentSession handoff", () => {
 		expect(handoffSpy).toHaveBeenCalledWith(expect.stringContaining("Threshold-triggered maintenance"), {
 			autoTriggered: true,
 			signal: expect.anything(),
+			onSwitchCancelled: expect.any(Function),
 		});
 		expect(events.filter(event => event.type === "auto_compaction_start")).toHaveLength(1);
 		const endEvents = events.filter(event => event.type === "auto_compaction_end");
@@ -1701,13 +1702,9 @@ describe("AgentSession handoff", () => {
 			modelRegistry,
 		);
 		vi.spyOn(extensionRunner, "hasHandlers").mockImplementation(eventName => eventName === "session_before_switch");
-		const emit = extensionRunner.emit.bind(extensionRunner);
-		const emitSpy = vi.spyOn(extensionRunner, "emit").mockImplementation(event => {
-			if (event.type === "session_before_switch") {
-				return { cancel: true };
-			}
-			return emit(event);
-		});
+		const emitSpy = vi.spyOn(extensionRunner, "emit").mockImplementation((async () => ({
+			cancel: true,
+		})) as ExtensionRunner["emit"]);
 
 		await session.dispose();
 		session = new AgentSession({
