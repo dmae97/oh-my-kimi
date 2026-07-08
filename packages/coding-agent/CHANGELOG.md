@@ -207,7 +207,7 @@
 - Fixed Windows session tail loss after atomic compaction rewrites by fencing append writers during full-file replacement and gating the atomic publish on a `commitGuard` that the storage backend checks synchronously before rename, so a concurrent `flushSync` (Ctrl+C / session-exit) is not overwritten by the stale body serialized before it ran. Covers post-compaction prompts, tool results, title changes, and exit diagnostics on the current JSONL path ([#4338](https://github.com/can1357/oh-my-pi/issues/4338)).
 ### Fixed
 
-- Fixed `/handoff` and auto-handoff skipping extension lifecycle hooks by emitting `session_switch` with `reason: "handoff"` before replacing the outgoing session ([#4434](https://github.com/can1357/oh-my-pi/issues/4434)).
+- Fixed `/handoff` and auto-handoff skipping extension lifecycle hooks by emitting cancellable `session_before_switch` hooks and a `session_switch` with `reason: "handoff"` after the replacement session is ready ([#4434](https://github.com/can1357/oh-my-pi/issues/4434)).
 
 ## [16.3.4] - 2026-07-03
 

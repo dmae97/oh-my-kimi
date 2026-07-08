@@ -1682,6 +1682,93 @@ describe("AgentSession handoff", () => {
 		});
 	});
 
+	it("treats a vetoed auto-handoff switch as cancelled instead of falling back", async () => {
+		session.settings.set("compaction.strategy", "handoff");
+		session.settings.set("compaction.thresholdPercent", 1);
+		session.settings.set("contextPromotion.enabled", false);
+
+		const model = session.model;
+		if (!model) {
+			throw new Error("Expected model to be set");
+		}
+
+		const extensionsResult = await loadExtensions([], tempDir.path());
+		const extensionRunner = new ExtensionRunner(
+			extensionsResult.extensions,
+			extensionsResult.runtime,
+			tempDir.path(),
+			sessionManager,
+			modelRegistry,
+		);
+		vi.spyOn(extensionRunner, "hasHandlers").mockImplementation(eventName => eventName === "session_before_switch");
+		const emit = extensionRunner.emit.bind(extensionRunner);
+		const emitSpy = vi.spyOn(extensionRunner, "emit").mockImplementation(event => {
+			if (event.type === "session_before_switch") {
+				return { cancel: true };
+			}
+			return emit(event);
+		});
+
+		await session.dispose();
+		session = new AgentSession({
+			agent: new Agent({
+				initialState: {
+					model,
+					systemPrompt: ["Test"],
+					tools: [],
+					messages: [],
+				},
+			}),
+			sessionManager,
+			settings: session.settings,
+			modelRegistry,
+			extensionRunner,
+			obfuscator,
+		});
+		session.subscribe(event => {
+			events.push(event);
+		});
+		const previousSessionFile = session.sessionFile;
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoffFromContext")
+			.mockResolvedValue("## Goal\nContinue from here");
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: "maintenance trigger" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "stop",
+			usage: {
+				input: 10_000,
+				output: 1_000,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 11_000,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		};
+
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
+		await waitFor(() => events.filter(event => event.type === "auto_compaction_end").length === 1);
+
+		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
+		expect(emitSpy).toHaveBeenCalledWith({ type: "session_before_switch", reason: "handoff" });
+		expect(emitSpy).not.toHaveBeenCalledWith(expect.objectContaining({ type: "session_switch" }));
+		expect(session.sessionFile).toBe(previousSessionFile);
+		expect(sessionManager.getEntries().filter(entry => entry.type === "compaction")).toHaveLength(0);
+		const endEvents = events.filter(event => event.type === "auto_compaction_end");
+		expect(endEvents).toHaveLength(1);
+		expect(endEvents[0]).toMatchObject({
+			type: "auto_compaction_end",
+			action: "handoff",
+			aborted: true,
+			willRetry: false,
+		});
+	});
+
 	it("resets to the base system prompt before generating a handoff", async () => {
 		const model = session.model;
 		if (!model) {
