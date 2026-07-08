@@ -127,12 +127,13 @@ export function buildBetaHeader(baseBetas: readonly string[], extraBetas: readon
 
 const midConversationSystemBeta = "mid-conversation-system-2026-04-07";
 const contextManagementBeta = "context-management-2025-06-27";
+const structuredOutputsBeta = "structured-outputs-2025-12-15";
 const claudeCodeUtilityBetaDefaults = [
 	"oauth-2025-04-20",
 	"interleaved-thinking-2025-05-14",
 	contextManagementBeta,
 	"prompt-caching-scope-2026-01-05",
-	"structured-outputs-2025-12-15",
+	structuredOutputsBeta,
 ] as const;
 const claudeCodeAgentBetaDefaults = [
 	"claude-code-20250219",
@@ -159,10 +160,12 @@ function buildClaudeCodeBetas(
 	agentRequest: boolean,
 	thinkingRequest: boolean,
 	redactThinking: boolean,
+	disableStrictTools = false,
 ): readonly string[] {
-	if (!agentRequest && !redactThinking) return claudeCodeUtilityBetaDefaults;
+	if (!agentRequest && !redactThinking && !disableStrictTools) return claudeCodeUtilityBetaDefaults;
 	const betas: string[] = [];
 	for (const beta of agentRequest ? claudeCodeAgentBetaDefaults : claudeCodeUtilityBetaDefaults) {
+		if (disableStrictTools && beta === structuredOutputsBeta) continue;
 		betas.push(beta);
 		// Match CC's header order: redact-thinking immediately follows interleaved-thinking.
 		if (redactThinking && beta === interleavedThinkingBeta) betas.push(redactThinkingBeta);
@@ -1098,6 +1101,7 @@ export type AnthropicClientOptionsArgs = {
 	hasTools?: boolean;
 	thinkingEnabled?: boolean;
 	thinkingDisplay?: AnthropicThinkingDisplay;
+	disableStrictTools?: boolean;
 	fetch?: FetchImpl;
 	claudeCodeSessionId?: string;
 };
@@ -1833,6 +1837,7 @@ const streamAnthropicOnce = (
 					thinkingDisplay: options?.thinkingDisplay,
 					fetch: options?.fetch,
 					claudeCodeSessionId: options?.sessionId ?? extractClaudeMetadataSessionId(options?.metadata?.user_id),
+					disableStrictTools,
 				});
 				client = created.client;
 				isOAuthToken = created.isOAuthToken;
@@ -2648,8 +2653,10 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		thinkingDisplay,
 		isOAuth,
 		claudeCodeSessionId,
+		disableStrictTools: disableStrictToolsOverride,
 	} = args;
 	const compat = model.compat;
+	const disableStrictTools = disableStrictToolsOverride ?? compat.disableStrictTools;
 	const needsInterleavedBeta = interleavedThinking && !model.thinking?.supportsDisplay;
 	const needsFineGrainedToolStreamingBeta = hasTools && !compat.supportsEagerToolInputStreaming;
 	const oauthToken = isOAuth ?? isAnthropicOAuthToken(apiKey);
@@ -2722,7 +2729,12 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		isCloudflareAiGateway: model.provider === "cloudflare-ai-gateway",
 		claudeCodeSessionId,
 		claudeCodeBetas: oauthToken
-			? buildClaudeCodeBetas(hasTools || thinkingEnabled, thinkingEnabled, thinkingDisplay === "omitted")
+			? buildClaudeCodeBetas(
+					hasTools || thinkingEnabled,
+					thinkingEnabled,
+					thinkingDisplay === "omitted",
+					disableStrictTools,
+				)
 			: [],
 	});
 
