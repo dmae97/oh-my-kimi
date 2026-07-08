@@ -1921,15 +1921,15 @@ mod tests {
 		let live_targets = registry.build_targets();
 		assert!(
 			!live_targets.is_empty(),
-			"a still-live pinned child must appear in the target set — otherwise the \
-			 cancellation cleanup would silently miss it"
+			"a still-live pinned child must appear in the target set — otherwise the cancellation \
+			 cleanup would silently miss it"
 		);
 		let live_pids: Vec<i32> = live_targets.processes.iter().map(Process::pid).collect();
 		assert_eq!(
 			live_pids,
 			vec![long_pid],
-			"target set must come from the pinned handle recorded at spawn time, not a \
-			 re-lookup by pid (which would race pid reuse — issue #4605)"
+			"target set must come from the pinned handle recorded at spawn time, not a re-lookup by \
+			 pid (which would race pid reuse — issue #4605)"
 		);
 
 		let _ = long.kill();
@@ -2019,18 +2019,15 @@ mod tests {
 		let retained = registry.state.lock().spawned.len();
 		assert!(
 			retained < SpawnRegistry::PRUNE_THRESHOLD,
-			"pruning must bound retained entries below the sweep threshold once the pinned \
-			 processes have exited; got {retained} retained (threshold {})",
+			"pruning must bound retained entries below the sweep threshold once the pinned processes \
+			 have exited; got {retained} retained (threshold {})",
 			SpawnRegistry::PRUNE_THRESHOLD
 		);
 
 		// build_targets sees no live handles → empty target set, matching the
 		// contract that fully-exited registries stop the wave loop early.
 		let targets = registry.build_targets();
-		assert!(
-			targets.is_empty(),
-			"registry of only-dead entries must produce an empty target set"
-		);
+		assert!(targets.is_empty(), "registry of only-dead entries must produce an empty target set");
 	}
 
 	/// Regression test for the third review on PR #4606: once the recorded
@@ -2057,10 +2054,7 @@ mod tests {
 			registry.record(None, Process::from_pid(self_pid));
 		}
 		let after_fill = registry.state.lock().spawned.len();
-		assert_eq!(
-			after_fill, fill,
-			"live-only entries must not be pruned during warm-up"
-		);
+		assert_eq!(after_fill, fill, "live-only entries must not be pruned during warm-up");
 		let watermark_after_fill = registry.state.lock().next_sweep_at;
 
 		// Every additional record with a live entry must land in the vec
