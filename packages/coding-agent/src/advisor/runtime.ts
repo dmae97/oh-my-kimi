@@ -50,6 +50,10 @@ export interface AdvisorRuntimeHost {
 	beginAdvisorUpdate?(): void;
 	/** Surface a non-recovering advisor failure to the host UI without adding model-visible context. */
 	notifyFailure?(error: unknown): void;
+	/** Signal that the advisor hit a quota/rate-limit. The host should update
+	 *  the status indicator to `quota_exhausted`; the runtime will auto-resume
+	 *  after its cooldown elapses. */
+	notifyQuotaExhausted?(): void;
 }
 
 interface PendingDelta {
@@ -64,6 +68,16 @@ interface CatchupWaiter {
 	timer?: NodeJS.Timeout;
 }
 
+/**
+ * Classify a provider error as quota/rate-limit exhaustion. These errors are
+ * transient but persist for minutes (until the quota window resets), so the
+ * runtime pauses the advisor and auto-resumes after a cooldown instead of
+ * burning 3 retries and dropping the backlog.
+ */
+function isQuotaError(err: unknown): boolean {
+	const msg = err instanceof Error ? err.message : String(err);
+	return /\b(quota|rate.?limit|429|insufficient_quota|usage.?limit|credit)\b/i.test(msg);
+}
 export class AdvisorRuntime {
 	#lastCount = 0;
 	/** Last-shown body, keyed by primary-context customType (plan/goal mode rules,
@@ -85,6 +99,11 @@ export class AdvisorRuntime {
 	 *  being retried/requeued into the post-reset conversation. */
 	#epoch = 0;
 	disposed = false;
+	/** Quota/rate-limit pause state. When `true`, the advisor stops processing
+	 *  turns until {@link #QUOTA_COOLDOWN_MS} elapses, then auto-resumes. */
+	#quotaExhausted = false;
+	#quotaExhaustedAt = 0;
+	static readonly #QUOTA_COOLDOWN_MS = 5 * 60 * 1000;
 
 	constructor(
 		private readonly agent: AdvisorAgent,
@@ -95,9 +114,26 @@ export class AdvisorRuntime {
 	get backlog(): number {
 		return this.#backlog;
 	}
+	get quotaExhausted(): boolean {
+		return this.#quotaExhausted;
+	}
+	get failureNotified(): boolean {
+		return this.#failureNotified;
+	}
 
 	onTurnEnd(messages?: AgentMessage[]): void {
 		if (this.disposed) return;
+		// Auto-resume after quota cooldown: clear the pause state and let the
+		// advisor process this turn normally. The quota window is assumed to
+		// have reset after the cooldown elapses.
+		if (this.#quotaExhausted) {
+			if (Date.now() - this.#quotaExhaustedAt >= AdvisorRuntime.#QUOTA_COOLDOWN_MS) {
+				this.#quotaExhausted = false;
+				logger.info("advisor quota cooldown elapsed, resuming");
+			} else {
+				return;
+			}
+		}
 		const all = messages ?? this.host.snapshotMessages();
 		this.#latestMessages = all;
 		const render = this.#renderDelta(all);
@@ -171,6 +207,7 @@ export class AdvisorRuntime {
 	 */
 	reset(): void {
 		this.#epoch++;
+		this.#quotaExhausted = false;
 		this.#resetAdvisorContext(true, true);
 	}
 
@@ -345,12 +382,24 @@ export class AdvisorRuntime {
 					this.#consecutiveFailures = 0;
 					this.#failureNotified = false;
 				} catch (err) {
-					// reset()/dispose() aborts the in-flight prompt; the rejection is the
-					// reset itself, not a transient advisor failure. Drop the stale batch
-					// (reset already cleared #pending and rewound the cursor) instead of
-					// requeuing it into the post-reset conversation.
 					if (this.#epoch !== epoch) continue;
 					this.#rollbackFailedTurn(messageSnapshot);
+					if (isQuotaError(err)) {
+						logger.warn("advisor quota exhausted, pausing", { err: String(err) });
+						this.#quotaExhausted = true;
+						this.#quotaExhaustedAt = Date.now();
+						this.#consecutiveFailures = 0;
+						this.#failureNotified = false;
+						this.#seenContext.clear();
+						this.#backlog = Math.max(0, this.#backlog - finalTurns);
+						this.#notifyWaiters();
+						try {
+							this.host.notifyQuotaExhausted?.();
+						} catch (notifyErr) {
+							logger.warn("advisor quota notification failed", { err: String(notifyErr) });
+						}
+						break;
+					}
 					logger.debug("advisor turn failed", { err: String(err) });
 					this.#consecutiveFailures++;
 					if (this.#consecutiveFailures >= 3) {
@@ -364,9 +413,6 @@ export class AdvisorRuntime {
 							}
 						}
 						this.#consecutiveFailures = 0;
-						// The dropped batch may carry primary-context we never delivered; drop
-						// the seen-state too so the next turn re-expands it instead of marking
-						// it "unchanged" against content the advisor never received.
 						this.#seenContext.clear();
 						success = true;
 					} else {

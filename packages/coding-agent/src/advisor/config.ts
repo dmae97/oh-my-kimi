@@ -21,7 +21,22 @@ export interface AdvisorConfig {
 	model?: string;
 	tools?: string[];
 	instructions?: string;
+	/** Per-advisor on/off toggle (default `true`). When `false`, the advisor
+	 *  stays in the roster but its runtime is never built — it shows `○` in
+	 *  the status line and `/advisor status` rather than disappearing. */
+	enabled?: boolean;
 }
+
+/**
+ * Runtime health of a single advisor, surfaced in stats and the status line.
+ * - `running` — actively processing primary turns
+ * - `paused` — user-toggled off via per-advisor switch (runtime disposed)
+ * - `quota_exhausted` — provider returned a quota/rate-limit error; the
+ *   runtime auto-retries after a cooldown so it can resume without user action
+ * - `error` — repeated transient failures; backlog dropped to prevent stall
+ * - `no_model` — no model resolved for this advisor's role/explicit model
+ */
+export type AdvisorRuntimeStatus = "running" | "paused" | "quota_exhausted" | "error" | "no_model";
 
 /**
  * The result of walking the `WATCHDOG.yml`/`WATCHDOG.yaml` search path: the
@@ -38,6 +53,7 @@ const advisorEntrySchema = type({
 	"model?": "string",
 	"tools?": "string[]",
 	"instructions?": "string",
+	"enabled?": "boolean",
 });
 
 const watchdogYamlSchema = type({
@@ -212,6 +228,9 @@ export async function loadWatchdogConfigFile(filePath: string): Promise<Watchdog
 			model: a.model?.trim() || undefined,
 			tools: a.tools?.length ? [...a.tools] : undefined,
 			instructions: a.instructions?.trim() ? a.instructions : undefined,
+			// Preserve `false` explicitly — `enabled` defaults to `true` when absent,
+			// so we only emit the field when the user sets it to `false` in YAML.
+			enabled: a.enabled === false ? false : undefined,
 		})),
 	};
 }
@@ -231,6 +250,8 @@ export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
 			if (a.model?.trim()) entry.model = a.model;
 			if (a.tools?.length) entry.tools = [...a.tools];
 			if (a.instructions?.trim()) entry.instructions = a.instructions;
+			// Explicit `=== false` — must not use truthy check or `false` is dropped.
+			if (a.enabled === false) entry.enabled = false;
 			return entry;
 		});
 	}

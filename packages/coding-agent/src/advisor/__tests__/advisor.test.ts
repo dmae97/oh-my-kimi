@@ -1429,6 +1429,82 @@ describe("advisor", () => {
 		});
 	});
 
+	describe("AdvisorRuntime quota classification", () => {
+		it("pauses on quota/rate-limit errors and notifies the host without retrying", async () => {
+			const promptInputs: string[] = [];
+			let quotaNotified = false;
+			let failureNotified = false;
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					throw new Error("insufficient_quota: you have exceeded your rate limit");
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => [],
+				enqueueAdvice: () => {},
+				notifyFailure: () => {
+					failureNotified = true;
+				},
+				notifyQuotaExhausted: () => {
+					quotaNotified = true;
+				},
+			};
+			const runtime = new AdvisorRuntime(agent, host, 0);
+
+			const messages: AgentMessage[] = [{ role: "user", content: "first", timestamp: 1 } as AgentMessage];
+			runtime.onTurnEnd(messages);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+
+			// Quota path: single prompt attempt, no retries, no generic failure.
+			expect(promptInputs).toHaveLength(1);
+			expect(runtime.quotaExhausted).toBe(true);
+			expect(quotaNotified).toBe(true);
+			expect(failureNotified).toBe(false);
+
+			// Subsequent turns are skipped while quota-exhausted.
+			messages.push({ role: "user", content: "second", timestamp: 2 } as AgentMessage);
+			runtime.onTurnEnd(messages);
+			await Bun.sleep(0);
+			expect(promptInputs).toHaveLength(1);
+		});
+
+		it("treats 'overloaded' as a transient server error, not quota exhaustion", async () => {
+			const promptInputs: string[] = [];
+			const failures: unknown[] = [];
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					throw new Error("overloaded: server is at capacity");
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => [],
+				enqueueAdvice: () => {},
+				notifyFailure: error => failures.push(error),
+			};
+			const runtime = new AdvisorRuntime(agent, host, 0);
+
+			const messages: AgentMessage[] = [{ role: "user", content: "first", timestamp: 1 } as AgentMessage];
+			runtime.onTurnEnd(messages);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+
+			// Overloaded follows the 3-retry → notifyFailure path, not the quota path.
+			expect(promptInputs).toHaveLength(3);
+			expect(runtime.quotaExhausted).toBe(false);
+			expect(failures).toHaveLength(1);
+		});
+	});
+
 	describe("advisor default tools", () => {
 		it("defaults to read/grep/glob, a subset of the full grantable tool pool", () => {
 			expect([...ADVISOR_DEFAULT_TOOL_NAMES]).toEqual(["read", "grep", "glob"]);

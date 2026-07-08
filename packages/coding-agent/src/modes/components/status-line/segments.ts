@@ -143,8 +143,30 @@ const modelSegment: StatusLineSegment = {
 		// `statusLineModel` is aliased to `accent` in many themes, so the badge
 		// uses `success` to stay visibly distinct from the model name color.
 		let content = theme.fg("statusLineModel", withIcon(modelIcon, modelName));
-		if (ctx.session.isAdvisorActive()) {
-			content += theme.fg("success", "++");
+		// Per-advisor status dots: ● running, ○ paused/no-model, ✕ error/quota.
+		// Truncated to 4 dots + "+" when the roster exceeds 4 advisors.
+		const advisorStats = ctx.session.getAdvisorStats();
+		if (advisorStats.configured && advisorStats.advisors.length > 0) {
+			let advisorDots = "";
+			for (const a of advisorStats.advisors.slice(0, 4)) {
+				switch (a.status) {
+					case "running":
+						advisorDots += theme.fg("success", "●");
+						break;
+					case "paused":
+					case "no_model":
+						advisorDots += theme.fg("dim", "○");
+						break;
+					case "quota_exhausted":
+						advisorDots += theme.fg("warning", "✕");
+						break;
+					case "error":
+						advisorDots += theme.fg("error", "✕");
+						break;
+				}
+			}
+			if (advisorStats.advisors.length > 4) advisorDots += theme.fg("dim", "+");
+			content += theme.fg("dim", "(") + advisorDots + theme.fg("dim", ")");
 		}
 		if (tail) {
 			content += theme.fg("statusLineModel", tail);

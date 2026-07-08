@@ -147,6 +147,7 @@ import {
 	type AdvisorMessageDetails,
 	type AdvisorNote,
 	AdvisorRuntime,
+	type AdvisorRuntimeStatus,
 	type AdvisorSeverity,
 	AdvisorTranscriptRecorder,
 	advisorTranscriptFilename,
@@ -961,10 +962,14 @@ export interface AdvisorStats {
 	advisors: PerAdvisorStat[];
 }
 
-/** One advisor's slice of {@link AdvisorStats}, surfaced for the multi-advisor status panel. */
+/** One advisor's slice of {@link AdvisorStats}. Active advisors carry full
+ *  token/cost data; disabled/no-model/quota-exhausted advisors appear with
+ *  just `name` + `status` so the status line can render a dot for every
+ *  configured advisor. */
 export interface PerAdvisorStat {
 	name: string;
-	model: Model;
+	status: AdvisorRuntimeStatus;
+	model?: Model;
 	contextWindow: number;
 	contextTokens: number;
 	tokens: AdvisorStats["tokens"];
@@ -1583,6 +1588,11 @@ export class AgentSession {
 	#advisors: ActiveAdvisor[] = [];
 	/** Configured advisor roster from WATCHDOG.yml; undefined/empty → single legacy advisor. */
 	#advisorConfigs?: AdvisorConfig[];
+	/** Per-advisor runtime status (slug → {name, status}). Tracks disabled/quota/states
+	 *  for the configured roster even when the advisor has no live runtime. The name
+	 *  is stored alongside the status so {@link getAdvisorStats} doesn't need to
+	 *  recompute slugs or resolve config names. */
+	#advisorStatuses: Map<string, { name: string; status: AdvisorRuntimeStatus }> = new Map();
 	/** Aggregate of the most recent stop's recorder closes; awaited by dispose() and
 	 *  used as the open barrier for the next build so two writers never share a file. */
 	#advisorRecorderClosed: Promise<void> = Promise.resolve();
@@ -2335,6 +2345,12 @@ export class AgentSession {
 				slug = candidate;
 				usedSlugs.add(slug);
 			}
+			// Per-advisor toggle: skip disabled advisors but keep them in the
+			// status map so they show `○` rather than disappearing.
+			if (config.enabled === false) {
+				if (slug) this.#advisorStatuses.set(slug, { name: config.name, status: "paused" });
+				continue;
+			}
 
 			// Resolve the advisor's model: an explicit `model` override wins; else the
 			// `advisor` role chain. A model that fails to resolve skips just this advisor.
@@ -2345,6 +2361,7 @@ export class AgentSession {
 				model = resolved.model;
 				thinkingLevel = concreteThinkingLevel(resolved.thinkingLevel);
 				if (!model) {
+					if (slug) this.#advisorStatuses.set(slug, { name: config.name, status: "no_model" });
 					if (emitWarnings) {
 						this.emitNotice("warning", `Advisor "${config.name}": no model matched "${config.model}"`, "advisor");
 					}
@@ -2353,6 +2370,7 @@ export class AgentSession {
 			} else {
 				const sel = resolveAdvisorRoleSelection(this.settings, this.#modelRegistry.getAvailable());
 				if (!sel) {
+					if (slug) this.#advisorStatuses.set(slug, { name: config.name, status: "no_model" });
 					if (emitWarnings) {
 						logger.debug("advisor enabled but no model assigned to the 'advisor' role; advisor inactive", {
 							advisor: config.name,
@@ -2409,6 +2427,10 @@ export class AgentSession {
 		if (!this.#advisorEnabled) return false;
 		if (this.#agentKind !== "main" && !this.settings.get("advisor.subagents")) return false;
 
+		// Rebuild the status map from scratch so removed/renamed advisors don't
+		// leave stale entries. #resolveAdvisorRuntimeDescriptors populates
+		// `paused`/`no_model` as it filters; this loop sets `running` on build.
+		this.#advisorStatuses.clear();
 		const descriptors = this.#resolveAdvisorRuntimeDescriptors(true);
 
 		// Advisor service tier (`tier.advisor`): "none" (default) runs the advisor
@@ -2540,12 +2562,17 @@ export class AgentSession {
 				obfuscator: this.#obfuscator,
 				beginAdvisorUpdate: () => advisorRef.emissionGuard.beginUpdate(),
 				notifyFailure: error => {
+					this.#advisorStatuses.set(slug, { name: advisorName, status: "error" });
 					const message = error instanceof Error ? error.message : String(error);
 					this.emitNotice(
 						"warning",
 						`Advisor${slug ? ` "${advisorName}"` : ""} unavailable for ${formatModelString(advisorModel)}: ${message}`,
 						"advisor",
 					);
+				},
+				notifyQuotaExhausted: () => {
+					this.#advisorStatuses.set(slug, { name: advisorName, status: "quota_exhausted" });
+					this.emitNotice("warning", `Advisor "${advisorName}" quota exhausted — pausing until reset.`, "advisor");
 				},
 			});
 
@@ -2564,6 +2591,7 @@ export class AgentSession {
 			};
 			this.#attachAdvisorRecorderFeed(advisorRef);
 			if (seedToCurrent) runtime.seedTo(this.agent.state.messages.length);
+			this.#advisorStatuses.set(slug, { name: advisorName, status: "running" });
 			this.#advisors.push(advisorRef);
 		}
 
@@ -15811,24 +15839,47 @@ export class AgentSession {
 	 */
 	getAdvisorStats(): AdvisorStats {
 		const configured = this.#advisorEnabled;
-		const advisors = this.#advisors.map(a => this.#computeAdvisorStat(a));
-		if (advisors.length === 0) {
+		const liveAdvisors = this.#advisors.map(a => this.#computeAdvisorStat(a));
+		// Build the complete roster from #advisorStatuses, which already has the
+		// correct de-duped slugs as keys. Live advisors (from #advisors) carry full
+		// token/cost data; disabled/no-model/quota-exhausted advisors appear as
+		// skeleton entries with just name + status so the status line renders a dot.
+		const liveStatBySlug = new Map(this.#advisors.map((a, i) => [a.slug, liveAdvisors[i]]));
+		const roster: PerAdvisorStat[] = [];
+		for (const [slug, entry] of this.#advisorStatuses) {
+			const live = liveStatBySlug.get(slug);
+			if (live) {
+				roster.push(live);
+			} else {
+				roster.push({
+					name: entry.name,
+					status: entry.status,
+					contextWindow: 0,
+					contextTokens: 0,
+					tokens: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					cost: 0,
+					messages: { user: 0, assistant: 0, total: 0 },
+				});
+			}
+		}
+		const active = liveAdvisors.length > 0;
+		if (liveAdvisors.length === 0) {
 			return {
 				configured,
-				active: false,
+				active,
 				contextWindow: 0,
 				contextTokens: 0,
 				tokens: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 				cost: 0,
 				messages: { user: 0, assistant: 0, total: 0 },
-				advisors: [],
+				advisors: roster,
 			};
 		}
 		const tokens = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
 		const messages = { user: 0, assistant: 0, total: 0 };
 		let cost = 0;
 		let contextTokens = 0;
-		for (const a of advisors) {
+		for (const a of liveAdvisors) {
 			tokens.input += a.tokens.input;
 			tokens.output += a.tokens.output;
 			tokens.reasoning += a.tokens.reasoning;
@@ -15845,14 +15896,14 @@ export class AgentSession {
 		// first advisor's so the legacy status line stays byte-identical.
 		return {
 			configured,
-			active: true,
-			model: advisors[0].model,
-			contextWindow: advisors[0].contextWindow,
+			active,
+			model: liveAdvisors[0].model,
+			contextWindow: liveAdvisors[0].contextWindow,
 			contextTokens,
 			tokens,
 			cost,
 			messages,
-			advisors,
+			advisors: roster,
 		};
 	}
 
@@ -15886,6 +15937,11 @@ export class AgentSession {
 		}
 		return {
 			name: advisor.name,
+			status: advisor.runtime.quotaExhausted
+				? "quota_exhausted"
+				: advisor.runtime.failureNotified
+					? "error"
+					: "running",
 			model,
 			contextWindow: model.contextWindow ?? 0,
 			contextTokens,
@@ -15915,6 +15971,7 @@ export class AgentSession {
 			if (s.tokens.cacheRead > 0) spendParts.push(`${s.tokens.cacheRead.toLocaleString()} cache read`);
 			if (s.tokens.cacheWrite > 0) spendParts.push(`${s.tokens.cacheWrite.toLocaleString()} cache write`);
 			const spendLine = `Spend: ${spendParts.join(", ")}, $${s.cost.toFixed(4)}`;
+			if (!s.model) return `Advisor "${s.name}" is ${s.status.replace("_", " ")}.`;
 			return `Advisor is enabled (${s.model.provider}/${s.model.id}). ${contextLine}. ${spendLine}.`;
 		}
 		const lines = [`Advisors enabled (${stats.advisors.length}):`];
@@ -15923,7 +15980,9 @@ export class AgentSession {
 				s.contextWindow > 0
 					? `${s.contextTokens.toLocaleString()} / ${s.contextWindow.toLocaleString()} (${Math.round((s.contextTokens / s.contextWindow) * 100)}%)`
 					: `${s.contextTokens.toLocaleString()}`;
-			lines.push(`  • ${s.name} (${s.model.provider}/${s.model.id}) — context ${ctx} tokens, $${s.cost.toFixed(4)}`);
+			lines.push(
+				`  • ${s.name}${s.model ? ` (${s.model.provider}/${s.model.id})` : ` [${s.status}]`} — context ${ctx} tokens, $${s.cost.toFixed(4)}`,
+			);
 		}
 		lines.push(
 			`Totals: ${stats.tokens.input.toLocaleString()} input, ${stats.tokens.output.toLocaleString()} output, $${stats.cost.toFixed(4)}.`,

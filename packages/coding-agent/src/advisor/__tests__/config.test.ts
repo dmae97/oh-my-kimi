@@ -171,3 +171,38 @@ describe("resolveAdvisorConfigEditPath", () => {
 		expect(await resolveAdvisorConfigEditPath("project", dirs(tmp))).toBe(path.join(tmp, "WATCHDOG.yml"));
 	});
 });
+
+describe("per-advisor enabled field", () => {
+	it("round-trips enabled: false through serialize → load", async () => {
+		const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "omp-advisor-enabled-"));
+		try {
+			const doc: WatchdogConfigDoc = {
+				advisors: [
+					{ name: "On", model: "test/model-a" },
+					{ name: "Off", model: "test/model-b", enabled: false },
+				],
+			};
+			const file = path.join(tmp, "WATCHDOG.yml");
+			await saveWatchdogConfigFile(file, doc);
+
+			// The YAML must contain `enabled: false` explicitly — not omitted.
+			const text = await Bun.file(file).text();
+			expect(text).toContain("enabled: false");
+
+			const loaded = await loadWatchdogConfigFile(file);
+			// Absent field → undefined (defaults to true at runtime)
+			expect(loaded.advisors[0].enabled).toBeUndefined();
+			// Explicit false survives
+			expect(loaded.advisors[1].enabled).toBe(false);
+		} finally {
+			await fsp.rm(tmp, { recursive: true, force: true });
+		}
+	});
+
+	it("does not emit enabled when it is true or absent", () => {
+		const text = serializeWatchdogConfig({
+			advisors: [{ name: "Default", enabled: true }, { name: "Unset" }],
+		});
+		expect(text).not.toContain("enabled");
+	});
+});

@@ -367,7 +367,7 @@ export class CommandController {
 						? `${a.contextTokens.toLocaleString()} / ${a.contextWindow.toLocaleString()} (${Math.round((a.contextTokens / a.contextWindow) * 100)}%)`
 						: `${a.contextTokens.toLocaleString()}`;
 				info += `\n${theme.bold(a.name)}\n`;
-				info += `${theme.fg("dim", "Model:")} ${a.model.provider}/${a.model.id}\n`;
+				if (a.model) info += `${theme.fg("dim", "Model:")} ${a.model.provider}/${a.model.id}\n`;
 				info += `${theme.fg("dim", "Context:")} ${ctx}\n`;
 				info += `${theme.fg("dim", "Messages:")} ${a.messages.total.toLocaleString()}\n`;
 				info += `${theme.fg("dim", "Spend:")} ${a.tokens.input.toLocaleString()} in / ${a.tokens.output.toLocaleString()} out`;
