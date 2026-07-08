@@ -145,7 +145,7 @@ const modelSegment: StatusLineSegment = {
 		let content = theme.fg("statusLineModel", withIcon(modelIcon, modelName));
 		// Per-advisor status dots: ● running, ○ paused/no-model, ✕ error/quota.
 		// Truncated to 4 dots + "+" when the roster exceeds 4 advisors.
-		const advisorStats = ctx.session.getAdvisorStats();
+		const advisorStats = ctx.session.getAdvisorStatusOverview();
 		if (advisorStats.configured && advisorStats.advisors.length > 0) {
 			let advisorDots = "";
 			for (const a of advisorStats.advisors.slice(0, 4)) {

@@ -989,6 +989,7 @@ export interface PerAdvisorStat {
 	tokens: AdvisorStats["tokens"];
 	cost: number;
 	messages: AdvisorStats["messages"];
+	sessionId?: string;
 }
 
 /**
@@ -15949,6 +15950,15 @@ export class AgentSession {
 	}
 
 	/**
+	 * Lightweight advisor status for the status line: returns just the configured
+	 * flag and per-advisor name/status without computing token/cost breakdowns.
+	 * Avoids re-tokenizing the advisor transcript on every render frame.
+	 */
+	getAdvisorStatusOverview(): { configured: boolean; advisors: { name: string; status: AdvisorRuntimeStatus }[] } {
+		const advisors = [...this.#advisorStatuses.values()].map(({ name, status }) => ({ name, status }));
+		return { configured: this.#advisorEnabled, advisors };
+	}
+	/**
 	 * Return structured advisor stats for the status command and TUI panel.
 	 */
 	getAdvisorStats(): AdvisorStats {
@@ -16062,6 +16072,7 @@ export class AgentSession {
 			tokens: { input, output, reasoning, cacheRead, cacheWrite, total: totalTokens },
 			cost,
 			messages: { user, assistant, total: messages.length },
+			sessionId: advisor.slug ? `${this.sessionId}-advisor-${advisor.slug}` : `${this.sessionId}-advisor`,
 		};
 	}
 
@@ -16077,6 +16088,11 @@ export class AgentSession {
 		}
 		if (stats.advisors.length <= 1) {
 			const s = stats.advisors[0];
+			if (s && s.status === "no_model") {
+				return stats.configured
+					? "Advisor setting is enabled, but no model is assigned to the 'advisor' role."
+					: "Advisor is disabled.";
+			}
 			const contextLine =
 				s.contextWindow > 0
 					? `Context: ${s.contextTokens.toLocaleString()} / ${s.contextWindow.toLocaleString()} tokens (${Math.round((s.contextTokens / s.contextWindow) * 100)}%)`
