@@ -18,6 +18,7 @@
 
 - Fixed autocompletion for absolute paths (such as `/tmp/...` or `/Users/...`) at the start of a prompt, ensuring they fall back to file-path completion instead of being incorrectly treated as slash commands.
 - Updated absolute path autocompletion behavior so that accepting a suggestion inserts the path without submitting the prompt.
+- Kept slash command autocomplete rows compact by truncating descriptions instead of wrapping them into multi-line blocks.
 
 ## [16.3.7] - 2026-07-05
 
