@@ -1242,7 +1242,7 @@ const CODEX_STALE_PREVIOUS_RESPONSE_CODES: Record<string, true> = {
 
 function isCodexStalePreviousResponseError(error: unknown): boolean {
 	if (!(error instanceof Error)) return false;
-	if ("code" in error && typeof error.code === "string" && CODEX_STALE_PREVIOUS_RESPONSE_CODES[error.code]) {
+	if ("code" in error && typeof error.code === "string" && Object.hasOwn(CODEX_STALE_PREVIOUS_RESPONSE_CODES, error.code)) {
 		return true;
 	}
 	// Message-based fallback for providers/proxies that report the condition
