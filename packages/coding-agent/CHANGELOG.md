@@ -97,6 +97,9 @@
 ### Fixed
 
 - Fixed the browser tool silently launching without its Puppeteer stealth patch: the patch was keyed to `puppeteer-core@25.1.0` while the resolved dependency had drifted to `25.3.0`, so Bun skipped it and Chrome ran with the `Runtime.enable` automation tell re-enabled. Regenerated the stealth patch against 25.3.0 and pinned `puppeteer-core` so the exact-version patch cannot silently deactivate on future drift.
+### Fixed
+
+- Fixed `read` and `grep` refusing to access filesystem paths whose names end in a selector-shaped suffix (e.g. `test:1-2`, `log:raw`) by preferring a literal match over the trailing `:<selector>` peel when the raw path exists on disk ([#4618](https://github.com/can1357/oh-my-pi/issues/4618)).
 
 ## [16.3.7] - 2026-07-05
 

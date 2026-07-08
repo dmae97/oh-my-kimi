@@ -450,6 +450,35 @@ describe("GrepTool internal URL resolution", () => {
 		expect(text).toMatch(/^\*\d+:.*needle/m);
 	});
 
+	it("read local://<name>:<sel> honors URL selector even when a sibling literal `<name>:<sel>` file exists (issue #4618)", async () => {
+		const localRoot = path.join(artifactsDir, "local");
+		await fs.mkdir(localRoot, { recursive: true });
+		// Base file targeted by `local://notes.md`; selector should slice this one.
+		await Bun.write(
+			path.join(localRoot, "notes.md"),
+			`${Array.from({ length: 10 }, (_, i) => `url-target line ${i + 1}`).join("\n")}\n`,
+		);
+		// Sibling literal `notes.md:1-2` under the same local root — must NOT
+		// shadow the URL selector semantics of `local://notes.md:1-2`.
+		await Bun.write(path.join(localRoot, "notes.md:1-2"), "sibling literal shadow\n");
+
+		LocalProtocolHandler.setOverride({ getArtifactsDir: () => artifactsDir, getSessionId: () => "session" });
+
+		const session = createSession({ hasEditTool: true });
+		session.settings.set("read.summarize.enabled", false);
+		const result = await new ReadTool(session).execute("test-read-local-url-selector", {
+			path: "local://notes.md:1-2",
+		});
+
+		const text = getResultText(result);
+		// The base file was targeted (URL selector semantics preserved), not the
+		// sibling literal. Content check is enough — the read tool's context
+		// expansion around the requested range is unrelated to the shadow bug.
+		expect(text).toContain("url-target line 1");
+		expect(text).toContain("url-target line 2");
+		expect(text).not.toContain("sibling literal shadow");
+	});
+
 	it("keeps hashlines on mutable files when mixed with immutable artifact:// inputs", async () => {
 		const content = "alpha line\nbeta needle line\ngamma line\n";
 		await Bun.write(path.join(artifactsDir, "11.bash.log"), content);
