@@ -39,6 +39,7 @@ import type { ModelRegistry } from "../../config/model-registry";
 import { formatModelSelectorValue } from "../../config/model-resolver";
 import type { Settings } from "../../config/settings";
 import type { PerAdvisorStat } from "../../session/agent-session";
+import type { OAuthAccountIdentity } from "../../session/auth-storage";
 import { formatCompactQuota } from "../controllers/command-controller";
 import { getSelectListTheme, theme } from "../theme/theme";
 import { HookEditorComponent } from "./hook-editor";
@@ -68,6 +69,8 @@ export interface AdvisorConfigCallbacks {
 	/** Live advisor usage stats; lets the preview show tokens/cost per advisor. */
 	getAdvisorStats?: () => PerAdvisorStat[];
 	getUsageReports?: () => Promise<UsageReport[] | null>;
+	/** Resolve the active OAuth identity for quota filtering (per-advisor account stickiness). */
+	resolveActiveAccount?: (provider: string, sessionId?: string) => OAuthAccountIdentity | undefined;
 }
 
 export interface AdvisorConfigDeps {
@@ -316,11 +319,10 @@ export class AdvisorConfigOverlayComponent implements Component {
 				);
 			}
 		}
-		// Show provider quota — fall back to the resolved live model when the advisor
-		// inherits the advisor-role model (no explicit `model` in config).
-		const quotaProvider = advisor.model?.split("/")[0] ?? liveStat?.model?.provider;
+		const quotaProvider = advisor.model?.split("/")[0] || liveStat?.model?.provider;
 		if (this.#cachedReports && quotaProvider) {
-			const quota = formatCompactQuota(quotaProvider, this.#cachedReports, Date.now());
+			const activeAccount = this.#cb.resolveActiveAccount?.(quotaProvider, liveStat?.sessionId);
+			const quota = formatCompactQuota(quotaProvider, this.#cachedReports, Date.now(), activeAccount);
 			if (quota) lines.push(theme.fg("dim", `  ${quota}`));
 		}
 		return lines.map(line => truncateToWidth(line, bodyWidth));

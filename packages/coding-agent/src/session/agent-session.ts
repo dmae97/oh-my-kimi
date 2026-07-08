@@ -15955,7 +15955,19 @@ export class AgentSession {
 	 * Avoids re-tokenizing the advisor transcript on every render frame.
 	 */
 	getAdvisorStatusOverview(): { configured: boolean; advisors: { name: string; status: AdvisorRuntimeStatus }[] } {
-		const advisors = [...this.#advisorStatuses.values()].map(({ name, status }) => ({ name, status }));
+		// Override stale map entries with live runtime status: failureNotified/quotaExhausted
+		// clear on reset() but #advisorStatuses lags until the next build.
+		const liveStatusBySlug = new Map<string, AdvisorRuntimeStatus>();
+		for (const a of this.#advisors) {
+			liveStatusBySlug.set(
+				a.slug,
+				a.runtime.quotaExhausted ? "quota_exhausted" : a.runtime.failureNotified ? "error" : "running",
+			);
+		}
+		const advisors = [...this.#advisorStatuses.entries()].map(([slug, { name, status }]) => ({
+			name,
+			status: liveStatusBySlug.get(slug) ?? status,
+		}));
 		return { configured: this.#advisorEnabled, advisors };
 	}
 	/**
