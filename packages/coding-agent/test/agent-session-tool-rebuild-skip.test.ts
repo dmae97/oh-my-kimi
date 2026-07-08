@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, setSystemTime } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -68,6 +68,7 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 	interface NewSessionOptions {
 		mcpDiscoveryEnabled?: boolean;
 		getMcpServerInstructions?: () => Map<string, string> | undefined;
+		getLocalCalendarDate?: () => string;
 	}
 
 	function newSession(
@@ -101,6 +102,7 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 			}),
 			mcpDiscoveryEnabled: options.mcpDiscoveryEnabled,
 			getMcpServerInstructions: options.getMcpServerInstructions,
+			getLocalCalendarDate: options.getLocalCalendarDate,
 		});
 		sessions.push(session);
 		return { session };
@@ -388,40 +390,38 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		await session.refreshMCPTools([dynamicTool]);
 		expect(rebuildCount).toBe(baseline + 1);
 	});
-	it("rebuilds when the calendar date rolls over between tool-stable MCP refreshes", async () => {
-		// `buildSystemPrompt` injects today's date into the prompt body.
-		// A session spanning midnight must not serve yesterday's date after an MCP
-		// reconnect that happens to bring an identical tool set.
-		setSystemTime(new Date("2025-01-01T23:59:58Z"));
-		try {
-			let rebuildCount = 0;
-			const { session } = newSession(async toolNames => {
+	it("rebuilds when the local calendar date rolls over between tool-stable MCP refreshes", async () => {
+		// `buildSystemPrompt` injects today's local date into the prompt body. The
+		// signature reads the same date provider so a session spanning local midnight
+		// must rebuild after an MCP reconnect with an otherwise identical tool set.
+		let currentDate = "2026-06-30";
+		let rebuildCount = 0;
+		const { session } = newSession(
+			async toolNames => {
 				rebuildCount++;
 				return `tools:${toolNames.join(",")}`;
-			});
-			const tool = createMcpCustomTool("mcp__nucleus_search", "nucleus", "search", "Search");
+			},
+			{ getLocalCalendarDate: () => currentDate },
+		);
+		const tool = createMcpCustomTool("mcp__nucleus_search", "nucleus", "search", "Search");
 
-			// First refresh: no signature yet, must rebuild.
-			await session.refreshMCPTools([tool]);
-			expect(rebuildCount).toBe(1);
+		// First refresh: no signature yet, must rebuild.
+		await session.refreshMCPTools([tool]);
+		expect(rebuildCount).toBe(1);
 
-			// Same tools, same day: signature matches, skip.
-			await session.refreshMCPTools([tool]);
-			expect(rebuildCount).toBe(1);
+		// Same tools, same local day: signature matches, skip.
+		await session.refreshMCPTools([tool]);
+		expect(rebuildCount).toBe(1);
 
-			// Advance past midnight.
-			setSystemTime(new Date("2025-01-02T00:00:01Z"));
+		currentDate = "2026-07-01";
 
-			// Same tools, new calendar day: date segment changed, must rebuild.
-			await session.refreshMCPTools([tool]);
-			expect(rebuildCount).toBe(2);
+		// Same tools, new local calendar day: date segment changed, must rebuild.
+		await session.refreshMCPTools([tool]);
+		expect(rebuildCount).toBe(2);
 
-			// Same tools, same new day: skip again.
-			await session.refreshMCPTools([tool]);
-			expect(rebuildCount).toBe(2);
-		} finally {
-			setSystemTime(); // restore real time
-		}
+		// Same tools, same new local day: skip again.
+		await session.refreshMCPTools([tool]);
+		expect(rebuildCount).toBe(2);
 	});
 	it("does not rebuild when MCP server instructions change only beyond the 4000-char truncation boundary", async () => {
 		// `rebuildSystemPrompt` (sdk.ts) truncates each server instruction to 4000 chars
