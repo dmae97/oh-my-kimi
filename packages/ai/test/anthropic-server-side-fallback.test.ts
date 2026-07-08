@@ -17,7 +17,8 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { convertAnthropicMessages, streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
 import { AnthropicMessages } from "@oh-my-pi/pi-ai/providers/anthropic-client";
-import type { AssistantMessage, Context, Model } from "@oh-my-pi/pi-ai/types";
+import type { MessageParam } from "@oh-my-pi/pi-ai/providers/anthropic-wire";
+import type { AssistantMessage, Context, Model, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
 const fableModel: Model<"anthropic-messages"> = buildModel({
@@ -326,5 +327,257 @@ describe("anthropic fallback content-block replay policy", () => {
 			{ serverSideFallbackEnabled: true },
 		);
 		expect(params[0]?.content).toEqual([{ type: "text", text: "continued" }]);
+	});
+});
+
+describe("anthropic assistant replay block ordering (tool_use partition)", () => {
+	// Anthropic's replay validator rejects any assistant turn that carries a
+	// non-`tool_use` content block AFTER a `tool_use` block
+	// (`messages.N: tool_use ids were found without tool_result blocks
+	// immediately after`). This bites when a mid-turn server-side fallback
+	// (`server-side-fallback-2026-06-01`) lands AFTER the primary model already
+	// emitted a tool_use, leaving persisted content shaped like
+	// [thinking, text, tool_use, fallback, text, tool_use]. The same validator
+	// rejects the older cross-provider [text, tool_use, text] shape (issue
+	// #544). `convertAnthropicMessages` defends against both by stable-
+	// partitioning every assistant wire message: all non-tool_use blocks first
+	// (original relative order), then all tool_use blocks (original relative
+	// order). Already-valid messages must serialize byte-identically.
+
+	function assistant(content: AssistantMessage["content"]): AssistantMessage {
+		return {
+			role: "assistant",
+			content,
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-fable-5",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: 0,
+		};
+	}
+
+	function toolResult(id: string, name: string): ToolResultMessage {
+		return {
+			role: "toolResult",
+			toolCallId: id,
+			toolName: name,
+			content: [{ type: "text", text: "ok" }],
+			isError: false,
+			timestamp: 0,
+		};
+	}
+
+	function assistantParam(params: MessageParam[]): MessageParam {
+		const asst = params.filter(p => p.role === "assistant");
+		if (asst.length !== 1 || !Array.isArray(asst[0]?.content)) {
+			throw new Error("expected exactly one assistant param with structured content blocks");
+		}
+		return asst[0];
+	}
+
+	it("mid-turn fallback repro: defers trailing tool_use, keeps the fallback marker in place", () => {
+		const params = convertAnthropicMessages(
+			[
+				assistant([
+					{ type: "thinking", thinking: "plan", thinkingSignature: "sig-1" },
+					{ type: "text", text: "before" },
+					{ type: "toolCall", id: "call_a", name: "read", arguments: {} },
+					{ type: "fallback", from: { model: "claude-fable-5" }, to: { model: "claude-opus-4-8" } },
+					{ type: "text", text: "after" },
+					{ type: "toolCall", id: "call_b", name: "grep", arguments: {} },
+					{ type: "toolCall", id: "call_c", name: "glob", arguments: {} },
+				]),
+				toolResult("call_a", "read"),
+				toolResult("call_b", "grep"),
+				toolResult("call_c", "glob"),
+				{ role: "user", content: "next", timestamp: 0 },
+			],
+			fableModel,
+			false,
+			{ serverSideFallbackEnabled: true },
+		);
+		expect(assistantParam(params).content).toEqual([
+			{ type: "thinking", thinking: "plan", signature: "sig-1" },
+			{ type: "text", text: "before" },
+			{ type: "fallback", from: { model: "claude-fable-5" }, to: { model: "claude-opus-4-8" } },
+			{ type: "text", text: "after" },
+			{ type: "tool_use", id: "call_a", name: "read", input: {} },
+			{ type: "tool_use", id: "call_b", name: "grep", input: {} },
+			{ type: "tool_use", id: "call_c", name: "glob", input: {} },
+		]);
+	});
+
+	it("opt-out drops the fallback marker but still defers tool_use to the tail", () => {
+		const params = convertAnthropicMessages(
+			[
+				assistant([
+					{ type: "thinking", thinking: "plan", thinkingSignature: "sig-1" },
+					{ type: "text", text: "before" },
+					{ type: "toolCall", id: "call_a", name: "read", arguments: {} },
+					{ type: "fallback", from: { model: "claude-fable-5" }, to: { model: "claude-opus-4-8" } },
+					{ type: "text", text: "after" },
+					{ type: "toolCall", id: "call_b", name: "grep", arguments: {} },
+					{ type: "toolCall", id: "call_c", name: "glob", arguments: {} },
+				]),
+				toolResult("call_a", "read"),
+				toolResult("call_b", "grep"),
+				toolResult("call_c", "glob"),
+				{ role: "user", content: "next", timestamp: 0 },
+			],
+			fableModel,
+			false,
+			// serverSideFallbackEnabled omitted → fallback block dropped
+		);
+		expect(assistantParam(params).content).toEqual([
+			{ type: "thinking", thinking: "plan", signature: "sig-1" },
+			{ type: "text", text: "before" },
+			{ type: "text", text: "after" },
+			{ type: "tool_use", id: "call_a", name: "read", input: {} },
+			{ type: "tool_use", id: "call_b", name: "grep", input: {} },
+			{ type: "tool_use", id: "call_c", name: "glob", input: {} },
+		]);
+	});
+
+	it("issue-544 family: text after a tool_use is reordered before the tool_use", () => {
+		const params = convertAnthropicMessages(
+			[
+				assistant([
+					{ type: "text", text: "before" },
+					{ type: "toolCall", id: "call_a", name: "read", arguments: {} },
+					{ type: "text", text: "after" },
+				]),
+				toolResult("call_a", "read"),
+				{ role: "user", content: "next", timestamp: 0 },
+			],
+			fableModel,
+			false,
+			{ serverSideFallbackEnabled: true },
+		);
+		expect(assistantParam(params).content).toEqual([
+			{ type: "text", text: "before" },
+			{ type: "text", text: "after" },
+			{ type: "tool_use", id: "call_a", name: "read", input: {} },
+		]);
+	});
+
+	it("identity fast-path: already-valid thinking→text→tool_use serializes in unchanged order", () => {
+		const params = convertAnthropicMessages(
+			[
+				assistant([
+					{ type: "thinking", thinking: "plan", thinkingSignature: "sig-1" },
+					{ type: "text", text: "before" },
+					{ type: "toolCall", id: "call_a", name: "read", arguments: {} },
+				]),
+				toolResult("call_a", "read"),
+				{ role: "user", content: "next", timestamp: 0 },
+			],
+			fableModel,
+			false,
+			{ serverSideFallbackEnabled: true },
+		);
+		expect(assistantParam(params).content).toEqual([
+			{ type: "thinking", thinking: "plan", signature: "sig-1" },
+			{ type: "text", text: "before" },
+			{ type: "tool_use", id: "call_a", name: "read", input: {} },
+		]);
+	});
+
+	it("interleaved signed thinking: signature-chain order preserved, tool_use deferred to the tail", () => {
+		const params = convertAnthropicMessages(
+			[
+				assistant([
+					{ type: "thinking", thinking: "first", thinkingSignature: "sig-1" },
+					{ type: "toolCall", id: "call_a", name: "read", arguments: {} },
+					{ type: "thinking", thinking: "second", thinkingSignature: "sig-2" },
+					{ type: "toolCall", id: "call_b", name: "grep", arguments: {} },
+				]),
+				toolResult("call_a", "read"),
+				toolResult("call_b", "grep"),
+				{ role: "user", content: "next", timestamp: 0 },
+			],
+			fableModel,
+			false,
+			{ serverSideFallbackEnabled: true },
+		);
+		expect(assistantParam(params).content).toEqual([
+			{ type: "thinking", thinking: "first", signature: "sig-1" },
+			{ type: "thinking", thinking: "second", signature: "sig-2" },
+			{ type: "tool_use", id: "call_a", name: "read", input: {} },
+			{ type: "tool_use", id: "call_b", name: "grep", input: {} },
+		]);
+	});
+
+	it("partition is localized: all other wire messages serialize byte-identically", () => {
+		// Prompt-cache contract: partitioning a poisoned assistant turn must be a
+		// LOCAL rewrite of that turn's own content — every OTHER wire message
+		// (the earlier valid assistant turn whose cached prefix must survive, its
+		// tool_result, the poisoned turn's tool_results, and the trailing user
+		// turn) must serialize to the exact same bytes. If the reorder leaked past
+		// the turn boundary (mutated a shared/adjacent message) or the slow path
+		// diverged from an already-ordered fast path, cached prefixes up to the
+		// reordered turn would be invalidated. Two histories, identical except the
+		// poisoned turn is pre-ordered to the partition result in (b): (a) fires
+		// the partition, (b) takes the fast path. Bytes must match everywhere but
+		// the poisoned param, which must converge to the same content either way.
+		const validAssistant = assistant([
+			{ type: "thinking", thinking: "plan", thinkingSignature: "sig-1" },
+			{ type: "text", text: "before" },
+			{ type: "toolCall", id: "call_v", name: "list", arguments: {} },
+		]);
+		const poisonedContent: AssistantMessage["content"] = [
+			{ type: "text", text: "poison-a" },
+			{ type: "toolCall", id: "call_a", name: "read", arguments: {} },
+			{ type: "fallback", from: { model: "claude-fable-5" }, to: { model: "claude-opus-4-8" } },
+			{ type: "text", text: "poison-b" },
+			{ type: "toolCall", id: "call_b", name: "grep", arguments: {} },
+		];
+		// Same blocks, hand-ordered to exactly what the stable partition emits:
+		// non-tool_use chain first (order preserved), then the tool_use tail.
+		const preOrderedContent: AssistantMessage["content"] = [
+			{ type: "text", text: "poison-a" },
+			{ type: "fallback", from: { model: "claude-fable-5" }, to: { model: "claude-opus-4-8" } },
+			{ type: "text", text: "poison-b" },
+			{ type: "toolCall", id: "call_a", name: "read", arguments: {} },
+			{ type: "toolCall", id: "call_b", name: "grep", arguments: {} },
+		];
+		const history = (poisoned: AssistantMessage["content"]) => [
+			{ role: "user", content: "start", timestamp: 0 } as const,
+			validAssistant,
+			toolResult("call_v", "list"),
+			assistant(poisoned),
+			toolResult("call_a", "read"),
+			toolResult("call_b", "grep"),
+			{ role: "user", content: "next", timestamp: 0 } as const,
+		];
+
+		const a = convertAnthropicMessages(history(poisonedContent), fableModel, false, {
+			serverSideFallbackEnabled: true,
+		});
+		const b = convertAnthropicMessages(history(preOrderedContent), fableModel, false, {
+			serverSideFallbackEnabled: true,
+		});
+
+		expect(a.length).toBe(b.length);
+		const poisonedIdx = a.findIndex(
+			p =>
+				p.role === "assistant" &&
+				Array.isArray(p.content) &&
+				p.content.some(block => block.type === "tool_use" && block.id === "call_a"),
+		);
+		expect(poisonedIdx).toBeGreaterThanOrEqual(0);
+		for (let i = 0; i < a.length; i++) {
+			if (i === poisonedIdx) continue;
+			expect(JSON.stringify(a[i])).toBe(JSON.stringify(b[i]));
+		}
+		// Convergence: partition (a) and fast path (b) yield identical final content.
+		expect(a[poisonedIdx]).toEqual(b[poisonedIdx]);
 	});
 });
