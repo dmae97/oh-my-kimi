@@ -36,6 +36,9 @@
 ### Fixed
 
 - Fixed bash/tool command environments inheriting Bun-autoloaded launch `.env.local` values, so nested apps can load their own dotenv values without parent deployment variables taking precedence. ([#4723](https://github.com/can1357/oh-my-pi/issues/4723))
+### Fixed
+
+- Fixed legacy plugin validation for extension graphs that import JSON with `with { type: "json" }`, leaving JSON files on Bun's native loader instead of parsing them as JavaScript ([#4687](https://github.com/can1357/oh-my-pi/issues/4687)).
 
 ## [16.3.10] - 2026-07-06
 
