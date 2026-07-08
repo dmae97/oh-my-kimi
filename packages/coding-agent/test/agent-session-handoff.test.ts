@@ -158,6 +158,90 @@ describe("AgentSession handoff", () => {
 		expect(sessionManager.getEntries().filter(entry => entry.type === "compaction")).toHaveLength(0);
 	});
 
+	it("emits handoff lifecycle hooks on the outgoing and replacement sessions", async () => {
+		const extensionsResult = await loadExtensions([], tempDir.path());
+		const extensionRunner = new ExtensionRunner(
+			extensionsResult.extensions,
+			extensionsResult.runtime,
+			tempDir.path(),
+			sessionManager,
+			modelRegistry,
+		);
+		const observedEvents: Array<{
+			type: "session_before_switch" | "session_switch";
+			reason: string;
+			previousSessionFile: string | undefined;
+			activeSessionFile: string | undefined;
+			messageCount: number;
+			handoffEntryCount: number;
+		}> = [];
+		vi.spyOn(extensionRunner, "hasHandlers").mockImplementation(eventName => eventName === "session_before_switch");
+		const emit = extensionRunner.emit.bind(extensionRunner);
+		vi.spyOn(extensionRunner, "emit").mockImplementation(event => {
+			if (event.type === "session_before_switch" || event.type === "session_switch") {
+				observedEvents.push({
+					type: event.type,
+					reason: event.reason,
+					previousSessionFile: event.type === "session_switch" ? event.previousSessionFile : undefined,
+					activeSessionFile: session.sessionFile,
+					messageCount: sessionManager.getBranch().filter(entry => entry.type === "message").length,
+					handoffEntryCount: sessionManager
+						.getBranch()
+						.filter(entry => entry.type === "custom_message" && entry.customType === "handoff").length,
+				});
+			}
+			return emit(event);
+		});
+
+		await session.dispose();
+		session = new AgentSession({
+			agent: new Agent({
+				initialState: {
+					model,
+					systemPrompt: ["Test"],
+					tools: [],
+					messages: [],
+				},
+			}),
+			sessionManager,
+			settings: Settings.isolated({
+				"compaction.enabled": true,
+				"compaction.autoContinue": false,
+			}),
+			modelRegistry,
+			extensionRunner,
+			obfuscator,
+		});
+		const previousSessionFile = session.sessionFile;
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoffFromContext")
+			.mockResolvedValue("## Goal\nContinue from here");
+
+		await session.handoff();
+
+		const nextSessionFile = session.sessionFile;
+		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
+		expect(nextSessionFile).not.toBe(previousSessionFile);
+		expect(observedEvents).toEqual([
+			{
+				type: "session_before_switch",
+				reason: "handoff",
+				previousSessionFile: undefined,
+				activeSessionFile: previousSessionFile,
+				messageCount: 2,
+				handoffEntryCount: 0,
+			},
+			{
+				type: "session_switch",
+				reason: "handoff",
+				previousSessionFile,
+				activeSessionFile: nextSessionFile,
+				messageCount: 0,
+				handoffEntryCount: 1,
+			},
+		]);
+	});
+
 	it("runs handoff generation through the configured side stream function", async () => {
 		const handoffText = "## Goal\nContinue via side stream";
 		let sideStreamCalls = 0;
