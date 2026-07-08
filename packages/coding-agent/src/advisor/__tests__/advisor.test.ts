@@ -1793,5 +1793,22 @@ describe("advisor", () => {
 			expect(text).toContain("default");
 			expect(text).toContain("anthropic/claude-opus");
 		});
+		it("shows disabled advisors with a dim circle marker and toggles them in the detail editor", async () => {
+			const uiTheme = await getThemeByName("dark");
+			if (!uiTheme) throw new Error("theme unavailable");
+			setThemeInstance(uiTheme);
+			const overlay = make({
+				advisors: [
+					{ name: "Active", model: "x-ai/grok-code-fast:high" },
+					{ name: "Disabled", model: "openai/gpt-4", enabled: false },
+				],
+			});
+			const text = strip(overlay.render(200));
+			// The list shows ● for enabled and ○ for disabled.
+			expect(text).toContain("● Active");
+			expect(text).toContain("○ Disabled");
+			// The preview of the highlighted (first) advisor shows its enabled status.
+			expect(text).toContain("● on");
+		});
 	});
 });

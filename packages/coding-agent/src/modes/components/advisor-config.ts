@@ -270,6 +270,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const lines = [
 			theme.bold(advisor.name || "(unnamed)"),
 			"",
+			`${theme.fg("dim", "Enabled:")} ${advisor.enabled === false ? "○ off" : "● on"}`,
 			`${theme.fg("dim", "Model:")} ${model}`,
 			`${theme.fg("dim", "Tools:")} ${tools}`,
 			"",
@@ -317,7 +318,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#ensureRosterVisible();
 		const items: SelectItem[] = this.#doc.advisors.map((advisor, index) => ({
 			value: `advisor:${index}`,
-			label: advisor.name || "(unnamed)",
+			label: `${advisor.enabled === false ? "○" : "●"} ${advisor.name || "(unnamed)"}`,
 			description: this.#advisorSummary(advisor),
 		}));
 		items.push({ value: "add", label: "+ Add advisor" });
@@ -387,6 +388,11 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const toolsDescription = advisor.tools?.length ? advisor.tools.join(", ") : "(default: read/grep/glob)";
 		const items: SelectItem[] = [
 			{ value: "name", label: "Name", description: advisor.name },
+			{
+				value: "toggleEnabled",
+				label: "Enabled",
+				description: advisor.enabled === false ? "○ off" : "● on",
+			},
 			{ value: "model", label: "Model", description: modelDescription },
 		];
 		if (advisor.model?.trim()) {
@@ -406,6 +412,13 @@ export class AdvisorConfigOverlayComponent implements Component {
 
 	#onDetailSelect(index: number, field: string): void {
 		switch (field) {
+			case "toggleEnabled": {
+				const a = this.#doc.advisors[index];
+				a.enabled = a.enabled === false ? undefined : false;
+				this.#dirty = true;
+				this.#showDetail(index);
+				return;
+			}
 			case "name":
 				this.#showNameEditor(index);
 				return;
