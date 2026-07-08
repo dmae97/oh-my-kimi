@@ -350,7 +350,7 @@ describe("AuthStorage codex oauth ranking", () => {
 		store.upsertCredentialBlock({
 			credentialId: blockedRow.id,
 			providerKey: "openai-codex:oauth",
-			blockScope: "",
+			blockScope: "shared",
 			blockedUntilMs: Date.now() + 6 * 24 * HOUR_MS,
 		});
 
@@ -398,7 +398,7 @@ describe("AuthStorage codex oauth ranking", () => {
 
 		await authStorage.fetchUsageReports();
 
-		expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "")).toBeUndefined();
+		expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeUndefined();
 		expect(authStorage.getGeneration()).toBeGreaterThan(generationBeforeFetch);
 
 		const reconciledSelectionCounts = await countApiKeySelections(
@@ -483,19 +483,19 @@ describe("AuthStorage codex oauth ranking", () => {
 			baseUrlResolver: provider => (provider === "openai-codex" ? inFlightBaseUrl : undefined),
 		});
 		await inFlightStarted.promise;
-		expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "")).toBeUndefined();
+		expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeUndefined();
 
 		const markResult = await authStorage.markUsageLimitReached("openai-codex", blockedSessionId, {
 			retryAfterMs: 6 * 24 * HOUR_MS,
 		});
 
 		expect(markResult.switched).toBe(true);
-		expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "")).toBeDefined();
+		expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeDefined();
 
 		inFlightUsage.resolve(blockedReport);
 		await inFlightReports;
 
-		expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "")).toBeDefined();
+		expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeDefined();
 		const selectionCounts = await countApiKeySelections(
 			authStorage,
 			"openai-codex",
@@ -599,14 +599,14 @@ describe("AuthStorage codex oauth ranking", () => {
 				});
 
 				expect(markResult.switched).toBe(true);
-				expect(remoteStore.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "")).toBeDefined();
+				expect(remoteStore.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeDefined();
 				await blockPersisted.promise;
-				expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "")).toBeDefined();
+				expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeDefined();
 
 				await clientStorage.fetchUsageReports();
 
-				expect(remoteStore.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "")).toBeUndefined();
-				expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "")).toBeUndefined();
+				expect(remoteStore.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeUndefined();
+				expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeUndefined();
 				expect(await clientStorage.getApiKey("openai-codex", blockedSessionId)).toBe("api-acct-broker-blocked");
 			} finally {
 				clientStorage.close();
@@ -637,7 +637,7 @@ describe("AuthStorage codex oauth ranking", () => {
 		store.upsertCredentialBlock({
 			credentialId: blockedRow.id,
 			providerKey: "openai-codex:oauth",
-			blockScope: "",
+			blockScope: "shared",
 			blockedUntilMs,
 		});
 
@@ -674,7 +674,7 @@ describe("AuthStorage codex oauth ranking", () => {
 
 		await authStorage.fetchUsageReports();
 
-		expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "")).toBe(blockedUntilMs);
+		expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBe(blockedUntilMs);
 	});
 
 	test("falls back to earliest-unblocking account when all exhausted", async () => {

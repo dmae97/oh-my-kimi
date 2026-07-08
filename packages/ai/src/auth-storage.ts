@@ -4372,10 +4372,9 @@ export class AuthStorage {
 	/**
 	 * Self-heal a stale Codex usage-limit block: when a fresh live usage report
 	 * shows the account is allowed and below every limit, drop the persisted and
-	 * in-memory `openai-codex:oauth` block so the balancer re-includes it. Only
-	 * Codex — its blocks are unscoped (`codexRankingStrategy` defines no
-	 * `blockScope`), so clearing all blocks for the credential id is exact. A
-	 * future scoped Codex block would require revisiting this.
+	 * in-memory `openai-codex:oauth` blocks so the balancer re-includes it. Only
+	 * Codex — its ranking strategy uses the single model-independent `"shared"`
+	 * scope, so clearing every block for the credential id is exact.
 	 */
 	#isHealthyCodexUsageReport(report: UsageReport): boolean {
 		const metadata = report.metadata;
@@ -4392,7 +4391,10 @@ export class AuthStorage {
 		const providerKey = this.#getProviderTypeKey(provider, "oauth");
 		const credentialIndex = this.#getStoredCredentials(provider).findIndex(entry => entry.id === credentialId);
 		if (credentialIndex < 0) return;
-		const blockedUntilMs = this.#getCredentialBlockedUntil(provider, providerKey, credentialIndex);
+		// Mirror selection: consult the same strategy scope `markUsageLimitReached`
+		// persists under, else a scoped block is invisible here and never healed.
+		const blockScope = this.#rankingStrategyResolver?.(provider)?.blockScope?.({});
+		const blockedUntilMs = this.#getCredentialBlockedUntil(provider, providerKey, credentialIndex, blockScope);
 		if (blockedUntilMs === undefined) return;
 		this.#clearCredentialBlocks(provider, credentialId);
 		logger.info("Cleared stale Codex usage-limit block after healthy live usage report", {
