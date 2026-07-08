@@ -366,6 +366,18 @@ export class CommandController {
 			this.ctx.present([new Spacer(1), new Text("Advisor is disabled.", 1, 0)]);
 			return;
 		}
+		// Fetch live quota data (cached 5 min by the auth-gateway) so we can show
+		// real usage windows/reset timers per advisor provider. Non-fatal when absent.
+		const usageProvider = this.ctx.session as { fetchUsageReports?: () => Promise<UsageReport[] | null> };
+		let usageReports: UsageReport[] | null = null;
+		if (usageProvider.fetchUsageReports) {
+			try {
+				usageReports = await usageProvider.fetchUsageReports();
+			} catch {
+				// Network/auth failure is non-fatal — just skip the quota line.
+			}
+		}
+		const nowMs = Date.now();
 		// Roster view: show every configured advisor with its status, even when
 		// none are live (all paused/no-model). The old code returned a generic
 		// message that hid the per-advisor state the user needs to act on.
@@ -383,6 +395,10 @@ export class CommandController {
 				info += `\n${theme.fg(color, glyph)} ${theme.bold(a.name)} ${theme.fg("dim", `[${label}]`)}\n`;
 				if (a.model) {
 					info += `${theme.fg("dim", "Model:")} ${a.model.provider}/${a.model.id}\n`;
+				}
+				if (a.model && usageReports) {
+					const quota = formatCompactQuota(a.model.provider, usageReports, nowMs);
+					if (quota) info += `${theme.fg("dim", quota)}\n`;
 				}
 				if (a.status === "running" || a.status === "quota_exhausted") {
 					const ctx =
@@ -416,6 +432,13 @@ export class CommandController {
 		if (model) {
 			info += `${theme.bold("Provider")}\n`;
 			info += `${theme.fg("dim", "Model:")} ${model.provider}/${model.id}\n`;
+		}
+		if (model && usageReports) {
+			const quota = formatCompactQuota(model.provider, usageReports, nowMs);
+			if (quota) {
+				info += `\n${theme.bold("Quota")}\n`;
+				info += `${theme.fg("dim", quota)}\n`;
+			}
 		}
 		info += `\n${theme.bold("Messages")}\n`;
 		info += `${theme.fg("dim", "User:")} ${stats.messages.user.toLocaleString()}\n`;
@@ -1555,6 +1578,33 @@ function resolveResetRange(limits: UsageLimit[], nowMs: number): string | null {
 		return `resets in ${formatDuration(minReset)}–${formatDuration(maxReset)}`;
 	}
 	return `resets in ${formatDuration(minReset)}`;
+}
+/**
+ * Compact one-line quota summary for a single advisor's provider.
+ * Returns `null` when the provider has no usage data.
+ * Example output: `Quota: 7d window · 67% used · resets in 3.2d`
+ */
+export function formatCompactQuota(provider: string, reports: UsageReport[], nowMs: number): string | null {
+	const providerReports = reports.filter(r => r.provider === provider);
+	if (providerReports.length === 0) return null;
+	// Collect all limits across accounts/windows for this provider, pick the
+	// one with the highest used fraction (most pressing).
+	let best: { limit: UsageLimit; fraction: number } | null = null;
+	for (const report of providerReports) {
+		for (const limit of report.limits) {
+			const fraction = resolveUsedFraction(limit);
+			if (fraction === undefined) continue;
+			if (!best || fraction > best.fraction) best = { limit, fraction };
+		}
+	}
+	if (!best) return null;
+	const { limit, fraction } = best;
+	const pct = Math.round(fraction * 100);
+	const windowLabel = limit.window?.label ?? limit.scope.windowId ?? "—";
+	const parts = [`${windowLabel} window`, `${pct}% used`];
+	const reset = resolveResetRange([limit], nowMs);
+	if (reset) parts.push(reset);
+	return `Quota: ${parts.join(" · ")}`;
 }
 
 function resolveStatusIcon(status: UsageLimit["status"], uiTheme: typeof theme): string {

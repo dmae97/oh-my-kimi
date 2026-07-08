@@ -16,7 +16,7 @@
  * `save` callback.
  */
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Model } from "@oh-my-pi/pi-ai";
+import type { Model, UsageReport } from "@oh-my-pi/pi-ai";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import {
 	type Component,
@@ -39,6 +39,7 @@ import type { ModelRegistry } from "../../config/model-registry";
 import { formatModelSelectorValue } from "../../config/model-resolver";
 import type { Settings } from "../../config/settings";
 import type { PerAdvisorStat } from "../../session/agent-session";
+import { formatCompactQuota } from "../controllers/command-controller";
 import { getSelectListTheme, theme } from "../theme/theme";
 import { HookEditorComponent } from "./hook-editor";
 import { ModelSelectorComponent } from "./model-selector";
@@ -66,6 +67,7 @@ export interface AdvisorConfigCallbacks {
 	notify: (message: string) => void;
 	/** Live advisor usage stats; lets the preview show tokens/cost per advisor. */
 	getAdvisorStats?: () => PerAdvisorStat[];
+	getUsageReports?: () => Promise<UsageReport[] | null>;
 }
 
 export interface AdvisorConfigDeps {
@@ -124,6 +126,8 @@ export class AdvisorConfigOverlayComponent implements Component {
 	#cb: AdvisorConfigCallbacks;
 	#scope: AdvisorConfigScope;
 	#doc: WatchdogConfigDoc;
+	/** Cached usage reports (quota/window/reset) prefetched on overlay open. */
+	#cachedReports: UsageReport[] | null = null;
 	#dirty = false;
 
 	#screen: Screen = "list";
@@ -155,6 +159,16 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#doc = doc;
 		this.#ensureRosterVisible();
 		this.#showList();
+		// Prefetch usage reports for quota display; non-fatal if unavailable.
+		if (callbacks.getUsageReports) {
+			void callbacks
+				.getUsageReports()
+				.then(r => {
+					this.#cachedReports = r;
+					this.#cb.requestRender();
+				})
+				.catch(() => {});
+		}
 	}
 
 	// ───────────────────────────── render ─────────────────────────────
@@ -302,6 +316,11 @@ export class AdvisorConfigOverlayComponent implements Component {
 					);
 				}
 			}
+		}
+		// Show provider quota (window/reset/remaining) when available.
+		if (this.#cachedReports && advisor.model) {
+			const quota = formatCompactQuota(advisor.model.split("/")[0]!, this.#cachedReports, Date.now());
+			if (quota) lines.push(theme.fg("dim", `  ${quota}`));
 		}
 		return lines.map(line => truncateToWidth(line, bodyWidth));
 	}
