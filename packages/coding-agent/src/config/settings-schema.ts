@@ -1367,7 +1367,17 @@ export const SETTINGS_SCHEMA = {
 			description: "Allow retry recovery to switch to configured fallback models",
 		},
 	},
-	"retry.fallbackChains": { type: "record", default: {} as Record<string, string[]> },
+	"retry.fallbackChains": {
+		type: "record",
+		default: {} as Record<string, string[]>,
+		ui: {
+			tab: "model",
+			group: "Retry & Fallback",
+			label: "Retry Fallback Chains",
+			description:
+				'JSON object mapping model roles to ordered fallback model selectors, e.g. {"default":["openai/gpt-4o-mini"]}.',
+		},
+	},
 	"retry.fallbackRevertPolicy": {
 		type: "enum",
 		values: ["cooldown-expiry", "never"] as const,

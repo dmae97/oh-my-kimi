@@ -107,4 +107,22 @@ describe("settings layout", () => {
 			group: "Services",
 		});
 	});
+
+	it("exposes retry fallback chains as editable JSON in the model settings", () => {
+		const def = getSettingsForTab("model").find(item => item.path === "retry.fallbackChains");
+
+		expect(def).toMatchObject({
+			path: "retry.fallbackChains",
+			type: "text",
+			tab: "model",
+			group: "Retry & Fallback",
+			label: "Retry Fallback Chains",
+		});
+		if (!def) throw new Error("retry.fallbackChains setting definition missing");
+
+		const description = def.description.toLowerCase();
+		expect(description).toContain("json");
+		expect(description).toContain("fallback");
+		expect(description).toContain("selector");
+	});
 });
