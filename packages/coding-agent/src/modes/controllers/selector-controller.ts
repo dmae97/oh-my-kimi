@@ -785,7 +785,6 @@ export class SelectorController {
 						return;
 					}
 
-					this.ctx.chatContainer.clear();
 					this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 					this.ctx.editor.setText(result.selectedText);
 					done();
@@ -929,7 +928,6 @@ export class SelectorController {
 
 						// Update UI — rebuild the display transcript for the new leaf (the
 						// context from navigateTree is the LLM context, not the transcript).
-						this.ctx.chatContainer.clear();
 						this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 						await this.ctx.reloadTodos();
 						if (result.editorText && !this.ctx.editor.getText().trim()) {
@@ -941,7 +939,7 @@ export class SelectorController {
 					} finally {
 						if (summaryLoader) {
 							summaryLoader.stop();
-							this.ctx.statusContainer.clear();
+							this.ctx.statusContainer.disposeChildren();
 						}
 						this.ctx.editor.onEscape = originalOnEscape;
 					}
@@ -1081,7 +1079,6 @@ export class SelectorController {
 		this.ctx.updateEditorBorderColor();
 
 		// Clear and re-render the chat
-		this.ctx.chatContainer.clear();
 		this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 		await this.ctx.reloadTodos();
 		this.ctx.showStatus(movedProject ? `Resumed session in ${shortenPath(newCwd)}` : "Resumed session");

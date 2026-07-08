@@ -579,10 +579,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.retryLoader.stop();
 			this.retryLoader = undefined;
 		}
-		this.statusContainer.clear();
-		this.pendingMessagesContainer.clear();
+		this.statusContainer.disposeChildren();
+		this.pendingMessagesContainer.disposeChildren();
 		this.#cancelModelCycleClearTimer();
-		this.modelCycleContainer.clear();
+		this.modelCycleContainer.disposeChildren();
 		this.compactionQueuedMessages = [];
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
@@ -3671,7 +3671,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	ensureLoadingAnimation(): void {
 		if (!this.loadingAnimation) {
 			this.#clearWorkingMessageAccentCache();
-			this.statusContainer.clear();
+			this.statusContainer.disposeChildren();
 			const messageColorFn = ((message: string) =>
 				renderWorkingMessage(message, this.#getWorkingMessageAccent())) as LoaderMessageColorFn & {
 				animated?: true;
@@ -3692,7 +3692,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			);
 			this.statusContainer.addChild(this.loadingAnimation);
 		} else if (!this.statusContainer.children.includes(this.loadingAnimation)) {
-			this.statusContainer.clear();
+			this.statusContainer.disposeChildren();
 			this.statusContainer.addChild(this.loadingAnimation);
 			this.ui.requestRender();
 		}
@@ -3705,7 +3705,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.loadingAnimation = undefined;
 		this.#clearWorkingMessageAccentCache();
 		if (clearStatusContainer) {
-			this.statusContainer.clear();
+			this.statusContainer.disposeChildren();
 		}
 	}
 
@@ -4168,7 +4168,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			}
 			this.#btwController.dispose();
 			this.#omfgController.dispose();
-			this.chatContainer.clear();
 			this.renderInitialMessages({ clearTerminalHistory: true });
 			this.updateEditorBorderColor();
 			this.showStatus(
