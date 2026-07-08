@@ -264,6 +264,37 @@ describe("createTools", () => {
 		expect(names).toEqual(["read", "goal", "resolve"]);
 	});
 
+	it("records active tools on the original session object", async () => {
+		const session = createTestSession();
+
+		await createTools(session, ["bash"]);
+
+		expect(session.isToolActive?.("bash")).toBe(true);
+		expect(session.isToolActive?.("read")).toBe(false);
+	});
+
+	it("renders bash guidance from the live active tool predicate", async () => {
+		const activeToolNames = new Set<string>();
+		const session = createTestSession({
+			isToolActive: name => activeToolNames.has(name),
+			setActiveToolNames: names => {
+				activeToolNames.clear();
+				for (const name of names) {
+					activeToolNames.add(name);
+				}
+			},
+		});
+
+		const tools = await createTools(session, ["bash", "grep", "read", "glob"]);
+		const bash = tools.find(tool => tool.name === "bash");
+
+		expect(bash?.description).toContain("`grep` tool");
+		session.setActiveToolNames?.(["bash"]);
+		expect(bash?.description).not.toContain("`grep` tool");
+		expect(bash?.description).not.toContain("`ls` → `read`");
+		expect(bash?.description).not.toContain("`find` → the `glob` tool");
+	});
+
 	it("includes search_tool_bm25 when MCP tool discovery is enabled and executable", async () => {
 		const session = createTestSession({
 			settings: createSettingsWithOverrides({

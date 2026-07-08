@@ -27,6 +27,7 @@ import { type BashInteractiveResult, runInteractiveBashPty } from "./bash-intera
 import { checkBashInterception } from "./bash-interceptor";
 import { canUseInteractiveBashPty } from "./bash-pty-selection";
 import { expandInternalUrls, type InternalUrlExpansionOptions } from "./bash-skill-urls";
+import { resolveEvalBackends } from "./eval-backends";
 import { invalidateGithubCacheForBashCommand } from "./gh-cache-invalidation";
 import {
 	formatStyledTruncationWarning,
@@ -375,7 +376,21 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 	};
 	readonly label = "Bash";
 	readonly loadMode = "essential";
-	readonly description: string;
+	get description(): string {
+		const evalBackends = resolveEvalBackends(this.session);
+		const isToolActive = (name: string, fallback: boolean): boolean => this.session.isToolActive?.(name) ?? fallback;
+		return prompt.render(bashDescription, {
+			asyncEnabled: this.#asyncEnabled,
+			autoBackgroundEnabled: this.#autoBackgroundEnabled,
+			autoBackgroundThresholdSeconds: Math.max(0, Math.floor(this.#autoBackgroundThresholdMs / 1000)),
+			hasAstGrep: isToolActive("ast_grep", this.session.settings.get("astGrep.enabled")),
+			hasAstEdit: isToolActive("ast_edit", this.session.settings.get("astEdit.enabled")),
+			hasGrep: isToolActive("grep", this.session.settings.get("grep.enabled")),
+			hasGlob: isToolActive("glob", this.session.settings.get("glob.enabled")),
+			hasRead: isToolActive("read", true),
+			hasEval: isToolActive("eval", evalBackends.python || evalBackends.js || evalBackends.ruby || evalBackends.julia),
+		});
+	}
 	readonly parameters: BashToolSchema;
 	// Non-pty calls run alongside each other (the executor isolates overlapping
 	// runs on the same shell session); pty takes over the terminal UI and must
@@ -397,15 +412,6 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 			),
 		);
 		this.parameters = this.#asyncEnabled ? bashSchemaWithAsync : bashSchemaBase;
-		this.description = prompt.render(bashDescription, {
-			asyncEnabled: this.#asyncEnabled,
-			autoBackgroundEnabled: this.#autoBackgroundEnabled,
-			autoBackgroundThresholdSeconds: Math.max(0, Math.floor(this.#autoBackgroundThresholdMs / 1000)),
-			hasAstGrep: this.session.settings.get("astGrep.enabled"),
-			hasAstEdit: this.session.settings.get("astEdit.enabled"),
-			hasGrep: this.session.settings.get("grep.enabled"),
-			hasGlob: this.session.settings.get("glob.enabled"),
-		});
 	}
 
 	#formatResultOutput(result: BashResult | BashInteractiveResult): string {

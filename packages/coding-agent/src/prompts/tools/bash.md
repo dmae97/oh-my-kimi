@@ -6,14 +6,22 @@ The shell invokes **real binaries** with simple args. It is NOT full GNU Bash.
 
 Use bash ONLY for: a single binary call, or one short pipeline that COMPUTES a fact and does not depend on shell-specific regex/quoting (`wc -l`, `sort | uniq -c`, `comm`, `diff`, a checksum, `git status`).
 
-Anything below → `eval` cell, not bash:
+{{#if hasEval}}Anything below → `eval` cell, not bash:
 - Inline interpreter scripts (`-e`/`-c`/`--eval`) when an eval runtime exists for that language
 - Heredocs (`<<EOF`), `while`/`for`/`if`/`case` shell control flow
 - `$(…)` command substitution nested inside another command
 - Pipelines with more than two stages, or stages that need control flow or quote/JSON escaping
 - Multiline commands, `&&`-chains mixing control flow
 - Quote/JSON escaping that fights the shell
-- GNU grep BRE extensions are not guaranteed in the embedded shell: use `grep -E 'json|tool'` for alternation instead of `grep 'json\|tool'`; use the built-in `grep` tool with `pattern: "json|tool"` (Rust regex, so `\bword\b` works there), or `eval` for exact text processing.
+{{else}}Anything below means you are writing a shell program, not invoking one. Prefer a purpose-built tool, a checked-in script, or a single repo command instead:
+- Inline interpreter scripts (`-e`/`-c`/`--eval`)
+- Heredocs (`<<EOF`), `while`/`for`/`if`/`case` shell control flow
+- `$(…)` command substitution nested inside another command
+- Pipelines with more than two stages, or stages that need control flow or quote/JSON escaping
+- Multiline commands, `&&`-chains mixing control flow
+- Quote/JSON escaping that fights the shell
+{{/if}}
+{{#if hasGrep}}- GNU grep BRE extensions are not guaranteed in the embedded shell: use `grep -E 'json|tool'` for alternation instead of `grep 'json\|tool'`; use the built-in `grep` tool with `pattern: "json|tool"` (Rust regex, so `\bword\b` works there){{#if hasEval}}, or `eval` for exact text processing{{/if}}.{{else}}- GNU grep BRE extensions are not guaranteed in the embedded shell: use `grep -E 'json|tool'` for alternation instead of `grep 'json\|tool'`{{#if hasEval}}, or use `eval` for exact text processing{{/if}}.{{/if}}
 
 <instruction>
 - `cwd` sets the working dir, not `cd dir && …`
@@ -23,14 +31,17 @@ Anything below → `eval` cell, not bash:
 - `;` only when later commands should run despite earlier failures
 - Multiple bash calls per message run concurrently. NEVER split order-dependent commands across parallel calls — chain with `&&` in one call.
 - Internal URIs (`skill://`, `agent://`, …) auto-resolve to FS paths
-- Need exact pipeline semantics (`cmd | head`, multi-stage filtering) or output truncation? Prefer `eval` and process the stream directly.
+{{#if hasEval}}- Need exact pipeline semantics (`cmd | head`, multi-stage filtering) or output truncation? Prefer `eval` and process the stream directly.{{else}}- Need exact pipeline semantics (`cmd | head`, multi-stage filtering) or output truncation? Use a checked-in script, purpose-built tool, or single command that owns the output shape.{{/if}}
 {{#if asyncEnabled}}
 - `async: true` for long-running commands when you don't need immediate output: returns a background job ID; result delivered as a follow-up.
 {{/if}}
 </instruction>
 
 <critical>
-- The embedded shell invokes real binaries with simple args; it is NOT full GNU Bash. Loops, conditionals, heredocs, inline interpreter scripts (`-e`/`-c`/`--eval`) when an eval runtime exists, several piped stages, exact pipeline semantics, or quote/JSON escaping mean you're writing a program → use `eval` cells: restartable, stateful, and free of shell-quoting traps.
+{{#if hasEval}}- The embedded shell invokes real binaries with simple args; it is NOT full GNU Bash and NOT a scripting surface. Loops, conditionals, heredocs, inline interpreter scripts (`-e`/`-c`/`--eval`) when an eval runtime exists, several piped stages, exact pipeline semantics, or quote/JSON escaping mean you're writing a program → use `eval` cells: restartable, stateful, and free of shell-quoting traps.{{else}}- The embedded shell invokes real binaries with simple args; it is NOT full GNU Bash and NOT a scripting surface. Loops, conditionals, heredocs, inline interpreter scripts, several piped stages, exact pipeline semantics, or quote/JSON escaping mean you're writing a shell program; use a purpose-built tool or checked-in script instead.{{/if}}
+{{#if hasGrep}}- NEVER shell out to search content or files: `grep/rg` → `grep`.{{else}}- Avoid shelling out for broad content search; use an active search/read tool when one is available.{{/if}}
+{{#if hasRead}}{{#if hasGlob}}- NEVER use `ls` or `find` to list or locate files — `ls` → `read` (a directory path lists entries), `find` → the `glob` tool (globbing). This is non-negotiable, even for a single quick listing.{{else}}- Prefer `read` for known file and directory reads. Only use shell listing when no file-listing tool is active.{{/if}}{{else}}{{#if hasGlob}}- Prefer `glob` for file discovery; avoid `find` when `glob` is active.{{else}}- If no file read/listing tool is active, keep shell inspection narrow and state that limitation.{{/if}}{{/if}}
+- Avoid head/tail/redirections: stderr already merged; long output auto-truncated, FULL capture kept at `artifact://<id>`.
 </critical>
 
 <output>

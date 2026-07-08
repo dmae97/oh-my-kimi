@@ -239,7 +239,7 @@ import { theme } from "../modes/theme/theme";
 import { parseTurnBudget } from "../modes/turn-budget";
 import { containsUltrathink, ULTRATHINK_NOTICE } from "../modes/ultrathink";
 import { computeNonMessageBreakdown, computeNonMessageTokens } from "../modes/utils/context-usage";
-import { containsWorkflow, WORKFLOW_NOTICE } from "../modes/workflow";
+import { containsWorkflow, renderWorkflowNotice } from "../modes/workflow";
 import { createPlanReadMatcher } from "../plan-mode/plan-protection";
 import type { PlanModeState } from "../plan-mode/state";
 import advisorSystemPrompt from "../prompts/advisor/system.md" with { type: "text" };
@@ -689,6 +689,8 @@ export interface AgentSessionConfig {
 	toolRegistry?: Map<string, AgentTool>;
 	/** Tool names whose current registry entry is still the built-in implementation. */
 	builtInToolNames?: Iterable<string>;
+	/** Update tool-session predicates that render guidance from the live active tool set. */
+	setActiveToolNames?: (names: Iterable<string>) => void;
 	/** Current session pre-LLM message transform pipeline */
 	transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => AgentMessage[] | Promise<AgentMessage[]>;
 	/**
@@ -1724,6 +1726,7 @@ export class AgentSession {
 	#getLocalCalendarDate: () => string;
 	#getMcpServerInstructions: (() => Map<string, string> | undefined) | undefined;
 	#reloadSshTool: (() => Promise<AgentTool | null>) | undefined;
+	#setActiveToolNames: ((names: Iterable<string>) => void) | undefined;
 	#disconnectOwnedMcpManager: (() => Promise<void>) | undefined;
 	#requestedToolNames: ReadonlySet<string> | undefined;
 	#baseSystemPrompt: string[];
@@ -2170,6 +2173,7 @@ export class AgentSession {
 		this.#getLocalCalendarDate = config.getLocalCalendarDate ?? formatLocalCalendarDate;
 		this.#getMcpServerInstructions = config.getMcpServerInstructions;
 		this.#reloadSshTool = config.reloadSshTool;
+		this.#setActiveToolNames = config.setActiveToolNames;
 		this.#disconnectOwnedMcpManager = config.disconnectOwnedMcpManager;
 		this.#baseSystemPrompt = this.agent.state.systemPrompt;
 		this.#promptModelKey = this.#currentPromptModelKey();
@@ -6320,6 +6324,7 @@ export class AgentSession {
 				),
 			);
 		}
+		this.#setActiveToolNames?.(validToolNames);
 		const activeNameSet = new Set(validToolNames);
 		for (const name of Array.from(this.#selectedDiscoveredToolNames)) {
 			if (!activeNameSet.has(name) || isMCPToolName(name) || !this.#toolRegistry.has(name)) {
@@ -6425,6 +6430,7 @@ export class AgentSession {
 	async refreshBaseSystemPrompt(): Promise<void> {
 		if (!this.#rebuildSystemPrompt) return;
 		const activeToolNames = this.getActiveToolNames();
+		this.#setActiveToolNames?.(activeToolNames);
 		const built = await this.#rebuildSystemPrompt(activeToolNames, this.#toolRegistry);
 		this.#baseSystemPrompt = built.systemPrompt;
 		this.#baseSystemPromptBeforeMemoryPromotion = undefined;
@@ -7368,7 +7374,7 @@ export class AgentSession {
 			keywordNotices.push({
 				role: "custom",
 				customType: "workflow-notice",
-				content: WORKFLOW_NOTICE,
+				content: renderWorkflowNotice({ taskBatch: this.settings.get("task.batch") }),
 				display: false,
 				attribution: "user",
 				timestamp,
