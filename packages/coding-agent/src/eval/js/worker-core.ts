@@ -213,8 +213,6 @@ export class WorkerCore {
 	}
 
 	async #runOne(runId: string, code: string, filename: string, snapshot: SessionSnapshot): Promise<void> {
-		const runtime = this.#ensureRuntime(snapshot);
-		runtime.setCwd(snapshot.cwd);
 		const active: ActiveRun = { runId, filename, pendingTools: new Map(), floatingRejections: [] };
 		this.#runs.set(runId, active);
 		const hooks: RuntimeHooks = {
@@ -224,6 +222,8 @@ export class WorkerCore {
 		};
 		let result: RunResult;
 		try {
+			const runtime = this.#ensureRuntime(snapshot);
+			runtime.setCwd(snapshot.cwd);
 			const value = await runtime.run(code, filename, hooks, { runId, cwd: snapshot.cwd });
 			runtime.displayValue(value, hooks);
 			result = { type: "result", runId, ok: true };
