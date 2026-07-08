@@ -145,7 +145,7 @@ export const mnemopiBackend: MemoryBackend = {
 				state = new MnemopiSessionState({ sessionId: session.sessionId, config, session });
 				setMnemopiSessionState(session, state);
 			}
-			await state?.consolidate();
+			await state?.consolidate({ full: true });
 		} catch (error) {
 			logger.warn("Mnemopi: enqueue failed.", { error: String(error) });
 		}

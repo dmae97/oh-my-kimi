@@ -554,7 +554,7 @@ describe("Mnemopi backend lifecycle", () => {
 		const perBank = ownedMemories.map(memory => ({
 			memory,
 			flush: vi.spyOn(memory, "flushExtractions"),
-			sleep: vi.spyOn(memory, "sleepAllSessions"),
+			sleep: vi.spyOn(memory, "sleep"),
 			close: vi.spyOn(memory, "close"),
 		}));
 
@@ -618,17 +618,47 @@ describe("Mnemopi backend lifecycle", () => {
 		const state = registerMnemopiState();
 		const retainMemory = state.getScopedRetainTarget().memory;
 		const flushSpy = vi.spyOn(retainMemory, "flushExtractions").mockResolvedValue();
-		const sleepSpy = vi.spyOn(retainMemory, "sleepAllSessions");
+		const sleepSpy = vi.spyOn(retainMemory, "sleep");
 		const closeSpy = vi.spyOn(retainMemory, "close");
 
 		await state.dispose();
 
-		// Unbounded dispose still runs the full consolidate-then-close pipeline,
-		// matching the #2320 contract for non-shutdown callers (state replacement
-		// during `mnemopiBackend.start`, etc.).
+		// Unbounded dispose still runs the consolidate-then-close pipeline, but
+		// uses the lighter current-session sleep rather than the full all-sessions
+		// scan so the interactive shutdown path stays fast (#3641).
 		expect(flushSpy).toHaveBeenCalledTimes(1);
 		expect(sleepSpy).toHaveBeenCalledTimes(1);
+		expect(sleepSpy).toHaveBeenCalledWith(false);
 		expect(closeSpy).toHaveBeenCalledTimes(1);
+
+		registeredMnemopiState = undefined;
+	});
+
+	it("dispose retains the current session without scheduling LLM fact extraction", async () => {
+		const state = registerMnemopiState();
+		const retainSpy = vi.spyOn(state, "forceRetainCurrentSession").mockResolvedValue();
+
+		await state.dispose();
+
+		expect(retainSpy).toHaveBeenCalledTimes(1);
+		expect(retainSpy).toHaveBeenCalledWith({ extract: false });
+
+		registeredMnemopiState = undefined;
+	});
+
+	it("consolidate({ full: true }) runs the full cross-session sleepAllSessions", async () => {
+		const state = registerMnemopiState();
+		const retainMemory = state.getScopedRetainTarget().memory;
+		vi.spyOn(state, "forceRetainCurrentSession").mockResolvedValue();
+		vi.spyOn(retainMemory, "flushExtractions").mockResolvedValue();
+		const sleepAllSessionsSpy = vi.spyOn(retainMemory, "sleepAllSessions");
+		const sleepSpy = vi.spyOn(retainMemory, "sleep");
+
+		await state.consolidate({ full: true });
+
+		expect(sleepAllSessionsSpy).toHaveBeenCalledTimes(1);
+		expect(sleepAllSessionsSpy).toHaveBeenCalledWith(false);
+		expect(sleepSpy).not.toHaveBeenCalled();
 
 		registeredMnemopiState = undefined;
 	});
