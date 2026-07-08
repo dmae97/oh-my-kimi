@@ -2339,7 +2339,7 @@ export class AgentSession {
 		const descriptors: AdvisorRuntimeDescriptor[] = [];
 		const usedSlugs = new Set<string>();
 		for (const config of roster) {
-			let slug = legacy ? "" : slugifyAdvisorName(config.name);
+			let slug = legacy ? "default" : slugifyAdvisorName(config.name);
 			if (slug) {
 				let candidate = slug;
 				let n = 2;

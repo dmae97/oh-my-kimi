@@ -293,6 +293,8 @@ export class AdvisorConfigOverlayComponent implements Component {
 			"",
 			theme.fg("dim", "Instructions:"),
 		];
+		const instr = advisor.instructions?.trim();
+		lines.push(...(instr ? wrap(instr, bodyWidth) : [theme.fg("muted", "(none)")]));
 		// Show live usage stats when available from the session.
 		const stats = this.#cb.getAdvisorStats?.();
 		if (stats) {

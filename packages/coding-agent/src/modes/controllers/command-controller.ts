@@ -344,7 +344,7 @@ export class CommandController {
 		this.ctx.present([new Spacer(1), new Text(info, 1, 0)]);
 	}
 
-	private static readonly advisorStatusGlyph: Record<string, string> = {
+	static readonly #advisorStatusGlyph: Record<string, string> = {
 		running: "●",
 		paused: "○",
 		no_model: "○",
@@ -352,7 +352,7 @@ export class CommandController {
 		error: "✕",
 	};
 
-	private static readonly advisorStatusLabel: Record<string, string> = {
+	static readonly #advisorStatusLabel: Record<string, string> = {
 		running: "running",
 		paused: "off",
 		no_model: "no model",
@@ -384,8 +384,8 @@ export class CommandController {
 		if (stats.advisors.length > 1 || (stats.configured && !stats.active)) {
 			let info = `${theme.bold("Advisor Status")} (${stats.advisors.length} advisors)\n`;
 			for (const a of stats.advisors) {
-				const glyph = CommandController.advisorStatusGlyph[a.status] ?? "?";
-				const label = CommandController.advisorStatusLabel[a.status] ?? a.status;
+				const glyph = CommandController.#advisorStatusGlyph[a.status] ?? "?";
+				const label = CommandController.#advisorStatusLabel[a.status] ?? a.status;
 				const color =
 					a.status === "running"
 						? "success"
@@ -425,8 +425,8 @@ export class CommandController {
 		let info = `${theme.bold("Advisor Status")}\n\n`;
 		if (stats.advisors.length === 1) {
 			const a = stats.advisors[0];
-			const glyph = CommandController.advisorStatusGlyph[a.status] ?? "?";
-			const label = CommandController.advisorStatusLabel[a.status] ?? a.status;
+			const glyph = CommandController.#advisorStatusGlyph[a.status] ?? "?";
+			const label = CommandController.#advisorStatusLabel[a.status] ?? a.status;
 			info += `${theme.fg(a.status === "running" ? "success" : "error", glyph)} ${a.name} ${theme.fg("dim", `[${label}]`)}\n\n`;
 		}
 		if (model) {
