@@ -99,10 +99,12 @@ import {
 	type LineRange,
 	parseLineRanges,
 	pathTargetsSsh,
+	probeLiteralPathExists,
 	resolveReadPath,
 	splitDelimitedPathEntry,
 	splitInternalUrlSel,
 	splitPathAndSel,
+	splitPathAndSelPreferringLiteral,
 } from "./path-utils";
 import { formatBytes, replaceTabs, shortenPath, wrapBrackets } from "./render-utils";
 import {
@@ -746,7 +748,10 @@ function splitPdfImageMemberReadPath(readPath: string): { pdfPath: string; membe
 
 const readSchema = type({
 	path: type("string").describe(
-		'Local path, internal URI (e.g. "omp://", "issue://123", "pr://123"), or URL; append :<sel> for line ranges or raw mode (e.g. "src/foo.ts:50-100")',
+		'Local path, internal URI (e.g. "omp://", "issue://123", "pr://123"), or URL. Inline :<sel> is still accepted for compatibility.',
+	),
+	"selector?": type("string").describe(
+		'selector without a leading colon (e.g. "50-100", "raw", "raw:50-100", "conflicts"); keeps `path` literal when filenames contain colons',
 	),
 });
 
@@ -2113,6 +2118,14 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		_toolContext?: AgentToolContext,
 	): Promise<AgentToolResult<ReadToolDetails>> {
 		let { path: readPath } = params;
+		let explicitSelector = params.selector?.trim();
+		let explicitParsedSelector = explicitSelector === undefined ? undefined : parseSel(explicitSelector);
+		if (
+			params.selector !== undefined &&
+			(explicitSelector === undefined || explicitSelector.length === 0 || explicitParsedSelector?.kind === "none")
+		) {
+			throw invalidSelector(params.selector);
+		}
 		if (readPath.startsWith("file://")) {
 			readPath = expandPath(readPath);
 		}
@@ -2133,40 +2146,55 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			if (!this.session.settings.get("fetch.enabled")) {
 				throw new ToolError("URL reads are disabled by settings.");
 			}
-			if (parsedUrlTarget.ranges !== undefined) {
+			if (explicitParsedSelector?.kind === "conflicts") {
+				throw new ToolError("The explicit read selector `conflicts` is only supported for local files.");
+			}
+			const urlRaw =
+				explicitParsedSelector === undefined ? parsedUrlTarget.raw : isRawSelector(explicitParsedSelector);
+			const urlRanges =
+				explicitParsedSelector?.kind === "lines" ? explicitParsedSelector.ranges : parsedUrlTarget.ranges;
+			if (urlRanges !== undefined && urlRanges.length > 1) {
 				const cached = await loadReadUrlCacheEntry(
 					this.session,
-					{ path: parsedUrlTarget.path, raw: parsedUrlTarget.raw },
+					{ path: parsedUrlTarget.path, raw: urlRaw },
 					signal,
 					{ ensureArtifact: true, preferCached: true },
 				);
-				return this.#buildInMemoryMultiRangeResult(cached.output, parsedUrlTarget.ranges, {
+				return this.#buildInMemoryMultiRangeResult(cached.output, urlRanges, {
 					details: { ...cached.details },
 					sourceUrl: cached.details.finalUrl,
 					entityLabel: "URL output",
-					raw: parsedUrlTarget.raw,
+					raw: urlRaw,
 					immutable: true,
 				});
 			}
-			if (parsedUrlTarget.offset !== undefined || parsedUrlTarget.limit !== undefined) {
+			const urlRange = urlRanges?.[0];
+			const urlOffset = explicitParsedSelector?.kind === "lines" ? urlRange?.startLine : parsedUrlTarget.offset;
+			const urlLimit =
+				explicitParsedSelector?.kind === "lines" && urlRange
+					? urlRange.endLine !== undefined
+						? urlRange.endLine - urlRange.startLine + 1
+						: undefined
+					: parsedUrlTarget.limit;
+			if (urlOffset !== undefined || urlLimit !== undefined) {
 				const cached = await loadReadUrlCacheEntry(
 					this.session,
-					{ path: parsedUrlTarget.path, raw: parsedUrlTarget.raw },
+					{ path: parsedUrlTarget.path, raw: urlRaw },
 					signal,
 					{
 						ensureArtifact: true,
 						preferCached: true,
 					},
 				);
-				return this.#buildInMemoryTextResult(cached.output, parsedUrlTarget.offset, parsedUrlTarget.limit, {
+				return this.#buildInMemoryTextResult(cached.output, urlOffset, urlLimit, {
 					details: { ...cached.details },
 					sourceUrl: cached.details.finalUrl,
 					entityLabel: "URL output",
-					raw: parsedUrlTarget.raw,
+					raw: urlRaw,
 					immutable: true,
 				});
 			}
-			return executeReadUrl(this.session, { path: parsedUrlTarget.path, raw: parsedUrlTarget.raw }, signal);
+			return executeReadUrl(this.session, { path: parsedUrlTarget.path, raw: urlRaw }, signal);
 		}
 
 		// Handle internal URLs (agent://, artifact://, memory://, skill://, rule://, local://, mcp://, omp://, issue://, pr://).
@@ -2174,8 +2202,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		// off the URL and surfaced via parseSel rather than confusing handlers.
 		const internalRouter = InternalUrlRouter.instance();
 		if (internalRouter.canHandle(readPath)) {
-			const internalTarget = splitInternalUrlSel(readPath);
-			const parsed = parseSel(internalTarget.sel);
+			const internalTarget =
+				explicitSelector === undefined ? splitInternalUrlSel(readPath) : { path: readPath, sel: explicitSelector };
+			const parsed = explicitParsedSelector ?? parseSel(internalTarget.sel);
 			if (internalTarget.sel !== undefined && parsed.kind === "none") {
 				throw new ToolError(
 					`Invalid selector ':${internalTarget.sel}' on '${internalTarget.path}'. Use :N, :N-M, :N+K, :N- (open-ended), a comma-separated list of ranges, :raw, or a range combined with raw (e.g. :raw:50-100).`,
@@ -2192,7 +2221,16 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					skills: this.session.skills,
 				});
 				if (localFile) {
-					readPath = internalTarget.sel === undefined ? localFile.path : `${localFile.path}:${internalTarget.sel}`;
+					readPath = localFile.path;
+					// Promote the URL-embedded selector into the explicit-selector state so
+					// downstream literal-preferring routing does NOT re-split the synthesized
+					// `${localFile.path}:${sel}` string — a sibling literal file at that name
+					// would otherwise shadow the intended local:// URL selector semantics
+					// (issue #4618 reviewer feedback on c493d12).
+					if (explicitSelector === undefined && internalTarget.sel !== undefined) {
+						explicitSelector = internalTarget.sel;
+						explicitParsedSelector = parsed;
+					}
 				} else {
 					return this.#handleInternalUrl(internalTarget.path, parsed, signal);
 				}
@@ -2205,48 +2243,68 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		// resolution share misses instead of re-globbing the workspace.
 		const suffixCache: SuffixMatchCache = new Map();
 
-		const archivePath = await this.#resolveArchiveReadPath(readPath, suffixCache, signal);
-		if (archivePath) {
-			const archiveSubPath = splitPathAndSel(archivePath.archiveSubPath);
-			const archiveParsed = parseSel(archiveSubPath.sel);
-			return this.#readArchive(
-				readPath,
-				archiveParsed,
-				{ ...archivePath, archiveSubPath: archiveSubPath.path },
-				signal,
-			);
-		}
+		// Prefer a literal filesystem match over selector interpretation so real
+		// POSIX filenames containing selector-looking suffixes win over structured
+		// archive / sqlite / pdf-image dispatch. With explicit `selector`, `path`
+		// is exact: `path: "test:1-2", selector: "1-2"` means "lines 1-2 from
+		// the literal file test:1-2", without recursively depending on whether a
+		// longer `test:1-2:1-2` filename also exists (issue #4618).
+		const literalSplit =
+			explicitSelector === undefined
+				? await splitPathAndSelPreferringLiteral(readPath, this.session.cwd)
+				: { path: readPath, sel: explicitSelector };
+		const rawPathIsLiteral =
+			explicitSelector !== undefined
+				? readPath.includes(":") && (await probeLiteralPathExists(readPath, this.session.cwd)) !== "missing"
+				: literalSplit.sel === undefined && splitPathAndSel(readPath).sel !== undefined;
 
-		const sqlitePath = await this.#resolveSqliteReadPath(readPath, suffixCache, signal);
-		if (sqlitePath) {
-			return this.#readSqlite(sqlitePath, signal);
-		}
-
-		const pdfImageMemberPath = splitPdfImageMemberReadPath(readPath);
-		if (pdfImageMemberPath) {
-			let absolutePdfPath = resolveReadPath(pdfImageMemberPath.pdfPath, this.session.cwd);
-			let suffixResolution: { from: string; to: string } | undefined;
-			try {
-				const stat = await Bun.file(absolutePdfPath).stat();
-				if (stat.isDirectory())
-					throw new ToolError(`Path '${pdfImageMemberPath.pdfPath}' is a directory, not a PDF file`);
-			} catch (error) {
-				if (!isNotFoundError(error) || isRemoteMountPath(absolutePdfPath)) throw error;
-				const suffixMatch = await this.#findSuffixMatchCached(suffixCache, pdfImageMemberPath.pdfPath, signal);
-				if (!suffixMatch) throw new ToolError(`Path '${pdfImageMemberPath.pdfPath}' not found`);
-				absolutePdfPath = suffixMatch.absolutePath;
-				suffixResolution = { from: pdfImageMemberPath.pdfPath, to: suffixMatch.displayPath };
+		if (!rawPathIsLiteral) {
+			const archivePath = await this.#resolveArchiveReadPath(readPath, suffixCache, signal);
+			if (archivePath) {
+				const archiveSubPath =
+					explicitSelector === undefined
+						? splitPathAndSel(archivePath.archiveSubPath)
+						: { path: archivePath.archiveSubPath, sel: explicitSelector };
+				const archiveParsed = parseSel(archiveSubPath.sel);
+				return this.#readArchive(
+					readPath,
+					archiveParsed,
+					{ ...archivePath, archiveSubPath: archiveSubPath.path },
+					signal,
+				);
 			}
-			return this.#readPdfImageMember(
-				absolutePdfPath,
-				pdfImageMemberPath.pdfPath,
-				pdfImageMemberPath.member,
-				suffixResolution,
-				signal,
-			);
+
+			const sqlitePath = await this.#resolveSqliteReadPath(readPath, suffixCache, signal);
+			if (sqlitePath) {
+				return this.#readSqlite(sqlitePath, signal);
+			}
+
+			const pdfImageMemberPath = splitPdfImageMemberReadPath(readPath);
+			if (pdfImageMemberPath) {
+				let absolutePdfPath = resolveReadPath(pdfImageMemberPath.pdfPath, this.session.cwd);
+				let suffixResolution: { from: string; to: string } | undefined;
+				try {
+					const stat = await Bun.file(absolutePdfPath).stat();
+					if (stat.isDirectory())
+						throw new ToolError(`Path '${pdfImageMemberPath.pdfPath}' is a directory, not a PDF file`);
+				} catch (error) {
+					if (!isNotFoundError(error) || isRemoteMountPath(absolutePdfPath)) throw error;
+					const suffixMatch = await this.#findSuffixMatchCached(suffixCache, pdfImageMemberPath.pdfPath, signal);
+					if (!suffixMatch) throw new ToolError(`Path '${pdfImageMemberPath.pdfPath}' not found`);
+					absolutePdfPath = suffixMatch.absolutePath;
+					suffixResolution = { from: pdfImageMemberPath.pdfPath, to: suffixMatch.displayPath };
+				}
+				return this.#readPdfImageMember(
+					absolutePdfPath,
+					pdfImageMemberPath.pdfPath,
+					pdfImageMemberPath.member,
+					suffixResolution,
+					signal,
+				);
+			}
 		}
 
-		const localTarget = splitPathAndSel(readPath);
+		const localTarget = literalSplit;
 		const localReadPath = localTarget.path;
 		const parsed = parseSel(localTarget.sel);
 

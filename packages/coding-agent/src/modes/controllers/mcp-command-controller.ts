@@ -88,12 +88,14 @@ function raceAbortSignal<T>(promise: Promise<T>, signal: AbortSignal, createErro
 const MCP_AUTH_MIN_WRAP_WIDTH = 16;
 
 /**
- * Wrap `url` into rows that each fit inside `width`, prefixed by a shared
- * single-column indent so nested composition doesn't touch column 0. When the
- * label + URL fit on one line, returns a single row; otherwise puts the label
- * on its own row and slices the URL into fixed-width chunks. URL chunks are
- * plain code points — browsers strip whitespace when pasted into the address
- * bar, so a multi-row selection copies back to the intact URL.
+ * Wrap `url` into rows that each fit inside `width`. When the label + URL fit
+ * on one line, returns a single indented row; otherwise puts the label on its
+ * own indented row and slices the URL into fixed-width chunks that start at
+ * column 0. Continuation chunks carry ZERO leading bytes on purpose: a
+ * multi-row terminal selection includes the newline plus any leading indent,
+ * and while address bars strip newlines they preserve or percent-encode
+ * embedded spaces — an indent would corrupt the URL at every chunk boundary
+ * (silently, when the damage lands inside a query value).
  */
 function wrapUrlRows(label: string, url: string, width: number): string[] {
 	const indent = " ";
@@ -103,10 +105,9 @@ function wrapUrlRows(label: string, url: string, width: number): string[] {
 	if (inlineWidth <= effective) {
 		return [`${indent}${theme.fg("muted", `${label} ${sanitized}`)}`];
 	}
-	const chunkWidth = Math.max(1, effective - indent.length);
 	const rows: string[] = [`${indent}${theme.fg("muted", label)}`];
-	for (let i = 0; i < sanitized.length; i += chunkWidth) {
-		rows.push(`${indent}${theme.fg("muted", sanitized.slice(i, i + chunkWidth))}`);
+	for (let i = 0; i < sanitized.length; i += effective) {
+		rows.push(theme.fg("muted", sanitized.slice(i, i + effective)));
 	}
 	return rows;
 }

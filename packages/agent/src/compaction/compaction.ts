@@ -698,6 +698,12 @@ function createSummarizationError(prefix: string, response: AssistantMessage): E
 	return response.errorStatus === undefined ? new Error(text) : new ProviderHttpError(text, response.errorStatus);
 }
 
+function shouldRetryHandoffWithAutoToolChoice(response: AssistantMessage): boolean {
+	if (response.errorStatus !== 400) return false;
+	const message = response.errorMessage ?? "";
+	return /\btool_choice\b/i.test(message) && /\bauto\b/i.test(message) && /\bsupported\b/i.test(message);
+}
+
 /**
  * Generate a summary of the conversation using the LLM.
  * If previousSummary is provided, uses the update prompt to merge.
@@ -813,14 +819,17 @@ export async function generateSummary(
 	];
 
 	if (options?.remoteEndpoint) {
-		const remote = await requestRemoteCompaction(
-			options.remoteEndpoint,
-			{
-				systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
-				prompt: promptText,
-			},
-			signal,
-			{ fetch: options.fetch },
+		const endpoint = options.remoteEndpoint;
+		const remote = await withAuth(
+			apiKey,
+			key =>
+				requestRemoteCompaction(
+					endpoint,
+					{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, prompt: promptText },
+					signal,
+					{ fetch: options.fetch, model, apiKey: key },
+				),
+			{ signal, missingKeyMessage: "Remote compaction credentials unavailable" },
 		);
 		return remote.summary;
 	}
@@ -917,24 +926,33 @@ export interface HandoffFromContextOptions {
  * `streamOptions` that mirror the live turn's cache routing. That keeps the
  * cache-preserving context construction in the host (which owns the transform
  * pipeline) while this function centralizes the handoff request contract:
- * `toolChoice: "none"`, clamped reasoning effort, oneshot telemetry, text-only
- * extraction, and provider-error mapping.
+ * cache-first `toolChoice: "none"`, clamped reasoning effort, one retry for
+ * auto-only `tool_choice` providers, oneshot telemetry, text-only extraction,
+ * and provider-error mapping.
  */
 export async function generateHandoffFromContext(
 	context: Context,
 	model: Model,
 	options: HandoffFromContextOptions,
 ): Promise<string> {
-	const response = await instrumentedCompleteSimple(
-		model,
-		context,
-		{
-			...options.streamOptions,
-			reasoning: resolveCompactionEffort(model, options.thinkingLevel),
-			toolChoice: "none",
-		},
-		{ telemetry: options.telemetry, oneshotKind: "handoff", completeImpl: options.completeImpl },
-	);
+	const requestOptions = {
+		...options.streamOptions,
+		reasoning: resolveCompactionEffort(model, options.thinkingLevel),
+		toolChoice: "none" as const,
+	};
+	let response = await instrumentedCompleteSimple(model, context, requestOptions, {
+		telemetry: options.telemetry,
+		oneshotKind: "handoff",
+		completeImpl: options.completeImpl,
+	});
+	if (response.stopReason === "error" && shouldRetryHandoffWithAutoToolChoice(response)) {
+		response = await instrumentedCompleteSimple(
+			model,
+			context,
+			{ ...requestOptions, toolChoice: "auto" },
+			{ telemetry: options.telemetry, oneshotKind: "handoff", completeImpl: options.completeImpl },
+		);
+	}
 
 	if (response.stopReason === "error") {
 		throw createSummarizationError("Handoff generation failed", response);
@@ -1001,14 +1019,17 @@ async function generateShortSummary(
 	promptText += SHORT_SUMMARY_PROMPT;
 
 	if (options?.remoteEndpoint) {
-		const remote = await requestRemoteCompaction(
-			options.remoteEndpoint,
-			{
-				systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
-				prompt: promptText,
-			},
-			signal,
-			{ fetch: options?.fetch },
+		const endpoint = options.remoteEndpoint;
+		const remote = await withAuth(
+			apiKey,
+			key =>
+				requestRemoteCompaction(
+					endpoint,
+					{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, prompt: promptText },
+					signal,
+					{ fetch: options?.fetch, model, apiKey: key },
+				),
+			{ signal, missingKeyMessage: "Remote compaction credentials unavailable" },
 		);
 		return remote.summary;
 	}

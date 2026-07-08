@@ -645,6 +645,354 @@ describe("listClaudePluginRoots", () => {
 
 		expect(found).toBeUndefined();
 	});
+
+	test("reads slash commands from array-form commands manifest field (Claude plugin path-behavior rules)", async () => {
+		// Mirrors real-world plugins such as addyosmani/agent-skills whose plugin.json
+		// declares `"commands": ["./.claude/commands", "./commands"]`. Both directories
+		// contribute; each command lands under the plugin's namespace.
+		const pluginsDir = path.join(tempDir, ".claude", "plugins");
+		const pluginPath = path.join(tempDir, "plugins", "manifest-commands-array");
+		await fs.mkdir(pluginsDir, { recursive: true });
+		await fs.mkdir(path.join(pluginPath, ".claude-plugin"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, ".claude", "commands"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, "commands"), { recursive: true });
+
+		const registry = {
+			version: 2,
+			plugins: {
+				"manifest-commands-array@market": [
+					{
+						scope: "user",
+						installPath: pluginPath,
+						version: "1.0.0",
+						installedAt: "2025-01-01T00:00:00Z",
+						lastUpdated: "2025-01-01T00:00:00Z",
+					},
+				],
+			},
+		};
+		await fs.writeFile(path.join(pluginsDir, "installed_plugins.json"), JSON.stringify(registry));
+		await fs.writeFile(
+			path.join(pluginPath, ".claude-plugin", "plugin.json"),
+			JSON.stringify({ commands: ["./.claude/commands", "./commands"] }),
+		);
+		await fs.writeFile(path.join(pluginPath, ".claude", "commands", "spec.md"), "Spec\n");
+		await fs.writeFile(path.join(pluginPath, ".claude", "commands", "plan.md"), "Plan\n");
+		await fs.writeFile(path.join(pluginPath, "commands", "review.md"), "Review\n");
+
+		const result = await loadCapability<SlashCommand>("slash-commands", { cwd: tempDir });
+		expect(result.warnings).toEqual([]);
+		const names = result.all
+			.filter(command => command.name.startsWith("manifest-commands-array:"))
+			.map(command => command.name)
+			.sort();
+		expect(names).toEqual([
+			"manifest-commands-array:plan",
+			"manifest-commands-array:review",
+			"manifest-commands-array:spec",
+		]);
+	});
+
+	test("reads slash commands from array-form manifest file entries", async () => {
+		// Claude plugins reference allows command paths to be either flat `.md`
+		// files or directories. A manifest-declared commands field still replaces
+		// default `commands/`; plugins that want defaults must list `./commands`.
+		const pluginsDir = path.join(tempDir, ".claude", "plugins");
+		const pluginPath = path.join(tempDir, "plugins", "manifest-commands-files");
+		await fs.mkdir(pluginsDir, { recursive: true });
+		await fs.mkdir(path.join(pluginPath, ".claude-plugin"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, "custom"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, "ops"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, "commands"), { recursive: true });
+
+		const registry = {
+			version: 2,
+			plugins: {
+				"manifest-commands-files@market": [
+					{
+						scope: "user",
+						installPath: pluginPath,
+						version: "1.0.0",
+						installedAt: "2025-01-01T00:00:00Z",
+						lastUpdated: "2025-01-01T00:00:00Z",
+					},
+				],
+			},
+		};
+		await fs.writeFile(path.join(pluginsDir, "installed_plugins.json"), JSON.stringify(registry));
+		await fs.writeFile(
+			path.join(pluginPath, ".claude-plugin", "plugin.json"),
+			JSON.stringify({ commands: ["./custom/deploy.md", "./ops"] }),
+		);
+		await fs.writeFile(path.join(pluginPath, "custom", "deploy.md"), "Deploy\n");
+		await fs.writeFile(path.join(pluginPath, "ops", "rollback.md"), "Rollback\n");
+		await fs.writeFile(path.join(pluginPath, "commands", "default.md"), "Default\n");
+
+		const result = await loadCapability<SlashCommand>("slash-commands", { cwd: tempDir });
+		expect(result.warnings).toEqual([]);
+		expect(result.all.find(c => c.name === "manifest-commands-files:deploy")?.content).toBe("Deploy\n");
+		expect(result.all.find(c => c.name === "manifest-commands-files:rollback")?.content).toBe("Rollback\n");
+		expect(result.all.find(c => c.name === "manifest-commands-files:default")).toBeUndefined();
+	});
+
+	test("array-form commands warns on out-of-root entries while loading valid ones", async () => {
+		const pluginsDir = path.join(tempDir, ".claude", "plugins");
+		const pluginPath = path.join(tempDir, "plugins", "manifest-commands-mixed");
+		const outsideDir = path.join(tempDir, "outside-commands");
+		await fs.mkdir(pluginsDir, { recursive: true });
+		await fs.mkdir(path.join(pluginPath, ".claude-plugin"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, ".claude", "commands"), { recursive: true });
+		await fs.mkdir(outsideDir, { recursive: true });
+
+		const registry = {
+			version: 2,
+			plugins: {
+				"manifest-commands-mixed@market": [
+					{
+						scope: "user",
+						installPath: pluginPath,
+						version: "1.0.0",
+						installedAt: "2025-01-01T00:00:00Z",
+						lastUpdated: "2025-01-01T00:00:00Z",
+					},
+				],
+			},
+		};
+		await fs.writeFile(path.join(pluginsDir, "installed_plugins.json"), JSON.stringify(registry));
+		await fs.writeFile(
+			path.join(pluginPath, ".claude-plugin", "plugin.json"),
+			JSON.stringify({ commands: ["./.claude/commands", "../../outside-commands"] }),
+		);
+		await fs.writeFile(path.join(pluginPath, ".claude", "commands", "spec.md"), "Spec\n");
+		await fs.writeFile(path.join(outsideDir, "escape.md"), "Escape\n");
+
+		const result = await loadCapability<SlashCommand>("slash-commands", { cwd: tempDir });
+		expect(result.warnings.some(w => w.includes("Ignoring commands path outside plugin root"))).toBe(true);
+		expect(result.all.find(c => c.name === "manifest-commands-mixed:spec")).toBeDefined();
+		expect(result.all.find(c => c.name === "manifest-commands-mixed:escape")).toBeUndefined();
+	});
+
+	test("reads skills from array-form skills manifest field", async () => {
+		const pluginsDir = path.join(tempDir, ".claude", "plugins");
+		const pluginPath = path.join(tempDir, "plugins", "manifest-skills-array");
+		await fs.mkdir(pluginsDir, { recursive: true });
+		await fs.mkdir(path.join(pluginPath, ".claude-plugin"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, "extra-skills", "alpha"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, "more-skills", "beta"), { recursive: true });
+
+		const registry = {
+			version: 2,
+			plugins: {
+				"manifest-skills-array@market": [
+					{
+						scope: "user",
+						installPath: pluginPath,
+						version: "1.0.0",
+						installedAt: "2025-01-01T00:00:00Z",
+						lastUpdated: "2025-01-01T00:00:00Z",
+					},
+				],
+			},
+		};
+		await fs.writeFile(path.join(pluginsDir, "installed_plugins.json"), JSON.stringify(registry));
+		await fs.writeFile(
+			path.join(pluginPath, ".claude-plugin", "plugin.json"),
+			JSON.stringify({ skills: ["./extra-skills", "./more-skills"] }),
+		);
+		await fs.writeFile(
+			path.join(pluginPath, "extra-skills", "alpha", "SKILL.md"),
+			"---\nname: alpha\ndescription: Alpha skill\n---\nBody\n",
+		);
+		await fs.writeFile(
+			path.join(pluginPath, "more-skills", "beta", "SKILL.md"),
+			"---\nname: beta\ndescription: Beta skill\n---\nBody\n",
+		);
+
+		const result = await loadCapability<Skill>("skills", { cwd: tempDir });
+		expect(result.warnings).toEqual([]);
+		expect(result.all.find(s => s.name === "alpha")).toBeDefined();
+		expect(result.all.find(s => s.name === "beta")).toBeDefined();
+	});
+
+	test("manifest skills field merges with default skills/ directory (adds, not replaces)", async () => {
+		// Per Claude plugins reference "Path behavior rules":
+		// `skills` adds to the default `skills/` scan; the default is always loaded
+		// alongside any manifest-declared directories.
+		const pluginsDir = path.join(tempDir, ".claude", "plugins");
+		const pluginPath = path.join(tempDir, "plugins", "manifest-skills-merge");
+		await fs.mkdir(pluginsDir, { recursive: true });
+		await fs.mkdir(path.join(pluginPath, ".claude-plugin"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, "skills", "default-skill"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, "extra-skills", "extra-skill"), { recursive: true });
+
+		const registry = {
+			version: 2,
+			plugins: {
+				"manifest-skills-merge@market": [
+					{
+						scope: "user",
+						installPath: pluginPath,
+						version: "1.0.0",
+						installedAt: "2025-01-01T00:00:00Z",
+						lastUpdated: "2025-01-01T00:00:00Z",
+					},
+				],
+			},
+		};
+		await fs.writeFile(path.join(pluginsDir, "installed_plugins.json"), JSON.stringify(registry));
+		await fs.writeFile(
+			path.join(pluginPath, ".claude-plugin", "plugin.json"),
+			JSON.stringify({ skills: ["./extra-skills"] }),
+		);
+		await fs.writeFile(
+			path.join(pluginPath, "skills", "default-skill", "SKILL.md"),
+			"---\nname: default-skill\ndescription: Default skill\n---\nBody\n",
+		);
+		await fs.writeFile(
+			path.join(pluginPath, "extra-skills", "extra-skill", "SKILL.md"),
+			"---\nname: extra-skill\ndescription: Extra skill\n---\nBody\n",
+		);
+
+		const result = await loadCapability<Skill>("skills", { cwd: tempDir });
+		expect(result.warnings).toEqual([]);
+		expect(result.all.find(s => s.name === "default-skill")).toBeDefined();
+		expect(result.all.find(s => s.name === "extra-skill")).toBeDefined();
+	});
+
+	test("marketplace-root skills manifest field replaces default skills directory", async () => {
+		// Claude path-behavior rules carve out marketplace entries whose source is the
+		// marketplace root: their manifest `skills` field selects the published
+		// subdirectories instead of also loading the root `skills/` directory.
+		const pluginsDir = path.join(tempDir, ".claude", "plugins");
+		const pluginPath = path.join(tempDir, "plugins", "manifest-skills-marketplace-root");
+		await fs.mkdir(pluginsDir, { recursive: true });
+		await fs.mkdir(path.join(pluginPath, ".claude-plugin"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, "skills", "unpublished-root-skill"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, "plugins", "published", "skills", "published-skill"), {
+			recursive: true,
+		});
+
+		const registry = {
+			version: 2,
+			plugins: {
+				"manifest-skills-marketplace-root@market": [
+					{
+						scope: "user",
+						installPath: pluginPath,
+						version: "1.0.0",
+						installedAt: "2025-01-01T00:00:00Z",
+						lastUpdated: "2025-01-01T00:00:00Z",
+					},
+				],
+			},
+		};
+		await fs.writeFile(path.join(pluginsDir, "installed_plugins.json"), JSON.stringify(registry));
+		await fs.writeFile(
+			path.join(pluginPath, "marketplace.json"),
+			JSON.stringify({
+				name: "market",
+				owner: { name: "Market" },
+				plugins: [{ name: "manifest-skills-marketplace-root", source: "./" }],
+			}),
+		);
+		await fs.writeFile(
+			path.join(pluginPath, ".claude-plugin", "plugin.json"),
+			JSON.stringify({ skills: ["./plugins/published/skills"] }),
+		);
+		await fs.writeFile(
+			path.join(pluginPath, "skills", "unpublished-root-skill", "SKILL.md"),
+			"---\nname: unpublished-root-skill\ndescription: Unpublished root skill\n---\nBody\n",
+		);
+		await fs.writeFile(
+			path.join(pluginPath, "plugins", "published", "skills", "published-skill", "SKILL.md"),
+			"---\nname: published-skill\ndescription: Published skill\n---\nBody\n",
+		);
+
+		const result = await loadCapability<Skill>("skills", { cwd: tempDir });
+		expect(result.warnings).toEqual([]);
+		expect(result.all.find(s => s.name === "published-skill")).toBeDefined();
+		expect(result.all.find(s => s.name === "unpublished-root-skill")).toBeUndefined();
+	});
+
+	test("array-form skills entry pointing at a directory containing SKILL.md loads the single skill", async () => {
+		// Per Claude plugins reference: a skills path may point directly at a directory whose
+		// SKILL.md is the skill (frontmatter name → invocation, directory basename → fallback).
+		// Real plugins use `"skills": ["./"]` — that entry must not silently drop the skill.
+		const pluginsDir = path.join(tempDir, ".claude", "plugins");
+		const pluginPath = path.join(tempDir, "plugins", "manifest-skills-self");
+		await fs.mkdir(pluginsDir, { recursive: true });
+		await fs.mkdir(path.join(pluginPath, ".claude-plugin"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, "single"), { recursive: true });
+
+		const registry = {
+			version: 2,
+			plugins: {
+				"manifest-skills-self@market": [
+					{
+						scope: "user",
+						installPath: pluginPath,
+						version: "1.0.0",
+						installedAt: "2025-01-01T00:00:00Z",
+						lastUpdated: "2025-01-01T00:00:00Z",
+					},
+				],
+			},
+		};
+		await fs.writeFile(path.join(pluginsDir, "installed_plugins.json"), JSON.stringify(registry));
+		await fs.writeFile(
+			path.join(pluginPath, ".claude-plugin", "plugin.json"),
+			JSON.stringify({ skills: ["./single"] }),
+		);
+		await fs.writeFile(
+			path.join(pluginPath, "single", "SKILL.md"),
+			"---\nname: solo-skill\ndescription: Solo skill\n---\nBody\n",
+		);
+
+		const result = await loadCapability<Skill>("skills", { cwd: tempDir });
+		expect(result.warnings).toEqual([]);
+		expect(result.all.find(s => s.name === "solo-skill")).toBeDefined();
+	});
+
+	test("manifest commands field replaces default commands/ directory (Claude replace semantics)", async () => {
+		// Per Claude plugins reference "Path behavior rules":
+		// `commands` REPLACES the default `commands/` scan when the manifest key is set.
+		// A plugin that wants both must list `./commands` explicitly.
+		const pluginsDir = path.join(tempDir, ".claude", "plugins");
+		const pluginPath = path.join(tempDir, "plugins", "manifest-commands-replace");
+		await fs.mkdir(pluginsDir, { recursive: true });
+		await fs.mkdir(path.join(pluginPath, ".claude-plugin"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, "commands"), { recursive: true });
+		await fs.mkdir(path.join(pluginPath, "admin-commands"), { recursive: true });
+
+		const registry = {
+			version: 2,
+			plugins: {
+				"manifest-commands-replace@market": [
+					{
+						scope: "user",
+						installPath: pluginPath,
+						version: "1.0.0",
+						installedAt: "2025-01-01T00:00:00Z",
+						lastUpdated: "2025-01-01T00:00:00Z",
+					},
+				],
+			},
+		};
+		await fs.writeFile(path.join(pluginsDir, "installed_plugins.json"), JSON.stringify(registry));
+		await fs.writeFile(
+			path.join(pluginPath, ".claude-plugin", "plugin.json"),
+			JSON.stringify({ commands: ["./admin-commands"] }),
+		);
+		// This file lives under the default commands/ dir and MUST NOT load once the
+		// manifest declares `commands` (Claude's documented "replaces default" semantic).
+		await fs.writeFile(path.join(pluginPath, "commands", "default.md"), "Default\n");
+		await fs.writeFile(path.join(pluginPath, "admin-commands", "admin.md"), "Admin\n");
+
+		const result = await loadCapability<SlashCommand>("slash-commands", { cwd: tempDir });
+		expect(result.warnings).toEqual([]);
+		expect(result.all.find(c => c.name === "manifest-commands-replace:admin")).toBeDefined();
+		expect(result.all.find(c => c.name === "manifest-commands-replace:default")).toBeUndefined();
+	});
 });
 
 describe("discoverAgents plugin precedence", () => {

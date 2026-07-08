@@ -2267,6 +2267,15 @@ export class ModelRegistry {
 	}
 
 	/**
+	 * Clear the cooldown suppression for one selector after an explicit user selection.
+	 */
+	clearSuppressedSelector(selector: string): void {
+		this.#suppressedSelectors.delete(
+			normalizeSuppressedSelector(selector, (provider, id) => this.find(provider, id) !== undefined),
+		);
+	}
+
+	/**
 	 * Clear all cooldown suppressions recorded via {@link suppressSelector}.
 	 * Used to reset retry-fallback cooldown state without a full {@link refresh}.
 	 */

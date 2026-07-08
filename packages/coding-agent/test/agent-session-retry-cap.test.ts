@@ -282,6 +282,79 @@ describe("AgentSession retry delay cap", () => {
 		expect(last.content).toContainEqual({ type: "text", text: "recovered after credential switch" });
 	});
 
+	it("switches same-provider credentials before model fallback on ChatGPT usage limits", async () => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const fallbackModel = getBundledModel("openai", "gpt-5.5");
+		if (!primaryModel || !fallbackModel) {
+			throw new Error("Expected bundled primary and fallback test models to exist");
+		}
+
+		authStorage.removeRuntimeApiKey("anthropic");
+		authStorage.setRuntimeApiKey("openai", "openai-fallback-key");
+		await authStorage.set("anthropic", [
+			{ type: "api_key", key: "anthropic-key-1" },
+			{ type: "api_key", key: "anthropic-key-2" },
+		]);
+
+		const usageLimitError = "Error: You have hit your ChatGPT usage limit (k12 plan). Try again in ~231 min.";
+		const mock = createMockModel();
+		const requestedModels: string[] = [];
+		const requestedKeys: string[] = [];
+		let agent!: Agent;
+		agent = new Agent({
+			getApiKey: model => modelRegistry.resolver(model, agent.sessionId),
+			initialState: {
+				model: primaryModel,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (requestedModel, context, options) => {
+				requestedModels.push(`${requestedModel.provider}/${requestedModel.id}`);
+				const apiKey = resolveInitialApiKey(options?.apiKey);
+				requestedKeys.push(apiKey);
+				if (requestedKeys.length === 1) {
+					mock.push({ throw: usageLimitError });
+				} else {
+					mock.push({ content: ["recovered after sibling account"] });
+				}
+				return mock.stream(requestedModel, context, options);
+			},
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.maxDelayMs": 100,
+			"retry.maxRetries": 1,
+			"retry.modelFallback": true,
+			"retry.fallbackChains": {
+				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
+			},
+		});
+		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+
+		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+		await session.prompt("Trigger k12 usage limit");
+		await session.waitForIdle();
+
+		expect(requestedModels).toEqual([
+			`${primaryModel.provider}/${primaryModel.id}`,
+			`${primaryModel.provider}/${primaryModel.id}`,
+		]);
+		expect([...requestedKeys].sort()).toEqual(["anthropic-key-1", "anthropic-key-2"]);
+		const last = lastAssistant(session);
+		expect(last.stopReason).toBe("stop");
+		expect(last.content).toContainEqual({ type: "text", text: "recovered after sibling account" });
+	});
+
 	it("waits for the earliest sibling unblock instead of failing the delay cap", async () => {
 		// Regression: with every sibling credential momentarily blocked (e.g. a
 		// short post-401 or usage-probe block), a usage-limit 429 with a

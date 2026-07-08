@@ -309,6 +309,34 @@ describe("Editor component", () => {
 			await expect(promise).resolves.toBe("/");
 		});
 
+		it("renders slash-command suggestions as compact item rows", async () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.setAutocompleteMaxVisible(10);
+			const longDescription =
+				"Plan and execute non-trivial architectural improvements to the codebase without turning each slash command into a multi-line block.";
+			editor.setAutocompleteProvider(
+				new CombinedAutocompleteProvider(
+					Array.from({ length: 12 }, (_, i) => ({
+						name: `cmd${i}`,
+						description: longDescription,
+					})),
+					"/tmp",
+				),
+			);
+
+			const { promise: autocompleteUpdated, resolve: resolveAutocompleteUpdated } = Promise.withResolvers<void>();
+			editor.onAutocompleteUpdate = resolveAutocompleteUpdated;
+
+			editor.handleInput("/");
+			await autocompleteUpdated;
+
+			const rendered = editor.render(80).map(line => stripVTControlCharacters(line));
+			for (let i = 0; i < 10; i += 1) {
+				expect(rendered.some(line => line.includes(`cmd${i}`))).toBe(true);
+			}
+			expect(rendered.some(line => line.includes("cmd10"))).toBe(false);
+		});
+
 		it("triggers file-reference autocomplete when typing at-sign", async () => {
 			const editor = new Editor(defaultEditorTheme);
 			const { promise, resolve } = Promise.withResolvers<string>();

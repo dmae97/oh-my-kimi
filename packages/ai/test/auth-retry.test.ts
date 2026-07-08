@@ -99,6 +99,28 @@ describe("withAuth", () => {
 		]);
 	});
 
+	it("switches accounts before refreshing the same account on usage limits", async () => {
+		const keys: string[] = [];
+		const contexts: ApiKeyResolveContext[] = [];
+		const result = await withAuth(
+			ctx => {
+				contexts.push(ctx);
+				return ctx.error === undefined ? "k0" : ctx.lastChance ? "k2" : "k1";
+			},
+			async key => {
+				keys.push(key);
+				if (key === "k2") return "success";
+				throw usageLimitError();
+			},
+		);
+		expect(result).toBe("success");
+		expect(keys).toEqual(["k0", "k2"]);
+		expect(contexts.map(ctx => ({ lastChance: ctx.lastChance, hasError: ctx.error !== undefined }))).toEqual([
+			{ lastChance: false, hasError: false },
+			{ lastChance: true, hasError: true },
+		]);
+	});
+
 	it("stops retrying when the resolver returns undefined", async () => {
 		const keys: string[] = [];
 		const original = authError();

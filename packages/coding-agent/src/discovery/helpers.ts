@@ -312,6 +312,15 @@ export interface ScanSkillsFromDirOptions {
 	providerId: string;
 	level: "user" | "project";
 	requireDescription?: boolean;
+	/**
+	 * When true, treat a `SKILL.md` sitting directly under `dir` as a single skill in addition to
+	 * scanning `<dir>/<name>/SKILL.md` children. Matches the Claude plugin manifest convention
+	 * that lets a skill path point at a directory containing `SKILL.md` directly (e.g.
+	 * `"skills": ["./"]`), where the frontmatter `name` determines the invocation name and the
+	 * directory basename is the fallback. Default `false` preserves the strict child-scan
+	 * semantic every non-Claude provider relies on.
+	 */
+	includeSelf?: boolean;
 }
 
 // Stable ordering used for skill lists in prompts: name (case-insensitive), then name, then path.
@@ -368,7 +377,13 @@ export async function scanSkillsFromDir(
 		}
 	};
 
-	const work = [];
+	const work: Promise<void>[] = [];
+	if (options.includeSelf) {
+		const selfSkillPath = path.join(dir, "SKILL.md");
+		if (fs.existsSync(selfSkillPath)) {
+			work.push(loadSkill(selfSkillPath));
+		}
+	}
 	for (const entry of entries) {
 		if (entry.name.startsWith(".")) continue;
 		if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;

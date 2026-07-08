@@ -233,6 +233,7 @@ async function refreshGatewayApiKeyAfterAuthError(
 			retryAfterMs,
 			baseUrl: model.baseUrl,
 			modelId: model.id,
+			apiKey: oldKey,
 			signal,
 		});
 		logger.debug("auth-gateway retrying provider request after usage-limit block", {

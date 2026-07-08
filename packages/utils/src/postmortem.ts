@@ -121,6 +121,24 @@ export function isExpectedCleanupError(reason: unknown): boolean {
 	return false;
 }
 
+/**
+ * Interceptors consulted by the global `unhandledRejection` handler before the
+ * fatal path. See {@link interceptUnhandledRejections}.
+ */
+const rejectionInterceptors = new Set<(reason: unknown) => boolean>();
+
+/**
+ * Register an interceptor consulted before an unhandled rejection tears the
+ * process down. Return `true` to consume the rejection — the interceptor owns
+ * reporting and the process continues. Used by embedded script runtimes (JS
+ * eval cells) whose user code can float rejections the host must not die for.
+ * Returns an unregister function.
+ */
+export function interceptUnhandledRejections(interceptor: (reason: unknown) => boolean): () => void {
+	rejectionInterceptors.add(interceptor);
+	return () => rejectionInterceptors.delete(interceptor);
+}
+
 function formatFatalError(label: string, err: Error): string {
 	const name = err.name || "Error";
 	const message = err.message || "(no message)";
@@ -171,6 +189,15 @@ if (isMainThread) {
 			if (isExpectedCleanupError(reason)) {
 				logger.warn("Ignoring expected cleanup rejection", { err });
 				return;
+			}
+			for (const interceptor of rejectionInterceptors) {
+				try {
+					if (interceptor(reason)) return;
+				} catch (interceptorErr) {
+					logger.warn("Unhandled-rejection interceptor threw; continuing with fatal path", {
+						err: interceptorErr,
+					});
+				}
 			}
 			process.stderr.write(formatFatalError("Unhandled Rejection", err));
 			logger.error("Unhandled rejection", { err });

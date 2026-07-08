@@ -48,12 +48,14 @@ import {
 	type LineRange,
 	parseLineRanges,
 	pathTargetsSsh,
+	probeLiteralPathExists,
 	type ResolvedSearchTarget,
 	resolveReadPath,
 	resolveToolSearchScope,
 	selectorLineRanges,
 	splitInternalUrlSel,
 	splitPathAndSel,
+	splitPathAndSelPreferringLiteral,
 	toPathList,
 } from "./path-utils";
 import {
@@ -76,6 +78,9 @@ const searchSchema = type({
 	pattern: type("string").describe("regex pattern"),
 	"path?": searchPathEntry.describe(
 		'file, directory, glob, internal URL, or "<file>:<lines>" selector to search; pass several as a semicolon-delimited list ("src; tests"). Omitted -> searches the workspace root (".")',
+	),
+	"selector?": type("string").describe(
+		'line selector without a leading colon (e.g. "50-100", "50+10", "50-100,200-300"); keeps `path` literal when filenames contain colons',
 	),
 	"case?": type("boolean").describe("case-sensitive search"),
 	"gitignore?": type("boolean").describe("respect gitignore"),
@@ -119,6 +124,7 @@ const SEARCH_GREP_TIMEOUT_MS = 30_000;
 interface GrepPathSpec {
 	original: string;
 	clean: string;
+	literalFilesystemMatch?: boolean;
 	ranges?: [LineRange, ...LineRange[]];
 }
 
@@ -147,9 +153,38 @@ function isReadSelectorGrammar(sel: string): boolean {
 	return lower === "raw" || lower === "conflicts" || parseLineRanges(sel) !== null;
 }
 
-function parsePathSpecs(rawEntries: readonly string[]): GrepPathSpec[] {
+async function parsePathSpecs(
+	rawEntries: readonly string[],
+	cwd: string,
+	explicitSelector?: string,
+): Promise<GrepPathSpec[]> {
+	const explicitRanges =
+		explicitSelector === undefined || explicitSelector.length === 0 ? undefined : parseLineRanges(explicitSelector);
+	if (explicitSelector !== undefined && !explicitRanges) {
+		throw new ToolError(
+			`selector "${explicitSelector}" is invalid — use line ranges like "50-100", "50+10", or "50-100,200-300" without a leading colon`,
+		);
+	}
 	const specs: GrepPathSpec[] = [];
 	for (const entry of rawEntries) {
+		if (explicitRanges) {
+			// Separate selector parameter makes `path` deterministic: first try the
+			// exact local filesystem path (with read-path normalization), then let
+			// archive/internal/URL resolution handle non-literal structured paths.
+			const rawPathHasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(entry);
+			const probe = rawPathHasScheme ? "missing" : await probeLiteralPathExists(entry, cwd);
+			// `"unknown"` covers EACCES/IO where we cannot confirm existence — treat
+			// it as a literal so a real file such as `test:1-2` under an unreadable
+			// parent is never silently reinterpreted as `test` + selector.
+			const literalMatch = probe !== "missing";
+			specs.push({
+				original: entry,
+				clean: literalMatch && !rawPathHasScheme ? resolveReadPath(entry, cwd) : entry,
+				literalFilesystemMatch: literalMatch,
+				ranges: explicitRanges,
+			});
+			continue;
+		}
 		// Internal URLs (`artifact://`, `skill://`, …) use the URL-aware splitter,
 		// which peels selector-shaped tails only for selector-capable schemes and
 		// leaves opaque ones (`mcp://`) intact. Unlike filesystem paths, their
@@ -168,10 +203,14 @@ function parsePathSpecs(rawEntries: readonly string[]): GrepPathSpec[] {
 			specs.push({ original: entry, clean: internalSplit.path, ranges: selectorLineRanges(internalSplit.sel) });
 			continue;
 		}
-		const split = splitPathAndSel(entry);
-		let clean = entry;
+		// Prefer a literal filesystem match when one exists — a real file named
+		// `test:1-2` outranks the `:1-2` selector interpretation (issue #4618).
+		const strictSplit = splitPathAndSel(entry);
+		const split = await splitPathAndSelPreferringLiteral(entry, cwd);
+		const literalFilesystemMatch = strictSplit.sel !== undefined && split.sel === undefined;
+		let clean = literalFilesystemMatch ? resolveReadPath(entry, cwd) : entry;
 		let ranges: [LineRange, ...LineRange[]] | undefined;
-		if (split.sel) {
+		if (!literalFilesystemMatch && split.sel) {
 			const parsed = parseLineRanges(split.sel);
 			if (!parsed) {
 				throw new ToolError(
@@ -184,7 +223,7 @@ function parsePathSpecs(rawEntries: readonly string[]): GrepPathSpec[] {
 			clean = split.path;
 			ranges = parsed;
 		}
-		specs.push({ original: entry, clean, ranges });
+		specs.push({ original: entry, clean, literalFilesystemMatch, ranges });
 	}
 	return specs;
 }
@@ -220,7 +259,7 @@ function matchAbsolutePath(matchPath: string, searchPath: string): string {
  * cleanup hook the caller MUST invoke in a `finally`.
  */
 async function resolveArchiveSearchPaths(
-	paths: string[],
+	pathSpecs: readonly GrepPathSpec[],
 	cwd: string,
 ): Promise<{
 	resolvedPaths: string[];
@@ -229,17 +268,18 @@ async function resolveArchiveSearchPaths(
 	unreadable: string[];
 	cleanup: () => Promise<void>;
 }> {
-	const resolvedPaths = paths.slice();
+	const resolvedPaths = pathSpecs.map(spec => spec.clean);
 	const displayMap = new Map<string, string>();
 	const displaySet = new Set<string>();
 	const unreadable: string[] = [];
 	let tempDir: string | undefined;
 	const archiveCache = new Map<string, ArchiveReader>();
 
-	for (let idx = 0; idx < paths.length; idx++) {
-		const entry = paths[idx];
+	for (let idx = 0; idx < pathSpecs.length; idx++) {
+		const spec = pathSpecs[idx];
+		if (!spec || spec.literalFilesystemMatch) continue;
+		const entry = spec.clean;
 		const candidates = parseArchivePathCandidates(entry);
-		// Longest archive prefix first; we want the one whose member portion is non-empty.
 		const member = candidates.find(c => c.subPath !== "" && c.archivePath !== entry);
 		if (!member) continue;
 
@@ -879,7 +919,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 		_onUpdate?: AgentToolUpdateCallback<GrepToolDetails>,
 		_toolContext?: AgentToolContext,
 	): Promise<AgentToolResult<GrepToolDetails>> {
-		const { pattern, path: rawPath, case: caseSensitive, gitignore, skip } = params;
+		const { pattern, path: rawPath, selector, case: caseSensitive, gitignore, skip } = params;
 
 		return untilAborted(signal, async () => {
 			// Preserve the pattern verbatim — leading/trailing whitespace is
@@ -897,8 +937,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 			const scopedPaths = toPathList(rawPath);
 			const effectivePaths = scopedPaths.length > 0 ? scopedPaths : ["."];
 			const rawEntries = await expandDelimitedPathEntries(effectivePaths, this.session.cwd);
-			const pathSpecs = parsePathSpecs(rawEntries);
-			const paths = pathSpecs.map(spec => spec.clean);
+			const pathSpecs = await parsePathSpecs(rawEntries, this.session.cwd, selector);
 			const materializedExternalPaths = new Map<string, string>();
 			const materializeExternalUrlForSearch = async (rawPath: string) => {
 				const target = parseReadUrlTarget(rawPath);
@@ -917,7 +956,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 				displaySet: archiveDisplaySet,
 				unreadable: archiveUnreadable,
 				cleanup: cleanupArchiveScratch,
-			} = await resolveArchiveSearchPaths(paths, this.session.cwd);
+			} = await resolveArchiveSearchPaths(pathSpecs, this.session.cwd);
 			try {
 				const internalResolution = await resolveInternalSearchInputs({
 					pathSpecs,

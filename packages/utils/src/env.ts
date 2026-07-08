@@ -53,6 +53,19 @@ export function filterProcessEnv(env: Record<string, string | undefined>): Recor
 	return result;
 }
 
+/** Filters process env for child shells without launch-cwd `.env.local` values. */
+export function filterChildShellEnv(
+	env: Record<string, string | undefined>,
+	cwd: string = process.cwd(),
+): Record<string, string> {
+	const result = filterProcessEnv(env);
+	const launchLocalEnv = parseEnvFile(path.join(cwd, ".env.local"));
+	for (const key in launchLocalEnv) {
+		if (result[key] === launchLocalEnv[key]) delete result[key];
+	}
+	return result;
+}
+
 /**
  * Parses a .env file synchronously and extracts key-value string pairs.
  * Ignores lines that are empty or start with '#'. Trims whitespace.

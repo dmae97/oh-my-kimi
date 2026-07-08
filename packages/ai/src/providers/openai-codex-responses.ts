@@ -1232,12 +1232,27 @@ function getOutputBlockStartEventType(block: CodexOutputBlock): "thinking_start"
 	return "toolcall_start";
 }
 
+const CODEX_STALE_PREVIOUS_RESPONSE_CODES: Record<string, true> = {
+	// OpenAI-standard code for an expired/missing `previous_response_id` chain.
+	previous_response_not_found: true,
+	// Proxy-specific: upstream response anchor expired. Same recovery class —
+	// retry the turn with full context and no `previous_response_id`.
+	codex_previous_response_stale: true,
+};
+
 function isCodexStalePreviousResponseError(error: unknown): boolean {
-	if (error instanceof CodexProviderStreamError) return error.code === "previous_response_not_found";
 	if (!(error instanceof Error)) return false;
-	if ((error as { code?: string }).code === "previous_response_not_found") return true;
-	// "unsupported": the backend intermittently rejects the parameter outright
-	// with `{"detail":"Unsupported parameter: previous_response_id"}` (no
+	if (
+		"code" in error &&
+		typeof error.code === "string" &&
+		Object.hasOwn(CODEX_STALE_PREVIOUS_RESPONSE_CODES, error.code)
+	) {
+		return true;
+	}
+	// Message-based fallback for providers/proxies that report the condition
+	// without a canonical code. Also covers "unsupported": the backend
+	// intermittently rejects the parameter outright with
+	// `{"detail":"Unsupported parameter: previous_response_id"}` (no
 	// `error.code`); treat it like a stale chain so the turn replays with full
 	// context instead of surfacing the 400.
 	return (

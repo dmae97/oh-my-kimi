@@ -178,6 +178,22 @@ describe("expandInternalUrls", () => {
 		);
 	});
 
+	it("leaves literal internal URLs embedded in quoted text unchanged", async () => {
+		const router = createInternalRouter({
+			"memory://root/summary.md": { sourcePath: "/tmp/memories/summary.md" },
+		});
+		const command = `printf '%s\\n' 'the literal memory://root/summary.md string'`;
+
+		await expect(expandInternalUrls(command, { skills: [], internalRouter: router })).resolves.toBe(command);
+	});
+
+	it("leaves unresolved quoted literal URLs unchanged", async () => {
+		const router = createInternalRouter({});
+		const command = "grep 'memory://xyz-quoted' file.txt";
+
+		await expect(expandInternalUrls(command, { skills: [], internalRouter: router })).resolves.toBe(command);
+	});
+
 	it("expands agent:// URLs when router is available", async () => {
 		const router = createInternalRouter({
 			"agent://abc": { sourcePath: "/tmp/session/abc.md" },
@@ -239,34 +255,30 @@ describe("expandInternalUrls", () => {
 		);
 	});
 
-	it("throws when local:// URL is used without local protocol options", async () => {
-		await expect(expandInternalUrls("mv foo local://bar", { skills: [] })).rejects.toThrow(
-			"Cannot resolve local:// URL in bash command: local protocol options are unavailable for this session.",
-		);
+	it("leaves local:// URLs unchanged without local protocol options", async () => {
+		const command = "mv foo local://bar";
+		await expect(expandInternalUrls(command, { skills: [] })).resolves.toBe(command);
 	});
 
-	it("throws when non-skill URL is used without an internal router", async () => {
-		await expect(expandInternalUrls("cat artifact://1", { skills: [] })).rejects.toThrow(
-			"Cannot resolve artifact:// URL in bash command",
-		);
+	it("leaves non-skill URLs unchanged without an internal router", async () => {
+		const command = "cat artifact://1";
+		await expect(expandInternalUrls(command, { skills: [] })).resolves.toBe(command);
 	});
 
-	it("throws when internal router resolves URL without sourcePath", async () => {
+	it("leaves internal URLs unchanged when they resolve without sourcePath", async () => {
 		const router = createInternalRouter({
 			"rule://my-rule": {},
 		});
-		await expect(expandInternalUrls("cat rule://my-rule", { skills: [], internalRouter: router })).rejects.toThrow(
-			"rule:// URL resolved without a filesystem path",
-		);
+		const command = "cat rule://my-rule";
+		await expect(expandInternalUrls(command, { skills: [], internalRouter: router })).resolves.toBe(command);
 	});
 
-	it("surfaces resolver errors with actionable context", async () => {
+	it("leaves internal URLs unchanged when the resolver fails", async () => {
 		const router = createInternalRouter({
 			"memory://root/missing.md": { error: "Memory file not found" },
 		});
-		await expect(
-			expandInternalUrls("cat memory://root/missing.md", { skills: [], internalRouter: router }),
-		).rejects.toThrow("Failed to resolve memory:// URL in bash command");
+		const command = "cat memory://root/missing.md";
+		await expect(expandInternalUrls(command, { skills: [], internalRouter: router })).resolves.toBe(command);
 	});
 
 	it("does not match local:/ inside filesystem paths (e.g. /repo/local:/PLAN.md)", async () => {

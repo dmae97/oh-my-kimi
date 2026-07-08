@@ -429,6 +429,9 @@ export class Settings {
 		if (path === "statusLine.sessionAccent") {
 			statusLineSessionAccentSignal.fire();
 		}
+		if (path === "modelRoles") {
+			modelRolesSignal.fire();
+		}
 	}
 
 	/**
@@ -480,11 +483,13 @@ export class Settings {
 	async reloadForCwd(cwd: string): Promise<void> {
 		const normalized = path.normalize(cwd);
 		if (normalized === this.#cwd) return;
+		const prevModelRoles = this.get("modelRoles");
 		this.#cwd = normalized;
 		if (this.#persist) {
 			this.#project = await this.#loadProjectSettings();
 		}
 		this.#rebuildMerged();
+		this.#fireEffectiveSettingChanged("modelRoles", this.get("modelRoles"), prevModelRoles);
 		this.#fireAllHooks();
 	}
 
@@ -1476,6 +1481,12 @@ const appendOnlyModeSignal = new SettingSignal<[value: string]>("provider.append
  * can register independently without overwriting each other.
  */
 export const onAppendOnlyModeChanged = (cb: (value: string) => void) => appendOnlyModeSignal.on(cb);
+
+/** Fires when any model role changes at runtime. */
+const modelRolesSignal = new SettingSignal("modelRoles");
+
+/** Subscribe to model role changes. Returns an unsubscribe function. */
+export const onModelRolesChanged: (cb: () => void) => () => void = modelRolesSignal.on.bind(modelRolesSignal);
 
 /** Fires when `statusLine.sessionAccent` changes at runtime. */
 const statusLineSessionAccentSignal = new SettingSignal("statusLine.sessionAccent");

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, setSystemTime, spyOn, vi } from "bun:test";
-import { TUI } from "@oh-my-pi/pi-tui";
+import { Container, TUI } from "@oh-my-pi/pi-tui";
 import { Loader, type LoaderMessageColorFn } from "@oh-my-pi/pi-tui/components/loader";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { VirtualTerminal } from "./virtual-terminal";
@@ -142,6 +142,30 @@ describe("Loader component", () => {
 		await Bun.sleep(40); // longer than the spinner interval
 		expect(spy.mock.calls.length).toBe(after);
 		expect(() => loader.dispose()).not.toThrow(); // idempotent
+		tui.stop();
+	});
+
+	it("container disposeChildren stops detached loader repaints", () => {
+		vi.useFakeTimers();
+		const term = new VirtualTerminal(20, 4);
+		const tui = new TUI(term);
+		const spy = spyOn(tui, "requestComponentRender");
+		const container = new Container();
+		const loader = new Loader(
+			tui,
+			text => text,
+			text => text,
+			"Checking",
+			["0", "1"],
+		);
+		container.addChild(loader);
+		const afterMount = spy.mock.calls.length;
+
+		container.disposeChildren();
+		vi.advanceTimersByTime(200);
+
+		expect(spy.mock.calls.length).toBe(afterMount);
+		expect(container.children).toEqual([]);
 		tui.stop();
 	});
 });

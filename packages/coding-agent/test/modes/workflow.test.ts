@@ -1,6 +1,11 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { containsWorkflow, highlightWorkflow, WORKFLOW_NOTICE } from "@oh-my-pi/pi-coding-agent/modes/workflow";
+import {
+	containsWorkflow,
+	highlightWorkflow,
+	renderWorkflowNotice,
+	WORKFLOW_NOTICE,
+} from "@oh-my-pi/pi-coding-agent/modes/workflow";
 
 beforeAll(() => {
 	// highlightWorkflow reads the global theme's color mode.
@@ -48,9 +53,18 @@ describe("workflow keyword highlighting", () => {
 });
 
 describe("workflow notice", () => {
-	it("is a non-empty system notice carrying the eval-fan-out contract", () => {
+	it("is a non-empty system notice carrying the task fan-out contract", () => {
 		expect(WORKFLOW_NOTICE.length).toBeGreaterThan(0);
 		expect(WORKFLOW_NOTICE).toContain("**workflowz** keyword");
-		expect(WORKFLOW_NOTICE).toContain("parallel(");
+		expect(WORKFLOW_NOTICE).toContain("Use the `task` tool for batched fan-out");
+		expect(WORKFLOW_NOTICE).toContain("tasks[]");
+	});
+
+	it("renders flat task-call guidance when task.batch is disabled", () => {
+		const notice = renderWorkflowNotice({ taskBatch: false });
+		expect(notice).toContain("once per independent subagent");
+		expect(notice).toContain("Do not pass `context` or `tasks[]`");
+		expect(notice).toContain("one independent task call per leaf");
+		expect(notice).not.toContain("Call `task` once per independent fan-out batch");
 	});
 });

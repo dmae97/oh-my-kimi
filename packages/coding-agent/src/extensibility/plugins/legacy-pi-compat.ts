@@ -1059,7 +1059,8 @@ async function collectExtensionModules(entryRealPath: string): Promise<Map<strin
 				let resolved: string | null = null;
 				let nextFollowsBareDependencies = followBareDependencies;
 				if (specifier.startsWith(".")) {
-					resolved = await realpathOrSelf(Bun.resolveSync(specifier, dir));
+					const candidate = Bun.resolveSync(specifier, dir);
+					resolved = hasSourceModuleExtension(candidate) ? await realpathOrSelf(candidate) : null;
 				} else if (specifier.startsWith("#")) {
 					resolved = await resolvePackageImportSpecifier(specifier, file);
 				} else if (
@@ -1078,7 +1079,10 @@ async function collectExtensionModules(entryRealPath: string): Promise<Map<strin
 						dependencyExtension === ".cjs" ||
 						dependencyExtension === ".cts" ||
 						((dependencyExtension === ".js" || dependencyExtension === ".jsx") && manifest?.type !== "module");
-					resolved = dependencyEntry && !isCommonJsEntry ? await realpathOrSelf(dependencyEntry) : null;
+					resolved =
+						dependencyEntry && hasSourceModuleExtension(dependencyEntry) && !isCommonJsEntry
+							? await realpathOrSelf(dependencyEntry)
+							: null;
 					nextFollowsBareDependencies = false;
 				}
 				if (resolved && !modules.has(resolved)) {

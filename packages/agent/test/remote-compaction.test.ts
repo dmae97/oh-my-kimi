@@ -13,6 +13,7 @@ import {
 	getCompactionV2PreserveData,
 	requestCompactionV2Streaming,
 	requestOpenAiRemoteCompaction,
+	requestRemoteCompaction,
 	shouldUseCompactionV2Streaming,
 	shouldUseOpenAiRemoteCompaction,
 } from "@oh-my-pi/pi-agent-core/compaction/openai";
@@ -540,6 +541,76 @@ describe("requestOpenAiRemoteCompaction timeout", () => {
 	});
 });
 
+describe("requestRemoteCompaction wire formats", () => {
+	test("uses OpenAI chat completions format for /chat/completions endpoints", async () => {
+		const model = buildModel({
+			id: "catalog-selection-id",
+			name: "Qwopus 3.6 35B-A3B Coder",
+			requestModelId: "provider-wire-id",
+			remoteCompaction: { model: "provider-compact-wire-id" },
+			api: "openai-completions",
+			provider: "local-llama",
+			baseUrl: "http://127.0.0.1:8001/v1",
+			headers: { "x-local-llama": "1" },
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 131072,
+			maxTokens: 4096,
+		});
+		let sentBody: unknown;
+		const fetchMock: FetchImpl = async (_input, init) => {
+			if (typeof init?.body !== "string") throw new Error("missing remote compaction request body");
+			sentBody = JSON.parse(init.body) as unknown;
+			const headers = new Headers(init.headers);
+			expect(headers.get("authorization")).toBe("Bearer local-key");
+			expect(headers.get("x-local-llama")).toBe("1");
+			return new Response(JSON.stringify({ choices: [{ message: { content: "remote summary" } }] }), {
+				headers: { "content-type": "application/json" },
+			});
+		};
+
+		const result = await requestRemoteCompaction(
+			"http://127.0.0.1:8001/v1/chat/completions",
+			{ systemPrompt: "summarize", prompt: "<conversation>hello</conversation>" },
+			undefined,
+			{ fetch: fetchMock, model, apiKey: "local-key" },
+		);
+
+		expect(result).toEqual({ summary: "remote summary" });
+		expect(sentBody).toEqual({
+			model: "provider-compact-wire-id",
+			messages: [
+				{ role: "system", content: "summarize" },
+				{ role: "user", content: "<conversation>hello</conversation>" },
+			],
+			stream: false,
+		});
+	});
+
+	test("keeps the generic omp summarizer format for other endpoints", async () => {
+		let sentBody: unknown;
+		const fetchMock: FetchImpl = async (_input, init) => {
+			if (typeof init?.body !== "string") throw new Error("missing remote compaction request body");
+			sentBody = JSON.parse(init.body) as unknown;
+			expect(new Headers(init.headers).get("authorization")).toBeNull();
+			return new Response(JSON.stringify({ summary: "generic summary", shortSummary: "generic" }), {
+				headers: { "content-type": "application/json" },
+			});
+		};
+
+		const result = await requestRemoteCompaction(
+			"https://compaction.example.test/summarize",
+			{ systemPrompt: "summarize", prompt: "<conversation>hello</conversation>" },
+			undefined,
+			{ fetch: fetchMock, apiKey: "unused-for-generic" },
+		);
+
+		expect(result).toEqual({ summary: "generic summary", shortSummary: "generic" });
+		expect(sentBody).toEqual({ systemPrompt: "summarize", prompt: "<conversation>hello</conversation>" });
+	});
+});
+
 describe("compact() remote compaction failure handling", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
@@ -769,6 +840,53 @@ describe("compact() remote compaction failure handling", () => {
 			}),
 		).rejects.toThrow();
 		expect(completeSpy).not.toHaveBeenCalled();
+	});
+
+	test("uses configured chat completions endpoints for openai-completions remote compaction", async () => {
+		const completeSpy = vi.spyOn(ai, "completeSimple").mockResolvedValue(localSummaryMessage("local fallback"));
+		const preparation = makePreparation();
+		preparation.settings = {
+			...preparation.settings,
+			remoteEndpoint: "http://127.0.0.1:8001/v1/chat/completions",
+			remoteStreamingV2Enabled: false,
+		};
+		const model = buildModel({
+			id: "catalog-selection-id",
+			name: "Qwopus 3.6 35B-A3B Coder",
+			requestModelId: "provider-wire-id",
+			api: "openai-completions",
+			provider: "local-llama",
+			baseUrl: "http://127.0.0.1:8001/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 131072,
+			maxTokens: 4096,
+		});
+		const requestBodies: unknown[] = [];
+		const fetchMock: FetchImpl = async (_input, init) => {
+			if (typeof init?.body !== "string") throw new Error("missing remote compaction request body");
+			requestBodies.push(JSON.parse(init.body) as unknown);
+			expect(new Headers(init.headers).get("authorization")).toBe("Bearer local-key");
+			const summary = requestBodies.length === 1 ? "remote history summary" : "remote short summary";
+			return new Response(JSON.stringify({ choices: [{ message: { content: summary } }] }), {
+				headers: { "content-type": "application/json" },
+			});
+		};
+
+		const result = await compact(preparation, model, "local-key", undefined, undefined, {
+			fetch: fetchMock,
+		});
+
+		expect(result.summary).toContain("remote history summary");
+		expect(result.shortSummary).toBe("remote short summary");
+		expect(completeSpy).not.toHaveBeenCalled();
+		expect(requestBodies).toHaveLength(2);
+		expect(requestBodies[0]).toMatchObject({
+			model: "provider-wire-id",
+			messages: [{ role: "system" }, { role: "user", content: expect.stringContaining("long history") }],
+			stream: false,
+		});
 	});
 
 	test("remote compact server failure without abort still falls back to local summarization", async () => {

@@ -110,9 +110,8 @@ You MUST use the specialized tool over its shell equivalent:
 {{#has tools "lsp"}}- Code intelligence → `{{toolRefs.lsp}}`.{{/has}}
 {{#has tools "grep"}}- Regex search → `{{toolRefs.grep}}`, not `grep`, `rg`, or `awk`.{{/has}}
 {{#has tools "glob"}}- Globbing → `{{toolRefs.glob}}`, not `ls **/*.ext` or `fd`.{{/has}}
-{{#has tools "eval"}}- Default for any compute: `{{toolRefs.eval}}` cells. Bash is the EXCEPTION — only single binary calls or short fact-computing pipelines (`wc -l`, `sort | uniq -c`, `diff`, checksums). The moment a command grows a loop, conditional, heredoc, `-e`/`-c` script, `$(…)` nesting, or >2 pipe stages, it's a program → `{{toolRefs.eval}}`. NEVER write multiline or inline-script bash.{{/has}}
 {{#has tools "bash"}}- `{{toolRefs.bash}}`: real binaries and short fact pipelines only. Commands shadowing the specialized tools above are blocked.{{/has}}
-{{#has tools "bash"}}- Litmus: one external-CLI call or short pipeline returning a count, frequency, set difference, or checksum → bash.{{#has tools "eval"}} Needs control flow, state, or fights shell quoting → `{{toolRefs.eval}}`.{{/has}} Merely moves, pages, or trims bytes a tool can fetch → use the tool.{{/has}}
+{{#has tools "bash"}}- Litmus: one external-CLI call or short pipeline returning a count, frequency, set difference, or checksum → bash. Merely moves, pages, or trims bytes a tool can fetch → use the tool.{{/has}}
 
 {{#has tools "report_tool_issue"}}
 <critical>

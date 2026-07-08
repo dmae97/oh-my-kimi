@@ -127,12 +127,13 @@ export function buildBetaHeader(baseBetas: readonly string[], extraBetas: readon
 
 const midConversationSystemBeta = "mid-conversation-system-2026-04-07";
 const contextManagementBeta = "context-management-2025-06-27";
+const structuredOutputsBeta = "structured-outputs-2025-12-15";
 const claudeCodeUtilityBetaDefaults = [
 	"oauth-2025-04-20",
 	"interleaved-thinking-2025-05-14",
 	contextManagementBeta,
 	"prompt-caching-scope-2026-01-05",
-	"structured-outputs-2025-12-15",
+	structuredOutputsBeta,
 ] as const;
 const claudeCodeAgentBetaDefaults = [
 	"claude-code-20250219",
@@ -159,10 +160,12 @@ function buildClaudeCodeBetas(
 	agentRequest: boolean,
 	thinkingRequest: boolean,
 	redactThinking: boolean,
+	disableStrictTools = false,
 ): readonly string[] {
-	if (!agentRequest && !redactThinking) return claudeCodeUtilityBetaDefaults;
+	if (!agentRequest && !redactThinking && !disableStrictTools) return claudeCodeUtilityBetaDefaults;
 	const betas: string[] = [];
 	for (const beta of agentRequest ? claudeCodeAgentBetaDefaults : claudeCodeUtilityBetaDefaults) {
+		if (disableStrictTools && beta === structuredOutputsBeta) continue;
 		betas.push(beta);
 		// Match CC's header order: redact-thinking immediately follows interleaved-thinking.
 		if (redactThinking && beta === interleavedThinkingBeta) betas.push(redactThinkingBeta);
@@ -1098,6 +1101,7 @@ export type AnthropicClientOptionsArgs = {
 	hasTools?: boolean;
 	thinkingEnabled?: boolean;
 	thinkingDisplay?: AnthropicThinkingDisplay;
+	disableStrictTools?: boolean;
 	fetch?: FetchImpl;
 	claudeCodeSessionId?: string;
 };
@@ -1833,6 +1837,7 @@ const streamAnthropicOnce = (
 					thinkingDisplay: options?.thinkingDisplay,
 					fetch: options?.fetch,
 					claudeCodeSessionId: options?.sessionId ?? extractClaudeMetadataSessionId(options?.metadata?.user_id),
+					disableStrictTools,
 				});
 				client = created.client;
 				isOAuthToken = created.isOAuthToken;
@@ -2648,8 +2653,10 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		thinkingDisplay,
 		isOAuth,
 		claudeCodeSessionId,
+		disableStrictTools: disableStrictToolsOverride,
 	} = args;
 	const compat = model.compat;
+	const disableStrictTools = disableStrictToolsOverride ?? compat.disableStrictTools;
 	const needsInterleavedBeta = interleavedThinking && !model.thinking?.supportsDisplay;
 	const needsFineGrainedToolStreamingBeta = hasTools && !compat.supportsEagerToolInputStreaming;
 	const oauthToken = isOAuth ?? isAnthropicOAuthToken(apiKey);
@@ -2722,7 +2729,12 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		isCloudflareAiGateway: model.provider === "cloudflare-ai-gateway",
 		claudeCodeSessionId,
 		claudeCodeBetas: oauthToken
-			? buildClaudeCodeBetas(hasTools || thinkingEnabled, thinkingEnabled, thinkingDisplay === "omitted")
+			? buildClaudeCodeBetas(
+					hasTools || thinkingEnabled,
+					thinkingEnabled,
+					thinkingDisplay === "omitted",
+					disableStrictTools,
+				)
 			: [],
 	});
 
@@ -3528,6 +3540,40 @@ export function convertAnthropicMessages(
 						input: toWellFormedDeep(block.arguments ?? {}),
 					});
 				}
+			}
+			// Anthropic's replay validator rejects any non-`tool_use` block that
+			// appears after a `tool_use` inside an assistant turn (400:
+			// "tool_use ids were found without tool_result blocks immediately
+			// after: <id>"). A persisted turn can violate this when a mid-turn
+			// server-side fallback handoff lands after the primary model already
+			// emitted a tool_use — the replayed content is then e.g.
+			// [thinking, text, tool_use, fallback, text, tool_use] — and also for
+			// the older cross-provider [text, tool_use, text] shape (issue #544).
+			// Stable-partition into [...non-tool_use, ...tool_use], preserving each
+			// side's relative order: the non-tool_use chain (thinking → text →
+			// fallback → text) carries thinking signatures and the fallback
+			// boundary marker whose order Anthropic verifies, while tool_use blocks
+			// are unsigned and safe to defer to the tail. Fast-path untouched when
+			// already in order so prompt-cache prefixes stay byte-identical.
+			let sawToolUse = false;
+			let needsPartition = false;
+			for (const block of blocks) {
+				if (block.type === "tool_use") {
+					sawToolUse = true;
+				} else if (sawToolUse) {
+					needsPartition = true;
+					break;
+				}
+			}
+			if (needsPartition) {
+				const nonToolUse: ContentBlockParam[] = [];
+				const toolUse: ContentBlockParam[] = [];
+				for (const block of blocks) {
+					if (block.type === "tool_use") toolUse.push(block);
+					else nonToolUse.push(block);
+				}
+				blocks.length = 0;
+				blocks.push(...nonToolUse, ...toolUse);
 			}
 			if (blocks.length === 0) continue;
 			params.push({

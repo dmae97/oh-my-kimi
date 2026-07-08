@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { SelectList } from "@oh-my-pi/pi-tui/components/select-list";
+import { SelectList, type SelectListTheme } from "@oh-my-pi/pi-tui/components/select-list";
 import { KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@oh-my-pi/pi-tui/keybindings";
 import type { SgrMouseEvent } from "@oh-my-pi/pi-tui/mouse";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
@@ -76,6 +76,14 @@ describe("SelectList", () => {
 		expect(rendered.length).toBeGreaterThanOrEqual(1);
 		expect(rendered[0]).not.toContain("\n");
 		expect(rendered[0]).toContain("Line one Line two Line three");
+	});
+
+	it("falls back to an ASCII cursor when a legacy theme omits symbols", () => {
+		const legacyTheme: SelectListTheme = { ...testTheme };
+		Reflect.deleteProperty(legacyTheme, "symbols");
+		const list = new SelectList([{ value: "run", label: "run" }], 1, legacyTheme);
+
+		expect(list.render(40)).toEqual(["> run"]);
 	});
 
 	it("keeps descriptions aligned when the primary text is truncated", () => {

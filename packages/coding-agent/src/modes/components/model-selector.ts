@@ -90,16 +90,20 @@ interface RoleAssignment {
 	autoSelected: boolean;
 }
 
+type ModelSelectorAction = "modelRole" | "retryFallback";
+
 type RoleSelectCallback = (
 	model: Model,
 	role: string | null,
 	thinkingLevel?: ConfiguredThinkingLevel,
 	selector?: string,
+	action?: ModelSelectorAction,
 ) => void;
 type CancelCallback = () => void;
 interface MenuRoleAction {
 	label: string;
-	role: string; // now accepts custom role strings
+	role: string;
+	action: ModelSelectorAction;
 }
 
 interface ProviderTabState {
@@ -284,14 +288,19 @@ export class ModelSelectorComponent extends Container {
 	}
 
 	#buildMenuRoleActions(): void {
-		this.#menuRoleActions = getKnownRoleIds(this.#settings).map(role => {
+		const roleActions = getKnownRoleIds(this.#settings).map(role => {
 			const roleInfo = getRoleInfo(role, this.#settings);
 			const roleLabel = roleInfo.tag ? `${roleInfo.tag} (${roleInfo.name})` : roleInfo.name;
 			return {
 				label: `Set as ${roleLabel}`,
 				role,
+				action: "modelRole" as const,
 			};
 		});
+		this.#menuRoleActions = [
+			...roleActions,
+			{ label: "Set as DEFAULT retry fallback", role: "default", action: "retryFallback" },
+		];
 	}
 
 	#loadRoleModels(autoCandidateModels?: ReadonlyArray<Model>): void {
@@ -1195,6 +1204,11 @@ export class ModelSelectorComponent extends Container {
 			if (this.#menuStep === "role") {
 				const action = this.#menuRoleActions[this.#menuSelectedIndex];
 				if (!action) return;
+				if (action.action === "retryFallback") {
+					this.#handleSelect(selectedItem, action.role, undefined, action.action);
+					this.#closeMenu();
+					return;
+				}
 				this.#menuSelectedRole = action.role;
 				this.#menuStep = "thinking";
 				this.#menuSelectedIndex = this.#getThinkingPreselectIndex(action.role, selectedItem.model);
@@ -1206,7 +1220,7 @@ export class ModelSelectorComponent extends Container {
 			const thinkingOptions = this.#getThinkingLevelsForModel(selectedItem.model);
 			const thinkingLevel = thinkingOptions[this.#menuSelectedIndex];
 			if (!thinkingLevel) return;
-			this.#handleSelect(selectedItem, this.#menuSelectedRole, thinkingLevel);
+			this.#handleSelect(selectedItem, this.#menuSelectedRole, thinkingLevel, "modelRole");
 			this.#closeMenu();
 			return;
 		}
@@ -1225,13 +1239,23 @@ export class ModelSelectorComponent extends Container {
 		}
 	}
 
-	#handleSelect(item: ModelItem, role: string | null, thinkingLevel?: ConfiguredThinkingLevel): void {
+	#handleSelect(
+		item: ModelItem,
+		role: string | null,
+		thinkingLevel?: ConfiguredThinkingLevel,
+		action: ModelSelectorAction = "modelRole",
+	): void {
 		if (this.#isItemDisabled(item)) {
 			return;
 		}
 		// For temporary role, don't save to settings - just notify caller
 		if (role === null) {
-			this.#onSelectCallback(item.model, null, undefined, item.selector);
+			this.#onSelectCallback(item.model, null, undefined, item.selector, action);
+			return;
+		}
+
+		if (action === "retryFallback") {
+			this.#onSelectCallback(item.model, role, undefined, item.selector, action);
 			return;
 		}
 
@@ -1241,7 +1265,7 @@ export class ModelSelectorComponent extends Container {
 		this.#roles[role] = { model: item.model, thinkingLevel: selectedThinkingLevel, autoSelected: false };
 
 		// Notify caller (for updating agent state if needed)
-		this.#onSelectCallback(item.model, role, selectedThinkingLevel, item.selector);
+		this.#onSelectCallback(item.model, role, selectedThinkingLevel, item.selector, action);
 
 		// Update list to show new badges
 		this.#updateList();

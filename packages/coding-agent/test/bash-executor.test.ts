@@ -402,6 +402,15 @@ exit 64
 		expect(result.output).not.toContain("done");
 	});
 
+	it("does not arm a deadline when timeout is zero", async () => {
+		if (process.platform === "win32") {
+			return;
+		}
+		const result = await executeBash("sleep 1.2; echo done", { cwd: tempDir, timeout: 0 });
+		expect(result.cancelled).toBe(false);
+		expect(result.output.trim()).toBe("done");
+	});
+
 	it("aborts commands", async () => {
 		if (process.platform === "win32") {
 			return;

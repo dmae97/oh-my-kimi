@@ -86,6 +86,20 @@ function hasPasteText(value: unknown): value is PasteTarget {
 	return typeof value === "object" && value !== null && typeof (value as PasteTarget).pasteText === "function";
 }
 
+const SHELL_PROMPT_COMMAND_RE =
+	/^(?:\.{0,2}\/|~\/|cd(?:\s|$)|sudo(?:\s|$)|git(?:\s|$)|bun(?:\s|$)|npm(?:\s|$)|pnpm(?:\s|$)|yarn(?:\s|$)|node(?:\s|$)|python\d*(?:\s|$)|cargo(?:\s|$)|go(?:\s|$)|make(?:\s|$)|docker(?:\s|$)|kubectl(?:\s|$))/;
+const SHELL_PROMPT_OPERATOR_RE = /(?:^|\s)(?:&&|\|\||\||2>&1|[<>]{1,2})(?:\s|$)/;
+const OMP_STATUS_LINE_RE = /^\s*in:\s+\d+\s+out:\s+\d+(?:\s+cache\s+\S+)?\s+t:\s+\S+\s+tok\/s:\s+\S+/m;
+
+function looksLikePastedShellPrompt(code: string): boolean {
+	const firstLine = code.split("\n", 1)[0]?.trimStart() ?? "";
+	return (
+		SHELL_PROMPT_COMMAND_RE.test(firstLine) ||
+		SHELL_PROMPT_OPERATOR_RE.test(firstLine) ||
+		OMP_STATUS_LINE_RE.test(code)
+	);
+}
+
 function pythonCommandPrefixLength(trimmedText: string): 0 | 1 | 2 {
 	if (trimmedText.charCodeAt(0) !== 36 /* $ */) return 0;
 	if (trimmedText.charCodeAt(1) === 123 /* { */) return 0;
@@ -100,8 +114,10 @@ function parsePythonCommandInput(text: string): { code: string; isExcluded: bool
 	const trimmed = text.trimStart();
 	const prefixLength = pythonCommandPrefixLength(trimmed);
 	if (prefixLength === 0) return undefined;
+	const code = trimmed.slice(prefixLength).trim();
+	if (prefixLength === 1 && looksLikePastedShellPrompt(code)) return undefined;
 	return {
-		code: trimmed.slice(prefixLength).trim(),
+		code,
 		isExcluded: prefixLength === 2,
 	};
 }
@@ -536,7 +552,7 @@ export class InputController {
 			const wasPythonMode = this.ctx.isPythonMode;
 			const trimmed = text.trimStart();
 			this.ctx.isBashMode = trimmed.startsWith("!");
-			this.ctx.isPythonMode = pythonCommandPrefixLength(trimmed) > 0;
+			this.ctx.isPythonMode = parsePythonCommandInput(trimmed) !== undefined;
 			if (wasBashMode !== this.ctx.isBashMode || wasPythonMode !== this.ctx.isPythonMode) {
 				this.ctx.updateEditorBorderColor();
 			}

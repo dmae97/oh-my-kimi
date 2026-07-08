@@ -316,6 +316,46 @@ export function splitPathAndSel(rawPath: string): { path: string; sel?: string }
 }
 
 /**
+ * Three-way probe for whether the exact filesystem entry named by `filePath`
+ * exists. `stat` (used earlier) failed for reasons other than "no such file"
+ * (dangling symlink, `EACCES` on a parent, transient I/O), and each of those
+ * silently reinterpreted a real literal path such as `test:1-2` as `test`
+ * plus selector `1-2` (issue #4618). `lstat` inspects the entry itself, so a
+ * dangling symlink is still detected as present; ambiguous errors resolve to
+ * `"unknown"` so callers keep the raw path instead of guessing.
+ */
+export async function probeLiteralPathExists(filePath: string, cwd: string): Promise<"exists" | "missing" | "unknown"> {
+	const resolved = resolveReadPath(filePath, cwd);
+	try {
+		await fs.promises.lstat(resolved);
+		return "exists";
+	} catch (err) {
+		if (isEnoent(err) || isEnotdir(err)) return "missing";
+		return "unknown";
+	}
+}
+
+/**
+ * Async sibling of {@link splitPathAndSel} that prefers a literal filesystem
+ * path over selector interpretation. Filenames whose tail matches the selector
+ * grammar (e.g. `test:1-2`, `log:raw`) are legal on POSIX; without this the
+ * strict splitter peels the tail and both `read` and `grep` refuse to open the
+ * real file (issue #4618). The literal wins on a confirmed `lstat`, and also
+ * on `"unknown"` (`EACCES` on a parent, transient I/O), so an unreachable
+ * literal is never silently reinterpreted as `path + selector`. Only a
+ * definitive `ENOENT`/`ENOTDIR` falls back to the strict split.
+ */
+export async function splitPathAndSelPreferringLiteral(
+	rawPath: string,
+	cwd: string,
+): Promise<{ path: string; sel?: string }> {
+	const strict = splitPathAndSel(rawPath);
+	if (strict.sel === undefined) return strict;
+	const probe = await probeLiteralPathExists(rawPath, cwd);
+	return probe === "missing" ? strict : { path: rawPath };
+}
+
+/**
  * Variant of {@link splitPathAndSel} for internal URLs (`scheme://...`).
  *
  * The filesystem-path splitter is intentionally conservative: it refuses to
@@ -669,7 +709,12 @@ export async function splitDelimitedPathEntry(
 	const normalizedEntry = normalizePathLikeInput(entry);
 	if (!hasTopLevelPathDelimiter(normalizedEntry)) return null;
 	if (isInternalUrlPath(normalizedEntry)) return null;
-
+	// A real POSIX file may contain the delimiter and a selector-shaped tail
+	// (`a;b:1-2`, `a b:1-2`). Preserve the raw entry whenever the full literal
+	// resolves — or is only ambiguous — so downstream literal-preferring
+	// splitters see it before delimiter expansion peels or splits (issue #4618
+	// reviewer feedback: delimited expansion ran before the literal check).
+	if ((await probeLiteralPathExists(normalizedEntry, cwd)) !== "missing") return null;
 	const splitter = options.splitter ?? parseSearchPath;
 	const peeledEntry = splitPathAndSel(normalizedEntry).path;
 	if (!hasGlobPathChars(peeledEntry) && (await delimitedPathPartResolves(normalizedEntry, cwd, splitter))) {

@@ -679,21 +679,35 @@ function wrapEditRendererLine(line: string, width: number): string[] {
 	const startAnsi = line.match(/^((?:\x1b\[[0-9;]*m)*)/)?.[1] ?? "";
 	const bodyWithReset = line.slice(startAnsi.length);
 	const body = bodyWithReset.endsWith("\x1b[39m") ? bodyWithReset.slice(0, -"\x1b[39m".length) : bodyWithReset;
-	const diffMatch = /^([+\-\s])(\s*\d+)([|│])(.*)$/s.exec(body);
+	// Gutter shapes produced by formatCodeFrameLine: "-315│", " 313│", "+322│",
+	// plus the deduplicated forms "   +│" and "    │" whose repeated line number
+	// renderDiff blanked (single-line replacement pairs and insert-then-context
+	// runs) — all │-separated. ASCII "|" gutters exist only in raw canonical
+	// diff rows passed through by the plain fallback ("-42|old", " 42|ctx"),
+	// which always carry a marker column ("+"/"-"/space) and a line number. So
+	// the number is optional for "│", while "|" requires the full canonical
+	// shape; anything else (a body line merely starting with "|", error text
+	// like "123|…") is not a diff row and wraps generically.
+	const diffMatch = /^(\s*[+-]?\s*\d*)([|│])(.*)$/s.exec(body);
 
-	if (!diffMatch) {
+	if (!diffMatch || diffMatch[1].length === 0 || (diffMatch[2] === "|" && !/^[+\-\s]\s*\d+$/.test(diffMatch[1]))) {
 		return wrapTextWithAnsi(line, width);
 	}
 
-	const [, marker, lineNum, separator, content] = diffMatch;
-	const prefix = `${marker}${lineNum}${separator}`;
+	const [, gutter, separator, content] = diffMatch;
+	const prefix = `${gutter}${separator}`;
 	const prefixWidth = visibleWidth(prefix);
 	const contentWidth = Math.max(1, width - prefixWidth);
 	const continuationPrefix = `${" ".repeat(Math.max(0, prefixWidth - 1))}${separator}`;
 	const wrappedContent = wrapTextWithAnsi(content ?? "", contentWidth);
 
+	// Each visual row is a standalone terminal line: wrapTextWithAnsi re-opens
+	// active SGR state at the next row's start, so a row that breaks inside an
+	// intra-line diff highlight still ends with inverse video active. Close it
+	// alongside the foreground reset — otherwise the frame padding appended
+	// after the row is painted as an inverse block (default-foreground cells).
 	return wrappedContent.map(
-		(segment, index) => `${startAnsi}${index === 0 ? prefix : continuationPrefix}${segment}\x1b[39m`,
+		(segment, index) => `${startAnsi}${index === 0 ? prefix : continuationPrefix}${segment}\x1b[27m\x1b[39m`,
 	);
 }
 

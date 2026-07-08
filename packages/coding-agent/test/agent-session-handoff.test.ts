@@ -158,6 +158,90 @@ describe("AgentSession handoff", () => {
 		expect(sessionManager.getEntries().filter(entry => entry.type === "compaction")).toHaveLength(0);
 	});
 
+	it("emits handoff lifecycle hooks on the outgoing and replacement sessions", async () => {
+		const extensionsResult = await loadExtensions([], tempDir.path());
+		const extensionRunner = new ExtensionRunner(
+			extensionsResult.extensions,
+			extensionsResult.runtime,
+			tempDir.path(),
+			sessionManager,
+			modelRegistry,
+		);
+		const observedEvents: Array<{
+			type: "session_before_switch" | "session_switch";
+			reason: string;
+			previousSessionFile: string | undefined;
+			activeSessionFile: string | undefined;
+			messageCount: number;
+			handoffEntryCount: number;
+		}> = [];
+		vi.spyOn(extensionRunner, "hasHandlers").mockImplementation(eventName => eventName === "session_before_switch");
+		const emit = extensionRunner.emit.bind(extensionRunner);
+		vi.spyOn(extensionRunner, "emit").mockImplementation(event => {
+			if (event.type === "session_before_switch" || event.type === "session_switch") {
+				observedEvents.push({
+					type: event.type,
+					reason: event.reason,
+					previousSessionFile: event.type === "session_switch" ? event.previousSessionFile : undefined,
+					activeSessionFile: session.sessionFile,
+					messageCount: sessionManager.getBranch().filter(entry => entry.type === "message").length,
+					handoffEntryCount: sessionManager
+						.getBranch()
+						.filter(entry => entry.type === "custom_message" && entry.customType === "handoff").length,
+				});
+			}
+			return emit(event);
+		});
+
+		await session.dispose();
+		session = new AgentSession({
+			agent: new Agent({
+				initialState: {
+					model,
+					systemPrompt: ["Test"],
+					tools: [],
+					messages: [],
+				},
+			}),
+			sessionManager,
+			settings: Settings.isolated({
+				"compaction.enabled": true,
+				"compaction.autoContinue": false,
+			}),
+			modelRegistry,
+			extensionRunner,
+			obfuscator,
+		});
+		const previousSessionFile = session.sessionFile;
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoffFromContext")
+			.mockResolvedValue("## Goal\nContinue from here");
+
+		await session.handoff();
+
+		const nextSessionFile = session.sessionFile;
+		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
+		expect(nextSessionFile).not.toBe(previousSessionFile);
+		expect(observedEvents).toEqual([
+			{
+				type: "session_before_switch",
+				reason: "handoff",
+				previousSessionFile: undefined,
+				activeSessionFile: previousSessionFile,
+				messageCount: 2,
+				handoffEntryCount: 0,
+			},
+			{
+				type: "session_switch",
+				reason: "handoff",
+				previousSessionFile,
+				activeSessionFile: nextSessionFile,
+				messageCount: 0,
+				handoffEntryCount: 1,
+			},
+		]);
+	});
+
 	it("runs handoff generation through the configured side stream function", async () => {
 		const handoffText = "## Goal\nContinue via side stream";
 		let sideStreamCalls = 0;
@@ -1336,6 +1420,7 @@ describe("AgentSession handoff", () => {
 		expect(handoffSpy).toHaveBeenCalledWith(expect.stringContaining("Threshold-triggered maintenance"), {
 			autoTriggered: true,
 			signal: expect.anything(),
+			onSwitchCancelled: expect.any(Function),
 		});
 		expect(events.filter(event => event.type === "auto_compaction_start")).toHaveLength(1);
 		const endEvents = events.filter(event => event.type === "auto_compaction_end");
@@ -1595,6 +1680,89 @@ describe("AgentSession handoff", () => {
 		});
 		expect(endEvents[0]).not.toMatchObject({
 			errorMessage: "Auto-handoff failed: no handoff document was generated",
+		});
+	});
+
+	it("treats a vetoed auto-handoff switch as cancelled instead of falling back", async () => {
+		session.settings.set("compaction.strategy", "handoff");
+		session.settings.set("compaction.thresholdPercent", 1);
+		session.settings.set("contextPromotion.enabled", false);
+
+		const model = session.model;
+		if (!model) {
+			throw new Error("Expected model to be set");
+		}
+
+		const extensionsResult = await loadExtensions([], tempDir.path());
+		const extensionRunner = new ExtensionRunner(
+			extensionsResult.extensions,
+			extensionsResult.runtime,
+			tempDir.path(),
+			sessionManager,
+			modelRegistry,
+		);
+		vi.spyOn(extensionRunner, "hasHandlers").mockImplementation(eventName => eventName === "session_before_switch");
+		const emitSpy = vi.spyOn(extensionRunner, "emit").mockImplementation((async () => ({
+			cancel: true,
+		})) as ExtensionRunner["emit"]);
+
+		await session.dispose();
+		session = new AgentSession({
+			agent: new Agent({
+				initialState: {
+					model,
+					systemPrompt: ["Test"],
+					tools: [],
+					messages: [],
+				},
+			}),
+			sessionManager,
+			settings: session.settings,
+			modelRegistry,
+			extensionRunner,
+			obfuscator,
+		});
+		session.subscribe(event => {
+			events.push(event);
+		});
+		const previousSessionFile = session.sessionFile;
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoffFromContext")
+			.mockResolvedValue("## Goal\nContinue from here");
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: "maintenance trigger" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "stop",
+			usage: {
+				input: 10_000,
+				output: 1_000,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 11_000,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		};
+
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
+		await waitFor(() => events.filter(event => event.type === "auto_compaction_end").length === 1);
+
+		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
+		expect(emitSpy).toHaveBeenCalledWith({ type: "session_before_switch", reason: "handoff" });
+		expect(emitSpy).not.toHaveBeenCalledWith(expect.objectContaining({ type: "session_switch" }));
+		expect(session.sessionFile).toBe(previousSessionFile);
+		expect(sessionManager.getEntries().filter(entry => entry.type === "compaction")).toHaveLength(0);
+		const endEvents = events.filter(event => event.type === "auto_compaction_end");
+		expect(endEvents).toHaveLength(1);
+		expect(endEvents[0]).toMatchObject({
+			type: "auto_compaction_end",
+			action: "handoff",
+			aborted: true,
+			willRetry: false,
 		});
 	});
 

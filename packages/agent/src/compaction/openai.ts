@@ -547,16 +547,55 @@ export async function requestOpenAiRemoteCompaction(
 	return { provider: model.provider, replacementHistory, compactionItem };
 }
 
+/**
+ * Generic remote-compaction POST. Two wire shapes are auto-selected by
+ * endpoint suffix so a single `compaction.remoteEndpoint` setting can point at
+ * either a purpose-built omp summarizer (`{systemPrompt, prompt}` → `{summary}`)
+ * or any OpenAI-compatible chat-completions server (`/chat/completions`,
+ * `/v1/chat/completions`, …) as reported for llama.cpp / vLLM / etc. in
+ * issue #4630: without this, the omp payload was rejected with
+ * HTTP 400 `"'messages' is required"`, compaction silently fell back to
+ * local summarization, and context grew unbounded.
+ *
+ * When `context.model` is provided the chat-completions body is tagged with
+ * that model's wire id (llama.cpp requires the field) and `context.apiKey` is
+ * forwarded as `Authorization: Bearer`. Callers wrap this in `withAuth` so
+ * 401s force-refresh through the standard credential rotation policy.
+ */
 export async function requestRemoteCompaction(
 	endpoint: string,
 	request: RemoteCompactionRequest,
 	signal?: AbortSignal,
-	opts?: { fetch?: FetchImpl; timeoutMs?: number },
+	opts?: { fetch?: FetchImpl; timeoutMs?: number; model?: Model; apiKey?: string },
 ): Promise<RemoteCompactionResponse> {
+	let endpointPath = endpoint;
+	try {
+		endpointPath = new URL(endpoint).pathname;
+	} catch {
+		// Keep the raw endpoint for relative/custom fetch implementations.
+	}
+	const isChatCompletions = /\/chat\/completions\/?$/.test(endpointPath);
+	const headers: Record<string, string> = { "content-type": "application/json" };
+	if (isChatCompletions) {
+		if (opts?.apiKey) headers.Authorization = `Bearer ${opts.apiKey}`;
+		if (opts?.model?.headers) Object.assign(headers, opts.model.headers);
+	}
+
+	const body: Record<string, unknown> = isChatCompletions
+		? {
+				model: opts?.model ? resolveOpenAiCompactModel(opts.model) : undefined,
+				messages: [
+					{ role: "system", content: request.systemPrompt },
+					{ role: "user", content: request.prompt },
+				],
+				stream: false,
+			}
+		: { systemPrompt: request.systemPrompt, prompt: request.prompt };
+
 	const response = await (opts?.fetch ?? fetch)(endpoint, {
 		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify(request),
+		headers,
+		body: JSON.stringify(body),
 		signal: withRequestTimeout(signal, opts?.timeoutMs ?? REMOTE_COMPACTION_TIMEOUT_MS),
 	});
 
@@ -575,6 +614,31 @@ export async function requestRemoteCompaction(
 				headers: response.headers,
 			},
 		);
+	}
+
+	if (isChatCompletions) {
+		type ChatCompletionsResponse = {
+			choices?: Array<{
+				message?: {
+					content?: string | Array<{ type?: string; text?: string }> | null;
+				};
+			}>;
+		};
+		const data = (await response.json()) as ChatCompletionsResponse | undefined;
+		const choice = data?.choices?.[0]?.message?.content;
+		let summary: string | undefined;
+		if (typeof choice === "string") {
+			summary = choice;
+		} else if (Array.isArray(choice)) {
+			summary = choice
+				.filter((part): part is { type?: string; text: string } => typeof part?.text === "string")
+				.map(part => part.text)
+				.join("");
+		}
+		if (typeof summary !== "string" || summary.length === 0) {
+			throw new Error("Remote compaction response missing choices[0].message.content");
+		}
+		return { summary };
 	}
 
 	const data = (await response.json()) as RemoteCompactionResponse | undefined;

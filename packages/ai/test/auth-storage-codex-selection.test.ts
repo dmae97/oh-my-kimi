@@ -98,7 +98,7 @@ function createCredential(accountId: string, email: string): OAuthCredentials {
 	return {
 		access: `access-${accountId}`,
 		refresh: `refresh-${accountId}`,
-		expires: Date.now() + HOUR_MS,
+		expires: Date.now() + WEEK_MS,
 		accountId,
 		email,
 	};
@@ -594,6 +594,100 @@ describe("AuthStorage codex oauth ranking", () => {
 		// refreshes never overlap (peak in-flight stays 1). A wall-clock bound here was
 		// flaky on loaded CI runners, so maxConcurrent is the authoritative signal.
 		expect(maxConcurrent).toBe(3);
+	});
+
+	test("skips expired access-token-only sticky credential and selects fresh sibling", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+		const sessionId = "sticky-token-only-session";
+		await authStorage.set("openai-codex", [{ type: "oauth", ...createCredential("acct-k12", "k12@example.com") }]);
+		usageByAccount.set(
+			"acct-k12",
+			createCodexUsageReport({
+				accountId: "acct-k12",
+				primary: { usedFraction: 0.3, resetInMs: 20 * 60 * 1000 },
+				secondary: { usedFraction: 0.2, resetInMs: 5 * 24 * 60 * 60 * 1000 },
+			}),
+		);
+		expect(await authStorage.getApiKey("openai-codex", sessionId)).toBe("api-acct-k12");
+		usageByAccount.set(
+			"acct-k12",
+			createCodexUsageReport({
+				accountId: "acct-k12",
+				primary: { usedFraction: 1, resetInMs: FIVE_HOUR_MS },
+				secondary: { usedFraction: 0.17, resetInMs: WEEK_MS },
+			}),
+		);
+		usageByAccount.set(
+			"acct-plus",
+			createCodexUsageReport({
+				accountId: "acct-plus",
+				primary: { usedFraction: 0.2, resetInMs: FIVE_HOUR_MS },
+				secondary: { usedFraction: 0.74, resetInMs: WEEK_MS },
+			}),
+		);
+
+		await authStorage.set("openai-codex", [
+			{
+				type: "oauth",
+				access: "access-acct-k12",
+				refresh: "",
+				expires: Date.now() - 1_000,
+				accountId: "acct-k12",
+				email: "k12@example.com",
+			},
+			{
+				type: "oauth",
+				...createCredential("acct-plus", "plus@example.com"),
+			},
+		]);
+
+		expect(await authStorage.getApiKey("openai-codex", sessionId)).toBe("api-acct-plus");
+	});
+
+	test("ignores legacy global Codex blocks when a scoped quota window has fresh siblings", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+		await authStorage.set("openai-codex", [
+			{ type: "oauth", ...createCredential("acct-k12", "k12@example.com") },
+			{ type: "oauth", ...createCredential("acct-plus", "plus@example.com") },
+		]);
+		usageByAccount.set(
+			"acct-k12",
+			createCodexUsageReport({
+				accountId: "acct-k12",
+				primary: { usedFraction: 1, resetInMs: FIVE_HOUR_MS },
+				secondary: { usedFraction: 1, resetInMs: WEEK_MS },
+			}),
+		);
+		usageByAccount.set(
+			"acct-plus",
+			createCodexUsageReport({
+				accountId: "acct-plus",
+				primary: { usedFraction: 0.2, resetInMs: FIVE_HOUR_MS },
+				secondary: { usedFraction: 0.74, resetInMs: WEEK_MS },
+			}),
+		);
+		const plus = store
+			.listAuthCredentials("openai-codex")
+			.find(row => row.credential.type === "oauth" && row.credential.accountId === "acct-plus");
+		if (!plus || !store.upsertCredentialBlock) throw new Error("missing plus credential row");
+		store.upsertCredentialBlock({
+			credentialId: plus.id,
+			providerKey: "openai-codex:oauth",
+			blockScope: "",
+			blockedUntilMs: Date.now() + WEEK_MS,
+		});
+		const k12 = store
+			.listAuthCredentials("openai-codex")
+			.find(row => row.credential.type === "oauth" && row.credential.accountId === "acct-k12");
+		if (!k12 || !store.upsertCredentialBlock) throw new Error("missing k12 credential row");
+		store.upsertCredentialBlock({
+			credentialId: k12.id,
+			providerKey: "openai-codex:oauth",
+			blockScope: "shared",
+			blockedUntilMs: Date.now() + HOUR_MS,
+		});
+
+		expect(await authStorage.getApiKey("openai-codex", "session-with-legacy-global-block")).toBe("api-acct-plus");
 	});
 });
 
