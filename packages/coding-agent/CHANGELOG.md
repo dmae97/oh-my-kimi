@@ -1450,6 +1450,10 @@
 - Fixed task subagents to install their configured ordered model candidates as child-session retry fallback chains, so retryable provider failures can advance to the next subagent model instead of failing the worker ([#2750](https://github.com/can1357/oh-my-pi/issues/2750)).
 - Fixed empty reasonless aborted assistant turns to auto-retry without switching model fallback, so transient provider-side aborts after tool results do not end headless sessions ([#2685](https://github.com/can1357/oh-my-pi/issues/2685)).
 
+
+### Fixed
+
+- Fixed TTSR stream interrupts so only the tool call whose stream matched a rule receives the rule-named abort result; sibling tool-call placeholders now use a neutral abort reason ([#2783](https://github.com/can1357/oh-my-pi/issues/2783)).
 ## [16.0.1] - 2026-06-15
 
 ### Breaking Changes

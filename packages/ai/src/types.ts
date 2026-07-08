@@ -715,6 +715,8 @@ export interface AssistantMessage {
 	stopReason: StopReason;
 	stopDetails?: StopDetails | null;
 	errorMessage?: string;
+	/** Per-tool abort messages used when an aborted assistant turn needs different placeholder results per tool call. */
+	toolCallAbortMessages?: Record<string, string>;
 	/** HTTP status surfaced by the provider when the request failed. Populated by every provider's catch block alongside `errorMessage` so consumers (auth retry, telemetry, UI) can branch without regex-scraping the message. */
 	errorStatus?: number;
 	/** Structured machine-readable error classifier; see `utils/error-id.ts` for bit layout and helpers. */

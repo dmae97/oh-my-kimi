@@ -202,6 +202,10 @@
 
 - Fixed `PI_DIALECT=minimax` being ignored by the owned tool-calling env selector. ([#2759](https://github.com/can1357/oh-my-pi/issues/2759))
 
+
+### Added
+
+- Added per-tool abort metadata so stream-wide aborts can label matching tool-call placeholders separately from unaffected sibling calls ([#2783](https://github.com/can1357/oh-my-pi/issues/2783)).
 ## [16.0.1] - 2026-06-15
 
 ### Fixed
