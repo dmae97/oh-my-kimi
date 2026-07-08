@@ -1626,7 +1626,11 @@ export function formatCompactQuota(
 	for (const { limit, fraction } of entries) {
 		const pct = Math.round(fraction * 100);
 		const windowLabel = limit.window?.label ?? limit.scope.windowId ?? "—";
-		const parts = [`${windowLabel}: ${pct}% used`];
+		// Include the limit label (account/tier) when it carries identity beyond
+		// the window name, so the user can tell which credential's quota is shown.
+		const identity = limit.label.trim();
+		const header = identity && identity !== windowLabel ? `${windowLabel} (${identity})` : windowLabel;
+		const parts = [`${header}: ${pct}% used`];
 		const reset = resolveResetRange([limit], nowMs);
 		if (reset) parts.push(reset);
 		lines.push(parts.join(" · "));
