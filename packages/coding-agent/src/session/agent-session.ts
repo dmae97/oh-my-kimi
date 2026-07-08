@@ -2413,7 +2413,7 @@ export class AgentSession {
 	#advisorRuntimeSignature(config: AdvisorConfig, slug: string, model: Model, thinkingLevel: ThinkingLevel): string {
 		const tools = config.tools?.length ? config.tools.join("\u001e") : "";
 		const instructions = config.instructions?.trim() ?? "";
-		return [config.name, slug, model.provider, model.id, thinkingLevel, tools, instructions].join("\u001f");
+		return [config.name, slug, formatModelStringWithRouting(model), thinkingLevel, tools, instructions].join("\u001f");
 	}
 
 	#advisorRuntimeMatchesCurrentConfig(): boolean {
