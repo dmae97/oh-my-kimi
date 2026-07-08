@@ -350,7 +350,11 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const advisor = doc.advisors[0];
 		if (!advisor) return false;
 		return (
-			advisor.name === "default" && !advisor.model?.trim() && !advisor.tools?.length && !advisor.instructions?.trim()
+			advisor.name === "default" &&
+			!advisor.model?.trim() &&
+			!advisor.tools?.length &&
+			!advisor.instructions?.trim() &&
+			advisor.enabled !== false
 		);
 	}
 

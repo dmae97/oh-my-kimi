@@ -398,6 +398,14 @@ export class AdvisorRuntime {
 					this.#rollbackFailedTurn(messageSnapshot);
 					if (isQuotaError(err)) {
 						logger.warn("advisor quota exhausted, pausing", { err: String(err) });
+						// Call the usage-limit hook so AgentSession can block the
+						// exhausted credential via markUsageLimitReached before pausing.
+						// Without this, the cooldown reselects the same account.
+						try {
+							await this.host.onTurnError?.(err);
+						} catch (hookErr) {
+							logger.debug("advisor onTurnError hook failed", { err: String(hookErr) });
+						}
 						this.#quotaExhausted = true;
 						this.#quotaExhaustedAt = Date.now();
 						this.#consecutiveFailures = 0;
