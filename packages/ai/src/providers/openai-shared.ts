@@ -80,6 +80,7 @@ import {
 import type { ChatCompletionCreateParamsStreaming } from "./openai-chat-wire";
 import type { InputItem } from "./openai-codex/request-transformer";
 import type {
+	Response as OpenAIResponse,
 	ResponseContentPartAddedEvent,
 	ResponseCreateParamsStreaming,
 	ResponseCustomToolCall,
@@ -1798,13 +1799,25 @@ export function finalizeCustomToolCallInputDone(block: ResponsesToolCallBlock, i
 	block.arguments = { input };
 }
 
+type OpenAIResponsesTerminalStreamEvent =
+	| Extract<ResponseStreamEvent, { type: "response.completed" | "response.incomplete" }>
+	| { type: "response.done"; response?: Partial<OpenAIResponse> };
+
+function getOpenAIResponsesTerminalEvent(event: ResponseStreamEvent): OpenAIResponsesTerminalStreamEvent | undefined {
+	const type = (event as { type?: unknown }).type;
+	return type === "response.completed" || type === "response.incomplete" || type === "response.done"
+		? (event as OpenAIResponsesTerminalStreamEvent)
+		: undefined;
+}
+
 export interface ProcessResponsesStreamOptions {
 	onFirstToken?: () => void;
 	onOutputItemDone?: (item: ResponseOutputItem) => void;
 	/**
-	 * Called when a terminal `response.completed` or `response.incomplete` event
-	 * is successfully processed. Only invoked on the successful-completion path;
-	 * thrown failure (`response.failed`) and cancellation paths never call this.
+	 * Called when a terminal `response.completed`, `response.incomplete`, or
+	 * `response.done` event is successfully processed. Only invoked on the
+	 * successful-completion path; thrown failure (`response.failed`) and
+	 * cancellation paths never call this.
 	 * Used by callers to detect premature stream closure (i.e. the stream ended
 	 * without a recognized terminal event).
 	 */
@@ -2039,6 +2052,7 @@ export async function processResponsesStream<TApi extends Api>(
 	let sawFirstToken = false;
 
 	for await (const event of openaiStream) {
+		const terminalEvent = getOpenAIResponsesTerminalEvent(event);
 		if (event.type === "response.created") {
 			output.responseId = event.response.id;
 		} else if (event.type === "response.output_item.added") {
@@ -2297,8 +2311,8 @@ export async function processResponsesStream<TApi extends Api>(
 				closeOpenItem(event.output_index, item.id, entry, item.call_id, prefixedFunctionCallItemKey(item.call_id));
 				stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
 			}
-		} else if (event.type === "response.completed" || event.type === "response.incomplete") {
-			const response = event.response;
+		} else if (terminalEvent) {
+			const response = terminalEvent.response;
 			finalizePendingResponsesToolCalls(output);
 			if (response?.id) {
 				output.responseId = response.id;
@@ -2336,7 +2350,7 @@ export async function processResponsesStream<TApi extends Api>(
 			}
 			promoteResponsesToolUseStopReason(output, (response as { end_turn?: boolean } | undefined)?.end_turn);
 			options?.onCompleted?.();
-			// `response.completed`/`response.incomplete` is the last event of a
+			// `response.completed`/`response.incomplete`/`response.done` is the last event of a
 			// Responses stream. Stop pulling instead of waiting for the server to
 			// close the connection: misbehaving providers keep the socket open
 			// after the terminal event, which would park this loop until the idle

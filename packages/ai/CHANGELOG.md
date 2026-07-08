@@ -8,6 +8,9 @@
 
 - Fixed `openai-codex-responses` fresh plan execution requests that contained only system/developer guidance by mirroring the final instruction as user input so Codex accepts the first turn. ([#4714](https://github.com/can1357/oh-my-pi/issues/4714))
 - Fixed Codex WebSocket compact/resume delta diagnostics to record request shape and raw-vs-displayed usage buckets, so persistent server-reported uncached suffixes without `orchestration_*` fields are visible in debug stats. ([#4707](https://github.com/can1357/oh-my-pi/issues/4707))
+### Fixed
+
+- Fixed OpenAI Responses streams that end with `response.done` being misclassified as premature stream closures.
 
 ## [16.3.10] - 2026-07-06
 
