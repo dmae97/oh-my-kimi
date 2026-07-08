@@ -7370,7 +7370,7 @@ export class AgentSession {
 				timestamp,
 			});
 		}
-		if (this.#magicKeywordEnabled("workflow") && containsWorkflow(text)) {
+		if (this.#magicKeywordEnabled("workflow") && containsWorkflow(text) && this.getActiveToolNames().includes("task")) {
 			keywordNotices.push({
 				role: "custom",
 				customType: "workflow-notice",
