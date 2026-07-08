@@ -55,6 +55,27 @@ async function readPluginManifest(root: ClaudePluginRoot): Promise<ClaudePluginM
 	}
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+async function skillsManifestReplacesFallback(root: ClaudePluginRoot): Promise<boolean> {
+	const raw = await readFile(path.join(root.path, "marketplace.json"));
+	if (raw === null) return false;
+
+	try {
+		const parsed: unknown = JSON.parse(raw);
+		if (!isRecord(parsed)) return false;
+		const plugins = parsed.plugins;
+		return (
+			Array.isArray(plugins) &&
+			plugins.some(entry => isRecord(entry) && entry.name === root.plugin && entry.source === "./")
+		);
+	} catch {
+		return false;
+	}
+}
+
 function isWithinPluginRoot(rootPath: string, targetPath: string): boolean {
 	const relative = path.relative(rootPath, targetPath);
 	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
@@ -157,11 +178,12 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 	warnings.push(...rootWarnings);
 	const results = await Promise.all(
 		roots.map(async root => {
+			const includeFallback = !(await skillsManifestReplacesFallback(root));
 			const { dirs: skillsDirs, warnings: resolveWarnings } = await resolvePluginDir(
 				root,
 				["skills"],
 				"skills",
-				true,
+				includeFallback,
 			);
 			const scanResults = await Promise.all(
 				skillsDirs.map(dir =>
