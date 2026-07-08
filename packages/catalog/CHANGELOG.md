@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.12] - 2026-07-08
+
 ### Fixed
 
 - Fixed LiteLLM discovery stopping at `/model_group/info` when that endpoint omitted `supports_vision`; it now continues to `/model/info` and preserves `model_info.supports_vision=true` for vision-capable proxy models. ([#4747](https://github.com/can1357/oh-my-pi/issues/4747))

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.12] - 2026-07-08
+
 ### Fixed
 
 - Fixed the native build script failing to locate the `@napi-rs/cli` `napi` binary on Windows because the `PATH` lookup joined entries with a Unix `:` separator instead of the platform delimiter (`path.delimiter`).
