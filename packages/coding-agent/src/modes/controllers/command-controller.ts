@@ -1587,24 +1587,33 @@ function resolveResetRange(limits: UsageLimit[], nowMs: number): string | null {
 export function formatCompactQuota(provider: string, reports: UsageReport[], nowMs: number): string | null {
 	const providerReports = reports.filter(r => r.provider === provider);
 	if (providerReports.length === 0) return null;
-	// Collect all limits across accounts/windows for this provider, pick the
-	// one with the highest used fraction (most pressing).
-	let best: { limit: UsageLimit; fraction: number } | null = null;
+	// Group limits by window id so we show BOTH the 5-hour and 7-day windows
+	// (or any other distinct windows the provider exposes). Within each window,
+	// pick the highest used fraction across accounts — that's the most pressing.
+	const byWindow = new Map<string, { limit: UsageLimit; fraction: number }>();
 	for (const report of providerReports) {
 		for (const limit of report.limits) {
 			const fraction = resolveUsedFraction(limit);
 			if (fraction === undefined) continue;
-			if (!best || fraction > best.fraction) best = { limit, fraction };
+			const key = limit.window?.id ?? limit.scope.windowId ?? "—";
+			const existing = byWindow.get(key);
+			if (!existing || fraction > existing.fraction) byWindow.set(key, { limit, fraction });
 		}
 	}
-	if (!best) return null;
-	const { limit, fraction } = best;
-	const pct = Math.round(fraction * 100);
-	const windowLabel = limit.window?.label ?? limit.scope.windowId ?? "—";
-	const parts = [`${windowLabel} window`, `${pct}% used`];
-	const reset = resolveResetRange([limit], nowMs);
-	if (reset) parts.push(reset);
-	return `Quota: ${parts.join(" · ")}`;
+	if (byWindow.size === 0) return null;
+	// Sort windows by urgency (highest fraction first) so the most pressing
+	// quota is always the first thing the user sees.
+	const entries = [...byWindow.values()].sort((a, b) => b.fraction - a.fraction);
+	const lines: string[] = [];
+	for (const { limit, fraction } of entries) {
+		const pct = Math.round(fraction * 100);
+		const windowLabel = limit.window?.label ?? limit.scope.windowId ?? "—";
+		const parts = [`${windowLabel}: ${pct}% used`];
+		const reset = resolveResetRange([limit], nowMs);
+		if (reset) parts.push(reset);
+		lines.push(parts.join(" · "));
+	}
+	return `Quota: ${lines.join(" │ ")}`;
 }
 
 function resolveStatusIcon(status: UsageLimit["status"], uiTheme: typeof theme): string {
