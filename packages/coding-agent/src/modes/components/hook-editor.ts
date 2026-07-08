@@ -20,6 +20,13 @@ import { DynamicBorder } from "./dynamic-border";
 export interface HookEditorOptions {
 	/** When true, use prompt-style keybindings with the legacy ask prompt chrome. */
 	promptStyle?: boolean;
+	/**
+	 * Max rows the inner Editor may occupy. When omitted, the editor is
+	 * bounded to the current terminal height minus the component's chrome
+	 * (≈10 rows) so long content scrolls instead of pushing the submit
+	 * hint out of view.
+	 */
+	maxHeight?: number;
 }
 
 export class HookEditorComponent extends Container {
@@ -58,6 +65,10 @@ export class HookEditorComponent extends Container {
 			this.#editor.setPromptGutter("> ");
 			this.#editor.disableSubmit = true;
 		}
+		// Bound the editor so long content scrolls instead of pushing the
+		// submit hint off-screen. Caller may override via options.maxHeight.
+		const termRows = this.#tui.terminal?.rows ?? process.stdout.rows ?? 40;
+		this.#editor.setMaxHeight(options?.maxHeight ?? Math.max(3, termRows - 12));
 		if (prefill) {
 			this.#editor.setText(prefill);
 		}

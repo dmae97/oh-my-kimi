@@ -344,46 +344,79 @@ export class CommandController {
 		this.ctx.present([new Spacer(1), new Text(info, 1, 0)]);
 	}
 
+	private static readonly advisorStatusGlyph: Record<string, string> = {
+		running: "●",
+		paused: "○",
+		no_model: "○",
+		quota_exhausted: "✕",
+		error: "✕",
+	};
+
+	private static readonly advisorStatusLabel: Record<string, string> = {
+		running: "running",
+		paused: "off",
+		no_model: "no model",
+		quota_exhausted: "quota exhausted",
+		error: "error",
+	};
+
 	async handleAdvisorStatusCommand(): Promise<void> {
 		const stats = this.ctx.session.getAdvisorStats();
-		if (!stats.active) {
-			this.ctx.present([
-				new Spacer(1),
-				new Text(
-					stats.configured
-						? "Advisor setting is enabled, but no model is assigned to the 'advisor' role."
-						: "Advisor is disabled.",
-					1,
-					0,
-				),
-			]);
+		if (!stats.configured) {
+			this.ctx.present([new Spacer(1), new Text("Advisor is disabled.", 1, 0)]);
 			return;
 		}
-		if (stats.advisors.length > 1) {
+		// Roster view: show every configured advisor with its status, even when
+		// none are live (all paused/no-model). The old code returned a generic
+		// message that hid the per-advisor state the user needs to act on.
+		if (stats.advisors.length > 1 || (stats.configured && !stats.active)) {
 			let info = `${theme.bold("Advisor Status")} (${stats.advisors.length} advisors)\n`;
 			for (const a of stats.advisors) {
-				const ctx =
-					a.contextWindow > 0
-						? `${a.contextTokens.toLocaleString()} / ${a.contextWindow.toLocaleString()} (${Math.round((a.contextTokens / a.contextWindow) * 100)}%)`
-						: `${a.contextTokens.toLocaleString()}`;
-				info += `\n${theme.bold(a.name)}\n`;
-				if (a.model) info += `${theme.fg("dim", "Model:")} ${a.model.provider}/${a.model.id}\n`;
-				info += `${theme.fg("dim", "Context:")} ${ctx}\n`;
-				info += `${theme.fg("dim", "Messages:")} ${a.messages.total.toLocaleString()}\n`;
-				info += `${theme.fg("dim", "Spend:")} ${a.tokens.input.toLocaleString()} in / ${a.tokens.output.toLocaleString()} out`;
-				if (a.cost > 0) info += `, $${a.cost.toFixed(4)}`;
-				info += "\n";
+				const glyph = CommandController.advisorStatusGlyph[a.status] ?? "?";
+				const label = CommandController.advisorStatusLabel[a.status] ?? a.status;
+				const color =
+					a.status === "running"
+						? "success"
+						: a.status === "quota_exhausted" || a.status === "error"
+							? "error"
+							: "dim";
+				info += `\n${theme.fg(color, glyph)} ${theme.bold(a.name)} ${theme.fg("dim", `[${label}]`)}\n`;
+				if (a.model) {
+					info += `${theme.fg("dim", "Model:")} ${a.model.provider}/${a.model.id}\n`;
+				}
+				if (a.status === "running" || a.status === "quota_exhausted") {
+					const ctx =
+						a.contextWindow > 0
+							? `${a.contextTokens.toLocaleString()} / ${a.contextWindow.toLocaleString()} (${Math.round((a.contextTokens / a.contextWindow) * 100)}%)`
+							: `${a.contextTokens.toLocaleString()}`;
+					info += `${theme.fg("dim", "Context:")} ${ctx}\n`;
+					info += `${theme.fg("dim", "Messages:")} ${a.messages.total.toLocaleString()}\n`;
+					info += `${theme.fg("dim", "Spend:")} ${a.tokens.input.toLocaleString()} in / ${a.tokens.output.toLocaleString()} out`;
+					if (a.cost > 0) info += `, $${a.cost.toFixed(4)}`;
+					info += "\n";
+				}
 			}
-			info += `\n${theme.bold("Totals")}\n`;
-			info += `${theme.fg("dim", "Tokens:")} ${stats.tokens.total.toLocaleString()}\n`;
-			if (stats.cost > 0) info += `${theme.fg("dim", "Cost:")} $${stats.cost.toFixed(4)}\n`;
+			if (stats.active) {
+				info += `\n${theme.bold("Totals")}\n`;
+				info += `${theme.fg("dim", "Tokens:")} ${stats.tokens.total.toLocaleString()}\n`;
+				if (stats.cost > 0) info += `${theme.fg("dim", "Cost:")} $${stats.cost.toFixed(4)}\n`;
+			}
 			this.ctx.present([new Spacer(1), new Text(info, 1, 0)]);
 			return;
 		}
-		const model = stats.model!;
+		// Single active advisor — detailed view.
+		const model = stats.model;
 		let info = `${theme.bold("Advisor Status")}\n\n`;
-		info += `${theme.bold("Provider")}\n`;
-		info += `${theme.fg("dim", "Model:")} ${model.provider}/${model.id}\n`;
+		if (stats.advisors.length === 1) {
+			const a = stats.advisors[0];
+			const glyph = CommandController.advisorStatusGlyph[a.status] ?? "?";
+			const label = CommandController.advisorStatusLabel[a.status] ?? a.status;
+			info += `${theme.fg(a.status === "running" ? "success" : "error", glyph)} ${a.name} ${theme.fg("dim", `[${label}]`)}\n\n`;
+		}
+		if (model) {
+			info += `${theme.bold("Provider")}\n`;
+			info += `${theme.fg("dim", "Model:")} ${model.provider}/${model.id}\n`;
+		}
 		info += `\n${theme.bold("Messages")}\n`;
 		info += `${theme.fg("dim", "User:")} ${stats.messages.user.toLocaleString()}\n`;
 		info += `${theme.fg("dim", "Assistant:")} ${stats.messages.assistant.toLocaleString()}\n`;
@@ -401,14 +434,7 @@ export class CommandController {
 		if (stats.tokens.cacheRead > 0) {
 			info += `${theme.fg("dim", "Cache Read:")} ${stats.tokens.cacheRead.toLocaleString()}\n`;
 		}
-		if (stats.tokens.cacheWrite > 0) {
-			info += `${theme.fg("dim", "Cache Write:")} ${stats.tokens.cacheWrite.toLocaleString()}\n`;
-		}
-		info += `${theme.fg("dim", "Total:")} ${stats.tokens.total.toLocaleString()}\n`;
-		if (stats.cost > 0) {
-			info += `\n${theme.bold("Cost")}\n`;
-			info += `${theme.fg("dim", "Total:")} $${stats.cost.toFixed(4)}\n`;
-		}
+		if (stats.cost > 0) info += `${theme.fg("dim", "Cost:")} $${stats.cost.toFixed(4)}\n`;
 		this.ctx.present([new Spacer(1), new Text(info, 1, 0)]);
 	}
 
