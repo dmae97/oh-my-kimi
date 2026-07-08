@@ -66,6 +66,7 @@ const USAGE_RANKING_METRIC_EPSILON = 1e-9;
 export type ApiKeyCredential = {
 	type: "api_key";
 	key: string;
+	source?: "login";
 };
 
 export type OAuthCredential = {
@@ -1556,13 +1557,14 @@ export class AuthStorage {
 		provider: string,
 		type: T,
 		sessionId?: string,
+		filter?: (credential: AuthCredential) => boolean,
 	): { credential: Extract<AuthCredential, { type: T }>; index: number } | undefined {
 		const credentials = this.#getCredentialsForProvider(provider)
 			.map((credential, index) => ({ credential, index }))
-			.filter(
-				(entry): entry is { credential: Extract<AuthCredential, { type: T }>; index: number } =>
-					entry.credential.type === type,
-			);
+			.filter((entry): entry is { credential: Extract<AuthCredential, { type: T }>; index: number } => {
+				if (entry.credential.type !== type) return false;
+				return filter?.(entry.credential) ?? true;
+			});
 
 		if (credentials.length === 0) return undefined;
 		if (credentials.length === 1) return credentials[0];
@@ -1853,8 +1855,8 @@ export class AuthStorage {
 	/**
 	 * Classify where a provider's auth comes from, following the same precedence
 	 * as {@link AuthStorage.getApiKey}: runtime override → config override →
-	 * stored OAuth → env var → stored api_key → fallback resolver. Returns
-	 * undefined when no auth is configured.
+	 * stored OAuth → login-stored api_key → env var → stored api_key →
+	 * fallback resolver. Returns undefined when no auth is configured.
 	 *
 	 * Compact, structured counterpart to {@link describeCredentialSource}.
 	 */
@@ -1863,6 +1865,9 @@ export class AuthStorage {
 		if (this.#configOverrides.has(provider)) return { kind: "config" };
 		const stored = this.#getCredentialsForProvider(provider);
 		if (stored.some(credential => credential.type === "oauth")) return { kind: "oauth" };
+		if (stored.some(credential => credential.type === "api_key" && credential.source === "login")) {
+			return { kind: "api_key" };
+		}
 		if (getEnvApiKey(provider)) return { kind: "env", envVar: getEnvApiKeyName(provider) };
 		if (stored.some(credential => credential.type === "api_key")) return { kind: "api_key" };
 		if (this.#fallbackResolver?.(provider)) return { kind: "fallback" };
@@ -2007,7 +2012,7 @@ export class AuthStorage {
 			if (!result) {
 				return;
 			}
-			const newCredential: ApiKeyCredential = { type: "api_key", key: result };
+			const newCredential: ApiKeyCredential = { type: "api_key", key: result, source: "login" };
 			const stored = this.#store.upsertAuthCredentialRemote
 				? await this.#store.upsertAuthCredentialRemote(provider, newCredential)
 				: this.#store.upsertAuthCredentialForProvider(provider, newCredential);
@@ -3955,9 +3960,10 @@ export class AuthStorage {
 	 * 1. Runtime override (CLI --api-key)
 	 * 2. Config override (models.yml `providers.<name>.apiKey`)
 	 * 3. OAuth token from storage (auto-refreshed)
-	 * 4. Environment variable
-	 * 5. Stored API key (e.g. a broker-migrated copy) — last resort, so an explicit env var wins
-	 * 6. Fallback resolver (models.yml custom providers, last-resort)
+	 * 4. API key persisted by a successful `/login`
+	 * 5. Environment variable
+	 * 6. Stored API key (e.g. a broker-migrated copy) — last resort, so an explicit env var wins
+	 * 7. Fallback resolver (models.yml custom providers, last-resort)
 	 */
 	async getApiKey(provider: string, sessionId?: string, options?: AuthApiKeyOptions): Promise<string | undefined> {
 		// Runtime override takes highest priority
@@ -3976,11 +3982,22 @@ export class AuthStorage {
 			return configKey;
 		}
 
-		// Precedence: a deliberate OAuth login wins, then an explicit env var, then a stored
-		// static api_key (which may be a stale broker-migrated copy) as a last resort.
+		// Precedence: a deliberate OAuth/login credential wins, then an explicit env var,
+		// then a stored static api_key (which may be a stale broker-migrated copy) as a last resort.
 		const oauthResolved = await this.#resolveOAuthSelection(provider, sessionId, options);
 		if (oauthResolved) {
 			return oauthResolved.apiKey;
+		}
+
+		const loginApiKeySelection = this.#selectCredentialByType(
+			provider,
+			"api_key",
+			sessionId,
+			credential => credential.type === "api_key" && credential.source === "login",
+		);
+		if (loginApiKeySelection) {
+			this.#recordSessionCredential(provider, sessionId, "api_key", loginApiKeySelection.index);
+			return this.#configValueResolver(loginApiKeySelection.credential.key);
 		}
 
 		// Past OAuth: the session sticky (if any) is stale — the request authenticates via
@@ -3991,7 +4008,12 @@ export class AuthStorage {
 		const envKey = getEnvApiKey(provider);
 		if (envKey) return envKey;
 
-		const apiKeySelection = this.#selectCredentialByType(provider, "api_key", sessionId);
+		const apiKeySelection = this.#selectCredentialByType(
+			provider,
+			"api_key",
+			sessionId,
+			credential => credential.type !== "api_key" || credential.source !== "login",
+		);
 		if (apiKeySelection) {
 			this.#recordSessionCredential(provider, sessionId, "api_key", apiKeySelection.index);
 			return this.#configValueResolver(apiKeySelection.credential.key);
@@ -4697,9 +4719,10 @@ export class AuthStorage {
 	 *   1. Runtime override (`--api-key`).
 	 *   2. Config override (`models.yml` `providers.<name>.apiKey`).
 	 *   3. Stored OAuth credential.
-	 *   4. Env var — overrides a stored static api_key (e.g. a stale broker copy).
-	 *   5. Stored api_key credential.
-	 *   6. Fallback resolver.
+	 *   4. API key persisted by a successful `/login`.
+	 *   5. Env var — overrides a stored static api_key (e.g. a stale broker copy).
+	 *   6. Stored api_key credential.
+	 *   7. Fallback resolver.
 	 *
 	 * The string is purely informational; consumers must not parse it.
 	 */
@@ -4714,14 +4737,16 @@ export class AuthStorage {
 		const baseLabel = this.#sourceLabel ?? "local store";
 		const stored = this.#getStoredCredentials(provider);
 		const session = sessionId ? this.#sessionLastCredential.get(provider)?.get(sessionId) : undefined;
-		// Describe the stored credential of a given type, honoring the session sticky index.
-		const describeStored = (type: AuthCredential["type"]): string | undefined => {
+		const describeStored = (
+			type: AuthCredential["type"],
+			filter?: (credential: AuthCredential) => boolean,
+		): string | undefined => {
 			const typed = stored
 				.map((entry, index) => ({ entry, index }))
-				.filter(({ entry }) => entry.credential.type === type);
+				.filter(({ entry }) => entry.credential.type === type && (filter?.(entry.credential) ?? true));
 			if (typed.length === 0) return undefined;
-			const index = session?.type === type ? session.index : typed[0].index;
-			const chosen = stored[index] ?? typed[0].entry;
+			const sticky = session?.type === type ? typed.find(entry => entry.index === session.index) : undefined;
+			const chosen = sticky?.entry ?? typed[0].entry;
 			const credential = chosen.credential;
 			const identity =
 				credential.type === "oauth"
@@ -4730,11 +4755,19 @@ export class AuthStorage {
 			return `${baseLabel} · ${type} #${chosen.id} (${identity})`;
 		};
 
-		// A deliberate OAuth login wins; then an explicit env var; then a stored static api_key.
+		// Deliberate login credentials win; then an explicit env var; then a stored static api_key.
 		const oauthSource = describeStored("oauth");
 		if (oauthSource) return oauthSource;
+		const loginApiKeySource = describeStored(
+			"api_key",
+			credential => credential.type === "api_key" && credential.source === "login",
+		);
+		if (loginApiKeySource) return loginApiKeySource;
 		if (getEnvApiKey(provider)) return `env (over ${baseLabel})`;
-		const apiKeySource = describeStored("api_key");
+		const apiKeySource = describeStored(
+			"api_key",
+			credential => credential.type !== "api_key" || credential.source !== "login",
+		);
 		if (apiKeySource) return apiKeySource;
 		if (this.#fallbackResolver?.(provider) !== undefined) return "fallback resolver";
 		return undefined;
@@ -4799,9 +4832,10 @@ function normalizeStoredIdentityKey(identityKey: string | null | undefined): str
 
 function serializeCredential(provider: string, credential: AuthCredential): SerializedCredentialRecord | null {
 	if (credential.type === "api_key") {
+		const data = credential.source === "login" ? { key: credential.key, source: "login" } : { key: credential.key };
 		return {
 			credentialType: "api_key",
-			data: JSON.stringify({ key: credential.key }),
+			data: JSON.stringify(data),
 			identityKey: null,
 		};
 	}
@@ -4829,7 +4863,8 @@ function deserializeCredential(row: AuthRow): AuthCredential | null {
 	if (row.credential_type === "api_key") {
 		const data = parsed as Record<string, unknown>;
 		if (typeof data.key === "string") {
-			return { type: "api_key", key: data.key };
+			const source = data.source === "login" ? "login" : undefined;
+			return source ? { type: "api_key", key: data.key, source } : { type: "api_key", key: data.key };
 		}
 	}
 	if (row.credential_type === "oauth") {
