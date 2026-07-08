@@ -16070,7 +16070,7 @@ export class AgentSession {
 	 */
 	formatAdvisorStatus(): string {
 		const stats = this.getAdvisorStats();
-		if (!stats.active) {
+		if (!stats.active && stats.advisors.length === 0) {
 			return stats.configured
 				? "Advisor setting is enabled, but no model is assigned to the 'advisor' role."
 				: "Advisor is disabled.";

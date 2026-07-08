@@ -296,32 +296,31 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const instr = advisor.instructions?.trim();
 		lines.push(...(instr ? wrap(instr, bodyWidth) : [theme.fg("muted", "(none)")]));
 		// Show live usage stats when available from the session.
-		const stats = this.#cb.getAdvisorStats?.();
-		if (stats) {
-			const match = stats.find(s => s.name === (advisor.name || "default"));
-			if (match && (match.status === "running" || match.status === "quota_exhausted")) {
-				lines.push("", theme.fg("dim", "Usage:"));
-				const spendParts: string[] = [
-					`${match.tokens.input.toLocaleString()} in`,
-					`${match.tokens.output.toLocaleString()} out`,
-				];
-				if (match.tokens.cacheRead > 0) spendParts.push(`${match.tokens.cacheRead.toLocaleString()} cache`);
-				lines.push(theme.fg("dim", `  Tokens: ${spendParts.join(", ")}`));
-				if (match.cost > 0) lines.push(theme.fg("dim", `  Cost: $${match.cost.toFixed(4)}`));
-				if (match.contextWindow > 0) {
-					const pct = Math.round((match.contextTokens / match.contextWindow) * 100);
-					lines.push(
-						theme.fg(
-							"dim",
-							`  Context: ${match.contextTokens.toLocaleString()}/${match.contextWindow.toLocaleString()} (${pct}%)`,
-						),
-					);
-				}
+		const liveStat = this.#cb.getAdvisorStats?.()?.find(s => s.name === (advisor.name || "default"));
+		if (liveStat && (liveStat.status === "running" || liveStat.status === "quota_exhausted")) {
+			lines.push("", theme.fg("dim", "Usage:"));
+			const spendParts: string[] = [
+				`${liveStat.tokens.input.toLocaleString()} in`,
+				`${liveStat.tokens.output.toLocaleString()} out`,
+			];
+			if (liveStat.tokens.cacheRead > 0) spendParts.push(`${liveStat.tokens.cacheRead.toLocaleString()} cache`);
+			lines.push(theme.fg("dim", `  Tokens: ${spendParts.join(", ")}`));
+			if (liveStat.cost > 0) lines.push(theme.fg("dim", `  Cost: $${liveStat.cost.toFixed(4)}`));
+			if (liveStat.contextWindow > 0) {
+				const pct = Math.round((liveStat.contextTokens / liveStat.contextWindow) * 100);
+				lines.push(
+					theme.fg(
+						"dim",
+						`  Context: ${liveStat.contextTokens.toLocaleString()}/${liveStat.contextWindow.toLocaleString()} (${pct}%)`,
+					),
+				);
 			}
 		}
-		// Show provider quota (window/reset/remaining) when available.
-		if (this.#cachedReports && advisor.model) {
-			const quota = formatCompactQuota(advisor.model.split("/")[0]!, this.#cachedReports, Date.now());
+		// Show provider quota — fall back to the resolved live model when the advisor
+		// inherits the advisor-role model (no explicit `model` in config).
+		const quotaProvider = advisor.model?.split("/")[0] ?? liveStat?.model?.provider;
+		if (this.#cachedReports && quotaProvider) {
+			const quota = formatCompactQuota(quotaProvider, this.#cachedReports, Date.now());
 			if (quota) lines.push(theme.fg("dim", `  ${quota}`));
 		}
 		return lines.map(line => truncateToWidth(line, bodyWidth));
