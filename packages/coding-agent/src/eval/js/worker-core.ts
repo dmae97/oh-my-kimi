@@ -77,16 +77,16 @@ export class WorkerCore {
 	}
 
 	async #runOne(runId: string, code: string, filename: string, snapshot: SessionSnapshot): Promise<void> {
-		const runtime = this.#ensureRuntime(snapshot);
-		runtime.setCwd(snapshot.cwd);
-		const active: ActiveRun = { runId, pendingTools: new Map() };
-		this.#runs.set(runId, active);
-		const hooks: RuntimeHooks = {
-			onText: chunk => this.#transport.send({ type: "text", runId, chunk }),
-			onDisplay: output => this.#transport.send({ type: "display", runId, output }),
-			callTool: (name, args) => this.#callTool(active, name, args),
-		};
 		try {
+			const runtime = this.#ensureRuntime(snapshot);
+			runtime.setCwd(snapshot.cwd);
+			const active: ActiveRun = { runId, pendingTools: new Map() };
+			this.#runs.set(runId, active);
+			const hooks: RuntimeHooks = {
+				onText: chunk => this.#transport.send({ type: "text", runId, chunk }),
+				onDisplay: output => this.#transport.send({ type: "display", runId, output }),
+				callTool: (name, args) => this.#callTool(active, name, args),
+			};
 			const value = await runtime.run(code, filename, hooks, { runId, cwd: snapshot.cwd });
 			runtime.displayValue(value, hooks);
 			this.#transport.send({ type: "result", runId, ok: true });
