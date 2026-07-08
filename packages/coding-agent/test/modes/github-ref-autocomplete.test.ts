@@ -132,6 +132,21 @@ describe("github-ref autocomplete — provider integration", () => {
 		expect(result.lines).toEqual(["review pr://3164 "]);
 	});
 
+	it("revalidates stale prefixes against the live cursor token before applying", async () => {
+		const provider = makeProvider();
+		const staleSuggestions = await provider.getSuggestions(["review #316"], 0, 11);
+		expect(staleSuggestions).not.toBeNull();
+		const stalePr = staleSuggestions!.items[0]!;
+
+		const updatedNumber = provider.applyCompletion(["review #3164"], 0, 12, stalePr, staleSuggestions!.prefix);
+		expect(updatedNumber.lines).toEqual(["review pr://3164 "]);
+		expect(updatedNumber.cursorCol).toBe("review pr://3164 ".length);
+
+		const embeddedHash = provider.applyCompletion(["owner/repo#3164"], 0, 15, stalePr, staleSuggestions!.prefix);
+		expect(embeddedHash.lines).toEqual(["owner/repo#3164"]);
+		expect(embeddedHash.cursorCol).toBe(15);
+	});
+
 	it("does not offer candidates for embedded hashes (falls through to other providers)", async () => {
 		const provider = makeProvider();
 		const isRef = (value: string) => value.startsWith("pr://") || value.startsWith("issue://");
