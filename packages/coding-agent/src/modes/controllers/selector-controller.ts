@@ -604,7 +604,7 @@ export class SelectorController {
 						if (action === "retryFallback" && role !== null) {
 							const fallbackSelector = formatModelSelectorValue(selectorValue, concreteThinking);
 							const fallbackChains = this.ctx.settings.get("retry.fallbackChains");
-							const chain = fallbackChains[role] ?? [];
+							const chain = Array.isArray(fallbackChains[role]) ? fallbackChains[role] : [];
 							this.ctx.settings.set("retry.fallbackChains", {
 								...fallbackChains,
 								[role]: [fallbackSelector, ...chain.filter(existing => existing !== fallbackSelector)],
