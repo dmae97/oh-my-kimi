@@ -3346,11 +3346,11 @@ export function litellmModelManagerOptions(
 		cacheProviderId: `litellm:rich-v3:${Bun.hash(baseUrl).toString(36)}`,
 		// litellm is a local-only proxy and is never bundled in models.json (that
 		// would leak the machine's localhost catalog). Prefer the proxy's richer
-		// management metadata, then fall back to /v1/models and enrich bare ids
-		// against models.dev like the gateway providers (fireworks et al.) do.
+		// management metadata, then enrich ids against models.dev with the bundled
+		// catalog as a fallback before using /v1/models.
 		fetchDynamicModels: async () => {
 			const modelsDevReferences = await loadModelsDevReferences<"openai-completions">(config?.fetch);
-			const resolveReference = (id: string) => modelsDevReferences.get(id);
+			const resolveReference = createReferenceResolver(modelsDevReferences);
 			const richModels = await fetchLiteLLMRichModels({
 				api: "openai-completions",
 				provider: "litellm",
