@@ -9,6 +9,7 @@ import {
 	type CredentialBlockResponse,
 	type FetchSnapshotResult,
 	RemoteAuthCredentialStore,
+	type SnapshotResponse,
 	startAuthBroker,
 } from "@oh-my-pi/pi-ai/auth-broker";
 import { snapshotResponseSchema } from "@oh-my-pi/pi-ai/auth-broker/wire-schemas";
@@ -219,6 +220,112 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 		expect(fetchSpy).toHaveBeenCalledTimes(1);
 
 		remoteStore.close();
+	});
+
+	test("broker block snapshots invalidate cached usage before the next fetchUsageReports", async () => {
+		const brokerClient = new AuthBrokerClient({ url: "http://127.0.0.1:9", token: "unused" });
+		const now = Date.now();
+		const blockedUntilMs = now + 60_000;
+		const credentialEntry = {
+			id: 7,
+			provider: "anthropic" as const,
+			credential: {
+				type: "oauth" as const,
+				access: "remote-access",
+				refresh: REMOTE_REFRESH_SENTINEL,
+				expires: now + 120_000,
+				accountId: "remote-account",
+				email: "remote@example.com",
+			},
+			identityKey: "email:remote@example.com",
+			rotatesInMs: null,
+		};
+		const initialSnapshot: SnapshotResponse = {
+			generation: 1,
+			generatedAt: now,
+			serverNowMs: now,
+			refresher: { enabled: false, intervalMs: 0, skewMs: 0, nextSweepInMs: Number.MAX_SAFE_INTEGER },
+			credentials: [credentialEntry],
+		};
+		const blockedSnapshot: SnapshotResponse = {
+			...initialSnapshot,
+			generation: 2,
+			generatedAt: now + 1,
+			serverNowMs: now + 1,
+			credentials: [
+				{
+					...credentialEntry,
+					blocks: [{ providerKey: "anthropic:oauth", blockScope: "tier:fable", blockedUntilMs }],
+				},
+			],
+		};
+		const healthyReport: UsageReport = {
+			provider: "anthropic",
+			fetchedAt: now,
+			limits: [
+				{
+					id: "anthropic:7d:fable",
+					label: "Claude 7 Day (Fable)",
+					scope: { provider: "anthropic", windowId: "7d", tier: "fable" },
+					window: { id: "7d", label: "7 Day" },
+					amount: { used: 10, limit: 100, usedFraction: 0.1, unit: "percent" },
+					status: "ok",
+				},
+			],
+			metadata: { accountId: "remote-account", email: "remote@example.com", brokerFetch: "before-block" },
+		};
+		const blockedReport: UsageReport = {
+			provider: "anthropic",
+			fetchedAt: now + 1,
+			limits: [
+				{
+					id: "anthropic:7d:fable",
+					label: "Claude 7 Day (Fable)",
+					scope: { provider: "anthropic", windowId: "7d", tier: "fable" },
+					window: { id: "7d", label: "7 Day" },
+					amount: { used: 100, limit: 100, usedFraction: 1, unit: "percent" },
+					status: "exhausted",
+				},
+			],
+			metadata: { accountId: "remote-account", email: "remote@example.com", brokerFetch: "after-block" },
+		};
+		const fetchUsageSpy = vi
+			.spyOn(brokerClient, "fetchUsage")
+			.mockResolvedValueOnce({ generatedAt: now, reports: [healthyReport] })
+			.mockResolvedValueOnce({ generatedAt: now + 1, reports: [blockedReport] });
+		const backgroundSnapshotFetch = Promise.withResolvers<FetchSnapshotResult>();
+		vi.spyOn(brokerClient, "fetchSnapshot")
+			.mockReturnValueOnce(backgroundSnapshotFetch.promise)
+			.mockResolvedValueOnce({
+				status: 200,
+				generation: blockedSnapshot.generation,
+				snapshot: blockedSnapshot,
+			});
+		const remoteStore = new RemoteAuthCredentialStore({
+			client: brokerClient,
+			streamSnapshots: false,
+			initialSnapshot,
+		});
+		try {
+			const first = await remoteStore.fetchUsageReports();
+			expect(fetchUsageSpy).toHaveBeenCalledTimes(1);
+			expect(first).not.toBeNull();
+			expect(first?.[0]?.metadata?.brokerFetch).toBe("before-block");
+			expect(requireLimit(first![0]!, "anthropic:7d:fable").status).toBe("ok");
+
+			await remoteStore.refreshSnapshot();
+			expect(remoteStore.getCredentialBlock(7, "anthropic:oauth", "tier:fable")).toBe(blockedUntilMs);
+
+			const second = await remoteStore.fetchUsageReports();
+			expect(fetchUsageSpy).toHaveBeenCalledTimes(2);
+			expect(second).not.toBeNull();
+			expect(second?.[0]?.metadata?.brokerFetch).toBe("after-block");
+			const afterBlockLimit = requireLimit(second![0]!, "anthropic:7d:fable");
+			expect(afterBlockLimit.status).toBe("exhausted");
+			expect(afterBlockLimit.amount.usedFraction).toBe(1);
+		} finally {
+			remoteStore.close();
+		}
 	});
 
 	test("getUsageReport caches broker fetch failure for USAGE_CACHE_TTL_MS", async () => {

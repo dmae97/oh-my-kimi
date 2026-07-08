@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Codex load balancing: clear stale persisted and in-memory usage-limit blocks for an `openai-codex` account when a fresh live usage report shows it is allowed and below all limits, including broker-backed gateway snapshots, so traffic returns to recovered accounts instead of funneling to one sibling.
+
 ## [16.3.11] - 2026-07-06
 
 ### Fixed
