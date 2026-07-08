@@ -157,7 +157,8 @@ export class AdvisorRuntime {
 	}
 
 	waitForCatchup(maxMs: number, threshold: number, signal?: AbortSignal): Promise<void> {
-		if (this.disposed || signal?.aborted || this.#backlog < threshold) return Promise.resolve();
+		if (this.disposed || signal?.aborted || this.#backlog < threshold || this.#quotaExhausted)
+			return Promise.resolve();
 		const { promise, resolve } = Promise.withResolvers<void>();
 		let waiter!: CatchupWaiter;
 		const finish = (): void => {
@@ -402,8 +403,10 @@ export class AdvisorRuntime {
 						this.#consecutiveFailures = 0;
 						this.#failureNotified = false;
 						this.#seenContext.clear();
-						this.#backlog = Math.max(0, this.#backlog - finalTurns);
-						this.#notifyWaiters();
+						this.#pending.unshift({ text: batch, turns: finalTurns });
+						// Release catchup waiters: a quota-paused advisor can't make
+						// progress, so waitForCatchup must not block the primary agent.
+						this.#wakeAllWaiters();
 						try {
 							this.host.notifyQuotaExhausted?.();
 						} catch (notifyErr) {

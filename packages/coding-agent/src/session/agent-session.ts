@@ -2339,7 +2339,7 @@ export class AgentSession {
 		const descriptors: AdvisorRuntimeDescriptor[] = [];
 		const usedSlugs = new Set<string>();
 		for (const config of roster) {
-			let slug = legacy ? "default" : slugifyAdvisorName(config.name);
+			let slug = legacy ? "" : slugifyAdvisorName(config.name);
 			if (slug) {
 				let candidate = slug;
 				let n = 2;
@@ -2350,7 +2350,7 @@ export class AgentSession {
 			// Per-advisor toggle: skip disabled advisors but keep them in the
 			// status map so they show `○` rather than disappearing.
 			if (config.enabled === false) {
-				if (slug) this.#advisorStatuses.set(slug, { name: config.name, status: "paused" });
+				this.#advisorStatuses.set(slug, { name: config.name, status: "paused" });
 				continue;
 			}
 
@@ -2363,7 +2363,7 @@ export class AgentSession {
 				model = resolved.model;
 				thinkingLevel = concreteThinkingLevel(resolved.thinkingLevel);
 				if (!model) {
-					if (slug) this.#advisorStatuses.set(slug, { name: config.name, status: "no_model" });
+					this.#advisorStatuses.set(slug, { name: config.name, status: "no_model" });
 					if (emitWarnings) {
 						this.emitNotice("warning", `Advisor "${config.name}": no model matched "${config.model}"`, "advisor");
 					}
@@ -2372,7 +2372,7 @@ export class AgentSession {
 			} else {
 				const sel = resolveAdvisorRoleSelection(this.settings, this.#modelRegistry.getAvailable());
 				if (!sel) {
-					if (slug) this.#advisorStatuses.set(slug, { name: config.name, status: "no_model" });
+					this.#advisorStatuses.set(slug, { name: config.name, status: "no_model" });
 					if (emitWarnings) {
 						logger.debug("advisor enabled but no model assigned to the 'advisor' role; advisor inactive", {
 							advisor: config.name,

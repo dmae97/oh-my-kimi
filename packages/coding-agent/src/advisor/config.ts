@@ -141,6 +141,8 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 				model: entry.model?.trim() || undefined,
 				tools: filterAdvisorTools(entry.tools, item.path),
 				instructions,
+				// Preserve `false` explicitly — `enabled` defaults to `true` when absent.
+				enabled: entry.enabled === false ? false : undefined,
 			});
 		}
 	}

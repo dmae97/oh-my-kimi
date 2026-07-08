@@ -1648,6 +1648,75 @@ describe("advisor", () => {
 			expect(runtime.quotaExhausted).toBe(false);
 			expect(failures).toHaveLength(1);
 		});
+		it("retains the failed batch in the pending queue on quota error", async () => {
+			const promptInputs: string[] = [];
+			let shouldFail = true;
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					if (shouldFail) throw new Error("insufficient_quota: rate limit exceeded");
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => [],
+				enqueueAdvice: () => {},
+				notifyQuotaExhausted: () => {},
+			};
+			const runtime = new AdvisorRuntime(agent, host, 0);
+			const messages: AgentMessage[] = [{ role: "user", content: "quota-turn", timestamp: 1 } as AgentMessage];
+			runtime.onTurnEnd(messages);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+
+			// The batch must remain in the queue (backlog > 0) so it's replayed
+			// once the quota window resets, instead of being silently dropped.
+			expect(runtime.quotaExhausted).toBe(true);
+			expect(runtime.backlog).toBeGreaterThan(0);
+			expect(promptInputs).toHaveLength(1);
+			expect(promptInputs[0]).toContain("quota-turn");
+
+			// After reset() clears the quota pause, the next onTurnEnd drains the
+			// retained batch — proving it was never lost.
+			shouldFail = false;
+			runtime.reset();
+			runtime.onTurnEnd(messages);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+			expect(promptInputs.at(-1)).toContain("quota-turn");
+		});
+
+		it("resolves waitForCatchup immediately when quota is exhausted", async () => {
+			const agent: AdvisorAgent = {
+				prompt: async () => {
+					throw new Error("insufficient_quota");
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => [],
+				enqueueAdvice: () => {},
+				notifyQuotaExhausted: () => {},
+			};
+			const runtime = new AdvisorRuntime(agent, host, 0);
+			const messages: AgentMessage[] = [{ role: "user", content: "turn", timestamp: 1 } as AgentMessage];
+			runtime.onTurnEnd(messages);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+
+			expect(runtime.quotaExhausted).toBe(true);
+			expect(runtime.backlog).toBeGreaterThan(0);
+
+			// waitForCatchup must resolve instantly — a quota-paused advisor can't
+			// make progress, so blocking the primary agent for 30s is wrong.
+			const start = Date.now();
+			await runtime.waitForCatchup(30_000, 1);
+			expect(Date.now() - start).toBeLessThan(1000);
+		});
 	});
 
 	describe("advisor default tools", () => {
