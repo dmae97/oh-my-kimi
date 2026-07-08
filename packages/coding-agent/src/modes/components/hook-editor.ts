@@ -69,6 +69,7 @@ export class HookEditorComponent extends Container {
 		// submit hint off-screen. Caller may override via options.maxHeight.
 		const termRows = this.#tui.terminal?.rows ?? process.stdout.rows ?? 40;
 		this.#editor.setMaxHeight(options?.maxHeight ?? Math.max(3, termRows - 12));
+		this.#editor.setScrollbarVisible(true);
 		if (prefill) {
 			this.#editor.setText(prefill);
 		}

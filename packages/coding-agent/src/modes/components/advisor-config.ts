@@ -38,6 +38,7 @@ import {
 import type { ModelRegistry } from "../../config/model-registry";
 import { formatModelSelectorValue } from "../../config/model-resolver";
 import type { Settings } from "../../config/settings";
+import type { PerAdvisorStat } from "../../session/agent-session";
 import { getSelectListTheme, theme } from "../theme/theme";
 import { HookEditorComponent } from "./hook-editor";
 import { ModelSelectorComponent } from "./model-selector";
@@ -63,6 +64,8 @@ export interface AdvisorConfigCallbacks {
 	requestRender: () => void;
 	/** Surface a transient status/warning line to the user. */
 	notify: (message: string) => void;
+	/** Live advisor usage stats; lets the preview show tokens/cost per advisor. */
+	getAdvisorStats?: () => PerAdvisorStat[];
 }
 
 export interface AdvisorConfigDeps {
@@ -276,8 +279,30 @@ export class AdvisorConfigOverlayComponent implements Component {
 			"",
 			theme.fg("dim", "Instructions:"),
 		];
-		const instr = advisor.instructions?.trim();
-		lines.push(...(instr ? wrap(instr, bodyWidth) : [theme.fg("muted", "(none)")]));
+		// Show live usage stats when available from the session.
+		const stats = this.#cb.getAdvisorStats?.();
+		if (stats) {
+			const match = stats.find(s => s.name === (advisor.name || "default"));
+			if (match && (match.status === "running" || match.status === "quota_exhausted")) {
+				lines.push("", theme.fg("dim", "Usage:"));
+				const spendParts: string[] = [
+					`${match.tokens.input.toLocaleString()} in`,
+					`${match.tokens.output.toLocaleString()} out`,
+				];
+				if (match.tokens.cacheRead > 0) spendParts.push(`${match.tokens.cacheRead.toLocaleString()} cache`);
+				lines.push(theme.fg("dim", `  Tokens: ${spendParts.join(", ")}`));
+				if (match.cost > 0) lines.push(theme.fg("dim", `  Cost: $${match.cost.toFixed(4)}`));
+				if (match.contextWindow > 0) {
+					const pct = Math.round((match.contextTokens / match.contextWindow) * 100);
+					lines.push(
+						theme.fg(
+							"dim",
+							`  Context: ${match.contextTokens.toLocaleString()}/${match.contextWindow.toLocaleString()} (${pct}%)`,
+						),
+					);
+				}
+			}
+		}
 		return lines.map(line => truncateToWidth(line, bodyWidth));
 	}
 

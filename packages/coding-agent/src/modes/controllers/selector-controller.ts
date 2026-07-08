@@ -275,6 +275,7 @@ export class SelectorController {
 				close: done,
 				requestRender: () => this.ctx.ui.requestRender(),
 				notify: message => this.ctx.showStatus(message),
+				getAdvisorStats: () => this.ctx.session.getAdvisorStats().advisors,
 			});
 			overlayHandle = this.ctx.ui.showOverlay(overlay, {
 				anchor: "bottom-center",

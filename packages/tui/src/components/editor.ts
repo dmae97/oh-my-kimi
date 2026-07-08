@@ -403,6 +403,10 @@ export class Editor implements Component, Focusable {
 	#paddingXOverride: number | undefined;
 	#maxHeight?: number;
 	#scrollOffset: number = 0;
+	/** When true, the right border shows a scrollbar track/thumb when content
+	 *  overflows {@link #maxHeight}. Enabled by {@link HookEditorComponent} and
+	 *  other multi-line consumers; single-line consumers are unaffected. */
+	#scrollbarVisible = false;
 
 	// Emacs-style kill ring
 	#killRing = new KillRing();
@@ -547,6 +551,11 @@ export class Editor implements Component, Focusable {
 		if (this.#maxHeight === maxHeight) return;
 		this.#maxHeight = maxHeight;
 		// Don't reset scrollOffset — #updateScrollOffset will clamp it on next render
+	}
+
+	/** Enable/disable the right-border scrollbar. Only shown when content overflows. */
+	setScrollbarVisible(visible: boolean): void {
+		this.#scrollbarVisible = visible;
 	}
 
 	setPaddingX(paddingX: number): void {
@@ -825,6 +834,22 @@ export class Editor implements Component, Focusable {
 		const visibleLayoutLines = layoutLines.slice(this.#scrollOffset, this.#scrollOffset + visibleContentHeight);
 
 		const result: string[] = [];
+		// Scrollbar: shown only when content overflows and the caller opted in.
+		const needsScrollbar = this.#scrollbarVisible && layoutLines.length > visibleContentHeight;
+		let scrollbarThumb: { start: number; end: number } | null = null;
+		if (needsScrollbar && visibleContentHeight > 0) {
+			const thumbSize = Math.max(
+				1,
+				Math.min(
+					Math.floor((visibleContentHeight * visibleContentHeight) / layoutLines.length),
+					visibleContentHeight,
+				),
+			);
+			const travel = visibleContentHeight - thumbSize;
+			const maxOffset = Math.max(0, layoutLines.length - visibleContentHeight);
+			const start = maxOffset === 0 ? 0 : Math.round((this.#scrollOffset / maxOffset) * travel);
+			scrollbarThumb = { start, end: start + thumbSize };
+		}
 
 		if (borderVisible) {
 			// Render top border: ╭─ [status content] ────────────────╮
@@ -1024,7 +1049,11 @@ export class Editor implements Component, Focusable {
 				result.push(`${bottomLeft}${displayText}${linePad}${bottomRightAdjusted}`);
 			} else {
 				const leftBorder = this.borderColor(`${box.vertical}${padding(paddingX)}`);
-				const rightBorder = this.borderColor(`${padding(Math.max(0, rightChromeCells - 1))}${box.vertical}`);
+				// When scrollbar is active, replace the right border vertical with a
+				// thumb glyph (█) on lines inside the thumb range, keeping the track (│) elsewhere.
+				const inThumb = scrollbarThumb && visibleIndex >= scrollbarThumb.start && visibleIndex < scrollbarThumb.end;
+				const rightGlyph = inThumb ? "█" : box.vertical;
+				const rightBorder = this.borderColor(`${padding(Math.max(0, rightChromeCells - 1))}${rightGlyph}`);
 				result.push(leftBorder + displayText + linePad + rightBorder);
 			}
 		}
