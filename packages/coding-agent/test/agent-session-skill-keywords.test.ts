@@ -16,8 +16,8 @@ import {
 } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import { createAssistantMessage } from "./helpers/agent-session-setup";
 import { type } from "arktype";
+import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 type ObservedSkillTurn = {
 	texts: string[];
