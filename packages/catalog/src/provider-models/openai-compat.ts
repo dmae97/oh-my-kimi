@@ -3339,11 +3339,12 @@ export function litellmModelManagerOptions(
 	const baseUrl = config?.baseUrl ?? Bun.env.LITELLM_BASE_URL ?? "http://localhost:4000/v1";
 	return {
 		providerId: "litellm",
-		// rich-v3 invalidates rows cached before reseller usage-suffix stripping
-		// and placeholder-only `all-team-models` filtering; bump the version whenever
-		// the mappers below change, or warm authoritative caches keep serving
-		// pre-change rows for the full TTL.
-		cacheProviderId: `litellm:rich-v3:${Bun.hash(baseUrl).toString(36)}`,
+		// rich-v4 invalidates rows cached before LiteLLM ids gained bundled
+		// reference fallback. Earlier versions also handled reseller usage-suffix
+		// stripping and placeholder-only `all-team-models` filtering; bump the
+		// version whenever the mappers below change, or warm authoritative caches
+		// keep serving pre-change rows for the full TTL.
+		cacheProviderId: `litellm:rich-v4:${Bun.hash(baseUrl).toString(36)}`,
 		// litellm is a local-only proxy and is never bundled in models.json (that
 		// would leak the machine's localhost catalog). Prefer the proxy's richer
 		// management metadata, then enrich ids against models.dev with the bundled
