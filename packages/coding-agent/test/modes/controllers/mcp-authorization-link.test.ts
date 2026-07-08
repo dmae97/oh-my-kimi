@@ -24,10 +24,12 @@ const LONG_AUTH_URL =
 const LINEAR_AUTH_URL = `https://mcp.linear.app/authorize?response_type=code&client_id=abcdefghij0123456789ABCDEFGHIJ0123456789&redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fcallback&scope=read%20write%20mcp%3Aall&state=0123456789abcdef0123456789abcdef&code_challenge=5MlkJfN2GhX9uP0rQ7sT8vB1oCwDeFgHiJkLmNoPqRsTuVwXyZ&code_challenge_method=S256`;
 
 /**
- * Reassemble the copy-URL rows for `label` into a single string, mirroring what
- * a browser would produce when a multi-row selection is pasted into its
- * address bar (whitespace stripped between chunks). Returns "" if the label
- * row isn't found.
+ * Reassemble the copy-URL rows for `label` into a single string, mirroring a
+ * real multi-row terminal selection pasted into an address bar: browsers
+ * strip the newlines, but any other leading bytes survive (verbatim or
+ * percent-encoded) — so chunks are concatenated RAW, with no indent-stripping
+ * that could mask a corrupting prefix. Returns "" if the label row isn't
+ * found.
  */
 function reassembleUrl(plainLines: string[], label: string): string {
 	const start = plainLines.findIndex(line => line.startsWith(` ${label}`));
@@ -36,15 +38,13 @@ function reassembleUrl(plainLines: string[], label: string): string {
 	// Inline form contains the whole URL on the label row.
 	const inlineMatch = first.match(new RegExp(`^ ${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} (.*)$`));
 	if (inlineMatch) return inlineMatch[1]!;
-	// Wrapped form: label alone, then continuation rows with a single-space indent.
+	// Wrapped form: indented label row, then UNINDENTED continuation chunks.
+	// Any indented row (the next label) or blank row ends this URL's chunks.
 	let joined = "";
 	for (let i = start + 1; i < plainLines.length; i++) {
 		const line = plainLines[i]!;
-		// Continuation rows have exactly one leading space; a different indent
-		// or label ends this URL's rows.
-		if (!line.startsWith(" ") || line.startsWith("  ") || line.trim().length === 0) break;
-		if (line.includes(":") && /^ [A-Z][^:]*:/.test(line)) break; // next label row
-		joined += line.slice(1);
+		if (line.startsWith(" ") || line.trim().length === 0) break;
+		joined += line;
 	}
 	return joined;
 }
@@ -89,10 +89,12 @@ describe("MCPAuthorizationLinkPrompt", () => {
 			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 		}
 
-		// Wrapping puts the label on its own row followed by continuation
-		// chunks with a single-space indent.
+		// Wrapping puts the label on its own indented row followed by
+		// UNINDENTED continuation chunks — zero leading bytes, so a multi-row
+		// selection pastes back to the exact URL.
 		const labelRow = plainLines.indexOf(` ${COPY_URL_LABEL}`);
 		expect(labelRow).toBeGreaterThanOrEqual(0);
+		expect(plainLines[labelRow + 1]!.startsWith(" ")).toBe(false);
 
 		// Chunks reassemble to the URL byte-for-byte — the trailing
 		// `code_challenge_method=S256` MUST be present.
@@ -140,7 +142,7 @@ describe("MCPAuthorizationLinkPrompt", () => {
 
 	it("floors the wrap width so degenerately-narrow viewports still emit every character", () => {
 		// Below 16 cols the terminal is unusable, but the render still emits
-		// chunks (bounded at 16 - indent = 15 chars). No character is silently
+		// chunks (bounded at the 16-column floor). No character is silently
 		// dropped; the user can widen and reflow.
 		const lines = new MCPAuthorizationLinkPrompt(LINEAR_AUTH_URL).render(4);
 		const plainLines = lines.map(line => stripVTControlCharacters(line));
