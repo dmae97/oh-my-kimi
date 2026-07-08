@@ -324,8 +324,11 @@ describe("Editor component", () => {
 				),
 			);
 
+			const { promise: autocompleteUpdated, resolve: resolveAutocompleteUpdated } = Promise.withResolvers<void>();
+			editor.onAutocompleteUpdate = resolveAutocompleteUpdated;
+
 			editor.handleInput("/");
-			await Bun.sleep(0);
+			await autocompleteUpdated;
 
 			const rendered = editor.render(80).map(line => stripVTControlCharacters(line));
 			for (let i = 0; i < 10; i += 1) {
