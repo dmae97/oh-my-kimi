@@ -41,7 +41,8 @@ describe("buildHotkeysMarkdown", () => {
 		expect(markdown).toContain("| `Ctrl+L` | Reset terminal display |");
 		expect(markdown).toContain("| `Alt+R` | Retry last failed assistant turn |");
 		expect(markdown).toContain("| `Alt+Shift+P` | Toggle plan mode |");
-		expect(markdown).toContain("| `#` | Open prompt actions |");
+		expect(markdown).toContain("| `#<number>` | GitHub issue/PR reference");
+		expect(markdown).toContain("| `#` / `#<text>` | Prompt actions");
 		for (const line of lines) {
 			if (line.length === 0) continue;
 			expect(line.startsWith(" ")).toBe(false);
