@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added optional right-border scrollbar to the `Editor` component (`setScrollbarVisible`): shows a thumb glyph on the right border when content overflows `maxHeight`, enabling scrollable multi-line editors (e.g. advisor instructions) without losing the submit hint off-screen.
 ## [16.3.10] - 2026-07-06
 
 ### Fixed

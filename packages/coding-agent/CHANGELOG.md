@@ -2,9 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added per-advisor on/off toggle (`enabled: false` in `WATCHDOG.yml`): advisors stay in the roster but their runtime is never built — they show `○` in the status line and `/advisor status` rather than disappearing. Existing configs are backward-compatible (defaults to `true` when absent).
+- Added per-advisor runtime status indicators in the status line (`●` running, `○` paused/no-model, `✕` error/quota-exhausted), truncated to 4 dots + `+` when the roster exceeds 4 advisors.
+- Added real provider quota display (usage percent, window, reset timer) to `/advisor status` and the `/advisor configure` preview.
+
 ### Changed
 
 - Memoized non-message token totals (system prompt, tool schemas, skills) so the per-turn compaction and context-threshold paths recompute them at most once per input change instead of on every call. `getContextBreakdown` and `#estimateStoredContextTokens` previously re-tokenized the system prompt and every tool's wire schema (per-tool `JSON.stringify`) several times per turn over inputs that change at most once per turn.
+- Enriched `/advisor status` to show per-advisor status glyphs, model, spend breakdown, and quota window for every configured advisor (including disabled ones), replacing the previous single-advisor-only summary.
 
 ## [16.3.11] - 2026-07-06
 
