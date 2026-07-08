@@ -2914,7 +2914,9 @@ export class Editor implements Component, Focusable {
 					// when the current query would still surface it. `tmp` after a bare
 					// slash therefore falls through to file completion instead of
 					// rewriting the user's `/tmp` to `/skill:…`.
-					if (scoreCommandTextMatch(token.slice(1).toLowerCase(), item.value.toLowerCase()) > 0) return true;
+					const lowerToken = token.slice(1).toLowerCase();
+					if (scoreCommandTextMatch(lowerToken, item.value.toLowerCase()) > 0) return true;
+					if (item.description && scoreCommandTextMatch(lowerToken, item.description.toLowerCase()) > 0) return true;
 				}
 			}
 			return false;

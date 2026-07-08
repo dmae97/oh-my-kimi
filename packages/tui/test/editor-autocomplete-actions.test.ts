@@ -272,6 +272,27 @@ describe("Editor Enter handler sync slash completion", () => {
 		expect(editor.isShowingAutocomplete()).toBe(false);
 	});
 
+	it("accepts a stale mid-prompt skill suggestion when the live token still matches its description", async () => {
+		const editor = new Editor(defaultEditorTheme);
+		editor.setAutocompleteProvider(
+			new CombinedAutocompleteProvider(
+				[
+					{ name: "skill:hardening", description: "Security scan" },
+					{ name: "model", description: "Switch model" },
+				],
+				"/tmp",
+			),
+		);
+
+		await openMidPromptSkillAutocomplete(editor, "run a ");
+		// Race the 100 ms debounce: type a query that matches only the skill description.
+		editor.handleInput("scan");
+		editor.handleInput("\t");
+
+		expect(editor.getText()).toBe("run a /skill:hardening ");
+		expect(editor.isShowingAutocomplete()).toBe(false);
+	});
+
 	it("opens mid-prompt skill autocomplete and inserts the skill token without wiping the draft on Tab", async () => {
 		const editor = new Editor(defaultEditorTheme);
 		editor.setAutocompleteProvider(
