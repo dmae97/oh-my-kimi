@@ -46,6 +46,9 @@
 - Fixed startup of cached llama.cpp vision models so the initial default/restored model refreshes `/props` metadata before the session exposes it as text-only.
 - Fixed IRC-woken yielded subagents skipping empty-stop retry because stale yield-termination state carried into the wake turn ([#4658](https://github.com/can1357/oh-my-pi/issues/4658)).
 - Fixed `irc wait` skipping replies that arrived between wait calls by draining pending IRC asides before honoring queued-interrupt aborts ([#4657](https://github.com/can1357/oh-my-pi/issues/4657)).
+### Fixed
+
+- Fixed pasted terminal transcripts beginning with a shell prompt (`$ ...`) being mistaken for local Python shortcuts instead of being submitted as normal prompts ([#4678](https://github.com/can1357/oh-my-pi/issues/4678)).
 
 ## [16.3.9] - 2026-07-06
 
