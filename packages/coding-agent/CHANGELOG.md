@@ -121,6 +121,7 @@
 - Fixed `/rename` title arguments treating `#` prompt-action tokens as autocomplete triggers instead of literal text.
 - Fixed empty session `.jsonl` files accumulating in the sessions directory after a draft-then-clear exit cycle.
 - Fixed advisor being disabled for the entire session when resolving to a reasoning model with no controllable effort surface (e.g., `devin/glm-5-2*`).
+- Fixed live advisors continuing to use a stale `modelRoles.advisor` selection after `/model` changed the advisor model. ([#4612](https://github.com/can1357/oh-my-pi/issues/4612))
 - Fixed legacy extension plugin validation failures by re-exporting relocated catalog symbols (such as `calculateCost`, `modelsAreEqual`, and `getBundledProviders`) through the legacy `pi-ai` root shim.
 - Fixed legacy Pi extension imports of `DefaultResourceLoader` by adding a compatibility loader shim that translates `resourceLoader` into native session discovery options.
 - Fixed legacy Pi extension reloads on POSIX to ensure same-process re-imports pick up edits across the entire dependency graph.

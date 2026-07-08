@@ -429,6 +429,9 @@ export class Settings {
 		if (path === "statusLine.sessionAccent") {
 			statusLineSessionAccentSignal.fire();
 		}
+		if (path === "modelRoles") {
+			modelRolesSignal.fire();
+		}
 	}
 
 	/**
@@ -1476,6 +1479,12 @@ const appendOnlyModeSignal = new SettingSignal<[value: string]>("provider.append
  * can register independently without overwriting each other.
  */
 export const onAppendOnlyModeChanged = (cb: (value: string) => void) => appendOnlyModeSignal.on(cb);
+
+/** Fires when any model role changes at runtime. */
+const modelRolesSignal = new SettingSignal("modelRoles");
+
+/** Subscribe to model role changes. Returns an unsubscribe function. */
+export const onModelRolesChanged: (cb: () => void) => () => void = modelRolesSignal.on.bind(modelRolesSignal);
 
 /** Fires when `statusLine.sessionAccent` changes at runtime. */
 const statusLineSessionAccentSignal = new SettingSignal("statusLine.sessionAccent");
