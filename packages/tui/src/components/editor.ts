@@ -2916,7 +2916,8 @@ export class Editor implements Component, Focusable {
 					// rewriting the user's `/tmp` to `/skill:…`.
 					const lowerToken = token.slice(1).toLowerCase();
 					if (scoreCommandTextMatch(lowerToken, item.value.toLowerCase()) > 0) return true;
-					if (item.description && scoreCommandTextMatch(lowerToken, item.description.toLowerCase()) > 0) return true;
+					if (item.description && scoreCommandTextMatch(lowerToken, item.description.toLowerCase()) > 0)
+						return true;
 				}
 			}
 			return false;

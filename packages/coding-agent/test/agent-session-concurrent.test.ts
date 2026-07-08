@@ -1355,7 +1355,6 @@ describe("AgentSession TTSR resume gate", () => {
 		expect(toolResultText(matchedToolCallContent.id)).toBe("");
 	});
 
-	
 	it("relativizes the rule file path in the TTSR interrupt injection (no absolute leak)", async () => {
 		collapseSchedulerSettleDelays();
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;

@@ -12,8 +12,8 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { AUTO_THINKING } from "@oh-my-pi/pi-coding-agent/thinking";
-import { type } from "arktype";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { type } from "arktype";
 
 const mockTaskTool: AgentTool = {
 	name: "task",

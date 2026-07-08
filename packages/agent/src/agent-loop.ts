@@ -944,7 +944,8 @@ async function runLoopBody(
 					// only the matching call is blamed and siblings stay neutral.
 					const scopedAbort = toolScopedAbortReason(signal);
 					const toolCallAbortMessages =
-						message.toolCallAbortMessages ?? (scopedAbort ? buildToolCallAbortMessages(message, scopedAbort) : undefined);
+						message.toolCallAbortMessages ??
+						(scopedAbort ? buildToolCallAbortMessages(message, scopedAbort) : undefined);
 					const toolResults: ToolResultMessage[] = [];
 					for (const toolCall of toolCalls) {
 						const errorMessage = toolCallAbortMessages?.[toolCall.id] ?? message.errorMessage;
@@ -1682,7 +1683,6 @@ export function abortReasonText(signal: AbortSignal | undefined): string {
 	}
 	return "Request was aborted";
 }
-
 
 function emitAbortedAssistantMessage(
 	partialMessage: AssistantMessage | null,
