@@ -530,7 +530,7 @@ describe("Mnemopi backend lifecycle", () => {
 		await childState?.dispose();
 	});
 
-	it("flushes extractions, sleeps, and closes every owned bank on session shutdown (#2320)", async () => {
+	it("flushes extractions and closes every owned bank on session shutdown (#2320)", async () => {
 		const config = makeMnemopiConfig({
 			scoping: "per-project-tagged",
 			bank: "project-alpha",
@@ -563,14 +563,11 @@ describe("Mnemopi backend lifecycle", () => {
 		expect(retainSpy).toHaveBeenCalledTimes(1);
 		for (const bank of perBank) {
 			expect(bank.flush).toHaveBeenCalledTimes(1);
-			expect(bank.sleep).toHaveBeenCalledTimes(1);
-			expect(bank.sleep).toHaveBeenCalledWith(false);
+			expect(bank.sleep).not.toHaveBeenCalled();
 			expect(bank.close).toHaveBeenCalledTimes(1);
 			const flushedAt = bank.flush.mock.invocationCallOrder[0];
-			const sleptAt = bank.sleep.mock.invocationCallOrder[0];
 			const closedAt = bank.close.mock.invocationCallOrder[0];
-			expect(flushedAt).toBeLessThan(sleptAt);
-			expect(sleptAt).toBeLessThan(closedAt);
+			expect(flushedAt).toBeLessThan(closedAt);
 			expect(retainSpy.mock.invocationCallOrder[0]).toBeLessThan(closedAt);
 		}
 		// State already consumed its owned resources; the afterEach hook would
@@ -614,7 +611,7 @@ describe("Mnemopi backend lifecycle", () => {
 		registeredMnemopiState = undefined;
 	});
 
-	it("dispose with no timeoutMs awaits consolidate to completion (#3641 — preserves #2320 contract)", async () => {
+	it("dispose with no timeoutMs retains, flushes, and closes without sleeping (#3641)", async () => {
 		const state = registerMnemopiState();
 		const retainMemory = state.getScopedRetainTarget().memory;
 		const flushSpy = vi.spyOn(retainMemory, "flushExtractions").mockResolvedValue();
@@ -624,11 +621,10 @@ describe("Mnemopi backend lifecycle", () => {
 		await state.dispose();
 
 		// Unbounded dispose still runs the consolidate-then-close pipeline, but
-		// uses the lighter current-session sleep rather than the full all-sessions
-		// scan so the interactive shutdown path stays fast (#3641).
+		// skips the synchronous bank sleep so the interactive shutdown path stays
+		// fast (#3641). Full consolidation remains reachable via `/memory enqueue`.
 		expect(flushSpy).toHaveBeenCalledTimes(1);
-		expect(sleepSpy).toHaveBeenCalledTimes(1);
-		expect(sleepSpy).toHaveBeenCalledWith(false);
+		expect(sleepSpy).not.toHaveBeenCalled();
 		expect(closeSpy).toHaveBeenCalledTimes(1);
 
 		registeredMnemopiState = undefined;
@@ -642,6 +638,22 @@ describe("Mnemopi backend lifecycle", () => {
 
 		expect(retainSpy).toHaveBeenCalledTimes(1);
 		expect(retainSpy).toHaveBeenCalledWith({ extract: false });
+
+		registeredMnemopiState = undefined;
+	});
+
+	it("consolidate({ sleep: false }) retains and flushes without sleeping the bank", async () => {
+		const state = registerMnemopiState();
+		const retainMemory = state.getScopedRetainTarget().memory;
+		vi.spyOn(state, "forceRetainCurrentSession").mockResolvedValue();
+		vi.spyOn(retainMemory, "flushExtractions").mockResolvedValue();
+		const sleepAllSessionsSpy = vi.spyOn(retainMemory, "sleepAllSessions");
+		const sleepSpy = vi.spyOn(retainMemory, "sleep");
+
+		await state.consolidate({ sleep: false });
+
+		expect(sleepAllSessionsSpy).not.toHaveBeenCalled();
+		expect(sleepSpy).not.toHaveBeenCalled();
 
 		registeredMnemopiState = undefined;
 	});

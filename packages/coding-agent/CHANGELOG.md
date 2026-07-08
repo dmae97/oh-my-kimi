@@ -128,7 +128,7 @@
 - Cached failed `!command` config resolutions and timed out extension dynamic model fetches after 15 seconds.
 ### Fixed
 
-- Fixed `/quit` and `/exit` hanging for seconds during interactive shutdown by making the mnemopi dispose path run a lighter, bounded consolidation: it retains the current session without scheduling LLM fact extraction and sleeps only the current session, while the `/memory enqueue` path and end-of-session backend enqueue still perform full cross-session consolidation. ([#3641](https://github.com/can1357/oh-my-pi/issues/3641))
+- Fixed `/quit` and `/exit` hanging during interactive shutdown by making the mnemopi dispose path retain the current session and flush in-flight extractions without sleeping the bank; the `/memory enqueue` path and end-of-session backend enqueue still perform full cross-session consolidation. ([#3641](https://github.com/can1357/oh-my-pi/issues/3641))
 
 ## [16.3.6] - 2026-07-04
 
