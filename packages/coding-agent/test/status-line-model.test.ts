@@ -16,6 +16,10 @@ function createModelContext(advisorActive: boolean): SegmentContext {
 			isAutoThinking: false,
 			autoResolvedThinkingLevel: () => undefined,
 			isAdvisorActive: () => advisorActive,
+			getAdvisorStatusOverview: () => ({
+				configured: advisorActive,
+				advisors: advisorActive ? [{ name: "default", status: "running" }] : [],
+			}),
 		} as unknown as SegmentContext["session"],
 		width: 120,
 		compactThinkingLevel: false,
@@ -51,18 +55,17 @@ function createModelContext(advisorActive: boolean): SegmentContext {
 }
 
 describe("status line model segment advisor badge", () => {
-	it("appends a success-colored ++ badge when the advisor is active", () => {
+	it("appends per-advisor status dots when the advisor is active", () => {
 		const rendered = renderSegment("model", createModelContext(true));
 		expect(rendered.content).toContain("Test Model");
-		// The badge carries the success color, kept distinct from the statusLineModel
-		// name color (which several themes alias to `accent`).
-		expect(rendered.content).toContain(theme.fg("success", "++"));
+		// Per-advisor dots: ● running, wrapped in parentheses after the model name.
+		expect(rendered.content).toContain(theme.fg("success", "●"));
 	});
 
-	it("omits the badge when the advisor is inactive", () => {
+	it("omits the dots when the advisor is inactive", () => {
 		const rendered = renderSegment("model", createModelContext(false));
 		expect(rendered.content).toContain("Test Model");
-		expect(rendered.content).not.toContain("++");
+		expect(rendered.content).not.toContain("●");
 	});
 });
 
@@ -70,6 +73,7 @@ describe("status line model segment compact thinking level", () => {
 	function createThinkingContext(compactThinkingLevel: boolean): SegmentContext {
 		return {
 			...createModelContext(false),
+			compactThinkingLevel,
 			session: {
 				state: {
 					model: { id: "test-model", name: "Test Model", thinking: true },
@@ -79,8 +83,8 @@ describe("status line model segment compact thinking level", () => {
 				isAutoThinking: false,
 				autoResolvedThinkingLevel: () => undefined,
 				isAdvisorActive: () => false,
+				getAdvisorStatusOverview: () => ({ configured: false, advisors: [] }),
 			} as unknown as SegmentContext["session"],
-			compactThinkingLevel,
 		};
 	}
 
