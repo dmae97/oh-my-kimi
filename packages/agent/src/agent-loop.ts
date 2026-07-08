@@ -939,9 +939,15 @@ async function runLoopBody(
 						(c): c is ToolCallContent =>
 							c.type === "toolCall" && (c as CursorExecResolvedCarrier)[kCursorExecResolved] !== true,
 					);
+					// Provider-built aborted messages (stream error events) carry no
+					// per-tool labels; derive them from a tool-scoped abort signal so
+					// only the matching call is blamed and siblings stay neutral.
+					const scopedAbort = toolScopedAbortReason(signal);
+					const toolCallAbortMessages =
+						message.toolCallAbortMessages ?? (scopedAbort ? buildToolCallAbortMessages(message, scopedAbort) : undefined);
 					const toolResults: ToolResultMessage[] = [];
 					for (const toolCall of toolCalls) {
-						const errorMessage = message.toolCallAbortMessages?.[toolCall.id] ?? message.errorMessage;
+						const errorMessage = toolCallAbortMessages?.[toolCall.id] ?? message.errorMessage;
 						const result = createAbortedToolResult(toolCall, stream, message.stopReason, errorMessage);
 						currentContext.messages.push(result);
 						newMessages.push(result);

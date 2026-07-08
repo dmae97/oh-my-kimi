@@ -1124,6 +1124,117 @@ describe("AgentSession TTSR resume gate", () => {
 		expect(session.isStreaming).toBe(false);
 	});
 
+	it("labels aborted tool placeholders with the TTSR rule reason", async () => {
+		collapseSchedulerSettleDelays();
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		let streamCallCount = 0;
+
+		const ttsrManager = new TtsrManager({
+			enabled: true,
+			contextMode: "discard",
+			interruptMode: "always",
+			repeatMode: "once",
+			repeatGap: 10,
+		});
+		ttsrManager.addRule(testRule);
+
+		const toolCallContent: ToolCall = {
+			type: "toolCall",
+			id: "call_ttsr_abort_reason",
+			name: "mock_edit",
+			arguments: { snippet: "let val = result.unwrap(" },
+		};
+
+		const makeToolCallMsg = (stopReason: "toolUse" | "aborted" = "toolUse"): AssistantMessage => ({
+			role: "assistant",
+			content: [toolCallContent],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "mock",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason,
+			timestamp: Date.now(),
+		});
+
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: (_model, _context, options) => {
+				streamCallCount++;
+				const stream = new AssistantMessageEventStream();
+				const signal = options?.signal;
+				if (streamCallCount === 1) {
+					queueMicrotask(() => {
+						const partial = makeToolCallMsg();
+						if (signal) {
+							signal.addEventListener(
+								"abort",
+								() => {
+									stream.push({
+										type: "error",
+										reason: "aborted",
+										error: makeToolCallMsg("aborted"),
+									});
+								},
+								{ once: true },
+							);
+						}
+						stream.push({ type: "start", partial });
+						stream.push({ type: "toolcall_start", contentIndex: 0, partial });
+						stream.push({
+							type: "toolcall_delta",
+							contentIndex: 0,
+							delta: 'let val = result.unwrap("oops")',
+							partial,
+						});
+						// The TTSR abort placeholder is only minted for tool calls that reached
+						// `toolcall_end`: the agent loop drops incomplete tool calls from an
+						// aborted turn (partial args are unsafe to replay). Complete the call
+						// before the rule-driven abort fires so the labeled placeholder survives.
+						stream.push({ type: "toolcall_end", contentIndex: 0, toolCall: toolCallContent, partial });
+					});
+				} else {
+					pushContinuationStream(stream, () => {});
+				}
+				return stream;
+			},
+		});
+
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth-abort-reason.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, ttsrManager });
+
+		await session.prompt("Write some Rust code");
+
+		const toolResult = sessionManager
+			.getEntries()
+			.find(
+				entry =>
+					entry.type === "message" &&
+					entry.message.role === "toolResult" &&
+					entry.message.toolCallId === toolCallContent.id,
+			);
+		expect(toolResult?.type).toBe("message");
+		const text =
+			toolResult?.type === "message" && toolResult.message.role === "toolResult"
+				? (toolResult.message.content.find((part): part is { type: "text"; text: string } => part.type === "text")
+						?.text ?? "")
+				: "";
+		expect(text).toContain("Tool execution was aborted: TTSR matched rule: no-unwrap");
+		expect(text).not.toContain("Request was aborted");
+	});
+
 	it("labels only the matching aborted tool placeholder with the TTSR rule reason", async () => {
 		collapseSchedulerSettleDelays();
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
@@ -1200,11 +1311,12 @@ describe("AgentSession TTSR resume gate", () => {
 							delta: 'let val = result.unwrap("oops")',
 							partial,
 						});
-						// The TTSR abort placeholder is only minted for tool calls that reached
+						// The abort placeholder is only minted for tool calls that reached
 						// `toolcall_end`: the agent loop drops incomplete tool calls from an
-						// aborted turn (partial args are unsafe to replay). Complete the call
-						// before the rule-driven abort fires so the labeled placeholder survives.
-						stream.push({ type: "toolcall_end", contentIndex: 0, toolCall: toolCallContent, partial });
+						// aborted turn (partial args are unsafe to replay). Complete the
+						// innocent read before the rule-driven abort fires so its placeholder
+						// survives and can carry the neutral sibling label.
+						stream.push({ type: "toolcall_end", contentIndex: 0, toolCall: readToolCallContent, partial });
 					});
 				} else {
 					pushContinuationStream(stream, () => {});
@@ -1234,13 +1346,16 @@ describe("AgentSession TTSR resume gate", () => {
 				?.content.find((part): part is { type: "text"; text: string } => part.type === "text")?.text ?? "";
 
 		const readText = toolResultText(readToolCallContent.id);
-		const matchedText = toolResultText(matchedToolCallContent.id);
 		expect(readText).toContain("Tool execution was aborted: TTSR interrupt on another tool call");
 		expect(readText).not.toContain("TTSR matched rule: no-unwrap");
-		expect(matchedText).toContain("Tool execution was aborted: TTSR matched rule: no-unwrap");
-		expect(matchedText).not.toContain("Request was aborted");
+		// The matching call never reached `toolcall_end`, so the loop drops it from
+		// the aborted turn (partial args are unsafe to replay) and no placeholder is
+		// minted. The rule label for a completed matching call is covered by the
+		// single-call test above.
+		expect(toolResultText(matchedToolCallContent.id)).toBe("");
 	});
 
+	
 	it("relativizes the rule file path in the TTSR interrupt injection (no absolute leak)", async () => {
 		collapseSchedulerSettleDelays();
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
