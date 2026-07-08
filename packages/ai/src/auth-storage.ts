@@ -3926,8 +3926,8 @@ export class AuthStorage {
 			return configKey;
 		}
 
-		// Precedence: a deliberate OAuth login wins, then an explicit env var, then a stored
-		// static api_key (which may be a stale broker-migrated copy) as a last resort.
+		// Precedence: a deliberate OAuth/login credential wins, then an explicit env var,
+		// then a stored static api_key (which may be a stale broker-migrated copy) as a last resort.
 		const oauthSelection = this.#selectCredentialByType(provider, "oauth");
 		if (oauthSelection) {
 			const expiresAt = oauthSelection.credential.expires;
@@ -3941,6 +3941,16 @@ export class AuthStorage {
 				}
 				return oauthSelection.credential.access;
 			}
+		}
+
+		const loginApiKeySelection = this.#selectCredentialByType(
+			provider,
+			"api_key",
+			undefined,
+			credential => credential.type === "api_key" && credential.source === "login",
+		);
+		if (loginApiKeySelection) {
+			return this.#configValueResolver(loginApiKeySelection.credential.key);
 		}
 
 		const envKey = getEnvApiKey(provider);

@@ -201,5 +201,6 @@ describe("AuthStorage api-key login upsert", () => {
 		});
 
 		expect(await authStorage.getApiKey("opencode-go", "session-opencode-go-login")).toBe("new-opencode-key");
+		expect(await authStorage.peekApiKey("opencode-go")).toBe("new-opencode-key");
 	});
 });
