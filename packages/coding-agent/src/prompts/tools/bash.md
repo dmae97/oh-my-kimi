@@ -52,9 +52,9 @@ Use bash ONLY for: a single binary call, or one short pipeline that COMPUTES a f
 {{#if asyncEnabled}}
 # Timeout and async
 
-- `timeout` is seconds, clamped to `1..3600`; the process is killed on elapse.
-- `async: true` defers only reporting — it does NOT extend the timeout; a daemon with `async: true` is still killed at the clamped timeout.
-- Need >3600s? Detach/manage lifecycle yourself (`cmd &`, supervisor, self-restarting script). The shell session persists across calls.
+- `timeout` is seconds; nonzero values are clamped to `1..3600` and the process is killed on elapse. Set `timeout: 0` only for commands that must run until completion or explicit cancellation.
+- `async: true` defers only reporting — it does NOT extend a nonzero timeout; use `timeout: 0` when a daemon or watcher must be cancellation-owned.
+- Need a daemon or >3600s run? Use `async: true` with `timeout: 0` when the harness should keep it alive until cancellation, or detach/manage lifecycle yourself (`cmd &`, supervisor, self-restarting script). The shell session persists across calls.
 {{/if}}
 {{#if autoBackgroundEnabled}}
 

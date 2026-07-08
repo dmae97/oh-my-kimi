@@ -1492,6 +1492,21 @@ function b() {
 			expect(result.details?.requestedTimeoutSeconds).toBe(7200);
 		});
 
+		it("should disable the command deadline when timeout is zero", async () => {
+			vi.spyOn(toolTimeouts, "clampTimeout").mockReturnValue(0.05);
+
+			const result = await bashTool.execute("test-call-timeout-disabled", {
+				command: "printf 'start\\n'; sleep 0.1; printf 'done\\n'",
+				timeout: 0,
+			});
+
+			const output = getTextOutput(result);
+			expect(output).toContain("start");
+			expect(output).toContain("done");
+			expect(result.details?.timeoutDisabled).toBe(true);
+			expect(result.details?.timeoutSeconds).toBeUndefined();
+		});
+
 		it("should respect timeout", async () => {
 			// Reduce the effective timeout through the production clamp seam; the
 			// real subprocess kill-on-timeout path is still exercised, just faster.

@@ -76,6 +76,9 @@
 ### Fixed
 
 - Fixed system prompt date rendering to use the host local calendar date instead of UTC.
+### Fixed
+
+- Fixed `bash` tool `timeout: 0` so it disables the command deadline instead of falling back to the minimum timeout.
 
 ## [16.3.8] - 2026-07-05
 
