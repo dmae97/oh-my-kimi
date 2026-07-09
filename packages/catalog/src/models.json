@@ -64651,7 +64651,7 @@
 			"cost": {
 				"input": 0.65,
 				"output": 3.41,
-				"cacheRead": 0.14,
+				"cacheRead": 0.15,
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
@@ -67788,7 +67788,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1048576,
-			"maxTokens": 512000,
+			"maxTokens": 131072,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -68452,7 +68452,7 @@
 			"cost": {
 				"input": 0.65,
 				"output": 3.41,
-				"cacheRead": 0.14,
+				"cacheRead": 0.15,
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
@@ -85684,6 +85684,34 @@
 				"includeEncryptedReasoning": false,
 				"filterReasoningHistory": true,
 				"omitReasoningEffort": false
+			}
+		},
+		"grok-4.5": {
+			"id": "grok-4.5",
+			"name": "Grok 4.5",
+			"api": "openai-responses",
+			"provider": "xai-oauth",
+			"baseUrl": "https://api.x.ai/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 500000,
+			"maxTokens": 500000,
+			"compat": {
+				"reasoningEffortMap": {
+					"minimal": "low"
+				},
+				"includeEncryptedReasoning": false,
+				"filterReasoningHistory": true,
+				"omitReasoningEffort": true
 			}
 		},
 		"grok-build": {
