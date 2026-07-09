@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `omp plugin install github:owner/repo --force` failing with Bun `DependencyLoop` when replacing an existing pinned git plugin source for the same repository; the installer now removes the stale pinned dependency edge before invoking Bun and restores it on rollback. ([#4960](https://github.com/can1357/oh-my-pi/issues/4960))
+
 ## [16.3.13] - 2026-07-09
 
 ### Fixed

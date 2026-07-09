@@ -228,6 +228,79 @@ describe("PluginManager.install with git sources", () => {
 		]);
 	});
 
+	test("removes an existing pinned git dependency before installing the unpinned source (#4960)", async () => {
+		await Bun.write(
+			pluginsPkgJson,
+			JSON.stringify(
+				{
+					name: "omp-plugins",
+					private: true,
+					dependencies: { "replaced-plugin": "github:foo/bar#v1.0.0" },
+				},
+				null,
+				2,
+			),
+		);
+		const seedDir = path.join(pluginsNodeModules, "replaced-plugin");
+		await fs.mkdir(seedDir, { recursive: true });
+		await Bun.write(
+			path.join(seedDir, "package.json"),
+			JSON.stringify({ name: "replaced-plugin", version: "1.0.0" }, null, 2),
+		);
+
+		const spawnedCommands: string[][] = [];
+		vi.spyOn(Bun, "spawn").mockImplementation(((cmd: string[]) => {
+			spawnedCommands.push([...cmd]);
+			if (cmd[1] === "install") {
+				expect(cmd).toEqual(["bun", "install", "github:foo/bar"]);
+				const prepare = (async () => {
+					const packageJson = await Bun.file(pluginsPkgJson).json();
+					expect(packageJson.dependencies?.["replaced-plugin"]).toBeUndefined();
+
+					await Bun.write(
+						pluginsPkgJson,
+						JSON.stringify(
+							{
+								name: "omp-plugins",
+								private: true,
+								dependencies: { "replaced-plugin": "github:foo/bar" },
+							},
+							null,
+							2,
+						),
+					);
+					await Bun.write(
+						path.join(seedDir, "package.json"),
+						JSON.stringify({ name: "replaced-plugin", version: "1.1.0" }, null, 2),
+					);
+				})();
+				return {
+					pid: 1,
+					stdout: emptyStream(),
+					stderr: emptyStream(),
+					exited: prepare.then(() => 0),
+				} as Subprocess;
+			}
+
+			expect(cmd).toEqual(["bun", "update", "replaced-plugin"]);
+			return {
+				pid: 2,
+				stdout: emptyStream(),
+				stderr: emptyStream(),
+				exited: Promise.resolve(0),
+			} as Subprocess;
+		}) as typeof Bun.spawn);
+
+		const mgr = new PluginManager(tmpRoot);
+		const result = await mgr.install("github:foo/bar");
+
+		expect(result.name).toBe("replaced-plugin");
+		expect(result.version).toBe("1.1.0");
+		expect(spawnedCommands[0]).toEqual(["bun", "install", "github:foo/bar"]);
+		const packageJson = await Bun.file(pluginsPkgJson).json();
+		expect(packageJson.dependencies).toEqual({ "replaced-plugin": "github:foo/bar" });
+	});
+
 	test("first-time github install does NOT run `bun update` (no existing pin to refresh)", async () => {
 		await Bun.write(
 			pluginsPkgJson,
