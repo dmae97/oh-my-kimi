@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the ask tool timeout so it auto-selects the recommended option even when the UI selector does not settle on its own. ([#4995](https://github.com/can1357/oh-my-pi/issues/4995))
+
 ## [16.3.15] - 2026-07-09
 
 ### Changed

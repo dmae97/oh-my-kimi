@@ -432,10 +432,16 @@ async function askSingleQuestion(
 		const helpText = navigation
 			? "up/down navigate  enter select  ←/→ question  esc cancel"
 			: "up/down navigate  enter select  esc cancel";
+		const timeoutController = typeof timeout === "number" && timeout > 0 ? new AbortController() : undefined;
+		const dialogSignal =
+			signal && timeoutController
+				? AbortSignal.any([signal, timeoutController.signal])
+				: (timeoutController?.signal ?? signal);
+		let timeoutId: NodeJS.Timeout | undefined;
 		const dialogOptions = {
 			initialIndex,
 			timeout,
-			signal,
+			signal: dialogSignal,
 			outline: true,
 			onTimeout,
 			helpText,
@@ -454,18 +460,33 @@ async function askSingleQuestion(
 				: undefined,
 		};
 		const startMs = Date.now();
-		const choice = signal
-			? await untilAborted(signal, () => ui.select(prompt, optionsToShow, dialogOptions))
-			: await ui.select(prompt, optionsToShow, dialogOptions);
-		if (!timeoutTriggered && choice === undefined && typeof timeout === "number") {
-			// Fallback for UI surfaces that enforce `timeout` without invoking
-			// `onTimeout`: their auto-cancel resolves right at the deadline. A
-			// cancel arriving well past the deadline is a deliberate user Esc on
-			// a surface that kept the dialog open — keep treating it as a cancel.
-			const elapsed = Date.now() - startMs;
-			timeoutTriggered = elapsed >= timeout && elapsed <= timeout + TIMEOUT_DETECTION_TOLERANCE_MS;
+		if (timeoutController && typeof timeout === "number") {
+			timeoutId = setTimeout(() => {
+				timeoutTriggered = true;
+				timeoutController.abort();
+			}, timeout);
 		}
-		return { choice, timedOut: timeoutTriggered, navigation: navigationAction };
+		try {
+			const choice = dialogSignal
+				? await untilAborted(dialogSignal, () => ui.select(prompt, optionsToShow, dialogOptions))
+				: await ui.select(prompt, optionsToShow, dialogOptions);
+			if (!timeoutTriggered && choice === undefined && typeof timeout === "number") {
+				// Fallback for UI surfaces that enforce `timeout` without invoking
+				// `onTimeout`: their auto-cancel resolves right at the deadline. A
+				// cancel arriving well past the deadline is a deliberate user Esc on
+				// a surface that kept the dialog open — keep treating it as a cancel.
+				const elapsed = Date.now() - startMs;
+				timeoutTriggered = elapsed >= timeout && elapsed <= timeout + TIMEOUT_DETECTION_TOLERANCE_MS;
+			}
+			return { choice, timedOut: timeoutTriggered, navigation: navigationAction };
+		} catch (error) {
+			if (timeoutTriggered && error instanceof Error && error.name === "AbortError") {
+				return { choice: undefined, timedOut: true, navigation: navigationAction };
+			}
+			throw error;
+		} finally {
+			clearTimeout(timeoutId);
+		}
 	};
 
 	const promptForCustomInput = async (
