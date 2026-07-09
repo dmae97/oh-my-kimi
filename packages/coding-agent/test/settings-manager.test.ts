@@ -70,6 +70,36 @@ describe("Settings", () => {
 		await Bun.sleep(0);
 		await tempDir?.remove();
 	});
+
+	describe("main config file selection", () => {
+		it("loads and updates an existing config.yaml without creating config.yml", async () => {
+			const yamlConfigPath = path.join(agentDir, "config.yaml");
+			await Bun.write(yamlConfigPath, YAML.stringify({ setupVersion: 1 }, null, 2));
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			expect(settings.get("setupVersion")).toBe(1);
+
+			settings.set("setupVersion", 2);
+			await settings.flush();
+
+			const savedSettings = YAML.parse(await Bun.file(yamlConfigPath).text()) as Record<string, unknown>;
+			expect(savedSettings.setupVersion).toBe(2);
+			expect(await Bun.file(getConfigPath()).exists()).toBe(false);
+		});
+
+		it("creates config.yml for new persisted settings when no main config exists", async () => {
+			const yamlConfigPath = path.join(agentDir, "config.yaml");
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			settings.set("setupVersion", 1);
+			await settings.flush();
+
+			expect(await Bun.file(getConfigPath()).exists()).toBe(true);
+			expect(await Bun.file(yamlConfigPath).exists()).toBe(false);
+			expect((await readSettings()).setupVersion).toBe(1);
+		});
+	});
+
 	describe("defaults", () => {
 		it("keeps eight inline images live by default", async () => {
 			const settings = await Settings.init({ cwd: projectDir, agentDir });
