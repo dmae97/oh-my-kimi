@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { buildParams } from "@oh-my-pi/pi-ai/providers/openai-responses";
+import type { Context } from "@oh-my-pi/pi-ai/types";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
@@ -39,5 +42,20 @@ describe("effort-dial-less reasoner encoding (regression)", () => {
 		const claude = getBundledModel("anthropic", "claude-sonnet-4-6");
 		if (!claude) throw new Error("anthropic/claude-sonnet-4-6 must be in bundled models.json");
 		expect(claude.thinking).toBeDefined();
+	});
+});
+
+const singleUserContext: Context = {
+	messages: [{ role: "user", content: "hello", timestamp: 0 }],
+};
+
+describe("xAI OAuth Responses reasoning payload (regression)", () => {
+	test("xai-oauth/grok-4.5 omits unsupported reasoning summary", () => {
+		const grok45 = getBundledModel<"openai-responses">("xai-oauth", "grok-4.5");
+		if (!grok45) throw new Error("xai-oauth/grok-4.5 must be in bundled models.json");
+
+		const { params } = buildParams(grok45, singleUserContext, { reasoning: Effort.High }, undefined);
+
+		expect(params.reasoning).toEqual({ effort: "high" });
 	});
 });

@@ -898,7 +898,7 @@ export function buildParams(
 		omitReasoningEffort: options?.omitReasoningEffort,
 	});
 	applyResponsesCompatPolicy(params, reasoningPolicy, {
-		reasoningSummary: options?.reasoningSummary,
+		reasoningSummary: model.provider === "xai-oauth" ? null : options?.reasoningSummary,
 		mapEffort: effort =>
 			model.compat.reasoningEffortMap?.[effort as NonNullable<OpenAIResponsesOptions["reasoning"]>] ??
 			model.thinking?.effortMap?.[effort as NonNullable<OpenAIResponsesOptions["reasoning"]>] ??

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `xai-oauth/grok-4.5` Responses requests to omit unsupported `reasoning.summary` while preserving the documented `reasoning.effort` payload ([#4998](https://github.com/can1357/oh-my-pi/issues/4998)).
+
 ## [16.3.15] - 2026-07-09
 
 ### Breaking Changes
