@@ -42,10 +42,13 @@ export interface CursorModelManagerConfig {
 	clientVersion?: string;
 }
 
+const CURSOR_CACHE_PROVIDER_ID = "cursor:max-mode-v2";
+
 export function cursorModelManagerOptions(config: CursorModelManagerConfig = {}): ModelManagerOptions<"cursor-agent"> {
 	const { apiKey, baseUrl, clientVersion } = config;
 	return {
 		providerId: "cursor",
+		cacheProviderId: CURSOR_CACHE_PROVIDER_ID,
 		...(apiKey
 			? {
 					fetchDynamicModels: async () => {
