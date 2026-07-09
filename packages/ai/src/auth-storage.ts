@@ -4941,6 +4941,7 @@ type CredentialBlockRow = {
 	provider_key: string;
 	block_scope: string;
 	blocked_until_ms: number;
+	updated_at: number;
 };
 
 type SerializedCredentialRecord = {
@@ -5203,10 +5204,10 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		);
 		this.#deleteExpiredCacheStmt = this.#db.prepare(`DELETE FROM cache WHERE expires_at <= ${SQLITE_NOW_EPOCH}`);
 		this.#getCredentialBlockStmt = this.#db.prepare(
-			"SELECT blocked_until_ms FROM auth_credential_blocks WHERE credential_id = ? AND provider_key = ? AND block_scope = ? AND blocked_until_ms > ?",
+			"SELECT blocked_until_ms, updated_at FROM auth_credential_blocks WHERE credential_id = ? AND provider_key = ? AND block_scope = ? AND blocked_until_ms > ?",
 		);
 		this.#listCredentialBlocksByCredentialStmt = this.#db.prepare(
-			"SELECT credential_id, provider_key, block_scope, blocked_until_ms FROM auth_credential_blocks WHERE credential_id = ? AND blocked_until_ms > ? ORDER BY provider_key ASC, block_scope ASC",
+			"SELECT credential_id, provider_key, block_scope, blocked_until_ms, updated_at FROM auth_credential_blocks WHERE credential_id = ? AND blocked_until_ms > ? ORDER BY provider_key ASC, block_scope ASC",
 		);
 		this.#upsertCredentialBlockStmt = this.#db.prepare(
 			`INSERT INTO auth_credential_blocks (credential_id, provider_key, block_scope, blocked_until_ms, updated_at)
@@ -5820,14 +5821,24 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		const nowMs = Date.now();
 		this.#deleteExpiredCredentialBlocksStmt.run(nowMs);
 		const row = this.#getCredentialBlockStmt.get(credentialId, providerKey, blockScope, nowMs) as
-			| { blocked_until_ms?: number }
+			| { blocked_until_ms?: number; updated_at?: number }
 			| undefined;
 		return typeof row?.blocked_until_ms === "number" ? row.blocked_until_ms : undefined;
 	}
 
 	getCredentialBlockReconcileAfter(credentialId: number, providerKey: string, blockScope: string): number | undefined {
-		if (this.getCredentialBlock(credentialId, providerKey, blockScope) === undefined) return undefined;
-		return this.#credentialBlockReconcileAfter.get(`${credentialId}\0${providerKey}\0${blockScope}`);
+		const nowMs = Date.now();
+		this.#deleteExpiredCredentialBlocksStmt.run(nowMs);
+		const row = this.#getCredentialBlockStmt.get(credentialId, providerKey, blockScope, nowMs) as
+			| { blocked_until_ms?: number; updated_at?: number }
+			| undefined;
+		if (typeof row?.blocked_until_ms !== "number") return undefined;
+		const memoryReconcileAfter =
+			this.#credentialBlockReconcileAfter.get(`${credentialId}\0${providerKey}\0${blockScope}`) ?? 0;
+		const persistedReconcileAfter =
+			typeof row.updated_at === "number" ? row.updated_at * 1000 + USAGE_REPORT_TTL_MS : 0;
+		const reconcileAfter = Math.max(memoryReconcileAfter, persistedReconcileAfter);
+		return reconcileAfter > nowMs ? Math.min(row.blocked_until_ms, reconcileAfter) : undefined;
 	}
 
 	upsertCredentialBlock(block: StoredCredentialBlock): void {
