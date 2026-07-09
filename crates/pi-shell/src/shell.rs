@@ -1649,7 +1649,7 @@ async fn read_output(
 			let pending = &buf[..it];
 			match str::from_utf8(pending) {
 				Ok(text) => {
-					emit_chunk(text, on_chunk.as_ref());
+					emit_chunk(text, on_chunk.as_ref()).await;
 					it = 0;
 					break;
 				},
@@ -1658,7 +1658,7 @@ async fn read_output(
 					if p > 0 {
 						// SAFETY: [..p] is guaranteed valid UTF-8 by valid_up_to().
 						let text = unsafe { str::from_utf8_unchecked(&pending[..p]) };
-						emit_chunk(text, on_chunk.as_ref());
+						emit_chunk(text, on_chunk.as_ref()).await;
 						// copy p..it to the beginning of the buffer
 						buf.copy_within(p..it, 0);
 						it -= p;
@@ -1667,7 +1667,7 @@ async fn read_output(
 					match err.error_len() {
 						Some(p) => {
 							// Invalid byte sequence: emit replacement and drop those bytes.
-							emit_chunk(REPLACEMENT, on_chunk.as_ref());
+							emit_chunk(REPLACEMENT, on_chunk.as_ref()).await;
 							// copy p..it to the beginning of the buffer
 							buf.copy_within(p..it, 0);
 							it -= p;
@@ -1688,10 +1688,10 @@ async fn read_output(
 	for chunk in buf[..it].utf8_chunks() {
 		let valid = chunk.valid();
 		if !valid.is_empty() {
-			emit_chunk(valid, on_chunk.as_ref());
+			emit_chunk(valid, on_chunk.as_ref()).await;
 		}
 		if !chunk.invalid().is_empty() {
-			emit_chunk(REPLACEMENT, on_chunk.as_ref());
+			emit_chunk(REPLACEMENT, on_chunk.as_ref()).await;
 		}
 	}
 }
@@ -1777,7 +1777,7 @@ async fn read_output_buffered(
 			while !pending.is_empty() {
 				match str::from_utf8(&pending) {
 					Ok(text) => {
-						emit_chunk(text, Some(cb));
+						emit_chunk(text, Some(cb)).await;
 						pending.clear();
 						break;
 					},
@@ -1786,12 +1786,12 @@ async fn read_output_buffered(
 						if p > 0 {
 							// SAFETY: [..p] is valid UTF-8 per valid_up_to().
 							let text = unsafe { str::from_utf8_unchecked(&pending[..p]) };
-							emit_chunk(text, Some(cb));
+							emit_chunk(text, Some(cb)).await;
 							pending.drain(..p);
 						}
 						match err.error_len() {
 							Some(skip) => {
-								emit_chunk(REPLACEMENT, Some(cb));
+								emit_chunk(REPLACEMENT, Some(cb)).await;
 								pending.drain(..skip);
 							},
 							None => break,
@@ -1807,10 +1807,10 @@ async fn read_output_buffered(
 		for chunk in pending.utf8_chunks() {
 			let valid = chunk.valid();
 			if !valid.is_empty() {
-				emit_chunk(valid, Some(cb));
+				emit_chunk(valid, Some(cb)).await;
 			}
 			if !chunk.invalid().is_empty() {
-				emit_chunk(REPLACEMENT, Some(cb));
+				emit_chunk(REPLACEMENT, Some(cb)).await;
 			}
 		}
 	}
@@ -1858,9 +1858,16 @@ fn read_nonblocking<T: std::os::fd::AsRawFd>(file: &T, buf: &mut [u8]) -> io::Re
 	}
 }
 
-fn emit_chunk(text: &str, callback: Option<&Sender<String>>) {
+/// Forward one decoded chunk to the streaming callback, honouring channel
+/// backpressure: on a bounded channel (the pi-natives JS bridge) the send
+/// parks until the consumer frees a slot — which parks the pipe reader and,
+/// transitively, the child on its stdout/stderr pipe — so a fast producer
+/// can never buffer unbounded output in memory (#4078). A disconnected
+/// receiver (consumer gone) fails immediately, so the pipe keeps draining
+/// and the child never wedges on a full pipe.
+async fn emit_chunk(text: &str, callback: Option<&Sender<String>>) {
 	if let Some(callback) = callback {
-		let _ = callback.send(text.to_string());
+		let _ = callback.send_async(text.to_string()).await;
 	}
 }
 
@@ -4139,5 +4146,40 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 			out.contains("DFL") && !out.contains("IGN"),
 			"builtin nohup masked SIGHUP like the external tool (output: {out:?})",
 		);
+	}
+
+	/// Regression for #4078: the JS bridge hands the pipe readers a *bounded*
+	/// chunk channel. With a consumer slower than the producer the readers
+	/// must park on `send_async` (backpressuring the child through its pipe)
+	/// rather than buffer unboundedly — and, unlike a drop-on-full design,
+	/// every produced byte must still reach the consumer.
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn streaming_output_backpressures_on_bounded_channel_without_loss() {
+		const TOTAL_BYTES: usize = 1_048_576;
+		let (tx, rx) = flume::bounded::<String>(4);
+		let options = ShellExecuteOptions {
+			command: format!("yes x | head -c {TOTAL_BYTES}"),
+			..Default::default()
+		};
+		let run = tokio::spawn(execute_shell(options, Some(tx), CancelToken::default()));
+
+		let mut received = 0usize;
+		while let Ok(chunk) = rx.recv_async().await {
+			received += chunk.len();
+			// Slow consumer: forces the bounded queue to fill and the readers
+			// to park between chunks.
+			time::sleep(Duration::from_micros(50)).await;
+		}
+
+		let result = time::timeout(Duration::from_secs(30), run)
+			.await
+			.expect("command should finish despite backpressure")
+			.expect("run task should not panic")
+			.expect("execute should succeed");
+		assert_eq!(result.exit_code, Some(0));
+		assert!(!result.cancelled);
+		assert!(!result.timed_out);
+		assert_eq!(received, TOTAL_BYTES, "streamed bytes were dropped under backpressure");
 	}
 }
