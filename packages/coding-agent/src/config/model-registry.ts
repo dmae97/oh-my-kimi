@@ -1604,7 +1604,12 @@ export class ModelRegistry {
 		if (strategy === "online-if-uncached") {
 			// Mirror shouldFetchRemoteSources: built-in managers use the catalog's
 			// default TTL, so only refresh when the manager will actually fetch.
-			const cache = readModelCache<Api>(cacheProviderId, BUILT_IN_DISCOVERY_CACHE_TTL_MS, Date.now, this.#cacheDbPath);
+			const cache = readModelCache<Api>(
+				cacheProviderId,
+				BUILT_IN_DISCOVERY_CACHE_TTL_MS,
+				Date.now,
+				this.#cacheDbPath,
+			);
 			const cacheAgeMs = cache ? Date.now() - cache.updatedAt : Number.POSITIVE_INFINITY;
 			if (cache?.fresh && (cache.authoritative || cacheAgeMs < BUILT_IN_DISCOVERY_NON_AUTHORITATIVE_RETRY_MS)) {
 				return peekedKey;

@@ -1,5 +1,5 @@
-import { create } from "@bufbuild/protobuf";
 import { describe, expect, it } from "bun:test";
+import { create } from "@bufbuild/protobuf";
 import {
 	type BlockState,
 	buildCursorHistoryForTest,
@@ -10,7 +10,7 @@ import {
 	streamCursor,
 	type ToolCallState,
 } from "@oh-my-pi/pi-ai/providers/cursor";
-import { setCursorProviderModule, streamCursor as lazyStreamCursor } from "@oh-my-pi/pi-ai/providers/register-builtins";
+import { streamCursor as lazyStreamCursor, setCursorProviderModule } from "@oh-my-pi/pi-ai/providers/register-builtins";
 import type { AssistantMessage, Context, CursorExecHandlers, Model, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";

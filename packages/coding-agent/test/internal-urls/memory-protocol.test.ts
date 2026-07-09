@@ -245,7 +245,15 @@ describe("MemoryProtocolHandler — mnemopi bridge (issue #4443)", () => {
 				.prepare(
 					"INSERT INTO facts (fact_id, session_id, subject, predicate, object, timestamp, confidence) VALUES (?, ?, ?, ?, ?, ?, ?)",
 				)
-				.run("0473bbdb8da6df92", beam.sessionId, "Glab", "works-without", "mise prefix", "2026-07-01T00:00:00.000Z", 0.9);
+				.run(
+					"0473bbdb8da6df92",
+					beam.sessionId,
+					"Glab",
+					"works-without",
+					"mise prefix",
+					"2026-07-01T00:00:00.000Z",
+					0.9,
+				);
 
 			const router = InternalUrlRouter.instance();
 			const resource = await router.resolve("memory://0473bbdb8da6df92");

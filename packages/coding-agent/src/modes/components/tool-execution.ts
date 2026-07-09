@@ -828,7 +828,8 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		if (this.#result !== undefined) return false;
 		const toolValue = (this.#tool as { forceFirstResultViewportRepaint?: FirstResultViewportRepaint } | undefined)
 			?.forceFirstResultViewportRepaint;
-		const value = toolValue !== undefined ? toolValue : toolRenderers[this.#toolName]?.forceFirstResultViewportRepaint;
+		const value =
+			toolValue !== undefined ? toolValue : toolRenderers[this.#toolName]?.forceFirstResultViewportRepaint;
 		if (typeof value === "function") return value(this.#args, this.#renderState);
 		return value === true;
 	}
