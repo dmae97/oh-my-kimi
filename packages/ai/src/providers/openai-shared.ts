@@ -695,13 +695,19 @@ export interface OpenAICompatPolicy {
 	};
 }
 
-function mapOpenAIReasoningEffort(
+/**
+ * Map a user-facing effort to the provider wire value: explicit compat
+ * override first, then the model's baked `thinking.effortMap`, else identity.
+ * Shared by the chat-completions/Responses policy resolver and the Codex
+ * request transformer.
+ */
+export function mapOpenAIReasoningEffort(
 	model: Pick<Model, "thinking">,
-	compat: OpenAICompatPolicyCompat,
+	compat: { reasoningEffortMap?: Partial<Record<Effort, string>> } | undefined,
 	effort: string,
 ): string {
 	const level = effort as Effort;
-	return compat.reasoningEffortMap?.[level] ?? model.thinking?.effortMap?.[level] ?? effort;
+	return compat?.reasoningEffortMap?.[level] ?? model.thinking?.effortMap?.[level] ?? effort;
 }
 
 function isImplicitDisableWhenNotRequested(disableMode: OpenAIReasoningDisableMode): boolean {

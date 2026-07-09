@@ -17214,9 +17214,9 @@
 			},
 			"requestModelId": "gpt-5-5-none-priority"
 		},
-		"gpt-5-6-luna-high": {
-			"id": "gpt-5-6-luna-high",
-			"name": "GPT-5.6 Luna High Thinking",
+		"gpt-5-6-luna": {
+			"id": "gpt-5-6-luna",
+			"name": "GPT-5.6 Luna",
 			"api": "devin-agent",
 			"provider": "devin",
 			"baseUrl": "https://server.codeium.com",
@@ -17233,11 +17233,30 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1000000,
-			"maxTokens": 64000
+			"maxTokens": 64000,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				],
+				"effortRouting": {
+					"off": "gpt-5-6-luna-none",
+					"minimal": "gpt-5-6-luna-low",
+					"low": "gpt-5-6-luna-medium",
+					"medium": "gpt-5-6-luna-high",
+					"high": "gpt-5-6-luna-xhigh",
+					"xhigh": "gpt-5-6-luna-max"
+				}
+			},
+			"requestModelId": "gpt-5-6-luna-none"
 		},
-		"gpt-5-6-luna-high-priority": {
-			"id": "gpt-5-6-luna-high-priority",
-			"name": "GPT-5.6 Luna High Thinking Fast",
+		"gpt-5-6-luna-fast": {
+			"id": "gpt-5-6-luna-fast",
+			"name": "GPT-5.6 Luna Fast",
 			"api": "devin-agent",
 			"provider": "devin",
 			"baseUrl": "https://server.codeium.com",
@@ -17254,11 +17273,30 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1000000,
-			"maxTokens": 64000
+			"maxTokens": 64000,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				],
+				"effortRouting": {
+					"off": "gpt-5-6-luna-none-priority",
+					"minimal": "gpt-5-6-luna-low-priority",
+					"low": "gpt-5-6-luna-low-priority",
+					"medium": "gpt-5-6-luna-medium-priority",
+					"high": "gpt-5-6-luna-high-priority",
+					"xhigh": "gpt-5-6-luna-xhigh-priority"
+				}
+			},
+			"requestModelId": "gpt-5-6-luna-none-priority"
 		},
-		"gpt-5-6-luna-low": {
-			"id": "gpt-5-6-luna-low",
-			"name": "GPT-5.6 Luna Low Thinking",
+		"gpt-5-6-sol": {
+			"id": "gpt-5-6-sol",
+			"name": "GPT-5.6 Sol",
 			"api": "devin-agent",
 			"provider": "devin",
 			"baseUrl": "https://server.codeium.com",
@@ -17275,11 +17313,30 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1000000,
-			"maxTokens": 64000
+			"maxTokens": 64000,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				],
+				"effortRouting": {
+					"off": "gpt-5-6-sol-none",
+					"minimal": "gpt-5-6-sol-low",
+					"low": "gpt-5-6-sol-medium",
+					"medium": "gpt-5-6-sol-high",
+					"high": "gpt-5-6-sol-xhigh",
+					"xhigh": "gpt-5-6-sol-max"
+				}
+			},
+			"requestModelId": "gpt-5-6-sol-none"
 		},
-		"gpt-5-6-luna-low-priority": {
-			"id": "gpt-5-6-luna-low-priority",
-			"name": "GPT-5.6 Luna Low Thinking Fast",
+		"gpt-5-6-sol-fast": {
+			"id": "gpt-5-6-sol-fast",
+			"name": "GPT-5.6 Sol Fast",
 			"api": "devin-agent",
 			"provider": "devin",
 			"baseUrl": "https://server.codeium.com",
@@ -17296,11 +17353,30 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1000000,
-			"maxTokens": 64000
+			"maxTokens": 64000,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				],
+				"effortRouting": {
+					"off": "gpt-5-6-sol-none-priority",
+					"minimal": "gpt-5-6-sol-low-priority",
+					"low": "gpt-5-6-sol-low-priority",
+					"medium": "gpt-5-6-sol-medium-priority",
+					"high": "gpt-5-6-sol-high-priority",
+					"xhigh": "gpt-5-6-sol-xhigh-priority"
+				}
+			},
+			"requestModelId": "gpt-5-6-sol-none-priority"
 		},
-		"gpt-5-6-luna-max": {
-			"id": "gpt-5-6-luna-max",
-			"name": "GPT-5.6 Luna Max Thinking",
+		"gpt-5-6-terra": {
+			"id": "gpt-5-6-terra",
+			"name": "GPT-5.6 Terra",
 			"api": "devin-agent",
 			"provider": "devin",
 			"baseUrl": "https://server.codeium.com",
@@ -17317,11 +17393,30 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1000000,
-			"maxTokens": 64000
+			"maxTokens": 64000,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				],
+				"effortRouting": {
+					"off": "gpt-5-6-terra-none",
+					"minimal": "gpt-5-6-terra-low",
+					"low": "gpt-5-6-terra-medium",
+					"medium": "gpt-5-6-terra-high",
+					"high": "gpt-5-6-terra-xhigh",
+					"xhigh": "gpt-5-6-terra-max"
+				}
+			},
+			"requestModelId": "gpt-5-6-terra-none"
 		},
-		"gpt-5-6-luna-medium": {
-			"id": "gpt-5-6-luna-medium",
-			"name": "GPT-5.6 Luna Medium Thinking",
+		"gpt-5-6-terra-fast": {
+			"id": "gpt-5-6-terra-fast",
+			"name": "GPT-5.6 Terra Fast",
 			"api": "devin-agent",
 			"provider": "devin",
 			"baseUrl": "https://server.codeium.com",
@@ -17338,574 +17433,26 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-luna-medium-priority": {
-			"id": "gpt-5-6-luna-medium-priority",
-			"name": "GPT-5.6 Luna Medium Thinking Fast",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
+			"maxTokens": 64000,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				],
+				"effortRouting": {
+					"off": "gpt-5-6-terra-none-priority",
+					"minimal": "gpt-5-6-terra-low-priority",
+					"low": "gpt-5-6-terra-low-priority",
+					"medium": "gpt-5-6-terra-medium-priority",
+					"high": "gpt-5-6-terra-high-priority",
+					"xhigh": "gpt-5-6-terra-xhigh-priority"
+				}
 			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-luna-none": {
-			"id": "gpt-5-6-luna-none",
-			"name": "GPT-5.6 Luna No Thinking",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": false,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-luna-none-priority": {
-			"id": "gpt-5-6-luna-none-priority",
-			"name": "GPT-5.6 Luna No Thinking Fast",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": false,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-luna-xhigh": {
-			"id": "gpt-5-6-luna-xhigh",
-			"name": "GPT-5.6 Luna XHigh Thinking",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-luna-xhigh-priority": {
-			"id": "gpt-5-6-luna-xhigh-priority",
-			"name": "GPT-5.6 Luna XHigh Thinking Fast",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-sol-high": {
-			"id": "gpt-5-6-sol-high",
-			"name": "GPT-5.6 Sol High Thinking",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-sol-high-priority": {
-			"id": "gpt-5-6-sol-high-priority",
-			"name": "GPT-5.6 Sol High Thinking Fast",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-sol-low": {
-			"id": "gpt-5-6-sol-low",
-			"name": "GPT-5.6 Sol Low Thinking",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-sol-low-priority": {
-			"id": "gpt-5-6-sol-low-priority",
-			"name": "GPT-5.6 Sol Low Thinking Fast",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-sol-max": {
-			"id": "gpt-5-6-sol-max",
-			"name": "GPT-5.6 Sol Max Thinking",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-sol-medium": {
-			"id": "gpt-5-6-sol-medium",
-			"name": "GPT-5.6 Sol Medium Thinking",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-sol-medium-priority": {
-			"id": "gpt-5-6-sol-medium-priority",
-			"name": "GPT-5.6 Sol Medium Thinking Fast",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-sol-none": {
-			"id": "gpt-5-6-sol-none",
-			"name": "GPT-5.6 Sol No Thinking",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": false,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-sol-none-priority": {
-			"id": "gpt-5-6-sol-none-priority",
-			"name": "GPT-5.6 Sol No Thinking Fast",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": false,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-sol-xhigh": {
-			"id": "gpt-5-6-sol-xhigh",
-			"name": "GPT-5.6 Sol XHigh Thinking",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-sol-xhigh-priority": {
-			"id": "gpt-5-6-sol-xhigh-priority",
-			"name": "GPT-5.6 Sol XHigh Thinking Fast",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-terra-high": {
-			"id": "gpt-5-6-terra-high",
-			"name": "GPT-5.6 Terra High Thinking",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-terra-high-priority": {
-			"id": "gpt-5-6-terra-high-priority",
-			"name": "GPT-5.6 Terra High Thinking Fast",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-terra-low": {
-			"id": "gpt-5-6-terra-low",
-			"name": "GPT-5.6 Terra Low Thinking",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-terra-low-priority": {
-			"id": "gpt-5-6-terra-low-priority",
-			"name": "GPT-5.6 Terra Low Thinking Fast",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-terra-max": {
-			"id": "gpt-5-6-terra-max",
-			"name": "GPT-5.6 Terra Max Thinking",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-terra-medium": {
-			"id": "gpt-5-6-terra-medium",
-			"name": "GPT-5.6 Terra Medium Thinking",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-terra-medium-priority": {
-			"id": "gpt-5-6-terra-medium-priority",
-			"name": "GPT-5.6 Terra Medium Thinking Fast",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-terra-none": {
-			"id": "gpt-5-6-terra-none",
-			"name": "GPT-5.6 Terra No Thinking",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": false,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-terra-none-priority": {
-			"id": "gpt-5-6-terra-none-priority",
-			"name": "GPT-5.6 Terra No Thinking Fast",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": false,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-terra-xhigh": {
-			"id": "gpt-5-6-terra-xhigh",
-			"name": "GPT-5.6 Terra XHigh Thinking",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
-		},
-		"gpt-5-6-terra-xhigh-priority": {
-			"id": "gpt-5-6-terra-xhigh-priority",
-			"name": "GPT-5.6 Terra XHigh Thinking Fast",
-			"api": "devin-agent",
-			"provider": "devin",
-			"baseUrl": "https://server.codeium.com",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"supportsTools": true,
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 1000000,
-			"maxTokens": 64000
+			"requestModelId": "gpt-5-6-terra-none-priority"
 		},
 		"kimi-k2-6": {
 			"id": "kimi-k2-6",
@@ -60549,6 +60096,120 @@
 			},
 			"contextPromotionTarget": "openai/gpt-5.4"
 		},
+		"gpt-5.6-luna": {
+			"id": "gpt-5.6-luna",
+			"name": "GPT-5.6 Luna",
+			"api": "openai-responses",
+			"provider": "openai",
+			"baseUrl": "https://api.openai.com/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 1,
+				"output": 6,
+				"cacheRead": 0.1,
+				"cacheWrite": 1.25
+			},
+			"contextWindow": 1050000,
+			"maxTokens": 128000,
+			"applyPatchToolType": "freeform",
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				],
+				"effortMap": {
+					"minimal": "low",
+					"low": "medium",
+					"medium": "high",
+					"high": "xhigh",
+					"xhigh": "max"
+				}
+			}
+		},
+		"gpt-5.6-sol": {
+			"id": "gpt-5.6-sol",
+			"name": "GPT-5.6 Sol",
+			"api": "openai-responses",
+			"provider": "openai",
+			"baseUrl": "https://api.openai.com/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 5,
+				"output": 30,
+				"cacheRead": 0.5,
+				"cacheWrite": 6.25
+			},
+			"contextWindow": 1050000,
+			"maxTokens": 128000,
+			"applyPatchToolType": "freeform",
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				],
+				"effortMap": {
+					"minimal": "low",
+					"low": "medium",
+					"medium": "high",
+					"high": "xhigh",
+					"xhigh": "max"
+				}
+			}
+		},
+		"gpt-5.6-terra": {
+			"id": "gpt-5.6-terra",
+			"name": "GPT-5.6 Terra",
+			"api": "openai-responses",
+			"provider": "openai",
+			"baseUrl": "https://api.openai.com/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 2.5,
+				"output": 15,
+				"cacheRead": 0.25,
+				"cacheWrite": 3.125
+			},
+			"contextWindow": 1050000,
+			"maxTokens": 128000,
+			"applyPatchToolType": "freeform",
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				],
+				"effortMap": {
+					"minimal": "low",
+					"low": "medium",
+					"medium": "high",
+					"high": "xhigh",
+					"xhigh": "max"
+				}
+			}
+		},
 		"o1": {
 			"id": "o1",
 			"name": "o1",
@@ -61330,7 +60991,7 @@
 		},
 		"gpt-5.6-luna": {
 			"id": "gpt-5.6-luna",
-			"name": "GPT-5.6-Luna",
+			"name": "GPT-5.6 Luna",
 			"api": "openai-codex-responses",
 			"provider": "openai-codex",
 			"baseUrl": "https://chatgpt.com/backend-api",
@@ -61340,10 +61001,10 @@
 				"image"
 			],
 			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
+				"input": 1,
+				"output": 6,
+				"cacheRead": 0.1,
+				"cacheWrite": 1.25
 			},
 			"remoteCompaction": {
 				"enabled": true,
@@ -61358,16 +61019,24 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
+					"minimal",
 					"low",
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "low",
+					"low": "medium",
+					"medium": "high",
+					"high": "xhigh",
+					"xhigh": "max"
+				}
 			}
 		},
 		"gpt-5.6-sol": {
 			"id": "gpt-5.6-sol",
-			"name": "GPT-5.6-Sol",
+			"name": "GPT-5.6 Sol",
 			"api": "openai-codex-responses",
 			"provider": "openai-codex",
 			"baseUrl": "https://chatgpt.com/backend-api",
@@ -61377,10 +61046,10 @@
 				"image"
 			],
 			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
+				"input": 5,
+				"output": 30,
+				"cacheRead": 0.5,
+				"cacheWrite": 6.25
 			},
 			"remoteCompaction": {
 				"enabled": true,
@@ -61395,16 +61064,24 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
+					"minimal",
 					"low",
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "low",
+					"low": "medium",
+					"medium": "high",
+					"high": "xhigh",
+					"xhigh": "max"
+				}
 			}
 		},
 		"gpt-5.6-terra": {
 			"id": "gpt-5.6-terra",
-			"name": "GPT-5.6-Terra",
+			"name": "GPT-5.6 Terra",
 			"api": "openai-codex-responses",
 			"provider": "openai-codex",
 			"baseUrl": "https://chatgpt.com/backend-api",
@@ -61414,10 +61091,10 @@
 				"image"
 			],
 			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
+				"input": 2.5,
+				"output": 15,
+				"cacheRead": 0.25,
+				"cacheWrite": 3.125
 			},
 			"remoteCompaction": {
 				"enabled": true,
@@ -61432,11 +61109,19 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
+					"minimal",
 					"low",
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "low",
+					"low": "medium",
+					"medium": "high",
+					"high": "xhigh",
+					"xhigh": "max"
+				}
 			}
 		}
 	},
@@ -69869,11 +69554,19 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
+					"minimal",
 					"low",
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "low",
+					"low": "medium",
+					"medium": "high",
+					"high": "xhigh",
+					"xhigh": "max"
+				}
 			}
 		},
 		"openai/gpt-5.6-luna-pro": {
@@ -69898,11 +69591,19 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
+					"minimal",
 					"low",
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "low",
+					"low": "medium",
+					"medium": "high",
+					"high": "xhigh",
+					"xhigh": "max"
+				}
 			}
 		},
 		"openai/gpt-5.6-sol": {
@@ -69927,11 +69628,19 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
+					"minimal",
 					"low",
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "low",
+					"low": "medium",
+					"medium": "high",
+					"high": "xhigh",
+					"xhigh": "max"
+				}
 			}
 		},
 		"openai/gpt-5.6-sol-pro": {
@@ -69956,11 +69665,19 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
+					"minimal",
 					"low",
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "low",
+					"low": "medium",
+					"medium": "high",
+					"high": "xhigh",
+					"xhigh": "max"
+				}
 			}
 		},
 		"openai/gpt-5.6-terra": {
@@ -69985,11 +69702,19 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
+					"minimal",
 					"low",
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "low",
+					"low": "medium",
+					"medium": "high",
+					"high": "xhigh",
+					"xhigh": "max"
+				}
 			}
 		},
 		"openai/gpt-5.6-terra-pro": {
@@ -70014,11 +69739,19 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
+					"minimal",
 					"low",
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "low",
+					"low": "medium",
+					"medium": "high",
+					"high": "xhigh",
+					"xhigh": "max"
+				}
 			}
 		},
 		"openai/gpt-audio": {
@@ -73625,13 +73358,13 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.546,
-				"output": 1.716,
-				"cacheRead": 0.10139999999999999,
+				"input": 0.54,
+				"output": 1.76,
+				"cacheRead": 0.09999999999999999,
 				"cacheWrite": 0
 			},
 			"contextWindow": 1048576,
-			"maxTokens": 128000,
+			"maxTokens": 101376,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -75776,7 +75509,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 1048576,
+			"contextWindow": 1000000,
 			"maxTokens": 1048576,
 			"compat": {
 				"supportsUsageInStreaming": false
@@ -82443,6 +82176,7 @@
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
+					"minimal",
 					"low",
 					"medium",
 					"high",
@@ -82472,6 +82206,7 @@
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
+					"minimal",
 					"low",
 					"medium",
 					"high",
@@ -82501,6 +82236,7 @@
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
+					"minimal",
 					"low",
 					"medium",
 					"high",

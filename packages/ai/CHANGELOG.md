@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Updated Codex reasoning effort mapping to support shifted wire tiers for newer models
+
+### Fixed
+
+- Fixed the Codex Responses request transformer bypassing catalog/compat reasoning effort maps: the clamped user effort is now remapped to the provider wire tier (GPT-5.6's shifted five-tier scale sends `max` for user `xhigh` and `xhigh` for `high`), failing loudly if a map produces a value outside the Codex wire vocabulary.
+
 ## [16.3.13] - 2026-07-09
 
 ### Changed
