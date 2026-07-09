@@ -476,6 +476,81 @@ describe("AuthStorage codex oauth ranking", () => {
 		expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeUndefined();
 	});
 
+	test("keeps a stale Codex block when the 5h window recovered but the 7d window remains exhausted", async () => {
+		if (!authStorage || !store?.upsertCredentialBlock || !store.getCredentialBlock) {
+			throw new Error("test setup failed");
+		}
+
+		await authStorage.set("openai-codex", [
+			{ type: "oauth", ...createCredential("acct-secondary-exhausted", "secondary-exhausted@example.com") },
+			{ type: "oauth", ...createCredential("acct-secondary-healthy", "secondary-healthy@example.com") },
+		]);
+
+		const blockedRow = store.listAuthCredentials("openai-codex").find(row => {
+			const credential = row.credential;
+			return credential.type === "oauth" && credential.accountId === "acct-secondary-exhausted";
+		});
+		if (!blockedRow) throw new Error("expected blocked credential row");
+
+		const blockedUntilMs = Date.now() + 6 * 24 * HOUR_MS;
+		store.upsertCredentialBlock({
+			credentialId: blockedRow.id,
+			providerKey: "openai-codex:oauth",
+			blockScope: "shared",
+			blockedUntilMs,
+		});
+
+		const fiveHourWindow: UsageWindowConfig = {
+			windowId: "5h",
+			windowLabel: "5 Hours",
+			durationMs: FIVE_HOUR_MS,
+		};
+
+		usageByAccount.set(
+			"acct-secondary-exhausted",
+			createCodexUsageReport({
+				accountId: "acct-secondary-exhausted",
+				primary: { usedFraction: 0.2, resetInMs: 4 * HOUR_MS },
+				secondary: { usedFraction: 1, resetInMs: 6 * 24 * HOUR_MS },
+				primaryWindow: fiveHourWindow,
+				metadata: {
+					allowed: true,
+					limitReached: false,
+					planType: "pro",
+					email: "secondary-exhausted@example.com",
+					accountId: "acct-secondary-exhausted",
+				},
+			}),
+		);
+		usageByAccount.set(
+			"acct-secondary-healthy",
+			createCodexUsageReport({
+				accountId: "acct-secondary-healthy",
+				primary: { usedFraction: 0.2, resetInMs: 4 * HOUR_MS },
+				secondary: { usedFraction: 0.3, resetInMs: 6 * 24 * HOUR_MS },
+				primaryWindow: fiveHourWindow,
+				metadata: {
+					allowed: true,
+					limitReached: false,
+					planType: "pro",
+					email: "secondary-healthy@example.com",
+					accountId: "acct-secondary-healthy",
+				},
+			}),
+		);
+
+		const selectionCounts = await countApiKeySelections(
+			authStorage,
+			"openai-codex",
+			"codex-stale-block-secondary-exhausted",
+			150,
+		);
+
+		expect(countFor(selectionCounts, "api-acct-secondary-exhausted")).toBe(0);
+		expect(countFor(selectionCounts, "api-acct-secondary-healthy")).toBeGreaterThan(0);
+		expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBe(blockedUntilMs);
+	});
+
 	test("an older in-flight healthy Codex usage report does not clear a newer usage-limit block", async () => {
 		if (!authStorage || !store?.getCredentialBlock) {
 			throw new Error("test setup failed");

@@ -4389,17 +4389,14 @@ export class AuthStorage {
 
 	/**
 	 * Self-heal a stale Codex usage-limit block: when a fresh live usage report
-	 * says the account is allowed and its primary rolling window is available,
-	 * drop the persisted and in-memory `openai-codex:oauth` blocks so credential
-	 * selection can re-include seats whose short window recovered before a
-	 * longer persisted block naturally expires.
+	 * says the account is allowed and below every reported limit, drop the
+	 * persisted and in-memory `openai-codex:oauth` blocks so credential selection
+	 * can re-include recovered seats before a stale block naturally expires.
 	 */
 	#isHealthyCodexUsageReport(report: UsageReport): boolean {
 		if (report.provider !== "openai-codex") return false;
 		const metadata = report.metadata;
 		if (metadata?.allowed !== true || metadata.limitReached !== false) return false;
-		const primary = codexRankingStrategy.findWindowLimits(report).primary;
-		if (primary) return !this.#isUsageLimitExhausted(primary);
 		return !this.#isUsageLimitReached(report.limits);
 	}
 
