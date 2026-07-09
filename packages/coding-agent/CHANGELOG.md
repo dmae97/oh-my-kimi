@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `omp -p` looking hung while a text-mode prompt is in flight by writing a one-shot working indicator to stderr before awaiting the model response. ([#4901](https://github.com/can1357/oh-my-pi/issues/4901))
+
 ## [16.3.12] - 2026-07-08
 
 ### Added

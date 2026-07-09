@@ -62,13 +62,22 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 		}
 	});
 
+	let wroteTextWorkingIndicator = false;
+	const writeTextWorkingIndicator = (): void => {
+		if (mode !== "text" || wroteTextWorkingIndicator) return;
+		process.stderr.write("Working...\n");
+		wroteTextWorkingIndicator = true;
+	};
+
 	// Send initial message with attachments
 	if (initialMessage !== undefined) {
+		writeTextWorkingIndicator();
 		await logger.time("print:prompt:initial", () => session.prompt(initialMessage, { images: initialImages }));
 	}
 
 	// Send remaining messages
 	for (const message of messages) {
+		writeTextWorkingIndicator();
 		await logger.time("print:prompt:next", () => session.prompt(message));
 	}
 
