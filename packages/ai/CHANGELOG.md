@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.15] - 2026-07-09
+
 ### Breaking Changes
 
 - Renamed `OpenAIResponsesCacheOptions`, `normalizeOpenAIResponsesPromptCacheKey`, and `getOpenAIResponsesPromptCacheKey` to the endpoint-neutral `OpenAICacheOptions`, `normalizeOpenAIPromptCacheKey`, and `getOpenAIPromptCacheKey`.
@@ -20,7 +22,6 @@
 
 - Improved account routing for GPT-5.6 models to better respect paid tier requirements
 - Refined account selection logic to correctly identify plan types from account metadata
-
 - Fixed OpenAI Codex multi-account routing for GPT-5.6: Sol and Luna requests now prefer Plus-or-higher accounts while Terra remains available to Free/Go accounts; local pro-mode aliases inherit their base model's Codex plan eligibility.
 - Fixed xAI Grok OAuth login to use xAI's device authorization flow: `/login` now opens the verification URL, displays the device code, and polls for approval instead of asking for a pasted redirect or linking to Hermes Agent documentation.
 

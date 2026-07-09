@@ -2,10 +2,11 @@
 
 ## [Unreleased]
 
+## [16.3.15] - 2026-07-09
+
 ### Changed
 
 - Integrated testing guidance directly into the main system prompt for improved workflow cohesion
-
 - Moved testing guidance into the main system prompt and removed the bundled Tester subagent.
 
 ## [16.3.14] - 2026-07-09

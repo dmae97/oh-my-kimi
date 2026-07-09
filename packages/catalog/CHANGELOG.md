@@ -2,10 +2,11 @@
 
 ## [Unreleased]
 
+## [16.3.15] - 2026-07-09
+
 ### Added
 
 - Added support for Grok 4.5 model
-
 - Added `gpt-5.6` base models and `gpt-5.6-{luna,sol,terra}-pro` variants
 - Added `meta/muse-spark-1.1` model support
 - Added support for thinking modes on `poolside/laguna` models
@@ -15,7 +16,6 @@
 
 - Updated cache read costs for Grok models
 - Reduced max token limit for Grok 4.3 model
-
 - Enabled prompt cache affinity for Grok models via the x-grok-conv-id header in OpenAI compatible endpoints
 - Enabled prompt cache affinity for Grok models via the x-grok-conv-id header
 - Marked direct xAI Grok Chat Completions models for `x-grok-conv-id` prompt-cache affinity.
