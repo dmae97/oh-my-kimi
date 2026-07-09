@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Recognized Pro Lite as a paid plan tier for OpenAI Codex models
+
 ## [16.3.15] - 2026-07-09
 
 ### Breaking Changes
