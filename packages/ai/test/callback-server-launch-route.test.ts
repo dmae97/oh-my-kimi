@@ -114,6 +114,24 @@ describe("OAuthCallbackFlow /launch route", () => {
 		await login;
 	});
 
+	it("serves success copy that permits manual tab close", async () => {
+		const { info, login } = await startFlowAndWaitForAuth();
+		const authUrl = new URL(info.url);
+		const redirectUri = authUrl.searchParams.get("redirect_uri");
+		expect(redirectUri).toMatch(/^http:\/\/localhost:\d+\/callback$/);
+		const state = authUrl.searchParams.get("state") ?? "";
+
+		const callbackResponse = await fetch(`${redirectUri}?code=test-code&state=${encodeURIComponent(state)}`);
+		expect(callbackResponse.status).toBe(200);
+		const html = await callbackResponse.text();
+
+		expect(html).toContain("Authentication Successful");
+		expect(html).toContain("You have successfully logged in.<br>You can now close this tab.");
+		expect(html).toContain("Close Window");
+		expect(html).not.toContain("This window will close automatically.");
+		await login;
+	});
+
 	it("suppresses launchUrl and routes /launch to the callback handler when callbackPath is /launch", async () => {
 		const abort = new AbortController();
 		const authFired = Promise.withResolvers<OAuthAuthInfo>();
