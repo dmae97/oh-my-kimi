@@ -320,6 +320,8 @@ export interface AuthCredentialStore {
 	cleanExpiredCache(): void;
 	/** Non-expired block for one (credential, providerKey, scope) key, or undefined. */
 	getCredentialBlock?(credentialId: number, providerKey: string, blockScope: string): number | undefined;
+	/** Earliest time a shared-store block should be eligible for live-usage reconciliation. */
+	getCredentialBlockReconcileAfter?(credentialId: number, providerKey: string, blockScope: string): number | undefined;
 	/** Upsert with MAX semantics: keep the later blockedUntilMs on conflict. */
 	upsertCredentialBlock?(block: StoredCredentialBlock): void;
 	/** Drop every block row for a credential (all providerKeys/scopes). */
@@ -4423,13 +4425,19 @@ export class AuthStorage {
 		const blockScope = this.#rankingStrategyResolver?.(provider)?.blockScope?.({});
 		const blockedUntilMs = this.#getCredentialBlockedUntil(provider, providerKey, credentialIndex, blockScope);
 		if (blockedUntilMs === undefined) return;
-		// `/usage` can lag the request path that just returned 429. Fresh local
-		// blocks get one usage-cache window before healthy reports may clear them.
+		// `/usage` can lag the request path that just returned 429. Fresh local or
+		// broker-sourced blocks get one usage-cache window before healthy reports may
+		// clear them.
 		const nowMs = Date.now();
 		const scopedBackoffKey = this.#toScopedBackoffKey(providerKey, blockScope);
 		const globalProbeAfterMs = this.#credentialBackoffProbeAfter.get(providerKey)?.get(credentialIndex) ?? 0;
 		const scopedProbeAfterMs = this.#credentialBackoffProbeAfter.get(scopedBackoffKey)?.get(credentialIndex) ?? 0;
-		if (Math.max(globalProbeAfterMs, scopedProbeAfterMs) > nowMs) return;
+		const getStoreReconcileAfter = this.#store.getCredentialBlockReconcileAfter?.bind(this.#store);
+		const storeGlobalProbeAfterMs = getStoreReconcileAfter?.(credentialId, providerKey, "") ?? 0;
+		const storeScopedProbeAfterMs = getStoreReconcileAfter?.(credentialId, providerKey, blockScope ?? "") ?? 0;
+		if (Math.max(globalProbeAfterMs, scopedProbeAfterMs, storeGlobalProbeAfterMs, storeScopedProbeAfterMs) > nowMs) {
+			return;
+		}
 		this.#clearCredentialBlocks(provider, credentialId);
 		logger.info("Cleared stale Codex usage-limit block after healthy live usage report", {
 			credentialId,
@@ -5148,6 +5156,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	#upsertCredentialBlockStmt: Statement;
 	#deleteCredentialBlocksStmt: Statement;
 	#deleteExpiredCredentialBlocksStmt: Statement;
+	#credentialBlockReconcileAfter: Map<string, number> = new Map();
 	#insertUsageHistoryStmt: Statement;
 	#insertUsageCostStmt: Statement;
 	#listUsageCostsStmt: Statement;
@@ -5816,6 +5825,11 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		return typeof row?.blocked_until_ms === "number" ? row.blocked_until_ms : undefined;
 	}
 
+	getCredentialBlockReconcileAfter(credentialId: number, providerKey: string, blockScope: string): number | undefined {
+		if (this.getCredentialBlock(credentialId, providerKey, blockScope) === undefined) return undefined;
+		return this.#credentialBlockReconcileAfter.get(`${credentialId}\0${providerKey}\0${blockScope}`);
+	}
+
 	upsertCredentialBlock(block: StoredCredentialBlock): void {
 		this.#upsertCredentialBlockStmt.run(
 			block.credentialId,
@@ -5823,14 +5837,24 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 			block.blockScope,
 			block.blockedUntilMs,
 		);
+		this.#credentialBlockReconcileAfter.set(
+			`${block.credentialId}\0${block.providerKey}\0${block.blockScope}`,
+			Math.min(block.blockedUntilMs, Date.now() + USAGE_REPORT_TTL_MS),
+		);
 	}
 
 	deleteCredentialBlocks(credentialId: number): void {
 		this.#deleteCredentialBlocksStmt.run(credentialId);
+		for (const key of this.#credentialBlockReconcileAfter.keys()) {
+			if (key.startsWith(`${credentialId}\0`)) this.#credentialBlockReconcileAfter.delete(key);
+		}
 	}
 
 	cleanExpiredCredentialBlocks(nowMs: number): void {
 		this.#deleteExpiredCredentialBlocksStmt.run(nowMs);
+		for (const [key, reconcileAfterMs] of this.#credentialBlockReconcileAfter) {
+			if (reconcileAfterMs <= nowMs) this.#credentialBlockReconcileAfter.delete(key);
+		}
 	}
 
 	listCredentialBlocks(credentialIds: readonly number[]): StoredCredentialBlock[] {

@@ -39,6 +39,7 @@ import type {
  * one broker call instead of N.
  */
 const USAGE_CACHE_TTL_MS = 15_000;
+const CREDENTIAL_BLOCK_RECONCILE_DELAY_MS = 5 * 60_000;
 const WAIT_THRESHOLD_MS = 1_000;
 const MAX_WAIT_MS = 5_000;
 const BACKGROUND_WAIT_MS = 30_000;
@@ -208,6 +209,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	#cache: Map<string, CacheEntry> = new Map();
 	#usageCache?: UsageCacheEntry;
 	#usageInflight?: Promise<UsageReport[] | null>;
+	#credentialBlockReconcileAfter: Map<string, number> = new Map();
 	#usageCacheEpoch = 0;
 	#closed = false;
 	/**
@@ -223,7 +225,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	constructor(opts: RemoteAuthCredentialStoreOptions) {
 		this.#client = opts.client;
 		this.#streamSnapshots = opts.streamSnapshots ?? true;
-		this.#applySnapshot(opts.initialSnapshot ?? emptySnapshot(), opts.initialSnapshot?.generation ?? 0);
+		this.#applySnapshot(opts.initialSnapshot ?? emptySnapshot(), opts.initialSnapshot?.generation ?? 0, false);
 		this.#onSnapshot = opts.onSnapshot;
 		void this.#runBackground();
 	}
@@ -236,10 +238,12 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		return this.#snapshot;
 	}
 
-	#applySnapshot(snapshot: SnapshotResponse, generation: number): void {
+	#applySnapshot(snapshot: SnapshotResponse, generation: number, protectNewBlocks = true): void {
 		const nowMs = Date.now();
+		const previousCredentials = this.#snapshot.credentials;
 		const credentials = snapshot.credentials.map(entry => this.#normalizeSnapshotEntryBlocks(entry, nowMs));
-		if (snapshotBlocksChanged(this.#snapshot.credentials, credentials)) this.#invalidateUsageCache();
+		if (snapshotBlocksChanged(previousCredentials, credentials)) this.#invalidateUsageCache();
+		if (protectNewBlocks) this.#protectNewSnapshotBlocks(previousCredentials, credentials, nowMs);
 		this.#snapshot = { ...snapshot, credentials };
 		this.#generation = generation;
 		this.#snapshotReceivedAt = nowMs;
@@ -249,6 +253,29 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			onSnapshot(this.#snapshot, generation);
 		} catch (error) {
 			logger.debug("auth-broker snapshot callback failed", { error: String(error) });
+		}
+	}
+	#protectNewSnapshotBlocks(previous: readonly SnapshotEntry[], next: readonly SnapshotEntry[], nowMs: number): void {
+		const previousBlocksByKey = new Map<string, number>();
+		for (const entry of previous) {
+			for (const block of entry.blocks ?? []) {
+				previousBlocksByKey.set(`${entry.id}\0${block.providerKey}\0${block.blockScope}`, block.blockedUntilMs);
+			}
+		}
+		const activeKeys = new Set<string>();
+		for (const entry of next) {
+			for (const block of entry.blocks ?? []) {
+				const key = `${entry.id}\0${block.providerKey}\0${block.blockScope}`;
+				activeKeys.add(key);
+				if (previousBlocksByKey.get(key) === block.blockedUntilMs) continue;
+				this.#credentialBlockReconcileAfter.set(
+					key,
+					Math.min(block.blockedUntilMs, nowMs + CREDENTIAL_BLOCK_RECONCILE_DELAY_MS),
+				);
+			}
+		}
+		for (const key of this.#credentialBlockReconcileAfter.keys()) {
+			if (!activeKeys.has(key)) this.#credentialBlockReconcileAfter.delete(key);
 		}
 	}
 
@@ -340,11 +367,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		const incoming = this.#normalizeSnapshotEntryBlocks(entry, Date.now());
 		const index = this.#snapshot.credentials.findIndex(candidate => candidate.id === incoming.id);
 		const previousBlocks = index === -1 ? undefined : this.#snapshot.credentials[index]?.blocks;
-		if (!credentialBlockSnapshotsEqual(previousBlocks, incoming.blocks)) this.#invalidateUsageCache();
+		const blocksChanged = !credentialBlockSnapshotsEqual(previousBlocks, incoming.blocks);
+		if (blocksChanged) this.#invalidateUsageCache();
 		const credentials =
 			index === -1
 				? [...this.#snapshot.credentials, incoming]
 				: this.#snapshot.credentials.map((candidate, i) => (i === index ? incoming : candidate));
+		if (blocksChanged) this.#protectNewSnapshotBlocks(this.#snapshot.credentials, credentials, Date.now());
 		this.#snapshot = { ...this.#snapshot, generation, serverNowMs, refresher, credentials };
 		this.#generation = generation;
 		this.#snapshotReceivedAt = Date.now();
@@ -392,6 +421,11 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		return block.blockedUntilMs;
 	}
 
+	getCredentialBlockReconcileAfter(credentialId: number, providerKey: string, blockScope: string): number | undefined {
+		if (this.getCredentialBlock(credentialId, providerKey, blockScope) === undefined) return undefined;
+		return this.#credentialBlockReconcileAfter.get(`${credentialId}\0${providerKey}\0${blockScope}`);
+	}
+
 	listCredentialBlocks(credentialIds: readonly number[]): StoredCredentialBlock[] {
 		const nowMs = Date.now();
 		this.cleanExpiredCredentialBlocks(nowMs);
@@ -416,6 +450,10 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	upsertCredentialBlock(block: StoredCredentialBlock): void {
 		this.#upsertSnapshotBlock(block);
 		this.#invalidateUsageCache();
+		this.#credentialBlockReconcileAfter.set(
+			`${block.credentialId}\0${block.providerKey}\0${block.blockScope}`,
+			Math.min(block.blockedUntilMs, Date.now() + CREDENTIAL_BLOCK_RECONCILE_DELAY_MS),
+		);
 		const body = toCredentialBlockSnapshot(block);
 		void this.#client
 			.upsertCredentialBlock(block.credentialId, body)
@@ -434,6 +472,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 
 	deleteCredentialBlocks(credentialId: number): void {
 		this.#deleteSnapshotBlocks(credentialId);
+		for (const key of this.#credentialBlockReconcileAfter.keys()) {
+			if (key.startsWith(`${credentialId}\0`)) this.#credentialBlockReconcileAfter.delete(key);
+		}
 		this.#invalidateUsageCache();
 		void this.#client
 			.deleteCredentialBlocks(credentialId)
@@ -450,6 +491,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 
 	cleanExpiredCredentialBlocks(nowMs: number): void {
 		this.#pruneExpiredCredentialBlocks(nowMs);
+		for (const [key, reconcileAfterMs] of this.#credentialBlockReconcileAfter) {
+			if (reconcileAfterMs <= nowMs) this.#credentialBlockReconcileAfter.delete(key);
+		}
 	}
 
 	/**
