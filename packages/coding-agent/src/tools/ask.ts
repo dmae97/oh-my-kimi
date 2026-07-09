@@ -389,6 +389,7 @@ interface UIContext {
 			signal?: AbortSignal;
 			outline?: boolean;
 			onTimeout?: () => void;
+			onTimeoutReset?: () => void;
 			onLeft?: () => void;
 			onRight?: () => void;
 			helpText?: string;
@@ -432,18 +433,29 @@ async function askSingleQuestion(
 		const helpText = navigation
 			? "up/down navigate  enter select  ←/→ question  esc cancel"
 			: "up/down navigate  enter select  esc cancel";
-		const timeoutController = typeof timeout === "number" && timeout > 0 ? new AbortController() : undefined;
+		const timeoutMs = typeof timeout === "number" && timeout > 0 ? timeout : undefined;
+		const timeoutController = timeoutMs === undefined ? undefined : new AbortController();
 		const dialogSignal =
 			signal && timeoutController
 				? AbortSignal.any([signal, timeoutController.signal])
 				: (timeoutController?.signal ?? signal);
 		let timeoutId: NodeJS.Timeout | undefined;
+		let timeoutStartedMs = Date.now();
+		const armFallbackTimeout = (durationMs: number) => {
+			clearTimeout(timeoutId);
+			timeoutStartedMs = Date.now();
+			timeoutId = setTimeout(() => {
+				timeoutTriggered = true;
+				timeoutController?.abort();
+			}, durationMs);
+		};
 		const dialogOptions = {
 			initialIndex,
 			timeout,
 			signal: dialogSignal,
 			outline: true,
 			onTimeout,
+			onTimeoutReset: timeoutMs === undefined ? undefined : () => armFallbackTimeout(timeoutMs),
 			helpText,
 			selectionMarker: marker?.selectionMarker,
 			checkedIndices: marker?.checkedIndices,
@@ -459,12 +471,8 @@ async function askSingleQuestion(
 					}
 				: undefined,
 		};
-		const startMs = Date.now();
-		if (timeoutController && typeof timeout === "number") {
-			timeoutId = setTimeout(() => {
-				timeoutTriggered = true;
-				timeoutController.abort();
-			}, timeout);
+		if (timeoutMs !== undefined) {
+			armFallbackTimeout(timeoutMs);
 		}
 		try {
 			const choice = dialogSignal
@@ -475,7 +483,7 @@ async function askSingleQuestion(
 				// `onTimeout`: their auto-cancel resolves right at the deadline. A
 				// cancel arriving well past the deadline is a deliberate user Esc on
 				// a surface that kept the dialog open — keep treating it as a cancel.
-				const elapsed = Date.now() - startMs;
+				const elapsed = Date.now() - timeoutStartedMs;
 				timeoutTriggered = elapsed >= timeout && elapsed <= timeout + TIMEOUT_DETECTION_TOLERANCE_MS;
 			}
 			return { choice, timedOut: timeoutTriggered, navigation: navigationAction };
