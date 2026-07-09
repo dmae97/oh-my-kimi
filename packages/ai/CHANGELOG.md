@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Codex OAuth credential selection to re-check blocked accounts during ranking and clear stale usage-limit blocks when live usage shows the 5-hour window recovered ([#4980](https://github.com/can1357/oh-my-pi/issues/4980)).
+
 ## [16.3.14] - 2026-07-09
 
 ### Changed

@@ -385,15 +385,6 @@ describe("AuthStorage codex oauth ranking", () => {
 			}),
 		);
 
-		const blockedSelectionCounts = await countApiKeySelections(
-			authStorage,
-			"openai-codex",
-			"stale-codex-block-before-fetch",
-			40,
-		);
-		expect(countFor(blockedSelectionCounts, "api-acct-blocked")).toBe(0);
-		expect(countFor(blockedSelectionCounts, "api-acct-healthy")).toBeGreaterThan(0);
-
 		const generationBeforeFetch = authStorage.getGeneration();
 
 		await authStorage.fetchUsageReports();
@@ -409,6 +400,80 @@ describe("AuthStorage codex oauth ranking", () => {
 		);
 		expect(countFor(reconciledSelectionCounts, "api-acct-blocked")).toBeGreaterThan(0);
 		expect(countFor(reconciledSelectionCounts, "api-acct-healthy")).toBeGreaterThan(0);
+	});
+
+	test("re-evaluates a stale persisted Codex block during selection when the 5h window recovered", async () => {
+		if (!authStorage || !store?.upsertCredentialBlock || !store.getCredentialBlock) {
+			throw new Error("test setup failed");
+		}
+
+		await authStorage.set("openai-codex", [
+			{ type: "oauth", ...createCredential("acct-recovered-blocked", "recovered-blocked@example.com") },
+			{ type: "oauth", ...createCredential("acct-recovered-sibling", "recovered-sibling@example.com") },
+		]);
+
+		const blockedRow = store.listAuthCredentials("openai-codex").find(row => {
+			const credential = row.credential;
+			return credential.type === "oauth" && credential.accountId === "acct-recovered-blocked";
+		});
+		if (!blockedRow) throw new Error("expected blocked credential row");
+
+		store.upsertCredentialBlock({
+			credentialId: blockedRow.id,
+			providerKey: "openai-codex:oauth",
+			blockScope: "shared",
+			blockedUntilMs: Date.now() + 6 * 24 * HOUR_MS,
+		});
+
+		const fiveHourWindow: UsageWindowConfig = {
+			windowId: "5h",
+			windowLabel: "5 Hours",
+			durationMs: FIVE_HOUR_MS,
+		};
+
+		usageByAccount.set(
+			"acct-recovered-blocked",
+			createCodexUsageReport({
+				accountId: "acct-recovered-blocked",
+				primary: { usedFraction: 0.2, resetInMs: 4 * HOUR_MS },
+				secondary: { usedFraction: 0.3, resetInMs: 6 * 24 * HOUR_MS },
+				primaryWindow: fiveHourWindow,
+				metadata: {
+					allowed: true,
+					limitReached: false,
+					planType: "pro",
+					email: "recovered-blocked@example.com",
+					accountId: "acct-recovered-blocked",
+				},
+			}),
+		);
+		usageByAccount.set(
+			"acct-recovered-sibling",
+			createCodexUsageReport({
+				accountId: "acct-recovered-sibling",
+				primary: { usedFraction: 0.2, resetInMs: 4 * HOUR_MS },
+				secondary: { usedFraction: 0.3, resetInMs: 6 * 24 * HOUR_MS },
+				primaryWindow: fiveHourWindow,
+				metadata: {
+					allowed: true,
+					limitReached: false,
+					planType: "pro",
+					email: "recovered-sibling@example.com",
+					accountId: "acct-recovered-sibling",
+				},
+			}),
+		);
+
+		const selectionCounts = await countApiKeySelections(
+			authStorage,
+			"openai-codex",
+			"codex-stale-block-selection-recovered",
+			150,
+		);
+
+		expect(countFor(selectionCounts, "api-acct-recovered-blocked")).toBeGreaterThan(0);
+		expect(countFor(selectionCounts, "api-acct-recovered-sibling")).toBeGreaterThan(0);
+		expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeUndefined();
 	});
 
 	test("an older in-flight healthy Codex usage report does not clear a newer usage-limit block", async () => {
@@ -496,14 +561,6 @@ describe("AuthStorage codex oauth ranking", () => {
 		await inFlightReports;
 
 		expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeDefined();
-		const selectionCounts = await countApiKeySelections(
-			authStorage,
-			"openai-codex",
-			"codex-inflight-race-after-resolve",
-			40,
-		);
-		expect(countFor(selectionCounts, "api-acct-race-blocked")).toBe(0);
-		expect(countFor(selectionCounts, "api-acct-race-healthy")).toBeGreaterThan(0);
 	});
 
 	test("broker-sourced healthy Codex usage clears remote gateway backoff", async () => {

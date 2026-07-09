@@ -3316,18 +3316,36 @@ export class AuthStorage {
 			args.order.map(async idx => {
 				const selection = args.credentials[idx];
 				if (!selection) return null;
-				const blockedUntil = this.#getCredentialBlockedUntil(
+				let blockedUntil = this.#getCredentialBlockedUntil(
 					args.provider,
 					args.providerKey,
 					selection.index,
 					args.blockScope,
 				);
-				if (blockedUntil !== undefined) return { selection, usage: null, usageChecked: false, blockedUntil };
-				const usage = await this.#getUsageReport(args.provider, selection.credential, {
-					...args.options,
-					timeoutMs: this.#usageRequestTimeoutMs,
-				});
-				return { selection, usage, usageChecked: true, blockedUntil: undefined as number | undefined };
+				let usage: UsageReport | null = null;
+				let usageChecked = false;
+				if (blockedUntil !== undefined && args.provider === "openai-codex") {
+					usage = await this.#getUsageReport(args.provider, selection.credential, {
+						...args.options,
+						timeoutMs: this.#usageRequestTimeoutMs,
+					});
+					usageChecked = true;
+					blockedUntil = this.#getCredentialBlockedUntil(
+						args.provider,
+						args.providerKey,
+						selection.index,
+						args.blockScope,
+					);
+				}
+				if (blockedUntil !== undefined) return { selection, usage, usageChecked, blockedUntil };
+				if (!usageChecked) {
+					usage = await this.#getUsageReport(args.provider, selection.credential, {
+						...args.options,
+						timeoutMs: this.#usageRequestTimeoutMs,
+					});
+					usageChecked = true;
+				}
+				return { selection, usage, usageChecked, blockedUntil: undefined as number | undefined };
 			}),
 		);
 		const timeoutSignal = Promise.withResolvers<null>();
@@ -4371,19 +4389,18 @@ export class AuthStorage {
 
 	/**
 	 * Self-heal a stale Codex usage-limit block: when a fresh live usage report
-	 * shows the account is allowed and below every limit, drop the persisted and
-	 * in-memory `openai-codex:oauth` blocks so the balancer re-includes it. Only
-	 * Codex — its ranking strategy uses the single model-independent `"shared"`
-	 * scope, so clearing every block for the credential id is exact.
+	 * says the account is allowed and its primary rolling window is available,
+	 * drop the persisted and in-memory `openai-codex:oauth` blocks so credential
+	 * selection can re-include seats whose short window recovered before a
+	 * longer persisted block naturally expires.
 	 */
 	#isHealthyCodexUsageReport(report: UsageReport): boolean {
+		if (report.provider !== "openai-codex") return false;
 		const metadata = report.metadata;
-		return (
-			report.provider === "openai-codex" &&
-			metadata?.allowed === true &&
-			metadata.limitReached === false &&
-			!this.#isUsageLimitReached(report.limits)
-		);
+		if (metadata?.allowed !== true || metadata.limitReached !== false) return false;
+		const primary = codexRankingStrategy.findWindowLimits(report).primary;
+		if (primary) return !this.#isUsageLimitExhausted(primary);
+		return !this.#isUsageLimitReached(report.limits);
 	}
 
 	#reconcileCodexUsageBlockForCredential(provider: Provider, credentialId: number, report: UsageReport): void {
