@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed xAI SuperGrok multi-account rotation when an account returns HTTP 403 `run out of credits` / `personal-team-blocked:spending-limit`. That account-local cap is now classified as a usage limit so `streamSimple` auth-retry and `rotateSessionCredential` switch to a sibling `xai-oauth` credential instead of sticking to the exhausted account.
+
 ### Changed
 
 - Changed the xAI Grok OAuth (`xai-oauth`) provider to use manual code-paste login by default. `/login` now accepts a pasted authorization code or full `http://127.0.0.1:56121/callback?code=...` redirect URL without starting a local callback listener ([#3277](https://github.com/can1357/oh-my-pi/pull/3277) by [@Jaaneek](https://github.com/Jaaneek)).

@@ -150,6 +150,32 @@ describe("AuthStorage forceRefresh + rotateSessionCredential", () => {
 		expect(second).not.toBe(first);
 	});
 
+	test("rotateSessionCredential(xAI credits 403) blocks the exhausted account and rotates", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+		registerProvider();
+		await authStorage.set(PROVIDER, [
+			{ type: "oauth", access: "acc-A", refresh: "ref-A", expires: farExpiry() },
+			{ type: "oauth", access: "acc-B", refresh: "ref-B", expires: farExpiry() },
+		]);
+
+		const first = await authStorage.getApiKey(PROVIDER, "xai-credits");
+		const usageLimitSpy = vi.spyOn(authStorage, "markUsageLimitReached");
+		const xaiCreditsError = Object.assign(
+			new Error(
+				"403 You have run out of credits or need a Grok subscription. Add credits at https://grok.com/?_s=usage or upgrade at https://grok.com/supergrok. (type=personal-team-blocked:spending-limit)",
+			),
+			{ status: 403 },
+		);
+
+		const rotated = await authStorage.rotateSessionCredential(PROVIDER, "xai-credits", {
+			error: xaiCreditsError,
+		});
+
+		expect(rotated).toBe(true);
+		expect(usageLimitSpy).toHaveBeenCalledTimes(1);
+		expect(await authStorage.getApiKey(PROVIDER, "xai-credits")).not.toBe(first);
+	});
+
 	test("rotateSessionCredential treats quota payloads as temporary usage blocks", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 		registerProvider();

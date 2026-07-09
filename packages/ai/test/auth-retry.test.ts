@@ -52,6 +52,18 @@ describe("isAuthRetryableError", () => {
 		// credentials won't help an org/global limit.
 		expect(isAuthRetryableError(Object.assign(new Error("429 too many requests"), { status: 429 }))).toBe(false);
 		expect(isAuthRetryableError("Error: 401 unauthorized")).toBe(true);
+		// xAI SuperGrok surfaces account exhaustion as 403 + "run out of credits" /
+		// spending-limit, not 429. Must rotate so multi-account xai-oauth pools work.
+		expect(
+			isAuthRetryableError(
+				Object.assign(
+					new Error(
+						"403 You have run out of credits or need a Grok subscription. Add credits at https://grok.com/?_s=usage or upgrade at https://grok.com/supergrok. (type=personal-team-blocked:spending-limit)",
+					),
+					{ status: 403 },
+				),
+			),
+		).toBe(true);
 		expect(isAuthRetryableError(authError(403))).toBe(false);
 		expect(isAuthRetryableError(authError(500))).toBe(false);
 		expect(isAuthRetryableError(new Error("network blip"))).toBe(false);

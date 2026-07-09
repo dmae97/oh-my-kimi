@@ -131,6 +131,17 @@ describe("isUsageLimit", () => {
 		expect(isUsageLimit("额度耗尽")).toBe(true);
 	});
 
+	it("detects xAI Grok SuperGrok credit exhaustion as a credential-rotatable usage limit", () => {
+		// xAI returns HTTP 403 with (type=personal-team-blocked:spending-limit), not a
+		// 429 usage_limit_reached. Without this match, multi-account xai-oauth pools
+		// stick to the exhausted credential instead of rotating siblings.
+		const message =
+			"403 You have run out of credits or need a Grok subscription. Add credits at https://grok.com/?_s=usage or upgrade at https://grok.com/supergrok.\nYou have run out of credits or need a Grok subscription. Add credits at https://grok.com/?_s=usage or upgrade at https://grok.com/supergrok. (type=personal-team-blocked:spending-limit)";
+		expect(isUsageLimit(message)).toBe(true);
+		expect(isUsageLimit(Object.assign(new Error(message), { status: 403 }))).toBe(true);
+		expect(parseRateLimitReason(message)).toBe("QUOTA_EXHAUSTED");
+	});
+
 	it("detects OpenAI quota payload codes as credential-rotatable usage limits", () => {
 		for (const message of ["insufficient_quota", "usage_limit_exceeded", "usage_limit_reached"]) {
 			expect(isUsageLimit(message)).toBe(true);
@@ -182,6 +193,14 @@ describe("isUsageLimitOutcome", () => {
 		expect(
 			isUsageLimitOutcome(403, "403 订阅额度不足或未配置订阅: subscription quota insufficient, need=14447"),
 		).toBe(true);
+	});
+
+	it("rotates on xAI Grok 403 credit/spending-limit exhaustion regardless of status", () => {
+		const message =
+			"403 You have run out of credits or need a Grok subscription. Add credits at https://grok.com/?_s=usage or upgrade at https://grok.com/supergrok. (type=personal-team-blocked:spending-limit)";
+		expect(isUsageLimitOutcome(403, message)).toBe(true);
+		expect(isUsageLimitOutcome(undefined, message)).toBe(true);
+		expect(isUsageLimitOutcome(429, message)).toBe(true);
 	});
 
 	it("does not rotate on auth/invalid-request statuses with unrelated bodies", () => {
