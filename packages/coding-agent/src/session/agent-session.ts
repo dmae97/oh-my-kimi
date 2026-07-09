@@ -2420,6 +2420,11 @@ export class AgentSession {
 			const requestedLevel = thinkingLevel ?? ThinkingLevel.Medium;
 			const resolvedLevel = resolveThinkingLevelForModel(model, requestedLevel);
 			const advisorThinkingLevel: ThinkingLevel = resolvedLevel ?? ThinkingLevel.Inherit;
+			// Record the status entry now (in roster order) so the Map's insertion
+			// order matches the configured roster even when earlier advisors were
+			// skipped as paused/no_model. The build loop overwrites this to "running"
+			// without changing insertion order.
+			this.#advisorStatuses.set(slug, { name: config.name, status: "running" });
 			descriptors.push({
 				config,
 				name: config.name,
@@ -2456,8 +2461,9 @@ export class AgentSession {
 		if (this.#agentKind !== "main" && !this.settings.get("advisor.subagents")) return false;
 
 		// Rebuild the status map from scratch so removed/renamed advisors don't
-		// leave stale entries. #resolveAdvisorRuntimeDescriptors populates
-		// `paused`/`no_model` as it filters; this loop sets `running` on build.
+		// leave stale entries. #resolveAdvisorRuntimeDescriptors populates every
+		// entry (`paused`/`no_model`/`running`) in roster order; the build loop
+		// below confirms `running` for successfully built advisors.
 		this.#advisorStatuses.clear();
 		const descriptors = this.#resolveAdvisorRuntimeDescriptors(true);
 
