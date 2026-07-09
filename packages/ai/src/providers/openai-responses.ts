@@ -76,7 +76,7 @@ import {
 	createInitialResponsesAssistantMessage,
 	createOpenAIStrictToolsState,
 	disableStrictToolsForScope,
-	getOpenAIResponsesPromptCacheKey,
+	getOpenAIPromptCacheKey,
 	getOpenAIResponsesRoutingSessionId,
 	getOpenAIStrictToolsScope,
 	getOpenRouterResponsesSessionId,
@@ -390,7 +390,7 @@ const streamOpenAIResponsesOnce = (
 			// stable prompt-cache key independently. Side-channel calls use this to
 			// avoid perturbing provider conversation state without cold-starting the cache.
 			const routingSessionId = getOpenAIResponsesRoutingSessionId(options);
-			const promptCacheSessionId = getOpenAIResponsesPromptCacheKey(options);
+			const promptCacheSessionId = getOpenAIPromptCacheKey(options);
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
 			const { headers, copilotPremiumRequests, baseUrl } = resolveOpenAIRequestSetup(model, {
 				apiKey,
@@ -818,7 +818,7 @@ export function buildParams(
 	}
 
 	const cacheRetention = resolveCacheRetention(options?.cacheRetention);
-	const promptCacheKey = getOpenAIResponsesPromptCacheKey(options);
+	const promptCacheKey = getOpenAIPromptCacheKey(options);
 	const modelId = applyWireModelIdTransform(
 		model.requestModelId ?? model.id,
 		model.compat.wireModelIdMode,

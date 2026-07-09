@@ -388,9 +388,9 @@ export interface StreamOptions {
 	 */
 	sessionId?: string;
 	/**
-	 * Optional prompt-cache identity. When set, OpenAI Responses-compatible
-	 * providers use this for `prompt_cache_key` while keeping `sessionId` for
-	 * provider routing / conversation headers.
+	 * Optional prompt-cache identity. OpenAI-family providers use this for
+	 * `prompt_cache_key` payloads and cache-affinity headers such as
+	 * `x-grok-conv-id`; when omitted, they fall back to `sessionId`.
 	 */
 	promptCacheKey?: string;
 	/**

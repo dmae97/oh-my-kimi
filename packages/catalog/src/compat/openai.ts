@@ -541,7 +541,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 			MINIMAX_PROVIDER_OR_ID_PATTERN.test(provider) || MINIMAX_PROVIDER_OR_ID_PATTERN.test(spec.id),
 		emptyLengthFinishIsContextError: provider === "ollama",
 		usesOpenAIToolCallIdLimit: provider === "openai",
-		promptCacheSessionHeader: undefined,
+		promptCacheSessionHeader: isGrok ? "x-grok-conv-id" : undefined,
 		dropThinkingWhenReasoningEffort: provider === "fireworks",
 	};
 
