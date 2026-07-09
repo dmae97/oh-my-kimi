@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed interactive OAuth login success messages waiting on model discovery; `/login xai-oauth` now reports saved credentials immediately while model metadata refreshes in the background. ([#4989](https://github.com/can1357/oh-my-pi/issues/4989))
+
 ## [16.3.15] - 2026-07-09
 
 ### Changed
