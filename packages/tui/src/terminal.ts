@@ -382,6 +382,8 @@ export interface Terminal {
 	 * Register a callback for terminal appearance (dark/light) changes.
 	 * Detection uses OSC 11 background color query with Mode 2031 as a change trigger.
 	 * Fires when the detected appearance changes, including the initial detection.
+	 * Subscribers registered after detection are invoked immediately with the
+	 * already-detected appearance so late subscribers never miss it.
 	 */
 	onAppearanceChange(callback: (appearance: TerminalAppearance) => void): void;
 	/** The last detected terminal appearance, or undefined if not yet known. */
@@ -516,6 +518,17 @@ export class ProcessTerminal implements Terminal {
 
 	onAppearanceChange(callback: (appearance: TerminalAppearance) => void): void {
 		this.#appearanceCallbacks.push(callback);
+		// Replay an already-detected appearance: the startup OSC 11 response can
+		// arrive before consumers (e.g. the theme bridge) subscribe, and the
+		// dedup in #handleOsc11Response would otherwise suppress the value for
+		// them forever (#4731).
+		if (this.#appearance) {
+			try {
+				callback(this.#appearance);
+			} catch {
+				/* ignore callback errors */
+			}
+		}
 	}
 
 	onPrivateModeReport(callback: (mode: number, supported: boolean) => void): void {
