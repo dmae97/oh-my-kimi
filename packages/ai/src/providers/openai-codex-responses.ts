@@ -949,7 +949,7 @@ export async function buildTransformedCodexRequestBody(
 	promptCacheKey = normalizeOpenAIResponsesPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
 ): Promise<RequestBody> {
 	const params: RequestBody = {
-		model: model.id,
+		model: model.requestModelId ?? model.id,
 		input: convertMessages(model, context),
 		stream: true,
 		prompt_cache_key: promptCacheKey,

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `gpt-5.6` base models and `gpt-5.6-{luna,sol,terra}-pro` variants
+- Added `meta/muse-spark-1.1` model support
+- Added support for thinking modes on `poolside/laguna` models
+
+- Added generated GPT-5.6 Pro aliases (`gpt-5.6-{luna,sol,terra}-pro`) on the `openai` and `openai-codex` providers: each alias sends the base model id on the wire (`requestModelId`) with the new `reasoningMode: "pro"` marker, and re-derives from the current base rows on every catalog regeneration.
+
 ## [16.3.14] - 2026-07-09
 
 ### Added

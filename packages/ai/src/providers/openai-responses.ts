@@ -904,6 +904,13 @@ export function buildParams(
 			model.thinking?.effortMap?.[effort as NonNullable<OpenAIResponsesOptions["reasoning"]>] ??
 			effort,
 	});
+	// Catalog pro aliases (`gpt-5.6-*-pro`): merge AFTER the compat policy so the
+	// mode survives every policy branch (disabled/omitted effort included) while
+	// keeping whatever effort/summary the policy produced — mode and effort are
+	// independent wire fields.
+	if (model.reasoningMode) {
+		params.reasoning = { ...params.reasoning, mode: model.reasoningMode };
+	}
 
 	applyOpenAIGatewayRouting(params, model.compat);
 

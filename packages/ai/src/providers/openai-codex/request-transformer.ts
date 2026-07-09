@@ -23,6 +23,8 @@ export interface ReasoningConfig {
 	effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	summary?: "auto" | "concise" | "detailed";
 	context?: CodexReasoningContext;
+	/** Pro reasoning serving mode (gpt-5.6+ catalog pro aliases). */
+	mode?: "pro";
 }
 
 export interface CodexRequestOptions {
@@ -366,6 +368,12 @@ export async function transformRequestBody(
 		}
 	} else {
 		delete body.reasoning;
+	}
+	// Catalog pro aliases (`gpt-5.6-*-pro`): applied after the effort branch so
+	// the mode is sent even when no effort is set (the branch above deletes
+	// `body.reasoning` in that case) — mode and effort are independent fields.
+	if (model.reasoningMode) {
+		body.reasoning = { ...body.reasoning, mode: model.reasoningMode };
 	}
 
 	body.text = {
