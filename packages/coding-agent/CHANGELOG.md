@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed collapsed compacted session transcript rebuilds reattaching snapcompact archive image frames to the live TUI, avoiding large retained JSC heaps on resume and transcript refresh. ([#4979](https://github.com/can1357/oh-my-pi/issues/4979))
+
 ## [16.3.14] - 2026-07-09
 
 ### Fixed
