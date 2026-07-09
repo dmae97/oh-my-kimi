@@ -410,6 +410,18 @@ function lineAllowed(lineNumber: number, ranges: readonly LineRange[] | undefine
 	return !ranges || isLineInRanges(lineNumber, ranges);
 }
 
+function lineRangeFetchEnd(pathSpecs: readonly GrepPathSpec[]): number | undefined {
+	let maxEnd = 0;
+	for (const spec of pathSpecs) {
+		if (!spec.ranges) continue;
+		for (const range of spec.ranges) {
+			if (range.endLine === undefined) return undefined;
+			maxEnd = Math.max(maxEnd, range.endLine);
+		}
+	}
+	return maxEnd;
+}
+
 /** Binary search for the index of the line containing byte `offset`. */
 function findLineIndex(starts: readonly number[], offset: number): number {
 	if (starts.length === 0) return -1;
@@ -1107,6 +1119,14 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					Boolean(multiTargets) ||
 					(virtualResources.length > 0 && (virtualResources.length > 1 || searchablePaths.length > 0));
 				const perFileMatchCap = isMultiScope ? MULTI_FILE_PER_FILE_MATCHES : SINGLE_FILE_MATCHES;
+				const hasLineRangeFilters = pathSpecs.some(spec => spec.ranges);
+				const lineRangeMatchFetchEnd = hasLineRangeFilters ? lineRangeFetchEnd(pathSpecs) : undefined;
+				const nativeMaxCount = hasLineRangeFilters ? undefined : INTERNAL_TOTAL_CAP;
+				const nativeMaxCountPerFile = hasLineRangeFilters
+					? lineRangeMatchFetchEnd === undefined
+						? undefined
+						: Math.max(perFileMatchCap + 1, lineRangeMatchFetchEnd)
+					: perFileMatchCap + 1;
 
 				// Run grep
 				let result: GrepResult = {
@@ -1141,12 +1161,12 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 										multiline: effectiveMultiline,
 										hidden: true,
 										gitignore: useGitignore,
-										maxCount: INTERNAL_TOTAL_CAP,
+										maxCount: nativeMaxCount,
 										contextBefore: normalizedContextBefore,
 										contextAfter: normalizedContextAfter,
 										maxColumns: DEFAULT_MAX_COLUMN,
 										mode: effectiveOutputMode,
-										maxCountPerFile: perFileMatchCap + 1,
+										maxCountPerFile: nativeMaxCountPerFile,
 										signal,
 										timeoutMs: SEARCH_GREP_TIMEOUT_MS,
 									},
@@ -1188,12 +1208,12 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 									multiline: effectiveMultiline,
 									hidden: true,
 									gitignore: useGitignore,
-									maxCount: INTERNAL_TOTAL_CAP,
+									maxCount: nativeMaxCount,
 									contextBefore: normalizedContextBefore,
 									contextAfter: normalizedContextAfter,
 									maxColumns: DEFAULT_MAX_COLUMN,
 									mode: effectiveOutputMode,
-									maxCountPerFile: perFileMatchCap + 1,
+									maxCountPerFile: nativeMaxCountPerFile,
 									signal,
 									timeoutMs: SEARCH_GREP_TIMEOUT_MS,
 								},
