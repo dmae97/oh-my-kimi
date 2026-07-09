@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.14] - 2026-07-09
+
 ### Changed
 
 - Updated Codex reasoning effort mapping to support shifted wire tiers for newer models

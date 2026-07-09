@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.14] - 2026-07-09
+
 ### Fixed
 
 - Fixed race condition where scrollback rows could be incorrectly retracted between render frames

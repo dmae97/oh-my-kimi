@@ -2,11 +2,12 @@
 
 ## [Unreleased]
 
+## [16.3.14] - 2026-07-09
+
 ### Added
 
 - Added support for GPT-5.6 (Luna, Sol, Terra) model variants
 - Enabled expanded five-tier reasoning effort scale (minimal to xhigh) for GPT-5.6 models
-
 - Added GPT-5.6 (Terra/Luna/Sol) support for the new `max` reasoning tier: on wire-effort APIs (OpenAI Responses, Codex, Azure, openai-compat/OpenRouter models that advertise reasoning) user efforts shift up one notch — `xhigh` sends `max`, `high` sends `xhigh` — mirroring the Claude Fable/Opus 4.7+ five-tier mapping, and the exposed ladder becomes `minimal..xhigh` with `minimal` reaching the native `low` tier. Devin's per-tier GPT-5.6 sibling rows now collapse into `gpt-5-6-{luna,sol,terra}` logical models with the same shifted routing (`xhigh` → `-max`), plus `-fast` families that keep the direct `low..xhigh` `-priority` scale since Devin serves no `-max-priority` tier.
 
 ## [16.3.13] - 2026-07-09

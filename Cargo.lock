@@ -1850,9 +1850,9 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 
 [[package]]
 name = "ignore"
-version = "0.4.27"
+version = "0.4.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe112b004901c62c2faa11f4f75e9864e0cc5af8da71c9115d184a3aa888749f"
+checksum = "2adf14691c72bcfc1058740436a35bdd3ae9c07d1a941ef00b749e9ea16aefa7"
 dependencies = [
  "crossbeam-deque",
  "globset",
@@ -2881,7 +2881,7 @@ dependencies = [
 
 [[package]]
 name = "pi-ast"
-version = "16.3.13"
+version = "16.3.14"
 dependencies = [
  "anyhow",
  "ast-grep-core",
@@ -2950,7 +2950,7 @@ dependencies = [
 
 [[package]]
 name = "pi-iso"
-version = "16.3.13"
+version = "16.3.14"
 dependencies = [
  "async-trait",
  "libc",
@@ -2962,7 +2962,7 @@ dependencies = [
 
 [[package]]
 name = "pi-natives"
-version = "16.3.13"
+version = "16.3.14"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3015,7 +3015,7 @@ dependencies = [
 
 [[package]]
 name = "pi-shell"
-version = "16.3.13"
+version = "16.3.14"
 dependencies = [
  "anyhow",
  "brush-builtins",
@@ -3064,7 +3064,7 @@ dependencies = [
 
 [[package]]
 name = "pi-walker"
-version = "16.3.13"
+version = "16.3.14"
 dependencies = [
  "dashmap",
  "globset",
