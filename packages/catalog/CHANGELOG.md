@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added support for Grok 4.5 across multiple providers
+- Added support for GPT-5.6 series models (Luna, Sol, Terra)
+- Added Aion 3.0 and 3.0 Mini models
+- Added Kuaishou KAT-Coder v2.5 models
+- Added Nex-N2-Mini and SWE-1.7 series models
+- Added Hy3 models and free variants
+
+### Changed
+
+- Updated cost and token configurations for various models across providers
+- Renamed several models for consistency (e.g., MiniMax M3, Gemma 4 31B, Qwen variants)
+
 ## [16.3.12] - 2026-07-08
 
 ### Fixed
