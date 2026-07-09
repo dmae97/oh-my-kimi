@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Updated xAI OAuth to use a dedicated device-code flow instead of redirect/loopback server
+
+### Fixed
+
+- Fixed xAI Grok OAuth login to use xAI's device authorization flow: `/login` now opens the verification URL, displays the device code, and polls for approval instead of asking for a pasted redirect or linking to Hermes Agent documentation.
+
 ## [16.3.14] - 2026-07-09
 
 ### Changed

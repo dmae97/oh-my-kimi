@@ -81,7 +81,6 @@ describe("provider registry auth surface", () => {
 				"google-antigravity",
 				"google-gemini-cli",
 				"openai-codex",
-				"xai-oauth",
 			].sort(),
 		);
 		expect(PASTE_CODE_LOGIN_PROVIDERS.has("zenmux")).toBe(false);
