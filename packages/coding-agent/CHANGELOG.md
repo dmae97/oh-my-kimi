@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed interactive TUI sessions dying with `Unhandled rejection: Cannot set cwd while another same-realm JS runtime is running` after the JS eval worker fell back to the in-process inline path (commonly when the worker could not load `pi_natives`). Concurrent inline eval/browser runtimes now stamp cwd without stealing the exclusive realm; exclusive activation remains on `run`/`setRunScope`, and WorkerCore `init` reports failures via `init-failed` instead of throwing out of the microtask path.
+
 ## [16.3.12] - 2026-07-08
 
 ### Added

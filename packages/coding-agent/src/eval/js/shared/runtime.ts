@@ -189,8 +189,22 @@ export class JsRuntime {
 	}
 
 	setCwd(cwd: string): void {
-		this.#activateGlobals("set cwd");
+		// Always stamp the local field: WorkerCore/browser/cmux call setCwd from
+		// init and pre-run paths that may race another same-realm runtime. The
+		// exclusive global bag is only needed when this runtime is about to
+		// execute; run()/setRunScope still assert ownership. A throw here used
+		// to escape via the inline-worker microtask path as a fatal
+		// unhandledRejection and kill the whole interactive session.
+		if (this.#disposed) throw new Error("Cannot set cwd on a disposed JS runtime");
 		this.#cwd = cwd;
+		try {
+			this.#activateGlobals("set cwd");
+		} catch (err) {
+			if (err instanceof Error && err.message.includes("another same-realm JS runtime is running")) {
+				return;
+			}
+			throw err;
+		}
 		const session = (globalThis as { __omp_session__?: { cwd?: string } }).__omp_session__;
 		if (session) session.cwd = cwd;
 	}

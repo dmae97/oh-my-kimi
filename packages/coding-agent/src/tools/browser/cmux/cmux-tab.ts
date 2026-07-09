@@ -1288,18 +1288,6 @@ export async function runCmuxCode(tab: CmuxTab, opts: RunCmuxCodeOptions): Promi
 	const screenshots: ScreenshotResult[] = [];
 	const runId = crypto.randomUUID();
 	tab.setRunContext({ session: opts.snapshot, displays, screenshots, signal, timeoutMs: opts.timeoutMs });
-	const runtime = tab.ensureRuntime(opts.snapshot);
-	runtime.setCwd(opts.snapshot.cwd);
-	const runTab = bindBrowserRunFacade(tab, signal);
-	runtime.setRunScope({
-		page: bindBrowserRunFacade(tab.page, signal),
-		browser: bindBrowserRunFacade(tab.browser, signal),
-		tab: runTab,
-		assert: (cond: unknown, text?: string): void => {
-			if (!cond) throw new ToolError(text ?? "Assertion failed");
-		},
-		wait: (ms: number): Promise<void> => waitForBrowserRun(ms, signal),
-	});
 
 	const { promise: cancelRejection, reject } = Promise.withResolvers<never>();
 	const onAbort = (): void => {
@@ -1317,6 +1305,22 @@ export async function runCmuxCode(tab: CmuxTab, opts: RunCmuxCodeOptions): Promi
 	else signal.addEventListener("abort", onAbort, { once: true });
 
 	try {
+		const runtime = tab.ensureRuntime(opts.snapshot);
+		// setCwd is non-exclusive; setRunScope/run still assert same-realm ownership.
+		// Keep both inside try so a concurrent in-process eval/browser run surfaces as
+		// a rejected promise the supervisor can report, never an unhandled rejection.
+		runtime.setCwd(opts.snapshot.cwd);
+		const runTab = bindBrowserRunFacade(tab, signal);
+		runtime.setRunScope({
+			page: bindBrowserRunFacade(tab.page, signal),
+			browser: bindBrowserRunFacade(tab.browser, signal),
+			tab: runTab,
+			assert: (cond: unknown, text?: string): void => {
+				if (!cond) throw new ToolError(text ?? "Assertion failed");
+			},
+			wait: (ms: number): Promise<void> => waitForBrowserRun(ms, signal),
+		});
+
 		const hooks: RuntimeHooks = {
 			onText: chunk => {
 				throwIfAborted(signal);
