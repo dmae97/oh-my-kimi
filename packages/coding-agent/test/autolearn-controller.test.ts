@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { AutoLearnController, buildAutoLearnInstructions } from "@oh-my-pi/pi-coding-agent/autolearn/controller";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -254,13 +255,24 @@ describe("AutoLearnController", () => {
 		const session = new FakeSession();
 		install(session, { "autolearn.autoContinue": true });
 		session.toolCalls(5);
-		session.agentEnd([
-			{
-				role: "assistant",
-				content: [{ type: "text", text: "partial" }],
-				stopReason: "aborted",
-			} as never,
-		]);
+		const abortedMessage: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: "partial" }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "mock",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "aborted",
+			timestamp: Date.now(),
+		};
+		session.agentEnd([abortedMessage]);
 		expect(session.sent).toHaveLength(0);
 	});
 });
