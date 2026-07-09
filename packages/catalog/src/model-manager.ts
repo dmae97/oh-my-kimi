@@ -152,8 +152,9 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 	const dynamicFetchSucceeded = fetchedDynamicModels !== null;
 	const cacheModels = dynamicFetchSucceeded
 		? []
-		: dropCachedModelIdsOnStaticMismatch(
+		: prepareCacheModelsForStaticMismatch(
 				normalizeModelList<TApi>(cache?.models ?? []),
+				staticModels,
 				cacheFingerprintMatches,
 				options.dropCachedModelIdsOnStaticMismatch,
 			);
@@ -188,8 +189,9 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 				collapseBuiltModelVariants(
 					mergeDynamicModels(
 						mergeModelSources(staticModels, modelsDevModels),
-						dropCachedModelIdsOnStaticMismatch(
+						prepareCacheModelsForStaticMismatch(
 							normalizeModelList<TApi>(latestCache?.models ?? cache?.models ?? []),
+							staticModels,
 							cacheFingerprintMatches,
 							options.dropCachedModelIdsOnStaticMismatch,
 						),
@@ -260,16 +262,29 @@ function shouldFetchRemoteSources(
 	return false;
 }
 
-function dropCachedModelIdsOnStaticMismatch<TApi extends Api>(
+function prepareCacheModelsForStaticMismatch<TApi extends Api>(
 	models: readonly Model<TApi>[],
+	staticModels: readonly Model<TApi>[],
 	cacheFingerprintMatches: boolean,
 	ids: readonly string[] | undefined,
 ): Model<TApi>[] {
-	if (cacheFingerprintMatches || ids === undefined || ids.length === 0 || models.length === 0) {
-		return models.length === 0 ? [] : [...models];
+	if (models.length === 0) {
+		return [];
 	}
-	const droppedIds = new Set(ids);
-	return models.filter(model => !droppedIds.has(model.id));
+	if (cacheFingerprintMatches) {
+		return [...models];
+	}
+
+	const droppedIds = ids && ids.length > 0 ? new Set(ids) : undefined;
+	const staticIds = staticModels.length > 0 ? new Set(staticModels.map(model => model.id)) : undefined;
+	const sanitizedModels: Model<TApi>[] = [];
+	for (const model of models) {
+		if (droppedIds?.has(model.id)) {
+			continue;
+		}
+		sanitizedModels.push(staticIds?.has(model.id) ? { ...model, contextWindow: null, maxTokens: null } : model);
+	}
+	return sanitizedModels;
 }
 
 function mergeModelSources<TApi extends Api>(...sources: readonly (readonly Model<TApi>[])[]): Model<TApi>[] {
