@@ -837,6 +837,150 @@ describe("AuthStorage codex oauth ranking", () => {
 		}
 	});
 
+	test("refreshes broker-sourced Codex block protection when the same deadline is re-upserted", async () => {
+		if (!authStorage || !store?.getCredentialBlock) {
+			throw new Error("test setup failed");
+		}
+
+		await authStorage.set("openai-codex", [
+			{
+				type: "oauth",
+				...createCredential("acct-broker-same-deadline-blocked", "broker-same-deadline-blocked@example.com"),
+			},
+			{
+				type: "oauth",
+				...createCredential("acct-broker-same-deadline-healthy", "broker-same-deadline-healthy@example.com"),
+			},
+		]);
+
+		usageByAccount.set(
+			"acct-broker-same-deadline-blocked",
+			createCodexUsageReport({
+				accountId: "acct-broker-same-deadline-blocked",
+				primary: { usedFraction: 0.2, resetInMs: HOUR_MS },
+				secondary: { usedFraction: 0.3, resetInMs: WEEK_MS },
+				metadata: {
+					allowed: true,
+					limitReached: false,
+					planType: "pro",
+					email: "broker-same-deadline-blocked@example.com",
+					accountId: "acct-broker-same-deadline-blocked",
+				},
+			}),
+		);
+		usageByAccount.set(
+			"acct-broker-same-deadline-healthy",
+			createCodexUsageReport({
+				accountId: "acct-broker-same-deadline-healthy",
+				primary: { usedFraction: 0.2, resetInMs: HOUR_MS },
+				secondary: { usedFraction: 0.3, resetInMs: WEEK_MS },
+				metadata: {
+					allowed: true,
+					limitReached: false,
+					planType: "pro",
+					email: "broker-same-deadline-healthy@example.com",
+					accountId: "acct-broker-same-deadline-healthy",
+				},
+			}),
+		);
+
+		const token = "codex-broker-same-deadline-block";
+		const handle = startAuthBroker({
+			storage: authStorage,
+			bind: "127.0.0.1:0",
+			bearerTokens: [token],
+			disableRefresher: true,
+		});
+		try {
+			const clientA = new AuthBrokerClient({ url: handle.url, token });
+			const clientB = new AuthBrokerClient({ url: handle.url, token });
+			const initialResult = await clientB.fetchSnapshot();
+			if (initialResult.status !== 200) throw new Error("expected initial broker snapshot");
+			const blockedRow = initialResult.snapshot.credentials.find(entry => {
+				const credential = entry.credential;
+				return credential.type === "oauth" && credential.accountId === "acct-broker-same-deadline-blocked";
+			});
+			if (!blockedRow) throw new Error("expected blocked credential row");
+
+			const blockedUntilMs = Date.now() + 6 * 24 * HOUR_MS;
+			await clientA.upsertCredentialBlock(blockedRow.id, {
+				providerKey: "openai-codex:oauth",
+				blockScope: "shared",
+				blockedUntilMs,
+			});
+
+			const initialUpdatedAtSec = Math.floor(Date.now() / 1000) - 1;
+			const db = new Database(dbPath);
+			try {
+				const result = db
+					.prepare(
+						"UPDATE auth_credential_blocks SET updated_at = ? WHERE credential_id = ? AND provider_key = ? AND block_scope = ?",
+					)
+					.run(initialUpdatedAtSec, blockedRow.id, "openai-codex:oauth", "shared") as { changes: number };
+				if (result.changes !== 1) throw new Error("expected to age the broker block update timestamp");
+			} finally {
+				db.close();
+			}
+
+			const snapshotWithBlock = await clientB.fetchSnapshot({
+				ifGenerationGt: initialResult.generation,
+				waitMs: 1000,
+			});
+			if (snapshotWithBlock.status !== 200)
+				throw new Error("expected broker snapshot containing same-deadline block");
+			const initialSnapshotBlock = snapshotWithBlock.snapshot.credentials
+				.find(entry => entry.id === blockedRow.id)
+				?.blocks?.find(block => block.providerKey === "openai-codex:oauth" && block.blockScope === "shared");
+			expect(initialSnapshotBlock?.blockedUntilMs).toBe(blockedUntilMs);
+			expect(initialSnapshotBlock?.updatedAtMs).toBe(initialUpdatedAtSec * 1000);
+
+			const remoteStoreB = new RemoteAuthCredentialStore({
+				client: clientB,
+				initialSnapshot: snapshotWithBlock.snapshot,
+				streamSnapshots: false,
+			});
+			const clientStorageB = new AuthStorage(remoteStoreB);
+			await clientStorageB.reload();
+			try {
+				expect(remoteStoreB.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBe(blockedUntilMs);
+				expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBe(blockedUntilMs);
+
+				remoteStoreB.cleanExpiredCredentialBlocks(Date.now() + STALE_BLOCK_GUARD_MS);
+
+				await clientA.upsertCredentialBlock(blockedRow.id, {
+					providerKey: "openai-codex:oauth",
+					blockScope: "shared",
+					blockedUntilMs,
+				});
+				const refreshedSnapshot = await clientB.fetchSnapshot({
+					ifGenerationGt: snapshotWithBlock.generation,
+					waitMs: 1000,
+				});
+				if (refreshedSnapshot.status !== 200) {
+					throw new Error("expected broker snapshot containing refreshed same-deadline block");
+				}
+
+				await remoteStoreB.refreshSnapshot();
+				const refreshedBlock = remoteStoreB.snapshot.credentials
+					.find(entry => entry.id === blockedRow.id)
+					?.blocks?.find(block => block.providerKey === "openai-codex:oauth" && block.blockScope === "shared");
+				expect(refreshedBlock?.blockedUntilMs).toBe(blockedUntilMs);
+				expect(refreshedBlock?.updatedAtMs).toBeGreaterThan(initialSnapshotBlock!.updatedAtMs!);
+
+				expect(await clientStorageB.getApiKey("openai-codex", "codex-broker-same-deadline-sibling")).toBe(
+					"api-acct-broker-same-deadline-healthy",
+				);
+				expect(remoteStoreB.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBe(blockedUntilMs);
+				expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBe(blockedUntilMs);
+			} finally {
+				clientStorageB.close();
+				remoteStoreB.close();
+			}
+		} finally {
+			await handle.close();
+		}
+	});
+
 	test("protects fresh Codex blocks present in the initial broker snapshot from healthy selection reconciliation", async () => {
 		if (!authStorage || !store?.getCredentialBlock) {
 			throw new Error("test setup failed");

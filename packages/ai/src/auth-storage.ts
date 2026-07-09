@@ -134,6 +134,8 @@ export interface StoredCredentialBlock {
 	blockScope: string;
 	/** Epoch milliseconds. */
 	blockedUntilMs: number;
+	/** Last row update timestamp in epoch milliseconds, when provided by the backing store. */
+	updatedAtMs?: number;
 }
 
 /**
@@ -5884,6 +5886,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 					providerKey: row.provider_key,
 					blockScope: row.block_scope,
 					blockedUntilMs: row.blocked_until_ms,
+					updatedAtMs: row.updated_at * 1000,
 				});
 			}
 		}
