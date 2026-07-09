@@ -442,6 +442,129 @@ describe("openai-codex streaming", () => {
 		expect(capturedText).toEqual({ verbosity: "low" });
 	});
 
+	it("preserves streamed reasoning when the done item has no summary text", async () => {
+		const token = createCodexTestToken();
+		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
+		const events = [
+			{
+				type: "response.output_item.added",
+				output_index: 0,
+				item: { type: "reasoning", id: "rs_1", summary: [] },
+			},
+			{
+				type: "response.reasoning_summary_part.added",
+				output_index: 0,
+				item_id: "rs_1",
+				summary_index: 0,
+				part: { type: "summary_text", text: "" },
+			},
+			{
+				type: "response.reasoning_summary_text.delta",
+				output_index: 0,
+				item_id: "rs_1",
+				summary_index: 0,
+				delta: "streamed thinking",
+			},
+			{
+				type: "response.output_item.done",
+				output_index: 0,
+				item: { type: "reasoning", id: "rs_1", summary: [] },
+			},
+			{
+				type: "response.output_item.added",
+				output_index: 1,
+				item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
+			},
+			{
+				type: "response.content_part.added",
+				output_index: 1,
+				item_id: "msg_1",
+				part: { type: "output_text", text: "" },
+			},
+			{ type: "response.output_text.delta", output_index: 1, item_id: "msg_1", delta: "done" },
+			{
+				type: "response.output_item.done",
+				output_index: 1,
+				item: {
+					type: "message",
+					id: "msg_1",
+					role: "assistant",
+					status: "completed",
+					content: [{ type: "output_text", text: "done" }],
+				},
+			},
+			{
+				type: "response.completed",
+				response: {
+					id: "resp_1",
+					status: "completed",
+					usage: {
+						input_tokens: 5,
+						output_tokens: 3,
+						total_tokens: 8,
+						input_tokens_details: { cached_tokens: 0 },
+					},
+				},
+			},
+		];
+		const sse = `${events.map(event => `data: ${JSON.stringify(event)}`).join("\n\n")}\n\n`;
+		const fetchMock: FetchImpl = async () =>
+			new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+
+		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			apiKey: token,
+			fetch: fetchMock,
+		}).result();
+
+		expect(result.content.find(block => block.type === "thinking")?.thinking).toBe("streamed thinking");
+	});
+
+	it("streams raw reasoning text deltas into the final thinking block", async () => {
+		const token = createCodexTestToken();
+		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
+		const events = [
+			{
+				type: "response.output_item.added",
+				output_index: 0,
+				item: { type: "reasoning", id: "rs_raw", summary: [] },
+			},
+			{
+				type: "response.reasoning_text.delta",
+				output_index: 0,
+				item_id: "rs_raw",
+				delta: "raw streamed thinking",
+			},
+			{
+				type: "response.output_item.done",
+				output_index: 0,
+				item: { type: "reasoning", id: "rs_raw", summary: [] },
+			},
+			{
+				type: "response.completed",
+				response: {
+					id: "resp_raw",
+					status: "completed",
+					usage: {
+						input_tokens: 5,
+						output_tokens: 3,
+						total_tokens: 8,
+						input_tokens_details: { cached_tokens: 0 },
+					},
+				},
+			},
+		];
+		const sse = `${events.map(event => `data: ${JSON.stringify(event)}`).join("\n\n")}\n\n`;
+		const fetchMock: FetchImpl = async () =>
+			new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+
+		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			apiKey: token,
+			fetch: fetchMock,
+		}).result();
+
+		expect(result.content.find(block => block.type === "thinking")?.thinking).toBe("raw streamed thinking");
+	});
+
 	it("maps end_turn=false on the terminal event to a pause_turn stop", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());

@@ -30,7 +30,7 @@ import type {
 	TSchema,
 } from "@oh-my-pi/pi-ai";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oauth/types";
-import type { AutocompleteItem, Component, EditorTheme, KeyId, TUI } from "@oh-my-pi/pi-tui";
+import type { AutocompleteItem, AutocompleteProvider, Component, EditorTheme, KeyId, TUI } from "@oh-my-pi/pi-tui";
 import type { logger as PiLogger } from "@oh-my-pi/pi-utils";
 import type { Type as arktype } from "arktype";
 import type * as zod from "zod/v4";
@@ -163,6 +163,9 @@ export type ExtensionUiComponent = Component & { dispose?(): void };
 export type ExtensionUiComponentFactory = (tui: TUI, theme: Theme) => ExtensionUiComponent;
 export type ExtensionWidgetContent = string[] | ExtensionUiComponentFactory | undefined;
 
+/** Wrap the current autocomplete provider with additional behavior (pi-compatible). */
+export type AutocompleteProviderFactory = (current: AutocompleteProvider) => AutocompleteProvider;
+
 /**
  * UI context for extensions to request interactive UI.
  * Each mode (interactive, RPC, print) provides its own implementation.
@@ -242,6 +245,14 @@ export interface ExtensionUIContext {
 		dialogOptions?: ExtensionUIDialogOptions,
 		editorOptions?: { promptStyle?: boolean },
 	): Promise<string | undefined>;
+
+	/**
+	 * Stack additional autocomplete behavior on top of the built-in provider
+	 * (pi-compatible). Interactive mode rebuilds the editor's provider through
+	 * every registered factory, in registration order; headless modes (print,
+	 * RPC, ACP, subagents) accept and ignore the factory.
+	 */
+	addAutocompleteProvider(factory: AutocompleteProviderFactory): void;
 
 	/**
 	 * Set a custom editor component via factory function, or `undefined` to restore the default editor.
@@ -1107,7 +1118,7 @@ export interface ExtensionAPI {
 		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
 	): void;
 
-	/** Send a user message to the agent, or queue it when deliverAs is set. */
+	/** Send a user prompt: idle starts a turn; streaming queues as steer unless deliverAs is set. */
 	sendUserMessage(
 		content: string | (TextContent | ImageContent)[],
 		options?: { deliverAs?: "steer" | "followUp" },

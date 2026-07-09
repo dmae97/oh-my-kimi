@@ -40,6 +40,18 @@ interface FinalizableBlock {
 	 * commits until the block finalizes.
 	 */
 	getTranscriptBlockSettledRows?(): number;
+	/**
+	 * Whether the block is a displaceable snapshot (todo/poll card) kept
+	 * unfinalized only so a follow-up matching call can retract it. Paired
+	 * with {@link seal}: once any of its rows enters native scrollback the
+	 * container seals it — rows on the tape are immutable, so retraction is
+	 * no longer possible, and an unfinalized block would otherwise pin the
+	 * live-region seam open for the rest of the turn (every row committed
+	 * below it audit-exempt, mass-recommitted when it finally finalizes).
+	 */
+	isDisplaceableBlock?(): boolean;
+	/** Finalize a displaceable snapshot in place (settle animation, freeze bytes). */
+	seal?(): void;
 }
 
 function isBlockFinalized(child: Component): boolean {
@@ -58,6 +70,12 @@ function getBlockSettledRows(child: Component): number {
 	if (!fn) return 0;
 	const value = fn.call(child);
 	return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
+}
+
+/** Seal a displaceable snapshot whose rows entered native scrollback (see {@link FinalizableBlock.isDisplaceableBlock}). */
+function sealCommittedSnapshot(child: Component): void {
+	const block = child as Component & FinalizableBlock;
+	if (block.isDisplaceableBlock?.()) block.seal?.();
 }
 
 // A "plain blank" row is empty or whitespace-only with no ANSI bytes. It marks
@@ -274,6 +292,21 @@ export class TranscriptContainer
 		this.#nativeScrollbackLiveRegionStart = undefined;
 
 		const count = this.children.length;
+
+		// Seal displaceable snapshots whose rows are already on the tape (per the
+		// previous frame's segments — the geometry the committed count was
+		// computed against): immutable history can no longer be retracted, and
+		// left unfinalized such a block would pin the live-region seam open below
+		// it. Runs before the live-block scan so the seam unpins in this same
+		// frame, and every frame so a block that BECAME displaceable after its
+		// pending-preview rows committed (late result on a scrolled-off call) is
+		// caught too.
+		for (let i = 0; i < count && i < this.#segments.length; i++) {
+			const previous = this.#segments[i]!;
+			if (previous.startRow >= this.#committedRows) break;
+			if (previous.rowCount === 0 || previous.component !== this.children[i]) continue;
+			sealCommittedSnapshot(previous.component);
+		}
 
 		// The commit boundary stops at the earliest still-mutating block. A
 		// block that has not finalized must gate it: out-of-band inserts

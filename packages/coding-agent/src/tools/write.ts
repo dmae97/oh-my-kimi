@@ -985,6 +985,24 @@ function countLines(text: string): number {
 	return text.split("\n").length;
 }
 
+/** Bounded newline scan: whether `text` spans more than `maxLines` lines.
+ *  Runs on every live compose (the repaint predicate below), so it must not
+ *  materialize the split the way `countLines` does. */
+function exceedsLineCount(text: string, maxLines: number): boolean {
+	if (!text) return false;
+	let lines = 1;
+	for (let index = text.indexOf("\n"); index !== -1; index = text.indexOf("\n", index + 1)) {
+		if (++lines > maxLines) return true;
+	}
+	return false;
+}
+
+function writeContentOf(args: unknown): string {
+	if (args == null || typeof args !== "object" || !("content" in args)) return "";
+	const content = args.content;
+	return typeof content === "string" ? content : "";
+}
+
 function formatLineCountSuffix(lineCount: number, uiTheme: Theme): string {
 	if (lineCount <= 0) return "";
 	return uiTheme.fg("dim", ` · ${lineCount} line${lineCount === 1 ? "" : "s"}`);
@@ -1218,4 +1236,12 @@ export const writeToolRenderer = {
 		});
 	},
 	mergeCallAndResult: true,
+	// The collapsed pending preview follows the streaming edge with a tail
+	// window once the content outgrows it (`… (N earlier lines)` + last rows);
+	// the first partial result re-anchors the frame to the top of the file, so
+	// tail rows already committed to viewport/native scrollback would survive
+	// as stale content above the new frame without a full replay. Expanded and
+	// short previews stay top-anchored and skip the (scrollback-wiping) reset.
+	forceFirstResultViewportRepaint: (args: unknown, options: RenderResultOptions) =>
+		!options.expanded && exceedsLineCount(writeContentOf(args), WRITE_STREAMING_PREVIEW_LINES),
 };

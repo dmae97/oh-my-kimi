@@ -314,6 +314,36 @@ describe("openai-codex reasoning effort validation", () => {
 	});
 });
 
+describe("openai-codex reasoning effort wire mapping", () => {
+	it("shifts gpt-5.6 user efforts one wire tier up via the baked effort map", async () => {
+		const model = createCodexModel("gpt-5.6-sol");
+		const shifted = [
+			["minimal", "low"],
+			["low", "medium"],
+			["medium", "high"],
+			["high", "xhigh"],
+			["xhigh", "max"],
+		] as const;
+
+		for (const [requested, wire] of shifted) {
+			const transformed = await transformRequestBody({ model: model.id }, model, {
+				reasoningEffort: requested,
+			});
+			expect(transformed.reasoning?.effort).toBe(wire);
+		}
+	});
+
+	it("keeps pre-5.6 efforts unshifted and passes none through unmapped", async () => {
+		const gpt55 = createCodexModel("gpt-5.5");
+		const unshifted = await transformRequestBody({ model: gpt55.id }, gpt55, { reasoningEffort: "xhigh" });
+		expect(unshifted.reasoning?.effort).toBe("xhigh");
+
+		const gpt56 = createCodexModel("gpt-5.6-sol");
+		const none = await transformRequestBody({ model: gpt56.id }, gpt56, { reasoningEffort: "none" });
+		expect(none.reasoning?.effort).toBe("none");
+	});
+});
+
 describe("openai-codex error parsing", () => {
 	it("produces friendly usage-limit messages and rate limits", async () => {
 		const resetAt = Math.floor(Date.now() / 1000) + 600;

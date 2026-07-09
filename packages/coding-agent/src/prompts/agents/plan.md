@@ -4,7 +4,6 @@ description: Software architect for complex multi-file architectural decisions. 
 tools: read, grep, glob, bash, lsp, web_search, ast_grep
 spawns: explore
 model: pi/plan, pi/slow
-thinking-level: high
 ---
 
 Analyze the codebase and the user's request. Produce a detailed implementation plan.

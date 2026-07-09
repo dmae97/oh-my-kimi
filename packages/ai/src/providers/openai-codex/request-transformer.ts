@@ -1,19 +1,33 @@
-import type { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { supportsAllTurnsReasoningContext, supportsCodexReasoningSummary } from "@oh-my-pi/pi-catalog/identity";
 import { requireSupportedEffort } from "@oh-my-pi/pi-catalog/model-thinking";
-import type { Api, Model } from "../../types";
+import type { Model } from "../../types";
+import { mapOpenAIReasoningEffort } from "../openai-shared";
 
 /** Reasoning replay scope for the Codex Responses API (`reasoning.context`). */
 export type CodexReasoningContext = "auto" | "current_turn" | "all_turns";
 
+/** User-facing effort levels accepted by Codex request options. */
+type CodexCallerEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+
+/** Caller literal → catalog `Effort` bridge (the enum is nominal). */
+const EFFORT_BY_NAME: Record<CodexCallerEffort, Effort> = {
+	minimal: Effort.Minimal,
+	low: Effort.Low,
+	medium: Effort.Medium,
+	high: Effort.High,
+	xhigh: Effort.XHigh,
+};
+
 export interface ReasoningConfig {
-	effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+	effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	summary?: "auto" | "concise" | "detailed";
 	context?: CodexReasoningContext;
 }
 
 export interface CodexRequestOptions {
-	reasoningEffort?: ReasoningConfig["effort"];
+	/** User-facing effort; the wire-only `max` tier is reached via the model's effort map. */
+	reasoningEffort?: CodexCallerEffort | "none";
 	reasoningSummary?: ReasoningConfig["summary"] | null;
 	/** Explicit `reasoning.context` override; defaults to `all_turns` when unset. The `all_turns` value is gated to gpt-5.4+ Codex models — older ids reject it, so it is suppressed and `context` omitted. */
 	reasoningContext?: CodexReasoningContext;
@@ -80,10 +94,40 @@ export function shouldUseCodexResponsesLite(body: RequestBody, requested: boolea
 	return requested === true && !containsInputImage(body.input);
 }
 
-function getReasoningConfig(model: Model<Api>, options: CodexRequestOptions): ReasoningConfig {
+/**
+ * Clamp a user-facing effort to the model's ladder, then remap to the wire
+ * tier (e.g. GPT-5.6's shifted five-tier scale sends `max` for user `xhigh`).
+ * A mapped value outside the Codex wire vocabulary is a broken compat/model
+ * effort map — fail loudly rather than silently sending a different tier.
+ */
+function mapCodexWireEffort(
+	model: Model<"openai-codex-responses">,
+	effort: CodexCallerEffort,
+): ReasoningConfig["effort"] {
+	const mapped = mapOpenAIReasoningEffort(model, model.compat, requireSupportedEffort(model, EFFORT_BY_NAME[effort]));
+	switch (mapped) {
+		case "none":
+		case "minimal":
+		case "low":
+		case "medium":
+		case "high":
+		case "xhigh":
+		case "max":
+			return mapped;
+		default:
+			throw new Error(
+				`Effort map for ${model.provider}/${model.id} produced invalid Codex reasoning effort "${mapped}"`,
+			);
+	}
+}
+
+function getReasoningConfig(
+	model: Model<"openai-codex-responses">,
+	effort: NonNullable<CodexRequestOptions["reasoningEffort"]>,
+	options: CodexRequestOptions,
+): ReasoningConfig {
 	const config: ReasoningConfig = {
-		effort:
-			options.reasoningEffort === "none" ? "none" : requireSupportedEffort(model, options.reasoningEffort as Effort),
+		effort: effort === "none" ? "none" : mapCodexWireEffort(model, effort),
 	};
 	// `reasoning.summary` is accepted only from gpt-5.4 onward; earlier Codex ids
 	// (gpt-5.1-codex, gpt-5.3-codex, gpt-5.3-codex-spark) reject it with
@@ -216,7 +260,7 @@ function stripImageDetails(input: InputItem[]): void {
 
 export async function transformRequestBody(
 	body: RequestBody,
-	model: Model<Api>,
+	model: Model<"openai-codex-responses">,
 	options: CodexRequestOptions = {},
 	prompt?: { developerMessages: string[] },
 ): Promise<RequestBody> {
@@ -300,7 +344,7 @@ export async function transformRequestBody(
 	}
 
 	if (options.reasoningEffort !== undefined) {
-		const reasoningConfig = getReasoningConfig(model, options);
+		const reasoningConfig = getReasoningConfig(model, options.reasoningEffort, options);
 		body.reasoning = {
 			...body.reasoning,
 			...reasoningConfig,

@@ -922,7 +922,7 @@ function isTerminalOnlyDetails(value: unknown): boolean {
 	return content === undefined || (Array.isArray(content) && content.length === 0);
 }
 
-function extractAssistantMessageText(value: unknown): string {
+export function extractAssistantMessageText(value: unknown): string {
 	if (typeof value !== "object" || value === null || !("content" in value)) {
 		return "";
 	}

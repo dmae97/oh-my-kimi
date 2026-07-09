@@ -1186,6 +1186,7 @@ const noOpUIContext: ExtensionUIContext = {
 	pasteToEditor: () => {},
 	getEditorText: () => "",
 	editor: async () => undefined,
+	addAutocompleteProvider: () => {},
 	get theme() {
 		return theme;
 	},
@@ -8338,11 +8339,10 @@ export class AgentSession {
 	}
 
 	/**
-	 * Send a user message to the agent.
-	 * When deliverAs is set, queue the message instead of starting a new turn.
+	 * Send a user message through the prompt flow.
 	 *
-	 * @param content User message content (string or content array)
-	 * @param options.deliverAs Delivery mode: "steer" or "followUp"
+	 * Omitted `deliverAs` starts a turn when idle and queues as a steer while streaming.
+	 * Explicit `deliverAs` queues without starting a turn in either state.
 	 */
 	async sendUserMessage(
 		content: string | (TextContent | ImageContent)[],
@@ -8377,10 +8377,13 @@ export class AgentSession {
 			return;
 		}
 
-		// Use prompt() with expandPromptTemplates: false to skip command handling and template expansion
+		// Use prompt() with expandPromptTemplates: false to skip command handling and template expansion.
+		// `streamingBehavior: "steer"` preserves prompt-flow side effects during streaming while
+		// covering the narrow race where a stream starts before prompt() acquires the turn.
 		await this.prompt(text, {
 			expandPromptTemplates: false,
 			images,
+			streamingBehavior: "steer",
 		});
 	}
 

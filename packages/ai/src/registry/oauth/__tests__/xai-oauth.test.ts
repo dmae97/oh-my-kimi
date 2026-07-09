@@ -69,6 +69,61 @@ describe("XAIOAuthFlow", () => {
 
 		expect(flow.redirectUri).toBe("http://127.0.0.1:56121/callback");
 	});
+
+	it("uses pasted-code login without starting a callback server", async () => {
+		const serveSpy = vi.spyOn(Bun, "serve").mockImplementation(() => {
+			throw new Error("callback server should not start");
+		});
+		let authUrl = "";
+		let tokenRequestBody = "";
+		const progress: string[] = [];
+		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+			if (url.includes("/.well-known/openid-configuration")) {
+				return new Response(
+					JSON.stringify({
+						authorization_endpoint: "https://auth.x.ai/oauth/authorize",
+						token_endpoint: "https://auth.x.ai/oauth/token",
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			tokenRequestBody = init?.body instanceof URLSearchParams ? init.body.toString() : String(init?.body ?? "");
+			return new Response(
+				JSON.stringify({
+					access_token: "access-token",
+					refresh_token: "refresh-token",
+					expires_in: 3600,
+				}),
+				{ status: 200, headers: { "Content-Type": "application/json" } },
+			);
+		});
+
+		const flow = new XAIOAuthFlow({
+			fetch: fetchMock as unknown as typeof fetch,
+			onAuth: info => {
+				authUrl = info.url;
+			},
+			onManualCodeInput: async () => {
+				const parsed = new URL(authUrl);
+				const redirectUri = parsed.searchParams.get("redirect_uri") ?? "";
+				const state = parsed.searchParams.get("state") ?? "";
+				return `${redirectUri}?code=code-xyz&state=${encodeURIComponent(state)}`;
+			},
+			onProgress: message => progress.push(message),
+		});
+
+		const credentials = await flow.login();
+		const authorizeUrl = new URL(authUrl);
+		const tokenParams = new URLSearchParams(tokenRequestBody);
+
+		expect(serveSpy).not.toHaveBeenCalled();
+		expect(authorizeUrl.searchParams.get("redirect_uri")).toBe("http://127.0.0.1:56121/callback");
+		expect(progress).toContain("Waiting for pasted authorization code...");
+		expect(tokenParams.get("code")).toBe("code-xyz");
+		expect(credentials.access).toBe("access-token");
+		expect(credentials.refresh).toBe("refresh-token");
+	});
 });
 
 describe("XAIOAuthFlow.exchangeToken", () => {

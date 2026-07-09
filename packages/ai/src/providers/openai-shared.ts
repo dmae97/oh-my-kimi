@@ -695,13 +695,19 @@ export interface OpenAICompatPolicy {
 	};
 }
 
-function mapOpenAIReasoningEffort(
+/**
+ * Map a user-facing effort to the provider wire value: explicit compat
+ * override first, then the model's baked `thinking.effortMap`, else identity.
+ * Shared by the chat-completions/Responses policy resolver and the Codex
+ * request transformer.
+ */
+export function mapOpenAIReasoningEffort(
 	model: Pick<Model, "thinking">,
-	compat: OpenAICompatPolicyCompat,
+	compat: { reasoningEffortMap?: Partial<Record<Effort, string>> } | undefined,
 	effort: string,
 ): string {
 	const level = effort as Effort;
-	return compat.reasoningEffortMap?.[level] ?? model.thinking?.effortMap?.[level] ?? effort;
+	return compat?.reasoningEffortMap?.[level] ?? model.thinking?.effortMap?.[level] ?? effort;
 }
 
 function isImplicitDisableWhenNotRequested(disableMode: OpenAIReasoningDisableMode): boolean {
@@ -1684,6 +1690,14 @@ export function appendReasoningSummaryPart(
 	item.summary.push(part);
 }
 
+/** Chooses the final reasoning text without discarding content already streamed into the block. */
+export function finalizeReasoningThinking(item: ResponseReasoningItem, streamedThinking: string): string {
+	const summaryThinking = item.summary?.map(part => part.text).join("\n\n") ?? "";
+	if (summaryThinking) return summaryThinking;
+	const contentThinking = item.content?.[0]?.type === "reasoning_text" ? (item.content[0].text ?? "") : "";
+	return contentThinking || streamedThinking || "";
+}
+
 export function appendReasoningSummaryTextDelta(
 	item: ResponseReasoningItem,
 	block: ThinkingContent,
@@ -2208,12 +2222,6 @@ export async function processResponsesStream<TApi extends Api>(
 					? lookupOpenItem({ output_index: event.output_index, item_id: item.id ?? item.call_id })
 					: lookupOpenItem({ output_index: event.output_index, item_id: item.id });
 			if (item.type === "reasoning") {
-				const thinking =
-					item.summary?.length > 0
-						? item.summary.map(part => part.text).join("\n\n")
-						: item.content?.[0]?.type === "reasoning_text"
-							? (item.content[0].text ?? "")
-							: "";
 				// Prefer the routed entry; the bare itemId find misroutes when ids are
 				// absent (`undefined === undefined` matches the FIRST thinking block) and
 				// misses entirely when the done-event id drifts from the added-event id.
@@ -2224,12 +2232,12 @@ export async function processResponsesStream<TApi extends Api>(
 								| ThinkingContent
 								| undefined);
 				if (reasoningBlock) {
-					reasoningBlock.thinking = thinking;
+					reasoningBlock.thinking = finalizeReasoningThinking(item, reasoningBlock.thinking);
 					reasoningBlock.thinkingSignature = JSON.stringify(item);
 					stream.push({
 						type: "thinking_end",
 						contentIndex: contentIndexOf(reasoningBlock),
-						content: thinking,
+						content: reasoningBlock.thinking,
 						partial: output,
 					});
 				}

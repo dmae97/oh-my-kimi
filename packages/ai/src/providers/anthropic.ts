@@ -1463,6 +1463,16 @@ async function* observeDecodedAnthropicSdkEvents(
 const PROVIDER_MAX_RETRIES = 10;
 
 /**
+ * How long `ping` keepalives may keep extending the idle deadline without any
+ * semantic stream progress, as a multiple of the idle timeout. Anthropic pings
+ * across legitimate generation gaps, so pings count as liveness — but a wedged
+ * upstream that pings forever while producing no events must eventually trip
+ * the idle watchdog instead of hanging an active tool-call stream without a
+ * recovery path (#4900).
+ */
+const PING_PROGRESS_MAX_IDLE_MULTIPLIER = 3;
+
+/**
  * Log a malformed-stream-envelope anomaly without aborting the turn. The strict
  * parser would `throw new AnthropicStreamEnvelopeError(...)` here; we instead
  * surface a warning and let the caller skip the offending event (or finalize what
@@ -2007,11 +2017,20 @@ const streamAnthropicOnce = (
 						}
 					>();
 
-					// Pings keep the idle deadline alive once content is flowing, but a
-					// ping before message_start must not consume the first-event watchdog:
-					// it would flip the (retryable) pre-content stall classification into
-					// a terminal mid-stream idle timeout.
+					// Pings keep the idle deadline alive once content is flowing (Anthropic
+					// bridges legitimate generation gaps with keepalives), but only within a
+					// bounded window: a wedged upstream that pings forever while the model
+					// produces nothing must still trip the idle watchdog, otherwise an
+					// active tool-call stream hangs unrecoverably with no retry (#4900).
+					// A ping before message_start must not consume the first-event watchdog
+					// either: it would flip the (retryable) pre-content stall classification
+					// into a terminal mid-stream idle timeout.
 					let sawNonPingEvent = false;
+					let lastNonPingProgressAtMs = 0;
+					const pingProgressCapMs =
+						idleTimeoutMs !== undefined && idleTimeoutMs > 0
+							? idleTimeoutMs * PING_PROGRESS_MAX_IDLE_MULTIPLIER
+							: undefined;
 					const timedAnthropicStream = iterateWithIdleTimeout(anthropicStream, {
 						idleTimeoutMs,
 						firstItemTimeoutMs: firstEventTimeoutMs,
@@ -2021,8 +2040,13 @@ const streamAnthropicOnce = (
 						onFirstItemTimeout: () => activeAbortTracker.abortLocally(firstEventTimeoutAbortError),
 						abortSignal: options?.signal,
 						isProgressItem: item => {
-							if ((item as AnthropicStreamEvent).type === "ping") return sawNonPingEvent;
+							if ((item as AnthropicStreamEvent).type === "ping") {
+								if (!sawNonPingEvent) return false;
+								if (pingProgressCapMs === undefined) return true;
+								return Date.now() - lastNonPingProgressAtMs < pingProgressCapMs;
+							}
 							sawNonPingEvent = true;
+							lastNonPingProgressAtMs = Date.now();
 							return true;
 						},
 					});

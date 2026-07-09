@@ -269,6 +269,16 @@ function abortViewSession(ctx: InteractiveModeContext): AbortViewSession {
 	// so property access is explicit.
 	return ctx.viewSession as unknown as AbortViewSession;
 }
+
+type MutableSessionState = InteractiveModeContext["session"] & {
+	isStreaming: boolean;
+};
+
+function mutableSessionState(ctx: InteractiveModeContext): MutableSessionState {
+	// Test harness installs a mutable fake AgentSession; keep the unchecked cast named
+	// so state mutations are explicit.
+	return ctx.session as MutableSessionState;
+}
 beforeEach(async () => {
 	await Settings.init({ inMemory: true });
 });
@@ -438,111 +448,37 @@ describe("InputController escape behavior", () => {
 		expect(spies.abort).not.toHaveBeenCalled();
 	});
 
-	it("requires a second Esc within two seconds to abort streaming", () => {
-		const now = vi.spyOn(Date, "now");
-		now.mockReturnValue(1_000);
+	it("aborts an active streaming turn on the first Esc without asking for confirmation", () => {
 		const { ctx, editor, spies } = createContext();
-		(ctx.session as { isStreaming: boolean }).isStreaming = true;
+		mutableSessionState(ctx).isStreaming = true;
 		const controller = new InputController(ctx);
 
 		controller.setupKeyHandlers();
+		editor.onEscape?.();
+
+		expect(spies.abort).toHaveBeenCalledTimes(1);
+		expect(spies.abort).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL });
+		expect(spies.showStatus).not.toHaveBeenCalledWith("Press Esc again within 2s to cancel streaming.");
+	});
+
+	it("aborts the submitted turn on the first Esc once the main session starts streaming", async () => {
+		const { ctx, editor, spies } = createContext();
+		const submission = createSubmission({ text: "fix issue #4921" });
+		spies.startPendingSubmission.mockReturnValue(submission);
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		controller.setupEditorSubmitHandler();
+		await editor.onSubmit?.("fix issue #4921");
+		mutableSessionState(ctx).isStreaming = true;
+		ctx.loadingAnimation = undefined;
+
 		editor.onEscape?.();
 
 		expect(spies.cancelPendingSubmission).not.toHaveBeenCalled();
-		expect(spies.clearQueue).not.toHaveBeenCalled();
-		expect(spies.abort).not.toHaveBeenCalled();
-		expect(spies.showStatus).toHaveBeenCalledWith("Press Esc again within 2s to cancel streaming.");
-
-		now.mockReturnValue(2_500);
-		editor.onEscape?.();
-
 		expect(spies.abort).toHaveBeenCalledTimes(1);
 		expect(spies.abort).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL });
-	});
-
-	it("expires the streaming Esc arm instead of aborting on a late second press", () => {
-		const now = vi.spyOn(Date, "now");
-		now.mockReturnValue(1_000);
-		const { ctx, editor, spies } = createContext();
-		(ctx.session as { isStreaming: boolean }).isStreaming = true;
-		const controller = new InputController(ctx);
-
-		controller.setupKeyHandlers();
-		editor.onEscape?.();
-		now.mockReturnValue(3_001);
-		editor.onEscape?.();
-
-		expect(spies.abort).not.toHaveBeenCalled();
-		expect(spies.showStatus).toHaveBeenCalledTimes(2);
-	});
-
-	it("preserves the streaming Esc arm when streamingComponent appears between presses", () => {
-		// Pre-`message_start`: first Esc arms on the per-turn sentinel. `message_start`
-		// then publishes `ctx.streamingComponent`; the second Esc must still abort the
-		// same live turn instead of re-arming on the new component reference.
-		const now = vi.spyOn(Date, "now");
-		now.mockReturnValue(1_000);
-		const { ctx, editor, spies } = createContext();
-		(ctx.session as { isStreaming: boolean }).isStreaming = true;
-		const controller = new InputController(ctx);
-
-		controller.setupKeyHandlers();
-		editor.onEscape?.();
-		(ctx as unknown as { streamingComponent: object }).streamingComponent = {};
-		now.mockReturnValue(1_500);
-		editor.onEscape?.();
-
-		expect(spies.abort).toHaveBeenCalledTimes(1);
-		expect(spies.abort).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL });
-	});
-
-	it("aborts on the second Esc even when ctx.streamingMessage was replaced by a delta in between", () => {
-		// `EventController` replaces `ctx.streamingMessage` with a fresh immutable
-		// snapshot on every `message_update`; the per-turn sentinel is unaffected so
-		// swapping the message must not invalidate the armed token.
-		const now = vi.spyOn(Date, "now");
-		now.mockReturnValue(1_000);
-		const { ctx, editor, spies } = createContext();
-		(ctx.session as { isStreaming: boolean }).isStreaming = true;
-		(ctx as unknown as { streamingComponent: object }).streamingComponent = {};
-		(ctx as unknown as { streamingMessage: object }).streamingMessage = { content: [] };
-		const controller = new InputController(ctx);
-
-		controller.setupKeyHandlers();
-		editor.onEscape?.();
-		(ctx as unknown as { streamingMessage: object }).streamingMessage = { content: ["delta"] };
-		now.mockReturnValue(1_500);
-		editor.onEscape?.();
-
-		expect(spies.abort).toHaveBeenCalledTimes(1);
-		expect(spies.abort).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL });
-	});
-
-	it("clears the streaming Esc arm when the current turn ends", () => {
-		const now = vi.spyOn(Date, "now");
-		now.mockReturnValue(1_000);
-		const { ctx, editor, spies, sessionListeners } = createContext();
-		(ctx.session as { isStreaming: boolean }).isStreaming = true;
-		const controller = new InputController(ctx);
-
-		controller.setupKeyHandlers();
-		// Fallback arm (no streamingMessage/streamingComponent yet — pre-message_start).
-		editor.onEscape?.();
-		expect(sessionListeners).toHaveLength(1);
-
-		// Turn 1 ends; a new turn starts. session.subscribe receives both transitions,
-		// either of which must invalidate the still-armed fallback token so it cannot
-		// fast-abort the new turn's first Esc.
-		for (const listener of sessionListeners) {
-			listener({ type: "agent_end" });
-			listener({ type: "agent_start" });
-		}
-
-		now.mockReturnValue(1_500);
-		editor.onEscape?.();
-
-		expect(spies.abort).not.toHaveBeenCalled();
-		expect(spies.showStatus).toHaveBeenCalledTimes(2);
+		expect(spies.showStatus).not.toHaveBeenCalledWith("Press Esc again within 2s to cancel streaming.");
 	});
 
 	it("returns focused subagent view to main on Esc instead of aborting", () => {

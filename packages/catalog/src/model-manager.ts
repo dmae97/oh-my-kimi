@@ -35,7 +35,7 @@ export interface ModelManagerOptions<TApi extends Api = Api, TModelsDevPayload =
 	cacheDbPath?: string;
 	/** Optional provider id override for cache namespacing. Defaults to providerId. */
 	cacheProviderId?: string;
-	/** Maximum cache age in milliseconds before considered stale. Default: 24h. */
+	/** Maximum cache age in milliseconds before considered stale. Default: 2h (`DEFAULT_CACHE_TTL_MS`). */
 	cacheTtlMs?: number;
 	/** When true, a successful dynamic fetch is the complete provider catalog and prunes static-only models. */
 	dynamicModelsAuthoritative?: boolean;

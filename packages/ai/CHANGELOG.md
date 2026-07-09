@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [16.3.14] - 2026-07-09
+
+### Changed
+
+- Updated Codex reasoning effort mapping to support shifted wire tiers for newer models
+
+### Fixed
+
+- Fixed the Codex Responses request transformer bypassing catalog/compat reasoning effort maps: the clamped user effort is now remapped to the provider wire tier (GPT-5.6's shifted five-tier scale sends `max` for user `xhigh` and `xhigh` for `high`), failing loudly if a map produces a value outside the Codex wire vocabulary.
+
+## [16.3.13] - 2026-07-09
+
+### Changed
+
+- Changed the xAI Grok OAuth (`xai-oauth`) provider to use manual code-paste login by default. `/login` now accepts a pasted authorization code or full `http://127.0.0.1:56121/callback?code=...` redirect URL without starting a local callback listener ([#3277](https://github.com/can1357/oh-my-pi/pull/3277) by [@Jaaneek](https://github.com/Jaaneek)).
+- Renamed the xAI Grok OAuth provider in login and credential prompts to "xAI Grok OAuth (SuperGrok or X Premium+)" ([#3277](https://github.com/can1357/oh-my-pi/pull/3277) by [@Jaaneek](https://github.com/Jaaneek)).
+
+### Fixed
+
+- Fixed the generic lazy-stream idle watchdog aborting healthy `cursor-agent` streams with "Provider stream stalled while waiting for the next event" while a Cursor exec-channel local tool (shell/read/grep/write/MCP/…) legitimately ran longer than the idle budget. Provider streams now advertise consumer-side local work in flight and the watchdog slides its deadline instead of aborting; genuinely silent streams still time out. ([#4593](https://github.com/can1357/oh-my-pi/issues/4593))
+- Fixed OpenAI Codex/Responses reasoning streams so streamed thinking content is preserved when the final `output_item.done` reconstructs to an empty summary ([#4918](https://github.com/can1357/oh-my-pi/issues/4918)).
+- Fixed Anthropic streams hanging forever when generation wedges mid-stream (notably long `write` tool calls on Opus 4.8 high/xhigh) while the server keeps sending `ping` keepalives: pings now extend the idle watchdog only within a bounded window (3x the idle timeout) since the last real stream event, so a stalled tool-call stream times out and recovers instead of hanging with no retry path ([#4900](https://github.com/can1357/oh-my-pi/issues/4900)).
+
 ## [16.3.12] - 2026-07-08
 
 ### Added
