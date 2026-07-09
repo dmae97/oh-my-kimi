@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.13] - 2026-07-09
+
 ### Fixed
 
 - Fixed `read` and `grep` treating empty optional `selector` fields emitted by models as invalid selectors instead of behaving like omitted selectors. ([#4879](https://github.com/can1357/oh-my-pi/issues/4879))

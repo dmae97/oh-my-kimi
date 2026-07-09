@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.13] - 2026-07-09
+
 ### Added
 
 - Added support for Grok 4.5 across multiple providers

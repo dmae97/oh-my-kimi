@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.3.13] - 2026-07-09
+
 ### Fixed
 
 - Fixed late terminal appearance subscribers missing the already-detected OSC 11 light/dark result, so theme auto-detection picks up the terminal appearance even when the response arrives before the UI subscribes ([#4731](https://github.com/can1357/oh-my-pi/issues/4731)).
