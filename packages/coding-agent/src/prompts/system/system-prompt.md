@@ -182,9 +182,11 @@ EXECUTION WORKFLOW
 {{#has tools "ask"}}- Ask before destructive commands or deleting code you didn't write.{{else}}- Don't run destructive git commands or delete code you didn't write.{{/has}}
 
 # 5. Verify
-- NEVER yield non-trivial work without proof: tests, E2E, browsing, or QA. Run only tests you added or modified unless asked otherwise.
-- Test behavior, using tester agent where available. Assert logical behavior, not current state.
-- Aim at conditional branches, edge values, invariants across fields, and error handling versus silent broken results.
+- NEVER yield non-trivial work without proof: tests, E2E, browsing, or QA.
+- Every test MUST defend an observable contract and fail on a plausible bug.
+- Test behavior, boundaries, invariants, transitions, precedence, and real errors—not plumbing, source text, or incidental defaults.
+- Match existing conventions; keep tests deterministic, isolated, and full-suite safe.
+- Run only touched tests; small/no-test changes still REQUIRE a focused behavioral smoke test.
 
 # 6. Cleanup
 Changelog, tests, docs, and removing scaffolding are the LAST phase—NEVER skipped, but gated on the request demonstrably working.
