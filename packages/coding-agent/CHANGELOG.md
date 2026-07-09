@@ -13,6 +13,8 @@
 - Built-in provider model discovery now refreshes an expired stored OAuth credential before an online refresh needs it, instead of silently skipping the provider. The refresh is scoped to the providers actually being discovered (`refreshProvider` cannot rotate unrelated credentials), fires under `online-if-uncached` only when the model manager will actually fetch, and offline discovery stays peek-only ([#4893](https://github.com/can1357/oh-my-pi/issues/4893)).
 - Fixed Escape during an active TUI prompt requiring a second press before canceling; the first Escape now aborts the streaming turn immediately. ([#4921](https://github.com/can1357/oh-my-pi/issues/4921))
 - Fixed the streamed `write` tool's collapsed pending tail preview leaving stale rows above the first partial-result frame in the TUI; the first result now replays the viewport like the SSH placeholder seam already did ([#4477](https://github.com/can1357/oh-my-pi/issues/4477))
+- Fixed first-run setup ignoring a pre-seeded `config.yaml`: the settings loader now treats `config.yml` and `config.yaml` as equivalent existing main config files, writes back to the existing extension, and only creates canonical `config.yml` for fresh installs. ([#4914](https://github.com/can1357/oh-my-pi/issues/4914))
+- Fixed extension `sendUserMessage()` without `deliverAs` surfacing `AgentBusyError` during active streams; omitted `deliverAs` now queues a steer through the normal prompt flow, and ACP/RPC skill-command prompts queue while streaming (RPC honors the prompt command's `streamingBehavior`, defaulting to steer) ([#4923](https://github.com/can1357/oh-my-pi/issues/4923)).
 
 ## [16.3.12] - 2026-07-08
 
@@ -26,9 +28,6 @@
 
 ### Fixed
 
-- Fixed first-run setup ignoring a pre-seeded `config.yaml`: the settings loader now treats `config.yml` and `config.yaml` as equivalent existing main config files, writes back to the existing extension, and only creates canonical `config.yml` for fresh installs. ([#4914](https://github.com/can1357/oh-my-pi/issues/4914))
-
-- Fixed extension `sendUserMessage()` without `deliverAs` surfacing `AgentBusyError` during active streams; omitted `deliverAs` now queues a steer through the normal prompt flow, and ACP/RPC skill-command prompts queue while streaming (RPC honors the prompt command's `streamingBehavior`, defaulting to steer) ([#4923](https://github.com/can1357/oh-my-pi/issues/4923)).
 - Improved handling of unawaited promises in JS eval cells to prevent process crashes
 - Added warning logs for unhandled rejections originating from finished eval cells
 - Improved advisor robustness by blocking exhausted accounts during consecutive turn failures
