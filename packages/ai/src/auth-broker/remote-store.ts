@@ -732,6 +732,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		this.#cache.set(key, { value, expiresAtSec });
 	}
 
+	/** Drop all cache rows whose keys start with the supplied prefix. */
+	deleteCachePrefix(prefix: string): void {
+		for (const key of this.#cache.keys()) {
+			if (key.startsWith(prefix)) this.#cache.delete(key);
+		}
+	}
+
 	cleanExpiredCache(): void {
 		const nowSec = Math.floor(Date.now() / 1000);
 		for (const [key, entry] of this.#cache) {

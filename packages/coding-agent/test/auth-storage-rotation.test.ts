@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { UsageProvider } from "@oh-my-pi/pi-ai";
+import type { OAuthCredential, UsageProvider } from "@oh-my-pi/pi-ai";
 import * as oauth from "@oh-my-pi/pi-ai/oauth";
-import type { OAuthCredentials } from "@oh-my-pi/pi-ai/oauth/types";
+import type { OAuthCredentials, OAuthProviderId } from "@oh-my-pi/pi-ai/oauth/types";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
@@ -13,6 +13,37 @@ describe("AuthStorage account rotation", () => {
 	let authStorage: AuthStorage;
 	let usageExhausted = false;
 
+	const stickyInvalidationSource = "auth-storage-rotation-issue-4982";
+	const targetProvider = "issue-4982-target" as OAuthProviderId;
+	const unrelatedProvider = "issue-4982-unrelated" as OAuthProviderId;
+	let nextLoginCredential: OAuthCredentials | undefined;
+
+	const findSessionWhereFreshSelectionChanges = async (
+		provider: string,
+		initialCredentials: OAuthCredential[],
+		finalCredentials: OAuthCredential[],
+	): Promise<{ sessionId: string; stickyKey: string; freshKey: string }> => {
+		const control = await AuthStorage.create(path.join(tempDir, `issue-4982-control-${Snowflake.next()}.db`), {
+			usageProviderResolver: () => undefined,
+		});
+		try {
+			await control.set(provider, finalCredentials);
+			await authStorage.set(provider, initialCredentials);
+
+			for (let attempt = 0; attempt < 128; attempt += 1) {
+				const sessionId = `issue-4982-session-${attempt}`;
+				const stickyKey = await authStorage.getApiKey(provider, sessionId);
+				const freshKey = await control.getApiKey(provider, sessionId);
+				if (stickyKey && freshKey && stickyKey !== freshKey) {
+					return { sessionId, stickyKey, freshKey };
+				}
+			}
+		} finally {
+			control.close();
+		}
+
+		throw new Error("expected at least one session whose fresh credential selection changes after login");
+	};
 	const usageProvider: UsageProvider = {
 		id: "openai-codex",
 		async fetchUsage(params) {
@@ -37,6 +68,20 @@ describe("AuthStorage account rotation", () => {
 		tempDir = path.join(os.tmpdir(), `pi-test-auth-rotation-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
 		usageExhausted = false;
+		nextLoginCredential = undefined;
+		for (const provider of [targetProvider, unrelatedProvider]) {
+			oauth.registerOAuthProvider({
+				id: provider,
+				name: provider,
+				sourceId: stickyInvalidationSource,
+				async login() {
+					if (!nextLoginCredential) {
+						throw new Error(`missing queued OAuth credential for ${provider}`);
+					}
+					return nextLoginCredential;
+				},
+			});
+		}
 
 		authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"), {
 			usageProviderResolver: provider => (provider === "openai-codex" ? usageProvider : undefined),
@@ -60,6 +105,7 @@ describe("AuthStorage account rotation", () => {
 
 	afterEach(() => {
 		vi.restoreAllMocks();
+		oauth.unregisterOAuthProviders(stickyInvalidationSource);
 		authStorage.close();
 		if (tempDir && fs.existsSync(tempDir)) {
 			removeSyncWithRetries(tempDir);
@@ -144,5 +190,81 @@ describe("AuthStorage account rotation", () => {
 		const result = await authStorage.markUsageLimitReached("openai-codex", sessionId, { apiKey: failedKey });
 		expect(result.switched).toBe(true);
 		expect(await authStorage.getApiKey("openai-codex", sessionId)).toBe(stickyKey);
+	});
+
+	test("provider login invalidates only that provider's persisted session stickiness", async () => {
+		const targetInitialCredentials: OAuthCredential[] = [
+			{
+				type: "oauth",
+				access: "target-access-a",
+				refresh: "target-refresh-a",
+				expires: Date.now() + 3600_000,
+				accountId: "target-acct-a",
+				email: "target-a@example.com",
+			},
+			{
+				type: "oauth",
+				access: "target-access-b",
+				refresh: "target-refresh-b",
+				expires: Date.now() + 3600_000,
+				accountId: "target-acct-b",
+				email: "target-b@example.com",
+			},
+		];
+		const targetAddedCredential: OAuthCredential = {
+			type: "oauth",
+			access: "target-access-c",
+			refresh: "target-refresh-c",
+			expires: Date.now() + 3600_000,
+			accountId: "target-acct-c",
+			email: "target-c@example.com",
+		};
+		const targetFinalCredentials = [...targetInitialCredentials, targetAddedCredential];
+		const { sessionId, stickyKey, freshKey } = await findSessionWhereFreshSelectionChanges(
+			targetProvider,
+			targetInitialCredentials,
+			targetFinalCredentials,
+		);
+
+		await authStorage.set(unrelatedProvider, [
+			{
+				type: "oauth",
+				access: "unrelated-access-a",
+				refresh: "unrelated-refresh-a",
+				expires: Date.now() + 3600_000,
+				accountId: "unrelated-acct-a",
+				email: "unrelated-a@example.com",
+			},
+			{
+				type: "oauth",
+				access: "unrelated-access-b",
+				refresh: "unrelated-refresh-b",
+				expires: Date.now() + 3600_000,
+				accountId: "unrelated-acct-b",
+				email: "unrelated-b@example.com",
+			},
+		]);
+		const unrelatedSessionId = "issue-4982-unrelated-session";
+		const unrelatedStickyKey = await authStorage.getApiKey(unrelatedProvider, unrelatedSessionId);
+		expect(unrelatedStickyKey).toMatch(/^unrelated-access-/);
+
+		const { type: _type, ...loginCredential } = targetAddedCredential;
+		nextLoginCredential = loginCredential;
+		await authStorage.login(targetProvider, {
+			onAuth: () => {},
+			onPrompt: async () => "",
+		});
+		nextLoginCredential = undefined;
+
+		authStorage.close();
+		authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"), {
+			usageProviderResolver: provider => (provider === "openai-codex" ? usageProvider : undefined),
+		});
+		await authStorage.reload();
+
+		const reloadedTargetKey = await authStorage.getApiKey(targetProvider, sessionId);
+		expect(reloadedTargetKey).toBe(freshKey);
+		expect(reloadedTargetKey).not.toBe(stickyKey);
+		expect(await authStorage.getApiKey(unrelatedProvider, unrelatedSessionId)).toBe(unrelatedStickyKey);
 	});
 });

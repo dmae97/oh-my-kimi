@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed provider credential changes leaving persisted session-sticky OAuth credential mappings active, so existing sessions reselect accounts after login/logout instead of reusing stale `session:sticky:<provider>:<sessionId>` rows. ([#4982](https://github.com/can1357/oh-my-pi/issues/4982))
+
 ## [16.3.15] - 2026-07-09
 
 ### Breaking Changes
