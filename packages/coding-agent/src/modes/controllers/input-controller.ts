@@ -154,7 +154,6 @@ const TINY_TITLE_PROGRESS_REVEAL_DELAY_MS = 1_000;
 // deliberate human double-tap is always tens of milliseconds apart.
 const LEFT_DOUBLE_TAP_MIN_GAP_MS = 40;
 const LEFT_DOUBLE_TAP_MAX_GAP_MS = 500;
-const STREAMING_ESCAPE_CANCEL_WINDOW_MS = 2_000;
 
 export class InputController {
 	constructor(
@@ -179,16 +178,6 @@ export class InputController {
 	// (>= LEFT_DOUBLE_TAP_MAX_GAP_MS) starts a fresh sequence. See
 	// #detectLeftDoubleTap.
 	#leftTapCount = 0;
-	// Streaming turns use a two-step Esc: first press arms this token, second press
-	// within the window aborts the same live assistant turn. The token is a per-turn
-	// sentinel minted lazily on demand and reset on every `agent_start`/`agent_end`
-	// (see setupKeyHandlers), so it survives `message_start`/`message_update`
-	// transitions inside a single turn but cannot leak across turn boundaries.
-	#streamingEscapeTurnSentinel: object | undefined;
-	#streamingEscapeArmedToken: object | undefined;
-	#streamingEscapeArmedUntil = 0;
-	#streamingEscapeTimer: NodeJS.Timeout | undefined;
-	#streamingEscapeSessionSubscribed = false;
 	// Sequential index for `local://attachment-N` references created by large-paste and
 	// pasted-file attachments. Seeded from 0 and bumped past existing attachment files.
 	#attachmentCounter = 0;
@@ -238,50 +227,12 @@ export class InputController {
 		const unsubscribe = tinyTitleClient.onProgress(update);
 	}
 
-	#clearStreamingEscapeArm(): void {
-		this.#streamingEscapeArmedToken = undefined;
-		this.#streamingEscapeArmedUntil = 0;
-		if (this.#streamingEscapeTimer) {
-			clearTimeout(this.#streamingEscapeTimer);
-			this.#streamingEscapeTimer = undefined;
-		}
-	}
-
-	#handleStreamingEscape(): void {
-		if (!this.#streamingEscapeTurnSentinel) {
-			this.#streamingEscapeTurnSentinel = {};
-		}
-		const token = this.#streamingEscapeTurnSentinel;
-		const now = Date.now();
-		if (this.#streamingEscapeArmedToken === token && now <= this.#streamingEscapeArmedUntil) {
-			this.#clearStreamingEscapeArm();
-			void this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
-			return;
-		}
-
-		this.#clearStreamingEscapeArm();
-		this.#streamingEscapeArmedToken = token;
-		this.#streamingEscapeArmedUntil = now + STREAMING_ESCAPE_CANCEL_WINDOW_MS;
-		this.#streamingEscapeTimer = setTimeout(() => {
-			if (this.#streamingEscapeArmedToken === token && Date.now() >= this.#streamingEscapeArmedUntil) {
-				this.#clearStreamingEscapeArm();
-			}
-		}, STREAMING_ESCAPE_CANCEL_WINDOW_MS);
-		this.#streamingEscapeTimer.unref?.();
-		this.ctx.showStatus("Press Esc again within 2s to cancel streaming.");
+	#abortStreamingTurn(): void {
+		void this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
 	}
 
 	setupKeyHandlers(): void {
 		this.ctx.editor.setActionKeys("app.interrupt", this.ctx.keybindings.getKeys("app.interrupt"));
-		if (!this.#streamingEscapeSessionSubscribed && typeof this.ctx.session.subscribe === "function") {
-			this.#streamingEscapeSessionSubscribed = true;
-			this.ctx.session.subscribe(event => {
-				if (event.type === "agent_start" || event.type === "agent_end") {
-					this.#streamingEscapeTurnSentinel = undefined;
-					this.#clearStreamingEscapeArm();
-				}
-			});
-		}
 		if (!this.#focusedLeftTapListenerInstalled) {
 			this.#focusedLeftTapListenerInstalled = true;
 			this.ctx.ui.addInputListener(data => {
@@ -351,7 +302,7 @@ export class InputController {
 			if (this.ctx.loopModeEnabled) {
 				this.ctx.pauseLoop();
 				if (this.ctx.session.isStreaming) {
-					this.#handleStreamingEscape();
+					this.#abortStreamingTurn();
 				} else {
 					this.ctx.cancelPendingSubmission();
 				}
@@ -402,11 +353,10 @@ export class InputController {
 				this.ctx.isPythonMode = false;
 				this.ctx.updateEditorBorderColor();
 			} else if (this.ctx.session.isStreaming) {
-				this.#handleStreamingEscape();
+				this.#abortStreamingTurn();
 			} else if (this.ctx.editor.getText().trim()) {
-				// Esc must not destroy an in-progress draft; it only disarms a previous empty-editor Esc.
+				// Esc must not destroy an in-progress draft.
 				this.ctx.lastEscapeTime = 0;
-				this.#clearStreamingEscapeArm();
 			} else if (vocalizer.isSpeaking()) {
 				// TTS buffers seconds of PCM past the streaming abort, so an Esc
 				// arriving after the model stopped would otherwise fall through to
