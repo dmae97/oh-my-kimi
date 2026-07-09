@@ -54,8 +54,8 @@ fn rgba_to_png(buffer: RgbaImage) -> Result<Vec<u8>> {
 /// offset. This matters: the header-less decode path arboard uses mis-places
 /// the pixel offset for V4/V5 headers with `BI_BITFIELDS` compression (it
 /// skips 12 trailing mask bytes that those headers embed instead), which is
-/// why Qt-based screenshot tools (`PixPin`, `Snipaste`, ...) fail through arboard
-/// in the first place (#3426).
+/// why Qt-based screenshot tools (`PixPin`, `Snipaste`, ...) fail through
+/// arboard in the first place (#3426).
 #[cfg_attr(
 	not(windows),
 	allow(
