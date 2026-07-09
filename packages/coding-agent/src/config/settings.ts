@@ -22,6 +22,7 @@ import {
 	getProjectDir,
 	isEnoent,
 	logger,
+	MAIN_CONFIG_FILENAMES,
 	procmgr,
 	setWorktreesDir,
 } from "@oh-my-pi/pi-utils";
@@ -264,7 +265,7 @@ export class Settings {
 	private constructor(options: SettingsOptions = {}) {
 		this.#cwd = path.normalize(options.cwd ?? getProjectDir());
 		this.#agentDir = path.normalize(options.agentDir ?? getAgentDir());
-		this.#configPath = options.inMemory ? null : path.join(this.#agentDir, "config.yml");
+		this.#configPath = options.inMemory ? null : path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]);
 		this.#configFiles = options.configFiles?.map(file => path.resolve(this.#cwd, expandTilde(file))) ?? [];
 		this.#persist = !options.inMemory && options.readOnly !== true;
 
@@ -748,19 +749,15 @@ export class Settings {
 
 	async #loadExistingMainYaml(): Promise<RawSettings | null> {
 		if (!this.#configPath) return null;
-		const ymlPath = path.join(this.#agentDir, "config.yml");
-		const yml = await this.#loadYamlIfPresent(ymlPath);
-		if (yml) {
-			this.#configPath = ymlPath;
-			return yml;
+		for (const filename of MAIN_CONFIG_FILENAMES) {
+			const configPath = path.join(this.#agentDir, filename);
+			const loaded = await this.#loadYamlIfPresent(configPath);
+			if (loaded) {
+				this.#configPath = configPath;
+				return loaded;
+			}
 		}
-		const yamlPath = path.join(this.#agentDir, "config.yaml");
-		const yaml = await this.#loadYamlIfPresent(yamlPath);
-		if (yaml) {
-			this.#configPath = yamlPath;
-			return yaml;
-		}
-		this.#configPath = ymlPath;
+		this.#configPath = path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]);
 		return null;
 	}
 
