@@ -16,6 +16,7 @@ import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ImageContent, Message, Model, Usage, UsageReport } from "@oh-my-pi/pi-ai";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import type {
+	AutocompleteProvider,
 	Component,
 	EditorTheme,
 	LoaderMessageColorFn,
@@ -59,6 +60,7 @@ import { applyProviderGlobalsFromSettings } from "../config/provider-globals";
 import { isSettingsInitialized, onStatusLineSessionAccentChanged, Settings, settings } from "../config/settings";
 import { clearClaudePluginRootsCache } from "../discovery/helpers";
 import type {
+	AutocompleteProviderFactory,
 	ContextUsage,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
@@ -516,6 +518,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	collabGuest?: CollabGuestLink;
 
 	#pendingSlashCommands: SlashCommand[] = [];
+	/** Built-in editor autocomplete provider, before extension wrapping. */
+	#baseAutocompleteProvider: AutocompleteProvider | undefined;
+	/** Extension-registered provider factories, applied in registration order (#4919). */
+	#autocompleteProviderFactories: AutocompleteProviderFactory[] = [];
 	#cleanupUnsubscribe?: () => void;
 	#signalTeardown?: SessionTeardown;
 	readonly #version: string;
@@ -1094,12 +1100,47 @@ export class InteractiveMode implements InteractiveModeContext {
 				// source suffix (e.g. "Review code (project)"), so pass it through verbatim.
 				description: template.description,
 			}));
-		const autocompleteProvider = this.#inputController.createAutocompleteProvider(
+		this.#baseAutocompleteProvider = this.#inputController.createAutocompleteProvider(
 			[...this.#pendingSlashCommands, ...fileSlashCommands, ...promptTemplateCommands],
 			basePath,
 		);
-		this.editor.setAutocompleteProvider(autocompleteProvider);
+		this.#applyAutocompleteProvider();
 		this.session.setSlashCommands(fileCommands);
+	}
+
+	/**
+	 * Rebuild the editor's autocomplete provider: the built-in provider wrapped
+	 * by every extension-registered factory, in registration order. A factory
+	 * that throws or returns a malformed provider is skipped so one broken
+	 * extension cannot take down core autocomplete.
+	 */
+	#applyAutocompleteProvider(): void {
+		const base = this.#baseAutocompleteProvider;
+		if (!base) return;
+		let provider = base;
+		for (const factory of this.#autocompleteProviderFactories) {
+			try {
+				const wrapped = factory(provider);
+				if (
+					wrapped &&
+					typeof wrapped.getSuggestions === "function" &&
+					typeof wrapped.applyCompletion === "function"
+				) {
+					provider = wrapped;
+				} else {
+					logger.warn("Extension autocomplete provider factory returned an invalid provider; skipping it");
+				}
+			} catch (error) {
+				logger.warn("Extension autocomplete provider factory threw; skipping it", { error: String(error) });
+			}
+		}
+		this.editor.setAutocompleteProvider(provider);
+	}
+
+	/** Stack extension autocomplete behavior on top of the built-in editor provider (#4919). */
+	addAutocompleteProvider(factory: AutocompleteProviderFactory): void {
+		this.#autocompleteProviderFactories.push(factory);
+		this.#applyAutocompleteProvider();
 	}
 
 	/**

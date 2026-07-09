@@ -82,6 +82,7 @@ export class ExtensionUiController {
 			getEditorText: () => this.ctx.editor.getText(),
 			editor: (title, prefill, dialogOptions, editorOptions) =>
 				this.showCollabAwareEditor(title, prefill, dialogOptions, editorOptions),
+			addAutocompleteProvider: factory => this.ctx.addAutocompleteProvider(factory),
 			get theme() {
 				return theme;
 			},

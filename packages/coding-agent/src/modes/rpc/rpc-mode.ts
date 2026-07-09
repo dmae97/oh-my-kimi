@@ -759,6 +759,10 @@ export async function runRpcMode(
 			return requestRpcEditor(this.pendingRequests, this.output, title, prefill, dialogOptions, editorOptions);
 		}
 
+		addAutocompleteProvider(): void {
+			// Autocomplete provider composition is not supported in RPC mode
+		}
+
 		get theme(): Theme {
 			return theme;
 		}
