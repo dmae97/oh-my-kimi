@@ -410,16 +410,25 @@ function lineAllowed(lineNumber: number, ranges: readonly LineRange[] | undefine
 	return !ranges || isLineInRanges(lineNumber, ranges);
 }
 
-function lineRangeFetchEnd(pathSpecs: readonly GrepPathSpec[]): number | undefined {
-	let maxEnd = 0;
+/**
+ * Per-file native fetch budget that guarantees the JS range filter can still
+ * surface `perFileKeep` in-range hits. Matches arrive one entry per matched
+ * line in line order, so a bounded range's hits all sit within the first
+ * `endLine` entries, and an open-ended range starting at S is preceded by at
+ * most S-1 out-of-range entries — S-1+perFileKeep entries cover the kept
+ * window or exhaust the file. Clamped to the native file-size ceiling (a
+ * ≤4 MiB file cannot have more matched lines than bytes), which also keeps
+ * the scaled global budget inside the native layer's u32 bounds.
+ */
+function lineRangeFetchCap(pathSpecs: readonly GrepPathSpec[], perFileKeep: number): number {
+	let cap = 0;
 	for (const spec of pathSpecs) {
 		if (!spec.ranges) continue;
 		for (const range of spec.ranges) {
-			if (range.endLine === undefined) return undefined;
-			maxEnd = Math.max(maxEnd, range.endLine);
+			cap = Math.max(cap, range.endLine ?? range.startLine - 1 + perFileKeep);
 		}
 	}
-	return maxEnd;
+	return Math.min(cap, NATIVE_GREP_MAX_FILE_BYTES);
 }
 
 /** Binary search for the index of the line containing byte `offset`. */
@@ -1119,14 +1128,18 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					Boolean(multiTargets) ||
 					(virtualResources.length > 0 && (virtualResources.length > 1 || searchablePaths.length > 0));
 				const perFileMatchCap = isMultiScope ? MULTI_FILE_PER_FILE_MATCHES : SINGLE_FILE_MATCHES;
+				// Range filtering happens in JS after the native fetch, so out-of-range
+				// matches consume fetch budget. Widen the per-file budget just enough
+				// that filtering can still yield `perFileMatchCap` in-range hits, and
+				// scale the global safety ceiling by the same amplification so ranged
+				// searches keep the baseline file coverage while staying finite.
 				const hasLineRangeFilters = pathSpecs.some(spec => spec.ranges);
-				const lineRangeMatchFetchEnd = hasLineRangeFilters ? lineRangeFetchEnd(pathSpecs) : undefined;
-				const nativeMaxCount = hasLineRangeFilters ? undefined : INTERNAL_TOTAL_CAP;
 				const nativeMaxCountPerFile = hasLineRangeFilters
-					? lineRangeMatchFetchEnd === undefined
-						? undefined
-						: Math.max(perFileMatchCap + 1, lineRangeMatchFetchEnd)
+					? Math.max(perFileMatchCap + 1, lineRangeFetchCap(pathSpecs, perFileMatchCap + 1))
 					: perFileMatchCap + 1;
+				const nativeMaxCount = hasLineRangeFilters
+					? Math.ceil(INTERNAL_TOTAL_CAP / (perFileMatchCap + 1)) * nativeMaxCountPerFile
+					: INTERNAL_TOTAL_CAP;
 
 				// Run grep
 				let result: GrepResult = {
@@ -1254,7 +1267,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					}
 					throw err;
 				}
-				result = mergeGrepResults(result, virtualResult, INTERNAL_TOTAL_CAP);
+				result = mergeGrepResults(result, virtualResult, nativeMaxCount);
 				if (rangesByAbsPath.size > 0 || globalRanges) {
 					const filteredMatches: GrepMatch[] = [];
 					for (const match of result.matches) {

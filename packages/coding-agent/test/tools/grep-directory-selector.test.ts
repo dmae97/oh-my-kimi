@@ -75,4 +75,25 @@ describe("grep explicit line selector on directory searches", () => {
 		expect(text).not.toContain("cap-needle line 24");
 		expect(text).not.toContain("cap-needle line 26");
 	});
+
+	it("supports open-ended selectors on directories with a finite fetch budget", async () => {
+		const appDir = path.join(testDir, "scripts", "tail");
+		await fs.mkdir(appDir, { recursive: true });
+		const content = `${Array.from(
+			{ length: 60 },
+			(_, index) => `open-needle line ${String(index + 1).padStart(2, "0")}`,
+		).join("\n")}\n`;
+		await Bun.write(path.join(appDir, "long.ts"), content);
+
+		const result = await new GrepTool(createSession()).execute("grep-directory-selector-open", {
+			pattern: "open-needle",
+			path: "scripts/tail",
+			selector: "35-",
+		});
+
+		const text = resultText(result);
+		expect(text).toContain("open-needle line 35");
+		expect(text).not.toContain("open-needle line 34");
+		expect(text).not.toContain("Line-range selector requires a single file");
+	});
 });
