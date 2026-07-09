@@ -109,13 +109,14 @@ function AssistantBody({
 			case "toolCall": {
 				const act = active.get(block.id);
 				const result = results.get(block.id);
+				const args = act?.args ?? block.arguments;
 				return (
 					<ToolCard
 						key={block.id}
 						toolCallId={block.id}
 						name={block.name}
 						intent={block.intent ?? act?.intent}
-						args={block.arguments}
+						args={args}
 						result={result}
 						host={host}
 						running={!result && (act !== undefined || pending)}

@@ -8,6 +8,9 @@ import type { ActiveTool } from "../src/lib/client";
 const TOOL_CALL_ID = "call-running-tool";
 const TOOL_NAME = "probe_tool";
 
+const RAW_ASSISTANT_TARGET = "stale-raw-assistant-target";
+const ACTIVE_TOOL_TARGET = "effective-active-tool-target";
+
 function assistantUsage(): AssistantMessage["usage"] {
 	return { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 3, cost: { total: 0 } };
 }
@@ -26,7 +29,7 @@ function committedAssistantToolCall(): SessionEntry {
 					type: "toolCall",
 					id: TOOL_CALL_ID,
 					name: TOOL_NAME,
-					arguments: { target: "fixture-input" },
+					arguments: { target: RAW_ASSISTANT_TARGET },
 					intent: "Inspect fixture input",
 				},
 			],
@@ -42,7 +45,7 @@ function activeTool(): ActiveTool {
 	return {
 		toolCallId: TOOL_CALL_ID,
 		toolName: TOOL_NAME,
-		args: { target: "fixture-input" },
+		args: { target: ACTIVE_TOOL_TARGET },
 		intent: "Inspect fixture input",
 		startedAt: 1,
 	};
@@ -88,7 +91,7 @@ function countOccurrences(text: string, needle: string): number {
 }
 
 describe("Transcript live tool rendering", () => {
-	it("renders one running card for a committed tool call without the working shimmer", () => {
+	it("renders one running card for a committed tool call using active args without the working shimmer", () => {
 		const html = renderTranscript({
 			entries: [committedAssistantToolCall()],
 			activeTools: new Map([[TOOL_CALL_ID, activeTool()]]),
@@ -99,6 +102,8 @@ describe("Transcript live tool rendering", () => {
 		expect(countElements(html, '[aria-label="running"]')).toBe(1);
 		expect(countOccurrences(html, TOOL_NAME)).toBe(1);
 		expect(html).not.toContain("thinking…");
+		expect(html).toContain(ACTIVE_TOOL_TARGET);
+		expect(html).not.toContain(RAW_ASSISTANT_TARGET);
 	});
 
 	it("keeps the working shimmer when no tool is active", () => {
