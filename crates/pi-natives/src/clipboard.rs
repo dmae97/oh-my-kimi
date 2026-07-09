@@ -34,7 +34,10 @@ fn encode_png(image: ImageData<'_>) -> Result<Vec<u8>> {
 }
 
 fn rgba_to_png(buffer: RgbaImage) -> Result<Vec<u8>> {
-	let capacity = (buffer.width().saturating_mul(buffer.height()).saturating_mul(4)) as usize;
+	let capacity = (buffer
+		.width()
+		.saturating_mul(buffer.height())
+		.saturating_mul(4)) as usize;
 	let mut output = Vec::with_capacity(capacity);
 	DynamicImage::ImageRgba8(buffer)
 		.write_to(&mut Cursor::new(&mut output), ImageFormat::Png)
@@ -57,7 +60,8 @@ fn rgba_to_png(buffer: RgbaImage) -> Result<Vec<u8>> {
 	not(windows),
 	allow(
 		dead_code,
-		reason = "reached only by the Windows clipboard fallback; kept target-independent so unit tests cover it on every host"
+		reason = "reached only by the Windows clipboard fallback; kept target-independent so unit \
+		          tests cover it on every host"
 	)
 )]
 fn dib_to_png(dib: &[u8]) -> Result<Vec<u8>> {
@@ -80,8 +84,11 @@ fn dib_to_png(dib: &[u8]) -> Result<Vec<u8>> {
 
 	// A plain BITMAPINFOHEADER with BI_BITFIELDS is trailed by three DWORD
 	// masks; larger (V2..V5) headers embed the masks in the header itself.
-	let mask_bytes: u64 =
-		if header_size == INFO_HEADER_SIZE && compression == BI_BITFIELDS { 12 } else { 0 };
+	let mask_bytes: u64 = if header_size == INFO_HEADER_SIZE && compression == BI_BITFIELDS {
+		12
+	} else {
+		0
+	};
 	let palette_entries: u64 = if colors_used != 0 {
 		colors_used
 	} else if bit_count <= 8 {

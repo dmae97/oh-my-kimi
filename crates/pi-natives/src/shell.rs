@@ -411,7 +411,9 @@ mod tests {
 			for i in 0..CHUNKS {
 				let chunk = format!("[{i:06}]{}", "x".repeat(CHUNK_BYTES - 8));
 				expected.push_str(&chunk);
-				tx.send_async(chunk).await.expect("pump should outlive the producer");
+				tx.send_async(chunk)
+					.await
+					.expect("pump should outlive the producer");
 				max_queued = max_queued.max(tx.len());
 			}
 			(expected, max_queued)
