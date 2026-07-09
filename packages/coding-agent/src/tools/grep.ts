@@ -158,11 +158,11 @@ async function parsePathSpecs(
 	cwd: string,
 	explicitSelector?: string,
 ): Promise<GrepPathSpec[]> {
-	const explicitRanges =
-		explicitSelector === undefined || explicitSelector.length === 0 ? undefined : parseLineRanges(explicitSelector);
-	if (explicitSelector !== undefined && !explicitRanges) {
+	const normalizedSelector = explicitSelector?.trim() || undefined;
+	const explicitRanges = normalizedSelector === undefined ? undefined : parseLineRanges(normalizedSelector);
+	if (normalizedSelector !== undefined && !explicitRanges) {
 		throw new ToolError(
-			`selector "${explicitSelector}" is invalid — use line ranges like "50-100", "50+10", or "50-100,200-300" without a leading colon`,
+			`selector "${normalizedSelector}" is invalid — use line ranges like "50-100", "50+10", or "50-100,200-300" without a leading colon`,
 		);
 	}
 	const specs: GrepPathSpec[] = [];

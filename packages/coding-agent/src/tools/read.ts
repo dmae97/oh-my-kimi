@@ -2118,13 +2118,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		_toolContext?: AgentToolContext,
 	): Promise<AgentToolResult<ReadToolDetails>> {
 		let { path: readPath } = params;
-		let explicitSelector = params.selector?.trim();
+		let explicitSelector = params.selector?.trim() || undefined;
 		let explicitParsedSelector = explicitSelector === undefined ? undefined : parseSel(explicitSelector);
-		if (
-			params.selector !== undefined &&
-			(explicitSelector === undefined || explicitSelector.length === 0 || explicitParsedSelector?.kind === "none")
-		) {
-			throw invalidSelector(params.selector);
+		if (explicitSelector !== undefined && explicitParsedSelector?.kind === "none") {
+			throw invalidSelector(explicitSelector);
 		}
 		if (readPath.startsWith("file://")) {
 			readPath = expandPath(readPath);
