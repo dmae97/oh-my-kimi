@@ -2969,6 +2969,7 @@ dependencies = [
  "ast-grep-core",
  "base64",
  "clap",
+ "clipboard-win",
  "flume",
  "fontdue",
  "globset",
