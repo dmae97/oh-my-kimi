@@ -649,13 +649,7 @@ describe("model thinking derivation", () => {
 		});
 
 		expect(devin.thinking?.effortMap).toBeUndefined();
-		expect(devin.thinking?.efforts).toEqual([
-			Effort.Minimal,
-			Effort.Low,
-			Effort.Medium,
-			Effort.High,
-			Effort.XHigh,
-		]);
+		expect(devin.thinking?.efforts).toEqual([Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh]);
 	});
 });
 

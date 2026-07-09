@@ -4,9 +4,10 @@
 
 ### Fixed
 
+- Fixed issue where unfinalized tool blocks could incorrectly pin the live-region scroll seam
+
 - Improved rendering of raw thinking blocks by stripping empty HTML comment noise
 - Fixed display of thinking blocks consisting entirely of hidden comment noise
-
 - Fixed gpt-5.6 reasoning summaries rendering literal `<!-- -->` sentinel lines in thinking blocks; empty HTML comments (and the unterminated `<!--` tail while streaming) are now dropped from the thinking display, and blocks reduced to pure comment noise are hidden entirely.
 
 ## [16.3.13] - 2026-07-09

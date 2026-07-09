@@ -40,6 +40,10 @@ function makeStreamingMessage(content: AssistantMessage["content"]): AssistantMe
 	};
 }
 
+// Components the controller mounts during a dispatch (pending tool previews).
+// Sealed in afterEach so their spinner intervals never outlive the test file.
+const mountedComponents: { seal?(): void }[] = [];
+
 function createFixture(streamingMessage: AssistantMessage) {
 	const markTranscriptBlockFinalized = vi.fn();
 	const streamingComponent = {
@@ -49,14 +53,14 @@ function createFixture(streamingMessage: AssistantMessage) {
 	const ctx = {
 		isInitialized: true,
 		init: vi.fn(async () => {}),
-		ui: { requestRender: vi.fn() },
+		ui: { requestRender: vi.fn(), requestComponentRender: vi.fn() },
 		statusLine: { invalidate: vi.fn() },
 		updateEditorTopBorder: vi.fn(),
 		streamingComponent,
 		streamingMessage,
 		pendingTools: new Map(),
 		noteDisplayableThinkingContent: vi.fn(() => false),
-		chatContainer: { addChild: vi.fn() },
+		chatContainer: { addChild: vi.fn((child: { seal?(): void }) => mountedComponents.push(child)) },
 		toolOutputExpanded: false,
 		settings,
 		session: { getToolByName: () => undefined },
@@ -84,6 +88,7 @@ async function dispatchUpdate(message: AssistantMessage) {
 
 describe("EventController finalizes assistant block when tool-call args stream", () => {
 	afterEach(() => {
+		for (const component of mountedComponents.splice(0)) component.seal?.();
 		resetSettingsForTest();
 		vi.restoreAllMocks();
 	});
