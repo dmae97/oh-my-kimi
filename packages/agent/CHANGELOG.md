@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed aborted tool-result hooks from continuing into another provider call before the abort settled. ([#4963](https://github.com/can1357/oh-my-pi/issues/4963))
+
 ## [16.3.12] - 2026-07-08
 
 ### Added

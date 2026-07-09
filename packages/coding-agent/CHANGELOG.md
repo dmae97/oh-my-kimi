@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed kept-alive task subagents entering a repeated provider-call loop after an IRC wake and terminal `yield`. ([#4963](https://github.com/can1357/oh-my-pi/issues/4963))
+
 ## [16.3.13] - 2026-07-09
 
 ### Fixed

@@ -2222,8 +2222,8 @@ export class AgentSession {
 			this.#maybeAbortStreamingEdit(event);
 			this.#maybeInterruptGeminiHeaderRunaway(message, assistantMessageEvent);
 		});
-		// Per-tool TTSR reminders are folded into the matched tool's result via this hook.
-		this.agent.afterToolCall = ctx => this.#ttsrAfterToolCall(ctx);
+		// Tool-result hook owns synchronous post-tool actions that must affect the current loop.
+		this.agent.afterToolCall = ctx => this.#afterToolCall(ctx);
 		this.agent.providerSessionState = this.#providerSessionState;
 		this.#syncAgentSessionId();
 		this.#syncTodoPhasesFromBranch();
@@ -3671,9 +3671,10 @@ export class AgentSession {
 				this.#planModeReminderAwaitingProgress = false;
 			}
 		}
-		if (event.type === "tool_execution_end" && event.toolName === "yield" && !event.isError) {
+		if (event.type === "tool_execution_end" && this.#isTerminalYieldToolResult(event)) {
 			this.#lastSuccessfulYieldToolCallId = event.toolCallId;
 			this.#yieldTerminationPending = true;
+			this.agent.abort();
 		}
 
 		// TTSR: Check for pattern matches on assistant text/thinking and tool argument deltas
@@ -4416,6 +4417,19 @@ export class AgentSession {
 		if (newlyAdded.length > 0) {
 			this.#ttsrManager?.markInjectedByNames(newlyAdded);
 		}
+	}
+
+	#afterToolCall(ctx: AfterToolCallContext): AfterToolCallResult | undefined {
+		if (
+			this.#isTerminalYieldToolResult({
+				toolName: ctx.toolCall.name,
+				isError: ctx.isError,
+				result: ctx.result,
+			})
+		) {
+			this.agent.abort();
+		}
+		return this.#ttsrAfterToolCall(ctx);
 	}
 
 	/** `afterToolCall` hook: fold any per-tool TTSR reminders into the result. */
@@ -10589,6 +10603,19 @@ export class AgentSession {
 		}
 		return COMPACTION_CHECK_NONE;
 	}
+	#isTerminalYieldToolResult(event: { toolName: string; isError?: boolean; result?: { details?: unknown } }): boolean {
+		if (event.toolName !== "yield" || event.isError) return false;
+		const details = event.result?.details;
+		if (!details || typeof details !== "object") return true;
+		const record = details as Record<string, unknown>;
+		return !(
+			record.status === "success" &&
+			Array.isArray(record.type) &&
+			record.type.length > 0 &&
+			record.type.every(item => typeof item === "string")
+		);
+	}
+
 	#assistantMessageHasSuccessfulYieldToolCall(assistantMessage: AssistantMessage, toolCallId: string): boolean {
 		const lastToolCall = assistantMessage.content
 			.slice()
