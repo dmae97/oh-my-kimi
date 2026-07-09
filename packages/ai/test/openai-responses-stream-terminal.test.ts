@@ -311,6 +311,49 @@ describe("processResponsesStream: lost output_item.added recovery", () => {
 		expect(second.thinkingSignature).toBeDefined();
 	});
 
+	test("preserves streamed reasoning when the done item has no summary text", async () => {
+		const output = makeOutput();
+		const stream = { push: () => {}, end: () => {} } as never;
+
+		await processResponsesStream(
+			makeStream([
+				{
+					type: "response.output_item.added",
+					output_index: 0,
+					item: { type: "reasoning", id: "rs_1", summary: [] },
+				},
+				{
+					type: "response.reasoning_summary_part.added",
+					output_index: 0,
+					item_id: "rs_1",
+					summary_index: 0,
+					part: { type: "summary_text", text: "" },
+				},
+				{
+					type: "response.reasoning_summary_text.delta",
+					output_index: 0,
+					item_id: "rs_1",
+					summary_index: 0,
+					delta: "streamed thinking",
+				},
+				{
+					type: "response.output_item.done",
+					output_index: 0,
+					item: { type: "reasoning", id: "rs_1", summary: [] },
+				},
+				{ type: "response.completed", response: { id: "resp_reasoning", status: "completed" } },
+			]),
+			output,
+			stream,
+			makeModel(),
+		);
+
+		const block = output.content[0];
+		if (block?.type !== "thinking") throw new Error("expected a thinking block");
+		expect(block.thinking).toBe("streamed thinking");
+		expect(block.thinkingSignature).toBeDefined();
+	});
+
 	test("treats content_filter incomplete responses as errors, not length", async () => {
 		const output = makeOutput();
 		const stream = { push: () => {}, end: () => {} } as never;
