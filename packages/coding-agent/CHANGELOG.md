@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed MCP tools receiving session image attachments as raw `local://...` URIs by resolving them to session-local filesystem paths before `tools/call` is sent ([#4946](https://github.com/can1357/oh-my-pi/issues/4946)).
+
 ## [16.3.12] - 2026-07-08
 
 ### Added

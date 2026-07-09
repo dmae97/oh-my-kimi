@@ -15,8 +15,10 @@ import type {
 	CustomToolResult,
 	RenderResultOptions,
 } from "../extensibility/custom-tools/types";
+import { resolveLocalUrlToFile } from "../internal-urls/local-protocol";
 import type { Theme } from "../modes/theme/theme";
 import type { OutputMeta } from "../tools/output-meta";
+import { normalizeLocalScheme } from "../tools/path-utils";
 import { ToolAbortError, throwIfAborted } from "../tools/tool-errors";
 import { callTool } from "./client";
 import { renderMCPCall, renderMCPResult } from "./render";
@@ -104,13 +106,62 @@ function stripHarnessIntent(args: MCPToolArgs, inputSchema: MCPToolDefinition["i
 	return rest;
 }
 
+async function resolveOutboundLocalUrlArgs(
+	value: unknown,
+	context: CustomToolContext,
+	seen: WeakSet<object> = new WeakSet(),
+): Promise<unknown> {
+	if (typeof value === "string") {
+		const normalized = normalizeLocalScheme(value);
+		if (!normalized.startsWith("local://")) return value;
+		const localFile = await resolveLocalUrlToFile(normalized, {
+			cwd: context.sessionManager?.getCwd?.(),
+			settings: context.settings,
+			localProtocolOptions: context.localProtocolOptions,
+		});
+		return localFile?.path ?? value;
+	}
+	if (typeof value !== "object" || value === null) return value;
+	if (seen.has(value)) return value;
+	seen.add(value);
+
+	if (Array.isArray(value)) {
+		let resolved: unknown[] | undefined;
+		for (let index = 0; index < value.length; index++) {
+			const item = value[index];
+			const next = await resolveOutboundLocalUrlArgs(item, context, seen);
+			if (next === item && !resolved) continue;
+			resolved ??= value.slice();
+			resolved[index] = next;
+		}
+		return resolved ?? value;
+	}
+
+	const input = value as Record<string, unknown>;
+	let resolved: Record<string, unknown> | undefined;
+	for (const key in input) {
+		const item = input[key];
+		const next = await resolveOutboundLocalUrlArgs(item, context, seen);
+		if (next === item && !resolved) continue;
+		resolved ??= { ...input };
+		resolved[key] = next;
+	}
+	return resolved ?? value;
+}
+
 /**
  * Normalize raw tool params into the outbound `tools/call` arguments: strip
- * the harness intent field, then drop optional empty placeholders the server
- * declares but doesn't require.
+ * the harness intent field, drop optional empty placeholders the server
+ * declares but doesn't require, then translate session-local files to paths
+ * external MCP servers can read.
  */
-function prepareOutboundArgs(params: unknown, inputSchema: MCPToolDefinition["inputSchema"]): MCPToolArgs {
-	return omitUnusedOptionalArgs(stripHarnessIntent(normalizeToolArgs(params), inputSchema), inputSchema);
+async function prepareOutboundArgs(
+	params: unknown,
+	inputSchema: MCPToolDefinition["inputSchema"],
+	context: CustomToolContext,
+): Promise<MCPToolArgs> {
+	const args = omitUnusedOptionalArgs(stripHarnessIntent(normalizeToolArgs(params), inputSchema), inputSchema);
+	return (await resolveOutboundLocalUrlArgs(args, context)) as MCPToolArgs;
 }
 
 /** Details included in MCP tool results for rendering */
@@ -316,7 +367,7 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 		signal?: AbortSignal,
 	): Promise<CustomToolResult<MCPToolDetails>> {
 		throwIfAborted(signal);
-		const args = prepareOutboundArgs(params, this.tool.inputSchema);
+		const args = await prepareOutboundArgs(params, this.tool.inputSchema, _ctx);
 		const provider = this.connection._source?.provider;
 		const providerName = this.connection._source?.providerName;
 
@@ -415,7 +466,7 @@ export class DeferredMCPTool implements CustomTool<TSchema, MCPToolDetails> {
 		signal?: AbortSignal,
 	): Promise<CustomToolResult<MCPToolDetails>> {
 		throwIfAborted(signal);
-		const args = prepareOutboundArgs(params, this.tool.inputSchema);
+		const args = await prepareOutboundArgs(params, this.tool.inputSchema, _ctx);
 		const provider = this.#fallbackProvider;
 		const providerName = this.#fallbackProviderName;
 

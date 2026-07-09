@@ -6613,6 +6613,8 @@ export class AgentSession {
 			abort: () => {
 				this.agent.abort();
 			},
+			settings: this.settings,
+			localProtocolOptions: this.#localProtocolOptions(),
 		});
 
 		for (const customTool of mcpTools) {
