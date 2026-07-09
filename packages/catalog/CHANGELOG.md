@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Cursor discovery to preserve `GetUsableModels` max-mode metadata for premium models. ([#4797](https://github.com/can1357/oh-my-pi/issues/4797))
+
 ## [16.3.11] - 2026-07-06
 
 ### Added

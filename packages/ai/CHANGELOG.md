@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Cursor `max_mode` requests to send discovered max-mode metadata on both model payload fields. ([#4797](https://github.com/can1357/oh-my-pi/issues/4797))
+
 ## [16.3.11] - 2026-07-06
 
 ### Fixed
