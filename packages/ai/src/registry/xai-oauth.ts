@@ -3,7 +3,7 @@ import type { ProviderDefinition } from "./types";
 
 export const xaiOauthProvider = {
 	id: "xai-oauth",
-	name: "xAI Grok OAuth (SuperGrok Subscription)",
+	name: "xAI Grok OAuth (SuperGrok or X Premium+)",
 	login: async (cb: OAuthLoginCallbacks) => {
 		// Lazy import: keep heavy OAuth flow modules out of the eager registry graph.
 		const { loginXAIOAuth } = await import("./oauth/xai-oauth");
@@ -14,4 +14,5 @@ export const xaiOauthProvider = {
 		const { refreshXAIOAuthToken } = await import("./oauth/xai-oauth");
 		return refreshXAIOAuthToken(credentials.refresh);
 	},
+	pasteCodeFlow: true,
 } as const satisfies ProviderDefinition;

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Changed the xAI Grok OAuth (`xai-oauth`) provider to use manual code-paste login by default. `/login` now accepts a pasted authorization code or full `http://127.0.0.1:56121/callback?code=...` redirect URL without starting a local callback listener ([#3277](https://github.com/can1357/oh-my-pi/pull/3277) by [@Jaaneek](https://github.com/Jaaneek)).
+- Renamed the xAI Grok OAuth provider in login and credential prompts to "xAI Grok OAuth (SuperGrok or X Premium+)" ([#3277](https://github.com/can1357/oh-my-pi/pull/3277) by [@Jaaneek](https://github.com/Jaaneek)).
+
 ## [16.3.12] - 2026-07-08
 
 ### Added

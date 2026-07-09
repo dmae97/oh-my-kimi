@@ -48,6 +48,8 @@ export interface OAuthCallbackFlowOptions {
 	 * an actionable message before opening the browser.
 	 */
 	allowPortFallback?: boolean;
+	/** Skip the local callback server entirely; the user pastes the code or redirect URL back. */
+	manualInputOnly?: boolean;
 }
 
 /**
@@ -60,6 +62,7 @@ export abstract class OAuthCallbackFlow {
 	callbackHostname: string;
 	redirectUri?: string;
 	allowPortFallback: boolean;
+	#manualInputOnly: boolean;
 	#callbackResolve?: (result: CallbackResult) => void;
 	#callbackReject?: (error: string) => void;
 	/**
@@ -82,6 +85,7 @@ export abstract class OAuthCallbackFlow {
 			this.callbackPath = callbackPath;
 			this.callbackHostname = DEFAULT_HOSTNAME;
 			this.allowPortFallback = true;
+			this.#manualInputOnly = false;
 			return;
 		}
 
@@ -90,6 +94,7 @@ export abstract class OAuthCallbackFlow {
 		this.callbackHostname = preferredPortOrOptions.callbackHostname ?? DEFAULT_HOSTNAME;
 		this.redirectUri = preferredPortOrOptions.redirectUri;
 		this.allowPortFallback = preferredPortOrOptions.allowPortFallback ?? true;
+		this.#manualInputOnly = preferredPortOrOptions.manualInputOnly ?? false;
 	}
 
 	/**
@@ -135,8 +140,12 @@ export abstract class OAuthCallbackFlow {
 		const state = this.generateState();
 		this.#throwIfCancelled();
 
-		// Start callback server first to get actual redirect URI
-		const { server, redirectUri, launchUrl } = await this.#startCallbackServer(state);
+		// Start callback server first to get actual redirect URI. Manual-only
+		// flows never bind a server — the advertised redirect URI is fixed and
+		// the user pastes the code/redirect URL back instead.
+		const { server, redirectUri, launchUrl } = this.#manualInputOnly
+			? { server: undefined, redirectUri: this.#buildRedirectUri(), launchUrl: undefined }
+			: await this.#startCallbackServer(state);
 
 		try {
 			this.#throwIfCancelled();
@@ -152,9 +161,12 @@ export abstract class OAuthCallbackFlow {
 
 			// Notify controller that auth is ready
 			this.ctrl.onAuth?.({ url: authUrl, launchUrl, instructions });
-			this.ctrl.onProgress?.("Waiting for browser authentication...");
+			this.ctrl.onProgress?.(
+				this.#manualInputOnly
+					? "Waiting for pasted authorization code..."
+					: "Waiting for browser authentication...",
+			);
 
-			// Wait for callback or manual input
 			const { code } = await this.#waitForCallback(state);
 			this.#throwIfCancelled();
 
@@ -163,8 +175,12 @@ export abstract class OAuthCallbackFlow {
 			return await this.exchangeToken(code, state, redirectUri);
 		} finally {
 			this.#pendingAuthUrl = undefined;
-			server.stop();
+			server?.stop();
 		}
+	}
+
+	#buildRedirectUri(): string {
+		return this.redirectUri ?? `http://${this.callbackHostname}:${this.preferredPort}${this.callbackPath}`;
 	}
 
 	/**
