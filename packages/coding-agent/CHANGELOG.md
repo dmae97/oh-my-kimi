@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `ultrathink`, `orchestrate`, and `workflowz` magic keywords not triggering when adjacent to sentence punctuation or quotes while still ignoring inflections and path/file-extension occurrences. ([#4965](https://github.com/can1357/oh-my-pi/issues/4965))
+
 ## [16.3.13] - 2026-07-09
 
 ### Fixed

@@ -51,20 +51,20 @@ Decompose first, then {{#if taskBatch}}batch the independent leaves{{else}}issue
 
 {{#if taskBatch}}
     task(
-      context: "# Goal\nReview the auth diff...\n# Constraints\nRead-only...\n# Contract\nReturn findings as severity/file/line/fix...",
+      context: "# Goal\nReview the auth diff…\n# Constraints\nRead-only…\n# Contract\nReturn findings as severity/file/line/fix…",
       tasks: [
-        { id: "AuthOwner", role: "Auth Storage Reviewer", assignment: "# Target\npackages/ai/src/auth-storage.ts\n# Change\nTrace credential selection...\n# Acceptance\nReturn confirmed findings only..." },
-        { id: "PromptOwner", role: "Prompt Contract Reviewer", assignment: "# Target\npackages/coding-agent/src/prompts/**\n# Change\nCheck active-tool guidance...\n# Acceptance\nReturn mismatches and exact prompt lines..." },
+        { id: "AuthOwner", role: "Auth Storage Reviewer", assignment: "# Target\npackages/ai/src/auth-storage.ts\n# Change\nTrace credential selection…\n# Acceptance\nReturn confirmed findings only…" },
+        { id: "PromptOwner", role: "Prompt Contract Reviewer", assignment: "# Target\npackages/coding-agent/src/prompts/**\n# Change\nCheck active-tool guidance…\n# Acceptance\nReturn mismatches and exact prompt lines…" },
       ]
     )
 {{else}}
     task(
       role: "Auth Storage Reviewer",
-      assignment: "# Target\npackages/ai/src/auth-storage.ts\n# Change\nReview the auth diff. Shared contract: read-only; return findings as severity/file/line/fix.\n# Acceptance\nReturn confirmed findings only..."
+      assignment: "# Target\npackages/ai/src/auth-storage.ts\n# Change\nReview the auth diff. Shared contract: read-only; return findings as severity/file/line/fix.\n# Acceptance\nReturn confirmed findings only…"
     )
     task(
       role: "Prompt Contract Reviewer",
-      assignment: "# Target\npackages/coding-agent/src/prompts/**\n# Change\nCheck active-tool guidance. Shared contract: read-only; return mismatches and exact prompt lines.\n# Acceptance\nReturn confirmed findings only..."
+      assignment: "# Target\npackages/coding-agent/src/prompts/**\n# Change\nCheck active-tool guidance. Shared contract: read-only; return mismatches and exact prompt lines.\n# Acceptance\nReturn confirmed findings only…"
     )
 {{/if}}
 

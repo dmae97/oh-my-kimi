@@ -1,6 +1,7 @@
 import { prompt } from "@oh-my-pi/pi-utils";
 import workflowNoticeTemplate from "../prompts/system/workflow-notice.md" with { type: "text" };
 import { createGradientHighlighter, type KeywordHighlighter } from "./gradient-highlight";
+import { magicKeywordRegex } from "./magic-keyword-boundary";
 import { keywordInProse } from "./markdown-prose";
 
 /**
@@ -10,13 +11,13 @@ import { keywordInProse } from "./markdown-prose";
  * amber→green gradient ({@link highlightWorkflow}); submitting a message that
  * mentions it appends a hidden workflow notice that steers the model to author
  * a deterministic multi-subagent workflow through the active task schema.
- * Matching is whitespace-delimited and case-sensitive (lowercase only) —
+ * Matching is prose-delimited and case-sensitive (lowercase only) —
  * "workflowz" triggers, but "workflowzed", "Workflowz", and "workflowz.ts"
  * never do.
  */
 
-// Detection: lowercase keyword flanked by whitespace or a string edge. Non-global so `.test` stays stateless.
-const WORKFLOW_WORD = /(?<!\S)workflowz(?!\S)/;
+// Detection: lowercase keyword flanked by prose punctuation, whitespace, or a string edge.
+const WORKFLOW_WORD = magicKeywordRegex("workflowz");
 
 /** WORKFLOW_NOTICE is the default hidden notice for sessions with batched task calls enabled. */
 export const WORKFLOW_NOTICE: string = renderWorkflowNotice({ taskBatch: true });
@@ -28,7 +29,7 @@ export function renderWorkflowNotice({ taskBatch }: { taskBatch: boolean }): str
 
 /**
  * Whether `text` contains the standalone keyword "workflowz"
- * (lowercase, whitespace-delimited) in prose — never inside a code block, inline
+ * (lowercase, prose-delimited) in prose — never inside a code block, inline
  * code span, or XML/HTML section.
  */
 export function containsWorkflow(text: string): boolean {
@@ -42,7 +43,7 @@ export function containsWorkflow(text: string): boolean {
  */
 export const highlightWorkflow: KeywordHighlighter = createGradientHighlighter({
 	probe: /workflowz/,
-	highlight: /(?<!\S)workflowz(?!\S)/g,
+	highlight: magicKeywordRegex("workflowz", "g"),
 	stops: 14,
 	hue: t => 30 + t * 120,
 });
