@@ -31,6 +31,18 @@ describe("resolveStdioSpawnCommand", () => {
 		});
 	});
 
+	it("keeps Darwin stdio MCP servers attached so TCC Apple Events prompts can resolve", async () => {
+		await expect(
+			resolveStdioSpawnCommand(
+				{ command: "xcrun", args: ["mcpbridge"] },
+				{ cwd: process.cwd(), env: {}, platform: "darwin" },
+			),
+		).resolves.toEqual({
+			cmd: ["xcrun", "mcpbridge"],
+			detached: false,
+		});
+	});
+
 	it("detaches off-Windows MCP servers so terminal job-control signals cannot stop them", async () => {
 		await expect(
 			resolveStdioSpawnCommand(

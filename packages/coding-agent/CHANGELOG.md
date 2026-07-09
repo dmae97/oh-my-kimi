@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed macOS stdio MCP servers launching in a detached session, so `xcrun mcpbridge` can trigger the TCC Apple Events permission prompt and complete startup. ([#4987](https://github.com/can1357/oh-my-pi/issues/4987))
+
 ## [16.3.15] - 2026-07-09
 
 ### Changed

@@ -37,12 +37,17 @@ export interface StdioSpawnCommand {
 	 */
 	windowsHide?: boolean;
 	/**
-	 * Run the subprocess in its own session.
+	 * Run the subprocess in its own session when the platform can safely do so.
 	 *
-	 * POSIX: `true`. Detach → `setsid`, so the MCP process tree has no
-	 * controlling terminal and terminal job-control signals (Ctrl+Z SIGTSTP,
+	 * Linux/other POSIX: `true`. Detach → `setsid`, so the MCP process tree has
+	 * no controlling terminal and terminal job-control signals (Ctrl+Z SIGTSTP,
 	 * background-read SIGTTIN) cannot stop stdio servers such as
 	 * `chrome-devtools-mcp` and leave our read loop blocked on silent pipes.
+	 *
+	 * macOS: `false`. LaunchServices/TCC attributes Apple Events automation to
+	 * the responsible terminal process only while the child stays in the
+	 * inherited session; detaching via `setsid` prevents the permission prompt
+	 * for servers such as `xcrun mcpbridge` (#4987).
 	 *
 	 * Windows: `false`. There is no SIGTSTP/SIGTTIN to escape, and Windows
 	 * wrapper chains must stay in the OMP console session so nested console
@@ -247,7 +252,7 @@ export async function resolveStdioSpawnCommand(
 	options: ResolveStdioSpawnOptions,
 ): Promise<StdioSpawnCommand> {
 	const args = config.args ?? [];
-	if (options.platform !== "win32") return { cmd: [config.command, ...args], detached: true };
+	if (options.platform !== "win32") return { cmd: [config.command, ...args], detached: options.platform !== "darwin" };
 
 	const windowsHide = options.hostHasInheritableConsole === undefined ? true : !options.hostHasInheritableConsole;
 	const resolved = await resolveWindowsCommandPath(config.command, options.cwd, options.env);
@@ -366,10 +371,11 @@ export class StdioTransport implements MCPTransport {
 		});
 
 		// Platform-derived session and console-window handling come from
-		// `resolveStdioSpawnCommand`: POSIX detaches into its own session to
-		// escape terminal job-control signals (SIGTSTP, SIGTTIN); Windows stays
-		// attached, and only hides the child when the host has no console to
-		// share. See `StdioSpawnCommand`.
+		// `resolveStdioSpawnCommand`: Linux/other POSIX detach into their own
+		// session to escape terminal job-control signals (SIGTSTP, SIGTTIN);
+		// macOS stays attached so TCC can prompt for Apple Events automation;
+		// Windows stays attached, and only hides the child when the host has no
+		// console to share. See `StdioSpawnCommand`.
 		this.#process = spawn({
 			cmd: spawnCommand.cmd,
 			cwd,

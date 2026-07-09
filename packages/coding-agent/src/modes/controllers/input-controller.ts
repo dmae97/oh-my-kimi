@@ -1024,10 +1024,10 @@ export class InputController {
 			// leaves wrappers and pipeline peers running and the terminal
 			// hung — exactly the failure shape we're fixing. Stopping the whole
 			// group keeps the shell's job-control view consistent. Long-lived
-			// children that must survive the suspend (MCP stdio servers via
-			// the `detached: true` spawn in `mcp/transports/stdio.ts`, every
-			// brush external command via brush's per-child `setsid` in
-			// `crates/vendor/brush-core/src/commands.rs`) are already in
+			// children that must survive the suspend (Linux/other POSIX MCP stdio
+			// servers via the platform-specific `detached: true` spawn in
+			// `mcp/transports/stdio.ts`, every brush external command via brush's
+			// per-child `setsid` in `crates/vendor/brush-core/src/commands.rs`) are
 			// their own sessions, so pgid=0 does not reach them.
 			process.kill(0, "SIGSTOP");
 		} catch (err) {
