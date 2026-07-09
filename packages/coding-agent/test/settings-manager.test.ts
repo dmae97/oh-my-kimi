@@ -87,6 +87,21 @@ describe("Settings", () => {
 			expect(await Bun.file(getConfigPath()).exists()).toBe(false);
 		});
 
+		it("clones the selected config.yaml path for persisted settings", async () => {
+			const yamlConfigPath = path.join(agentDir, "config.yaml");
+			await Bun.write(yamlConfigPath, YAML.stringify({ setupVersion: 1 }, null, 2));
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			const cloned = await settings.cloneForCwd(tempDir.join("other-project"));
+
+			cloned.set("setupVersion", 2);
+			await cloned.flush();
+
+			const savedSettings = YAML.parse(await Bun.file(yamlConfigPath).text()) as Record<string, unknown>;
+			expect(savedSettings.setupVersion).toBe(2);
+			expect(await Bun.file(getConfigPath()).exists()).toBe(false);
+		});
+
 		it("creates config.yml for new persisted settings when no main config exists", async () => {
 			const yamlConfigPath = path.join(agentDir, "config.yaml");
 
