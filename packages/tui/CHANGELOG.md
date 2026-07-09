@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Hid empty HTML comment separators in Markdown-rendered TUI output instead of showing `<!-- -->` literally ([#4911](https://github.com/can1357/oh-my-pi/issues/4911)).
+
 ## [16.3.12] - 2026-07-08
 
 ### Fixed

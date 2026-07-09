@@ -1221,6 +1221,25 @@ bar`,
 			).toBeTruthy();
 		});
 
+		it("should hide standalone empty HTML comments between visible text", () => {
+			const markdown = new Markdown(
+				"Before visible text\n\n<!-- -->\n\nAfter visible text",
+				0,
+				0,
+				defaultMarkdownTheme,
+			);
+
+			const plain = markdown
+				.render(80)
+				.map(line => stripVTControlCharacters(line))
+				.join("\n");
+
+			expect(plain).toContain("Before visible text");
+			expect(plain).toContain("After visible text");
+			expect(plain).not.toContain("<!--");
+			expect(plain).not.toContain("-->");
+		});
+
 		it("should strip inline span and text HTML tags but keep their contents", () => {
 			const markdown = new Markdown("<span></span><text>▃</text>", 0, 0, defaultMarkdownTheme);
 
