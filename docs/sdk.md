@@ -215,8 +215,9 @@ Behavior:
 
 1. optional command/template expansion (`/` commands, custom commands, file slash commands, prompt templates)
 2. if currently streaming:
-   - requires `streamingBehavior: "steer" | "followUp"`
-   - queues instead of throwing work away
+   - `streamingBehavior: "steer" | "followUp"` chooses how `prompt()` queues
+   - extension `sendUserMessage(content)` defaults to steer when `deliverAs` is omitted
+   - queued messages are preserved instead of throwing work away
 3. if idle:
    - validates model + API key
    - appends user message

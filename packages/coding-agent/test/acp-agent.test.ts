@@ -124,6 +124,7 @@ class FakeAgentSession {
 	}
 	promptCalls: string[] = [];
 	customMessages: Array<{ customType: string; content: string; details?: unknown }> = [];
+	customMessageOptions: Array<{ streamingBehavior?: "steer" | "followUp"; queueChipText?: string } | undefined> = [];
 	skillsSettings = { enableSkillCommands: true };
 	skills: Array<{ name: string; description: string; filePath: string; baseDir: string; source: string }> = [];
 	planModeState: PlanModeState | undefined;
@@ -235,8 +236,12 @@ class FakeAgentSession {
 		this.isStreaming = false;
 	}
 
-	async promptCustomMessage(message: { customType: string; content: string; details?: unknown }): Promise<void> {
+	async promptCustomMessage(
+		message: { customType: string; content: string; details?: unknown },
+		options?: { streamingBehavior?: "steer" | "followUp"; queueChipText?: string },
+	): Promise<void> {
 		this.customMessages.push(message);
+		this.customMessageOptions.push(options);
 		this.isStreaming = true;
 		const assistantMessage = makeAssistantMessage("skill pong");
 		for (const listener of this.#listeners) {
@@ -1443,6 +1448,7 @@ describe("ACP agent", () => {
 		expect(customMessage.content).toContain(`[Skill directory: ${skillDir}]`);
 		expect(customMessage.content).toMatch(/[Rr]esolve any relative paths/);
 		expect(customMessage.content).toContain("User: extra context");
+		expect(session.customMessageOptions[0]).toEqual({ streamingBehavior: "steer" });
 
 		harness.abortController.abort();
 		await Bun.sleep(0);
