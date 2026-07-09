@@ -965,6 +965,8 @@ export class AuthStorage {
 	#sessionLastCredential: Map<string, Map<string, { type: AuthCredential["type"]; index: number }>> = new Map();
 	/** Maps provider:type -> credentialIndex -> blockedUntilMs for temporary backoff. */
 	#credentialBackoff: Map<string, Map<number, number>> = new Map();
+	/** Earliest time a freshly-set in-memory block may be cleared by live usage reconciliation. */
+	#credentialBackoffProbeAfter: Map<string, Map<number, number>> = new Map();
 	#usageProviderResolver?: (provider: Provider) => UsageProvider | undefined;
 	#rankingStrategyResolver?: (provider: Provider) => CredentialRankingStrategy | undefined;
 	#usageCache: UsageCache;
@@ -1345,6 +1347,9 @@ export class AuthStorage {
 			if (backoffMap.size === 0) {
 				this.#credentialBackoff.delete(backoffKey);
 			}
+			const probeAfterMap = this.#credentialBackoffProbeAfter.get(backoffKey);
+			probeAfterMap?.delete(credentialIndex);
+			if (probeAfterMap?.size === 0) this.#credentialBackoffProbeAfter.delete(backoffKey);
 			return undefined;
 		}
 		return blockedUntil;
@@ -1437,6 +1442,9 @@ export class AuthStorage {
 		const nextBlockedUntil = Math.max(existing, blockedUntilMs);
 		backoffMap.set(credentialIndex, nextBlockedUntil);
 		this.#credentialBackoff.set(backoffKey, backoffMap);
+		const probeAfterMap = this.#credentialBackoffProbeAfter.get(backoffKey) ?? new Map<number, number>();
+		probeAfterMap.set(credentialIndex, Math.min(nextBlockedUntil, Date.now() + USAGE_REPORT_TTL_MS));
+		this.#credentialBackoffProbeAfter.set(backoffKey, probeAfterMap);
 		this.#invalidateUsageReportCache(provider);
 
 		const upsertCredentialBlock = this.#store.upsertCredentialBlock?.bind(this.#store);
@@ -4385,6 +4393,11 @@ export class AuthStorage {
 			backoffMap.delete(index);
 			if (backoffMap.size === 0) this.#credentialBackoff.delete(key);
 		}
+		for (const [key, probeAfterMap] of this.#credentialBackoffProbeAfter) {
+			if (key !== providerKey && !key.startsWith(scopedPrefix)) continue;
+			probeAfterMap.delete(index);
+			if (probeAfterMap.size === 0) this.#credentialBackoffProbeAfter.delete(key);
+		}
 	}
 
 	/**
@@ -4410,6 +4423,13 @@ export class AuthStorage {
 		const blockScope = this.#rankingStrategyResolver?.(provider)?.blockScope?.({});
 		const blockedUntilMs = this.#getCredentialBlockedUntil(provider, providerKey, credentialIndex, blockScope);
 		if (blockedUntilMs === undefined) return;
+		// `/usage` can lag the request path that just returned 429. Fresh local
+		// blocks get one usage-cache window before healthy reports may clear them.
+		const nowMs = Date.now();
+		const scopedBackoffKey = this.#toScopedBackoffKey(providerKey, blockScope);
+		const globalProbeAfterMs = this.#credentialBackoffProbeAfter.get(providerKey)?.get(credentialIndex) ?? 0;
+		const scopedProbeAfterMs = this.#credentialBackoffProbeAfter.get(scopedBackoffKey)?.get(credentialIndex) ?? 0;
+		if (Math.max(globalProbeAfterMs, scopedProbeAfterMs) > nowMs) return;
 		this.#clearCredentialBlocks(provider, credentialId);
 		logger.info("Cleared stale Codex usage-limit block after healthy live usage report", {
 			credentialId,

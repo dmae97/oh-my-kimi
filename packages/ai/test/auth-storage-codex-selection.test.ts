@@ -551,6 +551,73 @@ describe("AuthStorage codex oauth ranking", () => {
 		expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBe(blockedUntilMs);
 	});
 
+	test("keeps a fresh Codex usage-limit block when selection sees healthy usage", async () => {
+		if (!authStorage || !store?.getCredentialBlock) {
+			throw new Error("test setup failed");
+		}
+
+		await authStorage.set("openai-codex", [
+			{ type: "oauth", ...createCredential("acct-fresh-blocked", "fresh-blocked@example.com") },
+			{ type: "oauth", ...createCredential("acct-fresh-healthy", "fresh-healthy@example.com") },
+		]);
+
+		usageByAccount.set(
+			"acct-fresh-blocked",
+			createCodexUsageReport({
+				accountId: "acct-fresh-blocked",
+				primary: { usedFraction: 0.2, resetInMs: HOUR_MS },
+				secondary: { usedFraction: 0.3, resetInMs: WEEK_MS },
+				metadata: {
+					allowed: true,
+					limitReached: false,
+					planType: "pro",
+					email: "fresh-blocked@example.com",
+					accountId: "acct-fresh-blocked",
+				},
+			}),
+		);
+		usageByAccount.set(
+			"acct-fresh-healthy",
+			createCodexUsageReport({
+				accountId: "acct-fresh-healthy",
+				primary: { usedFraction: 0.2, resetInMs: HOUR_MS },
+				secondary: { usedFraction: 0.3, resetInMs: WEEK_MS },
+				metadata: {
+					allowed: true,
+					limitReached: false,
+					planType: "pro",
+					email: "fresh-healthy@example.com",
+					accountId: "acct-fresh-healthy",
+				},
+			}),
+		);
+
+		const blockedRow = store.listAuthCredentials("openai-codex").find(row => {
+			const credential = row.credential;
+			return credential.type === "oauth" && credential.accountId === "acct-fresh-blocked";
+		});
+		if (!blockedRow) throw new Error("expected blocked credential row");
+
+		let blockedSessionId: string | undefined;
+		for (let index = 0; index < 100; index += 1) {
+			const sessionId = `codex-fresh-block-selected-${index}`;
+			if ((await authStorage.getApiKey("openai-codex", sessionId)) === "api-acct-fresh-blocked") {
+				blockedSessionId = sessionId;
+				break;
+			}
+		}
+		if (!blockedSessionId) throw new Error("expected a session selecting the soon-blocked account");
+
+		const markResult = await authStorage.markUsageLimitReached("openai-codex", blockedSessionId, {
+			retryAfterMs: 6 * 24 * HOUR_MS,
+		});
+
+		expect(markResult.switched).toBe(true);
+		const selectionAfterBlock = await authStorage.getApiKey("openai-codex", blockedSessionId);
+		expect(selectionAfterBlock).not.toBe("api-acct-fresh-blocked");
+		expect(selectionAfterBlock).toBe("api-acct-fresh-healthy");
+		expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeDefined();
+	});
 	test("an older in-flight healthy Codex usage report does not clear a newer usage-limit block", async () => {
 		if (!authStorage || !store?.getCredentialBlock) {
 			throw new Error("test setup failed");
@@ -639,7 +706,7 @@ describe("AuthStorage codex oauth ranking", () => {
 	});
 
 	test("broker-sourced healthy Codex usage clears remote gateway backoff", async () => {
-		if (!authStorage || !store?.getCredentialBlock) {
+		if (!authStorage || !store?.getCredentialBlock || !store.upsertCredentialBlock) {
 			throw new Error("test setup failed");
 		}
 
@@ -679,6 +746,18 @@ describe("AuthStorage codex oauth ranking", () => {
 			}),
 		);
 
+		const staleBlockedRow = store.listAuthCredentials("openai-codex").find(row => {
+			const credential = row.credential;
+			return credential.type === "oauth" && credential.accountId === "acct-broker-blocked";
+		});
+		if (!staleBlockedRow) throw new Error("expected stale blocked credential row");
+		store.upsertCredentialBlock({
+			credentialId: staleBlockedRow.id,
+			providerKey: "openai-codex:oauth",
+			blockScope: "shared",
+			blockedUntilMs: Date.now() + 6 * 24 * HOUR_MS,
+		});
+
 		const token = "codex-broker-reconcile";
 		const handle = startAuthBroker({
 			storage: authStorage,
@@ -688,18 +767,6 @@ describe("AuthStorage codex oauth ranking", () => {
 		});
 		try {
 			const brokerClient = new AuthBrokerClient({ url: handle.url, token });
-			const originalUpsertCredentialBlock = brokerClient.upsertCredentialBlock.bind(brokerClient);
-			const blockPersisted = Promise.withResolvers<void>();
-			vi.spyOn(brokerClient, "upsertCredentialBlock").mockImplementation(async (id, block, signal) => {
-				try {
-					const response = await originalUpsertCredentialBlock(id, block, signal);
-					blockPersisted.resolve();
-					return response;
-				} catch (error) {
-					blockPersisted.reject(error);
-					throw error;
-				}
-			});
 			const initialResult = await brokerClient.fetchSnapshot();
 			if (initialResult.status !== 200) throw new Error("expected broker snapshot");
 			const blockedRow = initialResult.snapshot.credentials.find(entry => {
@@ -715,31 +782,16 @@ describe("AuthStorage codex oauth ranking", () => {
 			const clientStorage = new AuthStorage(remoteStore);
 			await clientStorage.reload();
 			try {
-				let blockedSessionId: string | undefined;
-				for (let index = 0; index < 100; index += 1) {
-					const sessionId = `broker-codex-local-block-${index}`;
-					const apiKey = await clientStorage.getApiKey("openai-codex", sessionId);
-					if (apiKey === "api-acct-broker-blocked") {
-						blockedSessionId = sessionId;
-						break;
-					}
-				}
-				if (!blockedSessionId) throw new Error("expected a session selecting the blocked account");
-
-				const markResult = await clientStorage.markUsageLimitReached("openai-codex", blockedSessionId, {
-					retryAfterMs: 6 * 24 * HOUR_MS,
-				});
-
-				expect(markResult.switched).toBe(true);
 				expect(remoteStore.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeDefined();
-				await blockPersisted.promise;
 				expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeDefined();
 
 				await clientStorage.fetchUsageReports();
 
 				expect(remoteStore.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeUndefined();
 				expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeUndefined();
-				expect(await clientStorage.getApiKey("openai-codex", blockedSessionId)).toBe("api-acct-broker-blocked");
+				expect(await clientStorage.getApiKey("openai-codex", "broker-codex-reconciled")).toBe(
+					"api-acct-broker-blocked",
+				);
 			} finally {
 				clientStorage.close();
 				remoteStore.close();
