@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { AutoLearnController, buildAutoLearnInstructions } from "@oh-my-pi/pi-coding-agent/autolearn/controller";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -52,8 +53,8 @@ class FakeSession {
 		this.emit({ type: "agent_start" });
 	}
 
-	agentEnd(): void {
-		this.emit({ type: "agent_end", messages: [] });
+	agentEnd(messages: AgentMessage[] = []): void {
+		this.emit({ type: "agent_end", messages });
 	}
 }
 
@@ -247,6 +248,20 @@ describe("AutoLearnController", () => {
 		session.toolCalls(2);
 		session.agentEnd();
 		expect(session.sent).toHaveLength(1);
+	});
+
+	it("does not nudge when the turn ended with stopReason aborted", () => {
+		const session = new FakeSession();
+		install(session, { "autolearn.autoContinue": true });
+		session.toolCalls(5);
+		session.agentEnd([
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "partial" }],
+				stopReason: "aborted",
+			} as never,
+		]);
+		expect(session.sent).toHaveLength(0);
 	});
 });
 
