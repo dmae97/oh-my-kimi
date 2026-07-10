@@ -254,14 +254,18 @@ function withAbortTimeout<T>(
 	return wrappedPromise;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	if (!value || typeof value !== "object") return false;
+	return !Array.isArray(value);
+}
+
 function getReportFindingKey(value: unknown): string | null {
-	if (!value || typeof value !== "object") return null;
-	const record = value as Record<string, unknown>;
-	const title = typeof record.title === "string" ? record.title : null;
-	const filePath = typeof record.file_path === "string" ? record.file_path : null;
-	const lineStart = typeof record.line_start === "number" ? record.line_start : null;
-	const lineEnd = typeof record.line_end === "number" ? record.line_end : null;
-	const priority = typeof record.priority === "string" ? record.priority : null;
+	if (!isRecord(value)) return null;
+	const title = typeof value.title === "string" ? value.title : null;
+	const filePath = typeof value.file_path === "string" ? value.file_path : null;
+	const lineStart = typeof value.line_start === "number" ? value.line_start : null;
+	const lineEnd = typeof value.line_end === "number" ? value.line_end : null;
+	const priority = typeof value.priority === "string" ? value.priority : null;
 	if (!title || !filePath || lineStart === null || lineEnd === null) {
 		return null;
 	}
@@ -908,6 +912,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	const abortSignal = abortController.signal;
 	let activeSession: AgentSession | null = null;
 	let yieldCalled = false;
+	let yieldCallPending = false;
 
 	// Accumulate usage incrementally from message_end events (no memory for streaming events)
 	const accumulatedUsage: Usage = {
@@ -1062,17 +1067,17 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	};
 
 	const getMessageContent = (message: unknown): unknown => {
-		if (message && typeof message === "object" && "content" in message) {
-			return (message as { content?: unknown }).content;
+		if (!isRecord(message) || !("content" in message)) {
+			return undefined;
 		}
-		return undefined;
+		return message.content;
 	};
 
 	const getMessageUsage = (message: unknown): unknown => {
-		if (message && typeof message === "object" && "usage" in message) {
-			return (message as { usage?: unknown }).usage;
+		if (!isRecord(message) || !("usage" in message)) {
+			return undefined;
 		}
-		return undefined;
+		return message.usage;
 	};
 
 	const updateRecentOutputLines = () => {
@@ -1136,6 +1141,27 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 		});
 	};
 
+	const recordExtractedToolData = (toolName: string, data: unknown): void => {
+		progress.extractedToolData = progress.extractedToolData || {};
+		const existing = progress.extractedToolData[toolName] || [];
+		const findingKey = toolName === "report_finding" ? getReportFindingKey(data) : null;
+		if (findingKey) {
+			const existingIndex = existing.findIndex(item => getReportFindingKey(item) === findingKey);
+			if (existingIndex >= 0) {
+				existing[existingIndex] = data;
+			} else {
+				existing.push(data);
+			}
+		} else {
+			existing.push(data);
+		}
+		progress.extractedToolData[toolName] = existing;
+		if (toolName === "yield") {
+			yieldCalled = true;
+			yieldCallPending = false;
+		}
+	};
+
 	const processEvent = (event: AgentEvent) => {
 		if (resolved) return;
 		const now = Date.now();
@@ -1151,13 +1177,20 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 			case "tool_execution_start": {
 				progress.toolCount++;
 				progress.currentTool = event.toolName;
-				progress.currentToolArgs = extractToolArgsPreview(
-					(event as { toolArgs?: Record<string, unknown> }).toolArgs || event.args || {},
-				);
+				let startArgs: Record<string, unknown> = {};
+				if ("toolArgs" in event && isRecord(event.toolArgs)) {
+					startArgs = event.toolArgs;
+				} else if (isRecord(event.args)) {
+					startArgs = event.args;
+				}
+				progress.currentToolArgs = extractToolArgsPreview(startArgs);
 				progress.currentToolStartMs = now;
 				const intent = event.intent?.trim();
 				if (intent) {
 					progress.lastIntent = intent;
+				}
+				if (event.toolName === "yield" && !yieldCalled) {
+					yieldCallPending = true;
 				}
 				// Reset any prior in-flight task snapshot so we don't show stale
 				// nested progress when the agent enters a fresh `task` call.
@@ -1191,7 +1224,8 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 
 				// Check for registered subagent tool handler
 				const handler = subprocessToolRegistry.getHandler(event.toolName);
-				const eventArgs = (event as { args?: Record<string, unknown> }).args ?? {};
+				const eventRecord: unknown = event;
+				const eventArgs = isRecord(eventRecord) && isRecord(eventRecord.args) ? eventRecord.args : {};
 				if (handler) {
 					// Extract data using handler
 					if (handler.extractData) {
@@ -1203,24 +1237,12 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 							isError: event.isError,
 						});
 						if (data !== undefined) {
-							progress.extractedToolData = progress.extractedToolData || {};
-							const existing = progress.extractedToolData[event.toolName] || [];
-							const findingKey = event.toolName === "report_finding" ? getReportFindingKey(data) : null;
-							if (findingKey) {
-								const existingIndex = existing.findIndex(item => getReportFindingKey(item) === findingKey);
-								if (existingIndex >= 0) {
-									existing[existingIndex] = data;
-								} else {
-									existing.push(data);
-								}
-							} else {
-								existing.push(data);
-							}
-							progress.extractedToolData[event.toolName] = existing;
-							if (event.toolName === "yield") {
-								yieldCalled = true;
-							}
+							recordExtractedToolData(event.toolName, data);
 						}
+					}
+
+					if (event.toolName === "yield") {
+						yieldCallPending = false;
 					}
 
 					// Check if handler wants to terminate the session
@@ -1284,7 +1306,23 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 				const role = event.message?.role;
 				if (role === "assistant") {
 					progress.requests += 1;
-					if (softRequestBudget > 0 && !abortSent) {
+					const eventContent = isRecord(event) && "content" in event ? event.content : undefined;
+					const messageContent = getMessageContent(event.message) || eventContent;
+					if (messageContent && Array.isArray(messageContent)) {
+						for (const block of messageContent) {
+							if (!isRecord(block)) continue;
+							if (block.type === "text" && typeof block.text === "string") {
+								outputChunks.push(block.text);
+								continue;
+							}
+							if (block.type !== "toolCall" || typeof block.name !== "string") continue;
+							if (block.name === "yield" && !yieldCalled) {
+								yieldCallPending = true;
+								flushProgress = true;
+							}
+						}
+					}
+					if (softRequestBudget > 0 && !abortSent && !yieldCalled && !yieldCallPending) {
 						if (progress.requests >= softRequestBudget * 1.5) {
 							requestAbort("budget");
 						} else if (softRequestBudgetNotice && !budgetSteerSent && progress.requests >= softRequestBudget) {
@@ -1302,32 +1340,21 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 						}
 					}
 				}
-				if (role === "assistant") {
-					const messageContent =
-						getMessageContent(event.message) || (event as AgentEvent & { content?: unknown }).content;
-					if (messageContent && Array.isArray(messageContent)) {
-						for (const block of messageContent) {
-							if (block.type === "text" && block.text) {
-								outputChunks.push(block.text);
-							}
-						}
-					}
-				}
 				// Extract and accumulate usage (prefer message.usage, fallback to event.usage)
-				const messageUsage = getMessageUsage(event.message) || (event as AgentEvent & { usage?: unknown }).usage;
-				if (messageUsage && typeof messageUsage === "object") {
+				const eventUsage = isRecord(event) && "usage" in event ? event.usage : undefined;
+				const messageUsage = getMessageUsage(event.message) || eventUsage;
+				if (isRecord(messageUsage)) {
 					// Only count assistant messages (not tool results, etc.)
 					if (role === "assistant") {
-						const usageRecord = messageUsage as Record<string, unknown>;
-						const costRecord = (messageUsage as { cost?: Record<string, unknown> }).cost;
+						const costRecord = isRecord(messageUsage.cost) ? messageUsage.cost : undefined;
 						hasUsage = true;
-						accumulatedUsage.input += getNumberField(usageRecord, "input") ?? 0;
-						accumulatedUsage.output += getNumberField(usageRecord, "output") ?? 0;
-						accumulatedUsage.cacheRead += getNumberField(usageRecord, "cacheRead") ?? 0;
-						accumulatedUsage.cacheWrite += getNumberField(usageRecord, "cacheWrite") ?? 0;
-						accumulatedUsage.totalTokens += getNumberField(usageRecord, "totalTokens") ?? 0;
+						accumulatedUsage.input += getNumberField(messageUsage, "input") ?? 0;
+						accumulatedUsage.output += getNumberField(messageUsage, "output") ?? 0;
+						accumulatedUsage.cacheRead += getNumberField(messageUsage, "cacheRead") ?? 0;
+						accumulatedUsage.cacheWrite += getNumberField(messageUsage, "cacheWrite") ?? 0;
+						accumulatedUsage.totalTokens += getNumberField(messageUsage, "totalTokens") ?? 0;
 						accumulatedUsage.reasoningTokens =
-							(accumulatedUsage.reasoningTokens ?? 0) + (getNumberField(usageRecord, "reasoningTokens") ?? 0);
+							(accumulatedUsage.reasoningTokens ?? 0) + (getNumberField(messageUsage, "reasoningTokens") ?? 0);
 						if (costRecord) {
 							accumulatedUsage.cost.input += getNumberField(costRecord, "input") ?? 0;
 							accumulatedUsage.cost.output += getNumberField(costRecord, "output") ?? 0;
@@ -1342,7 +1369,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 					// Track latest per-turn context size so the UI can show
 					// "current context", not just cumulative billing volume.
 					if (role === "assistant") {
-						const perTurnTotal = getNumberField(messageUsage as Record<string, unknown>, "totalTokens");
+						const perTurnTotal = getNumberField(messageUsage, "totalTokens");
 						if (perTurnTotal !== undefined && perTurnTotal > 0) {
 							progress.contextTokens = perTurnTotal;
 						}
@@ -1587,35 +1614,45 @@ async function driveSessionToYield(
 			}
 		}
 
-		await awaitAbortable(session.waitForIdle());
+		if (monitor.yieldCalled()) {
+			await session.waitForIdle();
+		} else {
+			await awaitAbortable(session.waitForIdle());
+		}
 
 		const lastAssistant = session.getLastAssistantMessage();
 		if (lastAssistant) {
 			if (lastAssistant.stopReason === "aborted") {
-				aborted = monitor.isAbortedRun();
-				if (aborted) {
-					// A real caller signal or the wall-clock timer carries a precise
-					// reason (signal.reason / "runtime limit exceeded"). An internal
-					// turn abort does NOT — prefer the assistant message's own
-					// errorMessage ("Request was aborted" or a specific stream error)
-					// over the misleading "Cancelled by caller".
-					abortReasonText ??= monitor.hasExplicitAbortReason()
-						? monitor.resolveAbortReasonText()
-						: lastAssistant.errorMessage?.trim() || monitor.resolveAbortReasonText();
+				if (!monitor.yieldCalled() || monitor.runtimeLimitExceeded()) {
+					aborted = monitor.isAbortedRun();
+					if (aborted) {
+						// A real caller signal or the wall-clock timer carries a precise
+						// reason (signal.reason / "runtime limit exceeded"). An internal
+						// turn abort does NOT — prefer the assistant message's own
+						// errorMessage ("Request was aborted" or a specific stream error)
+						// over the misleading "Cancelled by caller".
+						abortReasonText ??= monitor.hasExplicitAbortReason()
+							? monitor.resolveAbortReasonText()
+							: lastAssistant.errorMessage?.trim() || monitor.resolveAbortReasonText();
+					}
+					exitCode = 1;
 				}
-				exitCode = 1;
 			} else if (lastAssistant.stopReason === "error") {
 				exitCode = 1;
 				error ??= lastAssistant.errorMessage || "Subagent failed";
 			}
 		}
 	} catch (err) {
-		exitCode = 1;
-		if (!abortSignal.aborted) {
-			error = err instanceof Error ? err.stack || err.message : String(err);
+		if (abortSignal.aborted && monitor.yieldCalled() && !monitor.runtimeLimitExceeded()) {
+			exitCode = 0;
+		} else {
+			exitCode = 1;
+			if (!abortSignal.aborted) {
+				error = err instanceof Error ? err.stack || err.message : String(err);
+			}
 		}
 	} finally {
-		if (abortSignal.aborted) {
+		if (abortSignal.aborted && (!monitor.yieldCalled() || monitor.runtimeLimitExceeded())) {
 			aborted = monitor.isAbortedRun();
 			if (aborted) {
 				abortReasonText ??= monitor.resolveAbortReasonText();

@@ -13,6 +13,7 @@
 - Fixed LSP workspace diagnostics for Go workspaces so roots with `go.work` are recognized and every `go.work use` module is included in the `go build` package patterns. ([#5038](https://github.com/can1357/oh-my-pi/issues/5038))
 - Fixed interactive OAuth login success messages waiting on model discovery; `/login xai-oauth` now reports saved credentials immediately while model metadata refreshes in the background. ([#4989](https://github.com/can1357/oh-my-pi/issues/4989))
 - Fixed Windows bash tool crashes when an explicit timeout fires while a piped command is still streaming output; the JavaScript fallback now reports the timeout without also aborting the native timeout signal. ([#5021](https://github.com/can1357/oh-my-pi/issues/5021))
+- Fixed subagent `yield` tool calls being discarded when the soft request budget hard-aborted the same assistant turn before the yield result event landed. ([#5006](https://github.com/can1357/oh-my-pi/issues/5006))
 
 ## [16.3.15] - 2026-07-09
 
