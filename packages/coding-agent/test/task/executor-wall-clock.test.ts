@@ -477,6 +477,116 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		]);
 	});
 
+	it("resumes the hard budget guard after an incremental yield commits", async () => {
+		const settings = Settings.isolated({ "task.softRequestBudget": 1 });
+		const firstAssistantMessage = {
+			role: "assistant" as const,
+			content: [{ type: "text" as const, text: "still working" }],
+			stopReason: "stop" as const,
+		};
+		const incrementalYieldMessage = {
+			role: "assistant" as const,
+			content: [
+				{
+					type: "toolCall" as const,
+					id: "tool-yield-incremental",
+					name: "yield",
+					arguments: { type: ["findings"], result: { data: { id: "saved" } } },
+				},
+			],
+			stopReason: "toolUse" as const,
+		};
+		const followingAssistantMessage = {
+			role: "assistant" as const,
+			content: [{ type: "text" as const, text: "continuing after the saved section" }],
+			stopReason: "stop" as const,
+		};
+		let listenerRef: ((event: AgentSessionEvent) => void) | undefined;
+		let lastAssistantMessage:
+			| typeof firstAssistantMessage
+			| typeof incrementalYieldMessage
+			| typeof followingAssistantMessage
+			| undefined;
+		let waitForIdleCalls = 0;
+		let abortCount = 0;
+		let abortCountBeforeYieldExecutionEnd: number | undefined;
+		let abortCountAfterFollowingTurn: number | undefined;
+		const session: Partial<AgentSession> = {
+			state: { messages: [] } as never,
+			agent: { state: { systemPrompt: ["test"] } } as never,
+			extensionRunner: undefined as never,
+			sessionManager: { appendSessionInit: () => {} } as never,
+			getActiveToolNames: () => ["read", "yield"],
+			setActiveToolsByName: async () => {},
+			subscribe: (listener: (event: AgentSessionEvent) => void) => {
+				listenerRef = listener;
+				return () => {};
+			},
+			prompt: async () => true,
+			waitForIdle: async () => {
+				waitForIdleCalls += 1;
+				if (waitForIdleCalls !== 1) return;
+				lastAssistantMessage = firstAssistantMessage;
+				listenerRef?.({
+					type: "message_end",
+					message: firstAssistantMessage,
+				} as unknown as AgentSessionEvent);
+				lastAssistantMessage = incrementalYieldMessage;
+				listenerRef?.({
+					type: "message_end",
+					message: incrementalYieldMessage,
+				} as unknown as AgentSessionEvent);
+				abortCountBeforeYieldExecutionEnd = abortCount;
+				listenerRef?.({
+					type: "tool_execution_end",
+					toolCallId: "tool-yield-incremental",
+					toolName: "yield",
+					result: {
+						content: [{ type: "text", text: "Section submitted." }],
+						details: {
+							status: "success",
+							data: { id: "saved" },
+							type: ["findings"],
+						},
+					},
+					isError: false,
+				} as AgentSessionEvent);
+				lastAssistantMessage = followingAssistantMessage;
+				listenerRef?.({
+					type: "message_end",
+					message: followingAssistantMessage,
+				} as unknown as AgentSessionEvent);
+				abortCountAfterFollowingTurn = abortCount;
+			},
+			getLastAssistantMessage: () => lastAssistantMessage as never,
+			abort: async () => {
+				abortCount += 1;
+			},
+			dispose: async () => {},
+		};
+		mockCreateAgentSession(session as AgentSession);
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-soft-budget-incremental-yield",
+			settings,
+		});
+
+		expect(abortCountBeforeYieldExecutionEnd).toBe(0);
+		expect(abortCountAfterFollowingTurn).toBe(1);
+		expect(result.requests).toBe(3);
+		expect(result.extractedToolData?.yield).toEqual([
+			{
+				data: { id: "saved" },
+				status: "success",
+				error: undefined,
+				type: ["findings"],
+				useLastTurn: undefined,
+				schemaOverridden: undefined,
+			},
+		]);
+	});
+
 	it("propagates per-turn context tokens onto the SingleResult", async () => {
 		// Async task consumers (index.ts) copy `singleResult.contextTokens` and
 		// `singleResult.contextWindow` onto AgentProgress. This test pins the

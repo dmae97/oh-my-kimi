@@ -1322,7 +1322,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 							}
 						}
 					}
-					if (softRequestBudget > 0 && !abortSent && !yieldCalled && !yieldCallPending) {
+					if (softRequestBudget > 0 && !abortSent && !yieldCallPending) {
 						if (progress.requests >= softRequestBudget * 1.5) {
 							requestAbort("budget");
 						} else if (softRequestBudgetNotice && !budgetSteerSent && progress.requests >= softRequestBudget) {
