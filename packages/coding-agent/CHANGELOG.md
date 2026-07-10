@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Fixed collapsed compacted session transcript rebuilds reattaching snapcompact archive image frames to the live TUI, avoiding large retained JSC heaps on resume and transcript refresh. ([#4979](https://github.com/can1357/oh-my-pi/issues/4979))
+
 ### Fixed
 
 - Fixed interactive TUI sessions dying with `Unhandled rejection: Cannot set cwd while another same-realm JS runtime is running` after the JS eval worker fell back to the in-process inline path (commonly when the worker could not load `pi_natives`). Concurrent inline eval/browser runtimes now stamp cwd (including the saved `__omp_session__` state) without stealing the exclusive realm, WorkerCore `init` reports failures via `init-failed` instead of throwing out of the microtask path, and constructing a runtime while another same-realm run is live fails explicitly instead of clobbering its globals. ([#4907](https://github.com/can1357/oh-my-pi/pull/4907) by [@cexll](https://github.com/cexll))
@@ -15,15 +19,14 @@
 - Fixed Windows bash tool crashes when an explicit timeout fires while a piped command is still streaming output; the JavaScript fallback now reports the timeout without also aborting the native timeout signal. ([#5021](https://github.com/can1357/oh-my-pi/issues/5021))
 - Fixed subagent `yield` tool calls being discarded when the soft request budget hard-aborted the same assistant turn before the yield result event landed. ([#5006](https://github.com/can1357/oh-my-pi/issues/5006))
 - Fixed `--tools` filtering in interactive sessions disabling deferred MCP tools; MCP tools discovered from configured servers now stay active when the flag limits only built-in tools. ([#5013](https://github.com/can1357/oh-my-pi/issues/5013))
-
 - Fixed kept-alive task subagents entering a repeated provider-call loop after an IRC wake and terminal `yield`. ([#4963](https://github.com/can1357/oh-my-pi/issues/4963))
+
 ## [16.3.15] - 2026-07-09
 
 ### Changed
 
 - Integrated testing guidance directly into the main system prompt for improved workflow cohesion
 - Moved testing guidance into the main system prompt and removed the bundled Tester subagent.
-- Fixed collapsed compacted session transcript rebuilds reattaching snapcompact archive image frames to the live TUI, avoiding large retained JSC heaps on resume and transcript refresh. ([#4979](https://github.com/can1357/oh-my-pi/issues/4979))
 
 ## [16.3.14] - 2026-07-09
 

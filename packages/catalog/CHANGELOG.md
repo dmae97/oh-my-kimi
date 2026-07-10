@@ -9,7 +9,6 @@
 - Added GLM5.2-Fast model
 - Added Zenmux variants for GPT-5.6 (Luna, Sol, and Terra)
 - Added Novita as a model provider with authoritative public catalog discovery and generated pricing, limits, modality, reasoning, and tool metadata ([#4917](https://github.com/can1357/oh-my-pi/pull/4917) by [@jason-wu-ai](https://github.com/jason-wu-ai)).
-
 - Added `useResponsesLite` to `Model`/`ModelSpec` and Codex discovery parsing of the upstream `use_responses_lite` flag; regenerated `models.json` marks the GPT-5.6 family (`sol`/`terra`/`luna` and their pro aliases) for the Responses Lite transport. Added the `x-openai-internal-codex-responses-lite` marker to `OPENAI_HEADERS`.
 
 ### Changed

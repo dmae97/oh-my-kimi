@@ -2,9 +2,6 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- Fixed xAI SuperGrok multi-account rotation when an account returns HTTP 403 `run out of credits` / `personal-team-blocked:spending-limit`. That account-local cap is now classified as a usage limit so `streamSimple` auth-retry and `rotateSessionCredential` switch to a sibling `xai-oauth` credential instead of sticking to the exhausted account.
 ### Added
 
 - Added model-driven Codex Responses Lite: `responsesLite` now defaults to the catalog `useResponsesLite` flag (codex-rs `use_responses_lite`, set on the GPT-5.6 family), so lite requests are sent without per-call opt-in.
@@ -17,17 +14,18 @@
 - Refactored Responses Lite transport to move tools and instructions into input items
 - Updated Responses Lite to force parallel tool calling off and strip image detail
 - Standardized Responses Lite activation via model-level catalog flags
-
 - Recognized Pro Lite as a paid plan tier for OpenAI Codex models
 - Changed Responses Lite image handling to match current codex-rs: a lite request containing input images now stays on the lite transport with image `detail` stripped, instead of silently falling back to the full Responses shape.
 
 ### Fixed
 
+- Fixed xAI SuperGrok multi-account rotation when an account returns HTTP 403 `run out of credits` / `personal-team-blocked:spending-limit`. That account-local cap is now classified as a usage limit so `streamSimple` auth-retry and `rotateSessionCredential` switch to a sibling `xai-oauth` credential instead of sticking to the exhausted account.
 - Fixed concurrent reasoning summaries to ignore legacy streaming events under cutoff contract
 - Fixed sequential-cutoff Codex reasoning summaries repeating earlier content when atomic summary snapshots are replayed or extended.
 - Fixed error classification for typed AWS credential-resolution failures (`AwsCredentialsError`) to map them to authentication failures. ([#5030](https://github.com/can1357/oh-my-pi/pull/5030) by [@usr-bin-roygbiv](https://github.com/usr-bin-roygbiv))
 - Fixed OpenAI-compatible chat-completions streams preserving vLLM-style trailing cached-token usage chunks so `cacheRead` and billable `input` session stats are accurate ([#5022](https://github.com/can1357/oh-my-pi/issues/5022)).
 - Fixed `xai-oauth/grok-4.5` Responses requests to omit unsupported `reasoning.summary` while preserving the documented `reasoning.effort` payload ([#4998](https://github.com/can1357/oh-my-pi/issues/4998)).
+- Fixed Codex OAuth credential selection to re-check blocked accounts during ranking and clear stale usage-limit blocks when live usage shows all reported windows recovered ([#4980](https://github.com/can1357/oh-my-pi/issues/4980)).
 
 ## [16.3.15] - 2026-07-09
 
@@ -51,7 +49,6 @@
 - Refined account selection logic to correctly identify plan types from account metadata
 - Fixed OpenAI Codex multi-account routing for GPT-5.6: Sol and Luna requests now prefer Plus-or-higher accounts while Terra remains available to Free/Go accounts; local pro-mode aliases inherit their base model's Codex plan eligibility.
 - Fixed xAI Grok OAuth login to use xAI's device authorization flow: `/login` now opens the verification URL, displays the device code, and polls for approval instead of asking for a pasted redirect or linking to Hermes Agent documentation.
-- Fixed Codex OAuth credential selection to re-check blocked accounts during ranking and clear stale usage-limit blocks when live usage shows all reported windows recovered ([#4980](https://github.com/can1357/oh-my-pi/issues/4980)).
 
 ## [16.3.14] - 2026-07-09
 
