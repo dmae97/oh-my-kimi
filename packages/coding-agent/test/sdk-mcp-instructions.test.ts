@@ -9,7 +9,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
-import { SERVER_INSTRUCTIONS } from "./fixtures/instructions-mcp";
+import { SERVER_INSTRUCTIONS, TOOL_NAME } from "./fixtures/instructions-mcp";
 
 // Contract: a deferred interactive (`hasUI`) session runs MCP discovery off the
 // first-paint path, so an MCP server's `instructions` are not available when the
@@ -19,6 +19,7 @@ import { SERVER_INSTRUCTIONS } from "./fixtures/instructions-mcp";
 // guard: a prior version gated instruction inclusion on `!deferMCPDiscoveryForUI`,
 // which dropped server instructions permanently for every UI session.
 const FIXTURE_PATH = path.join(import.meta.dir, "fixtures", "instructions-mcp.ts");
+const MCP_TOOL_NAME = `mcp__instr_${TOOL_NAME}`;
 
 describe("createAgentSession MCP server instructions (deferred UI)", () => {
 	let registryDir: string;
@@ -109,6 +110,46 @@ describe("createAgentSession MCP server instructions (deferred UI)", () => {
 			expect(prompt).toContain(SERVER_INSTRUCTIONS);
 			// The instructions are framed under the MCP section, not pasted raw.
 			expect(prompt).toContain("MCP Server Instructions");
+		} finally {
+			await session.dispose();
+		}
+	}, 20_000);
+
+	it("keeps MCP tools active after deferred discovery when CLI tool filtering names only built-ins", async () => {
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			modelRegistry,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({}),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableLsp: false,
+			skipPythonPreflight: true,
+			enableMCP: true,
+			hasUI: true,
+			toolNames: ["read"],
+		});
+		try {
+			expect(session.getActiveToolNames()).toContain("read");
+
+			// Deferred MCP discovery is fire-and-forget and exposes no promise or
+			// event; fake timers cannot drive the real subprocess handshake, so we
+			// poll the live active-tool state and exit as soon as the fixture tool
+			// appears.
+			const deadline = Date.now() + 12_000;
+			let activeToolNames = session.getActiveToolNames();
+			while (!activeToolNames.includes(MCP_TOOL_NAME) && Date.now() < deadline) {
+				await Bun.sleep(50);
+				activeToolNames = session.getActiveToolNames();
+			}
+
+			expect(activeToolNames).toContain("read");
+			expect(activeToolNames).toContain(MCP_TOOL_NAME);
 		} finally {
 			await session.dispose();
 		}

@@ -6661,8 +6661,8 @@ export class AgentSession {
 	 *
 	 * @param mcpTools The new MCP tools to register.
 	 * @param options.activateAll When true, force-activates every newly registered MCP tool
-	 *   regardless of prior selection state. Used when an ACP client provisions MCP servers
-	 *   for a session where MCP discovery is disabled.
+	 *   regardless of prior selection state. Used when MCP discovery is disabled and tools
+	 *   arrive after initial session activation.
 	 */
 	async refreshMCPTools(mcpTools: CustomTool[], options?: { activateAll?: boolean }): Promise<void> {
 		const previousSelectedMCPToolNames = this.getSelectedMCPToolNames();
@@ -6707,10 +6707,10 @@ export class AgentSession {
 
 		if (options?.activateAll) {
 			// Force-activate every newly registered MCP tool. This path is used
-			// when an ACP client provisions MCP servers for a session where MCP
-			// discovery is disabled — without it, getSelectedMCPToolNames()
-			// returns only already-active tools (circular deadlock: tools can
-			// only become active if they're already active).
+			// when MCP discovery is disabled and tools arrive after initial
+			// activation — without it, getSelectedMCPToolNames() returns only
+			// already-active tools (circular deadlock: tools can only become
+			// active if they're already active).
 			const newMcpNames = mcpTools.map(t => t.name);
 			const nextActive = [...new Set([...this.#getActiveNonMCPToolNames(), ...newMcpNames])];
 			await this.#applyActiveToolsByName(nextActive, { previousSelectedMCPToolNames });

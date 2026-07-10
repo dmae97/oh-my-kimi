@@ -14,6 +14,7 @@
 - Fixed interactive OAuth login success messages waiting on model discovery; `/login xai-oauth` now reports saved credentials immediately while model metadata refreshes in the background. ([#4989](https://github.com/can1357/oh-my-pi/issues/4989))
 - Fixed Windows bash tool crashes when an explicit timeout fires while a piped command is still streaming output; the JavaScript fallback now reports the timeout without also aborting the native timeout signal. ([#5021](https://github.com/can1357/oh-my-pi/issues/5021))
 - Fixed subagent `yield` tool calls being discarded when the soft request budget hard-aborted the same assistant turn before the yield result event landed. ([#5006](https://github.com/can1357/oh-my-pi/issues/5006))
+- Fixed `--tools` filtering in interactive sessions disabling deferred MCP tools; MCP tools discovered from configured servers now stay active when the flag limits only built-in tools. ([#5013](https://github.com/can1357/oh-my-pi/issues/5013))
 
 ## [16.3.15] - 2026-07-09
 
