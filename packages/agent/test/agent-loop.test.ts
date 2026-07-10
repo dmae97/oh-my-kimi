@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { agentLoop, agentLoopContinue, agentLoopDetailed } from "@oh-my-pi/pi-agent-core/agent-loop";
+import {
+	agentLoop,
+	agentLoopContinue,
+	agentLoopDetailed,
+	TERMINAL_TOOL_RESULT_ABORT_REASON,
+} from "@oh-my-pi/pi-agent-core/agent-loop";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -2351,6 +2356,107 @@ describe("agentLoopContinue with AgentMessage", () => {
 			expect(toolEnd.isError).toBe(false);
 			expect(toolEnd.result.content).toEqual([{ type: "text", text: "rewritten after abort" }]);
 		}
+	});
+
+	it("stops after a post-tool hook marks the completed result terminal", async () => {
+		const toolSchema = type({ value: "string" });
+		const controller = new AbortController();
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				return {
+					content: [{ type: "text", text: params.value }],
+					details: { value: params.value },
+				};
+			},
+		};
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const mock = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", id: "tool-terminal", name: "echo", arguments: { value: "done" } }] },
+				{ content: ["must not be reached"] },
+			],
+		});
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			afterToolCall: async () => {
+				controller.abort(TERMINAL_TOOL_RESULT_ABORT_REASON);
+			},
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("echo")], context, config, controller.signal, mock.stream);
+		for await (const event of stream) events.push(event);
+
+		expect(mock.calls).toHaveLength(1);
+		expect(events.some(event => event.type === "tool_execution_end")).toBe(true);
+		expect(
+			events.some(
+				event =>
+					event.type === "message_end" &&
+					event.message.role === "assistant" &&
+					event.message.stopReason === "aborted",
+			),
+		).toBe(false);
+	});
+
+	it("preserves an external abort boundary when a completed tool ignores cancellation", async () => {
+		const toolSchema = type({ value: "string" });
+		const controller = new AbortController();
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				started.resolve();
+				await release.promise;
+				return {
+					content: [{ type: "text", text: params.value }],
+					details: { value: params.value },
+				};
+			},
+		};
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const mock = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", id: "tool-abort", name: "echo", arguments: { value: "done" } }] },
+				{ content: ["must not be observed"] },
+			],
+		});
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("echo")], context, config, controller.signal, mock.stream);
+		const consuming = (async () => {
+			for await (const event of stream) events.push(event);
+		})();
+		await started.promise;
+		controller.abort("Stopped by user");
+		release.resolve();
+		await consuming;
+
+		expect(mock.calls).toHaveLength(2);
+		const aborted = events.find(
+			event =>
+				event.type === "message_end" &&
+				event.message.role === "assistant" &&
+				event.message.stopReason === "aborted",
+		);
+		expect(aborted).toBeDefined();
+		if (aborted?.type !== "message_end" || aborted.message.role !== "assistant") {
+			throw new Error("Expected an aborted assistant message");
+		}
+		expect(aborted.message.errorMessage).toBe("Stopped by user");
 	});
 
 	it("surfaces afterToolCall errors as a tool error result", async () => {

@@ -39,6 +39,7 @@ import {
 	resolveTelemetry,
 	type StreamFn,
 	ThinkingLevel,
+	TERMINAL_TOOL_RESULT_ABORT_REASON,
 	type ToolChoiceDirective,
 } from "@oh-my-pi/pi-agent-core";
 import {
@@ -3717,7 +3718,7 @@ export class AgentSession {
 			const alreadyTerminated = this.#synchronouslyTerminatedYieldToolCallIds.delete(event.toolCallId);
 			if (!alreadyTerminated) {
 				this.#markTerminalYieldToolCall(event.toolCallId);
-				this.agent.abort();
+				this.agent.abort(TERMINAL_TOOL_RESULT_ABORT_REASON);
 			}
 		}
 
@@ -4473,7 +4474,7 @@ export class AgentSession {
 		) {
 			this.#markTerminalYieldToolCall(ctx.toolCall.id);
 			this.#synchronouslyTerminatedYieldToolCallIds.add(ctx.toolCall.id);
-			this.agent.abort();
+			this.agent.abort(TERMINAL_TOOL_RESULT_ABORT_REASON);
 		}
 		return this.#ttsrAfterToolCall(ctx);
 	}

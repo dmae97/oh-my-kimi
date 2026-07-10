@@ -132,6 +132,13 @@ export function createToolScopedAbortReason(
 	return { kind: "tool-scoped-abort", message, toolCallMessages, defaultToolCallMessage };
 }
 
+/**
+ * Marks an abort raised by a completed post-tool hook as terminal for the
+ * current run. External/user aborts still synthesize an aborted assistant
+ * boundary; this reason stops after persisting the completed tool batch.
+ */
+export const TERMINAL_TOOL_RESULT_ABORT_REASON = Symbol.for("pi-agent-core.terminal-tool-result");
+
 const STEERING_INTERRUPT_POLL_MS = 250;
 
 class HarmonyLeakInterruption extends Error {
@@ -1084,9 +1091,9 @@ async function runLoopBody(
 					}
 				}
 
-				// A tool hook may abort to mark the tool result as terminal (e.g. subagent yield).
-				// Stop before the next provider call; event listeners observe the result too late.
-				if (signal?.aborted) {
+				// A tool hook may mark its completed result as terminal (e.g. subagent yield).
+				// Stop before the next provider call without changing external/user abort semantics.
+				if (signal?.reason === TERMINAL_TOOL_RESULT_ABORT_REASON) {
 					hasMoreToolCalls = false;
 				}
 
