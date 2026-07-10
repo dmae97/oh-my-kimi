@@ -169,7 +169,7 @@ function buildCodexHeaders(options: CodexModelDiscoveryOptions, clientVersion: s
 	return headers;
 }
 
-async function resolveCodexClientVersion(
+export async function resolveCodexClientVersion(
 	clientVersion: string | undefined,
 	fetchFn: FetchImpl,
 	signal: AbortSignal | undefined,
