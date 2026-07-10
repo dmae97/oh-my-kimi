@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed resume/session-replace and resize-settle full paints blanking the live viewport before replaying the transcript, preventing flicker on terminals without effective synchronized output ([#5028](https://github.com/can1357/oh-my-pi/issues/5028)).
+
 ## [16.3.14] - 2026-07-09
 
 ### Fixed

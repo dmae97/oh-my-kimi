@@ -110,7 +110,7 @@ updates never rewrite anything a scrolled reader could be looking at.
 
 | Emitter | Bytes | When |
 |---|---|---|
-| `#emitFullPaint` | clears + `frame[0, C')` + window rows | gestures only. `clearScrollback` ⇒ `\x1b[2J\x1b[H\x1b[3J`; otherwise ED22 (when supported) + `\x1b[2J\x1b[H` |
+| `#emitFullPaint` | home + `frame[0, C')` + window rows; with `clearScrollback`, ED3 clears history without an ED2 viewport blank | gestures only |
 | `#emitUpdate` scroll-append | `\r\n` + new bottom rows + changed-row range | the rows leaving the screen are exactly the chunk, content untouched since painted |
 | `#emitUpdate` in-window diff | relative move + changed-row range rewrite | nothing scrolls, nothing commits (cursor-only when nothing changed) |
 | `#emitUpdate` seam rewrite | chunk rows + full window rewrite | commit advance, window re-anchor, hidden-gap backfill, mux resize |
@@ -118,9 +118,11 @@ updates never rewrite anything a scrolled reader could be looking at.
 **ED3 (`CSI 3 J`) is emitted in exactly one place** — `#emitFullPaint` with
 `clearScrollback: true` — and is reached only by user gestures: session
 replace/branch/resume (`requestRender(true, { clearScrollback: true })`),
-resize outside a multiplexer, `resetDisplay()` (Ctrl+L). A gesture pins the
-user to the tail, so the snap is acceptable; multiplexers never get ED3 (it is
-a no-op there and a replay would duplicate pane history).
+resize outside a multiplexer, `resetDisplay()` (Ctrl+L). It clears native
+history without `ED2` first; the replay overwrites every row from home so
+terminals without synchronized output do not expose a blank viewport. A gesture
+pins the user to the tail, so the history snap is acceptable; multiplexers never
+get ED3 (it is a no-op there and a replay would duplicate pane history).
 
 The ordinary update path never emits ED2/ED3 or an absolute cursor home —
 several terminal families snap a scrolled reader to the bottom on those.

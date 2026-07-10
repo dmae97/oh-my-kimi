@@ -432,7 +432,7 @@ describe("TUI terminal-state regressions", () => {
 				tui.resetDisplay();
 				await settle(term);
 
-				expect(writes.some(write => write.includes("\x1b[2J\x1b[H\x1b[3J"))).toBe(true);
+				expect(writes.some(write => write.includes("\x1b[H\x1b[3J") && !write.includes("\x1b[2J"))).toBe(true);
 				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(rows("L", 8));
 				expect(visible(term)).toEqual(["L5", "L6", "L7"]);
 			} finally {
@@ -1357,7 +1357,7 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
-		it("uses ED3 for destructive rebuilds even when CSI 22 J is supported", async () => {
+		it("uses ED3 without blanking the viewport for destructive rebuilds even when CSI 22 J is supported", async () => {
 			const saved = TERMINAL.supportsScreenToScrollback;
 			setTerminalScreenToScrollback(true);
 			const term = new VirtualTerminal(20, 3);
@@ -1373,7 +1373,8 @@ describe("TUI terminal-state regressions", () => {
 				tui.requestRender(true, { clearScrollback: true });
 				await settle(term);
 				const out = writes.join("");
-				expect(out).toContain("\x1b[2J\x1b[H\x1b[3J");
+				expect(out).toContain("\x1b[H\x1b[3J");
+				expect(out).not.toContain("\x1b[2J");
 				expect(out).not.toContain("\x1b[22J");
 			} finally {
 				tui.stop();

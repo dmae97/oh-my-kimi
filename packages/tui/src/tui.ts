@@ -561,10 +561,9 @@ export class Container implements Component {
  * method owns the bytes written and the state update.
  *
  * - `fullPaint`: gesture-driven replay — initial paint, session replacement,
- *   resize, resetDisplay. Clears the viewport and (for destructive replaces,
- *   outside multiplexers) native scrollback via ED3, then writes the
- *   committed prefix and the visible window. The only ED3 callsite in the
- *   engine.
+ *   resize, resetDisplay. Rewrites the frame from home; destructive replaces
+ *   clear native scrollback via ED3 without first blanking the viewport. The
+ *   only ED3 callsite in the engine.
  * - `update`: ordinary frame. Commits the newly settled chunk at the
  *   scrollback seam (if any) and repaints the window with relative moves.
  */
@@ -3221,7 +3220,10 @@ export class TUI extends Container {
 		}
 		let buffer = this.#paintBeginSequence + this.#leaveResizeAltSequence() + purgeSequence;
 		if (options.clearScrollback) {
-			buffer += "\x1b[2J\x1b[H\x1b[3J";
+			// Clear native history without blanking the live viewport first. The
+			// replay below rewrites every visible row from home, including blanks,
+			// so terminals without DEC 2026 never expose an ED2-cleared frame.
+			buffer += "\x1b[H\x1b[3J";
 		} else {
 			// Best-effort: push the pre-paint screen into scrollback on
 			// terminals that implement kitty's ED 22
@@ -3254,21 +3256,24 @@ export class TUI extends Container {
 		if (paintLines === null) {
 			// Common path: emit straight from the source arrays (the
 			// pre-merge two-loop form); byte-identical to replaying the
-			// merged array.
+			// merged array. Destructive history clears deliberately avoid ED2, so
+			// each row must self-clear stale cells left by the previous viewport.
 			for (let i = 0; i < chunkTo; i++) {
 				if (i > 0) buffer += "\r\n";
-				buffer += this.#terminalLine(frame[i] ?? "");
+				buffer += options.clearScrollback
+					? this.#lineRewriteSequence(frame[i] ?? "", width)
+					: this.#terminalLine(frame[i] ?? "");
 			}
 			for (let screenRow = 0; screenRow < height; screenRow++) {
 				if (chunkTo + screenRow > 0) buffer += "\r\n";
-				buffer += this.#terminalLine(visibleTexts ? (visibleTexts[screenRow] ?? "") : (window[screenRow] ?? ""));
+				const line = visibleTexts ? (visibleTexts[screenRow] ?? "") : (window[screenRow] ?? "");
+				buffer += options.clearScrollback ? this.#lineRewriteSequence(line, width) : this.#terminalLine(line);
 			}
 		} else {
 			for (let i = 0; i < paintLines.length; i++) {
 				if (i > 0) buffer += "\r\n";
-				buffer += this.#terminalLine(
-					visibleTexts && i >= visibleStart ? visibleTexts[i - visibleStart] : (paintLines[i] ?? ""),
-				);
+				const line = visibleTexts && i >= visibleStart ? visibleTexts[i - visibleStart] : (paintLines[i] ?? "");
+				buffer += options.clearScrollback ? this.#lineRewriteSequence(line, width) : this.#terminalLine(line);
 			}
 		}
 		buffer += fillSequence;

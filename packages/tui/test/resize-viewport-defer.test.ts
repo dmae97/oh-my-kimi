@@ -263,7 +263,9 @@ describe("non-multiplexer resize viewport fast path", () => {
 				await scheduler.flushImmediates(term);
 
 				// Settle window elapses: exactly one authoritative full paint that
-				// erases native scrollback (ED3) and replays every block.
+				// clears native scrollback (ED3) and replays every block. It must not
+				// blank the live viewport with ED2 first; terminals without DEC 2026
+				// expose that blank frame as resize/session-replace flicker.
 				for (const b of blocks) b.renderCount = 0;
 				await scheduler.flushAll(term);
 
@@ -273,6 +275,7 @@ describe("non-multiplexer resize viewport fast path", () => {
 				// full replay or a stray scrollback erase into the settle.
 				expect(tui.fullRedraws).toBe(baselineFull + 1);
 				expect(eraseScrollbackCount(writes)).toBe(1);
+				expect(writes.join("")).not.toContain("\x1b[2J");
 				// The full replay lays out the whole transcript, off-screen blocks
 				// included.
 				expect(blocks.every(b => b.renderCount > 0)).toBe(true);
