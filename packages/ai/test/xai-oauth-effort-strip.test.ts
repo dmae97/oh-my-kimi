@@ -50,6 +50,15 @@ const singleUserContext: Context = {
 };
 
 describe("xAI OAuth Responses reasoning payload (regression)", () => {
+	test("xai-oauth/grok-4.5 leaves reasoning unset when no reasoning was requested", () => {
+		const grok45 = getBundledModel<"openai-responses">("xai-oauth", "grok-4.5");
+		if (!grok45) throw new Error("xai-oauth/grok-4.5 must be in bundled models.json");
+
+		const { params } = buildParams(grok45, singleUserContext, undefined, undefined);
+
+		expect(params.reasoning).toBeUndefined();
+	});
+
 	test("xai-oauth/grok-4.5 omits unsupported reasoning summary", () => {
 		const grok45 = getBundledModel<"openai-responses">("xai-oauth", "grok-4.5");
 		if (!grok45) throw new Error("xai-oauth/grok-4.5 must be in bundled models.json");

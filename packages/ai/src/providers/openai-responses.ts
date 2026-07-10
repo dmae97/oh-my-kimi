@@ -897,8 +897,14 @@ export function buildParams(
 		filterReasoningHistory: options?.filterReasoningHistory,
 		omitReasoningEffort: options?.omitReasoningEffort,
 	});
+	const reasoningSummary =
+		model.provider === "xai-oauth"
+			? options?.reasoning === undefined
+				? undefined
+				: null
+			: options?.reasoningSummary;
 	applyResponsesCompatPolicy(params, reasoningPolicy, {
-		reasoningSummary: model.provider === "xai-oauth" ? null : options?.reasoningSummary,
+		reasoningSummary,
 		mapEffort: effort =>
 			model.compat.reasoningEffortMap?.[effort as NonNullable<OpenAIResponsesOptions["reasoning"]>] ??
 			model.thinking?.effortMap?.[effort as NonNullable<OpenAIResponsesOptions["reasoning"]>] ??
