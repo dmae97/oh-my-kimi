@@ -88426,13 +88426,10 @@
 			"contextWindow": 1000000,
 			"maxTokens": 131072,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-budget-effort",
 				"efforts": [
-					"minimal",
-					"low",
-					"medium",
 					"high",
-					"xhigh"
+					"max"
 				]
 			}
 		},

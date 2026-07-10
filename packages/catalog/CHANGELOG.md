@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Z.ai GLM-5.2 on the `anthropic-messages` coding endpoint deriving `mode: "budget"` with five synthetic effort tiers instead of the wire-exact `anthropic-budget-effort` with `[high, max]`. The catalog now matches Z.ai's Anthropic proxy to the same two-tier reasoning scale as Umans, so `output_config.effort` is emitted on the wire.
+
 ## [16.4.1] - 2026-07-10
 
 ### Added
