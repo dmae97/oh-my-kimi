@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed GitHub Copilot Business and Enterprise discovery preserving vision-capable models from `/models` instead of downgrading them to text-only. ([#4779](https://github.com/can1357/oh-my-pi/issues/4779))
+
 ## [16.3.11] - 2026-07-06
 
 ### Added

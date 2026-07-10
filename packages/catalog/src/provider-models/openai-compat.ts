@@ -16,12 +16,7 @@ import { getBundledModels } from "../models";
 import type { Api, FetchImpl, Model, ModelSpec, OpenAICompat, Provider, ThinkingConfig } from "../types";
 import { discoveryFetch, isAnthropicOAuthToken, isRecord, toBoolean, toNumber, toPositiveNumber } from "../utils";
 import { coreWeaveProjectHeaders } from "../wire/coreweave";
-import {
-	COPILOT_API_HEADERS,
-	getGitHubCopilotBaseUrl,
-	isPersonalGitHubCopilotBaseUrl,
-	parseGitHubCopilotApiKey,
-} from "../wire/github-copilot";
+import { COPILOT_API_HEADERS, getGitHubCopilotBaseUrl, parseGitHubCopilotApiKey } from "../wire/github-copilot";
 import { createBundledReferenceMap, createReferenceResolver, toModelSpec } from "./bundled-references";
 
 const MODELS_DEV_URL = "https://models.dev/api.json";
@@ -3695,16 +3690,13 @@ export function githubCopilotModelManagerOptions(config?: GithubCopilotModelMana
 								? entry.name
 								: (reference?.name ?? defaults.name);
 						const api = inferCopilotApi(defaults.id);
-						// `supports.vision` reports the model's intrinsic capability, but
-						// the business/enterprise endpoints respond `400 vision is not
-						// supported` on image inputs. Only honour the flag for the
-						// canonical personal-Copilot host.
 						const supportsVision = extractCopilotSupportsVision(entry);
-						const input: ModelSpec<Api>["input"] = isPersonalGitHubCopilotBaseUrl(baseUrl)
-							? supportsVision
-								? ["text", "image"]
-								: (reference?.input ?? defaults.input)
-							: ["text"];
+						const input: ModelSpec<Api>["input"] =
+							supportsVision === undefined
+								? (reference?.input ?? defaults.input)
+								: supportsVision
+									? ["text", "image"]
+									: ["text"];
 						// With COPILOT_API_HEADERS the served window is the long-context
 						// ceiling; the default tier ends at token_prices.default.context_max
 						// prompt tokens. Cap the base entry to the default tier — the long
