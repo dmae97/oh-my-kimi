@@ -300,9 +300,16 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 	const requestedTimeoutMs = options?.timeout;
 	const deadlineTimeoutMs = requestedTimeoutMs === 0 ? undefined : Math.max(1_000, requestedTimeoutMs ?? 300_000);
 	const nativeTimeoutMs = requestedTimeoutMs !== undefined && requestedTimeoutMs > 0 ? requestedTimeoutMs : undefined;
+	const nativeOwnsTimeout = nativeTimeoutMs !== undefined;
 	if (deadlineTimeoutMs !== undefined) {
 		timeoutTimer = setTimeout(() => {
-			abortCurrentExecution();
+			// Explicit timeouts are already enforced inside pi-natives via
+			// `timeoutMs`. Do not also abort the JS AbortSignal here: on Windows,
+			// aborting that signal while a piped command is still forwarding output
+			// can terminate the Bun host before the native timeout result resolves.
+			if (!nativeOwnsTimeout) {
+				abortCurrentExecution();
+			}
 			timeoutDeferred.resolve("timeout");
 		}, deadlineTimeoutMs);
 	}
