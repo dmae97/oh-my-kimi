@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed concurrent MCP OAuth refreshes across OMP processes so rotating refresh tokens are refreshed once, waiters reuse the canonical credential, and stale `invalid_grant` losers cannot clear the winner. ([#5081](https://github.com/can1357/oh-my-pi/issues/5081))
+
 ## [16.4.0] - 2026-07-10
 
 ### Breaking Changes

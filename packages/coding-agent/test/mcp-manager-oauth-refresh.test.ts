@@ -11,20 +11,57 @@
  */
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai";
 import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import * as oauthFlow from "@oh-my-pi/pi-coding-agent/mcp/oauth-flow";
 import type { MCPServerConfig } from "@oh-my-pi/pi-coding-agent/mcp/types";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const CREDENTIAL_ID = "mcp_oauth_test_1908";
 const TOKEN_URL = "https://example.com/oauth/token";
 const STALE_ACCESS = "stale-access-token";
 const STALE_REFRESH = "stale-refresh-token";
 
+const SHARED_CREDENTIAL_ID = "mcp_oauth_test_5081";
+const SHARED_STALE_ACCESS = "access-0";
+const SHARED_STALE_REFRESH = "refresh-0";
+const SHARED_FRESH_ACCESS = "access-1";
+const SHARED_FRESH_REFRESH = "refresh-1";
+
 /** Build a `Headers` snapshot from a prepared MCP config. */
 function getAuthorizationHeader(config: MCPServerConfig): string | undefined {
 	if (config.type !== "http" && config.type !== "sse") return undefined;
 	return config.headers?.Authorization;
+}
+
+async function withSharedSQLiteAuth<T>(
+	fn: (context: {
+		authA: AuthStorage;
+		authB: AuthStorage;
+		storeA: SqliteAuthCredentialStore;
+		storeB: SqliteAuthCredentialStore;
+	}) => Promise<T>,
+): Promise<T> {
+	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-oauth-shared-refresh-"));
+	let authA: AuthStorage | undefined;
+	let authB: AuthStorage | undefined;
+	try {
+		const dbPath = path.join(tempDir, "agent.db");
+		const storeA = await SqliteAuthCredentialStore.open(dbPath);
+		const storeB = await SqliteAuthCredentialStore.open(dbPath);
+		authA = new AuthStorage(storeA);
+		authB = new AuthStorage(storeB);
+		await authA.reload();
+		await authB.reload();
+		return await fn({ authA, authB, storeA, storeB });
+	} finally {
+		authA?.close();
+		authB?.close();
+		await removeWithRetries(tempDir);
+	}
 }
 
 describe("MCPManager OAuth refresh failure", () => {
@@ -135,5 +172,158 @@ describe("MCPManager OAuth refresh failure", () => {
 		expect(getAuthorizationHeader(prepared)).toBe("Bearer fresh-access");
 		const remaining = authStorage.get(CREDENTIAL_ID);
 		expect(remaining).toMatchObject({ type: "oauth", access: "fresh-access", refresh: "fresh-refresh" });
+	});
+});
+
+describe("MCPManager shared SQLite OAuth refresh", () => {
+	test("shares refresh ownership so peer managers do not replay a rotating refresh token", async () => {
+		await withSharedSQLiteAuth(async ({ authA, authB }) => {
+			await authA.set(SHARED_CREDENTIAL_ID, {
+				type: "oauth",
+				access: SHARED_STALE_ACCESS,
+				refresh: SHARED_STALE_REFRESH,
+				expires: Date.now() - 60_000,
+			});
+			await authB.reload();
+
+			const refreshStarted = Promise.withResolvers<void>();
+			const allowRefreshResponse = Promise.withResolvers<void>();
+			const refreshTokens: string[] = [];
+			let refreshRequests = 0;
+			const tokenServer = Bun.serve({
+				hostname: "127.0.0.1",
+				port: 0,
+				async fetch(req) {
+					if (req.method !== "POST" || new URL(req.url).pathname !== "/token") {
+						return new Response("not found", { status: 404 });
+					}
+					refreshRequests += 1;
+					const body = new URLSearchParams(await req.text());
+					refreshTokens.push(body.get("refresh_token") ?? "");
+					if (refreshRequests === 1) {
+						refreshStarted.resolve();
+						await allowRefreshResponse.promise;
+						return Response.json({
+							access_token: SHARED_FRESH_ACCESS,
+							refresh_token: SHARED_FRESH_REFRESH,
+							expires_in: 3600,
+						});
+					}
+					return Response.json({ error: "invalid_grant" }, { status: 400 });
+				},
+			});
+			try {
+				const managerA = new MCPManager(process.cwd());
+				managerA.setAuthStorage(authA);
+				const managerB = new MCPManager(process.cwd());
+				managerB.setAuthStorage(authB);
+				const config: MCPServerConfig = {
+					type: "http",
+					url: "https://logfire.example.com/mcp",
+					auth: {
+						type: "oauth",
+						credentialId: SHARED_CREDENTIAL_ID,
+						tokenUrl: `http://127.0.0.1:${tokenServer.port}/token`,
+					},
+				};
+
+				const preparedA = managerA.prepareConfig(config);
+				await refreshStarted.promise;
+				const preparedB = managerB.prepareConfig(config);
+				allowRefreshResponse.resolve();
+
+				const [resolvedA, resolvedB] = await Promise.all([preparedA, preparedB]);
+
+				expect(refreshRequests).toBe(1);
+				expect(refreshTokens).toEqual([SHARED_STALE_REFRESH]);
+				expect(getAuthorizationHeader(resolvedA)).toBe(`Bearer ${SHARED_FRESH_ACCESS}`);
+				expect(getAuthorizationHeader(resolvedB)).toBe(`Bearer ${SHARED_FRESH_ACCESS}`);
+
+				await authA.reload();
+				const canonical = authA.get(SHARED_CREDENTIAL_ID);
+				expect(canonical).toMatchObject({
+					type: "oauth",
+					access: SHARED_FRESH_ACCESS,
+					refresh: SHARED_FRESH_REFRESH,
+				});
+			} finally {
+				tokenServer.stop(true);
+			}
+		});
+	});
+
+	test("keeps the peer-rotated credential when a stale refresh attempt returns invalid_grant", async () => {
+		await withSharedSQLiteAuth(async ({ authA, authB, storeB }) => {
+			await authA.set(SHARED_CREDENTIAL_ID, {
+				type: "oauth",
+				access: SHARED_STALE_ACCESS,
+				refresh: SHARED_STALE_REFRESH,
+				expires: Date.now() - 60_000,
+			});
+			await authB.reload();
+			const storedBefore = storeB.listAuthCredentials(SHARED_CREDENTIAL_ID);
+			expect(storedBefore).toHaveLength(1);
+			const rowId = storedBefore[0]!.id;
+
+			const refreshStarted = Promise.withResolvers<void>();
+			const allowInvalidGrant = Promise.withResolvers<void>();
+			const refreshTokens: string[] = [];
+			let refreshRequests = 0;
+			const tokenServer = Bun.serve({
+				hostname: "127.0.0.1",
+				port: 0,
+				async fetch(req) {
+					if (req.method !== "POST" || new URL(req.url).pathname !== "/token") {
+						return new Response("not found", { status: 404 });
+					}
+					refreshRequests += 1;
+					const body = new URLSearchParams(await req.text());
+					refreshTokens.push(body.get("refresh_token") ?? "");
+					refreshStarted.resolve();
+					await allowInvalidGrant.promise;
+					return Response.json({ error: "invalid_grant" }, { status: 400 });
+				},
+			});
+			try {
+				const managerA = new MCPManager(process.cwd());
+				managerA.setAuthStorage(authA);
+				const config: MCPServerConfig = {
+					type: "http",
+					url: "https://logfire.example.com/mcp",
+					auth: {
+						type: "oauth",
+						credentialId: SHARED_CREDENTIAL_ID,
+						tokenUrl: `http://127.0.0.1:${tokenServer.port}/token`,
+					},
+				};
+
+				const prepared = managerA.prepareConfig(config);
+				await refreshStarted.promise;
+				storeB.updateAuthCredential(rowId, {
+					type: "oauth",
+					access: SHARED_FRESH_ACCESS,
+					refresh: SHARED_FRESH_REFRESH,
+					expires: Date.now() + 60 * 60_000,
+				});
+				allowInvalidGrant.resolve();
+
+				const resolved = await prepared;
+
+				expect(refreshRequests).toBe(1);
+				expect(refreshTokens).toEqual([SHARED_STALE_REFRESH]);
+				expect(getAuthorizationHeader(resolved)).toBe(`Bearer ${SHARED_FRESH_ACCESS}`);
+
+				await authA.reload();
+				const canonical = authA.get(SHARED_CREDENTIAL_ID);
+				expect(canonical).toMatchObject({
+					type: "oauth",
+					access: SHARED_FRESH_ACCESS,
+					refresh: SHARED_FRESH_REFRESH,
+				});
+				expect(storeB.listAuthCredentials(SHARED_CREDENTIAL_ID)).toHaveLength(1);
+			} finally {
+				tokenServer.stop(true);
+			}
+		});
 	});
 });
