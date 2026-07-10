@@ -1362,13 +1362,15 @@ describe("TUI terminal-state regressions", () => {
 			setTerminalScreenToScrollback(true);
 			const term = new VirtualTerminal(20, 3);
 			const tui = new TUI(term);
-			tui.addChild(new MutableLinesComponent(rows("line-", 6)));
+			const component = new MutableLinesComponent(rows("line-", 6));
+			tui.addChild(component);
 			const writes = captureWrites(term);
 
 			try {
 				tui.start();
 				await settle(term);
 				writes.length = 0;
+				component.setLines(["new"]);
 
 				tui.requestRender(true, { clearScrollback: true });
 				await settle(term);
@@ -1376,6 +1378,7 @@ describe("TUI terminal-state regressions", () => {
 				expect(out).toContain("\x1b[H\x1b[3J");
 				expect(out).not.toContain("\x1b[2J");
 				expect(out).not.toContain("\x1b[22J");
+				expect(visible(term)).toEqual(["new", "", ""]);
 			} finally {
 				tui.stop();
 				setTerminalScreenToScrollback(saved);

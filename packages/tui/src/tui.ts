@@ -3162,7 +3162,7 @@ export class TUI extends Container {
 	}
 
 	/**
-	 * Clear the viewport (optionally native scrollback) and replay the frame:
+	 * Replay the frame from home, optionally clearing native scrollback first:
 	 * committed prefix `[0, chunkTo)` followed by the visible window. ED3
 	 * (`CSI 3 J`) is emitted here and only here, and only for gesture-driven
 	 * paints (session replace, resize, resetDisplay, or an explicit
