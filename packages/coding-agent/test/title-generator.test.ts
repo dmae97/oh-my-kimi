@@ -70,6 +70,31 @@ describe("title generator", () => {
 		expect(options?.disableReasoning).toBe(true);
 	});
 
+	it.each([
+		[
+			"thinking",
+			"<thinking>Thinking process:\n<title>Wrong internal scratchpad</title>\n</thinking>\n<title>Fix login button</title>",
+		],
+		[
+			"think",
+			"<think>Thinking process:\n<title>Wrong internal scratchpad</title>\n</think>\n<title>Fix login button</title>",
+		],
+	] as const)("ignores leaked <%s> reasoning markup before the visible title", async (_tag, responseText) => {
+		const model = getModelOrThrow("claude-sonnet-4-5");
+		vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: responseText }],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"the login button is broken on mobile",
+			createRegistry(model),
+			createSettings(model),
+		);
+
+		expect(title).toBe("Fix login button");
+	});
+
 	it("uses the bundled default prompt when no title prompt file is resolved", async () => {
 		const model = getModelOrThrow("claude-sonnet-4-5");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({

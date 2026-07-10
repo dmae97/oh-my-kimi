@@ -4,6 +4,7 @@
 import * as path from "node:path";
 
 import { type Api, type AssistantMessage, completeSimple, type Model } from "@oh-my-pi/pi-ai";
+import { StreamMarkupHealing } from "@oh-my-pi/pi-ai/utils/stream-markup-healing";
 import { isTerminalHeadless, logger, prompt } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 
@@ -244,9 +245,15 @@ function extractGeneratedTitle(contentBlocks: AssistantMessage["content"]): stri
 	// Stay lenient: prefer the marker when the model closed it, otherwise
 	// accept a plain sentence after stripping any stray/unclosed tag fragment
 	// (e.g. output truncated before the closing tag).
-	const marker = TITLE_MARKER_RE.exec(textTitle);
-	const candidate = marker ? marker[1].trim() : textTitle.replace(/<\/?title>/gi, "").trim();
+	const cleanedTextTitle = stripLeakedThinkingMarkup(textTitle);
+	const marker = TITLE_MARKER_RE.exec(cleanedTextTitle);
+	const candidate = marker ? marker[1].trim() : cleanedTextTitle.replace(/<\/?title>/gi, "").trim();
 	return unwrapJsonTitle(candidate);
+}
+
+function stripLeakedThinkingMarkup(text: string): string {
+	const healer = new StreamMarkupHealing({ pattern: "thinking" });
+	return healer.feed(text) + healer.flushPending();
 }
 
 /**
