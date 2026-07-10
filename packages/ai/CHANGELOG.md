@@ -11,6 +11,9 @@
 ### Changed
 
 - Enforced `all_turns` reasoning context for all Responses Lite requests
+### Fixed
+
+- Fixed shared SQLite OAuth refreshes to use durable credential-row ownership plus compare-and-set persistence, preventing stale refresh failures from deleting or overwriting a peer's rotated credential. ([#5081](https://github.com/can1357/oh-my-pi/issues/5081))
 
 ## [16.4.0] - 2026-07-10
 
@@ -27,6 +30,7 @@
 
 ### Fixed
 
+- Fixed OpenAI Codex turn requests to include the Codex `version` header, matching upstream Codex request metadata for newly gated models.
 - Fixed xAI SuperGrok multi-account rotation to correctly treat HTTP 403 credit exhaustion and spending limit errors as usage limits, triggering a credential rotation to a sibling account.
 - Fixed error classification for AWS credential-resolution failures (AwsCredentialsError) to correctly map them as authentication failures.
 - Fixed OpenAI-compatible chat-completions streams to preserve vLLM-style trailing cached-token usage chunks, ensuring accurate cacheRead and billable input session statistics.

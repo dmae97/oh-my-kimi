@@ -28,7 +28,7 @@ import { convertTools } from "@oh-my-pi/pi-ai/providers/openai-responses";
 import { buildResponsesInput, resolveOpenAICompatPolicy } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
-import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { logger, prompt, stringifyJson } from "@oh-my-pi/pi-utils";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 import { type AgentTelemetry, instrumentedCompleteSimple } from "../telemetry";
 import { ThinkingLevel } from "../thinking";
@@ -406,7 +406,7 @@ export function estimateTokens(message: AgentMessage, options?: { excludeEncrypt
 					}
 				} else if (block.type === "toolCall") {
 					fragments.push(block.name);
-					fragments.push(JSON.stringify(block.arguments));
+					fragments.push(stringifyJson(block.arguments) ?? "null");
 				} else if (block.type === "redactedThinking") {
 					// Encrypted reasoning blob the provider still bills for on replay;
 					// excluded from the compaction floor for the same reason as above.

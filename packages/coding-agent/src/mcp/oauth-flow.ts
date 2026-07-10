@@ -724,6 +724,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
  */
 export interface RefreshMCPOAuthTokenOptions {
 	fetch?: FetchImpl;
+	signal?: AbortSignal;
 	/**
 	 * Authorization-server URL the original grant was minted against. Used to
 	 * filter same-origin resource indicators on refresh. Defaults to `tokenUrl`'s
@@ -775,6 +776,7 @@ export async function refreshMCPOAuthToken(
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
 		body: params.toString(),
+		signal: optsFromTrailing?.signal,
 	});
 
 	if (!response.ok) {

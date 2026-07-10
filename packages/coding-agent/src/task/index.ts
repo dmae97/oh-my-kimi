@@ -60,7 +60,7 @@ import {
 } from "./isolation-runner";
 import { generateTaskName } from "./name-generator";
 import { AgentOutputManager } from "./output-manager";
-import { mapWithConcurrencyLimit, normalizeConcurrencyLimit, Semaphore } from "./parallel";
+import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
 import { renderResult, renderCall as renderTaskCall } from "./render";
 import { repairTaskParams } from "./repair-args";
 import { parseIsolationMode } from "./worktree";
@@ -180,7 +180,6 @@ export function formatResultOutputFallback(result: Pick<SingleResult, "output" |
  */
 function renderDescription(
 	agents: AgentDefinition[],
-	maxConcurrency: number,
 	isolationEnabled: boolean,
 	disabledAgents: string[],
 	batchEnabled: boolean,
@@ -208,7 +207,6 @@ function renderDescription(
 		defaultAgent: spawnPolicy.defaultAgent,
 		defaultAgentIsGeneric: spawnPolicy.defaultAgent === DEFAULT_SPAWN_AGENT,
 		allowedAgentsText: spawnPolicy.allowedPromptText,
-		MAX_CONCURRENCY: normalizeConcurrencyLimit(maxConcurrency),
 		isolationEnabled,
 		batchEnabled,
 		asyncEnabled,
@@ -521,11 +519,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	/** Dynamic description that reflects current disabled-agent settings */
 	get description(): string {
 		const disabledAgents = this.session.settings.get("task.disabledAgents") as string[];
-		const maxConcurrency = this.session.settings.get("task.maxConcurrency");
 		const isolationMode = this.session.settings.get("task.isolation.mode");
 		return renderDescription(
 			this.#discoveredAgents,
-			maxConcurrency,
 			isolationMode !== "none",
 			disabledAgents,
 			this.#isBatchEnabled(),

@@ -27,6 +27,7 @@ import {
 	logger,
 	parseStreamingJson,
 	parseStreamingJsonThrottled,
+	stringifyJson,
 	structuredCloneJSON,
 } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
@@ -1694,7 +1695,7 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 			...(itemId ? { id: itemId } : {}),
 			call_id: normalized.callId,
 			name: functionName,
-			arguments: JSON.stringify(block.arguments),
+			arguments: stringifyJson(block.arguments) ?? "null",
 		});
 	}
 

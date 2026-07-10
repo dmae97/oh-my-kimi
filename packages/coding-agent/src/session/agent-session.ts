@@ -286,6 +286,7 @@ import {
 	type SecretObfuscator,
 } from "../secrets/obfuscator";
 import { invalidateHostMetadata } from "../ssh/connection-manager";
+import { usesCodexTaskPrompt } from "../task/prompt-policy";
 import {
 	AUTO_THINKING,
 	type ConfiguredThinkingLevel,
@@ -6123,19 +6124,17 @@ export class AgentSession {
 		return resolveEditMode(this.#getEditModeSession());
 	}
 
-	/**
-	 * Model key (`provider/id`) currently surfaced in the system prompt, or
-	 * undefined when the model is unset or `includeModelInPrompt` is disabled.
-	 */
+	/** Cache key for model-dependent prompt content: displayed id or hidden-policy cohort. */
 	#currentPromptModelKey(): string | undefined {
-		if (!this.settings.get("includeModelInPrompt")) return undefined;
-		return this.model ? formatModelString(this.model) : undefined;
+		const model = this.model ? formatModelString(this.model) : undefined;
+		if (!model || this.settings.get("includeModelInPrompt")) return model;
+		return usesCodexTaskPrompt(model) ? "task-policy:gpt-5.6" : "task-policy:default";
 	}
 
 	async #syncAfterModelChange(previousEditMode: EditMode): Promise<void> {
 		const currentEditMode = this.#resolveActiveEditMode();
 		const editModeChanged = previousEditMode !== currentEditMode && this.getActiveToolNames().includes("edit");
-		// The system prompt may surface the active model; a switch makes the cached prompt stale.
+		// The system prompt selects model-specific policy even when it does not display the model id.
 		const modelChanged = this.#currentPromptModelKey() !== this.#promptModelKey;
 		if (editModeChanged || modelChanged) {
 			await this.refreshBaseSystemPrompt();

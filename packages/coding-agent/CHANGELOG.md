@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed serialization of BigInt values in tool arguments during session compaction
+- Fixed GPT-5.6 over-delegating work by centralizing task fan-out and concurrency policy in the system prompt: default task mode now uses Codex's explicit-request policy, while eager task mode uses its proactive policy. Other models retain the existing delegation strategy; the task tool keeps only model-independent assignment and coordination guidance.
+
 ## [16.4.1] - 2026-07-10
 
 ### Changed
@@ -12,6 +17,7 @@
 ### Fixed
 
 - Fixed MCP OAuth dynamic client registration omitting discovered scopes on the RFC 7591 registration body. Providers such as Clerk bind DCR-created clients to only the scopes declared at registration, then reject the subsequent authorize request when it asks for `openid` (from `scopes_supported`). Registration now includes `config.scopes` when present, matching Claude Code and the scopes already sent on authorize.
+- Fixed concurrent MCP OAuth refreshes across OMP processes so rotating refresh tokens are refreshed once, waiters reuse the canonical credential, and stale `invalid_grant` losers cannot clear the winner. ([#5081](https://github.com/can1357/oh-my-pi/issues/5081))
 
 ## [16.4.0] - 2026-07-10
 
