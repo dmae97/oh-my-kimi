@@ -432,4 +432,82 @@ describe("AuthStorage OAuth refresh race", () => {
 		expect(cRow?.credential.type).toBe("oauth");
 		if (cRow?.credential.type === "oauth") expect(cRow.credential.refresh).toBe("c-ref");
 	});
+
+	test("propagates CAS update storage errors instead of treating them as peer refresh wins", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+
+		await authStorage.set("unit-oauth-cas-update-error", [
+			{
+				type: "oauth",
+				access: "access-old",
+				refresh: "refresh-old",
+				expires: Date.now() - 60_000,
+			},
+		]);
+
+		const failure = new Error("sqlite update failed");
+		vi.spyOn(store, "tryUpdateAuthCredentialIfMatches").mockImplementation(() => {
+			throw failure;
+		});
+
+		await expect(
+			authStorage.refreshStoredOAuthCredential("unit-oauth-cas-update-error", {
+				credentialFromRow: row => row,
+				forceRefresh: true,
+				refresh: async credential => ({
+					...credential,
+					access: "access-fresh",
+					refresh: "refresh-fresh",
+					expires: Date.now() + 60 * 60_000,
+				}),
+			}),
+		).rejects.toThrow("sqlite update failed");
+
+		const stored = store.listAuthCredentials("unit-oauth-cas-update-error");
+		expect(stored).toHaveLength(1);
+		expect(stored[0]?.credential).toMatchObject({
+			type: "oauth",
+			access: "access-old",
+			refresh: "refresh-old",
+		});
+	});
+
+	test("propagates CAS disable storage errors instead of treating them as peer rotations", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+
+		await authStorage.set("unit-oauth-cas-disable-error", [
+			{
+				type: "oauth",
+				access: "access-old",
+				refresh: "refresh-old",
+				expires: Date.now() - 60_000,
+			},
+		]);
+
+		const failure = new Error("sqlite disable failed");
+		vi.spyOn(store, "tryDisableAuthCredentialIfMatches").mockImplementation(() => {
+			throw failure;
+		});
+
+		await expect(
+			authStorage.refreshStoredOAuthCredential("unit-oauth-cas-disable-error", {
+				credentialFromRow: row => row,
+				forceRefresh: true,
+				refresh: async () => {
+					throw new Error('HTTP 400 invalid_grant {"error":"invalid_grant"}');
+				},
+				isDefinitiveFailure: error => error instanceof Error && error.message.includes("invalid_grant"),
+				disabledCause: error => `oauth refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+			}),
+		).rejects.toThrow("sqlite disable failed");
+
+		expect(events).toHaveLength(0);
+		const stored = store.listAuthCredentials("unit-oauth-cas-disable-error");
+		expect(stored).toHaveLength(1);
+		expect(stored[0]?.credential).toMatchObject({
+			type: "oauth",
+			access: "access-old",
+			refresh: "refresh-old",
+		});
+	});
 });
