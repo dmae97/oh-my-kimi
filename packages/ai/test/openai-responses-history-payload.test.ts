@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import {
 	convertCodexResponsesMessages,
 	streamOpenAICodexResponses,
@@ -9,6 +9,17 @@ import type { Context, Model, ModelSpec, ProviderSessionState } from "@oh-my-pi/
 import { createOpenAIResponsesHistoryPayload, truncateResponseItemId } from "@oh-my-pi/pi-ai/utils";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import * as piUtils from "@oh-my-pi/pi-utils";
+
+const TEST_INSTALLATION_ID = "00000000-0000-4000-8000-000000000001";
+
+beforeEach(() => {
+	vi.spyOn(piUtils, "getInstallId").mockReturnValue(TEST_INSTALLATION_ID);
+});
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
 function createAbortedSignal(): AbortSignal {
 	const controller = new AbortController();

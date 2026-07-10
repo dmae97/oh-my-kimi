@@ -1702,9 +1702,36 @@ export function appendReasoningSummaryPart(
 	item.summary.push(part);
 }
 
-/** Chooses the final reasoning text without discarding content already streamed into the block. */
-export function finalizeReasoningThinking(item: ResponseReasoningItem, streamedThinking: string): string {
-	const summaryThinking = item.summary?.map(part => part.text).join("\n\n") ?? "";
+// Sequential-cutoff streams may repeat the full canonical summary as later parts.
+function foldReasoningSummary(parts: ResponseReasoningItem["summary"] | undefined): string {
+	if (!parts) return "";
+	let canonical = "";
+	for (const part of parts) {
+		const text = part.text;
+		if (!text || text === canonical) continue;
+		const extendsCanonical = text.startsWith(canonical) && text[canonical.length] === "\n";
+		canonical = !canonical || extendsCanonical ? text : `${canonical}\n\n${text}`;
+	}
+	return canonical;
+}
+
+/** Chooses final reasoning text without making sequential-cutoff results disagree with emitted deltas. */
+export function finalizeReasoningThinking(
+	item: ResponseReasoningItem,
+	streamedThinking: string,
+	options: { cumulativeSummarySnapshots?: boolean } = {},
+): string {
+	const summaryThinking = options.cumulativeSummarySnapshots
+		? foldReasoningSummary(item.summary)
+		: (item.summary?.map(part => part.text).join("\n\n") ?? "");
+	if (
+		options.cumulativeSummarySnapshots &&
+		streamedThinking &&
+		summaryThinking &&
+		summaryThinking !== streamedThinking
+	) {
+		return streamedThinking;
+	}
 	if (summaryThinking) return summaryThinking;
 	const contentThinking = item.content?.[0]?.type === "reasoning_text" ? (item.content[0].text ?? "") : "";
 	return contentThinking || streamedThinking || "";
@@ -1742,12 +1769,12 @@ export function appendReasoningSummaryPartDone(
 }
 
 /**
- * Applies an atomic `response.reasoning_summary_text.done` event (concurrent
- * reasoning summaries, `stream_options.reasoning_summary_delivery:
- * "sequential_cutoff"`). The event carries the FULL text for `summaryIndex`;
- * incremental `.delta`/`.part.*` events are ignored under this contract, so
- * the whole part is stored and streamed here. Parts after the first are
- * separated by a section break, mirroring codex-rs.
+ * Applies an atomic `response.reasoning_summary_text.done` snapshot.
+ *
+ * Sequential-cutoff streams can replay an index or send the accumulated
+ * summary as a later part. Rebuild the canonical summary and emit only its
+ * append-only suffix. Divergent corrections stay buffered until finalization
+ * so delta consumers never receive suffixes based on unseen replacement text.
  */
 export function applyReasoningSummaryDone(
 	item: ResponseReasoningItem,
@@ -1763,8 +1790,11 @@ export function applyReasoningSummaryDone(
 		item.summary.push({ type: "summary_text", text: "" });
 	}
 	item.summary[summaryIndex].text = text;
-	const delta = summaryIndex > 0 ? `\n\n${text}` : text;
-	block.thinking += delta;
+	const after = foldReasoningSummary(item.summary);
+	if (!after.startsWith(block.thinking)) return;
+	const delta = after.slice(block.thinking.length);
+	if (!delta) return;
+	block.thinking = after;
 	stream.push({ type: "thinking_delta", contentIndex, delta, partial: output });
 }
 

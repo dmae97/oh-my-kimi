@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import {
 	type InputItem,
 	type RequestBody,
@@ -7,12 +7,24 @@ import {
 import {
 	buildTransformedCodexRequestBody,
 	convertCodexResponsesMessages,
+	resetOpenAICodexHistoryAfterCompaction,
 	streamOpenAICodexResponses,
 } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { isOpenAIResponsesProgressEvent } from "@oh-my-pi/pi-ai/providers/openai-shared";
-import type { Context, FetchImpl } from "@oh-my-pi/pi-ai/types";
+import type { CodexCompactionRequestContext, Context, FetchImpl, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import * as piUtils from "@oh-my-pi/pi-utils";
 import { createCodexModel } from "./helpers";
+
+const TEST_INSTALLATION_ID = "00000000-0000-4000-8000-000000000001";
+
+beforeEach(() => {
+	vi.spyOn(piUtils, "getInstallId").mockReturnValue(TEST_INSTALLATION_ID);
+});
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
 function createCodexTestToken(accountId = "acc_test"): string {
 	const payload = Buffer.from(
@@ -62,6 +74,24 @@ const COMPLETED_CODEX_EVENTS: Array<Record<string, unknown>> = [
 interface CapturedCodexRequest {
 	headers: Headers;
 	body: Record<string, unknown>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+	if (!isRecord(value)) {
+		throw new Error(`expected ${label} to be an object`);
+	}
+	return value;
+}
+
+function parseTurnMetadata(clientMetadata: Record<string, unknown>): Record<string, unknown> {
+	const encoded = clientMetadata["x-codex-turn-metadata"];
+	if (typeof encoded !== "string") throw new Error("expected x-codex-turn-metadata");
+	const decoded: unknown = JSON.parse(encoded);
+	return requireRecord(decoded, "x-codex-turn-metadata");
 }
 
 function createCodexFetchMock(sse: string, onRequest: (captured: CapturedCodexRequest) => void): FetchImpl {
@@ -370,15 +400,21 @@ describe("openai-codex fresh execution input shaping", () => {
 });
 
 describe("openai-codex Responses Lite and client metadata wire format", () => {
-	it("sends the lite header and client_metadata body field over SSE", async () => {
+	it("sends canonical Codex metadata and protects reserved fields over SSE", async () => {
 		const model = createCodexModel("gpt-5.1-codex");
-		const clientMetadata = { "x-codex-turn-metadata": '{"thread_id":"thread_1","turn_id":"turn_1"}' };
+		const context = createCodexTestContext();
+		const clientMetadata = {
+			workspace_kind: "repo",
+			workspace_path: "東京/🚀",
+			session_id: "caller-session",
+			"x-codex-turn-metadata": '{"turn_id":"caller-turn"}',
+		};
 		let captured: CapturedCodexRequest | undefined;
 		const fetchMock = createCodexFetchMock(createCodexSse(COMPLETED_CODEX_EVENTS), request => {
 			captured = request;
 		});
 
-		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
+		const result = await streamOpenAICodexResponses(model, context, {
 			apiKey: createCodexTestToken(),
 			fetch: fetchMock,
 			responsesLite: true,
@@ -386,8 +422,141 @@ describe("openai-codex Responses Lite and client metadata wire format", () => {
 		}).result();
 
 		expect(result.stopReason).toBe("stop");
-		expect(captured?.headers.get("x-openai-internal-codex-responses-lite")).toBe("true");
-		expect(captured?.body.client_metadata).toEqual(clientMetadata);
+		if (!captured) throw new Error("expected a captured Codex request");
+		expect(captured.headers.get("x-openai-internal-codex-responses-lite")).toBe("true");
+		expect(captured.headers.get("x-codex-installation-id")).toBeNull();
+
+		const metadata = requireRecord(captured.body.client_metadata, "client_metadata");
+		const turnMetadata = parseTurnMetadata(metadata);
+		expect(metadata.workspace_kind).toBeUndefined();
+		expect(metadata.workspace_path).toBeUndefined();
+		expect(metadata.session_id).not.toBe("caller-session");
+		expect(turnMetadata.request_kind).toBe("turn");
+		expect(turnMetadata.turn_started_at_unix_ms).toBe(context.messages[0]?.timestamp);
+		expect(turnMetadata.workspace_kind).toBe("repo");
+		expect(turnMetadata.workspace_path).toBe("東京/🚀");
+		expect(metadata["x-codex-installation-id"]).toMatch(
+			/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+		);
+		expect(metadata.session_id).toBe(turnMetadata.session_id);
+		expect(metadata.thread_id).toBe(turnMetadata.thread_id);
+		expect(metadata.turn_id).toBe(turnMetadata.turn_id);
+		expect(metadata["x-codex-window-id"]).toBe(turnMetadata.window_id);
+		expect(metadata.session_id).toBe(captured.headers.get("session-id"));
+		expect(metadata.thread_id).toBe(captured.headers.get("thread-id"));
+		expect(metadata["x-codex-window-id"]).toBe(captured.headers.get("x-codex-window-id"));
+		expect(metadata["x-codex-turn-metadata"]).toBe(captured.headers.get("x-codex-turn-metadata"));
+		const turnMetadataHeader = captured.headers.get("x-codex-turn-metadata");
+		expect(turnMetadataHeader).toMatch(/^[\x20-\x7e]+$/);
+		const reparsedTurnMetadata: unknown = turnMetadataHeader ? JSON.parse(turnMetadataHeader) : undefined;
+		expect(requireRecord(reparsedTurnMetadata, "round-tripped turn metadata").workspace_path).toBe("東京/🚀");
+	});
+
+	it("keeps the installation identity stable across provider sessions", async () => {
+		const model = createCodexModel("gpt-5.1-codex");
+		const captured: CapturedCodexRequest[] = [];
+		const fetchMock = createCodexFetchMock(createCodexSse(COMPLETED_CODEX_EVENTS), request => {
+			captured.push(request);
+		});
+
+		await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			apiKey: createCodexTestToken(),
+			fetch: fetchMock,
+			sessionId: "metadata-session-one",
+		}).result();
+		await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			apiKey: createCodexTestToken(),
+			fetch: fetchMock,
+			sessionId: "metadata-session-two",
+		}).result();
+
+		const firstMetadata = requireRecord(captured[0]?.body.client_metadata, "first client_metadata");
+		const secondMetadata = requireRecord(captured[1]?.body.client_metadata, "second client_metadata");
+		expect(firstMetadata["x-codex-installation-id"]).toBe(secondMetadata["x-codex-installation-id"]);
+		expect(firstMetadata.session_id).toBe("metadata-session-one");
+		expect(secondMetadata.session_id).toBe("metadata-session-two");
+		expect(firstMetadata.thread_id).not.toBe(secondMetadata.thread_id);
+	});
+
+	it("rotates compaction turns by phase and reuses one operation across fan-out calls", async () => {
+		const model = createCodexModel("gpt-5.1-codex");
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const captured: CapturedCodexRequest[] = [];
+		const fetchMock = createCodexFetchMock(createCodexSse(COMPLETED_CODEX_EVENTS), request => {
+			captured.push(request);
+		});
+		const send = async (codexCompaction?: CodexCompactionRequestContext): Promise<void> => {
+			await streamOpenAICodexResponses(model, createCodexTestContext(), {
+				apiKey: createCodexTestToken(),
+				fetch: fetchMock,
+				sessionId: "compaction-lifecycle-session",
+				providerSessionState,
+				codexCompaction,
+			}).result();
+		};
+		const preTurn: CodexCompactionRequestContext = {
+			operationId: "pre-turn-operation",
+			trigger: "auto",
+			reason: "context_limit",
+			implementation: "responses",
+			phase: "pre_turn",
+			strategy: "memento",
+		};
+		const midTurn: CodexCompactionRequestContext = {
+			...preTurn,
+			operationId: "mid-turn-operation",
+			phase: "mid_turn",
+		};
+		const standalone: CodexCompactionRequestContext = {
+			...preTurn,
+			operationId: "standalone-operation",
+			trigger: "manual",
+			reason: "user_requested",
+			phase: "standalone_turn",
+		};
+
+		await send();
+		await send(preTurn);
+		await send(preTurn);
+		resetOpenAICodexHistoryAfterCompaction({
+			providerSessionState,
+			sessionId: "compaction-lifecycle-session",
+			compaction: preTurn,
+		});
+		await send();
+		await send(midTurn);
+		await send(standalone);
+
+		const turns = captured.map((request, index) =>
+			parseTurnMetadata(requireRecord(request.body.client_metadata, `client_metadata ${index}`)),
+		);
+		expect(turns[0]?.request_kind).toBe("turn");
+		expect(turns[1]?.turn_id).not.toBe(turns[0]?.turn_id);
+		expect(turns[2]?.turn_id).toBe(turns[1]?.turn_id);
+		expect(turns[2]?.turn_started_at_unix_ms).toBe(turns[1]?.turn_started_at_unix_ms);
+		expect(turns[3]?.request_kind).toBe("turn");
+		expect(turns[3]?.turn_id).toBe(turns[1]?.turn_id);
+		expect(turns[3]?.window_id).not.toBe(turns[2]?.window_id);
+		expect(turns[4]?.turn_id).toBe(turns[1]?.turn_id);
+		expect(turns[5]?.turn_id).not.toBe(turns[4]?.turn_id);
+		expect(turns[1]?.thread_id).toBe(turns[5]?.thread_id);
+		expect(turns[1]?.compaction).toEqual({
+			trigger: "auto",
+			reason: "context_limit",
+			implementation: "responses",
+			phase: "pre_turn",
+			strategy: "memento",
+		});
+		const nestedCompaction = requireRecord(turns[1]?.compaction, "nested compaction metadata");
+		expect(nestedCompaction.operationId).toBeUndefined();
+		expect(nestedCompaction.operation_id).toBeUndefined();
+		expect(turns[5]?.compaction).toEqual({
+			trigger: "manual",
+			reason: "user_requested",
+			implementation: "responses",
+			phase: "standalone_turn",
+			strategy: "memento",
+		});
 	});
 	it("keeps lite and strips image detail when a lite request contains images", async () => {
 		const model = buildModel({
@@ -461,7 +630,7 @@ describe("openai-codex Responses Lite and client metadata wire format", () => {
 		expect((captured?.body.input as Array<Record<string, unknown>>)[0]?.type).toBe("additional_tools");
 	});
 
-	it("omits the lite header and client_metadata when not requested", async () => {
+	it("omits the lite marker while retaining canonical client_metadata", async () => {
 		const model = createCodexModel("gpt-5.1-codex");
 		let captured: CapturedCodexRequest | undefined;
 		const fetchMock = createCodexFetchMock(createCodexSse(COMPLETED_CODEX_EVENTS), request => {
@@ -475,7 +644,7 @@ describe("openai-codex Responses Lite and client metadata wire format", () => {
 
 		expect(result.stopReason).toBe("stop");
 		expect(captured?.headers.get("x-openai-internal-codex-responses-lite")).toBeNull();
-		expect(captured?.body.client_metadata).toBeUndefined();
+		expect(captured?.body.client_metadata).toBeDefined();
 	});
 });
 
@@ -559,7 +728,7 @@ describe("openai-codex concurrent reasoning summaries", () => {
 		expect(unsupported.stream_options).toBeUndefined();
 	});
 
-	it("decodes atomic summary dones and ignores legacy deltas under sequential cutoff", async () => {
+	it("deduplicates cumulative atomic summaries and ignores legacy deltas under sequential cutoff", async () => {
 		const model = createCodexModel("gpt-5.6-terra");
 		const events: Array<Record<string, unknown>> = [
 			{
@@ -586,14 +755,70 @@ describe("openai-codex concurrent reasoning summaries", () => {
 				item_id: "reason_1",
 				output_index: 0,
 				summary_index: 0,
-				text: "First part",
+				text: "Plan",
 			},
 			{
 				type: "response.reasoning_summary_text.done",
 				item_id: "reason_1",
 				output_index: 0,
 				summary_index: 1,
-				text: "Second part",
+				text: "Planning details",
+			},
+			{
+				type: "response.reasoning_summary_text.done",
+				item_id: "reason_1",
+				output_index: 0,
+				summary_index: 1,
+				text: "Planning details",
+			},
+			{
+				type: "response.reasoning_summary_text.done",
+				item_id: "reason_1",
+				output_index: 0,
+				summary_index: 2,
+				text: "Plan\n\nPlanning details\n\nInspect",
+			},
+			{
+				type: "response.reasoning_summary_text.done",
+				item_id: "reason_1",
+				output_index: 0,
+				summary_index: 2,
+				text: "Plan\n\nPlanning details\n\nInspect details",
+			},
+			{
+				type: "response.reasoning_summary_text.done",
+				item_id: "reason_1",
+				output_index: 0,
+				summary_index: 2,
+				text: "Plan\n\nPlanning details\n\nInspect details",
+			},
+			{
+				type: "response.reasoning_summary_text.done",
+				item_id: "reason_1",
+				output_index: 0,
+				summary_index: 3,
+				text: "Plan\n\nPlanning details\n\nInspect details",
+			},
+			{
+				type: "response.reasoning_summary_text.done",
+				item_id: "reason_1",
+				output_index: 0,
+				summary_index: 2,
+				text: "Plan\n\nPlanning details\n\nReview",
+			},
+			{
+				type: "response.reasoning_summary_text.done",
+				item_id: "reason_1",
+				output_index: 0,
+				summary_index: 2,
+				text: "Plan\n\nPlanning details\n\nReview output",
+			},
+			{
+				type: "response.reasoning_summary_text.done",
+				item_id: "reason_1",
+				output_index: 0,
+				summary_index: 3,
+				text: "Plan\n\nPlanning details\n\nReview output",
 			},
 			{
 				type: "response.output_item.done",
@@ -602,8 +827,10 @@ describe("openai-codex concurrent reasoning summaries", () => {
 					type: "reasoning",
 					id: "reason_1",
 					summary: [
-						{ type: "summary_text", text: "First part" },
-						{ type: "summary_text", text: "Second part" },
+						{ type: "summary_text", text: "Plan" },
+						{ type: "summary_text", text: "Planning details" },
+						{ type: "summary_text", text: "Plan\n\nPlanning details\n\nInspect details\n\nUnseen final" },
+						{ type: "summary_text", text: "Plan\n\nPlanning details\n\nInspect details\n\nUnseen final" },
 					],
 				},
 			},
@@ -618,7 +845,7 @@ describe("openai-codex concurrent reasoning summaries", () => {
 				type: "response.reasoning_summary_text.done",
 				item_id: "reason_1",
 				output_index: 0,
-				summary_index: 2,
+				summary_index: 4,
 				text: "STALE",
 			},
 			{
@@ -662,10 +889,11 @@ describe("openai-codex concurrent reasoning summaries", () => {
 		const result = await stream.result();
 
 		expect(captured?.body.stream_options).toEqual({ reasoning_summary_delivery: "sequential_cutoff" });
-		expect(thinkingDeltas).toEqual(["First part", "\n\nSecond part"]);
+		expect(thinkingDeltas).toEqual(["Plan", "\n\nPlanning details", "\n\nInspect", " details"]);
 		expect(result.stopReason).toBe("stop");
 		const thinking = result.content.find(block => block.type === "thinking");
-		expect(thinking?.thinking).toBe("First part\n\nSecond part");
+		expect(thinking?.thinking).toBe("Plan\n\nPlanning details\n\nInspect details");
+		expect(thinking?.thinking).toBe(thinkingDeltas.join(""));
 		const text = result.content.find(block => block.type === "text");
 		expect(text?.text).toBe("Hello");
 	});
