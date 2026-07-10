@@ -1763,7 +1763,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 									// Discovery flipped on mid-flight: route the explicit request
 									// through discovery-aware activation so selection persists.
 									await liveSession.activateDiscoveredMCPTools(activation.explicitlyRequestedMCPToolNames);
-								} else if (!discoveryEnabled) {
+								} else if (!discoveryEnabled && !activateAll) {
 									await liveSession.setActiveToolsByName([
 										...liveSession.getActiveToolNames(),
 										...activation.explicitlyRequestedMCPToolNames,
@@ -3055,16 +3055,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					try {
 						await session.refreshMCPTools(
 							tools,
-							deferMCPDiscoveryForUI && !mcpDiscoveryEnabled && options.toolNames === undefined
-								? { activateAll: true }
-								: undefined,
+							deferMCPDiscoveryForUI && !mcpDiscoveryEnabled ? { activateAll: true } : undefined,
 						);
-						if (deferMCPDiscoveryForUI && !mcpDiscoveryEnabled && explicitlyRequestedMCPToolNames.length > 0) {
-							await session.setActiveToolsByName([
-								...session.getActiveToolNames(),
-								...explicitlyRequestedMCPToolNames,
-							]);
-						}
 					} catch (error) {
 						logger.warn("MCP tool refresh failed", {
 							error: error instanceof Error ? error.message : String(error),
@@ -3106,7 +3098,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		startDeferredMCPDiscovery?.(session, {
 			mcpDiscoveryEnabled,
 			explicitlyRequestedMCPToolNames,
-			activateAllMCPTools: !mcpDiscoveryEnabled && options.toolNames === undefined,
+			activateAllMCPTools: !mcpDiscoveryEnabled,
 		});
 
 		return {

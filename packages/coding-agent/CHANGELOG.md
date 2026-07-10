@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `--tools` filtering in interactive sessions disabling deferred MCP tools; MCP tools discovered from configured servers now stay active when the flag limits only built-in tools. ([#5013](https://github.com/can1357/oh-my-pi/issues/5013))
+
 ## [16.3.15] - 2026-07-09
 
 ### Changed
