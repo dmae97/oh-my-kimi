@@ -88,11 +88,16 @@ describe("terminal frame without connection close", () => {
 		expect(Date.now() - startedAt).toBeLessThan(2_000);
 	}, 10_000);
 
-	it("openai-completions: keeps reading usage-only cache details after finish usage", async () => {
+	it("openai-completions: ignores zero cache placeholder until trailing positive cache details arrive", async () => {
 		const fetchMock = createNeverClosingFetch([
 			completionChunk({
 				choices: [{ index: 0, delta: { role: "assistant", content: "Hello" }, finish_reason: "stop" }],
-				usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+				usage: {
+					prompt_tokens: 10,
+					completion_tokens: 5,
+					total_tokens: 15,
+					prompt_tokens_details: { cached_tokens: 0 },
+				},
 			}),
 			completionChunk({
 				choices: [],

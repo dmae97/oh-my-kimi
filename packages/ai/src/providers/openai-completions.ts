@@ -156,16 +156,16 @@ function firstPositiveNumber(...values: unknown[]): number {
 	return 0;
 }
 
-function hasCacheReadTokenField(rawUsage: object): boolean {
+function hasPositiveCacheReadTokenField(rawUsage: object): boolean {
 	const usageLike = rawUsage as OpenAICompletionsUsageLike;
-	if (typeof usageLike.cached_tokens === "number") return true;
-	if (typeof usageLike.prompt_cache_hit_tokens === "number") return true;
+	if (typeof usageLike.cached_tokens === "number" && usageLike.cached_tokens > 0) return true;
+	if (typeof usageLike.prompt_cache_hit_tokens === "number" && usageLike.prompt_cache_hit_tokens > 0) return true;
 
 	const rawPromptTokenDetails = usageLike.prompt_tokens_details;
 	if (typeof rawPromptTokenDetails !== "object" || rawPromptTokenDetails === null) return false;
 
 	const promptTokenDetails = rawPromptTokenDetails as OpenAICompletionsPromptTokenDetails;
-	return typeof promptTokenDetails.cached_tokens === "number";
+	return typeof promptTokenDetails.cached_tokens === "number" && promptTokenDetails.cached_tokens > 0;
 }
 
 /**
@@ -1012,7 +1012,7 @@ const streamOpenAICompletionsOnce = (
 			const applyUsagePayload = (rawUsage: object): void => {
 				output.usage = parseChunkUsage(rawUsage, model, premiumRequestsTotal);
 				sawUsagePayload = true;
-				awaitTrailingUsageDetails = !hasCacheReadTokenField(rawUsage);
+				awaitTrailingUsageDetails = !hasPositiveCacheReadTokenField(rawUsage);
 			};
 			const timedOpenaiStream = iterateWithIdleTimeout(openaiStream, {
 				idleTimeoutMs,
