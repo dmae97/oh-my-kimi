@@ -22,6 +22,7 @@
 
 - Fixed concurrent reasoning summaries to ignore legacy streaming events under cutoff contract
 - Fixed sequential-cutoff Codex reasoning summaries repeating earlier content when atomic summary snapshots are replayed or extended.
+- Fixed error classification for typed AWS credential-resolution failures (`AwsCredentialsError`) to map them to authentication failures. ([#5030](https://github.com/can1357/oh-my-pi/pull/5030) by [@usr-bin-roygbiv](https://github.com/usr-bin-roygbiv))
 
 ## [16.3.15] - 2026-07-09
 
