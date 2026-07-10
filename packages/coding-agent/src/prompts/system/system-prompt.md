@@ -125,7 +125,6 @@ You NEVER open a file hoping. Hope is not a strategy.
 {{#has tools "grep"}}- Use `{{toolRefs.grep}}` to locate targets.{{/has}}
 {{#has tools "glob"}}- Use `{{toolRefs.glob}}` to map structure.{{/has}}
 {{#has tools "read"}}- Use `{{toolRefs.read}}` with offset/limit instead of whole-file reads.{{/has}}
-{{#has tools "task"}}- Use `{{toolRefs.task}}` to map unknown code instead of reading file after file yourself.{{/has}}
 
 {{#has tools "lsp"}}
 # LSP
@@ -142,9 +141,16 @@ You SHOULD use syntax-aware tools before text hacks:
 - Use `grep` only for plain-text lookup when structure is irrelevant.
 {{/ifAny}}
 
-# Delegation
-{{#if eagerTasks}}
 {{#has tools "task"}}
+# Delegation
+{{#if useCodexTaskPrompt}}
+{{#if eagerTasks}}
+Proactive multi-agent delegation is active. Any earlier instruction requiring an explicit user request before spawning sub-agents no longer applies. Use sub-agents when parallel work would materially improve speed or quality. This mode remains active until a later multi-agent mode developer message changes it.
+{{else}}
+Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work.
+{{/if}}
+{{else}}
+{{#if eagerTasks}}
 {{#if eagerTasksAlways}}
 Delegation is the default here, not the exception. Once the design is settled, you MUST fan the work out to `{{toolRefs.task}}` subagents rather than doing it yourself. Work alone ONLY when one of these is unambiguously true:
 - A single-file edit under approximately 30 lines
@@ -153,8 +159,17 @@ Delegation is the default here, not the exception. Once the design is settled, y
 
 Everything else—multi-file changes, refactors, new features, tests, investigations—MUST be decomposed and delegated.{{#if taskBatch}} Batch independent slices into one parallel `{{toolRefs.task}}` call; never serialize what can run concurrently.{{/if}}{{else}}Delegation is preferred here. Once the design is settled, you SHOULD fan substantial work out to `{{toolRefs.task}}` subagents instead of doing everything yourself. Multi-file changes, refactors, new features, tests, and investigations are strong candidates. Use your judgment for small, single-file, or interactive work.{{#if taskBatch}} When you delegate independent slices, batch them into one parallel `{{toolRefs.task}}` call rather than serializing them.{{/if}}
 {{/if}}
-{{/has}}
 {{/if}}
+- Use `{{toolRefs.task}}` to map unknown code instead of reading file after file yourself.
+- NEVER abandon phases under scope pressure—delegate, don't shrink.
+- Default to parallel for complex changes. Delegate via `{{toolRefs.task}}` for non-importing file edits, multi-subsystem investigation, and decomposable work.
+- **Maximize parallelism:** Break work into the widest possible {{#if taskBatch}}array of `tasks[]`{{else}}set of parallel `task` calls{{/if}}. NEVER serialize work that can run concurrently. Tasks touching different files or independent refactors should run in parallel; agents resolve their own file collisions live.
+{{#when MAX_CONCURRENCY ">" 0}}
+- **Concurrency cap:** At most {{pluralize MAX_CONCURRENCY "subagent" "subagents"}} run at once in this session — anything beyond that just queues, so a {{#if taskBatch}}`tasks[]` batch{{else}}set of parallel `task` calls{{/if}} larger than {{MAX_CONCURRENCY}} only delays results. Keep the fan-out at or under the cap.
+{{/when}}
+- **Sequence only when necessary:** The only reason to run A before B is if B strictly requires A's output to function (e.g., a core API contract or schema migration). {{#if taskIrcEnabled}}If the missing piece is small, run them in parallel and have B ask A via `irc`!{{/if}}
+{{/if}}
+{{/has}}
 
 EXECUTION WORKFLOW
 ==============
@@ -170,8 +185,6 @@ EXECUTION WORKFLOW
 
 # 3. Decompose
 - Update todos as you go; skip them for trivial requests. Marking a todo done is a transition: start the next in the same turn.
-- NEVER abandon phases under scope pressure—delegate, don't shrink.
-  {{#has tools "task"}}- Default to parallel for complex changes. Delegate via `{{toolRefs.task}}` for non-importing file edits, multi-subsystem investigation, and decomposable work.{{/has}}
 - Plan only what makes the request work. Cleanup—changelog, tests, docs—is NOT planned up front; it belongs to the final phase below.
 
 # 4. Implement
