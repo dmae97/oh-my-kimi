@@ -8,7 +8,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getProjectDir, readJsonl, Snowflake } from "@oh-my-pi/pi-utils";
-import { type Subprocess, spawn } from "bun";
+import type { Subprocess } from "bun";
 import { hostHasInheritableConsole } from "../../eval/py/spawn-options";
 import type {
 	JsonRpcError,
@@ -376,8 +376,11 @@ export class StdioTransport implements MCPTransport {
 		// macOS stays attached so TCC can prompt for Apple Events automation;
 		// Windows stays attached, and only hides the child when the host has no
 		// console to share. See `StdioSpawnCommand`.
-		this.#process = spawn({
-			cmd: spawnCommand.cmd,
+		// Keep this on Bun's argv-first overload. The eval JS kernel path that
+		// triggers macOS Apple Events TCC prompts uses the same shape; the
+		// one-object `{ cmd }` overload timed out before prompting for `mcpbridge`
+		// even with `detached: false` (#5085).
+		this.#process = Bun.spawn(spawnCommand.cmd, {
 			cwd,
 			env,
 			stdin: "pipe",

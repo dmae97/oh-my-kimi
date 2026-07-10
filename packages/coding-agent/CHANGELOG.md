@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed macOS stdio MCP servers still missing Apple Events TCC prompts by spawning MCP children through the same argv-first `Bun.spawn` overload used by the JS eval kernel. ([#5085](https://github.com/can1357/oh-my-pi/issues/5085))
+
 ## [16.4.0] - 2026-07-10
 
 ### Breaking Changes
