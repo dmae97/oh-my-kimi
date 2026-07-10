@@ -555,12 +555,28 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	 * "Only clients listed in the Figma MCP Catalog can connect"), the fallback
 	 * probe surfaces a message that names the endpoint and status instead of
 	 * the historical opaque "OAuth provider requires client_id".
+	 *
+	 * Includes {@link MCPOAuthConfig.scopes} as RFC 7591 `scope` when set so
+	 * providers that bind DCR clients to registered scopes only (e.g. Clerk)
+	 * accept the later authorize request for the same scope set.
 	 */
 	async #tryRegisterClient(redirectUri: string): Promise<void> {
 		const registrationEndpoint = await this.#resolveRegistrationEndpoint();
 		if (!registrationEndpoint) return;
 
 		try {
+			const registrationBody: Record<string, unknown> = {
+				client_name: "oh-my-pi",
+				redirect_uris: [redirectUri],
+				grant_types: ["authorization_code", "refresh_token"],
+				response_types: ["code"],
+				token_endpoint_auth_method: "none",
+				application_type: "native",
+			};
+			const scope = this.config.scopes?.trim();
+			if (scope) {
+				registrationBody.scope = scope;
+			}
 			const response = await this.#fetch(registrationEndpoint, {
 				method: "POST",
 				headers: {
@@ -568,14 +584,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 					Accept: "application/json",
 				},
 				signal: this.ctrl.signal,
-				body: JSON.stringify({
-					client_name: "oh-my-pi",
-					redirect_uris: [redirectUri],
-					grant_types: ["authorization_code", "refresh_token"],
-					response_types: ["code"],
-					token_endpoint_auth_method: "none",
-					application_type: "native",
-				}),
+				body: JSON.stringify(registrationBody),
 			});
 
 			if (!response.ok) {
