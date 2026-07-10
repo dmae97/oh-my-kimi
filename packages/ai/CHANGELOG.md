@@ -17,6 +17,7 @@
 
 ### Fixed
 
+- Fixed OpenAI Codex turn requests to include the Codex `version` header, matching upstream Codex request metadata for newly gated models.
 - Fixed xAI SuperGrok multi-account rotation to correctly treat HTTP 403 credit exhaustion and spending limit errors as usage limits, triggering a credential rotation to a sibling account.
 - Fixed error classification for AWS credential-resolution failures (AwsCredentialsError) to correctly map them as authentication failures.
 - Fixed OpenAI-compatible chat-completions streams to preserve vLLM-style trailing cached-token usage chunks, ensuring accurate cacheRead and billable input session statistics.

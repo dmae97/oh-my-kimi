@@ -14,6 +14,7 @@ import { isOpenAIResponsesProgressEvent } from "@oh-my-pi/pi-ai/providers/openai
 import type { CodexCompactionRequestContext, Context, FetchImpl, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import * as piUtils from "@oh-my-pi/pi-utils";
+import packageJson from "../package.json" with { type: "json" };
 import { createCodexModel } from "./helpers";
 
 const TEST_INSTALLATION_ID = "00000000-0000-4000-8000-000000000001";
@@ -625,6 +626,7 @@ describe("openai-codex Responses Lite and client metadata wire format", () => {
 
 		expect(result.stopReason).toBe("stop");
 		expect(captured?.headers.get("x-openai-internal-codex-responses-lite")).toBe("true");
+		expect(captured?.headers.get("version")).toBe(packageJson.version);
 		expect(captured?.body.instructions).toBeUndefined();
 		expect(captured?.body.tools).toBeUndefined();
 		expect((captured?.body.input as Array<Record<string, unknown>>)[0]?.type).toBe("additional_tools");
