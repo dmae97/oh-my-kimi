@@ -184,8 +184,15 @@ export class WorkerCore {
 	#handle(msg: WorkerInbound): void {
 		switch (msg.type) {
 			case "init":
-				this.#ensureRuntime(msg.snapshot);
-				this.#transport.send({ type: "ready" });
+				try {
+					this.#ensureRuntime(msg.snapshot);
+					this.#transport.send({ type: "ready" });
+				} catch (error) {
+					// Inline fallback delivers messages on a microtask. A sync throw
+					// from ensureRuntime/setCwd would otherwise become a process-fatal
+					// unhandledRejection on the main thread.
+					this.#transport.send({ type: "init-failed", error: errorPayload(error) });
+				}
 				return;
 			case "run":
 				void this.#runOne(msg.runId, msg.code, msg.filename, msg.snapshot);
