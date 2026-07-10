@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed stats sync crashing on legacy session entries whose usage payload has no cost breakdown; missing costs now use catalog pricing when available.
+
 ## [16.3.9] - 2026-07-06
 
 ### Changed
