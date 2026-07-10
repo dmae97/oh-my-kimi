@@ -123,7 +123,8 @@ export interface OpenAIRequestSetupModel extends OpenAIModelIdentity {
 	compat?: Pick<ResolvedOpenAISharedCompat, "promptCacheSessionHeader">;
 }
 
-export interface OpenAIResponsesCacheOptions {
+/** Cache identity controls shared by OpenAI-family transports. */
+export interface OpenAICacheOptions {
 	cacheRetention?: CacheRetention;
 	sessionId?: string;
 	promptCacheKey?: string;
@@ -173,6 +174,14 @@ function applyCoreWeaveProjectHeader(headers: Record<string, string>): void {
 	if (projectHeaders) {
 		headers[COREWEAVE_PROJECT_HEADER] = projectHeaders[COREWEAVE_PROJECT_HEADER];
 	}
+}
+
+function setHeaderIfAbsent(headers: Record<string, string>, name: string, value: string): void {
+	const normalizedName = name.toLowerCase();
+	for (const existingName in headers) {
+		if (existingName.toLowerCase() === normalizedName) return;
+	}
+	headers[name] = value;
 }
 
 export function resolveOpenAIRequestSetup(
@@ -257,11 +266,11 @@ export function resolveOpenAIRequestSetup(
 	}
 
 	if (options.openAISessionId && model.provider === "openai") {
-		headers.session_id ??= options.openAISessionId;
-		headers["x-client-request-id"] ??= options.openAISessionId;
+		setHeaderIfAbsent(headers, "session_id", options.openAISessionId);
+		setHeaderIfAbsent(headers, "x-client-request-id", options.openAISessionId);
 	}
 	if (options.promptCacheSessionId && model.compat?.promptCacheSessionHeader) {
-		headers[model.compat.promptCacheSessionHeader] ??= options.promptCacheSessionId;
+		setHeaderIfAbsent(headers, model.compat.promptCacheSessionHeader, options.promptCacheSessionId);
 	}
 
 	if (options.defaultBaseUrl !== undefined) {
@@ -368,7 +377,8 @@ export function calculateOpenAIUsageAccounting(accounting: OpenAIUsageAccounting
 	};
 }
 
-export function normalizeOpenAIResponsesPromptCacheKey(sessionId: string | undefined): string | undefined {
+/** Normalize a cache identity to the wire limit accepted by OpenAI-family providers. */
+export function normalizeOpenAIPromptCacheKey(sessionId: string | undefined): string | undefined {
 	return normalizeOpenAIStableId(sessionId, 64, "pc_");
 }
 
@@ -376,20 +386,21 @@ export function normalizeOpenRouterResponsesSessionId(sessionId: string | undefi
 	return normalizeOpenAIStableId(sessionId, 256, "session_");
 }
 
-export function getOpenAIResponsesPromptCacheKey(options: OpenAIResponsesCacheOptions | undefined): string | undefined {
+/** Resolve a prompt-cache identity, falling back to the provider session unless caching is disabled. */
+export function getOpenAIPromptCacheKey(options: OpenAICacheOptions | undefined): string | undefined {
 	if (resolveCacheRetention(options?.cacheRetention) === "none") return undefined;
-	return normalizeOpenAIResponsesPromptCacheKey(options?.promptCacheKey ?? options?.sessionId);
+	return normalizeOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId);
 }
 
 export function getOpenAIResponsesRoutingSessionId(
-	options: Pick<OpenAIResponsesCacheOptions, "cacheRetention" | "sessionId"> | undefined,
+	options: Pick<OpenAICacheOptions, "cacheRetention" | "sessionId"> | undefined,
 ): string | undefined {
 	if (resolveCacheRetention(options?.cacheRetention) === "none") return undefined;
-	return normalizeOpenAIResponsesPromptCacheKey(options?.sessionId);
+	return normalizeOpenAIPromptCacheKey(options?.sessionId);
 }
 
 export function getOpenRouterResponsesSessionId(
-	options: Pick<OpenAIResponsesCacheOptions, "cacheRetention" | "sessionId"> | undefined,
+	options: Pick<OpenAICacheOptions, "cacheRetention" | "sessionId"> | undefined,
 ): string | undefined {
 	if (resolveCacheRetention(options?.cacheRetention) === "none") return undefined;
 	return normalizeOpenRouterResponsesSessionId(options?.sessionId);
@@ -695,13 +706,19 @@ export interface OpenAICompatPolicy {
 	};
 }
 
-function mapOpenAIReasoningEffort(
+/**
+ * Map a user-facing effort to the provider wire value: explicit compat
+ * override first, then the model's baked `thinking.effortMap`, else identity.
+ * Shared by the chat-completions/Responses policy resolver and the Codex
+ * request transformer.
+ */
+export function mapOpenAIReasoningEffort(
 	model: Pick<Model, "thinking">,
-	compat: OpenAICompatPolicyCompat,
+	compat: { reasoningEffortMap?: Partial<Record<Effort, string>> } | undefined,
 	effort: string,
 ): string {
 	const level = effort as Effort;
-	return compat.reasoningEffortMap?.[level] ?? model.thinking?.effortMap?.[level] ?? effort;
+	return compat?.reasoningEffortMap?.[level] ?? model.thinking?.effortMap?.[level] ?? effort;
 }
 
 function isImplicitDisableWhenNotRequested(disableMode: OpenAIReasoningDisableMode): boolean {
@@ -1059,6 +1076,7 @@ export const OPENAI_RESPONSES_PROGRESS_EVENT_TYPES: ReadonlySet<string> = new Se
 	"response.output_item.added",
 	"response.reasoning_summary_part.added",
 	"response.reasoning_summary_text.delta",
+	"response.reasoning_summary_text.done",
 	"response.reasoning_summary_part.done",
 	"response.reasoning_text.delta",
 	"response.content_part.added",
@@ -1684,6 +1702,41 @@ export function appendReasoningSummaryPart(
 	item.summary.push(part);
 }
 
+// Sequential-cutoff streams may repeat the full canonical summary as later parts.
+function foldReasoningSummary(parts: ResponseReasoningItem["summary"] | undefined): string {
+	if (!parts) return "";
+	let canonical = "";
+	for (const part of parts) {
+		const text = part.text;
+		if (!text || text === canonical) continue;
+		const extendsCanonical = text.startsWith(canonical) && text[canonical.length] === "\n";
+		canonical = !canonical || extendsCanonical ? text : `${canonical}\n\n${text}`;
+	}
+	return canonical;
+}
+
+/** Chooses final reasoning text without making sequential-cutoff results disagree with emitted deltas. */
+export function finalizeReasoningThinking(
+	item: ResponseReasoningItem,
+	streamedThinking: string,
+	options: { cumulativeSummarySnapshots?: boolean } = {},
+): string {
+	const summaryThinking = options.cumulativeSummarySnapshots
+		? foldReasoningSummary(item.summary)
+		: (item.summary?.map(part => part.text).join("\n\n") ?? "");
+	if (
+		options.cumulativeSummarySnapshots &&
+		streamedThinking &&
+		summaryThinking &&
+		summaryThinking !== streamedThinking
+	) {
+		return streamedThinking;
+	}
+	if (summaryThinking) return summaryThinking;
+	const contentThinking = item.content?.[0]?.type === "reasoning_text" ? (item.content[0].text ?? "") : "";
+	return contentThinking || streamedThinking || "";
+}
+
 export function appendReasoningSummaryTextDelta(
 	item: ResponseReasoningItem,
 	block: ThinkingContent,
@@ -1713,6 +1766,36 @@ export function appendReasoningSummaryPartDone(
 	block.thinking += "\n\n";
 	lastPart.text += "\n\n";
 	stream.push({ type: "thinking_delta", contentIndex, delta: "\n\n", partial: output });
+}
+
+/**
+ * Applies an atomic `response.reasoning_summary_text.done` snapshot.
+ *
+ * Sequential-cutoff streams can replay an index or send the accumulated
+ * summary as a later part. Rebuild the canonical summary and emit only its
+ * append-only suffix. Divergent corrections stay buffered until finalization
+ * so delta consumers never receive suffixes based on unseen replacement text.
+ */
+export function applyReasoningSummaryDone(
+	item: ResponseReasoningItem,
+	block: ThinkingContent,
+	text: string,
+	summaryIndex: number,
+	stream: AssistantMessageEventStream,
+	output: AssistantMessage,
+	contentIndex: number,
+): void {
+	item.summary = item.summary || [];
+	while (item.summary.length <= summaryIndex) {
+		item.summary.push({ type: "summary_text", text: "" });
+	}
+	item.summary[summaryIndex].text = text;
+	const after = foldReasoningSummary(item.summary);
+	if (!after.startsWith(block.thinking)) return;
+	const delta = after.slice(block.thinking.length);
+	if (!delta) return;
+	block.thinking = after;
+	stream.push({ type: "thinking_delta", contentIndex, delta, partial: output });
 }
 
 export function appendMessageContentPart(
@@ -2208,12 +2291,6 @@ export async function processResponsesStream<TApi extends Api>(
 					? lookupOpenItem({ output_index: event.output_index, item_id: item.id ?? item.call_id })
 					: lookupOpenItem({ output_index: event.output_index, item_id: item.id });
 			if (item.type === "reasoning") {
-				const thinking =
-					item.summary?.length > 0
-						? item.summary.map(part => part.text).join("\n\n")
-						: item.content?.[0]?.type === "reasoning_text"
-							? (item.content[0].text ?? "")
-							: "";
 				// Prefer the routed entry; the bare itemId find misroutes when ids are
 				// absent (`undefined === undefined` matches the FIRST thinking block) and
 				// misses entirely when the done-event id drifts from the added-event id.
@@ -2224,12 +2301,12 @@ export async function processResponsesStream<TApi extends Api>(
 								| ThinkingContent
 								| undefined);
 				if (reasoningBlock) {
-					reasoningBlock.thinking = thinking;
+					reasoningBlock.thinking = finalizeReasoningThinking(item, reasoningBlock.thinking);
 					reasoningBlock.thinkingSignature = JSON.stringify(item);
 					stream.push({
 						type: "thinking_end",
 						contentIndex: contentIndexOf(reasoningBlock),
-						content: thinking,
+						content: reasoningBlock.thinking,
 						partial: output,
 					});
 				}

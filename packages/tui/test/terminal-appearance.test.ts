@@ -144,6 +144,24 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		terminal.stop();
 	});
 
+	it("replays already detected OSC 11 appearance to late subscribers", () => {
+		const { terminal } = setupTerminal();
+
+		process.stdin.emit("data", "\x1b]11;rgb:ffff/ffff/ffff\x07");
+		process.stdin.emit("data", "\x1b[?1;2c");
+
+		const appearances: string[] = [];
+		terminal.onAppearanceChange(a => appearances.push(a));
+		const detected = terminal.appearance;
+
+		// Stop before asserting: a failing expect must not leak a live terminal
+		// (stdin listeners, kitty push) into subsequent tests.
+		terminal.stop();
+
+		expect(detected).toBe("light");
+		expect(appearances).toEqual(["light"]);
+	});
+
 	it("2-digit hex OSC 11 response is correctly normalized", () => {
 		const { terminal } = setupTerminal();
 
@@ -582,6 +600,30 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 		terminal.stop();
 	});
 
+	it("applies a grow-back report whose fields carry colon subparameters (#4748)", () => {
+		// iOS soft keyboard dismissed under tmux-over-SSH: the pane grows back and
+		// the terminal reports the restored geometry in-band with a spec-permitted
+		// `:`-subparameter appended to a field. Mode 2048 allows subparameters on
+		// any field and requires clients to IGNORE them — dropping the whole
+		// report instead pins `rows` at the keyboard-present height, because no
+		// OS resize event accompanies the report to reconcile cached geometry.
+		Object.defineProperty(process.stdout, "columns", { value: 100, configurable: true });
+		Object.defineProperty(process.stdout, "rows", { value: 40, configurable: true });
+		const { terminal, received, resizeCount } = setup();
+		process.stdin.emit("data", "\x1b[?2048;1$y"); // in-band active
+		process.stdin.emit("data", "\x1b[48;20;100;400;1000t"); // keyboard appears: shrink
+		expect(terminal.rows).toBe(20);
+		expect(resizeCount()).toBe(1);
+
+		process.stdin.emit("data", "\x1b[48;40;100;800;1000:0t"); // keyboard dismissed: grow back
+
+		expect(terminal.rows).toBe(40);
+		expect(terminal.columns).toBe(100);
+		expect(resizeCount()).toBe(2);
+		expect(received).toEqual([]);
+		terminal.stop();
+	});
+
 	it("tracks OS geometry on resize when the post-resize in-band report is missed", () => {
 		// Real terminals always fire SIGWINCH (process.stdout dims refresh first),
 		// but the matching DEC 2048 report can be dropped or arrive malformed. The
@@ -655,6 +697,29 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 		expect(received).toEqual([]);
 		expect(terminal.rows).toBe(40);
 		expect(terminal.columns).toBe(125);
+		terminal.stop();
+	});
+
+	it("reassembles a split grow-back report with colon subparameters without dropping or leaking it", () => {
+		// Same grow-back report, fragmented by the StdinBuffer flush window right
+		// after the subparameter colon. The partial pattern must accept `:`, or
+		// the prefix is rejected as garbage, the report never applies, and the
+		// `0t` tail leaks into the editor as literal keystrokes.
+		vi.useFakeTimers();
+		Object.defineProperty(process.stdout, "columns", { value: 100, configurable: true });
+		Object.defineProperty(process.stdout, "rows", { value: 40, configurable: true });
+		const { terminal, received, resizeCount } = setup();
+		process.stdin.emit("data", "\x1b[?2048;1$y"); // in-band active
+		process.stdin.emit("data", "\x1b[48;20;100;400;1000t"); // keyboard appears: shrink
+		expect(terminal.rows).toBe(20);
+
+		process.stdin.emit("data", "\x1b[48;40;100;800;1000:");
+		vi.advanceTimersByTime(50); // flush window elapses mid-report
+		process.stdin.emit("data", "0t");
+
+		expect(received).toEqual([]);
+		expect(terminal.rows).toBe(40);
+		expect(resizeCount()).toBe(2);
 		terminal.stop();
 	});
 

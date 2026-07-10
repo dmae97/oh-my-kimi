@@ -16,9 +16,22 @@
  */
 
 import { ProviderHttpError } from "@oh-my-pi/pi-ai/error";
+import { applyCodexResponsesLiteShape } from "@oh-my-pi/pi-ai/providers/openai-codex/request-transformer";
+import {
+	createOpenAICodexCompactionRequestContext,
+	createOpenAICodexCompatibilityMetadata,
+} from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { parseAzureDeploymentNameMap, parseTextSignature } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import { transformMessages } from "@oh-my-pi/pi-ai/providers/transform-messages";
-import type { Api, AssistantMessage, FetchImpl, Message, Model } from "@oh-my-pi/pi-ai/types";
+import type {
+	Api,
+	AssistantMessage,
+	CodexCompactionContext,
+	FetchImpl,
+	Message,
+	Model,
+	ProviderSessionState,
+} from "@oh-my-pi/pi-ai/types";
 import {
 	getOpenAIResponsesHistoryItems,
 	getOpenAIResponsesHistoryPayload,
@@ -460,7 +473,13 @@ export async function requestOpenAiRemoteCompaction(
 	compactInput: Array<Record<string, unknown>>,
 	instructions: string,
 	signal?: AbortSignal,
-	opts?: { fetch?: FetchImpl; timeoutMs?: number },
+	opts?: {
+		fetch?: FetchImpl;
+		timeoutMs?: number;
+		sessionId?: string;
+		providerSessionState?: Map<string, ProviderSessionState>;
+		codexCompaction?: CodexCompactionContext;
+	},
 ): Promise<OpenAiRemoteCompactionResponse> {
 	const endpoint = resolveOpenAiCompactEndpoint(model);
 	const requestModel = resolveOpenAiCompactModel(model);
@@ -473,6 +492,8 @@ export async function requestOpenAiRemoteCompaction(
 		instructions,
 	};
 	const isAzureOpenAiResponses = (model.remoteCompaction?.api ?? model.api) === "azure-openai-responses";
+	const isCodexResponses =
+		model.provider === "openai-codex" || (model.remoteCompaction?.api ?? model.api) === "openai-codex-responses";
 	const headers: Record<string, string> = isAzureOpenAiResponses
 		? {
 				"content-type": "application/json",
@@ -486,13 +507,33 @@ export async function requestOpenAiRemoteCompaction(
 			};
 
 	// Codex endpoints require additional auth headers
-	if (model.provider === "openai-codex") {
+	if (isCodexResponses) {
 		const accountId = getCodexAccountId(apiKey);
 		if (accountId) {
 			headers[OPENAI_HEADERS.ACCOUNT_ID] = accountId;
 		}
 		headers[OPENAI_HEADERS.BETA] = OPENAI_HEADER_VALUES.BETA_RESPONSES;
 		headers[OPENAI_HEADERS.ORIGINATOR] = OPENAI_HEADER_VALUES.ORIGINATOR_CODEX;
+		Object.assign(
+			headers,
+			createOpenAICodexCompatibilityMetadata({
+				sessionId: opts?.sessionId,
+				providerSessionState: opts?.providerSessionState,
+				requestKind: "compaction",
+				compaction: createOpenAICodexCompactionRequestContext({
+					context: opts?.codexCompaction,
+					implementation: "responses_compact",
+				}),
+				includeInstallationHeader: true,
+			}).headers,
+		);
+		// Responses Lite models take the same rewrite on `/responses/compact`:
+		// instructions ride as an input item and the lite marker header is set
+		// (codex-rs routes compaction through `build_responses_request`).
+		if (model.useResponsesLite) {
+			applyCodexResponsesLiteShape(request);
+			headers[OPENAI_HEADERS.RESPONSES_LITE] = "true";
+		}
 	}
 
 	const response = await (opts?.fetch ?? fetch)(endpoint, {

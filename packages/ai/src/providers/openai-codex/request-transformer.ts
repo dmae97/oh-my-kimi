@@ -1,25 +1,46 @@
-import type { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { supportsAllTurnsReasoningContext, supportsCodexReasoningSummary } from "@oh-my-pi/pi-catalog/identity";
 import { requireSupportedEffort } from "@oh-my-pi/pi-catalog/model-thinking";
-import type { Api, Model } from "../../types";
+import type { Model } from "../../types";
+import { mapOpenAIReasoningEffort } from "../openai-shared";
 
 /** Reasoning replay scope for the Codex Responses API (`reasoning.context`). */
 export type CodexReasoningContext = "auto" | "current_turn" | "all_turns";
 
+/** User-facing effort levels accepted by Codex request options. */
+type CodexCallerEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+
+/** Caller literal → catalog `Effort` bridge (the enum is nominal). */
+const EFFORT_BY_NAME: Record<CodexCallerEffort, Effort> = {
+	minimal: Effort.Minimal,
+	low: Effort.Low,
+	medium: Effort.Medium,
+	high: Effort.High,
+	xhigh: Effort.XHigh,
+};
+
 export interface ReasoningConfig {
-	effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+	effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	summary?: "auto" | "concise" | "detailed";
 	context?: CodexReasoningContext;
+	/** Pro reasoning serving mode (gpt-5.6+ catalog pro aliases). */
+	mode?: "pro";
 }
 
 export interface CodexRequestOptions {
-	reasoningEffort?: ReasoningConfig["effort"];
+	/** User-facing effort; the wire-only `max` tier is reached via the model's effort map. */
+	reasoningEffort?: CodexCallerEffort | "none";
 	reasoningSummary?: ReasoningConfig["summary"] | null;
 	/** Explicit `reasoning.context` override; defaults to `all_turns` when unset. The `all_turns` value is gated to gpt-5.4+ Codex models — older ids reject it, so it is suppressed and `context` omitted. */
 	reasoningContext?: CodexReasoningContext;
 	textVerbosity?: "low" | "medium" | "high";
 	include?: string[];
-	/** Responses Lite transport contract: strips image detail and disables parallel tool calling, mirroring codex-rs. */
+	/**
+	 * Responses Lite transport override; defaults to the model's
+	 * `useResponsesLite`. Lite moves instructions/tools into input items,
+	 * strips image detail, and disables parallel tool calling (codex-rs
+	 * `use_responses_lite`).
+	 */
 	responsesLite?: boolean;
 }
 
@@ -32,6 +53,8 @@ export interface InputItem {
 	name?: string;
 	output?: unknown;
 	arguments?: unknown;
+	/** `additional_tools` developer item payload (Responses Lite). */
+	tools?: unknown;
 }
 
 export interface RequestBody {
@@ -42,6 +65,8 @@ export interface RequestBody {
 	input?: InputItem[];
 	tools?: unknown;
 	tool_choice?: unknown;
+	/** Concurrent reasoning-summary delivery (codex-rs `StreamOptions`). */
+	stream_options?: { reasoning_summary_delivery: "sequential_cutoff" };
 	// Sampling controls (temperature/top_p/top_k/min_p/presence_penalty/
 	// repetition_penalty/frequency_penalty/stop) are intentionally absent: the
 	// Codex backend rejects every one with a 400 `Unsupported parameter`, so
@@ -60,30 +85,52 @@ export interface RequestBody {
 	[key: string]: unknown;
 }
 
-function containsInputImage(value: unknown): boolean {
-	if (!value || typeof value !== "object") return false;
-	if ((value as { type?: unknown }).type === "input_image") return true;
-	if (Array.isArray(value)) {
-		for (const item of value) {
-			if (containsInputImage(item)) return true;
-		}
-		return false;
-	}
-	for (const item of Object.values(value)) {
-		if (containsInputImage(item)) return true;
-	}
-	return false;
+/**
+ * Resolve whether a Codex request uses the Responses Lite transport: an
+ * explicit option wins, otherwise the model's catalog flag (codex-rs
+ * `model_info.use_responses_lite`) decides.
+ */
+export function resolveCodexResponsesLite(
+	model: Model<"openai-codex-responses">,
+	requested: boolean | undefined,
+): boolean {
+	return requested ?? model.useResponsesLite === true;
 }
 
-/** Returns whether a Codex request can use the text-only Responses Lite transport. */
-export function shouldUseCodexResponsesLite(body: RequestBody, requested: boolean | undefined): boolean {
-	return requested === true && !containsInputImage(body.input);
+/**
+ * Clamp a user-facing effort to the model's ladder, then remap to the wire
+ * tier (e.g. GPT-5.6's shifted five-tier scale sends `max` for user `xhigh`).
+ * A mapped value outside the Codex wire vocabulary is a broken compat/model
+ * effort map — fail loudly rather than silently sending a different tier.
+ */
+function mapCodexWireEffort(
+	model: Model<"openai-codex-responses">,
+	effort: CodexCallerEffort,
+): ReasoningConfig["effort"] {
+	const mapped = mapOpenAIReasoningEffort(model, model.compat, requireSupportedEffort(model, EFFORT_BY_NAME[effort]));
+	switch (mapped) {
+		case "none":
+		case "minimal":
+		case "low":
+		case "medium":
+		case "high":
+		case "xhigh":
+		case "max":
+			return mapped;
+		default:
+			throw new Error(
+				`Effort map for ${model.provider}/${model.id} produced invalid Codex reasoning effort "${mapped}"`,
+			);
+	}
 }
 
-function getReasoningConfig(model: Model<Api>, options: CodexRequestOptions): ReasoningConfig {
+function getReasoningConfig(
+	model: Model<"openai-codex-responses">,
+	effort: NonNullable<CodexRequestOptions["reasoningEffort"]>,
+	options: CodexRequestOptions,
+): ReasoningConfig {
 	const config: ReasoningConfig = {
-		effort:
-			options.reasoningEffort === "none" ? "none" : requireSupportedEffort(model, options.reasoningEffort as Effort),
+		effort: effort === "none" ? "none" : mapCodexWireEffort(model, effort),
 	};
 	// `reasoning.summary` is accepted only from gpt-5.4 onward; earlier Codex ids
 	// (gpt-5.1-codex, gpt-5.3-codex, gpt-5.3-codex-spark) reject it with
@@ -196,27 +243,65 @@ function repairToolCallPairs(input: InputItem[]): InputItem[] {
  * `detail` from every input image (message content and tool outputs) before
  * sending, letting the server choose.
  */
-function stripImageDetails(input: InputItem[]): void {
+function stripImageDetails(input: unknown[]): void {
 	for (const item of input) {
-		for (const collection of [item.content, item.output]) {
+		if (!item || typeof item !== "object") continue;
+		const content = "content" in item ? item.content : undefined;
+		const output = "output" in item ? item.output : undefined;
+		for (const collection of [content, output]) {
 			if (!Array.isArray(collection)) continue;
 			for (const part of collection) {
-				if (
-					part &&
-					typeof part === "object" &&
-					(part as { type?: unknown }).type === "input_image" &&
-					"detail" in part
-				) {
-					part.detail = undefined;
-				}
+				if (!part || typeof part !== "object") continue;
+				if (!("type" in part) || part.type !== "input_image") continue;
+				if ("detail" in part) part.detail = undefined;
 			}
 		}
 	}
 }
 
+/**
+ * Structural view of a Responses-style body mutated by the Lite rewrite.
+ * Loose (`unknown`) property types let the turn transformer (`RequestBody`)
+ * and the agent's remote-compaction payloads reuse one shaper.
+ */
+export interface CodexLiteShapedBody {
+	instructions?: unknown;
+	tools?: unknown;
+	input?: unknown;
+	parallel_tool_calls?: unknown;
+}
+
+/**
+ * Applies the Responses Lite body contract in place (codex-rs
+ * `build_responses_request` with `use_responses_lite`): strips pinned image
+ * detail, forces parallel tool calling off, moves tools into a leading
+ * `additional_tools` developer item and the base instructions into a
+ * developer message, then omits top-level `instructions`/`tools`. Shared by
+ * normal turns and both remote-compaction paths — codex-rs routes
+ * `/responses/compact` through the same builder.
+ */
+export function applyCodexResponsesLiteShape(body: CodexLiteShapedBody): void {
+	const input = Array.isArray(body.input) ? body.input : [];
+	stripImageDetails(input);
+	body.parallel_tool_calls = false;
+	const prefix: InputItem[] = [
+		{ type: "additional_tools", role: "developer", tools: Array.isArray(body.tools) ? body.tools : [] },
+	];
+	if (typeof body.instructions === "string" && body.instructions.length > 0) {
+		prefix.push({
+			type: "message",
+			role: "developer",
+			content: [{ type: "input_text", text: body.instructions }],
+		});
+	}
+	body.input = [...prefix, ...input];
+	delete body.instructions;
+	delete body.tools;
+}
+
 export async function transformRequestBody(
 	body: RequestBody,
-	model: Model<Api>,
+	model: Model<"openai-codex-responses">,
 	options: CodexRequestOptions = {},
 	prompt?: { developerMessages: string[] },
 ): Promise<RequestBody> {
@@ -287,20 +372,13 @@ export async function transformRequestBody(
 		}
 	}
 
-	const responsesLite = shouldUseCodexResponsesLite(body, options.responsesLite);
+	const responsesLite = resolveCodexResponsesLite(model, options.responsesLite);
 	if (responsesLite) {
-		if (Array.isArray(body.input)) {
-			stripImageDetails(body.input);
-		}
-		// Responses Lite does not support parallel tool calling; codex-rs forces
-		// it off (`prompt.parallel_tool_calls && !use_responses_lite`).
-		if (body.tools !== undefined) {
-			body.parallel_tool_calls = false;
-		}
+		applyCodexResponsesLiteShape(body);
 	}
 
 	if (options.reasoningEffort !== undefined) {
-		const reasoningConfig = getReasoningConfig(model, options);
+		const reasoningConfig = getReasoningConfig(model, options.reasoningEffort, options);
 		body.reasoning = {
 			...body.reasoning,
 			...reasoningConfig,
@@ -322,6 +400,23 @@ export async function transformRequestBody(
 		}
 	} else {
 		delete body.reasoning;
+	}
+	// Catalog pro aliases (`gpt-5.6-*-pro`): applied after the effort branch so
+	// the mode is sent even when no effort is set (the branch above deletes
+	// `body.reasoning` in that case) — mode and effort are independent fields.
+	if (model.reasoningMode) {
+		body.reasoning = { ...body.reasoning, mode: model.reasoningMode };
+	}
+
+	// Concurrent reasoning summaries (codex-rs `concurrent_reasoning_summaries`
+	// feature): `sequential_cutoff` lets the server stream output without
+	// blocking on summary generation. Only meaningful when a summary is
+	// requested; codex-rs additionally gates on its OpenAI provider check,
+	// which is inherent here.
+	if (body.reasoning?.summary !== undefined) {
+		body.stream_options = { reasoning_summary_delivery: "sequential_cutoff" };
+	} else {
+		delete body.stream_options;
 	}
 
 	body.text = {

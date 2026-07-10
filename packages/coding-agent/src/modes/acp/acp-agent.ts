@@ -84,6 +84,7 @@ import { canonicalizeMessage } from "../../utils/thinking-display";
 import { createAcpClientBridge } from "./acp-client-bridge";
 import {
 	buildToolCallStartUpdate,
+	extractAssistantMessageText,
 	mapAgentSessionEventToAcpSessionUpdates,
 	normalizeReplayToolArguments,
 } from "./acp-event-mapper";
@@ -425,6 +426,7 @@ export function createAcpExtensionUiContext(
 		setEditorText: () => {},
 		getEditorText: () => "",
 		editor: async () => undefined,
+		addAutocompleteProvider: () => {},
 		setEditorComponent: () => {},
 		get theme() {
 			return theme;
@@ -843,13 +845,16 @@ export class AcpAgent implements Agent {
 			return false;
 		}
 		const built = await buildSkillPromptMessage(skill, parsed.args, "user");
-		await record.session.promptCustomMessage({
-			customType: SKILL_PROMPT_MESSAGE_TYPE,
-			content: built.message,
-			display: true,
-			details: built.details,
-			attribution: "user",
-		});
+		await record.session.promptCustomMessage(
+			{
+				customType: SKILL_PROMPT_MESSAGE_TYPE,
+				content: built.message,
+				display: true,
+				details: built.details,
+				attribution: "user",
+			},
+			{ streamingBehavior: "steer" },
+		);
 		return true;
 	}
 
@@ -1210,13 +1215,61 @@ export class AcpAgent implements Agent {
 		this.#clearLiveAssistantMessageAfterEvent(record, event);
 
 		if (event.type === "agent_end") {
+			await this.#flushMissedFinalAssistantText(record, event);
 			await this.#emitEndOfTurnUpdates(record);
 			await this.#waitForAcpPromptIdle(record);
+			record.liveMessageId = undefined;
+			record.liveMessageProgress = undefined;
 			this.#finishPrompt(record, {
 				stopReason: this.#resolveStopReason(event, promptTurn.cancelRequested),
 				usage: this.#buildTurnUsage(promptTurn.usageBaseline, record.session.sessionManager.getUsageStatistics()),
 			});
 		}
+	}
+
+	/**
+	 * Deliver the final visible answer when the assistant `message_end` never
+	 * reached this prompt turn's subscription. Session event handlers are
+	 * fire-and-forget (`Agent#emit` does not await async listeners), and
+	 * `agent_end` is flushed through the session's `#endInFlight` path while the
+	 * assistant `message_end` fan-out can still be parked on extension delivery —
+	 * so `agent_end` can overtake `message_end`. Once the turn finishes,
+	 * `#finishPrompt` unsubscribes and the fallback text emission in
+	 * `mapAssistantMessageEnd` is lost for good: a client that only received
+	 * `agent_thought_chunk`s stays stuck on the thinking block (#4902). The live
+	 * message progress records whether visible text ever reached the client; if
+	 * it has not, emit the last assistant message's text before the prompt
+	 * resolves. A `message_end` that lands during the end-of-turn waits still
+	 * takes the normal mapper path and sees `textEmitted` already set, so the
+	 * answer is delivered exactly once.
+	 */
+	async #flushMissedFinalAssistantText(
+		record: ManagedSessionRecord,
+		event: Extract<AgentSessionEvent, { type: "agent_end" }>,
+	): Promise<void> {
+		const progress = record.liveMessageProgress;
+		if (!progress || progress.textEmitted) {
+			return;
+		}
+		const lastAssistant = [...event.messages]
+			.reverse()
+			.find((message): message is AssistantMessage => message.role === "assistant");
+		if (!lastAssistant) {
+			return;
+		}
+		const text = extractAssistantMessageText(lastAssistant);
+		if (text.length === 0) {
+			return;
+		}
+		progress.textEmitted = true;
+		await this.#connection.sessionUpdate({
+			sessionId: record.session.sessionId,
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: { type: "text", text },
+				messageId: record.liveMessageId,
+			},
+		});
 	}
 
 	async #waitForAcpPromptIdle(record: ManagedSessionRecord): Promise<void> {
@@ -1244,8 +1297,16 @@ export class AcpAgent implements Agent {
 		}
 	}
 
+	/**
+	 * Reset live-message tracking once the assistant `message_end` is handled.
+	 * The `agent_end` reset happens inside the `agent_end` branch of
+	 * `#handlePromptEvent` — after `#flushMissedFinalAssistantText` — so a
+	 * `message_end` that arrives during the end-of-turn waits maps against the
+	 * real progress instead of resurrecting a fresh one (which would double-emit
+	 * the final answer).
+	 */
 	#clearLiveAssistantMessageAfterEvent(record: ManagedSessionRecord, event: AgentSessionEvent): void {
-		if ((event.type === "message_end" && event.message.role === "assistant") || event.type === "agent_end") {
+		if (event.type === "message_end" && event.message.role === "assistant") {
 			record.liveMessageId = undefined;
 			record.liveMessageProgress = undefined;
 		}

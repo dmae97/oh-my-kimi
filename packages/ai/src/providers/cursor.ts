@@ -653,7 +653,8 @@ export interface UsageState {
 	sawTokenDelta: boolean;
 }
 
-async function handleServerMessage(
+/** Exported for tests: drives one Cursor server message through the stream (exec waits mark the stream busy). */
+export async function handleServerMessage(
 	msg: AgentServerMessage,
 	output: AssistantMessage,
 	stream: AssistantMessageEventStream,
@@ -675,15 +676,21 @@ async function handleServerMessage(
 	} else if (msgCase === "kvServerMessage") {
 		handleKvServerMessage(msg.message.value as KvServerMessage, blobStore, h2Request);
 	} else if (msgCase === "execServerMessage") {
-		await handleExecServerMessage(
-			msg.message.value as ExecServerMessage,
-			h2Request,
-			execHandlers,
-			onToolResult,
-			requestContextTools,
-			output,
-			stream,
-			state,
+		// The server is waiting on OUR local tool result during this window — no
+		// AssistantMessageEvent flows until the handler finishes. Mark the wait
+		// as local work so the lazy stream idle watchdog attributes the silence
+		// to the tool run instead of aborting a healthy stream (issue #4593).
+		await stream.trackLocalWork(
+			handleExecServerMessage(
+				msg.message.value as ExecServerMessage,
+				h2Request,
+				execHandlers,
+				onToolResult,
+				requestContextTools,
+				output,
+				stream,
+				state,
+			),
 		);
 	} else if (msgCase === "conversationCheckpointUpdate") {
 		handleConversationCheckpointUpdate(msg.message.value, output, usageState, onConversationCheckpoint);

@@ -34,7 +34,7 @@ import {
 	applyResponsesReasoningParams,
 	buildResponsesInput,
 	createInitialResponsesAssistantMessage,
-	getOpenAIResponsesPromptCacheKey,
+	getOpenAIPromptCacheKey,
 	isOpenAIResponsesProgressEvent,
 	parseAzureDeploymentNameMap,
 	processResponsesStream,
@@ -348,7 +348,7 @@ function buildParams(
 		model: deploymentName,
 		input: messages,
 		stream: true,
-		prompt_cache_key: getOpenAIResponsesPromptCacheKey(options),
+		prompt_cache_key: getOpenAIPromptCacheKey(options),
 		// Encrypted reasoning replay (applyResponsesReasoningParams) requires
 		// stateless responses, matching the openai provider.
 		store: false,

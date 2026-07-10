@@ -238,6 +238,59 @@ describe("MemoryProtocolHandler — mnemopi bridge (issue #4443)", () => {
 		});
 	});
 
+	it("resolves memory://<fact-id> to a read-only fact row (issue #4725)", async () => {
+		await withMnemopiSession(async ({ state }) => {
+			const beam = state.memory.beam;
+			beam.db
+				.prepare(
+					"INSERT INTO facts (fact_id, session_id, subject, predicate, object, timestamp, confidence) VALUES (?, ?, ?, ?, ?, ?, ?)",
+				)
+				.run(
+					"0473bbdb8da6df92",
+					beam.sessionId,
+					"Glab",
+					"works-without",
+					"mise prefix",
+					"2026-07-01T00:00:00.000Z",
+					0.9,
+				);
+
+			const router = InternalUrlRouter.instance();
+			const resource = await router.resolve("memory://0473bbdb8da6df92");
+
+			expect(resource.content).toContain("id: 0473bbdb8da6df92");
+			expect(resource.content).toContain("store: fact");
+			expect(resource.content).toContain("Glab works-without mise prefix");
+		});
+	});
+
+	it("reports not_editable (not not_found) for memory_edit ops on a fact id (issue #4725)", async () => {
+		await withMnemopiSession(async ({ state }) => {
+			const beam = state.memory.beam;
+			beam.db
+				.prepare(
+					"INSERT INTO facts (fact_id, session_id, subject, predicate, object, timestamp, confidence) VALUES (?, ?, ?, ?, ?, ?, ?)",
+				)
+				.run("fact-readonly", beam.sessionId, "service", "uses", "postgres", "2026-07-01T00:00:00.000Z", 0.9);
+
+			expect(state.editScopedMemory("update", "fact-readonly", { content: "x" })).toMatchObject({
+				status: "not_editable",
+				store: "fact",
+			});
+			expect(state.editScopedMemory("forget", "fact-readonly")).toMatchObject({
+				status: "not_editable",
+				store: "fact",
+			});
+			expect(state.editScopedMemory("invalidate", "fact-readonly")).toMatchObject({
+				status: "not_editable",
+				store: "fact",
+			});
+
+			// The fact row itself is untouched by the rejected edits.
+			expect(beam.db.prepare("SELECT fact_id FROM facts WHERE fact_id = ?").get("fact-readonly")).not.toBeNull();
+		});
+	});
+
 	it("routes memory://root to the file-backed summary even when mnemopi is active", async () => {
 		await withMnemopiSession(async () => {
 			const router = InternalUrlRouter.instance();

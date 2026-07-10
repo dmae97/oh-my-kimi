@@ -38,7 +38,7 @@ import {
 	resolveImageOptions,
 	truncateToWidth,
 } from "../../tools/render-utils";
-import { toolRenderers } from "../../tools/renderers";
+import { type FirstResultViewportRepaint, toolRenderers } from "../../tools/renderers";
 import { TODO_STRIKE_TOTAL_FRAMES, type TodoToolDetails } from "../../tools/todo";
 import { isFramedBlockComponent, renderStatusLine, WidthAwareText } from "../../tui";
 import { sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
@@ -283,13 +283,13 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	// history, so progress renders static gray and further partial snapshots are
 	// dropped (see #maybeFreezeBackgroundTask).
 	#backgroundTaskFrozen = false;
-	// Set on each `render()` when the last painted shape carried the streamed
-	// SSH-style placeholder / partial-result chrome. Reset gates key off these
-	// so a topology-changing update that lands before the shape reaches the
-	// terminal never triggers a full-viewport replay (which on direct terminals
-	// wipes native scrollback and flashes the user's history — reviewer note on
-	// PR #4315).
-	#placeholderShapePainted = false;
+	// Set on each `render()` when the last painted pending shape must be
+	// replayed wholesale when the first result arrives. Reset gates key off
+	// these so a topology-changing update that lands before the shape reaches
+	// the terminal never triggers a full-viewport replay (which on direct
+	// terminals wipes native scrollback and flashes the user's history —
+	// reviewer note on PR #4315).
+	#firstResultViewportRepaintShapePainted = false;
 	#partialResultShapePainted = false;
 	#renderState: {
 		spinnerFrame?: number;
@@ -497,9 +497,9 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		}
 		const hadNoResult = this.#result === undefined;
 		const wasPartialResult = this.#result !== undefined && this.#isPartial;
-		const placeholderPainted = this.#placeholderShapePainted;
+		const firstResultRepaintShapePainted = this.#firstResultViewportRepaintShapePainted;
 		const partialResultPainted = this.#partialResultShapePainted;
-		this.#placeholderShapePainted = false;
+		this.#firstResultViewportRepaintShapePainted = false;
 		this.#partialResultShapePainted = false;
 		this.#result = result;
 		this.#resultVersion++;
@@ -513,7 +513,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		this.#updateTodoStrikeAnimation();
 		this.#updateDisplay();
 		this.#resetDisplayForResultTopologyChange(
-			hadNoResult && placeholderPainted,
+			hadNoResult && firstResultRepaintShapePainted,
 			wasPartialResult && partialResultPainted,
 			isPartial,
 		);
@@ -810,34 +810,38 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		this.#displayBuilt = true;
 	}
 
-	#rendererFlag(name: "forceFirstResultViewportRepaint" | "forceResultViewportRepaintOnSettle"): boolean {
+	#rendererFlag(name: "forceResultViewportRepaintOnSettle"): boolean {
 		const toolValue = (this.#tool as Record<string, unknown> | undefined)?.[name];
 		const rendererValue = toolRenderers[this.#toolName]?.[name];
 		return toolValue === true || (toolValue === undefined && rendererValue === true);
 	}
 
 	/**
-	 * True while the last painted shape uses the streamed placeholder path
-	 * (`⏳ SSH: […]` / `$ …`) — the render call ran with `__partialJson` args
-	 * and no result. Kept as a per-paint fact so a topology-changing update
-	 * that lands before the placeholder reaches the terminal skips the reset.
+	 * True while the last painted pending-call shape opted into a full viewport
+	 * repaint at the first result (`forceFirstResultViewportRepaint`) — e.g. the
+	 * streamed SSH placeholder (`⏳ SSH: […]` / `$ …`) or a collapsed write tail
+	 * window, both of which the first result render re-anchors instead of
+	 * preserving. Kept as a per-paint fact so a topology-changing update that
+	 * lands before the pending rows reach the terminal skips the reset.
 	 */
-	#isPlaceholderShapeAtRender(): boolean {
+	#needsFirstResultViewportRepaintAtRender(): boolean {
 		if (this.#result !== undefined) return false;
-		if (!this.#rendererFlag("forceFirstResultViewportRepaint")) return false;
-		return partialJsonOf(this.#args) !== undefined;
+		const toolValue = (this.#tool as { forceFirstResultViewportRepaint?: FirstResultViewportRepaint } | undefined)
+			?.forceFirstResultViewportRepaint;
+		const value =
+			toolValue !== undefined ? toolValue : toolRenderers[this.#toolName]?.forceFirstResultViewportRepaint;
+		if (typeof value === "function") return value(this.#args, this.#renderState);
+		return value === true;
 	}
 
 	#resetDisplayForResultTopologyChange(
-		firstResultAfterPlaceholderPaint: boolean,
+		firstResultAfterRepaintShapePaint: boolean,
 		partialResultPaintedBeforeSettle: boolean,
 		isPartial: boolean,
 	): void {
-		const firstResultReplacesStreamedPlaceholder =
-			firstResultAfterPlaceholderPaint && this.#rendererFlag("forceFirstResultViewportRepaint");
 		const provisionalResultSettled =
 			partialResultPaintedBeforeSettle && !isPartial && this.#rendererFlag("forceResultViewportRepaintOnSettle");
-		if (firstResultReplacesStreamedPlaceholder || provisionalResultSettled) {
+		if (firstResultAfterRepaintShapePaint || provisionalResultSettled) {
 			this.#ui.resetDisplay();
 		}
 	}
@@ -848,7 +852,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		// override runs on every compose the parent Container performs, so a
 		// frame that never gets composed leaves the flags false and prevents a
 		// spurious `resetDisplay()`.
-		this.#placeholderShapePainted = this.#isPlaceholderShapeAtRender();
+		this.#firstResultViewportRepaintShapePainted = this.#needsFirstResultViewportRepaintAtRender();
 		this.#partialResultShapePainted = this.#result !== undefined && this.#isPartial;
 		return lines;
 	}

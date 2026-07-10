@@ -14,5 +14,4 @@ export const xaiOauthProvider = {
 		const { refreshXAIOAuthToken } = await import("./oauth/xai-oauth");
 		return refreshXAIOAuthToken(credentials.refresh);
 	},
-	pasteCodeFlow: true,
 } as const satisfies ProviderDefinition;

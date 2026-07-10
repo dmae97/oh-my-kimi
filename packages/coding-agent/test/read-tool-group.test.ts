@@ -250,6 +250,45 @@ describe("ReadToolGroupComponent", () => {
 		expect(extractLinkTexts(rendered)).not.toContain("src/example.ts:7-9");
 	});
 
+	it("renders separate selector grouped summary paths while linking only the base path", () => {
+		settings.override("tui.hyperlinks", "always");
+		const component = new ReadToolGroupComponent();
+		const resolvedPath = path.resolve("/workspace/src/grouped.ts");
+		component.updateArgs({ path: "src/grouped.ts", selector: "2-3" }, "read-split-selector");
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "line 2" }],
+				details: { meta: { source: { type: "path", value: resolvedPath } } },
+			},
+			false,
+			"read-split-selector",
+		);
+
+		const rendered = component.render(120).join("\n");
+
+		const groupedUri = new URL(url.pathToFileURL(path.resolve(resolvedPath)).href);
+		groupedUri.searchParams.set("line", "2");
+		expect(Bun.stripANSI(rendered)).toContain("Read src/grouped.ts:2-3");
+		expect(extractLinkUris(rendered)).toContain(groupedUri.href);
+		expect(extractLinkTexts(rendered)).toContain("src/grouped.ts");
+		expect(extractLinkTexts(rendered)).not.toContain("src/grouped.ts:2-3");
+	});
+
+	it("ignores non-string selectors from malformed runtime args", () => {
+		const component = new ReadToolGroupComponent();
+		const malformedArgs = { path: "src/example.ts", selector: 10 } as unknown as {
+			path: string;
+			selector: string;
+		};
+
+		expect(() => component.updateArgs(malformedArgs, "read-malformed-selector")).not.toThrow();
+
+		const plain = Bun.stripANSI(component.render(120).join("\n"));
+
+		expect(plain).toContain("Read src/example.ts");
+		expect(plain).not.toContain("src/example.ts:10");
+	});
+
 	it("links inline preview titles when the summary row is suppressed", () => {
 		settings.override("tui.hyperlinks", "always");
 		const component = new ReadToolGroupComponent({ showContentPreview: true });

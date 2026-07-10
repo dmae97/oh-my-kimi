@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { recallEnhanced } from "@oh-my-pi/pi-mnemopi/core/beam/recall";
 import { initBeam } from "@oh-my-pi/pi-mnemopi/core/beam/schema";
 import {
 	exportToDict,
@@ -215,5 +216,72 @@ describe("beam store free functions", () => {
 		expect(get(dest, id)?.content).toBe("Exported working memory");
 		expect(dest.db.prepare("SELECT COUNT(*) AS count FROM scratchpad").get()).toEqual({ count: 1 });
 		expect(scratchpadRead(dest).map(row => row.content)).toEqual([]);
+	});
+});
+
+describe("fact-id read path (issue #4725)", () => {
+	function insertFact(
+		beam: BeamMemoryState,
+		factId: string,
+		sessionId: string,
+		subject: string,
+		predicate: string,
+		object: string,
+		confidence = 0.9,
+	): void {
+		beam.db
+			.prepare(
+				"INSERT INTO facts (fact_id, session_id, subject, predicate, object, timestamp, confidence) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			)
+			.run(factId, sessionId, subject, predicate, object, "2026-05-30T00:00:00.000Z", confidence);
+	}
+
+	it("resolves an id surfaced by fact recall to a read-only fact row", async () => {
+		const beam = makeState();
+		insertFact(beam, "fact-postgres", beam.sessionId, "service", "uses", "postgres database", 0.91);
+
+		const results = await recallEnhanced(beam, "postgres", 5, { includeFacts: true });
+		const surfaced = results.find(result => result.source === "facts");
+		expect(surfaced?.id).toBe("fact-postgres");
+
+		// memory://<id> reads and memory_edit both resolve ids via get(); a
+		// surfaced fact id must not be a dead end.
+		const row = get(beam, "fact-postgres");
+		expect(row).toMatchObject({
+			id: "fact-postgres",
+			content: "service uses postgres database",
+			source: "facts",
+			importance: 0.91,
+			session_id: beam.sessionId,
+			memory_store: "fact",
+		});
+		expect(JSON.parse(String(row?.metadata))).toMatchObject({
+			subject: "service",
+			predicate: "uses",
+			object: "postgres database",
+		});
+	});
+
+	it("keeps fact reads session-scoped like fact recall, honoring explicit global scope", () => {
+		const beam = makeState();
+		insertFact(beam, "fact-other", "session-other", "service", "uses", "postgres database");
+		expect(get(beam, "fact-other")).toBeNull();
+
+		beam.db.run("ALTER TABLE facts ADD COLUMN scope TEXT DEFAULT 'session'");
+		beam.db.run("UPDATE facts SET scope = 'global' WHERE fact_id = 'fact-other'");
+		expect(get(beam, "fact-other")?.memory_store).toBe("fact");
+	});
+
+	it("keeps working rows first on id collision and never deletes facts via forgetWorking", () => {
+		const beam = makeState();
+		insertFact(beam, "shared-id", beam.sessionId, "service", "uses", "postgres database");
+		const workingId = remember(beam, "working row shadowing a fact id");
+		beam.db.prepare("UPDATE working_memory SET id = ? WHERE id = ?").run("shared-id", workingId);
+
+		expect(get(beam, "shared-id")?.memory_store).toBe("working");
+
+		expect(forgetWorking(beam, "fact-missing")).toBe(false);
+		expect(forgetWorking(beam, "shared-id")).toBe(true);
+		expect(get(beam, "shared-id")?.memory_store).toBe("fact");
 	});
 });

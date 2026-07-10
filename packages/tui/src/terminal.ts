@@ -382,6 +382,8 @@ export interface Terminal {
 	 * Register a callback for terminal appearance (dark/light) changes.
 	 * Detection uses OSC 11 background color query with Mode 2031 as a change trigger.
 	 * Fires when the detected appearance changes, including the initial detection.
+	 * Subscribers registered after detection are invoked immediately with the
+	 * already-detected appearance so late subscribers never miss it.
 	 */
 	onAppearanceChange(callback: (appearance: TerminalAppearance) => void): void;
 	/** The last detected terminal appearance, or undefined if not yet known. */
@@ -516,6 +518,17 @@ export class ProcessTerminal implements Terminal {
 
 	onAppearanceChange(callback: (appearance: TerminalAppearance) => void): void {
 		this.#appearanceCallbacks.push(callback);
+		// Replay an already-detected appearance: the startup OSC 11 response can
+		// arrive before consumers (e.g. the theme bridge) subscribe, and the
+		// dedup in #handleOsc11Response would otherwise suppress the value for
+		// them forever (#4731).
+		if (this.#appearance) {
+			try {
+				callback(this.#appearance);
+			} catch {
+				/* ignore callback errors */
+			}
+		}
 	}
 
 	onPrivateModeReport(callback: (mode: number, supported: boolean) => void): void {
@@ -704,7 +717,10 @@ export class ProcessTerminal implements Terminal {
 		const decrpmResponsePattern = /^\x1b\[\?(\d+);(\d+)\$y$/;
 
 		// In-band resize report (DEC mode 2048): \x1b[48;rows;cols;yPixels;xPixels t
-		const inBandResizePattern = /^\x1b\[48;(\d+);(\d+);(\d+);(\d+)t$/;
+		// Any field may carry `:`-separated subparameters, which clients MUST
+		// ignore per spec (#4748): capture the leading digits of each field and
+		// skip the subparameter tail instead of dropping the whole report.
+		const inBandResizePattern = /^\x1b\[48;(\d+)(?::[\d:]*)?;(\d+)(?::[\d:]*)?;(\d+)(?::[\d:]*)?;(\d+)(?::[\d:]*)?t$/;
 
 		this.#stdinBuffer.on("data", (sequence: string) => {
 			// Fast path for plain-text bytes: every escape-probe regex below
@@ -776,7 +792,7 @@ export class ProcessTerminal implements Terminal {
 			// reassembled sequence that turns out not to be a resize report (e.g. a
 			// split kitty `\x1b[48;…u` for a digit key) is forwarded to the input
 			// handler rather than dropped.
-			const inBandResizePartialPattern = /^\x1b\[4[\d;]*$/;
+			const inBandResizePartialPattern = /^\x1b\[4[\d;:]*$/;
 			const isInBandResizePartial = this.#inBandResizeActive && inBandResizePartialPattern.test(sequence);
 			if (this.#inBandResizeBuffer && sequence.startsWith("\x1b")) {
 				// A new escape interrupted the partial; the stale partial is
@@ -1185,9 +1201,9 @@ export class ProcessTerminal implements Terminal {
 	 * `rows` before the `resize` event fires, so they are authoritative for the
 	 * new cell geometry. A cached DEC 2048 report can be stale: the matching
 	 * post-resize report may be dropped (split across stdin reads past the flush
-	 * window) or carry `:`-subparameters the parser skips, leaving the getters
-	 * pinned to the old size — which freezes the rendered width because the
-	 * renderer reflows against {@link columns}/{@link rows}, not the live OS
+	 * window, or interrupted by another escape mid-reassembly), leaving the
+	 * getters pinned to the old size — which freezes the rendered width because
+	 * the renderer reflows against {@link columns}/{@link rows}, not the live OS
 	 * value. Drop a cached dimension that disagrees with the live OS value; the
 	 * terminal's next valid in-band report re-seeds pixel sizing.
 	 */

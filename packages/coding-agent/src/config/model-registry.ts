@@ -54,6 +54,12 @@ const LOCAL_PROVIDER_PLACEHOLDERS = new Set<string>(["llama-cpp-local", "lm-stud
  * so a successful fast path does not leave an armed timeout signal for concurrent GC.
  */
 const RUNTIME_DYNAMIC_MODEL_FETCH_TIMEOUT_MS = 15_000;
+// Built-in discovery preflight mirror of the catalog model-manager's private
+// cache timings (model-manager.ts: DEFAULT_CACHE_TTL_MS / NON_AUTHORITATIVE_RETRY_MS).
+// Built-in descriptors never override cacheTtlMs, so agreeing with these values
+// makes the OAuth-refresh preflight fire exactly when the manager will fetch.
+const BUILT_IN_DISCOVERY_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
+const BUILT_IN_DISCOVERY_NON_AUTHORITATIVE_RETRY_MS = 5 * 60 * 1000;
 
 import type { ApiKeyResolver, FetchImpl } from "@oh-my-pi/pi-ai";
 import { registerOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
@@ -1560,12 +1566,11 @@ export class ModelRegistry {
 	): Promise<BuiltInDiscoveryResult> {
 		// Skip providers already handled by configured discovery (e.g. user-configured ollama with discovery.type)
 		const configuredDiscoveryProviders = new Set(this.#discoverableProviders.map(p => p.provider));
-		const managerOptions = (await this.#collectBuiltInModelManagerOptions()).filter(opts => {
-			if (configuredDiscoveryProviders.has(opts.providerId)) {
-				return false;
-			}
-			return providerFilter ? providerFilter.has(opts.providerId) : true;
-		});
+		const managerOptions = await this.#collectBuiltInModelManagerOptions(
+			strategy,
+			providerFilter,
+			configuredDiscoveryProviders,
+		);
 		if (managerOptions.length === 0) {
 			return { models: [], authoritativeProviders: new Set() };
 		}
@@ -1583,7 +1588,49 @@ export class ModelRegistry {
 		return { models, authoritativeProviders };
 	}
 
-	async #collectBuiltInModelManagerOptions(): Promise<ModelManagerOptions<Api>[]> {
+	async #resolveBuiltInDiscoveryApiKey(
+		providerId: string,
+		strategy: ModelRefreshStrategy,
+		cacheProviderId: string,
+	): Promise<string | undefined> {
+		const peekedKey = await this.#peekApiKeyForProvider(providerId);
+		if (isAuthenticated(peekedKey) || strategy === "offline") {
+			return peekedKey;
+		}
+		const oauthCredentials = getOAuthCredentialsForProvider(this.authStorage, providerId);
+		if (oauthCredentials.length === 0) {
+			return peekedKey;
+		}
+		if (strategy === "online-if-uncached") {
+			// Mirror shouldFetchRemoteSources: built-in managers use the catalog's
+			// default TTL, so only refresh when the manager will actually fetch.
+			const cache = readModelCache<Api>(
+				cacheProviderId,
+				BUILT_IN_DISCOVERY_CACHE_TTL_MS,
+				Date.now,
+				this.#cacheDbPath,
+			);
+			const cacheAgeMs = cache ? Date.now() - cache.updatedAt : Number.POSITIVE_INFINITY;
+			if (cache?.fresh && (cache.authoritative || cacheAgeMs < BUILT_IN_DISCOVERY_NON_AUTHORITATIVE_RETRY_MS)) {
+				return peekedKey;
+			}
+		}
+		try {
+			return await this.getApiKeyForProvider(providerId);
+		} catch (error) {
+			logger.debug("OAuth refresh failed during model discovery preflight", {
+				provider: providerId,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return peekedKey;
+		}
+	}
+
+	async #collectBuiltInModelManagerOptions(
+		strategy: ModelRefreshStrategy,
+		providerFilter: ReadonlySet<string> | undefined,
+		configuredDiscoveryProviders: ReadonlySet<string>,
+	): Promise<ModelManagerOptions<Api>[]> {
 		const specialProviderDescriptors: Array<{
 			providerId: string;
 			resolveKey: (value: string | undefined) => string | undefined;
@@ -1622,20 +1669,33 @@ export class ModelRegistry {
 			},
 		];
 		const disabledProviders = getDisabledProviderIdsFromSettings();
-		const standardProviderDescriptors = PROVIDER_DESCRIPTORS.filter(
-			descriptor => !disabledProviders.has(descriptor.providerId),
+		const standardProviderDescriptors = PROVIDER_DESCRIPTORS.filter(descriptor => {
+			if (disabledProviders.has(descriptor.providerId)) return false;
+			if (configuredDiscoveryProviders.has(descriptor.providerId)) return false;
+			return providerFilter ? providerFilter.has(descriptor.providerId) : true;
+		});
+		const enabledSpecialProviderDescriptors = specialProviderDescriptors.filter(descriptor => {
+			if (disabledProviders.has(descriptor.providerId)) return false;
+			if (configuredDiscoveryProviders.has(descriptor.providerId)) return false;
+			return providerFilter ? providerFilter.has(descriptor.providerId) : true;
+		});
+		const standardProviderKeys = await Promise.all(
+			standardProviderDescriptors.map(descriptor => {
+				const discoveryBaseUrl =
+					this.#runtimeProviderOverrides.get(descriptor.providerId)?.baseUrl ??
+					this.#providerOverrides.get(descriptor.providerId)?.baseUrl ??
+					this.getProviderBaseUrl(descriptor.providerId);
+				const cacheProviderId =
+					descriptor.createModelManagerOptions({ baseUrl: discoveryBaseUrl, fetch: this.#fetch })
+						.cacheProviderId ?? descriptor.providerId;
+				return this.#resolveBuiltInDiscoveryApiKey(descriptor.providerId, strategy, cacheProviderId);
+			}),
 		);
-		const enabledSpecialProviderDescriptors = specialProviderDescriptors.filter(
-			descriptor => !disabledProviders.has(descriptor.providerId),
+		const specialKeys = await Promise.all(
+			enabledSpecialProviderDescriptors.map(descriptor =>
+				this.#resolveBuiltInDiscoveryApiKey(descriptor.providerId, strategy, descriptor.providerId),
+			),
 		);
-		// Use peekApiKey to avoid OAuth token refresh during discovery.
-		// The token is only needed if the dynamic fetch fires (cache miss),
-		// and failures there are handled gracefully.
-		const peekKey = (descriptor: { providerId: string }) => this.#peekApiKeyForProvider(descriptor.providerId);
-		const [standardProviderKeys, specialKeys] = await Promise.all([
-			Promise.all(standardProviderDescriptors.map(peekKey)),
-			Promise.all(enabledSpecialProviderDescriptors.map(peekKey)),
-		]);
 		const options: ModelManagerOptions<Api>[] = [];
 		for (let i = 0; i < standardProviderDescriptors.length; i++) {
 			const descriptor = standardProviderDescriptors[i];
@@ -1670,7 +1730,12 @@ export class ModelRegistry {
 		}
 		// Append runtime model managers registered by extensions via fetchDynamicModels.
 		for (const { options: managerOpts } of this.#runtimeModelManagers.values()) {
-			options.push(managerOpts);
+			if (
+				!configuredDiscoveryProviders.has(managerOpts.providerId) &&
+				(!providerFilter || providerFilter.has(managerOpts.providerId))
+			) {
+				options.push(managerOpts);
+			}
 		}
 		return options;
 	}

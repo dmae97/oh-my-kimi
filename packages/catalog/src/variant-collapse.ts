@@ -113,6 +113,14 @@ function thinkingPair(baseId: string, name: string): EffortVariantFamily {
 
 type DevinTierRoutes = Partial<Record<"off" | "minimal" | "low" | "medium" | "high" | "xhigh", string>>;
 
+const DEVIN_FIVE_TIER_EFFORTS: readonly Effort[] = [
+	Effort.Minimal,
+	Effort.Low,
+	Effort.Medium,
+	Effort.High,
+	Effort.XHigh,
+];
+
 function devinTierFamily(
 	id: string,
 	name: string,
@@ -158,6 +166,44 @@ function devinTierFamily(
 			...(routes.off ? undefined : { requiresEffort: true }),
 		},
 	};
+}
+
+/**
+ * GPT-5.6 (Luna/Sol/Terra) adds a genuine `max` tier above `xhigh`, so the
+ * standard family shifts every user effort up one notch (`minimal` → `-low`
+ * … `xhigh` → `-max`), mirroring the Opus 4.7+ five-tier mapping. Devin
+ * serves no `-max-priority` sibling, so the fast family keeps the direct
+ * `low..xhigh` `-priority` scale.
+ */
+function devinGpt56Families(variant: "luna" | "sol" | "terra", name: string): readonly EffortVariantFamily[] {
+	const base = `gpt-5-6-${variant}`;
+	return [
+		devinTierFamily(
+			base,
+			name,
+			{
+				off: `${base}-none`,
+				minimal: `${base}-low`,
+				low: `${base}-medium`,
+				medium: `${base}-high`,
+				high: `${base}-xhigh`,
+				xhigh: `${base}-max`,
+			},
+			DEVIN_FIVE_TIER_EFFORTS,
+		),
+		devinTierFamily(
+			`${base}-fast`,
+			`${name} Fast`,
+			{
+				off: `${base}-none-priority`,
+				low: `${base}-low-priority`,
+				medium: `${base}-medium-priority`,
+				high: `${base}-high-priority`,
+				xhigh: `${base}-xhigh-priority`,
+			},
+			DEVIN_FIVE_TIER_EFFORTS,
+		),
+	];
 }
 
 const GEMINI_3_FLASH_FAMILY_EFFORTS: readonly Effort[] = [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High];
@@ -330,7 +376,7 @@ export const DEVIN_VARIANT_COLLAPSE_TABLE: VariantCollapseTable = {
 			},
 			thinking: {
 				mode: "effort",
-				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+				efforts: DEVIN_FIVE_TIER_EFFORTS,
 				requiresEffort: true,
 			},
 		},
@@ -353,7 +399,7 @@ export const DEVIN_VARIANT_COLLAPSE_TABLE: VariantCollapseTable = {
 			},
 			thinking: {
 				mode: "effort",
-				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+				efforts: DEVIN_FIVE_TIER_EFFORTS,
 				requiresEffort: true,
 			},
 		},
@@ -376,7 +422,7 @@ export const DEVIN_VARIANT_COLLAPSE_TABLE: VariantCollapseTable = {
 			},
 			thinking: {
 				mode: "effort",
-				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+				efforts: DEVIN_FIVE_TIER_EFFORTS,
 				requiresEffort: true,
 			},
 		},
@@ -399,7 +445,7 @@ export const DEVIN_VARIANT_COLLAPSE_TABLE: VariantCollapseTable = {
 			},
 			thinking: {
 				mode: "effort",
-				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+				efforts: DEVIN_FIVE_TIER_EFFORTS,
 				requiresEffort: true,
 			},
 		},
@@ -413,7 +459,7 @@ export const DEVIN_VARIANT_COLLAPSE_TABLE: VariantCollapseTable = {
 				high: "MODEL_GPT_5_2_HIGH",
 				xhigh: "MODEL_GPT_5_2_XHIGH",
 			},
-			[Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+			DEVIN_FIVE_TIER_EFFORTS,
 		),
 		devinTierFamily(
 			"gpt-5-3-codex",
@@ -424,7 +470,7 @@ export const DEVIN_VARIANT_COLLAPSE_TABLE: VariantCollapseTable = {
 				high: "gpt-5-3-codex-high",
 				xhigh: "gpt-5-3-codex-xhigh",
 			},
-			[Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+			DEVIN_FIVE_TIER_EFFORTS,
 		),
 		devinTierFamily(
 			"gpt-5-3-codex-fast",
@@ -435,7 +481,7 @@ export const DEVIN_VARIANT_COLLAPSE_TABLE: VariantCollapseTable = {
 				high: "gpt-5-3-codex-high-priority",
 				xhigh: "gpt-5-3-codex-xhigh-priority",
 			},
-			[Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+			DEVIN_FIVE_TIER_EFFORTS,
 		),
 		devinTierFamily(
 			"gpt-5-4",
@@ -447,7 +493,7 @@ export const DEVIN_VARIANT_COLLAPSE_TABLE: VariantCollapseTable = {
 				high: "gpt-5-4-high",
 				xhigh: "gpt-5-4-xhigh",
 			},
-			[Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+			DEVIN_FIVE_TIER_EFFORTS,
 		),
 		devinTierFamily(
 			"gpt-5-4-fast",
@@ -459,7 +505,7 @@ export const DEVIN_VARIANT_COLLAPSE_TABLE: VariantCollapseTable = {
 				high: "gpt-5-4-high-priority",
 				xhigh: "gpt-5-4-xhigh-priority",
 			},
-			[Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+			DEVIN_FIVE_TIER_EFFORTS,
 		),
 		devinTierFamily(
 			"gpt-5-4-mini",
@@ -470,7 +516,7 @@ export const DEVIN_VARIANT_COLLAPSE_TABLE: VariantCollapseTable = {
 				high: "gpt-5-4-mini-high",
 				xhigh: "gpt-5-4-mini-xhigh",
 			},
-			[Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+			DEVIN_FIVE_TIER_EFFORTS,
 		),
 		devinTierFamily(
 			"gpt-5-5",
@@ -482,7 +528,7 @@ export const DEVIN_VARIANT_COLLAPSE_TABLE: VariantCollapseTable = {
 				high: "gpt-5-5-high",
 				xhigh: "gpt-5-5-xhigh",
 			},
-			[Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+			DEVIN_FIVE_TIER_EFFORTS,
 		),
 		devinTierFamily(
 			"gpt-5-5-fast",
@@ -494,8 +540,11 @@ export const DEVIN_VARIANT_COLLAPSE_TABLE: VariantCollapseTable = {
 				high: "gpt-5-5-high-priority",
 				xhigh: "gpt-5-5-xhigh-priority",
 			},
-			[Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+			DEVIN_FIVE_TIER_EFFORTS,
 		),
+		...devinGpt56Families("luna", "GPT-5.6 Luna"),
+		...devinGpt56Families("sol", "GPT-5.6 Sol"),
+		...devinGpt56Families("terra", "GPT-5.6 Terra"),
 		devinTierFamily(
 			"gemini-3-1-pro",
 			"Gemini 3.1 Pro",

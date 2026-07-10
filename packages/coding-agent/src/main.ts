@@ -789,7 +789,8 @@ export function applyResolvedSystemPromptInputs(
 	}
 }
 
-async function buildSessionOptions(
+/** Builds startup session options from parsed CLI flags, scoped models, and resolved session lineage. */
+export async function buildSessionOptions(
 	parsed: Args,
 	scopedModels: ScopedModel[],
 	sessionManager: SessionManager | undefined,
@@ -819,6 +820,25 @@ async function buildSessionOptions(
 	}
 	if (parsed.providerSessionId) {
 		options.providerSessionId = parsed.providerSessionId;
+	}
+	if (parsed.providerPromptCacheKey) {
+		options.providerPromptCacheKey = parsed.providerPromptCacheKey;
+		options.providerPromptCacheKeySource = "explicit";
+	} else {
+		const header = sessionManager?.getHeader();
+		const scopedModelOverride = scopedModels.length > 0 && !parsed.continue && !parsed.resume;
+		const forkCacheShapeChanged =
+			scopedModelOverride ||
+			parsed.model !== undefined ||
+			parsed.thinking !== undefined ||
+			parsed.systemPrompt !== undefined ||
+			parsed.appendSystemPrompt !== undefined ||
+			parsed.tools !== undefined ||
+			parsed.noTools === true;
+		if (!forkCacheShapeChanged && header?.providerPromptCacheKey) {
+			options.providerPromptCacheKey = header.providerPromptCacheKey;
+			options.providerPromptCacheKeySource = "fork";
+		}
 	}
 
 	// Model from CLI

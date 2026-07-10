@@ -1,14 +1,16 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 
-// Single-entry memo for the proseOnly formatting path. During a streaming tick
-// the same growing thinking text is formatted up to three times (reveal count,
-// reveal slice, component render); this collapses them to one computation. The
-// `proseOnly === false` branch is a passthrough and never consults the cache, so
-// the key can be the text alone. A single entry is enough for the common case of
-// one active thinking block and never regresses (a miss recomputes exactly as
-// before).
-let formatCacheKey = "";
-let formatCacheValue = "";
+// Single-slot-per-mode memo for formatThinkingForDisplay. During a streaming
+// tick the same growing thinking text is formatted up to three times (reveal
+// count, reveal slice, component render); this collapses them to one
+// computation. Prose and raw modes produce different output for the same text,
+// so each mode keeps its own slot. One entry per mode is enough for the common
+// case of one active thinking block and never regresses (a miss recomputes
+// exactly as before).
+let proseCacheKey = "";
+let proseCacheValue = "";
+let rawCacheKey = "";
+let rawCacheValue = "";
 
 export function canonicalizeMessage(text: string | null | undefined): string {
 	if (!text) return "";
@@ -22,9 +24,35 @@ export function canonicalizeMessage(text: string | null | undefined): string {
 	return "";
 }
 
+// gpt-5.x reasoning summaries pad every summary part with an empty HTML
+// comment (`**Headline**\n\n<!-- -->`), streamed as a `<!--` delta followed by
+// ` -->`. Comments with actual content are left untouched.
+const EMPTY_COMMENT_RE = /^<!--\s*-->$/;
+const OPEN_COMMENT_RE = /^<!--\s*$/;
+
+/**
+ * Whether `line` is reasoning-summary comment noise: an empty HTML comment,
+ * or its still-unterminated `<!--` prefix on the last line while streaming.
+ */
+function isCommentNoise(line: string, isLastLine: boolean): boolean {
+	const trimmed = line.trim();
+	return EMPTY_COMMENT_RE.test(trimmed) || (isLastLine && OPEN_COMMENT_RE.test(trimmed));
+}
+
+/**
+ * Thinking text prepared for display. Both modes drop empty `<!-- -->`
+ * sentinel lines outside code fences (see {@link isCommentNoise}); prose-only
+ * mode additionally elides fenced code down to a trailing ellipsis.
+ */
 export function formatThinkingForDisplay(text: string, proseOnly: boolean): string {
-	if (!proseOnly || !text) return text;
-	if (text === formatCacheKey) return formatCacheValue;
+	if (!text) return text;
+	const hasComment = text.includes("<!--");
+	if (proseOnly) {
+		if (text === proseCacheKey) return proseCacheValue;
+	} else {
+		if (!hasComment) return text;
+		if (text === rawCacheKey) return rawCacheValue;
+	}
 
 	const lines = text.split("\n");
 	const resultLines: string[] = [];
@@ -56,22 +84,31 @@ export function formatThinkingForDisplay(text: string, proseOnly: boolean): stri
 
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i]!;
-		const open = FENCE.exec(line);
 
 		if (inFence) {
+			const close = FENCE.exec(line);
 			// A closing fence is the same char, at least as long, with nothing else on the line.
 			if (
-				open &&
-				open[2]![0] === fenceChar &&
-				open[2]!.length >= fenceLen &&
-				line.slice(open[1]!.length + open[2]!.length).trim() === ""
+				close &&
+				close[2]![0] === fenceChar &&
+				close[2]!.length >= fenceLen &&
+				line.slice(close[1]!.length + close[2]!.length).trim() === ""
 			) {
 				inFence = false;
 				fenceChar = "";
 				fenceLen = 0;
 			}
-			// We skip all internal lines of a code fence.
-		} else if (open) {
+			// Prose mode skips all fence lines; raw mode keeps them verbatim
+			// (comment markers inside fences are code, not noise).
+			if (!proseOnly) resultLines.push(line);
+			continue;
+		}
+
+		// Drop the whole line so `**Headline**\n\n<!-- -->` leaves no blank tail.
+		if (hasComment && isCommentNoise(line, i === lines.length - 1)) continue;
+
+		const open = FENCE.exec(line);
+		if (open) {
 			const marker = open[2]!;
 			const ch = marker[0]!;
 			// A backtick fence's info string may not contain a backtick.
@@ -79,18 +116,25 @@ export function formatThinkingForDisplay(text: string, proseOnly: boolean): stri
 				inFence = true;
 				fenceChar = ch;
 				fenceLen = marker.length;
-				appendEllipsis();
-			} else {
-				resultLines.push(line);
+				if (proseOnly) {
+					appendEllipsis();
+				} else {
+					resultLines.push(line);
+				}
+				continue;
 			}
-		} else {
-			resultLines.push(line);
 		}
+		resultLines.push(line);
 	}
 
 	const formatted = resultLines.join("\n");
-	formatCacheKey = text;
-	formatCacheValue = formatted;
+	if (proseOnly) {
+		proseCacheKey = text;
+		proseCacheValue = formatted;
+	} else {
+		rawCacheKey = text;
+		rawCacheValue = formatted;
+	}
 	return formatted;
 }
 
@@ -99,9 +143,11 @@ export function hasDisplayableThinking(
 	text: string | null | undefined,
 	formattedText: string | null | undefined,
 ): boolean {
-	if (!text) return false;
-	if (!formattedText) return false;
-	return formattedText.length > 0 && canonicalizeMessage(text).length > 0;
+	if (!text || !formattedText) return false;
+	// Visibility keys off the formatted text: a block whose raw text is only
+	// comment noise (`<!-- -->\n`) formats to whitespace and stays hidden. The
+	// raw canonicalize check still hides dot/ellipsis-only placeholder blocks.
+	return formattedText.trim().length > 0 && canonicalizeMessage(text).length > 0;
 }
 
 /** Whether an assistant message contains thinking content the TUI can reveal. */

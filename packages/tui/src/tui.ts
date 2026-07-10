@@ -1137,8 +1137,14 @@ export class TUI extends Container {
 				// Feed the engine's committed-row claim (from the previous frame's
 				// emit) before rendering so the child can skip re-deriving blocks
 				// that already live in immutable native scrollback. Reused segments
-				// skip this: they never call render(), so the signal is moot.
-				setNativeScrollbackCommittedRows(child, Math.max(0, this.#committedRows - offset));
+				// skip this: they never call render(), so the signal is moot. The
+				// claim is in the previous frame's coordinates and never exceeds
+				// the rows the child actually contributed there — history that
+				// advanced into LATER root children must not read as this child's
+				// own future rows being pre-committed.
+				const prevRows = previous !== undefined && previous.component === child ? previous.rowCount : 0;
+				const prevStart = previous !== undefined && previous.component === child ? previous.start : offset;
+				setNativeScrollbackCommittedRows(child, Math.min(prevRows, Math.max(0, this.#committedRows - prevStart)));
 				childLines = child.render(width);
 				const liveRegionStart = getNativeScrollbackLiveRegionStart(child);
 				if (liveRegionStart !== undefined) {
@@ -2802,6 +2808,7 @@ export class TUI extends Container {
 			this.#committedPrefixAuditRows = Math.min(chunkTo, finalBoundary);
 			this.#clearScrollbackOnNextRender = false;
 			this.#hasEverRendered = true;
+			this.#publishCommittedRows();
 			if (!firstPaint && frameLength > height) this.#armPostFullPaintSettle();
 			return;
 		}
@@ -2829,6 +2836,7 @@ export class TUI extends Container {
 		} else {
 			this.#committedPrefixAuditRows = Math.min(preAuditRows, this.#committedRows);
 		}
+		this.#publishCommittedRows();
 	}
 
 	/**
@@ -2850,6 +2858,25 @@ export class TUI extends Container {
 		if ($flag("PI_DEBUG_REDRAW")) {
 			const msg = `[${new Date().toISOString()}] commit resync: committed prefix diverged at row ${resyncTo}; recommitting\n`;
 			fs.appendFileSync(getDebugLogPath(), msg);
+		}
+	}
+
+	/**
+	 * Push the post-emit committed-row count to root children that implement
+	 * {@link NativeScrollbackCommittedRows}. Compose feeds the same signal
+	 * before each child render (see {@link render}), but guards that run
+	 * BETWEEN frames — e.g. a controller consulting the transcript's
+	 * committed boundary to decide whether a displaceable block may still be
+	 * retracted — would otherwise observe a count one frame stale and retract
+	 * rows that just entered immutable native scrollback, stranding an
+	 * orphaned copy above the repainted block.
+	 */
+	#publishCommittedRows(): void {
+		for (const segment of this.#frameSegments) {
+			setNativeScrollbackCommittedRows(
+				segment.component,
+				Math.min(segment.rowCount, Math.max(0, this.#committedRows - segment.start)),
+			);
 		}
 	}
 

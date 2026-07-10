@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { CURSOR_MARKER } from "@oh-my-pi/pi-tui";
 import { CombinedAutocompleteProvider } from "@oh-my-pi/pi-tui/autocomplete";
@@ -423,6 +426,46 @@ describe("Editor component", () => {
 
 			expect(editor.getText()).toBe("/help ");
 			expect(editor.isShowingAutocomplete()).toBe(false);
+		});
+
+		it("does not open file autocomplete after tab-completing no-arg slash commands", async () => {
+			vi.useFakeTimers();
+			const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "slash-tab-no-arg-"));
+			try {
+				await Bun.write(path.join(baseDir, "visible-file.ts"), "export {};\n");
+				const editor = new Editor(defaultEditorTheme);
+				editor.setAutocompleteProvider(
+					new CombinedAutocompleteProvider([{ name: "quit", description: "Quit", allowArgs: false }], baseDir),
+				);
+
+				let nextUpdate = Promise.withResolvers<void>();
+				editor.onAutocompleteUpdate = () => nextUpdate.resolve();
+				editor.handleInput("/");
+				await nextUpdate.promise;
+
+				nextUpdate = Promise.withResolvers<void>();
+				editor.onAutocompleteUpdate = () => nextUpdate.resolve();
+				editor.handleInput("q");
+				vi.advanceTimersByTime(100);
+				await nextUpdate.promise;
+
+				const chainedUpdates = Promise.withResolvers<void>();
+				let updateCount = 0;
+				editor.onAutocompleteUpdate = () => {
+					updateCount += 1;
+					if (updateCount === 2) {
+						chainedUpdates.resolve();
+					}
+				};
+				editor.handleInput("	");
+				await chainedUpdates.promise;
+
+				expect(editor.getText()).toBe("/quit ");
+				expect(editor.isShowingAutocomplete()).toBe(false);
+			} finally {
+				vi.useRealTimers();
+				await fs.rm(baseDir, { recursive: true, force: true });
+			}
 		});
 	});
 

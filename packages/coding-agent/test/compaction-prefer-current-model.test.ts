@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -97,6 +98,76 @@ describe("compaction prefers the current session model over modelRoles.default",
 		expect(compactSpy).toHaveBeenCalled();
 		const [, firstCandidate] = compactSpy.mock.calls[0]!;
 		expect(`${firstCandidate.provider}/${firstCandidate.id}`).toBe(`${currentModel.provider}/${currentModel.id}`);
+	});
+
+	it("falls back when the authenticated Bedrock candidate cannot resolve AWS credentials", async () => {
+		const currentModel = getBundledModel("amazon-bedrock", "global.anthropic.claude-opus-4-6-v1");
+		const fallbackModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!currentModel || !fallbackModel) {
+			throw new Error("Expected bundled test models to exist");
+		}
+
+		const settings = Settings.isolated({ "compaction.keepRecentTokens": 1, "compaction.strategy": "context-full" });
+		settings.setModelRole("smol", `${fallbackModel.provider}/${fallbackModel.id}`);
+
+		const agent = new Agent({
+			initialState: {
+				model: currentModel,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+		});
+
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
+		authStorage.setRuntimeApiKey(currentModel.provider, "bedrock-credentials");
+		authStorage.setRuntimeApiKey(fallbackModel.provider, "anthropic-token");
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		session.subscribe(() => {});
+
+		for (const [userText, assistantText] of [
+			["first question", "first answer"],
+			["second question", "second answer"],
+		] as const) {
+			const user = userMsg(userText);
+			const assistant = assistantMsg(assistantText);
+			session.agent.appendMessage(user);
+			session.sessionManager.appendMessage(user);
+			session.agent.appendMessage(assistant);
+			session.sessionManager.appendMessage(assistant);
+		}
+
+		const compactSpy = vi.spyOn(compactionModule, "compact").mockImplementation(async (preparation, model) => {
+			if (model.provider === currentModel.provider && model.id === currentModel.id) {
+				throw new AIError.AwsCredentialsError("opaque provider setup failure", "resolution");
+			}
+			if (model.provider !== fallbackModel.provider || model.id !== fallbackModel.id) {
+				throw new Error(`Unexpected compaction model ${model.provider}/${model.id}`);
+			}
+			return {
+				summary: "fallback summary",
+				shortSummary: "fallback short summary",
+				firstKeptEntryId: preparation.firstKeptEntryId,
+				tokensBefore: 42,
+				details: { provider: model.provider },
+			};
+		});
+
+		const result = await session.compact();
+
+		expect(result.summary).toBe("fallback summary");
+		expect(compactSpy).toHaveBeenCalledTimes(2);
+		expect(compactSpy.mock.calls.map(([, model]) => `${model.provider}/${model.id}`)).toEqual([
+			`${currentModel.provider}/${currentModel.id}`,
+			`${fallbackModel.provider}/${fallbackModel.id}`,
+		]);
 	});
 
 	it("uses compactionModel only for the summary call and leaves the active model unchanged", async () => {

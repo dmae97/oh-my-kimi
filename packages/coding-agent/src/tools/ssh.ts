@@ -244,6 +244,13 @@ interface SshRenderArgs {
 	timeout?: number;
 }
 
+/** Whether the painted call args still carry the streamed raw-JSON buffer —
+ *  the shape that renders the `⏳ SSH: […]` / `$ …` placeholder. */
+function hasStreamedRenderArgs(args: unknown): boolean {
+	if (args == null || typeof args !== "object" || !("__partialJson" in args)) return false;
+	return typeof args.__partialJson === "string";
+}
+
 interface SshRenderContext {
 	/** Visual lines for truncated output (pre-computed by tool-execution) */
 	visualLines?: string[];
@@ -388,9 +395,9 @@ export const sshToolRenderer = {
 	mergeCallAndResult: true,
 	// Streamed args can initially render the SSH placeholder (`⏳ SSH: […]` /
 	// `$ …`), then the first partial result inserts the `Output` section and
-	// re-anchors the frame. Force a full repaint at that seam so placeholder rows
-	// do not survive in viewport/native scrollback.
-	forceFirstResultViewportRepaint: true,
+	// re-anchors the frame. Force a full repaint only at that streamed-placeholder
+	// seam so placeholder rows do not survive in viewport/native scrollback.
+	forceFirstResultViewportRepaint: hasStreamedRenderArgs,
 	// The provisional pending-result frame settles into the final `⇄ SSH: [host]`
 	// frame, so clear/replay the viewport at that topology flip too.
 	forceResultViewportRepaintOnSettle: true,

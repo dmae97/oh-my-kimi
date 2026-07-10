@@ -124,6 +124,7 @@ class FakeAgentSession {
 	}
 	promptCalls: string[] = [];
 	customMessages: Array<{ customType: string; content: string; details?: unknown }> = [];
+	customMessageOptions: Array<{ streamingBehavior?: "steer" | "followUp"; queueChipText?: string } | undefined> = [];
 	skillsSettings = { enableSkillCommands: true };
 	skills: Array<{ name: string; description: string; filePath: string; baseDir: string; source: string }> = [];
 	planModeState: PlanModeState | undefined;
@@ -235,8 +236,12 @@ class FakeAgentSession {
 		this.isStreaming = false;
 	}
 
-	async promptCustomMessage(message: { customType: string; content: string; details?: unknown }): Promise<void> {
+	async promptCustomMessage(
+		message: { customType: string; content: string; details?: unknown },
+		options?: { streamingBehavior?: "steer" | "followUp"; queueChipText?: string },
+	): Promise<void> {
 		this.customMessages.push(message);
+		this.customMessageOptions.push(options);
 		this.isStreaming = true;
 		const assistantMessage = makeAssistantMessage("skill pong");
 		for (const listener of this.#listeners) {
@@ -1013,6 +1018,115 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
+	it("delivers the final visible answer when agent_end overtakes the assistant message_end (#4902)", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId);
+		if (!session) throw new Error("session not registered");
+
+		// Live turn as observed through the prompt subscription when the
+		// fire-and-forget assistant message_end handler loses the race against
+		// the agent_end flush: thinking streams, then the turn ends. No
+		// text_delta and no message_end ever reach this subscriber — the final
+		// text exists only on the agent_end payload.
+		const assistantMessage = makeAssistantMessage("Final visible answer.", "Considering the greeting.");
+		session.prompt = async (text: string): Promise<boolean> => {
+			session.promptCalls.push(text);
+			session.isStreaming = true;
+			for (const listener of session.listeners()) {
+				listener({
+					type: "message_update",
+					message: assistantMessage,
+					assistantMessageEvent: { type: "thinking_delta", delta: "Considering the greeting." },
+				} as AgentSessionEvent);
+			}
+			session.sessionManager.appendMessage(assistantMessage);
+			for (const listener of session.listeners()) {
+				listener({ type: "agent_end", messages: [assistantMessage] } as AgentSessionEvent);
+			}
+			session.isStreaming = false;
+			return true;
+		};
+
+		const response = await harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "Say hello" }],
+		});
+		expectAcpStructure(zPromptResponse, response);
+		expect(response.stopReason).toBe("end_turn");
+
+		const chunks = harness.updates.filter(update => update.sessionId === created.sessionId);
+		const thoughtChunks = chunks.filter(update => update.update.sessionUpdate === "agent_thought_chunk");
+		const messageChunks = chunks.filter(update => update.update.sessionUpdate === "agent_message_chunk");
+		expect(thoughtChunks).toHaveLength(1);
+		// The visible answer must reach the client exactly once even though the
+		// assistant message_end never arrived on this subscription.
+		expect(messageChunks).toHaveLength(1);
+		expect(messageChunks[0]?.update).toEqual(
+			expect.objectContaining({
+				sessionUpdate: "agent_message_chunk",
+				content: { type: "text", text: "Final visible answer." },
+			}),
+		);
+		// Flushed answer belongs to the same live message as the thought chunk.
+		expect(getChunkMessageId(messageChunks[0]!)).toBe(getChunkMessageId(thoughtChunks[0]!)!);
+		expectAcpNotifications(harness.updates);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("does not duplicate the final answer when the assistant message_end arrives before agent_end", async () => {
+		// Companion to the #4902 regression: when message_end IS delivered, its
+		// fallback emission wins and the agent_end flush must stay silent.
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId);
+		if (!session) throw new Error("session not registered");
+
+		const assistantMessage = makeAssistantMessage("Composed offline.", "quiet planning");
+		session.prompt = async (text: string): Promise<boolean> => {
+			session.promptCalls.push(text);
+			session.isStreaming = true;
+			for (const listener of session.listeners()) {
+				listener({
+					type: "message_update",
+					message: assistantMessage,
+					assistantMessageEvent: { type: "thinking_delta", delta: "quiet planning" },
+				} as AgentSessionEvent);
+			}
+			for (const listener of session.listeners()) {
+				listener({ type: "message_end", message: assistantMessage } as AgentSessionEvent);
+			}
+			session.sessionManager.appendMessage(assistantMessage);
+			for (const listener of session.listeners()) {
+				listener({ type: "agent_end", messages: [assistantMessage] } as AgentSessionEvent);
+			}
+			session.isStreaming = false;
+			return true;
+		};
+
+		const response = await harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "Say hello" }],
+		});
+		expectAcpStructure(zPromptResponse, response);
+
+		const messageChunks = harness.updates.filter(
+			update => update.sessionId === created.sessionId && update.update.sessionUpdate === "agent_message_chunk",
+		);
+		expect(messageChunks).toHaveLength(1);
+		expect(messageChunks[0]?.update).toEqual(
+			expect.objectContaining({
+				content: { type: "text", text: "Composed offline." },
+			}),
+		);
+		expectAcpNotifications(harness.updates);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
 	it("replays assistant tool calls and matching results without duplicating the start", async () => {
 		const harness = await createHarness();
 		const stored = new FakeAgentSession(harness.cwdA);
@@ -1443,6 +1557,7 @@ describe("ACP agent", () => {
 		expect(customMessage.content).toContain(`[Skill directory: ${skillDir}]`);
 		expect(customMessage.content).toMatch(/[Rr]esolve any relative paths/);
 		expect(customMessage.content).toContain("User: extra context");
+		expect(session.customMessageOptions[0]).toEqual({ streamingBehavior: "steer" });
 
 		harness.abortController.abort();
 		await Bun.sleep(0);

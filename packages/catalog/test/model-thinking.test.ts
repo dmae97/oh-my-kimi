@@ -567,6 +567,90 @@ describe("model thinking derivation", () => {
 		expect(getSupportedEfforts(model)).toEqual([]);
 		expect(clampThinkingLevelForModel(model, Effort.High)).toBeUndefined();
 	});
+
+	it("bakes the GPT-5.6 shifted five-tier effort map on wire-effort APIs", () => {
+		const codex = createModel({
+			id: "gpt-5.6-sol",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+		});
+
+		expect(codex.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+			effortMap: {
+				minimal: "low",
+				low: "medium",
+				medium: "high",
+				high: "xhigh",
+				xhigh: "max",
+			},
+		});
+
+		// Stale baked four-tier metadata (caches/discovery) normalizes back to
+		// the five-tier ladder with the map attached — the wire-defaults
+		// backfill path — and namespaced OpenRouter ids parse.
+		const staleOpenRouter = createModel({
+			id: "openai/gpt-5.6-terra",
+			api: "openrouter",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			thinking: {
+				mode: "effort",
+				efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+			},
+		});
+
+		expect(staleOpenRouter.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+			effortMap: {
+				minimal: "low",
+				low: "medium",
+				medium: "high",
+				high: "xhigh",
+				xhigh: "max",
+			},
+		});
+	});
+
+	it("keeps pre-5.6 and Devin-routed GPT models off the shifted effort map", () => {
+		const gpt55 = createModel({
+			id: "gpt-5.5",
+			api: "openai-responses",
+			provider: "openai",
+		});
+
+		expect(gpt55.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+		});
+		expect(gpt55.thinking?.effortMap).toBeUndefined();
+
+		// Devin selects effort by routing to per-tier sibling model ids, never
+		// via a wire reasoning.effort field — the shifted map must not attach.
+		const devin = createModel({
+			id: "gpt-5-6-sol",
+			api: "devin-agent",
+			provider: "devin",
+			baseUrl: "https://server.codeium.com",
+			thinking: {
+				mode: "effort",
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+				effortRouting: {
+					off: "gpt-5-6-sol-none",
+					minimal: "gpt-5-6-sol-low",
+					low: "gpt-5-6-sol-medium",
+					medium: "gpt-5-6-sol-high",
+					high: "gpt-5-6-sol-xhigh",
+					xhigh: "gpt-5-6-sol-max",
+				},
+			},
+		});
+
+		expect(devin.thinking?.effortMap).toBeUndefined();
+		expect(devin.thinking?.efforts).toEqual([Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh]);
+	});
 });
 
 describe("model thinking runtime helpers", () => {

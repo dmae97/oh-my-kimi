@@ -72,7 +72,7 @@ For each candidate issue, read the title, body, and **all comments** (comments o
 | `providers` | Provider-related behavior (generic provider scope) |
 
 **Provider labels** (apply only when a specific provider is explicitly involved):
-`provider:anthropic`, `provider:bedrock`, `provider:brave`, `provider:cerebras`, `provider:cloudflare`, `provider:codex`, `provider:copilot`, `provider:cursor`, `provider:exa`, `provider:gemini`, `provider:gitlab`, `provider:groq`, `provider:huggingface`, `provider:jina`, `provider:kimi`, `provider:litellm`, `provider:minimax`, `provider:mistral`, `provider:moonshot`, `provider:nanogpt`, `provider:nvidia`, `provider:openai`, `provider:opencode`, `provider:openrouter`, `provider:perplexity`, `provider:qianfan`, `provider:qwen`, `provider:synthetic`, `provider:together`, `provider:venice`, `provider:vercel`, `provider:xai`, `provider:xiaomi`, `provider:zai`
+`provider:anthropic`, `provider:bedrock`, `provider:brave`, `provider:cerebras`, `provider:cloudflare`, `provider:codex`, `provider:copilot`, `provider:cursor`, `provider:exa`, `provider:gemini`, `provider:gitlab`, `provider:groq`, `provider:huggingface`, `provider:jina`, `provider:kimi`, `provider:litellm`, `provider:minimax`, `provider:mistral`, `provider:moonshot`, `provider:nanogpt`, `provider:novita`, `provider:nvidia`, `provider:openai`, `provider:opencode`, `provider:openrouter`, `provider:perplexity`, `provider:qianfan`, `provider:qwen`, `provider:synthetic`, `provider:together`, `provider:venice`, `provider:vercel`, `provider:xai`, `provider:xiaomi`, `provider:zai`
 
 **Platform labels** (apply only when platform materially affects reproduction/root cause):
 | Label | Signals |
