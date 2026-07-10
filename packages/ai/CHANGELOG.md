@@ -4,33 +4,22 @@
 
 ### Added
 
-- Added `max` as a first-class reasoning effort option across providers and wire schemas
-- Updated `max` reasoning budget to 32768 tokens across all provider budget tables
-
-- Added model-driven Codex Responses Lite: `responsesLite` now defaults to the catalog `useResponsesLite` flag (codex-rs `use_responses_lite`, set on the GPT-5.6 family), so lite requests are sent without per-call opt-in.
-- Added the full Responses Lite wire contract: lite requests move tools into a leading `{type: "additional_tools", role: "developer"}` input item and the base instructions into a developer message, omit top-level `instructions`/`tools`, and force `parallel_tool_calls: false`, mirroring codex-rs `build_responses_request`.
-- Added concurrent reasoning summaries on Codex Responses: requests with a reasoning summary send `stream_options: { reasoning_summary_delivery: "sequential_cutoff" }`, and the stream decoder consumes the matching atomic `response.reasoning_summary_text.done` events (resolved by `item_id`/`output_index`, stale dones dropped, incremental `.delta`/`.part.*` events ignored under the cutoff contract). The cutoff gate reads the post-`onPayload` wire body on both transports, and `response.reasoning_summary_text.done` now counts as websocket watchdog progress.
-- Added Novita API-key login with authenticated key validation and `NOVITA_API_KEY` discovery ([#4917](https://github.com/can1357/oh-my-pi/pull/4917) by [@jason-wu-ai](https://github.com/jason-wu-ai)).
-- Added `"max"` as a first-class reasoning effort across provider options, wire types (`reasoning_effort`/`reasoning.effort`), server intake guards, and the Codex request transformer; user `max` now serializes 1:1 to the provider `max` tier instead of being reachable only through the retired shifted effort maps. Inbound Anthropic gateway requests now map `output_config.effort` onto `options.reasoning`.
+- Added "max" as a first-class reasoning effort option across providers (including Anthropic, Google, Bedrock, and OpenAI), supporting a maximum reasoning budget of 32,768 tokens.
+- Added and standardized the "Responses Lite" wire contract and transport, enabling automatic activation via model-level catalog flags, moving tools and instructions into developer input items, disabling parallel tool calls, and stripping image detail instead of falling back to the full transport.
+- Added support for concurrent reasoning summaries on Codex Responses using the sequential-cutoff streaming contract.
+- Added Novita API-key login with authenticated key validation and automatic NOVITA_API_KEY environment variable discovery.
 
 ### Changed
 
-- Refactored Responses Lite transport to move tools and instructions into input items
-- Updated Responses Lite to force parallel tool calling off and strip image detail
-- Standardized Responses Lite activation via model-level catalog flags
-- Recognized Pro Lite as a paid plan tier for OpenAI Codex models
-- Changed Responses Lite image handling to match current codex-rs: a lite request containing input images now stays on the lite transport with image `detail` stripped, instead of silently falling back to the full Responses shape.
-- Changed effort budget tables (`ANTHROPIC_THINKING`, `GOOGLE_THINKING`, `BEDROCK_CLAUDE_THINKING`, Bedrock `defaultBudgets`) to carry a `max` row (32768), and `getGoogleBudget` to resolve `max` to the largest bucket explicitly.
+- Recognized Pro Lite as a paid plan tier for OpenAI Codex models.
 
 ### Fixed
 
-- Fixed xAI SuperGrok multi-account rotation when an account returns HTTP 403 `run out of credits` / `personal-team-blocked:spending-limit`. That account-local cap is now classified as a usage limit so `streamSimple` auth-retry and `rotateSessionCredential` switch to a sibling `xai-oauth` credential instead of sticking to the exhausted account.
-- Fixed concurrent reasoning summaries to ignore legacy streaming events under cutoff contract
-- Fixed sequential-cutoff Codex reasoning summaries repeating earlier content when atomic summary snapshots are replayed or extended.
-- Fixed error classification for typed AWS credential-resolution failures (`AwsCredentialsError`) to map them to authentication failures. ([#5030](https://github.com/can1357/oh-my-pi/pull/5030) by [@usr-bin-roygbiv](https://github.com/usr-bin-roygbiv))
-- Fixed OpenAI-compatible chat-completions streams preserving vLLM-style trailing cached-token usage chunks so `cacheRead` and billable `input` session stats are accurate ([#5022](https://github.com/can1357/oh-my-pi/issues/5022)).
-- Fixed `xai-oauth/grok-4.5` Responses requests to omit unsupported `reasoning.summary` while preserving the documented `reasoning.effort` payload ([#4998](https://github.com/can1357/oh-my-pi/issues/4998)).
-- Fixed Codex OAuth credential selection to re-check blocked accounts during ranking and clear stale usage-limit blocks when live usage shows all reported windows recovered ([#4980](https://github.com/can1357/oh-my-pi/issues/4980)).
+- Fixed xAI SuperGrok multi-account rotation to correctly treat HTTP 403 credit exhaustion and spending limit errors as usage limits, triggering a credential rotation to a sibling account.
+- Fixed error classification for AWS credential-resolution failures (AwsCredentialsError) to correctly map them as authentication failures.
+- Fixed OpenAI-compatible chat-completions streams to preserve vLLM-style trailing cached-token usage chunks, ensuring accurate cacheRead and billable input session statistics.
+- Fixed xai-oauth/grok-4.5 Responses requests to omit the unsupported reasoning.summary field while preserving the reasoning.effort payload.
+- Fixed Codex OAuth credential selection to re-check blocked accounts during ranking and clear stale usage-limit blocks once live usage indicates recovery.
 
 ## [16.3.15] - 2026-07-09
 

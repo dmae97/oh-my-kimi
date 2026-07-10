@@ -4,36 +4,27 @@
 
 ### Breaking Changes
 
-- Renamed the bundled agent `explore` to `scout` (including renaming its configuration keys, prompt files, and task definitions). Any configurations, allowlists, or invocations referencing `explore` must now use `scout`.
+- Renamed the bundled agent explore to scout, including its configuration keys, prompt files, and task definitions. Any configurations, allowlists, or invocations referencing explore must now use scout.
 
 ### Added
 
-- Added `max` as a native, first-class thinking tier for supported models
-- Added `thinkingBudgets.max` configuration setting
-- Updated terminal theme to support optional `thinkingMax` border color and icons
-
-- Added a real `max` thinking level above `xhigh` with an optional `thinkingMax` theme border color (falls back to `thinkingXhigh`). `max` owns the top status-line icons (`◉` unicode, fire nerd-font, `[max]` ascii); the nerd-font preset uses an empty-to-full battery ramp for `minimal` through `xhigh` and shuffle while automatic effort is unresolved. `max` appears in cycling, selectors, `--thinking`, `:max` model suffixes, role scopes, settings, and completions on models that genuinely support it; on other models it clamps down like any unsupported tier.
-
-### Changed
-
-- Renamed the bundled agent `explore` to `scout` (including all internal references, prompt definitions, and task tool configurations). Any custom configurations or task invocations referencing `explore` must now use `scout`.
-- Changed `max` from a parse-time alias of `xhigh` to a distinct level everywhere (CLI flag, `:max` suffix, `defaultThinkingLevel`, ACP/RPC): the effort a model receives is now exactly the tier its wire supports, with no shifted remapping. Ultrathink now requests `max` (clamped per model); automatic thinking still tops out at `xhigh`. Added `thinkingBudgets.max` (default 32768).
-- Fixed collapsed compacted session transcript rebuilds reattaching snapcompact archive image frames to the live TUI, avoiding large retained JSC heaps on resume and transcript refresh. ([#4979](https://github.com/can1357/oh-my-pi/issues/4979))
+- Added a native, first-class max thinking tier for supported models, including a new thinkingBudgets.max configuration setting, support in CLI flags (--thinking, :max model suffixes), and terminal theme customization (thinkingMax border color and icons).
 
 ### Fixed
 
-- Fixed interactive TUI sessions dying with `Unhandled rejection: Cannot set cwd while another same-realm JS runtime is running` after the JS eval worker fell back to the in-process inline path (commonly when the worker could not load `pi_natives`). Concurrent inline eval/browser runtimes now stamp cwd (including the saved `__omp_session__` state) without stealing the exclusive realm, WorkerCore `init` reports failures via `init-failed` instead of throwing out of the microtask path, and constructing a runtime while another same-realm run is live fails explicitly instead of clobbering its globals. ([#4907](https://github.com/can1357/oh-my-pi/pull/4907) by [@cexll](https://github.com/cexll))
-- Fixed compaction aborting instead of trying an authenticated fallback model when Amazon Bedrock credential resolution fails before a request is sent. ([#5030](https://github.com/can1357/oh-my-pi/pull/5030) by [@usr-bin-roygbiv](https://github.com/usr-bin-roygbiv))
-- Fixed full-context forks cold-missing OpenAI prompt caches by persisting an inherited provider prompt-cache key separately from the new OMP session id, adding `--prompt-cache-key` for explicit cache affinity, and dropping automatic inheritance when startup changes the model, thinking level, system prompt, or tool schema. ([#5035](https://github.com/can1357/oh-my-pi/issues/5035))
-- Fixed Codex advisor requests using local `-advisor` session labels as provider session IDs; advisors now use stable UUIDv7 provider identities while keeping labeled transcript names. ([#5040](https://github.com/can1357/oh-my-pi/issues/5040))
-- Fixed macOS stdio MCP servers launching in a detached session, so `xcrun mcpbridge` can trigger the TCC Apple Events permission prompt and complete startup. ([#4987](https://github.com/can1357/oh-my-pi/issues/4987))
-- Fixed the ask tool timeout so it auto-selects the recommended option even when the UI selector does not settle on its own. ([#4995](https://github.com/can1357/oh-my-pi/issues/4995))
-- Fixed LSP workspace diagnostics for Go workspaces so roots with `go.work` are recognized and every `go.work use` module is included in the `go build` package patterns. ([#5038](https://github.com/can1357/oh-my-pi/issues/5038))
-- Fixed interactive OAuth login success messages waiting on model discovery; `/login xai-oauth` now reports saved credentials immediately while model metadata refreshes in the background. ([#4989](https://github.com/can1357/oh-my-pi/issues/4989))
-- Fixed Windows bash tool crashes when an explicit timeout fires while a piped command is still streaming output; the JavaScript fallback now reports the timeout without also aborting the native timeout signal. ([#5021](https://github.com/can1357/oh-my-pi/issues/5021))
-- Fixed subagent `yield` tool calls being discarded when the soft request budget hard-aborted the same assistant turn before the yield result event landed. ([#5006](https://github.com/can1357/oh-my-pi/issues/5006))
-- Fixed `--tools` filtering in interactive sessions disabling deferred MCP tools; MCP tools discovered from configured servers now stay active when the flag limits only built-in tools. ([#5013](https://github.com/can1357/oh-my-pi/issues/5013))
-- Fixed kept-alive task subagents entering a repeated provider-call loop after an IRC wake and terminal `yield`. ([#4963](https://github.com/can1357/oh-my-pi/issues/4963))
+- Fixed a memory leak (large retained JavaScriptCore heaps) in the TUI during session transcript rebuilds and refreshes by properly handling snapcompact archive image frames.
+- Fixed a crash in interactive TUI sessions (Cannot set cwd while another same-realm JS runtime is running) when the JS evaluation worker falls back to the in-process inline path.
+- Fixed compaction aborting when Amazon Bedrock credential resolution fails, ensuring it now falls back to trying an authenticated model.
+- Improved OpenAI prompt cache hit rates for full-context forks by persisting inherited provider prompt-cache keys separately from session IDs, and added a --prompt-cache-key flag for explicit cache affinity.
+- Fixed Codex advisor requests incorrectly using local session labels as provider session IDs, switching to stable UUIDv7 provider identities.
+- Fixed macOS stdio MCP servers launching in detached sessions, allowing tools like xcrun mcpbridge to successfully trigger TCC Apple Events permission prompts.
+- Fixed the ask tool timeout behavior to automatically select the recommended option if the UI selector does not settle.
+- Fixed LSP workspace diagnostics for Go workspaces to correctly recognize go.work roots and include all specified modules in go build package patterns.
+- Fixed interactive OAuth login (/login xai-oauth) delaying success messages; credentials are now reported immediately while model metadata refreshes in the background.
+- Fixed a crash in the Windows bash tool when a timeout occurs while a piped command is streaming output.
+- Fixed subagent yield tool calls being discarded when a soft request budget aborts the assistant turn before the yield event completes.
+- Fixed --tools filtering in interactive sessions incorrectly disabling deferred MCP tools from configured servers.
+- Fixed kept-alive task subagents entering infinite provider-call loops after an IRC wake and terminal yield.
 
 ## [16.3.15] - 2026-07-09
 
