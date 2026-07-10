@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.1] - 2026-07-10
+
 ### Added
 
 - Added full 2-D layout support for display LaTeX math (fractions, matrices, radicals, limits), modeled on the layout approach of [txm](https://github.com/thatmagicalcat/txm) (Terminal TeX Math) by [@thatmagicalcat](https://github.com/thatmagicalcat)

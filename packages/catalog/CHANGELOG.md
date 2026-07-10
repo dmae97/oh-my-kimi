@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.1] - 2026-07-10
+
 ### Added
 
 - Added GPT-5.6 Luna, Sol, and Terra models

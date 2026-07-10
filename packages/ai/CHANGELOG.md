@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.1] - 2026-07-10
+
 ### Changed
 
 - Enforced `all_turns` reasoning context for all Responses Lite requests

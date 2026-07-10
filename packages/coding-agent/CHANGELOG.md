@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.1] - 2026-07-10
+
 ### Changed
 
 - Reduced agent bias against large diffs and refactors in advisor prompts
