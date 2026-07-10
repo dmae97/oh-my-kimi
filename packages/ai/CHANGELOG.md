@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added GPT-5.6 model metadata from models.dev and OpenRouter, including direct OpenAI/Azure GPT-5.6 variants with `xhigh`/`max` reasoning metadata.
+
 ## [0.90.6] - 2026-07-09
 
 ## [0.90.5] - 2026-07-07

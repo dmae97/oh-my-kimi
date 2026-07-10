@@ -195,6 +195,10 @@ const OPENAI_RESPONSES_NONE_REASONING_MODELS = new Set([
 	"gpt-5.4-mini",
 	"gpt-5.4-nano",
 	"gpt-5.5",
+	"gpt-5.6",
+	"gpt-5.6-luna",
+	"gpt-5.6-sol",
+	"gpt-5.6-terra",
 ]);
 
 function mergeThinkingLevelMap(model: Model<any>, map: NonNullable<Model<any>["thinkingLevelMap"]>): void {
@@ -225,8 +229,13 @@ function supportsOpenAiXhigh(modelId: string): boolean {
 		modelId.includes("gpt-5.2") ||
 		modelId.includes("gpt-5.3") ||
 		modelId.includes("gpt-5.4") ||
-		modelId.includes("gpt-5.5")
+		modelId.includes("gpt-5.5") ||
+		modelId.includes("gpt-5.6")
 	);
+}
+
+function supportsOpenAiMax(modelId: string): boolean {
+	return modelId.includes("gpt-5.6");
 }
 
 function isGoogleThinkingApi(model: Model<any>): boolean {
@@ -294,7 +303,10 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 	if (supportsOpenAiXhigh(model.id)) {
 		mergeThinkingLevelMap(model, { xhigh: "xhigh" });
 	}
-	if (model.provider === "openai" && model.id === "gpt-5.5") {
+	if (supportsOpenAiMax(model.id)) {
+		mergeThinkingLevelMap(model, { max: "max" });
+	}
+	if (model.provider === "openai" && (model.id === "gpt-5.5" || model.id.startsWith("gpt-5.6"))) {
 		mergeThinkingLevelMap(model, { minimal: null });
 	}
 	if (model.id.endsWith("gpt-5.5-pro")) {
@@ -1507,7 +1519,10 @@ async function generateModels() {
 			candidate.contextWindow = 272000;
 			candidate.maxTokens = 128000;
 		}
-		if (candidate.provider === "openai" && (candidate.id === "gpt-5.4" || candidate.id === "gpt-5.5")) {
+		if (
+			candidate.provider === "openai" &&
+			(candidate.id === "gpt-5.4" || candidate.id === "gpt-5.5" || candidate.id.startsWith("gpt-5.6"))
+		) {
 			candidate.contextWindow = 272000;
 			candidate.maxTokens = 128000;
 		}
