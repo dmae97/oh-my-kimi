@@ -1184,7 +1184,19 @@ export class Agent {
 				}
 				return this.#dequeueSteeringMessages();
 			},
-			hasSteeringMessages: () => this.#steeringQueue.length > 0,
+			hasSteeringMessages: () => {
+				if (this.#steeringQueue.length === 0) {
+					return { queued: false };
+				}
+				for (const message of this.#steeringQueue) {
+					const role = "role" in message ? message.role : undefined;
+					const attribution = "attribution" in message ? message.attribution : undefined;
+					if (role === "user" && attribution !== "agent") {
+						return { queued: true, source: "user" };
+					}
+				}
+				return { queued: true, source: "system" };
+			},
 			hasIrcInterrupts: this.hasIrcInterrupts,
 			getFollowUpMessages: async () => this.#dequeueFollowUpMessages(),
 			getAsideMessages: async () => (await this.#asideMessageProvider?.()) ?? [],

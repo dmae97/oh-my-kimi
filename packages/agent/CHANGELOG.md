@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed skipped sibling tool results caused by system advisor steering so they no longer claim a queued user message caused the skip. ([#5074](https://github.com/can1357/oh-my-pi/issues/5074))
+
 ## [16.4.0] - 2026-07-10
 
 ### Added
