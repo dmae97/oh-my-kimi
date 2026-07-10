@@ -153,6 +153,36 @@ describe("auth-gateway openai-chat: parseRequest", () => {
 		expect(parsed.stream).toBe(false);
 	});
 
+	it("accepts assistant null content when replaying tool calls", () => {
+		const parsed = parseRequest({
+			model: "m",
+			messages: [
+				{ role: "user", content: "weather?" },
+				{
+					role: "assistant",
+					content: null,
+					tool_calls: [{ id: "call_1", type: "function", function: { name: "get_weather", arguments: "{}" } }],
+				},
+				{ role: "tool", tool_call_id: "call_1", content: "sunny" },
+			],
+		});
+
+		const assistant = parsed.context.messages.find(m => m.role === "assistant");
+		if (assistant?.role !== "assistant") throw new Error("expected assistant");
+		expect(assistant.content).toHaveLength(1);
+		const call = assistant.content[0];
+		if (call?.type !== "toolCall") throw new Error("expected toolCall");
+		expect(call.id).toBe("call_1");
+		expect(call.name).toBe("get_weather");
+		expect(call.arguments).toEqual({});
+
+		const tool = parsed.context.messages.find(m => m.role === "toolResult");
+		if (tool?.role !== "toolResult") throw new Error("expected toolResult");
+		expect(tool.toolCallId).toBe("call_1");
+		expect(tool.toolName).toBe("get_weather");
+		expect(tool.content).toEqual([{ type: "text", text: "sunny" }]);
+	});
+
 	it("honours an explicit wire `name` on a tool message over back-resolution", () => {
 		const parsed = parseRequest({
 			model: "m",

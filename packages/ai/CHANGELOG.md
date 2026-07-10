@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed OpenAI Chat Completions request parsing to accept assistant tool-call replay messages with `content: null` as absent content. ([#5121](https://github.com/can1357/oh-my-pi/issues/5121))
+
 ## [16.4.1] - 2026-07-10
 
 ### Changed
