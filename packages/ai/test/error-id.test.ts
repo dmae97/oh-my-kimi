@@ -43,6 +43,17 @@ describe("error-id classification", () => {
 		expect(AIError.retriable(id)).toBe(true);
 	});
 
+	it("keeps provider content filters non-retryable", () => {
+		const error = new AIError.ProviderResponseError("incomplete: content_filter", {
+			provider: "openrouter",
+			kind: "content-blocked",
+		});
+		const id = AIError.classify(error, "openai-responses");
+		expect(AIError.is(id, AIError.Flag.ContentBlocked)).toBe(true);
+		expect(AIError.is(id, AIError.Flag.ProviderFinishError)).toBe(false);
+		expect(AIError.retriable(id)).toBe(false);
+	});
+
 	it("keeps raw status fallback unclassified", () => {
 		const id = 503;
 		expect(AIError.is(id, AIError.Flag.Class)).toBe(false);
