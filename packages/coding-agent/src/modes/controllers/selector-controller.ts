@@ -1179,7 +1179,7 @@ export class SelectorController {
 				},
 				onManualCodeInput: useManualInput ? () => manualInput.waitForInput(providerId) : undefined,
 			});
-			await this.ctx.session.modelRegistry.refresh();
+			this.ctx.session.modelRegistry.refreshInBackground();
 			const block = new TranscriptBlock();
 			block.addChild(
 				new Text(theme.fg("success", `${theme.status.success} Successfully logged in to ${providerId}`), 1, 0),
