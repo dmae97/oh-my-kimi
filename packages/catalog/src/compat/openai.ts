@@ -601,8 +601,7 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 		// model pointed at the Copilot host under a different provider id still
 		// clamps; xai-oauth is provider-id only (same host family as paid `xai`).
 		supportsImageDetailOriginal:
-			spec.provider !== "xai-oauth" &&
-			!modelMatchesHost({ provider: spec.provider, baseUrl }, "githubCopilot"),
+			spec.provider !== "xai-oauth" && !modelMatchesHost({ provider: spec.provider, baseUrl }, "githubCopilot"),
 		reasoningEffortMap: {},
 		supportsReasoningParams: true,
 		thinkingFormat,
