@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `write` treating read-only internal URLs like `memory://root/memory_summary.md` as project-relative filesystem paths, prevented leaks such as `{cwd}/memory:/root/memory_summary.md`, and made `memory://root` prefer the calling session's cwd-specific memory root when multiple agents are live. ([#5075](https://github.com/can1357/oh-my-pi/issues/5075))
+
 ## [16.4.0] - 2026-07-10
 
 ### Breaking Changes
