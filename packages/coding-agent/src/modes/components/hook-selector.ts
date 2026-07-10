@@ -61,6 +61,7 @@ export interface HookSelectorOptions {
 	tui?: TUI;
 	timeout?: number;
 	onTimeout?: () => void;
+	onTimeoutStart?: () => void;
 	onTimeoutReset?: () => void;
 	initialIndex?: number;
 	outline?: boolean;
@@ -235,6 +236,7 @@ export class HookSelectorComponent extends Container {
 		}
 
 		if (opts?.timeout && opts.timeout > 0 && opts.tui) {
+			opts.onTimeoutStart?.();
 			this.#countdown = new CountdownTimer(
 				opts.timeout,
 				opts.tui,

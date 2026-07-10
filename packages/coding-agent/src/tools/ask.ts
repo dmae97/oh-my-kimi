@@ -389,6 +389,7 @@ interface UIContext {
 			signal?: AbortSignal;
 			outline?: boolean;
 			onTimeout?: () => void;
+			onTimeoutStart?: () => void;
 			onTimeoutReset?: () => void;
 			onLeft?: () => void;
 			onRight?: () => void;
@@ -455,6 +456,7 @@ async function askSingleQuestion(
 			signal: dialogSignal,
 			outline: true,
 			onTimeout,
+			onTimeoutStart: timeoutMs === undefined ? undefined : () => armFallbackTimeout(timeoutMs),
 			onTimeoutReset: timeoutMs === undefined ? undefined : () => armFallbackTimeout(timeoutMs),
 			helpText,
 			selectionMarker: marker?.selectionMarker,
@@ -471,9 +473,6 @@ async function askSingleQuestion(
 					}
 				: undefined,
 		};
-		if (timeoutMs !== undefined) {
-			armFallbackTimeout(timeoutMs);
-		}
 		try {
 			const choice = dialogSignal
 				? await untilAborted(dialogSignal, () => ui.select(prompt, optionsToShow, dialogOptions))

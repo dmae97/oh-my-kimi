@@ -48,7 +48,10 @@ describe("AskTool timeout", () => {
 
 	it("auto-selects the recommended option when the selector does not settle", async () => {
 		vi.useFakeTimers();
-		const select = vi.fn<AskSelect>(() => new Promise<string | undefined>(() => {}));
+		const select = vi.fn<AskSelect>((_title, _options, dialogOptions) => {
+			dialogOptions?.onTimeoutStart?.();
+			return new Promise<string | undefined>(() => {});
+		});
 		const abort = vi.fn();
 		const context = {
 			hasUI: true,
@@ -101,6 +104,7 @@ describe("AskTool timeout", () => {
 		vi.useFakeTimers();
 		let resetTimeout: (() => void) | undefined;
 		const select = vi.fn<AskSelect>((_title, _options, dialogOptions) => {
+			dialogOptions?.onTimeoutStart?.();
 			resetTimeout = dialogOptions?.onTimeoutReset;
 			return new Promise<string | undefined>(() => {});
 		});
@@ -161,17 +165,83 @@ describe("AskTool timeout", () => {
 		expect(abort).not.toHaveBeenCalled();
 	});
 
-	it("notifies callers when selector input resets the UI countdown", () => {
+	it("does not run the fallback timeout while the selector is queued", async () => {
 		vi.useFakeTimers();
+		let startTimeout: (() => void) | undefined;
+		const select = vi.fn<AskSelect>((_title, _options, dialogOptions) => {
+			startTimeout = dialogOptions?.onTimeoutStart;
+			return new Promise<string | undefined>(() => {});
+		});
+		const abort = vi.fn();
+		const context = {
+			hasUI: true,
+			ui: {
+				select,
+				editor: vi.fn(),
+			},
+			abort,
+		} as unknown as AgentToolContext;
+		let result: AskExecutionResult | undefined;
+		let rejection: unknown;
+
+		void createAskTool()
+			.execute(
+				"ask-timeout",
+				{
+					questions: [
+						{
+							id: "db",
+							question: "Which database?",
+							options: [{ label: "SQLite" }, { label: "Postgres" }],
+							recommended: 1,
+						},
+					],
+				},
+				undefined,
+				undefined,
+				context,
+			)
+			.then(
+				value => {
+					result = value;
+				},
+				error => {
+					rejection = error;
+				},
+			);
+
+		await drainMicrotasks();
+		expect(startTimeout).toBeDefined();
+
+		vi.advanceTimersByTime(10);
+		await drainMicrotasks();
+
+		expect(result).toBeUndefined();
+
+		startTimeout?.();
+		vi.advanceTimersByTime(10);
+		await drainMicrotasks();
+
+		expect(rejection).toBeUndefined();
+		expect(result?.details?.selectedOptions).toEqual(["Postgres"]);
+		expect(result?.details?.timedOut).toBe(true);
+		expect(abort).not.toHaveBeenCalled();
+	});
+
+	it("notifies callers when the selector countdown starts and resets", () => {
+		vi.useFakeTimers();
+		const onTimeoutStart = vi.fn();
 		const onTimeoutReset = vi.fn();
 		const selector = new HookSelectorComponent("Pick one", ["SQLite", "Postgres"], vi.fn(), vi.fn(), {
 			timeout: 10,
 			tui: { requestRender: vi.fn() } as unknown as TUI,
+			onTimeoutStart,
 			onTimeoutReset,
 		});
 
 		selector.handleInput("j");
 
+		expect(onTimeoutStart).toHaveBeenCalledTimes(1);
 		expect(onTimeoutReset).toHaveBeenCalledTimes(1);
 		selector.dispose();
 	});

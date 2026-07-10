@@ -624,6 +624,7 @@ export class ExtensionUiController {
 					initialIndex: dialogOptions?.initialIndex,
 					timeout: dialogOptions?.timeout,
 					onTimeout: dialogOptions?.onTimeout,
+					onTimeoutStart: dialogOptions?.onTimeoutStart,
 					onTimeoutReset: dialogOptions?.onTimeoutReset,
 					tui: this.ctx.ui,
 					outline: dialogOptions?.outline,
