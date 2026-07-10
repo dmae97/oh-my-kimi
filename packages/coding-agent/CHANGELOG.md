@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed MiniMax-M3 task subagents retrying empty `yield` results forever; repeated untyped `result: {}` submissions now abort the child with guidance instead of leaving the parent blocked. ([#5095](https://github.com/can1357/oh-my-pi/issues/5095))
+
 ## [16.4.0] - 2026-07-10
 
 ### Breaking Changes

@@ -526,6 +526,57 @@ describe("YieldTool", () => {
 		).rejects.toThrow("data is required when yield indicates success");
 	});
 
+	it("aborts instead of throwing forever after repeated untyped empty results", async () => {
+		const tool = new YieldTool(createSession());
+		const expectedGuidance =
+			'result must contain either `data` or `error`. Use `{result: {data: <your output>}}` for success or `{result: {error: "message"}}` for failure.';
+
+		for (let attempt = 1; attempt <= 3; attempt++) {
+			await expect(tool.execute(`call-empty-retry-${attempt}`, { result: {} } as never)).rejects.toThrow(
+				expectedGuidance,
+			);
+		}
+
+		const abortResult = await tool.execute("call-empty-abort", { result: {} } as never);
+		const details = abortResult.details;
+		expect(details).toBeDefined();
+		if (!details) throw new Error("missing abort details");
+		expect(details.status).toBe("aborted");
+		expect(details.data).toBeUndefined();
+		expect(String(details.error)).toContain("retrying forever");
+		expect(abortResult.content).toEqual([{ type: "text", text: expect.stringContaining("Task aborted") }]);
+	});
+
+	it("resets the untyped empty-result retry budget after a valid yield", async () => {
+		const tool = new YieldTool(createSession());
+		const expectedGuidance =
+			'result must contain either `data` or `error`. Use `{result: {data: <your output>}}` for success or `{result: {error: "message"}}` for failure.';
+
+		for (let attempt = 1; attempt <= 2; attempt++) {
+			await expect(tool.execute(`call-empty-before-valid-${attempt}`, { result: {} } as never)).rejects.toThrow(
+				expectedGuidance,
+			);
+		}
+
+		const validResult = await tool.execute("call-valid-reset", { result: { data: { ok: true } } } as never);
+		expect(validResult.details).toEqual({ data: { ok: true }, status: "success", error: undefined });
+
+		for (let attempt = 1; attempt <= 3; attempt++) {
+			await expect(tool.execute(`call-empty-after-valid-${attempt}`, { result: {} } as never)).rejects.toThrow(
+				expectedGuidance,
+			);
+		}
+
+		const abortResult = await tool.execute("call-empty-after-reset-abort", { result: {} } as never);
+		const details = abortResult.details;
+		expect(details).toBeDefined();
+		if (!details) throw new Error("missing abort details");
+		expect(details.status).toBe("aborted");
+		expect(details.data).toBeUndefined();
+		expect(String(details.error)).toContain("retrying forever");
+		expect(abortResult.content).toEqual([{ type: "text", text: expect.stringContaining("Task aborted") }]);
+	});
+
 	it("exposes typed last-turn mode in the argument schema", () => {
 		const tool = new YieldTool(createSession());
 		const parameters = tool.parameters as unknown as Record<string, unknown>;
