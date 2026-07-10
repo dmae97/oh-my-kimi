@@ -157,6 +157,7 @@ let openAICompletionsProviderModulePromise: Promise<LazyProviderModule<"openai-c
 let openAIResponsesProviderModulePromise: Promise<LazyProviderModule<"openai-responses">> | undefined;
 let ollamaProviderModulePromise: Promise<LazyProviderModule<"ollama-chat">> | undefined;
 let cursorProviderModulePromise: Promise<LazyProviderModule<"cursor-agent">> | undefined;
+let cursorProviderModuleOverride: LazyProviderModule<"cursor-agent"> | undefined;
 let devinProviderModulePromise: Promise<LazyProviderModule<"devin-agent">> | undefined;
 let bedrockProviderModuleOverride: LazyProviderModule<"bedrock-converse-stream"> | undefined;
 let bedrockProviderModulePromise: Promise<LazyProviderModule<"bedrock-converse-stream">> | undefined;
@@ -164,6 +165,12 @@ let bedrockProviderModulePromise: Promise<LazyProviderModule<"bedrock-converse-s
 export function setBedrockProviderModule(module: BedrockProviderModule): void {
 	bedrockProviderModuleOverride = {
 		stream: module.streamBedrock,
+	};
+}
+
+export function setCursorProviderModule(module: CursorProviderModule): void {
+	cursorProviderModuleOverride = {
+		stream: module.streamCursor,
 	};
 }
 
@@ -245,6 +252,10 @@ function forwardStream<TApi extends Api>(
 					(limits?.openAIIdleEnvFloorsFirstEvent
 						? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs, limits.defaultFirstEventTimeoutMs)
 						: getStreamFirstEventTimeoutMs(idleTimeoutMs, limits?.defaultFirstEventTimeoutMs)));
+			// Providers with a server-driven local tool bridge (e.g. the Cursor
+			// exec channel) mark their stream busy while a local tool runs; the
+			// watchdog must not read that silence as a provider stall (#4593).
+			const localWorkSource = source instanceof EventStreamImpl ? source : undefined;
 			const watchedSource = iterateWithIdleTimeout(source, {
 				idleTimeoutMs,
 				firstItemTimeoutMs,
@@ -260,6 +271,7 @@ function forwardStream<TApi extends Api>(
 				// `idleTimeoutMs` while we're still legitimately waiting on the model's
 				// first response (slow first-token from reasoning models, cold proxies, etc.).
 				isProgressItem: event => (event as AssistantMessageEvent).type !== "start",
+				hasPendingLocalWork: localWorkSource ? () => localWorkSource.hasPendingLocalWork : undefined,
 			});
 
 			for await (const event of watchedSource) {
@@ -411,6 +423,9 @@ function loadOllamaProviderModule(): Promise<LazyProviderModule<"ollama-chat">> 
 }
 
 function loadCursorProviderModule(): Promise<LazyProviderModule<"cursor-agent">> {
+	if (cursorProviderModuleOverride) {
+		return Promise.resolve(cursorProviderModuleOverride);
+	}
 	cursorProviderModulePromise ||= import("./cursor").then(module => {
 		const provider = module as CursorProviderModule;
 		return { stream: provider.streamCursor };

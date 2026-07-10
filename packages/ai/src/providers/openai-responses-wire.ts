@@ -6319,6 +6319,13 @@ export interface Reasoning {
 	 */
 	effort?: ReasoningEffort | null;
 	/**
+	 * **gpt-5.6 and later models only**
+	 *
+	 * Reasoning serving mode. `pro` routes the request to the pro reasoning
+	 * path (more compute per response); omit for the standard path.
+	 */
+	mode?: "pro" | null;
+	/**
 	 * @deprecated **Deprecated:** use `summary` instead.
 	 *
 	 * A summary of the reasoning performed by the model. This can be useful for

@@ -1,5 +1,6 @@
 import { isUnexpectedSocketCloseMessage } from "@oh-my-pi/pi-utils";
 import type { Api, AssistantMessage } from "../types";
+import { AwsCredentialsError } from "./aws";
 import {
 	AnthropicConnectionError,
 	AnthropicConnectionTimeoutError,
@@ -346,7 +347,9 @@ export function classify(error: unknown, api?: Api): number {
 			}
 		}
 
-		if (link instanceof AnthropicConnectionTimeoutError) {
+		if (link instanceof AwsCredentialsError) {
+			kinds |= Flag.AuthFailed;
+		} else if (link instanceof AnthropicConnectionTimeoutError) {
 			kinds |= Flag.Timeout | Flag.Transient;
 		} else if (link instanceof AnthropicConnectionError) {
 			kinds |= Flag.Transient;

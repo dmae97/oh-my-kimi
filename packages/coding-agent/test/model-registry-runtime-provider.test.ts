@@ -261,6 +261,52 @@ describe("ModelRegistry runtime provider registration", () => {
 		});
 	});
 
+	test("configured discovery suppresses extension fetchDynamicModels for the same provider", async () => {
+		const providerName = "runtime-configured-provider";
+		fs.writeFileSync(
+			modelsJsonPath,
+			JSON.stringify({
+				providers: {
+					[providerName]: {
+						baseUrl: "http://127.0.0.1:4893",
+						api: "openai-completions",
+						auth: "none",
+						discovery: { type: "openai-models-list" },
+					},
+				},
+			}),
+		);
+		const configuredFetch: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:4893/v1/models") {
+				return Response.json({
+					data: [{ id: "shared-runtime-model", context_length: 32_768 }],
+				});
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const configuredRegistry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: configuredFetch });
+		let runtimeFetchCalls = 0;
+		configuredRegistry.registerProvider(
+			providerName,
+			{
+				baseUrl: "https://runtime.example.com/v1",
+				apiKey: "RUNTIME_KEY",
+				api: "openai-completions",
+				fetchDynamicModels: async () => {
+					runtimeFetchCalls++;
+					return [{ ...baseModel, id: "shared-runtime-model", contextWindow: 999_999 }];
+				},
+			},
+			"ext://runtime",
+		);
+
+		await configuredRegistry.refreshProvider(providerName, "online");
+
+		expect(runtimeFetchCalls).toBe(0);
+		expect(configuredRegistry.find(providerName, "shared-runtime-model")?.contextWindow).toBe(32_768);
+	});
+
 	test("refreshRuntimeProviders times out extension fetchDynamicModels that never resolves", async () => {
 		vi.useFakeTimers();
 		const hangingFetch = Promise.withResolvers<readonly NonNullable<ProviderConfigInput["models"]>[number][]>();

@@ -88,6 +88,7 @@ export type RpcSkillCommandResult = { agentInvoked: true };
 export async function tryRunRpcSkillCommand(
 	session: RpcSkillCommandSession,
 	text: string,
+	streamingBehavior: "steer" | "followUp" = "steer",
 ): Promise<RpcSkillCommandResult | false> {
 	if (!session.skillsSettings?.enableSkillCommands) return false;
 	const parsed = parseSkillInvocation(text);
@@ -95,13 +96,16 @@ export async function tryRunRpcSkillCommand(
 	const skill = session.skills.find(candidate => candidate.name === parsed.name);
 	if (!skill) return false;
 	const built = await buildSkillPromptMessage(skill, parsed.args, "user");
-	await session.promptCustomMessage({
-		customType: SKILL_PROMPT_MESSAGE_TYPE,
-		content: built.message,
-		display: true,
-		details: built.details,
-		attribution: "user",
-	});
+	await session.promptCustomMessage(
+		{
+			customType: SKILL_PROMPT_MESSAGE_TYPE,
+			content: built.message,
+			display: true,
+			details: built.details,
+			attribution: "user",
+		},
+		{ streamingBehavior },
+	);
 	return { agentInvoked: true };
 }
 
@@ -755,6 +759,10 @@ export async function runRpcMode(
 			return requestRpcEditor(this.pendingRequests, this.output, title, prefill, dialogOptions, editorOptions);
 		}
 
+		addAutocompleteProvider(): void {
+			// Autocomplete provider composition is not supported in RPC mode
+		}
+
 		get theme(): Theme {
 			return theme;
 		}
@@ -842,7 +850,7 @@ export async function runRpcMode(
 			// =================================================================
 
 			case "prompt": {
-				const skillResult = await tryRunRpcSkillCommand(session, command.message);
+				const skillResult = await tryRunRpcSkillCommand(session, command.message, command.streamingBehavior);
 				if (skillResult) {
 					return success(id, "prompt", skillResult);
 				}

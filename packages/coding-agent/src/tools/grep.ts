@@ -80,7 +80,7 @@ const searchSchema = type({
 		'file, directory, glob, internal URL, or "<file>:<lines>" selector to search; pass several as a semicolon-delimited list ("src; tests"). Omitted -> searches the workspace root (".")',
 	),
 	"selector?": type("string").describe(
-		'line selector without a leading colon (e.g. "50-100", "50+10", "50-100,200-300"); keeps `path` literal when filenames contain colons',
+		'line selector applied to every searched file (e.g. "50-100", "50+10", "50-100,200-300"); never a path like "/"',
 	),
 	"case?": type("boolean").describe("case-sensitive search"),
 	"gitignore?": type("boolean").describe("respect gitignore"),
@@ -126,6 +126,7 @@ interface GrepPathSpec {
 	clean: string;
 	literalFilesystemMatch?: boolean;
 	ranges?: [LineRange, ...LineRange[]];
+	rangeSource?: "explicit" | "path";
 }
 
 /**
@@ -158,11 +159,11 @@ async function parsePathSpecs(
 	cwd: string,
 	explicitSelector?: string,
 ): Promise<GrepPathSpec[]> {
-	const explicitRanges =
-		explicitSelector === undefined || explicitSelector.length === 0 ? undefined : parseLineRanges(explicitSelector);
-	if (explicitSelector !== undefined && !explicitRanges) {
+	const normalizedSelector = explicitSelector?.trim() || undefined;
+	const explicitRanges = normalizedSelector === undefined ? undefined : parseLineRanges(normalizedSelector);
+	if (normalizedSelector !== undefined && !explicitRanges) {
 		throw new ToolError(
-			`selector "${explicitSelector}" is invalid — use line ranges like "50-100", "50+10", or "50-100,200-300" without a leading colon`,
+			`selector "${normalizedSelector}" is invalid — use line ranges like "50-100", "50+10", or "50-100,200-300" without a leading colon`,
 		);
 	}
 	const specs: GrepPathSpec[] = [];
@@ -182,6 +183,7 @@ async function parsePathSpecs(
 				clean: literalMatch && !rawPathHasScheme ? resolveReadPath(entry, cwd) : entry,
 				literalFilesystemMatch: literalMatch,
 				ranges: explicitRanges,
+				rangeSource: "explicit",
 			});
 			continue;
 		}
@@ -210,6 +212,7 @@ async function parsePathSpecs(
 		const literalFilesystemMatch = strictSplit.sel !== undefined && split.sel === undefined;
 		let clean = literalFilesystemMatch ? resolveReadPath(entry, cwd) : entry;
 		let ranges: [LineRange, ...LineRange[]] | undefined;
+		let rangeSource: "path" | undefined;
 		if (!literalFilesystemMatch && split.sel) {
 			const parsed = parseLineRanges(split.sel);
 			if (!parsed) {
@@ -222,8 +225,15 @@ async function parsePathSpecs(
 			}
 			clean = split.path;
 			ranges = parsed;
+			rangeSource = "path";
 		}
-		specs.push({ original: entry, clean, literalFilesystemMatch, ranges });
+		specs.push({
+			original: entry,
+			clean,
+			literalFilesystemMatch,
+			ranges,
+			rangeSource: ranges ? rangeSource : undefined,
+		});
 	}
 	return specs;
 }
@@ -398,6 +408,27 @@ function indexSearchLines(content: string): IndexedContentLines {
 
 function lineAllowed(lineNumber: number, ranges: readonly LineRange[] | undefined): boolean {
 	return !ranges || isLineInRanges(lineNumber, ranges);
+}
+
+/**
+ * Per-file native fetch budget that guarantees the JS range filter can still
+ * surface `perFileKeep` in-range hits. Matches arrive one entry per matched
+ * line in line order, so a bounded range's hits all sit within the first
+ * `endLine` entries, and an open-ended range starting at S is preceded by at
+ * most S-1 out-of-range entries — S-1+perFileKeep entries cover the kept
+ * window or exhaust the file. Clamped to the native file-size ceiling (a
+ * ≤4 MiB file cannot have more matched lines than bytes), which also keeps
+ * the scaled global budget inside the native layer's u32 bounds.
+ */
+function lineRangeFetchCap(pathSpecs: readonly GrepPathSpec[], perFileKeep: number): number {
+	let cap = 0;
+	for (const spec of pathSpecs) {
+		if (!spec.ranges) continue;
+		for (const range of spec.ranges) {
+			cap = Math.max(cap, range.endLine ?? range.startLine - 1 + perFileKeep);
+		}
+	}
+	return Math.min(cap, NATIVE_GREP_MAX_FILE_BYTES);
 }
 
 /** Binary search for the index of the line containing byte `offset`. */
@@ -971,6 +1002,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 				const searchablePaths = internalResolution.paths;
 				const { virtualResources, virtualPathSet, virtualInputIndexes } = internalResolution;
 				const rangesByAbsPath = new Map<string, LineRange[]>();
+				const globalRanges = pathSpecs.find(spec => spec.rangeSource === "explicit")?.ranges;
 
 				if (
 					archiveUnreadable.length > 0 &&
@@ -1030,6 +1062,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					for (let idx = 0; idx < pathSpecs.length; idx++) {
 						const spec = pathSpecs[idx];
 						if (!spec.ranges) continue;
+						if (spec.rangeSource === "explicit") continue;
 						if (virtualInputIndexes.has(idx)) continue;
 						const resolved = internalResolution.resolvedPathsByInput[idx];
 						if (!resolved) continue;
@@ -1095,6 +1128,18 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					Boolean(multiTargets) ||
 					(virtualResources.length > 0 && (virtualResources.length > 1 || searchablePaths.length > 0));
 				const perFileMatchCap = isMultiScope ? MULTI_FILE_PER_FILE_MATCHES : SINGLE_FILE_MATCHES;
+				// Range filtering happens in JS after the native fetch, so out-of-range
+				// matches consume fetch budget. Widen the per-file budget just enough
+				// that filtering can still yield `perFileMatchCap` in-range hits, and
+				// scale the global safety ceiling by the same amplification so ranged
+				// searches keep the baseline file coverage while staying finite.
+				const hasLineRangeFilters = pathSpecs.some(spec => spec.ranges);
+				const nativeMaxCountPerFile = hasLineRangeFilters
+					? Math.max(perFileMatchCap + 1, lineRangeFetchCap(pathSpecs, perFileMatchCap + 1))
+					: perFileMatchCap + 1;
+				const nativeMaxCount = hasLineRangeFilters
+					? Math.ceil(INTERNAL_TOTAL_CAP / (perFileMatchCap + 1)) * nativeMaxCountPerFile
+					: INTERNAL_TOTAL_CAP;
 
 				// Run grep
 				let result: GrepResult = {
@@ -1129,12 +1174,12 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 										multiline: effectiveMultiline,
 										hidden: true,
 										gitignore: useGitignore,
-										maxCount: INTERNAL_TOTAL_CAP,
+										maxCount: nativeMaxCount,
 										contextBefore: normalizedContextBefore,
 										contextAfter: normalizedContextAfter,
 										maxColumns: DEFAULT_MAX_COLUMN,
 										mode: effectiveOutputMode,
-										maxCountPerFile: perFileMatchCap + 1,
+										maxCountPerFile: nativeMaxCountPerFile,
 										signal,
 										timeoutMs: SEARCH_GREP_TIMEOUT_MS,
 									},
@@ -1176,12 +1221,12 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 									multiline: effectiveMultiline,
 									hidden: true,
 									gitignore: useGitignore,
-									maxCount: INTERNAL_TOTAL_CAP,
+									maxCount: nativeMaxCount,
 									contextBefore: normalizedContextBefore,
 									contextAfter: normalizedContextAfter,
 									maxColumns: DEFAULT_MAX_COLUMN,
 									mode: effectiveOutputMode,
-									maxCountPerFile: perFileMatchCap + 1,
+									maxCountPerFile: nativeMaxCountPerFile,
 									signal,
 									timeoutMs: SEARCH_GREP_TIMEOUT_MS,
 								},
@@ -1222,12 +1267,12 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					}
 					throw err;
 				}
-				result = mergeGrepResults(result, virtualResult, INTERNAL_TOTAL_CAP);
-				if (rangesByAbsPath.size > 0) {
+				result = mergeGrepResults(result, virtualResult, nativeMaxCount);
+				if (rangesByAbsPath.size > 0 || globalRanges) {
 					const filteredMatches: GrepMatch[] = [];
 					for (const match of result.matches) {
 						const abs = matchAbsolutePath(match.path, searchPath);
-						const ranges = rangesByAbsPath.get(abs);
+						const ranges = rangesByAbsPath.get(abs) ?? globalRanges;
 						if (!ranges) {
 							// Path has no line-range constraint (e.g. a peer entry without `:N-M`).
 							filteredMatches.push(match);

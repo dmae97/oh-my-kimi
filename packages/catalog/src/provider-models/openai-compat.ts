@@ -821,6 +821,62 @@ export function openaiModelManagerOptions(config?: OpenAIModelManagerConfig): Mo
 	};
 }
 
+/** First-party gpt-5.6 SKUs that accept `reasoning: { mode: "pro" }` on the Responses APIs. */
+const OPENAI_PRO_REASONING_BASE_IDS: Record<string, true> = {
+	"gpt-5.6-luna": true,
+	"gpt-5.6-sol": true,
+	"gpt-5.6-terra": true,
+};
+const OPENAI_PRO_REASONING_PROVIDERS: Record<string, true> = { openai: true, "openai-codex": true };
+
+/**
+ * A row this generator pass owns: one of the derived `gpt-5.6-*-pro` alias ids
+ * on `openai`/`openai-codex` that carries the generated `reasoningMode` marker.
+ * A real upstream model occupying the same id has no `reasoningMode` and is
+ * never touched.
+ */
+function isGeneratedOpenAIProReasoningAlias(model: ModelSpec<Api>): boolean {
+	return (
+		OPENAI_PRO_REASONING_PROVIDERS[model.provider] === true &&
+		model.reasoningMode !== undefined &&
+		model.id.endsWith("-pro") &&
+		OPENAI_PRO_REASONING_BASE_IDS[model.id.slice(0, -"-pro".length)] === true
+	);
+}
+
+/**
+ * Re-derive the generated pro-reasoning aliases (`gpt-5.6-*-pro`) for the
+ * first-party `openai`/`openai-codex` gpt-5.6 rows. Each alias inherits the
+ * base row's metadata, requests the base wire id via `requestModelId`, and
+ * sets `reasoningMode: "pro"` so Responses-family request builders emit
+ * `reasoning: { mode: "pro" }`. Called by the models.json generator after all
+ * sources merge: stale copies of the owned aliases (previous snapshot) are
+ * dropped and re-projected from the current base rows so alias metadata always
+ * tracks the base, while a real upstream model that occupies an alias id wins
+ * and suppresses the projection.
+ */
+export function projectOpenAIProReasoningAliases(models: readonly ModelSpec<Api>[]): ModelSpec<Api>[] {
+	const kept = models.filter(model => !isGeneratedOpenAIProReasoningAlias(model));
+	const ids = new Set(kept.map(model => `${model.provider}/${model.id}`));
+	const out = [...kept];
+	for (const model of kept) {
+		if (!OPENAI_PRO_REASONING_PROVIDERS[model.provider]) continue;
+		if (!OPENAI_PRO_REASONING_BASE_IDS[model.id]) continue;
+		const aliasId = `${model.id}-pro`;
+		const aliasKey = `${model.provider}/${aliasId}`;
+		if (ids.has(aliasKey)) continue;
+		ids.add(aliasKey);
+		out.push({
+			...model,
+			id: aliasId,
+			name: `${model.name} Pro`,
+			requestModelId: model.id,
+			reasoningMode: "pro",
+		});
+	}
+	return out;
+}
+
 // ---------------------------------------------------------------------------
 // 2. Groq
 // ---------------------------------------------------------------------------
@@ -916,6 +972,102 @@ export function nvidiaModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
+// 5.5 Novita
+// ---------------------------------------------------------------------------
+
+/** Novita OpenAI-compatible discovery configuration. */
+export interface NovitaModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+function novitaArrayIncludes(value: unknown, expected: string): boolean {
+	return Array.isArray(value) && value.some(item => item === expected);
+}
+
+function isPublicNovitaModelId(id: string): boolean {
+	return !id.toLowerCase().startsWith("ai_infer_test");
+}
+
+// Novita reports token prices in 1/10,000 USD per million tokens.
+function toNovitaCostPerMillion(value: unknown): number {
+	return toPositiveNumber(value, 0) / 10_000;
+}
+
+function getNovitaCacheReadPricePerMillion(entry: OpenAICompatibleModelRecord): number {
+	const pricing = entry.pricing;
+	if (!isRecord(pricing)) {
+		return 0;
+	}
+	const cacheRead = pricing.input_cache_read;
+	if (!isRecord(cacheRead)) {
+		return 0;
+	}
+	return toNovitaCostPerMillion(cacheRead.price_per_m);
+}
+
+function mapNovitaModel(
+	entry: OpenAICompatibleModelRecord,
+	defaults: ModelSpec<"openai-completions">,
+	reference: ModelSpec<"openai-completions"> | undefined,
+): ModelSpec<"openai-completions"> {
+	const model = mapWithBundledReference(
+		{
+			...entry,
+			name: entry.display_name ?? entry.title ?? entry.name,
+		},
+		defaults,
+		reference,
+	);
+	return {
+		...model,
+		reasoning: novitaArrayIncludes(entry.features, "reasoning"),
+		supportsTools: novitaArrayIncludes(entry.features, "function-calling"),
+		input: toInputCapabilities(entry.input_modalities),
+		cost: {
+			input: toNovitaCostPerMillion(entry.input_token_price_per_m),
+			output: toNovitaCostPerMillion(entry.output_token_price_per_m),
+			cacheRead: getNovitaCacheReadPricePerMillion(entry),
+			cacheWrite: 0,
+		},
+		contextWindow: toPositiveNumber(entry.context_size, model.contextWindow),
+		maxTokens: toPositiveNumber(entry.max_output_tokens, model.maxTokens),
+	};
+}
+
+/** Builds Novita's public model-discovery manager. */
+export function novitaModelManagerOptions(
+	config?: NovitaModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? "https://api.novita.ai/openai/v1";
+	const references = createBundledReferenceMap<"openai-completions">("novita");
+	return {
+		providerId: "novita",
+		dynamicModelsAuthoritative: true,
+		fetchDynamicModels: async () =>
+			fetchOpenAICompatibleModels({
+				api: "openai-completions",
+				provider: "novita",
+				baseUrl,
+				apiKey,
+				mapModel: (entry, defaults) => mapNovitaModel(entry, defaults, references.get(defaults.id)),
+				filterModel: (entry, model) => {
+					const active = typeof entry.status !== "number" || entry.status === 1;
+					return (
+						active &&
+						isPublicNovitaModelId(model.id) &&
+						novitaArrayIncludes(entry.endpoints, "chat/completions") &&
+						toPositiveNumber(entry.max_output_tokens, 0) > 0
+					);
+				},
+				fetch: config?.fetch,
+			}),
+	};
+}
+
+// ---------------------------------------------------------------------------
 // 6. xAI
 // ---------------------------------------------------------------------------
 
@@ -983,6 +1135,7 @@ export const XAI_OAUTH_CURATED_MODELS: readonly XAICuratedModel[] = [
 		input: ["text", "image"],
 	},
 	{ id: "grok-4.3", contextWindow: 1_000_000, name: "Grok 4.3", input: ["text", "image"] },
+	{ id: "grok-4.5", contextWindow: 500_000, name: "Grok 4.5", input: ["text", "image"] },
 	// grok-4.20-multi-agent-0309 is text-only per the bundled catalog; omit `input` for the default.
 	{ id: "grok-4.20-multi-agent-0309", contextWindow: 2_000_000, name: "Grok 4.20 (Multi-Agent)" },
 	{

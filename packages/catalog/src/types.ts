@@ -691,6 +691,13 @@ export interface Model<TApi extends Api = Api> {
 	 * everything local (selection, caching, usage attribution) keys on `id`.
 	 */
 	requestModelId?: string;
+	/**
+	 * `reasoning.mode` to send on OpenAI Responses-family requests. Set on
+	 * generated pro aliases (`gpt-5.6-*-pro` on `openai`/`openai-codex`) that
+	 * pair a base wire id (`requestModelId`) with OpenAI's pro reasoning
+	 * serving path. Absent everywhere else; providers omit the wire field.
+	 */
+	reasoningMode?: "pro";
 	name: string;
 	api: TApi;
 	provider: Provider;
@@ -751,6 +758,8 @@ export interface Model<TApi extends Api = Api> {
 	transport?: "pi-native";
 	/** Hint that websocket transport should be preferred when supported by the provider implementation. */
 	preferWebsockets?: boolean;
+	/** Codex Responses Lite transport: send the lite marker and carry instructions/tools as input items (mirrors codex-rs `use_responses_lite`). */
+	useResponsesLite?: boolean;
 	/** Preferred model to switch to when context promotion is triggered (model id or provider/id). */
 	contextPromotionTarget?: string;
 	/** Preferred model to use only for compaction (model id or provider/id); the active session model is unchanged. */

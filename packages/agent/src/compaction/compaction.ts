@@ -9,18 +9,21 @@ import {
 	type Api,
 	type ApiKey,
 	type AssistantMessage,
+	type CodexCompactionContext,
 	type Context,
 	Effort,
 	type FetchImpl,
 	type Message,
 	type MessageAttribution,
 	type Model,
+	type ProviderSessionState,
 	type SimpleStreamOptions,
 	type Tool,
 	type Usage,
 	withAuth,
 } from "@oh-my-pi/pi-ai";
 import { ProviderHttpError } from "@oh-my-pi/pi-ai/error";
+import { createOpenAICodexCompactionRequestContext } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { convertTools } from "@oh-my-pi/pi-ai/providers/openai-responses";
 import { buildResponsesInput, resolveOpenAICompatPolicy } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
@@ -736,6 +739,10 @@ export interface SummaryOptions {
 	sessionId?: string;
 	/** Prompt-cache key for remote compaction transports that support provider prefix caching. */
 	promptCacheKey?: string;
+	/** Mutable provider state used to keep Codex compaction on the live session identity. */
+	providerSessionState?: Map<string, ProviderSessionState>;
+	/** Classification shared by every provider request in this logical compaction. */
+	codexCompaction?: CodexCompactionContext;
 	/** Provider-visible tools for remote compaction transports that replay native tool history. */
 	tools?: Tool[];
 	/** Optional fetch implementation threaded into remote compaction calls. */
@@ -753,6 +760,13 @@ export interface SummaryOptions {
 		ctx: Context,
 		options: SimpleStreamOptions,
 	) => Promise<AssistantMessage>;
+}
+
+function localCodexCompaction(options: SummaryOptions | undefined) {
+	return createOpenAICodexCompactionRequestContext({
+		context: options?.codexCompaction,
+		implementation: "responses",
+	});
 }
 
 function formatPreviousSnapcompactArchive(archiveText: string): string {
@@ -844,6 +858,11 @@ export async function generateSummary(
 			reasoning: resolveCompactionEffort(model, options?.thinkingLevel),
 			initiatorOverride: options?.initiatorOverride,
 			metadata: options?.metadata,
+			fetch: options?.fetch,
+			sessionId: options?.sessionId,
+			promptCacheKey: options?.promptCacheKey,
+			providerSessionState: options?.providerSessionState,
+			codexCompaction: localCodexCompaction(options),
 		},
 		{ telemetry: options?.telemetry, oneshotKind: "compaction_summary", completeImpl: options?.completeImpl },
 	);
@@ -1047,6 +1066,11 @@ async function generateShortSummary(
 			reasoning: resolveCompactionEffort(model, options?.thinkingLevel),
 			initiatorOverride: options?.initiatorOverride,
 			metadata: options?.metadata,
+			fetch: options?.fetch,
+			sessionId: options?.sessionId,
+			promptCacheKey: options?.promptCacheKey,
+			providerSessionState: options?.providerSessionState,
+			codexCompaction: localCodexCompaction(options),
 		},
 		{ telemetry: options?.telemetry, oneshotKind: "compaction_short_summary", completeImpl: options?.completeImpl },
 	);
@@ -1317,6 +1341,8 @@ export async function compact(
 		thinkingLevel: options?.thinkingLevel,
 		sessionId: options?.sessionId,
 		promptCacheKey: options?.promptCacheKey,
+		providerSessionState: options?.providerSessionState,
+		codexCompaction: options?.codexCompaction,
 		tools: options?.tools,
 		fetch: options?.fetch,
 		completeImpl: options?.completeImpl,
@@ -1375,7 +1401,12 @@ export async function compact(
 				);
 				const remote = await withAuth(
 					apiKey,
-					key => requestCompactionV2Streaming(model, key, request, signal, { fetch: summaryOptions.fetch }),
+					key =>
+						requestCompactionV2Streaming(model, key, request, signal, {
+							fetch: summaryOptions.fetch,
+							providerSessionState: summaryOptions.providerSessionState,
+							codexCompaction: summaryOptions.codexCompaction,
+						}),
 					{ signal },
 				);
 				preserveData = { ...(preserveData ?? {}), ...storeCompactionV2PreserveData(remote, model) };
@@ -1419,7 +1450,12 @@ export async function compact(
 							remoteHistory,
 							summaryOptions.remoteInstructions ?? SUMMARIZATION_SYSTEM_PROMPT,
 							signal,
-							{ fetch: summaryOptions.fetch },
+							{
+								fetch: summaryOptions.fetch,
+								sessionId: summaryOptions.sessionId,
+								providerSessionState: summaryOptions.providerSessionState,
+								codexCompaction: summaryOptions.codexCompaction,
+							},
 						),
 					{ signal },
 				);
@@ -1495,16 +1531,9 @@ export async function compact(
 	const shortSummary = usedRemoteCompaction
 		? "Remote compaction"
 		: await generateShortSummary(recentMessages, summary, model, reserveTokens, apiKey, signal, {
+				...summaryOptions,
 				extraContext: options?.extraContext,
-				remoteEndpoint: summaryOptions.remoteEndpoint,
-				initiatorOverride: summaryOptions.initiatorOverride,
-				metadata: summaryOptions.metadata,
-				telemetry: summaryOptions.telemetry,
-				// Same propagation as summaryOptions above — generateShortSummary
-				// resolves its own reasoning via resolveCompactionEffort.
 				thinkingLevel: options?.thinkingLevel,
-				fetch: summaryOptions.fetch,
-				completeImpl: summaryOptions.completeImpl,
 			});
 
 	// Compute file lists and append to summary
@@ -1567,6 +1596,11 @@ async function generateTurnPrefixSummary(
 			reasoning: resolveCompactionEffort(model, options?.thinkingLevel),
 			initiatorOverride: options?.initiatorOverride,
 			metadata: options?.metadata,
+			fetch: options?.fetch,
+			sessionId: options?.sessionId,
+			promptCacheKey: options?.promptCacheKey,
+			providerSessionState: options?.providerSessionState,
+			codexCompaction: localCodexCompaction(options),
 		},
 		{ telemetry: options?.telemetry, oneshotKind: "compaction_turn_prefix", completeImpl: options?.completeImpl },
 	);

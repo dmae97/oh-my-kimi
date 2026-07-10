@@ -5,7 +5,7 @@ use std::{collections::HashMap, sync::Arc};
 use napi::{
 	Env, Result,
 	bindgen_prelude::*,
-	threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode},
+	threadsafe_function::{ThreadsafeFunction, UnknownReturnValue},
 };
 use napi_derive::napi;
 use pi_shell::{
@@ -216,7 +216,7 @@ impl Shell {
 		env: &'env Env,
 		options: ShellRunOptions<'env>,
 		#[napi(ts_arg_type = "((error: Error | null, chunk: string) => void) | undefined | null")]
-		on_chunk: Option<ThreadsafeFunction<String>>,
+		on_chunk: Option<ThreadsafeFunction<String, UnknownReturnValue>>,
 	) -> Result<PromiseRaw<'env, ShellRunResult>> {
 		let cancel_token = task::CancelToken::new(options.timeout_ms, options.signal);
 		let inner = Arc::clone(&self.inner);
@@ -269,7 +269,7 @@ pub fn execute_shell<'env>(
 	env: &'env Env,
 	options: ShellExecuteOptions<'env>,
 	#[napi(ts_arg_type = "((error: Error | null, chunk: string) => void) | undefined | null")]
-	on_chunk: Option<ThreadsafeFunction<String>>,
+	on_chunk: Option<ThreadsafeFunction<String, UnknownReturnValue>>,
 ) -> Result<PromiseRaw<'env, ShellRunResult>> {
 	let cancel_token = task::CancelToken::new(options.timeout_ms, options.signal);
 	let exec_options = CoreShellExecuteOptions {
@@ -294,40 +294,64 @@ pub fn execute_shell<'env>(
 	})
 }
 
+/// Capacity (in chunks) of the queue between the pipe readers and the JS
+/// forwarding pump. One queued chunk is at most one pipe read (≤64 KiB), so
+/// the Rust side of the bridge holds ~4 MiB worst case before the readers'
+/// `send_async` parks — which in turn parks the child on its stdout/stderr
+/// pipe (ordinary pipe backpressure) instead of buffering the surplus in
+/// process memory (#4078).
+const BRIDGE_QUEUE_CHUNKS: usize = 64;
+
 fn bridge_chunks(
-	on_chunk: Option<ThreadsafeFunction<String>>,
+	on_chunk: Option<ThreadsafeFunction<String, UnknownReturnValue>>,
 ) -> (Option<flume::Sender<String>>, Option<napi::tokio::task::JoinHandle<()>>) {
 	let Some(on_chunk) = on_chunk else {
 		return (None, None);
 	};
-	let (tx, rx) = flume::unbounded::<String>();
-	let handle = napi::tokio::spawn(async move {
-		// Hard cap on one coalesced batch so the JS main thread never sees a
-		// multi-MB napi callback (a giant single string would stall sanitize +
-		// tail-buffer maintenance for the whole copy).
-		const MAX_BATCH_BYTES: usize = 64 * 1024;
-		// Initial capacity sized for typical bursty pipe output. Re-allocated
-		// each batch because `String` ownership is moved into the napi call.
-		const INITIAL_BATCH_CAP: usize = 8 * 1024;
-		let mut batch = String::with_capacity(INITIAL_BATCH_CAP);
-		while let Ok(first) = rx.recv_async().await {
-			batch.push_str(&first);
-			// Greedily drain everything already queued. Child processes that
-			// write byte-at-a-time (printf-style progress, llama-cli token
-			// streams) otherwise produce one napi callback per `write(2)`,
-			// saturating the JS main thread (~200% CPU observed) and leaving
-			// the queue draining long after the child exits.
-			while batch.len() < MAX_BATCH_BYTES {
-				match rx.try_recv() {
-					Ok(more) => batch.push_str(&more),
-					Err(_) => break,
-				}
-			}
-			let payload = std::mem::replace(&mut batch, String::with_capacity(INITIAL_BATCH_CAP));
-			on_chunk.call(Ok(payload), ThreadsafeFunctionCallMode::NonBlocking);
-		}
-	});
+	let (tx, rx) = flume::bounded::<String>(BRIDGE_QUEUE_CHUNKS);
+	let handle = napi::tokio::spawn(pump_chunks(rx, async move |payload: String| {
+		// `call_async` resolves only after the JS callback ran, so at most
+		// one batch sits in the napi queue at a time and the JS event loop's
+		// actual consumption rate backpressures the whole pipeline. An error
+		// means the JS side is gone (env teardown) — stop forwarding.
+		on_chunk.call_async(Ok(payload)).await.is_ok()
+	}));
 	(Some(tx), Some(handle))
+}
+
+/// Drain `rx`, greedily coalescing queued chunks into ≤64 KiB batches, and
+/// feed each batch to `forward`, awaiting its completion before pulling more.
+/// Returns when `rx` disconnects (all senders dropped) or `forward` reports
+/// the consumer is gone; dropping `rx` then disconnects the channel so
+/// parked/future senders fail fast and the pipe readers keep draining the
+/// child instead of wedging it.
+async fn pump_chunks(rx: flume::Receiver<String>, mut forward: impl AsyncFnMut(String) -> bool) {
+	// Hard cap on one coalesced batch so the JS main thread never sees a
+	// multi-MB napi callback (a giant single string would stall sanitize +
+	// tail-buffer maintenance for the whole copy).
+	const MAX_BATCH_BYTES: usize = 64 * 1024;
+	// Initial capacity sized for typical bursty pipe output. Re-allocated
+	// each batch because `String` ownership is moved into the napi call.
+	const INITIAL_BATCH_CAP: usize = 8 * 1024;
+	let mut batch = String::with_capacity(INITIAL_BATCH_CAP);
+	while let Ok(first) = rx.recv_async().await {
+		batch.push_str(&first);
+		// Greedily drain everything already queued. Child processes that
+		// write byte-at-a-time (printf-style progress, llama-cli token
+		// streams) otherwise produce one napi callback per `write(2)`,
+		// saturating the JS main thread (~200% CPU observed) and leaving
+		// the queue draining long after the child exits.
+		while batch.len() < MAX_BATCH_BYTES {
+			match rx.try_recv() {
+				Ok(more) => batch.push_str(&more),
+				Err(_) => break,
+			}
+		}
+		let payload = std::mem::replace(&mut batch, String::with_capacity(INITIAL_BATCH_CAP));
+		if !forward(payload).await {
+			return;
+		}
+	}
 }
 
 /// Result of [`apply_bash_fixups`]: a possibly-rewritten command plus the
@@ -360,7 +384,6 @@ pub fn apply_bash_fixups(command: String) -> BashFixupResult {
 mod tests {
 	use std::time::Duration;
 
-	#[cfg(unix)]
 	use flume;
 	use pi_shell::{
 		ShellRunOptions as CoreShellRunOptions,
@@ -368,7 +391,83 @@ mod tests {
 	};
 	use tokio::time;
 
-	use super::CoreShell;
+	use super::{BRIDGE_QUEUE_CHUNKS, CoreShell, pump_chunks};
+
+	/// Regression for #4078: the reader→JS bridge queue must stay bounded when
+	/// the JS side (here: a deliberately slow `forward`) cannot keep up with a
+	/// fast producer, and backpressure must never drop or reorder chunks. On
+	/// the pre-fix bridge (`flume::unbounded` + fire-and-forget
+	/// `ThreadsafeFunctionCallMode::NonBlocking`) the same harness accumulates
+	/// the producer's entire surplus in the queue (measured: a 32 MiB stream
+	/// queued all 33_554_432 bytes while the consumer stalled).
+	#[tokio::test(flavor = "multi_thread")]
+	async fn bridge_pump_bounds_queue_and_delivers_all_bytes() {
+		const CHUNKS: usize = 512;
+		const CHUNK_BYTES: usize = 4096;
+		let (tx, rx) = flume::bounded::<String>(BRIDGE_QUEUE_CHUNKS);
+		let producer = tokio::spawn(async move {
+			let mut expected = String::with_capacity(CHUNKS * CHUNK_BYTES);
+			let mut max_queued = 0usize;
+			for i in 0..CHUNKS {
+				let chunk = format!("[{i:06}]{}", "x".repeat(CHUNK_BYTES - 8));
+				expected.push_str(&chunk);
+				tx.send_async(chunk)
+					.await
+					.expect("pump should outlive the producer");
+				max_queued = max_queued.max(tx.len());
+			}
+			(expected, max_queued)
+		});
+
+		let mut received = String::with_capacity(CHUNKS * CHUNK_BYTES);
+		time::timeout(
+			Duration::from_secs(30),
+			pump_chunks(rx, async |payload: String| {
+				received.push_str(&payload);
+				// Emulate a busy JS event loop: each napi callback takes a while.
+				time::sleep(Duration::from_micros(500)).await;
+				true
+			}),
+		)
+		.await
+		.expect("pump should finish once the producer hangs up");
+
+		let (expected, max_queued) = producer.await.expect("producer task");
+		assert!(
+			max_queued <= BRIDGE_QUEUE_CHUNKS,
+			"bridge queue grew past its bound: {max_queued} chunks",
+		);
+		assert_eq!(received.len(), expected.len(), "bytes were dropped or duplicated");
+		assert_eq!(received, expected, "chunks must arrive losslessly and in order");
+	}
+
+	/// When the JS side dies (`forward` fails: threadsafe function aborted on
+	/// env teardown), the pump must drop its receiver so parked and future
+	/// sends fail fast — the pipe readers keep draining the child instead of
+	/// wedging it on a full bridge queue.
+	#[tokio::test(flavor = "multi_thread")]
+	async fn bridge_pump_death_disconnects_channel_without_blocking_senders() {
+		let (tx, rx) = flume::bounded::<String>(4);
+		let pump = tokio::spawn(pump_chunks(rx, async |_payload: String| false));
+		let producer = tokio::spawn(async move {
+			let mut disconnected = 0usize;
+			for _ in 0..64 {
+				if tx.send_async("x".repeat(1024)).await.is_err() {
+					disconnected += 1;
+				}
+			}
+			disconnected
+		});
+		let disconnected = time::timeout(Duration::from_secs(5), producer)
+			.await
+			.expect("sends must not park once the consumer died")
+			.expect("producer task");
+		assert!(disconnected > 0, "channel should disconnect after the pump stops");
+		time::timeout(Duration::from_secs(5), pump)
+			.await
+			.expect("pump should exit after forward fails")
+			.expect("pump task");
+	}
 
 	mod child_session_action_tests {
 		use pi_shell::{ChildSessionAction, child_session_action};

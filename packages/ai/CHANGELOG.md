@@ -5,11 +5,73 @@
 ### Fixed
 
 - Fixed xAI SuperGrok multi-account rotation when an account returns HTTP 403 `run out of credits` / `personal-team-blocked:spending-limit`. That account-local cap is now classified as a usage limit so `streamSimple` auth-retry and `rotateSessionCredential` switch to a sibling `xai-oauth` credential instead of sticking to the exhausted account.
+### Added
+
+- Added model-driven Codex Responses Lite: `responsesLite` now defaults to the catalog `useResponsesLite` flag (codex-rs `use_responses_lite`, set on the GPT-5.6 family), so lite requests are sent without per-call opt-in.
+- Added the full Responses Lite wire contract: lite requests move tools into a leading `{type: "additional_tools", role: "developer"}` input item and the base instructions into a developer message, omit top-level `instructions`/`tools`, and force `parallel_tool_calls: false`, mirroring codex-rs `build_responses_request`.
+- Added concurrent reasoning summaries on Codex Responses: requests with a reasoning summary send `stream_options: { reasoning_summary_delivery: "sequential_cutoff" }`, and the stream decoder consumes the matching atomic `response.reasoning_summary_text.done` events (resolved by `item_id`/`output_index`, stale dones dropped, incremental `.delta`/`.part.*` events ignored under the cutoff contract). The cutoff gate reads the post-`onPayload` wire body on both transports, and `response.reasoning_summary_text.done` now counts as websocket watchdog progress.
+- Added Novita API-key login with authenticated key validation and `NOVITA_API_KEY` discovery ([#4917](https://github.com/can1357/oh-my-pi/pull/4917) by [@jason-wu-ai](https://github.com/jason-wu-ai)).
+
+### Changed
+
+- Refactored Responses Lite transport to move tools and instructions into input items
+- Updated Responses Lite to force parallel tool calling off and strip image detail
+- Standardized Responses Lite activation via model-level catalog flags
+
+- Recognized Pro Lite as a paid plan tier for OpenAI Codex models
+- Changed Responses Lite image handling to match current codex-rs: a lite request containing input images now stays on the lite transport with image `detail` stripped, instead of silently falling back to the full Responses shape.
+
+### Fixed
+
+- Fixed concurrent reasoning summaries to ignore legacy streaming events under cutoff contract
+- Fixed sequential-cutoff Codex reasoning summaries repeating earlier content when atomic summary snapshots are replayed or extended.
+- Fixed error classification for typed AWS credential-resolution failures (`AwsCredentialsError`) to map them to authentication failures. ([#5030](https://github.com/can1357/oh-my-pi/pull/5030) by [@usr-bin-roygbiv](https://github.com/usr-bin-roygbiv))
+
+## [16.3.15] - 2026-07-09
+
+### Breaking Changes
+
+- Renamed `OpenAIResponsesCacheOptions`, `normalizeOpenAIResponsesPromptCacheKey`, and `getOpenAIResponsesPromptCacheKey` to the endpoint-neutral `OpenAICacheOptions`, `normalizeOpenAIPromptCacheKey`, and `getOpenAIPromptCacheKey`.
+
+### Added
+
+- Added automatic prompt-cache affinity header injection for OpenAI-family chat completions
+- Added support for explicit prompt-cache affinity headers in OpenAI-family chat completions
+- Added OpenAI pro reasoning mode support: models carrying the catalog `reasoningMode: "pro"` marker (GPT-5.6 Pro aliases) send `reasoning: { mode: "pro" }` on OpenAI Responses and Codex Responses requests, alongside the configured effort. The Codex request body now honors `requestModelId` so catalog aliases request the base upstream model id.
+
+### Changed
+
+- Updated xAI OAuth to use a dedicated device-code flow instead of redirect/loopback server
+
+### Fixed
+
+- Improved account routing for GPT-5.6 models to better respect paid tier requirements
+- Refined account selection logic to correctly identify plan types from account metadata
+- Fixed OpenAI Codex multi-account routing for GPT-5.6: Sol and Luna requests now prefer Plus-or-higher accounts while Terra remains available to Free/Go accounts; local pro-mode aliases inherit their base model's Codex plan eligibility.
+- Fixed xAI Grok OAuth login to use xAI's device authorization flow: `/login` now opens the verification URL, displays the device code, and polls for approval instead of asking for a pasted redirect or linking to Hermes Agent documentation.
+
+## [16.3.14] - 2026-07-09
+
+### Changed
+
+- Updated Codex reasoning effort mapping to support shifted wire tiers for newer models
+
+### Fixed
+
+- Fixed the Codex Responses request transformer bypassing catalog/compat reasoning effort maps: the clamped user effort is now remapped to the provider wire tier (GPT-5.6's shifted five-tier scale sends `max` for user `xhigh` and `xhigh` for `high`), failing loudly if a map produces a value outside the Codex wire vocabulary.
+
+## [16.3.13] - 2026-07-09
 
 ### Changed
 
 - Changed the xAI Grok OAuth (`xai-oauth`) provider to use manual code-paste login by default. `/login` now accepts a pasted authorization code or full `http://127.0.0.1:56121/callback?code=...` redirect URL without starting a local callback listener ([#3277](https://github.com/can1357/oh-my-pi/pull/3277) by [@Jaaneek](https://github.com/Jaaneek)).
 - Renamed the xAI Grok OAuth provider in login and credential prompts to "xAI Grok OAuth (SuperGrok or X Premium+)" ([#3277](https://github.com/can1357/oh-my-pi/pull/3277) by [@Jaaneek](https://github.com/Jaaneek)).
+
+### Fixed
+
+- Fixed the generic lazy-stream idle watchdog aborting healthy `cursor-agent` streams with "Provider stream stalled while waiting for the next event" while a Cursor exec-channel local tool (shell/read/grep/write/MCP/…) legitimately ran longer than the idle budget. Provider streams now advertise consumer-side local work in flight and the watchdog slides its deadline instead of aborting; genuinely silent streams still time out. ([#4593](https://github.com/can1357/oh-my-pi/issues/4593))
+- Fixed OpenAI Codex/Responses reasoning streams so streamed thinking content is preserved when the final `output_item.done` reconstructs to an empty summary ([#4918](https://github.com/can1357/oh-my-pi/issues/4918)).
+- Fixed Anthropic streams hanging forever when generation wedges mid-stream (notably long `write` tool calls on Opus 4.8 high/xhigh) while the server keeps sending `ping` keepalives: pings now extend the idle watchdog only within a bounded window (3x the idle timeout) since the last real stream event, so a stalled tool-call stream times out and recovers instead of hanging with no retry path ([#4900](https://github.com/can1357/oh-my-pi/issues/4900)).
 
 ## [16.3.12] - 2026-07-08
 

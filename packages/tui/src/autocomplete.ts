@@ -437,6 +437,9 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 				const argumentText = commandText.slice(spaceIndex + 1); // Text after space
 
 				const command = this.#commands.find(cmd => commandMatchesNameOrAlias(cmd, commandName));
+				if (command && "allowArgs" in command && command.allowArgs === false && !/\S/.test(argumentText)) {
+					return null;
+				}
 				if (command && (!("allowArgs" in command) || command.allowArgs !== false)) {
 					if (!("getArgumentCompletions" in command) || !command.getArgumentCompletions) {
 						return null; // No argument completion for this command

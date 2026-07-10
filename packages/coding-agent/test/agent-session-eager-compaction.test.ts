@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
-import type { TextContent } from "@oh-my-pi/pi-ai";
+import type { Model, TextContent } from "@oh-my-pi/pi-ai";
+import * as codexResponses from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -135,22 +136,23 @@ describe("AgentSession eager prelude re-injection after compaction", () => {
 
 	async function createHarness(
 		settingsOverride: Record<string, unknown> = {},
-		opts: { agentId?: string; agentKind?: "main" | "sub" } = {},
+		opts: { agentId?: string; agentKind?: "main" | "sub"; model?: Model } = {},
 	): Promise<Harness> {
 		const observedCalls: ObservedPromptCall[] = [];
 		const waiters: Array<{
 			predicate: (call: ObservedPromptCall) => boolean;
 			resolve: (call: ObservedPromptCall) => void;
 		}> = [];
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const defaultModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!defaultModel) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const selectedModel = opts.model ?? defaultModel;
 		// Pin the window and output reservation: usage figures below trip the
 		// context-full strategy at a 200k/64k threshold; catalog regeneration must
 		// not shift the headroom math.
-		const model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
+		const model = { ...selectedModel, contextWindow: 200_000, maxTokens: 64_000 };
 
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), `testauth-${cleanups.length}.db`));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.setRuntimeApiKey(model.provider, "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), `models-${cleanups.length}.yml`));
 		const settings = Settings.isolated({
 			"compaction.enabled": true,
@@ -358,5 +360,26 @@ describe("AgentSession eager prelude re-injection after compaction", () => {
 		expect(session.getTodoPhases().length).toBeGreaterThan(0);
 		expect(continuation.messageTexts.some(text => text.includes("Consider calling"))).toBe(false);
 		expect(continuation.messageTexts.some(text => text.includes("You MUST call"))).toBe(false);
+	});
+
+	it("resets Codex provider history after successful auto-compaction", async () => {
+		const model = getBundledModel("openai-codex", "gpt-5.6-terra");
+		if (!model) throw new Error("Expected gpt-5.6-terra model to exist");
+		const resetSpy = vi.spyOn(codexResponses, "resetOpenAICodexHistoryAfterCompaction");
+		const { session, waitForCall } = await createHarness({}, { model });
+		stubCompaction();
+
+		await runToContinuation(session, waitForCall);
+
+		expect(resetSpy).toHaveBeenCalledTimes(1);
+		const reset = resetSpy.mock.calls[0]?.[0];
+		if (!reset) throw new Error("Expected Codex compaction reset");
+		expect(reset.providerSessionState).toBe(session.providerSessionState);
+		expect(reset.sessionId).toBe(session.sessionId);
+		expect(reset.compaction).toMatchObject({
+			trigger: "auto",
+			reason: "context_limit",
+			phase: "pre_turn",
+		});
 	});
 });

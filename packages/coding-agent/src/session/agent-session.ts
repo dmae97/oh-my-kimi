@@ -84,6 +84,7 @@ import type {
 	AssistantMessageEvent,
 	AssistantRetryRecovery,
 	AssistantRetryRecoveryKind,
+	CodexCompactionContext,
 	Context,
 	ImageContent,
 	Message,
@@ -117,6 +118,7 @@ import {
 	streamSimple,
 } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
+import { resetOpenAICodexHistoryAfterCompaction } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { GeminiHeaderRunDetector, isGeminiThinkingModel } from "@oh-my-pi/pi-ai/utils/thinking-loop";
 import { type RepeatedToolCallDetection, ToolCallLoopGuard } from "@oh-my-pi/pi-ai/utils/tool-call-loop-guard";
@@ -154,6 +156,7 @@ import {
 	AdvisorTranscriptRecorder,
 	advisorTranscriptFilename,
 	formatAdvisorBatchContent,
+	getOrCreateAdvisorProviderSessionId,
 	isAdvisorInterruptImmuneTurnActive,
 	isInterruptingSeverity,
 	resolveAdvisorDeliveryChannel,
@@ -602,6 +605,20 @@ function compactionDeadEndWarning(remedies: string): string {
 	);
 }
 
+function createCodexCompactionContext(options: {
+	trigger: CodexCompactionContext["trigger"];
+	reason: CodexCompactionContext["reason"];
+	phase: CodexCompactionContext["phase"];
+}): CodexCompactionContext {
+	return {
+		operationId: crypto.randomUUID(),
+		trigger: options.trigger,
+		reason: options.reason,
+		phase: options.phase,
+		strategy: "memento",
+	};
+}
+
 /**
  * Per-turn prune cache window. A tool result whose all-message suffix exceeds
  * this is in the warm, already-sent prompt-cache prefix: re-writing it costs the
@@ -793,6 +810,8 @@ export interface AgentSessionConfig {
 	 * so that credential sticky selection is consistent with the session's streaming calls.
 	 */
 	providerSessionId?: string;
+	/** Marks `agent.promptCacheKey` as fork-inherited so incompatible route changes can clear it. */
+	providerPromptCacheKeySource?: "explicit" | "fork";
 	/**
 	 * Full advisor toolset, pre-built in `createAgentSession` against a distinct,
 	 * advisor-scoped `ToolSession` (its own `-advisor` session/agent id) so the
@@ -1180,6 +1199,7 @@ const noOpUIContext: ExtensionUIContext = {
 	pasteToEditor: () => {},
 	getEditorText: () => "",
 	editor: async () => undefined,
+	addAutocompleteProvider: () => {},
 	get theme() {
 		return theme;
 	},
@@ -1598,6 +1618,8 @@ export class AgentSession {
 	#advisors: ActiveAdvisor[] = [];
 	/** Configured advisor roster from WATCHDOG.yml; undefined/empty → single legacy advisor. */
 	#advisorConfigs?: AdvisorConfig[];
+	/** Provider-facing UUIDv7 identities keyed by primary provider session and advisor slug. */
+	#advisorProviderSessionIds = new Map<string, string>();
 	/** Aggregate of the most recent stop's recorder closes; awaited by dispose() and
 	 *  used as the open barrier for the next build so two writers never share a file. */
 	#advisorRecorderClosed: Promise<void> = Promise.resolve();
@@ -1696,6 +1718,7 @@ export class AgentSession {
 	#agentKind: "main" | "sub" = "main";
 	#providerSessionId: string | undefined;
 	#freshProviderSessionId: string | undefined;
+	#inheritedProviderPromptCacheKey: string | undefined;
 	#isDisposed = false;
 	// Extension system
 	#extensionRunner: ExtensionRunner | undefined = undefined;
@@ -2211,6 +2234,8 @@ export class AgentSession {
 		this.#agentId = config.agentId;
 		this.#agentKind = config.agentKind ?? "main";
 		this.#providerSessionId = config.providerSessionId;
+		this.#inheritedProviderPromptCacheKey =
+			config.providerPromptCacheKeySource === "fork" ? this.agent.promptCacheKey : undefined;
 		this.agent.setAssistantMessageEventInterceptor((message, assistantMessageEvent) => {
 			const event: AgentEvent = {
 				type: "message_update",
@@ -2476,18 +2501,26 @@ export class AgentSession {
 			const names = config.tools?.length ? new Set(config.tools) : ADVISOR_DEFAULT_TOOL_NAMES;
 			const tools = (this.#advisorTools ?? []).filter(t => names.has(t.name));
 
-			const advisorSessionId = this.#advisorSessionId(slug);
+			const primaryProviderSessionId = this.sessionId;
+			const advisorSessionLabel = slug
+				? `${primaryProviderSessionId}-advisor-${slug}`
+				: `${primaryProviderSessionId}-advisor`;
+			const advisorProviderSessionId = getOrCreateAdvisorProviderSessionId(
+				this.#advisorProviderSessionIds,
+				primaryProviderSessionId,
+				slug,
+			);
 			const appendOnlyContext = new AppendOnlyContextManager();
 
 			// Thread the primary's telemetry into the advisor loop so the advisor
-			// model's GenAI spans + usage/cost hooks fire stamped with the advisor's
-			// own identity. `conversationId` is cleared so the advisor loop falls back
-			// to its own session id; undefined telemetry stays undefined.
+			// model's GenAI spans + usage/cost hooks fire stamped with the local advisor
+			// identity. `conversationId` is cleared so provider telemetry falls back to
+			// the UUIDv7 provider session id, not the local `-advisor` label.
 			const advisorTelemetry = this.agent.telemetry
 				? {
 						...this.agent.telemetry,
 						agent: {
-							id: advisorSessionId,
+							id: advisorSessionLabel,
 							name: slug ? `${MODEL_ROLES.advisor.name}: ${advisorName}` : MODEL_ROLES.advisor.name,
 							description: formatModelString(advisorModel),
 						},
@@ -2499,10 +2532,10 @@ export class AgentSession {
 			// advisor's requests cache, route, and obfuscate like the main turn.
 			// `promptCacheKey` preserves an explicitly pinned provider cache key
 			// unchanged so tan/shared-session advisor calls read the exact shard the
-			// parent turn populated, while keeping only `sessionId` advisor-scoped;
-			// sessions without a pinned key fall back to the advisor session id for
-			// stable advisor-local caching (see can1357/oh-my-pi#3639).
-			const advisorPromptCacheKey = this.agent.promptCacheKey ?? advisorSessionId;
+			// parent turn populated. Otherwise the advisor uses its provider UUIDv7 so
+			// Codex request identity remains UUID-shaped while local labels keep the
+			// `-advisor` suffix.
+			const advisorPromptCacheKey = this.agent.promptCacheKey ?? advisorProviderSessionId;
 			const advisorAgent = new Agent({
 				initialState: {
 					systemPrompt,
@@ -2511,11 +2544,11 @@ export class AgentSession {
 					tools: [adviseTool, ...tools],
 				},
 				appendOnlyContext,
-				sessionId: advisorSessionId,
+				sessionId: advisorProviderSessionId,
 				promptCacheKey: advisorPromptCacheKey,
 				providerSessionState: this.#providerSessionState,
 				preferWebsockets: this.#preferWebsockets,
-				getApiKey: requestModel => this.#modelRegistry.resolver(requestModel, advisorSessionId),
+				getApiKey: requestModel => this.#modelRegistry.resolver(requestModel, advisorProviderSessionId),
 				streamFn: this.#advisorStreamFn,
 				onPayload: this.#onPayload,
 				onResponse: this.#onResponse,
@@ -2574,11 +2607,15 @@ export class AgentSession {
 					// suspect-mark a credential on a transient advisor error).
 					const message = error instanceof Error ? error.message : String(error);
 					if (!isUsageLimitOutcome(extractHttpStatusFromError(error), message)) return;
-					await this.#modelRegistry.authStorage.markUsageLimitReached(advisorModel.provider, advisorSessionId, {
-						retryAfterMs: extractRetryHint(undefined, message),
-						baseUrl: advisorModel.baseUrl,
-						modelId: advisorModel.id,
-					});
+					await this.#modelRegistry.authStorage.markUsageLimitReached(
+						advisorModel.provider,
+						advisorProviderSessionId,
+						{
+							retryAfterMs: extractRetryHint(undefined, message),
+							baseUrl: advisorModel.baseUrl,
+							modelId: advisorModel.id,
+						},
+					);
 				},
 				notifyFailure: error => {
 					const message = error instanceof Error ? error.message : String(error);
@@ -2630,13 +2667,6 @@ export class AgentSession {
 		}
 
 		return this.#advisors.length > 0;
-	}
-
-	/** Provider/session id for an advisor's loop. The slug suffix MUST match the
-	 *  advisor's transcript filename so stats/telemetry attribute the same advisor. */
-	#advisorSessionId(slug: string): string | undefined {
-		if (!this.sessionId) return undefined;
-		return slug ? `${this.sessionId}-advisor-${slug}` : `${this.sessionId}-advisor`;
 	}
 
 	/**
@@ -2844,11 +2874,15 @@ export class AgentSession {
 			// No compaction candidates, fallback to re-prime
 			return true;
 		}
-		const advisorSessionId = this.#advisorSessionId(advisor.slug);
+		const advisorProviderSessionId = getOrCreateAdvisorProviderSessionId(
+			this.#advisorProviderSessionIds,
+			this.sessionId,
+			advisor.slug,
+		);
 		const preparation = prepareCompaction(
 			pathEntries,
 			compactionSettings,
-			await this.#runnableCompactionCandidates(candidates, advisorSessionId),
+			await this.#runnableCompactionCandidates(candidates, advisorProviderSessionId),
 		);
 		if (!preparation) {
 			// Cannot prepare compaction, fallback to re-prime
@@ -2868,17 +2902,23 @@ export class AgentSession {
 		let lastError: unknown;
 		// Instrument the advisor's overflow-compaction one-shot like the primary
 		// compaction path so the advisor model's maintenance call also emits spans.
-		const telemetry = resolveTelemetry(agent.telemetry, advisorSessionId);
+		const telemetry = resolveTelemetry(agent.telemetry, advisorProviderSessionId);
+
+		const codexCompaction = createCodexCompactionContext({
+			trigger: "auto",
+			reason: "context_limit",
+			phase: "pre_turn",
+		});
 
 		for (const candidate of candidates) {
-			const apiKey = await this.#modelRegistry.getApiKey(candidate, advisorSessionId);
+			const apiKey = await this.#modelRegistry.getApiKey(candidate, advisorProviderSessionId);
 			if (!apiKey) continue;
 
 			try {
 				compactResult = await compact(
 					preparation,
 					candidate,
-					this.#modelRegistry.resolver(candidate, advisorSessionId),
+					this.#modelRegistry.resolver(candidate, advisorProviderSessionId),
 					undefined,
 					undefined,
 					{
@@ -2886,8 +2926,10 @@ export class AgentSession {
 						convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 						telemetry,
 						tools: agent.state.tools,
-						sessionId: advisorSessionId,
-						promptCacheKey: advisorSessionId,
+						sessionId: advisorProviderSessionId,
+						promptCacheKey: advisorProviderSessionId,
+						providerSessionState: this.#providerSessionState,
+						codexCompaction,
 					},
 				);
 				break;
@@ -5569,6 +5611,23 @@ export class AgentSession {
 		return this.#freshProviderSessionId ?? this.#providerSessionId ?? sessionId ?? this.sessionManager.getSessionId();
 	}
 
+	#adoptInheritedProviderPromptCacheKey(): void {
+		const key = this.sessionManager.getHeader()?.providerPromptCacheKey;
+		if (!key) return;
+		if (this.#inheritedProviderPromptCacheKey !== undefined || this.agent.promptCacheKey === undefined) {
+			this.agent.promptCacheKey = key;
+			this.#inheritedProviderPromptCacheKey = key;
+		}
+	}
+
+	#clearInheritedProviderPromptCacheKey(): void {
+		const key = this.#inheritedProviderPromptCacheKey;
+		this.#inheritedProviderPromptCacheKey = undefined;
+		if (key !== undefined && this.agent.promptCacheKey === key) {
+			this.agent.promptCacheKey = undefined;
+		}
+	}
+
 	/**
 	 * Set agent.sessionId from the session manager and install a dynamic
 	 * metadata resolver so every Anthropic API request carries
@@ -6374,6 +6433,9 @@ export class AgentSession {
 		if (this.#rebuildSystemPrompt) {
 			const signature = this.#computeAppliedToolSignature(validToolNames, tools);
 			if (signature !== this.#lastAppliedToolSignature) {
+				if (this.#lastAppliedToolSignature !== undefined) {
+					this.#clearInheritedProviderPromptCacheKey();
+				}
 				const built = await this.#rebuildSystemPrompt(validToolNames, this.#toolRegistry);
 				this.#baseSystemPrompt = built.systemPrompt;
 				this.#baseSystemPromptBeforeMemoryPromotion = undefined;
@@ -6460,9 +6522,16 @@ export class AgentSession {
 		if (!this.#rebuildSystemPrompt) return;
 		const activeToolNames = this.getActiveToolNames();
 		this.#setActiveToolNames?.(activeToolNames);
+		const previousBaseSystemPrompt = this.#baseSystemPrompt;
 		const built = await this.#rebuildSystemPrompt(activeToolNames, this.#toolRegistry);
 		this.#baseSystemPrompt = built.systemPrompt;
 		this.#baseSystemPromptBeforeMemoryPromotion = undefined;
+		if (
+			previousBaseSystemPrompt.length !== this.#baseSystemPrompt.length ||
+			previousBaseSystemPrompt.some((part, index) => part !== this.#baseSystemPrompt[index])
+		) {
+			this.#clearInheritedProviderPromptCacheKey();
+		}
 		this.agent.setSystemPrompt(this.#baseSystemPrompt);
 		this.#promptModelKey = this.#currentPromptModelKey();
 		// Refresh the cached signature so a subsequent `#applyActiveToolsByName` with
@@ -8309,11 +8378,10 @@ export class AgentSession {
 	}
 
 	/**
-	 * Send a user message to the agent.
-	 * When deliverAs is set, queue the message instead of starting a new turn.
+	 * Send a user message through the prompt flow.
 	 *
-	 * @param content User message content (string or content array)
-	 * @param options.deliverAs Delivery mode: "steer" or "followUp"
+	 * Omitted `deliverAs` starts a turn when idle and queues as a steer while streaming.
+	 * Explicit `deliverAs` queues without starting a turn in either state.
 	 */
 	async sendUserMessage(
 		content: string | (TextContent | ImageContent)[],
@@ -8348,10 +8416,13 @@ export class AgentSession {
 			return;
 		}
 
-		// Use prompt() with expandPromptTemplates: false to skip command handling and template expansion
+		// Use prompt() with expandPromptTemplates: false to skip command handling and template expansion.
+		// `streamingBehavior: "steer"` preserves prompt-flow side effects during streaming while
+		// covering the narrow race where a stream starts before prompt() acquires the turn.
 		await this.prompt(text, {
 			expandPromptTemplates: false,
 			images,
+			streamingBehavior: "steer",
 		});
 	}
 
@@ -8701,6 +8772,7 @@ export class AgentSession {
 		this.#clearCheckpointRuntimeState();
 		this.setTodoPhases([]);
 		this.#freshProviderSessionId = undefined;
+		this.#clearInheritedProviderPromptCacheKey();
 		this.#syncAgentSessionId();
 		this.#rekeyHindsightMemoryForCurrentSessionId();
 		this.#rekeyMnemopiMemoryForCurrentSessionId();
@@ -8801,6 +8873,7 @@ export class AgentSession {
 
 		// Update agent session ID
 		this.#freshProviderSessionId = undefined;
+		this.#adoptInheritedProviderPromptCacheKey();
 		this.#syncAgentSessionId();
 		this.#rekeyHindsightMemoryForCurrentSessionId();
 		this.#rekeyMnemopiMemoryForCurrentSessionId();
@@ -9122,6 +9195,9 @@ export class AgentSession {
 			this.#autoThinking = true;
 			this.#autoResolvedLevel = undefined;
 			this.#thinkingLevel = provisional;
+			if (!wasAuto) {
+				this.#clearInheritedProviderPromptCacheKey();
+			}
 			this.#applyThinkingLevelToAgent(provisional);
 			if (persist) {
 				this.settings.set("defaultThinkingLevel", AUTO_THINKING);
@@ -9145,6 +9221,7 @@ export class AgentSession {
 		this.#applyThinkingLevelToAgent(effectiveLevel);
 
 		if (isChanging) {
+			this.#clearInheritedProviderPromptCacheKey();
 			this.sessionManager.appendThinkingLevelChange(effectiveLevel, effectiveLevel);
 			if (persist && effectiveLevel !== undefined && effectiveLevel !== ThinkingLevel.Off) {
 				this.settings.set("defaultThinkingLevel", effectiveLevel);
@@ -9748,6 +9825,7 @@ export class AgentSession {
 			let firstKeptEntryId: string;
 			let tokensBefore: number;
 			let details: unknown;
+			let codexCompaction: CodexCompactionContext | undefined;
 
 			// Snapcompact runs locally first. The frame cap is sized from the live
 			// model window via #computeSnapcompactMaxFrames so the post-render context
@@ -9827,6 +9905,11 @@ export class AgentSession {
 				details = snapcompactResult.details;
 				preserveData = { ...(compactionPrep.preserveData ?? {}), ...(snapcompactResult.preserveData ?? {}) };
 			} else {
+				codexCompaction = createCodexCompactionContext({
+					trigger: "manual",
+					reason: "user_requested",
+					phase: "standalone_turn",
+				});
 				// Generate compaction result. Only convert known abort-shaped
 				// rejections (AbortError raised while the abort signal is set,
 				// or an already-typed sentinel) into `CompactionCancelledError`
@@ -9848,6 +9931,7 @@ export class AgentSession {
 							extraContext: compactionPrep.hookContext,
 							remoteInstructions: this.#baseSystemPrompt.join("\n\n"),
 							convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
+							codexCompaction,
 						},
 						compactionCandidates,
 					);
@@ -9890,7 +9974,11 @@ export class AgentSession {
 			this.#planReferenceSent = false;
 			this.#resetAllAdvisorRuntimes();
 			this.#syncTodoPhasesFromBranch();
-			this.#closeCodexProviderSessionsForHistoryRewrite();
+			if (codexCompaction) {
+				this.#resetCodexProviderAfterCompaction(codexCompaction);
+			} else {
+				this.#closeCodexProviderSessionsForHistoryRewrite();
+			}
 
 			// Get the saved compaction entry for the hook
 			const savedCompactionEntry = newEntries.find(e => e.type === "compaction" && e.summary === summary) as
@@ -10256,6 +10344,7 @@ export class AgentSession {
 		await this.#runAutoCompaction("threshold", false, false, false, {
 			autoContinue: false,
 			triggerContextTokens: contextTokens,
+			phase: "pre_turn",
 		});
 	}
 
@@ -10330,6 +10419,7 @@ export class AgentSession {
 			suppressContinuation: true,
 			suppressHandoff: true,
 			triggerContextTokens: contextTokens,
+			phase: "mid_turn",
 		});
 
 		if (signal?.aborted) return;
@@ -10576,6 +10666,7 @@ export class AgentSession {
 				return await this.#runAutoCompaction("threshold", false, false, allowDefer, {
 					autoContinue,
 					triggerContextTokens: postMaintenanceContextTokens,
+					phase: "pre_turn",
 				});
 			}
 			logger.debug("Auto-compaction threshold satisfied but context promotion took over", {
@@ -10936,7 +11027,11 @@ export class AgentSession {
 	): Promise<CompactionCheckResult> {
 		const compactionEntryBefore = getLatestCompactionEntry(this.sessionManager.getBranch());
 		await this.#dropPersistedAssistantTurn(assistantMessage);
-		const result = await this.#runAutoCompaction(reason, true, false, allowDefer, options);
+		const result = await this.#runAutoCompaction(reason, true, false, allowDefer, {
+			autoContinue: options.autoContinue,
+			triggerContextTokens: options.triggerContextTokens,
+			phase: "mid_turn",
+		});
 		const compactionEntryAfter = getLatestCompactionEntry(this.sessionManager.getBranch());
 		if (result.historyRewritten !== true && compactionEntryAfter === compactionEntryBefore) {
 			this.#restoreFailedAssistantTurn(assistantMessage);
@@ -11535,6 +11630,9 @@ export class AgentSession {
 		const currentModel = this.model;
 		if (currentModel) {
 			this.#closeProviderSessionsForModelSwitch(currentModel, model);
+			if (!modelsAreEqual(currentModel, model)) {
+				this.#clearInheritedProviderPromptCacheKey();
+			}
 		}
 		this.agent.setModel(model);
 
@@ -11546,6 +11644,14 @@ export class AgentSession {
 		const currentModel = this.model;
 		if (currentModel?.api !== "openai-codex-responses") return;
 		this.#closeProviderSessionsForModelSwitch(currentModel, currentModel);
+	}
+
+	#resetCodexProviderAfterCompaction(compaction: CodexCompactionContext): void {
+		resetOpenAICodexHistoryAfterCompaction({
+			providerSessionState: this.#providerSessionState,
+			sessionId: this.sessionId,
+			compaction,
+		});
 	}
 
 	#resetCurrentResponsesProviderSession(reason: string): void {
@@ -11918,18 +12024,6 @@ export class AgentSession {
 
 		return candidates;
 	}
-	#isCompactionAuthFailure(error: unknown): boolean {
-		if (!(error instanceof Error)) return false;
-		// Real provider 401/403 — surfaced as `.status` by the compaction layer
-		// (see `createSummarizationError` in packages/agent/src/compaction/compaction.ts).
-		// Without this branch, an expired/revoked Anthropic key would bypass the
-		// authenticated-fallback path and dump the raw HTTP body into the UI.
-		const status = (error as Error & { status?: number }).status;
-		if (status === 401 || status === 403) return true;
-		// pi-native gateway synthetic for "no credential configured" (issue #986).
-		// Carries no HTTP status, so the legacy message regex stays.
-		return /auth_unavailable|no auth available/i.test(error.message);
-	}
 
 	#buildCompactionAuthError(): Error {
 		const currentModel = this.model;
@@ -11979,6 +12073,7 @@ export class AgentSession {
 						tools: this.agent.state.tools,
 						sessionId: this.sessionId,
 						promptCacheKey: this.sessionId,
+						providerSessionState: this.#providerSessionState,
 						// Route every summarization HTTP request through the
 						// session's side-stream transport so the provider
 						// concurrency cap (e.g. providers.ollama-cloud.maxConcurrency)
@@ -11994,7 +12089,7 @@ export class AgentSession {
 					},
 				);
 			} catch (error) {
-				if (!this.#isCompactionAuthFailure(error)) {
+				if (!AIError.is(AIError.classify(error, candidate.api), AIError.Flag.AuthFailed)) {
 					throw error;
 				}
 			}
@@ -12317,6 +12412,7 @@ export class AgentSession {
 			triggerContextTokens?: number;
 			suppressContinuation?: boolean;
 			suppressHandoff?: boolean;
+			phase?: CodexCompactionContext["phase"];
 		} = {},
 	): Promise<CompactionCheckResult> {
 		const compactionSettings = this.settings.getGroup("compaction");
@@ -12359,7 +12455,7 @@ export class AgentSession {
 				async signal => {
 					await Promise.resolve();
 					if (signal.aborted) return;
-					await this.#runAutoCompaction(reason, willRetry, true);
+					await this.#runAutoCompaction(reason, willRetry, true, true, { phase: options.phase });
 				},
 				{ generation },
 			);
@@ -12506,6 +12602,7 @@ export class AgentSession {
 			let hookCompaction: CompactionResult | undefined;
 			let fromExtension = false;
 			let preserveData: Record<string, unknown> | undefined;
+			let codexCompaction: CodexCompactionContext | undefined;
 
 			if (this.#extensionRunner?.hasHandlers("session_before_compact")) {
 				const hookResult = (await this.#extensionRunner.emit({
@@ -12644,6 +12741,13 @@ export class AgentSession {
 				const telemetry = resolveTelemetry(this.agent.telemetry, this.sessionId);
 				let compactResult: CompactionResult | undefined;
 				let lastError: unknown;
+				codexCompaction = createCodexCompactionContext({
+					trigger: "auto",
+					reason: "context_limit",
+					phase:
+						options.phase ??
+						(reason === "threshold" ? "pre_turn" : reason === "idle" ? "standalone_turn" : "mid_turn"),
+				});
 
 				for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex++) {
 					const candidate = candidates[candidateIndex];
@@ -12676,6 +12780,8 @@ export class AgentSession {
 									tools: this.agent.state.tools,
 									sessionId: this.sessionId,
 									promptCacheKey: this.sessionId,
+									providerSessionState: this.#providerSessionState,
+									codexCompaction,
 								},
 							);
 							break;
@@ -12686,7 +12792,7 @@ export class AgentSession {
 
 							const message = error instanceof Error ? error.message : String(error);
 							const id = AIError.classify(error, candidate.api);
-							if (this.#isCompactionAuthFailure(error)) {
+							if (AIError.is(id, AIError.Flag.AuthFailed)) {
 								lastError = this.#buildCompactionAuthError();
 								break;
 							}
@@ -12794,7 +12900,11 @@ export class AgentSession {
 			this.#planReferenceSent = false;
 			this.#resetAllAdvisorRuntimes();
 			this.#syncTodoPhasesFromBranch();
-			this.#closeCodexProviderSessionsForHistoryRewrite();
+			if (codexCompaction) {
+				this.#resetCodexProviderAfterCompaction(codexCompaction);
+			} else {
+				this.#closeCodexProviderSessionsForHistoryRewrite();
+			}
 
 			// Get the saved compaction entry for the hook
 			const savedCompactionEntry = newEntries.find(e => e.type === "compaction" && e.summary === summary) as
@@ -14676,6 +14786,7 @@ export class AgentSession {
 		const previousSystemPrompt = this.agent.state.systemPrompt;
 		const previousBaseSystemPromptBeforeMemoryPromotion = this.#baseSystemPromptBeforeMemoryPromotion;
 		const previousFreshProviderSessionId = this.#freshProviderSessionId;
+		const previousInheritedProviderPromptCacheKey = this.#inheritedProviderPromptCacheKey;
 		const previousFallbackSelectedMCPToolNames = previousSessionFile
 			? this.#getSessionDefaultSelectedMCPToolNames(previousSessionFile)
 			: undefined;
@@ -14697,6 +14808,8 @@ export class AgentSession {
 			await this.sessionManager.setSessionFile(sessionPath);
 			if (switchingToDifferentSession) {
 				this.#freshProviderSessionId = undefined;
+				this.#clearInheritedProviderPromptCacheKey();
+				this.#adoptInheritedProviderPromptCacheKey();
 			}
 			this.#syncAgentSessionId();
 			this.#rekeyHindsightMemoryForCurrentSessionId();
@@ -14850,6 +14963,7 @@ export class AgentSession {
 			this.agent.replaceQueues(previousSteeringMessages, previousFollowUpMessages);
 			this.#pendingNextTurnMessages = previousPendingNextTurnMessages;
 			this.#scheduledHiddenNextTurnGeneration = previousScheduledHiddenNextTurnGeneration;
+			this.#inheritedProviderPromptCacheKey = previousInheritedProviderPromptCacheKey;
 			this.#checkpointState = previousCheckpointState;
 			this.#pendingRewindReport = previousPendingRewindReport;
 			this.#lastCompletedRewind = previousLastCompletedRewind;
@@ -14925,6 +15039,7 @@ export class AgentSession {
 		this.#rehydrateCheckpointRewindState();
 		this.#syncTodoPhasesFromBranch();
 		this.#freshProviderSessionId = undefined;
+		this.#clearInheritedProviderPromptCacheKey();
 		this.#syncAgentSessionId();
 		this.#rekeyHindsightMemoryForCurrentSessionId();
 		this.#rekeyMnemopiMemoryForCurrentSessionId();

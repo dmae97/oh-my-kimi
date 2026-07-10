@@ -724,6 +724,157 @@ describe("AuthStorage codex oauth ranking", () => {
 		expect(apiKey).toBe("api-acct-solo");
 	});
 
+	test.each([
+		["gpt-5.6-sol", "free", "plus"],
+		["gpt-5.6-luna", "go", "business"],
+		["gpt-5.6-sol-pro", "free", "team"],
+	])("%s routes away from a less-used %s account to an eligible %s account", async (modelId, freePlan, paidPlan) => {
+		if (!authStorage) throw new Error("test setup failed");
+
+		await authStorage.set("openai-codex", [
+			{ type: "oauth", ...createCredential("acct-free", "free@example.com") },
+			{ type: "oauth", ...createCredential("acct-paid", "paid@example.com") },
+		]);
+
+		usageByAccount.set(
+			"acct-free",
+			createCodexUsageReport({
+				accountId: "acct-free",
+				primary: { usedFraction: 0.01, resetInMs: 30 * 60 * 1000 },
+				secondary: { usedFraction: 0.01, resetInMs: 6 * 24 * 60 * 60 * 1000 },
+				metadata: { planType: freePlan, email: "free@example.com" },
+			}),
+		);
+		usageByAccount.set(
+			"acct-paid",
+			createCodexUsageReport({
+				accountId: "acct-paid",
+				primary: { usedFraction: 0.8, resetInMs: 30 * 60 * 1000 },
+				secondary: { usedFraction: 0.8, resetInMs: 6 * 24 * 60 * 60 * 1000 },
+				metadata: { planType: paidPlan, email: "paid@example.com" },
+			}),
+		);
+
+		const apiKey = await authStorage.getApiKey("openai-codex", undefined, { modelId });
+		expect(apiKey).toBe("api-acct-paid");
+	});
+
+	test.each([
+		["gpt-5.6-terra", "free", "enterprise"],
+		["gpt-5.6-terra-pro", "go", "pro"],
+	])("%s keeps a less-used %s account in ordinary ranking ahead of %s", async (modelId, lowUsagePlan, highUsagePlan) => {
+		if (!authStorage) throw new Error("test setup failed");
+
+		await authStorage.set("openai-codex", [
+			{ type: "oauth", ...createCredential("acct-low-usage", "low-usage@example.com") },
+			{ type: "oauth", ...createCredential("acct-high-usage", "high-usage@example.com") },
+		]);
+
+		usageByAccount.set(
+			"acct-low-usage",
+			createCodexUsageReport({
+				accountId: "acct-low-usage",
+				primary: { usedFraction: 0.01, resetInMs: 30 * 60 * 1000 },
+				secondary: { usedFraction: 0.01, resetInMs: 6 * 24 * 60 * 60 * 1000 },
+				metadata: { planType: lowUsagePlan, email: "low-usage@example.com" },
+			}),
+		);
+		usageByAccount.set(
+			"acct-high-usage",
+			createCodexUsageReport({
+				accountId: "acct-high-usage",
+				primary: { usedFraction: 0.8, resetInMs: 30 * 60 * 1000 },
+				secondary: { usedFraction: 0.8, resetInMs: 6 * 24 * 60 * 60 * 1000 },
+				metadata: { planType: highUsagePlan, email: "high-usage@example.com" },
+			}),
+		);
+
+		const apiKey = await authStorage.getApiKey("openai-codex", undefined, { modelId });
+		expect(apiKey).toBe("api-acct-low-usage");
+	});
+
+	test("reranks a Terra session on a Go account when it switches to Sol", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+
+		await authStorage.set("openai-codex", [
+			{ type: "oauth", ...createCredential("acct-go", "go@example.com") },
+			{ type: "oauth", ...createCredential("acct-business", "business@example.com") },
+		]);
+
+		usageByAccount.set(
+			"acct-go",
+			createCodexUsageReport({
+				accountId: "acct-go",
+				primary: { usedFraction: 0.01, resetInMs: 30 * 60 * 1000 },
+				secondary: { usedFraction: 0.01, resetInMs: 6 * 24 * 60 * 60 * 1000 },
+				metadata: { planType: "go", email: "go@example.com" },
+			}),
+		);
+		usageByAccount.set(
+			"acct-business",
+			createCodexUsageReport({
+				accountId: "acct-business",
+				primary: { usedFraction: 0.8, resetInMs: 30 * 60 * 1000 },
+				secondary: { usedFraction: 0.8, resetInMs: 6 * 24 * 60 * 60 * 1000 },
+				metadata: { planType: "business", email: "business@example.com" },
+			}),
+		);
+
+		let terraSession: string | undefined;
+		let terraApiKey: string | undefined;
+		for (let index = 0; index < 100; index += 1) {
+			const sessionId = `session-terra-to-sol-${index}`;
+			const apiKey = await authStorage.getApiKey("openai-codex", sessionId, {
+				modelId: "gpt-5.6-terra",
+			});
+			if (apiKey === "api-acct-go") {
+				terraSession = sessionId;
+				terraApiKey = apiKey;
+				break;
+			}
+		}
+		expect(terraApiKey).toBe("api-acct-go");
+		if (!terraSession) throw new Error("expected Terra to select the lower-usage Go account");
+
+		const solApiKey = await authStorage.getApiKey("openai-codex", terraSession, {
+			modelId: "gpt-5.6-sol",
+		});
+		expect(solApiKey).toBe("api-acct-business");
+	});
+
+	test("falls back by ordinary usage ranking for Sol when no account is confirmed paid", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+
+		await authStorage.set("openai-codex", [
+			{ type: "oauth", ...createCredential("acct-free", "free@example.com") },
+			{ type: "oauth", ...createCredential("acct-go", "go@example.com") },
+		]);
+
+		usageByAccount.set(
+			"acct-free",
+			createCodexUsageReport({
+				accountId: "acct-free",
+				primary: { usedFraction: 0.8, resetInMs: 30 * 60 * 1000 },
+				secondary: { usedFraction: 0.8, resetInMs: 6 * 24 * 60 * 60 * 1000 },
+				metadata: { planType: "free", email: "free@example.com" },
+			}),
+		);
+		usageByAccount.set(
+			"acct-go",
+			createCodexUsageReport({
+				accountId: "acct-go",
+				primary: { usedFraction: 0.01, resetInMs: 30 * 60 * 1000 },
+				secondary: { usedFraction: 0.01, resetInMs: 6 * 24 * 60 * 60 * 1000 },
+				metadata: { planType: "go", email: "go@example.com" },
+			}),
+		);
+
+		const apiKey = await authStorage.getApiKey("openai-codex", undefined, {
+			modelId: "gpt-5.6-sol",
+		});
+		expect(apiKey).toBe("api-acct-go");
+	});
+
 	test("prefers Pro accounts for codex spark models over Plus accounts", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 

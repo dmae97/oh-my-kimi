@@ -108,10 +108,15 @@ export interface MnemopiMemoryEditOptions {
 }
 
 export interface MnemopiMemoryEditResult {
-	status: "updated" | "deleted" | "invalidated" | "not_found";
+	status: "updated" | "deleted" | "invalidated" | "not_found" | "not_editable";
 	bank?: string;
-	store?: "working" | "episodic";
+	store?: MnemopiMemoryStore;
 }
+
+/** Which mnemopi table a resolved memory id lives in. `fact` rows are
+ * read-only projections of fact extraction (issue #4725): resolvable for
+ * reads, never editable. */
+export type MnemopiMemoryStore = "working" | "episodic" | "fact";
 
 interface MnemopiStoredMemoryRow {
 	id?: unknown;
@@ -136,7 +141,7 @@ interface MnemopiStoredMemoryRow {
  */
 export interface MnemopiScopedMemoryHit {
 	bank: string;
-	store: "working" | "episodic";
+	store: MnemopiMemoryStore;
 	row: {
 		id: string;
 		content: string;
@@ -256,7 +261,8 @@ export class MnemopiSessionState {
 		for (const target of targets) {
 			const raw = target.memory.get(id) as MnemopiStoredMemoryRow | null;
 			if (!raw) continue;
-			const store: MnemopiScopedMemoryHit["store"] = raw.memory_store === "episodic" ? "episodic" : "working";
+			const store: MnemopiMemoryStore =
+				raw.memory_store === "episodic" || raw.memory_store === "fact" ? raw.memory_store : "working";
 			return {
 				bank: target.bank,
 				store,
@@ -291,8 +297,16 @@ export class MnemopiSessionState {
 		for (const target of targets) {
 			const row = target.memory.get(id) as MnemopiStoredMemoryRow | null;
 			if (!row) continue;
-			const store: MnemopiMemoryEditResult["store"] = row.memory_store === "episodic" ? "episodic" : "working";
+			const store: MnemopiMemoryStore =
+				row.memory_store === "episodic" || row.memory_store === "fact" ? row.memory_store : "working";
 			const resultContext: Pick<MnemopiMemoryEditResult, "bank" | "store"> = { bank: target.bank, store };
+			if (store === "fact") {
+				// Facts are read-only: no memory_edit op mutates the facts
+				// table, so report that precisely instead of `not_found`
+				// (the id DID resolve — issue #4725).
+				ineligible ??= { status: "not_editable", ...resultContext };
+				continue;
+			}
 			if ((op === "update" || op === "forget") && store !== "working") {
 				ineligible ??= { status: "not_found", ...resultContext };
 				continue;

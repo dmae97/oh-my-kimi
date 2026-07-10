@@ -323,6 +323,30 @@ export interface RawSseEvent {
 	raw: string[];
 }
 
+/** Lifecycle fields shared by every Codex compaction implementation. */
+export interface CodexCompactionContext {
+	/** Stable only for one logical compaction, including parallel summary calls. */
+	operationId: string;
+	trigger: "manual" | "auto";
+	reason: "user_requested" | "context_limit" | "model_downshift" | "comp_hash_changed";
+	phase: "standalone_turn" | "pre_turn" | "mid_turn";
+	strategy: "memento" | "prefix_compaction";
+}
+
+/** Canonical nested metadata serialized into the Codex turn envelope. */
+export interface CodexCompactionMetadata {
+	trigger: "manual" | "auto";
+	reason: "user_requested" | "context_limit" | "model_downshift" | "comp_hash_changed";
+	implementation: "responses" | "responses_compaction_v2" | "responses_compact";
+	phase: "standalone_turn" | "pre_turn" | "mid_turn";
+	strategy: "memento" | "prefix_compaction";
+}
+
+/** Dispatch context combining canonical metadata with its local operation identity. */
+export interface CodexCompactionRequestContext extends CodexCompactionMetadata {
+	operationId: string;
+}
+
 export interface StreamOptions {
 	temperature?: number;
 	topP?: number;
@@ -388,9 +412,9 @@ export interface StreamOptions {
 	 */
 	sessionId?: string;
 	/**
-	 * Optional prompt-cache identity. When set, OpenAI Responses-compatible
-	 * providers use this for `prompt_cache_key` while keeping `sessionId` for
-	 * provider routing / conversation headers.
+	 * Optional prompt-cache identity. OpenAI-family providers use this for
+	 * `prompt_cache_key` payloads and cache-affinity headers such as
+	 * `x-grok-conv-id`; when omitted, they fall back to `sessionId`.
 	 */
 	promptCacheKey?: string;
 	/**
@@ -398,6 +422,8 @@ export interface StreamOptions {
 	 * Providers can use this to persist transport/session state between turns.
 	 */
 	providerSessionState?: Map<string, ProviderSessionState>;
+	/** Canonical Codex compaction classification; ignored by other providers. */
+	codexCompaction?: CodexCompactionRequestContext;
 	/**
 	 * Force Gemini model-mode Interactions API transport for providers that support it.
 	 * When unset, those providers may still use Interactions to continue known

@@ -119,6 +119,23 @@ describe("CombinedAutocompleteProvider", () => {
 			expect(result?.items.map(item => item.value)).toContain("/tmp/");
 		});
 
+		it("does not treat whitespace-only no-arg slash command arguments as file prefixes", async () => {
+			const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "autocomplete-quit-whitespace-"));
+			try {
+				fs.writeFileSync(path.join(baseDir, "copy-target.ts"), "export {};\n");
+				const provider = new CombinedAutocompleteProvider(
+					[{ name: "quit", description: "Quit", allowArgs: false }],
+					baseDir,
+				);
+				const line = "/quit  ";
+				const result = await provider.getSuggestions([line], 0, line.length);
+
+				expect(result).toBeNull();
+			} finally {
+				fs.rmSync(baseDir, { recursive: true, force: true });
+			}
+		});
+
 		it("treats @ file-reference tokens as literal text inside slash command arguments without completions", async () => {
 			const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "autocomplete-rename-args-"));
 			try {
