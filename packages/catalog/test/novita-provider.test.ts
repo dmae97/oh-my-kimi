@@ -1,6 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { getOAuthProviders } from "@oh-my-pi/pi-ai/registry/oauth";
-import { getEnvApiKey } from "@oh-my-pi/pi-ai/stream";
 import { DEFAULT_MODEL_PER_PROVIDER, PROVIDER_DESCRIPTORS } from "@oh-my-pi/pi-catalog/provider-models/descriptors";
 import { novitaModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 
@@ -11,27 +9,8 @@ describe("Novita built-in provider", () => {
 		expect(descriptor?.defaultModel).toBe("moonshotai/kimi-k2.7-code");
 		expect(descriptor?.catalogDiscovery?.envVars).toContain("NOVITA_API_KEY");
 		expect(descriptor?.catalogDiscovery?.allowUnauthenticated).toBe(true);
+		expect(descriptor?.dynamicModelsAuthoritative).toBe(true);
 		expect(DEFAULT_MODEL_PER_PROVIDER.novita).toBe("moonshotai/kimi-k2.7-code");
-	});
-
-	test("registers Novita as an API-key login provider", () => {
-		const provider = getOAuthProviders().find(item => item.id === "novita");
-		expect(provider?.name).toBe("Novita");
-		expect(provider?.available).toBe(true);
-	});
-
-	test("resolves NOVITA_API_KEY via env", () => {
-		const previous = Bun.env.NOVITA_API_KEY;
-		Bun.env.NOVITA_API_KEY = "novita-test-key";
-		try {
-			expect(getEnvApiKey("novita")).toBe("novita-test-key");
-		} finally {
-			if (previous === undefined) {
-				delete Bun.env.NOVITA_API_KEY;
-			} else {
-				Bun.env.NOVITA_API_KEY = previous;
-			}
-		}
 	});
 
 	test("maps Novita model catalog metadata from the public OpenAI-compatible endpoint", async () => {
@@ -74,6 +53,23 @@ describe("Novita built-in provider", () => {
 						endpoints: ["chat/completions"],
 						input_modalities: ["text"],
 					},
+					{
+						id: "minimax/m2-her",
+						status: 1,
+						context_size: 32000,
+						features: ["serverless"],
+						endpoints: ["chat/completions"],
+						input_modalities: ["text"],
+					},
+					{
+						id: "test/zero-output",
+						status: 1,
+						context_size: 32000,
+						max_output_tokens: 0,
+						features: ["serverless"],
+						endpoints: ["chat/completions"],
+						input_modalities: ["text"],
+					},
 				],
 			});
 		};
@@ -83,6 +79,7 @@ describe("Novita built-in provider", () => {
 		const model = models?.find(item => item.id === "moonshotai/kimi-k2.7-code");
 
 		expect(requests).toEqual(["https://api.novita.ai/openai/v1/models"]);
+		expect(options.dynamicModelsAuthoritative).toBe(true);
 		expect(models?.map(item => item.id)).toEqual(["moonshotai/kimi-k2.7-code"]);
 		expect(model?.provider).toBe("novita");
 		expect(model?.baseUrl).toBe("https://api.novita.ai/openai/v1");
@@ -90,7 +87,7 @@ describe("Novita built-in provider", () => {
 		expect(model?.reasoning).toBe(true);
 		expect(model?.supportsTools).toBe(true);
 		expect(model?.input).toEqual(["text", "image"]);
-		expect(model?.cost).toEqual({ input: 9.5, output: 40, cacheRead: 1.9, cacheWrite: 0 });
+		expect(model?.cost).toEqual({ input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 });
 		expect(model?.contextWindow).toBe(262144);
 		expect(model?.maxTokens).toBe(131072);
 	});

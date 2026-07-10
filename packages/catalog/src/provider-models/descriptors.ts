@@ -277,6 +277,7 @@ export const CATALOG_PROVIDERS = [
 		defaultModel: "moonshotai/kimi-k2.7-code",
 		envVars: ["NOVITA_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => novitaModelManagerOptions(config),
+		dynamicModelsAuthoritative: true,
 		catalogDiscovery: { label: "Novita", allowUnauthenticated: true },
 	},
 	{

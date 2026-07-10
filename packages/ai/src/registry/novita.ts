@@ -9,13 +9,14 @@ export const loginNovita = createApiKeyLogin({
 	placeholder: "sk_...",
 	validation: {
 		kind: "models-endpoint",
-		provider: "novita",
-		modelsUrl: "https://api.novita.ai/openai/v1/models",
+		provider: "Novita",
+		modelsUrl: "https://api.novita.ai/openapi/v1/billing/balance/detail",
+		headers: { "Content-Type": "application/json" },
 	},
 });
 
 export const novitaProvider = {
 	id: "novita",
 	name: "Novita",
-	login: (cb: Parameters<typeof loginNovita>[0]) => loginNovita(cb),
-} as const satisfies ProviderDefinition;
+	login: loginNovita,
+} satisfies ProviderDefinition & { readonly id: "novita" };

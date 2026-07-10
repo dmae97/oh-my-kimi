@@ -975,6 +975,7 @@ export function nvidiaModelManagerOptions(
 // 5.5 Novita
 // ---------------------------------------------------------------------------
 
+/** Novita OpenAI-compatible discovery configuration. */
 export interface NovitaModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
@@ -989,8 +990,9 @@ function isPublicNovitaModelId(id: string): boolean {
 	return !id.toLowerCase().startsWith("ai_infer_test");
 }
 
+// Novita reports token prices in 1/10,000 USD per million tokens.
 function toNovitaCostPerMillion(value: unknown): number {
-	return toPositiveNumber(value, 0) / 1000;
+	return toPositiveNumber(value, 0) / 10_000;
 }
 
 function getNovitaCacheReadPricePerMillion(entry: OpenAICompatibleModelRecord): number {
@@ -1034,16 +1036,16 @@ function mapNovitaModel(
 	};
 }
 
+/** Builds Novita's public model-discovery manager. */
 export function novitaModelManagerOptions(
 	config?: NovitaModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
 	const apiKey = config?.apiKey;
 	const baseUrl = config?.baseUrl ?? "https://api.novita.ai/openai/v1";
-	const references = createBundledReferenceMap<"openai-completions">(
-		"novita" as Parameters<typeof getBundledModels>[0],
-	);
+	const references = createBundledReferenceMap<"openai-completions">("novita");
 	return {
 		providerId: "novita",
+		dynamicModelsAuthoritative: true,
 		fetchDynamicModels: async () =>
 			fetchOpenAICompatibleModels({
 				api: "openai-completions",
@@ -1057,7 +1059,7 @@ export function novitaModelManagerOptions(
 						active &&
 						isPublicNovitaModelId(model.id) &&
 						novitaArrayIncludes(entry.endpoints, "chat/completions") &&
-						model.maxTokens !== 0
+						toPositiveNumber(entry.max_output_tokens, 0) > 0
 					);
 				},
 				fetch: config?.fetch,
