@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed LSP workspace diagnostics for Go workspaces so roots with `go.work` are recognized and every `go.work use` module is included in the `go build` package patterns. ([#5038](https://github.com/can1357/oh-my-pi/issues/5038))
+
 ## [16.3.15] - 2026-07-09
 
 ### Changed
