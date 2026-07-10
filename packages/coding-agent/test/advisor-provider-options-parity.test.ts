@@ -167,8 +167,8 @@ describe("AgentSession advisor provider-options parity", () => {
 		expect(opts.onPayload).toBe(onPayload);
 
 		// Cache routing identity threaded through into the actual stream call.
-		// Without a parent `providerPromptCacheKey`, advisor's effective key
-		// collapses to `${main.sessionId}-advisor` which equals its sessionId.
+		// Without a parent `providerPromptCacheKey`, the advisor's effective key
+		// is its own provider-facing UUIDv7 session id (issue #5040).
 		expect(opts.sessionId).toBe(advisor.sessionId);
 		expect(opts.promptCacheKey).toBe(advisor.sessionId);
 		expect(opts.providerSessionState).toBe(session.providerSessionState);

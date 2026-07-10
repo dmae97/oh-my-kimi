@@ -122,8 +122,16 @@ describe("AuthStorage credential block persistence", () => {
 				blockedUntilMs: FUTURE_BLOCK_MS,
 			});
 
+			// `updatedAtMs` is the row's DB write time (issue #4980: same-deadline
+			// refreshes must be observable), so only its presence is asserted.
 			expect(storage.listCredentialBlocks([row.id])).toEqual([
-				{ credentialId: row.id, providerKey: PROVIDER_KEY, blockScope: "tier:fable", blockedUntilMs: longerBlock },
+				{
+					credentialId: row.id,
+					providerKey: PROVIDER_KEY,
+					blockScope: "tier:fable",
+					blockedUntilMs: longerBlock,
+					updatedAtMs: expect.any(Number),
+				},
 			]);
 		} finally {
 			storage.close();
@@ -157,6 +165,7 @@ describe("AuthStorage credential block persistence", () => {
 					providerKey: PROVIDER_KEY,
 					blockScope: "tier:fable",
 					blockedUntilMs: FUTURE_BLOCK_MS,
+					updatedAtMs: expect.any(Number),
 				},
 			]);
 
