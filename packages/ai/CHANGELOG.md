@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed OpenAI Responses server non-streaming envelopes to always include the required `incomplete_details` field, using `null` for completed responses. ([#5120](https://github.com/can1357/oh-my-pi/issues/5120))
+
 ## [16.4.1] - 2026-07-10
 
 ### Changed
