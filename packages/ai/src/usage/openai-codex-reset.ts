@@ -8,7 +8,7 @@
  *
  *   GET  /wham/rate-limit-reset-credits           → list redeemable credits
  *   POST /wham/rate-limit-reset-credits/consume   → spend one credit
- *        body: { credit_id, redeem_request_id }
+ *        body: { credit_id, redeem_request_id, account_id? }
  *
  * `redeem_request_id` is a client-generated idempotency key (UUID). The consume
  * response carries a `code`: `"reset"` on success, otherwise a business reason
@@ -159,7 +159,11 @@ export async function consumeCodexResetCredit(
 	const response = await auth.fetch(url, {
 		method: "POST",
 		headers: buildHeaders(auth, true),
-		body: JSON.stringify({ credit_id: auth.creditId, redeem_request_id: redeemRequestId }),
+		body: JSON.stringify({
+			credit_id: auth.creditId,
+			redeem_request_id: redeemRequestId,
+			account_id: auth.accountId,
+		}),
 		signal: auth.signal,
 	});
 	let body: unknown;

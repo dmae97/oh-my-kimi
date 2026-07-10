@@ -20,6 +20,7 @@
 ### Fixed
 
 - Fixed concurrent reasoning summaries to ignore legacy streaming events under cutoff contract
+- Fixed Codex saved-reset redemption to include the selected account in the consume request body, so `/usage reset` applies to the chosen OpenAI account in multi-account setups. ([#5054](https://github.com/can1357/oh-my-pi/issues/5054))
 
 ## [16.3.15] - 2026-07-09
 
