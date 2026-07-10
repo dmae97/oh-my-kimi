@@ -1846,6 +1846,7 @@ export class AgentSession {
 	 * Cleared before every new prompt turn so the next turn evaluates cleanly.
 	 */
 	#yieldTerminationPending = false;
+	#synchronouslyTerminatedYieldToolCallIds = new Set<string>();
 	#providerSessionState = new Map<string, ProviderSessionState>();
 	#hindsightSessionState: HindsightSessionState | undefined = undefined;
 	readonly rawSseDebugBuffer: RawSseDebugBuffer;
@@ -3672,9 +3673,11 @@ export class AgentSession {
 			}
 		}
 		if (event.type === "tool_execution_end" && this.#isTerminalYieldToolResult(event)) {
-			this.#lastSuccessfulYieldToolCallId = event.toolCallId;
-			this.#yieldTerminationPending = true;
-			this.agent.abort();
+			const alreadyTerminated = this.#synchronouslyTerminatedYieldToolCallIds.delete(event.toolCallId);
+			if (!alreadyTerminated) {
+				this.#markTerminalYieldToolCall(event.toolCallId);
+				this.agent.abort();
+			}
 		}
 
 		// TTSR: Check for pattern matches on assistant text/thinking and tool argument deltas
@@ -4427,6 +4430,8 @@ export class AgentSession {
 				result: ctx.result,
 			})
 		) {
+			this.#markTerminalYieldToolCall(ctx.toolCall.id);
+			this.#synchronouslyTerminatedYieldToolCallIds.add(ctx.toolCall.id);
 			this.agent.abort();
 		}
 		return this.#ttsrAfterToolCall(ctx);
@@ -10614,6 +10619,11 @@ export class AgentSession {
 			record.type.length > 0 &&
 			record.type.every(item => typeof item === "string")
 		);
+	}
+
+	#markTerminalYieldToolCall(toolCallId: string): void {
+		this.#lastSuccessfulYieldToolCallId = toolCallId;
+		this.#yieldTerminationPending = true;
 	}
 
 	#assistantMessageHasSuccessfulYieldToolCall(assistantMessage: AssistantMessage, toolCallId: string): boolean {
