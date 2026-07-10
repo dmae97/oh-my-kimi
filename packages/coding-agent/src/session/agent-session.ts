@@ -407,7 +407,13 @@ const MID_RUN_TODO_NUDGE_MUTATING_TOOLS: Record<string, true> = {
 	write: true,
 	ast_edit: true,
 };
-const USER_RESPONSE_CUE_RE = /\b(?:confirm|reply|answer|choose|pick|decide|advise|let\s+me\s+know|tell\s+me)\b/i;
+const MARKDOWN_PROMPT_PREFIX_RE = /^(?:>\s*)?(?:(?:[-*+]|\d+[.)])\s+)*/;
+const PROMPT_LABEL_RE = /^(?:q(?:uestion)?|ask)\s*\d*\s*[:.)-]\s*/i;
+const QUESTION_PROMPT_RE =
+	/^(?:what|which|when|where|why|how|who|whom|whose|do|does|did|can|could|would|will|should|is|are|am|may|shall)\b/i;
+const USER_DIRECTED_PROMPT_RE = /\b(?:you|your|we|our)\b/i;
+const USER_RESPONSE_CUE_RE =
+	/^(?:please\s+)?(?:confirm|reply|choose|pick|decide|advise)\b|^(?:please\s+)?answer\b|^(?:please\s+)?(?:let\s+me\s+know|tell\s+me)\b/i;
 
 function assistantText(message: AssistantMessage): string {
 	return message.content
@@ -417,16 +423,47 @@ function assistantText(message: AssistantMessage): string {
 		.trim();
 }
 
+interface PromptLine {
+	text: string;
+	hadPromptLabel: boolean;
+}
+
+function promptLine(line: string): PromptLine {
+	const withoutMarkdownPrefix = line.trim().replace(MARKDOWN_PROMPT_PREFIX_RE, "").trim();
+	const withoutPromptLabel = withoutMarkdownPrefix.replace(PROMPT_LABEL_RE, "").trim();
+	return {
+		text: withoutPromptLabel,
+		hadPromptLabel: withoutPromptLabel !== withoutMarkdownPrefix,
+	};
+}
+
+function isQuestionPromptLine(line: string): boolean {
+	const candidate = promptLine(line);
+	if (!/[?？]\s*$/.test(candidate.text)) return false;
+	return (
+		candidate.hadPromptLabel ||
+		QUESTION_PROMPT_RE.test(candidate.text) ||
+		USER_DIRECTED_PROMPT_RE.test(candidate.text)
+	);
+}
+
+function isResponseCueLine(line: string): boolean {
+	const candidate = promptLine(line)
+		.text.replace(/[.!?。！？]+$/, "")
+		.trim();
+	return USER_RESPONSE_CUE_RE.test(candidate);
+}
+
 function isAwaitingUserAnswer(message: AssistantMessage): boolean {
 	const text = assistantText(message);
 	if (!text) return false;
-	const tail = text
+	const tailLines = text
 		.split(/\r?\n/)
 		.map(line => line.trim())
 		.filter(Boolean)
-		.slice(-6)
-		.join("\n");
-	return /[?？]/.test(tail) || USER_RESPONSE_CUE_RE.test(tail);
+		.slice(-6);
+	const lastLine = tailLines.at(-1);
+	return tailLines.some(isQuestionPromptLine) || (lastLine !== undefined && isResponseCueLine(lastLine));
 }
 /** `customType` for the hidden mid-run todo nudge; `display: false`, so it reaches
  *  the model but never renders in the TUI or transcript. */

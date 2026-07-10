@@ -186,6 +186,30 @@ describe("AgentSession todo reminder self-continuation suppression", () => {
 		expect(continueSpy).not.toHaveBeenCalled();
 	});
 
+	it("still reminds and continues when ordinary prose contains answer", async () => {
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+
+		emitTextOnlyStop("Final answer: I summarized the work completed so far, but the todo items remain open.");
+		await withTimeout(firstReminderPromise, 1000, "todo_reminder never fired");
+		await session.waitForIdle();
+
+		expect(reminderAttempts).toEqual([1]);
+		expect(todoReminderTranscriptEntry()).toBeDefined();
+		expect(continueSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("still reminds and continues when TypeScript optional syntax appears in the assistant tail", async () => {
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+
+		emitTextOnlyStop("Tail note: the interface includes foo?: string, but the todo items remain open.");
+		await withTimeout(firstReminderPromise, 1000, "todo_reminder never fired");
+		await session.waitForIdle();
+
+		expect(reminderAttempts).toEqual([1]);
+		expect(todoReminderTranscriptEntry()).toBeDefined();
+		expect(continueSpy).toHaveBeenCalledTimes(1);
+	});
+
 	it("fires exactly one reminder per user pause when the agent only acknowledges", async () => {
 		// Each call to continue() mirrors what the bug-reported model did: emit another
 		// text-only stop ("paused at your instruction"), no tool calls in between.
