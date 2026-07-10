@@ -820,6 +820,23 @@ async function buildSessionOptions(
 	if (parsed.providerSessionId) {
 		options.providerSessionId = parsed.providerSessionId;
 	}
+	if (parsed.providerPromptCacheKey) {
+		options.providerPromptCacheKey = parsed.providerPromptCacheKey;
+		options.providerPromptCacheKeySource = "explicit";
+	} else {
+		const header = sessionManager?.getHeader();
+		const forkCacheShapeChanged =
+			parsed.model !== undefined ||
+			parsed.thinking !== undefined ||
+			parsed.systemPrompt !== undefined ||
+			parsed.appendSystemPrompt !== undefined ||
+			parsed.tools !== undefined ||
+			parsed.noTools === true;
+		if (!forkCacheShapeChanged && header?.providerPromptCacheKey) {
+			options.providerPromptCacheKey = header.providerPromptCacheKey;
+			options.providerPromptCacheKeySource = "fork";
+		}
+	}
 
 	// Model from CLI
 	// - supports --provider <name> --model <pattern>

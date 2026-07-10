@@ -426,6 +426,8 @@ export interface CreateAgentSessionOptions {
 	providerSessionId?: string;
 	/** Optional provider-facing prompt cache key, distinct from request lineage. */
 	providerPromptCacheKey?: string;
+	/** Whether `providerPromptCacheKey` is caller-pinned or inherited from a full fork. */
+	providerPromptCacheKeySource?: "explicit" | "fork";
 	/** Absolute wall-clock deadline in Unix epoch milliseconds. */
 	deadline?: number;
 
@@ -1221,6 +1223,25 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			SessionManager.create(cwd, SessionManager.getDefaultSessionDir(cwd, agentDir)),
 		);
 	const providerSessionId = options.providerSessionId ?? sessionManager.getSessionId();
+	const forkCacheShapeChanged =
+		options.model !== undefined ||
+		options.modelPattern !== undefined ||
+		options.thinkingLevel !== undefined ||
+		options.systemPrompt !== undefined ||
+		options.customSystemPrompt !== undefined ||
+		options.appendSystemPrompt !== undefined ||
+		options.toolNames !== undefined ||
+		options.customTools !== undefined;
+	const inheritedPromptCacheKey = forkCacheShapeChanged
+		? undefined
+		: sessionManager.getHeader()?.providerPromptCacheKey;
+	const providerPromptCacheKey = options.providerPromptCacheKey ?? inheritedPromptCacheKey;
+	const providerPromptCacheKeySource =
+		options.providerPromptCacheKey !== undefined
+			? (options.providerPromptCacheKeySource ?? "explicit")
+			: providerPromptCacheKey !== undefined
+				? "fork"
+				: undefined;
 	// Startup model *selection* only needs to know whether auth is configured for
 	// a candidate's provider — never the resolved key bytes. Use the synchronous,
 	// side-effect-free probe (`hasConfiguredAuth`): it refreshes no OAuth tokens,
@@ -2704,7 +2725,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			onPayload,
 			onResponse,
 			sessionId: providerSessionId,
-			promptCacheKey: options.providerPromptCacheKey,
+			promptCacheKey: providerPromptCacheKey,
 			deadline: options.deadline,
 			transformContext,
 			transformProviderContext,
@@ -2888,6 +2909,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			agentId: resolvedAgentId,
 			agentKind,
 			providerSessionId: options.providerSessionId,
+			providerPromptCacheKeySource,
 			parentEvalSessionId: options.parentEvalSessionId,
 			advisorTools,
 			titleSystemPrompt: options.titleSystemPrompt,

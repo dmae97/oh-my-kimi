@@ -793,6 +793,8 @@ export interface AgentSessionConfig {
 	 * so that credential sticky selection is consistent with the session's streaming calls.
 	 */
 	providerSessionId?: string;
+	/** Marks `agent.promptCacheKey` as fork-inherited so incompatible route changes can clear it. */
+	providerPromptCacheKeySource?: "explicit" | "fork";
 	/**
 	 * Full advisor toolset, pre-built in `createAgentSession` against a distinct,
 	 * advisor-scoped `ToolSession` (its own `-advisor` session/agent id) so the
@@ -1697,6 +1699,7 @@ export class AgentSession {
 	#agentKind: "main" | "sub" = "main";
 	#providerSessionId: string | undefined;
 	#freshProviderSessionId: string | undefined;
+	#inheritedProviderPromptCacheKey: string | undefined;
 	#isDisposed = false;
 	// Extension system
 	#extensionRunner: ExtensionRunner | undefined = undefined;
@@ -2212,6 +2215,8 @@ export class AgentSession {
 		this.#agentId = config.agentId;
 		this.#agentKind = config.agentKind ?? "main";
 		this.#providerSessionId = config.providerSessionId;
+		this.#inheritedProviderPromptCacheKey =
+			config.providerPromptCacheKeySource === "fork" ? this.agent.promptCacheKey : undefined;
 		this.agent.setAssistantMessageEventInterceptor((message, assistantMessageEvent) => {
 			const event: AgentEvent = {
 				type: "message_update",
@@ -5570,6 +5575,23 @@ export class AgentSession {
 		return this.#freshProviderSessionId ?? this.#providerSessionId ?? sessionId ?? this.sessionManager.getSessionId();
 	}
 
+	#adoptInheritedProviderPromptCacheKey(): void {
+		const key = this.sessionManager.getHeader()?.providerPromptCacheKey;
+		if (!key) return;
+		if (this.#inheritedProviderPromptCacheKey !== undefined || this.agent.promptCacheKey === undefined) {
+			this.agent.promptCacheKey = key;
+			this.#inheritedProviderPromptCacheKey = key;
+		}
+	}
+
+	#clearInheritedProviderPromptCacheKey(): void {
+		const key = this.#inheritedProviderPromptCacheKey;
+		this.#inheritedProviderPromptCacheKey = undefined;
+		if (key !== undefined && this.agent.promptCacheKey === key) {
+			this.agent.promptCacheKey = undefined;
+		}
+	}
+
 	/**
 	 * Set agent.sessionId from the session manager and install a dynamic
 	 * metadata resolver so every Anthropic API request carries
@@ -6375,6 +6397,9 @@ export class AgentSession {
 		if (this.#rebuildSystemPrompt) {
 			const signature = this.#computeAppliedToolSignature(validToolNames, tools);
 			if (signature !== this.#lastAppliedToolSignature) {
+				if (this.#lastAppliedToolSignature !== undefined) {
+					this.#clearInheritedProviderPromptCacheKey();
+				}
 				const built = await this.#rebuildSystemPrompt(validToolNames, this.#toolRegistry);
 				this.#baseSystemPrompt = built.systemPrompt;
 				this.#baseSystemPromptBeforeMemoryPromotion = undefined;
@@ -6461,9 +6486,16 @@ export class AgentSession {
 		if (!this.#rebuildSystemPrompt) return;
 		const activeToolNames = this.getActiveToolNames();
 		this.#setActiveToolNames?.(activeToolNames);
+		const previousBaseSystemPrompt = this.#baseSystemPrompt;
 		const built = await this.#rebuildSystemPrompt(activeToolNames, this.#toolRegistry);
 		this.#baseSystemPrompt = built.systemPrompt;
 		this.#baseSystemPromptBeforeMemoryPromotion = undefined;
+		if (
+			previousBaseSystemPrompt.length !== this.#baseSystemPrompt.length ||
+			previousBaseSystemPrompt.some((part, index) => part !== this.#baseSystemPrompt[index])
+		) {
+			this.#clearInheritedProviderPromptCacheKey();
+		}
 		this.agent.setSystemPrompt(this.#baseSystemPrompt);
 		this.#promptModelKey = this.#currentPromptModelKey();
 		// Refresh the cached signature so a subsequent `#applyActiveToolsByName` with
@@ -8704,6 +8736,7 @@ export class AgentSession {
 		this.#clearCheckpointRuntimeState();
 		this.setTodoPhases([]);
 		this.#freshProviderSessionId = undefined;
+		this.#clearInheritedProviderPromptCacheKey();
 		this.#syncAgentSessionId();
 		this.#rekeyHindsightMemoryForCurrentSessionId();
 		this.#rekeyMnemopiMemoryForCurrentSessionId();
@@ -8804,6 +8837,7 @@ export class AgentSession {
 
 		// Update agent session ID
 		this.#freshProviderSessionId = undefined;
+		this.#adoptInheritedProviderPromptCacheKey();
 		this.#syncAgentSessionId();
 		this.#rekeyHindsightMemoryForCurrentSessionId();
 		this.#rekeyMnemopiMemoryForCurrentSessionId();
@@ -9125,6 +9159,9 @@ export class AgentSession {
 			this.#autoThinking = true;
 			this.#autoResolvedLevel = undefined;
 			this.#thinkingLevel = provisional;
+			if (!wasAuto) {
+				this.#clearInheritedProviderPromptCacheKey();
+			}
 			this.#applyThinkingLevelToAgent(provisional);
 			if (persist) {
 				this.settings.set("defaultThinkingLevel", AUTO_THINKING);
@@ -9148,6 +9185,7 @@ export class AgentSession {
 		this.#applyThinkingLevelToAgent(effectiveLevel);
 
 		if (isChanging) {
+			this.#clearInheritedProviderPromptCacheKey();
 			this.sessionManager.appendThinkingLevelChange(effectiveLevel, effectiveLevel);
 			if (persist && effectiveLevel !== undefined && effectiveLevel !== ThinkingLevel.Off) {
 				this.settings.set("defaultThinkingLevel", effectiveLevel);
@@ -11538,6 +11576,9 @@ export class AgentSession {
 		const currentModel = this.model;
 		if (currentModel) {
 			this.#closeProviderSessionsForModelSwitch(currentModel, model);
+			if (!modelsAreEqual(currentModel, model)) {
+				this.#clearInheritedProviderPromptCacheKey();
+			}
 		}
 		this.agent.setModel(model);
 
@@ -14679,6 +14720,7 @@ export class AgentSession {
 		const previousSystemPrompt = this.agent.state.systemPrompt;
 		const previousBaseSystemPromptBeforeMemoryPromotion = this.#baseSystemPromptBeforeMemoryPromotion;
 		const previousFreshProviderSessionId = this.#freshProviderSessionId;
+		const previousInheritedProviderPromptCacheKey = this.#inheritedProviderPromptCacheKey;
 		const previousFallbackSelectedMCPToolNames = previousSessionFile
 			? this.#getSessionDefaultSelectedMCPToolNames(previousSessionFile)
 			: undefined;
@@ -14700,6 +14742,8 @@ export class AgentSession {
 			await this.sessionManager.setSessionFile(sessionPath);
 			if (switchingToDifferentSession) {
 				this.#freshProviderSessionId = undefined;
+				this.#clearInheritedProviderPromptCacheKey();
+				this.#adoptInheritedProviderPromptCacheKey();
 			}
 			this.#syncAgentSessionId();
 			this.#rekeyHindsightMemoryForCurrentSessionId();
@@ -14853,6 +14897,7 @@ export class AgentSession {
 			this.agent.replaceQueues(previousSteeringMessages, previousFollowUpMessages);
 			this.#pendingNextTurnMessages = previousPendingNextTurnMessages;
 			this.#scheduledHiddenNextTurnGeneration = previousScheduledHiddenNextTurnGeneration;
+			this.#inheritedProviderPromptCacheKey = previousInheritedProviderPromptCacheKey;
 			this.#checkpointState = previousCheckpointState;
 			this.#pendingRewindReport = previousPendingRewindReport;
 			this.#lastCompletedRewind = previousLastCompletedRewind;
@@ -14928,6 +14973,7 @@ export class AgentSession {
 		this.#rehydrateCheckpointRewindState();
 		this.#syncTodoPhasesFromBranch();
 		this.#freshProviderSessionId = undefined;
+		this.#clearInheritedProviderPromptCacheKey();
 		this.#syncAgentSessionId();
 		this.#rekeyHindsightMemoryForCurrentSessionId();
 		this.#rekeyMnemopiMemoryForCurrentSessionId();

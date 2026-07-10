@@ -32,10 +32,14 @@ export interface SessionHeader {
 	timestamp: string;
 	cwd: string;
 	parentSession?: string;
+	/** Provider prompt-cache identity inherited by exact-route full forks. */
+	providerPromptCacheKey?: string;
 }
 
 export interface NewSessionOptions {
 	parentSession?: string;
+	/** Provider prompt-cache identity to seed on the new session header. */
+	providerPromptCacheKey?: string;
 	/** Skip flushing the current session and delete it instead of saving. */
 	drop?: boolean;
 }
