@@ -972,6 +972,100 @@ export function nvidiaModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
+// 5.5 Novita
+// ---------------------------------------------------------------------------
+
+export interface NovitaModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+function novitaArrayIncludes(value: unknown, expected: string): boolean {
+	return Array.isArray(value) && value.some(item => item === expected);
+}
+
+function isPublicNovitaModelId(id: string): boolean {
+	return !id.toLowerCase().startsWith("ai_infer_test");
+}
+
+function toNovitaCostPerMillion(value: unknown): number {
+	return toPositiveNumber(value, 0) / 1000;
+}
+
+function getNovitaCacheReadPricePerMillion(entry: OpenAICompatibleModelRecord): number {
+	const pricing = entry.pricing;
+	if (!isRecord(pricing)) {
+		return 0;
+	}
+	const cacheRead = pricing.input_cache_read;
+	if (!isRecord(cacheRead)) {
+		return 0;
+	}
+	return toNovitaCostPerMillion(cacheRead.price_per_m);
+}
+
+function mapNovitaModel(
+	entry: OpenAICompatibleModelRecord,
+	defaults: ModelSpec<"openai-completions">,
+	reference: ModelSpec<"openai-completions"> | undefined,
+): ModelSpec<"openai-completions"> {
+	const model = mapWithBundledReference(
+		{
+			...entry,
+			name: entry.display_name ?? entry.title ?? entry.name,
+		},
+		defaults,
+		reference,
+	);
+	return {
+		...model,
+		reasoning: novitaArrayIncludes(entry.features, "reasoning"),
+		supportsTools: novitaArrayIncludes(entry.features, "function-calling"),
+		input: toInputCapabilities(entry.input_modalities),
+		cost: {
+			input: toNovitaCostPerMillion(entry.input_token_price_per_m),
+			output: toNovitaCostPerMillion(entry.output_token_price_per_m),
+			cacheRead: getNovitaCacheReadPricePerMillion(entry),
+			cacheWrite: 0,
+		},
+		contextWindow: toPositiveNumber(entry.context_size, model.contextWindow),
+		maxTokens: toPositiveNumber(entry.max_output_tokens, model.maxTokens),
+	};
+}
+
+export function novitaModelManagerOptions(
+	config?: NovitaModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? "https://api.novita.ai/openai/v1";
+	const references = createBundledReferenceMap<"openai-completions">(
+		"novita" as Parameters<typeof getBundledModels>[0],
+	);
+	return {
+		providerId: "novita",
+		fetchDynamicModels: async () =>
+			fetchOpenAICompatibleModels({
+				api: "openai-completions",
+				provider: "novita",
+				baseUrl,
+				apiKey,
+				mapModel: (entry, defaults) => mapNovitaModel(entry, defaults, references.get(defaults.id)),
+				filterModel: (entry, model) => {
+					const active = typeof entry.status !== "number" || entry.status === 1;
+					return (
+						active &&
+						isPublicNovitaModelId(model.id) &&
+						novitaArrayIncludes(entry.endpoints, "chat/completions") &&
+						model.maxTokens !== 0
+					);
+				},
+				fetch: config?.fetch,
+			}),
+	};
+}
+
+// ---------------------------------------------------------------------------
 // 6. xAI
 // ---------------------------------------------------------------------------
 
