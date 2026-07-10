@@ -8,6 +8,7 @@ export const OPENAI_HEADERS = {
 	BETA: "OpenAI-Beta",
 	ACCOUNT_ID: "chatgpt-account-id",
 	ORIGINATOR: "originator",
+	VERSION: "version",
 	SESSION_ID: "session_id",
 	CONVERSATION_ID: "conversation_id",
 	SCOPED_SESSION_ID: "session-id",

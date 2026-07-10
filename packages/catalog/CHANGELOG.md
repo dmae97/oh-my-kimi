@@ -19,6 +19,9 @@
 ### Removed
 
 - Removed the generated GPT-5.6 pro-reasoning aliases (`gpt-5.6-{luna,sol,terra}-pro`) from the `openai-codex` subscription provider — pro reasoning is not offered on subscriptions; the `openai` API-key aliases remain
+### Fixed
+
+- Fixed OpenAI Codex model discovery to include the Codex `version` header alongside the `client_version` query parameter.
 
 ## [16.4.0] - 2026-07-10
 
