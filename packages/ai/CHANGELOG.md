@@ -7,6 +7,9 @@
 ### Changed
 
 - Enforced `all_turns` reasoning context for all Responses Lite requests
+### Fixed
+
+- Fixed shared SQLite OAuth refreshes to use durable credential-row ownership plus compare-and-set persistence, preventing stale refresh failures from deleting or overwriting a peer's rotated credential. ([#5081](https://github.com/can1357/oh-my-pi/issues/5081))
 
 ## [16.4.0] - 2026-07-10
 
