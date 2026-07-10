@@ -59,6 +59,34 @@ export function slugifyAdvisorName(name: string): string {
 	return slug || "advisor";
 }
 
+const UUID_V7_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const ADVISOR_PROVIDER_SESSION_KEY_SEPARATOR = "\u0000";
+
+/**
+ * Returns a stable provider-facing UUIDv7 for one advisor within one primary session.
+ *
+ * Codex treats `session_id`/`conversation_id` as a UUID-shaped routing identity,
+ * so advisor labels such as `-advisor` stay local-only.
+ */
+export function getOrCreateAdvisorProviderSessionId(
+	ids: Map<string, string>,
+	primarySessionId: string | undefined,
+	slug: string,
+	randomSessionId: () => string = () => Bun.randomUUIDv7(),
+): string | undefined {
+	if (!primarySessionId) return undefined;
+	const key = `${primarySessionId}${ADVISOR_PROVIDER_SESSION_KEY_SEPARATOR}${slug}`;
+	const existing = ids.get(key);
+	if (existing) return existing;
+
+	const next = randomSessionId();
+	if (!UUID_V7_PATTERN.test(next)) {
+		throw new Error("Advisor provider session id generator returned a non-UUIDv7 value");
+	}
+	ids.set(key, next);
+	return next;
+}
+
 /** Built tool names, for validating an advisor's `tools` list. */
 const KNOWN_TOOL_NAMES = new Set<string>(BUILTIN_TOOL_NAMES);
 

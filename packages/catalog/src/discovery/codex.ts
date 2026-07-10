@@ -30,6 +30,7 @@ const codexModelEntrySchema = type({
 	"supported_in_api?": "unknown",
 	"priority?": "unknown",
 	"prefer_websockets?": "unknown",
+	"use_responses_lite?": "unknown",
 });
 
 const codexModelsResponseSchema = type({
@@ -262,6 +263,7 @@ function normalizeCodexModelEntry(entry: unknown, baseUrl: string): NormalizedCo
 	const reasoning = supportsReasoning(payload.default_reasoning_level, payload.supported_reasoning_levels);
 	const input = normalizeInputModalities(payload.input_modalities);
 	const preferWebsockets = toBoolean(payload.prefer_websockets) === true;
+	const useResponsesLite = toBoolean(payload.use_responses_lite) === true;
 	const priority = toFiniteNumber(payload.priority) ?? Number.MAX_SAFE_INTEGER;
 
 	return {
@@ -279,6 +281,7 @@ function normalizeCodexModelEntry(entry: unknown, baseUrl: string): NormalizedCo
 			contextWindow,
 			maxTokens,
 			...(preferWebsockets ? { preferWebsockets: true } : {}),
+			...(useResponsesLite ? { useResponsesLite: true } : {}),
 			...(priority !== Number.MAX_SAFE_INTEGER ? { priority } : {}),
 		},
 	};
