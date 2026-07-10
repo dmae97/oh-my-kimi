@@ -1076,6 +1076,7 @@ export const OPENAI_RESPONSES_PROGRESS_EVENT_TYPES: ReadonlySet<string> = new Se
 	"response.output_item.added",
 	"response.reasoning_summary_part.added",
 	"response.reasoning_summary_text.delta",
+	"response.reasoning_summary_text.done",
 	"response.reasoning_summary_part.done",
 	"response.reasoning_text.delta",
 	"response.content_part.added",
@@ -1738,6 +1739,33 @@ export function appendReasoningSummaryPartDone(
 	block.thinking += "\n\n";
 	lastPart.text += "\n\n";
 	stream.push({ type: "thinking_delta", contentIndex, delta: "\n\n", partial: output });
+}
+
+/**
+ * Applies an atomic `response.reasoning_summary_text.done` event (concurrent
+ * reasoning summaries, `stream_options.reasoning_summary_delivery:
+ * "sequential_cutoff"`). The event carries the FULL text for `summaryIndex`;
+ * incremental `.delta`/`.part.*` events are ignored under this contract, so
+ * the whole part is stored and streamed here. Parts after the first are
+ * separated by a section break, mirroring codex-rs.
+ */
+export function applyReasoningSummaryDone(
+	item: ResponseReasoningItem,
+	block: ThinkingContent,
+	text: string,
+	summaryIndex: number,
+	stream: AssistantMessageEventStream,
+	output: AssistantMessage,
+	contentIndex: number,
+): void {
+	item.summary = item.summary || [];
+	while (item.summary.length <= summaryIndex) {
+		item.summary.push({ type: "summary_text", text: "" });
+	}
+	item.summary[summaryIndex].text = text;
+	const delta = summaryIndex > 0 ? `\n\n${text}` : text;
+	block.thinking += delta;
+	stream.push({ type: "thinking_delta", contentIndex, delta, partial: output });
 }
 
 export function appendMessageContentPart(

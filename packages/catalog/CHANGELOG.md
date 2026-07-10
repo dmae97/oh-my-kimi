@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Grok 4.5 model family
+- Added support for Dolphin Mistral 24b Venice Edition
+- Added GLM5.2-Fast model
+- Added Zenmux variants for GPT-5.6 (Luna, Sol, and Terra)
+
+- Added `useResponsesLite` to `Model`/`ModelSpec` and Codex discovery parsing of the upstream `use_responses_lite` flag; regenerated `models.json` marks the GPT-5.6 family (`sol`/`terra`/`luna` and their pro aliases) for the Responses Lite transport. Added the `x-openai-internal-codex-responses-lite` marker to `OPENAI_HEADERS`.
+
+### Changed
+
+- Updated costs and context windows for various models in the catalog
+
 ## [16.3.15] - 2026-07-09
 
 ### Added

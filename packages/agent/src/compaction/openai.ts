@@ -16,6 +16,7 @@
  */
 
 import { ProviderHttpError } from "@oh-my-pi/pi-ai/error";
+import { applyCodexResponsesLiteShape } from "@oh-my-pi/pi-ai/providers/openai-codex/request-transformer";
 import { parseAzureDeploymentNameMap, parseTextSignature } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import { transformMessages } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import type { Api, AssistantMessage, FetchImpl, Message, Model } from "@oh-my-pi/pi-ai/types";
@@ -493,6 +494,13 @@ export async function requestOpenAiRemoteCompaction(
 		}
 		headers[OPENAI_HEADERS.BETA] = OPENAI_HEADER_VALUES.BETA_RESPONSES;
 		headers[OPENAI_HEADERS.ORIGINATOR] = OPENAI_HEADER_VALUES.ORIGINATOR_CODEX;
+		// Responses Lite models take the same rewrite on `/responses/compact`:
+		// instructions ride as an input item and the lite marker header is set
+		// (codex-rs routes compaction through `build_responses_request`).
+		if (model.useResponsesLite) {
+			applyCodexResponsesLiteShape(request);
+			headers[OPENAI_HEADERS.RESPONSES_LITE] = "true";
+		}
 	}
 
 	const response = await (opts?.fetch ?? fetch)(endpoint, {

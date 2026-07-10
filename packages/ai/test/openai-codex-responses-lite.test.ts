@@ -9,6 +9,7 @@ import {
 	convertCodexResponsesMessages,
 	streamOpenAICodexResponses,
 } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
+import { isOpenAIResponsesProgressEvent } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import type { Context, FetchImpl } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { createCodexModel } from "./helpers";
@@ -191,7 +192,7 @@ describe("openai-codex reasoning.summary", () => {
 });
 
 describe("openai-codex Responses Lite input shaping", () => {
-	it("keeps full Responses image details when a requested lite body contains images", async () => {
+	it("strips image detail and keeps lite when the input contains images", async () => {
 		const model = createCodexModel("gpt-5.1-codex");
 		const makeInput = (): InputItem[] => [
 			{
@@ -211,10 +212,11 @@ describe("openai-codex Responses Lite input shaping", () => {
 		];
 
 		const lite = await transformRequestBody({ model: model.id, input: makeInput() }, model, { responsesLite: true });
-		const liteMessage = lite.input?.[0]?.content as Array<Record<string, unknown>>;
-		const liteOutput = lite.input?.[2]?.output as Array<Record<string, unknown>>;
-		expect(liteMessage[1]).toEqual({ type: "input_image", detail: "auto", image_url: "data:image/png;base64,AAAA" });
-		expect(liteOutput[0]).toEqual({ type: "input_image", detail: "high", image_url: "data:image/png;base64,BBBB" });
+		expect(lite.input?.[0]).toEqual({ type: "additional_tools", role: "developer", tools: [] });
+		const liteMessage = lite.input?.[1]?.content as Array<Record<string, unknown>>;
+		const liteOutput = lite.input?.[3]?.output as Array<Record<string, unknown>>;
+		expect(liteMessage[1]).toEqual({ type: "input_image", image_url: "data:image/png;base64,AAAA" });
+		expect(liteOutput[0]).toEqual({ type: "input_image", image_url: "data:image/png;base64,BBBB" });
 
 		const plain = await transformRequestBody({ model: model.id, input: makeInput() }, model, {});
 		const plainMessage = plain.input?.[0]?.content as Array<Record<string, unknown>>;
@@ -253,7 +255,7 @@ describe("openai-codex Responses Lite input shaping", () => {
 		});
 	});
 
-	it("forces parallel_tool_calls off under lite when tools are present", async () => {
+	it("forces parallel_tool_calls off and moves tools into input under lite", async () => {
 		const model = createCodexModel("gpt-5.1-codex");
 		const tools = [{ type: "function", name: "shot", parameters: { type: "object" } }];
 
@@ -261,12 +263,57 @@ describe("openai-codex Responses Lite input shaping", () => {
 			responsesLite: true,
 		});
 		expect(lite.parallel_tool_calls).toBe(false);
+		expect(lite.tools).toBeUndefined();
+		expect(lite.input?.[0]).toEqual({ type: "additional_tools", role: "developer", tools });
 
 		const plain = await transformRequestBody({ model: model.id, tools, parallel_tool_calls: true }, model, {});
 		expect(plain.parallel_tool_calls).toBe(true);
+		expect(plain.tools).toEqual(tools);
 
 		const noTools = await transformRequestBody({ model: model.id }, model, { responsesLite: true });
-		expect(noTools.parallel_tool_calls).toBeUndefined();
+		expect(noTools.parallel_tool_calls).toBe(false);
+	});
+
+	it("moves instructions and tools into input items under lite", async () => {
+		const model = createCodexModel("gpt-5.6-terra");
+		const tools = [{ type: "function", name: "shot", parameters: { type: "object" } }];
+		const body = await transformRequestBody(
+			{
+				model: model.id,
+				instructions: "test instructions",
+				tools,
+				input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hello" }] }],
+			},
+			model,
+			{ responsesLite: true },
+		);
+
+		expect(body.instructions).toBeUndefined();
+		expect(body.tools).toBeUndefined();
+		expect(body.input?.[0]).toEqual({ type: "additional_tools", role: "developer", tools });
+		expect(body.input?.[1]).toEqual({
+			type: "message",
+			role: "developer",
+			content: [{ type: "input_text", text: "test instructions" }],
+		});
+		expect(body.input?.[2]).toEqual({
+			type: "message",
+			role: "user",
+			content: [{ type: "input_text", text: "hello" }],
+		});
+	});
+
+	it("defaults lite from the model useResponsesLite flag and honors explicit opt-out", async () => {
+		const model = createCodexModel("gpt-5.6-terra", { useResponsesLite: true });
+		const lite = await transformRequestBody({ model: model.id, instructions: "sys" }, model, {});
+		expect(lite.instructions).toBeUndefined();
+		expect(lite.input?.[0]?.type).toBe("additional_tools");
+
+		const optOut = await transformRequestBody({ model: model.id, instructions: "sys" }, model, {
+			responsesLite: false,
+		});
+		expect(optOut.instructions).toBe("sys");
+		expect(optOut.input?.some(item => item.type === "additional_tools")).toBe(false);
 	});
 });
 
@@ -342,7 +389,7 @@ describe("openai-codex Responses Lite and client metadata wire format", () => {
 		expect(captured?.headers.get("x-openai-internal-codex-responses-lite")).toBe("true");
 		expect(captured?.body.client_metadata).toEqual(clientMetadata);
 	});
-	it("falls back to full Responses when a lite request contains images", async () => {
+	it("keeps lite and strips image detail when a lite request contains images", async () => {
 		const model = buildModel({
 			id: "gpt-5.5",
 			name: "GPT-5.5",
@@ -382,16 +429,36 @@ describe("openai-codex Responses Lite and client metadata wire format", () => {
 		).result();
 
 		expect(result.stopReason).toBe("stop");
-		expect(captured?.headers.get("x-openai-internal-codex-responses-lite")).toBeNull();
+		expect(captured?.headers.get("x-openai-internal-codex-responses-lite")).toBe("true");
 		expect(captured?.body.input).toEqual([
+			{ type: "additional_tools", role: "developer", tools: [] },
 			{
 				role: "user",
 				content: [
 					{ type: "input_text", text: "read this image" },
-					{ type: "input_image", detail: "auto", image_url: "data:image/png;base64,AAAA" },
+					{ type: "input_image", image_url: "data:image/png;base64,AAAA" },
 				],
 			},
 		]);
+	});
+
+	it("sends the lite header when the model defaults to Responses Lite", async () => {
+		const model = createCodexModel("gpt-5.6-terra", { useResponsesLite: true });
+		let captured: CapturedCodexRequest | undefined;
+		const fetchMock = createCodexFetchMock(createCodexSse(COMPLETED_CODEX_EVENTS), request => {
+			captured = request;
+		});
+
+		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			apiKey: createCodexTestToken(),
+			fetch: fetchMock,
+		}).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(captured?.headers.get("x-openai-internal-codex-responses-lite")).toBe("true");
+		expect(captured?.body.instructions).toBeUndefined();
+		expect(captured?.body.tools).toBeUndefined();
+		expect((captured?.body.input as Array<Record<string, unknown>>)[0]?.type).toBe("additional_tools");
 	});
 
 	it("omits the lite header and client_metadata when not requested", async () => {
@@ -465,5 +532,141 @@ describe("openai-codex websocket append with client metadata", () => {
 		const body: RequestBody = { model: model.id, client_metadata: { "x-codex-turn-metadata": "{}" } };
 		const transformed = await transformRequestBody(body, model, {});
 		expect(transformed.client_metadata).toEqual({ "x-codex-turn-metadata": "{}" });
+	});
+});
+
+describe("openai-codex concurrent reasoning summaries", () => {
+	it("counts atomic summary dones as websocket watchdog progress", () => {
+		expect(isOpenAIResponsesProgressEvent({ type: "response.reasoning_summary_text.done" })).toBe(true);
+	});
+
+	it("sends stream_options only when a summary is requested and supported", async () => {
+		const terra = createCodexModel("gpt-5.6-terra");
+		const withSummary = await transformRequestBody({ model: terra.id }, terra, { reasoningEffort: "medium" });
+		expect(withSummary.stream_options).toEqual({ reasoning_summary_delivery: "sequential_cutoff" });
+
+		const suppressed = await transformRequestBody({ model: terra.id }, terra, {
+			reasoningEffort: "medium",
+			reasoningSummary: null,
+		});
+		expect(suppressed.stream_options).toBeUndefined();
+
+		const noReasoning = await transformRequestBody({ model: terra.id }, terra, {});
+		expect(noReasoning.stream_options).toBeUndefined();
+
+		const legacy = createCodexModel("gpt-5.1-codex");
+		const unsupported = await transformRequestBody({ model: legacy.id }, legacy, { reasoningEffort: "medium" });
+		expect(unsupported.stream_options).toBeUndefined();
+	});
+
+	it("decodes atomic summary dones and ignores legacy deltas under sequential cutoff", async () => {
+		const model = createCodexModel("gpt-5.6-terra");
+		const events: Array<Record<string, unknown>> = [
+			{
+				type: "response.output_item.added",
+				output_index: 0,
+				item: { type: "reasoning", id: "reason_1", summary: [] },
+			},
+			{
+				type: "response.reasoning_summary_part.added",
+				item_id: "reason_1",
+				output_index: 0,
+				summary_index: 0,
+				part: { type: "summary_text", text: "" },
+			},
+			{
+				type: "response.reasoning_summary_text.delta",
+				item_id: "reason_1",
+				output_index: 0,
+				summary_index: 0,
+				delta: "IGNORED",
+			},
+			{
+				type: "response.reasoning_summary_text.done",
+				item_id: "reason_1",
+				output_index: 0,
+				summary_index: 0,
+				text: "First part",
+			},
+			{
+				type: "response.reasoning_summary_text.done",
+				item_id: "reason_1",
+				output_index: 0,
+				summary_index: 1,
+				text: "Second part",
+			},
+			{
+				type: "response.output_item.done",
+				output_index: 0,
+				item: {
+					type: "reasoning",
+					id: "reason_1",
+					summary: [
+						{ type: "summary_text", text: "First part" },
+						{ type: "summary_text", text: "Second part" },
+					],
+				},
+			},
+			{
+				type: "response.output_item.added",
+				output_index: 1,
+				item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
+			},
+			{ type: "response.content_part.added", part: { type: "output_text", text: "" } },
+			{ type: "response.output_text.delta", item_id: "msg_1", output_index: 1, delta: "Hello" },
+			{
+				type: "response.reasoning_summary_text.done",
+				item_id: "reason_1",
+				output_index: 0,
+				summary_index: 2,
+				text: "STALE",
+			},
+			{
+				type: "response.output_item.done",
+				output_index: 1,
+				item: {
+					type: "message",
+					id: "msg_1",
+					role: "assistant",
+					status: "completed",
+					content: [{ type: "output_text", text: "Hello" }],
+				},
+			},
+			{
+				type: "response.completed",
+				response: {
+					status: "completed",
+					usage: {
+						input_tokens: 5,
+						output_tokens: 3,
+						total_tokens: 8,
+						input_tokens_details: { cached_tokens: 0 },
+					},
+				},
+			},
+		];
+		let captured: CapturedCodexRequest | undefined;
+		const fetchMock = createCodexFetchMock(createCodexSse(events), request => {
+			captured = request;
+		});
+
+		const stream = streamOpenAICodexResponses(model, createCodexTestContext(), {
+			apiKey: createCodexTestToken(),
+			fetch: fetchMock,
+			reasoning: "medium",
+		});
+		const thinkingDeltas: string[] = [];
+		for await (const event of stream) {
+			if (event.type === "thinking_delta") thinkingDeltas.push(event.delta);
+		}
+		const result = await stream.result();
+
+		expect(captured?.body.stream_options).toEqual({ reasoning_summary_delivery: "sequential_cutoff" });
+		expect(thinkingDeltas).toEqual(["First part", "\n\nSecond part"]);
+		expect(result.stopReason).toBe("stop");
+		const thinking = result.content.find(block => block.type === "thinking");
+		expect(thinking?.thinking).toBe("First part\n\nSecond part");
+		const text = result.content.find(block => block.type === "text");
+		expect(text?.text).toBe("Hello");
 	});
 });

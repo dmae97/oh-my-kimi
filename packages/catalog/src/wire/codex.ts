@@ -10,6 +10,8 @@ export const OPENAI_HEADERS = {
 	ORIGINATOR: "originator",
 	SESSION_ID: "session_id",
 	CONVERSATION_ID: "conversation_id",
+	/** Responses Lite transport marker (codex-rs `add_responses_lite_header`); value is always `"true"`. */
+	RESPONSES_LITE: "x-openai-internal-codex-responses-lite",
 } as const;
 
 export const OPENAI_HEADER_VALUES = {

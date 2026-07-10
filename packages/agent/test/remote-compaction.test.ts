@@ -393,6 +393,105 @@ describe("requestCompactionV2Streaming", () => {
 	});
 });
 
+describe("Responses Lite remote compaction", () => {
+	function makeCodexLiteModel(): Model<"openai-codex-responses"> {
+		return buildModel({
+			id: "gpt-5.6-terra",
+			name: "GPT-5.6 Terra",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.example/backend-api",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 372000,
+			maxTokens: 128000,
+			useResponsesLite: true,
+			remoteCompaction: { enabled: true, api: "openai-codex-responses", v2StreamingEnabled: true },
+		});
+	}
+
+	interface CapturedLiteRequest {
+		instructions?: unknown;
+		tools?: unknown;
+		input?: Array<Record<string, unknown>>;
+	}
+
+	function captureLite(init: RequestInit | undefined): { body: CapturedLiteRequest; liteHeader?: string } {
+		if (!init?.headers || init.headers instanceof Headers || Array.isArray(init.headers)) {
+			throw new Error("Expected remote compaction to send headers as a plain object");
+		}
+		const rawLite = init.headers["x-openai-internal-codex-responses-lite"];
+		return {
+			body: JSON.parse(String(init.body)) as CapturedLiteRequest,
+			liteHeader: typeof rawLite === "string" ? rawLite : undefined,
+		};
+	}
+
+	test("V1 compaction sends the lite header and input-item instructions", async () => {
+		const model = makeCodexLiteModel();
+		let captured: { body: CapturedLiteRequest; liteHeader?: string } | undefined;
+		const fetchMock: FetchImpl = async (_input, init) => {
+			captured = captureLite(init);
+			return Response.json({ output: [{ type: "compaction", encrypted_content: "enc" }] });
+		};
+
+		await requestOpenAiRemoteCompaction(
+			model,
+			"test-key",
+			[{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+			"compact instructions",
+			undefined,
+			{ fetch: fetchMock },
+		);
+
+		expect(captured?.liteHeader).toBe("true");
+		expect(captured?.body.instructions).toBeUndefined();
+		expect(captured?.body.tools).toBeUndefined();
+		expect(captured?.body.input?.[0]).toEqual({ type: "additional_tools", role: "developer", tools: [] });
+		expect(captured?.body.input?.[1]).toEqual({
+			type: "message",
+			role: "developer",
+			content: [{ type: "input_text", text: "compact instructions" }],
+		});
+	});
+
+	test("V2 streaming compaction applies the lite rewrite and keeps the trigger last", async () => {
+		const model = makeCodexLiteModel();
+		const request = buildCompactionV2Request(
+			model,
+			[{ type: "message", role: "user", content: [{ type: "input_text", text: "real user" }] }],
+			"compact instructions",
+		);
+		let captured: { body: CapturedLiteRequest; liteHeader?: string } | undefined;
+		const fetchMock: FetchImpl = async (_input, init) => {
+			captured = captureLite(init);
+			return sseResponse([
+				{
+					type: "response.output_item.done",
+					output_index: 0,
+					item: { type: "compaction", encrypted_content: "enc" },
+				},
+				{ type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } },
+			]);
+		};
+
+		expect(shouldUseCompactionV2Streaming(model)).toBe(true);
+		await requestCompactionV2Streaming(model, "test-key", request, undefined, { fetch: fetchMock });
+
+		expect(captured?.liteHeader).toBe("true");
+		expect(captured?.body.instructions).toBeUndefined();
+		expect(captured?.body.tools).toBeUndefined();
+		expect(captured?.body.input?.[0]).toEqual({ type: "additional_tools", role: "developer", tools: [] });
+		expect(captured?.body.input?.[1]).toEqual({
+			type: "message",
+			role: "developer",
+			content: [{ type: "input_text", text: "compact instructions" }],
+		});
+		expect(captured?.body.input?.at(-1)).toEqual({ type: "compaction_trigger" });
+	});
+});
+
 test("uses configured OpenAI-compatible compaction for custom providers", async () => {
 	const model = makeOpenAiModel({
 		provider: "cliproxy-codex",

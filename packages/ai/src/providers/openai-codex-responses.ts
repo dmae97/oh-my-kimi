@@ -65,7 +65,7 @@ import {
 	type CodexRequestOptions,
 	type InputItem,
 	type RequestBody,
-	shouldUseCodexResponsesLite,
+	resolveCodexResponsesLite,
 	transformRequestBody,
 } from "./openai-codex/request-transformer";
 import { CodexApiError } from "./openai-codex/response-handler";
@@ -88,6 +88,7 @@ import {
 	appendReasoningSummaryTextDelta,
 	appendResponsesToolResultMessages,
 	applyOpenAIServiceTier,
+	applyReasoningSummaryDone,
 	buildResponsesDeltaInput,
 	convertResponsesAssistantMessage,
 	convertResponsesInputContent,
@@ -117,11 +118,13 @@ export interface OpenAICodexResponsesOptions extends StreamOptions {
 	preferWebsockets?: boolean;
 	serviceTier?: ServiceTier;
 	/**
-	 * Opt into the Responses Lite transport contract. Sends
+	 * Responses Lite transport override; defaults to the model's catalog
+	 * `useResponsesLite` flag (codex-rs `use_responses_lite`). Sends
 	 * `x-openai-internal-codex-responses-lite: true` on HTTP requests and on the
 	 * WebSocket upgrade (the marker is connection-scoped there, so lite and
-	 * non-lite turns never share a pooled socket), strips image detail from
-	 * input, and disables parallel tool calling — mirroring codex-rs.
+	 * non-lite turns never share a pooled socket), moves instructions/tools
+	 * into input items, strips image detail, and disables parallel tool
+	 * calling — mirroring codex-rs.
 	 */
 	responsesLite?: boolean;
 	/**
@@ -186,7 +189,6 @@ const CODEX_RETRYABLE_EVENT_MESSAGE =
 const CODEX_PROVIDER_SESSION_STATE_KEY = "openai-codex-responses";
 const X_CODEX_TURN_STATE_HEADER = "x-codex-turn-state";
 const X_MODELS_ETAG_HEADER = "x-models-etag";
-const X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER = "x-openai-internal-codex-responses-lite";
 /** WebSocket frames cannot carry per-request HTTP headers; codex-rs mirrors the lite marker into `client_metadata` under this key. */
 const CODEX_WS_RESPONSES_LITE_CLIENT_METADATA_KEY = "ws_request_header_x_openai_internal_codex_responses_lite";
 /** `response.metadata` payload key carrying ChatGPT moderation metadata. */
@@ -913,7 +915,7 @@ async function buildCodexRequestContext(
 	};
 
 	const providerSessionState = getCodexProviderSessionState(options?.providerSessionState);
-	const responsesLite = shouldUseCodexResponsesLite(transformedBody, options?.responsesLite);
+	const responsesLite = resolveCodexResponsesLite(model, options?.responsesLite);
 	const sessionKey = getCodexWebSocketSessionKey(transportSessionId, model, accountId, apiKey, baseUrl, responsesLite);
 	const publicSessionKey = transportSessionId ? `${baseUrl}:${model.id}:${transportSessionId}` : undefined;
 	if (sessionKey && publicSessionKey) {
@@ -1092,6 +1094,14 @@ async function openCodexWebSocketTransport(
 		requestContext.responsesLite,
 	);
 	const requestBodyForState = structuredCloneJSON(requestContext.transformedBody);
+	// `onPayload` may rewrite the outgoing frame (e.g. drop `stream_options`);
+	// recorded state must reflect what was actually sent — the sequential-cutoff
+	// summary decoder keys off it.
+	if (websocketRequest.stream_options === undefined) {
+		delete requestBodyForState.stream_options;
+	} else {
+		requestBodyForState.stream_options = websocketRequest.stream_options;
+	}
 	requestContext.rawRequestDump.body = websocketRequest;
 	CODEX_DEBUG &&
 		logger.debug("[codex] codex websocket request", {
@@ -1324,6 +1334,17 @@ class CodexStreamProcessor {
 		this.startTime = init.startTime;
 	}
 
+	/**
+	 * Whether the request actually sent (post-`onPayload`) opted into
+	 * sequential-cutoff summary delivery: summaries then arrive as atomic
+	 * `response.reasoning_summary_text.done` events and incremental
+	 * `.delta`/`.part.*` events are ignored (mirrors codex-rs
+	 * `uses_sequential_cutoff_reasoning_summaries`).
+	 */
+	get #sequentialCutoffSummaries(): boolean {
+		return this.runtime.requestBodyForState.stream_options?.reasoning_summary_delivery === "sequential_cutoff";
+	}
+
 	async process(): Promise<CodexStreamCompletion> {
 		const { output, stream } = this;
 		stream.push({ type: "start", partial: output });
@@ -1385,6 +1406,7 @@ class CodexStreamProcessor {
 		}
 
 		if (eventType === "response.reasoning_summary_part.added") {
+			if (this.#sequentialCutoffSummaries) return firstTokenTime;
 			if (this.runtime.currentItem?.type === "reasoning") {
 				appendReasoningSummaryPart(
 					this.runtime.currentItem,
@@ -1395,6 +1417,7 @@ class CodexStreamProcessor {
 		}
 
 		if (eventType === "response.reasoning_summary_text.delta") {
+			if (this.#sequentialCutoffSummaries) return firstTokenTime;
 			if (this.runtime.currentItem?.type === "reasoning" && this.runtime.currentBlock?.type === "thinking") {
 				appendReasoningSummaryTextDelta(
 					this.runtime.currentItem,
@@ -1403,6 +1426,29 @@ class CodexStreamProcessor {
 					stream,
 					output,
 					output.content.length - 1,
+				);
+			}
+			return firstTokenTime;
+		}
+
+		if (eventType === "response.reasoning_summary_text.done") {
+			// Outside the cutoff contract the text already streamed via `.delta`.
+			if (!this.#sequentialCutoffSummaries) return firstTokenTime;
+			const entry = this.runtime.openItemForEvent(rawEvent);
+			if (entry?.item.type === "reasoning" && entry.block?.type === "thinking") {
+				if (!firstTokenTime) firstTokenTime = performance.now();
+				const summaryIndex =
+					typeof rawEvent.summary_index === "number" && Number.isFinite(rawEvent.summary_index)
+						? Math.trunc(rawEvent.summary_index)
+						: 0;
+				applyReasoningSummaryDone(
+					entry.item,
+					entry.block,
+					typeof rawEvent.text === "string" ? rawEvent.text : "",
+					summaryIndex,
+					stream,
+					output,
+					entry.contentIndex,
 				);
 			}
 			return firstTokenTime;
@@ -1424,6 +1470,7 @@ class CodexStreamProcessor {
 		}
 
 		if (eventType === "response.reasoning_summary_part.done") {
+			if (this.#sequentialCutoffSummaries) return firstTokenTime;
 			if (this.runtime.currentItem?.type === "reasoning" && this.runtime.currentBlock?.type === "thinking") {
 				appendReasoningSummaryPartDone(
 					this.runtime.currentItem,
@@ -2142,7 +2189,7 @@ export async function prewarmOpenAICodexResponses(
 	const transportSessionId = normalizeOpenAIPromptCacheKey(options?.sessionId);
 	const promptCacheKey = transportSessionId;
 	const providerSessionState = getCodexProviderSessionState(options?.providerSessionState);
-	const responsesLite = options?.responsesLite === true;
+	const responsesLite = resolveCodexResponsesLite(model, options?.responsesLite);
 	const sessionKey = getCodexWebSocketSessionKey(transportSessionId, model, accountId, apiKey, baseUrl, responsesLite);
 	const publicSessionKey = transportSessionId ? `${baseUrl}:${model.id}:${transportSessionId}` : undefined;
 	if (publicSessionKey && sessionKey) {
@@ -3372,9 +3419,9 @@ function createCodexHeaders(
 		headers.delete(X_MODELS_ETAG_HEADER);
 	}
 	if (responsesLite) {
-		headers.set(X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER, "true");
+		headers.set(OPENAI_HEADERS.RESPONSES_LITE, "true");
 	} else {
-		headers.delete(X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER);
+		headers.delete(OPENAI_HEADERS.RESPONSES_LITE);
 	}
 	if (transport === "sse") {
 		headers.set("accept", "text/event-stream");

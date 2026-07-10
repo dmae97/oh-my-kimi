@@ -9,6 +9,7 @@
 
 import type { Api, FetchImpl, Model } from "@oh-my-pi/pi-ai";
 import { isTransientStatus, ProviderHttpError } from "@oh-my-pi/pi-ai/error";
+import { applyCodexResponsesLiteShape } from "@oh-my-pi/pi-ai/providers/openai-codex/request-transformer";
 import {
 	getOpenAIPromptCacheKey,
 	getOpenAIResponsesRoutingSessionId,
@@ -276,10 +277,22 @@ async function attemptCompactionV2Streaming(
 		instructions: request.instructions,
 		stream: true,
 		store: false,
-		...(request.reasoning ? { reasoning: request.reasoning, include: ["reasoning.encrypted_content"] } : {}),
+		...(request.reasoning
+			? {
+					// Lite implies gpt-5.4+, where codex-rs sends `all_turns` replay.
+					reasoning: model.useResponsesLite ? { ...request.reasoning, context: "all_turns" } : request.reasoning,
+					include: ["reasoning.encrypted_content"],
+				}
+			: {}),
 		...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
 		...(request.tools && request.tools.length > 0 ? { tools: request.tools, tool_choice: "auto" } : {}),
 	};
+	// Responses Lite models take the same rewrite on the compaction stream:
+	// instructions/tools ride as input items (codex-rs `compact_remote_v2`
+	// builds through `build_responses_request`).
+	if (model.useResponsesLite) {
+		applyCodexResponsesLiteShape(body);
+	}
 	const response = await fetchImpl(endpoint, {
 		method: "POST",
 		headers: buildCompactionV2Headers(model, apiKey, request),
@@ -338,6 +351,9 @@ function buildCompactionV2Headers(model: Model, apiKey: string, request: Compact
 		}
 		headers[OPENAI_HEADERS.BETA] = OPENAI_HEADER_VALUES.BETA_RESPONSES;
 		headers[OPENAI_HEADERS.ORIGINATOR] = OPENAI_HEADER_VALUES.ORIGINATOR_CODEX;
+		if (model.useResponsesLite) {
+			headers[OPENAI_HEADERS.RESPONSES_LITE] = "true";
+		}
 	}
 
 	return headers;
