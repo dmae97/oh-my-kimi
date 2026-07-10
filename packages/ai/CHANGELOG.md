@@ -27,6 +27,7 @@
 - Fixed sequential-cutoff Codex reasoning summaries repeating earlier content when atomic summary snapshots are replayed or extended.
 - Fixed error classification for typed AWS credential-resolution failures (`AwsCredentialsError`) to map them to authentication failures. ([#5030](https://github.com/can1357/oh-my-pi/pull/5030) by [@usr-bin-roygbiv](https://github.com/usr-bin-roygbiv))
 - Fixed OpenAI-compatible chat-completions streams preserving vLLM-style trailing cached-token usage chunks so `cacheRead` and billable `input` session stats are accurate ([#5022](https://github.com/can1357/oh-my-pi/issues/5022)).
+- Fixed `xai-oauth/grok-4.5` Responses requests to omit unsupported `reasoning.summary` while preserving the documented `reasoning.effort` payload ([#4998](https://github.com/can1357/oh-my-pi/issues/4998)).
 
 ## [16.3.15] - 2026-07-09
 

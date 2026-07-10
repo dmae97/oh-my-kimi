@@ -11689,10 +11689,10 @@
 				"image"
 			],
 			"cost": {
-				"input": 2,
-				"output": 10,
-				"cacheRead": 0.2,
-				"cacheWrite": 2.5
+				"input": 3,
+				"output": 15,
+				"cacheRead": 0.3,
+				"cacheWrite": 3.75
 			},
 			"contextWindow": 1000000,
 			"maxTokens": 128000,
@@ -13686,7 +13686,7 @@
 				"cacheRead": 0.3,
 				"cacheWrite": 3.75
 			},
-			"contextWindow": 1000000,
+			"contextWindow": 200000,
 			"maxTokens": 64000,
 			"thinking": {
 				"mode": "budget",
@@ -63343,8 +63343,6 @@
 			},
 			"contextWindow": 1050000,
 			"maxTokens": 128000,
-			"requestModelId": "gpt-5.6-luna",
-			"reasoningMode": "pro",
 			"applyPatchToolType": "freeform",
 			"thinking": {
 				"mode": "effort",
@@ -63362,7 +63360,9 @@
 					"high": "xhigh",
 					"xhigh": "max"
 				}
-			}
+			},
+			"requestModelId": "gpt-5.6-luna",
+			"reasoningMode": "pro"
 		},
 		"gpt-5.6-sol": {
 			"id": "gpt-5.6-sol",
@@ -63421,8 +63421,6 @@
 			},
 			"contextWindow": 1050000,
 			"maxTokens": 128000,
-			"requestModelId": "gpt-5.6-sol",
-			"reasoningMode": "pro",
 			"applyPatchToolType": "freeform",
 			"thinking": {
 				"mode": "effort",
@@ -63440,7 +63438,9 @@
 					"high": "xhigh",
 					"xhigh": "max"
 				}
-			}
+			},
+			"requestModelId": "gpt-5.6-sol",
+			"reasoningMode": "pro"
 		},
 		"gpt-5.6-terra": {
 			"id": "gpt-5.6-terra",
@@ -63499,8 +63499,6 @@
 			},
 			"contextWindow": 1050000,
 			"maxTokens": 128000,
-			"requestModelId": "gpt-5.6-terra",
-			"reasoningMode": "pro",
 			"applyPatchToolType": "freeform",
 			"thinking": {
 				"mode": "effort",
@@ -63518,7 +63516,9 @@
 					"high": "xhigh",
 					"xhigh": "max"
 				}
-			}
+			},
+			"requestModelId": "gpt-5.6-terra",
+			"reasoningMode": "pro"
 		},
 		"o1": {
 			"id": "o1",
@@ -64372,8 +64372,6 @@
 			"preferWebsockets": true,
 			"useResponsesLite": true,
 			"priority": 3,
-			"requestModelId": "gpt-5.6-luna",
-			"reasoningMode": "pro",
 			"applyPatchToolType": "freeform",
 			"thinking": {
 				"mode": "effort",
@@ -64391,7 +64389,9 @@
 					"high": "xhigh",
 					"xhigh": "max"
 				}
-			}
+			},
+			"requestModelId": "gpt-5.6-luna",
+			"reasoningMode": "pro"
 		},
 		"gpt-5.6-sol": {
 			"id": "gpt-5.6-sol",
@@ -64466,8 +64466,6 @@
 			"preferWebsockets": true,
 			"useResponsesLite": true,
 			"priority": 1,
-			"requestModelId": "gpt-5.6-sol",
-			"reasoningMode": "pro",
 			"applyPatchToolType": "freeform",
 			"thinking": {
 				"mode": "effort",
@@ -64485,7 +64483,9 @@
 					"high": "xhigh",
 					"xhigh": "max"
 				}
-			}
+			},
+			"requestModelId": "gpt-5.6-sol",
+			"reasoningMode": "pro"
 		},
 		"gpt-5.6-terra": {
 			"id": "gpt-5.6-terra",
@@ -64560,8 +64560,6 @@
 			"preferWebsockets": true,
 			"useResponsesLite": true,
 			"priority": 2,
-			"requestModelId": "gpt-5.6-terra",
-			"reasoningMode": "pro",
 			"applyPatchToolType": "freeform",
 			"thinking": {
 				"mode": "effort",
@@ -64579,7 +64577,9 @@
 					"high": "xhigh",
 					"xhigh": "max"
 				}
-			}
+			},
+			"requestModelId": "gpt-5.6-terra",
+			"reasoningMode": "pro"
 		}
 	},
 	"opencode": {
@@ -88636,6 +88636,14 @@
 			},
 			"contextWindow": 2000000,
 			"maxTokens": 2000000,
+			"compat": {
+				"reasoningEffortMap": {
+					"minimal": "low"
+				},
+				"includeEncryptedReasoning": false,
+				"filterReasoningHistory": true,
+				"omitReasoningEffort": false
+			},
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -88648,14 +88656,6 @@
 				"effortMap": {
 					"minimal": "low"
 				}
-			},
-			"compat": {
-				"reasoningEffortMap": {
-					"minimal": "low"
-				},
-				"includeEncryptedReasoning": false,
-				"filterReasoningHistory": true,
-				"omitReasoningEffort": false
 			}
 		},
 		"grok-4.3": {
@@ -88677,6 +88677,14 @@
 			},
 			"contextWindow": 1000000,
 			"maxTokens": 1000000,
+			"compat": {
+				"reasoningEffortMap": {
+					"minimal": "low"
+				},
+				"includeEncryptedReasoning": false,
+				"filterReasoningHistory": true,
+				"omitReasoningEffort": false
+			},
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -88689,14 +88697,6 @@
 				"effortMap": {
 					"minimal": "low"
 				}
-			},
-			"compat": {
-				"reasoningEffortMap": {
-					"minimal": "low"
-				},
-				"includeEncryptedReasoning": false,
-				"filterReasoningHistory": true,
-				"omitReasoningEffort": false
 			}
 		},
 		"grok-4.5": {
@@ -88737,7 +88737,20 @@
 				},
 				"includeEncryptedReasoning": false,
 				"filterReasoningHistory": true,
-				"omitReasoningEffort": true
+				"omitReasoningEffort": false
+			},
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				],
+				"effortMap": {
+					"minimal": "low"
+				}
 			}
 		},
 		"grok-build": {
