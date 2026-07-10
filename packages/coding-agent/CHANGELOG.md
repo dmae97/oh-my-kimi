@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Codex advisor requests using local `-advisor` session labels as provider session IDs; advisors now use stable UUIDv7 provider identities while keeping labeled transcript names. ([#5040](https://github.com/can1357/oh-my-pi/issues/5040))
+
 ## [16.3.15] - 2026-07-09
 
 ### Changed
