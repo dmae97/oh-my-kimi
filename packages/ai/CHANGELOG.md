@@ -49,6 +49,7 @@
 - Refined account selection logic to correctly identify plan types from account metadata
 - Fixed OpenAI Codex multi-account routing for GPT-5.6: Sol and Luna requests now prefer Plus-or-higher accounts while Terra remains available to Free/Go accounts; local pro-mode aliases inherit their base model's Codex plan eligibility.
 - Fixed xAI Grok OAuth login to use xAI's device authorization flow: `/login` now opens the verification URL, displays the device code, and polls for approval instead of asking for a pasted redirect or linking to Hermes Agent documentation.
+- Fixed Codex OAuth credential selection to re-check blocked accounts during ranking and clear stale usage-limit blocks when live usage shows all reported windows recovered ([#4980](https://github.com/can1357/oh-my-pi/issues/4980)).
 
 ## [16.3.14] - 2026-07-09
 
