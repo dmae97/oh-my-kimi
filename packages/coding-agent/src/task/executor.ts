@@ -88,7 +88,7 @@ const MCP_CALL_TIMEOUT_MS = 60_000;
  * `task.softRequestBudgetNotice`.
  */
 export const SOFT_REQUEST_BUDGET: Record<string, number> = {
-	explore: 40,
+	scout: 40,
 	sonic: 40,
 	default: 90,
 };

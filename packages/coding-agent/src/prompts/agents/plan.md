@@ -2,7 +2,7 @@
 name: plan
 description: Software architect for complex multi-file architectural decisions. NOT for simple tasks, single-file changes, or tasks completable in <5 tool calls.
 tools: read, grep, glob, bash, lsp, web_search, ast_grep
-spawns: explore
+spawns: scout
 model: pi/plan, pi/slow
 ---
 
@@ -19,7 +19,7 @@ Analyze the codebase and the user's request. Produce a detailed implementation p
 4. Identify types, interfaces, contracts
 5. Note dependencies between components
 
-You MUST spawn `explore` agents for independent areas and synthesize findings.
+You MUST spawn `scout` agents for independent areas and synthesize findings.
 
 ## Phase 3: Design
 1. List concrete changes (files, functions, types)

@@ -2,7 +2,13 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Renamed the bundled agent `explore` to `scout` (including renaming its configuration keys, prompt files, and task definitions). Any configurations, allowlists, or invocations referencing `explore` must now use `scout`.
+
 ### Changed
+
+- Renamed the bundled agent `explore` to `scout` (including all internal references, prompt definitions, and task tool configurations). Any custom configurations or task invocations referencing `explore` must now use `scout`.
 
 - Fixed collapsed compacted session transcript rebuilds reattaching snapcompact archive image frames to the live TUI, avoiding large retained JSC heaps on resume and transcript refresh. ([#4979](https://github.com/can1357/oh-my-pi/issues/4979))
 

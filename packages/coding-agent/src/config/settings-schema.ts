@@ -4148,7 +4148,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Subagents",
 			label: "Soft Subagent Request Budget",
 			description:
-				"Soft per-subagent request budget (assistant requests per run). Crossing it can inject a steering notice when task.softRequestBudgetNotice is enabled; at 1.5x the budget the run is aborted gracefully, salvaging partial output. 0 disables the guard. Bundled explore/sonic agents use a lower built-in budget.",
+				"Soft per-subagent request budget (assistant requests per run). Crossing it can inject a steering notice when task.softRequestBudgetNotice is enabled; at 1.5x the budget the run is aborted gracefully, salvaging partial output. 0 disables the guard. Bundled scout/sonic agents use a lower built-in budget.",
 			options: [
 				{ value: "0", label: "Disabled" },
 				{ value: "40", label: "40 requests" },

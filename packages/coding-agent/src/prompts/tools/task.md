@@ -11,10 +11,10 @@ Execution blocks your turn: the call only returns once the work is completely fi
 {{#if ircEnabled}}- **Steering delivery:** Parent-to-subagent IRC is delivered immediately as steering; subagents blocked in `job poll` / `irc wait` do not need to poll separately for it.{{/if}}
 - **Role matching:** Assign each subagent a specific `role` (e.g. "Security Reviewer", "DB Migrator"). Do not spawn generic workers.
 - **No overhead:** Each assignment MUST instruct its agent to skip formatters, linters, and project-wide test suites. You will run those once at the end.
-- **One-pass agents:** Prefer agents that investigate **and** edit in a single pass; only spin a read-only discovery step (e.g. `explore`) when the affected files are genuinely unknown.
+- **One-pass agents:** Prefer agents that investigate **and** edit in a single pass; only spin a read-only discovery step (e.g. `scout`) when the affected files are genuinely unknown.
 
 # Inputs
-- `agent` (optional): The base agent type to use (e.g., `explore`, `reviewer`). Defaults to `{{defaultAgent}}`{{#if defaultAgentIsGeneric}} (the general-purpose worker){{/if}} — omit it for the default worker instead of passing `agent: "{{defaultAgent}}"`.{{#if allowedAgentsText}} Current spawn policy allows: {{allowedAgentsText}}.{{/if}}
+- `agent` (optional): The base agent type to use (e.g., `scout`, `reviewer`). Defaults to `{{defaultAgent}}`{{#if defaultAgentIsGeneric}} (the general-purpose worker){{/if}} — omit it for the default worker instead of passing `agent: "{{defaultAgent}}"`.{{#if allowedAgentsText}} Current spawn policy allows: {{allowedAgentsText}}.{{/if}}
 {{#if batchEnabled}}
 - `context`: Shared project state, constraints, and contracts. Applies to the entire batch; do not duplicate this background into individual tasks.
 - `tasks[]`: Array of subagents to spawn.
