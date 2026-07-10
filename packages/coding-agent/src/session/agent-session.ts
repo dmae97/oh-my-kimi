@@ -156,6 +156,7 @@ import {
 	AdvisorTranscriptRecorder,
 	advisorTranscriptFilename,
 	formatAdvisorBatchContent,
+	getOrCreateAdvisorProviderSessionId,
 	isAdvisorInterruptImmuneTurnActive,
 	isInterruptingSeverity,
 	resolveAdvisorDeliveryChannel,
@@ -1617,6 +1618,8 @@ export class AgentSession {
 	#advisors: ActiveAdvisor[] = [];
 	/** Configured advisor roster from WATCHDOG.yml; undefined/empty → single legacy advisor. */
 	#advisorConfigs?: AdvisorConfig[];
+	/** Provider-facing UUIDv7 identities keyed by primary provider session and advisor slug. */
+	#advisorProviderSessionIds = new Map<string, string>();
 	/** Aggregate of the most recent stop's recorder closes; awaited by dispose() and
 	 *  used as the open barrier for the next build so two writers never share a file. */
 	#advisorRecorderClosed: Promise<void> = Promise.resolve();
@@ -2498,18 +2501,26 @@ export class AgentSession {
 			const names = config.tools?.length ? new Set(config.tools) : ADVISOR_DEFAULT_TOOL_NAMES;
 			const tools = (this.#advisorTools ?? []).filter(t => names.has(t.name));
 
-			const advisorSessionId = this.#advisorSessionId(slug);
+			const primaryProviderSessionId = this.sessionId;
+			const advisorSessionLabel = slug
+				? `${primaryProviderSessionId}-advisor-${slug}`
+				: `${primaryProviderSessionId}-advisor`;
+			const advisorProviderSessionId = getOrCreateAdvisorProviderSessionId(
+				this.#advisorProviderSessionIds,
+				primaryProviderSessionId,
+				slug,
+			);
 			const appendOnlyContext = new AppendOnlyContextManager();
 
 			// Thread the primary's telemetry into the advisor loop so the advisor
-			// model's GenAI spans + usage/cost hooks fire stamped with the advisor's
-			// own identity. `conversationId` is cleared so the advisor loop falls back
-			// to its own session id; undefined telemetry stays undefined.
+			// model's GenAI spans + usage/cost hooks fire stamped with the local advisor
+			// identity. `conversationId` is cleared so provider telemetry falls back to
+			// the UUIDv7 provider session id, not the local `-advisor` label.
 			const advisorTelemetry = this.agent.telemetry
 				? {
 						...this.agent.telemetry,
 						agent: {
-							id: advisorSessionId,
+							id: advisorSessionLabel,
 							name: slug ? `${MODEL_ROLES.advisor.name}: ${advisorName}` : MODEL_ROLES.advisor.name,
 							description: formatModelString(advisorModel),
 						},
@@ -2521,10 +2532,10 @@ export class AgentSession {
 			// advisor's requests cache, route, and obfuscate like the main turn.
 			// `promptCacheKey` preserves an explicitly pinned provider cache key
 			// unchanged so tan/shared-session advisor calls read the exact shard the
-			// parent turn populated, while keeping only `sessionId` advisor-scoped;
-			// sessions without a pinned key fall back to the advisor session id for
-			// stable advisor-local caching (see can1357/oh-my-pi#3639).
-			const advisorPromptCacheKey = this.agent.promptCacheKey ?? advisorSessionId;
+			// parent turn populated. Otherwise the advisor uses its provider UUIDv7 so
+			// Codex request identity remains UUID-shaped while local labels keep the
+			// `-advisor` suffix.
+			const advisorPromptCacheKey = this.agent.promptCacheKey ?? advisorProviderSessionId;
 			const advisorAgent = new Agent({
 				initialState: {
 					systemPrompt,
@@ -2533,11 +2544,11 @@ export class AgentSession {
 					tools: [adviseTool, ...tools],
 				},
 				appendOnlyContext,
-				sessionId: advisorSessionId,
+				sessionId: advisorProviderSessionId,
 				promptCacheKey: advisorPromptCacheKey,
 				providerSessionState: this.#providerSessionState,
 				preferWebsockets: this.#preferWebsockets,
-				getApiKey: requestModel => this.#modelRegistry.resolver(requestModel, advisorSessionId),
+				getApiKey: requestModel => this.#modelRegistry.resolver(requestModel, advisorProviderSessionId),
 				streamFn: this.#advisorStreamFn,
 				onPayload: this.#onPayload,
 				onResponse: this.#onResponse,
@@ -2596,11 +2607,15 @@ export class AgentSession {
 					// suspect-mark a credential on a transient advisor error).
 					const message = error instanceof Error ? error.message : String(error);
 					if (!isUsageLimitOutcome(extractHttpStatusFromError(error), message)) return;
-					await this.#modelRegistry.authStorage.markUsageLimitReached(advisorModel.provider, advisorSessionId, {
-						retryAfterMs: extractRetryHint(undefined, message),
-						baseUrl: advisorModel.baseUrl,
-						modelId: advisorModel.id,
-					});
+					await this.#modelRegistry.authStorage.markUsageLimitReached(
+						advisorModel.provider,
+						advisorProviderSessionId,
+						{
+							retryAfterMs: extractRetryHint(undefined, message),
+							baseUrl: advisorModel.baseUrl,
+							modelId: advisorModel.id,
+						},
+					);
 				},
 				notifyFailure: error => {
 					const message = error instanceof Error ? error.message : String(error);
@@ -2652,13 +2667,6 @@ export class AgentSession {
 		}
 
 		return this.#advisors.length > 0;
-	}
-
-	/** Provider/session id for an advisor's loop. The slug suffix MUST match the
-	 *  advisor's transcript filename so stats/telemetry attribute the same advisor. */
-	#advisorSessionId(slug: string): string | undefined {
-		if (!this.sessionId) return undefined;
-		return slug ? `${this.sessionId}-advisor-${slug}` : `${this.sessionId}-advisor`;
 	}
 
 	/**
@@ -2866,11 +2874,15 @@ export class AgentSession {
 			// No compaction candidates, fallback to re-prime
 			return true;
 		}
-		const advisorSessionId = this.#advisorSessionId(advisor.slug);
+		const advisorProviderSessionId = getOrCreateAdvisorProviderSessionId(
+			this.#advisorProviderSessionIds,
+			this.sessionId,
+			advisor.slug,
+		);
 		const preparation = prepareCompaction(
 			pathEntries,
 			compactionSettings,
-			await this.#runnableCompactionCandidates(candidates, advisorSessionId),
+			await this.#runnableCompactionCandidates(candidates, advisorProviderSessionId),
 		);
 		if (!preparation) {
 			// Cannot prepare compaction, fallback to re-prime
@@ -2890,7 +2902,7 @@ export class AgentSession {
 		let lastError: unknown;
 		// Instrument the advisor's overflow-compaction one-shot like the primary
 		// compaction path so the advisor model's maintenance call also emits spans.
-		const telemetry = resolveTelemetry(agent.telemetry, advisorSessionId);
+		const telemetry = resolveTelemetry(agent.telemetry, advisorProviderSessionId);
 
 		const codexCompaction = createCodexCompactionContext({
 			trigger: "auto",
@@ -2899,14 +2911,14 @@ export class AgentSession {
 		});
 
 		for (const candidate of candidates) {
-			const apiKey = await this.#modelRegistry.getApiKey(candidate, advisorSessionId);
+			const apiKey = await this.#modelRegistry.getApiKey(candidate, advisorProviderSessionId);
 			if (!apiKey) continue;
 
 			try {
 				compactResult = await compact(
 					preparation,
 					candidate,
-					this.#modelRegistry.resolver(candidate, advisorSessionId),
+					this.#modelRegistry.resolver(candidate, advisorProviderSessionId),
 					undefined,
 					undefined,
 					{
@@ -2914,8 +2926,8 @@ export class AgentSession {
 						convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 						telemetry,
 						tools: agent.state.tools,
-						sessionId: advisorSessionId,
-						promptCacheKey: advisorSessionId,
+						sessionId: advisorProviderSessionId,
+						promptCacheKey: advisorProviderSessionId,
 						providerSessionState: this.#providerSessionState,
 						codexCompaction,
 					},

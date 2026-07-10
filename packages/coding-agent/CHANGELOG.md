@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed full-context forks cold-missing OpenAI prompt caches by persisting an inherited provider prompt-cache key separately from the new OMP session id, adding `--prompt-cache-key` for explicit cache affinity, and dropping automatic inheritance when startup changes the model, thinking level, system prompt, or tool schema. ([#5035](https://github.com/can1357/oh-my-pi/issues/5035))
+- Fixed Codex advisor requests using local `-advisor` session labels as provider session IDs; advisors now use stable UUIDv7 provider identities while keeping labeled transcript names. ([#5040](https://github.com/can1357/oh-my-pi/issues/5040))
 
 ## [16.3.15] - 2026-07-09
 
