@@ -2167,7 +2167,7 @@ export class AgentSession {
 			this.#advisorPrimaryTurnsCompleted++;
 			if (this.#advisors.length > 0) {
 				for (const a of this.#advisors) {
-					if (!a.runtime.disposed) a.runtime.onTurnEnd(messages);
+					if (!a.runtime.disposed) a.runtime.onTurnEnd(messages, { willContinue: context?.willContinue });
 				}
 				const syncBacklog = this.settings.get("advisor.syncBacklog");
 				if (syncBacklog !== "off") {
@@ -2695,6 +2695,12 @@ export class AgentSession {
 			logger.debug("advisor advice suppressed by emission guard", { severity, advisor: advisor.name });
 			return;
 		}
+		// When newer primary turns already arrived while the advisor model was
+		// processing this batch, the advice was generated without seeing them.
+		// Append a lightweight staleness caveat so the primary can weigh recency.
+		const deliveredNote = advisor.runtime.hasFreshBacklog
+			? `${note}\n\n_(Note: newer primary turns arrived after this reviewed window — verify this still applies.)_`
+			: note;
 		// The implicit single ("default") advisor stamps no source name, so its
 		// agent-facing `<advisory>` bytes stay identical to the pre-multi-advisor path.
 		const source = advisor.slug ? advisor.name : undefined;
@@ -2710,10 +2716,10 @@ export class AgentSession {
 			interruptImmuneTurnActive: interrupting && this.#isAdvisorInterruptImmuneTurnActive(),
 		});
 		if (channel === "aside") {
-			this.yieldQueue.enqueue("advisor", { note, severity, advisor: source });
+			this.yieldQueue.enqueue("advisor", { note: deliveredNote, severity, advisor: source });
 			return;
 		}
-		const notes: AdvisorNote[] = [{ note, severity, advisor: source }];
+		const notes: AdvisorNote[] = [{ note: deliveredNote, severity, advisor: source }];
 		const content = formatAdvisorBatchContent(notes);
 		const details = { notes } satisfies AdvisorMessageDetails;
 		if (channel === "preserve") {

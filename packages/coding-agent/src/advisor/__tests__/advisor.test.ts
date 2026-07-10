@@ -551,10 +551,14 @@ describe("advisor", () => {
 		it("coalesces multiple onTurnEnd calls while a prompt is in-flight", async () => {
 			const promptInputs: string[] = [];
 			const { promise: firstPromptPromise, resolve: finishFirstPrompt } = Promise.withResolvers<void>();
+			const { promise: secondPromptDone, resolve: finishSecondPrompt } = Promise.withResolvers<void>();
+			let promptCalls = 0;
 			const agent: AdvisorAgent = {
 				prompt: async input => {
 					promptInputs.push(input);
-					await firstPromptPromise;
+					promptCalls++;
+					if (promptCalls === 1) await firstPromptPromise;
+					else finishSecondPrompt();
 				},
 				abort: () => {},
 				reset: () => {},
@@ -575,34 +579,24 @@ describe("advisor", () => {
 			messages.push({ role: "user", content: "second", timestamp: 2 } as AgentMessage);
 			runtime.onTurnEnd();
 			await Promise.resolve();
-			expect(promptInputs).toHaveLength(1);
+			expect(promptInputs).toHaveLength(1); // second prompt not started yet
 
 			finishFirstPrompt();
-			await Promise.resolve();
-			await Promise.resolve();
+			await secondPromptDone;
 			expect(promptInputs).toHaveLength(2);
 			expect(promptInputs[1]).toContain("second");
 		});
 
-		it("budgets only the batch sent after async context maintenance", async () => {
+		it("coalesces late-arriving deltas into the batch after context maintenance", async () => {
 			const promptInputs: string[] = [];
 			const { promise: firstMaintainStarted, resolve: startFirstMaintain } = Promise.withResolvers<void>();
 			const { promise: finishFirstMaintain, resolve: releaseFirstMaintain } = Promise.withResolvers<boolean>();
-			const { promise: firstPromptStarted, resolve: startFirstPrompt } = Promise.withResolvers<void>();
-			const { promise: secondPromptStarted, resolve: startSecondPrompt } = Promise.withResolvers<void>();
-			const { promise: finishFirstPrompt, resolve: releaseFirstPrompt } = Promise.withResolvers<void>();
+			const { promise: promptStarted, resolve: startPrompt } = Promise.withResolvers<void>();
 			let maintainCalls = 0;
-			let promptCalls = 0;
 			const agent: AdvisorAgent = {
 				prompt: async input => {
 					promptInputs.push(input);
-					promptCalls++;
-					if (promptCalls === 1) {
-						startFirstPrompt();
-						await finishFirstPrompt;
-					} else if (promptCalls === 2) {
-						startSecondPrompt();
-					}
+					startPrompt();
 				},
 				abort: () => {},
 				reset: () => {},
@@ -625,19 +619,168 @@ describe("advisor", () => {
 
 			runtime.onTurnEnd();
 			await firstMaintainStarted;
+
+			// Second turn arrives while first maintainContext is still awaiting.
 			messages.push({ role: "user", content: "second", timestamp: 2 } as AgentMessage);
 			runtime.onTurnEnd();
 
 			releaseFirstMaintain(false);
-			await firstPromptStarted;
+			await promptStarted;
+
+			// Both deltas land in a single prompt — late arrival coalesced before agent.prompt().
 			expect(promptInputs).toHaveLength(1);
 			expect(promptInputs[0]).toContain("first");
-			expect(promptInputs[0]).not.toContain("second");
+			expect(promptInputs[0]).toContain("second");
+			// The loop re-checked maintenance for the expanded batch.
+			expect(maintainCalls).toBe(2);
+		});
 
-			releaseFirstPrompt();
-			await secondPromptStarted;
-			expect(promptInputs).toHaveLength(2);
-			expect(promptInputs[1]).toContain("second");
+		it("late-arriving delta that triggers reprime: full replay and correct turn accounting", async () => {
+			const promptInputs: string[] = [];
+			const { promise: firstMaintainStarted, resolve: startFirstMaintain } = Promise.withResolvers<void>();
+			const { promise: finishFirstMaintain, resolve: releaseFirstMaintain } = Promise.withResolvers<boolean>();
+			const { promise: promptStarted, resolve: startPrompt } = Promise.withResolvers<void>();
+			let resetCount = 0;
+			let maintainCalls = 0;
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					startPrompt();
+				},
+				abort: () => {},
+				reset: () => {
+					resetCount++;
+				},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [{ role: "user", content: "turn1", timestamp: 1 } as AgentMessage];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+				maintainContext: async () => {
+					maintainCalls++;
+					if (maintainCalls === 1) {
+						startFirstMaintain();
+						return await finishFirstMaintain;
+					}
+					// Second call (for the merged batch) → reprime.
+					return true;
+				},
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+
+			runtime.onTurnEnd();
+			await firstMaintainStarted;
+
+			messages.push({ role: "user", content: "turn2", timestamp: 2 } as AgentMessage);
+			runtime.onTurnEnd();
+
+			releaseFirstMaintain(false);
+			await promptStarted;
+
+			// Full replay includes both turns.
+			expect(promptInputs).toHaveLength(1);
+			expect(promptInputs[0]).toContain("turn1");
+			expect(promptInputs[0]).toContain("turn2");
+			// Reprime resets the advisor agent.
+			expect(resetCount).toBeGreaterThan(0);
+		});
+
+		it("tags in-progress turns with [in progress] heading", async () => {
+			const promptInputs: string[] = [];
+			const { promise: promptStarted, resolve: startPrompt } = Promise.withResolvers<void>();
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					startPrompt();
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [{ role: "user", content: "hello", timestamp: 1 } as AgentMessage];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+
+			runtime.onTurnEnd(messages, { willContinue: true });
+			await promptStarted;
+
+			expect(promptInputs).toHaveLength(1);
+			expect(promptInputs[0]).toContain("[in progress — more steps follow]");
+		});
+
+		it("uses plain heading when willContinue is false or absent", async () => {
+			const promptInputs: string[] = [];
+			const { promise: promptStarted, resolve: startPrompt } = Promise.withResolvers<void>();
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					startPrompt();
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [{ role: "user", content: "done", timestamp: 1 } as AgentMessage];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+
+			runtime.onTurnEnd(messages);
+			await promptStarted;
+
+			expect(promptInputs).toHaveLength(1);
+			expect(promptInputs[0]).toContain("### Session update\n");
+			expect(promptInputs[0]).not.toContain("[in progress");
+		});
+
+		it("hasFreshBacklog is true only while pending queue is non-empty during a prompt", async () => {
+			const { promise: firstPromptStarted, resolve: startFirstPrompt } = Promise.withResolvers<void>();
+			const { promise: firstPromptDone, resolve: finishFirstPrompt } = Promise.withResolvers<void>();
+			const { promise: secondPromptDone, resolve: finishSecondPrompt } = Promise.withResolvers<void>();
+			let promptCalls = 0;
+			const agent: AdvisorAgent = {
+				prompt: async () => {
+					promptCalls++;
+					if (promptCalls === 1) {
+						startFirstPrompt();
+						await firstPromptDone;
+					} else {
+						finishSecondPrompt();
+					}
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [{ role: "user", content: "a", timestamp: 1 } as AgentMessage];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+
+			runtime.onTurnEnd();
+			await firstPromptStarted;
+
+			// No late arrivals — false while first prompt runs with empty pending.
+			expect(runtime.hasFreshBacklog).toBe(false);
+
+			// Push a second turn while the first prompt is still in-flight.
+			messages.push({ role: "user", content: "b", timestamp: 2 } as AgentMessage);
+			runtime.onTurnEnd();
+			expect(runtime.hasFreshBacklog).toBe(true);
+
+			finishFirstPrompt();
+			await secondPromptDone;
+
+			// After the second turn is fully drained, pending is empty again.
+			expect(runtime.hasFreshBacklog).toBe(false);
 		});
 
 		it("sends the batch when context maintenance fails", async () => {
@@ -661,9 +804,18 @@ describe("advisor", () => {
 			expect(promptInputs[0]).toContain("first");
 		});
 
-		it("excludes advisor custom messages from the rendered delta", () => {
+		it("excludes advisor custom messages from the rendered delta", async () => {
 			const promptInputs: string[] = [];
-			const agent = makeAgent(promptInputs);
+			const { promise: promptStarted, resolve: startPrompt } = Promise.withResolvers<void>();
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					startPrompt();
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
 			const messages: AgentMessage[] = [
 				{ role: "user", content: "hello", timestamp: 1 } as AgentMessage,
 				{ role: "custom", customType: "advisor", content: "note", display: true, timestamp: 2 } as AgentMessage,
@@ -674,6 +826,7 @@ describe("advisor", () => {
 			};
 			const runtime = new AdvisorRuntime(agent, host);
 			runtime.onTurnEnd();
+			await promptStarted;
 			expect(promptInputs).toHaveLength(1);
 			expect(promptInputs[0]).toContain("hello");
 			expect(promptInputs[0]).not.toContain("note");
@@ -882,7 +1035,7 @@ describe("advisor", () => {
 			expect(promptInputs[1]).not.toContain("except the single plan file named below");
 		});
 
-		it("renders the watched delta with a heading, watched-role labels, and no inner ## headings", () => {
+		it("renders the watched delta with a heading, watched-role labels, and no inner ## headings", async () => {
 			const promptInputs: string[] = [];
 			const agent = makeAgent(promptInputs);
 			const messages: AgentMessage[] = [
@@ -920,6 +1073,7 @@ describe("advisor", () => {
 			};
 			const runtime = new AdvisorRuntime(agent, host);
 			runtime.onTurnEnd();
+			await Promise.resolve();
 			expect(promptInputs).toHaveLength(1);
 			const prompt = promptInputs[0];
 			expect(prompt).toContain("### Session update");
@@ -932,7 +1086,7 @@ describe("advisor", () => {
 			expect(prompt.split("**agent**:").length - 1).toBe(1);
 		});
 
-		it("handles compaction shrink without prompting", () => {
+		it("handles compaction shrink without prompting", async () => {
 			const promptInputs: string[] = [];
 			const agent = makeAgent(promptInputs);
 			let messages: AgentMessage[] = [
@@ -945,6 +1099,7 @@ describe("advisor", () => {
 			};
 			const runtime = new AdvisorRuntime(agent, host);
 			runtime.onTurnEnd();
+			await Promise.resolve();
 			expect(promptInputs).toHaveLength(1);
 
 			messages = [{ role: "user", content: "a", timestamp: 1 } as AgentMessage];
@@ -954,7 +1109,18 @@ describe("advisor", () => {
 
 		it("reset re-primes the advisor with the full current transcript", async () => {
 			const promptInputs: string[] = [];
-			const agent = makeAgent(promptInputs);
+			const { promise: secondPromptDone, resolve: finishSecond } = Promise.withResolvers<void>();
+			let promptCalls = 0;
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					promptCalls++;
+					if (promptCalls === 2) finishSecond();
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
 			const messages: AgentMessage[] = [{ role: "user", content: "aaa", timestamp: 1 } as AgentMessage];
 			const host: AdvisorRuntimeHost = {
 				snapshotMessages: () => messages,
@@ -972,7 +1138,7 @@ describe("advisor", () => {
 			runtime.reset();
 
 			runtime.onTurnEnd();
-			await Promise.resolve();
+			await secondPromptDone;
 			// The next turn replays the full post-compaction transcript, not just new tail.
 			expect(promptInputs).toHaveLength(2);
 			expect(promptInputs[1]).toContain("summary-bbb");
@@ -980,10 +1146,16 @@ describe("advisor", () => {
 
 		it("triggers a re-prime and full replay when maintainContext returns true", async () => {
 			const promptInputs: string[] = [];
+			const { promise: firstPromptDone, resolve: finishFirst } = Promise.withResolvers<void>();
+			const { promise: secondPromptDone, resolve: finishSecond } = Promise.withResolvers<void>();
+			let promptCalls = 0;
 			let resetCount = 0;
 			const agent: AdvisorAgent = {
 				prompt: async input => {
 					promptInputs.push(input);
+					promptCalls++;
+					if (promptCalls === 1) finishFirst();
+					else finishSecond();
 				},
 				abort: () => {},
 				reset: () => {
@@ -1003,21 +1175,20 @@ describe("advisor", () => {
 			};
 			const runtime = new AdvisorRuntime(agent, host);
 
-			// First turn: normal incremental prompt
+			// First turn: normal incremental prompt.
 			runtime.onTurnEnd(messages);
-			await Promise.resolve();
+			await firstPromptDone;
 			expect(promptInputs).toHaveLength(1);
 			expect(promptInputs[0]).toContain("aaa");
 			expect(resetCount).toBe(0);
 
-			// Second turn: maintainContext resolves true, triggering a re-prime
+			// Second turn: maintainContext returns true → re-prime.
 			shouldRePrime = true;
 			messages.push({ role: "user", content: "bbb", timestamp: 2 } as AgentMessage);
 			runtime.onTurnEnd(messages);
-			await Promise.resolve();
-			await Promise.resolve();
+			await secondPromptDone;
 
-			// The reset cleared history and prompted a full replay (so the batch contains both aaa and bbb)
+			// Full replay includes both aaa and bbb.
 			expect(promptInputs).toHaveLength(2);
 			expect(promptInputs[1]).toContain("aaa");
 			expect(promptInputs[1]).toContain("bbb");

@@ -107,11 +107,21 @@ export class AdvisorRuntime {
 		return this.#backlog;
 	}
 
-	onTurnEnd(messages?: AgentMessage[]): void {
+	/**
+	 * True while the advisor model is processing a batch AND newer primary turns
+	 * have already arrived — `#pending` is non-empty during `agent.prompt()`.
+	 * Used by the delivery path to annotate advice that was generated without
+	 * seeing those newer turns.
+	 */
+	get hasFreshBacklog(): boolean {
+		return this.#pending.length > 0;
+	}
+
+	onTurnEnd(messages?: AgentMessage[], opts?: { willContinue?: boolean }): void {
 		if (this.disposed) return;
 		const all = messages ?? this.host.snapshotMessages();
 		this.#latestMessages = all;
-		const render = this.#renderDelta(all);
+		const render = this.#renderDelta(all, opts?.willContinue ?? false);
 		if (render) {
 			this.#pending.push({ text: render, turns: 1 });
 			this.#backlog++;
@@ -200,7 +210,7 @@ export class AdvisorRuntime {
 		this.#wakeAllWaiters();
 	}
 
-	#renderDelta(messages?: AgentMessage[]): string | null {
+	#renderDelta(messages?: AgentMessage[], wip = false): string | null {
 		const all = messages ?? this.#latestMessages ?? this.host.snapshotMessages();
 		if (all.length < this.#lastCount) {
 			this.#lastCount = all.length;
@@ -209,7 +219,7 @@ export class AdvisorRuntime {
 		}
 		const delta = all
 			.slice(this.#lastCount)
-			.filter(m => !(m.role === "custom" && (m as { customType?: string }).customType === "advisor"))
+			.filter(m => !(m.role === "custom" && m.customType === "advisor"))
 			.map(m => this.#dedupContextMessage(m));
 		this.#lastCount = all.length;
 		if (delta.length === 0) return null;
@@ -223,7 +233,10 @@ export class AdvisorRuntime {
 			expandEditDiffs: true,
 		});
 		if (!md.trim()) return null;
-		return `### Session update\n\n${md}`;
+		const heading = wip
+			? "### Session update [in progress — more steps follow]"
+			: "### Session update";
+		return `${heading}\n\n${md}`;
 	}
 
 	/**
@@ -236,14 +249,13 @@ export class AdvisorRuntime {
 	 */
 	#dedupContextMessage(msg: AgentMessage): AgentMessage {
 		if (msg.role !== "custom") return msg;
-		const type = (msg as { customType?: string }).customType;
-		if (!type || !PRIMARY_CONTEXT_CUSTOM_TYPES.has(type)) return msg;
-		const content = (msg as { content?: unknown }).content;
-		if (typeof content !== "string") return msg;
-		if (this.#seenContext.get(type) === content) {
-			return { ...(msg as object), content: "(unchanged — still in effect)" } as AgentMessage;
+		// Narrowed to CustomMessage: customType and content are properly typed.
+		if (!PRIMARY_CONTEXT_CUSTOM_TYPES.has(msg.customType)) return msg;
+		if (typeof msg.content !== "string") return msg;
+		if (this.#seenContext.get(msg.customType) === msg.content) {
+			return { ...msg, content: "(unchanged — still in effect)" };
 		}
-		this.#seenContext.set(type, content);
+		this.#seenContext.set(msg.customType, msg.content);
 		return msg;
 	}
 
@@ -284,46 +296,71 @@ export class AdvisorRuntime {
 		}
 	}
 
+	/**
+	 * Collect all currently pending deltas into one batch, running
+	 * `maintainContext` for correct token budgeting. Loops until the pending
+	 * queue is stable (nothing new arrived during a maintenance check) or a
+	 * reprime is triggered. Every `await` inside the loop has an epoch guard so
+	 * a reset/dispose mid-await cannot leak a stale batch into the post-reset
+	 * conversation.
+	 *
+	 * Returns `null` when the epoch was invalidated — caller should `continue`.
+	 * Returns `{ batch: null, finalTurns }` when there is nothing to render but
+	 * backlog still needs to be decremented.
+	 */
+	async #collectAndMaintainBatch(
+		epoch: number,
+	): Promise<{ batch: string | null; finalTurns: number } | null> {
+		const initial = this.#pending.splice(0);
+		let batchText = initial.map(b => b.text).join("\n\n");
+		let turns = initial.reduce((sum, b) => sum + b.turns, 0);
+
+		while (true) {
+			if (this.host.maintainContext) {
+				const incomingTokens = estimateTokens({ role: "user", content: batchText, timestamp: Date.now() });
+				let shouldReprime = false;
+				try {
+					shouldReprime = await this.host.maintainContext(incomingTokens);
+				} catch (err) {
+					logger.debug("advisor context maintenance failed", { err: String(err) });
+				}
+				// Epoch guard — a reset/dispose during the maintainContext await
+				// invalidates this batch.
+				if (this.#epoch !== epoch) return null;
+
+				if (shouldReprime) {
+					// Tally deltas that arrived during this await before #resetAdvisorContext
+					// wipes #pending, so finalTurns stays accurate for backlog accounting.
+					turns += this.#pending.reduce((sum, b) => sum + b.turns, 0);
+					this.#resetAdvisorContext(false, false);
+					return { batch: this.#renderDelta(this.#latestMessages), finalTurns: turns };
+				}
+			}
+
+			// Coalesce any deltas that arrived while we were awaiting maintenance.
+			// If none arrived the batch is stable and we're done; otherwise merge
+			// and re-check the maintenance budget for the expanded batch.
+			const late = this.#pending.splice(0);
+			if (late.length === 0) break;
+			batchText = [batchText, ...late.map(b => b.text)].join("\n\n");
+			turns += late.reduce((sum, b) => sum + b.turns, 0);
+		}
+
+		return { batch: batchText || null, finalTurns: turns };
+	}
+
 	async #drain(): Promise<void> {
 		if (this.#busy) return;
 		this.#busy = true;
 		try {
 			while (!this.disposed && this.#pending.length) {
-				const popped = this.#pending.splice(0);
 				const epoch = this.#epoch;
-				// Each delta already opens with a `### Session update` heading, so
-				// join with a blank line rather than a `---` rule.
-				const candidateBatch = popped.map(b => b.text).join("\n\n");
-				const turnsCovered = popped.reduce((sum, b) => sum + b.turns, 0);
-				const incomingTokens = estimateTokens({
-					role: "user",
-					content: candidateBatch,
-					timestamp: Date.now(),
-				});
+				const result = await this.#collectAndMaintainBatch(epoch);
 
-				let shouldReprime = false;
-				if (this.host.maintainContext) {
-					try {
-						shouldReprime = await this.host.maintainContext(incomingTokens);
-					} catch (err) {
-						logger.debug("advisor context maintenance failed", { err: String(err) });
-					}
-				}
-				// A reset/dispose during context maintenance invalidates this batch.
-				if (this.#epoch !== epoch) continue;
+				// Epoch was invalidated during batch collection; restart the loop.
+				if (result === null) continue;
 
-				let batch: string | null;
-				let finalTurns: number;
-				if (shouldReprime) {
-					// Promotion could not fit the advisor's context — re-prime.
-					const newTurns = this.#pending.reduce((sum, b) => sum + b.turns, 0);
-					this.#resetAdvisorContext(false, false);
-					batch = this.#renderDelta(this.#latestMessages);
-					finalTurns = turnsCovered + newTurns;
-				} else {
-					batch = candidateBatch;
-					finalTurns = turnsCovered;
-				}
+				const { batch, finalTurns } = result;
 
 				if (this.disposed || batch === null) {
 					this.#backlog = Math.max(0, this.#backlog - finalTurns);
@@ -333,33 +370,27 @@ export class AdvisorRuntime {
 
 				let success = false;
 				// Capture the advisor's message count BEFORE the prompt so a failure can
-				// roll back the user batch + synthetic assistant-error turn `Agent.#runLoop`
-				// appends to internal state. Without this, a retry would replay the
-				// failed batch on top of the stale turns and the dropped-after-3 path
-				// would leak orphan failures into the next successful run's context.
+				// roll back the user batch + synthetic assistant-error turn Agent.#runLoop
+				// appends to internal state. Without this, a retry would replay the failed
+				// batch on top of stale turns and the dropped-after-3 path would leak
+				// orphan failures into the next successful run's context.
 				const messageSnapshot = this.agent.state.messages.length;
 				try {
 					// Reset the host's per-update advisor state (one-advise-per-update
-					// gate) before each model cycle, so the new batch starts with a
-					// fresh budget. Dedupe history persists across cycles.
+					// gate) before each model cycle so the new batch starts fresh.
 					this.host.beginAdvisorUpdate?.();
 					await this.agent.prompt(batch);
-					// `Agent.#runLoop` catches provider/stream failures internally and
-					// resolves `prompt()` cleanly with the assistant turn ending in
-					// `stopReason: "error"` and the message recorded on `state.error`.
-					// Treat that as a failed turn so OpenRouter ZDR-style endpoint
-					// rejections trip the retry/notify path instead of looking like a
-					// successful empty cycle.
+					// Agent.#runLoop catches provider/stream failures internally and
+					// resolves prompt() cleanly with stopReason: "error". Treat that
+					// as a failed turn so endpoint rejections trip the retry path.
 					const promptError = this.agent.state.error;
 					if (promptError) throw new Error(promptError);
 					success = true;
 					this.#consecutiveFailures = 0;
 					this.#failureNotified = false;
 				} catch (err) {
-					// reset()/dispose() aborts the in-flight prompt; the rejection is the
-					// reset itself, not a transient advisor failure. Drop the stale batch
-					// (reset already cleared #pending and rewound the cursor) instead of
-					// requeuing it into the post-reset conversation.
+					// reset()/dispose() aborts the in-flight prompt; treat it as a
+					// reset, not a transient failure — drop the stale batch.
 					if (this.#epoch !== epoch) continue;
 					this.#rollbackFailedTurn(messageSnapshot);
 					logger.debug("advisor turn failed", { err: String(err) });
@@ -368,8 +399,7 @@ export class AdvisorRuntime {
 					} catch (hookErr) {
 						logger.debug("advisor onTurnError hook failed", { err: String(hookErr) });
 					}
-					// The hook awaits; a reset during it invalidates this batch like the
-					// prompt await above — drop it instead of requeueing stale content.
+					// Epoch guard after the async error hook.
 					if (this.#epoch !== epoch) continue;
 					this.#consecutiveFailures++;
 					if (this.#consecutiveFailures >= 3) {
@@ -383,9 +413,9 @@ export class AdvisorRuntime {
 							}
 						}
 						this.#consecutiveFailures = 0;
-						// The dropped batch may carry primary-context we never delivered; drop
-						// the seen-state too so the next turn re-expands it instead of marking
-						// it "unchanged" against content the advisor never received.
+						// Drop the seen-context so the next turn re-expands primary-context
+						// prompts instead of marking them "unchanged" against content the
+						// advisor never received.
 						this.#seenContext.clear();
 						success = true;
 					} else {
