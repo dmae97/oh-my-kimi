@@ -48,10 +48,7 @@ describe("AskTool timeout", () => {
 
 	it("auto-selects the recommended option when the selector does not settle", async () => {
 		vi.useFakeTimers();
-		const select = vi.fn<AskSelect>((_title, _options, dialogOptions) => {
-			dialogOptions?.onTimeoutStart?.();
-			return Promise.withResolvers<string | undefined>().promise;
-		});
+		const select = vi.fn<AskSelect>(() => Promise.withResolvers<string | undefined>().promise);
 		const abort = vi.fn();
 		const context = {
 			hasUI: true,
@@ -176,6 +173,7 @@ describe("AskTool timeout", () => {
 		const context = {
 			hasUI: true,
 			ui: {
+				timeoutStartsOnPresentation: true,
 				select,
 				editor: vi.fn(),
 			},

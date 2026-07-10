@@ -380,6 +380,7 @@ interface AskSingleQuestionOptions {
 }
 
 interface UIContext {
+	timeoutStartsOnPresentation?: boolean;
 	select(
 		prompt: string,
 		options: ExtensionUISelectItem[],
@@ -474,9 +475,14 @@ async function askSingleQuestion(
 				: undefined,
 		};
 		try {
-			const choice = dialogSignal
-				? await untilAborted(dialogSignal, () => ui.select(prompt, optionsToShow, dialogOptions))
-				: await ui.select(prompt, optionsToShow, dialogOptions);
+			const runSelect = () => {
+				const selection = ui.select(prompt, optionsToShow, dialogOptions);
+				if (timeoutMs !== undefined && !ui.timeoutStartsOnPresentation) {
+					armFallbackTimeout(timeoutMs);
+				}
+				return selection;
+			};
+			const choice = dialogSignal ? await untilAborted(dialogSignal, runSelect) : await runSelect();
 			if (!timeoutTriggered && choice === undefined && typeof timeout === "number") {
 				// Fallback for UI surfaces that enforce `timeout` without invoking
 				// `onTimeout`: their auto-cancel resolves right at the deadline. A
@@ -774,6 +780,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 
 		const extensionUi = context.ui;
 		const ui: UIContext = {
+			timeoutStartsOnPresentation: extensionUi.timeoutStartsOnPresentation,
 			select: (prompt, options, dialogOptions) => extensionUi.select(prompt, options, dialogOptions),
 			editor: (title, prefill, dialogOptions, editorOptions) =>
 				extensionUi.editor(title, prefill, dialogOptions, editorOptions),
