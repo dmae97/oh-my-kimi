@@ -7,6 +7,7 @@
 - Added model-driven Codex Responses Lite: `responsesLite` now defaults to the catalog `useResponsesLite` flag (codex-rs `use_responses_lite`, set on the GPT-5.6 family), so lite requests are sent without per-call opt-in.
 - Added the full Responses Lite wire contract: lite requests move tools into a leading `{type: "additional_tools", role: "developer"}` input item and the base instructions into a developer message, omit top-level `instructions`/`tools`, and force `parallel_tool_calls: false`, mirroring codex-rs `build_responses_request`.
 - Added concurrent reasoning summaries on Codex Responses: requests with a reasoning summary send `stream_options: { reasoning_summary_delivery: "sequential_cutoff" }`, and the stream decoder consumes the matching atomic `response.reasoning_summary_text.done` events (resolved by `item_id`/`output_index`, stale dones dropped, incremental `.delta`/`.part.*` events ignored under the cutoff contract). The cutoff gate reads the post-`onPayload` wire body on both transports, and `response.reasoning_summary_text.done` now counts as websocket watchdog progress.
+- Added Novita API-key login with authenticated key validation and `NOVITA_API_KEY` discovery ([#4917](https://github.com/can1357/oh-my-pi/pull/4917) by [@jason-wu-ai](https://github.com/jason-wu-ai)).
 
 ### Changed
 
