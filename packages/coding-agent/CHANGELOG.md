@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed full-context forks cold-missing OpenAI prompt caches by persisting an inherited provider prompt-cache key separately from the new OMP session id, adding `--prompt-cache-key` for explicit cache affinity, and dropping automatic inheritance when startup changes the model, thinking level, system prompt, or tool schema. ([#5035](https://github.com/can1357/oh-my-pi/issues/5035))
+
 ## [16.3.15] - 2026-07-09
 
 ### Changed
