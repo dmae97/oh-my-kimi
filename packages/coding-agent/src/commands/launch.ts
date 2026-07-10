@@ -140,7 +140,7 @@ export default class Index extends Command {
 			description: "Include thinking blocks in print mode text output",
 		}),
 		"max-time": Flags.string({
-			description: "Stop the session after this many seconds",
+			description: "Stop the session after this duration (e.g., 600, 10m, 1h)",
 		}),
 		// `--auto-approve` / `--yolo`: declared here so oclif's auto-generated `--help` lists it.
 		// Runtime parsing happens in `cli/args.ts parseArgs` (line 176 in that file) — `runRootCommand`

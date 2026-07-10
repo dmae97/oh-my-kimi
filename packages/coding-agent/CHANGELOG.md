@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `--max-time` duration values like `5s`, `10m`, and `1h` being ignored instead of configuring a session deadline. ([#5041](https://github.com/can1357/oh-my-pi/issues/5041))
+
 ## [16.3.15] - 2026-07-09
 
 ### Changed

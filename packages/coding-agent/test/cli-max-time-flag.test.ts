@@ -16,6 +16,41 @@ describe("parseArgs — --max-time flag", () => {
 		expect(result.messages).toEqual(["hello"]);
 	});
 
+	it("parses --max-time duration suffixes as seconds", () => {
+		const cases = [
+			{ value: "5s", expected: 5 },
+			{ value: "10m", expected: 600 },
+			{ value: "1h", expected: 3_600 },
+		];
+
+		for (const { value, expected } of cases) {
+			const result = parseArgs(["--max-time", value, "--print", "hello"]);
+
+			expect(result.maxTime).toBe(expected);
+			expect(result.print).toBe(true);
+			expect(result.messages).toEqual(["hello"]);
+		}
+	});
+
+	it("throws a visible parse error for invalid --max-time values", () => {
+		const invalidValues = ["5d", "0", "-1", "Infinity", "NaN"];
+
+		for (const value of invalidValues) {
+			let thrown: unknown;
+
+			try {
+				parseArgs(["--max-time", value, "--print", "hello"]);
+			} catch (error) {
+				thrown = error;
+			}
+
+			if (!(thrown instanceof Error)) {
+				throw new Error(`--max-time ${value} did not throw a visible parse error`);
+			}
+			expect(thrown.message).toContain("--max-time");
+		}
+	});
+
 	it("converts maxTime to an absolute session deadline", async () => {
 		using tempDir = TempDir.createSync("@omp-max-time-");
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));

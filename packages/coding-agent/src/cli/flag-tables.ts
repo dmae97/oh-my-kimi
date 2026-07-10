@@ -85,6 +85,24 @@ const setResume: OptionalSetter = (result, value) => {
 	result.resume = value !== undefined ? value : true;
 };
 
+const MAX_TIME_DURATION_RE = /^(\d+(?:\.\d+)?)([smh])$/;
+
+function maxTimeMultiplier(unit: string | undefined): number {
+	if (unit === "h") return 3600;
+	if (unit === "m") return 60;
+	return 1;
+}
+
+function parseMaxTimeSeconds(value: string): number {
+	const trimmed = value.trim();
+	const duration = MAX_TIME_DURATION_RE.exec(trimmed);
+	const seconds = duration ? Number(duration[1]) * maxTimeMultiplier(duration[2]) : Number(trimmed);
+	if (Number.isFinite(seconds) && seconds > 0) return seconds;
+	throw new Error(
+		`Invalid --max-time value: ${JSON.stringify(value)}. Expected a positive number of seconds or duration like "5s", "10m", "1h".`,
+	);
+}
+
 /**
  * Setters for flags with string values. Most built-ins consume the next argv
  * token even when it starts with `-`; flags listed in
@@ -121,13 +139,8 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 	"--plan": (result, value) => {
 		result.plan = value;
 	},
-	"--max-time": (result, value, deps) => {
-		const seconds = Number(value);
-		if (Number.isFinite(seconds) && seconds > 0) {
-			result.maxTime = seconds;
-		} else {
-			deps.logger.warn("Invalid seconds passed to --max-time", { value });
-		}
+	"--max-time": (result, value) => {
+		result.maxTime = parseMaxTimeSeconds(value);
 	},
 	"--api-key": (result, value) => {
 		result.apiKey = value;
