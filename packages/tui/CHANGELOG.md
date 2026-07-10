@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.0] - 2026-07-10
+
 ### Fixed
 
 - Fixed terminal flickering during session resume, replacement, or resizing on terminals that do not support synchronized output.

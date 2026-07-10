@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.0] - 2026-07-10
+
 ### Added
 
 - Added "max" as a first-class reasoning effort option across providers (including Anthropic, Google, Bedrock, and OpenAI), supporting a maximum reasoning budget of 32,768 tokens.

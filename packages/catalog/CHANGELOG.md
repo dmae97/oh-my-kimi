@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.0] - 2026-07-10
+
 ### Breaking Changes
 
 - Redesigned reasoning effort ladders to be wire-exact, removing the shifted five-tier effort mapping. Models now expose exactly the effort tiers their upstream APIs accept, mapped 1:1. Removed SHIFTED_FIVE_TIER_EFFORT_MAP, ANTHROPIC_ADAPTIVE_EFFORT_MAP_4_TIER, and per-host xhigh-to-max alias maps. Selecting an unsupported tier now automatically clamps down via clampThinkingLevelForModel. Devin effort routing is now mapped 1:1 onto per-tier siblings.

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.0] - 2026-07-10
+
 ### Added
 
 - Added the `ThinkingLevel.Max` ("max") configuration option, mapping to the `Effort.Max` tier for supported models.

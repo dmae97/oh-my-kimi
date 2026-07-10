@@ -21,7 +21,7 @@
     },
     "packages/agent": {
       "name": "@oh-my-pi/pi-agent-core",
-      "version": "16.3.15",
+      "version": "16.4.0",
       "dependencies": {
         "@oh-my-pi/pi-ai": "catalog:",
         "@oh-my-pi/pi-catalog": "catalog:",
@@ -39,7 +39,7 @@
     },
     "packages/ai": {
       "name": "@oh-my-pi/pi-ai",
-      "version": "16.3.15",
+      "version": "16.4.0",
       "dependencies": {
         "@bufbuild/protobuf": "catalog:",
         "@oh-my-pi/pi-catalog": "catalog:",
@@ -55,7 +55,7 @@
     },
     "packages/catalog": {
       "name": "@oh-my-pi/pi-catalog",
-      "version": "16.3.15",
+      "version": "16.4.0",
       "dependencies": {
         "@bufbuild/protobuf": "catalog:",
         "@oh-my-pi/pi-utils": "catalog:",
@@ -69,7 +69,7 @@
     },
     "packages/coding-agent": {
       "name": "@oh-my-pi/pi-coding-agent",
-      "version": "16.3.15",
+      "version": "16.4.0",
       "bin": {
         "omp": "src/cli.ts",
       },
@@ -137,7 +137,7 @@
     },
     "packages/hashline": {
       "name": "@oh-my-pi/hashline",
-      "version": "16.3.15",
+      "version": "16.4.0",
       "dependencies": {
         "diff": "catalog:",
         "lru-cache": "catalog:",
@@ -148,7 +148,7 @@
     },
     "packages/mnemopi": {
       "name": "@oh-my-pi/pi-mnemopi",
-      "version": "16.3.15",
+      "version": "16.4.0",
       "bin": {
         "mnemopi": "src/cli.ts",
       },
@@ -174,7 +174,7 @@
     },
     "packages/natives": {
       "name": "@oh-my-pi/pi-natives",
-      "version": "16.3.15",
+      "version": "16.4.0",
       "devDependencies": {
         "@napi-rs/cli": "catalog:",
         "@types/bun": "catalog:",
@@ -182,7 +182,7 @@
     },
     "packages/snapcompact": {
       "name": "@oh-my-pi/snapcompact",
-      "version": "16.3.15",
+      "version": "16.4.0",
       "dependencies": {
         "@oh-my-pi/pi-ai": "catalog:",
         "@oh-my-pi/pi-natives": "catalog:",
@@ -195,7 +195,7 @@
     },
     "packages/stats": {
       "name": "@oh-my-pi/omp-stats",
-      "version": "16.3.15",
+      "version": "16.4.0",
       "bin": {
         "omp-stats": "./src/index.ts",
       },
@@ -221,7 +221,7 @@
     },
     "packages/swarm-extension": {
       "name": "@oh-my-pi/swarm-extension",
-      "version": "16.3.15",
+      "version": "16.4.0",
       "bin": {
         "omp-swarm": "src/cli.ts",
       },
@@ -247,7 +247,7 @@
     },
     "packages/tui": {
       "name": "@oh-my-pi/pi-tui",
-      "version": "16.3.15",
+      "version": "16.4.0",
       "dependencies": {
         "@oh-my-pi/pi-natives": "catalog:",
         "@oh-my-pi/pi-utils": "catalog:",
@@ -288,7 +288,7 @@
     },
     "packages/utils": {
       "name": "@oh-my-pi/pi-utils",
-      "version": "16.3.15",
+      "version": "16.4.0",
       "dependencies": {
         "@oh-my-pi/pi-natives": "catalog:",
         "handlebars": "catalog:",
@@ -301,7 +301,7 @@
     },
     "packages/wire": {
       "name": "@oh-my-pi/pi-wire",
-      "version": "16.3.15",
+      "version": "16.4.0",
       "devDependencies": {
         "@types/bun": "catalog:",
       },
@@ -338,18 +338,18 @@
     "@huggingface/transformers": "^4.2.0",
     "@mozilla/readability": "^0.6.0",
     "@napi-rs/cli": "3.7.0",
-    "@oh-my-pi/hashline": "16.3.15",
-    "@oh-my-pi/omp-stats": "16.3.15",
-    "@oh-my-pi/pi-agent-core": "16.3.15",
-    "@oh-my-pi/pi-ai": "16.3.15",
-    "@oh-my-pi/pi-catalog": "16.3.15",
-    "@oh-my-pi/pi-coding-agent": "16.3.15",
-    "@oh-my-pi/pi-mnemopi": "16.3.15",
-    "@oh-my-pi/pi-natives": "16.3.15",
-    "@oh-my-pi/pi-tui": "16.3.15",
-    "@oh-my-pi/pi-utils": "16.3.15",
-    "@oh-my-pi/pi-wire": "16.3.15",
-    "@oh-my-pi/snapcompact": "16.3.15",
+    "@oh-my-pi/hashline": "16.4.0",
+    "@oh-my-pi/omp-stats": "16.4.0",
+    "@oh-my-pi/pi-agent-core": "16.4.0",
+    "@oh-my-pi/pi-ai": "16.4.0",
+    "@oh-my-pi/pi-catalog": "16.4.0",
+    "@oh-my-pi/pi-coding-agent": "16.4.0",
+    "@oh-my-pi/pi-mnemopi": "16.4.0",
+    "@oh-my-pi/pi-natives": "16.4.0",
+    "@oh-my-pi/pi-tui": "16.4.0",
+    "@oh-my-pi/pi-utils": "16.4.0",
+    "@oh-my-pi/pi-wire": "16.4.0",
+    "@oh-my-pi/snapcompact": "16.4.0",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/context-async-hooks": "^2.7.1",
     "@opentelemetry/exporter-trace-otlp-proto": "^0.218.0",
@@ -967,7 +967,7 @@
 
     "bun-types": ["bun-types@1.3.14", "", { "dependencies": { "@types/node": "*" } }, "sha512-4N0ig0fEomHt5R0KCFWjovxow98rIoRwKolrYdCcknNwMekCXRnWEUvgu5soYV8QXtVsrUD8B95MBOZGPvr6KQ=="],
 
-    "caniuse-lite": ["caniuse-lite@1.0.30001800", "", {}, "sha512-MMHtuAz9Ys840zAY5F4k6fV5GaivZ9sPk+nz0mY+GYVzRBnYkN0mpqkSR92oWRQ19yQWo4HvBV/FnC16AJX8MA=="],
+    "caniuse-lite": ["caniuse-lite@1.0.30001803", "", {}, "sha512-g/uHREV2ZpK9qMalCsWaxmA6ol+DX8GYhuf3T40RKoP+oL7vhRJh8LNt73PCjpnR6l14FzfPrB5Yux4PKm2meg=="],
 
     "chalk": ["chalk@5.6.2", "", {}, "sha512-7NzBL0rN6fMUW+f7A6Io4h40qQlG+xGmtMxfbnH/K7TAtt8JQWVQK+6g0UXKMeVJoyV5EkkNsErQ8pVD3bLHbA=="],
 
@@ -1045,7 +1045,7 @@
 
     "duck": ["duck@0.1.12", "", { "dependencies": { "underscore": "^1.13.1" } }, "sha512-wkctla1O6VfP89gQ+J/yDesM0S7B7XLXjKGzXxMDVFg7uEn706niAtyYovKbyq1oT9YwDcly721/iUWoc8MVRg=="],
 
-    "electron-to-chromium": ["electron-to-chromium@1.5.387", "", {}, "sha512-TaxwufTFDufvPEoXdhwVrA3UdFWBeWGkYoJ1K8ldF1xe6gKfth6iRNS5lTQ5JPNOHdGQm8PT1QYKUqFLCiUefQ=="],
+    "electron-to-chromium": ["electron-to-chromium@1.5.388", "", {}, "sha512-Pl/aJaqOOxYxda3vcx1IKSJimwYXHDkEnGn0F+kG2EE68dDtx2uCinaS+Vih8Z91B9t8CSAbiF/HKyWcnXjhzw=="],
 
     "emnapi": ["emnapi@1.11.2", "", { "peerDependencies": { "node-addon-api": ">= 6.1.0" }, "optionalPeers": ["node-addon-api"] }, "sha512-iMt/XQc69fFn2EvcU6tm14HmXKwyy0lnABugsQlqp6xFuZIUuO+ONVSg2mz+MTVF8WbC+bic65AvRXdoldALKg=="],
 
@@ -1341,17 +1341,17 @@
 
     "sherpa-onnx-darwin-arm64": ["sherpa-onnx-darwin-arm64@1.13.3", "", { "os": "darwin", "cpu": "arm64" }, "sha512-9x86Cbf+BDFONdtCPM3cnjvtAW0ER8tMaHK5pVfz+SHPt8GeuwRXaiR/BzcByFBUyxCgmceO09/WMZOCi44P/g=="],
 
-    "sherpa-onnx-darwin-x64": ["sherpa-onnx-darwin-x64@1.13.3", "", { "os": "darwin", "cpu": "x64" }, "sha512-TVQ35g7JIpDPB1lUDdcog+JtI0cI45ZzOnvHXm0DtWs/dgxnJXtWMY3uLRtBbLnysV9j5ljffwZ1IX9VDHsCzQ=="],
+    "sherpa-onnx-darwin-x64": ["sherpa-onnx-darwin-x64@1.13.4", "", { "os": "darwin", "cpu": "x64" }, "sha512-6RGeis9K9gV/UQWOgd6Rf3iqXr2/YsBQswxHaCR4hrYkHfEIpHMfFmRWLt6nJJCOWgYW2xFxEd9yzjrafAV/Pw=="],
 
     "sherpa-onnx-linux-arm64": ["sherpa-onnx-linux-arm64@1.13.3", "", { "os": "linux", "cpu": "arm64" }, "sha512-uDtZkkoP6QQ/3DHOscCpEZ2WpaiHUQsDpbyYaHURrJ7DbsjqGnS6G8l+R589Ro5Bf282QElzBy3okwxXbt3Kxw=="],
 
-    "sherpa-onnx-linux-x64": ["sherpa-onnx-linux-x64@1.13.3", "", { "os": "linux", "cpu": "x64" }, "sha512-OFVK0GYwKwKNsjxbPmfcLQm/dfA0IwAoiIQJ96s+eFYcDqhlapcY06ocdb7SNluGBcM7xgU5jEW2QXBkMIOEvQ=="],
+    "sherpa-onnx-linux-x64": ["sherpa-onnx-linux-x64@1.13.4", "", { "os": "linux", "cpu": "x64" }, "sha512-WZh5NCkGPFHHpYSd78iN4OnmxQeSTGyt9uZskH+im/NFHQ7elQ7B0sLzCMeRpvJxiIKvd9C6WxIJ4hYaxClfsQ=="],
 
     "sherpa-onnx-node": ["sherpa-onnx-node@1.13.2", "", { "optionalDependencies": { "sherpa-onnx-darwin-arm64": "^1.13.2", "sherpa-onnx-darwin-x64": "^1.13.2", "sherpa-onnx-linux-arm64": "^1.13.2", "sherpa-onnx-linux-x64": "^1.13.2", "sherpa-onnx-win-ia32": "^1.13.2", "sherpa-onnx-win-x64": "^1.13.2" } }, "sha512-uIH6SA5Or4pb8HlCYWB3K54XkMtzdef4/tkw1amtIf8GB1tt6hQLpur9p2jSFNfTYRyzZ8XrXofxefXQ0A7EUA=="],
 
-    "sherpa-onnx-win-ia32": ["sherpa-onnx-win-ia32@1.13.3", "", { "os": "win32", "cpu": "ia32" }, "sha512-VDZh1M7Ccx/bkP3WwBCFoJzwAwq+b5nR1KRkYRz5p1w5bfhzfa3ACBGr7vpUt5AGUge4qSLe0MSKXyKtSmy1uA=="],
+    "sherpa-onnx-win-ia32": ["sherpa-onnx-win-ia32@1.13.4", "", { "os": "win32", "cpu": "ia32" }, "sha512-/JbPjldrfNv+t+uIS3MlkuhfIf5l3FHUGkRC2oRXgjRqOaVmEyP3vLlQ7dTa4J7raG5oB8c3GoPjuSWSqT9GOQ=="],
 
-    "sherpa-onnx-win-x64": ["sherpa-onnx-win-x64@1.13.3", "", { "os": "win32", "cpu": "x64" }, "sha512-ZQzcSmFvZK4jzmtWckqxocDUuEjYnBV2MHrDD21HPTeUMfGdE9yfvuSPpesIVfdzKbQzIQY42RAcfZEGWu0FbQ=="],
+    "sherpa-onnx-win-x64": ["sherpa-onnx-win-x64@1.13.4", "", { "os": "win32", "cpu": "x64" }, "sha512-R0PWby1VxC14TDZPq7GcfSyXSY6SAFO8Y4JwdCdqouFmeXkZ1L7Is9m98C9KxQ0dN7ZtDzhAmE/43FUs/elXRQ=="],
 
     "signal-exit": ["signal-exit@4.1.0", "", {}, "sha512-bzyZ1e88w9O1iNJbKnOlvYTrWPDl46O1bG0D3XInv+9tkPrxrN8jUUTiFlDkkmKWgn1M6CfIA13SuGqOa9Korw=="],
 

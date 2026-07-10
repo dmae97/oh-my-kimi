@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.0] - 2026-07-10
+
 ### Breaking Changes
 
 - Renamed the bundled agent explore to scout, including its configuration keys, prompt files, and task definitions. Any configurations, allowlists, or invocations referencing explore must now use scout.
