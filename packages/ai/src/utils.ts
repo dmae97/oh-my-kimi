@@ -65,10 +65,50 @@ export function truncateResponseItemId(id: string, prefix: string): string {
 	return `${prefix}_${Bun.hash(id).toString(36)}`;
 }
 
-export function sanitizeOpenAIResponsesHistoryItemsForReplay(items: Array<Record<string, unknown>>): ResponseInput {
+interface OpenAIResponsesReplaySanitizeOptions {
+	supportsImageDetailOriginal?: boolean;
+}
+
+function isReplayRecord(value: unknown): value is Record<string, unknown> {
+	if (!value || typeof value !== "object") return false;
+	return !Array.isArray(value);
+}
+
+function sanitizeReplayValueForCompatibility(value: unknown, options: OpenAIResponsesReplaySanitizeOptions): unknown {
+	if (options.supportsImageDetailOriginal !== false) return value;
+	if (Array.isArray(value)) {
+		let changed = false;
+		const sanitized = value.map(item => {
+			const next = sanitizeReplayValueForCompatibility(item, options);
+			if (next !== item) changed = true;
+			return next;
+		});
+		return changed ? sanitized : value;
+	}
+	if (!isReplayRecord(value)) return value;
+
+	let changed = false;
+	const sanitized: Record<string, unknown> = {};
+	for (const key in value) {
+		const child = value[key];
+		const next = sanitizeReplayValueForCompatibility(child, options);
+		if (next !== child) changed = true;
+		sanitized[key] = next;
+	}
+	if (value.type === "input_image" && value.detail === "original") {
+		sanitized.detail = "auto";
+		changed = true;
+	}
+	return changed ? sanitized : value;
+}
+
+export function sanitizeOpenAIResponsesHistoryItemsForReplay(
+	items: Array<Record<string, unknown>>,
+	options: OpenAIResponsesReplaySanitizeOptions = {},
+): ResponseInput {
 	const normalizedCallIds = new Map<string, string>();
 	return items.flatMap(item => {
-		const sanitized = sanitizeOpenAIResponsesHistoryItemForReplay(item, normalizedCallIds);
+		const sanitized = sanitizeOpenAIResponsesHistoryItemForReplay(item, normalizedCallIds, options);
 		return sanitized ? [sanitized] : [];
 	});
 }
@@ -82,8 +122,9 @@ export function sanitizeOpenAIResponsesHistoryItemsForReplay(items: Array<Record
  */
 export function sanitizeOpenAIResponsesAssistantHistoryItemsForReplay(
 	items: Array<Record<string, unknown>>,
+	options: OpenAIResponsesReplaySanitizeOptions = {},
 ): ResponseInput | undefined {
-	const sanitized = sanitizeOpenAIResponsesHistoryItemsForReplay(items);
+	const sanitized = sanitizeOpenAIResponsesHistoryItemsForReplay(items, options);
 	let hasReplayableAssistantOutput = false;
 
 	for (const item of sanitized) {
@@ -153,6 +194,7 @@ export function sanitizeOpenAIResponsesAssistantFallbackItemsForReplay(items: Re
 function sanitizeOpenAIResponsesHistoryItemForReplay(
 	item: Record<string, unknown>,
 	normalizedCallIds: Map<string, string>,
+	options: OpenAIResponsesReplaySanitizeOptions,
 ): OpenAIResponsesReplayItem | undefined {
 	if (item.type === "item_reference") return undefined;
 	if (item.type === "image_generation_call") return sanitizeOpenAIResponsesImageGenerationCallForReplay(item);
@@ -164,7 +206,8 @@ function sanitizeOpenAIResponsesHistoryItemForReplay(
 		sanitizedItem.call_id = normalizeReplayedResponsesHistoryCallId(item.call_id, normalizedCallIds);
 	}
 
-	return sanitizedItem as unknown as OpenAIResponsesReplayItem;
+	const compatibleItem = sanitizeReplayValueForCompatibility(sanitizedItem, options);
+	return compatibleItem as unknown as OpenAIResponsesReplayItem;
 }
 
 function sanitizeOpenAIResponsesReasoningItemForReplay(item: Record<string, unknown>): OpenAIResponsesReplayItem {

@@ -1356,6 +1356,52 @@ export function convertResponsesInputContent(
 	return normalizedContent.length > 0 ? normalizedContent : undefined;
 }
 
+interface ResponsesReplayCompatibilityOptions {
+	supportsCustomToolCalls: boolean;
+	tools: readonly Tool[] | undefined;
+}
+
+function resolveReplayCustomToolName(wireName: string, tools: readonly Tool[] | undefined): string {
+	if (tools) {
+		for (const tool of tools) {
+			if (tool.customWireName === wireName) return tool.name;
+		}
+	}
+	if (wireName === "apply_patch") return "edit";
+	return wireName;
+}
+
+function adaptResponsesReplayItemsForModel(
+	input: ResponseInput,
+	options: ResponsesReplayCompatibilityOptions,
+): ResponseInput {
+	let changed = false;
+	const adapted: ResponseInput = [];
+	for (const item of input) {
+		let next = item;
+		if (!options.supportsCustomToolCalls && item.type === "custom_tool_call") {
+			changed = true;
+			next = {
+				type: "function_call",
+				...(item.id ? { id: item.id } : {}),
+				call_id: item.call_id,
+				name: resolveReplayCustomToolName(item.name, options.tools),
+				arguments: JSON.stringify({ input: item.input }),
+				...(item.namespace ? { namespace: item.namespace } : {}),
+			};
+		} else if (!options.supportsCustomToolCalls && item.type === "custom_tool_call_output") {
+			changed = true;
+			next = {
+				type: "function_call_output",
+				call_id: item.call_id,
+				output: item.output,
+			};
+		}
+		adapted.push(next);
+	}
+	return changed ? adapted : input;
+}
+
 export interface BuildResponsesInputOptions<TApi extends Api> {
 	model: Model<TApi>;
 	context: Context;
@@ -1380,6 +1426,13 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 		messages.push({ role: options.systemRole as "system" | "developer", content: systemPrompt });
 	}
 
+	const supportsImageDetailOriginal =
+		options.model.provider === "xai-oauth" ? false : options.supportsImageDetailOriginal;
+	const supportsCustomToolCalls = options.model.applyPatchToolType === "freeform";
+	const replayCompatibility: ResponsesReplayCompatibilityOptions = {
+		supportsCustomToolCalls,
+		tools: options.context.tools,
+	};
 	let knownCallIds = new Set<string>();
 	const customCallIds = new Set<string>();
 	const transformedMessages = transformMessages(
@@ -1407,7 +1460,10 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 				}) ??
 					false);
 			if (historyItems && shouldReplayPayloadItems) {
-				messages.push(...sanitizeOpenAIResponsesHistoryItemsForReplay(filterReasoning(historyItems)));
+				const sanitizedItems = sanitizeOpenAIResponsesHistoryItemsForReplay(filterReasoning(historyItems), {
+					supportsImageDetailOriginal,
+				});
+				messages.push(...adaptResponsesReplayItemsForModel(sanitizedItems, replayCompatibility));
 				knownCallIds = collectKnownCallIds(messages);
 				for (const id of collectCustomCallIds(messages)) customCallIds.add(id);
 				msgIndex++;
@@ -1416,7 +1472,7 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 			const content = convertResponsesInputContent(
 				msg.content,
 				options.model.input.includes("image"),
-				options.supportsImageDetailOriginal,
+				supportsImageDetailOriginal,
 			);
 			if (!content) continue;
 			messages.push({
@@ -1444,9 +1500,13 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 			const historyItems = providerPayload?.items;
 			let suppressHiddenEmptyFallback = false;
 			if (historyItems) {
-				const sanitizedHistoryItems = sanitizeOpenAIResponsesAssistantHistoryItemsForReplay(
+				const rawSanitizedHistoryItems = sanitizeOpenAIResponsesAssistantHistoryItemsForReplay(
 					filterReasoning(historyItems),
+					{ supportsImageDetailOriginal },
 				);
+				const sanitizedHistoryItems = rawSanitizedHistoryItems
+					? adaptResponsesReplayItemsForModel(rawSanitizedHistoryItems, replayCompatibility)
+					: undefined;
 				if (nativeReplayEnabled && sanitizedHistoryItems) {
 					if (providerPayload?.dt) {
 						messages.push(...sanitizedHistoryItems);
@@ -1469,6 +1529,8 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 				suppressHiddenEmptyFallback ? false : includeThinkingSignatures,
 				customCallIds,
 				options.preserveAssistantMessageIds,
+				supportsCustomToolCalls,
+				options.context.tools,
 			);
 			const outputItems = suppressHiddenEmptyFallback
 				? sanitizeOpenAIResponsesAssistantFallbackItemsForReplay(convertedOutputItems)
@@ -1481,9 +1543,10 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 				msg,
 				options.model,
 				options.strictResponsesPairing,
-				options.supportsImageDetailOriginal,
+				supportsImageDetailOriginal,
 				knownCallIds,
 				customCallIds,
+				supportsCustomToolCalls,
 			);
 		}
 		msgIndex++;
@@ -1516,6 +1579,8 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 	includeThinkingSignatures = true,
 	customCallIds?: Set<string>,
 	preserveMessageIds = false,
+	supportsCustomToolCalls = true,
+	tools?: readonly Tool[],
 ): ResponseInput {
 	const outputItems: ResponseInput = [];
 	let unsignedTextBlocks = 0;
@@ -1587,7 +1652,7 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 			itemId = undefined;
 		}
 		knownCallIds.add(normalized.callId);
-		if (block.customWireName) {
+		if (block.customWireName && supportsCustomToolCalls) {
 			const rawInput = typeof block.arguments?.input === "string" ? block.arguments.input : "";
 			customCallIds?.add(normalized.callId);
 			outputItems.push({
@@ -1599,11 +1664,15 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 			} as ResponseInput[number]);
 			continue;
 		}
+		const functionName =
+			block.customWireName && !supportsCustomToolCalls
+				? resolveReplayCustomToolName(block.customWireName, tools)
+				: block.name;
 		outputItems.push({
 			type: "function_call",
 			...(itemId ? { id: itemId } : {}),
 			call_id: normalized.callId,
-			name: block.name,
+			name: functionName,
 			arguments: JSON.stringify(block.arguments),
 		});
 	}
@@ -1619,6 +1688,7 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 	supportsImageDetailOriginal: boolean,
 	knownCallIds: ReadonlySet<string>,
 	customCallIds?: ReadonlySet<string>,
+	supportsCustomToolCalls = true,
 ): void {
 	const supportsImages = model.input.includes("image");
 	const textResult = toolResult.content
@@ -1648,7 +1718,7 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 		} as ResponseInput[number]);
 		return;
 	}
-	if (customCallIds?.has(normalized.callId)) {
+	if (supportsCustomToolCalls && customCallIds?.has(normalized.callId)) {
 		messages.push({
 			type: "custom_tool_call_output",
 			call_id: normalized.callId,

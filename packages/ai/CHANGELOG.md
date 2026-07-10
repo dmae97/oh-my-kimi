@@ -7,6 +7,9 @@
 ### Changed
 
 - Enforced `all_turns` reasoning context for all Responses Lite requests
+### Fixed
+
+- Fixed xAI OAuth Responses continuations replaying OpenAI-only `custom_tool_call`/`custom_tool_call_output` history and `input_image.detail: "original"` frames; replay now downgrades those to xAI-compatible function calls and `detail: "auto"`. ([#5002](https://github.com/can1357/oh-my-pi/issues/5002))
 
 ## [16.4.0] - 2026-07-10
 
