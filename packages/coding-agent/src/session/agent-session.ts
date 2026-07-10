@@ -157,6 +157,7 @@ import {
 	AdvisorTranscriptRecorder,
 	advisorTranscriptFilename,
 	formatAdvisorBatchContent,
+	annotateForStaleness,
 	getOrCreateAdvisorProviderSessionId,
 	isAdvisorInterruptImmuneTurnActive,
 	isInterruptingSeverity,
@@ -2698,9 +2699,7 @@ export class AgentSession {
 		// When newer primary turns already arrived while the advisor model was
 		// processing this batch, the advice was generated without seeing them.
 		// Append a lightweight staleness caveat so the primary can weigh recency.
-		const deliveredNote = advisor.runtime.hasFreshBacklog
-			? `${note}\n\n_(Note: newer primary turns arrived after this reviewed window — verify this still applies.)_`
-			: note;
+		const deliveredNote = annotateForStaleness(note, advisor.runtime.hasFreshBacklog);
 		// The implicit single ("default") advisor stamps no source name, so its
 		// agent-facing `<advisory>` bytes stay identical to the pre-multi-advisor path.
 		const source = advisor.slug ? advisor.name : undefined;

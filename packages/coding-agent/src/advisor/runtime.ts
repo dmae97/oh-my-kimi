@@ -63,9 +63,18 @@ export interface AdvisorRuntimeHost {
 	notifyFailure?(error: unknown): void;
 }
 
+/**
+ * Maximum number of late-arrival coalescing rounds in {@link AdvisorRuntime.#collectAndMaintainBatch}.
+ * After this many rounds any items still in `#pending` are left for the next drain iteration
+ * so a pathologically fast primary + slow `maintainContext` cannot stall dispatch indefinitely.
+ */
+const MAX_COALESCE_ROUNDS = 3;
+
 interface PendingDelta {
 	text: string;
 	turns: number;
+	/** Whether the primary was mid-turn (willContinue:true) when this delta was rendered. */
+	wip: boolean;
 }
 
 interface CatchupWaiter {
@@ -108,22 +117,35 @@ export class AdvisorRuntime {
 	}
 
 	/**
-	 * True while the advisor model is processing a batch AND newer primary turns
-	 * have already arrived — `#pending` is non-empty during `agent.prompt()`.
-	 * Used by the delivery path to annotate advice that was generated without
-	 * seeing those newer turns.
+	 * True when `#pending` is non-empty while the drain loop is busy — i.e., newer
+	 * primary turns arrived after the current batch's transcript window was fixed
+	 * but before the advisor model finished processing it. The delivery path uses
+	 * this to annotate advice that was generated without seeing those newer turns.
+	 * Can be true during `agent.prompt()`, a `maintainContext` await, or a retry
+	 * sleep — any time `#drain` is busy and a concurrent `onTurnEnd` pushed.
 	 */
 	get hasFreshBacklog(): boolean {
 		return this.#pending.length > 0;
 	}
 
+	/**
+	 * Called after each primary turn ends. Renders the incremental delta and
+	 * queues it for the advisor model.
+	 *
+	 * @param messages - Live primary transcript snapshot (defaults to `snapshotMessages()`).
+	 * @param opts.willContinue - When `true` the primary is mid-turn (more tool-call
+	 *   steps will follow). The rendered heading is tagged `[in progress]` so the
+	 *   advisor knows to withhold critique on partial work. The flag is carried on
+	 *   the delta and forwarded to the reprime path so it is never silently dropped.
+	 */
 	onTurnEnd(messages?: AgentMessage[], opts?: { willContinue?: boolean }): void {
 		if (this.disposed) return;
 		const all = messages ?? this.host.snapshotMessages();
 		this.#latestMessages = all;
-		const render = this.#renderDelta(all, opts?.willContinue ?? false);
+		const wip = opts?.willContinue ?? false;
+		const render = this.#renderDelta(all, wip);
 		if (render) {
-			this.#pending.push({ text: render, turns: 1 });
+			this.#pending.push({ text: render, turns: 1, wip });
 			this.#backlog++;
 			this.#notifyWaiters();
 			void this.#drain();
@@ -299,10 +321,15 @@ export class AdvisorRuntime {
 	/**
 	 * Collect all currently pending deltas into one batch, running
 	 * `maintainContext` for correct token budgeting. Loops until the pending
-	 * queue is stable (nothing new arrived during a maintenance check) or a
+	 * queue is stable (no new deltas arrived during a maintenance check) or a
 	 * reprime is triggered. Every `await` inside the loop has an epoch guard so
 	 * a reset/dispose mid-await cannot leak a stale batch into the post-reset
 	 * conversation.
+	 *
+	 * The coalescing loop is capped at {@link MAX_COALESCE_ROUNDS} iterations so
+	 * a pathologically fast primary combined with a slow `maintainContext` cannot
+	 * stall dispatch indefinitely — any items still in `#pending` after the cap
+	 * are left for the next drain iteration.
 	 *
 	 * Returns `null` when the epoch was invalidated — caller should `continue`.
 	 * Returns `{ batch: null, finalTurns }` when there is nothing to render but
@@ -314,8 +341,12 @@ export class AdvisorRuntime {
 		const initial = this.#pending.splice(0);
 		let batchText = initial.map(b => b.text).join("\n\n");
 		let turns = initial.reduce((sum, b) => sum + b.turns, 0);
+		// Track WIP state of the most recent delta — forwarded to the reprime
+		// #renderDelta so a willContinue:true turn keeps its [in progress] heading
+		// even when the full transcript is replayed from scratch.
+		let wip = initial.at(-1)?.wip ?? false;
 
-		while (true) {
+		for (let round = 0; round < MAX_COALESCE_ROUNDS; round++) {
 			if (this.host.maintainContext) {
 				const incomingTokens = estimateTokens({ role: "user", content: batchText, timestamp: Date.now() });
 				let shouldReprime = false;
@@ -331,19 +362,23 @@ export class AdvisorRuntime {
 				if (shouldReprime) {
 					// Tally deltas that arrived during this await before #resetAdvisorContext
 					// wipes #pending, so finalTurns stays accurate for backlog accounting.
-					turns += this.#pending.reduce((sum, b) => sum + b.turns, 0);
+					// Also capture the latest WIP state before the queue is cleared.
+					const lateItems = this.#pending.splice(0);
+					turns += lateItems.reduce((sum, b) => sum + b.turns, 0);
+					if (lateItems.length > 0) wip = lateItems.at(-1)!.wip;
 					this.#resetAdvisorContext(false, false);
-					return { batch: this.#renderDelta(this.#latestMessages), finalTurns: turns };
+					return { batch: this.#renderDelta(this.#latestMessages, wip), finalTurns: turns };
 				}
 			}
 
 			// Coalesce any deltas that arrived while we were awaiting maintenance.
-			// If none arrived the batch is stable and we're done; otherwise merge
-			// and re-check the maintenance budget for the expanded batch.
+			// If none arrived the batch is stable and we're done; otherwise merge,
+			// update WIP state, and re-check the maintenance budget.
 			const late = this.#pending.splice(0);
 			if (late.length === 0) break;
 			batchText = [batchText, ...late.map(b => b.text)].join("\n\n");
 			turns += late.reduce((sum, b) => sum + b.turns, 0);
+			wip = late.at(-1)!.wip;
 		}
 
 		return { batch: batchText || null, finalTurns: turns };

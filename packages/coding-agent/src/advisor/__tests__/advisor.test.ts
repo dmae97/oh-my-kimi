@@ -20,6 +20,7 @@ import {
 	AdvisorRuntime,
 	type AdvisorRuntimeHost,
 	advisorTranscriptFilename,
+	annotateForStaleness,
 	deriveAdvisorTelemetry,
 	formatAdvisorBatchContent,
 	formatAdvisorContextPrompt,
@@ -364,6 +365,25 @@ describe("advisor", () => {
 		});
 	});
 
+	describe("annotateForStaleness", () => {
+		it("returns the note unchanged when hasFreshBacklog is false", () => {
+			expect(annotateForStaleness("watch out", false)).toBe("watch out");
+		});
+
+		it("appends the staleness caveat when hasFreshBacklog is true", () => {
+			const result = annotateForStaleness("watch out", true);
+			expect(result).toContain("watch out");
+			expect(result).toContain("newer primary turns arrived after this reviewed window");
+			expect(result).toContain("verify this still applies");
+		});
+
+		it("preserves the original note text verbatim (no mutations)", () => {
+			const note = "multi\nline\nnote";
+			const result = annotateForStaleness(note, true);
+			expect(result.startsWith(note)).toBe(true);
+		});
+	});
+
 	describe("AdviseTool", () => {
 		it("forwards advice to the callback and returns details", async () => {
 			const onAdvice = vi.fn();
@@ -686,6 +706,71 @@ describe("advisor", () => {
 			expect(resetCount).toBeGreaterThan(0);
 		});
 
+		it("backlog stays accurate when a delta arrives during the reprime-triggering maintainContext", async () => {
+			// Regression guard for: turns += this.#pending.reduce(...) in the reprime branch.
+			// Three onTurnEnd calls: turn1 starts the batch, turn2 arrives during the
+			// first (non-reprime) maintenance check, turn3 arrives during the reprime-
+			// triggering second check. All three must be counted in finalTurns so
+			// backlog returns to 0 (not stuck at 1) after the prompt succeeds.
+			const { promise: firstMaintainStarted, resolve: startFirstMaintain } = Promise.withResolvers<void>();
+			const { promise: finishFirstMaintain, resolve: releaseFirstMaintain } = Promise.withResolvers<boolean>();
+			const { promise: secondMaintainStarted, resolve: startSecondMaintain } = Promise.withResolvers<void>();
+			const { promise: finishSecondMaintain, resolve: releaseSecondMaintain } = Promise.withResolvers<boolean>();
+			const { promise: promptDone, resolve: finishPrompt } = Promise.withResolvers<void>();
+			let maintainCalls = 0;
+			const agent: AdvisorAgent = {
+				prompt: async () => {
+					finishPrompt();
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [{ role: "user", content: "t1", timestamp: 1 } as AgentMessage];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+				maintainContext: async () => {
+					maintainCalls++;
+					if (maintainCalls === 1) {
+						startFirstMaintain();
+						return await finishFirstMaintain; // returns false
+					}
+					startSecondMaintain();
+					return await finishSecondMaintain; // returns true → reprime
+				},
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+
+			// Turn 1 starts the drain; first maintainContext begins.
+			runtime.onTurnEnd();
+			await firstMaintainStarted;
+
+			// Turn 2 arrives during first maintenance (will be merged into the batch).
+			messages.push({ role: "user", content: "t2", timestamp: 2 } as AgentMessage);
+			runtime.onTurnEnd();
+
+			// First maintenance returns false; second begins (will trigger reprime).
+			releaseFirstMaintain(false);
+			await secondMaintainStarted;
+
+			// Turn 3 arrives during the reprime-triggering second maintenance.
+			// This is the delta that lands in #pending.reduce(...) in the reprime branch.
+			messages.push({ role: "user", content: "t3", timestamp: 3 } as AgentMessage);
+			runtime.onTurnEnd();
+
+			// Second maintenance returns true → reprime path fires.
+			releaseSecondMaintain(true);
+			// Wait for prompt to execute (backlog still 3 at this point inside prompt).
+			await promptDone;
+			// Give drain one tick to run its success path (backlog decrement).
+			await Promise.resolve();
+
+			// All three turns (3 backlog increments) must be covered by finalTurns.
+			// A deleted/broken tally would leave backlog at 1, not 0.
+			expect(runtime.backlog).toBe(0);
+		});
+
 		it("tags in-progress turns with [in progress] heading", async () => {
 			const promptInputs: string[] = [];
 			const { promise: promptStarted, resolve: startPrompt } = Promise.withResolvers<void>();
@@ -785,7 +870,16 @@ describe("advisor", () => {
 
 		it("sends the batch when context maintenance fails", async () => {
 			const promptInputs: string[] = [];
-			const agent = makeAgent(promptInputs);
+			const { promise: promptStarted, resolve: startPrompt } = Promise.withResolvers<void>();
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					startPrompt();
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
 			const messages: AgentMessage[] = [{ role: "user", content: "first", timestamp: 1 } as AgentMessage];
 			const host: AdvisorRuntimeHost = {
 				snapshotMessages: () => messages,
@@ -797,8 +891,7 @@ describe("advisor", () => {
 			const runtime = new AdvisorRuntime(agent, host);
 
 			runtime.onTurnEnd();
-			await Promise.resolve();
-			await Promise.resolve();
+			await promptStarted;
 
 			expect(promptInputs).toHaveLength(1);
 			expect(promptInputs[0]).toContain("first");
@@ -987,7 +1080,20 @@ describe("advisor", () => {
 
 		it("expands plan-mode context once, then collapses an unchanged re-injection", async () => {
 			const promptInputs: string[] = [];
-			const agent = makeAgent(promptInputs);
+			const { promise: firstPromptDone, resolve: finishFirst } = Promise.withResolvers<void>();
+			const { promise: secondPromptDone, resolve: finishSecond } = Promise.withResolvers<void>();
+			let promptCalls = 0;
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					promptCalls++;
+					if (promptCalls === 1) finishFirst();
+					else finishSecond();
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
 			const rule =
 				"Plan mode is active. You MUST perform READ-ONLY work only:\n- You NEVER create, edit, or delete files — except the single plan file named below.";
 			const messages: AgentMessage[] = [];
@@ -1006,8 +1112,7 @@ describe("advisor", () => {
 				timestamp: 2,
 			} as AgentMessage);
 			runtime.onTurnEnd();
-			await Promise.resolve();
-			await Promise.resolve();
+			await firstPromptDone;
 
 			expect(promptInputs).toHaveLength(1);
 			expect(promptInputs[0]).toContain('<primary-context kind="plan-mode-context">');
@@ -1027,8 +1132,7 @@ describe("advisor", () => {
 				timestamp: 4,
 			} as AgentMessage);
 			runtime.onTurnEnd();
-			await Promise.resolve();
-			await Promise.resolve();
+			await secondPromptDone;
 
 			expect(promptInputs).toHaveLength(2);
 			expect(promptInputs[1]).toContain("unchanged — still in effect");
