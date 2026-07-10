@@ -88,6 +88,38 @@ describe("terminal frame without connection close", () => {
 		expect(Date.now() - startedAt).toBeLessThan(2_000);
 	}, 10_000);
 
+	it("openai-completions: keeps reading usage-only cache details after finish usage", async () => {
+		const fetchMock = createNeverClosingFetch([
+			completionChunk({
+				choices: [{ index: 0, delta: { role: "assistant", content: "Hello" }, finish_reason: "stop" }],
+				usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+			}),
+			completionChunk({
+				choices: [],
+				usage: {
+					prompt_tokens: 10,
+					completion_tokens: 5,
+					total_tokens: 15,
+					prompt_tokens_details: { cached_tokens: 4 },
+				},
+			}),
+		]);
+
+		const startedAt = Date.now();
+		const result = await streamOpenAICompletions(completionsModel, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.content).toEqual([{ type: "text", text: "Hello" }]);
+		expect(result.usage.input).toBe(6);
+		expect(result.usage.cacheRead).toBe(4);
+		expect(result.usage.output).toBe(5);
+		expect(Date.now() - startedAt).toBeLessThan(2_000);
+	}, 10_000);
+
 	it("openai-completions: ends cleanly via the grace window when no usage chunk ever arrives", async () => {
 		const fetchMock = createNeverClosingFetch([
 			completionChunk({ choices: [{ index: 0, delta: { role: "assistant", content: "Hello" } }] }),

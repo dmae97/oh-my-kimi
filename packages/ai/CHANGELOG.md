@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed OpenAI-compatible chat-completions streams preserving vLLM-style trailing cached-token usage chunks so `cacheRead` and billable `input` session stats are accurate ([#5022](https://github.com/can1357/oh-my-pi/issues/5022)).
+
 ## [16.3.15] - 2026-07-09
 
 ### Breaking Changes
