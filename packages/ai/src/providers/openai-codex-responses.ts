@@ -95,6 +95,7 @@ import {
 	buildResponsesDeltaInput,
 	convertResponsesAssistantMessage,
 	convertResponsesInputContent,
+	createSequentialCutoffSummaryState,
 	encodeResponsesToolCallId,
 	encodeTextSignatureV1,
 	finalizeCustomToolCallInputDone,
@@ -106,6 +107,7 @@ import {
 	normalizeOpenAIPromptCacheKey,
 	populateResponsesUsageFromResponse,
 	promoteResponsesToolUseStopReason,
+	type SequentialCutoffSummaryState,
 } from "./openai-shared";
 import { transformMessages } from "./transform-messages";
 
@@ -685,6 +687,8 @@ class CodexStreamRuntime {
 	currentItem: CodexEventItem | null = null;
 	currentBlock: CodexOutputBlock | null = null;
 	nativeOutputItems: Array<Record<string, unknown>> = [];
+	/** Sequential-cutoff summary sections/emitted text, global to the response (indices span reasoning items). */
+	cutoffSummaries: SequentialCutoffSummaryState = createSequentialCutoffSummaryState();
 	websocketStreamRetries = 0;
 	providerRetryAttempt = 0;
 	sawTerminalEvent = false;
@@ -717,6 +721,7 @@ class CodexStreamRuntime {
 		this.currentItem = null;
 		this.currentBlock = null;
 		this.nativeOutputItems.length = 0;
+		this.cutoffSummaries = createSequentialCutoffSummaryState();
 	}
 
 	/**
@@ -1788,7 +1793,7 @@ class CodexStreamProcessor {
 						? Math.trunc(rawEvent.summary_index)
 						: 0;
 				applyReasoningSummaryDone(
-					entry.item,
+					this.runtime.cutoffSummaries,
 					entry.block,
 					typeof rawEvent.text === "string" ? rawEvent.text : "",
 					summaryIndex,
@@ -1937,9 +1942,11 @@ class CodexStreamProcessor {
 		const contentIndex = entry?.contentIndex ?? output.content.length - 1;
 
 		if (item.type === "reasoning" && block?.type === "thinking") {
-			block.thinking = finalizeReasoningThinking(item, block.thinking, {
-				cumulativeSummarySnapshots: this.#sequentialCutoffSummaries,
-			});
+			block.thinking = finalizeReasoningThinking(
+				item,
+				block.thinking,
+				this.#sequentialCutoffSummaries ? this.runtime.cutoffSummaries : undefined,
+			);
 			block.thinkingSignature = JSON.stringify(item);
 			stream.push({
 				type: "thinking_end",

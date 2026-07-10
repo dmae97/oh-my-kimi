@@ -897,4 +897,173 @@ describe("openai-codex concurrent reasoning summaries", () => {
 		const text = result.content.find(block => block.type === "text");
 		expect(text?.text).toBe("Hello");
 	});
+
+	it("does not replay earlier sections across reasoning items under sequential cutoff", async () => {
+		// Real gpt-5.6 sessions send response-GLOBAL summary indices: each new
+		// reasoning item replays the previous item's last completed section
+		// (`.done` at index N-1) before streaming its own, replay-only items add
+		// nothing, and every `output_item.done` payload carries the cumulative
+		// summary array. Folding per item duplicated every section header.
+		const model = createCodexModel("gpt-5.6-terra");
+		const events: Array<Record<string, unknown>> = [
+			{
+				type: "response.output_item.added",
+				output_index: 0,
+				item: { type: "reasoning", id: "rs_1", summary: [] },
+			},
+			{
+				type: "response.reasoning_summary_text.done",
+				item_id: "rs_1",
+				output_index: 0,
+				summary_index: 0,
+				text: "Planning refactor",
+			},
+			{
+				type: "response.output_item.done",
+				output_index: 0,
+				item: { type: "reasoning", id: "rs_1", summary: [{ type: "summary_text", text: "Planning refactor" }] },
+			},
+			{
+				type: "response.output_item.added",
+				output_index: 1,
+				item: { type: "reasoning", id: "rs_2", summary: [] },
+			},
+			// Replay of the previous item's section, then the new one.
+			{
+				type: "response.reasoning_summary_text.done",
+				item_id: "rs_2",
+				output_index: 1,
+				summary_index: 0,
+				text: "Planning refactor",
+			},
+			{
+				type: "response.reasoning_summary_text.done",
+				item_id: "rs_2",
+				output_index: 1,
+				summary_index: 1,
+				text: "Designing resolution",
+			},
+			{
+				type: "response.output_item.done",
+				output_index: 1,
+				item: {
+					type: "reasoning",
+					id: "rs_2",
+					summary: [
+						{ type: "summary_text", text: "Planning refactor" },
+						{ type: "summary_text", text: "Designing resolution" },
+					],
+				},
+			},
+			{
+				type: "response.output_item.added",
+				output_index: 2,
+				item: { type: "reasoning", id: "rs_3", summary: [] },
+			},
+			// Replay-only item: no new section arrives before it closes.
+			{
+				type: "response.reasoning_summary_text.done",
+				item_id: "rs_3",
+				output_index: 2,
+				summary_index: 1,
+				text: "Designing resolution",
+			},
+			{
+				type: "response.output_item.done",
+				output_index: 2,
+				item: {
+					type: "reasoning",
+					id: "rs_3",
+					summary: [
+						{ type: "summary_text", text: "Planning refactor" },
+						{ type: "summary_text", text: "Designing resolution" },
+					],
+				},
+			},
+			{
+				type: "response.output_item.added",
+				output_index: 3,
+				item: { type: "reasoning", id: "rs_4", summary: [] },
+			},
+			// Payload-only item: its new section never streams a `.done` event.
+			{
+				type: "response.output_item.done",
+				output_index: 3,
+				item: {
+					type: "reasoning",
+					id: "rs_4",
+					summary: [
+						{ type: "summary_text", text: "Planning refactor" },
+						{ type: "summary_text", text: "Designing resolution" },
+						{ type: "summary_text", text: "Enhancing caching" },
+					],
+				},
+			},
+			{
+				type: "response.output_item.added",
+				output_index: 4,
+				item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
+			},
+			{ type: "response.content_part.added", part: { type: "output_text", text: "" } },
+			{ type: "response.output_text.delta", item_id: "msg_1", output_index: 4, delta: "Hello" },
+			{
+				type: "response.output_item.done",
+				output_index: 4,
+				item: {
+					type: "message",
+					id: "msg_1",
+					role: "assistant",
+					status: "completed",
+					content: [{ type: "output_text", text: "Hello" }],
+				},
+			},
+			{
+				type: "response.completed",
+				response: {
+					status: "completed",
+					usage: {
+						input_tokens: 5,
+						output_tokens: 3,
+						total_tokens: 8,
+						input_tokens_details: { cached_tokens: 0 },
+					},
+				},
+			},
+		];
+		const fetchMock = createCodexFetchMock(createCodexSse(events), () => {});
+
+		const stream = streamOpenAICodexResponses(model, createCodexTestContext(), {
+			apiKey: createCodexTestToken(),
+			fetch: fetchMock,
+			reasoning: "medium",
+		});
+		const deltasByBlock = new Map<number, string>();
+		for await (const event of stream) {
+			if (event.type === "thinking_delta") {
+				deltasByBlock.set(event.contentIndex, (deltasByBlock.get(event.contentIndex) ?? "") + event.delta);
+			}
+		}
+		const result = await stream.result();
+
+		const thinkingBlocks = result.content.filter(block => block.type === "thinking");
+		expect(thinkingBlocks.map(block => block.thinking)).toEqual([
+			"Planning refactor",
+			"Designing resolution",
+			"",
+			"Enhancing caching",
+		]);
+		// Streamed deltas match each block that streamed; the payload-only block
+		// surfaces its unseen suffix at finalization without a delta.
+		expect([...deltasByBlock.entries()]).toEqual([
+			[0, "Planning refactor"],
+			[1, "Designing resolution"],
+		]);
+		// The replay-only block keeps its signed reasoning item so history replay
+		// still round-trips encrypted reasoning.
+		const replayOnly = thinkingBlocks[2];
+		expect(replayOnly?.thinkingSignature).toBeDefined();
+		expect(JSON.parse(replayOnly?.thinkingSignature ?? "{}").id).toBe("rs_3");
+		const text = result.content.find(block => block.type === "text");
+		expect(text?.text).toBe("Hello");
+	});
 });
