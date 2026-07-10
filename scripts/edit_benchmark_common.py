@@ -654,7 +654,7 @@ def install_verbose_logging(
         with _PRINT_LOCK:
             sys.stderr.write(
                 f"[{model.removeprefix('openrouter/')}] verbose> "
-                "no thinking level requested; pass --thinking low|medium|high|xhigh if the provider exposes reasoning.\n"
+                "no thinking level requested; pass --thinking low|medium|high|xhigh|max if the provider exposes reasoning.\n"
             )
             sys.stderr.flush()
 
@@ -914,7 +914,7 @@ def parse_args(description: str) -> argparse.Namespace:
     )
     parser.add_argument(
         "--thinking",
-        choices=["off", "minimal", "low", "medium", "high", "xhigh"],
+        choices=["off", "minimal", "low", "medium", "high", "xhigh", "max"],
         default="medium",
         help="Request a specific thinking level for models that support reasoning (default: medium).",
     )

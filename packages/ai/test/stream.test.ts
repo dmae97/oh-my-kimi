@@ -1765,7 +1765,7 @@ describe("Generate E2E Tests", () => {
 						tools: [calculatorTool],
 					},
 					{
-						reasoning: Effort.XHigh,
+						reasoning: Effort.Max,
 						interleavedThinking: true,
 						onPayload: payload => {
 							capturedPayload = payload;

@@ -643,7 +643,7 @@ export type OpenAICompletionsParams = Omit<ChatCompletionCreateParamsStreaming, 
 
 /** Reasoning-relevant slice of caller options the Chat Completions dialect dispatch reads. */
 export interface ChatCompletionsReasoningOptions {
-	reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh";
+	reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	disableReasoning?: boolean;
 }
 

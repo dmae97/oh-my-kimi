@@ -110,7 +110,7 @@ import {
 import { transformMessages } from "./transform-messages";
 
 export interface OpenAICodexResponsesOptions extends StreamOptions {
-	reasoning?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+	reasoning?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	reasoningSummary?: "auto" | "concise" | "detailed" | null;
 	/** `reasoning.context` replay scope; defaults to `all_turns` when unset. The `all_turns` value is gated to gpt-5.4+ Codex models — older ids reject it, so it is suppressed and `context` omitted. */
 	reasoningContext?: CodexReasoningContext;

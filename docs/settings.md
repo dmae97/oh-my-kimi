@@ -282,7 +282,7 @@ Every key below is defined in the settings schema; `omp config list` shows the f
 
 ### Models
 
-`modelRoles`, `modelTags`, and `cycleOrder` work together to define the models you can switch between. Role values may carry a thinking suffix (`:minimal`, `:low`, `:medium`, `:high`, `:xhigh`).
+`modelRoles`, `modelTags`, and `cycleOrder` work together to define the models you can switch between. Role values may carry a thinking suffix (`:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, `:max`).
 
 ```yaml
 modelRoles:
@@ -342,17 +342,19 @@ thinkingBudgets:
   medium: 8192
   high: 16384
   xhigh: 32768
+  max: 32768
 ```
 
 | Key | Type | Default | Values |
 |---|---|---|---|
-| `defaultThinkingLevel` | enum | `high` | `minimal`, `low`, `medium`, `high`, `xhigh`, `auto`. Override per run with `--thinking`. |
+| `defaultThinkingLevel` | enum | `high` | `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `auto`. Override per run with `--thinking`. |
 | `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in output. `--hide-thinking` sets it for the run (display only). |
 | `thinkingBudgets.minimal` | number | `1024` | Token budget for the `minimal` level. |
 | `thinkingBudgets.low` | number | `2048` | Token budget for `low`. |
 | `thinkingBudgets.medium` | number | `8192` | Token budget for `medium`. |
 | `thinkingBudgets.high` | number | `16384` | Token budget for `high`. |
 | `thinkingBudgets.xhigh` | number | `32768` | Token budget for `xhigh`. |
+| `thinkingBudgets.max` | number | `32768` | Token budget for `max`. |
 
 ### Sampling
 

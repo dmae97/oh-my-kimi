@@ -8,7 +8,7 @@ import { mapOpenAIReasoningEffort } from "../openai-shared";
 export type CodexReasoningContext = "auto" | "current_turn" | "all_turns";
 
 /** User-facing effort levels accepted by Codex request options. */
-type CodexCallerEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+type CodexCallerEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 /** Caller literal → catalog `Effort` bridge (the enum is nominal). */
 const EFFORT_BY_NAME: Record<CodexCallerEffort, Effort> = {
@@ -17,6 +17,7 @@ const EFFORT_BY_NAME: Record<CodexCallerEffort, Effort> = {
 	medium: Effort.Medium,
 	high: Effort.High,
 	xhigh: Effort.XHigh,
+	max: Effort.Max,
 };
 
 export interface ReasoningConfig {
@@ -28,7 +29,7 @@ export interface ReasoningConfig {
 }
 
 export interface CodexRequestOptions {
-	/** User-facing effort; the wire-only `max` tier is reached via the model's effort map. */
+	/** User-facing effort; maps 1:1 onto the wire tier of the same name. */
 	reasoningEffort?: CodexCallerEffort | "none";
 	reasoningSummary?: ReasoningConfig["summary"] | null;
 	/** Explicit `reasoning.context` override; defaults to `all_turns` when unset. The `all_turns` value is gated to gpt-5.4+ Codex models — older ids reject it, so it is suppressed and `context` omitted. */
@@ -99,7 +100,8 @@ export function resolveCodexResponsesLite(
 
 /**
  * Clamp a user-facing effort to the model's ladder, then remap to the wire
- * tier (e.g. GPT-5.6's shifted five-tier scale sends `max` for user `xhigh`).
+ * tier. User efforts map 1:1 onto wire tiers; the effort map only covers
+ * host quirks where a wire tier genuinely does not exist (e.g. `minimal→none`).
  * A mapped value outside the Codex wire vocabulary is a broken compat/model
  * effort map — fail loudly rather than silently sending a different tier.
  */

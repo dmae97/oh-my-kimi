@@ -65,7 +65,7 @@ bun src/runner.ts [options] [-- <extra harbor args>]
 | `-n, --concurrency <N>` | `4` | Concurrent trials |
 | `-k, --attempts <N>` | `1` | Attempts per task (pass@k) |
 | `-i/-x, --include/--exclude <glob>` | — | Task filters (repeatable) |
-| `--thinking <level>` | — | `off…xhigh` |
+| `--thinking <level>` | — | `off…max` |
 | `--advisor-model <p/m>` | — | Second model reviewing the primary; spend summed in |
 | `--agent <name>` | `omp` | `oracle`/`nop`/any harbor agent (bypasses omp) |
 | `--install <local\|published>` | `local` | `published` = npm `@oh-my-pi/pi-coding-agent` |

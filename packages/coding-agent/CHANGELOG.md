@@ -6,10 +6,18 @@
 
 - Renamed the bundled agent `explore` to `scout` (including renaming its configuration keys, prompt files, and task definitions). Any configurations, allowlists, or invocations referencing `explore` must now use `scout`.
 
+### Added
+
+- Added `max` as a native, first-class thinking tier for supported models
+- Added `thinkingBudgets.max` configuration setting
+- Updated terminal theme to support optional `thinkingMax` border color and icons
+
+- Added a real `max` thinking level above `xhigh` with an optional `thinkingMax` theme border color (falls back to `thinkingXhigh`). `max` owns the top status-line icons (`◉` unicode, fire nerd-font, `[max]` ascii); the nerd-font preset uses an empty-to-full battery ramp for `minimal` through `xhigh` and shuffle while automatic effort is unresolved. `max` appears in cycling, selectors, `--thinking`, `:max` model suffixes, role scopes, settings, and completions on models that genuinely support it; on other models it clamps down like any unsupported tier.
+
 ### Changed
 
 - Renamed the bundled agent `explore` to `scout` (including all internal references, prompt definitions, and task tool configurations). Any custom configurations or task invocations referencing `explore` must now use `scout`.
-
+- Changed `max` from a parse-time alias of `xhigh` to a distinct level everywhere (CLI flag, `:max` suffix, `defaultThinkingLevel`, ACP/RPC): the effort a model receives is now exactly the tier its wire supports, with no shifted remapping. Ultrathink now requests `max` (clamped per model); automatic thinking still tops out at `xhigh`. Added `thinkingBudgets.max` (default 32768).
 - Fixed collapsed compacted session transcript rebuilds reattaching snapcompact archive image frames to the live TUI, avoiding large retained JSC heaps on resume and transcript refresh. ([#4979](https://github.com/can1357/oh-my-pi/issues/4979))
 
 ### Fixed

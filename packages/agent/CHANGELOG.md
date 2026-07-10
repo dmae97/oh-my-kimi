@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `ThinkingLevel.Max` ("max") above `xhigh`, mapping to the catalog `Effort.Max` tier.
+
 ### Fixed
 
 - Fixed remote compaction for Codex Responses Lite models (GPT-5.6 family): both the V1 `/responses/compact` request and the V2 `compaction_trigger` stream now apply the lite rewrite (instructions as an input item, no top-level `instructions`/`tools`, `all_turns` reasoning replay on V2) and send the `x-openai-internal-codex-responses-lite` header, matching codex-rs routing compaction through `build_responses_request`.

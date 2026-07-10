@@ -56,7 +56,7 @@ function resolveDeploymentName(model: Model<"azure-openai-responses">, options?:
 
 // Azure OpenAI Responses-specific options
 export interface AzureOpenAIResponsesOptions extends StreamOptions {
-	reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh";
+	reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	reasoningSummary?: "auto" | "detailed" | "concise" | null;
 	azureApiVersion?: string;
 	azureResourceName?: string;

@@ -1309,7 +1309,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			for (let i = 0; i < sessionModelStrings.length; i++) {
 				const sessionModelStr = sessionModelStrings[i];
 				const parsedModel = parseModelString(sessionModelStr, {
-					allowMaxAlias: true,
+					allowMaxSuffix: true,
 					allowAutoAlias: true,
 					isLiteralModelId: (provider, id) => modelRegistry.find(provider, id) !== undefined,
 				});
@@ -1953,7 +1953,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			for (let i = 0; i < sessionRetryLimit; i++) {
 				const sessionModelStr = sessionModelStrings[i];
 				const parsedModel = parseModelString(sessionModelStr, {
-					allowMaxAlias: true,
+					allowMaxSuffix: true,
 					allowAutoAlias: true,
 					isLiteralModelId: (provider, id) => modelRegistry.find(provider, id) !== undefined,
 				});

@@ -622,9 +622,8 @@ const UMANS_REASONING_EFFORT_BY_LEVEL: Record<string, Effort> = {
 	medium: Effort.Medium,
 	high: Effort.High,
 	xhigh: Effort.XHigh,
-	max: Effort.XHigh,
+	max: Effort.Max,
 };
-const UMANS_MAX_REASONING_EFFORT_MAP = { [Effort.XHigh]: "max" } as const;
 const UMANS_DEFAULT_REASONING_EFFORTS = [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] as const;
 const UMANS_VIA_HANDOFF_MODEL_IDS = ["umans-glm-5.1", "umans-glm-5.2"] as const;
 
@@ -689,9 +688,6 @@ function mapUmansThinkingConfig(value: unknown): ThinkingConfig | undefined {
 		mode: umansHasMaxReasoningLevel(value) ? "anthropic-budget-effort" : "budget",
 		efforts,
 	};
-	if (thinking.mode === "anthropic-budget-effort") {
-		thinking.effortMap = UMANS_MAX_REASONING_EFFORT_MAP;
-	}
 	if (isRecord(value)) {
 		if (value.can_disable === false) {
 			thinking.requiresEffort = true;
@@ -2802,18 +2798,13 @@ export function basetenModelManagerOptions(
 
 						const baseModel = mapWithBundledReference(entry, defaults, reference);
 
+						// Baseten's reasoning router accepts only the high/max
+						// effort tiers for its GLM-5.2 and gpt-oss routes.
 						const isEffortReasoning = defaults.id === "openai/gpt-oss-120b" || defaults.id === "zai-org/GLM-5.2";
 						const thinking = isEffortReasoning
 							? {
 									mode: "effort" as const,
-									efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
-									effortMap: {
-										minimal: "high",
-										low: "high",
-										medium: "high",
-										high: "high",
-										xhigh: "max",
-									},
+									efforts: [Effort.High, Effort.Max],
 								}
 							: undefined;
 
@@ -2936,8 +2927,7 @@ const SAKANA_FUGU_ULTRA_COST = { input: 5, output: 30, cacheRead: 0.5, cacheWrit
 const SAKANA_FUGU_ULTRA_CONTEXT_WINDOW = 1_000_000;
 const SAKANA_FUGU_THINKING: ThinkingConfig = {
 	mode: "effort",
-	efforts: [Effort.High, Effort.XHigh],
-	effortMap: { [Effort.XHigh]: "max" },
+	efforts: [Effort.High, Effort.Max],
 };
 const SAKANA_RESPONSES_COMPAT: ModelSpec<"openai-responses">["compat"] = {
 	includeEncryptedReasoning: false,

@@ -60,8 +60,8 @@ describe("Sakana AI provider support", () => {
 		expect(bundled.find(model => model.id === "fugu-ultra-20260615")?.contextWindow).toBe(1_000_000);
 		for (const model of bundled) {
 			expect(model.api).toBe("openai-responses");
-			expect(model.thinking?.efforts).toEqual([Effort.High, Effort.XHigh]);
-			expect(model.thinking?.effortMap?.[Effort.XHigh]).toBe("max");
+			expect(model.thinking?.efforts).toEqual([Effort.High, Effort.Max]);
+			expect(model.thinking?.effortMap).toBeUndefined();
 			expect((model.compat as ResolvedOpenAIResponsesCompat).includeEncryptedReasoning).toBe(false);
 			expect((model.compat as ResolvedOpenAIResponsesCompat).streamIdleTimeoutMs).toBe(0);
 		}
@@ -95,8 +95,8 @@ describe("Sakana AI provider support", () => {
 		expect(models?.map(model => model.id)).toEqual(["fugu", "fugu-next", "fugu-ultra"]);
 		const fuguNext = models?.find(model => model.id === "fugu-next");
 		expect(fuguNext?.reasoning).toBe(true);
-		expect(fuguNext?.thinking?.efforts).toEqual([Effort.High, Effort.XHigh]);
-		expect(fuguNext?.thinking?.effortMap?.[Effort.XHigh]).toBe("max");
+		expect(fuguNext?.thinking?.efforts).toEqual([Effort.High, Effort.Max]);
+		expect(fuguNext?.thinking?.effortMap).toBeUndefined();
 		expect(fuguNext?.compat?.includeEncryptedReasoning).toBe(false);
 	});
 

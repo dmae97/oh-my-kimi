@@ -659,6 +659,8 @@ function effortFromThinkingLevel(level: ThinkingLevel): Effort {
 			return Effort.High;
 		case ThinkingLevel.XHigh:
 			return Effort.XHigh;
+		case ThinkingLevel.Max:
+			return Effort.Max;
 		case ThinkingLevel.Off:
 		case ThinkingLevel.Inherit:
 			throw new Error(`effortFromThinkingLevel: ${level} must be handled by caller`);

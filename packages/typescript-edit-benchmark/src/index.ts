@@ -116,7 +116,7 @@ Usage:
 Options:
   --model <id>              Provider/model ID, e.g. anthropic/claude-sonnet-4-20250514 (default)
   --provider <id>           Override provider (auto-detected from model prefix if omitted)
-  --thinking <level>        Thinking level: off, minimal, low, medium, high, xhigh
+  --thinking <level>        Thinking level: off, minimal, low, medium, high, xhigh, max
   --runs <n>                Runs per task (default: 1)
   --timeout <ms>            Timeout per run in ms (default: 120000)
   --connection-timeout <ms>  Timeout for first event before fast-retry (default: 30000)

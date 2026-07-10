@@ -76,8 +76,7 @@ describe("generated model policies", () => {
 		expect(models[0]?.cost.cacheWrite).toBe(6.25);
 		expect(models[1]?.thinking).toEqual({
 			mode: "anthropic-adaptive",
-			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
-			effortMap: { minimal: "low", xhigh: "max" },
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.Max],
 		});
 		expect(models[1]?.cost.cacheRead).toBe(0.5);
 		expect(models[1]?.cost.cacheWrite).toBe(6.25);
@@ -103,8 +102,7 @@ describe("generated model policies", () => {
 		expect(models[0]?.cost).toEqual({ input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 });
 		expect(models[0]?.thinking).toEqual({
 			mode: "anthropic-adaptive",
-			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
-			effortMap: { minimal: "low", low: "medium", medium: "high", high: "xhigh", xhigh: "max" },
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
 			supportsDisplay: true,
 		});
 	});

@@ -10,10 +10,17 @@
 - Added Zenmux variants for GPT-5.6 (Luna, Sol, and Terra)
 - Added Novita as a model provider with authoritative public catalog discovery and generated pricing, limits, modality, reasoning, and tool metadata ([#4917](https://github.com/can1357/oh-my-pi/pull/4917) by [@jason-wu-ai](https://github.com/jason-wu-ai)).
 - Added `useResponsesLite` to `Model`/`ModelSpec` and Codex discovery parsing of the upstream `use_responses_lite` flag; regenerated `models.json` marks the GPT-5.6 family (`sol`/`terra`/`luna` and their pro aliases) for the Responses Lite transport. Added the `x-openai-internal-codex-responses-lite` marker to `OPENAI_HEADERS`.
+- Added `Effort.Max` ("max") as a first-class user-facing thinking level above `xhigh`.
 
 ### Changed
 
+- Standardized reasoning effort levels to use a wire-exact `max` tier across all model providers
+- Refactored Devin model routing to support 1:1 mapping for the `max` effort tier
+- Normalized stale Ollama model configurations to the new wire-exact effort ladder
+
 - Updated costs and context windows for various models in the catalog
+- **Breaking**: Effort ladders are now wire-exact and the shifted five-tier effort mapping is gone. Models expose exactly the effort tiers their wire accepts, mapped 1:1: GPT-5.6+ and Anthropic adaptive models with a real xhigh tier (Opus 4.7+, Sonnet 5+, Fable/Mythos 5) expose `low..max`; legacy adaptive models (Opus 4.6 and all Bedrock adaptive) expose `low/medium/high/max`; Sonnet/Haiku 4.6 expose `low/medium/high`; GLM-5.2 on Z.ai/Zhipu/Umans/Ollama Cloud/Baseten and Sakana Fugu and DeepSeek expose `high/max`; local Ollama reasoning models expose `low/medium/high/max`; Fire Pass Kimi exposes `low..max` with distinct `xhigh` and `max` budgets. Removed `SHIFTED_FIVE_TIER_EFFORT_MAP`, `ANTHROPIC_ADAPTIVE_EFFORT_MAP_4_TIER`, and the per-host `xhigh -> "max"` alias maps; selecting a tier a model lacks clamps down via `clampThinkingLevelForModel`. Devin effort routing is now 1:1 onto per-tier siblings (`max -> -max`; families without a `-max` sibling top out at `xhigh`; the fake `minimal -> -low` fallback is gone). Regenerated `models.json`.
+- Changed `fillThinkingWireDefaults` to re-derive the effort map whenever the model-defined ladder disagrees with cached metadata, so stale cached surfaces from the shifted-map era normalize to the new wire-exact shape on every `buildModel`.
 
 ## [16.3.15] - 2026-07-09
 

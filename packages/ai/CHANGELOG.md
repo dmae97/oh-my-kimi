@@ -4,10 +4,14 @@
 
 ### Added
 
+- Added `max` as a first-class reasoning effort option across providers and wire schemas
+- Updated `max` reasoning budget to 32768 tokens across all provider budget tables
+
 - Added model-driven Codex Responses Lite: `responsesLite` now defaults to the catalog `useResponsesLite` flag (codex-rs `use_responses_lite`, set on the GPT-5.6 family), so lite requests are sent without per-call opt-in.
 - Added the full Responses Lite wire contract: lite requests move tools into a leading `{type: "additional_tools", role: "developer"}` input item and the base instructions into a developer message, omit top-level `instructions`/`tools`, and force `parallel_tool_calls: false`, mirroring codex-rs `build_responses_request`.
 - Added concurrent reasoning summaries on Codex Responses: requests with a reasoning summary send `stream_options: { reasoning_summary_delivery: "sequential_cutoff" }`, and the stream decoder consumes the matching atomic `response.reasoning_summary_text.done` events (resolved by `item_id`/`output_index`, stale dones dropped, incremental `.delta`/`.part.*` events ignored under the cutoff contract). The cutoff gate reads the post-`onPayload` wire body on both transports, and `response.reasoning_summary_text.done` now counts as websocket watchdog progress.
 - Added Novita API-key login with authenticated key validation and `NOVITA_API_KEY` discovery ([#4917](https://github.com/can1357/oh-my-pi/pull/4917) by [@jason-wu-ai](https://github.com/jason-wu-ai)).
+- Added `"max"` as a first-class reasoning effort across provider options, wire types (`reasoning_effort`/`reasoning.effort`), server intake guards, and the Codex request transformer; user `max` now serializes 1:1 to the provider `max` tier instead of being reachable only through the retired shifted effort maps. Inbound Anthropic gateway requests now map `output_config.effort` onto `options.reasoning`.
 
 ### Changed
 
@@ -16,6 +20,7 @@
 - Standardized Responses Lite activation via model-level catalog flags
 - Recognized Pro Lite as a paid plan tier for OpenAI Codex models
 - Changed Responses Lite image handling to match current codex-rs: a lite request containing input images now stays on the lite transport with image `detail` stripped, instead of silently falling back to the full Responses shape.
+- Changed effort budget tables (`ANTHROPIC_THINKING`, `GOOGLE_THINKING`, `BEDROCK_CLAUDE_THINKING`, Bedrock `defaultBudgets`) to carry a `max` row (32768), and `getGoogleBudget` to resolve `max` to the largest bucket explicitly.
 
 ### Fixed
 

@@ -459,7 +459,7 @@ export function isOpenAICompletionsProgressChunk(chunk: unknown): boolean {
 
 export interface OpenAICompletionsOptions extends StreamOptions {
 	toolChoice?: ToolChoice;
-	reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh";
+	reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	/** Force-disable reasoning where supported, or request the lowest effort on generic effort endpoints. */
 	disableReasoning?: boolean;
 	serviceTier?: ServiceTier;

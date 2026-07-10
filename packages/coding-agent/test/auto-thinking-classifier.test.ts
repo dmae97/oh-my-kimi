@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import * as ai from "@oh-my-pi/pi-ai";
 import { Effort, type Model } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import {
 	classifyDifficulty,
@@ -71,7 +72,7 @@ describe("auto thinking classifier helpers", () => {
 	it("parses CLI --thinking selectors while rejecting inherit", () => {
 		expect(parseCliThinkingLevel(ThinkingLevel.Off)).toBe(ThinkingLevel.Off);
 		expect(parseCliThinkingLevel(AUTO_THINKING)).toBe(AUTO_THINKING);
-		expect(parseCliThinkingLevel("max")).toBe(ThinkingLevel.XHigh);
+		expect(parseCliThinkingLevel("max")).toBe(ThinkingLevel.Max);
 		expect(parseCliThinkingLevel(ThinkingLevel.Inherit)).toBeUndefined();
 		expect(parseCliThinkingLevel("bogus")).toBeUndefined();
 	});
@@ -182,6 +183,24 @@ describe("auto thinking classifier helpers", () => {
 		expect(clampAutoThinkingEffort(model, Effort.Minimal)).toBe(Effort.Low);
 	});
 
+	it("clamps max down to the ladder ceiling on models without a max tier", () => {
+		const xhighCeilingModel = buildModel({
+			id: "mock-xhigh-ceiling",
+			name: "Mock XHigh Ceiling",
+			api: "openai-completions",
+			provider: "mock",
+			baseUrl: "https://example.com",
+			reasoning: true,
+			thinking: { mode: "effort", efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] },
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 4096,
+		});
+
+		expect(clampAutoThinkingEffort(xhighCeilingModel, Effort.Max)).toBe(Effort.XHigh);
+	});
+
 	it("returns undefined for reasoning models without controllable efforts (devin-agent shape)", () => {
 		// Repro for https://github.com/can1357/oh-my-pi/issues/3356 — Devin
 		// models report `reasoning: true` but expose no `thinking.efforts` (Cascade
@@ -202,13 +221,14 @@ describe("auto thinking classifier helpers", () => {
 
 		expect(clampAutoThinkingEffort(devinModel, Effort.Low)).toBeUndefined();
 		expect(clampAutoThinkingEffort(devinModel, Effort.XHigh)).toBeUndefined();
+		expect(clampAutoThinkingEffort(devinModel, Effort.Max)).toBeUndefined();
 		expect(resolveProvisionalAutoLevel(devinModel)).toBeUndefined();
 	});
 
-	it("accepts max as the top configured thinking alias", () => {
-		expect(parseEffort("max")).toBe(Effort.XHigh);
-		expect(parseThinkingLevel("max")).toBeUndefined();
-		expect(parseConfiguredThinkingLevel("max")).toBe(ThinkingLevel.XHigh);
+	it("parses max as a real thinking level", () => {
+		expect(parseEffort("max")).toBe(Effort.Max);
+		expect(parseThinkingLevel("max")).toBe(ThinkingLevel.Max);
+		expect(parseConfiguredThinkingLevel("max")).toBe(ThinkingLevel.Max);
 	});
 
 	it("rejects inherited object keys as thinking selectors", () => {

@@ -171,7 +171,7 @@ describe("ModelSelector role badge thinking display", () => {
 		expect(menuRendered).toContain("Set as SMOL (Quick)");
 	});
 
-	test("renders xhigh effort for OpenAI GPT-5.5 thinking options", async () => {
+	test("renders the xhigh-ceiling ladder without a speculative max tier (GPT-5.5)", async () => {
 		installTestTheme();
 		const model = getBundledModel("openai", "gpt-5.5");
 		if (!model) throw new Error("Expected bundled model openai/gpt-5.5");
@@ -186,7 +186,25 @@ describe("ModelSelector role badge thinking display", () => {
 		const rendered = normalizeRenderedText(selector.render(220).join("\n"));
 		expect(rendered).toContain("Thinking for: Default (gpt-5.5)");
 		expect(rendered).toContain("low medium high xhigh");
-		expect(rendered).not.toContain("low medium high max");
+		// gpt-5.5's wire has no max tier; the selector must not invent one.
+		expect(rendered).not.toContain("max");
+	});
+
+	test("renders max as a real final tier on max-capable models (GPT-5.6)", async () => {
+		installTestTheme();
+		const model = getBundledModel("openai", "gpt-5.6");
+		if (!model) throw new Error("Expected bundled model openai/gpt-5.6");
+
+		const selector = createSelector(model, Settings.isolated({}));
+		await Bun.sleep(0);
+		installTestTheme();
+
+		selector.handleInput("\n");
+		selector.handleInput("\n");
+
+		const rendered = normalizeRenderedText(selector.render(220).join("\n"));
+		expect(rendered).toContain("Thinking for: Default (gpt-5.6)");
+		expect(rendered).toContain("low medium high xhigh max");
 	});
 
 	test("reloads DEFAULT(auto) from defaultThinkingLevel", async () => {
