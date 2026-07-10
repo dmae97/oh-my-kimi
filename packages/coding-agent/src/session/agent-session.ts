@@ -38,8 +38,8 @@ import {
 	createToolScopedAbortReason,
 	resolveTelemetry,
 	type StreamFn,
-	ThinkingLevel,
 	TERMINAL_TOOL_RESULT_ABORT_REASON,
+	ThinkingLevel,
 	type ToolChoiceDirective,
 } from "@oh-my-pi/pi-agent-core";
 import {
