@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed remote compaction for Codex Responses Lite models (GPT-5.6 family): both the V1 `/responses/compact` request and the V2 `compaction_trigger` stream now apply the lite rewrite (instructions as an input item, no top-level `instructions`/`tools`, `all_turns` reasoning replay on V2) and send the `x-openai-internal-codex-responses-lite` header, matching codex-rs routing compaction through `build_responses_request`.
+- Fixed aborted tool-result hooks from continuing into another provider call before the abort settled. ([#4963](https://github.com/can1357/oh-my-pi/issues/4963))
 
 ## [16.3.12] - 2026-07-08
 

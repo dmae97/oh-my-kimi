@@ -16,6 +16,7 @@
 - Fixed subagent `yield` tool calls being discarded when the soft request budget hard-aborted the same assistant turn before the yield result event landed. ([#5006](https://github.com/can1357/oh-my-pi/issues/5006))
 - Fixed `--tools` filtering in interactive sessions disabling deferred MCP tools; MCP tools discovered from configured servers now stay active when the flag limits only built-in tools. ([#5013](https://github.com/can1357/oh-my-pi/issues/5013))
 
+- Fixed kept-alive task subagents entering a repeated provider-call loop after an IRC wake and terminal `yield`. ([#4963](https://github.com/can1357/oh-my-pi/issues/4963))
 ## [16.3.15] - 2026-07-09
 
 ### Changed

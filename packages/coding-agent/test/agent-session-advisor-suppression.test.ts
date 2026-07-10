@@ -18,7 +18,8 @@
  *     follow-up stays queued for the next explicit resume rather than auto-running.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-core";
+import type { ToolCall } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -29,6 +30,18 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Snowflake, TempDir } from "@oh-my-pi/pi-utils";
+import { type } from "arktype";
+
+interface MockYieldDetails {
+	status: "success";
+	data?: unknown;
+	type?: string | string[];
+}
+
+const mockYieldParameters = type({
+	result: "unknown",
+	"type?": "unknown",
+});
 
 const ADVISOR_TYPE = "advisor";
 
@@ -92,6 +105,56 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
 		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
 		return { session, sessionManager, mock, streamStarted: started.promise };
+	}
+
+	function readYieldResultData(result: unknown): unknown {
+		if (!result || typeof result !== "object" || !("data" in result)) return undefined;
+		return result.data;
+	}
+
+	function isYieldType(value: unknown): value is string | string[] {
+		return (
+			typeof value === "string" ||
+			(Array.isArray(value) && value.length > 0 && value.every(item => typeof item === "string"))
+		);
+	}
+
+	function createMockYieldTool(): AgentTool<typeof mockYieldParameters, MockYieldDetails> {
+		return {
+			name: "yield",
+			label: "Yield",
+			description: "Mock yield tool",
+			parameters: mockYieldParameters,
+			execute: async (_toolCallId, params) => {
+				const details: MockYieldDetails = { status: "success", data: readYieldResultData(params.result) };
+				if (isYieldType(params.type)) details.type = params.type;
+				return {
+					content: [{ type: "text", text: "Result submitted." }],
+					details,
+				};
+			},
+		};
+	}
+
+	function createYieldMockResponse(args: { result: { data: unknown }; type?: string | string[] }): MockResponse {
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: `call_yield_${Snowflake.next()}`,
+			name: "yield",
+			arguments: args,
+		};
+		return {
+			content: [toolCall],
+			stopReason: "toolUse",
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+		};
 	}
 
 	function advisorCard(content: string) {
@@ -323,6 +386,41 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		);
 		expect(sawIrc).toBe(true);
 		expect(mock.calls.length).toBe(2);
+	});
+
+	it("stops an idle IRC wake after a terminal yield", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		let providerCalls = 0;
+		const mock = createMockModel({
+			handler: () => {
+				providerCalls++;
+				if (providerCalls > 1) {
+					throw new Error("terminal yield must not start a second provider call");
+				}
+				return createYieldMockResponse({ result: { data: { ok: true } } });
+			},
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [createMockYieldTool()] },
+			streamFn: mock.stream,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({ "compaction.enabled": false });
+		const authStorage = await AuthStorage.create(tempDir.join(`auth-${Snowflake.next()}.db`));
+		authStorages.push(authStorage);
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		const msg: IrcMessage = { id: "m-yield", from: "peer", to: "me", body: "status?", ts: Date.now() };
+
+		const outcome = await session.deliverIrcMessage(msg);
+		await session.waitForIdle();
+
+		expect(outcome).toBe("woken");
+		expect(providerCalls).toBe(1);
+		expect(mock.calls.length).toBe(1);
 	});
 
 	it("flushes an accepted IRC aside on dispose instead of dropping it", async () => {

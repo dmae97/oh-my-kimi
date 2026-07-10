@@ -1084,6 +1084,12 @@ async function runLoopBody(
 					}
 				}
 
+				// A tool hook may abort to mark the tool result as terminal (e.g. subagent yield).
+				// Stop before the next provider call; event listeners observe the result too late.
+				if (signal?.aborted) {
+					hasMoreToolCalls = false;
+				}
+
 				if (toolCalls.length > 0) {
 					pausedTurnContinuations = 0;
 				} else if (
