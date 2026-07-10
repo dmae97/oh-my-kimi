@@ -100,9 +100,6 @@ function createCodexFetchMock(sse: string, onRequest: (captured: CapturedCodexRe
 		if (url === "https://api.github.com/repos/openai/codex/releases/latest") {
 			return new Response(JSON.stringify({ tag_name: "rust-v0.0.0" }), { status: 200 });
 		}
-		if (url === "https://registry.npmjs.org/@openai%2Fcodex/latest") {
-			return new Response(JSON.stringify({ version: "0.144.1" }), { status: 200 });
-		}
 		if (url.startsWith("https://raw.githubusercontent.com/openai/codex/")) {
 			return new Response("PROMPT", { status: 200, headers: { etag: '"etag"' } });
 		}
