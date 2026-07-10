@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed subagent `yield` tool calls being discarded when the soft request budget hard-aborted the same assistant turn before the yield result event landed. ([#5006](https://github.com/can1357/oh-my-pi/issues/5006))
+
 ## [16.3.15] - 2026-07-09
 
 ### Changed

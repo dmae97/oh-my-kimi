@@ -260,6 +260,74 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		expect(result.extractedToolData?.yield).toBeDefined();
 	});
 
+	it("commits a yield tool call before the soft request budget aborts the turn", async () => {
+		const settings = Settings.isolated({ "task.softRequestBudget": 1 });
+		const firstAssistantMessage = {
+			role: "assistant" as const,
+			content: [{ type: "text" as const, text: "finishing the task" }],
+			stopReason: "stop" as const,
+		};
+		const yieldAssistantMessage = {
+			role: "assistant" as const,
+			content: [
+				{
+					type: "toolCall" as const,
+					id: "tool-yield-budget",
+					name: "yield",
+					arguments: { result: { data: { finished: true } } },
+				},
+			],
+			stopReason: "toolUse" as const,
+		};
+		let listenerRef: ((event: AgentSessionEvent) => void) | undefined;
+		let waitForIdleCalls = 0;
+		let abortCount = 0;
+		const session: Partial<AgentSession> = {
+			state: { messages: [] } as never,
+			agent: { state: { systemPrompt: ["test"] } } as never,
+			extensionRunner: undefined as never,
+			sessionManager: { appendSessionInit: () => {} } as never,
+			getActiveToolNames: () => ["read", "yield"],
+			setActiveToolsByName: async () => {},
+			subscribe: (listener: (event: AgentSessionEvent) => void) => {
+				listenerRef = listener;
+				return () => {};
+			},
+			prompt: async () => true,
+			waitForIdle: async () => {
+				waitForIdleCalls += 1;
+				if (waitForIdleCalls !== 1) return;
+				listenerRef?.({
+					type: "message_end",
+					message: firstAssistantMessage,
+				} as unknown as AgentSessionEvent);
+				listenerRef?.({
+					type: "message_end",
+					message: yieldAssistantMessage,
+				} as unknown as AgentSessionEvent);
+			},
+			getLastAssistantMessage: () => yieldAssistantMessage as never,
+			abort: async () => {
+				abortCount += 1;
+			},
+			dispose: async () => {},
+		};
+		mockCreateAgentSession(session as AgentSession);
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-soft-budget-yield",
+			settings,
+		});
+
+		expect(abortCount).toBe(0);
+		expect(result.aborted).toBe(false);
+		expect(result.exitCode).toBe(0);
+		expect(result.requests).toBe(2);
+		expect(result.abortReason).toBeUndefined();
+		expect(JSON.parse(result.output)).toEqual({ finished: true });
+	});
+
 	it("propagates per-turn context tokens onto the SingleResult", async () => {
 		// Async task consumers (index.ts) copy `singleResult.contextTokens` and
 		// `singleResult.contextWindow` onto AgentProgress. This test pins the

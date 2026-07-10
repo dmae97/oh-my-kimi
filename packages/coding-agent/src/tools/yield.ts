@@ -425,6 +425,33 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 
 // Register subprocess tool handler for extraction + termination.
 subprocessToolRegistry.register<YieldDetails>("yield", {
+	extractCallData: event => {
+		const raw = event.args;
+		const rawResult = raw?.result;
+		if (!rawResult || typeof rawResult !== "object" || Array.isArray(rawResult)) return undefined;
+		const resultRecord = rawResult as Record<string, unknown>;
+		const errorMessage = typeof resultRecord.error === "string" ? resultRecord.error : undefined;
+		const data = resultRecord.data;
+		let yieldType: string | string[] | undefined;
+		try {
+			yieldType = parseYieldType(raw?.type);
+		} catch {
+			return undefined;
+		}
+		if (errorMessage !== undefined && data !== undefined) return undefined;
+		if (errorMessage === undefined && data === undefined && yieldType === undefined) return undefined;
+		if (errorMessage === undefined && data === null) return undefined;
+		return {
+			data,
+			status: errorMessage === undefined ? "success" : "aborted",
+			error: errorMessage,
+			type: yieldType,
+			useLastTurn:
+				errorMessage === undefined && data === undefined && yieldType !== undefined && !("error" in resultRecord)
+					? true
+					: undefined,
+		};
+	},
 	extractData: event => {
 		const details = event.result?.details;
 		if (!details || typeof details !== "object") return undefined;
