@@ -377,6 +377,39 @@ describe("title generator", () => {
 		expect(title).toBe("Fix login button on mobile");
 	});
 
+	it("preserves a markerless title that mentions a <think> tag", async () => {
+		const model = getModelFor("deepseek", "deepseek-v4-pro");
+		vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "Fix <think> tag parsing" }],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"fix title generation for <think> tag parsing",
+			createRegistry(model),
+			createSettings(model),
+		);
+
+		expect(title).toBe("Fix <think> tag parsing");
+	});
+
+	it("preserves a markerless title that mentions a ```thinking fence", async () => {
+		const model = getModelFor("deepseek", "deepseek-v4-pro");
+		vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "Fix ```thinking fence parsing" }],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"fix title generation for a ```thinking fence",
+			createRegistry(model),
+			createSettings(model),
+		);
+
+		expect(title).toContain("```thinking");
+		expect(title).toContain("fence");
+	});
+
 	it("strips an unclosed <title> tag from a truncated response", async () => {
 		const model = getModelFor("deepseek", "deepseek-v4-pro");
 		vi.spyOn(ai, "completeSimple").mockResolvedValue({

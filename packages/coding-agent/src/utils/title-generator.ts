@@ -35,6 +35,8 @@ const TITLE_MAX_TOKENS = 1024;
 /** Matches the title the model wraps in `<title>...</title>`. */
 const TITLE_MARKER_GLOBAL_RE = /<title>([\s\S]*?)<\/title>/gi;
 const TITLE_VISIBILITY_SENTINEL = "\uE000omp-title-visible\uE000";
+const LEADING_THINKING_TAG_RE = /^\s*<(think|thinking|reasoning)>\s*[\s\S]*?<\/\1>\s*/i;
+const LEADING_THINKING_FENCE_RE = /^\s*```(?:thinking|reasoning)\b[\s\S]*?```\s*/i;
 
 function getTitleModel(registry: ModelRegistry, settings: Settings, currentModel?: Model<Api>): Model<Api> | undefined {
 	const availableModels = registry.getAvailable();
@@ -244,12 +246,12 @@ function extractGeneratedTitle(contentBlocks: AssistantMessage["content"]): stri
 		}
 	}
 	// Stay lenient: prefer the first closed title marker in visible text, then
-	// fall back to a plain sentence after stripping leaked thinking plus any
-	// stray/unclosed title tag fragment (e.g. output truncated before closing).
+	// fall back to a plain sentence after stripping only known leading leaked
+	// thinking envelopes plus any stray/unclosed title tag fragment.
 	const markedTitle = extractVisibleMarkedTitle(textTitle);
 	const cleanedTextTitle =
 		markedTitle ??
-		stripLeakedThinkingMarkup(textTitle)
+		stripLeadingLeakedThinkingMarkup(textTitle)
 			.replace(/<\/?title>/gi, "")
 			.trim();
 	return unwrapJsonTitle(cleanedTextTitle);
@@ -270,6 +272,16 @@ function isVisibleTitleMarker(text: string, markerIndex: number): boolean {
 	return stripLeakedThinkingMarkup(`${text.slice(0, markerIndex)}${TITLE_VISIBILITY_SENTINEL}`).endsWith(
 		TITLE_VISIBILITY_SENTINEL,
 	);
+}
+
+function stripLeadingLeakedThinkingMarkup(text: string): string {
+	let current = text;
+	while (true) {
+		const withoutTag = current.replace(LEADING_THINKING_TAG_RE, "");
+		const withoutFence = withoutTag.replace(LEADING_THINKING_FENCE_RE, "");
+		if (withoutFence === current) return current;
+		current = withoutFence;
+	}
 }
 
 function stripLeakedThinkingMarkup(text: string): string {
