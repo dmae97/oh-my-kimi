@@ -291,6 +291,73 @@ describe("WorkerCore", () => {
 		}
 	});
 
+	it("first init while a same-realm run is live fails via init-failed and recovers", async () => {
+		const first = createWorkerHarness();
+		const second = createWorkerHarness(); // never initialized: no runtime exists yet
+		const cwd = process.cwd();
+		await initializeWorker(first, { cwd, sessionId: "first-init-live-first", localRoots: {} });
+
+		const gate = Promise.withResolvers<void>();
+		const entered = Promise.withResolvers<void>();
+		(globalThis as { __omp_worker_core_gate?: { entered(): void; wait: Promise<void> } }).__omp_worker_core_gate = {
+			entered: () => entered.resolve(),
+			wait: gate.promise,
+		};
+
+		const { fatal, uninstall } = installFatalCapture();
+		try {
+			const firstText = waitForMessage(
+				first,
+				message => message.type === "text" && message.runId === "hold-for-first-init",
+			);
+			const firstResult = waitForMessage(
+				first,
+				message => message.type === "result" && message.runId === "hold-for-first-init",
+			);
+			first.send({
+				type: "run",
+				runId: "hold-for-first-init",
+				code: "globalThis.__omp_worker_core_gate.entered(); await globalThis.__omp_worker_core_gate.wait; __omp_session__.sessionId;",
+				filename: "[first-init-live-first].js",
+				snapshot: { cwd, sessionId: "first-init-live-first", localRoots: {} },
+			});
+			await entered.promise;
+
+			// A fresh runtime's install would Object.assign over the live runtime's
+			// globals mid-run; it must fail via the protocol instead.
+			const reply = waitForMessage(second, message => message.type === "ready" || message.type === "init-failed");
+			second.send({ type: "init", snapshot: { cwd, sessionId: "first-init-live-second", localRoots: {} } });
+			expect(await reply).toMatchObject({
+				type: "init-failed",
+				error: { message: "Cannot initialize a JS runtime while another same-realm JS runtime is running" },
+			});
+
+			// The held run's globals were not clobbered: it still resolves its own
+			// session bag and completes cleanly.
+			gate.resolve();
+			expect(await firstText).toMatchObject({
+				type: "text",
+				runId: "hold-for-first-init",
+				chunk: "first-init-live-first\n",
+			});
+			expect(await firstResult).toMatchObject({ type: "result", runId: "hold-for-first-init", ok: true });
+
+			// Once the realm is free, the same core initializes cleanly.
+			await initializeWorker(second, { cwd, sessionId: "first-init-live-second", localRoots: {} });
+
+			// Drain the microtask queue so any latent fatal would surface.
+			for (let i = 0; i < 8; i++) await Promise.resolve();
+			expect(fatal).toEqual([]);
+		} finally {
+			uninstall();
+			gate.resolve();
+			delete (globalThis as { __omp_worker_core_gate?: { entered(): void; wait: Promise<void> } })
+				.__omp_worker_core_gate;
+			first.send({ type: "close" });
+			second.send({ type: "close" });
+		}
+	});
+
 	it("survives concurrent same-realm setCwd in a child process with postmortem loaded", async () => {
 		// Process-level oracle: the production crash was postmortem killing the process
 		// after an unhandled rejection from concurrent inline setCwd. This must stay green

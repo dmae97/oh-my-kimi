@@ -126,12 +126,12 @@ describe("JsRuntime global disposal", () => {
 			);
 			gate.resolve();
 			await activeSecond;
-			// After the exclusive run ends, setCwd can promote globals and keep the stamped cwd.
-			first.setCwd(pendingCwd);
+			// The deferred cwd must reach this runtime's next run WITHOUT a second
+			// setCwd: the saved __omp_session__ stack entry carries the new value.
+			expect(await first.run("__omp_session__.cwd", undefined, hooks)).toBe(pendingCwd);
 			expect(first.cwd).toBe(pendingCwd);
 			expect(globals.__omp_helpers__).toBe(first.helpers);
-			const session = globals.__omp_session__ as { cwd?: string } | undefined;
-			expect(session?.cwd).toBe(pendingCwd);
+			expect(globals.__omp_session__).toMatchObject({ cwd: pendingCwd });
 		} finally {
 			gate.resolve();
 			if (activeSecond) await activeSecond.catch(() => undefined);

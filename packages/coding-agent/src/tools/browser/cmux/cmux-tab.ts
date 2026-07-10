@@ -1290,6 +1290,11 @@ export async function runCmuxCode(tab: CmuxTab, opts: RunCmuxCodeOptions): Promi
 	tab.setRunContext({ session: opts.snapshot, displays, screenshots, signal, timeoutMs: opts.timeoutMs });
 
 	const { promise: cancelRejection, reject } = Promise.withResolvers<never>();
+	// If the synchronous setup below throws (same-realm ownership conflict)
+	// while `signal` is already aborted, `Promise.race` never attaches a
+	// handler to this promise; keep its armed rejection from surfacing as an
+	// unhandled rejection — the postmortem-fatal path this run guards against.
+	cancelRejection.catch(() => {});
 	const onAbort = (): void => {
 		if (timeoutSignal.aborted) {
 			reject(new ToolError(`Browser code execution timed out after ${opts.timeoutMs}ms`));
