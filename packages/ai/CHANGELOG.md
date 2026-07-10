@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.2] - 2026-07-10
+
 ### Fixed
 
 - Fixed compatibility with xAI by automatically downgrading OpenAI-specific tool calls and image detail settings during message history replays.

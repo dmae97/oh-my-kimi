@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.2] - 2026-07-10
+
 ### Fixed
 
 - Fixed an issue where BigInt values in tool arguments failed to serialize during session compaction.

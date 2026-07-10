@@ -434,18 +434,18 @@ checksum = "175812e0be2bccb6abe50bb8d566126198344f707e304f45c648fd8f2cc0365e"
 
 [[package]]
 name = "bytemuck"
-version = "1.25.0"
+version = "1.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8efb64bd706a16a1bdde310ae86b351e4d21550d98d056f22f8a7f7a2183fec"
+checksum = "d6aedf8ae72766347502cf3cb4f41cf5e9cc37d28bee90f1fdaaae15f9cf9424"
 dependencies = [
  "bytemuck_derive",
 ]
 
 [[package]]
 name = "bytemuck_derive"
-version = "1.10.2"
+version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9abbd1bc6865053c427f7198e6af43bfdedc55ab791faed4fbd361d789575ff"
+checksum = "f65693059b6b9c588b9f62fed1cedbf0a8b805631457ea162d68f0de186f3de5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2881,7 +2881,7 @@ dependencies = [
 
 [[package]]
 name = "pi-ast"
-version = "16.4.1"
+version = "16.4.2"
 dependencies = [
  "anyhow",
  "ast-grep-core",
@@ -2950,7 +2950,7 @@ dependencies = [
 
 [[package]]
 name = "pi-iso"
-version = "16.4.1"
+version = "16.4.2"
 dependencies = [
  "async-trait",
  "libc",
@@ -2962,7 +2962,7 @@ dependencies = [
 
 [[package]]
 name = "pi-natives"
-version = "16.4.1"
+version = "16.4.2"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3015,7 +3015,7 @@ dependencies = [
 
 [[package]]
 name = "pi-shell"
-version = "16.4.1"
+version = "16.4.2"
 dependencies = [
  "anyhow",
  "brush-builtins",
@@ -3064,7 +3064,7 @@ dependencies = [
 
 [[package]]
 name = "pi-walker"
-version = "16.4.1"
+version = "16.4.2"
 dependencies = [
  "dashmap",
  "globset",
