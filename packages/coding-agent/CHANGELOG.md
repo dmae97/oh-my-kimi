@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed todo reminders auto-continuing over interactive skill questions; text-only assistant questions now yield to the user without firing the incomplete-todo reminder loop. ([#5089](https://github.com/can1357/oh-my-pi/issues/5089))
+
 ## [16.4.0] - 2026-07-10
 
 ### Breaking Changes
