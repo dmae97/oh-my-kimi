@@ -127,6 +127,32 @@ describe("createAgentSession deferred MCP auto discovery", () => {
 		}
 	}, 40_000);
 
+	it("flips auto discovery when MCP tools finish after the startup timeout", async () => {
+		writeMcpConfig(["--delay", "750"]);
+		const { session } = await createAgentSession({ ...baseOptions(), toolNames: ["read"] });
+		try {
+			// The manager returns from startup after 250 ms while this fixture is
+			// still connecting. Its eventual tools arrive through onToolsChanged,
+			// so wait for that observable registry update rather than a fixed delay.
+			const deadline = Date.now() + 30_000;
+			while (
+				session.getAllToolNames().filter(name => name.startsWith("mcp__")).length < MANY_TOOL_COUNT &&
+				Date.now() < deadline
+			) {
+				await Bun.sleep(50);
+			}
+
+			expect(session.isMCPDiscoveryEnabled()).toBe(true);
+			const activeNames = session.getActiveToolNames();
+			expect(activeNames).toContain("read");
+			expect(activeNames).toContain("search_tool_bm25");
+			expect(activeNames.filter(name => name.startsWith("mcp__"))).toEqual([]);
+			expect(session.getDiscoverableTools({ source: "mcp" })).toHaveLength(MANY_TOOL_COUNT);
+		} finally {
+			await session.dispose();
+		}
+	}, 40_000);
+
 	it("disposing mid-connect disconnects the manager and never resurrects tools", async () => {
 		// Stall `initialize` in the real fixture subprocess so the connect is
 		// guaranteed to still be in flight when dispose() runs. Deterministic

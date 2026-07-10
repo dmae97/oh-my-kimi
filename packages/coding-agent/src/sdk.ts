@@ -1746,37 +1746,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 							}
 							applyMCPEnvironment(mcpResult);
 							logMCPLoadErrors(mcpResult.errors);
-							// `tools.discoveryMode: "auto"` was resolved against a registry that
-							// held only built-ins plus persisted placeholder names. Recompute with
-							// the real MCP tool count: a large toolset must flip discovery on
-							// BEFORE the refresh, or activateAll would dump every MCP tool into
-							// the active set with no search_tool_bm25 registered.
+							// `tools.discoveryMode: "auto"` was resolved before deferred MCP
+							// tools existed. Reconcile again before refresh so a large toolset
+							// cannot bypass discovery by arriving after first paint.
 							let discoveryEnabled = activation.mcpDiscoveryEnabled;
 							let activateAll = activation.activateAllMCPTools;
-							if (!discoveryEnabled) {
-								const nonMCPToolNames = [...toolRegistry.keys()].filter(name => !isMCPToolName(name));
-								const projectedMode = resolveEffectiveToolDiscoveryMode(
-									settings,
-									countToolsForAutoDiscovery([...nonMCPToolNames, ...mcpResult.tools.map(tool => tool.name)]),
-								);
-								if (projectedMode !== "off") {
-									effectiveDiscoveryMode = projectedMode;
-									mcpDiscoveryEnabled = true;
-									discoveryEnabled = true;
-									activateAll = false;
-									liveSession.enableMCPDiscovery();
-									if (!toolRegistry.has("search_tool_bm25")) {
-										const searchTool: Tool = new SearchToolBm25Tool(toolSession);
-										toolRegistry.set(
-											searchTool.name,
-											new ExtensionToolWrapper(wrapToolWithMetaNotice(searchTool), extensionRunner) as Tool,
-										);
-									}
-									await liveSession.setActiveToolsByName([
-										...liveSession.getActiveToolNames(),
-										"search_tool_bm25",
-									]);
-								}
+							if (
+								!discoveryEnabled &&
+								(await enableDeferredMCPDiscoveryForTools(liveSession, mcpResult.tools))
+							) {
+								discoveryEnabled = true;
+								activateAll = false;
 							}
 							await liveSession.refreshMCPTools(mcpResult.tools, { activateAll });
 							if (activation.explicitlyRequestedMCPToolNames.length > 0) {
@@ -2316,6 +2296,34 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			builtInRegistryToolNames.add(searchTool.name);
 		}
 		let mcpDiscoveryEnabled = effectiveDiscoveryMode !== "off"; // back-compat: true when any discovery active
+
+		async function enableDeferredMCPDiscoveryForTools(
+			liveSession: AgentSession,
+			mcpTools: CustomTool[],
+		): Promise<boolean> {
+			if (mcpDiscoveryEnabled) return true;
+			const nonMCPToolNames = [...toolRegistry.keys()].filter(name => !isMCPToolName(name));
+			const projectedMode = resolveEffectiveToolDiscoveryMode(
+				settings,
+				countToolsForAutoDiscovery([...nonMCPToolNames, ...mcpTools.map(tool => tool.name)]),
+			);
+			if (projectedMode === "off") return false;
+
+			effectiveDiscoveryMode = projectedMode;
+			mcpDiscoveryEnabled = true;
+			liveSession.enableMCPDiscovery();
+			if (!toolRegistry.has("search_tool_bm25")) {
+				const searchTool: Tool = new SearchToolBm25Tool(toolSession);
+				toolRegistry.set(
+					searchTool.name,
+					new ExtensionToolWrapper(wrapToolWithMetaNotice(searchTool), extensionRunner) as Tool,
+				);
+			}
+			if (!liveSession.getActiveToolNames().includes("search_tool_bm25")) {
+				await liveSession.setActiveToolsByName([...liveSession.getActiveToolNames(), "search_tool_bm25"]);
+			}
+			return true;
+		}
 
 		const reloadSshTool = async (): Promise<AgentTool | null> => {
 			if (!requestedToolNameSet.has("ssh")) return null;
@@ -3075,10 +3083,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			mcpManager.setOnToolsChanged(tools => {
 				void (async () => {
 					try {
-						await session.refreshMCPTools(
-							tools,
-							deferMCPDiscoveryForUI && !mcpDiscoveryEnabled ? { activateAll: true } : undefined,
-						);
+						let activateAll = deferMCPDiscoveryForUI && !mcpDiscoveryEnabled;
+						if (activateAll && (await enableDeferredMCPDiscoveryForTools(session, tools))) {
+							activateAll = false;
+						}
+						await session.refreshMCPTools(tools, activateAll ? { activateAll: true } : undefined);
 					} catch (error) {
 						logger.warn("MCP tool refresh failed", {
 							error: error instanceof Error ? error.message : String(error),
