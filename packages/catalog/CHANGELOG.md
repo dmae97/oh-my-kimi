@@ -15,6 +15,7 @@
 
 ### Changed
 
+- Enabled reasoning effort controls for Grok 4.5 and updated support flags for additional Grok variants
 - Standardized reasoning effort levels to use a wire-exact max tier across all model providers, including Devin routing and Ollama configurations.
 - Updated costs and context windows for various models in the catalog.
 

@@ -1199,18 +1199,21 @@ const XAI_REASONING_EFFORT_MAP = { minimal: "low" } as const;
 // The `minimal -> low` effort clamp (XAI_REASONING_EFFORT_MAP) is always
 // merged in so dynamic-fetched models — which arrive without curated
 // compat keys — still get the clamp applyResponsesReasoningParams expects.
+// The effort-dial pair (`supportsReasoningEffort`/`omitReasoningEffort`) is
+// authoritative: a stale flag on `base` (previous snapshot or dynamic fetch)
+// must not outlive an allowlist change in identity/family.ts.
 function mergeCuratedIntoModel(
 	base: ModelSpec<"openai-responses">,
 	curated: XAICuratedModel,
 ): ModelSpec<"openai-responses"> {
-	const effort = curated.supportsReasoningEffort;
+	const effortCapable = curated.supportsReasoningEffort ?? isGrokReasoningEffortCapable(curated.id);
 	const compat = {
 		...(base.compat ?? {}),
 		reasoningEffortMap: { ...XAI_REASONING_EFFORT_MAP, ...(base.compat?.reasoningEffortMap ?? {}) },
 		includeEncryptedReasoning: base.compat?.includeEncryptedReasoning ?? false,
 		filterReasoningHistory: base.compat?.filterReasoningHistory ?? true,
-		omitReasoningEffort: base.compat?.omitReasoningEffort ?? !isGrokReasoningEffortCapable(base.id),
-		...(effort === undefined ? {} : { supportsReasoningEffort: effort }),
+		omitReasoningEffort: !effortCapable,
+		supportsReasoningEffort: effortCapable,
 	};
 	return {
 		...base,

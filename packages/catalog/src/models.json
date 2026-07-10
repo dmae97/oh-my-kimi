@@ -87161,7 +87161,8 @@
 				},
 				"includeEncryptedReasoning": false,
 				"filterReasoningHistory": true,
-				"omitReasoningEffort": true
+				"omitReasoningEffort": true,
+				"supportsReasoningEffort": false
 			}
 		},
 		"grok-4.20-0309-reasoning": {
@@ -87230,7 +87231,8 @@
 				},
 				"includeEncryptedReasoning": false,
 				"filterReasoningHistory": true,
-				"omitReasoningEffort": false
+				"omitReasoningEffort": false,
+				"supportsReasoningEffort": true
 			}
 		},
 		"grok-4.3": {
@@ -87271,7 +87273,8 @@
 				},
 				"includeEncryptedReasoning": false,
 				"filterReasoningHistory": true,
-				"omitReasoningEffort": false
+				"omitReasoningEffort": false,
+				"supportsReasoningEffort": true
 			}
 		},
 		"grok-4.5": {
@@ -87312,7 +87315,8 @@
 				},
 				"includeEncryptedReasoning": false,
 				"filterReasoningHistory": true,
-				"omitReasoningEffort": true
+				"omitReasoningEffort": false,
+				"supportsReasoningEffort": true
 			}
 		},
 		"grok-build": {
@@ -87397,7 +87401,8 @@
 				},
 				"includeEncryptedReasoning": false,
 				"filterReasoningHistory": true,
-				"omitReasoningEffort": true
+				"omitReasoningEffort": true,
+				"supportsReasoningEffort": false
 			}
 		}
 	},

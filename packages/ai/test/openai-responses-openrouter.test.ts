@@ -211,7 +211,7 @@ describe("OpenRouter pseudo API dual-surface request parity", () => {
 			stream: true,
 			stream_options: { include_usage: true },
 			store: false,
-			reasoning: { effort: "xhigh" },
+			reasoning: { effort: "high" },
 			provider: routing,
 		});
 		expect(responsesBody).toEqual({
@@ -220,7 +220,7 @@ describe("OpenRouter pseudo API dual-surface request parity", () => {
 			stream: true,
 			input: [{ role: "user", content: [{ type: "input_text", text: "ping" }] }],
 			store: false,
-			reasoning: { effort: "xhigh", summary: "auto" },
+			reasoning: { effort: "high", summary: "auto" },
 			prompt_cache_key: "workflow-123",
 			session_id: "workflow-123",
 			provider: routing,

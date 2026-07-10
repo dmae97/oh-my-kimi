@@ -641,12 +641,12 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.mic": "\uf130",
 	// Compaction divider - fa-camera-retro
 	"icon.camera": "\uf083",
-	// Thinking levels — empty-to-full battery ramp, then fire.
-	"thinking.minimal": "\u{F244} min",
-	"thinking.low": "\u{F243} low",
-	"thinking.medium": "\u{F242} med",
-	"thinking.high": "\u{F241} high",
-	"thinking.xhigh": "\u{F240} xhi",
+	// Thinking levels — increasing circle slices, with fire reserved for max.
+	"thinking.minimal": "\u{F0A9E} min",
+	"thinking.low": "\u{F0A9F} low",
+	"thinking.medium": "\u{F0AA1} med",
+	"thinking.high": "\u{F0AA3} high",
+	"thinking.xhigh": "\u{F0AA5} xhi",
 	"thinking.max": "\u{F06D} max",
 	// Auto mode uses shuffle until the model resolves its thinking level.
 	"thinking.autoPending": "\u{F074}",
