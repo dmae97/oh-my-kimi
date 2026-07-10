@@ -23,6 +23,11 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
+/** Provider-facing advisor session ids must be UUIDv7 (issue #5040): Codex writes
+ *  them verbatim onto `conversation_id`/`session_id` headers, so `-advisor`
+ *  labels stay local-only (telemetry, transcripts). */
+const UUID_V7_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 describe("AgentSession advisor provider-options parity", () => {
 	let sharedDir: TempDir;
 	let authStorage: AuthStorage;
@@ -99,12 +104,12 @@ describe("AgentSession advisor provider-options parity", () => {
 		// Anthropic fast-mode fallbacks consistent across the two agents.
 		expect(advisor.providerSessionState).toBe(session.providerSessionState);
 
-		// Stable advisor-scoped cache key keeps consecutive advisor turns on the
-		// same OpenAI Responses shard. With no parent `providerPromptCacheKey`
-		// the main agent's effective key is just its `sessionId`, so the
-		// advisor's derived key matches its own `${sessionId}-advisor`.
-		expect(advisor.sessionId).toMatch(/-advisor$/);
-		expect(advisor.promptCacheKey).toBe(`${mainAgent.sessionId}-advisor`);
+		// The advisor's session identity is its own provider-facing UUIDv7
+		// (issue #5040), distinct from the parent's. Without a pinned parent
+		// `promptCacheKey` the advisor caches on that same UUID so consecutive
+		// advisor turns stay on one OpenAI Responses shard.
+		expect(advisor.sessionId).toMatch(UUID_V7_PATTERN);
+		expect(advisor.sessionId).not.toBe(mainAgent.sessionId);
 		expect(advisor.promptCacheKey).toBe(advisor.sessionId);
 	});
 
@@ -197,9 +202,10 @@ describe("AgentSession advisor provider-options parity", () => {
 		// Explicit provider cache keys are shared byte-for-byte with the parent
 		// live turn; only the provider session id stays advisor-scoped.
 		expect(advisor.promptCacheKey).toBe(parentPromptCacheKey);
-		// Session id is still advisor-scoped so credential stickiness and the
-		// advisor's session-keyed telemetry stay distinct from the parent.
-		expect(advisor.sessionId).toMatch(/-advisor$/);
+		// Session id remains a distinct provider-facing UUIDv7 (issue #5040) so
+		// credential stickiness and session-keyed telemetry stay distinct from
+		// the parent.
+		expect(advisor.sessionId).toMatch(UUID_V7_PATTERN);
 		expect(advisor.sessionId).not.toBe(advisor.promptCacheKey);
 	});
 });
