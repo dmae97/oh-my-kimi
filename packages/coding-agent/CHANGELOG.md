@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `memory://root` resolution leaking between live agents with different working directories by resolving file-backed memory roots from the calling session cwd before falling back to the global session registry. ([#5079](https://github.com/can1357/oh-my-pi/issues/5079))
+
 ## [16.4.0] - 2026-07-10
 
 ### Breaking Changes

@@ -6,7 +6,7 @@ import { getMnemopiSessionState, type MnemopiScopedMemoryHit, type MnemopiSessio
 import { AgentRegistry } from "../registry/agent-registry";
 import { buildDirectoryResource } from "./filesystem-resource";
 import { validateRelativePath } from "./skill-protocol";
-import type { InternalResource, InternalUrl, ProtocolHandler, UrlCompletion } from "./types";
+import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, UrlCompletion } from "./types";
 
 const DEFAULT_MEMORY_FILE = "memory_summary.md";
 const MEMORY_NAMESPACE = "root";
@@ -26,6 +26,11 @@ export function memoryRootsFromRegistry(): string[] {
 		if (root && !roots.includes(root)) roots.push(root);
 	}
 	return roots;
+}
+
+function memoryRootsForContext(context?: ResolveContext): string[] {
+	if (context?.cwd) return [getMemoryRoot(getAgentDir(), context.cwd)];
+	return memoryRootsFromRegistry();
 }
 
 function ensureWithinRoot(targetPath: string, rootPath: string): void {
@@ -196,16 +201,15 @@ function renderMnemopiMemory(url: InternalUrl, hit: MnemopiScopedMemoryHit): Int
 
 /**
  * Protocol handler for memory:// URLs.
- *
- * Walks every active session's memory root. Worktree-based subagents have
- * their own root; first one containing the file wins. Parent and subagent
- * sharing a cwd see the same file regardless of order.
+ * Resolves file-backed roots against the calling session cwd when provided.
+ * Contextless callers fall back to the live-session registry for legacy
+ * cross-session lookups.
  */
 export class MemoryProtocolHandler implements ProtocolHandler {
 	readonly scheme = "memory";
 	readonly immutable = true;
 
-	async resolve(url: InternalUrl): Promise<InternalResource> {
+	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
 		const namespace = url.rawHost || url.hostname;
 		if (!namespace) {
 			throw new Error("memory:// URL requires a namespace: memory://root or memory://<memory-id>");
@@ -230,7 +234,7 @@ export class MemoryProtocolHandler implements ProtocolHandler {
 			);
 		}
 
-		const roots = memoryRootsFromRegistry();
+		const roots = memoryRootsForContext(context);
 		if (roots.length === 0) {
 			throw new Error(
 				"Memory artifacts are not available for this project yet. Run a session with memories enabled first.",
