@@ -1356,48 +1356,61 @@ export function convertResponsesInputContent(
 	return normalizedContent.length > 0 ? normalizedContent : undefined;
 }
 
-interface ResponsesReplayCompatibilityOptions {
-	supportsCustomToolCalls: boolean;
-	tools: readonly Tool[] | undefined;
-}
-
-function resolveReplayCustomToolName(wireName: string, tools: readonly Tool[] | undefined): string {
-	if (tools) {
-		for (const tool of tools) {
-			if (tool.customWireName === wireName) return tool.name;
-		}
+/**
+ * Map freeform custom-tool wire names back to the internal tool name for
+ * providers that only accept function_call / function_call_output.
+ * Built once per request; `apply_patch` → `edit` is the OMP default.
+ */
+function buildCustomToolWireNameMap(tools: readonly Tool[] | undefined): ReadonlyMap<string, string> | undefined {
+	if (!tools?.length) return undefined;
+	const map = new Map<string, string>();
+	for (const tool of tools) {
+		if (tool.customWireName) map.set(tool.customWireName, tool.name);
 	}
-	if (wireName === "apply_patch") return "edit";
-	return wireName;
+	return map.size > 0 ? map : undefined;
 }
 
+function resolveReplayCustomToolName(wireName: string, wireNameMap: ReadonlyMap<string, string> | undefined): string {
+	return wireNameMap?.get(wireName) ?? (wireName === "apply_patch" ? "edit" : wireName);
+}
+
+/**
+ * Downgrade OpenAI-only custom tool items when the target model does not
+ * advertise freeform custom tools (`applyPatchToolType === "freeform"`).
+ * No-op (returns the same array reference) when freeform is supported.
+ */
 function adaptResponsesReplayItemsForModel(
 	input: ResponseInput,
-	options: ResponsesReplayCompatibilityOptions,
+	supportsCustomToolCalls: boolean,
+	wireNameMap: ReadonlyMap<string, string> | undefined,
 ): ResponseInput {
+	if (supportsCustomToolCalls) return input;
+
 	let changed = false;
 	const adapted: ResponseInput = [];
 	for (const item of input) {
-		let next = item;
-		if (!options.supportsCustomToolCalls && item.type === "custom_tool_call") {
+		if (item.type === "custom_tool_call") {
 			changed = true;
-			next = {
+			adapted.push({
 				type: "function_call",
 				...(item.id ? { id: item.id } : {}),
 				call_id: item.call_id,
-				name: resolveReplayCustomToolName(item.name, options.tools),
+				name: resolveReplayCustomToolName(item.name, wireNameMap),
 				arguments: JSON.stringify({ input: item.input }),
 				...(item.namespace ? { namespace: item.namespace } : {}),
-			};
-		} else if (!options.supportsCustomToolCalls && item.type === "custom_tool_call_output") {
+			});
+			continue;
+		}
+		if (item.type === "custom_tool_call_output") {
 			changed = true;
-			next = {
+			adapted.push({
 				type: "function_call_output",
 				call_id: item.call_id,
 				output: item.output,
-			};
+			});
+			continue;
 		}
-		adapted.push(next);
+		adapted.push(item);
 	}
 	return changed ? adapted : input;
 }
@@ -1426,13 +1439,15 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 		messages.push({ role: options.systemRole as "system" | "developer", content: systemPrompt });
 	}
 
-	const supportsImageDetailOriginal =
-		options.model.provider === "xai-oauth" ? false : options.supportsImageDetailOriginal;
+	// Compat is resolved by the catalog (e.g. Copilot / xai-oauth reject
+	// `detail: "original"`). Do not re-branch on provider id here.
+	const supportsImageDetailOriginal = options.supportsImageDetailOriginal;
+	// Freeform custom tools (`custom_tool_call`) only when the catalog says so;
+	// same gate as tool conversion (`applyPatchToolType === "freeform"`).
 	const supportsCustomToolCalls = options.model.applyPatchToolType === "freeform";
-	const replayCompatibility: ResponsesReplayCompatibilityOptions = {
-		supportsCustomToolCalls,
-		tools: options.context.tools,
-	};
+	const customToolWireNameMap = supportsCustomToolCalls
+		? undefined
+		: buildCustomToolWireNameMap(options.context.tools);
 	let knownCallIds = new Set<string>();
 	const customCallIds = new Set<string>();
 	const transformedMessages = transformMessages(
@@ -1463,7 +1478,9 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 				const sanitizedItems = sanitizeOpenAIResponsesHistoryItemsForReplay(filterReasoning(historyItems), {
 					supportsImageDetailOriginal,
 				});
-				messages.push(...adaptResponsesReplayItemsForModel(sanitizedItems, replayCompatibility));
+				messages.push(
+					...adaptResponsesReplayItemsForModel(sanitizedItems, supportsCustomToolCalls, customToolWireNameMap),
+				);
 				knownCallIds = collectKnownCallIds(messages);
 				for (const id of collectCustomCallIds(messages)) customCallIds.add(id);
 				msgIndex++;
@@ -1505,7 +1522,11 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 					{ supportsImageDetailOriginal },
 				);
 				const sanitizedHistoryItems = rawSanitizedHistoryItems
-					? adaptResponsesReplayItemsForModel(rawSanitizedHistoryItems, replayCompatibility)
+					? adaptResponsesReplayItemsForModel(
+							rawSanitizedHistoryItems,
+							supportsCustomToolCalls,
+							customToolWireNameMap,
+						)
 					: undefined;
 				if (nativeReplayEnabled && sanitizedHistoryItems) {
 					if (providerPayload?.dt) {
@@ -1530,7 +1551,7 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 				customCallIds,
 				options.preserveAssistantMessageIds,
 				supportsCustomToolCalls,
-				options.context.tools,
+				customToolWireNameMap,
 			);
 			const outputItems = suppressHiddenEmptyFallback
 				? sanitizeOpenAIResponsesAssistantFallbackItemsForReplay(convertedOutputItems)
@@ -1580,7 +1601,7 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 	customCallIds?: Set<string>,
 	preserveMessageIds = false,
 	supportsCustomToolCalls = true,
-	tools?: readonly Tool[],
+	customToolWireNameMap?: ReadonlyMap<string, string>,
 ): ResponseInput {
 	const outputItems: ResponseInput = [];
 	let unsignedTextBlocks = 0;
@@ -1666,7 +1687,7 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 		}
 		const functionName =
 			block.customWireName && !supportsCustomToolCalls
-				? resolveReplayCustomToolName(block.customWireName, tools)
+				? resolveReplayCustomToolName(block.customWireName, customToolWireNameMap)
 				: block.name;
 		outputItems.push({
 			type: "function_call",

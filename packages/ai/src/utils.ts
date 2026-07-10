@@ -69,37 +69,32 @@ interface OpenAIResponsesReplaySanitizeOptions {
 	supportsImageDetailOriginal?: boolean;
 }
 
-function isReplayRecord(value: unknown): value is Record<string, unknown> {
-	if (!value || typeof value !== "object") return false;
-	return !Array.isArray(value);
-}
+/**
+ * Clamp `detail: "original"` only where Responses input_image parts live —
+ * top-level items and `message.content[]`. Avoids a deep tree walk/clone of
+ * every history node on providers that reject native-resolution images.
+ */
+function clampReplayItemImageDetail(
+	item: Record<string, unknown>,
+	supportsImageDetailOriginal: boolean,
+): Record<string, unknown> {
+	if (supportsImageDetailOriginal) return item;
 
-function sanitizeReplayValueForCompatibility(value: unknown, options: OpenAIResponsesReplaySanitizeOptions): unknown {
-	if (options.supportsImageDetailOriginal !== false) return value;
-	if (Array.isArray(value)) {
-		let changed = false;
-		const sanitized = value.map(item => {
-			const next = sanitizeReplayValueForCompatibility(item, options);
-			if (next !== item) changed = true;
-			return next;
-		});
-		return changed ? sanitized : value;
+	if (item.type === "input_image" && item.detail === "original") {
+		return { ...item, detail: "auto" };
 	}
-	if (!isReplayRecord(value)) return value;
+
+	if (item.type !== "message" || !Array.isArray(item.content)) return item;
 
 	let changed = false;
-	const sanitized: Record<string, unknown> = {};
-	for (const key in value) {
-		const child = value[key];
-		const next = sanitizeReplayValueForCompatibility(child, options);
-		if (next !== child) changed = true;
-		sanitized[key] = next;
-	}
-	if (value.type === "input_image" && value.detail === "original") {
-		sanitized.detail = "auto";
+	const content = item.content.map(part => {
+		if (!part || typeof part !== "object" || Array.isArray(part)) return part;
+		const record = part as Record<string, unknown>;
+		if (record.type !== "input_image" || record.detail !== "original") return part;
 		changed = true;
-	}
-	return changed ? sanitized : value;
+		return { ...record, detail: "auto" };
+	});
+	return changed ? { ...item, content } : item;
 }
 
 export function sanitizeOpenAIResponsesHistoryItemsForReplay(
@@ -107,8 +102,13 @@ export function sanitizeOpenAIResponsesHistoryItemsForReplay(
 	options: OpenAIResponsesReplaySanitizeOptions = {},
 ): ResponseInput {
 	const normalizedCallIds = new Map<string, string>();
+	const supportsImageDetailOriginal = options.supportsImageDetailOriginal !== false;
 	return items.flatMap(item => {
-		const sanitized = sanitizeOpenAIResponsesHistoryItemForReplay(item, normalizedCallIds, options);
+		const sanitized = sanitizeOpenAIResponsesHistoryItemForReplay(
+			item,
+			normalizedCallIds,
+			supportsImageDetailOriginal,
+		);
 		return sanitized ? [sanitized] : [];
 	});
 }
@@ -194,7 +194,7 @@ export function sanitizeOpenAIResponsesAssistantFallbackItemsForReplay(items: Re
 function sanitizeOpenAIResponsesHistoryItemForReplay(
 	item: Record<string, unknown>,
 	normalizedCallIds: Map<string, string>,
-	options: OpenAIResponsesReplaySanitizeOptions,
+	supportsImageDetailOriginal: boolean,
 ): OpenAIResponsesReplayItem | undefined {
 	if (item.type === "item_reference") return undefined;
 	if (item.type === "image_generation_call") return sanitizeOpenAIResponsesImageGenerationCallForReplay(item);
@@ -206,8 +206,7 @@ function sanitizeOpenAIResponsesHistoryItemForReplay(
 		sanitizedItem.call_id = normalizeReplayedResponsesHistoryCallId(item.call_id, normalizedCallIds);
 	}
 
-	const compatibleItem = sanitizeReplayValueForCompatibility(sanitizedItem, options);
-	return compatibleItem as unknown as OpenAIResponsesReplayItem;
+	return clampReplayItemImageDetail(sanitizedItem, supportsImageDetailOriginal) as unknown as OpenAIResponsesReplayItem;
 }
 
 function sanitizeOpenAIResponsesReasoningItemForReplay(item: Record<string, unknown>): OpenAIResponsesReplayItem {

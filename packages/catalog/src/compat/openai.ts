@@ -595,12 +595,14 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 		// Azure OpenAI and GitHub Copilot Responses paths require tool results
 		// to strictly match prior tool calls when building Responses inputs.
 		strictResponsesPairing: isAzure || spec.provider === "github-copilot",
-		// GitHub Copilot's Responses endpoint rejects the `detail: "original"`
-		// image hint with a 400; every other host preserves native-resolution
-		// frames (snapcompact relies on `original`). Detect Copilot by provider id
-		// or base-URL host (mirroring the Anthropic compat builder) so a model
-		// pointed at the Copilot host under a different provider id still clamps.
-		supportsImageDetailOriginal: !modelMatchesHost({ provider: spec.provider, baseUrl }, "githubCopilot"),
+		// GitHub Copilot and xAI OAuth reject `detail: "original"` (400 / 422).
+		// Every other host preserves native-resolution frames (snapcompact relies
+		// on `original`). Detect Copilot by provider id or base-URL host so a
+		// model pointed at the Copilot host under a different provider id still
+		// clamps; xai-oauth is provider-id only (same host family as paid `xai`).
+		supportsImageDetailOriginal:
+			spec.provider !== "xai-oauth" &&
+			!modelMatchesHost({ provider: spec.provider, baseUrl }, "githubCopilot"),
 		reasoningEffortMap: {},
 		supportsReasoningParams: true,
 		thinkingFormat,
