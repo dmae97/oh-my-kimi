@@ -380,6 +380,7 @@ interface AskSingleQuestionOptions {
 }
 
 interface UIContext {
+	timeoutStartsOnPresentation?: boolean;
 	select(
 		prompt: string,
 		options: ExtensionUISelectItem[],
@@ -389,6 +390,8 @@ interface UIContext {
 			signal?: AbortSignal;
 			outline?: boolean;
 			onTimeout?: () => void;
+			onTimeoutStart?: () => void;
+			onTimeoutReset?: () => void;
 			onLeft?: () => void;
 			onRight?: () => void;
 			helpText?: string;
@@ -432,12 +435,30 @@ async function askSingleQuestion(
 		const helpText = navigation
 			? "up/down navigate  enter select  ←/→ question  esc cancel"
 			: "up/down navigate  enter select  esc cancel";
+		const timeoutMs = typeof timeout === "number" && timeout > 0 ? timeout : undefined;
+		const timeoutController = timeoutMs === undefined ? undefined : new AbortController();
+		const dialogSignal =
+			signal && timeoutController
+				? AbortSignal.any([signal, timeoutController.signal])
+				: (timeoutController?.signal ?? signal);
+		let timeoutId: NodeJS.Timeout | undefined;
+		let timeoutStartedMs = Date.now();
+		const armFallbackTimeout = (durationMs: number) => {
+			clearTimeout(timeoutId);
+			timeoutStartedMs = Date.now();
+			timeoutId = setTimeout(() => {
+				timeoutTriggered = true;
+				timeoutController?.abort();
+			}, durationMs);
+		};
 		const dialogOptions = {
 			initialIndex,
 			timeout,
-			signal,
+			signal: dialogSignal,
 			outline: true,
 			onTimeout,
+			onTimeoutStart: timeoutMs === undefined ? undefined : () => armFallbackTimeout(timeoutMs),
+			onTimeoutReset: timeoutMs === undefined ? undefined : () => armFallbackTimeout(timeoutMs),
 			helpText,
 			selectionMarker: marker?.selectionMarker,
 			checkedIndices: marker?.checkedIndices,
@@ -453,19 +474,32 @@ async function askSingleQuestion(
 					}
 				: undefined,
 		};
-		const startMs = Date.now();
-		const choice = signal
-			? await untilAborted(signal, () => ui.select(prompt, optionsToShow, dialogOptions))
-			: await ui.select(prompt, optionsToShow, dialogOptions);
-		if (!timeoutTriggered && choice === undefined && typeof timeout === "number") {
-			// Fallback for UI surfaces that enforce `timeout` without invoking
-			// `onTimeout`: their auto-cancel resolves right at the deadline. A
-			// cancel arriving well past the deadline is a deliberate user Esc on
-			// a surface that kept the dialog open — keep treating it as a cancel.
-			const elapsed = Date.now() - startMs;
-			timeoutTriggered = elapsed >= timeout && elapsed <= timeout + TIMEOUT_DETECTION_TOLERANCE_MS;
+		try {
+			const runSelect = () => {
+				const selection = ui.select(prompt, optionsToShow, dialogOptions);
+				if (timeoutMs !== undefined && !ui.timeoutStartsOnPresentation) {
+					armFallbackTimeout(timeoutMs);
+				}
+				return selection;
+			};
+			const choice = dialogSignal ? await untilAborted(dialogSignal, runSelect) : await runSelect();
+			if (!timeoutTriggered && choice === undefined && typeof timeout === "number") {
+				// Fallback for UI surfaces that enforce `timeout` without invoking
+				// `onTimeout`: their auto-cancel resolves right at the deadline. A
+				// cancel arriving well past the deadline is a deliberate user Esc on
+				// a surface that kept the dialog open — keep treating it as a cancel.
+				const elapsed = Date.now() - timeoutStartedMs;
+				timeoutTriggered = elapsed >= timeout && elapsed <= timeout + TIMEOUT_DETECTION_TOLERANCE_MS;
+			}
+			return { choice, timedOut: timeoutTriggered, navigation: navigationAction };
+		} catch (error) {
+			if (timeoutTriggered && error instanceof Error && error.name === "AbortError") {
+				return { choice: undefined, timedOut: true, navigation: navigationAction };
+			}
+			throw error;
+		} finally {
+			clearTimeout(timeoutId);
 		}
-		return { choice, timedOut: timeoutTriggered, navigation: navigationAction };
 	};
 
 	const promptForCustomInput = async (
@@ -614,6 +648,9 @@ async function askSingleQuestion(
 			customInput = undefined;
 			break;
 		}
+		if (timedOut && selectedOptions.length === 0 && customInput === undefined) {
+			selectedOptions = getAutoSelectionOnTimeout(questionOptions, recommended);
+		}
 		if (navigation?.allowForward) {
 			return { selectedOptions, customInput, timedOut, navigation: "forward" };
 		}
@@ -743,6 +780,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 
 		const extensionUi = context.ui;
 		const ui: UIContext = {
+			timeoutStartsOnPresentation: extensionUi.timeoutStartsOnPresentation,
 			select: (prompt, options, dialogOptions) => extensionUi.select(prompt, options, dialogOptions),
 			editor: (title, prefill, dialogOptions, editorOptions) =>
 				extensionUi.editor(title, prefill, dialogOptions, editorOptions),

@@ -61,6 +61,8 @@ export interface HookSelectorOptions {
 	tui?: TUI;
 	timeout?: number;
 	onTimeout?: () => void;
+	onTimeoutStart?: () => void;
+	onTimeoutReset?: () => void;
 	initialIndex?: number;
 	outline?: boolean;
 	maxVisible?: number;
@@ -178,6 +180,7 @@ export class HookSelectorComponent extends Container {
 	#onLeftCallback: (() => void) | undefined;
 	#onRightCallback: (() => void) | undefined;
 	#onExternalEditorCallback: (() => void) | undefined;
+	#onTimeoutResetCallback: (() => void) | undefined;
 	#slider: HookSelectorSlider | undefined;
 	#sliderIndex: number = 0;
 	#sliderComponent: Text | undefined;
@@ -213,6 +216,7 @@ export class HookSelectorComponent extends Container {
 		this.#onLeftCallback = opts?.onLeft;
 		this.#onRightCallback = opts?.onRight;
 		this.#onExternalEditorCallback = opts?.onExternalEditor;
+		this.#onTimeoutResetCallback = opts?.onTimeoutReset;
 		if (opts?.slider && opts.slider.segments.length > 0) {
 			this.#slider = opts.slider;
 			this.#sliderIndex = Math.max(0, Math.min(opts.slider.index, opts.slider.segments.length - 1));
@@ -232,6 +236,7 @@ export class HookSelectorComponent extends Container {
 		}
 
 		if (opts?.timeout && opts.timeout > 0 && opts.tui) {
+			opts.onTimeoutStart?.();
 			this.#countdown = new CountdownTimer(
 				opts.timeout,
 				opts.tui,
@@ -633,8 +638,10 @@ export class HookSelectorComponent extends Container {
 	}
 
 	handleInput(keyData: string): void {
-		// Reset countdown on any interaction
-		this.#countdown?.reset();
+		if (this.#countdown) {
+			this.#countdown.reset();
+			this.#onTimeoutResetCallback?.();
+		}
 
 		if (matchesSelectCancel(keyData)) {
 			this.#onCancelCallback();

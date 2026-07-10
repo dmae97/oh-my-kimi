@@ -9,6 +9,7 @@
 - Fixed full-context forks cold-missing OpenAI prompt caches by persisting an inherited provider prompt-cache key separately from the new OMP session id, adding `--prompt-cache-key` for explicit cache affinity, and dropping automatic inheritance when startup changes the model, thinking level, system prompt, or tool schema. ([#5035](https://github.com/can1357/oh-my-pi/issues/5035))
 - Fixed Codex advisor requests using local `-advisor` session labels as provider session IDs; advisors now use stable UUIDv7 provider identities while keeping labeled transcript names. ([#5040](https://github.com/can1357/oh-my-pi/issues/5040))
 - Fixed macOS stdio MCP servers launching in a detached session, so `xcrun mcpbridge` can trigger the TCC Apple Events permission prompt and complete startup. ([#4987](https://github.com/can1357/oh-my-pi/issues/4987))
+- Fixed the ask tool timeout so it auto-selects the recommended option even when the UI selector does not settle on its own. ([#4995](https://github.com/can1357/oh-my-pi/issues/4995))
 
 ## [16.3.15] - 2026-07-09
 

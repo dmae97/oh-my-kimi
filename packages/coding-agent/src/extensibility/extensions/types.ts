@@ -125,6 +125,10 @@ export interface ExtensionUIDialogOptions {
 	timeout?: number;
 	/** Invoked when the UI times out while waiting for a selection/input */
 	onTimeout?: () => void;
+	/** Invoked when the UI-managed timeout countdown starts */
+	onTimeoutStart?: () => void;
+	/** Invoked when user input resets a UI-managed timeout countdown */
+	onTimeoutReset?: () => void;
 	/** Initial cursor position for select dialogs (0-indexed) */
 	initialIndex?: number;
 	/** Render an outlined list for select dialogs */
@@ -176,6 +180,8 @@ export type AutocompleteProviderFactory = (current: AutocompleteProvider) => Aut
 // and may be invoked from event handlers that have already taken the agent
 // loop's lock — hooks intentionally cannot.
 export interface ExtensionUIContext {
+	/** True when selector timeouts start only after the dialog is presented. */
+	timeoutStartsOnPresentation?: boolean;
 	/** Show a selector and return the selected label, even when an option also includes a description. */
 	select(
 		title: string,

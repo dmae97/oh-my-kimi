@@ -61,6 +61,7 @@ export class ExtensionUiController {
 	async initHooksAndCustomTools(): Promise<void> {
 		// Create and set hook & tool UI context
 		const uiContext: ExtensionUIContext = {
+			timeoutStartsOnPresentation: true,
 			select: (title, options, dialogOptions) => this.showCollabAwareSelector(title, options, dialogOptions),
 			confirm: (title, message, _dialogOptions) => this.showHookConfirm(title, message),
 			input: (title, placeholder, dialogOptions) => this.showHookInput(title, placeholder, dialogOptions),
@@ -624,6 +625,8 @@ export class ExtensionUiController {
 					initialIndex: dialogOptions?.initialIndex,
 					timeout: dialogOptions?.timeout,
 					onTimeout: dialogOptions?.onTimeout,
+					onTimeoutStart: dialogOptions?.onTimeoutStart,
+					onTimeoutReset: dialogOptions?.onTimeoutReset,
 					tui: this.ctx.ui,
 					outline: dialogOptions?.outline,
 					disabledIndices: dialogOptions?.disabledIndices,
