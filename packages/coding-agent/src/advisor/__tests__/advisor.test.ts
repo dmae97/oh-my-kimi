@@ -655,6 +655,53 @@ describe("advisor", () => {
 			expect(maintainCalls).toBe(2);
 		});
 
+		it("caps maintainContext calls per drain cycle when arrivals never go stable", async () => {
+			// Regression guard for MAX_COALESCE_ROUNDS=3: during the first drain cycle,
+			// each maintainContext call pushes a new turn (queue never goes stable on its
+			// own). After exactly 3 calls the cap must stop coalescing, dispatch the
+			// budgeted batch, and defer the final-round arrival to the next iteration.
+			const promptInputs: string[] = [];
+			const { promise: promptStarted, resolve: startPrompt } = Promise.withResolvers<void>();
+			let maintainCalls = 0;
+			let runtime!: AdvisorRuntime;
+			const messages: AgentMessage[] = [{ role: "user", content: "t0", timestamp: 0 } as AgentMessage];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+				maintainContext: async () => {
+					maintainCalls++;
+					// Only push new turns during the FIRST drain cycle (first 3 calls)
+					// so the outer drain while-loop terminates after a second iteration.
+					if (maintainCalls <= 3) {
+						messages.push({ role: "user", content: `t${maintainCalls}`, timestamp: maintainCalls } as AgentMessage);
+						runtime.onTurnEnd(messages);
+					}
+					return false;
+				},
+			};
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					if (promptInputs.length === 1) startPrompt();
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			runtime = new AdvisorRuntime(agent, host);
+
+			runtime.onTurnEnd(messages);
+			await promptStarted;
+
+			// Exactly MAX_COALESCE_ROUNDS (3) maintenance checks in the first cycle.
+			expect(maintainCalls).toBe(3);
+			// Dispatch happened — no indefinite stall.
+			expect(promptInputs).toHaveLength(1);
+			// The turn pushed on the final round was NOT merged into this batch —
+			// it stayed in #pending for the next drain iteration.
+			expect(runtime.backlog).toBeGreaterThan(0);
+		});
+
 		it("late-arriving delta that triggers reprime: full replay and correct turn accounting", async () => {
 			const promptInputs: string[] = [];
 			const { promise: firstMaintainStarted, resolve: startFirstMaintain } = Promise.withResolvers<void>();

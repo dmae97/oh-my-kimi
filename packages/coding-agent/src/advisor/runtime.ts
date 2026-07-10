@@ -337,13 +337,14 @@ export class AdvisorRuntime {
 	 */
 	async #collectAndMaintainBatch(
 		epoch: number,
-	): Promise<{ batch: string | null; finalTurns: number } | null> {
+	): Promise<{ batch: string | null; finalTurns: number; wip: boolean } | null> {
 		const initial = this.#pending.splice(0);
 		let batchText = initial.map(b => b.text).join("\n\n");
 		let turns = initial.reduce((sum, b) => sum + b.turns, 0);
 		// Track WIP state of the most recent delta — forwarded to the reprime
 		// #renderDelta so a willContinue:true turn keeps its [in progress] heading
-		// even when the full transcript is replayed from scratch.
+		// even when the full transcript is replayed from scratch. Also returned to
+		// #drain so the retry-requeue path preserves it on failed turns.
 		let wip = initial.at(-1)?.wip ?? false;
 
 		for (let round = 0; round < MAX_COALESCE_ROUNDS; round++) {
@@ -367,9 +368,14 @@ export class AdvisorRuntime {
 					turns += lateItems.reduce((sum, b) => sum + b.turns, 0);
 					if (lateItems.length > 0) wip = lateItems.at(-1)!.wip;
 					this.#resetAdvisorContext(false, false);
-					return { batch: this.#renderDelta(this.#latestMessages, wip), finalTurns: turns };
+					return { batch: this.#renderDelta(this.#latestMessages, wip), finalTurns: turns, wip };
 				}
 			}
+
+			// On the final round stop here — any late arrivals would ship without
+			// a subsequent maintainContext budget check. Leave them in #pending for
+			// the next drain iteration where they will be properly budgeted.
+			if (round === MAX_COALESCE_ROUNDS - 1) break;
 
 			// Coalesce any deltas that arrived while we were awaiting maintenance.
 			// If none arrived the batch is stable and we're done; otherwise merge,
@@ -381,7 +387,7 @@ export class AdvisorRuntime {
 			wip = late.at(-1)!.wip;
 		}
 
-		return { batch: batchText || null, finalTurns: turns };
+		return { batch: batchText || null, finalTurns: turns, wip };
 	}
 
 	async #drain(): Promise<void> {
@@ -395,7 +401,7 @@ export class AdvisorRuntime {
 				// Epoch was invalidated during batch collection; restart the loop.
 				if (result === null) continue;
 
-				const { batch, finalTurns } = result;
+				const { batch, finalTurns, wip } = result;
 
 				if (this.disposed || batch === null) {
 					this.#backlog = Math.max(0, this.#backlog - finalTurns);
@@ -454,7 +460,7 @@ export class AdvisorRuntime {
 						this.#seenContext.clear();
 						success = true;
 					} else {
-						this.#pending.unshift({ text: batch, turns: finalTurns });
+					this.#pending.unshift({ text: batch, turns: finalTurns, wip });
 						await Bun.sleep(this.retryDelayMs);
 					}
 				}
