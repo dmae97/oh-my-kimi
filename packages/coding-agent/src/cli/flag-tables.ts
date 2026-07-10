@@ -32,6 +32,7 @@
 
 import type { ConfiguredThinkingLevel } from "../thinking";
 import type { Args } from "./args";
+import { CliUsageError } from "./usage-error";
 
 /**
  * Runtime dependencies injected into setters that need to validate input or
@@ -98,7 +99,7 @@ function parseMaxTimeSeconds(value: string): number {
 	const duration = MAX_TIME_DURATION_RE.exec(trimmed);
 	const seconds = duration ? Number(duration[1]) * maxTimeMultiplier(duration[2]) : Number(trimmed);
 	if (Number.isFinite(seconds) && seconds > 0) return seconds;
-	throw new Error(
+	throw new CliUsageError(
 		`Invalid --max-time value: ${JSON.stringify(value)}. Expected a positive number of seconds or duration like "5s", "10m", "1h".`,
 	);
 }
