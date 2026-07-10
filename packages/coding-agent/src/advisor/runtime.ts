@@ -255,9 +255,7 @@ export class AdvisorRuntime {
 			expandEditDiffs: true,
 		});
 		if (!md.trim()) return null;
-		const heading = wip
-			? "### Session update [in progress — more steps follow]"
-			: "### Session update";
+		const heading = wip ? "### Session update [in progress — more steps follow]" : "### Session update";
 		return `${heading}\n\n${md}`;
 	}
 
@@ -460,7 +458,7 @@ export class AdvisorRuntime {
 						this.#seenContext.clear();
 						success = true;
 					} else {
-					this.#pending.unshift({ text: batch, turns: finalTurns, wip });
+						this.#pending.unshift({ text: batch, turns: finalTurns, wip });
 						await Bun.sleep(this.retryDelayMs);
 					}
 				}

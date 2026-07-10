@@ -673,7 +673,11 @@ describe("advisor", () => {
 					// Only push new turns during the FIRST drain cycle (first 3 calls)
 					// so the outer drain while-loop terminates after a second iteration.
 					if (maintainCalls <= 3) {
-						messages.push({ role: "user", content: `t${maintainCalls}`, timestamp: maintainCalls } as AgentMessage);
+						messages.push({
+							role: "user",
+							content: `t${maintainCalls}`,
+							timestamp: maintainCalls,
+						} as AgentMessage);
 						runtime.onTurnEnd(messages);
 					}
 					return false;
