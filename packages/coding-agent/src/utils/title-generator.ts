@@ -35,6 +35,8 @@ const TITLE_MAX_TOKENS = 1024;
 /** Matches the title the model wraps in `<title>...</title>`. */
 const TITLE_MARKER_GLOBAL_RE = /<title>([\s\S]*?)<\/title>/gi;
 const TITLE_VISIBILITY_SENTINEL = "\uE000omp-title-visible\uE000";
+const THINKING_TAG_ENVELOPE_RE = /<(think|thinking|reasoning)>\s*[\s\S]*?<\/\1>/gi;
+const THINKING_FENCE_ENVELOPE_RE = /```(?:thinking|reasoning)\b[\s\S]*?```/gi;
 const LEADING_THINKING_TAG_RE = /^\s*<(think|thinking|reasoning)>\s*[\s\S]*?<\/\1>\s*/i;
 const LEADING_THINKING_FENCE_RE = /^\s*```(?:thinking|reasoning)\b[\s\S]*?```\s*/i;
 
@@ -269,9 +271,30 @@ function extractVisibleMarkedTitle(text: string): string | undefined {
 }
 
 function isVisibleTitleMarker(text: string, markerIndex: number): boolean {
+	if (isInsideKnownThinkingEnvelope(text, markerIndex)) return false;
 	return stripLeakedThinkingMarkup(`${text.slice(0, markerIndex)}${TITLE_VISIBILITY_SENTINEL}`).endsWith(
 		TITLE_VISIBILITY_SENTINEL,
 	);
+}
+
+function isInsideKnownThinkingEnvelope(text: string, index: number): boolean {
+	return (
+		isInsideEnvelopeMatchedBy(THINKING_TAG_ENVELOPE_RE, text, index) ||
+		isInsideEnvelopeMatchedBy(THINKING_FENCE_ENVELOPE_RE, text, index)
+	);
+}
+
+function isInsideEnvelopeMatchedBy(pattern: RegExp, text: string, index: number): boolean {
+	pattern.lastIndex = 0;
+	let marker = pattern.exec(text);
+	while (marker !== null) {
+		const start = marker.index;
+		const end = start + marker[0].length;
+		if (index > start && index < end) return true;
+		if (start > index) return false;
+		marker = pattern.exec(text);
+	}
+	return false;
 }
 
 function stripLeadingLeakedThinkingMarkup(text: string): string {

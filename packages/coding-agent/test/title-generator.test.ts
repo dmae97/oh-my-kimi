@@ -72,14 +72,22 @@ describe("title generator", () => {
 
 	it.each([
 		[
-			"thinking",
+			"<thinking>",
 			"<thinking>Thinking process:\n<title>Wrong internal scratchpad</title>\n</thinking>\n<title>Fix login button</title>",
 		],
 		[
-			"think",
+			"<think>",
 			"<think>Thinking process:\n<title>Wrong internal scratchpad</title>\n</think>\n<title>Fix login button</title>",
 		],
-	] as const)("ignores leaked <%s> reasoning markup before the visible title", async (_tag, responseText) => {
+		[
+			"<reasoning>",
+			"<reasoning>Thinking process:\n<title>Wrong internal scratchpad</title>\n</reasoning>\n<title>Fix login button</title>",
+		],
+		[
+			"```reasoning",
+			"```reasoning\nThinking process:\n<title>Wrong internal scratchpad</title>\n```\n<title>Fix login button</title>",
+		],
+	] as const)("ignores leaked %s reasoning markup before the visible title", async (_marker, responseText) => {
 		const model = getModelOrThrow("claude-sonnet-4-5");
 		vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
