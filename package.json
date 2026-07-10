@@ -1,5 +1,5 @@
 {
-  "name": "omp-monorepo",
+  "name": "omp",
   "homepage": "https://omp.sh",
   "private": true,
   "type": "module",
