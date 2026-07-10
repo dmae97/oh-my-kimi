@@ -4,7 +4,10 @@ import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { type Args, parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import type { ScopedModel } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { buildSessionOptions } from "@oh-my-pi/pi-coding-agent/main";
 import { type CreateAgentSessionOptions, createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -189,6 +192,42 @@ describe("provider prompt-cache key session affinity", () => {
 				await session?.dispose();
 				authStorage?.close();
 			}
+		}
+	});
+
+	it("does not pre-pin parent prompt-cache affinity when a scoped model selects the startup route", async () => {
+		using tempDir = TempDir.createSync("@omp-prompt-cache-scoped-model-");
+		const source = await createSourceSessionFixture(tempDir, "parent-cache-session-scoped");
+		const forkedManager = await SessionManager.forkFrom(source.sourceFile, source.cwd, source.forkSessionDir);
+		const authStorage = await AuthStorage.create(tempDir.join("scoped-auth.db"));
+		authStorage.setRuntimeApiKey(OPENAI_TEST_MODEL.provider, "test-key");
+		try {
+			const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+			const parsed = parseArgs([
+				"--cwd",
+				source.cwd,
+				"--models",
+				`${OPENAI_TEST_MODEL.provider}/${OPENAI_TEST_MODEL.id}`,
+			]);
+			const scopedModels: ScopedModel[] = [
+				{
+					model: OPENAI_TEST_MODEL,
+					explicitThinkingLevel: false,
+				},
+			];
+
+			const options = await buildSessionOptions(
+				parsed,
+				scopedModels,
+				forkedManager,
+				modelRegistry,
+				Settings.isolated({ "marketplace.autoUpdate": "off" }),
+			);
+
+			expect(options.model).toBe(OPENAI_TEST_MODEL);
+			expect(options.providerPromptCacheKey).toBeUndefined();
+		} finally {
+			authStorage.close();
 		}
 	});
 });
