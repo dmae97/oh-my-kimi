@@ -32,6 +32,11 @@ describe("AIError.classify — structural provider errors", () => {
 		).toBe(true);
 	});
 
+	it("classifies a typed AWS credential-resolution failure as authFailed", () => {
+		const id = AIError.classify(new AIError.AwsCredentialsError("opaque provider setup failure", "resolution"));
+		expect(AIError.is(id, AIError.Flag.AuthFailed)).toBe(true);
+	});
+
 	it("maps the usage_limit_reached code to usageLimit on a 429", () => {
 		const id = AIError.classify(
 			new AIError.ProviderHttpError("Payment Required", 429, { code: "usage_limit_reached" }),

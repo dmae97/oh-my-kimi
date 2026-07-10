@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed compaction aborting instead of trying an authenticated fallback model when Amazon Bedrock credential resolution fails before a request is sent. ([#5030](https://github.com/can1357/oh-my-pi/pull/5030) by [@usr-bin-roygbiv](https://github.com/usr-bin-roygbiv))
+
 ## [16.3.15] - 2026-07-09
 
 ### Changed

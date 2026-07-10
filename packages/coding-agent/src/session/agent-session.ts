@@ -11921,18 +11921,6 @@ export class AgentSession {
 
 		return candidates;
 	}
-	#isCompactionAuthFailure(error: unknown): boolean {
-		if (!(error instanceof Error)) return false;
-		// Real provider 401/403 — surfaced as `.status` by the compaction layer
-		// (see `createSummarizationError` in packages/agent/src/compaction/compaction.ts).
-		// Without this branch, an expired/revoked Anthropic key would bypass the
-		// authenticated-fallback path and dump the raw HTTP body into the UI.
-		const status = (error as Error & { status?: number }).status;
-		if (status === 401 || status === 403) return true;
-		// pi-native gateway synthetic for "no credential configured" (issue #986).
-		// Carries no HTTP status, so the legacy message regex stays.
-		return /auth_unavailable|no auth available/i.test(error.message);
-	}
 
 	#buildCompactionAuthError(): Error {
 		const currentModel = this.model;
@@ -11997,7 +11985,7 @@ export class AgentSession {
 					},
 				);
 			} catch (error) {
-				if (!this.#isCompactionAuthFailure(error)) {
+				if (!AIError.is(AIError.classify(error, candidate.api), AIError.Flag.AuthFailed)) {
 					throw error;
 				}
 			}
@@ -12689,7 +12677,7 @@ export class AgentSession {
 
 							const message = error instanceof Error ? error.message : String(error);
 							const id = AIError.classify(error, candidate.api);
-							if (this.#isCompactionAuthFailure(error)) {
+							if (AIError.is(id, AIError.Flag.AuthFailed)) {
 								lastError = this.#buildCompactionAuthError();
 								break;
 							}
