@@ -95,6 +95,22 @@ describe("title generator", () => {
 		expect(title).toBe("Fix login button");
 	});
 
+	it("preserves in-band reasoning syntax inside the parsed title", async () => {
+		const model = getModelOrThrow("claude-sonnet-4-5");
+		vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "<title>Fix <think> tag parsing</title>" }],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"fix title generation for <think> tag parsing",
+			createRegistry(model),
+			createSettings(model),
+		);
+
+		expect(title).toBe("Fix <think> tag parsing");
+	});
+
 	it("uses the bundled default prompt when no title prompt file is resolved", async () => {
 		const model = getModelOrThrow("claude-sonnet-4-5");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({

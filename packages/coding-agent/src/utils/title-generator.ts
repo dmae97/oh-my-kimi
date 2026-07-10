@@ -33,7 +33,8 @@ const TERMINAL_TITLE_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
 const TITLE_MAX_TOKENS = 1024;
 
 /** Matches the title the model wraps in `<title>...</title>`. */
-const TITLE_MARKER_RE = /<title>([\s\S]*?)<\/title>/i;
+const TITLE_MARKER_GLOBAL_RE = /<title>([\s\S]*?)<\/title>/gi;
+const TITLE_VISIBILITY_SENTINEL = "\uE000omp-title-visible\uE000";
 
 function getTitleModel(registry: ModelRegistry, settings: Settings, currentModel?: Model<Api>): Model<Api> | undefined {
 	const availableModels = registry.getAvailable();
@@ -242,13 +243,33 @@ function extractGeneratedTitle(contentBlocks: AssistantMessage["content"]): stri
 			textTitle += content.text;
 		}
 	}
-	// Stay lenient: prefer the marker when the model closed it, otherwise
-	// accept a plain sentence after stripping any stray/unclosed tag fragment
-	// (e.g. output truncated before the closing tag).
-	const cleanedTextTitle = stripLeakedThinkingMarkup(textTitle);
-	const marker = TITLE_MARKER_RE.exec(cleanedTextTitle);
-	const candidate = marker ? marker[1].trim() : cleanedTextTitle.replace(/<\/?title>/gi, "").trim();
-	return unwrapJsonTitle(candidate);
+	// Stay lenient: prefer the first closed title marker in visible text, then
+	// fall back to a plain sentence after stripping leaked thinking plus any
+	// stray/unclosed title tag fragment (e.g. output truncated before closing).
+	const markedTitle = extractVisibleMarkedTitle(textTitle);
+	const cleanedTextTitle =
+		markedTitle ??
+		stripLeakedThinkingMarkup(textTitle)
+			.replace(/<\/?title>/gi, "")
+			.trim();
+	return unwrapJsonTitle(cleanedTextTitle);
+}
+
+function extractVisibleMarkedTitle(text: string): string | undefined {
+	TITLE_MARKER_GLOBAL_RE.lastIndex = 0;
+	let marker: RegExpExecArray | null = TITLE_MARKER_GLOBAL_RE.exec(text);
+	while (marker !== null) {
+		const title = marker[1];
+		if (title !== undefined && isVisibleTitleMarker(text, marker.index)) return title.trim();
+		marker = TITLE_MARKER_GLOBAL_RE.exec(text);
+	}
+	return undefined;
+}
+
+function isVisibleTitleMarker(text: string, markerIndex: number): boolean {
+	return stripLeakedThinkingMarkup(`${text.slice(0, markerIndex)}${TITLE_VISIBILITY_SENTINEL}`).endsWith(
+		TITLE_VISIBILITY_SENTINEL,
+	);
 }
 
 function stripLeakedThinkingMarkup(text: string): string {
