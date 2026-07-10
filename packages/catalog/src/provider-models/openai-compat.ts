@@ -823,17 +823,23 @@ const OPENAI_PRO_REASONING_BASE_IDS: Record<string, true> = {
 	"gpt-5.6-sol": true,
 	"gpt-5.6-terra": true,
 };
-const OPENAI_PRO_REASONING_PROVIDERS: Record<string, true> = { openai: true, "openai-codex": true };
+/**
+ * Providers whose generated pro aliases this pass owns. `openai-codex` stays in
+ * the sweep so stale aliases from earlier snapshots are dropped on regen, but
+ * projection is `openai`-only — subscription (Codex) auth does not offer pro
+ * reasoning.
+ */
+const OPENAI_PRO_REASONING_SWEEP_PROVIDERS: Record<string, true> = { openai: true, "openai-codex": true };
 
 /**
  * A row this generator pass owns: one of the derived `gpt-5.6-*-pro` alias ids
- * on `openai`/`openai-codex` that carries the generated `reasoningMode` marker.
+ * on a swept provider that carries the generated `reasoningMode` marker.
  * A real upstream model occupying the same id has no `reasoningMode` and is
  * never touched.
  */
 function isGeneratedOpenAIProReasoningAlias(model: ModelSpec<Api>): boolean {
 	return (
-		OPENAI_PRO_REASONING_PROVIDERS[model.provider] === true &&
+		OPENAI_PRO_REASONING_SWEEP_PROVIDERS[model.provider] === true &&
 		model.reasoningMode !== undefined &&
 		model.id.endsWith("-pro") &&
 		OPENAI_PRO_REASONING_BASE_IDS[model.id.slice(0, -"-pro".length)] === true
@@ -842,21 +848,21 @@ function isGeneratedOpenAIProReasoningAlias(model: ModelSpec<Api>): boolean {
 
 /**
  * Re-derive the generated pro-reasoning aliases (`gpt-5.6-*-pro`) for the
- * first-party `openai`/`openai-codex` gpt-5.6 rows. Each alias inherits the
- * base row's metadata, requests the base wire id via `requestModelId`, and
- * sets `reasoningMode: "pro"` so Responses-family request builders emit
+ * first-party `openai` gpt-5.6 rows. Each alias inherits the base row's
+ * metadata, requests the base wire id via `requestModelId`, and sets
+ * `reasoningMode: "pro"` so Responses-family request builders emit
  * `reasoning: { mode: "pro" }`. Called by the models.json generator after all
- * sources merge: stale copies of the owned aliases (previous snapshot) are
- * dropped and re-projected from the current base rows so alias metadata always
- * tracks the base, while a real upstream model that occupies an alias id wins
- * and suppresses the projection.
+ * sources merge: stale copies of the owned aliases (previous snapshot,
+ * including retired `openai-codex` rows) are dropped and re-projected from the
+ * current base rows so alias metadata always tracks the base, while a real
+ * upstream model that occupies an alias id wins and suppresses the projection.
  */
 export function projectOpenAIProReasoningAliases(models: readonly ModelSpec<Api>[]): ModelSpec<Api>[] {
 	const kept = models.filter(model => !isGeneratedOpenAIProReasoningAlias(model));
 	const ids = new Set(kept.map(model => `${model.provider}/${model.id}`));
 	const out = [...kept];
 	for (const model of kept) {
-		if (!OPENAI_PRO_REASONING_PROVIDERS[model.provider]) continue;
+		if (model.provider !== "openai") continue;
 		if (!OPENAI_PRO_REASONING_BASE_IDS[model.id]) continue;
 		const aliasId = `${model.id}-pro`;
 		const aliasKey = `${model.provider}/${aliasId}`;

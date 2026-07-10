@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added GPT-5.6 Luna, Sol, and Terra models
+- Added perplexity-academic-researcher model
+
+### Changed
+
+- Updated context windows for multiple GPT-5.6 models
+- Increased max tokens for several models
+- Updated cache write costs for GPT-5.6 variants
+- Reduced pricing for select models
+
+### Removed
+
+- Removed pro-reasoning aliases for GPT-5.6 variants
+
 ## [16.4.0] - 2026-07-10
 
 ### Breaking Changes
