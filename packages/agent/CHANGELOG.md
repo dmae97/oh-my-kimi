@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed serialization of BigInt tool arguments to prevent data loss in remote compaction
+
 ## [16.4.1] - 2026-07-10
 
 ### Fixed

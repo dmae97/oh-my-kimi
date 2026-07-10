@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added stringifyJson utility that supports BigInt serialization
+
 ## [16.3.12] - 2026-07-08
 
 ### Added

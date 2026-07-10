@@ -27,7 +27,7 @@ import {
 	OPENAI_HEADER_VALUES,
 	OPENAI_HEADERS,
 } from "@oh-my-pi/pi-catalog/wire/codex";
-import { $env, logger } from "@oh-my-pi/pi-utils";
+import { $env, logger, stringifyJson } from "@oh-my-pi/pi-utils";
 
 // ============================================================================
 // Types & Configuration
@@ -329,7 +329,7 @@ async function attemptCompactionV2Streaming(
 	const response = await fetchImpl(endpoint, {
 		method: "POST",
 		headers: buildCompactionV2Headers(model, apiKey, request, codexMetadata),
-		body: JSON.stringify(body),
+		body: stringifyJson(body),
 		signal,
 	});
 

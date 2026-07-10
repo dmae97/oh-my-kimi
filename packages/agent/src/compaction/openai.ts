@@ -43,7 +43,7 @@ import {
 	OPENAI_HEADER_VALUES,
 	OPENAI_HEADERS,
 } from "@oh-my-pi/pi-catalog/wire/codex";
-import { $env, logger } from "@oh-my-pi/pi-utils";
+import { $env, logger, stringifyJson } from "@oh-my-pi/pi-utils";
 
 export * from "./compaction-v2-streaming";
 
@@ -419,7 +419,7 @@ export function buildOpenAiNativeHistory(
 						id: itemId,
 						call_id: normalized.callId,
 						name: block.name,
-						arguments: JSON.stringify(block.arguments),
+						arguments: stringifyJson(block.arguments) ?? "null",
 					});
 				}
 			}
@@ -549,7 +549,7 @@ export async function requestOpenAiRemoteCompaction(
 	const response = await (opts?.fetch ?? fetch)(endpoint, {
 		method: "POST",
 		headers,
-		body: JSON.stringify(request),
+		body: stringifyJson(request),
 		signal: withRequestTimeout(signal, opts?.timeoutMs ?? REMOTE_COMPACTION_TIMEOUT_MS),
 	});
 
@@ -646,7 +646,7 @@ export async function requestRemoteCompaction(
 	const response = await (opts?.fetch ?? fetch)(endpoint, {
 		method: "POST",
 		headers,
-		body: JSON.stringify(body),
+		body: stringifyJson(body),
 		signal: withRequestTimeout(signal, opts?.timeoutMs ?? REMOTE_COMPACTION_TIMEOUT_MS),
 	});
 

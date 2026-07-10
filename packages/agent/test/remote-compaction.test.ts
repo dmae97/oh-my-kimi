@@ -178,6 +178,38 @@ describe("buildOpenAiNativeHistory custom tool calls", () => {
 		expect(items.find(item => item.type === "function_call")).toBeDefined();
 		expect(items.find(item => item.type === "custom_tool_call")).toBeUndefined();
 	});
+
+	test("preserves bigint tool arguments as exact decimal strings", () => {
+		const assistant: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{
+					type: "toolCall",
+					id: "call_lookup_1|fc_lookup_1",
+					name: "lookup",
+					arguments: { rowId: 9_007_199_254_740_993n },
+				},
+			],
+			timestamp: Date.now(),
+			provider: "openai",
+			model: "gpt-5",
+			api: "openai-responses",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+		};
+
+		const items = buildOpenAiNativeHistory([assistant], makeOpenAiModel());
+		const call = items.find(item => item.type === "function_call");
+
+		expect(call?.arguments).toBe('{"rowId":"9007199254740993"}');
+	});
 });
 
 const ZERO_USAGE = {

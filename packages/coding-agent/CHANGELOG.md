@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Fixed serialization of BigInt values in tool arguments during session compaction
 - Fixed GPT-5.6 over-delegating work by centralizing task fan-out and concurrency policy in the system prompt: default task mode now uses Codex's explicit-request policy, while eager task mode uses its proactive policy. Other models retain the existing delegation strategy; the task tool keeps only model-independent assignment and coordination guidance.
 
 ## [16.4.1] - 2026-07-10
