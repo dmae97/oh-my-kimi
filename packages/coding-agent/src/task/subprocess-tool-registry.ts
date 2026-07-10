@@ -30,12 +30,6 @@ export interface SubprocessToolHandler<TData = unknown> {
 	extractData?: (event: SubprocessToolEvent) => TData | undefined;
 
 	/**
-	 * Extract structured data from a committed tool call before execution result
-	 * delivery. Used for terminal tools whose call arguments are the durable result.
-	 */
-	extractCallData?: (event: SubprocessToolEvent) => TData | undefined;
-
-	/**
 	 * Whether this tool's completion should terminate the subprocess.
 	 * Return true to send SIGTERM after the tool completes.
 	 */

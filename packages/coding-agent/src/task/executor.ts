@@ -912,7 +912,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	const abortSignal = abortController.signal;
 	let activeSession: AgentSession | null = null;
 	let yieldCalled = false;
-	const extractedToolCallIndexes = new Map<string, number>();
+	let yieldCallPending = false;
 
 	// Accumulate usage incrementally from message_end events (no memory for streaming events)
 	const accumulatedUsage: Usage = {
@@ -1141,49 +1141,25 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 		});
 	};
 
-	const recordExtractedToolData = (toolName: string, toolCallId: string, data: unknown): void => {
+	const recordExtractedToolData = (toolName: string, data: unknown): void => {
 		progress.extractedToolData = progress.extractedToolData || {};
 		const existing = progress.extractedToolData[toolName] || [];
-		const callKey = toolCallId.length > 0 ? `${toolName}\0${toolCallId}` : undefined;
-		if (callKey !== undefined) {
-			const existingIndex = extractedToolCallIndexes.get(callKey);
-			if (existingIndex !== undefined && existingIndex < existing.length) {
-				existing[existingIndex] = data;
-				progress.extractedToolData[toolName] = existing;
-				return;
-			}
-		}
 		const findingKey = toolName === "report_finding" ? getReportFindingKey(data) : null;
 		if (findingKey) {
 			const existingIndex = existing.findIndex(item => getReportFindingKey(item) === findingKey);
 			if (existingIndex >= 0) {
 				existing[existingIndex] = data;
-				if (callKey !== undefined) extractedToolCallIndexes.set(callKey, existingIndex);
 			} else {
 				existing.push(data);
-				if (callKey !== undefined) extractedToolCallIndexes.set(callKey, existing.length - 1);
 			}
 		} else {
 			existing.push(data);
-			if (callKey !== undefined) extractedToolCallIndexes.set(callKey, existing.length - 1);
 		}
 		progress.extractedToolData[toolName] = existing;
 		if (toolName === "yield") {
 			yieldCalled = true;
+			yieldCallPending = false;
 		}
-	};
-
-	const commitToolCallData = (toolName: string, toolCallId: string, eventArgs: Record<string, unknown>): boolean => {
-		const handler = subprocessToolRegistry.getHandler(toolName);
-		if (!handler?.extractCallData) return false;
-		const data = handler.extractCallData({
-			toolName,
-			toolCallId,
-			args: eventArgs,
-		});
-		if (data === undefined) return false;
-		recordExtractedToolData(toolName, toolCallId, data);
-		return true;
 	};
 
 	const processEvent = (event: AgentEvent) => {
@@ -1213,7 +1189,9 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 				if (intent) {
 					progress.lastIntent = intent;
 				}
-				commitToolCallData(event.toolName, event.toolCallId, startArgs);
+				if (event.toolName === "yield" && !yieldCalled) {
+					yieldCallPending = true;
+				}
 				// Reset any prior in-flight task snapshot so we don't show stale
 				// nested progress when the agent enters a fresh `task` call.
 				if (event.toolName === "task") {
@@ -1259,8 +1237,12 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 							isError: event.isError,
 						});
 						if (data !== undefined) {
-							recordExtractedToolData(event.toolName, event.toolCallId, data);
+							recordExtractedToolData(event.toolName, data);
 						}
+					}
+
+					if (event.toolName === "yield") {
+						yieldCallPending = false;
 					}
 
 					// Check if handler wants to terminate the session
@@ -1334,14 +1316,13 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 								continue;
 							}
 							if (block.type !== "toolCall" || typeof block.name !== "string") continue;
-							const toolCallId = typeof block.id === "string" ? block.id : "";
-							const toolArgs = isRecord(block.arguments) ? block.arguments : {};
-							if (commitToolCallData(block.name, toolCallId, toolArgs)) {
+							if (block.name === "yield" && !yieldCalled) {
+								yieldCallPending = true;
 								flushProgress = true;
 							}
 						}
 					}
-					if (softRequestBudget > 0 && !abortSent && !yieldCalled) {
+					if (softRequestBudget > 0 && !abortSent && !yieldCalled && !yieldCallPending) {
 						if (progress.requests >= softRequestBudget * 1.5) {
 							requestAbort("budget");
 						} else if (softRequestBudgetNotice && !budgetSteerSent && progress.requests >= softRequestBudget) {
