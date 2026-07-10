@@ -605,6 +605,40 @@ describe("github copilot vision endpoint policy", () => {
 		}
 	});
 
+	it("maps omitted upstream vision to text-only on non-personal Copilot endpoints", async () => {
+		for (const endpoint of [
+			{
+				apiKey: businessApiKey,
+				baseUrl: "https://api.business.githubcopilot.com",
+				token: "ghu_business_token",
+			},
+			{
+				apiKey: enterpriseApiKey,
+				baseUrl: "https://copilot-api.ghe.example.com",
+				token: "ghu_enterprise_token",
+			},
+		]) {
+			const { models } = await discoverCopilotModels(
+				{
+					data: [
+						tieredCopilotEntry({
+							id: "claude-sonnet-4.6",
+							name: "Claude Sonnet 4.6",
+							window: 200_000,
+							maxOutput: 32_000,
+						}),
+					],
+				},
+				endpoint.apiKey,
+				endpoint.baseUrl,
+				endpoint.token,
+			);
+			const model = models.find(candidate => candidate.id === "claude-sonnet-4.6");
+			expect(model?.baseUrl).toBe(endpoint.baseUrl);
+			expect(model?.input).toEqual(["text"]);
+		}
+	});
+
 	it("keeps vision on the canonical personal Copilot endpoint", async () => {
 		const { models } = await discoverCopilotModels({
 			data: [
