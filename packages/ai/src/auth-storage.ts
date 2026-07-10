@@ -308,13 +308,28 @@ export interface AuthCredentialSnapshot {
  *   a remote broker; mutating methods (`replace*`, `upsert*`, `delete*ForProvider`)
  *   throw because login flows route through the broker, not the client.
  */
+export interface CredentialRefreshLeaseFence {
+	owner: string;
+	nowMs: number;
+}
+
 export interface AuthCredentialStore {
 	close(): void;
 	listAuthCredentials(provider?: string): StoredAuthCredential[];
 	updateAuthCredential(id: number, credential: AuthCredential): void;
 	deleteAuthCredential(id: number, disabledCause: string): void;
-	tryDisableAuthCredentialIfMatches(id: number, expectedData: string, disabledCause: string): boolean;
-	tryUpdateAuthCredentialIfMatches?(id: number, expectedData: string, credential: AuthCredential): boolean;
+	tryDisableAuthCredentialIfMatches(
+		id: number,
+		expectedData: string,
+		disabledCause: string,
+		lease?: CredentialRefreshLeaseFence,
+	): boolean;
+	tryUpdateAuthCredentialIfMatches?(
+		id: number,
+		expectedData: string,
+		credential: AuthCredential,
+		lease?: CredentialRefreshLeaseFence,
+	): boolean;
 	replaceAuthCredentialsForProvider(provider: string, credentials: AuthCredential[]): StoredAuthCredential[];
 	upsertAuthCredentialForProvider(provider: string, credential: AuthCredential): StoredAuthCredential[];
 	deleteAuthCredentialsForProvider(provider: string, disabledCause: string): void;
@@ -601,6 +616,7 @@ const OAUTH_REFRESH_SKEW_MS = 60_000;
 const OAUTH_REFRESH_LEASE_TTL_MS = 15_000;
 const OAUTH_REFRESH_LEASE_POLL_MS = 50;
 const OAUTH_REFRESH_LEASE_RENEW_MS = 5_000;
+const OAUTH_REFRESH_OPERATION_TIMEOUT_MS = 10_000;
 /**
  * Cap on the buffered credential_disabled backlog held while no handler is attached.
  * In practice the backlog is 0–N where N ≈ active providers (≤ ~20). The cap exists so
@@ -736,7 +752,8 @@ export interface StoredOAuthRefreshOptions<T extends OAuthCredential = OAuthCred
 	signal?: AbortSignal;
 	keepCredentialOnRefreshFailure?: boolean | ((error: unknown) => boolean);
 	onRefreshFailure?: (error: unknown) => void;
-	refresh: (credential: T) => Promise<OAuthCredentials>;
+	refreshTimeoutMs?: number;
+	refresh: (credential: T, signal?: AbortSignal) => Promise<OAuthCredentials>;
 	mergeRefreshedCredential?: (credential: T, refreshed: OAuthCredentials) => T;
 	isDefinitiveFailure?: (error: unknown) => boolean;
 	disabledCause?: (error: unknown) => string;
@@ -1968,11 +1985,20 @@ export class AuthStorage {
 							leaseRenewalError = error;
 						})
 					: undefined;
+			const refreshAbort = new AbortController();
+			const refreshTimeout = setTimeout(() => {
+				refreshAbort.abort(
+					new AIError.OAuthError(`OAuth token refresh timed out for provider: ${provider}`, {
+						kind: "timeout",
+						provider,
+					}),
+				);
+			}, options.refreshTimeoutMs ?? OAUTH_REFRESH_OPERATION_TIMEOUT_MS);
 
 			let refreshed: OAuthCredentials;
 			try {
 				try {
-					refreshed = await options.refresh(current);
+					refreshed = await options.refresh(current, refreshAbort.signal);
 				} catch (error) {
 					if (options.isDefinitiveFailure?.(error)) {
 						const disabledCause = options.disabledCause?.(error) ?? `oauth refresh failed: ${String(error)}`;
@@ -1980,6 +2006,7 @@ export class AuthStorage {
 							row.id,
 							serialized.data,
 							disabledCause,
+							leasedCredentialId !== undefined ? { owner, nowMs: Date.now() } : undefined,
 						);
 						if (disabled) {
 							this.#setStoredCredentials(
@@ -2014,6 +2041,7 @@ export class AuthStorage {
 				stopLeaseRenewal = true;
 				leaseRenewalStopped.resolve();
 				await leaseRenewal;
+				clearTimeout(refreshTimeout);
 			}
 			if (leaseRenewalError) throw leaseRenewalError;
 
@@ -2031,7 +2059,14 @@ export class AuthStorage {
 						apiEndpoint: refreshed.apiEndpoint ?? current.apiEndpoint,
 					};
 			if (this.#store.tryUpdateAuthCredentialIfMatches) {
-				if (!this.#store.tryUpdateAuthCredentialIfMatches(row.id, serialized.data, merged)) {
+				if (
+					!this.#store.tryUpdateAuthCredentialIfMatches(
+						row.id,
+						serialized.data,
+						merged,
+						leasedCredentialId !== undefined ? { owner, nowMs: Date.now() } : undefined,
+					)
+				) {
 					await this.reload();
 					const latest = this.get(provider);
 					return {
@@ -5443,6 +5478,8 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	#getCacheIncludingExpiredStmt: Statement;
 	#upsertCacheStmt: Statement;
 	#deleteExpiredCacheStmt: Statement;
+	#updateIfMatchesWithLeaseStmt: Statement;
+	#deleteIfMatchesWithLeaseStmt: Statement;
 	#getCredentialBlockStmt: Statement;
 	#listCredentialBlocksByCredentialStmt: Statement;
 	#upsertCredentialBlockStmt: Statement;
@@ -5483,11 +5520,29 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#updateIfMatchesStmt = this.#db.prepare(
 			`UPDATE auth_credentials SET credential_type = ?, data = ?, identity_key = ?, updated_at = ${SQLITE_NOW_EPOCH} WHERE id = ? AND data = ? AND disabled_cause IS NULL`,
 		);
+		this.#updateIfMatchesWithLeaseStmt = this.#db.prepare(
+			`UPDATE auth_credentials
+			SET credential_type = ?, data = ?, identity_key = ?, updated_at = ${SQLITE_NOW_EPOCH}
+			WHERE id = ? AND data = ? AND disabled_cause IS NULL
+				AND EXISTS (
+					SELECT 1 FROM auth_credential_refresh_leases
+					WHERE credential_id = ? AND owner = ? AND expires_at_ms > ?
+				)`,
+		);
 		this.#deleteStmt = this.#db.prepare(
 			`UPDATE auth_credentials SET disabled_cause = ?, updated_at = ${SQLITE_NOW_EPOCH} WHERE id = ?`,
 		);
 		this.#deleteIfMatchesStmt = this.#db.prepare(
 			`UPDATE auth_credentials SET disabled_cause = ?, updated_at = ${SQLITE_NOW_EPOCH} WHERE id = ? AND data = ? AND disabled_cause IS NULL`,
+		);
+		this.#deleteIfMatchesWithLeaseStmt = this.#db.prepare(
+			`UPDATE auth_credentials
+			SET disabled_cause = ?, updated_at = ${SQLITE_NOW_EPOCH}
+			WHERE id = ? AND data = ? AND disabled_cause IS NULL
+				AND EXISTS (
+					SELECT 1 FROM auth_credential_refresh_leases
+					WHERE credential_id = ? AND owner = ? AND expires_at_ms > ?
+				)`,
 		);
 		this.#deleteByProviderStmt = this.#db.prepare(
 			`UPDATE auth_credentials SET disabled_cause = ?, updated_at = ${SQLITE_NOW_EPOCH} WHERE provider = ? AND disabled_cause IS NULL`,
@@ -6098,7 +6153,12 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		}
 	}
 
-	tryUpdateAuthCredentialIfMatches(id: number, expectedData: string, credential: AuthCredential): boolean {
+	tryUpdateAuthCredentialIfMatches(
+		id: number,
+		expectedData: string,
+		credential: AuthCredential,
+		lease?: CredentialRefreshLeaseFence,
+	): boolean {
 		const providerStmt = this.#db.prepare("SELECT provider FROM auth_credentials WHERE id = ?");
 		let providerRow: { provider?: string } | undefined;
 		try {
@@ -6109,13 +6169,24 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		const provider = providerRow?.provider ?? "";
 		const serialized = serializeCredential(provider, credential);
 		if (!serialized) return false;
-		const result = this.#updateIfMatchesStmt.run(
-			serialized.credentialType,
-			serialized.data,
-			serialized.identityKey,
-			id,
-			expectedData,
-		) as { changes: number };
+		const result = lease
+			? (this.#updateIfMatchesWithLeaseStmt.run(
+					serialized.credentialType,
+					serialized.data,
+					serialized.identityKey,
+					id,
+					expectedData,
+					id,
+					lease.owner,
+					lease.nowMs,
+				) as { changes: number })
+			: (this.#updateIfMatchesStmt.run(
+					serialized.credentialType,
+					serialized.data,
+					serialized.identityKey,
+					id,
+					expectedData,
+				) as { changes: number });
 		if (result.changes !== 1) return false;
 		if (provider) {
 			this.#purgeSupersededDisabledRows(provider, this.listAuthCredentials(provider));
@@ -6137,10 +6208,24 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	 * the OAuth refresh-failure path to avoid clobbering a peer that rotated the
 	 * row between our pre-check and the disable.
 	 */
-	tryDisableAuthCredentialIfMatches(id: number, expectedData: string, disabledCause: string): boolean {
-		const result = this.#deleteIfMatchesStmt.run(normalizeDisabledCause(disabledCause), id, expectedData) as {
-			changes: number;
-		};
+	tryDisableAuthCredentialIfMatches(
+		id: number,
+		expectedData: string,
+		disabledCause: string,
+		lease?: CredentialRefreshLeaseFence,
+	): boolean {
+		const result = lease
+			? (this.#deleteIfMatchesWithLeaseStmt.run(
+					normalizeDisabledCause(disabledCause),
+					id,
+					expectedData,
+					id,
+					lease.owner,
+					lease.nowMs,
+				) as { changes: number })
+			: (this.#deleteIfMatchesStmt.run(normalizeDisabledCause(disabledCause), id, expectedData) as {
+					changes: number;
+				});
 		return result.changes === 1;
 	}
 	deleteAuthCredentialsForProvider(provider: string, disabledCause: string): void {

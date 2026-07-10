@@ -1238,7 +1238,7 @@ export class MCPManager {
 							const material = selectMcpOAuthRefreshMaterial(current, auth);
 							return Boolean(current.refresh && material?.tokenUrl);
 						},
-						refresh: current => {
+						refresh: (current, signal) => {
 							if (current.refresh === REMOTE_REFRESH_SENTINEL) {
 								throw new Error("MCP OAuth refresh token is broker-redacted; local refresh is unavailable");
 							}
@@ -1257,6 +1257,7 @@ export class MCPManager {
 							return refreshMCPOAuthToken(tokenUrl, current.refresh, clientId, clientSecret, resource, {
 								authorizationUrl,
 								stripSameOriginResource: resourceIsFallback,
+								signal,
 							});
 						},
 						mergeRefreshedCredential: (current, refreshed) => {

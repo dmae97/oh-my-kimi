@@ -115,10 +115,11 @@ async function withSharedSQLiteAuth<T>(
 describe("MCPManager OAuth refresh failure", () => {
 	let manager: MCPManager;
 	let authStorage: AuthStorage;
+	let store: SqliteAuthCredentialStore;
 	let serverConfig: MCPServerConfig;
 
 	beforeEach(async () => {
-		const store = new SqliteAuthCredentialStore(new Database(":memory:"));
+		store = new SqliteAuthCredentialStore(new Database(":memory:"));
 		authStorage = new AuthStorage(store);
 		await authStorage.reload();
 
@@ -147,6 +148,7 @@ describe("MCPManager OAuth refresh failure", () => {
 	});
 
 	afterEach(() => {
+		vi.useRealTimers();
 		authStorage.close();
 		vi.restoreAllMocks();
 	});
@@ -169,7 +171,7 @@ describe("MCPManager OAuth refresh failure", () => {
 			undefined,
 			undefined,
 			"https://logfire.example.com/mcp",
-			{ authorizationUrl: undefined, stripSameOriginResource: true },
+			{ authorizationUrl: undefined, stripSameOriginResource: true, signal: expect.any(AbortSignal) },
 		);
 		// The poisoned Bearer must not be re-injected — that is the loop the user
 		// reported (#1908).
@@ -220,6 +222,60 @@ describe("MCPManager OAuth refresh failure", () => {
 		expect(getAuthorizationHeader(prepared)).toBe("Bearer fresh-access");
 		const remaining = authStorage.get(CREDENTIAL_ID);
 		expect(remaining).toMatchObject({ type: "oauth", access: "fresh-access", refresh: "fresh-refresh" });
+	});
+
+	test("aborts a timed-out token fetch and waits for it before releasing refresh ownership", async () => {
+		vi.useFakeTimers();
+		const fetchCalled = Promise.withResolvers<void>();
+		const abortObserved = Promise.withResolvers<void>();
+		const allowFetchReject = Promise.withResolvers<void>();
+		let capturedSignal: AbortSignal | undefined;
+		let preparedSettled = false;
+		const releaseSpy = vi.spyOn(store, "releaseCredentialRefreshLease");
+		const fetchImpl = Object.assign(
+			async (_input: string | URL | Request, init?: RequestInit | BunFetchRequestInit): Promise<Response> => {
+				capturedSignal = init?.signal ?? undefined;
+				if (!capturedSignal) throw new Error("token refresh fetch did not receive an AbortSignal");
+				fetchCalled.resolve();
+				capturedSignal.addEventListener(
+					"abort",
+					() => {
+						abortObserved.resolve();
+					},
+					{ once: true },
+				);
+				await allowFetchReject.promise;
+				throw capturedSignal.reason ?? new Error("fetch aborted");
+			},
+			{ preconnect: globalThis.fetch.preconnect },
+		);
+		vi.spyOn(globalThis, "fetch").mockImplementation(fetchImpl);
+
+		const prepared = manager.prepareConfig(serverConfig).finally(() => {
+			preparedSettled = true;
+		});
+		await fetchCalled.promise;
+		expect(capturedSignal).toBeDefined();
+
+		vi.advanceTimersByTime(9_999);
+		await drainMicrotasks();
+		expect(capturedSignal!.aborted).toBe(false);
+		expect(preparedSettled).toBe(false);
+		expect(releaseSpy).not.toHaveBeenCalled();
+
+		vi.advanceTimersByTime(1);
+		await abortObserved.promise;
+		expect(capturedSignal!.aborted).toBe(true);
+		await drainMicrotasks();
+		expect(preparedSettled).toBe(false);
+		expect(releaseSpy).not.toHaveBeenCalled();
+
+		allowFetchReject.resolve();
+		const preparedConfig = await prepared;
+
+		expect(preparedSettled).toBe(true);
+		expect(releaseSpy).toHaveBeenCalledTimes(1);
+		expect(getAuthorizationHeader(preparedConfig)).toBe(`Bearer ${STALE_ACCESS}`);
 	});
 });
 
