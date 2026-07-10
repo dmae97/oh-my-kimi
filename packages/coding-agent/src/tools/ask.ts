@@ -642,6 +642,9 @@ async function askSingleQuestion(
 			customInput = undefined;
 			break;
 		}
+		if (timedOut && selectedOptions.length === 0 && customInput === undefined) {
+			selectedOptions = getAutoSelectionOnTimeout(questionOptions, recommended);
+		}
 		if (navigation?.allowForward) {
 			return { selectedOptions, customInput, timedOut, navigation: "forward" };
 		}
