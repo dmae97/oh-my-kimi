@@ -1176,6 +1176,7 @@ function withXaiOAuthCompatDefaults(model: ModelSpec<"openai-responses">): Model
 		...(model.compat ?? {}),
 		includeEncryptedReasoning: model.compat?.includeEncryptedReasoning ?? false,
 		filterReasoningHistory: model.compat?.filterReasoningHistory ?? true,
+		supportsImageDetailOriginal: model.compat?.supportsImageDetailOriginal ?? false,
 		omitReasoningEffort: model.compat?.omitReasoningEffort ?? !isGrokReasoningEffortCapable(model.id),
 	};
 	return { ...model, compat };
@@ -1218,6 +1219,7 @@ function mergeCuratedIntoModel(
 		reasoningEffortMap: { ...XAI_REASONING_EFFORT_MAP, ...(base.compat?.reasoningEffortMap ?? {}) },
 		includeEncryptedReasoning: base.compat?.includeEncryptedReasoning ?? false,
 		filterReasoningHistory: base.compat?.filterReasoningHistory ?? true,
+		supportsImageDetailOriginal: base.compat?.supportsImageDetailOriginal ?? false,
 		omitReasoningEffort: !effortCapable,
 		supportsReasoningEffort: effortCapable,
 	};

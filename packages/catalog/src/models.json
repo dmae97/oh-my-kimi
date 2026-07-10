@@ -87250,7 +87250,8 @@
 				"includeEncryptedReasoning": false,
 				"filterReasoningHistory": true,
 				"omitReasoningEffort": true,
-				"supportsReasoningEffort": false
+				"supportsReasoningEffort": false,
+				"supportsImageDetailOriginal": false
 			}
 		},
 		"grok-4.20-0309-reasoning": {
@@ -87279,7 +87280,8 @@
 				"includeEncryptedReasoning": false,
 				"filterReasoningHistory": true,
 				"omitReasoningEffort": true,
-				"supportsReasoningEffort": false
+				"supportsReasoningEffort": false,
+				"supportsImageDetailOriginal": false
 			}
 		},
 		"grok-4.20-multi-agent-0309": {
@@ -87320,7 +87322,8 @@
 				"includeEncryptedReasoning": false,
 				"filterReasoningHistory": true,
 				"omitReasoningEffort": false,
-				"supportsReasoningEffort": true
+				"supportsReasoningEffort": true,
+				"supportsImageDetailOriginal": false
 			}
 		},
 		"grok-4.3": {
@@ -87362,7 +87365,8 @@
 				"includeEncryptedReasoning": false,
 				"filterReasoningHistory": true,
 				"omitReasoningEffort": false,
-				"supportsReasoningEffort": true
+				"supportsReasoningEffort": true,
+				"supportsImageDetailOriginal": false
 			}
 		},
 		"grok-4.5": {
@@ -87404,7 +87408,8 @@
 				"includeEncryptedReasoning": false,
 				"filterReasoningHistory": true,
 				"omitReasoningEffort": false,
-				"supportsReasoningEffort": true
+				"supportsReasoningEffort": true,
+				"supportsImageDetailOriginal": false
 			}
 		},
 		"grok-build": {
@@ -87433,7 +87438,8 @@
 				"includeEncryptedReasoning": false,
 				"filterReasoningHistory": true,
 				"omitReasoningEffort": true,
-				"supportsReasoningEffort": false
+				"supportsReasoningEffort": false,
+				"supportsImageDetailOriginal": false
 			}
 		},
 		"grok-build-0.1": {
@@ -87462,7 +87468,8 @@
 				"includeEncryptedReasoning": false,
 				"filterReasoningHistory": true,
 				"omitReasoningEffort": true,
-				"supportsReasoningEffort": false
+				"supportsReasoningEffort": false,
+				"supportsImageDetailOriginal": false
 			}
 		},
 		"grok-composer-2.5-fast": {
@@ -87490,7 +87497,8 @@
 				"includeEncryptedReasoning": false,
 				"filterReasoningHistory": true,
 				"omitReasoningEffort": true,
-				"supportsReasoningEffort": false
+				"supportsReasoningEffort": false,
+				"supportsImageDetailOriginal": false
 			}
 		}
 	},
