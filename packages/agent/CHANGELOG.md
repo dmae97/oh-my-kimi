@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Enabled reasoning encryption content for all Responses Lite compaction requests
+
 ## [16.4.0] - 2026-07-10
 
 ### Added

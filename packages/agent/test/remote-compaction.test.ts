@@ -446,6 +446,8 @@ describe("Responses Lite remote compaction", () => {
 		tools?: unknown;
 		input?: Array<Record<string, unknown>>;
 		client_metadata?: unknown;
+		reasoning?: Record<string, unknown>;
+		include?: string[];
 	}
 
 	interface CapturedLiteExchange {
@@ -501,8 +503,9 @@ describe("Responses Lite remote compaction", () => {
 		);
 
 		expect(captured?.headers.get("x-openai-internal-codex-responses-lite")).toBe("true");
+		expect(captured?.body.reasoning).toEqual({ context: "all_turns" });
+		expect(captured?.body.include).toEqual(["reasoning.encrypted_content"]);
 		expect(captured?.body.instructions).toBeUndefined();
-		expect(captured?.body.tools).toBeUndefined();
 		expect(captured?.body.client_metadata).toBeUndefined();
 		expect(captured?.headers.get("x-codex-installation-id")).toBe(TEST_INSTALLATION_ID);
 		expect(captured?.headers.get("session-id")).toBe("codex-compaction-session");
@@ -552,8 +555,9 @@ describe("Responses Lite remote compaction", () => {
 		});
 
 		expect(captured?.headers.get("x-openai-internal-codex-responses-lite")).toBe("true");
+		expect(captured?.body.reasoning).toEqual({ context: "all_turns" });
+		expect(captured?.body.include).toEqual(["reasoning.encrypted_content"]);
 		expect(captured?.body.instructions).toBeUndefined();
-		expect(captured?.body.tools).toBeUndefined();
 		if (!isRecord(captured?.body.client_metadata)) throw new Error("expected V2 client_metadata");
 		const v2ClientMetadata = captured.body.client_metadata;
 		const v2TurnMetadata = parseCodexTurnMetadata(v2ClientMetadata["x-codex-turn-metadata"]);

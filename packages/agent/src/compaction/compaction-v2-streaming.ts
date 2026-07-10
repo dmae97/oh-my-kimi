@@ -305,10 +305,12 @@ async function attemptCompactionV2Streaming(
 		instructions: request.instructions,
 		stream: true,
 		store: false,
-		...(request.reasoning
+		...(request.reasoning || model.useResponsesLite
 			? {
 					// Lite implies gpt-5.4+, where codex-rs sends `all_turns` replay.
-					reasoning: model.useResponsesLite ? { ...request.reasoning, context: "all_turns" } : request.reasoning,
+					reasoning: model.useResponsesLite
+						? { ...(request.reasoning ?? {}), context: "all_turns" }
+						: request.reasoning,
 					include: ["reasoning.encrypted_content"],
 				}
 			: {}),

@@ -32,7 +32,7 @@ export interface CodexRequestOptions {
 	/** User-facing effort; maps 1:1 onto the wire tier of the same name. */
 	reasoningEffort?: CodexCallerEffort | "none";
 	reasoningSummary?: ReasoningConfig["summary"] | null;
-	/** Explicit `reasoning.context` override; defaults to `all_turns` when unset. The `all_turns` value is gated to gpt-5.4+ Codex models — older ids reject it, so it is suppressed and `context` omitted. */
+	/** Explicit `reasoning.context` override; defaults to `all_turns` when unset. Gated to gpt-5.4+ Codex models (older ids reject it, so it is suppressed and `context` omitted). Note that under Responses Lite (`responsesLite`), the server strictly requires `reasoning.context` to be `all_turns`, which overrides this option and forces `all_turns`. */
 	reasoningContext?: CodexReasoningContext;
 	textVerbosity?: "low" | "medium" | "high";
 	include?: string[];
@@ -379,8 +379,9 @@ export async function transformRequestBody(
 		applyCodexResponsesLiteShape(body);
 	}
 
-	if (options.reasoningEffort !== undefined) {
-		const reasoningConfig = getReasoningConfig(model, options.reasoningEffort, options);
+	if (options.reasoningEffort !== undefined || responsesLite) {
+		const reasoningConfig =
+			options.reasoningEffort !== undefined ? getReasoningConfig(model, options.reasoningEffort, options) : {};
 		body.reasoning = {
 			...body.reasoning,
 			...reasoningConfig,
@@ -394,7 +395,8 @@ export async function transformRequestBody(
 		// default. The version gate is authoritative: even an explicit
 		// `all_turns` override is suppressed on unsupported models, while
 		// `current_turn`/`auto` (universally supported) always pass through.
-		const context = options.reasoningContext ?? "all_turns";
+		// Note: Responses Lite forces `all_turns` to satisfy the transport's server invariant.
+		const context = responsesLite ? "all_turns" : (options.reasoningContext ?? "all_turns");
 		if (context === "all_turns" && !supportsAllTurnsReasoningContext(model.id)) {
 			delete body.reasoning.context;
 		} else {

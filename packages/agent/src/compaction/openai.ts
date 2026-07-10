@@ -88,6 +88,11 @@ export interface OpenAiRemoteCompactionRequest {
 	model: string;
 	input: Array<Record<string, unknown>>;
 	instructions: string;
+	reasoning?: {
+		context?: string;
+		[key: string]: unknown;
+	};
+	include?: string[];
 }
 
 export interface OpenAiRemoteCompactionResponse extends OpenAiRemoteCompactionPreserveData {}
@@ -533,6 +538,11 @@ export async function requestOpenAiRemoteCompaction(
 		if (model.useResponsesLite) {
 			applyCodexResponsesLiteShape(request);
 			headers[OPENAI_HEADERS.RESPONSES_LITE] = "true";
+			request.reasoning = {
+				...request.reasoning,
+				context: "all_turns",
+			};
+			request.include = Array.from(new Set([...(request.include ?? []), "reasoning.encrypted_content"]));
 		}
 	}
 
