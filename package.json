@@ -54,7 +54,7 @@
       "@types/turndown": "5.0.6",
       "@typescript/native-preview": "7.0.0-dev.20260609.1",
       "@xterm/headless": "^6.0.0",
-      "arktype": "^2.2.0",
+      "arktype": "2.2.2",
       "chalk": "^5.6.2",
       "chart.js": "^4.5.1",
       "date-fns": "^4.4.0",
@@ -92,7 +92,9 @@
       "zod": "^4"
     }
   },
-  "overrides": {},
+  "overrides": {
+    "@ark/schema": "0.56.1"
+  },
   "scripts": {
     "setup": "bun install && bun run build:native && bun --cwd=packages/coding-agent link && sh scripts/link-omp.sh",
     "dev": "bun --cwd=packages/coding-agent src/cli.ts",
