@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed xAI SuperGrok multi-account rotation when an account returns HTTP 403 `run out of credits` / `personal-team-blocked:spending-limit`. That account-local cap is now classified as a usage limit so `streamSimple` auth-retry and `rotateSessionCredential` switch to a sibling `xai-oauth` credential instead of sticking to the exhausted account.
 ### Added
 
 - Added model-driven Codex Responses Lite: `responsesLite` now defaults to the catalog `useResponsesLite` flag (codex-rs `use_responses_lite`, set on the GPT-5.6 family), so lite requests are sent without per-call opt-in.
