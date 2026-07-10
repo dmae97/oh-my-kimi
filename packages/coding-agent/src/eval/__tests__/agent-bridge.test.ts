@@ -603,21 +603,22 @@ describe("agent() through eval runtimes", () => {
 		});
 		const { session, sessionFile, sessionId } = makeEvalSession(tempDir, "py-agent-interrupt", settings);
 		mockAgents();
-		// Subagents that ignore the abort for far longer than the kernel's SIGINT
-		// escalation window. Each kernel worker thread blocks in a synchronous
-		// `urllib` bridge call, joined by `parallel()`'s ThreadPoolExecutor exit.
-		// The host must respond the instant the cell aborts so the kernel can
-		// unwind via KeyboardInterrupt instead of being hard-killed (which used to
-		// surface "[kernel] Python kernel shutdown" and lose all session state).
+		// Each kernel worker thread blocks in a synchronous `urllib` bridge call,
+		// joined by `parallel()`'s ThreadPoolExecutor exit. The host must keep
+		// those already-started calls attached until they settle, then interrupt
+		// the kernel before `parallel()` launches another wave.
 		let inFlight = 0;
+		let completed = 0;
 		let markSaturated: (() => void) | undefined;
 		const saturated = new Promise<void>(resolve => {
 			markSaturated = resolve;
 		});
-		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
+		const releaseAgents = Promise.withResolvers<void>();
+		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
 			// task.maxConcurrency=6 → six bridge calls block at once; signal then.
 			if (++inFlight >= 6) markSaturated?.();
-			await Bun.sleep(9000); // deliberately ignores options.signal
+			await releaseAgents.promise;
+			completed++;
 			return singleResult(options, { output: options.assignment ?? "" });
 		});
 
@@ -640,8 +641,7 @@ describe("agent() through eval runtimes", () => {
 		// bridge calls (condition-driven) instead of waiting a fixed wall second.
 		void saturated.then(() => ac.abort(new Error("external interrupt")));
 
-		const start = Date.now();
-		const result = await executePython(
+		const resultPromise = executePython(
 			"import json\nprint(json.dumps(parallel([lambda n=n: agent(str(n)) for n in range(12)])))",
 			{
 				cwd: tempDir.path(),
@@ -653,13 +653,18 @@ describe("agent() through eval runtimes", () => {
 				signal: ac.signal,
 			},
 		);
-		const elapsed = Date.now() - start;
+		await saturated;
+		await Promise.resolve();
+		expect(completed).toBe(0);
+		releaseAgents.resolve();
+		const result = await resultPromise;
 
-		// Cancelled, but cleanly: no hard-kill, settled well within the kernel's 5s
-		// SIGINT escalation window rather than ~6s after it.
+		// Cancelled, but cleanly: no hard-kill, no orphaned bridge calls, and no
+		// second fan-out wave started after the deferred abort was delivered.
 		expect(result.cancelled).toBe(true);
 		expect(result.output).not.toContain("Python kernel shutdown");
-		expect(elapsed).toBeLessThan(4000);
+		expect(completed).toBe(6);
+		expect(runSpy).toHaveBeenCalledTimes(6);
 
 		// The persistent kernel survived the interrupt: prior state is intact.
 		const after = await executePython("print(PREP_MARKER)", {

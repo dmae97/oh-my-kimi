@@ -5,7 +5,9 @@ import {
 	isEvalTimeoutControlEvent,
 	withBridgeTimeoutPause,
 } from "../bridge-timeout";
+import { executeWithKernelBase, type GenericKernel } from "../executor-base";
 import type { JsStatusEvent } from "../js/shared/types";
+import type { KernelDisplayOutput } from "../py/display";
 
 describe("withBridgeTimeoutPause", () => {
 	it("emits one pause before the operation and one resume after it settles", async () => {
@@ -61,4 +63,62 @@ describe("withBridgeTimeoutPause", () => {
 		expect(isEvalTimeoutControlEvent({ op: EVAL_TIMEOUT_RESUME_OP })).toBe(true);
 		expect(isEvalTimeoutControlEvent({ op: "agent", id: "subagent-1" })).toBe(false);
 	});
+});
+
+class TestCancelledError extends Error {
+	readonly timedOut: boolean;
+
+	constructor(timedOut: boolean) {
+		super(timedOut ? "timed out" : "cancelled");
+		this.name = "TestCancelledError";
+		this.timedOut = timedOut;
+	}
+}
+
+it("defers external aborts until an in-flight bridge call resumes", async () => {
+	const abortController = new AbortController();
+	const release = Promise.withResolvers<void>();
+	let completed = false;
+	let kernelSignal: AbortSignal | undefined;
+	const kernel: GenericKernel<Record<string, string | null>> = {
+		async execute(_code, options) {
+			kernelSignal = options.signal;
+			options.onDisplay({
+				type: "status",
+				event: { op: EVAL_TIMEOUT_PAUSE_OP },
+			} satisfies KernelDisplayOutput);
+
+			abortController.abort(new Error("external interrupt"));
+			expect(kernelSignal?.aborted).toBe(false);
+
+			await release.promise;
+			completed = true;
+			options.onDisplay({
+				type: "status",
+				event: { op: EVAL_TIMEOUT_RESUME_OP },
+			} satisfies KernelDisplayOutput);
+			return { status: "ok", cancelled: false, timedOut: false };
+		},
+	};
+
+	const resultPromise = executeWithKernelBase({
+		kernel,
+		code: "agent('slow')",
+		options: { signal: abortController.signal },
+		runIdPrefix: "test",
+		errorLogLabel: "test",
+		cancelledErrorClass: TestCancelledError,
+		buildKernelEnvPatch: () => ({}),
+		formatKernelTimeoutAnnotation: () => "kernel timed out",
+		formatTimeoutAnnotation: () => "timed out",
+	});
+
+	await Promise.resolve();
+	expect(completed).toBe(false);
+
+	release.resolve();
+	const result = await resultPromise;
+	expect(completed).toBe(true);
+	expect(result.cancelled).toBe(true);
+	expect(result.exitCode).toBeUndefined();
 });
