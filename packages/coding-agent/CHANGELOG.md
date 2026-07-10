@@ -10,6 +10,7 @@
 - Fixed Codex advisor requests using local `-advisor` session labels as provider session IDs; advisors now use stable UUIDv7 provider identities while keeping labeled transcript names. ([#5040](https://github.com/can1357/oh-my-pi/issues/5040))
 - Fixed macOS stdio MCP servers launching in a detached session, so `xcrun mcpbridge` can trigger the TCC Apple Events permission prompt and complete startup. ([#4987](https://github.com/can1357/oh-my-pi/issues/4987))
 - Fixed the ask tool timeout so it auto-selects the recommended option even when the UI selector does not settle on its own. ([#4995](https://github.com/can1357/oh-my-pi/issues/4995))
+- Fixed LSP workspace diagnostics for Go workspaces so roots with `go.work` are recognized and every `go.work use` module is included in the `go build` package patterns. ([#5038](https://github.com/can1357/oh-my-pi/issues/5038))
 
 ## [16.3.15] - 2026-07-09
 

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { RenderResultOptions } from "@oh-my-pi/pi-agent-core";
+import type { AgentToolResult, RenderResultOptions } from "@oh-my-pi/pi-agent-core";
 import { preloadPluginRoots } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import { LspTool } from "@oh-my-pi/pi-coding-agent/lsp";
 import * as lspClient from "@oh-my-pi/pi-coding-agent/lsp/client";
@@ -20,6 +20,7 @@ import type {
 	DeleteFile,
 	Diagnostic,
 	LspClient,
+	LspToolDetails,
 	RenameFile,
 	ServerConfig,
 	SymbolInformation,
@@ -43,6 +44,7 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { clampTimeout } from "@oh-my-pi/pi-coding-agent/tools/tool-timeouts";
 import * as piUtils from "@oh-my-pi/pi-utils";
 import { sanitizeText, TempDir } from "@oh-my-pi/pi-utils";
+import type { Subprocess } from "bun";
 import DEFAULTS from "../../src/lsp/defaults.json" with { type: "json" };
 import { getLanguageFromPath } from "../../src/utils/lang-from-path";
 
@@ -187,6 +189,57 @@ function installFakeLsp(handler: FakeLspHandler): FakeLspServer {
 
 	vi.spyOn(piUtils.ptree, "spawn").mockReturnValue(proc);
 	return server;
+}
+
+type BunSpawnOptions = Bun.SpawnOptions.SpawnOptions<
+	Bun.SpawnOptions.Writable,
+	Bun.SpawnOptions.Readable,
+	Bun.SpawnOptions.Readable
+>;
+
+interface BunSpawnCall {
+	cmd: string[];
+	options?: BunSpawnOptions;
+}
+
+interface BunSpawnOutput {
+	stdout?: string;
+	stderr?: string;
+	exitCode?: number;
+}
+
+function textStream(text: string): ReadableStream<Uint8Array> {
+	const body = new Response(text).body;
+	if (!body) {
+		throw new Error("Failed to create text stream");
+	}
+	return body;
+}
+
+function completedProcess(stdout = "", stderr = "", exitCode = 0): Subprocess {
+	return {
+		pid: 12_345,
+		stdout: textStream(stdout),
+		stderr: textStream(stderr),
+		exited: Promise.resolve(exitCode),
+		kill: () => {},
+	} as Subprocess;
+}
+
+function recordBunSpawn(calls: BunSpawnCall[], outputForCommand: (cmd: string[]) => BunSpawnOutput = () => ({})): void {
+	vi.spyOn(Bun, "spawn").mockImplementation(((cmd: string[], options?: BunSpawnOptions) => {
+		const recordedCmd = [...cmd];
+		calls.push({ cmd: recordedCmd, options });
+		const output = outputForCommand(recordedCmd);
+		return completedProcess(output.stdout, output.stderr, output.exitCode);
+	}) as typeof Bun.spawn);
+}
+
+function textResult(result: AgentToolResult<LspToolDetails>): string {
+	return result.content
+		.filter(block => block.type === "text")
+		.map(block => block.text)
+		.join("\n");
 }
 
 describe("lsp regressions", () => {
@@ -1053,6 +1106,86 @@ describe("lsp regressions", () => {
 			expect(output).toBe("OK");
 		} finally {
 			vi.restoreAllMocks();
+			tempDir.removeSync();
+		}
+	});
+
+	it("treats a go.work-only root as a Go workspace for workspace diagnostics", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-go-work-only-");
+		const spawnCalls: BunSpawnCall[] = [];
+		recordBunSpawn(spawnCalls, cmd => {
+			if (cmd.join("\0") === "go\0work\0edit\0-json") {
+				return { stdout: JSON.stringify({ Use: [{ DiskPath: "./service" }] }) };
+			}
+			return {};
+		});
+
+		try {
+			const serviceDir = path.join(tempDir.path(), "service");
+			await fs.promises.mkdir(serviceDir, { recursive: true });
+			await Bun.write(path.join(tempDir.path(), "go.work"), ["go 1.22", "", "use ./service", ""].join("\n"));
+			await Bun.write(path.join(serviceDir, "go.mod"), "module example.com/service\n\ngo 1.22\n");
+
+			const tool = new LspTool({ cwd: tempDir.path() } as ToolSession);
+			const result = await tool.execute("go-work-only-diagnostics", {
+				action: "diagnostics",
+				file: "*",
+			});
+
+			const buildCalls = spawnCalls.filter(call => call.cmd[0] === "go" && call.cmd[1] === "build");
+			expect(buildCalls).toHaveLength(1);
+			expect(buildCalls[0]?.cmd).toEqual(["go", "build", "./service/..."]);
+			expect(buildCalls[0]?.options?.cwd).toBe(tempDir.path());
+			const output = textResult(result);
+			expect(output).toContain("Workspace diagnostics (");
+			expect(output).toContain("go build");
+			expect(output).toContain("No issues found");
+			expect(output).not.toContain("Cannot detect project type");
+		} finally {
+			tempDir.removeSync();
+		}
+	});
+
+	it("builds every go.work use module when go.work and go.mod coexist", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-go-work-before-mod-");
+		const spawnCalls: BunSpawnCall[] = [];
+		recordBunSpawn(spawnCalls, cmd => {
+			if (cmd.join("\0") === "go\0work\0edit\0-json") {
+				return {
+					stdout: JSON.stringify({
+						Use: [{ DiskPath: "." }, { DiskPath: "./service" }, { DiskPath: "./tools/helper" }],
+					}),
+				};
+			}
+			return {};
+		});
+
+		try {
+			const serviceDir = path.join(tempDir.path(), "service");
+			const helperDir = path.join(tempDir.path(), "tools", "helper");
+			await fs.promises.mkdir(serviceDir, { recursive: true });
+			await fs.promises.mkdir(helperDir, { recursive: true });
+			await Bun.write(path.join(tempDir.path(), "go.mod"), "module example.com/root\n\ngo 1.22\n");
+			await Bun.write(path.join(serviceDir, "go.mod"), "module example.com/service\n\ngo 1.22\n");
+			await Bun.write(path.join(helperDir, "go.mod"), "module example.com/helper\n\ngo 1.22\n");
+			await Bun.write(
+				path.join(tempDir.path(), "go.work"),
+				["go 1.22", "", "use (", "\t.", "\t./service", "\t./tools/helper", ")", ""].join("\n"),
+			);
+
+			const tool = new LspTool({ cwd: tempDir.path() } as ToolSession);
+			const result = await tool.execute("go-work-module-patterns", {
+				action: "diagnostics",
+				file: "*",
+			});
+
+			const buildCalls = spawnCalls.filter(call => call.cmd[0] === "go" && call.cmd[1] === "build");
+			expect(buildCalls).toHaveLength(1);
+			expect(buildCalls[0]?.cmd.slice(0, 2)).toEqual(["go", "build"]);
+			expect(buildCalls[0]?.cmd.slice(2).sort()).toEqual(["./...", "./service/...", "./tools/helper/..."]);
+			expect(textResult(result)).toContain("Workspace diagnostics (");
+			expect(textResult(result)).toContain("go build");
+		} finally {
 			tempDir.removeSync();
 		}
 	});
