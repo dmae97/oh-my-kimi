@@ -24,6 +24,7 @@ import { type HangulCompatibilityJamoWidth, setHangulCompatibilityJamoWidth } fr
 const TERMINAL_PROGRESS_KEEPALIVE_MS = 1000;
 const TERMINAL_PROGRESS_ACTIVE_SEQUENCE = "\x1b]9;4;3\x07";
 const TERMINAL_PROGRESS_CLEAR_SEQUENCE = "\x1b]9;4;0;\x07";
+const WINDOWS_TERMINAL_OSC11_POLL_MS = 30_000;
 // Hangul Compatibility Jamo (U+3131..=U+318E) render width is terminal-dependent:
 // Ghostty follows UAX#11 (2 cells); Terminal.app and iTerm2 render narrow (1),
 // matching the macOS platform default. Override only for terminals known to
@@ -48,6 +49,11 @@ function shouldEnableModifyOtherKeysFallback(env: NodeJS.ProcessEnv = Bun.env): 
 	return TERMINAL.id !== "base" && TERMINAL.id !== "trueColor";
 }
 
+function shouldPollWindowsTerminalAppearance(env: NodeJS.ProcessEnv = Bun.env): boolean {
+	if (process.platform !== "win32") return false;
+	if (!env.WT_SESSION) return false;
+	return !env.TERM_PROGRAM || env.TERM_PROGRAM.toLowerCase() === "windows_terminal";
+}
 /**
  * Maximum encoded UTF-8 bytes per `process.stdout.write` call on Windows.
  *
@@ -499,6 +505,7 @@ export class ProcessTerminal implements Terminal {
 	#reportedColumns?: number;
 	#reportedRows?: number;
 	#mode2031DebounceTimer?: Timer;
+	#windowsTerminalAppearancePollTimer?: Timer;
 	#progressTimer?: Timer;
 
 	get kittyProtocolActive(): boolean {
@@ -627,7 +634,8 @@ export class ProcessTerminal implements Terminal {
 		// WezTerm) detect the appearance once at startup and pick up later OS
 		// theme changes on next launch. Earlier builds polled OSC 11 every 30 s
 		// here for those terminals, but each poll's OSC 11/DA1 write wiped the
-		// user's active text selection on several of them (#3297).
+		// user's active text selection on several of them (#3297). Native Windows
+		// Terminal gets a scoped fallback after DECRQM confirms 2031 is unsupported.
 
 		// Probe DEC private-mode support via DECRQM. 2026 (synchronized output)
 		// gates the renderer's begin/end markers; 2048 (in-band resize) is enabled
@@ -1167,8 +1175,25 @@ export class ProcessTerminal implements Terminal {
 			}
 		}
 		if (mode === 2048 && supported) this.#enableInBandResize();
+		if (mode === 2031) this.#syncWindowsTerminalAppearancePolling(supported);
 	}
 
+	#syncWindowsTerminalAppearancePolling(mode2031Supported: boolean): void {
+		if (mode2031Supported || !shouldPollWindowsTerminalAppearance() || this.#dead) {
+			this.#clearWindowsTerminalAppearancePoll();
+			return;
+		}
+		if (this.#windowsTerminalAppearancePollTimer) return;
+		this.#windowsTerminalAppearancePollTimer = setInterval(() => {
+			this.#queryBackgroundColor();
+		}, WINDOWS_TERMINAL_OSC11_POLL_MS);
+	}
+
+	#clearWindowsTerminalAppearancePoll(): void {
+		if (!this.#windowsTerminalAppearancePollTimer) return;
+		clearInterval(this.#windowsTerminalAppearancePollTimer);
+		this.#windowsTerminalAppearancePollTimer = undefined;
+	}
 	#disableXtermScrollToBottomMode(mode: number): void {
 		if (this.#xtermScrollToBottomRestoreModes.has(mode) || this.#dead) return;
 		this.#xtermScrollToBottomRestoreModes.add(mode);
@@ -1326,6 +1351,7 @@ export class ProcessTerminal implements Terminal {
 		}
 		this.#appearanceCallbacks = [];
 		this.#osc11Pending = false;
+		this.#clearWindowsTerminalAppearancePoll();
 		this.#osc11QueryQueued = false;
 		this.#osc11ResponseBuffer = "";
 		this.#osc99PendingId = undefined;
