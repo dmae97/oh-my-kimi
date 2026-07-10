@@ -15,6 +15,7 @@
 
 - Integrated testing guidance directly into the main system prompt for improved workflow cohesion
 - Moved testing guidance into the main system prompt and removed the bundled Tester subagent.
+- Fixed collapsed compacted session transcript rebuilds reattaching snapcompact archive image frames to the live TUI, avoiding large retained JSC heaps on resume and transcript refresh. ([#4979](https://github.com/can1357/oh-my-pi/issues/4979))
 
 ## [16.3.14] - 2026-07-09
 
