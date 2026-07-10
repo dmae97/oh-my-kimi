@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added stringifyJson utility that supports BigInt serialization
+- Added `stringifyJson` utility with support for BigInt serialization.
 
 ## [16.3.12] - 2026-07-08
 

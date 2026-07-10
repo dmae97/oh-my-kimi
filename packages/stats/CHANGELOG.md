@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed stats sync crashing on legacy session entries whose usage payload has no cost breakdown; missing costs now use catalog pricing when available.
+- Fixed a crash during stats synchronization on legacy session entries that lack a cost breakdown by falling back to catalog pricing when available.
 
 ## [16.3.9] - 2026-07-06
 

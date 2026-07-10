@@ -4,16 +4,15 @@
 
 ### Fixed
 
-- Fixed xAI OAuth Responses continuations replaying OpenAI-only `custom_tool_call`/`custom_tool_call_output` history and `input_image.detail: "original"` frames; replay now downgrades those to xAI-compatible function calls and `detail: "auto"`. ([#5002](https://github.com/can1357/oh-my-pi/issues/5002))
+- Fixed compatibility with xAI by automatically downgrading OpenAI-specific tool calls and image detail settings during message history replays.
+- Fixed a race condition in shared SQLite OAuth token refreshes by implementing durable credential ownership and compare-and-set persistence to prevent stale refresh failures.
+- Fixed OpenAI Codex requests to include the required version header for newly gated models.
 
 ## [16.4.1] - 2026-07-10
 
 ### Changed
 
 - Enforced `all_turns` reasoning context for all Responses Lite requests
-### Fixed
-
-- Fixed shared SQLite OAuth refreshes to use durable credential-row ownership plus compare-and-set persistence, preventing stale refresh failures from deleting or overwriting a peer's rotated credential. ([#5081](https://github.com/can1357/oh-my-pi/issues/5081))
 
 ## [16.4.0] - 2026-07-10
 
@@ -30,7 +29,6 @@
 
 ### Fixed
 
-- Fixed OpenAI Codex turn requests to include the Codex `version` header, matching upstream Codex request metadata for newly gated models.
 - Fixed xAI SuperGrok multi-account rotation to correctly treat HTTP 403 credit exhaustion and spending limit errors as usage limits, triggering a credential rotation to a sibling account.
 - Fixed error classification for AWS credential-resolution failures (AwsCredentialsError) to correctly map them as authentication failures.
 - Fixed OpenAI-compatible chat-completions streams to preserve vLLM-style trailing cached-token usage chunks, ensuring accurate cacheRead and billable input session statistics.
