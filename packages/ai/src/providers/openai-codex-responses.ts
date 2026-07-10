@@ -99,7 +99,7 @@ import {
 	finalizeToolCallArgumentsDone,
 	isOpenAIResponsesProgressEvent,
 	mapOpenAIResponsesStopReason,
-	normalizeOpenAIResponsesPromptCacheKey,
+	normalizeOpenAIPromptCacheKey,
 	populateResponsesUsageFromResponse,
 	promoteResponsesToolUseStopReason,
 } from "./openai-shared";
@@ -898,8 +898,8 @@ async function buildCodexRequestContext(
 	const accountId = getCodexAccountId(apiKey);
 	const baseUrl = model.baseUrl || CODEX_BASE_URL;
 	const url = resolveCodexResponsesUrl(baseUrl);
-	const promptCacheKey = normalizeOpenAIResponsesPromptCacheKey(options?.promptCacheKey ?? options?.sessionId);
-	const transportSessionId = normalizeOpenAIResponsesPromptCacheKey(options?.sessionId);
+	const promptCacheKey = normalizeOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId);
+	const transportSessionId = normalizeOpenAIPromptCacheKey(options?.sessionId);
 	const transformedBody = await buildTransformedCodexRequestBody(model, context, options, promptCacheKey);
 
 	const requestHeaders = { ...(model.headers ?? {}), ...(options?.headers ?? {}) };
@@ -946,10 +946,10 @@ export async function buildTransformedCodexRequestBody(
 	model: Model<"openai-codex-responses">,
 	context: Context,
 	options: OpenAICodexResponsesOptions | undefined,
-	promptCacheKey = normalizeOpenAIResponsesPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
+	promptCacheKey = normalizeOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
 ): Promise<RequestBody> {
 	const params: RequestBody = {
-		model: model.id,
+		model: model.requestModelId ?? model.id,
 		input: convertMessages(model, context),
 		stream: true,
 		prompt_cache_key: promptCacheKey,
@@ -2139,7 +2139,7 @@ export async function prewarmOpenAICodexResponses(
 	const accountId = getCodexAccountId(apiKey);
 	const baseUrl = model.baseUrl || CODEX_BASE_URL;
 	const url = resolveCodexResponsesUrl(baseUrl);
-	const transportSessionId = normalizeOpenAIResponsesPromptCacheKey(options?.sessionId);
+	const transportSessionId = normalizeOpenAIPromptCacheKey(options?.sessionId);
 	const promptCacheKey = transportSessionId;
 	const providerSessionState = getCodexProviderSessionState(options?.providerSessionState);
 	const responsesLite = options?.responsesLite === true;
@@ -2283,7 +2283,7 @@ function getCodexWebSocketStateForPublicSession(
 ): CodexWebSocketSessionState | undefined {
 	const baseUrl = options?.baseUrl || model.baseUrl || CODEX_BASE_URL;
 	const providerSessionState = getCodexProviderSessionState(options?.providerSessionState);
-	const normalizedSessionId = normalizeOpenAIResponsesPromptCacheKey(options?.sessionId);
+	const normalizedSessionId = normalizeOpenAIPromptCacheKey(options?.sessionId);
 	const publicSessionKey = normalizedSessionId ? `${baseUrl}:${model.id}:${normalizedSessionId}` : undefined;
 	const privateSessionKey = publicSessionKey
 		? providerSessionState?.webSocketPublicToPrivate.get(publicSessionKey)

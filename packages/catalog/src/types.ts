@@ -691,6 +691,13 @@ export interface Model<TApi extends Api = Api> {
 	 * everything local (selection, caching, usage attribution) keys on `id`.
 	 */
 	requestModelId?: string;
+	/**
+	 * `reasoning.mode` to send on OpenAI Responses-family requests. Set on
+	 * generated pro aliases (`gpt-5.6-*-pro` on `openai`/`openai-codex`) that
+	 * pair a base wire id (`requestModelId`) with OpenAI's pro reasoning
+	 * serving path. Absent everywhere else; providers omit the wire field.
+	 */
+	reasoningMode?: "pro";
 	name: string;
 	api: TApi;
 	provider: Provider;

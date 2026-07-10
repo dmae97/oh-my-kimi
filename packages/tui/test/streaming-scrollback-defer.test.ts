@@ -80,6 +80,23 @@ class CommittedRowsProbe extends SeamLineList implements NativeScrollbackCommitt
 	}
 }
 
+/**
+ * Extends the compose-time probe with the raw wire: every value the engine
+ * pushes through `setNativeScrollbackCommittedRows`, in arrival order —
+ * including the post-emit publish that lands *between* frames. Guards that
+ * run between frames (a controller deciding whether a displaceable block may
+ * still be retracted) read exactly this last value; if it lags the emit by
+ * one frame they retract rows that already entered immutable history.
+ */
+class CommittedRowsWireProbe extends CommittedRowsProbe {
+	received: number[] = [];
+
+	override setNativeScrollbackCommittedRows(rows: number): void {
+		this.received.push(rows);
+		super.setNativeScrollbackCommittedRows(rows);
+	}
+}
+
 async function settle(term: VirtualTerminal): Promise<void> {
 	const nextTick = Promise.withResolvers<void>();
 	process.nextTick(nextTick.resolve);
@@ -599,6 +616,130 @@ describe("streaming scrollback — visual record", () => {
 			await settle(term);
 
 			expect(probe.committedRowsAtRender.at(-1)!).toBeGreaterThan(0);
+		} finally {
+			tui.stop();
+		}
+	});
+
+	it("publishes the post-emit committed count between frames — never one frame stale", async () => {
+		if (process.platform === "win32") return;
+		const term = new VirtualTerminal(40, 8);
+		overrideProbe(term, undefined);
+		const tui = new TUI(term);
+		const probe = new CommittedRowsWireProbe([]);
+
+		try {
+			tui.addChild(probe);
+			tui.start();
+			await settle(term);
+
+			// Nothing has scrolled: the between-frames claim is 0 — no phantom rows.
+			expect(probe.received.at(-1)).toBe(0);
+
+			// One frame grows past the viewport; its emit scrolls rows into
+			// native scrollback. No further render is requested — whatever the
+			// probe last received IS the claim a between-frames guard consults.
+			probe.setLines(rows("hist-", 20));
+			tui.requestRender();
+			await settle(term);
+
+			// Compose ran before the emit advanced the boundary, so this frame's
+			// render() saw the pre-emit count. The emit must then push the fresh
+			// count: with compose-only propagation the last received value would
+			// still equal the stale compose view, and a guard would retract rows
+			// that just became immutable — stranding an orphaned copy in history.
+			const composeView = probe.committedRowsAtRender.at(-1)!;
+			const betweenFrames = probe.received.at(-1)!;
+			expect(betweenFrames).toBeGreaterThan(composeView);
+			// The fresh claim is the truth: exactly the rows above the window
+			// (tape = committed history rows + the 8-row grid).
+			expect(betweenFrames).toBe(tape(term).length - 8);
+
+			// A frame that commits nothing must restate the boundary verbatim on
+			// every push — compose feed and post-emit publish alike. No regress,
+			// no phantom advance.
+			const wireLength = probe.received.length;
+			tui.requestRender();
+			await settle(term);
+			expect(probe.received.length).toBeGreaterThan(wireLength);
+			for (const value of probe.received.slice(wireLength)) {
+				expect(value).toBe(betweenFrames);
+			}
+		} finally {
+			tui.stop();
+		}
+	});
+
+	it("publishes the post-emit committed count on the full-paint replay path too", async () => {
+		if (process.platform === "win32") return;
+		const term = new VirtualTerminal(40, 8);
+		overrideProbe(term, undefined);
+		const tui = new TUI(term);
+		// Content taller than the viewport before the first paint: the initial
+		// frame takes the full-paint path, whose replay commits (frame - height)
+		// rows in one shot on a separate exit from the ordinary update emit.
+		const probe = new CommittedRowsWireProbe(rows("hist-", 20));
+
+		try {
+			tui.addChild(probe);
+			tui.start();
+			await settle(term);
+
+			// Compose fed the pre-emit count (0); the replay committed 12 rows.
+			// The full-paint return must publish the fresh count too — leaving
+			// it stale until the next compose is the same one-frame lag.
+			const composeView = probe.committedRowsAtRender.at(-1)!;
+			const betweenFrames = probe.received.at(-1)!;
+			expect(betweenFrames).toBeGreaterThan(composeView);
+			expect(betweenFrames).toBe(tape(term).length - 8);
+		} finally {
+			tui.stop();
+		}
+	});
+
+	it("clamps each child's committed-count feed to its own extent", async () => {
+		if (process.platform === "win32") return;
+		const term = new VirtualTerminal(40, 8);
+		overrideProbe(term, undefined);
+		const tui = new TUI(term);
+		// A short header above a tall overflowing body: the engine's committed
+		// boundary sails past the header's 2-row extent. Both feeds are in the
+		// child's own coordinates and must saturate at what the child actually
+		// contributed — an unclamped count would make rows the header appends
+		// LATER read as already-committed, exempting them from ever painting.
+		const header = new CommittedRowsWireProbe(rows("hdr-", 2));
+		const body = new CommittedRowsWireProbe([]);
+
+		try {
+			tui.addChild(header);
+			tui.addChild(body);
+			tui.start();
+			await settle(term);
+
+			body.setLines(rows("body-", 20));
+			tui.requestRender();
+			await settle(term);
+
+			// 22-row frame in an 8-row window: 14 rows committed, the boundary
+			// 12 rows past the header. Post-emit publish: the header's claim
+			// saturates at its own extent; the body receives the remainder in
+			// its own coordinates (boundary minus its start offset).
+			expect(tape(term).length).toBe(22);
+			expect(header.received.at(-1)).toBe(2);
+			expect(Math.max(...header.received)).toBe(2);
+			expect(body.received.at(-1)).toBe(12);
+			// Post-emit freshness holds per child in the multi-child layout:
+			// the body's compose view was still pre-emit, the publish delivered
+			// the advanced count.
+			expect(body.received.at(-1)!).toBeGreaterThan(body.committedRowsAtRender.at(-1)!);
+
+			// The compose-time feed clamps identically: an idle frame restates
+			// each child's saturated claim on every push — never more.
+			tui.requestRender();
+			await settle(term);
+			expect(header.received.at(-1)).toBe(2);
+			expect(Math.max(...header.received)).toBe(2);
+			expect(body.received.at(-1)).toBe(12);
 		} finally {
 			tui.stop();
 		}

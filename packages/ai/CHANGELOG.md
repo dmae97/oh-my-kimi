@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+## [16.3.15] - 2026-07-09
+
+### Breaking Changes
+
+- Renamed `OpenAIResponsesCacheOptions`, `normalizeOpenAIResponsesPromptCacheKey`, and `getOpenAIResponsesPromptCacheKey` to the endpoint-neutral `OpenAICacheOptions`, `normalizeOpenAIPromptCacheKey`, and `getOpenAIPromptCacheKey`.
+
+### Added
+
+- Added automatic prompt-cache affinity header injection for OpenAI-family chat completions
+- Added support for explicit prompt-cache affinity headers in OpenAI-family chat completions
+- Added OpenAI pro reasoning mode support: models carrying the catalog `reasoningMode: "pro"` marker (GPT-5.6 Pro aliases) send `reasoning: { mode: "pro" }` on OpenAI Responses and Codex Responses requests, alongside the configured effort. The Codex request body now honors `requestModelId` so catalog aliases request the base upstream model id.
+
+### Changed
+
+- Updated xAI OAuth to use a dedicated device-code flow instead of redirect/loopback server
+
+### Fixed
+
+- Improved account routing for GPT-5.6 models to better respect paid tier requirements
+- Refined account selection logic to correctly identify plan types from account metadata
+- Fixed OpenAI Codex multi-account routing for GPT-5.6: Sol and Luna requests now prefer Plus-or-higher accounts while Terra remains available to Free/Go accounts; local pro-mode aliases inherit their base model's Codex plan eligibility.
+- Fixed xAI Grok OAuth login to use xAI's device authorization flow: `/login` now opens the verification URL, displays the device code, and polls for approval instead of asking for a pasted redirect or linking to Hermes Agent documentation.
+
+## [16.3.14] - 2026-07-09
+
+### Changed
+
+- Updated Codex reasoning effort mapping to support shifted wire tiers for newer models
+
+### Fixed
+
+- Fixed the Codex Responses request transformer bypassing catalog/compat reasoning effort maps: the clamped user effort is now remapped to the provider wire tier (GPT-5.6's shifted five-tier scale sends `max` for user `xhigh` and `xhigh` for `high`), failing loudly if a map produces a value outside the Codex wire vocabulary.
+
 ## [16.3.13] - 2026-07-09
 
 ### Changed

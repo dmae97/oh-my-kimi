@@ -5,6 +5,21 @@
 ### Fixed
 
 - Fixed kept-alive task subagents entering a repeated provider-call loop after an IRC wake and terminal `yield`. ([#4963](https://github.com/can1357/oh-my-pi/issues/4963))
+## [16.3.15] - 2026-07-09
+
+### Changed
+
+- Integrated testing guidance directly into the main system prompt for improved workflow cohesion
+- Moved testing guidance into the main system prompt and removed the bundled Tester subagent.
+
+## [16.3.14] - 2026-07-09
+
+### Fixed
+
+- Fixed issue where unfinalized tool blocks could incorrectly pin the live-region scroll seam
+- Improved rendering of raw thinking blocks by stripping empty HTML comment noise
+- Fixed display of thinking blocks consisting entirely of hidden comment noise
+- Fixed gpt-5.6 reasoning summaries rendering literal `<!-- -->` sentinel lines in thinking blocks; empty HTML comments (and the unterminated `<!--` tail while streaming) are now dropped from the thinking display, and blocks reduced to pure comment noise are hidden entirely.
 
 ## [16.3.13] - 2026-07-09
 

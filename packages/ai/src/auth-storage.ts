@@ -761,25 +761,82 @@ function isAbortSignalOption(
 	return typeof value === "object" && value !== null && "aborted" in value && "addEventListener" in value;
 }
 
-function requiresOpenAICodexProModel(provider: string, modelId: string | undefined): boolean {
-	return provider === "openai-codex" && typeof modelId === "string" && modelId.includes("-spark");
+type OpenAICodexPlanRequirement = "none" | "paid" | "pro";
+type OpenAICodexPlanClass = "free" | "paid" | "pro" | "unknown";
+
+const GPT_56_PAID_CODEX_MODEL_PATTERN = /^gpt-5\.6-(?:sol|luna)(?:-pro)?$/;
+const OPENAI_CODEX_PRO_PLAN_TOKENS: Record<string, true> = {
+	pro: true,
+};
+const OPENAI_CODEX_PAID_PLAN_TOKENS: Record<string, true> = {
+	plus: true,
+	business: true,
+	team: true,
+	enterprise: true,
+	edu: true,
+	education: true,
+	teacher: true,
+	teachers: true,
+	health: true,
+	gov: true,
+	government: true,
+};
+const OPENAI_CODEX_FREE_PLAN_TOKENS: Record<string, true> = {
+	free: true,
+	go: true,
+};
+
+/**
+ * Account tier needed for model-aware Codex OAuth routing.
+ *
+ * GPT-5.6 Terra (including its local pro-mode alias) remains available on every
+ * plan. Sol and Luna pro-mode aliases inherit their base models' paid tier;
+ * only Spark currently has a documented Pro-plan preference in Codex.
+ */
+function resolveOpenAICodexPlanRequirement(provider: string, modelId: string | undefined): OpenAICodexPlanRequirement {
+	if (provider !== "openai-codex" || typeof modelId !== "string") return "none";
+	const separator = modelId.lastIndexOf("/");
+	const bareModelId = (separator === -1 ? modelId : modelId.slice(separator + 1)).toLowerCase();
+	if (bareModelId.includes("-spark")) return "pro";
+	if (bareModelId === "gpt-5.6" || GPT_56_PAID_CODEX_MODEL_PATTERN.test(bareModelId)) return "paid";
+	return "none";
 }
 
 function getUsagePlanType(report: UsageReport | null): string | undefined {
 	const metadata = report?.metadata;
-	if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return undefined;
-	const planType = (metadata as { planType?: unknown }).planType;
-	return typeof planType === "string" ? planType.toLowerCase() : undefined;
+	if (!metadata) return undefined;
+	const planType = metadata.planType;
+	if (typeof planType !== "string") return undefined;
+	const normalized = planType
+		.trim()
+		.toLowerCase()
+		.replace(/[\s-]+/g, "_");
+	return normalized.startsWith("chatgpt_") ? normalized.slice("chatgpt_".length) : normalized;
 }
 
-function getOpenAICodexPlanPriority(report: UsageReport | null): number {
+function classifyOpenAICodexPlan(report: UsageReport | null): OpenAICodexPlanClass {
 	const planType = getUsagePlanType(report);
-	if (!planType) return 1;
-	return planType.includes("pro") ? 0 : 2;
+	if (!planType) return "unknown";
+	const tokens = planType.split("_");
+	if (tokens.some(token => OPENAI_CODEX_PRO_PLAN_TOKENS[token] === true)) return "pro";
+	if (tokens.some(token => OPENAI_CODEX_PAID_PLAN_TOKENS[token] === true)) return "paid";
+	if (tokens.some(token => OPENAI_CODEX_FREE_PLAN_TOKENS[token] === true)) return "free";
+	return "unknown";
 }
 
-function hasOpenAICodexProPlan(report: UsageReport | null): boolean {
-	return getUsagePlanType(report)?.includes("pro") === true;
+function getOpenAICodexPlanEligibility(
+	report: UsageReport | null,
+	requirement: OpenAICodexPlanRequirement,
+): boolean | undefined {
+	if (requirement === "none") return true;
+	const planClass = classifyOpenAICodexPlan(report);
+	if (planClass === "unknown") return undefined;
+	return requirement === "paid" ? planClass !== "free" : planClass === "pro";
+}
+
+function getOpenAICodexPlanPriority(report: UsageReport | null, requirement: OpenAICodexPlanRequirement): number {
+	const eligibility = getOpenAICodexPlanEligibility(report, requirement);
+	return eligibility === true ? 0 : eligibility === undefined ? 1 : 2;
 }
 
 function compareUsageRankingMetric(left: number, right: number): number {
@@ -3186,8 +3243,7 @@ export class AuthStorage {
 	#compareRankedOAuthCandidatePriority(
 		left: RankedOAuthCandidate,
 		right: RankedOAuthCandidate,
-		provider: string,
-		modelId: string | undefined,
+		planRequirement: OpenAICodexPlanRequirement,
 	): number {
 		if (left.blocked !== right.blocked) return left.blocked ? 1 : -1;
 		if (left.blocked && right.blocked) {
@@ -3196,7 +3252,7 @@ export class AuthStorage {
 			if (leftBlockedUntil !== rightBlockedUntil) return leftBlockedUntil - rightBlockedUntil;
 			return 0;
 		}
-		if (requiresOpenAICodexProModel(provider, modelId) && left.planPriority !== right.planPriority) {
+		if (planRequirement !== "none" && left.planPriority !== right.planPriority) {
 			return left.planPriority - right.planPriority;
 		}
 		if (left.hasPriorityBoost !== right.hasPriorityBoost) return left.hasPriorityBoost ? -1 : 1;
@@ -3214,20 +3270,18 @@ export class AuthStorage {
 	#compareRankedOAuthCandidates(
 		left: RankedOAuthCandidate,
 		right: RankedOAuthCandidate,
-		provider: string,
-		modelId: string | undefined,
+		planRequirement: OpenAICodexPlanRequirement,
 	): number {
-		const priority = this.#compareRankedOAuthCandidatePriority(left, right, provider, modelId);
+		const priority = this.#compareRankedOAuthCandidatePriority(left, right, planRequirement);
 		return priority !== 0 ? priority : left.orderPos - right.orderPos;
 	}
 
 	#orderRankedOAuthCandidates(
 		candidates: RankedOAuthCandidate[],
 		sessionId: string | undefined,
-		provider: string,
-		modelId: string | undefined,
+		planRequirement: OpenAICodexPlanRequirement,
 	): OAuthCandidate[] {
-		candidates.sort((left, right) => this.#compareRankedOAuthCandidates(left, right, provider, modelId));
+		candidates.sort((left, right) => this.#compareRankedOAuthCandidates(left, right, planRequirement));
 		if (!sessionId) {
 			return candidates.map(candidate => ({
 				selection: candidate.selection,
@@ -3252,7 +3306,7 @@ export class AuthStorage {
 		for (const candidate of unblocked) {
 			if (
 				candidate !== previous &&
-				this.#compareRankedOAuthCandidatePriority(previous, candidate, provider, modelId) !== 0
+				this.#compareRankedOAuthCandidatePriority(previous, candidate, planRequirement) !== 0
 			) {
 				bucketIndex += 1;
 			}
@@ -3297,6 +3351,7 @@ export class AuthStorage {
 		providerKey: string;
 		provider: string;
 		order: number[];
+		planRequirement: OpenAICodexPlanRequirement;
 		credentials: OAuthSelection[];
 		options?: AuthApiKeyOptions;
 		sessionId?: string;
@@ -3378,7 +3433,7 @@ export class AuthStorage {
 				blocked,
 				blockedUntil,
 				hasPriorityBoost: strategy.hasPriorityBoost?.(primary) ?? false,
-				planPriority: getOpenAICodexPlanPriority(usage),
+				planPriority: getOpenAICodexPlanPriority(usage, args.planRequirement),
 				secondaryUsed: this.#normalizeUsageFraction(secondaryTarget),
 				secondaryDrainRate: this.#computeWindowDrainRate(
 					secondaryTarget,
@@ -3390,7 +3445,7 @@ export class AuthStorage {
 				orderPos,
 			});
 		}
-		return this.#orderRankedOAuthCandidates(ranked, args.sessionId, args.provider, args.options?.modelId);
+		return this.#orderRankedOAuthCandidates(ranked, args.sessionId, args.planRequirement);
 	}
 
 	/**
@@ -3418,8 +3473,9 @@ export class AuthStorage {
 		const strategy = this.#rankingStrategyResolver?.(provider);
 		const rankingContext: CredentialRankingContext = { modelId: options?.modelId };
 		const blockScope = strategy?.blockScope?.(rankingContext);
-		const requiresProModel = requiresOpenAICodexProModel(provider, options?.modelId);
-		const checkUsage = strategy !== undefined && (credentials.length > 1 || requiresProModel);
+		const planRequirement = resolveOpenAICodexPlanRequirement(provider, options?.modelId);
+		const hasPlanRequirement = planRequirement !== "none";
+		const checkUsage = strategy !== undefined && (credentials.length > 1 || hasPlanRequirement);
 		const sessionCredential = this.#getSessionCredential(provider, sessionId);
 		const sessionPreferredIndex = sessionCredential?.type === "oauth" ? sessionCredential.index : undefined;
 		const sessionPreferredCredential =
@@ -3438,12 +3494,13 @@ export class AuthStorage {
 			sessionPreferredIndex !== undefined &&
 			sessionPreferredCanRefreshOrUse &&
 			!this.#isCredentialBlocked(provider, providerKey, sessionPreferredIndex, blockScope);
-		const shouldRank = checkUsage && (!sessionPreferredIsAvailable || requiresProModel);
+		const shouldRank = checkUsage && (!sessionPreferredIsAvailable || hasPlanRequirement);
 		const rankingOrder = shouldRank && sessionId ? credentials.map((_credential, index) => index) : order;
 		const candidates = shouldRank
 			? await this.#rankOAuthSelections({
 					providerKey,
 					provider,
+					planRequirement,
 					order: rankingOrder,
 					credentials,
 					options,
@@ -3457,7 +3514,7 @@ export class AuthStorage {
 					.filter((selection): selection is { credential: OAuthCredential; index: number } => Boolean(selection))
 					.map(selection => ({ selection, usage: null, usageChecked: false }));
 
-		if (sessionPreferredIndex !== undefined && !requiresProModel) {
+		if (sessionPreferredIndex !== undefined && !hasPlanRequirement) {
 			const sessionPreferredCandidate = candidates.findIndex(
 				candidate =>
 					!this.#isCredentialBlocked(provider, providerKey, candidate.selection.index, blockScope) &&
@@ -3537,10 +3594,12 @@ export class AuthStorage {
 			}),
 		);
 
-		// Skip the Pro-plan filter when no candidate is confirmed Pro, so users with only
-		// non-Pro accounts can still attempt Spark requests (e.g. trial/grandfathered access).
-		const enforceProRequirement =
-			requiresProModel && candidates.some(candidate => hasOpenAICodexProPlan(candidate.usage));
+		// Enforce a tier only when at least one account is confirmed eligible. If
+		// every report is unknown or ineligible, preserve trial/grandfathered access
+		// by allowing the normal candidate fallback to attempt the request.
+		const enforcePlanRequirement =
+			hasPlanRequirement &&
+			candidates.some(candidate => getOpenAICodexPlanEligibility(candidate.usage, planRequirement) === true);
 
 		const fallback = candidates[0];
 
@@ -3556,7 +3615,8 @@ export class AuthStorage {
 					allowBlocked: false,
 					prefetchedUsage: candidate.usage,
 					usagePrechecked: candidate.usageChecked,
-					enforceProRequirement,
+					planRequirement,
+					enforcePlanRequirement,
 					strategy,
 					rankingContext,
 					blockScope,
@@ -3571,7 +3631,8 @@ export class AuthStorage {
 				allowBlocked: true,
 				prefetchedUsage: fallback.usage,
 				usagePrechecked: fallback.usageChecked,
-				enforceProRequirement,
+				planRequirement,
+				enforcePlanRequirement,
 				strategy,
 				rankingContext,
 				blockScope,
@@ -3709,7 +3770,8 @@ export class AuthStorage {
 			allowBlocked: boolean;
 			prefetchedUsage?: UsageReport | null;
 			usagePrechecked?: boolean;
-			enforceProRequirement?: boolean;
+			planRequirement?: OpenAICodexPlanRequirement;
+			enforcePlanRequirement?: boolean;
 			strategy?: CredentialRankingStrategy;
 			rankingContext?: CredentialRankingContext;
 			blockScope?: string;
@@ -3722,7 +3784,8 @@ export class AuthStorage {
 			allowBlocked,
 			prefetchedUsage = null,
 			usagePrechecked = false,
-			enforceProRequirement,
+			planRequirement: providedPlanRequirement,
+			enforcePlanRequirement,
 			strategy,
 			rankingContext,
 			blockScope,
@@ -3741,12 +3804,13 @@ export class AuthStorage {
 		// refresh / persist / CAS-disable addresses the row by this stable id.
 		const credentialId = this.#getStoredCredentials(provider)[selection.index]?.id;
 
-		const requiresProModel = requiresOpenAICodexProModel(provider, options?.modelId);
-		const applyProFilter = enforceProRequirement ?? requiresProModel;
+		const planRequirement = providedPlanRequirement ?? resolveOpenAICodexPlanRequirement(provider, options?.modelId);
+		const hasPlanRequirement = planRequirement !== "none";
+		const applyPlanFilter = enforcePlanRequirement ?? hasPlanRequirement;
 		let usage: UsageReport | null = null;
 		let usageChecked = false;
 
-		if ((checkUsage && !allowBlocked) || requiresProModel) {
+		if ((checkUsage && !allowBlocked) || hasPlanRequirement) {
 			if (usagePrechecked) {
 				usage = prefetchedUsage;
 				usageChecked = true;
@@ -3757,7 +3821,7 @@ export class AuthStorage {
 				});
 				usageChecked = true;
 			}
-			if (applyProFilter && !hasOpenAICodexProPlan(usage)) {
+			if (applyPlanFilter && getOpenAICodexPlanEligibility(usage, planRequirement) !== true) {
 				return undefined;
 			}
 			if (checkUsage && !allowBlocked && usage && strategy && rankingContext) {
@@ -3825,7 +3889,7 @@ export class AuthStorage {
 			} else {
 				this.#replaceCredentialAt(provider, selection.index, updated);
 			}
-			if ((checkUsage && !allowBlocked) || requiresProModel) {
+			if ((checkUsage && !allowBlocked) || hasPlanRequirement) {
 				const sameAccount = selection.credential.accountId === updated.accountId;
 				if (!usageChecked || !sameAccount) {
 					usage = await this.#getUsageReport(provider, updated, {
@@ -3834,7 +3898,7 @@ export class AuthStorage {
 					});
 					usageChecked = true;
 				}
-				if (applyProFilter && !hasOpenAICodexProPlan(usage)) {
+				if (applyPlanFilter && getOpenAICodexPlanEligibility(usage, planRequirement) !== true) {
 					return undefined;
 				}
 				if (checkUsage && !allowBlocked && usage && strategy && rankingContext) {
