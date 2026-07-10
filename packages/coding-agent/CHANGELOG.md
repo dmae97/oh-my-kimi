@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `omp update` on npm-managed Windows installs so npm `.cmd`/`.ps1`/`.bat` launchers update through npm instead of being overwritten by downloaded release binaries. ([#5053](https://github.com/can1357/oh-my-pi/issues/5053))
+
 ## [16.3.15] - 2026-07-09
 
 ### Changed
