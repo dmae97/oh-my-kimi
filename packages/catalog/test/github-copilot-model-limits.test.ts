@@ -656,6 +656,47 @@ describe("github copilot vision endpoint policy", () => {
 		expect(model?.input).toEqual(["text", "image"]);
 	});
 
+	it("keeps explicit upstream vision false text-only through the personal endpoint manager merge", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-copilot-vision-"));
+		try {
+			const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+				const url = typeof input === "string" ? input : input.toString();
+				expect(url).toBe("https://api.githubcopilot.com/models");
+				expect(init?.method).toBe("GET");
+				expect(getHeaderValue(init?.headers, "Authorization")).toBe("Bearer copilot-test-key");
+				return new Response(
+					JSON.stringify({
+						data: [
+							tieredCopilotEntry({
+								id: "claude-sonnet-4.6",
+								name: "Claude Sonnet 4.6",
+								window: 200_000,
+								maxOutput: 32_000,
+								vision: false,
+							}),
+						],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			});
+
+			const bundled = getBundledModel("github-copilot", "claude-sonnet-4.6");
+			expect(bundled?.input).toEqual(["text", "image"]);
+
+			const options = githubCopilotModelManagerOptions({ apiKey: "copilot-test-key", fetch: fetchMock });
+			const manager = createModelManager({
+				...options,
+				cacheDbPath: path.join(tempDir, "models.db"),
+			});
+			const { models } = await manager.refresh("online");
+			const model = models.find(candidate => candidate.id === "claude-sonnet-4.6");
+			expect(model?.baseUrl).toBe("https://api.githubcopilot.com");
+			expect(model?.input).toEqual(["text"]);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
 	it("keeps the merged Model image-capable when business discovery confirms a vision-capable bundled reference", async () => {
 		// Bundled `claude-sonnet-4.6` ships with `input=['text','image']`.
 		// Discovery against the business host confirms the same upstream vision
