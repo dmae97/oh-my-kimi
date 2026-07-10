@@ -1095,14 +1095,11 @@ describe("ModelRegistry", () => {
 			});
 		});
 
-		test("custom models preserve explicit thinking and gain backfilled wire facts", () => {
+		test("custom models preserve explicit thinking verbatim", () => {
 			const model = getModelsForProvider(thinkingCustom, "anthropic").find(m => m.id === "claude-custom");
-			expect(model?.thinking).toEqual({
-				...customThinking,
-				// Versionless claude ids resolve to the 4-tier adaptive wire map,
-				// filtered to the declared efforts (no xhigh).
-				effortMap: { minimal: "low" },
-			});
+			// Adaptive effort ladders are wire-exact — explicit thinking passes
+			// through without a backfilled effortMap.
+			expect(model?.thinking).toEqual(customThinking);
 		});
 
 		test("model overrides can replace canonical thinking metadata", () => {
