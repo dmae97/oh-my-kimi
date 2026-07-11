@@ -1898,7 +1898,11 @@ export class TUI extends Container {
 			return;
 		}
 		const segment = segments[segmentIndex]!;
-		if (segment.liveLocalStart !== undefined || segment.start < this.#committedRows) {
+		const fullyLiveUncommittedSegment = segment.liveLocalStart === 0 && segment.start >= this.#committedRows;
+		if (
+			(segment.liveLocalStart !== undefined && !fullyLiveUncommittedSegment) ||
+			segment.start < this.#committedRows
+		) {
 			this.requestComponentRender(component);
 			return;
 		}

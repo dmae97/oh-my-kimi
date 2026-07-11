@@ -45,6 +45,13 @@ class LiveHead extends CountingLines implements NativeScrollbackLiveRegion {
 	}
 }
 
+class AnchoredStatusContainer extends Container implements NativeScrollbackLiveRegion {
+	getNativeScrollbackLiveRegionStart(): number | undefined {
+		const hasAnchoredRows = this.children.length > 0;
+		return hasAnchoredRows ? 0 : undefined;
+	}
+}
+
 function strip(rows: string[]): string[] {
 	return rows.map(row => Bun.stripANSI(row).trimEnd());
 }
@@ -286,6 +293,37 @@ describe("TUI.requestDirectWrite", () => {
 			expect(tui.renders).toBe(tuiRenders);
 			expect(transcript.renders).toBe(transcriptRenders);
 			expect(footer.renders).toBe(footerRenders);
+		} finally {
+			tui.stop();
+			await term.flush();
+		}
+	});
+
+	it("directly rewrites fully live anchored status segments", async () => {
+		const term = new VirtualTerminal(40, 8, 1_000);
+		const scheduler = new StressRenderScheduler();
+		const tui = new RenderCountingTUI(term, undefined, { renderScheduler: scheduler });
+		const transcript = new CountingLines(["msg-0", "msg-1"]);
+		const status = new AnchoredStatusContainer();
+		const spinner = new CountingLines(["spin-0"]);
+		status.addChild(spinner);
+		tui.addChild(transcript);
+		tui.addChild(status);
+
+		try {
+			tui.start();
+			await scheduler.drain(term);
+			expect(visible(term)).toEqual(["msg-0", "msg-1", "spin-0"]);
+			const tuiRenders = tui.renders;
+			const transcriptRenders = transcript.renders;
+
+			spinner.set(["spin-1"]);
+			tui.requestDirectWrite(spinner);
+			await scheduler.drain(term);
+
+			expect(visible(term)).toEqual(["msg-0", "msg-1", "spin-1"]);
+			expect(tui.renders).toBe(tuiRenders);
+			expect(transcript.renders).toBe(transcriptRenders);
 		} finally {
 			tui.stop();
 			await term.flush();
