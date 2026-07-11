@@ -12,11 +12,14 @@
 - Added rich interactive ask dialogs: a fixed-height bottom panel (sized at spawn from the tallest tab, clamped to 70% of the terminal) with question tabs, option previews, notes, per-option markers, and ask.enabled gating. Multi-select questions toggle with Space/Enter and confirm from the Submit tab; submitting an empty Other value unselects the custom answer. ([#4186](https://github.com/can1357/oh-my-pi/issues/4186))
 - Added role un-assignment to the model hub: `x`/Backspace on a role row (or Enter on a chip already holding the model) clears the role back to auto-selection — previously only possible by editing config.
 - Added a manual F5 provider refresh in the model hub; providers now auto-refresh at most once per application lifetime instead of on every visit.
+- Added custom role creation to the Model Hub roles view (`+ New role…` / `n`): name the role and jump straight into assigning its model.
+- Added quick-switch (ctrl+p) cycle editing to the Model Hub roles view: `c` toggles a role's membership, `[`/`]` (or Shift+↑/↓) reorder it, with a live segment-track preview of the resulting cycle.
 
 ### Changed
 
 - Updated Model Hub sidebar to float providers with search matches to the top while searching
 - Added spatial navigation between the Model Hub sidebar and model list using left/right arrow keys
+- Model Hub sidebar now leads with Roles above Recent, and hopping scopes with ↑/↓ no longer captures arrow focus when passing the Roles entry (diving into role rows is explicit via Enter, →, or click); while searching, the hop also skips Roles and an empty Recent, and the Recent/All annotations show live match counts.
 - Removed "Chat about this" option from question dialogs
 - Redesigned ask dialogs with fixed height, removed explicit Next button, and simplified headers
 - Rewrote the task tool prompt for the new wire schema and to push callers toward the most specific agent type: read-only research is directed to `agent: "scout"`, and omitting `agent` is framed as an explicit decision that no listed specialist fits.

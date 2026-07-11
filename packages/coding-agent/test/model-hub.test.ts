@@ -110,6 +110,7 @@ function createHub(options: {
 			onUnassign: options.callbacks?.onUnassign ?? onUnassign,
 			onPick: options.callbacks?.onPick ?? onPick,
 			onLoginRequest: options.callbacks?.onLoginRequest ?? onLoginRequest,
+			onCycleOrderChange: options.callbacks?.onCycleOrderChange,
 			onCancel: options.callbacks?.onCancel ?? onCancel,
 		},
 		options.hub,
@@ -188,7 +189,8 @@ describe("ModelHub", () => {
 			const { hub } = createHub({ models: [model], scoped: true, settings });
 			installTestTheme();
 
-			hub.handleInput(UP); // All models → Roles
+			hub.handleInput(UP); // All models → Recent
+			hub.handleInput(UP); // Recent → Roles (now leads the sidebar)
 			const lines = hub.render(220).map(line => stripVTControlCharacters(line));
 			const defaultRow = lines.find(line => line.includes("DEFAULT"));
 			const smolRow = lines.find(line => line.includes("SMOL"));
@@ -213,7 +215,9 @@ describe("ModelHub", () => {
 			});
 			installTestTheme();
 
-			hub.handleInput(UP); // Roles view
+			hub.handleInput(UP);
+			hub.handleInput(UP); // Roles view (top of the sidebar)
+			hub.handleInput("\n"); // dive into the role rows
 			hub.handleInput(DOWN); // default → smol row
 			hub.handleInput("x");
 
@@ -224,6 +228,101 @@ describe("ModelHub", () => {
 			// reads as unassigned instead of keeping the cleared value.
 			expect(smolRow).not.toContain("worker-model");
 			expect(smolRow).toContain("—");
+		});
+	});
+
+	describe("hop focus stability", () => {
+		test("hopping onto Roles keeps provider navigation instead of capturing the arrows", () => {
+			const model = makeModel("prov-a", "model-a");
+			const { hub } = createHub({ models: [model] });
+			installTestTheme();
+
+			hub.handleInput(UP);
+			hub.handleInput(UP); // All models → Recent → Roles
+			// The roles view shows as a preview, but arrows keep hopping.
+			expect(footerLine(hub.render(220))).toContain("→ roles");
+			hub.handleInput(DOWN); // continues to Recent — not a role row
+			expect(normalize(hub.render(220))).toContain("Recently used");
+		});
+
+		test("while searching, the hop skips Roles and an empty Recent", () => {
+			const model = makeModel("prov-a", "target-model");
+			const { hub } = createHub({ models: [model] });
+			installTestTheme();
+
+			for (const ch of "target") hub.handleInput(ch);
+			hub.handleInput(UP); // skips Recent (0 recent hits) and Roles → wraps to prov-a
+			expect(normalize(hub.render(220))).toContain("prov-a ·");
+			expect(footerLine(hub.render(220))).not.toContain("→ roles");
+		});
+	});
+
+	describe("quick-switch cycle and custom roles", () => {
+		test("c toggles cycle membership, [ reorders, and the preview tracks the order", () => {
+			const model = makeModel("test", "cycle-model");
+			const settings = Settings.isolated({});
+			const changes: string[][] = [];
+			const { hub } = createHub({
+				models: [model],
+				scoped: true,
+				settings,
+				callbacks: {
+					onCycleOrderChange: order => {
+						changes.push([...order]);
+						settings.set("cycleOrder", order);
+					},
+				},
+			});
+			installTestTheme();
+
+			hub.handleInput(UP);
+			hub.handleInput(UP); // Roles view
+			hub.handleInput("\n"); // dive into rows; cursor on DEFAULT
+
+			// Default cycle is [smol, default, slow]: c removes default…
+			hub.handleInput("c");
+			expect(changes[0]).toEqual(["smol", "slow"]);
+			// …c again re-appends it at the end…
+			hub.handleInput("c");
+			expect(changes[1]).toEqual(["smol", "slow", "default"]);
+			// …and [ moves it one slot earlier.
+			hub.handleInput("[");
+			expect(changes[2]).toEqual(["smol", "default", "slow"]);
+
+			// The preview line renders the resulting ctrl+p track in order.
+			const preview = hub
+				.render(220)
+				.map(line => stripVTControlCharacters(line))
+				.find(line => line.includes("cycle:"));
+			expect(preview).toBeDefined();
+			const previewText = preview ?? "";
+			expect(previewText.indexOf("smol")).toBeGreaterThan(-1);
+			expect(previewText.indexOf("smol")).toBeLessThan(previewText.indexOf("default"));
+			expect(previewText.indexOf("default")).toBeLessThan(previewText.indexOf("slow"));
+		});
+
+		test("the + New role row names a custom role and jumps into assigning it", () => {
+			const model = makeModel("test", "reviewer-model");
+			const { hub, onAssign } = createHub({ models: [model], scoped: true });
+			installTestTheme();
+
+			hub.handleInput(UP);
+			hub.handleInput(UP); // Roles view
+			hub.handleInput("\n"); // dive into rows
+			hub.handleInput(UP); // wraps to the trailing "+ New role…" row
+			hub.handleInput("\n");
+			expect(footerLine(hub.render(220))).toContain("New role name:");
+
+			for (const ch of "reviewer") hub.handleInput(ch);
+			hub.handleInput("\n");
+			expect(normalize(hub.render(220))).toContain("Assigning reviewer");
+
+			hub.handleInput("\n"); // pick the sole model for the new role
+			expect(onAssign).toHaveBeenCalledTimes(1);
+			const call = onAssign.mock.calls[0];
+			expect(call?.[1]).toBe("reviewer");
+			expect(call?.[3]).toBe("test/reviewer-model");
+			expect(call?.[4]).toBe("modelRole");
 		});
 	});
 

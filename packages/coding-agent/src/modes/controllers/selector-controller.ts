@@ -698,6 +698,16 @@ export class SelectorController {
 					done();
 					void this.#loginThenReopenModelHub(providerId);
 				},
+				onCycleOrderChange: order => {
+					try {
+						this.ctx.settings.set("cycleOrder", order);
+						this.ctx.showStatus(
+							order.length > 0 ? `Quick-switch cycle: ${order.join(" → ")}` : "Quick-switch cycle cleared",
+						);
+					} catch (error) {
+						this.ctx.showError(error instanceof Error ? error.message : String(error));
+					}
+				},
 				onCancel: () => done(),
 			},
 			{

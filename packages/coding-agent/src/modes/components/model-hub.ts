@@ -17,6 +17,8 @@ import {
 	type Component,
 	extractPrintableText,
 	fuzzyFilter,
+	getKeybindings,
+	Input,
 	matchesKey,
 	routeSgrMouseInput,
 	type SgrMouseEvent,
@@ -45,6 +47,7 @@ import {
 	thinkingLevelGlyph,
 } from "./model-browser";
 import { bottomBorder, dividerSplit, row, splitBodyWidth, splitRow, topBorderSplit } from "./overlay-box";
+import { renderSegmentTrack } from "./segment-track";
 
 /** `roles` is the full /models hub; `pick` is a one-shot session/embedded picker. */
 export type ModelHubMode = "roles" | "pick";
@@ -72,6 +75,8 @@ export interface ModelHubCallbacks {
 	onPick?: (model: Model, selector: string) => void;
 	/** Locked provider activation: forward to the /login flow. */
 	onLoginRequest?: (providerId: string) => void;
+	/** Persist a new quick-switch cycle order (the ctrl+p role cycle). */
+	onCycleOrderChange?: (order: string[]) => void;
 	onCancel: () => void;
 }
 
@@ -107,15 +112,21 @@ interface StripChip {
 	thinkingLevel?: ConfiguredThinkingLevel;
 }
 
-interface StripState {
-	kind: "role" | "thinking";
-	item: ModelBrowserItem;
-	role?: string;
-	chips: StripChip[];
-	index: number;
-	/** Where to land when a thinking strip closes. */
-	returnToRoles: boolean;
-}
+type StripState =
+	| {
+			kind: "role" | "thinking";
+			item: ModelBrowserItem;
+			role?: string;
+			chips: StripChip[];
+			index: number;
+			/** Where to land when a thinking strip closes. */
+			returnToRoles: boolean;
+	  }
+	| {
+			/** Footer text input naming a new custom role. */
+			kind: "roleName";
+			input: Input;
+	  };
 
 /** Recorded chip hit-range on the footer row (columns relative to frame col 0). */
 interface ChipRange {
@@ -168,6 +179,9 @@ export class ModelHubComponent implements Component {
 	#fixedEntries: SidebarEntry[] = [];
 	#unlockedProviderEntries: SidebarEntry[] = [];
 	#lockedProviderEntries: SidebarEntry[] = [];
+	/** Fuzzy match totals while searching: recent-scope hits and overall hits. */
+	#recentSearchCount = 0;
+	#searchTotal = 0;
 	#activeEntryId = "all";
 	#sidebarScroll = 0;
 	#sidebarHover: number | null = null;
@@ -434,14 +448,9 @@ export class ModelHubComponent implements Component {
 			if (assignment && !assignment.autoSelected) assignedCount++;
 		}
 
-		const fixed: SidebarEntry[] = [
-			{
-				id: "recent",
-				kind: "recent",
-				label: "Recent",
-				annotation: this.#recentItems.length > 0 ? String(this.#recentItems.length) : "—",
-			},
-		];
+		// Roles leads the fixed section so downward hops from Recent head into
+		// model scopes instead of being captured by the roles view.
+		const fixed: SidebarEntry[] = [];
 		if (this.#mode === "roles") {
 			fixed.push({
 				id: "roles",
@@ -450,6 +459,12 @@ export class ModelHubComponent implements Component {
 				annotation: `${assignedCount}/${visibleRoles.length}`,
 			});
 		}
+		fixed.push({
+			id: "recent",
+			kind: "recent",
+			label: "Recent",
+			annotation: this.#recentItems.length > 0 ? String(this.#recentItems.length) : "—",
+		});
 		fixed.push({ id: "all", kind: "all", label: "All models", annotation: String(availableModels.length) });
 
 		this.#fixedEntries = fixed;
@@ -503,9 +518,10 @@ export class ModelHubComponent implements Component {
 		this.#activeEntryId = id;
 		this.#applyScope();
 		const entry = this.#activeEntry();
-		// The Roles view IS its rows — land with row navigation active; every
-		// other scope starts in provider-hop mode.
-		this.#focus = entry.kind === "roles" && this.#assigningRole === null ? "list" : "scope";
+		// Hops must never steal arrow focus: landing on a scope keeps provider
+		// navigation active. Diving into the roles rows is explicit (Enter, →,
+		// or a click on the Roles entry).
+		this.#focus = "scope";
 		if (entry.kind === "provider" && !entry.locked) {
 			this.#scheduleProviderRefresh(entry.providerId ?? "");
 		}
@@ -534,7 +550,7 @@ export class ModelHubComponent implements Component {
 			}
 			case "roles":
 				this.#roleIds = this.#visibleRoleIds();
-				this.#roleIndex = Math.min(this.#roleIndex, Math.max(0, this.#roleIds.length - 1));
+				this.#roleIndex = Math.min(this.#roleIndex, Math.max(0, this.#rolesRowCount - 1));
 				break;
 			default:
 				this.#browser.setShowProvider(true);
@@ -566,6 +582,12 @@ export class ModelHubComponent implements Component {
 		for (const item of matches) {
 			counts.set(item.provider, (counts.get(item.provider) ?? 0) + 1);
 		}
+		const recentSelectors = new Set(this.#recentItems.map(item => item.selector));
+		this.#recentSearchCount = matches.reduce(
+			(total, item) => total + (recentSelectors.has(item.selector) ? 1 : 0),
+			0,
+		);
+		this.#searchTotal = matches.length;
 		this.#searchCounts = counts;
 		this.#composeEntries();
 		const entry = this.#activeEntry();
@@ -578,10 +600,17 @@ export class ModelHubComponent implements Component {
 		}
 	}
 
-	/** Entries the scope hop skips: separators, and while searching, providers without matches. */
+	/**
+	 * Entries the scope hop skips: separators always; while searching, also
+	 * the Roles view (not a model scope), an empty Recent, locked providers,
+	 * and providers without matches.
+	 */
 	#isHopSkipped(entry: SidebarEntry): boolean {
 		if (entry.kind === "separator") return true;
-		if (this.#searchCounts && entry.kind === "provider") {
+		if (!this.#searchCounts) return false;
+		if (entry.kind === "roles") return true;
+		if (entry.kind === "recent") return this.#recentSearchCount === 0;
+		if (entry.kind === "provider") {
 			if (entry.locked) return true;
 			return (this.#searchCounts.get(entry.providerId ?? "") ?? 0) === 0;
 		}
@@ -802,12 +831,13 @@ export class ModelHubComponent implements Component {
 		this.#chipRanges = [];
 		if (strip?.kind === "thinking" && strip.returnToRoles && this.#mode === "roles") {
 			this.#setActiveEntry("roles");
+			this.#focus = "list";
 		}
 	}
 
 	#activateStripChip(): void {
 		const strip = this.#strip;
-		if (!strip) return;
+		if (!strip || strip.kind === "roleName") return;
 		const chip = strip.chips[strip.index];
 		if (!chip) return;
 		switch (chip.action) {
@@ -844,9 +874,8 @@ export class ModelHubComponent implements Component {
 		}
 	}
 
-	#startAssignFromRolesView(): void {
-		const role = this.#roleIds[this.#roleIndex];
-		if (!role) return;
+	/** Switch the body into assign mode for `role`: full catalog, cleared query, current model preselected. */
+	#startAssign(role: string): void {
 		this.#assigningRole = role;
 		this.#focus = "scope";
 		this.#browser.setShowProvider(true);
@@ -863,7 +892,61 @@ export class ModelHubComponent implements Component {
 		this.#browser.setQuery("");
 		if (this.#mode === "roles") {
 			this.#setActiveEntry("roles");
+			this.#focus = "list";
 		}
+	}
+
+	// ═══════════════════════════════════════════════════════════════════════
+	// Quick-switch cycle (ctrl+p) editing
+	// ═══════════════════════════════════════════════════════════════════════
+
+	#cycleOrder(): string[] {
+		try {
+			return [...this.#settings.get("cycleOrder")];
+		} catch {
+			return [];
+		}
+	}
+
+	/** Toggle `role`'s membership in the quick-switch cycle (appended at the end). */
+	#toggleCycleMembership(role: string): void {
+		const order = this.#cycleOrder();
+		const index = order.indexOf(role);
+		if (index >= 0) {
+			order.splice(index, 1);
+		} else {
+			order.push(role);
+		}
+		this.#callbacks.onCycleOrderChange?.(order);
+		this.#refreshAfterMutation();
+	}
+
+	/** Move `role` one slot earlier/later within the cycle order. */
+	#moveCycleMembership(role: string, delta: -1 | 1): void {
+		const order = this.#cycleOrder();
+		const index = order.indexOf(role);
+		const target = index + delta;
+		if (index < 0 || target < 0 || target >= order.length) return;
+		[order[index], order[target]] = [order[target], order[index]];
+		this.#callbacks.onCycleOrderChange?.(order);
+		this.#refreshAfterMutation();
+	}
+
+	/** Open the footer name input that creates a new custom role. */
+	#openRoleNameStrip(): void {
+		this.#strip = { kind: "roleName", input: new Input() };
+	}
+
+	/** Validate and commit the new-role name: jump straight into assigning it. */
+	#submitRoleName(): void {
+		const strip = this.#strip;
+		if (strip?.kind !== "roleName") return;
+		const name = strip.input.getValue().trim();
+		if (!/^[a-zA-Z][\w-]*$/.test(name)) return;
+		if (this.#visibleRoleIds().includes(name)) return;
+		this.#strip = null;
+		this.#chipRanges = [];
+		this.#startAssign(name);
 	}
 
 	// ═══════════════════════════════════════════════════════════════════════
@@ -962,6 +1045,14 @@ export class ModelHubComponent implements Component {
 			this.#closeStrip();
 			return;
 		}
+		if (strip.kind === "roleName") {
+			if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
+				this.#submitRoleName();
+				return;
+			}
+			strip.input.handleInput(data);
+			return;
+		}
 		if (matchesKey(data, "left") || matchesKey(data, "up") || matchesKey(data, "shift+tab")) {
 			strip.index = (strip.index - 1 + strip.chips.length) % strip.chips.length;
 			return;
@@ -994,32 +1085,74 @@ export class ModelHubComponent implements Component {
 		}
 	}
 
+	/** Row count of the roles view: every visible role plus the trailing "+ New role…" row. */
+	get #rolesRowCount(): number {
+		return this.#roleIds.length + 1;
+	}
+
 	#handleRolesViewInput(data: string): void {
+		// Scope focus treats the roles view as a preview: Enter/Space dives
+		// into the rows, everything else is inert (arrows already hop).
+		if (this.#focus === "scope") {
+			if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n" || matchesKey(data, "space")) {
+				this.#focus = "list";
+			}
+			return;
+		}
+		const rowCount = Math.max(1, this.#rolesRowCount);
 		if (matchesSelectUp(data)) {
-			this.#roleIndex = (this.#roleIndex - 1 + this.#roleIds.length) % Math.max(1, this.#roleIds.length);
+			this.#roleIndex = (this.#roleIndex - 1 + rowCount) % rowCount;
 			return;
 		}
 		if (matchesSelectDown(data)) {
-			this.#roleIndex = (this.#roleIndex + 1) % Math.max(1, this.#roleIds.length);
+			this.#roleIndex = (this.#roleIndex + 1) % rowCount;
 			return;
 		}
+		const role = this.#roleIds[this.#roleIndex];
 		if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
-			this.#startAssignFromRolesView();
+			if (role) {
+				this.#startAssign(role);
+			} else {
+				// The virtual "+ New role…" row.
+				this.#openRoleNameStrip();
+			}
 			return;
 		}
 		if (matchesKey(data, "backspace") || matchesKey(data, "delete")) {
-			const role = this.#roleIds[this.#roleIndex];
 			if (role) this.#unassignRole(role);
+			return;
+		}
+		// Cycle reordering: [ / shift+↑ moves the role earlier, ] / shift+↓ later.
+		if (matchesKey(data, "shift+up")) {
+			if (role) this.#moveCycleMembership(role, -1);
+			return;
+		}
+		if (matchesKey(data, "shift+down")) {
+			if (role) this.#moveCycleMembership(role, 1);
 			return;
 		}
 		const printable = extractPrintableText(data);
 		if (printable === "x") {
-			const role = this.#roleIds[this.#roleIndex];
 			if (role) this.#unassignRole(role);
 			return;
 		}
+		if (printable === "c") {
+			if (role) this.#toggleCycleMembership(role);
+			return;
+		}
+		if (printable === "[") {
+			if (role) this.#moveCycleMembership(role, -1);
+			return;
+		}
+		if (printable === "]") {
+			if (role) this.#moveCycleMembership(role, 1);
+			return;
+		}
+		if (printable === "n") {
+			this.#openRoleNameStrip();
+			return;
+		}
 		if (printable === "t") {
-			const role = this.#roleIds[this.#roleIndex];
 			const assignment = role ? this.#roles[role] : undefined;
 			if (role && assignment) {
 				const item: ModelBrowserItem = {
@@ -1058,10 +1191,11 @@ export class ModelHubComponent implements Component {
 
 		// Footer strip chips.
 		if (event.row === this.#footerRow && this.#strip) {
-			if (event.leftClick) {
+			const strip = this.#strip;
+			if (event.leftClick && strip.kind !== "roleName") {
 				for (const range of this.#chipRanges) {
 					if (event.col >= range.start && event.col < range.end) {
-						this.#strip.index = range.index;
+						strip.index = range.index;
 						this.#activateStripChip();
 						return true;
 					}
@@ -1075,7 +1209,7 @@ export class ModelHubComponent implements Component {
 				this.#moveSidebar(event.wheel);
 			} else if (overBody) {
 				if (entry.kind === "roles" && this.#assigningRole === null) {
-					const count = Math.max(1, this.#roleIds.length);
+					const count = Math.max(1, this.#rolesRowCount);
 					this.#roleIndex = (this.#roleIndex + event.wheel + count) % count;
 				} else if (this.#isBrowserView(entry)) {
 					this.#browser.routeMouse(event, bodyLine);
@@ -1088,7 +1222,7 @@ export class ModelHubComponent implements Component {
 			this.#sidebarHover = overSidebar ? this.#sidebarEntryIndexAt(contentLine) : null;
 			if (overBody && entry.kind === "roles" && this.#assigningRole === null) {
 				const roleLine = bodyLine - this.#rolesRowStart;
-				this.#roleHover = roleLine >= 0 && roleLine < this.#roleIds.length ? roleLine : null;
+				this.#roleHover = roleLine >= 0 && roleLine < this.#rolesRowCount ? roleLine : null;
 			} else {
 				this.#roleHover = null;
 				if (overBody && this.#isBrowserView(entry)) {
@@ -1107,6 +1241,8 @@ export class ModelHubComponent implements Component {
 				const already = clicked.id === this.#activeEntryId;
 				if (clicked.kind === "roles") this.#assigningRole = null;
 				this.#setActiveEntry(clicked.id);
+				// A click on Roles is a deliberate dive into the rows.
+				if (clicked.kind === "roles") this.#focus = "list";
 				if (already && clicked.kind === "provider" && clicked.locked) {
 					this.#requestLogin(clicked);
 				}
@@ -1116,10 +1252,16 @@ export class ModelHubComponent implements Component {
 
 		if (overBody) {
 			if (entry.kind === "roles" && this.#assigningRole === null) {
+				this.#focus = "list";
 				const roleLine = bodyLine - this.#rolesRowStart;
-				if (roleLine >= 0 && roleLine < this.#roleIds.length) {
+				if (roleLine >= 0 && roleLine < this.#rolesRowCount) {
 					if (roleLine === this.#roleIndex) {
-						this.#startAssignFromRolesView();
+						const role = this.#roleIds[roleLine];
+						if (role) {
+							this.#startAssign(role);
+						} else {
+							this.#openRoleNameStrip();
+						}
 					} else {
 						this.#roleIndex = roleLine;
 					}
@@ -1177,13 +1319,19 @@ export class ModelHubComponent implements Component {
 			const active = entry.id === this.#activeEntryId;
 			const hovered = i === this.#sidebarHover;
 			const searching = this.#searchCounts !== null;
-			const matchCount =
-				searching && entry.kind === "provider" && !entry.locked
-					? (this.#searchCounts?.get(entry.providerId ?? "") ?? 0)
-					: undefined;
-			// While searching, providers without matches gray out alongside
-			// locked ones (the scope hop skips both).
-			const muted = entry.locked || matchCount === 0;
+			let matchCount: number | undefined;
+			if (searching) {
+				if (entry.kind === "provider" && !entry.locked) {
+					matchCount = this.#searchCounts?.get(entry.providerId ?? "") ?? 0;
+				} else if (entry.kind === "recent") {
+					matchCount = this.#recentSearchCount;
+				} else if (entry.kind === "all") {
+					matchCount = this.#searchTotal;
+				}
+			}
+			// While searching, entries the hop skips gray out: locked and
+			// zero-match providers, an empty Recent, and the Roles view.
+			const muted = entry.locked || matchCount === 0 || (searching && entry.kind === "roles");
 			const cursor = active
 				? this.#focus === "scope"
 					? theme.fg("accent", theme.nav.cursor)
@@ -1279,7 +1427,8 @@ export class ModelHubComponent implements Component {
 			tagWidth = Math.max(tagWidth, visibleWidth(info.tag ?? info.name ?? role));
 		}
 
-		for (let i = 0; i < this.#roleIds.length && lines.length < rows - 1; i++) {
+		const cycleOrder = this.#cycleOrder();
+		for (let i = 0; i < this.#roleIds.length && lines.length < rows - 3; i++) {
 			const role = this.#roleIds[i];
 			const info = getRoleInfo(role, this.#settings);
 			const assignment = this.#roles[role];
@@ -1311,11 +1460,16 @@ export class ModelHubComponent implements Component {
 				value = theme.fg("dim", "—");
 			}
 
+			// Quick-cycle membership badge (`⟳2` = second stop of the ctrl+p cycle).
+			const cycleIndex = cycleOrder.indexOf(role);
+			const cycleStyled = cycleIndex >= 0 ? theme.fg("accent", `${theme.icon.loop}${cycleIndex + 1}`) : "";
+
 			let line = ` ${cursor} ${dot} ${tagStyled}  ${value}`;
-			const levelWidth = visibleWidth(levelStyled);
+			const right = [levelStyled, cycleStyled].filter(part => part.length > 0).join("  ");
+			const rightWidth = visibleWidth(right);
 			const lineWidth = visibleWidth(line);
-			if (levelWidth > 0 && lineWidth + levelWidth + 2 <= width) {
-				line = `${line}${" ".repeat(width - lineWidth - levelWidth - 1)}${levelStyled}`;
+			if (rightWidth > 0 && lineWidth + rightWidth + 2 <= width) {
+				line = `${line}${" ".repeat(width - lineWidth - rightWidth - 1)}${right}`;
 			} else {
 				line = truncateToWidth(line, width);
 			}
@@ -1325,7 +1479,39 @@ export class ModelHubComponent implements Component {
 			lines.push(line);
 		}
 
-		while (lines.length < rows) lines.push("");
+		// Trailing virtual row: create a custom role.
+		if (lines.length < rows - 2) {
+			const newRoleIndex = this.#roleIds.length;
+			const selected = this.#roleIndex === newRoleIndex;
+			const hovered = this.#roleHover === newRoleIndex;
+			const cursor = selected ? theme.fg("accent", theme.nav.cursor) : " ";
+			let line = ` ${cursor} ${theme.fg(selected ? "accent" : "dim", "+ New role…")}`;
+			line = truncateToWidth(line, width);
+			if (hovered && !selected) {
+				line = theme.bg("selectedBg", line);
+			}
+			lines.push(line);
+		}
+
+		// Live preview of the quick-switch cycle, rendered with the exact
+		// segment track the ctrl+p status uses; the selected role's chip fills.
+		while (lines.length < rows - 1) lines.push("");
+		if (rows >= 2) {
+			const cycleKey = getKeybindings().getKeys("app.model.cycleForward")[0] ?? "ctrl+p";
+			if (cycleOrder.length > 0) {
+				const activeIndex = cycleOrder.indexOf(this.#roleIds[this.#roleIndex] ?? "");
+				const track = renderSegmentTrack(
+					cycleOrder.map(role => ({ label: role })),
+					activeIndex,
+				);
+				lines[rows - 1] = truncateToWidth(`  ${theme.fg("dim", `${cycleKey} cycle:`)} ${track}`, width);
+			} else {
+				lines[rows - 1] = truncateToWidth(
+					theme.fg("dim", `  ${cycleKey} cycle is empty — press c on a role to add it`),
+					width,
+				);
+			}
+		}
 		return lines;
 	}
 
@@ -1368,6 +1554,9 @@ export class ModelHubComponent implements Component {
 	#footerHint(): string {
 		const strip = this.#strip;
 		if (strip) {
+			if (strip.kind === "roleName") {
+				return "Enter create + pick model · Esc cancel";
+			}
 			return strip.kind === "role"
 				? "←/→ choose · Enter assign/clear · Esc cancel"
 				: "←/→ thinking level · Enter apply · Esc keep";
@@ -1378,7 +1567,7 @@ export class ModelHubComponent implements Component {
 		const entry = this.#activeEntry();
 		if (entry.kind === "roles") {
 			return this.#focus === "list"
-				? "↑/↓ roles · Enter pick model · x clear · t thinking · ← providers · Esc close"
+				? "↑/↓ roles · Enter pick · x clear · t thinking · c cycle · [/] reorder · n new · ← providers"
 				: "↑/↓ providers · → roles · Esc close";
 		}
 		if (entry.kind === "provider" && entry.locked) {
@@ -1398,6 +1587,13 @@ export class ModelHubComponent implements Component {
 		const strip = this.#strip;
 		if (!strip) {
 			return truncateToWidth(theme.fg("dim", this.#footerHint()), width);
+		}
+
+		if (strip.kind === "roleName") {
+			const label = theme.fg("accent", "New role name:");
+			const inputWidth = Math.max(8, Math.min(32, width - visibleWidth("New role name:") - 24));
+			const inputLine = strip.input.render(inputWidth)[0] ?? "";
+			return truncateToWidth(`${label} ${inputLine} ${theme.fg("dim", "(letters, digits, - and _)")}`, width);
 		}
 
 		const prefix =
