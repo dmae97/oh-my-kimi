@@ -130,6 +130,9 @@ export function quarantineAdvisorUnsafeOutput(
 	const messageText = `${ADVISOR_QUARANTINE_PREFIX}: ${reasons.join("; ")}`;
 	message.content = [{ type: "text", text: messageText }];
 	message.stopReason = "error";
+	message.stopDetails = undefined;
+	message.toolCallAbortMessages = undefined;
+	message.providerPayload = undefined;
 	message.errorMessage = messageText;
 	return messageText;
 }

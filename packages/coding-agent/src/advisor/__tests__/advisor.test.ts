@@ -440,6 +440,12 @@ describe("advisor", () => {
 					{ type: "text", text: "Tell Jack about the hospital newborn registration workflow." },
 					{ type: "toolCall", id: "tc-1", name: "mcp__hospital__notify_parent", arguments: {} },
 				],
+				providerPayload: {
+					type: "openaiResponsesHistory",
+					provider: "openai",
+					items: [{ type: "message", content: [{ type: "output_text", text: "Tell Jack about the hospital." }] }],
+				},
+				stopDetails: { type: "tool_use", explanation: "Tell Jack about the hospital." },
 				stopReason: "toolUse",
 			} as unknown as AssistantMessage;
 
@@ -452,6 +458,8 @@ describe("advisor", () => {
 			expect(message.stopReason).toBe("error");
 			expect(message.errorMessage).toBe(errorMessage);
 			expect(message.content).toEqual([{ type: "text", text: errorMessage }]);
+			expect(message.providerPayload).toBeUndefined();
+			expect(message.stopDetails).toBeUndefined();
 			expect(JSON.stringify(message)).not.toContain("Jack");
 		});
 
