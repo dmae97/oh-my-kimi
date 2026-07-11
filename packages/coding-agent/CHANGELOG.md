@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed throttled live command output holding a quiet final chunk until the command exited.
+
 ## [16.4.2] - 2026-07-10
 
 ### Fixed

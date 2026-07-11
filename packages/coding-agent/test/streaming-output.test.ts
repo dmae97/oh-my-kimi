@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -32,6 +32,7 @@ function byteLength(text: string): number {
 }
 
 afterEach(async () => {
+	vi.useRealTimers();
 	for (const dir of createdTempDirs.splice(0)) {
 		await removeWithRetries(dir);
 	}
@@ -315,6 +316,48 @@ describe("OutputSink", () => {
 		// First push fires immediately; dump flushes the coalesced remainder.
 		expect(chunks).toEqual(["a", "bc"]);
 		expect(dumped.output).toBe("abc");
+	});
+
+	test("throttled onChunk emits a quiet tail at the throttle boundary", () => {
+		vi.useFakeTimers();
+		const chunks: string[] = [];
+		const sink = new OutputSink({ onChunk: chunk => chunks.push(chunk), chunkThrottleMs: 20 });
+
+		sink.push("a");
+		sink.push("b");
+		expect(chunks).toEqual(["a"]);
+
+		vi.advanceTimersByTime(20);
+
+		expect(chunks).toEqual(["a", "b"]);
+	});
+
+	test("dump flushes a throttled tail once and cancels its timer", async () => {
+		vi.useFakeTimers();
+		const chunks: string[] = [];
+		const sink = new OutputSink({ onChunk: chunk => chunks.push(chunk), chunkThrottleMs: 20 });
+
+		sink.push("a");
+		sink.push("b");
+		expect((await sink.dump()).output).toBe("ab");
+		expect(chunks).toEqual(["a", "b"]);
+
+		vi.advanceTimersByTime(20);
+
+		expect(chunks).toEqual(["a", "b"]);
+	});
+
+	test("replace cancels a throttled tail and discards its pending preview", () => {
+		vi.useFakeTimers();
+		const chunks: string[] = [];
+		const sink = new OutputSink({ onChunk: chunk => chunks.push(chunk), chunkThrottleMs: 20 });
+
+		sink.push("a");
+		sink.push("superseded");
+		sink.replace("replacement");
+		vi.advanceTimersByTime(20);
+
+		expect(chunks).toEqual(["a"]);
 	});
 
 	test("caps artifact-on-disk size: head + notice + tail when stream exceeds cap", async () => {
