@@ -1,3 +1,4 @@
+/// <reference path="./legacy-pi-virtual-modules.d.ts" />
 import * as fs from "node:fs";
 import { isBuiltin } from "node:module";
 import * as path from "node:path";
@@ -1233,7 +1234,10 @@ async function collectExtensionModules(entryRealPath: string): Promise<Map<strin
  * hook with source pre-rewritten during graph collection; Bun rejects a CJS
  * `require()` whose onLoad callback returns a promise.
  */
-function installExtensionGraphHook(entryRealPath: string, modules: Map<string, string>): void {
+function installExtensionGraphHook(
+	entryRealPath: string,
+	modules: Map<string, string>,
+): { asyncModules: Map<string, string>; syncCommonJsModules: Map<string, string> } {
 	const asyncModules = new Map<string, string>();
 	const syncCommonJsModules = new Map<string, string>();
 	for (const [modulePath, source] of modules) {
@@ -1289,6 +1293,7 @@ function installExtensionGraphHook(entryRealPath: string, modules: Map<string, s
 			},
 		});
 	}
+	return { asyncModules, syncCommonJsModules };
 }
 
 /**
@@ -1296,10 +1301,10 @@ function installExtensionGraphHook(entryRealPath: string, modules: Map<string, s
  * rewrite hook. The entry graph can grow across reloads, so each call collects
  * the current graph and registers hooks for paths not covered by earlier loads.
  *
- * Returns the newly collected path→source map so the caller can drop entries
- * the import never consumed; `undefined` when no new modules were discovered.
+ * Returns a clearable handle to drop cached sources that weren't consumed
+ * during the initial load; `undefined` when no new modules were discovered.
  */
-async function ensureExtensionGraphHook(entryRealPath: string): Promise<Map<string, string> | undefined> {
+async function ensureExtensionGraphHook(entryRealPath: string): Promise<{ clear(): void } | undefined> {
 	const currentModules = await collectExtensionModules(entryRealPath);
 	let hookedModules = extensionGraphHookModules.get(entryRealPath);
 	if (!hookedModules) {
@@ -1317,11 +1322,16 @@ async function ensureExtensionGraphHook(entryRealPath: string): Promise<Map<stri
 		return undefined;
 	}
 
-	installExtensionGraphHook(entryRealPath, pendingModules);
+	const { asyncModules, syncCommonJsModules } = installExtensionGraphHook(entryRealPath, pendingModules);
 	for (const modulePath of pendingModules.keys()) {
 		hookedModules.add(modulePath);
 	}
-	return pendingModules;
+	return {
+		clear() {
+			asyncModules.clear();
+			syncCommonJsModules.clear();
+		},
+	};
 }
 
 /**

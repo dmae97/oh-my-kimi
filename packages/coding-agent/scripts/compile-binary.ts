@@ -1,5 +1,5 @@
-import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
 import { buildDocsIndexPayload } from "./generate-docs-index";
+import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
 
 /** Inputs shared by local and release coding-agent binary builds. */
 export interface CodingAgentCompileOptions {

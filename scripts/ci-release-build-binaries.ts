@@ -163,6 +163,17 @@ async function resetArtifacts(): Promise<void> {
 	await runCommand(["bun", "run", "gen:stats:reset"], repoRoot);
 	await runCommand(["bun", "run", "gen:mupdf:reset"], repoRoot);
 }
+
+async function main(): Promise<void> {
+	const requestedTargets = parseRequestedTargets();
+	const selectedTargets = requestedTargets ? targets.filter(target => requestedTargets.has(target.id)) : targets;
+
+	if (requestedTargets) {
+		const unknownTargets = [...requestedTargets].filter(
+			requestedTarget => !targets.some(target => target.id === requestedTarget),
+		);
+		if (unknownTargets.length > 0) {
+			throw new Error(`Unknown release target(s): ${unknownTargets.join(", ")}`);
 		}
 	}
 

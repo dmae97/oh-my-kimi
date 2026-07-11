@@ -34,4 +34,3 @@ describe("decodeDocsIndex (embedded docs path)", () => {
 		expect(decodeDocsIndex("")).toBeNull();
 	});
 });
-
