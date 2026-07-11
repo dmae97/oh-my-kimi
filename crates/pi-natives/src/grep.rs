@@ -282,10 +282,7 @@ struct SearchWorker {
 
 impl SearchWorker {
 	fn new(params: SearchParams) -> Self {
-		Self {
-			searcher: build_searcher_for_params(params),
-			buffer:   Vec::new(),
-		}
+		Self { searcher: build_searcher_for_params(params), buffer: Vec::new() }
 	}
 }
 
@@ -1210,7 +1207,8 @@ struct PassState {
 ///
 /// Used by the deferred oversized pass: files larger than the cap are searched
 /// only over their leading window; the remainder is dropped. The bounded owned
-/// read avoids mmap page faults when the backing file is rewritten concurrently.
+/// read avoids mmap page faults when the backing file is rewritten
+/// concurrently.
 fn read_file_prefix(path: &Path, buffer: &mut Vec<u8>) -> io::Result<ReadFile> {
 	let file = match File::open(path) {
 		Ok(file) => file,
@@ -1262,14 +1260,13 @@ fn search_one_file<M: Matcher + Sync>(
 	}
 	// A searcher error counts as searched-with-no-matches, matching the prior
 	// behavior (the file was read and attempted).
-	let search = search_file_bytes(&mut worker.searcher, matcher, &worker.buffer, file_params).unwrap_or(
-		SearchResultInternal {
+	let search = search_file_bytes(&mut worker.searcher, matcher, &worker.buffer, file_params)
+		.unwrap_or(SearchResultInternal {
 			matches:       Vec::new(),
 			match_count:   0,
 			collected:     0,
 			limit_reached: false,
-		},
-	);
+		});
 	FileOutcome::Searched(search)
 }
 
