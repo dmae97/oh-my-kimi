@@ -157,6 +157,7 @@ import {
 	type AdvisorSeverity,
 	AdvisorTranscriptRecorder,
 	advisorTranscriptFilename,
+	buildAdvisorQuarantineSourceText,
 	formatAdvisorBatchContent,
 	getOrCreateAdvisorProviderSessionId,
 	isAdvisorInterruptImmuneTurnActive,
@@ -2580,7 +2581,7 @@ export class AgentSession {
 					quarantinedAdvisorOutput = quarantineAdvisorUnsafeOutput(
 						message,
 						availableAdvisorToolNames,
-						currentAdvisorInput,
+						buildAdvisorQuarantineSourceText(currentAdvisorInput, advisorAgent.state.messages),
 					);
 				},
 				telemetry: advisorTelemetry,
