@@ -2866,6 +2866,142 @@ mod tests {
 		let _ = std::fs::remove_dir_all(&tmp);
 	}
 
+	/// The vendored `sed` builtin must stream pipeline stdin through scripts and
+	/// perform `-i` in-place edits (with backup suffix) against the shell
+	/// working directory rather than the host process cwd.
+	#[tokio::test(flavor = "multi_thread")]
+	async fn uutils_sed_substitutes_streams_and_edits_in_place() {
+		let tmp = std::env::temp_dir().join(format!("pi-sed-{}", std::process::id()));
+		let _ = std::fs::remove_dir_all(&tmp);
+		std::fs::create_dir_all(&tmp).expect("temp dir");
+		std::fs::write(tmp.join("conf.txt"), "x=1\n").expect("conf");
+		let tmp_str = tmp.to_str().expect("utf8");
+
+		let config = ShellConfig { session_env: None, snapshot_path: None, minimizer: None };
+		let mut session = create_session(&config).await.expect("create_session");
+		session.shell.set_working_dir(tmp_str).expect("cwd");
+		let mut params = session.shell.default_exec_params();
+		params.set_fd(OpenFiles::STDIN_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDOUT_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDERR_FD, null_file().expect("null"));
+		let si = SourceInfo::from("pi-natives:test");
+		let read = |name: &str| std::fs::read_to_string(tmp.join(name)).unwrap_or_default();
+
+		// Piped stdin through a quiet substitute-and-print script.
+		session
+			.shell
+			.run_string("printf 'hello\\nworld\\n' | sed -n 's/hello/HI/p' > sed.txt", &si, &params)
+			.await
+			.expect("sed pipeline");
+		assert_eq!(read("sed.txt"), "HI\n");
+		// In-place edit of a cwd-relative operand, keeping the requested backup.
+		session
+			.shell
+			.run_string("sed -i.bak 's/1/2/' conf.txt", &si, &params)
+			.await
+			.expect("sed -i");
+		assert_eq!(read("conf.txt"), "x=2\n", "in-place edit must land in the shell cwd");
+		assert_eq!(read("conf.txt.bak"), "x=1\n", "backup must keep the original");
+
+		let _ = std::fs::remove_dir_all(&tmp);
+	}
+
+	/// The `xargs` builtin spawns real child processes, but their stdout must
+	/// flow back into the shell pipeline (ctx streams, not the host fds), items
+	/// must batch per `-n`, and a failing invocation must surface GNU's 123.
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn uutils_xargs_children_feed_pipeline_and_report_failure() {
+		let tmp = std::env::temp_dir().join(format!("pi-xargs-{}", std::process::id()));
+		let _ = std::fs::remove_dir_all(&tmp);
+		std::fs::create_dir_all(&tmp).expect("temp dir");
+		let tmp_str = tmp.to_str().expect("utf8");
+
+		let config = ShellConfig { session_env: None, snapshot_path: None, minimizer: None };
+		let mut session = create_session(&config).await.expect("create_session");
+		session.shell.set_working_dir(tmp_str).expect("cwd");
+		let mut params = session.shell.default_exec_params();
+		params.set_fd(OpenFiles::STDIN_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDOUT_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDERR_FD, null_file().expect("null"));
+		let si = SourceInfo::from("pi-natives:test");
+		let read = |name: &str| std::fs::read_to_string(tmp.join(name)).unwrap_or_default();
+
+		// Default echo action: child stdout is captured into the redirect.
+		session
+			.shell
+			.run_string("printf 'a b c\\n' | xargs > xargs.txt", &si, &params)
+			.await
+			.expect("xargs default");
+		assert_eq!(read("xargs.txt"), "a b c\n");
+		// -n batching, with child output feeding a downstream builtin stage.
+		session
+			.shell
+			.run_string(
+				"printf '1\\n2\\n3\\n4\\n' | xargs -n2 echo | wc -l > batches.txt",
+				&si,
+				&params,
+			)
+			.await
+			.expect("xargs -n2");
+		assert_eq!(read("batches.txt").trim(), "2");
+		// A child exiting 1-125 makes xargs exit 123 (GNU contract).
+		session
+			.shell
+			.run_string("printf 'x\\n' | xargs false; printf %s $? > code.txt", &si, &params)
+			.await
+			.expect("xargs false");
+		assert_eq!(read("code.txt"), "123");
+
+		let _ = std::fs::remove_dir_all(&tmp);
+	}
+
+	/// The `jq` builtin must evaluate filters over piped JSON, resolve file
+	/// operands against the shell working directory, and propagate `-e`'s
+	/// null/false exit status through the shell.
+	#[tokio::test(flavor = "multi_thread")]
+	async fn uutils_jq_filters_json_and_propagates_exit_status() {
+		let tmp = std::env::temp_dir().join(format!("pi-jq-{}", std::process::id()));
+		let _ = std::fs::remove_dir_all(&tmp);
+		std::fs::create_dir_all(&tmp).expect("temp dir");
+		std::fs::write(tmp.join("in.json"), "{\"name\":\"pi\"}\n").expect("in.json");
+		let tmp_str = tmp.to_str().expect("utf8");
+
+		let config = ShellConfig { session_env: None, snapshot_path: None, minimizer: None };
+		let mut session = create_session(&config).await.expect("create_session");
+		session.shell.set_working_dir(tmp_str).expect("cwd");
+		let mut params = session.shell.default_exec_params();
+		params.set_fd(OpenFiles::STDIN_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDOUT_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDERR_FD, null_file().expect("null"));
+		let si = SourceInfo::from("pi-natives:test");
+		let read = |name: &str| std::fs::read_to_string(tmp.join(name)).unwrap_or_default();
+
+		// Compact filter over piped stdin.
+		session
+			.shell
+			.run_string("printf '{\"a\":{\"b\":2}}' | jq -c .a > jq.txt", &si, &params)
+			.await
+			.expect("jq pipeline");
+		assert_eq!(read("jq.txt"), "{\"b\":2}\n");
+		// Raw output from a cwd-relative file operand.
+		session
+			.shell
+			.run_string("jq -r .name in.json > name.txt", &si, &params)
+			.await
+			.expect("jq file");
+		assert_eq!(read("name.txt"), "pi\n");
+		// -e maps a null result to exit status 1.
+		session
+			.shell
+			.run_string("printf 'null' | jq -e . > /dev/null; printf %s $? > code.txt", &si, &params)
+			.await
+			.expect("jq -e");
+		assert_eq!(read("code.txt"), "1");
+
+		let _ = std::fs::remove_dir_all(&tmp);
+	}
+
 	/// A stdin-reading builtin blocked on an open pipe must honor abort/timeout:
 	/// the context's cancel flag makes the read return EOF so the utility
 	/// unwinds promptly and the command reports interrupted (130) — it must not
