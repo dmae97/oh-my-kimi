@@ -4,6 +4,7 @@ import { SearchProviderError } from "../../../web/search/types";
 import { clampNumResults } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
+import { BROWSER_NAVIGATION_HEADERS } from "./browser-headers";
 import { classifyProviderHttpError, withHardTimeout } from "./utils";
 
 /**
@@ -27,15 +28,6 @@ const RECENCY_TO_DDG_DF: Record<NonNullable<SearchParams["recency"]>, string> = 
 	month: "m",
 	year: "y",
 };
-
-/**
- * Browser-like UA so DDG serves the standard results page instead of the
- * mobile-only or noscript variants. DDG returns HTTP 202 plus an anomaly
- * modal when it suspects automation; we surface that as a clear error so
- * the orchestrator can fall through to the next provider with context.
- */
-const BROWSER_USER_AGENT =
-	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
 
 interface ParsedResult {
 	title: string;
@@ -137,21 +129,9 @@ async function callDuckDuckGoHtml(params: SearchParams): Promise<string> {
 		method: "POST",
 		body: form.toString(),
 		headers: {
-			Accept:
-				"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-			"Accept-Language": "en,en-US;q=0.9",
-			"Cache-Control": "max-age=0",
+			...BROWSER_NAVIGATION_HEADERS,
 			"Content-Type": "application/x-www-form-urlencoded",
-			Priority: "u=0, i",
-			"Sec-Ch-Ua": '"Google Chrome";v="149", "Chromium";v="149", "Not)A;Brand";v="24"',
-			"Sec-Ch-Ua-Mobile": "?0",
-			"Sec-Ch-Ua-Platform": '"macOS"',
-			"Sec-Fetch-Dest": "document",
-			"Sec-Fetch-Mode": "navigate",
 			"Sec-Fetch-Site": "same-origin",
-			"Sec-Fetch-User": "?1",
-			"Upgrade-Insecure-Requests": "1",
-			"User-Agent": BROWSER_USER_AGENT,
 			Referer: "https://html.duckduckgo.com/",
 		},
 		signal: withHardTimeout(params.signal),

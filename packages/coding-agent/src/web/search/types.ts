@@ -48,6 +48,11 @@ export const SEARCH_PROVIDER_OPTIONS = [
 		label: "DuckDuckGo",
 		description: "Credential-free best-effort fallback; may be bot-challenged on datacenter/shared-egress IPs",
 	},
+	{
+		value: "google",
+		label: "Google",
+		description: "Credential-free browser-backed fallback; slower and may be bot-challenged",
+	},
 ] as const;
 
 /** Supported web search providers (every option except `auto`). */
