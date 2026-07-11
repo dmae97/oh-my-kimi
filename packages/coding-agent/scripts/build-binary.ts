@@ -99,7 +99,6 @@ async function main(): Promise<void> {
 				outfile: outputPath,
 				transformersVersion,
 				target: crossBuild?.target,
-				external: ["fastembed", "onnxruntime-node"],
 				skipBuiltinCodesign: shouldAdhocSignDarwinBinary(crossBuild),
 			});
 
