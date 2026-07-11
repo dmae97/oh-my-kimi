@@ -1659,6 +1659,161 @@ function validateContext(ctx: ValidationContext, value: unknown): ContextValidat
 	};
 }
 
+// In-band `arg_key`/`arg_value` tool-call syntax that leaks into native
+// tool-call arguments when a provider parses the model's owned format
+// server-side and the model botches an `</arg_value>` closer.
+const SPILL_KEY_OPEN = "<arg_key>";
+const SPILL_KEY_CLOSE = "</arg_key>";
+const SPILL_VALUE_OPEN = "<arg_value>";
+const SPILL_VALUE_CLOSE = "</arg_value>";
+const SPILL_TOOL_CLOSE = "</tool_call>";
+/** Plausible spilled argument names; anything else is ordinary content. */
+const SPILL_KEY_PATTERN = /^[\w.$-]{1,128}$/;
+
+interface SpillSplit {
+	head: string;
+	pairs: [string, string][];
+}
+
+function skipSpillWhitespace(text: string, from: number): number {
+	let at = from;
+	while (at < text.length && " \n\t\r".includes(text[at]!)) at++;
+	return at;
+}
+
+/** Whether a well-formed `<arg_key>NAME</arg_key>…<arg_value>` pair starts at `at`. */
+function isSpillPairStart(text: string, at: number): boolean {
+	if (!text.startsWith(SPILL_KEY_OPEN, at)) return false;
+	const keyStart = at + SPILL_KEY_OPEN.length;
+	const keyEnd = text.indexOf(SPILL_KEY_CLOSE, keyStart);
+	if (keyEnd === -1 || !SPILL_KEY_PATTERN.test(text.slice(keyStart, keyEnd))) return false;
+	const valueAt = skipSpillWhitespace(text, keyEnd + SPILL_KEY_CLOSE.length);
+	return text.startsWith(SPILL_VALUE_OPEN, valueAt);
+}
+
+/**
+ * Finds where a spilled `<arg_value>` body ends: the legit closer, a
+ * mistyped `</arg_key>` closer (validated by its follow-up), the start of the
+ * next pair when the closer is missing entirely, or end of input (the
+ * provider's parser consumed the terminating closer).
+ */
+function findSpillValueEnd(text: string, from: number): { end: number; next: number } {
+	const close = text.indexOf(SPILL_VALUE_CLOSE, from);
+	let wrong = text.indexOf(SPILL_KEY_CLOSE, from);
+	let open = text.indexOf(SPILL_KEY_OPEN, from);
+	while (true) {
+		const candidates = [close, wrong, open].filter(index => index !== -1);
+		if (candidates.length === 0) return { end: text.length, next: text.length };
+		const at = Math.min(...candidates);
+		if (at === close) return { end: at, next: at + SPILL_VALUE_CLOSE.length };
+		if (at === wrong) {
+			const follow = skipSpillWhitespace(text, at + SPILL_KEY_CLOSE.length);
+			if (
+				follow >= text.length ||
+				text.startsWith(SPILL_KEY_OPEN, follow) ||
+				text.startsWith(SPILL_TOOL_CLOSE, follow)
+			) {
+				return { end: at, next: at + SPILL_KEY_CLOSE.length };
+			}
+			wrong = text.indexOf(SPILL_KEY_CLOSE, at + 1);
+			continue;
+		}
+		if (isSpillPairStart(text, at)) {
+			let end = at;
+			while (end > from && " \n\t\r".includes(text[end - 1]!)) end--;
+			return { end, next: at };
+		}
+		open = text.indexOf(SPILL_KEY_OPEN, at + 1);
+	}
+}
+
+/**
+ * Strictly parses a spill tail as `<arg_key>…</arg_key><arg_value>…` pairs,
+ * tolerating a trailing `</tool_call>`. Returns null on any shape that is not
+ * pure pair syntax — the caller then treats the text as ordinary content.
+ */
+function parseSpilledPairs(text: string): [string, string][] | null {
+	const pairs: [string, string][] = [];
+	let at = skipSpillWhitespace(text, 0);
+	while (at < text.length) {
+		if (text.startsWith(SPILL_TOOL_CLOSE, at)) {
+			at = skipSpillWhitespace(text, at + SPILL_TOOL_CLOSE.length);
+			return at >= text.length ? pairs : null;
+		}
+		if (!text.startsWith(SPILL_KEY_OPEN, at)) return null;
+		const keyStart = at + SPILL_KEY_OPEN.length;
+		const keyEnd = text.indexOf(SPILL_KEY_CLOSE, keyStart);
+		if (keyEnd === -1) return null;
+		const key = text.slice(keyStart, keyEnd);
+		if (!SPILL_KEY_PATTERN.test(key)) return null;
+		at = skipSpillWhitespace(text, keyEnd + SPILL_KEY_CLOSE.length);
+		if (!text.startsWith(SPILL_VALUE_OPEN, at)) return null;
+		at += SPILL_VALUE_OPEN.length;
+		const { end, next } = findSpillValueEnd(text, at);
+		pairs.push([key, text.slice(at, end)]);
+		at = skipSpillWhitespace(text, next);
+	}
+	return pairs;
+}
+
+/**
+ * Splits a contaminated string value at the earliest spill boundary: a
+ * mistyped `</arg_key>` closer or an inlined next pair. Returns null when no
+ * boundary yields a cleanly parseable tail.
+ */
+function splitSpilledValue(text: string): SpillSplit | null {
+	let wrong = text.indexOf(SPILL_KEY_CLOSE);
+	let open = text.indexOf(SPILL_KEY_OPEN);
+	while (wrong !== -1 || open !== -1) {
+		if (wrong !== -1 && (open === -1 || wrong < open)) {
+			const pairs = parseSpilledPairs(text.slice(wrong + SPILL_KEY_CLOSE.length));
+			if (pairs) return { head: text.slice(0, wrong), pairs };
+			wrong = text.indexOf(SPILL_KEY_CLOSE, wrong + 1);
+			continue;
+		}
+		if (isSpillPairStart(text, open)) {
+			const pairs = parseSpilledPairs(text.slice(open));
+			if (pairs && pairs.length > 0) return { head: text.slice(0, open).trimEnd(), pairs };
+		}
+		open = text.indexOf(SPILL_KEY_OPEN, open + 1);
+	}
+	return null;
+}
+
+/**
+ * Repairs native tool-call arguments contaminated by in-band
+ * `<arg_key>`/`<arg_value>` syntax. Some providers parse owned tool-call
+ * formats server-side; when the model mistypes or omits an `</arg_value>`
+ * closer, every following pair is swallowed into one string argument, e.g.
+ * `op: "done</arg_key>\n<arg_key>task</arg_key>\n<arg_value>…"`. Truncates
+ * each contaminated top-level string at its spill boundary and restores the
+ * swallowed pairs as sibling arguments (never overwriting existing keys).
+ *
+ * Only invoked after validation and every coercion pass fail, so valid calls
+ * whose string content legitimately contains tag-like text are never touched.
+ */
+function healInbandArgSpill(value: unknown): { value: unknown; changed: boolean } {
+	if (!isPlainRecord(value)) return { value, changed: false };
+	let changed = false;
+	const out: Record<string, unknown> = { ...value };
+	const recovered: [string, string][] = [];
+	for (const key in value) {
+		const entry = value[key];
+		if (typeof entry !== "string") continue;
+		if (!entry.includes(SPILL_KEY_OPEN) && !entry.includes(SPILL_KEY_CLOSE)) continue;
+		const split = splitSpilledValue(entry);
+		if (!split) continue;
+		out[key] = split.head;
+		recovered.push(...split.pairs);
+		changed = true;
+	}
+	if (!changed) return { value, changed: false };
+	for (const [key, entry] of recovered) {
+		if (!(key in out)) out[key] = entry;
+	}
+	return { value: out, changed: true };
+}
+
 const MAX_COERCION_PASSES = 5;
 
 /**
@@ -1786,7 +1941,67 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 	let result = validateContext(ctx, normalizedArgs);
 	if (result.success) return result.value as ToolCall["arguments"];
 
+	const coercionOutcome = runCoercionPasses(ctx, normalizedArgs, result);
+	normalizedArgs = coercionOutcome.args;
+	changed ||= coercionOutcome.changed;
+	result = coercionOutcome.result;
+	if (result.success) return result.value as ToolCall["arguments"];
+
+	// Last resort: some providers parse in-band tool-call syntax server-side,
+	// and a mistyped/missing `</arg_value>` closer inlines the remaining pairs
+	// into one string argument. Gated on validation failure so valid calls
+	// with tag-like string content are never rewritten.
+	const spillHeal = healInbandArgSpill(normalizedArgs);
+	if (spillHeal.changed) {
+		normalizedArgs = spillHeal.value;
+		changed = true;
+		result = validateContext(ctx, normalizedArgs);
+		if (!result.success) {
+			const healedOutcome = runCoercionPasses(ctx, normalizedArgs, result);
+			normalizedArgs = healedOutcome.args;
+			result = healedOutcome.result;
+		}
+		if (result.success) return result.value as ToolCall["arguments"];
+	}
+
+	// Format validation errors nicely. The header phrase is asserted by
+	// existing tests; the detailed body is informational.
+	const errors = result.messages.join("\n") || "Unknown validation error";
+
+	// Truncate long per-field strings: the full payload (potentially hundreds
+	// of KB for write/edit-class calls) would otherwise round-trip back to the
+	// model inside the tool error.
+	const receivedArgs = changed
+		? {
+				original: truncateArgsForError(originalArgs),
+				normalized: truncateArgsForError(normalizedArgs),
+			}
+		: truncateArgsForError(originalArgs);
+
+	const errorMessage = `Validation failed for tool "${
+		toolCall.name
+	}":\n${errors}\n\nReceived arguments:\n${JSON.stringify(receivedArgs, null, 2)}`;
+
+	throw new AIError.ValidationError(errorMessage);
+}
+
+/**
+ * Runs up to {@link MAX_COERCION_PASSES} issue-driven coercion rounds,
+ * re-applying the schema normalizations after each round because a coercion
+ * may unwrap JSON-string containers and expose fields the pre-validation
+ * passes could not reach.
+ */
+function runCoercionPasses(
+	ctx: ValidationContext,
+	args: unknown,
+	initial: ContextValidationResult,
+): { args: unknown; result: ContextValidationResult; changed: boolean } {
+	const { json } = ctx;
+	let normalizedArgs = args;
+	let result = initial;
+	let changed = false;
 	for (let pass = 0; pass < MAX_COERCION_PASSES; pass += 1) {
+		if (result.success) break;
 		const coercion = coerceArgsFromIssues(normalizedArgs, result.flatIssues);
 		if (!coercion.changed) break;
 
@@ -1840,26 +2055,6 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 		}
 
 		result = validateContext(ctx, normalizedArgs);
-		if (result.success) return result.value as ToolCall["arguments"];
 	}
-
-	// Format validation errors nicely. The header phrase is asserted by
-	// existing tests; the detailed body is informational.
-	const errors = result.messages.join("\n") || "Unknown validation error";
-
-	// Truncate long per-field strings: the full payload (potentially hundreds
-	// of KB for write/edit-class calls) would otherwise round-trip back to the
-	// model inside the tool error.
-	const receivedArgs = changed
-		? {
-				original: truncateArgsForError(originalArgs),
-				normalized: truncateArgsForError(normalizedArgs),
-			}
-		: truncateArgsForError(originalArgs);
-
-	const errorMessage = `Validation failed for tool "${
-		toolCall.name
-	}":\n${errors}\n\nReceived arguments:\n${JSON.stringify(receivedArgs, null, 2)}`;
-
-	throw new AIError.ValidationError(errorMessage);
+	return { args: normalizedArgs, result, changed };
 }

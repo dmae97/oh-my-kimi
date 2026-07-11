@@ -1888,3 +1888,79 @@ describe("Tool argument coercion", () => {
 		});
 	});
 });
+
+describe("In-band arg spill healing", () => {
+	const todoTool: Tool = {
+		name: "todo",
+		description: "",
+		parameters: z.object({
+			op: z.enum(["append", "done", "drop", "init", "rm", "start", "view"]),
+			task: z.string().optional(),
+			phase: z.string().optional(),
+		}),
+	};
+
+	function run(tool: Tool, args: Record<string, unknown>): Record<string, unknown> {
+		return validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-spill",
+			name: tool.name,
+			arguments: args,
+		}) as Record<string, unknown>;
+	}
+
+	it("heals the wrong-closer spill delivered via native tool calling", () => {
+		// Exact payload observed in the wild: the model closed the value with
+		// </arg_key>, so the provider parser swallowed the next pair into `op`.
+		const result = run(todoTool, {
+			op: "done</arg_key>\n<arg_key>task</arg_key>\n<arg_value>Unify history column property",
+		});
+		expect(result).toEqual({ op: "done", task: "Unify history column property" });
+	});
+
+	it("heals a missing closer before the next inlined pair", () => {
+		const result = run(todoTool, {
+			op: "done\n<arg_key>task</arg_key>\n<arg_value>Unify history column property</arg_value>",
+		});
+		expect(result).toEqual({ op: "done", task: "Unify history column property" });
+	});
+
+	it("strips a stray wrong closer with a trailing </tool_call>", () => {
+		const result = run(todoTool, { op: "view</arg_key>\n</tool_call>" });
+		expect(result).toEqual({ op: "view" });
+	});
+
+	it("coerces recovered pair values against the schema", () => {
+		const tool: Tool = {
+			name: "spill-coerce",
+			description: "",
+			parameters: z.object({
+				op: z.enum(["read"]),
+				count: z.number().optional(),
+			}),
+		};
+		const result = run(tool, {
+			op: "read</arg_key>\n<arg_key>count</arg_key>\n<arg_value>3",
+		});
+		expect(result).toEqual({ op: "read", count: 3 });
+	});
+
+	it("never overwrites an existing argument with a spilled pair", () => {
+		const result = run(todoTool, {
+			op: "done</arg_key>\n<arg_key>task</arg_key>\n<arg_value>spilled",
+			task: "original",
+		});
+		expect(result).toEqual({ op: "done", task: "original" });
+	});
+
+	it("leaves valid calls with tag-like string content untouched", () => {
+		const tool: Tool = {
+			name: "spill-content",
+			description: "",
+			parameters: z.object({ content: z.string() }),
+		};
+		const content = "docs: emit </arg_key>\n<arg_key>path</arg_key>\n<arg_value>src/a.ts</arg_value> pairs";
+		const result = run(tool, { content });
+		expect(result).toEqual({ content });
+	});
+});
