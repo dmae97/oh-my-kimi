@@ -637,7 +637,15 @@ async function getChangelogForDisplay(parsed: Args): Promise<string | undefined>
 const SESSION_ID_ARG_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function normalizeContinueSessionArgs(parsed: Args): void {
-	if (!parsed.continue || parsed.resume || parsed.fork || parsed.messages.length !== 1) return;
+	if (
+		!parsed.continue ||
+		parsed.resume ||
+		parsed.fork ||
+		parsed.messages.length !== 1 ||
+		parsed.unrecognizedFlags.length !== 0
+	) {
+		return;
+	}
 	const message = parsed.messages[0]?.trim();
 	if (!message || !SESSION_ID_ARG_RE.test(message)) return;
 	parsed.resume = message;
