@@ -19,11 +19,16 @@ use std::{
 	path::{Path, PathBuf},
 };
 
-use clap::Parser;
-use globset::{Glob, GlobSet, GlobSetBuilder};
-use grep_matcher::Matcher;
+use clap::{
+	ArgMatches, CommandFactory, FromArgMatches, Parser, ValueEnum, parser::ValueSource,
+};
+use globset::{Glob, GlobMatcher};
+use grep_matcher::{LineTerminator, Matcher};
+use grep_pcre2::{RegexMatcher as PcreMatcher, RegexMatcherBuilder as PcreMatcherBuilder};
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
-use grep_searcher::{Searcher, SearcherBuilder, Sink, SinkContext, SinkFinish, SinkMatch};
+use grep_searcher::{
+	BinaryDetection, Searcher, SearcherBuilder, Sink, SinkContext, SinkFinish, SinkMatch,
+};
 pub use rg::run as run_rg;
 
 #[derive(Parser, Debug)]
@@ -32,41 +37,85 @@ pub use rg::run as run_rg;
 	version = concat!("grep (pi-uu-grep) ", env!("CARGO_PKG_VERSION")),
 	about = "Search for PATTERN in each FILE or standard input.",
 	disable_help_flag = true,
-	disable_version_flag = true
+	disable_version_flag = true,
+	args_override_self = true
 )]
 struct Cli {
 	/// Use PATTERN for matching (may be repeated; all patterns are OR-ed).
 	#[arg(short = 'e', long = "regexp", value_name = "PATTERN")]
 	patterns: Vec<String>,
 
-	/// Treat PATTERN as a strict extended regular expression: a pattern that
-	/// fails to parse is reported as an error rather than matched literally.
+	/// Read patterns from FILE, one per line.
+	#[arg(short = 'f', long = "file", value_name = "FILE")]
+	pattern_files: Vec<OsString>,
+
+	/// Interpret PATTERN as a strict extended regular expression.
 	#[arg(short = 'E', long = "extended-regexp")]
 	extended: bool,
 
-	/// PATTERN is a set of fixed strings, matched literally.
+	/// Interpret PATTERN using the default basic-compatible mode.
+	#[arg(short = 'G', long = "basic-regexp")]
+	basic: bool,
+
+	/// Interpret PATTERN as a fixed string.
 	#[arg(short = 'F', long = "fixed-strings")]
 	fixed: bool,
 
+	/// Interpret PATTERN as a Perl-compatible regular expression.
+	#[arg(short = 'P', long = "perl-regexp")]
+	perl: bool,
+
 	/// Ignore case distinctions in patterns and data.
-	#[arg(short = 'i', long = "ignore-case")]
+	#[arg(short = 'i', short_alias = 'y', long = "ignore-case")]
 	ignore_case: bool,
+
+	/// Restore case-sensitive matching after an earlier -i.
+	#[arg(long = "no-ignore-case")]
+	no_ignore_case: bool,
 
 	/// Select non-matching lines.
 	#[arg(short = 'v', long = "invert-match")]
 	invert: bool,
 
-	/// Prefix each line of output with its line number.
-	#[arg(short = 'n', long = "line-number")]
-	line_number: bool,
+	/// Match only whole words.
+	#[arg(short = 'w', long = "word-regexp")]
+	word: bool,
 
-	/// Print only a count of matching lines per FILE.
+	/// Match only whole lines.
+	#[arg(short = 'x', long = "line-regexp")]
+	line_regexp: bool,
+
+	/// Print only a count of selected lines per FILE.
 	#[arg(short = 'c', long = "count")]
 	count: bool,
 
-	/// Print only the names of FILEs with at least one match.
+	/// Print only the names of FILEs with at least one selected line.
 	#[arg(short = 'l', long = "files-with-matches")]
 	files_with_matches: bool,
+
+	/// Print only the names of FILEs with no selected lines.
+	#[arg(short = 'L', long = "files-without-match")]
+	files_without_match: bool,
+
+	/// Stop after NUM selected lines in each input.
+	#[arg(short = 'm', long = "max-count", value_name = "NUM", allow_hyphen_values = true)]
+	max_count: Option<i64>,
+
+	/// Print only the matched non-empty parts of selected lines.
+	#[arg(short = 'o', long = "only-matching")]
+	only_matching: bool,
+
+	/// Quiet; suppress normal output and stop after the first selected line.
+	#[arg(short = 'q', long = "quiet", visible_alias = "silent")]
+	quiet: bool,
+
+	/// Suppress error messages about nonexistent or unreadable files.
+	#[arg(short = 's', long = "no-messages")]
+	no_messages: bool,
+
+	/// Prefix output with the zero-based byte offset.
+	#[arg(short = 'b', long = "byte-offset")]
+	byte_offset: bool,
 
 	/// Always print the file name with output lines.
 	#[arg(short = 'H', long = "with-filename")]
@@ -76,74 +125,136 @@ struct Cli {
 	#[arg(short = 'h', long = "no-filename")]
 	no_filename: bool,
 
-	/// Recursively search each directory listed.
-	#[arg(short = 'r', long = "recursive")]
-	recursive: bool,
+	/// Use LABEL as the displayed name for standard input.
+	#[arg(long = "label", value_name = "LABEL")]
+	label: Option<OsString>,
 
-	/// Like -r but follow all symbolic links.
-	#[arg(short = 'R', long = "dereference-recursive")]
-	dereference_recursive: bool,
+	/// Prefix each output line with its one-based line number.
+	#[arg(short = 'n', long = "line-number")]
+	line_number: bool,
 
-	/// During recursion, search only files whose name matches GLOB.
-	#[arg(long = "include", value_name = "GLOB")]
-	include: Vec<String>,
+	/// Align line content on a tab stop after output prefixes.
+	#[arg(short = 'T', long = "initial-tab")]
+	initial_tab: bool,
 
-	/// Match only whole words.
-	#[arg(short = 'w', long = "word-regexp")]
-	word: bool,
+	/// Write NUL instead of the separator following a file name.
+	#[arg(short = 'Z', long = "null")]
+	null_paths: bool,
 
-	/// Match only whole lines (anchor each pattern to line boundaries).
-	#[arg(short = 'x', long = "line-regexp")]
-	line_regexp: bool,
-
-	/// Print only the matched (non-empty) parts of a matching line.
-	#[arg(short = 'o', long = "only-matching")]
-	only_matching: bool,
-
-	/// Print NUM lines of trailing context after matching lines.
+	/// Print NUM lines of trailing context after selected lines.
 	#[arg(short = 'A', long = "after-context", value_name = "NUM")]
 	after_context: Option<usize>,
 
-	/// Print NUM lines of leading context before matching lines.
+	/// Print NUM lines of leading context before selected lines.
 	#[arg(short = 'B', long = "before-context", value_name = "NUM")]
 	before_context: Option<usize>,
 
-	/// Print NUM lines of output context (both leading and trailing).
+	/// Print NUM lines of leading and trailing context.
 	#[arg(short = 'C', long = "context", value_name = "NUM")]
 	context: Option<usize>,
 
-	/// Suppress error messages about nonexistent or unreadable files.
-	#[arg(short = 's', long = "no-messages")]
-	no_messages: bool,
+	/// Print STRING between non-adjacent groups of context lines.
+	#[arg(long = "group-separator", value_name = "STRING")]
+	group_separator: Option<String>,
 
-	/// Quiet; suppress all normal output. Exit with zero status on the first
-	/// match (even if an error was detected later).
-	#[arg(short = 'q', long = "quiet", visible_alias = "silent")]
-	quiet: bool,
+	/// Do not print a separator between context groups.
+	#[arg(long = "no-group-separator")]
+	no_group_separator: bool,
+
+	/// Process binary input as text.
+	#[arg(short = 'a', long = "text")]
+	text: bool,
+
+	/// Treat binary input as having no selected lines.
+	#[arg(short = 'I')]
+	binary_without_match: bool,
+
+	/// Choose how binary input is searched.
+	#[arg(long = "binary-files", value_name = "TYPE")]
+	binary_files: Option<BinaryFiles>,
+
+	/// Choose how device, FIFO, and socket operands are handled.
+	#[arg(short = 'D', long = "devices", value_name = "ACTION")]
+	devices: Option<DeviceAction>,
+
+	/// Choose how directory operands are handled.
+	#[arg(short = 'd', long = "directories", value_name = "ACTION")]
+	directories: Option<DirectoryAction>,
+
+	/// Search files matching GLOB.
+	#[arg(long = "include", value_name = "GLOB")]
+	include: Vec<String>,
+
+	/// Skip files matching GLOB.
+	#[arg(long = "exclude", value_name = "GLOB")]
+	exclude: Vec<String>,
+
+	/// Read file exclusion globs from FILE.
+	#[arg(long = "exclude-from", value_name = "FILE")]
+	exclude_from: Vec<OsString>,
+
+	/// Skip directories matching GLOB during recursive searches.
+	#[arg(long = "exclude-dir", value_name = "GLOB")]
+	exclude_dir: Vec<String>,
+
+	/// Search directories matching GLOB during recursive searches.
+	#[arg(long = "include-dir", value_name = "GLOB")]
+	include_dir: Vec<String>,
+
+	/// Recursively search each directory operand.
+	#[arg(short = 'r', long = "recursive")]
+	recursive: bool,
+
+	/// Recursively search and follow every symbolic link.
+	#[arg(short = 'R', long = "dereference-recursive")]
+	dereference_recursive: bool,
+
+	/// Follow symbolic links named as command-line operands.
+	#[arg(short = 'O')]
+	follow_command_line: bool,
+
+	/// Do not follow symbolic links during recursive searches.
+	#[arg(short = 'p')]
+	no_follow: bool,
+
+	/// Follow every symbolic link during recursive searches.
+	#[arg(short = 'S')]
+	follow_all: bool,
+
+	/// Flush standard output after each output record.
+	#[arg(long = "line-buffered")]
+	line_buffered: bool,
+
+	/// Use binary I/O where the platform distinguishes it.
+	#[arg(short = 'U', long = "binary")]
+	binary_io: bool,
+
+	/// Treat NUL rather than newline as the input and output record delimiter.
+	#[arg(short = 'z', long = "null-data")]
+	null_data: bool,
+
+	/// Request memory-mapped input where supported.
+	#[allow(dead_code, reason = "accepted BSD grep compatibility option")]
+	#[arg(long = "mmap")]
+	mmap: bool,
+
+	/// Accepted compatibility option with no effect.
+	#[allow(dead_code, reason = "accepted GNU grep compatibility option")]
+	#[arg(short = 'u')]
+	unix_byte_offsets: bool,
 
 	/// Print a help message.
-	#[allow(dead_code, reason = "clap consumes help before the parsed options are inspected")]
+	#[allow(dead_code, reason = "clap consumes help before options are inspected")]
 	#[arg(long = "help", action = clap::ArgAction::Help)]
 	help: Option<bool>,
 
 	/// Print version information.
-	///
-	/// GNU grep ships a `--version`, and shell startup scripts probe it.
-	/// Routed through clap so output lands on the in-process stdout via the
-	/// same path as `--help`.
-	#[allow(dead_code, reason = "clap consumes version before the parsed options are inspected")]
+	#[allow(dead_code, reason = "clap consumes version before options are inspected")]
 	#[arg(short = 'V', long = "version", action = clap::ArgAction::Version)]
 	version: Option<bool>,
 
-	/// Surface color in matches: accepted for GNU-grep compatibility and
-	/// silently ignored. The builtin writes to in-process file descriptors
-	/// (often a pipe consumed by another tool), so injecting ANSI escapes
-	/// would corrupt downstream output. The common `alias grep='grep
-	/// --color=auto'` from distro bashrc files passes through unchanged.
-	#[allow(
-		dead_code,
-		reason = "GNU grep compatibility flag is accepted but intentionally ignored"
-	)]
+	/// Accept color configuration without injecting ANSI into redirected output.
+	#[allow(dead_code, reason = "color is intentionally disabled for builtin output")]
 	#[arg(
 		long = "color",
 		alias = "colour",
@@ -154,21 +265,329 @@ struct Cli {
 	)]
 	color: Option<String>,
 
-	/// PATTERN followed by FILEs (PATTERN is omitted when -e is given).
+	/// PATTERN followed by FILEs (PATTERN is omitted with -e or -f).
 	#[arg(value_name = "ARGS")]
 	args: Vec<OsString>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum BinaryFiles {
+	Binary,
+	Text,
+	WithoutMatch,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum DeviceAction {
+	Read,
+	Skip,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum DirectoryAction {
+	Read,
+	Skip,
+	Recurse,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MatchMode {
+	Default,
+	Extended,
+	Fixed,
+	Perl,
+}
+
 /// Resolved, flag-free options shared with the search [`Sink`].
 struct Options {
-	line_number:        bool,
-	count:              bool,
-	files_with_matches: bool,
-	only_matching:      bool,
-	before:             usize,
-	after:              usize,
-	no_messages:        bool,
-	quiet:              bool,
+	line_number:         bool,
+	byte_offset:         bool,
+	count:               bool,
+	files_with_matches:  bool,
+	files_without_match: bool,
+	only_matching:       bool,
+	before:              usize,
+	after:               usize,
+	no_messages:         bool,
+	quiet:               bool,
+	prefix_filename:     bool,
+	initial_tab:         bool,
+	null_paths:          bool,
+	record_terminator:   u8,
+	group_separator:     Option<Vec<u8>>,
+	line_buffered:       bool,
+	binary_files:        BinaryFiles,
+}
+
+enum CompiledMatcher {
+	Rust(RegexMatcher),
+	Pcre(PcreMatcher),
+}
+
+struct PathRule {
+	include: bool,
+	matcher: GlobMatcher,
+}
+
+struct RuleSpec {
+	index:   usize,
+	include: bool,
+	pattern: String,
+}
+
+#[derive(Default)]
+struct PathRules {
+	files: Vec<PathRule>,
+	dirs:  Vec<PathRule>,
+}
+
+impl PathRules {
+	fn allows_file(&self, path: &Path) -> bool {
+		Self::allows(&self.files, path)
+	}
+
+	fn allows_dir(&self, path: &Path) -> bool {
+		Self::allows(&self.dirs, path)
+	}
+
+	fn allows(rules: &[PathRule], path: &Path) -> bool {
+		let mut allowed = rules.first().is_none_or(|first| !first.include);
+		for rule in rules {
+			if path_suffix_matches(&rule.matcher, path) {
+				allowed = rule.include;
+			}
+		}
+		allowed
+	}
+}
+
+fn path_suffix_matches(matcher: &GlobMatcher, path: &Path) -> bool {
+	let mut components = path.components();
+	loop {
+		let suffix = components.as_path();
+		if suffix.as_os_str().is_empty() {
+			return false;
+		}
+		if matcher.is_match(suffix) {
+			return true;
+		}
+		if components.next().is_none() {
+			return false;
+		}
+	}
+}
+
+fn last_index(matches: &ArgMatches, id: &str) -> Option<usize> {
+	if matches.value_source(id) != Some(ValueSource::CommandLine) {
+		return None;
+	}
+	matches.indices_of(id).and_then(|indices| indices.max())
+}
+
+fn choose_latest<T>(selected: &mut (usize, T), index: Option<usize>, value: T) {
+	if let Some(index) = index
+		&& index >= selected.0
+	{
+		*selected = (index, value);
+	}
+}
+
+fn resolve_match_mode(matches: &ArgMatches) -> MatchMode {
+	let mut selected = (0, MatchMode::Default);
+	choose_latest(&mut selected, last_index(matches, "basic"), MatchMode::Default);
+	choose_latest(&mut selected, last_index(matches, "extended"), MatchMode::Extended);
+	choose_latest(&mut selected, last_index(matches, "fixed"), MatchMode::Fixed);
+	choose_latest(&mut selected, last_index(matches, "perl"), MatchMode::Perl);
+	selected.1
+}
+
+fn resolve_ignore_case(matches: &ArgMatches) -> bool {
+	let mut selected = (0, false);
+	choose_latest(&mut selected, last_index(matches, "ignore_case"), true);
+	choose_latest(&mut selected, last_index(matches, "no_ignore_case"), false);
+	selected.1
+}
+
+fn resolve_filename_prefix(matches: &ArgMatches) -> Option<bool> {
+	let mut selected = (0, None);
+	choose_latest(&mut selected, last_index(matches, "with_filename"), Some(true));
+	choose_latest(&mut selected, last_index(matches, "no_filename"), Some(false));
+	selected.1
+}
+
+fn resolve_file_list_modes(matches: &ArgMatches) -> (bool, bool) {
+	let mut selected = (0, None);
+	choose_latest(&mut selected, last_index(matches, "files_with_matches"), Some(true));
+	choose_latest(&mut selected, last_index(matches, "files_without_match"), Some(false));
+	match selected.1 {
+		Some(true) => (true, false),
+		Some(false) => (false, true),
+		None => (false, false),
+	}
+}
+
+fn resolve_context(cli: &Cli, matches: &ArgMatches) -> (usize, usize) {
+	let mut events = Vec::with_capacity(3);
+	if let (Some(index), Some(value)) = (last_index(matches, "after_context"), cli.after_context) {
+		events.push((index, false, value));
+	}
+	if let (Some(index), Some(value)) = (last_index(matches, "before_context"), cli.before_context) {
+		events.push((index, true, value));
+	}
+	if let (Some(index), Some(value)) = (last_index(matches, "context"), cli.context) {
+		events.push((index, false, value));
+		events.push((index, true, value));
+	}
+	events.sort_unstable_by_key(|event| event.0);
+
+	let mut before = 0;
+	let mut after = 0;
+	for (_, is_before, value) in events {
+		if is_before {
+			before = value;
+		} else {
+			after = value;
+		}
+	}
+	(before, after)
+}
+
+fn resolve_group_separator(cli: &Cli, matches: &ArgMatches) -> Option<Vec<u8>> {
+	let mut selected = (0, Some(b"--".to_vec()));
+	if let Some(separator) = &cli.group_separator {
+		choose_latest(
+			&mut selected,
+			last_index(matches, "group_separator"),
+			Some(separator.as_bytes().to_vec()),
+		);
+	}
+	choose_latest(&mut selected, last_index(matches, "no_group_separator"), None);
+	selected.1
+}
+
+fn resolve_directory_action(cli: &Cli, matches: &ArgMatches) -> DirectoryAction {
+	let mut selected = (0, DirectoryAction::Read);
+	choose_latest(&mut selected, last_index(matches, "recursive"), DirectoryAction::Recurse);
+	choose_latest(
+		&mut selected,
+		last_index(matches, "dereference_recursive"),
+		DirectoryAction::Recurse,
+	);
+	if let Some(action) = cli.directories {
+		choose_latest(&mut selected, last_index(matches, "directories"), action);
+	}
+	selected.1
+}
+
+fn resolve_follow_links(cli: &Cli, matches: &ArgMatches) -> pi_walker::FollowLinks {
+	let mut selected = (0, pi_walker::FollowLinks::Roots);
+	choose_latest(&mut selected, last_index(matches, "recursive"), pi_walker::FollowLinks::Roots);
+	choose_latest(
+		&mut selected,
+		last_index(matches, "dereference_recursive"),
+		pi_walker::FollowLinks::Always,
+	);
+	if cli.directories == Some(DirectoryAction::Recurse) {
+		choose_latest(
+			&mut selected,
+			last_index(matches, "directories"),
+			pi_walker::FollowLinks::Roots,
+		);
+	}
+	choose_latest(
+		&mut selected,
+		last_index(matches, "follow_command_line"),
+		pi_walker::FollowLinks::Roots,
+	);
+	choose_latest(&mut selected, last_index(matches, "no_follow"), pi_walker::FollowLinks::Never);
+	choose_latest(&mut selected, last_index(matches, "follow_all"), pi_walker::FollowLinks::Always);
+	selected.1
+}
+
+fn resolve_binary_files(cli: &Cli, matches: &ArgMatches) -> BinaryFiles {
+	// Preserve the builtin's historical byte-transparent default. Explicit
+	// GNU/BSD binary controls opt into detection.
+	let mut selected = (0, BinaryFiles::Text);
+	choose_latest(&mut selected, last_index(matches, "text"), BinaryFiles::Text);
+	choose_latest(
+		&mut selected,
+		last_index(matches, "binary_without_match"),
+		BinaryFiles::WithoutMatch,
+	);
+	if let Some(mode) = cli.binary_files {
+		choose_latest(&mut selected, last_index(matches, "binary_files"), mode);
+	}
+	choose_latest(&mut selected, last_index(matches, "binary_io"), BinaryFiles::Binary);
+	selected.1
+}
+
+fn resolve_max_count(cli: &Cli) -> Result<Option<u64>, String> {
+	match cli.max_count {
+		None | Some(-1) => Ok(None),
+		Some(value) if value >= 0 => u64::try_from(value)
+			.map(Some)
+			.map_err(|_| format!("invalid max count: {value}")),
+		Some(value) => Err(format!("invalid max count: {value}")),
+	}
+}
+
+fn option_takes_next_value(arg: &str) -> bool {
+	matches!(
+		arg,
+		"-e"
+			| "-f" | "-m"
+			| "-A" | "-B"
+			| "-C" | "-D"
+			| "-d" | "--regexp"
+			| "--file"
+			| "--max-count"
+			| "--after-context"
+			| "--before-context"
+			| "--context"
+			| "--label"
+			| "--group-separator"
+			| "--binary-files"
+			| "--devices"
+			| "--directories"
+			| "--include"
+			| "--exclude"
+			| "--exclude-from"
+			| "--exclude-dir"
+			| "--include-dir"
+	)
+}
+
+fn normalize_context_args(argv: Vec<OsString>) -> Vec<OsString> {
+	let mut normalized = Vec::with_capacity(argv.len());
+	let mut literal = false;
+	let mut value_pending = false;
+
+	for (index, arg) in argv.into_iter().enumerate() {
+		if index == 0 || literal || value_pending {
+			value_pending = false;
+			normalized.push(arg);
+			continue;
+		}
+		let Some(text) = arg.to_str() else {
+			normalized.push(arg);
+			continue;
+		};
+		if text == "--" {
+			literal = true;
+			normalized.push(arg);
+			continue;
+		}
+		if let Some(digits) = text.strip_prefix('-')
+			&& !digits.is_empty()
+			&& digits.bytes().all(|byte| byte.is_ascii_digit())
+		{
+			normalized.push(OsString::from(format!("--context={digits}")));
+			continue;
+		}
+		value_pending = option_takes_next_value(text);
+		normalized.push(arg);
+	}
+	normalized
 }
 
 /// Escape regular-expression meta-characters so a pattern is matched literally,
@@ -186,140 +605,246 @@ fn escape_literal(pat: &str) -> String {
 	out
 }
 
-/// Build the regex matcher from the collected patterns and flags.
-///
-/// In the default mode, any pattern that is not valid extended-regex syntax is
-/// matched literally instead of rejected — so `grep "fail)"` finds the text
-/// `fail)` the way GNU basic grep does, rather than erroring on the unbalanced
-/// `)`. The fallback is per-pattern: in a multi-`-e` search, valid alternatives
-/// keep their regex meaning and only the offending pattern is escaped. `-E`
-/// opts into strict extended-regex syntax (no fallback); `-F` escapes every
-/// pattern up front.
-fn build_matcher(patterns: &[String], cli: &Cli) -> Result<RegexMatcher, grep_regex::Error> {
+/// Compile all patterns using the last-selected matcher mode.
+fn build_matcher(
+	patterns: &[String],
+	cli: &Cli,
+	mode: MatchMode,
+	ignore_case: bool,
+) -> Result<CompiledMatcher, String> {
+	if mode == MatchMode::Perl {
+		let mut builder = PcreMatcherBuilder::new();
+		builder
+			.caseless(ignore_case)
+			.word(cli.word && !cli.line_regexp)
+			.whole_line(cli.line_regexp)
+			.utf(true)
+			.ucp(true)
+			.jit_if_available(true);
+		return builder
+			.build_many(patterns)
+			.map(CompiledMatcher::Pcre)
+			.map_err(|error| error.to_string());
+	}
+
 	let mut builder = RegexMatcherBuilder::new();
-	builder.case_insensitive(cli.ignore_case);
-	if cli.word {
-		builder.word(true);
+	builder
+		.case_insensitive(ignore_case)
+		.word(cli.word && !cli.line_regexp)
+		.whole_line(cli.line_regexp);
+	if cli.null_data {
+		builder.line_terminator(Some(b'\0'));
 	}
-	if cli.line_regexp {
-		builder.whole_line(true);
+	if mode == MatchMode::Fixed {
+		let escaped: Vec<String> = patterns
+			.iter()
+			.map(|pattern| escape_literal(pattern))
+			.collect();
+		return builder
+			.build_many(&escaped)
+			.map(CompiledMatcher::Rust)
+			.map_err(|error| error.to_string());
 	}
-	if cli.fixed {
-		let escaped: Vec<String> = patterns.iter().map(|p| escape_literal(p)).collect();
-		return builder.build_many(&escaped);
-	}
+
 	match builder.build_many(patterns) {
-		Ok(matcher) => Ok(matcher),
-		Err(err) if !cli.extended => {
-			// Escape only the patterns that fail to compile so valid regex
-			// alternatives keep their meaning.
+		Ok(matcher) => Ok(CompiledMatcher::Rust(matcher)),
+		Err(error) if mode == MatchMode::Default => {
+			// The historical builtin accepts ERE syntax by default but falls
+			// back to literals per malformed alternative.
 			let sanitized: Vec<String> = patterns
 				.iter()
-				.map(|p| {
-					if builder.build(p).is_ok() {
-						p.clone()
+				.map(|pattern| {
+					if builder.build(pattern).is_ok() {
+						pattern.clone()
 					} else {
-						escape_literal(p)
+						escape_literal(pattern)
 					}
 				})
 				.collect();
-			builder.build_many(&sanitized).map_err(|_| err)
+			builder
+				.build_many(&sanitized)
+				.map(CompiledMatcher::Rust)
+				.map_err(|_| error.to_string())
 		},
-		Err(err) => Err(err),
+		Err(error) => Err(error.to_string()),
 	}
 }
 
-/// A `grep_searcher` sink that renders matches/context to `out` in GNU grep's
-/// output format, while tracking match count and whether anything matched.
-struct GrepSink<'a, W: Write> {
+/// A search sink that renders GNU-compatible records and tracks selection.
+struct GrepSink<'a, M: Matcher, W: Write> {
 	out:         &'a mut W,
-	matcher:     &'a RegexMatcher,
-	/// Filename prefix bytes, or `None` to suppress the prefix.
-	display:     Option<&'a [u8]>,
+	matcher:     &'a M,
+	display:     &'a [u8],
 	opts:        &'a Options,
 	match_count: u64,
 	any_match:   bool,
+	binary:      bool,
 }
 
-impl<W: Write> GrepSink<'_, W> {
-	/// Write the `file:` / `linenum:` (or `-` for context) prefix.
-	fn write_prefix(&mut self, line_number: Option<u64>, sep: u8) -> io::Result<()> {
-		if let Some(name) = self.display {
-			self.out.write_all(name)?;
-			self.out.write_all(&[sep])?;
+impl<M: Matcher, W: Write> GrepSink<'_, M, W> {
+	fn flush_record(&mut self) -> io::Result<()> {
+		if self.opts.line_buffered {
+			self.out.flush()?;
+		}
+		Ok(())
+	}
+
+	fn write_prefix(
+		&mut self,
+		line_number: Option<u64>,
+		byte_offset: u64,
+		separator: u8,
+	) -> io::Result<()> {
+		let mut has_prefix = false;
+		if self.opts.prefix_filename {
+			self.out.write_all(self.display)?;
+			if self.opts.null_paths {
+				self.out.write_all(b"\0")?;
+			} else {
+				self.out.write_all(&[separator])?;
+			}
+			has_prefix = true;
 		}
 		if self.opts.line_number
-			&& let Some(n) = line_number
+			&& let Some(number) = line_number
 		{
-			write!(self.out, "{n}")?;
-			self.out.write_all(&[sep])?;
+			write!(self.out, "{number}")?;
+			self.out.write_all(&[separator])?;
+			has_prefix = true;
+		}
+		if self.opts.byte_offset {
+			write!(self.out, "{byte_offset}")?;
+			self.out.write_all(&[separator])?;
+			has_prefix = true;
+		}
+		if self.opts.initial_tab && has_prefix {
+			self.out.write_all(b"\t")?;
 		}
 		Ok(())
 	}
 
-	/// Write a line, ensuring it is newline-terminated.
-	fn write_line(&mut self, line: &[u8]) -> io::Result<()> {
-		self.out.write_all(line)?;
-		if !line.ends_with(b"\n") {
-			self.out.write_all(b"\n")?;
+	fn write_record(&mut self, record: &[u8]) -> io::Result<()> {
+		self.out.write_all(record)?;
+		if record.last().copied() != Some(self.opts.record_terminator) {
+			self.out.write_all(&[self.opts.record_terminator])?;
 		}
-		Ok(())
+		self.flush_record()
 	}
 
-	/// `-o`: emit each non-overlapping match span on its own line.
-	fn print_only_matching(&mut self, line: &[u8], line_number: Option<u64>) -> io::Result<()> {
+	fn write_path_record(&mut self) -> io::Result<()> {
+		self.out.write_all(self.display)?;
+		let terminator = if self.opts.null_paths {
+			b'\0'
+		} else {
+			self.opts.record_terminator
+		};
+		self.out.write_all(&[terminator])?;
+		self.flush_record()
+	}
+
+	fn print_only_matching(
+		&mut self,
+		line: &[u8],
+		line_number: Option<u64>,
+		line_offset: u64,
+	) -> io::Result<()> {
 		let mut at = 0usize;
 		while at <= line.len() {
-			match self.matcher.find_at(line, at) {
-				Ok(Some(m)) => {
-					self.write_prefix(line_number, b':')?;
-					self.out.write_all(&line[m.start()..m.end()])?;
-					self.out.write_all(b"\n")?;
-					at = if m.end() > at { m.end() } else { at + 1 };
-				},
-				_ => break,
+			let Some(found) = self
+				.matcher
+				.find_at(line, at)
+				.map_err(|error| io::Error::other(error.to_string()))?
+			else {
+				break;
+			};
+			if found.is_empty() {
+				at = found.end() + 1;
+				continue;
 			}
+			let match_offset = line_offset.saturating_add(
+				u64::try_from(found.start()).map_err(|error| io::Error::other(error.to_string()))?,
+			);
+			self.write_prefix(line_number, match_offset, b':')?;
+			self.write_record(&line[found.start()..found.end()])?;
+			at = found.end();
 		}
 		Ok(())
+	}
+
+	fn normal_output_is_suppressed(&self) -> bool {
+		self.opts.count
+			|| self.opts.files_with_matches
+			|| self.opts.files_without_match
+			|| self.opts.quiet
+	}
+
+	fn binary_summary(&self) -> bool {
+		self.binary
+			&& self.opts.binary_files == BinaryFiles::Binary
+			&& !self.normal_output_is_suppressed()
 	}
 }
 
-impl<W: Write> Sink for GrepSink<'_, W> {
+impl<M: Matcher, W: Write> Sink for GrepSink<'_, M, W> {
 	type Error = io::Error;
 
 	fn matched(&mut self, _searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, io::Error> {
-		self.any_match = true;
-		// -l / -q: a single match is enough; stop scanning this source.
-		if self.opts.files_with_matches || self.opts.quiet {
+		if self.binary && self.opts.binary_files == BinaryFiles::WithoutMatch {
 			return Ok(false);
 		}
+		self.any_match = true;
 		self.match_count += 1;
+		if self.opts.quiet
+			|| self.opts.files_with_matches
+			|| self.opts.files_without_match
+			|| self.binary_summary()
+		{
+			return Ok(false);
+		}
 		if self.opts.count {
 			return Ok(true);
 		}
-		let line = mat.bytes();
-		let line_number = mat.line_number();
 		if self.opts.only_matching {
-			self.print_only_matching(line, line_number)?;
+			self.print_only_matching(mat.bytes(), mat.line_number(), mat.absolute_byte_offset())?;
 		} else {
-			self.write_prefix(line_number, b':')?;
-			self.write_line(line)?;
+			self.write_prefix(mat.line_number(), mat.absolute_byte_offset(), b':')?;
+			self.write_record(mat.bytes())?;
 		}
 		Ok(true)
 	}
 
 	fn context(&mut self, _searcher: &Searcher, ctx: &SinkContext<'_>) -> Result<bool, io::Error> {
-		if self.opts.count || self.opts.files_with_matches || self.opts.only_matching {
+		if self.normal_output_is_suppressed() || self.opts.only_matching || self.binary_summary() {
 			return Ok(true);
 		}
-		self.write_prefix(ctx.line_number(), b'-')?;
-		self.write_line(ctx.bytes())?;
+		self.write_prefix(ctx.line_number(), ctx.absolute_byte_offset(), b'-')?;
+		self.write_record(ctx.bytes())?;
 		Ok(true)
 	}
 
 	fn context_break(&mut self, _searcher: &Searcher) -> Result<bool, io::Error> {
-		if !(self.opts.count || self.opts.files_with_matches || self.opts.only_matching) {
-			self.out.write_all(b"--\n")?;
+		if !self.normal_output_is_suppressed()
+			&& !self.opts.only_matching
+			&& !self.binary_summary()
+			&& let Some(separator) = &self.opts.group_separator
+		{
+			self.out.write_all(separator)?;
+			self.out.write_all(&[self.opts.record_terminator])?;
+			self.flush_record()?;
+		}
+		Ok(true)
+	}
+
+	fn binary_data(
+		&mut self,
+		_searcher: &Searcher,
+		_binary_byte_offset: u64,
+	) -> Result<bool, io::Error> {
+		self.binary = true;
+		if self.opts.binary_files == BinaryFiles::WithoutMatch {
+			self.any_match = false;
+			self.match_count = 0;
+			return Ok(false);
 		}
 		Ok(true)
 	}
@@ -328,34 +853,49 @@ impl<W: Write> Sink for GrepSink<'_, W> {
 		if self.opts.quiet {
 			return Ok(());
 		}
+		if self.binary_summary() && self.any_match {
+			self.out.write_all(b"Binary file ")?;
+			self.out.write_all(self.display)?;
+			self.out.write_all(b" matches")?;
+			self.out.write_all(&[self.opts.record_terminator])?;
+			return self.flush_record();
+		}
 		if self.opts.files_with_matches {
-			if self.any_match
-				&& let Some(name) = self.display
-			{
-				self.out.write_all(name)?;
-				self.out.write_all(b"\n")?;
+			if self.any_match {
+				self.write_path_record()?;
+			}
+		} else if self.opts.files_without_match {
+			if !self.any_match {
+				self.write_path_record()?;
 			}
 		} else if self.opts.count {
-			if let Some(name) = self.display {
-				self.out.write_all(name)?;
-				self.out.write_all(b":")?;
+			if self.opts.prefix_filename {
+				self.out.write_all(self.display)?;
+				if self.opts.null_paths {
+					self.out.write_all(b"\0")?;
+				} else {
+					self.out.write_all(b":")?;
+				}
 			}
-			writeln!(self.out, "{}", self.match_count)?;
+			write!(self.out, "{}", self.match_count)?;
+			self.out.write_all(&[self.opts.record_terminator])?;
+			self.flush_record()?;
 		}
 		Ok(())
 	}
 }
 
-/// Search a single reader, returning whether anything matched.
-fn process_reader<R: Read, W: Write>(
-	matcher: &RegexMatcher,
+/// Search one input and return whether it contained a selected record.
+fn process_reader<M: Matcher, R: Read, W: Write>(
+	matcher: &M,
 	searcher: &mut Searcher,
 	reader: R,
-	display: Option<&[u8]>,
+	display: &[u8],
 	opts: &Options,
 	out: &mut W,
 ) -> io::Result<bool> {
-	let mut sink = GrepSink { out, matcher, display, opts, match_count: 0, any_match: false };
+	let mut sink =
+		GrepSink { out, matcher, display, opts, match_count: 0, any_match: false, binary: false };
 	searcher.search_reader(matcher, reader, &mut sink)?;
 	Ok(sink.any_match)
 }
@@ -370,37 +910,28 @@ fn display_path_for_operand(operand: &OsStr, resolved: &Path, path: &Path) -> Pa
 }
 
 #[allow(clippy::too_many_arguments)]
-fn search_file_path<W: Write>(
+fn search_file_path<M: Matcher, W: Write>(
 	operand: &OsStr,
 	resolved: &Path,
 	path: &Path,
-	matcher: &RegexMatcher,
+	matcher: &M,
 	searcher: &mut Searcher,
 	opts: &Options,
-	include_set: Option<&GlobSet>,
-	show_names: bool,
 	out: &mut W,
 	had_error: &mut bool,
 ) -> bool {
-	if let Some(set) = include_set {
-		let name = path.file_name().unwrap_or_default();
-		if !set.is_match(name) {
-			return false;
-		}
-	}
 	let display_path = display_path_for_operand(operand, resolved, path);
 	match File::open(path) {
 		Ok(file) => {
-			let bytes = display_path.as_os_str().as_encoded_bytes().to_vec();
-			let name: Option<&[u8]> = if show_names { Some(&bytes) } else { None };
-			match process_reader(matcher, searcher, file, name, opts, out) {
+			let display = display_path.as_os_str().as_encoded_bytes();
+			match process_reader(matcher, searcher, file, display, opts, out) {
 				Ok(matched) => matched,
-				Err(err) => {
+				Err(error) => {
 					*had_error = true;
 					if !opts.no_messages {
 						let _ = writeln!(
 							pi_uutils_ctx::stderr(),
-							"grep: {}: {err}",
+							"grep: {}: {error}",
 							display_path.to_string_lossy()
 						);
 					}
@@ -408,24 +939,27 @@ fn search_file_path<W: Write>(
 				},
 			}
 		},
-		Err(err) => {
+		Err(error) => {
 			*had_error = true;
 			if !opts.no_messages {
-				let _ =
-					writeln!(pi_uutils_ctx::stderr(), "grep: {}: {err}", display_path.to_string_lossy());
+				let _ = writeln!(
+					pi_uutils_ctx::stderr(),
+					"grep: {}: {error}",
+					display_path.to_string_lossy()
+				);
 			}
 			false
 		},
 	}
 }
 
-fn grep_walk_request(root: &Path, follow_links: bool) -> pi_walker::WalkRequest {
+fn grep_walk_request(root: &Path, follow_links: pi_walker::FollowLinks) -> pi_walker::WalkRequest {
 	pi_walker::WalkRequest::new(root)
 		.hidden(true)
 		.gitignore(false)
 		.skip_git(false)
 		.skip_node_modules(false)
-		.follow_links(pi_walker::FollowLinks::from(follow_links))
+		.follow_links(follow_links)
 		.detail(pi_walker::WalkDetail::Minimal)
 		.order(pi_walker::WalkOrder::Unordered)
 		.emit_root(true)
@@ -434,21 +968,19 @@ fn grep_walk_request(root: &Path, follow_links: bool) -> pi_walker::WalkRequest 
 		.directory_errors(pi_walker::DirectoryErrorMode::Visit)
 		.same_file_system(false)
 		.cache(false)
-		.filter(pi_walker::WalkFilter::files_only())
+		.filter(pi_walker::WalkFilter::all())
 }
 
-/// Recursively search a directory operand. `operand` is the path as typed (used
-/// for display), `resolved` is the cwd-resolved root walked on the filesystem.
+/// Recursively search a directory operand while pruning excluded directories.
 #[allow(clippy::too_many_arguments)]
-fn search_dir<W: Write>(
+fn search_dir<M: Matcher, W: Write>(
 	operand: &OsStr,
 	resolved: &Path,
-	matcher: &RegexMatcher,
+	matcher: &M,
 	searcher: &mut Searcher,
 	opts: &Options,
-	include_set: Option<&GlobSet>,
-	show_names: bool,
-	follow_links: bool,
+	rules: &PathRules,
+	follow_links: pi_walker::FollowLinks,
 	out: &mut W,
 	had_error: &mut bool,
 ) -> bool {
@@ -468,6 +1000,14 @@ fn search_dir<W: Write>(
 				return Ok(pi_walker::WalkDecision::Stop);
 			}
 			if entry.file_type == pi_walker::FileType::Dir {
+				if entry.depth > 0 && !rules.allows_dir(Path::new(entry.relative_path)) {
+					return Ok(pi_walker::WalkDecision::SkipDescend);
+				}
+				return Ok(pi_walker::WalkDecision::Include);
+			}
+			if entry.file_type != pi_walker::FileType::File
+				|| !rules.allows_file(Path::new(entry.relative_path))
+			{
 				return Ok(pi_walker::WalkDecision::Skip);
 			}
 			let mut entry_had_error = had_error_state.get();
@@ -478,8 +1018,6 @@ fn search_dir<W: Write>(
 				matcher,
 				searcher,
 				opts,
-				include_set,
-				show_names,
 				out,
 				&mut entry_had_error,
 			);
@@ -509,16 +1047,14 @@ fn search_dir<W: Write>(
 	match walk {
 		Ok(pi_walker::WalkStatus::Complete | pi_walker::WalkStatus::Stopped) => any,
 		Err(pi_walker::WalkError::Interrupted(_)) if pi_uutils_ctx::is_cancelled() => {
-			// Harness cancellation (shell abort/timeout). The shell wrapper
-			// overrides the exit code, so stay silent and let the walk unwind
-			// without injecting a spurious diagnostic on the command's stderr.
+			// The shell wrapper owns the user-visible cancellation status.
 			*had_error = true;
 			any
 		},
-		Err(pi_walker::WalkError::Interrupted(err)) => {
+		Err(pi_walker::WalkError::Interrupted(error)) => {
 			*had_error = true;
 			if !opts.no_messages {
-				let _ = writeln!(pi_uutils_ctx::stderr(), "grep: {err}");
+				let _ = writeln!(pi_uutils_ctx::stderr(), "grep: {error}");
 			}
 			any
 		},
@@ -537,130 +1073,147 @@ fn search_dir<W: Write>(
 	}
 }
 
-/// In-process builtin entry point. The host installs a [`pi_uutils_ctx`] scope
-/// (stdio + working directory) on a dedicated blocking thread, then calls this.
-///
-/// Returns a GNU-grep exit code: 0 if any line matched, 1 if none matched,
-/// 2 if any error occurred (errors take precedence over the match result).
-pub fn run(argv: Vec<OsString>) -> i32 {
-	let cli = match Cli::try_parse_from(argv) {
-		Ok(c) => c,
-		Err(err) => {
-			let rendered = err.to_string();
-			if err.use_stderr() {
-				let _ = write!(pi_uutils_ctx::stderr(), "{rendered}");
-				return 2;
-			}
-			let _ = write!(pi_uutils_ctx::stdout(), "{rendered}");
-			return 0;
-		},
-	};
-
-	// Resolve the classic grep ambiguity: with -e present, every positional is a
-	// FILE; otherwise the first positional is the PATTERN.
-	let mut patterns = cli.patterns.clone();
-	let mut files: Vec<OsString> = Vec::new();
-	if patterns.is_empty() {
-		let mut rest = cli.args.iter();
-		match rest.next() {
-			Some(first) => {
-				patterns.push(first.to_string_lossy().into_owned());
-				files.extend(rest.cloned());
-			},
-			None => {
-				let _ = writeln!(
-					pi_uutils_ctx::stderr(),
-					"grep: no pattern given\nUsage: grep [OPTION]... PATTERN [FILE]..."
-				);
-				return 2;
-			},
-		}
+fn read_auxiliary_file(path: &OsStr) -> Result<Vec<u8>, String> {
+	let mut bytes = Vec::new();
+	let result = if path == OsStr::new("-") {
+		pi_uutils_ctx::stdin().read_to_end(&mut bytes)
 	} else {
-		files = cli.args.clone();
+		File::open(pi_uutils_ctx::resolve(path)).and_then(|mut file| file.read_to_end(&mut bytes))
+	};
+	result
+		.map(|_| bytes)
+		.map_err(|error| format!("{}: {error}", path.to_string_lossy()))
+}
+
+fn pattern_file_lines(bytes: &[u8]) -> Vec<String> {
+	if bytes.is_empty() {
+		return Vec::new();
+	}
+	String::from_utf8_lossy(bytes)
+		.split_terminator('\n')
+		.map(str::to_owned)
+		.collect()
+}
+
+fn resolve_patterns(cli: &Cli) -> Result<(Vec<String>, Vec<OsString>), String> {
+	let has_explicit_patterns = !cli.patterns.is_empty() || !cli.pattern_files.is_empty();
+	let mut patterns = Vec::new();
+	let mut files = Vec::new();
+
+	if has_explicit_patterns {
+		for pattern in &cli.patterns {
+			patterns.extend(pattern.split('\n').map(str::to_owned));
+		}
+		for path in &cli.pattern_files {
+			patterns.extend(pattern_file_lines(&read_auxiliary_file(path)?));
+		}
+		files.clone_from(&cli.args);
+		return Ok((patterns, files));
 	}
 
-	let recursive = cli.recursive || cli.dereference_recursive;
-
-	let matcher = match build_matcher(&patterns, &cli) {
-		Ok(m) => m,
-		Err(e) => {
-			let _ = writeln!(pi_uutils_ctx::stderr(), "grep: {e}");
-			return 2;
-		},
+	let mut args = cli.args.iter();
+	let Some(pattern) = args.next() else {
+		return Err("no pattern given\nUsage: grep [OPTION]... PATTERN [FILE]...".to_owned());
 	};
+	patterns.extend(pattern.to_string_lossy().split('\n').map(str::to_owned));
+	files.extend(args.cloned());
+	Ok((patterns, files))
+}
 
-	// --include globs apply during recursion only (GNU behaviour).
-	let include_set = if cli.include.is_empty() {
-		None
-	} else {
-		let mut gb = GlobSetBuilder::new();
-		for g in &cli.include {
-			match Glob::new(g) {
-				Ok(glob) => {
-					gb.add(glob);
-				},
-				Err(e) => {
-					let _ = writeln!(pi_uutils_ctx::stderr(), "grep: {e}");
-					return 2;
-				},
+fn collect_rule_specs(
+	cli: &Cli,
+	matches: &ArgMatches,
+) -> Result<(Vec<RuleSpec>, Vec<RuleSpec>), String> {
+	let mut files = Vec::new();
+	if let Some(indices) = matches.indices_of("include") {
+		for (index, pattern) in indices.zip(&cli.include) {
+			files.push(RuleSpec { index, include: true, pattern: pattern.clone() });
+		}
+	}
+	if let Some(indices) = matches.indices_of("exclude") {
+		for (index, pattern) in indices.zip(&cli.exclude) {
+			files.push(RuleSpec { index, include: false, pattern: pattern.clone() });
+		}
+	}
+	if let Some(indices) = matches.indices_of("exclude_from") {
+		for (index, path) in indices.zip(&cli.exclude_from) {
+			for pattern in pattern_file_lines(&read_auxiliary_file(path)?) {
+				files.push(RuleSpec { index, include: false, pattern });
 			}
 		}
-		match gb.build() {
-			Ok(set) => Some(set),
-			Err(e) => {
-				let _ = writeln!(pi_uutils_ctx::stderr(), "grep: {e}");
-				return 2;
-			},
-		}
-	};
-
-	if files.is_empty() {
-		files.push(OsString::from(if recursive { "." } else { "-" }));
 	}
 
-	// -l always prints names; otherwise show names when forced (-H), recursive,
-	// or searching more than one operand. -h overrides everything.
-	let show_names = if cli.no_filename {
-		false
-	} else if cli.with_filename || cli.files_with_matches {
-		true
+	let mut dirs = Vec::new();
+	if let Some(indices) = matches.indices_of("include_dir") {
+		for (index, pattern) in indices.zip(&cli.include_dir) {
+			dirs.push(RuleSpec { index, include: true, pattern: pattern.clone() });
+		}
+	}
+	if let Some(indices) = matches.indices_of("exclude_dir") {
+		for (index, pattern) in indices.zip(&cli.exclude_dir) {
+			dirs.push(RuleSpec { index, include: false, pattern: pattern.clone() });
+		}
+	}
+	Ok((files, dirs))
+}
+
+fn compile_rules(mut specs: Vec<RuleSpec>) -> Result<Vec<PathRule>, String> {
+	specs.sort_by_key(|spec| spec.index);
+	specs
+		.into_iter()
+		.map(|spec| {
+			Glob::new(&spec.pattern)
+				.map(|glob| PathRule { include: spec.include, matcher: glob.compile_matcher() })
+				.map_err(|error| format!("{}: {error}", spec.pattern))
+		})
+		.collect()
+}
+
+fn build_path_rules(cli: &Cli, matches: &ArgMatches) -> Result<PathRules, String> {
+	let (files, dirs) = collect_rule_specs(cli, matches)?;
+	Ok(PathRules { files: compile_rules(files)?, dirs: compile_rules(dirs)? })
+}
+
+fn build_searcher(cli: &Cli, opts: &Options, max_count: Option<u64>) -> Searcher {
+	let binary_detection = if cli.null_data || opts.binary_files == BinaryFiles::Text {
+		BinaryDetection::none()
+	} else if opts.binary_files == BinaryFiles::WithoutMatch {
+		BinaryDetection::quit(b'\0')
 	} else {
-		recursive || files.len() > 1
+		BinaryDetection::convert(b'\0')
 	};
-
-	let (before, after) = if cli.count || cli.files_with_matches || cli.quiet {
-		(0, 0)
-	} else {
-		let c = cli.context.unwrap_or(0);
-		(cli.before_context.unwrap_or(c), cli.after_context.unwrap_or(c))
-	};
-
-	let opts = Options {
-		line_number: cli.line_number,
-		count: cli.count,
-		files_with_matches: cli.files_with_matches,
-		only_matching: cli.only_matching,
-		before,
-		after,
-		no_messages: cli.no_messages,
-		quiet: cli.quiet,
-	};
-
-	let mut searcher = SearcherBuilder::new()
+	let mut builder = SearcherBuilder::new();
+	builder
 		.line_number(opts.line_number)
 		.before_context(opts.before)
 		.after_context(opts.after)
 		.invert_match(cli.invert)
-		.build();
+		.binary_detection(binary_detection)
+		.max_matches(max_count);
+	if cli.null_data {
+		builder.line_terminator(LineTerminator::byte(b'\0'));
+	}
+	builder.build()
+}
 
+#[allow(clippy::too_many_arguments)]
+fn execute_search<M: Matcher>(
+	cli: &Cli,
+	matcher: &M,
+	files: &[OsString],
+	directory_action: DirectoryAction,
+	follow_links: pi_walker::FollowLinks,
+	rules: &PathRules,
+	opts: &Options,
+	max_count: Option<u64>,
+) -> i32 {
+	let mut searcher = build_searcher(cli, opts, max_count);
 	let mut out = BufWriter::new(pi_uutils_ctx::stdout());
 	let mut any_match = false;
 	let mut had_error = false;
-
 	let mut processed_operand = false;
-	for f in &files {
-		// -q: once something matched, exit immediately; the status is settled
-		// below. Checked at the top so the stdin `continue` path stops too.
+
+	for operand in files {
 		if opts.quiet && any_match {
 			break;
 		}
@@ -669,26 +1222,26 @@ pub fn run(argv: Vec<OsString>) -> i32 {
 			break;
 		}
 		processed_operand = true;
-		// stdin
-		if f.as_os_str() == OsStr::new("-") {
-			let name: Option<&[u8]> = if show_names {
-				Some(b"(standard input)")
-			} else {
-				None
-			};
+
+		if operand == OsStr::new("-") {
+			let display = cli
+				.label
+				.as_deref()
+				.unwrap_or_else(|| OsStr::new("(standard input)"))
+				.as_encoded_bytes();
 			match process_reader(
-				&matcher,
+				matcher,
 				&mut searcher,
 				pi_uutils_ctx::stdin(),
-				name,
-				&opts,
+				display,
+				opts,
 				&mut out,
 			) {
-				Ok(m) => any_match |= m,
-				Err(e) => {
+				Ok(matched) => any_match |= matched,
+				Err(error) => {
 					had_error = true;
 					if !opts.no_messages {
-						let _ = writeln!(pi_uutils_ctx::stderr(), "grep: (standard input): {e}");
+						let _ = writeln!(pi_uutils_ctx::stderr(), "grep: (standard input): {error}");
 					}
 				},
 			}
@@ -699,60 +1252,60 @@ pub fn run(argv: Vec<OsString>) -> i32 {
 			continue;
 		}
 
-		let resolved = pi_uutils_ctx::resolve(f);
+		let resolved = pi_uutils_ctx::resolve(operand);
 		match std::fs::metadata(&resolved) {
-			Ok(meta) if meta.is_dir() => {
-				if recursive {
-					if search_dir(
-						f.as_os_str(),
-						&resolved,
-						&matcher,
-						&mut searcher,
-						&opts,
-						include_set.as_ref(),
-						show_names,
-						cli.dereference_recursive,
-						&mut out,
-						&mut had_error,
-					) {
+			Ok(metadata) if metadata.is_dir() => match directory_action {
+				DirectoryAction::Recurse => {
+					if rules.allows_dir(Path::new(operand))
+						&& search_dir(
+							operand.as_os_str(),
+							&resolved,
+							matcher,
+							&mut searcher,
+							opts,
+							rules,
+							follow_links,
+							&mut out,
+							&mut had_error,
+						) {
 						any_match = true;
 					}
-				} else {
-					// GNU prints this regardless of -s and exits 2.
+				},
+				DirectoryAction::Skip => {},
+				DirectoryAction::Read => {
 					had_error = true;
 					let _ = writeln!(
 						pi_uutils_ctx::stderr(),
 						"grep: {}: Is a directory",
-						f.to_string_lossy()
+						operand.to_string_lossy()
 					);
+				},
+			},
+			Ok(metadata) => {
+				if cli.devices == Some(DeviceAction::Skip) && !metadata.is_file() {
+					continue;
+				}
+				if !rules.allows_file(Path::new(operand)) {
+					continue;
+				}
+				if search_file_path(
+					operand.as_os_str(),
+					&resolved,
+					&resolved,
+					matcher,
+					&mut searcher,
+					opts,
+					&mut out,
+					&mut had_error,
+				) {
+					any_match = true;
 				}
 			},
-			Ok(_) => match File::open(&resolved) {
-				Ok(file) => {
-					let bytes = f.as_os_str().as_encoded_bytes();
-					let name: Option<&[u8]> = if show_names { Some(bytes) } else { None };
-					match process_reader(&matcher, &mut searcher, file, name, &opts, &mut out) {
-						Ok(m) => any_match |= m,
-						Err(e) => {
-							had_error = true;
-							if !opts.no_messages {
-								let _ =
-									writeln!(pi_uutils_ctx::stderr(), "grep: {}: {e}", f.to_string_lossy());
-							}
-						},
-					}
-				},
-				Err(e) => {
-					had_error = true;
-					if !opts.no_messages {
-						let _ = writeln!(pi_uutils_ctx::stderr(), "grep: {}: {e}", f.to_string_lossy());
-					}
-				},
-			},
-			Err(e) => {
+			Err(error) => {
 				had_error = true;
 				if !opts.no_messages {
-					let _ = writeln!(pi_uutils_ctx::stderr(), "grep: {}: {e}", f.to_string_lossy());
+					let _ =
+						writeln!(pi_uutils_ctx::stderr(), "grep: {}: {error}", operand.to_string_lossy());
 				}
 			},
 		}
@@ -763,9 +1316,7 @@ pub fn run(argv: Vec<OsString>) -> i32 {
 	}
 
 	let _ = out.flush();
-
 	if opts.quiet {
-		// -q reports success on any match even when an error was detected.
 		if any_match {
 			0
 		} else if had_error {
@@ -779,6 +1330,127 @@ pub fn run(argv: Vec<OsString>) -> i32 {
 		0
 	} else {
 		1
+	}
+}
+
+fn report_clap_error(error: clap::Error) -> i32 {
+	let rendered = error.to_string();
+	if error.use_stderr() {
+		let _ = write!(pi_uutils_ctx::stderr(), "{rendered}");
+		2
+	} else {
+		let _ = write!(pi_uutils_ctx::stdout(), "{rendered}");
+		0
+	}
+}
+
+/// Runs the in-process grep builtin and returns a GNU-compatible exit code.
+pub fn run(argv: Vec<OsString>) -> i32 {
+	let matches = match Cli::command().try_get_matches_from(normalize_context_args(argv)) {
+		Ok(matches) => matches,
+		Err(error) => return report_clap_error(error),
+	};
+	let cli = match Cli::from_arg_matches(&matches) {
+		Ok(cli) => cli,
+		Err(error) => return report_clap_error(error),
+	};
+
+	let (mut patterns, mut files) = match resolve_patterns(&cli) {
+		Ok(resolved) => resolved,
+		Err(error) => {
+			let _ = writeln!(pi_uutils_ctx::stderr(), "grep: {error}");
+			return 2;
+		},
+	};
+	let directory_action = resolve_directory_action(&cli, &matches);
+	if files.is_empty() {
+		files.push(OsString::from(if directory_action == DirectoryAction::Recurse {
+			"."
+		} else {
+			"-"
+		}));
+	}
+
+	let max_count = match resolve_max_count(&cli) {
+		Ok(max_count) => max_count,
+		Err(error) => {
+			let _ = writeln!(pi_uutils_ctx::stderr(), "grep: {error}");
+			return 2;
+		},
+	};
+	let rules = match build_path_rules(&cli, &matches) {
+		Ok(rules) => rules,
+		Err(error) => {
+			let _ = writeln!(pi_uutils_ctx::stderr(), "grep: {error}");
+			return 2;
+		},
+	};
+	let matcher = match build_matcher(
+		&patterns,
+		&cli,
+		resolve_match_mode(&matches),
+		resolve_ignore_case(&matches),
+	) {
+		Ok(matcher) => matcher,
+		Err(error) => {
+			let _ = writeln!(pi_uutils_ctx::stderr(), "grep: {error}");
+			return 2;
+		},
+	};
+	patterns.clear();
+
+	let (files_with_matches, files_without_match) = resolve_file_list_modes(&matches);
+	let suppress_context =
+		cli.count || files_with_matches || files_without_match || cli.quiet || cli.only_matching;
+	let (before, after) = if suppress_context {
+		(0, 0)
+	} else {
+		resolve_context(&cli, &matches)
+	};
+	let prefix_filename = resolve_filename_prefix(&matches)
+		.unwrap_or(directory_action == DirectoryAction::Recurse || files.len() > 1);
+	let opts = Options {
+		line_number: cli.line_number,
+		byte_offset: cli.byte_offset,
+		count: cli.count,
+		files_with_matches,
+		files_without_match,
+		only_matching: cli.only_matching,
+		before,
+		after,
+		no_messages: cli.no_messages,
+		quiet: cli.quiet,
+		prefix_filename,
+		initial_tab: cli.initial_tab,
+		null_paths: cli.null_paths,
+		record_terminator: if cli.null_data { b'\0' } else { b'\n' },
+		group_separator: resolve_group_separator(&cli, &matches),
+		line_buffered: cli.line_buffered,
+		binary_files: resolve_binary_files(&cli, &matches),
+	};
+	let follow_links = resolve_follow_links(&cli, &matches);
+
+	match matcher {
+		CompiledMatcher::Rust(matcher) => execute_search(
+			&cli,
+			&matcher,
+			&files,
+			directory_action,
+			follow_links,
+			&rules,
+			&opts,
+			max_count,
+		),
+		CompiledMatcher::Pcre(matcher) => execute_search(
+			&cli,
+			&matcher,
+			&files,
+			directory_action,
+			follow_links,
+			&rules,
+			&opts,
+			max_count,
+		),
 	}
 }
 
@@ -812,6 +1484,10 @@ mod tests {
 	/// Run the `grep` builtin with `args` (no argv[0]) over `stdin`, returning
 	/// `(exit_code, stdout, stderr)`.
 	fn run_grep(args: &[&str], stdin: &str) -> (i32, String, String) {
+		run_grep_in(args, stdin, &std::env::temp_dir())
+	}
+
+	fn run_grep_in(args: &[&str], stdin: &str, cwd: &Path) -> (i32, String, String) {
 		let out = Arc::new(Mutex::new(Vec::new()));
 		let err = Arc::new(Mutex::new(Vec::new()));
 		let io = ScopeIo {
@@ -820,7 +1496,7 @@ mod tests {
 			stdin_is_search_input: true,
 			stdout:                Box::new(SharedBuf(Arc::clone(&out))),
 			stderr:                Box::new(SharedBuf(Arc::clone(&err))),
-			cwd:                   std::env::temp_dir(),
+			cwd:                   cwd.to_path_buf(),
 			env:                   HashMap::new(),
 			cancel:                Arc::new(AtomicBool::new(false)),
 		};
@@ -832,6 +1508,94 @@ mod tests {
 		let stdout = String::from_utf8(out.lock().clone()).expect("utf8 stdout");
 		let stderr = String::from_utf8(err.lock().clone()).expect("utf8 stderr");
 		(code, stdout, stderr)
+	}
+
+	fn unique_tree(label: &str) -> PathBuf {
+		let tree = std::env::temp_dir().join(format!(
+			"pi-uu-grep-{label}-{}-{}",
+			std::process::id(),
+			std::time::SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)
+				.map(|duration| duration.as_nanos())
+				.unwrap_or(0)
+		));
+		std::fs::create_dir_all(&tree).expect("temp tree should be created");
+		tree
+	}
+
+	#[test]
+	fn max_count_accepts_compact_and_long_values() {
+		for option in ["-m1", "--max-count=1"] {
+			let (code, stdout, stderr) = run_grep(&[option, "hit"], "hit\nmiss\nhit\n");
+			assert_eq!(code, 0, "{option}: {stderr}");
+			assert_eq!(stdout, "hit\n", "{option}");
+		}
+
+		let (code, stdout, stderr) = run_grep(&["-m0", "hit"], "hit\n");
+		assert_eq!(code, 1, "{stderr}");
+		assert!(stdout.is_empty());
+	}
+
+	#[test]
+	fn pattern_file_combines_patterns_without_consuming_a_file_operand() {
+		let tree = unique_tree("patterns");
+		std::fs::write(tree.join("patterns"), "alpha\nbeta\n").expect("pattern file written");
+		std::fs::write(tree.join("haystack"), "alpha\ngamma\nbeta\n").expect("haystack written");
+
+		let (code, stdout, stderr) = run_grep_in(&["-f", "patterns", "haystack"], "", &tree);
+		assert_eq!(code, 0, "{stderr}");
+		assert_eq!(stdout, "alpha\nbeta\n");
+
+		let _ = std::fs::remove_dir_all(tree);
+	}
+
+	#[test]
+	fn perl_mode_supports_lookbehind() {
+		let (code, stdout, stderr) = run_grep(&["-P", "(?<=foo)bar"], "foobar\nbar\n");
+		assert_eq!(code, 0, "{stderr}");
+		assert_eq!(stdout, "foobar\n");
+	}
+
+	#[test]
+	fn byte_offsets_labels_and_nul_filename_separators_are_rendered() {
+		let (code, stdout, stderr) = run_grep(&["-bn", "hit"], "no\nhit\n");
+		assert_eq!(code, 0, "{stderr}");
+		assert_eq!(stdout, "2:3:hit\n");
+
+		let (code, stdout, stderr) =
+			run_grep(&["--label=pipe", "-HZ", "hit"], "hit\n");
+		assert_eq!(code, 0, "{stderr}");
+		assert_eq!(stdout.as_bytes(), b"pipe\0hit\n");
+	}
+
+	#[test]
+	fn numeric_context_uses_the_configured_group_separator() {
+		let input = "a\nhit\nb\ngap\nc\nhit\nd\n";
+		let (code, stdout, stderr) =
+			run_grep(&["-1", "--group-separator=@", "hit"], input);
+		assert_eq!(code, 0, "{stderr}");
+		assert_eq!(stdout, "a\nhit\nb\n@\nc\nhit\nd\n");
+	}
+
+	#[test]
+	fn recursive_include_and_exclude_dir_rules_filter_the_walk() {
+		let tree = unique_tree("filters");
+		std::fs::write(tree.join("keep.rs"), "hit\n").expect("included file written");
+		std::fs::write(tree.join("drop.txt"), "hit\n").expect("excluded file written");
+		std::fs::create_dir(tree.join("vendor")).expect("excluded directory created");
+		std::fs::write(tree.join("vendor/hidden.rs"), "hit\n").expect("excluded file written");
+
+		let (code, stdout, stderr) = run_grep_in(
+			&["-r", "--include=*.rs", "--exclude-dir=vendor", "hit", "."],
+			"",
+			&tree,
+		);
+		assert_eq!(code, 0, "{stderr}");
+		assert!(stdout.contains("keep.rs:hit"), "{stdout:?}");
+		assert!(!stdout.contains("drop.txt"), "{stdout:?}");
+		assert!(!stdout.contains("hidden.rs"), "{stdout:?}");
+
+		let _ = std::fs::remove_dir_all(tree);
 	}
 
 	#[test]

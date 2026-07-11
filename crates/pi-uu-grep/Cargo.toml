@@ -16,6 +16,7 @@ clap = { version = "4", features = ["derive"] }
 pi-uutils-ctx = { path = "../pi-uutils-ctx" }
 pi-walker = { path = "../pi-walker" }
 grep-matcher = "0.1"
+grep-pcre2 = "0.1"
 grep-regex = "0.1"
 grep-searcher = "0.1"
 ignore = "0.4"

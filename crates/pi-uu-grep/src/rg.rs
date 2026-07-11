@@ -1386,6 +1386,36 @@ mod tests {
 		}
 	}
 
+	fn run_rg(args: &[&str], stdin: &str) -> (i32, String, String) {
+		let out = Arc::new(Mutex::new(Vec::new()));
+		let err = Arc::new(Mutex::new(Vec::new()));
+		let io = ScopeIo {
+			stdin:                 Box::new(io::Cursor::new(stdin.as_bytes().to_vec())),
+			stdin_fd:              None,
+			stdin_is_search_input: true,
+			stdout:                Box::new(SharedBuf(Arc::clone(&out))),
+			stderr:                Box::new(SharedBuf(Arc::clone(&err))),
+			cwd:                   std::env::temp_dir(),
+			env:                   HashMap::new(),
+			cancel:                Arc::new(AtomicBool::new(false)),
+		};
+		let argv: Vec<OsString> = std::iter::once("rg")
+			.chain(args.iter().copied())
+			.map(OsString::from)
+			.collect();
+		let code = scope(io, || run(argv));
+		let stdout = String::from_utf8(out.lock().clone()).expect("utf8 stdout");
+		let stderr = String::from_utf8(err.lock().clone()).expect("utf8 stderr");
+		(code, stdout, stderr)
+	}
+
+	#[test]
+	fn max_count_accepts_an_attached_value() {
+		let (code, stdout, stderr) = run_rg(&["-m1", "hit"], "hit\nmiss\nhit\n");
+		assert_eq!(code, 0, "{stderr}");
+		assert_eq!(stdout, "hit\n");
+	}
+
 	/// Run `rg` with the cancel flag pre-set, mirroring the shell wrapper's
 	/// behavior when `abort`/`timeout` fires mid-walk.
 	fn run_rg_cancelled(args: &[&str], cwd: &Path) -> (i32, String, String) {
