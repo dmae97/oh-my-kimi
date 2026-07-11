@@ -1,11 +1,19 @@
 /**
  * Show provider usage limits for every authenticated account.
  */
-import { Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { runUsageCommand } from "../cli/usage-cli";
 
 export default class Usage extends Command {
 	static description = "Show provider usage limits for every authenticated account";
+
+	static args = {
+		action: Args.string({
+			description: "Optional subcommand to execute",
+			required: false,
+			options: ["invalidate"],
+		}),
+	};
 
 	static flags = {
 		json: Flags.boolean({ char: "j", description: "Output usage reports as JSON", default: false }),
@@ -28,11 +36,14 @@ export default class Usage extends Command {
 		"# Redact account identifiers for screenshots\n  omp usage --redact",
 		"# Machine-readable output\n  omp usage --json",
 		"# Usage-limit trend over the last 30 days\n  omp usage --history --days 30",
+		"# Invalidate cached usage reports for all providers\n  omp usage invalidate",
+		"# Invalidate cached usage reports for a specific provider\n  omp usage invalidate --provider anthropic",
 	];
 
 	async run(): Promise<void> {
-		const { flags } = await this.parse(Usage);
+		const { args, flags } = await this.parse(Usage);
 		await runUsageCommand({
+			action: args.action,
 			json: flags.json,
 			provider: flags.provider,
 			redact: flags.redact,

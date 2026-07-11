@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `invalidate` action to the usage command to clear cached usage reports
+
 ### Changed
 
 - Retain completed and abandoned tasks in session history for improved context on resume

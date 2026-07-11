@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added `invalidateUsageCache` method to manually clear cached usage reports
+- Added asynchronous `invalidateUsageCache` method to clear cached usage reports
 - Added support for cross-service usage cache invalidation between AuthStorage and AuthBroker
 
 ## [16.4.5] - 2026-07-11

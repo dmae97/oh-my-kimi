@@ -4704,25 +4704,31 @@ export class AuthStorage {
 	 * provider's credentials are invalidated; otherwise, all credentials in the
 	 * store are invalidated.
 	 */
-	invalidateUsageCache(provider?: string): void {
+	async invalidateUsageCache(provider?: string, signal?: AbortSignal): Promise<void> {
 		if (provider) {
 			this.#invalidateUsageReportCache(provider);
-			return;
-		}
-		this.#usageCacheEpoch += 1;
-		const expired = Date.now() - 1;
-		try {
-			const credentials = this.#store.listAuthCredentials();
-			for (const entry of credentials) {
-				if (entry.credential.type !== "oauth") continue;
-				const cacheKey = this.#buildUsageReportCacheKey(
-					this.#buildUsageRequestForOauth(entry.provider, entry.credential),
-				);
-				const existing = this.#usageCache.getStale<UsageReport | null>(cacheKey);
-				this.#usageCache.set(cacheKey, { value: existing?.value ?? null, expiresAt: expired });
+		} else {
+			this.#usageCacheEpoch += 1;
+			const expired = Date.now() - 1;
+			try {
+				const credentials = this.#store.listAuthCredentials();
+				for (const entry of credentials) {
+					if (entry.credential.type !== "oauth") continue;
+					const cacheKey = this.#buildUsageReportCacheKey(
+						this.#buildUsageRequestForOauth(entry.provider, entry.credential),
+					);
+					const existing = this.#usageCache.getStale<UsageReport | null>(cacheKey);
+					this.#usageCache.set(cacheKey, { value: existing?.value ?? null, expiresAt: expired });
+				}
+			} catch (err) {
+				logger.debug("Failed to list auth credentials for complete usage cache invalidation", { err });
 			}
-		} catch (err) {
-			logger.debug("Failed to list auth credentials for complete usage cache invalidation", { err });
+		}
+
+		if (this.#store.invalidateUsageCache) {
+			await this.#store.invalidateUsageCache(signal).catch(err => {
+				logger.debug("Failed to notify store of stale usage", { err });
+			});
 		}
 	}
 
