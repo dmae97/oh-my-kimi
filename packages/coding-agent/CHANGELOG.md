@@ -357,6 +357,9 @@
 ### Fixed
 
 - Fixed `omp usage` hiding sibling-only limits such as Claude 7 Day (Fable) on accounts whose current report omitted that scoped bucket; the account now renders an explicit `not reported` row instead of looking like the usage refresh skipped the column.
+### Added
+
+- Added rich interactive ask dialogs with headers, previews, notes, chat redirect, and ask.enabled gating ([#4186](https://github.com/can1357/oh-my-pi/issues/4186)).
 
 ## [16.3.3] - 2026-07-02
 
