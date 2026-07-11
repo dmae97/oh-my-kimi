@@ -212,6 +212,38 @@ describe("AuthStorage credential block persistence", () => {
 		}
 	});
 
+	it("backfills refresh leases for a v5 auth database", async () => {
+		const legacyDb = new Database(dbPath);
+		legacyDb.run(`
+			CREATE TABLE auth_schema_version (
+				id INTEGER PRIMARY KEY CHECK (id = 1),
+				version INTEGER NOT NULL
+			);
+			INSERT INTO auth_schema_version(id, version) VALUES (1, 5);
+			CREATE TABLE auth_credentials (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				provider TEXT NOT NULL,
+				credential_type TEXT NOT NULL,
+				data TEXT NOT NULL,
+				disabled_cause TEXT DEFAULT NULL,
+				identity_key TEXT DEFAULT NULL,
+				created_at INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER)),
+				updated_at INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER))
+			);
+		`);
+		legacyDb.close();
+
+		const migratedStore = await SqliteAuthCredentialStore.open(dbPath);
+		try {
+			const expiresAtMs = Date.now() + 3_600_000;
+			expect(migratedStore.tryAcquireCredentialRefreshLease(1, "test-owner", expiresAtMs)).toBe(true);
+			expect(migratedStore.getCredentialRefreshLeaseExpiresAt(1)).toBe(expiresAtMs);
+			expect(readAuthSchemaVersion(dbPath)).toBe(6);
+		} finally {
+			migratedStore.close();
+		}
+	});
+
 	it("migrates a v4 auth database to current version 6 without dropping credential rows", async () => {
 		const legacyDb = new Database(dbPath);
 		legacyDb.run(`

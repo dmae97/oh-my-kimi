@@ -6,10 +6,9 @@
 
 ### Fixed
 
+- Fixed auth database upgrades from schema v5 by creating the OAuth credential refresh-lease table before lease statements are prepared.
 - Fixed an issue in the Responses API where empty tool results were incorrectly serialized with a "(see attached image)" placeholder, causing models to look for non-existent attachments.
 - Fixed OpenAI Responses server non-streaming envelopes to always include the required "incomplete_details" field, using null for completed responses.
-### Fixed
-
 - Preserved Cloud Code Assist tool schemas when mixed-type unions carry branch-local validation descriptions.
 
 ## [16.4.2] - 2026-07-10
