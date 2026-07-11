@@ -206,6 +206,73 @@ describe("anthropic org-scoped credential identity", () => {
 			{ identity_key: `org:${TEAM_ORG}`, disabled_cause: null },
 		]);
 	});
+
+	it("claims an account-keyed row once a later same-org login recovers the email", () => {
+		if (!store) throw new Error("test setup failed");
+
+		// Email recovery failed for both subscriptions: the account UUID keys
+		// the rows, org-qualified.
+		store.upsertAuthCredentialForProvider(
+			"anthropic",
+			orgCredential({ suffix: "team-no-email", orgId: TEAM_ORG, omitEmail: true }),
+		);
+		store.upsertAuthCredentialForProvider(
+			"anthropic",
+			orgCredential({ suffix: "max-no-email", orgId: MAX_ORG, omitEmail: true }),
+		);
+
+		// Same subscription (account + org), email recovered this time: the
+		// account-keyed row is claimed and re-keyed by email — NOT duplicated.
+		// The sibling org's row is untouched.
+		const rows = store.upsertAuthCredentialForProvider(
+			"anthropic",
+			orgCredential({ suffix: "team-with-email", orgId: TEAM_ORG }),
+		);
+		expect(readIdentityRows(dbPath)).toEqual([
+			{ identity_key: `email:${EMAIL}|org:${TEAM_ORG}`, disabled_cause: null },
+			{ identity_key: `account:account-shared|org:${MAX_ORG}`, disabled_cause: null },
+		]);
+		const teamRow = rows.find(row => row.credential.type === "oauth" && row.credential.orgId === TEAM_ORG);
+		expect(teamRow?.credential.type).toBe("oauth");
+		if (teamRow?.credential.type === "oauth") {
+			expect(teamRow.credential.access).toBe("access-team-with-email");
+		}
+	});
+
+	it("claims a bare legacy account-keyed row by an org-scoped login whose primary base is the email", () => {
+		if (!store) throw new Error("test setup failed");
+
+		// Pre-org row, email never recovered: keyed by the bare account.
+		store.upsertAuthCredentialForProvider("anthropic", orgCredential({ suffix: "legacy", omitEmail: true }));
+		expect(readIdentityRows(dbPath)).toEqual([{ identity_key: "account:account-shared", disabled_cause: null }]);
+
+		// Org-scoped login carrying the same account AND an email: the key is
+		// email-based, but the shared account still claims the legacy row.
+		store.upsertAuthCredentialForProvider("anthropic", orgCredential({ suffix: "upgraded", orgId: TEAM_ORG }));
+		expect(readIdentityRows(dbPath)).toEqual([
+			{ identity_key: `email:${EMAIL}|org:${TEAM_ORG}`, disabled_cause: null },
+		]);
+	});
+
+	it("keeps org-less logins on exact-key matching only (no cross-base claiming)", () => {
+		if (!store) throw new Error("test setup failed");
+
+		store.upsertAuthCredentialForProvider(
+			"anthropic",
+			orgCredential({ suffix: "team", orgId: TEAM_ORG, omitEmail: true }),
+		);
+		store.upsertAuthCredentialForProvider("anthropic", orgCredential({ suffix: "legacy", omitEmail: true }));
+
+		// Org-less login carrying the same account plus an email resolves to the
+		// bare email key: it must neither claim the org-scoped account row nor
+		// the bare account row via the shared account base.
+		store.upsertAuthCredentialForProvider("anthropic", orgCredential({ suffix: "orgless" }));
+		expect(readIdentityRows(dbPath)).toEqual([
+			{ identity_key: `account:account-shared|org:${TEAM_ORG}`, disabled_cause: null },
+			{ identity_key: "account:account-shared", disabled_cause: null },
+			{ identity_key: `email:${EMAIL}`, disabled_cause: null },
+		]);
+	});
 });
 
 // ─── Usage report dedupe partitioning ───────────────────────────────────────

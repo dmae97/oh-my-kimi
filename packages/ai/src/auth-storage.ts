@@ -5537,26 +5537,37 @@ function matchesReplacementCredential(
 	if (incoming.type === "api_key") {
 		return existing.type === "api_key" && existing.key === incoming.key;
 	}
-	const incomingIdentityKey = resolveCredentialIdentityKey(provider, incoming);
+	const incomingIdentifiers = extractOAuthCredentialIdentifiers(incoming);
+	const incomingIdentityKey = resolveProviderCredentialIdentityKey(provider, incomingIdentifiers);
 	if (incomingIdentityKey === null) return false;
 	if (incomingIdentityKey === existingIdentityKey) return true;
-	// One-time upgrade: a pre-org row keyed by a bare base identity
-	// (`email:<e>`, `account:<a>`, or `project:<p>`) is claimed (and re-keyed)
-	// by the first org-scoped login with the same base — mirroring the pre-org
-	// replace behavior. The reverse stays a non-match: an org-less credential
-	// must never clobber an org-scoped row. Only anthropic identity keys carry
-	// the `|org:` qualifier, so this cannot affect other providers.
 	if (existingIdentityKey === null) return false;
-	const orgSeparator = incomingIdentityKey.indexOf("|org:");
-	if (orgSeparator === -1) return false;
-	if (incomingIdentityKey.slice(0, orgSeparator) === existingIdentityKey) return true;
-	// Same one-way upgrade for org-only rows: a row keyed `org:<id>` (stored
-	// when login recovered neither email nor account) is claimed and re-keyed
-	// by a later login of the same org that does recover the identity, instead
-	// of duplicating the subscription. The reverse never happens — an org-only
-	// incoming key has no `|org:` qualifier and already returned above, so it
-	// only ever claims a base-keyed row via exact equality.
-	return existingIdentityKey.startsWith("org:") && incomingIdentityKey.slice(orgSeparator + 1) === existingIdentityKey;
+	// One-way upgrade, applied only when the INCOMING identity key carries the
+	// org qualifier (only anthropic keys do, so other providers never reach the
+	// checks below). An org-scoped login `org:<o>` claims (and re-keys) any
+	// existing row that denotes the same subscription:
+	//   - `org:<o>` — org-only row stored when identity recovery failed, claimed
+	//     once a later same-org login recovers a base identity;
+	//   - `<b>` for any base identity `<b>` (email/account/project) the incoming
+	//     credential carries — a pre-org legacy row, mirroring the pre-org
+	//     replace behavior;
+	//   - `<b>|org:<o>` for any such base — the same subscription keyed by a
+	//     different base, e.g. an account-keyed row stored while the email could
+	//     not be recovered, claimed once a later login recovers the email.
+	// The reverse stays a non-match: an org-less credential only ever replaces
+	// via exact key equality above and must never clobber an org-scoped row.
+	const orgIdentifier = incomingIdentifiers.find(identifier => identifier.startsWith("org:"));
+	if (orgIdentifier === undefined) return false;
+	if (incomingIdentityKey !== orgIdentifier && !incomingIdentityKey.endsWith(`|${orgIdentifier}`)) return false;
+	if (existingIdentityKey === orgIdentifier) return true;
+	for (const identifier of incomingIdentifiers) {
+		const isBase =
+			identifier.startsWith("email:") || identifier.startsWith("account:") || identifier.startsWith("project:");
+		if (!isBase) continue;
+		if (existingIdentityKey === identifier) return true;
+		if (existingIdentityKey === `${identifier}|${orgIdentifier}`) return true;
+	}
+	return false;
 }
 
 function extractOAuthCredentialIdentifiers(credential: OAuthCredential): string[] {
