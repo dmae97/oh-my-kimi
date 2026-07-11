@@ -10874,21 +10874,21 @@ export class AgentSession {
 
 		this.#emptyStopRetryCount++;
 		if (this.#emptyStopRetryCount > EMPTY_STOP_MAX_RETRIES) {
-			logger.warn("Assistant returned empty stop after retry cap", {
-				attempts: this.#emptyStopRetryCount - 1,
+			const attempts = this.#emptyStopRetryCount - 1;
+			const finalError = "Assistant returned empty stop after retry cap";
+			logger.warn(finalError, {
+				attempts,
 				model: assistantMessage.model,
 				provider: assistantMessage.provider,
 			});
-			if (this.#retryAttempt > 0) {
-				await this.#emitSessionEvent({
-					type: "auto_retry_end",
-					success: false,
-					attempt: this.#retryAttempt,
-					finalError: "Assistant returned empty stop after retry cap",
-				});
-				this.#clearPendingRecoveredRetryErrors();
-				this.#retryAttempt = 0;
-			}
+			await this.#emitSessionEvent({
+				type: "auto_retry_end",
+				success: false,
+				attempt: this.#retryAttempt > 0 ? this.#retryAttempt : attempts,
+				finalError,
+			});
+			this.#clearPendingRecoveredRetryErrors();
+			this.#retryAttempt = 0;
 			this.#resolveRetry();
 			// Tool-use orphans corrupt Anthropic message history (tool_result without
 			// matching tool_use). Always remove them even when the retry cap is hit.

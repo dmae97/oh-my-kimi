@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed empty local-model `stop` responses exhausting their retry cap without surfacing a user-visible retry failure. ([#5128](https://github.com/can1357/oh-my-pi/issues/5128))
+
 ## [16.4.2] - 2026-07-10
 
 ### Fixed
