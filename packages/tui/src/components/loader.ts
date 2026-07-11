@@ -95,8 +95,13 @@ export class Loader extends Text {
 		if (this.setText(text) && this.#ui) {
 			// Direct write: a loader tick changes only this component, so the TUI
 			// can update the already-positioned rows without driving the full
-			// compose/prepare/diff pipeline. Unsafe states fall back inside TUI.
-			this.#ui.requestDirectWrite(this);
+			// compose/prepare/diff pipeline. Lightweight test stubs may not carry
+			// the newer API; keep their legacy component-scoped path working.
+			if (typeof this.#ui.requestDirectWrite === "function") {
+				this.#ui.requestDirectWrite(this);
+			} else {
+				this.#ui.requestComponentRender(this);
+			}
 		}
 	}
 }
