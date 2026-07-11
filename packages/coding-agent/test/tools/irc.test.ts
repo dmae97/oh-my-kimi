@@ -348,6 +348,28 @@ describe("IRC", () => {
 			// Failed revival never enqueues: the message is lost, not buffered.
 			expect(bus.unreadCount("0-Parked")).toBe(0);
 		});
+
+		it("wait with liveness aborts when the last running sender becomes idle after commitment", async () => {
+			const sub = makeFakeSession();
+			registry.register({ id: "0-Sub", displayName: "task", kind: "sub", session: sub.session, status: "running" });
+
+			const waiting = bus.wait("0-Main", {}, 1000, undefined, { liveness: { registry, senderId: "0-Main" } });
+			registry.setStatus("0-Sub", "idle");
+
+			await expect(waiting).rejects.toThrow("no running peers remain");
+		});
+
+		it("wait with liveness aborts when a specific sender becomes idle after commitment", async () => {
+			const sub = makeFakeSession();
+			registry.register({ id: "0-Sub", displayName: "task", kind: "sub", session: sub.session, status: "running" });
+
+			const waiting = bus.wait("0-Main", { from: "0-Sub" }, 1000, undefined, {
+				liveness: { registry, senderId: "0-Main" },
+			});
+			registry.setStatus("0-Sub", "idle");
+
+			await expect(waiting).rejects.toThrow('agent "0-Sub" is not running');
+		});
 	});
 
 	describe("IrcTool", () => {
@@ -506,7 +528,10 @@ describe("IRC", () => {
 			const main = makeFakeSession();
 			registry.register({ id: "0-Main", displayName: "main", kind: "main", session: main.session });
 			const sub = makeFakeSession();
-			registry.register({ id: "0-Sub", displayName: "task", kind: "sub", session: sub.session });
+			// Recipient starts idle: send wakes it, and its immediate reply must
+			// still reach the pre-armed await waiter — proving `send await:true`
+			// never arms the liveness auto-cancel that op:"wait" uses.
+			registry.register({ id: "0-Sub", displayName: "task", kind: "sub", session: sub.session, status: "idle" });
 			sub.onDeliver(msg => {
 				// Reply synchronously during delivery: the tool has already parked
 				// a future-only waiter, so the immediate reply is handed directly
@@ -603,12 +628,31 @@ describe("IRC", () => {
 		});
 
 		it("op=wait returns a clean non-error timeout result", async () => {
+			const fake = makeFakeSession();
+			registry.register({ id: "0-Sub", displayName: "sub", kind: "sub", session: fake.session, status: "running" });
 			const tool = new IrcTool(makeToolSession(registry, "0-Main"));
 			const result = await tool.execute("call-1", { op: "wait", timeoutMs: 5 });
 			expect(result.isError).toBeFalsy();
 			expect(result.details?.waited).toBeNull();
 			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 			expect(text).toContain("No message");
+		});
+
+		it("op=wait returns an error if no active agents exist", async () => {
+			const tool = new IrcTool(makeToolSession(registry, "0-Main"));
+			const result = await tool.execute("call-1", { op: "wait", timeoutMs: 5 });
+			expect(result.isError).toBe(true);
+			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+			expect(text).toContain("no running peers remain");
+		});
+
+		it("op=wait returns an error if the requested specific 'from' agent is not active", async () => {
+			registry.register({ id: "0-Sub", displayName: "sub", kind: "sub", session: null, status: "parked" });
+			const tool = new IrcTool(makeToolSession(registry, "0-Main"));
+			const result = await tool.execute("call-1", { op: "wait", from: "0-Sub", timeoutMs: 5 });
+			expect(result.isError).toBe(true);
+			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+			expect(text).toContain('agent "0-Sub" is not running');
 		});
 
 		it("op=wait consumes a pending IRC aside before honoring a queued interrupt abort", async () => {

@@ -29,6 +29,7 @@
 
 ### Fixed
 
+- Fixed agents getting stuck waiting for messages from peers that have already stopped running
 - Fixed `write conflict://<N>` duplicating code when the model pastes the "whole resolved function" including lines adjacent to the marker block: replacement lines that exactly echo the context directly above/below the recorded region are now dropped (multi-line echoes always; single-line echoes only when removal restores the recorded sides' delimiter balance), with a note in the tool result. The conflict footer now also states that writes replace only the marker block and to prefer the minimal merge of the recorded sides.
 - Fixed visible per-keystroke lag while searching in the `/resume` session picker. Literal matches now rank synchronously from a cached per-session haystack, fuzzy scoring runs in bounded background chunks that converge to the same ranking (large listings previously rebuilt a fuzzy index per token per session on every keystroke), and the prompt-history SQLite lookup — an FTS query plus a LIKE scan over every stored prompt — is debounced off the keystroke path.
 - Fixed compiled Linux binary extension loading when bundled web-search header generation cannot read `header-generator` data files from the build-time path. ([#5178](https://github.com/can1357/oh-my-pi/issues/5178))

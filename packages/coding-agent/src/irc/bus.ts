@@ -175,7 +175,7 @@ export class IrcBus {
 		filter: { from?: string },
 		timeoutMs: number,
 		signal?: AbortSignal,
-		options?: { drainPending?: boolean },
+		options?: { drainPending?: boolean; liveness?: { registry: AgentRegistry; senderId: string } },
 	): Promise<IrcMessage | null> {
 		if (signal?.aborted) {
 			throw signal.reason instanceof Error ? signal.reason : new Error("IRC wait aborted");
@@ -190,35 +190,43 @@ export class IrcBus {
 		const { promise, resolve, reject } = Promise.withResolvers<IrcMessage | null>();
 		let timer: NodeJS.Timeout | undefined;
 		let onAbort: (() => void) | undefined;
+		let unsubscribeLiveness: (() => void) | undefined;
 
-		const waiter: IrcWaiter = {
-			from: filter.from,
-			resolve: msg => {
-				cleanup();
-				resolve(msg);
-			},
-			cancel: () => {
-				cleanup();
-			},
+		const liveness = options?.liveness;
+		const livenessReason = filter.from
+			? `IRC wait aborted: agent "${filter.from}" is not running`
+			: "IRC wait aborted: no running peers remain";
+
+		const settle = (outcome: { kind: "message"; msg: IrcMessage } | { kind: "timeout" } | { kind: "abort"; error: Error }): void => {
+			cleanup();
+			if (outcome.kind === "message") {
+				resolve(outcome.msg);
+			} else if (outcome.kind === "timeout") {
+				resolve(null);
+			} else {
+				reject(outcome.error);
+			}
 		};
+
 		const cleanup = (): void => {
 			this.#removeWaiter(agentId, waiter);
 			clearTimeout(timer);
 			if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+			unsubscribeLiveness?.();
+		};
+
+		const waiter: IrcWaiter = {
+			from: filter.from,
+			resolve: msg => settle({ kind: "message", msg }),
+			cancel: () => cleanup(),
 		};
 
 		if (signal) {
-			onAbort = () => {
-				cleanup();
-				reject(signal.reason instanceof Error ? signal.reason : new Error("IRC wait aborted"));
-			};
+			onAbort = () => settle({ kind: "abort", error: signal.reason instanceof Error ? signal.reason : new Error("IRC wait aborted") });
 			signal.addEventListener("abort", onAbort, { once: true });
 		}
 		if (timeoutMs > 0) {
-			timer = setTimeout(() => {
-				cleanup();
-				resolve(null);
-			}, timeoutMs);
+			timer = setTimeout(() => settle({ kind: "timeout" }), timeoutMs);
 			timer.unref?.();
 		}
 
@@ -228,6 +236,24 @@ export class IrcBus {
 			this.#waiters.set(agentId, waiters);
 		}
 		waiters.push(waiter);
+
+		if (liveness) {
+			const { registry, senderId } = liveness;
+			const hasRunningSender = (from?: string): boolean =>
+				registry
+					.listVisibleTo(senderId)
+					.some(ref => ref.status === "running" && (!from || ref.id === from));
+			const check = filter.from ? () => hasRunningSender(filter.from) : () => hasRunningSender();
+			unsubscribeLiveness = registry.onChange(() => {
+				if (!check()) {
+					settle({ kind: "abort", error: new Error(livenessReason) });
+				}
+			});
+			if (!check()) {
+				settle({ kind: "abort", error: new Error(livenessReason) });
+			}
+		}
+
 		return promise;
 	}
 
