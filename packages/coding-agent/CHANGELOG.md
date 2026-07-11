@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed sub-agent progress rendering leaking raw terminal control bytes into the parent TUI. ([#5159](https://github.com/can1357/oh-my-pi/issues/5159))
+
 ## [16.4.3] - 2026-07-11
 
 ### Added
