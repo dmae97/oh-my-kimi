@@ -233,7 +233,7 @@ describe("AgentSession message pipeline", () => {
 		expect(requestOnPayload).toHaveBeenCalledWith({ original: true, session: true }, undefined);
 		expect(result).toEqual({ original: true, session: true });
 	});
-	it("keeps ephemeral side-channel cache key separate from provider routing", async () => {
+	it("keeps ephemeral side-channel cache key separate from provider routing while preserving websocket preference", async () => {
 		const api = "test-ephemeral-side-channel";
 		let capturedOptions: SimpleStreamOptions | undefined;
 		registerCustomApi(api, (_model, _context, options) => {
@@ -271,6 +271,7 @@ describe("AgentSession message pipeline", () => {
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({ "compaction.enabled": false }),
 			modelRegistry: createModelRegistryStub() as never,
+			preferWebsockets: true,
 		});
 		sessions.push(session);
 		const cacheSessionId = session.sessionId;
@@ -281,7 +282,7 @@ describe("AgentSession message pipeline", () => {
 		expect(capturedOptions?.promptCacheKey).toBe(cacheSessionId);
 		expect(capturedOptions?.sessionId).toStartWith(`${cacheSessionId}:side:`);
 		expect(capturedOptions?.sessionId).not.toBe(cacheSessionId);
-		expect(capturedOptions?.preferWebsockets).toBe(false);
+		expect(capturedOptions?.preferWebsockets).toBe(true);
 	});
 
 	it("runs ephemeral side-channel requests through the configured side stream function", async () => {

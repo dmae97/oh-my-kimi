@@ -14706,7 +14706,7 @@ export class AgentSession {
 				// stable, but give provider routing a unique request lineage.
 				sessionId: `${cacheSessionId}:side:${Snowflake.next()}`,
 				promptCacheKey: cacheSessionId,
-				preferWebsockets: false,
+				preferWebsockets: this.#preferWebsockets,
 				reasoning: toReasoningEffort(this.thinkingLevel),
 				disableReasoning: shouldDisableReasoning(this.thinkingLevel),
 				hideThinkingSummary: this.agent.hideThinkingSummary,
