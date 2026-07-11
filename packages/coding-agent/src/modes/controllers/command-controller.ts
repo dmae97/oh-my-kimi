@@ -47,7 +47,12 @@ import { limitMatchesActiveAccount } from "../../slash-commands/helpers/active-o
 import { outputMeta } from "../../tools/output-meta";
 import { resolveToCwd, stripOuterDoubleQuotes } from "../../tools/path-utils";
 import { replaceTabs, truncateToWidth } from "../../tools/render-utils";
-import { getChangelogPath, parseChangelog } from "../../utils/changelog";
+import {
+	getChangelogPath,
+	parseChangelog,
+	RECENT_CHANGELOG_ENTRY_LIMIT,
+	renderChangelogEntries,
+} from "../../utils/changelog";
 import { copyToClipboard } from "../../utils/clipboard";
 import { openPath } from "../../utils/open";
 import { setSessionTerminalTitle } from "../../utils/title-generator";
@@ -487,16 +492,9 @@ export class CommandController {
 	async handleChangelogCommand(showFull = false): Promise<void> {
 		const changelogPath = getChangelogPath();
 		const allEntries = await parseChangelog(changelogPath);
-		// Default to showing only the latest 3 versions unless --full is specified
-		// allEntries comes from parseChangelog with newest first, reverse to show oldest->newest
-		const entriesToShow = showFull ? allEntries : allEntries.slice(0, 3);
+		const entriesToShow = showFull ? allEntries : allEntries.slice(0, RECENT_CHANGELOG_ENTRY_LIMIT);
 		const changelogMarkdown =
-			entriesToShow.length > 0
-				? [...entriesToShow]
-						.reverse()
-						.map(e => e.content)
-						.join("\n\n")
-				: "No changelog entries found.";
+			entriesToShow.length > 0 ? renderChangelogEntries(entriesToShow).markdown : "No changelog entries found.";
 		const title = showFull ? "Full Changelog" : "Recent Changes";
 		const hint = showFull
 			? ""
