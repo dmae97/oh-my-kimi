@@ -66,6 +66,8 @@ import type {
 	AgentToolResult,
 	AgentTurnEndContext,
 	AsideMessage,
+	SteeringInterruptSource,
+	SteeringQueueState,
 	StreamFn,
 } from "./types";
 import { isSoftToolRequirement } from "./types";
@@ -1800,7 +1802,7 @@ async function executeToolCalls(
 	const interruptibleSignal: AbortSignal = signal
 		? AbortSignal.any([signal, steeringAbortController.signal, ircAbortController.signal])
 		: AbortSignal.any([steeringAbortController.signal, ircAbortController.signal]);
-	const interruptState = { triggered: false };
+	const interruptState: { triggered: boolean; source?: SteeringInterruptSource | "irc" } = { triggered: false };
 
 	const records = toolCalls.map(toolCall => {
 		// Tools emitted via OpenAI's custom-tool path (e.g. `apply_patch` on GPT-5)
@@ -1835,15 +1837,25 @@ async function executeToolCalls(
 		// integration only provides getSteeringMessages(), the queue drains at the
 		// injection boundary below; polling it here would strand or drop messages.
 		let steeringQueued = false;
+		let steeringSource: SteeringInterruptSource | undefined;
 		if (hasSteeringMessages) {
-			steeringQueued = await hasSteeringMessages();
+			const queuedState = await hasSteeringMessages();
+			if (typeof queuedState === "boolean") {
+				steeringQueued = queuedState;
+				steeringSource = queuedState ? "user" : undefined;
+			} else {
+				const state: SteeringQueueState = queuedState;
+				steeringQueued = state.queued;
+				steeringSource = state.source ?? (state.queued ? "unknown" : undefined);
+			}
 		}
 		if (steeringQueued) {
-			// User steering upgrades an in-flight IRC interrupt: it aborts the
+			// Queued steering upgrades an in-flight IRC interrupt: it aborts the
 			// shared signal so foreground tools stop as they do for a user Esc.
 			// Idempotent — a second steer poll after the abort is a no-op.
 			if (!steeringAbortController.signal.aborted) {
 				interruptState.triggered = true;
+				interruptState.source = steeringSource ?? "unknown";
 				steeringAbortController.abort();
 			}
 			return;
@@ -1855,6 +1867,7 @@ async function executeToolCalls(
 			// Peer IRC only aborts interruptible waits: a foreground bash / write
 			// mid-execution keeps running so we never leave partial side effects.
 			interruptState.triggered = true;
+			interruptState.source = "irc";
 			ircAbortController.abort();
 		}
 	};
@@ -2115,7 +2128,7 @@ async function executeToolCalls(
 			// This tool's own signal fired AND it failed — it was cut off before producing
 			// a usable result, so report it as skipped.
 			record.skipped = true;
-			emitToolResult(record, createSkippedToolResult(), true);
+			emitToolResult(record, createSkippedToolResult(interruptState.source), true);
 		} else {
 			// No interrupt on this signal, or the tool finished (successfully or with a
 			// genuine error) before the interrupt landed. Keep its real result: a completed
@@ -2209,7 +2222,7 @@ async function executeToolCalls(
 				toolName: record.toolCall.name,
 				status: "skipped",
 			});
-			emitToolResult(record, createSkippedToolResult(), true);
+			emitToolResult(record, createSkippedToolResult(interruptState.source), true);
 		}
 	}
 
@@ -2326,12 +2339,24 @@ function createToolSignalAbortedResult(signal: AbortSignal): AgentToolResult<unk
 	};
 }
 
-function createSkippedToolResult(): AgentToolResult<any> {
+function createSkippedToolResult(source: SteeringInterruptSource | "irc" | undefined): AgentToolResult<any> {
+	let reason = "pending steering message";
+	let blocker = "queued message";
+	if (source === "user") {
+		reason = "queued user message";
+		blocker = "queued message";
+	} else if (source === "system") {
+		reason = "pending system advisory";
+		blocker = "advisory";
+	} else if (source === "irc") {
+		reason = "pending peer interrupt";
+		blocker = "interrupt";
+	}
 	return {
 		content: [
 			{
 				type: "text",
-				text: "Skipped due to queued user message. Do not count this skipped result as completed work or verification. After the queued message is handled on the next step, retry the skipped tool if it is still needed.",
+				text: `Skipped due to ${reason}. Do not count this skipped result as completed work or verification. After the ${blocker} is handled on the next step, retry the skipped tool if it is still needed.`,
 			},
 		],
 		details: {},
