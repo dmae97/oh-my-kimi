@@ -187,7 +187,20 @@ pub fn rewrite_source(
 
 pub fn apply_edits(content: &str, edits: &[Edit<String>]) -> Result<String> {
 	let mut sorted: Vec<&Edit<String>> = edits.iter().collect();
-	sorted.sort_by_key(|edit| edit.position);
+	sorted.sort_by(|a, b| {
+		a.position
+			.cmp(&b.position)
+			.then(a.deleted_length.cmp(&b.deleted_length))
+			.then(a.inserted_text.cmp(&b.inserted_text))
+	});
+	// Byte-identical edits (same span, same replacement) are one deterministic
+	// edit: multiple patterns matching the same node collapse instead of
+	// tripping the overlap check. Only divergent overlaps are ambiguous.
+	sorted.dedup_by(|a, b| {
+		a.position == b.position
+			&& a.deleted_length == b.deleted_length
+			&& a.inserted_text == b.inserted_text
+	});
 	let mut prev_end = 0usize;
 	for edit in &sorted {
 		if edit.position < prev_end {
@@ -298,5 +311,16 @@ mod tests {
 			Edit::<String> { position: 2, deleted_length: 1, inserted_text: b"y".to_vec() },
 		];
 		assert!(apply_edits(source, &edits).is_err());
+	}
+
+	#[test]
+	fn apply_edits_dedupes_identical_edits() {
+		let source = "abcdef";
+		let edits = vec![
+			Edit::<String> { position: 1, deleted_length: 3, inserted_text: b"x".to_vec() },
+			Edit::<String> { position: 1, deleted_length: 3, inserted_text: b"x".to_vec() },
+		];
+		let output = apply_edits(source, &edits).expect("identical edits should collapse to one");
+		assert_eq!(output, "axef");
 	}
 }
