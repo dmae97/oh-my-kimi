@@ -23,6 +23,7 @@
  */
 import { dlopen, FFIType } from "bun:ffi";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { getLogPath } from "./dirs";
 
 const STDOUT_FILENO = 1;
@@ -101,7 +102,12 @@ export function suppressTerminalStderr(options?: SuppressTerminalStderrOptions):
 
 	let redirectFd: number;
 	try {
-		redirectFd = fs.openSync(options?.redirectPath ?? getLogPath(), "a");
+		const redirectPath = options?.redirectPath ?? getLogPath();
+		// getLogsDir() only computes the path; the logger creates it lazily, so
+		// on a fresh profile ~/.omp/logs may not exist yet. Create it here so
+		// diagnostics land in the log instead of falling through to /dev/null.
+		fs.mkdirSync(path.dirname(redirectPath), { recursive: true });
+		redirectFd = fs.openSync(redirectPath, "a");
 	} catch {
 		try {
 			redirectFd = fs.openSync("/dev/null", "w");

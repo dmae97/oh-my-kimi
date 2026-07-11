@@ -94,4 +94,48 @@ describe("stderr guard", () => {
 			expect(fs.existsSync(redirectPath)).toBe(false);
 		}
 	});
+
+	it("creates the redirect target's parent directory when it does not exist", async () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "stderr-guard-"));
+		tempDirs.push(dir);
+		// Nested path whose parent dirs do not exist yet — mirrors a fresh
+		// profile where ~/.omp/logs has not been created by the logger.
+		const missingParent = path.join(dir, "nested", "deep");
+		const redirectPath = path.join(missingParent, "redirect.log");
+		const probePath = path.join(dir, "probe.ts");
+		fs.writeFileSync(
+			probePath,
+			[
+				`import { restoreTerminalStderr, suppressTerminalStderr } from ${JSON.stringify(GUARD_MODULE)};`,
+				`import * as fs from "node:fs";`,
+				`const redirectPath = process.argv[2];`,
+				`const forced = suppressTerminalStderr({ force: true, redirectPath });`,
+				`if (forced) fs.writeSync(2, "hidden\\n");`,
+				`restoreTerminalStderr();`,
+				`process.stdout.write(JSON.stringify({ forced }));`,
+			].join("\n"),
+		);
+
+		const proc = Bun.spawn([process.execPath, probePath, redirectPath], {
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [stdout, exitCode] = await Promise.all([
+			new Response(proc.stdout as ReadableStream<Uint8Array>).text(),
+			proc.exited,
+		]);
+
+		expect(exitCode).toBe(0);
+		const { forced } = JSON.parse(stdout) as { forced: boolean };
+		if (forced) {
+			// The guard must have created the missing parent and written there,
+			// not fallen back to /dev/null.
+			expect(fs.existsSync(missingParent)).toBe(true);
+			expect(fs.readFileSync(redirectPath, "utf8")).toBe("hidden\n");
+		} else {
+			// Inert (no libc fd ops): returns before opening the redirect, so the
+			// parent is never created.
+			expect(fs.existsSync(missingParent)).toBe(false);
+		}
+	});
 });
