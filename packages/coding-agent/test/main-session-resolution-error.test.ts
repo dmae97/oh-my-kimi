@@ -6,15 +6,31 @@
  * `[Uncaught Exception]`.
  */
 import { describe, expect, it, vi } from "bun:test";
+import * as fsp from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { Args } from "@oh-my-pi/pi-coding-agent/cli/args";
 import type { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createSessionManager, SessionResolutionError, writeStartupNotice } from "@oh-my-pi/pi-coding-agent/main";
 import * as sessionListingModule from "@oh-my-pi/pi-coding-agent/session/session-listing";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 
-function buildResumeArgs(resume: string): Args {
+function buildResumeArgs(resume: string, sessionDir?: string): Args {
 	return {
 		resume,
+		sessionDir,
 		messages: [],
+		fileArgs: [],
+		unknownFlags: new Map(),
+		unrecognizedFlags: [],
+	};
+}
+
+function buildContinueArgs(message: string, sessionDir?: string): Args {
+	return {
+		continue: true,
+		sessionDir,
+		messages: [message],
 		fileArgs: [],
 		unknownFlags: new Map(),
 		unrecognizedFlags: [],
@@ -104,6 +120,51 @@ describe("createSessionManager — missing session (#2084)", () => {
 			expect(caught).toBeInstanceOf(SessionResolutionError);
 		} finally {
 			vi.restoreAllMocks();
+		}
+	});
+
+	it("rejects --resume with unknown id instead of falling back to latest persisted session", async () => {
+		const cwd = await fsp.mkdtemp(path.join(os.tmpdir(), "omp-resume-unknown-id-"));
+		const sessionDir = path.join(cwd, "sessions");
+		const missingId = "019ea530-ffff-7000-8000-000000000000";
+		try {
+			const latest = SessionManager.create(cwd, sessionDir);
+			latest.appendMessage({ role: "user", content: "newer persisted session", timestamp: Date.now() });
+			await latest.rewriteEntries();
+			const latestSessionId = latest.getSessionId();
+			expect(latestSessionId).not.toBe(missingId);
+
+			await expect(
+				createSessionManager(buildResumeArgs(missingId, sessionDir), cwd, stubSettings),
+			).rejects.toMatchObject({
+				name: "SessionResolutionError",
+				message: `Session "${missingId}" not found.`,
+				hint: expect.stringContaining("omp --resume"),
+			});
+		} finally {
+			await fsp.rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects --continue followed by an unknown session id instead of falling back to latest", async () => {
+		const cwd = await fsp.mkdtemp(path.join(os.tmpdir(), "omp-continue-unknown-id-"));
+		const sessionDir = path.join(cwd, "sessions");
+		const missingId = "019ea530-ffff-7000-8000-000000000000";
+		try {
+			const latest = SessionManager.create(cwd, sessionDir);
+			latest.appendMessage({ role: "user", content: "latest should not be resumed", timestamp: Date.now() });
+			await latest.rewriteEntries();
+			expect(latest.getSessionId()).not.toBe(missingId);
+
+			await expect(
+				createSessionManager(buildContinueArgs(missingId, sessionDir), cwd, stubSettings),
+			).rejects.toMatchObject({
+				name: "SessionResolutionError",
+				message: `Session "${missingId}" not found.`,
+				hint: expect.stringContaining("omp --resume"),
+			});
+		} finally {
+			await fsp.rm(cwd, { recursive: true, force: true });
 		}
 	});
 

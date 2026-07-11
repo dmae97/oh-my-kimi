@@ -634,6 +634,14 @@ async function getChangelogForDisplay(parsed: Args): Promise<string | undefined>
 	return undefined;
 }
 
+const SESSION_ID_ARG_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function positionalContinueSessionId(parsed: Args): string | undefined {
+	if (!parsed.continue || parsed.resume || parsed.fork || parsed.messages.length !== 1) return undefined;
+	const message = parsed.messages[0]?.trim();
+	return message && SESSION_ID_ARG_RE.test(message) ? message : undefined;
+}
+
 /** Resolves CLI session flags into an existing, forked, in-memory, or cancelled session manager. */
 export async function createSessionManager(
 	parsed: Args,
@@ -663,6 +671,13 @@ export async function createSessionManager(
 	if (parsed.noSession) {
 		return SessionManager.inMemory();
 	}
+	const continueSessionArg = positionalContinueSessionId(parsed);
+	if (continueSessionArg) {
+		parsed.resume = continueSessionArg;
+		parsed.continue = false;
+		parsed.messages = [];
+	}
+
 	if (typeof parsed.resume === "string") {
 		const sessionArg = parsed.resume;
 		if (sessionArg.includes("/") || sessionArg.includes("\\") || sessionArg.endsWith(".jsonl")) {
