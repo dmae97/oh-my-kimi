@@ -21,6 +21,7 @@
 - Fixed `/btw` side-channel turns on Codex models such as `gpt-5.6-luna` by preserving the session websocket preference instead of forcing SSE, and made Esc dismiss the active `/btw` panel before interrupting loop/maintenance work. ([#5213](https://github.com/can1357/oh-my-pi/issues/5213))
 - Fixed the Model Hub role-assignment strip hiding the selected chip once the row overflowed; the strip now scrolls horizontally, truncating passed chips behind a leading ellipsis so the selection (plus one chip of lookahead) stays visible.
 - Fixed mouse hover and clicks in the /models Roles view landing one row above the pointer (the row mapping subtracted the status row twice).
+- Fixed preferred web search providers failing before execution when an unrelated fallback provider could not initialize. ([#5182](https://github.com/can1357/oh-my-pi/pull/5182) by [@wolfiesch](https://github.com/wolfiesch))
 
 ## [16.4.5] - 2026-07-11
 
@@ -54,7 +55,6 @@
 - Fixed agents getting stuck waiting for messages from peers that have already stopped running.
 - Fixed compiled Linux binary extension loading when bundled web-search header generation cannot read `header-generator` data files from the build-time path. ([#5178](https://github.com/can1357/oh-my-pi/issues/5178))
 - Fixed plugin custom tool loading to skip and report invalid feature entries instead of crashing startup when a plugin dependency tree leaves one feature unresolved. ([#5189](https://github.com/can1357/oh-my-pi/issues/5189))
-- Fixed preferred web search providers failing before execution when an unrelated fallback provider could not initialize. ([#5182](https://github.com/can1357/oh-my-pi/pull/5182) by [@wolfiesch](https://github.com/wolfiesch))
 
 ## [16.4.4] - 2026-07-11
 
