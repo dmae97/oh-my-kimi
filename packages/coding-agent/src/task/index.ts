@@ -933,6 +933,11 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			options;
 		const buildFollowUpHint = (aborted: boolean): string => {
 			if (aborted) {
+				const status = AgentRegistry.global().get(agentId)?.status;
+				if (status === "idle" || status === "parked") {
+					const followUp = ircEnabled ? "message it via `irc` to resume; " : "";
+					return `\n\n${agentId} was stopped but is still resumable — ${followUp}transcript at history://${agentId}`;
+				}
 				return `\n\n${agentId} was aborted — transcript at history://${agentId}`;
 			}
 			const followUp = ircEnabled ? "message it via `irc` to follow up; " : "";
@@ -1574,11 +1579,17 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			preview = lastNewline >= 0 ? slice.slice(0, lastNewline) : slice;
 			truncated = true;
 		}
+		// A stopped-but-adopted agent (soft-budget stop) stays messageable; tell
+		// the parent so it can resume via irc instead of redoing the work.
+		const refStatus = AgentRegistry.global().get(result.id)?.status;
+		const resumable = result.aborted && (refStatus === "idle" || refStatus === "parked");
 		const summary = prompt.render(taskSummaryTemplate, {
 			agentName: result.agent,
 			id: result.id,
 			status,
 			duration: formatDuration(totalDurationMs),
+			abortReason: result.aborted ? result.abortReason : undefined,
+			resumable,
 			preview,
 			truncated,
 			meta: result.outputMeta

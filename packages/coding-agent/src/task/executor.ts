@@ -79,23 +79,27 @@ export type { YieldItem } from "./types";
 const MCP_CALL_TIMEOUT_MS = 60_000;
 
 /**
- * Soft per-agent request budgets (assistant requests per run). When a subagent
- * crosses its budget it can receive an optional steering notice asking it to
- * wrap up; at 1.5x the budget the run is aborted gracefully so partial output is
- * salvaged. The `default` key applies to agents without an explicit entry and
- * can be overridden via the `task.softRequestBudget` setting (0 disables the
- * guard). The notice is off by default and controlled separately by
- * `task.softRequestBudgetNotice`.
+ * Soft per-agent request budgets (assistant requests per run). Crossing the
+ * budget injects a wrap-up steering notice (`task.softRequestBudgetNotice`,
+ * on by default). At 1.5x the budget the free-running turn is stopped and the
+ * agent is driven to one forced final `yield` so partial findings come back
+ * as a real report; only if it still refuses to yield within
+ * {@link BUDGET_STOP_GRACE_REQUESTS} more requests is the run hard-aborted.
+ * The `default` key applies to agents without an explicit entry and can be
+ * overridden via the `task.softRequestBudget` setting (0 disables the guard).
  */
 export const SOFT_REQUEST_BUDGET: Record<string, number> = {
-	scout: 40,
-	sonic: 40,
-	default: 90,
+	scout: 100,
+	sonic: 100,
+	default: 200,
 };
 
-/** Optional steering notice injected when a subagent crosses its soft request budget. */
-export function buildBudgetNotice(requests: number): string {
-	return `[budget notice] You have used ${requests} requests in this run. Wrap up now: finish the current step and yield your final report.`;
+/** Extra requests allowed after a budget stop for the forced yield to land before the run is hard-aborted. */
+export const BUDGET_STOP_GRACE_REQUESTS = 5;
+
+/** Steering notice injected when a subagent crosses its soft request budget. */
+export function buildBudgetNotice(requests: number, budget: number): string {
+	return `[budget notice] You have used ${requests} requests in this run (soft budget: ${budget}). Wrap up now: finish the current step and yield your final report. At ${Math.ceil(budget * 1.5)} requests the run is force-stopped and you will be asked to yield whatever you have.`;
 }
 
 /** Flatten whitespace and clip salvage text for the cancelled-child summary line. */
@@ -799,7 +803,7 @@ export function createSubagentSettings(
 	});
 }
 
-type AbortReason = "signal" | "terminate" | "timeout" | "budget";
+export type AbortReason = "signal" | "terminate" | "timeout" | "budget";
 
 /** Inputs for the run monitor driving one subagent assignment. */
 interface RunMonitorArgs {
@@ -841,6 +845,12 @@ interface SubagentRunMonitor {
 	hasUsage(): boolean;
 	yieldCalled(): boolean;
 	runtimeLimitExceeded(): boolean;
+	/** True once the soft-budget stop fired: the free-running turn was aborted and the run is being driven to a forced final yield. */
+	budgetStopRequested(): boolean;
+	/** Resolves when the budget-stop session abort has settled (immediately when no stop fired). */
+	waitForBudgetStop(): Promise<void>;
+	/** The abort kind for this run, when an abort was requested. */
+	abortKind(): AbortReason | undefined;
 	/** True when the abort carries a precise external reason (signal / wall-clock / budget). */
 	hasExplicitAbortReason(): boolean;
 	/** Whether the (attempted) abort counts as a cancelled run rather than an internal failure. */
@@ -930,6 +940,8 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	let hasUsage = false;
 	let budgetSteerSent = false;
 	let budgetLimitExceeded = false;
+	let budgetStopRequested = false;
+	let budgetStopAbortPromise: Promise<void> | undefined;
 	let lastAssistantSalvageText: string | undefined;
 	let activeSessionAbortPromise: Promise<void> | undefined;
 
@@ -966,6 +978,24 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 		abortReason = reason;
 		abortController.abort();
 		void abortActiveSession();
+	};
+
+	// Soft-budget stop: cancel the free-running turn WITHOUT aborting the
+	// monitor, so driveSessionToYield can still drive one forced final yield.
+	// Deliberately not routed through abortActiveSession(): that memoizes its
+	// promise, and a later hard abort (grace exhausted) must be able to abort
+	// the session again.
+	const requestBudgetStop = () => {
+		if (budgetStopRequested || abortSent || resolved) return;
+		budgetStopRequested = true;
+		const session = activeSession;
+		budgetStopAbortPromise = session
+			? session.abort().catch(error => {
+					logger.debug("Subagent budget-stop abort failed", {
+						error: error instanceof Error ? error.message : String(error),
+					});
+				})
+			: Promise.resolve();
 	};
 
 	// Handle abort signal
@@ -1013,6 +1043,9 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 			return `Subagent runtime limit exceeded (task.maxRuntimeMs=${maxRuntimeMs})`;
 		}
 		if (budgetLimitExceeded) {
+			return `Soft request budget exceeded (${progress.requests} requests; budget ${softRequestBudget}) — agent did not yield when force-stopped`;
+		}
+		if (budgetStopRequested) {
 			return `Soft request budget exceeded (${progress.requests} requests; budget ${softRequestBudget})`;
 		}
 		return resolveSignalAbortReason();
@@ -1347,14 +1380,26 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 						}
 					}
 					if (softRequestBudget > 0 && !abortSent && !yieldCallPending) {
-						if (progress.requests >= softRequestBudget * 1.5) {
-							requestAbort("budget");
+						const stopThreshold = softRequestBudget * 1.5;
+						if (budgetStopRequested) {
+							// Grace window after the stop: the forced yield needs a
+							// request or two; a child that keeps burning requests
+							// instead of yielding is hard-aborted.
+							if (progress.requests >= stopThreshold + BUDGET_STOP_GRACE_REQUESTS) {
+								requestAbort("budget");
+							}
+						} else if (progress.requests >= stopThreshold) {
+							requestBudgetStop();
 						} else if (softRequestBudgetNotice && !budgetSteerSent && progress.requests >= softRequestBudget) {
 							budgetSteerSent = true;
 							const steerSession = activeSession;
 							if (steerSession) {
-								void steerSession
-									.sendUserMessage(buildBudgetNotice(progress.requests), { deliverAs: "steer" })
+								// Build the notice now (the count at crossing time), but send
+								// behind an async boundary: a synchronously-throwing send must
+								// never take down event processing (which escalates to terminate).
+								const notice = buildBudgetNotice(progress.requests, softRequestBudget);
+								void Promise.resolve()
+									.then(() => steerSession.sendUserMessage(notice, { deliverAs: "steer" }))
 									.catch(err => {
 										logger.warn("Subagent budget steer failed", {
 											error: err instanceof Error ? err.message : String(err),
@@ -1505,7 +1550,13 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 		hasUsage: () => hasUsage,
 		yieldCalled: () => yieldCalled,
 		runtimeLimitExceeded: () => runtimeLimitExceeded,
-		hasExplicitAbortReason: () => abortReason === "signal" || runtimeLimitExceeded || budgetLimitExceeded,
+		hasExplicitAbortReason: () =>
+			abortReason === "signal" || runtimeLimitExceeded || budgetLimitExceeded || budgetStopRequested,
+		budgetStopRequested: () => budgetStopRequested,
+		waitForBudgetStop: () => budgetStopAbortPromise ?? Promise.resolve(),
+		// A soft stop that never escalated still identifies as a budget abort so
+		// the lifecycle can park the agent as resumable instead of killing it.
+		abortKind: () => abortReason ?? (budgetStopRequested ? "budget" : undefined),
 		isAbortedRun: () =>
 			abortReason === "signal" || runtimeLimitExceeded || budgetLimitExceeded || abortReason === undefined,
 		requestAbort,
@@ -1553,7 +1604,9 @@ const MAX_YIELD_RETRIES = 3;
 /**
  * Drive one assignment through a live session: send the prompt, wait for idle,
  * remind the agent to `yield` (up to {@link MAX_YIELD_RETRIES} times), then
- * classify the terminal assistant state.
+ * classify the terminal assistant state. A soft-budget stop short-circuits the
+ * reminder ladder into a single forced final yield so partial findings still
+ * come back as a real report.
  */
 async function driveSessionToYield(
 	session: AgentSession,
@@ -1594,13 +1647,30 @@ async function driveSessionToYield(
 	};
 
 	try {
-		await awaitAbortable(session.prompt(task, { attribution: "agent" }));
-		await awaitAbortable(session.waitForIdle());
+		try {
+			await awaitAbortable(session.prompt(task, { attribution: "agent" }));
+			await awaitAbortable(session.waitForIdle());
+		} catch (err) {
+			// A budget stop cancels the free-running turn by aborting the
+			// session, which can surface here as a rejected prompt. Swallow it
+			// and drive the forced final yield below; real caller/timeout
+			// aborts (monitor signal) and genuine failures keep the old path.
+			if (!monitor.budgetStopRequested() || abortSignal.aborted) throw err;
+		}
 
 		const reminderToolChoice = buildNamedToolChoice("yield", session.model);
 
 		let retryCount = 0;
 		while (!monitor.yieldCalled() && retryCount < MAX_YIELD_RETRIES && !abortSignal.aborted) {
+			// A budget stop collapses the reminder ladder to a single forced
+			// final yield: wait for the stop's session abort to settle, then
+			// prompt once with the wrap-up reminder + named tool choice.
+			const budgetStop = monitor.budgetStopRequested();
+			if (budgetStop) {
+				retryCount = MAX_YIELD_RETRIES - 1;
+				await monitor.waitForBudgetStop();
+				if (monitor.yieldCalled() || abortSignal.aborted) break;
+			}
 			// Skip reminders when the model returned a terminal error (e.g.
 			// rate-limit cap hit, auth failure). Re-prompting would just
 			// hit the same wall, multiplying the failure noise without
@@ -1612,6 +1682,7 @@ async function driveSessionToYield(
 				const reminder = prompt.render(submitReminderTemplate, {
 					retryCount,
 					maxRetries: MAX_YIELD_RETRIES,
+					budgetStop,
 				});
 
 				const isFinalRetry = retryCount >= MAX_YIELD_RETRIES;
@@ -1665,6 +1736,14 @@ async function driveSessionToYield(
 				exitCode = 1;
 				error ??= lastAssistant.errorMessage || "Subagent failed";
 			}
+		}
+
+		// A budget-stopped run that still produced no yield is a budget abort:
+		// surface the precise reason instead of a generic missing-yield failure.
+		if (!monitor.yieldCalled() && monitor.budgetStopRequested() && !aborted) {
+			aborted = true;
+			abortReasonText ??= monitor.resolveAbortReasonText();
+			exitCode = 1;
 		}
 	} catch (err) {
 		if (abortSignal.aborted && monitor.yieldCalled() && !monitor.runtimeLimitExceeded()) {
@@ -1850,10 +1929,19 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 	};
 }
 
+/**
+ * Settle a subagent's registry lifecycle after a run: terminal teardown for
+ * hard aborts, unregister for one-shot helpers, park for isolated runs, and
+ * idle + lifecycle adoption for kept-alive agents. A soft-budget abort on a
+ * kept-alive, revivable agent is treated as a self-inflicted stop rather than
+ * a kill — the agent stays interrogable and resumable (irc wake / revival).
+ */
 export async function finalizeSubagentLifecycle(args: {
 	id: string;
 	session: AgentSession;
 	aborted: boolean;
+	/** Which watchdog (if any) requested the abort; decides revivability. */
+	abortKind?: AbortReason;
 	keepAlive: boolean;
 	isolated: boolean;
 	agentIdleTtlMs: number;
@@ -1868,8 +1956,12 @@ export async function finalizeSubagentLifecycle(args: {
 		}
 	};
 
-	if (args.aborted) {
-		// Hard abort (caller signal / wall-clock / budget): terminal teardown.
+	// A budget abort leaves a consistent session with its transcript on disk;
+	// caller signals, wall-clock timeouts (possible stream hang), and internal
+	// terminations are genuine kills and stay terminal.
+	const resumableAbort =
+		args.abortKind === "budget" && args.keepAlive && !args.isolated && args.reviveSession !== null;
+	if (args.aborted && !resumableAbort) {
 		registry.setStatus(args.id, "aborted");
 		await disposeSession();
 		return;
@@ -2592,6 +2684,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					id,
 					session,
 					aborted,
+					abortKind: monitor.abortKind(),
 					keepAlive: options.keepAlive !== false,
 					isolated: worktree !== undefined,
 					agentIdleTtlMs,

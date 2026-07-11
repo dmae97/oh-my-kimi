@@ -104,8 +104,19 @@ export class IrcBus {
 	): Promise<IrcDeliveryReceipt> {
 		const message: IrcMessage = { ...msg, id: Snowflake.next(), ts: Date.now() };
 		const ref = this.#registry.get(message.to);
-		if (!ref || ref.status === "aborted") {
-			return { to: message.to, outcome: "failed", error: `Unknown or terminated agent "${message.to}".` };
+		if (!ref) {
+			return {
+				to: message.to,
+				outcome: "failed",
+				error: `Unknown agent "${message.to}" — check \`irc list\` for live peers.`,
+			};
+		}
+		if (ref.status === "aborted") {
+			return {
+				to: message.to,
+				outcome: "failed",
+				error: `Agent "${message.to}" was hard-aborted and cannot be messaged or revived. Its transcript remains readable at history://${message.to}.`,
+			};
 		}
 		// Advisor refs are observability-only transcripts, never messageable peers.
 		if (ref.kind === "advisor") {
@@ -197,7 +208,9 @@ export class IrcBus {
 			? `IRC wait aborted: agent "${filter.from}" is not running`
 			: "IRC wait aborted: no running peers remain";
 
-		const settle = (outcome: { kind: "message"; msg: IrcMessage } | { kind: "timeout" } | { kind: "abort"; error: Error }): void => {
+		const settle = (
+			outcome: { kind: "message"; msg: IrcMessage } | { kind: "timeout" } | { kind: "abort"; error: Error },
+		): void => {
 			cleanup();
 			if (outcome.kind === "message") {
 				resolve(outcome.msg);
@@ -222,7 +235,11 @@ export class IrcBus {
 		};
 
 		if (signal) {
-			onAbort = () => settle({ kind: "abort", error: signal.reason instanceof Error ? signal.reason : new Error("IRC wait aborted") });
+			onAbort = () =>
+				settle({
+					kind: "abort",
+					error: signal.reason instanceof Error ? signal.reason : new Error("IRC wait aborted"),
+				});
 			signal.addEventListener("abort", onAbort, { once: true });
 		}
 		if (timeoutMs > 0) {
@@ -240,9 +257,7 @@ export class IrcBus {
 		if (liveness) {
 			const { registry, senderId } = liveness;
 			const hasRunningSender = (from?: string): boolean =>
-				registry
-					.listVisibleTo(senderId)
-					.some(ref => ref.status === "running" && (!from || ref.id === from));
+				registry.listVisibleTo(senderId).some(ref => ref.status === "running" && (!from || ref.id === from));
 			const check = filter.from ? () => hasRunningSender(filter.from) : () => hasRunningSender();
 			unsubscribeLiveness = registry.onChange(() => {
 				if (!check()) {

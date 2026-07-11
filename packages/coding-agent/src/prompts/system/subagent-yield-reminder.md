@@ -1,3 +1,12 @@
+{{#if budgetStop}}
+<system-reminder>
+This run crossed its request budget and the in-flight turn was stopped. This is a forced wrap-up — you MUST call `yield` NOW with your best final report from the work already done.
+
+- Consolidate everything of value you have gathered so far; name remaining gaps explicitly as incomplete instead of investigating further.
+- Do NOT call any other tool and do NOT resume the assignment.
+- Terminal `yield` only: omit `type` and put the report in `result.data`, or use `type: string` to finalize from your last assistant turn.
+</system-reminder>
+{{else}}
 <system-reminder>
 Your last turn ended without a tool call, so the session went idle. This is reminder {{retryCount}} of {{maxRetries}}.
 
@@ -11,3 +20,4 @@ Default to option 1 unless the work is actually done, actually blocked, or ready
 
 You NEVER end this turn with text only.
 </system-reminder>
+{{/if}}

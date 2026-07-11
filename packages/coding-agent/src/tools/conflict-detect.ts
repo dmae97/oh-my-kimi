@@ -705,7 +705,7 @@ export function formatConflictWarning(
 		'`content` shorthand: a line that is exactly `@ours` / `@theirs` / `@base` / `@both` expands to that recorded section. `@both` is ours-then-theirs with no separator. Lines that are not a token pass through verbatim, so `"// keep both\\n@ours\\n@theirs"` literally writes the comment, then ours, then theirs.',
 	);
 	out.push(
-		"Resolve with the minimal merge of the recorded sides — do not introduce logic that neither side contains.",
+		"Resolve with the minimal merge of the recorded sides — do not introduce logic that neither side contains. Resolve several conflicts in a single turn by issuing multiple `write` calls at once; ids stay valid as earlier blocks are resolved.",
 	);
 
 	for (const entry of entries) {
