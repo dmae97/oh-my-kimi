@@ -266,6 +266,8 @@ export class InputController {
 			});
 		}
 		this.ctx.editor.onEscape = () => {
+			// Side-channel panels are the topmost view. Esc dismisses them before
+			// touching loop mode, maintenance, or the underlying main turn.
 			// Active context maintenance owns Esc: auto/manual compaction,
 			// handoff generation, and auto-retry backoff all advertise
 			// "(esc to cancel)". Dispatch on live session state instead of
@@ -281,6 +283,13 @@ export class InputController {
 			// (see EventController). Main-session maintenance still owns Esc and
 			// stays cancellable from the main view (focused submit gates /compact
 			// and handoff, so manual maintenance is main-only anyway).
+			if (this.ctx.hasActiveBtw() && this.ctx.handleBtwEscape()) {
+				return;
+			}
+			if (this.ctx.hasActiveOmfg() && this.ctx.handleOmfgEscape()) {
+				return;
+			}
+
 			if (!this.ctx.focusedAgentId) {
 				const viewSession = this.ctx.viewSession;
 				let aborted = false;
@@ -306,12 +315,6 @@ export class InputController {
 				} else {
 					this.ctx.cancelPendingSubmission();
 				}
-				return;
-			}
-			if (this.ctx.hasActiveBtw() && this.ctx.handleBtwEscape()) {
-				return;
-			}
-			if (this.ctx.hasActiveOmfg() && this.ctx.handleOmfgEscape()) {
 				return;
 			}
 			if (this.ctx.focusedAgentId) {
