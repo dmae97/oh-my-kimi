@@ -231,12 +231,20 @@ export async function runSearchQuery(
 	params: SearchQueryParams,
 	options: { authStorage?: AuthStorage; sessionId?: string; signal?: AbortSignal } = {},
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details: SearchRenderDetails }> {
-	const authStorage = options.authStorage ?? (await discoverAuthStorage());
-	return executeSearch("cli-web-search", params, {
-		authStorage,
-		sessionId: options.sessionId,
-		signal: options.signal,
-	});
+	const createdAuthStorage = options.authStorage ? undefined : await discoverAuthStorage();
+	const authStorage = options.authStorage ?? createdAuthStorage;
+	if (!authStorage) {
+		throw new Error("Failed to initialize authentication storage");
+	}
+	try {
+		return await executeSearch("cli-web-search", params, {
+			authStorage,
+			sessionId: options.sessionId,
+			signal: options.signal,
+		});
+	} finally {
+		createdAuthStorage?.close();
+	}
 }
 
 /**

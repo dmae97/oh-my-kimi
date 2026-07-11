@@ -1,3 +1,4 @@
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { logger } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 import { captureRequestHeaders, resolvePromptCacheKey } from "../auth-gateway/http";
@@ -291,6 +292,19 @@ function deriveCacheRetention(data: {
 	return strongest;
 }
 
+/**
+ * Inbound `output_config.effort` wire literal → catalog `Effort` (1:1).
+ * Values outside this table (none exist in the schema today) are ignored
+ * rather than guessed at.
+ */
+const REASONING_EFFORT_BY_WIRE: Partial<Record<string, Effort>> = {
+	low: Effort.Low,
+	medium: Effort.Medium,
+	high: Effort.High,
+	xhigh: Effort.XHigh,
+	max: Effort.Max,
+};
+
 export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 	const data = anthropicMessagesRequestSchema(body);
 	if (data instanceof type.errors) {
@@ -350,6 +364,10 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 	}
 	if (data.output_config?.task_budget) {
 		options.taskBudget = data.output_config.task_budget;
+	}
+	if (data.output_config?.effort) {
+		const mapped = REASONING_EFFORT_BY_WIRE[data.output_config.effort];
+		if (mapped !== undefined) options.reasoning = mapped;
 	}
 	const cacheRetention = deriveCacheRetention(data);
 	if (cacheRetention !== undefined) options.cacheRetention = cacheRetention;

@@ -17,7 +17,6 @@ import type {
 	Target,
 } from "puppeteer-core";
 import { JsRuntime, type RuntimeHooks } from "../../eval/js/shared/runtime";
-import type { JsDisplayOutput } from "../../eval/js/shared/types";
 import { resizeImage } from "../../utils/image-resize";
 import { resolveToCwd } from "../path-utils";
 import { formatScreenshot } from "../render-utils";
@@ -37,12 +36,12 @@ import {
 } from "./launch";
 import { extractReadableFromHtml, type ReadableFormat } from "./readable";
 import { markHandled, waitForBrowserRun } from "./run-cancellation";
+import { cloneSafe, RunOutput } from "./run-output";
 import type {
 	Observation,
 	ObservationEntry,
 	ReadyInfo,
 	RunErrorPayload,
-	RunResultOk,
 	ScreenshotResult,
 	SessionSnapshot,
 	ToolReply,
@@ -116,15 +115,27 @@ type ActionabilityResult = { ok: true; x: number; y: number } | { ok: false; rea
  * - `QUICK_OP_TIMEOUT_MS`: page-coupled reads that should resolve fast (`observe`,
  *   `screenshot`, `extract`, `ariaSnapshot`).
  * - `ACTION_OP_TIMEOUT_MS`: interactive point actions (`click`, `fill`, `type`, …) and
- *   the default for wait helpers when no explicit `{ timeout }` is given.
+ *   the default for wait helpers when no explicit `{ timeout }` is given. Selector ops
+ *   additionally fail fast after `ZERO_MATCH_FAIL_FAST_MS` of confirmed zero matches
+ *   (see `#zeroMatchWatchdog`), so the full ceiling is only spent on elements that
+ *   exist but are not yet actionable.
  *
  * `goto` and `evaluate` stay uncapped (`Number.POSITIVE_INFINITY`): navigation and user
  * code legitimately use the full cell budget.
  */
 const QUICK_OP_TIMEOUT_MS = 20_000;
-const ACTION_OP_TIMEOUT_MS = 15_000;
+const ACTION_OP_TIMEOUT_MS = 8_000;
 /** Headroom subtracted from the cell budget so a per-op deadline fires before it. */
 const OP_DEADLINE_SLACK_MS = 1_000;
+/**
+ * A selector op whose selector has matched nothing for this long fails fast with the
+ * zero-match hint instead of burning the rest of its deadline: a wrong selector or a
+ * wrong page (consent wall, pre-navigation document) is the common agent failure and
+ * should cost ~2s, not the full action ceiling. Explicit `{ timeout }` waits opt out.
+ */
+const ZERO_MATCH_FAIL_FAST_MS = 2_000;
+/** Poll cadence for the zero-match watchdog. */
+const ZERO_MATCH_POLL_MS = 250;
 
 export interface OpTimeouts {
 	/** Largest per-op deadline allowed — strictly below the cell budget. */
@@ -190,7 +201,7 @@ interface TabApi {
 	press(key: KeyInput, opts?: { selector?: string }): Promise<void>;
 	scroll(deltaX: number, deltaY: number): Promise<void>;
 	drag(from: DragTarget, to: DragTarget): Promise<void>;
-	waitFor(selector: string, opts?: { timeout?: number }): Promise<ElementHandle>;
+	waitFor(selector: string, opts?: { timeout?: number }): Promise<ActionableHandle>;
 	evaluate<TResult, TArgs extends unknown[]>(
 		fn: string | ((...args: TArgs) => TResult | Promise<TResult>),
 		...args: TArgs
@@ -206,13 +217,13 @@ interface TabApi {
 	waitForSelector(
 		selector: string,
 		opts?: { timeout?: number; visible?: boolean; hidden?: boolean },
-	): Promise<ElementHandle | null>;
+	): Promise<ActionableHandle | null>;
 	waitForNavigation(opts?: {
 		waitUntil?: "load" | "domcontentloaded" | "networkidle0" | "networkidle2";
 		timeout?: number;
 	}): Promise<HTTPResponse | null>;
-	id(n: number): Promise<ElementHandle>;
-	ref(id: string): Promise<ElementHandle>;
+	id(n: number): Promise<ActionableHandle>;
+	ref(id: string): Promise<ActionableHandle>;
 }
 
 export function normalizeSelector(selector: string): string {
@@ -259,16 +270,30 @@ function asElementHandle(handle: unknown): ElementHandle | null {
 	return handle ? (handle as ElementHandle) : null;
 }
 
-function cloneSafe(value: unknown): unknown {
-	if (value === undefined) return undefined;
-	try {
-		structuredClone(value);
-		return value;
-	} catch {}
-	try {
-		return JSON.parse(JSON.stringify(value)) as unknown;
-	} catch {}
-	return String(value);
+/** ElementHandle enriched with the `fill()` the tool docs promise on handles from `tab.id()`/`tab.ref()`/`tab.waitFor()`. */
+export type ActionableHandle = ElementHandle & { fill(value: string): Promise<void> };
+
+/**
+ * Attach `fill()` to a puppeteer ElementHandle before handing it to user code.
+ * Puppeteer handles expose `type()` but no `fill()`; the semantics mirror the
+ * selector-based `tab.fill()`: focus, clear any existing value, then type.
+ */
+export function toActionableHandle(handle: ElementHandle): ActionableHandle {
+	const enriched = handle as ActionableHandle;
+	enriched.fill = value => fillViaHandle(enriched, value);
+	return enriched;
+}
+
+/** Focus, clear any existing value, then retype — shared by `tab.fill(aria-ref)` and enriched handles. */
+async function fillViaHandle(handle: ElementHandle, value: string, signal?: AbortSignal): Promise<void> {
+	await untilAborted(signal, () =>
+		handle.evaluate(el => {
+			const node = el as unknown as { value?: string; focus?: () => void };
+			node.focus?.();
+			if ("value" in node) node.value = "";
+		}),
+	);
+	await untilAborted(signal, () => handle.type(value, { delay: 0 }));
 }
 
 /**
@@ -301,14 +326,6 @@ function errorPayload(error: unknown): RunErrorPayload {
 		return { name: error.name, message: error.message, stack: error.stack, isToolError: false, isAbort: false };
 	}
 	return { name: "Error", message: String(error), isToolError: false, isAbort: false };
-}
-
-function safeJsonStringify(value: unknown): string {
-	try {
-		return JSON.stringify(value, null, 2);
-	} catch {
-		return String(value);
-	}
 }
 
 function replyError(payload: RunErrorPayload): Error {
@@ -508,6 +525,17 @@ async function clickQueryHandlerText(
 	);
 }
 
+/**
+ * Hint appended to a selector op's fail-fast timeout, given the selector's current
+ * match count: a missing element (consent wall, wrong page) reads differently from
+ * a present-but-unactionable one.
+ */
+export function formatSelectorMatchHint(count: number): string {
+	return count === 0
+		? "; selector currently matches no elements — run tab.observe() or tab.ariaSnapshot() to inspect the page"
+		: `; selector currently matches ${count} element(s) but the action never became possible — the element may be hidden or covered (try tab.scrollIntoView() or a more specific selector)`;
+}
+
 export interface InflightOp {
 	label: string;
 	startedAt: number;
@@ -517,7 +545,7 @@ interface ActiveRun {
 	id: string;
 	ac: AbortController;
 	signal: AbortSignal;
-	displays: RunResultOk["displays"];
+	output: RunOutput;
 	screenshots: ScreenshotResult[];
 	pendingTools: Map<string, { resolve(value: unknown): void; reject(error: Error): void }>;
 	/** Helper invocations currently awaiting the page/network, keyed by op id. */
@@ -706,13 +734,13 @@ export class WorkerCore {
 		const ac = new AbortController();
 		const runAc = new AbortController();
 		const signal = AbortSignal.any([timeoutSignal, ac.signal, runAc.signal]);
-		const displays: RunResultOk["displays"] = [];
+		const output = new RunOutput();
 		const screenshots: ScreenshotResult[] = [];
 		const active: ActiveRun = {
 			id: msg.id,
 			ac,
 			signal,
-			displays,
+			output,
 			screenshots,
 			pendingTools: new Map(),
 			inflight: new Map(),
@@ -723,7 +751,7 @@ export class WorkerCore {
 			throwIfAborted(signal);
 			const page = this.#requirePage();
 			const browser = this.#requireBrowser();
-			const tabApi = this.#createTabApi(msg.name, msg.timeoutMs, signal, msg.session, displays, screenshots, active);
+			const tabApi = this.#createTabApi(msg.name, msg.timeoutMs, signal, msg.session, output, screenshots, active);
 			const runtime = this.#ensureRuntime(msg.session);
 			runtime.setCwd(msg.session.cwd);
 			runtime.setRunScope({
@@ -774,7 +802,7 @@ export class WorkerCore {
 					type: "result",
 					id: msg.id,
 					ok: true,
-					payload: { displays, returnValue: cloneSafe(returnValue), screenshots },
+					payload: { displays: output.finish(), returnValue: cloneSafe(returnValue), screenshots },
 				});
 			} finally {
 				signal.removeEventListener("abort", onCancel);
@@ -802,31 +830,18 @@ export class WorkerCore {
 		return {
 			onText: chunk => {
 				throwIfAborted(active.signal);
+				active.output.pushText(chunk);
 				this.#log("debug", chunk.replace(/\n$/, ""));
 			},
 			onDisplay: output => {
 				throwIfAborted(active.signal);
-				this.#pushDisplay(active.displays, output);
+				active.output.pushDisplay(output);
 			},
 			callTool: (name, args) => {
 				throwIfAborted(active.signal);
 				return this.#callTool(active, name, args);
 			},
 		};
-	}
-
-	#pushDisplay(displays: RunResultOk["displays"], output: JsDisplayOutput): void {
-		if (output.type === "image") {
-			displays.push({ type: "image", data: output.data, mimeType: output.mimeType });
-			return;
-		}
-		if (output.type === "json") {
-			displays.push({ type: "text", text: safeJsonStringify(output.data) });
-			return;
-		}
-		// status — surface as compact JSON so helper side effects (read/write/env) appear in
-		// the cell result alongside explicit display() output.
-		displays.push({ type: "text", text: safeJsonStringify(output.event) });
 	}
 
 	async #callTool(active: ActiveRun, name: string, args: unknown): Promise<unknown> {
@@ -853,7 +868,10 @@ export class WorkerCore {
 	 * with a named error instead of silently consuming the whole cell budget. Pass
 	 * `Number.POSITIVE_INFINITY` for `perOpTimeoutMs` to bound the op only by the cell
 	 * budget (used for `evaluate` running user code and for locator helpers that already
-	 * carry puppeteer's own `.setTimeout(timeoutMs)`).
+	 * carry puppeteer's own `.setTimeout(timeoutMs)`). When the op targets a `selector`,
+	 * the fail-fast timeout carries a best-effort match-count hint, and — when
+	 * `zeroMatchAfterMs` is set — a watchdog aborts the op early once the selector has
+	 * matched nothing for that long.
 	 */
 	async #runOp<T>(
 		active: ActiveRun,
@@ -861,14 +879,28 @@ export class WorkerCore {
 		cellSignal: AbortSignal,
 		perOpTimeoutMs: number,
 		fn: (signal: AbortSignal) => Promise<T>,
+		opts?: { selector?: string; zeroMatchAfterMs?: number },
 	): Promise<T> {
 		const opId = active.opCounter++;
 		active.inflight.set(opId, { label, startedAt: Date.now() });
 		const capped = Number.isFinite(perOpTimeoutMs) && perOpTimeoutMs > 0;
 		const opTimeout = capped ? AbortSignal.timeout(perOpTimeoutMs) : undefined;
 		const opSignal = opTimeout ? AbortSignal.any([cellSignal, opTimeout]) : cellSignal;
+		const selector = opts?.selector;
+		const watchdog =
+			selector !== undefined && opts?.zeroMatchAfterMs !== undefined && parseAriaRefSelector(selector) === null
+				? { selector, afterMs: opts.zeroMatchAfterMs }
+				: undefined;
+		// Fired when the watchdog wins the race (tears down the in-flight action) and in
+		// the finally (stops the watchdog's polling once the op settles either way).
+		const earlyAc = new AbortController();
 		try {
-			return await fn(opSignal);
+			if (!watchdog) return await fn(opSignal);
+			const racedSignal = AbortSignal.any([opSignal, earlyAc.signal]);
+			return await Promise.race([
+				fn(racedSignal),
+				this.#zeroMatchWatchdog(watchdog.selector, label, watchdog.afterMs, racedSignal),
+			]);
 		} catch (err) {
 			// Fail fast with a named, attributable error instead of the opaque whole-cell timeout:
 			// our per-op deadline fired, or puppeteer's own (equal) timeout fired first — having
@@ -879,11 +911,67 @@ export class WorkerCore {
 				!cellSignal.aborted &&
 				(opTimeout?.aborted || (err instanceof Error && err.name === "TimeoutError"))
 			) {
-				throw new ToolError(`${label} timed out after ${perOpTimeoutMs}ms`);
+				const hint = selector ? await this.#selectorTimeoutHint(selector) : "";
+				throw new ToolError(`${label} timed out after ${perOpTimeoutMs}ms${hint}`);
 			}
 			throw err;
 		} finally {
+			earlyAc.abort();
 			active.inflight.delete(opId);
+		}
+	}
+
+	/**
+	 * Fail-fast arm raced against a selector op: rejects once the selector has matched
+	 * nothing for the whole `afterMs` window, so a wrong selector or wrong page (consent
+	 * wall, pre-navigation document) costs ~2s instead of the full action deadline.
+	 * Disarms — hangs until the settled race drops it — the moment at least one element
+	 * matches; an inconclusive probe (mid-navigation, detached frame) never counts
+	 * toward the zero-match window.
+	 */
+	async #zeroMatchWatchdog(selector: string, label: string, afterMs: number, signal: AbortSignal): Promise<never> {
+		const page = this.#requirePage();
+		const resolved = normalizeSelector(selector);
+		const deadline = Date.now() + afterMs;
+		while (!signal.aborted) {
+			let count: number | null = null;
+			try {
+				const handles = await page.$$(resolved);
+				count = handles.length;
+				for (const handle of handles) void handle.dispose().catch(() => undefined);
+			} catch {
+				// Inconclusive probe — keep polling without advancing toward failure.
+			}
+			if (count !== null && count > 0) break;
+			if (count === 0 && Date.now() >= deadline) {
+				throw new ToolError(`${label} failed fast after ${afterMs}ms${formatSelectorMatchHint(0)}`);
+			}
+			try {
+				await untilAborted(signal, () => Bun.sleep(ZERO_MATCH_POLL_MS));
+			} catch {
+				break;
+			}
+		}
+		return await new Promise<never>(() => {});
+	}
+
+	/**
+	 * Best-effort match-count probe for a timed-out selector op. Never throws;
+	 * empty string when the probe fails, stalls, or the selector is an aria-ref.
+	 */
+	async #selectorTimeoutHint(selector: string): Promise<string> {
+		if (parseAriaRefSelector(selector) !== null) return "";
+		try {
+			const handles = await Promise.race([
+				this.#requirePage().$$(normalizeSelector(selector)),
+				Bun.sleep(1_000).then(() => null),
+			]);
+			if (!handles) return "";
+			const count = handles.length;
+			for (const handle of handles) void handle.dispose().catch(() => undefined);
+			return formatSelectorMatchHint(count);
+		} catch {
+			return "";
 		}
 	}
 
@@ -892,7 +980,7 @@ export class WorkerCore {
 		timeoutMs: number,
 		signal: AbortSignal,
 		session: SessionSnapshot,
-		displays: RunResultOk["displays"],
+		output: RunOutput,
 		screenshots: ScreenshotResult[],
 		active: ActiveRun,
 	): TabApi {
@@ -900,8 +988,12 @@ export class WorkerCore {
 		const { quickOpMs, actionOpMs } = resolveOpTimeouts(timeoutMs);
 		const waitMs = (explicit?: number): number => resolveWaitTimeout(timeoutMs, explicit);
 		const INF = Number.POSITIVE_INFINITY;
-		const op = <T>(label: string, perOpMs: number, fn: (sig: AbortSignal) => Promise<T>): Promise<T> =>
-			markHandled(this.#runOp(active, label, signal, perOpMs, fn));
+		const op = <T>(
+			label: string,
+			perOpMs: number,
+			fn: (sig: AbortSignal) => Promise<T>,
+			selectorOpts?: { selector?: string; zeroMatchAfterMs?: number },
+		): Promise<T> => markHandled(this.#runOp(active, label, signal, perOpMs, fn, selectorOpts));
 		return {
 			name,
 			page,
@@ -941,7 +1033,7 @@ export class WorkerCore {
 				),
 			screenshot: opts =>
 				op(describeScreenshot(opts), quickOpMs, sig =>
-					this.#captureScreenshot(session, displays, screenshots, sig, opts),
+					this.#captureScreenshot(session, output, screenshots, sig, opts),
 				),
 			extract: (format = "markdown") =>
 				op(`tab.extract(${JSON.stringify(format)})`, quickOpMs, async sig => {
@@ -961,51 +1053,62 @@ export class WorkerCore {
 					return content;
 				}),
 			click: selector =>
-				op(`tab.click(${JSON.stringify(selector)})`, actionOpMs, async sig => {
-					if (parseAriaRefSelector(selector) !== null) {
-						const handle = await this.#resolveAriaRef(selector);
-						try {
-							await untilAborted(sig, () => handle.click());
-						} finally {
-							await handle.dispose().catch(() => undefined);
+				op(
+					`tab.click(${JSON.stringify(selector)})`,
+					actionOpMs,
+					async sig => {
+						if (parseAriaRefSelector(selector) !== null) {
+							const handle = await this.#resolveAriaRef(selector);
+							try {
+								await untilAborted(sig, () => handle.click());
+							} finally {
+								await handle.dispose().catch(() => undefined);
+							}
+							return;
 						}
-						return;
-					}
-					const resolved = normalizeSelector(selector);
-					if (resolved.startsWith("text/")) await clickQueryHandlerText(page, resolved, actionOpMs, sig);
-					else await untilAborted(sig, () => page.locator(resolved).setTimeout(actionOpMs).click({ signal: sig }));
-				}),
-			type: (selector, text) =>
-				op(`tab.type(${JSON.stringify(selector)})`, actionOpMs, async sig => {
-					const handle = await this.#resolveActionHandle(selector, actionOpMs, sig);
-					try {
-						await untilAborted(sig, () => handle.type(text, { delay: 0 }));
-					} finally {
-						await handle.dispose().catch(() => undefined);
-					}
-				}),
-			fill: (selector, value) =>
-				op(`tab.fill(${JSON.stringify(selector)})`, actionOpMs, async sig => {
-					if (parseAriaRefSelector(selector) !== null) {
-						const handle = await this.#resolveAriaRef(selector);
-						try {
+						const resolved = normalizeSelector(selector);
+						if (resolved.startsWith("text/")) await clickQueryHandlerText(page, resolved, actionOpMs, sig);
+						else
 							await untilAborted(sig, () =>
-								handle.evaluate(el => {
-									const node = el as unknown as { value?: string; focus?: () => void };
-									node.focus?.();
-									if ("value" in node) node.value = "";
-								}),
+								page.locator(resolved).setTimeout(actionOpMs).click({ signal: sig }),
 							);
-							await untilAborted(sig, () => handle.type(value, { delay: 0 }));
+					},
+					{ selector, zeroMatchAfterMs: ZERO_MATCH_FAIL_FAST_MS },
+				),
+			type: (selector, text) =>
+				op(
+					`tab.type(${JSON.stringify(selector)})`,
+					actionOpMs,
+					async sig => {
+						const handle = await this.#resolveActionHandle(selector, actionOpMs, sig);
+						try {
+							await untilAborted(sig, () => handle.type(text, { delay: 0 }));
 						} finally {
 							await handle.dispose().catch(() => undefined);
 						}
-						return;
-					}
-					await untilAborted(sig, () =>
-						page.locator(normalizeSelector(selector)).setTimeout(actionOpMs).fill(value, { signal: sig }),
-					);
-				}),
+					},
+					{ selector, zeroMatchAfterMs: ZERO_MATCH_FAIL_FAST_MS },
+				),
+			fill: (selector, value) =>
+				op(
+					`tab.fill(${JSON.stringify(selector)})`,
+					actionOpMs,
+					async sig => {
+						if (parseAriaRefSelector(selector) !== null) {
+							const handle = await this.#resolveAriaRef(selector);
+							try {
+								await fillViaHandle(handle, value, sig);
+							} finally {
+								await handle.dispose().catch(() => undefined);
+							}
+							return;
+						}
+						await untilAborted(sig, () =>
+							page.locator(normalizeSelector(selector)).setTimeout(actionOpMs).fill(value, { signal: sig }),
+						);
+					},
+					{ selector, zeroMatchAfterMs: ZERO_MATCH_FAIL_FAST_MS },
+				),
 			press: (key, opts) =>
 				op(`tab.press(${JSON.stringify(key)})`, actionOpMs, async sig => {
 					const selector = opts?.selector;
@@ -1017,23 +1120,37 @@ export class WorkerCore {
 			drag: (from, to) => op("tab.drag()", actionOpMs, sig => this.#drag(from, to, sig)),
 			waitFor: (selector, opts) => {
 				const w = waitMs(opts?.timeout);
-				return op(`tab.waitFor(${JSON.stringify(selector)})`, w, sig =>
-					this.#resolveActionHandle(selector, w, sig),
+				return op(
+					`tab.waitFor(${JSON.stringify(selector)})`,
+					w,
+					async sig => toActionableHandle(await this.#resolveActionHandle(selector, w, sig)),
+					{ selector, zeroMatchAfterMs: opts?.timeout === undefined ? ZERO_MATCH_FAIL_FAST_MS : undefined },
 				);
 			},
 			waitForSelector: (selector, opts) => {
 				const w = waitMs(opts?.timeout);
-				return op(`tab.waitForSelector(${JSON.stringify(selector)})`, w, async sig => {
-					if (parseAriaRefSelector(selector) !== null) return this.#resolveAriaRef(selector);
-					return (await untilAborted(sig, () =>
-						page.waitForSelector(normalizeSelector(selector), {
-							timeout: w,
-							visible: opts?.visible,
-							hidden: opts?.hidden,
-							signal: sig,
-						}),
-					)) as ElementHandle | null;
-				});
+				return op(
+					`tab.waitForSelector(${JSON.stringify(selector)})`,
+					w,
+					async sig => {
+						if (parseAriaRefSelector(selector) !== null)
+							return toActionableHandle(await this.#resolveAriaRef(selector));
+						const handle = (await untilAborted(sig, () =>
+							page.waitForSelector(normalizeSelector(selector), {
+								timeout: w,
+								visible: opts?.visible,
+								hidden: opts?.hidden,
+								signal: sig,
+							}),
+						)) as ElementHandle | null;
+						return handle ? toActionableHandle(handle) : null;
+					},
+					{
+						selector,
+						// `hidden: true` waits for zero matches — that is success, never a fast-fail.
+						zeroMatchAfterMs: opts?.timeout === undefined && !opts?.hidden ? ZERO_MATCH_FAIL_FAST_MS : undefined,
+					},
+				);
 			},
 			waitForNavigation: opts => {
 				const w = waitMs(opts?.timeout);
@@ -1052,28 +1169,39 @@ export class WorkerCore {
 					),
 				) as never,
 			scrollIntoView: selector =>
-				op(`tab.scrollIntoView(${JSON.stringify(selector)})`, actionOpMs, async sig => {
-					const handle = await this.#resolveActionHandle(selector, actionOpMs, sig);
-					try {
-						await untilAborted(sig, () =>
-							handle.evaluate(el => {
-								const target = el as unknown as {
-									scrollIntoView: (opts: { behavior: string; block: string; inline: string }) => void;
-								};
-								target.scrollIntoView({ behavior: "instant", block: "center", inline: "center" });
-							}),
-						);
-					} finally {
-						await handle.dispose().catch(() => undefined);
-					}
-				}),
+				op(
+					`tab.scrollIntoView(${JSON.stringify(selector)})`,
+					actionOpMs,
+					async sig => {
+						const handle = await this.#resolveActionHandle(selector, actionOpMs, sig);
+						try {
+							await untilAborted(sig, () =>
+								handle.evaluate(el => {
+									const target = el as unknown as {
+										scrollIntoView: (opts: { behavior: string; block: string; inline: string }) => void;
+									};
+									target.scrollIntoView({ behavior: "instant", block: "center", inline: "center" });
+								}),
+							);
+						} finally {
+							await handle.dispose().catch(() => undefined);
+						}
+					},
+					{ selector, zeroMatchAfterMs: ZERO_MATCH_FAIL_FAST_MS },
+				),
 			select: (selector, ...values) =>
-				op(`tab.select(${JSON.stringify(selector)})`, actionOpMs, sig =>
-					this.#select(selector, values, actionOpMs, sig),
+				op(
+					`tab.select(${JSON.stringify(selector)})`,
+					actionOpMs,
+					sig => this.#select(selector, values, actionOpMs, sig),
+					{ selector, zeroMatchAfterMs: ZERO_MATCH_FAIL_FAST_MS },
 				),
 			uploadFile: (selector, ...filePaths) =>
-				op(`tab.uploadFile(${JSON.stringify(selector)})`, actionOpMs, sig =>
-					this.#uploadFile(selector, filePaths, actionOpMs, sig, session),
+				op(
+					`tab.uploadFile(${JSON.stringify(selector)})`,
+					actionOpMs,
+					sig => this.#uploadFile(selector, filePaths, actionOpMs, sig, session),
+					{ selector, zeroMatchAfterMs: ZERO_MATCH_FAIL_FAST_MS },
 				),
 			waitForUrl: (pattern, opts) => {
 				const w = waitMs(opts?.timeout);
@@ -1083,8 +1211,8 @@ export class WorkerCore {
 				const w = waitMs(opts?.timeout);
 				return op("tab.waitForResponse()", w, sig => this.#waitForResponse(pattern, w, sig));
 			},
-			id: id => this.#resolveCachedHandle(id),
-			ref: id => this.#resolveAriaRef(id),
+			id: async id => toActionableHandle(await this.#resolveCachedHandle(id)),
+			ref: async id => toActionableHandle(await this.#resolveAriaRef(id)),
 		};
 	}
 
@@ -1134,12 +1262,19 @@ export class WorkerCore {
 
 	async #captureScreenshot(
 		session: SessionSnapshot,
-		displays: RunResultOk["displays"],
+		output: RunOutput,
 		screenshots: ScreenshotResult[],
 		signal: AbortSignal | undefined,
 		opts: ScreenshotOptions = {},
 	): Promise<ScreenshotResult> {
 		const page = this.#requirePage();
+		// Multiple tabs can share one Chromium (sibling headless tabs on a shared
+		// endpoint, cdp/app attach). CDP `Page.captureScreenshot` reads the
+		// compositor surface, which follows the *active* target — a backgrounded
+		// page can stall waiting for a fresh frame (the 20s screenshot timeouts)
+		// or hand back a sibling tab's pixels. Activate first; best-effort so an
+		// already-active or freshly-closed target never fails the capture.
+		await untilAborted(signal, () => page.bringToFront()).catch(() => undefined);
 		const fullPage = opts.selector ? false : (opts.fullPage ?? false);
 		// An explicit save path picks the full-res capture format: puppeteer encodes
 		// png/jpeg/webp natively, so `save: "shot.webp"` gets real WebP bytes instead
@@ -1211,8 +1346,8 @@ export class WorkerCore {
 				dest,
 				resized,
 			});
-			displays.push({ type: "text", text: lines.join("\n") });
-			displays.push({ type: "image", data: resized.data, mimeType: resized.mimeType });
+			output.push({ type: "text", text: lines.join("\n") });
+			output.push({ type: "image", data: resized.data, mimeType: resized.mimeType });
 		}
 		return info;
 	}

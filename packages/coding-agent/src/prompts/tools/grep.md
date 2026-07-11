@@ -1,7 +1,7 @@
 Greps files using regex.
 
 <instruction>
-- Rust regex (RE2-style): alternation is `foo|bar`, not GNU BRE-style `foo\|bar`; Rust word boundaries like `\bword\b` are supported. Use line anchors or post-filters instead of lookaround/backreferences.
+- Supports Rust regex and PCRE2 syntax.
 - `path`: SHOULD scope to a known path (e.g. `src`); pass several as a delimited list (`src; tests`). Use `selector` only for line-number filtering, never path/root selection (`"/"` belongs in `path`).
 - Literal colon filename + line range? Use `selector` (e.g. `{"path":"test:1-2","selector":"1-2"}`), not recursive `path:"test:1-2:1-2"`.
 - Cross-line patterns detected from literal `\n` or `\\n` in `pattern`.
@@ -19,5 +19,5 @@ Greps files using regex.
 
 <critical>
 - MUST use built-in `grep` for any content search. NEVER shell out to `grep`, `rg`, `ripgrep`, `ag`, `ack`, `git grep`, `awk`, `sed`-for-search, or any CLI search via Bash — not even for one match or a quick check.
-- Open-ended search needing multiple rounds? MUST use the Task tool with the explore subagent, NOT chained `grep` calls.
+- Open-ended search needing multiple rounds? MUST use the Task tool with the scout subagent, NOT chained `grep` calls.
 </critical>

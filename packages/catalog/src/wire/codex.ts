@@ -4,12 +4,27 @@
 
 export const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 
+/**
+ * Pinned OpenAI Codex client version (corresponds to @openai/codex package version).
+ */
+export const CODEX_CLIENT_VERSION = "0.144.1";
+
 export const OPENAI_HEADERS = {
 	BETA: "OpenAI-Beta",
 	ACCOUNT_ID: "chatgpt-account-id",
 	ORIGINATOR: "originator",
+	VERSION: "version",
 	SESSION_ID: "session_id",
 	CONVERSATION_ID: "conversation_id",
+	SCOPED_SESSION_ID: "session-id",
+	THREAD_ID: "thread-id",
+	INSTALLATION_ID: "x-codex-installation-id",
+	WINDOW_ID: "x-codex-window-id",
+	TURN_METADATA: "x-codex-turn-metadata",
+	PARENT_THREAD_ID: "x-codex-parent-thread-id",
+	SUBAGENT: "x-openai-subagent",
+	/** Responses Lite transport marker (codex-rs `add_responses_lite_header`); value is always `"true"`. */
+	RESPONSES_LITE: "x-openai-internal-codex-responses-lite",
 } as const;
 
 export const OPENAI_HEADER_VALUES = {

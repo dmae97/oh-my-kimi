@@ -1127,6 +1127,102 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
+	it("surfaces a provider error that reaches the client only via agent_end", async () => {
+		// A request that fails before streaming any assistant events (e.g.
+		// GitHub Copilot's HTTP 400 model_not_supported after retries) emits no
+		// message_update/message_end — only agent_end carrying an empty
+		// assistant message with errorMessage. The client must still see why
+		// the turn ended instead of a silent stop.
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId);
+		if (!session) throw new Error("session not registered");
+
+		const errorText =
+			"GitHub Copilot rejected this model (HTTP 400 model_not_supported) after retries. Try again in a few seconds.";
+		const failedMessage = {
+			...makeAssistantMessage(""),
+			stopReason: "error" as const,
+			errorMessage: errorText,
+		};
+		session.prompt = async (text: string): Promise<boolean> => {
+			session.promptCalls.push(text);
+			session.isStreaming = true;
+			session.sessionManager.appendMessage(failedMessage);
+			for (const listener of session.listeners()) {
+				listener({ type: "agent_end", messages: [failedMessage] } as AgentSessionEvent);
+			}
+			session.isStreaming = false;
+			return true;
+		};
+
+		const response = await harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "Say hello" }],
+		});
+		expectAcpStructure(zPromptResponse, response);
+
+		const messageChunks = harness.updates.filter(
+			update => update.sessionId === created.sessionId && update.update.sessionUpdate === "agent_message_chunk",
+		);
+		expect(messageChunks).toHaveLength(1);
+		expect(messageChunks[0]?.update).toEqual(expect.objectContaining({ content: { type: "text", text: errorText } }));
+		expectAcpNotifications(harness.updates);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("does not re-send a streamed error chunk from the agent_end fallback", async () => {
+		// When the error DID stream (message_update with an `error` event maps
+		// to an agent_message_chunk), the agent_end fallback must stay silent —
+		// even though agent_end races the in-flight chunk delivery.
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId);
+		if (!session) throw new Error("session not registered");
+
+		const errorText = "upstream stream failed";
+		const failedMessage = {
+			...makeAssistantMessage(""),
+			stopReason: "error" as const,
+			errorMessage: errorText,
+		};
+		session.prompt = async (text: string): Promise<boolean> => {
+			session.promptCalls.push(text);
+			session.isStreaming = true;
+			for (const listener of session.listeners()) {
+				listener({
+					type: "message_update",
+					message: failedMessage,
+					assistantMessageEvent: { type: "error", error: { errorMessage: errorText } },
+				} as AgentSessionEvent);
+			}
+			session.sessionManager.appendMessage(failedMessage);
+			for (const listener of session.listeners()) {
+				listener({ type: "agent_end", messages: [failedMessage] } as AgentSessionEvent);
+			}
+			session.isStreaming = false;
+			return true;
+		};
+
+		const response = await harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "Say hello" }],
+		});
+		expectAcpStructure(zPromptResponse, response);
+
+		const messageChunks = harness.updates.filter(
+			update => update.sessionId === created.sessionId && update.update.sessionUpdate === "agent_message_chunk",
+		);
+		expect(messageChunks).toHaveLength(1);
+		expect(messageChunks[0]?.update).toEqual(expect.objectContaining({ content: { type: "text", text: errorText } }));
+		expectAcpNotifications(harness.updates);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
 	it("replays assistant tool calls and matching results without duplicating the start", async () => {
 		const harness = await createHarness();
 		const stored = new FakeAgentSession(harness.cwdA);

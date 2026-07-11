@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { encodeResponse, encodeStream, parseRequest } from "@oh-my-pi/pi-ai/providers/anthropic-messages-server";
 import type { AssistantMessage, AssistantMessageEvent, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 
 function emptyUsage(): AssistantMessage["usage"] {
 	return {
@@ -218,6 +219,32 @@ describe("anthropic-messages parseRequest", () => {
 		expect(parsed.context.messages).toHaveLength(2);
 		expect(parsed.context.messages[0]).toMatchObject({ role: "user", content: "preface text" });
 		expect(parsed.context.messages[1]!.role).toBe("toolResult");
+	});
+
+	it("maps inbound output_config.effort onto options.reasoning 1:1", () => {
+		const cases = [
+			["low", Effort.Low],
+			["medium", Effort.Medium],
+			["high", Effort.High],
+			["xhigh", Effort.XHigh],
+			["max", Effort.Max],
+		] as const;
+		for (const [wire, effort] of cases) {
+			const parsed = parseRequest({
+				model: "m",
+				max_tokens: 8,
+				output_config: { effort: wire },
+				messages: [{ role: "user", content: "hi" }],
+			});
+			expect(parsed.options.reasoning).toBe(effort);
+		}
+
+		const absent = parseRequest({
+			model: "m",
+			max_tokens: 8,
+			messages: [{ role: "user", content: "hi" }],
+		});
+		expect(absent.options.reasoning).toBeUndefined();
 	});
 
 	it("rejects missing required fields and unsupported request controls", () => {

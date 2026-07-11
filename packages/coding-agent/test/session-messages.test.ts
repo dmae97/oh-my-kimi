@@ -54,7 +54,8 @@ describe("convertToLlm compaction summary", () => {
 			{ role: "compactionSummary", summary: "plain summary", tokensBefore: 1000, timestamp: Date.now() },
 		];
 		const converted = convertToLlm(messages);
-		expect((converted[0]?.content as unknown[]).length).toBe(1);
+		expect(converted[0]).toBeDefined();
+		expect((converted[0]!.content as unknown[]).length).toBe(1);
 	});
 });
 

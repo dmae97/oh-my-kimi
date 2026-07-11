@@ -523,7 +523,7 @@ mod tests {
 	};
 
 	static CONFIG_COUNTER: AtomicUsize = AtomicUsize::new(0);
-	pub(crate) static TEST_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+	pub static TEST_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
 	use super::*;
 	use crate::minimizer::MinimizerOptions;

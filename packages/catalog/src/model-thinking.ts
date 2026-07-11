@@ -61,12 +61,34 @@ const GEMINI_3_FLASH_EFFORTS: readonly Effort[] = [Effort.Minimal, Effort.Low, E
 const GPT_5_2_PLUS_EFFORTS: readonly Effort[] = [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh];
 const GPT_5_1_CODEX_MINI_EFFORTS: readonly Effort[] = [Effort.Medium, Effort.High];
 const LOW_MEDIUM_HIGH_REASONING_EFFORTS: readonly Effort[] = [Effort.Low, Effort.Medium, Effort.High];
-const GLM_52_HIGH_MAX_REASONING_EFFORTS: readonly Effort[] = [Effort.High, Effort.XHigh];
-
-const FUGU_REASONING_EFFORTS: readonly Effort[] = [Effort.High, Effort.XHigh];
-const FUGU_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
-	[Effort.XHigh]: "max",
-};
+/** Wire-exact two-tier scale (`high`/`max`): GLM-5.2 on Z.ai/Umans/Ollama Cloud/Baseten, Sakana Fugu, DeepSeek. */
+const HIGH_MAX_REASONING_EFFORTS: readonly Effort[] = [Effort.High, Effort.Max];
+/** OpenRouter's DeepSeek route accepts only `high`. */
+const HIGH_ONLY_REASONING_EFFORTS: readonly Effort[] = [Effort.High];
+/**
+ * Five wire tiers with a `low` floor: GPT-5.6+, Anthropic adaptive models
+ * with the real xhigh tier (Opus 4.7+, Sonnet 5+, Fable/Mythos 5), and the
+ * Fire Pass Kimi router (distinct xhigh and max budgets).
+ */
+const FIVE_TIER_EFFORTS_LOW_TO_MAX: readonly Effort[] = [
+	Effort.Low,
+	Effort.Medium,
+	Effort.High,
+	Effort.XHigh,
+	Effort.Max,
+];
+/** Legacy adaptive scale (Opus/Sonnet 4.6, every Bedrock adaptive model): four wire tiers, no xhigh. */
+const FOUR_TIER_EFFORTS_LOW_TO_MAX: readonly Effort[] = [Effort.Low, Effort.Medium, Effort.High, Effort.Max];
+/** GLM-5.2 resellers that pass the default lower tiers verbatim and expose the genuine `max` top tier. */
+const DEFAULT_REASONING_EFFORTS_WITH_MAX: readonly Effort[] = [
+	Effort.Minimal,
+	Effort.Low,
+	Effort.Medium,
+	Effort.High,
+	Effort.Max,
+];
+/** Local Ollama wire vocabulary (`low`/`medium`/`high`/`max`; `none` is thinking-off). */
+const OLLAMA_REASONING_EFFORTS: readonly Effort[] = [Effort.Low, Effort.Medium, Effort.High, Effort.Max];
 type EffortMap = Partial<Record<Effort, string>>;
 
 const GROQ_QWEN3_32B_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
@@ -76,55 +98,12 @@ const GROQ_QWEN3_32B_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
 	[Effort.High]: "default",
 	[Effort.XHigh]: "default",
 };
-const DEEPSEEK_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
-	[Effort.Minimal]: "high",
-	[Effort.Low]: "high",
-	[Effort.Medium]: "high",
-	[Effort.High]: "high",
-	[Effort.XHigh]: "max",
-};
 const FIREWORKS_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
 	[Effort.Minimal]: "none",
-};
-const ZAI_GLM_52_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
-	[Effort.Minimal]: "none",
-	[Effort.Low]: "high",
-	[Effort.Medium]: "high",
-	[Effort.High]: "high",
-	[Effort.XHigh]: "max",
-};
-const GLM_52_XHIGH_MAX_EFFORT_MAP: Readonly<EffortMap> = {
-	[Effort.XHigh]: "max",
 };
 const MIMO_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
 	[Effort.Minimal]: "low",
 	[Effort.XHigh]: "high",
-};
-
-/**
- * Effort → wire-value map for a shifted five-tier scale (`low..max`):
- * user-facing efforts shift up one notch so the top tier reaches the genuine
- * "max" and "high" lands on the recommended "xhigh" coding/agentic default.
- * Used by Anthropic adaptive models with a real xhigh tier (Opus 4.7+ and
- * Fable/Mythos 5 on the Messages API) and by GPT-5.6+ wire-effort models,
- * which expose the same genuine `max` tier above `xhigh`.
- */
-export const SHIFTED_FIVE_TIER_EFFORT_MAP: Readonly<Partial<Record<Effort, string>>> = {
-	[Effort.Minimal]: "low",
-	[Effort.Low]: "medium",
-	[Effort.Medium]: "high",
-	[Effort.High]: "xhigh",
-	[Effort.XHigh]: "max",
-};
-
-/**
- * Effort → wire-value map for the legacy 4-tier adaptive scale (Opus 4.6,
- * Sonnet 4.6+, and every adaptive model on Bedrock Converse). `low..high` pass
- * through verbatim; there is no real "xhigh", so it aliases the top "max" tier.
- */
-export const ANTHROPIC_ADAPTIVE_EFFORT_MAP_4_TIER: Readonly<Partial<Record<Effort, string>>> = {
-	[Effort.Minimal]: "low",
-	[Effort.XHigh]: "max",
 };
 
 const MINIMAX_ANTHROPIC_ADAPTIVE_EFFORT_MAP: Readonly<EffortMap> = {
@@ -172,8 +151,10 @@ export function resolveModelThinking<TApi extends Api>(
 /**
  * Backfill identity-derived wire facts onto explicit thinking metadata.
  * Explicit `effortMap` / `supportsDisplay` (including `false`) win, except
- * model-defined effort restrictions still normalize stale cached capability
- * surfaces before request-time code can observe them.
+ * when the model-defined effort ladder disagrees with the cached surface:
+ * then both the ladder AND the wire map are re-derived from identity, so
+ * stale cached metadata from before a wire-truth change (e.g. the retired
+ * shifted five-tier maps) cannot survive normalization.
  */
 function fillThinkingWireDefaults<TApi extends Api>(
 	spec: ModelSpec<TApi>,
@@ -184,11 +165,9 @@ function fillThinkingWireDefaults<TApi extends Api>(
 	const normalizedEfforts = getModelDefinedEfforts(spec, compat) ?? thinking.efforts;
 	const effortsChanged = !sameEffortList(normalizedEfforts, thinking.efforts);
 	const effortMap =
-		thinking.effortMap === undefined
-			? inferEffortMap(spec, compat, parsed, thinking.mode, normalizedEfforts)
-			: effortsChanged
-				? filterEffortMapToSupportedEfforts(thinking.effortMap, normalizedEfforts)
-				: undefined;
+		thinking.effortMap === undefined || effortsChanged
+			? inferEffortMap(spec, compat, thinking.mode, normalizedEfforts)
+			: undefined;
 	const shouldReplaceEffortMap = thinking.effortMap === undefined ? effortMap !== undefined : effortsChanged;
 	const needsDisplay =
 		thinking.supportsDisplay === undefined &&
@@ -229,7 +208,7 @@ export function deriveThinking<TApi extends Api>(spec: ModelSpec<TApi>, compat: 
 		mode: inferThinkingControlMode(spec, parsed),
 		efforts,
 	};
-	const effortMap = inferEffortMap(spec, compat, parsed, config.mode, config.efforts);
+	const effortMap = inferEffortMap(spec, compat, config.mode, config.efforts);
 	if (effortMap !== undefined) {
 		config.effortMap = effortMap;
 	}
@@ -264,11 +243,10 @@ function omitsWireReasoningEffort(api: Api, compat: CompatOf<Api>): boolean {
 function inferEffortMap<TApi extends Api>(
 	spec: ModelSpec<TApi>,
 	compat: CompatOf<TApi>,
-	parsedModel: ParsedModel,
 	mode: ThinkingConfig["mode"],
 	efforts: readonly Effort[],
 ): EffortMap | undefined {
-	const detected = inferDetectedEffortMap(spec, compat, parsedModel, mode);
+	const detected = inferDetectedEffortMap(spec, compat, mode);
 	const configured = readCompatEffortMap(compat);
 	const merged =
 		detected === undefined ? configured : configured === undefined ? detected : { ...detected, ...configured };
@@ -300,9 +278,9 @@ function isOpenAICompatReasoningApi(api: Api): boolean {
 
 /**
  * GPT-5.6+ addressed through a wire `reasoning.effort`/`reasoning_effort`
- * field, where the shifted five-tier map applies. Devin (`devin-agent`)
- * selects effort by routing to per-tier sibling model ids instead and must
- * stay unmapped.
+ * field, where the five-tier `low..max` wire scale applies. Devin
+ * (`devin-agent`) selects effort by routing to per-tier sibling model ids
+ * instead and must stay unmapped.
  */
 function isGpt56PlusWireEffortModel<TApi extends Api>(spec: ModelSpec<TApi>): boolean {
 	switch (spec.api) {
@@ -324,24 +302,64 @@ function getModelDefinedEfforts<TApi extends Api>(
 	compat: CompatOf<TApi>,
 ): readonly Effort[] | undefined {
 	if (isGlm52ReasoningEffortModelId(spec.id)) {
-		// Z.ai/Zhipu and OpenRouter both surface GLM-5.2's full effort ladder,
-		// including the top `xhigh` (= "max") tier; Umans and Ollama Cloud
-		// expose only high/max.
-		if (isZaiThinkingFormat(compat) || isOpenRouterThinkingFormat(compat)) {
+		// GLM-5.2's reasoning_effort dialect is host-specific (verified against
+		// live endpoints):
+		//   - Z.ai/Zhipu ("zai" dialect) expose only high/max ("none" is the
+		//     thinking-off state, not a user tier).
+		//   - Umans, Ollama Cloud, and Baseten serve the same two-tier
+		//     high/max scale on their GLM-5.2 routes.
+		//   - OpenRouter rejects `max` — `xhigh` IS its top tier.
+		//   - Other openai-compat hosts (Fireworks, resellers) pass the
+		//     default lower tiers through verbatim and expose the genuine
+		//     `max` above `high` (host quirks like Fireworks' minimal→none
+		//     stay in the host maps).
+		if (isOpenRouterThinkingFormat(compat)) {
 			return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
 		}
-		if (isUmansGlm52ReasoningEffortModel(spec) || isOllamaCloudGlm52ReasoningEffortModel(spec)) {
-			return GLM_52_HIGH_MAX_REASONING_EFFORTS;
+		if (
+			isZaiThinkingFormat(compat) ||
+			isUmansGlm52ReasoningEffortModel(spec) ||
+			isOllamaCloudGlm52ReasoningEffortModel(spec) ||
+			spec.provider === "baseten"
+		) {
+			return HIGH_MAX_REASONING_EFFORTS;
+		}
+		if (isOpenAICompatReasoningApi(spec.api)) {
+			return DEFAULT_REASONING_EFFORTS_WITH_MAX;
 		}
 	}
 	if (isSakanaFuguReasoningModel(spec)) {
-		return FUGU_REASONING_EFFORTS;
+		return HIGH_MAX_REASONING_EFFORTS;
 	}
 	if (isGpt56PlusWireEffortModel(spec)) {
-		// Normalize stale baked/discovered `low..xhigh` surfaces to the full
-		// five-tier ladder so the shifted map keeps the native `low` tier
-		// reachable (user `minimal`).
-		return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
+		// Normalize stale baked/discovered `low..xhigh` surfaces to the
+		// wire-exact five-tier `low..max` ladder.
+		return FIVE_TIER_EFFORTS_LOW_TO_MAX;
+	}
+	const anthropicAdaptive = getAnthropicAdaptiveEfforts(spec);
+	if (anthropicAdaptive !== undefined) {
+		return anthropicAdaptive;
+	}
+	// Fire Pass's Kimi router accepts low..max with distinct xhigh and max
+	// budgets; user minimal has no wire tier there.
+	if (spec.provider === "firepass") {
+		return FIVE_TIER_EFFORTS_LOW_TO_MAX;
+	}
+	// Local Ollama's effort vocabulary is low/medium/high/max regardless of
+	// model. Custom OpenAI-compatible providers pointed at an Ollama port
+	// under a different provider id must set `compat.reasoningEffortMap`
+	// themselves.
+	if (spec.provider === "ollama") {
+		return OLLAMA_REASONING_EFFORTS;
+	}
+	if (isOpenAICompatReasoningApi(spec.api) && isDeepseekReasoningModel(spec)) {
+		// DeepSeek's reasoning_effort accepts only high/max; OpenRouter's
+		// DeepSeek route tops out at high.
+		return isOpenRouterThinkingFormat(compat) ? HIGH_ONLY_REASONING_EFFORTS : HIGH_MAX_REASONING_EFFORTS;
+	}
+	if (spec.provider === "baseten" && isOpenAIGptOssModelId(spec.id)) {
+		// Baseten's gpt-oss router mirrors its GLM route: high/max only.
+		return HIGH_MAX_REASONING_EFFORTS;
 	}
 	return isOpenAICompatReasoningApi(spec.api) &&
 		(isMinimaxM2FamilyModelId(spec.id) ||
@@ -349,6 +367,27 @@ function getModelDefinedEfforts<TApi extends Api>(
 			isOpenAICompatMimoReasoningEffortModel(spec, compat))
 		? LOW_MEDIUM_HIGH_REASONING_EFFORTS
 		: undefined;
+}
+
+/**
+ * Wire-exact effort ladders for Anthropic adaptive models (4.6+). Model-defined
+ * so stale cached surfaces normalize on every build: Messages-API models with
+ * the real xhigh tier (4.7+) expose the full five-tier `low..max` scale;
+ * Opus/Sonnet 4.6 and every Bedrock adaptive model stay on the four-tier
+ * `low/medium/high/max` scale.
+ */
+function getAnthropicAdaptiveEfforts<TApi extends Api>(spec: ModelSpec<TApi>): readonly Effort[] | undefined {
+	const parsed = parseAnthropicModel(bareModelId(spec.id));
+	if (!parsed || !isAnthropicAdaptiveGenAtLeast(parsed, "4.6")) return undefined;
+	if (spec.api === "anthropic-messages" || spec.api === "bedrock-converse-stream") {
+		return anthropicModelHasRealXHighEffort(spec, parsed)
+			? FIVE_TIER_EFFORTS_LOW_TO_MAX
+			: FOUR_TIER_EFFORTS_LOW_TO_MAX;
+	}
+	if (isOpenRouterAnthropicAdaptiveReasoningModel(parsed, spec)) {
+		return isAnthropicAdaptiveGenAtLeast(parsed, "4.7") ? FIVE_TIER_EFFORTS_LOW_TO_MAX : FOUR_TIER_EFFORTS_LOW_TO_MAX;
+	}
+	return undefined;
 }
 
 function isOllamaCloudGlm52ReasoningEffortModel<TApi extends Api>(spec: ModelSpec<TApi>): boolean {
@@ -395,62 +434,31 @@ function isZaiThinkingFormat(compat: CompatOf<Api>): boolean {
 function inferDetectedEffortMap<TApi extends Api>(
 	spec: ModelSpec<TApi>,
 	compat: CompatOf<TApi>,
-	parsedModel: ParsedModel,
 	mode: ThinkingConfig["mode"],
 ): EffortMap | undefined {
 	if (mode === "anthropic-adaptive") {
 		if (isMinimaxReasoningModelOnAnthropicEndpoint(spec)) {
 			return MINIMAX_ANTHROPIC_ADAPTIVE_EFFORT_MAP;
 		}
-		return anthropicModelHasRealXHighEffort(spec, parsedModel)
-			? SHIFTED_FIVE_TIER_EFFORT_MAP
-			: ANTHROPIC_ADAPTIVE_EFFORT_MAP_4_TIER;
-	}
-	// GLM-5.2 coding SKUs accept `reasoning_effort`, but the effort dialect is
-	// host-specific (verified against live endpoints):
-	//   - Z.ai/Zhipu ("zai" dialect): the model exposes only none/high/max, so
-	//     `xhigh` 400s — collapse minimal->none, low/medium/high->high, xhigh->max.
-	//   - OpenRouter: `max` 400s and `xhigh` IS its max tier, so it passes `xhigh`
-	//     through literally (no map; the tier is exposed via getModelDefinedEfforts).
-	//   - Umans and Ollama Cloud expose only high/max on their GLM-5.2 routes.
-	//   - Other openai-compat hosts (Fireworks, resellers) keep their distinct
-	//     lower tiers and host quirks (e.g. Fireworks rejects `minimal`, so
-	//     `minimal->none` stays) and only remap the top `xhigh` UI tier onto the
-	//     genuine `max` budget. Filtered to supported efforts later.
-	const isGlm52 = isGlm52ReasoningEffortModelId(spec.id);
-	if (isGlm52 && isZaiThinkingFormat(compat)) {
-		return ZAI_GLM_52_REASONING_EFFORT_MAP;
-	}
-	if (isUmansGlm52ReasoningEffortModel(spec) || isOllamaCloudGlm52ReasoningEffortModel(spec)) {
-		return GLM_52_XHIGH_MAX_EFFORT_MAP;
-	}
-	if (isSakanaFuguReasoningModel(spec)) {
-		return FUGU_REASONING_EFFORT_MAP;
-	}
-	if (isGpt56PlusWireEffortModel(spec)) {
-		return SHIFTED_FIVE_TIER_EFFORT_MAP;
+		// Adaptive effort ladders are wire-exact (see
+		// getAnthropicAdaptiveEfforts) — no mapping needed.
+		return undefined;
 	}
 	if (!isOpenAICompatReasoningApi(spec.api)) {
 		return undefined;
 	}
-	let map: EffortMap | undefined;
 	if (spec.provider === "groq" && spec.id === "qwen/qwen3-32b") {
-		map = GROQ_QWEN3_32B_REASONING_EFFORT_MAP;
-	} else if (isDeepseekReasoningModel(spec)) {
-		map = DEEPSEEK_REASONING_EFFORT_MAP;
-	} else if (isOpenAICompatMimoReasoningEffortModel(spec, compat)) {
-		map = MIMO_REASONING_EFFORT_MAP;
-	} else if (modelMatchesHost(spec, "openrouter")) {
-		map = getOpenRouterAnthropicReasoningEffortMap(spec.id);
-	} else if (modelMatchesHost(spec, "fireworks")) {
-		map = FIREWORKS_REASONING_EFFORT_MAP;
+		return GROQ_QWEN3_32B_REASONING_EFFORT_MAP;
 	}
-	// Overlay GLM-5.2's top-tier `xhigh -> max` on the host base map, except on
-	// OpenRouter (xhigh IS its max tier; `max` 400s there).
-	if (isGlm52 && !isOpenRouterThinkingFormat(compat)) {
-		map = { ...map, ...GLM_52_XHIGH_MAX_EFFORT_MAP };
+	if (isOpenAICompatMimoReasoningEffortModel(spec, compat)) {
+		return MIMO_REASONING_EFFORT_MAP;
 	}
-	return map;
+	// Host quirk: Fireworks rejects `minimal` (maps to `none`) on ladders
+	// that genuinely include it. Filtered to supported efforts later.
+	if (modelMatchesHost(spec, "fireworks")) {
+		return FIREWORKS_REASONING_EFFORT_MAP;
+	}
+	return undefined;
 }
 
 function isSakanaFuguReasoningModel<TApi extends Api>(spec: ModelSpec<TApi>): boolean {
@@ -469,17 +477,6 @@ function isDeepseekReasoningModel<TApi extends Api>(spec: ModelSpec<TApi>): bool
 		isDeepseekModelIdOrName(spec.name ?? "") ||
 		isOpenCodeDeepseekAlias
 	);
-}
-
-function getOpenRouterAnthropicReasoningEffortMap(modelId: string): EffortMap | undefined {
-	const parsed = parseAnthropicModel(bareModelId(modelId));
-	if (!parsed) return undefined;
-	// Adaptive efforts on OpenRouter's completions front: Fable/Mythos, Sonnet 5+,
-	// and Opus 4.6+ only — older Sonnet versions stay on the plain effort vocabulary there.
-	if (!isAnthropicAdaptiveGenAtLeast(parsed, "4.6")) return undefined;
-
-	const hasRealXHigh = isAnthropicAdaptiveGenAtLeast(parsed, "4.7");
-	return hasRealXHigh ? SHIFTED_FIVE_TIER_EFFORT_MAP : ANTHROPIC_ADAPTIVE_EFFORT_MAP_4_TIER;
 }
 
 function inferSupportedEfforts<TApi extends Api>(
@@ -507,10 +504,9 @@ function inferOpenAISupportedEfforts(model: OpenAIModel): readonly Effort[] {
 	if (model.variant === "codex-mini" && semverEqual(model.version, "5.1")) {
 		return GPT_5_1_CODEX_MINI_EFFORTS;
 	}
-	// 5.6+ exposes the full five-tier ladder: the shifted wire map spans
-	// low..max, with user `minimal` reaching the native `low` tier.
+	// 5.6+ exposes the wire-exact five-tier ladder low..max.
 	if (semverGte(model.version, "5.6")) {
-		return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
+		return FIVE_TIER_EFFORTS_LOW_TO_MAX;
 	}
 	if (semverGte(model.version, "5.2")) {
 		return GPT_5_2_PLUS_EFFORTS;
@@ -554,16 +550,18 @@ function inferAnthropicSupportedEfforts<TApi extends Api>(
 	spec: ModelSpec<TApi>,
 	compat: CompatOf<TApi>,
 ): readonly Effort[] {
-	if (
-		(spec.api === "anthropic-messages" || spec.api === "bedrock-converse-stream") &&
-		semverGte(parsedModel.version, "4.6")
-	) {
-		return isAnthropicAdaptiveGenAtLeast(parsedModel, "4.6")
-			? DEFAULT_REASONING_EFFORTS_WITH_XHIGH
-			: DEFAULT_REASONING_EFFORTS;
+	// Ladders for adaptive-generation models (Opus 4.6+, Sonnet 5+,
+	// Fable/Mythos) are model-defined and already resolved by
+	// getAnthropicAdaptiveEfforts. Every other 4.6+ model on the Messages
+	// API (Sonnet/Haiku 4.6) still runs adaptive mode with the three-tier
+	// low/medium/high wire scale — no minimal, no max.
+	if (spec.api === "anthropic-messages" && semverGte(parsedModel.version, "4.6")) {
+		return LOW_MEDIUM_HIGH_REASONING_EFFORTS;
 	}
-	if (isOpenRouterAnthropicAdaptiveReasoningModel(parsedModel, spec)) {
-		return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
+	// Non-adaptive 4.6 models on Bedrock stay budget-mode, where minimal is
+	// a legitimate synthetic budget tier.
+	if (spec.api === "bedrock-converse-stream" && semverGte(parsedModel.version, "4.6")) {
+		return DEFAULT_REASONING_EFFORTS;
 	}
 	return inferFallbackEfforts(spec, compat);
 }
@@ -752,6 +750,7 @@ export function mapEffortToGoogleThinkingLevel(effort: Effort): "MINIMAL" | "LOW
 			return "MEDIUM";
 		case Effort.High:
 		case Effort.XHigh:
+		case Effort.Max:
 			return "HIGH";
 	}
 }

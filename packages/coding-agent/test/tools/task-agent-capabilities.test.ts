@@ -10,21 +10,21 @@ function agentByName(agents: AgentDefinition[], name: string): AgentDefinition {
 }
 
 describe("task agent capability descriptions", () => {
-	it("classifies bundled explore as the only read-only delegated agent", () => {
+	it("classifies bundled scout as the only read-only delegated agent", () => {
 		const agents = loadBundledAgents();
 
-		expect(isReadOnlyAgent(agentByName(agents, "explore"))).toBe(true);
-		for (const name of ["task", "sonic", "plan", "reviewer", "designer"]) {
+		expect(isReadOnlyAgent(agentByName(agents, "scout"))).toBe(true);
+		for (const name of ["task", "sonic", "reviewer", "designer"]) {
 			expect(isReadOnlyAgent(agentByName(agents, name))).toBe(false);
 		}
 	});
 
-	it("disables read summarization for explore and librarian, leaves other agents summarizing", () => {
+	it("disables read summarization for scout and librarian, leaves other agents summarizing", () => {
 		const agents = loadBundledAgents();
 
-		expect(agentByName(agents, "explore").readSummarize).toBe(false);
+		expect(agentByName(agents, "scout").readSummarize).toBe(false);
 		expect(agentByName(agents, "librarian").readSummarize).toBe(false);
-		for (const name of ["task", "sonic", "plan", "reviewer", "designer"]) {
+		for (const name of ["task", "sonic", "reviewer", "designer"]) {
 			expect(agentByName(agents, name).readSummarize).toBeUndefined();
 		}
 	});

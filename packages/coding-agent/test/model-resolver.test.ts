@@ -219,6 +219,25 @@ const mockCodexOverlapModels: Model<"anthropic-messages">[] = [
 	}),
 ];
 
+const mockMaxCapableModels: Model<"anthropic-messages">[] = [
+	buildModel({
+		id: "claude-opus-4-7",
+		name: "Claude Opus 4.7",
+		api: "anthropic-messages",
+		provider: "anthropic",
+		baseUrl: "https://api.anthropic.com",
+		reasoning: true,
+		thinking: {
+			mode: "anthropic-adaptive",
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
+		},
+		input: ["text", "image"],
+		cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+		contextWindow: 200000,
+		maxTokens: 32000,
+	}),
+];
+
 const openaiGpt55Models: Model<Api>[] = [
 	buildModel({
 		id: "gpt-5.5",
@@ -410,7 +429,15 @@ describe("parseModelPattern", () => {
 		});
 
 		test("all valid thinking levels work", () => {
-			const levels = ["off", Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] as const;
+			const levels = [
+				"off",
+				Effort.Minimal,
+				Effort.Low,
+				Effort.Medium,
+				Effort.High,
+				Effort.XHigh,
+				Effort.Max,
+			] as const;
 			for (const level of levels) {
 				const result = parseModelPattern(`sonnet:${level}`, allModels);
 				expect(result.model?.id).toBe("claude-sonnet-4-5");
@@ -418,15 +445,15 @@ describe("parseModelPattern", () => {
 				expect(result.warning).toBeUndefined();
 			}
 		});
-		test("max aliases the highest thinking level after the literal pattern misses", () => {
+		test("max parses as a real thinking level after the literal pattern misses", () => {
 			const result = parseModelPattern("gpt-5.3-codex:max", allModels);
 			expect(result.model?.id).toBe("gpt-5.3-codex");
-			expect(result.thinkingLevel).toBe(Effort.XHigh);
+			expect(result.thinkingLevel).toBe(Effort.Max);
 			expect(result.explicitThinkingLevel).toBe(true);
 			expect(result.warning).toBeUndefined();
 		});
 
-		test("literal model ids ending in max win over the thinking alias", () => {
+		test("literal model ids ending in max win over the thinking suffix", () => {
 			const result = parseModelPattern("nanogpt/coding-router:max", mockMaxSuffixModels);
 			expect(result.model?.id).toBe("coding-router:max");
 			expect(result.thinkingLevel).toBeUndefined();
@@ -523,13 +550,13 @@ describe("parseModelPattern", () => {
 			expect(result.warning).toBeUndefined();
 		});
 
-		test("openrouter/<id>:max applies xhigh through the exact-selector path, not an OpenRouter route", () => {
-			// `max` is a thinking alias, never an OpenRouter route suffix: the request must
-			// resolve the base model and carry xhigh, not clone a literal `z-ai/glm-4.7:max`.
+		test("openrouter/<id>:max applies max through the exact-selector path, not an OpenRouter route", () => {
+			// `max` is a thinking-level suffix, never an OpenRouter route suffix: the request
+			// must resolve the base model and carry max, not clone a literal `z-ai/glm-4.7:max`.
 			const result = parseModelPattern("openrouter/z-ai/glm-4.7:max", allModels);
 			expect(result.model?.provider).toBe("openrouter");
 			expect(result.model?.id).toBe("z-ai/glm-4.7");
-			expect(result.thinkingLevel).toBe(Effort.XHigh);
+			expect(result.thinkingLevel).toBe(Effort.Max);
 			expect(result.explicitThinkingLevel).toBe(true);
 		});
 	});
@@ -618,6 +645,7 @@ describe("resolveModelRoleValue", () => {
 
 		expect(result.model?.provider).toBe("openai-codex");
 		expect(result.model?.id).toBe("gpt-5.3-codex");
+		// Role-value resolution clamps: gpt-5.3-codex's ladder tops out at xhigh.
 		expect(result.thinkingLevel).toBe(Effort.XHigh);
 		expect(result.explicitThinkingLevel).toBe(true);
 	});
@@ -676,6 +704,15 @@ describe("resolveModelRoleValue", () => {
 		expect(result.model?.provider).toBe("anthropic");
 		expect(result.model?.id).toBe("claude-sonnet-4-5");
 		expect(result.thinkingLevel).toBe(Effort.High);
+		expect(result.explicitThinkingLevel).toBe(true);
+	});
+
+	test("passes max through unclamped when the model ladder includes it", () => {
+		const result = resolveModelRoleValue("anthropic/claude-opus-4-7:max", mockMaxCapableModels);
+
+		expect(result.model?.provider).toBe("anthropic");
+		expect(result.model?.id).toBe("claude-opus-4-7");
+		expect(result.thinkingLevel).toBe(Effort.Max);
 		expect(result.explicitThinkingLevel).toBe(true);
 	});
 
@@ -1071,7 +1108,7 @@ describe("resolveModelScope", () => {
 		expect(scoped[0].model.id).toBe("gpt-5.5");
 	});
 
-	test("applies max thinking aliases to glob scopes when no literal max ids match", async () => {
+	test("applies max thinking selectors to glob scopes when no literal max ids match", async () => {
 		const registry = {
 			getAvailable: () => mockCodexOverlapModels,
 		};
@@ -1079,8 +1116,21 @@ describe("resolveModelScope", () => {
 		const scoped = await resolveModelScope(["openai-codex/*:max"], registry);
 
 		expect(scoped).toHaveLength(2);
+		// Scoped levels clamp per model: max on an xhigh-ceiling ladder resolves to xhigh.
 		expect(scoped.map(entry => entry.thinkingLevel)).toEqual([Effort.XHigh, Effort.XHigh]);
 		expect(scoped.every(entry => entry.explicitThinkingLevel)).toBe(true);
+	});
+
+	test("keeps max on glob scopes when the model ladder includes it", async () => {
+		const registry = {
+			getAvailable: () => mockMaxCapableModels,
+		};
+
+		const scoped = await resolveModelScope(["anthropic/*:max"], registry);
+
+		expect(scoped).toHaveLength(1);
+		expect(scoped[0].thinkingLevel).toBe(Effort.Max);
+		expect(scoped[0].explicitThinkingLevel).toBe(true);
 	});
 
 	test("preserves literal :max in scoped-model globs", async () => {
@@ -1144,16 +1194,23 @@ describe("parseModelString", () => {
 		});
 
 		test("extracts max when explicitly enabled for provider id selectors", () => {
-			const result = parseModelString("deepseek/deepseek-v4-pro:max", { allowMaxAlias: true });
-			expect(result).toEqual({ provider: "deepseek", id: "deepseek-v4-pro", thinkingLevel: Effort.XHigh });
+			const result = parseModelString("deepseek/deepseek-v4-pro:max", { allowMaxSuffix: true });
+			expect(result).toEqual({ provider: "deepseek", id: "deepseek-v4-pro", thinkingLevel: Effort.Max });
 		});
 
 		test("preserves literal max model ids when the caller can prove they exist", () => {
 			const result = parseModelString("nanogpt/coding-router:max", {
-				allowMaxAlias: true,
+				allowMaxSuffix: true,
 				isLiteralModelId: (provider, id) => provider === "nanogpt" && id === "coding-router:max",
 			});
 			expect(result).toEqual({ provider: "nanogpt", id: "coding-router:max" });
+		});
+
+		test("leaves :max attached to the model id unless the caller opts in via allowMaxSuffix", () => {
+			// Without allowMaxSuffix, the strict suffix parser must not silently
+			// reinterpret a literal `:max` id as a thinking suffix.
+			const result = parseModelString("anthropic/claude-sonnet-4-5:max");
+			expect(result).toEqual({ provider: "anthropic", id: "claude-sonnet-4-5:max" });
 		});
 
 		test("leaves :auto attached to the model id unless the caller opts in via allowAutoAlias", () => {
@@ -1242,7 +1299,7 @@ describe("extractExplicitThinkingSelector", () => {
 		const result = extractExplicitThinkingSelector("nanogpt/coding-router:max", undefined, {
 			isLiteralModelId: () => false,
 		});
-		expect(result).toBe(Effort.XHigh);
+		expect(result).toBe(Effort.Max);
 	});
 
 	test("treats max on pi role aliases as an explicit selector before expansion", () => {
@@ -1251,7 +1308,7 @@ describe("extractExplicitThinkingSelector", () => {
 		const result = extractExplicitThinkingSelector("pi/smol:max", settings, {
 			isLiteralModelId: (provider, id) => provider === "nanogpt" && id === "coding-router:max",
 		});
-		expect(result).toBe(Effort.XHigh);
+		expect(result).toBe(Effort.Max);
 	});
 
 	test("does not carry auto from literal role model ids", () => {

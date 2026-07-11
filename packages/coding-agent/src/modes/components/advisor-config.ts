@@ -43,7 +43,7 @@ import type { OAuthAccountIdentity } from "../../session/auth-storage";
 import { formatCompactQuota } from "../controllers/command-controller";
 import { getSelectListTheme, theme } from "../theme/theme";
 import { HookEditorComponent } from "./hook-editor";
-import { ModelSelectorComponent } from "./model-selector";
+import { buildBrowserItems, ModelBrowser, sortModelItems } from "./model-browser";
 import {
 	bottomBorder,
 	divider,
@@ -90,9 +90,9 @@ function previewLine(text: string | undefined): string {
 	return first.length > PREVIEW_WIDTH ? `${first.slice(0, PREVIEW_WIDTH - 1)}…` : first;
 }
 
-/** Default when the set is empty or exactly read/grep/glob; else the available-ordered subset. */
+/** Omitted means default read/grep/glob; an explicit empty set means no tools. */
 function commitTools(selected: ReadonlySet<string>, all: readonly string[]): string[] | undefined {
-	if (selected.size === 0) return undefined;
+	if (selected.size === 0) return [];
 	if (selected.size === ADVISOR_DEFAULT_TOOL_NAMES.size) {
 		let matchesDefault = true;
 		for (const name of ADVISOR_DEFAULT_TOOL_NAMES) {
@@ -104,6 +104,11 @@ function commitTools(selected: ReadonlySet<string>, all: readonly string[]): str
 		if (matchesDefault) return undefined;
 	}
 	return all.filter(name => selected.has(name));
+}
+
+function formatAdvisorTools(tools: readonly string[] | undefined, emptyLabel: string): string {
+	if (tools === undefined) return "read, grep, glob (default)";
+	return tools.length > 0 ? tools.join(", ") : emptyLabel;
 }
 
 /** Soft-wrap plain text to `width`, returning at least one (possibly empty) line. */
@@ -286,7 +291,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 
 	#advisorPreview(advisor: AdvisorConfig, bodyWidth: number): string[] {
 		const model = advisor.model?.trim() || this.#defaultModelLabel || "advisor role default";
-		const tools = advisor.tools?.length ? advisor.tools.join(", ") : "read, grep, glob (default)";
+		const tools = formatAdvisorTools(advisor.tools, "no tools");
 		const lines = [
 			theme.bold(advisor.name || "(unnamed)"),
 			"",
@@ -353,7 +358,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		return (
 			advisor.name === "default" &&
 			!advisor.model?.trim() &&
-			!advisor.tools?.length &&
+			advisor.tools === undefined &&
 			!advisor.instructions?.trim() &&
 			advisor.enabled !== false
 		);
@@ -361,7 +366,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 
 	#advisorSummary(advisor: AdvisorConfig): string {
 		const model = advisor.model?.trim() || this.#defaultModelLabel || "advisor role default";
-		const tools = advisor.tools?.length ? advisor.tools.join(", ") : "(default: read/grep/glob)";
+		const tools = formatAdvisorTools(advisor.tools, "no tools");
 		return `${model} · ${tools}`;
 	}
 
@@ -436,7 +441,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 			return;
 		}
 		const modelDescription = advisor.model?.trim() || this.#defaultModelLabel || "advisor role default";
-		const toolsDescription = advisor.tools?.length ? advisor.tools.join(", ") : "(default: read/grep/glob)";
+		const toolsDescription = formatAdvisorTools(advisor.tools, "no tools");
 		const items: SelectItem[] = [
 			{ value: "name", label: "Name", description: advisor.name },
 			{
@@ -517,27 +522,35 @@ export class AdvisorConfigOverlayComponent implements Component {
 	}
 
 	#showModelPicker(index: number): void {
-		const picker = new ModelSelectorComponent(
-			this.#tui,
-			undefined,
-			this.#settings,
-			this.#modelRegistry,
-			this.#scopedModels,
-			(model, _role, _thinking, selector) => {
-				const base = selector ?? `${model.provider}/${model.id}`;
-				const efforts = getSupportedEfforts(model);
-				if (efforts.length === 0) {
-					this.#doc.advisors[index].model = base;
-					this.#dirty = true;
-					this.#showDetail(index);
-				} else {
-					this.#showThinkingPicker(index, base, efforts);
-				}
-			},
-			() => this.#showDetail(index),
-			{ directSelect: true, pickerHint: "Pick this advisor's model · Enter / click select · Esc back" },
-		);
-		this.#setScreen("model", picker, "Type to search · Enter / click pick model · Esc back");
+		const mruOrder = this.#settings.getStorage()?.getModelUsageOrder() ?? [];
+		let models: ReadonlyArray<Model>;
+		if (this.#scopedModels.length > 0) {
+			models = this.#scopedModels.map(scoped => scoped.model);
+		} else {
+			try {
+				models = this.#modelRegistry.getAvailable();
+			} catch {
+				models = [];
+			}
+		}
+		const items = buildBrowserItems(models);
+		sortModelItems(items, { mruOrder });
+
+		const picker = new ModelBrowser(this.#settings, {});
+		picker.setMruOrder(mruOrder);
+		picker.setItems(items);
+		picker.onActivate = item => {
+			const efforts = getSupportedEfforts(item.model);
+			if (efforts.length === 0) {
+				this.#doc.advisors[index].model = item.selector;
+				this.#dirty = true;
+				this.#showDetail(index);
+			} else {
+				this.#showThinkingPicker(index, item.selector, efforts);
+			}
+		};
+		picker.onCancel = () => this.#showDetail(index);
+		this.#setScreen("model", picker, "Type to search · Enter / click twice picks · Esc back");
 	}
 
 	#showThinkingPicker(index: number, selector: string, efforts: readonly string[]): void {
@@ -588,7 +601,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#setScreen(
 			"tools",
 			list,
-			"Enter / click toggle · select Done or Esc to apply (empty or read/grep/glob = default)",
+			"Enter / click toggle · select Done or Esc to apply (empty = no tools; read/grep/glob = default)",
 		);
 	}
 

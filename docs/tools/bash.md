@@ -9,7 +9,6 @@
   - `packages/coding-agent/src/tools/bash-interactive.ts` — PTY/TUI execution path.
   - `packages/coding-agent/src/tools/bash-interceptor.ts` — blocks tool-better shell patterns.
   - `packages/coding-agent/src/tools/bash-skill-urls.ts` — expands internal URLs to paths.
-  - `packages/coding-agent/src/tools/bash-command-fixup.ts` — strips trailing `| head`/`| tail` pipes and redundant `2>&1` (thin wrapper over native `pi_shell::fixup`).
   - `packages/coding-agent/src/tools/bash-pty-selection.ts` — `canUseInteractiveBashPty()` decides whether a call may use the local PTY overlay.
   - `packages/coding-agent/src/tools/gh-cache-invalidation.ts` — drops `github-cache` rows for mutating `gh issue`/`gh pr` subcommands.
   - `packages/coding-agent/src/exec/bash-executor.ts` — non-PTY shell execution.
@@ -54,7 +53,7 @@ The tool returns a single `text` content block plus optional `details`.
 Stdout and stderr are merged before the model sees them. Definite non-zero exit codes are appended to the returned error result text as `Command exited with code <n>`.
 
 ## Flow
-1. `BashTool.execute()` in `packages/coding-agent/src/tools/bash.ts` reads `command`, normalizes `env`, and defaults `timeout` to `300`. When `bash.stripTrailingHeadTail` is enabled (default), `applyBashFixups()` from `packages/coding-agent/src/tools/bash-command-fixup.ts` first strips safe trailing `| head`/`| tail` pipes and redundant trailing `2>&1` from single-line commands.
+1. `BashTool.execute()` in `packages/coding-agent/src/tools/bash.ts` reads `command`, normalizes `env`, and defaults `timeout` to `300`. Commands execute exactly as written — there is no pre-execution rewrite pass.
 2. If `cwd` is absent, it rewrites a leading `cd <path> && ...` into the structured `cwd` field and strips that prefix from `command`.
 3. If `async: true` is requested while `async.enabled` is off, it throws `ToolError` before any execution.
 4. If `bashInterceptor.enabled` is on, `checkBashInterception()` runs against both the original command and the `cd`-stripped command. A matching enabled rule throws before URL expansion or execution.

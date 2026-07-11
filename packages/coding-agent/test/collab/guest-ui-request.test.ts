@@ -24,6 +24,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
 import type {
+	ExtensionAskDialogQuestion,
 	ExtensionUIDialogOptions,
 	ExtensionUISelectItem,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
@@ -710,6 +711,154 @@ describe("collab host dialog vs teardown (#4049 follow-up)", () => {
 			expect(race.dialog.signal?.aborted).toBe(true);
 		} finally {
 			await race.cleanup();
+		}
+	});
+});
+
+// ── Guest ask "unavailable" literal answer (#4375: tagged guest results) ────
+//
+// A guest may legitimately answer with the literal string "unavailable" (e.g.
+// a status option). The old `#requestGuestUiString` flattened
+// `CollabGuestUiResult` to `string | "unavailable" | undefined`, so that answer
+// collided with the transport-unavailable sentinel and cancelled the whole ask
+// instead of recording the answer. `CollabHost.requestGuestUi` already returns
+// a tagged `CollabGuestUiResult`; this test pins the wire-level contract: a
+// guest "unavailable" answer is `{ kind: "answered", value: "unavailable" }`,
+// not `{ kind: "unavailable" }`.
+
+describe("guest ask unavailable literal answer (#4375)", () => {
+	it("preserves a guest answer of 'unavailable' as answered, not transport-unavailable", async () => {
+		const ctx = makeHostContext();
+		const host = new CollabHost(ctx);
+		await host.start("ws://localhost:8787");
+		ctx.collabHost = host;
+		try {
+			const guest = await joinRawGuest(host.link, COLLAB_PROTO);
+			const welcome = await guest.nextFrame();
+			if (welcome.t !== "welcome") throw new Error(`expected welcome, got ${welcome.t}`);
+
+			const pending = host.requestGuestUi({
+				kind: "select",
+				title: "Status?",
+				options: ["available", "unavailable", "busy"],
+			});
+			if (!pending) throw new Error("expected writable guest UI request");
+			const request = await guest.nextFrame();
+			if (request.t !== "ui-request") throw new Error(`expected ui-request, got ${request.t}`);
+			// Guest answers with the literal string "unavailable" — this must be
+			// treated as a real answer, not a transport-unavailable sentinel.
+			guest.socket.send({ t: "ui-response", reqId: request.request.reqId, value: "unavailable" });
+			const result = await pending;
+			expect(result).toEqual({ kind: "answered", value: "unavailable" });
+			guest.socket.close();
+		} finally {
+			await host.stop("test done");
+		}
+	});
+});
+
+// ── Guest ask multi-select Next gating (#4375: PRRT_kwDOQxs0bc6OFbDW) ───────
+//
+// The local rich dialog disables the Next row on a single-question
+// multi-select until at least one option or custom input is chosen. The guest
+// mirror has no "disabled row" concept on the wire, so it must OMIT Next from
+// the option list until an answer exists, then include it on the next round.
+// This test pins that wire-level contract by inspecting consecutive
+// ui-request frames.
+
+/** Context double with the extra members `#showLocalAskDialog` touches when
+ *  mounting the local AskDialogComponent. The local dialog is never driven
+ *  (no input), so it never settles and the remote guest wins the race.
+ *  Reuses makeHostContext for the CollabHost-facing members. */
+function makeAskHostContext(): InteractiveModeContext {
+	const base = makeHostContext();
+	// Stub only the surface the local ask-dialog mount path calls: container
+	// clear/addChild, ui focus/render, and editor (dispose path). The real
+	// InteractiveModeContext has many more members; the double-cast below is
+	// the established test pattern in this file (see makeHostContext) for a
+	// complex interface that is only partially exercised.
+	const stub = {
+		...base,
+		editorContainer: { clear: () => {}, addChild: () => {} },
+		editor: { getText: () => "", setText: () => {} },
+		ui: {
+			requestRender: () => {},
+			setFocus: () => {},
+			terminal: { rows: 40, columns: 80 },
+			addInputListener: () => () => {},
+		},
+	};
+	return stub as unknown as InteractiveModeContext;
+}
+
+describe("guest ask multi-select Next gating (#4375 PRRT_kwDOQxs0bc6OFbDW)", () => {
+	/** Skip ui-request-end dismissal frames, wait for the next ui-request. */
+	async function nextUiRequest(guest: {
+		nextFrame(): Promise<CollabFrame>;
+	}): Promise<CollabFrame & { t: "ui-request" }> {
+		for (;;) {
+			const frame = await guest.nextFrame();
+			if (frame.t === "ui-request") return frame;
+			// ui-request-end / other non-request frames are expected between
+			// rounds; keep draining until the next request arrives.
+		}
+	}
+
+	/** Extract string labels from a select ui-request's options, narrowing the
+	 *  discriminated union so `options` is visible to the type checker. */
+	function selectLabels(frame: CollabFrame & { t: "ui-request" }): string[] {
+		if (frame.request.kind !== "select") throw new Error(`expected select, got ${frame.request.kind}`);
+		return frame.request.options.map(o => (typeof o === "string" ? o : o.label));
+	}
+
+	it("omits Next from the first ui-request, includes it after a toggle", async () => {
+		const ctx = makeAskHostContext();
+		const host = new CollabHost(ctx);
+		await host.start("ws://localhost:8787");
+		ctx.collabHost = host;
+		const controller = new ExtensionUiController(ctx);
+		try {
+			const guest = await joinRawGuest(host.link, COLLAB_PROTO);
+			const welcome = await guest.nextFrame();
+			if (welcome.t !== "welcome") throw new Error(`expected welcome, got ${welcome.t}`);
+
+			const questions: ExtensionAskDialogQuestion[] = [
+				{
+					id: "q1",
+					question: "Pick several?",
+					options: [{ label: "Option A" }, { label: "Option B" }],
+					multi: true,
+				},
+			];
+			const result = controller.showAskDialog(questions);
+
+			// First ui-request: Next must be absent (no answer yet).
+			const first = await nextUiRequest(guest);
+			const firstLabels = selectLabels(first);
+			expect(firstLabels).not.toContain("Next →");
+			expect(firstLabels).toContain("Option A");
+			expect(firstLabels).toContain("Other (type your own)");
+			expect(firstLabels).toContain("Chat about this");
+
+			// Guest toggles Option A — a real answer, not Next/Other/Chat.
+			guest.socket.send({ t: "ui-response", reqId: first.request.reqId, value: "Option A" });
+
+			// Second ui-request: Next must now be present.
+			const second = await nextUiRequest(guest);
+			const secondLabels = selectLabels(second);
+			expect(secondLabels).toContain("Next →");
+			expect(secondLabels).toContain("Option A");
+
+			// Guest selects Next to submit.
+			guest.socket.send({ t: "ui-response", reqId: second.request.reqId, value: "Next →" });
+			const settled = await result;
+			expect(settled?.kind).toBe("submit");
+			if (settled?.kind === "submit") {
+				expect(settled.results[0]?.selectedOptions).toEqual(["Option A"]);
+			}
+			guest.socket.close();
+		} finally {
+			await host.stop("test done");
 		}
 	});
 });

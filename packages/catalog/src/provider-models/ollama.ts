@@ -25,8 +25,7 @@ type OllamaShowResponse = {
 const OLLAMA_RETRY_DELAYS_MS = [2_000, 5_000, 10_000];
 const OLLAMA_CLOUD_GLM_52_THINKING: ThinkingConfig = {
 	mode: "effort",
-	efforts: [Effort.High, Effort.XHigh],
-	effortMap: { [Effort.XHigh]: "max" },
+	efforts: [Effort.High, Effort.Max],
 };
 
 function trimTrailingSlash(value: string): string {

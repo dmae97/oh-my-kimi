@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 
 import { resolveStdioSpawnCommand, StdioTransport } from "./stdio";
 
@@ -31,6 +31,18 @@ describe("resolveStdioSpawnCommand", () => {
 		});
 	});
 
+	it("keeps Darwin stdio MCP servers attached so TCC Apple Events prompts can resolve", async () => {
+		await expect(
+			resolveStdioSpawnCommand(
+				{ command: "xcrun", args: ["mcpbridge"] },
+				{ cwd: process.cwd(), env: {}, platform: "darwin" },
+			),
+		).resolves.toEqual({
+			cmd: ["xcrun", "mcpbridge"],
+			detached: false,
+		});
+	});
+
 	it("detaches off-Windows MCP servers so terminal job-control signals cannot stop them", async () => {
 		await expect(
 			resolveStdioSpawnCommand(
@@ -41,6 +53,50 @@ describe("resolveStdioSpawnCommand", () => {
 			cmd: ["server.exe", "--stdio"],
 			detached: true,
 		});
+	});
+});
+
+describe("StdioTransport.connect", () => {
+	it("passes argv as Bun.spawn's first argument and process options as the second", async () => {
+		const cwd = process.cwd();
+		const envValue = "stdio-spawn-shape";
+		const argv = [process.execPath, "-e", "process.exit(0)"];
+		const transport = new StdioTransport({
+			command: argv[0],
+			args: argv.slice(1),
+			cwd,
+			env: {
+				OMP_STDIO_SPAWN_SHAPE: envValue,
+			},
+		});
+		const spawnSpy = spyOn(Bun, "spawn");
+
+		try {
+			await transport.connect();
+
+			expect(spawnSpy).toHaveBeenCalledTimes(1);
+			const call = spawnSpy.mock.calls[0];
+			if (!call) throw new Error("expected StdioTransport.connect() to spawn exactly one subprocess");
+
+			const [spawnArgv, spawnOptions] = call;
+			expect(spawnArgv).toEqual(argv);
+			expect(spawnOptions).toEqual(
+				expect.objectContaining({
+					cwd,
+					detached: !(process.platform === "darwin" || process.platform === "win32"),
+					env: expect.objectContaining({
+						OMP_STDIO_SPAWN_SHAPE: envValue,
+					}),
+					stderr: "pipe",
+					stdin: "pipe",
+					stdout: "pipe",
+					windowsHide: process.platform === "win32" ? expect.any(Boolean) : undefined,
+				}),
+			);
+		} finally {
+			await transport.close();
+			spawnSpy.mockRestore();
+		}
 	});
 });
 

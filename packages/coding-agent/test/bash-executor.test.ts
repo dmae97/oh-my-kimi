@@ -520,11 +520,7 @@ exit 64
 		expect(next.output.trim()).toBe("still_persistent");
 	});
 
-	it("returns at the JavaScript timeout when native timeout cleanup stalls", async () => {
-		if (process.platform === "win32") {
-			return;
-		}
-
+	it("does not abort the native signal when the JavaScript timeout fallback returns streamed output", async () => {
 		// Compress the JS-side fallback timer (floored at 1000ms in the source) so
 		// the safety-net fires deterministically without a real 1s wait. Only long
 		// timers are shrunk — fs/subprocess setup keeps real scheduling — and the
@@ -537,8 +533,12 @@ exit 64
 				...rest,
 			)) as typeof globalThis.setTimeout);
 
-		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation((_options, onChunk) => {
-			onChunk?.(null, "started\n");
+		let nativeSignal: AbortSignal | undefined;
+		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation((options, onChunk) => {
+			if (options.signal instanceof AbortSignal) {
+				nativeSignal = options.signal;
+			}
+			onChunk?.(null, "streamed-before-timeout\n");
 			return Promise.withResolvers<never>().promise;
 		});
 		const abortSpy = vi.spyOn(piNatives.Shell.prototype, "abort").mockResolvedValue();
@@ -546,12 +546,15 @@ exit 64
 		const result = await executeBash("sleep 10", {
 			cwd: tempDir,
 			timeout: 1000,
-			sessionKey: "hung-native-timeout",
+			sessionKey: "explicit-timeout-keeps-native-signal",
 		});
 
 		expect(result.cancelled).toBe(true);
+		expect(result.output).toContain("streamed-before-timeout");
 		expect(result.output).toContain("Command timed out after 1 seconds");
-		expect(abortSpy).toHaveBeenCalled();
+		expect(nativeSignal).toBeDefined();
+		expect(nativeSignal?.aborted).toBe(false);
+		expect(abortSpy).not.toHaveBeenCalled();
 	});
 
 	it("aborts before follow-up output", async () => {

@@ -282,7 +282,7 @@ Every key below is defined in the settings schema; `omp config list` shows the f
 
 ### Models
 
-`modelRoles`, `modelTags`, and `cycleOrder` work together to define the models you can switch between. Role values may carry a thinking suffix (`:minimal`, `:low`, `:medium`, `:high`, `:xhigh`).
+`modelRoles`, `modelTags`, and `cycleOrder` work together to define the models you can switch between. Role values may carry a thinking suffix (`:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, `:max`).
 
 ```yaml
 modelRoles:
@@ -342,17 +342,19 @@ thinkingBudgets:
   medium: 8192
   high: 16384
   xhigh: 32768
+  max: 32768
 ```
 
 | Key | Type | Default | Values |
 |---|---|---|---|
-| `defaultThinkingLevel` | enum | `high` | `minimal`, `low`, `medium`, `high`, `xhigh`, `auto`. Override per run with `--thinking`. |
+| `defaultThinkingLevel` | enum | `high` | `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `auto`. Override per run with `--thinking`. |
 | `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in output. `--hide-thinking` sets it for the run (display only). |
 | `thinkingBudgets.minimal` | number | `1024` | Token budget for the `minimal` level. |
 | `thinkingBudgets.low` | number | `2048` | Token budget for `low`. |
 | `thinkingBudgets.medium` | number | `8192` | Token budget for `medium`. |
 | `thinkingBudgets.high` | number | `16384` | Token budget for `high`. |
 | `thinkingBudgets.xhigh` | number | `32768` | Token budget for `xhigh`. |
+| `thinkingBudgets.max` | number | `32768` | Token budget for `max`. |
 
 ### Sampling
 
@@ -429,7 +431,6 @@ Individual built-in tools are toggled by their own keys, e.g. `bash.enabled`, `e
 ```yaml
 bash:
   enabled: true
-  stripTrailingHeadTail: true
   autoBackground:
     enabled: false
     thresholdMs: 60000
@@ -453,7 +454,6 @@ lsp:
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `bash.enabled` | boolean | `true` | Enable the bash tool. |
-| `bash.stripTrailingHeadTail` | boolean | `true` | Strip trailing head/tail noise from output. |
 | `bash.autoBackground.enabled` | boolean | `false` | Auto-background long-running commands. |
 | `bash.autoBackground.thresholdMs` | number | `60000` | Threshold before auto-backgrounding. |
 | `eval.py` | boolean | `true` | Python eval backend. `PI_PY=0` disables for the process. |
@@ -502,7 +502,7 @@ read:
 
 ```yaml
 contextPromotion:
-  enabled: true
+  enabled: false
 
 compaction:
   enabled: true
@@ -518,7 +518,7 @@ memory:
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `contextPromotion.enabled` | boolean | `true` | Promote relevant earlier context. |
+| `contextPromotion.enabled` | boolean | `false` | Promote to the active model's explicit `contextPromotionTarget` on context overflow. |
 | `compaction.enabled` | boolean | `true` | Automatic conversation compaction. |
 | `compaction.midTurnEnabled` | boolean | `true` | Check thresholds at safe mid-turn tool-loop boundaries before the next provider request. |
 | `compaction.strategy` | enum | `snapcompact` | `context-full`, `handoff`, `shake`, `snapcompact`, `off`. |

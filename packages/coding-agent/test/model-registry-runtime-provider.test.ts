@@ -371,9 +371,8 @@ describe("ModelRegistry runtime provider registration", () => {
 		expect(model?.thinking).toEqual({
 			mode: "anthropic-adaptive",
 			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
-			// Wire facts are backfilled from identity; non-claude ids get the
-			// 4-tier adaptive map, filtered to the declared efforts (no xhigh).
-			effortMap: { minimal: "low" },
+			// Adaptive ladders are wire-exact (no backfilled effortMap); only
+			// requiresEffort is backfilled from identity.
 			requiresEffort: true,
 		});
 	});

@@ -1,14 +1,14 @@
 /**
  * Contracts: task.batch gating (batch spawning + shared context).
  *
- * 1. The wire schema is shape-swapped by `task.batch`: `{ agent, context,
- *    tasks[] }` when on (per-spawn fields — including `isolated` — live in the
- *    items), the flat `{ agent, ...item }` when off. Neither shape exposes a
- *    per-call `schema` input (structured output comes from agent frontmatter /
- *    inherited session schema / eval agent()).
+ * 1. The wire schema is shape-swapped by `task.batch`: `{ context, tasks[] }`
+ *    when on (per-spawn fields — including `isolated` — live in the items),
+ *    the flat `{ name?, agent?, task, isolated? }` when off. Neither
+ *    shape exposes a per-call `schema` input (structured output comes from
+ *    agent frontmatter / inherited session schema / eval agent()).
  * 2. Shape validation rejects `schema` always, `tasks`/`context` while batch
- *    is disabled, top-level `assignment` in batch calls, empty/invalid items,
- *    duplicate ids, and a missing shared `context`.
+ *    is disabled, top-level `task` in batch calls, empty/invalid items,
+ *    duplicate names, and a missing shared `context`.
  * 3. With `async.enabled=true`, a batch call registers one background job per
  *    item; with `async.enabled=false`, it blocks and returns merged results.
  *    Both modes forward the shared `context`; the flat form stays accepted at
@@ -95,21 +95,22 @@ describe("task.batch schema gating", () => {
 		const offProperties = getSchemaProperties(off);
 		expect(offProperties.tasks).toBeUndefined();
 		expect(offProperties.context).toBeUndefined();
-		expect(offProperties.assignment).toBeDefined();
-		expect(offProperties.id).toBeDefined();
+		expect(offProperties.task).toBeDefined();
+		expect(offProperties.name).toBeDefined();
 
 		const on = await TaskTool.create(createSession({ settings: { "task.batch": true } }));
 		const onProperties = getSchemaProperties(on);
 		expect(onProperties.tasks).toBeDefined();
 		expect(onProperties.context).toBeDefined();
-		// The batch shape is { agent, context, tasks[] } — the per-spawn fields
-		// live only inside the task items.
-		expect(onProperties.assignment).toBeUndefined();
-		expect(onProperties.id).toBeUndefined();
-		expect(onProperties.description).toBeUndefined();
+		// The batch shape is { context, tasks[] } — the per-spawn fields live
+		// only inside the task items.
+		expect(onProperties.task).toBeUndefined();
+		expect(onProperties.name).toBeUndefined();
+		expect(onProperties.agent).toBeUndefined();
 		const items = (onProperties.tasks as { items?: { properties?: Record<string, unknown> } }).items;
-		expect(items?.properties?.assignment).toBeDefined();
-		expect(items?.properties?.id).toBeDefined();
+		expect(items?.properties?.task).toBeDefined();
+		expect(items?.properties?.name).toBeDefined();
+		expect(items?.properties?.agent).toBeDefined();
 	});
 
 	it("places isolated per item in the batch shape when isolation is enabled", async () => {
@@ -149,7 +150,7 @@ describe("task.batch validation", () => {
 	it("rejects a schema argument regardless of batch mode", async () => {
 		for (const batch of [false, true]) {
 			const text = await executeText(
-				{ agent: "task", assignment: "Work.", schema: '{"properties":{}}' },
+				{ agent: "task", task: "Work.", schema: '{"properties":{}}' },
 				{ "task.batch": batch },
 			);
 			expect(text).toContain("does not accept `schema`");
@@ -158,49 +159,42 @@ describe("task.batch validation", () => {
 
 	it("rejects tasks and context while task.batch is disabled", async () => {
 		const disabled = { "task.batch": false };
-		const text = await executeText({ agent: "task", tasks: [{ assignment: "Work." }] }, disabled);
+		const text = await executeText({ agent: "task", tasks: [{ task: "Work." }] }, disabled);
 		expect(text).toContain("task.batch is disabled");
 
-		const contextText = await executeText({ agent: "task", assignment: "Work.", context: "Background." }, disabled);
+		const contextText = await executeText({ agent: "task", task: "Work.", context: "Background." }, disabled);
 		expect(contextText).toContain("task.batch is disabled");
 	});
 
-	it("rejects top-level assignment in the batch shape", async () => {
-		const text = await executeText(
-			{ agent: "task", assignment: "Work.", tasks: [{ assignment: "Other." }] },
-			{ "task.batch": true },
-		);
+	it("rejects top-level task in the batch shape", async () => {
+		const text = await executeText({ task: "Work.", tasks: [{ task: "Other." }] }, { "task.batch": true });
 		expect(text).toContain("not part of the batch shape");
 	});
 
-	it("rejects empty task arrays and items without assignments", async () => {
-		const empty = await executeText({ agent: "task", tasks: [] }, { "task.batch": true });
+	it("rejects empty task arrays and items without tasks", async () => {
+		const empty = await executeText({ tasks: [] }, { "task.batch": true });
 		expect(empty).toContain("Missing `tasks`");
 
-		const missing = await executeText(
-			{ agent: "task", tasks: [{ assignment: "Work." }, { id: "Beta" }] },
-			{ "task.batch": true },
-		);
-		expect(missing).toContain("Task 2 (`Beta`) is missing `assignment`");
+		const missing = await executeText({ tasks: [{ task: "Work." }, { name: "Beta" }] }, { "task.batch": true });
+		expect(missing).toContain("Task 2 (`Beta`) is missing `task`");
 	});
 
 	it("requires a shared context for batch calls", async () => {
-		const text = await executeText({ agent: "task", tasks: [{ assignment: "Work." }] }, { "task.batch": true });
+		const text = await executeText({ tasks: [{ task: "Work." }] }, { "task.batch": true });
 		expect(text).toContain("Missing `context`");
 	});
 
-	it("rejects duplicate provided ids case-insensitively", async () => {
+	it("rejects duplicate provided names case-insensitively", async () => {
 		const text = await executeText(
 			{
-				agent: "task",
 				tasks: [
-					{ id: "Anna", assignment: "A." },
-					{ id: "anna", assignment: "B." },
+					{ name: "Anna", task: "A." },
+					{ name: "anna", task: "B." },
 				],
 			},
 			{ "task.batch": true },
 		);
-		expect(text).toContain("Duplicate task id");
+		expect(text).toContain("Duplicate task name");
 	});
 });
 
@@ -246,11 +240,10 @@ describe("task.batch spawning", () => {
 		);
 
 		const result = await tool.execute("tc-batch", {
-			agent: "task",
 			context: "# Goal\nShared background.",
 			tasks: [
-				{ id: "Alpha", description: "first", assignment: "Do A." },
-				{ id: "Beta", assignment: "Do B." },
+				{ name: "Alpha", task: "Do A." },
+				{ name: "Beta", task: "Do B." },
 			],
 		} as TaskParams);
 
@@ -297,9 +290,8 @@ describe("task.batch spawning", () => {
 		);
 
 		const result = await tool.execute("tc-single", {
-			agent: "task",
 			context: "Shared notes.",
-			tasks: [{ id: "Solo", assignment: "Do the thing." }],
+			tasks: [{ name: "Solo", task: "Do the thing." }],
 		} as TaskParams);
 
 		expect(getFirstText(result)).toContain("Spawned agent `Solo`");
@@ -322,8 +314,8 @@ describe("task.batch spawning", () => {
 
 		const result = await tool.execute("tc-flat", {
 			agent: "task",
-			id: "Flat",
-			assignment: "Do the thing.",
+			name: "Flat",
+			task: "Do the thing.",
 		} as TaskParams);
 
 		expect(getFirstText(result)).toContain("Spawned agent `Flat`");
@@ -346,11 +338,10 @@ describe("task.batch spawning", () => {
 		);
 
 		const result = await tool.execute("tc-sync-batch", {
-			agent: "task",
 			context: "# Goal\nShared synchronous context.",
 			tasks: [
-				{ id: "Alpha", assignment: "Do A." },
-				{ id: "Beta", assignment: "Do B." },
+				{ name: "Alpha", task: "Do A." },
+				{ name: "Beta", task: "Do B." },
 			],
 		} as TaskParams);
 
@@ -390,11 +381,10 @@ describe("task.batch spawning", () => {
 		const result = await tool.execute(
 			"tc-batch-cancel",
 			{
-				agent: "task",
 				context: "ctx",
 				tasks: [
-					{ id: "First", assignment: "Do A." },
-					{ id: "Second", assignment: "Do B." },
+					{ name: "First", task: "Do A." },
+					{ name: "Second", task: "Do B." },
 				],
 			} as TaskParams,
 			undefined,

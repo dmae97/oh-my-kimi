@@ -8,4 +8,4 @@ Background tasks deliver their results automatically the moment they finish. You
   - To watch EVERY running job, issue a call with NO fields at all (no `poll`, no `cancel`, no `list`). NEVER pass an array of every running ID.
   - A finished job's output, or the interrupting message and reason, is included in the next turn.
 - **Stop execution:** Pass `cancel` with job IDs to kill jobs that have hung, stalled, or are no longer needed. A cancel-only call returns immediately.
-- **Snapshot:** Pass `list: true` to get the current status of all jobs without waiting.
+- **Snapshot:** Pass `list: true` to get the current status of all jobs without waiting. The listing also names running subagents that have no job entry (e.g. agents woken via `irc`, or spawns owned by another agent) — those are coordinated through `irc`, not this tool.

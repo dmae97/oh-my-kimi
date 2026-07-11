@@ -8,7 +8,7 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { parseModelPattern } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
+import { parseModelPattern, parseModelString } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -1602,6 +1602,12 @@ describe("AgentSession retry fallback", () => {
 		expect(modelRegistry.isSelectorSuppressed("openai/gpt-4o")).toBe(true);
 		expect(modelRegistry.isSelectorSuppressed("openai/gpt-4o:low")).toBe(true);
 
+		// `:max` is a real thinking level now, not an xhigh alias — the two parse
+		// to distinct selectors...
+		expect(parseModelString("openai/gpt-4o:max", { allowMaxSuffix: true })?.thinkingLevel).toBe(Effort.Max);
+		expect(parseModelString("openai/gpt-4o:xhigh")?.thinkingLevel).toBe(Effort.XHigh);
+		// ...but suppression normalizes every thinking suffix to the base selector,
+		// so suppressing either still covers both.
 		modelRegistry.suppressSelector("openai/gpt-4o:max", future);
 		expect(modelRegistry.isSelectorSuppressed("openai/gpt-4o:xhigh")).toBe(true);
 		expect(modelRegistry.isSelectorSuppressed("openai/gpt-4o:max")).toBe(true);

@@ -103,6 +103,7 @@ export * from "./search-tool-bm25";
 export * from "./ssh";
 export * from "./todo";
 export * from "./tts";
+export * from "./vibe";
 export * from "./write";
 export * from "./yield";
 
@@ -616,6 +617,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "web_search") return session.settings.get("web_search.enabled");
 		// search_tool_bm25 is allowed when either legacy mcp.discoveryMode or new tools.discoveryMode is active.
 		if (name === "search_tool_bm25") return discoveryActive;
+		if (name === "ask") return session.settings.get("ask.enabled");
 		if (name === "browser") return session.settings.get("browser.enabled");
 		if (name === "checkpoint" || name === "rewind") return session.settings.get("checkpoint.enabled");
 		if (name === "irc") return isIrcEnabled(session.settings, session.taskDepth ?? 0);

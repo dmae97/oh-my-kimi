@@ -52,9 +52,8 @@ describe("task.async-fallback", () => {
 
 		const result = await tool.execute("tool-1", {
 			agent: "task",
-			id: "One",
-			description: "label",
-			assignment: "Do the thing.",
+			name: "One",
+			task: "Do the thing.",
 		} as TaskParams);
 
 		const text = getFirstText(result);

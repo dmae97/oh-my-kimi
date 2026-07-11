@@ -1,13 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import {
+	formatTitleConversationContext,
 	formatTitleUserMessage,
-	isLowSignalTitleInput,
-	MAX_TITLE_INPUT_CHARS,
-	NO_TITLE_SENTINEL,
-	normalizeGeneratedTitle,
-	prepareTitleInput,
+	MAX_TINY_MESSAGE_CHARS,
+	preprocessTinyMessage,
 	stripCodeBlocks,
-} from "@oh-my-pi/pi-coding-agent/tiny/text";
+} from "@oh-my-pi/pi-coding-agent/tiny/message-preproc";
+import { isLowSignalTitleInput, NO_TITLE_SENTINEL, normalizeGeneratedTitle } from "@oh-my-pi/pi-coding-agent/tiny/text";
 
 describe("stripCodeBlocks", () => {
 	it("drops fenced code blocks but keeps the surrounding prose", () => {
@@ -48,22 +47,54 @@ describe("stripCodeBlocks", () => {
 	});
 });
 
-describe("prepareTitleInput", () => {
-	it("strips code blocks before bounding length", () => {
-		const message = `intro prose ${"x".repeat(MAX_TITLE_INPUT_CHARS)}\n\`\`\`\n${"y".repeat(5000)}\n\`\`\``;
-		const prepared = prepareTitleInput(message);
+describe("preprocessTinyMessage", () => {
+	it("strips code blocks before middle-truncating", () => {
+		const message = `intro prose ${"x".repeat(MAX_TINY_MESSAGE_CHARS)}\n\`\`\`\n${"y".repeat(5000)}\n\`\`\``;
+		const prepared = preprocessTinyMessage(message);
 		expect(prepared).not.toContain("yyyy");
-		expect(prepared.length).toBeLessThanOrEqual(MAX_TITLE_INPUT_CHARS + 1); // +1 for the ellipsis
+		expect(prepared.length).toBeLessThanOrEqual(MAX_TINY_MESSAGE_CHARS);
+	});
+
+	it("strips ANSI and XML noise while shortening full hashes", () => {
+		const prepared = preprocessTinyMessage(
+			"\u001b[31mmerge\u001b[0m <tool>ignore this output</tool> 54783db3f0f17c74cae81976f0e825a909deb71e",
+		);
+		expect(prepared).toBe("merge 54783db");
+	});
+
+	it("preserves both ends with a counted omission marker", () => {
+		const prepared = preprocessTinyMessage(`HEAD ${"x".repeat(3000)} TAIL`);
+		expect(prepared.startsWith("HEAD ")).toBe(true);
+		expect(prepared.endsWith(" TAIL")).toBe(true);
+		expect(prepared).toMatch(/\[… \d+ chars omitted …\]/);
+		expect(prepared.length).toBeLessThanOrEqual(MAX_TINY_MESSAGE_CHARS);
 	});
 });
 
 describe("formatTitleUserMessage", () => {
-	it("wraps stripped content in user-message tags", () => {
+	it("wraps stripped content in user tags", () => {
 		const formatted = formatTitleUserMessage("plan a thing\n```\nnoise\n```");
-		expect(formatted.startsWith("<user-message>\n")).toBe(true);
-		expect(formatted.endsWith("\n</user-message>")).toBe(true);
+		expect(formatted.startsWith("<user>\n")).toBe(true);
+		expect(formatted.endsWith("\n</user>")).toBe(true);
 		expect(formatted).toContain("plan a thing");
 		expect(formatted).not.toContain("noise");
+	});
+
+	it("passes preformatted chat context through unchanged", () => {
+		const context = "<chat>\n<user>\nfix parser\n</user>\n</chat>";
+		expect(formatTitleUserMessage(context)).toBe(context);
+	});
+});
+
+describe("formatTitleConversationContext", () => {
+	it("uses compact chat and think tags after cleaning each turn", () => {
+		const formatted = formatTitleConversationContext([
+			{ role: "user", text: "fix this <tool>noisy output</tool>" },
+			{ role: "assistant", text: "Checking", thinking: "inspect the logs" },
+		]);
+		expect(formatted).toBe(
+			"<chat>\n<user>\nfix this\n</user>\n\n<assistant>\nChecking\n\n<think>\ninspect the logs\n</think>\n</assistant>\n</chat>",
+		);
 	});
 });
 
@@ -90,6 +121,16 @@ describe("normalizeGeneratedTitle", () => {
 		expect(normalizeGeneratedTitle("none")).toBeNull();
 		expect(normalizeGeneratedTitle("None.")).toBeNull();
 		expect(normalizeGeneratedTitle('"none"')).toBeNull();
+	});
+
+	it("accepts empty, legacy, and partial title markers", () => {
+		expect(normalizeGeneratedTitle("<title/>")).toBeNull();
+		expect(normalizeGeneratedTitle("<title />")).toBeNull();
+		expect(normalizeGeneratedTitle("<title>")).toBeNull();
+		expect(normalizeGeneratedTitle("<title></title>")).toBeNull();
+		expect(normalizeGeneratedTitle("<title>none</title>")).toBeNull();
+		expect(normalizeGeneratedTitle("<title>Fix login</title>")).toBe("Fix login");
+		expect(normalizeGeneratedTitle("Fix login</title>")).toBe("Fix login");
 	});
 
 	it("keeps a title that merely contains the word none", () => {
@@ -267,5 +308,15 @@ describe("isLowSignalTitleInput", () => {
 		]) {
 			expect(isLowSignalTitleInput(msg)).toBe(false);
 		}
+	});
+
+	it("does not treat preformatted chat context as low-signal even though it contains XML tags", () => {
+		const context = "<chat>\n<user>\nfix parser\n</user>\n</chat>";
+		expect(isLowSignalTitleInput(context)).toBe(false);
+	});
+
+	it("still evaluates the actual inner text of a preformatted chat context correctly", () => {
+		const context = "<chat>\n<user>\nhi\n</user>\n</chat>";
+		expect(isLowSignalTitleInput(context)).toBe(true);
 	});
 });

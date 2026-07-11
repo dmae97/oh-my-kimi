@@ -381,3 +381,61 @@ describe("in-band tool dialects", () => {
 		expect(deltas).toBe("line1\nconst x = `a`;");
 	});
 });
+
+describe("GLM value-closer healing", () => {
+	it("recovers when a value is closed with </arg_key> instead of </arg_value>", () => {
+		const text =
+			"<tool_call>write\n<arg_key>path</arg_key>\n<arg_value>a.ts</arg_key>\n<arg_key>content</arg_key>\n<arg_value>hello</arg_value>\n</tool_call>";
+		const events = feedText("glm", text);
+		const ends = toolEnds(events);
+		expect(ends).toHaveLength(1);
+		expect(ends[0]?.arguments).toEqual({ path: "a.ts", content: "hello" });
+		expect(ends[0]?.rawBlock).toBe(text);
+		const pathDeltas = parameterDeltaEvents(events)
+			.filter(event => event.key === "path")
+			.map(event => event.delta)
+			.join("");
+		expect(pathDeltas).toBe("a.ts");
+	});
+
+	it("recovers a wrong closer directly before </tool_call>", () => {
+		const events = feedText(
+			"glm",
+			"<tool_call>read\n<arg_key>path</arg_key>\n<arg_value>a.ts</arg_key>\n</tool_call>",
+		);
+		const ends = toolEnds(events);
+		expect(ends).toHaveLength(1);
+		expect(ends[0]?.arguments).toEqual({ path: "a.ts" });
+	});
+
+	it("drops a stray </arg_key> preceding the real </arg_value>", () => {
+		const events = feedText(
+			"glm",
+			"<tool_call>read\n<arg_key>path</arg_key>\n<arg_value>a.ts</arg_key></arg_value>\n</tool_call>",
+		);
+		const ends = toolEnds(events);
+		expect(ends).toHaveLength(1);
+		expect(ends[0]?.arguments).toEqual({ path: "a.ts" });
+	});
+
+	it("recovers when </arg_value> is missing before the next pair", () => {
+		const events = feedText(
+			"glm",
+			"<tool_call>write\n<arg_key>path</arg_key>\n<arg_value>a.ts\n<arg_key>content</arg_key>\n<arg_value>hello</arg_value>\n</tool_call>",
+		);
+		const ends = toolEnds(events);
+		expect(ends).toHaveLength(1);
+		expect(ends[0]?.arguments).toEqual({ path: "a.ts", content: "hello" });
+	});
+
+	it("leaves values containing tag-like prose intact", () => {
+		const content = "uses <arg_key> and </arg_key> tokens in prose";
+		const events = feedText(
+			"glm",
+			`<tool_call>write\n<arg_key>path</arg_key>\n<arg_value>a.ts</arg_value>\n<arg_key>content</arg_key>\n<arg_value>${content}</arg_value>\n</tool_call>`,
+		);
+		const ends = toolEnds(events);
+		expect(ends).toHaveLength(1);
+		expect(ends[0]?.arguments).toEqual({ path: "a.ts", content });
+	});
+});

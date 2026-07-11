@@ -7,6 +7,27 @@ export interface ChangelogEntry {
 	content: string;
 }
 
+/** Number of changelog releases shown by automatic and default recent views. */
+export const RECENT_CHANGELOG_ENTRY_LIMIT = 3;
+/** Maximum Markdown source bytes allowed in automatic startup release notes. */
+export const STARTUP_CHANGELOG_MAX_BYTES = 64 * 1024;
+/** Hint appended when automatic startup release notes are truncated. */
+export const STARTUP_CHANGELOG_FULL_HINT = "Use `/changelog full` to view the complete changelog.";
+
+/** Markdown generated from selected changelog entries and whether it hit a size cap. */
+export interface RenderedChangelog {
+	markdown: string;
+	truncated: boolean;
+}
+
+/** Automatic startup changelog decision, including whether the marker should advance. */
+export interface StartupChangelogSelection {
+	markdown: string | undefined;
+	persistCurrentVersion: boolean;
+	truncated: boolean;
+	selectedEntries: number;
+}
+
 /**
  * Parse changelog entries from the file at `changelogPath`. Scans for `## [x.y.z]`
  * headings and collects each block until the next heading or EOF.
@@ -87,19 +108,95 @@ export function compareVersions(v1: ChangelogEntry, v2: ChangelogEntry): number 
 }
 
 /**
- * Get entries newer than lastVersion
+ * Parse an omp changelog marker version into comparable parts.
  */
-export function getNewEntries(entries: ChangelogEntry[], lastVersion: string): ChangelogEntry[] {
-	// Parse lastVersion
-	const parts = lastVersion.split(".").map(Number);
-	const last: ChangelogEntry = {
-		major: parts[0] || 0,
-		minor: parts[1] || 0,
-		patch: parts[2] || 0,
+export function parseChangelogVersion(version: string | undefined): ChangelogEntry | undefined {
+	const match = version?.match(/^(\d+)\.(\d+)\.(\d+)$/);
+	if (!match) {
+		return undefined;
+	}
+
+	return {
+		major: Number.parseInt(match[1], 10),
+		minor: Number.parseInt(match[2], 10),
+		patch: Number.parseInt(match[3], 10),
 		content: "",
 	};
+}
 
-	return entries.filter(entry => compareVersions(entry, last) > 0);
+/**
+ * Get entries newer than lastVersion.
+ */
+export function getNewEntries(entries: ChangelogEntry[], lastVersion: string): ChangelogEntry[] {
+	const parsedLastVersion = parseChangelogVersion(lastVersion);
+	if (!parsedLastVersion) {
+		return [];
+	}
+
+	return entries.filter(entry => compareVersions(entry, parsedLastVersion) > 0);
+}
+
+/**
+ * Render changelog entries oldest-first by default and optionally cap the Markdown source size.
+ */
+export function renderChangelogEntries(
+	entries: ChangelogEntry[],
+	options: { maxBytes?: number; truncationHint?: string; oldestFirst?: boolean } = {},
+): RenderedChangelog {
+	const orderedEntries = options.oldestFirst === false ? entries : [...entries].reverse();
+	const markdown = orderedEntries.map(entry => entry.content).join("\n\n");
+	if (options.maxBytes === undefined || Buffer.byteLength(markdown) <= options.maxBytes) {
+		return { markdown, truncated: false };
+	}
+
+	const suffix = `\n\n…\n\n${options.truncationHint ?? STARTUP_CHANGELOG_FULL_HINT}`;
+	let low = 0;
+	let high = markdown.length;
+	while (low < high) {
+		const middle = Math.floor((low + high + 1) / 2);
+		if (Buffer.byteLength(markdown.slice(0, middle) + suffix) <= options.maxBytes) {
+			low = middle;
+		} else {
+			high = middle - 1;
+		}
+	}
+
+	return { markdown: markdown.slice(0, low) + suffix, truncated: true };
+}
+
+/**
+ * Select bounded release notes for interactive startup.
+ */
+export function selectStartupChangelog(
+	entries: ChangelogEntry[],
+	lastVersion: string | undefined,
+	currentVersion: string,
+): StartupChangelogSelection {
+	const parsedLastVersion = parseChangelogVersion(lastVersion);
+	if (!parsedLastVersion) {
+		return { markdown: undefined, persistCurrentVersion: true, truncated: false, selectedEntries: 0 };
+	}
+	const markerVersion = lastVersion ?? "";
+	if (markerVersion === currentVersion) {
+		return { markdown: undefined, persistCurrentVersion: false, truncated: false, selectedEntries: 0 };
+	}
+
+	const newEntries = getNewEntries(entries, markerVersion).slice(0, RECENT_CHANGELOG_ENTRY_LIMIT);
+	if (newEntries.length === 0) {
+		return { markdown: undefined, persistCurrentVersion: false, truncated: false, selectedEntries: 0 };
+	}
+
+	const rendered = renderChangelogEntries(newEntries, {
+		maxBytes: STARTUP_CHANGELOG_MAX_BYTES,
+		truncationHint: STARTUP_CHANGELOG_FULL_HINT,
+		oldestFirst: false,
+	});
+	return {
+		markdown: rendered.markdown,
+		persistCurrentVersion: true,
+		truncated: rendered.truncated,
+		selectedEntries: newEntries.length,
+	};
 }
 
 // Re-export getChangelogPath from paths.ts for convenience

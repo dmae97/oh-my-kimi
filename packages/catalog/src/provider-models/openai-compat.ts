@@ -622,9 +622,8 @@ const UMANS_REASONING_EFFORT_BY_LEVEL: Record<string, Effort> = {
 	medium: Effort.Medium,
 	high: Effort.High,
 	xhigh: Effort.XHigh,
-	max: Effort.XHigh,
+	max: Effort.Max,
 };
-const UMANS_MAX_REASONING_EFFORT_MAP = { [Effort.XHigh]: "max" } as const;
 const UMANS_DEFAULT_REASONING_EFFORTS = [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] as const;
 const UMANS_VIA_HANDOFF_MODEL_IDS = ["umans-glm-5.1", "umans-glm-5.2"] as const;
 
@@ -689,9 +688,6 @@ function mapUmansThinkingConfig(value: unknown): ThinkingConfig | undefined {
 		mode: umansHasMaxReasoningLevel(value) ? "anthropic-budget-effort" : "budget",
 		efforts,
 	};
-	if (thinking.mode === "anthropic-budget-effort") {
-		thinking.effortMap = UMANS_MAX_REASONING_EFFORT_MAP;
-	}
 	if (isRecord(value)) {
 		if (value.can_disable === false) {
 			thinking.requiresEffort = true;
@@ -821,6 +817,68 @@ export function openaiModelManagerOptions(config?: OpenAIModelManagerConfig): Mo
 	};
 }
 
+/** First-party gpt-5.6 SKUs that accept `reasoning: { mode: "pro" }` on the Responses APIs. */
+const OPENAI_PRO_REASONING_BASE_IDS: Record<string, true> = {
+	"gpt-5.6-luna": true,
+	"gpt-5.6-sol": true,
+	"gpt-5.6-terra": true,
+};
+/**
+ * Providers whose generated pro aliases this pass owns. `openai-codex` stays in
+ * the sweep so stale aliases from earlier snapshots are dropped on regen, but
+ * projection is `openai`-only — subscription (Codex) auth does not offer pro
+ * reasoning.
+ */
+const OPENAI_PRO_REASONING_SWEEP_PROVIDERS: Record<string, true> = { openai: true, "openai-codex": true };
+
+/**
+ * A row this generator pass owns: one of the derived `gpt-5.6-*-pro` alias ids
+ * on a swept provider that carries the generated `reasoningMode` marker.
+ * A real upstream model occupying the same id has no `reasoningMode` and is
+ * never touched.
+ */
+function isGeneratedOpenAIProReasoningAlias(model: ModelSpec<Api>): boolean {
+	return (
+		OPENAI_PRO_REASONING_SWEEP_PROVIDERS[model.provider] === true &&
+		model.reasoningMode !== undefined &&
+		model.id.endsWith("-pro") &&
+		OPENAI_PRO_REASONING_BASE_IDS[model.id.slice(0, -"-pro".length)] === true
+	);
+}
+
+/**
+ * Re-derive the generated pro-reasoning aliases (`gpt-5.6-*-pro`) for the
+ * first-party `openai` gpt-5.6 rows. Each alias inherits the base row's
+ * metadata, requests the base wire id via `requestModelId`, and sets
+ * `reasoningMode: "pro"` so Responses-family request builders emit
+ * `reasoning: { mode: "pro" }`. Called by the models.json generator after all
+ * sources merge: stale copies of the owned aliases (previous snapshot,
+ * including retired `openai-codex` rows) are dropped and re-projected from the
+ * current base rows so alias metadata always tracks the base, while a real
+ * upstream model that occupies an alias id wins and suppresses the projection.
+ */
+export function projectOpenAIProReasoningAliases(models: readonly ModelSpec<Api>[]): ModelSpec<Api>[] {
+	const kept = models.filter(model => !isGeneratedOpenAIProReasoningAlias(model));
+	const ids = new Set(kept.map(model => `${model.provider}/${model.id}`));
+	const out = [...kept];
+	for (const model of kept) {
+		if (model.provider !== "openai") continue;
+		if (!OPENAI_PRO_REASONING_BASE_IDS[model.id]) continue;
+		const aliasId = `${model.id}-pro`;
+		const aliasKey = `${model.provider}/${aliasId}`;
+		if (ids.has(aliasKey)) continue;
+		ids.add(aliasKey);
+		out.push({
+			...model,
+			id: aliasId,
+			name: `${model.name} Pro`,
+			requestModelId: model.id,
+			reasoningMode: "pro",
+		});
+	}
+	return out;
+}
+
 // ---------------------------------------------------------------------------
 // 2. Groq
 // ---------------------------------------------------------------------------
@@ -916,6 +974,102 @@ export function nvidiaModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
+// 5.5 Novita
+// ---------------------------------------------------------------------------
+
+/** Novita OpenAI-compatible discovery configuration. */
+export interface NovitaModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+function novitaArrayIncludes(value: unknown, expected: string): boolean {
+	return Array.isArray(value) && value.some(item => item === expected);
+}
+
+function isPublicNovitaModelId(id: string): boolean {
+	return !id.toLowerCase().startsWith("ai_infer_test");
+}
+
+// Novita reports token prices in 1/10,000 USD per million tokens.
+function toNovitaCostPerMillion(value: unknown): number {
+	return toPositiveNumber(value, 0) / 10_000;
+}
+
+function getNovitaCacheReadPricePerMillion(entry: OpenAICompatibleModelRecord): number {
+	const pricing = entry.pricing;
+	if (!isRecord(pricing)) {
+		return 0;
+	}
+	const cacheRead = pricing.input_cache_read;
+	if (!isRecord(cacheRead)) {
+		return 0;
+	}
+	return toNovitaCostPerMillion(cacheRead.price_per_m);
+}
+
+function mapNovitaModel(
+	entry: OpenAICompatibleModelRecord,
+	defaults: ModelSpec<"openai-completions">,
+	reference: ModelSpec<"openai-completions"> | undefined,
+): ModelSpec<"openai-completions"> {
+	const model = mapWithBundledReference(
+		{
+			...entry,
+			name: entry.display_name ?? entry.title ?? entry.name,
+		},
+		defaults,
+		reference,
+	);
+	return {
+		...model,
+		reasoning: novitaArrayIncludes(entry.features, "reasoning"),
+		supportsTools: novitaArrayIncludes(entry.features, "function-calling"),
+		input: toInputCapabilities(entry.input_modalities),
+		cost: {
+			input: toNovitaCostPerMillion(entry.input_token_price_per_m),
+			output: toNovitaCostPerMillion(entry.output_token_price_per_m),
+			cacheRead: getNovitaCacheReadPricePerMillion(entry),
+			cacheWrite: 0,
+		},
+		contextWindow: toPositiveNumber(entry.context_size, model.contextWindow),
+		maxTokens: toPositiveNumber(entry.max_output_tokens, model.maxTokens),
+	};
+}
+
+/** Builds Novita's public model-discovery manager. */
+export function novitaModelManagerOptions(
+	config?: NovitaModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? "https://api.novita.ai/openai/v1";
+	const references = createBundledReferenceMap<"openai-completions">("novita");
+	return {
+		providerId: "novita",
+		dynamicModelsAuthoritative: true,
+		fetchDynamicModels: async () =>
+			fetchOpenAICompatibleModels({
+				api: "openai-completions",
+				provider: "novita",
+				baseUrl,
+				apiKey,
+				mapModel: (entry, defaults) => mapNovitaModel(entry, defaults, references.get(defaults.id)),
+				filterModel: (entry, model) => {
+					const active = typeof entry.status !== "number" || entry.status === 1;
+					return (
+						active &&
+						isPublicNovitaModelId(model.id) &&
+						novitaArrayIncludes(entry.endpoints, "chat/completions") &&
+						toPositiveNumber(entry.max_output_tokens, 0) > 0
+					);
+				},
+				fetch: config?.fetch,
+			}),
+	};
+}
+
+// ---------------------------------------------------------------------------
 // 6. xAI
 // ---------------------------------------------------------------------------
 
@@ -983,6 +1137,7 @@ export const XAI_OAUTH_CURATED_MODELS: readonly XAICuratedModel[] = [
 		input: ["text", "image"],
 	},
 	{ id: "grok-4.3", contextWindow: 1_000_000, name: "Grok 4.3", input: ["text", "image"] },
+	{ id: "grok-4.5", contextWindow: 500_000, name: "Grok 4.5", input: ["text", "image"] },
 	// grok-4.20-multi-agent-0309 is text-only per the bundled catalog; omit `input` for the default.
 	{ id: "grok-4.20-multi-agent-0309", contextWindow: 2_000_000, name: "Grok 4.20 (Multi-Agent)" },
 	{
@@ -1021,6 +1176,7 @@ function withXaiOAuthCompatDefaults(model: ModelSpec<"openai-responses">): Model
 		...(model.compat ?? {}),
 		includeEncryptedReasoning: model.compat?.includeEncryptedReasoning ?? false,
 		filterReasoningHistory: model.compat?.filterReasoningHistory ?? true,
+		supportsImageDetailOriginal: model.compat?.supportsImageDetailOriginal ?? false,
 		omitReasoningEffort: model.compat?.omitReasoningEffort ?? !isGrokReasoningEffortCapable(model.id),
 	};
 	return { ...model, compat };
@@ -1050,18 +1206,22 @@ const XAI_REASONING_EFFORT_MAP = { minimal: "low" } as const;
 // The `minimal -> low` effort clamp (XAI_REASONING_EFFORT_MAP) is always
 // merged in so dynamic-fetched models — which arrive without curated
 // compat keys — still get the clamp applyResponsesReasoningParams expects.
+// The effort-dial pair (`supportsReasoningEffort`/`omitReasoningEffort`) is
+// authoritative: a stale flag on `base` (previous snapshot or dynamic fetch)
+// must not outlive an allowlist change in identity/family.ts.
 function mergeCuratedIntoModel(
 	base: ModelSpec<"openai-responses">,
 	curated: XAICuratedModel,
 ): ModelSpec<"openai-responses"> {
-	const effort = curated.supportsReasoningEffort;
+	const effortCapable = curated.supportsReasoningEffort ?? isGrokReasoningEffortCapable(curated.id);
 	const compat = {
 		...(base.compat ?? {}),
 		reasoningEffortMap: { ...XAI_REASONING_EFFORT_MAP, ...(base.compat?.reasoningEffortMap ?? {}) },
 		includeEncryptedReasoning: base.compat?.includeEncryptedReasoning ?? false,
 		filterReasoningHistory: base.compat?.filterReasoningHistory ?? true,
-		omitReasoningEffort: base.compat?.omitReasoningEffort ?? !isGrokReasoningEffortCapable(base.id),
-		...(effort === undefined ? {} : { supportsReasoningEffort: effort }),
+		supportsImageDetailOriginal: base.compat?.supportsImageDetailOriginal ?? false,
+		omitReasoningEffort: !effortCapable,
+		supportsReasoningEffort: effortCapable,
 	};
 	return {
 		...base,
@@ -2649,18 +2809,13 @@ export function basetenModelManagerOptions(
 
 						const baseModel = mapWithBundledReference(entry, defaults, reference);
 
+						// Baseten's reasoning router accepts only the high/max
+						// effort tiers for its GLM-5.2 and gpt-oss routes.
 						const isEffortReasoning = defaults.id === "openai/gpt-oss-120b" || defaults.id === "zai-org/GLM-5.2";
 						const thinking = isEffortReasoning
 							? {
 									mode: "effort" as const,
-									efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
-									effortMap: {
-										minimal: "high",
-										low: "high",
-										medium: "high",
-										high: "high",
-										xhigh: "max",
-									},
+									efforts: [Effort.High, Effort.Max],
 								}
 							: undefined;
 
@@ -2783,8 +2938,7 @@ const SAKANA_FUGU_ULTRA_COST = { input: 5, output: 30, cacheRead: 0.5, cacheWrit
 const SAKANA_FUGU_ULTRA_CONTEXT_WINDOW = 1_000_000;
 const SAKANA_FUGU_THINKING: ThinkingConfig = {
 	mode: "effort",
-	efforts: [Effort.High, Effort.XHigh],
-	effortMap: { [Effort.XHigh]: "max" },
+	efforts: [Effort.High, Effort.Max],
 };
 const SAKANA_RESPONSES_COMPAT: ModelSpec<"openai-responses">["compat"] = {
 	includeEncryptedReasoning: false,
@@ -3770,16 +3924,13 @@ export function githubCopilotModelManagerOptions(config?: GithubCopilotModelMana
 								? entry.name
 								: (reference?.name ?? defaults.name);
 						const api = inferCopilotApi(defaults.id);
-						// `supports.vision` reports the model's intrinsic capability, but
-						// the business/enterprise endpoints respond `400 vision is not
-						// supported` on image inputs. Only honour the flag for the
-						// canonical personal-Copilot host.
 						const supportsVision = extractCopilotSupportsVision(entry);
-						const input: ModelSpec<Api>["input"] = isPersonalGitHubCopilotBaseUrl(baseUrl)
-							? supportsVision
+						const input: ModelSpec<Api>["input"] =
+							supportsVision === true
 								? ["text", "image"]
-								: (reference?.input ?? defaults.input)
-							: ["text"];
+								: supportsVision === false || !isPersonalGitHubCopilotBaseUrl(baseUrl)
+									? ["text"]
+									: (reference?.input ?? defaults.input);
 						// With COPILOT_API_HEADERS the served window is the long-context
 						// ceiling; the default tier ends at token_prices.default.context_max
 						// prompt tokens. Cap the base entry to the default tier — the long

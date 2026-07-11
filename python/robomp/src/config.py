@@ -10,7 +10,7 @@ from typing import Literal
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-ThinkingLevel = Literal["off", "low", "medium", "high", "xhigh"]
+ThinkingLevel = Literal["off", "low", "medium", "high", "xhigh", "max"]
 
 
 class Settings(BaseSettings):

@@ -3,12 +3,14 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { visibleWidth } from "@oh-my-pi/pi-tui";
 import { Settings } from "../../../config/settings";
 import { getThemeByName, setThemeInstance, type Theme } from "../../theme/theme";
 import { MoveOverlay, type MoveOverlayResult, resolveExistingDirectory, resolveMovePath } from "../move-overlay";
 
 // Strip SGR colors so assertions see visible text only.
-const strip = (lines: readonly string[]): string => lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+const stripAnsi = (text: string): string => text.replace(/\x1b\[[0-9;]*m/g, "");
+const strip = (lines: readonly string[]): string => lines.map(stripAnsi).join("\n");
 
 describe("resolveMovePath", () => {
 	it("expands ~ to homedir", () => {
@@ -80,6 +82,19 @@ describe("MoveOverlay", () => {
 		const text = strip(overlay.render(80));
 		expect(text).toContain("Move to directory");
 		expect(text).toContain("Path:");
+	});
+
+	it("renders every frame row at the assigned overlay width", () => {
+		const overlay = new MoveOverlay(cwd, () => {});
+		const lines = overlay.render(72);
+		const plainLines = lines.map(stripAnsi);
+
+		expect(lines.map(line => visibleWidth(line))).toEqual(Array(lines.length).fill(72));
+		expect(plainLines[0]!.endsWith(uiTheme.boxRound.topRight)).toBe(true);
+		expect(plainLines.at(-1)!.endsWith(uiTheme.boxRound.bottomRight)).toBe(true);
+		for (const line of plainLines.slice(1, -1)) {
+			expect(line.endsWith(uiTheme.boxRound.vertical)).toBe(true);
+		}
 	});
 
 	it("lists child directories (excluding hidden and files) on empty input", () => {

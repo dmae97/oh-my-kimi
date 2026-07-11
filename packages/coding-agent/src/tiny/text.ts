@@ -1,70 +1,4 @@
-export const MAX_TITLE_INPUT_CHARS = 2000;
-
-/**
- * Minimum length of code-stripped input below which we fall back to the
- * original message. Guards against messages that are (almost) entirely a code
- * block — stripping would otherwise leave the model nothing to title from.
- */
-const MIN_STRIPPED_TITLE_CHARS = 12;
-/** Matches a fenced code block (3+ backticks), including an unterminated trailing fence. */
-const FENCED_CODE_BLOCK = /```+[\s\S]*?(?:```+|$)/g;
-
-export function truncateTitleInput(message: string): string {
-	return message.length > MAX_TITLE_INPUT_CHARS ? `${message.slice(0, MAX_TITLE_INPUT_CHARS)}…` : message;
-}
-
-/**
- * Strip fenced code blocks from a message before titling.
- *
- * Small title models latch onto literal text inside code blocks — e.g. a pasted
- * UI mockup containing "Welcome to Claude Code v2.1.158" yields that string as
- * the title instead of the surrounding intent. Removing fenced blocks leaves the
- * prose that actually describes the task. Inline code (single backticks) is kept
- * — it is short, high-signal context like `/login`.
- *
- * Falls back to the original message when stripping leaves too little to title
- * (a message that is essentially just a code block).
- */
-export function stripCodeBlocks(message: string): string {
-	const cleaned = message
-		.replace(FENCED_CODE_BLOCK, " ")
-		.replace(/[ \t]+/g, " ")
-		.replace(/\n{3,}/g, "\n\n")
-		.trim();
-	return cleaned.length >= MIN_STRIPPED_TITLE_CHARS ? cleaned : message;
-}
-
-/** Prepare a raw user message for titling: drop code blocks, then bound length. */
-export function prepareTitleInput(message: string): string {
-	return truncateTitleInput(stripCodeBlocks(message));
-}
-
-export function formatTitleUserMessage(message: string): string {
-	return `<user-message>\n${prepareTitleInput(message)}\n</user-message>`;
-}
-
-/** Single recent conversation turn supplied to title refresh after replanning. */
-export interface TitleConversationTurn {
-	role: "user" | "assistant";
-	text?: string;
-	thinking?: string;
-}
-
-/** Format recent user/assistant context for title generation after a todo replan. */
-export function formatTitleConversationContext(turns: readonly TitleConversationTurn[]): string {
-	const formattedTurns: string[] = [];
-	for (const turn of turns) {
-		const sections: string[] = [];
-		const text = turn.text?.trim();
-		if (text) sections.push(text);
-		const thinking = turn.role === "assistant" ? turn.thinking?.trim() : undefined;
-		if (thinking) sections.push(`<thinking>\n${thinking}\n</thinking>`);
-		if (sections.length === 0) continue;
-		formattedTurns.push(`<${turn.role}>\n${sections.join("\n\n")}\n</${turn.role}>`);
-	}
-	if (formattedTurns.length === 0) return "";
-	return prepareTitleInput(`<conversation>\n${formattedTurns.join("\n\n")}\n</conversation>`);
-}
+import { cleanTinyMessage, isPreformattedChatContext, stripChatScaffolding } from "./message-preproc";
 
 /**
  * Greeting / acknowledgement / filler tokens. A first user message composed
@@ -191,7 +125,11 @@ const COMMON_TITLE_ACRONYMS = new Set<string>([
  * the next message instead.
  */
 export function isLowSignalTitleInput(message: string): boolean {
-	const tokens = stripCodeBlocks(message).toLowerCase().match(TITLE_WORD);
+	// Preformatted replan contexts are already cleaned per turn; only the
+	// scaffolding tags are dropped so the turn text drives the signal check
+	// (cleanTinyMessage would strip the paired <chat> envelope to nothing).
+	const cleaned = isPreformattedChatContext(message) ? stripChatScaffolding(message) : cleanTinyMessage(message);
+	const tokens = cleaned.toLowerCase().match(TITLE_WORD);
 	if (!tokens) return true;
 	return tokens.every(token => FILLER_TITLE_TOKENS.has(token) || /^\d+$/.test(token));
 }
@@ -200,14 +138,18 @@ export function isLowSignalTitleInput(message: string): boolean {
  * Sentinel a capable title model may emit when a message carries no concrete
  * task. Treated as "no title yet" so the caller can defer titling. Backstop for
  * the deterministic {@link isLowSignalTitleInput} filter; kept in sync with the
- * `none` instruction in `prompts/system/title-system.md`.
+ * `<title/>` instruction in `prompts/system/title-system.md`.
  */
 export const NO_TITLE_SENTINEL = "none";
 
 export function normalizeGeneratedTitle(value: string | null | undefined, sourceText?: string): string | null {
 	const firstLine = value?.trim().split(/\r?\n/, 1)[0]?.trim();
 	if (!firstLine) return null;
-	const title = firstLine
+	const unquoted = firstLine.replace(/^["']|["']$/g, "").trim();
+	if (/^<title\s*\/>$/i.test(unquoted)) return null;
+	const title = unquoted
+		.replace(/^<title>/i, "")
+		.replace(/<\/title>$/i, "")
 		.replace(/^["']|["']$/g, "")
 		.replace(/[.!?]$/, "")
 		.trim();

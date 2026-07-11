@@ -120,6 +120,15 @@ export interface BuildSessionContextOptions {
 	transcript?: boolean;
 	/** In transcript mode, elide entries replaced by the latest compaction. */
 	collapseCompactedHistory?: boolean;
+	/**
+	 * Transcript mode only: keep `toolCall` blocks that have no matching
+	 * `toolResult` on the path instead of stripping them. Pass this when the
+	 * session is mid-turn (a tool is still executing, its result not yet
+	 * persisted) so the rebuilt transcript renders the in-flight call as
+	 * pending; without it a focus/unfocus or overlay-close rebuild silently
+	 * hides the call the agent is still waiting on.
+	 */
+	keepDanglingToolCalls?: boolean;
 }
 
 /**
@@ -132,6 +141,7 @@ function snapcompactHistoryBlocksForContext(
 	options: BuildSessionContextOptions | undefined,
 ) {
 	if (!archive) return undefined;
+	if (options?.transcript && options.collapseCompactedHistory) return undefined;
 	return snapcompact.historyBlocks(archive, snapcompactHistoryBlockOptions(archive, options));
 }
 
@@ -445,34 +455,42 @@ export function buildSessionContext(
 	// plaintext to keep) and clear `thinking` signatures so the provider encoder
 	// downgrades them to plain text (verified accepted by the live API), preserving the
 	// visible reasoning while removing the immutability/invalid-signature hazard. Drop a
-	// turn left with no content. (Live turns never qualify: their results are persisted
-	// on the same path before any context rebuild.)
-	const pairedToolResultIds = new Set<string>();
-	for (const message of messages) {
-		if (message.role === "toolResult") pairedToolResultIds.add(message.toolCallId);
-	}
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const message = messages[i];
-		if (message.role !== "assistant") continue;
-		const hasDangling = message.content.some(
-			block => block.type === "toolCall" && !pairedToolResultIds.has(block.id),
-		);
-		if (!hasDangling) continue;
-		const normalized = message.content
-			.filter(
-				block =>
-					!(block.type === "toolCall" && !pairedToolResultIds.has(block.id)) && block.type !== "redactedThinking",
-			)
-			.map(block =>
-				block.type === "thinking" && block.thinkingSignature ? { ...block, thinkingSignature: undefined } : block,
+	// turn left with no content. (Live turns only qualify mid-turn: a transcript rebuild
+	// while the tool still executes sees the persisted assistant turn without its result.
+	// Those callers pass `keepDanglingToolCalls` so the in-flight call stays visible as
+	// a pending block instead of vanishing from the chat.)
+	const keepDangling = options?.transcript === true && options.keepDanglingToolCalls === true;
+	if (!keepDangling) {
+		const pairedToolResultIds = new Set<string>();
+		for (const message of messages) {
+			if (message.role === "toolResult") pairedToolResultIds.add(message.toolCallId);
+		}
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const message = messages[i];
+			if (message.role !== "assistant") continue;
+			const hasDangling = message.content.some(
+				block => block.type === "toolCall" && !pairedToolResultIds.has(block.id),
 			);
-		if (normalized.length === 0) {
-			messages.splice(i, 1);
-			if (options?.transcript) {
-				cacheMissExplainedAt.splice(i, 1);
+			if (!hasDangling) continue;
+			const normalized = message.content
+				.filter(
+					block =>
+						!(block.type === "toolCall" && !pairedToolResultIds.has(block.id)) &&
+						block.type !== "redactedThinking",
+				)
+				.map(block =>
+					block.type === "thinking" && block.thinkingSignature
+						? { ...block, thinkingSignature: undefined }
+						: block,
+				);
+			if (normalized.length === 0) {
+				messages.splice(i, 1);
+				if (options?.transcript) {
+					cacheMissExplainedAt.splice(i, 1);
+				}
+			} else {
+				messages[i] = { ...message, content: normalized };
 			}
-		} else {
-			messages[i] = { ...message, content: normalized };
 		}
 	}
 

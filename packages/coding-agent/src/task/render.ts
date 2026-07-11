@@ -678,6 +678,35 @@ function formatOutputInline(data: unknown, theme: Theme, maxWidth = 80): string 
 }
 
 /**
+ * First line of a streamed `task` brief, trimmed — a row's secondary text.
+ * The args stream in token by token, so non-string values fall through to "".
+ */
+function taskFirstLine(task: unknown): string {
+	if (typeof task !== "string") return "";
+	const trimmed = task.trim();
+	const newline = trimmed.indexOf("\n");
+	return newline === -1 ? trimmed : trimmed.slice(0, newline);
+}
+
+/**
+ * Header label for a task call while nothing has spawned yet: the flat form's
+ * `agent` type. Batch calls return undefined — each item row carries its own
+ * `⟨agent⟩` badge, so a joined list in the header would just repeat them.
+ */
+function formatAgentHeaderLabel(args: Partial<TaskParams> | undefined): string | undefined {
+	if (!args) return undefined;
+	const flat = typeof args.agent === "string" ? args.agent.trim() : "";
+	return flat || undefined;
+}
+
+/** Dim `⟨agent⟩` badge for a non-default agent type; empty for the generic worker. */
+function agentTypeBadge(agent: string | undefined, theme: Theme): string {
+	const trimmed = agent?.trim();
+	if (!trimmed || trimmed === "task") return "";
+	return ` ${theme.fg("dim", `${theme.format.bracketLeft}${trimmed}${theme.format.bracketRight}`)}`;
+}
+
+/**
  * Render the call preview lines for the single spawned agent. The
  * args stream in token by token, so every field access is defensive.
  */
@@ -686,14 +715,15 @@ function renderTaskCallLines(args: Partial<TaskParams> | undefined, theme: Theme
 	const bullet = theme.fg("dim", "•");
 	const lines: string[] = [];
 
-	const rawId = typeof args.id === "string" ? args.id.trim() : "";
-	const idLabel = rawId ? formatTaskId(rawId) : "";
-	const desc = typeof args.description === "string" ? args.description.trim() : "";
-	if (idLabel || desc) {
+	const rawName = typeof args.name === "string" ? args.name.trim() : "";
+	const idLabel = rawName ? formatTaskId(rawName) : "";
+	const brief = taskFirstLine(args.task);
+	if (idLabel || brief) {
 		let line = `${bullet} ${theme.fg("accent", theme.bold(idLabel || "agent"))}`;
-		if (desc) {
-			line += `: ${theme.fg("muted", previewLine(desc, 64))}`;
+		if (brief) {
+			line += `: ${theme.fg("muted", previewLine(brief, 64))}`;
 		}
+		line += agentTypeBadge(args.agent, theme);
 		lines.push(line);
 	}
 	lines.push(...renderTaskItemLines(args.tasks, theme));
@@ -707,7 +737,7 @@ function renderTaskCallLines(args: Partial<TaskParams> | undefined, theme: Theme
 const COLLAPSED_AGENT_LIMIT = 4;
 
 /**
- * Render the per-item list (`id` + ui `description`) for a batch call's
+ * Render the per-item list (`name` + `task` brief) for a batch call's
  * streaming preview. The args stream in token by token, so the array grows
  * over time and trailing entries may be partially parsed — every field access
  * is defensive.
@@ -719,15 +749,16 @@ function renderTaskItemLines(tasks: TaskItem[] | undefined, theme: Theme): strin
 	const cap = Math.min(tasks.length, COLLAPSED_AGENT_LIMIT);
 	const lines: string[] = [];
 	for (let i = 0; i < cap; i++) {
-		const task = tasks[i] as Partial<TaskItem> | undefined;
-		const rawId = typeof task?.id === "string" ? task.id.trim() : "";
-		const idLabel = rawId ? formatTaskId(rawId) : `#${i + 1}`;
+		const item = tasks[i] as Partial<TaskItem> | undefined;
+		const rawName = typeof item?.name === "string" ? item.name.trim() : "";
+		const idLabel = rawName ? formatTaskId(rawName) : `#${i + 1}`;
 		let line = `${bullet} ${theme.fg("accent", theme.bold(idLabel))}`;
-		const desc = typeof task?.description === "string" ? task.description.trim() : "";
-		if (desc) {
-			line += `: ${theme.fg("muted", previewLine(desc, 64))}`;
+		const brief = taskFirstLine(item?.task);
+		if (brief) {
+			line += `: ${theme.fg("muted", previewLine(brief, 64))}`;
 		}
-		if (task?.isolated === true) {
+		line += agentTypeBadge(item?.agent, theme);
+		if (item?.isolated === true) {
 			line += theme.fg("dim", " [isolated]");
 		}
 		lines.push(line);
@@ -760,7 +791,7 @@ function createAssignmentSectionRenderer(
 	// `renderResult` receives the raw tool args (unlike `renderCall`, which is
 	// fed through `repairTaskParams`), so undo any per-field double-encoding
 	// here too. The repair is idempotent on already-clean text.
-	const assignment = repairDoubleEncodedJsonString(typeof args?.assignment === "string" ? args.assignment : "").trim();
+	const assignment = repairDoubleEncodedJsonString(typeof args?.task === "string" ? args.task : "").trim();
 	if (!assignment) return undefined;
 	return createMarkdownSectionRenderer(assignment, theme);
 }
@@ -795,7 +826,11 @@ export function renderCall(args: TaskParams, options: TaskRenderOptions, theme: 
 	// pending/hourglass icon would misread the call as something the turn
 	// waits on.
 	const header = renderStatusLine(
-		{ iconOverride: theme.styledSymbol("tool.task", "accent"), title: "Task", description: args.agent },
+		{
+			iconOverride: theme.styledSymbol("tool.task", "accent"),
+			title: "Task",
+			description: formatAgentHeaderLabel(args),
+		},
 		theme,
 	);
 	const assignmentSection = createAssignmentSectionRenderer(args, theme);
@@ -883,6 +918,7 @@ function renderAgentProgress(
 	} else {
 		statusLine = `${indent}${theme.fg(iconColor, icon)} ${theme.fg("accent", titlePart)}`;
 	}
+	statusLine += agentTypeBadge(progress.agent, theme);
 
 	// Show retry-blocked badge so the parent immediately sees that a child
 	// is sleeping on a provider 429, not silently progressing. Wins over the
@@ -1215,7 +1251,7 @@ function renderAgentResult(
 	let statusLine = `${prefix ? `${prefix} ` : ""}${theme.fg(iconColor, icon)} ${theme.fg(
 		success && !needsWarning ? "text" : "accent",
 		titlePart,
-	)} ${formatBadge(statusText, iconColor, theme)}`;
+	)}${agentTypeBadge(result.agent, theme)} ${formatBadge(statusText, iconColor, theme)}`;
 	const showBadge = settings.get("task.showResolvedModelBadge");
 	statusLine = appendAgentStats(
 		statusLine,
@@ -1460,7 +1496,7 @@ export function renderResult(
 ): Component {
 	const fallbackText = result.content.find(c => c.type === "text")?.text ?? "";
 	const details = result.details;
-	const agentLabel = args?.agent?.trim() || undefined;
+	const agentLabel = formatAgentHeaderLabel(args);
 	const assignmentSection = createAssignmentSectionRenderer(args, theme);
 	const contextSection = createContextSectionRenderer(args, theme);
 
@@ -1515,10 +1551,11 @@ export function renderResult(
 	const isError = aborted || failed;
 	const agentCount = hasResults ? details.results.length : (details.progress?.length ?? 0);
 	const icon: ToolUIStatus = options.isPartial ? "running" : isError ? "error" : mergeFailed ? "warning" : "success";
-	// Surface the dispatched agent type (e.g. `Reviewer`) alongside the count
-	// so the header reads `Task 1 agent: Reviewer`.
+	// Header meta is the spawn count only; each row carries its own ⟨agent⟩
+	// badge, so a joined type list here would repeat them. Before anything
+	// spawns, fall back to the flat form's agent type from the call args.
 	const countLabel = agentCount > 0 ? `${agentCount} ${agentCount === 1 ? "agent" : "agents"}` : undefined;
-	const metaLabel = countLabel ? (agentLabel ? `${countLabel}: ${agentLabel}` : countLabel) : agentLabel;
+	const metaLabel = countLabel ?? agentLabel;
 	const header = renderStatusLine(
 		{
 			icon: icon === "success" || icon === "running" ? undefined : icon,
@@ -1542,8 +1579,10 @@ export function renderResult(
 		const frozen = options.renderContext?.frozen === true;
 		const lines: string[] = [];
 
+		// Result rows win once any exist; progress rows for spawns without a
+		// result (a mixed call's async subset) render as a supplement below.
 		const shouldRenderProgress =
-			Boolean(details.progress && details.progress.length > 0) && (isPartial || details.results.length === 0);
+			Boolean(details.progress && details.progress.length > 0) && details.results.length === 0;
 		if (shouldRenderProgress && details.progress) {
 			const ordered = orderProgressForDisplay(details.progress);
 			// Collapsed view keeps the live edge: finished rows sort to the top of
@@ -1568,6 +1607,19 @@ export function renderResult(
 				lines.push(
 					`${theme.fg("dim", formatMoreItems(ordered.length - visible.length, "agent"))}${hint ? ` ${hint}` : ""}`,
 				);
+			}
+
+			// Mixed blocking+async call: async spawns never land in `results`
+			// (their payloads deliver through jobs) — keep their rows visible
+			// beside the finalized inline results, live while running and
+			// settled once their jobs finish.
+			const supplementalProgress = details.progress
+				? orderProgressForDisplay(
+						details.progress.filter(progress => !details.results.some(res => res.id === progress.id)),
+					)
+				: [];
+			for (const progress of supplementalProgress) {
+				lines.push(...renderAgentProgress(progress, "", "  ", expanded, theme, spinnerFrame, frozen));
 			}
 
 			const summaryParts: string[] = [];

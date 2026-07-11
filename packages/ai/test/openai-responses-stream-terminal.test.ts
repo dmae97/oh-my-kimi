@@ -288,7 +288,13 @@ describe("processResponsesStream: lost output_item.added recovery", () => {
 				{
 					type: "response.output_item.done",
 					output_index: 0,
-					item: { type: "reasoning", summary: [{ type: "summary_text", text: "first" }] },
+					item: {
+						type: "reasoning",
+						summary: [
+							{ type: "summary_text", text: "Plan" },
+							{ type: "summary_text", text: "Planning details" },
+						],
+					},
 				},
 				{
 					type: "response.output_item.done",
@@ -305,7 +311,7 @@ describe("processResponsesStream: lost output_item.added recovery", () => {
 		expect(output.content).toHaveLength(2);
 		const [first, second] = output.content;
 		if (first?.type !== "thinking" || second?.type !== "thinking") throw new Error("expected thinking blocks");
-		expect(first.thinking).toBe("first");
+		expect(first.thinking).toBe("Plan\n\nPlanning details");
 		expect(second.thinking).toBe("second");
 		expect(first.thinkingSignature).toBeDefined();
 		expect(second.thinkingSignature).toBeDefined();

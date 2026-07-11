@@ -319,6 +319,15 @@ export function parseConflictUri(raw: string): ParsedConflictUri | null {
 	return recoveredPrefix !== undefined ? { id, scope, recoveredPrefix } : { id, scope };
 }
 
+/** Result of {@link spliceConflict}: the new file text plus any boundary-echo repair applied. */
+export interface ConflictSplice {
+	text: string;
+	/** Replacement lines dropped because they duplicated the context directly above the region. */
+	trimmedLeading: number;
+	/** Replacement lines dropped because they duplicated the context directly below the region. */
+	trimmedTrailing: number;
+}
+
 /**
  * Splice the conflict region recorded in `entry` out of `originalText`
  * and replace it with `replacement` (markers and all sides included).
@@ -328,8 +337,16 @@ export function parseConflictUri(raw: string): ParsedConflictUri | null {
  * match), so out-of-band edits earlier in the file that shift line
  * numbers don't break resolution. Throws clearly when the marker block
  * has actually been altered or removed.
+ *
+ * Boundary-echo repair (same philosophy as the edit tool's hashline
+ * keeper repair): models frequently paste the "whole resolved function"
+ * including the lines that live directly before/after the marker block,
+ * which the verbatim splice would duplicate. Replacement lines that
+ * exactly echo the adjacent context are dropped when the echo is
+ * unambiguous — two or more consecutive lines, or a single line whose
+ * removal fixes a delimiter-balance mismatch against the recorded sides.
  */
-export function spliceConflict(originalText: string, entry: ConflictEntry, replacement: string): string {
+export function spliceConflict(originalText: string, entry: ConflictEntry, replacement: string): ConflictSplice {
 	const lines = originalText.split("\n");
 	const expected = buildRecordedRegion(entry);
 	const match = locateRegion(lines, expected, entry.startLine - 1);
@@ -341,6 +358,8 @@ export function spliceConflict(originalText: string, entry: ConflictEntry, repla
 
 	const trimmed = normalizeTrailingNewline(replacement);
 	let replacementLines = trimmed.split("\n").map(stripTrailingCr);
+	const echo = trimBoundaryEcho(replacementLines, lines, match, entry);
+	replacementLines = echo.lines;
 	// Round-trip fidelity for CRLF files: recorded sections are LF-normalized,
 	// so re-apply \r to spliced lines when the matched region used CRLF. The
 	// final replacement line only carries \r when another line follows it.
@@ -351,7 +370,79 @@ export function spliceConflict(originalText: string, entry: ConflictEntry, repla
 		);
 	}
 	const next = [...lines.slice(0, match.startIdx), ...replacementLines, ...lines.slice(match.endIdx + 1)];
-	return next.join("\n");
+	return { text: next.join("\n"), trimmedLeading: echo.leading, trimmedTrailing: echo.trailing };
+}
+
+const MAX_ECHO_LINES = 12;
+
+/**
+ * Net `{}`/`()`/`[]` count over `lines`. Crude (string/comment-blind) —
+ * used only to corroborate single-line echo trims, never alone.
+ */
+function delimiterBalance(lines: readonly string[]): number {
+	let balance = 0;
+	for (const line of lines) {
+		for (let i = 0; i < line.length; i++) {
+			const ch = line.charCodeAt(i);
+			if (ch === 123 /* { */ || ch === 40 /* ( */ || ch === 91 /* [ */) balance++;
+			else if (ch === 125 /* } */ || ch === 41 /* ) */ || ch === 93 /* ] */) balance--;
+		}
+	}
+	return balance;
+}
+
+/**
+ * Drop replacement lines that exactly echo the file lines adjacent to the
+ * located region. A multi-line echo is trimmed unconditionally (a correct
+ * resolution ending with the exact lines that already follow the region
+ * would mean intentionally duplicated code — vanishingly unlikely, and the
+ * untrimmed splice produces exactly that duplication). A single-line echo
+ * is trimmed only when the recorded sides agree on the region's delimiter
+ * balance and dropping the echo is what restores it.
+ */
+function trimBoundaryEcho(
+	replacement: string[],
+	fileLines: readonly string[],
+	match: { startIdx: number; endIdx: number },
+	entry: ConflictBlock,
+): { lines: string[]; leading: number; trailing: number } {
+	const oursBalance = delimiterBalance(entry.oursLines);
+	const expectedBalance = oursBalance === delimiterBalance(entry.theirsLines) ? oursBalance : null;
+	const singleEchoJustified = (lines: string[], without: string[]) =>
+		expectedBalance !== null &&
+		delimiterBalance(lines) !== expectedBalance &&
+		delimiterBalance(without) === expectedBalance;
+
+	let lines = replacement;
+	let trailing = 0;
+	const after: string[] = [];
+	for (let i = match.endIdx + 1; i < fileLines.length && after.length < MAX_ECHO_LINES; i++) {
+		after.push(stripTrailingCr(fileLines[i]!));
+	}
+	for (let k = Math.min(after.length, lines.length - 1); k >= 1; k--) {
+		if (!after.slice(0, k).every((line, i) => lines[lines.length - k + i] === line)) continue;
+		if (k >= 2 || singleEchoJustified(lines, lines.slice(0, -1))) {
+			trailing = k;
+			lines = lines.slice(0, lines.length - k);
+		}
+		break;
+	}
+
+	let leading = 0;
+	const before: string[] = [];
+	for (let i = match.startIdx - 1; i >= 0 && before.length < MAX_ECHO_LINES; i--) {
+		before.unshift(stripTrailingCr(fileLines[i]!));
+	}
+	for (let k = Math.min(before.length, lines.length - 1); k >= 1; k--) {
+		if (!before.slice(before.length - k).every((line, i) => lines[i] === line)) continue;
+		if (k >= 2 || singleEchoJustified(lines, lines.slice(1))) {
+			leading = k;
+			lines = lines.slice(k);
+		}
+		break;
+	}
+
+	return { lines, leading, trailing };
 }
 
 /** Reconstruct the recorded marker block as it should appear in the file. */
@@ -608,10 +699,16 @@ export function formatConflictWarning(
 	if (theirsLabel) out.push(`- theirs = ${theirsLabel}`);
 	if (anyBase) out.push(`- base = ${baseLabel ?? "(no label)"}`);
 	out.push(
-		'NOTICE: Inspect a block by reading `conflict://<N>` (add `/ours` / `/theirs` / `/base` to render a single side). Resolve with `write({ path: "conflict://<N>", content })`, or bulk-resolve every registered conflict with `write({ path: "conflict://*", content })`. Writes replace the whole conflict region (markers + all sides).',
+		'NOTICE: Inspect a block by reading `conflict://<N>` (add `/ours` / `/theirs` / `/base` to render a single side). Resolve with `write({ path: "conflict://<N>", content })`, or bulk-resolve every registered conflict with `write({ path: "conflict://*", content })`. Writes replace ONLY the marker block (markers + all sides) — never repeat the lines before/after it; they stay in place.',
 	);
 	out.push(
-		'`content` shorthand: a line that is exactly `@ours` / `@theirs` / `@base` / `@both` expands to that recorded section. `@both` is ours-then-theirs with no separator. Lines that are not a token pass through verbatim, so `"// keep both\\n@ours\\n@theirs"` literally writes the comment, then ours, then theirs.',
+		'`content` shorthand: a line that is exactly `@ours` / `@theirs` / `@base` / `@both` expands to that recorded section. `@both` is ours-then-theirs with no separator — only for additive conflicts where each side adds something different; NEVER for competing edits of the same lines (pick a side or write the combined text). Lines that are not a token pass through verbatim, so `"// keep both\\n@ours\\n@theirs"` literally writes the comment, then ours, then theirs.',
+	);
+	out.push(
+		'Per-id bulk: `write({ path: "conflict://*", content: "1: @ours\\n2: @theirs\\n…" })` resolves each listed id with that side in ONE call — the cheapest way through many pick-one conflicts; unlisted ids stay registered.',
+	);
+	out.push(
+		"Resolve each block faithfully: keep one side (`@ours`/`@theirs`), or combine them when both intents apply — never invent content beyond the recorded sides, and never stack both sides of competing edits. Resolve several conflicts in a single turn by issuing multiple `write` calls at once; ids stay valid as earlier blocks are resolved.",
 	);
 
 	for (const entry of entries) {
@@ -674,7 +771,7 @@ export function formatConflictSummary(
 		'NOTICE: Bulk-resolve with `write({ path: "conflict://*", content })`, or address a single block with `write({ path: "conflict://<N>", content })`. Inspect a block by reading `conflict://<N>` (add `/ours` / `/theirs` / `/base` for a single side).',
 	);
 	lines.push(
-		"`content` shorthand: `@ours` / `@theirs` / `@base` / `@both` lines expand to the recorded sections; `@both` = ours-then-theirs. Non-token lines pass through verbatim.",
+		'`content` shorthand: `@ours` / `@theirs` / `@base` / `@both` lines expand to the recorded sections; `@both` = ours-then-theirs (additive conflicts only — never for competing edits of the same lines). Per-id bulk: content of `<id>: @side` lines (e.g. "1: @ours\\n2: @theirs") resolves each listed id in one call. Non-token lines pass through verbatim. Writes replace ONLY the marker block — never repeat the surrounding lines. Keep one side or combine faithfully; never invent content beyond the recorded sides.',
 	);
 	lines.push("");
 	const idWidth = String(entries[entries.length - 1]?.id ?? 1).length;

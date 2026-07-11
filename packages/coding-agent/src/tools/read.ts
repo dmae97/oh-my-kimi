@@ -1289,13 +1289,17 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const ignoreResultLimits = options.ignoreResultLimits ?? false;
 		const requestedEnd = limit !== undefined ? Math.min(requestedStart + limit, allLines.length) : allLines.length;
 		// Expand only on sides the user actually constrained: leading context
-		// when offset>1, trailing context when a finite limit was set.
+		// when offset>1, trailing context when a finite limit was set. Raw mode
+		// never expands — without line numbers the padding is indistinguishable
+		// from requested content, so `raw:31-31` must return line 31 and nothing
+		// else (verbatim-extraction contract).
+		const rawDisplay = options.raw === true;
 		const expanded = expandRangeWithContext(
 			requestedStart,
 			requestedEnd,
 			allLines.length,
-			offset !== undefined && offset > 1,
-			limit !== undefined,
+			!rawDisplay && offset !== undefined && offset > 1,
+			!rawDisplay && limit !== undefined,
 		);
 		const startLine = expanded.startLine;
 		const endLineExpanded = expanded.endLine;
@@ -2527,10 +2531,14 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					}
 
 					// User-requested 0-indexed range start. Lines BEFORE this become
-					// leading context (added below if offset is explicit).
+					// leading context (added below if offset is explicit). Raw mode
+					// never adds context: without line numbers the padding is
+					// indistinguishable from requested content, so `raw:31-31` must
+					// return line 31 and nothing else.
+					const rawSelector = isRawSelector(parsed);
 					const requestedStart = offset ? Math.max(0, offset - 1) : 0;
-					const expandStart = offset !== undefined && offset > 1;
-					const expandEnd = limit !== undefined;
+					const expandStart = !rawSelector && offset !== undefined && offset > 1;
+					const expandEnd = !rawSelector && limit !== undefined;
 					const leadingContext = expandStart ? Math.min(requestedStart, RANGE_LEADING_CONTEXT_LINES) : 0;
 					const trailingContext = expandEnd ? RANGE_TRAILING_CONTEXT_LINES : 0;
 					const startLine = requestedStart - leadingContext;
@@ -2581,7 +2589,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					// verbatim bytes for paste-back-into-tool workflows. Total byte/line
 					// counts in `truncation` keep reflecting the source, not the trimmed
 					// view — column truncation surfaces separately via `.limits()`.
-					const rawSelector = isRawSelector(parsed);
 					const maxColumns = resolveOutputMaxColumns(this.session.settings);
 					// Column truncation is display-only. `collectedLines` MUST stay
 					// byte-for-byte with the on-disk content so the snapshot recorded
@@ -2972,8 +2979,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 		const { offset, limit } = selToOffsetLimit(parsedSel);
 		const requestedStart = offset ? Math.max(0, offset - 1) : 0;
-		const expandStart = offset !== undefined && offset > 1;
-		const expandEnd = limit !== undefined;
+		// Raw mode never adds context lines — see the plain-file range path.
+		const expandStart = !rawSelector && offset !== undefined && offset > 1;
+		const expandEnd = !rawSelector && limit !== undefined;
 		const leadingContext = expandStart ? Math.min(requestedStart, RANGE_LEADING_CONTEXT_LINES) : 0;
 		const trailingContext = expandEnd ? RANGE_TRAILING_CONTEXT_LINES : 0;
 		const startLine = requestedStart - leadingContext;

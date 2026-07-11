@@ -8,7 +8,7 @@ import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import type { ModelRegistry, ProviderDiscoveryState } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { ModelRegistry as ModelRegistryImpl } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { ModelSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/components/model-selector";
+import { ModelHubComponent } from "@oh-my-pi/pi-coding-agent/modes/components/model-hub";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import type { TUI } from "@oh-my-pi/pi-tui";
@@ -27,7 +27,7 @@ function installTestTheme(): void {
 	setThemeInstance(testTheme);
 }
 
-async function createSelector(state: ProviderDiscoveryState): Promise<ModelSelectorComponent> {
+async function createHub(state: ProviderDiscoveryState): Promise<ModelHubComponent> {
 	const modelRegistry = {
 		refresh: async () => {},
 		refreshProvider: async () => {},
@@ -36,22 +36,21 @@ async function createSelector(state: ProviderDiscoveryState): Promise<ModelSelec
 		getAll: () => [],
 		getDiscoverableProviders: () => [state.provider],
 		getProviderDiscoveryState: () => state,
+		authStorage: { hasAuth: () => false },
 	} as unknown as ModelRegistry;
-	const ui = { requestRender: vi.fn() } as unknown as TUI;
-	const selector = new ModelSelectorComponent(
-		ui,
-		undefined,
-		Settings.isolated({}),
-		modelRegistry,
-		[],
-		() => {},
-		() => {},
-	);
+	const ui = { requestRender: vi.fn(), terminal: { rows: 40 } } as unknown as TUI;
+	const hub = new ModelHubComponent(ui, Settings.isolated({}), modelRegistry, [], {
+		onAssign: () => {},
+		onUnassign: () => {},
+		onCancel: () => {},
+	});
 	await Bun.sleep(0);
 	installTestTheme();
-	selector.handleInput("\x1b[C");
+	// Scope-hop is the default arrow mode: one Down moves All models → the
+	// sole provider entry (separators are skipped).
+	hub.handleInput("\x1b[B");
 	await Bun.sleep(0);
-	return selector;
+	return hub;
 }
 
 describe("issue #970 custom provider discovery", () => {
@@ -141,7 +140,7 @@ describe("issue #970 custom provider discovery", () => {
 
 	test("shows a provider-tab hint when discovery succeeds but returns zero models", async () => {
 		installTestTheme();
-		const selector = await createSelector({
+		const hub = await createHub({
 			provider: "vllm",
 			status: "empty",
 			optional: false,
@@ -150,14 +149,15 @@ describe("issue #970 custom provider discovery", () => {
 			models: [],
 		});
 
-		const rendered = normalizeRenderedText(selector.render(200).join("\n"));
+		const rendered = normalizeRenderedText(hub.render(200).join("\n"));
 		expect(rendered).toContain("Discovery succeeded but returned 0 models");
 		expect(rendered).toContain("/models returns { data: [{ id }] }");
+		hub.dispose();
 	});
 
 	test("shows a provider-tab hint when the discovery endpoint returns 404", async () => {
 		installTestTheme();
-		const selector = await createSelector({
+		const hub = await createHub({
 			provider: "vllm",
 			status: "unavailable",
 			optional: false,
@@ -167,9 +167,10 @@ describe("issue #970 custom provider discovery", () => {
 			error: "HTTP 404 from http://192.168.5.3:8085/v1/models",
 		});
 
-		const rendered = normalizeRenderedText(selector.render(200).join("\n"));
+		const rendered = normalizeRenderedText(hub.render(200).join("\n"));
 		expect(rendered).toContain("http://192.168.5.3:8085/v1/models returned 404");
 		expect(rendered).toContain("baseUrl");
+		hub.dispose();
 	});
 
 	test("discovers multiple configurable vllm instances and preserves advertised context metadata", async () => {

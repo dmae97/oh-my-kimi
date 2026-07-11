@@ -105,6 +105,7 @@ Each provider has one or more environment variables that supply a key when no st
 | `huggingface` | `HUGGINGFACE_HUB_TOKEN`, then `HF_TOKEN` |
 | `moonshot` | `MOONSHOT_API_KEY` |
 | `nanogpt` | `NANO_GPT_API_KEY` |
+| `novita` | `NOVITA_API_KEY` |
 | `venice` | `VENICE_API_KEY` |
 | `vercel-ai-gateway` | `AI_GATEWAY_API_KEY` (also `VERCEL_AI_GATEWAY_API_KEY` for catalog discovery) |
 | `cloudflare-ai-gateway` | `CLOUDFLARE_AI_GATEWAY_API_KEY` |

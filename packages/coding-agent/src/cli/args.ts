@@ -42,6 +42,7 @@ export interface Args {
 	noSession?: boolean;
 	sessionDir?: string;
 	providerSessionId?: string;
+	providerPromptCacheKey?: string;
 	fork?: string;
 	/** Collab link to join at startup (set by the `join` subcommand; no CLI flag). */
 	join?: string;

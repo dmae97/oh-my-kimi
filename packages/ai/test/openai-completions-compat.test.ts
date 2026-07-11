@@ -115,7 +115,7 @@ function kimiZaiModel(): Model<"openai-completions"> {
 async function captureOpenAICompletionsPayload(
 	model: Model<"openai-completions">,
 	context: Context = baseContext(),
-	options?: { reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" },
+	options?: { reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" },
 ): Promise<unknown> {
 	const { promise, resolve } = Promise.withResolvers<unknown>();
 	const fetchMock = createMockFetch(["[DONE]"]);
@@ -810,7 +810,7 @@ describe("openai-completions compatibility", () => {
 		expect(getNestedBoolean(chatTemplateArgs, "enable_thinking")).toBe(true);
 	});
 
-	it("maps GLM-5.2 xhigh to Z.AI max and enables tool streaming", async () => {
+	it("sends reasoning_effort:max for the real Z.AI max tier and enables tool streaming", async () => {
 		const model = zaiGlm52Model();
 		const readTool: Tool = {
 			name: "read",
@@ -828,7 +828,7 @@ describe("openai-completions compatibility", () => {
 			{ ...baseContext(), tools: [readTool] },
 			{
 				apiKey: "test-key",
-				reasoning: "xhigh",
+				reasoning: "max",
 				signal: createAbortedSignal(),
 				onPayload: payload => resolve(payload),
 				maxTokens: 65_536,
@@ -879,21 +879,10 @@ describe("openai-completions compatibility", () => {
 		expect(payloadObject?.tool_stream).toBeUndefined();
 	});
 
-	it("maps GLM-5.2 minimal reasoning to disabled Z.AI thinking", async () => {
+	it("bakes the honest [high, max] Z.AI GLM-5.2 ladder with no effortMap", () => {
 		const model = zaiGlm52Model();
-
-		const { promise, resolve } = Promise.withResolvers<unknown>();
-		streamOpenAICompletions(model, baseContext(), {
-			apiKey: "test-key",
-			reasoning: "minimal",
-			signal: createAbortedSignal(),
-			onPayload: payload => resolve(payload),
-		});
-		const payload = await promise;
-		const thinking = getNestedObject(payload, "thinking");
-
-		expect(thinking?.type).toBe("disabled");
-		expect(toObject(payload)?.reasoning_effort).toBeUndefined();
+		expect(model.thinking?.efforts).toEqual([Effort.High, Effort.Max]);
+		expect(model.thinking?.effortMap).toBeUndefined();
 	});
 
 	it("treats finish_reason end as stop", async () => {
@@ -1217,7 +1206,7 @@ describe("kimi model detection via detectCompat", () => {
 		expect(openRouterKimi.compat.thinkingFormat).toBe("openrouter");
 	});
 
-	it("maps OpenRouter Anthropic adaptive reasoning efforts to the Anthropic scale", async () => {
+	it("sends OpenRouter Anthropic adaptive reasoning efforts 1:1 on the wire", async () => {
 		const model: Model<"openai-completions"> = buildModel({
 			...gpt4oMiniSpec,
 			api: "openai-completions",
@@ -1229,9 +1218,11 @@ describe("kimi model detection via detectCompat", () => {
 
 		const highPayload = await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "high" });
 		const xhighPayload = await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "xhigh" });
+		const maxPayload = await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "max" });
 
-		expect(getNestedObject(highPayload, "reasoning")).toEqual({ effort: "xhigh" });
-		expect(getNestedObject(xhighPayload, "reasoning")).toEqual({ effort: "max" });
+		expect(getNestedObject(highPayload, "reasoning")).toEqual({ effort: "high" });
+		expect(getNestedObject(xhighPayload, "reasoning")).toEqual({ effort: "xhigh" });
+		expect(getNestedObject(maxPayload, "reasoning")).toEqual({ effort: "max" });
 	});
 
 	// Regression for #1071: OpenCode-Go/Zen handle reasoning content server-side

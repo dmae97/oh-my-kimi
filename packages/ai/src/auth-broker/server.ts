@@ -290,6 +290,7 @@ function buildCredentialBlockGroups(
 			providerKey: block.providerKey,
 			blockScope: block.blockScope,
 			blockedUntilMs: block.blockedUntilMs,
+			updatedAtMs: block.updatedAtMs,
 		};
 		const existing = byCredentialId.get(block.credentialId);
 		if (existing) {

@@ -33,7 +33,7 @@ Supported keys (today):
   contains `<alias>` (case-insensitive). Falls back to the normal random
   pool selection if no member matches.
 - `/thinking <level>` — override `ROBOMP_THINKING` for this run. Accepts
-  `off|none|no`, `lo|low`, `med|medium`, `hi|high`, `xhi|xhigh`
+  `off|none|no`, `lo|low`, `med|medium`, `hi|high`, `xhi|xhigh`, `max`
   (case-insensitive); anything else is ignored.
 
 Parser semantics:
@@ -49,7 +49,7 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-ThinkingLevel = Literal["off", "low", "medium", "high", "xhigh"]
+ThinkingLevel = Literal["off", "low", "medium", "high", "xhigh", "max"]
 
 # Key = ascii lowercase / digit / dash / underscore, must start with a letter.
 # The value (when using `/key=value` form) runs to end-of-token.
@@ -164,6 +164,7 @@ _THINKING_ALIASES: dict[str, ThinkingLevel] = {
     "high": "high",
     "xhi": "xhigh",
     "xhigh": "xhigh",
+    "max": "max",
 }
 
 

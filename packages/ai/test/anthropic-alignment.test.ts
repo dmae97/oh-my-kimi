@@ -382,12 +382,17 @@ describe("Anthropic request fingerprint alignment", () => {
 		// cache window (the Continue. pad is appended after it) but must not get
 		// a breakpoint — Anthropic rejects cache_control on thinking blocks.
 		const assistant = payload.messages?.find(message => message.role === "assistant");
-		expect(Array.isArray(assistant?.content)).toBe(true);
-		for (const block of assistant?.content as Array<{ type: string; cache_control?: unknown }>) {
+		expect(assistant).toBeDefined();
+		const assistantContent = assistant?.content;
+		expect(Array.isArray(assistantContent)).toBe(true);
+		for (const block of (assistantContent ?? []) as Array<{ type: string; cache_control?: unknown }>) {
 			expect(block.cache_control).toBeUndefined();
 		}
 		const last = payload.messages?.at(-1);
-		expect((last?.content as Array<{ cache_control?: unknown }>)[0]?.cache_control).toBeDefined();
+		expect(last).toBeDefined();
+		const lastContent = last?.content;
+		expect(Array.isArray(lastContent)).toBe(true);
+		expect((lastContent as Array<{ cache_control?: unknown }>)[0]?.cache_control).toBeDefined();
 	});
 
 	it("adds effort and mid-conversation betas to API-key requests that use those features", async () => {
@@ -1939,16 +1944,17 @@ describe("Anthropic request fingerprint alignment", () => {
 	});
 
 	it("drops sampling params and keeps summarized adaptive thinking for OAuth Opus 4.7+", async () => {
+		const opus47 = buildModel({
+			...ANTHROPIC_MODEL_SPEC,
+			id: "claude-opus-4-7",
+			name: "Claude Opus 4.7",
+			thinking: {
+				mode: "anthropic-adaptive",
+				efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
+			},
+		});
 		const payload = (await captureAnthropicPayload(
-			buildModel({
-				...ANTHROPIC_MODEL_SPEC,
-				id: "claude-opus-4-7",
-				name: "Claude Opus 4.7",
-				thinking: {
-					mode: "anthropic-adaptive",
-					efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
-				},
-			}),
+			opus47,
 			{
 				systemPrompt: ["Stay concise."],
 				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
@@ -1976,18 +1982,10 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(payload.context_management).toEqual({
 			edits: [{ type: "clear_thinking_20251015", keep: "all" }],
 		});
-		expect(payload.output_config).toEqual({ effort: "xhigh" });
+		expect(payload.output_config).toEqual({ effort: "high" });
 
-		const maxPayload = (await captureAnthropicPayload(
-			buildModel({
-				...ANTHROPIC_MODEL_SPEC,
-				id: "claude-opus-4-7",
-				name: "Claude Opus 4.7",
-				thinking: {
-					mode: "anthropic-adaptive",
-					efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
-				},
-			}),
+		const xhighPayload = (await captureAnthropicPayload(
+			opus47,
 			{
 				systemPrompt: ["Stay concise."],
 				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
@@ -1995,6 +1993,23 @@ describe("Anthropic request fingerprint alignment", () => {
 			{
 				thinkingEnabled: true,
 				reasoning: Effort.XHigh,
+			},
+		)) as {
+			thinking?: { type?: string; display?: string };
+			output_config?: { effort?: string };
+		};
+		expect(xhighPayload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+		expect(xhighPayload.output_config).toEqual({ effort: "xhigh" });
+
+		const maxPayload = (await captureAnthropicPayload(
+			opus47,
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{
+				thinkingEnabled: true,
+				reasoning: Effort.Max,
 			},
 		)) as {
 			thinking?: { type?: string; display?: string };
@@ -2014,15 +2029,14 @@ describe("Anthropic request fingerprint alignment", () => {
 				baseUrl: "https://api.code.umans.ai",
 				thinking: {
 					mode: "anthropic-budget-effort",
-					efforts: [Effort.High, Effort.XHigh],
-					effortMap: { [Effort.XHigh]: "max" },
+					efforts: [Effort.High, Effort.Max],
 				},
 			}),
 			{
 				systemPrompt: ["Stay concise."],
 				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
 			},
-			Effort.XHigh,
+			Effort.Max,
 		)) as {
 			thinking?: { type?: string; budget_tokens?: number };
 			output_config?: { effort?: string };
@@ -2098,7 +2112,7 @@ describe("Anthropic request fingerprint alignment", () => {
 				name: "Claude Opus 4.7",
 				thinking: {
 					mode: "anthropic-adaptive",
-					efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+					efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
 				},
 			}),
 			{
@@ -2120,7 +2134,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(payload.context_management).toEqual({
 			edits: [{ type: "clear_thinking_20251015", keep: "all" }],
 		});
-		expect(payload.output_config).toEqual({ effort: "xhigh" });
+		expect(payload.output_config).toEqual({ effort: "high" });
 	});
 
 	it("sends task budgets through Anthropic output_config without dropping adaptive effort", async () => {
@@ -2131,7 +2145,7 @@ describe("Anthropic request fingerprint alignment", () => {
 				name: "Claude Opus 4.7",
 				thinking: {
 					mode: "anthropic-adaptive",
-					efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+					efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
 				},
 			}),
 			{
@@ -2151,7 +2165,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		};
 
 		expect(payload.output_config).toEqual({
-			effort: "xhigh",
+			effort: "high",
 			task_budget: { type: "tokens", total: 64_000, remaining: 48_000 },
 		});
 	});
@@ -2164,7 +2178,7 @@ describe("Anthropic request fingerprint alignment", () => {
 				name: "Claude Opus 4.7",
 				thinking: {
 					mode: "anthropic-adaptive",
-					efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+					efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
 				},
 			}),
 			{
@@ -2209,7 +2223,7 @@ describe("Anthropic request fingerprint alignment", () => {
 					maxTokens: 128_000,
 					thinking: {
 						mode: "anthropic-adaptive",
-						efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+						efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
 					},
 				}),
 				{
@@ -2236,7 +2250,7 @@ describe("Anthropic request fingerprint alignment", () => {
 
 			expect(payload.tool_choice).toEqual({ type: "auto" });
 			expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
-			expect(payload.output_config).toEqual({ effort: "xhigh" });
+			expect(payload.output_config).toEqual({ effort: "high" });
 		}
 	});
 

@@ -428,7 +428,7 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		// Mutate the settings-backed state. The tool object identity does not change,
 		// but its `description` getter now returns a new string. The signature must
 		// pick this up live (no per-tool caching) and force a rebuild.
-		settingState.disabled = "plan,explore";
+		settingState.disabled = "plan,scout";
 		await session.refreshMCPTools([dynamicTool]);
 		expect(rebuildCount).toBe(baseline + 1);
 

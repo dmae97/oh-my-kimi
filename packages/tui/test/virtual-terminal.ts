@@ -143,8 +143,9 @@ export class VirtualTerminal implements Terminal {
 	// allocator exhausts after enough cumulative write volume in one instance
 	// (recommit-heavy stress runs hit it); on an OOM trap the wrapper rebuilds
 	// a fresh engine and replays this log, which reproduces the exact terminal
-	// state. Full-clear recreates reset the log (prior history is erased), so
-	// it stays bounded by the bytes since the last destructive replay.
+	// state. Recreates (reset/clear/legacy full-clear) reset the log, so it
+	// stays bounded by the bytes written since the last fresh engine; the
+	// no-ED2 destructive paint path leaves it intact.
 	#eventLog: (string | { columns: number; rows: number })[] = [];
 	#eventLogBytes = 0;
 	#logBaseColumns: number;
@@ -152,9 +153,10 @@ export class VirtualTerminal implements Terminal {
 	#replayingLog = false;
 	// Memoized text of committed scrollback rows, keyed by absolute offset. Safe
 	// because the engine never evicts (its byte budget sits far above the line
-	// cap), so an offset's content is stable until a resize (rewrap) or recreate
-	// (clear) — both reset this. Eliminates the per-op O(history) WASM re-reads
-	// that made long streaming runs O(n²) in committed rows.
+	// cap), so an offset's content is stable until a resize (rewrap), a recreate
+	// (clear), or an ED3 history clear (renumbers offsets) — all reset this.
+	// Eliminates the per-op O(history) WASM re-reads that made long streaming
+	// runs O(n²) in committed rows.
 	#historyTextCache: string[] = [];
 
 	constructor(columns = 80, rows = 24, scrollback?: number) {
@@ -429,8 +431,12 @@ export class VirtualTerminal implements Terminal {
 	#engineWrite(data: string): void {
 		const wasBottom = this.#atBottom();
 		const clearScrollbackAfterFullClear = "\x1b[2J\x1b[H\x1b[3J";
-		const clearIndex = data.indexOf(clearScrollbackAfterFullClear);
-		if (clearIndex >= 0 && this.#canRecreateForFullClear(data, clearIndex)) {
+		// Destructive full paints emit home + ED3 without ED2 (TUI#emitFullPaint
+		// rewrites every visible row with self-clearing lines).
+		const destructiveClear = "\x1b[H\x1b[3J";
+		const fullClearIndex = data.indexOf(clearScrollbackAfterFullClear);
+		const destructiveIndex = data.indexOf(destructiveClear);
+		if (fullClearIndex >= 0 && this.#clearFollowsPaintBegin(data, fullClearIndex)) {
 			// ghostty-web 0.4 can trap in WASM when libghostty-vt processes a
 			// full-clear + ED3 repaint against an existing history buffer. The
 			// sequence's observable effect here is a blank terminal with empty
@@ -438,12 +444,21 @@ export class VirtualTerminal implements Terminal {
 			// state directly in a fresh WASM instance and feed Ghostty the
 			// unmodified text/SGR tail.
 			this.#recreate();
-			data = data.slice(0, clearIndex) + data.slice(clearIndex + clearScrollbackAfterFullClear.length);
-		} else if (this.#pendingEngineResize) {
-			this.#term.resize(this.#columns, this.#rows);
-			this.#eventLog.push({ columns: this.#columns, rows: this.#rows });
-			this.#historyTextCache.length = 0; // engine rewraps scrollback on resize
-			this.#pendingEngineResize = false;
+			data = data.slice(0, fullClearIndex) + data.slice(fullClearIndex + clearScrollbackAfterFullClear.length);
+		} else {
+			if (this.#pendingEngineResize) {
+				this.#term.resize(this.#columns, this.#rows);
+				this.#eventLog.push({ columns: this.#columns, rows: this.#rows });
+				this.#historyTextCache.length = 0; // engine rewraps scrollback on resize
+				this.#pendingEngineResize = false;
+			}
+			if (destructiveIndex >= 0 && this.#clearFollowsPaintBegin(data, destructiveIndex)) {
+				// ED3 renumbers scrollback offsets, so the offset-keyed history text
+				// cache is stale. Let Ghostty process the bytes natively — recreating
+				// to a blank grid here would mask self-clear regressions in the
+				// no-ED2 repaint contract that the render tests exist to catch.
+				this.#historyTextCache.length = 0;
+			}
 		}
 		data = this.#stripSynchronizedOutput(data);
 		data = stripCombiningMarksForGhostty(data);
@@ -589,7 +604,8 @@ export class VirtualTerminal implements Terminal {
 		}
 	}
 
-	#canRecreateForFullClear(data: string, clearIndex: number): boolean {
+	/** Whether a viewport/history clear sequence sits immediately after a full-paint begin prefix. */
+	#clearFollowsPaintBegin(data: string, clearIndex: number): boolean {
 		const paintBegin = "\x1b[?25l\x1b[?2026h\x1b[?7l";
 		const paintBeginNoSync = "\x1b[?25l\x1b[?7l";
 		return (

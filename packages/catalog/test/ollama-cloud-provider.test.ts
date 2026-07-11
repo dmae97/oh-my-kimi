@@ -141,8 +141,7 @@ describe("ollama-cloud provider support", () => {
 		expect(model?.reasoning).toBe(true);
 		expect(built?.thinking).toEqual({
 			mode: "effort",
-			efforts: [Effort.High, Effort.XHigh],
-			effortMap: { xhigh: "max" },
+			efforts: [Effort.High, Effort.Max],
 		});
 	});
 
@@ -286,7 +285,7 @@ describe("ollama-cloud provider support", () => {
 		expect(result.errorMessage).toContain("prompt filled the context window");
 	});
 
-	test("sends max for GLM-5.2 xhigh reasoning on Ollama Cloud", async () => {
+	test("sends native max for GLM-5.2 max reasoning on Ollama Cloud", async () => {
 		let requestBody: Record<string, unknown> | undefined;
 		const fetchMock: FetchImpl = vi.fn(async (_input, init) => {
 			requestBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
@@ -302,7 +301,7 @@ describe("ollama-cloud provider support", () => {
 			provider: "ollama-cloud",
 			baseUrl: "https://ollama.com",
 			reasoning: true,
-			thinking: { mode: "effort", efforts: [Effort.High, Effort.XHigh], effortMap: { [Effort.XHigh]: "max" } },
+			thinking: { mode: "effort", efforts: [Effort.High, Effort.Max] },
 			input: ["text"],
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 1_000_000,
@@ -315,7 +314,7 @@ describe("ollama-cloud provider support", () => {
 			{
 				apiKey: "cloud-test-key",
 				fetch: fetchMock,
-				reasoning: Effort.XHigh,
+				reasoning: Effort.Max,
 			},
 		).result();
 

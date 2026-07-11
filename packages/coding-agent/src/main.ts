@@ -78,9 +78,10 @@ import { concreteThinkingLevel, parseConfiguredThinkingLevel } from "./thinking"
 import type { LspStartupServerInfo } from "./tools";
 import {
 	getChangelogPath,
-	getNewEntries,
 	parseChangelog,
+	parseChangelogVersion,
 	readLastChangelogVersion,
+	selectStartupChangelog,
 	writeLastChangelogVersion,
 } from "./utils/changelog";
 import { EventBus } from "./utils/event-bus";
@@ -610,6 +611,11 @@ async function getChangelogForDisplay(parsed: Args): Promise<string | undefined>
 	}
 
 	const lastVersion = await readLastChangelogVersion();
+	const parsedLastVersion = parseChangelogVersion(lastVersion);
+	if (!parsedLastVersion) {
+		await writeLastChangelogVersion(VERSION);
+		return undefined;
+	}
 	if (lastVersion === VERSION) {
 		// Steady state: user already saw the current version's changelog. Skip the file read + parse.
 		return undefined;
@@ -617,18 +623,12 @@ async function getChangelogForDisplay(parsed: Args): Promise<string | undefined>
 
 	const changelogPath = getChangelogPath();
 	const entries = await parseChangelog(changelogPath);
-
-	if (!lastVersion) {
-		if (entries.length > 0) {
-			await writeLastChangelogVersion(VERSION);
-			return entries.map(e => e.content).join("\n\n");
-		}
-	} else {
-		const newEntries = getNewEntries(entries, lastVersion);
-		if (newEntries.length > 0) {
-			await writeLastChangelogVersion(VERSION);
-			return newEntries.map(e => e.content).join("\n\n");
-		}
+	const startupChangelog = selectStartupChangelog(entries, lastVersion, VERSION);
+	if (startupChangelog.persistCurrentVersion) {
+		await writeLastChangelogVersion(VERSION);
+	}
+	if (startupChangelog.markdown) {
+		return startupChangelog.markdown;
 	}
 
 	return undefined;
@@ -789,7 +789,8 @@ export function applyResolvedSystemPromptInputs(
 	}
 }
 
-async function buildSessionOptions(
+/** Builds startup session options from parsed CLI flags, scoped models, and resolved session lineage. */
+export async function buildSessionOptions(
 	parsed: Args,
 	scopedModels: ScopedModel[],
 	sessionManager: SessionManager | undefined,
@@ -819,6 +820,25 @@ async function buildSessionOptions(
 	}
 	if (parsed.providerSessionId) {
 		options.providerSessionId = parsed.providerSessionId;
+	}
+	if (parsed.providerPromptCacheKey) {
+		options.providerPromptCacheKey = parsed.providerPromptCacheKey;
+		options.providerPromptCacheKeySource = "explicit";
+	} else {
+		const header = sessionManager?.getHeader();
+		const scopedModelOverride = scopedModels.length > 0 && !parsed.continue && !parsed.resume;
+		const forkCacheShapeChanged =
+			scopedModelOverride ||
+			parsed.model !== undefined ||
+			parsed.thinking !== undefined ||
+			parsed.systemPrompt !== undefined ||
+			parsed.appendSystemPrompt !== undefined ||
+			parsed.tools !== undefined ||
+			parsed.noTools === true;
+		if (!forkCacheShapeChanged && header?.providerPromptCacheKey) {
+			options.providerPromptCacheKey = header.providerPromptCacheKey;
+			options.providerPromptCacheKeySource = "fork";
+		}
 	}
 
 	// Model from CLI

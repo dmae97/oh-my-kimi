@@ -258,7 +258,12 @@ async function createSessionHarness(
 		modelRegistry: sharedModelRegistry,
 		sessionManager,
 		model,
-		settings: Settings.isolated(),
+		// These tests seed bare `{ close }` stubs into `providerSessionState` and
+		// assert reload closes them. The SDK's fire-and-forget Codex websocket
+		// prewarm (models with `preferWebsockets`) would race in and replace the
+		// stub via `getCodexProviderSessionState`, orphaning the spy — disable
+		// websockets since these tests exercise reload semantics, not transport.
+		settings: Settings.isolated({ "providers.openaiWebsockets": "off" }),
 		disableExtensionDiscovery: true,
 		skills: [],
 		contextFiles: [],

@@ -113,7 +113,7 @@ Model / agent:
       --agent <name>             omp (default) | oracle | nop | any harbor agent
       --install <local|published> omp source. local = pack /work/pi (default)
       --version <v>              omp version for published install (default: latest)
-      --thinking <level>         off|minimal|low|medium|high|xhigh
+      --thinking <level>         off|minimal|low|medium|high|xhigh|max
       --advisor-model <p/m>      Second model reviewing the primary (spend summed in)
       --advisor-sync <off|1|3|5> Advisor catch-up backlog (default 1 = accurate spend; off = faster)
       --tarball <path>           Reuse a prebuilt omp tarball (implies --no-build)

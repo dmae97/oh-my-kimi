@@ -700,8 +700,8 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(qwen?.reasoning).toBe(true);
 		expect(qwen?.thinking).toEqual({
 			mode: "effort",
-			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
-			effortMap: { [Effort.Minimal]: Effort.Low },
+			// Local Ollama's wire effort vocabulary is low/medium/high/max.
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.Max],
 		});
 
 		const llama = registry.find("ollama", "llama3.2:3b");

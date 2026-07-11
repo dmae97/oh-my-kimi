@@ -110,4 +110,42 @@ describe("git subprocess config", () => {
 			"HEAD:refs/heads/feature",
 		]);
 	});
+
+	it("preserves the caller's GPG_TTY for signing-capable commands", async () => {
+		const originalGpgTty = process.env.GPG_TTY;
+		const spawnCalls: SpawnCall[] = [];
+		vi.spyOn(Bun, "spawn").mockImplementation(createSpawnMock(spawnCalls));
+
+		process.env.GPG_TTY = "/dev/pts/42";
+		try {
+			await git.commit("/work/pi", "fix: preserve signing tty");
+		} finally {
+			if (originalGpgTty === undefined) {
+				delete process.env.GPG_TTY;
+			} else {
+				process.env.GPG_TTY = originalGpgTty;
+			}
+		}
+
+		expect(spawnCalls).toHaveLength(1);
+		expect(spawnCalls[0]?.options.env?.GPG_TTY).toBe("/dev/pts/42");
+	});
+
+	it("does not invent a bogus GPG_TTY when the caller has none", async () => {
+		const originalGpgTty = process.env.GPG_TTY;
+		const spawnCalls: SpawnCall[] = [];
+		vi.spyOn(Bun, "spawn").mockImplementation(createSpawnMock(spawnCalls));
+
+		delete process.env.GPG_TTY;
+		try {
+			await git.commit("/work/pi", "fix: allow gui pinentry");
+		} finally {
+			if (originalGpgTty !== undefined) {
+				process.env.GPG_TTY = originalGpgTty;
+			}
+		}
+
+		expect(spawnCalls).toHaveLength(1);
+		expect(spawnCalls[0]?.options.env).not.toHaveProperty("GPG_TTY");
+	});
 });

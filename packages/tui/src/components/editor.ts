@@ -3,7 +3,7 @@ import {
 	type AutocompleteProvider,
 	findLeadingSlashCommandStart,
 	findTrailingSlashCommandStart,
-	scoreCommandTextMatch,
+	midPromptSkillTokenMatches,
 } from "../autocomplete";
 import { BracketedPasteHandler, decodeReencodedPasteControls } from "../bracketed-paste";
 import { getKeybindings, type KeybindingsManager } from "../keybindings";
@@ -2940,13 +2940,12 @@ export class Editor implements Component, Focusable {
 					// Guard the timing window where the popup was built for an earlier
 					// query (e.g. bare `/`) and the user typed further characters before
 					// the 100 ms debounced refresh fired: accept the stale skill only
-					// when the current query would still surface it. `tmp` after a bare
-					// slash therefore falls through to file completion instead of
-					// rewriting the user's `/tmp` to `/skill:…`.
+					// when the refreshed popup would still surface it (same gate as
+					// buildMidPromptSkillCompletions). `tmp` after a bare slash
+					// therefore falls through to file completion instead of rewriting
+					// the user's `/tmp` to `/skill:…`.
 					const lowerToken = token.slice(1).toLowerCase();
-					if (scoreCommandTextMatch(lowerToken, item.value.toLowerCase()) > 0) return true;
-					if (item.description && scoreCommandTextMatch(lowerToken, item.description.toLowerCase()) > 0)
-						return true;
+					if (midPromptSkillTokenMatches(lowerToken, item.value, item.description)) return true;
 				}
 			}
 			return false;
@@ -3079,11 +3078,6 @@ export class Editor implements Component, Focusable {
 		await this.#tryTriggerAutocomplete();
 	}
 
-	/*
-https://github.com/EsotericSoftware/spine-runtimes/actions/runs/19536643416/job/559322883
-17 this job fails with https://github.com/EsotericSoftware/spine-runtimes/actions/runs/19
-536643416/job/55932288317 havea  look at .gi
-    */
 	async #forceFileAutocomplete(explicitTab: boolean = false): Promise<void> {
 		if (!this.#autocompleteProvider) return;
 

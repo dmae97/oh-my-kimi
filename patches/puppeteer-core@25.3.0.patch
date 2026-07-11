@@ -1,3 +1,6 @@
+diff --git a/node_modules/puppeteer-core/.bun-tag-a797aeb3ca2bd69f b/.bun-tag-a797aeb3ca2bd69f
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/lib/puppeteer/api/ElementHandle.js b/lib/puppeteer/api/ElementHandle.js
 index 81454fe2af73518f7e76f04cbe3a7f170d735fa5..6f9eedb9fc1344901705bc83cb3cf415e6271e28 100644
 --- a/lib/puppeteer/api/ElementHandle.js
@@ -614,6 +617,40 @@ index 3d68f887920ded269eb641273a5a13dee235ae1d..dcdd86c8697c0dbd2dd2162c9a739dd9
      }
      mainRealm() {
          return this.#world;
+diff --git a/lib/puppeteer/common/QueryHandler.js b/lib/puppeteer/common/QueryHandler.js
+index 8c406cf90e0f9d899efaa5acb6a636a86f32e37e..185ef5954b2b95b708855ed68e8327a8c51f9e70 100644
+--- a/lib/puppeteer/common/QueryHandler.js
++++ b/lib/puppeteer/common/QueryHandler.js
+@@ -152,8 +152,8 @@ export class QueryHandler {
+      * Waits until a single node appears for a given selector and
+      * {@link ElementHandle}.
+      *
+-     * This will always query the handle in the Puppeteer world and migrate the
+-     * result to the main world.
++     * This will always query the handle in the Puppeteer world and return the
++     * result in that world.
+      */
+     static async waitFor(elementOrFrame, selector, options) {
+         const env_3 = { stack: [], error: void 0, hasError: false };
+@@ -191,7 +191,17 @@ export class QueryHandler {
+                     if (!(_isElementHandle in handle)) {
+                         return null;
+                     }
+-                    return await frame.mainRealm().transferHandle(handle);
++                    // xxx-stealth: keep the result in the isolated (Puppeteer)
++                    // world instead of upstream's mainRealm transfer. The stealth
++                    // patch routes default Frame.evaluate/waitForFunction and $/$$
++                    // through the isolated world, so a main-world handle here made
++                    // every consumer that passes the handle back in (Locator's
++                    // enabled precondition, page.evaluate(fn, handle)) throw
++                    // "JSHandles can be evaluated only in the context they were
++                    // created!" — Locators retried that silently until timeout.
++                    // Intentional main-world evaluation still adopts via the
++                    // //!world=main directive path in ElementHandle.
++                    return handle.move();
+                 }
+                 catch (e_3) {
+                     env_4.error = e_3;
 diff --git a/lib/puppeteer/node/ChromeLauncher.js b/lib/puppeteer/node/ChromeLauncher.js
 index fb7fe66ecb99fd207b99c1e9a9ae00769f0b9a20..af5284b9ee8226e78fa0243ec2f83a631bbaca9d 100644
 --- a/lib/puppeteer/node/ChromeLauncher.js

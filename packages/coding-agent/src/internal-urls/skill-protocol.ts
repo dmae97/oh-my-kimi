@@ -72,7 +72,7 @@ export class SkillProtocolHandler implements ProtocolHandler {
 				throw new Error("Path traversal is not allowed");
 			}
 		} else {
-			targetPath = skill.filePath;
+			targetPath = context?.pathOnly === true ? skill.baseDir : skill.filePath;
 		}
 
 		let stats: fsTypes.Stats;

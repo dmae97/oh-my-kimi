@@ -3,7 +3,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { logger, postmortem, Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
 import { JsRuntime, type RuntimeHooks } from "../../../eval/js/shared/runtime";
-import type { JsDisplayOutput } from "../../../eval/js/shared/types";
 import { callSessionTool } from "../../../eval/js/tool-bridge";
 import { resizeImage } from "../../../utils/image-resize";
 import type { ToolSession } from "../../index";
@@ -14,6 +13,7 @@ import { type AriaSnapshotOptions, buildAriaSnapshotScript } from "../aria/aria-
 import { DEFAULT_VIEWPORT } from "../launch";
 import { extractReadableFromHtml, type ReadableFormat } from "../readable";
 import { bindBrowserRunFacade, waitForBrowserRun } from "../run-cancellation";
+import { cloneSafe, RunOutput } from "../run-output";
 import type { Observation, ReadyInfo, RunResultOk, ScreenshotResult, SessionSnapshot } from "../tab-protocol";
 import {
 	type CmuxEvalResult,
@@ -24,7 +24,8 @@ import {
 	cmuxSnapshotToObservation,
 	GEOMETRY_SCRIPT,
 	mapWaitUntil,
-	serializeEval,
+	serializeEvalWithEnvelope,
+	unwrapEvalEnvelope,
 } from "./rpc";
 import type { CmuxSocketClient } from "./socket-client";
 
@@ -43,7 +44,7 @@ interface ObserveOptions {
 
 interface RunContext {
 	session: SessionSnapshot;
-	displays: RunResultOk["displays"];
+	output: RunOutput;
 	screenshots: ScreenshotResult[];
 	signal: AbortSignal;
 	timeoutMs: number;
@@ -445,10 +446,14 @@ export class CmuxTab {
 		fn: string | ((...args: TArgs) => TResult | Promise<TResult>),
 		...args: TArgs
 	): Promise<TResult> {
-		const result = (await this.#request("browser.eval", {
-			script: serializeEval(fn as string | ((...args: unknown[]) => unknown), args),
-		})) as CmuxEvalResult;
-		return result.value as TResult;
+		// A script that throws inside the daemon comes back as a bare
+		// `js_error: A JavaScript exception occurred` with no message or stack.
+		// Catch page-side instead so the exception is diagnosable, and turn the
+		// daemon's other blind spot — Promise return values it cannot
+		// serialize — into an actionable error instead of "unsupported type".
+		const script = serializeEvalWithEnvelope(fn as string | ((...args: unknown[]) => unknown), args);
+		const result = (await this.#request("browser.eval", { script })) as CmuxEvalResult;
+		return unwrapEvalEnvelope<TResult>(result.value, "tab.evaluate()");
 	}
 
 	async scrollIntoView(selector: string): Promise<void> {
@@ -479,10 +484,22 @@ export class CmuxTab {
 
 	async screenshot(opts: ScreenshotOptions = {}): Promise<ScreenshotResult> {
 		const context = this.#requireRunContext("tab.screenshot()");
+		// The cmux daemon's `browser.screenshot` captures the surface viewport
+		// only — it has no element-clip or full-page mode, and Bun.Image cannot
+		// crop locally. Degrade transparently instead of silently mislabeling
+		// the capture: scroll the element into view, then TELL the model the
+		// image is the full viewport (reports showed selector captures being
+		// consumed as element crops).
+		const captureNotes: string[] = [];
 		if (opts.selector) {
 			await this.scrollIntoView(opts.selector);
+			captureNotes.push(
+				`selector ${JSON.stringify(opts.selector)} was scrolled into view, but this surface cannot clip to an element — the image is the full viewport`,
+			);
 		}
-		void opts.fullPage;
+		if (opts.fullPage) {
+			captureNotes.push("fullPage is unavailable on this surface — the image is the viewport only");
+		}
 		const result = await this.#captureScreenshotPng(context.timeoutMs);
 		const buffer = Buffer.from(result.png_base64, "base64");
 		const captureMime = "image/png";
@@ -528,8 +545,11 @@ export class CmuxTab {
 				dest,
 				resized,
 			});
-			context.displays.push({ type: "text", text: lines.join("\n") });
-			context.displays.push({ type: "image", data: resized.data, mimeType: resized.mimeType });
+			if (captureNotes.length > 0) {
+				lines.push(`[cmux surface: ${captureNotes.join("; ")}]`);
+			}
+			context.output.push({ type: "text", text: lines.join("\n") });
+			context.output.push({ type: "image", data: resized.data, mimeType: resized.mimeType });
 		}
 		return info;
 	}
@@ -724,7 +744,12 @@ export class CmuxTab {
 			const callable = (0, eval)("(" + source + ")");
 			return callable(element, ...args);
 		})()`;
-		return await this.#evalScript<TResult>(script);
+		// Envelope so a stale selector or a throwing callback reports its actual
+		// error instead of the daemon's generic js_error (see tab.evaluate()).
+		const result = (await this.#request("browser.eval", {
+			script: serializeEvalWithEnvelope(script, []),
+		})) as CmuxEvalResult;
+		return unwrapEvalEnvelope<TResult>(result.value, "elementHandle.evaluate()");
 	}
 
 	async pageContent(): Promise<string> {
@@ -1097,6 +1122,10 @@ class CmuxElementHandle {
 		await this.#tab.fill(this.#selector, value);
 	}
 
+	async press(key: string): Promise<void> {
+		await this.#tab.press(key, { selector: this.#selector });
+	}
+
 	async focus(): Promise<void> {
 		await this.#tab.focus(this.#selector);
 	}
@@ -1284,24 +1313,17 @@ export async function runCmuxCode(tab: CmuxTab, opts: RunCmuxCodeOptions): Promi
 	const signal = AbortSignal.any(
 		opts.signal ? [timeoutSignal, opts.signal, runAc.signal] : [timeoutSignal, runAc.signal],
 	);
-	const displays: RunResultOk["displays"] = [];
+	const output = new RunOutput();
 	const screenshots: ScreenshotResult[] = [];
 	const runId = crypto.randomUUID();
-	tab.setRunContext({ session: opts.snapshot, displays, screenshots, signal, timeoutMs: opts.timeoutMs });
-	const runtime = tab.ensureRuntime(opts.snapshot);
-	runtime.setCwd(opts.snapshot.cwd);
-	const runTab = bindBrowserRunFacade(tab, signal);
-	runtime.setRunScope({
-		page: bindBrowserRunFacade(tab.page, signal),
-		browser: bindBrowserRunFacade(tab.browser, signal),
-		tab: runTab,
-		assert: (cond: unknown, text?: string): void => {
-			if (!cond) throw new ToolError(text ?? "Assertion failed");
-		},
-		wait: (ms: number): Promise<void> => waitForBrowserRun(ms, signal),
-	});
+	tab.setRunContext({ session: opts.snapshot, output, screenshots, signal, timeoutMs: opts.timeoutMs });
 
 	const { promise: cancelRejection, reject } = Promise.withResolvers<never>();
+	// If the synchronous setup below throws (same-realm ownership conflict)
+	// while `signal` is already aborted, `Promise.race` never attaches a
+	// handler to this promise; keep its armed rejection from surfacing as an
+	// unhandled rejection — the postmortem-fatal path this run guards against.
+	cancelRejection.catch(() => {});
 	const onAbort = (): void => {
 		if (timeoutSignal.aborted) {
 			reject(new ToolError(`Browser code execution timed out after ${opts.timeoutMs}ms`));
@@ -1317,14 +1339,31 @@ export async function runCmuxCode(tab: CmuxTab, opts: RunCmuxCodeOptions): Promi
 	else signal.addEventListener("abort", onAbort, { once: true });
 
 	try {
+		const runtime = tab.ensureRuntime(opts.snapshot);
+		// setCwd is non-exclusive; setRunScope/run still assert same-realm ownership.
+		// Keep both inside try so a concurrent in-process eval/browser run surfaces as
+		// a rejected promise the supervisor can report, never an unhandled rejection.
+		runtime.setCwd(opts.snapshot.cwd);
+		const runTab = bindBrowserRunFacade(tab, signal);
+		runtime.setRunScope({
+			page: bindBrowserRunFacade(tab.page, signal),
+			browser: bindBrowserRunFacade(tab.browser, signal),
+			tab: runTab,
+			assert: (cond: unknown, text?: string): void => {
+				if (!cond) throw new ToolError(text ?? "Assertion failed");
+			},
+			wait: (ms: number): Promise<void> => waitForBrowserRun(ms, signal),
+		});
+
 		const hooks: RuntimeHooks = {
 			onText: chunk => {
 				throwIfAborted(signal);
+				output.pushText(chunk);
 				logger.debug(chunk.replace(/\n$/, ""));
 			},
-			onDisplay: output => {
+			onDisplay: displayed => {
 				throwIfAborted(signal);
-				pushDisplay(displays, output);
+				output.pushDisplay(displayed);
 			},
 			callTool: (name, args) => {
 				throwIfAborted(signal);
@@ -1337,44 +1376,12 @@ export async function runCmuxCode(tab: CmuxTab, opts: RunCmuxCodeOptions): Promi
 			runtime.run(opts.code, `cmux-run-${runId}.js`, hooks, { runId, cwd: opts.snapshot.cwd }),
 			cancelRejection,
 		]);
-		return { displays, returnValue: cloneSafe(returnValue), screenshots };
+		return { displays: output.finish(), returnValue: cloneSafe(returnValue), screenshots };
 	} finally {
 		signal.removeEventListener("abort", onAbort);
 		runAc.abort(postmortem.markExpectedCleanupError(new ToolAbortError("Browser run ended")));
 		tab.clearRunContext();
 	}
-}
-
-function pushDisplay(displays: RunResultOk["displays"], output: JsDisplayOutput): void {
-	if (output.type === "image") {
-		displays.push({ type: "image", data: output.data, mimeType: output.mimeType });
-		return;
-	}
-	if (output.type === "json") {
-		displays.push({ type: "text", text: safeJsonStringify(output.data) });
-		return;
-	}
-	displays.push({ type: "text", text: safeJsonStringify(output.event) });
-}
-
-function safeJsonStringify(value: unknown): string {
-	try {
-		return JSON.stringify(value, null, 2);
-	} catch {
-		return String(value);
-	}
-}
-
-function cloneSafe(value: unknown): unknown {
-	if (value === undefined) return undefined;
-	try {
-		structuredClone(value);
-		return value;
-	} catch {}
-	try {
-		return JSON.parse(JSON.stringify(value)) as unknown;
-	} catch {}
-	return String(value);
 }
 
 function numberFrom(value: unknown, fallback: number): number {

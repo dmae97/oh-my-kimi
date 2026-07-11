@@ -141,6 +141,9 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 	"--provider-session-id": (result, value) => {
 		result.providerSessionId = value;
 	},
+	"--prompt-cache-key": (result, value) => {
+		result.providerPromptCacheKey = value;
+	},
 	"--session-dir": (result, value) => {
 		result.sessionDir = value;
 	},

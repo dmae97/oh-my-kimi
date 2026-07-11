@@ -96,6 +96,87 @@ describe("task progress rendering", () => {
 		expect(rawRow0).toBe(rawRow1);
 	});
 
+	// Regression: the ⟨agent⟩ type badge must survive past the streaming call
+	// preview — it stays on live progress rows and on finished result rows, and
+	// the generic `task` worker stays bare.
+	it("keeps the agent type badge on progress and result rows", async () => {
+		const theme = (await getThemeByName("dark"))!;
+		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
+		const badge = `${theme.format.bracketLeft}sonic${theme.format.bracketRight}`;
+
+		const progressRow = Bun.stripANSI(
+			findRow(
+				taskToolRenderer.renderResult(
+					{
+						content: [{ type: "text", text: "" }],
+						details: detailsFor(runningProgress({ id: "SonicCount", agent: "sonic" })),
+					},
+					options,
+					theme,
+				),
+				"SonicCount",
+			),
+		);
+		expect(progressRow).toContain(badge);
+
+		const resultDetails: TaskToolDetails = {
+			projectAgentsDir: null,
+			results: [finishedResult({ id: "SonicCount", agent: "sonic" })],
+			totalDurationMs: 0,
+		};
+		const resultRow = Bun.stripANSI(
+			findRow(
+				taskToolRenderer.renderResult(
+					{ content: [{ type: "text", text: "" }], details: resultDetails },
+					{ expanded: false, isPartial: false },
+					theme,
+				),
+				"SonicCount",
+			),
+		);
+		expect(resultRow).toContain(badge);
+
+		const genericRow = Bun.stripANSI(
+			findRow(
+				taskToolRenderer.renderResult(
+					{
+						content: [{ type: "text", text: "" }],
+						details: detailsFor(runningProgress({ id: "PlainWorker", agent: "task" })),
+					},
+					options,
+					theme,
+				),
+				"PlainWorker",
+			),
+		);
+		expect(genericRow).not.toContain(`${theme.format.bracketLeft}task${theme.format.bracketRight}`);
+	});
+
+	it("shows the spawn count without a joined agent-type list in the header", async () => {
+		const theme = (await getThemeByName("dark"))!;
+		const details: TaskToolDetails = {
+			projectAgentsDir: null,
+			results: [],
+			totalDurationMs: 0,
+			progress: [
+				runningProgress({ index: 0, id: "ScoutProbe", agent: "scout" }),
+				runningProgress({ index: 1, id: "SonicCount", agent: "sonic" }),
+			],
+		};
+		const header = Bun.stripANSI(
+			findRow(
+				taskToolRenderer.renderResult(
+					{ content: [{ type: "text", text: "" }], details },
+					{ expanded: false, isPartial: true, spinnerFrame: 0 },
+					theme,
+				),
+				"2 agents",
+			),
+		);
+		expect(header).not.toContain("2 agents:");
+		expect(header).not.toContain("scout, sonic");
+	});
+
 	it("keeps the agent dot when shimmer is disabled", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		const settings = Settings.instance;
@@ -198,7 +279,7 @@ describe("task progress rendering", () => {
 		expect(stripped).not.toContain(theme.getSpinnerFrames("status")[0]);
 	});
 
-	it("renders the assignment markdown inside the result frame", async () => {
+	it("renders the task brief markdown inside the result frame", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		setThemeInstance(theme);
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
@@ -210,7 +291,7 @@ describe("task progress rendering", () => {
 					{ content: [{ type: "text", text: "Spawned agent BestGpt..." }], details: detailsFor(progress) },
 					options,
 					theme,
-					{ agent: "task", id: "BestGpt", assignment: "# Target\nCombine the winning patches." },
+					{ agent: "task", name: "BestGpt", task: "# Target\nCombine the winning patches." },
 				)
 				.render(120)
 				.join("\n"),
@@ -376,17 +457,17 @@ describe("task result detail-less state", () => {
 
 	it("renders a validation failure with the error glyph, not a success bullet", async () => {
 		const theme = (await getThemeByName("dark"))!;
-		// The assignment section renders markdown, which reads the active theme.
+		// The task-brief section renders markdown, which reads the active theme.
 		setThemeInstance(theme);
 		const options: RenderResultOptions = { expanded: false, isPartial: false };
 		const component = taskToolRenderer.renderResult(
 			{
-				content: [{ type: "text", text: 'Validation failed for tool "task": assignment: Invalid input' }],
+				content: [{ type: "text", text: 'Validation failed for tool "task": task: Invalid input' }],
 				isError: true,
 			},
 			options,
 			theme,
-			{ agent: "explore", assignment: "Look around." },
+			{ agent: "explore", task: "Look around." },
 		);
 		const stripped = Bun.stripANSI(component.render(120).join("\n"));
 
@@ -404,7 +485,7 @@ describe("task result detail-less state", () => {
 		const options: RenderResultOptions = { expanded: false, isPartial: false };
 		const component = taskToolRenderer.renderResult({ content: [{ type: "text", text: "done" }] }, options, theme, {
 			agent: "explore",
-			assignment: "Look around.",
+			task: "Look around.",
 		});
 		const stripped = Bun.stripANSI(component.render(120).join("\n"));
 

@@ -96,18 +96,24 @@ describe("JsRuntime global disposal", () => {
 		}
 	});
 
-	it("rejects cross-runtime mutations while another same-realm runtime is running", async () => {
+	it("defers cross-runtime setCwd while another same-realm runtime is running", async () => {
 		const before = snapshotGlobals();
 		const globals = globalThis as Record<string, unknown>;
-		const first = new JsRuntime({ initialCwd: process.cwd(), sessionId: "first-overlap" });
-		const second = new JsRuntime({ initialCwd: process.cwd(), sessionId: "second-overlap" });
+		const firstCwd = process.cwd();
+		const secondCwd = process.cwd();
+		const first = new JsRuntime({ initialCwd: firstCwd, sessionId: "first-overlap" });
+		const second = new JsRuntime({ initialCwd: secondCwd, sessionId: "second-overlap" });
 		const gate = Promise.withResolvers<void>();
 		let activeSecond: Promise<unknown> | undefined;
+		const pendingCwd = `${firstCwd}/pending-same-realm-cwd`;
 
 		try {
 			second.setRunScope({ gate: gate.promise });
 			activeSecond = second.run("await gate;", undefined, hooks);
-			expect(() => first.setCwd(process.cwd())).toThrow("another same-realm JS runtime is running");
+			// Local cwd may be stamped without stealing the active realm.
+			first.setCwd(pendingCwd);
+			expect(first.cwd).toBe(pendingCwd);
+			expect(globals.__omp_helpers__).toBe(second.helpers);
 			await first.run("1", undefined, hooks).then(
 				() => {
 					throw new Error("expected active runtime rejection");
@@ -120,14 +126,29 @@ describe("JsRuntime global disposal", () => {
 			);
 			gate.resolve();
 			await activeSecond;
-			first.setCwd(process.cwd());
+			// The deferred cwd must reach this runtime's next run WITHOUT a second
+			// setCwd: the saved __omp_session__ stack entry carries the new value.
+			expect(await first.run("__omp_session__.cwd", undefined, hooks)).toBe(pendingCwd);
+			expect(first.cwd).toBe(pendingCwd);
 			expect(globals.__omp_helpers__).toBe(first.helpers);
+			expect(globals.__omp_session__).toMatchObject({ cwd: pendingCwd });
 		} finally {
 			gate.resolve();
 			if (activeSecond) await activeSecond.catch(() => undefined);
 			delete globals.gate;
 			first.dispose();
 			second.dispose();
+			restoreGlobals(before);
+		}
+	});
+
+	it("setCwd on a disposed runtime still throws", () => {
+		const before = snapshotGlobals();
+		const runtime = new JsRuntime({ initialCwd: process.cwd(), sessionId: "disposed-setcwd" });
+		try {
+			runtime.dispose();
+			expect(() => runtime.setCwd(process.cwd())).toThrow("Cannot set cwd on a disposed JS runtime");
+		} finally {
 			restoreGlobals(before);
 		}
 	});

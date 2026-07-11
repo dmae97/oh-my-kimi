@@ -2303,7 +2303,8 @@ def test_gh_push_branch_runs_fix_and_check_before_pushing(
     # Both gates ran, and fix preceded check (both have one call recorded).
     assert fix_calls.read_text() == "called"
     assert check_calls.read_text() == "called"
-    # The formatter's diff was committed by the bot as a `style: bun run fix` commit.
+    # The formatter's diff was amended into the agent's HEAD commit — no
+    # standalone `style:` commit; subject and author are retained.
     log = subprocess.run(
         ["git", "-C", str(ws.repo_dir), "log", "--format=%an <%ae> %s", "-n", "2"],
         capture_output=True,
@@ -2311,7 +2312,17 @@ def test_gh_push_branch_runs_fix_and_check_before_pushing(
         check=True,
     )
     lines = log.stdout.strip().splitlines()
-    assert lines[0].startswith("robomp-bot <robomp-bot@example.invalid> style: bun run fix"), lines
+    assert lines[0] == "robomp-bot <robomp-bot@example.invalid> feat: follow-up", lines
+    assert lines[1] == "robomp-bot <robomp-bot@example.invalid> init", lines
+    assert (ws.repo_dir / "src.txt").read_text() == "formatted\n"
+    # HEAD's tree contains the formatter output (not just the worktree).
+    show = subprocess.run(
+        ["git", "-C", str(ws.repo_dir), "show", "HEAD:src.txt"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert show.stdout == "formatted\n"
     # And the branch ended up on the remote at the new head.
     assert result.startswith(f"pushed {ws.branch} ")
     refs = subprocess.run(
@@ -2920,10 +2931,10 @@ def test_gh_push_branch_skip_checks_still_refuses_dirty_worktree(
     assert not any(r.startswith("refs/heads/farm/") for r in refs.stdout.splitlines()), refs.stdout
 
 
-def test_gh_open_pr_runs_fix_then_check_and_commits_fixup(
+def test_gh_open_pr_runs_fix_then_check_and_amends_formatter_diff(
     db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """gh_open_pr runs `bun run fix`, commits any diff as the bot, then runs `bun check`."""
+    """gh_open_pr runs `bun run fix`, amends any diff into HEAD, then runs `bun check`."""
     import os
     import subprocess
 
@@ -3078,7 +3089,8 @@ def test_gh_open_pr_runs_fix_then_check_and_commits_fixup(
     # Both bun stages ran, and fix preceded check.
     assert fix_calls.read_text() == "called"
     assert check_calls.read_text() == "called"
-    # The formatter diff was committed by the bot as a "style:" commit.
+    # The formatter diff was amended into HEAD — subject and author retained,
+    # no standalone "style:" commit, and HEAD's tree holds the formatted file.
     log = subprocess.run(
         ["git", "-C", str(ws.repo_dir), "log", "--format=%an|%ae|%s", "-2"],
         capture_output=True,
@@ -3086,8 +3098,15 @@ def test_gh_open_pr_runs_fix_then_check_and_commits_fixup(
         check=True,
     )
     lines = log.stdout.strip().splitlines()
-    assert lines[0] == "robomp-bot|robomp-bot@example.invalid|style: bun run fix"
-    assert lines[1].endswith("|feat: initial change")
+    assert lines[0] == "robomp-bot|robomp-bot@example.invalid|feat: initial change"
+    assert lines[1].endswith("|init")
+    show = subprocess.run(
+        ["git", "-C", str(ws.repo_dir), "show", "HEAD:src.txt"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert show.stdout == "formatted\n"
     # Worktree is clean again (gate before push would have rejected otherwise).
     status = subprocess.run(
         ["git", "-C", str(ws.repo_dir), "status", "--porcelain"],
@@ -3113,8 +3132,8 @@ def test_gh_open_pr_refuses_dirty_worktree_before_fix(
 ) -> None:
     """A pre-existing uncommitted edit MUST cause gh_open_pr (and gh_push_branch)
     to refuse BEFORE `bun run fix` runs — otherwise `git add -A` after fix
-    would silently fold the unrelated edit into the `style: bun run fix`
-    commit and ship it in the PR."""
+    would silently amend the unrelated edit into the agent's HEAD commit
+    and ship it in the PR."""
     import os
     import subprocess
 
@@ -3272,14 +3291,6 @@ def test_gh_open_pr_refuses_dirty_worktree_before_fix(
         check=True,
     )
     assert "src.txt" in status.stdout
-    # No commit named "style: bun run fix" exists.
-    log = subprocess.run(
-        ["git", "-C", str(ws.repo_dir), "log", "--format=%s"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    assert "style: bun run fix" not in log.stdout
     # Origin's farm/* branch was never created — push refused before reaching the network.
     refs = subprocess.run(
         ["git", "-C", str(bare), "for-each-ref", "--format=%(refname)"],

@@ -114,6 +114,41 @@ const PROVIDER_META: Record<SearchProviderId, ProviderMeta> = {
 		label: SEARCH_PROVIDER_LABELS.duckduckgo,
 		load: async () => new (await import("./providers/duckduckgo")).DuckDuckGoProvider(),
 	},
+	google: {
+		id: "google",
+		label: SEARCH_PROVIDER_LABELS.google,
+		load: async () => new (await import("./providers/google")).GoogleProvider(),
+	},
+	bing: {
+		id: "bing",
+		label: SEARCH_PROVIDER_LABELS.bing,
+		load: async () => new (await import("./providers/bing")).BingProvider(),
+	},
+	yahoo: {
+		id: "yahoo",
+		label: SEARCH_PROVIDER_LABELS.yahoo,
+		load: async () => new (await import("./providers/yahoo")).YahooProvider(),
+	},
+	ecosia: {
+		id: "ecosia",
+		label: SEARCH_PROVIDER_LABELS.ecosia,
+		load: async () => new (await import("./providers/ecosia")).EcosiaProvider(),
+	},
+	startpage: {
+		id: "startpage",
+		label: SEARCH_PROVIDER_LABELS.startpage,
+		load: async () => new (await import("./providers/startpage")).StartpageProvider(),
+	},
+	mojeek: {
+		id: "mojeek",
+		label: SEARCH_PROVIDER_LABELS.mojeek,
+		load: async () => new (await import("./providers/mojeek")).MojeekProvider(),
+	},
+	public: {
+		id: "public",
+		label: SEARCH_PROVIDER_LABELS.public,
+		load: async () => new (await import("./providers/public")).PublicWebProvider(),
+	},
 };
 
 const instanceCache = new Map<SearchProviderId, SearchProvider>();
@@ -180,7 +215,8 @@ export function setExcludedSearchProviders(providers: readonly SearchProviderId[
 	excludedProvIds = new Set(providers);
 }
 
-function isSearchProviderExcluded(id: SearchProviderId): boolean {
+/** `true` when settings exclude `id` from web search (auto chain and the Public Web fan-out). */
+export function isSearchProviderExcluded(id: SearchProviderId): boolean {
 	return excludedProvIds.has(id);
 }
 

@@ -11,8 +11,10 @@ JsonValue: TypeAlias = JsonPrimitive | list["JsonValue"] | dict[str, "JsonValue"
 JsonObject: TypeAlias = dict[str, JsonValue]
 
 Attribution: TypeAlias = Literal["user", "agent"]
-Effort: TypeAlias = Literal["minimal", "low", "medium", "high", "xhigh"]
-ThinkingLevel: TypeAlias = Literal["off", "minimal", "low", "medium", "high", "xhigh"]
+Effort: TypeAlias = Literal["minimal", "low", "medium", "high", "xhigh", "max"]
+ThinkingLevel: TypeAlias = Literal[
+    "off", "minimal", "low", "medium", "high", "xhigh", "max"
+]
 StreamingBehavior: TypeAlias = Literal["steer", "followUp"]
 SteeringMode: TypeAlias = Literal["all", "one-at-a-time"]
 InterruptMode: TypeAlias = Literal["immediate", "wait"]
@@ -50,7 +52,7 @@ VALUE_EXTENSION_UI_METHODS: Final[frozenset[ValueExtensionUiMethod]] = frozenset
     {"select", "input", "editor"}
 )
 _EFFORT_VALUES: Final[frozenset[str]] = frozenset(
-    {"minimal", "low", "medium", "high", "xhigh"}
+    {"minimal", "low", "medium", "high", "xhigh", "max"}
 )
 _THINKING_LEVEL_VALUES: Final[frozenset[str]] = _EFFORT_VALUES | frozenset({"off"})
 _STEERING_MODE_VALUES: Final[frozenset[str]] = frozenset({"all", "one-at-a-time"})

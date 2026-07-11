@@ -130,6 +130,15 @@ type PromptTurnState = {
 	cancelRequested: boolean;
 	settled: boolean;
 	/**
+	 * Delivery of streamed assistant `error` chunks this turn (the mapper
+	 * surfaces them as `agent_message_chunk`s). Resolves `true` once at least
+	 * one error chunk reached the client — the `agent_end` error fallback in
+	 * {@link AcpAgent##flushUnreportedTurnError} awaits it and stays silent on
+	 * success, so a fallback racing an in-flight delivery can neither duplicate
+	 * the error nor drop it when delivery fails.
+	 */
+	errorTextDelivery: Promise<boolean> | undefined;
+	/**
 	 * `abort()` is in-flight (or its bounded-timeout race). `undefined` while the turn is
 	 * running normally and after cleanup completes. The turn occupies `record.promptTurn`
 	 * for as long as either `!settled` or `cleanup` is set — that combined window is the
@@ -684,6 +693,7 @@ export class AcpAgent implements Agent {
 			record.promptTurn = {
 				cancelRequested: false,
 				settled: false,
+				errorTextDelivery: undefined,
 				cleanup: undefined,
 				usageBaseline: this.#cloneUsageStatistics(record.session.sessionManager.getUsageStatistics()),
 				unsubscribe: undefined,
@@ -1200,6 +1210,10 @@ export class AcpAgent implements Agent {
 			imageDataCache.set(key, resolved);
 			return resolved;
 		};
+		const streamedAssistantError =
+			event.type === "message_update" &&
+			event.message.role === "assistant" &&
+			event.assistantMessageEvent.type === "error";
 		for (const notification of mapAgentSessionEventToAcpSessionUpdates(event, record.session.sessionId, {
 			getMessageId: message => this.#getLiveMessageId(record, message),
 			getMessageProgress: message => this.#getLiveMessageProgress(record, message),
@@ -1207,7 +1221,18 @@ export class AcpAgent implements Agent {
 			cwd: record.session.sessionManager.getCwd(),
 			resolveImageData: resolveImageDataForAcp,
 		})) {
-			await this.#connection.sessionUpdate(notification);
+			const delivery = this.#connection.sessionUpdate(notification);
+			if (streamedAssistantError) {
+				// Resolves true only once the error chunk actually reached the
+				// client — a failed delivery keeps the agent_end fallback armed.
+				const outcome = delivery.then(
+					() => true,
+					() => false,
+				);
+				const prior = promptTurn.errorTextDelivery;
+				promptTurn.errorTextDelivery = prior ? Promise.all([prior, outcome]).then(([a, b]) => a || b) : outcome;
+			}
+			await delivery;
 		}
 		if (event.type === "tool_execution_end") {
 			record.toolArgsById.delete(event.toolCallId);
@@ -1216,6 +1241,7 @@ export class AcpAgent implements Agent {
 
 		if (event.type === "agent_end") {
 			await this.#flushMissedFinalAssistantText(record, event);
+			await this.#flushUnreportedTurnError(record, event);
 			await this.#emitEndOfTurnUpdates(record);
 			await this.#waitForAcpPromptIdle(record);
 			record.liveMessageId = undefined;
@@ -1268,6 +1294,44 @@ export class AcpAgent implements Agent {
 				sessionUpdate: "agent_message_chunk",
 				content: { type: "text", text },
 				messageId: record.liveMessageId,
+			},
+		});
+	}
+
+	/**
+	 * Surface a turn-fatal provider error that never reached the client. A
+	 * request that fails before streaming any assistant events — e.g. GitHub
+	 * Copilot's `HTTP 400 model_not_supported` after retries — emits only
+	 * `agent_end` with an empty assistant message carrying `errorMessage`
+	 * (`Agent#runLoop`'s catch), so no `message_update`/`message_end` ever maps
+	 * to a session update and the client sees the turn end silently. Errors
+	 * that did stream are tracked via {@link PromptTurnState.errorTextDelivery};
+	 * the fallback awaits that delivery and re-sends only when it failed.
+	 */
+	async #flushUnreportedTurnError(
+		record: ManagedSessionRecord,
+		event: Extract<AgentSessionEvent, { type: "agent_end" }>,
+	): Promise<void> {
+		const streamedDelivery = record.promptTurn?.errorTextDelivery;
+		if (streamedDelivery && (await streamedDelivery)) {
+			return;
+		}
+		const lastAssistant = [...event.messages]
+			.reverse()
+			.find((message): message is AssistantMessage => message.role === "assistant");
+		if (lastAssistant?.stopReason !== "error") {
+			return;
+		}
+		const errorMessage = lastAssistant.errorMessage;
+		if (!errorMessage || isSilentAbort(lastAssistant)) {
+			return;
+		}
+		await this.#connection.sessionUpdate({
+			sessionId: record.session.sessionId,
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: { type: "text", text: errorMessage },
+				messageId: record.liveMessageId ?? crypto.randomUUID(),
 			},
 		});
 	}

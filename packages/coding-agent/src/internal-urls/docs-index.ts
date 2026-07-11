@@ -16,7 +16,8 @@ import * as path from "node:path";
 import { promisify } from "node:util";
 import { gunzip } from "node:zlib";
 import { Glob } from "bun";
-import docsEmbed from "./docs-index.generated.txt";
+
+const docsEmbed = process.env.PI_DOCS_EMBED ?? "";
 
 const gunzipAsync = promisify(gunzip);
 

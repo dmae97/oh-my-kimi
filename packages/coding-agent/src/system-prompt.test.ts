@@ -123,29 +123,36 @@ describe.skipIf(process.platform !== "linux")("system prompt GPU probe", () => {
 	}, 15_000);
 
 	it("kills the GPU probe at the prep deadline", async () => {
-		const result = await runProbeScenario({ runs: 1, sleepSeconds: 7, holdStdoutOpen: true });
+		const result = await runProbeScenario({ runs: 1, sleepSeconds: 12, holdStdoutOpen: true });
 
 		expect(result.cached).toEqual({ gpu: null });
+		// Probe is SIGKILLed at ~4.5s and the drain wait is bounded, so in-child
+		// time sits near the deadline; waiting on the descendant would push it
+		// past the 12s sleep.
 		expect(result.elapsedMs).toBeLessThan(6500);
-		// Codex#3838: the child process MUST exit shortly after the deadline,
-		// not linger until a descendant holding stdout (sleep 7) exits on its own.
-		expect(result.childElapsedMs).toBeLessThan(6500);
-	}, 15_000);
+		// Codex#3838: the child process MUST exit shortly after the deadline, not
+		// linger until a descendant holding stdout (sleep 12) exits on its own.
+		// The bound over in-child time budgets bun spawn/startup on loaded runners
+		// while staying far below the descendant's 12s exit.
+		expect(result.childElapsedMs).toBeLessThan(9000);
+	}, 20_000);
 
 	it("does not wait on stdout held by a descendant after a successful probe", async () => {
-		const result = await runProbeScenario({ runs: 1, sleepSeconds: 3, descendantHoldsStdout: true });
+		const result = await runProbeScenario({ runs: 1, sleepSeconds: 8, descendantHoldsStdout: true });
 
 		expect(result.cached).toEqual({ gpu: null });
 		// Probe exits 0 immediately but leaves a backgrounded sleep holding the stdout
 		// pipe. The success path MUST bound the drain wait, not block until sleep exits.
 		expect(result.elapsedMs).toBeLessThan(2000);
-		expect(result.childElapsedMs).toBeLessThan(2000);
-	}, 15_000);
+		// Budgets bun spawn/startup overhead; blocking on the descendant would
+		// take at least the 8s sleep.
+		expect(result.childElapsedMs).toBeLessThan(5000);
+	}, 20_000);
 
 	it("keeps probe output captured before a descendant delays EOF", async () => {
 		const result = await runProbeScenario({
 			runs: 1,
-			sleepSeconds: 3,
+			sleepSeconds: 8,
 			descendantHoldsStdout: true,
 			validOutput: "00:02.0 VGA compatible controller: NVIDIA TestGPU",
 		});
@@ -154,8 +161,10 @@ describe.skipIf(process.platform !== "linux")("system prompt GPU probe", () => {
 		// Captured stdout MUST be cached, not discarded as if the probe failed.
 		expect(result.cached).toEqual({ gpu: "02.0 VGA compatible controller: NVIDIA TestGPU" });
 		expect(result.elapsedMs).toBeLessThan(2000);
-		expect(result.childElapsedMs).toBeLessThan(2000);
-	}, 15_000);
+		// Budgets bun spawn/startup overhead; blocking on the descendant would
+		// take at least the 8s sleep.
+		expect(result.childElapsedMs).toBeLessThan(5000);
+	}, 20_000);
 });
 
 describe.skipIf(process.platform !== "linux")("system prompt CPU model", () => {

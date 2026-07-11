@@ -17,6 +17,7 @@ import {
 	ANTIGRAVITY_VARIANT_COLLAPSE_TABLE,
 	collapseEffortVariants,
 	collapseEffortVariantsAcrossProviders,
+	DEVIN_VARIANT_COLLAPSE_TABLE,
 	deriveThinkingPairFamilies,
 	GEMINI_CLI_VARIANT_COLLAPSE_TABLE,
 	getVariantAliasSources,
@@ -523,6 +524,45 @@ describe("collapseEffortVariantsAcrossProviders", () => {
 			"google-antigravity/gemini-3.5-flash",
 			"venice/kimi-k2",
 		]);
+	});
+});
+
+describe("Devin tier routing", () => {
+	const family = (id: string) => {
+		const found = DEVIN_VARIANT_COLLAPSE_TABLE.families.find(f => f.id === id);
+		if (!found) throw new Error(`Devin family ${id} missing`);
+		return found;
+	};
+
+	it("routes user efforts 1:1 onto per-tier siblings including max", () => {
+		const opus = family("claude-opus-4-8");
+		expect(opus.routing).toEqual({
+			[Effort.Low]: "claude-opus-4-8-low",
+			[Effort.Medium]: "claude-opus-4-8-medium",
+			[Effort.High]: "claude-opus-4-8-high",
+			[Effort.XHigh]: "claude-opus-4-8-xhigh",
+			[Effort.Max]: "claude-opus-4-8-max",
+		});
+		expect(opus.thinking.efforts).toEqual([Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max]);
+		expect(opus.thinking.requiresEffort).toBe(true);
+
+		const sol = family("gpt-5-6-sol");
+		expect(sol.routing[Effort.Max]).toBe("gpt-5-6-sol-max");
+		expect(sol.routing[Effort.Low]).toBe("gpt-5-6-sol-low");
+		expect(sol.routing.off).toBe("gpt-5-6-sol-none");
+		expect(sol.routing[Effort.Minimal]).toBeUndefined();
+	});
+
+	it("keeps families without a -max sibling on the xhigh ceiling", () => {
+		const solFast = family("gpt-5-6-sol-fast");
+		expect(solFast.thinking.efforts).toEqual([Effort.Low, Effort.Medium, Effort.High, Effort.XHigh]);
+		expect(solFast.routing[Effort.Max]).toBeUndefined();
+		expect(solFast.routing[Effort.XHigh]).toBe("gpt-5-6-sol-xhigh-priority");
+
+		const gpt55 = family("gpt-5-5");
+		expect(gpt55.thinking.efforts).toEqual([Effort.Low, Effort.Medium, Effort.High, Effort.XHigh]);
+		expect(gpt55.routing[Effort.Minimal]).toBeUndefined();
+		expect(gpt55.routing[Effort.Max]).toBeUndefined();
 	});
 });
 

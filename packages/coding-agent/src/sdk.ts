@@ -161,6 +161,7 @@ import {
 	BUILTIN_TOOLS,
 	computeEssentialBuiltinNames,
 	createTools,
+	createVibeTools,
 	type DeferredDiagnosticsEntry,
 	discoverStartupLspServers,
 	EditTool,
@@ -191,6 +192,7 @@ import {
 import { normalizeToolName, normalizeToolNames } from "./tools/builtin-names";
 import { ToolContextStore } from "./tools/context";
 import { getImageGenTools } from "./tools/image-gen";
+import { isIrcEnabled } from "./tools/irc";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
 import { queueResolveHandler } from "./tools/resolve";
 import { ttsTool } from "./tools/tts";
@@ -426,6 +428,8 @@ export interface CreateAgentSessionOptions {
 	providerSessionId?: string;
 	/** Optional provider-facing prompt cache key, distinct from request lineage. */
 	providerPromptCacheKey?: string;
+	/** Whether `providerPromptCacheKey` is caller-pinned or inherited from a full fork. */
+	providerPromptCacheKeySource?: "explicit" | "fork";
 	/** Absolute wall-clock deadline in Unix epoch milliseconds. */
 	deadline?: number;
 
@@ -1221,6 +1225,25 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			SessionManager.create(cwd, SessionManager.getDefaultSessionDir(cwd, agentDir)),
 		);
 	const providerSessionId = options.providerSessionId ?? sessionManager.getSessionId();
+	const forkCacheShapeChanged =
+		options.model !== undefined ||
+		options.modelPattern !== undefined ||
+		options.thinkingLevel !== undefined ||
+		options.systemPrompt !== undefined ||
+		options.customSystemPrompt !== undefined ||
+		options.appendSystemPrompt !== undefined ||
+		options.toolNames !== undefined ||
+		options.customTools !== undefined;
+	const inheritedPromptCacheKey = forkCacheShapeChanged
+		? undefined
+		: sessionManager.getHeader()?.providerPromptCacheKey;
+	const providerPromptCacheKey = options.providerPromptCacheKey ?? inheritedPromptCacheKey;
+	const providerPromptCacheKeySource =
+		options.providerPromptCacheKey !== undefined
+			? (options.providerPromptCacheKeySource ?? "explicit")
+			: providerPromptCacheKey !== undefined
+				? "fork"
+				: undefined;
 	// Startup model *selection* only needs to know whether auth is configured for
 	// a candidate's provider — never the resolved key bytes. Use the synchronous,
 	// side-effect-free probe (`hasConfiguredAuth`): it refreshes no OAuth tokens,
@@ -1288,7 +1311,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			for (let i = 0; i < sessionModelStrings.length; i++) {
 				const sessionModelStr = sessionModelStrings[i];
 				const parsedModel = parseModelString(sessionModelStr, {
-					allowMaxAlias: true,
+					allowMaxSuffix: true,
 					allowAutoAlias: true,
 					isLiteralModelId: (provider, id) => modelRegistry.find(provider, id) !== undefined,
 				});
@@ -1725,37 +1748,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 							}
 							applyMCPEnvironment(mcpResult);
 							logMCPLoadErrors(mcpResult.errors);
-							// `tools.discoveryMode: "auto"` was resolved against a registry that
-							// held only built-ins plus persisted placeholder names. Recompute with
-							// the real MCP tool count: a large toolset must flip discovery on
-							// BEFORE the refresh, or activateAll would dump every MCP tool into
-							// the active set with no search_tool_bm25 registered.
+							// `tools.discoveryMode: "auto"` was resolved before deferred MCP
+							// tools existed. Reconcile again before refresh so a large toolset
+							// cannot bypass discovery by arriving after first paint.
 							let discoveryEnabled = activation.mcpDiscoveryEnabled;
 							let activateAll = activation.activateAllMCPTools;
-							if (!discoveryEnabled) {
-								const nonMCPToolNames = [...toolRegistry.keys()].filter(name => !isMCPToolName(name));
-								const projectedMode = resolveEffectiveToolDiscoveryMode(
-									settings,
-									countToolsForAutoDiscovery([...nonMCPToolNames, ...mcpResult.tools.map(tool => tool.name)]),
-								);
-								if (projectedMode !== "off") {
-									effectiveDiscoveryMode = projectedMode;
-									mcpDiscoveryEnabled = true;
-									discoveryEnabled = true;
-									activateAll = false;
-									liveSession.enableMCPDiscovery();
-									if (!toolRegistry.has("search_tool_bm25")) {
-										const searchTool: Tool = new SearchToolBm25Tool(toolSession);
-										toolRegistry.set(
-											searchTool.name,
-											new ExtensionToolWrapper(wrapToolWithMetaNotice(searchTool), extensionRunner) as Tool,
-										);
-									}
-									await liveSession.setActiveToolsByName([
-										...liveSession.getActiveToolNames(),
-										"search_tool_bm25",
-									]);
-								}
+							if (
+								!discoveryEnabled &&
+								(await enableDeferredMCPDiscoveryForTools(liveSession, mcpResult.tools))
+							) {
+								discoveryEnabled = true;
+								activateAll = false;
 							}
 							await liveSession.refreshMCPTools(mcpResult.tools, { activateAll });
 							if (activation.explicitlyRequestedMCPToolNames.length > 0) {
@@ -1763,7 +1766,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 									// Discovery flipped on mid-flight: route the explicit request
 									// through discovery-aware activation so selection persists.
 									await liveSession.activateDiscoveredMCPTools(activation.explicitlyRequestedMCPToolNames);
-								} else if (!discoveryEnabled) {
+								} else if (!discoveryEnabled && !activateAll) {
 									await liveSession.setActiveToolsByName([
 										...liveSession.getActiveToolNames(),
 										...activation.explicitlyRequestedMCPToolNames,
@@ -1952,7 +1955,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			for (let i = 0; i < sessionRetryLimit; i++) {
 				const sessionModelStr = sessionModelStrings[i];
 				const parsedModel = parseModelString(sessionModelStr, {
-					allowMaxAlias: true,
+					allowMaxSuffix: true,
 					allowAutoAlias: true,
 					isLiteralModelId: (provider, id) => modelRegistry.find(provider, id) !== undefined,
 				});
@@ -2296,6 +2299,34 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 		let mcpDiscoveryEnabled = effectiveDiscoveryMode !== "off"; // back-compat: true when any discovery active
 
+		async function enableDeferredMCPDiscoveryForTools(
+			liveSession: AgentSession,
+			mcpTools: CustomTool[],
+		): Promise<boolean> {
+			if (mcpDiscoveryEnabled) return true;
+			const nonMCPToolNames = [...toolRegistry.keys()].filter(name => !isMCPToolName(name));
+			const projectedMode = resolveEffectiveToolDiscoveryMode(
+				settings,
+				countToolsForAutoDiscovery([...nonMCPToolNames, ...mcpTools.map(tool => tool.name)]),
+			);
+			if (projectedMode === "off") return false;
+
+			effectiveDiscoveryMode = projectedMode;
+			mcpDiscoveryEnabled = true;
+			liveSession.enableMCPDiscovery();
+			if (!toolRegistry.has("search_tool_bm25")) {
+				const searchTool: Tool = new SearchToolBm25Tool(toolSession);
+				toolRegistry.set(
+					searchTool.name,
+					new ExtensionToolWrapper(wrapToolWithMetaNotice(searchTool), extensionRunner) as Tool,
+				);
+			}
+			if (!liveSession.getActiveToolNames().includes("search_tool_bm25")) {
+				await liveSession.setActiveToolsByName([...liveSession.getActiveToolNames(), "search_tool_bm25"]);
+			}
+			return true;
+		}
+
 		const reloadSshTool = async (): Promise<AgentTool | null> => {
 			if (!requestedToolNameSet.has("ssh")) return null;
 			const sshTool = (await loadSshTool({
@@ -2415,11 +2446,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				eagerTasks,
 				eagerTasksAlways,
 				taskBatch: settings.get("task.batch"),
+				taskMaxConcurrency: settings.get("task.maxConcurrency"),
+				taskIrcEnabled: isIrcEnabled(settings, options.taskDepth ?? 0),
 				secretsEnabled,
 				workspaceTree: workspaceTreePromise,
 				includeWorkspaceTree,
 				memoryRootEnabled: memoryBackend.id === "local",
-				model: settings.get("includeModelInPrompt") ? getActiveModelString() : undefined,
+				model: getActiveModelString(),
+				includeModelInPrompt: settings.get("includeModelInPrompt"),
 				personality: agentKind === "sub" ? "none" : settings.get("personality"),
 				renderMermaid: settings.get("tui.renderMermaid"),
 				activeRepoContext,
@@ -2704,7 +2738,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			onPayload,
 			onResponse,
 			sessionId: providerSessionId,
-			promptCacheKey: options.providerPromptCacheKey,
+			promptCacheKey: providerPromptCacheKey,
 			deadline: options.deadline,
 			transformContext,
 			transformProviderContext,
@@ -2850,6 +2884,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			skillsSettings: settings.getGroup("skills"),
 			modelRegistry,
 			toolRegistry,
+			createVibeTools:
+				(options.taskDepth ?? 0) === 0 && !options.parentTaskPrefix
+					? () => createVibeTools(toolSession)
+					: undefined,
 			builtInToolNames: builtInRegistryToolNames,
 			transformContext,
 			transformProviderContext,
@@ -2888,6 +2926,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			agentId: resolvedAgentId,
 			agentKind,
 			providerSessionId: options.providerSessionId,
+			providerPromptCacheKeySource,
 			parentEvalSessionId: options.parentEvalSessionId,
 			advisorTools,
 			titleSystemPrompt: options.titleSystemPrompt,
@@ -3053,18 +3092,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			mcpManager.setOnToolsChanged(tools => {
 				void (async () => {
 					try {
-						await session.refreshMCPTools(
-							tools,
-							deferMCPDiscoveryForUI && !mcpDiscoveryEnabled && options.toolNames === undefined
-								? { activateAll: true }
-								: undefined,
-						);
-						if (deferMCPDiscoveryForUI && !mcpDiscoveryEnabled && explicitlyRequestedMCPToolNames.length > 0) {
-							await session.setActiveToolsByName([
-								...session.getActiveToolNames(),
-								...explicitlyRequestedMCPToolNames,
-							]);
+						let activateAll = deferMCPDiscoveryForUI && !mcpDiscoveryEnabled;
+						if (activateAll && (await enableDeferredMCPDiscoveryForTools(session, tools))) {
+							activateAll = false;
 						}
+						await session.refreshMCPTools(tools, activateAll ? { activateAll: true } : undefined);
 					} catch (error) {
 						logger.warn("MCP tool refresh failed", {
 							error: error instanceof Error ? error.message : String(error),
@@ -3106,7 +3138,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		startDeferredMCPDiscovery?.(session, {
 			mcpDiscoveryEnabled,
 			explicitlyRequestedMCPToolNames,
-			activateAllMCPTools: !mcpDiscoveryEnabled && options.toolNames === undefined,
+			activateAllMCPTools: !mcpDiscoveryEnabled,
 		});
 
 		return {

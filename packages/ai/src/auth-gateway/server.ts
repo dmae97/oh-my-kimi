@@ -112,8 +112,8 @@ function deriveSessionId(modelId: string, context: Context): string {
 		parts.push(JSON.stringify({ role: first.role, content: first.content }));
 	}
 	const seed = parts.join("\u0000");
-	// The 36-char UUID flows through unchanged: Codex's
-	// `normalizeOpenAIResponsesPromptCacheKey` accepts ≤64 chars verbatim.
+	// The 36-char UUID flows through unchanged:
+	// `normalizeOpenAIPromptCacheKey` accepts ≤64 chars verbatim.
 	return deterministicUuid(seed);
 }
 

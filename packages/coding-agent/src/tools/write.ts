@@ -20,6 +20,7 @@ import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { InternalUrlRouter } from "../internal-urls";
 import { parseInternalUrl } from "../internal-urls/parse";
 import { createLspWritethrough, type FileDiagnosticsResult, type WritethroughCallback, writethroughNoop } from "../lsp";
+import { DeferredDiagnostics } from "../lsp/deferred-diagnostics";
 import { getDiagnosticsLedger } from "../lsp/diagnostics-ledger";
 import { getLanguageFromPath, highlightCode, type Theme } from "../modes/theme/theme";
 import writeDescription from "../prompts/tools/write.md" with { type: "text" };
@@ -80,6 +81,30 @@ import { toolResult } from "./tool-result";
 
 const LOOSE_HASHLINE_HEADER_RE = /^\s*\[[^#\r\n]+#[^ \t\r\n]*\]\s*$/;
 const EXECUTABLE_NOTICE = "[Notice: Made executable via chmod +x]";
+
+const BULK_DIRECTIVE_RE = /^#?(\d+)\s*[:=]\s*(@ours|@theirs|@base|@both)$/;
+
+/**
+ * Parse `conflict://*` per-id directive content: every non-empty line must be
+ * `<id>: @side` (also accepted: `#<id> = @side`). Returns `null` when the
+ * content is not directive-shaped (→ uniform bulk mode); throws on duplicate
+ * ids so a typo never silently drops a resolution.
+ */
+function parseBulkDirectives(content: string): Map<number, string> | null {
+	const map = new Map<number, string>();
+	for (const raw of content.split("\n")) {
+		const line = raw.trim();
+		if (line.length === 0) continue;
+		const match = line.match(BULK_DIRECTIVE_RE);
+		if (!match) return null;
+		const id = Number.parseInt(match[1], 10);
+		if (map.has(id)) {
+			throw new ToolError(`Bulk directive lists conflict #${id} twice — each id may appear once.`);
+		}
+		map.set(id, match[2]);
+	}
+	return map.size > 0 ? map : null;
+}
 
 const writeSchema = type({
 	path: type("string").describe("file path"),
@@ -323,12 +348,15 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 	}
 
 	readonly #writethrough: WritethroughCallback;
+	readonly #deferredDiagnostics: DeferredDiagnostics | undefined;
 
 	constructor(private readonly session: ToolSession) {
 		const enableLsp = session.enableLsp ?? true;
 		const enableFormat = enableLsp && session.settings.get("lsp.formatOnWrite");
 		const enableDiagnostics = enableLsp && session.settings.get("lsp.diagnosticsOnWrite");
 		const dedup = enableDiagnostics && session.settings.get("lsp.diagnosticsDeduplicate");
+		this.#deferredDiagnostics =
+			enableDiagnostics && session.queueDeferredDiagnostics ? new DeferredDiagnostics(session, dedup) : undefined;
 		this.#writethrough = enableLsp
 			? createLspWritethrough(session.cwd, {
 					enableFormat,
@@ -587,7 +615,8 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 
 		const expanded = expandContentTokens(replacementContent, entry);
 		const originalText = await Bun.file(absolutePath).text();
-		const newContent = spliceConflict(originalText, entry, expanded);
+		const splice = spliceConflict(originalText, entry, expanded);
+		const newContent = splice.text;
 
 		await writethroughNoop(absolutePath, newContent, signal);
 		invalidateFsScanAfterWrite(absolutePath);
@@ -621,6 +650,10 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		let resultText = header ? `${header}\n${summary}` : summary;
 		if (stripped) {
 			resultText += `\nNote: auto-stripped hashline display prefixes from content before writing.`;
+		}
+		const echoTrimmed = splice.trimmedLeading + splice.trimmedTrailing;
+		if (echoTrimmed > 0) {
+			resultText += `\nNote: dropped ${echoTrimmed} content line(s) that duplicated the code adjacent to the conflict region — writes replace only the marker block; surrounding lines stay in place.`;
 		}
 
 		return {
@@ -667,6 +700,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		replacementContent: string,
 		stripped: boolean,
 		signal: AbortSignal | undefined,
+		rawContent: string = replacementContent,
 	): Promise<AgentToolResult<WriteToolDetails>> {
 		const history = getConflictHistory(this.session);
 		const allEntries = history.entries();
@@ -676,8 +710,28 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			);
 		}
 
+		// Per-id directive mode: content made solely of `<id>: @side` lines
+		// resolves each listed conflict with that side in one call. Ideal for
+		// merge-hell files where dozens of pick-one blocks each need their own
+		// winner — one call instead of one write per conflict. Parsed from the
+		// PRE-strip content: hashline prefix stripping would otherwise eat the
+		// `<id>: ` heads as echoed line numbers.
+		const directives = parseBulkDirectives(rawContent) ?? parseBulkDirectives(replacementContent);
+		if (directives) {
+			const known = new Set(allEntries.map(entry => entry.id));
+			const unknown = [...directives.keys()].filter(id => !known.has(id));
+			if (unknown.length > 0) {
+				throw new ToolError(
+					`Bulk directive references unknown conflict id(s) ${unknown.map(id => `#${id}`).join(", ")}. Currently registered: ${allEntries.map(e => `#${e.id}`).join(", ")}.`,
+				);
+			}
+		}
+		const selectedEntries = directives ? allEntries.filter(entry => directives.has(entry.id)) : allEntries;
+		const contentFor = (entry: ConflictEntry): string =>
+			directives ? (directives.get(entry.id) as string) : replacementContent;
+
 		const byFile = new Map<string, ConflictEntry[]>();
-		for (const entry of allEntries) {
+		for (const entry of selectedEntries) {
 			const bucket = byFile.get(entry.absolutePath) ?? [];
 			bucket.push(entry);
 			byFile.set(entry.absolutePath, bucket);
@@ -686,6 +740,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		const succeededFiles: { displayPath: string; count: number; header?: string }[] = [];
 		const failedFiles: { displayPath: string; count: number; error: string }[] = [];
 		let totalResolvedIds = 0;
+		let totalEchoTrimmed = 0;
 
 		for (const [absolutePath, fileEntries] of byFile) {
 			const sample = fileEntries[0]!;
@@ -716,8 +771,10 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			}
 			for (const entry of fileEntries) {
 				try {
-					const expanded = expandContentTokens(replacementContent, entry);
-					text = spliceConflict(text, entry, expanded);
+					const expanded = expandContentTokens(contentFor(entry), entry);
+					const splice = spliceConflict(text, entry, expanded);
+					text = splice.text;
+					totalEchoTrimmed += splice.trimmedLeading + splice.trimmedTrailing;
 					resolvedEntries.push(entry);
 				} catch (error) {
 					// A locate-miss for a region an earlier entry already spliced
@@ -762,6 +819,17 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				summaryLines.push(`  ${file.displayPath}: ${file.count} ${conflictWord(file.count)}`);
 			}
 		}
+		if (directives && selectedEntries.length < allEntries.length) {
+			const remaining = allEntries.filter(entry => !directives.has(entry.id)).map(entry => `#${entry.id}`);
+			summaryLines.push(
+				`Directive mode: ${remaining.length} unlisted ${conflictWord(remaining.length)} still registered (${remaining.join(", ")}).`,
+			);
+		}
+		if (totalEchoTrimmed > 0) {
+			summaryLines.push(
+				`Note: dropped ${totalEchoTrimmed} content line(s) that duplicated code adjacent to conflict regions — writes replace only the marker block; surrounding lines stay in place.`,
+			);
+		}
 		if (failedFiles.length > 0) {
 			summaryLines.push(
 				`Failed to resolve ${failedFiles.length} ${fileWord(failedFiles.length)} — registered entries left intact for retry:`,
@@ -777,7 +845,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			summaryLines.push("Snapshots:");
 			for (const header of headerLines) summaryLines.push(`  ${header}`);
 		}
-		if (stripped) {
+		if (stripped && !directives) {
 			summaryLines.push("Note: auto-stripped hashline display prefixes from content before writing.");
 		}
 		const resultText = summaryLines.join("\n");
@@ -845,7 +913,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				emitWriteProgress(onUpdate, cleanContent, path);
 				const result =
 					conflictUri.id === "*"
-						? await this.#resolveAllConflicts(cleanContent, stripped, signal)
+						? await this.#resolveAllConflicts(cleanContent, stripped, signal, content)
 						: await this.#resolveSingleConflictById(conflictUri.id, cleanContent, stripped, signal);
 				if (conflictUri.recoveredPrefix !== undefined) {
 					appendNoteToResult(
@@ -931,9 +999,18 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				};
 			}
 
-			const diagnostics = await this.#writethrough(absolutePath, cleanContent, signal, undefined, batchRequest);
+			const diagnostics = await this.#writethrough(
+				absolutePath,
+				cleanContent,
+				signal,
+				undefined,
+				batchRequest,
+				dst => this.#deferredDiagnostics?.begin(dst),
+			);
 			invalidateFsScanAfterWrite(absolutePath);
-			this.session.bumpFileMutationVersion?.(absolutePath);
+			if (!this.#deferredDiagnostics || batchRequest?.flush === false) {
+				this.session.bumpFileMutationVersion?.(absolutePath);
+			}
 			const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, cleanContent);
 
 			const header = maybeWriteSnapshotHeader(this.session, absolutePath, cleanContent);

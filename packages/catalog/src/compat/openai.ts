@@ -71,31 +71,11 @@ const DSML_HEALING_PROVIDERS = new Set([
 	"openrouter",
 ]);
 
-/**
- * Ollama's OpenAI-compatible `reasoning.effort` only accepts
- * `high|medium|low|max|none`; OMP's `minimal`/`xhigh` levels make the server
- * reject the turn with HTTP 400 `invalid reasoning value`. Map the two
- * unsupported levels onto the closest accepted ones. Stamped in the compat
- * builder (not only at discovery) so stale-cached and custom `ollama`-provider
- * specs are backfilled on every `buildModel`, not just on a fresh
- * `omp models refresh`. Custom OpenAI-compatible providers pointed at a local
- * Ollama port under a different provider id are not covered — they must set
- * `compat.reasoningEffortMap` themselves.
- */
-const OLLAMA_REASONING_EFFORT_MAP: ResolvedOpenAISharedCompat["reasoningEffortMap"] = { minimal: "low", xhigh: "max" };
-
-/**
- * Merge the Ollama default effort map under any explicit overrides (overrides
- * win). No-op off the local `ollama` provider or for non-reasoning models.
- */
-function mergeOllamaReasoningEffortMap(
-	compat: ResolvedOpenAISharedCompat,
-	provider: string,
-	reasoning: boolean | undefined,
-): void {
-	if (provider !== "ollama" || !reasoning) return;
-	compat.reasoningEffortMap = { ...OLLAMA_REASONING_EFFORT_MAP, ...compat.reasoningEffortMap };
-}
+// Ollama's OpenAI-compatible `reasoning.effort` accepts `high|medium|low|max|none`;
+// `ollama`-provider reasoning models carry the wire-exact `low..max` effort
+// ladder (see getModelDefinedEfforts), so no compat-level remapping is needed.
+// Custom OpenAI-compatible providers pointed at a local Ollama port under a
+// different provider id must set `compat.reasoningEffortMap` themselves.
 
 function resolveReasoningDisableMode(
 	thinkingFormat: ResolvedOpenAISharedCompat["thinkingFormat"],
@@ -541,7 +521,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 			MINIMAX_PROVIDER_OR_ID_PATTERN.test(provider) || MINIMAX_PROVIDER_OR_ID_PATTERN.test(spec.id),
 		emptyLengthFinishIsContextError: provider === "ollama",
 		usesOpenAIToolCallIdLimit: provider === "openai",
-		promptCacheSessionHeader: undefined,
+		promptCacheSessionHeader: isGrok ? "x-grok-conv-id" : undefined,
 		dropThinkingWhenReasoningEffort: provider === "fireworks",
 	};
 
@@ -554,7 +534,6 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 	if (spec.compat?.omitReasoningEffort === undefined && !compat.supportsReasoningEffort) {
 		compat.omitReasoningEffort = true;
 	}
-	mergeOllamaReasoningEffortMap(compat, provider, spec.reasoning);
 	mergeMimoReasoningEffortMap(compat, isMimoReasoningEffortModel);
 
 	const whenThinkingPolicy =
@@ -568,7 +547,6 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		if (whenThinkingPolicy.omitReasoningEffort === undefined && !variant.supportsReasoningEffort) {
 			variant.omitReasoningEffort = true;
 		}
-		mergeOllamaReasoningEffortMap(variant, provider, spec.reasoning);
 		mergeMimoReasoningEffortMap(variant, isMimoReasoningEffortModel);
 		compat.whenThinking = variant;
 	}
@@ -617,12 +595,13 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 		// Azure OpenAI and GitHub Copilot Responses paths require tool results
 		// to strictly match prior tool calls when building Responses inputs.
 		strictResponsesPairing: isAzure || spec.provider === "github-copilot",
-		// GitHub Copilot's Responses endpoint rejects the `detail: "original"`
-		// image hint with a 400; every other host preserves native-resolution
-		// frames (snapcompact relies on `original`). Detect Copilot by provider id
-		// or base-URL host (mirroring the Anthropic compat builder) so a model
-		// pointed at the Copilot host under a different provider id still clamps.
-		supportsImageDetailOriginal: !modelMatchesHost({ provider: spec.provider, baseUrl }, "githubCopilot"),
+		// GitHub Copilot and xAI OAuth reject `detail: "original"` (400 / 422).
+		// Every other host preserves native-resolution frames (snapcompact relies
+		// on `original`). Detect Copilot by provider id or base-URL host so a
+		// model pointed at the Copilot host under a different provider id still
+		// clamps; xai-oauth is provider-id only (same host family as paid `xai`).
+		supportsImageDetailOriginal:
+			spec.provider !== "xai-oauth" && !modelMatchesHost({ provider: spec.provider, baseUrl }, "githubCopilot"),
 		reasoningEffortMap: {},
 		supportsReasoningParams: true,
 		thinkingFormat,
@@ -678,7 +657,6 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 	if (spec.compat?.omitReasoningEffort === undefined && !compat.supportsReasoningEffort) {
 		compat.omitReasoningEffort = true;
 	}
-	mergeOllamaReasoningEffortMap(compat, spec.provider, spec.reasoning);
 	return compat;
 }
 

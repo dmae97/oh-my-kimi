@@ -20,12 +20,7 @@ import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import "@oh-my-pi/pi-coding-agent/tools/yield";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 
-const TEST_TASK: TaskParams = {
-	agent: "task",
-	id: "CheckLsp",
-	description: "Check LSP availability",
-	assignment: "Inspect LSP tools.",
-};
+const TEST_TASK: TaskParams = { agent: "task", name: "CheckLsp", task: "Inspect LSP tools." };
 
 function createAssistantStopMessage(text: string): AssistantMessage {
 	return {
