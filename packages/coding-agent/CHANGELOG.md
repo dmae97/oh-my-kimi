@@ -42,6 +42,9 @@
 ### Removed
 
 - Removed the bundled plan subagent from available task agents.
+### Fixed
+
+- Fixed advisor config preserving an explicit empty tool list so `/advisor config` can disable all advisor tools. ([#5155](https://github.com/can1357/oh-my-pi/issues/5155))
 
 ## [16.4.2] - 2026-07-10
 
