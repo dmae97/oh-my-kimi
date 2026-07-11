@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed rpc-ui extension UI responses deadlocking login and session lifecycle commands while an active command awaited the same response. ([#5153](https://github.com/can1357/oh-my-pi/issues/5153))
+
 ## [16.4.2] - 2026-07-10
 
 ### Fixed
