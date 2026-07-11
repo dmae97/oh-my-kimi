@@ -103,10 +103,13 @@ export function quarantineAdvisorUnsafeOutput(
 ): string | undefined {
 	const reasons: string[] = [];
 	const unavailableToolNames = new Set<string>();
-	const textParts: string[] = [];
+	const generatedParts: string[] = [];
 	for (const block of message.content) {
 		if (block.type === "toolCall" && !availableToolNames.has(block.name)) unavailableToolNames.add(block.name);
-		if (block.type === "text") textParts.push(block.text);
+		if (block.type === "toolCall" && block.name === "advise" && typeof block.arguments.note === "string") {
+			generatedParts.push(block.arguments.note);
+		}
+		if (block.type === "text") generatedParts.push(block.text);
 	}
 	if (unavailableToolNames.size > 0) {
 		const names = [...unavailableToolNames].sort();
@@ -114,11 +117,11 @@ export function quarantineAdvisorUnsafeOutput(
 		reasons.push(`requested unavailable ${toolLabel} ${names.join(", ")}`);
 	}
 
-	const text = textParts.join("\n");
-	if (text) {
+	const generatedText = generatedParts.join("\n");
+	if (generatedText) {
 		const labels: string[] = [];
 		for (const hazard of ADVISOR_OUTPUT_ONLY_HAZARDS) {
-			if (hazard.pattern.test(text) && !hazard.pattern.test(sourceText)) labels.push(hazard.label);
+			if (hazard.pattern.test(generatedText) && !hazard.pattern.test(sourceText)) labels.push(hazard.label);
 		}
 		if (labels.includes("destructive shell command") || labels.length >= 3) {
 			reasons.push(`generated output-only destructive directives: ${labels.join(", ")}`);
