@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the Windows binary exiting silently without running the CLI (which also made `omp update` roll back with "could not verify updated version"): `Bun.build`-API compiled Windows executables report `import.meta.main === false`, so the entry dispatch in `cli.ts` never ran. The dispatch now also honors the compile-time `PI_COMPILED` marker.
+
 ## [16.4.3] - 2026-07-11
 
 ### Added
