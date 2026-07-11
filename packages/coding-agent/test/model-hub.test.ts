@@ -1,0 +1,508 @@
+import { afterEach, beforeAll, describe, expect, test, vi } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type { Model } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import {
+	type ModelHubCallbacks,
+	ModelHubComponent,
+	type ModelHubOptions,
+	resetProviderAutoRefreshGuard,
+} from "@oh-my-pi/pi-coding-agent/modes/components/model-hub";
+import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { AUTO_THINKING } from "@oh-my-pi/pi-coding-agent/thinking";
+import type { TUI } from "@oh-my-pi/pi-tui";
+
+function normalize(lines: readonly string[]): string {
+	return stripVTControlCharacters(lines.join("\n")).replace(/\s+/g, " ").trim();
+}
+
+/** The footer row (hint line or an active chip strip) of a rendered frame. */
+function footerLine(lines: readonly string[]): string {
+	return stripVTControlCharacters(lines[lines.length - 2] ?? "");
+}
+
+function makeModel(provider: string, id: string, contextWindow = 128_000): Model {
+	return buildModel({
+		id,
+		name: id,
+		api: "ollama-chat",
+		provider,
+		baseUrl: "https://example.com",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow,
+		maxTokens: 1024,
+	});
+}
+
+let testTheme = await getThemeByName("dark");
+
+function installTestTheme(): void {
+	if (!testTheme) {
+		throw new Error("Failed to load dark theme for ModelHub tests");
+	}
+	setThemeInstance(testTheme);
+}
+
+interface RegistryOverrides {
+	refresh?: (mode: string) => Promise<void>;
+	refreshProvider?: (providerId: string, mode: string) => Promise<void>;
+	getAvailable?: () => Model[];
+	getAll?: () => Model[];
+	getDiscoverableProviders?: () => string[];
+	getProviderDiscoveryState?: (providerId: string) => unknown;
+}
+
+function makeRegistry(models: () => Model[], overrides: RegistryOverrides = {}): ModelRegistry {
+	return {
+		refresh: overrides.refresh ?? (async () => {}),
+		refreshProvider: overrides.refreshProvider ?? (async () => {}),
+		getError: () => undefined,
+		getAvailable: overrides.getAvailable ?? models,
+		getAll: overrides.getAll ?? models,
+		getDiscoverableProviders: overrides.getDiscoverableProviders ?? (() => []),
+		getProviderDiscoveryState: overrides.getProviderDiscoveryState ?? (() => undefined),
+		authStorage: { hasAuth: () => false },
+	} as unknown as ModelRegistry;
+}
+
+interface HubHarness {
+	hub: ModelHubComponent;
+	onAssign: ReturnType<typeof vi.fn>;
+	onUnassign: ReturnType<typeof vi.fn>;
+	onPick: ReturnType<typeof vi.fn>;
+	onLoginRequest: ReturnType<typeof vi.fn>;
+	onCancel: ReturnType<typeof vi.fn>;
+}
+
+const openHubs: ModelHubComponent[] = [];
+
+function createHub(options: {
+	models: Model[] | (() => Model[]);
+	scoped?: boolean;
+	settings?: Settings;
+	registry?: RegistryOverrides;
+	hub?: ModelHubOptions;
+	callbacks?: Partial<ModelHubCallbacks>;
+}): HubHarness {
+	installTestTheme();
+	const modelsFn = typeof options.models === "function" ? options.models : () => options.models as Model[];
+	const settings = options.settings ?? Settings.isolated({});
+	const registry = makeRegistry(modelsFn, options.registry);
+	const ui = { requestRender: vi.fn(), terminal: { rows: 40 } } as unknown as TUI;
+	const onAssign = vi.fn();
+	const onUnassign = vi.fn();
+	const onPick = vi.fn();
+	const onLoginRequest = vi.fn();
+	const onCancel = vi.fn();
+	const hub = new ModelHubComponent(
+		ui,
+		settings,
+		registry,
+		options.scoped ? modelsFn().map(model => ({ model })) : [],
+		{
+			onAssign: options.callbacks?.onAssign ?? onAssign,
+			onUnassign: options.callbacks?.onUnassign ?? onUnassign,
+			onPick: options.callbacks?.onPick ?? onPick,
+			onLoginRequest: options.callbacks?.onLoginRequest ?? onLoginRequest,
+			onCancel: options.callbacks?.onCancel ?? onCancel,
+		},
+		options.hub,
+	);
+	openHubs.push(hub);
+	return { hub, onAssign, onUnassign, onPick, onLoginRequest, onCancel };
+}
+
+const DOWN = "\x1b[B";
+const UP = "\x1b[A";
+const LEFT = "\x1b[D";
+
+describe("ModelHub", () => {
+	beforeAll(async () => {
+		testTheme = await getThemeByName("dark");
+		if (!testTheme) {
+			throw new Error("Failed to load dark theme for ModelHub tests");
+		}
+	});
+
+	afterEach(() => {
+		resetProviderAutoRefreshGuard();
+		for (const hub of openHubs.splice(0)) {
+			hub.dispose();
+		}
+	});
+
+	describe("role chips and roles view", () => {
+		test("shows configured role chips with thinking glyphs, including custom roles", () => {
+			const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+			if (!model) throw new Error("Expected bundled model anthropic/claude-sonnet-4-5");
+			const settings = Settings.isolated({
+				cycleOrder: ["smol", "custom-fast", "default"],
+				modelRoles: {
+					default: `${model.provider}/${model.id}`,
+					"custom-fast": `${model.provider}/${model.id}:low`,
+					smol: `${model.provider}/${model.id}`,
+				},
+			});
+			const { hub } = createHub({ models: [model], scoped: true, settings });
+			installTestTheme();
+
+			const rendered = normalize(hub.render(220));
+			expect(rendered).toContain("●default");
+			expect(rendered).toContain("●custom-fast");
+			// Explicit :low suffix surfaces as the low thinking glyph on the chip.
+			expect(rendered).toContain("◔");
+			expect(rendered).toContain("●smol");
+		});
+
+		test("renders hollow chips for auto-selected role fallbacks", () => {
+			const settings = Settings.isolated({});
+			const haiku = makeModel("test", "claude-haiku-4.5");
+			const codex = makeModel("test", "gpt-5.1-codex");
+			const { hub } = createHub({ models: [codex, haiku], scoped: true, settings });
+			installTestTheme();
+
+			const rendered = normalize(hub.render(220));
+			// No roles configured: auto-selection still tags the small/reasoning
+			// candidates (smol → haiku, slow → codex), rendered hollow.
+			expect(rendered).toContain("○smol");
+			expect(rendered).toContain("○slow");
+			expect(rendered).not.toContain("●smol");
+		});
+
+		test("roles view reflects auto thinking from defaultThinkingLevel and :auto suffixes", () => {
+			const model = getBundledModel("openai", "gpt-5.5");
+			if (!model) throw new Error("Expected bundled model openai/gpt-5.5");
+			const settings = Settings.isolated({
+				defaultThinkingLevel: AUTO_THINKING,
+				modelRoles: {
+					default: `${model.provider}/${model.id}`,
+					smol: `${model.provider}/${model.id}:auto`,
+				},
+			});
+			const { hub } = createHub({ models: [model], scoped: true, settings });
+			installTestTheme();
+
+			hub.handleInput(UP); // All models → Roles
+			const lines = hub.render(220).map(line => stripVTControlCharacters(line));
+			const defaultRow = lines.find(line => line.includes("DEFAULT"));
+			const smolRow = lines.find(line => line.includes("SMOL"));
+			expect(defaultRow).toContain("auto");
+			expect(defaultRow).not.toContain("inherit");
+			expect(smolRow).toContain("auto");
+		});
+
+		test("x clears a configured role back to auto-selection", () => {
+			const model = makeModel("test", "worker-model");
+			const settings = Settings.isolated({
+				modelRoles: { smol: "test/worker-model" },
+			});
+			const { hub } = createHub({
+				models: [model],
+				scoped: true,
+				settings,
+				callbacks: {
+					// Emulate the controller: clearing deletes the persisted role.
+					onUnassign: role => settings.setModelRole(role, undefined),
+				},
+			});
+			installTestTheme();
+
+			hub.handleInput(UP); // Roles view
+			hub.handleInput(DOWN); // default → smol row
+			hub.handleInput("x");
+
+			expect(settings.getModelRole("smol")).toBeUndefined();
+			const lines = hub.render(220).map(line => stripVTControlCharacters(line));
+			const smolRow = lines.find(line => line.includes("SMOL"));
+			// No auto candidate resolves for this synthetic model, so the row
+			// reads as unassigned instead of keeping the cleared value.
+			expect(smolRow).not.toContain("worker-model");
+			expect(smolRow).toContain("—");
+		});
+	});
+
+	describe("assignment strips", () => {
+		test("Enter opens the role strip; assigning fires onAssign and opens the thinking strip", () => {
+			const model = getBundledModel("openai", "gpt-5.5");
+			if (!model) throw new Error("Expected bundled model openai/gpt-5.5");
+			const { hub, onAssign } = createHub({ models: [model], scoped: true });
+			installTestTheme();
+
+			hub.handleInput("\n");
+			const strip = footerLine(hub.render(220));
+			expect(strip).toContain("default");
+			expect(strip).toContain("retry-fallback");
+
+			hub.handleInput("\n"); // assign to default (first chip)
+			expect(onAssign).toHaveBeenCalledTimes(1);
+			const call = onAssign.mock.calls[0];
+			expect(call?.[0]).toBe(model);
+			expect(call?.[1]).toBe("default");
+			expect(call?.[2]).toBe(ThinkingLevel.Inherit);
+			expect(call?.[3]).toBe("openai/gpt-5.5");
+			expect(call?.[4]).toBe("modelRole");
+
+			// The thinking strip follows immediately, scoped to the model's
+			// real ladder: gpt-5.5 tops out at xhigh — no invented max tier.
+			const thinking = footerLine(hub.render(220));
+			expect(thinking).toContain("inherit");
+			expect(thinking).toContain("xhigh");
+			expect(thinking).not.toContain("max");
+		});
+
+		test("renders max as a real final tier on max-capable models (gpt-5.6)", () => {
+			const model = getBundledModel("openai", "gpt-5.6");
+			if (!model) throw new Error("Expected bundled model openai/gpt-5.6");
+			const { hub } = createHub({ models: [model], scoped: true });
+			installTestTheme();
+
+			hub.handleInput("\n");
+			hub.handleInput("\n");
+			const thinking = footerLine(hub.render(220));
+			expect(thinking).toContain("xhigh");
+			expect(thinking).toContain("max");
+		});
+
+		test("Enter on a chip already holding this model unassigns it", () => {
+			const model = makeModel("test", "toggled-model");
+			const settings = Settings.isolated({ modelRoles: { smol: "test/toggled-model" } });
+			const { hub, onAssign, onUnassign } = createHub({ models: [model], scoped: true, settings });
+			installTestTheme();
+
+			hub.handleInput("\n"); // role strip
+			hub.handleInput(DOWN); // default → smol chip (down moves right)
+			hub.handleInput("\n");
+
+			expect(onUnassign).toHaveBeenCalledWith("smol");
+			expect(onAssign).not.toHaveBeenCalled();
+			// Toggle closes the strip without a thinking step.
+			expect(footerLine(hub.render(220))).not.toContain("inherit");
+		});
+
+		test("retry-fallback chip fires the retryFallback action without a thinking strip", () => {
+			const model = makeModel("test", "retry-fallback-model");
+			const { hub, onAssign } = createHub({ models: [model], scoped: true });
+			installTestTheme();
+
+			hub.handleInput("\n");
+			hub.handleInput(LEFT); // wraps to the trailing retry-fallback chip
+			hub.handleInput("\n");
+
+			expect(onAssign).toHaveBeenCalledTimes(1);
+			const call = onAssign.mock.calls[0];
+			expect(call?.[1]).toBe("default");
+			expect(call?.[4]).toBe("retryFallback");
+			expect(footerLine(hub.render(220))).not.toContain("inherit");
+		});
+	});
+
+	describe("pick mode", () => {
+		test("disables models below the current context size and picks the first enabled one", () => {
+			const small = makeModel("test", "a-small", 4096);
+			const large = makeModel("test", "b-large", 128_000);
+			const { hub, onPick } = createHub({
+				models: [small, large],
+				scoped: true,
+				hub: { mode: "pick", currentContextTokens: 6000 },
+			});
+			installTestTheme();
+
+			const rendered = normalize(hub.render(220));
+			expect(rendered).toContain("a-small");
+			expect(rendered).toContain("context>4.1k");
+			expect(rendered).toContain("Session-only switch");
+
+			hub.handleInput("\n");
+			expect(onPick).toHaveBeenCalledTimes(1);
+			expect(onPick.mock.calls[0]?.[0]).toBe(large);
+		});
+
+		test("uses cached models for Enter while the offline refresh is still pending", () => {
+			const cached = makeModel("test", "cached-fast");
+			const refreshGate = Promise.withResolvers<void>();
+			const refresh = vi.fn(() => refreshGate.promise);
+			const { hub, onPick } = createHub({
+				models: [cached],
+				registry: { refresh },
+				hub: { mode: "pick" },
+			});
+			installTestTheme();
+
+			hub.handleInput("\n");
+			expect(onPick).toHaveBeenCalledTimes(1);
+			expect(onPick.mock.calls[0]?.[0]).toBe(cached);
+			expect(refresh).toHaveBeenCalledTimes(1);
+			refreshGate.resolve();
+		});
+
+		test("keeps the highlighted model when a background refresh reorders the list", async () => {
+			const modelBb = makeModel("test", "bb-model");
+			const modelCc = makeModel("test", "cc-model");
+			const modelAa = makeModel("test", "aa-model");
+			let available = [modelBb, modelCc];
+			const refreshGate = Promise.withResolvers<void>();
+			const { hub, onPick } = createHub({
+				models: () => available,
+				registry: { refresh: () => refreshGate.promise },
+				hub: { mode: "pick" },
+			});
+			installTestTheme();
+
+			hub.handleInput("\t"); // list mode
+			hub.handleInput(DOWN); // highlight cc-model
+			available = [modelAa, modelBb, modelCc];
+			refreshGate.resolve();
+			await Bun.sleep(0);
+
+			hub.handleInput("\n");
+			expect(onPick.mock.calls[0]?.[0]?.id).toBe("cc-model");
+		});
+	});
+
+	describe("provider scopes and search", () => {
+		test("search inside a provider scope keeps that provider's model (#4522)", () => {
+			const openrouterGlm = makeModel("openrouter", "z-ai/glm-5.2");
+			const customGlm = makeModel("custom-provider", "glm-5.2");
+			const { hub, onPick } = createHub({
+				models: [openrouterGlm, customGlm],
+				hub: { mode: "pick" },
+			});
+			installTestTheme();
+
+			// Scope-hop: All models → custom-provider → openrouter.
+			hub.handleInput(DOWN);
+			hub.handleInput(DOWN);
+			expect(normalize(hub.render(220))).toContain("openrouter ·");
+
+			for (const ch of "glm-5.2") hub.handleInput(ch);
+			hub.handleInput("\n");
+
+			expect(onPick).toHaveBeenCalledTimes(1);
+			expect(onPick.mock.calls[0]?.[0]?.provider).toBe("openrouter");
+			expect(onPick.mock.calls[0]?.[0]?.id).toBe("z-ai/glm-5.2");
+		});
+
+		test("search on All models spans every provider", () => {
+			const openrouterGlm = makeModel("openrouter", "z-ai/glm-5.2");
+			const customGlm = makeModel("custom-provider", "glm-5.2");
+			const { hub } = createHub({ models: [openrouterGlm, customGlm] });
+			installTestTheme();
+
+			for (const ch of "glm") hub.handleInput(ch);
+			const rendered = normalize(hub.render(220));
+			expect(rendered).toContain("openrouter/z-ai/glm-5.2");
+			expect(rendered).toContain("custom-provider/glm-5.2");
+		});
+
+		test("a provider scope that loses every match falls back to All models", () => {
+			const openrouterGlm = makeModel("openrouter", "z-ai/glm-5.2");
+			const customGlm = makeModel("custom-provider", "glm-5.2");
+			const { hub } = createHub({ models: [openrouterGlm, customGlm] });
+			installTestTheme();
+
+			hub.handleInput(DOWN);
+			hub.handleInput(DOWN); // openrouter scope
+			for (const ch of "does-not-exist") hub.handleInput(ch);
+
+			const rendered = normalize(hub.render(220));
+			expect(rendered).toContain("All available models");
+			expect(rendered).toContain("No matching models");
+		});
+
+		test("scope hop skips providers without matches while searching", () => {
+			const openrouterGlm = makeModel("openrouter", "z-ai/glm-5.2");
+			const customOther = makeModel("custom-provider", "different-model");
+			const { hub } = createHub({ models: [openrouterGlm, customOther] });
+			installTestTheme();
+
+			for (const ch of "z-ai") hub.handleInput(ch);
+			hub.handleInput(DOWN); // skips custom-provider (0 matches), lands on openrouter
+			expect(normalize(hub.render(220))).toContain("openrouter ·");
+		});
+
+		test("Escape clears an active query before closing the hub", () => {
+			const model = makeModel("test", "escape-model");
+			const { hub, onCancel } = createHub({ models: [model] });
+			installTestTheme();
+
+			for (const ch of "esc") hub.handleInput(ch);
+			hub.handleInput("\x1b");
+			expect(onCancel).not.toHaveBeenCalled();
+			hub.handleInput("\x1b");
+			expect(onCancel).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	describe("provider refresh lifecycle", () => {
+		test("auto-refreshes a provider once per process; F5 forces a re-fetch", async () => {
+			const model = makeModel("prov-a", "model-a");
+			const refreshProvider = vi.fn(async () => {});
+			const { hub } = createHub({
+				models: [model],
+				registry: { refreshProvider },
+			});
+			installTestTheme();
+
+			// Real waits: the hub debounces provider refreshes with a real
+			// 120ms setTimeout (no injection seam), and the fetch completion is
+			// a promise chain — fake timers cannot drive the mixed path.
+			hub.handleInput(DOWN); // All models → prov-a, schedules the refresh
+			await Bun.sleep(140);
+			expect(refreshProvider).toHaveBeenCalledTimes(1);
+			expect(refreshProvider).toHaveBeenCalledWith("prov-a", "online");
+
+			hub.handleInput(UP); // back to All models
+			hub.handleInput(DOWN); // revisit prov-a
+			await Bun.sleep(140);
+			// Lifetime guard: revisiting must not re-fetch.
+			expect(refreshProvider).toHaveBeenCalledTimes(1);
+
+			hub.handleInput("\x1b[15~"); // F5
+			await Bun.sleep(140);
+			expect(refreshProvider).toHaveBeenCalledTimes(2);
+		});
+
+		test("shows a refreshing status while the provider fetch is in flight", async () => {
+			const model = makeModel("prov-b", "model-b");
+			const gate = Promise.withResolvers<void>();
+			const { hub } = createHub({
+				models: [model],
+				registry: { refreshProvider: () => gate.promise },
+			});
+			installTestTheme();
+
+			hub.handleInput(DOWN);
+			await Bun.sleep(140);
+			expect(normalize(hub.render(220))).toContain("refreshing model list");
+
+			gate.resolve();
+			await Bun.sleep(0);
+			expect(normalize(hub.render(220))).not.toContain("refreshing model list");
+		});
+	});
+
+	describe("locked providers", () => {
+		test("catalog providers without credentials appear locked and forward to login", () => {
+			const anthropicModel = makeModel("anthropic", "claude-locked-test");
+			const { hub, onLoginRequest } = createHub({
+				models: [anthropicModel],
+				registry: { getAvailable: () => [] },
+			});
+			installTestTheme();
+
+			hub.handleInput(DOWN); // All models → locked anthropic (separator skipped)
+			const rendered = normalize(hub.render(220));
+			expect(rendered).toContain("anthropic has no credentials configured");
+			expect(rendered).toContain("claude-locked-test");
+
+			hub.handleInput("\n");
+			expect(onLoginRequest).toHaveBeenCalledWith("anthropic");
+		});
+	});
+});

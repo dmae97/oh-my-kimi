@@ -2,10 +2,9 @@
 
 ## [Unreleased]
 
-### Changed
+### Fixed
 
-- Optimized mid-prompt skill suggestions to ignore irrelevant prose matching descriptions
-- Improved reliability of skill autocomplete when typing during debounced refresh cycles
+- Fixed the mid-prompt `/` autocomplete popup lingering until Esc on tokens that are neither a path nor skill-shaped. Skill suggestions previously stayed alive through fuzzy subsequence matches against long skill descriptions, so nearly any prose token kept the popup hovering; matching is now gated to the `skill:` namespace (bare `/`, `s`, `sk`, …), explicit `skill:` queries (fuzzy search retained), and bare skill-name prefixes (`/hum` → `skill:humanizer`). Everything else falls through to path completion or dismisses the popup, and the Tab/Enter staleness guard shares the same gate so a stale popup can no longer rewrite tokens like `/scan` into `/skill:…`.
 
 ## [16.4.1] - 2026-07-10
 

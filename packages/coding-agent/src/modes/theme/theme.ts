@@ -249,7 +249,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"status.disabled": "⦸",
 	"status.enabled": "●",
 	"status.running": "⟳",
-	"status.shadowed": "◌",
+	"status.shadowed": "○",
 	"status.aborted": "⏹",
 	"status.done": "•",
 	// Navigation
@@ -464,8 +464,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"status.enabled": "\uf111",
 	// pick:  | alt:   
 	"status.running": "\uf110",
-	// pick: ◐ | alt: ◑ ◒ ◓ ◔
-	"status.shadowed": "◐",
+	// pick:  (nf-fa-circle_o, pairs with status.enabled's nf-fa-circle) | alt: ◐ ◑
+	"status.shadowed": "\uf10c",
 	// pick:  | alt:  
 	"status.aborted": "\uf04d",
 	// pick: • | alt: ● ·

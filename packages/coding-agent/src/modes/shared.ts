@@ -18,7 +18,7 @@ export function sanitizeStatusText(text: string): string {
 // Tab Bar Theme
 // ═══════════════════════════════════════════════════════════════════════════
 
-/** Shared tab bar theme used by model-selector and settings-selector. */
+/** Shared tab bar theme used by fullscreen overlays (settings, agent hub). */
 export function getTabBarTheme(): TabBarTheme {
 	return {
 		label: (text: string) => theme.bold(theme.fg("accent", text)),

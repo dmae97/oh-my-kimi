@@ -40,7 +40,7 @@ import { formatModelSelectorValue } from "../../config/model-resolver";
 import type { Settings } from "../../config/settings";
 import { getSelectListTheme, theme } from "../theme/theme";
 import { HookEditorComponent } from "./hook-editor";
-import { ModelSelectorComponent } from "./model-selector";
+import { buildBrowserItems, ModelBrowser, sortModelItems } from "./model-browser";
 import {
 	bottomBorder,
 	divider,
@@ -461,27 +461,35 @@ export class AdvisorConfigOverlayComponent implements Component {
 	}
 
 	#showModelPicker(index: number): void {
-		const picker = new ModelSelectorComponent(
-			this.#tui,
-			undefined,
-			this.#settings,
-			this.#modelRegistry,
-			this.#scopedModels,
-			(model, _role, _thinking, selector) => {
-				const base = selector ?? `${model.provider}/${model.id}`;
-				const efforts = getSupportedEfforts(model);
-				if (efforts.length === 0) {
-					this.#doc.advisors[index].model = base;
-					this.#dirty = true;
-					this.#showDetail(index);
-				} else {
-					this.#showThinkingPicker(index, base, efforts);
-				}
-			},
-			() => this.#showDetail(index),
-			{ directSelect: true, pickerHint: "Pick this advisor's model · Enter / click select · Esc back" },
-		);
-		this.#setScreen("model", picker, "Type to search · Enter / click pick model · Esc back");
+		const mruOrder = this.#settings.getStorage()?.getModelUsageOrder() ?? [];
+		let models: ReadonlyArray<Model>;
+		if (this.#scopedModels.length > 0) {
+			models = this.#scopedModels.map(scoped => scoped.model);
+		} else {
+			try {
+				models = this.#modelRegistry.getAvailable();
+			} catch {
+				models = [];
+			}
+		}
+		const items = buildBrowserItems(models);
+		sortModelItems(items, { mruOrder });
+
+		const picker = new ModelBrowser(this.#settings, {});
+		picker.setMruOrder(mruOrder);
+		picker.setItems(items);
+		picker.onActivate = item => {
+			const efforts = getSupportedEfforts(item.model);
+			if (efforts.length === 0) {
+				this.#doc.advisors[index].model = item.selector;
+				this.#dirty = true;
+				this.#showDetail(index);
+			} else {
+				this.#showThinkingPicker(index, item.selector, efforts);
+			}
+		};
+		picker.onCancel = () => this.#showDetail(index);
+		this.#setScreen("model", picker, "Type to search · Enter / click twice picks · Esc back");
 	}
 
 	#showThinkingPicker(index: number, selector: string, efforts: readonly string[]): void {

@@ -10,6 +10,8 @@
 
 - Added `auto` as a valid `thinking-level` in agent frontmatter; the bundled `task` subagent now defaults to it. An explicit `:level` suffix on a resolved model pattern takes precedence over an agent-definition default.
 - Added rich interactive ask dialogs: a fixed-height bottom panel (sized at spawn from the tallest tab, clamped to 70% of the terminal) with question tabs, option previews, notes, per-option markers, and ask.enabled gating. Multi-select questions toggle with Space/Enter and confirm from the Submit tab; submitting an empty Other value unselects the custom answer. ([#4186](https://github.com/can1357/oh-my-pi/issues/4186))
+- Added role un-assignment to the model hub: `x`/Backspace on a role row (or Enter on a chip already holding the model) clears the role back to auto-selection — previously only possible by editing config.
+- Added a manual F5 provider refresh in the model hub; providers now auto-refresh at most once per application lifetime instead of on every visit.
 
 ### Changed
 
@@ -17,6 +19,8 @@
 - Redesigned ask dialogs with fixed height, removed explicit Next button, and simplified headers
 - Rewrote the task tool prompt for the new wire schema and to push callers toward the most specific agent type: read-only research is directed to `agent: "scout"`, and omitting `agent` is framed as an explicit decision that no listed specialist fits.
 - Task rendering now keeps the `⟨agent⟩` type badge on live progress and finished result rows (previously it vanished after the streaming call preview), and the Task header shows only the spawn count instead of repeating the per-item agent types.
+- Redesigned `/model` into a fullscreen alternate-screen Model Hub (the `/settings` idiom) with full mouse support: a sidebar of scopes (recently used, role management, all models, per-provider), a metadata-aligned model table (role chips with thinking glyphs, context window, per-M cost), and inline role/thinking assignment strips instead of the old nested menus. Providers without credentials are listed dimmed and forward to `/login` when activated, replacing the "Only showing models with configured API keys" warning; up/down hops providers even while typing (Tab toggles row navigation), and searching grays out and skips providers without matches.
+- OAuth logins now run inside a cancellable login dialog (Esc aborts the flow and restores the editor) instead of an inescapable pairing prompt, and the model hub only reopens after a successful login.
 
 ### Fixed
 
