@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed non-recursive glob patterns traversing entire subtrees they could never match into: `dir/*.json` walked everything under `dir` (unbounded depth) because only the match filter — not the walk — knew the pattern was shallow. The walker is now depth-bounded by the pattern's segment count when it contains no `**` or brace alternation (wildcards never cross `/`), so narrow direct-child globs over huge directories (`~/.cache/*`-style) return in milliseconds instead of hitting the 5s timeout with zero partial matches.
+- Fixed native filesystem searches (`glob`, `grep`, and AST search/edit) treating an explicitly rooted ignored directory as still excluded by its ancestor rule. Walks now discard only ancestor ignore patterns that cover the requested root, while preserving unrelated parent rules and ignore files discovered inside the root.
 
 ## [16.3.13] - 2026-07-09
 
