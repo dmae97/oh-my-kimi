@@ -213,6 +213,12 @@ const modeSegment: StatusLineSegment = {
 			return renderGoalMode(ctx, goal);
 		}
 
+		const vibe = ctx.vibeMode;
+		if (vibe?.enabled) {
+			const content = withIcon(theme.icon.agents, "Vibe");
+			return { content: theme.fg("accent", content), visible: true };
+		}
+
 		const loop = ctx.loopMode;
 		if (loop?.enabled) {
 			const content = withIcon(theme.icon.loop, "Loop");
