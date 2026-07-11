@@ -48,6 +48,9 @@
 - Fixed `/vibe` tools being pre-registered as hidden session tools; they are now installed only on mode entry and removed on exit
 - Fixed `/vibe wait` reporting to properly capture settled results that have queued follow-up turns
 - Improved `/vibe` TUI responsiveness by rendering animated content (cursors, spinners) directly from mutable state at paint time
+### Fixed
+
+- Fixed first-run interactive startup rendering the full packaged changelog when the last-seen marker is missing, malformed, or unreadable. Startup upgrade notes now show at most three unseen releases and cap Markdown source at 64 KiB; `/changelog full` remains the explicit full-history path. ([#5135](https://github.com/can1357/oh-my-pi/issues/5135))
 
 ## [16.4.2] - 2026-07-10
 
