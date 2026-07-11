@@ -389,8 +389,7 @@ function buildMidPromptSkillCompletions(commands: CommandEntry[], lowerPrefix: s
 		commands.filter(cmd => {
 			const name = getCommandName(cmd);
 			return (
-				name !== undefined &&
-				name.startsWith(SKILL_NAMESPACE) &&
+				name?.startsWith(SKILL_NAMESPACE) &&
 				midPromptSkillTokenMatches(lowerPrefix, name, getStaticCommandDescription(cmd))
 			);
 		}),
