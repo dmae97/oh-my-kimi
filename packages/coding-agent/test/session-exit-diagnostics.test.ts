@@ -311,6 +311,23 @@ describe("session exit diagnostics", () => {
 		).toBe(true);
 	});
 
+	it("reconstructs a normal exit that reports pending tool calls", () => {
+		const sessionManager = SessionManager.inMemory();
+		sessionManager.appendMessage({ role: "user", content: "inspect the file", timestamp: Date.now() });
+		sessionManager.appendMessage(pendingAssistant);
+		sessionManager.appendCustomEntry(SESSION_EXIT_CUSTOM_TYPE, {
+			reason: "manual exit",
+			kind: "normal",
+			recordedAt: "2026-07-11T02:20:08.800Z",
+			pendingToolCalls: [{ toolCallId: "toolu_repro", toolName: "bash" }],
+		});
+
+		expect(createInterruptedTurnAbortMessage(sessionManager.getBranch())).toMatchObject({
+			role: "assistant",
+			stopReason: "aborted",
+		});
+	});
+
 	it("reconstructs an interrupted assistant tool-call tail", () => {
 		const sessionManager = SessionManager.inMemory();
 		sessionManager.appendMessage({ role: "user", content: "inspect the file", timestamp: Date.now() });

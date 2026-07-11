@@ -77,7 +77,12 @@ function readSessionExit(entry: SessionEntry): SessionExitData | undefined {
 	) {
 		return undefined;
 	}
-	return { reason, kind, recordedAt };
+	return {
+		reason,
+		kind,
+		recordedAt,
+		pendingToolCalls: entry.data.pendingToolCalls as PendingToolCallDiagnostic[] | undefined,
+	};
 }
 
 /**
@@ -97,7 +102,7 @@ export function createInterruptedTurnAbortMessage(
 		exit = candidate;
 		break;
 	}
-	if (!exit || exit.kind === "normal") return undefined;
+	if (!exit || (exit.kind === "normal" && !exit.pendingToolCalls?.length)) return undefined;
 
 	let tailIndex = -1;
 	let tail: AgentMessage | undefined;

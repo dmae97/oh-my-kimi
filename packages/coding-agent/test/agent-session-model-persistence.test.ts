@@ -529,6 +529,53 @@ describe("AgentSession model persistence", () => {
 		});
 	});
 
+	it("marks an interrupted first turn aborted when switching sessions", async () => {
+		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const created = await createSession({ initialModel: defaultModel, persist: true });
+		const targetFile = path.join(tempDir.path(), "switch-interrupted-user.jsonl");
+		const timestamp = "2026-07-11T02:20:08.800Z";
+		await Bun.write(
+			targetFile,
+			`${[
+				{ type: "session", version: 3, id: "switch-target", timestamp, cwd: tempDir.path() },
+				{
+					type: "model_change",
+					id: "model",
+					parentId: null,
+					timestamp,
+					model: modelValue(defaultModel),
+				},
+				{
+					type: "message",
+					id: "user",
+					parentId: "model",
+					timestamp,
+					message: { role: "user", content: "inspect state", timestamp: Date.parse(timestamp) },
+				},
+				{
+					type: "custom",
+					id: "exit",
+					parentId: "user",
+					timestamp,
+					customType: "session_exit",
+					data: { reason: "exit", kind: "process_exit", recordedAt: timestamp },
+				},
+			]
+				.map(entry => JSON.stringify(entry))
+				.join("\n")}\n`,
+		);
+
+		await expect(created.session.switchSession(targetFile)).resolves.toBe(true);
+
+		expect(created.session.sessionManager.buildSessionContext().messages.at(-1)).toMatchObject({
+			role: "assistant",
+			api: defaultModel.api,
+			provider: defaultModel.provider,
+			model: defaultModel.id,
+			stopReason: "aborted",
+		});
+	});
+
 	it("lists restorable temporary model before the default fallback", () => {
 		expect(
 			getRestorableSessionModels(
