@@ -1,4 +1,4 @@
-import { cleanTinyMessage } from "./message-preproc";
+import { cleanTinyMessage, isPreformattedChatContext, stripChatScaffolding } from "./message-preproc";
 
 /**
  * Greeting / acknowledgement / filler tokens. A first user message composed
@@ -125,7 +125,11 @@ const COMMON_TITLE_ACRONYMS = new Set<string>([
  * the next message instead.
  */
 export function isLowSignalTitleInput(message: string): boolean {
-	const tokens = cleanTinyMessage(message).toLowerCase().match(TITLE_WORD);
+	// Preformatted replan contexts are already cleaned per turn; only the
+	// scaffolding tags are dropped so the turn text drives the signal check
+	// (cleanTinyMessage would strip the paired <chat> envelope to nothing).
+	const cleaned = isPreformattedChatContext(message) ? stripChatScaffolding(message) : cleanTinyMessage(message);
+	const tokens = cleaned.toLowerCase().match(TITLE_WORD);
 	if (!tokens) return true;
 	return tokens.every(token => FILLER_TITLE_TOKENS.has(token) || /^\d+$/.test(token));
 }

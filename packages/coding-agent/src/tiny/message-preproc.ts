@@ -102,8 +102,30 @@ export function preprocessTinyMessage(message: string): string {
 	return truncateTinyMessage(cleanTinyMessage(message));
 }
 
-/** Wrap a preprocessed user message for title generation. */
+/** Envelope produced by {@link formatTitleConversationContext}. Anchored to both
+ *  ends so ordinary user text merely containing a chat snippet never matches. */
+const CHAT_CONTEXT_ENVELOPE = /^\s*<chat>[\s\S]*<\/chat>\s*$/;
+/** Structural tags emitted by {@link formatTitleConversationContext}. */
+const CHAT_SCAFFOLD_TAG = /<\/?(?:chat|user|assistant|think)>/g;
+
+/** True when `message` is a preformatted replan context from
+ *  {@link formatTitleConversationContext} — already cleaned per turn and
+ *  bounded, so it must bypass {@link preprocessTinyMessage} (whose paired-tag
+ *  stripping would consume the entire envelope). */
+export function isPreformattedChatContext(message: string): boolean {
+	return CHAT_CONTEXT_ENVELOPE.test(message);
+}
+
+/** Drop the `<chat>`/`<user>`/`<assistant>`/`<think>` scaffolding, keeping turn
+ *  text. Used for token-level signal checks on preformatted contexts. */
+export function stripChatScaffolding(message: string): string {
+	return message.replace(CHAT_SCAFFOLD_TAG, " ");
+}
+
+/** Wrap a preprocessed user message for title generation. Preformatted replan
+ *  contexts pass through untouched. */
 export function formatTitleUserMessage(message: string): string {
+	if (isPreformattedChatContext(message)) return message;
 	return `<user>\n${preprocessTinyMessage(message)}\n</user>`;
 }
 

@@ -79,6 +79,11 @@ describe("formatTitleUserMessage", () => {
 		expect(formatted).toContain("plan a thing");
 		expect(formatted).not.toContain("noise");
 	});
+
+	it("passes preformatted chat context through unchanged", () => {
+		const context = "<chat>\n<user>\nfix parser\n</user>\n</chat>";
+		expect(formatTitleUserMessage(context)).toBe(context);
+	});
 });
 
 describe("formatTitleConversationContext", () => {
@@ -303,5 +308,15 @@ describe("isLowSignalTitleInput", () => {
 		]) {
 			expect(isLowSignalTitleInput(msg)).toBe(false);
 		}
+	});
+
+	it("does not treat preformatted chat context as low-signal even though it contains XML tags", () => {
+		const context = "<chat>\n<user>\nfix parser\n</user>\n</chat>";
+		expect(isLowSignalTitleInput(context)).toBe(false);
+	});
+
+	it("still evaluates the actual inner text of a preformatted chat context correctly", () => {
+		const context = "<chat>\n<user>\nhi\n</user>\n</chat>";
+		expect(isLowSignalTitleInput(context)).toBe(true);
 	});
 });
