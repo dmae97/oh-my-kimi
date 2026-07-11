@@ -40,6 +40,7 @@ import {
 import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { sanitizeText, structuredCloneJSON } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
+import { agentPauseGate } from "./pause";
 import { type AgentRunCoverage, type AgentRunSummary, ToolCallBlockedError } from "./run-collector";
 import {
 	type AgentTelemetry,
@@ -816,6 +817,10 @@ async function runLoopBody(
 				// Yield at the top of each iteration to prevent busy-wait when
 				// the agent loop is executing tool calls back-to-back.
 				await yieldIfDue();
+				// Park at the turn boundary while the process-wide pause gate is
+				// engaged (host /pause). An external abort releases the park so a
+				// cancelled run still unwinds while everything else stays frozen.
+				if (agentPauseGate.paused) await agentPauseGate.waitUntilResumed(signal);
 				if (!firstTurn) {
 					stream.push({ type: "turn_start" });
 				} else {
@@ -1922,6 +1927,10 @@ async function executeToolCalls(
 			record.skipped = true;
 			return;
 		}
+		// Park before starting this tool while the process-wide pause gate is
+		// engaged. Tools already executing are unaffected (pausing never aborts);
+		// a batch interrupted mid-pause unwinds via the signal checks below.
+		if (agentPauseGate.paused) await agentPauseGate.waitUntilResumed(record.signal);
 
 		const { toolCall, tool } = record;
 		let argsForExecution = toolCall.arguments as Record<string, unknown>;

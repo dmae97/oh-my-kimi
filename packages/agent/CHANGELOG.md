@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a process-global pause gate (`agentPauseGate`): every agent loop parks at its next safe boundary (before each model call, before each tool start) while engaged, without aborting anything; a run's abort signal still unwinds a parked loop, and `resume()` continues every loop where it stopped.
+
 ## [16.4.3] - 2026-07-11
 
 ### Fixed

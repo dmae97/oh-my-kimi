@@ -24,6 +24,7 @@ import {
 	MarketplaceManager,
 } from "../extensibility/plugins/marketplace";
 import { resolveMemoryBackend } from "../memory-backend";
+import { runPauseScreen } from "../modes/components/pause-screen";
 import { describeLoopLimitRuntime } from "../modes/loop-limit";
 import { theme } from "../modes/theme/theme";
 import type { InteractiveModeContext } from "../modes/types";
@@ -2267,6 +2268,14 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 
 			// If a prompt was provided, pass it through as input
 			if (prompt) return { prompt };
+		},
+	},
+	{
+		name: "pause",
+		description: "Freeze all agents (main, subagents, advisor) until resumed",
+		handleTui: async (_command, runtime) => {
+			runtime.ctx.editor.setText("");
+			await runPauseScreen(runtime.ctx);
 		},
 	},
 	{
