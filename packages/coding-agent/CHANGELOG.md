@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Bounded transcript render retention after finalized rows enter native scrollback, while rehydrating the complete transcript before destructive resize/reset replays, so long resumed TUI sessions no longer retain every committed row or lose history on repaint ([#4820](https://github.com/can1357/oh-my-pi/issues/4820)).
+
 ## [16.4.5] - 2026-07-11
 
 ### Breaking Changes

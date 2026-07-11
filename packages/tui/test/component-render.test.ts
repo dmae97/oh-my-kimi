@@ -1,5 +1,12 @@
 import { describe, expect, it } from "bun:test";
-import { type Component, Container, type NativeScrollbackLiveRegion, TUI } from "@oh-my-pi/pi-tui";
+import {
+	type Component,
+	Container,
+	type NativeScrollbackCommittedRows,
+	type NativeScrollbackLiveRegion,
+	type NativeScrollbackReplay,
+	TUI,
+} from "@oh-my-pi/pi-tui";
 import { StressRenderScheduler } from "./render-stress-scheduler";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -68,6 +75,73 @@ class RenderCountingTUI extends TUI {
 		return super.render(width);
 	}
 }
+
+class ReplayVirtualizedLines implements Component, NativeScrollbackCommittedRows, NativeScrollbackReplay {
+	readonly lines: readonly string[];
+	replayPreparations = 0;
+	#compacted = false;
+	#replayPending = false;
+
+	constructor(lines: readonly string[]) {
+		this.lines = lines;
+	}
+
+	invalidate(): void {}
+
+	setNativeScrollbackCommittedRows(rows: number): void {
+		if (rows >= 4) this.#compacted = true;
+	}
+
+	prepareNativeScrollbackReplay(): void {
+		this.replayPreparations++;
+		this.#replayPending = true;
+	}
+
+	render(_width: number): readonly string[] {
+		if (this.#replayPending) {
+			this.#replayPending = false;
+			return this.lines;
+		}
+		return this.#compacted ? this.lines.slice(4) : this.lines;
+	}
+}
+
+describe("TUI native scrollback replay", () => {
+	it("rehydrates virtualized roots before a destructive full paint", async () => {
+		const term = new VirtualTerminal(40, 4, 1_000);
+		const scheduler = new StressRenderScheduler();
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
+		const transcript = new ReplayVirtualizedLines([
+			"history-0",
+			"history-1",
+			"history-2",
+			"history-3",
+			"tail-0",
+			"tail-1",
+			"tail-2",
+			"tail-3",
+		]);
+		tui.addChild(transcript);
+
+		try {
+			tui.start();
+			await scheduler.drain(term);
+			tui.requestRender();
+			await scheduler.drain(term);
+
+			tui.requestRender(true, { clearScrollback: true });
+			await scheduler.drain(term);
+
+			expect(transcript.replayPreparations).toBe(1);
+			const buffer = strip(term.getScrollBuffer());
+			expect(buffer).toContain("history-0");
+			expect(buffer).toContain("tail-3");
+		} finally {
+			tui.stop();
+			await term.flush();
+		}
+	});
+});
 
 describe("TUI.requestComponentRender", () => {
 	it("re-renders only the requesting subtree on a quiet frame", async () => {

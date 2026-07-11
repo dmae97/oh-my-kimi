@@ -1518,6 +1518,18 @@ describe("Markdown.render reference stability", () => {
 		expect(b.render(40)).toBe(a.render(40));
 	});
 
+	it("does not share oversized renders through the L2 cache", () => {
+		const width = 80;
+		const paragraph = `cache-budget sentinel ${"x".repeat(120)}`;
+		const largeText = Array.from({ length: 160 }, (_, index) => `Paragraph ${index}: ${paragraph}`).join("\n\n");
+
+		const first = new Markdown(largeText, 0, 0, defaultMarkdownTheme).render(width);
+		const second = new Markdown(largeText, 0, 0, defaultMarkdownTheme).render(width);
+
+		expect(second).toEqual(first);
+		expect(second).not.toBe(first);
+	});
+
 	it("returns a new reference with updated content after setText", () => {
 		const md = new Markdown("Before edit", 1, 0, defaultMarkdownTheme);
 		const before = md.render(40);

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Bounded the Markdown L2 render cache by weighted output size and excluded oversized renders, preventing a few large documents from occupying ordinary cache slots indefinitely ([#4820](https://github.com/can1357/oh-my-pi/issues/4820)).
+
 ## [16.4.5] - 2026-07-11
 
 ### Added

@@ -348,6 +348,26 @@ describe("TranscriptContainer", () => {
 		expect(container.render(40)).toEqual(["history", "", "live", "", "finalized-below-0", "finalized-below-1"]);
 		expect(container.getNativeScrollbackLiveRegionStart()).toBe(2);
 	});
+	it("drops committed finalized head rows and rehydrates them for a full replay", () => {
+		const container = new TranscriptContainer();
+		const history = new CountingFinalizedBlock(["committed-history"]);
+		const tail = new CountingFinalizedBlock(["retained-tail"]);
+		container.addChild(history);
+		container.addChild(tail);
+
+		expect(container.render(40)).toEqual(["committed-history", "", "retained-tail"]);
+		container.setNativeScrollbackCommittedRows(2);
+		expect(container.render(40)).toEqual(["retained-tail"]);
+		expect(history.renderCount).toBe(1);
+
+		container.prepareNativeScrollbackReplay();
+		// The TUI supplies its previous committed count immediately before the
+		// replay render; the complete frame must still survive this one compose.
+		container.setNativeScrollbackCommittedRows(2);
+		expect(container.render(40)).toEqual(["committed-history", "", "retained-tail"]);
+		expect(history.renderCount).toBe(2);
+	});
+
 	it("does not re-render finalized rows already committed to native scrollback", () => {
 		const container = new TranscriptContainer();
 		const committed = new CountingFinalizedBlock(["committed"]);
@@ -653,6 +673,19 @@ describe("TranscriptContainer isBlockUncommitted", () => {
 
 		container.setNativeScrollbackCommittedRows(3);
 		expect(container.isBlockUncommitted(block)).toBe(false);
+	});
+
+	it("keeps compacted committed blocks marked committed", () => {
+		const container = new TranscriptContainer();
+		const committed = new StreamingBlock(["committed"], true);
+		container.addChild(committed);
+		container.addChild(new StreamingBlock(["tail"], true));
+
+		expect(container.render(40)).toEqual(["committed", "", "tail"]);
+		container.setNativeScrollbackCommittedRows(2);
+		expect(container.render(40)).toEqual(["tail"]);
+
+		expect(container.isBlockUncommitted(committed)).toBe(false);
 	});
 
 	it("keeps empty-render blocks uncommitted after committed rows advance", () => {
