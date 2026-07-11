@@ -13,7 +13,7 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import {
 	type Component,
-	fuzzyFilter,
+	fuzzyRank,
 	Input,
 	matchesKey,
 	ScrollView,
@@ -432,10 +432,19 @@ export class ModelBrowser implements Component {
 		if (query.trim()) {
 			// Match against the displayed "provider/id" string so the user can
 			// type what they see: bare names, provider prefixes, or scoped
-			// queries all flow through the same fuzzy matcher. Skip role rank
-			// so a weakly matching default doesn't trump a stronger match.
-			const matches = fuzzyFilter(this.#baseItems, query, ({ provider, id }) => `${provider}/${id}`);
+			// queries all flow through the same fuzzy matcher.
+			const ranked = fuzzyRank(this.#baseItems, query, ({ provider, id }) => `${provider}/${id}`);
+			const matches = ranked.map(result => result.item);
+			// Match quality is the primary key while searching: an exact
+			// "gpt-5.5" must beat the MRU (or role-assigned) "gpt-5.6", so
+			// role rank is skipped and MRU only breaks ties. Scores are
+			// bucketed so sub-point position noise (provider-name length)
+			// can't split equally good matches; within a bucket the stable
+			// sort keeps sortModelItems' MRU/version order.
 			sortModelItems(matches, { roles: this.#roles, mruOrder: this.#mruOrder, skipRoleRank: true });
+			const buckets = new Map<ModelBrowserItem, number>();
+			for (const result of ranked) buckets.set(result.item, Math.round(result.score / 10));
+			matches.sort((a, b) => (buckets.get(a) ?? 0) - (buckets.get(b) ?? 0));
 			items = matches;
 		} else {
 			items = this.#baseItems;
