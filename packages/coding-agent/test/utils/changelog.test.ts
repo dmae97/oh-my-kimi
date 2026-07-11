@@ -104,6 +104,7 @@ describe("selectStartupChangelog", () => {
 		expect(selection.persistCurrentVersion).toBe(true);
 		expect(selection.truncated).toBe(false);
 		expect(selection.selectedEntries).toBe(RECENT_CHANGELOG_ENTRY_LIMIT);
+		expect(selection.markdown?.match(/## \[(\d+\.\d+\.\d+)\]/)?.[1]).toBe("1.0.5");
 		expect(selection.markdown).toContain("## [1.0.5]");
 		expect(selection.markdown).toContain("## [1.0.4]");
 		expect(selection.markdown).toContain("## [1.0.3]");
@@ -143,8 +144,9 @@ describe("selectStartupChangelog", () => {
 		expect(selection.persistCurrentVersion).toBe(true);
 		expect(selection.selectedEntries).toBe(RECENT_CHANGELOG_ENTRY_LIMIT);
 		expect(selection.truncated).toBe(true);
+		expect(selection.markdown?.match(/## \[(\d+\.\d+\.\d+)\]/)?.[1]).toBe("1.0.4");
 		expect(selection.markdown).toContain(STARTUP_CHANGELOG_FULL_HINT);
-		expect(selection.markdown).not.toContain("TAIL-FOUR");
+		expect(selection.markdown).not.toContain("TAIL-THREE");
 		expect(Buffer.byteLength(selection.markdown ?? "")).toBeLessThanOrEqual(STARTUP_CHANGELOG_MAX_BYTES);
 	});
 });
@@ -158,6 +160,7 @@ describe("renderChangelogEntries", () => {
 			release(1, 0, 0, `### Added\n\n- First ${largeBody}\nEND-FIRST`),
 		]);
 
+		expect(rendered.markdown.match(/## \[(\d+\.\d+\.\d+)\]/)?.[1]).toBe("1.0.0");
 		expect(rendered.truncated).toBe(false);
 		expect(rendered.markdown).toContain("END-FIRST");
 		expect(rendered.markdown).toContain("END-SECOND");

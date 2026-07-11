@@ -137,16 +137,14 @@ export function getNewEntries(entries: ChangelogEntry[], lastVersion: string): C
 }
 
 /**
- * Render changelog entries newest-last and optionally cap the Markdown source size.
+ * Render changelog entries oldest-first by default and optionally cap the Markdown source size.
  */
 export function renderChangelogEntries(
 	entries: ChangelogEntry[],
-	options: { maxBytes?: number; truncationHint?: string } = {},
+	options: { maxBytes?: number; truncationHint?: string; oldestFirst?: boolean } = {},
 ): RenderedChangelog {
-	const markdown = [...entries]
-		.reverse()
-		.map(entry => entry.content)
-		.join("\n\n");
+	const orderedEntries = options.oldestFirst === false ? entries : [...entries].reverse();
+	const markdown = orderedEntries.map(entry => entry.content).join("\n\n");
 	if (options.maxBytes === undefined || Buffer.byteLength(markdown) <= options.maxBytes) {
 		return { markdown, truncated: false };
 	}
@@ -191,6 +189,7 @@ export function selectStartupChangelog(
 	const rendered = renderChangelogEntries(newEntries, {
 		maxBytes: STARTUP_CHANGELOG_MAX_BYTES,
 		truncationHint: STARTUP_CHANGELOG_FULL_HINT,
+		oldestFirst: false,
 	});
 	return {
 		markdown: rendered.markdown,
