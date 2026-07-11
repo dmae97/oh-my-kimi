@@ -25,6 +25,9 @@
 ### Removed
 
 - Removed the generated GPT-5.6 pro-reasoning aliases (`gpt-5.6-{luna,sol,terra}-pro`) from the `openai-codex` subscription provider — pro reasoning is not offered on subscriptions; the `openai` API-key aliases remain
+### Fixed
+
+- Fixed SAP AI Core Claude ids in version-first order (`anthropic--claude-4.8-opus`) parsing as unknown, restoring Anthropic adaptive thinking metadata and capability gates. ([#5069](https://github.com/can1357/oh-my-pi/issues/5069))
 
 ## [16.4.0] - 2026-07-10
 
