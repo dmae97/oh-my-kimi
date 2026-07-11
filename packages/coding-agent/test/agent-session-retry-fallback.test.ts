@@ -322,6 +322,75 @@ describe("AgentSession retry fallback", () => {
 		]);
 	});
 
+	it("falls back to the chain when credential rotation exhausts the retry budget", async () => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
+		if (!primaryModel || !fallbackModel) {
+			throw new Error("Expected bundled test models to exist");
+		}
+
+		const requestedModels: string[] = [];
+		const mock = createMockModel();
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: {
+				model: primaryModel,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (model, context, options) => {
+				requestedModels.push(`${model.provider}/${model.id}`);
+				if (model.provider === primaryModel.provider && model.id === primaryModel.id) {
+					mock.push({ throw: "429 usage_limit_reached" });
+				} else {
+					mock.push({ content: [`ok:${model.provider}/${model.id}`] });
+				}
+				return mock.stream(model, context, options);
+			},
+		});
+
+		// Rotation always claims a sibling credential is available — the shape
+		// of a multi-account pool where the sibling check passes but every
+		// subsequent request keeps failing on the same capped account.
+		vi.spyOn(modelRegistry.authStorage, "markUsageLimitReached").mockResolvedValue({ switched: true });
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.maxRetries": 2,
+			"retry.fallbackChains": {
+				[`${primaryModel.provider}/${primaryModel.id}`]: [`${fallbackModel.provider}/${fallbackModel.id}`],
+			},
+		});
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		const { retryStartEvents, retryEndEvents } = trackRetryEvents(session);
+
+		await session.prompt("Exhaust rotation, then fail over");
+		await session.waitForIdle();
+
+		// Two rotation retries burn the budget on the primary; the exhausted
+		// attempt consults the chain instead of giving up.
+		expect(requestedModels).toEqual([
+			`${primaryModel.provider}/${primaryModel.id}`,
+			`${primaryModel.provider}/${primaryModel.id}`,
+			`${primaryModel.provider}/${primaryModel.id}`,
+			`${fallbackModel.provider}/${fallbackModel.id}`,
+		]);
+		expect(session.model?.provider).toBe(fallbackModel.provider);
+		expect(session.model?.id).toBe(fallbackModel.id);
+		// The fallback model gets a fresh retry budget (attempt resets to 1).
+		expect(retryStartEvents.map(event => event.attempt)).toEqual([1, 2, 1]);
+		expect(retryEndEvents).toHaveLength(1);
+		expect(retryEndEvents[0]).toMatchObject({ success: true });
+	});
+
 	it("applies a provider-wildcard chain to any model of that provider", async () => {
 		const primaryModel = getBundledModel("anthropic", "claude-opus-4-1");
 		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");

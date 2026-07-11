@@ -13993,20 +13993,13 @@ export class AgentSession {
 			this.#retryResolve = resolve;
 		}
 
-		if (this.#retryAttempt > retrySettings.maxRetries) {
-			await this.#persistRetryLifecycleErrorMessage(message);
-			// Max retries exceeded, emit final failure and reset
-			await this.#emitSessionEvent({
-				type: "auto_retry_end",
-				success: false,
-				attempt: this.#retryAttempt - 1,
-				finalError: message.errorMessage,
-			});
-			this.#clearPendingRecoveredRetryErrors();
-			this.#retryAttempt = 0;
-			this.#resolveRetry(); // Resolve so waitForRetry() completes
-			return false;
-		}
+		// All attempts on the current model are spent. Don't fail yet: the
+		// fallback chain below gets one last consult. Credential rotation can
+		// consume the entire budget without the fallback branch ever running
+		// (every rotation sets switchedCredential and skips it), so without
+		// this last resort a provider-wide usage cap never fails over to the
+		// configured chain.
+		const retryBudgetExhausted = this.#retryAttempt > retrySettings.maxRetries;
 
 		const errorMessage = message.errorMessage || "Unknown error";
 		const id = this.#classifyRetryMessage(message);
@@ -14025,7 +14018,12 @@ export class AgentSession {
 			this.#resetCurrentResponsesProviderSession("stale replay error");
 		}
 
-		if (this.model && !staleOpenAIResponsesReplayError && AIError.is(id, AIError.Flag.UsageLimit)) {
+		if (
+			!retryBudgetExhausted &&
+			this.model &&
+			!staleOpenAIResponsesReplayError &&
+			AIError.is(id, AIError.Flag.UsageLimit)
+		) {
 			const retryAfterMs = parsedRetryAfterMs ?? calculateRateLimitBackoffMs(parseRateLimitReason(errorMessage));
 			const outcome = await this.#modelRegistry.authStorage.markUsageLimitReached(
 				this.model.provider,
@@ -14071,7 +14069,9 @@ export class AgentSession {
 		const allowModelFallback = options?.allowModelFallback !== false;
 		const currentSelector = this.model ? formatRetryFallbackSelector(this.model, this.thinkingLevel) : undefined;
 		if (!staleOpenAIResponsesReplayError && !switchedCredential && currentSelector) {
-			if (allowModelFallback && retrySettings.modelFallback) {
+			// A refusal chain stops at the retry budget: the exhausted-attempt
+			// last resort is for provider failures, not classifier decisions.
+			if (allowModelFallback && retrySettings.modelFallback && !(retryBudgetExhausted && classifierRefusal)) {
 				if (!classifierRefusal) {
 					this.#noteRetryFallbackCooldown(currentSelector, parsedRetryAfterMs, errorMessage);
 				}
@@ -14089,6 +14089,26 @@ export class AgentSession {
 			} else if (usageLimitWaitMs === undefined && parsedRetryAfterMs && parsedRetryAfterMs > delayMs) {
 				delayMs = parsedRetryAfterMs;
 			}
+		}
+		if (retryBudgetExhausted) {
+			if (!switchedModel) {
+				await this.#persistRetryLifecycleErrorMessage(message);
+				// Max retries exceeded and no fallback model to switch to: emit
+				// final failure and reset.
+				await this.#emitSessionEvent({
+					type: "auto_retry_end",
+					success: false,
+					attempt: this.#retryAttempt - 1,
+					finalError: message.errorMessage,
+				});
+				this.#clearPendingRecoveredRetryErrors();
+				this.#retryAttempt = 0;
+				this.#resolveRetry(); // Resolve so waitForRetry() completes
+				return false;
+			}
+			// The fallback model gets a fresh retry budget — leaving the spent
+			// counter in place would exhaust it again on its first error.
+			this.#retryAttempt = 1;
 		}
 		if (classifierRefusal && !switchedModel) {
 			this.#retryAttempt = 0;
