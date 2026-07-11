@@ -689,6 +689,85 @@ describe("ModelHub", () => {
 		});
 	});
 
+	describe("mouse wheel", () => {
+		// SGR wheel reports: button 64 = up, 65 = down. Column 100 lands in the
+		// body pane, column 3 in the sidebar; row 10 is inside the content rows.
+		const WHEEL_UP_BODY = "\x1b[<64;100;10M";
+		const WHEEL_DOWN_BODY = "\x1b[<65;100;10M";
+		const WHEEL_UP_SIDEBAR = "\x1b[<64;3;10M";
+		const WHEEL_DOWN_SIDEBAR = "\x1b[<65;3;10M";
+
+		test("wheel pans the model list without moving the selection and clamps at the ends", () => {
+			const models = Array.from({ length: 40 }, (_, i) => makeModel("test", `model-${String(i).padStart(2, "0")}`));
+			const { hub, onPick } = createHub({ models, scoped: true, hub: { mode: "pick" } });
+
+			const before = normalize(hub.render(220)); // establishes mouse geometry
+			hub.handleInput("\n");
+			expect(onPick).toHaveBeenCalledTimes(1);
+			const initiallySelected = onPick.mock.calls[0]?.[0];
+
+			// Panning reveals rows that were below the fold...
+			for (let i = 0; i < 8; i++) hub.handleInput(WHEEL_DOWN_BODY);
+			const panned = normalize(hub.render(220));
+			const modelIdsIn = (frame: string) => new Set(Array.from(frame.matchAll(/model-\d\d/g), match => match[0]));
+			const beforeIds = modelIdsIn(before);
+			const revealed = [...modelIdsIn(panned)].filter(id => !beforeIds.has(id));
+			expect(revealed.length).toBeGreaterThan(0);
+
+			// ...but never moves the selection: Enter still picks the same model.
+			hub.handleInput("\n");
+			expect(onPick).toHaveBeenCalledTimes(2);
+			expect(onPick.mock.calls[1]?.[0]).toBe(initiallySelected);
+
+			// The window clamps at the bottom instead of wrapping back to the top...
+			for (let i = 0; i < 500; i++) hub.handleInput(WHEEL_DOWN_BODY);
+			const saturated = normalize(hub.render(220));
+			hub.handleInput(WHEEL_DOWN_BODY);
+			expect(normalize(hub.render(220))).toBe(saturated);
+
+			// ...and scrolling back up restores the original window exactly.
+			for (let i = 0; i < 500; i++) hub.handleInput(WHEEL_UP_BODY);
+			expect(normalize(hub.render(220))).toBe(before);
+		});
+
+		test("wheel over the sidebar never changes the active scope or schedules refreshes", () => {
+			vi.useFakeTimers();
+			try {
+				const refreshProvider = vi.fn(async () => {});
+				const { hub } = createHub({
+					models: [makeModel("prov-a", "model-a"), makeModel("prov-b", "model-b")],
+					registry: { refreshProvider },
+				});
+
+				expect(normalize(hub.render(220))).toContain("All available models");
+
+				// Two hops under the old wheel-selects behavior would land on a
+				// provider scope; the viewport pan must leave the scope alone.
+				for (let i = 0; i < 2; i++) hub.handleInput(WHEEL_DOWN_SIDEBAR);
+				expect(normalize(hub.render(220))).toContain("All available models");
+				for (let i = 0; i < 2; i++) hub.handleInput(WHEEL_UP_SIDEBAR);
+				expect(normalize(hub.render(220))).toContain("All available models");
+
+				// No scope change means no provider auto-refresh either.
+				vi.advanceTimersByTime(200); // past the 120ms provider-refresh debounce
+				expect(refreshProvider).not.toHaveBeenCalled();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		test("wheel in the roles view clamps at the top instead of wrapping to the bottom rows", () => {
+			const { hub } = createHub({ models: [makeModel("test", "model-a")], scoped: true });
+
+			hub.handleInput(UP); // All models → Roles
+			hub.render(220); // establish mouse geometry
+			for (let i = 0; i < 4; i++) hub.handleInput(WHEEL_UP_BODY); // cursor stays on the first role
+			hub.handleInput("\n"); // dive into the rows
+			hub.handleInput("\n"); // activate the cursor row
+			expect(normalize(hub.render(220))).toContain("Assigning DEFAULT");
+		});
+	});
+
 	describe("provider scopes and search", () => {
 		test("search inside a provider scope keeps that provider's model (#4522)", () => {
 			const openrouterGlm = makeModel("openrouter", "z-ai/glm-5.2");

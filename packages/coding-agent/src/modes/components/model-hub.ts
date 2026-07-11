@@ -202,6 +202,8 @@ export class ModelHubComponent implements Component {
 	#searchTotal = 0;
 	#activeEntryId = "all";
 	#sidebarScroll = 0;
+	/** Snap the sidebar viewport to the active entry on the next render; wheel panning leaves it free. */
+	#sidebarFollowActive = true;
 	#sidebarHover: number | null = null;
 	/**
 	 * Arrow-key ownership: `scope` (default) hops the sidebar even while the
@@ -393,11 +395,13 @@ export class ModelHubComponent implements Component {
 		this.#reloadRoles(availableModels);
 		this.#buildRolesRows();
 
-		const mruOrder = this.#settings.getStorage()?.getModelUsageOrder() ?? [];
+		const storage = this.#settings.getStorage();
+		const mruOrder = storage?.getModelUsageOrder() ?? [];
 		this.#availableItems = buildBrowserItems(availableModels);
 		sortModelItems(this.#availableItems, { roles: this.#roles, mruOrder });
 		this.#browser.setRoles(this.#roles);
 		this.#browser.setMruOrder(mruOrder);
+		this.#browser.setPerfStats(storage?.getModelPerf() ?? new Map());
 
 		const bySelector = new Map(this.#availableItems.map(item => [item.selector, item]));
 		this.#recentItems = [];
@@ -521,6 +525,7 @@ export class ModelHubComponent implements Component {
 		this.#entries = entries;
 		if (!entries.some(entry => entry.id === this.#activeEntryId)) {
 			this.#activeEntryId = "all";
+			this.#sidebarFollowActive = true;
 		}
 	}
 
@@ -531,6 +536,7 @@ export class ModelHubComponent implements Component {
 	#setActiveEntry(id: string): void {
 		if (!this.#entries.some(entry => entry.id === id)) return;
 		this.#activeEntryId = id;
+		this.#sidebarFollowActive = true;
 		this.#applyScope();
 		const entry = this.#activeEntry();
 		// Hops must never steal arrow focus: landing on a scope keeps provider
@@ -1293,15 +1299,23 @@ export class ModelHubComponent implements Component {
 		}
 	}
 
-	/** Step the roles cursor by one row, wrapping and skipping separator rows. */
-	#stepRoleIndex(from: number, delta: -1 | 1): number {
-		const count = Math.max(1, this.#rolesRows.length);
+	/** Step the roles cursor by one row, skipping separator rows. Wraps at the ends unless `wrap: false` (then the cursor stays put). */
+	#stepRoleIndex(from: number, delta: -1 | 1, options: { wrap?: boolean } = {}): number {
+		const wrap = options.wrap ?? true;
+		const count = this.#rolesRows.length;
+		if (count === 0) return 0;
 		let index = from;
 		for (let i = 0; i < count; i++) {
-			index = (index + delta + count) % count;
-			if (this.#rolesRows[index]?.kind !== "separator") break;
+			const next = index + delta;
+			if (next < 0 || next >= count) {
+				if (!wrap) return from;
+				index = (next + count) % count;
+			} else {
+				index = next;
+			}
+			if (this.#rolesRows[index]?.kind !== "separator") return index;
 		}
-		return index;
+		return from;
 	}
 
 	#handleRolesViewInput(data: string): void {
@@ -1431,10 +1445,13 @@ export class ModelHubComponent implements Component {
 
 		if (event.wheel !== null) {
 			if (overSidebar) {
-				this.#moveSidebar(event.wheel);
+				// Wheel pans the sidebar viewport; picking a scope is click/keys only.
+				const maxScroll = Math.max(0, this.#entries.length - this.#contentRowCount);
+				this.#sidebarScroll = Math.max(0, Math.min(this.#sidebarScroll + event.wheel, maxScroll));
+				this.#sidebarHover = this.#sidebarEntryIndexAt(contentLine);
 			} else if (overBody) {
 				if (entry.kind === "roles" && this.#assigning === null) {
-					this.#roleIndex = this.#stepRoleIndex(this.#roleIndex, event.wheel > 0 ? 1 : -1);
+					this.#roleIndex = this.#stepRoleIndex(this.#roleIndex, event.wheel > 0 ? 1 : -1, { wrap: false });
 				} else if (this.#isBrowserView(entry)) {
 					this.#browser.routeMouse(event, bodyLine);
 				}
@@ -1520,15 +1537,22 @@ export class ModelHubComponent implements Component {
 	}
 
 	#renderSidebar(width: number, rows: number): string[] {
-		const activeIndex = Math.max(
-			0,
-			this.#entries.findIndex(entry => entry.id === this.#activeEntryId),
-		);
-		if (this.#entries.length > rows) {
-			this.#sidebarScroll = Math.max(0, Math.min(activeIndex - Math.floor(rows / 2), this.#entries.length - rows));
-		} else {
-			this.#sidebarScroll = 0;
+		// The scroll offset is persistent: the wheel pans it freely. Only an
+		// activation (keys, click, programmatic) snaps the viewport to the
+		// active entry, and only far enough to reveal it.
+		if (this.#sidebarFollowActive) {
+			const activeIndex = Math.max(
+				0,
+				this.#entries.findIndex(entry => entry.id === this.#activeEntryId),
+			);
+			if (activeIndex < this.#sidebarScroll) {
+				this.#sidebarScroll = activeIndex;
+			} else if (activeIndex >= this.#sidebarScroll + rows) {
+				this.#sidebarScroll = activeIndex - rows + 1;
+			}
+			this.#sidebarFollowActive = false;
 		}
+		this.#sidebarScroll = Math.max(0, Math.min(this.#sidebarScroll, Math.max(0, this.#entries.length - rows)));
 
 		const lines: string[] = [];
 		for (let i = this.#sidebarScroll; i < Math.min(this.#entries.length, this.#sidebarScroll + rows); i++) {
