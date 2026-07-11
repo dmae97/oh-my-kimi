@@ -148,4 +148,46 @@ describe("transcript streaming commit (assistant text)", () => {
 			await term.flush();
 		}
 	});
+
+	it("keeps the final closed diff row highlighted while following prose streams", async () => {
+		if (process.platform === "win32") return;
+		const rows = 6;
+		const term = new VirtualTerminal(52, rows);
+		Object.defineProperty(term, "isNativeViewportAtBottom", { configurable: true, value: () => undefined });
+		const scheduler = new StressRenderScheduler();
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
+		const chat = new TranscriptContainer();
+		const block = new StreamingMarkdownBlock();
+		const diffLines = Array.from({ length: 18 }, (_value, index) => {
+			const sign = index % 2 === 0 ? "-" : "+";
+			return `${sign}closed-${String(index).padStart(2, "0")}`;
+		});
+		const finalDiffLine = "+closed-tail-no-extra-newline";
+		const codeBlockSource = [...diffLines, finalDiffLine].join("\n");
+		const streamingProse = Array.from(
+			{ length: 12 },
+			(_value, index) => `still streaming prose line ${String(index).padStart(2, "0")}`,
+		).join("\n");
+		const closedFenceWithLiveTail = `\`\`\`diff\n${codeBlockSource}\n\`\`\`\n${streamingProse}`;
+		chat.addChild(block);
+		tui.addChild(chat);
+
+		try {
+			tui.start();
+			await scheduler.drain(term);
+
+			block.setStreamingText(closedFenceWithLiveTail);
+			tui.requestRender();
+			await scheduler.drain(term);
+
+			const streamedRows = term.getScrollBuffer().map(row => Bun.stripANSI(row).trimEnd());
+			const finalDiffRow = streamedRows.findIndex(row => row.includes(finalDiffLine));
+			expect(finalDiffRow).toBeGreaterThanOrEqual(0);
+			expect(finalDiffRow).toBeLessThan(term.getBufferPosition().baseY);
+			expect(foregroundColumnsForBufferRow(term, finalDiffRow).length).toBeGreaterThan(0);
+		} finally {
+			tui.stop();
+			await term.flush();
+		}
+	});
 });

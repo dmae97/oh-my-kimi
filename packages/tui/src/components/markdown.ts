@@ -1421,16 +1421,19 @@ export class Markdown implements Component {
 		}
 
 		if (canStreamDiff) {
+			const closedFence = this.#codeTokenHasClosingFence(token);
 			const lineEnd = tokenText.lastIndexOf("\n");
-			if (lineEnd >= 0) {
-				const completedText = tokenText.slice(0, lineEnd);
-				if (completedText.length > 0) {
+			if (closedFence || lineEnd >= 0) {
+				const completedText = closedFence ? tokenText : tokenText.slice(0, lineEnd);
+				if (closedFence || completedText.length > 0) {
 					for (const hlLine of this.#highlightStreamingDiffLines(completedText, lang)) {
 						bodyLines.push(`${codeIndent}${hlLine}`);
 					}
 				}
-				for (const codeLine of tokenText.slice(lineEnd + 1).split("\n")) {
-					bodyLines.push(`${codeIndent}${this.#theme.codeBlock(codeLine)}`);
+				if (!closedFence) {
+					for (const codeLine of tokenText.slice(lineEnd + 1).split("\n")) {
+						bodyLines.push(`${codeIndent}${this.#theme.codeBlock(codeLine)}`);
+					}
 				}
 				return bodyLines;
 			}
@@ -1440,6 +1443,37 @@ export class Markdown implements Component {
 			bodyLines.push(`${codeIndent}${this.#theme.codeBlock(codeLine)}`);
 		}
 		return bodyLines;
+	}
+
+	#codeTokenHasClosingFence(token: Token): boolean {
+		const raw = "raw" in token && typeof token.raw === "string" ? token.raw : "";
+		const firstLineEnd = raw.indexOf("\n");
+		if (firstLineEnd < 0) return false;
+		const openingLine = raw.slice(0, firstLineEnd);
+		const openingTrimmed = openingLine.trimStart();
+		const openingIndent = openingLine.length - openingTrimmed.length;
+		if (openingIndent > 3) return false;
+		const fenceChar = openingTrimmed.charAt(0);
+		if (fenceChar !== "`" && fenceChar !== "~") return false;
+		let fenceLength = 0;
+		while (openingTrimmed.charAt(fenceLength) === fenceChar) fenceLength++;
+		if (fenceLength < 3) return false;
+
+		let lineStart = firstLineEnd + 1;
+		while (lineStart <= raw.length) {
+			const lineEnd = raw.indexOf("\n", lineStart);
+			const line = lineEnd >= 0 ? raw.slice(lineStart, lineEnd) : raw.slice(lineStart);
+			const trimmed = line.trimStart();
+			const indent = line.length - trimmed.length;
+			let closingLength = 0;
+			while (trimmed.charAt(closingLength) === fenceChar) closingLength++;
+			if (indent <= 3 && closingLength >= fenceLength && trimmed.slice(closingLength).trim().length === 0) {
+				return true;
+			}
+			if (lineEnd < 0) break;
+			lineStart = lineEnd + 1;
+		}
+		return false;
 	}
 
 	#highlightStreamingDiffLines(completedText: string, lang: string | undefined): readonly string[] {
