@@ -1835,6 +1835,155 @@ export class TUI extends Container {
 		this.#requestOrdinaryRender();
 	}
 
+	/**
+	 * Rewrite a quiet, visible component segment directly.
+	 *
+	 * Loader-style animation changes one already-positioned segment at a fixed
+	 * size. When the current frame geometry is still valid, rewrite just those
+	 * rows and update the diff baseline instead of scheduling a full render
+	 * cycle. Unsafe states fall back to `requestComponentRender()`, preserving
+	 * the ordinary renderer as the correctness path.
+	 */
+	requestDirectWrite(component: Component): void {
+		if (this.#stopped) return;
+		if (
+			this.#renderRequested ||
+			this.#postFullPaintSettleTimer !== undefined ||
+			this.#postFullPaintSettleUntilMs > 0
+		) {
+			this.requestComponentRender(component);
+			return;
+		}
+
+		const width = this.terminal.columns;
+		const height = this.terminal.rows;
+		if (!this.#hasEverRendered || this.#resizeEventPending) {
+			this.requestComponentRender(component);
+			return;
+		}
+		if (width !== this.#previousWidth || height !== this.#previousHeight || width !== this.#composeWidth) {
+			this.requestComponentRender(component);
+			return;
+		}
+		if (this.#clearScrollbackOnNextRender || this.#forceViewportRepaintOnNextRender) {
+			this.requestComponentRender(component);
+			return;
+		}
+		if (this.overlayStack.length > 0 || this.#altActive || !this.#imageBudget.quiescent) {
+			this.requestComponentRender(component);
+			return;
+		}
+
+		const children = this.children;
+		const segments = this.#frameSegments;
+		if (segments.length !== children.length) {
+			this.requestComponentRender(component);
+			return;
+		}
+		for (let i = 0; i < children.length; i++) {
+			if (segments[i]!.component !== children[i]) {
+				this.requestComponentRender(component);
+				return;
+			}
+		}
+
+		const root = this.#resolveComponentRoot(component);
+		if (root === null) {
+			this.requestComponentRender(component);
+			return;
+		}
+		const segmentIndex = segments.findIndex(segment => segment.component === root);
+		if (segmentIndex === -1) {
+			this.requestComponentRender(component);
+			return;
+		}
+		const segment = segments[segmentIndex]!;
+		if (segment.liveLocalStart !== undefined || segment.start < this.#committedRows) {
+			this.requestComponentRender(component);
+			return;
+		}
+
+		const windowTop = Math.max(this.#committedRows, this.#composedFrame.length - height, 0);
+		if (windowTop !== this.#windowTopRow) {
+			this.requestComponentRender(component);
+			return;
+		}
+		const screenStart = segment.start - windowTop;
+		if (screenStart < 0 || screenStart + segment.rowCount > height) {
+			this.requestComponentRender(component);
+			return;
+		}
+
+		const nextLines = root.render(width);
+		if (nextLines.length !== segment.rowCount) {
+			this.requestComponentRender(component);
+			return;
+		}
+		for (const line of nextLines) {
+			if (line.includes(CURSOR_MARKER)) {
+				this.requestComponentRender(component);
+				return;
+			}
+		}
+
+		let firstChanged = -1;
+		let lastChanged = -1;
+		const previousWindow = this.#previousWindow;
+		for (let i = 0; i < nextLines.length; i++) {
+			const frameRow = segment.start + i;
+			const raw = nextLines[i]!;
+			const prepared = this.#prepareLine(raw, width);
+			this.#composedFrame[frameRow] = raw;
+			this.#preparedMeta[frameRow] = prepared;
+			this.#preparedFrame[frameRow] = prepared.line;
+			if (previousWindow[screenStart + i] === prepared.line) continue;
+			previousWindow[screenStart + i] = prepared.line;
+			if (firstChanged === -1) firstChanged = i;
+			lastChanged = i;
+		}
+		segments[segmentIndex] = { ...segment, lines: nextLines };
+		this.#preparedValidRows = Math.max(this.#preparedValidRows, segment.start + nextLines.length);
+		this.#renderStablePrefixRows = Math.min(this.#renderStablePrefixRows, segment.start);
+
+		let cursorPos: { row: number; col: number } | null = null;
+		for (let i = this.#frameCursorMarkers.length - 1; i >= 0; i--) {
+			const marker = this.#frameCursorMarkers[i]!;
+			if (marker.row >= windowTop) {
+				cursorPos = marker;
+				break;
+			}
+		}
+
+		if (firstChanged === -1) {
+			this.#writeCursorPosition(cursorPos, this.#composedFrame.length);
+			this.#previousWidth = width;
+			this.#previousHeight = height;
+			return;
+		}
+
+		const currentScreenRow = Math.max(0, Math.min(height - 1, this.#hardwareCursorRow - windowTop));
+		const targetScreenRow = screenStart + firstChanged;
+		const rowDelta = targetScreenRow - currentScreenRow;
+		let buffer = this.#paintBeginSequence;
+		if (rowDelta > 0) buffer += `\x1b[${rowDelta}B`;
+		else if (rowDelta < 0) buffer += `\x1b[${-rowDelta}A`;
+		buffer += "\r";
+		for (let i = firstChanged; i <= lastChanged; i++) {
+			if (i > firstChanged) buffer += "\r\n";
+			buffer += this.#lineRewriteSequence(this.#preparedFrame[segment.start + i] ?? "", width);
+		}
+		const cursorControl = this.#cursorControlSequence(
+			cursorPos,
+			this.#composedFrame.length,
+			segment.start + lastChanged,
+		);
+		buffer += cursorControl.seq;
+		buffer += this.#paintEndSequence;
+		this.terminal.write(buffer);
+		this.#windowTopRow = windowTop;
+		this.#commit(this.#composedFrame, previousWindow, width, height, cursorControl);
+	}
+
 	/** Ordinary (non-forced) scheduling shared by full and component-scoped requests. */
 	#requestOrdinaryRender(): void {
 		// Coalesce non-forced renders inside the post-full-paint ConPTY settle

@@ -53,6 +53,15 @@ function visible(term: VirtualTerminal): string[] {
 	return strip(term.getViewport()).filter(row => row.length > 0);
 }
 
+class RenderCountingTUI extends TUI {
+	renders = 0;
+
+	override render(width: number): readonly string[] {
+		this.renders++;
+		return super.render(width);
+	}
+}
+
 describe("TUI.requestComponentRender", () => {
 	it("re-renders only the requesting subtree on a quiet frame", async () => {
 		const term = new VirtualTerminal(40, 8, 1_000);
@@ -242,6 +251,73 @@ describe("TUI.requestComponentRender", () => {
 			expect(duplicated).toEqual([]);
 			const observed = Array.from(buffer.matchAll(/ROW-\d{3}/g), match => match[0]);
 			expect(observed).toEqual(markers);
+		} finally {
+			tui.stop();
+			await term.flush();
+		}
+	});
+});
+
+describe("TUI.requestDirectWrite", () => {
+	it("directly rewrites a visible unchanged-size root segment without a full render", async () => {
+		const term = new VirtualTerminal(40, 8, 1_000);
+		const scheduler = new StressRenderScheduler();
+		const tui = new RenderCountingTUI(term, undefined, { renderScheduler: scheduler });
+		const transcript = new CountingLines(["msg-0", "msg-1"]);
+		const spinner = new CountingLines(["spin-0"]);
+		const footer = new CountingLines(["footer"]);
+		tui.addChild(transcript);
+		tui.addChild(spinner);
+		tui.addChild(footer);
+
+		try {
+			tui.start();
+			await scheduler.drain(term);
+			expect(visible(term)).toEqual(["msg-0", "msg-1", "spin-0", "footer"]);
+			const tuiRenders = tui.renders;
+			const transcriptRenders = transcript.renders;
+			const footerRenders = footer.renders;
+
+			spinner.set(["spin-1"]);
+			tui.requestDirectWrite(spinner);
+			await scheduler.drain(term);
+
+			expect(visible(term)).toEqual(["msg-0", "msg-1", "spin-1", "footer"]);
+			expect(tui.renders).toBe(tuiRenders);
+			expect(transcript.renders).toBe(transcriptRenders);
+			expect(footer.renders).toBe(footerRenders);
+		} finally {
+			tui.stop();
+			await term.flush();
+		}
+	});
+
+	it("falls back to a full render while a visible overlay is up", async () => {
+		const term = new VirtualTerminal(40, 8, 1_000);
+		const scheduler = new StressRenderScheduler();
+		const tui = new RenderCountingTUI(term, undefined, { renderScheduler: scheduler });
+		const transcript = new CountingLines(["msg-0"]);
+		const spinner = new CountingLines(["spin-0"]);
+		const footer = new CountingLines(["footer"]);
+		tui.addChild(transcript);
+		tui.addChild(spinner);
+		tui.addChild(footer);
+
+		try {
+			tui.start();
+			await scheduler.drain(term);
+			tui.showOverlay(new CountingLines(["modal"]), { width: 5, anchor: "top-left" });
+			await scheduler.drain(term);
+			expect(visible(term)).toEqual(["modal", "spin-0", "footer"]);
+			const tuiRenders = tui.renders;
+			const transcriptRenders = transcript.renders;
+
+			spinner.set(["spin-1"]);
+			tui.requestDirectWrite(spinner);
+			await scheduler.drain(term);
+			expect(visible(term)).toEqual(["modal", "spin-1", "footer"]);
+			expect(tui.renders).toBeGreaterThan(tuiRenders);
+			expect(transcript.renders).toBeGreaterThan(transcriptRenders);
 		} finally {
 			tui.stop();
 			await term.flush();

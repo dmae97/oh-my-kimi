@@ -93,11 +93,10 @@ export class Loader extends Text {
 		const frame = this.#frames[this.#currentFrame];
 		const text = `${this.spinnerColorFn(frame)} ${this.messageColorFn(this.message)}`;
 		if (this.setText(text) && this.#ui) {
-			// Component-scoped: a spinner tick changes only this component, so
-			// the TUI may reuse every other root subtree instead of re-walking
-			// the whole tree (full repaints at 12.5 Hz made huge transcripts
-			// lag as soon as the loader appeared).
-			this.#ui.requestComponentRender(this);
+			// Direct write: a loader tick changes only this component, so the TUI
+			// can update the already-positioned rows without driving the full
+			// compose/prepare/diff pipeline. Unsafe states fall back inside TUI.
+			this.#ui.requestDirectWrite(this);
 		}
 	}
 }

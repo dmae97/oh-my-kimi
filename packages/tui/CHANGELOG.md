@@ -9,6 +9,7 @@
 ### Fixed
 
 - Fixed the mid-prompt `/` autocomplete popup lingering until Esc on tokens that are neither a path nor skill-shaped. Skill suggestions previously stayed alive through fuzzy subsequence matches against long skill descriptions, so nearly any prose token kept the popup hovering; matching is now gated to the `skill:` namespace (bare `/`, `s`, `sk`, …), explicit `skill:` queries (fuzzy search retained), and bare skill-name prefixes (`/hum` → `skill:humanizer`). Everything else falls through to path completion or dismisses the popup, and the Tab/Enter staleness guard shares the same gate so a stale popup can no longer rewrite tokens like `/scan` into `/skill:…`.
+- Fixed idle Loader animation driving the full TUI render pipeline on every spinner tick by directly rewriting the Loader's visible rows when geometry is unchanged, reducing idle render work while preserving fallback repaint paths ([#5192](https://github.com/can1357/oh-my-pi/issues/5192)).
 
 ## [16.4.1] - 2026-07-10
 
