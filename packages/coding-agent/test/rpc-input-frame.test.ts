@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { RpcHostToolBridge } from "@oh-my-pi/pi-coding-agent/modes/rpc/host-tools";
 import {
 	dispatchRpcInputFrame,
 	type PendingExtensionRequest,
@@ -7,7 +8,13 @@ import {
 	RpcPendingExtensionRequests,
 	RpcShutdownCoordinator,
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
-import type { RpcCommand, RpcExtensionUIResponse, RpcResponse } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
+import type {
+	RpcCommand,
+	RpcExtensionUIResponse,
+	RpcHostToolCallRequest,
+	RpcHostToolCancelRequest,
+	RpcResponse,
+} from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 
 type OutputFrame = RpcResponse | object;
 
@@ -351,6 +358,74 @@ describe("RpcInputDispatcher", () => {
 				type: "response",
 				command: "set_auto_retry",
 				success: true,
+			},
+		]);
+	});
+
+	test("drain after EOF rejects active and queued host tool requests without emitting new calls", async () => {
+		const disconnectMessage = "RPC client disconnected before host tool execution completed";
+		const hostToolFrames: Array<RpcHostToolCallRequest | RpcHostToolCancelRequest> = [];
+		const bridge = new RpcHostToolBridge(frame => {
+			hostToolFrames.push(frame);
+		});
+		const [tool] = bridge.setTools([
+			{
+				name: "host_wait",
+				description: "Waits for host process",
+				parameters: {
+					type: "object",
+					properties: {},
+					additionalProperties: false,
+				},
+			},
+		]);
+		const started: string[] = [];
+		const { deps, outputs } = makeDeps(async command => {
+			if (command.type !== "prompt") throw new Error(`unexpected command type: ${command.type}`);
+			started.push(command.id ?? "");
+			await tool.execute(`toolu_${command.id}`, {});
+			return {
+				id: command.id,
+				type: "response",
+				command: "prompt",
+				success: true,
+				data: { agentInvoked: true },
+			};
+		});
+		const dispatcher = new RpcInputDispatcher({ deps });
+
+		dispatcher.dispatch({ id: "active", type: "prompt", message: "active host tool" });
+		dispatcher.dispatch({ id: "queued", type: "prompt", message: "queued host tool" });
+		await flushMicrotasks();
+
+		expect(started).toEqual(["active"]);
+		expect(hostToolFrames).toHaveLength(1);
+		expect(hostToolFrames[0]).toMatchObject({
+			type: "host_tool_call",
+			toolCallId: "toolu_active",
+			toolName: "host_wait",
+			arguments: {},
+		});
+
+		bridge.close(disconnectMessage);
+		await dispatcher.drain();
+
+		expect(started).toEqual(["active", "queued"]);
+		expect(hostToolFrames).toHaveLength(1);
+		expect(outputs).toEqual([
+			{
+				id: "active",
+				type: "response",
+				command: "prompt",
+				success: false,
+				error: disconnectMessage,
+			},
+			{
+				id: "queued",
+				type: "response",
+				command: "prompt",
+				success: false,
+				error: disconnectMessage,
 			},
 		]);
 	});
