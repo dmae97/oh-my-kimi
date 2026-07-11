@@ -299,7 +299,7 @@ import {
 	shouldDisableReasoning,
 	toReasoningEffort,
 } from "../thinking";
-import { formatTitleConversationContext, type TitleConversationTurn } from "../tiny/text";
+import { formatTitleConversationContext, type TitleConversationTurn } from "../tiny/message-preproc";
 import { shutdownTinyTitleClient } from "../tiny/title-client";
 import { countToolsForAutoDiscovery, resolveEffectiveToolDiscoveryMode } from "../tool-discovery/mode";
 import {

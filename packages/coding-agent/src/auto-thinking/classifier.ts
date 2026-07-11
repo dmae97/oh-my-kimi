@@ -22,6 +22,7 @@ import type { Settings } from "../config/settings";
 import difficultySystemPrompt from "../prompts/system/auto-thinking-difficulty.md" with { type: "text" };
 import difficultyLocalPrompt from "../prompts/system/auto-thinking-difficulty-local.md" with { type: "text" };
 import { clampAutoThinkingEffort } from "../thinking";
+import { preprocessTinyMessage } from "../tiny/message-preproc";
 import {
 	isTinyMemoryLocalModelKey,
 	isTinyMemoryReasoningModelKey,
@@ -31,10 +32,6 @@ import { tinyModelClient } from "../tiny/title-client";
 
 const DIFFICULTY_SYSTEM_PROMPT = prompt.render(difficultySystemPrompt);
 
-/** Upper bound on prompt characters fed to the classifier. */
-const MAX_INPUT_CHARS = 6000;
-const HEAD_CHARS = 4000;
-const TAIL_CHARS = 2000;
 /** Local classifiers occasionally need more room for chat-template boilerplate. */
 const LOCAL_ANSWER_MAX_TOKENS = 16;
 /**
@@ -66,7 +63,7 @@ export async function classifyDifficulty(
 	deps: ClassifyDifficultyDeps,
 ): Promise<Effort | undefined> {
 	const backend = deps.settings.get("providers.autoThinkingModel");
-	const input = prepareClassifierInput(promptText);
+	const input = preprocessTinyMessage(promptText);
 	const effort =
 		backend === ONLINE_AUTO_THINKING_MODEL_KEY
 			? await classifyOnline(input, deps)
@@ -182,15 +179,4 @@ function extractText(content: AssistantMessage["content"]): string {
 		.map(block => block.text)
 		.join(" ")
 		.trim();
-}
-
-/**
- * Bound the classifier input. Code blocks are kept (a large diff is signal), but
- * very long prompts are head+tail trimmed so the intent (start) and any trailing
- * error/stacktrace (end) both survive.
- */
-function prepareClassifierInput(text: string): string {
-	const trimmed = text.trim();
-	if (trimmed.length <= MAX_INPUT_CHARS) return trimmed;
-	return `${trimmed.slice(0, HEAD_CHARS)}\n…\n${trimmed.slice(-TAIL_CHARS)}`;
 }

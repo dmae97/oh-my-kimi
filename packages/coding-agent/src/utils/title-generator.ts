@@ -12,8 +12,9 @@ import { resolveRoleSelection } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import titleMarkerInstruction from "../prompts/system/title-marker-instruction.md" with { type: "text" };
 import titleSystemPrompt from "../prompts/system/title-system.md" with { type: "text" };
+import { formatTitleUserMessage } from "../tiny/message-preproc";
 import { isTinyTitleLocalModelKey, ONLINE_TINY_TITLE_MODEL_KEY } from "../tiny/models";
-import { formatTitleUserMessage, isLowSignalTitleInput, normalizeGeneratedTitle } from "../tiny/text";
+import { isLowSignalTitleInput, normalizeGeneratedTitle } from "../tiny/text";
 import { tinyTitleClient } from "../tiny/title-client";
 
 const TITLE_SYSTEM_PROMPT = prompt.render(titleSystemPrompt);
@@ -33,7 +34,7 @@ const TERMINAL_TITLE_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
 const TITLE_MAX_TOKENS = 1024;
 
 /** Matches the title the model wraps in `<title>...</title>`. */
-const TITLE_MARKER_GLOBAL_RE = /<title>([\s\S]*?)<\/title>/gi;
+const TITLE_MARKER_GLOBAL_RE = /<title>([\s\S]*?)<\/title>|<title\s*\/>|<title>\s*$/gi;
 const TITLE_VISIBILITY_SENTINEL = "\uE000omp-title-visible\uE000";
 const THINKING_TAG_ENVELOPE_RE = /<(think|thinking|reasoning)>\s*[\s\S]*?<\/\1>/gi;
 const THINKING_FENCE_ENVELOPE_RE = /```(?:thinking|reasoning)\b[\s\S]*?```/gi;
@@ -263,8 +264,8 @@ function extractVisibleMarkedTitle(text: string): string | undefined {
 	TITLE_MARKER_GLOBAL_RE.lastIndex = 0;
 	let marker: RegExpExecArray | null = TITLE_MARKER_GLOBAL_RE.exec(text);
 	while (marker !== null) {
-		const title = marker[1];
-		if (title !== undefined && isVisibleTitleMarker(text, marker.index)) return title.trim();
+		const content = marker[1];
+		if (isVisibleTitleMarker(text, marker.index)) return content?.trim() ?? "";
 		marker = TITLE_MARKER_GLOBAL_RE.exec(text);
 	}
 	return undefined;

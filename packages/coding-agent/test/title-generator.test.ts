@@ -249,6 +249,40 @@ describe("title generator", () => {
 		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
 	});
 
+	it("returns null for a self-closing <title/> marker", async () => {
+		const model = getModelOrThrow("claude-sonnet-4-5");
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "<title/>" }],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"I have a quick question for you",
+			createRegistry(model),
+			createSettings(model),
+		);
+
+		expect(title).toBeNull();
+		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("returns null for a bare <title> marker", async () => {
+		const model = getModelOrThrow("claude-sonnet-4-5");
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "<title>" }],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"I have a quick question for you",
+			createRegistry(model),
+			createSettings(model),
+		);
+
+		expect(title).toBeNull();
+		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+	});
+
 	it("logs and returns null when title credentials are missing", async () => {
 		const model = getModelOrThrow("claude-sonnet-4-5");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple");

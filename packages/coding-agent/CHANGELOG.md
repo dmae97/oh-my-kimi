@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a benchmark script for evaluating tiny model title generation quality and latency
+
+### Changed
+
+- Unified message preprocessing for auto-thinking, session titles, and benchmarks to better filter noise (ANSI codes, XML tags, and long commit hashes)
+- Optimized input truncation for tiny models by preserving both the start and end of long messages with an explicit omission marker
+- Updated title generation to support self-closing `<title/>` tags for empty or non-task sessions
+- Rewrote the session-title system prompt for sub-billion-parameter tiny models (LFM2 etc.): shorter positively-framed rules, no negation lists, and few-shot examples as `<user>` → `<title>` input/output pairs on both the local and online paths.
+- Unified tiny-model message preprocessing across session titles, auto-thinking classification, and the title benchmark: ANSI/XML noise and fenced code blocks are removed, long commit hashes are shortened, and long input preserves both ends with a counted omission marker.
+
 ### Fixed
 
 - Fixed the Windows binary exiting silently without running the CLI (which also made `omp update` roll back with "could not verify updated version"): `Bun.build`-API compiled Windows executables report `import.meta.main === false`, so the entry dispatch in `cli.ts` never ran. The dispatch now also honors the compile-time `PI_COMPILED` marker.
