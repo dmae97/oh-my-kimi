@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `GenerateImage` rejecting OpenAI Codex-compatible proxy bearer keys when the token does not expose a `chatgpt-account-id`. ([#5174](https://github.com/can1357/oh-my-pi/issues/5174))
+
 ## [16.4.3] - 2026-07-11
 
 ### Added
