@@ -56,16 +56,25 @@ describe("discoverAdvisorConfigs", () => {
 		expect(sharedInstructions).toBe("Shared baseline for all advisors.");
 	});
 
-	it("preserves an explicit empty tools list instead of treating it as the omitted default", async () => {
-		const yaml = ["advisors:", "  - name: No Tools", "    tools: []", "  - name: Default Tools"].join("\n");
+	it("distinguishes omitted tools, explicit no-tools, and invalid-only lists", async () => {
+		const yaml = [
+			"advisors:",
+			"  - name: No Tools",
+			"    tools: []",
+			"  - name: Default Tools",
+			"  - name: Invalid Only",
+			"    tools: [reed]",
+		].join("\n");
 		await Bun.write(path.join(tmp, "WATCHDOG.yml"), yaml);
 
 		const { advisors } = await discoverAdvisorConfigs(tmp, agentDir);
 		const noTools = advisors.find(a => a.name === "No Tools");
 		const defaultTools = advisors.find(a => a.name === "Default Tools");
+		const invalidOnly = advisors.find(a => a.name === "Invalid Only");
 
 		expect(noTools?.tools).toEqual([]);
 		expect(defaultTools?.tools).toBeUndefined();
+		expect(invalidOnly?.tools).toBeUndefined();
 	});
 
 	it("ignores a malformed YAML file without throwing", async () => {

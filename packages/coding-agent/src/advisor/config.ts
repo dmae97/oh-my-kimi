@@ -95,18 +95,19 @@ const KNOWN_TOOL_NAMES = new Set<string>(BUILTIN_TOOL_NAMES);
  * Keep only valid tool names from an advisor's `tools` list, dropping unknowns
  * with a warning. The advisor is a full agent, so any built tool may be granted;
  * the runtime further filters to what's actually available this session.
- * `undefined` means "use the default subset" (read/grep/glob); an explicit empty
- * list means "no tools".
+ * `undefined` means "use the default subset" (read/grep/glob); only an explicit
+ * raw empty list means "no tools".
  */
 function filterAdvisorTools(tools: string[] | undefined, sourcePath: string): string[] | undefined {
 	if (tools === undefined) return undefined;
+	if (tools.length === 0) return [];
 	// Normalize legacy aliases (search→grep, find→glob) and dedupe before validating.
 	const filtered = normalizeToolNames(tools).filter(name => {
 		if (KNOWN_TOOL_NAMES.has(name)) return true;
 		logger.warn("Advisor config: dropping unknown tool", { path: sourcePath, tool: name });
 		return false;
 	});
-	return filtered;
+	return filtered.length > 0 ? filtered : undefined;
 }
 
 /**
