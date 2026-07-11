@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed native Windows binary installs on older Windows 10 CPUs by building the generic `omp-windows-x64.exe` release asset with Bun's baseline x64 runtime instead of the AVX2-only modern target. ([#5172](https://github.com/can1357/oh-my-pi/issues/5172))
+
 ## [16.4.3] - 2026-07-11
 
 ### Added

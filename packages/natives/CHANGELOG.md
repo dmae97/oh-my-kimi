@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed macOS `pi-natives` package installs depending on Homebrew's dynamic `libpcre2-8.0.dylib`; release builds now force pcre2-sys to link PCRE2 statically. ([#5172](https://github.com/can1357/oh-my-pi/issues/5172))
+
 ## [16.4.3] - 2026-07-11
 
 ### Fixed

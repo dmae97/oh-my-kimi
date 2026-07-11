@@ -4,6 +4,10 @@ import { $ } from "bun";
 import { detectHostAvx2Support } from "../../../scripts/host-detect";
 import { generateEnumExports } from "./gen-enums";
 
+// pcre2-sys prefers a system libpcre2 when pkg-config finds one. Release addons
+// must not retain host Homebrew paths such as /opt/homebrew/opt/pcre2/*.dylib.
+process.env.PCRE2_SYS_STATIC ??= "1";
+
 const repoRoot = path.join(import.meta.dir, "../../..");
 const rustDir = path.join(repoRoot, "crates/pi-natives");
 const nativeDir = path.join(import.meta.dir, "../native");
