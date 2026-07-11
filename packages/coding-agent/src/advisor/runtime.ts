@@ -63,6 +63,77 @@ export interface AdvisorRuntimeHost {
 	notifyFailure?(error: unknown): void;
 }
 
+const ADVISOR_QUARANTINE_PREFIX = "Advisor response quarantined";
+
+/** Signals that an advisor response was discarded before it could become model-visible context. */
+export class AdvisorOutputQuarantinedError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "AdvisorOutputQuarantinedError";
+	}
+}
+
+interface AdvisorOutputHazard {
+	label: string;
+	pattern: RegExp;
+}
+
+const ADVISOR_OUTPUT_ONLY_HAZARDS: readonly AdvisorOutputHazard[] = [
+	{ label: "account-deletion claim", pattern: /\buser\b.{0,80}\b(?:deleted|erased)\b.{0,80}\baccount\b/i },
+	{
+		label: "instruction override",
+		pattern: /\bignore\s+(?:all\s+)?(?:prior|previous|earlier)\s+(?:user\s+)?instructions\b/i,
+	},
+	{ label: "destructive shell command", pattern: /\brm\s+-[a-z]*r[a-z]*f[a-z]*(?:\s|$)/i },
+	{ label: "denial instruction", pattern: /\bdeny\s+(?:this|it|the\s+request)\s+if\s+(?:asked|questioned)\b/i },
+];
+
+/**
+ * Replaces an advisor assistant turn that requested unavailable tools or generated
+ * output-only destructive directives with a sanitized error before dispatch.
+ *
+ * The agent loop records assistant turns before dispatching tools. Without this
+ * pre-dispatch rewrite, an advisor hallucination can leave unrelated text in the
+ * advisor transcript even though the action itself never executes.
+ */
+export function quarantineAdvisorUnsafeOutput(
+	message: AssistantMessage,
+	availableToolNames: ReadonlySet<string>,
+	sourceText = "",
+): string | undefined {
+	const reasons: string[] = [];
+	const unavailableToolNames = new Set<string>();
+	const textParts: string[] = [];
+	for (const block of message.content) {
+		if (block.type === "toolCall" && !availableToolNames.has(block.name)) unavailableToolNames.add(block.name);
+		if (block.type === "text") textParts.push(block.text);
+	}
+	if (unavailableToolNames.size > 0) {
+		const names = [...unavailableToolNames].sort();
+		const toolLabel = names.length === 1 ? "tool" : "tools";
+		reasons.push(`requested unavailable ${toolLabel} ${names.join(", ")}`);
+	}
+
+	const text = textParts.join("\n");
+	if (text) {
+		const labels: string[] = [];
+		for (const hazard of ADVISOR_OUTPUT_ONLY_HAZARDS) {
+			if (hazard.pattern.test(text) && !hazard.pattern.test(sourceText)) labels.push(hazard.label);
+		}
+		if (labels.includes("destructive shell command") || labels.length >= 3) {
+			reasons.push(`generated output-only destructive directives: ${labels.join(", ")}`);
+		}
+	}
+
+	if (reasons.length === 0) return undefined;
+
+	const messageText = `${ADVISOR_QUARANTINE_PREFIX}: ${reasons.join("; ")}`;
+	message.content = [{ type: "text", text: messageText }];
+	message.stopReason = "error";
+	message.errorMessage = messageText;
+	return messageText;
+}
+
 interface PendingDelta {
 	text: string;
 	turns: number;
@@ -367,6 +438,10 @@ export class AdvisorRuntime {
 						await this.host.onTurnError?.(err);
 					} catch (hookErr) {
 						logger.debug("advisor onTurnError hook failed", { err: String(hookErr) });
+					}
+					if (err instanceof AdvisorOutputQuarantinedError) {
+						this.#resetAdvisorContext(true, true);
+						continue;
 					}
 					// The hook awaits; a reset during it invalidates this batch like the
 					// prompt await above — drop it instead of requeueing stale content.

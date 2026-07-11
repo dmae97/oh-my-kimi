@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Advisor containment so hallucinated unavailable tool calls and output-only destructive directives quarantine the Advisor response and reset its private context instead of feeding contaminated text into later advice. ([#5181](https://github.com/can1357/oh-my-pi/issues/5181))
+
 ## [16.4.4] - 2026-07-11
 
 ### Changed

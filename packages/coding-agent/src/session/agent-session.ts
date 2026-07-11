@@ -152,6 +152,7 @@ import {
 	AdvisorEmissionGuard,
 	type AdvisorMessageDetails,
 	type AdvisorNote,
+	AdvisorOutputQuarantinedError,
 	AdvisorRuntime,
 	type AdvisorSeverity,
 	AdvisorTranscriptRecorder,
@@ -160,6 +161,7 @@ import {
 	getOrCreateAdvisorProviderSessionId,
 	isAdvisorInterruptImmuneTurnActive,
 	isInterruptingSeverity,
+	quarantineAdvisorUnsafeOutput,
 	resolveAdvisorDeliveryChannel,
 	slugifyAdvisorName,
 } from "../advisor";
@@ -2511,6 +2513,14 @@ export class AgentSession {
 
 			const names = config.tools === undefined ? ADVISOR_DEFAULT_TOOL_NAMES : new Set(config.tools);
 			const tools = (this.#advisorTools ?? []).filter(t => names.has(t.name));
+			const availableAdvisorToolNames = new Set<string>();
+			availableAdvisorToolNames.add(adviseTool.name);
+			for (const tool of tools) {
+				availableAdvisorToolNames.add(tool.name);
+				if (tool.customWireName !== undefined) availableAdvisorToolNames.add(tool.customWireName);
+			}
+			let quarantinedAdvisorOutput: string | undefined;
+			let currentAdvisorInput = "";
 
 			const primaryProviderSessionId = this.sessionId;
 			const advisorSessionLabel = slug
@@ -2566,6 +2576,13 @@ export class AgentSession {
 				onSseEvent: this.#onSseEvent,
 				transformProviderContext: this.#transformProviderContext,
 				intentTracing: false,
+				transformAssistantMessage: message => {
+					quarantinedAdvisorOutput = quarantineAdvisorUnsafeOutput(
+						message,
+						availableAdvisorToolNames,
+						currentAdvisorInput,
+					);
+				},
 				telemetry: advisorTelemetry,
 				serviceTier: undefined,
 				serviceTierResolver: advisorServiceTierResolver,
@@ -2573,7 +2590,19 @@ export class AgentSession {
 			advisorAgent.setDisableReasoning(shouldDisableReasoning(advisorThinkingLevel));
 
 			const advisorAgentFacade: AdvisorAgent = {
-				prompt: input => advisorAgent.prompt(input),
+				prompt: async input => {
+					let quarantined: string | undefined;
+					try {
+						quarantinedAdvisorOutput = undefined;
+						currentAdvisorInput = input;
+						await advisorAgent.prompt(input);
+						quarantined = quarantinedAdvisorOutput;
+					} finally {
+						quarantinedAdvisorOutput = undefined;
+						currentAdvisorInput = "";
+					}
+					if (quarantined) throw new AdvisorOutputQuarantinedError(quarantined);
+				},
 				abort: reason => advisorAgent.abort(reason),
 				reset: () => {
 					advisorAgent.reset();
