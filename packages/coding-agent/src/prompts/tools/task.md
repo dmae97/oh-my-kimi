@@ -3,12 +3,13 @@ Execution does not block your turn: you receive agent and job IDs immediately, a
 Execution blocks your turn: the call only returns once the work is completely finished.{{/if}}
 
 # Assignment Design
+- **Agent typing:** Choose the `agent` type first. `role` only names the specialist inside that type — it NEVER changes tools, model, or speed. Writing `role: "Scout"` does NOT make a scout: read-only research MUST use `agent: "scout"`, which runs on a faster model.
 - **Role matching:** Assign each subagent a specific `role` (e.g. "Security Reviewer", "DB Migrator"). Do not spawn generic workers.
 - **No overhead:** Each assignment MUST instruct its agent to skip formatters, linters, and project-wide test suites. You will run those once at the end.
 - **One-pass agents:** Prefer agents that investigate **and** edit in a single pass; only spin a read-only discovery step (e.g. `scout`) when the affected files are genuinely unknown.
 
 # Inputs
-- `agent` (optional): The base agent type to use (e.g., `scout`, `reviewer`). Defaults to `{{defaultAgent}}`{{#if defaultAgentIsGeneric}} (the general-purpose worker){{/if}} — omit it for the default worker instead of passing `agent: "{{defaultAgent}}"`.{{#if allowedAgentsText}} Current spawn policy allows: {{allowedAgentsText}}.{{/if}}
+- `agent` (optional): The base agent type to use (e.g., `scout`, `reviewer`). Omitting it gives you the general-purpose worker (`{{defaultAgent}}`) — never pass that name explicitly. Only omit it after checking the agent list below and finding no specialist that fits.{{#if allowedAgentsText}} Current spawn policy allows: {{allowedAgentsText}}.{{/if}}
 {{#if batchEnabled}}
 - `context`: Shared project state, constraints, and contracts. Applies to the entire batch; do not duplicate this background into individual tasks.
 - `tasks[]`: Array of subagents to spawn.
@@ -55,6 +56,7 @@ The `assignment` field MUST follow this format:
 {{#if spawningDisabled}}
 Agent spawning is currently disabled.
 {{else}}
+Pick the most specific agent for each task. Use the default worker only when no specialist below fits.
 {{#list agents join="\n"}}
 ### {{name}}{{#if readOnly}} (READ-ONLY: no edit/write/command tools){{/if}}
 {{description}}

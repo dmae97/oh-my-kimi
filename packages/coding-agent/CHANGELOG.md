@@ -8,6 +8,7 @@
 
 ### Changed
 
+- Refined task tool prompts to emphasize selecting the most specific agent type over defaults
 - Updated the task subagent to default to the `auto` thinking selector
 - The bundled `task` subagent now defaults to the `auto` thinking selector; agent frontmatter `thinking-level` accepts `auto`, and an explicit `:level` suffix on a resolved model pattern takes precedence over an agent-definition default.
 - Clarified the task tool prompt so callers pick the most specific agent type: `role` is documented as never changing tools/model, read-only investigation is directed to `agent: "scout"`, and omitting `agent` is framed as an explicit decision that no listed specialist fits.
