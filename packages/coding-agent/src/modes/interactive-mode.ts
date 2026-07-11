@@ -4287,6 +4287,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#inputController.handleImagePaste();
 	}
 
+	/** Queue slash-command input behind the active turn. */
+	handleQueueCommand(message: string): Promise<void> {
+		return this.#inputController.handleQueueCommand(message);
+	}
+
 	handleBtwCommand(question: string): Promise<void> {
 		return this.#btwController.start(question);
 	}

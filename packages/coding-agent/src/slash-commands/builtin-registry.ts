@@ -327,6 +327,15 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "queue",
+		description: "Queue a message for after the agent yields",
+		inlineHint: "<message>",
+		allowArgs: true,
+		handleTui: async (command, runtime) => {
+			await runtime.ctx.handleQueueCommand(command.args);
+		},
+	},
+	{
 		name: "model",
 		aliases: ["models"],
 		description: "Switch model for this session",
