@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `fuzzyFind` burying shallow matches below deeply nested ones on score ties: `@scripts` in the prompt ranked `packages/*/scripts` above the cwd-root `scripts/` directory because ties broke lexicographically on the full path. Ties now prefer shallower paths first.
+
 ## [16.4.3] - 2026-07-11
 
 ### Fixed
