@@ -24,7 +24,8 @@ import {
 	cmuxSnapshotToObservation,
 	GEOMETRY_SCRIPT,
 	mapWaitUntil,
-	serializeEval,
+	serializeEvalWithEnvelope,
+	unwrapEvalEnvelope,
 } from "./rpc";
 import type { CmuxSocketClient } from "./socket-client";
 
@@ -445,10 +446,14 @@ export class CmuxTab {
 		fn: string | ((...args: TArgs) => TResult | Promise<TResult>),
 		...args: TArgs
 	): Promise<TResult> {
-		const result = (await this.#request("browser.eval", {
-			script: serializeEval(fn as string | ((...args: unknown[]) => unknown), args),
-		})) as CmuxEvalResult;
-		return result.value as TResult;
+		// A script that throws inside the daemon comes back as a bare
+		// `js_error: A JavaScript exception occurred` with no message or stack.
+		// Catch page-side instead so the exception is diagnosable, and turn the
+		// daemon's other blind spot — Promise return values it cannot
+		// serialize — into an actionable error instead of "unsupported type".
+		const script = serializeEvalWithEnvelope(fn as string | ((...args: unknown[]) => unknown), args);
+		const result = (await this.#request("browser.eval", { script })) as CmuxEvalResult;
+		return unwrapEvalEnvelope<TResult>(result.value, "tab.evaluate()");
 	}
 
 	async scrollIntoView(selector: string): Promise<void> {
@@ -479,10 +484,22 @@ export class CmuxTab {
 
 	async screenshot(opts: ScreenshotOptions = {}): Promise<ScreenshotResult> {
 		const context = this.#requireRunContext("tab.screenshot()");
+		// The cmux daemon's `browser.screenshot` captures the surface viewport
+		// only — it has no element-clip or full-page mode, and Bun.Image cannot
+		// crop locally. Degrade transparently instead of silently mislabeling
+		// the capture: scroll the element into view, then TELL the model the
+		// image is the full viewport (reports showed selector captures being
+		// consumed as element crops).
+		const captureNotes: string[] = [];
 		if (opts.selector) {
 			await this.scrollIntoView(opts.selector);
+			captureNotes.push(
+				`selector ${JSON.stringify(opts.selector)} was scrolled into view, but this surface cannot clip to an element — the image is the full viewport`,
+			);
 		}
-		void opts.fullPage;
+		if (opts.fullPage) {
+			captureNotes.push("fullPage is unavailable on this surface — the image is the viewport only");
+		}
 		const result = await this.#captureScreenshotPng(context.timeoutMs);
 		const buffer = Buffer.from(result.png_base64, "base64");
 		const captureMime = "image/png";
@@ -528,6 +545,9 @@ export class CmuxTab {
 				dest,
 				resized,
 			});
+			if (captureNotes.length > 0) {
+				lines.push(`[cmux surface: ${captureNotes.join("; ")}]`);
+			}
 			context.displays.push({ type: "text", text: lines.join("\n") });
 			context.displays.push({ type: "image", data: resized.data, mimeType: resized.mimeType });
 		}
@@ -724,7 +744,12 @@ export class CmuxTab {
 			const callable = (0, eval)("(" + source + ")");
 			return callable(element, ...args);
 		})()`;
-		return await this.#evalScript<TResult>(script);
+		// Envelope so a stale selector or a throwing callback reports its actual
+		// error instead of the daemon's generic js_error (see tab.evaluate()).
+		const result = (await this.#request("browser.eval", {
+			script: serializeEvalWithEnvelope(script, []),
+		})) as CmuxEvalResult;
+		return unwrapEvalEnvelope<TResult>(result.value, "elementHandle.evaluate()");
 	}
 
 	async pageContent(): Promise<string> {

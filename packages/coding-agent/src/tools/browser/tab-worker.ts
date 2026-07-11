@@ -1140,6 +1140,13 @@ export class WorkerCore {
 		opts: ScreenshotOptions = {},
 	): Promise<ScreenshotResult> {
 		const page = this.#requirePage();
+		// Multiple tabs can share one Chromium (sibling headless tabs on a shared
+		// endpoint, cdp/app attach). CDP `Page.captureScreenshot` reads the
+		// compositor surface, which follows the *active* target — a backgrounded
+		// page can stall waiting for a fresh frame (the 20s screenshot timeouts)
+		// or hand back a sibling tab's pixels. Activate first; best-effort so an
+		// already-active or freshly-closed target never fails the capture.
+		await untilAborted(signal, () => page.bringToFront()).catch(() => undefined);
 		const fullPage = opts.selector ? false : (opts.fullPage ?? false);
 		// An explicit save path picks the full-res capture format: puppeteer encodes
 		// png/jpeg/webp natively, so `save: "shot.webp"` gets real WebP bytes instead
