@@ -650,7 +650,6 @@ export class ExtensionUiController {
 				{
 					onSubmit: result => settle(result),
 					onCancel: () => settle(undefined),
-					onChat: () => settle({ kind: "chat" }),
 					onPrompt: promptForText,
 				},
 				{
