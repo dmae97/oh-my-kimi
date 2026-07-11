@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, test, vi } from "bun:test";
+import { afterEach, beforeAll, describe, expect, type Mock, test, vi } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
@@ -78,6 +78,7 @@ interface HubHarness {
 	onPick: ReturnType<typeof vi.fn>;
 	onLoginRequest: ReturnType<typeof vi.fn>;
 	onCancel: ReturnType<typeof vi.fn>;
+	onFallbackChainChange: Mock<(role: string, chain: string[]) => void>;
 }
 
 const openHubs: ModelHubComponent[] = [];
@@ -100,6 +101,16 @@ function createHub(options: {
 	const onPick = vi.fn();
 	const onLoginRequest = vi.fn();
 	const onCancel = vi.fn();
+	// Mirror the controller: persist chain edits so the hub's re-read sees them.
+	const onFallbackChainChange = vi.fn((role: string, chain: string[]) => {
+		const chains = { ...settings.get("retry.fallbackChains") };
+		if (chain.length === 0) {
+			delete chains[role];
+		} else {
+			chains[role] = chain;
+		}
+		settings.override("retry.fallbackChains", chains);
+	});
 	const hub = new ModelHubComponent(
 		ui,
 		settings,
@@ -111,12 +122,13 @@ function createHub(options: {
 			onPick: options.callbacks?.onPick ?? onPick,
 			onLoginRequest: options.callbacks?.onLoginRequest ?? onLoginRequest,
 			onCycleOrderChange: options.callbacks?.onCycleOrderChange,
+			onFallbackChainChange: options.callbacks?.onFallbackChainChange ?? onFallbackChainChange,
 			onCancel: options.callbacks?.onCancel ?? onCancel,
 		},
 		options.hub,
 	);
 	openHubs.push(hub);
-	return { hub, onAssign, onUnassign, onPick, onLoginRequest, onCancel };
+	return { hub, onAssign, onUnassign, onPick, onLoginRequest, onCancel, onFallbackChainChange };
 }
 
 const DOWN = "\x1b[B";
@@ -304,7 +316,8 @@ describe("ModelHub", () => {
 
 			hub.handleInput(UP); // All models → Roles (since Recent is removed)
 			hub.handleInput("\n"); // dive into rows
-			hub.handleInput(UP); // wraps to the trailing "+ New role…" row
+			hub.handleInput(UP); // wraps to the trailing "+ New fallback…" row
+			hub.handleInput(UP); // skips the section divider up to "+ New role…"
 			hub.handleInput("\n");
 			expect(footerLine(hub.render(220))).toContain("New role name:");
 
@@ -317,7 +330,6 @@ describe("ModelHub", () => {
 			const call = onAssign.mock.calls[0];
 			expect(call?.[1]).toBe("reviewer");
 			expect(call?.[3]).toBe("test/reviewer-model");
-			expect(call?.[4]).toBe("modelRole");
 		});
 	});
 
@@ -340,7 +352,6 @@ describe("ModelHub", () => {
 			expect(call?.[1]).toBe("default");
 			expect(call?.[2]).toBe(ThinkingLevel.Inherit);
 			expect(call?.[3]).toBe("openai/gpt-5.5");
-			expect(call?.[4]).toBe("modelRole");
 
 			// The thinking strip follows immediately, scoped to the model's
 			// real ladder: gpt-5.5 tops out at xhigh — no invented max tier.
@@ -379,20 +390,24 @@ describe("ModelHub", () => {
 			expect(footerLine(hub.render(220))).not.toContain("inherit");
 		});
 
-		test("retry-fallback chip fires the retryFallback action without a thinking strip", () => {
+		test("retry-fallback chip appends the model to the default chain without a thinking strip", () => {
 			const model = makeModel("test", "retry-fallback-model");
-			const { hub, onAssign } = createHub({ models: [model], scoped: true });
+			const { hub, onAssign, onFallbackChainChange } = createHub({ models: [model], scoped: true });
 			installTestTheme();
 
 			hub.handleInput("\n");
 			hub.handleInput(LEFT); // wraps to the trailing retry-fallback chip
 			hub.handleInput("\n");
 
-			expect(onAssign).toHaveBeenCalledTimes(1);
-			const call = onAssign.mock.calls[0];
-			expect(call?.[1]).toBe("default");
-			expect(call?.[4]).toBe("retryFallback");
+			expect(onFallbackChainChange).toHaveBeenCalledWith("default", ["test/retry-fallback-model"]);
+			expect(onAssign).not.toHaveBeenCalled();
 			expect(footerLine(hub.render(220))).not.toContain("inherit");
+
+			// A second registration of the same model is a no-op, not a duplicate.
+			hub.handleInput("\n");
+			hub.handleInput(LEFT);
+			hub.handleInput("\n");
+			expect(onFallbackChainChange).toHaveBeenCalledTimes(1);
 		});
 
 		test("overflowing role strip scrolls left so the selected chip stays visible", () => {
@@ -414,6 +429,181 @@ describe("ModelHub", () => {
 			const reset = footerLine(hub.render(80));
 			expect(reset).toContain("[ default");
 			expect(reset.trimStart().startsWith("…")).toBe(false);
+		});
+	});
+
+	describe("fallback chains in the roles view", () => {
+		/** Hop to the Roles sidebar entry and dive into its rows. */
+		function enterRolesView(hub: ModelHubComponent): void {
+			hub.handleInput(UP); // All models → Roles
+			hub.handleInput("\n"); // dive into the rows
+		}
+
+		test("renders configured chain entries as indented rows under their role", () => {
+			const a = makeModel("test", "model-a");
+			const b = makeModel("test", "model-b");
+			const settings = Settings.isolated({
+				"retry.fallbackChains": { default: ["test/model-a", "test/model-b"] },
+			});
+			const { hub } = createHub({ models: [a, b], scoped: true, settings });
+
+			enterRolesView(hub);
+			const rendered = normalize(hub.render(220));
+			expect(rendered).toContain("↳ test/model-a");
+			expect(rendered).toContain("↳ test/model-b");
+		});
+
+		test("f on a role opens fallback assignment and Enter appends the picked model", () => {
+			const a = makeModel("test", "model-a");
+			const settings = Settings.isolated({});
+			const { hub, onFallbackChainChange, onAssign } = createHub({ models: [a], scoped: true, settings });
+
+			enterRolesView(hub);
+			hub.handleInput("f"); // add a fallback for the first role (default)
+			expect(normalize(hub.render(220))).toContain("Adding fallback for");
+
+			hub.handleInput("\n"); // pick the only model
+			expect(onFallbackChainChange).toHaveBeenCalledWith("default", ["test/model-a"]);
+			expect(onAssign).not.toHaveBeenCalled(); // no role assignment, no thinking strip
+			expect(normalize(hub.render(220))).toContain("↳ test/model-a");
+		});
+
+		test("x removes a chain entry and Enter on an entry replaces it", () => {
+			const a = makeModel("test", "model-a");
+			const b = makeModel("test", "model-b");
+			const settings = Settings.isolated({
+				"retry.fallbackChains": { default: ["test/model-a", "test/model-b"] },
+			});
+			const { hub, onFallbackChainChange } = createHub({ models: [a, b], scoped: true, settings });
+
+			enterRolesView(hub);
+			hub.handleInput(DOWN); // default → its first chain entry (model-a)
+			hub.handleInput("\n"); // replace this entry
+			expect(normalize(hub.render(220))).toContain("Replacing fallback of");
+			for (const ch of "model-b") hub.handleInput(ch); // search: arrows hop scopes in assign mode
+			hub.handleInput("\n");
+			expect(onFallbackChainChange).toHaveBeenLastCalledWith("default", ["test/model-b"]);
+
+			hub.handleInput("x"); // cursor landed on the replaced entry — remove it
+			expect(onFallbackChainChange).toHaveBeenLastCalledWith("default", []);
+			expect(normalize(hub.render(220))).not.toContain("↳");
+		});
+
+		test("] moves a chain entry later and the cursor follows it", () => {
+			const a = makeModel("test", "model-a");
+			const b = makeModel("test", "model-b");
+			const settings = Settings.isolated({
+				"retry.fallbackChains": { default: ["test/model-a", "test/model-b"] },
+			});
+			const { hub, onFallbackChainChange } = createHub({ models: [a, b], scoped: true, settings });
+
+			enterRolesView(hub);
+			hub.handleInput(DOWN); // first chain entry (model-a)
+			hub.handleInput("]");
+			expect(onFallbackChainChange).toHaveBeenLastCalledWith("default", ["test/model-b", "test/model-a"]);
+
+			// Cursor followed the moved entry: x removes model-a, not model-b.
+			hub.handleInput("x");
+			expect(onFallbackChainChange).toHaveBeenLastCalledWith("default", ["test/model-b"]);
+		});
+
+		test("clicking a roles row hits the row under the pointer", () => {
+			const a = makeModel("test", "model-a");
+			const { hub } = createHub({ models: [a], scoped: true });
+
+			hub.handleInput(UP); // All models → Roles
+			// Derive the pointer row from the frame itself: the fullscreen
+			// overlay paints from screen row 0, so frame index == screen row.
+			const frame = hub.render(220).map(line => stripVTControlCharacters(line));
+			const screenRow = frame.findIndex(line => line.includes("DEFAULT"));
+			expect(screenRow).toBeGreaterThan(0);
+			const sgr = `\x1b[<0;61;${screenRow + 1}M`; // SGR reports are 1-based
+			hub.handleInput(sgr); // select (dive into rows)
+			hub.handleInput(sgr); // click-again activates
+			expect(normalize(hub.render(220))).toContain("Assigning DEFAULT");
+		});
+
+		test("fallbacks chip keys a new chain by the selected model", () => {
+			const a = makeModel("test", "model-a");
+			const b = makeModel("test", "model-b");
+			const { hub, onFallbackChainChange } = createHub({ models: [a, b], scoped: true });
+
+			for (const ch of "model-a") hub.handleInput(ch);
+			hub.handleInput("\n"); // open the strip for model-a
+			hub.handleInput(LEFT); // retry-fallback
+			hub.handleInput(LEFT); // fallbacks:test/*
+			hub.handleInput(LEFT); // fallbacks:model-a
+			hub.handleInput("\n");
+			expect(normalize(hub.render(220))).toContain("Adding fallback for test/model-a");
+
+			for (const ch of "model-b") hub.handleInput(ch);
+			hub.handleInput("\n");
+			expect(onFallbackChainChange).toHaveBeenLastCalledWith("test/model-a", ["test/model-b"]);
+			const rendered = normalize(hub.render(220));
+			expect(rendered).toContain("test/model-a");
+			expect(rendered).toContain("↳ test/model-b");
+		});
+
+		test("provider chip keys the chain by provider/*", () => {
+			const a = makeModel("test", "model-a");
+			const b = makeModel("test", "model-b");
+			const { hub, onFallbackChainChange } = createHub({ models: [a, b], scoped: true });
+
+			for (const ch of "model-a") hub.handleInput(ch);
+			hub.handleInput("\n");
+			hub.handleInput(LEFT); // retry-fallback
+			hub.handleInput(LEFT); // fallbacks:test/*
+			hub.handleInput("\n");
+			expect(normalize(hub.render(220))).toContain("Adding fallback for test/*");
+
+			for (const ch of "model-b") hub.handleInput(ch);
+			hub.handleInput("\n");
+			expect(onFallbackChainChange).toHaveBeenLastCalledWith("test/*", ["test/model-b"]);
+		});
+
+		test("+ New fallback… picks the protected model, then keys the chain via the strip", () => {
+			const a = makeModel("test", "model-a");
+			const b = makeModel("test", "model-b");
+			const { hub, onFallbackChainChange } = createHub({ models: [a, b], scoped: true });
+
+			enterRolesView(hub);
+			hub.handleInput(UP); // wrap to the trailing "+ New fallback…"
+			hub.handleInput("\n");
+			expect(normalize(hub.render(220))).toContain("New fallback chain");
+
+			for (const ch of "model-a") hub.handleInput(ch);
+			hub.handleInput("\n"); // pick the protected model
+			const strip = footerLine(hub.render(220));
+			expect(strip).toContain("for test/model-a");
+			expect(strip).toContain("for test/*");
+
+			hub.handleInput("\n"); // key by the exact model
+			expect(normalize(hub.render(220))).toContain("Adding fallback for test/model-a");
+			for (const ch of "model-b") hub.handleInput(ch);
+			hub.handleInput("\n");
+			expect(onFallbackChainChange).toHaveBeenLastCalledWith("test/model-a", ["test/model-b"]);
+		});
+
+		test("model-keyed chains render below the separator and x clears the whole chain", () => {
+			const a = makeModel("test", "model-a");
+			const settings = Settings.isolated({
+				"retry.fallbackChains": { "test/*": ["test/model-a"] },
+			});
+			const { hub, onFallbackChainChange } = createHub({ models: [a], scoped: true, settings });
+
+			enterRolesView(hub);
+			const rendered = normalize(hub.render(220));
+			expect(rendered).toContain("test/*");
+			expect(rendered).toContain("↳ test/model-a");
+			expect(rendered).toContain("+ New fallback…");
+			expect(rendered).toMatch(/─{10,}/); // the roles/fallbacks divider
+
+			hub.handleInput(UP); // + New fallback…
+			hub.handleInput(UP); // ↳ test/model-a
+			hub.handleInput(UP); // test/* header (separator is skipped)
+			hub.handleInput("x");
+			expect(onFallbackChainChange).toHaveBeenLastCalledWith("test/*", []);
+			expect(normalize(hub.render(220))).not.toContain("↳ test/model-a");
 		});
 	});
 

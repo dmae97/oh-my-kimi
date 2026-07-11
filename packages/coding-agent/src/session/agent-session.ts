@@ -1060,6 +1060,7 @@ export interface FreshSessionResult {
 
 /** Standard thinking levels */
 
+/** `retry.fallbackChains` config: chain key (role name or model selector) → ordered fallback selectors. */
 type RetryFallbackChains = Record<string, string[]>;
 
 type RetryFallbackRevertPolicy = "never" | "cooldown-expiry";
@@ -1072,6 +1073,7 @@ interface RetryFallbackSelector {
 }
 
 interface ActiveRetryFallbackState {
+	/** Chain key that produced this fallback: a model-role name or a model-selector key. */
 	role: string;
 	originalSelector: string;
 	originalThinkingLevel: ConfiguredThinkingLevel | undefined;
@@ -1097,6 +1099,24 @@ function parseRetryFallbackSelector(
 		id: parsed.id,
 		thinkingLevel: concreteThinkingLevel(parsed.thinkingLevel),
 	};
+}
+
+/**
+ * `retry.fallbackChains` keys are either model-role names (`smol`, `default`)
+ * or model selectors (`provider/model-id[:thinking]`). Role names never
+ * contain a slash, so its presence marks a model-keyed chain whose primary is
+ * the key itself — the chain follows the model across role reassignments.
+ */
+function isRetryFallbackModelKey(key: string): boolean {
+	return key.includes("/");
+}
+
+/**
+ * A `provider/*` fallback-chain key: matches any active model of that provider,
+ * so one entry covers every current and future model behind the provider.
+ */
+function isRetryFallbackWildcardKey(key: string): boolean {
+	return key.endsWith("/*");
 }
 
 function formatRetryFallbackSelector(model: Model, thinkingLevel: ThinkingLevel | undefined): string {
@@ -13475,36 +13495,68 @@ export class AgentSession {
 		const configuredChains = this.settings.get("retry.fallbackChains");
 		if (configuredChains === undefined) return;
 		if (!configuredChains || typeof configuredChains !== "object" || Array.isArray(configuredChains)) {
-			const msg = "retry.fallbackChains must be a mapping of role names to selector arrays.";
+			const msg = "retry.fallbackChains must be a mapping of role names or model selectors to selector arrays.";
 			logger.warn(msg);
 			this.configWarnings.push(msg);
 			return;
 		}
 
-		for (const [role, chain] of Object.entries(configuredChains)) {
+		for (const key in configuredChains) {
+			const chain = (configuredChains as RetryFallbackChains)[key];
+			const keyKind = isRetryFallbackModelKey(key) ? "model" : "role";
+			if (keyKind === "model") {
+				if (isRetryFallbackWildcardKey(key)) {
+					const provider = key.slice(0, -2);
+					if (!this.#modelRegistry.getAll().some(model => model.provider === provider)) {
+						const msg = `retry.fallbackChains wildcard key references unknown provider: ${key}`;
+						logger.warn(msg);
+						this.configWarnings.push(msg);
+					}
+				} else {
+					const parsedKey = parseRetryFallbackSelector(key, this.#modelRegistry);
+					if (!parsedKey) {
+						const msg = `Invalid model selector key in retry.fallbackChains: ${key}`;
+						logger.warn(msg);
+						this.configWarnings.push(msg);
+					} else if (!this.#modelRegistry.find(parsedKey.provider, parsedKey.id)) {
+						const msg = `retry.fallbackChains key references unknown model: ${key}`;
+						logger.warn(msg);
+						this.configWarnings.push(msg);
+					}
+				}
+			}
 			if (!Array.isArray(chain)) {
-				const msg = `Fallback chain for role '${role}' must be an array of selector strings.`;
+				const msg = `Fallback chain for ${keyKind} '${key}' must be an array of selector strings.`;
 				logger.warn(msg);
 				this.configWarnings.push(msg);
 				continue;
 			}
 			for (const selectorStr of chain) {
 				if (typeof selectorStr !== "string") {
-					const msg = `Fallback chain for role '${role}' contains a non-string selector.`;
+					const msg = `Fallback chain for ${keyKind} '${key}' contains a non-string selector.`;
 					logger.warn(msg);
 					this.configWarnings.push(msg);
 					continue;
 				}
+				if (isRetryFallbackWildcardKey(selectorStr)) {
+					const provider = selectorStr.slice(0, -2);
+					if (!this.#modelRegistry.getAll().some(model => model.provider === provider)) {
+						const msg = `Fallback chain for ${keyKind} '${key}' references unknown provider: ${selectorStr}`;
+						logger.warn(msg);
+						this.configWarnings.push(msg);
+					}
+					continue;
+				}
 				const parsed = parseRetryFallbackSelector(selectorStr, this.#modelRegistry);
 				if (!parsed) {
-					const msg = `Invalid fallback selector format in role '${role}': ${selectorStr}`;
+					const msg = `Invalid fallback selector format in ${keyKind} '${key}': ${selectorStr}`;
 					logger.warn(msg);
 					this.configWarnings.push(msg);
 					continue;
 				}
 				const exists = this.#modelRegistry.find(parsed.provider, parsed.id);
 				if (!exists) {
-					const msg = `Fallback chain for role '${role}' references unknown model: ${selectorStr}`;
+					const msg = `Fallback chain for ${keyKind} '${key}' references unknown model: ${selectorStr}`;
 					logger.warn(msg);
 					this.configWarnings.push(msg);
 				}
@@ -13517,6 +13569,8 @@ export class AgentSession {
 	}
 
 	#getRetryFallbackPrimarySelector(role: string): RetryFallbackSelector | undefined {
+		if (isRetryFallbackWildcardKey(role)) return undefined;
+		if (isRetryFallbackModelKey(role)) return parseRetryFallbackSelector(role, this.#modelRegistry);
 		const configuredSelector = this.settings.getModelRole(role);
 		return configuredSelector ? parseRetryFallbackSelector(configuredSelector, this.#modelRegistry) : undefined;
 	}
@@ -13538,6 +13592,13 @@ export class AgentSession {
 		this.#modelRegistry.suppressSelector(currentSelector, Date.now() + cooldownMs);
 	}
 
+	/**
+	 * Map the failing model selector to the chain key that owns it, by
+	 * specificity: an exact model-selector key, then a `provider/*` wildcard,
+	 * then a model role whose current assignment matches, then `default`.
+	 * Model-oriented keys win over roles so a chain follows the model across
+	 * role reassignments.
+	 */
 	#resolveRetryFallbackRole(currentSelector: string): string | undefined {
 		const parsedCurrent = parseRetryFallbackSelector(currentSelector, this.#modelRegistry);
 		if (!parsedCurrent) return undefined;
@@ -13551,18 +13612,33 @@ export class AgentSession {
 				? formatRetryFallbackBaseSelector(parseRetryFallbackSelector(currentPlainSelector) ?? parsedCurrent)
 				: undefined;
 
-		for (const role of Object.keys(chains)) {
-			const primarySelector = this.#getRetryFallbackPrimarySelector(role);
-			if (primarySelector?.raw === currentSelector) return role;
+		const exactModelKeys: string[] = [];
+		const roleKeys: string[] = [];
+		for (const key in chains) {
+			if (!isRetryFallbackModelKey(key)) roleKeys.push(key);
+			else if (!isRetryFallbackWildcardKey(key)) exactModelKeys.push(key);
 		}
-		for (const role of Object.keys(chains)) {
-			const primarySelector = this.#getRetryFallbackPrimarySelector(role);
-			if (!primarySelector) continue;
-			if (currentPlainSelector && primarySelector.raw === currentPlainSelector) return role;
-			const primaryBaseSelector = formatRetryFallbackBaseSelector(primarySelector);
-			if (primaryBaseSelector === currentBaseSelector) return role;
-			if (currentPlainBaseSelector && primaryBaseSelector === currentPlainBaseSelector) return role;
+		const matchesCurrent = (primary: RetryFallbackSelector | undefined): boolean => {
+			if (!primary) return false;
+			if (primary.raw === currentSelector || (currentPlainSelector && primary.raw === currentPlainSelector)) {
+				return true;
+			}
+			const base = formatRetryFallbackBaseSelector(primary);
+			return base === currentBaseSelector || (!!currentPlainBaseSelector && base === currentPlainBaseSelector);
+		};
+
+		// 1. Exact model-selector keys — most specific.
+		for (const key of exactModelKeys) {
+			if (matchesCurrent(this.#getRetryFallbackPrimarySelector(key))) return key;
 		}
+		// 2. Provider wildcard (`provider/*`) — any active model of this provider.
+		const wildcardKey = `${parsedCurrent.provider}/*`;
+		if (Array.isArray(chains[wildcardKey])) return wildcardKey;
+		// 3. Role keys — matched by the role's currently-assigned model.
+		for (const key of roleKeys) {
+			if (matchesCurrent(this.#getRetryFallbackPrimarySelector(key))) return key;
+		}
+		// 4. The default chain, when default has no explicit role primary.
 		const defaultChain = chains.default;
 		if (
 			Array.isArray(defaultChain) &&
@@ -13574,13 +13650,45 @@ export class AgentSession {
 		return undefined;
 	}
 
-	#getRetryFallbackEffectiveChain(role: string): RetryFallbackSelector[] {
-		const primarySelector = this.#getRetryFallbackPrimarySelector(role);
-		if (!primarySelector) return [];
-		const chain = [primarySelector];
-		const seen = new Set<string>([primarySelector.raw]);
+	/**
+	 * Parse one configured chain entry. A `provider/*` entry keeps the failing
+	 * model's id and swaps the provider (google-antigravity/x → google/x);
+	 * ids the target provider lacks are skipped by the candidate loop's
+	 * registry lookup.
+	 */
+	#parseRetryFallbackChainEntry(
+		entry: string,
+		current: RetryFallbackSelector | undefined,
+	): RetryFallbackSelector | undefined {
+		if (isRetryFallbackWildcardKey(entry)) {
+			if (!current) return undefined;
+			const provider = entry.slice(0, -2);
+			return { raw: `${provider}/${current.id}`, provider, id: current.id, thinkingLevel: undefined };
+		}
+		return parseRetryFallbackSelector(entry, this.#modelRegistry);
+	}
+
+	#getRetryFallbackEffectiveChain(role: string, currentSelector?: string): RetryFallbackSelector[] {
+		const parsedCurrent = currentSelector
+			? parseRetryFallbackSelector(currentSelector, this.#modelRegistry)
+			: undefined;
+		const seen = new Set<string>();
+		const chain: RetryFallbackSelector[] = [];
+		if (isRetryFallbackWildcardKey(role)) {
+			// A wildcard key has no fixed primary: the active model is the
+			// primary, followed by the configured provider-level fallbacks.
+			if (parsedCurrent) {
+				chain.push(parsedCurrent);
+				seen.add(parsedCurrent.raw);
+			}
+		} else {
+			const primarySelector = this.#getRetryFallbackPrimarySelector(role);
+			if (!primarySelector) return [];
+			chain.push(primarySelector);
+			seen.add(primarySelector.raw);
+		}
 		for (const selector of this.#getRetryFallbackChains()[role] ?? []) {
-			const parsed = parseRetryFallbackSelector(selector, this.#modelRegistry);
+			const parsed = this.#parseRetryFallbackChainEntry(selector, parsedCurrent);
 			if (!parsed || seen.has(parsed.raw)) continue;
 			seen.add(parsed.raw);
 			chain.push(parsed);
@@ -13589,7 +13697,7 @@ export class AgentSession {
 	}
 
 	#findRetryFallbackCandidates(role: string, currentSelector: string): RetryFallbackSelector[] {
-		let chain = this.#getRetryFallbackEffectiveChain(role);
+		let chain = this.#getRetryFallbackEffectiveChain(role, currentSelector);
 		const parsedCurrent = parseRetryFallbackSelector(currentSelector, this.#modelRegistry);
 		if (chain.length === 0 && role === "default" && parsedCurrent) {
 			const chains = this.#getRetryFallbackChains();
@@ -13602,7 +13710,7 @@ export class AgentSession {
 				const seen = new Set<string>([parsedCurrent.raw]);
 				chain = [parsedCurrent];
 				for (const selector of defaultChain) {
-					const parsed = parseRetryFallbackSelector(selector, this.#modelRegistry);
+					const parsed = this.#parseRetryFallbackChainEntry(selector, parsedCurrent);
 					if (!parsed || seen.has(parsed.raw)) continue;
 					seen.add(parsed.raw);
 					chain.push(parsed);

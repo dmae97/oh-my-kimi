@@ -1606,6 +1606,44 @@ describe("AuthStorage codex oauth ranking", () => {
 		expect(apiKey).toBe("api-acct-paid");
 	});
 
+	test("attempts every exhausted account for a paid-gated model until one passes the plan gate", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+
+		// Production shape of the same regression: EVERY seat is usage-blocked
+		// (the free seat resets soonest, so it leads the blocked ordering) and
+		// only a later-resetting paid seat can serve gpt-5.6-sol. The blocked
+		// pass must keep iterating past the plan-ineligible free seat instead
+		// of giving up after the first blocked candidate.
+		await authStorage.set("openai-codex", [
+			{ type: "oauth", ...createCredential("acct-free", "free@example.com") },
+			{ type: "oauth", ...createCredential("acct-paid", "paid@example.com") },
+		]);
+
+		usageByAccount.set(
+			"acct-free",
+			createCodexUsageReport({
+				accountId: "acct-free",
+				primary: { usedFraction: 1, resetInMs: 5 * 60 * 1000 },
+				secondary: { usedFraction: 1, resetInMs: 5 * 60 * 1000 },
+				metadata: { planType: "free", email: "free@example.com", limitReached: true },
+			}),
+		);
+		usageByAccount.set(
+			"acct-paid",
+			createCodexUsageReport({
+				accountId: "acct-paid",
+				primary: { usedFraction: 1, resetInMs: 2 * HOUR_MS },
+				secondary: { usedFraction: 1, resetInMs: 6 * 24 * 60 * 60 * 1000 },
+				metadata: { planType: "plus", email: "paid@example.com", limitReached: true },
+			}),
+		);
+
+		const apiKey = await authStorage.getApiKey("openai-codex", "session-sol-all-exhausted", {
+			modelId: "gpt-5.6-sol",
+		});
+		expect(apiKey).toBe("api-acct-paid");
+	});
+
 	test("prefers Pro accounts for codex spark models over Plus accounts", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
