@@ -1382,6 +1382,21 @@ function isAdvisorCard(message: AgentMessage): message is CustomMessage {
 	return message.role === "custom" && message.customType === "advisor";
 }
 
+function isTerminalTextAssistantAnswer(message: AgentMessage | undefined): message is AssistantMessage {
+	if (message?.role !== "assistant" || message.stopReason !== "stop") return false;
+	let hasText = false;
+	for (const part of message.content) {
+		if (part.type === "toolCall") return false;
+		if (part.type === "text") {
+			if (part.text.trim().length > 0) hasText = true;
+			continue;
+		}
+		if (part.type === "thinking") continue;
+		return false;
+	}
+	return hasText;
+}
+
 /**
  * A queued message the user can restore to the editor / pull back as a draft.
  * Only genuinely user-authored messages qualify: plain user turns, or custom
@@ -2601,13 +2616,21 @@ export class AgentSession {
 	/**
 	 * Route one accepted advice note from `advisor` to the primary. Concern and
 	 * blocker interrupt the running agent through the steering channel; once the
-	 * loop has yielded, `triggerTurn` resumes it. After a deliberate user interrupt
-	 * auto-resume is suppressed while idle/unwinding (the note becomes a preserved
-	 * card re-entering on resume); a live-streaming turn is steered in directly. A
-	 * plain nit always rides the non-interrupting YieldQueue aside. Suppression by
-	 * the per-advisor emission guard drops the note silently — the model still saw
-	 * `Recorded.`, so it isn't tempted to rephrase the same note past the dedupe.
+	 * loop has yielded, `triggerTurn` resumes it. If the loop already ended with a
+	 * terminal text answer and no queued work remains, the note is preserved as an
+	 * advisor card instead of waking a duplicate completion turn. After a deliberate
+	 * user interrupt auto-resume is suppressed while idle/unwinding (the note
+	 * becomes a preserved card re-entering on resume); a live-streaming turn is
+	 * steered in directly. A plain nit always rides the non-interrupting YieldQueue
+	 * aside. Suppression by the per-advisor emission guard drops the note silently —
+	 * the model still saw `Recorded.`, so it isn't tempted to rephrase the same note
+	 * past the dedupe.
 	 */
+	#hasTerminalTextAnswerWithoutQueuedWork(): boolean {
+		if (this.agent.hasQueuedMessages() || this.#pendingNextTurnMessages.length > 0) return false;
+		return isTerminalTextAssistantAnswer(this.agent.state.messages.at(-1));
+	}
+
 	#routeAdvice(advisor: ActiveAdvisor, note: string, severity?: AdvisorSeverity): void {
 		if (!advisor.emissionGuard.accept(note)) {
 			logger.debug("advisor advice suppressed by emission guard", { severity, advisor: advisor.name });
@@ -2625,6 +2648,7 @@ export class AgentSession {
 			// loop consumes a steer at its next boundary.
 			streaming: this.agent.state.isStreaming,
 			aborting: this.#abortInProgress,
+			terminalAnswerNoQueuedWork: this.#hasTerminalTextAnswerWithoutQueuedWork(),
 			interruptImmuneTurnActive: interrupting && this.#isAdvisorInterruptImmuneTurnActive(),
 		});
 		if (channel === "aside") {

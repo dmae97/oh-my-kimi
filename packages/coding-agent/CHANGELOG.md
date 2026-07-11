@@ -6,6 +6,10 @@
 
 - Memoized non-message token totals (system prompt, tool schemas, skills) so the per-turn compaction and context-threshold paths recompute them at most once per input change instead of on every call. `getContextBreakdown` and `#estimateStoredContextTokens` previously re-tokenized the system prompt and every tool's wire schema (per-tool `JSON.stringify`) several times per turn over inputs that change at most once per turn.
 
+### Fixed
+
+- Fixed late advisor concerns after a terminal primary answer starting a duplicate primary turn when no queued work remains ([#4840](https://github.com/can1357/oh-my-pi/issues/4840)).
+
 ## [16.3.11] - 2026-07-06
 
 ### Changed
