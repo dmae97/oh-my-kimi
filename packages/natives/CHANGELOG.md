@@ -4,8 +4,7 @@
 
 ### Added
 
-- Added context-safe in-process shell builtins for `base64`; the `md5sum`, `sha1sum`, `sha224sum`, `sha256sum`, `sha384sum`, `sha512sum`, and `b2sum` checksum family; and the common path/text utilities `basename`, `dirname`, `cut`, `tee`, `tr`, `paste`, and `comm`. The vendored uutils implementations support pipelines, shell-relative file operands, redirected output, checksum verification, and abort/timeout cancellation without spawning external binaries.
-- Added in-process shell builtins for `sed` (vendored [uutils/sed](https://github.com/uutils/sed), GNU-compatible scripts including `-i` in-place editing, `-E`, hold space, and `-z`), `xargs` (vendored from [uutils/findutils](https://github.com/uutils/findutils) 0.8.0, with child processes running in the shell cwd, inheriting the shell's exported environment, and their output flowing back through the pipeline), and `jq` (vendored [jaq](https://github.com/01mf02/jaq) 2.3.0 CLI over the jaq-core interpreter, jq-compatible filters and exit codes). All three route stdio through the command's file descriptors, resolve path operands against the shell working directory, and honor abort/timeout cancellation.
+- Added context-safe, in-process shell builtins for common utilities including base64, basename, dirname, cut, tee, tr, paste, comm, sed, xargs, jq, and the md5sum/sha/b2sum checksum family. These builtins run without spawning external binaries, support pipelines, respect shell-relative paths and environment variables, and honor abort/timeout cancellation.
 
 ## [16.4.4] - 2026-07-11
 

@@ -4,44 +4,32 @@
 
 ### Breaking Changes
 
-- Reworked the task tool wire schema: the top-level `agent` field moved into each task item as `agent` (so one call can mix agent types), `assignment` was renamed `task`, `id` was renamed `name`, and the `role` and `description` fields were removed. The one-line UI label previously supplied via `description` is now generated automatically from the `task` text by the tiny/title model.
+- Reworked the task tool wire schema: moved the top-level agent field into individual task items, renamed assignment to task and id to name, and removed the role and description fields. UI labels are now automatically generated from the task text.
 
 ### Added
 
-- Added per-id bulk conflict directives: `write({ path: "conflict://*", content: "1: @ours\n2: @theirs\n…" })` resolves each listed conflict with that side in a single call (unlisted ids stay registered; unknown or duplicate ids are rejected). Directives are parsed from pre-strip content so hashline prefix stripping never eats the `<id>:` heads. The conflict footer documents the form and now clarifies that `@both` is for additive conflicts only — never for competing edits of the same lines.
-- Added `auto` as a valid `thinking-level` in agent frontmatter; the bundled `task` subagent now defaults to it. An explicit `:level` suffix on a resolved model pattern takes precedence over an agent-definition default.
-- Added rich interactive ask dialogs: a fixed-height bottom panel (sized at spawn from the tallest tab, clamped to 70% of the terminal) with question tabs, option previews, notes, per-option markers, and ask.enabled gating. Multi-select questions toggle with Space/Enter and confirm from the Submit tab; submitting an empty Other value unselects the custom answer. ([#4186](https://github.com/can1357/oh-my-pi/issues/4186))
-- Added role un-assignment to the model hub: `x`/Backspace on a role row (or Enter on a chip already holding the model) clears the role back to auto-selection — previously only possible by editing config.
-- Added a manual F5 provider refresh in the model hub; providers now auto-refresh at most once per application lifetime instead of on every visit.
-- Added custom role creation to the Model Hub roles view (`+ New role…` / `n`): name the role and jump straight into assigning its model.
-- Added quick-switch (ctrl+p) cycle editing to the Model Hub roles view: `c` toggles a role's membership, `[`/`]` (or Shift+↑/↓) reorder it, with a live segment-track preview of the resulting cycle.
-- Added `/pause`: freezes every agent in the session (main, subagents, advisor) at its next safe step behind a fullscreen pause screen — in-flight model calls and running tools finish, nothing new starts, and esc/enter/space resumes exactly where everything parked. Handy for hand-editing the repo mid-run, then explaining the change as a normal steering message.
-- Added the current session title (bolded and centered above the pause bars) to the fullscreen \`/pause\` view.
+- Introduced a fullscreen, mouse-supported Model Hub (via /model) featuring a sidebar of scopes, metadata-aligned model tables, inline role/thinking assignment strips, custom role creation, quick-switch cycle editing, and manual provider refreshing.
+- Added a /pause command to freeze all active agents (main, subagents, and advisor) at their next safe step, allowing manual repository edits mid-run before resuming.
+- Added support for per-ID bulk conflict directives via write({ path: "conflict://*", content: "..." }) to resolve multiple conflicts in a single call.
+- Added auto as a valid thinking-level in agent frontmatter, which is now the default for the bundled task subagent.
+- Added rich, interactive, fixed-height ask dialogs featuring question tabs, option previews, notes, and multi-select toggles.
 
 ### Changed
 
-- Updated Model Hub sidebar to float providers with search matches to the top while searching
-- Added spatial navigation between the Model Hub sidebar and model list using left/right arrow keys
-- Model Hub sidebar now leads with Roles above All models, and hopping scopes with ↑/↓ no longer captures arrow focus when passing the Roles entry (diving into role rows is explicit via Enter, →, or click); while searching, the hop also skips Roles, and the All models annotation shows live match counts.
-- Removed "Chat about this" option from question dialogs
-- Redesigned ask dialogs with fixed height, removed explicit Next button, and simplified headers
-- Rewrote the task tool prompt for the new wire schema and to push callers toward the most specific agent type: read-only research is directed to `agent: "scout"`, and omitting `agent` is framed as an explicit decision that no listed specialist fits.
-- Task rendering now keeps the `⟨agent⟩` type badge on live progress and finished result rows (previously it vanished after the streaming call preview), and the Task header shows only the spawn count instead of repeating the per-item agent types.
-- Redesigned `/model` into a fullscreen alternate-screen Model Hub (the `/settings` idiom) with full mouse support: a sidebar of scopes (role management, all models, per-provider), a metadata-aligned model table (role chips with thinking glyphs, context window, per-M cost, and a visual horizontal separator between recently used or role-assigned models and never-used models), and inline role/thinking assignment strips instead of the old nested menus. Providers without credentials are listed dimmed and forward to `/login` when activated, replacing the "Only showing models with configured API keys" warning; you can now use arrow keys to navigate between the sidebar and model list, and searching grays out and skips providers without matches.
-- OAuth logins now run inside a cancellable login dialog (Esc aborts the flow and restores the editor) instead of an inescapable pairing prompt, and the model hub only reopens after a successful login.
-- Reworked the subagent soft request budget from a silent kill into a graceful stop: crossing the budget now steers the child to wrap up (notice on by default), crossing 1.5x stops the free-running turn and forces one final `yield` so partial findings come back as a real report, and only a child that keeps burning requests without yielding is hard-aborted. Default budget raised to 200 requests (bundled scout/sonic: 100).
+- Redesigned OAuth logins to run inside a cancellable dialog (aborted via Esc) rather than an inescapable pairing prompt.
+- Reworked the subagent soft request budget to gracefully steer child agents to wrap up and yield partial findings instead of silently terminating them, and raised the default budget to 200 requests.
+- Updated task rendering to retain the agent type badge on live progress and finished result rows.
 
 ### Fixed
 
-- Fixed in-flight tool calls disappearing from the chat during mid-turn transcript rebuilds (agent-view focus/unfocus via ←←, overlay close): the rebuild stripped toolCalls that had no persisted result yet — exactly the calls still executing — so a pending `task`/`bash` block (and its live subagent progress tree above the editor) vanished while the agent kept waiting on it, and the eventual result was dropped. Mid-turn rebuilds now keep the pending block visible and route the live result into it; idle rebuilds freeze leftover unresolved calls instead of spinning forever.
-- Fixed agents getting stuck waiting for messages from peers that have already stopped running
-- Fixed budget-stopped subagents becoming unreachable: a soft-budget abort no longer hard-kills the agent — it stays adopted (idle, then parked) so `irc` can wake it to resume with full context, the task result now carries the abort reason plus a resume hint, and the irc bus distinguishes an unknown peer from a hard-aborted one instead of reporting "Unknown or terminated agent" for both.
-- Fixed `write conflict://<N>` duplicating code when the model pastes the "whole resolved function" including lines adjacent to the marker block: replacement lines that exactly echo the context directly above/below the recorded region are now dropped (multi-line echoes always; single-line echoes only when removal restores the recorded sides' delimiter balance), with a note in the tool result. The conflict footer now also states that writes replace only the marker block and to prefer the minimal merge of the recorded sides.
-- Fixed visible per-keystroke lag while searching in the `/resume` session picker. Literal matches now rank synchronously from a cached per-session haystack, fuzzy scoring runs in bounded background chunks that converge to the same ranking (large listings previously rebuilt a fuzzy index per token per session on every keystroke), and the prompt-history SQLite lookup — an FTS query plus a LIKE scan over every stored prompt — is debounced off the keystroke path.
-- Fixed compiled Linux binary extension loading when bundled web-search header generation cannot read `header-generator` data files from the build-time path. ([#5178](https://github.com/can1357/oh-my-pi/issues/5178))
-- Fixed `job` `list`/empty-poll snapshots returning empty output: a no-job result now says so explicitly, and both snapshots list running subagents that have no backing job (agents woken via `irc`, spawns owned by another agent) with an `irc` coordination hint, so the tool's picture matches the UI's running-agent badge. Polling an agent id that has no job now explains the agent's registry state instead of a bare "no matching jobs".
-- Fixed mixed blocking/non-blocking `task` batches degrading every spawn to synchronous execution: `blocking: true` was all-or-nothing per call, so one `scout` item silently stripped its non-blocking siblings of background execution (no job ids despite the tool description promising them, the whole turn blocked on the slowest worker, and every spawn died with the turn's abort signal). Execution mode is now per item — blocking items run inline and return their results in the call while non-blocking items still spawn as background jobs — with one shared progress/result aggregate.
-- Fixed the task block "disappearing" when a background spawn's job settled while the tool call was still executing (e.g. beside a blocking spawn in the same turn): the final job frame replaced the block with an empty-results skeleton, dropped it from live tracking so the call's real result never rendered, and duplicated every completion frame. Final async frames now only finalize a block the call has already parked as background, returned task results report the converged job state instead of a stale "running", job completion frames carry the shared aggregate (inline results included) exactly once, and a mixed call's block renders its inline result rows alongside the still-running background rows.
+- Fixed issues where in-flight tool calls or task blocks would disappear from the chat during mid-turn transcript rebuilds or when background jobs settled.
+- Fixed mixed blocking and non-blocking task batches degrading all spawns to synchronous execution; execution mode is now correctly handled per item.
+- Fixed budget-stopped subagents becoming unreachable, allowing them to remain adopted and resumable via irc with full context.
+- Fixed code duplication in write conflict://<N> when models pasted lines adjacent to the marker block.
+- Fixed visible per-keystroke lag when searching in the /resume session picker by caching search targets and debouncing SQLite lookups.
+- Fixed compiled Linux binary extension loading failures related to bundled web-search header generation data paths.
+- Fixed job list and empty-poll snapshots returning empty output, ensuring running subagents without backing jobs are properly listed.
+- Fixed agents getting stuck waiting for messages from peers that have already stopped running.
 
 ## [16.4.4] - 2026-07-11
 
@@ -382,6 +370,7 @@
 ### Fixed
 
 - Fixed `omp usage` hiding sibling-only limits such as Claude 7 Day (Fable) on accounts whose current report omitted that scoped bucket; the account now renders an explicit `not reported` row instead of looking like the usage refresh skipped the column.
+
 ## [16.3.3] - 2026-07-02
 
 ### Breaking Changes
