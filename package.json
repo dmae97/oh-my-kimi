@@ -181,8 +181,6 @@
     "gen:models": "bun --cwd=packages/catalog run gen:models",
     "gen:stats": "bun --cwd=packages/stats run gen:stats",
     "gen:stats:reset": "bun --cwd=packages/stats run gen:stats:reset",
-    "gen:docs": "bun --cwd=packages/coding-agent run gen:docs",
-    "gen:docs:reset": "bun --cwd=packages/coding-agent run gen:docs:reset",
     "gen:changelog": "bun scripts/rewrite-changelog.ts",
     "gen:tool-views": "bun --cwd=packages/collab-web run gen:tool-views",
     "gen:bundle": "bun --cwd=packages/coding-agent run gen:bundle",

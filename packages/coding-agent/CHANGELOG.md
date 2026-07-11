@@ -20,12 +20,15 @@
 - Clarified that prerequisite work for subagent tasks should be handled inline by the main agent
 - HTML search requests now use a randomized, internally consistent desktop Chrome profile per request; Google, Ecosia, and Mojeek try fetch first and escalate blocked or failed production responses to the shared stealth browser.
 - Reordered credential-free web search engines from live quality measurements: Startpage (Google-backed, fastest and most reliable in testing) now leads the auto chain, Ecosia precedes the flakier browser-backed Google, and Mojeek stays last; the Public Web fan-out tiebreak now favors Google-index engines (Startpage, Google) so their ranking wins equal-consensus ties.
+- Replaced the generated legacy Pi bundled-module registry and duplicate key list with an in-memory Bun build plugin that derives static compile edges directly from current package exports; binary builds no longer generate, format, or reset thousands of lines of compatibility source.
+- Replaced the generated `docs-index.generated.txt` file and its surrounding build-time reset orchestration with an in-memory compiler define (`process.env.PI_DOCS_EMBED`); compiled executables and prepacked npm bundles are inlined directly from the source `docs/` Markdown corpus without writing to the working tree.
 
 ### Removed
 
 - Removed the bundled `plan` subagent from available task agents
 
 ### Fixed
+- Fixed compiled-binary extensions failing to load napi-rs/FFI dependencies whose CommonJS loader requires a platform package with a native `.node` main (for example `@yuuang/ffi-rs-darwin-arm64`). The extension loader now resolves those platform packages against the extension's own `node_modules`, pins each require to the addon's absolute path, and serves the rewritten CommonJS loader synchronously so Bun can `require()` it.
 - Fixed the `omp search` / `omp q` CLI command hanging instead of exiting cleanly after search execution by ensuring the internally discovered `AuthStorage` connection is properly closed.
 - Fixed `write` blocking for the full 3-second LSP diagnostics poll in main-agent sessions by wiring it into the deferred late-diagnostics channel; slow diagnostics now return after the short inline window and arrive as an aside.
 - Fixed `tab.fill`/`tab.click` (and every puppeteer Locator action) timing out after 15s on all pages: the stealth patch routes default `Frame.evaluate`/`waitForFunction` through the isolated world, but `waitForSelector`/Locator results were still transferred to the main world, so Locator's enabled-precondition (`handle.frame.waitForFunction(pred, opts, handle)`) and `page.evaluate(fn, handle)` threw a cross-context handle error that Locators retried silently until timeout. `QueryHandler.waitFor` now returns its result in the isolated world, matching the patched default realm; explicit `//!world=main` evaluation still adopts handles via ElementHandle
