@@ -1597,10 +1597,38 @@ export class ModelHubComponent implements Component {
 				? `${theme.fg("accent", strip.item.id)}${theme.fg("dim", " →")} `
 				: `${theme.fg(getRoleInfo(strip.role ?? "", this.#settings).color ?? "muted", (getRoleInfo(strip.role ?? "", this.#settings).tag ?? strip.role ?? "").toLowerCase())}${theme.fg("dim", ` · ${strip.item.id} →`)} `;
 
+		// Horizontal window: once the strip overflows, drop leading chips behind
+		// a dim ellipsis so the selected chip (plus one chip of lookahead when it
+		// fits) stays visible while cycling right.
+		const prefixWidth = visibleWidth(prefix);
+		const available = Math.max(1, width - prefixWidth);
+		const chipWidths = strip.chips.map(
+			(chip, i) => visibleWidth(` ${chip.styled} `) + (i === strip.index ? 2 : 0) + 1,
+		);
+		// Smallest start index whose window [start..target] (with its "… " lead-in
+		// when start > 0) fits in the available width; `target` itself may still
+		// overflow when a single chip is wider than the row.
+		const startFor = (target: number): number => {
+			let start = 0;
+			while (start < target) {
+				let sum = start > 0 ? 2 : 0;
+				for (let i = start; i <= target; i++) sum += chipWidths[i] ?? 0;
+				if (sum <= available) break;
+				start++;
+			}
+			return start;
+		};
+		let start = startFor(Math.min(strip.index + 1, strip.chips.length - 1));
+		if (start > strip.index) start = startFor(strip.index);
+
 		let line = prefix;
 		// Columns are relative to the frame: row() insets content by 2.
-		let col = 2 + visibleWidth(prefix);
-		for (let i = 0; i < strip.chips.length; i++) {
+		let col = 2 + prefixWidth;
+		if (start > 0) {
+			line += theme.fg("dim", "… ");
+			col += 2;
+		}
+		for (let i = start; i < strip.chips.length; i++) {
 			const chip = strip.chips[i];
 			if (!chip) continue;
 			const selected = i === strip.index;

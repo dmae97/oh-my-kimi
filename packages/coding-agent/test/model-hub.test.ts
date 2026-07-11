@@ -394,6 +394,27 @@ describe("ModelHub", () => {
 			expect(call?.[4]).toBe("retryFallback");
 			expect(footerLine(hub.render(220))).not.toContain("inherit");
 		});
+
+		test("overflowing role strip scrolls left so the selected chip stays visible", () => {
+			const model = makeModel("test", "narrow-strip-model");
+			const { hub } = createHub({ models: [model], scoped: true });
+			installTestTheme();
+
+			hub.handleInput("\n"); // open the role strip
+			// At full width every chip fits and no left ellipsis appears.
+			expect(footerLine(hub.render(220))).not.toContain("…");
+
+			hub.handleInput(LEFT); // wrap to the trailing retry-fallback chip
+			const narrow = footerLine(hub.render(80));
+			expect(narrow).toContain("[ retry-fallback ]");
+			expect(narrow).toContain("…");
+
+			// Back on the first chip the window resets — no leading ellipsis.
+			hub.handleInput("\x1b[C"); // wrap right back to the first chip
+			const reset = footerLine(hub.render(80));
+			expect(reset).toContain("[ default");
+			expect(reset.trimStart().startsWith("…")).toBe(false);
+		});
 	});
 
 	describe("pick mode", () => {
