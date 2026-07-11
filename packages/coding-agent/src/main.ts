@@ -636,10 +636,13 @@ async function getChangelogForDisplay(parsed: Args): Promise<string | undefined>
 
 const SESSION_ID_ARG_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function positionalContinueSessionId(parsed: Args): string | undefined {
-	if (!parsed.continue || parsed.resume || parsed.fork || parsed.messages.length !== 1) return undefined;
+export function normalizeContinueSessionArgs(parsed: Args): void {
+	if (!parsed.continue || parsed.resume || parsed.fork || parsed.messages.length !== 1) return;
 	const message = parsed.messages[0]?.trim();
-	return message && SESSION_ID_ARG_RE.test(message) ? message : undefined;
+	if (!message || !SESSION_ID_ARG_RE.test(message)) return;
+	parsed.resume = message;
+	parsed.continue = false;
+	parsed.messages = [];
 }
 
 /** Resolves CLI session flags into an existing, forked, in-memory, or cancelled session manager. */
@@ -671,12 +674,7 @@ export async function createSessionManager(
 	if (parsed.noSession) {
 		return SessionManager.inMemory();
 	}
-	const continueSessionArg = positionalContinueSessionId(parsed);
-	if (continueSessionArg) {
-		parsed.resume = continueSessionArg;
-		parsed.continue = false;
-		parsed.messages = [];
-	}
+	normalizeContinueSessionArgs(parsed);
 
 	if (typeof parsed.resume === "string") {
 		const sessionArg = parsed.resume;
@@ -1352,6 +1350,7 @@ export async function runRootCommand(
 			},
 		};
 		const initialArgs = applyExtensionFlags(extensionFlagSink, rawArgs) ?? parsedArgs;
+		normalizeContinueSessionArgs(initialArgs);
 		// Fail fast on stale/typo flags (e.g. `omp --list-models`) now that we
 		// know the real extension flag set. Without this check the unrecognized
 		// token gets silently consumed and any following positional leaks as the
