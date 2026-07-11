@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Retain completed and abandoned tasks in session history for improved context on resume
+
 ### Fixed
 
 - Fixed compiled release binaries bundling `fastembed` and baking the build-machine `@anush008/tokenizers` path; native runtime dependencies now stay external for every compiled build path so Mnemopi resolves its on-demand install instead. ([#5195](https://github.com/can1357/oh-my-pi/issues/5195))
