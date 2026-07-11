@@ -95,6 +95,15 @@ describe("read tool large artifact handling", () => {
 		expect(output).not.toContain("artifact://0:raw:N-M");
 	});
 
+	it("returns exactly the requested raw artifact range without context padding", async () => {
+		const result = await tool.execute("call-raw-exact", { path: "artifact://0:raw:31-31" });
+		const output = getTextOutput(result);
+
+		expect(output).toContain("line-031");
+		expect(output).not.toContain("line-030");
+		expect(output).not.toContain("line-032");
+	});
+
 	it("shortens artifact paths under the user's home dir instead of leaking the absolute path", async () => {
 		const homeSpy = spyOn(os, "homedir").mockReturnValue(testDir);
 		try {
