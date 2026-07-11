@@ -10984,6 +10984,7 @@ export class AgentSession {
 
 		if (this.#acceptTerminalEmptyStopForPrompt && assistantMessage.stopReason === "stop") {
 			this.#acceptTerminalEmptyStopForPrompt = false;
+			this.#discardAcceptedTerminalEmptyStop(assistantMessage);
 			this.#emptyStopRetryCount = 0;
 			return false;
 		}
@@ -11203,6 +11204,37 @@ export class AgentSession {
 			return;
 		}
 		this.agent.appendMessage(assistantMessage);
+	}
+
+	#discardAcceptedTerminalEmptyStop(assistantMessage: AssistantMessage): void {
+		const branch = this.sessionManager.getBranch();
+		const branchEntry = branch
+			.slice()
+			.reverse()
+			.find(
+				entry =>
+					entry.type === "message" &&
+					entry.message.role === "assistant" &&
+					this.#isSameAssistantMessage(entry.message, assistantMessage),
+			);
+		const parentEntry =
+			branchEntry?.parentId === null || branchEntry?.parentId === undefined
+				? undefined
+				: branch.find(entry => entry.id === branchEntry.parentId);
+		const prunePrompt = parentEntry?.type === "custom_message";
+
+		this.#removeAssistantMessageFromActiveContext(assistantMessage, "accepted-terminal-empty-stop");
+		if (prunePrompt && this.agent.state.messages.at(-1)?.role === "custom") {
+			this.agent.replaceMessages(this.agent.state.messages.slice(0, -1));
+		}
+
+		if (!branchEntry) return;
+		const targetParentId = prunePrompt ? parentEntry.parentId : branchEntry.parentId;
+		if (targetParentId === null) {
+			this.sessionManager.resetLeaf();
+		} else {
+			this.sessionManager.branch(targetParentId);
+		}
 	}
 
 	/**

@@ -407,9 +407,6 @@ describe("AgentSession empty stop guard", () => {
 				recordCall("learn-beta", "call-record-learn-beta"),
 				{ content: ["normal turn complete"], stopReason: "stop" },
 				emptyStop(),
-				emptyStop(),
-				emptyStop(),
-				emptyStop(),
 			],
 			{
 				"autolearn.enabled": true,
@@ -430,7 +427,19 @@ describe("AgentSession empty stop guard", () => {
 		expect(assistantText(session.agent.state.messages)).toContain("normal turn complete");
 		expect(reminderMessages(session.agent.state.messages)).toHaveLength(0);
 		expect(retryEndEvents.filter(event => event.success === false)).toEqual([]);
-		expect(emptyAssistantStops(session.agent.state.messages)).toHaveLength(1);
+		expect(emptyAssistantStops(session.agent.state.messages)).toHaveLength(0);
+
+		const branchMessagesAfterCapture = session.sessionManager
+			.getBranch()
+			.filter(entry => entry.type === "message")
+			.map(entry => entry.message as AgentMessage);
+		expect(emptyAssistantStops(branchMessagesAfterCapture)).toHaveLength(0);
+		expect(
+			session.sessionManager
+				.getBranch()
+				.some(entry => entry.type === "custom_message" && entry.customType === "autolearn-nudge"),
+		).toBe(false);
+
 		const captureCall = mock.calls[3];
 		if (!captureCall) throw new Error("Expected auto-learn capture turn to call the model");
 		const messageHasText = (message: (typeof captureCall.context.messages)[number], text: string): boolean => {
@@ -441,11 +450,30 @@ describe("AgentSession empty stop guard", () => {
 				content.some(block => "text" in block && typeof block.text === "string" && block.text.includes(text))
 			);
 		};
+		const autoLearnNudgeText = "If your previous turn produced anything reusable";
+		expect(captureCall.context.messages.some(message => messageHasText(message, autoLearnNudgeText))).toBe(true);
+
+		mock.push({ content: ["next real turn complete"], stopReason: "stop" });
+		await session.prompt("next real prompt after auto-learn no-op");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(5);
+		const nextPromptCall = mock.calls[4];
+		if (!nextPromptCall) throw new Error("Expected next real prompt to call the model");
+		expect(nextPromptCall.context.messages.some(message => messageHasText(message, autoLearnNudgeText))).toBe(false);
+		expect(assistantText(session.agent.state.messages)).toContain("next real turn complete");
+		expect(emptyAssistantStops(session.agent.state.messages)).toHaveLength(0);
+
+		const branchMessagesAfterNextPrompt = session.sessionManager
+			.getBranch()
+			.filter(entry => entry.type === "message")
+			.map(entry => entry.message as AgentMessage);
+		expect(emptyAssistantStops(branchMessagesAfterNextPrompt)).toHaveLength(0);
 		expect(
-			captureCall.context.messages.some(message =>
-				messageHasText(message, "If your previous turn produced anything reusable"),
-			),
-		).toBe(true);
+			session.sessionManager
+				.getBranch()
+				.some(entry => entry.type === "custom_message" && entry.customType === "autolearn-nudge"),
+		).toBe(false);
 	});
 
 	it("does not let a non-opt-in custom turn inherit auto-learn terminal empty-stop acceptance", async () => {
