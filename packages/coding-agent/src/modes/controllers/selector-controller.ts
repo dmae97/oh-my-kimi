@@ -1222,12 +1222,9 @@ export class SelectorController {
 			// Name the account (and Anthropic organization) that was stored so a
 			// login that lands on an unintended account/subscription is visible
 			// immediately instead of silently replacing an existing registration.
-			const who =
-				identity?.type === "oauth" && (identity.email || identity.accountId)
-					? ` as ${identity.email ?? identity.accountId}${
-							identity.orgName || identity.orgId ? ` (${identity.orgName ?? identity.orgId})` : ""
-						}`
-					: "";
+			const whoBase = identity?.type === "oauth" ? (identity.email ?? identity.accountId) : undefined;
+			const whoOrg = identity?.type === "oauth" ? (identity.orgName ?? identity.orgId) : undefined;
+			const who = whoBase ? ` as ${whoBase}${whoOrg ? ` (${whoOrg})` : ""}` : whoOrg ? ` as ${whoOrg}` : "";
 			block.addChild(
 				new Text(
 					theme.fg("success", `${theme.status.success} Successfully logged in to ${providerId}${who}`),

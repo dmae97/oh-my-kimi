@@ -56,12 +56,13 @@ function oauthMatchesActiveIdentity(
 ): boolean {
 	if (!activeIdentity || row.credential.type !== "oauth") return false;
 	const credential = row.credential;
-	// Org precedence: when the active credential is org-scoped, only the row of
-	// the SAME org can be active. This also excludes org-less legacy rows — an
-	// org-scoped active identity means the active credential carries an org, so
-	// a bare-email row is by definition a different registration; falling back
-	// to the shared email would preselect it in the logout list.
-	if (activeIdentity.orgId !== undefined) {
+	// Org-decisive when EITHER side is org-scoped: an org-scoped active session
+	// must not preselect the bare-email legacy row, and a bare-email active row
+	// must not mark org-scoped siblings active via the shared email. The
+	// email/account fallback applies only when both sides are org-less
+	// (providers without orgs keep their former behavior; the bare active row
+	// still matches itself through the fallback).
+	if (activeIdentity.orgId !== undefined || credential.orgId !== undefined) {
 		return credential.orgId === activeIdentity.orgId;
 	}
 	return (

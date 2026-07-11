@@ -88,6 +88,24 @@ describe("limitMatchesActiveAccount", () => {
 			limitMatchesActiveAccount(makeReport({ metadata: { email: "shared@example.com" } }), makeLimit(), identity),
 		).toBe(false);
 	});
+
+	test("org-less identity never claims an org-attributed report via the shared email", () => {
+		// Reverse direction: the active session runs on a legacy bare-email row
+		// while reports are org-attributed — the marker must not appear on
+		// another registration's report.
+		const identity = { email: "shared@example.com", accountId: "account-shared" };
+		expect(
+			limitMatchesActiveAccount(
+				makeReport({ metadata: { email: "shared@example.com", orgId: "org-team" } }),
+				makeLimit(),
+				identity,
+			),
+		).toBe(false);
+		// Both sides org-less: providers without orgs keep the email fallback.
+		expect(
+			limitMatchesActiveAccount(makeReport({ metadata: { email: "shared@example.com" } }), makeLimit(), identity),
+		).toBe(true);
+	});
 });
 
 describe("reportMatchesActiveAccount", () => {
@@ -132,6 +150,16 @@ describe("toLogoutAccounts org scoping", () => {
 		);
 		const activeIds = accounts.filter(account => account.active).map(account => account.credentialId);
 		expect(activeIds).toEqual([2]);
+	});
+
+	test("bare-email active row marks only itself active — never org-scoped siblings", () => {
+		const accounts = toLogoutAccounts(
+			"anthropic",
+			[oauthRow(1, "org-team", "Team Workspace"), oauthRow(2, "org-max", "Personal Max"), oauthRow(3)],
+			{ activeIdentity: { email: "shared@example.com", accountId: "account-shared" } },
+		);
+		const activeIds = accounts.filter(account => account.active).map(account => account.credentialId);
+		expect(activeIds).toEqual([3]);
 	});
 
 	test("labels distinguish the two orgs and the legacy row", () => {

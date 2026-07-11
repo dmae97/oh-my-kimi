@@ -160,8 +160,11 @@ export interface CredentialHealthResult {
 	type: AuthCredential["type"];
 	/** OAuth email if known on the stored credential or surfaced by the probe. */
 	email?: string;
-	/** OAuth account id / org id if known. */
+	/** OAuth account id if known. */
 	accountId?: string;
+	/** Organization/workspace the credential is scoped to (Anthropic multi-subscription). */
+	orgId?: string;
+	orgName?: string;
 	/** `true` when the refresh token lives on a remote broker (sentinel was present). */
 	remoteRefresh?: true;
 	ok: boolean | null;
@@ -2319,7 +2322,7 @@ export class AuthStorage {
 		if (typeof preferred.orgName === "string" && preferred.orgName.length > 0) {
 			identity.orgName = preferred.orgName;
 		}
-		if (!identity.accountId && !identity.email && !identity.projectId) return undefined;
+		if (!identity.accountId && !identity.email && !identity.projectId && !identity.orgId) return undefined;
 		return identity;
 	}
 
@@ -3366,6 +3369,8 @@ export class AuthStorage {
 			if (row.credential.type === "oauth") {
 				if (row.credential.email) base.email = row.credential.email;
 				if (row.credential.accountId) base.accountId = row.credential.accountId;
+				if (row.credential.orgId) base.orgId = row.credential.orgId;
+				if (row.credential.orgName) base.orgName = row.credential.orgName;
 				if (row.credential.refresh === REMOTE_REFRESH_SENTINEL) base.remoteRefresh = true;
 			}
 

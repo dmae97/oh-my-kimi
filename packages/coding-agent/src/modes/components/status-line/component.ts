@@ -780,7 +780,16 @@ export class StatusLineComponent implements Component {
 		const activeProvider = session.state.model?.provider ?? session.model?.provider ?? "";
 		if (!activeProvider) return "";
 		const identity = session.modelRegistry?.authStorage?.getOAuthAccountIdentity(activeProvider, session.sessionId);
-		return [activeProvider, identity?.accountId ?? "", identity?.email ?? "", identity?.projectId ?? ""].join("\0");
+		// orgId is part of the key: rotating between two same-email Anthropic
+		// subscriptions must invalidate the cached usage immediately instead of
+		// showing the previous org's quota for the rest of the cache TTL.
+		return [
+			activeProvider,
+			identity?.accountId ?? "",
+			identity?.email ?? "",
+			identity?.projectId ?? "",
+			identity?.orgId ?? "",
+		].join("\0");
 	}
 
 	/**

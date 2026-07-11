@@ -42,7 +42,9 @@ function formatUsageReportAccount(report: UsageReport, limit: UsageLimit, index:
 	// a valid scoped fallback (e.g. metadata.accountId="" hides limit.scope.accountId).
 	const metaAccountId = report.metadata?.accountId;
 	const accountId = typeof metaAccountId === "string" && metaAccountId ? metaAccountId : limit.scope.accountId;
-	if (typeof accountId === "string" && accountId) return accountId;
+	if (typeof accountId === "string" && accountId) {
+		return org && org !== accountId ? `${accountId} (${org})` : accountId;
+	}
 	const metaProjectId = report.metadata?.projectId;
 	const projectId = typeof metaProjectId === "string" && metaProjectId ? metaProjectId : limit.scope.projectId;
 	if (typeof projectId === "string" && projectId) return projectId;
