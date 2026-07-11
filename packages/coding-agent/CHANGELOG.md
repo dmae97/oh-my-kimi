@@ -70,6 +70,9 @@
 ### Fixed
 
 - Fixed MCP OAuth dynamic client registration omitting discovered scopes on the RFC 7591 registration body. Providers such as Clerk bind DCR-created clients to only the scopes declared at registration, then reject the subsequent authorize request when it asks for `openid` (from `scopes_supported`). Registration now includes `config.scopes` when present, matching Claude Code and the scopes already sent on authorize.
+### Fixed
+
+- Fixed bare `skill://<name>` path-only resolution for bash, grep, and glob so tools receive the skill directory instead of `SKILL.md`, while `read skill://<name>` still opens the skill instructions. ([#5087](https://github.com/can1357/oh-my-pi/issues/5087))
 
 ## [16.4.0] - 2026-07-10
 

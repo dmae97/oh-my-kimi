@@ -184,6 +184,7 @@ export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
 					signal,
 					localProtocolOptions: this.session.localProtocolOptions,
 					skills: this.session.skills,
+					pathOnly: true,
 				});
 				if (!resource.sourcePath) {
 					throw new ToolError(`Cannot find internal URL without a backing file: ${rawPattern}`);
