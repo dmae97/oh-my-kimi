@@ -513,12 +513,11 @@ When a turn fails with a context overflow error (e.g. `context_length_exceeded`)
 
 ### Target selection
 
-Selection is model-driven, not role-driven:
+Selection is explicit and model-driven:
 
 1. `currentModel.contextPromotionTarget` (if configured)
-2. smallest larger-context model on the same provider + API
 
-Candidates are ignored unless credentials resolve (`ModelRegistry.getApiKey(...)`).
+Only the configured target is considered; context promotion does not automatically choose a larger same-provider/API sibling. Configured targets are ignored unless credentials resolve (`ModelRegistry.getApiKey(...)`).
 
 ### OpenAI Codex websocket handoff
 

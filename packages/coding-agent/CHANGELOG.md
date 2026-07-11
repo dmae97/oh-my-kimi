@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed context promotion docs to match the explicit `contextPromotionTarget` runtime behavior and `contextPromotion.enabled` default. ([#5163](https://github.com/can1357/oh-my-pi/issues/5163))
+
 ## [16.4.3] - 2026-07-11
 
 ### Added
