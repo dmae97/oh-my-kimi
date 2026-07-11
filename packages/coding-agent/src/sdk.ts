@@ -1278,7 +1278,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		sessionManager.appendMessage(interruptedTurnAbort);
 		existingBranch = logger.time("getRecoveredSessionBranch", () => sessionManager.getBranch());
 	}
-	const existingSession = logger.time("loadSessionContext", () =>
+	let existingSession = logger.time("loadSessionContext", () =>
 		deobfuscateSessionContext(sessionManager.buildSessionContext(), obfuscator),
 	);
 	const hasExistingSession = existingBranch.length > 0;
@@ -2167,6 +2167,24 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					autoThinking
 						? resolveProvisionalAutoLevel(refreshedModel)
 						: resolveThinkingLevelForModel(refreshedModel, effectiveThinkingLevel),
+				);
+			}
+		}
+
+		// A first-turn user tail has no assistant metadata to copy. Once startup
+		// has selected its final model, use that model to terminate the
+		// interrupted turn before the live agent consumes the restored context.
+		if (model) {
+			const selectedModelAbort = createInterruptedTurnAbortMessage(existingBranch, {
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+			});
+			if (selectedModelAbort) {
+				sessionManager.appendMessage(selectedModelAbort);
+				existingBranch = logger.time("getRecoveredUserTailBranch", () => sessionManager.getBranch());
+				existingSession = logger.time("loadRecoveredUserTailContext", () =>
+					deobfuscateSessionContext(sessionManager.buildSessionContext(), obfuscator),
 				);
 			}
 		}

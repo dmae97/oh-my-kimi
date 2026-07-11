@@ -54,6 +54,12 @@ interface ToolCallContent {
 	arguments?: unknown;
 }
 
+export interface AssistantModelMetadata {
+	api: AssistantMessage["api"];
+	provider: string;
+	model: string;
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
 	if (typeof value !== "object") return false;
 	return value !== null;
@@ -78,7 +84,10 @@ function readSessionExit(entry: SessionEntry): SessionExitData | undefined {
  * createInterruptedTurnAbortMessage returns a terminal assistant record when
  * the latest persisted process exit follows a non-terminal conversation tail.
  */
-export function createInterruptedTurnAbortMessage(entries: readonly SessionEntry[]): AssistantMessage | undefined {
+export function createInterruptedTurnAbortMessage(
+	entries: readonly SessionEntry[],
+	fallbackModel?: AssistantModelMetadata,
+): AssistantMessage | undefined {
 	let exitIndex = -1;
 	let exit: SessionExitData | undefined;
 	for (let index = entries.length - 1; index >= 0; index--) {
@@ -100,7 +109,7 @@ export function createInterruptedTurnAbortMessage(entries: readonly SessionEntry
 		break;
 	}
 	if (!tail || tailIndex > exitIndex) return undefined;
-	if (tail.role === "assistant" && tail.stopReason !== "toolUse") return undefined;
+	if (tail.role === "assistant" && !tail.content.some(isToolCallContent)) return undefined;
 
 	let previousAssistant: AssistantMessage | undefined;
 	for (let index = tailIndex; index >= 0; index--) {
@@ -109,15 +118,16 @@ export function createInterruptedTurnAbortMessage(entries: readonly SessionEntry
 		previousAssistant = entry.message;
 		break;
 	}
-	if (!previousAssistant) return undefined;
+	const model = previousAssistant ?? fallbackModel;
+	if (!model) return undefined;
 
 	const recordedAt = Date.parse(exit.recordedAt);
 	return {
 		role: "assistant",
 		content: [],
-		api: previousAssistant.api,
-		provider: previousAssistant.provider,
-		model: previousAssistant.model,
+		api: model.api,
+		provider: model.provider,
+		model: model.model,
 		usage: {
 			input: 0,
 			output: 0,

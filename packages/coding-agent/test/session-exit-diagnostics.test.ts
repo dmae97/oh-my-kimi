@@ -331,6 +331,46 @@ describe("session exit diagnostics", () => {
 		});
 	});
 
+	it("reconstructs tool-call content even when stopReason is stop", () => {
+		const sessionManager = SessionManager.inMemory();
+		sessionManager.appendMessage({ role: "user", content: "inspect the file", timestamp: Date.now() });
+		sessionManager.appendMessage({ ...pendingAssistant, stopReason: "stop" });
+		sessionManager.appendCustomEntry(SESSION_EXIT_CUSTOM_TYPE, {
+			reason: "exit",
+			kind: "process_exit",
+			recordedAt: "2026-07-11T02:20:08.800Z",
+		});
+
+		expect(createInterruptedTurnAbortMessage(sessionManager.getBranch())).toMatchObject({
+			role: "assistant",
+			stopReason: "aborted",
+		});
+	});
+
+	it("reconstructs a first user-message tail with selected model metadata", () => {
+		const sessionManager = SessionManager.inMemory();
+		sessionManager.appendMessage({ role: "user", content: "inspect the file", timestamp: Date.now() });
+		sessionManager.appendCustomEntry(SESSION_EXIT_CUSTOM_TYPE, {
+			reason: "exit",
+			kind: "process_exit",
+			recordedAt: "2026-07-11T02:20:08.800Z",
+		});
+
+		expect(
+			createInterruptedTurnAbortMessage(sessionManager.getBranch(), {
+				api: pendingAssistant.api,
+				provider: pendingAssistant.provider,
+				model: pendingAssistant.model,
+			}),
+		).toMatchObject({
+			role: "assistant",
+			api: pendingAssistant.api,
+			provider: pendingAssistant.provider,
+			model: pendingAssistant.model,
+			stopReason: "aborted",
+		});
+	});
+
 	it("does not reconstruct clean, completed, or superseded exits", () => {
 		const normalExit = SessionManager.inMemory();
 		normalExit.appendMessage({ role: "user", content: "inspect the file", timestamp: Date.now() });

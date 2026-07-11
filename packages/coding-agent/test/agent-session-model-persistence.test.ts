@@ -483,6 +483,52 @@ describe("AgentSession model persistence", () => {
 		);
 	});
 
+	it("marks a first user-message process-exit tail aborted with the selected model", async () => {
+		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const settings = Settings.isolated();
+		settings.setModelRole("default", modelValue(defaultModel));
+		const sessionManager = SessionManager.create(tempDir.path(), path.join(tempDir.path(), "interrupted-user"));
+		sessionManager.appendModelChange(modelValue(defaultModel));
+		sessionManager.appendMessage({ role: "user", content: "inspect state", timestamp: Date.now() });
+		sessionManager.appendCustomEntry("session_exit", {
+			reason: "exit",
+			kind: "process_exit",
+			recordedAt: "2026-07-11T02:20:08.800Z",
+		});
+		const result = await createAgentSession({
+			cwd: tempDir.path(),
+			agentDir: tempDir.path(),
+			authStorage: sharedAuthStorage,
+			modelRegistry: sharedModelRegistry,
+			sessionManager,
+			settings,
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+		});
+		session = result.session;
+		expect(result.session.model?.id).toBe(defaultModel.id);
+		expect(
+			result.session.sessionManager
+				.getBranch()
+				.find(entry => entry.type === "message" && entry.message.role === "assistant"),
+		).toMatchObject({
+			type: "message",
+			message: {
+				role: "assistant",
+				api: defaultModel.api,
+				provider: defaultModel.provider,
+				model: defaultModel.id,
+				stopReason: "aborted",
+			},
+		});
+	});
+
 	it("lists restorable temporary model before the default fallback", () => {
 		expect(
 			getRestorableSessionModels(
