@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Refined agent delegation logic to prioritize top-level planning and scoping by the primary agent
+- Optimized subagent usage to discourage single-agent delegation and improve parallel execution flows
+- Clarified that prerequisite work for subagent tasks should be handled inline by the main agent
+
 ## [16.4.2] - 2026-07-10
 
 ### Fixed
