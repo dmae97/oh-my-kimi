@@ -315,6 +315,8 @@ export interface CredentialRefreshLeaseFence {
 
 export interface AuthCredentialStore {
 	close(): void;
+	/** Optional hook to notify the underlying store that usage report cache is stale. */
+	invalidateUsageCache?(signal?: AbortSignal): Promise<void>;
 	listAuthCredentials(provider?: string): StoredAuthCredential[];
 	updateAuthCredential(id: number, credential: AuthCredential): void;
 	deleteAuthCredential(id: number, disabledCause: string): void;
@@ -4666,6 +4668,11 @@ export class AuthStorage {
 		});
 		if (result.ok) {
 			this.#invalidateUsageReportCache(provider, baseUrl);
+			if (this.#store.invalidateUsageCache) {
+				await this.#store.invalidateUsageCache(options.signal).catch(err => {
+					logger.debug("Failed to notify store of stale usage", { err });
+				});
+			}
 			// The window this credential was blocked on (by markUsageLimitReached)
 			// is now reset, so lift its temporary block — otherwise selection
 			// keeps skipping/under-ranking the freshly-reset account.
@@ -4688,6 +4695,34 @@ export class AuthStorage {
 			);
 			const existing = this.#usageCache.getStale<UsageReport | null>(cacheKey);
 			this.#usageCache.set(cacheKey, { value: existing?.value ?? null, expiresAt: expired });
+		}
+	}
+
+	/**
+	 * Force-invalidate cached usage reports so the next fetch retrieves fresh
+	 * values from upstream providers. If `provider` is specified, only that
+	 * provider's credentials are invalidated; otherwise, all credentials in the
+	 * store are invalidated.
+	 */
+	invalidateUsageCache(provider?: string): void {
+		if (provider) {
+			this.#invalidateUsageReportCache(provider);
+			return;
+		}
+		this.#usageCacheEpoch += 1;
+		const expired = Date.now() - 1;
+		try {
+			const credentials = this.#store.listAuthCredentials();
+			for (const entry of credentials) {
+				if (entry.credential.type !== "oauth") continue;
+				const cacheKey = this.#buildUsageReportCacheKey(
+					this.#buildUsageRequestForOauth(entry.provider, entry.credential),
+				);
+				const existing = this.#usageCache.getStale<UsageReport | null>(cacheKey);
+				this.#usageCache.set(cacheKey, { value: existing?.value ?? null, expiresAt: expired });
+			}
+		} catch (err) {
+			logger.debug("Failed to list auth credentials for complete usage cache invalidation", { err });
 		}
 	}
 

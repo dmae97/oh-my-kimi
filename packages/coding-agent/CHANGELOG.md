@@ -9,6 +9,7 @@
 ### Fixed
 
 - Fixed compiled release binaries bundling `fastembed` and baking the build-machine `@anush008/tokenizers` path; native runtime dependencies now stay external for every compiled build path so Mnemopi resolves its on-demand install instead. ([#5195](https://github.com/can1357/oh-my-pi/issues/5195))
+- Fixed `/btw` side-channel turns on Codex models such as `gpt-5.6-luna` by preserving the session websocket preference instead of forcing SSE, and made Esc dismiss the active `/btw` panel before interrupting loop/maintenance work. ([#5213](https://github.com/can1357/oh-my-pi/issues/5213))
 
 ## [16.4.5] - 2026-07-11
 
@@ -40,8 +41,6 @@
 - Fixed compiled Linux binary extension loading failures related to bundled web-search header generation data paths.
 - Fixed job list and empty-poll snapshots returning empty output, ensuring running subagents without backing jobs are properly listed.
 - Fixed agents getting stuck waiting for messages from peers that have already stopped running.
-- Fixed `/btw` side-channel turns on Codex models such as `gpt-5.6-luna` by preserving the session websocket preference instead of forcing SSE, and made Esc dismiss the active `/btw` panel before interrupting loop/maintenance work. ([#5213](https://github.com/can1357/oh-my-pi/issues/5213))
-- Fixed visible per-keystroke lag while searching in the `/resume` session picker. Literal matches now rank synchronously from a cached per-session haystack, fuzzy scoring runs in bounded background chunks that converge to the same ranking (large listings previously rebuilt a fuzzy index per token per session on every keystroke), and the prompt-history SQLite lookup — an FTS query plus a LIKE scan over every stored prompt — is debounced off the keystroke path.
 - Fixed compiled Linux binary extension loading when bundled web-search header generation cannot read `header-generator` data files from the build-time path. ([#5178](https://github.com/can1357/oh-my-pi/issues/5178))
 - Fixed plugin custom tool loading to skip and report invalid feature entries instead of crashing startup when a plugin dependency tree leaves one feature unresolved. ([#5189](https://github.com/can1357/oh-my-pi/issues/5189))
 

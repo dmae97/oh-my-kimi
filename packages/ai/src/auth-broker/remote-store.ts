@@ -794,6 +794,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		}
 	}
 
+	async invalidateUsageCache(signal?: AbortSignal): Promise<void> {
+		this.#invalidateUsageCache();
+		await this.#client.notifyUsageStale(signal).catch(err => {
+			logger.warn("auth-broker notification of stale usage failed", { error: String(err) });
+		});
+	}
+
 	#invalidateUsageCache(): void {
 		this.#usageCache = undefined;
 		this.#usageInflight = undefined;
