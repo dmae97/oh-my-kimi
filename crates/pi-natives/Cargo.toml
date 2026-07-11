@@ -29,7 +29,6 @@ icy_sixel.workspace = true
 ignore.workspace = true
 image = { workspace = true, features = ["bmp"] }
 inferno.workspace = true
-memmap2.workspace = true
 napi.workspace = true
 napi-derive.workspace = true
 parking_lot.workspace = true
