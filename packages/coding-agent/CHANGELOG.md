@@ -6,6 +6,10 @@
 
 - Memoized non-message token totals (system prompt, tool schemas, skills) so the per-turn compaction and context-threshold paths recompute them at most once per input change instead of on every call. `getContextBreakdown` and `#estimateStoredContextTokens` previously re-tokenized the system prompt and every tool's wire schema (per-tool `JSON.stringify`) several times per turn over inputs that change at most once per turn.
 
+### Fixed
+
+- Fixed `omp commit` agent sessions so a valid proposal is committed before session teardown can dispose mnemopi/autolearn resources, missing required host outputs now fail non-zero instead of returning cleanly, and git subprocesses no longer force `GPG_TTY=not a tty` on signing-enabled repositories ([#4794](https://github.com/can1357/oh-my-pi/issues/4794)).
+
 ## [16.3.11] - 2026-07-06
 
 ### Changed

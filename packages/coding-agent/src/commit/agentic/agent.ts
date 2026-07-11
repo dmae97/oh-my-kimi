@@ -29,6 +29,7 @@ export interface CommitAgentInput {
 	requireChangelog: boolean;
 	diffText?: string;
 	existingChangelogEntries?: ExistingChangelogEntries[];
+	onComplete?: (state: CommitAgentState) => Promise<void> | void;
 }
 
 export interface ExistingChangelogEntries {
@@ -175,6 +176,9 @@ export async function runCommitAgentSession(input: CommitAgentInput): Promise<Co
 			});
 		}
 
+		if (input.onComplete) {
+			await input.onComplete(state);
+		}
 		return state;
 	} finally {
 		unsubscribe();
