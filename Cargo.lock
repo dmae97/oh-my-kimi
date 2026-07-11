@@ -3057,7 +3057,6 @@ dependencies = [
  "image",
  "inferno",
  "libc",
- "memmap2",
  "napi",
  "napi-build",
  "napi-derive",

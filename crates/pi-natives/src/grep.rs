@@ -35,7 +35,6 @@ use smallvec::SmallVec;
 use crate::{glob_util, iofs, task};
 
 const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
-const SMALL_FILE_READ_BYTES: u64 = 128 * 1024;
 
 /// Output mode for [`search`] and [`grep`] (string values match JS callers).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -265,10 +264,8 @@ struct FileSearchResult {
 	limit_reached: bool,
 }
 
-enum FileBytes {
-	Mapped(memmap2::Mmap),
-	Owned(Vec<u8>),
-}
+/// Owned bytes captured from a file before search.
+type FileBytes = Vec<u8>;
 
 /// Outcome of attempting to read a file for searching.
 enum ReadFile {
@@ -278,15 +275,6 @@ enum ReadFile {
 	Oversized,
 	/// Unreadable or not a regular file; silently skipped.
 	Skipped,
-}
-
-impl FileBytes {
-	fn as_slice(&self) -> &[u8] {
-		match self {
-			Self::Mapped(mapped) => mapped.as_ref(),
-			Self::Owned(bytes) => bytes.as_slice(),
-		}
-	}
 }
 
 impl MatchCollector {
@@ -661,8 +649,17 @@ fn build_searcher(
 		.build()
 }
 
+const FILE_CLASSIFICATION_READ_BYTES: u64 = MAX_FILE_BYTES + 1;
+
 fn file_len_exceeds_limit(len: usize) -> bool {
 	u64::try_from(len).map_or(true, |len| len > MAX_FILE_BYTES)
+}
+
+fn read_owned_prefix(mut file: File, limit: u64) -> io::Result<Vec<u8>> {
+	let mut buffer =
+		Vec::with_capacity(usize::try_from(limit).expect("bounded read limit fits usize"));
+	file.by_ref().take(limit).read_to_end(&mut buffer)?;
+	Ok(buffer)
 }
 
 /// Read file bytes, distinguishing oversized files from other skips.
@@ -692,44 +689,13 @@ fn read_file_bytes_with_size(path: &Path, size_hint: Option<u64>) -> io::Result<
 	};
 	if size > MAX_FILE_BYTES {
 		return Ok(ReadFile::Oversized);
-	} else if size == 0 {
-		return Ok(ReadFile::Bytes(FileBytes::Owned(Vec::new())));
-	}
-	if size <= SMALL_FILE_READ_BYTES {
-		let mut buffer =
-			Vec::with_capacity(usize::try_from(size).expect("bounded small file size fits usize"));
-		let mut handle = file;
-		handle.read_to_end(&mut buffer)?;
-		if file_len_exceeds_limit(buffer.len()) {
-			return Ok(ReadFile::Oversized);
-		}
-		return Ok(ReadFile::Bytes(FileBytes::Owned(buffer)));
 	}
 
-	let mapping = unsafe {
-		// SAFETY: The mapping is read-only and tied to the opened file handle.
-		// We do not mutate through this view; the map is dropped immediately
-		// after search for each file.
-		memmap2::Mmap::map(&file)
-	};
-
-	let bytes = if let Ok(mapped) = mapping {
-		if file_len_exceeds_limit(mapped.len()) {
-			return Ok(ReadFile::Oversized);
-		}
-		FileBytes::Mapped(mapped)
-	} else {
-		let mut buffer =
-			Vec::with_capacity(usize::try_from(size).expect("bounded file size fits usize"));
-		let mut handle = file;
-		handle.read_to_end(&mut buffer)?;
-		if file_len_exceeds_limit(buffer.len()) {
-			return Ok(ReadFile::Oversized);
-		}
-		FileBytes::Owned(buffer)
-	};
-
-	Ok(ReadFile::Bytes(bytes))
+	let buffer = read_owned_prefix(file, FILE_CLASSIFICATION_READ_BYTES)?;
+	if file_len_exceeds_limit(buffer.len()) {
+		return Ok(ReadFile::Oversized);
+	}
+	Ok(ReadFile::Bytes(buffer))
 }
 
 // ---------------------------------------------------------------------------
@@ -1218,12 +1184,11 @@ struct PassState {
 	skipped_oversized: AtomicU64,
 	emitted:           AtomicU64,
 }
-/// Memory-map the first [`MAX_FILE_BYTES`] of a file for searching.
+/// Read the first [`MAX_FILE_BYTES`] of a file into owned bytes for searching.
 ///
 /// Used by the deferred oversized pass: files larger than the cap are searched
-/// only over their leading window; the remainder is dropped. mmap-only — never
-/// falls back to `read_to_end`, so a multi-gigabyte file never allocates its
-/// full contents. Returns [`ReadFile::Skipped`] when the file cannot be mapped.
+/// only over their leading window; the remainder is dropped. The bounded owned
+/// read avoids mmap page faults when the backing file is rewritten concurrently.
 fn read_file_prefix(path: &Path) -> io::Result<ReadFile> {
 	let file = match File::open(path) {
 		Ok(file) => file,
@@ -1240,17 +1205,11 @@ fn read_file_prefix(path: &Path) -> io::Result<ReadFile> {
 	}
 	let len = metadata.len();
 	if len == 0 {
-		return Ok(ReadFile::Bytes(FileBytes::Owned(Vec::new())));
+		return Ok(ReadFile::Bytes(Vec::new()));
 	}
-	let window =
-		usize::try_from(len.min(MAX_FILE_BYTES)).expect("window is bounded by MAX_FILE_BYTES");
-	// SAFETY: read-only mapping tied to the open handle, bounded to `window`
-	// bytes (<= file length). Dropped immediately after the per-file search.
-	let mapping = unsafe { memmap2::MmapOptions::new().len(window).map(&file) };
-	match mapping {
-		Ok(mapped) => Ok(ReadFile::Bytes(FileBytes::Mapped(mapped))),
-		Err(_) => Ok(ReadFile::Skipped),
-	}
+	let window = len.min(MAX_FILE_BYTES);
+	let buffer = read_owned_prefix(file, window)?;
+	Ok(ReadFile::Bytes(buffer))
 }
 
 /// Read one candidate per `policy` and search it, classifying the result.
@@ -3186,6 +3145,30 @@ mod tests {
 		assert_eq!(result.files_searched, 1);
 		assert_eq!(result.skipped_oversized, None);
 		assert_eq!(result.matches[0].path, "big.txt");
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn oversized_prefix_read_returns_stable_snapshot_after_rewrite() {
+		let root = TempDirGuard::new();
+		let path = root.path().join("big.txt");
+		let prefix_len = usize::try_from(super::MAX_FILE_BYTES).expect("MAX_FILE_BYTES fits usize");
+		let oversized_len = prefix_len + 1024;
+		fs::write(&path, vec![b'a'; oversized_len]).expect("write original oversized file");
+
+		let captured = match super::read_file_prefix(&path).expect("read oversized prefix") {
+			super::ReadFile::Bytes(bytes) => bytes,
+			super::ReadFile::Oversized => panic!("prefix reader should return the bounded prefix"),
+			super::ReadFile::Skipped => panic!("prefix reader should read a regular oversized file"),
+		};
+		assert_eq!(captured.as_slice().len(), prefix_len);
+
+		fs::write(&path, vec![b'b'; oversized_len]).expect("rewrite backing file");
+
+		assert!(
+			captured.as_slice().iter().all(|&byte| byte == b'a'),
+			"captured prefix must remain the original bytes after the backing file is rewritten",
+		);
 	}
 
 	#[cfg(unix)]
