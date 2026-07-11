@@ -2,28 +2,16 @@
 
 ## [Unreleased]
 
-### Added
-
-- Added a benchmark script for evaluating tiny model title generation quality and latency
-
 ### Changed
 
-- Unified message preprocessing for auto-thinking, session titles, and benchmarks to better filter noise (ANSI codes, XML tags, and long commit hashes)
-- Optimized input truncation for tiny models by preserving both the start and end of long messages with an explicit omission marker
-- Updated title generation to support self-closing `<title/>` tags for empty or non-task sessions
-- Rewrote the session-title system prompt for sub-billion-parameter tiny models (LFM2 etc.): shorter positively-framed rules, no negation lists, and few-shot examples as `<user>` → `<title>` input/output pairs on both the local and online paths.
-- Unified tiny-model message preprocessing across session titles, auto-thinking classification, and the title benchmark: ANSI/XML noise and fenced code blocks are removed, long commit hashes are shortened, and long input preserves both ends with a counted omission marker.
+- Optimized session title generation and auto-thinking classification for sub-billion-parameter tiny models (such as LFM2) by rewriting system prompts, improving input truncation to preserve message context, and unifying preprocessing to filter out noise like ANSI codes, XML tags, and long commit hashes.
 
 ### Fixed
 
-- Fixed the Windows binary exiting silently without running the CLI (which also made `omp update` roll back with "could not verify updated version"): `Bun.build`-API compiled Windows executables report `import.meta.main === false`, so the entry dispatch in `cli.ts` never ran. The dispatch now also honors the compile-time `PI_COMPILED` marker.
-- Fixed context promotion docs to match the explicit `contextPromotionTarget` runtime behavior and `contextPromotion.enabled` default. ([#5163](https://github.com/can1357/oh-my-pi/issues/5163))
-### Fixed
-
-- Fixed `GenerateImage` rejecting OpenAI Codex-compatible proxy bearer keys when the token does not expose a `chatgpt-account-id`. ([#5174](https://github.com/can1357/oh-my-pi/issues/5174))
-### Fixed
-
-- Fixed native Windows binary installs on older Windows 10 CPUs by building the generic `omp-windows-x64.exe` release asset with Bun's baseline x64 runtime instead of the AVX2-only modern target. ([#5172](https://github.com/can1357/oh-my-pi/issues/5172))
+- Fixed an issue where the Windows binary exited silently without running the CLI, which also caused `omp update` to roll back.
+- Fixed native Windows binary compatibility on older Windows 10 CPUs by building the `omp-windows-x64.exe` release asset with a baseline x64 runtime instead of AVX2. (#5172)
+- Fixed `GenerateImage` rejecting OpenAI Codex-compatible proxy bearer keys when the token does not expose a `chatgpt-account-id`. (#5174)
+- Fixed context promotion documentation to accurately reflect the `contextPromotionTarget` runtime behavior and `contextPromotion.enabled` default. (#5163)
 
 ## [16.4.3] - 2026-07-11
 

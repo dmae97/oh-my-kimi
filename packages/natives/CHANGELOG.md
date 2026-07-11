@@ -4,8 +4,8 @@
 
 ### Fixed
 
-- Fixed `fuzzyFind` burying shallow matches below deeply nested ones on score ties: `@scripts` in the prompt ranked `packages/*/scripts` above the cwd-root `scripts/` directory because ties broke lexicographically on the full path. Ties now prefer shallower paths first.
-- Fixed macOS `pi-natives` package installs depending on Homebrew's dynamic `libpcre2-8.0.dylib`; release builds now force pcre2-sys to link PCRE2 statically. ([#5172](https://github.com/can1357/oh-my-pi/issues/5172))
+- Fixed fuzzyFind tie-breaking logic to prefer shallower paths first, preventing deeply nested matches from ranking above shallow ones on score ties.
+- Fixed macOS installation issues for pi-natives by statically linking PCRE2, removing the runtime dependency on Homebrew's dynamic libpcre2-8.0.dylib library.
 
 ## [16.4.3] - 2026-07-11
 
