@@ -21,8 +21,10 @@ import {
 	formatSearchProviderFailure,
 	formatSearchProviderFailures,
 	getSearchProvider,
-	resolveProviderChain,
+	getSearchProviderLabel,
+	resolveProviderCandidates,
 	type SearchProvider,
+	type SearchProviderCandidate,
 } from "./provider";
 import { renderSearchCall, renderSearchResult, type SearchRenderDetails } from "./render";
 import type { SearchProviderId, SearchResponse } from "./types";
@@ -128,25 +130,18 @@ async function executeSearch(
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details: SearchRenderDetails }> {
 	const { authStorage, sessionId, signal } = options;
 	const explicitProvider = params.provider;
-	let providers: SearchProvider[];
+	let candidates: SearchProviderCandidate[];
 	if (explicitProvider && explicitProvider !== "auto") {
 		const provider = await getSearchProvider(explicitProvider);
-		providers = (await provider.isExplicitlyAvailable(authStorage))
-			? [provider]
-			: await resolveProviderChain(authStorage, "auto");
+		candidates = (await provider.isExplicitlyAvailable(authStorage))
+			? [{ id: explicitProvider, explicit: true }]
+			: resolveProviderCandidates("auto");
 	} else if (explicitProvider === "auto") {
 		// Explicit `--provider auto` bypasses the configured preferred provider
 		// for this invocation; exclusions still apply.
-		providers = await resolveProviderChain(authStorage, "auto");
+		candidates = resolveProviderCandidates("auto");
 	} else {
-		providers = await resolveProviderChain(authStorage);
-	}
-	if (providers.length === 0) {
-		const message = "No web search provider configured.";
-		return {
-			content: [{ type: "text" as const, text: `Error: ${message}` }],
-			details: { response: { provider: "none", sources: [] }, error: message },
-		};
+		candidates = resolveProviderCandidates();
 	}
 
 	// Invariant across providers; read once and tolerate an uninitialized
@@ -166,11 +161,22 @@ async function executeSearch(
 		geminiModel = undefined;
 	}
 
-	const failures: Array<{ provider: SearchProvider; error: unknown }> = [];
-	let lastProvider = providers[0];
-	for (const provider of providers) {
-		lastProvider = provider;
+	const failures: Array<{ provider: Pick<SearchProvider, "id" | "label">; error: unknown }> = [];
+	let availableProviderCount = 0;
+	let lastProvider: Pick<SearchProvider, "id" | "label"> | undefined;
+	for (const candidate of candidates) {
+		let provider: SearchProvider | undefined;
+		const providerMeta = { id: candidate.id, label: getSearchProviderLabel(candidate.id) };
+		lastProvider = providerMeta;
 		try {
+			provider = await getSearchProvider(candidate.id);
+			const available = candidate.explicit
+				? await provider.isExplicitlyAvailable(authStorage)
+				: await provider.isAvailable(authStorage);
+			if (!available) continue;
+			availableProviderCount++;
+			lastProvider = provider;
+
 			const response = await provider.search({
 				query: params.query,
 				limit: params.limit,
@@ -203,20 +209,31 @@ async function executeSearch(
 			// failure and the loop falls through to the next provider (or to the
 			// summary error), masking the cancellation.
 			throwIfAborted(signal);
-			failures.push({ provider, error });
+			failures.push({ provider: provider ?? providerMeta, error });
 		}
+	}
+
+	if (availableProviderCount === 0 && failures.length === 0) {
+		const message = "No web search provider configured.";
+		return {
+			content: [{ type: "text" as const, text: `Error: ${message}` }],
+			details: { response: { provider: "none", sources: [] }, error: message },
+		};
 	}
 
 	const lastFailure = failures[failures.length - 1];
 	const baseMessage = lastFailure
 		? formatSearchProviderFailure(lastFailure.error, lastFailure.provider)
-		: `Unknown error from ${lastProvider.label}`;
+		: `Unknown error from ${lastProvider?.label ?? "web search provider"}`;
 	const message =
-		providers.length > 1 ? `All web search providers failed: ${formatSearchProviderFailures(failures)}` : baseMessage;
+		failures.length > 1 ? `All web search providers failed: ${formatSearchProviderFailures(failures)}` : baseMessage;
 
 	return {
 		content: [{ type: "text" as const, text: `Error: ${message}` }],
-		details: { response: { provider: lastProvider.id, sources: [] }, error: message },
+		details: {
+			response: { provider: lastFailure?.provider.id ?? lastProvider?.id ?? "none", sources: [] },
+			error: message,
+		},
 	};
 }
 
