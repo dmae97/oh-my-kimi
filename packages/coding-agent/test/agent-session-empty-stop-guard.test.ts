@@ -4,6 +4,7 @@ import { scheduler } from "node:timers/promises";
 import { Agent, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import { z } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
+import { AutoLearnController } from "@oh-my-pi/pi-coding-agent/autolearn/controller";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { type SettingPath, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -397,6 +398,54 @@ describe("AgentSession empty stop guard", () => {
 		});
 		expect(session.isRetrying).toBe(false);
 		expect(reminderMessages(session.agent.state.messages)).toHaveLength(1);
+	});
+
+	it("accepts an auto-learn capture turn that ends with an empty terminal stop", async () => {
+		const { session, mock } = await createHarness(
+			[
+				recordCall("learn-alpha", "call-record-learn-alpha"),
+				recordCall("learn-beta", "call-record-learn-beta"),
+				{ content: ["normal turn complete"], stopReason: "stop" },
+				emptyStop(),
+				emptyStop(),
+				emptyStop(),
+				emptyStop(),
+			],
+			{
+				"autolearn.enabled": true,
+				"autolearn.autoContinue": true,
+				"autolearn.minToolCalls": 2,
+			},
+		);
+		const retryEndEvents: Array<Extract<AgentSessionEvent, { type: "auto_retry_end" }>> = [];
+		session.subscribe(event => {
+			if (event.type === "auto_retry_end") retryEndEvents.push(event);
+		});
+		new AutoLearnController({ session, settings: session.settings });
+
+		await session.prompt("record enough facts for auto-learn");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(4);
+		expect(assistantText(session.agent.state.messages)).toContain("normal turn complete");
+		expect(reminderMessages(session.agent.state.messages)).toHaveLength(0);
+		expect(retryEndEvents.filter(event => event.success === false)).toEqual([]);
+		expect(emptyAssistantStops(session.agent.state.messages)).toHaveLength(1);
+		const captureCall = mock.calls[3];
+		if (!captureCall) throw new Error("Expected auto-learn capture turn to call the model");
+		const messageHasText = (message: (typeof captureCall.context.messages)[number], text: string): boolean => {
+			const { content } = message;
+			if (typeof content === "string") return content.includes(text);
+			return (
+				Array.isArray(content) &&
+				content.some(block => "text" in block && typeof block.text === "string" && block.text.includes(text))
+			);
+		};
+		expect(
+			captureCall.context.messages.some(message =>
+				messageHasText(message, "If your previous turn produced anything reusable"),
+			),
+		).toBe(true);
 	});
 
 	it("does not retry normal stop or tool-use turns", async () => {

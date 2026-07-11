@@ -31,6 +31,7 @@
 
 - Fixed visible per-keystroke lag while searching in the `/resume` session picker. Literal matches now rank synchronously from a cached per-session haystack, fuzzy scoring runs in bounded background chunks that converge to the same ranking (large listings previously rebuilt a fuzzy index per token per session on every keystroke), and the prompt-history SQLite lookup — an FTS query plus a LIKE scan over every stored prompt — is debounced off the keystroke path.
 - Fixed compiled Linux binary extension loading when bundled web-search header generation cannot read `header-generator` data files from the build-time path. ([#5178](https://github.com/can1357/oh-my-pi/issues/5178))
+- Fixed `autolearn.autoContinue` treating the hidden capture turn's terminal empty assistant stop as a retryable empty response instead of successful completion. ([#5211](https://github.com/can1357/oh-my-pi/issues/5211))
 
 ## [16.4.4] - 2026-07-11
 
