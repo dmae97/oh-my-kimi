@@ -473,6 +473,157 @@ describe("openai-codex streaming", () => {
 		expect(capturedText).toEqual({ verbosity: "low" });
 	});
 
+	async function runCodexSseEvents(events: unknown[]) {
+		const token = createCodexTestToken();
+		const context = createCodexTestContext();
+		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
+		const sse = `${events.map(event => `data: ${JSON.stringify(event)}`).join("\n\n")}\n\n`;
+		const fetchMock: FetchImpl = async () =>
+			new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+		const textEndContents: string[] = [];
+
+		const stream = streamOpenAICodexResponses(model, context, {
+			apiKey: token,
+			fetch: fetchMock,
+		});
+		const readPromise = (async () => {
+			for await (const event of stream) {
+				if (event.type === "text_end") textEndContents.push(event.content);
+			}
+		})();
+		const result = await stream.result();
+		await readPromise;
+
+		return { result, textEndContents };
+	}
+
+	for (const testCase of [
+		{
+			name: "absent terminal content preserves streamed text",
+			deltas: ["Hello", " world"],
+			expectedText: "Hello world",
+		},
+		{
+			name: "empty terminal content preserves streamed text",
+			deltas: ["Hello", " world"],
+			terminalContent: [],
+			expectedText: "Hello world",
+		},
+		{
+			name: "identical terminal text is not appended to streamed text",
+			deltas: ["Same text"],
+			terminalContent: [{ type: "output_text", text: "Same text", annotations: [] }],
+			expectedText: "Same text",
+		},
+		{
+			name: "terminal text replaces streamed text",
+			deltas: ["draft text"],
+			terminalContent: [{ type: "output_text", text: "final text", annotations: [] }],
+			expectedText: "final text",
+		},
+		{
+			name: "explicit empty terminal text clears streamed text",
+			deltas: ["draft text"],
+			terminalContent: [{ type: "output_text", text: "", annotations: [] }],
+			expectedText: "",
+		},
+		{
+			name: "terminal refusal replaces streamed text",
+			deltas: ["draft text"],
+			terminalContent: [{ type: "refusal", refusal: "I cannot help with that." }],
+			expectedText: "I cannot help with that.",
+		},
+	]) {
+		it(`finalizes message text when ${testCase.name}`, async () => {
+			const doneItem =
+				"terminalContent" in testCase
+					? {
+							type: "message",
+							id: "msg_1",
+							role: "assistant",
+							status: "completed",
+							content: testCase.terminalContent,
+						}
+					: { type: "message", id: "msg_1", role: "assistant", status: "completed" };
+			const events = [
+				{
+					type: "response.output_item.added",
+					output_index: 0,
+					item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
+				},
+				...testCase.deltas.map(delta => ({
+					type: "response.output_text.delta",
+					output_index: 0,
+					item_id: "msg_1",
+					delta,
+				})),
+				{ type: "response.output_item.done", output_index: 0, item: doneItem },
+				{
+					type: "response.completed",
+					response: {
+						id: "resp_1",
+						status: "completed",
+						usage: {
+							input_tokens: 5,
+							output_tokens: 3,
+							total_tokens: 8,
+							input_tokens_details: { cached_tokens: 0 },
+						},
+					},
+				},
+			];
+
+			const { result, textEndContents } = await runCodexSseEvents(events);
+
+			expect(result.content.find(block => block.type === "text")?.text).toBe(testCase.expectedText);
+			expect(textEndContents).toEqual([testCase.expectedText]);
+		});
+	}
+
+	it("keeps separate message output items from concatenating", async () => {
+		const { result, textEndContents } = await runCodexSseEvents([
+			{
+				type: "response.output_item.added",
+				output_index: 0,
+				item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
+			},
+			{ type: "response.output_text.delta", output_index: 0, item_id: "msg_1", delta: "First" },
+			{
+				type: "response.output_item.done",
+				output_index: 0,
+				item: { type: "message", id: "msg_1", role: "assistant", status: "completed", content: [] },
+			},
+			{
+				type: "response.output_item.added",
+				output_index: 1,
+				item: { type: "message", id: "msg_2", role: "assistant", status: "in_progress", content: [] },
+			},
+			{ type: "response.output_text.delta", output_index: 1, item_id: "msg_2", delta: "Second" },
+			{
+				type: "response.output_item.done",
+				output_index: 1,
+				item: { type: "message", id: "msg_2", role: "assistant", status: "completed", content: [] },
+			},
+			{
+				type: "response.completed",
+				response: {
+					id: "resp_1",
+					status: "completed",
+					usage: {
+						input_tokens: 5,
+						output_tokens: 3,
+						total_tokens: 8,
+						input_tokens_details: { cached_tokens: 0 },
+					},
+				},
+			},
+		]);
+
+		const textBlocks = result.content.filter(block => block.type === "text");
+		expect(textBlocks.map(block => block.text)).toEqual(["First", "Second"]);
+		expect(textEndContents).toEqual(["First", "Second"]);
+	});
+
 	it("preserves streamed reasoning when the done item has no summary text", async () => {
 		const token = createCodexTestToken();
 		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };

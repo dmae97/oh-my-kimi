@@ -120,6 +120,129 @@ describe("processResponsesStream: terminal events", () => {
 		expect(output.content).toEqual([expect.objectContaining({ type: "text", text: "Hello, trunc" })]);
 	});
 
+	for (const testCase of [
+		{
+			name: "absent terminal content preserves streamed text",
+			deltas: ["Hello", " world"],
+			expectedText: "Hello world",
+		},
+		{
+			name: "empty terminal content preserves streamed text",
+			deltas: ["Hello", " world"],
+			terminalContent: [],
+			expectedText: "Hello world",
+		},
+		{
+			name: "identical terminal text is not appended to streamed text",
+			deltas: ["Same text"],
+			terminalContent: [{ type: "output_text", text: "Same text", annotations: [] }],
+			expectedText: "Same text",
+		},
+		{
+			name: "terminal text replaces streamed text",
+			deltas: ["draft text"],
+			terminalContent: [{ type: "output_text", text: "final text", annotations: [] }],
+			expectedText: "final text",
+		},
+		{
+			name: "explicit empty terminal text clears streamed text",
+			deltas: ["draft text"],
+			terminalContent: [{ type: "output_text", text: "", annotations: [] }],
+			expectedText: "",
+		},
+		{
+			name: "terminal refusal replaces streamed text",
+			deltas: ["draft text"],
+			terminalContent: [{ type: "refusal", refusal: "I cannot help with that." }],
+			expectedText: "I cannot help with that.",
+		},
+	]) {
+		test(`finalizes message text when ${testCase.name}`, async () => {
+			const output = makeOutput();
+			const emitted: EmittedEvent[] = [];
+			const stream = { push: (e: unknown) => emitted.push(e as EmittedEvent), end: () => {} } as never;
+			const doneItem =
+				"terminalContent" in testCase
+					? {
+							type: "message",
+							id: "msg_1",
+							role: "assistant",
+							status: "completed",
+							content: testCase.terminalContent,
+						}
+					: { type: "message", id: "msg_1", role: "assistant", status: "completed" };
+
+			await processResponsesStream(
+				makeStream([
+					{
+						type: "response.output_item.added",
+						output_index: 0,
+						item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
+					},
+					...testCase.deltas.map(delta => ({
+						type: "response.output_text.delta",
+						output_index: 0,
+						item_id: "msg_1",
+						delta,
+					})),
+					{ type: "response.output_item.done", output_index: 0, item: doneItem },
+					{ type: "response.completed", response: { id: "resp_done", status: "completed" } },
+				]),
+				output,
+				stream,
+				makeModel(),
+			);
+
+			expect(output.content).toEqual([expect.objectContaining({ type: "text", text: testCase.expectedText })]);
+			const end = emitted.find(e => e.type === "text_end");
+			expect(end?.content).toBe(testCase.expectedText);
+		});
+	}
+
+	test("keeps separate message output items from concatenating", async () => {
+		const output = makeOutput();
+		const emitted: EmittedEvent[] = [];
+		const stream = { push: (e: unknown) => emitted.push(e as EmittedEvent), end: () => {} } as never;
+
+		await processResponsesStream(
+			makeStream([
+				{
+					type: "response.output_item.added",
+					output_index: 0,
+					item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
+				},
+				{ type: "response.output_text.delta", output_index: 0, item_id: "msg_1", delta: "First" },
+				{
+					type: "response.output_item.done",
+					output_index: 0,
+					item: { type: "message", id: "msg_1", role: "assistant", status: "completed", content: [] },
+				},
+				{
+					type: "response.output_item.added",
+					output_index: 1,
+					item: { type: "message", id: "msg_2", role: "assistant", status: "in_progress", content: [] },
+				},
+				{ type: "response.output_text.delta", output_index: 1, item_id: "msg_2", delta: "Second" },
+				{
+					type: "response.output_item.done",
+					output_index: 1,
+					item: { type: "message", id: "msg_2", role: "assistant", status: "completed", content: [] },
+				},
+				{ type: "response.completed", response: { id: "resp_done", status: "completed" } },
+			]),
+			output,
+			stream,
+			makeModel(),
+		);
+
+		const textBlocks = output.content.filter(block => block.type === "text");
+		expect(textBlocks.map(block => block.text)).toEqual(["First", "Second"]);
+		expect(emitted.filter(e => e.type === "text_end").map(e => [e.contentIndex, e.content])).toEqual([
+			[0, "First"],
+			[1, "Second"],
+		]);
+	});
+
 	test("persists final custom tool input on the block and drops the accumulation buffer", async () => {
 		const output = makeOutput();
 		const emitted: EmittedEvent[] = [];

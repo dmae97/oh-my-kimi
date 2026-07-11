@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed OpenAI Responses and Codex Responses message finalization preserving streamed text when `output_item.done` arrives with empty content. ([#5146](https://github.com/can1357/oh-my-pi/issues/5146))
+
 ## [16.4.2] - 2026-07-10
 
 ### Fixed
