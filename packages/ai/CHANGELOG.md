@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.5] - 2026-07-11
+
 ### Fixed
 
 - Fixed an issue in GLM tool calling where missing or malformed argument closers (such as `<arg_value>` mistyped as `</arg_key>`) caused subsequent arguments to be swallowed or merged into a single field, affecting both in-band and native tool calling.

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.5] - 2026-07-11
+
 ### Added
 
 - Added `FuzzyText`, a prepared fuzzy-match handle that builds the search index once and matches many queries against it, optimizing performance for large corpora like session or transcript searches.

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.5] - 2026-07-11
+
 ### Breaking Changes
 
 - Reworked the task tool wire schema: moved the top-level agent field into individual task items, renamed assignment to task and id to name, and removed the role and description fields. UI labels are now automatically generated from the task text.

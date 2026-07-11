@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.5] - 2026-07-11
+
 ### Added
 
 - Added context-safe, in-process shell builtins for common utilities including base64, basename, dirname, cut, tee, tr, paste, comm, sed, xargs, jq, and the md5sum/sha/b2sum checksum family. These builtins run without spawning external binaries, support pipelines, respect shell-relative paths and environment variables, and honor abort/timeout cancellation.
