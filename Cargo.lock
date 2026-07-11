@@ -537,9 +537,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.66"
+version = "1.2.67"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5d6cac793997bd970000024b2934968efe83b382de4fdcf4fcb46b6ee4ad996"
+checksum = "e17dd265a7d0f31ef544e1b20e03add05d3b45b491b633b10d67145d2acc1a38"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -2955,7 +2955,7 @@ dependencies = [
 
 [[package]]
 name = "pi-ast"
-version = "16.4.3"
+version = "16.4.4"
 dependencies = [
  "anyhow",
  "ast-grep-core",
@@ -3024,7 +3024,7 @@ dependencies = [
 
 [[package]]
 name = "pi-iso"
-version = "16.4.3"
+version = "16.4.4"
 dependencies = [
  "async-trait",
  "libc",
@@ -3036,7 +3036,7 @@ dependencies = [
 
 [[package]]
 name = "pi-natives"
-version = "16.4.3"
+version = "16.4.4"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3090,7 +3090,7 @@ dependencies = [
 
 [[package]]
 name = "pi-shell"
-version = "16.4.3"
+version = "16.4.4"
 dependencies = [
  "anyhow",
  "brush-builtins",
@@ -3139,7 +3139,7 @@ dependencies = [
 
 [[package]]
 name = "pi-walker"
-version = "16.4.3"
+version = "16.4.4"
 dependencies = [
  "dashmap",
  "globset",

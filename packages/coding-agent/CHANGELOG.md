@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.4] - 2026-07-11
+
 ### Changed
 
 - Optimized session title generation and auto-thinking classification for sub-billion-parameter tiny models (such as LFM2) by rewriting system prompts, improving input truncation to preserve message context, and unifying preprocessing to filter out noise like ANSI codes, XML tags, and long commit hashes.

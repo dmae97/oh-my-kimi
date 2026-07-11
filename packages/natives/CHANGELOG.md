@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.4] - 2026-07-11
+
 ### Fixed
 
 - Fixed fuzzyFind tie-breaking logic to prefer shallower paths first, preventing deeply nested matches from ranking above shallow ones on score ties.
