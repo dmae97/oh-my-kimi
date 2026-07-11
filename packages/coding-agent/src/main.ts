@@ -1365,7 +1365,7 @@ export async function runRootCommand(
 			},
 		};
 		const initialArgs = applyExtensionFlags(extensionFlagSink, rawArgs) ?? parsedArgs;
-		normalizeContinueSessionArgs(initialArgs);
+		normalizeContinueSessionArgs(initialArgs, rawArgs);
 		// Fail fast on stale/typo flags (e.g. `omp --list-models`) now that we
 		// know the real extension flag set. Without this check the unrecognized
 		// token gets silently consumed and any following positional leaks as the

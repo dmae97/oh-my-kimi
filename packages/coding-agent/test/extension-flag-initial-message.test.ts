@@ -118,6 +118,23 @@ describe("extension flags vs initial message", () => {
 		expect(initialMessage).toBeUndefined();
 	});
 
+	it("removes a continued session id while preserving a following prompt after extension reparse", () => {
+		const sessionId = "019ea530-ffff-7000-8000-000000000000";
+		const rawArgs = ["--continue", sessionId, "--spawn-peer", "reviewer", "do next"];
+		const sink: ExtensionFlagSink = {
+			getFlags: () => extFlags,
+			setFlagValue: () => {},
+		};
+		const parsed = applyExtensionFlags(sink, rawArgs);
+		expect(parsed).not.toBeNull();
+		if (!parsed) return;
+
+		normalizeContinueSessionArgs(parsed, rawArgs);
+
+		expect(parsed.resume).toBe(sessionId);
+		expect(parsed.messages).toEqual(["do next"]);
+	});
+
 	it("does not consume a UUID-shaped extension flag value before extension-aware reparse", () => {
 		const sessionId = "019ea530-ffff-7000-8000-000000000000";
 		const rawArgs = ["--continue", "--spawn-peer", sessionId];
