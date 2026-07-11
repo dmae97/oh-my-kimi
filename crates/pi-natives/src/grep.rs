@@ -264,17 +264,29 @@ struct FileSearchResult {
 	limit_reached: bool,
 }
 
-/// Owned bytes captured from a file before search.
-type FileBytes = Vec<u8>;
-
 /// Outcome of attempting to read a file for searching.
 enum ReadFile {
-	Bytes(FileBytes),
+	/// File was read successfully into the provided buffer.
+	Read,
 	/// File exceeds [`MAX_FILE_BYTES`]; callers count these so the skip can be
 	/// surfaced instead of silently returning no matches.
 	Oversized,
 	/// Unreadable or not a regular file; silently skipped.
 	Skipped,
+}
+
+struct SearchWorker {
+	searcher: Searcher,
+	buffer:   Vec<u8>,
+}
+
+impl SearchWorker {
+	fn new(params: SearchParams) -> Self {
+		Self {
+			searcher: build_searcher_for_params(params),
+			buffer:   Vec::new(),
+		}
+	}
 }
 
 impl MatchCollector {
@@ -616,21 +628,21 @@ fn build_searcher_for_params(params: SearchParams) -> Searcher {
 	)
 }
 std::thread_local! {
-	static PARALLEL_GREP_SEARCHER: RefCell<Option<(SearchParams, Searcher)>> =
+	static PARALLEL_GREP_SEARCHER: RefCell<Option<(SearchParams, SearchWorker)>> =
 		const { RefCell::new(None) };
 }
 
 fn with_parallel_grep_searcher<T>(
 	params: SearchParams,
-	search: impl FnOnce(&mut Searcher) -> T,
+	search: impl FnOnce(&mut SearchWorker) -> T,
 ) -> T {
 	PARALLEL_GREP_SEARCHER.with(|cell| {
 		let mut cached = cell.borrow_mut();
 		if !matches!(cached.as_ref(), Some((cached_params, _)) if *cached_params == params) {
-			*cached = Some((params, build_searcher_for_params(params)));
+			*cached = Some((params, SearchWorker::new(params)));
 		}
-		let (_, searcher) = cached.as_mut().expect("parallel grep searcher initialized");
-		search(searcher)
+		let (_, worker) = cached.as_mut().expect("parallel grep searcher initialized");
+		search(worker)
 	})
 }
 
@@ -655,21 +667,30 @@ fn file_len_exceeds_limit(len: usize) -> bool {
 	u64::try_from(len).map_or(true, |len| len > MAX_FILE_BYTES)
 }
 
-fn read_owned_prefix(mut file: File, limit: u64, capacity_hint: u64) -> io::Result<Vec<u8>> {
+fn read_owned_prefix(
+	mut file: File,
+	limit: u64,
+	capacity_hint: u64,
+	buffer: &mut Vec<u8>,
+) -> io::Result<()> {
+	buffer.clear();
 	let capacity = capacity_hint.min(limit);
-	let mut buffer =
-		Vec::with_capacity(usize::try_from(capacity).expect("bounded read capacity fits usize"));
-	file.by_ref().take(limit).read_to_end(&mut buffer)?;
-	Ok(buffer)
+	buffer.reserve(usize::try_from(capacity).expect("bounded read capacity fits usize"));
+	file.by_ref().take(limit).read_to_end(buffer)?;
+	Ok(())
 }
 
 /// Read file bytes, distinguishing oversized files from other skips.
-fn read_file_bytes(path: &Path) -> io::Result<ReadFile> {
-	read_file_bytes_with_size(path, None)
+fn read_file_bytes(path: &Path, buffer: &mut Vec<u8>) -> io::Result<ReadFile> {
+	read_file_bytes_with_size(path, None, buffer)
 }
 
 /// Read file bytes with an optional size hint from directory traversal.
-fn read_file_bytes_with_size(path: &Path, size_hint: Option<u64>) -> io::Result<ReadFile> {
+fn read_file_bytes_with_size(
+	path: &Path,
+	size_hint: Option<u64>,
+	buffer: &mut Vec<u8>,
+) -> io::Result<ReadFile> {
 	let file = match File::open(path) {
 		Ok(file) => file,
 		Err(err)
@@ -692,11 +713,11 @@ fn read_file_bytes_with_size(path: &Path, size_hint: Option<u64>) -> io::Result<
 		return Ok(ReadFile::Oversized);
 	}
 
-	let buffer = read_owned_prefix(file, FILE_CLASSIFICATION_READ_BYTES, size)?;
+	read_owned_prefix(file, FILE_CLASSIFICATION_READ_BYTES, size, buffer)?;
 	if file_len_exceeds_limit(buffer.len()) {
 		return Ok(ReadFile::Oversized);
 	}
-	Ok(ReadFile::Bytes(buffer))
+	Ok(ReadFile::Read)
 }
 
 // ---------------------------------------------------------------------------
@@ -1190,7 +1211,7 @@ struct PassState {
 /// Used by the deferred oversized pass: files larger than the cap are searched
 /// only over their leading window; the remainder is dropped. The bounded owned
 /// read avoids mmap page faults when the backing file is rewritten concurrently.
-fn read_file_prefix(path: &Path) -> io::Result<ReadFile> {
+fn read_file_prefix(path: &Path, buffer: &mut Vec<u8>) -> io::Result<ReadFile> {
 	let file = match File::open(path) {
 		Ok(file) => file,
 		Err(err)
@@ -1206,27 +1227,30 @@ fn read_file_prefix(path: &Path) -> io::Result<ReadFile> {
 	}
 	let len = metadata.len();
 	if len == 0 {
-		return Ok(ReadFile::Bytes(Vec::new()));
+		buffer.clear();
+		return Ok(ReadFile::Read);
 	}
 	let window = len.min(MAX_FILE_BYTES);
-	let buffer = read_owned_prefix(file, window, window)?;
-	Ok(ReadFile::Bytes(buffer))
+	read_owned_prefix(file, window, window, buffer)?;
+	Ok(ReadFile::Read)
 }
 
 /// Read one candidate per `policy` and search it, classifying the result.
 fn search_one_file<M: Matcher + Sync>(
-	searcher: &mut Searcher,
+	worker: &mut SearchWorker,
 	matcher: &M,
 	file: &pi_walker::FileCandidate,
 	file_params: SearchParams,
 	policy: ReadPolicy,
 ) -> FileOutcome {
 	let read = match policy {
-		ReadPolicy::Full => read_file_bytes_with_size(&file.path, file_size_hint(file.size)),
-		ReadPolicy::Prefix => read_file_prefix(&file.path),
+		ReadPolicy::Full => {
+			read_file_bytes_with_size(&file.path, file_size_hint(file.size), &mut worker.buffer)
+		},
+		ReadPolicy::Prefix => read_file_prefix(&file.path, &mut worker.buffer),
 	};
-	let bytes = match read {
-		Ok(ReadFile::Bytes(bytes)) => bytes,
+	match read {
+		Ok(ReadFile::Read) => {},
 		Ok(ReadFile::Oversized) => return FileOutcome::Defer,
 		Ok(ReadFile::Skipped) => {
 			return match policy {
@@ -1235,10 +1259,10 @@ fn search_one_file<M: Matcher + Sync>(
 			};
 		},
 		Err(_) => return FileOutcome::Skipped,
-	};
+	}
 	// A searcher error counts as searched-with-no-matches, matching the prior
 	// behavior (the file was read and attempted).
-	let search = search_file_bytes(searcher, matcher, bytes.as_slice(), file_params).unwrap_or(
+	let search = search_file_bytes(&mut worker.searcher, matcher, &worker.buffer, file_params).unwrap_or(
 		SearchResultInternal {
 			matches:       Vec::new(),
 			match_count:   0,
@@ -1252,7 +1276,7 @@ fn search_one_file<M: Matcher + Sync>(
 /// Search one candidate and fold its outcome into the shared [`PassState`].
 fn handle_file<M: Matcher + Sync>(
 	file: &pi_walker::FileCandidate,
-	searcher: &mut Searcher,
+	worker: &mut SearchWorker,
 	matcher: &M,
 	file_params: SearchParams,
 	policy: ReadPolicy,
@@ -1266,7 +1290,7 @@ fn handle_file<M: Matcher + Sync>(
 	{
 		return Ok(());
 	}
-	match search_one_file(searcher, matcher, file, file_params, policy) {
+	match search_one_file(worker, matcher, file, file_params, policy) {
 		FileOutcome::Defer => {
 			state.deferred.lock().push(file.clone());
 		},
@@ -1310,13 +1334,13 @@ fn run_pass<M: Matcher + Sync>(
 	if parallel_allowed && pi_walker::should_parallelize(candidates.len()) {
 		pi_walker::execute_candidates_init(
 			candidates,
-			|| build_searcher_for_params(file_params),
-			|searcher, file| {
-				handle_file(file, searcher, matcher, file_params, policy, stop_after_matches, state, ct)
+			|| SearchWorker::new(file_params),
+			|worker, file| {
+				handle_file(file, worker, matcher, file_params, policy, stop_after_matches, state, ct)
 			},
 		)?;
 	} else {
-		let mut searcher = build_searcher_for_params(file_params);
+		let mut worker = SearchWorker::new(file_params);
 		ct.heartbeat()?;
 		for file in candidates {
 			if let Some(stop) = stop_after_matches
@@ -1326,7 +1350,7 @@ fn run_pass<M: Matcher + Sync>(
 			}
 			handle_file(
 				file,
-				&mut searcher,
+				&mut worker,
 				matcher,
 				file_params,
 				policy,
@@ -1928,10 +1952,11 @@ fn grep_sync_with_matcher<M: Matcher + Sync>(
 			});
 		}
 
-		let bytes = match read_file_bytes(&search_path) {
-			Ok(ReadFile::Bytes(bytes)) => bytes,
-			Ok(ReadFile::Oversized) => match read_file_prefix(&search_path) {
-				Ok(ReadFile::Bytes(bytes)) => bytes,
+		let mut buffer = Vec::new();
+		let bytes = match read_file_bytes(&search_path, &mut buffer) {
+			Ok(ReadFile::Read) => &buffer,
+			Ok(ReadFile::Oversized) => match read_file_prefix(&search_path, &mut buffer) {
+				Ok(ReadFile::Read) => &buffer,
 				_ => {
 					return Ok(GrepResult {
 						matches:            Vec::new(),
@@ -3157,17 +3182,15 @@ mod tests {
 		let oversized_len = prefix_len + 1024;
 		fs::write(&path, vec![b'a'; oversized_len]).expect("write original oversized file");
 
-		let captured = match super::read_file_prefix(&path).expect("read oversized prefix") {
-			super::ReadFile::Bytes(bytes) => bytes,
-			super::ReadFile::Oversized => panic!("prefix reader should return the bounded prefix"),
-			super::ReadFile::Skipped => panic!("prefix reader should read a regular oversized file"),
-		};
-		assert_eq!(captured.as_slice().len(), prefix_len);
+		let mut buffer = Vec::new();
+		let outcome = super::read_file_prefix(&path, &mut buffer).expect("read oversized prefix");
+		assert!(matches!(outcome, super::ReadFile::Read));
+		assert_eq!(buffer.len(), prefix_len);
 
 		fs::write(&path, vec![b'b'; oversized_len]).expect("rewrite backing file");
 
 		assert!(
-			captured.as_slice().iter().all(|&byte| byte == b'a'),
+			buffer.iter().all(|&byte| byte == b'a'),
 			"captured prefix must remain the original bytes after the backing file is rewritten",
 		);
 	}
