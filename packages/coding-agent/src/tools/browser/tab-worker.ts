@@ -115,15 +115,27 @@ type ActionabilityResult = { ok: true; x: number; y: number } | { ok: false; rea
  * - `QUICK_OP_TIMEOUT_MS`: page-coupled reads that should resolve fast (`observe`,
  *   `screenshot`, `extract`, `ariaSnapshot`).
  * - `ACTION_OP_TIMEOUT_MS`: interactive point actions (`click`, `fill`, `type`, …) and
- *   the default for wait helpers when no explicit `{ timeout }` is given.
+ *   the default for wait helpers when no explicit `{ timeout }` is given. Selector ops
+ *   additionally fail fast after `ZERO_MATCH_FAIL_FAST_MS` of confirmed zero matches
+ *   (see `#zeroMatchWatchdog`), so the full ceiling is only spent on elements that
+ *   exist but are not yet actionable.
  *
  * `goto` and `evaluate` stay uncapped (`Number.POSITIVE_INFINITY`): navigation and user
  * code legitimately use the full cell budget.
  */
 const QUICK_OP_TIMEOUT_MS = 20_000;
-const ACTION_OP_TIMEOUT_MS = 15_000;
+const ACTION_OP_TIMEOUT_MS = 8_000;
 /** Headroom subtracted from the cell budget so a per-op deadline fires before it. */
 const OP_DEADLINE_SLACK_MS = 1_000;
+/**
+ * A selector op whose selector has matched nothing for this long fails fast with the
+ * zero-match hint instead of burning the rest of its deadline: a wrong selector or a
+ * wrong page (consent wall, pre-navigation document) is the common agent failure and
+ * should cost ~2s, not the full action ceiling. Explicit `{ timeout }` waits opt out.
+ */
+const ZERO_MATCH_FAIL_FAST_MS = 2_000;
+/** Poll cadence for the zero-match watchdog. */
+const ZERO_MATCH_POLL_MS = 250;
 
 export interface OpTimeouts {
 	/** Largest per-op deadline allowed — strictly below the cell budget. */
@@ -857,7 +869,9 @@ export class WorkerCore {
 	 * `Number.POSITIVE_INFINITY` for `perOpTimeoutMs` to bound the op only by the cell
 	 * budget (used for `evaluate` running user code and for locator helpers that already
 	 * carry puppeteer's own `.setTimeout(timeoutMs)`). When the op targets a `selector`,
-	 * the fail-fast timeout carries a best-effort match-count hint.
+	 * the fail-fast timeout carries a best-effort match-count hint, and — when
+	 * `zeroMatchAfterMs` is set — a watchdog aborts the op early once the selector has
+	 * matched nothing for that long.
 	 */
 	async #runOp<T>(
 		active: ActiveRun,
@@ -865,15 +879,28 @@ export class WorkerCore {
 		cellSignal: AbortSignal,
 		perOpTimeoutMs: number,
 		fn: (signal: AbortSignal) => Promise<T>,
-		selector?: string,
+		opts?: { selector?: string; zeroMatchAfterMs?: number },
 	): Promise<T> {
 		const opId = active.opCounter++;
 		active.inflight.set(opId, { label, startedAt: Date.now() });
 		const capped = Number.isFinite(perOpTimeoutMs) && perOpTimeoutMs > 0;
 		const opTimeout = capped ? AbortSignal.timeout(perOpTimeoutMs) : undefined;
 		const opSignal = opTimeout ? AbortSignal.any([cellSignal, opTimeout]) : cellSignal;
+		const selector = opts?.selector;
+		const watchdog =
+			selector !== undefined && opts?.zeroMatchAfterMs !== undefined && parseAriaRefSelector(selector) === null
+				? { selector, afterMs: opts.zeroMatchAfterMs }
+				: undefined;
+		// Fired when the watchdog wins the race (tears down the in-flight action) and in
+		// the finally (stops the watchdog's polling once the op settles either way).
+		const earlyAc = new AbortController();
 		try {
-			return await fn(opSignal);
+			if (!watchdog) return await fn(opSignal);
+			const racedSignal = AbortSignal.any([opSignal, earlyAc.signal]);
+			return await Promise.race([
+				fn(racedSignal),
+				this.#zeroMatchWatchdog(watchdog.selector, label, watchdog.afterMs, racedSignal),
+			]);
 		} catch (err) {
 			// Fail fast with a named, attributable error instead of the opaque whole-cell timeout:
 			// our per-op deadline fired, or puppeteer's own (equal) timeout fired first — having
@@ -889,8 +916,43 @@ export class WorkerCore {
 			}
 			throw err;
 		} finally {
+			earlyAc.abort();
 			active.inflight.delete(opId);
 		}
+	}
+
+	/**
+	 * Fail-fast arm raced against a selector op: rejects once the selector has matched
+	 * nothing for the whole `afterMs` window, so a wrong selector or wrong page (consent
+	 * wall, pre-navigation document) costs ~2s instead of the full action deadline.
+	 * Disarms — hangs until the settled race drops it — the moment at least one element
+	 * matches; an inconclusive probe (mid-navigation, detached frame) never counts
+	 * toward the zero-match window.
+	 */
+	async #zeroMatchWatchdog(selector: string, label: string, afterMs: number, signal: AbortSignal): Promise<never> {
+		const page = this.#requirePage();
+		const resolved = normalizeSelector(selector);
+		const deadline = Date.now() + afterMs;
+		while (!signal.aborted) {
+			let count: number | null = null;
+			try {
+				const handles = await page.$$(resolved);
+				count = handles.length;
+				for (const handle of handles) void handle.dispose().catch(() => undefined);
+			} catch {
+				// Inconclusive probe — keep polling without advancing toward failure.
+			}
+			if (count !== null && count > 0) break;
+			if (count === 0 && Date.now() >= deadline) {
+				throw new ToolError(`${label} failed fast after ${afterMs}ms${formatSelectorMatchHint(0)}`);
+			}
+			try {
+				await untilAborted(signal, () => Bun.sleep(ZERO_MATCH_POLL_MS));
+			} catch {
+				break;
+			}
+		}
+		return await new Promise<never>(() => {});
 	}
 
 	/**
@@ -930,8 +992,8 @@ export class WorkerCore {
 			label: string,
 			perOpMs: number,
 			fn: (sig: AbortSignal) => Promise<T>,
-			selector?: string,
-		): Promise<T> => markHandled(this.#runOp(active, label, signal, perOpMs, fn, selector));
+			selectorOpts?: { selector?: string; zeroMatchAfterMs?: number },
+		): Promise<T> => markHandled(this.#runOp(active, label, signal, perOpMs, fn, selectorOpts));
 		return {
 			name,
 			page,
@@ -1011,7 +1073,7 @@ export class WorkerCore {
 								page.locator(resolved).setTimeout(actionOpMs).click({ signal: sig }),
 							);
 					},
-					selector,
+					{ selector, zeroMatchAfterMs: ZERO_MATCH_FAIL_FAST_MS },
 				),
 			type: (selector, text) =>
 				op(
@@ -1025,7 +1087,7 @@ export class WorkerCore {
 							await handle.dispose().catch(() => undefined);
 						}
 					},
-					selector,
+					{ selector, zeroMatchAfterMs: ZERO_MATCH_FAIL_FAST_MS },
 				),
 			fill: (selector, value) =>
 				op(
@@ -1045,7 +1107,7 @@ export class WorkerCore {
 							page.locator(normalizeSelector(selector)).setTimeout(actionOpMs).fill(value, { signal: sig }),
 						);
 					},
-					selector,
+					{ selector, zeroMatchAfterMs: ZERO_MATCH_FAIL_FAST_MS },
 				),
 			press: (key, opts) =>
 				op(`tab.press(${JSON.stringify(key)})`, actionOpMs, async sig => {
@@ -1062,7 +1124,7 @@ export class WorkerCore {
 					`tab.waitFor(${JSON.stringify(selector)})`,
 					w,
 					async sig => toActionableHandle(await this.#resolveActionHandle(selector, w, sig)),
-					selector,
+					{ selector, zeroMatchAfterMs: opts?.timeout === undefined ? ZERO_MATCH_FAIL_FAST_MS : undefined },
 				);
 			},
 			waitForSelector: (selector, opts) => {
@@ -1083,7 +1145,11 @@ export class WorkerCore {
 						)) as ElementHandle | null;
 						return handle ? toActionableHandle(handle) : null;
 					},
-					selector,
+					{
+						selector,
+						// `hidden: true` waits for zero matches — that is success, never a fast-fail.
+						zeroMatchAfterMs: opts?.timeout === undefined && !opts?.hidden ? ZERO_MATCH_FAIL_FAST_MS : undefined,
+					},
 				);
 			},
 			waitForNavigation: opts => {
@@ -1121,21 +1187,21 @@ export class WorkerCore {
 							await handle.dispose().catch(() => undefined);
 						}
 					},
-					selector,
+					{ selector, zeroMatchAfterMs: ZERO_MATCH_FAIL_FAST_MS },
 				),
 			select: (selector, ...values) =>
 				op(
 					`tab.select(${JSON.stringify(selector)})`,
 					actionOpMs,
 					sig => this.#select(selector, values, actionOpMs, sig),
-					selector,
+					{ selector, zeroMatchAfterMs: ZERO_MATCH_FAIL_FAST_MS },
 				),
 			uploadFile: (selector, ...filePaths) =>
 				op(
 					`tab.uploadFile(${JSON.stringify(selector)})`,
 					actionOpMs,
 					sig => this.#uploadFile(selector, filePaths, actionOpMs, sig, session),
-					selector,
+					{ selector, zeroMatchAfterMs: ZERO_MATCH_FAIL_FAST_MS },
 				),
 			waitForUrl: (pattern, opts) => {
 				const w = waitMs(opts?.timeout);

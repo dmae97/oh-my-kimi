@@ -30,7 +30,7 @@ Drives real Chromium tab; full puppeteer access via JS.
   - `tab.evaluate(fn, …args)` — `page.evaluate` for ad-hoc DOM reads.
   - `tab.screenshot({ selector?, fullPage?, save?, silent? })` — capture + attach for viewing (`silent: true` skips). Pass `save` only when a later step needs the file.
   - `tab.extract(format = "markdown")` — readable page content (`"markdown"` | `"text"`); throws when nothing readable.
-- Selectors: CSS + puppeteer handlers `aria/Sign in`, `text/Continue`, `xpath/…`, `pierce/…`; also Playwright-style `p-aria/…`, `p-text/…`. Playwright-only engines/pseudos (`:has-text()`, `:visible`, …) are rejected — use `text/…` or `aria/…`. A stalled action/wait fails fast with a named `tab.<op> timed out` error, never the whole-cell timeout.
+- Selectors: CSS + puppeteer handlers `aria/Sign in`, `text/Continue`, `xpath/…`, `pierce/…`; also Playwright-style `p-aria/…`, `p-text/…`. Playwright-only engines/pseudos (`:has-text()`, `:visible`, …) are rejected — use `text/…` or `aria/…`. A stalled action/wait fails fast with a named `tab.<op>` error carrying a match-count diagnosis, never the whole-cell timeout; a selector matching nothing fails in ~2s (pass an explicit `{ timeout }` to `waitFor`/`waitForSelector` to wait out slow-appearing elements).
 </instruction>
 
 <critical>

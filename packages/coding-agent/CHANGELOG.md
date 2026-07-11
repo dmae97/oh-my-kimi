@@ -11,6 +11,7 @@
 
 ### Changed
 
+- Reduced browser action timeout from 15s to 8s to improve agent iteration speed
 - Refined agent delegation logic to prioritize top-level planning and scoping by the primary agent
 - Optimized subagent usage to discourage single-agent delegation and improve parallel execution flows
 - Clarified that prerequisite work for subagent tasks should be handled inline by the main agent
@@ -27,6 +28,7 @@
 - Fixed browser runs silently dropping `display("string")`, `console.log`, and `print` output: the runtime emits those as stream text, which the browser embedders (worker and cmux) routed to the debug log only, so the tool result showed a bare "Ran code on tab". Stream text is now buffered and surfaced as ordered display entries alongside `display()` payloads and screenshots.
 - Fixed `input.fill is not a function` on element handles from `tab.id()`/`tab.ref()`/`tab.waitFor()`: raw puppeteer ElementHandles expose `type()` but not the `fill()` the tool docs promise. Handles handed to user code now carry a `fill()` matching `tab.fill()` semantics (focus, clear, retype).
 - Browser selector ops (`click`/`type`/`fill`/`waitFor`/…) that hit their fail-fast timeout now append a match-count diagnosis — "matches no elements" (wrong page, consent wall) vs "matches N element(s) but the action never became possible" (hidden/covered) — instead of a bare `timed out after 15000ms`.
+- Browser selector ops no longer burn their whole deadline on a selector that matches nothing: a watchdog polls while the action runs and aborts after ~2s of confirmed zero matches with the inspection hint. `waitFor`/`waitForSelector` opt out via an explicit `{ timeout }` (and `hidden: true` waits are exempt — zero matches is their success condition). The per-action ceiling for present-but-unactionable elements also dropped from 15s to 8s.
 - Fixed silent failures in ACP mode when provider errors occurred before streaming assistant text
 - Prevented duplicate error messages in ACP when a provider error was both streamed and final
 - Fixed `glob` reporting the contradictory "No files found matching pattern" next to a "timed out; returning 0 partial matches" notice. A timed-out empty scan now states explicitly that the result is incomplete (not proof of absence) and suggests scoping to a deeper directory, and the TUI renders it as "No matches before timeout (scan incomplete)" instead of a definitive no-files claim.
