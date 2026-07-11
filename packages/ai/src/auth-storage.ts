@@ -2451,10 +2451,11 @@ export class AuthStorage {
 		if (projectId) parts.push(`project:${projectId}`);
 		const enterpriseUrl = credential.enterpriseUrl?.trim().toLowerCase();
 		if (enterpriseUrl) parts.push(`enterprise:${enterpriseUrl}`);
-		// Only fall back to a secret-derived key when a stable account identifier is unavailable.
-		// Including the token hash when accountId/email are present causes cache misses on
-		// every OAuth refresh — usage data is per-account, not per-token.
-		const hasStableIdentifier = Boolean(accountId || email);
+		// Only fall back to a secret-derived key when a stable account identifier is
+		// unavailable. Including the token hash when accountId/email/orgId are present
+		// causes cache misses on every OAuth refresh — usage data is per-account (or
+		// per-org for org-only anthropic rows), not per-token.
+		const hasStableIdentifier = Boolean(accountId || email || orgId);
 		if (!hasStableIdentifier) {
 			const secret = credential.apiKey?.trim() || credential.refreshToken?.trim() || credential.accessToken?.trim();
 			if (secret) {
@@ -5553,19 +5554,29 @@ function matchesReplacementCredential(
 	//     replace behavior;
 	//   - `<b>|org:<o>` for any such base — the same subscription keyed by a
 	//     different base, e.g. an account-keyed row stored while the email could
-	//     not be recovered, claimed once a later login recovers the email.
+	//     not be recovered, claimed once a later login recovers the email;
+	//   - any same-org row whose STORED credential shares a base identity with
+	//     the incoming one — a stored credential can retain identifiers its key
+	//     does not use (an email-keyed row also carries the account UUID), so a
+	//     later login that loses the email but keeps the account still updates
+	//     its row instead of duplicating the subscription.
 	// The reverse stays a non-match: an org-less credential only ever replaces
 	// via exact key equality above and must never clobber an org-scoped row.
 	const orgIdentifier = incomingIdentifiers.find(identifier => identifier.startsWith("org:"));
 	if (orgIdentifier === undefined) return false;
 	if (incomingIdentityKey !== orgIdentifier && !incomingIdentityKey.endsWith(`|${orgIdentifier}`)) return false;
 	if (existingIdentityKey === orgIdentifier) return true;
+	const existingIdentifiers =
+		existing.type === "oauth" && existingIdentityKey.endsWith(`|${orgIdentifier}`)
+			? extractOAuthCredentialIdentifiers(existing)
+			: null;
 	for (const identifier of incomingIdentifiers) {
 		const isBase =
 			identifier.startsWith("email:") || identifier.startsWith("account:") || identifier.startsWith("project:");
 		if (!isBase) continue;
 		if (existingIdentityKey === identifier) return true;
 		if (existingIdentityKey === `${identifier}|${orgIdentifier}`) return true;
+		if (existingIdentifiers?.includes(identifier)) return true;
 	}
 	return false;
 }

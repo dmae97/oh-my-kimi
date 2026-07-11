@@ -693,3 +693,56 @@ describe("AuthStorage usage cache: terminal refresh failure", () => {
 		}
 	});
 });
+
+describe("AuthStorage usage cache: org-only identity stability", () => {
+	it("keeps the cache entry across a token rotation for an org-only credential", async () => {
+		// Identity recovery failed at login: the credential carries neither
+		// accountId nor email — only the org. The usage-cache identity must key
+		// off the org instead of a token hash, or every OAuth refresh would
+		// churn the cache key and fragment the usage history.
+		const credential: AuthCredential = {
+			type: "oauth",
+			access: "oat-initial",
+			refresh: "refresh-initial",
+			expires: Date.now() + 3_600_000,
+			orgId: "org-team-1111",
+		};
+		const row: StoredAuthCredential = { id: 1, provider: "anthropic", credential, disabledCause: null };
+		const store = makeStore([row]);
+		const storage = new AuthStorage(store, {
+			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
+		});
+		await storage.reload();
+		try {
+			let calls = 0;
+			vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async () => {
+				calls += 1;
+				return makeReport("org-only");
+			});
+
+			const first = anthropicReports(await storage.fetchUsageReports());
+			expect(first).toHaveLength(1);
+			expect(calls).toBe(1);
+			const reportKeysBefore = [...store.cache.keys()].filter(key => key.startsWith("usage_cache:report:")).sort();
+			expect(reportKeysBefore).toHaveLength(1);
+
+			// An OAuth refresh rotates both tokens. The rotated credential must
+			// resolve to the SAME cache entry — served from cache, no refetch.
+			row.credential = { ...credential, access: "oat-rotated", refresh: "refresh-rotated" };
+			await storage.reload();
+
+			const second = anthropicReports(await storage.fetchUsageReports());
+			expect(second).toHaveLength(1);
+			expect(calls).toBe(1);
+			const reportKeysAfter = [...store.cache.keys()].filter(key => key.startsWith("usage_cache:report:")).sort();
+			expect(reportKeysAfter).toEqual(reportKeysBefore);
+			for (const key of reportKeysAfter) {
+				expect(key).toContain("org:org-team-1111");
+				expect(key).not.toContain("secret:");
+			}
+		} finally {
+			storage.close();
+			vi.restoreAllMocks();
+		}
+	});
+});

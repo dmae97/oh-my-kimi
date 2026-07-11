@@ -273,6 +273,51 @@ describe("anthropic org-scoped credential identity", () => {
 			{ identity_key: `email:${EMAIL}`, disabled_cause: null },
 		]);
 	});
+
+	it("claims an email-keyed row when a later same-org login loses the email but keeps the account", () => {
+		if (!store) throw new Error("test setup failed");
+
+		// Both subscriptions stored with full identity: keyed by email, but the
+		// stored credentials also carry the shared account UUID.
+		store.upsertAuthCredentialForProvider("anthropic", orgCredential({ suffix: "team", orgId: TEAM_ORG }));
+		store.upsertAuthCredentialForProvider("anthropic", orgCredential({ suffix: "max", orgId: MAX_ORG }));
+
+		// Same subscription re-login where email recovery fails this time: the
+		// incoming key is account-based, but the STORED credential shares the
+		// account — the row is claimed and re-keyed, not duplicated. The
+		// sibling org's email-keyed row is untouched.
+		const rows = store.upsertAuthCredentialForProvider(
+			"anthropic",
+			orgCredential({ suffix: "team-lost-email", orgId: TEAM_ORG, omitEmail: true }),
+		);
+		expect(readIdentityRows(dbPath)).toEqual([
+			{ identity_key: `account:account-shared|org:${TEAM_ORG}`, disabled_cause: null },
+			{ identity_key: `email:${EMAIL}|org:${MAX_ORG}`, disabled_cause: null },
+		]);
+		const teamRow = rows.find(row => row.credential.type === "oauth" && row.credential.orgId === TEAM_ORG);
+		expect(teamRow?.credential.type).toBe("oauth");
+		if (teamRow?.credential.type === "oauth") {
+			expect(teamRow.credential.access).toBe("access-team-lost-email");
+		}
+	});
+
+	it("never claims across orgs even when the stored credential shares every base identity", () => {
+		if (!store) throw new Error("test setup failed");
+
+		store.upsertAuthCredentialForProvider("anthropic", orgCredential({ suffix: "team", orgId: TEAM_ORG }));
+
+		// Same account UUID, different org: a distinct subscription — it gets
+		// its own row and must never claim the sibling org's row, no matter
+		// how many base identifiers the stored credential shares.
+		store.upsertAuthCredentialForProvider(
+			"anthropic",
+			orgCredential({ suffix: "max-lost-email", orgId: MAX_ORG, omitEmail: true }),
+		);
+		expect(readIdentityRows(dbPath)).toEqual([
+			{ identity_key: `email:${EMAIL}|org:${TEAM_ORG}`, disabled_cause: null },
+			{ identity_key: `account:account-shared|org:${MAX_ORG}`, disabled_cause: null },
+		]);
+	});
 });
 
 // ─── Usage report dedupe partitioning ───────────────────────────────────────
