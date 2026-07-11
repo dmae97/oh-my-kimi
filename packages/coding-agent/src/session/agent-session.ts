@@ -714,6 +714,8 @@ export interface AgentSessionConfig {
 	modelRegistry: ModelRegistry;
 	/** Tool registry for LSP and settings */
 	toolRegistry?: Map<string, AgentTool>;
+	/** Creates the tools registered only while `/vibe` mode is active. */
+	createVibeTools?: () => AgentTool[];
 	/** Tool names whose current registry entry is still the built-in implementation. */
 	builtInToolNames?: Iterable<string>;
 	/** Update tool-session predicates that render guidance from the live active tool set. */
@@ -1747,6 +1749,8 @@ export class AgentSession {
 
 	// Tool registry and prompt builder for extensions
 	#toolRegistry: Map<string, AgentTool>;
+	#createVibeTools: (() => AgentTool[]) | undefined;
+	#installedVibeToolNames = new Set<string>();
 	#transformContext: (messages: AgentMessage[], signal?: AbortSignal) => AgentMessage[] | Promise<AgentMessage[]>;
 	#onPayload: SimpleStreamOptions["onPayload"] | undefined;
 	#onResponse: SimpleStreamOptions["onResponse"] | undefined;
@@ -2110,6 +2114,7 @@ export class AgentSession {
 		this.#pruneToolDescriptions = config.pruneToolDescriptions === true;
 		this.#validateRetryFallbackChains();
 		this.#toolRegistry = config.toolRegistry ?? new Map();
+		this.#createVibeTools = config.createVibeTools;
 		this.#builtInToolNames = new Set(config.builtInToolNames ?? []);
 		this.#requestedToolNames = config.requestedToolNames;
 		this.#transformContext = config.transformContext ?? (messages => messages);
@@ -6114,6 +6119,49 @@ export class AgentSession {
 	 */
 	getAllToolNames(): string[] {
 		return Array.from(this.#toolRegistry.keys());
+	}
+
+	#wrapRuntimeTool(tool: AgentTool): AgentTool {
+		const wrapped = wrapToolWithMetaNotice(tool);
+		return this.#extensionRunner ? new ExtensionToolWrapper(wrapped, this.#extensionRunner) : wrapped;
+	}
+
+	/**
+	 * Registers the ephemeral vibe tools and activates them alongside `baseToolNames`.
+	 *
+	 * @throws When this session cannot create vibe tools or the factory returns duplicate names.
+	 */
+	async activateVibeTools(baseToolNames: string[]): Promise<void> {
+		const createVibeTools = this.#createVibeTools;
+		if (!createVibeTools) {
+			throw new Error("Vibe tools are unavailable in this session.");
+		}
+
+		const tools = createVibeTools();
+		const vibeToolNames = tools.map(tool => tool.name);
+		if (new Set(vibeToolNames).size !== vibeToolNames.length) {
+			throw new Error("Vibe tool names must be unique.");
+		}
+
+		for (const tool of tools) {
+			if (this.#toolRegistry.has(tool.name)) continue;
+			this.#toolRegistry.set(tool.name, this.#wrapRuntimeTool(tool));
+			this.#builtInToolNames.add(tool.name);
+			this.#installedVibeToolNames.add(tool.name);
+		}
+
+		await this.#applyActiveToolsByName([...new Set([...baseToolNames, ...vibeToolNames])]);
+	}
+
+	/** Removes tools installed by {@link activateVibeTools} and activates `nextToolNames`. */
+	async deactivateVibeTools(nextToolNames: string[]): Promise<void> {
+		for (const name of this.#installedVibeToolNames) {
+			this.#toolRegistry.delete(name);
+			this.#builtInToolNames.delete(name);
+			this.#selectedDiscoveredToolNames.delete(name);
+		}
+		this.#installedVibeToolNames.clear();
+		await this.#applyActiveToolsByName(nextToolNames);
 	}
 
 	#getEditModeSession() {

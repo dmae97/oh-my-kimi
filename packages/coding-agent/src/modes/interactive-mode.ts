@@ -118,7 +118,6 @@ import { setAutoQaConsentHandler } from "../tools/report-tool-issue";
 import { type ResolveToolDetails, runResolveInvocation } from "../tools/resolve";
 import { formatPhaseDisplayName, todoMatchesAnyDescription } from "../tools/todo";
 import { ToolError } from "../tools/tool-errors";
-import { VIBE_TOOL_NAMES } from "../tools/vibe";
 import { vocalizer } from "../tts/vocalizer";
 import { renderTreeList } from "../tui/tree-list";
 import type { EventBus } from "../utils/event-bus";
@@ -2122,9 +2121,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		if (this.vibeModeEnabled) {
-			if (this.#vibeModePreviousTools !== undefined) {
-				await this.session.setActiveToolsByName(this.#vibeModePreviousTools);
-			}
+			await this.session.deactivateVibeTools(this.#vibeModePreviousTools ?? []);
 			this.session.setVibeModeState(undefined);
 			this.vibeModeEnabled = false;
 			this.#vibeModePreviousTools = undefined;
@@ -2922,10 +2919,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	/**
-	 * `/vibe` toggle. Entering strips the active toolset down to `read` plus the
-	 * vibe session tools and injects the director context; exiting restores the
-	 * previous toolset and kills every worker session (boring and safe — workers
-	 * do not outlive the mode that directs them).
+	 * `/vibe` toggle. Entering installs the ephemeral vibe tools, strips the
+	 * active toolset down to `read` plus those tools, and injects the director
+	 * context. Exiting unregisters them, restores the previous toolset, and kills
+	 * every worker session so workers cannot outlive the mode that directs them.
 	 */
 	async handleVibeModeCommand(initialPrompt?: string): Promise<void> {
 		if (this.vibeModeEnabled) {
@@ -2959,12 +2956,13 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 
-		this.#vibeModePreviousTools = this.session.getActiveToolNames();
+		const previousTools = this.session.getActiveToolNames();
+		await this.session.activateVibeTools(["read"]);
+		this.#vibeModePreviousTools = previousTools;
 		this.vibeModeEnabled = true;
 		// Suppress cache-miss marker on the next turn: vibe mode changes the
 		// injected context, which predictably invalidates the cache.
 		this.lastAssistantUsage = undefined;
-		await this.session.setActiveToolsByName(["read", ...VIBE_TOOL_NAMES]);
 		this.session.setVibeModeState({ enabled: true });
 		if (this.session.isStreaming) {
 			await this.session.sendVibeModeContext({ deliverAs: "steer" });
@@ -2978,10 +2976,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!this.vibeModeEnabled) {
 			return;
 		}
-		const previousTools = this.#vibeModePreviousTools;
-		if (previousTools !== undefined) {
-			await this.session.setActiveToolsByName(previousTools);
-		}
+		await this.session.deactivateVibeTools(this.#vibeModePreviousTools ?? []);
 		this.session.setVibeModeState(undefined);
 		this.vibeModeEnabled = false;
 		this.#vibeModePreviousTools = undefined;

@@ -64,7 +64,6 @@ import { reportFindingTool } from "./review";
 import { SearchToolBm25Tool } from "./search-tool-bm25";
 import { loadSshTool } from "./ssh";
 import { type TodoPhase, TodoTool } from "./todo";
-import { VibeKillTool, VibeListTool, VibeSendTool, VibeSpawnTool, VibeWaitTool } from "./vibe";
 import { WriteTool } from "./write";
 import { YieldTool } from "./yield";
 
@@ -485,11 +484,6 @@ export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
 	report_tool_issue: s => createReportToolIssueTool(s),
 	resolve: s => new ResolveTool(s),
 	goal: s => new GoalTool(s),
-	vibe_spawn: s => new VibeSpawnTool(s),
-	vibe_send: s => new VibeSendTool(s),
-	vibe_wait: s => new VibeWaitTool(s),
-	vibe_kill: s => new VibeKillTool(s),
-	vibe_list: s => new VibeListTool(s),
 };
 
 export type ToolName = BuiltinToolName;

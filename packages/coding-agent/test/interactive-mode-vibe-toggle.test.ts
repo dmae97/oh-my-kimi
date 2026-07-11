@@ -1,11 +1,10 @@
 /**
  * Contracts: /vibe mode toggle on InteractiveMode.
  *
- * 1. Entering vibe mode swaps the active toolset to exactly `read` + the vibe
- *    tools and marks the session's vibe-mode state.
- * 2. Exiting restores the pre-vibe toolset EXACTLY — including the legitimate
- *    empty set (regression: a truthiness/length guard used to skip restoring
- *    `[]`, leaving read/vibe tools active after exit).
+ * 1. Vibe tools do not exist in the session registry before the mode is entered.
+ * 2. Entering registers and activates exactly `read` plus the vibe tools.
+ * 3. Exiting unregisters the vibe tools and restores the pre-vibe active toolset
+ *    exactly, including the legitimate empty set.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
@@ -54,7 +53,7 @@ describe("InteractiveMode vibe mode toggle", () => {
 		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
 
-		const registryTools = ["read", ...VIBE_TOOL_NAMES].map(stubTool);
+		const registryTools = [stubTool("read")];
 
 		session = new AgentSession({
 			agent: new Agent({
@@ -69,6 +68,7 @@ describe("InteractiveMode vibe mode toggle", () => {
 			settings: Settings.isolated({}),
 			modelRegistry,
 			toolRegistry: new Map(registryTools.map(tool => [tool.name, tool])),
+			createVibeTools: () => VIBE_TOOL_NAMES.map(stubTool),
 		});
 		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, new EventBus());
 	});
@@ -83,6 +83,7 @@ describe("InteractiveMode vibe mode toggle", () => {
 	});
 
 	it("restores the exact pre-vibe toolset on exit, including an empty one", async () => {
+		expect(session.getAllToolNames()).toEqual(["read"]);
 		expect(session.getActiveToolNames()).toEqual([]);
 
 		await mode.handleVibeModeCommand();
@@ -93,11 +94,13 @@ describe("InteractiveMode vibe mode toggle", () => {
 			expect(inMode).toContain(name);
 		}
 		expect(inMode.toSorted()).toEqual(["read", ...VIBE_TOOL_NAMES].toSorted());
+		expect(session.getAllToolNames().toSorted()).toEqual(["read", ...VIBE_TOOL_NAMES].toSorted());
 
 		// Toggle off: the empty previous toolset must come back — vibe tools
 		// must not leak past the mode.
 		await mode.handleVibeModeCommand();
 		expect(mode.vibeModeEnabled).toBe(false);
 		expect(session.getActiveToolNames()).toEqual([]);
+		expect(session.getAllToolNames()).toEqual(["read"]);
 	});
 });

@@ -35,7 +35,7 @@ import {
 	type VibeSessionState,
 	type VibeWaitOutcome,
 } from "../vibe/runtime";
-import type { ToolSession } from "./index";
+import type { Tool, ToolSession } from "./index";
 import {
 	Ellipsis,
 	formatBadge,
@@ -275,6 +275,17 @@ export class VibeListTool implements AgentTool<typeof vibeListSchema, VibeToolDe
 		});
 		return textResult(lines.join("\n"), details);
 	}
+}
+
+/** Creates the ephemeral tools installed while `/vibe` mode is active. */
+export function createVibeTools(session: ToolSession): Tool[] {
+	return [
+		new VibeSpawnTool(session),
+		new VibeSendTool(session),
+		new VibeWaitTool(session),
+		new VibeKillTool(session),
+		new VibeListTool(session),
+	];
 }
 
 // =============================================================================

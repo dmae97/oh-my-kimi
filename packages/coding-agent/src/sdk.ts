@@ -161,6 +161,7 @@ import {
 	BUILTIN_TOOLS,
 	computeEssentialBuiltinNames,
 	createTools,
+	createVibeTools,
 	type DeferredDiagnosticsEntry,
 	discoverStartupLspServers,
 	EditTool,
@@ -184,7 +185,6 @@ import {
 	setPreferredSearchProvider,
 	type Tool,
 	type ToolSession,
-	VIBE_TOOL_NAMES,
 	WebSearchTool,
 	WriteTool,
 	warmupLspServers,
@@ -2240,19 +2240,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				builtInRegistryToolNames.add(goalTool.name);
 			}
 		}
-		// Vibe tools are hidden from every default/discovery set; they exist in the
-		// registry so entering vibe mode can activate them via setActiveToolsByName.
-		// Top-level interactive sessions only — subagents never direct vibe workers.
-		if ((options.taskDepth ?? 0) === 0 && !options.parentTaskPrefix) {
-			for (const name of VIBE_TOOL_NAMES) {
-				if (toolRegistry.has(name)) continue;
-				const vibeTool = await logger.time(`createTools:${name}:session`, HIDDEN_TOOLS[name], toolSession);
-				if (vibeTool) {
-					toolRegistry.set(vibeTool.name, wrapToolWithMetaNotice(vibeTool));
-					builtInRegistryToolNames.add(vibeTool.name);
-				}
-			}
-		}
 		for (const tool of wrappedExtensionTools) {
 			toolRegistry.set(tool.name, tool);
 			builtInRegistryToolNames.delete(tool.name);
@@ -2897,6 +2884,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			skillsSettings: settings.getGroup("skills"),
 			modelRegistry,
 			toolRegistry,
+			createVibeTools:
+				(options.taskDepth ?? 0) === 0 && !options.parentTaskPrefix
+					? () => createVibeTools(toolSession)
+					: undefined,
 			builtInToolNames: builtInRegistryToolNames,
 			transformContext,
 			transformProviderContext,
