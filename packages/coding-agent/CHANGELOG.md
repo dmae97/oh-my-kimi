@@ -51,6 +51,9 @@
 ### Fixed
 
 - Fixed first-run interactive startup rendering the full packaged changelog when the last-seen marker is missing, malformed, or unreadable. Startup upgrade notes now show at most three unseen releases and cap Markdown source at 64 KiB; `/changelog full` remains the explicit full-history path. ([#5135](https://github.com/can1357/oh-my-pi/issues/5135))
+### Fixed
+
+- Fixed empty local-model `stop` responses exhausting their retry cap without surfacing a user-visible retry failure. ([#5128](https://github.com/can1357/oh-my-pi/issues/5128))
 
 ## [16.4.2] - 2026-07-10
 
