@@ -8,6 +8,7 @@
 
 ### Added
 
+- Added per-id bulk conflict directives: `write({ path: "conflict://*", content: "1: @ours\n2: @theirs\n…" })` resolves each listed conflict with that side in a single call (unlisted ids stay registered; unknown or duplicate ids are rejected). Directives are parsed from pre-strip content so hashline prefix stripping never eats the `<id>:` heads. The conflict footer documents the form and now clarifies that `@both` is for additive conflicts only — never for competing edits of the same lines.
 - Added `auto` as a valid `thinking-level` in agent frontmatter; the bundled `task` subagent now defaults to it. An explicit `:level` suffix on a resolved model pattern takes precedence over an agent-definition default.
 - Added rich interactive ask dialogs: a fixed-height bottom panel (sized at spawn from the tallest tab, clamped to 70% of the terminal) with question tabs, option previews, notes, per-option markers, and ask.enabled gating. Multi-select questions toggle with Space/Enter and confirm from the Submit tab; submitting an empty Other value unselects the custom answer. ([#4186](https://github.com/can1357/oh-my-pi/issues/4186))
 - Added role un-assignment to the model hub: `x`/Backspace on a role row (or Enter on a chip already holding the model) clears the role back to auto-selection — previously only possible by editing config.
@@ -32,7 +33,7 @@
 
 ### Fixed
 
-- Fixed in-flight tool calls disappearing from the chat during session rebuilds (e.g., focus switches)
+- Fixed in-flight tool calls disappearing from the chat during mid-turn transcript rebuilds (agent-view focus/unfocus via ←←, overlay close): the rebuild stripped toolCalls that had no persisted result yet — exactly the calls still executing — so a pending `task`/`bash` block (and its live subagent progress tree above the editor) vanished while the agent kept waiting on it, and the eventual result was dropped. Mid-turn rebuilds now keep the pending block visible and route the live result into it; idle rebuilds freeze leftover unresolved calls instead of spinning forever.
 - Fixed agents getting stuck waiting for messages from peers that have already stopped running
 - Fixed budget-stopped subagents becoming unreachable: a soft-budget abort no longer hard-kills the agent — it stays adopted (idle, then parked) so `irc` can wake it to resume with full context, the task result now carries the abort reason plus a resume hint, and the irc bus distinguishes an unknown peer from a hard-aborted one instead of reporting "Unknown or terminated agent" for both.
 - Fixed `write conflict://<N>` duplicating code when the model pastes the "whole resolved function" including lines adjacent to the marker block: replacement lines that exactly echo the context directly above/below the recorded region are now dropped (multi-line echoes always; single-line echoes only when removal restores the recorded sides' delimiter balance), with a note in the tool result. The conflict footer now also states that writes replace only the marker block and to prefer the minimal merge of the recorded sides.
