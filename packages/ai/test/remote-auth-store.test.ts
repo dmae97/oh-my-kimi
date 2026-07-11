@@ -426,6 +426,79 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 		]);
 	});
 
+	test("getUsageReport routes each org-scoped credential to its own org's report", async () => {
+		// Two subscriptions (orgs) on one account email: the broker aggregate
+		// carries both pools. Matching by shared email/account would hand the
+		// healthy Max credential the exhausted Team report (and vice versa).
+		const brokerClient = new AuthBrokerClient({ url: "http://127.0.0.1:9", token: "unused" });
+		const now = Date.now();
+		const makeCredential = (id: number, orgId: string) => ({
+			type: "oauth" as const,
+			access: `remote-access-${id}`,
+			refresh: REMOTE_REFRESH_SENTINEL,
+			expires: now + 120_000,
+			accountId: "account-shared",
+			email: "shared@example.com",
+			orgId,
+		});
+		const makeOrgReport = (orgId: string, usedFraction: number, status: "ok" | "exhausted"): UsageReport => ({
+			provider: "anthropic",
+			fetchedAt: now,
+			limits: [
+				{
+					id: "anthropic:5h",
+					label: "Claude 5 Hour",
+					scope: { provider: "anthropic", windowId: "5h" },
+					window: { id: "5h", label: "5 Hour" },
+					amount: { used: usedFraction * 100, limit: 100, usedFraction, unit: "percent" },
+					status,
+				},
+			],
+			metadata: { email: "shared@example.com", accountId: "account-shared", orgId },
+		});
+		vi.spyOn(brokerClient, "fetchUsage").mockResolvedValue({
+			generatedAt: now,
+			reports: [makeOrgReport("org-team", 1, "exhausted"), makeOrgReport("org-max", 0.1, "ok")],
+		});
+		const remoteStore = new RemoteAuthCredentialStore({
+			client: brokerClient,
+			streamSnapshots: false,
+			initialSnapshot: {
+				generation: 1,
+				generatedAt: now,
+				serverNowMs: now,
+				refresher: { enabled: false, intervalMs: 0, skewMs: 0, nextSweepInMs: Number.MAX_SAFE_INTEGER },
+				credentials: [
+					{
+						id: 1,
+						provider: "anthropic",
+						credential: makeCredential(1, "org-team"),
+						identityKey: "email:shared@example.com|org:org-team",
+						rotatesInMs: null,
+					},
+					{
+						id: 2,
+						provider: "anthropic",
+						credential: makeCredential(2, "org-max"),
+						identityKey: "email:shared@example.com|org:org-max",
+						rotatesInMs: null,
+					},
+				],
+			},
+		});
+		try {
+			const teamReport = await remoteStore.getUsageReport("anthropic", makeCredential(1, "org-team"));
+			expect(teamReport?.metadata?.orgId).toBe("org-team");
+			expect(requireLimit(teamReport!, "anthropic:5h").status).toBe("exhausted");
+
+			const maxReport = await remoteStore.getUsageReport("anthropic", makeCredential(2, "org-max"));
+			expect(maxReport?.metadata?.orgId).toBe("org-max");
+			expect(requireLimit(maxReport!, "anthropic:5h").status).toBe("ok");
+		} finally {
+			remoteStore.close();
+		}
+	});
+
 	test("RemoteAuthCredentialStore reads snapshot blocks and applies upserts before broker acknowledgement", () => {
 		const futureBlock = Date.now() + 60_000;
 		const laterBlock = futureBlock + 60_000;

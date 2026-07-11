@@ -40,6 +40,11 @@
 - Fixed native Windows binary compatibility on older Windows 10 CPUs by building the `omp-windows-x64.exe` release asset with a baseline x64 runtime instead of AVX2. (#5172)
 - Fixed `GenerateImage` rejecting OpenAI Codex-compatible proxy bearer keys when the token does not expose a `chatgpt-account-id`. (#5174)
 - Fixed context promotion documentation to accurately reflect the `contextPromotionTarget` runtime behavior and `contextPromotion.enabled` default. (#5163)
+### Changed
+
+- `omp usage` and the in-session `/usage` view now show the Anthropic organization next to the account for org-scoped credentials (with `--redact` masking applied per part in the CLI, falling back to the org id when no display name is available), attribute "no usage data" rows per organization, and match the "in use by this session" marker by organization so only the active subscription is flagged. The OAuth login success message names the account and organization that was stored — a login landing on an unintended subscription is visible immediately.
+- `/logout` and `omp token --list` label Anthropic accounts with their organization and mark only the credential of the active organization as active, so two subscriptions sharing one email are distinguishable when selecting which to remove or mint a token for.
+- `omp auth-broker migrate --from-local` dedupes Anthropic OAuth identities per organization, so a Team seat already on the broker no longer blocks uploading the personal plan under the same email.
 
 ## [16.4.3] - 2026-07-11
 

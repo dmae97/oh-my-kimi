@@ -1200,7 +1200,7 @@ export class SelectorController {
 		this.ctx.ui.setFocus(dialog);
 		this.ctx.ui.requestRender();
 		try {
-			await this.ctx.session.modelRegistry.authStorage.login(providerId as OAuthProvider, {
+			const identity = await this.ctx.session.modelRegistry.authStorage.login(providerId as OAuthProvider, {
 				signal: dialog.signal,
 				onAuth: (info: { url: string; launchUrl?: string; instructions?: string }) => {
 					// The dialog renders the full URL (SSH-safe copy target) and
@@ -1219,8 +1219,21 @@ export class SelectorController {
 			});
 			this.ctx.session.modelRegistry.refreshInBackground();
 			const block = new TranscriptBlock();
+			// Name the account (and Anthropic organization) that was stored so a
+			// login that lands on an unintended account/subscription is visible
+			// immediately instead of silently replacing an existing registration.
+			const who =
+				identity?.type === "oauth" && (identity.email || identity.accountId)
+					? ` as ${identity.email ?? identity.accountId}${
+							identity.orgName || identity.orgId ? ` (${identity.orgName ?? identity.orgId})` : ""
+						}`
+					: "";
 			block.addChild(
-				new Text(theme.fg("success", `${theme.status.success} Successfully logged in to ${providerId}`), 1, 0),
+				new Text(
+					theme.fg("success", `${theme.status.success} Successfully logged in to ${providerId}${who}`),
+					1,
+					0,
+				),
 			);
 			block.addChild(new Text(theme.fg("dim", `Credentials saved to ${getAgentDbPath()}`), 1, 0));
 			this.ctx.present(block);

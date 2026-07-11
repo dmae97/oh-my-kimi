@@ -143,8 +143,13 @@ interface UsageCacheEntry {
 
 function usageOverlayKey(
 	provider: Provider,
-	ids: { accountId?: string; email?: string; projectId?: string },
+	ids: { accountId?: string; email?: string; projectId?: string; orgId?: string },
 ): string | undefined {
+	// Org first: one account email can hold several organizations (Anthropic
+	// Team seat + personal Max), each with its own limit pools. Keying the
+	// overlay by account/email would merge the two pools' header ingests.
+	const orgId = ids.orgId?.trim().toLowerCase();
+	if (orgId) return `${provider}\0org:${orgId}`;
 	const accountId = ids.accountId?.trim().toLowerCase();
 	if (accountId) return `${provider}\0account:${accountId}`;
 	const email = ids.email?.trim().toLowerCase();
@@ -982,6 +987,24 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 function matchUsageReport(reports: UsageReport[], provider: Provider, credential: OAuthCredential): UsageReport | null {
 	const candidates = reports.filter(report => report.provider === provider);
 	if (candidates.length === 0) return null;
+	// Org precedence: when the credential is org-scoped and the broker's
+	// reports are org-attributed, only an org match may win — falling through
+	// to the shared email/account would hand one subscription the OTHER
+	// subscription's pool (e.g. mark healthy Max exhausted via Team's report).
+	const orgId = credential.orgId?.trim().toLowerCase();
+	if (orgId) {
+		let sawReportOrg = false;
+		for (const report of candidates) {
+			const metaOrg = readMetadataString((report.metadata ?? {}) as Record<string, unknown>, "orgId");
+			if (metaOrg) {
+				sawReportOrg = true;
+				if (metaOrg.toLowerCase() === orgId) return report;
+			}
+		}
+		// Org-attributed reports exist but none is ours: report "no usage data"
+		// rather than mis-attributing another org's pool.
+		if (sawReportOrg) return null;
+	}
 	if (candidates.length === 1) return candidates[0];
 	const accountId = credential.accountId?.trim().toLowerCase();
 	const email = credential.email?.trim().toLowerCase();
@@ -997,8 +1020,22 @@ function findMatchingReportIndex(reports: UsageReport[], overlay: UsageReport): 
 		.map((report, index) => ({ report, index }))
 		.filter(candidate => candidate.report.provider === overlay.provider);
 	if (candidates.length === 0) return -1;
-	if (candidates.length === 1) return candidates[0]!.index;
 	const metadata = (overlay.metadata ?? {}) as Record<string, unknown>;
+	// Org precedence — mirror matchUsageReport: an org-attributed overlay may
+	// only merge into the report of the SAME org.
+	const overlayOrg = readMetadataString(metadata, "orgId")?.toLowerCase();
+	if (overlayOrg) {
+		let sawReportOrg = false;
+		for (const candidate of candidates) {
+			const candidateOrg = readMetadataString((candidate.report.metadata ?? {}) as Record<string, unknown>, "orgId");
+			if (candidateOrg) {
+				sawReportOrg = true;
+				if (candidateOrg.toLowerCase() === overlayOrg) return candidate.index;
+			}
+		}
+		if (sawReportOrg) return -1;
+	}
+	if (candidates.length === 1) return candidates[0]!.index;
 	const accountId = readMetadataString(metadata, "accountId")?.toLowerCase();
 	const email = readMetadataString(metadata, "email")?.toLowerCase();
 	const projectId = readMetadataString(metadata, "projectId")?.toLowerCase();

@@ -31,7 +31,7 @@ When a provider needs an API key, `omp` resolves it in this order (first match w
 1. **Runtime override** — a key supplied for the current process, e.g. CLI `--api-key`. Never persisted.
 2. **`models.yml` config key** — an `apiKey` pinned on a custom provider, registered as a config-sourced bearer. This deliberately beats stored OAuth, so a key supplied for a custom `baseUrl`/gateway is honored instead of forwarding an upstream OAuth token the proxy would reject.
 3. **Stored API key** — an API-key credential saved in the auth store.
-4. **Stored OAuth credential** — refreshed when needed; multiple accounts are ranked/rotated automatically.
+4. **Stored OAuth credential** — refreshed when needed; multiple accounts are ranked/rotated automatically. For Anthropic, each organization counts as its own account: one email holding both a Team seat and a personal plan can log in once per subscription (pick the workspace on the browser consent page) and rotation treats them as two accounts.
 5. **Provider environment variable** — including values loaded from `.env` files (see [the env-var table](#environment-variables-and-env-files)).
 6. **`models.yml` fallback resolver** — keys for custom providers not otherwise registered.
 

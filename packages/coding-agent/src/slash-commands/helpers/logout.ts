@@ -22,13 +22,16 @@ function nonEmpty(value: string | undefined): string | undefined {
 function oauthLabel(row: StoredAuthCredential): string {
 	const credential = row.credential;
 	if (credential.type !== "oauth") return `API key #${row.id}`;
-	return (
+	const base =
 		nonEmpty(credential.email) ??
 		nonEmpty(credential.accountId) ??
 		nonEmpty(credential.projectId) ??
 		nonEmpty(credential.enterpriseUrl) ??
-		`OAuth credential #${row.id}`
-	);
+		`OAuth credential #${row.id}`;
+	// Two subscriptions (orgs) can share one email — the org is the only
+	// user-visible way to tell which row a logout will remove.
+	const org = nonEmpty(credential.orgName) ?? nonEmpty(credential.orgId);
+	return org && org !== base ? `${base} (${org})` : base;
 }
 
 function oauthDetail(row: StoredAuthCredential, label: string): string {
@@ -53,6 +56,11 @@ function oauthMatchesActiveIdentity(
 ): boolean {
 	if (!activeIdentity || row.credential.type !== "oauth") return false;
 	const credential = row.credential;
+	// Org precedence: when both sides are org-scoped, the org decides — the
+	// shared email/account would otherwise mark BOTH subscriptions active.
+	if (activeIdentity.orgId !== undefined && credential.orgId !== undefined) {
+		return credential.orgId === activeIdentity.orgId;
+	}
 	return (
 		(activeIdentity.accountId !== undefined && credential.accountId === activeIdentity.accountId) ||
 		(activeIdentity.email !== undefined && credential.email === activeIdentity.email) ||

@@ -6,6 +6,8 @@
 
 - Healed GLM in-band tool calls whose `<arg_value>` closer is missing or mistyped as `</arg_key>`; the scanner now ends the value at the next-pair signature instead of swallowing the remaining arguments into one field.
 - Healed the same `arg_key`/`arg_value` spill when it arrives through native tool calling (provider parses the in-band syntax server-side): as a last resort after validation and coercion fail, contaminated string arguments are split at the spill boundary and the swallowed pairs restored.
+- Fixed Anthropic logins silently replacing the stored credential when one account email holds multiple organizations (e.g. a Team seat plus a personal Max plan). Credentials are now identified by email + organization: the login flow captures the organization from the token exchange (with a `claude_cli/bootstrap` fallback), both subscriptions store side by side, and the existing multi-account rotation treats them as separate accounts. Legacy email-keyed rows are claimed in place by the first org-scoped login with the same email, and an org-less credential never clobbers org-scoped rows. Usage reports and the per-credential usage cache also partition by organization so the two subscriptions' limit pools no longer merge into one confused row.
+- Fixed broker-served usage routing for org-scoped credentials: `RemoteAuthCredentialStore` now matches aggregate reports and keys header-ingest overlays by organization first, so with a Team seat exhausted and a personal Max healthy under one email, each credential receives its own pool instead of whichever report appeared first. The Anthropic usage-cache key version was bumped so pre-org cache entries (including the 24h last-good fallback) cannot be replayed across organizations.
 
 ## [16.4.3] - 2026-07-11
 

@@ -9,6 +9,9 @@ function normalizeIdentityValue(value: unknown): string | undefined {
  * True when a single usage-limit column belongs to the given OAuth identity.
  *
  * Single definition of the matching rules for both `/usage` renderers:
+ * - `orgId`     ↔ report metadata `orgId` — checked first and DECISIVE when
+ *   both sides carry it: two subscriptions (orgs) can share one email, and
+ *   the shared email/account would otherwise mark both reports as active
  * - `accountId` ↔ report metadata `accountId`/`account_id` or `limit.scope.accountId`
  * - `email`     ↔ report metadata `email`
  * - `projectId` ↔ report metadata `projectId` or `limit.scope.projectId`
@@ -21,6 +24,9 @@ export function limitMatchesActiveAccount(
 ): boolean {
 	if (!identity) return false;
 	const metadata = report.metadata ?? {};
+	const activeOrgId = normalizeIdentityValue(identity.orgId);
+	const reportOrgId = normalizeIdentityValue(metadata.orgId);
+	if (activeOrgId && reportOrgId) return reportOrgId === activeOrgId;
 	const activeAccountId = normalizeIdentityValue(identity.accountId);
 	if (activeAccountId) {
 		const reportAccountId = normalizeIdentityValue(metadata.accountId) ?? normalizeIdentityValue(metadata.account_id);

@@ -43,6 +43,10 @@ describe("anthropic oauth alignment", () => {
 						uuid: "11111111-2222-3333-4444-555555555555",
 						email_address: "user@example.com",
 					},
+					organization: {
+						uuid: "99999999-8888-7777-6666-555555555555",
+						name: "Team Workspace",
+					},
 				}),
 				{ status: 200, headers: { "Content-Type": "application/json" } },
 			);
@@ -55,6 +59,9 @@ describe("anthropic oauth alignment", () => {
 
 		expect(result.access).toBe("access-token");
 		expect(result.refresh).toBe("refresh-token");
+		expect(result.orgId).toBe("99999999-8888-7777-6666-555555555555");
+		expect(result.orgName).toBe("Team Workspace");
+		// Org came from the token response — no bootstrap fallback call.
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
@@ -73,6 +80,7 @@ describe("anthropic oauth alignment", () => {
 						uuid: "11111111-2222-3333-4444-555555555555",
 						email_address: "user@example.com",
 					},
+					organization: { uuid: "99999999-8888-7777-6666-555555555555" },
 				}),
 				{ status: 200, headers: { "Content-Type": "application/json" } },
 			);
@@ -99,6 +107,7 @@ describe("anthropic oauth alignment", () => {
 						uuid: "11111111-2222-3333-4444-555555555555",
 						email_address: "user@example.com",
 					},
+					organization: { uuid: "99999999-8888-7777-6666-555555555555" },
 				}),
 				{ status: 200, headers: { "Content-Type": "application/json" } },
 			);
@@ -174,6 +183,7 @@ describe("anthropic oauth alignment", () => {
 						uuid: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 						email_address: "refreshed@example.com",
 					},
+					organization: { uuid: "99999999-8888-7777-6666-555555555555", name: "Drifted Org" },
 				}),
 				{ status: 200, headers: { "Content-Type": "application/json" } },
 			);
@@ -183,6 +193,10 @@ describe("anthropic oauth alignment", () => {
 
 		expect(result.accountId).toBe("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
 		expect(result.email).toBe("refreshed@example.com");
+		// Refresh must never emit org fields — the org a credential is scoped to
+		// is captured once at login; merge sites preserve the stored value.
+		expect(result.orgId).toBeUndefined();
+		expect(result.orgName).toBeUndefined();
 	});
 
 	it("fetches bootstrap identity when token response omits account block", async () => {
@@ -209,6 +223,8 @@ describe("anthropic oauth alignment", () => {
 					oauth_account: {
 						account_uuid: "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
 						account_email: "bootstrap@example.com",
+						organization_uuid: "cccccccc-dddd-eeee-ffff-000000000000",
+						organization_name: "Bootstrap Org",
 					},
 				}),
 				{ status: 200, headers: { "Content-Type": "application/json" } },
@@ -221,6 +237,8 @@ describe("anthropic oauth alignment", () => {
 
 		expect(result.accountId).toBe("bbbbbbbb-cccc-dddd-eeee-ffffffffffff");
 		expect(result.email).toBe("bootstrap@example.com");
+		expect(result.orgId).toBe("cccccccc-dddd-eeee-ffff-000000000000");
+		expect(result.orgName).toBe("Bootstrap Org");
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 	});
 

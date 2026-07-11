@@ -10,6 +10,14 @@ export type OAuthCredentials = {
 	email?: string;
 	accountId?: string;
 	apiEndpoint?: string;
+	/**
+	 * Organization/workspace the token is scoped to (e.g. an Anthropic org
+	 * UUID). Captured once at login; token refreshes never rewrite it. Lets
+	 * one account email hold credentials for multiple subscriptions.
+	 */
+	orgId?: string;
+	/** Human-readable organization name for display (may embed the email). */
+	orgName?: string;
 };
 
 export type OAuthProvider = OAuthProviderUnion;

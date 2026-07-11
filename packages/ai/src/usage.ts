@@ -260,6 +260,10 @@ export interface UsageCredential {
 	accountId?: string;
 	projectId?: string;
 	email?: string;
+	/** Organization/workspace the credential is scoped to (see OAuthCredentials.orgId). */
+	orgId?: string;
+	/** Human-readable organization name for display. */
+	orgName?: string;
 	enterpriseUrl?: string;
 	metadata?: Record<string, unknown>;
 	apiEndpoint?: string;
