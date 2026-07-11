@@ -387,6 +387,11 @@ export class UiHelpers {
 				const errorPresentation = resolveAssistantErrorPresentation(message, this.ctx.viewSession.retryAttempt);
 				const hasErrorStop = errorPresentation.kind === "full";
 				const errorMessage = hasErrorStop ? errorPresentation.text : null;
+				const appendAssistantSegment = (segment: AssistantMessage | undefined) => {
+					if (!segment || !assistantHasVisibleContent(segment)) return;
+					const component = createAssistantMessageComponent(this.ctx, segment);
+					this.ctx.chatContainer.addChild(component);
+				};
 
 				// Render tool call components
 				for (const content of message.content) {
@@ -394,6 +399,7 @@ export class UiHelpers {
 						continue;
 					}
 					resolveWaitingPoll(content.name);
+					const afterToolSegment = timeline.afterToolCalls.get(content.id);
 
 					if (
 						content.name === "read" &&
@@ -414,6 +420,19 @@ export class UiHelpers {
 								false,
 								content.id,
 							);
+						} else if (afterToolSegment) {
+							if (!readGroup) {
+								readGroup = new ReadToolGroupComponent({
+									showContentPreview: this.ctx.settings.get("read.toolResultPreview"),
+								});
+								readGroup.setExpanded(this.ctx.toolOutputExpanded);
+								this.ctx.chatContainer.addChild(readGroup);
+							}
+							readGroup.updateArgs(content.arguments, content.id);
+							this.ctx.pendingTools.set(content.id, readGroup);
+							if (assistantComponent) {
+								readToolCallAssistantComponents.set(content.id, assistantComponent);
+							}
 						} else {
 							const normalizedArgs = normalizeToolArgs(content.arguments);
 							readToolCallArgs.set(content.id, normalizedArgs);
@@ -421,6 +440,7 @@ export class UiHelpers {
 								readToolCallAssistantComponents.set(content.id, assistantComponent);
 							}
 						}
+						appendAssistantSegment(afterToolSegment);
 						continue;
 					}
 
@@ -468,10 +488,7 @@ export class UiHelpers {
 					} else {
 						this.ctx.pendingTools.set(content.id, component);
 					}
-				}
-				if (timeline.afterTools && assistantHasVisibleContent(timeline.afterTools)) {
-					const afterToolsComponent = createAssistantMessageComponent(this.ctx, timeline.afterTools);
-					this.ctx.chatContainer.addChild(afterToolsComponent);
+					appendAssistantSegment(afterToolSegment);
 				}
 				pendingUsage =
 					this.ctx.settings.get("display.showTokenUsage") && assistantUsageIsBilled(message.usage)

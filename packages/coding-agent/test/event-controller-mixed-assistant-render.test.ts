@@ -8,10 +8,13 @@ import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/typ
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { TUI } from "@oh-my-pi/pi-tui";
 
-const TOOL_CALL_ID = "toolu_mixed_text_order";
-const INTRO_MARKER = "INTRO TEXT BEFORE TOOL";
-const TOOL_RESULT_MARKER = "TOOL RESULT BETWEEN TEXT BLOCKS";
-const FINAL_MARKER = "FINAL ANSWER AFTER TOOL";
+const TOOL_CALL_A_ID = "toolu_mixed_text_order_a";
+const TOOL_CALL_B_ID = "toolu_mixed_text_order_b";
+const INTRO_MARKER = "INTRO TEXT BEFORE FIRST TOOL";
+const TOOL_RESULT_A_MARKER = "TOOL RESULT FROM FIRST TOOL";
+const MIDDLE_MARKER = "MIDDLE TEXT BETWEEN TOOL CALLS";
+const TOOL_RESULT_B_MARKER = "TOOL RESULT FROM SECOND TOOL";
+const FINAL_MARKER = "FINAL ANSWER AFTER SECOND TOOL";
 
 function zeroUsage(): Usage {
 	return {
@@ -107,19 +110,33 @@ describe("EventController mixed assistant text/tool rendering", () => {
 		resetSettingsForTest();
 	});
 
-	it("renders trailing assistant text after the tool result for one text-toolCall-text message", async () => {
+	it("renders assistant text segments in order around two tool results from one mixed message", async () => {
 		const { controller, chatContainer } = createFixture();
-		const toolCall: ToolCall = {
+		const toolCallA: ToolCall = {
 			type: "toolCall",
-			id: TOOL_CALL_ID,
-			name: "contract_probe",
-			arguments: { value: 1 },
+			id: TOOL_CALL_A_ID,
+			name: "contract_probe_a",
+			arguments: { value: "a" },
+		};
+		const toolCallB: ToolCall = {
+			type: "toolCall",
+			id: TOOL_CALL_B_ID,
+			name: "contract_probe_b",
+			arguments: { value: "b" },
 		};
 		const started = assistantMessage([]);
-		const withToolCall = assistantMessage([{ type: "text", text: INTRO_MARKER }, toolCall]);
+		const withFirstToolCall = assistantMessage([{ type: "text", text: INTRO_MARKER }, toolCallA]);
+		const withSecondToolCall = assistantMessage([
+			{ type: "text", text: INTRO_MARKER },
+			toolCallA,
+			{ type: "text", text: MIDDLE_MARKER },
+			toolCallB,
+		]);
 		const completed = assistantMessage([
 			{ type: "text", text: INTRO_MARKER },
-			toolCall,
+			toolCallA,
+			{ type: "text", text: MIDDLE_MARKER },
+			toolCallB,
 			{ type: "text", text: FINAL_MARKER },
 		]);
 
@@ -129,20 +146,48 @@ describe("EventController mixed assistant text/tool rendering", () => {
 		>);
 		await controller.handleEvent({
 			type: "message_update",
-			message: withToolCall,
-			assistantMessageEvent: { type: "toolcall_end", contentIndex: 1, toolCall, partial: withToolCall },
+			message: withFirstToolCall,
+			assistantMessageEvent: {
+				type: "toolcall_end",
+				contentIndex: 1,
+				toolCall: toolCallA,
+				partial: withFirstToolCall,
+			},
+		} as Extract<AgentSessionEvent, { type: "message_update" }>);
+		await controller.handleEvent({
+			type: "message_update",
+			message: withSecondToolCall,
+			assistantMessageEvent: {
+				type: "toolcall_end",
+				contentIndex: 3,
+				toolCall: toolCallB,
+				partial: withSecondToolCall,
+			},
 		} as Extract<AgentSessionEvent, { type: "message_update" }>);
 		await controller.handleEvent({
 			type: "tool_execution_start",
-			toolCallId: TOOL_CALL_ID,
-			toolName: "contract_probe",
-			args: { value: 1 },
+			toolCallId: TOOL_CALL_A_ID,
+			toolName: "contract_probe_a",
+			args: { value: "a" },
 		} as Extract<AgentSessionEvent, { type: "tool_execution_start" }>);
 		await controller.handleEvent({
 			type: "tool_execution_end",
-			toolCallId: TOOL_CALL_ID,
-			toolName: "contract_probe",
-			result: { content: [{ type: "text", text: TOOL_RESULT_MARKER }] },
+			toolCallId: TOOL_CALL_A_ID,
+			toolName: "contract_probe_a",
+			result: { content: [{ type: "text", text: TOOL_RESULT_A_MARKER }] },
+			isError: false,
+		} as Extract<AgentSessionEvent, { type: "tool_execution_end" }>);
+		await controller.handleEvent({
+			type: "tool_execution_start",
+			toolCallId: TOOL_CALL_B_ID,
+			toolName: "contract_probe_b",
+			args: { value: "b" },
+		} as Extract<AgentSessionEvent, { type: "tool_execution_start" }>);
+		await controller.handleEvent({
+			type: "tool_execution_end",
+			toolCallId: TOOL_CALL_B_ID,
+			toolName: "contract_probe_b",
+			result: { content: [{ type: "text", text: TOOL_RESULT_B_MARKER }] },
 			isError: false,
 		} as Extract<AgentSessionEvent, { type: "tool_execution_end" }>);
 		await controller.handleEvent({ type: "message_end", message: completed } as Extract<
@@ -152,10 +197,14 @@ describe("EventController mixed assistant text/tool rendering", () => {
 
 		const lines = chatContainer.render(120).map(line => Bun.stripANSI(line));
 		const introLine = lineContaining(lines, INTRO_MARKER);
-		const toolResultLine = lineContaining(lines, TOOL_RESULT_MARKER);
+		const toolResultALine = lineContaining(lines, TOOL_RESULT_A_MARKER);
+		const middleLine = lineContaining(lines, MIDDLE_MARKER);
+		const toolResultBLine = lineContaining(lines, TOOL_RESULT_B_MARKER);
 		const finalLine = lineContaining(lines, FINAL_MARKER);
 
-		expect(introLine).toBeLessThan(toolResultLine);
-		expect(finalLine).toBeGreaterThan(toolResultLine);
+		expect(introLine).toBeLessThan(toolResultALine);
+		expect(toolResultALine).toBeLessThan(middleLine);
+		expect(middleLine).toBeLessThan(toolResultBLine);
+		expect(toolResultBLine).toBeLessThan(finalLine);
 	});
 });

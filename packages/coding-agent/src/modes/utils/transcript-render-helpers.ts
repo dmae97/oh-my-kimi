@@ -137,56 +137,57 @@ export function assistantHasVisibleContent(message: AssistantAgentMessage): bool
 }
 
 /**
- * Split mixed assistant turns into the visible text before tool execution and
- * the visible text that must render after the tool timeline. Cursor can return
- * intro text, tool calls, and the final answer in one assistant message; keeping
- * the post-tool text in the leading assistant block buries the answer above tool
- * results in the transcript.
+ * Split mixed assistant turns into visible text before tool execution and
+ * visible text segments that must render immediately after the preceding tool.
+ * Cursor can return intro text, tool calls, progress text, and the final answer
+ * in one assistant message; keeping every text block in the leading assistant
+ * block buries post-tool text above tool results in the transcript.
  */
 export function splitAssistantMessageToolTimeline(message: AssistantAgentMessage): {
 	beforeTools: AssistantAgentMessage;
-	afterTools: AssistantAgentMessage | undefined;
+	afterToolCalls: ReadonlyMap<string, AssistantAgentMessage>;
 	hasToolCalls: boolean;
 } {
 	const beforeTools: AssistantAgentMessage["content"] = [];
-	const afterTools: AssistantAgentMessage["content"] = [];
+	const afterToolCalls = new Map<string, AssistantAgentMessage>();
+	let pendingAfterTool: AssistantAgentMessage["content"] = [];
+	let lastToolCallId: string | undefined;
 	let sawToolCall = false;
+
+	const displaySegment = (content: AssistantAgentMessage["content"]): AssistantAgentMessage => ({
+		...message,
+		content,
+		stopReason: "stop",
+		errorMessage: undefined,
+		retryRecovery: undefined,
+	});
+
+	const flushPendingAfterTool = () => {
+		if (!lastToolCallId || pendingAfterTool.length === 0) return;
+		afterToolCalls.set(lastToolCallId, displaySegment(pendingAfterTool));
+		pendingAfterTool = [];
+	};
 
 	for (const content of message.content) {
 		if (content.type === "toolCall") {
+			flushPendingAfterTool();
 			sawToolCall = true;
+			lastToolCallId = content.id;
 			continue;
 		}
 		if (sawToolCall) {
-			afterTools.push(content);
+			pendingAfterTool.push(content);
 		} else {
 			beforeTools.push(content);
 		}
 	}
+	flushPendingAfterTool();
 
 	if (!sawToolCall) {
-		return { beforeTools: message, afterTools: undefined, hasToolCalls: false };
+		return { beforeTools: message, afterToolCalls, hasToolCalls: false };
 	}
 
-	const beforeMessage: AssistantAgentMessage = {
-		...message,
-		content: beforeTools,
-		stopReason: "stop",
-		errorMessage: undefined,
-		retryRecovery: undefined,
-	};
-	const afterMessage: AssistantAgentMessage | undefined =
-		afterTools.length === 0
-			? undefined
-			: {
-					...message,
-					content: afterTools,
-					stopReason: "stop",
-					errorMessage: undefined,
-					retryRecovery: undefined,
-				};
-
-	return { beforeTools: beforeMessage, afterTools: afterMessage, hasToolCalls: true };
+	return { beforeTools: displaySegment(beforeTools), afterToolCalls, hasToolCalls: true };
 }
 
 /**
