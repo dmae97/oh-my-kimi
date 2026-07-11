@@ -1720,12 +1720,19 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 	const hasImages = toolResult.content.some((block): block is ImageContent => block.type === "image");
 	const omittedImages = hasImages && !supportsImages;
 	const normalized = normalizeResponsesToolCallId(toolResult.toolCallId);
+	// "(see attached image)" is only truthful when the result actually carries
+	// images (they ride as a separate user message on the Responses API). A
+	// genuinely empty text result (empty file read, silent tool) must stay
+	// empty — the placeholder sent models chasing an attachment that never
+	// existed.
 	const output = (
 		omittedImages
 			? joinTextWithImagePlaceholder(textResult, true)
 			: textResult.length > 0
 				? textResult
-				: "(see attached image)"
+				: hasImages
+					? "(see attached image)"
+					: ""
 	).toWellFormed();
 	if (strictResponsesPairing && !knownCallIds.has(normalized.callId)) {
 		// Strict backends (Azure, Copilot) reject unpaired outputs outright, but

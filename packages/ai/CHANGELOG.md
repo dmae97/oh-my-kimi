@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the Responses API serializing a genuinely empty tool result (e.g. reading an empty file with `:raw`) as `(see attached image)` even when the turn carried no image, sending models chasing a phantom attachment. The placeholder is now emitted only when the result actually contains images; empty results stay empty, matching the Completions and Google converters.
+
 ## [16.4.2] - 2026-07-10
 
 ### Fixed
