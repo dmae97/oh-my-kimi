@@ -10,6 +10,7 @@
 use std::{
 	borrow::Cow,
 	cell::RefCell,
+	fmt,
 	fs::File,
 	io::{self, Read},
 	path::{Path, PathBuf},
@@ -17,7 +18,8 @@ use std::{
 };
 
 use grep_matcher::Matcher;
-use grep_regex::RegexMatcherBuilder;
+use grep_pcre2::{RegexMatcher as PcreMatcher, RegexMatcherBuilder as PcreMatcherBuilder};
+use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{
 	BinaryDetection, Searcher, SearcherBuilder, Sink, SinkContext, SinkContextKind, SinkMatch,
 };
@@ -535,17 +537,61 @@ struct SearchParams {
 	multiline:          bool,
 }
 
-fn run_search(
-	matcher: &grep_regex::RegexMatcher,
+enum CompiledMatcher {
+	Rust(RegexMatcher),
+	Pcre(PcreMatcher),
+}
+
+#[derive(Debug)]
+enum CompiledMatcherError {
+	Rust(grep_matcher::NoError),
+	Pcre(grep_pcre2::Error),
+}
+
+impl fmt::Display for CompiledMatcherError {
+	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			Self::Rust(err) => err.fmt(formatter),
+			Self::Pcre(err) => err.fmt(formatter),
+		}
+	}
+}
+
+impl Matcher for CompiledMatcher {
+	type Captures = grep_matcher::NoCaptures;
+	type Error = CompiledMatcherError;
+
+	fn find_at(
+		&self,
+		haystack: &[u8],
+		at: usize,
+	) -> std::result::Result<Option<grep_matcher::Match>, Self::Error> {
+		match self {
+			Self::Rust(matcher) => matcher
+				.find_at(haystack, at)
+				.map_err(CompiledMatcherError::Rust),
+			Self::Pcre(matcher) => matcher
+				.find_at(haystack, at)
+				.map_err(CompiledMatcherError::Pcre),
+		}
+	}
+
+	fn new_captures(&self) -> std::result::Result<Self::Captures, Self::Error> {
+		Ok(grep_matcher::NoCaptures::new())
+	}
+}
+
+fn run_search<M: Matcher + Sync>(
+	matcher: &M,
 	content: &[u8],
 	params: SearchParams,
 ) -> io::Result<SearchResultInternal> {
 	run_search_slice(&mut build_searcher_for_params(params), matcher, content, params)
 }
 
-fn run_search_slice(
+fn run_search_slice<M: Matcher + Sync>(
 	searcher: &mut Searcher,
-	matcher: &grep_regex::RegexMatcher,
+	matcher: &M,
 	content: &[u8],
 	params: SearchParams,
 ) -> io::Result<SearchResultInternal> {
@@ -957,7 +1003,7 @@ fn build_regex_matcher(
 	pattern: &str,
 	ignore_case: bool,
 	multiline: bool,
-) -> std::result::Result<grep_regex::RegexMatcher, grep_regex::Error> {
+) -> std::result::Result<RegexMatcher, grep_regex::Error> {
 	let build = |line_terminated| {
 		let mut builder = RegexMatcherBuilder::new();
 		builder.case_insensitive(ignore_case).multi_line(multiline);
@@ -973,16 +1019,33 @@ fn build_regex_matcher(
 	build(false)
 }
 
-fn build_matcher(
+fn build_pcre_matcher(
 	pattern: &str,
 	ignore_case: bool,
 	multiline: bool,
-) -> Result<grep_regex::RegexMatcher> {
+) -> std::result::Result<PcreMatcher, grep_pcre2::Error> {
+	let mut builder = PcreMatcherBuilder::new();
+	builder
+		.caseless(ignore_case)
+		.multi_line(multiline)
+		.utf(true)
+		.ucp(true)
+		.jit_if_available(true);
+	builder.build(pattern)
+}
+
+fn build_matcher(pattern: &str, ignore_case: bool, multiline: bool) -> Result<CompiledMatcher> {
 	let sanitized = sanitize_braces(pattern);
 	let err = match build_regex_matcher(sanitized.as_ref(), ignore_case, multiline) {
-		Ok(matcher) => return Ok(matcher),
+		Ok(matcher) => return Ok(CompiledMatcher::Rust(matcher)),
 		Err(err) => err,
 	};
+
+	// PCRE2 supports features the Rust regex engine deliberately omits, such
+	// as lookaround and backreferences.
+	if let Ok(matcher) = build_pcre_matcher(sanitized.as_ref(), ignore_case, multiline) {
+		return Ok(CompiledMatcher::Pcre(matcher));
+	}
 
 	// Targeted retry: a stray `(`/`)` in an otherwise valid regex (e.g.
 	// `fetchProvider(`) — escape the parentheses but keep the rest of the regex
@@ -990,17 +1053,20 @@ fn build_matcher(
 	let message = err.to_string();
 	if message.contains("unclosed group") || message.contains("unopened group") {
 		let escaped = escape_unescaped_parentheses(sanitized.as_ref());
-		if escaped.as_ref() != sanitized.as_ref()
-			&& let Ok(matcher) = build_regex_matcher(escaped.as_ref(), ignore_case, multiline)
-		{
-			return Ok(matcher);
+		if escaped.as_ref() != sanitized.as_ref() {
+			if let Ok(matcher) = build_regex_matcher(escaped.as_ref(), ignore_case, multiline) {
+				return Ok(CompiledMatcher::Rust(matcher));
+			}
+			if let Ok(matcher) = build_pcre_matcher(escaped.as_ref(), ignore_case, multiline) {
+				return Ok(CompiledMatcher::Pcre(matcher));
+			}
 		}
 	}
 
-	// Final fallback: the pattern is not valid regex syntax at all (e.g. an
-	// unclosed character class or a dangling quantifier), so match it literally
+	// Final fallback: both engines rejected the pattern, so match it literally
 	// instead of failing the whole search.
 	build_regex_matcher(&regex::escape(pattern), ignore_case, multiline)
+		.map(CompiledMatcher::Rust)
 		.map_err(|_| Error::from_reason(format!("Regex error: {message}")))
 }
 
@@ -1034,9 +1100,9 @@ fn streaming_stop_after(params: SearchParams) -> Option<u64> {
 	params.max_count.filter(|max| *max > 0)
 }
 
-fn search_file_bytes(
+fn search_file_bytes<M: Matcher + Sync>(
 	searcher: &mut Searcher,
-	matcher: &grep_regex::RegexMatcher,
+	matcher: &M,
 	bytes: &[u8],
 	params: SearchParams,
 ) -> Option<SearchResultInternal> {
@@ -1188,9 +1254,9 @@ fn read_file_prefix(path: &Path) -> io::Result<ReadFile> {
 }
 
 /// Read one candidate per `policy` and search it, classifying the result.
-fn search_one_file(
+fn search_one_file<M: Matcher + Sync>(
 	searcher: &mut Searcher,
-	matcher: &grep_regex::RegexMatcher,
+	matcher: &M,
 	file: &pi_walker::FileCandidate,
 	file_params: SearchParams,
 	policy: ReadPolicy,
@@ -1224,10 +1290,10 @@ fn search_one_file(
 }
 
 /// Search one candidate and fold its outcome into the shared [`PassState`].
-fn handle_file(
+fn handle_file<M: Matcher + Sync>(
 	file: &pi_walker::FileCandidate,
 	searcher: &mut Searcher,
-	matcher: &grep_regex::RegexMatcher,
+	matcher: &M,
 	file_params: SearchParams,
 	policy: ReadPolicy,
 	stop_after_matches: Option<u64>,
@@ -1271,9 +1337,9 @@ fn handle_file(
 ///
 /// Counters and the deferred list accumulate into `state`; `results` is drained
 /// here so the same state can drive a second pass.
-fn run_pass(
+fn run_pass<M: Matcher + Sync>(
 	candidates: &[pi_walker::FileCandidate],
-	matcher: &grep_regex::RegexMatcher,
+	matcher: &M,
 	file_params: SearchParams,
 	policy: ReadPolicy,
 	parallel_allowed: bool,
@@ -1321,9 +1387,9 @@ fn run_pass(
 /// Deferring oversized files lets smaller files surface first and lets a
 /// satisfied match budget skip the oversized pass entirely. Normal results
 /// always precede oversized results; each group is path-sorted internally.
-fn process_candidates(
+fn process_candidates<M: Matcher + Sync>(
 	candidates: Vec<pi_walker::FileCandidate>,
-	matcher: &grep_regex::RegexMatcher,
+	matcher: &M,
 	params: SearchParams,
 	parallel_allowed: bool,
 	stop_after_matches: Option<u64>,
@@ -1382,9 +1448,9 @@ fn process_candidates(
 	))
 }
 
-fn run_sequential_grep(
+fn run_sequential_grep<M: Matcher + Sync>(
 	search_path: &Path,
-	matcher: &grep_regex::RegexMatcher,
+	matcher: &M,
 	glob: Option<&str>,
 	type_filter: Option<&TypeFilter>,
 	params: SearchParams,
@@ -1414,9 +1480,9 @@ fn run_sequential_grep(
 	clippy::fn_params_excessive_bools,
 	reason = "matches options structure of underlying walk candidates collector"
 )]
-fn run_parallel_streaming_grep(
+fn run_parallel_streaming_grep<M: Matcher + Sync>(
 	search_path: &Path,
-	matcher: &grep_regex::RegexMatcher,
+	matcher: &M,
 	glob: Option<&str>,
 	type_filter: Option<&TypeFilter>,
 	params: SearchParams,
@@ -1476,10 +1542,10 @@ fn emitted_content_matches(results: &[FileSearchResult]) -> u64 {
 	})
 }
 
-fn flush_stream_window(
+fn flush_stream_window<M: Matcher + Sync>(
 	window: &mut Vec<pi_walker::FileCandidate>,
 	results: &mut Vec<FileSearchResult>,
-	matcher: &grep_regex::RegexMatcher,
+	matcher: &M,
 	file_params: SearchParams,
 	state: &PassState,
 	ct: &task::CancelToken,
@@ -1504,9 +1570,9 @@ fn flush_stream_window(
 	clippy::fn_params_excessive_bools,
 	reason = "matches options structure of underlying walk candidates collector"
 )]
-fn run_windowed_streaming_grep(
+fn run_windowed_streaming_grep<M: Matcher + Sync>(
 	search_path: &Path,
-	matcher: &grep_regex::RegexMatcher,
+	matcher: &M,
 	glob: Option<&str>,
 	type_filter: Option<&TypeFilter>,
 	params: SearchParams,
@@ -1599,9 +1665,9 @@ fn run_windowed_streaming_grep(
 	))
 }
 
-fn run_streaming_grep(
+fn run_streaming_grep<M: Matcher + Sync>(
 	search_path: &Path,
-	matcher: &grep_regex::RegexMatcher,
+	matcher: &M,
 	glob: Option<&str>,
 	type_filter: Option<&TypeFilter>,
 	params: SearchParams,
@@ -1808,7 +1874,11 @@ fn search_sync(content: &[u8], options: SearchOptions) -> SearchResult {
 		offset,
 		multiline,
 	};
-	let result = match run_search(&matcher, content, params) {
+	let result = match matcher {
+		CompiledMatcher::Rust(matcher) => run_search(&matcher, content, params),
+		CompiledMatcher::Pcre(matcher) => run_search(&matcher, content, params),
+	};
+	let result = match result {
 		Ok(result) => result,
 		Err(err) => return empty_search_result(Some(err.to_string())),
 	};
@@ -1826,13 +1896,25 @@ pub(crate) fn grep_sync(
 	on_match: Option<&ThreadsafeFunction<GrepMatch>>,
 	ct: task::CancelToken,
 ) -> Result<GrepResult> {
+	let ignore_case = options.ignore_case.unwrap_or(false);
+	let multiline = options.multiline.unwrap_or(false);
+	match build_matcher(&options.pattern, ignore_case, multiline)? {
+		CompiledMatcher::Rust(matcher) => grep_sync_with_matcher(options, on_match, ct, &matcher),
+		CompiledMatcher::Pcre(matcher) => grep_sync_with_matcher(options, on_match, ct, &matcher),
+	}
+}
+
+fn grep_sync_with_matcher<M: Matcher + Sync>(
+	options: GrepConfig,
+	on_match: Option<&ThreadsafeFunction<GrepMatch>>,
+	ct: task::CancelToken,
+	matcher: &M,
+) -> Result<GrepResult> {
 	let search_path = resolve_search_path(&options.path)?;
 	let metadata = std::fs::metadata(&search_path)
 		.map_err(|err| Error::from_reason(format!("Path not found: {err}")))?;
-	let ignore_case = options.ignore_case.unwrap_or(false);
 	let multiline = options.multiline.unwrap_or(false);
 	let output_mode = parse_output_mode(options.mode);
-	let matcher = build_matcher(&options.pattern, ignore_case, multiline)?;
 
 	let (context_before, context_after) =
 		resolve_context(options.context, options.context_before, options.context_after);
@@ -1947,7 +2029,7 @@ pub(crate) fn grep_sync(
 			});
 		}
 
-		let search = run_search(&matcher, bytes.as_slice(), params)
+		let search = run_search(matcher, bytes.as_slice(), params)
 			.map_err(|err| Error::from_reason(format!("Search failed: {err}")))?;
 
 		if search.match_count == 0 {
@@ -2007,7 +2089,7 @@ pub(crate) fn grep_sync(
 	let mentions_node_modules = glob.is_some_and(|g| g.contains("node_modules"));
 	let results = run_streaming_grep(
 		&search_path,
-		&matcher,
+		matcher,
 		glob,
 		type_filter.as_ref(),
 		params,
@@ -2185,6 +2267,8 @@ mod tests {
 		time::{Duration, SystemTime, UNIX_EPOCH},
 	};
 
+	use grep_matcher::Matcher;
+
 	#[cfg(unix)]
 	use super::{GrepConfig, GrepOutputMode, grep_sync};
 	use super::{escape_unescaped_parentheses, sanitize_braces};
@@ -2306,7 +2390,6 @@ mod tests {
 
 	#[test]
 	fn invalid_regex_falls_back_to_literal() {
-		use grep_matcher::Matcher;
 		// Patterns that are not valid regex syntax (unclosed class, dangling
 		// quantifier, stray `)`) must degrade to a literal search rather than
 		// erroring.
@@ -2324,7 +2407,6 @@ mod tests {
 
 	#[test]
 	fn stray_parenthesis_preserves_surrounding_regex() {
-		use grep_matcher::Matcher;
 		// The targeted retry escapes the stray `(` but keeps `.*` as a regex.
 		let matcher =
 			super::build_matcher("foo.*(bar", false, false).expect("retry with escaped paren");
@@ -2334,12 +2416,35 @@ mod tests {
 
 	#[test]
 	fn valid_regex_is_not_escaped() {
-		use grep_matcher::Matcher;
 		// A parseable pattern stays a regex: `fo+` matches repeats, which the
 		// literal `fo+` never would.
 		let matcher = super::build_matcher("fo+", false, false).expect("valid regex");
 		assert!(matcher.is_match(b"foooo").unwrap());
 		assert!(!matcher.is_match(b"bar").unwrap());
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn grep_supports_pcre2_lookaround_and_backreferences() {
+		let root = TempDirGuard::new();
+		write_file(&root.path().join("lookahead.txt"), "foobar\nfoobaz\n");
+		write_file(&root.path().join("backreference.txt"), "same same\nsame other\n");
+
+		for (pattern, path, line) in [
+			(r"foo(?=bar)", "lookahead.txt", "foobar"),
+			(r"\b(\w+)\s+\1\b", "backreference.txt", "same same"),
+		] {
+			let mut config = base_grep_config(root.path());
+			config.pattern = pattern.to_string();
+			let result = grep_sync(config, None, task::CancelToken::default())
+				.unwrap_or_else(|err| panic!("`{pattern}` should search with PCRE2: {err}"));
+
+			assert_eq!(result.total_matches, 1, "`{pattern}` should match once");
+			assert_eq!(result.matches.len(), 1, "`{pattern}` should return one match");
+			assert_eq!(result.matches[0].path, path);
+			assert_eq!(result.matches[0].line_number, 1);
+			assert_eq!(result.matches[0].line, line);
+		}
 	}
 	#[cfg(unix)]
 	#[test]

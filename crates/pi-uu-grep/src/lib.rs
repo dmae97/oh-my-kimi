@@ -19,9 +19,7 @@ use std::{
 	path::{Path, PathBuf},
 };
 
-use clap::{
-	ArgMatches, CommandFactory, FromArgMatches, Parser, ValueEnum, parser::ValueSource,
-};
+use clap::{ArgMatches, CommandFactory, FromArgMatches, Parser, ValueEnum, parser::ValueSource};
 use globset::{Glob, GlobMatcher};
 use grep_matcher::{LineTerminator, Matcher};
 use grep_pcre2::{RegexMatcher as PcreMatcher, RegexMatcherBuilder as PcreMatcherBuilder};
@@ -1562,8 +1560,7 @@ mod tests {
 		assert_eq!(code, 0, "{stderr}");
 		assert_eq!(stdout, "2:3:hit\n");
 
-		let (code, stdout, stderr) =
-			run_grep(&["--label=pipe", "-HZ", "hit"], "hit\n");
+		let (code, stdout, stderr) = run_grep(&["--label=pipe", "-HZ", "hit"], "hit\n");
 		assert_eq!(code, 0, "{stderr}");
 		assert_eq!(stdout.as_bytes(), b"pipe\0hit\n");
 	}
@@ -1571,8 +1568,7 @@ mod tests {
 	#[test]
 	fn numeric_context_uses_the_configured_group_separator() {
 		let input = "a\nhit\nb\ngap\nc\nhit\nd\n";
-		let (code, stdout, stderr) =
-			run_grep(&["-1", "--group-separator=@", "hit"], input);
+		let (code, stdout, stderr) = run_grep(&["-1", "--group-separator=@", "hit"], input);
 		assert_eq!(code, 0, "{stderr}");
 		assert_eq!(stdout, "a\nhit\nb\n@\nc\nhit\nd\n");
 	}
@@ -1585,11 +1581,8 @@ mod tests {
 		std::fs::create_dir(tree.join("vendor")).expect("excluded directory created");
 		std::fs::write(tree.join("vendor/hidden.rs"), "hit\n").expect("excluded file written");
 
-		let (code, stdout, stderr) = run_grep_in(
-			&["-r", "--include=*.rs", "--exclude-dir=vendor", "hit", "."],
-			"",
-			&tree,
-		);
+		let (code, stdout, stderr) =
+			run_grep_in(&["-r", "--include=*.rs", "--exclude-dir=vendor", "hit", "."], "", &tree);
 		assert_eq!(code, 0, "{stderr}");
 		assert!(stdout.contains("keep.rs:hit"), "{stdout:?}");
 		assert!(!stdout.contains("drop.txt"), "{stdout:?}");

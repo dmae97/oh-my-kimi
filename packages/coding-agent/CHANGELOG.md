@@ -8,6 +8,7 @@
 - Added `/vibe` mode: the model becomes a director whose toolset is stripped to `read` plus five new session tools (`vibe_spawn`, `vibe_send`, `vibe_wait`, `vibe_kill`, `vibe_list`) for driving persistent background worker sessions. Workers come in two flavors mapped to existing model tiers — `fast` (sonic/`pi/smol`) and `good` (task/`pi/task`) — retain their conversation across turns via the subagent keep-alive lifecycle, deliver each turn's result asynchronously with a compressed tool-call trace plus the worker's response, and are killed when the mode exits. The TUI renders sends as a mini CLI composer and waits as a live stacked-screen view of every worker's tool calls and streamed output.
 - `omp acp` now prints a short hint on stderr when launched from an interactive terminal (stdin is a TTY): the command speaks JSON-RPC over stdout and is meant to be spawned by an ACP client such as Zed, so running it by hand previously showed nothing at all
 - Added a credential-free Google web search provider that loads rendered Search results in stealth Chromium, parses titles, URLs, and snippets, and supports recency filters.
+- Added PCRE2 fallback for grep lookaround and backreferences when Rust regex rejects a pattern.
 
 ### Changed
 
