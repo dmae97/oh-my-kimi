@@ -5637,6 +5637,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				} catch {
 					// Ignore chmod failures (e.g., Windows)
 				}
+				SqliteAuthCredentialStore.#ensureAuthCredentialRefreshLeasesTable(db);
 				return new SqliteAuthCredentialStore(db);
 			} catch (err) {
 				db?.close();
@@ -5653,6 +5654,18 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 			`Failed to open auth database at '${dbPath}' after ${maxAttempts} attempts: ${lastBusyError?.message}`,
 			{ cause: lastBusyError },
 		);
+	}
+
+	static #ensureAuthCredentialRefreshLeasesTable(db: Database): void {
+		db.run(`
+			CREATE TABLE IF NOT EXISTS auth_credential_refresh_leases (
+				credential_id INTEGER PRIMARY KEY,
+				owner TEXT NOT NULL,
+				expires_at_ms INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL
+			);
+			CREATE INDEX IF NOT EXISTS idx_auth_credential_refresh_leases_expires ON auth_credential_refresh_leases(expires_at_ms);
+		`);
 	}
 
 	#initializeSchema(): void {
@@ -5820,15 +5833,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	#createAuthCredentialRefreshLeasesTable(): void {
-		this.#db.run(`
-			CREATE TABLE IF NOT EXISTS auth_credential_refresh_leases (
-				credential_id INTEGER PRIMARY KEY,
-				owner TEXT NOT NULL,
-				expires_at_ms INTEGER NOT NULL,
-				updated_at INTEGER NOT NULL
-			);
-			CREATE INDEX IF NOT EXISTS idx_auth_credential_refresh_leases_expires ON auth_credential_refresh_leases(expires_at_ms);
-		`);
+		SqliteAuthCredentialStore.#ensureAuthCredentialRefreshLeasesTable(this.#db);
 	}
 
 	#migrateAuthSchema(fromVersion: number): void {
