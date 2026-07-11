@@ -12,9 +12,10 @@ import { collectConfigCandidates } from "./watchdog";
  * with an optional `:level` thinking suffix (e.g. `x-ai/grok-code-fast:high`),
  * resolved exactly like any other model override; `tools` is a subset of
  * `BUILTIN_TOOL_NAMES` — any built-in name, including mutating tools such as
- * `edit`/`write`/`bash` (the advisor is a full agent). Omitted or empty falls
- * back to the default `read`/`grep`/`glob` subset. `instructions` is the
- * advisor's specialization, appended to the shared baseline.
+ * `edit`/`write`/`bash` (the advisor is a full agent). Omitted falls back to
+ * the default `read`/`grep`/`glob` subset; an explicit empty list grants no
+ * tools. `instructions` is the advisor's specialization, appended to the shared
+ * baseline.
  */
 export interface AdvisorConfig {
 	name: string;
@@ -93,18 +94,19 @@ const KNOWN_TOOL_NAMES = new Set<string>(BUILTIN_TOOL_NAMES);
 /**
  * Keep only valid tool names from an advisor's `tools` list, dropping unknowns
  * with a warning. The advisor is a full agent, so any built tool may be granted;
- * the runtime further filters to what's actually available this session. An empty
- * result (or no list) means "use the default subset" (read/grep/glob).
+ * the runtime further filters to what's actually available this session.
+ * `undefined` means "use the default subset" (read/grep/glob); an explicit empty
+ * list means "no tools".
  */
 function filterAdvisorTools(tools: string[] | undefined, sourcePath: string): string[] | undefined {
-	if (!tools || tools.length === 0) return undefined;
+	if (tools === undefined) return undefined;
 	// Normalize legacy aliases (search→grep, find→glob) and dedupe before validating.
 	const filtered = normalizeToolNames(tools).filter(name => {
 		if (KNOWN_TOOL_NAMES.has(name)) return true;
 		logger.warn("Advisor config: dropping unknown tool", { path: sourcePath, tool: name });
 		return false;
 	});
-	return filtered.length > 0 ? filtered : undefined;
+	return filtered;
 }
 
 /**
@@ -238,7 +240,7 @@ export async function loadWatchdogConfigFile(filePath: string): Promise<Watchdog
 		advisors: (result.advisors ?? []).map(a => ({
 			name: a.name,
 			model: a.model?.trim() || undefined,
-			tools: a.tools?.length ? [...a.tools] : undefined,
+			tools: a.tools === undefined ? undefined : [...a.tools],
 			instructions: a.instructions?.trim() ? a.instructions : undefined,
 		})),
 	};
@@ -257,7 +259,7 @@ export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
 		out.advisors = doc.advisors.map(a => {
 			const entry: AdvisorConfig = { name: a.name };
 			if (a.model?.trim()) entry.model = a.model;
-			if (a.tools?.length) entry.tools = [...a.tools];
+			if (a.tools !== undefined) entry.tools = [...a.tools];
 			if (a.instructions?.trim()) entry.instructions = a.instructions;
 			return entry;
 		});

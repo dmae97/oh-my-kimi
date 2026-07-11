@@ -82,9 +82,9 @@ function previewLine(text: string | undefined): string {
 	return first.length > PREVIEW_WIDTH ? `${first.slice(0, PREVIEW_WIDTH - 1)}…` : first;
 }
 
-/** Default when the set is empty or exactly read/grep/glob; else the available-ordered subset. */
+/** Omitted means default read/grep/glob; an explicit empty set means no tools. */
 function commitTools(selected: ReadonlySet<string>, all: readonly string[]): string[] | undefined {
-	if (selected.size === 0) return undefined;
+	if (selected.size === 0) return [];
 	if (selected.size === ADVISOR_DEFAULT_TOOL_NAMES.size) {
 		let matchesDefault = true;
 		for (const name of ADVISOR_DEFAULT_TOOL_NAMES) {
@@ -96,6 +96,11 @@ function commitTools(selected: ReadonlySet<string>, all: readonly string[]): str
 		if (matchesDefault) return undefined;
 	}
 	return all.filter(name => selected.has(name));
+}
+
+function formatAdvisorTools(tools: readonly string[] | undefined, emptyLabel: string): string {
+	if (tools === undefined) return "read, grep, glob (default)";
+	return tools.length > 0 ? tools.join(", ") : emptyLabel;
 }
 
 /** Soft-wrap plain text to `width`, returning at least one (possibly empty) line. */
@@ -266,7 +271,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 
 	#advisorPreview(advisor: AdvisorConfig, bodyWidth: number): string[] {
 		const model = advisor.model?.trim() || this.#defaultModelLabel || "advisor role default";
-		const tools = advisor.tools?.length ? advisor.tools.join(", ") : "read, grep, glob (default)";
+		const tools = formatAdvisorTools(advisor.tools, "no tools");
 		const lines = [
 			theme.bold(advisor.name || "(unnamed)"),
 			"",
@@ -303,13 +308,16 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const advisor = doc.advisors[0];
 		if (!advisor) return false;
 		return (
-			advisor.name === "default" && !advisor.model?.trim() && !advisor.tools?.length && !advisor.instructions?.trim()
+			advisor.name === "default" &&
+			!advisor.model?.trim() &&
+			advisor.tools === undefined &&
+			!advisor.instructions?.trim()
 		);
 	}
 
 	#advisorSummary(advisor: AdvisorConfig): string {
 		const model = advisor.model?.trim() || this.#defaultModelLabel || "advisor role default";
-		const tools = advisor.tools?.length ? advisor.tools.join(", ") : "(default: read/grep/glob)";
+		const tools = formatAdvisorTools(advisor.tools, "no tools");
 		return `${model} · ${tools}`;
 	}
 
@@ -384,7 +392,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 			return;
 		}
 		const modelDescription = advisor.model?.trim() || this.#defaultModelLabel || "advisor role default";
-		const toolsDescription = advisor.tools?.length ? advisor.tools.join(", ") : "(default: read/grep/glob)";
+		const toolsDescription = formatAdvisorTools(advisor.tools, "no tools");
 		const items: SelectItem[] = [
 			{ value: "name", label: "Name", description: advisor.name },
 			{ value: "model", label: "Model", description: modelDescription },
@@ -524,7 +532,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#setScreen(
 			"tools",
 			list,
-			"Enter / click toggle · select Done or Esc to apply (empty or read/grep/glob = default)",
+			"Enter / click toggle · select Done or Esc to apply (empty = no tools; read/grep/glob = default)",
 		);
 	}
 
