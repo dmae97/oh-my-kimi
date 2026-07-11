@@ -505,6 +505,112 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 		}
 	});
 
+	test("getUsageReport gates same-org siblings on the member's own identity", async () => {
+		// Two Team members share the org id but draw on per-user pools: the
+		// shared org is a gate, not a match, so Bob must never receive Alice's
+		// report just because it is the first (or only) same-org candidate.
+		const brokerClient = new AuthBrokerClient({ url: "http://127.0.0.1:9", token: "unused" });
+		const now = Date.now();
+		const makeMemberCredential = (name: string, orgId?: string) => ({
+			type: "oauth" as const,
+			access: `remote-access-${name}`,
+			refresh: REMOTE_REFRESH_SENTINEL,
+			expires: now + 120_000,
+			...(name === "org-only" ? {} : { accountId: `account-${name}`, email: `${name}@example.com` }),
+			orgId,
+		});
+		const makeMemberReport = (
+			name: string,
+			orgId: string,
+			usedFraction: number,
+			status: "ok" | "exhausted",
+		): UsageReport => ({
+			provider: "anthropic",
+			fetchedAt: now,
+			limits: [
+				{
+					id: "anthropic:5h",
+					label: "Claude 5 Hour",
+					scope: { provider: "anthropic", windowId: "5h" },
+					window: { id: "5h", label: "5 Hour" },
+					amount: { used: usedFraction * 100, limit: 100, usedFraction, unit: "percent" },
+					status,
+				},
+			],
+			metadata: { email: `${name}@example.com`, accountId: `account-${name}`, orgId },
+		});
+		// Bob's report deliberately precedes Alice's so a first-same-org match
+		// would hand his pool to Alice; org-duo holds only Dave's report.
+		vi.spyOn(brokerClient, "fetchUsage").mockResolvedValue({
+			generatedAt: now,
+			reports: [
+				makeMemberReport("bob", "org-team", 0.1, "ok"),
+				makeMemberReport("alice", "org-team", 1, "exhausted"),
+				makeMemberReport("dave", "org-duo", 0.5, "ok"),
+			],
+		});
+		const remoteStore = new RemoteAuthCredentialStore({
+			client: brokerClient,
+			streamSnapshots: false,
+			initialSnapshot: {
+				generation: 1,
+				generatedAt: now,
+				serverNowMs: now,
+				refresher: { enabled: false, intervalMs: 0, skewMs: 0, nextSweepInMs: Number.MAX_SAFE_INTEGER },
+				credentials: [],
+			},
+		});
+		try {
+			// Each member routes to their OWN pool inside the shared org.
+			const aliceReport = await remoteStore.getUsageReport("anthropic", makeMemberCredential("alice", "org-team"));
+			expect(aliceReport?.metadata?.accountId).toBe("account-alice");
+			expect(requireLimit(aliceReport!, "anthropic:5h").status).toBe("exhausted");
+			const bobReport = await remoteStore.getUsageReport("anthropic", makeMemberCredential("bob", "org-team"));
+			expect(bobReport?.metadata?.accountId).toBe("account-bob");
+			expect(requireLimit(bobReport!, "anthropic:5h").status).toBe("ok");
+
+			// Erin's own report is missing: the lone same-org sibling report
+			// (Dave's) must not stand in for hers — "no usage data" is correct.
+			expect(await remoteStore.getUsageReport("anthropic", makeMemberCredential("erin", "org-duo"))).toBeNull();
+
+			// An org-only credential (no base identifiers) still matches on the
+			// org alone, but only when the same-org report is unambiguous.
+			const duoReport = await remoteStore.getUsageReport("anthropic", makeMemberCredential("org-only", "org-duo"));
+			expect(duoReport?.metadata?.accountId).toBe("account-dave");
+			expect(await remoteStore.getUsageReport("anthropic", makeMemberCredential("org-only", "org-team"))).toBeNull();
+
+			// Header-ingest overlays partition per member too: Alice's ingest
+			// must merge into HER aggregate row, not Bob's earlier same-org row.
+			const overlay: UsageReport = {
+				provider: "anthropic",
+				fetchedAt: now,
+				limits: [
+					{
+						id: "anthropic:5h",
+						label: "Claude 5 Hour",
+						scope: { provider: "anthropic", windowId: "5h" },
+						window: { id: "5h", label: "5 Hour" },
+						amount: { used: 90, limit: 100, usedFraction: 0.9, unit: "percent" },
+						status: "ok",
+					},
+				],
+				metadata: { email: "alice@example.com", accountId: "account-alice", orgId: "org-team" },
+			};
+			expect(remoteStore.ingestUsageReport("anthropic", makeMemberCredential("alice", "org-team"), overlay)).toBe(
+				true,
+			);
+			const merged = await remoteStore.fetchUsageReports();
+			const mergedAlice = merged?.find(report => report.metadata?.accountId === "account-alice");
+			const mergedBob = merged?.find(report => report.metadata?.accountId === "account-bob");
+			expect(requireLimit(mergedAlice!, "anthropic:5h").amount.used).toBe(90);
+			expect(requireLimit(mergedBob!, "anthropic:5h").amount.used).toBe(10);
+			const bobAfterIngest = await remoteStore.getUsageReport("anthropic", makeMemberCredential("bob", "org-team"));
+			expect(requireLimit(bobAfterIngest!, "anthropic:5h").amount.used).toBe(10);
+		} finally {
+			remoteStore.close();
+		}
+	});
+
 	test("RemoteAuthCredentialStore reads snapshot blocks and applies upserts before broker acknowledgement", () => {
 		const futureBlock = Date.now() + 60_000;
 		const laterBlock = futureBlock + 60_000;

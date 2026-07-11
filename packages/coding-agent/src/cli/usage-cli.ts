@@ -303,20 +303,33 @@ export function collectUnreportedAccounts(
 		// org-scoped account is covered only by its own org's report, and an
 		// org-less legacy account is never covered by an org-attributed sibling
 		// report — its own fetch failing must surface as "no usage data". The
-		// email/account fallback below applies only when both sides are
-		// org-less.
+		// shared org is a GATE, not a match: two Team members share the org id
+		// while drawing on per-user pools, so coverage also requires the
+		// account's own base identity inside the same-org subset (an org-only
+		// account, with no base identifiers, is covered by any same-org
+		// report). The email/account fallback below applies only when both
+		// sides are org-less.
 		const accountOrg = account.orgId?.toLowerCase();
-		const reportedOrgs = new Set<string>();
-		for (const report of providerReports) {
-			const metaOrg = report.metadata?.orgId;
-			if (typeof metaOrg === "string" && metaOrg) reportedOrgs.add(metaOrg.toLowerCase());
-		}
-		if (accountOrg || reportedOrgs.size > 0) {
-			return !(accountOrg !== undefined && reportedOrgs.has(accountOrg));
-		}
 		const ids = [account.email, account.accountId, account.projectId]
 			.filter((value): value is string => typeof value === "string" && value.length > 0)
 			.map(value => value.toLowerCase());
+		const sameOrgReports: UsageReport[] = [];
+		let sawReportOrg = false;
+		for (const report of providerReports) {
+			const metaOrg = report.metadata?.orgId;
+			if (typeof metaOrg === "string" && metaOrg) {
+				sawReportOrg = true;
+				if (accountOrg !== undefined && metaOrg.toLowerCase() === accountOrg) sameOrgReports.push(report);
+			}
+		}
+		if (accountOrg || sawReportOrg) {
+			if (!accountOrg || sameOrgReports.length === 0) return true;
+			if (ids.length === 0) return false;
+			return !sameOrgReports.some(report => {
+				const identifiers = reportIdentifiers(report);
+				return ids.some(id => identifiers.has(id));
+			});
+		}
 		if (ids.length === 0) return false;
 		const reported = new Set<string>();
 		let anyIdentified = false;

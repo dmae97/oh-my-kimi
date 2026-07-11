@@ -148,14 +148,19 @@ function usageOverlayKey(
 	// Org first: one account email can hold several organizations (Anthropic
 	// Team seat + personal Max), each with its own limit pools. Keying the
 	// overlay by account/email would merge the two pools' header ingests.
-	const orgId = ids.orgId?.trim().toLowerCase();
-	if (orgId) return `${provider}\0org:${orgId}`;
+	// But the org alone is not enough either: two Team members share the org
+	// id while drawing on per-user pools, so the key stays qualified by the
+	// member's own base identity whenever one is known.
+	let base: string | undefined;
 	const accountId = ids.accountId?.trim().toLowerCase();
-	if (accountId) return `${provider}\0account:${accountId}`;
 	const email = ids.email?.trim().toLowerCase();
-	if (email) return `${provider}\0email:${email}`;
 	const projectId = ids.projectId?.trim().toLowerCase();
-	if (projectId) return `${provider}\0project:${projectId}`;
+	if (accountId) base = `account:${accountId}`;
+	else if (email) base = `email:${email}`;
+	else if (projectId) base = `project:${projectId}`;
+	const orgId = ids.orgId?.trim().toLowerCase();
+	if (orgId) return base ? `${provider}\0org:${orgId}|${base}` : `${provider}\0org:${orgId}`;
+	if (base) return `${provider}\0${base}`;
 	return undefined;
 }
 
@@ -994,28 +999,43 @@ function matchUsageReport(reports: UsageReport[], provider: Provider, credential
 	// Max exhausted via Team's report, or rank a legacy row on a sibling's
 	// numbers).
 	const orgId = credential.orgId?.trim().toLowerCase();
+	const accountId = credential.accountId?.trim().toLowerCase();
+	const email = credential.email?.trim().toLowerCase();
+	const projectId = credential.projectId?.trim().toLowerCase();
 	if (orgId) {
+		const sameOrg: UsageReport[] = [];
 		let sawReportOrg = false;
 		for (const report of all) {
 			const metaOrg = readMetadataString((report.metadata ?? {}) as Record<string, unknown>, "orgId");
 			if (metaOrg) {
 				sawReportOrg = true;
-				if (metaOrg.toLowerCase() === orgId) return report;
+				if (metaOrg.toLowerCase() === orgId) sameOrg.push(report);
 			}
 		}
-		// Org-attributed reports exist but none is ours: report "no usage data"
-		// rather than mis-attributing another org's pool. When NO report carries
-		// an org (legacy broker aggregate), fall through with all candidates.
-		if (sawReportOrg) return null;
+		// Org-attributed reports exist: the shared org is a GATE, not a match.
+		// Two Team members share the org id while drawing on per-user pools,
+		// so the credential's own base identity must still line up inside the
+		// same-org subset — a lone sibling report is NOT ours. An org-only
+		// credential (no base identifiers) takes the lone same-org report and
+		// treats several as ambiguous. None in our org → "no usage data"
+		// rather than mis-attributing another org's pool. When NO report
+		// carries an org (legacy broker aggregate), fall through with all
+		// candidates.
+		if (sawReportOrg) {
+			if (accountId || email || projectId) {
+				for (const report of sameOrg) {
+					if (reportMatchesIdentity(report, accountId, email, projectId)) return report;
+				}
+				return null;
+			}
+			return sameOrg.length === 1 ? sameOrg[0]! : null;
+		}
 	}
 	const candidates = orgId
 		? all
 		: all.filter(report => !readMetadataString((report.metadata ?? {}) as Record<string, unknown>, "orgId"));
 	if (candidates.length === 0) return null;
 	if (candidates.length === 1) return candidates[0];
-	const accountId = credential.accountId?.trim().toLowerCase();
-	const email = credential.email?.trim().toLowerCase();
-	const projectId = credential.projectId?.trim().toLowerCase();
 	for (const report of candidates) {
 		if (reportMatchesIdentity(report, accountId, email, projectId)) return report;
 	}
@@ -1029,19 +1049,33 @@ function findMatchingReportIndex(reports: UsageReport[], overlay: UsageReport): 
 	if (all.length === 0) return -1;
 	const metadata = (overlay.metadata ?? {}) as Record<string, unknown>;
 	// Org precedence — mirror matchUsageReport: an org-attributed overlay may
-	// only merge into the report of the SAME org, and an org-less overlay may
-	// only merge into an org-less report.
+	// only merge into a report of the SAME org, and an org-less overlay may
+	// only merge into an org-less report. Within the same org the overlay's
+	// base identity must still match — two Team members' reports share the
+	// org id but must not swallow each other's header ingests.
 	const overlayOrg = readMetadataString(metadata, "orgId")?.toLowerCase();
+	const accountId = readMetadataString(metadata, "accountId")?.toLowerCase();
+	const email = readMetadataString(metadata, "email")?.toLowerCase();
+	const projectId = readMetadataString(metadata, "projectId")?.toLowerCase();
 	if (overlayOrg) {
+		const sameOrg: { report: UsageReport; index: number }[] = [];
 		let sawReportOrg = false;
 		for (const candidate of all) {
 			const candidateOrg = readMetadataString((candidate.report.metadata ?? {}) as Record<string, unknown>, "orgId");
 			if (candidateOrg) {
 				sawReportOrg = true;
-				if (candidateOrg.toLowerCase() === overlayOrg) return candidate.index;
+				if (candidateOrg.toLowerCase() === overlayOrg) sameOrg.push(candidate);
 			}
 		}
-		if (sawReportOrg) return -1;
+		if (sawReportOrg) {
+			if (accountId || email || projectId) {
+				for (const candidate of sameOrg) {
+					if (reportMatchesIdentity(candidate.report, accountId, email, projectId)) return candidate.index;
+				}
+				return -1;
+			}
+			return sameOrg.length === 1 ? sameOrg[0]!.index : -1;
+		}
 	}
 	const candidates = overlayOrg
 		? all
@@ -1050,9 +1084,6 @@ function findMatchingReportIndex(reports: UsageReport[], overlay: UsageReport): 
 			);
 	if (candidates.length === 0) return -1;
 	if (candidates.length === 1) return candidates[0]!.index;
-	const accountId = readMetadataString(metadata, "accountId")?.toLowerCase();
-	const email = readMetadataString(metadata, "email")?.toLowerCase();
-	const projectId = readMetadataString(metadata, "projectId")?.toLowerCase();
 	for (const candidate of candidates) {
 		if (reportMatchesIdentity(candidate.report, accountId, email, projectId)) return candidate.index;
 	}
