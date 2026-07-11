@@ -259,6 +259,22 @@ describe("Editor Enter handler sync slash completion", () => {
 		expect(editor.isShowingAutocomplete()).toBe(false);
 	});
 
+	it("closes mid-prompt skill autocomplete on its own once the token stops being skill-shaped", async () => {
+		const editor = createSkillEditor();
+
+		await openMidPromptSkillAutocomplete(editor, "we should ");
+		// "sign" is a fuzzy subsequence of the skill description but neither a
+		// name prefix nor a `skill:` query, and no /sign* path exists — the
+		// popup must dismiss itself after the debounced refresh, without Esc.
+		editor.handleInput("sign");
+		const refreshed = Promise.withResolvers<void>();
+		editor.onAutocompleteUpdate = () => refreshed.resolve();
+		await refreshed.promise;
+
+		expect(editor.getText()).toBe("we should /sign");
+		expect(editor.isShowingAutocomplete()).toBe(false);
+	});
+
 	it("does not apply a stale mid-prompt skill suggestion when the live token stops matching", async () => {
 		const editor = createSkillEditor();
 
@@ -272,7 +288,7 @@ describe("Editor Enter handler sync slash completion", () => {
 		expect(editor.isShowingAutocomplete()).toBe(false);
 	});
 
-	it("accepts a stale mid-prompt skill suggestion when the live token still matches its description", async () => {
+	it("cancels a stale mid-prompt skill suggestion when the live token only matches the description", async () => {
 		const editor = new Editor(defaultEditorTheme);
 		editor.setAutocompleteProvider(
 			new CombinedAutocompleteProvider(
@@ -285,8 +301,33 @@ describe("Editor Enter handler sync slash completion", () => {
 		);
 
 		await openMidPromptSkillAutocomplete(editor, "run a ");
-		// Race the 100 ms debounce: type a query that matches only the skill description.
+		// Race the 100 ms debounce: type a query that matches only the skill
+		// description. The refreshed popup would no longer surface the skill
+		// (mid-prompt matching is gated to namespace/name prefixes), so Tab
+		// must not rewrite the token to `/skill:…`.
 		editor.handleInput("scan");
+		editor.handleInput("\t");
+
+		expect(editor.getText()).toBe("run a /scan");
+		expect(editor.isShowingAutocomplete()).toBe(false);
+	});
+
+	it("accepts a stale mid-prompt skill suggestion when the live token is still a name prefix", async () => {
+		const editor = new Editor(defaultEditorTheme);
+		editor.setAutocompleteProvider(
+			new CombinedAutocompleteProvider(
+				[
+					{ name: "skill:hardening", description: "Security scan" },
+					{ name: "model", description: "Switch model" },
+				],
+				"/tmp",
+			),
+		);
+
+		await openMidPromptSkillAutocomplete(editor, "run a ");
+		// Race the 100 ms debounce: a bare-name prefix would still surface the
+		// skill after refresh, so accepting the stale popup is safe.
+		editor.handleInput("hard");
 		editor.handleInput("\t");
 
 		expect(editor.getText()).toBe("run a /skill:hardening ");

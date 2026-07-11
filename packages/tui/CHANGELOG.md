@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Optimized mid-prompt skill suggestions to ignore irrelevant prose matching descriptions
+- Improved reliability of skill autocomplete when typing during debounced refresh cycles
+
 ## [16.4.1] - 2026-07-10
 
 ### Added
