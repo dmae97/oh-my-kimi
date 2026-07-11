@@ -20,6 +20,7 @@ import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { InternalUrlRouter } from "../internal-urls";
 import { parseInternalUrl } from "../internal-urls/parse";
 import { createLspWritethrough, type FileDiagnosticsResult, type WritethroughCallback, writethroughNoop } from "../lsp";
+import { DeferredDiagnostics } from "../lsp/deferred-diagnostics";
 import { getDiagnosticsLedger } from "../lsp/diagnostics-ledger";
 import { getLanguageFromPath, highlightCode, type Theme } from "../modes/theme/theme";
 import writeDescription from "../prompts/tools/write.md" with { type: "text" };
@@ -323,12 +324,15 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 	}
 
 	readonly #writethrough: WritethroughCallback;
+	readonly #deferredDiagnostics: DeferredDiagnostics | undefined;
 
 	constructor(private readonly session: ToolSession) {
 		const enableLsp = session.enableLsp ?? true;
 		const enableFormat = enableLsp && session.settings.get("lsp.formatOnWrite");
 		const enableDiagnostics = enableLsp && session.settings.get("lsp.diagnosticsOnWrite");
 		const dedup = enableDiagnostics && session.settings.get("lsp.diagnosticsDeduplicate");
+		this.#deferredDiagnostics =
+			enableDiagnostics && session.queueDeferredDiagnostics ? new DeferredDiagnostics(session, dedup) : undefined;
 		this.#writethrough = enableLsp
 			? createLspWritethrough(session.cwd, {
 					enableFormat,
@@ -931,9 +935,18 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				};
 			}
 
-			const diagnostics = await this.#writethrough(absolutePath, cleanContent, signal, undefined, batchRequest);
+			const diagnostics = await this.#writethrough(
+				absolutePath,
+				cleanContent,
+				signal,
+				undefined,
+				batchRequest,
+				dst => this.#deferredDiagnostics?.begin(dst),
+			);
 			invalidateFsScanAfterWrite(absolutePath);
-			this.session.bumpFileMutationVersion?.(absolutePath);
+			if (!this.#deferredDiagnostics || batchRequest?.flush === false) {
+				this.session.bumpFileMutationVersion?.(absolutePath);
+			}
 			const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, cleanContent);
 
 			const header = maybeWriteSnapshotHeader(this.session, absolutePath, cleanContent);
