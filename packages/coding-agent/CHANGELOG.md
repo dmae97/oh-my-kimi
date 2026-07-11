@@ -21,6 +21,7 @@
 
 ### Fixed
 
+- Fixed `tab.fill`/`tab.click` (and every puppeteer Locator action) timing out after 15s on all pages: the stealth patch routes default `Frame.evaluate`/`waitForFunction` through the isolated world, but `waitForSelector`/Locator results were still transferred to the main world, so Locator's enabled-precondition (`handle.frame.waitForFunction(pred, opts, handle)`) and `page.evaluate(fn, handle)` threw a cross-context handle error that Locators retried silently until timeout. `QueryHandler.waitFor` now returns its result in the isolated world, matching the patched default realm; explicit `//!world=main` evaluation still adopts handles via ElementHandle
 - Fixed silent failures in ACP mode when provider errors occurred before streaming assistant text
 - Prevented duplicate error messages in ACP when a provider error was both streamed and final
 - Fixed `glob` reporting the contradictory "No files found matching pattern" next to a "timed out; returning 0 partial matches" notice. A timed-out empty scan now states explicitly that the result is incomplete (not proof of absence) and suggests scoping to a deeper directory, and the TUI renders it as "No matches before timeout (scan incomplete)" instead of a definitive no-files claim.
