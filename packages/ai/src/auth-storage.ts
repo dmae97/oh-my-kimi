@@ -3741,8 +3741,17 @@ export class AuthStorage {
 
 	/**
 	 * Resolves an OAuth credential, trying credentials in priority order.
-	 * Skips blocked credentials and checks usage limits for providers with usage data.
-	 * Falls back to earliest-unblocking credential if all are blocked.
+	 *
+	 * Resolution ladder — a request in hand always beats "no API key":
+	 * 1. strict: unblocked credentials only, usage limits respected, plan
+	 *    filter enforced (when any account is confirmed eligible);
+	 * 2. plan-fitting last resort: same plan filter, but blocked/exhausted
+	 *    accounts are allowed (blocked candidates rank earliest-unblocking
+	 *    first) so the caller gets real usage-limit semantics from the wire
+	 *    instead of a missing key;
+	 * 3. unfiltered last resort: the plan filter matched nothing usable —
+	 *    skip it and try every account once; the server is the final arbiter
+	 *    of model access.
 	 *
 	 * Returns both the API key bytes for outbound requests AND the refreshed
 	 * {@link OAuthCredential} so callers needing identity metadata (account id,
@@ -3892,42 +3901,34 @@ export class AuthStorage {
 			hasPlanRequirement &&
 			candidates.some(candidate => getOpenAICodexPlanEligibility(candidate.usage, planRequirement) === true);
 
-		const fallback = candidates[0];
+		const passes: Array<{ allowBlocked: boolean; enforcePlanRequirement: boolean }> = [
+			{ allowBlocked: false, enforcePlanRequirement },
+			{ allowBlocked: true, enforcePlanRequirement },
+		];
+		if (enforcePlanRequirement) passes.push({ allowBlocked: true, enforcePlanRequirement: false });
 
-		for (const candidate of candidates) {
-			const resolved = await this.#tryOAuthCredential(
-				provider,
-				candidate.selection,
-				providerKey,
-				sessionId,
-				options,
-				{
-					checkUsage,
-					allowBlocked: false,
-					prefetchedUsage: candidate.usage,
-					usagePrechecked: candidate.usageChecked,
-					planRequirement,
-					enforcePlanRequirement,
-					strategy,
-					rankingContext,
-					blockScope,
-				},
-			);
-			if (resolved) return resolved;
-		}
-
-		if (fallback && this.#isCredentialBlocked(provider, providerKey, fallback.selection.index, blockScope)) {
-			return this.#tryOAuthCredential(provider, fallback.selection, providerKey, sessionId, options, {
-				checkUsage,
-				allowBlocked: true,
-				prefetchedUsage: fallback.usage,
-				usagePrechecked: fallback.usageChecked,
-				planRequirement,
-				enforcePlanRequirement,
-				strategy,
-				rankingContext,
-				blockScope,
-			});
+		for (const pass of passes) {
+			for (const candidate of candidates) {
+				const resolved = await this.#tryOAuthCredential(
+					provider,
+					candidate.selection,
+					providerKey,
+					sessionId,
+					options,
+					{
+						checkUsage,
+						allowBlocked: pass.allowBlocked,
+						prefetchedUsage: candidate.usage,
+						usagePrechecked: candidate.usageChecked,
+						planRequirement,
+						enforcePlanRequirement: pass.enforcePlanRequirement,
+						strategy,
+						rankingContext,
+						blockScope,
+					},
+				);
+				if (resolved) return resolved;
+			}
 		}
 
 		return undefined;
