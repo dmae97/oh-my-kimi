@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.3] - 2026-07-11
+
 ### Fixed
 
 - Fixed an issue in the Responses API where empty tool results were incorrectly serialized with a "(see attached image)" placeholder, causing models to look for non-existent attachments.

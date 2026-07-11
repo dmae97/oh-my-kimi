@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "omp-monorepo",
+      "name": "omp",
       "dependencies": {
         "sherpa-onnx": "1.13.2",
         "sherpa-onnx-darwin-arm64": "1.13.3",
@@ -21,7 +21,7 @@
     },
     "packages/agent": {
       "name": "@oh-my-pi/pi-agent-core",
-      "version": "16.4.2",
+      "version": "16.4.3",
       "dependencies": {
         "@oh-my-pi/pi-ai": "catalog:",
         "@oh-my-pi/pi-catalog": "catalog:",
@@ -39,7 +39,7 @@
     },
     "packages/ai": {
       "name": "@oh-my-pi/pi-ai",
-      "version": "16.4.2",
+      "version": "16.4.3",
       "dependencies": {
         "@bufbuild/protobuf": "catalog:",
         "@oh-my-pi/pi-catalog": "catalog:",
@@ -55,7 +55,7 @@
     },
     "packages/catalog": {
       "name": "@oh-my-pi/pi-catalog",
-      "version": "16.4.2",
+      "version": "16.4.3",
       "dependencies": {
         "@bufbuild/protobuf": "catalog:",
         "@oh-my-pi/pi-utils": "catalog:",
@@ -69,7 +69,7 @@
     },
     "packages/coding-agent": {
       "name": "@oh-my-pi/pi-coding-agent",
-      "version": "16.4.2",
+      "version": "16.4.3",
       "bin": {
         "omp": "src/cli.ts",
       },
@@ -138,7 +138,7 @@
     },
     "packages/hashline": {
       "name": "@oh-my-pi/hashline",
-      "version": "16.4.2",
+      "version": "16.4.3",
       "dependencies": {
         "diff": "catalog:",
         "lru-cache": "catalog:",
@@ -149,7 +149,7 @@
     },
     "packages/mnemopi": {
       "name": "@oh-my-pi/pi-mnemopi",
-      "version": "16.4.2",
+      "version": "16.4.3",
       "bin": {
         "mnemopi": "src/cli.ts",
       },
@@ -175,7 +175,7 @@
     },
     "packages/natives": {
       "name": "@oh-my-pi/pi-natives",
-      "version": "16.4.2",
+      "version": "16.4.3",
       "devDependencies": {
         "@napi-rs/cli": "catalog:",
         "@types/bun": "catalog:",
@@ -183,7 +183,7 @@
     },
     "packages/snapcompact": {
       "name": "@oh-my-pi/snapcompact",
-      "version": "16.4.2",
+      "version": "16.4.3",
       "dependencies": {
         "@oh-my-pi/pi-ai": "catalog:",
         "@oh-my-pi/pi-natives": "catalog:",
@@ -196,7 +196,7 @@
     },
     "packages/stats": {
       "name": "@oh-my-pi/omp-stats",
-      "version": "16.4.2",
+      "version": "16.4.3",
       "bin": {
         "omp-stats": "./src/index.ts",
       },
@@ -222,7 +222,7 @@
     },
     "packages/swarm-extension": {
       "name": "@oh-my-pi/swarm-extension",
-      "version": "16.4.2",
+      "version": "16.4.3",
       "bin": {
         "omp-swarm": "src/cli.ts",
       },
@@ -248,7 +248,7 @@
     },
     "packages/tui": {
       "name": "@oh-my-pi/pi-tui",
-      "version": "16.4.2",
+      "version": "16.4.3",
       "dependencies": {
         "@oh-my-pi/pi-natives": "catalog:",
         "@oh-my-pi/pi-utils": "catalog:",
@@ -289,7 +289,7 @@
     },
     "packages/utils": {
       "name": "@oh-my-pi/pi-utils",
-      "version": "16.4.2",
+      "version": "16.4.3",
       "dependencies": {
         "@oh-my-pi/pi-natives": "catalog:",
         "handlebars": "catalog:",
@@ -302,7 +302,7 @@
     },
     "packages/wire": {
       "name": "@oh-my-pi/pi-wire",
-      "version": "16.4.2",
+      "version": "16.4.3",
       "devDependencies": {
         "@types/bun": "catalog:",
       },
@@ -342,18 +342,18 @@
     "@huggingface/transformers": "^4.2.0",
     "@mozilla/readability": "^0.6.0",
     "@napi-rs/cli": "3.7.0",
-    "@oh-my-pi/hashline": "16.4.2",
-    "@oh-my-pi/omp-stats": "16.4.2",
-    "@oh-my-pi/pi-agent-core": "16.4.2",
-    "@oh-my-pi/pi-ai": "16.4.2",
-    "@oh-my-pi/pi-catalog": "16.4.2",
-    "@oh-my-pi/pi-coding-agent": "16.4.2",
-    "@oh-my-pi/pi-mnemopi": "16.4.2",
-    "@oh-my-pi/pi-natives": "16.4.2",
-    "@oh-my-pi/pi-tui": "16.4.2",
-    "@oh-my-pi/pi-utils": "16.4.2",
-    "@oh-my-pi/pi-wire": "16.4.2",
-    "@oh-my-pi/snapcompact": "16.4.2",
+    "@oh-my-pi/hashline": "16.4.3",
+    "@oh-my-pi/omp-stats": "16.4.3",
+    "@oh-my-pi/pi-agent-core": "16.4.3",
+    "@oh-my-pi/pi-ai": "16.4.3",
+    "@oh-my-pi/pi-catalog": "16.4.3",
+    "@oh-my-pi/pi-coding-agent": "16.4.3",
+    "@oh-my-pi/pi-mnemopi": "16.4.3",
+    "@oh-my-pi/pi-natives": "16.4.3",
+    "@oh-my-pi/pi-tui": "16.4.3",
+    "@oh-my-pi/pi-utils": "16.4.3",
+    "@oh-my-pi/pi-wire": "16.4.3",
+    "@oh-my-pi/snapcompact": "16.4.3",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/context-async-hooks": "^2.7.1",
     "@opentelemetry/exporter-trace-otlp-proto": "^0.218.0",

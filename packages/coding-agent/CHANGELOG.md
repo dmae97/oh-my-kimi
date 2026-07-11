@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.3] - 2026-07-11
+
 ### Added
 
 - Added /vibe mode, allowing the model to act as a director driving persistent background worker sessions (fast and good tiers) with dedicated session tools (vibe_spawn, vibe_send, vibe_wait, vibe_kill, vibe_list) and a live TUI "TV wall" showing active worker activity, tool traces, and streamed output.

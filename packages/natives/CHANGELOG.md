@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.3] - 2026-07-11
+
 ### Fixed
 
 - Optimized non-recursive glob patterns (e.g., `dir/*.json`) to prevent traversing entire subtrees, significantly improving performance and preventing timeouts when searching large directories.

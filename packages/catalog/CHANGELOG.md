@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.3] - 2026-07-11
+
 ### Fixed
 
 - Fixed parsing of SAP AI Core Claude model IDs in version-first format (e.g., anthropic--claude-4.8-opus), restoring adaptive thinking metadata and capability gates.
