@@ -7,14 +7,16 @@ import { compileCodingAgent } from "./compile-binary";
 const packageDir = path.join(import.meta.dir, "..");
 const repoRoot = path.join(packageDir, "..", "..");
 
-interface CrossBuild {
+/** Binary cross-compilation settings selected by `CROSS_TARGET`. */
+export interface CrossBuild {
 	readonly id: string;
 	readonly platform: string;
 	readonly arch: string;
 	readonly target: Bun.Build.CompileTarget;
 }
 
-function resolveCrossBuild(value: string | undefined): CrossBuild | null {
+/** Resolves a CROSS_TARGET value to the Bun compile target used by local binary builds. */
+export function resolveCrossBuild(value: string | undefined): CrossBuild | null {
 	switch (value) {
 		case undefined:
 		case "":
@@ -29,15 +31,11 @@ function resolveCrossBuild(value: string | undefined): CrossBuild | null {
 			return { id: value, platform: "linux", arch: "x64", target: "bun-linux-x64-baseline" };
 		case "win32-x64":
 		case "windows-x64":
-			return { id: value, platform: "win32", arch: "x64", target: "bun-windows-x64-modern" };
+			return { id: value, platform: "win32", arch: "x64", target: "bun-windows-x64-baseline" };
 		default:
 			throw new Error(`Unsupported CROSS_TARGET: ${value}`);
 	}
 }
-
-const crossBuild = resolveCrossBuild(Bun.env.CROSS_TARGET);
-const outName = crossBuild ? `omp-${crossBuild.id}` : "omp";
-const outputPath = path.join(packageDir, "dist", outName);
 
 // Transformers.js is an optional, native-heavy dependency that is never bundled
 // into the binary; the tiny-model worker `bun install`s it into a runtime cache
@@ -55,7 +53,7 @@ if (
 }
 const transformersVersion = transformersManifest.version;
 
-function shouldAdhocSignDarwinBinary(): boolean {
+function shouldAdhocSignDarwinBinary(crossBuild: CrossBuild | null): boolean {
 	return process.platform === "darwin" && !crossBuild;
 }
 
@@ -77,6 +75,9 @@ async function runCommand(
 }
 
 async function main(): Promise<void> {
+	const crossBuild = resolveCrossBuild(Bun.env.CROSS_TARGET);
+	const outName = crossBuild ? `omp-${crossBuild.id}` : "omp";
+	const outputPath = path.join(packageDir, "dist", outName);
 	// Generate inside the try so the finally always restores the empty checked-in
 	// placeholders (stats client archive, docs index) even on failure.
 	try {
@@ -99,11 +100,10 @@ async function main(): Promise<void> {
 				transformersVersion,
 				target: crossBuild?.target,
 				external: ["fastembed", "onnxruntime-node"],
-				skipBuiltinCodesign: shouldAdhocSignDarwinBinary(),
+				skipBuiltinCodesign: shouldAdhocSignDarwinBinary(crossBuild),
 			});
 
-			// Bun 1.3.12 emits a truncated Mach-O signature on darwin builds.
-			if (shouldAdhocSignDarwinBinary()) {
+			if (shouldAdhocSignDarwinBinary(crossBuild)) {
 				await runCommand(["codesign", "--force", "--sign", "-", outputPath]);
 			}
 		} finally {
@@ -115,4 +115,4 @@ async function main(): Promise<void> {
 	}
 }
 
-await main();
+if (import.meta.main) await main();
