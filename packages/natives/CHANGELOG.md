@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed non-recursive glob patterns traversing entire subtrees they could never match into: `dir/*.json` walked everything under `dir` (unbounded depth) because only the match filter — not the walk — knew the pattern was shallow. The walker is now depth-bounded by the pattern's segment count when it contains no `**` or brace alternation (wildcards never cross `/`), so narrow direct-child globs over huge directories (`~/.cache/*`-style) return in milliseconds instead of hitting the 5s timeout with zero partial matches.
+
 ## [16.3.13] - 2026-07-09
 
 ### Fixed

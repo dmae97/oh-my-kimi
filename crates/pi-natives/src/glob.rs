@@ -172,6 +172,9 @@ fn run_glob(
 	ct: task::CancelToken,
 ) -> Result<GlobResult> {
 	let walk_glob_pattern = glob_util::build_glob_pattern(&config.pattern, config.recursive);
+	// Non-recursive patterns bound the walk: `dir/*` must not traverse the
+	// entire subtree under `dir` to match only direct children.
+	let walk_depth_limit = glob_util::walk_depth_bound(&walk_glob_pattern);
 	let walk_glob = pi_walker::CompiledWalkGlob::new([walk_glob_pattern])
 		.map_err(|err| Error::from_reason(format!("Invalid glob pattern: {err}")))?;
 	if config.max_results == 0 {
@@ -192,7 +195,7 @@ fn run_glob(
 		.detail(scan_detail)
 		.order(pi_walker::WalkOrder::Path)
 		.emit_root(false)
-		.depth(1, usize::MAX)
+		.depth(1, walk_depth_limit)
 		.directory_errors(pi_walker::DirectoryErrorMode::SkipSkippable)
 		.cache(config.cache)
 		.empty_recheck(pi_walker::EmptyRecheck::Configured)
@@ -377,5 +380,52 @@ mod tests {
 				.any(|entry| entry.path.starts_with("ignored/")),
 			"gitignored directory should be pruned before matching, got {paths:?}"
 		);
+	}
+
+	#[test]
+	fn run_glob_depth_bounded_patterns_still_match_at_their_exact_depth() {
+		// The walk for non-`**` patterns is depth-bounded (see walk_depth_bound);
+		// this defends the boundary: matches AT the bound depth must survive,
+		// deeper entries must not appear, and the mtime-ranked mode (the glob
+		// tool default) must behave identically to the streaming mode.
+		let root = TempDirGuard::new();
+		fs::write(root.path().join("top.txt"), "top").expect("write top file");
+		fs::create_dir_all(root.path().join("deep/nested")).expect("create nested dirs");
+		fs::write(root.path().join("deep/child.txt"), "mid").expect("write mid file");
+		fs::write(root.path().join("deep/nested/leaf.txt"), "leaf").expect("write leaf file");
+
+		let run = |pattern: &str| {
+			super::run_glob(
+				super::GlobConfig {
+					root:                  root.path().to_path_buf(),
+					pattern:               pattern.to_string(),
+					recursive:             false,
+					include_hidden:        true,
+					file_type_filter:      None,
+					max_results:           100,
+					use_gitignore:         true,
+					mentions_node_modules: false,
+					sort_by_mtime:         true,
+					cache:                 false,
+				},
+				None,
+				crate::task::CancelToken::default(),
+			)
+			.expect("glob succeeds")
+		};
+
+		let direct = run("*.txt");
+		assert_eq!(match_paths(&direct), ["top.txt"]);
+
+		let two_deep = run("deep/*.txt");
+		assert_eq!(match_paths(&two_deep), ["deep/child.txt"]);
+
+		let wildcard_dir = run("*/nested/leaf.txt");
+		assert_eq!(match_paths(&wildcard_dir), ["deep/nested/leaf.txt"]);
+
+		let recursive = run("**/*.txt");
+		let mut recursive_paths = match_paths(&recursive);
+		recursive_paths.sort_unstable();
+		assert_eq!(recursive_paths, ["deep/child.txt", "deep/nested/leaf.txt", "top.txt"]);
 	}
 }
