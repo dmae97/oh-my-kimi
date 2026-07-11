@@ -142,6 +142,18 @@ describe("extension flags vs initial message", () => {
 		expect(extensionArgs.messages).toEqual([]);
 	});
 
+	it("resolves a continued session id before a later extension flag is known", () => {
+		const sessionId = "019ea530-ffff-7000-8000-000000000000";
+		const rawArgs = ["--continue", sessionId, "--spawn-peer", "reviewer"];
+		const startupArgs = parseArgs(rawArgs);
+
+		normalizeContinueSessionArgs(startupArgs, rawArgs);
+
+		expect(startupArgs.continue).toBe(false);
+		expect(startupArgs.resume).toBe(sessionId);
+		expect(startupArgs.messages).toEqual(["reviewer"]);
+	});
+
 	it("documents the pre-fix leak: without the flag map the value becomes the first prompt", () => {
 		// This is exactly the startup parse: extensions have not loaded, so the
 		// flag map is absent. `--spawn-peer` is dropped (it starts with `-`) but
