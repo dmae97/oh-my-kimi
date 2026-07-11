@@ -18,12 +18,11 @@ export function createUsageRowBlock(usage: Usage, durationMs?: number, ttftMs?: 
 		parts.push(`${theme.icon.time} ${(ttftMs / 1000).toFixed(1)}s`);
 	}
 	if (durationMs && durationMs > MIN_DURATION_MS && usage.output > 0) {
-		// Throughput excludes TTFT — generation time is duration minus time-to-first-token.
-		const genMs = durationMs - (ttftMs ?? 0);
-		if (genMs > MIN_DURATION_MS) {
-			const tokPerSec = (usage.output / genMs) * 1000;
-			parts.push(`${theme.icon.throughput} ${tokPerSec.toFixed(1)}/s`);
-		}
+		// TPS over the total request duration — the post-TTFT window undercounts
+		// generation time when reasoning tokens are hidden before the first
+		// visible byte, inflating the rate.
+		const tokPerSec = (usage.output / durationMs) * 1000;
+		parts.push(`${theme.icon.throughput} ${tokPerSec.toFixed(1)}/s`);
 	}
 	const block = new Container();
 	block.addChild(new Spacer(1));
