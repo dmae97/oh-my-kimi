@@ -591,7 +591,8 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 
 		const expanded = expandContentTokens(replacementContent, entry);
 		const originalText = await Bun.file(absolutePath).text();
-		const newContent = spliceConflict(originalText, entry, expanded);
+		const splice = spliceConflict(originalText, entry, expanded);
+		const newContent = splice.text;
 
 		await writethroughNoop(absolutePath, newContent, signal);
 		invalidateFsScanAfterWrite(absolutePath);
@@ -625,6 +626,10 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		let resultText = header ? `${header}\n${summary}` : summary;
 		if (stripped) {
 			resultText += `\nNote: auto-stripped hashline display prefixes from content before writing.`;
+		}
+		const echoTrimmed = splice.trimmedLeading + splice.trimmedTrailing;
+		if (echoTrimmed > 0) {
+			resultText += `\nNote: dropped ${echoTrimmed} content line(s) that duplicated the code adjacent to the conflict region — writes replace only the marker block; surrounding lines stay in place.`;
 		}
 
 		return {
@@ -690,6 +695,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		const succeededFiles: { displayPath: string; count: number; header?: string }[] = [];
 		const failedFiles: { displayPath: string; count: number; error: string }[] = [];
 		let totalResolvedIds = 0;
+		let totalEchoTrimmed = 0;
 
 		for (const [absolutePath, fileEntries] of byFile) {
 			const sample = fileEntries[0]!;
@@ -721,7 +727,9 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			for (const entry of fileEntries) {
 				try {
 					const expanded = expandContentTokens(replacementContent, entry);
-					text = spliceConflict(text, entry, expanded);
+					const splice = spliceConflict(text, entry, expanded);
+					text = splice.text;
+					totalEchoTrimmed += splice.trimmedLeading + splice.trimmedTrailing;
 					resolvedEntries.push(entry);
 				} catch (error) {
 					// A locate-miss for a region an earlier entry already spliced
@@ -765,6 +773,11 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			for (const file of succeededFiles) {
 				summaryLines.push(`  ${file.displayPath}: ${file.count} ${conflictWord(file.count)}`);
 			}
+		}
+		if (totalEchoTrimmed > 0) {
+			summaryLines.push(
+				`Note: dropped ${totalEchoTrimmed} content line(s) that duplicated code adjacent to conflict regions — writes replace only the marker block; surrounding lines stay in place.`,
+			);
 		}
 		if (failedFiles.length > 0) {
 			summaryLines.push(

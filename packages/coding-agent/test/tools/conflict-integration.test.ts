@@ -332,6 +332,40 @@ describe("write resolves conflicts via conflict://N", () => {
 		expect(session.conflictHistory?.get(1)).toBeUndefined();
 	});
 
+	it("drops trailing lines that echo the context below the region and notes the repair", async () => {
+		const filePath = path.join(tempDir, "echo.ts");
+		const content = [
+			"function f() {",
+			"<<<<<<< HEAD",
+			"\tours();",
+			"=======",
+			"\ttheirs();",
+			">>>>>>> feature/x",
+			"\tdone();",
+			"}",
+			"",
+		].join("\n");
+		await Bun.write(filePath, content);
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+		const write = await getTool(session, "write");
+
+		await read.execute("read-echo", { path: "echo.ts" });
+		// The classic failure: the model pastes the whole resolved function,
+		// including the two lines that live below the marker block.
+		const result = await write.execute("write-echo", {
+			path: "conflict://1",
+			content: "\tours();\n\ttheirs();\n\tdone();\n}\n",
+		});
+
+		const text = getText(result);
+		expect(text).toContain("Resolved conflict #1");
+		expect(text).toContain("dropped 2 content line(s)");
+		expect(await Bun.file(filePath).text()).toBe(
+			["function f() {", "\tours();", "\ttheirs();", "\tdone();", "}", ""].join("\n"),
+		);
+	});
+
 	it("auto-recovers a `<file>:conflict://N` path and resolves the conflict", async () => {
 		const filePath = path.join(tempDir, "prefix.ts");
 		await Bun.write(filePath, TWO_WAY);
