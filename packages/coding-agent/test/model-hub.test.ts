@@ -426,6 +426,30 @@ describe("ModelHub", () => {
 			expect(normalize(hub.render(220))).toContain("openrouter ·");
 		});
 
+		test("providers with matches float to the top of the sidebar while searching", () => {
+			const noMatch = makeModel("aaa-provider", "different-model");
+			const withMatch = makeModel("zzz-provider", "target-model");
+			const { hub } = createHub({ models: [noMatch, withMatch] });
+			installTestTheme();
+
+			// Sidebar cell = the first `│`-delimited column of each split row;
+			// body rows may also mention provider names, so scope the check.
+			const sidebarIndexOf = (provider: string): number =>
+				hub
+					.render(220)
+					.map(line => stripVTControlCharacters(line).split("│")[1] ?? "")
+					.findIndex(cell => cell.includes(provider));
+
+			expect(sidebarIndexOf("aaa-provider")).toBeLessThan(sidebarIndexOf("zzz-provider"));
+
+			for (const ch of "target") hub.handleInput(ch);
+			expect(sidebarIndexOf("zzz-provider")).toBeLessThan(sidebarIndexOf("aaa-provider"));
+
+			// Clearing the query restores the alphabetical order.
+			hub.handleInput("\x1b");
+			expect(sidebarIndexOf("aaa-provider")).toBeLessThan(sidebarIndexOf("zzz-provider"));
+		});
+
 		test("Escape clears an active query before closing the hub", () => {
 			const model = makeModel("test", "escape-model");
 			const { hub, onCancel } = createHub({ models: [model] });

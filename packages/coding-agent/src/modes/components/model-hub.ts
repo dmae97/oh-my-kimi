@@ -163,6 +163,11 @@ export class ModelHubComponent implements Component {
 	#configError: string | undefined;
 
 	#entries: SidebarEntry[] = [];
+	// Sidebar sections from the last registry sync; #composeEntries assembles
+	// #entries from these (reordered while searching).
+	#fixedEntries: SidebarEntry[] = [];
+	#unlockedProviderEntries: SidebarEntry[] = [];
+	#lockedProviderEntries: SidebarEntry[] = [];
 	#activeEntryId = "all";
 	#sidebarScroll = 0;
 	#sidebarHover: number | null = null;
@@ -429,7 +434,7 @@ export class ModelHubComponent implements Component {
 			if (assignment && !assignment.autoSelected) assignedCount++;
 		}
 
-		const entries: SidebarEntry[] = [
+		const fixed: SidebarEntry[] = [
 			{
 				id: "recent",
 				kind: "recent",
@@ -438,29 +443,49 @@ export class ModelHubComponent implements Component {
 			},
 		];
 		if (this.#mode === "roles") {
-			entries.push({
+			fixed.push({
 				id: "roles",
 				kind: "roles",
 				label: "Roles",
 				annotation: `${assignedCount}/${visibleRoles.length}`,
 			});
 		}
-		entries.push({ id: "all", kind: "all", label: "All models", annotation: String(availableModels.length) });
+		fixed.push({ id: "all", kind: "all", label: "All models", annotation: String(availableModels.length) });
 
-		const sortedUnlocked = [...unlocked].sort((a, b) => a.localeCompare(b));
-		if (sortedUnlocked.length > 0) {
-			entries.push({ id: "sep:providers", kind: "separator", label: "" });
-			for (const provider of sortedUnlocked) {
-				entries.push(providerEntry(provider, false));
-			}
+		this.#fixedEntries = fixed;
+		this.#unlockedProviderEntries = [...unlocked]
+			.sort((a, b) => a.localeCompare(b))
+			.map(provider => providerEntry(provider, false));
+		this.#lockedProviderEntries = [...locked]
+			.sort((a, b) => a.localeCompare(b))
+			.map(provider => providerEntry(provider, true));
+		this.#composeEntries();
+	}
+
+	/**
+	 * Assemble `#entries` from the stored sections. While a search is active,
+	 * providers with matches float to the top of the provider section (each
+	 * group stays alphabetical) so the hop order, mouse hit-testing, and the
+	 * paint all agree.
+	 */
+	#composeEntries(): void {
+		const counts = this.#searchCounts;
+		let providers = this.#unlockedProviderEntries;
+		if (counts) {
+			providers = [...providers].sort((a, b) => {
+				const aMatched = (counts.get(a.providerId ?? "") ?? 0) > 0;
+				const bMatched = (counts.get(b.providerId ?? "") ?? 0) > 0;
+				if (aMatched !== bMatched) return aMatched ? -1 : 1;
+				return a.label.localeCompare(b.label);
+			});
 		}
 
-		const sortedLocked = [...locked].sort((a, b) => a.localeCompare(b));
-		if (sortedLocked.length > 0) {
-			entries.push({ id: "sep:locked", kind: "separator", label: "" });
-			for (const provider of sortedLocked) {
-				entries.push(providerEntry(provider, true));
-			}
+		const entries: SidebarEntry[] = [...this.#fixedEntries];
+		if (providers.length > 0) {
+			entries.push({ id: "sep:providers", kind: "separator", label: "" }, ...providers);
+		}
+		if (this.#lockedProviderEntries.length > 0) {
+			entries.push({ id: "sep:locked", kind: "separator", label: "" }, ...this.#lockedProviderEntries);
 		}
 
 		this.#entries = entries;
@@ -533,6 +558,7 @@ export class ModelHubComponent implements Component {
 	#onQueryChanged(query: string): void {
 		if (!query.trim()) {
 			this.#searchCounts = null;
+			this.#composeEntries();
 			return;
 		}
 		const matches = fuzzyFilter(this.#availableItems, query, ({ provider, id }) => `${provider}/${id}`);
@@ -541,6 +567,7 @@ export class ModelHubComponent implements Component {
 			counts.set(item.provider, (counts.get(item.provider) ?? 0) + 1);
 		}
 		this.#searchCounts = counts;
+		this.#composeEntries();
 		const entry = this.#activeEntry();
 		if (
 			this.#assigningRole === null &&

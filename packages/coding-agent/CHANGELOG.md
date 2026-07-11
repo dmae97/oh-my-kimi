@@ -15,6 +15,7 @@
 
 ### Changed
 
+- Updated Model Hub sidebar to float providers with search matches to the top while searching
 - Added spatial navigation between the Model Hub sidebar and model list using left/right arrow keys
 - Removed "Chat about this" option from question dialogs
 - Redesigned ask dialogs with fixed height, removed explicit Next button, and simplified headers
