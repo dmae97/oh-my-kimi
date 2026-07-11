@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `omp acp` now prints a short hint on stderr when launched from an interactive terminal (stdin is a TTY): the command speaks JSON-RPC over stdout and is meant to be spawned by an ACP client such as Zed, so running it by hand previously showed nothing at all
+
 ### Changed
 
 - Refined agent delegation logic to prioritize top-level planning and scoping by the primary agent
@@ -15,7 +19,10 @@
 
 ### Fixed
 
+- Fixed silent failures in ACP mode when provider errors occurred before streaming assistant text
+- Prevented duplicate error messages in ACP when a provider error was both streamed and final
 - Fixed `glob` reporting the contradictory "No files found matching pattern" next to a "timed out; returning 0 partial matches" notice. A timed-out empty scan now states explicitly that the result is incomplete (not proof of absence) and suggests scoping to a deeper directory, and the TUI renders it as "No matches before timeout (scan incomplete)" instead of a definitive no-files claim.
+- Fixed ACP turns ending silently when the provider request failed before streaming any assistant output (e.g. GitHub Copilot's intermittent `HTTP 400 model_not_supported` after retries): such failures emit only `agent_end` with the error on the assistant message, which never mapped to a session update. The error message is now delivered to the client as an `agent_message_chunk`, without duplicating errors that already streamed
 - Fixed `read` adding invisible context padding to raw range selectors: `raw:31-31` returned lines 30–34 (1 leading + 3 trailing context lines) with nothing to distinguish the padding, corrupting verbatim-extraction workflows. Raw ranges now return exactly the requested lines across all three range paths (plain files, in-memory/bridge reads, artifacts); numbered reads keep the self-describing padding.
 - Fixed browser screenshots capturing the wrong tab or hanging until the op timeout when multiple tabs share one Chromium (sibling headless tabs, `cdp_url`/app attach): CDP reads the *active* target's compositor surface, so a backgrounded page could stall waiting for a frame or return a sibling's pixels. The worker now activates the page (`bringToFront`) before every capture, best-effort.
 - Fixed cmux `tab.screenshot({ selector })` silently returning a full-viewport capture that models consumed as an element crop. The cmux daemon has no element-clip or full-page capture; the tool still scrolls the selector into view but now labels the image as full-viewport (same for `fullPage`) instead of mislabeling it.
