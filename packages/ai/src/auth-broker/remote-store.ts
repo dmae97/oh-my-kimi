@@ -1018,9 +1018,7 @@ function matchUsageReport(reports: UsageReport[], provider: Provider, credential
 		// same-org subset — a lone sibling report is NOT ours. An org-only
 		// credential (no base identifiers) takes the lone same-org report and
 		// treats several as ambiguous. None in our org → "no usage data"
-		// rather than mis-attributing another org's pool. When NO report
-		// carries an org (legacy broker aggregate), fall through with all
-		// candidates.
+		// rather than mis-attributing another org's pool.
 		if (sawReportOrg) {
 			if (accountId || email || projectId) {
 				for (const report of sameOrg) {
@@ -1030,10 +1028,15 @@ function matchUsageReport(reports: UsageReport[], provider: Provider, credential
 			}
 			return sameOrg.length === 1 ? sameOrg[0]! : null;
 		}
+		// No surviving report carries an org at all: presence mismatch is a
+		// non-match too — the sole org-less report may be a legacy sibling
+		// row's pool, and handing it to a scoped credential would rank/block
+		// on the wrong quota. "No usage data" degrades gracefully instead.
+		return null;
 	}
-	const candidates = orgId
-		? all
-		: all.filter(report => !readMetadataString((report.metadata ?? {}) as Record<string, unknown>, "orgId"));
+	const candidates = all.filter(
+		report => !readMetadataString((report.metadata ?? {}) as Record<string, unknown>, "orgId"),
+	);
 	if (candidates.length === 0) return null;
 	if (candidates.length === 1) return candidates[0];
 	for (const report of candidates) {
@@ -1076,12 +1079,13 @@ function findMatchingReportIndex(reports: UsageReport[], overlay: UsageReport): 
 			}
 			return sameOrg.length === 1 ? sameOrg[0]!.index : -1;
 		}
+		// Presence mismatch — mirror matchUsageReport: an org-scoped overlay
+		// never merges into an org-less report; it becomes its own report row.
+		return -1;
 	}
-	const candidates = overlayOrg
-		? all
-		: all.filter(
-				candidate => !readMetadataString((candidate.report.metadata ?? {}) as Record<string, unknown>, "orgId"),
-			);
+	const candidates = all.filter(
+		candidate => !readMetadataString((candidate.report.metadata ?? {}) as Record<string, unknown>, "orgId"),
+	);
 	if (candidates.length === 0) return -1;
 	if (candidates.length === 1) return candidates[0]!.index;
 	for (const candidate of candidates) {
