@@ -3,7 +3,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { logger, postmortem, Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
 import { JsRuntime, type RuntimeHooks } from "../../../eval/js/shared/runtime";
-import type { JsDisplayOutput } from "../../../eval/js/shared/types";
 import { callSessionTool } from "../../../eval/js/tool-bridge";
 import { resizeImage } from "../../../utils/image-resize";
 import type { ToolSession } from "../../index";
@@ -14,6 +13,7 @@ import { type AriaSnapshotOptions, buildAriaSnapshotScript } from "../aria/aria-
 import { DEFAULT_VIEWPORT } from "../launch";
 import { extractReadableFromHtml, type ReadableFormat } from "../readable";
 import { bindBrowserRunFacade, waitForBrowserRun } from "../run-cancellation";
+import { cloneSafe, RunOutput } from "../run-output";
 import type { Observation, ReadyInfo, RunResultOk, ScreenshotResult, SessionSnapshot } from "../tab-protocol";
 import {
 	type CmuxEvalResult,
@@ -44,7 +44,7 @@ interface ObserveOptions {
 
 interface RunContext {
 	session: SessionSnapshot;
-	displays: RunResultOk["displays"];
+	output: RunOutput;
 	screenshots: ScreenshotResult[];
 	signal: AbortSignal;
 	timeoutMs: number;
@@ -548,8 +548,8 @@ export class CmuxTab {
 			if (captureNotes.length > 0) {
 				lines.push(`[cmux surface: ${captureNotes.join("; ")}]`);
 			}
-			context.displays.push({ type: "text", text: lines.join("\n") });
-			context.displays.push({ type: "image", data: resized.data, mimeType: resized.mimeType });
+			context.output.push({ type: "text", text: lines.join("\n") });
+			context.output.push({ type: "image", data: resized.data, mimeType: resized.mimeType });
 		}
 		return info;
 	}
@@ -1122,6 +1122,10 @@ class CmuxElementHandle {
 		await this.#tab.fill(this.#selector, value);
 	}
 
+	async press(key: string): Promise<void> {
+		await this.#tab.press(key, { selector: this.#selector });
+	}
+
 	async focus(): Promise<void> {
 		await this.#tab.focus(this.#selector);
 	}
@@ -1309,10 +1313,10 @@ export async function runCmuxCode(tab: CmuxTab, opts: RunCmuxCodeOptions): Promi
 	const signal = AbortSignal.any(
 		opts.signal ? [timeoutSignal, opts.signal, runAc.signal] : [timeoutSignal, runAc.signal],
 	);
-	const displays: RunResultOk["displays"] = [];
+	const output = new RunOutput();
 	const screenshots: ScreenshotResult[] = [];
 	const runId = crypto.randomUUID();
-	tab.setRunContext({ session: opts.snapshot, displays, screenshots, signal, timeoutMs: opts.timeoutMs });
+	tab.setRunContext({ session: opts.snapshot, output, screenshots, signal, timeoutMs: opts.timeoutMs });
 
 	const { promise: cancelRejection, reject } = Promise.withResolvers<never>();
 	// If the synchronous setup below throws (same-realm ownership conflict)
@@ -1354,11 +1358,12 @@ export async function runCmuxCode(tab: CmuxTab, opts: RunCmuxCodeOptions): Promi
 		const hooks: RuntimeHooks = {
 			onText: chunk => {
 				throwIfAborted(signal);
+				output.pushText(chunk);
 				logger.debug(chunk.replace(/\n$/, ""));
 			},
-			onDisplay: output => {
+			onDisplay: displayed => {
 				throwIfAborted(signal);
-				pushDisplay(displays, output);
+				output.pushDisplay(displayed);
 			},
 			callTool: (name, args) => {
 				throwIfAborted(signal);
@@ -1371,44 +1376,12 @@ export async function runCmuxCode(tab: CmuxTab, opts: RunCmuxCodeOptions): Promi
 			runtime.run(opts.code, `cmux-run-${runId}.js`, hooks, { runId, cwd: opts.snapshot.cwd }),
 			cancelRejection,
 		]);
-		return { displays, returnValue: cloneSafe(returnValue), screenshots };
+		return { displays: output.finish(), returnValue: cloneSafe(returnValue), screenshots };
 	} finally {
 		signal.removeEventListener("abort", onAbort);
 		runAc.abort(postmortem.markExpectedCleanupError(new ToolAbortError("Browser run ended")));
 		tab.clearRunContext();
 	}
-}
-
-function pushDisplay(displays: RunResultOk["displays"], output: JsDisplayOutput): void {
-	if (output.type === "image") {
-		displays.push({ type: "image", data: output.data, mimeType: output.mimeType });
-		return;
-	}
-	if (output.type === "json") {
-		displays.push({ type: "text", text: safeJsonStringify(output.data) });
-		return;
-	}
-	displays.push({ type: "text", text: safeJsonStringify(output.event) });
-}
-
-function safeJsonStringify(value: unknown): string {
-	try {
-		return JSON.stringify(value, null, 2);
-	} catch {
-		return String(value);
-	}
-}
-
-function cloneSafe(value: unknown): unknown {
-	if (value === undefined) return undefined;
-	try {
-		structuredClone(value);
-		return value;
-	} catch {}
-	try {
-		return JSON.parse(JSON.stringify(value)) as unknown;
-	} catch {}
-	return String(value);
 }
 
 function numberFrom(value: unknown, fallback: number): number {
