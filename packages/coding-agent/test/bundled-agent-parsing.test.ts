@@ -4,6 +4,7 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { resolveAgentModelPatterns, resolveModelOverride } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getBundledAgent } from "@oh-my-pi/pi-coding-agent/task/agents";
+import { AUTO_THINKING } from "@oh-my-pi/pi-coding-agent/thinking";
 
 describe("bundled agent parsing", () => {
 	it("lets reviewer inherit thinking effort from its model role", () => {
@@ -15,12 +16,19 @@ describe("bundled agent parsing", () => {
 		expect(reviewer?.thinkingLevel).toBeUndefined();
 	});
 
+	it("defaults the task agent to the auto thinking selector", () => {
+		const task = getBundledAgent("task");
+
+		expect(task).toBeDefined();
+		expect(task?.model).toEqual(["pi/task"]);
+		expect(task?.thinkingLevel).toBe(AUTO_THINKING);
+	});
+
 	// Issue #4761: with `modelRoles.slow: ...:xhigh`, the role's explicit effort
 	// suffix must survive agent-pattern expansion and model resolution for the
-	// bundled agents routed at that role. The executor picks
-	// `agent.thinkingLevel ?? resolvedThinkingLevel` (task/executor.ts), so a
-	// bundled frontmatter pin would mask the suffix — reviewer declares none
-	// (asserted above) and the resolved level below is what the subagent runs at.
+	// bundled agents routed at that role. The executor prefers an explicit
+	// resolved suffix over the agent-definition default (task/executor.ts), so
+	// the resolved level below is what the subagent runs at.
 	it("resolves the configured slow-role effort suffix for reviewer", () => {
 		const gpt55 = buildModel({
 			id: "gpt-5.5",

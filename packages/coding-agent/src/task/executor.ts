@@ -5,7 +5,7 @@
  */
 
 import path from "node:path";
-import type { AgentEvent, AgentIdentity, AgentTelemetryConfig, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type { AgentEvent, AgentIdentity, AgentTelemetryConfig } from "@oh-my-pi/pi-agent-core";
 import { recordHandoff, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model, ServiceTierByFamily, Usage } from "@oh-my-pi/pi-ai";
 import { logger, popLoopPhase, prompt, pushLoopPhase, untilAborted } from "@oh-my-pi/pi-utils";
@@ -42,6 +42,7 @@ import type { AuthStorage } from "../session/auth-storage";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../session/messages";
 import { SessionManager } from "../session/session-manager";
 import { truncateTail } from "../session/streaming-output";
+import type { ConfiguredThinkingLevel } from "../thinking";
 import type { ContextFileEntry, ToolSession } from "../tools";
 import { resolveEvalBackends } from "../tools/eval-backends";
 import { isIrcEnabled } from "../tools/irc";
@@ -306,7 +307,7 @@ export interface ExecutorOptions {
 	 * if the resolved subagent model has no working credentials. See #985.
 	 */
 	parentActiveModelPattern?: string;
-	thinkingLevel?: ThinkingLevel;
+	thinkingLevel?: ConfiguredThinkingLevel;
 	outputSchema?: unknown;
 	/**
 	 * Caller supplied a schema that supersedes the agent's native output prompt.
@@ -2252,7 +2253,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					? formatModelSelectorValue(formatModelStringWithRouting(model), resolvedThinkingLevel)
 					: formatModelStringWithRouting(model);
 			}
-			const effectiveThinkingLevel = thinkingLevel ?? resolvedThinkingLevel;
+			// Precedence: explicit `:level` suffix on the resolved model pattern >
+			// agent-definition default (e.g. task's `auto`) > pattern-derived level.
+			const effectiveThinkingLevel = explicitThinkingLevel
+				? resolvedThinkingLevel
+				: (thinkingLevel ?? resolvedThinkingLevel);
 			resolvedAt = performance.now();
 
 			const effectiveCwd = worktree ?? cwd;
