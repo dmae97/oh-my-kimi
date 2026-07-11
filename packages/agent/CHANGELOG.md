@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed compaction summary inputs escaping Harmony control tokens so Copilot `gpt-5.6-*` models no longer reject serialized analysis-channel markers. ([#5184](https://github.com/can1357/oh-my-pi/issues/5184))
+
 ## [16.4.3] - 2026-07-11
 
 ### Fixed

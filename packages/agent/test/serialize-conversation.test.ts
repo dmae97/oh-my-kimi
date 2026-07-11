@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { serializeConversation } from "@oh-my-pi/pi-agent-core/compaction";
+import { serializeConversation, serializeConversationForSummary } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, Message, ToolResultMessage, Usage } from "@oh-my-pi/pi-ai";
 
 const ZERO_USAGE: Usage = {
@@ -80,6 +80,41 @@ describe("serializeConversation — useless pairs", () => {
 		expect(out).toContain("<function_results>");
 		expect(out).not.toContain("[Tool Call]:");
 		expect(out).not.toContain("[Assistant tool calls]:");
+	});
+
+	test("summary serialization escapes Harmony control tokens while preserving assistant thinking", () => {
+		const messages = [
+			assistantMessage([
+				{ type: "thinking", thinking: "Need to inspect the failing compaction path." },
+				{ type: "text", text: "The final answer stays visible." },
+			]),
+		];
+
+		const out = serializeConversationForSummary(messages, "harmony");
+
+		expect(out).not.toContain("<|channel|>analysis");
+		expect(out).not.toContain("<|message|>");
+		expect(out).toContain("<\\|channel\\|>analysis");
+		expect(out).toContain("<\\|channel\\|>final");
+		expect(out).toContain("Need to inspect the failing compaction path.");
+		expect(out).toContain("The final answer stays visible.");
+	});
+
+	test("native Harmony serialization keeps raw transcript markers", () => {
+		const out = serializeConversation(
+			[
+				assistantMessage([
+					{ type: "thinking", thinking: "Native transcript includes analysis." },
+					{ type: "text", text: "Native final text." },
+				]),
+			],
+			"harmony",
+		);
+
+		expect(out).toContain("<|channel|>analysis");
+		expect(out).toContain("<|message|>Native transcript includes analysis.");
+		expect(out).toContain("<|channel|>final");
+		expect(out).toContain("Native final text.");
 	});
 
 	test("native dialect serialization drops empty assistants left by useless calls", () => {
