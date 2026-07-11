@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Cursor-provider turns whose assistant message contains intro text, tool calls, and trailing final text rendering the final answer above the tool output instead of at the transcript tail ([#4871](https://github.com/can1357/oh-my-pi/issues/4871)).
+
 ## [16.3.12] - 2026-07-08
 
 ### Added

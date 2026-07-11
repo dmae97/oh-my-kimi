@@ -56,6 +56,7 @@ import {
 	buildIrcMessageCard,
 	normalizeToolArgs,
 	resolveAssistantErrorPresentation,
+	splitAssistantMessageToolTimeline,
 } from "./transcript-render-helpers";
 
 type TextBlock = { type: "text"; text: string };
@@ -250,7 +251,10 @@ export class UiHelpers {
 				break;
 			}
 			case "assistant": {
-				const assistantComponent = createAssistantMessageComponent(this.ctx, message);
+				const assistantComponent = createAssistantMessageComponent(
+					this.ctx,
+					splitAssistantMessageToolTimeline(message).beforeTools,
+				);
 				this.ctx.chatContainer.addChild(assistantComponent);
 				break;
 			}
@@ -356,6 +360,7 @@ export class UiHelpers {
 			if (message.role !== "toolResult") flushPendingUsage();
 			// Assistant messages need special handling for tool calls
 			if (message.role === "assistant") {
+				const timeline = splitAssistantMessageToolTimeline(message);
 				this.ctx.addMessageToChat(message);
 				const lastChild = this.ctx.chatContainer.children[this.ctx.chatContainer.children.length - 1];
 				const assistantComponent = lastChild instanceof AssistantMessageComponent ? lastChild : undefined;
@@ -463,6 +468,10 @@ export class UiHelpers {
 					} else {
 						this.ctx.pendingTools.set(content.id, component);
 					}
+				}
+				if (timeline.afterTools && assistantHasVisibleContent(timeline.afterTools)) {
+					const afterToolsComponent = createAssistantMessageComponent(this.ctx, timeline.afterTools);
+					this.ctx.chatContainer.addChild(afterToolsComponent);
 				}
 				pendingUsage =
 					this.ctx.settings.get("display.showTokenUsage") && assistantUsageIsBilled(message.usage)

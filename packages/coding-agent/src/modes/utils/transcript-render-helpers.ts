@@ -137,6 +137,59 @@ export function assistantHasVisibleContent(message: AssistantAgentMessage): bool
 }
 
 /**
+ * Split mixed assistant turns into the visible text before tool execution and
+ * the visible text that must render after the tool timeline. Cursor can return
+ * intro text, tool calls, and the final answer in one assistant message; keeping
+ * the post-tool text in the leading assistant block buries the answer above tool
+ * results in the transcript.
+ */
+export function splitAssistantMessageToolTimeline(message: AssistantAgentMessage): {
+	beforeTools: AssistantAgentMessage;
+	afterTools: AssistantAgentMessage | undefined;
+	hasToolCalls: boolean;
+} {
+	const beforeTools: AssistantAgentMessage["content"] = [];
+	const afterTools: AssistantAgentMessage["content"] = [];
+	let sawToolCall = false;
+
+	for (const content of message.content) {
+		if (content.type === "toolCall") {
+			sawToolCall = true;
+			continue;
+		}
+		if (sawToolCall) {
+			afterTools.push(content);
+		} else {
+			beforeTools.push(content);
+		}
+	}
+
+	if (!sawToolCall) {
+		return { beforeTools: message, afterTools: undefined, hasToolCalls: false };
+	}
+
+	const beforeMessage: AssistantAgentMessage = {
+		...message,
+		content: beforeTools,
+		stopReason: "stop",
+		errorMessage: undefined,
+		retryRecovery: undefined,
+	};
+	const afterMessage: AssistantAgentMessage | undefined =
+		afterTools.length === 0
+			? undefined
+			: {
+					...message,
+					content: afterTools,
+					stopReason: "stop",
+					errorMessage: undefined,
+					retryRecovery: undefined,
+				};
+
+	return { beforeTools: beforeMessage, afterTools: afterMessage, hasToolCalls: true };
+}
+
+/**
  * Normalize raw tool-call arguments to a plain record, collapsing non-object or
  * array values to an empty object.
  */
