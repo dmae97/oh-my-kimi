@@ -15,22 +15,13 @@ describe("bundled agent parsing", () => {
 		expect(reviewer?.thinkingLevel).toBeUndefined();
 	});
 
-	it("lets plan inherit thinking effort from its model role", () => {
-		const plan = getBundledAgent("plan");
-
-		expect(plan).toBeDefined();
-		expect(plan?.source).toBe("bundled");
-		expect(plan?.model).toEqual(["pi/plan", "pi/slow"]);
-		expect(plan?.thinkingLevel).toBeUndefined();
-	});
-
 	// Issue #4761: with `modelRoles.slow: ...:xhigh`, the role's explicit effort
 	// suffix must survive agent-pattern expansion and model resolution for the
 	// bundled agents routed at that role. The executor picks
 	// `agent.thinkingLevel ?? resolvedThinkingLevel` (task/executor.ts), so a
-	// bundled frontmatter pin would mask the suffix — reviewer/plan declare none
+	// bundled frontmatter pin would mask the suffix — reviewer declares none
 	// (asserted above) and the resolved level below is what the subagent runs at.
-	it("resolves the configured slow-role effort suffix for reviewer and plan", () => {
+	it("resolves the configured slow-role effort suffix for reviewer", () => {
 		const gpt55 = buildModel({
 			id: "gpt-5.5",
 			name: "GPT-5.5 Codex",
@@ -45,19 +36,17 @@ describe("bundled agent parsing", () => {
 			maxTokens: 128000,
 		});
 		const settings = Settings.isolated({
-			modelRoles: { slow: "openai-codex/gpt-5.5:xhigh", plan: "openai-codex/gpt-5.5:xhigh" },
+			modelRoles: { slow: "openai-codex/gpt-5.5:xhigh" },
 		});
 		const registry = { getAvailable: () => [gpt55] } as Parameters<typeof resolveModelOverride>[1];
 
-		for (const name of ["reviewer", "plan"]) {
-			const agent = getBundledAgent(name);
-			expect(agent?.thinkingLevel).toBeUndefined();
-			const patterns = resolveAgentModelPatterns({ agentModel: agent?.model, settings });
-			const resolved = resolveModelOverride(patterns, registry, settings);
-			expect(resolved.model?.provider).toBe("openai-codex");
-			expect(resolved.model?.id).toBe("gpt-5.5");
-			expect(resolved.thinkingLevel).toBe(Effort.XHigh);
-			expect(resolved.explicitThinkingLevel).toBe(true);
-		}
+		const agent = getBundledAgent("reviewer");
+		expect(agent?.thinkingLevel).toBeUndefined();
+		const patterns = resolveAgentModelPatterns({ agentModel: agent?.model, settings });
+		const resolved = resolveModelOverride(patterns, registry, settings);
+		expect(resolved.model?.provider).toBe("openai-codex");
+		expect(resolved.model?.id).toBe("gpt-5.5");
+		expect(resolved.thinkingLevel).toBe(Effort.XHigh);
+		expect(resolved.explicitThinkingLevel).toBe(true);
 	});
 });

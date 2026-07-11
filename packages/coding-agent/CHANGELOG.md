@@ -8,6 +8,11 @@
 - Optimized subagent usage to discourage single-agent delegation and improve parallel execution flows
 - Clarified that prerequisite work for subagent tasks should be handled inline by the main agent
 
+### Removed
+
+- Removed the bundled `plan` subagent from available task agents
+- Removed the bundled `plan` subagent from available task agents.
+
 ## [16.4.2] - 2026-07-10
 
 ### Fixed

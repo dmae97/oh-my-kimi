@@ -14,7 +14,7 @@ describe("task agent capability descriptions", () => {
 		const agents = loadBundledAgents();
 
 		expect(isReadOnlyAgent(agentByName(agents, "scout"))).toBe(true);
-		for (const name of ["task", "sonic", "plan", "reviewer", "designer"]) {
+		for (const name of ["task", "sonic", "reviewer", "designer"]) {
 			expect(isReadOnlyAgent(agentByName(agents, name))).toBe(false);
 		}
 	});
@@ -24,7 +24,7 @@ describe("task agent capability descriptions", () => {
 
 		expect(agentByName(agents, "scout").readSummarize).toBe(false);
 		expect(agentByName(agents, "librarian").readSummarize).toBe(false);
-		for (const name of ["task", "sonic", "plan", "reviewer", "designer"]) {
+		for (const name of ["task", "sonic", "reviewer", "designer"]) {
 			expect(agentByName(agents, name).readSummarize).toBeUndefined();
 		}
 	});
