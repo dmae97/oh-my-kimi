@@ -547,7 +547,11 @@ function collapseMixedTypeCombinerVariants(schema: JsonObject, combiner: "anyOf"
 
 			const existingValue = mergedVariantFields[key];
 			if (existingValue !== undefined && !areJsonValuesEqual(existingValue, variantValue)) {
-				return schema;
+				if (key !== "description") return schema;
+				// Descriptions are annotations, so merge branch-local spill text instead of
+				// treating it as a structural incompatibility.
+				mergedVariantFields[key] = mergeSchemaDescriptions(existingValue, variantValue);
+				continue;
 			}
 			mergedVariantFields[key] = variantValue;
 		}
@@ -588,13 +592,22 @@ function collapseMixedTypeCombinerVariants(schema: JsonObject, combiner: "anyOf"
 		const value = mergedVariantFields[key];
 		const existingValue = nextSchema[key];
 		if (existingValue !== undefined && !areJsonValuesEqual(existingValue, value)) {
-			return schema;
+			if (key !== "description") return schema;
+			nextSchema[key] = mergeSchemaDescriptions(existingValue, value);
+			continue;
 		}
 		if (existingValue === undefined) {
 			nextSchema[key] = value;
 		}
 	}
 	return nextSchema;
+}
+
+function mergeSchemaDescriptions(existing: unknown, incoming: unknown): string {
+	if (typeof existing !== "string") return typeof incoming === "string" ? incoming : "";
+	if (typeof incoming !== "string" || incoming.length === 0 || existing === incoming) return existing;
+	if (existing.length === 0) return incoming;
+	return `${existing}\n\n${incoming}`;
 }
 
 function collapseSameTypeCombinerVariants(schema: JsonObject, combiner: "anyOf" | "oneOf"): JsonObject {

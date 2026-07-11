@@ -1021,6 +1021,17 @@ describe("normalizeSchemaForCCA", () => {
 		});
 	});
 
+	it("keeps mixed unions when branch validation spill differs from the parent description", () => {
+		const normalized = normalizeSchemaForCCA({
+			anyOf: [{ type: "string" }, { type: "array", minItems: 1, items: { type: "string" } }],
+			description: "Optional result type",
+		}) as Record<string, unknown>;
+
+		expect(normalized.type).toBe("string");
+		expect(normalized.anyOf).toBeUndefined();
+		expect(normalized.description).toBe("Optional result type\n\n{minItems: 1}");
+	});
+
 	it("strips sibling type-specific keys copied from parent when mixed-type collapse picks opposing type", () => {
 		// Edge case: parent has a sibling `items` outside the anyOf,
 		// and the chosen type is string. The sibling must be stripped.
