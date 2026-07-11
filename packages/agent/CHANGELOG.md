@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed an issue where skipped sibling tool results incorrectly reported that a queued user message caused the skip.
+
 ## [16.4.2] - 2026-07-10
 
 ### Fixed
@@ -13,9 +17,6 @@
 ### Fixed
 
 - Enabled reasoning encryption content for all Responses Lite compaction requests
-### Fixed
-
-- Fixed skipped sibling tool results caused by system advisor steering so they no longer claim a queued user message caused the skip. ([#5074](https://github.com/can1357/oh-my-pi/issues/5074))
 
 ## [16.4.0] - 2026-07-10
 

@@ -4,56 +4,41 @@
 
 ### Added
 
-- Added live TUI "TV wall" for `/vibe` tools showing active worker activity, tool traces, and output
-- Added `/vibe` mode: the model becomes a director whose toolset is stripped to `read` plus five new session tools (`vibe_spawn`, `vibe_send`, `vibe_wait`, `vibe_kill`, `vibe_list`) for driving persistent background worker sessions. Workers come in two flavors mapped to existing model tiers — `fast` (sonic/`pi/smol`) and `good` (task/`pi/task`) — retain their conversation across turns via the subagent keep-alive lifecycle, deliver each turn's result asynchronously with a compressed tool-call trace plus the worker's response, and are killed when the mode exits. The TUI renders sends as a mini CLI composer and waits as a live stacked-screen view of every worker's tool calls and streamed output.
-- `omp acp` now prints a short hint on stderr when launched from an interactive terminal (stdin is a TTY): the command speaks JSON-RPC over stdout and is meant to be spawned by an ACP client such as Zed, so running it by hand previously showed nothing at all
-- Added a credential-free Google web search provider that loads rendered Search results in stealth Chromium, parses titles, URLs, and snippets, and supports recency filters.
-- Added five credential-free web search providers scraped from public engines: Bing, Yahoo, and Startpage over plain fetch, plus Ecosia and Mojeek with stealth-browser escalation (Cloudflare and ALTCHA proof-of-work walls); all detect bot challenges and map recency filters where the engine supports them.
-- Added a `public` ("Public Web") web search provider that fans out to every credential-free engine in parallel and consolidates results — URLs deduplicated across engines, ranked by cross-engine consensus then best per-engine rank — returning at the earliest of all engines settled, a 5s soft deadline with at least one success, or a 30s hard cap. Explicit selection only; never auto-selected.
-- Added PCRE2 fallback for grep lookaround and backreferences when Rust regex rejects a pattern.
+- Added /vibe mode, allowing the model to act as a director driving persistent background worker sessions (fast and good tiers) with dedicated session tools (vibe_spawn, vibe_send, vibe_wait, vibe_kill, vibe_list) and a live TUI "TV wall" showing active worker activity, tool traces, and streamed output.
+- Added multiple credential-free web search providers (Google, Bing, Yahoo, Startpage, Ecosia, Mojeek) with stealth-browser escalation, bot challenge detection, and recency filters, alongside a parallel public ("Public Web") provider that aggregates and deduplicates results across all engines.
+- Added PCRE2 fallback support for grep lookaround and backreferences when the default Rust regex engine rejects a pattern.
+- Added a helpful stderr hint when launching omp acp from an interactive terminal to clarify that the command communicates via JSON-RPC over stdout.
 
 ### Changed
 
-- Reduced browser action timeout from 15s to 8s to improve agent iteration speed
-- Refined agent delegation logic to prioritize top-level planning and scoping by the primary agent
-- Optimized subagent usage to discourage single-agent delegation and improve parallel execution flows
-- Clarified that prerequisite work for subagent tasks should be handled inline by the main agent
-- HTML search requests now use a randomized, internally consistent desktop Chrome profile per request; Google, Ecosia, and Mojeek try fetch first and escalate blocked or failed production responses to the shared stealth browser.
-- Reordered credential-free web search engines from live quality measurements: Startpage (Google-backed, fastest and most reliable in testing) now leads the auto chain, Ecosia precedes the flakier browser-backed Google, and Mojeek stays last; the Public Web fan-out tiebreak now favors Google-index engines (Startpage, Google) so their ranking wins equal-consensus ties.
-- Replaced the generated legacy Pi bundled-module registry and duplicate key list with an in-memory Bun build plugin that derives static compile edges directly from current package exports; binary builds no longer generate, format, or reset thousands of lines of compatibility source.
-- Replaced the generated `docs-index.generated.txt` file and its surrounding build-time reset orchestration with an in-memory compiler define (`process.env.PI_DOCS_EMBED`); compiled executables and prepacked npm bundles are inlined directly from the source `docs/` Markdown corpus without writing to the working tree.
+- Reduced browser action timeout from 15s to 8s to improve agent iteration speed.
+- Refined agent delegation logic to prioritize top-level planning by the primary agent, discourage single-agent delegation, and handle prerequisite work inline.
+- Optimized credential-free web search engine ordering and routing, prioritizing Startpage and Ecosia, and using randomized desktop Chrome profiles with stealth-browser escalation for blocked requests.
+
+### Fixed
+
+- Fixed compiled-binary extensions failing to load native .node FFI dependencies by resolving platform-specific packages against the extension's own node_modules.
+- Fixed a hang in omp search and omp q CLI commands by ensuring the AuthStorage connection is properly closed upon completion.
+- Fixed write blocking for the full LSP diagnostics poll by deferring slow diagnostics to a late-diagnostics channel.
+- Fixed multiple browser and puppeteer tool issues, including locator action timeouts, missing console/print output buffering, missing fill() method on element handles, and incorrect viewport screenshots on multi-tab setups.
+- Improved browser selector error diagnostics to report match counts and abort early on empty matches instead of waiting for the full timeout.
+- Fixed silent failures, duplicate error messages, and unhandled provider errors in ACP mode when errors occurred before streaming assistant text.
+- Fixed glob reporting contradictory "no files found" messages on timeout by explicitly stating the scan was incomplete.
+- Fixed read adding unwanted context padding to raw range selectors (e.g., raw:31-31).
+- Fixed first-run interactive startup rendering the entire changelog when the last-seen marker is missing or unreadable (#5135).
+- Fixed empty local-model stop responses exhausting retries without displaying a user-visible error (#5128).
+- Fixed serialization of BigInt values in tool arguments during session compaction.
+- Fixed GPT-5.6 over-delegating work by centralizing task fan-out and concurrency policy in the system prompt.
+- Fixed session title generation including leaked thinking markup from OpenAI-compatible endpoints (#5122).
+- Fixed bare skill://<name> path-only resolution for bash, grep, and glob to resolve to the skill directory instead of SKILL.md (#5087).
+- Fixed macOS stdio MCP servers missing Apple Events TCC prompts by spawning MCP children via the correct Bun.spawn overload (#5085).
+- Fixed the /move directory picker drawing a narrow 68-column frame inside wider overlays (#5067).
+- Fixed snapcompact inline imaging for GitHub Copilot Business and Enterprise models (#4779).
+- Fixed omp commit agent sessions to ensure valid proposals are committed before teardown, handle missing host outputs with non-zero exits, and prevent forcing GPG_TTY on signing-enabled repositories (#4794).
 
 ### Removed
 
-- Removed the bundled `plan` subagent from available task agents
-
-### Fixed
-- Fixed compiled-binary extensions failing to load napi-rs/FFI dependencies whose CommonJS loader requires a platform package with a native `.node` main (for example `@yuuang/ffi-rs-darwin-arm64`). The extension loader now resolves those platform packages against the extension's own `node_modules`, pins each require to the addon's absolute path, and serves the rewritten CommonJS loader synchronously so Bun can `require()` it.
-- Fixed the `omp search` / `omp q` CLI command hanging instead of exiting cleanly after search execution by ensuring the internally discovered `AuthStorage` connection is properly closed.
-- Fixed `write` blocking for the full 3-second LSP diagnostics poll in main-agent sessions by wiring it into the deferred late-diagnostics channel; slow diagnostics now return after the short inline window and arrive as an aside.
-- Fixed `tab.fill`/`tab.click` (and every puppeteer Locator action) timing out after 15s on all pages: the stealth patch routes default `Frame.evaluate`/`waitForFunction` through the isolated world, but `waitForSelector`/Locator results were still transferred to the main world, so Locator's enabled-precondition (`handle.frame.waitForFunction(pred, opts, handle)`) and `page.evaluate(fn, handle)` threw a cross-context handle error that Locators retried silently until timeout. `QueryHandler.waitFor` now returns its result in the isolated world, matching the patched default realm; explicit `//!world=main` evaluation still adopts handles via ElementHandle
-- Fixed browser runs silently dropping `display("string")`, `console.log`, and `print` output: the runtime emits those as stream text, which the browser embedders (worker and cmux) routed to the debug log only, so the tool result showed a bare "Ran code on tab". Stream text is now buffered and surfaced as ordered display entries alongside `display()` payloads and screenshots.
-- Fixed `input.fill is not a function` on element handles from `tab.id()`/`tab.ref()`/`tab.waitFor()`: raw puppeteer ElementHandles expose `type()` but not the `fill()` the tool docs promise. Handles handed to user code now carry a `fill()` matching `tab.fill()` semantics (focus, clear, retype).
-- Browser selector ops (`click`/`type`/`fill`/`waitFor`/…) that hit their fail-fast timeout now append a match-count diagnosis — "matches no elements" (wrong page, consent wall) vs "matches N element(s) but the action never became possible" (hidden/covered) — instead of a bare `timed out after 15000ms`.
-- Browser selector ops no longer burn their whole deadline on a selector that matches nothing: a watchdog polls while the action runs and aborts after ~2s of confirmed zero matches with the inspection hint. `waitFor`/`waitForSelector` opt out via an explicit `{ timeout }` (and `hidden: true` waits are exempt — zero matches is their success condition). The per-action ceiling for present-but-unactionable elements also dropped from 15s to 8s.
-- Fixed silent failures in ACP mode when provider errors occurred before streaming assistant text
-- Prevented duplicate error messages in ACP when a provider error was both streamed and final
-- Fixed `glob` reporting the contradictory "No files found matching pattern" next to a "timed out; returning 0 partial matches" notice. A timed-out empty scan now states explicitly that the result is incomplete (not proof of absence) and suggests scoping to a deeper directory, and the TUI renders it as "No matches before timeout (scan incomplete)" instead of a definitive no-files claim.
-- Fixed ACP turns ending silently when the provider request failed before streaming any assistant output (e.g. GitHub Copilot's intermittent `HTTP 400 model_not_supported` after retries): such failures emit only `agent_end` with the error on the assistant message, which never mapped to a session update. The error message is now delivered to the client as an `agent_message_chunk`, without duplicating errors that already streamed
-- Fixed `read` adding invisible context padding to raw range selectors: `raw:31-31` returned lines 30–34 (1 leading + 3 trailing context lines) with nothing to distinguish the padding, corrupting verbatim-extraction workflows. Raw ranges now return exactly the requested lines across all three range paths (plain files, in-memory/bridge reads, artifacts); numbered reads keep the self-describing padding.
-- Fixed browser screenshots capturing the wrong tab or hanging until the op timeout when multiple tabs share one Chromium (sibling headless tabs, `cdp_url`/app attach): CDP reads the *active* target's compositor surface, so a backgrounded page could stall waiting for a frame or return a sibling's pixels. The worker now activates the page (`bringToFront`) before every capture, best-effort.
-- Fixed cmux `tab.screenshot({ selector })` silently returning a full-viewport capture that models consumed as an element crop. The cmux daemon has no element-clip or full-page capture; the tool still scrolls the selector into view but now labels the image as full-viewport (same for `fullPage`) instead of mislabeling it.
-- Fixed cmux `tab.evaluate()` / `elementHandle.evaluate()` errors surfacing as the daemon's opaque `js_error: A JavaScript exception occurred`. Scripts now run inside a page-side try/catch envelope that returns the real message and stack, and a Promise return (which the daemon cannot serialize) yields an actionable "evaluates synchronously" error instead of an unsupported-type failure.
-- Fixed bug where exiting `/vibe` mode failed to restore an empty toolset
-- Fixed `/vibe` tools being pre-registered as hidden session tools; they are now installed only on mode entry and removed on exit
-- Fixed `/vibe wait` reporting to properly capture settled results that have queued follow-up turns
-- Improved `/vibe` TUI responsiveness by rendering animated content (cursors, spinners) directly from mutable state at paint time
-### Fixed
-
-- Fixed first-run interactive startup rendering the full packaged changelog when the last-seen marker is missing, malformed, or unreadable. Startup upgrade notes now show at most three unseen releases and cap Markdown source at 64 KiB; `/changelog full` remains the explicit full-history path. ([#5135](https://github.com/can1357/oh-my-pi/issues/5135))
-### Fixed
-
-- Fixed empty local-model `stop` responses exhausting their retry cap without surfacing a user-visible retry failure. ([#5128](https://github.com/can1357/oh-my-pi/issues/5128))
+- Removed the bundled plan subagent from available task agents.
 
 ## [16.4.2] - 2026-07-10
 
@@ -62,9 +47,6 @@
 - Fixed an issue where BigInt values in tool arguments failed to serialize during session compaction.
 - Resolved an issue where GPT-5.6 over-delegated tasks by refining task fan-out and concurrency policies in the system prompt.
 - Fixed a race condition in concurrent MCP OAuth token refreshes across processes, ensuring rotating refresh tokens are only refreshed once and preventing stale token errors from clearing valid credentials.
-- Fixed serialization of BigInt values in tool arguments during session compaction
-- Fixed GPT-5.6 over-delegating work by centralizing task fan-out and concurrency policy in the system prompt: default task mode now uses Codex's explicit-request policy, while eager task mode uses its proactive policy. Other models retain the existing delegation strategy; the task tool keeps only model-independent assignment and coordination guidance.
-- Fixed session title generation including leaked thinking markup from OpenAI-compatible endpoints that ignore reasoning disablement. ([#5122](https://github.com/can1357/oh-my-pi/issues/5122))
 
 ## [16.4.1] - 2026-07-10
 
@@ -76,12 +58,6 @@
 ### Fixed
 
 - Fixed MCP OAuth dynamic client registration omitting discovered scopes on the RFC 7591 registration body. Providers such as Clerk bind DCR-created clients to only the scopes declared at registration, then reject the subsequent authorize request when it asks for `openid` (from `scopes_supported`). Registration now includes `config.scopes` when present, matching Claude Code and the scopes already sent on authorize.
-### Fixed
-
-- Fixed bare `skill://<name>` path-only resolution for bash, grep, and glob so tools receive the skill directory instead of `SKILL.md`, while `read skill://<name>` still opens the skill instructions. ([#5087](https://github.com/can1357/oh-my-pi/issues/5087))
-### Fixed
-
-- Fixed macOS stdio MCP servers still missing Apple Events TCC prompts by spawning MCP children through the same argv-first `Bun.spawn` overload used by the JS eval kernel. ([#5085](https://github.com/can1357/oh-my-pi/issues/5085))
 
 ## [16.4.0] - 2026-07-10
 
@@ -96,7 +72,6 @@
 
 ### Fixed
 
-- Fixed the `/move` directory picker drawing a 68-column frame inside wider full-width overlays. ([#5067](https://github.com/can1357/oh-my-pi/issues/5067))
 - Fixed Go debug launches falling back to native debuggers when Delve is unavailable; nested modules and `go.work` workspaces now resolve local Delve adapters before PATH, newly installed adapters are detected without restart, and missing adapter errors include install or configuration guidance. ([#5037](https://github.com/can1357/oh-my-pi/issues/5037))
 - Fixed a memory leak (large retained JavaScriptCore heaps) in the TUI during session transcript rebuilds and refreshes by properly handling snapcompact archive image frames.
 - Fixed a crash in interactive TUI sessions (Cannot set cwd while another same-realm JS runtime is running) when the JS evaluation worker falls back to the in-process inline path.
@@ -192,8 +167,6 @@
 - Fixed retry fallback model recovery by exposing `retry.fallbackChains` in `/settings`, adding a `/model` action to assign the selected default fallback model, and clearing a selected model's retry cooldown marker on manual model switches. ([#4533](https://github.com/can1357/oh-my-pi/issues/4533))
 - Fixed `/handoff` and auto-handoff skipping extension lifecycle hooks by emitting cancellable `session_before_switch` hooks and a `session_switch` with `reason: "handoff"` after the replacement session is ready ([#4434](https://github.com/can1357/oh-my-pi/issues/4434)).
 - Fixed TTSR stream interrupts so only the tool call whose stream matched a rule receives the rule-named abort result; sibling tool-call placeholders now use a neutral abort reason ([#2783](https://github.com/can1357/oh-my-pi/issues/2783)).
-- Fixed snapcompact inline imaging for GitHub Copilot Business and Enterprise models that advertise image input, removing the stale non-personal-host block. ([#4779](https://github.com/can1357/oh-my-pi/issues/4779))
-- Fixed `omp commit` agent sessions so a valid proposal is committed before session teardown can dispose mnemopi/autolearn resources, missing required host outputs now fail non-zero instead of returning cleanly, and git subprocesses no longer force `GPG_TTY=not a tty` on signing-enabled repositories ([#4794](https://github.com/can1357/oh-my-pi/issues/4794)).
 
 ## [16.3.11] - 2026-07-06
 

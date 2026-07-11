@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed parsing of SAP AI Core Claude model IDs in version-first format (e.g., anthropic--claude-4.8-opus), restoring adaptive thinking metadata and capability gates.
+- Fixed GitHub Copilot Business and Enterprise model discovery to correctly preserve vision capabilities instead of downgrading models to text-only.
+
 ## [16.4.2] - 2026-07-10
 
 ### Fixed
@@ -25,9 +30,6 @@
 ### Removed
 
 - Removed the generated GPT-5.6 pro-reasoning aliases (`gpt-5.6-{luna,sol,terra}-pro`) from the `openai-codex` subscription provider — pro reasoning is not offered on subscriptions; the `openai` API-key aliases remain
-### Fixed
-
-- Fixed SAP AI Core Claude ids in version-first order (`anthropic--claude-4.8-opus`) parsing as unknown, restoring Anthropic adaptive thinking metadata and capability gates. ([#5069](https://github.com/can1357/oh-my-pi/issues/5069))
 
 ## [16.4.0] - 2026-07-10
 
@@ -97,9 +99,6 @@
 - Fixed LiteLLM discovery stopping at `/model_group/info` when that endpoint omitted `supports_vision`; it now continues to `/model/info` and preserves `model_info.supports_vision=true` for vision-capable proxy models. ([#4747](https://github.com/can1357/oh-my-pi/issues/4747))
 - Fixed LiteLLM discovery to fall back to bundled catalog metadata when `models.dev` lacks a model reference, preserving reasoning and thinking support for models such as `glm-5.2`. ([#4695](https://github.com/can1357/oh-my-pi/issues/4695))
 - Detected Azure AI Inference / Foundry Anthropic routes as strict-tool-incompatible so resolved Anthropic compat disables strict tools before request construction ([#4679](https://github.com/can1357/oh-my-pi/issues/4679)).
-### Fixed
-
-- Fixed GitHub Copilot Business and Enterprise discovery preserving vision-capable models from `/models` instead of downgrading them to text-only. ([#4779](https://github.com/can1357/oh-my-pi/issues/4779))
 
 ## [16.3.11] - 2026-07-06
 
