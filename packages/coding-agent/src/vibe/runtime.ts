@@ -603,7 +603,7 @@ export class VibeSessionRegistry {
 					);
 				}
 			},
-			{ id: `${record.id}-t${turnIndex}`, ownerId: record.ownerId },
+			{ id: `${record.id}-t${turnIndex}`, agentId: record.id, ownerId: record.ownerId },
 		);
 		turn.jobId = jobId;
 		record.turn = turn;

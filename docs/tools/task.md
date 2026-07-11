@@ -1,6 +1,6 @@
 # task
 
-> Spawn subagents — one per call, or a `tasks[]` batch per call (`task.batch`, default on). With `async.enabled=true`, spawns run in the background; otherwise the call blocks until they finish.
+> Spawn subagents — one per call, or a `tasks[]` batch per call (`task.batch`, default on). With `async.enabled=true`, spawns run in the background; otherwise the call blocks until they finish. Execution mode is per item: an item whose agent type declares `blocking: true` (e.g. `scout`) runs inline and returns its result in the call, while non-blocking items in the same call still spawn as background jobs.
 
 ## Source
 - Entry: `packages/coding-agent/src/task/index.ts`
@@ -52,10 +52,10 @@ The tool returns one text block plus `details: TaskToolDetails`.
 
 Background response (`async.enabled=true`):
 - `content`: `` Spawned agent `<id>` (job `<jobId>`). The result will be delivered when it yields. ... `` plus a coordination hint (`irc` DM when enabled, otherwise `job`). A batch call instead returns `` Spawned N background agents using <agent types>. ... `` (the deduped per-item agent types, comma-joined) with a per-agent `- `<id>` (job `<jobId>`)` listing.
-- `details`: `{ projectAgentsDir: null, results: [], totalDurationMs: 0, progress: [<seeded AgentProgress per spawn>], async: { state: "running", jobId, type: "task" } }`. A batch call keeps one shared `progress[]` snapshot; `async.jobId` is the first started job and `async.state` aggregates ("running" until every job settles, "failed" if any spawn failed).
+- `details`: `{ projectAgentsDir, results, totalDurationMs, progress: [<AgentProgress per spawn>], async: { state, jobId, type: "task" } }`. The call keeps one shared `progress[]` snapshot; `async.jobId` is the first started job and `async.state` aggregates over the async spawns ("running" until every job settles, "failed" if any spawn failed) — jobs that settled before the call returned are already reflected. A mixed call's `results` carries the blocking spawns' inline `SingleResult`s (pure background calls return `results: []`).
 - Live progress keeps streaming into the same tool block via `onUpdate(...)`; each final result arrives later as an async-result injection into the parent conversation. The delivery text appends a follow-up hint: `` <id> is now idle — message it via `irc` to follow up; transcript at history://<id> `` (aborted variant points at the transcript only).
 
-Settled response (`async.enabled=false`, no job manager, blocking agent, or async job body):
+Settled response (`async.enabled=false`, no job manager, every item's agent `blocking: true`, or async job body):
 - `content`: summary rendered from `packages/coding-agent/src/prompts/tools/task-summary.md` with a preview capped at 5000 chars; `agent://<id>` holds the full output. A sync batch concatenates the per-spawn summaries.
 - `details.results`: one `SingleResult` per spawn; `usage`, `outputPaths` populated (aggregated across spawns for a sync batch).
 
@@ -75,12 +75,13 @@ Artifacts and side channels:
 ## Flow
 1. `TaskTool.create(...)` discovers agents once per cwd through a process-level memo (`discoverAgentsForCreate`) to render the dynamic prompt description.
 2. `execute(...)` repairs raw params (`repairTaskParams`), then validates: `schema` is always rejected; `tasks`/`context` are rejected unless `task.batch` is on; batch calls need a non-empty `tasks` (a `task` per item, unique provided names), a non-empty shared `context`, and no top-level `task` alongside `tasks`; flat calls need `task`. The call is then normalized into its spawn list (`resolveSpawnItems`).
-3. Sync execution runs when `async.enabled=false`, the session has no `AsyncJobManager` (orphaned host), or the selected agent definition declares `blocking: true`; the call then runs every spawn through `#executeSync(...)` inline under the session-scoped semaphore.
-4. Background execution runs only when `async.enabled=true` and the session has an `AsyncJobManager`:
+3. Per-item execution split: items whose agent type declares `blocking: true` run inline; the rest become background jobs. The whole call runs sync when `async.enabled=false`, the session has no `AsyncJobManager` (orphaned host), or every item is blocking; inline spawns run through `#executeSync(...)` under the session-scoped semaphore.
+4. Background execution (any non-blocking item with `async.enabled=true` and an `AsyncJobManager`):
    - agent ids are allocated up front via `AgentOutputManager.allocate(...)` — each item's `name`, or a generated AdjectiveNoun name — one per spawn;
    - one `type: "task"` job per spawn is registered with `session.asyncJobManager` (`id` = agent id, `queued: true`, `ownerId` = caller agent id) and the tool returns immediately;
    - each job body acquires the session-scoped `Semaphore` (one per `TaskTool` instance, sized from `task.maxConcurrency` at first use), marks the job running, runs `#executeSync(...)` with that spawn's params, and reports progress through the shared `buildAsyncDetails`/`onUpdate`;
    - a failed or aborted run throws `TaskJobError` so the job lands `failed`, but the agent itself stays registered and interrogable.
+   - a mixed call registers the async jobs first, then runs its blocking items inline and returns once they settle — the text combines the inline summaries with the spawned-job listing, and the block keeps rendering the still-running background rows beside the inline results.
 5. `#executeSync(...)` runs the spawn path (`#runSpawn`), which rediscovers agents from disk, so runtime resolution can differ from the create-time description.
 6. It resolves each spawn's requested `agent` type, rejects unknown or settings-disabled agents, and enforces parent spawn policy plus `PI_BLOCKED_AGENT` self-recursion prevention.
 7. Output schema priority: agent frontmatter `output` → inherited parent session schema (the call itself never carries one).
@@ -99,8 +100,8 @@ Artifacts and side channels:
 
 ## Modes / Variants
 - Execution mode
-  - Background job — `async.enabled=true`; spawns go through `AsyncJobManager`.
-  - Sync inline — `async.enabled=false`, no job manager, or `blocking: true` agent.
+  - Background job — `async.enabled=true`; non-blocking spawns go through `AsyncJobManager`.
+  - Sync inline — `async.enabled=false`, no job manager, or the item's agent declares `blocking: true` (per item: a mixed call runs both modes).
 - Batch mode (`task.batch`, default on)
   - on — `{ context, tasks[] }`: one independent spawn per item, required `context` shared across the call's spawns, `agent`/`isolated` per item. Lifecycle, revival, and concurrency semantics match N parallel single calls.
   - off — single spawn per call; `tasks`/`context` are rejected and removed from the schema.

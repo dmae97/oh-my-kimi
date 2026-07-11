@@ -943,12 +943,18 @@ export class EventController {
 		if (component) {
 			const asyncState = (event.partialResult.details as { async?: { state?: string } } | undefined)?.async?.state;
 			const isFinalAsyncState = asyncState === "completed" || asyncState === "failed";
+			// A final async snapshot is terminal only for a parked background
+			// block (the call already returned and was kept alive for its jobs).
+			// While the call is still executing — a mixed blocking+async task
+			// call whose jobs settle before its blocking subset — treat it as a
+			// partial frame: `tool_execution_end` still owns the terminal result.
+			const isTerminal = isFinalAsyncState && this.#backgroundToolCallIds.has(event.toolCallId);
 			component.updateResult(
 				{ ...event.partialResult, isError: asyncState === "failed" },
-				!isFinalAsyncState,
+				!isTerminal,
 				event.toolCallId,
 			);
-			if (isFinalAsyncState) {
+			if (isTerminal) {
 				this.ctx.pendingTools.delete(event.toolCallId);
 				this.#backgroundToolCallIds.delete(event.toolCallId);
 			}

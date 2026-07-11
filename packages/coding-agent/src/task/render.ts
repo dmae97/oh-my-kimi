@@ -1579,8 +1579,10 @@ export function renderResult(
 		const frozen = options.renderContext?.frozen === true;
 		const lines: string[] = [];
 
+		// Result rows win once any exist; progress rows for spawns without a
+		// result (a mixed call's async subset) render as a supplement below.
 		const shouldRenderProgress =
-			Boolean(details.progress && details.progress.length > 0) && (isPartial || details.results.length === 0);
+			Boolean(details.progress && details.progress.length > 0) && details.results.length === 0;
 		if (shouldRenderProgress && details.progress) {
 			const ordered = orderProgressForDisplay(details.progress);
 			// Collapsed view keeps the live edge: finished rows sort to the top of
@@ -1605,6 +1607,19 @@ export function renderResult(
 				lines.push(
 					`${theme.fg("dim", formatMoreItems(ordered.length - visible.length, "agent"))}${hint ? ` ${hint}` : ""}`,
 				);
+			}
+
+			// Mixed blocking+async call: async spawns never land in `results`
+			// (their payloads deliver through jobs) — keep their rows visible
+			// beside the finalized inline results, live while running and
+			// settled once their jobs finish.
+			const supplementalProgress = details.progress
+				? orderProgressForDisplay(
+						details.progress.filter(progress => !details.results.some(res => res.id === progress.id)),
+					)
+				: [];
+			for (const progress of supplementalProgress) {
+				lines.push(...renderAgentProgress(progress, "", "  ", expanded, theme, spinnerFrame, frozen));
 			}
 
 			const summaryParts: string[] = [];
