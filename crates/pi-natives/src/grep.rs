@@ -655,9 +655,10 @@ fn file_len_exceeds_limit(len: usize) -> bool {
 	u64::try_from(len).map_or(true, |len| len > MAX_FILE_BYTES)
 }
 
-fn read_owned_prefix(mut file: File, limit: u64) -> io::Result<Vec<u8>> {
+fn read_owned_prefix(mut file: File, limit: u64, capacity_hint: u64) -> io::Result<Vec<u8>> {
+	let capacity = capacity_hint.min(limit);
 	let mut buffer =
-		Vec::with_capacity(usize::try_from(limit).expect("bounded read limit fits usize"));
+		Vec::with_capacity(usize::try_from(capacity).expect("bounded read capacity fits usize"));
 	file.by_ref().take(limit).read_to_end(&mut buffer)?;
 	Ok(buffer)
 }
@@ -691,7 +692,7 @@ fn read_file_bytes_with_size(path: &Path, size_hint: Option<u64>) -> io::Result<
 		return Ok(ReadFile::Oversized);
 	}
 
-	let buffer = read_owned_prefix(file, FILE_CLASSIFICATION_READ_BYTES)?;
+	let buffer = read_owned_prefix(file, FILE_CLASSIFICATION_READ_BYTES, size)?;
 	if file_len_exceeds_limit(buffer.len()) {
 		return Ok(ReadFile::Oversized);
 	}
@@ -1208,7 +1209,7 @@ fn read_file_prefix(path: &Path) -> io::Result<ReadFile> {
 		return Ok(ReadFile::Bytes(Vec::new()));
 	}
 	let window = len.min(MAX_FILE_BYTES);
-	let buffer = read_owned_prefix(file, window)?;
+	let buffer = read_owned_prefix(file, window, window)?;
 	Ok(ReadFile::Bytes(buffer))
 }
 
