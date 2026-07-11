@@ -15,6 +15,7 @@
 - Added custom role creation to the Model Hub roles view (`+ New role…` / `n`): name the role and jump straight into assigning its model.
 - Added quick-switch (ctrl+p) cycle editing to the Model Hub roles view: `c` toggles a role's membership, `[`/`]` (or Shift+↑/↓) reorder it, with a live segment-track preview of the resulting cycle.
 - Added `/pause`: freezes every agent in the session (main, subagents, advisor) at its next safe step behind a fullscreen pause screen — in-flight model calls and running tools finish, nothing new starts, and esc/enter/space resumes exactly where everything parked. Handy for hand-editing the repo mid-run, then explaining the change as a normal steering message.
+- Added the current session title (bolded and centered above the pause bars) to the fullscreen \`/pause\` view.
 
 ### Changed
 

@@ -36,6 +36,7 @@ export interface PauseScreenHost {
 		readonly terminal: { readonly rows: number };
 	};
 	showStatus(message: string, options?: { dim?: boolean }): void;
+	readonly sessionName?: string;
 }
 
 /** Refresh cadence for the live "paused for" clock. */
@@ -76,16 +77,25 @@ function formatClock(ms: number): string {
  * Paint the pause scene as exactly `height` rows, vertically centered.
  * Exported for tests.
  */
-export function renderPauseScreen(width: number, height: number, elapsedMs: number): string[] {
+export function renderPauseScreen(width: number, height: number, elapsedMs: number, sessionName?: string): string[] {
 	const compact = width < MIN_FULL_WIDTH || height < MIN_FULL_HEIGHT;
 	const content: string[] = [];
 
 	if (compact) {
+		if (sessionName) {
+			content.push(centerLine(theme.bold(sessionName), width));
+			content.push("");
+		}
 		content.push(centerLine(theme.bold(theme.fg("accent", `▌▌ ${TITLE}`)), width));
 		content.push("");
 		content.push(centerLine(theme.fg("dim", `paused for ${formatClock(elapsedMs)}`), width));
 		content.push(centerLine(theme.fg("dim", "esc to resume"), width));
 	} else {
+		if (sessionName) {
+			content.push(centerLine(theme.bold(sessionName), width));
+			content.push("");
+			content.push("");
+		}
 		const bar = "█".repeat(BAR_WIDTH);
 		const glyphRow = `${bar}${" ".repeat(BAR_GAP)}${bar}`;
 		for (let i = 0; i < BAR_ROWS; i++) {
@@ -158,7 +168,12 @@ export class PauseScreenComponent implements Component, OverlayFocusOwner {
 
 	render(width: number): readonly string[] {
 		const elapsed = Date.now() - this.#startedAt;
-		return renderPauseScreen(Math.max(1, width), Math.max(1, this.host.ui.terminal.rows), elapsed);
+		return renderPauseScreen(
+			Math.max(1, width),
+			Math.max(1, this.host.ui.terminal.rows),
+			elapsed,
+			this.host.sessionName,
+		);
 	}
 }
 

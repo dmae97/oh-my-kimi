@@ -81,6 +81,20 @@ describe("pause screen", () => {
 			const text = renderPauseScreen(80, 24, 3_725_000).map(stripAnsi).join("\n");
 			expect(text).toContain("paused for 1:02:05");
 		});
+
+		it("displays the session name when provided in full mode", () => {
+			const lines = renderPauseScreen(80, 24, 65_000, "My Awesome Session");
+			const text = lines.map(stripAnsi).join("\n");
+			expect(text).toContain("My Awesome Session");
+			expect(text).toContain("P A U S E D");
+		});
+
+		it("displays the session name when provided in compact mode", () => {
+			const lines = renderPauseScreen(40, 10, 3_000, "Compact Session Title");
+			const text = lines.map(stripAnsi).join("\n");
+			expect(text).toContain("Compact Session Title");
+			expect(text).toContain("▌▌ P A U S E D");
+		});
 	});
 
 	describe("runPauseScreen", () => {

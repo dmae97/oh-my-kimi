@@ -566,6 +566,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	get focusedAgentId(): string | undefined {
 		return this.#focusController.focusedAgentId;
 	}
+	get sessionName(): string | undefined {
+		return this.session.sessionName;
+	}
 	focusAgentSession(id: string): Promise<void> {
 		return this.#focusController.focusAgent(id);
 	}
