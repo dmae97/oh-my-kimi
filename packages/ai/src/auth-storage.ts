@@ -2569,9 +2569,14 @@ export class AuthStorage {
 	 */
 	#findStoredCredentialIdForUsageCredential(provider: Provider, previous: UsageCredential): number | undefined {
 		const entries = this.#getStoredCredentials(provider);
+		// Broker-backed rows all carry REMOTE_REFRESH_SENTINEL as their refresh
+		// token — it identifies nothing, and comparing it would match the FIRST
+		// OAuth row regardless of which account/org is being refreshed.
+		const previousRefresh =
+			previous.refreshToken && previous.refreshToken !== REMOTE_REFRESH_SENTINEL ? previous.refreshToken : undefined;
 		const match = entries.find(entry => {
 			if (entry.credential.type !== "oauth") return false;
-			if (previous.refreshToken && entry.credential.refresh === previous.refreshToken) return true;
+			if (previousRefresh && entry.credential.refresh === previousRefresh) return true;
 			if (previous.accessToken && entry.credential.access === previous.accessToken) return true;
 			return (
 				entry.credential.accountId === previous.accountId &&
@@ -2585,9 +2590,12 @@ export class AuthStorage {
 
 	#persistRefreshedUsageCredential(provider: Provider, previous: UsageCredential, next: UsageCredential): void {
 		const entries = this.#getStoredCredentials(provider);
+		// Same sentinel rule as #findStoredCredentialIdForUsageCredential above.
+		const previousRefresh =
+			previous.refreshToken && previous.refreshToken !== REMOTE_REFRESH_SENTINEL ? previous.refreshToken : undefined;
 		const index = entries.findIndex(entry => {
 			if (entry.credential.type !== "oauth") return false;
-			if (previous.refreshToken && entry.credential.refresh === previous.refreshToken) return true;
+			if (previousRefresh && entry.credential.refresh === previousRefresh) return true;
 			if (previous.accessToken && entry.credential.access === previous.accessToken) return true;
 			return (
 				entry.credential.accountId === previous.accountId &&

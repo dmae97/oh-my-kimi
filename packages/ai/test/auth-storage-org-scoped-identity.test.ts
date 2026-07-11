@@ -22,6 +22,7 @@ import {
 	type AuthCredential,
 	type AuthCredentialStore,
 	AuthStorage,
+	REMOTE_REFRESH_SENTINEL,
 	SqliteAuthCredentialStore,
 	type StoredAuthCredential,
 } from "@oh-my-pi/pi-ai/auth-storage";
@@ -137,14 +138,19 @@ interface CacheEntry {
 	expiresAtSec: number;
 }
 
-function makeStore(rows: StoredAuthCredential[]): AuthCredentialStore {
+function makeStore(
+	rows: StoredAuthCredential[],
+	onUpdate?: (id: number, credential: AuthCredential) => void,
+): AuthCredentialStore {
 	const cache = new Map<string, CacheEntry>();
 	return {
 		close() {},
 		listAuthCredentials() {
 			return rows;
 		},
-		updateAuthCredential() {},
+		updateAuthCredential(id, credential) {
+			onUpdate?.(id, credential);
+		},
 		deleteAuthCredential() {},
 		tryDisableAuthCredentialIfMatches() {
 			return false;
@@ -169,15 +175,20 @@ function makeStore(rows: StoredAuthCredential[]): AuthCredentialStore {
 	};
 }
 
-function oauthRow(id: number, orgId?: string, orgName?: string): StoredAuthCredential {
+function oauthRow(
+	id: number,
+	orgId?: string,
+	orgName?: string,
+	overrides?: { refresh?: string; expires?: number },
+): StoredAuthCredential {
 	return {
 		id,
 		provider: "anthropic",
 		credential: {
 			type: "oauth",
 			access: `oat-${id}`,
-			refresh: `refresh-${id}`,
-			expires: Date.now() + 3_600_000,
+			refresh: overrides?.refresh ?? `refresh-${id}`,
+			expires: overrides?.expires ?? Date.now() + 3_600_000,
 			accountId: "account-shared",
 			email: EMAIL,
 			orgId,
@@ -264,5 +275,48 @@ describe("anthropic usage report dedupe partitions by org", () => {
 
 		const reports = ((await storage.fetchUsageReports()) ?? []).filter(r => r.provider === "anthropic");
 		expect(reports).toHaveLength(1);
+	});
+});
+
+describe("broker-backed refresh row addressing", () => {
+	let storage: AuthStorage | null = null;
+
+	afterEach(() => {
+		storage?.close();
+		storage = null;
+		vi.restoreAllMocks();
+	});
+
+	it("persists a refresh into the refreshed org's row, not the first sentinel row", async () => {
+		// Broker snapshots replace every refresh token with the shared
+		// REMOTE_REFRESH_SENTINEL. The sentinel must not act as row identity:
+		// with two same-email orgs, refreshing the expired Max row previously
+		// matched the Team row first and persisted the new token there.
+		const teamRow = oauthRow(1, TEAM_ORG, "Team Workspace", { refresh: REMOTE_REFRESH_SENTINEL });
+		const maxRow = oauthRow(2, MAX_ORG, "Personal Max", {
+			refresh: REMOTE_REFRESH_SENTINEL,
+			expires: Date.now() - 1_000,
+		});
+		const updates: number[] = [];
+		storage = new AuthStorage(
+			makeStore([teamRow, maxRow], id => {
+				updates.push(id);
+			}),
+			{
+				usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
+				refreshOAuthCredential: async () => ({
+					access: "refreshed-access",
+					refresh: REMOTE_REFRESH_SENTINEL,
+					expires: Date.now() + 3_600_000,
+				}),
+			},
+		);
+		await storage.reload();
+
+		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async () => emailOnlyReport());
+
+		await storage.fetchUsageReports();
+		// Only the expired Max row (id 2) was rewritten; the Team row was never touched.
+		expect(updates).toEqual([2]);
 	});
 });
