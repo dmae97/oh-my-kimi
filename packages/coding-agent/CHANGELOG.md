@@ -59,6 +59,9 @@
 - Fixed an issue where BigInt values in tool arguments failed to serialize during session compaction.
 - Resolved an issue where GPT-5.6 over-delegated tasks by refining task fan-out and concurrency policies in the system prompt.
 - Fixed a race condition in concurrent MCP OAuth token refreshes across processes, ensuring rotating refresh tokens are only refreshed once and preventing stale token errors from clearing valid credentials.
+- Fixed serialization of BigInt values in tool arguments during session compaction
+- Fixed GPT-5.6 over-delegating work by centralizing task fan-out and concurrency policy in the system prompt: default task mode now uses Codex's explicit-request policy, while eager task mode uses its proactive policy. Other models retain the existing delegation strategy; the task tool keeps only model-independent assignment and coordination guidance.
+- Fixed session title generation including leaked thinking markup from OpenAI-compatible endpoints that ignore reasoning disablement. ([#5122](https://github.com/can1357/oh-my-pi/issues/5122))
 
 ## [16.4.1] - 2026-07-10
 
