@@ -448,6 +448,61 @@ describe("AgentSession empty stop guard", () => {
 		).toBe(true);
 	});
 
+	it("does not let a non-opt-in custom turn inherit auto-learn terminal empty-stop acceptance", async () => {
+		const { session, mock } = await createHarness(
+			[
+				recordCall("learn-alpha", "call-record-learn-alpha"),
+				recordCall("learn-beta", "call-record-learn-beta"),
+				{ content: ["normal turn complete"], stopReason: "stop" },
+				{ content: ["auto-learn captured non-empty text"], stopReason: "stop" },
+				emptyStop(),
+				emptyStop(),
+				emptyStop(),
+				emptyStop(),
+			],
+			{
+				"autolearn.enabled": true,
+				"autolearn.autoContinue": true,
+				"autolearn.minToolCalls": 2,
+			},
+		);
+		const retryEndEvents: Array<Extract<AgentSessionEvent, { type: "auto_retry_end" }>> = [];
+		session.subscribe(event => {
+			if (event.type === "auto_retry_end") retryEndEvents.push(event);
+		});
+		new AutoLearnController({ session, settings: session.settings });
+
+		await session.prompt("record enough facts for auto-learn");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(4);
+		expect(assistantText(session.agent.state.messages)).toContain("auto-learn captured non-empty text");
+		expect(reminderMessages(session.agent.state.messages)).toHaveLength(0);
+
+		await expectPromptCompletes(
+			session.sendCustomMessage(
+				{
+					customType: "advisor",
+					content: "check",
+					display: false,
+					attribution: "agent",
+				},
+				{ triggerTurn: true },
+			),
+		);
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(8);
+		expect(reminderMessages(session.agent.state.messages)).toHaveLength(3);
+		expect(retryEndEvents).toHaveLength(1);
+		expect(retryEndEvents[0]).toMatchObject({
+			type: "auto_retry_end",
+			success: false,
+			attempt: 3,
+		});
+		expect(retryEndEvents[0]?.finalError).toContain("empty stop");
+	});
+
 	it("does not retry normal stop or tool-use turns", async () => {
 		const normal = await createHarness([{ content: ["already done"], stopReason: "stop" }]);
 

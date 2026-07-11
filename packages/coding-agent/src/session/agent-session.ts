@@ -8359,13 +8359,15 @@ export class AgentSession {
 	): Promise<void> {
 		this.#beginInFlight();
 		try {
-			if (options?.acceptTerminalEmptyStop) {
+			const acceptTerminalEmptyStop = options?.acceptTerminalEmptyStop === true;
+			if (acceptTerminalEmptyStop) {
 				this.#resetPromptMaintenanceState();
-				this.#acceptTerminalEmptyStopForPrompt = true;
 			}
+			this.#acceptTerminalEmptyStopForPrompt = acceptTerminalEmptyStop;
 			await this.agent.prompt(message);
 			await this.#waitForPostPromptRecovery();
 		} finally {
+			this.#acceptTerminalEmptyStopForPrompt = false;
 			this.#endInFlight();
 		}
 	}
