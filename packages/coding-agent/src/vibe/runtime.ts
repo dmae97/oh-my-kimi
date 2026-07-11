@@ -92,6 +92,14 @@ interface VibeRecord {
 	/** Resolved model display string once known. */
 	resolvedModel?: string;
 	turn?: VibeTurn;
+	/** Live view of the in-flight turn (current tool, intent, streamed text tail). */
+	live?: {
+		currentTool?: string;
+		currentToolArgs?: string;
+		lastIntent?: string;
+		/** Latest streamed assistant text lines, oldest first. */
+		outputTail: string[];
+	};
 	/** Job id of the most recently settled turn (wait snapshots after settle). */
 	lastJobId?: string;
 	/** Messages queued while a turn was in flight; drained into the next turn. */
@@ -100,18 +108,31 @@ interface VibeRecord {
 	killed: boolean;
 }
 
-/** Roster entry returned by {@link VibeSessionRegistry.list}. */
-export interface VibeRosterEntry {
+/**
+ * Live per-session "screen" for rich rendering: what the worker is doing right
+ * now (tool trace, current tool, streamed text tail) plus roster metadata.
+ * Every string is already one-line sanitized.
+ */
+export interface VibeScreenSnapshot {
 	id: string;
 	cli: VibeCli;
 	state: VibeSessionState;
 	model?: string;
 	turns: number;
 	queued: number;
+	/** Start of the in-flight turn, when running. */
+	turnStartedAt?: number;
+	/** Gist of the message that started the in-flight turn. */
+	turnMessage?: string;
+	currentTool?: string;
+	currentToolArgs?: string;
+	lastIntent?: string;
+	/** Completed tool calls of the in-flight turn, oldest first (tail). */
+	trace: string[];
+	/** Latest streamed worker text lines, oldest first. */
+	outputTail: string[];
 	lastActivity?: string;
 	lastActivityAt: number;
-	/** Job id of the in-flight turn, when running. */
-	jobId?: string;
 }
 
 export interface VibeSpawnOutcome {
@@ -214,23 +235,43 @@ export class VibeSessionRegistry {
 		return ids;
 	}
 
-	list(owner: string): VibeRosterEntry[] {
-		const entries: VibeRosterEntry[] = [];
+	/**
+	 * Live screen snapshots for rich rendering (the "TV wall"): one entry per
+	 * session in creation order, carrying the in-flight turn's trace, current
+	 * tool, and streamed text tail. All strings are one-line sanitized here so
+	 * renderers can print them verbatim.
+	 */
+	screens(owner: string, ids?: string[]): VibeScreenSnapshot[] {
+		const wanted = ids?.length ? new Set(ids.map(id => id.trim())) : undefined;
+		const records: VibeRecord[] = [];
 		for (const record of this.#records.values()) {
 			if (record.ownerId !== owner) continue;
-			entries.push({
-				id: record.id,
-				cli: record.cli,
-				state: record.state,
-				model: record.resolvedModel,
-				turns: record.turnCount,
-				queued: record.queue.length,
-				lastActivity: record.lastActivity,
-				lastActivityAt: record.lastActivityAt,
-				jobId: record.turn?.jobId,
-			});
+			if (wanted && !wanted.has(record.id)) continue;
+			records.push(record);
 		}
-		return entries.sort((a, b) => a.lastActivityAt - b.lastActivityAt);
+		// Stable TV-wall ordering: spawn order, not activity order.
+		records.sort((a, b) => a.createdAt - b.createdAt);
+		return records.map(record => ({
+			id: record.id,
+			cli: record.cli,
+			state: record.state,
+			model: record.resolvedModel,
+			turns: record.turnCount,
+			queued: record.queue.length,
+			turnStartedAt: record.turn?.startedAt,
+			turnMessage: record.turn ? firstLine(record.turn.message, 80) : undefined,
+			currentTool: record.live?.currentTool,
+			currentToolArgs: record.live?.currentToolArgs ? firstLine(record.live.currentToolArgs, 60) : undefined,
+			lastIntent: record.live?.lastIntent ? firstLine(record.live.lastIntent, 80) : undefined,
+			trace: record.turn
+				? record.turn.trace
+						.slice(-6)
+						.map(entry => firstLine(`${entry.tool}${entry.args ? `(${entry.args})` : ""}`, TRACE_LINE_MAX))
+				: [],
+			outputTail: (record.live?.outputTail ?? []).map(line => firstLine(line, 100)),
+			lastActivity: record.lastActivity,
+			lastActivityAt: record.lastActivityAt,
+		}));
 	}
 
 	/** Spawn a persistent worker session and start its first turn in the background. */
@@ -509,6 +550,13 @@ export class VibeSessionRegistry {
 		const onProgress = (progress: AgentProgress): void => {
 			mergeTrace(turn, progress);
 			record.resolvedModel = progress.resolvedModel ?? record.resolvedModel;
+			// recentOutput is newest-first; keep the latest lines oldest-first for display.
+			record.live = {
+				currentTool: progress.currentTool,
+				currentToolArgs: progress.currentToolArgs,
+				lastIntent: progress.lastIntent,
+				outputTail: progress.recentOutput.slice(0, 3).reverse(),
+			};
 			const gist =
 				progress.lastIntent ??
 				(progress.currentTool ? `${progress.currentTool} ${progress.currentToolArgs ?? ""}` : undefined);
@@ -558,6 +606,7 @@ export class VibeSessionRegistry {
 	#finishTurn(session: ToolSession, manager: AsyncJobManager, record: VibeRecord, settledJobId: string): void {
 		record.lastJobId = settledJobId;
 		record.turn = undefined;
+		record.live = undefined;
 		record.lastActivityAt = Date.now();
 		if (record.killed) {
 			record.state = "dead";
@@ -611,24 +660,42 @@ export class VibeSessionRegistry {
 			response = lastNewline > 0 ? slice.slice(0, lastNewline) : slice;
 			responseTruncated = true;
 		}
-		const text = prompt
-			.render(vibeTurnResultTemplate, {
+		let text: string;
+		try {
+			text = prompt
+				.render(vibeTurnResultTemplate, {
+					id: record.id,
+					cli: record.cli,
+					turn: turnIndex,
+					status,
+					duration: formatDuration(result.durationMs),
+					requests: result.requests,
+					toolCount: turn.toolCount,
+					model: result.resolvedModel ?? record.resolvedModel ?? "",
+					trace: traceLines,
+					traceOverflow: traceOverflow > 0 ? traceOverflow : undefined,
+					response,
+					responseTruncated,
+					error: failed ? (result.abortReason ?? result.error ?? result.stderr ?? "") : "",
+					alive: record.state !== "dead",
+				})
+				.trim();
+		} catch (error) {
+			// A formatting bug must never turn a finished worker turn into a false
+			// failure — the work is done; degrade to a plain-text assembly.
+			logger.warn("vibe: turn-result template render failed; using plain fallback", {
 				id: record.id,
-				cli: record.cli,
-				turn: turnIndex,
-				status,
-				duration: formatDuration(result.durationMs),
-				requests: result.requests,
-				toolCount: turn.toolCount,
-				model: result.resolvedModel ?? record.resolvedModel ?? "",
-				trace: traceLines,
-				traceOverflow: traceOverflow > 0 ? traceOverflow : undefined,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			text = [
+				`[vibe:${record.id} cli=${record.cli} turn=${turnIndex} status=${status}]`,
+				`Activity (${turn.toolCount} tool calls, ${result.requests} requests):`,
+				...traceLines.map(line => `- ${line}`),
+				"",
+				"Response:",
 				response,
-				responseTruncated,
-				error: failed ? (result.abortReason ?? result.error ?? result.stderr ?? "") : "",
-				alive: record.state !== "dead",
-			})
-			.trim();
+			].join("\n");
+		}
 		if (failed) throw new VibeTurnError(text);
 		return text;
 	}

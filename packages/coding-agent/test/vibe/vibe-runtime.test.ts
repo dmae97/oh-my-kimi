@@ -231,7 +231,7 @@ describe("vibe session registry", () => {
 		// Ack is immediate: the job is still running behind the gate.
 		const job = manager.getJob(jobId)!;
 		expect(job.status).toBe("running");
-		expect(registry.list("Main")[0]?.cli).toBe("fast");
+		expect(registry.screens("Main")[0]?.cli).toBe("fast");
 
 		gate.resolve();
 		await job.promise;
@@ -245,7 +245,7 @@ describe("vibe session registry", () => {
 		expect(text.indexOf("read(src/foo.ts)")).toBeLessThan(text.indexOf("bash(bun test)"));
 		expect(text).toContain("Implemented the widget.");
 		// Session survives the turn, addressable for follow-ups.
-		const entry = registry.list("Main")[0]!;
+		const entry = registry.screens("Main")[0]!;
 		expect(entry.state).toBe("idle");
 		expect(entry.turns).toBe(1);
 	});
@@ -287,7 +287,7 @@ describe("vibe session registry", () => {
 		fake.setStreaming(false);
 		const queued = await registry.send(session, { session: "Good", message: "Then write tests." });
 		expect(queued.mode).toBe("queued");
-		expect(registry.list("Main")[0]?.queued).toBe(1);
+		expect(registry.screens("Main")[0]?.queued).toBe(1);
 
 		// Settling the turn drains the queue into an automatic follow-up turn.
 		gate.resolve();
@@ -340,7 +340,7 @@ describe("vibe session registry", () => {
 		expect(text).toContain('turn="2"');
 		expect(text).toContain("edit(src/foo.ts)");
 		expect(text).toContain("Renamed everything.");
-		expect(registry.list("Main")[0]?.turns).toBe(2);
+		expect(registry.screens("Main")[0]?.turns).toBe(2);
 	});
 
 	it("runSubagentFollowUpTurn continues the same live session and finalizes trace + yield response", async () => {
@@ -444,7 +444,7 @@ describe("vibe session registry", () => {
 		expect(manager.getJob(jobId)!.status).toBe("cancelled");
 		expect(fake.isDisposed()).toBe(true);
 		expect(AgentRegistry.global().get("Doomed")).toBeUndefined();
-		expect(registry.list("Main")[0]?.state).toBe("dead");
+		expect(registry.screens("Main")[0]?.state).toBe("dead");
 		await expect(registry.send(session, { session: "Doomed", message: "hello?" })).rejects.toThrow("dead");
 
 		gate.resolve();
