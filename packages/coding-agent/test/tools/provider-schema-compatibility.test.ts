@@ -138,6 +138,22 @@ describe("builtin tool schemas provider compatibility", () => {
 		expect(failures).toEqual([]);
 	});
 
+	it("preserves the yield result schema for Cloud Code Assist", async () => {
+		const toolSchemas = await collectToolSchemas();
+		const yieldEntry = toolSchemas.find(tool => tool.name === "yield");
+		expect(yieldEntry).toBeDefined();
+		if (!yieldEntry) return;
+
+		const normalized = asSchemaObject(normalizeSchemaForCCA(yieldEntry.schema));
+		const properties = asSchemaObject(normalized?.properties);
+		const typeSchema = asSchemaObject(properties?.type);
+
+		expect(normalized?.type).toBe("object");
+		expect(properties?.result).toBeDefined();
+		expect(typeSchema?.type).toBe("string");
+		expect(typeSchema?.anyOf).toBeUndefined();
+	});
+
 	it("asserts that browser tool schema root has 'type: \"object\"' for Codex and OpenAI Responses compatibility", async () => {
 		const toolSchemas = await collectToolSchemas();
 		const browserEntry = toolSchemas.find(tool => tool.name === "browser");
