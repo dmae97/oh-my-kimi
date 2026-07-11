@@ -504,7 +504,7 @@ read:
 
 ```yaml
 contextPromotion:
-  enabled: true
+  enabled: false
 
 compaction:
   enabled: true
@@ -520,7 +520,7 @@ memory:
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `contextPromotion.enabled` | boolean | `true` | Promote relevant earlier context. |
+| `contextPromotion.enabled` | boolean | `false` | Promote to the active model's explicit `contextPromotionTarget` on context overflow. |
 | `compaction.enabled` | boolean | `true` | Automatic conversation compaction. |
 | `compaction.midTurnEnabled` | boolean | `true` | Check thresholds at safe mid-turn tool-loop boundaries before the next provider request. |
 | `compaction.strategy` | enum | `snapcompact` | `context-full`, `handoff`, `shake`, `snapcompact`, `off`. |
