@@ -251,10 +251,12 @@ export class ModelHubComponent implements Component {
 		const initialProvider = options.initialProviderId;
 		if (initialProvider && this.#entries.some(entry => entry.providerId === initialProvider)) {
 			this.#setActiveEntry(`provider:${initialProvider}`);
-		} else if (this.#recentItems.length > 0) {
-			this.#setActiveEntry("recent");
 		} else {
 			this.#setActiveEntry("all");
+		}
+
+		if (this.#mode === "pick") {
+			this.#focus = "list";
 		}
 
 		// Reconcile with cached discovery state in the background. A --models
@@ -459,12 +461,6 @@ export class ModelHubComponent implements Component {
 				annotation: `${assignedCount}/${visibleRoles.length}`,
 			});
 		}
-		fixed.push({
-			id: "recent",
-			kind: "recent",
-			label: "Recent",
-			annotation: this.#recentItems.length > 0 ? String(this.#recentItems.length) : "—",
-		});
 		fixed.push({ id: "all", kind: "all", label: "All models", annotation: String(availableModels.length) });
 
 		this.#fixedEntries = fixed;

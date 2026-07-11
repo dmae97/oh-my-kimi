@@ -189,8 +189,7 @@ describe("ModelHub", () => {
 			const { hub } = createHub({ models: [model], scoped: true, settings });
 			installTestTheme();
 
-			hub.handleInput(UP); // All models → Recent
-			hub.handleInput(UP); // Recent → Roles (now leads the sidebar)
+			hub.handleInput(UP); // All models → Roles (since Recent is removed)
 			const lines = hub.render(220).map(line => stripVTControlCharacters(line));
 			const defaultRow = lines.find(line => line.includes("DEFAULT"));
 			const smolRow = lines.find(line => line.includes("SMOL"));
@@ -215,8 +214,7 @@ describe("ModelHub", () => {
 			});
 			installTestTheme();
 
-			hub.handleInput(UP);
-			hub.handleInput(UP); // Roles view (top of the sidebar)
+			hub.handleInput(UP); // All models → Roles (top of the sidebar)
 			hub.handleInput("\n"); // dive into the role rows
 			hub.handleInput(DOWN); // default → smol row
 			hub.handleInput("x");
@@ -237,21 +235,20 @@ describe("ModelHub", () => {
 			const { hub } = createHub({ models: [model] });
 			installTestTheme();
 
-			hub.handleInput(UP);
-			hub.handleInput(UP); // All models → Recent → Roles
+			hub.handleInput(UP); // All models → Roles (since Recent is removed)
 			// The roles view shows as a preview, but arrows keep hopping.
 			expect(footerLine(hub.render(220))).toContain("→ roles");
-			hub.handleInput(DOWN); // continues to Recent — not a role row
-			expect(normalize(hub.render(220))).toContain("Recently used");
+			hub.handleInput(DOWN); // continues to All models — not a role row
+			expect(normalize(hub.render(220))).toContain("All available models");
 		});
 
-		test("while searching, the hop skips Roles and an empty Recent", () => {
+		test("while searching, the hop skips Roles", () => {
 			const model = makeModel("prov-a", "target-model");
 			const { hub } = createHub({ models: [model] });
 			installTestTheme();
 
 			for (const ch of "target") hub.handleInput(ch);
-			hub.handleInput(UP); // skips Recent (0 recent hits) and Roles → wraps to prov-a
+			hub.handleInput(UP); // skips Roles → wraps to prov-a
 			expect(normalize(hub.render(220))).toContain("prov-a ·");
 			expect(footerLine(hub.render(220))).not.toContain("→ roles");
 		});
@@ -275,8 +272,7 @@ describe("ModelHub", () => {
 			});
 			installTestTheme();
 
-			hub.handleInput(UP);
-			hub.handleInput(UP); // Roles view
+			hub.handleInput(UP); // All models → Roles (since Recent is removed)
 			hub.handleInput("\n"); // dive into rows; cursor on DEFAULT
 
 			// Default cycle is [smol, default, slow]: c removes default…
@@ -306,8 +302,7 @@ describe("ModelHub", () => {
 			const { hub, onAssign } = createHub({ models: [model], scoped: true });
 			installTestTheme();
 
-			hub.handleInput(UP);
-			hub.handleInput(UP); // Roles view
+			hub.handleInput(UP); // All models → Roles (since Recent is removed)
 			hub.handleInput("\n"); // dive into rows
 			hub.handleInput(UP); // wraps to the trailing "+ New role…" row
 			hub.handleInput("\n");
@@ -440,6 +435,26 @@ describe("ModelHub", () => {
 			refreshGate.resolve();
 		});
 
+		test("focuses list mode initially in pick mode", () => {
+			const model = makeModel("test", "test-model");
+			const { hub } = createHub({
+				models: [model],
+				hub: { mode: "pick" },
+			});
+			const rendered = normalize(hub.render(220));
+			expect(rendered).toContain("↑/↓ models · ← providers");
+		});
+
+		test("focuses scope mode initially in roles mode", () => {
+			const model = makeModel("test", "test-model");
+			const { hub } = createHub({
+				models: [model],
+				hub: { mode: "roles" },
+			});
+			const rendered = normalize(hub.render(220));
+			expect(rendered).toContain("↑/↓ providers · → models");
+		});
+
 		test("keeps the highlighted model when a background refresh reorders the list", async () => {
 			const modelBb = makeModel("test", "bb-model");
 			const modelCc = makeModel("test", "cc-model");
@@ -453,7 +468,6 @@ describe("ModelHub", () => {
 			});
 			installTestTheme();
 
-			hub.handleInput("\t"); // list mode
 			hub.handleInput(DOWN); // highlight cc-model
 			available = [modelAa, modelBb, modelCc];
 			refreshGate.resolve();
@@ -474,6 +488,8 @@ describe("ModelHub", () => {
 			});
 			installTestTheme();
 
+			// Focus scope first to allow scope-hopping
+			hub.handleInput("\t");
 			// Scope-hop: All models → custom-provider → openrouter.
 			hub.handleInput(DOWN);
 			hub.handleInput(DOWN);

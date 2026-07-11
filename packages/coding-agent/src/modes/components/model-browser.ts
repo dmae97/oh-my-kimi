@@ -9,6 +9,7 @@
  */
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import {
 	type Component,
@@ -348,6 +349,7 @@ export class ModelBrowser implements Component {
 	}
 
 	#isDisabled(item: ModelBrowserItem): boolean {
+		if (item.id === "separator") return true;
 		if (!this.#disableOverContext || this.#currentContextTokens <= 0) return false;
 		const contextWindow = item.model.contextWindow ?? 0;
 		return contextWindow > 0 && this.#currentContextTokens > contextWindow;
@@ -390,8 +392,43 @@ export class ModelBrowser implements Component {
 		this.onSelectionChange?.(this.getSelected());
 	}
 
+	#isRecentOrRole(item: ModelBrowserItem): boolean {
+		if (this.#mruOrder.includes(item.selector)) return true;
+		for (const role in this.#roles) {
+			const r = this.#roles[role];
+			if (r && modelsAreEqual(r.model, item.model)) return true;
+		}
+		return false;
+	}
+	#insertSeparator(items: ModelBrowserItem[]): ModelBrowserItem[] {
+		const filtered = items.filter(item => item.id !== "separator");
+		const firstNonRecentIndex = filtered.findIndex(item => !this.#isRecentOrRole(item));
+		if (firstNonRecentIndex > 0 && firstNonRecentIndex < filtered.length) {
+			const separatorItem: ModelBrowserItem = {
+				id: "separator",
+				provider: "",
+				selector: "separator",
+				model: buildModel({
+					id: "separator",
+					name: "separator",
+					api: "ollama-chat",
+					provider: "",
+					baseUrl: "",
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 0,
+					maxTokens: 0,
+				}),
+			};
+			return [...filtered.slice(0, firstNonRecentIndex), separatorItem, ...filtered.slice(firstNonRecentIndex)];
+		}
+		return filtered;
+	}
+
 	#applyQuery(): void {
 		const query = this.#searchInput.getValue();
+		let items: ModelBrowserItem[];
 		if (query.trim()) {
 			// Match against the displayed "provider/id" string so the user can
 			// type what they see: bare names, provider prefixes, or scoped
@@ -399,10 +436,11 @@ export class ModelBrowser implements Component {
 			// so a weakly matching default doesn't trump a stronger match.
 			const matches = fuzzyFilter(this.#baseItems, query, ({ provider, id }) => `${provider}/${id}`);
 			sortModelItems(matches, { roles: this.#roles, mruOrder: this.#mruOrder, skipRoleRank: true });
-			this.#visibleItems = matches;
+			items = matches;
 		} else {
-			this.#visibleItems = this.#baseItems;
+			items = this.#baseItems;
 		}
+		this.#visibleItems = this.#insertSeparator(items);
 		this.#selectedIndex = this.#coerceSelectedIndex(Math.min(this.#selectedIndex, this.#visibleItems.length - 1));
 		this.onSelectionChange?.(this.getSelected());
 	}
@@ -515,6 +553,11 @@ export class ModelBrowser implements Component {
 		ctxWidth: number,
 		costWidth: number,
 	): string {
+		if (item.id === "separator") {
+			const dashCount = Math.max(0, width - 4);
+			const line = theme.fg("muted", "─".repeat(dashCount));
+			return `  ${line}  `;
+		}
 		const disabled = this.#isDisabled(item);
 		const prefix = selected ? `${theme.fg("accent", theme.nav.cursor)} ` : "  ";
 		const providerPrefix = this.#showProvider ? theme.fg("dim", `${item.provider}/`) : "";
