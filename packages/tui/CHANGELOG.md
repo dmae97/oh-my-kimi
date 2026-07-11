@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed streamed diff code fences retaining unhighlighted rows in native scrollback when long transient blocks leave the viewport before finalization ([#5126](https://github.com/can1357/oh-my-pi/issues/5126)).
+
 ## [16.4.1] - 2026-07-10
 
 ### Added
