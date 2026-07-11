@@ -347,6 +347,27 @@ describe("session exit diagnostics", () => {
 		});
 	});
 
+	it("does not reconstruct a failed tool turn already closed by synthetic results", () => {
+		const sessionManager = SessionManager.inMemory();
+		sessionManager.appendMessage({ role: "user", content: "inspect the file", timestamp: Date.now() });
+		sessionManager.appendMessage({ ...pendingAssistant, stopReason: "error" });
+		sessionManager.appendMessage({
+			role: "toolResult",
+			toolCallId: "toolu_repro",
+			toolName: "bash",
+			content: [{ type: "text", text: "Tool execution stopped after model failure." }],
+			isError: true,
+			timestamp: Date.now(),
+		});
+		sessionManager.appendCustomEntry(SESSION_EXIT_CUSTOM_TYPE, {
+			reason: "exit",
+			kind: "process_exit",
+			recordedAt: "2026-07-11T02:20:08.800Z",
+		});
+
+		expect(createInterruptedTurnAbortMessage(sessionManager.getBranch())).toBeUndefined();
+	});
+
 	it("reconstructs a first user-message tail with selected model metadata", () => {
 		const sessionManager = SessionManager.inMemory();
 		sessionManager.appendMessage({ role: "user", content: "inspect the file", timestamp: Date.now() });

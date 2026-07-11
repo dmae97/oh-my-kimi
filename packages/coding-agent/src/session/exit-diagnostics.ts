@@ -118,6 +118,12 @@ export function createInterruptedTurnAbortMessage(
 		previousAssistant = entry.message;
 		break;
 	}
+	if (
+		tail.role === "toolResult" &&
+		(previousAssistant?.stopReason === "error" || previousAssistant?.stopReason === "aborted")
+	) {
+		return undefined;
+	}
 	const model = previousAssistant ?? fallbackModel;
 	if (!model) return undefined;
 
