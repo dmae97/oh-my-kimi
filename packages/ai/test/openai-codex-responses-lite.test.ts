@@ -758,6 +758,7 @@ describe("openai-codex concurrent reasoning summaries", () => {
 		const terra = createCodexModel("gpt-5.6-terra");
 		const withSummary = await transformRequestBody({ model: terra.id }, terra, { reasoningEffort: "medium" });
 		expect(withSummary.stream_options).toEqual({ reasoning_summary_delivery: "sequential_cutoff" });
+		expect(withSummary.reasoning?.summary).toBe("detailed");
 
 		const suppressed = await transformRequestBody({ model: terra.id }, terra, {
 			reasoningEffort: "medium",
@@ -771,6 +772,58 @@ describe("openai-codex concurrent reasoning summaries", () => {
 		const legacy = createCodexModel("gpt-5.1-codex");
 		const unsupported = await transformRequestBody({ model: legacy.id }, legacy, { reasoningEffort: "medium" });
 		expect(unsupported.stream_options).toBeUndefined();
+	});
+
+	it("renders summary deltas when sequential-cutoff omits atomic done events", async () => {
+		const model = createCodexModel("gpt-5.6-terra");
+		const events: Array<Record<string, unknown>> = [
+			{
+				type: "response.output_item.added",
+				output_index: 0,
+				item: { type: "reasoning", id: "reason_delta", summary: [] },
+			},
+			{
+				type: "response.reasoning_summary_part.added",
+				item_id: "reason_delta",
+				output_index: 0,
+				summary_index: 0,
+				part: { type: "summary_text", text: "" },
+			},
+			{
+				type: "response.reasoning_summary_text.delta",
+				item_id: "reason_delta",
+				output_index: 0,
+				summary_index: 0,
+				delta: "Streaming ",
+			},
+			{
+				type: "response.reasoning_summary_text.delta",
+				item_id: "reason_delta",
+				output_index: 0,
+				summary_index: 0,
+				delta: "fallback",
+			},
+			{
+				type: "response.output_item.done",
+				output_index: 0,
+				item: { type: "reasoning", id: "reason_delta", summary: [] },
+			},
+			...COMPLETED_CODEX_EVENTS,
+		];
+		const fetchMock = createCodexFetchMock(createCodexSse(events), () => {});
+		const stream = streamOpenAICodexResponses(model, createCodexTestContext(), {
+			apiKey: createCodexTestToken(),
+			fetch: fetchMock,
+			reasoning: "medium",
+		});
+		const thinkingDeltas: string[] = [];
+		for await (const event of stream) {
+			if (event.type === "thinking_delta") thinkingDeltas.push(event.delta);
+		}
+		const result = await stream.result();
+
+		expect(thinkingDeltas).toEqual(["Streaming ", "fallback"]);
+		expect(result.content.find(block => block.type === "thinking")?.thinking).toBe("Streaming fallback");
 	});
 
 	it("deduplicates cumulative atomic summaries and ignores legacy deltas under sequential cutoff", async () => {
