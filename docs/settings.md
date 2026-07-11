@@ -431,7 +431,6 @@ Individual built-in tools are toggled by their own keys, e.g. `bash.enabled`, `e
 ```yaml
 bash:
   enabled: true
-  stripTrailingHeadTail: true
   autoBackground:
     enabled: false
     thresholdMs: 60000
@@ -455,7 +454,6 @@ lsp:
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `bash.enabled` | boolean | `true` | Enable the bash tool. |
-| `bash.stripTrailingHeadTail` | boolean | `true` | Strip trailing head/tail noise from output. |
 | `bash.autoBackground.enabled` | boolean | `false` | Auto-background long-running commands. |
 | `bash.autoBackground.thresholdMs` | number | `60000` | Threshold before auto-backgrounding. |
 | `eval.py` | boolean | `true` | Python eval backend. `PI_PY=0` disables for the process. |
