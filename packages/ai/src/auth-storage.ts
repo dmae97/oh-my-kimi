@@ -703,6 +703,9 @@ export interface OAuthAccess {
 	projectId?: string;
 	enterpriseUrl?: string;
 	apiEndpoint?: string;
+	/** Organization/workspace the credential is scoped to (Anthropic multi-subscription). */
+	orgId?: string;
+	orgName?: string;
 }
 
 /**
@@ -725,6 +728,9 @@ export interface OAuthAccessFailure {
 	projectId?: string;
 	enterpriseUrl?: string;
 	apiEndpoint?: string;
+	/** Organization/workspace the credential is scoped to (Anthropic multi-subscription). */
+	orgId?: string;
+	orgName?: string;
 	error: string;
 }
 
@@ -4529,6 +4535,8 @@ export class AuthStorage {
 			projectId: credential.projectId,
 			enterpriseUrl: credential.enterpriseUrl,
 			apiEndpoint: credential.apiEndpoint,
+			orgId: credential.orgId,
+			orgName: credential.orgName,
 		};
 	}
 
@@ -4563,6 +4571,8 @@ export class AuthStorage {
 					email: selection.credential.email,
 					projectId: selection.credential.projectId,
 					enterpriseUrl: selection.credential.enterpriseUrl,
+					orgId: selection.credential.orgId,
+					orgName: selection.credential.orgName,
 					error: "OAuth access unavailable",
 				};
 			}
@@ -4575,6 +4585,8 @@ export class AuthStorage {
 				email: credential.email,
 				projectId: credential.projectId,
 				enterpriseUrl: credential.enterpriseUrl,
+				orgId: credential.orgId,
+				orgName: credential.orgName,
 			};
 		} catch (error) {
 			return {
@@ -4584,6 +4596,8 @@ export class AuthStorage {
 				email: selection.credential.email,
 				projectId: selection.credential.projectId,
 				enterpriseUrl: selection.credential.enterpriseUrl,
+				orgId: selection.credential.orgId,
+				orgName: selection.credential.orgName,
 				error: error instanceof Error ? error.message : String(error),
 			};
 		}

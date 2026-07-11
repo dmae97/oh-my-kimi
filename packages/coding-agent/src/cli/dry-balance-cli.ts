@@ -214,8 +214,15 @@ function extractAccount(access: {
 	accountId?: string;
 	projectId?: string;
 	enterpriseUrl?: string;
+	orgId?: string;
+	orgName?: string;
 }): string {
-	return access.email ?? access.accountId ?? access.projectId ?? access.enterpriseUrl ?? "(unknown oauth account)";
+	const base =
+		access.email ?? access.accountId ?? access.projectId ?? access.enterpriseUrl ?? "(unknown oauth account)";
+	// Two subscriptions (orgs) can share one email — name the org so per-account
+	// bench rows stay tellable apart.
+	const org = access.orgName ?? access.orgId;
+	return org ? `${base} (${org})` : base;
 }
 
 function getBenchTargetKey(access: {
@@ -225,15 +232,18 @@ function getBenchTargetKey(access: {
 	projectId?: string;
 	enterpriseUrl?: string;
 	accessToken?: string;
+	orgId?: string;
 }): string {
-	return (
+	const base =
 		access.email ??
 		access.accountId ??
 		access.projectId ??
 		access.enterpriseUrl ??
 		(access.credentialId === undefined ? access.accessToken : `credential:${access.credentialId}`) ??
-		"(unknown oauth account)"
-	);
+		"(unknown oauth account)";
+	// Org-qualify: two org-scoped credentials under one email are two distinct
+	// benchmark targets, not duplicates.
+	return access.orgId ? `${base}|org:${access.orgId}` : base;
 }
 
 function sanitizeBenchText(text: string, width: number): string {

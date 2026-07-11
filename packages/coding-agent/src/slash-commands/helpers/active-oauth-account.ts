@@ -10,8 +10,9 @@ function normalizeIdentityValue(value: unknown): string | undefined {
  *
  * Single definition of the matching rules for both `/usage` renderers:
  * - `orgId`     ↔ report metadata `orgId` — checked first and DECISIVE when
- *   both sides carry it: two subscriptions (orgs) can share one email, and
- *   the shared email/account would otherwise mark both reports as active
+ *   the active identity carries it: two subscriptions (orgs) can share one
+ *   email, so an org-scoped active identity matches only its own org's
+ *   report (org-less reports included — they are a different registration)
  * - `accountId` ↔ report metadata `accountId`/`account_id` or `limit.scope.accountId`
  * - `email`     ↔ report metadata `email`
  * - `projectId` ↔ report metadata `projectId` or `limit.scope.projectId`
@@ -25,8 +26,10 @@ export function limitMatchesActiveAccount(
 	if (!identity) return false;
 	const metadata = report.metadata ?? {};
 	const activeOrgId = normalizeIdentityValue(identity.orgId);
-	const reportOrgId = normalizeIdentityValue(metadata.orgId);
-	if (activeOrgId && reportOrgId) return reportOrgId === activeOrgId;
+	// Org-scoped active identity: only the same org's report can be "in use".
+	// This also excludes org-less reports (pre-upgrade cache leftovers) — the
+	// shared email would otherwise attach the marker to another registration.
+	if (activeOrgId) return normalizeIdentityValue(metadata.orgId) === activeOrgId;
 	const activeAccountId = normalizeIdentityValue(identity.accountId);
 	if (activeAccountId) {
 		const reportAccountId = normalizeIdentityValue(metadata.accountId) ?? normalizeIdentityValue(metadata.account_id);

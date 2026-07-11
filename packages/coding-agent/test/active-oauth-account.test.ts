@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import type { UsageLimit, UsageReport } from "@oh-my-pi/pi-ai";
+import type { StoredAuthCredential, UsageLimit, UsageReport } from "@oh-my-pi/pi-ai";
 import {
 	limitMatchesActiveAccount,
 	reportMatchesActiveAccount,
 } from "../src/slash-commands/helpers/active-oauth-account";
+import { toLogoutAccounts } from "../src/slash-commands/helpers/logout";
 
 function makeLimit(scope: Partial<UsageLimit["scope"]> = {}): UsageLimit {
 	return {
@@ -64,6 +65,29 @@ describe("limitMatchesActiveAccount", () => {
 		);
 		expect(limitMatchesActiveAccount(makeReport({ metadata: { email: "a@b.c" } }), makeLimit(), {})).toBe(false);
 	});
+
+	test("org-scoped identity matches only its own org — not the shared email, not org-less reports", () => {
+		const identity = { email: "shared@example.com", orgId: "org-team" };
+		expect(
+			limitMatchesActiveAccount(
+				makeReport({ metadata: { email: "shared@example.com", orgId: "org-team" } }),
+				makeLimit(),
+				identity,
+			),
+		).toBe(true);
+		// Same email, other org: must NOT be flagged as this session's account.
+		expect(
+			limitMatchesActiveAccount(
+				makeReport({ metadata: { email: "shared@example.com", orgId: "org-max" } }),
+				makeLimit(),
+				identity,
+			),
+		).toBe(false);
+		// Org-less report (pre-upgrade cache leftover): shared email must not attach the marker.
+		expect(
+			limitMatchesActiveAccount(makeReport({ metadata: { email: "shared@example.com" } }), makeLimit(), identity),
+		).toBe(false);
+	});
 });
 
 describe("reportMatchesActiveAccount", () => {
@@ -78,5 +102,49 @@ describe("reportMatchesActiveAccount", () => {
 	test("does not match a report with no limits", () => {
 		const report = makeReport({ limits: [], metadata: { email: "user@example.com" } });
 		expect(reportMatchesActiveAccount(report, { email: "user@example.com" })).toBe(false);
+	});
+});
+
+describe("toLogoutAccounts org scoping", () => {
+	function oauthRow(id: number, orgId?: string, orgName?: string): StoredAuthCredential {
+		return {
+			id,
+			provider: "anthropic",
+			credential: {
+				type: "oauth",
+				access: `access-${id}`,
+				refresh: `refresh-${id}`,
+				expires: Date.now() + 60_000,
+				accountId: "account-shared",
+				email: "shared@example.com",
+				orgId,
+				orgName,
+			},
+			disabledCause: null,
+		};
+	}
+
+	test("org-scoped active session marks only its own org's row active — never the legacy bare-email row", () => {
+		const accounts = toLogoutAccounts(
+			"anthropic",
+			[oauthRow(1, "org-team", "Team Workspace"), oauthRow(2, "org-max", "Personal Max"), oauthRow(3)],
+			{ activeIdentity: { email: "shared@example.com", accountId: "account-shared", orgId: "org-max" } },
+		);
+		const activeIds = accounts.filter(account => account.active).map(account => account.credentialId);
+		expect(activeIds).toEqual([2]);
+	});
+
+	test("labels distinguish the two orgs and the legacy row", () => {
+		const accounts = toLogoutAccounts("anthropic", [
+			oauthRow(1, "org-team", "Team Workspace"),
+			oauthRow(2, "org-max", "Personal Max"),
+			oauthRow(3),
+		]);
+		const labels = accounts.map(account => account.label).sort();
+		expect(labels).toEqual([
+			"shared@example.com",
+			"shared@example.com (Personal Max)",
+			"shared@example.com (Team Workspace)",
+		]);
 	});
 });
