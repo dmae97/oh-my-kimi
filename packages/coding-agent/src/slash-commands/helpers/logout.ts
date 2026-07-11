@@ -56,14 +56,22 @@ function oauthMatchesActiveIdentity(
 ): boolean {
 	if (!activeIdentity || row.credential.type !== "oauth") return false;
 	const credential = row.credential;
-	// Org-decisive when EITHER side is org-scoped: an org-scoped active session
-	// must not preselect the bare-email legacy row, and a bare-email active row
-	// must not mark org-scoped siblings active via the shared email. The
-	// email/account fallback applies only when both sides are org-less
-	// (providers without orgs keep their former behavior; the bare active row
-	// still matches itself through the fallback).
+	// The org GATES the base identity rather than replacing it: mismatched org
+	// presence or different orgs never match — an org-scoped active session
+	// must not preselect the bare-email legacy row, and a bare-email active
+	// row must not mark org-scoped siblings active via the shared email. A
+	// SHARED org still requires the base-identity match below: two Team seats
+	// share one orgId yet own distinct rows. Only an org-only active identity
+	// (no base identifiers recovered at all) matches on the org alone.
 	if (activeIdentity.orgId !== undefined || credential.orgId !== undefined) {
-		return credential.orgId === activeIdentity.orgId;
+		if (credential.orgId !== activeIdentity.orgId) return false;
+		if (
+			activeIdentity.accountId === undefined &&
+			activeIdentity.email === undefined &&
+			activeIdentity.projectId === undefined
+		) {
+			return true;
+		}
 	}
 	return (
 		(activeIdentity.accountId !== undefined && credential.accountId === activeIdentity.accountId) ||

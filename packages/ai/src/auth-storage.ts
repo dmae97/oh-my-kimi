@@ -5548,7 +5548,15 @@ function matchesReplacementCredential(
 	// the `|org:` qualifier, so this cannot affect other providers.
 	if (existingIdentityKey === null) return false;
 	const orgSeparator = incomingIdentityKey.indexOf("|org:");
-	return orgSeparator !== -1 && incomingIdentityKey.slice(0, orgSeparator) === existingIdentityKey;
+	if (orgSeparator === -1) return false;
+	if (incomingIdentityKey.slice(0, orgSeparator) === existingIdentityKey) return true;
+	// Same one-way upgrade for org-only rows: a row keyed `org:<id>` (stored
+	// when login recovered neither email nor account) is claimed and re-keyed
+	// by a later login of the same org that does recover the identity, instead
+	// of duplicating the subscription. The reverse never happens — an org-only
+	// incoming key has no `|org:` qualifier and already returned above, so it
+	// only ever claims a base-keyed row via exact equality.
+	return existingIdentityKey.startsWith("org:") && incomingIdentityKey.slice(orgSeparator + 1) === existingIdentityKey;
 }
 
 function extractOAuthCredentialIdentifiers(credential: OAuthCredential): string[] {

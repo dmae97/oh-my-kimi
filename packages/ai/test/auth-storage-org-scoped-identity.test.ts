@@ -40,13 +40,15 @@ function orgCredential(args: {
 	orgName?: string;
 	/** Simulate the no-email edge: token response omits it AND bootstrap recovery fails. */
 	omitEmail?: boolean;
+	/** Simulate full identity-recovery failure: with omitEmail, only the org keys the row. */
+	omitAccountId?: boolean;
 }): AuthCredential {
 	return {
 		type: "oauth",
 		access: `access-${args.suffix}`,
 		refresh: `refresh-${args.suffix}`,
 		expires: Date.now() + 3_600_000,
-		accountId: "account-shared",
+		accountId: args.omitAccountId ? undefined : "account-shared",
 		email: args.omitEmail ? undefined : EMAIL,
 		orgId: args.orgId,
 		orgName: args.orgName,
@@ -173,6 +175,35 @@ describe("anthropic org-scoped credential identity", () => {
 			{ identity_key: `account:account-shared|org:${TEAM_ORG}`, disabled_cause: null },
 			{ identity_key: `account:account-shared|org:${MAX_ORG}`, disabled_cause: null },
 			{ identity_key: "account:account-shared|org:org-third-3333", disabled_cause: null },
+		]);
+	});
+
+	it("upgrades an org-only row in place when a later same-org login recovers the identity", () => {
+		if (!store) throw new Error("test setup failed");
+
+		// Login recovered neither email nor account: the org alone keys the row.
+		store.upsertAuthCredentialForProvider(
+			"anthropic",
+			orgCredential({ suffix: "anon", orgId: TEAM_ORG, omitEmail: true, omitAccountId: true }),
+		);
+		expect(readIdentityRows(dbPath)).toEqual([{ identity_key: `org:${TEAM_ORG}`, disabled_cause: null }]);
+
+		// Same org, identity recovered: claims the org-only row in place instead
+		// of duplicating the subscription.
+		store.upsertAuthCredentialForProvider("anthropic", orgCredential({ suffix: "named", orgId: TEAM_ORG }));
+		expect(readIdentityRows(dbPath)).toEqual([
+			{ identity_key: `email:${EMAIL}|org:${TEAM_ORG}`, disabled_cause: null },
+		]);
+
+		// One-way: a later org-only login of the same org must not claim the now
+		// base-keyed row — it gets its own row until identity is recovered again.
+		store.upsertAuthCredentialForProvider(
+			"anthropic",
+			orgCredential({ suffix: "anon-again", orgId: TEAM_ORG, omitEmail: true, omitAccountId: true }),
+		);
+		expect(readIdentityRows(dbPath)).toEqual([
+			{ identity_key: `email:${EMAIL}|org:${TEAM_ORG}`, disabled_cause: null },
+			{ identity_key: `org:${TEAM_ORG}`, disabled_cause: null },
 		]);
 	});
 });

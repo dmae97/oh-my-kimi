@@ -106,6 +106,43 @@ describe("limitMatchesActiveAccount", () => {
 			limitMatchesActiveAccount(makeReport({ metadata: { email: "shared@example.com" } }), makeLimit(), identity),
 		).toBe(true);
 	});
+
+	test("same org, different member: the base identity is still required — two Team seats never share the marker", () => {
+		const identity = { email: "alice@example.com", accountId: "account-alice", orgId: "org-team" };
+		// Anthropic Team seats have per-user pools but share the org id in
+		// report metadata — the other member's report must not be flagged.
+		expect(
+			limitMatchesActiveAccount(
+				makeReport({ metadata: { email: "bob@example.com", accountId: "account-bob", orgId: "org-team" } }),
+				makeLimit(),
+				identity,
+			),
+		).toBe(false);
+		// The member's own same-org report still matches through the base identity.
+		expect(
+			limitMatchesActiveAccount(
+				makeReport({ metadata: { email: "alice@example.com", orgId: "org-team" } }),
+				makeLimit(),
+				identity,
+			),
+		).toBe(true);
+	});
+
+	test("org-only active identity matches same-org reports on the org alone", () => {
+		// Login recovered neither email nor account: the org is all the session
+		// knows about itself.
+		const identity = { orgId: "org-team" };
+		expect(
+			limitMatchesActiveAccount(
+				makeReport({ metadata: { email: "bob@example.com", orgId: "org-team" } }),
+				makeLimit(),
+				identity,
+			),
+		).toBe(true);
+		expect(limitMatchesActiveAccount(makeReport({ metadata: { orgId: "org-max" } }), makeLimit(), identity)).toBe(
+			false,
+		);
+	});
 });
 
 describe("reportMatchesActiveAccount", () => {
@@ -124,7 +161,12 @@ describe("reportMatchesActiveAccount", () => {
 });
 
 describe("toLogoutAccounts org scoping", () => {
-	function oauthRow(id: number, orgId?: string, orgName?: string): StoredAuthCredential {
+	function oauthRow(
+		id: number,
+		orgId?: string,
+		orgName?: string,
+		identity?: { email?: string; accountId?: string },
+	): StoredAuthCredential {
 		return {
 			id,
 			provider: "anthropic",
@@ -133,8 +175,8 @@ describe("toLogoutAccounts org scoping", () => {
 				access: `access-${id}`,
 				refresh: `refresh-${id}`,
 				expires: Date.now() + 60_000,
-				accountId: "account-shared",
-				email: "shared@example.com",
+				accountId: identity?.accountId ?? "account-shared",
+				email: identity?.email ?? "shared@example.com",
 				orgId,
 				orgName,
 			},
@@ -160,6 +202,30 @@ describe("toLogoutAccounts org scoping", () => {
 		);
 		const activeIds = accounts.filter(account => account.active).map(account => account.credentialId);
 		expect(activeIds).toEqual([3]);
+	});
+
+	test("same org, different member: only the active user's own row is marked active", () => {
+		// Two Team seats in one org pool — same orgId, distinct email/account.
+		const accounts = toLogoutAccounts(
+			"anthropic",
+			[
+				oauthRow(1, "org-team", "Team Workspace", { email: "alice@example.com", accountId: "account-alice" }),
+				oauthRow(2, "org-team", "Team Workspace", { email: "bob@example.com", accountId: "account-bob" }),
+			],
+			{ activeIdentity: { email: "alice@example.com", accountId: "account-alice", orgId: "org-team" } },
+		);
+		const activeIds = accounts.filter(account => account.active).map(account => account.credentialId);
+		expect(activeIds).toEqual([1]);
+	});
+
+	test("org-only active identity marks same-org rows active on the org alone", () => {
+		const accounts = toLogoutAccounts(
+			"anthropic",
+			[oauthRow(1, "org-team", "Team Workspace"), oauthRow(2, "org-max", "Personal Max")],
+			{ activeIdentity: { orgId: "org-team" } },
+		);
+		const activeIds = accounts.filter(account => account.active).map(account => account.credentialId);
+		expect(activeIds).toEqual([1]);
 	});
 
 	test("labels distinguish the two orgs and the legacy row", () => {
