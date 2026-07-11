@@ -1,16 +1,13 @@
-import type { AuthStorage, FetchImpl } from "@oh-my-pi/pi-ai";
-import { untilAborted } from "@oh-my-pi/pi-utils";
+import type { AuthStorage } from "@oh-my-pi/pi-ai";
 import { parseHTML } from "linkedom";
-import type { Page } from "puppeteer-core";
-import { applyStealthPatches, applyViewport } from "../../../tools/browser/launch";
-import { acquireBrowser, holdBrowser, releaseBrowser } from "../../../tools/browser/registry";
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import { clampNumResults } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
-import { BROWSER_NAVIGATION_HEADERS } from "./browser-headers";
-import { SEARCH_HARD_TIMEOUT_MS, withHardTimeout } from "./utils";
+import type { LoadedHtmlPage } from "./browser-page";
+import { browserFetch } from "./browser-page";
+import { withHardTimeout } from "./utils";
 
 const GOOGLE_HOME_URL = "https://www.google.com/";
 const GOOGLE_SEARCH_URL = "https://www.google.com/search";
@@ -36,12 +33,6 @@ interface ParsedResult {
 	title: string;
 	url: string;
 	snippet?: string;
-}
-
-interface LoadedGooglePage {
-	html: string;
-	status: number;
-	url: string;
 }
 
 function normalizeText(value: string | null | undefined): string {
@@ -111,76 +102,34 @@ function buildSearchUrl(params: SearchParams, numResults: number): string {
 	return url.href;
 }
 
-async function loadWithFetch(url: string, fetchImpl: FetchImpl, signal: AbortSignal): Promise<LoadedGooglePage> {
-	const response = await fetchImpl(url, {
-		headers: {
-			...BROWSER_NAVIGATION_HEADERS,
-			Referer: GOOGLE_HOME_URL,
-			"Sec-Fetch-Site": "same-origin",
-		},
-		signal,
-	});
-	return { html: await response.text(), status: response.status, url: response.url || url };
-}
-
-async function loadWithBrowser(url: string, signal: AbortSignal): Promise<LoadedGooglePage> {
-	const handle = await untilAborted(signal, () =>
-		acquireBrowser(
-			{ kind: "headless", headless: true },
-			{
-				cwd: process.cwd(),
-				signal,
-			},
-		),
-	);
-	if (!("browser" in handle)) {
-		await releaseBrowser(handle, { kill: false });
-		throw new Error("Headless browser acquisition returned a non-Puppeteer browser");
-	}
-
-	holdBrowser(handle);
-	let page: Page | undefined;
-	try {
-		const activePage = await untilAborted(signal, () => handle.browser.newPage());
-		page = activePage;
-		await applyViewport(activePage);
-		await applyStealthPatches(handle.browser, activePage, handle.stealth);
-		// Seed Google's same-origin cookies and referrer; a cold direct navigation gets the enable-JavaScript interstitial.
-		await untilAborted(signal, () =>
-			activePage.goto(GOOGLE_HOME_URL, { waitUntil: "domcontentloaded", timeout: SEARCH_HARD_TIMEOUT_MS }),
-		);
-		const response = await untilAborted(signal, () =>
-			activePage.goto(url, { waitUntil: "domcontentloaded", timeout: SEARCH_HARD_TIMEOUT_MS }),
-		);
-		await untilAborted(signal, () =>
-			activePage.waitForSelector("a h3", { timeout: RESULT_RENDER_TIMEOUT_MS }).catch(() => null),
-		);
-		return {
-			html: await untilAborted(signal, () => activePage.content()),
-			status: response?.status() ?? 200,
-			url: activePage.url(),
-		};
-	} finally {
-		await page?.close().catch(() => undefined);
-		await releaseBrowser(handle, { kill: false });
-	}
-}
-
-function isBlockedPage(page: LoadedGooglePage): boolean {
-	return (
+function blockReason(page: LoadedHtmlPage): "javascript" | "traffic" | undefined {
+	if (page.html.includes("/httpservice/retry/enablejs") && !/<h3\b/i.test(page.html)) return "javascript";
+	if (
 		page.status === 403 ||
 		page.status === 429 ||
 		page.url.includes("/sorry/") ||
 		/unusual traffic|detected unusual traffic|g-recaptcha/i.test(page.html)
-	);
+	) {
+		return "traffic";
+	}
+	return undefined;
 }
 
 async function callGoogleHtml(params: SearchParams, numResults: number): Promise<string> {
 	const signal = withHardTimeout(params.signal);
 	const url = buildSearchUrl(params, numResults);
-	let page: LoadedGooglePage;
+	let page: LoadedHtmlPage;
 	try {
-		page = params.fetch ? await loadWithFetch(url, params.fetch, signal) : await loadWithBrowser(url, signal);
+		page = await browserFetch(url, {
+			fetch: params.fetch,
+			signal,
+			referer: GOOGLE_HOME_URL,
+			browser: {
+				homeUrl: GOOGLE_HOME_URL,
+				ready: { selector: "a h3", timeoutMs: RESULT_RENDER_TIMEOUT_MS },
+				shouldFallback: candidate => blockReason(candidate) !== undefined,
+			},
+		});
 	} catch (error) {
 		if (error instanceof SearchProviderError || params.signal?.aborted) throw error;
 		if (signal.aborted) {
@@ -190,7 +139,8 @@ async function callGoogleHtml(params: SearchParams, numResults: number): Promise
 		throw new SearchProviderError("google", `Google browser search failed: ${message}`, 503);
 	}
 
-	if (isBlockedPage(page)) {
+	const blocked = blockReason(page);
+	if (blocked === "traffic") {
 		throw new SearchProviderError(
 			"google",
 			"Google blocked the browser search with an automated-traffic challenge. Try another web search provider or retry later.",
@@ -200,7 +150,7 @@ async function callGoogleHtml(params: SearchParams, numResults: number): Promise
 	if (page.status < 200 || page.status >= 300) {
 		throw new SearchProviderError("google", `Google HTML error (${page.status})`, page.status);
 	}
-	if (page.html.includes("/httpservice/retry/enablejs") && !/<h3\b/i.test(page.html)) {
+	if (blocked === "javascript") {
 		throw new SearchProviderError(
 			"google",
 			"Google returned its JavaScript challenge instead of rendered search results.",
@@ -210,7 +160,7 @@ async function callGoogleHtml(params: SearchParams, numResults: number): Promise
 	return page.html;
 }
 
-/** Execute a Google web search through a real headless browser and parse the rendered result page. */
+/** Execute a Google web search with fetch-first loading and a headless-browser fallback. */
 export async function searchGoogle(params: SearchParams): Promise<SearchResponse> {
 	const numResults = clampNumResults(params.numSearchResults ?? params.limit, DEFAULT_NUM_RESULTS, MAX_NUM_RESULTS);
 	const html = await callGoogleHtml(params, numResults);
@@ -228,7 +178,7 @@ export async function searchGoogle(params: SearchParams): Promise<SearchResponse
 	return { provider: "google", sources };
 }
 
-/** Browser-backed Google Search provider; no API key is required. */
+/** Fetch-first Google Search provider with a headless-browser fallback; no API key is required. */
 export class GoogleProvider extends SearchProvider {
 	readonly id = "google";
 	readonly label = "Google";

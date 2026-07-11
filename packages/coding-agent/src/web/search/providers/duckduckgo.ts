@@ -4,7 +4,7 @@ import { SearchProviderError } from "../../../web/search/types";
 import { clampNumResults } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
-import { BROWSER_NAVIGATION_HEADERS } from "./browser-headers";
+import { browserFetch } from "./browser-page";
 import { classifyProviderHttpError, withHardTimeout } from "./utils";
 
 /**
@@ -125,23 +125,22 @@ async function callDuckDuckGoHtml(params: SearchParams): Promise<string> {
 	// Add b: "" parameter as specified in the browser fetch template to match real browser form submission
 	form.set("b", "");
 
-	const response = await (params.fetch ?? fetch)(DUCKDUCKGO_HTML_URL, {
-		method: "POST",
-		body: form.toString(),
-		headers: {
-			...BROWSER_NAVIGATION_HEADERS,
-			"Content-Type": "application/x-www-form-urlencoded",
-			"Sec-Fetch-Site": "same-origin",
-			Referer: "https://html.duckduckgo.com/",
-		},
+	const page = await browserFetch(DUCKDUCKGO_HTML_URL, {
+		fetch: params.fetch ?? fetch,
 		signal: withHardTimeout(params.signal),
+		referer: "https://html.duckduckgo.com/",
+		init: {
+			method: "POST",
+			body: form.toString(),
+		},
+		headers: { "Content-Type": "application/x-www-form-urlencoded" },
 	});
 
-	const body = await response.text();
-	if (!response.ok && response.status !== 202) {
-		const classified = classifyProviderHttpError("duckduckgo", response.status, body);
+	const body = page.html;
+	if (page.status < 200 || page.status >= 300) {
+		const classified = classifyProviderHttpError("duckduckgo", page.status, body);
 		if (classified) throw classified;
-		throw new SearchProviderError("duckduckgo", `DuckDuckGo HTML error (${response.status})`, response.status);
+		throw new SearchProviderError("duckduckgo", `DuckDuckGo HTML error (${page.status})`, page.status);
 	}
 
 	if (isAnomalyResponse(body)) {

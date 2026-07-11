@@ -65,7 +65,7 @@ describe("Google web search provider", () => {
 		expect(capturedInit?.method).toBeUndefined();
 		const headers = new Headers(capturedInit?.headers);
 		expect(headers.get("accept")).toContain("text/html");
-		expect(headers.get("user-agent")).toContain("Chrome/149");
+		expect(headers.get("user-agent")).toMatch(/Chrome\/\d+\.0\.0\.0/);
 		expect(headers.get("referer")).toBe("https://www.google.com/");
 		expect(headers.get("sec-fetch-dest")).toBe("document");
 		expect(headers.get("sec-fetch-mode")).toBe("navigate");

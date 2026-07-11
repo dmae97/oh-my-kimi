@@ -8,6 +8,8 @@
 - Added `/vibe` mode: the model becomes a director whose toolset is stripped to `read` plus five new session tools (`vibe_spawn`, `vibe_send`, `vibe_wait`, `vibe_kill`, `vibe_list`) for driving persistent background worker sessions. Workers come in two flavors mapped to existing model tiers — `fast` (sonic/`pi/smol`) and `good` (task/`pi/task`) — retain their conversation across turns via the subagent keep-alive lifecycle, deliver each turn's result asynchronously with a compressed tool-call trace plus the worker's response, and are killed when the mode exits. The TUI renders sends as a mini CLI composer and waits as a live stacked-screen view of every worker's tool calls and streamed output.
 - `omp acp` now prints a short hint on stderr when launched from an interactive terminal (stdin is a TTY): the command speaks JSON-RPC over stdout and is meant to be spawned by an ACP client such as Zed, so running it by hand previously showed nothing at all
 - Added a credential-free Google web search provider that loads rendered Search results in stealth Chromium, parses titles, URLs, and snippets, and supports recency filters.
+- Added five credential-free web search providers scraped from public engines: Bing, Yahoo, and Startpage over plain fetch, plus Ecosia and Mojeek with stealth-browser escalation (Cloudflare and ALTCHA proof-of-work walls); all detect bot challenges and map recency filters where the engine supports them.
+- Added a `public` ("Public Web") web search provider that fans out to every credential-free engine in parallel and consolidates results — URLs deduplicated across engines, ranked by cross-engine consensus then best per-engine rank — returning at the earliest of all engines settled, a 5s soft deadline with at least one success, or a 30s hard cap. Explicit selection only; never auto-selected.
 - Added PCRE2 fallback for grep lookaround and backreferences when Rust regex rejects a pattern.
 
 ### Changed
@@ -16,14 +18,15 @@
 - Refined agent delegation logic to prioritize top-level planning and scoping by the primary agent
 - Optimized subagent usage to discourage single-agent delegation and improve parallel execution flows
 - Clarified that prerequisite work for subagent tasks should be handled inline by the main agent
+- HTML search requests now use a randomized, internally consistent desktop Chrome profile per request; Google, Ecosia, and Mojeek try fetch first and escalate blocked or failed production responses to the shared stealth browser.
+- Reordered credential-free web search engines from live quality measurements: Startpage (Google-backed, fastest and most reliable in testing) now leads the auto chain, Ecosia precedes the flakier browser-backed Google, and Mojeek stays last; the Public Web fan-out tiebreak now favors Google-index engines (Startpage, Google) so their ranking wins equal-consensus ties.
 
 ### Removed
 
 - Removed the bundled `plan` subagent from available task agents
-- Removed the bundled `plan` subagent from available task agents.
 
 ### Fixed
-
+- Fixed the `omp search` / `omp q` CLI command hanging instead of exiting cleanly after search execution by ensuring the internally discovered `AuthStorage` connection is properly closed.
 - Fixed `write` blocking for the full 3-second LSP diagnostics poll in main-agent sessions by wiring it into the deferred late-diagnostics channel; slow diagnostics now return after the short inline window and arrive as an aside.
 - Fixed `tab.fill`/`tab.click` (and every puppeteer Locator action) timing out after 15s on all pages: the stealth patch routes default `Frame.evaluate`/`waitForFunction` through the isolated world, but `waitForSelector`/Locator results were still transferred to the main world, so Locator's enabled-precondition (`handle.frame.waitForFunction(pred, opts, handle)`) and `page.evaluate(fn, handle)` threw a cross-context handle error that Locators retried silently until timeout. `QueryHandler.waitFor` now returns its result in the isolated world, matching the patched default realm; explicit `//!world=main` evaluation still adopts handles via ElementHandle
 - Fixed browser runs silently dropping `display("string")`, `console.log`, and `print` output: the runtime emits those as stream text, which the browser embedders (worker and cmux) routed to the debug log only, so the tool result showed a bare "Ran code on tab". Stream text is now buffered and surfaced as ordered display entries alongside `display()` payloads and screenshots.

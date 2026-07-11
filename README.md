@@ -309,13 +309,13 @@ Ollama `local` · Ollama Cloud · LM Studio `local` · llama.cpp `local` · vLLM
 
 Full provider & routing reference at [omp.sh/docs/providers](https://omp.sh/docs/providers).
 
-## Eighteen backends. _One tool the agent already knows_.
+## Twenty-five backends. _One tool the agent already knows_.
 
-`web_search` is built in, not bolted on. `auto` walks an eighteen-provider chain; pin one by name if you already pay for it. Behind every hit, site-aware extraction turns GitHub, registries, arXiv, Stack Overflow, and docs into structured markdown — anchors and link targets survive.
+`web_search` is built in, not bolted on. `auto` walks a twenty-five-provider chain; pin one by name if you already pay for it. Behind every hit, site-aware extraction turns GitHub, registries, arXiv, Stack Overflow, and docs into structured markdown — anchors and link targets survive.
 
 ### Search providers
 
-Eighteen backends. Pin one, or let `auto` walk the chain in order.
+Twenty-five backends. Pin one, or let `auto` walk the chain in order.
 
 | provider     | auth                   |
 | ------------ | ---------------------- |
@@ -338,6 +338,13 @@ Eighteen backends. Pin one, or let `auto` walk the chain in order.
 | `synthetic`  | `SYNTHETIC_API_KEY`    |
 | `searxng`    | self-hosted            |
 | `duckduckgo` | no key                 |
+| `bing`       | no key                 |
+| `yahoo`      | no key                 |
+| `startpage`  | no key                 |
+| `google`     | no key (browser)       |
+| `ecosia`     | no key (browser)       |
+| `mojeek`     | no key (browser)       |
+| `public`     | no key (all of the above, consolidated) |
 
 ### Specialised handlers
 

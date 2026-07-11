@@ -81,6 +81,7 @@
     "diff": "catalog:",
     "fast-xml-parser": "catalog:",
     "handlebars": "catalog:",
+    "header-generator": "catalog:",
     "linkedom": "catalog:",
     "lru-cache": "catalog:",
     "mammoth": "catalog:",

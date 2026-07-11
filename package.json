@@ -64,6 +64,7 @@
       "fast-xml-parser": "^5.9.0",
       "ghostty-web": "^0.4.0",
       "handlebars": "^4.7.9",
+      "header-generator": "^2.1.82",
       "linkedom": "^0.18.12",
       "lint-staged": "^17.0.7",
       "lru-cache": "11.5.1",
