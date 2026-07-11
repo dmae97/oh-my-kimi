@@ -5,7 +5,6 @@ tools: read, grep, glob, web_search
 model: pi/smol
 thinking-level: medium
 read-summarize: false
-blocking: true
 output:
   properties:
     summary:
