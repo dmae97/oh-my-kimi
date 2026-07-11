@@ -88,21 +88,29 @@ async function main(): Promise<void> {
 	// afterwards to keep the checked-in placeholder empty.
 	await runCommand(["bun", "--cwd=../stats", "run", "gen:stats"]);
 	try {
-		await runCommand([
-			"bun",
-			"build",
-			"--target=bun",
-			"--outdir",
-			"dist",
-			"--minify",
-			"--keep-names",
-			...[...ALWAYS_EXTERNAL, ...RUNTIME_EXTERNAL].flatMap(dep => ["--external", dep]),
-			"--define",
-			'process.env.PI_BUNDLED="true"',
-			"--define",
-			`process.env.PI_DOCS_EMBED=${JSON.stringify((await buildDocsIndexPayload()).payload)}`,
-			"./src/cli.ts",
-		]);
+		// Build in-process: the docs embed payload is far larger than Linux's
+		// 128KiB per-argv-string cap, so it can never be passed as a CLI
+		// `--define` (posix_spawn fails with E2BIG).
+		const output = await Bun.build({
+			entrypoints: [path.join(packageDir, "src/cli.ts")],
+			outdir: outDir,
+			target: "bun",
+			external: [...ALWAYS_EXTERNAL, ...RUNTIME_EXTERNAL],
+			define: {
+				"process.env.PI_BUNDLED": JSON.stringify("true"),
+				"process.env.PI_DOCS_EMBED": JSON.stringify((await buildDocsIndexPayload()).payload),
+			},
+			minify: {
+				whitespace: true,
+				syntax: true,
+				identifiers: true,
+				keepNames: true,
+			},
+			throw: false,
+		});
+		if (!output.success) {
+			throw new Error(`CLI bundle failed:\n${output.logs.map(log => log.message).join("\n")}`);
+		}
 	} finally {
 		await runCommand(["bun", "--cwd=../stats", "run", "gen:stats:reset"]);
 	}
