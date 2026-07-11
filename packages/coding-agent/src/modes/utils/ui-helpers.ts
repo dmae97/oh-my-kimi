@@ -557,14 +557,35 @@ export class UiHelpers {
 		// hand it back to the controller so a follow-up `todo` update keeps
 		// displacing instead of stacking. Idle rebuilds (resume / compaction)
 		// fall through to the seal path so the snapshot freezes as history.
-		if (todoSnapshot && this.ctx.session?.isStreaming) {
+		if (todoSnapshot && this.ctx.viewSession.isStreaming) {
 			this.ctx.eventController?.inheritDisplaceableTodo(todoSnapshot);
 			todoSnapshot = null;
 		} else {
 			resolveTodoSnapshot();
 		}
 
-		this.ctx.pendingTools.clear();
+		// Entries still in `pendingTools` are toolCalls whose result never landed
+		// during the replay — with `keepDanglingToolCalls` these are exactly the
+		// turn's in-flight calls (assistant turn persisted at message_end, tool
+		// still executing). While the viewed session streams, keep them tracked so
+		// the live event stream routes `tool_execution_update`/`_end` into the
+		// rebuilt components instead of dropping the result; their args are final,
+		// so mark them complete. Idle rebuilds have no result coming: seal so the
+		// blocks freeze as history instead of pinning the live region, then clear
+		// so reconstructed historical components never leak into live tracking.
+		// (`rebuildChatFromMessages` builds its context WITHOUT dangling calls and
+		// restores its own preserved live components afterwards — for that caller
+		// the map is empty here either way.)
+		if (this.ctx.viewSession.isStreaming) {
+			for (const [toolCallId, component] of this.ctx.pendingTools) {
+				component.setArgsComplete(toolCallId);
+			}
+		} else {
+			for (const component of this.ctx.pendingTools.values()) {
+				component.seal();
+			}
+			this.ctx.pendingTools.clear();
+		}
 		this.ctx.ui.requestRender();
 	}
 
@@ -586,8 +607,14 @@ export class UiHelpers {
 		this.ctx.pendingPythonComponents = [];
 
 		// Live display uses the compacted transcript tail; export/resume callers
-		// can still request the full inline compaction history.
-		const context = this.ctx.viewSession.buildTranscriptSessionContext({ collapseCompactedHistory: true });
+		// can still request the full inline compaction history. Mid-turn rebuilds
+		// (focus attach/unfocus while a tool executes) keep dangling toolCalls so
+		// the in-flight call re-renders as pending instead of vanishing;
+		// renderSessionContext then keeps it in `pendingTools` for live routing.
+		const context = this.ctx.viewSession.buildTranscriptSessionContext({
+			collapseCompactedHistory: true,
+			keepDanglingToolCalls: this.ctx.viewSession.isStreaming,
+		});
 		this.ctx.renderSessionContext(context, {
 			updateFooter: true,
 			populateHistory: !this.ctx.focusedAgentId,

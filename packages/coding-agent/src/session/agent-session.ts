@@ -6891,12 +6891,13 @@ export class AgentSession {
 	 * `agent.replaceMessages` or a provider.
 	 */
 	buildTranscriptSessionContext(
-		options?: Pick<BuildSessionContextOptions, "collapseCompactedHistory">,
+		options?: Pick<BuildSessionContextOptions, "collapseCompactedHistory" | "keepDanglingToolCalls">,
 	): SessionContext {
 		return deobfuscateSessionContext(
 			this.sessionManager.buildSessionContext({
 				transcript: true,
 				collapseCompactedHistory: options?.collapseCompactedHistory,
+				keepDanglingToolCalls: options?.keepDanglingToolCalls,
 			}),
 			this.#obfuscator,
 		);

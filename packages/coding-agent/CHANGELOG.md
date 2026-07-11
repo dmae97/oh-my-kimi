@@ -32,6 +32,7 @@
 
 ### Fixed
 
+- Fixed in-flight tool calls disappearing from the chat during session rebuilds (e.g., focus switches)
 - Fixed agents getting stuck waiting for messages from peers that have already stopped running
 - Fixed budget-stopped subagents becoming unreachable: a soft-budget abort no longer hard-kills the agent — it stays adopted (idle, then parked) so `irc` can wake it to resume with full context, the task result now carries the abort reason plus a resume hint, and the irc bus distinguishes an unknown peer from a hard-aborted one instead of reporting "Unknown or terminated agent" for both.
 - Fixed `write conflict://<N>` duplicating code when the model pastes the "whole resolved function" including lines adjacent to the marker block: replacement lines that exactly echo the context directly above/below the recorded region are now dropped (multi-line echoes always; single-line echoes only when removal restores the recorded sides' delimiter balance), with a note in the tool result. The conflict footer now also states that writes replace only the marker block and to prefer the minimal merge of the recorded sides.

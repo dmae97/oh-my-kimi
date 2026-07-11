@@ -81,3 +81,76 @@ describe("buildSessionContext snapcompact archives", () => {
 		expect(summary.blocks?.map(block => block.type)).toEqual(["text", "image", "text"]);
 	});
 });
+
+// A turn whose tool is still executing at rebuild time: the assistant message
+// (with its toolCall) is persisted at message_end, the toolResult is not.
+const danglingToolCallEntries = [
+	{
+		type: "message",
+		id: "m1",
+		parentId: null,
+		timestamp,
+		message: { role: "user", content: [{ type: "text", text: "run it" }], timestamp: 1 },
+	},
+	{
+		type: "message",
+		id: "m2",
+		parentId: "m1",
+		timestamp,
+		message: {
+			role: "assistant",
+			content: [{ type: "toolCall", id: "call-1", name: "bash", arguments: { command: "sleep 60" } }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: 2,
+		},
+	},
+] satisfies SessionEntry[];
+
+function danglingCallIds(messages: AgentMessage[]): string[] {
+	const ids: string[] = [];
+	for (const message of messages) {
+		if (message.role !== "assistant") continue;
+		for (const block of message.content) {
+			if (block.type === "toolCall") ids.push(block.id);
+		}
+	}
+	return ids;
+}
+
+describe("buildSessionContext dangling toolCalls", () => {
+	it("strips a dangling toolCall-only assistant turn from the transcript by default", () => {
+		const context = buildSessionContext(danglingToolCallEntries, undefined, undefined, { transcript: true });
+
+		expect(danglingCallIds(context.messages)).toEqual([]);
+		// The turn had nothing but the dangling call, so the whole message drops.
+		expect(context.messages.some(message => message.role === "assistant")).toBe(false);
+	});
+
+	it("keeps a dangling toolCall in transcript mode with keepDanglingToolCalls", () => {
+		const context = buildSessionContext(danglingToolCallEntries, undefined, undefined, {
+			transcript: true,
+			keepDanglingToolCalls: true,
+		});
+
+		expect(danglingCallIds(context.messages)).toEqual(["call-1"]);
+	});
+
+	it("always strips dangling toolCalls from the LLM context", () => {
+		const context = buildSessionContext(danglingToolCallEntries, undefined, undefined, {
+			keepDanglingToolCalls: true,
+		});
+
+		expect(danglingCallIds(context.messages)).toEqual([]);
+	});
+});
