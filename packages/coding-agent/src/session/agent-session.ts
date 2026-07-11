@@ -3840,6 +3840,16 @@ export class AgentSession {
 			if (event.message.role === "assistant") {
 				this.#lastAssistantMessage = event.message;
 				const assistantMsg = event.message as AssistantMessage;
+				// Fold this turn's timing into per-model perf aggregates (drives the
+				// /models TPS/TTFT display). Errored turns measure nothing; aborted
+				// turns with reported usage are still valid throughput samples.
+				if (assistantMsg.stopReason !== "error" && assistantMsg.duration !== undefined) {
+					this.settings.getStorage()?.recordModelPerf(`${assistantMsg.provider}/${assistantMsg.model}`, {
+						outputTokens: assistantMsg.usage.output,
+						durationMs: assistantMsg.duration,
+						ttftMs: assistantMsg.ttft,
+					});
+				}
 				if (
 					assistantMsg.disabledFeatures?.includes("priority") &&
 					this.#serviceTierByFamily.anthropic === "priority"
