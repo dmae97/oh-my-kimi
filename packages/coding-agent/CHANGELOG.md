@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed macOS runtime diagnostics (e.g. `MallocStackLogging: can't turn off malloc stack logging because it was not enabled`) written directly to fd 2 by libmalloc painting into the TUI viewport. While the TUI owns the terminal, stderr is now redirected to the omp log file and restored at every ownership handoff (external editor, Ctrl+Z suspend, shutdown, crash restore); fatal crash reports still reach the real terminal. Mirrors [openai/codex#24459](https://github.com/openai/codex/pull/24459).
+
 ## [16.4.2] - 2026-07-10
 
 ### Fixed

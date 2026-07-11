@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed unmanaged macOS stderr writes (libmalloc/framework diagnostics) corrupting the viewport: `ProcessTerminal` now suppresses fd 2 via the pi-utils stderr guard while it owns the terminal and restores it in `stop()` and the emergency-restore path.
+
 ## [16.4.1] - 2026-07-10
 
 ### Added
