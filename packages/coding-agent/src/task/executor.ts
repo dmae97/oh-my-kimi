@@ -57,15 +57,14 @@ import { ToolAbortError } from "../tools/tool-errors";
 import type { EventBus } from "../utils/event-bus";
 import { buildNamedToolChoice } from "../utils/tool-choice";
 import type { WorkspaceTree } from "../workspace-tree";
+import { generateTaskLabel } from "./label";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import {
 	type AgentDefinition,
 	type AgentProgress,
 	MAX_OUTPUT_BYTES,
 	MAX_OUTPUT_LINES,
-	oneLineLabel,
 	type ReviewFinding,
-	resolveSubagentDisplayName,
 	type SingleResult,
 	TASK_SUBAGENT_EVENT_CHANNEL,
 	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
@@ -288,9 +287,8 @@ export interface ExecutorOptions {
 	 * the session did not start with a plan (or while plan mode is still active).
 	 */
 	planReference?: { path: string; content: string };
+	/** Pre-set UI label (e.g. eval bridge label). When absent, a tiny-model label is generated from the assignment. */
 	description?: string;
-	/** Specialist role/expertise for this spawn; drives the system-prompt preamble, display name, and telemetry identity. */
-	role?: string;
 	index: number;
 	id: string;
 	parentToolCallId?: string;
@@ -811,6 +809,10 @@ interface RunMonitorArgs {
 	task: string;
 	assignment?: string;
 	description?: string;
+	/** Parent model registry for tiny-model label generation; absent → skip labeling. */
+	modelRegistry?: ModelRegistry;
+	/** Parent settings for tiny-model label generation. */
+	settings?: Settings;
 	modelOverride?: string | string[];
 	signal?: AbortSignal;
 	onProgress?: (progress: AgentProgress) => void;
@@ -1066,6 +1068,27 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 			emitProgressNow();
 		}, PROGRESS_COALESCE_MS - elapsed);
 	};
+
+	// The task wire schema carries no description: when the caller didn't pre-set
+	// a UI label (e.g. the eval bridge's `label`), compress the assignment into a
+	// tiny-model one-sentence label off the spawn's critical path. Best-effort —
+	// a late label still lands via the finalize-time reads of `progress.description`;
+	// failures just leave the label unset.
+	const labelSource = assignment?.trim();
+	if (!args.description && args.modelRegistry && args.settings && labelSource) {
+		generateTaskLabel(labelSource, args.modelRegistry, args.settings, id)
+			.then(label => {
+				if (!label || abortSignal.aborted || progress.description) return;
+				progress.description = label;
+				if (!resolved) scheduleProgress();
+			})
+			.catch(err => {
+				logger.debug("Subagent label generation failed", {
+					id,
+					error: err instanceof Error ? err.message : String(err),
+				});
+			});
+	}
 
 	const getMessageContent = (message: unknown): unknown => {
 		if (!isRecord(message) || !("content" in message)) {
@@ -1673,7 +1696,6 @@ interface FinalizeRunArgs {
 	agent: AgentDefinition;
 	task: string;
 	assignment?: string;
-	description?: string;
 	modelOverride?: string | string[];
 	outputSchema?: unknown;
 	signal?: AbortSignal;
@@ -1790,7 +1812,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 			parentToolCallId: args.parentToolCallId,
 			detached: args.detached,
 			agentSource: agent.source,
-			description: args.description,
+			description: progress.description,
 			status: progress.status as "completed" | "failed" | "aborted",
 			sessionFile: args.sessionFile,
 			index,
@@ -1804,7 +1826,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 		agentSource: agent.source,
 		task,
 		assignment,
-		description: args.description,
+		description: progress.description,
 		lastIntent: progress.lastIntent,
 		exitCode,
 		output: truncatedOutput,
@@ -1975,7 +1997,6 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 		id,
 		agent,
 		task: message,
-		description: options.description,
 		signal,
 		artifactsDir: options.artifactsDir,
 		eventBus: options.eventBus,
@@ -2047,12 +2068,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		options.parentServiceTier,
 	);
 	const maxRecursionDepth = settings.get("task.maxRecursionDepth") ?? 2;
-	// Tailored specialist identity for this spawn. `subagentRole` is the full
-	// (trimmed) role text fed to the system-prompt preamble; `subagentDisplayName`
-	// is the label-normalized form the registry/roster show, falling back to the
-	// agent type name when no role was given.
-	const subagentRole = options.role?.trim() || undefined;
-	const subagentDisplayName = resolveSubagentDisplayName(options.role, agent.name);
 	const maxRuntimeMs = Math.max(
 		0,
 		Math.trunc(Number(options.maxRuntimeMs ?? settings.get("task.maxRuntimeMs") ?? 0) || 0),
@@ -2118,6 +2133,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		task,
 		assignment,
 		description: options.description,
+		modelRegistry: options.modelRegistry,
+		settings,
 		modelOverride,
 		signal,
 		onProgress,
@@ -2285,8 +2302,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			const subagentAgentIdentity: AgentIdentity | undefined = options.parentTelemetry
 				? {
 						id,
-						name: subagentDisplayName,
-						description: subagentRole ? oneLineLabel(subagentRole) : agent.description,
+						name: agent.name,
+						description: agent.description,
 					}
 				: undefined;
 			const subagentTelemetry: AgentTelemetryConfig | undefined =
@@ -2342,7 +2359,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				systemPrompt: defaultPrompt => {
 					const subagentPrompt = prompt.render(subagentSystemPromptTemplate, {
 						agent: agent.systemPrompt,
-						role: subagentRole ? oneLineLabel(subagentRole) : "",
 						context: options.context?.trim() ?? "",
 						planReference: options.planReference?.content ?? "",
 						planReferencePath: options.planReference?.path ?? "",
@@ -2365,7 +2381,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				parentTaskPrefix: id,
 				parentAgentId: options.parentAgentId,
 				agentId: id,
-				agentDisplayName: subagentDisplayName,
+				agentDisplayName: agent.name,
 				enableLsp: lspEnabled,
 				skipPythonPreflight,
 				enableMCP,
@@ -2634,7 +2650,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		agent,
 		task,
 		assignment,
-		description: options.description,
 		modelOverride,
 		outputSchema,
 		signal,

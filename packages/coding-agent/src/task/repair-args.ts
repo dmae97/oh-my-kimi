@@ -2,7 +2,7 @@
  * Repair double-encoded JSON string arguments for the task tool.
  *
  * Models occasionally JSON-escape a string value twice when emitting a
- * `task` tool call, so an `assignment` that should read
+ * `task` tool call, so a `task` field that should read
  *
  *     # Role
  *     You are a judge … "describe this" … return —
@@ -24,7 +24,8 @@
  * string.
  *
  * This is deliberately scoped to the task tool's natural-language fields
- * (`assignment`, `description`). It is NOT applied to code-bearing
+ * (`task`, shared `context`); identifier fields (`name`, `agent`)
+ * are never repaired. It is NOT applied to code-bearing
  * tools (write/edit/bash/search), where a backslash or quote is load-bearing
  * and a false-positive unescape would silently corrupt a file or command.
  */
@@ -78,52 +79,40 @@ export function repairDoubleEncodedJsonString(value: string): string {
 	return typeof decoded === "string" && decoded !== value ? decoded : value;
 }
 
-/** Repair a single (possibly partial) task item's prose fields. */
-function repairTaskItem(task: TaskItem): TaskItem {
-	if (task === null || typeof task !== "object") return task;
-	const assignment =
-		typeof task.assignment === "string" ? repairDoubleEncodedJsonString(task.assignment) : task.assignment;
-	const description =
-		typeof task.description === "string" ? repairDoubleEncodedJsonString(task.description) : task.description;
-	if (assignment === task.assignment && description === task.description) return task;
-	return { ...task, assignment, description };
+/** Repair a single (possibly partial) task item's prose field (`task`). */
+function repairTaskItem(item: TaskItem): TaskItem {
+	if (item === null || typeof item !== "object") return item;
+	const task = typeof item.task === "string" ? repairDoubleEncodedJsonString(item.task) : item.task;
+	if (task === item.task) return item;
+	return { ...item, task };
 }
 
 /**
- * Repair double-encoded prose in task-tool params (`assignment`,
- * `description`, shared `context`, and each batch task item's prose fields).
- * Returns the same reference when nothing changed so callers can cheaply skip
- * work. Defensive against partially-streamed args (missing/undefined fields,
- * partial task arrays) so it is safe on the render path as well as on
- * execution.
+ * Repair double-encoded prose in task-tool params (flat `task`, shared
+ * `context`, and each batch task item's `task`). Returns the same reference
+ * when nothing changed so callers can cheaply skip work. Defensive against
+ * partially-streamed args (missing/undefined fields, partial task arrays) so
+ * it is safe on the render path as well as on execution.
  */
 export function repairTaskParams(params: TaskParams): TaskParams {
 	if (params === null || typeof params !== "object") return params;
 
-	const assignment =
-		typeof params.assignment === "string" ? repairDoubleEncodedJsonString(params.assignment) : params.assignment;
-	const description =
-		typeof params.description === "string" ? repairDoubleEncodedJsonString(params.description) : params.description;
+	const task = typeof params.task === "string" ? repairDoubleEncodedJsonString(params.task) : params.task;
 	const context = typeof params.context === "string" ? repairDoubleEncodedJsonString(params.context) : params.context;
 
 	let tasks = params.tasks;
 	if (Array.isArray(params.tasks)) {
 		let changed = false;
-		const repaired = params.tasks.map(task => {
-			const next = repairTaskItem(task);
-			if (next !== task) changed = true;
+		const repaired = params.tasks.map(item => {
+			const next = repairTaskItem(item);
+			if (next !== item) changed = true;
 			return next;
 		});
 		if (changed) tasks = repaired;
 	}
 
-	if (
-		assignment === params.assignment &&
-		description === params.description &&
-		context === params.context &&
-		tasks === params.tasks
-	) {
+	if (task === params.task && context === params.context && tasks === params.tasks) {
 		return params;
 	}
-	return { ...params, assignment, description, context, tasks };
+	return { ...params, task, context, tasks };
 }

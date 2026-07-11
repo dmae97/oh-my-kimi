@@ -2,16 +2,18 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Reworked the task tool wire schema: the top-level `agent` field moved into each task item as `agent` (so one call can mix agent types), `assignment` was renamed `task`, `id` was renamed `name`, and the `role` and `description` fields were removed. The one-line UI label previously supplied via `description` is now generated automatically from the `task` text by the tiny/title model.
+
 ### Added
 
-- Added `auto` as a valid option for `thinking-level` in agent frontmatter
+- Added `auto` as a valid `thinking-level` in agent frontmatter; the bundled `task` subagent now defaults to it. An explicit `:level` suffix on a resolved model pattern takes precedence over an agent-definition default.
 
 ### Changed
 
-- Refined task tool prompts to emphasize selecting the most specific agent type over defaults
-- Updated the task subagent to default to the `auto` thinking selector
-- The bundled `task` subagent now defaults to the `auto` thinking selector; agent frontmatter `thinking-level` accepts `auto`, and an explicit `:level` suffix on a resolved model pattern takes precedence over an agent-definition default.
-- Clarified the task tool prompt so callers pick the most specific agent type: `role` is documented as never changing tools/model, read-only investigation is directed to `agent: "scout"`, and omitting `agent` is framed as an explicit decision that no listed specialist fits.
+- Rewrote the task tool prompt for the new wire schema and to push callers toward the most specific agent type: read-only research is directed to `agent: "scout"`, and omitting `agent` is framed as an explicit decision that no listed specialist fits.
+- Task rendering now keeps the `⟨agent⟩` type badge on live progress and finished result rows (previously it vanished after the streaming call preview), and the Task header shows only the spawn count instead of repeating the per-item agent types.
 
 ## [16.4.4] - 2026-07-11
 

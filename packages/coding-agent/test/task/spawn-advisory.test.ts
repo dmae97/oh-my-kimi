@@ -5,41 +5,42 @@ import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry
 import { buildSpecializationAdvisory, TaskTool } from "@oh-my-pi/pi-coding-agent/task";
 import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
-import type { AgentDefinition, SingleResult, TaskItem, TaskParams } from "@oh-my-pi/pi-coding-agent/task/types";
+import type { AgentDefinition, SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 
 // Contract: the task tool appends an advisory (never a rejection) steering the
-// spawner toward tailored specialists when it spawns generic role-less workers
-// and still holds spawn capacity (DepthCapacity). It is gated on depth so a
-// leaf at max recursion is never nagged.
-
-const item = (role?: string): TaskItem => ({ assignment: "do the thing", role });
+// spawner toward more specific agent types when one call resolves ≥2 items to
+// a generic `task`/`sonic` worker and the spawner still holds spawn capacity
+// (DepthCapacity). It is gated on depth so a leaf at max recursion is never
+// nagged, and a lone generic spawn is never flagged.
 
 describe("buildSpecializationAdvisory", () => {
-	it("nudges a generic role-less spawn when depth capacity remains", () => {
-		const advice = buildSpecializationAdvisory("task", [item()], true);
+	it("nudges when one call spawns two generic workers with depth capacity", () => {
+		const advice = buildSpecializationAdvisory(["task", "task"], true);
 		expect(advice).toBeDefined();
-		expect(advice).toContain("`role`");
+		expect(advice).toContain('`agent: "scout"`');
 	});
 
-	it("stays silent at max depth even for a generic role-less spawn", () => {
-		expect(buildSpecializationAdvisory("task", [item()], false)).toBeUndefined();
+	it("stays silent at max depth even for a generic fan-out", () => {
+		expect(buildSpecializationAdvisory(["task", "task"], false)).toBeUndefined();
 	});
 
-	it("stays silent when the spawn already carries a role", () => {
-		expect(buildSpecializationAdvisory("task", [item("Rust async-runtime specialist")], true)).toBeUndefined();
+	it("stays silent for a single generic spawn", () => {
+		expect(buildSpecializationAdvisory(["task"], true)).toBeUndefined();
 	});
 
-	it("treats a whitespace-only role as absent and nudges", () => {
-		expect(buildSpecializationAdvisory("sonic", [item("   ")], true)).toBeDefined();
+	it("stays silent when the fan-out already uses specific agent types", () => {
+		expect(buildSpecializationAdvisory(["reviewer", "scout"], true)).toBeUndefined();
 	});
 
-	it("nudges when one call clones the same agent twice without roles", () => {
-		expect(buildSpecializationAdvisory("reviewer", [item(), item()], true)).toBeDefined();
+	it("stays silent for a mixed call with only one generic worker", () => {
+		expect(buildSpecializationAdvisory(["task", "scout"], true)).toBeUndefined();
 	});
 
-	it("stays silent for a single non-generic role-less spawn", () => {
-		expect(buildSpecializationAdvisory("reviewer", [item()], true)).toBeUndefined();
+	it("counts sonic as generic alongside task", () => {
+		const advice = buildSpecializationAdvisory(["sonic", "task"], true);
+		expect(advice).toBeDefined();
+		expect(advice).toContain("2 generic");
 	});
 });
 
@@ -71,7 +72,7 @@ describe("task tool advisory gating via suppressSpawnAdvisory", () => {
 			cwd: "/tmp",
 			hasUI: false,
 			suppressSpawnAdvisory: suppress,
-			settings: Settings.isolated({ "task.isolation.mode": "none", "task.batch": false }),
+			settings: Settings.isolated({ "task.isolation.mode": "none", "task.batch": true }),
 			getSessionFile: () => null,
 			getSessionSpawns: () => "*",
 		} as unknown as ToolSession;
@@ -81,7 +82,7 @@ describe("task tool advisory gating via suppressSpawnAdvisory", () => {
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [agent], projectAgentsDir: null });
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(
 			async (options): Promise<SingleResult> => ({
-				index: 0,
+				index: options.index ?? 0,
 				id: options.id ?? "X",
 				agent: "task",
 				agentSource: "bundled",
@@ -97,15 +98,23 @@ describe("task tool advisory gating via suppressSpawnAdvisory", () => {
 			}),
 		);
 		const tool = await TaskTool.create(session(suppress));
-		const result = await tool.execute("tc", { agent: "task", id: "X", assignment: "do the thing" } as TaskParams);
+		// Both items omit `agent`, so each resolves to the generic spawn-policy
+		// default ("task") — the ≥2-generics condition the advisory gates on.
+		const result = await tool.execute("tc", {
+			context: "shared fan-out background",
+			tasks: [
+				{ name: "First", task: "do the thing" },
+				{ name: "Second", task: "do the other thing" },
+			],
+		});
 		return result.content.find(part => part.type === "text")?.text ?? "";
 	}
 
-	it("appends the specialization advisory for a generic role-less spawn", async () => {
-		expect(await spawnText(false)).toContain("`role`");
+	it("appends the specialization advisory when a batch resolves two generic workers", async () => {
+		expect(await spawnText(false)).toContain('`agent: "scout"`');
 	});
 
 	it("omits the advisory entirely when the session suppresses it", async () => {
-		expect(await spawnText(true)).not.toContain("`role`");
+		expect(await spawnText(true)).not.toContain('`agent: "scout"`');
 	});
 });

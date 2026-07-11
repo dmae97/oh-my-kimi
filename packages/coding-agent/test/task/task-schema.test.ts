@@ -12,20 +12,20 @@ import { type } from "arktype";
 // exists at all; follow-ups go through `irc` messaging.
 
 describe("task schema (single-spawn)", () => {
-	it("accepts {agent, assignment}", () => {
-		const parsed = taskSchema({ agent: "explore", assignment: "Map the auth module." });
+	it("accepts {agent, task}", () => {
+		const parsed = taskSchema({ agent: "explore", task: "Map the auth module." });
 		expect(parsed instanceof type.errors).toBe(false);
 	});
 
 	it("defaults agent to `task` when omitted", () => {
-		const parsed = taskSchema({ assignment: "Map the auth module." });
+		const parsed = taskSchema({ task: "Map the auth module." });
 		expect(parsed instanceof type.errors).toBe(false);
 		if (!(parsed instanceof type.errors)) {
 			expect(parsed.agent).toBe("task");
 		}
 	});
 
-	it("requires assignment", () => {
+	it("requires task", () => {
 		const parsed = taskSchema({ agent: "explore" });
 		expect(parsed instanceof type.errors).toBe(true);
 	});
@@ -33,9 +33,9 @@ describe("task schema (single-spawn)", () => {
 	it("strips tasks/context/schema from the single-spawn schema", () => {
 		const parsed = taskSchema({
 			agent: "explore",
-			assignment: "Map the auth module.",
+			task: "Map the auth module.",
 			context: "shared background",
-			tasks: [{ id: "A", assignment: "..." }],
+			tasks: [{ name: "A", task: "..." }],
 			schema: '{"properties":{}}',
 		});
 		expect(parsed instanceof type.errors).toBe(false);
@@ -74,12 +74,12 @@ describe("task spawn validation", () => {
 	it("defaults a missing agent to `task`", async () => {
 		// With no `agent`, execute() normalizes to the `task` default, so the
 		// failure is unknown-agent (none discovered), not missing-agent.
-		const text = await executeText({ assignment: "..." });
+		const text = await executeText({ task: "..." });
 		expect(text).toContain('Unknown agent "task"');
 	});
 
-	it("rejects a missing assignment", async () => {
+	it("rejects a missing task", async () => {
 		const text = await executeText({ agent: "explore" });
-		expect(text).toContain("Missing `assignment`");
+		expect(text).toContain("Missing `task`");
 	});
 });

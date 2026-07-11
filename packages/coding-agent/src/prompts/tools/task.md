@@ -2,29 +2,25 @@
 Execution does not block your turn: you receive agent and job IDs immediately, and the final results deliver themselves when the subagents finish.{{else}}{{#if batchEnabled}}Run subagents synchronously by passing items in a `tasks[]` batch.{{else}}Run ONE subagent synchronously per call.{{/if}}
 Execution blocks your turn: the call only returns once the work is completely finished.{{/if}}
 
-# Assignment Design
-- **Agent typing:** Choose the `agent` type first. `role` only names the specialist inside that type — it NEVER changes tools, model, or speed. Writing `role: "Scout"` does NOT make a scout: read-only research MUST use `agent: "scout"`, which runs on a faster model.
-- **Role matching:** Assign each subagent a specific `role` (e.g. "Security Reviewer", "DB Migrator"). Do not spawn generic workers.
-- **No overhead:** Each assignment MUST instruct its agent to skip formatters, linters, and project-wide test suites. You will run those once at the end.
-- **One-pass agents:** Prefer agents that investigate **and** edit in a single pass; only spin a read-only discovery step (e.g. `scout`) when the affected files are genuinely unknown.
+# Task Design
+- **Agent typing:** Choose each item's `agent` type first. Read-only research MUST use `agent: "scout"`, which runs on a faster model. Use the default worker only when no listed specialist fits.
+- **No overhead:** Each `task` MUST instruct its agent to skip formatters, linters, and project-wide test suites. You will run those once at the end.
+- **One-pass agents:** Prefer agents that investigate **and** edit in a single pass; only spin a read-only discovery step (e.g. `agent: "scout"`) when the affected files are genuinely unknown.
 
 # Inputs
-- `agent` (optional): The base agent type to use (e.g., `scout`, `reviewer`). Omitting it gives you the general-purpose worker (`{{defaultAgent}}`) — never pass that name explicitly. Only omit it after checking the agent list below and finding no specialist that fits.{{#if allowedAgentsText}} Current spawn policy allows: {{allowedAgentsText}}.{{/if}}
 {{#if batchEnabled}}
 - `context`: Shared project state, constraints, and contracts. Applies to the entire batch; do not duplicate this background into individual tasks.
 - `tasks[]`: Array of subagents to spawn.
-  - `assignment`: Complete, self-contained instructions. One-liners or missing acceptance criteria are PROHIBITED.
-  - `id`: A stable CamelCase identifier (≤32 chars). Generated automatically if omitted.
-  - `description`: A UI label only; the subagent NEVER sees it.
-  - `role`: The specialist this subagent embodies. Tailor per spawn; do not clone a generic worker.
+  - `name`: A stable CamelCase identifier (≤32 chars), used to address the agent (IRC, job ids). Generated automatically if omitted.
+  - `agent`: The agent type running this item (e.g. `scout`, `reviewer`). Omitting it gives you the general-purpose worker (`{{defaultAgent}}`) — NEVER pass that name explicitly. Only omit it after checking the agent list below and finding no specialist that fits.{{#if allowedAgentsText}} Current spawn policy allows: {{allowedAgentsText}}.{{/if}}
+  - `task`: Complete, self-contained instructions. One-liners or missing acceptance criteria are PROHIBITED.
 {{#if isolationEnabled}}
   - `isolated`: Run in a dedicated worktree and return patches. Isolated agents are destroyed upon completion and cannot be addressed afterward.
 {{/if}}
 {{else}}
-- `assignment`: Complete, self-contained instructions. One-liners or missing acceptance criteria are PROHIBITED.
-- `id`: A stable CamelCase identifier (≤32 chars). Generated automatically if omitted.
-- `description`: A UI label only; the subagent NEVER sees it.
-- `role`: The specialist this subagent embodies. Tailor per spawn; do not clone a generic worker.
+- `name`: A stable CamelCase identifier (≤32 chars), used to address the agent (IRC, job ids). Generated automatically if omitted.
+- `agent`: The agent type to spawn (e.g. `scout`, `reviewer`). Omitting it gives you the general-purpose worker (`{{defaultAgent}}`) — NEVER pass that name explicitly. Only omit it after checking the agent list below and finding no specialist that fits.{{#if allowedAgentsText}} Current spawn policy allows: {{allowedAgentsText}}.{{/if}}
+- `task`: Complete, self-contained instructions. One-liners or missing acceptance criteria are PROHIBITED.
 {{#if isolationEnabled}}
 - `isolated`: Run in a dedicated worktree and return patches. Isolated agents are destroyed upon completion and cannot be addressed afterward.
 {{/if}}
@@ -34,9 +30,9 @@ Execution blocks your turn: the call only returns once the work is completely fi
 Subagents start blank. They have no access to your conversation history.
 {{#if ircEnabled}}- **Steering delivery:** Parent-to-subagent IRC is delivered immediately as steering; subagents blocked in `job poll` / `irc wait` do not need to poll separately for it.{{/if}}
 {{#if batchEnabled}}
-- Pass large payloads using `local://<path>` URIs, never inline text.
+- Pass large payloads using `local://<path>` URIs, NEVER inline text.
 {{else}}
-- Write shared project state ONCE to a `local://` file (e.g., `local://ctx.md`) and reference that URL in your assignments.
+- Write shared project state ONCE to a `local://` file (e.g., `local://ctx.md`) and reference that URL in each `task`.
 {{/if}}
 
 # Format Contracts
@@ -47,7 +43,7 @@ The `context` field MUST follow this format:
 # Contract     ← shared interfaces
 {{/if}}
 
-The `assignment` field MUST follow this format:
+The `task` field MUST follow this format:
 # Target       ← exact files and symbols; explicit non-goals
 # Change       ← step-by-step add/remove/rename; APIs and patterns
 # Acceptance   ← observable result; no project-wide commands

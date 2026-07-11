@@ -42,9 +42,9 @@ describe("task spawn policy surfaces", () => {
 
 	it("uses the first allowed spawn as the schema default", () => {
 		const schema = getTaskSchema({ isolationEnabled: false, batchEnabled: false, defaultAgent: "fact-finder" });
-		const parsed = schema({ assignment: "check" });
+		const parsed = schema({ task: "check" });
 
-		expect(parsed).toEqual({ agent: "fact-finder", assignment: "check" });
+		expect(parsed).toEqual({ agent: "fact-finder", task: "check" });
 	});
 
 	it("renders the restricted spawn default in the task description", async () => {
@@ -56,8 +56,8 @@ describe("task spawn policy surfaces", () => {
 		const tool = await TaskTool.create(makeSession("fact-finder,oracle"));
 		const description = tool.description;
 
-		expect(description).toContain("Defaults to `fact-finder`");
+		expect(description).toContain("the general-purpose worker (`fact-finder`)");
 		expect(description).toContain("Current spawn policy allows: `fact-finder`, `oracle`.");
-		expect(description).not.toContain("Defaults to `task`");
+		expect(description).not.toContain("(`task`)");
 	});
 });
