@@ -7,7 +7,10 @@
  *    running screen showing its tool-call trace, current tool, and streamed
  *    text tail; an idle screen its last-activity gist; a settled screen its
  *    delivery footer.
- * 3. Every emitted line respects the render width (sanitized, truncated).
+ * 3. Animated content (cursor blink, spinner) re-derives from the shared
+ *    mutable options on every paint of the SAME component — spinner ticks
+ *    repaint the block without re-invoking renderCall/renderResult.
+ * 4. Every emitted line respects the render width (sanitized, truncated).
  */
 import { beforeAll, describe, expect, it } from "bun:test";
 import { Settings } from "../../config/settings";
@@ -16,9 +19,7 @@ import type { VibeScreenSnapshot } from "../../vibe/runtime";
 import { createVibeToolRenderer, type VibeToolDetails } from "../vibe";
 
 const strip = (lines: readonly string[]): string[] =>
-	lines.map(line =>
-		line.replace(/\x1b\]8;[^\x1b\x07]*(?:\x07|\x1b\\)/g, "").replace(/\x1b\[[0-9;]*m/g, ""),
-	);
+	lines.map(line => line.replace(/\x1b\]8;[^\x1b\x07]*(?:\x07|\x1b\\)/g, "").replace(/\x1b\[[0-9;]*m/g, ""));
 
 function makeScreen(overrides: Partial<VibeScreenSnapshot> = {}): VibeScreenSnapshot {
 	return {
@@ -73,6 +74,38 @@ describe("vibe tool renderers", () => {
 		expect(off).not.toContain("▌");
 	});
 
+	it("composer cursor re-derives from mutated options on the same component", () => {
+		const renderer = createVibeToolRenderer("send");
+		const options = { expanded: false, isPartial: true, spinnerFrame: 0 };
+		const component = renderer.renderCall({ session: "Anna", message: "Hi" }, options, uiTheme) as {
+			render(width: number): readonly string[];
+		};
+		expect(renderLines(component).join("\n")).toContain("▌");
+		// The tool block mutates ONE shared render-state object per spinner tick
+		// and repaints — the component must not have baked frame 0 in.
+		options.spinnerFrame = 1;
+		expect(renderLines(component).join("\n")).not.toContain("▌");
+	});
+
+	it("wait wall spinner re-derives from mutated options on the same component", () => {
+		const renderer = createVibeToolRenderer("wait");
+		const details: VibeToolDetails = {
+			op: "wait",
+			screens: [makeScreen({ currentTool: "edit" })],
+			wait: { settled: [], stillRunning: ["Anna"], timedOut: false, waiting: true },
+		};
+		const options = { expanded: false, isPartial: true, spinnerFrame: 0 };
+		const component = renderer.renderResult({ content: [{ type: "text", text: "" }], details }, options, uiTheme, {
+			sessions: ["Anna"],
+		}) as { render(width: number): readonly string[] };
+		const first = renderLines(component).join("\n");
+		options.spinnerFrame = 5;
+		const second = renderLines(component).join("\n");
+		// Spinner glyphs for frames 0 and 5 differ; a component that baked its
+		// lines at build time would render byte-identical output.
+		expect(second).not.toBe(first);
+	});
+
 	it("send result frames the ack under the composer", () => {
 		const renderer = createVibeToolRenderer("send");
 		const details: VibeToolDetails = {
@@ -113,7 +146,11 @@ describe("vibe tool renderers", () => {
 				}),
 				makeScreen({ id: "Bob", cli: "good", state: "idle", turns: 2, lastActivity: "turn 2 completed" }),
 			],
-			wait: { settled: [{ id: "Bob", jobId: "Bob-t2", status: "completed" }], stillRunning: ["Anna"], timedOut: false },
+			wait: {
+				settled: [{ id: "Bob", jobId: "Bob-t2", status: "completed" }],
+				stillRunning: ["Anna"],
+				timedOut: false,
+			},
 		};
 		const component = renderer.renderResult(
 			{ content: [{ type: "text", text: "" }], details },

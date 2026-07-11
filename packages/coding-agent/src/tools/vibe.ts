@@ -33,6 +33,7 @@ import {
 	type VibeSendOutcome,
 	VibeSessionRegistry,
 	type VibeSessionState,
+	type VibeWaitOutcome,
 } from "../vibe/runtime";
 import type { ToolSession } from "./index";
 import {
@@ -180,7 +181,7 @@ export class VibeWaitTool implements AgentTool<typeof vibeWaitSchema, VibeToolDe
 		};
 		const progressTimer = onUpdate ? setInterval(emitProgress, WAIT_PROGRESS_INTERVAL_MS) : undefined;
 		emitProgress();
-		let outcome: Awaited<ReturnType<VibeSessionRegistry["wait"]>>;
+		let outcome: VibeWaitOutcome;
 		try {
 			outcome = await registry.wait(this.session, {
 				sessions: params.sessions,
@@ -233,11 +234,14 @@ export class VibeKillTool implements AgentTool<typeof vibeKillSchema, VibeToolDe
 	async execute(_toolCallId: string, params: typeof vibeKillSchema.infer): Promise<AgentToolResult<VibeToolDetails>> {
 		const outcome = await VibeSessionRegistry.global().kill(this.session, params.session);
 		const cancelNote = outcome.cancelledTurn ? " Its in-flight turn was cancelled." : "";
-		return textResult(`Killed session \`${outcome.id}\`.${cancelNote} Transcript remains at history://${outcome.id}.`, {
-			op: "kill",
-			screens: screensOf(this.session),
-			killed: outcome,
-		});
+		return textResult(
+			`Killed session \`${outcome.id}\`.${cancelNote} Transcript remains at history://${outcome.id}.`,
+			{
+				op: "kill",
+				screens: screensOf(this.session),
+				killed: outcome,
+			},
+		);
 	}
 }
 
@@ -340,7 +344,9 @@ function miniFrame(uiTheme: Theme, header: string, body: string[], footer?: stri
 	for (const row of body) {
 		lines.push(`${rail(box.vertical)} ${row}`);
 	}
-	lines.push(footer ? `${rail(`${box.bottomLeft}${box.horizontal}`)} ${footer}` : rail(`${box.bottomLeft}${box.horizontal}`));
+	lines.push(
+		footer ? `${rail(`${box.bottomLeft}${box.horizontal}`)} ${footer}` : rail(`${box.bottomLeft}${box.horizontal}`),
+	);
 	return lines;
 }
 
@@ -356,7 +362,9 @@ function composerRows(uiTheme: Theme, message: string, options: { cursor: boolea
 	} else if (options.cursor) {
 		visible[visible.length - 1] = `${visible[visible.length - 1]}${uiTheme.fg("accent", CURSOR_GLYPH)}`;
 	}
-	return visible.map((line, index) => (index === 0 ? `${promptGlyph} ${uiTheme.fg("toolOutput", line)}` : `  ${uiTheme.fg("toolOutput", line)}`));
+	return visible.map((line, index) =>
+		index === 0 ? `${promptGlyph} ${uiTheme.fg("toolOutput", line)}` : `  ${uiTheme.fg("toolOutput", line)}`,
+	);
 }
 
 /** Render one worker "TV": header + live tool calls + streamed text tail. */
@@ -416,16 +424,27 @@ function tvScreen(
 		body.push(`${uiTheme.fg("dim", hook)} ${uiTheme.fg("muted", frameText(screen.lastActivity, TV_LINE_MAX))}`);
 	}
 	const footer = settledStatus
-		? uiTheme.fg(settledStatus === "completed" ? "success" : settledStatus === "failed" ? "error" : "warning", `turn ${settledStatus} — result delivered`)
+		? uiTheme.fg(
+				settledStatus === "completed" ? "success" : settledStatus === "failed" ? "error" : "warning",
+				`turn ${settledStatus} — result delivered`,
+			)
 		: undefined;
 	return miniFrame(uiTheme, headParts.join(" "), body, footer);
 }
 
-/** Width-aware component: truncates every prebuilt line at render time. */
-function linesComponent(lines: string[]): Component {
+/**
+ * Width-aware component over prebuilt lines, or — given a builder — lines
+ * recomputed on every paint. Spinner ticks repaint the tool block WITHOUT
+ * re-invoking renderCall/renderResult, so time-based content (shimmer sweep,
+ * spinner glyph, cursor blink, elapsed turn duration) must be produced inside
+ * a builder that reads the shared mutable `options` at paint time; prebuilt
+ * arrays are for static frames only.
+ */
+function linesComponent(lines: string[] | (() => string[])): Component {
 	return {
 		render(width: number): readonly string[] {
-			return lines.map(line => truncateToWidth(line, width, Ellipsis.Unicode));
+			const rows = typeof lines === "function" ? lines() : lines;
+			return rows.map(line => truncateToWidth(line, width, Ellipsis.Unicode));
 		},
 		invalidate() {},
 	};
@@ -461,14 +480,15 @@ export function createVibeToolRenderer(op: VibeOp) {
 			const title = uiTheme.fg("muted", `vibe ${describeCall(op, args)}`);
 			if (composerOp) {
 				const message = op === "spawn" ? (args?.prompt ?? "") : (args?.message ?? "");
-				const cursorOn = ((options.spinnerFrame ?? 0) & 1) === 0;
-				const lines = miniFrame(
-					uiTheme,
-					title,
-					composerRows(uiTheme, message, { cursor: cursorOn, expanded: options.expanded }),
-					uiTheme.fg("dim", op === "spawn" ? "booting CLI…" : "delivering…"),
-				);
-				return linesComponent(lines);
+				return linesComponent(() => {
+					const cursorOn = ((options.spinnerFrame ?? 0) & 1) === 0;
+					return miniFrame(
+						uiTheme,
+						title,
+						composerRows(uiTheme, message, { cursor: cursorOn, expanded: options.expanded }),
+						uiTheme.fg("dim", op === "spawn" ? "booting CLI…" : "delivering…"),
+					);
+				});
 			}
 			return new Text(renderStatusLine({ icon: "pending", title: `vibe ${describeCall(op, args)}` }, uiTheme), 0, 0);
 		},
@@ -505,7 +525,10 @@ export function createVibeToolRenderer(op: VibeOp) {
 							? uiTheme.fg("success", "steered into the running turn")
 							: details.send?.mode === "queued"
 								? uiTheme.fg("warning", "mid-turn — queued as the next turn")
-								: uiTheme.fg("success", `turn started${details.send?.jobId ? ` (job ${details.send.jobId})` : ""}`);
+								: uiTheme.fg(
+										"success",
+										`turn started${details.send?.jobId ? ` (job ${details.send.jobId})` : ""}`,
+									);
 				const lines = miniFrame(
 					uiTheme,
 					target,
@@ -518,7 +541,10 @@ export function createVibeToolRenderer(op: VibeOp) {
 			if (op === "kill") {
 				const killedNote = details.killed?.cancelledTurn ? " (in-flight turn cancelled)" : "";
 				const header = renderStatusLine(
-					{ icon: "done", title: `vibe kill ${frameText(details.killed?.id ?? args?.session ?? "?", 40)}${killedNote}` },
+					{
+						icon: "done",
+						title: `vibe kill ${frameText(details.killed?.id ?? args?.session ?? "?", 40)}${killedNote}`,
+					},
 					uiTheme,
 				);
 				return new Text(header, 0, 0);
@@ -529,38 +555,43 @@ export function createVibeToolRenderer(op: VibeOp) {
 			if (screens.length === 0) {
 				const fallback = result.content.find(part => part.type === "text")?.text ?? "no sessions";
 				return new Text(
-					renderStatusLine({ icon: "warning", title: `vibe ${op}`, meta: [uiTheme.fg("dim", frameText(fallback, 60))] }, uiTheme),
+					renderStatusLine(
+						{ icon: "warning", title: `vibe ${op}`, meta: [uiTheme.fg("dim", frameText(fallback, 60))] },
+						uiTheme,
+					),
 					0,
 					0,
 				);
 			}
 			const waiting = details.wait?.waiting === true;
 			const settledById = new Map(details.wait?.settled.map(entry => [entry.id, entry.status] as const) ?? []);
-			const running = screens.filter(screen => screen.state === "running" || screen.state === "starting").length;
-			const meta: string[] = [];
-			if (running > 0) meta.push(uiTheme.fg("accent", `${running} on air`));
-			if (settledById.size > 0) meta.push(uiTheme.fg("success", `${settledById.size} settled`));
-			if (details.wait?.timedOut) meta.push(uiTheme.fg("warning", "timed out"));
-			const title =
-				op === "wait"
-					? waiting
-						? "vibe wait — watching the wall"
-						: "vibe wait"
-					: `vibe sessions (${screens.length})`;
-			const header = renderStatusLine(
-				{
-					icon: details.wait?.timedOut ? "warning" : running > 0 ? "info" : "done",
-					spinnerFrame: running > 0 ? options.spinnerFrame : undefined,
-					title,
-					meta,
-				},
-				uiTheme,
-			);
-			const lines = [header];
-			for (const screen of screens) {
-				lines.push(...tvScreen(uiTheme, screen, options, settledById.get(screen.id)));
-			}
-			return linesComponent(lines);
+			return linesComponent(() => {
+				const running = screens.filter(screen => screen.state === "running" || screen.state === "starting").length;
+				const meta: string[] = [];
+				if (running > 0) meta.push(uiTheme.fg("accent", `${running} on air`));
+				if (settledById.size > 0) meta.push(uiTheme.fg("success", `${settledById.size} settled`));
+				if (details.wait?.timedOut) meta.push(uiTheme.fg("warning", "timed out"));
+				const title =
+					op === "wait"
+						? waiting
+							? "vibe wait — watching the wall"
+							: "vibe wait"
+						: `vibe sessions (${screens.length})`;
+				const header = renderStatusLine(
+					{
+						icon: details.wait?.timedOut ? "warning" : running > 0 ? "info" : "done",
+						spinnerFrame: running > 0 ? options.spinnerFrame : undefined,
+						title,
+						meta,
+					},
+					uiTheme,
+				);
+				const lines = [header];
+				for (const screen of screens) {
+					lines.push(...tvScreen(uiTheme, screen, options, settledById.get(screen.id)));
+				}
+				return lines;
+			});
 		},
 	};
 }

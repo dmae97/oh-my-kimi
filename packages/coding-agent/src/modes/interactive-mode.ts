@@ -2979,7 +2979,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		const previousTools = this.#vibeModePreviousTools;
-		if (previousTools && previousTools.length > 0) {
+		if (previousTools !== undefined) {
 			await this.session.setActiveToolsByName(previousTools);
 		}
 		this.session.setVibeModeState(undefined);

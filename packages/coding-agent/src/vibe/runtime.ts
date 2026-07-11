@@ -158,9 +158,10 @@ export interface VibeKillOutcome {
 }
 
 export interface VibeWaitOutcome {
-	/** Watched sessions whose latest turn settled during (or before) the wait. */
+	/** Watched sessions whose snapshotted turn settled during (or before) the wait.
+	 * May overlap `stillRunning` when a queued follow-up turn already started. */
 	settled: Array<{ id: string; jobId: string; status: "completed" | "failed" | "cancelled"; resultText: string }>;
-	/** Watched sessions still mid-turn when the wait returned. */
+	/** Watched sessions with a turn in flight when the wait returned. */
 	stillRunning: string[];
 	timedOut: boolean;
 }
@@ -373,11 +374,20 @@ export class VibeSessionRegistry {
 			? args.sessions.map(id => this.#record(owner, id))
 			: [...this.#records.values()].filter(record => record.ownerId === owner && record.turn !== undefined);
 
+		// Snapshot each watched turn's job at entry: #finishTurn installs a
+		// queued follow-up turn inside the settling job's callback (before that
+		// job's promise resolves), so re-reading record.turn after the race
+		// would inspect the *next* running job and silently drop the settled
+		// result — whose async delivery watchJobs is suppressing on our behalf.
+		const snapshots: Array<{ record: VibeRecord; jobId: string }> = [];
+		for (const record of watched) {
+			const jobId = record.turn?.jobId ?? record.lastJobId;
+			if (jobId) snapshots.push({ record, jobId });
+		}
+
 		const collectSettled = (): VibeWaitOutcome["settled"] => {
 			const settled: VibeWaitOutcome["settled"] = [];
-			for (const record of watched) {
-				const jobId = record.turn?.jobId ?? record.lastJobId;
-				if (!jobId) continue;
+			for (const { record, jobId } of snapshots) {
 				const job = manager.getJob(jobId);
 				if (!job || job.status === "running") continue;
 				settled.push({
@@ -391,9 +401,8 @@ export class VibeSessionRegistry {
 		};
 
 		const runningJobs: AsyncJob[] = [];
-		for (const record of watched) {
-			if (!record.turn) continue;
-			const job = manager.getJob(record.turn.jobId);
+		for (const { jobId } of snapshots) {
+			const job = manager.getJob(jobId);
 			if (job?.status === "running") runningJobs.push(job);
 		}
 
@@ -425,10 +434,9 @@ export class VibeSessionRegistry {
 
 		const settled = collectSettled();
 		manager.acknowledgeDeliveries(settled.map(entry => entry.jobId));
-		const settledIds = new Set(settled.map(entry => entry.id));
-		const stillRunning = watched
-			.filter(record => !settledIds.has(record.id) && record.turn !== undefined)
-			.map(record => record.id);
+		// Current in-flight state, independent of the snapshot: a session whose
+		// watched turn settled may already be mid queued follow-up.
+		const stillRunning = watched.filter(record => record.turn !== undefined).map(record => record.id);
 		return { settled, stillRunning, timedOut: waited && settled.length === 0 };
 	}
 

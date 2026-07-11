@@ -417,6 +417,54 @@ describe("vibe session registry", () => {
 		await manager.getJob(good.jobId)!.promise;
 	});
 
+	it("wait reports the settled turn even when a queued follow-up starts immediately", async () => {
+		const firstGate = deferred();
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			AgentRegistry.global().register({
+				id: options.id,
+				displayName: options.id,
+				kind: "sub",
+				parentId: "Main",
+				session: createFakeWorkerSession().session,
+				status: "running",
+			});
+			await firstGate.promise;
+			AgentRegistry.global().setStatus(options.id, "idle");
+			return makeResult(options.id, { output: "First turn done." });
+		});
+		const followUpGate = deferred();
+		vi.spyOn(executorModule, "runSubagentFollowUpTurn").mockImplementation(async options => {
+			await followUpGate.promise;
+			return makeResult(options.id, { output: "Follow-up done." });
+		});
+
+		const manager = createManager();
+		const session = createSession({ manager });
+		const registry = VibeSessionRegistry.global();
+		const { jobId } = await registry.spawn(session, { cli: "fast", name: "Fast", prompt: "Task A." });
+		await pollUntil(() => AgentRegistry.global().get("Fast") !== undefined);
+
+		// Queued while mid-turn: #finishTurn starts this follow-up turn inside
+		// the settling job's callback, BEFORE the watched job's promise resolves.
+		const queued = await registry.send(session, { session: "Fast", message: "Task B." });
+		expect(queued.mode).toBe("queued");
+
+		const waitPromise = registry.wait(session, { sessions: ["Fast"], timeoutMs: 5000 });
+		firstGate.resolve();
+		const outcome = await waitPromise;
+
+		// The settled first turn is reported (not shadowed by the new in-flight
+		// turn) and acknowledged so it is not re-delivered …
+		expect(outcome.settled.map(entry => entry.jobId)).toEqual([jobId]);
+		expect(outcome.settled[0]!.resultText).toContain("First turn done.");
+		expect(manager.isDeliverySuppressed(jobId)).toBe(true);
+		// … while the drained-queue follow-up shows as still running.
+		expect(outcome.stillRunning).toEqual(["Fast"]);
+
+		followUpGate.resolve();
+		await manager.getJob("Fast-t2")!.promise;
+	});
+
 	it("kill cancels the in-flight turn and releases the worker session", async () => {
 		const gate = deferred();
 		const fake = createFakeWorkerSession();
