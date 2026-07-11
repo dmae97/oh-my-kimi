@@ -13,6 +13,14 @@
 - Removed the bundled `plan` subagent from available task agents
 - Removed the bundled `plan` subagent from available task agents.
 
+### Fixed
+
+- Fixed `glob` reporting the contradictory "No files found matching pattern" next to a "timed out; returning 0 partial matches" notice. A timed-out empty scan now states explicitly that the result is incomplete (not proof of absence) and suggests scoping to a deeper directory, and the TUI renders it as "No matches before timeout (scan incomplete)" instead of a definitive no-files claim.
+- Fixed `read` adding invisible context padding to raw range selectors: `raw:31-31` returned lines 30–34 (1 leading + 3 trailing context lines) with nothing to distinguish the padding, corrupting verbatim-extraction workflows. Raw ranges now return exactly the requested lines across all three range paths (plain files, in-memory/bridge reads, artifacts); numbered reads keep the self-describing padding.
+- Fixed browser screenshots capturing the wrong tab or hanging until the op timeout when multiple tabs share one Chromium (sibling headless tabs, `cdp_url`/app attach): CDP reads the *active* target's compositor surface, so a backgrounded page could stall waiting for a frame or return a sibling's pixels. The worker now activates the page (`bringToFront`) before every capture, best-effort.
+- Fixed cmux `tab.screenshot({ selector })` silently returning a full-viewport capture that models consumed as an element crop. The cmux daemon has no element-clip or full-page capture; the tool still scrolls the selector into view but now labels the image as full-viewport (same for `fullPage`) instead of mislabeling it.
+- Fixed cmux `tab.evaluate()` / `elementHandle.evaluate()` errors surfacing as the daemon's opaque `js_error: A JavaScript exception occurred`. Scripts now run inside a page-side try/catch envelope that returns the real message and stack, and a Promise return (which the daemon cannot serialize) yields an actionable "evaluates synchronously" error instead of an unsupported-type failure.
+
 ## [16.4.2] - 2026-07-10
 
 ### Fixed
