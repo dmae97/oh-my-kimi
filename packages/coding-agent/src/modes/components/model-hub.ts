@@ -883,6 +883,20 @@ export class ModelHubComponent implements Component {
 			return;
 		}
 
+		// ←/→ are spatial pane switches: the sidebar sits left of the rows.
+		// They never reach the search caret — fuzzy queries don't need one.
+		if (matchesKey(data, "left")) {
+			this.#focus = "scope";
+			return;
+		}
+		if (matchesKey(data, "right")) {
+			// Only views with rows can take list focus (not the locked pane).
+			if (rolesView || this.#isBrowserView(entry)) {
+				this.#focus = "list";
+			}
+			return;
+		}
+
 		// Arrow ownership: scope mode hops the sidebar even while the search
 		// bar holds the caret; list mode navigates rows.
 		if (this.#focus === "scope") {
@@ -1337,13 +1351,13 @@ export class ModelHubComponent implements Component {
 		const entry = this.#activeEntry();
 		if (entry.kind === "roles") {
 			return this.#focus === "list"
-				? "↑/↓ roles · Enter pick model · x clear · t thinking · Tab providers · Esc close"
-				: "↑/↓ providers · Tab roles · Esc close";
+				? "↑/↓ roles · Enter pick model · x clear · t thinking · ← providers · Esc close"
+				: "↑/↓ providers · → roles · Esc close";
 		}
 		if (entry.kind === "provider" && entry.locked) {
 			return entry.oauth ? "Enter log in · ↑/↓ providers · Esc close" : "↑/↓ providers · Esc close";
 		}
-		const arrows = this.#focus === "scope" ? "↑/↓ providers · Tab models" : "↑/↓ models · Tab providers";
+		const arrows = this.#focus === "scope" ? "↑/↓ providers · → models" : "↑/↓ models · ← providers";
 		const refresh = entry.kind === "provider" ? " · F5 refresh" : "";
 		if (this.#mode === "pick") {
 			return `Enter use for this session · ${arrows} · type to search${refresh} · Esc close`;

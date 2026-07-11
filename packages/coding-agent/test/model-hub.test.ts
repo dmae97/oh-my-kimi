@@ -437,6 +437,24 @@ describe("ModelHub", () => {
 			hub.handleInput("\x1b");
 			expect(onCancel).toHaveBeenCalledTimes(1);
 		});
+
+		test("left/right arrows switch between the sidebar and the model list", () => {
+			const modelA = makeModel("prov-a", "model-a");
+			const modelB = makeModel("prov-b", "model-b");
+			const { hub } = createHub({ models: [modelA, modelB] });
+			installTestTheme();
+
+			// Right enters list mode: Down now moves the model selection, the
+			// scope stays on All models.
+			hub.handleInput("\x1b[C");
+			hub.handleInput(DOWN);
+			expect(normalize(hub.render(220))).toContain("All available models");
+
+			// Left returns to the sidebar: Down hops to the first provider.
+			hub.handleInput(LEFT);
+			hub.handleInput(DOWN);
+			expect(normalize(hub.render(220))).toContain("prov-a ·");
+		});
 	});
 
 	describe("provider refresh lifecycle", () => {
