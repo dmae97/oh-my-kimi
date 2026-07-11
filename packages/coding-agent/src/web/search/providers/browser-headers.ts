@@ -1,22 +1,35 @@
 import { HeaderGenerator } from "header-generator";
 
-// Instantiate the singleton header generator.
-// This matches modern browsers from real-world query statistics
-// and randomizes between Chrome, Firefox, Safari, and Edge.
-const generator = new HeaderGenerator({
-	browserListQuery: "last 3 versions",
-	devices: ["desktop"],
-	operatingSystems: ["windows", "macos", "linux"],
-	locales: ["en-US", "en"],
-	httpVersion: "2",
-	strict: false,
-});
+// Lazily instantiate the singleton header generator. Bun single-file binaries do not
+// bundle header-generator's fs-loaded data_files, so construction may throw when the
+// original build-time node_modules path is absent.
+let generator: HeaderGenerator | undefined;
+let generatorUnavailable = false;
+
+function getHeaderGenerator(): HeaderGenerator | undefined {
+	if (generatorUnavailable) return undefined;
+	try {
+		generator ??= new HeaderGenerator({
+			browserListQuery: "last 3 versions",
+			devices: ["desktop"],
+			operatingSystems: ["windows", "macos", "linux"],
+			locales: ["en-US", "en"],
+			httpVersion: "2",
+			strict: false,
+		});
+		return generator;
+	} catch {
+		generatorUnavailable = true;
+		return undefined;
+	}
+}
 
 // A fallback desktop Mac Chrome navigation fingerprint matching
 // the previous static default setup for deterministic or non-randomized calls.
 const CHROME_FALLBACK_HEADERS: Record<string, string> = {
 	Accept:
 		"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+	"Accept-Encoding": "gzip, deflate, br, zstd",
 	"Accept-Language": "en-US,en;q=0.9",
 	"Cache-Control": "max-age=0",
 	Priority: "u=0, i",
@@ -81,10 +94,14 @@ export function buildBrowserNavigationHeaders(options?: { randomized?: boolean }
 		return { ...CHROME_FALLBACK_HEADERS };
 	}
 
+	const generator = getHeaderGenerator();
+	if (!generator) {
+		return { ...CHROME_FALLBACK_HEADERS };
+	}
+
 	try {
 		// Generate realistic, consistent headers with the Bayesian generator
-		const generated = generator.getHeaders();
-		return canonicalizeHeaderNames(generated);
+		return canonicalizeHeaderNames(generator.getHeaders());
 	} catch {
 		// Gracefully recover to the robust default profile on unexpected generator errors
 		return { ...CHROME_FALLBACK_HEADERS };
