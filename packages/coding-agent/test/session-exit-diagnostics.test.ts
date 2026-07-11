@@ -11,6 +11,7 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import {
 	collectPendingToolCalls,
+	createInterruptedTurnAbortMessage,
 	describePendingToolCalls,
 	SESSION_EXIT_CUSTOM_TYPE,
 	TOOL_EXECUTION_START_CUSTOM_TYPE,
@@ -266,5 +267,105 @@ describe("session exit diagnostics", () => {
 
 		expect(collectPendingToolCalls(sessionManager.getBranch())).toEqual([]);
 		expect(describePendingToolCalls(sessionManager.getBranch())).toBeUndefined();
+	});
+
+	it("reconstructs an abnormal process-exit tail as one terminal aborted assistant message", () => {
+		const sessionManager = SessionManager.inMemory();
+		sessionManager.appendMessage({ role: "user", content: "inspect the file", timestamp: Date.now() });
+		sessionManager.appendMessage(pendingAssistant);
+		sessionManager.appendMessage({
+			role: "toolResult",
+			toolCallId: "toolu_repro",
+			toolName: "bash",
+			content: [{ type: "text", text: "partial result stays in history" }],
+			isError: false,
+			timestamp: Date.now(),
+		});
+		sessionManager.appendCustomEntry(SESSION_EXIT_CUSTOM_TYPE, {
+			reason: "exit",
+			kind: "process_exit",
+			recordedAt: "2026-07-11T02:20:08.800Z",
+		});
+
+		const recovered = createInterruptedTurnAbortMessage(sessionManager.getBranch());
+		expect(recovered).toMatchObject({
+			role: "assistant",
+			content: [],
+			api: pendingAssistant.api,
+			provider: pendingAssistant.provider,
+			model: pendingAssistant.model,
+			stopReason: "aborted",
+		});
+		expect(recovered?.errorMessage).toContain("process exited");
+
+		sessionManager.appendMessage(recovered!);
+		expect(createInterruptedTurnAbortMessage(sessionManager.getBranch())).toBeUndefined();
+		expect(
+			sessionManager
+				.buildSessionContext()
+				.messages.some(
+					message =>
+						message.role === "toolResult" &&
+						message.content.some(part => part.type === "text" && part.text === "partial result stays in history"),
+				),
+		).toBe(true);
+	});
+
+	it("reconstructs an interrupted assistant tool-call tail", () => {
+		const sessionManager = SessionManager.inMemory();
+		sessionManager.appendMessage({ role: "user", content: "inspect the file", timestamp: Date.now() });
+		sessionManager.appendMessage(pendingAssistant);
+		sessionManager.appendCustomEntry(SESSION_EXIT_CUSTOM_TYPE, {
+			reason: "exit",
+			kind: "process_exit",
+			recordedAt: "2026-07-11T02:20:08.800Z",
+		});
+
+		expect(createInterruptedTurnAbortMessage(sessionManager.getBranch())).toMatchObject({
+			role: "assistant",
+			content: [],
+			api: pendingAssistant.api,
+			provider: pendingAssistant.provider,
+			model: pendingAssistant.model,
+			stopReason: "aborted",
+		});
+	});
+
+	it("does not reconstruct clean, completed, or superseded exits", () => {
+		const normalExit = SessionManager.inMemory();
+		normalExit.appendMessage({ role: "user", content: "inspect the file", timestamp: Date.now() });
+		normalExit.appendMessage(pendingAssistant);
+		normalExit.appendCustomEntry(SESSION_EXIT_CUSTOM_TYPE, {
+			reason: "dispose",
+			kind: "normal",
+			recordedAt: "2026-07-11T02:20:08.800Z",
+		});
+
+		const completedTurn = SessionManager.inMemory();
+		completedTurn.appendMessage({ role: "user", content: "inspect the file", timestamp: Date.now() });
+		completedTurn.appendMessage({
+			...pendingAssistant,
+			content: [{ type: "text", text: "done" }],
+			stopReason: "stop",
+		});
+		completedTurn.appendCustomEntry(SESSION_EXIT_CUSTOM_TYPE, {
+			reason: "exit",
+			kind: "process_exit",
+			recordedAt: "2026-07-11T02:20:08.800Z",
+		});
+
+		const supersededExit = SessionManager.inMemory();
+		supersededExit.appendMessage({ role: "user", content: "first turn", timestamp: Date.now() });
+		supersededExit.appendMessage(pendingAssistant);
+		supersededExit.appendCustomEntry(SESSION_EXIT_CUSTOM_TYPE, {
+			reason: "exit",
+			kind: "process_exit",
+			recordedAt: "2026-07-11T02:20:08.800Z",
+		});
+		supersededExit.appendMessage({ role: "user", content: "new turn", timestamp: Date.now() });
+
+		expect(createInterruptedTurnAbortMessage(normalExit.getBranch())).toBeUndefined();
+		expect(createInterruptedTurnAbortMessage(completedTurn.getBranch())).toBeUndefined();
+		expect(createInterruptedTurnAbortMessage(supersededExit.getBranch())).toBeUndefined();
 	});
 });
