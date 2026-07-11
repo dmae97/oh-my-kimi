@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added context-safe in-process shell builtins for `base64`; the `md5sum`, `sha1sum`, `sha224sum`, `sha256sum`, `sha384sum`, `sha512sum`, and `b2sum` checksum family; and the common path/text utilities `basename`, `dirname`, `cut`, `tee`, `tr`, `paste`, and `comm`. The vendored uutils implementations support pipelines, shell-relative file operands, redirected output, checksum verification, and abort/timeout cancellation without spawning external binaries.
+
 ## [16.4.4] - 2026-07-11
 
 ### Fixed

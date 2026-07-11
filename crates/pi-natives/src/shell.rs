@@ -12,8 +12,7 @@ use pi_shell::{
 	MinimizerResult as CoreMinimizerResult, Shell as CoreShell,
 	ShellExecuteOptions as CoreShellExecuteOptions, ShellOptions as CoreShellOptions,
 	ShellRunOptions as CoreShellRunOptions, ShellRunResult as CoreShellRunResult,
-	execute_shell as core_execute_shell,
-	minimizer,
+	execute_shell as core_execute_shell, minimizer,
 };
 
 use crate::task;
@@ -372,7 +371,7 @@ mod tests {
 	/// the pre-fix bridge (`flume::unbounded` + fire-and-forget
 	/// `ThreadsafeFunctionCallMode::NonBlocking`) the same harness accumulates
 	/// the producer's entire surplus in the queue (measured: a 32 MiB stream
-	/// queued all 33_554_432 bytes while the consumer stalled).
+	/// queued all `33_554_432` bytes while the consumer stalled).
 	#[tokio::test(flavor = "multi_thread")]
 	async fn bridge_pump_bounds_queue_and_delivers_all_bytes() {
 		const CHUNKS: usize = 512;

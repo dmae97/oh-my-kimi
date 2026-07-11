@@ -209,6 +209,24 @@ uutil_builtin!(pub fn rm_builtin => uu_rm::run);
 uutil_builtin!(pub fn mv_builtin => uu_mv::run);
 uutil_builtin!(pub fn cat_builtin => uu_cat::run);
 uutil_builtin!(pub fn uniq_builtin => uu_uniq::run);
+uutil_builtin!(pub fn base64_builtin => uu_base64::run);
+uutil_builtin!(pub fn md5sum_builtin => uu_md5sum::run);
+uutil_builtin!(pub fn sha1sum_builtin => uu_sha1sum::run);
+uutil_builtin!(pub fn sha224sum_builtin => uu_sha224sum::run);
+uutil_builtin!(pub fn sha256sum_builtin => uu_sha256sum::run);
+uutil_builtin!(pub fn sha384sum_builtin => uu_sha384sum::run);
+uutil_builtin!(pub fn sha512sum_builtin => uu_sha512sum::run);
+uutil_builtin!(pub fn b2sum_builtin => uu_b2sum::run);
+uutil_builtin!(pub fn basename_builtin => uu_basename::run);
+uutil_builtin!(pub fn dirname_builtin => uu_dirname::run);
+uutil_builtin!(pub fn cut_builtin => uu_cut::run);
+uutil_builtin!(pub fn tee_builtin => uu_tee::run);
+uutil_builtin!(pub fn tr_builtin => uu_tr::run);
+uutil_builtin!(pub fn paste_builtin => uu_paste::run);
+uutil_builtin!(pub fn comm_builtin => uu_comm::run);
+uutil_builtin!(pub fn sed_builtin => uu_sed::run);
+uutil_builtin!(pub fn xargs_builtin => uu_xargs::run);
+uutil_builtin!(pub fn jq_builtin => jaq::run);
 
 #[cfg(test)]
 mod tests {

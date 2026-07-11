@@ -622,6 +622,24 @@ async fn create_session_for_run(
 		shell.register_builtin("fd", crate::fd::fd_builtin());
 		shell.register_builtin("cat", crate::coreutils::cat_builtin());
 		shell.register_builtin("uniq", crate::coreutils::uniq_builtin());
+		shell.register_builtin("base64", crate::coreutils::base64_builtin());
+		shell.register_builtin("md5sum", crate::coreutils::md5sum_builtin());
+		shell.register_builtin("sha1sum", crate::coreutils::sha1sum_builtin());
+		shell.register_builtin("sha224sum", crate::coreutils::sha224sum_builtin());
+		shell.register_builtin("sha256sum", crate::coreutils::sha256sum_builtin());
+		shell.register_builtin("sha384sum", crate::coreutils::sha384sum_builtin());
+		shell.register_builtin("sha512sum", crate::coreutils::sha512sum_builtin());
+		shell.register_builtin("b2sum", crate::coreutils::b2sum_builtin());
+		shell.register_builtin("basename", crate::coreutils::basename_builtin());
+		shell.register_builtin("dirname", crate::coreutils::dirname_builtin());
+		shell.register_builtin("cut", crate::coreutils::cut_builtin());
+		shell.register_builtin("tee", crate::coreutils::tee_builtin());
+		shell.register_builtin("tr", crate::coreutils::tr_builtin());
+		shell.register_builtin("paste", crate::coreutils::paste_builtin());
+		shell.register_builtin("comm", crate::coreutils::comm_builtin());
+		shell.register_builtin("sed", crate::coreutils::sed_builtin());
+		shell.register_builtin("xargs", crate::coreutils::xargs_builtin());
+		shell.register_builtin("jq", crate::coreutils::jq_builtin());
 		if !uutils_env_disabled(config, "PI_DISABLE_UUTILS_DESTRUCTIVE") {
 			if !uutils_env_disabled(config, "PI_DISABLE_RM_BUILTIN") {
 				shell.register_builtin("rm", crate::coreutils::rm_builtin());

@@ -3,9 +3,11 @@
 // For the full copyright and license information, please view the LICENSE
 // file that was distributed with this source code.
 
-use std::ffi::OsString;
-use std::fs::{File, OpenOptions};
-use std::io::{Error, ErrorKind, Read, Result, Write};
+use std::{
+	ffi::OsString,
+	fs::{File, OpenOptions},
+	io::{Error, ErrorKind, Read, Result, Write},
+};
 
 use uucore::display::Quotable;
 
@@ -37,7 +39,11 @@ pub fn run(argv: Vec<OsString>) -> i32 {
 			"exit-nopipe" => OutputErrorMode::ExitNoPipe,
 			_ => unreachable!("clap validates output-error"),
 		})
-		.or_else(|| matches.get_flag(options::IGNORE_PIPE_ERRORS).then_some(OutputErrorMode::WarnNoPipe));
+		.or_else(|| {
+			matches
+				.get_flag(options::IGNORE_PIPE_ERRORS)
+				.then_some(OutputErrorMode::WarnNoPipe)
+		});
 	let files = matches
 		.get_many::<OsString>(options::FILE)
 		.map(|values| values.cloned().collect())
@@ -61,7 +67,8 @@ fn tee(options: &Options) -> Result<()> {
 	let mut had_open_errors = false;
 	for name in &options.files {
 		if name == "-" {
-			writers.push(NamedWriter { name: OsString::from("standard output"), inner: Writer::Stdout });
+			writers
+				.push(NamedWriter { name: OsString::from("standard output"), inner: Writer::Stdout });
 			continue;
 		}
 		match open(name, options.append) {
@@ -83,7 +90,12 @@ fn tee(options: &Options) -> Result<()> {
 	let copy_result = copy(pi_uutils_ctx::stdin(), &mut output);
 	let flush_result = output.flush();
 	if had_open_errors || copy_result.is_err() || flush_result.is_err() || output.error_occurred() {
-		Err(copy_result.err().or_else(|| flush_result.err()).unwrap_or_else(|| Error::other("output error")))
+		Err(
+			copy_result
+				.err()
+				.or_else(|| flush_result.err())
+				.unwrap_or_else(|| Error::other("output error")),
+		)
 	} else {
 		Ok(())
 	}
@@ -123,24 +135,30 @@ fn open(name: &OsString, append: bool) -> Result<NamedWriter> {
 }
 
 struct MultiWriter {
-	writers: Vec<NamedWriter>,
+	writers:           Vec<NamedWriter>,
 	output_error_mode: Option<OutputErrorMode>,
-	ignored_errors: usize,
+	ignored_errors:    usize,
 }
 
 impl MultiWriter {
 	fn new(writers: Vec<NamedWriter>, output_error_mode: Option<OutputErrorMode>) -> Self {
 		Self { writers, output_error_mode, ignored_errors: 0 }
 	}
+
 	fn error_occurred(&self) -> bool {
 		self.ignored_errors != 0
 	}
+
 	fn process(&mut self, flush: bool, buf: &[u8]) -> Result<()> {
 		let mode = self.output_error_mode.clone();
 		let mut aborted = None;
 		let mut errors = 0;
 		self.writers.retain_mut(|writer| {
-			let result = if flush { writer.flush() } else { writer.write_all(buf) };
+			let result = if flush {
+				writer.flush()
+			} else {
+				writer.write_all(buf)
+			};
 			match result {
 				Ok(()) => true,
 				Err(err) => {
@@ -149,7 +167,8 @@ impl MultiWriter {
 						matches!(mode.as_ref(), Some(OutputErrorMode::Warn | OutputErrorMode::Exit))
 							|| !is_pipe;
 					if report {
-						let _ = writeln!(pi_uutils_ctx::stderr(), "tee: {}: {err}", writer.name.maybe_quote());
+						let _ =
+							writeln!(pi_uutils_ctx::stderr(), "tee: {}: {err}", writer.name.maybe_quote());
 						errors += 1;
 					}
 					let exit = matches!(mode.as_ref(), Some(OutputErrorMode::Exit))
@@ -177,6 +196,7 @@ impl Write for MultiWriter {
 		self.process(false, buf)?;
 		Ok(buf.len())
 	}
+
 	fn flush(&mut self) -> Result<()> {
 		self.process(true, &[])
 	}
@@ -194,6 +214,7 @@ impl Write for Writer {
 			Self::Stdout => pi_uutils_ctx::stdout().write(buf),
 		}
 	}
+
 	fn flush(&mut self) -> Result<()> {
 		match self {
 			Self::File(file) => file.flush(),
@@ -204,13 +225,14 @@ impl Write for Writer {
 
 struct NamedWriter {
 	inner: Writer,
-	name: OsString,
+	name:  OsString,
 }
 
 impl Write for NamedWriter {
 	fn write(&mut self, buf: &[u8]) -> Result<usize> {
 		self.inner.write(buf)
 	}
+
 	fn flush(&mut self) -> Result<()> {
 		self.inner.flush()
 	}
