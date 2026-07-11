@@ -1,5 +1,5 @@
 /**
- * models.json config file handle and provider configuration validation.
+ * Custom model/provider config file handle and validation.
  */
 
 import type { Api, ModelSpec } from "@oh-my-pi/pi-ai/types";

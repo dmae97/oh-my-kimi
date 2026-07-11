@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed custom model/provider config discovery so `~/.omp/agent/models.yaml` loads when `models.yml` is absent, while preserving `.yml` precedence and only migrating legacy `models.json` when neither YAML file exists. ([#5145](https://github.com/can1357/oh-my-pi/issues/5145))
+
 ## [16.4.2] - 2026-07-10
 
 ### Fixed
