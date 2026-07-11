@@ -1425,10 +1425,8 @@ export class Markdown implements Component {
 			const lineEnd = tokenText.lastIndexOf("\n");
 			if (closedFence || lineEnd >= 0) {
 				const completedText = closedFence ? tokenText : tokenText.slice(0, lineEnd);
-				if (closedFence || completedText.length > 0) {
-					for (const hlLine of this.#highlightStreamingDiffLines(completedText, lang)) {
-						bodyLines.push(`${codeIndent}${hlLine}`);
-					}
+				for (const hlLine of this.#highlightStreamingDiffLines(completedText, lang)) {
+					bodyLines.push(`${codeIndent}${hlLine}`);
 				}
 				if (!closedFence) {
 					for (const codeLine of tokenText.slice(lineEnd + 1).split("\n")) {
@@ -1502,10 +1500,8 @@ export class Markdown implements Component {
 			if (completedText.length === cache.text.length) return cache.lines;
 			const lines = cache.lines.slice();
 			const addedText = completedText.slice(cache.text.length === 0 ? 0 : cache.text.length + 1);
-			if (addedText.length > 0) {
-				for (const codeLine of addedText.split("\n")) {
-					lines.push(...highlightCode(codeLine, lang));
-				}
+			for (const codeLine of addedText.split("\n")) {
+				lines.push(...highlightCode(codeLine, lang));
 			}
 			this.#streamingDiffLineCache = { ...signature, lang, text: completedText, lines };
 			return lines;

@@ -190,4 +190,33 @@ describe("transcript streaming commit (assistant text)", () => {
 			await term.flush();
 		}
 	});
+
+	it("renders a leading completed blank row in an open streamed diff body", () => {
+		const block = new StreamingMarkdownBlock();
+		block.setStreamingText("```diff\n\n+next");
+
+		const rows = block.render(40).map(row => Bun.stripANSI(row).trimEnd());
+		const fenceRow = rows.indexOf("```diff");
+
+		expect(fenceRow).toBeGreaterThanOrEqual(0);
+		expect(rows.slice(fenceRow, fenceRow + 4)).toEqual(["```diff", "", "  +next", "```"]);
+	});
+
+	it("appends a completed blank row when the streamed diff line cache grows", () => {
+		const block = new StreamingMarkdownBlock();
+
+		block.setStreamingText("```diff\n+a\n+streaming");
+		const initialRows = block.render(40).map(row => Bun.stripANSI(row).trimEnd());
+		const initialCodeRow = initialRows.indexOf("  +a");
+		expect(initialCodeRow).toBeGreaterThanOrEqual(0);
+		expect(initialRows.slice(initialCodeRow, initialCodeRow + 2)).toEqual(["  +a", "  +streaming"]);
+
+		block.setStreamingText("```diff\n+a\n\n+streaming");
+
+		const rows = block.render(40).map(row => Bun.stripANSI(row).trimEnd());
+		const codeRow = rows.indexOf("  +a");
+
+		expect(codeRow).toBeGreaterThanOrEqual(0);
+		expect(rows.slice(codeRow, codeRow + 3)).toEqual(["  +a", "", "  +streaming"]);
+	});
 });
