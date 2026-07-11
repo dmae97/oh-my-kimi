@@ -3924,16 +3924,13 @@ export function githubCopilotModelManagerOptions(config?: GithubCopilotModelMana
 								? entry.name
 								: (reference?.name ?? defaults.name);
 						const api = inferCopilotApi(defaults.id);
-						// `supports.vision` reports the model's intrinsic capability, but
-						// the business/enterprise endpoints respond `400 vision is not
-						// supported` on image inputs. Only honour the flag for the
-						// canonical personal-Copilot host.
 						const supportsVision = extractCopilotSupportsVision(entry);
-						const input: ModelSpec<Api>["input"] = isPersonalGitHubCopilotBaseUrl(baseUrl)
-							? supportsVision
+						const input: ModelSpec<Api>["input"] =
+							supportsVision === true
 								? ["text", "image"]
-								: (reference?.input ?? defaults.input)
-							: ["text"];
+								: supportsVision === false || !isPersonalGitHubCopilotBaseUrl(baseUrl)
+									? ["text"]
+									: (reference?.input ?? defaults.input);
 						// With COPILOT_API_HEADERS the served window is the long-context
 						// ceiling; the default tier ends at token_prices.default.context_max
 						// prompt tokens. Cap the base entry to the default tier — the long
