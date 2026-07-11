@@ -34,14 +34,20 @@ const EMAIL = "shared@example.com";
 const TEAM_ORG = "org-team-1111";
 const MAX_ORG = "org-max-2222";
 
-function orgCredential(args: { suffix: string; orgId?: string; orgName?: string }): AuthCredential {
+function orgCredential(args: {
+	suffix: string;
+	orgId?: string;
+	orgName?: string;
+	/** Simulate the no-email edge: token response omits it AND bootstrap recovery fails. */
+	omitEmail?: boolean;
+}): AuthCredential {
 	return {
 		type: "oauth",
 		access: `access-${args.suffix}`,
 		refresh: `refresh-${args.suffix}`,
 		expires: Date.now() + 3_600_000,
 		accountId: "account-shared",
-		email: EMAIL,
+		email: args.omitEmail ? undefined : EMAIL,
 		orgId: args.orgId,
 		orgName: args.orgName,
 	};
@@ -129,6 +135,46 @@ describe("anthropic org-scoped credential identity", () => {
 			{ identity_key: `email:${EMAIL}`, disabled_cause: null },
 		]);
 	});
+
+	it("scopes account-only identities (no email) by org so the second subscription cannot replace the first", () => {
+		if (!store) throw new Error("test setup failed");
+
+		// The account UUID is identical across the orgs of one login account —
+		// without the org qualifier these two would collapse to one row.
+		store.upsertAuthCredentialForProvider(
+			"anthropic",
+			orgCredential({ suffix: "team", orgId: TEAM_ORG, omitEmail: true }),
+		);
+		store.upsertAuthCredentialForProvider(
+			"anthropic",
+			orgCredential({ suffix: "max", orgId: MAX_ORG, omitEmail: true }),
+		);
+		expect(readIdentityRows(dbPath)).toEqual([
+			{ identity_key: `account:account-shared|org:${TEAM_ORG}`, disabled_cause: null },
+			{ identity_key: `account:account-shared|org:${MAX_ORG}`, disabled_cause: null },
+		]);
+
+		// Same-org no-email re-login still replaces its own row in place.
+		store.upsertAuthCredentialForProvider(
+			"anthropic",
+			orgCredential({ suffix: "team-renewed", orgId: TEAM_ORG, omitEmail: true }),
+		);
+		expect(readIdentityRows(dbPath)).toHaveLength(2);
+
+		// A legacy bare account-keyed row is claimed by the first org-scoped
+		// login with the same account, mirroring the email upgrade path.
+		store.upsertAuthCredentialForProvider("anthropic", orgCredential({ suffix: "legacy", omitEmail: true }));
+		expect(readIdentityRows(dbPath)).toHaveLength(3);
+		store.upsertAuthCredentialForProvider(
+			"anthropic",
+			orgCredential({ suffix: "claimed", orgId: "org-third-3333", omitEmail: true }),
+		);
+		expect(readIdentityRows(dbPath)).toEqual([
+			{ identity_key: `account:account-shared|org:${TEAM_ORG}`, disabled_cause: null },
+			{ identity_key: `account:account-shared|org:${MAX_ORG}`, disabled_cause: null },
+			{ identity_key: "account:account-shared|org:org-third-3333", disabled_cause: null },
+		]);
+	});
 });
 
 // ─── Usage report dedupe partitioning ───────────────────────────────────────
@@ -179,7 +225,7 @@ function oauthRow(
 	id: number,
 	orgId?: string,
 	orgName?: string,
-	overrides?: { refresh?: string; expires?: number },
+	overrides?: { refresh?: string; expires?: number; omitEmail?: boolean },
 ): StoredAuthCredential {
 	return {
 		id,
@@ -190,7 +236,7 @@ function oauthRow(
 			refresh: overrides?.refresh ?? `refresh-${id}`,
 			expires: overrides?.expires ?? Date.now() + 3_600_000,
 			accountId: "account-shared",
-			email: EMAIL,
+			email: overrides?.omitEmail ? undefined : EMAIL,
 			orgId,
 			orgName,
 		},
@@ -243,6 +289,32 @@ describe("anthropic usage report dedupe partitions by org", () => {
 		expect(orgIds).toEqual([MAX_ORG, TEAM_ORG].sort());
 		const orgNames = reports.map(report => report.metadata?.orgName).sort();
 		expect(orgNames).toEqual(["Personal Max", "Team Workspace"].sort());
+	});
+
+	it("keeps no-email reports from two orgs separate via the account fallback", async () => {
+		// The account UUID is shared across orgs; without the org-qualified
+		// account fallback these two reports would either merge or lose their
+		// dedupe identity entirely when the email cannot be recovered.
+		storage = new AuthStorage(
+			makeStore([
+				oauthRow(1, TEAM_ORG, "Team Workspace", { omitEmail: true }),
+				oauthRow(2, MAX_ORG, "Personal Max", { omitEmail: true }),
+			]),
+			{
+				usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
+			},
+		);
+		await storage.reload();
+
+		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async () => ({
+			...emailOnlyReport(),
+			metadata: { accountId: "account-shared" },
+		}));
+
+		const reports = ((await storage.fetchUsageReports()) ?? []).filter(r => r.provider === "anthropic");
+		expect(reports).toHaveLength(2);
+		const orgIds = reports.map(report => report.metadata?.orgId).sort();
+		expect(orgIds).toEqual([MAX_ORG, TEAM_ORG].sort());
 	});
 
 	it("attaches the stored org name when the provider response already carries the org id", async () => {

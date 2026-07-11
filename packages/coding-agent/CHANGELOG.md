@@ -46,6 +46,7 @@
 - `/logout` and `omp token --list` label Anthropic accounts with their organization and mark only the credential of the active organization as active, so two subscriptions sharing one email are distinguishable when selecting which to remove or mint a token for.
 - `omp auth-broker migrate --from-local` dedupes Anthropic OAuth identities per organization, so a Team seat already on the broker no longer blocks uploading the personal plan under the same email.
 - The status line invalidates its cached usage when the session rotates to a different Anthropic organization (previously the old subscription's quota could linger for the cache TTL), and `omp auth-gateway check` labels each credential with its organization so a failing row says which subscription needs re-login.
+- `omp usage` "no usage data" attribution is org-decisive whenever either the stored account or a report carries an organization: an org-less legacy credential whose own fetch failed is no longer hidden by an org-attributed sibling report sharing the same email.
 
 ## [16.4.3] - 2026-07-11
 

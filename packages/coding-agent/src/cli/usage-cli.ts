@@ -298,17 +298,21 @@ export function collectUnreportedAccounts(
 		const providerReports = byProvider.get(account.provider) ?? [];
 		if (providerReports.length === 0) return true;
 		if (account.type === "api_key") return false;
-		// Org-scoped account (Anthropic multi-subscription): when reports carry
-		// org identity, attribution must match on the org — the shared email
-		// would otherwise mark BOTH subscriptions as covered by one report.
-		if (account.orgId) {
-			const orgId = account.orgId.toLowerCase();
-			const reportedOrgs = new Set<string>();
-			for (const report of providerReports) {
-				const metaOrg = report.metadata?.orgId;
-				if (typeof metaOrg === "string" && metaOrg) reportedOrgs.add(metaOrg.toLowerCase());
-			}
-			if (reportedOrgs.size > 0) return !reportedOrgs.has(orgId);
+		// Org-decisive attribution when EITHER side carries an org (Anthropic
+		// multi-subscription): two orgs share every other identifier, so an
+		// org-scoped account is covered only by its own org's report, and an
+		// org-less legacy account is never covered by an org-attributed sibling
+		// report — its own fetch failing must surface as "no usage data". The
+		// email/account fallback below applies only when both sides are
+		// org-less.
+		const accountOrg = account.orgId?.toLowerCase();
+		const reportedOrgs = new Set<string>();
+		for (const report of providerReports) {
+			const metaOrg = report.metadata?.orgId;
+			if (typeof metaOrg === "string" && metaOrg) reportedOrgs.add(metaOrg.toLowerCase());
+		}
+		if (accountOrg || reportedOrgs.size > 0) {
+			return !(accountOrg !== undefined && reportedOrgs.has(accountOrg));
 		}
 		const ids = [account.email, account.accountId, account.projectId]
 			.filter((value): value is string => typeof value === "string" && value.length > 0)

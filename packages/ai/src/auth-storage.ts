@@ -3050,20 +3050,28 @@ export class AuthStorage {
 		const identifiers: string[] = [];
 		const email = this.#getUsageReportMetadataValue(report, "email");
 		if (email) identifiers.push(`email:${email.toLowerCase()}`);
-		if (report.provider === "openai-codex" || report.provider === "anthropic") {
+		if (report.provider === "anthropic") {
 			// Anthropic: one account email can hold several organizations
 			// (Team seat + personal Max). Reports from different orgs must not
 			// merge — scope every identifier by org when the report carries one.
-			// Org-less reports (pre-upgrade caches) keep the bare email key and
-			// only merge among themselves.
-			if (report.provider === "anthropic") {
-				const orgId = this.#getUsageReportMetadataValue(report, "orgId");
-				if (orgId) {
-					return identifiers.map(
-						identifier => `${report.provider}:org:${orgId.toLowerCase()}|${identifier.toLowerCase()}`,
-					);
-				}
+			// When the email could not be recovered, fall back to the account
+			// (identical across orgs, hence the org qualifier is what keeps two
+			// subscriptions apart) so no-email reports still merge per org.
+			// Org-less reports (pre-upgrade caches) keep their bare identifiers
+			// and only merge among themselves.
+			if (identifiers.length === 0) {
+				const accountId =
+					this.#getUsageReportMetadataValue(report, "accountId") ?? this.#getUsageReportScopeAccountId(report);
+				if (accountId) identifiers.push(`account:${accountId}`);
 			}
+			const orgId = this.#getUsageReportMetadataValue(report, "orgId");
+			if (orgId) {
+				if (identifiers.length === 0) return [`anthropic:org:${orgId.toLowerCase()}`];
+				return identifiers.map(identifier => `anthropic:org:${orgId.toLowerCase()}|${identifier.toLowerCase()}`);
+			}
+			return identifiers.map(identifier => `anthropic:${identifier.toLowerCase()}`);
+		}
+		if (report.provider === "openai-codex") {
 			return identifiers.map(identifier => `${report.provider}:${identifier.toLowerCase()}`);
 		}
 		const projectId =
@@ -5479,14 +5487,24 @@ function toStoredAuthCredential(row: AuthRow, credential: AuthCredential): Store
 
 function resolveProviderCredentialIdentityKey(provider: string, identifiers: string[]): string | null {
 	const emailIdentifier = identifiers.find(identifier => identifier.startsWith("email:"));
-	if (provider === "anthropic" && emailIdentifier) {
+	if (provider === "anthropic") {
 		// One Anthropic account email can hold several organizations (e.g. a
 		// Team seat plus a personal Max plan), each with its own org-scoped
 		// token and limit pools. Scope identity by org so both subscriptions
-		// can be stored side by side; org-less credentials (rows written
-		// before org capture existed) keep the bare email key.
+		// can be stored side by side. The qualifier rides on whichever base
+		// identity is available — the account UUID is IDENTICAL across the
+		// orgs of one login account, so an unqualified account/project
+		// fallback would still collapse two subscriptions whenever the email
+		// could not be recovered. Org-less credentials (rows written before
+		// org capture existed) keep their bare key.
+		const base =
+			emailIdentifier ??
+			identifiers.find(identifier => identifier.startsWith("account:")) ??
+			identifiers.find(identifier => identifier.startsWith("project:"));
 		const orgIdentifier = identifiers.find(identifier => identifier.startsWith("org:"));
-		return orgIdentifier ? `${emailIdentifier}|${orgIdentifier}` : emailIdentifier;
+		if (base) return orgIdentifier ? `${base}|${orgIdentifier}` : base;
+		// No base identity at all: the org alone still distinguishes the row.
+		return orgIdentifier ?? null;
 	}
 	if (provider === "openai-codex" && emailIdentifier) return emailIdentifier;
 	const accountIdentifier = identifiers.find(identifier => identifier.startsWith("account:"));
@@ -5522,12 +5540,13 @@ function matchesReplacementCredential(
 	const incomingIdentityKey = resolveCredentialIdentityKey(provider, incoming);
 	if (incomingIdentityKey === null) return false;
 	if (incomingIdentityKey === existingIdentityKey) return true;
-	// One-time upgrade: a pre-org row keyed by bare email (`email:<e>`) is
-	// claimed (and re-keyed) by the first org-scoped login (`email:<e>|org:<o>`)
-	// with the same email — mirroring the pre-org replace behavior. The reverse
-	// stays a non-match: an org-less credential must never clobber an
-	// org-scoped row.
-	if (existingIdentityKey === null || !incomingIdentityKey.startsWith("email:")) return false;
+	// One-time upgrade: a pre-org row keyed by a bare base identity
+	// (`email:<e>`, `account:<a>`, or `project:<p>`) is claimed (and re-keyed)
+	// by the first org-scoped login with the same base — mirroring the pre-org
+	// replace behavior. The reverse stays a non-match: an org-less credential
+	// must never clobber an org-scoped row. Only anthropic identity keys carry
+	// the `|org:` qualifier, so this cannot affect other providers.
+	if (existingIdentityKey === null) return false;
 	const orgSeparator = incomingIdentityKey.indexOf("|org:");
 	return orgSeparator !== -1 && incomingIdentityKey.slice(0, orgSeparator) === existingIdentityKey;
 }

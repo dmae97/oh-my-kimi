@@ -139,6 +139,30 @@ describe("collectUnreportedAccounts", () => {
 		const unreported = collectUnreportedAccounts(anonymous, accounts);
 		expect(unreported).toEqual([{ provider: "cerebras", type: "api_key" }]);
 	});
+
+	it("attributes org-decisively when either side carries an org", () => {
+		const shared = "shared@example.test";
+		const orgAccounts: UsageAccountIdentity[] = [
+			{ provider: "anthropic", type: "oauth", email: shared, orgId: "org-team" },
+			{ provider: "anthropic", type: "oauth", email: shared, orgId: "org-max" },
+			{ provider: "anthropic", type: "oauth", email: shared },
+		];
+		const teamReport = {
+			...makeReport("anthropic", shared, []),
+			metadata: { email: shared, orgId: "org-team" },
+		};
+		// Only the Team org reported: Max and the org-less legacy row must both
+		// surface as unreported despite the shared email.
+		const unreported = collectUnreportedAccounts([teamReport], orgAccounts);
+		expect(unreported).toEqual([
+			{ provider: "anthropic", type: "oauth", email: shared, orgId: "org-max" },
+			{ provider: "anthropic", type: "oauth", email: shared },
+		]);
+		// Both sides org-less: the email fallback still covers the account.
+		const orglessReport = { ...makeReport("anthropic", shared, []), metadata: { email: shared } };
+		const orglessAccounts: UsageAccountIdentity[] = [{ provider: "anthropic", type: "oauth", email: shared }];
+		expect(collectUnreportedAccounts([orglessReport], orglessAccounts)).toEqual([]);
+	});
 });
 
 describe("formatUsageBreakdown", () => {

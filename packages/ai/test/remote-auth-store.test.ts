@@ -432,7 +432,7 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 		// healthy Max credential the exhausted Team report (and vice versa).
 		const brokerClient = new AuthBrokerClient({ url: "http://127.0.0.1:9", token: "unused" });
 		const now = Date.now();
-		const makeCredential = (id: number, orgId: string) => ({
+		const makeCredential = (id: number, orgId?: string) => ({
 			type: "oauth" as const,
 			access: `remote-access-${id}`,
 			refresh: REMOTE_REFRESH_SENTINEL,
@@ -494,6 +494,12 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 			const maxReport = await remoteStore.getUsageReport("anthropic", makeCredential(2, "org-max"));
 			expect(maxReport?.metadata?.orgId).toBe("org-max");
 			expect(requireLimit(maxReport!, "anthropic:5h").status).toBe("ok");
+
+			// An org-less (legacy) credential must not receive an org-attributed
+			// sibling's pool via the shared email/account — "no usage data" is
+			// the correct answer.
+			const legacyReport = await remoteStore.getUsageReport("anthropic", makeCredential(3));
+			expect(legacyReport).toBeNull();
 		} finally {
 			remoteStore.close();
 		}
