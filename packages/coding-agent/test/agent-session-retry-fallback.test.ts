@@ -444,6 +444,140 @@ describe("AgentSession retry fallback", () => {
 		]);
 	});
 
+	it("consults the fallback chain on a non-retryable hard error instead of failing the turn", async () => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
+		if (!primaryModel || !fallbackModel) {
+			throw new Error("Expected bundled test models to exist");
+		}
+
+		const mock = createMockModel();
+		const requestedModels: string[] = [];
+		const fallbackAppliedEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>> = [];
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: {
+				model: primaryModel,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (model, context, options) => {
+				requestedModels.push(`${model.provider}/${model.id}`);
+				if (model.provider === primaryModel.provider) {
+					// Classifies as neither transient, usage-limit, nor auth:
+					// the generic retry classifier rejects it outright.
+					mock.push({ throw: "unrecoverable model quirk" });
+				} else {
+					mock.push({ content: ["Recovered on fallback"] });
+				}
+				return mock.stream(model, context, options);
+			},
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.fallbackChains": {
+				"anthropic/*": [`${fallbackModel.provider}/${fallbackModel.id}`],
+			},
+		});
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+
+		session.subscribe(event => {
+			if (event.type === "retry_fallback_applied") {
+				fallbackAppliedEvents.push(event);
+			}
+		});
+
+		await session.prompt("Survive a hard error");
+		await session.waitForIdle();
+
+		// Exactly one attempt on the failing model: a hard error switches models
+		// immediately, it never backoff-retries the same model.
+		expect(requestedModels).toEqual([
+			`${primaryModel.provider}/${primaryModel.id}`,
+			`${fallbackModel.provider}/${fallbackModel.id}`,
+		]);
+		expect(fallbackAppliedEvents).toEqual([
+			{
+				type: "retry_fallback_applied",
+				from: `${primaryModel.provider}/${primaryModel.id}`,
+				to: `${fallbackModel.provider}/${fallbackModel.id}`,
+				role: "anthropic/*",
+			},
+		]);
+		expect(session.model?.provider).toBe(fallbackModel.provider);
+		expect(getLastAssistantMessage(session).stopReason).toBe("stop");
+	});
+
+	it("surfaces a non-retryable error without same-model retries when no fallback candidate has a credential", async () => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
+		if (!primaryModel || !fallbackModel) {
+			throw new Error("Expected bundled test models to exist");
+		}
+
+		const originalGetApiKey = modelRegistry.getApiKey.bind(modelRegistry);
+		vi.spyOn(modelRegistry, "getApiKey").mockImplementation((model, sessionId) =>
+			model.provider === fallbackModel.provider ? Promise.resolve(undefined) : originalGetApiKey(model, sessionId),
+		);
+
+		const mock = createMockModel();
+		const requestedModels: string[] = [];
+		const fallbackAppliedEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>> = [];
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: {
+				model: primaryModel,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (model, context, options) => {
+				requestedModels.push(`${model.provider}/${model.id}`);
+				mock.push({ throw: "unrecoverable model quirk" });
+				return mock.stream(model, context, options);
+			},
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.fallbackChains": {
+				"anthropic/*": [`${fallbackModel.provider}/${fallbackModel.id}`],
+			},
+		});
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+
+		session.subscribe(event => {
+			if (event.type === "retry_fallback_applied") {
+				fallbackAppliedEvents.push(event);
+			}
+		});
+
+		await session.prompt("Fail hard with no fallback credential");
+		await session.waitForIdle();
+
+		// The switch could not happen and the error is non-retryable: surface it
+		// after a single attempt instead of backoff-retrying the failing model.
+		expect(requestedModels).toEqual([`${primaryModel.provider}/${primaryModel.id}`]);
+		expect(fallbackAppliedEvents).toEqual([]);
+		expect(getLastAssistantMessage(session).stopReason).toBe("error");
+	});
+
 	it("substitutes the failing model id into provider-wildcard chain entries", async () => {
 		const primaryModel = getBundledModel("google", "gemini-2.5-flash");
 		const fallbackModel = getBundledModel("google-vertex", "gemini-2.5-flash");
@@ -1387,13 +1521,16 @@ describe("AgentSession retry fallback", () => {
 		expect(lastAssistant.content).toContainEqual({ type: "text", text: "Recovered after Anthropic envelope retry" });
 	});
 
-	it("does not auto-retry Anthropic stream-envelope failures before terminal stop signal", async () => {
+	it("falls back on mid-stream Anthropic envelope failures without same-model retries", async () => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
 		if (!primaryModel || !fallbackModel) {
 			throw new Error("Expected bundled test models to exist");
 		}
 
+		// Mid-stream envelope corruption is not auto-retried on the same model
+		// (partial content may have been delivered), but a configured fallback
+		// chain is still consulted: a different model is a fresh chance.
 		const envelopeError = "Anthropic stream envelope error: received content_block_delta before terminal stop signal";
 		const requestedModels: string[] = [];
 		const fallbackAppliedEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>> = [];
@@ -1443,11 +1580,23 @@ describe("AgentSession retry fallback", () => {
 		await session.prompt("Do not retry Anthropic envelope failure before terminal stop signal");
 		await session.waitForIdle();
 
-		expect(requestedModels).toEqual([`${primaryModel.provider}/${primaryModel.id}`]);
-		expect(retryStartEvents).toHaveLength(0);
-		expect(retryEndEvents).toHaveLength(0);
-		expect(fallbackAppliedEvents).toHaveLength(0);
+		// One attempt per model: chain advances, never a same-model backoff retry.
+		expect(requestedModels).toEqual([
+			`${primaryModel.provider}/${primaryModel.id}`,
+			`${fallbackModel.provider}/${fallbackModel.id}`,
+		]);
+		expect(fallbackAppliedEvents).toEqual([
+			{
+				type: "retry_fallback_applied",
+				from: `${primaryModel.provider}/${primaryModel.id}`,
+				to: `${fallbackModel.provider}/${fallbackModel.id}`,
+				role: "default",
+			},
+		]);
+		// The fallback fails with the same hard error and the chain is exhausted:
+		// the failure surfaces instead of looping.
 		expect(fallbackSucceededEvents).toHaveLength(0);
+		expect(retryStartEvents).toHaveLength(1);
 		const lastAssistant = getLastAssistantMessage(session);
 		expect(lastAssistant.stopReason).toBe("error");
 		expect(lastAssistant.errorMessage).toBe(envelopeError);

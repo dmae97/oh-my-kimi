@@ -12,6 +12,7 @@
 
 ### Fixed
 
+- Fixed configured `retry.fallbackChains` never engaging on non-retryable provider errors (e.g. "Cloud Code Assist API returned an empty response"): a hard error on a model covered by a fallback chain now switches to the next candidate instead of failing the turn, while still never backoff-retrying the failing model itself
 - Fixed backgrounded Bash blocks continuing to repaint with live and final job output; they now freeze with a compact job notice while completion is delivered separately
 
 ### Removed

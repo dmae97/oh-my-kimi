@@ -4136,6 +4136,17 @@ export class AgentSession {
 					await emitAgentEndNotification();
 					return;
 				}
+			} else if (this.#isHardErrorFallbackEligible(msg)) {
+				// A non-retryable hard error on a model covered by a configured
+				// fallback chain: retrying the SAME model is pointless, but a
+				// DIFFERENT model is a fresh chance — consult the chain before
+				// surfacing the failure. #handleRetryableError bails out (no
+				// backoff-retry of the failing model) when no switch happens.
+				const didRetry = await this.#handleRetryableError(msg, { hardErrorFallback: true });
+				if (didRetry) {
+					await emitAgentEndNotification();
+					return;
+				}
 			}
 			// Classifier refusals are persisted-skipped above; also prune the trailing
 			// stub from active context so the next turn's prompt does not replay it.
@@ -13846,6 +13857,34 @@ export class AgentSession {
 	}
 
 	/**
+	 * True when a turn failed with a hard (non-retryable) provider error but a
+	 * configured `retry.fallbackChains` entry covers the active model: the same
+	 * model is not worth retrying, yet a DIFFERENT model is a fresh chance, so
+	 * the chain is consulted before the error becomes final. Skips failures a
+	 * model switch cannot fix or must not replay: cancellations (abort-flavored
+	 * errors are not model faults), context overflow (compaction's job),
+	 * classifier refusals (chain consult is handled on the retryable path with
+	 * `pinFallback`), and turns that already emitted a tool call (replaying
+	 * could duplicate work).
+	 */
+	#isHardErrorFallbackEligible(message: AssistantMessage): boolean {
+		if (message.stopReason !== "error") return false;
+		const model = this.model;
+		if (!model) return false;
+		const retrySettings = this.settings.getGroup("retry");
+		if (!retrySettings.enabled || !retrySettings.modelFallback) return false;
+		if (this.#isClassifierRefusal(message)) return false;
+		const id = this.#classifyRetryMessage(message);
+		if (AIError.is(id, AIError.Flag.Abort) || AIError.is(id, AIError.Flag.UserInterrupt)) return false;
+		if (AIError.isContextOverflow(message, model.contextWindow ?? 0)) return false;
+		if (this.#hasReplayUnsafeToolOutput(message)) return false;
+		const currentSelector = formatRetryFallbackSelector(model, this.thinkingLevel);
+		const role = this.#activeRetryFallback?.role ?? this.#resolveRetryFallbackRole(currentSelector);
+		if (!role) return false;
+		return this.#findRetryFallbackCandidates(role, currentSelector).length > 0;
+	}
+
+	/**
 	 * Switch the active model from a Fireworks Fast (`-fast`) variant to its base
 	 * (Standard) id and stick there for the rest of the session — the auto
 	 * fallback that makes Fast a safe default. Returns false when the current
@@ -13968,12 +14007,16 @@ export class AgentSession {
 	}
 
 	/**
-	 * Handle retryable errors with exponential backoff.
+	 * Handle retryable errors with exponential backoff, credential rotation, and
+	 * model-fallback chains. Also entered for NON-retryable errors when a switch
+	 * is the recovery (`fireworksFastFallback`, `hardErrorFallback`): then a
+	 * successful model switch retries immediately, and a failed switch surfaces
+	 * the error without a same-model backoff retry.
 	 * @returns true if retry was initiated, false if max retries exceeded or disabled
 	 */
 	async #handleRetryableError(
 		message: AssistantMessage,
-		options?: { allowModelFallback?: boolean; fireworksFastFallback?: boolean },
+		options?: { allowModelFallback?: boolean; fireworksFastFallback?: boolean; hardErrorFallback?: boolean },
 	): Promise<boolean> {
 		const retrySettings = this.settings.getGroup("retry");
 		// The Fireworks Fast→base degrade is an intrinsic model-selection safety net,
@@ -14115,11 +14158,16 @@ export class AgentSession {
 			this.#resolveRetry();
 			return false;
 		}
-		// Fast→base was requested but the base switch could not happen (e.g. the
-		// base model has no credential). Don't fall through to backing-off and
-		// retrying the failing fast model for a hard router error that the generic
-		// classifier wouldn't retry — surface it instead.
-		if (options?.fireworksFastFallback && !switchedModel && !this.#isRetryableError(message)) {
+		// A fallback switch was the whole reason we entered (Fast→base degrade or
+		// a hard-error chain consult) but it could not happen (e.g. no candidate
+		// has a credential). Don't fall through to backing-off and retrying the
+		// failing model for an error the generic classifier wouldn't retry —
+		// surface it instead.
+		if (
+			(options?.fireworksFastFallback || options?.hardErrorFallback) &&
+			!switchedModel &&
+			!this.#isRetryableError(message)
+		) {
 			this.#retryAttempt = 0;
 			this.#resolveRetry();
 			return false;
