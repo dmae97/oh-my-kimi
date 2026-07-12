@@ -1,5 +1,6 @@
 import { toNumber } from "@oh-my-pi/pi-catalog/utils";
 import type {
+	CredentialRankingStrategy,
 	UsageAmount,
 	UsageFetchContext,
 	UsageFetchParams,
@@ -191,6 +192,21 @@ function buildModelUsageUrl(baseUrl: string, now: Date): string {
 	return `${baseUrl}${MODEL_USAGE_PATH}?startTime=${encodeURIComponent(startTime)}&endTime=${encodeURIComponent(endTime)}`;
 }
 
+function rankZaiRequestLimits(report: UsageReport): UsageLimit[] {
+	const requestLimits = report.limits.filter(limit => limit.id.startsWith("zai:requests:"));
+	const limits = requestLimits.length > 0 ? requestLimits : report.limits;
+	const ranked = [...limits];
+	ranked.sort((left, right) => {
+		const leftDuration = left.window?.durationMs ?? Number.POSITIVE_INFINITY;
+		const rightDuration = right.window?.durationMs ?? Number.POSITIVE_INFINITY;
+		if (leftDuration !== rightDuration) return leftDuration - rightDuration;
+		const leftReset = left.window?.resetsAt ?? Number.POSITIVE_INFINITY;
+		const rightReset = right.window?.resetsAt ?? Number.POSITIVE_INFINITY;
+		return leftReset - rightReset;
+	});
+	return ranked;
+}
+
 async function fetchZaiUsage(params: UsageFetchParams, ctx: UsageFetchContext): Promise<UsageReport | null> {
 	if (params.provider !== "zai") return null;
 	const credential = params.credential;
@@ -318,4 +334,15 @@ export const zaiUsageProvider: UsageProvider = {
 	id: "zai",
 	fetchUsage: fetchZaiUsage,
 	supports: params => params.provider === "zai" && params.credential.type === "api_key",
+};
+
+export const zaiRankingStrategy: CredentialRankingStrategy = {
+	findWindowLimits(report) {
+		const ranked = rankZaiRequestLimits(report);
+		return { primary: ranked[0], secondary: ranked[1] };
+	},
+	windowDefaults: {
+		primaryMs: 5 * HOUR_MS,
+		secondaryMs: WEEK_MS,
+	},
 };
