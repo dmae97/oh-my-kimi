@@ -8,6 +8,7 @@
  * - `SqliteAuthCredentialStore`: concrete SQLite-backed implementation
  */
 import { Database, type Statement } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDbPath, logger } from "@oh-my-pi/pi-utils";
@@ -58,6 +59,12 @@ import { opencodeGoUsageProvider } from "./usage/opencode-go";
 import { zaiUsageProvider } from "./usage/zai";
 
 const USAGE_RANKING_METRIC_EPSILON = 1e-9;
+const OAUTH_BEARER_FINGERPRINT_HISTORY_LIMIT = 8;
+
+/** SHA-256 bearer fingerprint, so superseded OAuth token bytes never enter the identity cache. */
+function fingerprintOAuthBearer(bearer: string): string {
+	return createHash("sha256").update(bearer).digest("base64url");
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Credential Types
@@ -1076,6 +1083,8 @@ export class AuthStorage {
 	#providerRoundRobinIndex: Map<string, number> = new Map();
 	/** Tracks the last used credential per provider for a session (used for rate-limit switching). */
 	#sessionLastCredential: Map<string, Map<string, { type: AuthCredential["type"]; index: number }>> = new Map();
+	/** Recent bearer fingerprints resolved for each durable OAuth row; used only for delayed usage-limit attribution. */
+	#oauthBearerFingerprints: Map<string, Map<number, string[]>> = new Map();
 	/** Maps provider:type -> credentialIndex -> blockedUntilMs for temporary backoff. */
 	#credentialBackoff: Map<string, Map<number, number>> = new Map();
 	/** Earliest time a freshly-set in-memory block may be cleared by live usage reconciliation. */
@@ -1329,12 +1338,42 @@ export class AuthStorage {
 	#setStoredCredentials(provider: string, credentials: StoredCredential[]): void {
 		const current = this.#data.get(provider) ?? [];
 		if (storedCredentialArraysEqual(current, credentials)) return;
+		const trackedBearerFingerprints = this.#oauthBearerFingerprints.get(provider);
+		if (trackedBearerFingerprints) {
+			const activeOAuthIds = new Set(
+				credentials.filter(entry => entry.credential.type === "oauth").map(entry => entry.id),
+			);
+			for (const credentialId of trackedBearerFingerprints.keys()) {
+				if (!activeOAuthIds.has(credentialId)) trackedBearerFingerprints.delete(credentialId);
+			}
+			if (trackedBearerFingerprints.size === 0) this.#oauthBearerFingerprints.delete(provider);
+		}
 		if (credentials.length === 0) {
 			this.#data.delete(provider);
 		} else {
 			this.#data.set(provider, credentials);
 		}
 		this.#bumpGeneration("credentials");
+	}
+
+	#recordOAuthBearerCredentialId(provider: string, bearer: string, credentialId: number | undefined): void {
+		if (credentialId === undefined) return;
+		const fingerprint = fingerprintOAuthBearer(bearer);
+		const byCredentialId = this.#oauthBearerFingerprints.get(provider) ?? new Map<number, string[]>();
+		const history = byCredentialId.get(credentialId) ?? [];
+		const nextHistory = history.filter(previous => previous !== fingerprint);
+		nextHistory.push(fingerprint);
+		if (nextHistory.length > OAUTH_BEARER_FINGERPRINT_HISTORY_LIMIT) nextHistory.shift();
+		byCredentialId.set(credentialId, nextHistory);
+		this.#oauthBearerFingerprints.set(provider, byCredentialId);
+	}
+
+	#findOAuthCredentialIdForBearer(provider: string, bearer: string): number | undefined {
+		const fingerprint = fingerprintOAuthBearer(bearer);
+		for (const [credentialId, history] of this.#oauthBearerFingerprints.get(provider) ?? []) {
+			if (history.includes(fingerprint)) return credentialId;
+		}
+		return undefined;
 	}
 
 	#resolveOAuthDedupeIdentityKey(provider: string, credential: OAuthCredential): string | null {
@@ -3453,42 +3492,63 @@ export class AuthStorage {
 			signal?: AbortSignal;
 		},
 	): Promise<UsageLimitMarkResult> {
-		const sessionCredential = await this.#resolveCredentialTarget(provider, sessionId, {
+		let sessionCredential = await this.#resolveCredentialTarget(provider, sessionId, {
 			credentialId: options?.credentialId,
 			apiKey: options?.apiKey,
 		});
+		if (!sessionCredential && options?.credentialId === undefined && options?.apiKey !== undefined) {
+			// Account quota survives OAuth bearer rotation. Attribute a delayed
+			// usage-limit response through the durable row id captured when this
+			// exact bearer was resolved; never use this alias for hard auth errors.
+			const credentialId = this.#findOAuthCredentialIdForBearer(provider, options.apiKey);
+			const index =
+				credentialId === undefined
+					? -1
+					: this.#getStoredCredentials(provider).findIndex(
+							entry => entry.id === credentialId && entry.credential.type === "oauth",
+						);
+			if (index >= 0) sessionCredential = { type: "oauth", index, explicit: true };
+		}
 		if (!sessionCredential) return { switched: false };
+		const target = this.#getStoredCredentials(provider)[sessionCredential.index];
+		if (!target || target.credential.type !== sessionCredential.type) return { switched: false };
+		const credentialType = sessionCredential.type;
+		const targetCredentialId = target.id;
 
-		const providerKey = this.#getProviderTypeKey(provider, sessionCredential.type);
+		const providerKey = this.#getProviderTypeKey(provider, credentialType);
 		const strategy = this.#rankingStrategyResolver?.(provider);
 		const rankingContext: CredentialRankingContext = { modelId: options?.modelId };
 		const blockScope = strategy?.blockScope?.(rankingContext);
 		const now = Date.now();
 		let blockedUntil = now + (options?.retryAfterMs ?? AuthStorage.#defaultBackoffMs);
 
-		if (sessionCredential.type === "oauth" && strategy) {
-			const credential = this.#getCredentialsForProvider(provider)[sessionCredential.index];
-			if (credential?.type === "oauth") {
-				const report = await this.#getUsageReport(provider, credential, options);
-				if (report) {
-					const scopedLimits = this.#getScopedUsageLimits(strategy, report, rankingContext);
-					if (this.#isUsageLimitReached(scopedLimits)) {
-						const resetAtMs = this.#getUsageResetAtMs(scopedLimits, Date.now());
-						if (resetAtMs && resetAtMs > blockedUntil) {
-							blockedUntil = resetAtMs;
-						}
+		if (credentialType === "oauth" && target.credential.type === "oauth" && strategy) {
+			const report = await this.#getUsageReport(provider, target.credential, options);
+			if (report) {
+				const scopedLimits = this.#getScopedUsageLimits(strategy, report, rankingContext);
+				if (this.#isUsageLimitReached(scopedLimits)) {
+					const resetAtMs = this.#getUsageResetAtMs(scopedLimits, Date.now());
+					if (resetAtMs && resetAtMs > blockedUntil) {
+						blockedUntil = resetAtMs;
 					}
 				}
 			}
 		}
 
-		this.#markCredentialBlocked(provider, providerKey, sessionCredential.index, blockedUntil, blockScope);
+		// Usage lookup may refresh, disable, or remove a row. Re-resolve its
+		// durable id before applying positional in-memory and persisted blocks.
+		const targetIndex = this.#getStoredCredentials(provider).findIndex(
+			entry => entry.id === targetCredentialId && entry.credential.type === credentialType,
+		);
+		if (targetIndex >= 0) {
+			this.#markCredentialBlocked(provider, providerKey, targetIndex, blockedUntil, blockScope);
+		}
 
 		const remainingCredentials = this.#getCredentialsForProvider(provider)
 			.map((credential, index) => ({ credential, index }))
 			.filter(
 				(entry): entry is { credential: AuthCredential; index: number } =>
-					entry.credential.type === sessionCredential.type && entry.index !== sessionCredential.index,
+					entry.credential.type === credentialType && entry.index !== targetIndex,
 			);
 
 		let retryAtMs: number | undefined;
@@ -4240,6 +4300,7 @@ export class AuthStorage {
 					}
 				}
 			}
+			this.#recordOAuthBearerCredentialId(provider, result.apiKey, credentialId);
 			this.#recordSessionCredential(provider, sessionId, "oauth", selection.index);
 			return { apiKey: result.apiKey, credential: updated, credentialId };
 		} catch (error) {
@@ -4960,10 +5021,10 @@ export class AuthStorage {
 	 * in `options.credentialId`, then the failed bearer supplied in
 	 * `options.apiKey`, so overlapping requests cannot redirect rotation through
 	 * stale session stickiness. Fall back to the session-sticky credential only
-	 * when neither explicit target is available. If an explicit target is supplied
-	 * but no longer matches storage, return `false` without mutating sticky state.
-	 * Apply the storage action for the error class, then let the next resolve
-	 * select a sibling.
+	 * when neither explicit target is available. For hard-auth errors, an explicit
+	 * target that no longer matches storage returns `false` without mutation.
+	 * Delayed usage-limit errors may instead recover the durable OAuth row from
+	 * the bearer fingerprint recorded when the request resolved.
 	 *
 	 * - usage-limit / account-rate-limit error → {@link AuthStorage.markUsageLimitReached}
 	 *   (temporary block via its own backoff — default plus server usage-report
@@ -4979,12 +5040,6 @@ export class AuthStorage {
 		sessionId: string | undefined,
 		options?: { error?: unknown; modelId?: string; apiKey?: string; credentialId?: number; signal?: AbortSignal },
 	): Promise<boolean> {
-		const sessionCredential = await this.#resolveCredentialTarget(provider, sessionId, {
-			credentialId: options?.credentialId,
-			apiKey: options?.apiKey,
-		});
-		if (!sessionCredential) return false;
-
 		const error = options?.error;
 		const status = AIError.status(error);
 		const message = error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
@@ -4998,6 +5053,12 @@ export class AuthStorage {
 				})
 			).switched;
 		}
+
+		const sessionCredential = await this.#resolveCredentialTarget(provider, sessionId, {
+			credentialId: options?.credentialId,
+			apiKey: options?.apiKey,
+		});
+		if (!sessionCredential) return false;
 
 		const providerKey = this.#getProviderTypeKey(provider, sessionCredential.type);
 		// Snapshot sibling availability before mutating so a soft-deleting
@@ -5046,7 +5107,7 @@ export class AuthStorage {
 	 *
 	 * - initial (`error: undefined`) → resolve the session credential.
 	 * - step (b) `!lastChance` → force-refresh the SAME session-sticky credential.
-	 * - step (c) `lastChance` → rotate to a sibling credential, then re-resolve.
+	 * - step (c) `lastChance` → rotate to a sibling and re-resolve, unless quota exhaustion has no sibling.
 	 *
 	 * Used by web-search providers and other consumers that hold an AuthStorage
 	 * directly (no ModelRegistry in scope).
@@ -5058,13 +5119,20 @@ export class AuthStorage {
 				return this.getApiKey(provider, sessionId, { baseUrl, modelId, signal });
 			}
 			if (lastChance) {
-				const rotated = await this.rotateSessionCredential(provider, sessionId, {
+				const switched = await this.rotateSessionCredential(provider, sessionId, {
 					error,
 					modelId,
 					signal,
 					apiKey: previousKey,
 				});
-				if (!rotated) return undefined;
+				if (!switched) {
+					const status = AIError.status(error);
+					const message = error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
+					// Preserve no-sibling quota backoff instead of re-resolving an
+					// already-blocked fallback. Hard-auth declines still re-resolve
+					// because a peer may have refreshed the failed bearer.
+					if (AIError.isUsageLimit(error) || isUsageLimitOutcome(status, message)) return undefined;
+				}
 				return this.getApiKey(provider, sessionId, { baseUrl, modelId, signal });
 			}
 			return this.getApiKey(provider, sessionId, { baseUrl, modelId, forceRefresh: true, signal });
