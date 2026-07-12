@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.6] - 2026-07-12
+
 ### Added
 
 - Added asynchronous `invalidateUsageCache` method to clear cached usage reports

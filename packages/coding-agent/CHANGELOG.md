@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.6] - 2026-07-12
+
 ### Added
 
 - Added `invalidate` action to the usage command to clear cached usage reports
