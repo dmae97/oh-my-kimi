@@ -10,6 +10,10 @@
 
 - Updated status event log to prioritize the most recent entries in the display window
 
+### Removed
+
+- Removed the unreliable Bing and Yahoo HTML-scraping web search providers
+
 ## [16.4.8] - 2026-07-12
 ### Added
 
@@ -17,6 +21,7 @@
 
 ### Changed
 
+- Replaced the Alt+P / `/switch` temporary model selector's fullscreen /models hub with a compact full-width floating overlay anchored above the editor (~40% of the terminal height): just the searchable model list — no provider sidebar or role management — with the session's active model highlighted and preselected
 - Improved tab recovery after timeouts by automatically clearing pending navigation and JS dialogs
 - Made `tab.goto` navigation failures catchable with a named error instead of triggering a whole-cell timeout
 - Made `tab.evaluate` run in the page's main JavaScript world so page-defined globals are available without a directive
@@ -26,6 +31,7 @@
 
 ### Fixed
 
+- Fixed the eval tool's status-event tree truncating from the bottom: the newest `log()` progress lines were hidden behind an `… N more` marker while the oldest stayed visible; the tree now shows a tail window behind an `… N earlier` marker, and the expanded view widens to the viewport instead of a fixed 10 events
 - Fixed the `//!world=main` directive being silently ignored for string expressions passed to raw Puppeteer evaluation APIs
 - Fixed tab reuse issues where hung navigation or unhandled modals would cause initialization to stall and trigger a force-kill
 - Improved search reliability for Perplexity provider by forcing retrieval for all queries
