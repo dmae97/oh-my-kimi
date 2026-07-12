@@ -102,7 +102,8 @@ pub fn compile_pattern(
 ) -> Result<Pattern> {
 	let selector = selector.map(str::trim).filter(|s| !s.is_empty());
 	let mut compiled = if let Some(selector) = selector {
-		Pattern::contextual(pattern, selector, lang).map_err(|err| anyhow!("Invalid pattern: {err}"))?
+		Pattern::contextual(pattern, selector, lang)
+			.map_err(|err| anyhow!("Invalid pattern: {err}"))?
 	} else {
 		match Pattern::try_new(pattern, lang) {
 			Ok(compiled) => compiled,
@@ -126,8 +127,9 @@ pub fn compile_pattern(
 /// Language-specific wrapper template used to turn a multi-node fragment into a
 /// single selectable node. `None` for languages without a template — those keep
 /// the original `MultipleNode` error.
-fn wrapper_template(lang: SupportLang) -> Option<(&'static str, &'static str, &'static str)> {
-	// (prefix, suffix, selector-kind); the fragment is spliced between prefix/suffix.
+const fn wrapper_template(lang: SupportLang) -> Option<(&'static str, &'static str, &'static str)> {
+	// (prefix, suffix, selector-kind); the fragment is spliced between
+	// prefix/suffix.
 	match lang {
 		SupportLang::Json => Some(("{", "}", "pair")),
 		_ => None,
@@ -135,9 +137,9 @@ fn wrapper_template(lang: SupportLang) -> Option<(&'static str, &'static str, &'
 }
 
 /// Retry a fragment that failed as `MultipleNode` by wrapping it in a minimal
-/// valid context and selecting the node kind that spans it. Returns the compiled
-/// pattern (with `strictness` applied) or `None` if this language has no template
-/// or the wrapped form still fails to compile.
+/// valid context and selecting the node kind that spans it. Returns the
+/// compiled pattern (with `strictness` applied) or `None` if this language has
+/// no template or the wrapped form still fails to compile.
 fn compile_wrapped_fallback(
 	pattern: &str,
 	strictness: &MatchStrictness,
@@ -180,8 +182,7 @@ fn quote_bare_metavars(pattern: &str) -> String {
 			if bytes[index..].starts_with(b"$$") {
 				index += 2;
 			}
-			while index < bytes.len()
-				&& (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
+			while index < bytes.len() && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
 			{
 				index += 1;
 			}
