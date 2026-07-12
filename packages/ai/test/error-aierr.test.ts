@@ -69,6 +69,19 @@ describe("AIError.classify — structural provider errors", () => {
 		expect(AIError.retriable(id)).toBe(true);
 	});
 
+	it("classifies an empty provider response as transient + retryable", () => {
+		// Regression: "Cloud Code Assist API returned an empty response" matched no
+		// text pattern and empty-body carried no flag, so retry/model-fallback
+		// chains never engaged and the turn hard-failed.
+		const err = new AIError.ProviderResponseError("Cloud Code Assist API returned an empty response", {
+			provider: "google-antigravity",
+			kind: "empty-body",
+		});
+		const id = AIError.classify(err);
+		expect(AIError.is(id, AIError.Flag.Transient)).toBe(true);
+		expect(AIError.retriable(id)).toBe(true);
+	});
+
 	it("does not mark a terminal output provider error as transient", () => {
 		const err = new AIError.ProviderResponseError("upstream error", { provider: "google", kind: "output" });
 		expect(AIError.retriable(AIError.classify(err))).toBe(false);
