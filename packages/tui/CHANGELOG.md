@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.7] - 2026-07-12
+
 ### Fixed
 
 - Fixed keyboard navigation paying an extra frame of input latency after idle; the queue-drain grace now applies only to Ctrl+C and Escape double-press gestures.

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.7] - 2026-07-12
+
 ### Added
 
 - Enabled Home and End keyboard navigation in the model browser
