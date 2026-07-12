@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
+import { AgentStorage, SCHEMA_VERSION } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { readTableSql } from "./helpers/sqlite-inspect";
 
@@ -53,7 +53,7 @@ describe("AgentStorage SQLite compatibility", () => {
 		storage.recordModelUsage("openai/gpt-5");
 
 		expect(storage.getModelUsageOrder()).toEqual(["openai/gpt-5"]);
-		expect(readSchemaVersion(dbPath)).toBe(5);
+		expect(readSchemaVersion(dbPath)).toBe(SCHEMA_VERSION);
 		expect(readTableSql(dbPath, "settings")).not.toContain("unixepoch(");
 		expect(readTableSql(dbPath, "settings")).toContain("strftime('%s','now')");
 		expect(readTableSql(dbPath, "model_usage")).not.toContain("unixepoch(");
@@ -87,7 +87,7 @@ describe("AgentStorage SQLite compatibility", () => {
 
 		const storage = await AgentStorage.open(dbPath);
 
-		expect(readSchemaVersion(dbPath)).toBe(5);
+		expect(readSchemaVersion(dbPath)).toBe(SCHEMA_VERSION);
 		expect(readTableSql(dbPath, "settings")).not.toContain("unixepoch(");
 		expect(readTableSql(dbPath, "settings")).toContain("strftime('%s','now')");
 		expect(readTableSql(dbPath, "model_usage")).not.toContain("unixepoch(");

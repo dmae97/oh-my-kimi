@@ -115,8 +115,8 @@ function normalizeModelPerfSample(modelKey: string, sample: ModelPerfSample): Mo
 	return { modelKey, outputTokens, durationMs, ttftSamples: ttftMs !== undefined ? 1 : 0, ttftMs: ttftMs ?? 0 };
 }
 
-/** Bump when schema changes require migration */
-const SCHEMA_VERSION = 6;
+/** Current agent.db schema version; bump when schema changes require migration. */
+export const SCHEMA_VERSION = 6;
 const SQLITE_NOW_EPOCH = "CAST(strftime('%s','now') AS INTEGER)";
 
 /** Singleton instances per database path */

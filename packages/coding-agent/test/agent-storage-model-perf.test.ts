@@ -144,11 +144,14 @@ describe("AgentStorage model perf aggregates", () => {
 		const insert = statsDb.prepare("INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?)");
 		const now = Date.now();
 		// 300 rows: the newest 256 run at 100 t/s, the older 44 at a wild
-		// 10000 t/s. Only the newest 256 may count.
-		for (let i = 0; i < 300; i++) {
-			const fast = i < 44; // smallest timestamps = oldest rows
-			insert.run("openai", "gpt-5", fast ? 10_000 : 100, 1000, null, "stop", now - (300 - i) * 1000);
-		}
+		// 10000 t/s. Only the newest 256 may count. One transaction: per-row
+		// implicit transactions fsync 300 times and time out on slow CI disks.
+		statsDb.transaction(() => {
+			for (let i = 0; i < 300; i++) {
+				const fast = i < 44; // smallest timestamps = oldest rows
+				insert.run("openai", "gpt-5", fast ? 10_000 : 100, 1000, null, "stop", now - (300 - i) * 1000);
+			}
+		})();
 		statsDb.close();
 
 		const imported = await storage.backfillModelPerfFromStats(statsDbPath);
