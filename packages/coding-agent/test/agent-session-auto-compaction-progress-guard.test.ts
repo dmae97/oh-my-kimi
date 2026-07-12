@@ -11,6 +11,7 @@ import { loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensio
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import type { CompactionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getProjectAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 
@@ -1230,5 +1231,68 @@ describe("AgentSession auto-compaction progress guard", () => {
 		expect(noProgress[0].level).toBe("warning");
 		const recovery = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes("dead-end recovery"));
 		expect(recovery.length).toBe(0);
+		// The dead-end is also stamped on the compaction entry so the transcript
+		// divider badges the pause and carries the warning across rebuilds/resume.
+		const compactionEntry = sessionManager
+			.getEntries()
+			.filter((e): e is CompactionEntry => e.type === "compaction")
+			.at(-1);
+		expect(compactionEntry?.warning).toContain(NO_PROGRESS_FRAGMENT);
+	});
+
+	it("auto-continues (no warning) when the image-drop tier frees an image-only tail", async () => {
+		// Elide cannot touch image content (collectShakeRegions skips image-only
+		// tool results and user-message images), so the rescue's second tier drops
+		// attached images — the automated `/shake images` remedy — and re-tests
+		// the recovery band before the guard is allowed to pause.
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
+		vi.spyOn(session.agent, "continue").mockResolvedValue();
+		let imagesDropped = false;
+		vi.spyOn(session, "getContextUsage").mockImplementation(() =>
+			imagesDropped
+				? { tokens: 1000, contextWindow: 200000, percent: 0.5 }
+				: { tokens: 190000, contextWindow: 200000, percent: 95 },
+		);
+		// Nothing elide-eligible in the oversized tail.
+		vi.spyOn(session, "shake").mockResolvedValue({
+			mode: "elide",
+			toolResultsDropped: 0,
+			blocksDropped: 0,
+			tokensFreed: 0,
+		});
+		const dropSpy = vi.spyOn(session, "dropImages").mockImplementation(async () => {
+			imagesDropped = true;
+			return { removed: 2 };
+		});
+
+		const notices = collectNotices();
+
+		const { promise: compactionDone, resolve: onCompactionDone } = Promise.withResolvers<void>();
+		session.subscribe(event => {
+			if (event.type === "auto_compaction_end") onCompactionDone();
+		});
+
+		const assistantMsg = highUsageAssistant();
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
+
+		await compactionDone;
+		await session.waitForIdle();
+
+		expect(dropSpy).toHaveBeenCalledTimes(1);
+		expect(promptSpy).toHaveBeenCalledTimes(1);
+		const noProgress = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes(NO_PROGRESS_FRAGMENT));
+		expect(noProgress.length).toBe(0);
+		const recovery = notices.filter(
+			n => n.source === NOTICE_SOURCE && n.message.includes("dropped 2 attached images"),
+		);
+		expect(recovery.length).toBe(1);
+		expect(recovery[0].level).toBe("info");
+		// A rescued pass must not stamp the dead-end warning on the entry.
+		const compactionEntry = sessionManager
+			.getEntries()
+			.filter((e): e is CompactionEntry => e.type === "compaction")
+			.at(-1);
+		expect(compactionEntry?.warning).toBeUndefined();
 	});
 });

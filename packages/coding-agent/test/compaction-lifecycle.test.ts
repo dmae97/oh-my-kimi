@@ -48,6 +48,9 @@ function buildCtx(compact: InteractiveModeContext["session"]["compact"]) {
 		updateEditorTopBorder: vi.fn(),
 		showError,
 		flushCompactionQueue: vi.fn(async () => undefined),
+		// executeCompaction consults display.collapseCompacted on the ok path to
+		// decide whether the rebuild replaces the terminal transcript.
+		settings: { get: vi.fn(() => true) },
 	} as unknown as InteractiveModeContext;
 
 	return {
