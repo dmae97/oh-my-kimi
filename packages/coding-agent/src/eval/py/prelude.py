@@ -487,48 +487,17 @@ if "__omp_prelude_loaded__" not in globals():
         model=None,
         label=None,
         schema=None,
+        schema_mode=None,
         isolated=None,
         apply=None,
         merge=None,
         handle=False,
     ):
-        """Run a subagent and return its final output.
+        """Run a subagent and return its final output or structured data.
 
-        `agent` selects the subagent definition (default "task"). Pass
-        `model` to override that agent's model, `label` for the output artifact
-        id, and `schema` to request structured JSON output; when `schema` is
-        supplied the parsed object is returned. Share background by writing a
-        local:// file and referencing it in the prompt.
-
-        Pass `isolated=True` to run the subagent inside an isolation worktree
-        (copy-on-write of the parent repo) so parallel `agent()` spawns can
-        edit overlapping files safely. Strict opt-in, mirroring the `task`
-        tool: the default is non-isolated regardless of `task.isolation.mode`.
-        `isolated=True` while the setting is `"none"` errors out instead of
-        silently downgrading.
-
-        When isolated, `apply=False` keeps captured changes inside the
-        worktree and surfaces the root patch path, branch name, and nested
-        repository patches through the DAG node dict (combine with
-        `handle=True` to receive them — see below; the bare return type
-        stays bytes/string/parsed object and has nowhere to expose artifacts).
-        `merge=False` forces patch mode even when `task.isolation.merge` is
-        `"branch"`, avoiding the per-call git lock + repo mutation that branch
-        mode performs.
-
-        Set `handle=True` to receive a DAG node dict instead of bare
-        text: ``{"text", "output", "handle", "id", "agent"}`` where ``handle``
-        is the spawned agent's recoverable ``agent://<id>`` URI. A downstream
-        ``pipeline``/``parallel`` stage embeds that ``handle`` (or ``output``)
-        in its prompt so a large transcript flows through the graph by
-        reference, never re-inlined. When ``schema`` is also set the parsed
-        object lands under ``"data"``. When the spawn ran isolated the node
-        also carries ``"isolated"`` and, when present, ``"patch_path"``,
-        ``"branch_name"``, ``"nested_patches"``, ``"changes_applied"``
-        (``True``/``False``/``None`` — ``None`` means ``apply=False``), and
-        ``"isolation_summary"``. If
-        the bridge returns no recoverable id the node still resolves with
-        ``handle=None`` — the helper never throws.
+        `schema` overrides agent and session schemas. `schema_mode` is
+        `"permissive"` or `"strict"`. `handle=True` returns the child output
+        reference and metadata, with parsed data under `"data"` when available.
         """
         args = {"prompt": prompt}
         if agent is not None:
@@ -539,6 +508,8 @@ if "__omp_prelude_loaded__" not in globals():
             args["label"] = label
         if schema is not None:
             args["schema"] = schema
+        if schema_mode is not None:
+            args["schemaMode"] = schema_mode
         if isolated is not None:
             args["isolated"] = bool(isolated)
         if apply is not None:
@@ -549,7 +520,8 @@ if "__omp_prelude_loaded__" not in globals():
             args["handle"] = True
         res = _bridge_call("__agent__", args)
         text = res.get("text") if isinstance(res, dict) else res
-        parsed = json.loads(text) if schema is not None else text
+        has_data = isinstance(res, dict) and "data" in res
+        parsed = res["data"] if has_data else json.loads(text) if schema is not None else text
         if not handle:
             return parsed
         details = res.get("details") if isinstance(res, dict) else None
@@ -568,7 +540,7 @@ if "__omp_prelude_loaded__" not in globals():
             "id": details["id"],
             "agent": details.get("agent"),
         }
-        if schema is not None:
+        if has_data or schema is not None:
             node["data"] = parsed
         for src_key, dst_key in (
             ("isolated", "isolated"),

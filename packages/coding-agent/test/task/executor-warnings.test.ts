@@ -374,4 +374,32 @@ describe("subagent warning injection", () => {
 		expect(result.exitCode).toBe(0);
 		expect(result.rawOutput).toBe("plain final answer");
 	});
+
+	it("rejects exhausted schema retries in strict mode and retains parsed validation metadata", () => {
+		const result = finalizeSubprocessOutput({
+			rawOutput: "",
+			exitCode: 0,
+			stderr: "",
+			doneAborted: false,
+			signalAborted: false,
+			yieldItems: [{ status: "success", data: { ok: "wrong" }, schemaOverridden: true }],
+			outputSchema: {
+				type: "object",
+				required: ["ok"],
+				properties: { ok: { type: "boolean" } },
+			},
+			outputSchemaMode: "strict",
+			outputSchemaSource: "caller",
+		});
+
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toContain("schema_violation");
+		expect(result.structuredOutput).toEqual({
+			source: "caller",
+			mode: "strict",
+			status: "invalid",
+			data: { ok: "wrong" },
+			error: expect.any(String),
+		});
+	});
 });

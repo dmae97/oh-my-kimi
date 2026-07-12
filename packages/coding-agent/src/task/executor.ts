@@ -61,6 +61,9 @@ import {
 	MAX_OUTPUT_BYTES,
 	MAX_OUTPUT_LINES,
 	type SingleResult,
+	type StructuredSubagentOutput,
+	type StructuredSubagentSchemaMode,
+	type StructuredSubagentSchemaSource,
 	TASK_SUBAGENT_EVENT_CHANNEL,
 	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
 	TASK_SUBAGENT_PROGRESS_CHANNEL,
@@ -292,7 +295,12 @@ export interface ExecutorOptions {
 	 */
 	parentActiveModelPattern?: string;
 	thinkingLevel?: ConfiguredThinkingLevel;
+	/** Schema used to validate the final structured completion. */
 	outputSchema?: unknown;
+	/** Enforcement policy for {@link outputSchema}; defaults to legacy permissive behavior. */
+	outputSchemaMode?: StructuredSubagentSchemaMode;
+	/** Origin of the selected schema, preserved in {@link SingleResult.structuredOutput}. */
+	outputSchemaSource?: StructuredSubagentSchemaSource;
 	/**
 	 * Caller supplied a schema that supersedes the agent's native output prompt.
 	 * Eval `agent(..., schema=...)` sets this so built-in agents ignore stale yield labels.
@@ -307,7 +315,20 @@ export interface ExecutorOptions {
 	 * watchdog is already suspended for the call's duration.
 	 */
 	maxRuntimeMs?: number;
+	/** Include IRC only when the invocation policy permits collaboration. */
+	enableIrc?: boolean;
 	enableLsp?: boolean;
+	/**
+	 * Enable MCP capabilities for this child. `false` suppresses both inherited
+	 * MCP proxy tools and session MCP discovery; it never consults the
+	 * process-global MCP manager. Defaults to `true`.
+	 */
+	enableMCP?: boolean;
+	/**
+	 * Limit the child to its explicit host tool names and the required yield
+	 * tool, suppressing discovered and always-included capabilities.
+	 */
+	restrictToolNames?: boolean;
 	signal?: AbortSignal;
 	onProgress?: (progress: AgentProgress) => void;
 	/**
@@ -450,6 +471,8 @@ interface FinalizeSubprocessOutputArgs {
 	signalAborted: boolean;
 	yieldItems?: YieldItem[];
 	outputSchema: unknown;
+	outputSchemaMode?: StructuredSubagentSchemaMode;
+	outputSchemaSource?: StructuredSubagentSchemaSource;
 	lastAssistantText?: string;
 }
 
@@ -459,6 +482,7 @@ interface FinalizeSubprocessOutputResult {
 	stderr: string;
 	abortedViaYield: boolean;
 	hasYield: boolean;
+	structuredOutput?: StructuredSubagentOutput;
 }
 export const SUBAGENT_WARNING_SCHEMA_OVERRIDDEN =
 	"SYSTEM WARNING: Subagent exhausted schema-retry budget; result was accepted despite failing the output schema.";
@@ -494,6 +518,10 @@ function buildSchemaViolationOutcome(
 export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): FinalizeSubprocessOutputResult {
 	let { rawOutput, exitCode, stderr } = args;
 	const { yieldItems, doneAborted, signalAborted, outputSchema, lastAssistantText } = args;
+	const mode = args.outputSchemaMode ?? "permissive";
+	const source = args.outputSchemaSource ?? (outputSchema === undefined ? "none" : "session");
+	const includeStructuredOutput = source !== "none";
+	let structuredOutput: StructuredSubagentOutput | undefined;
 	let abortedViaYield = false;
 	const hasYield = Array.isArray(yieldItems) && yieldItems.length > 0;
 	const hadFailureBeforeYield = exitCode !== 0 && stderr.trim().length > 0;
@@ -514,15 +542,37 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 			if (!assembled || assembled.missingData) {
 				rawOutput = rawOutput ? `${SUBAGENT_WARNING_NULL_YIELD}\n\n${rawOutput}` : SUBAGENT_WARNING_NULL_YIELD;
 			} else {
-				const { validator, error: schemaError } = buildOutputValidator(outputSchema);
-				const completeData = assembled.rawText ? assembled.data : parseStringifiedJson(assembled.data ?? null);
-				const result =
-					schemaError || assembled.schemaOverridden
-						? { success: true as const }
-						: (validator?.validate(completeData) ?? { success: true as const });
-				if (!result.success) {
-					const summary = summarizeValidationFailure(result, completeData, validator?.requiredFields ?? []);
-					const outcome = buildSchemaViolationOutcome(summary, completeData);
+				const { validator, error: schemaError, normalized } = buildOutputValidator(outputSchema);
+				const completeData = assembled.rawText
+					? assembled.data
+					: parseStringifiedJson(assembled.data ?? null);
+				const validation = validator?.validate(completeData);
+				const failure =
+					validation && !validation.success
+						? summarizeValidationFailure(validation, completeData, validator?.requiredFields ?? [])
+						: assembled.schemaOverridden
+							? { message: SUBAGENT_WARNING_SCHEMA_OVERRIDDEN, missingRequired: [] }
+							: schemaError
+								? { message: `invalid output schema: ${schemaError}`, missingRequired: [] }
+								: undefined;
+				if (includeStructuredOutput) {
+					structuredOutput =
+						schemaError || normalized === undefined
+							? {
+									source,
+									mode,
+									status: "unavailable",
+									data: completeData,
+									error: schemaError ? `invalid output schema: ${schemaError}` : undefined,
+								}
+							: failure
+								? { source, mode, status: "invalid", data: completeData, error: failure.message }
+								: { source, mode, status: "valid", data: completeData };
+				}
+				const mustReject =
+					failure !== undefined && (mode === "strict" || (!assembled.schemaOverridden && !schemaError));
+				if (mustReject && failure) {
+					const outcome = buildSchemaViolationOutcome(failure, completeData);
 					rawOutput = outcome.rawOutput;
 					stderr = outcome.stderr;
 					exitCode = outcome.exitCode;
@@ -540,9 +590,7 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 						exitCode = 0;
 						stderr = assembled.schemaOverridden
 							? SUBAGENT_WARNING_SCHEMA_OVERRIDDEN
-							: schemaError
-								? `invalid output schema: ${schemaError}`
-								: "";
+							: (structuredOutput?.error ?? "");
 					} else if (!stderr) {
 						stderr = "Subagent failed after yielding a result.";
 					}
@@ -560,11 +608,22 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 			const result = validator?.validate(completeData) ?? { success: true as const };
 			if (!result.success) {
 				const summary = summarizeValidationFailure(result, completeData, validator?.requiredFields ?? []);
+				if (includeStructuredOutput) {
+					structuredOutput = { source, mode, status: "invalid", data: completeData, error: summary.message };
+				}
 				const outcome = buildSchemaViolationOutcome(summary, completeData);
 				rawOutput = outcome.rawOutput;
 				stderr = outcome.stderr;
 				exitCode = outcome.exitCode;
 			} else {
+				if (includeStructuredOutput) {
+					structuredOutput = {
+						source,
+						mode,
+						status: "valid",
+						data: completeData,
+					};
+				}
 				try {
 					rawOutput = JSON.stringify(completeData, null, 2) ?? "null";
 				} catch (err) {
@@ -587,7 +646,7 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 		}
 	}
 
-	return { rawOutput, exitCode, stderr, abortedViaYield, hasYield };
+	return { rawOutput, exitCode, stderr, abortedViaYield, hasYield, structuredOutput };
 }
 
 /**
@@ -1710,6 +1769,8 @@ interface FinalizeRunArgs {
 	assignment?: string;
 	modelOverride?: string | string[];
 	outputSchema?: unknown;
+	outputSchemaMode?: StructuredSubagentSchemaMode;
+	outputSchemaSource?: StructuredSubagentSchemaSource;
 	signal?: AbortSignal;
 	artifactsDir?: string;
 	eventBus?: EventBus;
@@ -1747,6 +1808,8 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 			signalAborted: Boolean(signal?.aborted),
 			yieldItems,
 			outputSchema: args.outputSchema,
+			outputSchemaMode: args.outputSchemaMode,
+			outputSchemaSource: args.outputSchemaSource,
 			lastAssistantText: monitor.lastAssistantSalvageText(),
 		});
 	} finally {
@@ -1841,6 +1904,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 		output: truncatedOutput,
 		stderr,
 		truncated: Boolean(truncated),
+		...(finalized.structuredOutput ? { structuredOutput: finalized.structuredOutput } : {}),
 		durationMs: Date.now() - args.startTime,
 		tokens: progress.tokens,
 		requests: progress.requests,
@@ -1935,6 +1999,10 @@ export interface FollowUpTurnOptions {
 	message: string;
 	index?: number;
 	description?: string;
+	/** Structured-output state retained from the original invocation. */
+	outputSchema?: unknown;
+	outputSchemaMode?: StructuredSubagentSchemaMode;
+	outputSchemaSource?: StructuredSubagentSchemaSource;
 	signal?: AbortSignal;
 	onProgress?: (progress: AgentProgress) => void;
 	eventBus?: EventBus;
@@ -2019,6 +2087,9 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 		id,
 		agent,
 		task: message,
+		outputSchema: options.outputSchema,
+		outputSchemaMode: options.outputSchemaMode,
+		outputSchemaSource: options.outputSchemaSource,
 		signal,
 		artifactsDir: options.artifactsDir,
 		eventBus: options.eventBus,
@@ -2107,6 +2178,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	const parentDepth = options.taskDepth ?? 0;
 	const childDepth = parentDepth + 1;
 	const atMaxDepth = maxRecursionDepth >= 0 && childDepth >= maxRecursionDepth;
+	const ircEnabled = options.enableIrc !== false && isIrcEnabled(subagentSettings, childDepth);
 
 	// Add tools if specified
 	let toolNames: string[] | undefined;
@@ -2121,9 +2193,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	if (atMaxDepth && toolNames?.includes("task")) {
 		toolNames = toolNames.filter(name => name !== "task");
 	}
-	// The hub is always available; the COOP prompt section advertises messaging,
-	// so a restricted whitelist must still carry `hub` for the subagent to use it.
-	if (toolNames && !toolNames.includes("hub")) {
+	// Ordinary agents retain the host's always-on collaboration capability.
+	// Restricted sessions must not widen their explicit host tool list with hub.
+	if (toolNames && !options.restrictToolNames && !toolNames.includes("hub")) {
 		toolNames = [...toolNames, "hub"];
 	}
 	if (toolNames?.includes("exec")) {
@@ -2145,7 +2217,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				: agent.spawns.join(",");
 
 	const lspEnabled = enableLsp ?? true;
-	const ircEnabled = isIrcEnabled(subagentSettings, childDepth);
 	const skipPythonPreflight = Array.isArray(toolNames) && !toolNames.includes("eval");
 
 	const monitor = createSubagentRunMonitor({
@@ -2354,8 +2425,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 			sessionOpenedAt = performance.now();
 
-			const mcpProxyTools = options.mcpManager ? createMCPProxyTools(options.mcpManager) : [];
-			const enableMCP = !options.mcpManager;
+			const restrictToolNames = options.restrictToolNames === true;
+			const enableMCP = !restrictToolNames && (options.enableMCP ?? true);
+			const mcpManager = enableMCP ? options.mcpManager : undefined;
+			const mcpProxyTools = mcpManager ? createMCPProxyTools(mcpManager) : [];
 
 			// Derive subagent-scoped telemetry from the parent's config so the
 			// child loop's spans nest under the parent's active execute_tool span
@@ -2411,14 +2484,16 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				thinkingLevel: effectiveThinkingLevel,
 				toolNames,
 				outputSchema,
+				outputSchemaMode: options.outputSchemaMode,
+				restrictToolNames: options.restrictToolNames,
 				requireYieldTool: true,
 				contextFiles: options.contextFiles,
 				skills: options.skills,
 				promptTemplates: options.promptTemplates,
 				workspaceTree: options.workspaceTree,
 				rules: options.rules,
-				preloadedExtensionPaths: options.preloadedExtensionPaths,
-				preloadedCustomToolPaths: options.preloadedCustomToolPaths,
+				preloadedExtensionPaths: restrictToolNames ? [] : options.preloadedExtensionPaths,
+				preloadedCustomToolPaths: restrictToolNames ? [] : options.preloadedCustomToolPaths,
 				systemPrompt: defaultPrompt => {
 					const subagentPrompt = prompt.render(subagentSystemPromptTemplate, {
 						agent: agent.systemPrompt,
@@ -2447,9 +2522,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				agentId: id,
 				agentDisplayName: agent.name,
 				enableLsp: lspEnabled,
+				enableIrc: options.enableIrc,
 				skipPythonPreflight,
 				enableMCP,
-				mcpManager: options.mcpManager,
+				mcpManager,
 				customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
 				localProtocolOptions: options.localProtocolOptions,
 				telemetry: subagentTelemetry,
@@ -2524,6 +2600,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				spawns: spawnsEnv,
 				readSummarize: agent.readSummarize,
 				outputSchema,
+				outputSchemaMode: options.outputSchemaMode,
+				restrictToolNames: restrictToolNames || undefined,
 			});
 
 			abortSignal.addEventListener(
@@ -2720,6 +2798,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		assignment,
 		modelOverride,
 		outputSchema,
+		outputSchemaMode: options.outputSchemaMode,
+		outputSchemaSource: options.outputSchemaSource,
 		signal,
 		artifactsDir: options.artifactsDir,
 		eventBus: options.eventBus,

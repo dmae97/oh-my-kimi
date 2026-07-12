@@ -28,7 +28,7 @@ import type { UsageStatistics } from "../session/session-entries";
 import type { ToolChoiceQueue } from "../session/tool-choice-queue";
 import { TaskTool } from "../task";
 import type { AgentOutputManager } from "../task/output-manager";
-import { canSpawnAtDepth } from "../task/types";
+import { canSpawnAtDepth, type StructuredSubagentSchemaMode } from "../task/types";
 import type { EventBus } from "../utils/event-bus";
 import { WebSearchTool } from "../web/search";
 import type { WorkspaceTree } from "../workspace-tree";
@@ -45,7 +45,7 @@ import { resolveEvalBackends } from "./eval-backends";
 import { GithubTool } from "./gh";
 import { GlobTool } from "./glob";
 import { GrepTool } from "./grep";
-import { HubTool } from "./hub";
+import { HubTool, isIrcEnabled } from "./hub";
 import { InspectImageTool } from "./inspect-image";
 import { LearnTool } from "./learn";
 import { ManageSkillTool } from "./manage-skill";
@@ -183,17 +183,31 @@ export interface ToolSession {
 	customToolPaths?: ToolPathWithSource[];
 	/** Whether LSP integrations are enabled */
 	enableLsp?: boolean;
+	/** Whether this invocation may expose IRC. `false` removes it even for subagents. */
+	enableIrc?: boolean;
+	/**
+	 * Whether MCP capabilities may be forwarded to child sessions. `false`
+	 * prohibits inherited-manager and process-global MCP fallback.
+	 */
+	enableMCP?: boolean;
 	/** Whether an edit-capable tool is available in this session (controls hashline output) */
 	hasEditTool?: boolean;
 	/** Event bus for tool/extension communication */
 	eventBus?: EventBus;
-	/** Output schema for structured completion (subagents) */
+	/** Output schema for structured completion (subagents). */
 	outputSchema?: unknown;
+	/** Enforcement policy for {@link outputSchema}; defaults to legacy permissive behavior. */
+	outputSchemaMode?: StructuredSubagentSchemaMode;
 	/** Whether to include the yield tool by default */
 	requireYieldTool?: boolean;
 	/** Session starts with a prewalk hand-off armed. Keeps `todo` in yield-gated
 	 *  (subagent) registries: the prewalk plan nudge + todo gate need it. */
 	prewalkArmed?: boolean;
+	/**
+	 * Constrain the active set to the caller's explicit built-in names (plus a
+	 * required yield tool). Suppresses automatic tool-set expansion.
+	 */
+	restrictToolNames?: boolean;
 	/** Task recursion depth (0 = top-level, 1 = first child, etc.) */
 	taskDepth?: number;
 	/** Get shared eval executor session ID. Subagents inherit this to share JS/Python/Ruby/Julia state. */
@@ -403,13 +417,18 @@ export type ToolName = BuiltinToolName;
  * Create tools from BUILTIN_TOOLS registry.
  */
 export async function createTools(session: ToolSession, toolNames?: string[]): Promise<Tool[]> {
+	const restrictToolNames = session.restrictToolNames === true;
 	const includeYield = session.requireYieldTool === true;
 	const enableLsp = session.enableLsp ?? true;
-	let requestedTools = toolNames && toolNames.length > 0 ? normalizeToolNames(toolNames) : undefined;
+	const requestedTools = restrictToolNames
+		? normalizeToolNames(toolNames ?? [])
+		: toolNames && toolNames.length > 0
+			? normalizeToolNames(toolNames)
+			: undefined;
 	const goalEnabled = session.settings.get("goal.enabled");
-	const goalModeActive = goalEnabled && session.getGoalModeState?.()?.enabled === true;
+	const goalModeActive = !restrictToolNames && goalEnabled && session.getGoalModeState?.()?.enabled === true;
 	if (goalModeActive && requestedTools && !requestedTools.includes("goal")) {
-		requestedTools = [...requestedTools, "goal"];
+		requestedTools.push("goal");
 	}
 	const backends = resolveEvalBackends(session);
 	const allowPython = backends.python;
@@ -466,8 +485,9 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	// unreachable, in which case eval dispatches exclusively to the others.
 	const allowEval = effectivePythonAllowed || allowJs || effectiveRubyAllowed || effectiveJuliaAllowed;
 
-	// Auto-include AST counterparts when their text-based sibling is present
-	if (requestedTools) {
+	// Auto-include AST counterparts when their text-based sibling is present.
+	// Restricted callers own the active list and must not have it widened.
+	if (requestedTools && !restrictToolNames) {
 		if (
 			requestedTools.includes("grep") &&
 			!requestedTools.includes("ast_grep") &&
@@ -522,6 +542,9 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "ask") return session.settings.get("ask.enabled");
 		if (name === "browser") return session.settings.get("browser.enabled");
 		if (name === "checkpoint" || name === "rewind") return session.settings.get("checkpoint.enabled");
+		if (name === "hub") {
+			return !restrictToolNames && session.enableIrc !== false && isIrcEnabled(session.settings, session.taskDepth ?? 0);
+		}
 		if (name === "retain" || name === "recall" || name === "reflect") {
 			return ["hindsight", "mnemopi"].includes(session.settings.get("memory.backend") ?? "");
 		}
@@ -569,10 +592,11 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	);
 	let tools = baseResults.filter((r): r is Tool => r !== null);
 
-	// Always create the xd:// registry when enabled so SDK assembly can mount
-	// discoverable custom/MCP tools later. Explicitly requested built-ins keep
-	// their top-level presentation; default tool sets mount discoverable built-ins.
-	const xdevEnabled = session.settings.get("tools.xdev");
+	// Ordinary sessions use xd:// for discoverable built-ins, custom tools, and
+	// MCP tools. Structured children must expose only their host-provided names,
+	// so never allocate a registry that later SDK assembly could populate.
+	// Explicitly requested built-ins retain their top-level presentation.
+	const xdevEnabled = !restrictToolNames && session.settings.get("tools.xdev");
 	const mountBuiltinTools = requestedTools === undefined;
 	if (xdevEnabled) {
 		const mounted: Tool[] = [];
@@ -595,13 +619,17 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	// (e.g. ast_edit) also resolve through a `write` to xd://resolve/reject. Retain
 	// both whenever any device is mounted or a deferrable tool can stage one.
 	const xdevMounted = (session.xdevRegistry?.size ?? 0) > 0;
-	if ((tools.some(tool => tool.deferrable === true) || xdevMounted) && !tools.some(tool => tool.name === "write")) {
+	if (
+		!restrictToolNames &&
+		(tools.some(tool => tool.deferrable === true) || xdevMounted) &&
+		!tools.some(tool => tool.name === "write")
+	) {
 		const writeTool = await logger.time("createTools:write", BUILTIN_TOOLS.write, session);
 		if (writeTool) {
 			tools.push(wrapToolWithMetaNotice(writeTool));
 		}
 	}
-	if (xdevMounted && !tools.some(tool => tool.name === "read")) {
+	if (!restrictToolNames && xdevMounted && !tools.some(tool => tool.name === "read")) {
 		const readTool = await logger.time("createTools:read", BUILTIN_TOOLS.read, session);
 		if (readTool) {
 			tools.push(wrapToolWithMetaNotice(readTool));
