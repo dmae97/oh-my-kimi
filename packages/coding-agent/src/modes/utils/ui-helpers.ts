@@ -45,7 +45,7 @@ import {
 	SKILL_PROMPT_MESSAGE_TYPE,
 	type SkillPromptDetails,
 } from "../../session/messages";
-import type { SessionContext } from "../../session/session-context";
+import type { SessionContext, StrippedToolCallsMarker } from "../../session/session-context";
 import { replaceTabs } from "../../tools/render-utils";
 import { buildSkillCommandPrompt, invokeSkillCommandFromText, isKnownSkillCommand } from "../skill-command";
 import { createAssistantMessageComponent } from "./interactive-context-helpers";
@@ -464,6 +464,26 @@ export class UiHelpers {
 					} else {
 						this.ctx.pendingTools.set(content.id, component);
 					}
+				}
+				// Dangling toolCalls (no result on the resolved path — failed or
+				// retried turns, results on sibling branches) were stripped by the
+				// context build; surface a placeholder so the turn's activity is
+				// visibly elided instead of silently vanishing (the "bare thinking
+				// lines" transcript trap).
+				const strippedToolCalls = (message as AgentMessage & StrippedToolCallsMarker).strippedToolCalls ?? 0;
+				if (strippedToolCalls > 0) {
+					this.ctx.chatContainer.addChild(
+						new Text(
+							theme.fg(
+								"dim",
+								theme.italic(
+									`${strippedToolCalls} tool call${strippedToolCalls === 1 ? "" : "s"} elided — no result on this branch`,
+								),
+							),
+							1,
+							0,
+						),
+					);
 				}
 				pendingUsage =
 					this.ctx.settings.get("display.showTokenUsage") && assistantUsageIsBilled(message.usage)
