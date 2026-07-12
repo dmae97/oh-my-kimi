@@ -12510,53 +12510,85 @@ export class AgentSession {
 	}
 
 	/**
-	 * Last-resort reducer when {@link #runAutoCompaction} would otherwise dead-end.
-	 * The summarizer cut at the only available turn boundary, but the kept tail is
-	 * still over the recovery band because a single recent turn (a large
-	 * tool-result, a heavy fenced/XML block) is itself bigger than the band and
-	 * `findCutPoint` cannot cut inside one message. `shake("elide")` reaches INSIDE
-	 * that tail — it offloads heavy tool-result / block content to one
-	 * `artifact://` blob and leaves a recoverable placeholder — so residual context
-	 * genuinely drops instead of the guard pausing maintenance and looping the
-	 * warning. Without it the guard would pause/warn here; with it the caller
-	 * re-tests its progress predicate after the elide pass and only falls through
-	 * to the warning when residual stays over.
+	 * Last-resort tiered reducer when {@link #runAutoCompaction} would otherwise
+	 * dead-end. The summarizer cut at the only available turn boundary, but the
+	 * kept tail is still over the recovery band because a single recent turn (a
+	 * large tool-result, a heavy fenced/XML block, attached images) is itself
+	 * bigger than the band and `findCutPoint` cannot cut inside one message.
 	 *
-	 * Image-only tails are out of scope: `collectShakeRegions` skips image-only
-	 * tool results and user-message images aren't counted by the local estimate
-	 * that gates the dead-end, so those still surface the warning (remedy:
-	 * `/shake images`).
+	 * Tier 1 — `shake("elide")` reaches INSIDE that tail: heavy tool-result /
+	 * block content is offloaded to one `artifact://` blob behind a recoverable
+	 * placeholder. Skipped when this pass already ran a shake (`skipElide`).
+	 * Tier 2 — `dropImages()`: the manual `/shake images` remedy, automated.
+	 * Image blocks are stripped from the branch; unlike elided text they are NOT
+	 * artifact-recoverable, so this tier only runs once elide has failed the
+	 * progress re-test.
 	 *
-	 * Returns the elide {@link ShakeResult} when something was offloaded (so the
-	 * caller can re-test and report), or `undefined` when nothing was eligible or
-	 * the pass aborted/failed.
+	 * Each tier that rewrote history re-anchors the in-flight context snapshot,
+	 * then the caller's progress predicate is re-tested; the first tier that
+	 * restores progress emits one info notice describing everything freed and
+	 * stops. Returns whether progress was restored — `false` falls through to
+	 * the dead-end warning.
 	 */
-	async #tryShakeRescueForDeadEnd(signal: AbortSignal): Promise<ShakeResult | undefined> {
-		if (signal.aborted) return undefined;
+	async #rescueCompactionDeadEnd(
+		signal: AbortSignal,
+		options: { skipElide: boolean; hasProgress: () => boolean },
+	): Promise<boolean> {
+		if (signal.aborted) return false;
+		let elided = 0;
+		let elidedTokens = 0;
+		let elideSink = "placeholders";
+		if (!options.skipElide) {
+			try {
+				const result = await this.shake("elide", { signal });
+				elided = result.toolResultsDropped + result.blocksDropped;
+				elidedTokens = result.tokensFreed;
+				if (result.artifactId) elideSink = "an artifact";
+				if (elided > 0) {
+					// The elide pass rewrote history; re-anchor the in-flight snapshot
+					// so the caller's headroom/retry-fit re-test measures the shaken
+					// context.
+					this.#rebasePendingContextSnapshotAfterCompaction();
+				}
+			} catch (error) {
+				logger.warn("Dead-end shake rescue failed", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+			if (elided > 0 && options.hasProgress()) {
+				this.emitNotice(
+					"info",
+					`Compaction dead-end recovery: ${this.#describeElideRescue(elided, elidedTokens, elideSink)} so maintenance could make progress.`,
+					"compaction",
+				);
+				return true;
+			}
+		}
+		if (signal.aborted) return false;
+		let imagesDropped = 0;
 		try {
-			const result = await this.shake("elide", { signal });
-			if (result.toolResultsDropped + result.blocksDropped === 0) return undefined;
-			// The elide pass rewrote history; re-anchor the in-flight snapshot so
-			// the caller's headroom/retry-fit re-test measures the shaken context.
-			this.#rebasePendingContextSnapshotAfterCompaction();
-			return result;
+			imagesDropped = (await this.dropImages()).removed;
+			if (imagesDropped > 0) this.#rebasePendingContextSnapshotAfterCompaction();
 		} catch (error) {
-			logger.warn("Dead-end shake rescue failed", {
+			logger.warn("Dead-end image-drop rescue failed", {
 				error: error instanceof Error ? error.message : String(error),
 			});
-			return undefined;
 		}
+		if (imagesDropped > 0 && options.hasProgress()) {
+			const elidedPart = elided > 0 ? `${this.#describeElideRescue(elided, elidedTokens, elideSink)} and ` : "";
+			this.emitNotice(
+				"info",
+				`Compaction dead-end recovery: ${elidedPart}dropped ${imagesDropped} attached image${imagesDropped === 1 ? "" : "s"} so maintenance could make progress.`,
+				"compaction",
+			);
+			return true;
+		}
+		return false;
 	}
 
-	/** Notice describing a successful dead-end elide rescue. */
-	#emitShakeRescueNotice(result: ShakeResult): void {
-		const elided = result.toolResultsDropped + result.blocksDropped;
-		const sink = result.artifactId ? "an artifact" : "placeholders";
-		this.emitNotice(
-			"info",
-			`Compaction dead-end recovery: elided ${elided} heavy block${elided === 1 ? "" : "s"} (~${result.tokensFreed.toLocaleString()} tokens) to ${sink} so maintenance could make progress.`,
-			"compaction",
-		);
+	/** Notice fragment for a dead-end elide tier: what was freed and where it went. */
+	#describeElideRescue(elided: number, tokensFreed: number, sink: string): string {
+		return `elided ${elided} heavy block${elided === 1 ? "" : "s"} (~${tokensFreed.toLocaleString()} tokens) to ${sink}`;
 	}
 
 	/**
@@ -13098,23 +13130,28 @@ export class AgentSession {
 				details,
 				preserveData,
 			};
-			await this.#emitSessionEvent({ type: "auto_compaction_end", action, result, aborted: false, willRetry });
-
-			// Post-maintenance progress guard. Snapcompact can project over budget and
-			// fall back to a context-full summary; the summarizer keeps `keepRecentTokens`
-			// of recent history verbatim and findCutPoint can only cut at turn
-			// boundaries (never tool results), so a single oversized recent turn (e.g. a
-			// huge tool result) leaves the rewritten context still above threshold.
-			// Scheduling the continuation regardless means the next agent_end re-enters
-			// #checkCompaction over the same oversized tail and re-fires forever. The
-			// retry and the threshold auto-continue use different progress tests (a
-			// recoverable overflow only has to fit; the auto-continue thrash needs the
-			// stricter recovery band), so each branch evaluates its own below.
+			// Post-maintenance progress guard — evaluated BEFORE emitting
+			// auto_compaction_end so the TUI rebuild triggered by that event
+			// already reflects any rescue rewrite (elide / image-drop) and the
+			// dead-end warning stamped on the compaction entry. Snapcompact can
+			// project over budget and fall back to a context-full summary; the
+			// summarizer keeps `keepRecentTokens` of recent history verbatim and
+			// findCutPoint can only cut at turn boundaries (never tool results),
+			// so a single oversized recent turn (e.g. a huge tool result) leaves
+			// the rewritten context still above threshold. Scheduling the
+			// continuation regardless means the next agent_end re-enters
+			// #checkCompaction over the same oversized tail and re-fires forever.
+			// The retry and the threshold auto-continue use different progress
+			// tests (a recoverable overflow only has to fit; the auto-continue
+			// thrash needs the stricter recovery band), so each branch evaluates
+			// its own below.
 			let continuationScheduled = false;
 			// A non-idle pass that wanted to continue (retry or auto-continue) but freed
 			// too little for that path to proceed is a dead-end: warn once so the user
 			// understands why maintenance paused instead of silently looping.
 			let noProgressDeadEnd = false;
+			let retryFits = false;
+			let hasHeadroom = false;
 
 			if (willRetry) {
 				const messages = this.agent.state.messages;
@@ -13139,18 +13176,14 @@ export class AgentSession {
 				// won't include) is excluded. Reusing the auto-continue recovery band
 				// here turned recoverable overflows into manual dead-ends (#3412 review),
 				// so use the looser fit budget.
-				let retryFits = this.#compactionCreatedRetryFit();
-				if (!retryFits && !fallbackFromShake) {
-					const rescue = await this.#tryShakeRescueForDeadEnd(autoCompactionSignal);
-					if (rescue && this.#compactionCreatedRetryFit()) {
-						retryFits = true;
-						this.#emitShakeRescueNotice(rescue);
-					}
+				retryFits = this.#compactionCreatedRetryFit();
+				if (!retryFits) {
+					retryFits = await this.#rescueCompactionDeadEnd(autoCompactionSignal, {
+						skipElide: fallbackFromShake,
+						hasProgress: () => this.#compactionCreatedRetryFit(),
+					});
 				}
-				if (retryFits) {
-					this.#scheduleAgentContinue({ delayMs: 100, generation });
-					continuationScheduled = true;
-				} else {
+				if (!retryFits) {
 					noProgressDeadEnd = true;
 				}
 			} else if (reason !== "idle") {
@@ -13161,22 +13194,35 @@ export class AgentSession {
 				// when auto-continue is disabled, a no-headroom threshold pass must still
 				// block later automatic continuations (todo reminders/session_stop hooks)
 				// from re-entering the same oversized context.
-				let hasHeadroom = this.#compactionCreatedHeadroom();
-				if (!hasHeadroom && !fallbackFromShake) {
-					const rescue = await this.#tryShakeRescueForDeadEnd(autoCompactionSignal);
-					if (rescue && this.#compactionCreatedHeadroom()) {
-						hasHeadroom = true;
-						this.#emitShakeRescueNotice(rescue);
-					}
+				hasHeadroom = this.#compactionCreatedHeadroom();
+				if (!hasHeadroom) {
+					hasHeadroom = await this.#rescueCompactionDeadEnd(autoCompactionSignal, {
+						skipElide: fallbackFromShake,
+						hasProgress: () => this.#compactionCreatedHeadroom(),
+					});
 				}
-				if (hasHeadroom) {
-					if (shouldAutoContinue) {
-						this.#scheduleAutoContinuePrompt(generation);
-						continuationScheduled = true;
-					}
-				} else {
+				if (!hasHeadroom) {
 					noProgressDeadEnd = true;
 				}
+			}
+
+			const deadEndWarning = noProgressDeadEnd ? compactionDeadEndWarning("clear large tool output") : undefined;
+			if (deadEndWarning && savedCompactionEntry) {
+				// Stamp the divider: the compaction bar badges the dead-end and
+				// carries the full warning in its ctrl+o detail, so the pause
+				// stays explained even after the notice row scrolls away.
+				savedCompactionEntry.warning = deadEndWarning;
+				await this.sessionManager.rewriteEntries();
+			}
+
+			await this.#emitSessionEvent({ type: "auto_compaction_end", action, result, aborted: false, willRetry });
+
+			if (retryFits) {
+				this.#scheduleAgentContinue({ delayMs: 100, generation });
+				continuationScheduled = true;
+			} else if (hasHeadroom && shouldAutoContinue) {
+				this.#scheduleAutoContinuePrompt(generation);
+				continuationScheduled = true;
 			}
 			if (!continuationScheduled && !suppressContinuation && this.agent.hasQueuedMessages()) {
 				// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
@@ -13190,12 +13236,8 @@ export class AgentSession {
 				continuationScheduled = true;
 			}
 
-			if (noProgressDeadEnd) {
-				this.emitNotice(
-					"warning",
-					compactionDeadEndWarning("clear large tool output, run `/shake images` to drop attached images,"),
-					"compaction",
-				);
+			if (deadEndWarning) {
+				this.emitNotice("warning", deadEndWarning, "compaction");
 			}
 			if (continuationScheduled) return COMPACTION_CHECK_CONTINUATION;
 			return noProgressDeadEnd ? COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION : COMPACTION_CHECK_NONE;

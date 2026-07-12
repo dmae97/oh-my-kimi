@@ -87,7 +87,12 @@ export class CompactionSummaryMessageComponent implements Component {
 
 	constructor(private readonly message: CompactionSummaryMessage) {
 		this.#divider = new SummaryDividerComponent({
-			label: () => `${theme.icon.camera} compacted`,
+			// A dead-end warning stamped by the progress guard badges the bar;
+			// the full text lives in the ctrl+o detail block below.
+			label: () =>
+				this.message.warning
+					? `${theme.icon.camera} compacted ${theme.fg("warning", theme.icon.warning)}`
+					: `${theme.icon.camera} compacted`,
 			detailMarkdown: () => this.#detailMarkdown(),
 		});
 	}
@@ -109,7 +114,8 @@ export class CompactionSummaryMessageComponent implements Component {
 		const frameCount = this.message.images?.length ?? 0;
 		const frameNote =
 			frameCount > 0 ? `\n\n_${frameCount} snapcompact frame${frameCount === 1 ? "" : "s"} attached_` : "";
-		return `**Compacted from ${tokenStr} tokens**\n\n${this.message.summary}${frameNote}`;
+		const warningNote = this.message.warning ? `\n\n${theme.icon.warning} **Warning:** ${this.message.warning}` : "";
+		return `**Compacted from ${tokenStr} tokens**${warningNote}\n\n${this.message.summary}${frameNote}`;
 	}
 }
 

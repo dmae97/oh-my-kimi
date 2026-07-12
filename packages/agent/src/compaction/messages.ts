@@ -56,6 +56,8 @@ export interface CompactionSummaryMessage {
 	blocks?: (TextContent | ImageContent)[];
 	/** Snapcompact image blocks, kept for display counts / legacy consumers. */
 	images?: ImageContent[];
+	/** Post-pass dead-end warning attached to this compaction (progress guard). */
+	warning?: string;
 	timestamp: number;
 }
 
@@ -105,6 +107,7 @@ export function createCompactionSummaryMessage(
 	providerPayload?: ProviderPayload,
 	images?: ImageContent[],
 	blocks?: (TextContent | ImageContent)[],
+	warning?: string,
 ): CompactionSummaryMessage {
 	const imageBlocks =
 		blocks?.filter((block): block is ImageContent => block.type === "image") ??
@@ -117,6 +120,7 @@ export function createCompactionSummaryMessage(
 		providerPayload,
 		blocks: blocks && blocks.length > 0 ? blocks : undefined,
 		images: imageBlocks && imageBlocks.length > 0 ? imageBlocks : undefined,
+		warning,
 		timestamp: new Date(timestamp).getTime(),
 	};
 }
