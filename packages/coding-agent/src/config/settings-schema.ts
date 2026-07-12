@@ -1239,7 +1239,7 @@ export const SETTINGS_SCHEMA = {
 	textVerbosity: {
 		type: "enum",
 		values: ["low", "medium", "high"] as const,
-		default: "high",
+		default: "medium",
 		ui: {
 			tab: "model",
 			group: "Sampling",
@@ -1247,8 +1247,8 @@ export const SETTINGS_SCHEMA = {
 			description: "OpenAI Responses and Codex response verbosity (low, medium, or high)",
 			options: [
 				{ value: "low", label: "Low", description: "Prefer concise responses" },
-				{ value: "medium", label: "Medium", description: "Balance brevity and detail" },
-				{ value: "high", label: "High", description: "Prefer detailed responses (default)" },
+				{ value: "medium", label: "Medium", description: "Balance brevity and detail (default)" },
+				{ value: "high", label: "High", description: "Prefer detailed responses" },
 			],
 		},
 	},
