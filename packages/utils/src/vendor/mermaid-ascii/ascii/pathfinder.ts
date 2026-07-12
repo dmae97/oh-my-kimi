@@ -108,21 +108,75 @@ const MOVE_DIRS: GridCoord[] = [
   { x: 0, y: -1 },
 ]
 
-/** Check if a grid cell is unoccupied and has non-negative coordinates. */
-function isFreeInGrid(grid: Map<string, AsciiNode>, c: GridCoord): boolean {
-  if (c.x < 0 || c.y < 0) return false
+interface SearchBounds {
+  minX: number
+  maxX: number
+  minY: number
+  maxY: number
+  expansionLimit: number
+}
+
+const MIN_ROUTING_MARGIN = 8
+const MIN_EXPANSION_BUDGET = 256
+const MAX_EXPANSION_BUDGET = 50_000
+
+function searchBoundsFor(grid: Map<string, AsciiNode>, from: GridCoord, to: GridCoord): SearchBounds {
+  let minX = Math.min(from.x, to.x)
+  let maxX = Math.max(from.x, to.x)
+  let minY = Math.min(from.y, to.y)
+  let maxY = Math.max(from.y, to.y)
+
+  for (const key of grid.keys()) {
+    const comma = key.indexOf(',')
+    if (comma === -1) continue
+
+    const x = Number(key.slice(0, comma))
+    const y = Number(key.slice(comma + 1))
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue
+
+    minX = Math.min(minX, x)
+    maxX = Math.max(maxX, x)
+    minY = Math.min(minY, y)
+    maxY = Math.max(maxY, y)
+  }
+
+  const width = maxX - minX + 1
+  const height = maxY - minY + 1
+  const margin = Math.max(MIN_ROUTING_MARGIN, Math.ceil(Math.max(width, height) / 2))
+  const boundedMinX = Math.max(0, minX - margin)
+  const boundedMaxX = maxX + margin
+  const boundedMinY = Math.max(0, minY - margin)
+  const boundedMaxY = maxY + margin
+  const area = (boundedMaxX - boundedMinX + 1) * (boundedMaxY - boundedMinY + 1)
+
+  return {
+    minX: boundedMinX,
+    maxX: boundedMaxX,
+    minY: boundedMinY,
+    maxY: boundedMaxY,
+    expansionLimit: Math.min(MAX_EXPANSION_BUDGET, Math.max(MIN_EXPANSION_BUDGET, area * 4)),
+  }
+}
+
+/** Check if a grid cell is unoccupied and inside the bounded routing area. */
+function isFreeInGrid(grid: Map<string, AsciiNode>, c: GridCoord, bounds: SearchBounds): boolean {
+  if (c.x < bounds.minX || c.x > bounds.maxX || c.y < bounds.minY || c.y > bounds.maxY) {
+    return false
+  }
+
   return !grid.has(gridKey(c))
 }
 
 /**
  * Find a path from `from` to `to` on the grid using A*.
- * Returns the path as an array of GridCoords, or null if no path exists.
+ * Returns the path as an array of GridCoords, or null if no bounded path exists.
  */
 export function getPath(
   grid: Map<string, AsciiNode>,
   from: GridCoord,
   to: GridCoord,
 ): GridCoord[] | null {
+  const bounds = searchBoundsFor(grid, from, to)
   const pq = new MinHeap()
   pq.push({ coord: from, priority: 0 })
 
@@ -132,7 +186,13 @@ export function getPath(
   const cameFrom = new Map<string, GridCoord | null>()
   cameFrom.set(gridKey(from), null)
 
+  let expansions = 0
+
   while (pq.length > 0) {
+    if (expansions++ >= bounds.expansionLimit) {
+      return null
+    }
+
     const current = pq.pop()!.coord
 
     if (gridCoordEquals(current, to)) {
@@ -150,9 +210,11 @@ export function getPath(
 
     for (const dir of MOVE_DIRS) {
       const next: GridCoord = { x: current.x + dir.x, y: current.y + dir.y }
+      const insideBounds = next.x >= bounds.minX && next.x <= bounds.maxX
+        && next.y >= bounds.minY && next.y <= bounds.maxY
 
       // Allow moving to the destination even if it's occupied (it's a node boundary)
-      if (!isFreeInGrid(grid, next) && !gridCoordEquals(next, to)) {
+      if (!insideBounds || (!isFreeInGrid(grid, next, bounds) && !gridCoordEquals(next, to))) {
         continue
       }
 

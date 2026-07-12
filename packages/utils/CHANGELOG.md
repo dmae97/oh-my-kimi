@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Mermaid ASCII routing to stop unbounded pathfinder searches when an edge attachment point is unreachable. ([#5293](https://github.com/can1357/oh-my-pi/issues/5293))
+
 ## [16.4.6] - 2026-07-12
 
 ### Added
