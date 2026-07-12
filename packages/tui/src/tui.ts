@@ -2239,12 +2239,12 @@ export class TUI extends Container {
 	}
 
 	#handleInput(data: string): void {
-		// Raw-mode Ctrl+C/Esc arrive as stdin data, not process signals. If the
-		// first key in a double-key gesture schedules an immediate slow repaint,
-		// the queued second key can sit behind that repaint long enough for the
-		// app-level double-press window to expire. Give the input queue one frame
-		// before ordinary paints; forced repaints still bypass this path.
-		this.#inputRenderGraceUntilMs = this.#renderScheduler.now() + TUI.#INPUT_RENDER_GRACE_MS;
+		// Ctrl+C/Esc use app-level double-press windows. Give those gestures one
+		// frame to drain queued input before an ordinary repaint; delaying every
+		// key would make idle navigation pay a full frame of latency.
+		if (matchesKey(data, "ctrl+c") || matchesKey(data, "escape")) {
+			this.#inputRenderGraceUntilMs = this.#renderScheduler.now() + TUI.#INPUT_RENDER_GRACE_MS;
+		}
 		if (this.#inputListeners.size > 0) {
 			let current = data;
 			for (const listener of this.#inputListeners) {

@@ -4,7 +4,14 @@
 
 ### Added
 
+- Enabled Home and End keyboard navigation in the model browser
 - Added a `c` hotkey in the plan-review overlay that copies the current reviewed plan markdown to the system clipboard, including in-overlay edits.
+
+### Changed
+
+- Streamlined list view styling by removing inline model role chips from row entries
+- Clarified active selection state by only displaying cursor and highlight bands in focused panes
+- Removed the redundant "login" label from inactive (locked) provider entries in the Model Hub sidebar
 
 ## [16.4.6] - 2026-07-12
 

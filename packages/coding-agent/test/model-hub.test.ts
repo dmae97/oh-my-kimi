@@ -151,7 +151,7 @@ describe("ModelHub", () => {
 	});
 
 	describe("role chips and roles view", () => {
-		test("shows configured role chips with thinking glyphs, including custom roles", () => {
+		test("tags the selected model's roles in the detail line, including custom roles", () => {
 			const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 			if (!model) throw new Error("Expected bundled model anthropic/claude-sonnet-4-5");
 			const settings = Settings.isolated({
@@ -173,7 +173,7 @@ describe("ModelHub", () => {
 			expect(rendered).toContain("●smol");
 		});
 
-		test("renders hollow chips for auto-selected role fallbacks", () => {
+		test("list rows carry no role chips; only the selected model's detail line is tagged", () => {
 			const settings = Settings.isolated({});
 			const haiku = makeModel("test", "claude-haiku-4.5");
 			const codex = makeModel("test", "gpt-5.1-codex");
@@ -181,10 +181,11 @@ describe("ModelHub", () => {
 			installTestTheme();
 
 			const rendered = normalize(hub.render(220));
-			// No roles configured: auto-selection still tags the small/reasoning
-			// candidates (smol → haiku, slow → codex), rendered hollow.
-			expect(rendered).toContain("○smol");
-			expect(rendered).toContain("○slow");
+			// Auto-selection tags smol → haiku and slow → codex, but only the
+			// selected model's chips render (in the detail line). With row
+			// chips both would appear at once.
+			const hollow = ["○smol", "○slow"].filter(chip => rendered.includes(chip));
+			expect(hollow).toHaveLength(1);
 			expect(rendered).not.toContain("●smol");
 		});
 

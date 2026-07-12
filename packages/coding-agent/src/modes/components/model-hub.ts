@@ -461,7 +461,7 @@ export class ModelHubComponent implements Component {
 			label: providerId,
 			providerId,
 			locked: isLocked,
-			annotation: isLocked ? "login" : String(availableCounts.get(providerId) ?? 0),
+			annotation: isLocked ? undefined : String(availableCounts.get(providerId) ?? 0),
 			oauth: oauthIds.has(providerId),
 			catalogCount: catalogCounts.get(providerId) ?? 0,
 		});
@@ -1468,6 +1468,10 @@ export class ModelHubComponent implements Component {
 				this.#roleHover = null;
 				if (overBody && this.#isBrowserView(entry)) {
 					this.#browser.routeMouse(event, bodyLine);
+				} else {
+					// Pointer left the browser pane: without this, the last
+					// hovered row keeps its band while the sidebar hovers too.
+					this.#browser.clearHover();
 				}
 			}
 			return true;
@@ -1578,11 +1582,10 @@ export class ModelHubComponent implements Component {
 			// While searching, entries the hop skips gray out: locked and
 			// zero-match providers, an empty Recent, and the Roles view.
 			const muted = entry.locked || matchCount === 0 || (searching && entry.kind === "roles");
-			const cursor = active
-				? this.#focus === "scope"
-					? theme.fg("accent", theme.nav.cursor)
-					: theme.fg("dim", theme.nav.cursor)
-				: " ";
+			// The sidebar's active entry is state, not a cursor: accent label
+			// plus a cursor glyph while the sidebar owns the arrows. The band
+			// stays in the body pane so the two never look alike.
+			const cursor = active && this.#focus === "scope" ? theme.fg("accent", theme.nav.cursor) : " ";
 
 			let icon: string;
 			if (entry.kind === "recent") {
@@ -1597,7 +1600,7 @@ export class ModelHubComponent implements Component {
 			const labelStyled = muted
 				? theme.fg("dim", entry.label)
 				: active
-					? theme.fg("accent", entry.label)
+					? theme.bold(theme.fg("accent", entry.label))
 					: entry.label;
 
 			const refreshing = entry.providerId ? this.#refreshingProviders.has(entry.providerId) : false;
@@ -1614,8 +1617,10 @@ export class ModelHubComponent implements Component {
 				line = `${left}${" ".repeat(width - leftWidth - annWidth)}${annotationStyled}`;
 			} else {
 				line = truncateToWidth(left, width);
+				const lineWidth = visibleWidth(line);
+				if (lineWidth < width) line += " ".repeat(width - lineWidth);
 			}
-			if (hovered && !active) {
+			if (hovered) {
 				line = theme.bg("selectedBg", line);
 			}
 			lines.push(line);
@@ -1675,6 +1680,17 @@ export class ModelHubComponent implements Component {
 		return truncateToWidth(theme.fg("muted", ` ${text}`), width);
 	}
 
+	/** Clamp a roles row to `width`; the bg band is reserved for mouse hover. */
+	#finishRolesRow(line: string, width: number, hovered: boolean): string {
+		let out = truncateToWidth(line, width);
+		if (hovered) {
+			const w = visibleWidth(out);
+			if (w < width) out += " ".repeat(width - w);
+			return theme.bg("selectedBg", out);
+		}
+		return out;
+	}
+
 	#renderRolesView(width: number, rows: number): string[] {
 		const lines: string[] = [];
 		lines.push("");
@@ -1691,12 +1707,14 @@ export class ModelHubComponent implements Component {
 		}
 
 		const cycleOrder = this.#cycleOrder();
+		const listFocused = this.#focus === "list";
 		for (let i = 0; i < this.#rolesRows.length && lines.length < rows - 2; i++) {
 			const rowDef = this.#rolesRows[i];
 			if (!rowDef) continue;
 			const selected = i === this.#roleIndex;
 			const hovered = i === this.#roleHover;
-			const cursor = selected ? theme.fg("accent", theme.nav.cursor) : " ";
+			// The unfocused pane draws no cursor; accent text still marks the row.
+			const cursor = selected && listFocused ? theme.fg("accent", theme.nav.cursor) : " ";
 
 			if (rowDef.kind === "separator") {
 				lines.push(`   ${theme.fg("border", "─".repeat(Math.max(1, width - 6)))}`);
@@ -1706,10 +1724,7 @@ export class ModelHubComponent implements Component {
 			if (rowDef.kind === "newRole" || rowDef.kind === "newFallback") {
 				const label = rowDef.kind === "newRole" ? "+ New role…" : "+ New fallback…";
 				let line = ` ${cursor} ${theme.fg(selected ? "accent" : "dim", label)}`;
-				line = truncateToWidth(line, width);
-				if (hovered && !selected) {
-					line = theme.bg("selectedBg", line);
-				}
+				line = this.#finishRolesRow(line, width, hovered);
 				lines.push(line);
 				continue;
 			}
@@ -1720,10 +1735,7 @@ export class ModelHubComponent implements Component {
 				const tail = key.slice(slash + 1);
 				const keyStyled = theme.fg("dim", key.slice(0, slash + 1)) + (selected ? theme.fg("accent", tail) : tail);
 				let line = ` ${cursor} ${theme.fg("dim", theme.status.shadowed)} ${keyStyled}`;
-				line = truncateToWidth(line, width);
-				if (hovered && !selected) {
-					line = theme.bg("selectedBg", line);
-				}
+				line = this.#finishRolesRow(line, width, hovered);
 				lines.push(line);
 				continue;
 			}
@@ -1732,10 +1744,7 @@ export class ModelHubComponent implements Component {
 				const branch = theme.fg("dim", `${"".padEnd(tagWidth + 3)}↳`);
 				const selector = selected ? theme.fg("accent", rowDef.selector) : theme.fg("muted", rowDef.selector);
 				let line = ` ${cursor} ${branch} ${selector}`;
-				line = truncateToWidth(line, width);
-				if (hovered && !selected) {
-					line = theme.bg("selectedBg", line);
-				}
+				line = this.#finishRolesRow(line, width, hovered);
 				lines.push(line);
 				continue;
 			}
@@ -1778,12 +1787,8 @@ export class ModelHubComponent implements Component {
 			const lineWidth = visibleWidth(line);
 			if (rightWidth > 0 && lineWidth + rightWidth + 2 <= width) {
 				line = `${line}${" ".repeat(width - lineWidth - rightWidth - 1)}${right}`;
-			} else {
-				line = truncateToWidth(line, width);
 			}
-			if (hovered && !selected) {
-				line = theme.bg("selectedBg", line);
-			}
+			line = this.#finishRolesRow(line, width, hovered);
 			lines.push(line);
 		}
 
@@ -1981,6 +1986,7 @@ export class ModelHubComponent implements Component {
 			bodyLines.push(...this.#renderLockedView(entry, bodyWidth, contentRows - 1));
 		} else {
 			this.#browser.setMaxVisible(contentRows - 1 - 5);
+			this.#browser.setFocused(this.#focus === "list");
 			bodyLines.push(...this.#browser.render(bodyWidth));
 		}
 

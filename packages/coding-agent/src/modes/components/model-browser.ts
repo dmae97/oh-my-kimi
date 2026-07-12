@@ -293,6 +293,8 @@ export class ModelBrowser implements Component {
 	/** First visible list row; panned by the wheel, snapped to the selection on keyboard navigation. */
 	#windowStart = 0;
 	#windowCount = 0;
+	/** Whether the host pane owns arrow keys; drives cursor strength and the selected-row band. */
+	#focused = true;
 
 	/** Enter or click-on-selected. */
 	onActivate?: (item: ModelBrowserItem) => void;
@@ -344,6 +346,10 @@ export class ModelBrowser implements Component {
 
 	setShowProvider(show: boolean): void {
 		this.#showProvider = show;
+	}
+	/** Focused: accent cursor + selected-row background band. Unfocused: dim cursor, no band. */
+	setFocused(focused: boolean): void {
+		this.#focused = focused;
 	}
 
 	/** Total rendered height for the current `maxVisible` (host layout budgeting). */
@@ -416,18 +422,27 @@ export class ModelBrowser implements Component {
 		this.#windowStart = this.#clampWindowStart(this.#windowStart);
 	}
 
-	moveSelection(delta: number): void {
+	/**
+	 * Move the selection by `delta` rows, skipping disabled rows. Single steps
+	 * wrap at the ends; `wrap: false` (page/home/end jumps) clamps instead.
+	 */
+	moveSelection(delta: number, options: { wrap?: boolean } = {}): void {
 		const count = this.#visibleItems.length;
 		if (count === 0) return;
-		let index = this.#selectedIndex;
-		for (let step = 0; step < count; step++) {
-			index = (index + delta + count) % count;
-			const item = this.#visibleItems[index];
-			if (item && !this.#isDisabled(item)) {
-				this.#setSelectedIndex(index);
-				return;
+		if (options.wrap ?? true) {
+			let index = this.#selectedIndex;
+			for (let step = 0; step < count; step++) {
+				index = (index + delta + count) % count;
+				const item = this.#visibleItems[index];
+				if (item && !this.#isDisabled(item)) {
+					this.#setSelectedIndex(index);
+					return;
+				}
 			}
+			return;
 		}
+		const target = Math.max(0, Math.min(this.#selectedIndex + delta, count - 1));
+		this.#setSelectedIndex(this.#coerceSelectedIndex(target));
 	}
 
 	#setSelectedIndex(index: number): void {
@@ -514,11 +529,19 @@ export class ModelBrowser implements Component {
 			return;
 		}
 		if (matchesSelectPageUp(data)) {
-			this.moveSelection(-this.#maxVisible);
+			this.moveSelection(-this.#maxVisible, { wrap: false });
 			return;
 		}
 		if (matchesSelectPageDown(data)) {
-			this.moveSelection(this.#maxVisible);
+			this.moveSelection(this.#maxVisible, { wrap: false });
+			return;
+		}
+		if (matchesKey(data, "home")) {
+			this.moveSelection(-this.#visibleItems.length, { wrap: false });
+			return;
+		}
+		if (matchesKey(data, "end")) {
+			this.moveSelection(this.#visibleItems.length, { wrap: false });
 			return;
 		}
 		if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
@@ -574,6 +597,10 @@ export class ModelBrowser implements Component {
 			this.#setSelectedIndex(index);
 		}
 	}
+	/** Drop the hover band. Hosts call this when the pointer leaves the browser pane. */
+	clearHover(): void {
+		this.#hoveredIndex = null;
+	}
 
 	/** List index under a frame-local row, or null when off-list or on a disabled row. */
 	#hoverIndexAt(line: number): number | null {
@@ -583,22 +610,6 @@ export class ModelBrowser implements Component {
 		const item = this.#visibleItems[index];
 		if (!item || this.#isDisabled(item)) return null;
 		return index;
-	}
-
-	#chipsFor(model: Model): string {
-		const parts: string[] = [];
-		const seen = new Set<string>();
-		const pushChip = (role: string) => {
-			if (seen.has(role)) return;
-			seen.add(role);
-			const assignment = this.#roles[role];
-			if (!assignment || !modelsAreEqual(assignment.model, model)) return;
-			if (getRoleInfo(role, this.#settings).hidden) return;
-			parts.push(formatRoleChip(role, assignment, this.#settings));
-		};
-		for (const role of MODEL_ROLE_IDS) pushChip(role);
-		for (const role in this.#roles) pushChip(role);
-		return parts.length > 0 ? ` ${parts.join(" ")}` : "";
 	}
 
 	/** `0.9s 118t/s` measured-perf cell for the row's meta block; empty when unmeasured or the column is off. */
@@ -627,13 +638,13 @@ export class ModelBrowser implements Component {
 			return `  ${line}  `;
 		}
 		const disabled = this.#isDisabled(item);
-		const prefix = selected ? `${theme.fg("accent", theme.nav.cursor)} ` : "  ";
+		const prefix = selected && this.#focused ? `${theme.fg("accent", theme.nav.cursor)} ` : "  ";
 		const providerPrefix = this.#showProvider ? theme.fg("dim", `${item.provider}/`) : "";
 		const name = selected ? theme.fg("accent", item.id) : item.id;
 		const overLimit = disabled
 			? ` ${theme.status.disabled} context>${formatNumber(item.model.contextWindow ?? 0).toLowerCase()}`
 			: "";
-		let left = `${prefix}${providerPrefix}${name}${this.#chipsFor(item.model)}${overLimit}`;
+		let left = `${prefix}${providerPrefix}${name}${overLimit}`;
 
 		// Perf column collapses entirely when no visible row has measurements.
 		const perfCol =
@@ -648,7 +659,9 @@ export class ModelBrowser implements Component {
 		if (disabled) {
 			line = theme.fg("dim", Bun.stripANSI(line));
 		}
-		if (hovered && !selected && !disabled) {
+		// The bg band is reserved for the mouse: it marks hover, nothing else.
+		// Keyboard selection is the cursor glyph + accent name.
+		if (hovered && !disabled) {
 			line = theme.bg("selectedBg", line);
 		}
 		return line;
