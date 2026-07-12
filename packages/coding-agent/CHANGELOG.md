@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a compact session-only model picker (Alt+P) for quick model switching without changing roles
+
 ### Changed
 
 - Updated status event log to prioritize the most recent entries in the display window

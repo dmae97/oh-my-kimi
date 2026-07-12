@@ -6,7 +6,8 @@
  * {@link ModelBrowser} body. The Roles view manages assignments directly:
  * pick a role, pick a model, adjust thinking in an inline strip, or clear the
  * role back to auto-selection. Locked providers forward to the /login flow.
- * Fully mouse-navigable (hover, wheel, click).
+ * Fully mouse-navigable (hover, wheel, click). Session-only switching lives
+ * in the compact alt+p picker ({@link ./model-picker}).
  */
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
@@ -27,15 +28,9 @@ import {
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
 import type { ModelRegistry } from "../../config/model-registry";
-import { getModelMatchPreferences, resolveModelRoleValue } from "../../config/model-resolver";
 import { getKnownRoleIds, getRoleInfo } from "../../config/model-roles";
 import type { Settings } from "../../config/settings";
-import {
-	AUTO_THINKING,
-	type ConfiguredThinkingLevel,
-	getConfiguredThinkingLevelMetadata,
-	parseConfiguredThinkingLevel,
-} from "../../thinking";
+import { AUTO_THINKING, type ConfiguredThinkingLevel, getConfiguredThinkingLevelMetadata } from "../../thinking";
 import { theme } from "../theme/theme";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../utils/keybinding-matchers";
 import {
@@ -43,14 +38,12 @@ import {
 	ModelBrowser,
 	type ModelBrowserItem,
 	type RoleAssignments,
+	resolveRoleAssignments,
 	sortModelItems,
 	thinkingLevelGlyph,
 } from "./model-browser";
 import { bottomBorder, dividerSplit, row, splitBodyWidth, splitRow, topBorderSplit } from "./overlay-box";
 import { renderSegmentTrack } from "./segment-track";
-
-/** `roles` is the full /models hub; `pick` is a one-shot session/embedded picker. */
-export type ModelHubMode = "roles" | "pick";
 
 /**
  * A row of the Roles view: a role, a model/wildcard chain-key header, one of a
@@ -89,8 +82,6 @@ export interface ModelHubCallbacks {
 	onUnassign: (role: string) => void;
 	/** Persist a `retry.fallbackChains` entry — keyed by a role, `provider/model-id`, or `provider/*`; an empty chain clears the key. */
 	onFallbackChainChange?: (role: string, chain: string[]) => void;
-	/** Pick-mode activation: session-only switch or embedded pick. */
-	onPick?: (model: Model, selector: string) => void;
 	/** Locked provider activation: forward to the /login flow. */
 	onLoginRequest?: (providerId: string) => void;
 	/** Persist a new quick-switch cycle order (the ctrl+p role cycle). */
@@ -99,14 +90,8 @@ export interface ModelHubCallbacks {
 }
 
 export interface ModelHubOptions {
-	mode?: ModelHubMode;
-	/** Session token count; in pick mode, models with smaller context windows are disabled. */
-	currentContextTokens?: number;
 	/** Preselect this provider's sidebar entry (e.g. when reopening after /login). */
 	initialProviderId?: string;
-	/** Status-row hint shown in pick mode. */
-	pickerHint?: string;
-	initialQuery?: string;
 }
 
 interface SidebarEntry {
@@ -158,8 +143,6 @@ const RECENT_LIMIT = 15;
 const SIDEBAR_MIN_WIDTH = 18;
 const SIDEBAR_MAX_WIDTH = 26;
 
-const PICK_MODE_HINT = "Session-only switch — role models stay unchanged";
-
 /**
  * Providers already auto-refreshed this process. Selecting a provider fetches
  * its live model list at most once per application lifetime (surviving hub
@@ -182,8 +165,6 @@ export class ModelHubComponent implements Component {
 	#registry: ModelRegistry;
 	#scopedModels: ReadonlyArray<ScopedModelItem>;
 	#callbacks: ModelHubCallbacks;
-	#mode: ModelHubMode;
-	#pickerHint: string;
 
 	#browser: ModelBrowser;
 	#roles: RoleAssignments = {};
@@ -250,14 +231,9 @@ export class ModelHubComponent implements Component {
 		this.#registry = registry;
 		this.#scopedModels = scopedModels;
 		this.#callbacks = callbacks;
-		this.#mode = options.mode ?? "roles";
-		this.#pickerHint = options.pickerHint ?? PICK_MODE_HINT;
 
 		this.#browser = new ModelBrowser(settings, {
-			currentContextTokens: options.currentContextTokens,
-			disableOverContext: this.#mode === "pick",
 			emptyText: () => this.#emptyStateMessage(),
-			initialQuery: options.initialQuery,
 		});
 		this.#browser.onActivate = item => this.#activateItem(item);
 		this.#browser.onCancel = () => this.#callbacks.onCancel();
@@ -273,10 +249,6 @@ export class ModelHubComponent implements Component {
 			this.#setActiveEntry(`provider:${initialProvider}`);
 		} else {
 			this.#setActiveEntry("all");
-		}
-
-		if (this.#mode === "pick") {
-			this.#focus = "list";
 		}
 
 		// Reconcile with cached discovery state in the background. A --models
@@ -314,62 +286,10 @@ export class ModelHubComponent implements Component {
 		return getKnownRoleIds(this.#settings).filter(role => !getRoleInfo(role, this.#settings).hidden);
 	}
 
-	#getResolvedRoleThinkingLevel(
-		role: string,
-		resolved: { explicitThinkingLevel: boolean; thinkingLevel?: ConfiguredThinkingLevel },
-	): ConfiguredThinkingLevel {
-		if (resolved.explicitThinkingLevel && resolved.thinkingLevel !== undefined) {
-			return resolved.thinkingLevel;
-		}
-		if (role === "default") {
-			return parseConfiguredThinkingLevel(this.#settings.get("defaultThinkingLevel")) ?? ThinkingLevel.Inherit;
-		}
-		return ThinkingLevel.Inherit;
-	}
-
 	/** Resolve every known role: configured values first, auto-selection for the rest. */
 	#reloadRoles(autoCandidates: ReadonlyArray<Model>): void {
-		const nextRoles: RoleAssignments = {};
-		const allModels = this.#scopedModels.length > 0 ? [...autoCandidates] : this.#registry.getAll();
-		const matchPreferences = getModelMatchPreferences(this.#settings);
-		const knownRoles = getKnownRoleIds(this.#settings);
-		const configuredRoles = new Set<string>();
-
-		for (const role of knownRoles) {
-			const roleValue = this.#settings.getModelRole(role);
-			if (!roleValue) continue;
-			configuredRoles.add(role);
-			const resolved = resolveModelRoleValue(roleValue, allModels, {
-				settings: this.#settings,
-				matchPreferences,
-			});
-			if (resolved.model) {
-				nextRoles[role] = {
-					model: resolved.model,
-					thinkingLevel: this.#getResolvedRoleThinkingLevel(role, resolved),
-					autoSelected: false,
-				};
-			}
-		}
-
-		if (autoCandidates.length > 0) {
-			const candidates = [...autoCandidates];
-			for (const role of knownRoles) {
-				if (configuredRoles.has(role)) continue;
-				const resolved = resolveModelRoleValue(`pi/${role}`, candidates, {
-					settings: this.#settings,
-					matchPreferences,
-				});
-				if (!resolved.model) continue;
-				nextRoles[role] = {
-					model: resolved.model,
-					thinkingLevel: this.#getResolvedRoleThinkingLevel(role, resolved),
-					autoSelected: true,
-				};
-			}
-		}
-
-		this.#roles = nextRoles;
+		const allModels = this.#scopedModels.length > 0 ? autoCandidates : this.#registry.getAll();
+		this.#roles = resolveRoleAssignments(this.#settings, allModels, autoCandidates);
 	}
 
 	/** Rebuild items, roles, and the sidebar from the registry's in-memory state. */
@@ -475,16 +395,15 @@ export class ModelHubComponent implements Component {
 
 		// Roles leads the fixed section so downward hops from Recent head into
 		// model scopes instead of being captured by the roles view.
-		const fixed: SidebarEntry[] = [];
-		if (this.#mode === "roles") {
-			fixed.push({
+		const fixed: SidebarEntry[] = [
+			{
 				id: "roles",
 				kind: "roles",
 				label: "Roles",
 				annotation: `${assignedCount}/${visibleRoles.length}`,
-			});
-		}
-		fixed.push({ id: "all", kind: "all", label: "All models", annotation: String(availableModels.length) });
+			},
+			{ id: "all", kind: "all", label: "All models", annotation: String(availableModels.length) },
+		];
 
 		this.#fixedEntries = fixed;
 		this.#unlockedProviderEntries = [...unlocked]
@@ -811,10 +730,6 @@ export class ModelHubComponent implements Component {
 	// ═══════════════════════════════════════════════════════════════════════
 
 	#activateItem(item: ModelBrowserItem): void {
-		if (this.#mode === "pick") {
-			this.#callbacks.onPick?.(item.model, item.selector);
-			return;
-		}
 		if (this.#assigning) {
 			const target = this.#assigning;
 			this.#assigning = null;
@@ -917,7 +832,7 @@ export class ModelHubComponent implements Component {
 		const strip = this.#strip;
 		this.#strip = null;
 		this.#chipRanges = [];
-		if (strip?.kind === "thinking" && strip.returnToRoles && this.#mode === "roles") {
+		if (strip?.kind === "thinking" && strip.returnToRoles) {
 			this.#setActiveEntry("roles");
 			this.#focus = "list";
 		}
@@ -1030,14 +945,12 @@ export class ModelHubComponent implements Component {
 		}
 		this.#setFallbackChain(target.role, chain);
 		this.#browser.setQuery("");
-		if (this.#mode === "roles") {
-			this.#setActiveEntry("roles");
-			this.#focus = "list";
-			const rowIndex = this.#rolesRows.findIndex(
-				row => row.kind === "fallback" && row.role === target.role && row.selector === selector,
-			);
-			if (rowIndex >= 0) this.#roleIndex = rowIndex;
-		}
+		this.#setActiveEntry("roles");
+		this.#focus = "list";
+		const rowIndex = this.#rolesRows.findIndex(
+			row => row.kind === "fallback" && row.role === target.role && row.selector === selector,
+		);
+		if (rowIndex >= 0) this.#roleIndex = rowIndex;
 	}
 
 	/** Persist `role`'s chain through the host callback and rebuild dependent state. */
@@ -1076,10 +989,8 @@ export class ModelHubComponent implements Component {
 	#cancelAssign(): void {
 		this.#assigning = null;
 		this.#browser.setQuery("");
-		if (this.#mode === "roles") {
-			this.#setActiveEntry("roles");
-			this.#focus = "list";
-		}
+		this.#setActiveEntry("roles");
+		this.#focus = "list";
 	}
 
 	// ═══════════════════════════════════════════════════════════════════════
@@ -1655,7 +1566,7 @@ export class ModelHubComponent implements Component {
 		let text: string;
 		switch (entry.kind) {
 			case "recent":
-				text = this.#mode === "pick" ? this.#pickerHint : `Recently used models${scopedSuffix}`;
+				text = `Recently used models${scopedSuffix}`;
 				break;
 			case "roles":
 				text = "Model roles — f adds a retry fallback, cleared roles fall back to auto-selection";
@@ -1670,7 +1581,7 @@ export class ModelHubComponent implements Component {
 				}
 				break;
 			default:
-				text = this.#mode === "pick" ? this.#pickerHint : `All available models${scopedSuffix}`;
+				text = `All available models${scopedSuffix}`;
 				break;
 		}
 		if (this.#configError && entry.kind !== "provider") {
@@ -1895,9 +1806,6 @@ export class ModelHubComponent implements Component {
 		}
 		const arrows = this.#focus === "scope" ? "↑/↓ providers · → models" : "↑/↓ models · ← providers";
 		const refresh = entry.kind === "provider" ? " · F5 refresh" : "";
-		if (this.#mode === "pick") {
-			return `Enter use for this session · ${arrows} · type to search${refresh} · Esc close`;
-		}
 		return `Enter assign roles · ${arrows} · type to search${refresh} · Esc close`;
 	}
 
@@ -1992,9 +1900,8 @@ export class ModelHubComponent implements Component {
 
 		const sidebarLines = this.#renderSidebar(sidebarWidth, contentRows);
 
-		const title = this.#mode === "pick" ? "Switch Model" : "Models";
 		const out: string[] = [];
-		out.push(topBorderSplit(width, title, sidebarWidth));
+		out.push(topBorderSplit(width, "Models", sidebarWidth));
 		this.#contentRowStart = out.length;
 		for (let i = 0; i < contentRows; i++) {
 			out.push(splitRow(sidebarLines[i] ?? "", bodyLines[i] ?? "", width, sidebarWidth));

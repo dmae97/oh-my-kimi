@@ -22,10 +22,11 @@ import {
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
 import { formatNumber } from "@oh-my-pi/pi-utils";
-import { getRoleInfo, MODEL_ROLE_IDS } from "../../config/model-roles";
+import { getModelMatchPreferences, resolveModelRoleValue } from "../../config/model-resolver";
+import { getKnownRoleIds, getRoleInfo, MODEL_ROLE_IDS } from "../../config/model-roles";
 import type { Settings } from "../../config/settings";
 import type { ModelPerfStats } from "../../session/agent-storage";
-import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../../thinking";
+import { AUTO_THINKING, type ConfiguredThinkingLevel, parseConfiguredThinkingLevel } from "../../thinking";
 import { theme } from "../theme/theme";
 import {
 	matchesSelectCancel,
@@ -53,6 +54,67 @@ export interface RoleAssignment {
 
 /** Map of role id to its resolved assignment (absent roles are unresolved). */
 export type RoleAssignments = Record<string, RoleAssignment | undefined>;
+
+/**
+ * Resolve every known role to its display assignment: configured role values
+ * resolve against `allModels`; unconfigured roles fall back to auto-selection
+ * over `autoCandidates` (skipped when empty). Shared by the /models hub and
+ * the alt+p session picker.
+ */
+export function resolveRoleAssignments(
+	settings: Settings,
+	allModels: ReadonlyArray<Model>,
+	autoCandidates: ReadonlyArray<Model>,
+): RoleAssignments {
+	const resolvedThinkingLevel = (
+		role: string,
+		resolved: { explicitThinkingLevel: boolean; thinkingLevel?: ConfiguredThinkingLevel },
+	): ConfiguredThinkingLevel => {
+		if (resolved.explicitThinkingLevel && resolved.thinkingLevel !== undefined) {
+			return resolved.thinkingLevel;
+		}
+		if (role === "default") {
+			return parseConfiguredThinkingLevel(settings.get("defaultThinkingLevel")) ?? ThinkingLevel.Inherit;
+		}
+		return ThinkingLevel.Inherit;
+	};
+
+	const roles: RoleAssignments = {};
+	const matchPreferences = getModelMatchPreferences(settings);
+	const knownRoles = getKnownRoleIds(settings);
+	const configuredRoles = new Set<string>();
+	const catalog = [...allModels];
+
+	for (const role of knownRoles) {
+		const roleValue = settings.getModelRole(role);
+		if (!roleValue) continue;
+		configuredRoles.add(role);
+		const resolved = resolveModelRoleValue(roleValue, catalog, { settings, matchPreferences });
+		if (resolved.model) {
+			roles[role] = {
+				model: resolved.model,
+				thinkingLevel: resolvedThinkingLevel(role, resolved),
+				autoSelected: false,
+			};
+		}
+	}
+
+	if (autoCandidates.length > 0) {
+		const candidates = [...autoCandidates];
+		for (const role of knownRoles) {
+			if (configuredRoles.has(role)) continue;
+			const resolved = resolveModelRoleValue(`pi/${role}`, candidates, { settings, matchPreferences });
+			if (!resolved.model) continue;
+			roles[role] = {
+				model: resolved.model,
+				thinkingLevel: resolvedThinkingLevel(role, resolved),
+				autoSelected: true,
+			};
+		}
+	}
+
+	return roles;
+}
 
 /** Wrap raw models into browser items. */
 export function buildBrowserItems(models: ReadonlyArray<Model>): ModelBrowserItem[] {
@@ -256,7 +318,6 @@ export interface ModelBrowserOptions {
 	disableOverContext?: boolean;
 	/** Host-provided empty-state text (e.g. provider discovery status). */
 	emptyText?: () => string | undefined;
-	initialQuery?: string;
 }
 
 /** Rendered rows before the list window: search row + blank. */
@@ -295,6 +356,8 @@ export class ModelBrowser implements Component {
 	#windowCount = 0;
 	/** Whether the host pane owns arrow keys; drives cursor strength and the selected-row band. */
 	#focused = true;
+	/** `provider/id` of the session's active model; marked in rows and detail. */
+	#currentSelector: string | undefined;
 
 	/** Enter or click-on-selected. */
 	onActivate?: (item: ModelBrowserItem) => void;
@@ -310,9 +373,11 @@ export class ModelBrowser implements Component {
 		this.#currentContextTokens = Number.isFinite(tokens) && tokens > 0 ? Math.floor(tokens) : 0;
 		this.#disableOverContext = options.disableOverContext ?? false;
 		this.#emptyText = options.emptyText;
-		if (options.initialQuery) {
-			this.#searchInput.setValue(options.initialQuery);
-		}
+	}
+
+	/** Mark `selector` as the session's active model (undefined clears the mark). */
+	setCurrentSelector(selector: string | undefined): void {
+		this.#currentSelector = selector;
 	}
 
 	/** Replace the scope's base items; the live query re-applies and selection is pinned by selector. */
@@ -641,10 +706,12 @@ export class ModelBrowser implements Component {
 		const prefix = selected && this.#focused ? `${theme.fg("accent", theme.nav.cursor)} ` : "  ";
 		const providerPrefix = this.#showProvider ? theme.fg("dim", `${item.provider}/`) : "";
 		const name = selected ? theme.fg("accent", item.id) : item.id;
+		const currentMark =
+			item.selector === this.#currentSelector ? ` ${theme.fg("success", theme.status.enabled)}` : "";
 		const overLimit = disabled
 			? ` ${theme.status.disabled} context>${formatNumber(item.model.contextWindow ?? 0).toLowerCase()}`
 			: "";
-		let left = `${prefix}${providerPrefix}${name}${overLimit}`;
+		let left = `${prefix}${providerPrefix}${name}${currentMark}${overLimit}`;
 
 		// Perf column collapses entirely when no visible row has measurements.
 		const perfCol =
@@ -691,6 +758,9 @@ export class ModelBrowser implements Component {
 		}
 
 		const chips: string[] = [];
+		if (selected.selector === this.#currentSelector) {
+			chips.push(theme.fg("success", `${theme.status.enabled} current`));
+		}
 		const seen = new Set<string>();
 		const pushRole = (role: string) => {
 			if (seen.has(role)) return;
