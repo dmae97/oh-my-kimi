@@ -10115,6 +10115,7 @@ export class AgentSession {
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.buildDisplaySessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
+			this.#rebasePendingContextSnapshotAfterCompaction();
 			// Compaction discarded the conversation history that carried the approved
 			// plan reference. Clear the sent-flag so #buildPlanReferenceMessage re-reads
 			// the plan from disk and re-injects it on the next turn (issue #1246).
@@ -12534,7 +12535,11 @@ export class AgentSession {
 		if (signal.aborted) return undefined;
 		try {
 			const result = await this.shake("elide", { signal });
-			return result.toolResultsDropped + result.blocksDropped > 0 ? result : undefined;
+			if (result.toolResultsDropped + result.blocksDropped === 0) return undefined;
+			// The elide pass rewrote history; re-anchor the in-flight snapshot so
+			// the caller's headroom/retry-fit re-test measures the shaken context.
+			this.#rebasePendingContextSnapshotAfterCompaction();
+			return result;
 		} catch (error) {
 			logger.warn("Dead-end shake rescue failed", {
 				error: error instanceof Error ? error.message : String(error),
@@ -13059,6 +13064,7 @@ export class AgentSession {
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.buildDisplaySessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
+			this.#rebasePendingContextSnapshotAfterCompaction();
 			// Compaction discarded the conversation history that carried the approved
 			// plan reference. Clear the sent-flag so #buildPlanReferenceMessage re-reads
 			// the plan from disk and re-injects it on the next turn (issue #1246).
@@ -13124,6 +13130,7 @@ export class AgentSession {
 						(reason === "incomplete" && lastAssistant.stopReason === "length");
 					if (shouldDrop) {
 						this.agent.replaceMessages(messages.slice(0, -1));
+						this.#rebasePendingContextSnapshotAfterCompaction();
 					}
 				}
 
@@ -15939,6 +15946,28 @@ export class AgentSession {
 	): void {
 		this.#pendingContextSnapshot = snapshot;
 		this.#contextUsageRevision++;
+	}
+
+	/**
+	 * Rebase the in-flight pending context snapshot onto the current message
+	 * set after a compaction (or its dead-end rescue) rewrote history mid-run.
+	 * The snapshot captures the prompt as submitted at run start and lives for
+	 * the whole run; once a compaction entry lands, every earlier usage anchor
+	 * is hidden from {@link getContextBreakdown}, so the stale run-start figure
+	 * would be reported as live context until the next provider response. That
+	 * inflated residual is what the post-compaction headroom/retry-fit checks
+	 * measure — a run that started above the recovery band then trips the
+	 * "freed too little context" dead-end even when compaction genuinely
+	 * shrank the context. No-op while no prompt is in flight.
+	 */
+	#rebasePendingContextSnapshotAfterCompaction(): void {
+		if (!this.#pendingContextSnapshot) return;
+		const nonMessageTokens = computeNonMessageTokens(this);
+		this.#setPendingContextSnapshot({
+			promptTokens: nonMessageTokens + this.messages.reduce((sum, msg) => sum + estimateTokens(msg), 0),
+			nonMessageTokens,
+			cutoffCount: this.messages.length,
+		});
 	}
 
 	#ingestProviderUsageHeaders(response: ProviderResponseMetadata, model?: Model): void {
