@@ -29,6 +29,11 @@ describe("AuthStorage Z.AI API-key usage ranking", () => {
 		store = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
 		authStorage = new AuthStorage(store, {
 			usageProviderResolver: provider => (provider === "zai" ? usageProvider : undefined),
+			async configValueResolver(config) {
+				if (config === "ZAI_EXHAUSTED_REF") return "zai-exhausted";
+				if (config === "ZAI_HEALTHY_REF") return "zai-healthy";
+				return config;
+			},
 		});
 		usageByKey.clear();
 	});
@@ -95,5 +100,126 @@ describe("AuthStorage Z.AI API-key usage ranking", () => {
 		});
 
 		expect(await authStorage.getApiKey("zai")).toBe("zai-healthy");
+	});
+
+	test("resolves stored API-key references before probing Z.AI usage", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+
+		await authStorage.set("zai", [
+			{ type: "api_key", key: "ZAI_EXHAUSTED_REF", source: "login" },
+			{ type: "api_key", key: "ZAI_HEALTHY_REF", source: "login" },
+		]);
+		usageByKey.set("zai-exhausted", {
+			provider: "zai",
+			fetchedAt: Date.now(),
+			limits: [
+				{
+					id: "zai:requests:5h",
+					label: "ZAI Request Quota",
+					scope: { provider: "zai", windowId: "5h", shared: true },
+					window: { id: "5h", label: "5 Hour", durationMs: 5 * HOUR_MS, resetsAt: Date.now() + HOUR_MS },
+					amount: {
+						unit: "requests",
+						used: 100,
+						limit: 100,
+						remaining: 0,
+						usedFraction: 1,
+						remainingFraction: 0,
+					},
+					status: "exhausted",
+				},
+			],
+		});
+		usageByKey.set("zai-healthy", {
+			provider: "zai",
+			fetchedAt: Date.now(),
+			limits: [
+				{
+					id: "zai:requests:5h",
+					label: "ZAI Request Quota",
+					scope: { provider: "zai", windowId: "5h", shared: true },
+					window: { id: "5h", label: "5 Hour", durationMs: 5 * HOUR_MS, resetsAt: Date.now() + 2 * HOUR_MS },
+					amount: {
+						unit: "requests",
+						used: 20,
+						limit: 100,
+						remaining: 80,
+						usedFraction: 0.2,
+						remainingFraction: 0.8,
+					},
+					status: "ok",
+				},
+			],
+		});
+
+		expect(await authStorage.getApiKey("zai")).toBe("zai-healthy");
+	});
+
+	test("ignores exhausted Z.AI feature quotas for model request routing", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+
+		await authStorage.set("zai", [
+			{ type: "api_key", key: "zai-feature-exhausted", source: "login" },
+			{ type: "api_key", key: "zai-general-busier", source: "login" },
+		]);
+		usageByKey.set("zai-feature-exhausted", {
+			provider: "zai",
+			fetchedAt: Date.now(),
+			limits: [
+				{
+					id: "zai:features:web-search-reader-zread:5h",
+					label: "ZAI Web Search / Reader / Zread Quota",
+					scope: { provider: "zai", windowId: "5h", tier: "web-search-reader-zread", shared: false },
+					window: { id: "5h", label: "5 Hour", durationMs: 5 * HOUR_MS, resetsAt: Date.now() + HOUR_MS },
+					amount: {
+						unit: "requests",
+						used: 100,
+						limit: 100,
+						remaining: 0,
+						usedFraction: 1,
+						remainingFraction: 0,
+					},
+					status: "exhausted",
+				},
+				{
+					id: "zai:requests:5h",
+					label: "ZAI Request Quota",
+					scope: { provider: "zai", windowId: "5h", shared: true },
+					window: { id: "5h", label: "5 Hour", durationMs: 5 * HOUR_MS, resetsAt: Date.now() + 2 * HOUR_MS },
+					amount: {
+						unit: "requests",
+						used: 10,
+						limit: 100,
+						remaining: 90,
+						usedFraction: 0.1,
+						remainingFraction: 0.9,
+					},
+					status: "ok",
+				},
+			],
+		});
+		usageByKey.set("zai-general-busier", {
+			provider: "zai",
+			fetchedAt: Date.now(),
+			limits: [
+				{
+					id: "zai:requests:5h",
+					label: "ZAI Request Quota",
+					scope: { provider: "zai", windowId: "5h", shared: true },
+					window: { id: "5h", label: "5 Hour", durationMs: 5 * HOUR_MS, resetsAt: Date.now() + 2 * HOUR_MS },
+					amount: {
+						unit: "requests",
+						used: 80,
+						limit: 100,
+						remaining: 20,
+						usedFraction: 0.8,
+						remainingFraction: 0.2,
+					},
+					status: "ok",
+				},
+			],
+		});
+
+		expect(await authStorage.getApiKey("zai")).toBe("zai-feature-exhausted");
 	});
 });

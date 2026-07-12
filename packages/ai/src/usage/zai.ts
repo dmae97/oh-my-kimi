@@ -176,12 +176,14 @@ function buildZaiWindow(parsed: ZaiUsageLimitItem): UsageWindow {
 	};
 }
 
-function requestQuotaLabel(parsed: ZaiUsageLimitItem): string {
+function isZaiFeatureRequestLimit(parsed: ZaiUsageLimitItem): boolean {
 	const detailCodes =
 		parsed.usageDetails?.map(detail => detail.modelCode).filter((code): code is string => !!code) ?? [];
-	if (detailCodes.includes("search-prime") && detailCodes.includes("web-reader") && detailCodes.includes("zread")) {
-		return "ZAI Web Search / Reader / Zread Quota";
-	}
+	return detailCodes.includes("search-prime") && detailCodes.includes("web-reader") && detailCodes.includes("zread");
+}
+
+function requestQuotaLabel(parsed: ZaiUsageLimitItem): string {
+	if (isZaiFeatureRequestLimit(parsed)) return "ZAI Web Search / Reader / Zread Quota";
 	return "ZAI Request Quota";
 }
 
@@ -192,9 +194,17 @@ function buildModelUsageUrl(baseUrl: string, now: Date): string {
 	return `${baseUrl}${MODEL_USAGE_PATH}?startTime=${encodeURIComponent(startTime)}&endTime=${encodeURIComponent(endTime)}`;
 }
 
+function getZaiCredentialLimits(report: UsageReport): UsageLimit[] {
+	const limits = report.limits.filter(
+		limit => limit.id.startsWith("zai:requests:") || limit.id.startsWith("zai:tokens:"),
+	);
+	return limits;
+}
+
 function rankZaiRequestLimits(report: UsageReport): UsageLimit[] {
 	const requestLimits = report.limits.filter(limit => limit.id.startsWith("zai:requests:"));
-	const limits = requestLimits.length > 0 ? requestLimits : report.limits;
+	const credentialLimits = getZaiCredentialLimits(report);
+	const limits = requestLimits.length > 0 ? requestLimits : credentialLimits;
 	const ranked = [...limits];
 	ranked.sort((left, right) => {
 		const leftDuration = left.window?.durationMs ?? Number.POSITIVE_INFINITY;
@@ -279,13 +289,15 @@ async function fetchZaiUsage(params: UsageFetchParams, ctx: UsageFetchContext): 
 				percentage: parsed.percentage,
 				unit: "requests",
 			});
+			const featureLimit = isZaiFeatureRequestLimit(parsed);
 			limits.push({
-				id: `zai:requests:${window.id}`,
+				id: featureLimit ? `zai:features:web-search-reader-zread:${window.id}` : `zai:requests:${window.id}`,
 				label: requestQuotaLabel(parsed),
 				scope: {
 					provider: params.provider,
 					windowId: window.id,
-					shared: true,
+					shared: !featureLimit,
+					...(featureLimit ? { tier: "web-search-reader-zread" } : {}),
 				},
 				window,
 				amount,
@@ -340,6 +352,10 @@ export const zaiRankingStrategy: CredentialRankingStrategy = {
 	findWindowLimits(report) {
 		const ranked = rankZaiRequestLimits(report);
 		return { primary: ranked[0], secondary: ranked[1] };
+	},
+	scopeLimits(report) {
+		const limits = getZaiCredentialLimits(report);
+		return limits;
 	},
 	windowDefaults: {
 		primaryMs: 5 * HOUR_MS,

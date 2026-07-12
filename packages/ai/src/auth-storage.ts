@@ -3276,8 +3276,14 @@ export class AuthStorage {
 				return report;
 			}
 		}
+		const usageCredential = this.#buildUsageCredential(credential);
+		if (credential.type === "api_key") {
+			const resolvedApiKey = await this.#configValueResolver(credential.key);
+			if (!resolvedApiKey) return null;
+			usageCredential.apiKey = resolvedApiKey;
+		}
 		return this.#fetchUsageCached(
-			this.#buildUsageRequest(provider, this.#buildUsageCredential(credential), options?.baseUrl),
+			this.#buildUsageRequest(provider, usageCredential, options?.baseUrl),
 			options?.timeoutMs ?? this.#usageRequestTimeoutMs,
 		);
 	}
