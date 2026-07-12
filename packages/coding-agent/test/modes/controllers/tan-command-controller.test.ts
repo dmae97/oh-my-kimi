@@ -261,7 +261,9 @@ describe("TanCommandController", () => {
 	it("parks the finished tan in the registry so it stays visible in the Agent Hub", async () => {
 		const harness = createContext();
 		vi.spyOn(SessionManager, "forkFrom").mockResolvedValue(harness.cloneManager);
+		const appendSessionInit = vi.fn();
 		const clone = {
+			sessionManager: { appendSessionInit },
 			prompt: vi.fn(async () => {}),
 			waitForIdle: vi.fn(async () => {}),
 			getLastAssistantMessage: vi.fn(() => assistantText("done")),
@@ -287,6 +289,11 @@ describe("TanCommandController", () => {
 		});
 
 		expect(result).toBe("done");
+		expect(appendSessionInit).toHaveBeenCalledWith({
+			systemPrompt: "system prompt",
+			task: "park me",
+			tools: ["read", "bash"],
+		});
 		// Parked (not unregistered) before dispose, then the disposed session is nulled
 		// out — the hub keeps the ref and reads its transcript from the session file.
 		expect(setStatus).toHaveBeenCalledWith(expect.stringMatching(/^Tan-/), "parked");

@@ -127,6 +127,11 @@ export class TanCommandController {
 							disableExtensionDiscovery: true,
 						});
 						clone = created.session;
+						clone.sessionManager?.appendSessionInit?.({
+							systemPrompt: clone.systemPrompt ? clone.systemPrompt.join("\n\n") : systemPrompt.join("\n\n"),
+							task: trimmedWork,
+							tools: clone.getActiveToolNames ? clone.getActiveToolNames() : toolNames,
+						});
 						const abortClone = () => {
 							void clone?.abort();
 						};
