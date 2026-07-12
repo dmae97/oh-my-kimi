@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Pyright LSP semantic requests hanging during startup by sending the initial workspace configuration notification after `initialized`. ([#5276](https://github.com/can1357/oh-my-pi/issues/5276))
+
 ## [16.4.7] - 2026-07-12
 
 ### Added

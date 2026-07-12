@@ -750,8 +750,14 @@ export async function getOrCreateClient(
 
 			client.serverCapabilities = initResult.capabilities as LspClient["serverCapabilities"];
 
-			// Send initialized notification
+			// Finish the initialize handshake before publishing the client as ready.
 			await sendNotification(client, "initialized", {}, signal);
+			await sendNotification(
+				client,
+				"workspace/didChangeConfiguration",
+				{ settings: config.settings ?? {} },
+				signal,
+			);
 
 			client.status = "ready";
 			// Publish only after init succeeds: pre-init clients are reachable
