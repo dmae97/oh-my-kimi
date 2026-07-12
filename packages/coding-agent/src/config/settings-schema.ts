@@ -918,6 +918,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"display.collapseCompacted": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Collapse Compacted History",
+			description:
+				"Collapse pre-compaction history behind the summary divider on the live transcript; disable to keep the full transcript inline with dividers at each compaction point",
+		},
+	},
+
 	showHardwareCursor: {
 		type: "boolean",
 		default: true, // will be computed based on platform if undefined
