@@ -10,8 +10,13 @@
 ### Changed
 
 - Streamlined list view styling by removing inline model role chips from row entries
-- Clarified active selection state by only displaying cursor and highlight bands in focused panes
+- Reworked /models hub selection visuals: the background highlight band is reserved for mouse hover, the keyboard position is a cursor glyph drawn only in the pane that owns the arrow keys, and the sidebar's active scope renders as a bold accent label
 - Removed the redundant "login" label from inactive (locked) provider entries in the Model Hub sidebar
+
+### Fixed
+
+- Fixed PageUp/PageDown in the model browser wrapping past the list edges instead of clamping
+- Fixed the hover highlight sticking to the last hovered model row when the pointer moved into the provider sidebar
 
 ## [16.4.6] - 2026-07-12
 

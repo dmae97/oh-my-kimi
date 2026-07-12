@@ -21,4 +21,5 @@ Pair up live: `/collab` shares your session through an end-to-end encrypted rela
 Press ← ← to drill into a running or finished agent and inspect its tool calls and transcript
 Hit a Codex rate limit? `/usage reset` spends a saved reset credit to immediately restore your quota
 No native tool_calling? Inference provider botches parsing them? `PI_DIALECT=glm|kimi|anthropic…` rolls it locally for them!
-Turn on `/advisor` to attach a second model that reviews every turn and quietly injects advice [NEW]
+Turn on `/advisor` to attach a second model that reviews every turn and quietly injects advice
+Try starting your prompt with a ->, and writing a list (1. Do X, 2. Do Y)
