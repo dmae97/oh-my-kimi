@@ -3,7 +3,8 @@ import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { ApiKeyResolveContext, AssistantMessage, ToolCall } from "@oh-my-pi/pi-ai";
-import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
+import { createMockModel, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
 import * as aiStream from "@oh-my-pi/pi-ai/stream";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
@@ -16,6 +17,8 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 
 type AutoRetryEndEvent = Extract<AgentSessionEvent, { type: "auto_retry_end" }>;
 type AutoRetryStartEvent = Extract<AgentSessionEvent, { type: "auto_retry_start" }>;
+
+const RETRY_CAP_MOCK_API_SOURCE = "agent-session-retry-cap-test";
 
 function lastAssistant(session: AgentSession): AssistantMessage {
 	const message = session.agent.state.messages.at(-1);
@@ -67,9 +70,10 @@ describe("AgentSession retry delay cap", () => {
 			await session.dispose();
 			session = undefined;
 		}
+		unregisterCustomApis(RETRY_CAP_MOCK_API_SOURCE);
+		vi.restoreAllMocks();
 		authStorage.close();
 		tempDir.removeSync();
-		vi.restoreAllMocks();
 	});
 
 	it("bails immediately when retry-after exceeds retry.maxDelayMs", async () => {
@@ -205,25 +209,45 @@ describe("AgentSession retry delay cap", () => {
 		expect(last.content).toContainEqual({ type: "text", text: "recovered after stream read retry" });
 	});
 
-	it("switches credentials instead of failing the delay cap for account rate limits", async () => {
+	it("rolls through four sibling credentials inside one AgentSession prompt before delay-cap retry", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
-			throw new Error("Expected bundled Anthropic test model to exist");
+		const fallbackModel = getBundledModel("openai", "gpt-5");
+		if (!model || !fallbackModel) {
+			throw new Error("Expected bundled primary and fallback test models to exist");
 		}
+		const providerSessionId = "retry-four-credential-session-3";
 
+		registerMockApi(RETRY_CAP_MOCK_API_SOURCE);
 		authStorage.removeRuntimeApiKey("anthropic");
+		authStorage.setRuntimeApiKey("openai", "openai-fallback-key");
 		await authStorage.set("anthropic", [
-			{ type: "api_key", key: "anthropic-key-1" },
-			{ type: "api_key", key: "anthropic-key-2" },
+			{ type: "api_key", key: "anthropic-key-A" },
+			{ type: "api_key", key: "anthropic-key-B" },
+			{ type: "api_key", key: "anthropic-key-C" },
+			{ type: "api_key", key: "anthropic-key-D" },
 		]);
 
 		const rateLimitError =
 			'429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s rate limit. Please try again later."}} retry-after-ms=11180000';
-		const mock = createMockModel();
 		const requestedKeys: string[] = [];
-		let agent!: Agent;
-		agent = new Agent({
-			getApiKey: model => modelRegistry.resolver(model, agent.sessionId),
+		const mock = createMockModel({
+			id: model.id,
+			provider: model.provider,
+			handler: (_context, options) => {
+				const apiKey = typeof options?.apiKey === "string" ? options.apiKey : undefined;
+				if (!apiKey) {
+					throw new Error("Expected streamSimple to pass a resolved string API key");
+				}
+				requestedKeys.push(apiKey);
+				return apiKey === "anthropic-key-D"
+					? { content: ["recovered on fourth credential"], stopReason: "stop" }
+					: { throw: rateLimitError };
+			},
+		});
+		const requestedModels: string[] = [];
+		const agent = new Agent({
+			getApiKey: model => modelRegistry.resolver(model, providerSessionId),
+			sessionId: providerSessionId,
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
@@ -231,22 +255,20 @@ describe("AgentSession retry delay cap", () => {
 				messages: [],
 			},
 			streamFn: (requestedModel, context, options) => {
-				const apiKey = resolveInitialApiKey(options?.apiKey);
-				requestedKeys.push(apiKey);
-				if (requestedKeys.length === 1) {
-					mock.push({ throw: rateLimitError });
-				} else {
-					mock.push({ content: ["recovered after credential switch"] });
-				}
-				return mock.stream(requestedModel, context, options);
+				requestedModels.push(`${requestedModel.provider}/${requestedModel.id}`);
+				return aiStream.streamSimple(mock.model, context, options);
 			},
 		});
 
 		const settings = Settings.isolated({
 			"compaction.enabled": false,
-			"retry.baseDelayMs": 5,
-			"retry.maxDelayMs": 100,
-			"retry.maxRetries": 1,
+			"retry.baseDelayMs": 1,
+			"retry.maxDelayMs": 1,
+			"retry.maxRetries": 0,
+			"retry.modelFallback": true,
+			"retry.fallbackChains": {
+				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
+			},
 		});
 		settings.setModelRole("default", `${model.provider}/${model.id}`);
 
@@ -255,9 +277,9 @@ describe("AgentSession retry delay cap", () => {
 			sessionManager: SessionManager.inMemory(),
 			settings,
 			modelRegistry,
+			providerSessionId,
 		});
 
-		const waitSpy = vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
 		const retryStartEvents: AutoRetryStartEvent[] = [];
 		const retryEndEvents: AutoRetryEndEvent[] = [];
 		session.subscribe(event => {
@@ -268,18 +290,26 @@ describe("AgentSession retry delay cap", () => {
 		await session.prompt("Trigger account rate limit with long retry-after");
 		await session.waitForIdle();
 
-		expect(requestedKeys).toHaveLength(2);
-		expect(new Set(requestedKeys).size).toBe(2);
-		expect(retryStartEvents).toHaveLength(1);
-		expect(retryStartEvents[0]).toMatchObject({ delayMs: 0 });
-		expect(retryEndEvents).toHaveLength(1);
-		expect(retryEndEvents[0]).toMatchObject({ success: true, attempt: 1 });
-		for (const call of waitSpy.mock.calls) {
-			expect(call[0]).toBeLessThanOrEqual(100);
+		expect(requestedModels).toEqual([`${model.provider}/${model.id}`]);
+		expect(requestedKeys).toEqual(["anthropic-key-A", "anthropic-key-B", "anthropic-key-C", "anthropic-key-D"]);
+		expect(new Set(requestedKeys).size).toBe(4);
+		expect(mock.calls).toHaveLength(4);
+		expect(retryStartEvents).toHaveLength(0);
+		expect(retryEndEvents).toHaveLength(0);
+		expect(session.model?.provider).toBe(model.provider);
+		expect(session.model?.id).toBe(model.id);
+		for (const call of mock.calls) {
+			expect(call.context.messages.filter(message => message.role === "user")).toHaveLength(1);
 		}
+		expect(session.agent.state.messages.filter(message => message.role === "user")).toHaveLength(1);
+		expect(
+			session.agent.state.messages.some(
+				message => message.role === "custom" && "customType" in message && message.customType === "irc:incoming",
+			),
+		).toBe(false);
 		const last = lastAssistant(session);
 		expect(last.stopReason).toBe("stop");
-		expect(last.content).toContainEqual({ type: "text", text: "recovered after credential switch" });
+		expect(last.content).toContainEqual({ type: "text", text: "recovered on fourth credential" });
 	});
 
 	it("switches same-provider credentials before model fallback on ChatGPT usage limits", async () => {

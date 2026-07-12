@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { ProviderHttpError } from "@oh-my-pi/pi-ai/error";
 import { isUsageLimit } from "@oh-my-pi/pi-ai/error/flags";
 import {
 	calculateRateLimitBackoffMs,
@@ -148,6 +149,15 @@ describe("isUsageLimit", () => {
 		}
 		expect(isUsageLimitStatus(429)).toBe(true);
 		expect(isUsageLimitStatus(400)).toBe(false);
+	});
+
+	it("detects structured provider usage codes without quota wording", () => {
+		expect(isUsageLimit(new ProviderHttpError("Generic provider failure", 429, { code: "insufficient_quota" }))).toBe(
+			true,
+		);
+		expect(isUsageLimit(new ProviderHttpError("Generic provider failure", 429, { code: "rate_limit_error" }))).toBe(
+			false,
+		);
 	});
 });
 

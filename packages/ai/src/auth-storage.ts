@@ -682,7 +682,7 @@ type AuthApiKeyOptions = {
 	 */
 	forceRefresh?: boolean;
 };
-type OAuthResolutionResult = { apiKey: string; credential: OAuthCredential };
+type OAuthResolutionResult = { apiKey: string; credential: OAuthCredential; credentialId?: number };
 
 /**
  * Refreshed OAuth access plus identity metadata returned by
@@ -3401,6 +3401,39 @@ export class AuthStorage {
 		return results;
 	}
 
+	async #resolveCredentialTarget(
+		provider: string,
+		sessionId: string | undefined,
+		options?: { credentialId?: number; apiKey?: string },
+	): Promise<{ type: AuthCredential["type"]; index: number; explicit: boolean } | undefined> {
+		const explicit = options?.credentialId !== undefined || options?.apiKey !== undefined;
+		if (explicit) {
+			const latestRows = this.#store.listAuthCredentials(provider);
+			this.#setStoredCredentials(
+				provider,
+				latestRows.map(row => ({ id: row.id, credential: row.credential })),
+			);
+		}
+		if (options?.credentialId !== undefined) {
+			const stored = this.#getStoredCredentials(provider);
+			const index = stored.findIndex(entry => entry.id === options.credentialId);
+			const entry = index === -1 ? undefined : stored[index];
+			if (entry) return { type: entry.credential.type, index, explicit: true };
+		}
+		if (options?.apiKey !== undefined) {
+			const stored = this.#getStoredCredentials(provider);
+			for (let index = 0; index < stored.length; index++) {
+				const entry = stored[index];
+				if (entry && (await this.#credentialMatchesApiKey(entry.credential, options.apiKey))) {
+					return { type: entry.credential.type, index, explicit: true };
+				}
+			}
+		}
+		if (explicit) return undefined;
+		const sessionCredential = this.#getSessionCredential(provider, sessionId);
+		return sessionCredential ? { ...sessionCredential, explicit: false } : undefined;
+	}
+
 	/**
 	 * Marks the current session's credential as temporarily blocked due to usage limits.
 	 * Uses usage reports to determine accurate reset time when available.
@@ -3411,20 +3444,19 @@ export class AuthStorage {
 	async markUsageLimitReached(
 		provider: string,
 		sessionId: string | undefined,
-		options?: { retryAfterMs?: number; baseUrl?: string; modelId?: string; apiKey?: string; signal?: AbortSignal },
+		options?: {
+			retryAfterMs?: number;
+			baseUrl?: string;
+			modelId?: string;
+			apiKey?: string;
+			credentialId?: number;
+			signal?: AbortSignal;
+		},
 	): Promise<UsageLimitMarkResult> {
-		let sessionCredential: { type: AuthCredential["type"]; index: number } | undefined;
-		if (options?.apiKey) {
-			const stored = this.#getStoredCredentials(provider);
-			for (let index = 0; index < stored.length; index++) {
-				const entry = stored[index];
-				if (entry && (await this.#credentialMatchesApiKey(entry.credential, options.apiKey))) {
-					sessionCredential = { type: entry.credential.type, index };
-					break;
-				}
-			}
-		}
-		sessionCredential ??= this.#getSessionCredential(provider, sessionId);
+		const sessionCredential = await this.#resolveCredentialTarget(provider, sessionId, {
+			credentialId: options?.credentialId,
+			apiKey: options?.apiKey,
+		});
 		if (!sessionCredential) return { switched: false };
 
 		const providerKey = this.#getProviderTypeKey(provider, sessionCredential.type);
@@ -4209,7 +4241,7 @@ export class AuthStorage {
 				}
 			}
 			this.#recordSessionCredential(provider, sessionId, "oauth", selection.index);
-			return { apiKey: result.apiKey, credential: updated };
+			return { apiKey: result.apiKey, credential: updated, credentialId };
 		} catch (error) {
 			const errorMsg = String(error);
 			// Only remove credentials for definitive auth failures
@@ -4434,9 +4466,10 @@ export class AuthStorage {
 		}
 		const resolved = await this.#resolveOAuthSelection(provider, sessionId, options);
 		if (!resolved) return undefined;
-		const { credential } = resolved;
+		const { credential, credentialId } = resolved;
 		return {
 			accessToken: credential.access,
+			credentialId,
 			accountId: credential.accountId,
 			email: credential.email,
 			projectId: credential.projectId,
@@ -4922,36 +4955,45 @@ export class AuthStorage {
 	}
 
 	/**
-	 * Rotate away from the session's current credential after a retryable auth
-	 * error — step (c) of the auth-retry policy. Stateless: looks up the
-	 * session-sticky credential (no API-key matching needed), applies the
-	 * storage action for the error class, then clears the sticky so the next
-	 * {@link AuthStorage.getApiKey} for this session picks a sibling.
+	 * Rotate away from the credential that failed after a retryable auth error —
+	 * step (c) of the auth-retry policy. Prefer the failed stored row id supplied
+	 * in `options.credentialId`, then the failed bearer supplied in
+	 * `options.apiKey`, so overlapping requests cannot redirect rotation through
+	 * stale session stickiness. Fall back to the session-sticky credential only
+	 * when neither explicit target is available. If an explicit target is supplied
+	 * but no longer matches storage, return `false` without mutating sticky state.
+	 * Apply the storage action for the error class, then let the next resolve
+	 * select a sibling.
 	 *
 	 * - usage-limit / account-rate-limit error → {@link AuthStorage.markUsageLimitReached}
 	 *   (temporary block via its own backoff — default plus server usage-report
 	 *   reset; sticky left intact so the next resolve re-ranks around the block).
 	 * - otherwise (hard 401 / auth failure) → mark the credential suspect (or
-	 *   reload when no broker hook is wired) and block it, then drop the sticky.
+	 *   reload when no broker hook is wired) and block it, then drop matching
+	 *   sticky state.
 	 *
 	 * Returns whether another usable credential of the same type remains.
 	 */
 	async rotateSessionCredential(
 		provider: string,
 		sessionId: string | undefined,
-		options?: { error?: unknown; modelId?: string; apiKey?: string; signal?: AbortSignal },
+		options?: { error?: unknown; modelId?: string; apiKey?: string; credentialId?: number; signal?: AbortSignal },
 	): Promise<boolean> {
-		const sessionCredential = this.#getSessionCredential(provider, sessionId);
+		const sessionCredential = await this.#resolveCredentialTarget(provider, sessionId, {
+			credentialId: options?.credentialId,
+			apiKey: options?.apiKey,
+		});
 		if (!sessionCredential) return false;
 
 		const error = options?.error;
 		const status = AIError.status(error);
 		const message = error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
-		if (isUsageLimitOutcome(status, message)) {
+		if (AIError.isUsageLimit(error) || isUsageLimitOutcome(status, message)) {
 			return (
 				await this.markUsageLimitReached(provider, sessionId, {
 					modelId: options?.modelId,
 					apiKey: options?.apiKey,
+					credentialId: options?.credentialId,
 					signal: options?.signal,
 				})
 			).switched;
@@ -4967,7 +5009,13 @@ export class AuthStorage {
 				!this.#isCredentialBlocked(provider, providerKey, index),
 		);
 		const target = this.#getStoredCredentials(provider)[sessionCredential.index];
-		this.#clearSessionCredential(provider, sessionId);
+		const sticky = this.#getSessionCredential(provider, sessionId);
+		if (
+			!sessionCredential.explicit ||
+			(sticky?.type === sessionCredential.type && sticky.index === sessionCredential.index)
+		) {
+			this.#clearSessionCredential(provider, sessionId);
+		}
 		this.#markCredentialBlocked(
 			provider,
 			providerKey,
@@ -5005,12 +5053,18 @@ export class AuthStorage {
 	 */
 	resolver(provider: string, options?: { sessionId?: string; baseUrl?: string; modelId?: string }): ApiKeyResolver {
 		const { sessionId, baseUrl, modelId } = options ?? {};
-		return async ({ lastChance, error, signal }) => {
+		return async ({ lastChance, error, signal, previousKey }) => {
 			if (error === undefined) {
 				return this.getApiKey(provider, sessionId, { baseUrl, modelId, signal });
 			}
 			if (lastChance) {
-				await this.rotateSessionCredential(provider, sessionId, { error, modelId, signal });
+				const rotated = await this.rotateSessionCredential(provider, sessionId, {
+					error,
+					modelId,
+					signal,
+					apiKey: previousKey,
+				});
+				if (!rotated) return undefined;
 				return this.getApiKey(provider, sessionId, { baseUrl, modelId, signal });
 			}
 			return this.getApiKey(provider, sessionId, { baseUrl, modelId, forceRefresh: true, signal });

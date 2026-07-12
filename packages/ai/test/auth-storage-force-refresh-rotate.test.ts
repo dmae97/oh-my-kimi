@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type AuthCredentialStore, AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai/auth-storage";
+import { ProviderHttpError } from "@oh-my-pi/pi-ai/error";
 import { registerOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/registry/oauth";
 import { removeWithRetries } from "../../utils/src/temp";
 
@@ -100,6 +101,28 @@ describe("AuthStorage forceRefresh + rotateSessionCredential", () => {
 		expect(after).toBe("minted-access");
 	});
 
+	test("getOAuthAccess includes a stable credentialId across cached and forced refresh resolves", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+		registerProvider();
+		await authStorage.set(PROVIDER, [
+			{ type: "oauth", access: "cached-access", refresh: "cached-refresh", expires: farExpiry() },
+		]);
+
+		const cached = await authStorage.getOAuthAccess(PROVIDER, "oauth-identity");
+		expect(cached?.accessToken).toBe("cached-access");
+		expect(typeof cached?.credentialId).toBe("number");
+		const credentialId = cached?.credentialId;
+		if (credentialId === undefined) throw new Error("expected OAuth credential id");
+
+		const forced = await authStorage.getOAuthAccess(PROVIDER, "oauth-identity", { forceRefresh: true });
+		expect(forced?.accessToken).toBe("minted-access");
+		expect(forced?.credentialId).toBe(credentialId);
+
+		const after = await authStorage.getOAuthAccess(PROVIDER, "oauth-identity");
+		expect(after?.accessToken).toBe("minted-access");
+		expect(after?.credentialId).toBe(credentialId);
+	});
+
 	test("rotateSessionCredential(401) blocks + clears the sticky and rotates to a sibling", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 		registerProvider();
@@ -121,6 +144,117 @@ describe("AuthStorage forceRefresh + rotateSessionCredential", () => {
 		const second = await authStorage.getApiKey(PROVIDER, "sess");
 		expect(["acc-A", "acc-B"]).toContain(second ?? "");
 		expect(second).not.toBe(first);
+	});
+
+	test("resolver rotates the credential matching previousKey instead of a stale sticky", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+		await authStorage.set(PROVIDER, [
+			{ type: "api_key", key: "sticky-key" },
+			{ type: "api_key", key: "failed-key" },
+			{ type: "api_key", key: "survivor-key" },
+		]);
+
+		const sessionId = "resolver-previous-key";
+		const sticky = await authStorage.getApiKey(PROVIDER, sessionId);
+		if (!sticky) throw new Error("expected initial sticky credential");
+		const failed = sticky === "failed-key" ? "sticky-key" : "failed-key";
+		const resolver = authStorage.resolver(PROVIDER, { sessionId });
+
+		const retry = await resolver({
+			lastChance: true,
+			error: authError(),
+			previousKey: failed,
+		});
+
+		expect(retry).toBe(sticky);
+		expect(retry).not.toBe(failed);
+
+		const laterSelections = new Set<string>();
+		for (let index = 0; index < 6; index += 1) {
+			const selected = await authStorage.getApiKey(PROVIDER);
+			if (selected) laterSelections.add(selected);
+		}
+		expect(laterSelections.has(failed)).toBe(false);
+		expect(laterSelections.has(sticky)).toBe(true);
+	});
+
+	test("explicit missing rotation targets do not fall back to stale stickiness", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+		await authStorage.set(PROVIDER, [
+			{ type: "api_key", key: "acc-A" },
+			{ type: "api_key", key: "acc-B" },
+			{ type: "api_key", key: "acc-C" },
+		]);
+
+		const sessionId = "explicit-missing-target";
+		const sticky = await authStorage.getApiKey(PROVIDER, sessionId);
+		if (!sticky) throw new Error("expected sticky credential");
+		const maxCredentialId = Math.max(...store.listAuthCredentials(PROVIDER).map(row => row.id));
+		const missingCredentialId = maxCredentialId + 1000;
+
+		const rotated = await authStorage.rotateSessionCredential(PROVIDER, sessionId, {
+			error: authError(),
+			apiKey: "missing-or-changed-failed-bearer",
+		});
+		expect(rotated).toBe(false);
+		expect(await authStorage.getApiKey(PROVIDER, sessionId)).toBe(sticky);
+
+		const rotatedByMissingId = await authStorage.rotateSessionCredential(PROVIDER, sessionId, {
+			error: authError(),
+			credentialId: missingCredentialId,
+		});
+		expect(rotatedByMissingId).toBe(false);
+		expect(await authStorage.getApiKey(PROVIDER, sessionId)).toBe(sticky);
+
+		const marked = await authStorage.markUsageLimitReached(PROVIDER, sessionId, {
+			apiKey: "missing-or-changed-failed-bearer",
+		});
+		expect(marked.switched).toBe(false);
+		expect(await authStorage.getApiKey(PROVIDER, sessionId)).toBe(sticky);
+
+		const markedByMissingId = await authStorage.markUsageLimitReached(PROVIDER, sessionId, {
+			credentialId: missingCredentialId,
+		});
+		expect(markedByMissingId.switched).toBe(false);
+		expect(await authStorage.getApiKey(PROVIDER, sessionId)).toBe(sticky);
+	});
+
+	test("credentialId rotation targets the failed row after bearer changes without clearing stale sticky", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+		await authStorage.set(PROVIDER, [
+			{ type: "api_key", key: "acc-A" },
+			{ type: "api_key", key: "acc-B" },
+			{ type: "api_key", key: "acc-C" },
+		]);
+
+		const sessionId = "credential-id-target";
+		const sticky = await authStorage.getApiKey(PROVIDER, sessionId);
+		if (!sticky) throw new Error("expected sticky credential");
+		const targetRow = store.listAuthCredentials(PROVIDER).find(row => {
+			const credential = row.credential;
+			return credential.type === "api_key" && credential.key !== sticky;
+		});
+		if (targetRow?.credential.type !== "api_key") throw new Error("expected non-sticky target row");
+		const oldKey = targetRow.credential.key;
+		const changedKey = `${oldKey}-rotated`;
+		store.updateAuthCredential(targetRow.id, { type: "api_key", key: changedKey });
+		await authStorage.reload();
+
+		const rotated = await authStorage.rotateSessionCredential(PROVIDER, sessionId, {
+			error: authError(),
+			apiKey: oldKey,
+			credentialId: targetRow.id,
+		});
+		expect(rotated).toBe(true);
+		expect(await authStorage.getApiKey(PROVIDER, sessionId)).toBe(sticky);
+
+		const laterSelections = new Set<string>();
+		for (let index = 0; index < 6; index += 1) {
+			const selected = await authStorage.getApiKey(PROVIDER);
+			if (selected) laterSelections.add(selected);
+		}
+		expect(laterSelections.has(changedKey)).toBe(false);
+		expect(laterSelections.has(sticky)).toBe(true);
 	});
 
 	test("rotateSessionCredential(usage-limit) delegates to markUsageLimitReached", async () => {
@@ -148,6 +282,27 @@ describe("AuthStorage forceRefresh + rotateSessionCredential", () => {
 
 		const second = await authStorage.getApiKey(PROVIDER, "sess");
 		expect(second).not.toBe(first);
+	});
+
+	test("rotateSessionCredential treats structured usage codes as quota blocks despite generic messages", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+		registerProvider();
+		await authStorage.set(PROVIDER, [
+			{ type: "oauth", access: "acc-A", refresh: "ref-A", expires: farExpiry() },
+			{ type: "oauth", access: "acc-B", refresh: "ref-B", expires: farExpiry() },
+		]);
+
+		const first = await authStorage.getApiKey(PROVIDER, "machine-code-quota");
+		const usageLimitSpy = vi.spyOn(authStorage, "markUsageLimitReached");
+		const rotated = await authStorage.rotateSessionCredential(PROVIDER, "machine-code-quota", {
+			error: new ProviderHttpError("Generic provider failure", 401, { code: "insufficient_quota" }),
+		});
+
+		expect(rotated).toBe(true);
+		expect(usageLimitSpy).toHaveBeenCalledTimes(1);
+		expect(usageLimitSpy.mock.calls[0]?.[0]).toBe(PROVIDER);
+		expect(usageLimitSpy.mock.calls[0]?.[1]).toBe("machine-code-quota");
+		expect(await authStorage.getApiKey(PROVIDER, "machine-code-quota")).not.toBe(first);
 	});
 
 	test("rotateSessionCredential(xAI credits 403) blocks the exhausted account and rotates", async () => {

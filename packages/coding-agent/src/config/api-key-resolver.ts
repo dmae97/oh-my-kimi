@@ -59,12 +59,13 @@ export function createApiKeyResolver(
 			// sibling exists we switch immediately; the precise no-sibling backoff
 			// is owned by `markUsageLimitReached` (default + server usage-report
 			// reset) and the outer whole-turn retry layer.
-			await registry.authStorage.rotateSessionCredential(provider, sessionId, {
+			const rotated = await registry.authStorage.rotateSessionCredential(provider, sessionId, {
 				error,
 				modelId,
 				signal,
 				apiKey: previousKey,
 			});
+			if (!rotated) return undefined;
 			return registry.getApiKeyForProvider(provider, sessionId, { baseUrl, modelId });
 		}
 		return registry.getApiKeyForProvider(provider, sessionId, { baseUrl, modelId, forceRefresh: true, signal });

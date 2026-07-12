@@ -17,7 +17,7 @@ import { CATALOG_PROVIDERS, type ProviderCatalogEntry } from "@oh-my-pi/pi-catal
 import { CODEX_BASE_URL } from "@oh-my-pi/pi-catalog/wire/codex";
 import { $env, $pickenv, getConfigRootDir, isEnoent, logger, withExtraCaFetch } from "@oh-my-pi/pi-utils";
 import { getCustomApi } from "./api-registry";
-import { AUTH_RETRY_STEPS, isApiKeyResolver, resolveRetryKey } from "./auth-retry";
+import { createAuthRetryKeyState, isApiKeyResolver, resolveNextAuthRetryKey } from "./auth-retry";
 import * as AIError from "./error";
 import { ProviderHttpError } from "./error";
 import { isUsageLimitOutcome } from "./error/rate-limit";
@@ -978,17 +978,19 @@ function isRetryableUpstreamError(error: unknown, status: number | undefined, me
 	// per-minute caps) classify as RATE_LIMIT_EXCEEDED in
 	// `parseRateLimitReason` and stay in the provider's own backoff layer
 	// instead of burning siblings.
+	if (AIError.isUsageLimit(error)) return true;
 	if (status === 401) return true;
-	void error;
 	return isUsageLimitOutcome(status, message);
 }
 
 function createAssistantAuthError(message: AssistantMessage): Error {
 	const text = message.errorMessage ?? "Provider authentication failed";
 	const status = extractStatusFromAssistantError(message);
-	return status === undefined
-		? new AIError.ProviderResponseError(text, { kind: "runtime" })
-		: new ProviderHttpError(text, status);
+	const error =
+		status === undefined
+			? new AIError.ProviderResponseError(text, { kind: "runtime" })
+			: new ProviderHttpError(text, status);
+	return typeof message.errorId === "number" ? AIError.attach(error, message.errorId) : error;
 }
 
 function emitBufferedEvents(stream: AssistantMessageEventStream, events: AssistantMessageEvent[]): void {
@@ -1012,12 +1014,12 @@ export function streamSimple<TApi extends Api>(
 	if (apiKeyResolver) {
 		const outer = new AssistantMessageEventStream();
 		const signal = requestOptions?.signal;
-		// One inner attempt against a resolved string key. When
-		// `captureAuthFailure` is set, a retryable auth error that arrives before
-		// any replay-unsafe event is buffered and returned (so the caller can
-		// retry with a fresh key) instead of surfaced. The terminal attempt
-		// clears the flag and emits whatever it gets.
-		const runAttempt = async (apiKey: string, captureAuthFailure: boolean): Promise<AuthRetryFailure | undefined> => {
+		// One inner attempt against a resolved string key. A retryable auth error
+		// that arrives before any replay-unsafe event is buffered and returned
+		// (so the caller can retry with a fresh key) instead of surfaced. Once any
+		// non-start event escapes, retry is no longer safe and the failure is
+		// emitted directly.
+		const runAttempt = async (apiKey: string): Promise<AuthRetryFailure | undefined> => {
 			const bufferedEvents: AssistantMessageEvent[] = [];
 			let emittedReplayUnsafeEvent = false;
 			const flushBuffered = (): void => {
@@ -1034,7 +1036,6 @@ export function streamSimple<TApi extends Api>(
 					}
 					if (
 						!emittedReplayUnsafeEvent &&
-						captureAuthFailure &&
 						event.type === "error" &&
 						isRetryableUpstreamError(
 							event.error,
@@ -1054,7 +1055,6 @@ export function streamSimple<TApi extends Api>(
 			} catch (error) {
 				if (
 					!emittedReplayUnsafeEvent &&
-					captureAuthFailure &&
 					isRetryableUpstreamError(
 						error,
 						AIError.status(error),
@@ -1096,27 +1096,16 @@ export function streamSimple<TApi extends Api>(
 				outer.fail(new AIError.MissingApiKeyError(model.provider));
 				return;
 			}
-			let failure = await runAttempt(lastKey, true);
+			const retryState = createAuthRetryKeyState(lastKey);
+			let failure = await runAttempt(lastKey);
 			if (!failure) return;
-			// a/b/c policy: refresh the same account (lastChance=false), then
-			// switch to a sibling (lastChance=true). A step is skipped when the
-			// resolver yields the same key it just tried or `undefined`; the
-			// final step's attempt clears the capture flag so it emits directly.
-			for (let step = 0; step < AUTH_RETRY_STEPS.length; step++) {
+			while (true) {
 				// Caller aborted between attempts: don't mint a fresh token or fire
 				// another doomed request — emit the captured failure instead.
 				if (signal?.aborted) break;
-				const nextKey = await resolveRetryKey(
-					apiKeyResolver,
-					AUTH_RETRY_STEPS[step]!,
-					failure.error,
-					signal,
-					lastKey,
-				);
-				if (nextKey === undefined || nextKey === lastKey) continue;
-				lastKey = nextKey;
-				const isLastStep = step === AUTH_RETRY_STEPS.length - 1;
-				const next = await runAttempt(nextKey, !isLastStep);
+				const nextKey = await resolveNextAuthRetryKey(retryState, apiKeyResolver, failure.error, signal);
+				if (nextKey === undefined) break;
+				const next = await runAttempt(nextKey);
 				if (!next) return;
 				failure = next;
 			}

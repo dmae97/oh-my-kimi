@@ -12,6 +12,7 @@
 ### Fixed
 
 - Fixed OAuth credential resolution returning "No API key found" when every plan-eligible OpenAI Codex account was rate-limit blocked and the only unblocked account failed the model's plan gate: resolution now runs a last-resort ladder that first yields a plan-fitting account regardless of usage blocks (so callers get real usage-limit retry semantics), then tries every account with the plan filter dropped before reporting no credential
+- Fixed provider-agnostic replay-safe usage/account-quota failures to rotate through every distinct eligible credential instead of stopping after the fixed a/b/c ladder, while preserving transient-429 backoff, cycle/abort guards, exact failed-credential targeting despite stale session stickiness, and a finite safety ceiling.
 
 ## [16.4.5] - 2026-07-11
 
