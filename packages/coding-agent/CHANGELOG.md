@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Updated status event log to prioritize the most recent entries in the display window
+
 ## [16.4.8] - 2026-07-12
 ### Added
 
