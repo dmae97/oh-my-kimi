@@ -1,5 +1,5 @@
 import { untilAborted } from "@oh-my-pi/pi-utils";
-import { throwIfAborted } from "../tool-errors";
+import { ToolError, throwIfAborted } from "../tool-errors";
 
 /**
  * Marks a run-scoped promise as observed without changing its behavior for awaited callers.
@@ -16,12 +16,51 @@ export function markHandled<T>(promise: Promise<T>): Promise<T> {
 	return promise;
 }
 
-/** Sleeps inside evaluated browser code while honoring the owning run's cancellation signal. */
-export function waitForBrowserRun(ms: number, signal: AbortSignal): Promise<void> {
-	const promise = (async (): Promise<void> => {
+/** Options for the predicate form of the run-scoped `wait()` helper. */
+export interface WaitPredicateOptions {
+	/** Max time to poll before failing, in ms (default 30_000). */
+	timeout?: number;
+	/** Poll interval in ms (default 100, floor 10). */
+	interval?: number;
+}
+
+/**
+ * Run-scoped `wait()` helper for evaluated browser code, honoring the owning run's
+ * cancellation signal.
+ *
+ * - `wait(ms)` sleeps for `ms` milliseconds.
+ * - `wait(fn, { timeout?, interval? })` polls `fn` (sync or async) until it returns a
+ *   truthy value and resolves with that value; throws a named `ToolError` on timeout
+ *   instead of stalling into the whole-cell deadline. Predicate errors propagate.
+ */
+export function waitForBrowserRun(
+	msOrPredicate: number | (() => unknown),
+	signal: AbortSignal,
+	opts?: WaitPredicateOptions,
+): Promise<unknown> {
+	const promise = (async (): Promise<unknown> => {
 		throwIfAborted(signal);
-		await untilAborted(signal, () => Bun.sleep(ms));
-		throwIfAborted(signal);
+		if (typeof msOrPredicate === "number") {
+			await untilAborted(signal, async () => await Bun.sleep(msOrPredicate));
+			throwIfAborted(signal);
+			return undefined;
+		}
+		if (typeof msOrPredicate !== "function") {
+			throw new ToolError("wait(...) expects milliseconds (number) or a predicate function to poll");
+		}
+		const timeout =
+			opts?.timeout !== undefined && Number.isFinite(opts.timeout) && opts.timeout > 0 ? opts.timeout : 30_000;
+		const interval = Math.max(opts?.interval ?? 100, 10);
+		const deadline = Date.now() + timeout;
+		for (;;) {
+			const value = await untilAborted(signal, async () => await msOrPredicate());
+			throwIfAborted(signal);
+			if (value) return value;
+			if (Date.now() + interval > deadline) {
+				throw new ToolError(`wait(predicate) timed out after ${timeout}ms — predicate never returned truthy`);
+			}
+			await untilAborted(signal, async () => await Bun.sleep(interval));
+		}
 	})();
 	return markHandled(promise);
 }

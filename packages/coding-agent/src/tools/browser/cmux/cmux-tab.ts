@@ -12,7 +12,7 @@ import { ToolAbortError, ToolError, throwIfAborted } from "../../tool-errors";
 import { type AriaSnapshotOptions, buildAriaSnapshotScript } from "../aria/aria-snapshot";
 import { DEFAULT_VIEWPORT } from "../launch";
 import { extractReadableFromHtml, type ReadableFormat } from "../readable";
-import { bindBrowserRunFacade, waitForBrowserRun } from "../run-cancellation";
+import { bindBrowserRunFacade, type WaitPredicateOptions, waitForBrowserRun } from "../run-cancellation";
 import { cloneSafe, RunOutput } from "../run-output";
 import type { Observation, ReadyInfo, RunResultOk, ScreenshotResult, SessionSnapshot } from "../tab-protocol";
 import {
@@ -1352,7 +1352,8 @@ export async function runCmuxCode(tab: CmuxTab, opts: RunCmuxCodeOptions): Promi
 			assert: (cond: unknown, text?: string): void => {
 				if (!cond) throw new ToolError(text ?? "Assertion failed");
 			},
-			wait: (ms: number): Promise<void> => waitForBrowserRun(ms, signal),
+			wait: (msOrPredicate: number | (() => unknown), opts?: WaitPredicateOptions): Promise<unknown> =>
+				waitForBrowserRun(msOrPredicate, signal, opts),
 		});
 
 		const hooks: RuntimeHooks = {
