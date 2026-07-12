@@ -46,6 +46,7 @@ import {
 	type SkillPromptDetails,
 } from "../../session/messages";
 import type { SessionContext } from "../../session/session-context";
+import { replaceTabs } from "../../tools/render-utils";
 import { buildSkillCommandPrompt, invokeSkillCommandFromText, isKnownSkillCommand } from "../skill-command";
 import { createAssistantMessageComponent } from "./interactive-context-helpers";
 import {
@@ -677,35 +678,33 @@ export class UiHelpers {
 		this.ctx.pendingMessagesContainer.disposeChildren();
 		const queuedMessages = this.ctx.viewSession.getQueuedMessages() as QueuedMessages;
 
-		const steeringMessages: Array<{ message: string; label: string }> = [];
-		for (const message of queuedMessages.steering) {
-			steeringMessages.push({ message, label: "Steer" });
-		}
+		const steeringMessages = [...queuedMessages.steering];
 		for (const entry of this.ctx.compactionQueuedMessages as CompactionQueuedMessage[]) {
-			if (entry.mode === "steer") {
-				steeringMessages.push({ message: entry.text, label: "Steer" });
-			}
+			if (entry.mode === "steer") steeringMessages.push(entry.text);
 		}
 
-		const followUpMessages: Array<{ message: string; label: string }> = [];
-		for (const message of queuedMessages.followUp) {
-			followUpMessages.push({ message, label: "Follow-up" });
-		}
+		const followUpMessages = [...queuedMessages.followUp];
 		for (const entry of this.ctx.compactionQueuedMessages as CompactionQueuedMessage[]) {
-			if (entry.mode === "followUp") {
-				followUpMessages.push({ message: entry.text, label: "Follow-up" });
-			}
+			if (entry.mode === "followUp") followUpMessages.push(entry.text);
 		}
 
-		const allMessages = [...steeringMessages, ...followUpMessages];
-		if (allMessages.length > 0) {
+		const groups = [
+			{ label: "Steering", messages: steeringMessages },
+			{ label: "After yield", messages: followUpMessages },
+		].filter(group => group.messages.length > 0);
+		if (groups.length > 0) {
 			this.ctx.pendingMessagesContainer.addChild(new Spacer(1));
-			for (const entry of allMessages) {
-				const queuedText = theme.fg("dim", `${entry.label}: ${entry.message}`);
-				this.ctx.pendingMessagesContainer.addChild(new TruncatedText(queuedText, 1, 0));
+			for (const group of groups) {
+				const heading = theme.fg("muted", `${group.label}${theme.sep.dot}${group.messages.length}`);
+				this.ctx.pendingMessagesContainer.addChild(new TruncatedText(heading, 1, 0));
+				for (let index = 0; index < group.messages.length; index++) {
+					const message = replaceTabs(group.messages[index] ?? "").replace(/\r?\n/g, " ↵ ");
+					const queuedText = theme.fg("dim", `  ${index + 1}. ${message}`);
+					this.ctx.pendingMessagesContainer.addChild(new TruncatedText(queuedText, 1, 0));
+				}
 			}
 			const dequeueKey = this.ctx.keybindings.getDisplayString("app.message.dequeue") || "Alt+Up";
-			const hintText = theme.fg("dim", `${theme.tree.hook} ${dequeueKey} to edit`);
+			const hintText = theme.fg("dim", `  ${theme.tree.hook} ${dequeueKey} to edit`);
 			this.ctx.pendingMessagesContainer.addChild(new TruncatedText(hintText, 1, 0));
 		}
 	}

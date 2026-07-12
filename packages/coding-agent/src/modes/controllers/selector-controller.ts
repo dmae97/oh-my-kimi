@@ -616,7 +616,7 @@ export class SelectorController {
 			this.ctx.session.modelRegistry,
 			this.ctx.session.scopedModels,
 			{
-				onAssign: async (model, role, thinkingLevel, selector, action) => {
+				onAssign: async (model, role, thinkingLevel, selector) => {
 					// `auto` is session-global: never baked into a per-role model value
 					// (it can't round-trip through `model:<level>`). Apply it to the session
 					// separately and persist via `defaultThinkingLevel`.
@@ -624,18 +624,6 @@ export class SelectorController {
 					const concreteThinking = isAuto || thinkingLevel === undefined ? undefined : thinkingLevel;
 					const selectorValue = selector ?? `${model.provider}/${model.id}`;
 					try {
-						if (action === "retryFallback") {
-							const fallbackSelector = formatModelSelectorValue(selectorValue, concreteThinking);
-							const fallbackChains = this.ctx.settings.get("retry.fallbackChains");
-							const chain = Array.isArray(fallbackChains[role]) ? fallbackChains[role] : [];
-							this.ctx.settings.set("retry.fallbackChains", {
-								...fallbackChains,
-								[role]: [fallbackSelector, ...chain.filter(existing => existing !== fallbackSelector)],
-							});
-							const roleInfo = getRoleInfo(role, settings);
-							this.ctx.showStatus(`${roleInfo?.name ?? role} fallback model: ${fallbackSelector}`);
-							return;
-						}
 						if (role === "default") {
 							const { switched } = await this.ctx.session.setModel(model, role, {
 								selector,
@@ -675,6 +663,25 @@ export class SelectorController {
 						this.ctx.settings.setModelRole(role, undefined);
 						const roleInfo = getRoleInfo(role, settings);
 						this.ctx.showStatus(`${roleInfo?.name ?? role} role cleared — auto-selection applies`);
+					} catch (error) {
+						this.ctx.showError(error instanceof Error ? error.message : String(error));
+					}
+				},
+				onFallbackChainChange: (role, chain) => {
+					try {
+						const chains = { ...this.ctx.settings.get("retry.fallbackChains") };
+						if (chain.length === 0) {
+							delete chains[role];
+						} else {
+							chains[role] = chain;
+						}
+						this.ctx.settings.set("retry.fallbackChains", chains);
+						const roleInfo = getRoleInfo(role, settings);
+						this.ctx.showStatus(
+							chain.length > 0
+								? `${roleInfo?.name ?? role} fallbacks: ${chain.join(" → ")}`
+								: `${roleInfo?.name ?? role} fallbacks cleared`,
+						);
 					} catch (error) {
 						this.ctx.showError(error instanceof Error ? error.message : String(error));
 					}

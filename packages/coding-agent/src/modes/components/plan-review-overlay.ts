@@ -82,6 +82,8 @@ export interface PlanReviewOverlayCallbacks {
 	onPick: (label: string) => void;
 	/** Invoked on Esc / cancel. */
 	onCancel: () => void;
+	/** Invoked with the current full plan text when the copy hotkey is pressed. */
+	onCopyPlan?: (content: string) => void | Promise<void>;
 	/** Invoked when the external-editor key is pressed (overlay stays open). */
 	onExternalEditor?: () => void;
 	/** Invoked when the external-editor key edits the active annotation draft. */
@@ -300,6 +302,10 @@ export class PlanReviewOverlay implements Component {
 		}
 		if (this.callbacks.onExternalEditor && matchesAppExternalEditor(keyData)) {
 			this.callbacks.onExternalEditor();
+			return;
+		}
+		if (this.callbacks.onCopyPlan && keyData === "c") {
+			void this.callbacks.onCopyPlan(joinPlanSections(this.#sections));
 			return;
 		}
 		if (matchesKey(keyData, "tab") || keyData === "\t") {
@@ -677,6 +683,7 @@ export class PlanReviewOverlay implements Component {
 				parts.push("↑↓ scroll", "⇧ faster", "pgup/pgdn", "g/G ends");
 				break;
 		}
+		if (this.callbacks.onCopyPlan) parts.push("c copy");
 		parts.push("tab regions");
 		if (this.#externalEditorLabel && this.#focus !== "toc") parts.push(`${this.#externalEditorLabel} editor`);
 		parts.push(this.#helpSuffix);

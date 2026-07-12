@@ -385,6 +385,31 @@ retry:
   maxDelayMs: 300000
   modelFallback: true
   fallbackRevertPolicy: cooldown-expiry
+  fallbackChains:
+    # Any role without an explicit chain inherits the "default" chain.
+    default:
+      - anthropic/claude-opus-4-5
+      - openai/gpt-5.5
+      - google/gemini-3-pro
+    # Per-role chains override the default (roles from `modelRoles`,
+    # including custom roles). Selectors accept an optional thinking
+    # suffix, e.g. openai/gpt-5.5:low.
+    smol:
+      - openai/gpt-5.5-mini
+      - anthropic/claude-haiku-4-5
+    # Model-selector keys (any key containing "/") attach the chain to the
+    # model itself: it applies whenever that model is active, no matter
+    # which role it is assigned to, and survives role reassignment.
+    google/gemini-3-pro:
+      - google-vertex/gemini-3-pro
+    # A `provider/*` KEY covers every model of a provider — current or
+    # future. A `provider/*` ENTRY keeps the failing model's id and swaps
+    # the provider: google-antigravity/x -> google/x -> google-vertex/x.
+    # Ids missing on the target provider are skipped (near-miss ids resolve
+    # fuzzily); exact model keys override the wildcard for a specific model.
+    google-antigravity/*:
+      - google/*
+      - google-vertex/*
 ```
 
 | Key | Type | Default | Notes |
@@ -394,8 +419,10 @@ retry:
 | `retry.baseDelayMs` | number | `500` | Initial backoff. |
 | `retry.maxDelayMs` | number | `300000` | Backoff ceiling (5 min). |
 | `retry.modelFallback` | boolean | `true` | Fall back to another model when one is unavailable. |
-| `retry.fallbackChains` | record | `{}` | Per-model fallback chains. |
-| `retry.fallbackRevertPolicy` | enum | `cooldown-expiry` | `cooldown-expiry`, `never`. |
+| `retry.fallbackChains` | record | `{}` | Maps roles, model selectors, or `provider/*` wildcards to ordered fallback selectors. Keys containing `/` are model-oriented and win over roles: `provider/model-id` matches that exact model, `provider/*` matches every model of the provider. A `provider/*` *entry* keeps the failing model's id and swaps the provider. The `default` chain covers every assigned role without its own chain. Unknown models/providers or malformed chains are reported as config warnings at startup. |
+| `retry.fallbackRevertPolicy` | enum | `cooldown-expiry` | `cooldown-expiry` returns to the primary model once its suppression window ends; `never` stays on the fallback until switched manually. |
+
+When the active model keeps failing (429s, quota walls, provider outages) and `retry.modelFallback` is on, the session picks the chain that owns the failing model, by specificity: an exact `provider/model-id` key, then a `provider/*` wildcard, then the current role's chain, then `default`. It skips models whose selectors are still cooling down and switches for the rest of the turn. Subagents get their own per-spawn chains when their agent definition lists multiple model patterns — the first resolvable pattern is primary and the rest become its fallbacks; there is no `agent:<name>` key in `fallbackChains`.
 
 ### Tools and approvals
 

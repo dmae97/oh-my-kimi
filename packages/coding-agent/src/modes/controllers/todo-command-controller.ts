@@ -133,8 +133,7 @@ export class TodoCommandController {
 
 	/**
 	 * True latest todo state for the user-facing /todo verbs. Reads from session
-	 * entries so that completed/abandoned tasks remain visible after resume
-	 * (where `session.getTodoPhases()` would have stripped them).
+	 * entries or falls back to the active session state.
 	 */
 	#currentPhases(): TodoPhase[] {
 		const fromEntries = getLatestTodoPhasesFromEntries(this.ctx.sessionManager.getBranch());

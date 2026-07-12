@@ -40,6 +40,18 @@ class BlockingDoubleInterruptComponent implements Component {
 	}
 }
 
+class NavigationProbe implements Component {
+	#selected = 0;
+
+	handleInput(data: string): void {
+		if (data === "\x1b[B") this.#selected++;
+	}
+
+	render(_width: number): readonly string[] {
+		return [`selected:${this.#selected}`];
+	}
+}
+
 async function drainNextTick(): Promise<void> {
 	const nextTick = Promise.withResolvers<void>();
 	process.nextTick(nextTick.resolve);
@@ -101,5 +113,29 @@ describe("TUI input priority", () => {
 		expect(component.slowRenderBeforeSecond).toBe(false);
 		expect(component.interruptsHandled).toBe(2);
 		expect(component.exitRequests).toBe(1);
+	});
+
+	it("renders ordinary navigation without an interrupt-grace delay", async () => {
+		vi.useFakeTimers();
+		setSystemTime(new Date(1_000));
+		const terminal = new VirtualTerminal(40, 8);
+		const tui = new TUI(terminal, undefined, { renderScheduler: fakeTimerScheduler() });
+		const component = new NavigationProbe();
+		tui.addChild(component);
+		tui.setFocus(component);
+
+		try {
+			tui.start();
+			await drainNextTick();
+			vi.advanceTimersByTime(40);
+
+			terminal.sendInput("\x1b[B");
+			await drainNextTick();
+			await drainNextTick();
+
+			expect(terminal.getViewport().map(row => row.trimEnd())).toContain("selected:1");
+		} finally {
+			tui.stop();
+		}
 	});
 });

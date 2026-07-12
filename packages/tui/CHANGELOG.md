@@ -5,6 +5,17 @@
 ### Fixed
 
 - Bounded the Markdown L2 render cache by weighted output size and excluded oversized renders, preventing a few large documents from occupying ordinary cache slots indefinitely ([#4820](https://github.com/can1357/oh-my-pi/issues/4820)).
+## [16.4.7] - 2026-07-12
+
+### Fixed
+
+- Fixed keyboard navigation paying an extra frame of input latency after idle; the queue-drain grace now applies only to Ctrl+C and Escape double-press gestures.
+
+## [16.4.6] - 2026-07-12
+
+### Added
+
+- Added support for width-changing editor text decorators on standalone presentation lines, with decorated output safely truncated to the available content width.
 
 ## [16.4.5] - 2026-07-11
 

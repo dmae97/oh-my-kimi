@@ -44,20 +44,19 @@ const NEW_GLOW_PERIOD_MS = 1500;
  *  affordance surfaces this many times as often. */
 const NEW_TIP_WEIGHT = 4;
 
-/** Per-tip selection weights, parallel to {@link TIPS}. */
-const TIP_WEIGHTS: readonly number[] = TIPS.map(tip => (NEW_TIP_MARKER.test(tip) ? NEW_TIP_WEIGHT : 1));
-const TIP_WEIGHT_TOTAL = TIP_WEIGHTS.reduce((sum, weight) => sum + weight, 0);
-
-/** Pick a tip at random, biased toward "[NEW]" tips by {@link NEW_TIP_WEIGHT}.
- *  Returns "" when no tips are embedded. */
-function pickWeightedTip(): string {
-	if (TIPS.length === 0) return "";
-	let r = Math.random() * TIP_WEIGHT_TOTAL;
-	for (let i = 0; i < TIPS.length; i++) {
-		r -= TIP_WEIGHTS[i] ?? 1;
-		if (r < 0) return TIPS[i] ?? "";
+/** Pick a tip from `tips`, biased toward "[NEW]" tips by {@link NEW_TIP_WEIGHT};
+ *  `r` is a uniform sample in [0, 1). Returns "" when `tips` is empty.
+ *  Exported for tests. */
+export function pickWeightedTip(tips: readonly string[], r: number): string {
+	if (tips.length === 0) return "";
+	const weights = tips.map(tip => (NEW_TIP_MARKER.test(tip) ? NEW_TIP_WEIGHT : 1));
+	const total = weights.reduce((sum, weight) => sum + weight, 0);
+	let acc = r * total;
+	for (let i = 0; i < tips.length; i++) {
+		acc -= weights[i] ?? 1;
+		if (acc < 0) return tips[i] ?? "";
 	}
-	return TIPS[TIPS.length - 1] ?? "";
+	return tips[tips.length - 1] ?? "";
 }
 
 type ColorEncoding = "ansi-16m" | "ansi-256";
@@ -161,7 +160,7 @@ export class WelcomeComponent implements Component {
 			if (theme.getSymbolPreset() === "unicode" && Math.random() < 0.1) {
 				this.#selectedTip = "Please use nerdfont 😭.";
 			} else {
-				this.#selectedTip = pickWeightedTip();
+				this.#selectedTip = pickWeightedTip(TIPS, Math.random());
 			}
 		}
 		return this.#selectedTip || undefined;

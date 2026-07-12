@@ -21,6 +21,7 @@ import type {
 	SnapshotResponse,
 	SnapshotStreamEvent,
 	UsageResponse,
+	UsageStaleResponse,
 } from "./types";
 import {
 	credentialBlockResponseSchema,
@@ -32,6 +33,7 @@ import {
 	snapshotResponseSchema,
 	snapshotStreamEventSchema,
 	usageResponseSchema,
+	usageStaleResponseSchema,
 } from "./wire-schemas";
 
 export interface AuthBrokerClientOptions {
@@ -240,6 +242,13 @@ export class AuthBrokerClient {
 		// the broker can ship new shapes ahead of the client. `raw` is accepted
 		// but normally stripped by the broker before send.
 		return this.#request<UsageResponse>("GET", "/v1/usage", { schema: usageResponseSchema, signal });
+	}
+
+	notifyUsageStale(signal?: AbortSignal): Promise<UsageStaleResponse> {
+		return this.#request<UsageStaleResponse>("POST", "/v1/usage/stale", {
+			schema: usageStaleResponseSchema,
+			signal,
+		});
 	}
 
 	async refreshCredential(id: number, signal?: AbortSignal): Promise<CredentialRefreshResponse> {

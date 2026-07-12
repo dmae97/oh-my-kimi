@@ -13,7 +13,7 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import {
 	type Component,
-	fuzzyFilter,
+	fuzzyRank,
 	Input,
 	matchesKey,
 	ScrollView,
@@ -24,6 +24,7 @@ import {
 import { formatNumber } from "@oh-my-pi/pi-utils";
 import { getRoleInfo, MODEL_ROLE_IDS } from "../../config/model-roles";
 import type { Settings } from "../../config/settings";
+import type { ModelPerfStats } from "../../session/agent-storage";
 import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../../thinking";
 import { theme } from "../theme/theme";
 import {
@@ -227,6 +228,18 @@ function formatContext(model: Model): string {
 	return `${formatNumber(ctx).toLowerCase()} ${theme.icon.context.replace(/:$/, "")}`;
 }
 
+/** `118t/s` average output speed; one decimal below 10 t/s. */
+function formatTps(tps: number): string {
+	const value = tps >= 10 ? String(Math.round(tps)) : tps.toFixed(1);
+	return `${value}t/s`;
+}
+
+/** `0.9s` average time-to-first-token; whole seconds from 10s up. */
+function formatTtft(ms: number): string {
+	const seconds = ms / 1000;
+	return seconds >= 10 ? `${Math.round(seconds)}s` : `${seconds.toFixed(1)}s`;
+}
+
 /** Pad `text` on the left to `width` terminal columns (ANSI/emoji aware). */
 function padLeftVisible(text: string, width: number): string {
 	const missing = width - visibleWidth(text);
@@ -250,6 +263,12 @@ export interface ModelBrowserOptions {
 const LIST_ROW_START = 2;
 /** Rendered rows after the list window: blank + two detail rows. */
 const DETAIL_ROWS = 3;
+/** Row width from which the measured-perf column appears (TPS only). */
+const PERF_TPS_MIN_WIDTH = 76;
+/** Row width from which the perf column also includes TTFT. */
+const PERF_FULL_MIN_WIDTH = 96;
+/** What the per-row perf column shows at the current width. */
+type PerfMode = "off" | "tps" | "full";
 
 /**
  * The reusable browser component. Renders a fixed-height block
@@ -263,6 +282,7 @@ export class ModelBrowser implements Component {
 	#visibleItems: ModelBrowserItem[] = [];
 	#roles: RoleAssignments = {};
 	#mruOrder: ReadonlyArray<string> = [];
+	#perf: ReadonlyMap<string, ModelPerfStats> = new Map();
 	#selectedIndex = 0;
 	#hoveredIndex: number | null = null;
 	#maxVisible = 10;
@@ -270,8 +290,11 @@ export class ModelBrowser implements Component {
 	#currentContextTokens: number;
 	#disableOverContext: boolean;
 	#emptyText?: () => string | undefined;
+	/** First visible list row; panned by the wheel, snapped to the selection on keyboard navigation. */
 	#windowStart = 0;
 	#windowCount = 0;
+	/** Whether the host pane owns arrow keys; drives cursor strength and the selected-row band. */
+	#focused = true;
 
 	/** Enter or click-on-selected. */
 	onActivate?: (item: ModelBrowserItem) => void;
@@ -310,12 +333,23 @@ export class ModelBrowser implements Component {
 		this.#mruOrder = order;
 	}
 
+	/** Measured TPS/TTFT averages keyed by `provider/id` selector (see AgentStorage.getModelPerf). */
+	setPerfStats(perf: ReadonlyMap<string, ModelPerfStats>): void {
+		this.#perf = perf;
+	}
+
 	setMaxVisible(rows: number): void {
+		// No selection snap here: hosts call this on every render, and it must
+		// not undo wheel panning. render() re-clamps the window.
 		this.#maxVisible = Math.max(1, rows);
 	}
 
 	setShowProvider(show: boolean): void {
 		this.#showProvider = show;
+	}
+	/** Focused: accent cursor + selected-row background band. Unfocused: dim cursor, no band. */
+	setFocused(focused: boolean): void {
+		this.#focused = focused;
 	}
 
 	/** Total rendered height for the current `maxVisible` (host layout budgeting). */
@@ -345,6 +379,7 @@ export class ModelBrowser implements Component {
 		const index = this.#visibleItems.findIndex(item => item.selector === selector);
 		if (index < 0) return false;
 		this.#selectedIndex = this.#coerceSelectedIndex(index);
+		this.#ensureSelectedVisible();
 		return true;
 	}
 
@@ -372,23 +407,48 @@ export class ModelBrowser implements Component {
 		return clamped;
 	}
 
-	moveSelection(delta: number): void {
+	/** Clamp a window start into `[0, total - maxVisible]`. */
+	#clampWindowStart(start: number): number {
+		return Math.max(0, Math.min(start, this.#visibleItems.length - this.#maxVisible));
+	}
+
+	/** Scroll just enough to keep the selected row inside the window. */
+	#ensureSelectedVisible(): void {
+		if (this.#selectedIndex < this.#windowStart) {
+			this.#windowStart = this.#selectedIndex;
+		} else if (this.#selectedIndex >= this.#windowStart + this.#maxVisible) {
+			this.#windowStart = this.#selectedIndex - this.#maxVisible + 1;
+		}
+		this.#windowStart = this.#clampWindowStart(this.#windowStart);
+	}
+
+	/**
+	 * Move the selection by `delta` rows, skipping disabled rows. Single steps
+	 * wrap at the ends; `wrap: false` (page/home/end jumps) clamps instead.
+	 */
+	moveSelection(delta: number, options: { wrap?: boolean } = {}): void {
 		const count = this.#visibleItems.length;
 		if (count === 0) return;
-		let index = this.#selectedIndex;
-		for (let step = 0; step < count; step++) {
-			index = (index + delta + count) % count;
-			const item = this.#visibleItems[index];
-			if (item && !this.#isDisabled(item)) {
-				this.#setSelectedIndex(index);
-				return;
+		if (options.wrap ?? true) {
+			let index = this.#selectedIndex;
+			for (let step = 0; step < count; step++) {
+				index = (index + delta + count) % count;
+				const item = this.#visibleItems[index];
+				if (item && !this.#isDisabled(item)) {
+					this.#setSelectedIndex(index);
+					return;
+				}
 			}
+			return;
 		}
+		const target = Math.max(0, Math.min(this.#selectedIndex + delta, count - 1));
+		this.#setSelectedIndex(this.#coerceSelectedIndex(target));
 	}
 
 	#setSelectedIndex(index: number): void {
 		if (index === this.#selectedIndex) return;
 		this.#selectedIndex = index;
+		this.#ensureSelectedVisible();
 		this.onSelectionChange?.(this.getSelected());
 	}
 
@@ -432,16 +492,26 @@ export class ModelBrowser implements Component {
 		if (query.trim()) {
 			// Match against the displayed "provider/id" string so the user can
 			// type what they see: bare names, provider prefixes, or scoped
-			// queries all flow through the same fuzzy matcher. Skip role rank
-			// so a weakly matching default doesn't trump a stronger match.
-			const matches = fuzzyFilter(this.#baseItems, query, ({ provider, id }) => `${provider}/${id}`);
+			// queries all flow through the same fuzzy matcher.
+			const ranked = fuzzyRank(this.#baseItems, query, ({ provider, id }) => `${provider}/${id}`);
+			const matches = ranked.map(result => result.item);
+			// Match quality is the primary key while searching: an exact
+			// "gpt-5.5" must beat the MRU (or role-assigned) "gpt-5.6", so
+			// role rank is skipped and MRU only breaks ties. Scores are
+			// bucketed so sub-point position noise (provider-name length)
+			// can't split equally good matches; within a bucket the stable
+			// sort keeps sortModelItems' MRU/version order.
 			sortModelItems(matches, { roles: this.#roles, mruOrder: this.#mruOrder, skipRoleRank: true });
+			const buckets = new Map<ModelBrowserItem, number>();
+			for (const result of ranked) buckets.set(result.item, Math.round(result.score / 10));
+			matches.sort((a, b) => (buckets.get(a) ?? 0) - (buckets.get(b) ?? 0));
 			items = matches;
 		} else {
 			items = this.#baseItems;
 		}
 		this.#visibleItems = this.#insertSeparator(items);
 		this.#selectedIndex = this.#coerceSelectedIndex(Math.min(this.#selectedIndex, this.#visibleItems.length - 1));
+		this.#ensureSelectedVisible();
 		this.onSelectionChange?.(this.getSelected());
 	}
 
@@ -459,11 +529,19 @@ export class ModelBrowser implements Component {
 			return;
 		}
 		if (matchesSelectPageUp(data)) {
-			this.moveSelection(-this.#maxVisible);
+			this.moveSelection(-this.#maxVisible, { wrap: false });
 			return;
 		}
 		if (matchesSelectPageDown(data)) {
-			this.moveSelection(this.#maxVisible);
+			this.moveSelection(this.#maxVisible, { wrap: false });
+			return;
+		}
+		if (matchesKey(data, "home")) {
+			this.moveSelection(-this.#visibleItems.length, { wrap: false });
+			return;
+		}
+		if (matchesKey(data, "end")) {
+			this.moveSelection(this.#visibleItems.length, { wrap: false });
 			return;
 		}
 		if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
@@ -499,50 +577,49 @@ export class ModelBrowser implements Component {
 	 */
 	routeMouse(event: SgrMouseEvent, line: number): void {
 		if (event.wheel !== null) {
-			this.moveSelection(event.wheel);
-			return;
-		}
-		const listLine = line - LIST_ROW_START;
-		if (listLine < 0 || listLine >= this.#windowCount) {
-			if (event.motion && this.#hoveredIndex !== null) {
-				this.#hoveredIndex = null;
-			}
-			return;
-		}
-		const index = this.#windowStart + listLine;
-		const item = this.#visibleItems[index];
-		if (!item || this.#isDisabled(item)) {
-			this.#hoveredIndex = null;
+			// Wheel pans the window; it never moves the selection and never wraps.
+			this.#windowStart = this.#clampWindowStart(this.#windowStart + event.wheel);
+			this.#hoveredIndex = this.#hoverIndexAt(line);
 			return;
 		}
 		if (event.motion) {
-			this.#hoveredIndex = index;
+			this.#hoveredIndex = this.#hoverIndexAt(line);
 			return;
 		}
-		if (event.leftClick) {
-			// Settings idiom: click selects, click-again activates.
-			if (index === this.#selectedIndex) {
-				this.onActivate?.(item);
-			} else {
-				this.#setSelectedIndex(index);
-			}
+		if (!event.leftClick) return;
+		const index = this.#hoverIndexAt(line);
+		const item = index !== null ? this.#visibleItems[index] : undefined;
+		if (index === null || !item) return;
+		// Settings idiom: click selects, click-again activates.
+		if (index === this.#selectedIndex) {
+			this.onActivate?.(item);
+		} else {
+			this.#setSelectedIndex(index);
 		}
 	}
+	/** Drop the hover band. Hosts call this when the pointer leaves the browser pane. */
+	clearHover(): void {
+		this.#hoveredIndex = null;
+	}
 
-	#chipsFor(model: Model): string {
-		const parts: string[] = [];
-		const seen = new Set<string>();
-		const pushChip = (role: string) => {
-			if (seen.has(role)) return;
-			seen.add(role);
-			const assignment = this.#roles[role];
-			if (!assignment || !modelsAreEqual(assignment.model, model)) return;
-			if (getRoleInfo(role, this.#settings).hidden) return;
-			parts.push(formatRoleChip(role, assignment, this.#settings));
-		};
-		for (const role of MODEL_ROLE_IDS) pushChip(role);
-		for (const role in this.#roles) pushChip(role);
-		return parts.length > 0 ? ` ${parts.join(" ")}` : "";
+	/** List index under a frame-local row, or null when off-list or on a disabled row. */
+	#hoverIndexAt(line: number): number | null {
+		const listLine = line - LIST_ROW_START;
+		if (listLine < 0 || listLine >= this.#windowCount) return null;
+		const index = this.#windowStart + listLine;
+		const item = this.#visibleItems[index];
+		if (!item || this.#isDisabled(item)) return null;
+		return index;
+	}
+
+	/** `0.9s 118t/s` measured-perf cell for the row's meta block; empty when unmeasured or the column is off. */
+	#perfCell(item: ModelBrowserItem, mode: PerfMode): string {
+		if (mode === "off") return "";
+		const perf = this.#perf.get(item.selector);
+		if (!perf) return "";
+		const tps = formatTps(perf.tps);
+		if (mode === "full" && perf.ttftMs !== null) return `${formatTtft(perf.ttftMs)} ${tps}`;
+		return tps;
 	}
 
 	#renderRow(
@@ -552,6 +629,8 @@ export class ModelBrowser implements Component {
 		hovered: boolean,
 		ctxWidth: number,
 		costWidth: number,
+		perfWidth: number,
+		perfMode: PerfMode,
 	): string {
 		if (item.id === "separator") {
 			const dashCount = Math.max(0, width - 4);
@@ -559,16 +638,19 @@ export class ModelBrowser implements Component {
 			return `  ${line}  `;
 		}
 		const disabled = this.#isDisabled(item);
-		const prefix = selected ? `${theme.fg("accent", theme.nav.cursor)} ` : "  ";
+		const prefix = selected && this.#focused ? `${theme.fg("accent", theme.nav.cursor)} ` : "  ";
 		const providerPrefix = this.#showProvider ? theme.fg("dim", `${item.provider}/`) : "";
 		const name = selected ? theme.fg("accent", item.id) : item.id;
 		const overLimit = disabled
 			? ` ${theme.status.disabled} context>${formatNumber(item.model.contextWindow ?? 0).toLowerCase()}`
 			: "";
-		let left = `${prefix}${providerPrefix}${name}${this.#chipsFor(item.model)}${overLimit}`;
+		let left = `${prefix}${providerPrefix}${name}${overLimit}`;
 
-		const meta = `${theme.fg("dim", padLeftVisible(formatContext(item.model), ctxWidth))}  ${theme.fg("dim", padLeftVisible(formatCostPair(item.model), costWidth))}`;
-		const metaWidth = ctxWidth + costWidth + 2;
+		// Perf column collapses entirely when no visible row has measurements.
+		const perfCol =
+			perfWidth > 0 ? `${theme.fg("dim", padLeftVisible(this.#perfCell(item, perfMode), perfWidth))}  ` : "";
+		const meta = `${perfCol}${theme.fg("dim", padLeftVisible(formatContext(item.model), ctxWidth))}  ${theme.fg("dim", padLeftVisible(formatCostPair(item.model), costWidth))}`;
+		const metaWidth = ctxWidth + costWidth + 2 + (perfWidth > 0 ? perfWidth + 2 : 0);
 		const available = Math.max(1, width - metaWidth - 1);
 		left = truncateToWidth(left, available);
 		const gap = Math.max(0, available - visibleWidth(left));
@@ -577,7 +659,9 @@ export class ModelBrowser implements Component {
 		if (disabled) {
 			line = theme.fg("dim", Bun.stripANSI(line));
 		}
-		if (hovered && !selected && !disabled) {
+		// The bg band is reserved for the mouse: it marks hover, nothing else.
+		// Keyboard selection is the cursor glyph + accent name.
+		if (hovered && !disabled) {
 			line = theme.bg("selectedBg", line);
 		}
 		return line;
@@ -594,6 +678,11 @@ export class ModelBrowser implements Component {
 		facts.push(`${formatCostPair(model)} per M`);
 		if (model.reasoning) facts.push("reasoning");
 		if (model.input.includes("image")) facts.push("vision");
+		const perf = this.#perf.get(selected.selector);
+		if (perf) {
+			facts.push(`~${formatTps(perf.tps)}`);
+			if (perf.ttftMs !== null) facts.push(`${formatTtft(perf.ttftMs)} ttft`);
+		}
 		const line1 = truncateToWidth(theme.fg("muted", `  ${facts.join(" · ")}`), width);
 
 		if (this.#isDisabled(selected)) {
@@ -626,12 +715,12 @@ export class ModelBrowser implements Component {
 		lines.push("");
 
 		const total = this.#visibleItems.length;
-		const startIndex = Math.max(
-			0,
-			Math.min(this.#selectedIndex - Math.floor(this.#maxVisible / 2), total - this.#maxVisible),
-		);
+		// The window is persistent state: wheel scrolling panned it, keyboard
+		// navigation snapped it to the selection. Re-clamp here because items
+		// or maxVisible may have changed since.
+		this.#windowStart = this.#clampWindowStart(this.#windowStart);
+		const startIndex = this.#windowStart;
 		const endIndex = Math.min(startIndex + this.#maxVisible, total);
-		this.#windowStart = startIndex;
 		this.#windowCount = Math.max(0, endIndex - startIndex);
 
 		if (total === 0) {
@@ -644,11 +733,14 @@ export class ModelBrowser implements Component {
 			// scanning the entire catalog on every render.
 			let ctxWidth = 0;
 			let costWidth = 0;
+			const perfMode: PerfMode = width >= PERF_FULL_MIN_WIDTH ? "full" : width >= PERF_TPS_MIN_WIDTH ? "tps" : "off";
+			let perfWidth = 0;
 			for (let i = startIndex; i < endIndex; i++) {
 				const item = this.#visibleItems[i];
 				if (!item) continue;
 				ctxWidth = Math.max(ctxWidth, visibleWidth(formatContext(item.model)));
 				costWidth = Math.max(costWidth, visibleWidth(formatCostPair(item.model)));
+				perfWidth = Math.max(perfWidth, visibleWidth(this.#perfCell(item, perfMode)));
 			}
 
 			const rows: string[] = [];
@@ -663,6 +755,8 @@ export class ModelBrowser implements Component {
 						i === this.#hoveredIndex,
 						ctxWidth,
 						costWidth,
+						perfWidth,
+						perfMode,
 					),
 				);
 			}

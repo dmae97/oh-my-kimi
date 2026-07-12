@@ -23,6 +23,7 @@ import { discoverAuthStorage } from "../sdk";
 const BAR_WIDTH = 28;
 
 export interface UsageCommandArgs {
+	action?: string;
 	json?: boolean;
 	provider?: string;
 	redact?: boolean;
@@ -755,6 +756,16 @@ function redactReportForJson(
 export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 	const authStorage = await discoverAuthStorage();
 	try {
+		if (cmd.action === "invalidate") {
+			const provider = cmd.provider?.toLowerCase();
+			await authStorage.invalidateUsageCache(provider);
+			if (provider) {
+				process.stdout.write(`Invalidated cached usage reports for provider "${provider}".\n`);
+			} else {
+				process.stdout.write("Invalidated cached usage reports for all providers.\n");
+			}
+			return;
+		}
 		if (cmd.history) {
 			const days = cmd.days !== undefined && Number.isFinite(cmd.days) && cmd.days > 0 ? cmd.days : 7;
 			const nowMs = Date.now();

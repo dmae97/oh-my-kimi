@@ -75,6 +75,11 @@ export interface CredentialBlocksDeleteResponse {
 	ok: boolean;
 }
 
+/** POST /v1/usage/stale response body. */
+export interface UsageStaleResponse {
+	ok: boolean;
+}
+
 /**
  * POST /v1/credential request body. The OAuth `refresh` must be the *real*
  * refresh token (not the sentinel) — the broker is the canonical writer.

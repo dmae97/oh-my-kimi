@@ -13,6 +13,7 @@ import { TinyTitleDownloadProgressComponent } from "../../modes/components/tiny-
 import { expandEmoticons } from "../../modes/emoji-autocomplete";
 import { materializeImageReferenceLinks, shiftImageMarkers } from "../../modes/image-references";
 import { createPromptActionAutocompleteProvider } from "../../modes/prompt-action-autocomplete";
+import { parseQueueShorthand, splitQueuedMessages } from "../../modes/queue-input";
 import { invokeSkillCommandFromText, isKnownSkillCommand } from "../../modes/skill-command";
 import type { InteractiveModeContext } from "../../modes/types";
 import manualContinuePrompt from "../../prompts/system/manual-continue.md" with { type: "text" };
@@ -266,6 +267,8 @@ export class InputController {
 			});
 		}
 		this.ctx.editor.onEscape = () => {
+			// Side-channel panels are the topmost view. Esc dismisses them before
+			// touching loop mode, maintenance, or the underlying main turn.
 			// Active context maintenance owns Esc: auto/manual compaction,
 			// handoff generation, and auto-retry backoff all advertise
 			// "(esc to cancel)". Dispatch on live session state instead of
@@ -281,6 +284,13 @@ export class InputController {
 			// (see EventController). Main-session maintenance still owns Esc and
 			// stays cancellable from the main view (focused submit gates /compact
 			// and handoff, so manual maintenance is main-only anyway).
+			if (this.ctx.hasActiveBtw() && this.ctx.handleBtwEscape()) {
+				return;
+			}
+			if (this.ctx.hasActiveOmfg() && this.ctx.handleOmfgEscape()) {
+				return;
+			}
+
 			if (!this.ctx.focusedAgentId) {
 				const viewSession = this.ctx.viewSession;
 				let aborted = false;
@@ -306,12 +316,6 @@ export class InputController {
 				} else {
 					this.ctx.cancelPendingSubmission();
 				}
-				return;
-			}
-			if (this.ctx.hasActiveBtw() && this.ctx.handleBtwEscape()) {
-				return;
-			}
-			if (this.ctx.hasActiveOmfg() && this.ctx.handleOmfgEscape()) {
 				return;
 			}
 			if (this.ctx.focusedAgentId) {
@@ -646,6 +650,16 @@ export class InputController {
 			}
 
 			if (!text && !hasInputImages) return;
+
+			const queueBody = parseQueueShorthand(text);
+			if (queueBody !== undefined) {
+				await this.#queueForYield(queueBody, {
+					historyText: text,
+					images: inputImages,
+					imageLinks: inputImageLinks,
+				});
+				return;
+			}
 
 			// Handle built-in slash commands
 			if (text) {
@@ -1112,6 +1126,126 @@ export class InputController {
 		} else {
 			this.ctx.showStatus("Nothing to retry");
 		}
+	}
+
+	/** Queue `/queue` input behind an active turn, or start it immediately when idle. */
+	async handleQueueCommand(text: string): Promise<void> {
+		const images = this.ctx.editor.pendingImages.length > 0 ? [...this.ctx.editor.pendingImages] : undefined;
+		const imageLinks =
+			images && this.ctx.editor.pendingImageLinks.length > 0 ? [...this.ctx.editor.pendingImageLinks] : undefined;
+		await this.#queueForYield(text, { images, imageLinks });
+	}
+
+	async #queueForYield(
+		text: string,
+		options: {
+			historyText?: string;
+			images?: ImageContent[];
+			imageLinks?: (string | undefined)[];
+		},
+	): Promise<void> {
+		const splitMessages = splitQueuedMessages(text);
+		if (splitMessages.length === 0 && !options.images?.length) {
+			this.ctx.editor.clearDraft();
+			this.ctx.showWarning("Usage: /queue <message> (or start a prompt with -> / =>)");
+			return;
+		}
+
+		const messages = splitMessages.length > 0 ? splitMessages : [""];
+		const originalDraft = this.ctx.editor.getText();
+		const images = options.images?.length ? [...options.images] : undefined;
+		const imageLinks = options.imageLinks
+			? [...options.imageLinks]
+			: images
+				? images.map(() => undefined)
+				: undefined;
+		this.ctx.editor.clearDraft(options.historyText);
+
+		if (this.ctx.session.isCompacting) {
+			for (let index = 0; index < messages.length; index++) {
+				this.ctx.compactionQueuedMessages.push({
+					text: messages[index] ?? "",
+					mode: "followUp",
+					images: index === 0 ? images : undefined,
+				});
+			}
+			this.ctx.updatePendingMessagesDisplay();
+			this.ctx.showStatus(
+				messages.length === 1
+					? "Queued message for after compaction"
+					: `Queued ${messages.length} messages for after compaction`,
+			);
+			this.ctx.ui.requestRender();
+			return;
+		}
+
+		const startImmediately = !this.ctx.session.isStreaming && this.ctx.session.queuedMessageCount === 0;
+		let queuedCount = 0;
+		try {
+			if (startImmediately && this.ctx.onInputCallback) {
+				const first = messages[0] ?? "";
+				const submission = this.ctx.startPendingSubmission({
+					text: first,
+					images,
+					imageLinks,
+					streamingBehavior: "followUp",
+				});
+				this.ctx.onInputCallback(submission);
+				queuedCount = 1;
+			}
+			while (queuedCount < messages.length) {
+				const message = messages[queuedCount] ?? "";
+				const queuedImages = queuedCount === 0 ? images : undefined;
+				await this.ctx.withLocalSubmission(
+					message,
+					async () => {
+						if (startImmediately && queuedCount === 0) {
+							await this.ctx.session.prompt(message, {
+								images: queuedImages,
+								streamingBehavior: "followUp",
+							});
+						} else {
+							await this.ctx.session.followUp(message, queuedImages);
+						}
+					},
+					{ imageCount: queuedImages?.length ?? 0 },
+				);
+				queuedCount++;
+			}
+		} catch (error) {
+			if (queuedCount === 0) {
+				this.ctx.editor.setText(originalDraft);
+				if (images) {
+					this.ctx.editor.pendingImages = images;
+					this.ctx.editor.pendingImageLinks = imageLinks ?? images.map(() => undefined);
+					this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
+				}
+			} else {
+				const remaining = messages.slice(queuedCount);
+				const restored =
+					remaining.length === 1
+						? `=> ${remaining[0]}`
+						: `=>\n${remaining
+								.map((message, index) => `${index + 1}. ${message.replaceAll("\n", "\n   ")}`)
+								.join("\n")}`;
+				this.ctx.editor.setText(restored);
+			}
+			this.ctx.showError(error instanceof Error ? error.message : String(error));
+		}
+
+		this.ctx.updatePendingMessagesDisplay();
+		if (queuedCount === messages.length) {
+			this.ctx.showStatus(
+				startImmediately
+					? queuedCount === 1
+						? "Sent queued message"
+						: `Sent first message; queued ${queuedCount - 1} for later yields`
+					: queuedCount === 1
+						? "Queued message for when the agent yields"
+						: `Queued ${queuedCount} messages for when the agent yields`,
+			);
+		}
+		this.ctx.ui.requestRender();
 	}
 
 	/** Send editor text as a follow-up message (queued behind current stream). */
