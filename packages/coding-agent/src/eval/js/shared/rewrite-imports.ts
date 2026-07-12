@@ -48,6 +48,15 @@ type BabelClassDeclaration = {
 };
 
 type BabelLexicalDecl = BabelVariableDeclaration | BabelClassDeclaration;
+type BabelFunctionDeclaration = {
+	type: "FunctionDeclaration";
+	start: number;
+	end: number;
+	id: { start: number; end: number; name: string } | null;
+};
+
+/** Top-level declarations whose bindings must survive the cell (demoted and/or published). */
+type BabelPublishableDecl = BabelLexicalDecl | BabelFunctionDeclaration;
 
 type BabelExpressionStatement = {
 	type: "ExpressionStatement";
@@ -322,7 +331,7 @@ function collectBindingNames(pattern: unknown, names: string[]): void {
 	}
 }
 
-function getLexicalBindingNames(node: BabelLexicalDecl): string[] {
+function getLexicalBindingNames(node: BabelPublishableDecl): string[] {
 	const names: string[] = [];
 	if (node.type === "VariableDeclaration") {
 		for (const declaration of node.declarations ?? []) collectBindingNames(declaration.id, names);
@@ -348,40 +357,49 @@ function appendGlobalBindingPublish(source: string, names: readonly string[]): s
  *   let { a, b } = obj;      -> var { a, b } = obj;
  *   class Foo extends Bar {} -> var Foo = class extends Bar {};
  *
- * When the source must run inside the async wrapper, demoted `var`s would normally become
- * function-scoped. In that mode we publish each top-level binding back to the wrapper's
- * lexical `this`, which is the worker global object.
+ * When the source must run inside the async wrapper (top-level `await`), demoted `var`s —
+ * and the user's own top-level `var` and `function` declarations — would be scoped to the
+ * wrapper function and die with the cell. In that mode we publish every top-level binding
+ * back to the wrapper's lexical `this`, which is the worker global object.
  *
- * Nested declarations (inside functions, blocks, classes) are left alone \u2014 they're
+ * Nested declarations (inside functions, blocks, classes) are left alone — they're
  * scoped to their enclosing function/block regardless of `var` vs `let`/`const`.
  */
 async function demoteTopLevelLexicals(code: string, options: { publishGlobals?: boolean } = {}): Promise<string> {
-	if (!/\b(?:const|let|class)\b/.test(code)) return code;
+	const publishGlobals = options.publishGlobals === true;
+	const fastPath = publishGlobals ? /\b(?:const|let|class|var|function)\b/ : /\b(?:const|let|class)\b/;
+	if (!fastPath.test(code)) return code;
 
 	const ast = await parseProgram(code);
 	if (!ast) {
 		return code;
 	}
 
-	const targets: BabelLexicalDecl[] = [];
+	const targets: Array<{ node: BabelPublishableDecl; demote: boolean }> = [];
 	for (const node of ast.program.body) {
 		if (node.type === "VariableDeclaration") {
 			const decl = node as unknown as BabelVariableDeclaration;
-			if (decl.kind === "const" || decl.kind === "let") targets.push(decl);
+			if (decl.kind === "const" || decl.kind === "let") targets.push({ node: decl, demote: true });
+			else if (publishGlobals) targets.push({ node: decl, demote: false });
 		} else if (node.type === "ClassDeclaration") {
 			const decl = node as unknown as BabelClassDeclaration;
-			if (decl.id) targets.push(decl);
+			if (decl.id) targets.push({ node: decl, demote: true });
+		} else if (publishGlobals && node.type === "FunctionDeclaration") {
+			const decl = node as unknown as BabelFunctionDeclaration;
+			if (decl.id) targets.push({ node: decl, demote: false });
 		}
 	}
 	if (targets.length === 0) return code;
 
-	targets.sort((a, b) => b.start - a.start);
+	targets.sort((a, b) => b.node.start - a.node.start);
 	let result = code;
-	for (const node of targets) {
+	for (const { node, demote } of targets) {
 		const segment = result.slice(node.start, node.end);
-		const bindingNames = options.publishGlobals ? getLexicalBindingNames(node) : [];
+		const bindingNames = publishGlobals ? getLexicalBindingNames(node) : [];
 		let replacement: string;
-		if (node.type === "VariableDeclaration") {
+		if (!demote) {
+			replacement = segment;
+		} else if (node.type === "VariableDeclaration") {
 			replacement = `var${segment.slice(node.kind.length)}`;
 		} else {
 			const id = node.id;
