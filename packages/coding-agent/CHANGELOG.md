@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.4.8] - 2026-07-12
+
 ### Fixed
 
 - Improved search reliability for Perplexity provider by forcing retrieval for all queries
