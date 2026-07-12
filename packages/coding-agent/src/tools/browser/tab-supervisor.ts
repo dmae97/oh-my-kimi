@@ -131,6 +131,10 @@ const tabs = new Map<string, TabSession>();
 // awaits) cannot interleave and leak a worker + browser refCount.
 const acquireChains = new Map<string, Promise<void>>();
 const GRACE_MS = 750;
+// Names of tabs the supervisor force-killed (timeout past grace, failed recycle),
+// mapped to the kill reason. Lets the next `run` on that name explain WHY the tab
+// vanished instead of a bare "not alive". Cleared when the name is opened again.
+const killedTabs = new Map<string, string>();
 
 export function getTab(name: string): TabSession | undefined {
 	return tabs.get(name);
@@ -161,6 +165,7 @@ async function acquireTabImpl(
 	if (opts.signal?.aborted) {
 		throw new ToolAbortError("Browser tab open aborted");
 	}
+	killedTabs.delete(name);
 	// Temporary refCount hold so releasing an existing tab on the SAME browser
 	// below cannot drop it to refCount 0 and dispose the instance we are about
 	// to reuse (e.g. reopening the sole tab with a different dialogs policy).
@@ -386,7 +391,14 @@ async function runInTabWithSnapshot(
 	snapshot: SessionSnapshot,
 ): Promise<RunResultOk> {
 	const tab = tabs.get(name);
-	if (!tab || tab.state === "dead") throw new ToolError(`Tab ${JSON.stringify(name)} is not alive. Reopen it.`);
+	if (!tab || tab.state === "dead") {
+		const killed = killedTabs.get(name);
+		throw new ToolError(
+			killed
+				? `Tab ${JSON.stringify(name)} was killed: ${killed}. Reopen it.`
+				: `Tab ${JSON.stringify(name)} is not alive. Open it first with action:"open".`,
+		);
+	}
 	if (tab.pending.size > 0) throw new ToolError(`Tab ${JSON.stringify(name)} is busy`);
 	const id = Snowflake.next();
 	const { promise, resolve, reject } = Promise.withResolvers<RunResultOk>();
@@ -712,6 +724,9 @@ async function recycleTimedOutWorkerTab(tab: WorkerTabSession, timeoutMs: number
 		safeDir: getPuppeteerDir(),
 		targetId: tab.targetId,
 		dialogs: tab.dialogPolicy,
+		// Unblock a wedged page (open JS dialog, hung navigation) before adopting it —
+		// otherwise init stalls, times out, and the tab gets force-killed.
+		recover: true,
 	};
 	let worker = await spawnTabWorker();
 	try {
@@ -743,6 +758,7 @@ async function recycleTimedOutWorkerTab(tab: WorkerTabSession, timeoutMs: number
 async function forceKillTab(name: string, reason: string): Promise<void> {
 	const tab = tabs.get(name);
 	if (!tab) return;
+	killedTabs.set(name, reason);
 	tab.state = "dead";
 	const error = postmortem.markExpectedCleanupError(new ToolError(reason));
 	for (const pending of tab.pending.values()) pending.reject(error);

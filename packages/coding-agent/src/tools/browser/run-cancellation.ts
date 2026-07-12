@@ -16,12 +16,31 @@ export function markHandled<T>(promise: Promise<T>): Promise<T> {
 	return promise;
 }
 
+/** Headroom subtracted from the cell budget so an in-run deadline fires before the opaque whole-cell timeout. */
+export const CELL_BUDGET_SLACK_MS = 1_000;
+
+/** Default poll deadline for `wait(predicate)` before clamping to the cell budget. */
+export const DEFAULT_PREDICATE_TIMEOUT_MS = 30_000;
+
 /** Options for the predicate form of the run-scoped `wait()` helper. */
 export interface WaitPredicateOptions {
-	/** Max time to poll before failing, in ms (default 30_000). */
+	/** Max time to poll before failing, in ms (default 30s, clamped to the cell budget). */
 	timeout?: number;
 	/** Poll interval in ms (default 100, floor 10). */
 	interval?: number;
+}
+
+/**
+ * Effective `wait(predicate)` deadline for a given cell budget. Always strictly below
+ * the cell budget so the named `wait(predicate) timed out` error wins the race against
+ * the opaque whole-cell "Browser code execution timed out". `0`/`Infinity` ("disable")
+ * map to the largest bounded deadline; negative/NaN garbage falls back to the default.
+ */
+export function resolvePredicateTimeout(cellTimeoutMs: number, explicit?: number): number {
+	const budgetBound = Math.max(1, cellTimeoutMs - CELL_BUDGET_SLACK_MS);
+	if (explicit === 0 || explicit === Number.POSITIVE_INFINITY) return budgetBound;
+	if (explicit !== undefined && Number.isFinite(explicit) && explicit > 0) return Math.min(explicit, budgetBound);
+	return Math.min(DEFAULT_PREDICATE_TIMEOUT_MS, budgetBound);
 }
 
 /**
@@ -49,7 +68,9 @@ export function waitForBrowserRun(
 			throw new ToolError("wait(...) expects milliseconds (number) or a predicate function to poll");
 		}
 		const timeout =
-			opts?.timeout !== undefined && Number.isFinite(opts.timeout) && opts.timeout > 0 ? opts.timeout : 30_000;
+			opts?.timeout !== undefined && Number.isFinite(opts.timeout) && opts.timeout > 0
+				? opts.timeout
+				: DEFAULT_PREDICATE_TIMEOUT_MS;
 		const interval = Math.max(opts?.interval ?? 100, 10);
 		const deadline = Date.now() + timeout;
 		for (;;) {

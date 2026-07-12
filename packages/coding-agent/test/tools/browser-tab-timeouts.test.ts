@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { resolvePredicateTimeout } from "@oh-my-pi/pi-coding-agent/tools/browser/run-cancellation";
 import {
 	normalizeSelector,
 	resolveOpTimeouts,
@@ -74,6 +75,31 @@ describe("browser wait-helper timeout resolution", () => {
 		const { budgetBound, actionOpMs } = resolveOpTimeouts(cell);
 		expect(resolveWaitTimeout(cell, -5_000)).toBe(actionOpMs);
 		expect(resolveWaitTimeout(cell, -5_000)).not.toBe(budgetBound);
+	});
+});
+
+describe("browser wait(predicate) deadline resolution", () => {
+	it("keeps the default deadline strictly under the cell budget so the named error wins", () => {
+		// Default cell (30s): the old 30s predicate default tied the cell timer and lost the
+		// race, surfacing the opaque whole-cell timeout instead of the named wait error.
+		for (const cell of [5_000, 30_000, 120_000]) {
+			expect(resolvePredicateTimeout(cell)).toBeLessThan(cell);
+		}
+		expect(resolvePredicateTimeout(120_000)).toBe(30_000);
+		expect(resolvePredicateTimeout(5_000)).toBe(4_000);
+	});
+
+	it("honors an explicit deadline but clamps it under the cell budget", () => {
+		expect(resolvePredicateTimeout(30_000, 5_000)).toBe(5_000);
+		expect(resolvePredicateTimeout(30_000, 90_000)).toBe(29_000);
+		expect(resolvePredicateTimeout(120_000, 90_000)).toBe(90_000);
+	});
+
+	it("maps disable sentinels to the largest bounded deadline and garbage to the default", () => {
+		expect(resolvePredicateTimeout(30_000, 0)).toBe(29_000);
+		expect(resolvePredicateTimeout(30_000, Number.POSITIVE_INFINITY)).toBe(29_000);
+		expect(resolvePredicateTimeout(30_000, -5)).toBe(29_000);
+		expect(resolvePredicateTimeout(30_000, Number.NaN)).toBe(29_000);
 	});
 });
 

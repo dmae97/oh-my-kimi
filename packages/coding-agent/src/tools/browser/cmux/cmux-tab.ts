@@ -12,7 +12,12 @@ import { ToolAbortError, ToolError, throwIfAborted } from "../../tool-errors";
 import { type AriaSnapshotOptions, buildAriaSnapshotScript } from "../aria/aria-snapshot";
 import { DEFAULT_VIEWPORT } from "../launch";
 import { extractReadableFromHtml, type ReadableFormat } from "../readable";
-import { bindBrowserRunFacade, type WaitPredicateOptions, waitForBrowserRun } from "../run-cancellation";
+import {
+	bindBrowserRunFacade,
+	resolvePredicateTimeout,
+	type WaitPredicateOptions,
+	waitForBrowserRun,
+} from "../run-cancellation";
 import { cloneSafe, RunOutput } from "../run-output";
 import type { Observation, ReadyInfo, RunResultOk, ScreenshotResult, SessionSnapshot } from "../tab-protocol";
 import {
@@ -1352,8 +1357,17 @@ export async function runCmuxCode(tab: CmuxTab, opts: RunCmuxCodeOptions): Promi
 			assert: (cond: unknown, text?: string): void => {
 				if (!cond) throw new ToolError(text ?? "Assertion failed");
 			},
-			wait: (msOrPredicate: number | (() => unknown), opts?: WaitPredicateOptions): Promise<unknown> =>
-				waitForBrowserRun(msOrPredicate, signal, opts),
+			wait: (msOrPredicate: number | (() => unknown), waitOpts?: WaitPredicateOptions): Promise<unknown> =>
+				waitForBrowserRun(
+					msOrPredicate,
+					signal,
+					typeof msOrPredicate === "number"
+						? waitOpts
+						: {
+								timeout: resolvePredicateTimeout(opts.timeoutMs, waitOpts?.timeout),
+								interval: waitOpts?.interval,
+							},
+				),
 		});
 
 		const hooks: RuntimeHooks = {

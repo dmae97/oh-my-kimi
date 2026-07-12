@@ -3,12 +3,23 @@
 ## [Unreleased]
 
 ## [16.4.8] - 2026-07-12
+### Added
+
+- Added a predicate form to the browser run's `wait()` helper: `wait(fn, { timeout?, interval? })` polls the function (sync or async) until truthy and resolves with that value, failing with a named timeout error (deadline clamped under the cell budget so it always beats the opaque whole-cell timeout) instead of Bun's `sleep expects a number` or a whole-cell stall from in-page polling Promises; both `wait` forms now register in the stall diagnosis of cell timeouts
+
 ### Changed
 
+- Improved tab recovery after timeouts by automatically clearing pending navigation and JS dialogs
+- Made `tab.goto` navigation failures catchable with a named error instead of triggering a whole-cell timeout
+- Added support for `//!world=main` in `tab.evaluate` to access page-level globals
+- Enhanced cell timeout messages to include identification of stalled operations and blocking JS dialogs
+- Browser `run` on a tab the supervisor force-killed now reports the kill reason instead of a bare "not alive"
 - Refined agent workflow to prioritize smoke testing and reduce mandatory upfront test generation
 
 ### Fixed
 
+- Fixed the `//!world=main` evaluate directive being silently ignored for string expressions passed through `page.evaluate`/`tab.evaluate`: puppeteer's source-URL tagging boxed the string into a `String` object before the world check
+- Fixed tab reuse issues where hung navigation or unhandled modals would cause initialization to stall and trigger a force-kill
 - Improved search reliability for Perplexity provider by forcing retrieval for all queries
 - Fixed JS eval cells losing top-level `function` and `var` declarations across cells when the defining cell contained top-level `await` — the async wrapper scoped them to the cell's IIFE instead of publishing them to the worker global
 
