@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added display setting to toggle between collapsing or keeping compacted history inline
+- Added display setting to toggle between collapsing or keeping compacted history inline, now applied to live session displays
 - Added a compact session-only model picker (Alt+P) for quick model switching without changing roles
 
 ### Changed

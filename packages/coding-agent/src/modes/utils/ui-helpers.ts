@@ -607,13 +607,14 @@ export class UiHelpers {
 		this.ctx.pendingBashComponents = [];
 		this.ctx.pendingPythonComponents = [];
 
-		// Live display uses the compacted transcript tail; export/resume callers
-		// can still request the full inline compaction history. Mid-turn rebuilds
+		// Live display collapses to the compacted transcript tail unless the
+		// user opted into the full inline history; export/resume callers can
+		// still request either mode. Mid-turn rebuilds
 		// (focus attach/unfocus while a tool executes) keep dangling toolCalls so
 		// the in-flight call re-renders as pending instead of vanishing;
 		// renderSessionContext then keeps it in `pendingTools` for live routing.
 		const context = this.ctx.viewSession.buildTranscriptSessionContext({
-			collapseCompactedHistory: true,
+			collapseCompactedHistory: settings.get("display.collapseCompacted"),
 			keepDanglingToolCalls: this.ctx.viewSession.isStreaming,
 		});
 		this.ctx.renderSessionContext(context, {
