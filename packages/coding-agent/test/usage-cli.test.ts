@@ -279,6 +279,44 @@ describe("formatUsageBreakdown", () => {
 		expect(text).toContain("0.40× quota left");
 	});
 
+	it("renders Cursor request quotas in the usage breakdown", () => {
+		const now = Date.parse("2026-01-01T00:00:00.000Z");
+		const reports: UsageReport[] = [
+			{
+				provider: "cursor",
+				fetchedAt: now,
+				metadata: { email: "cursor@example.test" },
+				limits: [
+					{
+						id: "cursor:requests:gpt-4",
+						label: "gpt-4 requests",
+						scope: { provider: "cursor", windowId: "monthly" },
+						window: {
+							id: "monthly",
+							label: "Monthly",
+							resetsAt: Date.parse("2026-02-01T00:00:00.000Z"),
+						},
+						amount: {
+							unit: "requests",
+							used: 150,
+							limit: 500,
+							remaining: 350,
+							usedFraction: 0.3,
+							remainingFraction: 0.7,
+						},
+						status: "ok",
+					},
+				],
+			},
+		];
+
+		const text = stripVTControlCharacters(formatUsageBreakdown(reports, [], now));
+		expect(text).toContain("Cursor");
+		expect(text).toContain("gpt-4 requests");
+		expect(text).toContain("150 / 500 requests");
+		expect(text).toContain("30.0% used");
+		expect(text).toContain("resets in 31d");
+	});
 	it("renders saved reset expiry state for future and expired credits", () => {
 		const now = Date.parse("2026-01-01T00:00:00.000Z");
 		const reports: UsageReport[] = [

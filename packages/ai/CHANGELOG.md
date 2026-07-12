@@ -6,6 +6,7 @@
 
 - Added asynchronous `invalidateUsageCache` method to clear cached usage reports
 - Added support for cross-service usage cache invalidation between AuthStorage and AuthBroker
+- Added Cursor OAuth and access-token usage reporting to `omp usage` via Cursor's account usage endpoint.
 
 ### Fixed
 
