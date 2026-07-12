@@ -242,9 +242,13 @@ export class TranscriptContainer
 	 */
 	isBlockUncommitted(component: Component): boolean {
 		const index = this.children.indexOf(component);
+		// Compacted prefix is already committed native history and must not be
+		// retracted. Compacted slots may be sparse holes after a later re-render
+		// (render only fills from #compactedChildStart), so the loop below must
+		// skip undefined entries.
 		if (index >= 0 && index < this.#compactedChildStart) return false;
 		for (const segment of this.#segments) {
-			if (segment.component !== component) continue;
+			if (segment === undefined || segment.component !== component) continue;
 			return segment.rowCount === 0 || segment.startRow >= this.#committedRows;
 		}
 		return true;

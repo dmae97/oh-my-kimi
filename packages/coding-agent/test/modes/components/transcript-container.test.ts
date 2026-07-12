@@ -700,6 +700,26 @@ describe("TranscriptContainer isBlockUncommitted", () => {
 		container.setNativeScrollbackCommittedRows(100);
 		expect(container.isBlockUncommitted(empty)).toBe(true);
 	});
+
+	it("survives sparse compacted segment holes when checking uncommitted status", () => {
+		const container = new TranscriptContainer();
+		const committed = new StreamingBlock(["committed"], true);
+		const live = new StreamingBlock(["live"], true);
+		container.addChild(committed);
+		container.addChild(live);
+
+		expect(container.render(40)).toEqual(["committed", "", "live"]);
+		container.setNativeScrollbackCommittedRows(2);
+		// Compaction first rewrites the compacted prefix into zero-row placeholders.
+		expect(container.render(40)).toEqual(["live"]);
+		// The next render only repopulates from #compactedChildStart, leaving a
+		// sparse hole at the compacted index. Retiring IRC/ephemeral cards walks
+		// every segment and must not crash on those undefined entries.
+		expect(container.render(40)).toEqual(["live"]);
+		expect(() => container.isBlockUncommitted(live)).not.toThrow();
+		expect(() => container.isBlockUncommitted(committed)).not.toThrow();
+		expect(container.isBlockUncommitted(committed)).toBe(false);
+	});
 });
 
 describe("TranscriptContainer renderViewportTail", () => {
