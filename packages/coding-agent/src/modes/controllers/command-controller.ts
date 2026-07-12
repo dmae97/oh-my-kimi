@@ -1200,7 +1200,15 @@ export class CommandController {
 			this.ctx.rebuildChatFromMessages();
 
 			this.ctx.statusLine.invalidate();
-			this.ctx.ui.requestRender();
+			// Same as the auto-compaction rebuild: a collapsed transcript is an
+			// intentional replacement, so drop the stale pre-compaction scrollback
+			// instead of repainting the shrunken frame below it. With collapse
+			// disabled the full history stays inline and scrollback is kept.
+			if (this.ctx.settings.get("display.collapseCompacted")) {
+				this.ctx.ui.requestRender(true, { clearScrollback: true });
+			} else {
+				this.ctx.ui.requestRender();
+			}
 		} catch (error) {
 			if (error instanceof CompactionCancelledError) {
 				outcome = "cancelled";

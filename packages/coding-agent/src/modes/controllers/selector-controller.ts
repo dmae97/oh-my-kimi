@@ -452,6 +452,13 @@ export class SelectorController {
 				this.ctx.rebuildChatFromMessages();
 				this.ctx.ui.resetDisplay();
 				break;
+			case "display.collapseCompacted":
+				// Rebuild swaps between the collapsed tail and the full inline
+				// history; full reset retires blocks already committed to native
+				// scrollback (mirrors cacheMissMarker).
+				this.ctx.rebuildChatFromMessages();
+				this.ctx.ui.resetDisplay();
+				break;
 			case "tui.tight":
 				setTuiTight(value as boolean);
 				this.ctx.ui.invalidate();

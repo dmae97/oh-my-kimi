@@ -17,8 +17,9 @@
 
 ### Fixed
 
+- Fixed inconsistent history rendering when toggling the display setting for compacted items
 - Fixed configured `retry.fallbackChains` never engaging on non-retryable provider errors (e.g. "Cloud Code Assist API returned an empty response"): a hard error on a model covered by a fallback chain now switches to the next candidate instead of failing the turn, while still never backoff-retrying the failing model itself
-- Fixed the post-compaction transcript rebuild (auto-compaction and `/compact`) repainting the entire collapsed transcript — welcome banner included — below the stale pre-compaction scrollback: the rebuild collapses history behind the summary divider, shrinking the frame far below the committed row count, and the renderer's "duplication, never loss" resync re-showed everything without retracting native scrollback; both rebuild paths now request `clearScrollback` like auto-handoff already did
+- Fixed transcript rebuilds (compaction, `/compact`, and toggling history display) repainting content below stale scrollback when collapsing history; rebuilds now correctly clear the scrollback buffer when history is collapsed
 - Fixed mid-run auto-compaction spuriously warning "Compaction freed too little context to make progress" and pausing maintenance even when compaction genuinely shrank the context (observed: snapcompact took a 312k-token gpt-5.6 session to 86k real tokens and still dead-ended): the in-flight prompt's pending context snapshot — set once at run start and alive for the whole tool loop — was read as live residual context by the post-compaction headroom/retry-fit checks because the fresh compaction entry hides every earlier usage anchor; compaction (auto and `/compact`), the retry drop, and the dead-end shake rescue now rebase the snapshot onto the rewritten message set
 - Fixed backgrounded Bash blocks continuing to repaint with live and final job output; they now freeze with a compact job notice while completion is delivered separately
 

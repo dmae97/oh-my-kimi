@@ -1234,7 +1234,19 @@ export class EventController {
 			this.ctx.lastAssistantUsage = undefined;
 			this.ctx.rebuildChatFromMessages();
 			this.ctx.statusLine.invalidate();
-			this.ctx.ui.requestRender();
+			// When history collapses behind the summary divider, the frame
+			// shrinks far below the committed row count; without clearing, the
+			// differential renderer's "duplication, never loss" resync repaints
+			// the whole collapsed transcript (welcome box included) BELOW the
+			// stale pre-compaction scrollback. Compaction is an intentional
+			// transcript replacement then — same as auto-handoff below. With
+			// collapse disabled the rebuilt transcript keeps the full history,
+			// so the resync handles it and scrollback stays.
+			if (settings.get("display.collapseCompacted")) {
+				this.ctx.ui.requestRender(true, { clearScrollback: true });
+			} else {
+				this.ctx.ui.requestRender();
+			}
 		} else if (event.errorMessage) {
 			this.ctx.showWarning(event.errorMessage);
 		} else if (isHandoffAction) {

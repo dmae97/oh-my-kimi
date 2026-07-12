@@ -1614,9 +1614,12 @@ export class InteractiveMode implements InteractiveModeContext {
 			}
 		}
 		this.chatContainer.clear();
-		// Live display uses the compacted transcript tail; export/resume callers
-		// can still request the full inline compaction history.
-		const context = this.viewSession.buildTranscriptSessionContext({ collapseCompactedHistory: true });
+		// Live display collapses to the compacted transcript tail unless the
+		// user opted into the full inline history; export/resume callers choose
+		// their own mode.
+		const context = this.viewSession.buildTranscriptSessionContext({
+			collapseCompactedHistory: settings.get("display.collapseCompacted"),
+		});
 		this.renderSessionContext(context);
 		for (const child of liveComponents) {
 			this.chatContainer.addChild(child);
