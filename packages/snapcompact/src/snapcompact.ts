@@ -638,8 +638,6 @@ export function createFileOps(): FileOperations {
 }
 const URL_SCHEME_RE = /[a-z][a-z0-9+.-]*:\/\//i;
 
-const HEADING_MARKER = " ¶";
-
 export function isUrlSchemePath(path: string): boolean {
 	return URL_SCHEME_RE.test(path);
 }
@@ -776,10 +774,22 @@ export function serializeConversation(messages: Message[], options?: SerializeOp
 	const headRatio = options?.truncateHeadRatio ?? TRUNCATE_HEAD_RATIO;
 	const dimToolResults = options?.dimToolResults !== false;
 	const parts: string[] = [];
+	let lastPrefix: string | null = null;
+
+	const pushPart = (prefix: string, content: string) => {
+		const lastIndex = parts.length - 1;
+		if (lastIndex >= 0 && lastPrefix === prefix) {
+			const sep = parts[lastIndex].endsWith("\n") || content.startsWith("\n") ? "" : "\n";
+			parts[lastIndex] += sep + content;
+		} else {
+			parts.push(prefix + content);
+			lastPrefix = prefix;
+		}
+	};
 
 	// Tool results flagged contextually useless (and their paired calls) carry no
 	// information worth archiving — skip the whole pair. Surviving results are
-	// indexed by tool-call id so each merges into its originating `# Tool call`.
+	// indexed by tool-call id so each merges into its originating `¶call:` scope.
 	const uselessCallIds = new Set<string>();
 	const resultTextByCallId = new Map<string, string>();
 	for (const msg of messages) {
@@ -796,7 +806,7 @@ export function serializeConversation(messages: Message[], options?: SerializeOp
 	}
 
 	// Wrap a raw tool-result body in an `<out>` block, dimming only the body so
-	// the frame coloring keeps structure (headings, calls) loud.
+	// the frame coloring keeps scope markers and calls loud.
 	const renderResultBlock = (rawText: string): string => {
 		const body = truncateForSummary(stripDimMarkers(rawText), toolResultMaxChars, headRatio);
 		return `<out>\n${dimToolResults ? `${DIM_ON}${body}${DIM_OFF}` : body}\n</out>`;
@@ -813,18 +823,19 @@ export function serializeConversation(messages: Message[], options?: SerializeOp
 							.filter((content): content is { type: "text"; text: string } => content.type === "text")
 							.map(content => content.text)
 							.join("");
-			if (content) parts.push(`# User${HEADING_MARKER}\n${stripDimMarkers(content)}`);
+			if (content) pushPart("¶user:", stripDimMarkers(content));
 		} else if (msg.role === "assistant") {
 			// Stream blocks in content order: buffer thinking/text, then flush a
-			// `# Assistant` block (thinking as italics above the text) right before
-			// each tool call, so text or thinking after a call stays after it.
+			// separate section for each block type right before each tool call.
 			let pendingThinking: string[] = [];
 			let pendingText: string[] = [];
 			const flushAssistant = () => {
-				const sections: string[] = [];
-				if (pendingThinking.length > 0) sections.push(`_${pendingThinking.join("\n")}_`);
-				if (pendingText.length > 0) sections.push(pendingText.join("\n"));
-				if (sections.length > 0) parts.push(`# Assistant${HEADING_MARKER}\n${sections.join("\n\n")}`);
+				if (pendingThinking.length > 0) {
+					pushPart("¶think:", pendingThinking.join("\n"));
+				}
+				if (pendingText.length > 0) {
+					pushPart("¶ai:", pendingText.join("\n"));
+				}
 				pendingThinking = [];
 				pendingText = [];
 			};
@@ -860,24 +871,27 @@ export function serializeConversation(messages: Message[], options?: SerializeOp
 						toolCallMaxChars,
 						headRatio,
 					);
-					const lines = [`# Tool call${HEADING_MARKER}`];
-					if (intent) lines.push(`//${intent}`);
-					lines.push(`${block.name}(${argsStr})`);
+					const lines: string[] = [];
+					let firstLine = `${block.name}(${argsStr})`;
+					if (intent) {
+						firstLine += `//${intent}`;
+					}
+					lines.push(firstLine);
 					const resultText = resultTextByCallId.get(block.id);
 					if (resultText !== undefined) {
 						mergedCallIds.add(block.id);
 						lines.push(renderResultBlock(resultText));
 					}
-					parts.push(lines.join("\n"));
+					pushPart("¶call:", lines.join("\n"));
 				}
 			}
 			flushAssistant();
 		} else if (msg.role === "toolResult") {
-			// Paired results already merged into their `# Tool call` block above;
+			// Paired results already merged into their tool call block above;
 			// only orphans (call archived outside this window) render standalone.
 			if (uselessCallIds.has(msg.toolCallId) || mergedCallIds.has(msg.toolCallId)) continue;
 			const resultText = resultTextByCallId.get(msg.toolCallId);
-			if (resultText !== undefined) parts.push(`# Tool call${HEADING_MARKER}\n${renderResultBlock(resultText)}`);
+			if (resultText !== undefined) pushPart("¶call:", `\n${renderResultBlock(resultText)}`);
 		}
 	}
 
@@ -1911,15 +1925,6 @@ export async function compact<TMessage = Message>(
 
 	const frames = await Promise.all(newFrames);
 	const totalChars = frames.reduce((sum, frame) => sum + frame.chars, 0) + textChars;
-	const mixedShapes = frames.some(
-		frame =>
-			frame.cols !== geo.cols ||
-			frame.rows !== geo.rows ||
-			(frame.variant ?? "sent") !== high.variant ||
-			(frame.lineRepeat ?? 1) !== high.lineRepeat ||
-			(frame.columns ?? 1) !== (high.columns ?? 1) ||
-			(frame.stopwordDim ?? false) !== (high.stopwordDim ?? false),
-	);
 
 	const { readFiles, modifiedFiles } = computeFileLists(fileOps);
 	const files = formatFileList(readFiles, modifiedFiles, fileOps.read);
@@ -1936,9 +1941,7 @@ export async function compact<TMessage = Message>(
 			rows: geo.rows,
 			sentenceInk: high.variant === "sent",
 			stopwordDimmed: high.stopwordDim === true,
-			dimmedToolResults: options?.dimToolResults !== false,
 			lineRepeated: high.lineRepeat > 1,
-			mixedShapes,
 			truncatedChars,
 			includedPreviousSummary,
 			files: files.length > 0 ? files : undefined,
