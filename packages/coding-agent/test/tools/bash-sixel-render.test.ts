@@ -128,6 +128,34 @@ describe("bashToolRenderer", () => {
 		expect(rendered).not.toContain("Wall time: 1.23 seconds");
 	});
 
+	it("renders a backgrounded job as a static footer notice", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+		const component = bashToolRenderer.renderResult(
+			{
+				content: [
+					{
+						type: "text",
+						text: "started\n\nBackgrounded as job bash-42; result will be delivered automatically.",
+					},
+				],
+				details: {
+					timeoutSeconds: 300,
+					async: { state: "running", jobId: "bash-42", type: "bash" },
+				},
+				isError: false,
+			},
+			{ expanded: false, isPartial: false },
+			uiTheme,
+			{ command: "sleep 30" },
+		);
+		const rendered = sanitizeText(component.render(120).join("\n"));
+		expect(rendered).toContain("started");
+		expect(rendered).toContain("Backgrounded: bash-42");
+		expect(rendered).not.toContain("result will be delivered automatically");
+	});
+
 	it("folds raw output artifact notices into the status footer", async () => {
 		const theme = await getThemeByName("dark");
 		expect(theme).toBeDefined();

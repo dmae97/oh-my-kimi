@@ -76,7 +76,7 @@ export class EventController {
 	#lastVisibleBlockCount = 0;
 	#renderedCustomMessages = new Set<string>();
 	#lastIntent: string | undefined = undefined;
-	#backgroundToolCallIds = new Set<string>();
+	#backgroundTaskCallIds = new Set<string>();
 	#readToolCallArgs = new Map<string, Record<string, unknown>>();
 	#readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
 	#lastAssistantComponent: AssistantMessageComponent | undefined = undefined;
@@ -281,7 +281,7 @@ export class EventController {
 		this.#lastVisibleBlockCount = 0;
 		this.#renderedCustomMessages.clear();
 		this.#lastIntent = undefined;
-		this.#backgroundToolCallIds.clear();
+		this.#backgroundTaskCallIds.clear();
 		this.#readToolCallArgs.clear();
 		this.#readToolCallAssistantComponents.clear();
 		this.#lastAssistantComponent = undefined;
@@ -828,9 +828,9 @@ export class EventController {
 				// The turn ended without running these calls (abort/error/TTSR rewind),
 				// so they will never produce a result. Seal them so they stop animating
 				// and freeze instead of pinning the transcript live region while a retry
-				// streams fresh blocks below them. Background tools keep updating.
+				// streams fresh blocks below them. Background task calls keep updating.
 				for (const [toolCallId, component] of this.ctx.pendingTools.entries()) {
-					if (!this.#backgroundToolCallIds.has(toolCallId) && component instanceof ToolExecutionComponent) {
+					if (!this.#backgroundTaskCallIds.has(toolCallId) && component instanceof ToolExecutionComponent) {
 						component.seal();
 					}
 				}
@@ -948,7 +948,7 @@ export class EventController {
 			// While the call is still executing — a mixed blocking+async task
 			// call whose jobs settle before its blocking subset — treat it as a
 			// partial frame: `tool_execution_end` still owns the terminal result.
-			const isTerminal = isFinalAsyncState && this.#backgroundToolCallIds.has(event.toolCallId);
+			const isTerminal = isFinalAsyncState && this.#backgroundTaskCallIds.has(event.toolCallId);
 			component.updateResult(
 				{ ...event.partialResult, isError: asyncState === "failed" },
 				!isTerminal,
@@ -956,7 +956,7 @@ export class EventController {
 			);
 			if (isTerminal) {
 				this.ctx.pendingTools.delete(event.toolCallId);
-				this.#backgroundToolCallIds.delete(event.toolCallId);
+				this.#backgroundTaskCallIds.delete(event.toolCallId);
 			}
 			this.ctx.ui.requestRender();
 		}
@@ -977,13 +977,7 @@ export class EventController {
 					component.updateResult({ ...event.result, isError: event.isError }, false, event.toolCallId);
 					this.ctx.pendingTools.delete(event.toolCallId);
 				}
-				const asyncState = (event.result.details as { async?: { state?: string } } | undefined)?.async?.state;
-				if (asyncState === "running") {
-					this.#backgroundToolCallIds.add(event.toolCallId);
-				} else {
-					this.#backgroundToolCallIds.delete(event.toolCallId);
-					this.#clearReadToolCall(event.toolCallId);
-				}
+				this.#clearReadToolCall(event.toolCallId);
 				this.ctx.ui.requestRender();
 			} else {
 				let component = this.ctx.pendingTools.get(event.toolCallId);
@@ -996,29 +990,22 @@ export class EventController {
 					component = group;
 					this.ctx.pendingTools.set(event.toolCallId, group);
 				}
-				const asyncState = (event.result.details as { async?: { state?: string } } | undefined)?.async?.state;
-				const isBackgroundRunning = asyncState === "running";
-				component.updateResult({ ...event.result, isError: event.isError }, isBackgroundRunning, event.toolCallId);
-				if (isBackgroundRunning) {
-					this.#backgroundToolCallIds.add(event.toolCallId);
-				} else {
-					this.ctx.pendingTools.delete(event.toolCallId);
-					this.#backgroundToolCallIds.delete(event.toolCallId);
-					this.#clearReadToolCall(event.toolCallId);
-				}
+				component.updateResult({ ...event.result, isError: event.isError }, false, event.toolCallId);
+				this.ctx.pendingTools.delete(event.toolCallId);
+				this.#clearReadToolCall(event.toolCallId);
 				this.ctx.ui.requestRender();
 			}
 		} else {
 			const component = this.ctx.pendingTools.get(event.toolCallId);
 			if (component) {
 				const asyncState = (event.result.details as { async?: { state?: string } } | undefined)?.async?.state;
-				const isBackgroundRunning = asyncState === "running";
-				component.updateResult({ ...event.result, isError: event.isError }, isBackgroundRunning, event.toolCallId);
-				if (isBackgroundRunning) {
-					this.#backgroundToolCallIds.add(event.toolCallId);
+				const isBackgroundTask = event.toolName === "task" && asyncState === "running";
+				component.updateResult({ ...event.result, isError: event.isError }, isBackgroundTask, event.toolCallId);
+				if (isBackgroundTask) {
+					this.#backgroundTaskCallIds.add(event.toolCallId);
 				} else {
 					this.ctx.pendingTools.delete(event.toolCallId);
-					this.#backgroundToolCallIds.delete(event.toolCallId);
+					this.#backgroundTaskCallIds.delete(event.toolCallId);
 				}
 				if (component instanceof ToolExecutionComponent && component.isDisplaceableBlock()) {
 					if (event.toolName === "job" && component.canBeDisplacedBy("job")) {
@@ -1098,7 +1085,7 @@ export class EventController {
 		}
 		await this.ctx.flushPendingModelSwitch();
 		for (const toolCallId of Array.from(this.ctx.pendingTools.keys())) {
-			if (!this.#backgroundToolCallIds.has(toolCallId)) {
+			if (!this.#backgroundTaskCallIds.has(toolCallId)) {
 				// A foreground tool still pending at turn end never delivered a result;
 				// seal it so it freezes (and stops animating) rather than lingering in
 				// the transcript live region as a streaming preview until the next thaw.
@@ -1112,8 +1099,8 @@ export class EventController {
 				this.ctx.pendingTools.delete(toolCallId);
 			}
 		}
-		this.#backgroundToolCallIds = new Set(
-			Array.from(this.#backgroundToolCallIds).filter(toolCallId => this.ctx.pendingTools.has(toolCallId)),
+		this.#backgroundTaskCallIds = new Set(
+			Array.from(this.#backgroundTaskCallIds).filter(toolCallId => this.ctx.pendingTools.has(toolCallId)),
 		);
 		this.#readToolCallArgs.clear();
 		this.#readToolCallAssistantComponents.clear();

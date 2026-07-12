@@ -10,6 +10,10 @@
 
 - Updated status event log to prioritize the most recent entries in the display window
 
+### Fixed
+
+- Fixed backgrounded Bash blocks continuing to repaint with live and final job output; they now freeze with a compact job notice while completion is delivered separately
+
 ### Removed
 
 - Removed the unreliable Bing and Yahoo HTML-scraping web search providers
