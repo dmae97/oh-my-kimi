@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ## [16.4.8] - 2026-07-12
+### Changed
+
+- Refined agent workflow to prioritize smoke testing and reduce mandatory upfront test generation
 
 ### Fixed
 
