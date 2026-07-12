@@ -57,6 +57,13 @@ import type {
 	WorkerInitPayload,
 } from "./tab-protocol";
 
+declare module "puppeteer-core" {
+	interface Frame {
+		/** Puppeteer's main JavaScript realm, retained by our pinned runtime patch. */
+		mainRealm(): Realm;
+	}
+}
+
 declare global {
 	interface Element extends HTMLElement {}
 	function getComputedStyle(element: Element): Record<string, unknown>;
@@ -1257,8 +1264,11 @@ export class WorkerCore {
 				op("tab.evaluate()", INF, sig =>
 					untilAborted(sig, () =>
 						typeof fn === "string"
-							? page.evaluate(fn)
-							: page.evaluate(fn as (...a: unknown[]) => unknown, ...args),
+							? page.mainFrame().mainRealm().evaluate(fn)
+							: page
+									.mainFrame()
+									.mainRealm()
+									.evaluate(fn as (...a: unknown[]) => unknown, ...args),
 					),
 				) as never,
 			scrollIntoView: selector =>
