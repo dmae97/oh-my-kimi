@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Switched Google and Google Vertex providers to always use `streamGenerateContent` requests
+
+### Removed
+
+- Removed automatic `/interactions` chaining for follow-up turns in Google provider calls
+- Removed `useInteractionsApi`, `storeInteraction`, and `previousInteractionId` from stream options
+
 ### Fixed
 
 - Fixed empty provider responses (e.g. "Cloud Code Assist API returned an empty response") being classified as non-retryable: `ProviderResponseError` with kind `empty-body` now carries the transient flag, so session retry and configured model-fallback chains engage instead of hard-failing the turn

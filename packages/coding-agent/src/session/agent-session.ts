@@ -259,9 +259,6 @@ import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with {
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
 import parentIrcSteerTemplate from "../prompts/steering/parent-irc.md" with { type: "text" };
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
-import prewalkChecklistPrompt from "../prompts/system/prewalk-checklist.md" with { type: "text" };
-import prewalkContinuePrompt from "../prompts/system/prewalk-continue.md" with { type: "text" };
-import prewalkPlanPrompt from "../prompts/system/prewalk-plan.md" with { type: "text" };
 import eagerTaskPrompt from "../prompts/system/eager-task.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
 import emptyStopRetryTemplate from "../prompts/system/empty-stop-retry.md" with { type: "text" };
@@ -276,6 +273,9 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 	type: "text",
 };
 import planYoloHandoffPrompt from "../prompts/system/plan-yolo-handoff.md" with { type: "text" };
+import prewalkChecklistPrompt from "../prompts/system/prewalk-checklist.md" with { type: "text" };
+import prewalkContinuePrompt from "../prompts/system/prewalk-continue.md" with { type: "text" };
+import prewalkPlanPrompt from "../prompts/system/prewalk-plan.md" with { type: "text" };
 import rewindReportTemplate from "../prompts/system/rewind-report.md" with { type: "text" };
 import sideChannelNoToolsReminder from "../prompts/system/side-channel-no-tools.md" with { type: "text" };
 import thinkingLoopRedirectTemplate from "../prompts/system/thinking-loop-redirect.md" with { type: "text" };

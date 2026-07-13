@@ -109,7 +109,7 @@ import {
 	obfuscateProviderContext,
 	SecretObfuscator,
 } from "./secrets";
-import { AgentSession, type Prewalk, type PlanYolo } from "./session/agent-session";
+import { AgentSession, type PlanYolo, type Prewalk } from "./session/agent-session";
 import { discoverAuthStorage as discoverAuthStorageFromConfig } from "./session/auth-broker-config";
 import type { AuthStorage } from "./session/auth-storage";
 import {

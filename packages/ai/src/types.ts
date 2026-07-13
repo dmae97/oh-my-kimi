@@ -425,22 +425,6 @@ export interface StreamOptions {
 	/** Canonical Codex compaction classification; ignored by other providers. */
 	codexCompaction?: CodexCompactionRequestContext;
 	/**
-	 * Force Gemini model-mode Interactions API transport for providers that support it.
-	 * When unset, those providers may still use Interactions to continue known
-	 * server-side conversation lineage via `previousInteractionId` or stored state.
-	 */
-	useInteractionsApi?: boolean;
-	/**
-	 * Whether supported Interactions transports should store server-side conversation
-	 * state and return response ids for follow-up turns. Defaults to true.
-	 */
-	storeInteraction?: boolean;
-	/**
-	 * Explicit Interactions response id to continue. Mutually exclusive with
-	 * `storeInteraction: false` because the follow-up itself must be storable.
-	 */
-	previousInteractionId?: string;
-	/**
 	 * Optional per-provider concurrent request cap for LLM stream calls. Keys are
 	 * provider ids (`model.provider`); positive numeric values cap in-flight
 	 * requests across local OMP processes that share the same config root. Omitted
