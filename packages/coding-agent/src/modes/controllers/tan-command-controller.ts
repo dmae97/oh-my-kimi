@@ -3,6 +3,7 @@ import * as path from "node:path";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import backgroundTanDispatchPrompt from "../../prompts/system/background-tan-dispatch.md" with { type: "text" };
+import tanContextSwitchPrompt from "../../prompts/system/tan-context-switch.md" with { type: "text" };
 import { AgentRegistry, MAIN_AGENT_ID } from "../../registry/agent-registry";
 import * as sdk from "../../sdk";
 import type { AgentSession } from "../../session/agent-session";
@@ -141,6 +142,15 @@ export class TanCommandController {
 								abortClone();
 								throw new Error("Aborted before execution");
 							}
+							// Inject a context-switch developer message so the clone knows
+							// it is a tangential fork — its parent owns the prior conversation;
+							// this agent must focus exclusively on the user's request.
+							clone.agent.appendMessage({
+								role: "developer",
+								content: tanContextSwitchPrompt,
+								attribution: "agent",
+								timestamp: Date.now(),
+							});
 							await clone.prompt(trimmedWork, { attribution: "user" });
 							await clone.waitForIdle();
 							return extractAssistantText(clone.getLastAssistantMessage()) || "(no output)";

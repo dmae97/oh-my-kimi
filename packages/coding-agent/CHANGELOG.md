@@ -13,6 +13,7 @@
 
 ### Changed
 
+- Updated tangential agent forks to ignore parent session history and focus exclusively on the new request
 - Added visual markers in the transcript for elided tool calls that have no corresponding result
 - Updated status event log to prioritize the most recent entries in the display window
 - Updated the snapcompact shape preview transcript to use the compact scope format shown to models during compaction.
