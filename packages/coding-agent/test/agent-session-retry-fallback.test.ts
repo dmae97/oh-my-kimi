@@ -1567,7 +1567,7 @@ describe("AgentSession retry fallback", () => {
 			settings,
 			modelRegistry,
 		});
-		const { retryStartEvents, retryEndEvents } = trackRetryEvents(session);
+		const { retryStartEvents } = trackRetryEvents(session);
 		session.subscribe(event => {
 			if (event.type === "retry_fallback_applied") {
 				fallbackAppliedEvents.push(event);

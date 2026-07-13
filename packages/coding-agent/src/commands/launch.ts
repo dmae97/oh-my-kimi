@@ -34,6 +34,24 @@ export default class Index extends Command {
 		plan: Flags.string({
 			description: "Plan model for architectural planning (or PI_PLAN_MODEL env)",
 		}),
+		"reasoning-slide-model": Flags.string({
+			description: "Switch to this model after --reasoning-slide-turns completed assistant turns",
+		}),
+		"reasoning-slide-turns": Flags.string({
+			description: "Positive number of completed assistant turns before the reasoning slide",
+		}),
+		"reasoning-slide-on-action": Flags.boolean({
+			description: "Trigger the reasoning slide at the first completed turn that ran edit/write",
+		}),
+		"reasoning-slide-plan": Flags.boolean({
+			description: "Inject a hidden deep-plan nudge before the reasoning slide, scrubbed at the switch",
+		}),
+		"reasoning-slide-plan-at": Flags.string({
+			description: "Completed assistant turns before the plan nudge is injected (default 1)",
+		}),
+		"reasoning-slide-checklist": Flags.boolean({
+			description: "Steer a hidden verify-before-finishing checklist into the run at the switch",
+		}),
 		provider: Flags.string({
 			description: "Provider to use (legacy; prefer --model)",
 		}),

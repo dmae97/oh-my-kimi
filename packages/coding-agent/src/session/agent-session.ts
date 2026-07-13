@@ -270,6 +270,9 @@ import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" w
 import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool-decision-reminder.md" with {
 	type: "text",
 };
+import reasoningSlideChecklistPrompt from "../prompts/system/reasoning-slide-checklist.md" with { type: "text" };
+import reasoningSlideContinuePrompt from "../prompts/system/reasoning-slide-continue.md" with { type: "text" };
+import reasoningSlidePlanPrompt from "../prompts/system/reasoning-slide-plan.md" with { type: "text" };
 import rewindReportTemplate from "../prompts/system/rewind-report.md" with { type: "text" };
 import sideChannelNoToolsReminder from "../prompts/system/side-channel-no-tools.md" with { type: "text" };
 import thinkingLoopRedirectTemplate from "../prompts/system/thinking-loop-redirect.md" with { type: "text" };
@@ -413,7 +416,30 @@ const MID_RUN_TODO_NUDGE_MUTATING_TOOLS: Record<string, true> = {
 /** `customType` for the hidden mid-run todo nudge; `display: false`, so it reaches
  *  the model but never renders in the TUI or transcript. */
 const MID_RUN_TODO_NUDGE_MESSAGE_TYPE = "mid-run-todo-nudge";
-
+/** Hidden plan-burst nudge injected by the reasoning slide; scrubbed from the
+ *  LLM context when the slide switches models. */
+const REASONING_SLIDE_PLAN_MESSAGE_TYPE = "reasoning-slide-plan";
+/** Hidden safety-net nudge forcing one more turn after a text-only reply to
+ *  the plan nudge, which would otherwise end the run with no code written. */
+const REASONING_SLIDE_CONTINUE_MESSAGE_TYPE = "reasoning-slide-continue";
+/** Hidden "verify before finishing" checklist steered into the run at the
+ *  switch, aimed at the fast model's specific failure patterns: partial
+ *  multi-site fixes, unnecessarily broad rewrites, and reported-test-only
+ *  verification. */
+const REASONING_SLIDE_CHECKLIST_MESSAGE_TYPE = "reasoning-slide-checklist";
+/** Minimum visible text length for a post-nudge assistant turn to count as the
+ *  delivered plan; exploration turns emit short connective text and stay under. */
+const REASONING_SLIDE_PLAN_MIN_CHARS = 400;
+/** Extra turns past `afterTurns` the slide waits for the plan before switching anyway. */
+const REASONING_SLIDE_PLAN_GRACE_TURNS = 4;
+/** Tools whose first successful call marks the execution phase for
+ *  {@link ReasoningSlide.onFirstAction}-triggered switches. Bash is
+ *  deliberately excluded: it doubles as exploration (ls/cat) and fired
+ *  turn-1 switches in practice. */
+const REASONING_SLIDE_ACTION_TOOLS: Record<string, true> = {
+	edit: true,
+	write: true,
+};
 /** Abort reason for the Gemini reasoning-header runaway interrupt. Surfaced on the
  *  discarded assistant turn only; never reaches the model. */
 const GEMINI_HEADER_INTERRUPT_REASON = "Interrupted: emit a tool call instead of more planning";
@@ -599,8 +625,9 @@ const COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION: CompactionCheckResult = {
 
 /**
  * User-facing notice for a compaction dead end: maintenance freed too little
- * to retry safely. `remedies` names the recovery actions available on the
- * emitting path (the shake-rescue path can additionally offer `/shake images`).
+ * to retry safely. `remedies` names the recovery actions left on the emitting
+ * path — by the time the post-pass dead end fires, the tiered rescue has
+ * already attempted both elide and image-drop automatically.
  */
 function compactionDeadEndWarning(remedies: string): string {
 	return (
@@ -680,6 +707,36 @@ export interface AsyncJobSnapshot {
 }
 
 export type { ShakeMode, ShakeResult };
+/**
+ * Switches an active session from its initial model one-way at a completed
+ * assistant-turn boundary. Trigger is either a fixed turn count
+ * ({@link afterTurns}) or the first turn that ran an action tool
+ * ({@link onFirstAction}); exactly one must be set.
+ */
+export interface ReasoningSlide {
+	target: Model;
+	/** Switch after this many completed assistant turns. */
+	afterTurns?: number;
+	/** Switch at the first completed turn that ran an edit/write tool. */
+	onFirstAction?: boolean;
+	thinkingLevel?: ConfiguredThinkingLevel;
+	/**
+	 * Plan burst: after {@link planAtTurn} completed turns, steer a hidden
+	 * "lay out the complete plan" nudge into the run so the primary model
+	 * spends its remaining turns producing a comprehensive plan. The nudge is
+	 * removed from the LLM context at the switch; the plan itself stays.
+	 */
+	plan?: boolean;
+	/** Completed assistant turns before the plan nudge is injected (default 1). */
+	planAtTurn?: number;
+	/**
+	 * Steer a hidden "before you finish, verify..." checklist into the run at
+	 * the moment of the switch — consistency across matching call sites,
+	 * diff scope vs. the reported issue, running the full test module rather
+	 * than only the reported test. Independent of {@link plan}.
+	 */
+	checklist?: boolean;
+}
 
 // ============================================================================
 // Types
@@ -695,6 +752,9 @@ export interface AgentSessionConfig {
 	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 	/** Initial session thinking selector. */
 	thinkingLevel?: ConfiguredThinkingLevel;
+	/** Switch model after this many completed assistant turns. */
+	reasoningSlide?: ReasoningSlide;
+
 	/** Initial per-family service tiers (OpenAI / Anthropic / Google) for the live session. */
 	serviceTierByFamily?: ServiceTierByFamily;
 	/** Prompt templates for expansion */
@@ -1607,6 +1667,13 @@ export class AgentSession {
 	#autoThinking: boolean = false;
 	/** The level `auto` last resolved to (for UI); undefined until a turn is classified. */
 	#autoResolvedLevel: Effort | undefined;
+	#reasoningSlide: ReasoningSlide | undefined;
+	#reasoningSlideTurnCount = 0;
+	/** True once the plan-burst nudge has been queued; scrubbed from context at the switch. */
+	#reasoningSlidePlanInjected = false;
+	/** True once a post-nudge assistant turn delivered a substantial written plan. */
+	#reasoningSlidePlanDelivered = false;
+
 	#promptTemplates: PromptTemplate[];
 	#slashCommands: FileSlashCommand[];
 
@@ -2091,6 +2158,155 @@ export class AgentSession {
 		this.#emit(pending);
 	}
 
+	/** Advance the configured one-way model switch at a successful assistant-turn boundary. */
+	async #advanceReasoningSlide(liveMessages: AgentMessage[], context: AgentTurnEndContext | undefined): Promise<void> {
+		const reasoningSlide = this.#reasoningSlide;
+		if (!reasoningSlide || context?.message.role !== "assistant") return;
+
+		this.#reasoningSlideTurnCount++;
+		// Structural safety net, scoped to the plan nudge specifically: every
+		// branch below assumes the agent loop will run another turn. It won't
+		// if THIS turn had no tool calls — the loop treats a text-only turn as
+		// "the agent is done" and ends the session with no further prompting.
+		// A bare fixed-turn/action slide never provokes that (a genuine
+		// text-only stop there is normal agent behavior and must be honored),
+		// but the plan nudge explicitly asks for a prose reply, which makes a
+		// text-only turn common right after it — observed silently killing
+		// production SWE-bench runs before any code was ever written. Force
+		// one more turn only in that specific, self-created hazard window.
+		if (reasoningSlide.plan && this.#reasoningSlidePlanInjected && context.toolResults.length === 0) {
+			this.agent.steer({
+				role: "custom",
+				customType: REASONING_SLIDE_CONTINUE_MESSAGE_TYPE,
+				content: reasoningSlideContinuePrompt,
+				attribution: "agent",
+				display: false,
+				timestamp: Date.now(),
+			});
+		}
+		this.#noteReasoningSlidePlanDelivery(reasoningSlide, context.message);
+		let trigger: string;
+		if (reasoningSlide.onFirstAction) {
+			// Action trigger: the first turn that mutates the world (edit/write/
+			// bash) marks the start of the execution phase — switch right there.
+			const action = context.toolResults.find(result => REASONING_SLIDE_ACTION_TOOLS[result.toolName]);
+			if (!action) {
+				this.#maybeInjectReasoningSlidePlanNudge(reasoningSlide);
+				return;
+			}
+			trigger = `first ${action.toolName} call (turn ${this.#reasoningSlideTurnCount})`;
+		} else {
+			const afterTurns = reasoningSlide.afterTurns ?? 1;
+			if (this.#reasoningSlideTurnCount < afterTurns) {
+				this.#maybeInjectReasoningSlidePlanNudge(reasoningSlide);
+				return;
+			}
+			// Hold the switch until the nudged plan actually lands: sliding mid-
+			// exploration hands the fast model a transcript with an unfulfilled
+			// promise to plan (observed as test-doctoring drift on SWE-bench).
+			// Bounded so a model that refuses to plan still slides eventually.
+			if (
+				reasoningSlide.plan &&
+				this.#reasoningSlidePlanInjected &&
+				!this.#reasoningSlidePlanDelivered &&
+				this.#reasoningSlideTurnCount < afterTurns + REASONING_SLIDE_PLAN_GRACE_TURNS
+			) {
+				return;
+			}
+			trigger = `${this.#reasoningSlideTurnCount} completed turns`;
+		}
+		await this.#waitForSessionMessagePersistence(context.message);
+		for (const toolResult of context.toolResults) {
+			await this.#waitForSessionMessagePersistence(toolResult);
+		}
+
+		this.#scrubReasoningSlidePlanNudge(liveMessages);
+		const target = reasoningSlide.target;
+		if (this.model && modelsAreEqual(this.model, target)) {
+			this.#reasoningSlide = undefined;
+			return;
+		}
+
+		await this.setModelTemporary(target, reasoningSlide.thinkingLevel, { ephemeral: true });
+		this.#reasoningSlide = undefined;
+		this.emitNotice(
+			"info",
+			`Reasoning slide: switched to ${target.provider}/${target.id} after ${trigger}.`,
+			"reasoning-slide",
+		);
+		if (reasoningSlide.checklist) {
+			this.agent.steer({
+				role: "custom",
+				customType: REASONING_SLIDE_CHECKLIST_MESSAGE_TYPE,
+				content: reasoningSlideChecklistPrompt,
+				attribution: "agent",
+				display: false,
+				timestamp: Date.now(),
+			});
+		}
+	}
+
+	/**
+	 * Plan-delivery detector: a post-nudge assistant turn whose visible text is
+	 * substantial ({@link REASONING_SLIDE_PLAN_MIN_CHARS}+) is taken as the
+	 * written plan. Exploration turns emit short connective text ("Let me read
+	 * X first") and never trip this.
+	 */
+	#noteReasoningSlidePlanDelivery(reasoningSlide: ReasoningSlide, message: AgentTurnEndContext["message"]): void {
+		if (!reasoningSlide.plan || !this.#reasoningSlidePlanInjected || this.#reasoningSlidePlanDelivered) return;
+		if (message.role !== "assistant") return;
+		let textChars = 0;
+		for (const block of message.content) {
+			if (block.type === "text") textChars += block.text.length;
+		}
+		if (textChars >= REASONING_SLIDE_PLAN_MIN_CHARS) {
+			this.#reasoningSlidePlanDelivered = true;
+			this.emitNotice("info", "Reasoning slide: plan delivered.", "reasoning-slide");
+		}
+	}
+
+	/**
+	 * Plan burst: once {@link ReasoningSlide.planAtTurn} turns have completed,
+	 * steer a hidden deep-planning nudge into the run so the primary model's
+	 * remaining pre-slide turns produce a comprehensive plan for the fast model
+	 * to execute. Injected at most once per slide.
+	 */
+	#maybeInjectReasoningSlidePlanNudge(reasoningSlide: ReasoningSlide): void {
+		if (!reasoningSlide.plan || this.#reasoningSlidePlanInjected) return;
+		if (this.#reasoningSlideTurnCount < (reasoningSlide.planAtTurn ?? 1)) return;
+		this.#reasoningSlidePlanInjected = true;
+		this.agent.steer({
+			role: "custom",
+			customType: REASONING_SLIDE_PLAN_MESSAGE_TYPE,
+			content: reasoningSlidePlanPrompt,
+			display: false,
+			attribution: "agent",
+			timestamp: Date.now(),
+		});
+		this.emitNotice("info", "Reasoning slide: injected deep-plan nudge.", "reasoning-slide");
+	}
+
+	/**
+	 * Remove the plan-burst nudge from the LLM context before the model
+	 * switch: the fast model inherits the plan the nudge produced, not the
+	 * nudge itself. Splices the loop's live context array in place (the run
+	 * streams from it) and mirrors the removal into agent state. The persisted
+	 * transcript keeps the message for audit; a session reload re-materializes
+	 * it, which is acceptable for the benchmark-oriented single-run lifecycle
+	 * this feature targets.
+	 */
+	#scrubReasoningSlidePlanNudge(liveMessages: AgentMessage[]): void {
+		if (!this.#reasoningSlidePlanInjected) return;
+		const isPlanNudge = (m: AgentMessage): boolean =>
+			m.role === "custom" && m.customType === REASONING_SLIDE_PLAN_MESSAGE_TYPE;
+		for (let i = liveMessages.length - 1; i >= 0; i--) {
+			if (isPlanNudge(liveMessages[i])) liveMessages.splice(i, 1);
+		}
+		const stateMessages = this.agent.state.messages;
+		const filtered = stateMessages.filter(m => !isPlanNudge(m));
+		if (filtered.length !== stateMessages.length) this.agent.replaceMessages(filtered);
+	}
+
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
@@ -2111,7 +2327,18 @@ export class AgentSession {
 		} else {
 			this.#thinkingLevel = config.thinkingLevel;
 		}
+		if (config.reasoningSlide) {
+			const { afterTurns, onFirstAction } = config.reasoningSlide;
+			if ((afterTurns !== undefined) === (onFirstAction === true)) {
+				throw new Error("reasoningSlide requires exactly one trigger: afterTurns or onFirstAction");
+			}
+			if (afterTurns !== undefined && (!Number.isSafeInteger(afterTurns) || afterTurns < 1)) {
+				throw new Error("reasoningSlide.afterTurns must be a positive integer");
+			}
+			this.#reasoningSlide = config.reasoningSlide;
+		}
 		this.#applyThinkingLevelToAgent(this.#thinkingLevel);
+
 		this.#promptTemplates = config.promptTemplates ?? [];
 		this.#slashCommands = config.slashCommands ?? [];
 		this.#extensionRunner = config.extensionRunner;
@@ -2184,6 +2411,7 @@ export class AgentSession {
 				});
 				if (detection) this.#maybeInjectToolCallLoopRedirect(messages, detection);
 			}
+			await this.#advanceReasoningSlide(messages, context);
 			this.#advisorPrimaryTurnsCompleted++;
 			if (this.#advisors.length > 0) {
 				for (const a of this.#advisors) {
