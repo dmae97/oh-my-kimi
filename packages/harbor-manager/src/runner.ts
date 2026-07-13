@@ -473,7 +473,7 @@ function probeLine(line: string, probe: CostProbe): void {
 	if (!trimmed) return;
 	try {
 		const event = JSON.parse(trimmed);
-		if (!event || event.type !== "message_end") return;
+		if (event?.type !== "message_end") return;
 		const message = event.message;
 		if (!message || typeof message !== "object" || message.role !== "assistant") return;
 		const usage = message.usage;
@@ -529,7 +529,7 @@ function probeTrialCost(ompLogPath: string): CostProbe | null {
 			const read = fs.readSync(fd, chunk, 0, chunk.length, probe.offset);
 			if (read <= 0) break;
 			probe.offset += read;
-			let data = Buffer.concat([probe.remainder, chunk.subarray(0, read)]);
+			const data = Buffer.concat([probe.remainder, chunk.subarray(0, read)]);
 			let start = 0;
 			for (;;) {
 				const nl = data.indexOf(0x0a, start);

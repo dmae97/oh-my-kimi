@@ -53,7 +53,10 @@ export function printableEvent(event: AgentSessionEvent): unknown {
 		case "message_update": {
 			const streamEvent = event.assistantMessageEvent;
 			if (streamEvent.type === "done" || streamEvent.type === "error") {
-				return { type: "message_update", assistantMessageEvent: { type: streamEvent.type, reason: streamEvent.reason } };
+				return {
+					type: "message_update",
+					assistantMessageEvent: { type: streamEvent.type, reason: streamEvent.reason },
+				};
 			}
 			const { partial: _partial, ...rest } = streamEvent;
 			return { type: "message_update", assistantMessageEvent: rest };
@@ -69,10 +72,6 @@ export function printableEvent(event: AgentSessionEvent): unknown {
 			};
 		case "agent_end":
 			return { ...event, messages: event.messages.map(stripProviderPayload) };
-		case "auto_compaction_end":
-			return event.result?.providerPayload
-				? { ...event, result: { ...event.result, providerPayload: undefined } }
-				: event;
 		default:
 			return event;
 	}

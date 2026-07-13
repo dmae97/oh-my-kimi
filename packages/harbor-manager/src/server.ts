@@ -51,6 +51,8 @@ export interface LaunchRequest {
 	agent?: string;
 	jobName?: string;
 	webSearch?: boolean;
+	/** Harbor container backend. Defaults to apple-container whenever the Apple `container` CLI is installed; docker is an explicit opt-in. */
+	environment?: "docker" | "apple-container";
 	/** Prewalk to a fast/cheap model at the first edit/write once the todo list exists; `into` overrides the default "smol" target. */
 	prewalk?: { into?: string };
 	/** Role of this run inside its experiment (baseline vs treatment). */
@@ -177,6 +179,7 @@ export function resolveArmLaunch(store: RunStore, experimentId: string, req: Add
 		prewalk: req.prewalk,
 		role: req.role,
 		note: req.note,
+		environment: cfg.environment === "docker" || cfg.environment === "apple-container" ? cfg.environment : undefined,
 		extraArgs: req.extraArgs,
 	};
 }
@@ -382,6 +385,11 @@ export class ManagerServer {
 				"--jobs-dir",
 				this.jobsDir,
 			];
+			// Prefer Apple Container when its CLI is present: native arm64 task
+			// containers with no Docker daemon. The runner itself defaults to
+			// docker, so the preference must be stated here.
+			const environment = request.environment ?? (Bun.which("container") ? "apple-container" : "docker");
+			argv.push("--environment", environment);
 			if (request.agent) argv.push("--agent", request.agent);
 			// An explicit include list IS the sample — never let the runner's
 			// default task cap truncate it.
