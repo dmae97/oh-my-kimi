@@ -1,5 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { buildHarborEnv, collectForwardEnv, parseArgs } from "./runner";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { buildHarborEnv, collectForwardEnv, parseArgs, readTrials } from "./runner";
 
 describe("generic agent-arg / env passthrough", () => {
 	it("forwards repeated --agent-arg as a JSON array the in-container agent can parse", () => {
@@ -129,5 +132,42 @@ describe("environment backends", () => {
 		expect(() => parseArgs(["--model", "anthropic/claude-opus-4-8", "--environment", "podman"])).toThrow(
 			/--environment must be/,
 		);
+	});
+});
+
+describe("live-trial cost probe", () => {
+	const usageEvent = (cost: number, input: number, output: number): string =>
+		`${JSON.stringify({
+			type: "message_end",
+			message: {
+				role: "assistant",
+				usage: { input, output, cacheRead: 0, cost: { total: cost } },
+			},
+		})}\n`;
+
+	it("accumulates usage incrementally across appended transcript writes", () => {
+		const jobDir = fs.mkdtempSync(path.join(os.tmpdir(), "harbor-runner-test-"));
+		try {
+			const agentDir = path.join(jobDir, "task__abc", "agent");
+			fs.mkdirSync(agentDir, { recursive: true });
+			const log = path.join(agentDir, "omp.txt");
+
+			// First flush: one complete event plus a partial line mid-write.
+			fs.writeFileSync(log, `${usageEvent(0.5, 100, 10)}{"type":"mess`);
+			let [trial] = readTrials(jobDir);
+			expect(trial.status).toBe("running");
+			expect(trial.costUsd).toBeCloseTo(0.5);
+			expect(trial.tokIn).toBe(100);
+
+			// Second flush completes the partial line and appends another event.
+			// Only appended bytes are parsed: the first event must count once.
+			fs.appendFileSync(log, `age_end"}\n${usageEvent(0.25, 40, 4)}`);
+			[trial] = readTrials(jobDir);
+			expect(trial.costUsd).toBeCloseTo(0.75);
+			expect(trial.tokIn).toBe(140);
+			expect(trial.tokOut).toBe(14);
+		} finally {
+			fs.rmSync(jobDir, { recursive: true, force: true });
+		}
 	});
 });

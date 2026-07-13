@@ -366,10 +366,12 @@ export class RunStore {
 					JSON.stringify(snapshot.metrics),
 					jobName,
 				);
-			// Historical Harbor runs have no owning process. Infer their terminal
-			// state from result metadata or directory freshness.
-			if (row.benchmark === "harbor" && row.pid === null && row.finishedAt === null && row.status !== "cancelled") {
-				const result = readJobResult(jobDir);
+			// Runs with no owning process (historical dirs, or a runner that died
+			// with a previous manager). Infer terminal state from result metadata
+			// or directory freshness — an orphaned harbor child may still be
+			// running and writing trials, so a fresh dir stays "running".
+			if (row.pid === null && row.finishedAt === null && row.status !== "cancelled") {
+				const result = row.benchmark === "harbor" ? readJobResult(jobDir) : null;
 				let status: RunStatus;
 				let finishedAt: number | null = null;
 				if (result?.finishedAt != null) {
@@ -399,11 +401,13 @@ export class RunStore {
 		}>;
 		const out: RunRow[] = [];
 		for (const { job_name } of active) {
-			// A pid-owning run whose process died without markExit (manager restart)
-			// is finalized here so it doesn't stay "running" forever.
+			// A pid-owning run whose runner died without markExit (manager
+			// restart) loses its pid here; syncRun's disk inference then decides
+			// the real status — the workload may have completed, or may still be
+			// running as an orphan.
 			const row = this.getRun(job_name);
 			if (row?.pid != null && !processAlive(row.pid)) {
-				this.markExit(job_name, null);
+				this.#db.query("UPDATE runs SET pid = NULL WHERE job_name = ?").run(job_name);
 			}
 			const synced = this.syncRun(job_name);
 			if (synced) out.push(synced);

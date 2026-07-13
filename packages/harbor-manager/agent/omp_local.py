@@ -565,13 +565,18 @@ class OmpLocal(BaseInstalledAgent):
         }
 
     def _sum_main(self, path: Path, acc: "_Usage") -> None:
-        """Sum assistant `message_end` usage from omp's stdout JSONL."""
+        """Sum assistant `message_end` usage from omp's stdout JSONL.
+
+        Streams line-by-line: a runaway transcript must not OOM the host-side
+        post-run parse.
+        """
         if not path.exists():
             return
-        for line in path.read_text(errors="replace").splitlines():
-            event = _loads(line)
-            if not event or event.get("type") != "message_end":
-                continue
-            message = event.get("message")
-            if isinstance(message, dict) and message.get("role") == "assistant":
-                acc.add(message.get("usage"))
+        with path.open(errors="replace") as fh:
+            for line in fh:
+                event = _loads(line)
+                if not event or event.get("type") != "message_end":
+                    continue
+                message = event.get("message")
+                if isinstance(message, dict) and message.get("role") == "assistant":
+                    acc.add(message.get("usage"))

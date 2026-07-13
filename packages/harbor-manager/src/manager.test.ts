@@ -166,7 +166,7 @@ describe("RunStore", () => {
 		expect(treat?.note).toBe("prewalk flash v2");
 	});
 
-	it("finalizes running rows whose owning process died", () => {
+	it("releases a dead runner's pid without failing a possibly-live orphan", () => {
 		const jobsDir = makeJobsDir();
 		writeFixtureJob(jobsDir, "job-b");
 		const store = new RunStore(jobsDir);
@@ -181,7 +181,26 @@ describe("RunStore", () => {
 		});
 		const rows = store.syncActive();
 		expect(rows).toHaveLength(1);
-		expect(store.getRun("job-b")?.status).toBe("failed");
+		// The runner is only a monitor: its death must not fail the run while
+		// the job dir is fresh (an orphaned harbor may still be writing trials).
+		const row = store.getRun("job-b");
+		expect(row?.pid).toBeNull();
+		expect(row?.status).toBe("running");
+
+		// Once harbor stamps the terminal marker, the same sweep completes it.
+		const jobDir = path.join(jobsDir, "job-b");
+		fs.writeFileSync(
+			path.join(jobDir, "result.json"),
+			JSON.stringify({
+				n_total_trials: 3,
+				stats: { n_running_trials: 0, n_pending_trials: 0 },
+				finished_at: "2026-07-12T11:00:00",
+			}),
+		);
+		store.syncActive();
+		const finished = store.getRun("job-b");
+		expect(finished?.status).toBe("complete");
+		expect(finished?.finishedAt).toBe(Date.parse("2026-07-12T11:00:00"));
 	});
 });
 

@@ -188,6 +188,7 @@ export class ManagerServer {
 	#lastSnapshot = "";
 	#syncTimer: Timer | undefined;
 	#server: Server<undefined> | null = null;
+	#stopped = false;
 	readonly jobsDir: string;
 
 	constructor(jobsDir: string, dbPath?: string) {
@@ -216,6 +217,7 @@ export class ManagerServer {
 	}
 
 	async stop(): Promise<void> {
+		this.#stopped = true;
 		clearInterval(this.#syncTimer);
 		for (const client of this.#sse) {
 			client.state = SseState.Closed;
@@ -417,10 +419,19 @@ export class ManagerServer {
 			stdout: logFile,
 			stderr: logFile,
 			env: { ...process.env },
+			// Own process group: a manager restart (Ctrl+C / --hot dev cycle) must
+			// not deliver terminal signals to runners — that killed live runs.
+			detached: true,
 		});
 		const child: ManagedChild = { proc, jobName, cancelled: false };
 		this.#children.set(jobName, child);
 		proc.exited.then(exitCode => {
+			try {
+				fs.closeSync(logFile);
+			} catch {}
+			// A retired instance (--hot reload) must not touch the closed store;
+			// the successor's pid sweep reconciles this run from disk instead.
+			if (this.#stopped) return;
 			this.#store.markExit(jobName, exitCode, child.cancelled);
 			// Final sync AFTER the terminal state: the ticker only revisits
 			// running rows, so the last-2s trial results would otherwise be lost.
@@ -523,7 +534,7 @@ export class ManagerServer {
 		if (!file.startsWith(`${path.resolve(jobDir)}${path.sep}`) || !fs.existsSync(file)) {
 			return Response.json({ error: "trace not found" }, { status: 404 });
 		}
-		const text = fs.readFileSync(file, "utf8");
+		const text = readTextTail(file, TRACE_READ_CAP_BYTES);
 		if (!file.endsWith(".txt")) {
 			if (raw) return new Response(text, { headers: { "content-type": "text/plain; charset=utf-8" } });
 			return Response.json({
@@ -574,9 +585,33 @@ export class ManagerServer {
 	}
 }
 
+/** Trace files can be runaway-huge; the viewer only shows a tail anyway. */
+const TRACE_READ_CAP_BYTES = 32 * 1024 * 1024;
+
+/** Last `cap` bytes of a file as text, dropping a leading partial line when truncated. */
+function readTextTail(file: string, cap: number): string {
+	const size = fs.statSync(file).size;
+	if (size <= cap) return fs.readFileSync(file, "utf8");
+	const fd = fs.openSync(file, "r");
+	try {
+		const buf = Buffer.allocUnsafe(cap);
+		const read = fs.readSync(fd, buf, 0, cap, size - cap);
+		const text = buf.subarray(0, read).toString("utf8");
+		const nl = text.indexOf("\n");
+		return nl === -1 ? text : text.slice(nl + 1);
+	} finally {
+		fs.closeSync(fd);
+	}
+}
+
 if (import.meta.main) {
+	// `bun --hot` re-evaluates this module in-place: retire the previous
+	// instance first, or its sync ticker and sqlite connection leak per reload.
+	const host = globalThis as typeof globalThis & { __harborManagerServer?: ManagerServer };
+	await host.__harborManagerServer?.stop();
 	const { port, jobsDir } = parseServerArgs(process.argv.slice(2));
 	const manager = new ManagerServer(jobsDir);
+	host.__harborManagerServer = manager;
 	const server = manager.start(port);
 	process.stdout.write(`harbor-manager listening on http://localhost:${server.port} (jobs: ${jobsDir})\n`);
 	const shutdown = async () => {
