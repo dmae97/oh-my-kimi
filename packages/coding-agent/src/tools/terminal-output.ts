@@ -114,10 +114,8 @@ export function readTerminalRows(terminal: XtermTerminal, startRow: number, rowC
 			if (!cell) break;
 			const chars = cell.getChars();
 			const width = Math.max(1, cell.getWidth());
-			if (chars) {
-				cells.push({ chars, style: cellStyle(cell) });
-				if (chars !== " ") lastContent = cells.length - 1;
-			}
+			cells.push({ chars: chars || " ", style: cellStyle(cell) });
+			if (chars && chars !== " ") lastContent = cells.length - 1;
 			column += width;
 		}
 

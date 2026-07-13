@@ -79,17 +79,24 @@ describe("launchToolRenderer", () => {
 		);
 		expect(rendered[0]).toContain("Launch logs");
 		expect(rendered[0]).toContain("cursor 2210");
-		expect(rendered).toContain("line one");
-		expect(rendered).toContain("line two");
+		expect(rendered.some(line => line.includes("line one"))).toBe(true);
+		expect(rendered.some(line => line.includes("line two"))).toBe(true);
 		expect(rendered.some(line => line.includes("[web: running"))).toBe(false);
+		expect(rendered[0]).toContain("╭");
+		expect(rendered.some(line => line.includes("Output"))).toBe(true);
+		expect(rendered.at(-1)).toContain("╰");
 	});
 
 	it("replays terminal screen rows so cursor rewrites retain their final color and weight", async () => {
-		const terminalRows = await renderTerminalOutput("\x1b[1;31mold\x1b[0m\r\x1b[1;32mready\x1b[0m\x1b[K", {
-			head: false,
-			maxRows: 10,
-		});
+		const terminalRows = await renderTerminalOutput(
+			"\x1b[1;31mold\x1b[0m\r\x1b[2K\x1b[12G\x1b[1;32mready\x1b[0m\x1b[K",
+			{
+				head: false,
+				maxRows: 10,
+			},
+		);
 		if (terminalRows === undefined) throw new Error("terminal replay failed");
+		expect(Bun.stripANSI(terminalRows[0] ?? "")).toBe("           ready");
 
 		const uiTheme = await theme();
 		const component = launchToolRenderer.renderResult(

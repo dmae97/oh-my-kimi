@@ -102,24 +102,33 @@ export const shellFixtures: Record<string, GalleryFixture> = {
 	launch_logs: {
 		label: "Launch",
 		renderer: "launch",
-		args: { op: "logs", name: "web", lines: 100, follow: true, cursor: 1842, timeout: 30 },
+		args: { op: "logs", name: "comp-debug", lines: 100, follow: true, cursor: 233_512, timeout: 30 },
 		result: {
 			content: [
 				{
 					type: "text",
 					text: [
-						"$ bun run dev",
-						"  VITE v6.0.3  ready in 312 ms",
-						"",
-						"  ➜  Local:   http://localhost:5173/",
-						"  ➜  Network: use --host to expose",
-						"12:04:11 [vite] hmr update /src/App.tsx",
-						"12:04:15 [vite] hmr update /src/components/Chart.tsx",
-						"[web: running; cursor=2210]",
+						"Breakpoint 1: 3 locations.",
+						"(lldb) run",
+						"Process 726 launched: '/tmp/compiler'",
+						"frame #0: 0x0000000100012f80 compiler`parse_expression",
+						"[comp-debug: ready; cursor=233797]",
 					].join("\n"),
 				},
 			],
-			details: { op: "logs", cursor: 2210, timedOut: false, state: "running" },
+			details: {
+				op: "logs",
+				cursor: 233_797,
+				timedOut: false,
+				state: "ready",
+				terminalRows: [
+					"\x1b[0mBreakpoint 1: 3 locations.",
+					"\x1b[0m(lldb) run",
+					"\x1b[0mProcess 726 launched: '/tmp/compiler'",
+					"\x1b[0mframe #0: 0x0000000100012f80 compiler`parse_expression",
+					"\x1b[0m\x1b[1;38;5;2m(lldb)\x1b[0m ",
+				],
+			},
 		},
 		errorResult: {
 			content: [{ type: "text", text: "No daemon named web" }],

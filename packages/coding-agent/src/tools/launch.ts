@@ -16,12 +16,13 @@ import type { DaemonOperation, DaemonRpcResult, DaemonSnapshot, DaemonSpec, Daem
 import { renderTerminalOutput } from "../launch/terminal-output";
 import type { Theme, ThemeColor } from "../modes/theme/theme";
 import launchDescription from "../prompts/tools/launch.md" with { type: "text" };
-import { renderStatusLine } from "../tui";
+import { framedBlock, outputBlockContentWidth, renderStatusLine } from "../tui";
 import type { ToolSession } from ".";
 import { resolveToCwd } from "./path-utils";
 import {
 	capPreviewLines,
 	createCachedComponent,
+	DEFAULT_TERMINAL_PREVIEW_LINES,
 	formatDuration,
 	formatExpandHint,
 	formatMoreItems,
@@ -283,10 +284,13 @@ async function toolDetails(result: DaemonRpcResult, params: LaunchParams): Promi
 		case "list":
 			return { op: "list", daemons: result.daemons };
 		case "logs": {
-			const terminalRows = await renderTerminalOutput(result.text, {
-				head: params.head ?? false,
-				maxRows: Math.min(1_000, Math.floor(params.lines ?? 100)),
-			});
+			const terminalRows =
+				result.terminalText === undefined
+					? undefined
+					: await renderTerminalOutput(result.terminalText, {
+							head: params.head ?? false,
+							maxRows: Math.min(1_000, Math.floor(params.lines ?? 100)),
+						});
 			return {
 				op: "logs",
 				cursor: result.cursor,
@@ -600,13 +604,32 @@ export const launchToolRenderer = {
 			theme,
 		);
 
+		if (op === "logs") {
+			return framedBlock(theme, width => {
+				const innerWidth = outputBlockContentWidth(width);
+				const rows = body.map(line => truncateToWidth(line, innerWidth));
+				return {
+					header,
+					state: options.isPartial ? "pending" : failed ? "error" : "success",
+					sections: [
+						{
+							label: theme.fg("toolTitle", "Output"),
+							lines: capPreviewLines(rows, theme, {
+								expanded: options.expanded,
+								max: DEFAULT_TERMINAL_PREVIEW_LINES,
+							}),
+						},
+					],
+					width,
+				};
+			});
+		}
+
 		return createCachedComponent(
 			() => options.expanded,
 			(width, expanded) => {
 				let visible = body;
-				if (op === "logs") {
-					visible = capPreviewLines(body, theme, { expanded });
-				} else if (!expanded && op === "list" && body.length > PREVIEW_LIMITS.COLLAPSED_ITEMS) {
+				if (!expanded && op === "list" && body.length > PREVIEW_LIMITS.COLLAPSED_ITEMS) {
 					const remaining = body.length - PREVIEW_LIMITS.COLLAPSED_ITEMS;
 					visible = [
 						...body.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS),

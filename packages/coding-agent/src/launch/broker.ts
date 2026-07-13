@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Process, type PtyRunResult, PtySession } from "@oh-my-pi/pi-natives";
 import { isEexist, isEnoent, logger, postmortem, sanitizeText } from "@oh-my-pi/pi-utils";
-import { truncateHead, truncateTail } from "../session/streaming-output";
+import { truncateHead, truncateHeadBytes, truncateTail, truncateTailBytes } from "../session/streaming-output";
 import { workerEnvFromParent } from "../subprocess/worker-client";
 import { daemonBrokerEndpoint } from "./paths";
 import { hasLiveDaemonProjectPresence } from "./presence";
@@ -74,6 +74,11 @@ interface ManagedDaemon {
 interface BrokerLease {
 	path: string;
 	instanceId: string;
+}
+
+interface DaemonLogRead {
+	text: string;
+	terminalText: string;
 }
 
 function quoteShellArg(value: string): string {
@@ -155,7 +160,7 @@ class DaemonLog {
 		return text;
 	}
 
-	async read(head: boolean, lines: number, grep?: string): Promise<string> {
+	async read(head: boolean, lines: number, grep?: string): Promise<DaemonLogRead> {
 		await this.#queue;
 		await this.#writer.flush();
 		return DaemonLog.readFiles(this.#path, this.#previousPath, head, lines, grep);
@@ -168,19 +173,19 @@ class DaemonLog {
 		await this.#writer.end();
 	}
 
-	static async readDir(dir: string, head: boolean, lines: number, grep?: string): Promise<string> {
-		return DaemonLog.readFiles(path.join(dir, LOG_FILE), path.join(dir, PREVIOUS_LOG_FILE), head, lines, grep);
-	}
-
 	static async readFiles(
 		logPath: string,
 		previousPath: string,
 		head: boolean,
 		lines: number,
 		grep?: string,
-	): Promise<string> {
+	): Promise<DaemonLogRead> {
 		const [previous, current] = await Promise.all([fileTextSlice(previousPath, head), fileTextSlice(logPath, head)]);
-		let text = `${previous}${previous && current && !previous.endsWith("\n") ? "\n" : ""}${current}`;
+		const combined = `${previous}${previous && current && !previous.endsWith("\n") ? "\n" : ""}${current}`;
+		const terminalText = head
+			? truncateHeadBytes(combined, LOG_READ_BYTES).text
+			: truncateTailBytes(combined, LOG_READ_BYTES).text;
+		let text = sanitizeText(terminalText);
 		if (grep) {
 			let pattern: RegExp;
 			try {
@@ -190,11 +195,14 @@ class DaemonLog {
 			}
 			text = text
 				.split("\n")
-				.filter(line => pattern.test(sanitizeText(line)))
+				.filter(line => pattern.test(line))
 				.join("\n");
 		}
 		const options = { maxLines: lines, maxBytes: 256 * 1024 };
-		return head ? truncateHead(text, options).content : truncateTail(text, options).content;
+		return {
+			text: head ? truncateHead(text, options).content : truncateTail(text, options).content,
+			terminalText,
+		};
 	}
 
 	async #rotate(): Promise<void> {
@@ -755,13 +763,20 @@ class DaemonBroker {
 			timedOut = !changed;
 		}
 		const lines = Math.max(1, Math.min(1_000, Math.floor(operation.lines)));
-		const text = record.log
+		const output = record.log
 			? await record.log.read(operation.head, lines, operation.grep)
-			: await DaemonLog.readDir(record.dir, operation.head, lines, operation.grep);
+			: await DaemonLog.readFiles(
+					path.join(record.dir, LOG_FILE),
+					path.join(record.dir, PREVIOUS_LOG_FILE),
+					operation.head,
+					lines,
+					operation.grep,
+				);
 		return {
 			op: "logs",
 			name: record.snapshot.name,
-			text,
+			text: output.text,
+			terminalText: record.spec.pty && operation.grep === undefined ? output.terminalText : undefined,
 			cursor: record.snapshot.outputBytes,
 			timedOut,
 			state: record.snapshot.state,

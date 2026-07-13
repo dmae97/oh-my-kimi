@@ -101,6 +101,8 @@ export type DaemonRpcResult =
 			op: "logs";
 			name: string;
 			text: string;
+			/** Raw PTY byte stream used only to reconstruct the terminal screen. */
+			terminalText?: string;
 			cursor: number;
 			timedOut: boolean;
 			state: DaemonState;
@@ -353,6 +355,8 @@ export function parseDaemonRpcResult(operation: DaemonOperation, value: unknown)
 				op: "logs",
 				name: stringValue(source.name, "result.name"),
 				text: typeof source.text === "string" ? source.text : "",
+				terminalText:
+					source.terminalText === undefined ? undefined : rawString(source.terminalText, "result.terminalText"),
 				cursor: numberValue(source.cursor, "result.cursor"),
 				timedOut: booleanValue(source.timedOut, "result.timedOut"),
 				state: daemonState(source.state),
