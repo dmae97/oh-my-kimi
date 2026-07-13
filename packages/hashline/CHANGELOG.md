@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Rejected ambiguous swaps that risk silent deletion of range boundaries
+- Prevented ambiguous auto-repairing of structural closing lines when payload placement is unclear
+
 ## [16.3.3] - 2026-07-02
 
 ### Breaking Changes

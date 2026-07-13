@@ -108,6 +108,55 @@ export function insertAfterBlockCloserLoweredWarning(line: number): string {
 export function insertAfterBlockUnresolvedLoweredWarning(line: number): string {
 	return `\`INS.BLK.POST ${line}:\` could not resolve a syntactic block on line ${line}, so it was applied as plain \`INS.POST ${line}:\`. Verify the landing line; anchor on a line that OPENS a construct.`;
 }
+/**
+ * A one-sided boundary echo whose payload is too short to be the widened
+ * range's full content: dropping the echo deletes range line(s) the payload
+ * never restates (the "widened range" reading), while the "range shifted by
+ * the echo" reading keeps them. The readings produce different files, so the
+ * edit is rejected instead of repaired.
+ */
+export function ambiguousBoundaryEchoMessage(
+	startLine: number,
+	endLine: number,
+	side: "leading" | "trailing",
+	count: number,
+): string {
+	const where =
+		side === "leading"
+			? `opens by restating the ${count} line(s) just above the range`
+			: `ends by restating the ${count} line(s) just below the range`;
+	return (
+		`\`SWAP ${startLine}${HL_RANGE_SEP}${endLine}:\` rejected: the body ${where}, ` +
+		`but is too short to be the full final content of the widened range — applying it as-is or ` +
+		`auto-repairing would delete range line(s) the body never restates. ` +
+		`Re-issue with the range covering exactly the lines that change and the body as their complete ` +
+		`final content: drop the restated keeper from the body, or widen the range to consume it.`
+	);
+}
+
+/**
+ * A replacement range deletes trailing structural closer(s) the payload never
+ * restates, and nothing anchors the payload inside the block those closers
+ * terminate: the payload has no unmatched opener for them and its indentation
+ * is not deeper than the closer. Sparing the closer would have to guess
+ * whether the payload belongs before it (inside the block) or after it (a
+ * sibling), so the edit is rejected instead of repaired.
+ */
+export function ambiguousCloserSpareMessage(
+	startLine: number,
+	endLine: number,
+	closerLine: number,
+	count: number,
+): string {
+	const closers = count === 1 ? `line ${closerLine}` : `lines ${closerLine}-${closerLine + count - 1}`;
+	return (
+		`\`SWAP ${startLine}${HL_RANGE_SEP}${endLine}:\` rejected: the range deletes the closing-delimiter ` +
+		`${closers} but the body never restates it, and the body claims no position inside that block ` +
+		`(no unmatched opener, indentation not deeper than the closer) — whether the new content belongs ` +
+		`before or after the closer is ambiguous. Restate the closer in the body at the intended position, ` +
+		`or use \`INS.PRE ${closerLine}:\` / \`INS.POST ${closerLine}:\` instead.`
+	);
+}
 
 /**
  * Internal invariant: `applyEdits` received an unresolved `replace_block N:`
