@@ -15,6 +15,9 @@
 // point no longer calls `std::process::exit`. The upstream implementation is
 // unix-only (it relies on `std::os::unix`), so it lives behind `#[cfg(unix)]`;
 // non-unix targets get a stub that reports the builtin as unsupported.
+// BSD-style invocations (`stat -f FORMAT`, macOS muscle memory) are detected
+// and translated to the GNU format language before argument parsing; see
+// `rewrite_bsd_invocation`.
 
 #[cfg(unix)]
 pub use imp::{run, uu_app};
@@ -1400,12 +1403,329 @@ for details about the options it supports.";
 		}
 	}
 
+	/// pi-uutils: BSD `stat -f FORMAT` compatibility (macOS muscle memory).
+	///
+	/// BSD stat's `-f` takes a format string (`stat -f "%Sm %N" file`), while
+	/// GNU's `-f` is `--file-system`; parsed as GNU, a BSD invocation prints
+	/// filesystem info for each real operand and errors on the format operand.
+	/// An invocation is treated as BSD when a `-f` cluster (optionally with the
+	/// BSD boolean flags `L`/`n`/`q`/`F`) carries a format value containing
+	/// `%` — GNU filesystem mode would have to target a file literally named
+	/// like a format string, which never happens in practice. Detected
+	/// invocations are rewritten to the GNU equivalent (`-c`/`--printf` plus a
+	/// translated format) before clap parsing.
+	///
+	/// Returns `None` when the invocation is not BSD-shaped, `Some(Err(_))`
+	/// when it is BSD-shaped but uses an option or directive with no GNU
+	/// counterpart.
+	fn rewrite_bsd_invocation(argv: &[OsString]) -> Option<Result<Vec<OsString>, String>> {
+		let toks: Vec<Cow<'_, str>> = argv.iter().map(|a| a.to_string_lossy()).collect();
+		let mut detected = false;
+		for (idx, tok) in toks.iter().enumerate().skip(1) {
+			if tok.as_ref() == "--" {
+				break;
+			}
+			let Some(cluster) = tok.strip_prefix('-') else {
+				continue;
+			};
+			if cluster.is_empty() || cluster.starts_with('-') {
+				continue;
+			}
+			let Some(fpos) = cluster.find('f') else {
+				continue;
+			};
+			if !cluster[..fpos]
+				.chars()
+				.all(|c| matches!(c, 'L' | 'n' | 'q' | 'F'))
+			{
+				continue;
+			}
+			let attached = &cluster[fpos + 1..];
+			let format = if attached.is_empty() {
+				toks.get(idx + 1).map(Cow::as_ref)
+			} else {
+				Some(attached)
+			};
+			if format.is_some_and(|f| f.contains('%')) {
+				detected = true;
+				break;
+			}
+		}
+		if !detected {
+			return None;
+		}
+		Some(bsd_to_gnu_argv(argv, &toks))
+	}
+
+	/// Parses a detected BSD invocation and produces the equivalent GNU argv.
+	fn bsd_to_gnu_argv(argv: &[OsString], toks: &[Cow<'_, str>]) -> Result<Vec<OsString>, String> {
+		let mut follow = false;
+		let mut no_newline = false;
+		let mut format = None;
+		let mut timefmt_ignored = false;
+		let mut files: Vec<OsString> = Vec::new();
+
+		let mut i = 1;
+		while i < toks.len() {
+			if toks[i].as_ref() == "--" {
+				files.extend_from_slice(&argv[i + 1..]);
+				break;
+			}
+			let cluster: Vec<char> = match toks[i].strip_prefix('-') {
+				Some(c) if !c.is_empty() && !c.starts_with('-') => c.chars().collect(),
+				// Operands keep the original (possibly non-UTF8) bytes.
+				_ => {
+					files.push(argv[i].clone());
+					i += 1;
+					continue;
+				},
+			};
+			let mut consumed_next = false;
+			let mut k = 0;
+			while k < cluster.len() {
+				match cluster[k] {
+					'L' => follow = true,
+					'n' => no_newline = true,
+					// `-q` (suppress error messages) and `-F` (ls -F type
+					// decorations) have no GNU counterpart worth emulating.
+					'q' | 'F' => {},
+					c @ ('f' | 't') => {
+						// The rest of the cluster is the attached value,
+						// otherwise the next token is.
+						let value: String = if k + 1 < cluster.len() {
+							cluster[k + 1..].iter().collect()
+						} else {
+							consumed_next = true;
+							match toks.get(i + 1) {
+								Some(v) => v.to_string(),
+								None => return Err(format!("option '-{c}' requires an argument")),
+							}
+						};
+						if c == 'f' {
+							format = Some(value);
+						} else {
+							timefmt_ignored = true;
+						}
+						break;
+					},
+					other => {
+						return Err(format!(
+							"option '-{other}' is not supported (BSD stat compatibility)"
+						));
+					},
+				}
+				k += 1;
+			}
+			i += 1 + usize::from(consumed_next);
+		}
+
+		let Some(format) = format else {
+			return Err("BSD-style '-f' expects a format string".to_string());
+		};
+		if timefmt_ignored {
+			let _ = writeln!(
+				pi_uutils_ctx::stderr(),
+				"stat: warning: BSD '-t' time format is ignored; human-readable times use the GNU \
+				 default format"
+			);
+		}
+		let translated = translate_bsd_format(&format, no_newline)?;
+
+		let mut out: Vec<OsString> = Vec::with_capacity(files.len() + 4);
+		out.push(argv[0].clone());
+		if follow {
+			out.push("-L".into());
+		}
+		// `--printf` suppresses the mandatory trailing newline (BSD `-n`); the
+		// translator escapes literal backslashes so text survives printf mode.
+		out.push(if no_newline {
+			"--printf".into()
+		} else {
+			"-c".into()
+		});
+		out.push(translated.into());
+		out.extend(files);
+		Ok(out)
+	}
+
+	/// Translates a BSD stat format string into the GNU format language used by
+	/// this implementation. Directives with no GNU counterpart (`%f` user
+	/// flags, `%v` inode generation, `%Y` symlink target, ...) are rejected.
+	/// With `printf_mode` set, literal backslashes are escaped so the result
+	/// survives `--printf` escape processing unchanged.
+	fn translate_bsd_format(fmt: &str, printf_mode: bool) -> Result<String, String> {
+		let chars: Vec<char> = fmt.chars().collect();
+		let mut out = String::with_capacity(fmt.len() + 8);
+		let mut i = 0;
+		while i < chars.len() {
+			if chars[i] != '%' {
+				if printf_mode && chars[i] == '\\' {
+					out.push_str(r"\\");
+				} else {
+					out.push(chars[i]);
+				}
+				i += 1;
+				continue;
+			}
+			let start = i;
+			i += 1;
+			if i >= chars.len() {
+				out.push('%');
+				break;
+			}
+			if chars[i] == '%' {
+				out.push_str("%%");
+				i += 1;
+				continue;
+			}
+			// Flags, width, and precision use the same syntax in both format
+			// languages; copy them through verbatim.
+			let mut spec = String::new();
+			while i < chars.len() && matches!(chars[i], '#' | '+' | '-' | '0' | ' ') {
+				spec.push(chars[i]);
+				i += 1;
+			}
+			while i < chars.len() && chars[i].is_ascii_digit() {
+				spec.push(chars[i]);
+				i += 1;
+			}
+			if i < chars.len() && chars[i] == '.' {
+				spec.push('.');
+				i += 1;
+				while i < chars.len() && chars[i].is_ascii_digit() {
+					spec.push(chars[i]);
+					i += 1;
+				}
+			}
+			// BSD grammar: %[flags][width][.prec][fmt][sub]datum, with
+			// fmt ∈ {D,O,U,X,F,S} (output representation) and sub ∈ {H,M,L}
+			// (datum sub-field). Only `S` ("string form") changes the GNU
+			// mapping; the numeric representations keep GNU's defaults.
+			let mut string_form = false;
+			if i < chars.len() && matches!(chars[i], 'D' | 'O' | 'U' | 'X' | 'F' | 'S') {
+				string_form = chars[i] == 'S';
+				i += 1;
+			}
+			let mut sub = None;
+			if i < chars.len() && matches!(chars[i], 'H' | 'M' | 'L') {
+				sub = Some(chars[i]);
+				i += 1;
+			}
+			let Some(&datum) = chars.get(i) else {
+				return Err(unsupported_bsd_directive(&chars[start..]));
+			};
+			i += 1;
+			let gnu: &str = match datum {
+				// Times: mtime / atime / ctime / birth; `S` selects the
+				// human-readable form, otherwise seconds since Epoch.
+				'm' => {
+					if string_form {
+						"y"
+					} else {
+						"Y"
+					}
+				},
+				'a' => {
+					if string_form {
+						"x"
+					} else {
+						"X"
+					}
+				},
+				'c' => {
+					if string_form {
+						"z"
+					} else {
+						"Z"
+					}
+				},
+				'B' => {
+					if string_form {
+						"w"
+					} else {
+						"W"
+					}
+				},
+				// File name as typed.
+				'N' => "n",
+				// Size in bytes.
+				'z' => "s",
+				// Owner / group: numeric, or (`S`) by name.
+				'u' => {
+					if string_form {
+						"U"
+					} else {
+						"u"
+					}
+				},
+				'g' => {
+					if string_form {
+						"G"
+					} else {
+						"g"
+					}
+				},
+				// Permissions: octal bits, or (`S`) the human-readable form.
+				'p' if string_form => "A",
+				'p' if matches!(sub, None | Some('L')) => "a",
+				// Inode, hard links, device, rdev, blocks, block size.
+				'i' => "i",
+				'l' => "h",
+				'd' => match sub {
+					Some('H') => "Hd",
+					Some('L') => "Ld",
+					None => "d",
+					Some(_) => return Err(unsupported_bsd_directive(&chars[start..i])),
+				},
+				'r' => match sub {
+					Some('H') => "Hr",
+					Some('L') => "Lr",
+					None => "r",
+					Some(_) => return Err(unsupported_bsd_directive(&chars[start..i])),
+				},
+				'b' => "b",
+				'k' => "o",
+				// File type, human readable (`%HT` / `%T`).
+				'T' => "F",
+				// `%n` and `%t` are literal newline / tab in BSD formats.
+				'n' => {
+					out.push('\n');
+					continue;
+				},
+				't' => {
+					out.push('\t');
+					continue;
+				},
+				_ => return Err(unsupported_bsd_directive(&chars[start..i])),
+			};
+			out.push('%');
+			out.push_str(&spec);
+			out.push_str(gnu);
+		}
+		Ok(out)
+	}
+
+	fn unsupported_bsd_directive(directive: &[char]) -> String {
+		let directive: String = directive.iter().collect();
+		format!("unsupported BSD format directive '{directive}'")
+	}
+
 	/// In-process builtin entry point. Unlike upstream's `uumain`, this parses
 	/// the arguments directly (without the uucore clap-localization helper that
 	/// would terminate the process), renders clap help/usage/version to the
 	/// context streams, and maps the `UResult` to an exit code, so it is safe
 	/// to run inside the host shell process.
 	pub fn run(argv: Vec<OsString>) -> i32 {
+		// pi-uutils: translate BSD-style `stat -f FORMAT` invocations into GNU
+		// form before parsing; see `rewrite_bsd_invocation`.
+		let argv = match rewrite_bsd_invocation(&argv) {
+			None => argv,
+			Some(Ok(rewritten)) => rewritten,
+			Some(Err(msg)) => {
+				let _ = writeln!(pi_uutils_ctx::stderr(), "stat: {msg}");
+				return 1;
+			},
+		};
 		let matches = match uu_app().try_get_matches_from(argv) {
 			Ok(matches) => matches,
 			Err(err) => {
@@ -1781,5 +2101,75 @@ mod tests {
 		assert!(stdout.contains("Usage:"));
 		assert!(stdout.contains("file system status"));
 		assert_eq!(stderr, "");
+	}
+
+	#[test]
+	fn bsd_dash_f_format_is_translated() {
+		let (_dir, root) = canonical_tempdir();
+		fs::write(root.join("data.bin"), b"hello world!").unwrap();
+
+		// macOS `stat -f "%Sm %N"`: BSD `-f` takes a format; the invocation is
+		// detected and translated instead of being parsed as `--file-system`.
+		let (code, stdout, stderr) = run_in(root.clone(), vec!["-f", "%Sm %N", "data.bin"]);
+		assert_eq!(code, 0);
+		assert_eq!(stderr, "");
+		assert!(stdout.ends_with(" data.bin\n"), "unexpected stdout: {stdout:?}");
+		assert!(
+			stdout.chars().next().is_some_and(|c| c.is_ascii_digit()),
+			"human-readable mtime should lead: {stdout:?}"
+		);
+
+		// Size, name-as-typed, and epoch mtime.
+		let (code, stdout, stderr) = run_in(root, vec!["-f", "%N: %z (%m)", "data.bin"]);
+		assert_eq!(code, 0);
+		assert_eq!(stderr, "");
+		assert!(stdout.starts_with("data.bin: 12 ("), "unexpected stdout: {stdout:?}");
+		let epoch = stdout
+			.trim_end()
+			.trim_end_matches(')')
+			.rsplit('(')
+			.next()
+			.unwrap();
+		assert!(epoch.parse::<u64>().is_ok(), "epoch mtime should be numeric: {stdout:?}");
+	}
+
+	#[test]
+	fn bsd_flag_cluster_follows_symlink_and_suppresses_newline() {
+		let (_dir, root) = canonical_tempdir();
+		fs::write(root.join("target"), b"abc").unwrap();
+		std::os::unix::fs::symlink("target", root.join("link")).unwrap();
+
+		// `-Lnf`: BSD boolean flags clustered with `-f`; `-n` drops the
+		// trailing newline (mapped to --printf), `-L` follows the link.
+		let (code, stdout, stderr) = run_in(root, vec!["-Lnf", "%z", "link"]);
+		assert_eq!((code, stdout.as_str(), stderr.as_str()), (0, "3", ""));
+	}
+
+	#[test]
+	fn bsd_string_form_and_subfield_directives() {
+		let (_dir, root) = canonical_tempdir();
+		fs::write(root.join("data.bin"), b"x").unwrap();
+
+		// %HT → %F (file type), %Lp → %a (permission bits, octal).
+		let (code, stdout, stderr) = run_in(root, vec!["-f", "%HT/%Lp", "data.bin"]);
+		assert_eq!(code, 0);
+		assert_eq!(stderr, "");
+		let (kind, perms) = stdout.trim_end().rsplit_once('/').unwrap();
+		assert_eq!(kind, "regular file");
+		assert!(perms.chars().all(|c| c.is_digit(8)), "octal perms expected: {stdout:?}");
+	}
+
+	#[test]
+	fn bsd_unsupported_directive_is_rejected() {
+		let (_dir, root) = canonical_tempdir();
+		fs::write(root.join("data.bin"), b"x").unwrap();
+
+		let (code, stdout, stderr) = run_in(root, vec!["-f", "%v", "data.bin"]);
+		assert_eq!(code, 1);
+		assert_eq!(stdout, "");
+		assert!(
+			stderr.contains("unsupported BSD format directive '%v'"),
+			"unexpected stderr: {stderr:?}"
+		);
 	}
 }
