@@ -8,11 +8,12 @@ import type {
 import type { ToolExample } from "@oh-my-pi/pi-ai";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { prompt, sanitizeText } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { daemonClientForProject } from "../launch/client";
 import type { DaemonOperation, DaemonRpcResult, DaemonSnapshot, DaemonSpec, DaemonState } from "../launch/protocol";
+import { renderTerminalOutput } from "../launch/terminal-output";
 import type { Theme, ThemeColor } from "../modes/theme/theme";
 import launchDescription from "../prompts/tools/launch.md" with { type: "text" };
 import { renderStatusLine } from "../tui";
@@ -32,6 +33,7 @@ import {
 	TRUNCATE_LENGTHS,
 	truncateToWidth,
 } from "./render-utils";
+import { styleTerminalRow } from "./terminal-output";
 import { ToolError } from "./tool-errors";
 
 const launchSchema = type({
@@ -92,6 +94,8 @@ export interface LaunchToolDetails {
 	timedOut?: boolean;
 	/** logs: daemon lifecycle state at read time. */
 	state?: DaemonState;
+	/** logs: virtual terminal rows for display; model-facing content remains sanitized text. */
+	terminalRows?: string[];
 	/** wait: output line that satisfied the pattern. */
 	matched?: string;
 	/** describe: immutable launch spec backing the command/cwd detail lines. */
@@ -243,8 +247,10 @@ function toolContent(result: DaemonRpcResult, params: LaunchParams): string {
 			return result.daemons.length
 				? result.daemons.map(daemon => `- ${daemonLabel(daemon)}`).join("\n")
 				: "No daemons.";
-		case "logs":
-			return `${result.text}${result.text && !result.text.endsWith("\n") ? "\n" : ""}[${result.name}: ${result.state}; cursor=${result.cursor}${result.timedOut ? "; follow timed out" : ""}]`;
+		case "logs": {
+			const text = sanitizeText(result.text);
+			return `${text}${text && !text.endsWith("\n") ? "\n" : ""}[${result.name}: ${result.state}; cursor=${result.cursor}${result.timedOut ? "; follow timed out" : ""}]`;
+		}
 		case "wait": {
 			const lines = [daemonLabel(result.daemon)];
 			if (result.matched) lines.push(`Matched: ${result.matched}`);
@@ -270,14 +276,25 @@ function toolContent(result: DaemonRpcResult, params: LaunchParams): string {
 	}
 }
 
-function toolDetails(result: DaemonRpcResult): LaunchToolDetails {
+async function toolDetails(result: DaemonRpcResult, params: LaunchParams): Promise<LaunchToolDetails> {
 	switch (result.op) {
 		case "start":
 			return { op: "start", daemon: result.daemon, timedOut: result.readyTimedOut };
 		case "list":
 			return { op: "list", daemons: result.daemons };
-		case "logs":
-			return { op: "logs", cursor: result.cursor, timedOut: result.timedOut, state: result.state };
+		case "logs": {
+			const terminalRows = await renderTerminalOutput(result.text, {
+				head: params.head ?? false,
+				maxRows: Math.min(1_000, Math.floor(params.lines ?? 100)),
+			});
+			return {
+				op: "logs",
+				cursor: result.cursor,
+				timedOut: result.timedOut,
+				state: result.state,
+				terminalRows,
+			};
+		}
 		case "wait":
 			return { op: "wait", daemon: result.daemon, timedOut: result.timedOut, matched: result.matched };
 		case "send":
@@ -372,7 +389,7 @@ export class LaunchTool implements AgentTool<typeof launchSchema, LaunchToolDeta
 		const result = await client.request(operationFor(params, this.session), signal);
 		return {
 			content: [{ type: "text", text: replaceTabs(toolContent(result, params)) }],
-			details: toolDetails(result),
+			details: await toolDetails(result, params),
 		};
 	}
 }
@@ -541,7 +558,10 @@ export const launchToolRenderer = {
 					if (details?.timedOut) meta.push(theme.fg("warning", "follow timed out"));
 					// Strip the trailing `[name: state; cursor=N]` status suffix `toolContent` appends.
 					const logText = text.replace(/\n?\[[^\n]*\]$/, "").trimEnd();
-					if (logText) {
+					const terminalRows = details?.terminalRows;
+					if (terminalRows) {
+						for (const row of terminalRows) body.push(styleTerminalRow(row, theme.getFgAnsi("toolOutput")));
+					} else if (logText) {
 						for (const line of logText.split("\n")) body.push(theme.fg("toolOutput", replaceTabs(line)));
 					}
 					break;
