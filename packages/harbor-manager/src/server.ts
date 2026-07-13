@@ -51,8 +51,8 @@ export interface LaunchRequest {
 	agent?: string;
 	jobName?: string;
 	webSearch?: boolean;
-	/** Downshift to a fast/cheap model at the first edit/write once the todo list exists; `into` overrides the default "smol" target. */
-	downshift?: { into?: string };
+	/** Prewalk to a fast/cheap model at the first edit/write once the todo list exists; `into` overrides the default "smol" target. */
+	prewalk?: { into?: string };
 	/** Role of this run inside its experiment (baseline vs treatment). */
 	role?: RunRole;
 	/** One-line description of what this arm tests. */
@@ -70,7 +70,7 @@ export interface AddArmRequest {
 	/** Arm label; becomes the `<id>-<arm>` job name. */
 	arm: string;
 	model: string;
-	downshift?: LaunchRequest["downshift"];
+	prewalk?: LaunchRequest["prewalk"];
 	/** Explicit task sample; skips sibling inheritance when provided. */
 	include?: string[];
 	role?: RunRole;
@@ -110,7 +110,7 @@ function parseServerArgs(argv: string[]): { port: number; jobsDir: string } {
  * Inherits the experiment's benchmark, dataset, and — crucially — the exact
  * task sample from a sibling arm (its recorded `include`, else its observed
  * trial tasks) so the arm is directly comparable. Only per-arm knobs (model,
- * downshift, role, note, extra args) come from `req`. Throws if the experiment has
+ * prewalk, role, note, extra args) come from `req`. Throws if the experiment has
  * no runs to inherit from or the arm name is taken.
  */
 export function resolveArmLaunch(store: RunStore, experimentId: string, req: AddArmRequest): LaunchRequest {
@@ -174,7 +174,7 @@ export function resolveArmLaunch(store: RunStore, experimentId: string, req: Add
 		prebuiltBinaries: cfg.prebuiltBinaries === true || undefined,
 		conditions: conditions.length > 0 ? conditions : undefined,
 		jobName,
-		downshift: req.downshift,
+		prewalk: req.prewalk,
 		role: req.role,
 		note: req.note,
 		extraArgs: req.extraArgs,
@@ -392,12 +392,12 @@ export class ManagerServer {
 				argv.push("--timeout-multiplier", String(request.timeoutMultiplier));
 			if (request.webSearch) argv.push("--web-search");
 			for (const task of request.include ?? []) argv.push("--include", task);
-			if (request.downshift) {
-				argv.push("--agent-arg", "--downshift");
-				if (request.downshift.into) {
-					argv.push("--agent-arg", "--downshift-into", "--agent-arg", request.downshift.into);
-					const provider = request.downshift.into.split("/", 1)[0];
-					if (provider && request.downshift.into.includes("/")) argv.push("--providers", provider);
+			if (request.prewalk) {
+				argv.push("--agent-arg", "--prewalk");
+				if (request.prewalk.into) {
+					argv.push("--agent-arg", "--prewalk-into", "--agent-arg", request.prewalk.into);
+					const provider = request.prewalk.into.split("/", 1)[0];
+					if (provider && request.prewalk.into.includes("/")) argv.push("--providers", provider);
 				}
 			}
 			if (request.prebuiltBinaries) {
@@ -434,7 +434,7 @@ export class ManagerServer {
 			dataset,
 			agent: request.agent ?? "omp",
 			models: [request.model],
-			downshift: request.downshift,
+			prewalk: request.prewalk,
 			config: { ...request },
 			pid: proc.pid,
 			role: request.role,

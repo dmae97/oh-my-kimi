@@ -109,7 +109,7 @@ import {
 	obfuscateProviderContext,
 	SecretObfuscator,
 } from "./secrets";
-import { AgentSession, type Downshift, type PlanYolo } from "./session/agent-session";
+import { AgentSession, type Prewalk, type PlanYolo } from "./session/agent-session";
 import { discoverAuthStorage as discoverAuthStorageFromConfig } from "./session/auth-broker-config";
 import type { AuthStorage } from "./session/auth-storage";
 import {
@@ -407,8 +407,8 @@ export interface CreateAgentSessionOptions {
 	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Models available for cycling (Ctrl+P in interactive mode) */
 	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
-	/** Downshift from the starting model to a fast/cheap target at the first edit/write once the todo list exists. */
-	downshift?: Downshift;
+	/** Prewalk from the starting model to a fast/cheap target at the first edit/write once the todo list exists. */
+	prewalk?: Prewalk;
 	/** Force read-only plan mode at start, auto-approve on the model's first resolve call, then switch to execute. */
 	planYolo?: PlanYolo;
 
@@ -2867,7 +2867,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			agent,
 			pruneToolDescriptions: inlineToolDescriptors,
 			thinkingLevel: autoThinking ? AUTO_THINKING : effectiveThinkingLevel,
-			downshift: options.downshift,
+			prewalk: options.prewalk,
 			planYolo: options.planYolo,
 			serviceTierByFamily: initialServiceTierByFamily,
 			sessionManager,

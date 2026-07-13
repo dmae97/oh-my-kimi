@@ -117,7 +117,7 @@ export const TAB_METADATA: Record<SettingTab, { label: string; icon: `tab.${stri
  */
 export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 	appearance: ["Theme", "Status Line", "Display", "Images"],
-	model: ["Thinking", "Sampling", "Prompt", "Retry & Fallback", "Advisor", "Downshift", "Vision"],
+	model: ["Thinking", "Sampling", "Prompt", "Retry & Fallback", "Advisor", "Prewalk", "Vision"],
 	interaction: [
 		"Input",
 		"Approvals",
@@ -422,15 +422,15 @@ export const SETTINGS_SCHEMA = {
 				"Pair a second model (assigned to the 'advisor' role) that passively reviews each turn and injects notes.",
 		},
 	},
-	"downshift.enabled": {
+	"prewalk.enabled": {
 		type: "boolean",
 		default: false,
 		ui: {
 			tab: "model",
-			group: "Downshift",
-			label: "Enable Downshift",
+			group: "Prewalk",
+			label: "Enable Prewalk",
 			description:
-				"Start on the active model, then switch to a fast/cheap model (default the 'smol' role) at the first edit/write after the plan nudge's todo list exists — the strong model plans, commits the todos, and starts the implementation before handing off. Overridable per session with --downshift / --no-downshift.",
+				"Start on the active model, then switch to a fast/cheap model (default the 'smol' role) at the first edit/write after the plan nudge's todo list exists — the strong model plans, commits the todos, and starts the implementation before handing off. Overridable per session with --prewalk / --no-prewalk.",
 		},
 	},
 	"advisor.subagents": {

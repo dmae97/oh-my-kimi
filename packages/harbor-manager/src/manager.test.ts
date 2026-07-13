@@ -145,7 +145,7 @@ describe("RunStore", () => {
 		store.discover();
 		store.setExperimentGoal("exp", "does the treatment beat the baseline?");
 		expect(store.setRunMeta("exp-base", { role: "baseline", note: "plain model" })).toBe(true);
-		expect(store.setRunMeta("exp-treat", { role: "variant", note: "downshift flash", label: "flash@edit" })).toBe(
+		expect(store.setRunMeta("exp-treat", { role: "variant", note: "prewalk flash", label: "flash@edit" })).toBe(
 			true,
 		);
 		expect(store.setRunMeta("exp-missing", { role: "variant" })).toBe(false);
@@ -155,15 +155,15 @@ describe("RunStore", () => {
 		// ArmSummary.arm resolves to the display label when one is set.
 		expect(detail?.arms.map(a => [a.arm, a.run.role, a.run.note, a.run.label])).toEqual([
 			["base", "baseline", "plain model", ""],
-			["flash@edit", "variant", "downshift flash", "flash@edit"],
+			["flash@edit", "variant", "prewalk flash", "flash@edit"],
 		]);
 
 		// Partial updates keep the omitted fields.
-		expect(store.setRunMeta("exp-treat", { note: "downshift flash v2" })).toBe(true);
+		expect(store.setRunMeta("exp-treat", { note: "prewalk flash v2" })).toBe(true);
 		const treat = store.getRun("exp-treat");
 		expect(treat?.label).toBe("flash@edit");
 		expect(treat?.role).toBe("variant");
-		expect(treat?.note).toBe("downshift flash v2");
+		expect(treat?.note).toBe("prewalk flash v2");
 	});
 
 	it("finalizes running rows whose owning process died", () => {
@@ -328,8 +328,8 @@ describe("resolveArmLaunch", () => {
 			arm: "n8",
 			model: "google/gemini-3.5-flash",
 			role: "variant",
-			note: "downshift@flash",
-			downshift: { into: "google/gemini-3.5-flash" },
+			note: "prewalk@flash",
+			prewalk: { into: "google/gemini-3.5-flash" },
 		});
 
 		expect(launch.jobName).toBe("exp-n8");
@@ -340,7 +340,7 @@ describe("resolveArmLaunch", () => {
 		expect(launch.timeoutMultiplier).toBe(2);
 		expect(launch.model).toBe("google/gemini-3.5-flash");
 		expect(launch.role).toBe("variant");
-		expect(launch.downshift?.into).toBe("google/gemini-3.5-flash");
+		expect(launch.prewalk?.into).toBe("google/gemini-3.5-flash");
 	});
 
 	it("prefers the sibling with a recorded include list over newer include-less siblings", () => {

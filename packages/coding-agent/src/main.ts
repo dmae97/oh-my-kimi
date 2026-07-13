@@ -905,27 +905,27 @@ export async function buildSessionOptions(
 		if (!options.model) options.model = scopedModels[0].model;
 	}
 
-	if (parsed.noDownshift && (parsed.downshift || parsed.downshiftInto !== undefined)) {
-		throw new Error("--no-downshift cannot be combined with --downshift or --downshift-into");
+	if (parsed.noPrewalk && (parsed.prewalk || parsed.prewalkInto !== undefined)) {
+		throw new Error("--no-prewalk cannot be combined with --prewalk or --prewalk-into");
 	}
-	const downshiftEnabled = parsed.noDownshift
+	const prewalkEnabled = parsed.noPrewalk
 		? false
-		: parsed.downshift === true || parsed.downshiftInto !== undefined
+		: parsed.prewalk === true || parsed.prewalkInto !== undefined
 			? true
-			: activeSettings.get("downshift.enabled");
-	if (downshiftEnabled) {
-		const rolePattern = expandRoleAlias(parsed.downshiftInto ?? "pi/smol", activeSettings);
+			: activeSettings.get("prewalk.enabled");
+	if (prewalkEnabled) {
+		const rolePattern = expandRoleAlias(parsed.prewalkInto ?? "pi/smol", activeSettings);
 		const resolved = resolveCliModel({ cliModel: rolePattern, modelRegistry, preferences: modelMatchPreferences });
 		if (resolved.warning) {
 			process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
 		}
 		if (resolved.error || !resolved.model) {
-			throw new Error(resolved.error ?? `Model "${parsed.downshiftInto ?? "pi/smol"}" not found`);
+			throw new Error(resolved.error ?? `Model "${parsed.prewalkInto ?? "pi/smol"}" not found`);
 		}
 		if (!modelRegistry.hasConfiguredAuth(resolved.model)) {
 			throw new Error(`No API key for ${resolved.model.provider}/${resolved.model.id}`);
 		}
-		options.downshift = { target: resolved.model, thinkingLevel: resolved.thinkingLevel };
+		options.prewalk = { target: resolved.model, thinkingLevel: resolved.thinkingLevel };
 	}
 
 	if (parsed.planYoloInto !== undefined && !parsed.planYolo) {

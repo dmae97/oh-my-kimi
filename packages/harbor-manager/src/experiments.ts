@@ -19,7 +19,7 @@ export interface ArmSummary {
 	run: RunRow;
 	/** Arm label: job name minus the experiment prefix. */
 	arm: string;
-	/** Human config line: models plus downshift description when known. */
+	/** Human config line: models plus prewalk description when known. */
 	config: string;
 	/** Observed pass% over decided trials. */
 	passPct: number | null;
@@ -67,11 +67,11 @@ export function armOf(jobName: string): string {
 	return jobName.length > exp.length ? jobName.slice(exp.length + 1) : jobName;
 }
 
-function downshiftLabel(downshiftJson: string | null): string {
-	if (!downshiftJson) return "";
+function prewalkLabel(prewalkJson: string | null): string {
+	if (!prewalkJson) return "";
 	try {
 		// Historical rows may hold legacy reasoning-slide JSON ({model, turns, onAction, plan}).
-		const parsed = JSON.parse(downshiftJson) as {
+		const parsed = JSON.parse(prewalkJson) as {
 			into?: string;
 			model?: string;
 			turns?: number;
@@ -118,7 +118,7 @@ export function summarizeArm(run: RunRow, traces: TraceRow[]): ArmSummary {
 	return {
 		run,
 		arm: armOf(run.jobName),
-		config: `${run.benchmark} · ${run.models}${downshiftLabel(run.downshift)}`,
+		config: `${run.benchmark} · ${run.models}${prewalkLabel(run.prewalk)}`,
 		passPct,
 		costPerTask,
 		meanTrialMs,
