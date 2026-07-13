@@ -431,11 +431,16 @@ const DOWNSHIFT_CONTINUE_MESSAGE_TYPE = "downshift-continue";
  *  verification. */
 const DOWNSHIFT_CHECKLIST_MESSAGE_TYPE = "downshift-checklist";
 /** Tools whose first successful call marks the start of the execution phase
- *  that triggers the switch. Bash is deliberately excluded: it doubles as
- *  exploration (ls/cat) and fired turn-1 switches in practice. */
+ *  that triggers the switch. `todo` is included because the plan nudge tells
+ *  the model to initialize its todo list from the finished plan — the todo
+ *  init IS the "planning complete, starting work" signal, and hands the fast
+ *  model a live checklist with built-in reminders. Bash is deliberately
+ *  excluded: it doubles as exploration (ls/cat) and fired turn-1 switches in
+ *  practice. */
 const DOWNSHIFT_ACTION_TOOLS: Record<string, true> = {
 	edit: true,
 	write: true,
+	todo: true,
 };
 /** `customType` for the hidden hand-off message steered to the target model
  *  once PlanYolo auto-approves the plan. Unlike downshift's plan nudge this
@@ -710,11 +715,13 @@ export interface AsyncJobSnapshot {
 export type { ShakeMode, ShakeResult };
 /**
  * Downshift: switches an active session one-way from its starting model to
- * a fast/cheap `target` at the first completed turn that runs an edit/write
- * tool. A hidden plan nudge asks the starting model to write a plan before
- * that first action; a hidden checklist nudge asks the target model to
- * verify its work before finishing. Both are always on — this is the one
- * mechanism that won out over turn-count and ungated variants in testing.
+ * a fast/cheap `target` at the first completed turn that starts execution —
+ * an edit/write tool, or the todo-list init the plan nudge asks for. A
+ * hidden plan nudge asks the starting model to write a plan and then
+ * initialize its todo list from it before that first action; a hidden
+ * checklist nudge asks the target model to verify its work before
+ * finishing. Both are always on — this is the one mechanism that won out
+ * over turn-count and ungated variants in testing.
  */
 export interface Downshift {
 	target: Model;
@@ -748,7 +755,7 @@ export interface AgentSessionConfig {
 	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 	/** Initial session thinking selector. */
 	thinkingLevel?: ConfiguredThinkingLevel;
-	/** Downshift from the starting model to a fast/cheap target at the first edit/write. */
+	/** Downshift from the starting model to a fast/cheap target at the first action (post-plan todo init or edit/write). */
 	downshift?: Downshift;
 	/** Force read-only plan mode at start, auto-approve on the model's first
 	 *  `resolve` call, then switch to the target to implement. */
@@ -2181,8 +2188,16 @@ export class AgentSession {
 			});
 		}
 
-		// Switch at the first completed turn that mutates the world (edit/write).
-		const action = context.toolResults.find(result => DOWNSHIFT_ACTION_TOOLS[result.toolName]);
+		// Switch at the first completed turn that starts execution: an edit/write
+		// always counts, a `todo` call only counts once the plan nudge is in
+		// context — the nudge instructs "finish the plan, then todo-init and go",
+		// so a post-nudge todo IS the ready signal, while a pre-nudge turn-1 todo
+		// init is mere bookkeeping and must not fire a switch before any
+		// planning happened.
+		const action = context.toolResults.find(
+			result =>
+				DOWNSHIFT_ACTION_TOOLS[result.toolName] && (result.toolName !== "todo" || this.#downshiftPlanInjected),
+		);
 		if (!action) {
 			if (!this.#downshiftPlanInjected) {
 				this.#downshiftPlanInjected = true;
@@ -2239,7 +2254,7 @@ export class AgentSession {
 		if (this.#downshift) {
 			this.emitNotice(
 				"info",
-				`Downshift: already armed for ${this.#downshift.target.provider}/${this.#downshift.target.id}, waiting for the first edit/write.`,
+				`Downshift: already armed for ${this.#downshift.target.provider}/${this.#downshift.target.id}, waiting for the first action.`,
 				"downshift",
 			);
 			return;
@@ -2256,7 +2271,7 @@ export class AgentSession {
 		});
 		this.emitNotice(
 			"info",
-			`Downshift: armed for ${target.provider}/${target.id} — will switch at the first edit/write.`,
+			`Downshift: armed for ${target.provider}/${target.id} — will switch at the first action (todo/edit/write).`,
 			"downshift",
 		);
 	}

@@ -8,4 +8,4 @@ Lay out, explicitly and comprehensively:
 
 Be thorough and concrete — this plan is the reference for the remainder of the run. You may verify details with tools after the plan is written, never before.
 
-This is a checkpoint, not a final answer: do not end your turn on the plan alone. In the SAME reply, immediately after the plan, call whatever tool starts the first step — do not stop here.
+This is a checkpoint, not a final answer: do not end your turn on the plan alone. Only once the plan above is complete and detailed, in the SAME reply, initialize your todo list from it with the todo tool and start the task — do not stop here.

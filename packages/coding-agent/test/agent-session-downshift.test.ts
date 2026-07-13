@@ -14,12 +14,12 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 
 /**
  * Downshift: one-way switch from the starting model to a fast/cheap target
- * at the first completed turn that runs an edit/write tool, with a hidden
- * plan nudge before the switch and a hidden verify-before-finishing
- * checklist after it. This is the single mechanism that won out over
- * fixed-turn and ungated variants in benchmark testing — see the plan
- * nudge / checklist / continuation-safety-net prompts under
- * `src/prompts/system/downshift-*.md`.
+ * at the first completed turn that starts execution — an edit/write tool,
+ * or the todo-list init the plan nudge asks for — with a hidden plan nudge
+ * before the switch and a hidden verify-before-finishing checklist after
+ * it. This is the single mechanism that won out over fixed-turn and
+ * ungated variants in benchmark testing — see the plan nudge / checklist /
+ * continuation-safety-net prompts under `src/prompts/system/downshift-*.md`.
  */
 describe("AgentSession downshift", () => {
 	let tempDir: TempDir;
@@ -74,10 +74,21 @@ describe("AgentSession downshift", () => {
 			return { content: [{ type: "text", text: "wrote" }], details: undefined };
 		},
 	};
+	const todoToolSchema = z.object({});
+	const todoTool: AgentTool<typeof todoToolSchema, undefined> = {
+		name: "todo",
+		label: "Todo",
+		description: "Track tasks",
+		parameters: todoToolSchema,
+		async execute() {
+			return { content: [{ type: "text", text: "listed" }], details: undefined };
+		},
+	};
 	const toolRegistry = new Map<string, AgentTool>([
 		[recordTool.name, recordTool as AgentTool],
 		[bashTool.name, bashTool as AgentTool],
 		[writeTool.name, writeTool as AgentTool],
+		[todoTool.name, todoTool as AgentTool],
 	]);
 
 	function toolCall(id: string, name: string): MockResponse {
@@ -154,6 +165,59 @@ describe("AgentSession downshift", () => {
 		expect(calls.map(call => call.hasNudge)).toEqual([false, true, true, false]);
 		// Checklist present only once the target model is running.
 		expect(calls.map(call => call.hasChecklist)).toEqual([false, false, false, true]);
+		expect(session.model?.id).toBe(target.id);
+	});
+
+	it("todo triggers the switch only after the plan nudge; a turn-1 todo init is bookkeeping, not readiness", async () => {
+		const primary = modelOrThrow("claude-sonnet-4-5");
+		const target = modelOrThrow("claude-sonnet-4-6");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		const planMarker = "complete plan in your NEXT reply";
+
+		// Turn 1: todo init BEFORE the nudge exists — must not switch (the nudge
+		// is injected after this turn instead). Turn 2: exploration under the
+		// nudge. Turn 3: todo — the post-plan "starting work" signal, switch.
+		const mock = createMockModel({
+			responses: [toolCall("t1", "todo"), toolCall("t2", "record"), toolCall("t3", "todo"), { content: ["done"] }],
+		});
+		const calls: Array<{ model: string; hasNudge: boolean }> = [];
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model: primary,
+				systemPrompt: ["Test"],
+				tools: [recordTool as AgentTool, todoTool as AgentTool],
+				messages: [],
+				thinkingLevel: Effort.Medium,
+			},
+			convertToLlm,
+			streamFn: (model, context, options) => {
+				calls.push({
+					model: `${model.provider}/${model.id}`,
+					hasNudge: contextMessagesHaveMarker(context.messages, planMarker),
+				});
+				return mock.stream(model, context, options);
+			},
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry,
+			toolRegistry,
+			downshift: { target },
+		});
+
+		await session.prompt("do the task");
+
+		expect(calls.map(call => call.model)).toEqual([
+			`${primary.provider}/${primary.id}`,
+			`${primary.provider}/${primary.id}`,
+			`${primary.provider}/${primary.id}`,
+			`${target.provider}/${target.id}`,
+		]);
+		// Nudge injected after turn 1 despite the todo call there.
+		expect(calls.map(call => call.hasNudge)).toEqual([false, true, true, false]);
 		expect(session.model?.id).toBe(target.id);
 	});
 

@@ -36,7 +36,7 @@ export default class Index extends Command {
 		}),
 		downshift: Flags.boolean({
 			description:
-				"Switch from the active model to a fast/cheap model at the first edit/write, with a plan handoff (default off; see downshift.enabled)",
+				"Switch from the active model to a fast/cheap model at the first action (post-plan todo init or edit/write), with a plan handoff (default off; see downshift.enabled)",
 		}),
 		"no-downshift": Flags.boolean({
 			description: "Disable downshift even if downshift.enabled is set",

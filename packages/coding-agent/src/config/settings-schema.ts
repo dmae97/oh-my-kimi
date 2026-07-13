@@ -430,7 +430,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Downshift",
 			label: "Enable Downshift",
 			description:
-				"Start on the active model, then switch to a fast/cheap model (default the 'smol' role) at the first edit/write, with a plan handed off at the switch. Overridable per session with --downshift / --no-downshift.",
+				"Start on the active model, then switch to a fast/cheap model (default the 'smol' role) at the first action — the todo-list init the plan nudge asks for, or any edit/write — with the plan handed off at the switch. Overridable per session with --downshift / --no-downshift.",
 		},
 	},
 	"advisor.subagents": {

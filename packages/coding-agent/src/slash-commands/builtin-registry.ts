@@ -463,8 +463,8 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "downshift",
-		description: "Switch to a fast/cheap model at the next edit/write (works even without --downshift)",
-		acpDescription: "Downshift at the next edit/write",
+		description: "Switch to a fast/cheap model at the next action (works even without --downshift)",
+		acpDescription: "Downshift at the next action",
 		handle: async (_command, runtime) => {
 			const rolePattern = expandRoleAlias("pi/smol", runtime.settings);
 			const resolved = resolveCliModel({
@@ -480,7 +480,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			}
 			runtime.session.armDownshift(resolved.model, resolved.thinkingLevel);
 			await runtime.output(
-				`Downshift on: switching to ${resolved.model.provider}/${resolved.model.id} at the next edit/write.`,
+				`Downshift on: switching to ${resolved.model.provider}/${resolved.model.id} at the next action (todo/edit/write).`,
 			);
 			return commandConsumed();
 		},
