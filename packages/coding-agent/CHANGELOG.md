@@ -25,10 +25,6 @@
 - Updated status event log to prioritize the most recent entries in the display window
 - Updated the snapcompact shape preview transcript to use the compact scope format shown to models during compaction.
 
-### Fixed
-
-- Fixed eval cells launching interactive subprocesses in OMP's terminal session, which could steal the foreground process group and suspend the conversation with `zsh: suspended (tty input)`
-
 ### Removed
 
 - Removed the `--downshift-boomerang` feature and its associated configuration setting
@@ -38,6 +34,7 @@
 
 - Fixed `/tan` and `/fork` clones cold-missing the provider prompt cache: the per-turn supersede/useless-result prune rewrote the live context without persisting it, so file-based forks and resume rebuilt a divergent (un-pruned) prefix and re-wrote the entire cache
 - Fixed `/tan` pinning the clone's prompt-cache key to the parent's session id instead of the parent's effective cache key, dropping shard affinity when the parent was itself a fork or tan
+- Fixed eval kernels inheriting the interactive terminal session, allowing subprocesses to take the foreground process group and suspend the CLI with `zsh: suspended (tty input)` ([#5327](https://github.com/can1357/oh-my-pi/pull/5327) by [@masonc15](https://github.com/masonc15))
 - Fixed inconsistent history rendering when toggling the display setting for compacted items
 - Fixed configured `retry.fallbackChains` never engaging on non-retryable provider errors (e.g. "Cloud Code Assist API returned an empty response"): a hard error on a model covered by a fallback chain now switches to the next candidate instead of failing the turn, while still never backoff-retrying the failing model itself
 - Fixed transcript rebuilds (compaction, `/compact`, and toggling history display) repainting content below stale scrollback when collapsing history; rebuilds now correctly clear the scrollback buffer when history is collapsed
