@@ -139,6 +139,40 @@ CREATE TABLE IF NOT EXISTS experiments (
 /** Directory names inside the jobs root that are not Harbor job dirs. */
 const NON_JOB_DIRS = new Set(["_bench", "_manager"]);
 
+/** True when a bun:sqlite error is a transient busy/recovery lock. */
+function isBusyLock(err: unknown): boolean {
+	if (err && typeof err === "object" && "code" in err) {
+		const code = err.code;
+		return typeof code === "string" && code.startsWith("SQLITE_BUSY");
+	}
+	return false;
+}
+
+/**
+ * Enable WAL journaling, tolerating a briefly locked database.
+ *
+ * `PRAGMA journal_mode = WAL` needs a momentary exclusive lock. When another
+ * connection holds the DB — a restarting manager, or a WAL mid-recovery —
+ * SQLite returns `SQLITE_BUSY`/`SQLITE_BUSY_RECOVERY`. The busy handler that
+ * `busy_timeout` installs is not invoked for recovery locks, so retry the
+ * pragma explicitly before surfacing the failure.
+ */
+function enableWal(db: Database): void {
+	const attempts = 10;
+	for (let attempt = 1; attempt <= attempts; attempt++) {
+		try {
+			db.run("PRAGMA journal_mode = WAL");
+			return;
+		} catch (err) {
+			if (attempt < attempts && isBusyLock(err)) {
+				Bun.sleepSync(100);
+				continue;
+			}
+			throw err;
+		}
+	}
+}
+
 export class RunStore {
 	#db: Database;
 	readonly jobsDir: string;
@@ -147,7 +181,8 @@ export class RunStore {
 		this.jobsDir = jobsDir;
 		fs.mkdirSync(path.join(jobsDir, "_manager"), { recursive: true });
 		this.#db = new Database(dbPath ?? path.join(jobsDir, "_manager", "harbor-manager.sqlite"));
-		this.#db.run("PRAGMA journal_mode = WAL");
+		this.#db.run("PRAGMA busy_timeout = 5000");
+		enableWal(this.#db);
 		this.#db.run(SCHEMA);
 		const runColumns = new Set(
 			(this.#db.query("PRAGMA table_info(runs)").all() as Array<{ name: string }>).map(c => c.name),

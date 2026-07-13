@@ -1059,7 +1059,13 @@ function buildMountsJson(source: SourceMount | null): string | null {
 }
 
 function deriveProviders(cfg: Config): string[] {
-	const set = new Set<string>(cfg.providers);
+	// Explicit --providers is authoritative: it's the escape hatch for routing
+	// only SOME providers through the gateway (e.g. oauth-only openai-codex)
+	// while the model's own provider authenticates directly via a forwarded
+	// env key. The model-provider + anthropic/openai-codex additions are the
+	// DEFAULT for when the flag is absent.
+	if (cfg.providers.length > 0) return [...new Set(cfg.providers)];
+	const set = new Set<string>();
 	for (const m of cfg.models) {
 		const slash = m.indexOf("/");
 		if (slash > 0) set.add(m.slice(0, slash));

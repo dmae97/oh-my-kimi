@@ -25,13 +25,17 @@ describe("generic agent-arg / env passthrough", () => {
 		expect(env.OMP_BENCH_AGENT_ARGS).toBeUndefined();
 	});
 
-	it("routes an explicit --providers entry alongside the model's own provider", () => {
-		// The runner has no built-in concept of a "second model"; gateway routing
-		// for any extra model introduced via --agent-arg must be declared
-		// explicitly via --providers.
-		const cfg = parseArgs(["--model", "anthropic/claude-opus-4-8", "--providers", "google"]);
-		const env = buildHarborEnv(cfg, "/tmp/models.yml", null, "test");
-		expect(new Set(env.OMP_BENCH_GATEWAY_PROVIDERS?.split(","))).toEqual(new Set(["anthropic", "google"]));
+	it("explicit --providers is authoritative; the default derives from the model", () => {
+		// Explicit list: exactly what was asked for — the escape hatch that lets
+		// the model's own provider authenticate directly (forwarded env key)
+		// while only e.g. oauth-only providers route through the gateway.
+		const explicit = parseArgs(["--model", "anthropic/claude-opus-4-8", "--providers", "google"]);
+		const envExplicit = buildHarborEnv(explicit, "/tmp/models.yml", null, "test");
+		expect(new Set(envExplicit.OMP_BENCH_GATEWAY_PROVIDERS?.split(","))).toEqual(new Set(["google"]));
+		// No flag: the model's provider is gateway-routed by default.
+		const derived = parseArgs(["--model", "anthropic/claude-opus-4-8"]);
+		const envDerived = buildHarborEnv(derived, "/tmp/models.yml", null, "test");
+		expect(new Set(envDerived.OMP_BENCH_GATEWAY_PROVIDERS?.split(","))).toEqual(new Set(["anthropic"]));
 	});
 
 	it("collects explicit --env pairs, with an explicit value winning over a bare host-forwarded key", () => {

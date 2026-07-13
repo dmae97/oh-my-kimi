@@ -27,7 +27,7 @@ export interface ExperimentMetaUpdate {
 	runs?: Record<string, { role?: RunRole; note?: string; label?: string }>;
 }
 
-const INDEX_HTML_PATH = new URL("./web/index.html", import.meta.url).pathname;
+import indexHtml from "./web/index.html";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
 const PKG_DIR = path.resolve(import.meta.dir, "..");
@@ -188,7 +188,6 @@ export class ManagerServer {
 	#lastSnapshot = "";
 	#syncTimer: Timer | undefined;
 	#server: Server<undefined> | null = null;
-	#appBundleCode: string | null = null;
 	readonly jobsDir: string;
 
 	constructor(jobsDir: string, dbPath?: string) {
@@ -207,6 +206,10 @@ export class ManagerServer {
 		this.#server = Bun.serve({
 			port,
 			idleTimeout: 0,
+			// Bun bundles the dashboard (React + TSX) from the HTML import and
+			// serves it on the same port as the API — one process, no Vite.
+			routes: { "/": indexHtml },
+			development: process.env.NODE_ENV !== "production" && { hmr: true, console: true },
 			fetch: request => this.#route(request),
 		});
 		return this.#server;
@@ -234,22 +237,6 @@ export class ManagerServer {
 		}
 	}
 
-	/** Bundle the React dashboard once per process; served at /app.tsx (matches the Vite dev entry). */
-	async #appBundle(): Promise<string> {
-		if (this.#appBundleCode !== null) return this.#appBundleCode;
-		const result = await Bun.build({
-			entrypoints: [path.join(import.meta.dir, "web", "app.tsx")],
-			target: "browser",
-			minify: true,
-			define: { "process.env.NODE_ENV": '"production"' },
-		});
-		if (!result.success) {
-			throw new Error(`dashboard bundle failed:\n${result.logs.map(l => l.message).join("\n")}`);
-		}
-		this.#appBundleCode = await result.outputs[0].text();
-		return this.#appBundleCode;
-	}
-
 	#broadcast(frame: string): void {
 		const bytes = new TextEncoder().encode(frame);
 		for (const client of this.#sse) {
@@ -267,14 +254,6 @@ export class ManagerServer {
 		const url = new URL(request.url);
 		const p = url.pathname;
 		try {
-			if (p === "/" || p === "/index.html") {
-				return new Response(Bun.file(INDEX_HTML_PATH));
-			}
-			if (p === "/app.tsx") {
-				return new Response(await this.#appBundle(), {
-					headers: { "content-type": "text/javascript; charset=utf-8" },
-				});
-			}
 			if (p === "/api/events") return this.#sseResponse();
 			if (p === "/api/benchmarks" && request.method === "GET") {
 				return Response.json(BENCHMARK_DEFINITIONS);
@@ -402,7 +381,11 @@ export class ManagerServer {
 				this.jobsDir,
 			];
 			if (request.agent) argv.push("--agent", request.agent);
-			if (request.tasks !== undefined) argv.push("--tasks", String(request.tasks));
+			// An explicit include list IS the sample — never let the runner's
+			// default task cap truncate it.
+			const tasks =
+				request.tasks ?? (request.include && request.include.length > 0 ? request.include.length : undefined);
+			if (tasks !== undefined) argv.push("--tasks", String(tasks));
 			if (request.concurrency !== undefined) argv.push("--concurrency", String(request.concurrency));
 			if (request.attempts !== undefined) argv.push("--attempts", String(request.attempts));
 			if (request.timeoutMultiplier !== undefined)
