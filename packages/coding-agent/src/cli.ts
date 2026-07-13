@@ -108,6 +108,7 @@ const TINY_WORKER_ARG = "__omp_worker_tiny_inference";
 const STATS_SYNC_WORKER_ARG = "__omp_worker_stats_sync";
 const TAB_WORKER_ARG = "__omp_worker_tab";
 const JS_EVAL_WORKER_ARG = "__omp_worker_js_eval";
+const JS_EVAL_PROCESS_ARG = "__omp_worker_js_eval_process";
 const STT_WORKER_ARG = "__omp_worker_stt";
 const TTS_WORKER_ARG = "__omp_worker_tts";
 const MNEMOPI_EMBED_WORKER_ARG = "__omp_worker_mnemopi_embed";
@@ -154,6 +155,11 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 	if (arg === JS_EVAL_WORKER_ARG) {
 		if (parentPort) installWorkerInbox(parentPort);
 		await import("./eval/js/worker-entry");
+		return true;
+	}
+	if (arg === JS_EVAL_PROCESS_ARG) {
+		const { startJsEvalProcess } = await import("./eval/js/process-entry");
+		await runIpcSubprocessWorker(startJsEvalProcess);
 		return true;
 	}
 	if (arg === STT_WORKER_ARG) {

@@ -25,6 +25,10 @@
 - Updated status event log to prioritize the most recent entries in the display window
 - Updated the snapcompact shape preview transcript to use the compact scope format shown to models during compaction.
 
+### Fixed
+
+- Fixed eval cells launching interactive subprocesses in OMP's terminal session, which could steal the foreground process group and suspend the conversation with `zsh: suspended (tty input)`
+
 ### Removed
 
 - Removed the `--downshift-boomerang` feature and its associated configuration setting

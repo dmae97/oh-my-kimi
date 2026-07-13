@@ -159,6 +159,12 @@ export function createWorkerSubprocess<Outbound>(options: {
 	spawnCommand: WorkerSpawnCommand;
 	env: Record<string, string>;
 	exitLabel: string;
+	/** Start the child as a new process-group/session leader where Bun supports it. */
+	detached?: boolean;
+	/** Treat exit code 0 as unexpected; eval cells can call process.exit(0). */
+	reportCleanExit?: boolean;
+	/** Whether an idle worker should stop keeping the parent event loop alive. */
+	unref?: boolean;
 }): SpawnedSubprocess<Outbound> {
 	const inbound = new Set<(message: Outbound) => void>();
 	const errors = new Set<(error: Error) => void>();
@@ -175,6 +181,7 @@ export function createWorkerSubprocess<Outbound>(options: {
 	const proc = Bun.spawn({
 		cmd: options.spawnCommand.cmd,
 		cwd: options.spawnCommand.cwd,
+		detached: options.detached,
 		env: options.env,
 		stdin: "ignore",
 		stdout: "ignore",
@@ -186,7 +193,7 @@ export function createWorkerSubprocess<Outbound>(options: {
 		},
 		onExit(_proc, exitCode, signalCode) {
 			startStderrDrain();
-			if (exitCode === 0) return;
+			if (exitCode === 0 && !options.reportCleanExit) return;
 			// Swallow only the expected SIGKILL from `terminate()`; every other
 			// signal exit (SIGSEGV from a native fault, OOM SIGKILL, operator
 			// `kill -9`) is a real worker death that must fault in-flight
@@ -206,7 +213,7 @@ export function createWorkerSubprocess<Outbound>(options: {
 	// Don't keep the parent event loop alive on an idle worker; the dispose
 	// path calls `terminate()` explicitly. Bun's test runner starves IPC for
 	// unref'd subprocesses, so keep it referenced only under tests.
-	if (!isBunTestRuntime()) proc.unref();
+	if (!isBunTestRuntime() && options.unref !== false) proc.unref();
 	return { proc, inbound, errors, intentionalExit, stderrDrained: stderrDrained.promise };
 }
 

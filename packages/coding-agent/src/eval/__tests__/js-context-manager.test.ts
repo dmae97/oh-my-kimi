@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { Settings } from "../../config/settings";
 import type { ToolSession } from "../../tools";
-import { disposeAllVmContexts, setWorkerCloseTimeoutMsForTests } from "../js/context-manager";
+import {
+	disposeAllVmContexts,
+	setJsEvalWorkerThreadForTests,
+	setWorkerCloseTimeoutMsForTests,
+} from "../js/context-manager";
 import { executeJs } from "../js/executor";
 
 const originalWorker = globalThis.Worker;
@@ -181,7 +185,9 @@ function installFakeWorker(stats: FakeWorkerStats, behavior: FakeWorkerBehavior)
 
 describe("JavaScript eval worker lifecycle", () => {
 	let restoreCloseTimeoutMs = 0;
+	let restoreWorkerThread = false;
 	beforeEach(() => {
+		restoreWorkerThread = setJsEvalWorkerThreadForTests(true);
 		// Shrink the graceful-close grace period so the "close acked but the worker
 		// never exits -> force terminate" contract is proven without a real 1s wait.
 		restoreCloseTimeoutMs = setWorkerCloseTimeoutMsForTests(1);
@@ -197,6 +203,7 @@ describe("JavaScript eval worker lifecycle", () => {
 			writable: true,
 			value: originalWorker,
 		});
+		setJsEvalWorkerThreadForTests(restoreWorkerThread);
 	});
 
 	it("exits a real worker on graceful close even with ref'ed user handles", async () => {
@@ -287,5 +294,39 @@ describe("JavaScript eval worker lifecycle", () => {
 		expect(result.output.trim()).toBe("42");
 		// The errored primary worker is torn down before the inline retry takes over.
 		expect(stats.terminateCalls).toBe(1);
+	});
+});
+
+describe.skipIf(process.platform === "win32")("JavaScript eval process isolation", () => {
+	afterEach(async () => {
+		await disposeAllVmContexts();
+	});
+
+	it("runs spawned commands under an isolated POSIX session", async () => {
+		using tempDir = TempDir.createSync("@omp-js-process-isolation-");
+		const session = makeSession(tempDir.path());
+		const evalSessionId = `js-isolation:${crypto.randomUUID()}`;
+		const result = await executeJs(
+			[
+				`const child = Bun.spawn(["/bin/sh", "-c", 'sid=$(ps -o sid= -p $$); printf "%s %s\\n" "$sid" "$PPID"'], { stdout: "pipe" });`,
+				"return await new Response(child.stdout).text();",
+			].join("\n"),
+			{ cwd: tempDir.path(), sessionId: evalSessionId, session },
+		);
+		const [sessionId, parentProcessId] = result.output.trim().split(/\s+/).map(Number);
+		expect(parentProcessId).not.toBe(process.pid);
+		expect(sessionId).toBe(parentProcessId);
+
+		await executeJs("var saved = 41; function increment(value) { return value + 1; }", {
+			cwd: tempDir.path(),
+			sessionId: evalSessionId,
+			session,
+		});
+		const reused = await executeJs("return increment(saved);", {
+			cwd: tempDir.path(),
+			sessionId: evalSessionId,
+			session,
+		});
+		expect(reused.output.trim()).toBe("42");
 	});
 });
