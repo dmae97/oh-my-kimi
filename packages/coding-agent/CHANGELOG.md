@@ -25,6 +25,7 @@
 - Added visual markers in the transcript for elided tool calls that have no corresponding result
 - Updated status event log to prioritize the most recent entries in the display window
 - Updated the snapcompact shape preview transcript to use the compact scope format shown to models during compaction.
+- Bumped `@agentclientprotocol/sdk` 0.25.0 → 1.2.1 (major); patched the package's `exports` map to restore the `dist/schema/zod.gen.js` subpath the SDK no longer publishes, which our tests import for response-shape validation.
 
 ### Removed
 
