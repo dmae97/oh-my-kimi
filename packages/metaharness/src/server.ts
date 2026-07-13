@@ -1,16 +1,23 @@
 #!/usr/bin/env bun
 /**
- * harbor-manager server: REST + SSE API over the run store, static web
+ * metaharness server: REST + SSE API over the run store, static web
  * dashboard, and a launcher that spawns the CLI runner as a managed child.
  *
  *   bun src/server.ts [--port 4700] [--jobs-dir <path>]
  *
  * API:
- *   GET    /api/experiments               → experiment summaries across all benchmarks
- *   GET    /api/runs                      → RunRow[]
+ *   GET    /api/experiments[?q=]          → experiment summaries across all benchmarks
+ *   POST   /api/experiments               → register an experiment (id + goal) before its first arm
+ *   GET    /api/experiments/:id           → experiment detail (arms, task matrix)
+ *   PUT    /api/experiments/:id           → update goal + per-run role/note/label
+ *   DELETE /api/experiments/:id           → delete all arms (rows + job dirs) and the goal row
+ *   POST   /api/experiments/:id/arms      → launch a comparable arm
+ *   GET    /api/runs[?experiment=&status=&benchmark=] → RunRow[]
  *   POST   /api/runs                      → launch any benchmark
  *   GET    /api/runs/:name                → { run, traces }
- *   DELETE /api/runs/:name                → cancel a managed run
+ *   POST   /api/runs/:name/cancel         → cancel a managed run
+ *   POST   /api/runs/:name/resume         → resume an incomplete harbor run
+ *   DELETE /api/runs/:name                → delete a finished run (row + job dir)
  *   GET    /api/runs/:name/traces/:trace  → normalized trace
  *   GET    /api/events                    → SSE: run-list snapshots on change
  */
@@ -26,6 +33,13 @@ import { type LaunchRecord, type RunRole, type RunRow, RunStore } from "./store"
 export interface ExperimentMetaUpdate {
 	goal?: string;
 	runs?: Record<string, { role?: RunRole; note?: string; label?: string }>;
+}
+
+/** POST /api/experiments body — pre-registers an experiment id with a goal. */
+export interface CreateExperimentRequest {
+	/** Dash-free token; runs group into it as `<id>-<arm>` job names. */
+	id: string;
+	goal?: string;
 }
 
 import indexHtml from "./web/index.html";
@@ -74,6 +88,24 @@ function parseServerArgs(argv: string[]): { port: number; jobsDir: string } {
 	}
 	if (!Number.isSafeInteger(port) || port < 1 || port > 65535) throw new Error("--port must be 1..65535");
 	return { port, jobsDir };
+}
+
+/** Job names are single path segments; anything else could escape the jobs dir. */
+function assertSafeJobName(jobName: string): void {
+	if (!jobName || jobName === "." || jobName === ".." || /[/\\]/.test(jobName)) {
+		throw new Error(`invalid job name: ${jobName}`);
+	}
+}
+
+/** True when `pid` names a live process (signal-0 probe). */
+function pidAlive(pid: number | null): boolean {
+	if (pid == null) return false;
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 /**
@@ -236,7 +268,17 @@ export class ManagerServer {
 				return Response.json(BENCHMARK_DEFINITIONS);
 			}
 			if (p === "/api/experiments" && request.method === "GET") {
-				return Response.json(buildExperiments(this.#store));
+				const q = url.searchParams.get("q")?.toLowerCase() ?? "";
+				const experiments = buildExperiments(this.#store);
+				return Response.json(
+					q
+						? experiments.filter(e => e.id.toLowerCase().includes(q) || e.goal.toLowerCase().includes(q))
+						: experiments,
+				);
+			}
+			if (p === "/api/experiments" && request.method === "POST") {
+				const body = (await request.json()) as CreateExperimentRequest;
+				return Response.json(this.createExperiment(body), { status: 201 });
 			}
 			const expMatch = p.match(/^\/api\/experiments\/([^/]+)$/);
 			if (expMatch) {
@@ -244,6 +286,11 @@ export class ManagerServer {
 				if (request.method === "PUT") {
 					const body = (await request.json()) as ExperimentMetaUpdate;
 					return Response.json(this.updateExperimentMeta(id, body));
+				}
+				if (request.method === "DELETE") {
+					const result = this.deleteExperiment(id);
+					if (!result) return Response.json({ error: "experiment not found" }, { status: 404 });
+					return Response.json(result);
 				}
 				const detail = experimentDetail(this.#store, id);
 				if (!detail) return Response.json({ error: "experiment not found" }, { status: 404 });
@@ -256,7 +303,14 @@ export class ManagerServer {
 				return Response.json(this.addArm(id, body), { status: 201 });
 			}
 			if (p === "/api/runs" && request.method === "GET") {
-				return Response.json(this.#store.listRuns());
+				const experiment = url.searchParams.get("experiment");
+				const status = url.searchParams.get("status");
+				const benchmark = url.searchParams.get("benchmark");
+				let runs = this.#store.listRuns();
+				if (experiment) runs = runs.filter(r => experimentOf(r.jobName) === experiment);
+				if (status) runs = runs.filter(r => r.status === status);
+				if (benchmark) runs = runs.filter(r => r.benchmark === benchmark);
+				return Response.json(runs);
 			}
 			if (p === "/api/runs" && request.method === "POST") {
 				const body = (await request.json()) as LaunchRequest;
@@ -268,10 +322,17 @@ export class ManagerServer {
 				const body = (await request.json().catch(() => ({}))) as { filterErrorTypes?: string[] };
 				return Response.json(this.resume(jobName, body), { status: 201 });
 			}
+			const cancelMatch = p.match(/^\/api\/runs\/([^/]+)\/cancel$/);
+			if (cancelMatch && request.method === "POST") {
+				return Response.json(this.cancel(decodeURIComponent(cancelMatch[1])));
+			}
 			const runMatch = p.match(/^\/api\/runs\/([^/]+)$/);
 			if (runMatch) {
 				const jobName = decodeURIComponent(runMatch[1]);
-				if (request.method === "DELETE") return Response.json(this.cancel(jobName));
+				if (request.method === "DELETE") {
+					if (!this.deleteRun(jobName)) return Response.json({ error: "run not found" }, { status: 404 });
+					return Response.json({ jobName, deleted: true });
+				}
 				const run = this.#store.syncRun(jobName);
 				if (!run) return Response.json({ error: "run not found" }, { status: 404 });
 				return Response.json({ run, traces: this.#store.listTraces(jobName) });
@@ -386,16 +447,7 @@ export class ManagerServer {
 		// Trust liveness, not the recorded status: a runner killed while a
 		// previous server instance owned it leaves a stale `running` row with a
 		// dead (or null) pid and nobody to fire markExit.
-		const pidAlive = (pid: number | null): boolean => {
-			if (pid == null) return false;
-			try {
-				process.kill(pid, 0);
-				return true;
-			} catch {
-				return false;
-			}
-		};
-		if (this.#children.has(jobName) || (run.status === "running" && pidAlive(run.pid))) {
+		if (this.#runLive(run)) {
 			throw new Error(`run ${jobName} is already running`);
 		}
 		if (run.status === "running") this.#store.markExit(jobName, null, true);
@@ -461,16 +513,78 @@ export class ManagerServer {
 		return proc.pid;
 	}
 
+	/** Liveness check that survives manager restarts: managed child, or a running row with a live pid. */
+	#runLive(run: RunRow): boolean {
+		return this.#children.has(run.jobName) || (run.status === "running" && pidAlive(run.pid));
+	}
+
+	/** Register an experiment id (with an optional goal) so it is browsable before its first arm. */
+	createExperiment(req: CreateExperimentRequest): { id: string; goal: string } {
+		const id = req.id?.trim() ?? "";
+		// Dashes are structurally impossible: `experimentOf` groups job names by
+		// the token before the first dash, so a dashed id could never own a run.
+		if (!/^[A-Za-z0-9_.]+$/.test(id)) {
+			throw new Error("experiment id must be a non-empty token of [A-Za-z0-9_.] (runs group as `<id>-<arm>`)");
+		}
+		const goal = req.goal ?? this.#store.getExperimentMeta(id)?.goal ?? "";
+		this.#store.setExperimentGoal(id, goal);
+		return { id, goal };
+	}
+
 	/** Apply goal + per-run role/note metadata; used by the UI and for backfill. */
 	updateExperimentMeta(id: string, update: ExperimentMetaUpdate): { id: string; updatedRuns: string[] } {
 		if (update.goal !== undefined) this.#store.setExperimentGoal(id, update.goal);
 		const updatedRuns: string[] = [];
-		for (const [jobName, meta] of Object.entries(update.runs ?? {})) {
+		for (const jobName in update.runs) {
 			if (experimentOf(jobName) !== id) continue;
-			if (this.#store.setRunMeta(jobName, meta)) updatedRuns.push(jobName);
+			if (this.#store.setRunMeta(jobName, update.runs[jobName])) updatedRuns.push(jobName);
 		}
 		this.#tick();
 		return { id, updatedRuns };
+	}
+
+	/**
+	 * Delete an experiment: every arm's DB row, job dir, and manager log, plus
+	 * the goal row. Refuses while any arm is live (cancel first — deleting a
+	 * job dir under a writing runner would corrupt it). Returns null when the
+	 * id names neither runs nor a registered experiment.
+	 */
+	deleteExperiment(id: string): { id: string; deletedRuns: string[] } | null {
+		const runs = this.#store.listRuns().filter(r => experimentOf(r.jobName) === id);
+		if (runs.length === 0 && !this.#store.getExperimentMeta(id)) return null;
+		const live = runs.filter(r => this.#runLive(r));
+		if (live.length > 0) {
+			throw new Error(
+				`experiment ${id} has running arms (${live.map(r => r.jobName).join(", ")}); cancel them first`,
+			);
+		}
+		for (const run of runs) this.#destroyRun(run.jobName);
+		this.#store.deleteExperimentMeta(id);
+		this.#tick();
+		return { id, deletedRuns: runs.map(r => r.jobName) };
+	}
+
+	/**
+	 * Permanently delete a run: DB row + trials, job dir, and manager log.
+	 * Disk removal is not optional — discover() would resurrect a surviving
+	 * job dir as a fresh row on the next restart. Refuses while the run is
+	 * live; returns false when the run is unknown.
+	 */
+	deleteRun(jobName: string): boolean {
+		const run = this.#store.getRun(jobName);
+		if (!run) return false;
+		if (this.#runLive(run)) throw new Error(`run ${jobName} is running; cancel it first`);
+		this.#destroyRun(jobName);
+		this.#tick();
+		return true;
+	}
+
+	/** Remove a run's DB rows and on-disk artifacts (job dir + manager log). */
+	#destroyRun(jobName: string): void {
+		assertSafeJobName(jobName);
+		this.#store.deleteRun(jobName);
+		fs.rmSync(path.join(this.jobsDir, jobName), { recursive: true, force: true });
+		fs.rmSync(path.join(this.jobsDir, "_manager", "logs", `${jobName}.log`), { force: true });
 	}
 
 	/** Add a comparable arm to an existing experiment, inheriting its sample + config. */
@@ -642,20 +756,20 @@ if (import.meta.main) {
 	// `bun --hot` re-evaluates this module in-place: retire the previous
 	// instance first, or its sync ticker and sqlite connection leak per reload.
 	const host = globalThis as typeof globalThis & {
-		__harborManagerServer?: ManagerServer;
-		__harborManagerHooks?: boolean;
+		__metaharnessServer?: ManagerServer;
+		__metaharnessHooks?: boolean;
 	};
-	await host.__harborManagerServer?.stop();
+	await host.__metaharnessServer?.stop();
 	const { port, jobsDir } = parseServerArgs(process.argv.slice(2));
 	const manager = new ManagerServer(jobsDir);
-	host.__harborManagerServer = manager;
+	host.__metaharnessServer = manager;
 	const server = manager.start(port);
-	process.stdout.write(`harbor-manager listening on http://localhost:${server.port} (jobs: ${jobsDir})\n`);
+	process.stdout.write(`metaharness listening on http://localhost:${server.port} (jobs: ${jobsDir})\n`);
 	// Process-wide hooks register once; `--hot` re-evals reuse them via `host`.
-	if (!host.__harborManagerHooks) {
-		host.__harborManagerHooks = true;
+	if (!host.__metaharnessHooks) {
+		host.__metaharnessHooks = true;
 		const shutdown = async () => {
-			await host.__harborManagerServer?.stop();
+			await host.__metaharnessServer?.stop();
 			process.exit(0);
 		};
 		process.on("SIGINT", shutdown);

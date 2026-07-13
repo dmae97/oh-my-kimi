@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"private": true,
-	"name": "@oh-my-pi/harbor-manager",
+	"name": "@oh-my-pi/pi-metaharness",
 	"version": "0.0.1",
 	"description": "Unified benchmark runners plus Harbor run storage, REST/SSE APIs, and a live web dashboard",
 	"homepage": "https://omp.sh",
@@ -10,10 +10,10 @@
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/can1357/oh-my-pi.git",
-		"directory": "packages/harbor-manager"
+		"directory": "packages/metaharness"
 	},
 	"bin": {
-		"harbor-manager": "src/server.ts"
+		"metaharness": "src/server.ts"
 	},
 	"scripts": {
 		"check": "biome check . && bun run check:types",

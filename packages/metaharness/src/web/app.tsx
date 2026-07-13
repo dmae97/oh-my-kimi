@@ -1,5 +1,5 @@
 /**
- * harbor-manager dashboard.
+ * metaharness dashboard.
  *
  * Views (hash-routed):
  *   #/            experiments index — runs grouped by job-name prefix
@@ -1696,7 +1696,7 @@ function RunsPage({ selected }: { selected: string | null }) {
 		if (el) el.scrollTop = el.scrollHeight;
 	}, [traceData]);
 	const cancel = useCallback(async (name: string) => {
-		if (confirm(`stop ${name}?`)) await fetch(`/api/runs/${encodeURIComponent(name)}`, { method: "DELETE" });
+		if (confirm(`stop ${name}?`)) await fetch(`/api/runs/${encodeURIComponent(name)}/cancel`, { method: "POST" });
 	}, []);
 	const resume = useCallback(async (name: string) => {
 		if (!confirm(`resume ${name}? completed trials are kept; interrupted, pending, and errored ones re-run`)) return;
@@ -1966,7 +1966,7 @@ function App() {
 	return (
 		<>
 			<header className="sticky top-0 z-10 flex items-center gap-4 border-b border-zinc-800 bg-zinc-950/90 px-4 py-2 backdrop-blur">
-				<h1 className="text-sm font-semibold tracking-wide">harbor-manager</h1>
+				<h1 className="text-sm font-semibold tracking-wide">metaharness</h1>
 				<nav className="flex gap-1 text-sm">
 					{tab("#/", "experiments", !expMatch && !runMatch)}
 					{tab("#/runs", "runs", !!runMatch)}

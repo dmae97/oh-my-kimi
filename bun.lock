@@ -136,11 +136,22 @@
         "@types/react-dom": "catalog:",
       },
     },
-    "packages/harbor-manager": {
-      "name": "@oh-my-pi/harbor-manager",
+    "packages/hashline": {
+      "name": "@oh-my-pi/hashline",
+      "version": "16.4.8",
+      "dependencies": {
+        "diff": "catalog:",
+        "lru-cache": "catalog:",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+      },
+    },
+    "packages/metaharness": {
+      "name": "@oh-my-pi/pi-metaharness",
       "version": "0.0.1",
       "bin": {
-        "harbor-manager": "src/server.ts",
+        "metaharness": "src/server.ts",
       },
       "dependencies": {
         "@oh-my-pi/hashline": "catalog:",
@@ -165,17 +176,6 @@
         "@types/react": "^19.1.0",
         "@types/react-dom": "^19.1.0",
         "react-refresh": "^0.18.0",
-      },
-    },
-    "packages/hashline": {
-      "name": "@oh-my-pi/hashline",
-      "version": "16.4.8",
-      "dependencies": {
-        "diff": "catalog:",
-        "lru-cache": "catalog:",
-      },
-      "devDependencies": {
-        "@types/bun": "catalog:",
       },
     },
     "packages/mnemopi": {
@@ -759,8 +759,6 @@
 
     "@oh-my-pi/collab-web": ["@oh-my-pi/collab-web@workspace:packages/collab-web"],
 
-    "@oh-my-pi/harbor-manager": ["@oh-my-pi/harbor-manager@workspace:packages/harbor-manager"],
-
     "@oh-my-pi/hashline": ["@oh-my-pi/hashline@workspace:packages/hashline"],
 
     "@oh-my-pi/omp-stats": ["@oh-my-pi/omp-stats@workspace:packages/stats"],
@@ -772,6 +770,8 @@
     "@oh-my-pi/pi-catalog": ["@oh-my-pi/pi-catalog@workspace:packages/catalog"],
 
     "@oh-my-pi/pi-coding-agent": ["@oh-my-pi/pi-coding-agent@workspace:packages/coding-agent"],
+
+    "@oh-my-pi/pi-metaharness": ["@oh-my-pi/pi-metaharness@workspace:packages/metaharness"],
 
     "@oh-my-pi/pi-mnemopi": ["@oh-my-pi/pi-mnemopi@workspace:packages/mnemopi"],
 

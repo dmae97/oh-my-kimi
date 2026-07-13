@@ -72,6 +72,13 @@ export interface TraceRow {
 	tracePath: string | null;
 }
 
+/** Row in the `experiments` table: goal metadata keyed by experiment id. */
+export interface ExperimentMeta {
+	id: string;
+	goal: string;
+	updatedAt: number;
+}
+
 export interface LaunchRecord {
 	benchmark: BenchmarkKind;
 	jobName: string;
@@ -180,7 +187,7 @@ export class RunStore {
 	constructor(jobsDir: string, dbPath?: string) {
 		this.jobsDir = jobsDir;
 		fs.mkdirSync(path.join(jobsDir, "_manager"), { recursive: true });
-		this.#db = new Database(dbPath ?? path.join(jobsDir, "_manager", "harbor-manager.sqlite"));
+		this.#db = new Database(dbPath ?? path.join(jobsDir, "_manager", "metaharness.sqlite"));
 		this.#db.run("PRAGMA busy_timeout = 5000");
 		enableWal(this.#db);
 		this.#db.run(SCHEMA);
@@ -258,9 +265,39 @@ export class RunStore {
 			.run(id, goal, Date.now());
 	}
 
-	getExperimentGoal(id: string): string {
-		const row = this.#db.query("SELECT goal FROM experiments WHERE id = ?").get(id) as { goal: string } | null;
-		return row?.goal ?? "";
+	/** Stored experiment metadata, or null when the id was never registered. */
+	getExperimentMeta(id: string): ExperimentMeta | null {
+		const row = this.#db.query("SELECT id, goal, updated_at FROM experiments WHERE id = ?").get(id) as {
+			id: string;
+			goal: string;
+			updated_at: number;
+		} | null;
+		return row ? { id: row.id, goal: row.goal, updatedAt: row.updated_at } : null;
+	}
+
+	/** Every registered experiment row, newest first. */
+	listExperimentMeta(): ExperimentMeta[] {
+		const rows = this.#db
+			.query("SELECT id, goal, updated_at FROM experiments ORDER BY updated_at DESC")
+			.all() as Array<{
+			id: string;
+			goal: string;
+			updated_at: number;
+		}>;
+		return rows.map(r => ({ id: r.id, goal: r.goal, updatedAt: r.updated_at }));
+	}
+
+	/** Drop the experiment metadata row (run rows are deleted separately via deleteRun). */
+	deleteExperimentMeta(id: string): void {
+		this.#db.query("DELETE FROM experiments WHERE id = ?").run(id);
+	}
+
+	/** Delete a run row and its trials; returns false when the run is unknown. */
+	deleteRun(jobName: string): boolean {
+		if (!this.getRun(jobName)) return false;
+		this.#db.query("DELETE FROM trials WHERE job_name = ?").run(jobName);
+		this.#db.query("DELETE FROM runs WHERE job_name = ?").run(jobName);
+		return true;
 	}
 
 	/** Set role/note/label metadata on an existing run row. */

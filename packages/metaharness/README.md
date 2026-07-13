@@ -1,4 +1,4 @@
-# @oh-my-pi/harbor-manager
+# @oh-my-pi/pi-metaharness
 
 One manager for repository benchmarks. Harbor, TypeScript edit, and SnapCompact
 runs use the same experiment → run → trace model, SQLite store, REST/SSE API,
@@ -30,8 +30,19 @@ bun run serve --port 4700
 ## Server
 
 - `GET /` — experiments, runs, normalized traces, and a launch form for every benchmark.
-- `GET /api/experiments` — experiment summaries across all benchmark types.
-- `GET /api/runs` — uniform run rows with benchmark, score, progress, spend, and tokens.
+- `GET /api/experiments[?q=]` — experiment summaries across all benchmark types
+  (`q` filters by id/goal substring).
+- `POST /api/experiments` — register an experiment before its first arm. Body
+  `{ "id": "sb2", "goal": "..." }`; the id is the dash-free token job names
+  group under (`sb2-n8` → experiment `sb2`).
+- `GET /api/experiments/:id` — arms, per-task matrix, and calibrated projections.
+- `PUT /api/experiments/:id` — update the goal and per-run role/note/label.
+- `POST /api/experiments/:id/arms` — launch a comparable arm; sample + config
+  inherited from a sibling.
+- `DELETE /api/experiments/:id` — delete every arm (DB rows **and** job dirs)
+  plus the goal row; rejected while any arm is running.
+- `GET /api/runs[?experiment=&status=&benchmark=]` — uniform run rows with
+  benchmark, score, progress, spend, and tokens.
 - `POST /api/runs` — launch through a benchmark adapter. Body:
 
   ```json
@@ -51,7 +62,10 @@ bun run serve --port 4700
   `include`, `timeoutMultiplier`, and `prewalk`; edit uses `include` as task IDs;
   SnapCompact uses `conditions` and treats `tasks` as the passage limit.
 - `GET /api/runs/:name` — `{ run, traces }` (syncs native artifacts on read).
-- `DELETE /api/runs/:name` — cancel a manager-launched run.
+- `POST /api/runs/:name/cancel` — cancel a manager-launched run.
+- `DELETE /api/runs/:name` — permanently delete a finished run (DB row **and**
+  job dir; a surviving dir would be re-discovered on restart); rejected while
+  the run is live.
 - `POST /api/runs/:name/resume` — resume an incomplete harbor run in place:
   completed trials (and their spend) are reused, interrupted/pending trials
   re-run, and errored trials retried (body `{ "filterErrorTypes": [...] }`
@@ -62,7 +76,7 @@ bun run serve --port 4700
 - `GET /api/runs/:name/traces/:trace[?raw=1]` — normalized or native trace.
 - `GET /api/events` — SSE stream of run-list snapshots (sent on change).
 
-State lives in `<jobs-dir>/_manager/harbor-manager.sqlite`; the filesystem
+State lives in `<jobs-dir>/_manager/metaharness.sqlite`; the filesystem
 stays the source of truth and historical CLI runs are auto-discovered.
 
 ## Harbor runner options (excerpt)

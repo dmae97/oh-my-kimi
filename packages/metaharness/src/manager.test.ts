@@ -19,7 +19,7 @@ afterEach(() => {
 });
 
 function makeJobsDir(): string {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harbor-manager-test-"));
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "metaharness-test-"));
 	cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
 	return dir;
 }
@@ -238,10 +238,13 @@ describe("ManagerServer API", () => {
 		});
 		expect(badLaunch.status).toBe(400);
 
-		const cancelUnknown = (await (await fetch(`${base}/api/runs/nope`, { method: "DELETE" })).json()) as {
+		const cancelUnknown = (await (await fetch(`${base}/api/runs/nope/cancel`, { method: "POST" })).json()) as {
 			cancelled: boolean;
 		};
 		expect(cancelUnknown.cancelled).toBe(false);
+
+		const deleteUnknown = await fetch(`${base}/api/runs/nope`, { method: "DELETE" });
+		expect(deleteUnknown.status).toBe(404);
 	});
 
 	it("serves edit and SnapCompact metrics and native traces through one API", async () => {
@@ -365,6 +368,100 @@ describe("ManagerServer API", () => {
 		expect(await resumeError("edit-x")).toMatch(/only harbor/);
 		expect(await resumeError("job-live")).toMatch(/already running/);
 		expect(await resumeError("job-bare")).toMatch(/no harbor config.json/);
+	});
+
+	it("experiment CRUD: create is browsable, delete removes rows + job dirs, live arms are protected", async () => {
+		const jobsDir = makeJobsDir();
+		const manager = new ManagerServer(jobsDir);
+		// Two finished arms of experiment `crud` and one live run in a different experiment.
+		for (const jobName of ["crud-base", "crud-treat"]) {
+			manager.store.registerLaunch({
+				benchmark: "harbor",
+				jobName,
+				dataset: "terminal-bench@2.0",
+				agent: "omp",
+				models: ["m/x"],
+				pid: process.pid,
+			});
+			manager.store.markExit(jobName, 0);
+		}
+		manager.store.registerLaunch({
+			benchmark: "harbor",
+			jobName: "live-run",
+			dataset: "terminal-bench@2.0",
+			agent: "omp",
+			models: ["m/x"],
+			pid: process.pid,
+		});
+		const server = manager.start(0);
+		cleanups.push(() => {
+			void manager.stop();
+		});
+		const base = `http://localhost:${server.port}`;
+
+		// Create: registered id is browsable before any run exists.
+		const created = await fetch(`${base}/api/experiments`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ id: "fresh", goal: "does X beat Y?" }),
+		});
+		expect(created.status).toBe(201);
+		const list = (await (await fetch(`${base}/api/experiments`)).json()) as Array<{
+			id: string;
+			goal: string;
+			arms: number;
+		}>;
+		const fresh = list.find(e => e.id === "fresh");
+		expect(fresh).toMatchObject({ goal: "does X beat Y?", arms: 0 });
+		const freshDetail = (await (await fetch(`${base}/api/experiments/fresh`)).json()) as {
+			goal: string;
+			arms: unknown[];
+		};
+		expect(freshDetail).toMatchObject({ goal: "does X beat Y?", arms: [] });
+
+		// Create: dashed / empty ids can never own a run — rejected.
+		for (const id of ["bad-id", ""]) {
+			const res = await fetch(`${base}/api/experiments`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ id }),
+			});
+			expect(res.status).toBe(400);
+		}
+
+		// Browse: list filters.
+		const filtered = (await (await fetch(`${base}/api/runs?experiment=crud`)).json()) as Array<{
+			jobName: string;
+		}>;
+		expect(filtered.map(r => r.jobName).sort()).toEqual(["crud-base", "crud-treat"]);
+		const running = (await (await fetch(`${base}/api/runs?status=running`)).json()) as Array<{
+			jobName: string;
+		}>;
+		expect(running.map(r => r.jobName)).toEqual(["live-run"]);
+		const q = (await (await fetch(`${base}/api/experiments?q=fresh`)).json()) as Array<{ id: string }>;
+		expect(q.map(e => e.id)).toEqual(["fresh"]);
+
+		// Delete run: live runs are protected, finished runs vanish from DB and disk.
+		const liveDelete = await fetch(`${base}/api/runs/live-run`, { method: "DELETE" });
+		expect(liveDelete.status).toBe(400);
+		const runDelete = await fetch(`${base}/api/runs/crud-treat`, { method: "DELETE" });
+		expect(runDelete.status).toBe(200);
+		expect(fs.existsSync(path.join(jobsDir, "crud-treat"))).toBe(false);
+		expect(manager.store.getRun("crud-treat")).toBeNull();
+
+		// Delete experiment: remaining arm rows + dirs + goal row all go; 404 after.
+		const expDelete = (await (await fetch(`${base}/api/experiments/crud`, { method: "DELETE" })).json()) as {
+			deletedRuns: string[];
+		};
+		expect(expDelete.deletedRuns).toEqual(["crud-base"]);
+		expect(fs.existsSync(path.join(jobsDir, "crud-base"))).toBe(false);
+		expect((await fetch(`${base}/api/experiments/crud`)).status).toBe(404);
+		expect((await fetch(`${base}/api/experiments/unknown`, { method: "DELETE" })).status).toBe(404);
+
+		// Delete experiment with a live arm: refused, nothing removed.
+		const liveExpDelete = await fetch(`${base}/api/experiments/live`, { method: "DELETE" });
+		expect(liveExpDelete.status).toBe(400);
+		expect(manager.store.getRun("live-run")).not.toBeNull();
 	});
 });
 
