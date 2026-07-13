@@ -85,6 +85,7 @@ function createContext(overrides?: {
 	isStreaming?: boolean;
 	model?: Model;
 	agentId?: string;
+	parentPromptCacheKey?: string;
 	register?: (run: CapturedJobRun, options?: AsyncJobRegisterOptions) => string;
 }) {
 	const tempDir = TempDir.createSync("@omp-tan-controller-");
@@ -104,6 +105,7 @@ function createContext(overrides?: {
 	);
 	const session = {
 		isStreaming: overrides?.isStreaming ?? false,
+		agent: { promptCacheKey: overrides?.parentPromptCacheKey },
 		model: overrides?.model ?? model,
 		asyncJobManager: { register },
 		sessionId: "parent-session",
@@ -289,6 +291,27 @@ describe("TanCommandController", () => {
 		expect(opts?.parentAgentId).toBe("FocusedParent");
 		expect(opts?.parentTaskPrefix).toMatch(/^Tan-/);
 		expect(opts?.parentTaskPrefix).not.toBe("FocusedParent");
+	});
+
+	it("pins the parent's effective cache key when the parent itself carries a pinned promptCacheKey", async () => {
+		// A parent that is itself a fork/tan caches under `agent.promptCacheKey`,
+		// not its own session id — the clone must read that exact shard.
+		const harness = createContext({ parentPromptCacheKey: "grandparent-cache-key" });
+		vi.spyOn(SessionManager, "forkFrom").mockResolvedValue(harness.cloneManager);
+		const { clone } = createCloneStub();
+		const createAgentSessionSpy = vi
+			.spyOn(sdkModule, "createAgentSession")
+			.mockResolvedValue({ session: clone } as unknown as CreateAgentSessionResult);
+		const controller = new TanCommandController(harness.ctx);
+
+		await controller.start("follow the tangent");
+		const run = harness.capturedRun;
+		if (!run) throw new Error("run function was not captured");
+		await run({ jobId: "job-1", signal: new AbortController().signal, reportProgress: async () => {} });
+
+		const opts = createAgentSessionSpy.mock.calls[0]?.[0];
+		expect(opts?.providerPromptCacheKey).toBe("grandparent-cache-key");
+		expect(opts?.providerSessionId).toMatch(/^parent-session:tan:/);
 	});
 
 	it("parks the finished tan in the registry so it stays visible in the Agent Hub", async () => {
