@@ -10,6 +10,7 @@ import type { AgentSession } from "../../session/agent-session";
 import { BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE } from "../../session/messages";
 import { SessionManager } from "../../session/session-manager";
 import { createMCPProxyTools, createSubagentSettings } from "../../task/executor";
+import { USER_TODO_EDIT_CUSTOM_TYPE } from "../../tools/todo";
 import type { InteractiveModeContext } from "../types";
 
 const TAN_LABEL_PREVIEW_LENGTH = 80;
@@ -67,6 +68,11 @@ export class TanCommandController {
 		}
 
 		const parentSessionId = session.sessionId;
+		// Providers route on `promptCacheKey ?? sessionId`, so the parent's live
+		// requests may cache under a pinned key that differs from its session id
+		// (the parent being itself a fork/tan). Mirror exactly what the parent
+		// populated the cache under — same rule as advisor and handoff calls.
+		const parentPromptCacheKey = session.agent.promptCacheKey ?? parentSessionId;
 		const thinkingLevel = session.configuredThinkingLevel();
 		const systemPrompt = [...session.systemPrompt];
 		const toolNames = session.getActiveToolNames();
@@ -112,7 +118,7 @@ export class TanCommandController {
 							systemPrompt,
 							toolNames,
 							providerSessionId: `${parentSessionId}:tan:${Snowflake.next()}`,
-							providerPromptCacheKey: parentSessionId,
+							providerPromptCacheKey: parentPromptCacheKey,
 							modelRegistry,
 							authStorage: modelRegistry.authStorage,
 							settings,
@@ -137,6 +143,28 @@ export class TanCommandController {
 							void clone?.abort();
 						};
 						signal.addEventListener("abort", abortClone, { once: true });
+						// The fork inherits the parent's todo list via session entries;
+						// its reminders would drag the tan back onto the parent's task.
+						// Clear runtime state and persist an empty edit so reloads agree.
+						clone.setTodoPhases([]);
+						cloneManager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases: [] });
+						const injectContextSwitch = () => {
+							clone?.agent.appendMessage({
+								role: "developer",
+								content: tanContextSwitchPrompt,
+								attribution: "agent",
+								timestamp: Date.now(),
+							});
+						};
+						// Compaction summarizes the fork notice away with the rest of the
+						// history, after which the clone re-adopts the parent's task as its
+						// own (the summary blends both). Re-inject after every successful
+						// compaction so the fork boundary survives summarization.
+						const unsubscribeCompaction = clone.subscribe(event => {
+							if (event.type === "auto_compaction_end" && event.result && !event.aborted) {
+								injectContextSwitch();
+							}
+						});
 						try {
 							if (signal.aborted) {
 								abortClone();
@@ -145,16 +173,12 @@ export class TanCommandController {
 							// Inject a context-switch developer message so the clone knows
 							// it is a tangential fork — its parent owns the prior conversation;
 							// this agent must focus exclusively on the user's request.
-							clone.agent.appendMessage({
-								role: "developer",
-								content: tanContextSwitchPrompt,
-								attribution: "agent",
-								timestamp: Date.now(),
-							});
+							injectContextSwitch();
 							await clone.prompt(trimmedWork, { attribution: "user" });
 							await clone.waitForIdle();
 							return extractAssistantText(clone.getLastAssistantMessage()) || "(no output)";
 						} finally {
+							unsubscribeCompaction();
 							signal.removeEventListener("abort", abortClone);
 						}
 					} finally {

@@ -9880,6 +9880,11 @@ export class AgentSession {
 	 * candidate is small or the session has been idle long enough that the
 	 * provider prompt cache is cold), so it is cheap to run every turn. Gated
 	 * on the `compaction.supersedeReads` and `compaction.dropUseless` settings.
+	 *
+	 * Persists via `rewriteEntries` like every other history rewrite — the
+	 * session file must match the live (pruned) context or file-based forks
+	 * (`/fork`, `/tan`) and resume rebuild a divergent prefix and cold-miss the
+	 * provider prompt cache.
 	 */
 	async #pruneStaleToolResults(): Promise<{ prunedCount: number; tokensSaved: number } | undefined> {
 		const { supersedeReads, dropUseless } = this.settings.getGroup("compaction");
@@ -9902,6 +9907,7 @@ export class AgentSession {
 			return undefined;
 		}
 
+		await this.sessionManager.rewriteEntries();
 		const sessionContext = this.buildDisplaySessionContext();
 		this.agent.replaceMessages(sessionContext.messages);
 		this.#resetAllAdvisorRuntimes();

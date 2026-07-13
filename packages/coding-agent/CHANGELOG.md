@@ -14,6 +14,7 @@
 ### Changed
 
 - Updated tangential agent forks to ignore parent session history and focus exclusively on the new request
+- Hardened `/tan` fork isolation: the clone's inherited todo list is cleared at fork (parent todo reminders no longer drag the tan back onto the parent's task), the fork notice warns that the parent is concurrently editing the same working directory, and the notice is re-injected after each compaction so the fork boundary survives summarization
 - Added visual markers in the transcript for elided tool calls that have no corresponding result
 - Updated status event log to prioritize the most recent entries in the display window
 - Updated the snapcompact shape preview transcript to use the compact scope format shown to models during compaction.
