@@ -34,6 +34,7 @@
 
 ### Fixed
 
+- Fixed expanded (ctrl+O) streaming edit previews duplicating the tool box in terminal scrollback: an unbounded live diff scrolled above the native-scrollback commit boundary mid-stream, freezing a stale preview snapshot that the finalized render then recommitted below. Expanded previews now use a viewport-sized tail window; the full diff still renders once the result finalizes.
 - Fixed quadratic growth of `--mode json` logs by eliding redundant message snapshots and payloads
 - Fixed `/tan` and `/fork` clones cold-missing the provider prompt cache: the per-turn supersede/useless-result prune rewrote the live context without persisting it, so file-based forks and resume rebuilt a divergent (un-pruned) prefix and re-wrote the entire cache
 - Fixed `/tan` pinning the clone's prompt-cache key to the parent's session id instead of the parent's effective cache key, dropping shard affinity when the parent was itself a fork or tan
