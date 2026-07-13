@@ -14,6 +14,7 @@ function makeSession(): ToolSession {
 }
 
 describe("browser tab evaluation", () => {
+	// Launches real headless Chromium; CI cold start easily exceeds bun's 5s default.
 	it("runs tab.evaluate in the page's main JavaScript world", async () => {
 		const tool = new BrowserTool(makeSession());
 		const name = `main-world-${process.pid}`;
@@ -34,5 +35,5 @@ describe("browser tab evaluation", () => {
 		} finally {
 			await tool.execute("close", { action: "close", name, kill: true });
 		}
-	});
+	}, 30_000);
 });
