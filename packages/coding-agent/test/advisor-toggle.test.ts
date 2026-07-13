@@ -284,4 +284,16 @@ describe("AgentSession advisor toggle", () => {
 		expect(sessionB.isAdvisorEnabled()).toBe(true);
 		expect(sessionB.isAdvisorActive()).toBe(true);
 	});
+
+	it("exposes provider sessionId on live advisor stats", () => {
+		session.settings.setModelRole("advisor", `${model.provider}/${model.id}`);
+		session.toggleAdvisorEnabled();
+
+		const stats = session.getAdvisorStats();
+		expect(stats.advisors).toHaveLength(1);
+		const sid = stats.advisors[0].sessionId!;
+		// Full UUIDv7 — must not contain the display-label "-advisor" suffix
+		expect(sid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+		expect(sid).not.toContain("-advisor");
+	});
 });

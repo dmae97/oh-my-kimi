@@ -16929,7 +16929,7 @@ export class AgentSession {
 			tokens: { input, output, reasoning, cacheRead, cacheWrite, total: totalTokens },
 			cost,
 			messages: { user, assistant, total: messages.length },
-			sessionId: advisor.slug ? `${this.sessionId}-advisor-${advisor.slug}` : `${this.sessionId}-advisor`,
+			sessionId: advisor.agent.sessionId,
 		};
 	}
 
@@ -16958,7 +16958,7 @@ export class AgentSession {
 			if (s.tokens.cacheRead > 0) spendParts.push(`${s.tokens.cacheRead.toLocaleString()} cache read`);
 			if (s.tokens.cacheWrite > 0) spendParts.push(`${s.tokens.cacheWrite.toLocaleString()} cache write`);
 			const spendLine = `Spend: ${spendParts.join(", ")}, $${s.cost.toFixed(4)}`;
-			if (!s.model) return `Advisor "${s.name}" is ${s.status.replace("_", " ")}.`;
+			if (!s.model || s.status !== "running") return `Advisor "${s.name}" is ${s.status.replace("_", " ")}.`;
 			return `Advisor is enabled (${s.model.provider}/${s.model.id}). ${contextLine}. ${spendLine}.`;
 		}
 		const lines = [`Advisors enabled (${stats.advisors.length}):`];
@@ -16968,7 +16968,7 @@ export class AgentSession {
 					? `${s.contextTokens.toLocaleString()} / ${s.contextWindow.toLocaleString()} (${Math.round((s.contextTokens / s.contextWindow) * 100)}%)`
 					: `${s.contextTokens.toLocaleString()}`;
 			lines.push(
-				`  • ${s.name}${s.model ? ` (${s.model.provider}/${s.model.id})` : ` [${s.status}]`} — context ${ctx} tokens, $${s.cost.toFixed(4)}`,
+				`  • ${s.name}${s.model && s.status === "running" ? ` (${s.model.provider}/${s.model.id})` : ` [${s.status}]`} — context ${ctx} tokens, $${s.cost.toFixed(4)}`,
 			);
 		}
 		lines.push(
