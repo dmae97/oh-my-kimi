@@ -26,7 +26,17 @@ interface ActiveRun {
 type RunResult = Extract<WorkerOutbound, { type: "result" }>;
 
 export type WorkerCoreOptions =
-	| { mode: "isolated" }
+	| {
+			mode: "isolated";
+			/**
+			 * Mirror the session cwd onto the real process cwd so cell code using
+			 * `process.cwd()`, relative paths, or child processes without an explicit
+			 * `cwd` resolves against the project. Only the dedicated subprocess may
+			 * pass this: `process.chdir` is unavailable in Worker threads and would
+			 * mutate the host's own cwd on the inline fallback.
+			 */
+			chdir?: (cwd: string) => void;
+	  }
 	| {
 			mode: "inline";
 			interceptUnhandledRejections(handler: (reason: unknown) => boolean): () => void;
@@ -214,6 +224,7 @@ export class WorkerCore {
 	}
 
 	#ensureRuntime(snapshot: SessionSnapshot): JsRuntime {
+		this.#syncProcessCwd(snapshot.cwd);
 		if (this.#runtime) {
 			this.#runtime.setCwd(snapshot.cwd);
 			return this.#runtime;
@@ -224,6 +235,22 @@ export class WorkerCore {
 			localRoots: snapshot.localRoots,
 		});
 		return this.#runtime;
+	}
+
+	#syncProcessCwd(cwd: string): void {
+		if (this.#options.mode !== "isolated" || !this.#options.chdir) return;
+		try {
+			this.#options.chdir(cwd);
+		} catch (error) {
+			// `process.chdir` throws when the session cwd no longer exists; keep
+			// the cell on the runtime's virtual cwd instead of failing the run.
+			this.#transport.send({
+				type: "log",
+				level: "warn",
+				msg: "JS eval subprocess could not enter the session cwd",
+				meta: { cwd, error: errorPayload(error) },
+			});
+		}
 	}
 
 	async #runOne(runId: string, code: string, filename: string, snapshot: SessionSnapshot): Promise<void> {

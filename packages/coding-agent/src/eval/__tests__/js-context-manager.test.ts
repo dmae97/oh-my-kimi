@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { Settings } from "../../config/settings";
 import type { ToolSession } from "../../tools";
@@ -328,6 +330,33 @@ describe.skipIf(process.platform === "win32")("JavaScript eval process isolation
 			session,
 		});
 		expect(reused.output.trim()).toBe("42");
+	});
+
+	it("mirrors the session cwd onto the subprocess's real cwd", async () => {
+		using tempDir = TempDir.createSync("@omp-js-process-cwd-");
+		const session = makeSession(tempDir.path());
+		const evalSessionId = `js-cwd:${crypto.randomUUID()}`;
+		const result = await executeJs("return process.cwd();", {
+			cwd: tempDir.path(),
+			sessionId: evalSessionId,
+			session,
+		});
+		// process.chdir resolves symlinks (macOS tempdirs live under /var ->
+		// /private/var), so compare physical paths.
+		expect(result.output.trim()).toBe(fs.realpathSync(tempDir.path()));
+	});
+
+	it("still runs cells when the session cwd does not exist", async () => {
+		using tempDir = TempDir.createSync("@omp-js-process-cwd-missing-");
+		const missingCwd = path.join(tempDir.path(), "deleted");
+		const session = makeSession(missingCwd);
+		const result = await executeJs("return String(6 * 7);", {
+			cwd: missingCwd,
+			sessionId: `js-cwd-missing:${crypto.randomUUID()}`,
+			session,
+		});
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe("42");
 	});
 
 	it("keeps the isolated process alive after a stackless floated rejection", async () => {

@@ -14,6 +14,14 @@ export function startJsEvalProcess(transport: {
 			// WorkerCore `closed` acknowledgement has crossed IPC.
 			close: () => {},
 		},
-		{ mode: "isolated" },
+		{
+			mode: "isolated",
+			// The subprocess starts with its real cwd at the worker-host entry dir
+			// (a `resolveWorkerSpawnCmd` requirement); mirror the session cwd so
+			// cell code using relative paths or spawning children resolves against
+			// the project instead of the install dir. Worker threads cannot pass
+			// this — `process.chdir` is unavailable there.
+			chdir: cwd => process.chdir(cwd),
+		},
 	);
 }
