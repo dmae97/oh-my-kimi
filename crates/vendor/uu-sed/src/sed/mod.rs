@@ -20,7 +20,7 @@ pub mod processor;
 pub mod script_char_provider;
 pub mod script_line_provider;
 
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, ffi::OsString, path::PathBuf};
 
 use clap::{Arg, ArgMatches, Command, arg, crate_version};
 use pi_uutils_ctx::format_usage;
@@ -49,22 +49,30 @@ pub fn sed_main(matches: &ArgMatches) -> UResult<()> {
 	Ok(())
 }
 
-/// Rewrite GNU-style attached `-i` backup suffixes (`-i.bak`, `-ibak`) into
-/// the `-i=.bak` form clap needs with `require_equals`. GNU sed's `-i`
-/// takes its optional suffix only when directly attached, so a separate
-/// following token must stay a script/file operand; scanning stops at `--`.
-pub fn normalize_args(argv: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
+// pi-uutils: normalize the BSD/macOS `sed -i ''` idiom before clap parsing,
+// following uu-stat's `rewrite_bsd_invocation` precedent.
+/// Normalize GNU's attached `-i` backup suffixes and BSD's empty backup
+/// suffix. GNU sed's `-i` takes its optional suffix only when directly
+/// attached, so a separate non-empty token must stay a script/file operand;
+/// scanning stops at `--`.
+pub fn normalize_args(argv: Vec<OsString>) -> Vec<OsString> {
 	let mut out = Vec::with_capacity(argv.len());
-	let mut iter = argv.into_iter();
+	let mut iter = argv.into_iter().peekable();
 	// argv[0] is the command name; never rewritten.
 	if let Some(first) = iter.next() {
 		out.push(first);
 	}
 	let mut past_separator = false;
-	for arg in iter {
+	while let Some(arg) = iter.next() {
 		if !past_separator {
 			if arg == "--" {
 				past_separator = true;
+			} else if is_in_place_flag(&arg) && iter.peek().is_some_and(|next| next.is_empty()) {
+				// BSD `-i ''` means in-place without a backup, matching GNU
+				// bare `-i`; the empty token would otherwise become SCRIPT.
+				out.push(arg);
+				iter.next();
+				continue;
 			} else if let Some(s) = arg.to_str()
 				&& let Some(suffix) = s.strip_prefix("-i")
 				&& !suffix.is_empty()
@@ -77,6 +85,22 @@ pub fn normalize_args(argv: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> 
 		out.push(arg);
 	}
 	out
+}
+
+/// Whether `arg` is a clap-supported short-flag cluster ending in `-i`.
+fn is_in_place_flag(arg: &OsString) -> bool {
+	let Some(cluster) = arg.to_str().and_then(|arg| arg.strip_prefix('-')) else {
+		return false;
+	};
+	let Some(prefix) = cluster.strip_suffix('i') else {
+		return false;
+	};
+
+	!cluster.is_empty()
+		&& !cluster.starts_with('-')
+		&& prefix
+			.chars()
+			.all(|flag| matches!(flag, 'a' | 'E' | 'r' | 'n' | 's' | 'u' | 'z'))
 }
 
 #[allow(clippy::cognitive_complexity)]
@@ -415,6 +439,36 @@ mod tests {
 
 		assert!(ctx.in_place);
 		assert_eq!(ctx.in_place_suffix, Some(".bak".to_string()));
+	}
+
+	#[test]
+	fn test_bsd_empty_in_place_suffix_with_short_flag_cluster() {
+		// clap accepts `-Ei` as `-E -i`, so the BSD empty suffix must be
+		// removed from this valid GNU flag cluster as well.
+		let matches = test_matches(&["-Ei", "", "s/x/y/", "file.txt"]);
+		let ctx = build_context(&matches);
+
+		assert!(ctx.regex_extended);
+		assert!(ctx.in_place);
+		assert_eq!(ctx.in_place_suffix, None);
+		let (scripts, files) = get_scripts_files(&matches).expect("BSD invocation parses");
+		assert_eq!(scripts, vec![ScriptValue::StringVal("s/x/y/".to_string())]);
+		assert_eq!(files, vec![PathBuf::from("file.txt")]);
+	}
+
+	#[test]
+	fn test_nonempty_token_after_in_place_is_not_consumed() {
+		let argv = ["sed", "-i", ".bak", "s/x/y/", "file.txt"]
+			.into_iter()
+			.map(std::ffi::OsString::from)
+			.collect();
+		let actual = normalize_args(argv);
+		let expected = ["sed", "-i", ".bak", "s/x/y/", "file.txt"]
+			.into_iter()
+			.map(std::ffi::OsString::from)
+			.collect::<Vec<_>>();
+
+		assert_eq!(actual, expected);
 	}
 
 	#[test]

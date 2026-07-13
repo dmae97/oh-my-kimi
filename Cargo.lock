@@ -5342,7 +5342,9 @@ name = "uu_base64"
 version = "0.8.0"
 dependencies = [
  "clap",
+ "parking_lot",
  "pi-uutils-ctx",
+ "tempfile",
  "uu_base32",
  "uucore 0.8.0",
 ]
@@ -5435,6 +5437,7 @@ dependencies = [
  "filetime",
  "nix 0.29.0",
  "onig",
+ "parking_lot",
  "pi-uutils-ctx",
  "pi-walker",
  "regex",
@@ -5742,9 +5745,12 @@ dependencies = [
  "libc",
  "memchr",
  "notify",
+ "parking_lot",
  "pi-uutils-ctx",
  "rstest",
  "rustix",
+ "tempfile",
+ "uu_tac",
  "uucore 0.8.0",
  "windows-sys 0.61.2",
 ]

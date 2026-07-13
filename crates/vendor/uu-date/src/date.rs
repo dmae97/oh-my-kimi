@@ -29,7 +29,7 @@ use std::{
 	ffi::OsString,
 	fs::File,
 	io::{BufRead, BufReader, BufWriter, Read, Write},
-	path::PathBuf,
+	path::{Path, PathBuf},
 	sync::LazyLock,
 };
 
@@ -296,12 +296,250 @@ fn parse_military_timezone_with_offset(s: &str) -> Option<(i32, DayDelta)> {
 	Some((hours_from_midnight, day_delta))
 }
 
+/// pi-uutils: BSD `date` compatibility (macOS muscle memory).
+///
+/// BSD `date -r SECONDS` formats an epoch, whereas GNU `-r FILE` formats a
+/// file's mtime. We rewrite only an all-digit `-r` value for which no file
+/// exists in the shell working directory, preserving GNU's meaningful file
+/// invocation. BSD-only `-v` and `-j` are unambiguous, so they always select
+/// this compatibility path. The rewrite deliberately rejects BSD forms with
+/// no equivalent in the vendored GNU parser instead of producing wrong output.
+///
+/// Returns `None` when the invocation is not BSD-shaped, `Some(Err(_))` when
+/// it is BSD-shaped but cannot be represented by GNU date.
+fn rewrite_bsd_invocation(argv: &[OsString]) -> Option<Result<Vec<OsString>, String>> {
+	let toks: Vec<Cow<'_, str>> = argv.iter().map(|arg| arg.to_string_lossy()).collect();
+	let mut detected = false;
+	let mut epoch_reference = false;
+	let mut i = 1;
+
+	while i < toks.len() {
+		let token = toks[i].as_ref();
+		if token == "--" {
+			break;
+		}
+		match token {
+			// These GNU options take their next token as a value, including a
+			// value that begins with `-`; it must not be mistaken for BSD -j/-v.
+			"-d" | "--date" | "-f" | "--file" | "-s" | "--set" => {
+				i += 2;
+				continue;
+			},
+			"-r" => {
+				if let Some(value) = toks.get(i + 1)
+					&& is_bsd_epoch_reference(value)
+					&& std::fs::symlink_metadata(pi_uutils_ctx::resolve(Path::new(&argv[i + 1])))
+						.is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound)
+				{
+					detected = true;
+					epoch_reference = true;
+				}
+				i += 2;
+				continue;
+			},
+			_ => {},
+		}
+
+		if short_option_contains_bsd_flag(token) {
+			detected = true;
+		}
+		i += 1;
+	}
+
+	detected.then(|| bsd_to_gnu_argv(argv, &toks, epoch_reference))
+}
+
+/// Recognizes BSD-only short flags without treating an attached GNU option
+/// value (for example, the `-j` in `date -d-j`) as an option.
+fn short_option_contains_bsd_flag(token: &str) -> bool {
+	let Some(cluster) = token.strip_prefix('-') else {
+		return false;
+	};
+	if cluster.is_empty() || cluster.starts_with('-') {
+		return false;
+	}
+
+	for flag in cluster.chars() {
+		match flag {
+			// The rest of this cluster is a GNU option value.
+			'd' | 'f' | 'r' | 's' | 'I' => return false,
+			'j' | 'v' => return true,
+			_ => {},
+		}
+	}
+	false
+}
+
+fn is_bsd_epoch_reference(value: &str) -> bool {
+	!value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// Parses a detected BSD invocation and produces the equivalent GNU argv.
+fn bsd_to_gnu_argv(
+	argv: &[OsString],
+	toks: &[Cow<'_, str>],
+	epoch_reference: bool,
+) -> Result<Vec<OsString>, String> {
+	let mut adjustments = Vec::new();
+	let mut has_no_set = false;
+	let mut i = 1;
+	while i < toks.len() {
+		let token = toks[i].as_ref();
+		if token == "--" {
+			break;
+		}
+		match token {
+			"-d" | "--date" | "-s" | "--set" => {
+				i += 2;
+				continue;
+			},
+			"-f" => {
+				if has_no_set {
+					return Err("BSD 'date -j -f' parse mode is not supported; use -d STRING".into());
+				}
+				i += 2;
+				continue;
+			},
+			"--file" => {
+				i += 2;
+				continue;
+			},
+			"-r" => {
+				i += 2;
+				continue;
+			},
+			"-j" => has_no_set = true,
+			_ if token.starts_with("-v") => {
+				let value = token.strip_prefix("-v").unwrap();
+				if value.is_empty() {
+					return Err("BSD -v requires a signed adjustment such as -v-1d".into());
+				}
+				adjustments.push(parse_bsd_adjustment(value)?);
+			},
+			_ => {},
+		}
+		i += 1;
+	}
+
+	if !has_no_set {
+		// `-j` might have appeared later than `-f`; detect it without changing
+		// the parsing rules above.
+		has_no_set = toks.iter().skip(1).any(|token| token.as_ref() == "-j");
+	}
+	if has_no_set && has_bsd_file_parse_mode(toks) {
+		return Err("BSD 'date -j -f' parse mode is not supported; use -d STRING".into());
+	}
+	if adjustments.len() > 1 {
+		return Err("multiple BSD -v adjustments are not supported".into());
+	}
+	if !adjustments.is_empty() && epoch_reference {
+		return Err("BSD -v with -r EPOCH is not supported".into());
+	}
+
+	let mut rewritten = Vec::with_capacity(argv.len() + adjustments.len());
+	rewritten.push(argv[0].clone());
+	i = 1;
+	while i < argv.len() {
+		let token = toks[i].as_ref();
+		if token == "--" {
+			rewritten.extend_from_slice(&argv[i..]);
+			break;
+		}
+		if token == "-j" {
+			i += 1;
+			continue;
+		}
+		if token.starts_with("-v") {
+			i += 1;
+			continue;
+		}
+		if token == "-r"
+			&& toks
+				.get(i + 1)
+				.is_some_and(|value| is_bsd_epoch_reference(value))
+			&& std::fs::symlink_metadata(pi_uutils_ctx::resolve(Path::new(&argv[i + 1])))
+				.is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound)
+		{
+			rewritten.push(OsString::from("-d"));
+			rewritten.push(OsString::from(format!("@{}", toks[i + 1])));
+			i += 2;
+			continue;
+		}
+		rewritten.push(argv[i].clone());
+		i += 1;
+	}
+
+	if let Some(adjustment) = adjustments.pop() {
+		rewritten.push(OsString::from("-d"));
+		rewritten.push(OsString::from(adjustment));
+	}
+	Ok(rewritten)
+}
+
+/// Finds an actual short GNU `-f` option rather than a value passed to `-d`.
+fn has_bsd_file_parse_mode(toks: &[Cow<'_, str>]) -> bool {
+	let mut i = 1;
+	while i < toks.len() {
+		match toks[i].as_ref() {
+			"--" => return false,
+			"-d" | "--date" | "-s" | "--set" | "-r" | "--reference" => i += 2,
+			"-f" => return true,
+			_ => i += 1,
+		}
+	}
+	false
+}
+
+fn parse_bsd_adjustment(value: &str) -> Result<String, String> {
+	let (sign, value) = value
+		.chars()
+		.next()
+		.map(|sign| (sign, &value[sign.len_utf8()..]))
+		.ok_or_else(|| "BSD -v requires a signed adjustment such as -v-1d".to_string())?;
+	if !matches!(sign, '+' | '-') {
+		return Err("BSD -v field-set adjustments are not supported (use -v+N/-v-N)".into());
+	}
+	let Some(unit) = value.chars().last() else {
+		return Err("BSD -v requires a signed adjustment such as -v-1d".into());
+	};
+	let number = &value[..value.len() - unit.len_utf8()];
+	if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) {
+		return Err("BSD -v requires a signed adjustment such as -v-1d".into());
+	}
+	let unit = match unit {
+		'y' => "year",
+		'm' => "month",
+		'w' => "week",
+		'd' => "day",
+		'H' => "hour",
+		'M' => "minute",
+		'S' => "second",
+		_ => return Err(format!("BSD -v unit '{unit}' is not supported")),
+	};
+	let plural = if number == "1" { "" } else { "s" };
+	if sign == '-' {
+		Ok(format!("{number} {unit}{plural} ago"))
+	} else {
+		Ok(format!("{number} {unit}{plural}"))
+	}
+}
+
 /// In-process builtin entry point. Unlike upstream's `uumain`, this parses the
 /// arguments directly (without the uucore clap-localization helper that would
 /// terminate the process), renders clap help/usage/version to the context
 /// streams, and maps the `UResult` to an exit code, so it is safe to run inside
 /// the host shell process.
 pub fn run(argv: Vec<OsString>) -> i32 {
+	// pi-uutils: translate unambiguous BSD date forms before GNU clap parsing;
+	// see `rewrite_bsd_invocation`.
+	let argv = match rewrite_bsd_invocation(&argv) {
+		None => argv,
+		Some(Ok(rewritten)) => rewritten,
+		Some(Err(msg)) => {
+			let _ = writeln!(pi_uutils_ctx::stderr(), "date: {msg}");
+			return 1;
+		},
+	};
 	let matches = match uu_app().try_get_matches_from(argv) {
 		Ok(matches) => matches,
 		Err(err) => {
@@ -1310,6 +1548,90 @@ mod tests {
 		let (code, _, stderr) = run_in(root, vec!["-r", "missing-file"]);
 		assert_eq!(code, 1);
 		assert!(stderr.contains("missing-file"), "stderr: {stderr}");
+	}
+
+	#[test]
+	fn bsd_epoch_reference_formats_seconds() {
+		let (_dir, root) = canonical_tempdir();
+
+		// BSD `-r` names an epoch; a nonexistent all-digit path is unambiguous.
+		let (code, stdout, stderr) = run_in(root, vec!["-r", "1736344012", "+%s"]);
+		assert_eq!((code, stdout.as_str(), stderr.as_str()), (0, "1736344012\n", ""));
+	}
+
+	#[test]
+	fn numeric_existing_reference_keeps_gnu_file_semantics() {
+		let (_dir, root) = canonical_tempdir();
+		std::fs::write(root.join("1736344012"), b"x").unwrap();
+
+		// An existing all-digit filename remains GNU `-r FILE`, not BSD epoch
+		// syntax. Its mtime is necessarily close to the current clock.
+		let (code, stdout, stderr) = run_in(root, vec!["-u", "-r", "1736344012", "+%s"]);
+		assert_eq!(code, 0);
+		assert_eq!(stderr, "");
+		let mtime: i64 = stdout.trim().parse().unwrap();
+		let now = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.unwrap()
+			.as_secs() as i64;
+		assert!((now - mtime).abs() < 60, "mtime epoch {mtime} should be close to now {now}");
+	}
+
+	#[test]
+	fn bsd_signed_adjustment_formats_relative_date() {
+		let (code, stdout, stderr) = run_in(PathBuf::from("."), vec!["-u", "-v-1d", "+%F"]);
+		assert_eq!(code, 0);
+		assert_eq!(stderr, "");
+		let expected = strtime::format(
+			"%F",
+			&Timestamp::now()
+				.to_zoned(TimeZone::UTC)
+				.yesterday()
+				.unwrap(),
+		)
+		.unwrap();
+		assert_eq!(stdout, format!("{expected}\n"));
+
+		let (code, stdout, stderr) = run_in(PathBuf::from("."), vec!["-u", "-v+1d", "+%F"]);
+		assert_eq!(code, 0);
+		assert_eq!(stderr, "");
+		let expected =
+			strtime::format("%F", &Timestamp::now().to_zoned(TimeZone::UTC).tomorrow().unwrap())
+				.unwrap();
+		assert_eq!(stdout, format!("{expected}\n"));
+	}
+
+	#[test]
+	fn bsd_no_set_flag_is_a_no_op() {
+		let (code, stdout, stderr) = run_in(PathBuf::from("."), vec!["-j", "+%s"]);
+		assert_eq!(code, 0);
+		assert_eq!(stderr, "");
+		assert!(stdout.trim().parse::<i64>().is_ok(), "epoch output expected: {stdout:?}");
+	}
+
+	#[test]
+	fn unsupported_bsd_forms_fail_loudly() {
+		let (code, stdout, stderr) = run_in(PathBuf::from("."), vec!["-v1d", "+%F"]);
+		assert_eq!((code, stdout.as_str()), (1, ""));
+		assert!(
+			stderr.contains("BSD -v field-set adjustments are not supported"),
+			"unexpected stderr: {stderr:?}"
+		);
+
+		let (code, stdout, stderr) = run_in(PathBuf::from("."), vec!["-j", "-f", "%F"]);
+		assert_eq!((code, stdout.as_str()), (1, ""));
+		assert!(
+			stderr.contains("BSD 'date -j -f' parse mode is not supported"),
+			"unexpected stderr: {stderr:?}"
+		);
+
+		let (_dir, root) = canonical_tempdir();
+		let (code, stdout, stderr) = run_in(root, vec!["-v-1d", "-r", "1736344012", "+%F"]);
+		assert_eq!((code, stdout.as_str()), (1, ""));
+		assert!(
+			stderr.contains("BSD -v with -r EPOCH is not supported"),
+			"unexpected stderr: {stderr:?}"
+		);
 	}
 
 	#[test]

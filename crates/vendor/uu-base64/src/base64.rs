@@ -49,3 +49,85 @@ pub fn uu_app() -> Command {
 	)
 	.name("base64")
 }
+
+#[cfg(test)]
+mod tests {
+	use std::{
+		collections::HashMap,
+		ffi::OsString,
+		io::{Cursor, Write},
+		path::PathBuf,
+		sync::Arc,
+	};
+
+	use parking_lot::Mutex;
+	use pi_uutils_ctx::ScopeIo;
+
+	use super::run;
+
+	fn run_in(cwd: PathBuf, input: &[u8], args: Vec<&str>) -> (i32, String, String) {
+		let stdout_buf = Arc::new(Mutex::new(Vec::new()));
+		let stderr_buf = Arc::new(Mutex::new(Vec::new()));
+
+		#[derive(Clone)]
+		struct SharedWriter {
+			buf: Arc<Mutex<Vec<u8>>>,
+		}
+		impl Write for SharedWriter {
+			fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+				self.buf.lock().write(buf)
+			}
+
+			fn flush(&mut self) -> std::io::Result<()> {
+				self.buf.lock().flush()
+			}
+		}
+
+		let io = ScopeIo {
+			stdin: Box::new(Cursor::new(input.to_vec())),
+			stdin_fd: None,
+			stdin_is_search_input: false,
+			stdout: Box::new(SharedWriter { buf: stdout_buf.clone() }),
+			stderr: Box::new(SharedWriter { buf: stderr_buf.clone() }),
+			cwd,
+			env: HashMap::new(),
+			cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+		};
+		let argv: Vec<OsString> = std::iter::once("base64")
+			.chain(args)
+			.map(OsString::from)
+			.collect();
+		let code = pi_uutils_ctx::scope(io, || run(argv));
+
+		(
+			code,
+			String::from_utf8(stdout_buf.lock().clone()).unwrap(),
+			String::from_utf8(stderr_buf.lock().clone()).unwrap(),
+		)
+	}
+
+	fn canonical_tempdir() -> (tempfile::TempDir, PathBuf) {
+		let dir = tempfile::tempdir().unwrap();
+		let canon = std::fs::canonicalize(dir.path()).unwrap();
+		(dir, canon)
+	}
+
+	#[test]
+	fn macos_decode_alias_round_trips_and_gnu_alias_still_works() {
+		let (_dir, cwd) = canonical_tempdir();
+		let (code, encoded, stderr) = run_in(cwd.clone(), b"hello", vec![]);
+		assert_eq!(code, 0);
+		assert_eq!(encoded, "aGVsbG8=\n");
+		assert_eq!(stderr, "");
+
+		let (code, decoded, stderr) = run_in(cwd.clone(), encoded.as_bytes(), vec!["-D"]);
+		assert_eq!(code, 0);
+		assert_eq!(decoded, "hello");
+		assert_eq!(stderr, "");
+
+		let (code, decoded, stderr) = run_in(cwd, encoded.as_bytes(), vec!["-d"]);
+		assert_eq!(code, 0);
+		assert_eq!(decoded, "hello");
+		assert_eq!(stderr, "");
+	}
+}

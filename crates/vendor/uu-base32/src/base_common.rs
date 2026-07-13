@@ -104,9 +104,10 @@ pub fn base_app(about: String, usage: String) -> Command {
 	uucore::clap_localization::configure_localized_command(cmd)
 		// Format arguments.
 		.arg(
+			// pi-uutils: macOS base64 accepts `-D` as a non-visible decode alias.
 			Arg::new(options::DECODE)
 				.short('d')
-				.visible_short_alias('D')
+				.short_alias('D')
 				.long(options::DECODE)
 				.help("decode data")
 				.action(ArgAction::SetTrue)

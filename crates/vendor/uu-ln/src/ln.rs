@@ -248,6 +248,16 @@ pub fn uu_app() -> Command {
 			 DIRECTORY\nln [OPTION]... -t DIRECTORY TARGET...",
 		))
 		.infer_long_args(true)
+		// pi-uutils: free the `-h` short for the BSD `--no-dereference`
+		// alias below; neither GNU nor BSD ln has `-h` help, and `--help`
+		// keeps working via the explicit long-only arg.
+		.disable_help_flag(true)
+		.arg(
+			Arg::new("help")
+				.long("help")
+				.help("Print help information")
+				.action(ArgAction::Help),
+		)
 		.after_help(after_help)
 		.arg(backup_control::arguments::backup())
 		.arg(backup_control::arguments::backup_no_args())
@@ -276,6 +286,9 @@ pub fn uu_app() -> Command {
 		.arg(
 			Arg::new(options::NO_DEREFERENCE)
 				.short('n')
+				// pi-uutils: BSD/macOS ln spells this flag `-h` (`ln -sfh` is
+				// common macOS muscle memory); hidden alias, GNU help shape.
+				.short_alias('h')
 				.long(options::NO_DEREFERENCE)
 				.help("treat LINK_NAME as a normal file if it is a\nsymbolic link to a directory")
 				.action(ArgAction::SetTrue),
@@ -706,6 +719,22 @@ mod tests {
 		let link = root.join("link");
 		assert!(link.is_symlink(), "link must be created inside the scope cwd");
 		assert_eq!(fs::read_link(&link).unwrap(), PathBuf::from("target"));
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn bsd_dash_h_replaces_symlink_to_directory() {
+		let (_dir, root) = canonical_tempdir();
+		fs::create_dir(root.join("dir_a")).unwrap();
+		fs::create_dir(root.join("dir_b")).unwrap();
+		std::os::unix::fs::symlink("dir_a", root.join("cur")).unwrap();
+
+		// macOS `ln -sfh`: BSD spells `--no-dereference` as `-h`. Without it,
+		// `cur` dereferences to `dir_a` and the link lands *inside* it.
+		let (code, stdout, stderr) = run_in(root.clone(), vec!["-sfh", "dir_b", "cur"]);
+		assert_eq!((code, stdout.as_str(), stderr.as_str()), (0, "", ""));
+		assert_eq!(fs::read_link(root.join("cur")).unwrap(), PathBuf::from("dir_b"));
+		assert!(!root.join("dir_a").join("dir_b").exists(), "must not link inside the target dir");
 	}
 
 	#[cfg(unix)]

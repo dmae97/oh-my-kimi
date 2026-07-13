@@ -212,19 +212,32 @@ mod tests {
 		let dir = tempfile::tempdir().unwrap();
 		std::fs::write(dir.path().join("file.txt"), "x marks\n").unwrap();
 		let (code, out, err) =
-			run_sed_in(dir.path().to_path_buf(), b"", &["-i", "s/x/y/", "file.txt"]);
+			run_sed_in(dir.path().to_path_buf(), b"", &["-i", "s/x marks/y marks/", "file.txt"]);
 		assert_eq!(code, 0, "stderr: {err}");
 		assert!(out.is_empty(), "in-place edit must not print: {out}");
 		assert_eq!(std::fs::read_to_string(dir.path().join("file.txt")).unwrap(), "y marks\n");
 	}
 
 	#[test]
+	fn bsd_empty_in_place_suffix_edits_without_backup() {
+		let dir = tempfile::tempdir().unwrap();
+		std::fs::write(dir.path().join("file.txt"), "x marks\n").unwrap();
+		let (code, out, err) =
+			run_sed_in(dir.path().to_path_buf(), b"", &["-i", "", "s/x marks/y marks/", "file.txt"]);
+		assert_eq!(code, 0, "stderr: {err}");
+		assert!(out.is_empty(), "in-place edit must not print: {out}");
+		assert_eq!(std::fs::read_to_string(dir.path().join("file.txt")).unwrap(), "y marks\n");
+		assert!(!dir.path().join("file.txt.bak").exists());
+	}
+
+	#[test]
 	fn in_place_backup_suffix_keeps_original() {
 		let dir = tempfile::tempdir().unwrap();
 		std::fs::write(dir.path().join("file.txt"), "x marks\n").unwrap();
-		let (code, _, err) =
+		let (code, out, err) =
 			run_sed_in(dir.path().to_path_buf(), b"", &["-i.bak", "s/x/y/", "file.txt"]);
 		assert_eq!(code, 0, "stderr: {err}");
+		assert!(out.is_empty(), "in-place edit must not print: {out}");
 		assert_eq!(std::fs::read_to_string(dir.path().join("file.txt")).unwrap(), "y marks\n");
 		assert_eq!(std::fs::read_to_string(dir.path().join("file.txt.bak")).unwrap(), "x marks\n");
 	}

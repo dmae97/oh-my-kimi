@@ -235,7 +235,7 @@ impl Params {
 		// Convert OsString template to string for processing
 		// When using -t flag, be permissive with invalid UTF-8 like GNU mktemp
 		// Otherwise, maintain strict UTF-8 validation (existing behavior)
-		let template_str = if options.treat_as_template {
+		let mut template_str = if options.treat_as_template {
 			// For -t templates, use lossy conversion for GNU compatibility
 			options.template.to_string_lossy().into_owned()
 		} else {
@@ -256,16 +256,28 @@ impl Params {
 		// Get the start and end indices of the randomized part of the template.
 		//
 		// For example, if the template is "abcXXXXyz", then `i` is 3 and `j` is 7.
-		let Some((i, j)) = find_last_contiguous_block_of_xs(&template_str) else {
-			let s = match options.suffix {
-				// If a suffix is specified, the error message includes the template without the suffix.
-				Some(_) => template_str
-					.chars()
-					.take(template_str.len())
-					.collect::<String>(),
-				None => template_str.clone(),
-			};
-			return Err(MkTempError::TooFewXs(s));
+		let (i, j) = match find_last_contiguous_block_of_xs(&template_str) {
+			Some(indices) => indices,
+			// pi-uutils: BSD `mktemp -t PREFIX` treats PREFIX as a name prefix,
+			// unlike GNU `-t`, which requires Xs and would otherwise fail here.
+			None if options.treat_as_template => {
+				template_str.push('.');
+				template_str.push_str("XXXXXXXXXX");
+				let j = template_str.len();
+				(j - 10, j)
+			},
+			None => {
+				let s = match options.suffix {
+					// If a suffix is specified, the error message includes the template without the
+					// suffix.
+					Some(_) => template_str
+						.chars()
+						.take(template_str.len())
+						.collect::<String>(),
+					None => template_str.clone(),
+				};
+				return Err(MkTempError::TooFewXs(s));
+			},
 		};
 
 		// Combine the directory given as an option and the prefix of the template.
@@ -827,6 +839,58 @@ mod tests {
 		assert_eq!(code, 1);
 		assert_eq!(stdout, "");
 		assert_eq!(stderr, "mktemp: too few X's in template 'foo.XX'\n");
+	}
+
+	#[test]
+	fn bsd_t_prefix_creates_file_in_tmpdir() {
+		let (_dir, root) = canonical_tempdir();
+
+		let (code, stdout, stderr) = run_in(root.clone(), tmpdir_env(&root), vec!["-t", "omp"]);
+		assert_eq!(code, 0);
+		assert_eq!(stderr, "");
+		let printed = PathBuf::from(stdout.trim_end_matches('\n'));
+		assert!(printed.is_file(), "printed path {printed:?} must be a regular file");
+		assert_eq!(printed.parent(), Some(root.as_path()));
+		let name = printed.file_name().unwrap().to_str().unwrap();
+		assert!(name.starts_with("omp."), "unexpected name {name}");
+		assert_eq!(name.len(), "omp.".len() + 10);
+	}
+
+	#[test]
+	fn bsd_t_prefix_creates_directory_with_d_flag() {
+		let (_dir, root) = canonical_tempdir();
+
+		let (code, stdout, stderr) = run_in(root.clone(), tmpdir_env(&root), vec!["-d", "-t", "pfx"]);
+		assert_eq!(code, 0);
+		assert_eq!(stderr, "");
+		let printed = PathBuf::from(stdout.trim_end_matches('\n'));
+		assert!(printed.is_dir(), "printed path {printed:?} must be a directory");
+		assert_eq!(printed.parent(), Some(root.as_path()));
+	}
+
+	#[test]
+	fn gnu_t_template_keeps_template_behavior() {
+		let (_dir, root) = canonical_tempdir();
+
+		let (code, stdout, stderr) = run_in(root.clone(), tmpdir_env(&root), vec!["-t", "fooXXXX"]);
+		assert_eq!(code, 0);
+		assert_eq!(stderr, "");
+		let printed = PathBuf::from(stdout.trim_end_matches('\n'));
+		assert!(printed.is_file(), "printed path {printed:?} must be a regular file");
+		assert_eq!(printed.parent(), Some(root.as_path()));
+		let name = printed.file_name().unwrap().to_str().unwrap();
+		assert!(name.starts_with("foo"), "unexpected name {name}");
+		assert_eq!(name.len(), "foo".len() + 4);
+	}
+
+	#[test]
+	fn template_without_xs_without_t_remains_an_error() {
+		let (_dir, root) = canonical_tempdir();
+
+		let (code, stdout, stderr) = run_in(root, HashMap::new(), vec!["prefix"]);
+		assert_eq!(code, 1);
+		assert_eq!(stdout, "");
+		assert_eq!(stderr, "mktemp: too few X's in template 'prefix'\n");
 	}
 
 	#[test]
