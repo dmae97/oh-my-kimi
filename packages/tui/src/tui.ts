@@ -2696,18 +2696,19 @@ export class TUI extends Container {
 		//     alternate screen to repaint the whole transcript on the normal
 		//     screen — then the next SIGWINCH re-enters the alt screen and paints
 		//     only the tail, so the block flashes in for one frame and vanishes.
-		// A forced render (tool finalization, reset, image reconciliation) must
-		// still preempt: it set #forceViewportRepaintOnNextRender via
-		// #prepareForcedRender and owns the next authoritative paint, so it falls
-		// through. A visible overlay composites over the transcript and needs the
-		// whole window, so it also falls through (overlay resizes are not on the
-		// drag-cost hot path).
-		if (
-			this.#resizeViewportActive &&
-			!this.#forceViewportRepaintOnNextRender &&
-			this.#hasEverRendered &&
-			this.#getTopmostVisibleOverlay() === undefined
-		) {
+		// A FORCED render mid-drag (tool finalization, resetDisplay, image
+		// reconciliation) also stays on the fast path: preempting would leave
+		// the borrowed alternate screen and run the geometry-rebuild full paint
+		// on the normal screen — ED3 plus an O(history) replay that visibly
+		// scrolls the whole transcript through the viewport, once per forced
+		// render and once more at settle. The forced intent is not lost: the
+		// fast path consumes neither #forceViewportRepaintOnNextRender nor
+		// #clearScrollbackOnNextRender, and the settle's authoritative
+		// requestRender(true) honors both — same fold-into-the-settle contract
+		// as the multiplexer resize debounce. A visible overlay composites over
+		// the transcript and needs the whole window, so it falls through
+		// (overlay resizes are not on the drag-cost hot path).
+		if (this.#resizeViewportActive && this.#hasEverRendered && this.#getTopmostVisibleOverlay() === undefined) {
 			this.#componentRenderTargets.clear();
 			this.#renderResizeViewport(width, height);
 			return;

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed forced renders (tool finalization, `resetDisplay`, image reconciliation) landing during a resize drag preempting the alternate-screen viewport fast path: each one left the borrowed alt screen, erased native scrollback (ED3), and visibly replayed the whole transcript on the normal screen mid-drag — then the settle replayed it again. Forced intent now folds into the single authoritative settle paint.
+
 ## [16.4.7] - 2026-07-12
 
 ### Fixed
