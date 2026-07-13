@@ -64,6 +64,17 @@ export interface LaunchRequest {
 	extraArgs?: string[];
 }
 
+/** POST /api/experiments/:id/arms body — a new comparable arm; sample+config inherited. */
+export interface AddArmRequest {
+	/** Arm label; becomes the `<id>-<arm>` job name. */
+	arm: string;
+	model: string;
+	slide?: LaunchRequest["slide"];
+	role?: RunRole;
+	note?: string;
+	extraArgs?: string[];
+}
+
 interface ManagedChild {
 	proc: Subprocess;
 	jobName: string;
@@ -89,6 +100,68 @@ function parseServerArgs(argv: string[]): { port: number; jobsDir: string } {
 	}
 	if (!Number.isSafeInteger(port) || port < 1 || port > 65535) throw new Error("--port must be 1..65535");
 	return { port, jobsDir };
+}
+
+/**
+ * Resolve the launch request for a new arm added to an existing experiment.
+ * Inherits the experiment's benchmark, dataset, and — crucially — the exact
+ * task sample from a sibling arm (its recorded `include`, else its observed
+ * trial tasks) so the arm is directly comparable. Only per-arm knobs (model,
+ * slide, role, note, extra args) come from `req`. Throws if the experiment has
+ * no runs to inherit from or the arm name is taken.
+ */
+export function resolveArmLaunch(store: RunStore, experimentId: string, req: AddArmRequest): LaunchRequest {
+	if (!req.arm || /[^\w.-]/.test(req.arm)) throw new Error("arm must be a non-empty [A-Za-z0-9_.-] token");
+	if (!req.model) throw new Error("model is required");
+	const siblings = store.listRuns().filter(r => experimentOf(r.jobName) === experimentId);
+	if (siblings.length === 0) throw new Error(`experiment '${experimentId}' has no runs to inherit from`);
+	// Template = the sibling with the most observed trials (most representative
+	// of the real sample); listRuns is newest-first so ties keep the newest.
+	let template = siblings[0];
+	let templateTrials = store.listTraces(template.jobName).length;
+	for (const r of siblings.slice(1)) {
+		const n = store.listTraces(r.jobName).length;
+		if (n > templateTrials) [template, templateTrials] = [r, n];
+	}
+	const cfg = template.config as Partial<LaunchRequest>;
+	const str = (v: unknown): string | undefined => (typeof v === "string" && v ? v : undefined);
+	const numberOr = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+	const strings = (v: unknown): string[] =>
+		Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+	// Exact task sample: prefer the intended include list, else observed trial tasks.
+	let include = strings(cfg.include);
+	if (include.length === 0) {
+		include = [
+			...new Set(
+				store
+					.listTraces(template.jobName)
+					.map(t => t.task)
+					.filter(Boolean),
+			),
+		];
+	}
+	const jobName = `${experimentId}-${req.arm}`;
+	if (store.getRun(jobName)) throw new Error(`arm '${req.arm}' already exists in '${experimentId}'`);
+	const conditions = strings(cfg.conditions);
+	return {
+		benchmark: template.benchmark,
+		model: req.model,
+		dataset: template.dataset,
+		include: include.length > 0 ? include : undefined,
+		tasks: include.length > 0 ? include.length : numberOr(cfg.tasks),
+		concurrency: numberOr(cfg.concurrency),
+		timeoutMultiplier: numberOr(cfg.timeoutMultiplier),
+		attempts: numberOr(cfg.attempts),
+		agent: str(cfg.agent),
+		webSearch: cfg.webSearch === true || undefined,
+		prebuiltBinaries: cfg.prebuiltBinaries === true || undefined,
+		conditions: conditions.length > 0 ? conditions : undefined,
+		jobName,
+		slide: req.slide,
+		role: req.role,
+		note: req.note,
+		extraArgs: req.extraArgs,
+	};
 }
 
 export class ManagerServer {
@@ -144,7 +217,7 @@ export class ManagerServer {
 		}
 	}
 
-	/** Bundle the React dashboard once per process; served at /app.js. */
+	/** Bundle the React dashboard once per process; served at /app.tsx (matches the Vite dev entry). */
 	async #appBundle(): Promise<string> {
 		if (this.#appBundleCode !== null) return this.#appBundleCode;
 		const result = await Bun.build({
@@ -180,7 +253,7 @@ export class ManagerServer {
 			if (p === "/" || p === "/index.html") {
 				return new Response(Bun.file(INDEX_HTML_PATH));
 			}
-			if (p === "/app.js") {
+			if (p === "/app.tsx") {
 				return new Response(await this.#appBundle(), {
 					headers: { "content-type": "text/javascript; charset=utf-8" },
 				});
@@ -202,6 +275,12 @@ export class ManagerServer {
 				const detail = experimentDetail(this.#store, id);
 				if (!detail) return Response.json({ error: "experiment not found" }, { status: 404 });
 				return Response.json(detail);
+			}
+			const armMatch = p.match(/^\/api\/experiments\/([^/]+)\/arms$/);
+			if (armMatch && request.method === "POST") {
+				const id = decodeURIComponent(armMatch[1]);
+				const body = (await request.json()) as AddArmRequest;
+				return Response.json(this.addArm(id, body), { status: 201 });
 			}
 			if (p === "/api/runs" && request.method === "GET") {
 				return Response.json(this.#store.listRuns());
@@ -379,6 +458,11 @@ export class ManagerServer {
 		}
 		this.#tick();
 		return { id, updatedRuns };
+	}
+
+	/** Add a comparable arm to an existing experiment, inheriting its sample + config. */
+	addArm(experimentId: string, req: AddArmRequest): { jobName: string; pid: number } {
+		return this.launch(resolveArmLaunch(this.#store, experimentId, req));
 	}
 
 	/** Cancel a manager-launched run (kills the runner; harbor children follow). */

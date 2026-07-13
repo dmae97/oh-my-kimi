@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { experimentDetail } from "./experiments";
-import { ManagerServer } from "./server";
+import { ManagerServer, resolveArmLaunch } from "./server";
 import { RunStore } from "./store";
 
 /**
@@ -291,5 +291,61 @@ describe("ManagerServer API", () => {
 			await fetch(`${base}/api/runs/snapcompact-arm/traces/${encodeURIComponent(snap.traces[0].name)}`)
 		).json()) as { entries: Array<{ kind: string }> };
 		expect(snapTrace.entries.map(entry => entry.kind)).toEqual(["question", "answer", "reference"]);
+	});
+});
+
+describe("resolveArmLaunch", () => {
+	it("inherits dataset + exact task sample + scale from a sibling arm", () => {
+		const store = new RunStore(makeJobsDir());
+		cleanups.push(() => store.close());
+		store.registerLaunch({
+			benchmark: "harbor",
+			jobName: "exp-base",
+			dataset: "swe-bench/swe-bench-verified",
+			agent: "omp",
+			models: ["anthropic/claude-opus-4-8"],
+			pid: 4321,
+			role: "baseline",
+			config: {
+				include: ["astropy__astropy-1", "django__django-2", "sympy__sympy-3"],
+				tasks: 3,
+				concurrency: 4,
+				timeoutMultiplier: 2,
+			},
+		});
+
+		const launch = resolveArmLaunch(store, "exp", {
+			arm: "n8",
+			model: "google/gemini-3.5-flash",
+			role: "variant",
+			note: "slide@8",
+			slide: { model: "google/gemini-3.5-flash", turns: 8 },
+		});
+
+		expect(launch.jobName).toBe("exp-n8");
+		expect(launch.dataset).toBe("swe-bench/swe-bench-verified");
+		expect(launch.include).toEqual(["astropy__astropy-1", "django__django-2", "sympy__sympy-3"]);
+		expect(launch.tasks).toBe(3);
+		expect(launch.concurrency).toBe(4);
+		expect(launch.timeoutMultiplier).toBe(2);
+		expect(launch.model).toBe("google/gemini-3.5-flash");
+		expect(launch.role).toBe("variant");
+		expect(launch.slide?.turns).toBe(8);
+	});
+
+	it("rejects a duplicate arm and an unknown experiment", () => {
+		const store = new RunStore(makeJobsDir());
+		cleanups.push(() => store.close());
+		store.registerLaunch({
+			benchmark: "harbor",
+			jobName: "exp-base",
+			dataset: "d",
+			agent: "omp",
+			models: ["m/x"],
+			pid: 1,
+			config: { include: ["t1"] },
+		});
+		expect(() => resolveArmLaunch(store, "exp", { arm: "base", model: "m/y" })).toThrow(/already exists/);
+		expect(() => resolveArmLaunch(store, "ghost", { arm: "x", model: "m/y" })).toThrow(/no runs to inherit/);
 	});
 });

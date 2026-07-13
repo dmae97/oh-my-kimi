@@ -144,6 +144,8 @@ function usePolled<T>(url: string | null, intervalMs: number): T | null {
 	return data;
 }
 
+const INPUT_CLASS = "rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm";
+
 const STATUS_CLASS: Record<string, string> = {
 	running: "text-sky-400 border-sky-400",
 	complete: "text-emerald-400 border-emerald-400",
@@ -426,7 +428,83 @@ function Delta({
 	return <span className={`ml-1 text-[10px] ${good ? "text-emerald-500" : "text-red-400"}`}>({body})</span>;
 }
 
+/**
+ * Launch a new arm into an existing experiment. The server inherits the
+ * experiment's dataset and exact task sample from a sibling arm, so only the
+ * arm-specific knobs (name, model, role, note, optional slide) are collected here.
+ */
+function AddArmForm({ experimentId, onDone }: { experimentId: string; onDone: () => void }) {
+	const [msg, setMsg] = useState("");
+	const submit = useCallback(
+		async (ev: React.FormEvent<HTMLFormElement>) => {
+			ev.preventDefault();
+			const f = new FormData(ev.currentTarget);
+			const body: Record<string, unknown> = { arm: f.get("arm"), model: f.get("model") };
+			if (f.get("role")) body.role = f.get("role");
+			if (f.get("note")) body.note = f.get("note");
+			const trigger = f.get("slideTrigger");
+			if (f.get("slideModel") && trigger) {
+				const slide: Record<string, unknown> = {
+					model: f.get("slideModel"),
+					plan: !!f.get("slidePlan"),
+					checklist: !!f.get("slideChecklist"),
+				};
+				if (trigger === "on-action") slide.onAction = true;
+				else slide.turns = Number(f.get("slideTurns") || 8);
+				body.slide = slide;
+			}
+			setMsg("launching…");
+			const res = await fetch(`/api/experiments/${encodeURIComponent(experimentId)}/arms`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(body),
+			});
+			const out = (await res.json()) as { jobName?: string; error?: string };
+			setMsg(res.ok ? `launched ${out.jobName}` : `error: ${out.error}`);
+			if (res.ok) setTimeout(onDone, 900);
+		},
+		[experimentId, onDone],
+	);
+	return (
+		<form
+			onSubmit={submit}
+			className="mb-4 grid grid-cols-4 gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 p-3 text-sm"
+		>
+			<input name="arm" placeholder="arm name (e.g. opus48)" required className={INPUT_CLASS} />
+			<input name="model" placeholder="model (provider/model)" required className={INPUT_CLASS} />
+			<select name="role" className={INPUT_CLASS} defaultValue="">
+				<option value="">role: unset</option>
+				<option value="baseline">baseline</option>
+				<option value="variant">variant</option>
+			</select>
+			<input name="note" placeholder="note (what this arm tests)" className={INPUT_CLASS} />
+			<input name="slideModel" placeholder="slide model (optional)" className={INPUT_CLASS} />
+			<select name="slideTrigger" className={INPUT_CLASS} defaultValue="">
+				<option value="">no slide</option>
+				<option value="on-action">on first edit/write</option>
+				<option value="turns">after N turns</option>
+			</select>
+			<input name="slideTurns" type="number" placeholder="slide turns" className={INPUT_CLASS} />
+			<label className="flex items-center gap-3 text-xs text-zinc-400">
+				<span className="flex items-center gap-1">
+					<input type="checkbox" name="slidePlan" /> plan
+				</span>
+				<span className="flex items-center gap-1">
+					<input type="checkbox" name="slideChecklist" /> checklist
+				</span>
+			</label>
+			<div className="col-span-4 flex items-center gap-3">
+				<button type="submit" className="rounded border border-zinc-600 px-3 py-1 hover:border-sky-400">
+					launch arm
+				</button>
+				<span className="text-xs text-zinc-500">inherits dataset + task sample from existing arms · {msg}</span>
+			</div>
+		</form>
+	);
+}
+
 function ExperimentPage({ id }: { id: string }) {
+	const [adding, setAdding] = useState(false);
 	const detail = usePolled<ExperimentDetail>(`/api/experiments/${encodeURIComponent(id)}`, 3000);
 	if (!detail) return <div className="p-10 text-zinc-500">loading…</div>;
 	const { arms, tasks, matrix, goal } = detail;
@@ -459,8 +537,16 @@ function ExperimentPage({ id }: { id: string }) {
 						</>
 					)}
 				</span>
+				<button
+					type="button"
+					onClick={() => setAdding(v => !v)}
+					className="ml-auto rounded border border-zinc-700 px-2 py-0.5 text-xs hover:border-sky-400"
+				>
+					{adding ? "cancel" : "+ add arm"}
+				</button>
 			</div>
 			{goal && <p className="mb-4 max-w-4xl text-sm text-zinc-400">{goal}</p>}
+			{adding && <AddArmForm experimentId={id} onDone={() => setAdding(false)} />}
 
 			<table className="mb-6 w-full text-sm">
 				<thead>
@@ -823,7 +909,7 @@ function LaunchForm({ onDone }: { onDone: () => void }) {
 		},
 		[onDone],
 	);
-	const input = "rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm";
+	const input = INPUT_CLASS;
 	return (
 		<form onSubmit={submit} className="grid grid-cols-4 gap-2 border-b border-zinc-800 bg-zinc-900/70 p-4 text-sm">
 			<select name="benchmark" className={input}>
