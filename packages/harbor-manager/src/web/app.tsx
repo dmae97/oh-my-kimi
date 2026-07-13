@@ -19,7 +19,7 @@ interface RunRow {
 	dataset: string;
 	agent: string;
 	models: string;
-	slide: string | null;
+	downshift: string | null;
 	config: Record<string, unknown>;
 	role: "baseline" | "variant" | "";
 	note: string;
@@ -383,7 +383,7 @@ const CELL_CLASS: Record<string, string> = {
 
 /**
  * The comparison anchor for an experiment: the completed baseline arm with the
- * highest pass rate (the "ceiling" a reasoning slide tries to preserve). Ties
+ * highest pass rate (the "ceiling" a downshift arm tries to preserve). Ties
  * break toward the cheaper arm. Returns null when no baseline has finished data.
  */
 function pickReferenceArm(arms: ArmSummary[]): ArmSummary | null {
@@ -431,7 +431,7 @@ function Delta({
 /**
  * Launch a new arm into an existing experiment. The server inherits the
  * experiment's dataset and exact task sample from a sibling arm, so only the
- * arm-specific knobs (name, model, role, note, optional slide) are collected here.
+ * arm-specific knobs (name, model, role, note, optional downshift) are collected here.
  */
 function AddArmForm({ experimentId, onDone }: { experimentId: string; onDone: () => void }) {
 	const [msg, setMsg] = useState("");
@@ -442,16 +442,8 @@ function AddArmForm({ experimentId, onDone }: { experimentId: string; onDone: ()
 			const body: Record<string, unknown> = { arm: f.get("arm"), model: f.get("model") };
 			if (f.get("role")) body.role = f.get("role");
 			if (f.get("note")) body.note = f.get("note");
-			const trigger = f.get("slideTrigger");
-			if (f.get("slideModel") && trigger) {
-				const slide: Record<string, unknown> = {
-					model: f.get("slideModel"),
-					plan: !!f.get("slidePlan"),
-					checklist: !!f.get("slideChecklist"),
-				};
-				if (trigger === "on-action") slide.onAction = true;
-				else slide.turns = Number(f.get("slideTurns") || 8);
-				body.slide = slide;
+			if (f.get("downshiftInto") || f.get("downshift")) {
+				body.downshift = f.get("downshiftInto") ? { into: f.get("downshiftInto") } : {};
 			}
 			setMsg("launching…");
 			const res = await fetch(`/api/experiments/${encodeURIComponent(experimentId)}/arms`, {
@@ -478,20 +470,9 @@ function AddArmForm({ experimentId, onDone }: { experimentId: string; onDone: ()
 				<option value="variant">variant</option>
 			</select>
 			<input name="note" placeholder="note (what this arm tests)" className={INPUT_CLASS} />
-			<input name="slideModel" placeholder="slide model (optional)" className={INPUT_CLASS} />
-			<select name="slideTrigger" className={INPUT_CLASS} defaultValue="">
-				<option value="">no slide</option>
-				<option value="on-action">on first edit/write</option>
-				<option value="turns">after N turns</option>
-			</select>
-			<input name="slideTurns" type="number" placeholder="slide turns" className={INPUT_CLASS} />
-			<label className="flex items-center gap-3 text-xs text-zinc-400">
-				<span className="flex items-center gap-1">
-					<input type="checkbox" name="slidePlan" /> plan
-				</span>
-				<span className="flex items-center gap-1">
-					<input type="checkbox" name="slideChecklist" /> checklist
-				</span>
+			<input name="downshiftInto" placeholder="downshift into (model, optional)" className={INPUT_CLASS} />
+			<label className="flex items-center gap-1 text-xs text-zinc-400">
+				<input type="checkbox" name="downshift" /> downshift (default smol)
 			</label>
 			<div className="col-span-4 flex items-center gap-3">
 				<button type="submit" className="rounded border border-zinc-600 px-3 py-1 hover:border-sky-400">
@@ -798,7 +779,7 @@ function RunsPage({ selected }: { selected: string | null }) {
 							<span className="text-xs text-zinc-500">
 								{detail.run.benchmark} · {detail.run.dataset} · {detail.run.models}
 								{detail.run.score !== null ? ` · score ${(100 * detail.run.score).toFixed(1)}%` : ""}
-								{detail.run.slide ? ` → ${detail.run.slide}` : ""}
+								{detail.run.downshift ? ` → ${detail.run.downshift}` : ""}
 							</span>
 							<div className="mt-1 flex gap-3 text-xs text-zinc-400">
 								{Object.entries(detail.run.metrics).map(([key, value]) => (
@@ -890,12 +871,8 @@ function LaunchForm({ onDone }: { onDone: () => void }) {
 			if (f.get("goal")) body.goal = f.get("goal");
 			if (f.get("role")) body.role = f.get("role");
 			if (f.get("note")) body.note = f.get("note");
-			const trigger = f.get("slideTrigger");
-			if (f.get("slideModel") && trigger) {
-				const slide: Record<string, unknown> = { model: f.get("slideModel"), plan: !!f.get("slidePlan") };
-				if (trigger === "on-action") slide.onAction = true;
-				else slide.turns = Number(f.get("slideTurns") || 8);
-				body.slide = slide;
+			if (f.get("downshiftInto") || f.get("downshift")) {
+				body.downshift = f.get("downshiftInto") ? { into: f.get("downshiftInto") } : {};
 			}
 			setMsg("launching…");
 			const res = await fetch("/api/runs", {
@@ -923,15 +900,9 @@ function LaunchForm({ onDone }: { onDone: () => void }) {
 			<input name="tasks" type="number" placeholder="task/passages limit" className={input} />
 			<input name="concurrency" type="number" placeholder="concurrency" className={input} />
 			<input name="timeoutMultiplier" type="number" step="0.5" placeholder="timeout ×" className={input} />
-			<input name="slideModel" placeholder="slide model" className={input} />
-			<select name="slideTrigger" className={input}>
-				<option value="">no slide</option>
-				<option value="on-action">on first edit/write</option>
-				<option value="turns">after N turns</option>
-			</select>
-			<input name="slideTurns" type="number" placeholder="slide turns" className={input} />
+			<input name="downshiftInto" placeholder="downshift into (model)" className={input} />
 			<label className="flex items-center gap-2 text-xs text-zinc-400">
-				<input type="checkbox" name="slidePlan" /> plan nudge
+				<input type="checkbox" name="downshift" /> downshift (default smol)
 			</label>
 			<input name="include" placeholder="include tasks, comma-sep" className={`${input} col-span-2`} />
 			<input name="conditions" placeholder="SnapCompact conditions, comma-sep" className={`${input} col-span-2`} />
@@ -945,7 +916,7 @@ function LaunchForm({ onDone }: { onDone: () => void }) {
 				<option value="baseline">baseline</option>
 				<option value="variant">variant</option>
 			</select>
-			<input name="note" placeholder="arm note (e.g. slide N=8)" className={input} />
+			<input name="note" placeholder="arm note (e.g. downshift flash)" className={input} />
 			<div className="col-span-4 flex items-center gap-3">
 				<button type="submit" className="rounded border border-zinc-600 px-3 py-1 hover:border-sky-400">
 					launch

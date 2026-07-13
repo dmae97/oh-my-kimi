@@ -19,7 +19,7 @@ export interface ArmSummary {
 	run: RunRow;
 	/** Arm label: job name minus the experiment prefix. */
 	arm: string;
-	/** Human config line: models plus slide description when known. */
+	/** Human config line: models plus downshift description when known. */
 	config: string;
 	/** Observed pass% over decided trials. */
 	passPct: number | null;
@@ -67,13 +67,22 @@ export function armOf(jobName: string): string {
 	return jobName.length > exp.length ? jobName.slice(exp.length + 1) : jobName;
 }
 
-function slideLabel(slideJson: string | null): string {
-	if (!slideJson) return "";
+function downshiftLabel(downshiftJson: string | null): string {
+	if (!downshiftJson) return "";
 	try {
-		const slide = JSON.parse(slideJson) as { model?: string; turns?: number; onAction?: boolean; plan?: boolean };
-		if (!slide.model) return "";
-		const trigger = slide.onAction ? "on first edit/write" : `after ${slide.turns} turns`;
-		return ` → ${slide.model} ${trigger}${slide.plan ? " +plan" : ""}`;
+		// Historical rows may hold legacy reasoning-slide JSON ({model, turns, onAction, plan}).
+		const parsed = JSON.parse(downshiftJson) as {
+			into?: string;
+			model?: string;
+			turns?: number;
+			onAction?: boolean;
+			plan?: boolean;
+		};
+		if (parsed.model) {
+			const trigger = parsed.onAction ? "on first edit/write" : `after ${parsed.turns} turns`;
+			return ` → ${parsed.model} ${trigger}${parsed.plan ? " +plan" : ""}`;
+		}
+		return ` → ${parsed.into ?? "smol"} at first edit/write`;
 	} catch {
 		return "";
 	}
@@ -102,7 +111,7 @@ export function summarizeArm(run: RunRow, traces: TraceRow[]): ArmSummary {
 	return {
 		run,
 		arm: armOf(run.jobName),
-		config: `${run.benchmark} · ${run.models}${slideLabel(run.slide)}`,
+		config: `${run.benchmark} · ${run.models}${downshiftLabel(run.downshift)}`,
 		passPct,
 		costPerTask,
 		meanTrialMs,

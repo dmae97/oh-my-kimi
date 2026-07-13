@@ -51,7 +51,8 @@ export interface LaunchRequest {
 	agent?: string;
 	jobName?: string;
 	webSearch?: boolean;
-	slide?: { model: string; turns?: number; onAction?: boolean; plan?: boolean; checklist?: boolean };
+	/** Downshift to a fast/cheap model at the first edit/write; `into` overrides the default "smol" target. */
+	downshift?: { into?: string };
 	/** Role of this run inside its experiment (baseline vs treatment). */
 	role?: RunRole;
 	/** One-line description of what this arm tests. */
@@ -69,7 +70,7 @@ export interface AddArmRequest {
 	/** Arm label; becomes the `<id>-<arm>` job name. */
 	arm: string;
 	model: string;
-	slide?: LaunchRequest["slide"];
+	downshift?: LaunchRequest["downshift"];
 	role?: RunRole;
 	note?: string;
 	extraArgs?: string[];
@@ -107,7 +108,7 @@ function parseServerArgs(argv: string[]): { port: number; jobsDir: string } {
  * Inherits the experiment's benchmark, dataset, and — crucially — the exact
  * task sample from a sibling arm (its recorded `include`, else its observed
  * trial tasks) so the arm is directly comparable. Only per-arm knobs (model,
- * slide, role, note, extra args) come from `req`. Throws if the experiment has
+ * downshift, role, note, extra args) come from `req`. Throws if the experiment has
  * no runs to inherit from or the arm name is taken.
  */
 export function resolveArmLaunch(store: RunStore, experimentId: string, req: AddArmRequest): LaunchRequest {
@@ -157,7 +158,7 @@ export function resolveArmLaunch(store: RunStore, experimentId: string, req: Add
 		prebuiltBinaries: cfg.prebuiltBinaries === true || undefined,
 		conditions: conditions.length > 0 ? conditions : undefined,
 		jobName,
-		slide: req.slide,
+		downshift: req.downshift,
 		role: req.role,
 		note: req.note,
 		extraArgs: req.extraArgs,
@@ -392,16 +393,13 @@ export class ManagerServer {
 				argv.push("--timeout-multiplier", String(request.timeoutMultiplier));
 			if (request.webSearch) argv.push("--web-search");
 			for (const task of request.include ?? []) argv.push("--include", task);
-			if (request.slide) {
-				argv.push("--agent-arg", "--reasoning-slide-model", "--agent-arg", request.slide.model);
-				if (request.slide.onAction) argv.push("--agent-arg", "--reasoning-slide-on-action");
-				else if (request.slide.turns !== undefined) {
-					argv.push("--agent-arg", "--reasoning-slide-turns", "--agent-arg", String(request.slide.turns));
-				} else throw new Error("slide requires turns or onAction");
-				if (request.slide.plan) argv.push("--agent-arg", "--reasoning-slide-plan");
-				if (request.slide.checklist) argv.push("--agent-arg", "--reasoning-slide-checklist");
-				const slideProvider = request.slide.model.split("/", 1)[0];
-				if (slideProvider) argv.push("--providers", slideProvider);
+			if (request.downshift) {
+				argv.push("--agent-arg", "--downshift");
+				if (request.downshift.into) {
+					argv.push("--agent-arg", "--downshift-into", "--agent-arg", request.downshift.into);
+					const provider = request.downshift.into.split("/", 1)[0];
+					if (provider && request.downshift.into.includes("/")) argv.push("--providers", provider);
+				}
 			}
 			if (request.prebuiltBinaries) {
 				for (const name of ["omp-linux-arm64", "omp-linux-x64"]) {
@@ -437,7 +435,7 @@ export class ManagerServer {
 			dataset,
 			agent: request.agent ?? "omp",
 			models: [request.model],
-			slide: request.slide,
+			downshift: request.downshift,
 			config: { ...request },
 			pid: proc.pid,
 			role: request.role,
