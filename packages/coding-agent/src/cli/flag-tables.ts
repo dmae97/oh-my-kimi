@@ -283,7 +283,6 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
 	"--advisor",
 	"--downshift",
 	"--no-downshift",
-	"--downshift-boomerang",
 	"--plan-yolo",
 	"--print",
 	"--print-thoughts",

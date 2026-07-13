@@ -73,7 +73,6 @@ function downshiftLabel(downshiftJson: string | null): string {
 		// Historical rows may hold legacy reasoning-slide JSON ({model, turns, onAction, plan}).
 		const parsed = JSON.parse(downshiftJson) as {
 			into?: string;
-			boomerang?: boolean;
 			model?: string;
 			turns?: number;
 			onAction?: boolean;
@@ -83,7 +82,7 @@ function downshiftLabel(downshiftJson: string | null): string {
 			const trigger = parsed.onAction ? "on first edit/write" : `after ${parsed.turns} turns`;
 			return ` → ${parsed.model} ${trigger}${parsed.plan ? " +plan" : ""}`;
 		}
-		return ` → ${parsed.into ?? "smol"} at first action${parsed.boomerang ? " ⮌ validate" : ""}`;
+		return ` → ${parsed.into ?? "smol"} at first action`;
 	} catch {
 		return "";
 	}

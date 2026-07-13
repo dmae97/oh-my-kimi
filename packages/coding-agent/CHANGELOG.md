@@ -9,7 +9,6 @@
 ### Added
 
 - Added `--downshift` / `--downshift-into <model>` / `--no-downshift`: start on a strong model, then hand off to a fast/cheap one (default the `smol` role) at the first edit/write tool call *after* the todo list has been initialized. The starting model handles all planning and todo initialization, and begins implementation, before handing off; the fast model includes a verify checklist before finishing. Enable per-user with the `downshift.enabled` setting; force it mid-session with the new `/downshift` slash command, which arms the switch.
-- Added `--downshift-boomerang` (setting `downshift.boomerang`): once the downshifted model yields naturally with all todos complete, the session hands back to the original model for a brief validation pass — the fast model's turns are cut from the LLM context (the visible transcript keeps them) and the original model gets the fast model's final report with instructions to verify completion and fix anything missing
 - Added display setting to toggle between collapsing or keeping compacted history inline, now applied to live session displays
 - Added a compact session-only model picker (Alt+P) for quick model switching without changing roles
 - Added `@` search to the Alt+P / `/switch` picker: it lists configured Ctrl+P quick roles in matching segment colors and applies the selected role's model and thinking for the current session.
@@ -19,7 +18,7 @@
 
 ### Changed
 
-- Updated `downshift.boomerang` instructions to require rigorous validation, including full module test runs and rejection of negative test cases, rather than relying on the fast model's summary report
+- Refined the downshift planning instructions to require a super-detailed todo list with one item per concrete step, each specifying its target and verification method
 - Updated tangential agent forks to ignore parent session history and focus exclusively on the new request
 - Hardened `/tan` fork isolation: the clone's inherited todo list is cleared at fork (parent todo reminders no longer drag the tan back onto the parent's task), the fork notice warns that the parent is concurrently editing the same working directory, and the notice is re-injected after each compaction so the fork boundary survives summarization
 - Added visual markers in the transcript for elided tool calls that have no corresponding result
@@ -28,6 +27,7 @@
 
 ### Removed
 
+- Removed the `--downshift-boomerang` feature and its associated configuration setting
 - Removed the unreliable Bing and Yahoo HTML-scraping web search providers
 
 ### Fixed

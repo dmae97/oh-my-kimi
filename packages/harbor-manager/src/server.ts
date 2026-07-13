@@ -51,9 +51,8 @@ export interface LaunchRequest {
 	agent?: string;
 	jobName?: string;
 	webSearch?: boolean;
-	/** Downshift to a fast/cheap model at the first edit/write once the todo list exists; `into` overrides the
-	 *  default "smol" target; `boomerang` hands back to the original model for a final validation pass. */
-	downshift?: { into?: string; boomerang?: boolean };
+	/** Downshift to a fast/cheap model at the first edit/write once the todo list exists; `into` overrides the default "smol" target. */
+	downshift?: { into?: string };
 	/** Role of this run inside its experiment (baseline vs treatment). */
 	role?: RunRole;
 	/** One-line description of what this arm tests. */
@@ -417,7 +416,6 @@ export class ManagerServer {
 					const provider = request.downshift.into.split("/", 1)[0];
 					if (provider && request.downshift.into.includes("/")) argv.push("--providers", provider);
 				}
-				if (request.downshift.boomerang) argv.push("--agent-arg", "--downshift-boomerang");
 			}
 			if (request.prebuiltBinaries) {
 				for (const name of ["omp-linux-arm64", "omp-linux-x64"]) {

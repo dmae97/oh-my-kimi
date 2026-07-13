@@ -433,18 +433,6 @@ export const SETTINGS_SCHEMA = {
 				"Start on the active model, then switch to a fast/cheap model (default the 'smol' role) at the first edit/write after the plan nudge's todo list exists — the strong model plans, commits the todos, and starts the implementation before handing off. Overridable per session with --downshift / --no-downshift.",
 		},
 	},
-	"downshift.boomerang": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "model",
-			group: "Downshift",
-			label: "Boomerang Validation",
-			description:
-				"After the downshifted model yields with all todos complete, hand back to the original model for a brief validation pass. The fast model's turns are cut from the LLM context at the hand-back; the visible history is untouched. Overridable per session with --downshift-boomerang.",
-			condition: "downshiftEnabled",
-		},
-	},
 	"advisor.subagents": {
 		type: "boolean",
 		default: false,

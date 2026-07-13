@@ -810,11 +810,8 @@ function AddArmForm({ experimentId, onDone }: { experimentId: string; onDone: ()
 			const body: Record<string, unknown> = { arm: f.get("arm"), model: f.get("model") };
 			if (f.get("role")) body.role = f.get("role");
 			if (f.get("note")) body.note = f.get("note");
-			if (f.get("downshiftInto") || f.get("downshift") || f.get("downshiftBoomerang")) {
-				body.downshift = {
-					...(f.get("downshiftInto") ? { into: f.get("downshiftInto") } : {}),
-					...(f.get("downshiftBoomerang") ? { boomerang: true } : {}),
-				};
+			if (f.get("downshiftInto") || f.get("downshift")) {
+				body.downshift = f.get("downshiftInto") ? { into: f.get("downshiftInto") } : {};
 			}
 			setMsg("launching…");
 			const res = await fetch(`/api/experiments/${encodeURIComponent(experimentId)}/arms`, {
@@ -842,13 +839,8 @@ function AddArmForm({ experimentId, onDone }: { experimentId: string; onDone: ()
 			</select>
 			<input name="note" placeholder="note (what this arm tests)" className={INPUT_CLASS} />
 			<input name="downshiftInto" placeholder="downshift into (model, optional)" className={INPUT_CLASS} />
-			<label className="flex items-center gap-3 text-xs text-zinc-400">
-				<span className="flex items-center gap-1">
-					<input type="checkbox" name="downshift" /> downshift
-				</span>
-				<span className="flex items-center gap-1">
-					<input type="checkbox" name="downshiftBoomerang" /> boomerang
-				</span>
+			<label className="flex items-center gap-1 text-xs text-zinc-400">
+				<input type="checkbox" name="downshift" /> downshift (default smol)
 			</label>
 			<div className="col-span-4 flex items-center gap-3">
 				<button type="submit" className="rounded border border-zinc-600 px-3 py-1 hover:border-sky-400">
@@ -1869,11 +1861,8 @@ function LaunchForm({ onDone }: { onDone: () => void }) {
 			if (f.get("goal")) body.goal = f.get("goal");
 			if (f.get("role")) body.role = f.get("role");
 			if (f.get("note")) body.note = f.get("note");
-			if (f.get("downshiftInto") || f.get("downshift") || f.get("downshiftBoomerang")) {
-				body.downshift = {
-					...(f.get("downshiftInto") ? { into: f.get("downshiftInto") } : {}),
-					...(f.get("downshiftBoomerang") ? { boomerang: true } : {}),
-				};
+			if (f.get("downshiftInto") || f.get("downshift")) {
+				body.downshift = f.get("downshiftInto") ? { into: f.get("downshiftInto") } : {};
 			}
 			setMsg("launching…");
 			const res = await fetch("/api/runs", {
@@ -1903,8 +1892,7 @@ function LaunchForm({ onDone }: { onDone: () => void }) {
 			<input name="timeoutMultiplier" type="number" step="0.5" placeholder="timeout ×" className={input} />
 			<input name="downshiftInto" placeholder="downshift into (model)" className={input} />
 			<label className="flex items-center gap-2 text-xs text-zinc-400">
-				<input type="checkbox" name="downshift" /> downshift
-				<input type="checkbox" name="downshiftBoomerang" /> boomerang
+				<input type="checkbox" name="downshift" /> downshift (default smol)
 			</label>
 			<input name="include" placeholder="include tasks, comma-sep" className={`${input} col-span-2`} />
 			<input name="conditions" placeholder="SnapCompact conditions, comma-sep" className={`${input} col-span-2`} />

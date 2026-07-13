@@ -78,7 +78,7 @@ export interface LaunchRecord {
 	dataset: string;
 	agent: string;
 	models: string[];
-	downshift?: { into?: string; boomerang?: boolean };
+	downshift?: { into?: string };
 	pid: number;
 	role?: RunRole;
 	note?: string;

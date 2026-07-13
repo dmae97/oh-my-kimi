@@ -30,7 +30,6 @@ export interface Args {
 	downshift?: boolean;
 	noDownshift?: boolean;
 	downshiftInto?: string;
-	downshiftBoomerang?: boolean;
 	planYolo?: boolean;
 	planYoloInto?: string;
 	maxTime?: number;
@@ -241,8 +240,6 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.downshift = true;
 		} else if (arg === "--no-downshift") {
 			result.noDownshift = true;
-		} else if (arg === "--downshift-boomerang") {
-			result.downshiftBoomerang = true;
 		} else if (arg === "--plan-yolo") {
 			result.planYolo = true;
 		} else if (arg === "--print" || arg === "-p") {
