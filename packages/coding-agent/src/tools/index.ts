@@ -50,6 +50,7 @@ import { GrepTool } from "./grep";
 import { InspectImageTool } from "./inspect-image";
 import { IrcTool, isIrcEnabled } from "./irc";
 import { JobTool } from "./job";
+import { LaunchTool } from "./launch";
 import { LearnTool } from "./learn";
 import { ManageSkillTool } from "./manage-skill";
 import { MemoryEditTool } from "./memory-edit";
@@ -89,6 +90,7 @@ export * from "./image-gen";
 export * from "./inspect-image";
 export * from "./irc";
 export * from "./job";
+export * from "./launch";
 export * from "./learn";
 export * from "./manage-skill";
 export * from "./memory-edit";
@@ -389,6 +391,7 @@ export type BuiltinToolLoadMode = "essential" | "discoverable";
 export const DEFAULT_ESSENTIAL_TOOL_NAMES: readonly string[] = [
 	"read",
 	"bash",
+	"launch",
 	"edit",
 	"write",
 	"glob",
@@ -448,6 +451,7 @@ export function filterInitialToolsForDiscoveryAll(
 export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	read: s => new ReadTool(s),
 	bash: s => new BashTool(s),
+	launch: s => new LaunchTool(s),
 	edit: s => new EditTool(s),
 	ast_grep: s => new AstGrepTool(s),
 	ast_edit: s => new AstEditTool(s),

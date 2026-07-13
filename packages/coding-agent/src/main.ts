@@ -50,6 +50,7 @@ import { injectOmpExtensionCliRoots } from "./discovery/omp-extension-roots";
 import { ExtensionRunner } from "./extensibility/extensions/runner";
 import type { ExtensionUIContext } from "./extensibility/extensions/types";
 import { scheduleMarketplaceAutoUpdate } from "./extensibility/plugins/marketplace-auto-update";
+import { registerDaemonProjectPresence } from "./launch/presence";
 import type { MCPManager } from "./mcp";
 import { InteractiveMode } from "./modes/interactive-mode";
 import type { PrintModeOptions } from "./modes/print-mode";
@@ -1047,11 +1048,12 @@ interface RunRootCommandDependencies {
 	settings?: Settings;
 	forceSetupWizard?: boolean;
 }
+const DEFAULT_RUN_ROOT_DEPENDENCIES: RunRootCommandDependencies = {};
 
 export async function runRootCommand(
 	parsed: Args,
 	rawArgs: string[],
-	deps: RunRootCommandDependencies = {},
+	deps: RunRootCommandDependencies = DEFAULT_RUN_ROOT_DEPENDENCIES,
 ): Promise<void> {
 	logger.startTiming();
 	startStartupWatchdog();
@@ -1308,6 +1310,9 @@ export async function runRootCommand(
 	}
 
 	await pluginPreloadPromise;
+	if (deps === DEFAULT_RUN_ROOT_DEPENDENCIES) {
+		await logger.time("registerDaemonProjectPresence", registerDaemonProjectPresence, cwd);
+	}
 
 	scheduleMarketplaceAutoUpdate({
 		autoUpdate: settingsInstance.get("marketplace.autoUpdate"),

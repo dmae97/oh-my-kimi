@@ -331,6 +331,25 @@ export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [
 		tool: "write",
 		message: "Use the `write` tool instead of echo/cat redirection. It handles encoding and provides confirmation.",
 	},
+	{
+		pattern: "^\\s*nohup\\s+|(?<!&)\\&\\s*$",
+		tool: "launch",
+		message:
+			"Use the `launch` tool instead of nohup or background shell syntax so the process stays observable and managed.",
+	},
+	{
+		pattern:
+			"^\\s*(?:(?:bun|npm|pnpm|yarn)\\s+(?:run\\s+)?(?:dev|start)(?:\\s|$)|(?:vite|next\\s+dev|nuxt\\s+dev|nodemon|lldb|gdb|tail\\s+-f)(?:\\s|$)|docker\\s+compose\\s+up(?!.*(?:\\s-d(?:\\s|$)|--detach))(?:\\s|$))",
+		tool: "launch",
+		message:
+			"Use the `launch` tool for services, watchers, and debuggers so other omp instances can observe and control them.",
+	},
+	{
+		pattern:
+			"^\\s*(?:(?:bun|npm|pnpm|yarn)\\s+(?:run\\s+)?\\S+|cargo\\s+watch|watchexec|pytest|vitest|jest|tsc)(?:.|\\n)*(?:--watch|-w)(?:\\s|$)",
+		tool: "launch",
+		message: "Use the `launch` tool for watch mode so its output, input, and lifecycle stay managed.",
+	},
 ];
 
 export const SETTINGS_SCHEMA = {

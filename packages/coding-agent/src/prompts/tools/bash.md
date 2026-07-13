@@ -5,6 +5,7 @@ Runs commands in the embedded shell — terminal ops: git, bun, cargo, python.
 The shell invokes **real binaries** with simple args. It is NOT full GNU Bash.
 
 Use bash ONLY for: a single binary call, or one short pipeline that COMPUTES a fact and does not depend on shell-specific regex/quoting (`wc -l`, `sort | uniq -c`, `comm`, `diff`, a checksum, `git status`).
+{{#if hasLaunch}}Long-running service, watcher, debugger, REPL, or process needing later input? MUST use `launch`, not bash.{{/if}}
 
 {{#if hasEval}}Anything below → `eval` cell, not bash:
 - Inline interpreter scripts (`-e`/`-c`/`--eval`) when an eval runtime exists for that language
@@ -33,7 +34,7 @@ Use bash ONLY for: a single binary call, or one short pipeline that COMPUTES a f
 - Internal URIs (`skill://`, `agent://`, …) auto-resolve to FS paths
 {{#if hasEval}}- Need exact pipeline semantics (`cmd | head`, multi-stage filtering) or output truncation? Prefer `eval` and process the stream directly.{{else}}- Need exact pipeline semantics (`cmd | head`, multi-stage filtering) or output truncation? Use a checked-in script, purpose-built tool, or single command that owns the output shape.{{/if}}
 {{#if asyncEnabled}}
-- `async: true` for long-running commands when you don't need immediate output: returns a background job ID; result delivered as a follow-up.
+- `async: true` defers reporting for finite commands that need no later input; completion arrives as a follow-up.
 {{/if}}
 </instruction>
 
@@ -42,6 +43,7 @@ Use bash ONLY for: a single binary call, or one short pipeline that COMPUTES a f
 {{#if hasGrep}}- NEVER shell out to search content or files: `grep/rg` → `grep`.{{else}}- Avoid shelling out for broad content search; use an active search/read tool when one is available.{{/if}}
 {{#if hasRead}}{{#if hasGlob}}- NEVER use `ls` or `find` to list or locate files — `ls` → `read` (a directory path lists entries), `find` → the `glob` tool (globbing). This is non-negotiable, even for a single quick listing.{{else}}- Prefer `read` for known file and directory reads. Only use shell listing when no file-listing tool is active.{{/if}}{{else}}{{#if hasGlob}}- Prefer `glob` for file discovery; avoid `find` when `glob` is active.{{else}}- If no file read/listing tool is active, keep shell inspection narrow and state that limitation.{{/if}}{{/if}}
 - Avoid head/tail/redirections: stderr already merged; long output auto-truncated, FULL capture kept at `artifact://<id>`.
+{{#if hasLaunch}}- NEVER launch daemons, watchers, dev servers, debuggers, or REPLs through bash/background shell syntax — use `launch`.{{/if}}
 </critical>
 
 <output>
@@ -52,9 +54,9 @@ Use bash ONLY for: a single binary call, or one short pipeline that COMPUTES a f
 {{#if asyncEnabled}}
 # Timeout and async
 
-- `timeout` is seconds; nonzero values are clamped to `1..3600` and the process is killed on elapse. Set `timeout: 0` only for commands that must run until completion or explicit cancellation.
-- `async: true` defers only reporting — it does NOT extend a nonzero timeout; use `timeout: 0` when a daemon or watcher must be cancellation-owned.
-- Need a daemon or >3600s run? Use `async: true` with `timeout: 0` when the harness should keep it alive until cancellation, or detach/manage lifecycle yourself (`cmd &`, supervisor, self-restarting script). The shell session persists across calls.
+- `timeout` is seconds; nonzero values are clamped to `1..3600` and the process is killed on elapse. Set `timeout: 0` only for finite commands whose completion is cancellation-owned.
+- `async: true` defers only reporting; it does NOT extend a nonzero timeout.
+{{#if hasLaunch}}- Need a service, watcher, debugger, REPL, or later stdin? MUST use `launch`. NEVER use `cmd &`, `nohup`, or async bash as a process supervisor.{{else}}- Need a long-running process or >3600s run? Use an external process supervisor; avoid detached shell jobs you cannot later observe or stop.{{/if}}
 {{/if}}
 {{#if autoBackgroundEnabled}}
 
