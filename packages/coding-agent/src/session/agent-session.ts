@@ -2998,7 +2998,7 @@ export class AgentSession {
 					// suspect-mark a credential on a transient advisor error).
 					const message = error instanceof Error ? error.message : String(error);
 					if (!isUsageLimitOutcome(extractHttpStatusFromError(error), message)) return;
-					await this.#modelRegistry.authStorage.markUsageLimitReached(
+					const result = await this.#modelRegistry.authStorage.markUsageLimitReached(
 						advisorModel.provider,
 						advisorProviderSessionId,
 						{
@@ -3007,6 +3007,7 @@ export class AgentSession {
 							modelId: advisorModel.id,
 						},
 					);
+					return result.switched;
 				},
 				notifyFailure: error => {
 					this.#advisorStatuses.set(slug, { name: advisorName, status: "error" });

@@ -58,7 +58,7 @@ export interface AdvisorRuntimeHost {
 	 * same usage-limited account on every retry. Errors thrown here are logged
 	 * and swallowed.
 	 */
-	onTurnError?(error: unknown): Promise<void> | void;
+	onTurnError?(error: unknown): Promise<boolean | undefined> | undefined;
 	/** Surface a non-recovering advisor failure to the host UI without adding model-visible context. */
 	notifyFailure?(error: unknown): void;
 	/** Signal that the advisor hit a quota/rate-limit. The host should update
@@ -388,56 +388,88 @@ export class AdvisorRuntime {
 					if (this.#epoch !== epoch) continue;
 					this.#rollbackFailedTurn(messageSnapshot);
 					if (isQuotaError(err)) {
-						logger.warn("advisor quota exhausted, pausing", { err: String(err) });
+						logger.warn("advisor quota exhausted", { err: String(err) });
 						// Call the usage-limit hook so AgentSession can block the
 						// exhausted credential via markUsageLimitReached before pausing.
-						// Without this, the cooldown reselects the same account.
+						// When the hook returns true, a sibling credential is available
+						// now — retry immediately instead of entering quota pause.
+						let switched = false;
+						try {
+							switched = (await this.host.onTurnError?.(err)) === true;
+						} catch (hookErr) {
+							logger.debug("advisor onTurnError hook failed", { err: String(hookErr) });
+						}
+						if (switched) {
+							// Sibling credential available — retry once with the new key.
+							const retrySnapshot = this.agent.state.messages.length;
+							try {
+								this.host.beginAdvisorUpdate?.();
+								await this.agent.prompt(batch);
+								const retryError = this.agent.state.error;
+								if (retryError) throw new Error(retryError);
+								success = true;
+								this.#consecutiveFailures = 0;
+								this.#failureNotified = false;
+							} catch {
+								this.#rollbackFailedTurn(retrySnapshot);
+								if (this.#epoch !== epoch) continue;
+								this.#quotaExhausted = true;
+								this.#consecutiveFailures = 0;
+								this.#failureNotified = false;
+								this.#seenContext.clear();
+								this.#pending.unshift({ text: batch, turns: finalTurns });
+								this.#wakeAllWaiters();
+								try {
+									this.host.notifyQuotaExhausted?.();
+								} catch (notifyErr) {
+									logger.warn("advisor quota notification failed", { err: String(notifyErr) });
+								}
+								break;
+							}
+						} else {
+							this.#quotaExhausted = true;
+							this.#consecutiveFailures = 0;
+							this.#failureNotified = false;
+							this.#seenContext.clear();
+							this.#pending.unshift({ text: batch, turns: finalTurns });
+							// Release catchup waiters: a quota-paused advisor can't make
+							// progress, so waitForCatchup must not block the primary agent.
+							this.#wakeAllWaiters();
+							try {
+								this.host.notifyQuotaExhausted?.();
+							} catch (notifyErr) {
+								logger.warn("advisor quota notification failed", { err: String(notifyErr) });
+							}
+							break;
+						}
+					} else {
+						logger.debug("advisor turn failed", { err: String(err) });
 						try {
 							await this.host.onTurnError?.(err);
 						} catch (hookErr) {
 							logger.debug("advisor onTurnError hook failed", { err: String(hookErr) });
 						}
-						this.#quotaExhausted = true;
-						this.#consecutiveFailures = 0;
-						this.#failureNotified = false;
-						this.#seenContext.clear();
-						this.#pending.unshift({ text: batch, turns: finalTurns });
-						// Release catchup waiters: a quota-paused advisor can't make
-						// progress, so waitForCatchup must not block the primary agent.
-						this.#wakeAllWaiters();
-						try {
-							this.host.notifyQuotaExhausted?.();
-						} catch (notifyErr) {
-							logger.warn("advisor quota notification failed", { err: String(notifyErr) });
-						}
-						break;
-					}
-					logger.debug("advisor turn failed", { err: String(err) });
-					try {
-						await this.host.onTurnError?.(err);
-					} catch (hookErr) {
-						logger.debug("advisor onTurnError hook failed", { err: String(hookErr) });
-					}
-					// The hook awaits; a reset during it invalidates this batch like the
-					// prompt await above — drop it instead of requeueing stale content.
-					if (this.#epoch !== epoch) continue;
-					this.#consecutiveFailures++;
-					if (this.#consecutiveFailures >= 3) {
-						logger.warn("advisor failed consecutively 3 times; dropping backlog to prevent stall");
-						if (!this.#failureNotified) {
-							this.#failureNotified = true;
-							try {
-								this.host.notifyFailure?.(err);
-							} catch (notifyErr) {
-								logger.warn("advisor failure notification failed", { err: String(notifyErr) });
+						// The hook awaits; a reset during it invalidates this batch like the
+						// prompt await above — drop it instead of requeueing stale content.
+						if (this.#epoch !== epoch) continue;
+						this.#consecutiveFailures++;
+						if (this.#consecutiveFailures >= 3) {
+							logger.warn("advisor failed consecutively 3 times; dropping backlog to prevent stall");
+							if (!this.#failureNotified) {
+								this.#failureNotified = true;
+								try {
+									this.host.notifyFailure?.(err);
+								} catch (notifyErr) {
+									logger.warn("advisor failure notification failed", { err: String(notifyErr) });
+								}
 							}
+							this.#consecutiveFailures = 0;
+							this.#seenContext.clear();
+							success = true;
+						} else {
+							this.#pending.unshift({ text: batch, turns: finalTurns });
+							await Bun.sleep(this.retryDelayMs);
 						}
-						this.#consecutiveFailures = 0;
-						this.#seenContext.clear();
-						success = true;
-					} else {
-						this.#pending.unshift({ text: batch, turns: finalTurns });
-						await Bun.sleep(this.retryDelayMs);
 					}
 				}
 

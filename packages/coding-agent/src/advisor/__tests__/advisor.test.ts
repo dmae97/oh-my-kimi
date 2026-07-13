@@ -1717,6 +1717,77 @@ describe("advisor", () => {
 			await runtime.waitForCatchup(30_000, 1);
 			expect(Date.now() - start).toBeLessThan(1000);
 		});
+		it("retries once when onTurnError signals a switched sibling credential", async () => {
+			const promptInputs: string[] = [];
+			let firstCall = true;
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					if (firstCall) {
+						firstCall = false;
+						throw new Error("insufficient_quota: you have exceeded your rate limit");
+					}
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			let quotaNotified = false;
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => [],
+				enqueueAdvice: () => {},
+				onTurnError: async () => true,
+				notifyQuotaExhausted: () => {
+					quotaNotified = true;
+				},
+			};
+			const runtime = new AdvisorRuntime(agent, host, 0);
+
+			const messages: AgentMessage[] = [{ role: "user", content: "quota-turn", timestamp: 1 } as AgentMessage];
+			runtime.onTurnEnd(messages);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+
+			// Sibling credential switched: retry succeeds, no quota pause.
+			expect(promptInputs).toHaveLength(2);
+			expect(runtime.quotaExhausted).toBe(false);
+			expect(quotaNotified).toBe(false);
+			expect(runtime.backlog).toBe(0);
+		});
+
+		it("falls through to quota pause when onTurnError returns false (no sibling)", async () => {
+			const promptInputs: string[] = [];
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					throw new Error("insufficient_quota: you have exceeded your rate limit");
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			let quotaNotified = false;
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => [],
+				enqueueAdvice: () => {},
+				onTurnError: async () => false,
+				notifyQuotaExhausted: () => {
+					quotaNotified = true;
+				},
+			};
+			const runtime = new AdvisorRuntime(agent, host, 0);
+
+			const messages: AgentMessage[] = [{ role: "user", content: "first", timestamp: 1 } as AgentMessage];
+			runtime.onTurnEnd(messages);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+
+			// No sibling: single prompt, then quota pause (no retry).
+			expect(promptInputs).toHaveLength(1);
+			expect(runtime.quotaExhausted).toBe(true);
+			expect(quotaNotified).toBe(true);
+		});
 	});
 
 	describe("advisor default tools", () => {
