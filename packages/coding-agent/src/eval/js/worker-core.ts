@@ -223,8 +223,8 @@ export class WorkerCore {
 		}
 	}
 
-	#ensureRuntime(snapshot: SessionSnapshot): JsRuntime {
-		this.#syncProcessCwd(snapshot.cwd);
+	#ensureRuntime(snapshot: SessionSnapshot, currentRunId?: string): JsRuntime {
+		this.#syncProcessCwd(snapshot.cwd, currentRunId);
 		if (this.#runtime) {
 			this.#runtime.setCwd(snapshot.cwd);
 			return this.#runtime;
@@ -237,8 +237,27 @@ export class WorkerCore {
 		return this.#runtime;
 	}
 
-	#syncProcessCwd(cwd: string): void {
+	#syncProcessCwd(cwd: string, currentRunId?: string): void {
 		if (this.#options.mode !== "isolated" || !this.#options.chdir) return;
+		try {
+			if (process.cwd() === cwd) return;
+		} catch {
+			// The current cwd was deleted; the chdir below is the recovery.
+		}
+		// Process cwd is realm-wide state. Moving it while another cell is mid-run
+		// would silently redirect that cell's `process.cwd()`, relative fs access,
+		// and child spawns, so keep it in place; this run still resolves against
+		// its own virtual cwd, and the next cell to start alone lands the move.
+		for (const runId of this.#runs.keys()) {
+			if (runId === currentRunId) continue;
+			this.#transport.send({
+				type: "log",
+				level: "warn",
+				msg: "JS eval subprocess kept its process cwd: other cells are mid-run",
+				meta: { cwd },
+			});
+			return;
+		}
 		try {
 			this.#options.chdir(cwd);
 		} catch (error) {
@@ -263,7 +282,7 @@ export class WorkerCore {
 		};
 		let result: RunResult;
 		try {
-			const runtime = this.#ensureRuntime(snapshot);
+			const runtime = this.#ensureRuntime(snapshot, runId);
 			runtime.setCwd(snapshot.cwd);
 			const value = await runtime.run(code, filename, hooks, { runId, cwd: snapshot.cwd });
 			runtime.displayValue(value, hooks);
