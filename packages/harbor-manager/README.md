@@ -52,6 +52,13 @@ bun run serve --port 4700
   SnapCompact uses `conditions` and treats `tasks` as the passage limit.
 - `GET /api/runs/:name` — `{ run, traces }` (syncs native artifacts on read).
 - `DELETE /api/runs/:name` — cancel a manager-launched run.
+- `POST /api/runs/:name/resume` — resume an incomplete harbor run in place:
+  completed trials (and their spend) are reused, interrupted/pending trials
+  re-run, and errored trials retried (body `{ "filterErrorTypes": [...] }`
+  overrides the retry set, which defaults to every exception type in the job's
+  `result.json`). The runner recovers the original launch flags from
+  `_bench/<name>/runner-config.json` (snapshotted at launch) or the run's
+  `manager.json` — nothing needs re-specifying.
 - `GET /api/runs/:name/traces/:trace[?raw=1]` — normalized or native trace.
 - `GET /api/events` — SSE stream of run-list snapshots (sent on change).
 
@@ -77,6 +84,8 @@ stays the source of truth and historical CLI runs are auto-discovered.
 | `--gateway-url <url>` | `http://host.docker.internal:4000` | `http://192.168.64.1:4000` under `--environment apple-container` |
 | `--no-gateway` | off | Pass host provider keys into containers instead |
 | `-o, --jobs-dir <path>` | `<repo>/runs/harbor` | Shared with the server |
+| `--resume <name\|path>` | — | Resume that job dir via `harbor job resume`; original flags recovered automatically |
+| `--filter-error-type <T>` | `CancelledError` | With `--resume`: also re-run completed trials that errored with exception type `T` (repeatable) |
 | `--dry-run` | off | Print the harbor command + models.yml and exit |
 
 ## Outputs

@@ -19,7 +19,8 @@ import * as path from "node:path";
 import type { Server, Subprocess } from "bun";
 import { BENCHMARK_DEFINITIONS } from "./benchmarks";
 import { buildExperiments, experimentDetail, experimentOf } from "./experiments";
-import { type BenchmarkKind, type RunRole, type RunRow, RunStore } from "./store";
+import { harborRunnerArgs, type LaunchRequest } from "./launch-args";
+import { type LaunchRecord, type RunRole, type RunRow, RunStore } from "./store";
 
 /** PUT /api/experiments/:id body — goal and per-run role/note/label metadata. */
 export interface ExperimentMetaUpdate {
@@ -33,39 +34,7 @@ const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
 const PKG_DIR = path.resolve(import.meta.dir, "..");
 const DEFAULT_JOBS_DIR = path.join(REPO_ROOT, "runs", "harbor");
 
-/** POST /api/runs body. Mirrors the runner CLI surface we actually use. */
-export interface LaunchRequest {
-	/** Benchmark adapter to execute. */
-	benchmark?: BenchmarkKind;
-	model: string;
-	dataset?: string;
-	/** Task count for a dataset sample, or omit when `include` is given. */
-	tasks?: number;
-	/** Explicit task names (passed as repeated --include). */
-	include?: string[];
-	concurrency?: number;
-	/** SnapCompact conditions; ignored by other benchmarks. */
-	conditions?: string[];
-	timeoutMultiplier?: number;
-	attempts?: number;
-	agent?: string;
-	jobName?: string;
-	webSearch?: boolean;
-	/** Harbor container backend. Defaults to apple-container whenever the Apple `container` CLI is installed; docker is an explicit opt-in. */
-	environment?: "docker" | "apple-container";
-	/** Prewalk to a fast/cheap model at the first edit/write once the todo list exists; `into` overrides the default "smol" target. */
-	prewalk?: { into?: string };
-	/** Role of this run inside its experiment (baseline vs treatment). */
-	role?: RunRole;
-	/** One-line description of what this arm tests. */
-	note?: string;
-	/** Experiment goal; upserted for the run's experiment (job-name prefix). */
-	goal?: string;
-	/** Use prebuilt dist/omp-linux-* binaries instead of the default source mount. */
-	prebuiltBinaries?: boolean;
-	/** Extra raw runner args, appended verbatim. */
-	extraArgs?: string[];
-}
+export type { LaunchRequest } from "./launch-args";
 
 /** POST /api/experiments/:id/arms body — a new comparable arm; sample+config inherited. */
 export interface AddArmRequest {
@@ -290,6 +259,12 @@ export class ManagerServer {
 				const body = (await request.json()) as LaunchRequest;
 				return Response.json(this.launch(body), { status: 201 });
 			}
+			const resumeMatch = p.match(/^\/api\/runs\/([^/]+)\/resume$/);
+			if (resumeMatch && request.method === "POST") {
+				const jobName = decodeURIComponent(resumeMatch[1]);
+				const body = (await request.json().catch(() => ({}))) as { filterErrorTypes?: string[] };
+				return Response.json(this.resume(jobName, body), { status: 201 });
+			}
 			const runMatch = p.match(/^\/api\/runs\/([^/]+)$/);
 			if (runMatch) {
 				const jobName = decodeURIComponent(runMatch[1]);
@@ -373,52 +348,70 @@ export class ManagerServer {
 			if (request.conditions?.length) argv.push("--conditions", request.conditions.join(","));
 		} else {
 			cwd = PKG_DIR;
-			argv = [
-				"bun",
-				"src/runner.ts",
-				"--model",
-				request.model,
-				"-d",
-				dataset,
-				"--job-name",
-				jobName,
-				"--jobs-dir",
-				this.jobsDir,
-			];
-			// Prefer Apple Container when its CLI is present: native arm64 task
-			// containers with no Docker daemon. The runner itself defaults to
-			// docker, so the preference must be stated here.
-			const environment = request.environment ?? (Bun.which("container") ? "apple-container" : "docker");
-			argv.push("--environment", environment);
-			if (request.agent) argv.push("--agent", request.agent);
-			// An explicit include list IS the sample — never let the runner's
-			// default task cap truncate it.
-			const tasks =
-				request.tasks ?? (request.include && request.include.length > 0 ? request.include.length : undefined);
-			if (tasks !== undefined) argv.push("--tasks", String(tasks));
-			if (request.concurrency !== undefined) argv.push("--concurrency", String(request.concurrency));
-			if (request.attempts !== undefined) argv.push("--attempts", String(request.attempts));
-			if (request.timeoutMultiplier !== undefined)
-				argv.push("--timeout-multiplier", String(request.timeoutMultiplier));
-			if (request.webSearch) argv.push("--web-search");
-			for (const task of request.include ?? []) argv.push("--include", task);
-			if (request.prewalk) {
-				argv.push("--agent-arg", "--prewalk");
-				if (request.prewalk.into) {
-					argv.push("--agent-arg", "--prewalk-into", "--agent-arg", request.prewalk.into);
-					const provider = request.prewalk.into.split("/", 1)[0];
-					if (provider && request.prewalk.into.includes("/")) argv.push("--providers", provider);
-				}
-			}
-			if (request.prebuiltBinaries) {
-				for (const name of ["omp-linux-arm64", "omp-linux-x64"]) {
-					const binary = path.join(REPO_ROOT, "packages", "coding-agent", "dist", name);
-					if (fs.existsSync(binary)) argv.push("--binary", binary);
-				}
-			}
+			argv = ["bun", "src/runner.ts", ...harborRunnerArgs(request, { jobsDir: this.jobsDir, jobName, dataset })];
 		}
-		argv.push(...(request.extraArgs ?? []));
+		if (benchmark !== "harbor") argv.push(...(request.extraArgs ?? []));
 
+		const pid = this.#spawnRunner(argv, cwd, {
+			benchmark,
+			jobName,
+			dataset,
+			agent: request.agent ?? "omp",
+			models: [request.model],
+			prewalk: request.prewalk,
+			config: { ...request },
+			role: request.role,
+			note: request.note,
+		});
+		if (request.goal) this.#store.setExperimentGoal(experimentOf(jobName), request.goal);
+		return { jobName, pid };
+	}
+
+	/**
+	 * Resume a harbor run in place via the runner's `--resume`: completed
+	 * trials (and their spend) are reused, interrupted/pending trials re-run,
+	 * and errored trials are evicted for retry. The runner recovers the
+	 * original launch flags from the run's recorded config, so nothing needs
+	 * re-specifying. `filterErrorTypes` overrides the default retry set
+	 * (every exception type recorded in the job's result.json).
+	 */
+	resume(jobName: string, opts: { filterErrorTypes?: string[] } = {}): { jobName: string; pid: number } {
+		const run = this.#store.getRun(jobName);
+		if (!run) throw new Error(`run ${jobName} not found`);
+		if (run.benchmark !== "harbor")
+			throw new Error(`resume supports only harbor runs (${jobName} is ${run.benchmark})`);
+		if (this.#children.has(jobName) || run.status === "running") {
+			throw new Error(`run ${jobName} is already running`);
+		}
+		const jobDir = path.join(this.jobsDir, jobName);
+		if (!fs.existsSync(path.join(jobDir, "config.json"))) {
+			throw new Error(`${jobName} has no harbor config.json to resume from`);
+		}
+		const argv = ["bun", "src/runner.ts", "--resume", jobName, "--jobs-dir", this.jobsDir];
+		for (const t of opts.filterErrorTypes ?? erroredExceptionTypes(jobDir)) argv.push("--filter-error-type", t);
+		let prewalk: LaunchRequest["prewalk"];
+		try {
+			prewalk = run.prewalk ? (JSON.parse(run.prewalk) as { into?: string }) : undefined;
+		} catch {
+			prewalk = undefined;
+		}
+		const pid = this.#spawnRunner(argv, PKG_DIR, {
+			benchmark: "harbor",
+			jobName,
+			dataset: run.dataset,
+			agent: run.agent,
+			models: run.models ? run.models.split(",") : [],
+			prewalk,
+			config: run.config,
+			role: run.role,
+			note: run.note,
+		});
+		return { jobName, pid };
+	}
+
+	/** Spawn a detached runner child, wire its exit back into the store, and register the run. */
+	#spawnRunner(argv: string[], cwd: string, record: Omit<LaunchRecord, "pid">): number {
+		const jobName = record.jobName;
 		const logDir = path.join(this.jobsDir, "_manager", "logs");
 		fs.mkdirSync(logDir, { recursive: true });
 		const logFile = fs.openSync(path.join(logDir, `${jobName}.log`), "w");
@@ -447,21 +440,9 @@ export class ManagerServer {
 			this.#children.delete(jobName);
 			this.#tick();
 		});
-		this.#store.registerLaunch({
-			benchmark,
-			jobName,
-			dataset,
-			agent: request.agent ?? "omp",
-			models: [request.model],
-			prewalk: request.prewalk,
-			config: { ...request },
-			pid: proc.pid,
-			role: request.role,
-			note: request.note,
-		});
-		if (request.goal) this.#store.setExperimentGoal(experimentOf(jobName), request.goal);
+		this.#store.registerLaunch({ ...record, pid: proc.pid });
 		this.#tick();
-		return { jobName, pid: proc.pid };
+		return proc.pid;
 	}
 
 	/** Apply goal + per-run role/note metadata; used by the UI and for backfill. */
@@ -590,6 +571,24 @@ export class ManagerServer {
 			}
 		}
 		return Response.json({ jobName, trace: traceName, entries: entries.slice(-n), totalEvents: lines.length });
+	}
+}
+/**
+ * Exception types recorded in a job's result.json — the errored trials a
+ * resume retries by default (reward-0 fails are completed results and stay).
+ */
+function erroredExceptionTypes(jobDir: string): string[] {
+	try {
+		const raw = JSON.parse(fs.readFileSync(path.join(jobDir, "result.json"), "utf8")) as {
+			stats?: { evals?: Record<string, { exception_stats?: Record<string, unknown> }> };
+		};
+		const types = new Set<string>();
+		for (const ev of Object.values(raw.stats?.evals ?? {})) {
+			for (const t of Object.keys(ev.exception_stats ?? {})) types.add(t);
+		}
+		return [...types];
+	} catch {
+		return [];
 	}
 }
 

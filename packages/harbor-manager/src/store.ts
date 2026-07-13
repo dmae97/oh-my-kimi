@@ -331,6 +331,15 @@ export class RunStore {
 				trace_path = excluded.trace_path, updated_at = excluded.updated_at`,
 		);
 		const tx = this.#db.transaction(() => {
+			// Prune rows whose trial dirs vanished from disk (a resume deletes
+			// interrupted trial dirs and re-runs the task under a fresh suffix) —
+			// otherwise phantom `running` rows haunt the dashboard forever.
+			if (snapshot.traces.length > 0) {
+				const names = snapshot.traces.map(t => t.name);
+				this.#db
+					.query(`DELETE FROM trials WHERE job_name = ? AND name NOT IN (${names.map(() => "?").join(",")})`)
+					.run(jobName, ...names);
+			}
 			for (const trace of snapshot.traces) {
 				upsert.run(
 					jobName,

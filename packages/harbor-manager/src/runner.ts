@@ -19,6 +19,7 @@ import * as path from "node:path";
  *   harbor-manager harbor --help
  */
 import type { Server } from "bun";
+import { harborRunnerArgs, type LaunchRequest } from "./launch-args";
 
 // ────────────────────────────────────────────────────────────────────── config
 
@@ -76,6 +77,10 @@ export interface Config {
 	cleanup: boolean;
 	cleanupForce: boolean;
 	hostNetwork: boolean;
+	/** Job name (or job dir path) to resume via `harbor job resume` instead of starting a new run. */
+	resume: string | null;
+	/** With resume: evict+re-run completed trials that errored with these exception types. */
+	filterErrorTypes: string[];
 	/** Harbor environment backend running the task containers. */
 	envType: "docker" | "apple-container";
 	passthrough: string[];
@@ -115,6 +120,8 @@ function defaultConfig(): Config {
 		cleanup: false,
 		cleanupForce: false,
 		hostNetwork: false,
+		resume: null,
+		filterErrorTypes: [],
 		envType: "docker",
 		passthrough: [],
 		env: {},
@@ -166,6 +173,11 @@ Environment:
 Output / control:
   -o, --jobs-dir <path>          Default <repo>/runs/harbor
       --job-name <name>          Default <model>-<timestamp>
+      --resume <name|path>       Resume that job dir: the original launch flags are recovered
+                                 automatically (runner-config.json / manager.json), completed
+                                 trials are kept and paid for once, the rest re-run
+      --filter-error-type <T>    With --resume: also re-run completed trials whose exception
+                                 type is <T> (repeatable; CancelledError is always evicted)
       --dry-run                  Print the harbor command + models.yml and exit
       --cleanup                  Clean up stale and exited Harbor Docker resources safely before starting (docker only)
       --cleanup-force            Force-stop and remove ALL previous Harbor Docker containers and networks (docker only)
@@ -296,6 +308,12 @@ export function parseArgs(argv: string[]): Config {
 			case "--job-name":
 				cfg.jobName = take(arg);
 				break;
+			case "--resume":
+				cfg.resume = take(arg);
+				break;
+			case "--filter-error-type":
+				cfg.filterErrorTypes.push(take(arg));
+				break;
 			case "--timeout-multiplier":
 				cfg.timeoutMultiplier = Number(take(arg));
 				break;
@@ -353,6 +371,70 @@ export function parseArgs(argv: string[]): Config {
 	return cfg;
 }
 
+// ─────────────────────────────────────────────────────────────────── resume
+
+/** manager.json launch record written by RunStore.registerLaunch. */
+interface ManagerRecord {
+	benchmark?: string;
+	dataset?: string;
+	config?: LaunchRequest;
+}
+
+/**
+ * Recover the original launch Config for `--resume <job>` — nothing needs
+ * re-specifying. Prefers the exact Config snapshot recorded at launch
+ * (`_bench/<job>/runner-config.json`), falling back to rebuilding runner argv
+ * from the manager.json launch record of API-launched runs. The job dir's own
+ * harbor config.json decides the container backend: harbor rejects a resume
+ * whose reconstructed config differs from the recorded one.
+ */
+export function resolveResumeConfig(cli: Config): Config {
+	const spec = cli.resume as string;
+	const jobsDir = spec.includes(path.sep) ? path.dirname(path.resolve(spec)) : cli.jobsDir;
+	const jobName = path.basename(spec);
+	const jobDir = path.join(jobsDir, jobName);
+	const jobConfig = readJson(path.join(jobDir, "config.json")) as { environment?: { type?: string } } | null;
+	if (!jobConfig) throw new Error(`--resume: ${jobDir} has no harbor config.json (not a harbor job dir)`);
+
+	let cfg: Config | null = null;
+	const saved = readJson(path.join(jobsDir, "_bench", jobName, "runner-config.json"));
+	if (saved && typeof saved === "object") {
+		cfg = { ...defaultConfig(), ...(saved as Partial<Config>) };
+	} else {
+		const manager = readJson(path.join(jobDir, "manager.json")) as ManagerRecord | null;
+		if (manager?.config) {
+			if (manager.benchmark && manager.benchmark !== "harbor") {
+				throw new Error(`--resume supports only harbor runs (${jobName} is ${manager.benchmark})`);
+			}
+			const dataset = manager.config.dataset ?? manager.dataset ?? "terminal-bench@2.0";
+			cfg = parseArgs(harborRunnerArgs(manager.config, { jobsDir, jobName, dataset }));
+		}
+	}
+	if (!cfg) {
+		throw new Error(
+			`--resume: no recorded launch config for ${jobName} ` +
+				`(missing both _bench/${jobName}/runner-config.json and ${jobName}/manager.json)`,
+		);
+	}
+	cfg.jobsDir = jobsDir;
+	cfg.jobName = jobName;
+	cfg.resume = spec;
+	// The recorded backend wins over any reconstruction-time preference
+	// (e.g. apple-container auto-detection added after the original run).
+	const recorded = jobConfig.environment?.type;
+	if ((recorded === "docker" || recorded === "apple-container") && cfg.envType !== recorded) {
+		if (recorded === "apple-container" && cfg.gatewayUrl === DOCKER_GATEWAY_URL) cfg.gatewayUrl = VMNET_GATEWAY_URL;
+		else if (recorded === "docker" && cfg.gatewayUrl === VMNET_GATEWAY_URL) cfg.gatewayUrl = DOCKER_GATEWAY_URL;
+		cfg.envType = recorded;
+	}
+	// Knobs owned by the resume invocation, not the original launch.
+	cfg.filterErrorTypes = cli.filterErrorTypes;
+	cfg.passthrough = cli.passthrough;
+	cfg.dryRun = cli.dryRun;
+	cfg.cleanup = cli.cleanup;
+	cfg.cleanupForce = cli.cleanupForce;
+	return cfg;
+}
 // ──────────────────────────────────────────────────────────────────── helpers
 
 const isTTY = Boolean(process.stdout.isTTY);
@@ -1255,6 +1337,20 @@ function buildHarborArgs(
 	a.push(...cfg.passthrough);
 	return a;
 }
+/**
+ * `harbor job resume` argv for an existing job dir: trial dirs with a
+ * result.json are kept (their spend is reused), the rest re-run. Explicit
+ * `-f` values REPLACE harbor's CancelledError default, so it is always
+ * re-added alongside the caller's filters.
+ */
+export function buildResumeArgs(cfg: Config, jobDir: string): string[] {
+	const a: string[] = ["job", "resume", "-p", jobDir];
+	if (cfg.filterErrorTypes.length > 0) {
+		for (const t of new Set(["CancelledError", ...cfg.filterErrorTypes])) a.push("-f", t);
+	}
+	a.push(...cfg.passthrough);
+	return a;
+}
 
 const FORWARD_ENV_DENYLIST = new Set([
 	"PI_CODING_AGENT_DIR",
@@ -1461,6 +1557,11 @@ async function runBenchmark(cfg: Config): Promise<BenchmarkRun> {
 	const jobDir = path.join(cfg.jobsDir, jobName);
 	const benchDir = path.join(cfg.jobsDir, "_bench", jobName);
 	fs.mkdirSync(benchDir, { recursive: true });
+	if (!cfg.resume && !cfg.dryRun) {
+		// Snapshot the resolved launch config so a later `--resume <job>` can
+		// rebuild the exact same invocation without re-specifying flags.
+		fs.writeFileSync(path.join(benchDir, "runner-config.json"), JSON.stringify({ ...cfg, jobName }, null, "\t"));
+	}
 
 	const version = readPkgVersion();
 
@@ -1498,7 +1599,9 @@ async function runBenchmark(cfg: Config): Promise<BenchmarkRun> {
 	const composeOverlayPath = cfg.envType === "docker" ? writeComposeOverlay(benchDir, cfg, source) : null;
 	const mountsJson = cfg.envType === "docker" ? null : buildMountsJson(source);
 
-	const harborArgs = buildHarborArgs(cfg, jobName, modelsYaml, tarball, composeOverlayPath, mountsJson);
+	const harborArgs = cfg.resume
+		? buildResumeArgs(cfg, jobDir)
+		: buildHarborArgs(cfg, jobName, modelsYaml, tarball, composeOverlayPath, mountsJson);
 	const harborEnv = buildHarborEnv(cfg, modelsYaml, tarball, version, source);
 	const logPath = path.join(benchDir, "harbor.log");
 	if (cfg.dryRun) {
@@ -1540,7 +1643,9 @@ async function runBenchmark(cfg: Config): Promise<BenchmarkRun> {
 		stdin: "ignore",
 	});
 
-	const expected = Math.max(1, cfg.tasks * cfg.attempts * cfg.models.length);
+	const expected = cfg.resume
+		? (readJobResult(jobDir)?.nTotal ?? Math.max(1, cfg.tasks * cfg.attempts * cfg.models.length))
+		: Math.max(1, cfg.tasks * cfg.attempts * cfg.models.length);
 	const st: RenderState = { cfg, jobDir, logPath, startMs: Date.now(), expected, tick: 0 };
 
 	if (isTTY) process.stdout.write(`${ESC}?1049h${ESC}?25l`); // alt screen, hide cursor
@@ -1610,7 +1715,8 @@ async function main(): Promise<void> {
 		runDockerCleanup(true);
 		return;
 	}
-	const cfg = parseArgs(argv);
+	let cfg = parseArgs(argv);
+	if (cfg.resume) cfg = resolveResumeConfig(cfg);
 	const exitCode = (await runBenchmark(cfg)).exitCode;
 	process.exit(exitCode);
 }

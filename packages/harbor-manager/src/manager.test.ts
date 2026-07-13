@@ -319,6 +319,53 @@ describe("ManagerServer API", () => {
 		).json()) as { entries: Array<{ kind: string }> };
 		expect(snapTrace.entries.map(entry => entry.kind)).toEqual(["question", "answer", "reference"]);
 	});
+	it("guards resume: unknown, non-harbor, running, and config-less runs are rejected", async () => {
+		const jobsDir = makeJobsDir();
+		const manager = new ManagerServer(jobsDir);
+		manager.store.registerLaunch({
+			benchmark: "edit",
+			jobName: "edit-x",
+			dataset: "typescript-edit",
+			agent: "edit",
+			models: ["m/x"],
+			pid: process.pid,
+		});
+		manager.store.markExit("edit-x", 1);
+		// A live harbor run: pid is this test process, never marked exited.
+		manager.store.registerLaunch({
+			benchmark: "harbor",
+			jobName: "job-live",
+			dataset: "terminal-bench@2.0",
+			agent: "omp",
+			models: ["m/x"],
+			pid: process.pid,
+		});
+		// A failed harbor run whose job dir has no harbor config.json.
+		manager.store.registerLaunch({
+			benchmark: "harbor",
+			jobName: "job-bare",
+			dataset: "terminal-bench@2.0",
+			agent: "omp",
+			models: ["m/x"],
+			pid: process.pid,
+		});
+		manager.store.markExit("job-bare", 1);
+		const server = manager.start(0);
+		cleanups.push(() => {
+			void manager.stop();
+		});
+		const base = `http://localhost:${server.port}`;
+		const resumeError = async (name: string): Promise<string> => {
+			const res = await fetch(`${base}/api/runs/${name}/resume`, { method: "POST" });
+			expect(res.status).toBe(400);
+			return ((await res.json()) as { error: string }).error;
+		};
+
+		expect(await resumeError("nope")).toMatch(/not found/);
+		expect(await resumeError("edit-x")).toMatch(/only harbor/);
+		expect(await resumeError("job-live")).toMatch(/already running/);
+		expect(await resumeError("job-bare")).toMatch(/no harbor config.json/);
+	});
 });
 
 describe("resolveArmLaunch", () => {

@@ -1698,6 +1698,11 @@ function RunsPage({ selected }: { selected: string | null }) {
 	const cancel = useCallback(async (name: string) => {
 		if (confirm(`stop ${name}?`)) await fetch(`/api/runs/${encodeURIComponent(name)}`, { method: "DELETE" });
 	}, []);
+	const resume = useCallback(async (name: string) => {
+		if (!confirm(`resume ${name}? completed trials are kept; interrupted, pending, and errored ones re-run`)) return;
+		const res = await fetch(`/api/runs/${encodeURIComponent(name)}/resume`, { method: "POST" });
+		if (!res.ok) alert((await res.json().catch(() => null))?.error ?? `resume failed (${res.status})`);
+	}, []);
 
 	if (!runs) return <div className="p-10 text-zinc-500">loading…</div>;
 	return (
@@ -1743,7 +1748,7 @@ function RunsPage({ selected }: { selected: string | null }) {
 								</td>
 								<td>{fmtUsd(r.costUsd)}</td>
 								<td>
-									{r.status === "running" && (
+									{r.status === "running" ? (
 										<button
 											type="button"
 											onClick={ev => {
@@ -1754,6 +1759,20 @@ function RunsPage({ selected }: { selected: string | null }) {
 										>
 											stop
 										</button>
+									) : (
+										r.benchmark === "harbor" &&
+										(r.done < r.nTotal || r.error > 0) && (
+											<button
+												type="button"
+												onClick={ev => {
+													ev.stopPropagation();
+													void resume(r.jobName);
+												}}
+												className="rounded border border-zinc-700 px-2 text-xs hover:border-emerald-500 hover:text-emerald-400"
+											>
+												resume
+											</button>
+										)
 									)}
 								</td>
 							</tr>

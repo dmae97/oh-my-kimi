@@ -2,7 +2,14 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildHarborEnv, collectForwardEnv, parseArgs, readTrials } from "./runner";
+import {
+	buildHarborEnv,
+	buildResumeArgs,
+	collectForwardEnv,
+	parseArgs,
+	readTrials,
+	resolveResumeConfig,
+} from "./runner";
 
 describe("generic agent-arg / env passthrough", () => {
 	it("forwards repeated --agent-arg as a JSON array the in-container agent can parse", () => {
@@ -169,5 +176,115 @@ describe("live-trial cost probe", () => {
 		} finally {
 			fs.rmSync(jobDir, { recursive: true, force: true });
 		}
+	});
+});
+describe("resume", () => {
+	const mkJob = (opts: {
+		envType?: string;
+		managerConfig?: Record<string, unknown>;
+		runnerConfig?: Record<string, unknown>;
+	}): { jobsDir: string; jobName: string } => {
+		const jobsDir = fs.mkdtempSync(path.join(os.tmpdir(), "harbor-resume-test-"));
+		const jobName = "job-x";
+		const jobDir = path.join(jobsDir, jobName);
+		fs.mkdirSync(jobDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(jobDir, "config.json"),
+			JSON.stringify({ environment: { type: opts.envType ?? "docker" } }),
+		);
+		if (opts.managerConfig) {
+			fs.writeFileSync(
+				path.join(jobDir, "manager.json"),
+				JSON.stringify({
+					benchmark: "harbor",
+					jobName,
+					dataset: "swe-bench/swe-bench-verified",
+					config: opts.managerConfig,
+				}),
+			);
+		}
+		if (opts.runnerConfig) {
+			const benchDir = path.join(jobsDir, "_bench", jobName);
+			fs.mkdirSync(benchDir, { recursive: true });
+			fs.writeFileSync(path.join(benchDir, "runner-config.json"), JSON.stringify(opts.runnerConfig));
+		}
+		return { jobsDir, jobName };
+	};
+
+	it("recovers the full launch config from manager.json (API-launched runs)", () => {
+		const { jobsDir, jobName } = mkJob({
+			managerConfig: {
+				benchmark: "harbor",
+				model: "openai/gpt-5.6-sol",
+				include: ["swe-bench/django__django-13837"],
+				timeoutMultiplier: 2,
+				extraArgs: ["--providers", "openai-codex", "--agent-arg", "--downshift", "--env", "FOO=bar"],
+			},
+		});
+		try {
+			const cfg = resolveResumeConfig(parseArgs(["--resume", jobName, "--jobs-dir", jobsDir]));
+			expect(cfg.jobName).toBe(jobName);
+			expect(cfg.jobsDir).toBe(jobsDir);
+			expect(cfg.models).toEqual(["openai/gpt-5.6-sol"]);
+			expect(cfg.dataset).toBe("swe-bench/swe-bench-verified");
+			expect(cfg.timeoutMultiplier).toBe(2);
+			expect(cfg.providers).toEqual(["openai-codex"]);
+			expect(cfg.agentArgs).toEqual(["--downshift"]);
+			expect(cfg.env).toEqual({ FOO: "bar" });
+		} finally {
+			fs.rmSync(jobsDir, { recursive: true, force: true });
+		}
+	});
+
+	it("prefers the runner-config.json snapshot and forces the recorded container backend", () => {
+		const { jobsDir, jobName } = mkJob({
+			envType: "apple-container",
+			managerConfig: { model: "wrong/model" },
+			runnerConfig: { models: ["anthropic/claude-opus-4-8"], envType: "docker" },
+		});
+		try {
+			const cfg = resolveResumeConfig(
+				parseArgs(["--resume", jobName, "--jobs-dir", jobsDir, "--filter-error-type", "RewardFileNotFoundError"]),
+			);
+			expect(cfg.models).toEqual(["anthropic/claude-opus-4-8"]);
+			// config.json's recorded backend wins, incl. the gateway host swap.
+			expect(cfg.envType).toBe("apple-container");
+			expect(cfg.gatewayUrl).toContain("192.168.64.1");
+			// resume-invocation knobs come from the CLI, not the snapshot
+			expect(cfg.filterErrorTypes).toEqual(["RewardFileNotFoundError"]);
+		} finally {
+			fs.rmSync(jobsDir, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects a job dir without a recorded launch config or without harbor's config.json", () => {
+		const { jobsDir, jobName } = mkJob({});
+		try {
+			expect(() => resolveResumeConfig(parseArgs(["--resume", jobName, "--jobs-dir", jobsDir]))).toThrow(
+				/no recorded launch config/,
+			);
+			expect(() => resolveResumeConfig(parseArgs(["--resume", "ghost", "--jobs-dir", jobsDir]))).toThrow(
+				/no harbor config.json/,
+			);
+		} finally {
+			fs.rmSync(jobsDir, { recursive: true, force: true });
+		}
+	});
+
+	it("re-adds harbor's CancelledError default when explicit -f filters would replace it", () => {
+		const withFilters = parseArgs(["--resume", "j", "--filter-error-type", "RewardFileNotFoundError"]);
+		expect(buildResumeArgs(withFilters, "/jobs/j")).toEqual([
+			"job",
+			"resume",
+			"-p",
+			"/jobs/j",
+			"-f",
+			"CancelledError",
+			"-f",
+			"RewardFileNotFoundError",
+		]);
+		// No explicit filters → no -f flags: harbor's own default applies.
+		const bare = parseArgs(["--resume", "j"]);
+		expect(buildResumeArgs(bare, "/jobs/j")).toEqual(["job", "resume", "-p", "/jobs/j"]);
 	});
 });
