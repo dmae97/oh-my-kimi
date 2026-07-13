@@ -117,7 +117,7 @@ export const TAB_METADATA: Record<SettingTab, { label: string; icon: `tab.${stri
  */
 export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 	appearance: ["Theme", "Status Line", "Display", "Images"],
-	model: ["Thinking", "Sampling", "Prompt", "Retry & Fallback", "Advisor", "Vision"],
+	model: ["Thinking", "Sampling", "Prompt", "Retry & Fallback", "Advisor", "Downshift", "Vision"],
 	interaction: [
 		"Input",
 		"Approvals",
@@ -420,6 +420,17 @@ export const SETTINGS_SCHEMA = {
 			label: "Enable Advisor",
 			description:
 				"Pair a second model (assigned to the 'advisor' role) that passively reviews each turn and injects notes.",
+		},
+	},
+	"downshift.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "model",
+			group: "Downshift",
+			label: "Enable Downshift",
+			description:
+				"Start on the active model, then switch to a fast/cheap model (default the 'smol' role) at the first edit/write, with a plan handed off at the switch. Overridable per session with --downshift / --no-downshift.",
 		},
 	},
 	"advisor.subagents": {

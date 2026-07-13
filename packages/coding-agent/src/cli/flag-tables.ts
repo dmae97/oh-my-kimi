@@ -121,14 +121,11 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 	"--plan": (result, value) => {
 		result.plan = value;
 	},
-	"--reasoning-slide-model": (result, value) => {
-		result.reasoningSlideModel = value;
+	"--downshift-into": (result, value) => {
+		result.downshiftInto = value;
 	},
-	"--reasoning-slide-turns": (result, value) => {
-		result.reasoningSlideTurns = value;
-	},
-	"--reasoning-slide-plan-at": (result, value) => {
-		result.reasoningSlidePlanAt = value;
+	"--plan-yolo-into": (result, value) => {
+		result.planYoloInto = value;
 	},
 	"--max-time": (result, value, deps) => {
 		const seconds = Number(value);
@@ -284,9 +281,9 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
 	"--no-pty",
 	"--hide-thinking",
 	"--advisor",
-	"--reasoning-slide-plan",
-	"--reasoning-slide-on-action",
-	"--reasoning-slide-checklist",
+	"--downshift",
+	"--no-downshift",
+	"--plan-yolo",
 	"--print",
 	"--print-thoughts",
 	"--no-extensions",

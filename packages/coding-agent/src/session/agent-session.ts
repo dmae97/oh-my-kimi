@@ -30,6 +30,7 @@ import {
 	type AgentMessage,
 	type AgentState,
 	type AgentTool,
+	type AgentToolResult,
 	type AgentTurnEndContext,
 	AppendOnlyContextManager,
 	type AsideMessage,
@@ -250,6 +251,7 @@ import { parseTurnBudget } from "../modes/turn-budget";
 import { containsUltrathink, ULTRATHINK_NOTICE } from "../modes/ultrathink";
 import { computeNonMessageBreakdown, computeNonMessageTokens } from "../modes/utils/context-usage";
 import { containsWorkflow, renderWorkflowNotice } from "../modes/workflow";
+import { resolveApprovedPlan } from "../plan-mode/approved-plan";
 import { createPlanReadMatcher } from "../plan-mode/plan-protection";
 import type { PlanModeState } from "../plan-mode/state";
 import advisorSystemPrompt from "../prompts/advisor/system.md" with { type: "text" };
@@ -257,6 +259,9 @@ import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with {
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
 import parentIrcSteerTemplate from "../prompts/steering/parent-irc.md" with { type: "text" };
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
+import downshiftChecklistPrompt from "../prompts/system/downshift-checklist.md" with { type: "text" };
+import downshiftContinuePrompt from "../prompts/system/downshift-continue.md" with { type: "text" };
+import downshiftPlanPrompt from "../prompts/system/downshift-plan.md" with { type: "text" };
 import eagerTaskPrompt from "../prompts/system/eager-task.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
 import emptyStopRetryTemplate from "../prompts/system/empty-stop-retry.md" with { type: "text" };
@@ -270,9 +275,7 @@ import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" w
 import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool-decision-reminder.md" with {
 	type: "text",
 };
-import reasoningSlideChecklistPrompt from "../prompts/system/reasoning-slide-checklist.md" with { type: "text" };
-import reasoningSlideContinuePrompt from "../prompts/system/reasoning-slide-continue.md" with { type: "text" };
-import reasoningSlidePlanPrompt from "../prompts/system/reasoning-slide-plan.md" with { type: "text" };
+import planYoloHandoffPrompt from "../prompts/system/plan-yolo-handoff.md" with { type: "text" };
 import rewindReportTemplate from "../prompts/system/rewind-report.md" with { type: "text" };
 import sideChannelNoToolsReminder from "../prompts/system/side-channel-no-tools.md" with { type: "text" };
 import thinkingLoopRedirectTemplate from "../prompts/system/thinking-loop-redirect.md" with { type: "text" };
@@ -321,7 +324,7 @@ import type { CheckpointState, CompletedRewindState } from "../tools/checkpoint"
 import { outputMeta, wrapToolWithMetaNotice } from "../tools/output-meta";
 import { normalizeLocalScheme, resolveToCwd } from "../tools/path-utils";
 import { isAutoQaEnabled } from "../tools/report-tool-issue";
-import { buildResolveReminderMessage } from "../tools/resolve";
+import { buildResolveReminderMessage, type ResolveToolDetails, runResolveInvocation } from "../tools/resolve";
 import { getLatestTodoPhasesFromEntries, type TodoItem, type TodoPhase } from "../tools/todo";
 import { ToolAbortError, ToolError } from "../tools/tool-errors";
 import { clampTimeout } from "../tools/tool-timeouts";
@@ -416,30 +419,28 @@ const MID_RUN_TODO_NUDGE_MUTATING_TOOLS: Record<string, true> = {
 /** `customType` for the hidden mid-run todo nudge; `display: false`, so it reaches
  *  the model but never renders in the TUI or transcript. */
 const MID_RUN_TODO_NUDGE_MESSAGE_TYPE = "mid-run-todo-nudge";
-/** Hidden plan-burst nudge injected by the reasoning slide; scrubbed from the
- *  LLM context when the slide switches models. */
-const REASONING_SLIDE_PLAN_MESSAGE_TYPE = "reasoning-slide-plan";
+/** Hidden plan nudge injected by downshift; scrubbed from the LLM context
+ *  when the switch happens. */
+const DOWNSHIFT_PLAN_MESSAGE_TYPE = "downshift-plan";
 /** Hidden safety-net nudge forcing one more turn after a text-only reply to
  *  the plan nudge, which would otherwise end the run with no code written. */
-const REASONING_SLIDE_CONTINUE_MESSAGE_TYPE = "reasoning-slide-continue";
+const DOWNSHIFT_CONTINUE_MESSAGE_TYPE = "downshift-continue";
 /** Hidden "verify before finishing" checklist steered into the run at the
  *  switch, aimed at the fast model's specific failure patterns: partial
  *  multi-site fixes, unnecessarily broad rewrites, and reported-test-only
  *  verification. */
-const REASONING_SLIDE_CHECKLIST_MESSAGE_TYPE = "reasoning-slide-checklist";
-/** Minimum visible text length for a post-nudge assistant turn to count as the
- *  delivered plan; exploration turns emit short connective text and stay under. */
-const REASONING_SLIDE_PLAN_MIN_CHARS = 400;
-/** Extra turns past `afterTurns` the slide waits for the plan before switching anyway. */
-const REASONING_SLIDE_PLAN_GRACE_TURNS = 4;
-/** Tools whose first successful call marks the execution phase for
- *  {@link ReasoningSlide.onFirstAction}-triggered switches. Bash is
- *  deliberately excluded: it doubles as exploration (ls/cat) and fired
- *  turn-1 switches in practice. */
-const REASONING_SLIDE_ACTION_TOOLS: Record<string, true> = {
+const DOWNSHIFT_CHECKLIST_MESSAGE_TYPE = "downshift-checklist";
+/** Tools whose first successful call marks the start of the execution phase
+ *  that triggers the switch. Bash is deliberately excluded: it doubles as
+ *  exploration (ls/cat) and fired turn-1 switches in practice. */
+const DOWNSHIFT_ACTION_TOOLS: Record<string, true> = {
 	edit: true,
 	write: true,
 };
+/** `customType` for the hidden hand-off message steered to the target model
+ *  once PlanYolo auto-approves the plan. Unlike downshift's plan nudge this
+ *  is never scrubbed — it IS the instruction the target model acts on. */
+const PLAN_YOLO_HANDOFF_MESSAGE_TYPE = "plan-yolo-handoff";
 /** Abort reason for the Gemini reasoning-header runaway interrupt. Surfaced on the
  *  discarded assistant turn only; never reaches the model. */
 const GEMINI_HEADER_INTERRUPT_REASON = "Interrupted: emit a tool call instead of more planning";
@@ -708,34 +709,29 @@ export interface AsyncJobSnapshot {
 
 export type { ShakeMode, ShakeResult };
 /**
- * Switches an active session from its initial model one-way at a completed
- * assistant-turn boundary. Trigger is either a fixed turn count
- * ({@link afterTurns}) or the first turn that ran an action tool
- * ({@link onFirstAction}); exactly one must be set.
+ * Downshift: switches an active session one-way from its starting model to
+ * a fast/cheap `target` at the first completed turn that runs an edit/write
+ * tool. A hidden plan nudge asks the starting model to write a plan before
+ * that first action; a hidden checklist nudge asks the target model to
+ * verify its work before finishing. Both are always on — this is the one
+ * mechanism that won out over turn-count and ungated variants in testing.
  */
-export interface ReasoningSlide {
+export interface Downshift {
 	target: Model;
-	/** Switch after this many completed assistant turns. */
-	afterTurns?: number;
-	/** Switch at the first completed turn that ran an edit/write tool. */
-	onFirstAction?: boolean;
 	thinkingLevel?: ConfiguredThinkingLevel;
-	/**
-	 * Plan burst: after {@link planAtTurn} completed turns, steer a hidden
-	 * "lay out the complete plan" nudge into the run so the primary model
-	 * spends its remaining turns producing a comprehensive plan. The nudge is
-	 * removed from the LLM context at the switch; the plan itself stays.
-	 */
-	plan?: boolean;
-	/** Completed assistant turns before the plan nudge is injected (default 1). */
-	planAtTurn?: number;
-	/**
-	 * Steer a hidden "before you finish, verify..." checklist into the run at
-	 * the moment of the switch — consistency across matching call sites,
-	 * diff scope vs. the reported issue, running the full test module rather
-	 * than only the reported test. Independent of {@link plan}.
-	 */
-	checklist?: boolean;
+}
+
+/**
+ * PlanYolo: forces the session into read-only plan mode at start, then
+ * auto-approves the plan the instant the model calls `resolve({ action:
+ * "apply" })` for it — no interactive review — and switches to a fast/cheap
+ * `target` model to implement it. The headless counterpart to interactive
+ * plan mode's "Approve and execute", for print/non-interactive runs where
+ * there is no one to click Approve.
+ */
+export interface PlanYolo {
+	target: Model;
+	thinkingLevel?: ConfiguredThinkingLevel;
 }
 
 // ============================================================================
@@ -752,8 +748,11 @@ export interface AgentSessionConfig {
 	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 	/** Initial session thinking selector. */
 	thinkingLevel?: ConfiguredThinkingLevel;
-	/** Switch model after this many completed assistant turns. */
-	reasoningSlide?: ReasoningSlide;
+	/** Downshift from the starting model to a fast/cheap target at the first edit/write. */
+	downshift?: Downshift;
+	/** Force read-only plan mode at start, auto-approve on the model's first
+	 *  `resolve` call, then switch to the target to implement. */
+	planYolo?: PlanYolo;
 
 	/** Initial per-family service tiers (OpenAI / Anthropic / Google) for the live session. */
 	serviceTierByFamily?: ServiceTierByFamily;
@@ -1667,12 +1666,12 @@ export class AgentSession {
 	#autoThinking: boolean = false;
 	/** The level `auto` last resolved to (for UI); undefined until a turn is classified. */
 	#autoResolvedLevel: Effort | undefined;
-	#reasoningSlide: ReasoningSlide | undefined;
-	#reasoningSlideTurnCount = 0;
-	/** True once the plan-burst nudge has been queued; scrubbed from context at the switch. */
-	#reasoningSlidePlanInjected = false;
-	/** True once a post-nudge assistant turn delivered a substantial written plan. */
-	#reasoningSlidePlanDelivered = false;
+	#downshift: Downshift | undefined;
+	/** True once the plan nudge has been queued; scrubbed from context at the switch. */
+	#downshiftPlanInjected = false;
+	#planYolo: PlanYolo | undefined;
+	#planYoloPreviousTools: string[] | undefined;
+	#planYoloArmed = false;
 
 	#promptTemplates: PromptTemplate[];
 	#slashCommands: FileSlashCommand[];
@@ -2158,153 +2157,240 @@ export class AgentSession {
 		this.#emit(pending);
 	}
 
-	/** Advance the configured one-way model switch at a successful assistant-turn boundary. */
-	async #advanceReasoningSlide(liveMessages: AgentMessage[], context: AgentTurnEndContext | undefined): Promise<void> {
-		const reasoningSlide = this.#reasoningSlide;
-		if (!reasoningSlide || context?.message.role !== "assistant") return;
+	/** Advance the one-way downshift switch at a completed assistant-turn boundary. */
+	async #advanceDownshift(liveMessages: AgentMessage[], context: AgentTurnEndContext | undefined): Promise<void> {
+		const downshift = this.#downshift;
+		if (!downshift || context?.message.role !== "assistant") return;
 
-		this.#reasoningSlideTurnCount++;
-		// Structural safety net, scoped to the plan nudge specifically: every
-		// branch below assumes the agent loop will run another turn. It won't
-		// if THIS turn had no tool calls — the loop treats a text-only turn as
-		// "the agent is done" and ends the session with no further prompting.
-		// A bare fixed-turn/action slide never provokes that (a genuine
-		// text-only stop there is normal agent behavior and must be honored),
-		// but the plan nudge explicitly asks for a prose reply, which makes a
-		// text-only turn common right after it — observed silently killing
-		// production SWE-bench runs before any code was ever written. Force
-		// one more turn only in that specific, self-created hazard window.
-		if (reasoningSlide.plan && this.#reasoningSlidePlanInjected && context.toolResults.length === 0) {
+		// Structural safety net: every branch below assumes the agent loop will
+		// run another turn. It won't if THIS turn had no tool calls — the loop
+		// treats a text-only turn as "the agent is done" and ends the session
+		// with no further prompting. The plan nudge explicitly asks for a prose
+		// reply, which makes a text-only turn common right after it — observed
+		// silently killing production SWE-bench runs before any code was ever
+		// written. Force one more turn only in that specific, self-created
+		// hazard window.
+		if (this.#downshiftPlanInjected && context.toolResults.length === 0) {
 			this.agent.steer({
 				role: "custom",
-				customType: REASONING_SLIDE_CONTINUE_MESSAGE_TYPE,
-				content: reasoningSlideContinuePrompt,
+				customType: DOWNSHIFT_CONTINUE_MESSAGE_TYPE,
+				content: downshiftContinuePrompt,
 				attribution: "agent",
 				display: false,
 				timestamp: Date.now(),
 			});
 		}
-		this.#noteReasoningSlidePlanDelivery(reasoningSlide, context.message);
-		let trigger: string;
-		if (reasoningSlide.onFirstAction) {
-			// Action trigger: the first turn that mutates the world (edit/write/
-			// bash) marks the start of the execution phase — switch right there.
-			const action = context.toolResults.find(result => REASONING_SLIDE_ACTION_TOOLS[result.toolName]);
-			if (!action) {
-				this.#maybeInjectReasoningSlidePlanNudge(reasoningSlide);
-				return;
+
+		// Switch at the first completed turn that mutates the world (edit/write).
+		const action = context.toolResults.find(result => DOWNSHIFT_ACTION_TOOLS[result.toolName]);
+		if (!action) {
+			if (!this.#downshiftPlanInjected) {
+				this.#downshiftPlanInjected = true;
+				this.agent.steer({
+					role: "custom",
+					customType: DOWNSHIFT_PLAN_MESSAGE_TYPE,
+					content: downshiftPlanPrompt,
+					display: false,
+					attribution: "agent",
+					timestamp: Date.now(),
+				});
+				this.emitNotice("info", "Downshift: injected deep-plan nudge.", "downshift");
 			}
-			trigger = `first ${action.toolName} call (turn ${this.#reasoningSlideTurnCount})`;
-		} else {
-			const afterTurns = reasoningSlide.afterTurns ?? 1;
-			if (this.#reasoningSlideTurnCount < afterTurns) {
-				this.#maybeInjectReasoningSlidePlanNudge(reasoningSlide);
-				return;
-			}
-			// Hold the switch until the nudged plan actually lands: sliding mid-
-			// exploration hands the fast model a transcript with an unfulfilled
-			// promise to plan (observed as test-doctoring drift on SWE-bench).
-			// Bounded so a model that refuses to plan still slides eventually.
-			if (
-				reasoningSlide.plan &&
-				this.#reasoningSlidePlanInjected &&
-				!this.#reasoningSlidePlanDelivered &&
-				this.#reasoningSlideTurnCount < afterTurns + REASONING_SLIDE_PLAN_GRACE_TURNS
-			) {
-				return;
-			}
-			trigger = `${this.#reasoningSlideTurnCount} completed turns`;
+			return;
 		}
+
 		await this.#waitForSessionMessagePersistence(context.message);
 		for (const toolResult of context.toolResults) {
 			await this.#waitForSessionMessagePersistence(toolResult);
 		}
 
-		this.#scrubReasoningSlidePlanNudge(liveMessages);
-		const target = reasoningSlide.target;
+		this.#scrubDownshiftPlanNudge(liveMessages);
+		const target = downshift.target;
 		if (this.model && modelsAreEqual(this.model, target)) {
-			this.#reasoningSlide = undefined;
+			this.#downshift = undefined;
 			return;
 		}
 
-		await this.setModelTemporary(target, reasoningSlide.thinkingLevel, { ephemeral: true });
-		this.#reasoningSlide = undefined;
+		await this.setModelTemporary(target, downshift.thinkingLevel, { ephemeral: true });
+		this.#downshift = undefined;
 		this.emitNotice(
 			"info",
-			`Reasoning slide: switched to ${target.provider}/${target.id} after ${trigger}.`,
-			"reasoning-slide",
+			`Downshift: switched to ${target.provider}/${target.id} after first ${action.toolName} call.`,
+			"downshift",
 		);
-		if (reasoningSlide.checklist) {
-			this.agent.steer({
-				role: "custom",
-				customType: REASONING_SLIDE_CHECKLIST_MESSAGE_TYPE,
-				content: reasoningSlideChecklistPrompt,
-				attribution: "agent",
-				display: false,
-				timestamp: Date.now(),
-			});
-		}
-	}
-
-	/**
-	 * Plan-delivery detector: a post-nudge assistant turn whose visible text is
-	 * substantial ({@link REASONING_SLIDE_PLAN_MIN_CHARS}+) is taken as the
-	 * written plan. Exploration turns emit short connective text ("Let me read
-	 * X first") and never trip this.
-	 */
-	#noteReasoningSlidePlanDelivery(reasoningSlide: ReasoningSlide, message: AgentTurnEndContext["message"]): void {
-		if (!reasoningSlide.plan || !this.#reasoningSlidePlanInjected || this.#reasoningSlidePlanDelivered) return;
-		if (message.role !== "assistant") return;
-		let textChars = 0;
-		for (const block of message.content) {
-			if (block.type === "text") textChars += block.text.length;
-		}
-		if (textChars >= REASONING_SLIDE_PLAN_MIN_CHARS) {
-			this.#reasoningSlidePlanDelivered = true;
-			this.emitNotice("info", "Reasoning slide: plan delivered.", "reasoning-slide");
-		}
-	}
-
-	/**
-	 * Plan burst: once {@link ReasoningSlide.planAtTurn} turns have completed,
-	 * steer a hidden deep-planning nudge into the run so the primary model's
-	 * remaining pre-slide turns produce a comprehensive plan for the fast model
-	 * to execute. Injected at most once per slide.
-	 */
-	#maybeInjectReasoningSlidePlanNudge(reasoningSlide: ReasoningSlide): void {
-		if (!reasoningSlide.plan || this.#reasoningSlidePlanInjected) return;
-		if (this.#reasoningSlideTurnCount < (reasoningSlide.planAtTurn ?? 1)) return;
-		this.#reasoningSlidePlanInjected = true;
 		this.agent.steer({
 			role: "custom",
-			customType: REASONING_SLIDE_PLAN_MESSAGE_TYPE,
-			content: reasoningSlidePlanPrompt,
+			customType: DOWNSHIFT_CHECKLIST_MESSAGE_TYPE,
+			content: downshiftChecklistPrompt,
+			attribution: "agent",
+			display: false,
+			timestamp: Date.now(),
+		});
+	}
+
+	/**
+	 * Arm downshift outside the normal startup path (the `/downshift` slash
+	 * command): sets the target and immediately steers the plan nudge rather
+	 * than waiting for the next turn boundary, since an explicit manual
+	 * invocation means "start this now." A no-op with a notice if a downshift
+	 * is already armed and waiting.
+	 */
+	armDownshift(target: Model, thinkingLevel?: ConfiguredThinkingLevel): void {
+		if (this.#downshift) {
+			this.emitNotice(
+				"info",
+				`Downshift: already armed for ${this.#downshift.target.provider}/${this.#downshift.target.id}, waiting for the first edit/write.`,
+				"downshift",
+			);
+			return;
+		}
+		this.#downshift = { target, thinkingLevel };
+		this.#downshiftPlanInjected = true;
+		this.agent.steer({
+			role: "custom",
+			customType: DOWNSHIFT_PLAN_MESSAGE_TYPE,
+			content: downshiftPlanPrompt,
 			display: false,
 			attribution: "agent",
 			timestamp: Date.now(),
 		});
-		this.emitNotice("info", "Reasoning slide: injected deep-plan nudge.", "reasoning-slide");
+		this.emitNotice(
+			"info",
+			`Downshift: armed for ${target.provider}/${target.id} — will switch at the first edit/write.`,
+			"downshift",
+		);
 	}
 
 	/**
-	 * Remove the plan-burst nudge from the LLM context before the model
-	 * switch: the fast model inherits the plan the nudge produced, not the
-	 * nudge itself. Splices the loop's live context array in place (the run
-	 * streams from it) and mirrors the removal into agent state. The persisted
-	 * transcript keeps the message for audit; a session reload re-materializes
-	 * it, which is acceptable for the benchmark-oriented single-run lifecycle
-	 * this feature targets.
+	 * Remove the plan nudge from the LLM context before the model switch: the
+	 * fast model inherits the plan the nudge produced, not the nudge itself.
+	 * Splices the loop's live context array in place (the run streams from
+	 * it) and mirrors the removal into agent state. The persisted transcript
+	 * keeps the message for audit; a session reload re-materializes it,
+	 * which is acceptable for downshift's single-run lifecycle.
 	 */
-	#scrubReasoningSlidePlanNudge(liveMessages: AgentMessage[]): void {
-		if (!this.#reasoningSlidePlanInjected) return;
+	#scrubDownshiftPlanNudge(liveMessages: AgentMessage[]): void {
+		if (!this.#downshiftPlanInjected) return;
 		const isPlanNudge = (m: AgentMessage): boolean =>
-			m.role === "custom" && m.customType === REASONING_SLIDE_PLAN_MESSAGE_TYPE;
+			m.role === "custom" && m.customType === DOWNSHIFT_PLAN_MESSAGE_TYPE;
 		for (let i = liveMessages.length - 1; i >= 0; i--) {
 			if (isPlanNudge(liveMessages[i])) liveMessages.splice(i, 1);
 		}
 		const stateMessages = this.agent.state.messages;
 		const filtered = stateMessages.filter(m => !isPlanNudge(m));
 		if (filtered.length !== stateMessages.length) this.agent.replaceMessages(filtered);
+	}
+
+	/**
+	 * Lazily arm PlanYolo before the first prompt is built: restricts tools to
+	 * the plan-mode read-only set (plus `resolve`/`write`, both normally
+	 * discovery-hidden), marks plan-mode state so `#buildPlanModeMessage`
+	 * injects the standard plan-mode-active instructions on this and every
+	 * following prompt, and registers the auto-approve resolve handler.
+	 * Idempotent — a no-op once armed or when PlanYolo is not configured.
+	 */
+	async #armPlanYoloIfNeeded(): Promise<void> {
+		if (!this.#planYolo || this.#planYoloArmed) return;
+		this.#planYoloArmed = true;
+		const previousTools = this.getActiveToolNames();
+		const augmentations = ["resolve"];
+		if (this.hasBuiltInTool("write")) augmentations.push("write");
+		await this.setActiveToolsByName([...new Set([...previousTools, ...augmentations])]);
+		this.#planYoloPreviousTools = previousTools;
+		this.setPlanModeState({
+			enabled: true,
+			planFilePath: this.getPlanReferencePath() || "local://PLAN.md",
+			workflow: "parallel",
+		});
+		this.setStandingResolveHandler(input => this.#runPlanYoloApprovalResolve(input));
+	}
+
+	/**
+	 * Standing resolve handler while PlanYolo's plan phase is active. Auto-
+	 * approves the instant the model calls `resolve { action: "apply" }` for
+	 * the plan — no interactive review, the headless counterpart to plan
+	 * mode's "Approve and execute" — then restores tools, exits plan-mode
+	 * state, switches to the configured `target`, and hands off the approved
+	 * plan for it to implement.
+	 */
+	#runPlanYoloApprovalResolve(input: unknown): Promise<AgentToolResult<ResolveToolDetails>> {
+		return runResolveInvocation(input as Parameters<typeof runResolveInvocation>[0], {
+			sourceToolName: "plan_approval",
+			label: "Plan ready for approval",
+			apply: async (_reason, extra) => {
+				const planYolo = this.#planYolo;
+				const state = this.getPlanModeState();
+				if (!planYolo || !state?.enabled) {
+					throw new ToolError("Plan mode is not active.");
+				}
+				const { planFilePath, title } = await resolveApprovedPlan({
+					suppliedTitle: extra?.title,
+					statePlanFilePath: state.planFilePath,
+					readPlan: url => this.#readPlanYoloFile(url),
+					listPlanFiles: () => this.#listPlanYoloFiles(),
+				});
+				const previousTools = this.#planYoloPreviousTools;
+				if (previousTools) {
+					await this.setActiveToolsByName(previousTools);
+				}
+				this.setStandingResolveHandler(null);
+				this.setPlanModeState(undefined);
+				this.#planYolo = undefined;
+				this.#planYoloPreviousTools = undefined;
+				await this.setModelTemporary(planYolo.target, planYolo.thinkingLevel, { ephemeral: true });
+				this.emitNotice(
+					"info",
+					`Plan-yolo: plan approved, switched to ${planYolo.target.provider}/${planYolo.target.id} to implement "${title}".`,
+					"plan-yolo",
+				);
+				this.agent.steer({
+					role: "custom",
+					customType: PLAN_YOLO_HANDOFF_MESSAGE_TYPE,
+					content: prompt.render(planYoloHandoffPrompt, { planFilePath, title }),
+					attribution: "agent",
+					display: false,
+					timestamp: Date.now(),
+				});
+				return {
+					content: [
+						{ type: "text" as const, text: `Plan approved. Implementing now with ${planYolo.target.id}.` },
+					],
+					details: { planFilePath, title, planExists: true },
+				};
+			},
+		});
+	}
+
+	async #readPlanYoloFile(planFilePath: string): Promise<string | null> {
+		const resolvedPath = planFilePath.startsWith("local:")
+			? resolveLocalUrlToPath(normalizeLocalScheme(planFilePath), this.#localProtocolOptions())
+			: resolveToCwd(planFilePath, this.sessionManager.getCwd());
+		try {
+			return await Bun.file(resolvedPath).text();
+		} catch (error) {
+			if (isEnoent(error)) return null;
+			throw error;
+		}
+	}
+
+	/** `local://` URLs of plan files in the session-local root, newest first —
+	 *  a fallback for `resolveApprovedPlan` when the agent dropped `extra.title`. */
+	async #listPlanYoloFiles(): Promise<string[]> {
+		const localRoot = resolveLocalUrlToPath("local://", this.#localProtocolOptions());
+		try {
+			const entries = await fs.promises.readdir(localRoot, { withFileTypes: true });
+			const plans = await Promise.all(
+				entries
+					.filter(entry => entry.isFile() && /plan\.md$/i.test(entry.name))
+					.map(async entry => {
+						const stat = await fs.promises.stat(path.join(localRoot, entry.name)).catch(() => null);
+						return { url: `local://${entry.name}`, mtime: stat?.mtimeMs ?? 0 };
+					}),
+			);
+			return plans.sort((a, b) => b.mtime - a.mtime).map(plan => plan.url);
+		} catch {
+			return [];
+		}
 	}
 
 	constructor(config: AgentSessionConfig) {
@@ -2327,15 +2413,11 @@ export class AgentSession {
 		} else {
 			this.#thinkingLevel = config.thinkingLevel;
 		}
-		if (config.reasoningSlide) {
-			const { afterTurns, onFirstAction } = config.reasoningSlide;
-			if ((afterTurns !== undefined) === (onFirstAction === true)) {
-				throw new Error("reasoningSlide requires exactly one trigger: afterTurns or onFirstAction");
-			}
-			if (afterTurns !== undefined && (!Number.isSafeInteger(afterTurns) || afterTurns < 1)) {
-				throw new Error("reasoningSlide.afterTurns must be a positive integer");
-			}
-			this.#reasoningSlide = config.reasoningSlide;
+		if (config.downshift) {
+			this.#downshift = config.downshift;
+		}
+		if (config.planYolo) {
+			this.#planYolo = config.planYolo;
 		}
 		this.#applyThinkingLevelToAgent(this.#thinkingLevel);
 
@@ -2411,7 +2493,7 @@ export class AgentSession {
 				});
 				if (detection) this.#maybeInjectToolCallLoopRedirect(messages, detection);
 			}
-			await this.#advanceReasoningSlide(messages, context);
+			await this.#advanceDownshift(messages, context);
 			this.#advisorPrimaryTurnsCompleted++;
 			if (this.#advisors.length > 0) {
 				for (const a of this.#advisors) {
@@ -8109,6 +8191,8 @@ export class AgentSession {
 			if (lastAssistant && !options?.skipCompactionCheck) {
 				await this.#checkCompaction(lastAssistant, false, false, false);
 			}
+
+			await this.#armPlanYoloIfNeeded();
 
 			// Build messages array (session context, eager todo prelude, then active prompt message)
 			const messages: AgentMessage[] = [];

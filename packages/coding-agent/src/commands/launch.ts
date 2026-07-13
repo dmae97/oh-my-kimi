@@ -34,23 +34,22 @@ export default class Index extends Command {
 		plan: Flags.string({
 			description: "Plan model for architectural planning (or PI_PLAN_MODEL env)",
 		}),
-		"reasoning-slide-model": Flags.string({
-			description: "Switch to this model after --reasoning-slide-turns completed assistant turns",
+		downshift: Flags.boolean({
+			description:
+				"Switch from the active model to a fast/cheap model at the first edit/write, with a plan handoff (default off; see downshift.enabled)",
 		}),
-		"reasoning-slide-turns": Flags.string({
-			description: "Positive number of completed assistant turns before the reasoning slide",
+		"no-downshift": Flags.boolean({
+			description: "Disable downshift even if downshift.enabled is set",
 		}),
-		"reasoning-slide-on-action": Flags.boolean({
-			description: "Trigger the reasoning slide at the first completed turn that ran edit/write",
+		"downshift-into": Flags.string({
+			description: 'Target model for downshift (default the "smol" role)',
 		}),
-		"reasoning-slide-plan": Flags.boolean({
-			description: "Inject a hidden deep-plan nudge before the reasoning slide, scrubbed at the switch",
+		"plan-yolo": Flags.boolean({
+			description:
+				"Force read-only plan mode at start, auto-approve the plan on the model's first resolve call, then switch to --plan-yolo-into to implement it",
 		}),
-		"reasoning-slide-plan-at": Flags.string({
-			description: "Completed assistant turns before the plan nudge is injected (default 1)",
-		}),
-		"reasoning-slide-checklist": Flags.boolean({
-			description: "Steer a hidden verify-before-finishing checklist into the run at the switch",
+		"plan-yolo-into": Flags.string({
+			description: 'Target model for plan-yolo execution (default the "smol" role)',
 		}),
 		provider: Flags.string({
 			description: "Provider to use (legacy; prefer --model)",
