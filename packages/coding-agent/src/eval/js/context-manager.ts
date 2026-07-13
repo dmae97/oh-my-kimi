@@ -268,27 +268,29 @@ async function acquireSession(sessionKey: string, snapshot: SessionSnapshot, tim
 		// Init headroom is the fixed infrastructure floor; the caller's per-cell timeout
 		// dominates when larger so users can grant more by raising `timeout` on a cell.
 		const readyTimeoutMs = Math.max(WORKER_INIT_TIMEOUT_MS, timeoutMs ?? 0);
-		try {
-			await initWorker(session, snapshot, readyTimeoutMs);
-		} catch (error) {
-			// Runtime crash/load failures surface asynchronously via the worker error
-			// callback — after `spawnJsWorker`'s synchronous try/catch already
-			// returned — so the only signal is the rejected handshake. Retry on the
-			// inline worker so a broken module graph fails fast instead of stalling
-			// every cell on the init timeout and then dying with exitCode 1.
-			await worker.terminate().catch(() => undefined);
-			if (worker.mode === "inline") throw error;
-			logger.warn("JS eval worker init failed; retrying with inline worker (no sync-loop guard)", {
-				error: error instanceof Error ? error.message : String(error),
-			});
-			const inline = spawnInlineWorker();
-			session.worker = inline;
-			session.state = "alive";
+		while (true) {
 			try {
 				await initWorker(session, snapshot, readyTimeoutMs);
-			} catch (inlineError) {
-				await inline.terminate().catch(() => undefined);
-				throw inlineError;
+				break;
+			} catch (error) {
+				// Runtime crash/load failures surface asynchronously via the runtime's
+				// error callback, after the synchronous spawn try/catch has returned.
+				// Preserve the full process -> Worker -> inline ladder for those failures.
+				const failed = session.worker;
+				await failed.terminate().catch(() => undefined);
+				if (failed.mode === "inline") throw error;
+				if (failed.mode === "process") {
+					logger.warn("JS eval subprocess init failed; retrying with a Bun Worker", {
+						error: error instanceof Error ? error.message : String(error),
+					});
+					session.worker = spawnBunWorker();
+				} else {
+					logger.warn("JS eval worker init failed; retrying with inline worker (no sync-loop guard)", {
+						error: error instanceof Error ? error.message : String(error),
+					});
+					session.worker = spawnInlineWorker();
+				}
+				session.state = "alive";
 			}
 		}
 		sessions.set(sessionKey, session);
@@ -507,6 +509,10 @@ function spawnJsWorker(): WorkerHandle {
 			});
 		}
 	}
+	return spawnBunWorker();
+}
+
+function spawnBunWorker(): WorkerHandle {
 	try {
 		const hostEntry = workerHostEntry();
 		const worker = hostEntry

@@ -309,6 +309,44 @@ describe("JavaScript eval worker lifecycle", () => {
 		}
 	});
 
+	it("falls back to a Bun Worker when the subprocess fails during initialization", async () => {
+		using tempDir = TempDir.createSync("@omp-js-init-fallback-");
+		// Exercise the production ladder (process -> worker -> inline), not the
+		// worker-thread test seam the surrounding describe enables.
+		setJsEvalWorkerThreadForTests(false);
+		const stats: FakeWorkerStats = { closeRequests: 0, terminateCalls: 0 };
+		installFakeWorker(stats, { exitOnClose: true, settleRuns: true });
+		const originalSpawn = Bun.spawn;
+		let spawnAttempts = 0;
+		Bun.spawn = ((options: unknown) => {
+			spawnAttempts++;
+			const spawnOptions = options as {
+				onExit?: (proc: unknown, exitCode: number | null, signalCode: string | null) => void;
+			};
+			const fakeProcess = {
+				send: () => undefined,
+				kill: () => undefined,
+				unref: () => undefined,
+			};
+			queueMicrotask(() => spawnOptions.onExit?.(fakeProcess, 1, null));
+			return fakeProcess;
+		}) as unknown as typeof Bun.spawn;
+
+		try {
+			const session = makeSession(tempDir.path());
+			const sessionId = `js-init-fallback:${crypto.randomUUID()}`;
+			// The fake Worker settles runs without executing the cell, so empty
+			// output proves the middle rung handled the retry. Inline execution
+			// would evaluate the expression and print 42.
+			const result = await executeJs("return String(6 * 7);", { cwd: tempDir.path(), sessionId, session });
+			expect(result.exitCode).toBe(0);
+			expect(result.output.trim()).toBe("");
+			expect(spawnAttempts).toBe(1);
+		} finally {
+			Bun.spawn = originalSpawn;
+		}
+	});
+
 	it("falls back to the inline worker when the spawned worker errors during startup", async () => {
 		using tempDir = TempDir.createSync("@omp-js-worker-error-");
 		const stats: FakeWorkerStats = { closeRequests: 0, terminateCalls: 0 };
