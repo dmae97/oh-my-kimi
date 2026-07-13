@@ -27,7 +27,7 @@ import { getKnownRoleIds, getRoleInfo, MODEL_ROLE_IDS } from "../../config/model
 import type { Settings } from "../../config/settings";
 import type { ModelPerfStats } from "../../session/agent-storage";
 import { AUTO_THINKING, type ConfiguredThinkingLevel, parseConfiguredThinkingLevel } from "../../thinking";
-import { theme } from "../theme/theme";
+import { type ThemeColor, theme } from "../theme/theme";
 import {
 	matchesSelectCancel,
 	matchesSelectDown,
@@ -36,12 +36,14 @@ import {
 	matchesSelectUp,
 } from "../utils/keybinding-matchers";
 
-/** One selectable model row. `selector` is the canonical `provider/id` key. */
+/** One selectable row. `selector` is a canonical model key or host-specific virtual key. */
 export interface ModelBrowserItem {
 	provider: string;
 	id: string;
 	model: Model;
 	selector: string;
+	/** Optional foreground color for the row label. */
+	labelColor?: ThemeColor;
 }
 
 /** Resolved role assignment as displayed by the browser and the hub. */
@@ -351,6 +353,8 @@ export class ModelBrowser implements Component {
 	#currentContextTokens: number;
 	#disableOverContext: boolean;
 	#emptyText?: () => string | undefined;
+	/** Keep role-like virtual rows in their host-defined order during search. */
+	#preserveQueryOrder = false;
 	/** First visible list row; panned by the wheel, snapped to the selection on keyboard navigation. */
 	#windowStart = 0;
 	#windowCount = 0;
@@ -411,6 +415,14 @@ export class ModelBrowser implements Component {
 
 	setShowProvider(show: boolean): void {
 		this.#showProvider = show;
+	}
+	/** Keep the source order after fuzzy filtering instead of applying model-specific ranking. */
+	setPreserveQueryOrder(preserve: boolean): void {
+		this.#preserveQueryOrder = preserve;
+	}
+	/** Allow hosts to toggle context-window eligibility between browser modes. */
+	setDisableOverContext(disable: boolean): void {
+		this.#disableOverContext = disable;
 	}
 	/** Focused: accent cursor + selected-row background band. Unfocused: dim cursor, no band. */
 	setFocused(focused: boolean): void {
@@ -560,17 +572,21 @@ export class ModelBrowser implements Component {
 			// queries all flow through the same fuzzy matcher.
 			const ranked = fuzzyRank(this.#baseItems, query, ({ provider, id }) => `${provider}/${id}`);
 			const matches = ranked.map(result => result.item);
-			// Match quality is the primary key while searching: an exact
-			// "gpt-5.5" must beat the MRU (or role-assigned) "gpt-5.6", so
-			// role rank is skipped and MRU only breaks ties. Scores are
-			// bucketed so sub-point position noise (provider-name length)
-			// can't split equally good matches; within a bucket the stable
-			// sort keeps sortModelItems' MRU/version order.
-			sortModelItems(matches, { roles: this.#roles, mruOrder: this.#mruOrder, skipRoleRank: true });
-			const buckets = new Map<ModelBrowserItem, number>();
-			for (const result of ranked) buckets.set(result.item, Math.round(result.score / 10));
-			matches.sort((a, b) => (buckets.get(a) ?? 0) - (buckets.get(b) ?? 0));
-			items = matches;
+			if (this.#preserveQueryOrder) {
+				items = matches;
+			} else {
+				// Match quality is the primary key while searching: an exact
+				// "gpt-5.5" must beat the MRU (or role-assigned) "gpt-5.6", so
+				// role rank is skipped and MRU only breaks ties. Scores are
+				// bucketed so sub-point position noise (provider-name length)
+				// can't split equally good matches; within a bucket the stable
+				// sort keeps sortModelItems' MRU/version order.
+				sortModelItems(matches, { roles: this.#roles, mruOrder: this.#mruOrder, skipRoleRank: true });
+				const buckets = new Map<ModelBrowserItem, number>();
+				for (const result of ranked) buckets.set(result.item, Math.round(result.score / 10));
+				matches.sort((a, b) => (buckets.get(a) ?? 0) - (buckets.get(b) ?? 0));
+				items = matches;
+			}
 		} else {
 			items = this.#baseItems;
 		}
@@ -705,7 +721,11 @@ export class ModelBrowser implements Component {
 		const disabled = this.#isDisabled(item);
 		const prefix = selected && this.#focused ? `${theme.fg("accent", theme.nav.cursor)} ` : "  ";
 		const providerPrefix = this.#showProvider ? theme.fg("dim", `${item.provider}/`) : "";
-		const name = selected ? theme.fg("accent", item.id) : item.id;
+		const name = item.labelColor
+			? theme.fg(item.labelColor, item.id)
+			: selected
+				? theme.fg("accent", item.id)
+				: item.id;
 		const currentMark =
 			item.selector === this.#currentSelector ? ` ${theme.fg("success", theme.status.enabled)}` : "";
 		const overLimit = disabled

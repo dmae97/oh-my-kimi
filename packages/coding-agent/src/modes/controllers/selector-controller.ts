@@ -72,6 +72,7 @@ import { ModelPickerComponent } from "../components/model-picker";
 import { OAuthSelectorComponent } from "../components/oauth-selector";
 import { PluginSelectorComponent } from "../components/plugin-selector";
 import { ResetUsageSelectorComponent } from "../components/reset-usage-selector";
+import { renderSegmentTrack } from "../components/segment-track";
 import { SessionSelectorComponent } from "../components/session-selector";
 import { SettingsSelectorComponent } from "../components/settings-selector";
 import { ToolExecutionComponent } from "../components/tool-execution";
@@ -603,13 +604,14 @@ export class SelectorController {
 
 	/**
 	 * Compact session-only model picker (alt+p / `/switch`): a floating
-	 * bottom-anchored overlay over the transcript — just the model list, no
-	 * provider sidebar, no role management. The current model is highlighted
-	 * and preselected.
+	 * bottom-anchored overlay over the transcript. The current model is
+	 * highlighted and preselected; a leading `@` searches ctrl+p quick roles.
 	 */
 	#showModelPicker(): void {
 		const currentContextTokens = this.ctx.session.getContextUsage()?.tokens ?? 0;
 		const current = this.ctx.session.model;
+		const quickRoleOrder = this.ctx.settings.get("cycleOrder");
+		const quickRoleCycle = this.ctx.session.getRoleModelCycle(quickRoleOrder);
 		let overlayHandle: OverlayHandle | undefined;
 		let closed = false;
 		const done = () => {
@@ -638,11 +640,30 @@ export class SelectorController {
 						this.ctx.showError(error instanceof Error ? error.message : String(error));
 					}
 				},
+				onPickRole: async entry => {
+					try {
+						await this.ctx.session.applyRoleModel(entry);
+						this.ctx.statusLine.invalidate();
+						this.ctx.updateEditorBorderColor();
+						this.ctx.showModelCycleTrack(
+							renderSegmentTrack(
+								quickRoleOrder.map(role => ({ label: role })),
+								quickRoleOrder.indexOf(entry.role),
+							),
+						);
+						done();
+					} catch (error) {
+						this.ctx.showError(error instanceof Error ? error.message : String(error));
+					}
+				},
 				onCancel: done,
 			},
 			{
 				currentContextTokens,
 				currentSelector: current ? `${current.provider}/${current.id}` : undefined,
+				quickRoles: quickRoleCycle?.models,
+				quickRoleOrder,
+				currentQuickRole: quickRoleCycle?.models[quickRoleCycle.currentIndex]?.role,
 			},
 		);
 		overlayHandle = this.ctx.ui.showOverlay(picker, {
