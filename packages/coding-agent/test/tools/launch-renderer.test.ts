@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import type { DaemonSnapshot } from "@oh-my-pi/pi-coding-agent/launch/protocol";
+import { renderTerminalOutput } from "@oh-my-pi/pi-coding-agent/launch/terminal-output";
 import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { type LaunchToolDetails, launchToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/launch";
 import { toolRenderers } from "@oh-my-pi/pi-coding-agent/tools/renderers";
@@ -81,6 +82,36 @@ describe("launchToolRenderer", () => {
 		expect(rendered).toContain("line one");
 		expect(rendered).toContain("line two");
 		expect(rendered.some(line => line.includes("[web: running"))).toBe(false);
+	});
+
+	it("replays terminal screen rows so cursor rewrites retain their final color and weight", async () => {
+		const terminalRows = await renderTerminalOutput("\x1b[1;31mold\x1b[0m\r\x1b[1;32mready\x1b[0m\x1b[K", {
+			head: false,
+			maxRows: 10,
+		});
+		if (terminalRows === undefined) throw new Error("terminal replay failed");
+
+		const uiTheme = await theme();
+		const component = launchToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "ready\n[web: running; cursor=2210]" }],
+				details: {
+					op: "logs",
+					cursor: 2210,
+					timedOut: false,
+					state: "running",
+					terminalRows,
+				} satisfies LaunchToolDetails,
+			},
+			{ expanded: false, isPartial: false },
+			uiTheme,
+			{ op: "logs", name: "web" },
+		);
+		const raw = component.render(200).join("\n");
+		const plain = Bun.stripANSI(raw);
+		expect(plain).toContain("ready");
+		expect(plain).not.toContain("old");
+		expect(raw).toContain("\x1b[1;38;5;2mready");
 	});
 
 	it("caps a collapsed list to the preview item limit with a more-items row", async () => {
