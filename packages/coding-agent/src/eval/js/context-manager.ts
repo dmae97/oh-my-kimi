@@ -499,10 +499,12 @@ function spawnJsWorker(): WorkerHandle {
 		try {
 			return spawnJsProcess();
 		} catch (err) {
-			logger.warn("JS eval subprocess spawn failed; using inline JS eval worker (no sync-loop guard)", {
+			// Fall through to the Bun Worker rung: a worker thread still interrupts
+			// synchronous infinite loops via terminate(), which the inline fallback
+			// cannot.
+			logger.warn("JS eval subprocess spawn failed; falling back to a Bun Worker", {
 				error: err instanceof Error ? err.message : String(err),
 			});
-			return spawnInlineWorker();
 		}
 	}
 	try {

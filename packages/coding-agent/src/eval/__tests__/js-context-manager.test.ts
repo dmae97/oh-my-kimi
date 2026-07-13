@@ -280,6 +280,35 @@ describe("JavaScript eval worker lifecycle", () => {
 		expect(stats.terminateCalls).toBe(1);
 	});
 
+	it("falls back to a Bun Worker when the subprocess cannot spawn", async () => {
+		using tempDir = TempDir.createSync("@omp-js-spawn-fallback-");
+		// Exercise the production ladder (process -> worker -> inline), not the
+		// worker-thread test seam the surrounding describe enables.
+		setJsEvalWorkerThreadForTests(false);
+		const stats: FakeWorkerStats = { closeRequests: 0, terminateCalls: 0 };
+		installFakeWorker(stats, { exitOnClose: true, settleRuns: true });
+		const originalSpawn = Bun.spawn;
+		let spawnAttempts = 0;
+		Bun.spawn = ((): never => {
+			spawnAttempts++;
+			throw new Error("subprocess spawn unavailable");
+		}) as unknown as typeof Bun.spawn;
+
+		try {
+			const session = makeSession(tempDir.path());
+			const sessionId = `js-spawn-fallback:${crypto.randomUUID()}`;
+			// The fake Worker settles runs without executing the cell, so an empty
+			// output proves the middle rung handled it — the inline fallback would
+			// have actually evaluated the expression and printed 42.
+			const result = await executeJs("return String(6 * 7);", { cwd: tempDir.path(), sessionId, session });
+			expect(result.exitCode).toBe(0);
+			expect(result.output.trim()).toBe("");
+			expect(spawnAttempts).toBe(1);
+		} finally {
+			Bun.spawn = originalSpawn;
+		}
+	});
+
 	it("falls back to the inline worker when the spawned worker errors during startup", async () => {
 		using tempDir = TempDir.createSync("@omp-js-worker-error-");
 		const stats: FakeWorkerStats = { closeRequests: 0, terminateCalls: 0 };
