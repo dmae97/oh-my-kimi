@@ -92,6 +92,13 @@ const CONDITIONS: Record<string, () => boolean> = {
 			return false;
 		}
 	},
+	downshiftEnabled: () => {
+		try {
+			return Settings.instance.get("downshift.enabled") === true;
+		} catch {
+			return false;
+		}
+	},
 	hindsightActive: () => {
 		try {
 			return Settings.instance.get("memory.backend") === "hindsight";

@@ -905,12 +905,12 @@ export async function buildSessionOptions(
 		if (!options.model) options.model = scopedModels[0].model;
 	}
 
-	if (parsed.noDownshift && (parsed.downshift || parsed.downshiftInto !== undefined)) {
-		throw new Error("--no-downshift cannot be combined with --downshift or --downshift-into");
+	if (parsed.noDownshift && (parsed.downshift || parsed.downshiftInto !== undefined || parsed.downshiftBoomerang)) {
+		throw new Error("--no-downshift cannot be combined with --downshift, --downshift-into, or --downshift-boomerang");
 	}
 	const downshiftEnabled = parsed.noDownshift
 		? false
-		: parsed.downshift === true || parsed.downshiftInto !== undefined
+		: parsed.downshift === true || parsed.downshiftInto !== undefined || parsed.downshiftBoomerang === true
 			? true
 			: activeSettings.get("downshift.enabled");
 	if (downshiftEnabled) {
@@ -925,7 +925,11 @@ export async function buildSessionOptions(
 		if (!modelRegistry.hasConfiguredAuth(resolved.model)) {
 			throw new Error(`No API key for ${resolved.model.provider}/${resolved.model.id}`);
 		}
-		options.downshift = { target: resolved.model, thinkingLevel: resolved.thinkingLevel };
+		options.downshift = {
+			target: resolved.model,
+			thinkingLevel: resolved.thinkingLevel,
+			boomerang: parsed.downshiftBoomerang ?? activeSettings.get("downshift.boomerang"),
+		};
 	}
 
 	if (parsed.planYoloInto !== undefined && !parsed.planYolo) {

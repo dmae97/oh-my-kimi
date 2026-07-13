@@ -44,6 +44,10 @@ export default class Index extends Command {
 		"downshift-into": Flags.string({
 			description: 'Target model for downshift (default the "smol" role)',
 		}),
+		"downshift-boomerang": Flags.boolean({
+			description:
+				"After the downshifted model yields with all todos complete, hand back to the original model for a brief validation pass (implies --downshift)",
+		}),
 		"plan-yolo": Flags.boolean({
 			description:
 				"Force read-only plan mode at start, auto-approve the plan on the model's first resolve call, then switch to --plan-yolo-into to implement it",

@@ -9,6 +9,7 @@
 ### Added
 
 - Added `--downshift` / `--downshift-into <model>` / `--no-downshift`: start on a strong model, then hand off to a fast/cheap one (default the `smol` role) at the first action, with a hidden plan nudge before the switch and a verify checklist after. The nudge asks the model to finish the plan, initialize its todo list from it, and go — the todo init (or any edit/write) is the switch trigger, so the fast model starts with a live checklist and its reminders. Enable per-user with the `downshift.enabled` setting; force it mid-session with the new `/downshift` slash command, which arms the switch even when the session wasn't started with `--downshift`
+- Added `--downshift-boomerang` (setting `downshift.boomerang`): once the downshifted model yields naturally with all todos complete, the session hands back to the original model for a brief validation pass — the fast model's turns are cut from the LLM context (the visible transcript keeps them) and the original model gets the fast model's final report with instructions to verify completion and fix anything missing
 - Added display setting to toggle between collapsing or keeping compacted history inline, now applied to live session displays
 - Added a compact session-only model picker (Alt+P) for quick model switching without changing roles
 - Added `@` search to the Alt+P / `/switch` picker: it lists configured Ctrl+P quick roles in matching segment colors and applies the selected role's model and thinking for the current session.

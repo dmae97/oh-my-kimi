@@ -259,6 +259,7 @@ import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with {
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
 import parentIrcSteerTemplate from "../prompts/steering/parent-irc.md" with { type: "text" };
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
+import downshiftBoomerangTemplate from "../prompts/system/downshift-boomerang.md" with { type: "text" };
 import downshiftChecklistPrompt from "../prompts/system/downshift-checklist.md" with { type: "text" };
 import downshiftContinuePrompt from "../prompts/system/downshift-continue.md" with { type: "text" };
 import downshiftPlanPrompt from "../prompts/system/downshift-plan.md" with { type: "text" };
@@ -430,6 +431,9 @@ const DOWNSHIFT_CONTINUE_MESSAGE_TYPE = "downshift-continue";
  *  multi-site fixes, unnecessarily broad rewrites, and reported-test-only
  *  verification. */
 const DOWNSHIFT_CHECKLIST_MESSAGE_TYPE = "downshift-checklist";
+/** `customType` for the hidden validation hand-back injected when a boomerang
+ *  downshift returns to the original model at the run's terminal settle. */
+const DOWNSHIFT_BOOMERANG_MESSAGE_TYPE = "downshift-boomerang";
 /** Tools whose first successful call marks the start of the execution phase
  *  that triggers the switch. `todo` is included because the plan nudge tells
  *  the model to initialize its todo list from the finished plan — the todo
@@ -725,6 +729,12 @@ export type { ShakeMode, ShakeResult };
  */
 export interface Downshift {
 	target: Model;
+	/** Return to the original model for a brief validation pass once the
+	 *  downshifted agent yields naturally with all todos complete. The fast
+	 *  model's turns are cut from the LLM context at the hand-back (the
+	 *  visual transcript keeps them); the original model resumes from its
+	 *  own plan handoff plus the fast model's final report. */
+	boomerang?: boolean;
 	thinkingLevel?: ConfiguredThinkingLevel;
 }
 
@@ -1676,6 +1686,9 @@ export class AgentSession {
 	#downshift: Downshift | undefined;
 	/** True once the plan nudge has been queued; scrubbed from context at the switch. */
 	#downshiftPlanInjected = false;
+	/** Set at the downshift switch when `boomerang` is configured: the model
+	 *  to hand back to at the run's terminal settle. Cleared once fired. */
+	#downshiftBoomerang?: { model: Model; thinkingLevel?: ConfiguredThinkingLevel };
 	#planYolo: PlanYolo | undefined;
 	#planYoloPreviousTools: string[] | undefined;
 	#planYoloArmed = false;
@@ -2226,6 +2239,9 @@ export class AgentSession {
 			return;
 		}
 
+		if (downshift.boomerang && this.model) {
+			this.#downshiftBoomerang = { model: this.model, thinkingLevel: this.#thinkingLevel };
+		}
 		await this.setModelTemporary(target, downshift.thinkingLevel, { ephemeral: true });
 		this.#downshift = undefined;
 		this.emitNotice(
@@ -2294,6 +2310,62 @@ export class AgentSession {
 		const stateMessages = this.agent.state.messages;
 		const filtered = stateMessages.filter(m => !isPlanNudge(m));
 		if (filtered.length !== stateMessages.length) this.agent.replaceMessages(filtered);
+	}
+
+	/**
+	 * Boomerang: hand a completed downshift run back to the original model for
+	 * a brief validation pass. Fires at the terminal settle only — a natural
+	 * yield (`stopReason === "stop"`) with no incomplete todos. The fast
+	 * model's era (checklist steer onward) is cut from the LLM context so the
+	 * original model resumes from its own plan handoff plus the fast model's
+	 * final report; the visual transcript and persisted history keep every
+	 * turn. One-shot: disarms before switching, so the validation pass itself
+	 * settles normally. Returns true when a continuation was scheduled.
+	 */
+	async #advanceDownshiftBoomerang(finalMessage: AssistantMessage): Promise<boolean> {
+		const boomerang = this.#downshiftBoomerang;
+		if (!boomerang || this.#downshift || this.#abortInProgress) return false;
+		if (finalMessage.stopReason !== "stop") return false;
+		const hasIncompleteTodos = this.getTodoPhases().some(phase =>
+			phase.tasks.some(task => task.status === "pending" || task.status === "in_progress"),
+		);
+		if (hasIncompleteTodos) return false;
+		this.#downshiftBoomerang = undefined;
+
+		const finalReport = finalMessage.content
+			.filter(block => block.type === "text")
+			.map(block => block.text)
+			.join("\n")
+			.trim();
+
+		// Cut the fast-model era: drop the checklist steer and everything after
+		// it from the LLM context. If the boundary is gone (e.g. compacted
+		// away), skip the cut — the validation pass still works, just with the
+		// full history in context.
+		const stateMessages = this.agent.state.messages;
+		const boundary = stateMessages.findLastIndex(
+			m => m.role === "custom" && m.customType === DOWNSHIFT_CHECKLIST_MESSAGE_TYPE,
+		);
+		if (boundary >= 0) this.agent.replaceMessages(stateMessages.slice(0, boundary));
+
+		const handback: AgentMessage = {
+			role: "custom",
+			customType: DOWNSHIFT_BOOMERANG_MESSAGE_TYPE,
+			content: prompt.render(downshiftBoomerangTemplate, { finalReport }),
+			attribution: "agent",
+			display: false,
+			timestamp: Date.now(),
+		};
+		this.agent.appendMessage(handback);
+		this.sessionManager.appendMessage(handback);
+		await this.setModelTemporary(boomerang.model, boomerang.thinkingLevel, { ephemeral: true });
+		this.emitNotice(
+			"info",
+			`Downshift: boomerang — back to ${boomerang.model.provider}/${boomerang.model.id} to validate completion.`,
+			"downshift",
+		);
+		this.#scheduleAgentContinue({ generation: this.#promptGeneration });
+		return true;
 	}
 
 	/**
@@ -4533,6 +4605,10 @@ export class AgentSession {
 			// the session is fully idle (the todo reminder above defers the same
 			// way inside #checkTodoCompletion).
 			if (this.#hasPendingAsyncWake()) {
+				await emitAgentEndNotification();
+				return;
+			}
+			if (await this.#advanceDownshiftBoomerang(msg)) {
 				await emitAgentEndNotification();
 				return;
 			}
