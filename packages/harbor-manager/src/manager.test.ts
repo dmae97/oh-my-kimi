@@ -145,14 +145,14 @@ describe("RunStore", () => {
 		store.discover();
 		store.setExperimentGoal("exp", "does the treatment beat the baseline?");
 		expect(store.setRunMeta("exp-base", { role: "baseline", note: "plain model" })).toBe(true);
-		expect(store.setRunMeta("exp-treat", { role: "variant", note: "slide N=8" })).toBe(true);
+		expect(store.setRunMeta("exp-treat", { role: "variant", note: "downshift flash" })).toBe(true);
 		expect(store.setRunMeta("exp-missing", { role: "variant" })).toBe(false);
 
 		const detail = experimentDetail(store, "exp");
 		expect(detail?.goal).toBe("does the treatment beat the baseline?");
 		expect(detail?.arms.map(a => [a.arm, a.run.role, a.run.note])).toEqual([
 			["base", "baseline", "plain model"],
-			["treat", "variant", "slide N=8"],
+			["treat", "variant", "downshift flash"],
 		]);
 	});
 
@@ -318,8 +318,8 @@ describe("resolveArmLaunch", () => {
 			arm: "n8",
 			model: "google/gemini-3.5-flash",
 			role: "variant",
-			note: "slide@8",
-			slide: { model: "google/gemini-3.5-flash", turns: 8 },
+			note: "downshift@flash",
+			downshift: { into: "google/gemini-3.5-flash" },
 		});
 
 		expect(launch.jobName).toBe("exp-n8");
@@ -330,7 +330,7 @@ describe("resolveArmLaunch", () => {
 		expect(launch.timeoutMultiplier).toBe(2);
 		expect(launch.model).toBe("google/gemini-3.5-flash");
 		expect(launch.role).toBe("variant");
-		expect(launch.slide?.turns).toBe(8);
+		expect(launch.downshift?.into).toBe("google/gemini-3.5-flash");
 	});
 
 	it("rejects a duplicate arm and an unknown experiment", () => {
