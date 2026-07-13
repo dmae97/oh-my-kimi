@@ -12,13 +12,26 @@ import { prompt } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { daemonClientForProject } from "../launch/client";
-import type { DaemonOperation, DaemonRpcResult, DaemonSnapshot, DaemonSpec } from "../launch/protocol";
-import type { Theme } from "../modes/theme/theme";
+import type { DaemonOperation, DaemonRpcResult, DaemonSnapshot, DaemonSpec, DaemonState } from "../launch/protocol";
+import type { Theme, ThemeColor } from "../modes/theme/theme";
 import launchDescription from "../prompts/tools/launch.md" with { type: "text" };
 import { renderStatusLine } from "../tui";
 import type { ToolSession } from ".";
 import { resolveToCwd } from "./path-utils";
-import { formatDuration, replaceTabs, shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "./render-utils";
+import {
+	capPreviewLines,
+	createCachedComponent,
+	formatDuration,
+	formatExpandHint,
+	formatMoreItems,
+	PREVIEW_LIMITS,
+	pluralize,
+	previewLine,
+	replaceTabs,
+	shortenPath,
+	TRUNCATE_LENGTHS,
+	truncateToWidth,
+} from "./render-utils";
 import { ToolError } from "./tool-errors";
 
 const launchSchema = type({
@@ -77,6 +90,12 @@ export interface LaunchToolDetails {
 	daemons?: DaemonSnapshot[];
 	cursor?: number;
 	timedOut?: boolean;
+	/** logs: daemon lifecycle state at read time. */
+	state?: DaemonState;
+	/** wait: output line that satisfied the pattern. */
+	matched?: string;
+	/** describe: immutable launch spec backing the command/cwd detail lines. */
+	spec?: DaemonSpec;
 }
 
 function requiredName(params: LaunchParams): string {
@@ -180,18 +199,44 @@ function daemonLabel(daemon: DaemonSnapshot): string {
 	)} restarts=${daemon.restartCount}${daemon.detached ? " detached" : daemon.persist ? " persistent" : ""}`;
 }
 
-function toolContent(result: DaemonRpcResult): string {
+/**
+ * Human sentences for the readiness conditions still unmet, e.g.
+ * `port 5173 on 127.0.0.1 never accepted connections`. `ready` (from the start
+ * params) adds the concrete pattern/port; absent it falls back to generic labels.
+ */
+function readyPendingSummary(daemon: DaemonSnapshot, ready?: LaunchParams["ready"]): string[] {
+	const parts: string[] = [];
+	for (const condition of daemon.readyPending ?? []) {
+		if (condition === "log") {
+			parts.push(ready?.log ? `log pattern /${ready.log}/ never matched` : "the log pattern never matched");
+		} else {
+			parts.push(
+				ready?.port !== undefined
+					? `port ${ready.port} on ${ready.host ?? "127.0.0.1"} never accepted connections`
+					: "the port never accepted connections",
+			);
+		}
+	}
+	return parts;
+}
+
+function toolContent(result: DaemonRpcResult, params: LaunchParams): string {
 	switch (result.op) {
 		case "ping":
 		case "shutdown":
 			throw new ToolError(`Internal daemon result ${result.op} is not tool-visible`);
 		case "start": {
-			const lines = [
-				`${result.daemon.state === "failed" ? "Failed to launch" : "Started"} ${daemonLabel(result.daemon)}`,
-			];
-			if (result.daemon.readyMatch) lines.push(`Ready: ${result.daemon.readyMatch}`);
-			if (result.readyTimedOut)
-				lines.push("Readiness timed out; the daemon remains running. Inspect logs or stop it.");
+			const daemon = result.daemon;
+			const lines = [`${daemon.state === "failed" ? "Failed to launch" : "Started"} ${daemonLabel(daemon)}`];
+			if (daemon.state === "failed" && daemon.exitReason) lines.push(`Reason: ${daemon.exitReason}`);
+			if (daemon.readyMatch) lines.push(`Ready log matched: ${daemon.readyMatch}`);
+			if (result.readyTimedOut) {
+				const pending = readyPendingSummary(daemon, params.ready);
+				const cause = pending.length > 0 ? `: ${pending.join("; ")}` : "";
+				lines.push(
+					`NOT ready — readiness timed out after ${params.ready?.timeout ?? 30}s${cause}. The process is still running (state: ${daemon.state}); follow its logs or stop it.`,
+				);
+			}
 			return lines.join("\n");
 		}
 		case "list":
@@ -200,8 +245,15 @@ function toolContent(result: DaemonRpcResult): string {
 				: "No daemons.";
 		case "logs":
 			return `${result.text}${result.text && !result.text.endsWith("\n") ? "\n" : ""}[${result.name}: ${result.state}; cursor=${result.cursor}${result.timedOut ? "; follow timed out" : ""}]`;
-		case "wait":
-			return `${daemonLabel(result.daemon)}${result.matched ? `\nMatched: ${result.matched}` : ""}${result.timedOut ? "\nWait timed out." : ""}`;
+		case "wait": {
+			const lines = [daemonLabel(result.daemon)];
+			if (result.matched) lines.push(`Matched: ${result.matched}`);
+			if (result.timedOut) {
+				const pending = readyPendingSummary(result.daemon);
+				lines.push(`Wait timed out${pending.length > 0 ? ` (still waiting on: ${pending.join("; ")})` : ""}.`);
+			}
+			return lines.join("\n");
+		}
 		case "send":
 			return `Sent input to ${daemonLabel(result.daemon)}`;
 		case "stop":
@@ -225,9 +277,9 @@ function toolDetails(result: DaemonRpcResult): LaunchToolDetails {
 		case "list":
 			return { op: "list", daemons: result.daemons };
 		case "logs":
-			return { op: "logs", cursor: result.cursor, timedOut: result.timedOut };
+			return { op: "logs", cursor: result.cursor, timedOut: result.timedOut, state: result.state };
 		case "wait":
-			return { op: "wait", daemon: result.daemon, timedOut: result.timedOut };
+			return { op: "wait", daemon: result.daemon, timedOut: result.timedOut, matched: result.matched };
 		case "send":
 			return { op: "send", daemon: result.daemon };
 		case "stop":
@@ -235,7 +287,7 @@ function toolDetails(result: DaemonRpcResult): LaunchToolDetails {
 		case "restart":
 			return { op: "restart", daemon: result.daemon };
 		case "describe":
-			return { op: "describe", daemon: result.daemon };
+			return { op: "describe", daemon: result.daemon, spec: result.spec };
 		case "ping":
 		case "shutdown":
 			throw new ToolError(`Internal daemon result ${result.op} is not tool-visible`);
@@ -319,38 +371,230 @@ export class LaunchTool implements AgentTool<typeof launchSchema, LaunchToolDeta
 		const client = await daemonClientForProject(this.session.cwd);
 		const result = await client.request(operationFor(params, this.session), signal);
 		return {
-			content: [{ type: "text", text: replaceTabs(toolContent(result)) }],
+			content: [{ type: "text", text: replaceTabs(toolContent(result, params)) }],
 			details: toolDetails(result),
 		};
 	}
+}
 
-	renderCall(args: LaunchParams, _options: RenderResultOptions, theme: Theme): Component {
-		const target = args.name ?? args.application;
-		return new Text(
-			renderStatusLine(
-				{
-					icon: "pending",
-					title: `Launch ${args.op ?? "…"}`,
-					description: target ? replaceTabs(target) : undefined,
-				},
-				theme,
-			),
-			0,
-			0,
-		);
-	}
+/** Args shape visible to the renderer, possibly mid-stream (every field optional). */
+type LaunchRenderArgs = Partial<LaunchParams>;
 
-	renderResult(
-		result: AgentToolResult<LaunchToolDetails, typeof launchSchema>,
-		_options: RenderResultOptions,
-		theme: Theme,
-	): Component {
-		const raw = result.content.find(item => item.type === "text")?.text ?? "";
-		const text = replaceTabs(raw)
-			.split("\n")
-			.map(line => truncateToWidth(line, TRUNCATE_LENGTHS.CONTENT))
-			.join("\n");
-		const status = renderStatusLine({ icon: result.isError ? "error" : "success", title: "Launch" }, theme);
-		return new Text(`${status}${text ? `\n${text}` : ""}`, 0, 0);
+function stateColor(state: DaemonState): ThemeColor {
+	switch (state) {
+		case "running":
+		case "ready":
+			return "success";
+		case "failed":
+			return "error";
+		case "exited":
+			return "muted";
+		default:
+			return "warning";
 	}
 }
+
+/** Compact `state · pid · uptime` fragments for the status-line meta slot. */
+function daemonMeta(daemon: DaemonSnapshot, theme: Theme): string[] {
+	const meta = [theme.fg(stateColor(daemon.state), daemon.state)];
+	if (daemon.readyPending?.length) meta.push(theme.fg("warning", `waiting on ${daemon.readyPending.join("+")}`));
+	if (daemon.exitCode !== undefined) {
+		meta.push(theme.fg(daemon.exitCode === 0 ? "muted" : "error", `exit ${daemon.exitCode}`));
+	} else if (daemon.pid !== undefined) {
+		meta.push(`pid ${daemon.pid}`);
+	}
+	const lifespan = formatDuration((daemon.exitedAt ?? Date.now()) - daemon.startedAt);
+	meta.push(daemon.exitedAt === undefined ? `up ${lifespan}` : `ran ${lifespan}`);
+	if (daemon.restartCount > 0) meta.push(`restarts ${daemon.restartCount}`);
+	if (daemon.detached) meta.push("detached");
+	else if (daemon.persist) meta.push("persistent");
+	return meta;
+}
+
+/** Op-specific call context (command line, log filters, wait condition, send payload). */
+function callMeta(args: LaunchRenderArgs): string[] {
+	const meta: string[] = [];
+	switch (args.op) {
+		case "start":
+			if (args.application) meta.push([args.application, ...(args.args ?? [])].join(" "));
+			break;
+		case "logs":
+			if (args.follow) meta.push("follow");
+			if (args.grep) meta.push(`grep /${args.grep}/`);
+			break;
+		case "wait":
+			meta.push(args.pattern ? `for /${args.pattern}/` : `for ${args.for ?? "exit"}`);
+			break;
+		case "send":
+			if (args.signal) meta.push(args.signal);
+			else if (args.text) meta.push(args.text);
+			if (args.keys?.length) meta.push(args.keys.join(" "));
+			break;
+	}
+	return meta.map(entry => previewLine(replaceTabs(entry), TRUNCATE_LENGTHS.SHORT));
+}
+
+/** TUI renderer: one status header per op, meta from structured details, capped body lines. */
+export const launchToolRenderer = {
+	inline: true,
+	mergeCallAndResult: true,
+	animatedPendingPreview: true,
+
+	renderCall(args: LaunchRenderArgs, options: RenderResultOptions, theme: Theme): Component {
+		const target = args.name ?? args.application;
+		const header = renderStatusLine(
+			{
+				icon: options.spinnerFrame !== undefined ? "running" : "pending",
+				spinnerFrame: options.spinnerFrame,
+				title: `Launch ${args.op ?? "…"}`,
+				description: target ? replaceTabs(target) : undefined,
+				meta: callMeta(args),
+			},
+			theme,
+		);
+		return new Text(header, 0, 0);
+	},
+
+	renderResult(
+		result: { content: Array<{ type: string; text?: string }>; details?: LaunchToolDetails; isError?: boolean },
+		options: RenderResultOptions,
+		theme: Theme,
+		args?: LaunchRenderArgs,
+	): Component {
+		const details = result.details;
+		const params = args ?? {};
+		const op = details?.op ?? params.op;
+		const isError = result.isError === true;
+		const daemon = details?.daemon;
+		const failed = isError || daemon?.state === "failed";
+		const text =
+			result.content
+				?.filter(item => item.type === "text")
+				.map(item => item.text ?? "")
+				.join("\n") ?? "";
+
+		const meta: string[] = [];
+		const body: string[] = [];
+		let description = params.name ?? daemon?.name;
+
+		if (isError) {
+			for (const line of replaceTabs(text.trimEnd()).split("\n")) body.push(theme.fg("error", line));
+		} else {
+			switch (op) {
+				case "start": {
+					meta.push(...callMeta(params));
+					if (daemon) meta.push(...daemonMeta(daemon, theme));
+					if (daemon?.readyMatch) body.push(theme.fg("dim", `log matched: ${replaceTabs(daemon.readyMatch)}`));
+					if (daemon?.state === "failed" && daemon.exitReason)
+						body.push(theme.fg("error", replaceTabs(daemon.exitReason)));
+					if (details?.timedOut) {
+						const pending = daemon ? readyPendingSummary(daemon, params.ready) : [];
+						body.push(
+							theme.fg(
+								"warning",
+								pending.length > 0
+									? `Not ready — ${pending.join("; ")}. Still running.`
+									: "Readiness timed out; the process is still running.",
+							),
+						);
+					}
+					break;
+				}
+				case "send":
+					meta.push(...callMeta(params));
+					if (daemon) meta.push(...daemonMeta(daemon, theme));
+					break;
+				case "stop":
+				case "restart":
+					if (daemon) meta.push(...daemonMeta(daemon, theme));
+					break;
+				case "wait": {
+					meta.push(...callMeta(params));
+					if (daemon) meta.push(...daemonMeta(daemon, theme));
+					if (details?.matched) body.push(theme.fg("dim", `matched: ${replaceTabs(details.matched)}`));
+					if (details?.timedOut) {
+						const pending = daemon ? readyPendingSummary(daemon) : [];
+						body.push(
+							theme.fg(
+								"warning",
+								pending.length > 0
+									? `Wait timed out — still waiting on ${pending.join("; ")}.`
+									: "Wait timed out.",
+							),
+						);
+					}
+					break;
+				}
+				case "list": {
+					const daemons = details?.daemons ?? [];
+					description = `${daemons.length || "no"} ${pluralize("process", daemons.length)}`;
+					for (const item of daemons) {
+						body.push(
+							`${theme.fg("accent", replaceTabs(item.name))} ${theme.fg("dim", daemonMeta(item, theme).join(theme.sep.dot))}`,
+						);
+					}
+					break;
+				}
+				case "logs": {
+					if (details?.state) meta.push(theme.fg(stateColor(details.state), details.state));
+					if (details?.cursor !== undefined) meta.push(`cursor ${details.cursor}`);
+					if (details?.timedOut) meta.push(theme.fg("warning", "follow timed out"));
+					// Strip the trailing `[name: state; cursor=N]` status suffix `toolContent` appends.
+					const logText = text.replace(/\n?\[[^\n]*\]$/, "").trimEnd();
+					if (logText) {
+						for (const line of logText.split("\n")) body.push(theme.fg("toolOutput", replaceTabs(line)));
+					}
+					break;
+				}
+				case "describe": {
+					if (daemon) meta.push(...daemonMeta(daemon, theme));
+					const spec = details?.spec;
+					if (spec) {
+						body.push(theme.fg("toolOutput", replaceTabs([spec.application, ...spec.args].join(" "))));
+						body.push(theme.fg("dim", `cwd ${shortenPath(spec.cwd)}`));
+						const flags = [`pty ${spec.pty}`, `restart ${spec.restart}`];
+						if (spec.detached) flags.push("detached");
+						else if (spec.persist) flags.push("persistent");
+						body.push(theme.fg("dim", flags.join(theme.sep.dot)));
+					}
+					break;
+				}
+				default:
+					if (text.trim()) {
+						for (const line of replaceTabs(text.trimEnd()).split("\n")) body.push(theme.fg("toolOutput", line));
+					}
+			}
+		}
+
+		const header = renderStatusLine(
+			{
+				...(failed
+					? { icon: "error" as const }
+					: options.isPartial
+						? { icon: "pending" as const }
+						: { iconOverride: theme.styledSymbol("tool.launch", "accent") }),
+				title: `Launch ${op ?? ""}`.trimEnd(),
+				description: description ? replaceTabs(description) : undefined,
+				meta,
+			},
+			theme,
+		);
+
+		return createCachedComponent(
+			() => options.expanded,
+			(width, expanded) => {
+				let visible = body;
+				if (op === "logs") {
+					visible = capPreviewLines(body, theme, { expanded });
+				} else if (!expanded && op === "list" && body.length > PREVIEW_LIMITS.COLLAPSED_ITEMS) {
+					const remaining = body.length - PREVIEW_LIMITS.COLLAPSED_ITEMS;
+					visible = [
+						...body.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS),
+						theme.fg("dim", `${formatMoreItems(remaining, "process")} ${formatExpandHint(theme, false, true)}`),
+					];
+				}
+				return [header, ...visible].map(line => truncateToWidth(line, width));
+			},
+		);
+	},
+};

@@ -252,4 +252,47 @@ setInterval(() => {}, 1000);
 			}
 		}
 	}, 20_000);
+
+	// Regression: a start whose log pattern matched but whose port never accepted
+	// used to report "Ready: <match>" AND "Readiness timed out" with no hint of
+	// which condition failed. The snapshot now names the unmet condition(s).
+	it("names the unmet readiness condition when start times out", async () => {
+		const projectDir = await tempDir("omp-daemon-ready-project-");
+		const runtimeDir = await tempDir("omp-daemon-ready-runtime-");
+		const scriptPath = path.join(projectDir, "service.ts");
+		await Bun.write(scriptPath, `process.stdout.write("LISTENING\\n"); setInterval(() => {}, 1000);\n`);
+		// Reserve an ephemeral port and release it so nothing accepts connections there.
+		const probe = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+		const deadPort = probe.port;
+		probe.stop(true);
+		const client = await createDaemonBrokerClient(projectDir, { runtimeDir, idleGraceMs: 5_000 });
+		try {
+			const spec: DaemonSpec = {
+				name: "never-ready",
+				application: process.execPath,
+				args: [scriptPath],
+				env: {},
+				cwd: projectDir,
+				pty: false,
+				ready: { log: "LISTENING", port: deadPort, timeoutMs: 3_000 },
+				restart: "no",
+				persist: false,
+				detached: false,
+			};
+			const started = await client.request({ op: "start", spec });
+			expect(started.op).toBe("start");
+			if (started.op !== "start") throw new Error("unexpected start result");
+			expect(started.readyTimedOut).toBeTrue();
+			expect(started.daemon.state).toBe("starting");
+			expect(started.daemon.readyMatch).toBe("LISTENING");
+			expect(started.daemon.readyPending).toEqual(["port"]);
+
+			const stopped = await client.request({ op: "stop", name: "never-ready", timeoutMs: 2_000 });
+			if (stopped.op !== "stop") throw new Error("unexpected stop result");
+			// Terminal states carry no stale readiness noise.
+			expect(stopped.daemon.readyPending).toBeUndefined();
+		} finally {
+			await shutdown(client);
+		}
+	}, 20_000);
 });

@@ -85,6 +85,18 @@ function terminalState(state: DaemonSnapshot["state"]): boolean {
 	return state === "exited" || state === "failed";
 }
 
+/** Mirror per-condition readiness progress into the snapshot so clients can see which condition is unmet. */
+function syncReadyPending(record: ManagedDaemon): void {
+	if (record.snapshot.state !== "starting") {
+		record.snapshot.readyPending = undefined;
+		return;
+	}
+	const pending: ("log" | "port")[] = [];
+	if (!record.logReady) pending.push("log");
+	if (!record.portReady) pending.push("port");
+	record.snapshot.readyPending = pending.length > 0 ? pending : undefined;
+}
+
 async function fileTextSlice(filePath: string, head: boolean): Promise<string> {
 	try {
 		const stat = await fs.stat(filePath);
@@ -455,6 +467,7 @@ class DaemonBroker {
 			consecutiveFailures: 0,
 			persistQueue: Promise.resolve(),
 		};
+		syncReadyPending(record);
 		this.#records.set(spec.name, record);
 		await this.#launch(record);
 		let readyTimedOut = false;
@@ -480,6 +493,7 @@ class DaemonBroker {
 		record.snapshot.readyMatch = undefined;
 		record.logReady = !record.spec.ready?.log;
 		record.portReady = record.spec.ready?.port === undefined;
+		syncReadyPending(record);
 		record.readinessBuffer = "";
 		record.outputOffset = 0;
 		this.#persist(record);
@@ -645,6 +659,7 @@ class DaemonBroker {
 			if (match) {
 				record.logReady = true;
 				record.snapshot.readyMatch = match[0].slice(0, 500);
+				syncReadyPending(record);
 			}
 		}
 		this.#markReady(record);
@@ -667,6 +682,7 @@ class DaemonBroker {
 		while (generation === record.generation && !terminalState(record.snapshot.state)) {
 			if (await connectPort(host, port)) {
 				record.portReady = true;
+				syncReadyPending(record);
 				this.#markReady(record);
 				return;
 			}
@@ -696,6 +712,7 @@ class DaemonBroker {
 		record.snapshot.exitedAt = Date.now();
 		record.snapshot.exitCode = exitCode;
 		record.snapshot.exitReason = error;
+		record.snapshot.readyPending = undefined;
 		const failed = error !== undefined || (exitCode !== undefined && exitCode !== 0);
 		const shouldRestart =
 			!record.stopRequested &&
@@ -920,6 +937,7 @@ class DaemonBroker {
 					consecutiveFailures: 0,
 					persistQueue: Promise.resolve(),
 				};
+				syncReadyPending(record);
 				this.#records.set(snapshot.name, record);
 				if (detached && spec.ready?.port !== undefined && snapshot.state !== "ready") {
 					void this.#pollPort(record, record.generation, spec.ready);

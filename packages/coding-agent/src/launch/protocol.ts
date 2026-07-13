@@ -57,6 +57,8 @@ export interface DaemonSnapshot {
 	outputBytes: number;
 	owner?: string;
 	readyMatch?: string;
+	/** Readiness conditions still unmet while `state` is `starting`; absent once ready or without a ready spec. */
+	readyPending?: ("log" | "port")[];
 	persist: boolean;
 	detached: boolean;
 }
@@ -188,6 +190,16 @@ function daemonSignal(value: unknown): DaemonSignal {
 	throw new Error(`Unknown daemon signal: ${signal}`);
 }
 
+function readyPendingList(value: unknown): ("log" | "port")[] {
+	if (!Array.isArray(value)) throw new Error("daemon.readyPending must be an array");
+	const result: ("log" | "port")[] = [];
+	for (const item of value) {
+		if (item !== "log" && item !== "port") throw new Error(`Unknown readiness condition: ${String(item)}`);
+		result.push(item);
+	}
+	return result;
+}
+
 function readySpec(value: unknown): DaemonReadySpec {
 	const source = record(value, "ready");
 	const log = optionalString(source.log, "ready.log");
@@ -234,6 +246,7 @@ export function parseDaemonSnapshot(value: unknown): DaemonSnapshot {
 		outputBytes: numberValue(source.outputBytes, "daemon.outputBytes"),
 		owner: optionalString(source.owner, "daemon.owner"),
 		readyMatch: optionalString(source.readyMatch, "daemon.readyMatch"),
+		readyPending: source.readyPending === undefined ? undefined : readyPendingList(source.readyPending),
 		persist: booleanValue(source.persist, "daemon.persist"),
 		detached: source.detached === undefined ? false : booleanValue(source.detached, "daemon.detached"),
 	};
