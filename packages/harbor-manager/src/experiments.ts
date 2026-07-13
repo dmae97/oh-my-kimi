@@ -82,7 +82,7 @@ function downshiftLabel(downshiftJson: string | null): string {
 			const trigger = parsed.onAction ? "on first edit/write" : `after ${parsed.turns} turns`;
 			return ` → ${parsed.model} ${trigger}${parsed.plan ? " +plan" : ""}`;
 		}
-		return ` → ${parsed.into ?? "smol"} at first edit/write`;
+		return ` → ${parsed.into ?? "smol"} at first action`;
 	} catch {
 		return "";
 	}

@@ -113,7 +113,7 @@ describe("summarizeArm", () => {
 			}),
 			[],
 		);
-		expect(arm.config).toBe("harbor · anthropic/claude-opus-4-8 → google/gemini-3.5-flash at first edit/write");
+		expect(arm.config).toBe("harbor · anthropic/claude-opus-4-8 → google/gemini-3.5-flash at first action");
 	});
 
 	it("still labels legacy reasoning-slide rows", () => {

@@ -51,7 +51,7 @@ export interface LaunchRequest {
 	agent?: string;
 	jobName?: string;
 	webSearch?: boolean;
-	/** Downshift to a fast/cheap model at the first edit/write; `into` overrides the default "smol" target. */
+	/** Downshift to a fast/cheap model at the first action (post-plan todo init or edit/write); `into` overrides the default "smol" target. */
 	downshift?: { into?: string };
 	/** Role of this run inside its experiment (baseline vs treatment). */
 	role?: RunRole;
