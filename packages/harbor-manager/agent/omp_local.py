@@ -88,7 +88,33 @@ def _patch_harbor_cleanup_cancellation() -> None:
     Trial._omp_cleanup_cancellation_patch = True
 
 
+def _patch_apple_container_dns() -> None:
+    """Inject an explicit resolver into every Apple Container `container run`.
+
+    Containers default to the vmnet gateway resolver (192.168.64.1:53), which is
+    unreachable when VPN/DNS agents on the host intercept port 53. The runner
+    sets OMP_BENCH_CONTAINER_DNS for apple-container jobs; absent, no-op.
+    """
+    dns = os.environ.get("OMP_BENCH_CONTAINER_DNS")
+    if not dns:
+        return
+    from harbor.environments.apple_container import AppleContainerEnvironment
+
+    if getattr(AppleContainerEnvironment, "_omp_dns_patch", False):
+        return
+    original = AppleContainerEnvironment._run_container_command
+
+    async def _run_with_dns(self, args, *pargs, **kwargs):
+        if args and args[0] == "run":
+            args = ["run", "--dns", dns, *args[1:]]
+        return await original(self, args, *pargs, **kwargs)
+
+    AppleContainerEnvironment._run_container_command = _run_with_dns
+    AppleContainerEnvironment._omp_dns_patch = True
+
+
 _patch_harbor_cleanup_cancellation()
+_patch_apple_container_dns()
 
 # Container-side staging paths (absolute; never depend on $HOME at write time).
 _TARBALL_DST = "/tmp/omp-local.tgz"

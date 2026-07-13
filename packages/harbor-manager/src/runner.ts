@@ -1,4 +1,7 @@
 #!/usr/bin/env bun
+import { spawnSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
 /**
  * Harbor benchmark runner for the local `omp` build.
  *
@@ -15,9 +18,7 @@
  *   harbor-manager harbor --agent oracle --tasks 2        # cheap pipeline smoke
  *   harbor-manager harbor --help
  */
-import { spawnSync } from "node:child_process";
-import * as fs from "node:fs";
-import * as path from "node:path";
+import type { Server } from "bun";
 
 // ────────────────────────────────────────────────────────────────────── config
 
@@ -30,6 +31,17 @@ const AGENT_IMPORT_PATH = "omp_local:OmpLocal";
 /** Container-side mount points for `--install source` (must match omp_local.py defaults). */
 const SOURCE_SRC_MOUNT = "/opt/omp/src";
 const SOURCE_BIN_MOUNT = "/opt/omp/bin";
+
+/** Host address containers see on Apple Container's vmnet (bridge) network. */
+const VMNET_HOST_IP = "192.168.64.1";
+const DOCKER_GATEWAY_URL = "http://host.docker.internal:4000";
+const VMNET_GATEWAY_URL = `http://${VMNET_HOST_IP}:4000`;
+/**
+ * Resolver injected into Apple Container runs (OMP_BENCH_CONTAINER_DNS overrides).
+ * The vmnet gateway resolver (192.168.64.1:53) is unreachable when VPN/DNS
+ * agents on the host intercept port 53, so containers get an explicit one.
+ */
+const CONTAINER_DNS = process.env.OMP_BENCH_CONTAINER_DNS || "1.1.1.1";
 
 export interface Config {
 	models: string[];
@@ -64,6 +76,8 @@ export interface Config {
 	cleanup: boolean;
 	cleanupForce: boolean;
 	hostNetwork: boolean;
+	/** Harbor environment backend running the task containers. */
+	envType: "docker" | "apple-container";
 	passthrough: string[];
 	env: Record<string, string>;
 }
@@ -89,7 +103,7 @@ function defaultConfig(): Config {
 		build: true,
 		jobsDir: path.join(REPO_ROOT, "runs", "harbor"),
 		jobName: null,
-		gatewayUrl: "http://host.docker.internal:4000",
+		gatewayUrl: DOCKER_GATEWAY_URL,
 		gatewayToken: "no-auth",
 		providers: [],
 		gateway: true,
@@ -101,6 +115,7 @@ function defaultConfig(): Config {
 		cleanup: false,
 		cleanupForce: false,
 		hostNetwork: false,
+		envType: "docker",
 		passthrough: [],
 		env: {},
 	};
@@ -144,12 +159,16 @@ Gateway (auth, no keys in container):
       --web-search               Enable omp web_search (off by default; can't auth via gateway)
       --allow-host <host>        harbor --allow-agent-host (repeatable)
 
+Environment:
+      --environment <type>       docker (default) | apple-container (Apple 'container' CLI;
+                                 no Docker needed, gateway auto-forwarded via 192.168.64.1)
+
 Output / control:
   -o, --jobs-dir <path>          Default <repo>/runs/harbor
       --job-name <name>          Default <model>-<timestamp>
       --dry-run                  Print the harbor command + models.yml and exit
-      --cleanup                  Clean up stale and exited Harbor Docker resources safely before starting
-      --cleanup-force            Force-stop and remove ALL previous Harbor Docker containers and networks
+      --cleanup                  Clean up stale and exited Harbor Docker resources safely before starting (docker only)
+      --cleanup-force            Force-stop and remove ALL previous Harbor Docker containers and networks (docker only)
       --host-network             Run Docker task containers using host networking (experimental)
   -h, --help                     This help
 `;
@@ -313,11 +332,24 @@ export function parseArgs(argv: string[]): Config {
 				}
 				break;
 			}
+			case "--environment": {
+				const v = take(arg);
+				if (v !== "docker" && v !== "apple-container") {
+					throw new Error("--environment must be docker|apple-container");
+				}
+				cfg.envType = v;
+				break;
+			}
 			default:
 				throw new Error(`unknown flag: ${arg} (see --help)`);
 		}
 	}
 	if (cfg.models.length === 0) cfg.models = ["anthropic/claude-sonnet-4-6"];
+	if (cfg.envType === "apple-container") {
+		if (cfg.hostNetwork) throw new Error("--host-network is docker-only (compose overlay)");
+		// host.docker.internal doesn't exist on vmnet; containers reach the host at the bridge address.
+		if (cfg.gatewayUrl === DOCKER_GATEWAY_URL) cfg.gatewayUrl = VMNET_GATEWAY_URL;
+	}
 	return cfg;
 }
 
@@ -899,7 +931,7 @@ function sourceDepsStamp(manifests: string[], bunVersion: string): string {
  * a manifest/lockfile or the pinned bun version changes; TS edits never invalidate it.
  */
 export function prepareSourceDeps(cfg: Config): SourceMount {
-	const arch = dockerServerArch();
+	const arch = cfg.envType === "apple-container" ? "arm64" : dockerServerArch();
 	const bunVersion = repoBunVersion();
 	const depsDir = path.join(cfg.jobsDir, "_bench", "_deps", `linux-${arch}`);
 	const pkgDirs = workspacePackageDirs();
@@ -925,27 +957,43 @@ export function prepareSourceDeps(cfg: Config): SourceMount {
 		// (root `prepare` → gen:tool-views) would fail; patchedDependencies still apply.
 		const script =
 			'mkdir -p /deps/bin && cp "$(command -v bun)" /deps/bin/bun && cd /deps && bun install --production --omit=optional --ignore-scripts';
-		const r = spawnSync(
-			"docker",
-			[
-				"run",
-				"--rm",
-				"--platform",
-				`linux/${arch === "x64" ? "amd64" : "arm64"}`,
-				"-e",
-				"HOME=/tmp",
-				"-v",
-				`${depsDir}:/deps`,
-				`oven/bun:${bunVersion}`,
-				"sh",
-				"-c",
-				script,
-			],
-			{ stdio: ["ignore", "inherit", "inherit"] },
-		);
+		const image = `oven/bun:${bunVersion}`;
+		const runArgv =
+			cfg.envType === "apple-container"
+				? [
+						"container",
+						"run",
+						"--rm",
+						"--dns",
+						CONTAINER_DNS,
+						"-e",
+						"HOME=/tmp",
+						"-v",
+						`${depsDir}:/deps`,
+						image,
+						"sh",
+						"-c",
+						script,
+					]
+				: [
+						"docker",
+						"run",
+						"--rm",
+						"--platform",
+						`linux/${arch === "x64" ? "amd64" : "arm64"}`,
+						"-e",
+						"HOME=/tmp",
+						"-v",
+						`${depsDir}:/deps`,
+						image,
+						"sh",
+						"-c",
+						script,
+					];
+		const r = spawnSync(runArgv[0], runArgv.slice(1), { stdio: ["ignore", "inherit", "inherit"] });
 		if (r.status !== 0) {
 			fs.rmSync(stampFile, { force: true });
-			throw new Error(`source deps install failed (docker exit ${r.status})`);
+			throw new Error(`source deps install failed (${runArgv[0]} exit ${r.status})`);
 		}
 		fs.writeFileSync(stampFile, `${stamp}\n`);
 	}
@@ -988,6 +1036,28 @@ function writeComposeOverlay(benchDir: string, cfg: Config, source: SourceMount 
 	return file;
 }
 
+/**
+ * `harbor run --mounts` JSON (compose service-volume format) for non-compose
+ * environments (apple-container): source repo + linux deps tree. Apple
+ * Container currently mounts binds read-write regardless of `read_only`.
+ */
+function buildMountsJson(source: SourceMount | null): string | null {
+	if (!source) return null;
+	const mounts: Array<{ type: "bind"; source: string; target: string; read_only: true }> = [
+		{ type: "bind", source: REPO_ROOT, target: SOURCE_SRC_MOUNT, read_only: true },
+	];
+	for (const rel of source.nodeModules) {
+		mounts.push({
+			type: "bind",
+			source: path.join(source.depsDir, rel),
+			target: `${SOURCE_SRC_MOUNT}/${rel}`,
+			read_only: true,
+		});
+	}
+	mounts.push({ type: "bind", source: path.join(source.depsDir, "bin"), target: SOURCE_BIN_MOUNT, read_only: true });
+	return JSON.stringify(mounts);
+}
+
 function deriveProviders(cfg: Config): string[] {
 	const set = new Set<string>(cfg.providers);
 	for (const m of cfg.models) {
@@ -1017,9 +1087,54 @@ function writeModelsYaml(benchDir: string, cfg: Config): string {
 }
 
 function gatewayHealthOk(url: string): boolean {
-	const hostUrl = url.replace("host.docker.internal", "127.0.0.1").replace(/\/+$/, "");
+	const hostUrl = url
+		.replace("host.docker.internal", "127.0.0.1")
+		.replace(VMNET_HOST_IP, "127.0.0.1")
+		.replace(/\/+$/, "");
 	const r = spawnSync("curl", ["-s", "--max-time", "4", `${hostUrl}/healthz`], { encoding: "utf8" });
 	return r.status === 0 && (r.stdout ?? "").includes('"ok":true');
+}
+
+/**
+ * HTTP forward from the vmnet host address to the loopback-bound auth gateway.
+ * Apple Container has no host.docker.internal: containers reach the host at
+ * 192.168.64.1, but the pm2 gateway binds 127.0.0.1 only. The bridge interface
+ * only exists while a container is running, so binding retries until it appears.
+ */
+function startVmnetGatewayForward(cfg: Config): { stop(): void } | null {
+	if (cfg.envType !== "apple-container" || !cfg.gateway) return null;
+	const url = new URL(cfg.gatewayUrl);
+	if (url.hostname !== VMNET_HOST_IP) return null;
+	const port = Number(url.port || "80");
+	let server: Server<undefined> | null = null;
+	let timer: Timer | undefined;
+	let stopped = false;
+	const bind = (): void => {
+		if (stopped) return;
+		try {
+			server = Bun.serve({
+				hostname: VMNET_HOST_IP,
+				port,
+				idleTimeout: 0,
+				fetch(req) {
+					const target = new URL(req.url);
+					target.hostname = "127.0.0.1";
+					return fetch(target, { method: req.method, headers: req.headers, body: req.body, redirect: "manual" });
+				},
+			});
+			process.stdout.write(dim(`gateway forward: ${VMNET_HOST_IP}:${port} → 127.0.0.1:${port}\n`));
+		} catch {
+			timer = setTimeout(bind, 2000);
+		}
+	};
+	bind();
+	return {
+		stop(): void {
+			stopped = true;
+			clearTimeout(timer);
+			server?.stop(true);
+		},
+	};
 }
 
 function buildHarborArgs(
@@ -1028,6 +1143,7 @@ function buildHarborArgs(
 	modelsYaml: string,
 	tarball: string | null,
 	composeOverlayPath: string | null,
+	mountsJson: string | null,
 ): string[] {
 	const a: string[] = ["run", "-d", cfg.dataset, "-o", cfg.jobsDir, "--job-name", jobName];
 	a.push("-n", String(cfg.concurrency), "-k", String(cfg.attempts), "-l", String(cfg.tasks));
@@ -1040,6 +1156,8 @@ function buildHarborArgs(
 	if (composeOverlayPath) {
 		a.push("--extra-docker-compose", composeOverlayPath);
 	}
+	if (cfg.envType !== "docker") a.push("-e", cfg.envType);
+	if (mountsJson) a.push("--mounts", mountsJson);
 
 	if (cfg.agent === "omp") {
 		// Config + secrets travel via env (OMP_BENCH_*); the agent reads os.environ.
@@ -1117,6 +1235,7 @@ export function buildHarborEnv(
 		env.OMP_BENCH_GATEWAY_TOKEN = cfg.gatewayToken;
 		env.OMP_BENCH_GATEWAY_PROVIDERS = deriveProviders(cfg).join(",");
 	}
+	if (cfg.envType === "apple-container") env.OMP_BENCH_CONTAINER_DNS = CONTAINER_DNS;
 	const forward = collectForwardEnv(cfg);
 	if (Object.keys(forward).length > 0) env.OMP_BENCH_FORWARD_ENV = JSON.stringify(forward);
 	return env;
@@ -1242,8 +1361,13 @@ async function runBenchmark(cfg: Config): Promise<BenchmarkRun> {
 	if (!which("harbor")) {
 		throw new Error("harbor not found on PATH. Install with: uv tool install harbor");
 	}
-	if (cfg.agent === "omp" && !which("docker")) {
+	if (cfg.agent === "omp" && cfg.envType === "docker" && !which("docker")) {
 		throw new Error("docker not found on PATH (required to run task containers).");
+	}
+	if (cfg.envType === "apple-container" && !which("container")) {
+		throw new Error(
+			"Apple 'container' CLI not found. Install with: brew install container && container system start",
+		);
 	}
 
 	const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
@@ -1286,9 +1410,10 @@ async function runBenchmark(cfg: Config): Promise<BenchmarkRun> {
 			);
 		}
 	}
-	const composeOverlayPath = writeComposeOverlay(benchDir, cfg, source);
+	const composeOverlayPath = cfg.envType === "docker" ? writeComposeOverlay(benchDir, cfg, source) : null;
+	const mountsJson = cfg.envType === "docker" ? null : buildMountsJson(source);
 
-	const harborArgs = buildHarborArgs(cfg, jobName, modelsYaml, tarball, composeOverlayPath);
+	const harborArgs = buildHarborArgs(cfg, jobName, modelsYaml, tarball, composeOverlayPath, mountsJson);
 	const harborEnv = buildHarborEnv(cfg, modelsYaml, tarball, version, source);
 	const logPath = path.join(benchDir, "harbor.log");
 	if (cfg.dryRun) {
@@ -1316,10 +1441,11 @@ async function runBenchmark(cfg: Config): Promise<BenchmarkRun> {
 	}
 
 	// Pre-run cleanup of leftover Harbor resources, if requested.
-	if ((cfg.cleanup || cfg.cleanupForce) && which("docker")) {
+	if ((cfg.cleanup || cfg.cleanupForce) && cfg.envType === "docker" && which("docker")) {
 		runDockerCleanup(cfg.cleanupForce);
 	}
 
+	const gatewayForward = startVmnetGatewayForward(cfg);
 	process.stdout.write(dim(`launching harbor → ${logPath}\n`));
 	const logFd = fs.openSync(logPath, "a");
 	const proc = Bun.spawn(["harbor", ...harborArgs], {
@@ -1358,6 +1484,7 @@ async function runBenchmark(cfg: Config): Promise<BenchmarkRun> {
 		}
 		render(st); // final frame
 	} finally {
+		gatewayForward?.stop();
 		if (isTTY) process.stdout.write(`${ESC}?25h${ESC}?1049l`); // restore cursor + screen
 		try {
 			fs.closeSync(logFd);

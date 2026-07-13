@@ -73,7 +73,8 @@ stays the source of truth and historical CLI runs are auto-discovered.
 | `--env <KEY[=VALUE]>` | — | Forward env into the omp container (repeatable); `KEY` alone forwards the host value |
 | `--binary <path>` | — | Prebuilt omp binary (repeat for arm64+x64) |
 | `--install <source\|local\|published>` | `source` | `source` = repo bind-mount, `local` = tarball pack, `published` = npm `@oh-my-pi/pi-coding-agent` |
-| `--gateway-url <url>` | `http://host.docker.internal:4000` | |
+| `--environment <docker\|apple-container>` | `docker` | `apple-container` runs trials via Apple's `container` CLI (no Docker); source/deps mounts go through `harbor --mounts` and the gateway is auto-forwarded from `192.168.64.1:4000` to the loopback-bound gateway |
+| `--gateway-url <url>` | `http://host.docker.internal:4000` | `http://192.168.64.1:4000` under `--environment apple-container` |
 | `--no-gateway` | off | Pass host provider keys into containers instead |
 | `-o, --jobs-dir <path>` | `<repo>/runs/harbor` | Shared with the server |
 | `--dry-run` | off | Print the harbor command + models.yml and exit |
@@ -98,6 +99,10 @@ stays the source of truth and historical CLI runs are auto-discovered.
   fail setup with an arch-mismatch error — use `--binary` for those.
 - **The repo is visible (read-only) inside task containers** in source mode;
   fine for curated benchmarks, but don't point it at untrusted tasks.
+- **Apple Container specifics.** `--environment apple-container` needs
+  `brew install container && container system start` (macOS 26+, Apple
+  silicon). `--host-network` and `--cleanup*` are docker-only, and bind
+  mounts are read-write (the backend ignores `read_only`).
 - **`--install local` reflects local TS changes** (inlined into `dist/cli.js`),
   but **not** uncommitted Rust natives — rebuild `packages/natives` per target
   first (the version sentinel must match).
