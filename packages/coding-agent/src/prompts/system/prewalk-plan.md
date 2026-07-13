@@ -8,6 +8,6 @@ First, state the plan itself, explicitly and comprehensively:
 
 Be thorough and concrete — this plan is the reference for the remainder of the run. You may verify details with tools after the plan is written, never before.
 
-Then, only once the plan above is complete and detailed, in the SAME reply, capture it as a SUPER-DETAILED todo list (the todo tool): one item per concrete step from the plan — each naming its exact file/symbol/command target and its verification — not a handful of vague phase headings. The todo list must be precise enough that every item can be checked off against an observable result.
+Then, only once the plan above is complete, in the SAME reply, capture it as a todo list (the todo tool): 5-9 items, one per MEANINGFUL step, each naming its concrete target and its verification. Only steps that change or verify code belong on the list — no reporting, bookkeeping, cleanup-ceremony, or release-note items. The todo list serves the task, never the reverse: when reality disagrees with an item, fix the actual problem rather than working the checklist.
 
 This is a checkpoint, not a final answer: do not end your turn on the plan alone — after recording the todo list, continue the task; do not stop here.

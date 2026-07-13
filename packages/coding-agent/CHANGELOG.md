@@ -19,7 +19,7 @@
 ### Changed
 
 - Updated `--mode json` logs to include provider payloads in auto-compaction events
-- Refined the prewalk planning instructions to require a super-detailed todo list with one item per concrete step, each specifying its target and verification method
+- Refined prewalk planning to require 5-9 meaningful todo items with concrete targets and checks
 - Updated tangential agent forks to ignore parent session history and focus exclusively on the new request
 - Hardened `/tan` fork isolation: the clone's inherited todo list is cleared at fork (parent todo reminders no longer drag the tan back onto the parent's task), the fork notice warns that the parent is concurrently editing the same working directory, and the notice is re-injected after each compaction so the fork boundary survives summarization
 - Added visual markers in the transcript for elided tool calls that have no corresponding result

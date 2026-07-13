@@ -645,3 +645,5 @@ if (import.meta.main) {
 	process.on("SIGINT", shutdown);
 	process.on("SIGTERM", shutdown);
 }
+
+// hot-reload-probe
