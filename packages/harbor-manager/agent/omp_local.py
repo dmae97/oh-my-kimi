@@ -1,12 +1,18 @@
 """Harbor agent that runs the LOCAL oh-my-pi (`omp`) build inside task containers.
 
 Unlike Harbor's built-in `pi` agent (which `npm i -g @mariozechner/pi-coding-agent`),
-this installs the working tree at `/work/pi`:
+this runs the working tree at `/work/pi`. Install modes (`OMP_BENCH_INSTALL`):
 
-  * the runner packs `packages/coding-agent` with `bun pm pack` (bundles every
-    workspace TS package into `dist/cli.js`) and hands us the tarball path,
-  * we upload it, install Bun, `bun install` the bundle's external deps + the
-    platform native addon, and run `bun .../dist/cli.js`.
+  * `source` (default): the runner bind-mounts the repo read-only plus a
+    prebuilt linux `node_modules` tree and a linux `bun` binary; omp runs
+    straight from `packages/coding-agent/src/cli.ts`. Zero-network setup, and
+    host TS edits apply to the next trial with no rebuild (Rust natives load
+    from the in-tree `packages/natives/native/*.node` prebuilds).
+  * `local`: the runner packs `packages/coding-agent` with `bun pm pack`
+    (bundles every workspace TS package into `dist/cli.js`) and hands us the
+    tarball path; we upload it, install Bun, `bun install` the bundle's
+    external deps + the platform native addon, and run `bun .../dist/cli.js`.
+  * binary (`--binary`): a self-contained compiled omp binary is uploaded.
 
 Auth never enters the container: a generated `~/.omp/agent/models.yml` routes the
 configured providers' `baseUrl` at the host's pm2 auth-gateway (default
@@ -14,7 +20,7 @@ configured providers' `baseUrl` at the host's pm2 auth-gateway (default
 resolves credentials host-side. No provider API keys are passed in.
 
 All knobs come from environment variables the runner sets on the `harbor` process
-(see `OMP_TB_*` below); the agent reads them from `os.environ` directly.
+(see `OMP_BENCH_*` below); the agent reads them from `os.environ` directly.
 
 Selected via `harbor run --agent-import-path omp_local:OmpLocal` with the
 directory of this file on `PYTHONPATH`.
@@ -89,7 +95,6 @@ _TARBALL_DST = "/tmp/omp-local.tgz"
 _MODELS_DST = "/tmp/omp-models.yml"
 _CONFIG_DST = "/tmp/omp-config.yml"
 _OUTPUT_FILENAME = "omp.txt"
-_ADVISOR_FILENAME = "advisor.jsonl"
 
 # Provider → host env vars used in --no-gateway (direct-auth) mode only.
 _PROVIDER_KEYS: dict[str, list[str]] = {
@@ -166,37 +171,42 @@ class OmpLocal(BaseInstalledAgent):
 
     def __init__(self, *args, **kwargs) -> None:  # noqa: D401 - thin wrapper
         super().__init__(*args, **kwargs)
-        self._install_mode = _env("OMP_TB_INSTALL", "local")
-        self._tarball = _env("OMP_TB_TARBALL")
-        self._pkg_version = _env("OMP_TB_VERSION", "latest")
-        self._models_yaml_path = _env("OMP_TB_MODELS_YAML")
-        self._gateway_url = _env("OMP_TB_GATEWAY_URL", "http://host.docker.internal:4000")
-        self._gateway_token = _env("OMP_TB_GATEWAY_TOKEN", "no-auth-dummy")
+        self._install_mode = _env("OMP_BENCH_INSTALL", "source")
+        self._tarball = _env("OMP_BENCH_TARBALL")
+        self._pkg_version = _env("OMP_BENCH_VERSION", "latest")
+        self._models_yaml_path = _env("OMP_BENCH_MODELS_YAML")
+        self._gateway_url = _env("OMP_BENCH_GATEWAY_URL", "http://host.docker.internal:4000")
+        self._gateway_token = _env("OMP_BENCH_GATEWAY_TOKEN", "no-auth-dummy")
         self._gateway_providers = [
             p.strip()
-            for p in _env("OMP_TB_GATEWAY_PROVIDERS", "anthropic,openai-codex").split(",")
+            for p in _env("OMP_BENCH_GATEWAY_PROVIDERS", "anthropic,openai-codex").split(",")
             if p.strip()
         ]
-        self._thinking = _env("OMP_TB_THINKING")
-        self._auto_approve = _truthy(_env("OMP_TB_AUTO_APPROVE", "1"))
-        self._extra_args = _env("OMP_TB_EXTRA_ARGS")
-        self._bun_version = _env("OMP_TB_BUN_VERSION", "1.3.14")
-        self._gateway_on = _env("OMP_TB_GATEWAY", "1") != "0"
-        # Optional second model reviewing the primary (separate spend, summed in).
-        self._advisor_model = _env("OMP_TB_ADVISOR_MODEL")
-        self._advisor_sync = _env("OMP_TB_ADVISOR_SYNC", "1")
+        self._thinking = _env("OMP_BENCH_THINKING")
+        self._auto_approve = _truthy(_env("OMP_BENCH_AUTO_APPROVE", "1"))
+        # Extra CLI args forwarded verbatim to the in-container omp invocation,
+        # JSON-array-encoded by the runner (OMP_BENCH_AGENT_ARGS) so multi-word
+        # values survive without a second layer of shell quoting.
+        self._agent_args = self._parse_agent_args()
+        self._bun_version = _env("OMP_BENCH_BUN_VERSION", "1.3.14")
+        self._gateway_on = _env("OMP_BENCH_GATEWAY", "1") != "0"
+
         # web_search auth can't route through the gateway (dedicated provider creds);
         # off by default so search-using tasks don't false-negative on 401s.
-        self._web_search = _truthy(_env("OMP_TB_WEB_SEARCH", "0"))
+        self._web_search = _truthy(_env("OMP_BENCH_WEB_SEARCH", "0"))
         # Extra env (PI_* dialect knobs, explicit --env) the runner forwards into
-        # the in-container omp run, JSON-encoded in OMP_TB_FORWARD_ENV.
+        # the in-container omp run, JSON-encoded in OMP_BENCH_FORWARD_ENV.
         self._forward_env = self._parse_forward_env()
+        # Source-mount paths (defaults must match the runner's compose overlay).
+        self._source_dir = _env("OMP_BENCH_SOURCE_DIR", "/opt/omp/src")
+        self._source_bun = _env("OMP_BENCH_SOURCE_BUN", "/opt/omp/bin/bun")
+        self._source_arch = _env("OMP_BENCH_SOURCE_ARCH")
         # Resolved during install(); reused by version + run commands.
         self._home = "/root"
         self._bun = "/root/.bun/bin/bun"
         self._cli = "/root/.omp-bench/app/dist/cli.js"
-        self._binary_arm64 = _env("OMP_TB_BINARY_ARM64")
-        self._binary_x64 = _env("OMP_TB_BINARY_X64")
+        self._binary_arm64 = _env("OMP_BENCH_BINARY_ARM64")
+        self._binary_x64 = _env("OMP_BENCH_BINARY_X64")
         self._binary = bool(self._binary_arm64 or self._binary_x64)
 
     @staticmethod
@@ -226,9 +236,10 @@ class OmpLocal(BaseInstalledAgent):
         omp spawns Bun worker subprocesses at runtime, so `bun` must resolve on
         PATH during `run()` too — not just for the entrypoint.
         """
+        bun_dir = os.path.dirname(self._bun)
         return (
             f'export BUN_INSTALL={shlex.quote(self._home + "/.bun")}; '
-            f'export PATH="{self._home}/.bun/bin:$PATH"; '
+            f'export PATH="{bun_dir}:$PATH"; '
             f"{command}"
         )
 
@@ -242,6 +253,9 @@ class OmpLocal(BaseInstalledAgent):
             # Self-contained binary mode: upload + chmod only. No apt/curl/bun/npm, so
             # trial setup needs zero outbound network (no_network tasks set up cleanly).
             await self._install_binary(environment)
+        elif self._install_mode == "source":
+            # Everything is bind-mounted by the runner; nothing to download.
+            self._cli = await self._install_source(environment)
         else:
             # 1) System deps (root). curl+unzip for the Bun installer; ca-certs for TLS.
             await self.exec_as_root(
@@ -279,9 +293,39 @@ class OmpLocal(BaseInstalledAgent):
             await self._write_models_yaml(environment)
         await self._write_config(environment)
 
+    async def _install_source(self, environment: BaseEnvironment) -> str:
+        """Verify the read-only repo + linux deps mounts and run omp from TS source.
+
+        The runner mounts the repo at `self._source_dir`, shadows every host
+        `node_modules` with a linux tree, and mounts a linux `bun` binary — so
+        setup needs zero outbound network and no rebuild for TS changes.
+        """
+        arch = (await self.exec_as_agent(environment, command="uname -m")).stdout.strip()
+        norm = {"aarch64": "arm64", "arm64": "arm64", "x86_64": "x64", "amd64": "x64"}.get(arch)
+        if self._source_arch and norm != self._source_arch:
+            raise RuntimeError(
+                f"source mode: container arch {arch!r} != mounted deps tree arch "
+                f"({self._source_arch}); use --binary for emulated-arch tasks"
+            )
+        self._bun = self._source_bun
+        cli = f"{self._source_dir}/packages/coding-agent/src/cli.ts"
+        q = shlex.quote
+        await self.exec_as_agent(
+            environment,
+            command=(
+                "set -e; "
+                f"test -x {q(self._source_bun)} || {{ echo 'omp source mode: bun mount missing' >&2; exit 5; }}; "
+                f"test -f {q(cli)} || {{ echo 'omp source mode: repo mount missing' >&2; exit 5; }}; "
+                f"test -d {q(self._source_dir + '/node_modules/@oh-my-pi')} || "
+                "{ echo 'omp source mode: linux deps mount missing' >&2; exit 5; }; "
+                f"{q(self._source_bun)} --version"
+            ),
+        )
+        return cli
+
     async def _install_local(self, environment: BaseEnvironment) -> str:
         if not self._tarball:
-            raise RuntimeError("OMP_TB_INSTALL=local requires OMP_TB_TARBALL (host tarball path)")
+            raise RuntimeError("OMP_BENCH_INSTALL=local requires OMP_BENCH_TARBALL (host tarball path)")
         await environment.upload_file(self._tarball, _TARBALL_DST)
         app = f"{self._home}/.omp-bench/app"
         await self.exec_as_agent(
@@ -363,7 +407,7 @@ class OmpLocal(BaseInstalledAgent):
         )
 
     def _generate_models_yaml(self) -> str:
-        lines = ["# Generated by terminal-bench runner — routes auth via host gateway.", "providers:"]
+        lines = ["# Generated by harbor-manager runner — routes auth via host gateway.", "providers:"]
         for provider in self._gateway_providers:
             lines += [
                 f"  {provider}:",
@@ -375,25 +419,15 @@ class OmpLocal(BaseInstalledAgent):
         return "\n".join(lines)
 
     async def _write_config(self, environment: BaseEnvironment) -> None:
-        """Write $HOME/.omp/agent/config.yml: web_search toggle + optional advisor.
+        """Write $HOME/.omp/agent/config.yml: the web_search toggle.
 
-        The advisor is a separate model with its own spend; its turns are written
-        to <session>/__advisor.jsonl (requires a persisted session, see run()).
         web_search can't authenticate through the gateway, so it's off by default.
         """
         lines = [
-            "# Generated by terminal-bench runner.",
+            "# Generated by harbor-manager runner.",
             "web_search:",
             f"  enabled: {'true' if self._web_search else 'false'}",
         ]
-        if self._advisor_model:
-            lines += [
-                "modelRoles:",
-                f"  advisor: {self._advisor_model}",
-                "advisor:",
-                "  enabled: true",
-                f'  syncBacklog: "{self._advisor_sync}"',
-            ]
         content = "\n".join(lines)
         heredoc = f"cat > {_CONFIG_DST} <<'OMP_CONFIG_EOF'\n{content}\nOMP_CONFIG_EOF"
         await self.exec_as_agent(environment, command=heredoc)
@@ -407,8 +441,8 @@ class OmpLocal(BaseInstalledAgent):
 
     @staticmethod
     def _parse_forward_env() -> dict[str, str]:
-        """Extra run-time env from the runner (OMP_TB_FORWARD_ENV = JSON object)."""
-        raw = _env("OMP_TB_FORWARD_ENV")
+        """Extra run-time env from the runner (OMP_BENCH_FORWARD_ENV = JSON object)."""
+        raw = _env("OMP_BENCH_FORWARD_ENV")
         if not raw:
             return {}
         try:
@@ -419,17 +453,27 @@ class OmpLocal(BaseInstalledAgent):
             return {}
         return {str(key): str(value) for key, value in parsed.items()}
 
+    @staticmethod
+    def _parse_agent_args() -> list[str]:
+        """Extra CLI args from the runner (OMP_BENCH_AGENT_ARGS = JSON array)."""
+        raw = _env("OMP_BENCH_AGENT_ARGS")
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            return []
+        if not isinstance(parsed, list):
+            return []
+        return [str(item) for item in parsed]
+
     def _collect_provider_keys(self, provider: str) -> dict[str, str]:
-        """Host env vars for the primary + advisor providers (direct-auth mode)."""
-        providers = {provider}
-        if self._advisor_model and "/" in self._advisor_model:
-            providers.add(self._advisor_model.split("/", 1)[0])
+        """Host env vars for the primary model's provider (direct-auth mode only)."""
         env: dict[str, str] = {}
-        for prov in providers:
-            for key in _PROVIDER_KEYS.get(prov, []):
-                value = os.environ.get(key)
-                if value:
-                    env[key] = value
+        for key in _PROVIDER_KEYS.get(provider, []):
+            value = os.environ.get(key)
+            if value:
+                env[key] = value
         return env
 
     # ---------------------------------------------------------------------- run
@@ -455,17 +499,13 @@ class OmpLocal(BaseInstalledAgent):
             "--mode json",
             f"--provider {shlex.quote(provider)}",
             f"--model {shlex.quote(model)}",
+            "--no-session",
         ]
-        # The advisor records its (separately-billed) turns to <session>/__advisor.jsonl,
-        # which only exists with a persisted session — so keep sessions on for advisor runs.
-        if not self._advisor_model:
-            parts.append("--no-session")
         if self._auto_approve:
             parts.append("--auto-approve")
         if self._thinking:
             parts.append(f"--thinking {shlex.quote(self._thinking)}")
-        if self._extra_args:
-            parts.append(self._extra_args)
+        parts.extend(shlex.quote(arg) for arg in self._agent_args)
         # POSIX positional separator: some task prompts start with "-" (e.g. a
         # markdown bullet, as in pytorch-model-recovery). Without this, omp parses
         # the prompt as an unknown flag and exits 2. `--` forces positional mode.
@@ -474,13 +514,6 @@ class OmpLocal(BaseInstalledAgent):
         # No pipes/stdbuf (absent in minimal images): redirect raw JSONL to the
         # mounted agent log dir; populate_context_post_run parses it on the host.
         run = " ".join(parts) + f" > /logs/agent/{_OUTPUT_FILENAME} 2>&1"
-        if self._advisor_model:
-            # Preserve omp's exit code, then collect advisor spend into the mounted dir.
-            run += (
-                "; rc=$?; "
-                f'find "$HOME/.omp/agent/sessions" -name __advisor.jsonl -exec cat {{}} + '
-                f"> /logs/agent/{_ADVISOR_FILENAME} 2>/dev/null || true; exit $rc"
-            )
         # Exec env for the omp run. Direct-auth (no-gateway) mode contributes the
         # selected providers' keys (via exec env, never argv); forwarded PI_* /
         # --env knobs apply last so an explicit --env always wins.
@@ -494,21 +527,15 @@ class OmpLocal(BaseInstalledAgent):
     def populate_context_post_run(self, context: AgentContext) -> None:
         main = _Usage()
         self._sum_main(self.logs_dir / _OUTPUT_FILENAME, main)
-        advisor = _Usage()
-        if self._advisor_model:
-            self._sum_advisor(self.logs_dir / _ADVISOR_FILENAME, advisor)
-        if main.empty() and advisor.empty():
+        if main.empty():
             return
-        total_cost = main.cost + advisor.cost
-        context.n_input_tokens = main.in_tok + main.cache_read + advisor.in_tok + advisor.cache_read
-        context.n_output_tokens = main.out_tok + advisor.out_tok
-        context.n_cache_tokens = main.cache_read + advisor.cache_read
-        context.cost_usd = total_cost if total_cost > 0 else None
+        context.n_input_tokens = main.in_tok + main.cache_read
+        context.n_output_tokens = main.out_tok
+        context.n_cache_tokens = main.cache_read
+        context.cost_usd = main.cost if main.cost > 0 else None
         context.metadata = {
             **(context.metadata or {}),
-            "cache_write_tokens": main.cache_write + advisor.cache_write,
-            "main_cost_usd": main.cost,
-            "advisor_cost_usd": advisor.cost,
+            "cache_write_tokens": main.cache_write,
         }
 
     def _sum_main(self, path: Path, acc: "_Usage") -> None:
@@ -522,19 +549,3 @@ class OmpLocal(BaseInstalledAgent):
             message = event.get("message")
             if isinstance(message, dict) and message.get("role") == "assistant":
                 acc.add(message.get("usage"))
-
-    def _sum_advisor(self, path: Path, acc: "_Usage") -> None:
-        """Sum assistant-turn usage from concatenated __advisor.jsonl session entries."""
-        if not path.exists():
-            return
-        for line in path.read_text(errors="replace").splitlines():
-            entry = _loads(line)
-            if not entry:
-                continue
-            # Session-tree entries are flat: {role: "assistant", usage: {...}}.
-            if entry.get("role") == "assistant":
-                acc.add(entry.get("usage"))
-            else:
-                message = entry.get("message")
-                if isinstance(message, dict) and message.get("role") == "assistant":
-                    acc.add(message.get("usage"))

@@ -1,11 +1,11 @@
 #!/usr/bin/env bun
 /**
- * terminal-bench-2 runner for the local `omp` build.
+ * Harbor benchmark runner for the local `omp` build.
  *
- * Orchestrates Harbor (`harbor run`) against the harbor-framework/terminal-bench-2
- * dataset using a custom agent (`agent/omp_local.py`) that installs the working
- * tree at /work/pi and routes all model auth through the host pm2 auth-gateway
- * (no provider keys ever enter the task containers).
+ * Orchestrates Harbor (`harbor run`) against any Harbor dataset (default
+ * terminal-bench-2) using a custom agent (`agent/omp_local.py`) that installs
+ * the working tree at /work/pi and routes all model auth through the host pm2
+ * auth-gateway (no provider keys ever enter the task containers).
  *
  * It owns the terminal: Harbor's own output is redirected to a log file and this
  * process renders a live dashboard (progress / success% / spend / tokens / ETA)
@@ -27,6 +27,10 @@ const AGENT_DIR = path.join(PKG_DIR, "agent");
 const CODING_AGENT_DIR = path.join(REPO_ROOT, "packages", "coding-agent");
 const AGENT_IMPORT_PATH = "omp_local:OmpLocal";
 
+/** Container-side mount points for `--install source` (must match omp_local.py defaults). */
+const SOURCE_SRC_MOUNT = "/opt/omp/src";
+const SOURCE_BIN_MOUNT = "/opt/omp/bin";
+
 export interface Config {
 	models: string[];
 	dataset: string;
@@ -36,10 +40,11 @@ export interface Config {
 	include: string[];
 	exclude: string[];
 	thinking: string | null;
-	advisorModel: string | null;
-	advisorSync: string;
+	/** Extra args forwarded verbatim to the in-container omp CLI invocation (repeatable). */
+	agentArgs: string[];
+
 	agent: string;
-	install: "local" | "published";
+	install: "source" | "local" | "published";
 	version: string | null;
 	tarball: string | null;
 	binaryArm64: string | null;
@@ -73,16 +78,16 @@ function defaultConfig(): Config {
 		include: [],
 		exclude: [],
 		thinking: null,
-		advisorModel: null,
-		advisorSync: "1",
+		agentArgs: [],
+
 		agent: "omp",
-		install: "local",
+		install: "source",
 		version: null,
 		tarball: null,
 		binaryArm64: null,
 		binaryX64: null,
 		build: true,
-		jobsDir: path.join(REPO_ROOT, "runs", "tb2"),
+		jobsDir: path.join(REPO_ROOT, "runs", "harbor"),
 		jobName: null,
 		gatewayUrl: "http://host.docker.internal:4000",
 		gatewayToken: "no-auth",
@@ -101,7 +106,7 @@ function defaultConfig(): Config {
 	};
 }
 
-const HELP = `terminal-bench-2 runner (local omp)
+const HELP = `harbor-manager runner (local omp)
 
 Usage: bun src/runner.ts [options] [-- <extra harbor args>]
 
@@ -111,13 +116,15 @@ Commands:
 Model / agent:
   -m, --model <provider/model>   Model (repeatable). Default anthropic/claude-sonnet-4-6
       --agent <name>             omp (default) | oracle | nop | any harbor agent
-      --install <local|published> omp source. local = pack /work/pi (default)
+      --install <source|local|published> omp install mode (default: source).
+                                 source = mount /work/pi read-only + prebuilt linux deps tree; TS changes
+                                 apply per-trial with no rebuild. local = pack a tarball. published = npm.
       --version <v>              omp version for published install (default: latest)
       --thinking <level>         off|minimal|low|medium|high|xhigh|max
-      --advisor-model <p/m>      Second model reviewing the primary (spend summed in)
-      --advisor-sync <off|1|3|5> Advisor catch-up backlog (default 1 = accurate spend; off = faster)
-      --tarball <path>           Reuse a prebuilt omp tarball (implies --no-build)
-      --no-build                 Skip packing; reuse newest tarball in bench dir
+
+      --tarball <path>           Reuse a prebuilt omp tarball (implies --install local, --no-build)
+      --no-build                 Skip packing; reuse newest tarball in bench dir (--install local)
+      --agent-arg <arg>          Extra arg forwarded verbatim to the in-container omp CLI (repeatable)
       --env <KEY[=VALUE]>        Forward env into omp container (repeatable).
                                  KEY alone forwards host value; host PI_* auto-forwarded.
 
@@ -138,8 +145,8 @@ Gateway (auth, no keys in container):
       --allow-host <host>        harbor --allow-agent-host (repeatable)
 
 Output / control:
-  -o, --jobs-dir <path>          Default <repo>/runs/tb2
-      --job-name <name>          Default tb2-<model>-<timestamp>
+  -o, --jobs-dir <path>          Default <repo>/runs/harbor
+      --job-name <name>          Default <model>-<timestamp>
       --dry-run                  Print the harbor command + models.yml and exit
       --cleanup                  Clean up stale and exited Harbor Docker resources safely before starting
       --cleanup-force            Force-stop and remove ALL previous Harbor Docker containers and networks
@@ -180,7 +187,9 @@ export function parseArgs(argv: string[]): Config {
 				break;
 			case "--install": {
 				const v = take(arg);
-				if (v !== "local" && v !== "published") throw new Error("--install must be local|published");
+				if (v !== "source" && v !== "local" && v !== "published") {
+					throw new Error("--install must be source|local|published");
+				}
 				cfg.install = v;
 				break;
 			}
@@ -190,14 +199,9 @@ export function parseArgs(argv: string[]): Config {
 			case "--thinking":
 				cfg.thinking = take(arg);
 				break;
-			case "--advisor-model":
-				cfg.advisorModel = take(arg);
-				break;
-			case "--advisor-sync":
-				cfg.advisorSync = take(arg);
-				break;
 			case "--tarball":
 				cfg.tarball = path.resolve(take(arg));
+				cfg.install = "local";
 				cfg.build = false;
 				break;
 			case "--binary": {
@@ -211,6 +215,9 @@ export function parseArgs(argv: string[]): Config {
 			}
 			case "--no-build":
 				cfg.build = false;
+				break;
+			case "--agent-arg":
+				cfg.agentArgs.push(take(arg));
 				break;
 			case "-l":
 			case "--tasks":
@@ -239,6 +246,7 @@ export function parseArgs(argv: string[]): Config {
 			case "--dataset":
 				cfg.dataset = take(arg);
 				break;
+
 			case "--gateway-url":
 				cfg.gatewayUrl = take(arg);
 				break;
@@ -357,16 +365,19 @@ function pad(s: string, w: number): string {
 	return s.length >= w ? s.slice(0, w) : s + " ".repeat(w - s.length);
 }
 
+function agentArgsLabel(cfg: Config): string | null {
+	return cfg.agentArgs.length > 0 ? cfg.agentArgs.join(" ") : null;
+}
+
 // ───────────────────────────────────────────────────────────── result parsing
 
-type TrialStatus = "pass" | "fail" | "error" | "running";
+export type TrialStatus = "pass" | "fail" | "error" | "running";
 
-interface Trial {
+export interface Trial {
 	name: string;
 	status: TrialStatus;
 	reward: number | null;
 	costUsd: number;
-	advisorCostUsd: number;
 	tokIn: number;
 	tokOut: number;
 	tokCache: number;
@@ -379,7 +390,6 @@ interface AgentCtxLike {
 	n_cache_tokens?: unknown;
 	n_output_tokens?: unknown;
 	cost_usd?: unknown;
-	metadata?: unknown;
 }
 
 function num(v: unknown): number {
@@ -457,7 +467,6 @@ function parseTrial(dir: string, name: string): Trial | null {
 			status: "running",
 			reward: null,
 			costUsd,
-			advisorCostUsd: 0,
 			tokIn,
 			tokOut,
 			tokCache,
@@ -481,7 +490,6 @@ function parseTrial(dir: string, name: string): Trial | null {
 		}
 	}
 	let costUsd = 0,
-		advisorCostUsd = 0,
 		tokIn = 0,
 		tokOut = 0,
 		tokCache = 0;
@@ -490,9 +498,6 @@ function parseTrial(dir: string, name: string): Trial | null {
 		tokIn += num(ctx.n_input_tokens);
 		tokOut += num(ctx.n_output_tokens);
 		tokCache += num(ctx.n_cache_tokens);
-		if (ctx.metadata && typeof ctx.metadata === "object") {
-			advisorCostUsd += num((ctx.metadata as Record<string, unknown>).advisor_cost_usd);
-		}
 	}
 
 	// rewards: top-level verifier_result, else step_results last verifier
@@ -531,10 +536,10 @@ function parseTrial(dir: string, name: string): Trial | null {
 	} else {
 		status = "fail";
 	}
-	return { name, status, reward, costUsd, advisorCostUsd, tokIn, tokOut, tokCache, durationMs, detail };
+	return { name, status, reward, costUsd, tokIn, tokOut, tokCache, durationMs, detail };
 }
 
-function readTrials(jobDir: string): Trial[] {
+export function readTrials(jobDir: string): Trial[] {
 	let entries: fs.Dirent[] = [];
 	try {
 		entries = fs.readdirSync(jobDir, { withFileTypes: true });
@@ -551,13 +556,15 @@ function readTrials(jobDir: string): Trial[] {
 }
 
 /** Authoritative job-level totals from <jobDir>/result.json (written incrementally). */
-interface JobInfo {
+export interface JobInfo {
 	nTotal: number;
 	running: number | null;
 	pending: number | null;
+	/** Harbor sets this only when the job reached a terminal state. */
+	finishedAt: number | null;
 }
 
-function readJobResult(jobDir: string): JobInfo | null {
+export function readJobResult(jobDir: string): JobInfo | null {
 	const raw = readJson(path.join(jobDir, "result.json"));
 	if (!raw || typeof raw !== "object") return null;
 	const r = raw as Record<string, unknown>;
@@ -569,12 +576,14 @@ function readJobResult(jobDir: string): JobInfo | null {
 		if (typeof s.n_running_trials === "number") running = s.n_running_trials;
 		if (typeof s.n_pending_trials === "number") pending = s.n_pending_trials;
 	}
-	return nTotal > 0 ? { nTotal, running, pending } : null;
+	const finishedRaw = typeof r.finished_at === "string" ? Date.parse(r.finished_at) : NaN;
+	const finishedAt = Number.isFinite(finishedRaw) ? finishedRaw : null;
+	return nTotal > 0 ? { nTotal, running, pending, finishedAt } : null;
 }
 
 // ──────────────────────────────────────────────────────────────────── totals
 
-interface Totals {
+export interface Totals {
 	total: number;
 	done: number;
 	pass: number;
@@ -583,13 +592,13 @@ interface Totals {
 	running: number;
 	pending: number;
 	costUsd: number;
-	advisorCostUsd: number;
 	tokIn: number;
 	tokOut: number;
 	tokCache: number;
+	durationMs: number;
 }
 
-function aggregate(trials: Trial[], job: JobInfo | null, fallbackExpected: number): Totals {
+export function aggregate(trials: Trial[], job: JobInfo | null, fallbackExpected: number): Totals {
 	const t: Totals = {
 		total: fallbackExpected,
 		done: 0,
@@ -599,14 +608,13 @@ function aggregate(trials: Trial[], job: JobInfo | null, fallbackExpected: numbe
 		running: 0,
 		pending: 0,
 		costUsd: 0,
-		advisorCostUsd: 0,
 		tokIn: 0,
 		tokOut: 0,
 		tokCache: 0,
+		durationMs: 0,
 	};
 	for (const tr of trials) {
 		t.costUsd += tr.costUsd;
-		t.advisorCostUsd += tr.advisorCostUsd;
 		t.tokIn += tr.tokIn;
 		t.tokOut += tr.tokOut;
 		t.tokCache += tr.tokCache;
@@ -614,6 +622,8 @@ function aggregate(trials: Trial[], job: JobInfo | null, fallbackExpected: numbe
 			t.running++;
 			continue;
 		}
+		t.durationMs += tr.durationMs;
+
 		t.done++;
 		if (tr.status === "pass") t.pass++;
 		else if (tr.status === "error") t.error++;
@@ -671,8 +681,9 @@ function render(st: RenderState): void {
 	const successPct = tot.done > 0 ? (tot.pass / tot.done) * 100 : 0;
 
 	const rows: string[] = [];
-	const advisorTag = st.cfg.advisorModel ? `${dim(" + advisor ")}${st.cfg.advisorModel}` : "";
-	const header = `${bold("terminal-bench-2")} ${dim("·")} ${cyan(st.cfg.agent)} ${dim("·")} ${st.cfg.models.join(",")}${advisorTag} ${dim(`· conc=${st.cfg.concurrency} k=${st.cfg.attempts}`)}`;
+	const argsLabel = agentArgsLabel(st.cfg);
+	const argsTag = argsLabel ? `${dim(" · args ")}${argsLabel}` : "";
+	const header = `${bold(st.cfg.dataset)} ${dim("·")} ${cyan(st.cfg.agent)} ${dim("·")} ${st.cfg.models.join(",")}${argsTag} ${dim(`· conc=${st.cfg.concurrency} k=${st.cfg.attempts}`)}`;
 	rows.push(header);
 	const width = 28;
 	rows.push(
@@ -681,9 +692,8 @@ function render(st: RenderState): void {
 	rows.push(
 		`${green(`pass ${tot.pass}`)} ${dim(`(${successPct.toFixed(0)}%)`)}   ${red(`fail ${tot.fail}`)}   ${yellow(`err ${tot.error}`)}   ${cyan(`run ${tot.running}`)}   ${gray(`pend ${tot.pending}`)}`,
 	);
-	const advisorSpend = tot.advisorCostUsd > 0 ? dim(` (advisor ${fmtUsd(tot.advisorCostUsd)})`) : "";
 	rows.push(
-		`${bold("spend")} ${fmtUsd(tot.costUsd)}${advisorSpend}   ${dim("in")} ${fmtNum(tot.tokIn)}  ${dim("out")} ${fmtNum(tot.tokOut)}  ${dim("cache")} ${fmtNum(tot.tokCache)}`,
+		`${bold("spend")} ${fmtUsd(tot.costUsd)}   ${dim("in")} ${fmtNum(tot.tokIn)}  ${dim("out")} ${fmtNum(tot.tokOut)}  ${dim("cache")} ${fmtNum(tot.tokCache)}`,
 	);
 	rows.push(dim("─".repeat(54)));
 
@@ -709,7 +719,7 @@ function render(st: RenderState): void {
 		process.stdout.write(out);
 	} else {
 		process.stdout.write(
-			`[tb2] ${tot.done}/${tot.total} pass=${tot.pass}(${successPct.toFixed(0)}%) fail=${tot.fail} err=${tot.error} run=${tot.running} spend=${fmtUsd(tot.costUsd)} elapsed=${fmtDur(elapsed)}\n`,
+			`[harbor] ${tot.done}/${tot.total} pass=${tot.pass}(${successPct.toFixed(0)}%) fail=${tot.fail} err=${tot.error} run=${tot.running} spend=${fmtUsd(tot.costUsd)} elapsed=${fmtDur(elapsed)}\n`,
 		);
 	}
 }
@@ -722,11 +732,10 @@ function writeReport(st: RenderState, benchDir: string, exitCode: number): strin
 	const successPct = tot.done > 0 ? (tot.pass / tot.done) * 100 : 0;
 	const lines: string[] = [];
 	const isOmp = st.cfg.agent === "omp";
-	const modelLine =
-		isOmp && st.cfg.advisorModel
-			? `${st.cfg.models.join(", ")} + advisor ${st.cfg.advisorModel}`
-			: st.cfg.models.join(", ");
-	lines.push(`# terminal-bench-2 — ${st.cfg.agent} — ${modelLine}`);
+	const argsLabel = agentArgsLabel(st.cfg);
+	const baseModelLine = st.cfg.models.join(", ");
+	const modelLine = argsLabel ? `${baseModelLine} (${argsLabel})` : baseModelLine;
+	lines.push(`# ${st.cfg.dataset} — ${st.cfg.agent} — ${modelLine}`);
 	lines.push("");
 	lines.push(`- dataset: \`${st.cfg.dataset}\``);
 	lines.push(`- tasks: ${st.cfg.tasks} · attempts: ${st.cfg.attempts} · concurrency: ${st.cfg.concurrency}`);
@@ -735,13 +744,12 @@ function writeReport(st: RenderState, benchDir: string, exitCode: number): strin
 			`- install: ${st.cfg.install} · auth: ${st.cfg.gateway ? "host gateway (no keys in container)" : "direct provider keys"}`,
 		);
 		lines.push(`- tools: web_search=${st.cfg.webSearch ? "on" : "off"}`);
-		if (st.cfg.advisorModel) lines.push(`- advisor: ${st.cfg.advisorModel}`);
+		if (argsLabel) lines.push(`- agent args: ${argsLabel}`);
 	}
 	lines.push(`- elapsed: ${fmtDur(Date.now() - st.startMs)} · harbor exit: ${exitCode}`);
 	lines.push("");
-	const advisorSpend = tot.advisorCostUsd > 0 ? ` (advisor ${fmtUsd(tot.advisorCostUsd)})` : "";
 	lines.push(
-		`**${tot.pass}/${tot.done} passed (${successPct.toFixed(1)}%)** · fail ${tot.fail} · error ${tot.error} · spend ${fmtUsd(tot.costUsd)}${advisorSpend}`,
+		`**${tot.pass}/${tot.done} passed (${successPct.toFixed(1)}%)** · fail ${tot.fail} · error ${tot.error} · spend ${fmtUsd(tot.costUsd)}`,
 	);
 	lines.push(`tokens: in ${fmtNum(tot.tokIn)} · out ${fmtNum(tot.tokOut)} · cache ${fmtNum(tot.tokCache)}`);
 	lines.push("");
@@ -816,15 +824,175 @@ function newestTarball(benchDir: string): string | null {
 	}
 }
 
+// ─────────────────────────────────────────────────────── source mount (--install source)
+
+/** Linux deps tree + mount plan for running omp straight from the mounted repo. */
+export interface SourceMount {
+	arch: "arm64" | "x64";
+	/** Host dir holding the linux `bin/bun` + skeleton `node_modules` trees. */
+	depsDir: string;
+	/** Repo-relative node_modules dirs to shadow-mount over the darwin ones. */
+	nodeModules: string[];
+}
+
+/** Bun version pinned by the repo's `packageManager` field. */
+function repoBunVersion(): string {
+	const raw = readJson(path.join(REPO_ROOT, "package.json"));
+	if (raw && typeof raw === "object") {
+		const pm = (raw as Record<string, unknown>).packageManager;
+		if (typeof pm === "string" && pm.startsWith("bun@")) return pm.slice("bun@".length);
+	}
+	return "1.3.14";
+}
+
+/** Native arch of the docker daemon (what non-emulated task containers run as). */
+function dockerServerArch(): "arm64" | "x64" {
+	const r = spawnSync("docker", ["version", "--format", "{{.Server.Arch}}"], { encoding: "utf8" });
+	const a = (r.stdout ?? "").trim();
+	if (a === "arm64" || a === "aarch64") return "arm64";
+	if (a === "amd64" || a === "x86_64") return "x64";
+	throw new Error(`cannot detect docker server arch (got ${a || "nothing"}); is docker running?`);
+}
+
+/** Workspace member dirs (repo-relative), expanded from root package.json `workspaces.packages`. */
+function workspacePackageDirs(): string[] {
+	const raw = readJson(path.join(REPO_ROOT, "package.json")) as {
+		workspaces?: { packages?: string[] };
+	} | null;
+	const dirs = new Set<string>();
+	for (const pattern of raw?.workspaces?.packages ?? []) {
+		for (const match of new Bun.Glob(`${pattern}/package.json`).scanSync({ cwd: REPO_ROOT })) {
+			dirs.add(path.dirname(match));
+		}
+	}
+	return [...dirs].sort();
+}
+
+/** Manifest files (repo-relative) that fully determine a `bun install` result. */
+function sourceManifestFiles(pkgDirs: string[]): string[] {
+	const files = ["package.json", "bun.lock"];
+	if (fs.existsSync(path.join(REPO_ROOT, "bunfig.toml"))) files.push("bunfig.toml");
+	const patchesDir = path.join(REPO_ROOT, "patches");
+	if (fs.existsSync(patchesDir)) {
+		for (const f of fs.readdirSync(patchesDir).sort()) files.push(path.join("patches", f));
+	}
+	for (const dir of pkgDirs) files.push(path.join(dir, "package.json"));
+	return files;
+}
+
+function sourceDepsStamp(manifests: string[], bunVersion: string): string {
+	const h = new Bun.CryptoHasher("sha256");
+	h.update(`bun@${bunVersion}\0source-deps-v1\0`);
+	for (const rel of manifests) {
+		h.update(rel);
+		h.update("\0");
+		h.update(fs.readFileSync(path.join(REPO_ROOT, rel)));
+		h.update("\0");
+	}
+	return h.digest("hex");
+}
+
+/**
+ * Ensure the cached linux deps tree for source mode: a manifest-only skeleton of the
+ * workspace with `bun install --production` run inside `oven/bun:<ver>` (matching the
+ * daemon's native arch), plus the image's linux `bun` under `bin/`. Rebuilt only when
+ * a manifest/lockfile or the pinned bun version changes; TS edits never invalidate it.
+ */
+export function prepareSourceDeps(cfg: Config): SourceMount {
+	const arch = dockerServerArch();
+	const bunVersion = repoBunVersion();
+	const depsDir = path.join(cfg.jobsDir, "_bench", "_deps", `linux-${arch}`);
+	const pkgDirs = workspacePackageDirs();
+	const manifests = sourceManifestFiles(pkgDirs);
+	const stamp = sourceDepsStamp(manifests, bunVersion);
+	const stampFile = path.join(depsDir, ".stamp");
+	let current: string | null = null;
+	try {
+		current = fs.readFileSync(stampFile, "utf8").trim();
+	} catch {
+		/* no stamp yet */
+	}
+	if (current !== stamp) {
+		process.stdout.write(dim(`building linux-${arch} deps tree for source mount (one-time per lockfile change)…\n`));
+		fs.rmSync(depsDir, { recursive: true, force: true });
+		fs.mkdirSync(depsDir, { recursive: true });
+		for (const rel of manifests) {
+			const dst = path.join(depsDir, rel);
+			fs.mkdirSync(path.dirname(dst), { recursive: true });
+			fs.copyFileSync(path.join(REPO_ROOT, rel), dst);
+		}
+		// --ignore-scripts: the skeleton has manifests only, so lifecycle scripts
+		// (root `prepare` → gen:tool-views) would fail; patchedDependencies still apply.
+		const script =
+			'mkdir -p /deps/bin && cp "$(command -v bun)" /deps/bin/bun && cd /deps && bun install --production --omit=optional --ignore-scripts';
+		const r = spawnSync(
+			"docker",
+			[
+				"run",
+				"--rm",
+				"--platform",
+				`linux/${arch === "x64" ? "amd64" : "arm64"}`,
+				"-e",
+				"HOME=/tmp",
+				"-v",
+				`${depsDir}:/deps`,
+				`oven/bun:${bunVersion}`,
+				"sh",
+				"-c",
+				script,
+			],
+			{ stdio: ["ignore", "inherit", "inherit"] },
+		);
+		if (r.status !== 0) {
+			fs.rmSync(stampFile, { force: true });
+			throw new Error(`source deps install failed (docker exit ${r.status})`);
+		}
+		fs.writeFileSync(stampFile, `${stamp}\n`);
+	}
+	if (!fs.existsSync(path.join(depsDir, "node_modules"))) {
+		throw new Error(`source deps tree has no node_modules (${depsDir}); delete it and retry`);
+	}
+	// Shadow-mount every node_modules visible in the host tree (they hold darwin
+	// binaries) with the skeleton's linux one; both sides of each mount must exist.
+	const nodeModules = ["node_modules"];
+	for (const dir of pkgDirs) {
+		const rel = path.join(dir, "node_modules");
+		const inHost = fs.existsSync(path.join(REPO_ROOT, rel));
+		const inDeps = fs.existsSync(path.join(depsDir, rel));
+		if (!inHost && !inDeps) continue;
+		if (!inDeps) fs.mkdirSync(path.join(depsDir, rel), { recursive: true });
+		if (!inHost) fs.mkdirSync(path.join(REPO_ROOT, rel), { recursive: true });
+		nodeModules.push(rel);
+	}
+	return { arch, depsDir, nodeModules };
+}
+
+/**
+ * Compose overlay applied to every trial's `main` service: host networking and/or the
+ * read-only source + linux-deps mounts. Returns null when nothing needs overlaying.
+ */
+function writeComposeOverlay(benchDir: string, cfg: Config, source: SourceMount | null): string | null {
+	const lines: string[] = [];
+	if (cfg.hostNetwork) lines.push('    network_mode: "host"');
+	if (source) {
+		lines.push("    volumes:");
+		lines.push(`      - ${REPO_ROOT}:${SOURCE_SRC_MOUNT}:ro`);
+		for (const rel of source.nodeModules) {
+			lines.push(`      - ${path.join(source.depsDir, rel)}:${SOURCE_SRC_MOUNT}/${rel}:ro`);
+		}
+		lines.push(`      - ${path.join(source.depsDir, "bin")}:${SOURCE_BIN_MOUNT}:ro`);
+	}
+	if (lines.length === 0) return null;
+	const file = path.join(benchDir, "omp-compose-overlay.yaml");
+	fs.writeFileSync(file, `${["services:", "  main:", ...lines].join("\n")}\n`);
+	return file;
+}
+
 function deriveProviders(cfg: Config): string[] {
 	const set = new Set<string>(cfg.providers);
 	for (const m of cfg.models) {
 		const slash = m.indexOf("/");
 		if (slash > 0) set.add(m.slice(0, slash));
-	}
-	if (cfg.advisorModel) {
-		const slash = cfg.advisorModel.indexOf("/");
-		if (slash > 0) set.add(cfg.advisorModel.slice(0, slash));
 	}
 	if (set.size === 0) {
 		set.add("anthropic");
@@ -835,7 +1003,7 @@ function deriveProviders(cfg: Config): string[] {
 
 function writeModelsYaml(benchDir: string, cfg: Config): string {
 	const providers = deriveProviders(cfg);
-	const lines = ["# Generated by terminal-bench runner — auth via host pm2 gateway.", "providers:"];
+	const lines = ["# Generated by harbor-manager — auth via host pm2 gateway.", "providers:"];
 	for (const p of providers) {
 		lines.push(`  ${p}:`);
 		lines.push(`    baseUrl: ${cfg.gatewayUrl}`);
@@ -859,7 +1027,7 @@ function buildHarborArgs(
 	jobName: string,
 	modelsYaml: string,
 	tarball: string | null,
-	hostNetworkOverlayPath: string | null,
+	composeOverlayPath: string | null,
 ): string[] {
 	const a: string[] = ["run", "-d", cfg.dataset, "-o", cfg.jobsDir, "--job-name", jobName];
 	a.push("-n", String(cfg.concurrency), "-k", String(cfg.attempts), "-l", String(cfg.tasks));
@@ -869,12 +1037,12 @@ function buildHarborArgs(
 	for (const h of cfg.allowHosts) a.push("--allow-agent-host", h);
 	if (cfg.timeoutMultiplier !== null) a.push("--timeout-multiplier", String(cfg.timeoutMultiplier));
 	if (cfg.yes) a.push("-y");
-	if (hostNetworkOverlayPath) {
-		a.push("--extra-docker-compose", hostNetworkOverlayPath);
+	if (composeOverlayPath) {
+		a.push("--extra-docker-compose", composeOverlayPath);
 	}
 
 	if (cfg.agent === "omp") {
-		// Config + secrets travel via env (OMP_TB_*); the agent reads os.environ.
+		// Config + secrets travel via env (OMP_BENCH_*); the agent reads os.environ.
 		a.push("--agent-import-path", AGENT_IMPORT_PATH);
 		void modelsYaml;
 		void tarball;
@@ -918,36 +1086,39 @@ export function buildHarborEnv(
 	modelsYaml: string,
 	tarball: string | null,
 	version: string,
+	source: SourceMount | null = null,
 ): Record<string, string> {
 	const env: Record<string, string> = { ...(process.env as Record<string, string>) };
-	// Drop any stale OMP_TB_FORWARD_ENV inherited from the caller's shell before
+	// Drop any stale OMP_BENCH_FORWARD_ENV inherited from the caller's shell before
 	// the agent-type early return, so it never leaks (incl. into the dry-run dump).
-	delete env.OMP_TB_FORWARD_ENV;
+	delete env.OMP_BENCH_FORWARD_ENV;
 	if (cfg.agent !== "omp") return env;
 	const prepend = (k: string, v: string): void => {
 		env[k] = env[k] ? `${v}:${env[k]}` : v;
 	};
 	prepend("PYTHONPATH", AGENT_DIR);
-	env.OMP_TB_INSTALL = cfg.install;
-	env.OMP_TB_VERSION = cfg.version ?? version;
-	if (tarball) env.OMP_TB_TARBALL = tarball;
-	if (cfg.binaryArm64) env.OMP_TB_BINARY_ARM64 = cfg.binaryArm64;
-	if (cfg.binaryX64) env.OMP_TB_BINARY_X64 = cfg.binaryX64;
-	if (cfg.thinking) env.OMP_TB_THINKING = cfg.thinking;
-	if (cfg.advisorModel) {
-		env.OMP_TB_ADVISOR_MODEL = cfg.advisorModel;
-		env.OMP_TB_ADVISOR_SYNC = cfg.advisorSync;
+	env.OMP_BENCH_INSTALL = cfg.install;
+	env.OMP_BENCH_VERSION = cfg.version ?? version;
+	if (tarball) env.OMP_BENCH_TARBALL = tarball;
+	if (source) {
+		env.OMP_BENCH_SOURCE_DIR = SOURCE_SRC_MOUNT;
+		env.OMP_BENCH_SOURCE_BUN = `${SOURCE_BIN_MOUNT}/bun`;
+		env.OMP_BENCH_SOURCE_ARCH = source.arch;
 	}
-	if (cfg.webSearch) env.OMP_TB_WEB_SEARCH = "1";
-	env.OMP_TB_GATEWAY = cfg.gateway ? "1" : "0";
+	if (cfg.binaryArm64) env.OMP_BENCH_BINARY_ARM64 = cfg.binaryArm64;
+	if (cfg.binaryX64) env.OMP_BENCH_BINARY_X64 = cfg.binaryX64;
+	if (cfg.thinking) env.OMP_BENCH_THINKING = cfg.thinking;
+	if (cfg.agentArgs.length > 0) env.OMP_BENCH_AGENT_ARGS = JSON.stringify(cfg.agentArgs);
+	if (cfg.webSearch) env.OMP_BENCH_WEB_SEARCH = "1";
+	env.OMP_BENCH_GATEWAY = cfg.gateway ? "1" : "0";
 	if (cfg.gateway) {
-		env.OMP_TB_MODELS_YAML = modelsYaml;
-		env.OMP_TB_GATEWAY_URL = cfg.gatewayUrl;
-		env.OMP_TB_GATEWAY_TOKEN = cfg.gatewayToken;
-		env.OMP_TB_GATEWAY_PROVIDERS = deriveProviders(cfg).join(",");
+		env.OMP_BENCH_MODELS_YAML = modelsYaml;
+		env.OMP_BENCH_GATEWAY_URL = cfg.gatewayUrl;
+		env.OMP_BENCH_GATEWAY_TOKEN = cfg.gatewayToken;
+		env.OMP_BENCH_GATEWAY_PROVIDERS = deriveProviders(cfg).join(",");
 	}
 	const forward = collectForwardEnv(cfg);
-	if (Object.keys(forward).length > 0) env.OMP_TB_FORWARD_ENV = JSON.stringify(forward);
+	if (Object.keys(forward).length > 0) env.OMP_BENCH_FORWARD_ENV = JSON.stringify(forward);
 	return env;
 }
 
@@ -1056,15 +1227,18 @@ function runDockerCleanup(force: boolean): void {
 
 // ──────────────────────────────────────────────────────────────────────── main
 
-async function main(): Promise<void> {
-	const argv = process.argv.slice(2);
-	if (argv[0] === "cleanup") {
-		if (!which("docker")) throw new Error("docker not found on PATH (required for cleanup).");
-		runDockerCleanup(true);
-		return;
-	}
-	const cfg = parseArgs(argv);
+interface BenchmarkRun {
+	exitCode: number;
+	jobName: string;
+	jobDir: string;
+	benchDir: string;
+	tarball: string | null;
+	elapsedMs: number;
+	totals: Totals | null;
+	reportPath: string | null;
+}
 
+async function runBenchmark(cfg: Config): Promise<BenchmarkRun> {
 	if (!which("harbor")) {
 		throw new Error("harbor not found on PATH. Install with: uv tool install harbor");
 	}
@@ -1073,8 +1247,8 @@ async function main(): Promise<void> {
 	}
 
 	const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-	const modelSlug = cfg.models[0].replace(/[^a-zA-Z0-9]+/g, "-");
-	const jobName = cfg.jobName ?? `tb2-${modelSlug}-${stamp}`;
+	const modelSlug = (cfg.models[0] ?? "model").replace(/[^a-zA-Z0-9]+/g, "-");
+	const jobName = cfg.jobName ?? `${modelSlug}-${stamp}`;
 	const jobDir = path.join(cfg.jobsDir, jobName);
 	const benchDir = path.join(cfg.jobsDir, "_bench", jobName);
 	fs.mkdirSync(benchDir, { recursive: true });
@@ -1094,6 +1268,12 @@ async function main(): Promise<void> {
 		}
 	}
 
+	// source mount (default): repo bind-mounted read-only + cached linux deps tree
+	let source: SourceMount | null = null;
+	if (cfg.agent === "omp" && cfg.install === "source" && !cfg.binaryArm64 && !cfg.binaryX64) {
+		source = prepareSourceDeps(cfg);
+	}
+
 	// models.yml (gateway)
 	let modelsYaml = "";
 	if (cfg.agent === "omp" && cfg.gateway) {
@@ -1106,18 +1286,10 @@ async function main(): Promise<void> {
 			);
 		}
 	}
-	let hostNetworkOverlayPath: string | null = null;
-	if (cfg.hostNetwork) {
-		hostNetworkOverlayPath = path.join(benchDir, "host-network-overlay.yaml");
-		const content = `services:
-  main:
-    network_mode: "host"
-`;
-		fs.writeFileSync(hostNetworkOverlayPath, content);
-	}
+	const composeOverlayPath = writeComposeOverlay(benchDir, cfg, source);
 
-	const harborArgs = buildHarborArgs(cfg, jobName, modelsYaml, tarball, hostNetworkOverlayPath);
-	const harborEnv = buildHarborEnv(cfg, modelsYaml, tarball, version);
+	const harborArgs = buildHarborArgs(cfg, jobName, modelsYaml, tarball, composeOverlayPath);
+	const harborEnv = buildHarborEnv(cfg, modelsYaml, tarball, version, source);
 	const logPath = path.join(benchDir, "harbor.log");
 	if (cfg.dryRun) {
 		process.stdout.write(bold("\nharbor command:\n"));
@@ -1127,16 +1299,20 @@ async function main(): Promise<void> {
 			process.stdout.write(`${fs.readFileSync(modelsYaml, "utf8")}\n`);
 		}
 		process.stdout.write(bold("omp env:\n"));
-		for (const k in harborEnv) {
-			if (k === "OMP_TB_FORWARD_ENV") continue;
-			if (k.startsWith("OMP_TB_") || k === "PYTHONPATH") process.stdout.write(`  ${k}=${harborEnv[k]}\n`);
+		for (const key in harborEnv) {
+			if (key === "OMP_BENCH_FORWARD_ENV") continue;
+			if (key.startsWith("OMP_BENCH_") || key === "PYTHONPATH") process.stdout.write(`  ${key}=${harborEnv[key]}\n`);
 		}
-		if (harborEnv.OMP_TB_FORWARD_ENV) {
-			const keys = Object.keys(JSON.parse(harborEnv.OMP_TB_FORWARD_ENV) as Record<string, string>);
-			process.stdout.write(`  OMP_TB_FORWARD_ENV=${keys.join(",")} (values hidden)\n`);
+		if (harborEnv.OMP_BENCH_FORWARD_ENV) {
+			const parsedForwardEnv: unknown = JSON.parse(harborEnv.OMP_BENCH_FORWARD_ENV);
+			if (parsedForwardEnv !== null && typeof parsedForwardEnv === "object" && !Array.isArray(parsedForwardEnv)) {
+				const keys: string[] = [];
+				for (const key in parsedForwardEnv) keys.push(key);
+				process.stdout.write(`  OMP_BENCH_FORWARD_ENV=${keys.join(",")} (values hidden)\n`);
+			}
 		}
 		process.stdout.write(`\njob dir: ${jobDir}\nbench dir: ${benchDir}\n`);
-		return;
+		return { exitCode: 0, jobName, jobDir, benchDir, tarball, elapsedMs: 0, totals: null, reportPath: null };
 	}
 
 	// Pre-run cleanup of leftover Harbor resources, if requested.
@@ -1194,23 +1370,36 @@ async function main(): Promise<void> {
 
 	// final summary (printed to the normal screen)
 	const trials = readTrials(jobDir);
-	const tot = aggregate(trials, readJobResult(jobDir), expected);
-	const successPct = tot.done > 0 ? (tot.pass / tot.done) * 100 : 0;
+	const totals = aggregate(trials, readJobResult(jobDir), expected);
+	const successPct = totals.done > 0 ? (totals.pass / totals.done) * 100 : 0;
+	const elapsedMs = Date.now() - st.startMs;
 	const reportPath = writeReport(st, benchDir, exitCode);
 	process.stdout.write("\n");
 	process.stdout.write(
-		`${bold("terminal-bench-2 complete")} — ${green(`${tot.pass}/${tot.done} passed (${successPct.toFixed(1)}%)`)}\n`,
+		`${bold(`${st.cfg.dataset} complete`)} — ${green(`${totals.pass}/${totals.done} passed (${successPct.toFixed(1)}%)`)}\n`,
 	);
 	process.stdout.write(
-		`fail ${tot.fail} · error ${tot.error} · spend ${fmtUsd(tot.costUsd)} · elapsed ${fmtDur(Date.now() - st.startMs)}\n`,
+		`fail ${totals.fail} · error ${totals.error} · spend ${fmtUsd(totals.costUsd)} · elapsed ${fmtDur(elapsedMs)}\n`,
 	);
 	process.stdout.write(
-		`tokens: in ${fmtNum(tot.tokIn)} · out ${fmtNum(tot.tokOut)} · cache ${fmtNum(tot.tokCache)}\n`,
+		`tokens: in ${fmtNum(totals.tokIn)} · out ${fmtNum(totals.tokOut)} · cache ${fmtNum(totals.tokCache)}\n`,
 	);
 	process.stdout.write(`${dim("report:")} ${reportPath}\n`);
 	process.stdout.write(`${dim("logs:  ")} ${logPath}\n`);
 	process.stdout.write(`${dim("trials:")} ${jobDir}\n`);
 	if (exitCode !== 0) process.stdout.write(yellow(`harbor exited ${exitCode}; see harbor.log\n`));
+	return { exitCode, jobName, jobDir, benchDir, tarball, elapsedMs, totals, reportPath };
+}
+
+async function main(): Promise<void> {
+	const argv = process.argv.slice(2);
+	if (argv[0] === "cleanup") {
+		if (!which("docker")) throw new Error("docker not found on PATH (required for cleanup).");
+		runDockerCleanup(true);
+		return;
+	}
+	const cfg = parseArgs(argv);
+	const exitCode = (await runBenchmark(cfg)).exitCode;
 	process.exit(exitCode);
 }
 
