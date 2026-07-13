@@ -434,17 +434,15 @@ const DOWNSHIFT_CHECKLIST_MESSAGE_TYPE = "downshift-checklist";
 /** `customType` for the hidden validation hand-back injected when a boomerang
  *  downshift returns to the original model at the run's terminal settle. */
 const DOWNSHIFT_BOOMERANG_MESSAGE_TYPE = "downshift-boomerang";
-/** Tools whose first successful call marks the start of the execution phase
- *  that triggers the switch. `todo` is included because the plan nudge tells
- *  the model to initialize its todo list from the finished plan — the todo
- *  init IS the "planning complete, starting work" signal, and hands the fast
- *  model a live checklist with built-in reminders. Bash is deliberately
- *  excluded: it doubles as exploration (ls/cat) and fired turn-1 switches in
- *  practice. */
+/** Tools whose first successful call triggers the switch — once the todo
+ *  gate is open (see {@link AgentSession.#downshiftTodoSeen}). Bash is
+ *  deliberately excluded: it doubles as exploration (ls/cat) and fired
+ *  turn-1 switches in practice. `todo` is deliberately NOT a trigger: firing
+ *  at the todo init handed the fast model 100% of the implementation with
+ *  zero started work and measurably regressed pass rates. */
 const DOWNSHIFT_ACTION_TOOLS: Record<string, true> = {
 	edit: true,
 	write: true,
-	todo: true,
 };
 /** `customType` for the hidden hand-off message steered to the target model
  *  once PlanYolo auto-approves the plan. Unlike downshift's plan nudge this
@@ -719,10 +717,11 @@ export interface AsyncJobSnapshot {
 export type { ShakeMode, ShakeResult };
 /**
  * Downshift: switches an active session one-way from its starting model to
- * a fast/cheap `target` at the first completed turn that starts execution —
- * an edit/write tool, or the todo-list init the plan nudge asks for. A
- * hidden plan nudge asks the starting model to write a plan and then
- * initialize its todo list from it before that first action; a hidden
+ * a fast/cheap `target` at the first completed turn that runs an edit/write
+ * tool once the todo list exists. A hidden plan nudge asks the starting
+ * model to write a plan, initialize its todo list from it, and start; the
+ * todo call opens the trigger gate (it never fires the switch itself), so
+ * the starting model always begins the implementation. A hidden
  * checklist nudge asks the target model to verify its work before
  * finishing. Both are always on — this is the one mechanism that won out
  * over turn-count and ungated variants in testing.
@@ -765,7 +764,7 @@ export interface AgentSessionConfig {
 	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 	/** Initial session thinking selector. */
 	thinkingLevel?: ConfiguredThinkingLevel;
-	/** Downshift from the starting model to a fast/cheap target at the first action (post-plan todo init or edit/write). */
+	/** Downshift from the starting model to a fast/cheap target at the first edit/write once the todo list exists. */
 	downshift?: Downshift;
 	/** Force read-only plan mode at start, auto-approve on the model's first
 	 *  `resolve` call, then switch to the target to implement. */
@@ -1686,6 +1685,10 @@ export class AgentSession {
 	#downshift: Downshift | undefined;
 	/** True once the plan nudge has been queued; scrubbed from context at the switch. */
 	#downshiftPlanInjected = false;
+	/** True once any successful `todo` call landed — opens the downshift
+	 *  trigger gate: the switch fires at the first edit/write AFTER the todo
+	 *  list exists (sessions without a todo tool skip the gate). */
+	#downshiftTodoSeen = false;
 	/** Set at the downshift switch when `boomerang` is configured: the model
 	 *  to hand back to at the run's terminal settle. Cleared once fired. */
 	#downshiftBoomerang?: { model: Model; thinkingLevel?: ConfiguredThinkingLevel };
@@ -2201,16 +2204,19 @@ export class AgentSession {
 			});
 		}
 
-		// Switch at the first completed turn that starts execution: an edit/write
-		// always counts, a `todo` call only counts once the plan nudge is in
-		// context — the nudge instructs "finish the plan, then todo-init and go",
-		// so a post-nudge todo IS the ready signal, while a pre-nudge turn-1 todo
-		// init is mere bookkeeping and must not fire a switch before any
-		// planning happened.
-		const action = context.toolResults.find(
-			result =>
-				DOWNSHIFT_ACTION_TOOLS[result.toolName] && (result.toolName !== "todo" || this.#downshiftPlanInjected),
-		);
+		// Todo gate: the plan nudge instructs "finish the plan, then init the
+		// todo list from it and start" — so the switch waits until a todo list
+		// exists AND the model has actually started implementing (first
+		// edit/write). The todo call itself never triggers: firing there handed
+		// the fast model the whole implementation cold. Sessions without a todo
+		// tool skip the gate.
+		if (context.toolResults.some(result => result.toolName === "todo")) {
+			this.#downshiftTodoSeen = true;
+		}
+		const todoGateOpen = this.#downshiftTodoSeen || !this.#toolRegistry.has("todo");
+		const action = todoGateOpen
+			? context.toolResults.find(result => DOWNSHIFT_ACTION_TOOLS[result.toolName])
+			: undefined;
 		if (!action) {
 			if (!this.#downshiftPlanInjected) {
 				this.#downshiftPlanInjected = true;
@@ -2270,7 +2276,7 @@ export class AgentSession {
 		if (this.#downshift) {
 			this.emitNotice(
 				"info",
-				`Downshift: already armed for ${this.#downshift.target.provider}/${this.#downshift.target.id}, waiting for the first action.`,
+				`Downshift: already armed for ${this.#downshift.target.provider}/${this.#downshift.target.id}, waiting for the first edit/write.`,
 				"downshift",
 			);
 			return;
@@ -2287,7 +2293,7 @@ export class AgentSession {
 		});
 		this.emitNotice(
 			"info",
-			`Downshift: armed for ${target.provider}/${target.id} — will switch at the first action (todo/edit/write).`,
+			`Downshift: armed for ${target.provider}/${target.id} — will switch at the first edit/write once the todo list exists.`,
 			"downshift",
 		);
 	}

@@ -110,17 +110,24 @@ describe("AgentSession downshift", () => {
 		});
 	}
 
-	it("downshifts at the first edit/write: plan nudge before, checklist after, bash doesn't trigger", async () => {
+	it("downshifts at the first edit/write after the todo gate opens; bash and todo don't trigger", async () => {
 		const primary = modelOrThrow("claude-sonnet-4-5");
 		const target = modelOrThrow("claude-sonnet-4-6");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 		const planMarker = "complete plan in your NEXT reply";
 		const checklistMarker = "grep for every other call site";
 
-		// Turn 1: read-only (nudge injected after). Turn 2: bash — excluded from
-		// the trigger set, still no switch. Turn 3: write — first action, switch.
+		// Turn 1: read-only (nudge injected after). Turn 2: bash — excluded.
+		// Turn 3: todo — opens the gate, must NOT itself switch. Turn 4: write —
+		// first post-todo edit/write, switch.
 		const mock = createMockModel({
-			responses: [toolCall("t1", "record"), toolCall("t2", "bash"), toolCall("t3", "write"), { content: ["done"] }],
+			responses: [
+				toolCall("t1", "record"),
+				toolCall("t2", "bash"),
+				toolCall("t3", "todo"),
+				toolCall("t4", "write"),
+				{ content: ["done"] },
+			],
 		});
 		const calls: Array<{ model: string; hasNudge: boolean; hasChecklist: boolean }> = [];
 		const agent = new Agent({
@@ -128,7 +135,7 @@ describe("AgentSession downshift", () => {
 			initialState: {
 				model: primary,
 				systemPrompt: ["Test"],
-				tools: [recordTool as AgentTool, bashTool as AgentTool, writeTool as AgentTool],
+				tools: [recordTool as AgentTool, bashTool as AgentTool, writeTool as AgentTool, todoTool as AgentTool],
 				messages: [],
 				thinkingLevel: Effort.Medium,
 			},
@@ -157,26 +164,33 @@ describe("AgentSession downshift", () => {
 			`${primary.provider}/${primary.id}`,
 			`${primary.provider}/${primary.id}`,
 			`${primary.provider}/${primary.id}`,
+			`${primary.provider}/${primary.id}`,
 			`${target.provider}/${target.id}`,
 		]);
-		// Nudge absent on turn 1 (not yet injected), present turns 2-3, scrubbed by turn 4.
-		expect(calls.map(call => call.hasNudge)).toEqual([false, true, true, false]);
+		// Nudge absent on turn 1 (not yet injected), present turns 2-4, scrubbed after the switch.
+		expect(calls.map(call => call.hasNudge)).toEqual([false, true, true, true, false]);
 		// Checklist present only once the target model is running.
-		expect(calls.map(call => call.hasChecklist)).toEqual([false, false, false, true]);
+		expect(calls.map(call => call.hasChecklist)).toEqual([false, false, false, false, true]);
 		expect(session.model?.id).toBe(target.id);
 	});
 
-	it("todo triggers the switch only after the plan nudge; a turn-1 todo init is bookkeeping, not readiness", async () => {
+	it("an edit before any todo call does not switch while a todo tool exists; the next edit after todo does", async () => {
 		const primary = modelOrThrow("claude-sonnet-4-5");
 		const target = modelOrThrow("claude-sonnet-4-6");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 		const planMarker = "complete plan in your NEXT reply";
 
-		// Turn 1: todo init BEFORE the nudge exists — must not switch (the nudge
-		// is injected after this turn instead). Turn 2: exploration under the
-		// nudge. Turn 3: todo — the post-plan "starting work" signal, switch.
+		// Turn 1: exploration (nudge after). Turn 2: write with the gate still
+		// closed — no switch; the fast model must not inherit a todo-less run.
+		// Turn 3: todo — gate opens. Turn 4: write — switch.
 		const mock = createMockModel({
-			responses: [toolCall("t1", "todo"), toolCall("t2", "record"), toolCall("t3", "todo"), { content: ["done"] }],
+			responses: [
+				toolCall("t1", "record"),
+				toolCall("t2", "write"),
+				toolCall("t3", "todo"),
+				toolCall("t4", "write"),
+				{ content: ["done"] },
+			],
 		});
 		const calls: Array<{ model: string; hasNudge: boolean }> = [];
 		const agent = new Agent({
@@ -184,7 +198,7 @@ describe("AgentSession downshift", () => {
 			initialState: {
 				model: primary,
 				systemPrompt: ["Test"],
-				tools: [recordTool as AgentTool, todoTool as AgentTool],
+				tools: [recordTool as AgentTool, writeTool as AgentTool, todoTool as AgentTool],
 				messages: [],
 				thinkingLevel: Effort.Medium,
 			},
@@ -212,10 +226,11 @@ describe("AgentSession downshift", () => {
 			`${primary.provider}/${primary.id}`,
 			`${primary.provider}/${primary.id}`,
 			`${primary.provider}/${primary.id}`,
+			`${primary.provider}/${primary.id}`,
 			`${target.provider}/${target.id}`,
 		]);
-		// Nudge injected after turn 1 despite the todo call there.
-		expect(calls.map(call => call.hasNudge)).toEqual([false, true, true, false]);
+		// The turn-2 write landed while the gate was closed — still primary on turn 3.
+		expect(calls.map(call => call.hasNudge)).toEqual([false, true, true, true, false]);
 		expect(session.model?.id).toBe(target.id);
 	});
 
@@ -367,7 +382,10 @@ describe("AgentSession downshift", () => {
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({ "compaction.enabled": false }),
 			modelRegistry,
-			toolRegistry,
+			toolRegistry: new Map([
+				[recordTool.name, recordTool as AgentTool],
+				[writeTool.name, writeTool as AgentTool],
+			]),
 			downshift: { target, boomerang: true },
 		});
 

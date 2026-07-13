@@ -480,7 +480,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			}
 			runtime.session.armDownshift(resolved.model, resolved.thinkingLevel);
 			await runtime.output(
-				`Downshift on: switching to ${resolved.model.provider}/${resolved.model.id} at the next action (todo/edit/write).`,
+				`Downshift on: switching to ${resolved.model.provider}/${resolved.model.id} at the next edit/write (todo-gated).`,
 			);
 			return commandConsumed();
 		},
