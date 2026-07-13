@@ -104,13 +104,13 @@ describe("RunStore", () => {
 		expect(run?.running).toBe(1);
 		expect(run?.costUsd).toBeCloseTo(0.7, 5);
 
-		const trials = store.listTrials("job-a");
-		expect(trials.map(t => [t.task, t.status])).toEqual([
+		const traces = store.listTraces("job-a");
+		expect(traces.map(t => [t.task, t.status])).toEqual([
 			["alpha", "pass"],
 			["beta", "error"],
 			["gamma", "running"],
 		]);
-		expect(trials[1].detail).toBe("AgentTimeoutError");
+		expect(traces[1].detail).toBe("AgentTimeoutError");
 
 		// re-discover is idempotent
 		expect(store.discover()).toBe(0);
@@ -162,6 +162,7 @@ describe("RunStore", () => {
 		const store = new RunStore(jobsDir);
 		cleanups.push(() => store.close());
 		store.registerLaunch({
+			benchmark: "harbor",
 			jobName: "job-b",
 			dataset: "test-dataset@1.0",
 			agent: "omp",
@@ -175,7 +176,7 @@ describe("RunStore", () => {
 });
 
 describe("ManagerServer API", () => {
-	it("serves runs, trials, transcripts, and validates launches", async () => {
+	it("serves uniform runs, traces, and rejects invalid launches", async () => {
 		const jobsDir = makeJobsDir();
 		writeFixtureJob(jobsDir, "job-api");
 		const manager = new ManagerServer(jobsDir);
@@ -190,15 +191,15 @@ describe("ManagerServer API", () => {
 
 		const detailRes = await fetch(`${base}/api/runs/job-api`);
 		expect(detailRes.status).toBe(200);
-		const detail = (await detailRes.json()) as { run: { pass: number }; trials: Array<{ status: string }> };
+		const detail = (await detailRes.json()) as { run: { pass: number }; traces: Array<{ status: string }> };
 		expect(detail.run.pass).toBe(1);
-		expect(detail.trials).toHaveLength(3);
+		expect(detail.traces).toHaveLength(3);
 
-		const tr = await fetch(`${base}/api/runs/job-api/trials/alpha__abc/transcript?tail=10`);
+		const tr = await fetch(`${base}/api/runs/job-api/traces/alpha__abc?tail=10`);
 		expect(tr.status).toBe(200);
-		const transcript = (await tr.json()) as { entries: Array<{ kind: string; tools?: string[] }> };
-		expect(transcript.entries.map(e => e.kind)).toEqual(["assistant", "toolResult"]);
-		expect(transcript.entries[0].tools).toEqual(["read"]);
+		const trace = (await tr.json()) as { entries: Array<{ kind: string; tools?: string[] }> };
+		expect(trace.entries.map(e => e.kind)).toEqual(["assistant", "toolResult"]);
+		expect(trace.entries[0].tools).toEqual(["read"]);
 
 		const missing = await fetch(`${base}/api/runs/nope`);
 		expect(missing.status).toBe(404);
@@ -214,5 +215,81 @@ describe("ManagerServer API", () => {
 			cancelled: boolean;
 		};
 		expect(cancelUnknown.cancelled).toBe(false);
+	});
+
+	it("serves edit and SnapCompact metrics and native traces through one API", async () => {
+		const jobsDir = makeJobsDir();
+		const manager = new ManagerServer(jobsDir);
+		for (const benchmark of ["edit", "snapcompact"] as const) {
+			const jobName = `${benchmark}-arm`;
+			manager.store.registerLaunch({
+				benchmark,
+				jobName,
+				dataset: benchmark === "edit" ? "typescript-edit" : "squad-dev",
+				agent: benchmark,
+				models: ["test/model"],
+				pid: process.pid,
+			});
+			manager.store.markExit(jobName, 0);
+		}
+		const editDir = path.join(jobsDir, "edit-arm");
+		fs.writeFileSync(
+			path.join(editDir, "result.json"),
+			JSON.stringify({
+				tasks: [
+					{
+						id: "rename",
+						name: "Rename",
+						runs: [{ runIndex: 0, success: true, duration: 10, tokens: { input: 8, output: 2, reasoning: 0 } }],
+					},
+				],
+				summary: {
+					totalRuns: 1,
+					successfulRuns: 1,
+					taskSuccessRate: 1,
+					editSuccessRate: 1,
+					totalTokens: { input: 8, output: 2 },
+				},
+			}),
+		);
+		fs.mkdirSync(path.join(editDir, "result.dump", "rename"), { recursive: true });
+		fs.writeFileSync(path.join(editDir, "result.dump", "rename", "run-1.md"), "# conversation\n\nassistant answer");
+		const snapDir = path.join(jobsDir, "snapcompact-arm");
+		fs.writeFileSync(
+			path.join(snapDir, "records.jsonl"),
+			`${JSON.stringify({ cond: "text", chunk: 0, pos_rel: 0, q: "question", answer: "answer", golds: ["gold"], em: 0, f1: 0.5 })}\n`,
+		);
+		fs.writeFileSync(
+			path.join(snapDir, "summary.json"),
+			JSON.stringify({
+				rows: [{ n: 1, f1: 0.5, em: 0, cost_usd: 0.1, tokens_in: 10, tokens_out: 2, cache_w: 0, cache_r: 0 }],
+			}),
+		);
+		manager.store.syncAll();
+		const server = manager.start(0);
+		cleanups.push(() => {
+			void manager.stop();
+		});
+		const base = `http://localhost:${server.port}`;
+
+		const edit = (await (await fetch(`${base}/api/runs/edit-arm`)).json()) as {
+			run: { benchmark: string; metrics: Record<string, number> };
+			traces: Array<{ name: string }>;
+		};
+		expect(edit.run).toMatchObject({ benchmark: "edit", metrics: { task_success_rate: 1, edit_success_rate: 1 } });
+		const editTrace = (await (
+			await fetch(`${base}/api/runs/edit-arm/traces/${encodeURIComponent(edit.traces[0].name)}`)
+		).json()) as { entries: Array<{ kind: string; text: string }> };
+		expect(editTrace.entries).toEqual([{ kind: "conversation", text: "# conversation\n\nassistant answer" }]);
+
+		const snap = (await (await fetch(`${base}/api/runs/snapcompact-arm`)).json()) as {
+			run: { benchmark: string; metrics: Record<string, number> };
+			traces: Array<{ name: string }>;
+		};
+		expect(snap.run).toMatchObject({ benchmark: "snapcompact", metrics: { f1: 0.5, exact_match: 0 } });
+		const snapTrace = (await (
+			await fetch(`${base}/api/runs/snapcompact-arm/traces/${encodeURIComponent(snap.traces[0].name)}`)
+		).json()) as { entries: Array<{ kind: string }> };
+		expect(snapTrace.entries.map(entry => entry.kind)).toEqual(["question", "answer", "reference"]);
 	});
 });

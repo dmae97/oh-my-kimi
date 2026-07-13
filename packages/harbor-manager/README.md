@@ -1,22 +1,16 @@
 # @oh-my-pi/harbor-manager
 
-Manage [Harbor](https://github.com/laude-institute/harbor) benchmark runs against
-the **local `omp` build**: a CLI runner with a live terminal dashboard, a
-SQLite-backed run store, a REST/SSE API, and a web dashboard with live
-run → trial → transcript drill-down.
-
-Works with any Harbor dataset (`terminal-bench@2.0` by default,
-`swe-bench/swe-bench-verified`, …).
+One manager for repository benchmarks. Harbor, TypeScript edit, and SnapCompact
+runs use the same experiment → run → trace model, SQLite store, REST/SSE API,
+and dashboard. Benchmark-native artifacts remain on disk; adapters normalize
+their live progress, scores, token usage, costs, and traces.
 
 ```bash
-# CLI run (owns the terminal, writes a markdown report)
-bun src/runner.ts --model anthropic/claude-sonnet-4-6 --tasks 20 --concurrency 4
-
-# Web manager: dashboard + API on :4700
-bun run serve            # bun src/server.ts [--port 4700] [--jobs-dir <path>]
+# Dashboard + API on :4700; launch every benchmark from the same “new run” form
+bun run serve --port 4700
 ```
 
-## How runs execute
+## How Harbor runs execute
 
 1. **Local omp, not npm.** By default the runner bind-mounts the repo
    read-only into each task container (`--install source`) and runs omp
@@ -35,34 +29,36 @@ bun run serve            # bun src/server.ts [--port 4700] [--jobs-dir <path>]
 
 ## Server
 
-- `GET /` — dashboard: run list (SSE-live), trial grid, transcript viewer
-  that tails live sessions.
-- `GET /api/runs` — run rows (rollups: pass/fail/error/spend/tokens).
-- `POST /api/runs` — launch. Body:
+- `GET /` — experiments, runs, normalized traces, and a launch form for every benchmark.
+- `GET /api/experiments` — experiment summaries across all benchmark types.
+- `GET /api/runs` — uniform run rows with benchmark, score, progress, spend, and tokens.
+- `POST /api/runs` — launch through a benchmark adapter. Body:
 
   ```json
   {
+    "benchmark": "edit",
     "model": "anthropic/claude-opus-4-8",
-    "dataset": "swe-bench/swe-bench-verified",
     "tasks": 20,
     "concurrency": 4,
-    "timeoutMultiplier": 2,
-    "include": ["swe-bench/astropy__astropy-14995"],
-    "slide": { "model": "google/gemini-3.5-flash", "onAction": true, "plan": true }
+    "attempts": 2,
+    "jobName": "edit-baseline",
+    "role": "baseline",
+    "goal": "compare edit strategies"
   }
   ```
 
-  `slide.turns` and `slide.onAction` are mutually exclusive triggers.
-- `GET /api/runs/:name` — `{ run, trials }` (syncs from disk on read).
+  `benchmark` is `harbor`, `edit`, or `snapcompact`. Harbor uses `dataset`,
+  `include`, `timeoutMultiplier`, and `slide`; edit uses `include` as task IDs;
+  SnapCompact uses `conditions` and treats `tasks` as the passage limit.
+- `GET /api/runs/:name` — `{ run, traces }` (syncs native artifacts on read).
 - `DELETE /api/runs/:name` — cancel a manager-launched run.
-- `GET /api/runs/:name/trials/:trial/transcript?tail=N[&raw=1]` — compact
-  (or raw JSONL) view of the trial's live session log.
+- `GET /api/runs/:name/traces/:trace[?raw=1]` — normalized or native trace.
 - `GET /api/events` — SSE stream of run-list snapshots (sent on change).
 
 State lives in `<jobs-dir>/_manager/harbor-manager.sqlite`; the filesystem
 stays the source of truth and historical CLI runs are auto-discovered.
 
-## Runner options (excerpt)
+## Harbor runner options (excerpt)
 
 | Option | Default | Notes |
 |---|---|---|

@@ -11,9 +11,9 @@
  * process renders a live dashboard (progress / success% / spend / tokens / ETA)
  * by polling each trial's `result.json`. On completion it writes a markdown report.
  *
- *   bun src/runner.ts --model anthropic/claude-sonnet-4-6 --tasks 20 --concurrency 4
- *   bun src/runner.ts --agent oracle --tasks 2            # cheap pipeline smoke
- *   bun src/runner.ts --help
+ *   harbor-manager harbor --model anthropic/claude-sonnet-4-6 --tasks 20 --concurrency 4
+ *   harbor-manager harbor --agent oracle --tasks 2        # cheap pipeline smoke
+ *   harbor-manager harbor --help
  */
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -108,7 +108,7 @@ function defaultConfig(): Config {
 
 const HELP = `harbor-manager runner (local omp)
 
-Usage: bun src/runner.ts [options] [-- <extra harbor args>]
+Usage: harbor-manager harbor [options] [-- <extra harbor args>]
 
 Commands:
   cleanup                        Force-remove ALL leftover Harbor containers + networks, then exit

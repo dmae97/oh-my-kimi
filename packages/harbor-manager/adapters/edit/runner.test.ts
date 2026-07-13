@@ -4,12 +4,8 @@ import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { formatSessionDumpText, SessionManager } from "@oh-my-pi/pi-coding-agent";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import { generateReport } from "@oh-my-pi/typescript-edit-benchmark/report";
-import {
-	buildBenchmarkResult,
-	type TaskRunResult,
-	writeConversationDump,
-} from "@oh-my-pi/typescript-edit-benchmark/runner";
+import { generateReport } from "./report";
+import { buildBenchmarkResult, type TaskRunResult, writeConversationDump } from "./runner";
 import type { EditTask } from "@oh-my-pi/typescript-edit-benchmark/tasks";
 
 const tempDirs: TempDir[] = [];

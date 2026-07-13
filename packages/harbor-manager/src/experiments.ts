@@ -3,7 +3,7 @@
  * `sb2-gemini` → experiment `sb2`) so comparable arms can be charted together,
  * with linear projections for arms still in flight.
  */
-import type { RunRow, RunStore, TrialRow } from "./store";
+import type { RunRow, RunStore, TraceRow } from "./store";
 
 /** Linear extrapolation of a running arm to its full task count. */
 export interface ArmProjection {
@@ -79,8 +79,8 @@ function slideLabel(slideJson: string | null): string {
 	}
 }
 
-export function summarizeArm(run: RunRow, trials: TrialRow[]): ArmSummary {
-	const decided = trials.filter(t => t.status === "pass" || t.status === "fail" || t.status === "error");
+export function summarizeArm(run: RunRow, traces: TraceRow[]): ArmSummary {
+	const decided = traces.filter(t => t.status === "pass" || t.status === "fail" || t.status === "error");
 	const durations = decided.filter(t => t.durationMs > 0).map(t => t.durationMs);
 	const meanTrialMs = durations.length > 0 ? durations.reduce((a, b) => a + b, 0) / durations.length : null;
 	const passPct = decided.length > 0 ? (100 * run.pass) / decided.length : null;
@@ -102,7 +102,7 @@ export function summarizeArm(run: RunRow, trials: TrialRow[]): ArmSummary {
 	return {
 		run,
 		arm: armOf(run.jobName),
-		config: `${run.models}${slideLabel(run.slide)}`,
+		config: `${run.benchmark} · ${run.models}${slideLabel(run.slide)}`,
 		passPct,
 		costPerTask,
 		meanTrialMs,
@@ -150,7 +150,7 @@ export function experimentDetail(store: RunStore, id: string): ExperimentDetail 
 	const matrix: ExperimentDetail["matrix"] = {};
 	const tasks = new Set<string>();
 	for (const run of runs) {
-		const trials = store.listTrials(run.jobName);
+		const trials = store.listTraces(run.jobName);
 		arms.push(summarizeArm(run, trials));
 		const cells: Record<string, { status: string; reward: number | null }> = {};
 		for (const t of trials) {

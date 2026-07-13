@@ -13,15 +13,22 @@ import type { Model, ToolExample } from "@oh-my-pi/pi-ai";
 import { formatSessionDumpText, RpcClient } from "@oh-my-pi/pi-coding-agent";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { diffLines } from "diff";
-import { formatDirectory } from "./formatter";
-import { discoverSharedInfra, InProcessClient, type SharedInfra } from "./in-process-client";
+import { formatDirectory } from "@oh-my-pi/typescript-edit-benchmark/formatter";
+import {
+	discoverSharedInfra,
+	InProcessClient,
+	type SharedInfra,
+} from "@oh-my-pi/typescript-edit-benchmark/in-process-client";
 import benchmarkRetryPrompt from "./prompts/benchmark-retry.md" with { type: "text" };
 import benchmarkSystemPrompt from "./prompts/benchmark-system.md" with { type: "text" };
 import benchmarkTaskPrompt from "./prompts/benchmark-task.md" with { type: "text" };
-import type { EditTask } from "./tasks";
-import { verifyExpectedFileSubset, verifyExpectedFiles } from "./verify";
+import type { EditTask } from "@oh-my-pi/typescript-edit-benchmark/tasks";
+import {
+	verifyExpectedFileSubset,
+	verifyExpectedFiles,
+} from "@oh-my-pi/typescript-edit-benchmark/verify";
 
-const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
+const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..", "..");
 const RUNS_DIR = path.join(REPO_ROOT, "runs");
 const TMP = path.join(RUNS_DIR, `rb-${Math.random().toString(36).slice(2, 10)}`);
 const CLI_PATH = Bun.fileURLToPath(import.meta.resolve("@oh-my-pi/pi-coding-agent/cli"));

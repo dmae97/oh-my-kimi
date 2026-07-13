@@ -6,18 +6,20 @@
  *   bun src/server.ts [--port 4700] [--jobs-dir <path>]
  *
  * API:
+ *   GET    /api/experiments               → experiment summaries across all benchmarks
  *   GET    /api/runs                      → RunRow[]
- *   POST   /api/runs                      → launch a run (JSON body, see LaunchRequest)
- *   GET    /api/runs/:name                → { run, trials }
- *   DELETE /api/runs/:name                → cancel a manager-launched run
- *   GET    /api/runs/:name/trials/:trial/transcript?tail=N[&raw=1]
+ *   POST   /api/runs                      → launch any benchmark
+ *   GET    /api/runs/:name                → { run, traces }
+ *   DELETE /api/runs/:name                → cancel a managed run
+ *   GET    /api/runs/:name/traces/:trace  → normalized trace
  *   GET    /api/events                    → SSE: run-list snapshots on change
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Server, Subprocess } from "bun";
+import { BENCHMARK_DEFINITIONS } from "./benchmarks";
 import { buildExperiments, experimentDetail, experimentOf } from "./experiments";
-import { type RunRole, RunStore } from "./store";
+import { type BenchmarkKind, type RunRole, RunStore } from "./store";
 
 /** PUT /api/experiments/:id body — goal and per-run role/note metadata. */
 export interface ExperimentMetaUpdate {
@@ -33,6 +35,8 @@ const DEFAULT_JOBS_DIR = path.join(REPO_ROOT, "runs", "harbor");
 
 /** POST /api/runs body. Mirrors the runner CLI surface we actually use. */
 export interface LaunchRequest {
+	/** Benchmark adapter to execute. */
+	benchmark?: BenchmarkKind;
 	model: string;
 	dataset?: string;
 	/** Task count for a dataset sample, or omit when `include` is given. */
@@ -40,12 +44,14 @@ export interface LaunchRequest {
 	/** Explicit task names (passed as repeated --include). */
 	include?: string[];
 	concurrency?: number;
+	/** SnapCompact conditions; ignored by other benchmarks. */
+	conditions?: string[];
 	timeoutMultiplier?: number;
 	attempts?: number;
 	agent?: string;
 	jobName?: string;
 	webSearch?: boolean;
-	slide?: { model: string; turns?: number; onAction?: boolean; plan?: boolean };
+	slide?: { model: string; turns?: number; onAction?: boolean; plan?: boolean; checklist?: boolean };
 	/** Role of this run inside its experiment (baseline vs treatment). */
 	role?: RunRole;
 	/** One-line description of what this arm tests. */
@@ -180,6 +186,9 @@ export class ManagerServer {
 				});
 			}
 			if (p === "/api/events") return this.#sseResponse();
+			if (p === "/api/benchmarks" && request.method === "GET") {
+				return Response.json(BENCHMARK_DEFINITIONS);
+			}
 			if (p === "/api/experiments" && request.method === "GET") {
 				return Response.json(buildExperiments(this.#store));
 			}
@@ -207,15 +216,15 @@ export class ManagerServer {
 				if (request.method === "DELETE") return Response.json(this.cancel(jobName));
 				const run = this.#store.syncRun(jobName);
 				if (!run) return Response.json({ error: "run not found" }, { status: 404 });
-				return Response.json({ run, trials: this.#store.listTrials(jobName) });
+				return Response.json({ run, traces: this.#store.listTraces(jobName) });
 			}
-			const trialMatch = p.match(/^\/api\/runs\/([^/]+)\/trials\/([^/]+)\/transcript$/);
-			if (trialMatch) {
-				const jobName = decodeURIComponent(trialMatch[1]);
-				const trial = decodeURIComponent(trialMatch[2]);
+			const traceMatch = p.match(/^\/api\/runs\/([^/]+)\/traces\/([^/]+)$/);
+			if (traceMatch) {
+				const jobName = decodeURIComponent(traceMatch[1]);
+				const trace = decodeURIComponent(traceMatch[2]);
 				const tail = Number(url.searchParams.get("tail") ?? "120");
 				const raw = url.searchParams.get("raw") === "1";
-				return this.#transcript(jobName, trial, tail, raw);
+				return this.#trace(jobName, trace, tail, raw);
 			}
 			return Response.json({ error: "not found" }, { status: 404 });
 		} catch (err) {
@@ -248,43 +257,78 @@ export class ManagerServer {
 		});
 	}
 
-	/** Spawn the CLI runner for `request` and register the run. */
+	/** Launch any supported benchmark and register it in the uniform run store. */
 	launch(request: LaunchRequest): { jobName: string; pid: number } {
 		if (!request.model) throw new Error("model is required");
-		const dataset = request.dataset ?? "terminal-bench@2.0";
+		const benchmark = request.benchmark ?? "harbor";
+		if (benchmark !== "harbor" && benchmark !== "edit" && benchmark !== "snapcompact") {
+			throw new Error(`unsupported benchmark: ${benchmark}`);
+		}
+		const dataset =
+			request.dataset ??
+			(benchmark === "harbor" ? "terminal-bench@2.0" : benchmark === "edit" ? "typescript-edit" : "squad-dev");
 		const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 		const modelSlug = request.model.replace(/[^a-zA-Z0-9]+/g, "-");
 		const jobName = request.jobName ?? `${modelSlug}-${stamp}`;
 		if (this.#children.has(jobName) || this.#store.getRun(jobName)?.status === "running") {
 			throw new Error(`run ${jobName} is already running`);
 		}
+		const jobDir = path.join(this.jobsDir, jobName);
+		fs.mkdirSync(jobDir, { recursive: true });
 
-		const argv = ["bun", "src/runner.ts", "--model", request.model, "-d", dataset, "--job-name", jobName];
-		if (request.agent) argv.push("--agent", request.agent);
-		if (request.tasks !== undefined) argv.push("--tasks", String(request.tasks));
-		if (request.concurrency !== undefined) argv.push("--concurrency", String(request.concurrency));
-		if (request.attempts !== undefined) argv.push("--attempts", String(request.attempts));
-		if (request.timeoutMultiplier !== undefined) argv.push("--timeout-multiplier", String(request.timeoutMultiplier));
-		if (request.webSearch) argv.push("--web-search");
-		for (const task of request.include ?? []) argv.push("--include", task);
-		if (request.slide) {
-			argv.push("--agent-arg", "--reasoning-slide-model", "--agent-arg", request.slide.model);
-			if (request.slide.onAction) argv.push("--agent-arg", "--reasoning-slide-on-action");
-			else if (request.slide.turns !== undefined) {
-				argv.push("--agent-arg", "--reasoning-slide-turns", "--agent-arg", String(request.slide.turns));
-			} else throw new Error("slide requires turns or onAction");
-			if (request.slide.plan) argv.push("--agent-arg", "--reasoning-slide-plan");
-			// The runner only auto-routes gateway auth for the primary model's
-			// provider; declare the slide model's provider explicitly so its
-			// requests reach the gateway too.
-			const slideProvider = request.slide.model.split("/", 1)[0];
-			if (slideProvider) argv.push("--providers", slideProvider);
-		}
-		// Default to source mode (repo bind-mount, no rebuild); prebuilt binaries only on request.
-		if (request.prebuiltBinaries) {
-			for (const name of ["omp-linux-arm64", "omp-linux-x64"]) {
-				const binary = path.join(REPO_ROOT, "packages", "coding-agent", "dist", name);
-				if (fs.existsSync(binary)) argv.push("--binary", binary);
+		let argv: string[];
+		let cwd: string;
+		if (benchmark === "edit") {
+			cwd = PKG_DIR;
+			argv = ["bun", "adapters/edit/cli.ts", "--model", request.model, "--output", path.join(jobDir, "result.json")];
+			if (request.tasks !== undefined) argv.push("--max-tasks", String(request.tasks));
+			if (request.include?.length) argv.push("--tasks", request.include.join(","));
+			if (request.concurrency !== undefined) argv.push("--task-concurrency", String(request.concurrency));
+			if (request.attempts !== undefined) argv.push("--runs", String(request.attempts));
+		} else if (benchmark === "snapcompact") {
+			cwd = PKG_DIR;
+			argv = ["uv", "run", "src/adapters/snapcompact.py", "--model", request.model, "--output-dir", jobDir];
+			if (request.tasks !== undefined) argv.push("--limit-paras", String(request.tasks));
+			if (request.concurrency !== undefined) argv.push("--workers", String(request.concurrency));
+			if (request.conditions?.length) argv.push("--conditions", request.conditions.join(","));
+		} else {
+			cwd = PKG_DIR;
+			argv = [
+				"bun",
+				"src/runner.ts",
+				"--model",
+				request.model,
+				"-d",
+				dataset,
+				"--job-name",
+				jobName,
+				"--jobs-dir",
+				this.jobsDir,
+			];
+			if (request.agent) argv.push("--agent", request.agent);
+			if (request.tasks !== undefined) argv.push("--tasks", String(request.tasks));
+			if (request.concurrency !== undefined) argv.push("--concurrency", String(request.concurrency));
+			if (request.attempts !== undefined) argv.push("--attempts", String(request.attempts));
+			if (request.timeoutMultiplier !== undefined)
+				argv.push("--timeout-multiplier", String(request.timeoutMultiplier));
+			if (request.webSearch) argv.push("--web-search");
+			for (const task of request.include ?? []) argv.push("--include", task);
+			if (request.slide) {
+				argv.push("--agent-arg", "--reasoning-slide-model", "--agent-arg", request.slide.model);
+				if (request.slide.onAction) argv.push("--agent-arg", "--reasoning-slide-on-action");
+				else if (request.slide.turns !== undefined) {
+					argv.push("--agent-arg", "--reasoning-slide-turns", "--agent-arg", String(request.slide.turns));
+				} else throw new Error("slide requires turns or onAction");
+				if (request.slide.plan) argv.push("--agent-arg", "--reasoning-slide-plan");
+				if (request.slide.checklist) argv.push("--agent-arg", "--reasoning-slide-checklist");
+				const slideProvider = request.slide.model.split("/", 1)[0];
+				if (slideProvider) argv.push("--providers", slideProvider);
+			}
+			if (request.prebuiltBinaries) {
+				for (const name of ["omp-linux-arm64", "omp-linux-x64"]) {
+					const binary = path.join(REPO_ROOT, "packages", "coding-agent", "dist", name);
+					if (fs.existsSync(binary)) argv.push("--binary", binary);
+				}
 			}
 		}
 		argv.push(...(request.extraArgs ?? []));
@@ -293,7 +337,7 @@ export class ManagerServer {
 		fs.mkdirSync(logDir, { recursive: true });
 		const logFile = fs.openSync(path.join(logDir, `${jobName}.log`), "w");
 		const proc = Bun.spawn(argv, {
-			cwd: PKG_DIR,
+			cwd,
 			stdout: logFile,
 			stderr: logFile,
 			env: { ...process.env },
@@ -309,11 +353,13 @@ export class ManagerServer {
 			this.#tick();
 		});
 		this.#store.registerLaunch({
+			benchmark,
 			jobName,
 			dataset,
 			agent: request.agent ?? "omp",
 			models: [request.model],
 			slide: request.slide,
+			config: { ...request },
 			pid: proc.pid,
 			role: request.role,
 			note: request.note,
@@ -354,12 +400,44 @@ export class ManagerServer {
 		return { jobName, cancelled: false };
 	}
 
-	/** Compact transcript view of a trial's omp.txt session JSONL. */
-	#transcript(jobName: string, trial: string, tail: number, raw: boolean): Response {
-		const file = path.join(this.jobsDir, jobName, trial, "agent", "omp.txt");
-		if (!fs.existsSync(file)) return Response.json({ error: "transcript not found" }, { status: 404 });
-		const lines = fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
+	/** Return a normalized trace regardless of the benchmark's native artifact format. */
+	#trace(jobName: string, traceName: string, tail: number, raw: boolean): Response {
+		const trace = this.#store.listTraces(jobName).find(item => item.name === traceName);
+		if (!trace?.tracePath) return Response.json({ error: "trace not found" }, { status: 404 });
+		const jobDir = path.join(this.jobsDir, jobName);
 		const n = Number.isSafeInteger(tail) && tail > 0 ? Math.min(tail, 2000) : 120;
+		if (trace.tracePath.startsWith("record:")) {
+			const lineNumber = Number(trace.tracePath.slice("record:".length));
+			const line = fs.readFileSync(path.join(jobDir, "records.jsonl"), "utf8").split("\n")[lineNumber - 1];
+			if (!line) return Response.json({ error: "trace not found" }, { status: 404 });
+			if (raw) return new Response(line, { headers: { "content-type": "application/json" } });
+			const record = JSON.parse(line) as Record<string, unknown>;
+			return Response.json({
+				jobName,
+				trace: traceName,
+				entries: [
+					{ kind: "question", text: String(record.q ?? "") },
+					{ kind: "answer", model: this.#store.getRun(jobName)?.models ?? "", text: String(record.answer ?? "") },
+					{ kind: "reference", text: JSON.stringify(record.golds ?? []) },
+				],
+				totalEvents: 3,
+			});
+		}
+		const file = path.resolve(jobDir, trace.tracePath);
+		if (!file.startsWith(`${path.resolve(jobDir)}${path.sep}`) || !fs.existsSync(file)) {
+			return Response.json({ error: "trace not found" }, { status: 404 });
+		}
+		const text = fs.readFileSync(file, "utf8");
+		if (!file.endsWith(".txt")) {
+			if (raw) return new Response(text, { headers: { "content-type": "text/plain; charset=utf-8" } });
+			return Response.json({
+				jobName,
+				trace: traceName,
+				entries: [{ kind: "conversation", text }],
+				totalEvents: 1,
+			});
+		}
+		const lines = text.split("\n").filter(Boolean);
 		if (raw) {
 			return new Response(lines.slice(-n).join("\n"), {
 				headers: { "content-type": "application/x-ndjson" },
@@ -373,41 +451,30 @@ export class ManagerServer {
 			} catch {
 				continue;
 			}
-			const type = event.type;
-			if (type === "message_end") {
+			if (event.type === "message_end") {
 				const message = event.message as Record<string, unknown> | undefined;
 				if (!message) continue;
-				const role = message.role;
-				if (role === "assistant") {
-					const content = Array.isArray(message.content)
-						? (message.content as Array<Record<string, unknown>>)
-						: [];
-					const text = content
-						.filter(block => block.type === "text")
-						.map(block => String(block.text ?? ""))
-						.join("\n");
+				const content = Array.isArray(message.content) ? (message.content as Array<Record<string, unknown>>) : [];
+				const body = content
+					.filter(block => block.type === "text")
+					.map(block => String(block.text ?? ""))
+					.join("\n");
+				if (message.role === "assistant") {
 					const tools = content.filter(block => block.type === "toolCall").map(block => String(block.name ?? "?"));
-					entries.push({ kind: "assistant", model: message.model ?? "", text, tools });
-				} else if (role === "toolResult") {
-					const content = Array.isArray(message.content)
-						? (message.content as Array<Record<string, unknown>>)
-						: [];
-					const text = content
-						.filter(block => block.type === "text")
-						.map(block => String(block.text ?? ""))
-						.join("\n");
+					entries.push({ kind: "assistant", model: message.model ?? "", text: body, tools });
+				} else if (message.role === "toolResult") {
 					entries.push({
 						kind: "toolResult",
 						tool: message.toolName ?? "?",
 						isError: message.isError === true,
-						text: text.length > 1600 ? `${text.slice(0, 1600)}…` : text,
+						text: body.length > 1600 ? `${body.slice(0, 1600)}…` : body,
 					});
 				}
-			} else if (type === "notice") {
+			} else if (event.type === "notice") {
 				entries.push({ kind: "notice", text: event.message ?? "" });
 			}
 		}
-		return Response.json({ jobName, trial, entries: entries.slice(-n), totalEvents: lines.length });
+		return Response.json({ jobName, trace: traceName, entries: entries.slice(-n), totalEvents: lines.length });
 	}
 }
 

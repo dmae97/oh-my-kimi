@@ -36,6 +36,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+RESEARCH = HERE.parents[2] / "snapcompact" / "research"
 
 def find_agent_prompts() -> Path:
     for parent in HERE.parents:
@@ -48,16 +49,16 @@ def find_agent_prompts() -> Path:
     raise FileNotFoundError("Could not find agent compaction prompts")
 
 
-sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(RESEARCH))
 
 import squad  # noqa: E402
 from anthropic_api import complete, image_block, load_api_key  # noqa: E402
 from bdf import VARIANTS, FontCfg, capacity, render  # noqa: E402
 
 AGENT_PROMPTS = find_agent_prompts()
-CACHE = HERE / ".cache"
+CACHE = RESEARCH / ".cache"
 QA_CACHE = CACHE / "qa"
-RESULTS = HERE / "results"
+RESULTS = RESEARCH / "results"
 
 FONTS = {
     "8x13": FontCfg("8x13", "8x13", 8, 13),
@@ -100,7 +101,7 @@ def sha8(*parts: str) -> str:
 
 
 def load_prompt(name: str) -> str:
-    return (HERE / "prompts" / name).read_text()
+    return (RESEARCH / "prompts" / name).read_text()
 
 
 def agent_prompt(name: str) -> str:
@@ -276,6 +277,7 @@ def main() -> None:
     ap.add_argument("--price-in", type=float, default=10.0, help="$ per 1M input tokens")
     ap.add_argument("--price-out", type=float, default=50.0, help="$ per 1M output tokens")
     ap.add_argument("--env", default="~/.env")
+    ap.add_argument("--output-dir", help="write records.jsonl and summary.json directly to this directory")
     args = ap.parse_args()
 
     CACHE.mkdir(exist_ok=True)
@@ -288,7 +290,11 @@ def main() -> None:
             f"-e{args.effort}" if args.effort else "",
         ]
     )
-    run_dir = RESULTS / f"{args.model}-seed{args.seed}-qpc{args.qpc}-{scope}{tag}"
+    run_dir = (
+        Path(args.output_dir).expanduser().resolve()
+        if args.output_dir
+        else RESULTS / f"{args.model}-seed{args.seed}-qpc{args.qpc}-{scope}{tag}"
+    )
     run_dir.mkdir(parents=True, exist_ok=True)
 
     paras = squad.load_paragraphs(CACHE)
@@ -312,17 +318,18 @@ def main() -> None:
     ctx_args = {"args": args, "flow": flow, "paras": paras, "offsets": offsets, "api_key": api_key}
     records: list[dict] = []
     done = 0
-    with ThreadPoolExecutor(args.workers) as pool:
-        futures = [pool.submit(run_chunk, cond, start, end, ctx_args) for cond, start, end in tasks]
-        for fut in futures:
-            records.extend(fut.result())
-            done += 1
-            if done % 20 == 0:
-                print(f"  {done}/{len(tasks)} chunks", flush=True)
-
-    with (run_dir / "records.jsonl").open("w") as fh:
-        for r in records:
-            fh.write(json.dumps(r) + "\n")
+    with (run_dir / "records.jsonl").open("w") as records_file:
+        with ThreadPoolExecutor(args.workers) as pool:
+            futures = [pool.submit(run_chunk, cond, start, end, ctx_args) for cond, start, end in tasks]
+            for fut in futures:
+                chunk_records = fut.result()
+                records.extend(chunk_records)
+                for record in chunk_records:
+                    records_file.write(json.dumps(record) + "\n")
+                records_file.flush()
+                done += 1
+                if done % 20 == 0:
+                    print(f"  {done}/{len(tasks)} chunks", flush=True)
 
     rows = [
         aggregate(cond["name"], [r for r in records if r["cond"] == cond["name"]], args.price_in, args.price_out)

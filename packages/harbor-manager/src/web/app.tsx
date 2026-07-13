@@ -6,7 +6,7 @@
  *   #/exp/<id>    experiment detail — arm table, dithered comparison charts
  *                 (projected values for in-flight arms, dimmed), task matrix
  *   #/runs        flat run list (legacy view)
- *   #/runs/<name> run detail — trial grid + live transcript tail
+ *   #/runs/<name> run detail — normalized trace grid + live trace viewer
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -14,11 +14,13 @@ import { createRoot } from "react-dom/client";
 // ── api types (mirrors server modules) ──────────────────────────────────────
 
 interface RunRow {
+	benchmark: "harbor" | "edit" | "snapcompact";
 	jobName: string;
 	dataset: string;
 	agent: string;
 	models: string;
 	slide: string | null;
+	config: Record<string, unknown>;
 	role: "baseline" | "variant" | "";
 	note: string;
 	status: "running" | "complete" | "failed" | "cancelled";
@@ -32,9 +34,11 @@ interface RunRow {
 	error: number;
 	running: number;
 	costUsd: number;
+	score: number | null;
+	metrics: Record<string, number | null>;
 }
 
-interface TrialRow {
+interface TraceRow {
 	name: string;
 	task: string;
 	status: string;
@@ -193,7 +197,7 @@ function ExperimentsIndex() {
 				<a
 					key={exp.id}
 					href={`#/exp/${encodeURIComponent(exp.id)}`}
-					className="flex items-center gap-6 rounded-lg border border-zinc-800 bg-zinc-900/60 px-5 py-4 hover:border-zinc-600"
+					className="flex min-w-0 items-center gap-6 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/60 px-5 py-4 hover:border-zinc-600"
 				>
 					<div className="w-40 shrink-0">
 						<div className="font-semibold">{exp.id}</div>
@@ -375,6 +379,53 @@ const CELL_CLASS: Record<string, string> = {
 	running: "bg-sky-500 animate-pulse",
 };
 
+/**
+ * The comparison anchor for an experiment: the completed baseline arm with the
+ * highest pass rate (the "ceiling" a reasoning slide tries to preserve). Ties
+ * break toward the cheaper arm. Returns null when no baseline has finished data.
+ */
+function pickReferenceArm(arms: ArmSummary[]): ArmSummary | null {
+	let ref: ArmSummary | null = null;
+	for (const a of arms) {
+		if (a.run.role !== "baseline" || a.passPct === null) continue;
+		if (
+			ref === null ||
+			a.passPct > (ref.passPct ?? -1) ||
+			(a.passPct === ref.passPct && (a.costPerTask ?? Infinity) < (ref.costPerTask ?? Infinity))
+		) {
+			ref = a;
+		}
+	}
+	return ref;
+}
+
+/**
+ * Signed, colour-coded offset of a metric from the reference arm. `points`
+ * shows absolute percentage-point difference (pass rate); `relative` shows a
+ * percentage change (cost, time). `higherBetter` decides which direction is green.
+ */
+function Delta({
+	value,
+	reference,
+	mode,
+	higherBetter,
+}: {
+	value: number | null;
+	reference: number | null;
+	mode: "points" | "relative";
+	higherBetter: boolean;
+}) {
+	if (value === null || reference === null) return null;
+	const raw =
+		mode === "points" ? value - reference : reference === 0 ? Number.NaN : ((value - reference) / reference) * 100;
+	if (!Number.isFinite(raw) || Math.abs(raw) < 0.5) {
+		return <span className="ml-1 text-[10px] text-zinc-600">≈</span>;
+	}
+	const good = higherBetter ? raw > 0 : raw < 0;
+	const body = `${raw > 0 ? "+" : "−"}${Math.abs(raw).toFixed(0)}${mode === "relative" ? "%" : ""}`;
+	return <span className={`ml-1 text-[10px] ${good ? "text-emerald-500" : "text-red-400"}`}>({body})</span>;
+}
+
 function ExperimentPage({ id }: { id: string }) {
 	const detail = usePolled<ExperimentDetail>(`/api/experiments/${encodeURIComponent(id)}`, 3000);
 	if (!detail) return <div className="p-10 text-zinc-500">loading…</div>;
@@ -394,12 +445,19 @@ function ExperimentPage({ id }: { id: string }) {
 		a => (a.meanTrialMs === null ? null : a.meanTrialMs / 60000),
 		p => p.meanTrialMs / 60000,
 	);
+	const ref = pickReferenceArm(arms);
 	return (
 		<div className="mx-auto max-w-7xl p-6">
 			<div className="mb-1 flex items-baseline gap-4">
 				<h2 className="text-lg font-semibold">{id}</h2>
 				<span className="text-xs text-zinc-500">
 					{arms.length} arms · {tasks.length} tasks
+					{ref && (
+						<>
+							{" "}
+							· Δ vs <span className="text-zinc-400">{ref.arm}</span>
+						</>
+					)}
 				</span>
 			</div>
 			{goal && <p className="mb-4 max-w-4xl text-sm text-zinc-400">{goal}</p>}
@@ -430,6 +488,14 @@ function ExperimentPage({ id }: { id: string }) {
 										{arm.run.role}
 									</span>
 								)}
+								{ref?.arm === arm.arm && (
+									<span
+										className="ml-1 text-[10px] text-zinc-500"
+										title="reference arm (highest-pass baseline); deltas are measured against it"
+									>
+										ref
+									</span>
+								)}
 							</td>
 							<td
 								className="max-w-md truncate pr-4 text-xs text-zinc-400"
@@ -447,12 +513,33 @@ function ExperimentPage({ id }: { id: string }) {
 							<td className="pr-4">
 								{arm.passPct !== null ? `${arm.passPct.toFixed(0)}%` : "—"}
 								{arm.projected && <span className="text-zinc-500"> →{arm.projected.passPct.toFixed(0)}%</span>}
+								{ref && ref.arm !== arm.arm && (
+									<Delta value={arm.passPct} reference={ref.passPct} mode="points" higherBetter />
+								)}
 							</td>
 							<td className="pr-4">
 								{arm.costPerTask !== null ? fmtUsd(arm.costPerTask) : "—"}
 								{arm.projected && <span className="text-zinc-500"> Σ{fmtUsd(arm.projected.totalCostUsd)}</span>}
+								{ref && ref.arm !== arm.arm && (
+									<Delta
+										value={arm.costPerTask}
+										reference={ref.costPerTask}
+										mode="relative"
+										higherBetter={false}
+									/>
+								)}
 							</td>
-							<td className="pr-4">{arm.meanTrialMs !== null ? fmtMin(arm.meanTrialMs) : "—"}</td>
+							<td className="pr-4">
+								{arm.meanTrialMs !== null ? fmtMin(arm.meanTrialMs) : "—"}
+								{ref && ref.arm !== arm.arm && (
+									<Delta
+										value={arm.meanTrialMs}
+										reference={ref.meanTrialMs}
+										mode="relative"
+										higherBetter={false}
+									/>
+								)}
+							</td>
 							<td>
 								<a
 									className="text-xs text-zinc-500 underline hover:text-zinc-300"
@@ -534,23 +621,23 @@ function useRunsSse(): RunRow[] | null {
 
 function RunsPage({ selected }: { selected: string | null }) {
 	const runs = useRunsSse();
-	const detail = usePolled<{ run: RunRow; trials: TrialRow[] }>(
+	const detail = usePolled<{ run: RunRow; traces: TraceRow[] }>(
 		selected ? `/api/runs/${encodeURIComponent(selected)}` : null,
 		2500,
 	);
-	const [trial, setTrial] = useState<string | null>(null);
-	const transcript = usePolled<{ entries: TranscriptEntry[] }>(
-		selected && trial
-			? `/api/runs/${encodeURIComponent(selected)}/trials/${encodeURIComponent(trial)}/transcript?tail=60`
+	const [trace, setTrace] = useState<string | null>(null);
+	const traceData = usePolled<{ entries: TranscriptEntry[] }>(
+		selected && trace
+			? `/api/runs/${encodeURIComponent(selected)}/traces/${encodeURIComponent(trace)}?tail=60`
 			: null,
 		2500,
 	);
-	const transcriptRef = useRef<HTMLDivElement | null>(null);
+	const traceRef = useRef<HTMLDivElement | null>(null);
 	useEffect(() => {
-		if (!transcript) return;
-		const el = transcriptRef.current;
+		if (!traceData) return;
+		const el = traceRef.current;
 		if (el) el.scrollTop = el.scrollHeight;
-	}, [transcript]);
+	}, [traceData]);
 	const cancel = useCallback(async (name: string) => {
 		if (confirm(`stop ${name}?`)) await fetch(`/api/runs/${encodeURIComponent(name)}`, { method: "DELETE" });
 	}, []);
@@ -578,6 +665,7 @@ function RunsPage({ selected }: { selected: string | null }) {
 							>
 								<td className="px-3 py-1.5" title={r.models}>
 									{r.jobName}
+									<div className="text-[10px] uppercase tracking-wide text-zinc-600">{r.benchmark}</div>
 									{(r.note || r.role) && (
 										<div className="text-[11px] text-zinc-500">
 											{r.role && (
@@ -622,34 +710,42 @@ function RunsPage({ selected }: { selected: string | null }) {
 						<div className="border-b border-zinc-800 px-4 py-2 text-sm">
 							<span className="font-semibold">{detail.run.jobName}</span> <Chip label={detail.run.status} />{" "}
 							<span className="text-xs text-zinc-500">
-								{detail.run.dataset} · {detail.run.models}
+								{detail.run.benchmark} · {detail.run.dataset} · {detail.run.models}
+								{detail.run.score !== null ? ` · score ${(100 * detail.run.score).toFixed(1)}%` : ""}
 								{detail.run.slide ? ` → ${detail.run.slide}` : ""}
 							</span>
+							<div className="mt-1 flex gap-3 text-xs text-zinc-400">
+								{Object.entries(detail.run.metrics).map(([key, value]) => (
+									<span key={key}>
+										{key.replaceAll("_", " ")}: {value === null ? "—" : `${(100 * value).toFixed(1)}%`}
+									</span>
+								))}
+							</div>
 						</div>
 						<div className="min-h-0 flex-1 overflow-auto">
 							<table className="w-full text-sm">
 								<tbody>
-									{detail.trials.map(t => (
+									{detail.traces.map(t => (
 										<tr
 											key={t.name}
-											onClick={() => setTrial(t.name)}
-											className={`cursor-pointer border-t border-zinc-800/60 hover:bg-zinc-900 ${t.name === trial ? "bg-zinc-900" : ""}`}
+											onClick={() => setTrace(t.name)}
+											className={`cursor-pointer border-t border-zinc-800/60 hover:bg-zinc-900 ${t.name === trace ? "bg-zinc-900" : ""}`}
 										>
 											<td className="px-4 py-1">{t.task}</td>
 											<td>
 												<Chip label={t.status} />
 											</td>
+											<td>{t.reward === null ? "—" : t.reward.toFixed(3)}</td>
 											<td>{fmtUsd(t.costUsd)}</td>
 											<td>{t.durationMs ? fmtMin(t.durationMs) : "—"}</td>
-											<td className="text-xs text-zinc-500">{t.detail}</td>
 										</tr>
 									))}
 								</tbody>
 							</table>
 						</div>
-						{trial && (
-							<div ref={transcriptRef} className="h-2/5 overflow-auto border-t border-zinc-800 bg-zinc-950/60">
-								{(transcript?.entries ?? []).map((e, i) => (
+						{trace && (
+							<div ref={traceRef} className="h-2/5 overflow-auto border-t border-zinc-800 bg-zinc-950/60">
+								{(traceData?.entries ?? []).map((e, i) => (
 									// biome-ignore lint/suspicious/noArrayIndexKey: tail window, entries have no ids
 									<div key={i} className="border-b border-zinc-900 px-4 py-2">
 										<div className="text-xs text-zinc-500">
@@ -687,7 +783,7 @@ function LaunchForm({ onDone }: { onDone: () => void }) {
 		async (ev: React.FormEvent<HTMLFormElement>) => {
 			ev.preventDefault();
 			const f = new FormData(ev.currentTarget);
-			const body: Record<string, unknown> = { model: f.get("model") };
+			const body: Record<string, unknown> = { benchmark: f.get("benchmark"), model: f.get("model") };
 			if (f.get("jobName")) body.jobName = f.get("jobName");
 			if (f.get("dataset")) body.dataset = f.get("dataset");
 			if (f.get("tasks")) body.tasks = Number(f.get("tasks"));
@@ -695,6 +791,12 @@ function LaunchForm({ onDone }: { onDone: () => void }) {
 			if (f.get("timeoutMultiplier")) body.timeoutMultiplier = Number(f.get("timeoutMultiplier"));
 			if (f.get("include")) {
 				body.include = String(f.get("include"))
+					.split(",")
+					.map(s => s.trim())
+					.filter(Boolean);
+			}
+			if (f.get("conditions")) {
+				body.conditions = String(f.get("conditions"))
 					.split(",")
 					.map(s => s.trim())
 					.filter(Boolean);
@@ -724,10 +826,15 @@ function LaunchForm({ onDone }: { onDone: () => void }) {
 	const input = "rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm";
 	return (
 		<form onSubmit={submit} className="grid grid-cols-4 gap-2 border-b border-zinc-800 bg-zinc-900/70 p-4 text-sm">
+			<select name="benchmark" className={input}>
+				<option value="harbor">Harbor</option>
+				<option value="edit">TypeScript edit</option>
+				<option value="snapcompact">SnapCompact</option>
+			</select>
 			<input name="model" placeholder="model (required)" required className={input} />
 			<input name="dataset" placeholder="dataset (terminal-bench@2.0)" className={input} />
 			<input name="jobName" placeholder="job name (exp-arm)" className={input} />
-			<input name="tasks" type="number" placeholder="tasks" className={input} />
+			<input name="tasks" type="number" placeholder="task/passages limit" className={input} />
 			<input name="concurrency" type="number" placeholder="concurrency" className={input} />
 			<input name="timeoutMultiplier" type="number" step="0.5" placeholder="timeout ×" className={input} />
 			<input name="slideModel" placeholder="slide model" className={input} />
@@ -741,6 +848,7 @@ function LaunchForm({ onDone }: { onDone: () => void }) {
 				<input type="checkbox" name="slidePlan" /> plan nudge
 			</label>
 			<input name="include" placeholder="include tasks, comma-sep" className={`${input} col-span-2`} />
+			<input name="conditions" placeholder="SnapCompact conditions, comma-sep" className={`${input} col-span-2`} />
 			<input
 				name="goal"
 				placeholder="experiment goal (what question does this answer?)"

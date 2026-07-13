@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { armOf, experimentOf, summarizeArm } from "./experiments";
-import type { RunRow, TrialRow } from "./store";
+import type { RunRow, TraceRow } from "./store";
 
 /**
  * Contracts under test:
@@ -11,11 +11,13 @@ import type { RunRow, TrialRow } from "./store";
 
 function runRow(overrides: Partial<RunRow>): RunRow {
 	return {
+		benchmark: "harbor",
 		jobName: "exp-arm",
 		dataset: "d",
 		agent: "omp",
 		models: "anthropic/claude-opus-4-8",
 		slide: null,
+		config: {},
 		role: "",
 		note: "",
 		status: "running",
@@ -33,11 +35,13 @@ function runRow(overrides: Partial<RunRow>): RunRow {
 		tokIn: 0,
 		tokOut: 0,
 		tokCache: 0,
+		score: null,
+		metrics: {},
 		...overrides,
 	};
 }
 
-function trialRow(overrides: Partial<TrialRow>): TrialRow {
+function traceRow(overrides: Partial<TraceRow>): TraceRow {
 	return {
 		jobName: "exp-arm",
 		name: "task__x",
@@ -48,6 +52,7 @@ function trialRow(overrides: Partial<TrialRow>): TrialRow {
 		durationMs: 60_000,
 		detail: "",
 		updatedAt: Date.now(),
+		tracePath: null,
 		...overrides,
 	};
 }
@@ -75,8 +80,8 @@ describe("summarizeArm", () => {
 				costUsd: 5,
 			}),
 			[
-				trialRow({ status: "pass", durationMs: 120_000 }),
-				trialRow({ name: "b__x", task: "b", status: "fail", reward: 0, durationMs: 240_000 }),
+				traceRow({ status: "pass", durationMs: 120_000 }),
+				traceRow({ name: "b__x", task: "b", status: "fail", reward: 0, durationMs: 240_000 }),
 			],
 		);
 		expect(running.arm).toBe("n8");
@@ -94,7 +99,7 @@ describe("summarizeArm", () => {
 
 		const finished = summarizeArm(
 			runRow({ jobName: "sb2-opus", status: "complete", nTotal: 20, done: 20, pass: 15, costUsd: 30 }),
-			[trialRow({})],
+			[traceRow({})],
 		);
 		expect(finished.projected).toBeNull();
 		expect(finished.costPerTask).toBeCloseTo(1.5, 5);
@@ -108,6 +113,6 @@ describe("summarizeArm", () => {
 			}),
 			[],
 		);
-		expect(arm.config).toBe("anthropic/claude-opus-4-8 → google/gemini-3.5-flash on first edit/write +plan");
+		expect(arm.config).toBe("harbor · anthropic/claude-opus-4-8 → google/gemini-3.5-flash on first edit/write +plan");
 	});
 });

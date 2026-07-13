@@ -140,12 +140,19 @@
       "name": "@oh-my-pi/harbor-manager",
       "version": "0.0.1",
       "bin": {
-        "harbor-manager": "src/runner.ts",
+        "harbor-manager": "src/server.ts",
       },
       "dependencies": {
+        "@oh-my-pi/hashline": "catalog:",
+        "@oh-my-pi/pi-agent-core": "catalog:",
+        "@oh-my-pi/pi-ai": "catalog:",
+        "@oh-my-pi/pi-coding-agent": "catalog:",
+        "@oh-my-pi/pi-utils": "catalog:",
+        "@oh-my-pi/typescript-edit-benchmark": "workspace:*",
         "clsx": "^2.1.1",
         "d3-scale": "^4.0.2",
         "d3-shape": "^3.2.0",
+        "diff": "catalog:",
         "motion": "^12.15.0",
         "react": "^19.1.0",
         "react-dom": "^19.1.0",
@@ -276,9 +283,6 @@
     "packages/typescript-edit-benchmark": {
       "name": "@oh-my-pi/typescript-edit-benchmark",
       "version": "0.0.1",
-      "bin": {
-        "typescript-edit-benchmark": "src/index.ts",
-      },
       "dependencies": {
         "@babel/generator": "catalog:",
         "@babel/parser": "catalog:",
