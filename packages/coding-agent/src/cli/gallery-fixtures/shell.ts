@@ -1,4 +1,4 @@
-/** Gallery fixtures for the shell tools (bash, eval). */
+/** Gallery fixtures for the shell tools (bash, eval, launch). */
 import type { GalleryFixture } from "./types";
 
 export const shellFixtures: Record<string, GalleryFixture> = {
@@ -53,6 +53,78 @@ export const shellFixtures: Record<string, GalleryFixture> = {
 				wallTimeMs: 5120,
 				timeoutSeconds: 30,
 			},
+		},
+	},
+
+	launch: {
+		label: "Launch",
+		streamingArgs: { op: "start", name: "web" },
+		args: {
+			op: "start",
+			name: "web",
+			application: "bun",
+			args: ["run", "dev"],
+			ready: { log: "Local:.*http", port: 5173, timeout: 30 },
+		},
+		result: {
+			content: [
+				{
+					type: "text",
+					text: "Started web: ready pid=51234 uptime=1.2s restarts=0\nReady: Local: http://localhost:5173",
+				},
+			],
+			details: {
+				op: "start",
+				daemon: {
+					name: "web",
+					id: "d-1",
+					state: "ready",
+					pid: 51234,
+					createdAt: 0,
+					startedAt: Date.now() - 1_200,
+					readyAt: Date.now(),
+					restartCount: 0,
+					outputBytes: 2048,
+					readyMatch: "Local:   http://localhost:5173/",
+					persist: false,
+					detached: false,
+				},
+				timedOut: false,
+			},
+		},
+		errorResult: {
+			content: [{ type: "text", text: "start requires application" }],
+			isError: true,
+			details: { op: "start" },
+		},
+	},
+
+	launch_logs: {
+		label: "Launch",
+		renderer: "launch",
+		args: { op: "logs", name: "web", lines: 100, follow: true, cursor: 1842, timeout: 30 },
+		result: {
+			content: [
+				{
+					type: "text",
+					text: [
+						"$ bun run dev",
+						"  VITE v6.0.3  ready in 312 ms",
+						"",
+						"  ➜  Local:   http://localhost:5173/",
+						"  ➜  Network: use --host to expose",
+						"12:04:11 [vite] hmr update /src/App.tsx",
+						"12:04:15 [vite] hmr update /src/components/Chart.tsx",
+						"[web: running; cursor=2210]",
+					].join("\n"),
+				},
+			],
+			details: { op: "logs", cursor: 2210, timedOut: false, state: "running" },
+		},
+		errorResult: {
+			content: [{ type: "text", text: "No daemon named web" }],
+			isError: true,
+			details: { op: "logs" },
 		},
 	},
 

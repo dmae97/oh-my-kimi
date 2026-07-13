@@ -18,7 +18,7 @@ const fakeAuthStorage = {
 } as unknown as AuthStorage;
 
 /** Restrict the fan-out to the two engines these tests provide fixtures for. */
-const NON_TEST_ENGINES: readonly SearchProviderId[] = ["bing", "yahoo", "ecosia", "startpage", "mojeek"];
+const NON_TEST_ENGINES: readonly SearchProviderId[] = ["ecosia", "startpage", "mojeek"];
 
 function makeParams(query: string, fetch: FetchImpl): SearchParams {
 	return {

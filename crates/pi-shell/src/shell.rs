@@ -632,6 +632,23 @@ async fn create_session_for_run(
 		shell.register_builtin("b2sum", crate::coreutils::b2sum_builtin());
 		shell.register_builtin("basename", crate::coreutils::basename_builtin());
 		shell.register_builtin("dirname", crate::coreutils::dirname_builtin());
+		shell.register_builtin("readlink", crate::coreutils::readlink_builtin());
+		shell.register_builtin("realpath", crate::coreutils::realpath_builtin());
+		shell.register_builtin("touch", crate::coreutils::touch_builtin());
+		shell.register_builtin("stat", crate::coreutils::stat_builtin());
+		shell.register_builtin("date", crate::coreutils::date_builtin());
+		shell.register_builtin("mktemp", crate::coreutils::mktemp_builtin());
+		shell.register_builtin("seq", crate::coreutils::seq_builtin());
+		shell.register_builtin("yes", crate::coreutils::yes_builtin());
+		shell.register_builtin("printenv", crate::coreutils::printenv_builtin());
+		shell.register_builtin("truncate", crate::coreutils::truncate_builtin());
+		shell.register_builtin("tac", crate::coreutils::tac_builtin());
+		shell.register_builtin("nproc", crate::coreutils::nproc_builtin());
+		shell.register_builtin("uname", crate::coreutils::uname_builtin());
+		shell.register_builtin("whoami", crate::coreutils::whoami_builtin());
+		shell.register_builtin("hostname", crate::coreutils::hostname_builtin());
+		shell.register_builtin("which", crate::which::which_builtin());
+		shell.register_builtin("diff", crate::coreutils::diff_builtin());
 		shell.register_builtin("cut", crate::coreutils::cut_builtin());
 		shell.register_builtin("tee", crate::coreutils::tee_builtin());
 		shell.register_builtin("tr", crate::coreutils::tr_builtin());
@@ -647,6 +664,8 @@ async fn create_session_for_run(
 			if !uutils_env_disabled(config, "PI_DISABLE_MV_BUILTIN") {
 				shell.register_builtin("mv", crate::coreutils::mv_builtin());
 			}
+			// ln can clobber existing files via -f; gate it with the destructive set.
+			shell.register_builtin("ln", crate::coreutils::ln_builtin());
 		}
 	}
 

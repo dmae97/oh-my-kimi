@@ -731,4 +731,23 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 		expect(clientStorage.get("kagi")).toBeUndefined();
 		clientStorage.close();
 	});
+
+	test("client AuthStorage invalidateUsageCache notifies broker to invalidate server-side cache", async () => {
+		const brokerClient = new AuthBrokerClient({ url: handle!.url, token });
+		const initialResult = await brokerClient.fetchSnapshot();
+		if (initialResult.status !== 200) throw new Error("expected snapshot");
+		const remoteStore = new RemoteAuthCredentialStore({
+			client: brokerClient,
+			initialSnapshot: initialResult.snapshot,
+		});
+		const clientStorage = new AuthStorage(remoteStore);
+		await clientStorage.reload();
+
+		const serverInvalidateSpy = vi.spyOn(serverStorage!, "invalidateUsageCache");
+
+		await remoteStore.invalidateUsageCache();
+
+		expect(serverInvalidateSpy).toHaveBeenCalled();
+		clientStorage.close();
+	});
 });

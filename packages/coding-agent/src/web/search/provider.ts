@@ -119,16 +119,6 @@ const PROVIDER_META: Record<SearchProviderId, ProviderMeta> = {
 		label: SEARCH_PROVIDER_LABELS.google,
 		load: async () => new (await import("./providers/google")).GoogleProvider(),
 	},
-	bing: {
-		id: "bing",
-		label: SEARCH_PROVIDER_LABELS.bing,
-		load: async () => new (await import("./providers/bing")).BingProvider(),
-	},
-	yahoo: {
-		id: "yahoo",
-		label: SEARCH_PROVIDER_LABELS.yahoo,
-		load: async () => new (await import("./providers/yahoo")).YahooProvider(),
-	},
 	ecosia: {
 		id: "ecosia",
 		label: SEARCH_PROVIDER_LABELS.ecosia,

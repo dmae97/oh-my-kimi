@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { WelcomeComponent } from "@oh-my-pi/pi-coding-agent/modes/components/welcome";
+import { pickWeightedTip, WelcomeComponent } from "@oh-my-pi/pi-coding-agent/modes/components/welcome";
 import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 
 describe("WelcomeComponent tips", () => {
@@ -37,17 +37,15 @@ describe("WelcomeComponent tips", () => {
 	});
 
 	it("weights [NEW] tips above ordinary tips in selection", () => {
-		// Skip the nerdfont gate so the only Math.random() call is the weighted pick.
-		vi.spyOn(theme, "getSymbolPreset").mockReturnValue("nerd");
-		let r = 0;
-		vi.spyOn(Math, "random").mockImplementation(() => r);
+		// Data-independent: tips.txt may legitimately carry zero "[NEW]" tips, so
+		// exercise the weighting contract on a synthetic list.
+		const tips = ["plain one", "shiny thing [NEW]", "plain two"] as const;
 
 		const counts = new Map<string, number>();
 		const samples = 10_000;
 		for (let i = 0; i < samples; i++) {
-			r = (i + 0.5) / samples; // sweep the selection domain uniformly
-			const tip = new WelcomeComponent("1.0.0", "model", "provider").tip;
-			if (tip) counts.set(tip, (counts.get(tip) ?? 0) + 1);
+			const tip = pickWeightedTip(tips, (i + 0.5) / samples); // sweep the selection domain uniformly
+			counts.set(tip, (counts.get(tip) ?? 0) + 1);
 		}
 
 		let newMax = 0;
@@ -61,5 +59,6 @@ describe("WelcomeComponent tips", () => {
 		// uniform selection domain than any single ordinary tip.
 		expect(newMax).toBeGreaterThan(0);
 		expect(newMax).toBeGreaterThan(ordinaryMax);
+		expect(pickWeightedTip([], 0.5)).toBe("");
 	});
 });

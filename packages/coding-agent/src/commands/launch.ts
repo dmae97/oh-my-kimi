@@ -34,6 +34,23 @@ export default class Index extends Command {
 		plan: Flags.string({
 			description: "Plan model for architectural planning (or PI_PLAN_MODEL env)",
 		}),
+		downshift: Flags.boolean({
+			description:
+				"Switch from the active model to a fast/cheap model at the first edit/write after the plan's todo list exists (default off; see downshift.enabled)",
+		}),
+		"no-downshift": Flags.boolean({
+			description: "Disable downshift even if downshift.enabled is set",
+		}),
+		"downshift-into": Flags.string({
+			description: 'Target model for downshift (default the "smol" role)',
+		}),
+		"plan-yolo": Flags.boolean({
+			description:
+				"Force read-only plan mode at start, auto-approve the plan on the model's first resolve call, then switch to --plan-yolo-into to implement it",
+		}),
+		"plan-yolo-into": Flags.string({
+			description: 'Target model for plan-yolo execution (default the "smol" role)',
+		}),
 		provider: Flags.string({
 			description: "Provider to use (legacy; prefer --model)",
 		}),

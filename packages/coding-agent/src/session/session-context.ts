@@ -132,6 +132,16 @@ export interface BuildSessionContextOptions {
 }
 
 /**
+ * Display-only marker set on transcript assistant messages whose dangling
+ * `toolCall` blocks were stripped (no paired result on the resolved path —
+ * failed/retried turns, results on sibling branches). The TUI renders a
+ * placeholder row from it so the turn's activity never silently vanishes.
+ */
+export interface StrippedToolCallsMarker {
+	strippedToolCalls?: number;
+}
+
+/**
  * Build the session context from entries using tree traversal.
  * If leafId is provided, walks from that entry to root.
  * Handles compaction and branch summaries along the path.
@@ -353,6 +363,7 @@ export function buildSessionContext(
 						undefined,
 						undefined,
 						snapcompactHistoryBlocksForContext(snapcompactArchive, options),
+						entry.warning,
 					),
 				);
 			} else {
@@ -385,6 +396,7 @@ export function buildSessionContext(
 			providerPayload,
 			undefined,
 			snapcompactHistoryBlocksForContext(snapcompactArchive, options),
+			compaction.warning,
 		);
 		// Agent context (non-transcript): summary first so the LLM sees the
 		// compacted context before recent messages.
@@ -468,10 +480,11 @@ export function buildSessionContext(
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const message = messages[i];
 			if (message.role !== "assistant") continue;
-			const hasDangling = message.content.some(
-				block => block.type === "toolCall" && !pairedToolResultIds.has(block.id),
-			);
-			if (!hasDangling) continue;
+			let strippedToolCalls = 0;
+			for (const block of message.content) {
+				if (block.type === "toolCall" && !pairedToolResultIds.has(block.id)) strippedToolCalls++;
+			}
+			if (strippedToolCalls === 0) continue;
 			const normalized = message.content
 				.filter(
 					block =>
@@ -483,13 +496,17 @@ export function buildSessionContext(
 						? { ...block, thinkingSignature: undefined }
 						: block,
 				);
-			if (normalized.length === 0) {
+			if (normalized.length === 0 && !options?.transcript) {
 				messages.splice(i, 1);
-				if (options?.transcript) {
-					cacheMissExplainedAt.splice(i, 1);
-				}
 			} else {
-				messages[i] = { ...message, content: normalized };
+				const rewritten = { ...message, content: normalized };
+				if (options?.transcript) {
+					// Display transcript: keep the turn (even content-less) and mark
+					// how many calls were dropped so the TUI renders a placeholder
+					// row instead of silently erasing the turn's activity.
+					(rewritten as AgentMessage & StrippedToolCallsMarker).strippedToolCalls = strippedToolCalls;
+				}
+				messages[i] = rewritten;
 			}
 		}
 	}

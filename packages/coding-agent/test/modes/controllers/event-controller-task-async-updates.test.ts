@@ -21,6 +21,7 @@ import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/eve
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { TaskToolDetails } from "@oh-my-pi/pi-coding-agent/task/types";
+import type { BashToolDetails } from "@oh-my-pi/pi-coding-agent/tools/bash";
 
 function taskResult(asyncState: "running" | "completed" | "failed" | undefined, text: string) {
 	const details: TaskToolDetails = {
@@ -32,7 +33,14 @@ function taskResult(asyncState: "running" | "completed" | "failed" | undefined, 
 	return { content: [{ type: "text" as const, text }], details };
 }
 
-describe("EventController task async update finalization", () => {
+function bashResult(text: string) {
+	const details: BashToolDetails = {
+		async: { state: "running", jobId: "bash-1", type: "bash" },
+	};
+	return { content: [{ type: "text" as const, text }], details };
+}
+
+describe("EventController async update finalization", () => {
 	const sealed: ToolExecutionComponent[] = [];
 
 	beforeEach(async () => {
@@ -130,6 +138,29 @@ describe("EventController task async update finalization", () => {
 			partialResult: taskResult("completed", "Background task Job1 complete."),
 		});
 		expect(pendingTools.has("tc-task")).toBe(false);
+		expect(component.isTranscriptBlockFinalized()).toBe(true);
+	});
+
+	it("finalizes a backgrounded Bash block without tracking later job updates", async () => {
+		const { controller, pendingTools } = createFixture();
+		await controller.handleEvent({
+			type: "tool_execution_start",
+			toolCallId: "tc-bash",
+			toolName: "bash",
+			args: { command: "sleep 30" },
+		});
+		const component = pendingTools.get("tc-bash")!;
+		sealed.push(component);
+
+		await controller.handleEvent({
+			type: "tool_execution_end",
+			toolCallId: "tc-bash",
+			toolName: "bash",
+			result: bashResult("Backgrounded as job bash-1; result will be delivered automatically."),
+			isError: false,
+		});
+
+		expect(pendingTools.has("tc-bash")).toBe(false);
 		expect(component.isTranscriptBlockFinalized()).toBe(true);
 	});
 });

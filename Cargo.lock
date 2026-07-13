@@ -1116,6 +1116,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dns-lookup"
+version = "3.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e39034cee21a2f5bbb66ba0e3689819c4bb5d00382a282006e802a7ffa6c41d"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "socket2",
+ "windows-sys 0.60.2",
+]
+
+[[package]]
 name = "downcast-rs"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2604,9 +2616,9 @@ dependencies = [
 
 [[package]]
 name = "napi"
-version = "3.10.3"
+version = "3.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c71997d6f7ad4a756966e452426848ac27d3b37a295302d63afbbcce0270f93"
+checksum = "59b7fbd5f12adbf51ddec954d4ef9cecb3542a9d53bce2fe0653696c4cd06d73"
 dependencies = [
  "bitflags 2.13.0",
  "ctor",
@@ -2626,9 +2638,9 @@ checksum = "c9c366d2c8c60b86fa632df75f745509b52f9128f91a6bad4c796e44abb505e1"
 
 [[package]]
 name = "napi-derive"
-version = "3.5.9"
+version = "3.5.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4ba572deef53e2c386759a8c2014175a62679d74ff83adc205c8bc0e0285727"
+checksum = "b0fe526e81c105d3640516fcde83909dd1afe757c0d7a15af58830b5bc0fb9a1"
 dependencies = [
  "convert_case",
  "ctor",
@@ -2640,9 +2652,9 @@ dependencies = [
 
 [[package]]
 name = "napi-derive-backend"
-version = "5.1.1"
+version = "5.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ddd961eb2aa8965e3f29722d754f3a86907eb1984e2fbcbe3fe87b9a02d6bfba"
+checksum = "514281397bcddd9ea9a876c7a21a57bff2374237a000ca9a64ea0211ec1993e2"
 dependencies = [
  "convert_case",
  "proc-macro2",
@@ -2653,9 +2665,9 @@ dependencies = [
 
 [[package]]
 name = "napi-sys"
-version = "3.2.2"
+version = "3.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f5bcdf71abd3a50d00b49c1c2c75251cb3c913777d6139cd37dabc093a5e400"
+checksum = "73e43cf2eb0bd1bf95a43c07c076ebd2da5d1e015a71c3d201faeffffcc0ecac"
 dependencies = [
  "libloading",
 ]
@@ -3023,6 +3035,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "parse_datetime"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "413775a7eac2261d2211a79d10ef275e5b6f7b527eec42ad09adce2ffa92b6e5"
+dependencies = [
+ "jiff",
+ "num-traits",
+ "winnow 0.7.15",
+]
+
+[[package]]
 name = "pcre2"
 version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3241,7 +3264,7 @@ dependencies = [
 
 [[package]]
 name = "pi-ast"
-version = "16.4.5"
+version = "16.4.8"
 dependencies = [
  "anyhow",
  "ast-grep-core",
@@ -3310,7 +3333,7 @@ dependencies = [
 
 [[package]]
 name = "pi-iso"
-version = "16.4.5"
+version = "16.4.8"
 dependencies = [
  "async-trait",
  "libc",
@@ -3322,7 +3345,7 @@ dependencies = [
 
 [[package]]
 name = "pi-natives"
-version = "16.4.5"
+version = "16.4.8"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3375,7 +3398,7 @@ dependencies = [
 
 [[package]]
 name = "pi-shell"
-version = "16.4.5"
+version = "16.4.8"
 dependencies = [
  "anyhow",
  "brush-builtins",
@@ -3392,6 +3415,7 @@ dependencies = [
  "parking_lot",
  "pi-uutils-ctx",
  "pi-walker",
+ "pi_uu_diff",
  "pi_uu_grep",
  "regex",
  "serde",
@@ -3406,28 +3430,44 @@ dependencies = [
  "uu_cat",
  "uu_comm",
  "uu_cut",
+ "uu_date",
  "uu_dirname",
  "uu_find",
  "uu_head",
+ "uu_hostname",
+ "uu_ln",
  "uu_ls",
  "uu_md5sum",
  "uu_mkdir",
+ "uu_mktemp",
  "uu_mv",
+ "uu_nproc",
  "uu_paste",
+ "uu_printenv",
+ "uu_readlink",
+ "uu_realpath",
  "uu_rm",
  "uu_sed",
+ "uu_seq",
  "uu_sha1sum",
  "uu_sha224sum",
  "uu_sha256sum",
  "uu_sha384sum",
  "uu_sha512sum",
  "uu_sort",
+ "uu_stat",
+ "uu_tac",
  "uu_tail",
  "uu_tee",
+ "uu_touch",
  "uu_tr",
+ "uu_truncate",
+ "uu_uname",
  "uu_uniq",
  "uu_wc",
+ "uu_whoami",
  "uu_xargs",
+ "uu_yes",
  "windows-sys 0.61.2",
  "winreg 0.56.0",
  "xxhash-rust",
@@ -3442,7 +3482,7 @@ dependencies = [
 
 [[package]]
 name = "pi-walker"
-version = "16.4.5"
+version = "16.4.8"
 dependencies = [
  "dashmap",
  "globset",
@@ -3451,6 +3491,17 @@ dependencies = [
  "parking_lot",
  "rayon",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "pi_uu_diff"
+version = "0.8.0"
+dependencies = [
+ "clap",
+ "parking_lot",
+ "pi-uutils-ctx",
+ "similar 3.1.1",
+ "tempfile",
 ]
 
 [[package]]
@@ -3483,6 +3534,16 @@ name = "pkg-config"
 version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
+
+[[package]]
+name = "platform-info"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9368d62437c8cbb7c31ee37fd8c08a7d390e09a3ff75698a674953f46705ffcb"
+dependencies = [
+ "libc",
+ "windows-sys 0.59.0",
+]
 
 [[package]]
 name = "png"
@@ -4474,7 +4535,7 @@ dependencies = [
  "toml_datetime",
  "toml_parser",
  "toml_writer",
- "winnow",
+ "winnow 1.0.3",
 ]
 
 [[package]]
@@ -4495,7 +4556,7 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "toml_parser",
- "winnow",
+ "winnow 1.0.3",
 ]
 
 [[package]]
@@ -4504,7 +4565,7 @@ version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2abe9b86193656635d2411dc43050282ca48aa31c2451210f4202550afb7526"
 dependencies = [
- "winnow",
+ "winnow 1.0.3",
 ]
 
 [[package]]
@@ -5281,7 +5342,9 @@ name = "uu_base64"
 version = "0.8.0"
 dependencies = [
  "clap",
+ "parking_lot",
  "pi-uutils-ctx",
+ "tempfile",
  "uu_base32",
  "uucore 0.8.0",
 ]
@@ -5339,6 +5402,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "uu_date"
+version = "0.8.0"
+dependencies = [
+ "clap",
+ "jiff",
+ "parking_lot",
+ "parse_datetime",
+ "pi-uutils-ctx",
+ "regex",
+ "rustix",
+ "tempfile",
+ "uucore 0.8.0",
+]
+
+[[package]]
 name = "uu_dirname"
 version = "0.8.0"
 dependencies = [
@@ -5359,6 +5437,7 @@ dependencies = [
  "filetime",
  "nix 0.29.0",
  "onig",
+ "parking_lot",
  "pi-uutils-ctx",
  "pi-walker",
  "regex",
@@ -5373,6 +5452,31 @@ dependencies = [
  "clap",
  "memchr",
  "pi-uutils-ctx",
+ "thiserror 2.0.18",
+ "uucore 0.8.0",
+]
+
+[[package]]
+name = "uu_hostname"
+version = "0.8.0"
+dependencies = [
+ "clap",
+ "dns-lookup",
+ "hostname",
+ "parking_lot",
+ "pi-uutils-ctx",
+ "uucore 0.8.0",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "uu_ln"
+version = "0.8.0"
+dependencies = [
+ "clap",
+ "parking_lot",
+ "pi-uutils-ctx",
+ "tempfile",
  "thiserror 2.0.18",
  "uucore 0.8.0",
 ]
@@ -5413,6 +5517,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "uu_mktemp"
+version = "0.8.0"
+dependencies = [
+ "clap",
+ "parking_lot",
+ "pi-uutils-ctx",
+ "rand 0.10.2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "uucore 0.8.0",
+]
+
+[[package]]
 name = "uu_mv"
 version = "0.8.0"
 dependencies = [
@@ -5428,11 +5545,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "uu_nproc"
+version = "0.8.0"
+dependencies = [
+ "clap",
+ "libc",
+ "parking_lot",
+ "pi-uutils-ctx",
+ "uucore 0.8.0",
+]
+
+[[package]]
 name = "uu_paste"
 version = "0.8.0"
 dependencies = [
  "clap",
  "pi-uutils-ctx",
+ "uucore 0.8.0",
+]
+
+[[package]]
+name = "uu_printenv"
+version = "0.8.0"
+dependencies = [
+ "clap",
+ "parking_lot",
+ "pi-uutils-ctx",
+ "uucore 0.8.0",
+]
+
+[[package]]
+name = "uu_readlink"
+version = "0.8.0"
+dependencies = [
+ "clap",
+ "parking_lot",
+ "pi-uutils-ctx",
+ "tempfile",
+ "uucore 0.8.0",
+]
+
+[[package]]
+name = "uu_realpath"
+version = "0.8.0"
+dependencies = [
+ "clap",
+ "parking_lot",
+ "pi-uutils-ctx",
+ "tempfile",
  "uucore 0.8.0",
 ]
 
@@ -5462,6 +5622,20 @@ dependencies = [
  "regex",
  "tempfile",
  "uucore 0.9.0",
+]
+
+[[package]]
+name = "uu_seq"
+version = "0.8.0"
+dependencies = [
+ "bigdecimal",
+ "clap",
+ "num-bigint",
+ "num-traits",
+ "parking_lot",
+ "pi-uutils-ctx",
+ "thiserror 2.0.18",
+ "uucore 0.8.0",
 ]
 
 [[package]]
@@ -5537,6 +5711,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "uu_stat"
+version = "0.8.0"
+dependencies = [
+ "clap",
+ "parking_lot",
+ "pi-uutils-ctx",
+ "tempfile",
+ "thiserror 2.0.18",
+ "uucore 0.8.0",
+]
+
+[[package]]
+name = "uu_tac"
+version = "0.8.0"
+dependencies = [
+ "clap",
+ "memchr",
+ "memmap2",
+ "parking_lot",
+ "pi-uutils-ctx",
+ "regex",
+ "tempfile",
+ "thiserror 2.0.18",
+ "uucore 0.8.0",
+]
+
+[[package]]
 name = "uu_tail"
 version = "0.8.0"
 dependencies = [
@@ -5544,9 +5745,12 @@ dependencies = [
  "libc",
  "memchr",
  "notify",
+ "parking_lot",
  "pi-uutils-ctx",
  "rstest",
  "rustix",
+ "tempfile",
+ "uu_tac",
  "uucore 0.8.0",
  "windows-sys 0.61.2",
 ]
@@ -5561,6 +5765,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "uu_touch"
+version = "0.8.0"
+dependencies = [
+ "clap",
+ "filetime",
+ "jiff",
+ "libc",
+ "parking_lot",
+ "parse_datetime",
+ "pi-uutils-ctx",
+ "rustix",
+ "tempfile",
+ "thiserror 2.0.18",
+ "uucore 0.8.0",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "uu_tr"
 version = "0.8.0"
 dependencies = [
@@ -5568,6 +5790,28 @@ dependencies = [
  "clap",
  "nom 8.0.0",
  "pi-uutils-ctx",
+ "uucore 0.8.0",
+]
+
+[[package]]
+name = "uu_truncate"
+version = "0.8.0"
+dependencies = [
+ "clap",
+ "parking_lot",
+ "pi-uutils-ctx",
+ "tempfile",
+ "uucore 0.8.0",
+]
+
+[[package]]
+name = "uu_uname"
+version = "0.8.0"
+dependencies = [
+ "clap",
+ "parking_lot",
+ "pi-uutils-ctx",
+ "platform-info",
  "uucore 0.8.0",
 ]
 
@@ -5595,6 +5839,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "uu_whoami"
+version = "0.8.0"
+dependencies = [
+ "clap",
+ "parking_lot",
+ "pi-uutils-ctx",
+ "uucore 0.8.0",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "uu_xargs"
 version = "0.8.0"
 dependencies = [
@@ -5603,6 +5858,17 @@ dependencies = [
  "parking_lot",
  "pi-uutils-ctx",
  "tempfile",
+]
+
+[[package]]
+name = "uu_yes"
+version = "0.8.0"
+dependencies = [
+ "clap",
+ "itertools",
+ "parking_lot",
+ "pi-uutils-ctx",
+ "uucore 0.8.0",
 ]
 
 [[package]]
@@ -6329,6 +6595,15 @@ name = "windows_x86_64_msvc"
 version = "0.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
+
+[[package]]
+name = "winnow"
+version = "0.7.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "winnow"

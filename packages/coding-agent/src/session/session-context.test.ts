@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 import type { CompactionSummaryMessage } from "./messages";
-import { buildSessionContext } from "./session-context";
+import { buildSessionContext, type StrippedToolCallsMarker } from "./session-context";
 import type { SessionEntry } from "./session-entries";
 
 const timestamp = "2026-07-09T00:00:00.000Z";
@@ -129,12 +129,16 @@ function danglingCallIds(messages: AgentMessage[]): string[] {
 }
 
 describe("buildSessionContext dangling toolCalls", () => {
-	it("strips a dangling toolCall-only assistant turn from the transcript by default", () => {
+	it("strips a dangling toolCall from the transcript but keeps the turn with a stripped marker", () => {
 		const context = buildSessionContext(danglingToolCallEntries, undefined, undefined, { transcript: true });
 
 		expect(danglingCallIds(context.messages)).toEqual([]);
-		// The turn had nothing but the dangling call, so the whole message drops.
-		expect(context.messages.some(message => message.role === "assistant")).toBe(false);
+		// The turn survives (even content-less) carrying the marker so the TUI
+		// renders a placeholder row instead of silently erasing the activity.
+		const assistant = context.messages.find(message => message.role === "assistant");
+		expect(assistant).toBeDefined();
+		expect(assistant?.content).toEqual([]);
+		expect((assistant as AgentMessage & StrippedToolCallsMarker).strippedToolCalls).toBe(1);
 	});
 
 	it("keeps a dangling toolCall in transcript mode with keepDanglingToolCalls", () => {
@@ -146,11 +150,12 @@ describe("buildSessionContext dangling toolCalls", () => {
 		expect(danglingCallIds(context.messages)).toEqual(["call-1"]);
 	});
 
-	it("always strips dangling toolCalls from the LLM context", () => {
+	it("always strips dangling toolCalls from the LLM context and drops the emptied turn", () => {
 		const context = buildSessionContext(danglingToolCallEntries, undefined, undefined, {
 			keepDanglingToolCalls: true,
 		});
 
 		expect(danglingCallIds(context.messages)).toEqual([]);
+		expect(context.messages.some(message => message.role === "assistant")).toBe(false);
 	});
 });

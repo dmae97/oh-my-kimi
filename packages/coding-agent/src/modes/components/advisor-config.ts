@@ -522,7 +522,8 @@ export class AdvisorConfigOverlayComponent implements Component {
 	}
 
 	#showModelPicker(index: number): void {
-		const mruOrder = this.#settings.getStorage()?.getModelUsageOrder() ?? [];
+		const storage = this.#settings.getStorage();
+		const mruOrder = storage?.getModelUsageOrder() ?? [];
 		let models: ReadonlyArray<Model>;
 		if (this.#scopedModels.length > 0) {
 			models = this.#scopedModels.map(scoped => scoped.model);
@@ -538,6 +539,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 
 		const picker = new ModelBrowser(this.#settings, {});
 		picker.setMruOrder(mruOrder);
+		picker.setPerfStats(storage?.getModelPerf() ?? new Map());
 		picker.setItems(items);
 		picker.onActivate = item => {
 			const efforts = getSupportedEfforts(item.model);

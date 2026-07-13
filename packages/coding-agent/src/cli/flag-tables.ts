@@ -121,6 +121,12 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 	"--plan": (result, value) => {
 		result.plan = value;
 	},
+	"--downshift-into": (result, value) => {
+		result.downshiftInto = value;
+	},
+	"--plan-yolo-into": (result, value) => {
+		result.planYoloInto = value;
+	},
 	"--max-time": (result, value, deps) => {
 		const seconds = Number(value);
 		if (Number.isFinite(seconds) && seconds > 0) {
@@ -275,6 +281,9 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
 	"--no-pty",
 	"--hide-thinking",
 	"--advisor",
+	"--downshift",
+	"--no-downshift",
+	"--plan-yolo",
 	"--print",
 	"--print-thoughts",
 	"--no-extensions",

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [16.4.7] - 2026-07-12
+
+### Fixed
+
+- Fixed a `SQLITE_CONSTRAINT_NOTNULL` crash (`messages.stop_reason`) aborting the entire session sync when a persisted assistant message lacks a `stopReason`. Malformed entries — missing stop reason, token counts, or message timestamp — are now coerced at the parser boundary, and entries with no usage or model attribution are skipped instead of failing the batch insert.
+
 ## [16.4.2] - 2026-07-10
 
 ### Fixed

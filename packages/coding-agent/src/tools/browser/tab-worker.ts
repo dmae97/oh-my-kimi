@@ -6,6 +6,7 @@ import { postmortem, Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
 import type { HTMLElement } from "linkedom";
 import type {
 	Browser,
+	CDPSession,
 	Dialog,
 	ElementHandle,
 	ElementScreenshotOptions,
@@ -35,7 +36,13 @@ import {
 	loadPuppeteerInWorker,
 } from "./launch";
 import { extractReadableFromHtml, type ReadableFormat } from "./readable";
-import { markHandled, waitForBrowserRun } from "./run-cancellation";
+import {
+	CELL_BUDGET_SLACK_MS,
+	markHandled,
+	resolvePredicateTimeout,
+	type WaitPredicateOptions,
+	waitForBrowserRun,
+} from "./run-cancellation";
 import { cloneSafe, RunOutput } from "./run-output";
 import type {
 	Observation,
@@ -49,6 +56,13 @@ import type {
 	WorkerInbound,
 	WorkerInitPayload,
 } from "./tab-protocol";
+
+declare module "puppeteer-core" {
+	interface Frame {
+		/** Puppeteer's main JavaScript realm, retained by our pinned runtime patch. */
+		mainRealm(): Realm;
+	}
+}
 
 declare global {
 	interface Element extends HTMLElement {}
@@ -105,6 +119,11 @@ const PLAYWRIGHT_ONLY_SELECTOR_RE =
 type DialogPolicy = "accept" | "dismiss";
 type DragTarget = string | { readonly x: number; readonly y: number };
 type ActionabilityResult = { ok: true; x: number; y: number } | { ok: false; reason: string };
+/** Last JS dialog seen on the page; kept for timeout attribution until handled or navigation. */
+interface OpenDialogInfo {
+	type: string;
+	message: string;
+}
 
 /**
  * Per-op fail-fast ceilings for `tab.*` helpers. All are kept strictly under the cell
@@ -126,7 +145,7 @@ type ActionabilityResult = { ok: true; x: number; y: number } | { ok: false; rea
 const QUICK_OP_TIMEOUT_MS = 20_000;
 const ACTION_OP_TIMEOUT_MS = 8_000;
 /** Headroom subtracted from the cell budget so a per-op deadline fires before it. */
-const OP_DEADLINE_SLACK_MS = 1_000;
+const OP_DEADLINE_SLACK_MS = CELL_BUDGET_SLACK_MS;
 /**
  * A selector op whose selector has matched nothing for this long fails fast with the
  * zero-match hint instead of burning the rest of its deadline: a wrong selector or a
@@ -595,6 +614,7 @@ export class WorkerCore {
 	#mode?: WorkerInitPayload["mode"];
 	#dialogPolicy?: DialogPolicy;
 	#dialogHandler?: (dialog: Dialog) => void;
+	#openDialog?: OpenDialogInfo;
 
 	constructor(transport: Transport) {
 		this.#transport = transport;
@@ -648,6 +668,7 @@ export class WorkerCore {
 			});
 			if (payload.mode === "headless") {
 				this.#page = await this.#browser.newPage();
+				this.#observeDialogs();
 				await applyStealthPatches(this.#browser, this.#page, { browserSession: null, override: null });
 				await applyViewport(this.#page, payload.viewport);
 				if (payload.dialogs) this.#applyDialogPolicy(payload.dialogs);
@@ -659,7 +680,15 @@ export class WorkerCore {
 					});
 				}
 			} else {
-				this.#page = await this.#findAttachedPage(payload.targetId);
+				const target = await this.#findAttachedTarget(payload.targetId);
+				// Post-timeout recycle: unblock the target BEFORE adopting the page — an open
+				// modal dialog or hung navigation can stall `target.page()` / ready info, and a
+				// stalled init used to time out and force-kill the tab.
+				if (payload.recover) await this.#recoverAttachedTarget(target);
+				const page = await target.page();
+				if (!page) throw new ToolError(`Target ${payload.targetId} is no longer available on the attached browser`);
+				this.#page = page;
+				this.#observeDialogs();
 				if (payload.dialogs) this.#applyDialogPolicy(payload.dialogs);
 			}
 			this.#targetId = await targetIdForPage(this.#page);
@@ -669,15 +698,51 @@ export class WorkerCore {
 		}
 	}
 
-	async #findAttachedPage(targetId: string): Promise<Page> {
+	async #findAttachedTarget(targetId: string): Promise<Target> {
 		if (!this.#browser) throw new ToolError("Browser is not connected");
 		for (const target of this.#browser.targets()) {
 			if ((await targetIdForTarget(target).catch(() => "")) !== targetId) continue;
-			const page = await target.page();
-			if (!page) break;
-			return page;
+			return target;
 		}
 		throw new ToolError(`Target ${targetId} is no longer available on the attached browser`);
+	}
+
+	/**
+	 * Best-effort unblocking of a wedged target during post-timeout recovery: dismiss any
+	 * open JS dialog and stop a pending navigation over a raw CDP session (created on the
+	 * target, not the page, so it works while the page itself is unresponsive). Every step
+	 * tolerates "nothing to do".
+	 */
+	async #recoverAttachedTarget(target: Target): Promise<void> {
+		let session: CDPSession | undefined;
+		try {
+			session = await target.createCDPSession();
+			await session.send("Page.enable").catch(() => undefined);
+			await session.send("Page.handleJavaScriptDialog", { accept: false }).catch(() => undefined);
+			await session.send("Page.stopLoading").catch(() => undefined);
+		} catch (error) {
+			this.#log("debug", "Recovery CDP session failed; proceeding with attach", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		} finally {
+			await session?.detach().catch(() => undefined);
+		}
+	}
+
+	/**
+	 * Record JS dialogs for timeout attribution without handling them (semantics of an
+	 * unset `dialogs` policy are unchanged — the page stays blocked until user code or
+	 * the policy handler acts). Cleared when the policy handler settles the dialog or a
+	 * main-frame navigation proves the modal is gone.
+	 */
+	#observeDialogs(): void {
+		const page = this.#requirePage();
+		page.on("dialog", dialog => {
+			this.#openDialog = { type: dialog.type(), message: dialog.message() };
+		});
+		page.on("framenavigated", frame => {
+			if (frame === page.mainFrame()) this.#openDialog = undefined;
+		});
 	}
 
 	async #currentReadyInfo(): Promise<ReadyInfo> {
@@ -698,11 +763,15 @@ export class WorkerCore {
 		if (this.#dialogHandler) page.off("dialog", this.#dialogHandler);
 		const handler = (dialog: Dialog): void => {
 			const action = policy === "accept" ? dialog.accept() : dialog.dismiss();
-			void action.catch(err =>
-				this.#log("debug", "Dialog auto-handler failed", {
-					policy,
-					error: err instanceof Error ? err.message : String(err),
-				}),
+			void action.then(
+				() => {
+					this.#openDialog = undefined;
+				},
+				err =>
+					this.#log("debug", "Dialog auto-handler failed", {
+						policy,
+						error: err instanceof Error ? err.message : String(err),
+					}),
 			);
 		};
 		page.on("dialog", handler);
@@ -761,7 +830,20 @@ export class WorkerCore {
 				assert: (cond: unknown, text?: string): void => {
 					if (!cond) throw new ToolError(text ?? "Assertion failed");
 				},
-				wait: (ms: number): Promise<void> => waitForBrowserRun(ms, signal),
+				// Both wait forms register in the in-flight map so a cell that dies while
+				// sleeping/polling names the culprit instead of a bare whole-cell timeout.
+				wait: (msOrPredicate: number | (() => unknown), opts?: WaitPredicateOptions): Promise<unknown> => {
+					const label = typeof msOrPredicate === "number" ? `wait(${msOrPredicate}ms)` : "wait(predicate)";
+					const resolved =
+						typeof msOrPredicate === "number"
+							? undefined
+							: { timeout: resolvePredicateTimeout(msg.timeoutMs, opts?.timeout), interval: opts?.interval };
+					return markHandled(
+						this.#runOp(active, label, signal, Number.POSITIVE_INFINITY, sig =>
+							waitForBrowserRun(msOrPredicate, sig, resolved),
+						),
+					);
+				},
 			});
 			const { promise: cancelRejection, reject: rejectCancel } = Promise.withResolvers<never>();
 			const onCancel = (): void => {
@@ -771,9 +853,13 @@ export class WorkerCore {
 						: new ToolAbortError(undefined, { cause: signal.reason });
 				if (timeoutSignal.aborted) {
 					const stalled = describeInflight(active.inflight);
+					const dialog = this.#openDialog;
+					const dialogNote = dialog
+						? `; a ${dialog.type}(${JSON.stringify(dialog.message.slice(0, 80))}) dialog opened during this run and may still block the page — reopen the tab with dialogs:"accept"|"dismiss" or handle page.on('dialog')`
+						: "";
 					rejectCancel(
 						new ToolError(
-							`Browser code execution timed out after ${msg.timeoutMs}ms${stalled ? ` (stalled on ${stalled})` : ""}`,
+							`Browser code execution timed out after ${msg.timeoutMs}ms${stalled ? ` (stalled on ${stalled})` : ""}${dialogNote}`,
 						),
 					);
 				} else {
@@ -985,7 +1071,7 @@ export class WorkerCore {
 		active: ActiveRun,
 	): TabApi {
 		const page = this.#requirePage();
-		const { quickOpMs, actionOpMs } = resolveOpTimeouts(timeoutMs);
+		const { budgetBound, quickOpMs, actionOpMs } = resolveOpTimeouts(timeoutMs);
 		const waitMs = (explicit?: number): number => resolveWaitTimeout(timeoutMs, explicit);
 		const INF = Number.POSITIVE_INFINITY;
 		const op = <T>(
@@ -1003,10 +1089,24 @@ export class WorkerCore {
 			goto: (url, opts) =>
 				op(`tab.goto(${JSON.stringify(url)})`, INF, async sig => {
 					this.#clearElementCache();
-					// Default to "load" because dev servers with HMR/WS never reach networkidle.
-					await untilAborted(sig, () =>
-						page.goto(url, { waitUntil: opts?.waitUntil ?? "load", timeout: timeoutMs }),
-					);
+					try {
+						// Default to "load" because dev servers with HMR/WS never reach networkidle.
+						// budgetBound (not the full cell) so a hung navigation fails named and
+						// catchable inside the run instead of dying with the whole cell.
+						await untilAborted(sig, () =>
+							page.goto(url, { waitUntil: opts?.waitUntil ?? "load", timeout: budgetBound }),
+						);
+					} catch (err) {
+						if (err instanceof Error && err.name === "TimeoutError") {
+							// Abandon the hung navigation NOW — a still-pending load stalls every
+							// later op on this page and cascades into more opaque timeouts.
+							await this.#stopLoading();
+							throw new ToolError(
+								`tab.goto(${JSON.stringify(url)}) timed out after ${budgetBound}ms; pending navigation stopped — retry with a longer tool timeout or waitUntil:"domcontentloaded"`,
+							);
+						}
+						throw err;
+					}
 				}),
 			observe: opts => op("tab.observe()", quickOpMs, sig => this.#collectObservation({ ...opts, signal: sig })),
 			ariaSnapshot: (selector, opts) =>
@@ -1164,8 +1264,11 @@ export class WorkerCore {
 				op("tab.evaluate()", INF, sig =>
 					untilAborted(sig, () =>
 						typeof fn === "string"
-							? page.evaluate(fn)
-							: page.evaluate(fn as (...a: unknown[]) => unknown, ...args),
+							? page.mainFrame().mainRealm().evaluate(fn)
+							: page
+									.mainFrame()
+									.mainRealm()
+									.evaluate(fn as (...a: unknown[]) => unknown, ...args),
 					),
 				) as never,
 			scrollIntoView: selector =>
@@ -1551,6 +1654,22 @@ export class WorkerCore {
 		this.#elementCache.clear();
 		this.#elementCounter = 0;
 		for (const handle of handles) void handle.dispose().catch(() => undefined);
+	}
+
+	/** Best-effort `Page.stopLoading` so an abandoned navigation cannot stall later ops. */
+	async #stopLoading(): Promise<void> {
+		try {
+			const session = await this.#requirePage().createCDPSession();
+			try {
+				await session.send("Page.stopLoading");
+			} finally {
+				await session.detach().catch(() => undefined);
+			}
+		} catch (error) {
+			this.#log("debug", "Page.stopLoading failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
 	}
 
 	async #close(): Promise<void> {

@@ -4,6 +4,7 @@ mod fd;
 pub mod minimizer;
 pub mod process;
 pub mod shell;
+mod which;
 #[cfg(windows)]
 pub mod windows;
 

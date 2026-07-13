@@ -387,9 +387,9 @@ export class Editor implements Component, Focusable {
 	cursorOverride: string | undefined;
 	/** Display width of the cursorOverride glyph (needed because override may contain ANSI escapes). */
 	cursorOverrideWidth: number | undefined;
-	/** Optional hook that styles displayed input text with zero-width ANSI escapes.
-	 *  MUST preserve visible width (may only add SGR codes, never glyphs). Applied per
-	 *  layout line to the user-text segments — never to the cursor glyph or inline hint. */
+	/** Optional hook that decorates displayed user text after source-text layout.
+	 *  Width-changing output is allowed on lines without the cursor; it is truncated
+	 *  to the content width rather than reflowed. Cursor glyphs and inline hints are excluded. */
 	decorateText: ((text: string) => string) | undefined;
 	#promptGutter: string | undefined;
 
@@ -1025,6 +1025,13 @@ export class Editor implements Component, Focusable {
 			// the cursor still satisfies its right-boundary lookahead.
 			if (!decorated) {
 				displayText = this.#decorate(displayText);
+			}
+			if (!hasCursor) {
+				displayWidth = visibleWidth(displayText);
+				if (displayWidth > lineContentWidth) {
+					displayText = truncateToWidth(displayText, lineContentWidth);
+					displayWidth = visibleWidth(displayText);
+				}
 			}
 
 			const linePad = padding(Math.max(0, lineContentWidth - displayWidth));

@@ -581,11 +581,27 @@ async function callPerplexityAsk(
 		search_recency_filter: params.search_recency_filter ?? null,
 		is_incognito: true,
 		use_schematized_api: true,
-		skip_search_enabled: true,
+		// `true` (the native app's default) lets the backend classifier skip
+		// retrieval for queries it deems answerable from memory — the model then
+		// runs ungrounded and refuses with "I don't currently have live access".
+		// We are a search tool; always retrieve.
+		skip_search_enabled: false,
+		// Belt and braces with `skip_search_enabled: false`: the web client sets
+		// this to force retrieval even when the skip classifier fires.
+		always_search_override: true,
+		prompt_source: "user",
+		source: "default",
+		local_search_enabled: false,
+		// Declare no tool-approval UI and no local (Comet) browser agent, so the
+		// stream never stalls waiting for a confirmation we cannot render.
+		should_ask_for_mcp_tool_confirmation: false,
+		supports_tool_approval_modal: false,
+		force_enable_browser_agent: false,
+		is_local_browser_available: false,
+		is_local_browser_allowed: false,
 	};
 	if (auth.type === "anonymous") {
 		requestParams.send_back_text_in_streaming_api = true;
-		requestParams.source = "default";
 	}
 
 	const response = await (params.fetch ?? fetch)(PERPLEXITY_OAUTH_ASK_URL, {
