@@ -9649,7 +9649,7 @@ export class AgentSession {
 		const all = this.#modelRegistry.getAvailable();
 		const patterns = this.settings.get("enabledModels");
 		if (!patterns || patterns.length === 0) return all;
-		return filterAvailableModelsByEnabledPatterns(all, patterns);
+		return filterAvailableModelsByEnabledPatterns(all, patterns, this.settings);
 	}
 
 	// =========================================================================

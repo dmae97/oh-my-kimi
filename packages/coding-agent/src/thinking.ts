@@ -62,18 +62,25 @@ const THINKING_LEVEL_BY_SELECTOR: Readonly<Record<string, ThinkingLevel>> = {
 };
 
 function getOwnSelector<T>(selectors: Readonly<Record<string, T>>, value: string | null | undefined): T | undefined {
-	return value === undefined || value === null || !Object.hasOwn(selectors, value) ? undefined : selectors[value];
+	if (value === undefined || value === null) return undefined;
+	if (Object.hasOwn(selectors, value)) return selectors[value];
+	// Accept unambiguous abbreviations (`xhi` → xhigh, `med` → medium) so every
+	// selector surface (`--thinking`, `:suffix`, role values) parses alike.
+	// Two-character minimum keeps single letters (`m`) from guessing.
+	if (value.length < 2) return undefined;
+	const matches = Object.keys(selectors).filter(selector => selector.startsWith(value));
+	return matches.length === 1 ? selectors[matches[0]] : undefined;
 }
 
 /**
- * Parses a provider-facing effort value.
+ * Parses a provider-facing effort value. Accepts unambiguous abbreviations.
  */
 export function parseEffort(value: string | null | undefined): Effort | undefined {
 	return getOwnSelector(EFFORT_BY_SELECTOR, value);
 }
 
 /**
- * Parses an agent-local thinking selector.
+ * Parses an agent-local thinking selector. Accepts unambiguous abbreviations.
  */
 export function parseThinkingLevel(value: string | null | undefined): ThinkingLevel | undefined {
 	return getOwnSelector(THINKING_LEVEL_BY_SELECTOR, value);

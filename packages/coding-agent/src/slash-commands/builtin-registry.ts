@@ -466,7 +466,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		description: "Switch to a fast/cheap model at the next action (works even without --prewalk)",
 		acpDescription: "Prewalk at the next action",
 		handle: async (_command, runtime) => {
-			const rolePattern = expandRoleAlias("pi/smol", runtime.settings);
+			const rolePattern = expandRoleAlias("@smol", runtime.settings);
 			const resolved = resolveCliModel({
 				cliModel: rolePattern,
 				modelRegistry: runtime.session.modelRegistry,

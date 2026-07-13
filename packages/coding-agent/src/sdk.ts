@@ -1987,7 +1987,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 		}
 		// Resolve deferred --model/subagent patterns now that extension models are
-		// registered. Expand role aliases (`pi/smol`) and comma chains to concrete
+		// registered. Expand role aliases (`@smol`) and comma chains to concrete
 		// selectors first so deferred resolution accepts everything the immediate
 		// path (resolveModelOverride → resolveModelRoleValue) accepts.
 		if (!model && deferredModelPatterns.length > 0) {

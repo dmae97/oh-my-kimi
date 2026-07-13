@@ -167,7 +167,7 @@ Handlers and tool `execute` receive `ctx` with:
 
 - `list()` — authenticated models available this session.
 - `current()` — the live session model (read lazily, so it reflects `/model` switches).
-- `resolve(spec)` — a model string (`provider/id`, bare id) or role alias (`pi/slow`, a configured role) → `Model`, honoring the same settings-backed aliases and match preferences as `--model`. Returns `undefined` when nothing matches.
+- `resolve(spec)` — a model string (`provider/id`, bare id) or role alias (`@slow`, a configured role) → `Model`, honoring the same settings-backed aliases and match preferences as `--model`. Returns `undefined` when nothing matches.
 - `family(model)` — an opaque lineage token for "same family?" checks (Claude point releases share a token; Claude and GPT differ). Compare it; don't persist it (the vocabulary tracks new releases).
 
 ```ts

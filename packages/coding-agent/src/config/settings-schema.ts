@@ -2639,14 +2639,14 @@ export const SETTINGS_SCHEMA = {
 			group: "Mnemopi",
 			label: "Mnemopi LLM Mode",
 			description:
-				"Use no LLM, the online tiny model (the TINY role from /models, else pi/smol), or a remote OpenAI-compatible endpoint",
+				"Use no LLM, the online tiny model (the TINY role from /models, else @smol), or a remote OpenAI-compatible endpoint",
 			condition: "mnemopiActive",
 			options: [
 				{ value: "none", label: "None", description: "Disable Mnemopi LLM-backed extraction" },
 				{
 					value: "smol",
 					label: "Online (tiny)",
-					description: "Use the online tiny model (the TINY role from /models, else pi/smol)",
+					description: "Use the online tiny model (the TINY role from /models, else @smol)",
 				},
 				{ value: "remote", label: "Remote", description: "Use the Mnemopi remote LLM settings below" },
 			],
@@ -4600,7 +4600,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Tiny Model",
 			label: "Tiny Model",
 			description:
-				"Session-title model: online (the TINY role from /models, else pi/smol) by default, or a local on-device model",
+				"Session-title model: online (the TINY role from /models, else @smol) by default, or a local on-device model",
 			options: TINY_TITLE_MODEL_OPTIONS,
 		},
 	},

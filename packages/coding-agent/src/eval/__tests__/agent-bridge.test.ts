@@ -28,7 +28,7 @@ const taskAgent = {
 	systemPrompt: "Run the task.",
 	source: "bundled",
 	spawns: "*",
-	model: ["pi/task"],
+	model: ["@task"],
 } satisfies AgentDefinition;
 
 const reviewerAgent = {
@@ -36,7 +36,7 @@ const reviewerAgent = {
 	description: "Reviewer agent",
 	systemPrompt: "Review the task.",
 	source: "bundled",
-	model: ["pi/smol"],
+	model: ["@smol"],
 } satisfies AgentDefinition;
 
 interface SessionOptions {

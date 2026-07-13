@@ -34,7 +34,7 @@ describe("commit role thinking selection", () => {
 		const settings = createSettings({
 			default: `${defaultModel.provider}/${defaultModel.id}:high`,
 			commit: `${commitModel.provider}/${commitModel.id}:low`,
-			smol: "pi/default:minimal",
+			smol: "@default:minimal",
 		});
 		const registry = {
 			getAvailable: () => [defaultModel, commitModel],

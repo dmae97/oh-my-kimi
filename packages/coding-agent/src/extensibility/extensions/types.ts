@@ -391,7 +391,7 @@ export interface ExtensionModelQuery {
 	/** The current session model, if one is set. */
 	current(): Model | undefined;
 	/**
-	 * Resolve a model string (`provider/id`, bare id) or role alias (`pi/slow`, a
+	 * Resolve a model string (`provider/id`, bare id) or role alias (`@slow`, a
 	 * configured role) to a Model, using the same settings-backed aliases and match
 	 * preferences as core selection. Thinking/routing suffixes are accepted and resolved
 	 * to the base model (pass effort separately). Returns undefined when nothing matches.

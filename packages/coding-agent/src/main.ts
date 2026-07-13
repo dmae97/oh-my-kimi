@@ -852,6 +852,7 @@ export async function buildSessionOptions(
 			cliProvider: parsed.provider,
 			cliModel: parsed.model,
 			modelRegistry,
+			settings: activeSettings,
 			preferences: modelMatchPreferences,
 		});
 		if (resolved.warning) {
@@ -914,13 +915,13 @@ export async function buildSessionOptions(
 			? true
 			: activeSettings.get("prewalk.enabled");
 	if (prewalkEnabled) {
-		const rolePattern = expandRoleAlias(parsed.prewalkInto ?? "pi/smol", activeSettings);
+		const rolePattern = expandRoleAlias(parsed.prewalkInto ?? "@smol", activeSettings);
 		const resolved = resolveCliModel({ cliModel: rolePattern, modelRegistry, preferences: modelMatchPreferences });
 		if (resolved.warning) {
 			process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
 		}
 		if (resolved.error || !resolved.model) {
-			throw new Error(resolved.error ?? `Model "${parsed.prewalkInto ?? "pi/smol"}" not found`);
+			throw new Error(resolved.error ?? `Model "${parsed.prewalkInto ?? "@smol"}" not found`);
 		}
 		if (!modelRegistry.hasConfiguredAuth(resolved.model)) {
 			throw new Error(`No API key for ${resolved.model.provider}/${resolved.model.id}`);
@@ -932,13 +933,13 @@ export async function buildSessionOptions(
 		throw new Error("--plan-yolo-into requires --plan-yolo");
 	}
 	if (parsed.planYolo) {
-		const rolePattern = expandRoleAlias(parsed.planYoloInto ?? "pi/smol", activeSettings);
+		const rolePattern = expandRoleAlias(parsed.planYoloInto ?? "@smol", activeSettings);
 		const resolved = resolveCliModel({ cliModel: rolePattern, modelRegistry, preferences: modelMatchPreferences });
 		if (resolved.warning) {
 			process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
 		}
 		if (resolved.error || !resolved.model) {
-			throw new Error(resolved.error ?? `Model "${parsed.planYoloInto ?? "pi/smol"}" not found`);
+			throw new Error(resolved.error ?? `Model "${parsed.planYoloInto ?? "@smol"}" not found`);
 		}
 		if (!modelRegistry.hasConfiguredAuth(resolved.model)) {
 			throw new Error(`No API key for ${resolved.model.provider}/${resolved.model.id}`);
@@ -1183,6 +1184,7 @@ export async function runRootCommand(
 			modelPatterns,
 			modelRegistry,
 			modelMatchPreferences,
+			settingsInstance,
 		);
 	}
 
