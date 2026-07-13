@@ -27,6 +27,7 @@ import {
 import { declareWorkerHostEntry, installWorkerInbox } from "@oh-my-pi/pi-utils/worker-host";
 import { installProfileAlias, resolveProfileAliasCommandFromProcess } from "./cli/profile-alias";
 import { extractProfileFlags } from "./cli/profile-bootstrap";
+import { startJsEvalProcess } from "./eval/js/process-entry";
 import { DAEMON_BROKER_WORKER_ARG } from "./launch/protocol";
 
 if (Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0) {
@@ -158,7 +159,6 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 		return true;
 	}
 	if (arg === JS_EVAL_PROCESS_ARG) {
-		const { startJsEvalProcess } = await import("./eval/js/process-entry");
 		await runIpcSubprocessWorker(startJsEvalProcess);
 		return true;
 	}

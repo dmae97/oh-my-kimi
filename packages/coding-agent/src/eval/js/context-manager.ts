@@ -1,4 +1,4 @@
-import { logger, Snowflake, workerHostEntry } from "@oh-my-pi/pi-utils";
+import { logger, postmortem, Snowflake, workerHostEntry } from "@oh-my-pi/pi-utils";
 import {
 	createWorkerHandle,
 	createWorkerSubprocess,
@@ -648,7 +648,10 @@ function spawnInlineWorker(): WorkerHandle {
 		},
 		close: () => {},
 	};
-	const core = new WorkerCore(workerTransport);
+	const core = new WorkerCore(workerTransport, {
+		mode: "inline",
+		interceptUnhandledRejections: postmortem.interceptUnhandledRejections,
+	});
 	return {
 		mode: "inline",
 		send: msg =>

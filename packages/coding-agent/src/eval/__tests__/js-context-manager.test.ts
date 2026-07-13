@@ -329,4 +329,24 @@ describe.skipIf(process.platform === "win32")("JavaScript eval process isolation
 		});
 		expect(reused.output.trim()).toBe("42");
 	});
+
+	it("keeps the isolated process alive after a stackless floated rejection", async () => {
+		using tempDir = TempDir.createSync("@omp-js-process-rejection-");
+		const session = makeSession(tempDir.path());
+		const evalSessionId = `js-rejection:${crypto.randomUUID()}`;
+		const rejected = await executeJs(
+			'var savedAfterRejection = 41; Promise.reject("stackless rejection"); await Bun.sleep(10);',
+			{ cwd: tempDir.path(), sessionId: evalSessionId, session },
+		);
+		expect(rejected.exitCode).toBe(1);
+		expect(rejected.output).toContain("Unhandled rejection (missing await?): stackless rejection");
+
+		const reused = await executeJs("return savedAfterRejection + 1;", {
+			cwd: tempDir.path(),
+			sessionId: evalSessionId,
+			session,
+		});
+		expect(reused.exitCode).toBe(0);
+		expect(reused.output.trim()).toBe("42");
+	});
 });

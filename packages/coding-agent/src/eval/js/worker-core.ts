@@ -1,5 +1,3 @@
-import { isMainThread } from "node:worker_threads";
-import { postmortem } from "@oh-my-pi/pi-utils";
 import { ToolError } from "../../tools/tool-errors";
 import { JsRuntime, type RuntimeHooks } from "./shared/runtime";
 import type {
@@ -26,6 +24,13 @@ interface ActiveRun {
 }
 
 type RunResult = Extract<WorkerOutbound, { type: "result" }>;
+
+export type WorkerCoreOptions =
+	| { mode: "isolated" }
+	| {
+			mode: "inline";
+			interceptUnhandledRejections(handler: (reason: unknown) => boolean): () => void;
+	  };
 
 /** Finished-cell filenames retained for attributing rejections that surface after the run settled. */
 const RECENT_CELL_FILES_MAX = 256;
@@ -82,9 +87,11 @@ export class WorkerCore {
 	#recentCellFiles = new Set<string>();
 	#unsubscribe: () => void;
 	#uninstallRejectionGuard: () => void;
+	#options: WorkerCoreOptions;
 
-	constructor(transport: Transport) {
+	constructor(transport: Transport, options: WorkerCoreOptions) {
 		this.#transport = transport;
+		this.#options = options;
 		this.#unsubscribe = transport.onMessage(msg => this.#handle(msg));
 		this.#uninstallRejectionGuard = this.#installRejectionGuard();
 	}
@@ -98,8 +105,8 @@ export class WorkerCore {
 	 * without a usable stack, while anything else keeps its default fatality.
 	 */
 	#installRejectionGuard(): () => void {
-		if (isMainThread) {
-			return postmortem.interceptUnhandledRejections(reason => this.#consumeRejection(reason));
+		if (this.#options.mode === "inline") {
+			return this.#options.interceptUnhandledRejections(reason => this.#consumeRejection(reason));
 		}
 		const onRejection = (reason: unknown): void => {
 			if (this.#consumeRejection(reason)) return;
@@ -161,7 +168,7 @@ export class WorkerCore {
 				return true;
 			}
 		}
-		if (!isMainThread && this.#runs.size > 0) {
+		if (this.#options.mode === "isolated" && this.#runs.size > 0) {
 			// Dedicated eval worker: during a live run, a rejection without a cell
 			// frame (e.g. `Promise.reject("msg")` or a library-created reason) is
 			// still cell activity — nothing else runs user code in this realm.

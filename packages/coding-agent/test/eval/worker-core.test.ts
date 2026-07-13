@@ -10,6 +10,7 @@ import type {
 	WorkerInbound,
 	WorkerOutbound,
 } from "@oh-my-pi/pi-coding-agent/eval/js/worker-protocol";
+import { postmortem } from "@oh-my-pi/pi-utils";
 
 interface WorkerHarness {
 	send(message: WorkerInbound): void;
@@ -31,7 +32,10 @@ function createWorkerHarness(): WorkerHarness {
 		},
 		close: () => {},
 	};
-	new WorkerCore(transport);
+	new WorkerCore(transport, {
+		mode: "inline",
+		interceptUnhandledRejections: postmortem.interceptUnhandledRejections,
+	});
 	return {
 		send(message) {
 			queueMicrotask(() => {
