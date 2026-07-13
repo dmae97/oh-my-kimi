@@ -634,7 +634,7 @@ export class UiHelpers {
 		// the in-flight call re-renders as pending instead of vanishing;
 		// renderSessionContext then keeps it in `pendingTools` for live routing.
 		const context = this.ctx.viewSession.buildTranscriptSessionContext({
-			collapseCompactedHistory: settings.get("display.collapseCompacted"),
+			collapseCompactedHistory: this.ctx.settings.get("display.collapseCompacted"),
 			keepDanglingToolCalls: this.ctx.viewSession.isStreaming,
 		});
 		this.ctx.renderSessionContext(context, {
