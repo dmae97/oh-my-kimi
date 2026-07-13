@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.5.0] - 2026-07-13
+
 ### Added
 
 - Added diagnostic response headers to auth-gateway inference endpoints, including request IDs (x-request-id/request-id), LiteLLM model metadata (x-litellm-model-id/x-litellm-model-api-base), and performance/cost metrics (x-litellm-response-cost, x-litellm-response-duration-ms, openai-processing-ms) on non-streaming responses.

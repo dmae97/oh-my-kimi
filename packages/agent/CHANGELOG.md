@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.5.0] - 2026-07-13
+
 ### Added
 
 - Added an automated image-dropping rescue tier to compaction dead-end recovery.

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.5.0] - 2026-07-13
+
 ### Breaking Changes
 
 - Replaced the `--reasoning-slide-*` flag family with a unified `--prewalk` mechanism (`--prewalk`, `--prewalk-into <model>`, and `--no-prewalk`) to manage model handoffs during execution.

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.5.0] - 2026-07-13
+
 ### Fixed
 
 - Fixed a critical issue where ambiguous swaps could silently delete range boundaries.
