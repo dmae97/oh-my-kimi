@@ -1788,6 +1788,104 @@ describe("advisor", () => {
 			expect(runtime.quotaExhausted).toBe(true);
 			expect(quotaNotified).toBe(true);
 		});
+		it("uses generic failure path when switched retry hits a non-quota error", async () => {
+			const promptInputs: string[] = [];
+			let callCount = 0;
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					callCount++;
+					if (callCount === 1) {
+						throw new Error("insufficient_quota: you have exceeded your rate limit");
+					}
+					if (callCount === 2) {
+						throw new Error("ECONNRESET: socket hang up");
+					}
+					// callCount >= 3: success
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const hookErrors: unknown[] = [];
+			let quotaNotified = false;
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => [],
+				enqueueAdvice: () => {},
+				onTurnError: async error => {
+					hookErrors.push(error);
+					return hookErrors.length === 1 ? true : undefined;
+				},
+				notifyQuotaExhausted: () => {
+					quotaNotified = true;
+				},
+			};
+			const runtime = new AdvisorRuntime(agent, host, 0);
+
+			const messages: AgentMessage[] = [{ role: "user", content: "mixed-turn", timestamp: 1 } as AgentMessage];
+			runtime.onTurnEnd(messages);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+
+			// Sibling switched (call 1 quota), retry failed with non-quota
+			// (call 2), then succeeded (call 3). No quota pause, backlog cleared.
+			expect(promptInputs).toHaveLength(3);
+			expect(runtime.quotaExhausted).toBe(false);
+			expect(quotaNotified).toBe(false);
+			expect(runtime.backlog).toBe(0);
+			// Hook sees both errors: the original quota (switched) and the
+			// retry's non-quota (generic path, no switch).
+			expect(hookErrors).toHaveLength(2);
+		});
+
+		it("marks sibling and pauses when switched retry hits a second quota error", async () => {
+			const promptInputs: string[] = [];
+			let firstCall = true;
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					if (firstCall) {
+						firstCall = false;
+						throw new Error("insufficient_quota: you have exceeded your rate limit");
+					}
+					throw new Error("429 Too Many Requests: quota exceeded");
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const hookErrors: unknown[] = [];
+			let quotaNotified = false;
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => [],
+				enqueueAdvice: () => {},
+				onTurnError: async error => {
+					hookErrors.push(error);
+					return hookErrors.length === 1 ? true : undefined;
+				},
+				notifyQuotaExhausted: () => {
+					quotaNotified = true;
+				},
+			};
+			const runtime = new AdvisorRuntime(agent, host, 0);
+
+			const messages: AgentMessage[] = [{ role: "user", content: "double-quota", timestamp: 1 } as AgentMessage];
+			runtime.onTurnEnd(messages);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+
+			// Both credentials exhausted: retry prompted twice, then entered quota pause.
+			expect(promptInputs).toHaveLength(2);
+			expect(runtime.quotaExhausted).toBe(true);
+			expect(quotaNotified).toBe(true);
+			// Hook marks both the original credential (switched=true) and the
+			// newly exhausted sibling on the second quota error.
+			expect(hookErrors).toHaveLength(2);
+		});
 	});
 
 	describe("advisor default tools", () => {

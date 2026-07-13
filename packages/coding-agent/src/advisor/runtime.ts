@@ -410,21 +410,60 @@ export class AdvisorRuntime {
 								success = true;
 								this.#consecutiveFailures = 0;
 								this.#failureNotified = false;
-							} catch {
+							} catch (retryErr) {
 								this.#rollbackFailedTurn(retrySnapshot);
 								if (this.#epoch !== epoch) continue;
-								this.#quotaExhausted = true;
-								this.#consecutiveFailures = 0;
-								this.#failureNotified = false;
-								this.#seenContext.clear();
-								this.#pending.unshift({ text: batch, turns: finalTurns });
-								this.#wakeAllWaiters();
-								try {
-									this.host.notifyQuotaExhausted?.();
-								} catch (notifyErr) {
-									logger.warn("advisor quota notification failed", { err: String(notifyErr) });
+								if (isQuotaError(retryErr)) {
+									// Second quota on the sibling credential — mark it too,
+									// then enter quota pause (both credentials exhausted).
+									logger.warn("advisor quota exhausted on switched credential", { err: String(retryErr) });
+									try {
+										await this.host.onTurnError?.(retryErr);
+									} catch (hookErr) {
+										logger.debug("advisor onTurnError hook failed", { err: String(hookErr) });
+									}
+									if (this.#epoch !== epoch) continue;
+									this.#quotaExhausted = true;
+									this.#consecutiveFailures = 0;
+									this.#failureNotified = false;
+									this.#seenContext.clear();
+									this.#pending.unshift({ text: batch, turns: finalTurns });
+									this.#wakeAllWaiters();
+									try {
+										this.host.notifyQuotaExhausted?.();
+									} catch (notifyErr) {
+										logger.warn("advisor quota notification failed", { err: String(notifyErr) });
+									}
+									break;
 								}
-								break;
+								// Non-quota transient error on the retry — route through
+								// onTurnError like every failed turn, then use the generic
+								// failure/requeue/notify path.
+								logger.debug("advisor switched retry failed with non-quota error", { err: String(retryErr) });
+								try {
+									await this.host.onTurnError?.(retryErr);
+								} catch (hookErr) {
+									logger.debug("advisor onTurnError hook failed", { err: String(hookErr) });
+								}
+								if (this.#epoch !== epoch) continue;
+								this.#consecutiveFailures++;
+								if (this.#consecutiveFailures >= 3) {
+									logger.warn("advisor failed consecutively 3 times; dropping backlog to prevent stall");
+									if (!this.#failureNotified) {
+										this.#failureNotified = true;
+										try {
+											this.host.notifyFailure?.(retryErr);
+										} catch (notifyErr) {
+											logger.warn("advisor failure notification failed", { err: String(notifyErr) });
+										}
+									}
+									this.#consecutiveFailures = 0;
+									this.#seenContext.clear();
+									success = true;
+								} else {
+									this.#pending.unshift({ text: batch, turns: finalTurns });
+									await Bun.sleep(this.retryDelayMs);
+								}
 							}
 						} else {
 							this.#quotaExhausted = true;
