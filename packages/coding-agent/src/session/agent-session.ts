@@ -7473,6 +7473,11 @@ export class AgentSession {
 		return this.#planModeState;
 	}
 
+	/** Prewalk state, if armed and active */
+	getPrewalkState(): Prewalk | undefined {
+		return this.#prewalk;
+	}
+
 	setPlanModeState(state: PlanModeState | undefined): void {
 		this.#planModeState = state;
 		if (state?.enabled) {

@@ -92,6 +92,7 @@ export type SymbolKey =
 	// Icons
 	| "icon.model"
 	| "icon.plan"
+	| "icon.prewalk"
 	| "icon.goal"
 	| "icon.pause"
 	| "icon.loop"
@@ -301,6 +302,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	// Icons
 	"icon.model": "⬢",
 	"icon.plan": "🗺",
+	"icon.prewalk": "🏃",
 	"icon.goal": "🎯",
 	"icon.pause": "⏸",
 	"icon.loop": "↻",
@@ -562,6 +564,7 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.model": "\uec19",
 	// pick:  | alt:  
 	"icon.plan": "\uf2d2",
+	"icon.prewalk": "\uf29d",
 	// pick:  (nf-fa-bullseye) | alt:  (nf-md-target) ◎ ⌖
 	"icon.goal": "\uf140",
 	// pick:  (nf-fa-pause) | alt: ⏸ ||
@@ -819,6 +822,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	// Icons
 	"icon.model": "[M]",
 	"icon.plan": "plan",
+	"icon.prewalk": "prewalk",
 	"icon.goal": "goal",
 	"icon.pause": "||",
 	"icon.loop": "loop",
@@ -1819,6 +1823,7 @@ export class Theme {
 		return {
 			model: this.#symbols["icon.model"],
 			plan: this.#symbols["icon.plan"],
+			prewalk: this.#symbols["icon.prewalk"],
 			goal: this.#symbols["icon.goal"],
 			pause: this.#symbols["icon.pause"],
 			loop: this.#symbols["icon.loop"],

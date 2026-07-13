@@ -208,6 +208,12 @@ const modeSegment: StatusLineSegment = {
 			return { content: theme.fg(color, content), visible: true };
 		}
 
+		const prewalk = ctx.prewalk;
+		if (prewalk?.enabled) {
+			const content = withIcon(theme.icon.prewalk, "Prewalk");
+			return { content: theme.fg("accent", content), visible: true };
+		}
+
 		const goal = ctx.goalMode;
 		if (goal && (goal.enabled || goal.paused)) {
 			return renderGoalMode(ctx, goal);

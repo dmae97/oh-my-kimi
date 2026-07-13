@@ -2,9 +2,13 @@
 
 ## [Unreleased]
 
+### Changed
+
+ - Improved native scrollback history management by introducing an optional erase-and-replay mechanism to rebuild scrollback when mutated rows (such as finalized tool blocks or collapsed transcripts) diverge. This is now gated behind the `tui.scrollbackRebuild` setting and defaults to off.
+
 ### Fixed
 
-- Fixed forced renders (tool finalization, `resetDisplay`, image reconciliation) landing during a resize drag preempting the alternate-screen viewport fast path: each one left the borrowed alt screen, erased native scrollback (ED3), and visibly replayed the whole transcript on the normal screen mid-drag — then the settle replayed it again. Forced intent now folds into the single authoritative settle paint.
+- Fixed a rendering issue where resizing the terminal during forced renders (such as tool finalization or image reconciliation) caused the entire transcript to visibly replay and flicker. Forced renders are now consolidated into a single paint once the resize settles.
 
 ## [16.4.7] - 2026-07-12
 

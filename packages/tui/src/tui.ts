@@ -5,11 +5,15 @@
  * immutable — the tape is the terminal's visual record. Whatever scrolls
  * above the window enters history exactly once, in order: as exact-final
  * bytes when the component seam (`NativeScrollbackLiveRegion`) declared them
- * final, else as a frozen snapshot of what was on screen. ED3 (`CSI 3 J`) is
- * emitted only for gesture-driven replays (session replace, resize,
- * resetDisplay) where snapping the viewport is acceptable. The engine never
- * probes or guesses the terminal's scroll position, and the hot path clamps
- * over-wide lines instead of throwing. See `docs/tui-core-renderer.md`.
+ * final, else as a frozen snapshot of what was on screen. When recorded
+ * history diverges from the frame (a finalized block replacing its
+ * scrolled-off live render), the engine erases and replays (ED3, `CSI 3 J`)
+ * so history holds the content exactly once — the same replay used for
+ * gestures (session replace, resize, resetDisplay). Multiplexer panes, where
+ * ED3 is unsafe, instead re-anchor and recommit below the stale fragment —
+ * duplication, never loss. The engine never probes or guesses the terminal's
+ * scroll position, and the hot path clamps over-wide lines instead of
+ * throwing. See `docs/tui-core-renderer.md`.
  */
 import * as fs from "node:fs";
 import { performance } from "node:perf_hooks";
@@ -783,9 +787,11 @@ const RESYNC_TAIL_SAMPLES = 8;
  *       source just became declared-final (the block finalized / a barrier
  *       cleared). Hard-scanned in FULL with no tolerance: any content change
  *       (a pending header settling, a preview replaced by its result, a tail
- *       shifting up after a barrier removal) re-anchors so the final content
- *       recommits below the frozen snapshot — duplication, never loss —
- *       instead of being committed nowhere and painted nowhere.
+ *       shifting up after a barrier removal) re-anchors so the engine can
+ *       erase-and-replay history with the final content exactly once (or, on
+ *       ED3-unsafe multiplexers, recommit it below the frozen snapshot —
+ *       duplication, never loss) instead of committing it nowhere and
+ *       painting it nowhere.
  *   [finalTo, prefix.length) FROZEN visual snapshots of still-live rows —
  *       exempt: their drift is expected (a collapsing preview, a ticking
  *       progress tree) and must never spray re-anchors mid-run.
@@ -1001,6 +1007,8 @@ export class TUI extends Container {
 	#clearScrollbackOnNextRender = false;
 	#forceViewportRepaintOnNextRender = false;
 	#hasEverRendered = false;
+	#scrollbackRebuildEnabled =
+		Bun.env.PI_TUI_SCROLLBACK_REBUILD === "1" || Bun.env.PI_TUI_SCROLLBACK_REBUILD === "true";
 	// Set by the terminal resize callback; consumed by the next render. A resize
 	// event invalidates the committed screen even when the dimensions net out
 	// unchanged by render time (e.g. a 6→4→6 round trip coalesced into one frame
@@ -1288,6 +1296,23 @@ export class TUI extends Container {
 	 */
 	setMaxInlineImages(cap: number): void {
 		this.#imageBudget.setCap(cap);
+	}
+
+	/**
+	 * Get whether scrollback divergence rebuild is enabled.
+	 */
+	getScrollbackRebuild(): boolean {
+		return this.#scrollbackRebuildEnabled;
+	}
+
+	/**
+	 * Enable or disable scrollback divergence rebuild (default off).
+	 * When enabled, the engine will erase and replay the terminal's
+	 * scrollback (using ED3 / alt buffer / scrollback replay) to avoid
+	 * duplicate blocks when a block's final form replaces its live preview.
+	 */
+	setScrollbackRebuild(enabled: boolean): void {
+		this.#scrollbackRebuildEnabled = enabled;
 	}
 
 	getShowHardwareCursor(): boolean {
@@ -2778,8 +2803,9 @@ export class TUI extends Container {
 		// verified once (a pending header settling, a barrier clearing above a
 		// shifted tail); rows past the boundary are still-live frozen snapshots,
 		// exempt so a collapsing preview can never spray re-anchors mid-run. A
-		// divergence re-anchors and recommits — duplication, never loss —
-		// instead of silently skipping rows (committed nowhere, painted
+		// divergence re-anchors — feeding the divergenceRebuild erase-and-replay
+		// below (mux fallback: recommit below the stale copy; duplication, never
+		// loss) — instead of silently skipping rows (committed nowhere, painted
 		// nowhere). Skipped on geometry frames (a rewrap legitimately reflows
 		// every row), and skipped when the composed frame's stable prefix
 		// covers every verified row and no rows newly became final.
@@ -2852,7 +2878,21 @@ export class TUI extends Container {
 		const firstPaint = !this.#hasEverRendered;
 		const replaceRequested = this.#clearScrollbackOnNextRender;
 		const geometryRebuild = geometryChanged && !resizeRepaintsInPlace();
-		const fullPaint = firstPaint || replaceRequested || geometryRebuild;
+		// Committed history no longer matches the frame: a finalized block
+		// replaced its scrolled-off live render, or the frame collapsed into
+		// recorded rows. Native scrollback is a render cache, not a court
+		// record — erase and replay so history holds the content exactly once,
+		// instead of recommitting the final form below the stale fragment
+		// (a visibly duplicated block). Multiplexer panes cannot ED3 safely
+		// and keep the repair-below fallback in the branches under this one.
+		const divergenceRebuild =
+			this.#scrollbackRebuildEnabled &&
+			!firstPaint &&
+			!replaceRequested &&
+			!geometryChanged &&
+			!isMultiplexerSession() &&
+			(committedRowsResynced || frameLength <= this.#committedRows);
+		const fullPaint = firstPaint || replaceRequested || geometryRebuild || divergenceRebuild;
 		let windowTop: number;
 		let chunkTo: number;
 		if (fullPaint) {
@@ -2865,16 +2905,17 @@ export class TUI extends Container {
 				frameLength - this.#committedRows < height &&
 				cursorMarkers.some(marker => marker.row >= this.#committedRows))
 		) {
-			// Either the frame shrank into the committed prefix, or a
-			// committed-prefix resync left a focused cursor tail shorter than the
-			// viewport. The latter happens when a streaming/live block had an
-			// append-only prefix committed, then collapses on abort/finalize:
-			// the audit re-anchors #committedRows at the first divergent row, but
-			// flooring windowTop there would pin the editor near the top and
-			// leave blank rows underneath. Re-show the frame tail instead. The
-			// stale committed copy stays in native history; duplicating a few rows
-			// is preferable to a live editor gap and matches the existing
-			// "duplication, never loss" resync contract.
+			// Multiplexer fallback (a direct terminal takes the divergenceRebuild
+			// full paint above): either the frame shrank into the committed
+			// prefix, or a committed-prefix resync left a focused cursor tail
+			// shorter than the viewport. The latter happens when a streaming/live
+			// block had an append-only prefix committed, then collapses on
+			// abort/finalize: the audit re-anchors #committedRows at the first
+			// divergent row, but flooring windowTop there would pin the editor
+			// near the top and leave blank rows underneath. Re-show the frame
+			// tail instead. The stale committed copy stays in native history;
+			// duplicating a few rows is preferable to a live editor gap —
+			// "duplication, never loss" is the ED3-unsafe fallback contract.
 			committedPrefixResliced = true;
 			windowTop = Math.max(0, frameLength - height);
 			chunkTo = windowTop;
@@ -2927,7 +2968,10 @@ export class TUI extends Container {
 		const cursorTrackingLineCount = hasVisibleOverlay ? Math.max(frame.length, windowTop + height) : frame.length;
 
 		const intent: RenderIntent = fullPaint
-			? { kind: "fullPaint", clearScrollback: replaceRequested || geometryRebuild ? !isMultiplexerSession() : false }
+			? {
+					kind: "fullPaint",
+					clearScrollback: divergenceRebuild || ((replaceRequested || geometryRebuild) && !isMultiplexerSession()),
+				}
 			: { kind: "update", chunkTo, windowTop };
 		this.#logRedraw(intent, frameLength, height);
 

@@ -22,6 +22,7 @@ function createModelContext(advisorActive: boolean): SegmentContext {
 		options: {},
 		planMode: null,
 		loopMode: null,
+		prewalk: null,
 		goalMode: null,
 		vibeMode: null,
 		collab: null,

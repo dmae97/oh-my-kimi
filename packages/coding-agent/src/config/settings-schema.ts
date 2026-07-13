@@ -897,6 +897,17 @@ export const SETTINGS_SCHEMA = {
 			description: "Remove the 1-character horizontal padding from the left and right of the terminal output",
 		},
 	},
+	"tui.scrollbackRebuild": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Rewrite Scrollback",
+			description:
+				"Erase and replay terminal scrollback when a block's final form replaces its live preview. When off (default), stale preview copies remain in history and the final content is appended below.",
+		},
+	},
 
 	"display.shimmer": {
 		type: "enum",
