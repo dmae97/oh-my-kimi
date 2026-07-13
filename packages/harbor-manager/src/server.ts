@@ -182,7 +182,11 @@ export class ManagerServer {
 			// Bun bundles the dashboard (React + TSX) from the HTML import and
 			// serves it on the same port as the API — one process, no Vite.
 			routes: { "/": indexHtml },
-			development: process.env.NODE_ENV !== "production" && { hmr: true, console: true },
+			// Only `hmr`: Bun's `console: true` mirror opens a server-read stream
+			// over the dev client that a `--hot` reload's force-close tears down
+			// mid-read, surfacing an unhandled `AbortError: ERR_STREAM_RELEASE_LOCK`
+			// that crashes the process.
+			development: process.env.NODE_ENV !== "production" && { hmr: true },
 			fetch: request => this.#route(request),
 		});
 		return this.#server;
@@ -380,9 +384,22 @@ export class ManagerServer {
 		if (!run) throw new Error(`run ${jobName} not found`);
 		if (run.benchmark !== "harbor")
 			throw new Error(`resume supports only harbor runs (${jobName} is ${run.benchmark})`);
-		if (this.#children.has(jobName) || run.status === "running") {
+		// Trust liveness, not the recorded status: a runner killed while a
+		// previous server instance owned it leaves a stale `running` row with a
+		// dead (or null) pid and nobody to fire markExit.
+		const pidAlive = (pid: number | null): boolean => {
+			if (pid == null) return false;
+			try {
+				process.kill(pid, 0);
+				return true;
+			} catch {
+				return false;
+			}
+		};
+		if (this.#children.has(jobName) || (run.status === "running" && pidAlive(run.pid))) {
 			throw new Error(`run ${jobName} is already running`);
 		}
+		if (run.status === "running") this.#store.markExit(jobName, null, true);
 		const jobDir = path.join(this.jobsDir, jobName);
 		if (!fs.existsSync(path.join(jobDir, "config.json"))) {
 			throw new Error(`${jobName} has no harbor config.json to resume from`);
