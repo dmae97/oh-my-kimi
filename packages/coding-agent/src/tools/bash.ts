@@ -397,7 +397,7 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 			hasGrep: isToolActive("grep", this.session.settings.get("grep.enabled")),
 			hasGlob: isToolActive("glob", this.session.settings.get("glob.enabled")),
 			hasRead: isToolActive("read", true),
-			hasLaunch: isToolActive("launch", true),
+			hasLaunch: isToolActive("launch", this.session.settings.get("launch.enabled")),
 			hasEval: isToolActive(
 				"eval",
 				evalBackends.python || evalBackends.js || evalBackends.ruby || evalBackends.julia,

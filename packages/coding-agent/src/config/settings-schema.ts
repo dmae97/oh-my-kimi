@@ -3549,6 +3549,17 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"launch.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			group: "Available Tools",
+			label: "Launch",
+			description: "Enable the launch tool for supervising shared long-running project processes",
+		},
+	},
+
 	"speechgen.enabled": {
 		type: "boolean",
 		default: false,

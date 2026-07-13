@@ -451,7 +451,7 @@ tools:
 | `tools.artifactTailBytes` | number | `20` | KB of tail kept inline on spill. |
 | `tools.artifactTailLines` | number | `500` | Max tail lines kept inline on spill. |
 
-Individual built-in tools are toggled by their own keys, e.g. `bash.enabled`, `eval.py`, `eval.js`, `glob.enabled`, `grep.enabled`, `fetch.enabled`, `browser.enabled`, `astEdit.enabled`, `astGrep.enabled`, `web_search.enabled`, `inspect_image.enabled`.
+Individual built-in tools are toggled by their own keys, e.g. `bash.enabled`, `launch.enabled`, `eval.py`, `eval.js`, `glob.enabled`, `grep.enabled`, `fetch.enabled`, `browser.enabled`, `astEdit.enabled`, `astGrep.enabled`, `web_search.enabled`, `inspect_image.enabled`.
 
 ### Shell, eval, and LSP
 
@@ -481,6 +481,7 @@ lsp:
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `bash.enabled` | boolean | `true` | Enable the bash tool. |
+| `launch.enabled` | boolean | `true` | Enable the launch tool for shared long-running project processes. |
 | `bash.autoBackground.enabled` | boolean | `false` | Auto-background long-running commands. |
 | `bash.autoBackground.thresholdMs` | number | `60000` | Threshold before auto-backgrounding. |
 | `eval.py` | boolean | `true` | Python eval backend. `PI_PY=0` disables for the process. |

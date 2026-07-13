@@ -609,6 +609,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "goal") return goalEnabled && goalModeActive;
 		if (name === "lsp") return enableLsp && session.settings.get("lsp.enabled");
 		if (name === "bash") return session.settings.get("bash.enabled");
+		if (name === "launch") return session.settings.get("launch.enabled");
 		if (name === "eval") return allowEval;
 		if (name === "debug") return session.settings.get("debug.enabled");
 		if (name === "todo") return !includeYield && session.settings.get("todo.enabled");

@@ -237,6 +237,7 @@ describe("createTools", () => {
 				"astGrep.enabled": false,
 				"astEdit.enabled": false,
 				"bash.enabled": false,
+				"launch.enabled": false,
 				"web_search.enabled": false,
 				"browser.enabled": false,
 				"inspect_image.enabled": false,
@@ -246,6 +247,7 @@ describe("createTools", () => {
 		const names = tools.map(t => t.name);
 
 		expect(names).not.toContain("bash");
+		expect(names).not.toContain("launch");
 		expect(names).not.toContain("glob");
 		expect(names).not.toContain("grep");
 		expect(names).not.toContain("ast_grep");
