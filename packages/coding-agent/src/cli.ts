@@ -159,7 +159,10 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 		return true;
 	}
 	if (arg === JS_EVAL_PROCESS_ARG) {
-		await runIpcSubprocessWorker(startJsEvalProcess);
+		// The JS evaluator forwards user-controlled payloads (tool-call args,
+		// display outputs); a non-serializable one must fail that cell, not
+		// SIGKILL the kernel and erase the eval session's state.
+		await runIpcSubprocessWorker(startJsEvalProcess, { rethrowConnectedSendErrors: true });
 		return true;
 	}
 	if (arg === STT_WORKER_ARG) {
@@ -202,6 +205,18 @@ async function runIpcSubprocessWorker<In, Out>(
 		sendAndFlush(message: Out): Promise<void>;
 		onMessage(handler: (message: In) => void): () => void;
 	}) => void,
+	options?: {
+		/**
+		 * Rethrow send failures while the IPC channel is still connected instead
+		 * of shutting down. A connected-channel failure means this particular
+		 * message could not be serialized (e.g. a JS eval cell passed a function
+		 * into tool args, a DataCloneError under advanced serialization) — the
+		 * caller must see that error, exactly as Worker `postMessage` would
+		 * deliver it, rather than losing the whole worker and its state.
+		 * Channel-gone failures still shut down.
+		 */
+		rethrowConnectedSendErrors?: boolean;
+	},
 ): Promise<void> {
 	const { promise: shuttingDown, resolve: shutdown } = Promise.withResolvers<void>();
 	type IpcSend = (this: NodeJS.Process, message: unknown, callback?: (error: Error | null) => void) => boolean;
@@ -217,7 +232,8 @@ async function runIpcSubprocessWorker<In, Out>(
 		}
 		try {
 			sender.call(process, message);
-		} catch {
+		} catch (error) {
+			if (options?.rethrowConnectedSendErrors && process.connected) throw error;
 			shutdown();
 		}
 	};

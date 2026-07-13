@@ -297,7 +297,15 @@ export class WorkerCore {
 		const id = `tc-${active.runId}-${crypto.randomUUID()}`;
 		const { promise, resolve, reject } = Promise.withResolvers<unknown>();
 		active.pendingTools.set(id, { runId: active.runId, resolve, reject });
-		this.#transport.send({ type: "tool-call", id, runId: active.runId, name, args });
+		try {
+			this.#transport.send({ type: "tool-call", id, runId: active.runId, name, args });
+		} catch (error) {
+			// Non-serializable args (DataCloneError from postMessage / IPC send).
+			// No reply will ever arrive; fail this call instead of stranding a
+			// pending entry until close.
+			active.pendingTools.delete(id);
+			reject(error);
+		}
 		return await promise;
 	}
 
