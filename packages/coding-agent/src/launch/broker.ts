@@ -11,6 +11,8 @@ import { hasLiveDaemonProjectPresence } from "./presence";
 import {
 	DAEMON_IDLE_GRACE_ENV,
 	DAEMON_PROJECT_DIR_ENV,
+	DAEMON_PTY_COLUMNS,
+	DAEMON_PTY_ROWS,
 	DAEMON_RUNTIME_DIR_ENV,
 	type DaemonOperation,
 	type DaemonReadySpec,
@@ -141,8 +143,7 @@ class DaemonLog {
 		return new DaemonLog(logPath, previousPath, file, file.writer());
 	}
 
-	append(raw: string): string {
-		const text = sanitizeText(raw);
+	append(text: string): string {
 		if (text.length === 0 || this.#closed) return text;
 		const bytes = Buffer.byteLength(text, "utf8");
 		this.#queue = this.#queue.then(async () => {
@@ -179,7 +180,7 @@ class DaemonLog {
 		grep?: string,
 	): Promise<string> {
 		const [previous, current] = await Promise.all([fileTextSlice(previousPath, head), fileTextSlice(logPath, head)]);
-		let text = sanitizeText(`${previous}${previous && current && !previous.endsWith("\n") ? "\n" : ""}${current}`);
+		let text = `${previous}${previous && current && !previous.endsWith("\n") ? "\n" : ""}${current}`;
 		if (grep) {
 			let pattern: RegExp;
 			try {
@@ -189,7 +190,7 @@ class DaemonLog {
 			}
 			text = text
 				.split("\n")
-				.filter(line => pattern.test(line))
+				.filter(line => pattern.test(sanitizeText(line)))
 				.join("\n");
 		}
 		const options = { maxLines: lines, maxBytes: 256 * 1024 };
@@ -527,8 +528,8 @@ class DaemonBroker {
 					command,
 					cwd: record.spec.cwd,
 					env: workerEnvFromParent({ TERM: "xterm-256color", ...record.spec.env }),
-					cols: 120,
-					rows: 40,
+					cols: DAEMON_PTY_COLUMNS,
+					rows: DAEMON_PTY_ROWS,
 					shell,
 				},
 				(error, chunk) => {
@@ -626,9 +627,10 @@ class DaemonBroker {
 
 	#onOutput(record: ManagedDaemon, generation: number, raw: string): void {
 		if (generation !== record.generation) return;
-		const text = record.log?.append(raw) ?? sanitizeText(raw);
+		const output = raw.toWellFormed();
+		const text = record.log?.append(output) ?? output;
 		record.snapshot.outputBytes += Buffer.byteLength(text, "utf8");
-		this.#trackOutput(record, generation, text);
+		this.#trackOutput(record, generation, sanitizeText(text));
 	}
 
 	async #readDetachedOutput(record: ManagedDaemon, generation: number): Promise<void> {

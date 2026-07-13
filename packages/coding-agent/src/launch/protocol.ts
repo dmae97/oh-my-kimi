@@ -4,6 +4,10 @@
 /** Hidden CLI selector used to re-enter the daemon broker worker. */
 export const DAEMON_BROKER_WORKER_ARG = "__omp_worker_daemon_broker";
 
+/** Fixed dimensions negotiated with every supervised PTY. */
+export const DAEMON_PTY_COLUMNS = 120;
+export const DAEMON_PTY_ROWS = 40;
+
 /** Environment key carrying the broker's canonical project directory. */
 export const DAEMON_PROJECT_DIR_ENV = "OMP_DAEMON_PROJECT_DIR";
 
