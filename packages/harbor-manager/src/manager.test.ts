@@ -136,7 +136,7 @@ describe("RunStore", () => {
 		expect(store.getRun("job-done")?.finishedAt).not.toBeNull();
 	});
 
-	it("stores experiment goals and run roles, and orders baselines first", () => {
+	it("stores experiment goals and run roles/labels, and orders baselines first", () => {
 		const jobsDir = makeJobsDir();
 		writeFixtureJob(jobsDir, "exp-treat");
 		writeFixtureJob(jobsDir, "exp-base");
@@ -145,15 +145,25 @@ describe("RunStore", () => {
 		store.discover();
 		store.setExperimentGoal("exp", "does the treatment beat the baseline?");
 		expect(store.setRunMeta("exp-base", { role: "baseline", note: "plain model" })).toBe(true);
-		expect(store.setRunMeta("exp-treat", { role: "variant", note: "downshift flash" })).toBe(true);
+		expect(store.setRunMeta("exp-treat", { role: "variant", note: "downshift flash", label: "flash@edit" })).toBe(
+			true,
+		);
 		expect(store.setRunMeta("exp-missing", { role: "variant" })).toBe(false);
 
 		const detail = experimentDetail(store, "exp");
 		expect(detail?.goal).toBe("does the treatment beat the baseline?");
-		expect(detail?.arms.map(a => [a.arm, a.run.role, a.run.note])).toEqual([
-			["base", "baseline", "plain model"],
-			["treat", "variant", "downshift flash"],
+		// ArmSummary.arm resolves to the display label when one is set.
+		expect(detail?.arms.map(a => [a.arm, a.run.role, a.run.note, a.run.label])).toEqual([
+			["base", "baseline", "plain model", ""],
+			["flash@edit", "variant", "downshift flash", "flash@edit"],
 		]);
+
+		// Partial updates keep the omitted fields.
+		expect(store.setRunMeta("exp-treat", { note: "downshift flash v2" })).toBe(true);
+		const treat = store.getRun("exp-treat");
+		expect(treat?.label).toBe("flash@edit");
+		expect(treat?.role).toBe("variant");
+		expect(treat?.note).toBe("downshift flash v2");
 	});
 
 	it("finalizes running rows whose owning process died", () => {
@@ -331,6 +341,35 @@ describe("resolveArmLaunch", () => {
 		expect(launch.model).toBe("google/gemini-3.5-flash");
 		expect(launch.role).toBe("variant");
 		expect(launch.downshift?.into).toBe("google/gemini-3.5-flash");
+	});
+
+	it("prefers the sibling with a recorded include list over newer include-less siblings", () => {
+		const store = new RunStore(makeJobsDir());
+		cleanups.push(() => store.close());
+		// Older sibling carries the authoritative sample…
+		store.registerLaunch({
+			benchmark: "harbor",
+			jobName: "exp-base",
+			dataset: "swe-bench/swe-bench-verified",
+			agent: "omp",
+			models: ["anthropic/claude-opus-4-8"],
+			pid: 1,
+			config: { include: ["swe-bench/astropy__astropy-1", "swe-bench/django__django-2"] },
+		});
+		// …while a newer arm (e.g. discovered from disk) recorded no include.
+		store.registerLaunch({
+			benchmark: "harbor",
+			jobName: "exp-noinc",
+			dataset: "swe-bench/swe-bench-verified",
+			agent: "omp",
+			models: ["anthropic/claude-opus-4-8"],
+			pid: 2,
+			config: {},
+		});
+
+		const launch = resolveArmLaunch(store, "exp", { arm: "next", model: "anthropic/claude-opus-4-8" });
+		expect(launch.include).toEqual(["swe-bench/astropy__astropy-1", "swe-bench/django__django-2"]);
+		expect(launch.tasks).toBe(2);
 	});
 
 	it("rejects a duplicate arm and an unknown experiment", () => {

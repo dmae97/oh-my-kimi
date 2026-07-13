@@ -35,6 +35,8 @@ export interface RunRow {
 	role: RunRole;
 	/** One-line description of what this arm tests (e.g. "downshift→flash at first edit/write"). */
 	note: string;
+	/** Display-name override for the arm; "" falls back to the jobName-derived arm label. */
+	label: string;
 	status: RunStatus;
 	pid: number | null;
 	exitCode: number | null;
@@ -76,7 +78,7 @@ export interface LaunchRecord {
 	dataset: string;
 	agent: string;
 	models: string[];
-	downshift?: { into?: string };
+	downshift?: { into?: string; boomerang?: boolean };
 	pid: number;
 	role?: RunRole;
 	note?: string;
@@ -93,6 +95,7 @@ CREATE TABLE IF NOT EXISTS runs (
 	downshift TEXT,
 	role TEXT NOT NULL DEFAULT '',
 	note TEXT NOT NULL DEFAULT '',
+	label TEXT NOT NULL DEFAULT '',
 	config_json TEXT NOT NULL DEFAULT '{}',
 	status TEXT NOT NULL DEFAULT 'running',
 	pid INTEGER,
@@ -151,6 +154,7 @@ export class RunStore {
 		);
 		if (!runColumns.has("role")) this.#db.run("ALTER TABLE runs ADD COLUMN role TEXT NOT NULL DEFAULT ''");
 		if (!runColumns.has("note")) this.#db.run("ALTER TABLE runs ADD COLUMN note TEXT NOT NULL DEFAULT ''");
+		if (!runColumns.has("label")) this.#db.run("ALTER TABLE runs ADD COLUMN label TEXT NOT NULL DEFAULT ''");
 		if (!runColumns.has("benchmark")) {
 			this.#db.run("ALTER TABLE runs ADD COLUMN benchmark TEXT NOT NULL DEFAULT 'harbor'");
 		}
@@ -224,13 +228,13 @@ export class RunStore {
 		return row?.goal ?? "";
 	}
 
-	/** Set role/note metadata on an existing run row. */
-	setRunMeta(jobName: string, meta: { role?: RunRole; note?: string }): boolean {
+	/** Set role/note/label metadata on an existing run row. */
+	setRunMeta(jobName: string, meta: { role?: RunRole; note?: string; label?: string }): boolean {
 		const existing = this.getRun(jobName);
 		if (!existing) return false;
 		this.#db
-			.query("UPDATE runs SET role = ?, note = ? WHERE job_name = ?")
-			.run(meta.role ?? existing.role, meta.note ?? existing.note, jobName);
+			.query("UPDATE runs SET role = ?, note = ?, label = ? WHERE job_name = ?")
+			.run(meta.role ?? existing.role, meta.note ?? existing.note, meta.label ?? existing.label, jobName);
 		return true;
 	}
 
@@ -424,6 +428,7 @@ function rowToRun(r: Record<string, unknown>): RunRow {
 		config: JSON.parse(String(r.config_json ?? "{}")),
 		role: String(r.role ?? "") as RunRole,
 		note: String(r.note ?? ""),
+		label: String(r.label ?? ""),
 		status: String(r.status) as RunStatus,
 		pid: r.pid === null ? null : Number(r.pid),
 		exitCode: r.exit_code === null ? null : Number(r.exit_code),

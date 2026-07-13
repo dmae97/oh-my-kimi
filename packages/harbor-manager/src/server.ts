@@ -19,12 +19,12 @@ import * as path from "node:path";
 import type { Server, Subprocess } from "bun";
 import { BENCHMARK_DEFINITIONS } from "./benchmarks";
 import { buildExperiments, experimentDetail, experimentOf } from "./experiments";
-import { type BenchmarkKind, type RunRole, RunStore } from "./store";
+import { type BenchmarkKind, type RunRole, type RunRow, RunStore } from "./store";
 
-/** PUT /api/experiments/:id body — goal and per-run role/note metadata. */
+/** PUT /api/experiments/:id body — goal and per-run role/note/label metadata. */
 export interface ExperimentMetaUpdate {
 	goal?: string;
-	runs?: Record<string, { role?: RunRole; note?: string }>;
+	runs?: Record<string, { role?: RunRole; note?: string; label?: string }>;
 }
 
 const INDEX_HTML_PATH = new URL("./web/index.html", import.meta.url).pathname;
@@ -51,8 +51,9 @@ export interface LaunchRequest {
 	agent?: string;
 	jobName?: string;
 	webSearch?: boolean;
-	/** Downshift to a fast/cheap model at the first action (post-plan todo init or edit/write); `into` overrides the default "smol" target. */
-	downshift?: { into?: string };
+	/** Downshift to a fast/cheap model at the first edit/write once the todo list exists; `into` overrides the
+	 *  default "smol" target; `boomerang` hands back to the original model for a final validation pass. */
+	downshift?: { into?: string; boomerang?: boolean };
 	/** Role of this run inside its experiment (baseline vs treatment). */
 	role?: RunRole;
 	/** One-line description of what this arm tests. */
@@ -71,6 +72,8 @@ export interface AddArmRequest {
 	arm: string;
 	model: string;
 	downshift?: LaunchRequest["downshift"];
+	/** Explicit task sample; skips sibling inheritance when provided. */
+	include?: string[];
 	role?: RunRole;
 	note?: string;
 	extraArgs?: string[];
@@ -116,28 +119,42 @@ export function resolveArmLaunch(store: RunStore, experimentId: string, req: Add
 	if (!req.model) throw new Error("model is required");
 	const siblings = store.listRuns().filter(r => experimentOf(r.jobName) === experimentId);
 	if (siblings.length === 0) throw new Error(`experiment '${experimentId}' has no runs to inherit from`);
-	// Template = the sibling with the most observed trials (most representative
-	// of the real sample); listRuns is newest-first so ties keep the newest.
+	// Template = the sibling whose recorded `include` list is the longest (the
+	// fullest expression of the experiment's sample — partial re-run arms
+	// record subsets); among include-less siblings, the most observed trials.
+	// listRuns is newest-first so ties keep the newest.
+	const strings = (v: unknown): string[] =>
+		Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+	const recordedInclude = (r: RunRow): string[] => strings((r.config as Partial<LaunchRequest>).include);
+	const score = (r: RunRow): [number, number] => {
+		const recorded = recordedInclude(r).length;
+		return recorded > 0 ? [1, recorded] : [0, store.listTraces(r.jobName).length];
+	};
 	let template = siblings[0];
-	let templateTrials = store.listTraces(template.jobName).length;
+	let templateScore = score(template);
 	for (const r of siblings.slice(1)) {
-		const n = store.listTraces(r.jobName).length;
-		if (n > templateTrials) [template, templateTrials] = [r, n];
+		const s = score(r);
+		if (s[0] > templateScore[0] || (s[0] === templateScore[0] && s[1] > templateScore[1])) {
+			[template, templateScore] = [r, s];
+		}
 	}
 	const cfg = template.config as Partial<LaunchRequest>;
 	const str = (v: unknown): string | undefined => (typeof v === "string" && v ? v : undefined);
 	const numberOr = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
-	const strings = (v: unknown): string[] =>
-		Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
-	// Exact task sample: prefer the intended include list, else observed trial tasks.
-	let include = strings(cfg.include);
+	// Exact task sample: prefer the intended include list, else observed trial
+	// tasks. Trial task names are stored bare, while org-prefixed datasets
+	// (e.g. "swe-bench/swe-bench-verified") address tasks as "<org>/<task>" —
+	// re-derive the prefix for the fallback.
+	let include = req.include && req.include.length > 0 ? req.include : strings(cfg.include);
 	if (include.length === 0) {
+		const org = template.dataset.includes("/") ? `${template.dataset.split("/", 1)[0]}/` : "";
 		include = [
 			...new Set(
 				store
 					.listTraces(template.jobName)
 					.map(t => t.task)
-					.filter(Boolean),
+					.filter(Boolean)
+					.map(task => (task.includes("/") ? task : `${org}${task}`)),
 			),
 		];
 	}
@@ -400,6 +417,7 @@ export class ManagerServer {
 					const provider = request.downshift.into.split("/", 1)[0];
 					if (provider && request.downshift.into.includes("/")) argv.push("--providers", provider);
 				}
+				if (request.downshift.boomerang) argv.push("--agent-arg", "--downshift-boomerang");
 			}
 			if (request.prebuiltBinaries) {
 				for (const name of ["omp-linux-arm64", "omp-linux-x64"]) {
@@ -463,19 +481,34 @@ export class ManagerServer {
 		return this.launch(resolveArmLaunch(this.#store, experimentId, req));
 	}
 
-	/** Cancel a manager-launched run (kills the runner; harbor children follow). */
+	/** Cancel a managed run. SIGTERM first so the runner forwards the signal to
+	 *  its harbor child (SIGKILL is untrappable — it used to orphan the harbor
+	 *  process, which kept running trials into the job dir); escalates to
+	 *  SIGKILL after a grace window. */
 	cancel(jobName: string): { jobName: string; cancelled: boolean } {
 		const child = this.#children.get(jobName);
 		if (child) {
 			child.cancelled = true;
-			child.proc.kill(9);
+			child.proc.kill("SIGTERM");
+			const escalate = setTimeout(() => {
+				try {
+					child.proc.kill(9);
+				} catch {}
+			}, 5000);
+			child.proc.exited.then(() => clearTimeout(escalate));
 			return { jobName, cancelled: true };
 		}
 		const run = this.#store.getRun(jobName);
 		if (run?.pid != null) {
+			const pid = run.pid;
 			try {
-				process.kill(run.pid, "SIGKILL");
+				process.kill(pid, "SIGTERM");
 			} catch {}
+			setTimeout(() => {
+				try {
+					process.kill(pid, "SIGKILL");
+				} catch {}
+			}, 5000);
 			this.#store.markExit(jobName, null, true);
 			return { jobName, cancelled: true };
 		}
