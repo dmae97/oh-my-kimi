@@ -59,7 +59,7 @@ describe("daemon broker", () => {
 			`process.stdin.setRawMode?.(true);
 process.stdin.setEncoding("utf8");
 process.stdin.resume();
-process.stdout.write("READY\\n");
+process.stdout.write("\\x1b[1;32mREADY\\x1b[0m\\n");
 process.stdin.on("data", chunk => process.stdout.write("INPUT:" + JSON.stringify(chunk) + "\\n"));
 setInterval(() => {}, 1000);
 `,
@@ -114,6 +114,7 @@ setInterval(() => {}, 1000);
 			expect(logs.op).toBe("logs");
 			if (logs.op !== "logs") throw new Error("unexpected logs result");
 			expect(logs.text).toContain("READY");
+			expect(logs.text).toContain("\x1b[1;32mREADY\x1b[0m");
 			expect(logs.text).toContain('INPUT:"run\\r"');
 
 			const stopped = await first.request({ op: "stop", name: "debugger", timeoutMs: 2_000 });
