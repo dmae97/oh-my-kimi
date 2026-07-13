@@ -6,6 +6,7 @@
 
 - Added display setting to toggle between collapsing or keeping compacted history inline, now applied to live session displays
 - Added a compact session-only model picker (Alt+P) for quick model switching without changing roles
+- Redesigned Agent Hub entries as two-line cards: identity (status glyph, name, agent type, parent when nested) on the left, active model + reasoning level and age right-aligned, with the task description on its own line; dropped the redundant `sub · of Main` noise
 
 ### Changed
 
