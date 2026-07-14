@@ -832,15 +832,18 @@ export function getRecentRequests(limit = 100): MessageStats[] {
 	return (stmt.all(limit) as any[]).map(rowToMessageStats);
 }
 
-export function getRecentErrors(limit = 100): MessageStats[] {
+export function getRecentErrors(limit = 100, cutoff?: number | null): MessageStats[] {
 	if (!db) return [];
+	const hasCutoff = cutoff !== undefined && cutoff !== null;
 	const stmt = db.prepare(`
-		SELECT * FROM messages 
+		SELECT * FROM messages
 		WHERE stop_reason = 'error'
-		ORDER BY timestamp DESC 
+		${hasCutoff ? "AND timestamp >= ?" : ""}
+		ORDER BY timestamp DESC
 		LIMIT ?
 	`);
-	return (stmt.all(limit) as any[]).map(rowToMessageStats);
+	const rows = hasCutoff ? stmt.all(cutoff, limit) : stmt.all(limit);
+	return rows.map(rowToMessageStats);
 }
 
 export function getMessageById(id: number): MessageStats | null {

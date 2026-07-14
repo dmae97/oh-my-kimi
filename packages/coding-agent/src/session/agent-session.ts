@@ -248,7 +248,11 @@ import { containsOrchestrate, ORCHESTRATE_NOTICE } from "../modes/orchestrate";
 import { theme } from "../modes/theme/theme";
 import { parseTurnBudget } from "../modes/turn-budget";
 import { containsUltrathink, ULTRATHINK_NOTICE } from "../modes/ultrathink";
-import { computeNonMessageBreakdown, computeNonMessageTokens } from "../modes/utils/context-usage";
+import {
+	computeNonMessageBreakdown,
+	computeNonMessageTokens,
+	estimateToolSchemaTokens,
+} from "../modes/utils/context-usage";
 import { containsWorkflow, renderWorkflowNotice } from "../modes/workflow";
 import { createPlanReadMatcher } from "../plan-mode/plan-protection";
 import type { PlanModeState } from "../plan-mode/state";
@@ -1035,6 +1039,13 @@ interface ActiveAdvisor {
 	thinkingLevel: ThinkingLevel;
 	/** Stable key for the resolved runtime inputs that require a rebuild to change. */
 	signature: string;
+}
+
+/** Runtime-only advisor compaction metadata. It never enters the model-facing summary text. */
+interface AdvisorCompactionSummaryMessage extends CompactionSummaryMessage {
+	firstKeptEntryId?: string;
+	/** First message index eligible to anchor provider usage after this compaction. */
+	advisorUsageAnchorStartIndex?: number;
 }
 
 /** Resolved advisor config ready to instantiate as an {@link ActiveAdvisor}. */
@@ -2849,10 +2860,23 @@ export class AgentSession {
 		if (contextWindow <= 0) return false;
 
 		const messages = agent.state.messages;
-		let contextTokens = incomingTokens;
+		const estimateOptions = { excludeEncryptedReasoning: true } as const;
+		let storedConversationTokens = 0;
 		for (const message of messages) {
-			contextTokens += estimateTokens(message);
+			storedConversationTokens += estimateTokens(message, estimateOptions);
 		}
+		// Provider usage (including cache reads and generated output) is the
+		// trustworthy anchor for accumulated context. Add only the trailing incoming
+		// delta to that arm. Floor it by a full local estimate — fixed advisor system
+		// prompt, tool schemas, stored messages, and incoming delta — so provider
+		// under-reporting or payload transforms cannot suppress maintenance.
+		const providerContextTokens = this.#estimateAdvisorContextTokens(messages) + incomingTokens;
+		const localContextTokens =
+			countTokens(agent.state.systemPrompt) +
+			estimateToolSchemaTokens(agent.state.tools) +
+			storedConversationTokens +
+			incomingTokens;
+		const contextTokens = compactionContextTokens(providerContextTokens, localContextTokens);
 
 		if (!shouldCompact(contextTokens, contextWindow, compactionSettings)) {
 			return false;
@@ -2876,6 +2900,7 @@ export class AgentSession {
 			const timestamp = String(message.timestamp || Date.now());
 
 			if (message.role === "compactionSummary") {
+				const advisorSummary = message as AdvisorCompactionSummaryMessage;
 				return {
 					type: "compaction",
 					id,
@@ -2883,9 +2908,7 @@ export class AgentSession {
 					timestamp,
 					summary: message.summary,
 					shortSummary: message.shortSummary,
-					firstKeptEntryId:
-						(message as CompactionSummaryMessage & { firstKeptEntryId?: string }).firstKeptEntryId ||
-						`msg-${i + 1}`,
+					firstKeptEntryId: advisorSummary.firstKeptEntryId || `msg-${i + 1}`,
 					tokensBefore: message.tokensBefore,
 				} satisfies CompactionEntry;
 			}
@@ -2979,11 +3002,15 @@ export class AgentSession {
 		const firstKeptEntryId = compactResult.firstKeptEntryId;
 		const tokensBefore = compactResult.tokensBefore;
 
-		// Rebuild messages with the compaction summary
+		// The retained messages still carry provider usage from before this
+		// compaction. Record their exact array boundary on the in-memory summary so
+		// only assistants appended afterward can become the next usage anchor.
+		const advisorUsageAnchorStartIndex = preparation.recentMessages.length + 1;
 		const summaryMessage = {
 			...createCompactionSummaryMessage(summary, tokensBefore, new Date().toISOString(), shortSummary),
 			firstKeptEntryId,
-		} as CompactionSummaryMessage & { firstKeptEntryId?: string };
+			advisorUsageAnchorStartIndex,
+		} satisfies AdvisorCompactionSummaryMessage;
 
 		agent.replaceMessages([summaryMessage, ...preparation.recentMessages]);
 		return false;
@@ -16426,37 +16453,51 @@ export class AgentSession {
 	}
 
 	/**
-	 * Estimate the advisor's current context tokens. When the advisor has a
-	 * recent non-aborted assistant message with usage, use that prompt's token
-	 * count and add a trailing estimate for messages after it. Otherwise estimate
-	 * every message.
+	 * Estimate the advisor's current context tokens. A successful provider usage
+	 * after the latest advisor compaction is ground truth for the prompt plus its
+	 * generated output; only messages after that anchor are estimated. Usage from
+	 * retained pre-compaction messages is stale and must not immediately retrigger
+	 * maintenance on the newly compacted context.
 	 */
 	#estimateAdvisorContextTokens(messages: AgentMessage[]): number {
-		let lastUsageIndex: number | null = null;
-		let lastUsage: AssistantMessage["usage"] | undefined;
+		let usageAnchorStartIndex = 0;
 		for (let i = messages.length - 1; i >= 0; i--) {
-			const msg = messages[i];
-			if (msg.role === "assistant") {
-				const assistantMsg = msg as AssistantMessage;
-				if (assistantMsg.stopReason !== "aborted" && assistantMsg.stopReason !== "error" && assistantMsg.usage) {
-					lastUsage = assistantMsg.usage;
-					lastUsageIndex = i;
-					break;
-				}
+			const message = messages[i];
+			if (message.role !== "compactionSummary") continue;
+			const advisorSummary = message as AdvisorCompactionSummaryMessage;
+			// Advisor summaries created before this runtime-only boundary existed have
+			// no trustworthy way to distinguish retained from newly appended messages.
+			// Conservatively ignore every current assistant until the next compaction.
+			usageAnchorStartIndex = advisorSummary.advisorUsageAnchorStartIndex ?? messages.length;
+			break;
+		}
+
+		let lastUsageIndex: number | undefined;
+		let lastUsage: AssistantMessage["usage"] | undefined;
+		for (let i = messages.length - 1; i >= usageAnchorStartIndex; i--) {
+			const message = messages[i];
+			if (message.role !== "assistant") continue;
+			const assistant = message as AssistantMessage;
+			if (assistant.stopReason !== "aborted" && assistant.stopReason !== "error" && assistant.usage) {
+				lastUsage = assistant.usage;
+				lastUsageIndex = i;
+				break;
 			}
 		}
-		if (!lastUsage || lastUsageIndex === null) {
+
+		const estimateOptions = { excludeEncryptedReasoning: true } as const;
+		if (!lastUsage || lastUsageIndex === undefined) {
 			let estimated = 0;
 			for (const message of messages) {
-				estimated += estimateTokens(message);
+				estimated += estimateTokens(message, estimateOptions);
 			}
 			return estimated;
 		}
 		let trailingTokens = 0;
 		for (let i = lastUsageIndex + 1; i < messages.length; i++) {
-			trailingTokens += estimateTokens(messages[i]);
+			trailingTokens += estimateTokens(messages[i], estimateOptions);
 		}
-		return calculatePromptTokens(lastUsage) + trailingTokens;
+		return calculateContextTokens(lastUsage) + trailingTokens;
 	}
 
 	/**

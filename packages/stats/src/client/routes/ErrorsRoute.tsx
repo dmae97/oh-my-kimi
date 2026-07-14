@@ -12,12 +12,12 @@ export interface ErrorsRouteProps {
 	onRequestClick: (id: number) => void;
 }
 
-export function ErrorsRoute({ active, refreshTrigger, onRequestClick }: ErrorsRouteProps) {
+export function ErrorsRoute({ active, range, refreshTrigger, onRequestClick }: ErrorsRouteProps) {
 	const {
 		data: recentErrors,
 		error,
 		loading,
-	} = useResource(["recent-errors-dense", refreshTrigger], signal => getRecentErrors(50, signal), {
+	} = useResource(["recent-errors-dense", range, refreshTrigger], signal => getRecentErrors(range, 50, signal), {
 		pollMs: 30000,
 		enabled: active,
 	});
