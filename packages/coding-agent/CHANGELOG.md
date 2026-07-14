@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed omp crashing at startup (`TypeError: undefined is not an object (evaluating 'this.#theme.symbols.boxRound')`) after installing a plugin whose custom editor subclasses `CustomEditor`/`Editor` and forwards the upstream-pi `super(tui, theme, keybindings)` constructor — the arg order that `setEditorComponent`'s factory contract advertises. `CustomEditor` now resolves the real `EditorTheme` by shape rather than position and captures a leading `TUI` for plugin overrides ([#4766](https://github.com/can1357/oh-my-pi/issues/4766)).
+
 ## [16.3.11] - 2026-07-06
 
 ### Changed
