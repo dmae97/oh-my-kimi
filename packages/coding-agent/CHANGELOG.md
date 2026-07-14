@@ -89,6 +89,9 @@
 
 - Fixed PageUp/PageDown in the model browser wrapping past the list edges instead of clamping
 - Fixed the hover highlight sticking to the last hovered model row when the pointer moved into the provider sidebar
+### Fixed
+
+- Fixed ModelRegistry/AuthStorage resolvers to continue replay-safe usage/account-quota turns across every distinct eligible credential and return exhaustion when no sibling switches, instead of re-resolving the same failed credential.
 
 ## [16.4.6] - 2026-07-12
 

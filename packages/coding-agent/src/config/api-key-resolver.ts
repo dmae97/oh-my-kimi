@@ -1,4 +1,5 @@
-import type { Api, ApiKeyResolver, AuthStorage, Model } from "@oh-my-pi/pi-ai";
+import { type Api, type ApiKeyResolver, type AuthStorage, isUsageLimitOutcome, type Model } from "@oh-my-pi/pi-ai";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 
 /** Model slice accepted by the model-form `resolver(model, sessionId)` overload. */
 export type ApiKeyResolverModel = Pick<Model<Api>, "provider" | "baseUrl" | "id">;
@@ -27,7 +28,7 @@ export interface ApiKeyResolverRegistry {
 	/**
 	 * Build an {@link ApiKeyResolver} implementing the central a/b/c auth-retry
 	 * policy: initial → resolve; step (b) → force-refresh same account; step (c)
-	 * → rotate to a sibling credential, then re-resolve.
+	 * → rotate to a sibling and re-resolve, unless quota exhaustion has no sibling.
 	 *
 	 * Two call forms: `resolver(provider, options?)` for provider-scoped keys,
 	 * and `resolver(model, sessionId?)` which derives `baseUrl`/`modelId` from
@@ -59,12 +60,20 @@ export function createApiKeyResolver(
 			// sibling exists we switch immediately; the precise no-sibling backoff
 			// is owned by `markUsageLimitReached` (default + server usage-report
 			// reset) and the outer whole-turn retry layer.
-			await registry.authStorage.rotateSessionCredential(provider, sessionId, {
+			const switched = await registry.authStorage.rotateSessionCredential(provider, sessionId, {
 				error,
 				modelId,
 				signal,
 				apiKey: previousKey,
 			});
+			if (!switched) {
+				const status = AIError.status(error);
+				const message = error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
+				// No sibling for an account-quota failure: stop so the outer
+				// whole-turn retry layer can honor the recorded backoff. A hard
+				// auth decline can instead mean a peer refreshed the bearer.
+				if (AIError.isUsageLimit(error) || isUsageLimitOutcome(status, message)) return undefined;
+			}
 			return registry.getApiKeyForProvider(provider, sessionId, { baseUrl, modelId });
 		}
 		return registry.getApiKeyForProvider(provider, sessionId, { baseUrl, modelId, forceRefresh: true, signal });

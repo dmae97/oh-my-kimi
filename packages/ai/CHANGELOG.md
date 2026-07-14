@@ -19,6 +19,9 @@
 ### Removed
 
 - Removed automatic /interactions chaining for follow-up turns in Google provider calls, along with the useInteractionsApi, storeInteraction, and previousInteractionId stream options.
+### Fixed
+
+- Fixed provider-agnostic replay-safe usage/account-quota failures to rotate through every distinct eligible credential instead of stopping after the fixed a/b/c ladder, while preserving transient-429 backoff, cycle/abort guards, exact failed-credential targeting despite stale session stickiness, and a finite safety ceiling.
 
 ## [16.4.6] - 2026-07-12
 
