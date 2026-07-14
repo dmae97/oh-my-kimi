@@ -604,7 +604,7 @@ async function callPerplexityAsk(
 		requestParams.send_back_text_in_streaming_api = true;
 	}
 
-	const response = await (params.fetch ?? fetch)(PERPLEXITY_OAUTH_ASK_URL, {
+	const requestInit = {
 		method: "POST",
 		headers,
 		body: JSON.stringify({
@@ -612,7 +612,19 @@ async function callPerplexityAsk(
 			params: requestParams,
 		}),
 		signal: withHardTimeout(params.signal),
-	});
+	};
+
+	// The consumer ask endpoint intermittently drops the socket before sending an
+	// HTTP response (#5315). Retry the transport exactly once; once we hold an
+	// HTTP response (handled below) the outcome — including non-2xx — is final and
+	// never retried, so a real 401/429 is never papered over by a second attempt.
+	let response: Response;
+	try {
+		response = await (params.fetch ?? fetch)(PERPLEXITY_OAUTH_ASK_URL, requestInit);
+	} catch (error) {
+		if (params.signal?.aborted) throw error;
+		response = await (params.fetch ?? fetch)(PERPLEXITY_OAUTH_ASK_URL, requestInit);
+	}
 
 	if (!response.ok) {
 		const errorText = await response.text();
