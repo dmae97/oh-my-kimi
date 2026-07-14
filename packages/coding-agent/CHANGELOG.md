@@ -2,9 +2,43 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a `generate_image.enabled` setting (Settings › Tools › Generate Image) so the image generation tool can be toggled like every other tool ([#5305](https://github.com/can1357/oh-my-pi/issues/5305))
+
 ### Changed
 
 - Provider rate-limit response headers are now ingested for every provider with a header parser (previously Anthropic-only), wiring OpenAI Codex responses into proactive account blocking so multi-account sessions rotate off an exhausted account without hitting a wire 429.
+
+### Fixed
+
+- Fixed `omp config list --json` truncating output at 64 KiB when stdout is piped ([#5309](https://github.com/can1357/oh-my-pi/issues/5309))
+- Fixed vim-style `h`/`j`/`k`/`l` navigation under the Kitty keyboard protocol ([#5314](https://github.com/can1357/oh-my-pi/issues/5314))
+- Fixed `/guided-goal` throwing `Model not found` on websocket-only Codex models (e.g. `gpt-5.6-luna`): the interview now routes through the session's provider transport (`providerSessionState` + `preferWebsockets`) instead of forcing an SSE fallback the Codex `/responses` endpoint rejects for those models — same class as the `/btw` regression. The whole interview reuses a single isolated Codex side session, so a multi-question run shares one socket instead of leaking one per turn. ([#5304](https://github.com/can1357/oh-my-pi/issues/5304))
+- Fixed `tool_result` extension handlers being unable to rewrite the model-visible content of a thrown tool failure while keeping it an error — `ExtensionToolWrapper` rethrew the original exception and discarded the replacement `content`/`details`; it now surfaces the modified result with `isError: true` ([#5302](https://github.com/can1357/oh-my-pi/issues/5302))
+- Fixed Perplexity OAuth web search intermittently failing with `Perplexity authorization failed (401). Check API key or base URL.` when the consumer ask endpoint (`/rest/sse/perplexity_ask`) dropped its socket before responding. `getApiConfigs` was emitting the OAuth session JWT (which `getApiKey` returns while OAuth is the active origin) as a direct `api.perplexity.ai` api-key config, so a transient transport failure on the ask endpoint fell through and sent the session token as a Bearer to the direct API, whose 401 masked the real error. The direct api-key config is now suppressed when the active Perplexity credential origin is OAuth, and the OAuth ask request gets one transport-only retry (HTTP responses, including 401/429, are never retried). ([#5315](https://github.com/can1357/oh-my-pi/issues/5315))
+- Fixed `generate_image` staying active under `--no-tools` and any explicit tool whitelist that omitted it; the tool now honors the whitelist and the new `generate_image.enabled` setting instead of being force-activated as a custom tool ([#5305](https://github.com/can1357/oh-my-pi/issues/5305))
+- Fixed markerless prose thinking preambles becoming session titles when title models omit the required `<title>` marker. ([#5252](https://github.com/can1357/oh-my-pi/issues/5252))
+- Fixed the agent rebuilding a todo list the user just cleared with `/todo rm`: the manual-edit system reminder now states removal intent ("intentionally cleared/removed … Do NOT recreate/re-add") so the model stops re-populating the list without an explicit request. ([#5258](https://github.com/can1357/oh-my-pi/issues/5258))
+- Fixed internal-URL autocomplete (`agent://`, `skill://`, `omp://`, etc.) not triggering inside slash command arguments: `allowArgs: true` commands returned the base provider's `null` result directly, short-circuiting the internal-URL fallthrough. Completion now falls through to internal-URL suggestions when a command has no argument completion (or its `getArgumentCompletions` yields no match), while `#` prompt-action tokens stay literal inside slash arguments. ([#5263](https://github.com/can1357/oh-my-pi/issues/5263))
+- Fixed the browser tool hanging indefinitely at the "Closing tab" phase when the headless Chromium process is wedged (a Windows failure mode): `disposeBrowserHandle` awaited Puppeteer's `browser.close()` with no timeout, so a process that never exits froze tab cleanup forever. The dispose now caps the close at 5s and force-kills the Chromium process tree on timeout so the tool call always releases. ([#5260](https://github.com/can1357/oh-my-pi/issues/5260))
+- Fixed `history://` URLs (direct lookup, the bare `history://` index, and prompt-mode autocomplete) only surfacing agents still present in the in-memory `AgentRegistry`, so transcripts of unregistered one-shot helpers (`keepAlive: false`), released agents (Agent Hub / vibe kill), or any subagent after a session resume threw `Unknown agent` despite their `.jsonl` session file persisting on disk. `HistoryProtocolHandler` now falls back to scanning artifacts dirs for `<id>.jsonl` (excluding `__advisor*` and `.bak`) and loads them read-only, mirroring how `agent://` reads `.md` outputs off disk. Also documented `history://` in the system prompt's Internal URLs section. ([#5261](https://github.com/can1357/oh-my-pi/issues/5261))
+- Fixed eval cells treating `timeout: 0` as a one-second deadline and reporting session-deadline cancellation as a user abort ([#5250](https://github.com/can1357/oh-my-pi/issues/5250)).
+- Fixed MCP OAuth dynamic client registration for pathful authorization-server issuers by preserving the discovered `registration_endpoint` instead of re-deriving metadata from the authorization endpoint. ([#5267](https://github.com/can1357/oh-my-pi/issues/5267))
+
+### Removed
+
+- Fixed inconsistent history rendering when toggling the display setting for compacted items
+- Fixed discovered plugin `.mcp.json` stdio servers launching relative `command`/`cwd` values against the session cwd instead of the plugin's config directory, which broke bundled ChatGPT/Codex plugins such as Computer Use (`ENOENT` spawning `./…` from an unrelated cwd). Relative `cwd` and path-like `command` (`./`, `../`) discovered by the `claude-plugins`/`omp-plugins` providers now resolve against the `.mcp.json` directory; bare executables like `npx` are left untouched. ([#5330](https://github.com/can1357/oh-my-pi/issues/5330))
+- Fixed configured `retry.fallbackChains` never engaging on non-retryable provider errors (e.g. "Cloud Code Assist API returned an empty response"): a hard error on a model covered by a fallback chain now switches to the next candidate instead of failing the turn, while still never backoff-retrying the failing model itself
+- Fixed transcript rebuilds (compaction, `/compact`, and toggling history display) repainting content below stale scrollback when collapsing history; rebuilds now correctly clear the scrollback buffer when history is collapsed
+- Improved auto-compaction to automatically drop images and elide content when context is tight, and added persistent warning badges to the compaction divider when manual intervention is required
+- Fixed backgrounded Bash blocks continuing to repaint with live and final job output; they now freeze with a compact job notice while completion is delivered separately
+- Fixed `--reasoning-slide-plan` silently ending the run with no code written when the model answered the plan nudge with a text-only reply (no tool call): the agent loop treats a tool-call-free turn as a natural stop and never prompts again, which the nudge's own "write the plan in your next reply" instruction makes common. The nudge now explicitly tells the model this is a checkpoint, not a final answer, and the session forces one more turn whenever a post-nudge reply lands with zero tool calls
+- Fixed launch tool rendering stacking a stale pending header over a bare `✓ Launch` line and raw text: the tool now uses a merged registry renderer with one per-op status header (op, target, `state · pid · uptime` meta), stripped log cursor suffixes, capped collapsed log/list previews, and a launch tool glyph
+- Fixed confusing launch start/wait results when readiness timed out with the log pattern already matched (readiness needs log AND port): the result printed a contradictory `Ready: <match>` next to `Readiness timed out` without naming the failing condition. Daemon snapshots now carry the unmet conditions (`readyPending`), and start/wait results state exactly what never happened (e.g. `port 3100 on 127.0.0.1 never accepted connections`); the TUI shows a `waiting on port` badge on starting daemons
+- Fixed the in-process `stat` builtin mangling BSD-style invocations like `stat -f "%Sm %N" file` (macOS muscle memory): GNU `-f` means `--file-system`, so the format string was treated as a file operand — printing filesystem info for the real operands and erroring with `cannot read file system information for '%Sm %N'`. A `-f` whose format value contains `%` is now detected as BSD syntax and translated to the GNU equivalent (`%Sm`→`%y`, `%N`→`%n`, `%z`→`%s`, epoch/`S`-form times, owner/group/permission and `H`/`L` sub-field directives, `-L`/`-n`/`-q`/`-F` flag clusters, with `%n`/`%t` as literal newline/tab); directives with no GNU counterpart fail with a clear `unsupported BSD format directive` error
+- Fixed the remaining GNU-flavored shell builtins that broke under macOS/BSD muscle memory, using the same unambiguous-detection approach as the `stat` fix (only invocations that are invalid or nonsensical under GNU semantics are reinterpreted; unsupported BSD forms fail loudly instead of producing wrong output): `date -r <epoch>` formats the epoch when no such file exists (GNU `-r FILE` mtime preserved), signed `date -v±N<unit>` adjustments translate to `-d` relative dates and `-j` is accepted (`-j -f` strptime parse mode and field-set `-v` error clearly); `sed -i '' 's/…/…/' file` drops the BSD empty backup-suffix token instead of treating it as the script; `mktemp -t prefix` without X's creates `$TMPDIR/prefix.XXXXXXXXXX` (the GNU `too few X's` error path); `tail -r` reverses input by delegating to `tac` (with `-n`/`-c`/`-f` combinations erroring clearly); `find -E` maps to `-regextype posix-extended` ahead of the expression; `base64 -D` decodes as an alias of `-d`; and `ln -sfh` works via a `-h` alias of `--no-dereference` (clap's `-h` help short is dropped to match real GNU/BSD ln; `--help` unchanged)
 
 ## [16.5.1] - 2026-07-14
 
@@ -70,46 +104,10 @@
 - Fixed rendering, status display, and PTY control sequence formatting issues in the `launch` tool.
 - Fixed in-process shell builtins (including `stat`, `date`, `sed`, `mktemp`, `tail`, `find`, `base64`, and `ln`) to correctly detect and translate macOS/BSD-style arguments and flags, preventing failures caused by GNU-only assumptions.
 
-### Fixed
-
-- Fixed `omp config list --json` truncating output at 64 KiB when stdout is piped ([#5309](https://github.com/can1357/oh-my-pi/issues/5309))
-
-### Fixed
-
-- Fixed vim-style `h`/`j`/`k`/`l` navigation under the Kitty keyboard protocol ([#5314](https://github.com/can1357/oh-my-pi/issues/5314))
-
 ### Removed
 
 - Removed the `--prewalk-boomerang` feature and its associated configuration setting.
 - Removed the unreliable Bing and Yahoo HTML-scraping web search providers.
-- Fixed inconsistent history rendering when toggling the display setting for compacted items
-- Fixed discovered plugin `.mcp.json` stdio servers launching relative `command`/`cwd` values against the session cwd instead of the plugin's config directory, which broke bundled ChatGPT/Codex plugins such as Computer Use (`ENOENT` spawning `./…` from an unrelated cwd). Relative `cwd` and path-like `command` (`./`, `../`) discovered by the `claude-plugins`/`omp-plugins` providers now resolve against the `.mcp.json` directory; bare executables like `npx` are left untouched. ([#5330](https://github.com/can1357/oh-my-pi/issues/5330))
-- Fixed configured `retry.fallbackChains` never engaging on non-retryable provider errors (e.g. "Cloud Code Assist API returned an empty response"): a hard error on a model covered by a fallback chain now switches to the next candidate instead of failing the turn, while still never backoff-retrying the failing model itself
-- Fixed transcript rebuilds (compaction, `/compact`, and toggling history display) repainting content below stale scrollback when collapsing history; rebuilds now correctly clear the scrollback buffer when history is collapsed
-- Improved auto-compaction to automatically drop images and elide content when context is tight, and added persistent warning badges to the compaction divider when manual intervention is required
-- Fixed backgrounded Bash blocks continuing to repaint with live and final job output; they now freeze with a compact job notice while completion is delivered separately
-- Fixed `--reasoning-slide-plan` silently ending the run with no code written when the model answered the plan nudge with a text-only reply (no tool call): the agent loop treats a tool-call-free turn as a natural stop and never prompts again, which the nudge's own "write the plan in your next reply" instruction makes common. The nudge now explicitly tells the model this is a checkpoint, not a final answer, and the session forces one more turn whenever a post-nudge reply lands with zero tool calls
-- Fixed launch tool rendering stacking a stale pending header over a bare `✓ Launch` line and raw text: the tool now uses a merged registry renderer with one per-op status header (op, target, `state · pid · uptime` meta), stripped log cursor suffixes, capped collapsed log/list previews, and a launch tool glyph
-- Fixed confusing launch start/wait results when readiness timed out with the log pattern already matched (readiness needs log AND port): the result printed a contradictory `Ready: <match>` next to `Readiness timed out` without naming the failing condition. Daemon snapshots now carry the unmet conditions (`readyPending`), and start/wait results state exactly what never happened (e.g. `port 3100 on 127.0.0.1 never accepted connections`); the TUI shows a `waiting on port` badge on starting daemons
-- Fixed the in-process `stat` builtin mangling BSD-style invocations like `stat -f "%Sm %N" file` (macOS muscle memory): GNU `-f` means `--file-system`, so the format string was treated as a file operand — printing filesystem info for the real operands and erroring with `cannot read file system information for '%Sm %N'`. A `-f` whose format value contains `%` is now detected as BSD syntax and translated to the GNU equivalent (`%Sm`→`%y`, `%N`→`%n`, `%z`→`%s`, epoch/`S`-form times, owner/group/permission and `H`/`L` sub-field directives, `-L`/`-n`/`-q`/`-F` flag clusters, with `%n`/`%t` as literal newline/tab); directives with no GNU counterpart fail with a clear `unsupported BSD format directive` error
-- Fixed the remaining GNU-flavored shell builtins that broke under macOS/BSD muscle memory, using the same unambiguous-detection approach as the `stat` fix (only invocations that are invalid or nonsensical under GNU semantics are reinterpreted; unsupported BSD forms fail loudly instead of producing wrong output): `date -r <epoch>` formats the epoch when no such file exists (GNU `-r FILE` mtime preserved), signed `date -v±N<unit>` adjustments translate to `-d` relative dates and `-j` is accepted (`-j -f` strptime parse mode and field-set `-v` error clearly); `sed -i '' 's/…/…/' file` drops the BSD empty backup-suffix token instead of treating it as the script; `mktemp -t prefix` without X's creates `$TMPDIR/prefix.XXXXXXXXXX` (the GNU `too few X's` error path); `tail -r` reverses input by delegating to `tac` (with `-n`/`-c`/`-f` combinations erroring clearly); `find -E` maps to `-regextype posix-extended` ahead of the expression; `base64 -D` decodes as an alias of `-d`; and `ln -sfh` works via a `-h` alias of `--no-dereference` (clap's `-h` help short is dropped to match real GNU/BSD ln; `--help` unchanged)
-### Fixed
-
-- Fixed `/guided-goal` throwing `Model not found` on websocket-only Codex models (e.g. `gpt-5.6-luna`): the interview now routes through the session's provider transport (`providerSessionState` + `preferWebsockets`) instead of forcing an SSE fallback the Codex `/responses` endpoint rejects for those models — same class as the `/btw` regression. The whole interview reuses a single isolated Codex side session, so a multi-question run shares one socket instead of leaking one per turn. ([#5304](https://github.com/can1357/oh-my-pi/issues/5304))
-### Fixed
-
-- Fixed `tool_result` extension handlers being unable to rewrite the model-visible content of a thrown tool failure while keeping it an error — `ExtensionToolWrapper` rethrew the original exception and discarded the replacement `content`/`details`; it now surfaces the modified result with `isError: true` ([#5302](https://github.com/can1357/oh-my-pi/issues/5302))
-
-### Fixed
-
-- Fixed Perplexity OAuth web search intermittently failing with `Perplexity authorization failed (401). Check API key or base URL.` when the consumer ask endpoint (`/rest/sse/perplexity_ask`) dropped its socket before responding. `getApiConfigs` was emitting the OAuth session JWT (which `getApiKey` returns while OAuth is the active origin) as a direct `api.perplexity.ai` api-key config, so a transient transport failure on the ask endpoint fell through and sent the session token as a Bearer to the direct API, whose 401 masked the real error. The direct api-key config is now suppressed when the active Perplexity credential origin is OAuth, and the OAuth ask request gets one transport-only retry (HTTP responses, including 401/429, are never retried). ([#5315](https://github.com/can1357/oh-my-pi/issues/5315))
-### Added
-
-- Added a `generate_image.enabled` setting (Settings › Tools › Generate Image) so the image generation tool can be toggled like every other tool ([#5305](https://github.com/can1357/oh-my-pi/issues/5305))
-
-### Fixed
-
-- Fixed `generate_image` staying active under `--no-tools` and any explicit tool whitelist that omitted it; the tool now honors the whitelist and the new `generate_image.enabled` setting instead of being force-activated as a custom tool ([#5305](https://github.com/can1357/oh-my-pi/issues/5305))
 
 ## [16.4.8] - 2026-07-12
 
@@ -155,24 +153,6 @@
 
 - Fixed PageUp/PageDown in the model browser wrapping past the list edges instead of clamping
 - Fixed the hover highlight sticking to the last hovered model row when the pointer moved into the provider sidebar
-### Fixed
-
-- Fixed markerless prose thinking preambles becoming session titles when title models omit the required `<title>` marker. ([#5252](https://github.com/can1357/oh-my-pi/issues/5252))
-### Fixed
-
-- Fixed the agent rebuilding a todo list the user just cleared with `/todo rm`: the manual-edit system reminder now states removal intent ("intentionally cleared/removed … Do NOT recreate/re-add") so the model stops re-populating the list without an explicit request. ([#5258](https://github.com/can1357/oh-my-pi/issues/5258))
-### Fixed
-
-- Fixed internal-URL autocomplete (`agent://`, `skill://`, `omp://`, etc.) not triggering inside slash command arguments: `allowArgs: true` commands returned the base provider's `null` result directly, short-circuiting the internal-URL fallthrough. Completion now falls through to internal-URL suggestions when a command has no argument completion (or its `getArgumentCompletions` yields no match), while `#` prompt-action tokens stay literal inside slash arguments. ([#5263](https://github.com/can1357/oh-my-pi/issues/5263))
-### Fixed
-
-- Fixed the browser tool hanging indefinitely at the "Closing tab" phase when the headless Chromium process is wedged (a Windows failure mode): `disposeBrowserHandle` awaited Puppeteer's `browser.close()` with no timeout, so a process that never exits froze tab cleanup forever. The dispose now caps the close at 5s and force-kills the Chromium process tree on timeout so the tool call always releases. ([#5260](https://github.com/can1357/oh-my-pi/issues/5260))
-### Fixed
-
-- Fixed `history://` URLs (direct lookup, the bare `history://` index, and prompt-mode autocomplete) only surfacing agents still present in the in-memory `AgentRegistry`, so transcripts of unregistered one-shot helpers (`keepAlive: false`), released agents (Agent Hub / vibe kill), or any subagent after a session resume threw `Unknown agent` despite their `.jsonl` session file persisting on disk. `HistoryProtocolHandler` now falls back to scanning artifacts dirs for `<id>.jsonl` (excluding `__advisor*` and `.bak`) and loads them read-only, mirroring how `agent://` reads `.md` outputs off disk. Also documented `history://` in the system prompt's Internal URLs section. ([#5261](https://github.com/can1357/oh-my-pi/issues/5261))
-### Fixed
-
-- Fixed eval cells treating `timeout: 0` as a one-second deadline and reporting session-deadline cancellation as a user abort ([#5250](https://github.com/can1357/oh-my-pi/issues/5250)).
 
 ## [16.4.6] - 2026-07-12
 
@@ -193,7 +173,6 @@
 
 ### Fixed
 
-- Fixed MCP OAuth dynamic client registration for pathful authorization-server issuers by preserving the discovered `registration_endpoint` instead of re-deriving metadata from the authorization endpoint. ([#5267](https://github.com/can1357/oh-my-pi/issues/5267))
 - Fixed failure to trigger model fallback when the retry budget is exhausted by credential rotation
 - Fixed uncontrollable mouse-wheel scrolling in the /models hub: the wheel moved the selection (one step per wheel event, so a single trackpad flick skipped many rows) and wrapped from the bottom back to the top. Wheel scrolling now pans the list viewport only, clamps at the ends, and leaves the selection where it is; keyboard navigation still scrolls the selection into view. Likewise, the wheel over the provider sidebar no longer switches the active scope (or triggers provider refreshes) — it just scrolls the sidebar.
 - Fixed TPS being inflated several-fold when a provider hides reasoning tokens until late in the stream (e.g. `google/gemini-3.5` vs `google-vertex/gemini-3.5` reporting 648 vs 186 TPS for identical durations): `omp bench`, the per-turn usage row, and the /models perf aggregates now measure tokens/sec over the total request duration instead of the post-TTFT decode window, matching `omp stats`. Stored perf aggregates are purged and re-backfilled from stats history with the corrected math on first launch.
