@@ -368,11 +368,14 @@ describe("lsp regressions", () => {
 
 	it("sends initial workspace configuration after initialized before semantic requests (#5276)", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-initial-config-");
+		let receivedInitialConfiguration = false;
 		try {
 			const server = installFakeLsp((message, srv) => {
 				if (message.method === "initialize") {
 					srv.send({ jsonrpc: "2.0", id: message.id, result: { capabilities: { hoverProvider: true } } });
-				} else if (message.method === "textDocument/hover") {
+				} else if (message.method === "workspace/didChangeConfiguration") {
+					receivedInitialConfiguration = true;
+				} else if (message.method === "textDocument/hover" && receivedInitialConfiguration) {
 					srv.send({ jsonrpc: "2.0", id: message.id, result: { contents: "configured hover" } });
 				} else if (message.method === "shutdown") {
 					srv.send({ jsonrpc: "2.0", id: message.id, result: null });
