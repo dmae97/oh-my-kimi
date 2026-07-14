@@ -239,7 +239,10 @@ describe("AgentSession retry delay cap", () => {
 					throw new Error("Expected streamSimple to pass a resolved string API key");
 				}
 				requestedKeys.push(apiKey);
-				return apiKey === "anthropic-key-D"
+				// Succeed only once the fourth distinct sibling is attempted; the
+				// session-hash start index is arbitrary, so the repro must not pin
+				// which credential comes first — only that all four are rolled through.
+				return new Set(requestedKeys).size >= 4
 					? { content: ["recovered on fourth credential"], stopReason: "stop" }
 					: { throw: rateLimitError };
 			},
@@ -291,7 +294,7 @@ describe("AgentSession retry delay cap", () => {
 		await session.waitForIdle();
 
 		expect(requestedModels).toEqual([`${model.provider}/${model.id}`]);
-		expect(requestedKeys).toEqual(["anthropic-key-A", "anthropic-key-B", "anthropic-key-C", "anthropic-key-D"]);
+		expect(requestedKeys).toHaveLength(4);
 		expect(new Set(requestedKeys).size).toBe(4);
 		expect(mock.calls).toHaveLength(4);
 		expect(retryStartEvents).toHaveLength(0);
