@@ -390,9 +390,11 @@ export interface Terminal {
 	get appearance(): TerminalAppearance | undefined;
 	/**
 	 * Register a callback fired once per DEC private mode when its DECRQM support
-	 * status resolves. Optional: only real terminals implement capability probing.
+	 * status resolves. `confirmed` is false when the terminal answered the DA1
+	 * sentinel without answering DECRQM, which proves only that querying support
+	 * is unavailable — not that the private mode itself is unsupported.
 	 */
-	onPrivateModeReport?(callback: (mode: number, supported: boolean) => void): void;
+	onPrivateModeReport?(callback: (mode: number, supported: boolean, confirmed?: boolean) => void): void;
 }
 
 /**
@@ -480,7 +482,7 @@ export class ProcessTerminal implements Terminal {
 	#da1SentinelOwners: Da1SentinelOwner[] = [];
 	/** Resolved DECRQM support per private mode (mode → supported). */
 	#privateModeSupport = new Map<number, boolean>();
-	#privateModeCallbacks: Array<(mode: number, supported: boolean) => void> = [];
+	#privateModeCallbacks: Array<(mode: number, supported: boolean, confirmed: boolean) => void> = [];
 	/** Whether DEC 2048 in-band resize notifications are currently enabled. */
 	#inBandResizeActive = false;
 	/** Reassembly buffer for a DEC 2048 in-band resize report split across stdin reads. */
@@ -531,7 +533,7 @@ export class ProcessTerminal implements Terminal {
 		}
 	}
 
-	onPrivateModeReport(callback: (mode: number, supported: boolean) => void): void {
+	onPrivateModeReport(callback: (mode: number, supported: boolean, confirmed?: boolean) => void): void {
 		this.#privateModeCallbacks.push(callback);
 	}
 
@@ -866,8 +868,10 @@ export class ProcessTerminal implements Terminal {
 						break;
 					}
 					case "privateMode": {
-						// DA1 beat the DECRPM reply for this mode → treat as unsupported.
-						this.#resolvePrivateMode(owner.mode, false);
+						// DA1 beat the DECRPM reply. The terminal cannot report this
+						// capability, but may still implement it; keep that distinction
+						// so static terminal detection is not incorrectly downgraded.
+						this.#resolvePrivateMode(owner.mode, false, false);
 						break;
 					}
 					case "keyboard": {
@@ -1129,7 +1133,7 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	#handlePrivateModeReport(mode: number, status: string): void {
-		this.#resolvePrivateMode(mode, isPrivateModeSupported(status));
+		this.#resolvePrivateMode(mode, isPrivateModeSupported(status), true);
 		if (isXtermScrollToBottomMode(mode) && isPrivateModeSet(status)) {
 			this.#disableXtermScrollToBottomMode(mode);
 		}
@@ -1137,15 +1141,16 @@ export class ProcessTerminal implements Terminal {
 
 	/**
 	 * Record DECRQM support for a private mode (idempotent — first result wins)
-	 * and notify subscribers. Enables DEC 2048 in-band resize when 2048 resolves
-	 * supported.
+	 * and notify subscribers. `confirmed` distinguishes an explicit DECRPM
+	 * unsupported response from an absent response followed by the DA1 sentinel.
+	 * Enables DEC 2048 in-band resize only after positive confirmation.
 	 */
-	#resolvePrivateMode(mode: number, supported: boolean): void {
+	#resolvePrivateMode(mode: number, supported: boolean, confirmed: boolean): void {
 		if (this.#privateModeSupport.has(mode)) return;
 		this.#privateModeSupport.set(mode, supported);
 		for (const cb of this.#privateModeCallbacks) {
 			try {
-				cb(mode, supported);
+				cb(mode, supported, confirmed);
 			} catch {
 				// Ignore subscriber errors — capability reporting must not crash input.
 			}
