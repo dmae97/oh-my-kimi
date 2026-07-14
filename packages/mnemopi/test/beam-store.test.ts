@@ -17,6 +17,7 @@ import {
 	updateWorking,
 } from "@oh-my-pi/pi-mnemopi/core/beam/store";
 import type { BeamEvent, BeamMemoryState } from "@oh-my-pi/pi-mnemopi/core/beam/types";
+import { EpisodicGraph } from "@oh-my-pi/pi-mnemopi/core/episodic-graph";
 import { openDatabase } from "@oh-my-pi/pi-mnemopi/db";
 
 const states: BeamMemoryState[] = [];
@@ -215,5 +216,167 @@ describe("beam store free functions", () => {
 		expect(get(dest, id)?.content).toBe("Exported working memory");
 		expect(dest.db.prepare("SELECT COUNT(*) AS count FROM scratchpad").get()).toEqual({ count: 1 });
 		expect(scratchpadRead(dest).map(row => row.content)).toEqual([]);
+	});
+
+	it("keeps restored durable rows and cascades linked artifacts on trim, force-import, and forget (issue #4819)", () => {
+		const beam = makeState("trim-4819");
+		// EpisodicGraph owns the `gists` / `graph_edges` schema; init it so the
+		// cascade can be exercised end to end on the shared connection.
+		new EpisodicGraph({ db: beam.db, dbPath: ":memory:" });
+		const oldTimestamp = new Date(Date.now() - 1000 * 3_600_000).toISOString();
+		const countOf = (sql: string, ...params: (string | number | null)[]): number => {
+			const row = beam.db.prepare(sql).get(...params) as { count: number };
+			return row.count;
+		};
+		const seedArtifacts = (memoryId: string): void => {
+			beam.db
+				.prepare("INSERT INTO annotations (memory_id, kind, value) VALUES (?, 'mentions', 'Alice')")
+				.run(memoryId);
+			beam.db
+				.prepare("INSERT INTO memory_embeddings (memory_id, embedding_json, model) VALUES (?, '[0.1]', 't')")
+				.run(memoryId);
+			beam.db
+				.prepare(
+					"INSERT INTO facts (fact_id, session_id, subject, predicate, object, source_msg_id) VALUES (?, 'trim-4819', 'Alice', 'is', 'User', ?)",
+				)
+				.run(`fact-${memoryId}`, memoryId);
+			beam.db
+				.prepare(
+					"INSERT INTO memoria_facts (session_id, fact_type, key, value, source_memory_id) VALUES ('trim-4819', 'name', 'name', 'Alice', ?)",
+				)
+				.run(memoryId);
+			beam.db
+				.prepare("INSERT INTO gists (id, text, memory_id) VALUES (?, 'g', ?)")
+				.run(`gist_${memoryId}`, memoryId);
+			beam.db
+				.prepare("INSERT INTO graph_edges (source, target, edge_type) VALUES (?, ?, 'ctx')")
+				.run(memoryId, `gist_${memoryId}`);
+			beam.db
+				.prepare("INSERT INTO graph_edges (source, target, edge_type) VALUES (?, ?, 'rel')")
+				.run(`gist_${memoryId}`, `fact-${memoryId}`);
+		};
+		const artifactCount = (memoryId: string): number =>
+			countOf("SELECT COUNT(*) AS count FROM annotations WHERE memory_id = ?", memoryId) +
+			countOf("SELECT COUNT(*) AS count FROM memory_embeddings WHERE memory_id = ?", memoryId) +
+			countOf("SELECT COUNT(*) AS count FROM facts WHERE source_msg_id = ?", memoryId) +
+			countOf("SELECT COUNT(*) AS count FROM memoria_facts WHERE source_memory_id = ?", memoryId) +
+			countOf("SELECT COUNT(*) AS count FROM gists WHERE memory_id = ?", memoryId) +
+			countOf(
+				"SELECT COUNT(*) AS count FROM graph_edges WHERE source = ? OR target = ? OR source = ? OR target = ?",
+				memoryId,
+				memoryId,
+				`gist_${memoryId}`,
+				`gist_${memoryId}`,
+			);
+
+		// (1) Restored durable row: old timestamp, consolidated_at NULL, IMPORTED tier.
+		const durableId = "restored-durable";
+		beam.db
+			.prepare(
+				"INSERT INTO working_memory (id, content, source, timestamp, session_id, importance, trust_tier, consolidated_at) VALUES (?, 'canonical fact', 'backup', ?, 'trim-4819', 0.9, 'IMPORTED', NULL)",
+			)
+			.run(durableId, oldTimestamp);
+		seedArtifacts(durableId);
+
+		// (2) Transient scratch row: old timestamp, consolidated_at NULL, STATED tier.
+		const transientId = "transient-scratch";
+		beam.db
+			.prepare(
+				"INSERT INTO working_memory (id, content, source, timestamp, session_id, importance, trust_tier, consolidated_at) VALUES (?, 'idle chatter', 'conversation', ?, 'trim-4819', 0.2, 'STATED', NULL)",
+			)
+			.run(transientId, oldTimestamp);
+		seedArtifacts(transientId);
+
+		// A normal write triggers the automatic trim.
+		remember(beam, "a fresh conversational note", { source: "conversation" });
+
+		// Durable row survives with all artifacts intact.
+		expect(get(beam, durableId)?.content).toBe("canonical fact");
+		expect(artifactCount(durableId)).toBe(7);
+
+		// Transient old row is trimmed and every linked artifact cascades.
+		expect(get(beam, durableId) === null).toBe(false);
+		expect(countOf("SELECT COUNT(*) AS count FROM working_memory WHERE id = ?", transientId)).toBe(0);
+		expect(artifactCount(transientId)).toBe(0);
+
+		// (3) forgetWorking cascades every linked artifact, not just annotations.
+		expect(forgetWorking(beam, durableId)).toBe(true);
+		expect(artifactCount(durableId)).toBe(0);
+	});
+
+	it("marks imported working memory as consolidated so restored banks survive trim (issue #4819)", () => {
+		const dest = makeState("import-4819");
+		const oldTimestamp = new Date(Date.now() - 1000 * 3_600_000).toISOString();
+		importFromDict(
+			dest,
+			{
+				working_memory: [
+					{
+						id: "restored-import",
+						content: "durable restored fact",
+						timestamp: oldTimestamp,
+						session_id: "import-4819",
+						trust_tier: "STATED",
+						consolidated_at: null,
+					},
+				],
+			},
+			true,
+		);
+		const importedRow = dest.db
+			.prepare("SELECT consolidated_at FROM working_memory WHERE id = 'restored-import'")
+			.get() as { consolidated_at: string | null };
+		expect(importedRow.consolidated_at).not.toBeNull();
+
+		remember(dest, "a fresh note", { source: "conversation" });
+		expect(get(dest, "restored-import")?.content).toBe("durable restored fact");
+	});
+
+	it("force-import overwrite cleans stale linked artifacts of the replaced row (issue #4819)", () => {
+		const dest = makeState("import-overwrite-4819");
+		const id = "overwrite-me";
+		dest.db
+			.prepare(
+				"INSERT INTO working_memory (id, content, source, timestamp, session_id, importance, trust_tier) VALUES (?, 'stale', 'backup', '2020-01-01T00:00:00.000Z', 'import-overwrite-4819', 0.5, 'IMPORTED')",
+			)
+			.run(id);
+		dest.db.prepare("INSERT INTO annotations (memory_id, kind, value) VALUES (?, 'mentions', 'Stale')").run(id);
+		dest.db
+			.prepare("INSERT INTO memory_embeddings (memory_id, embedding_json, model) VALUES (?, '[0.9]', 'old')")
+			.run(id);
+		dest.db
+			.prepare(
+				"INSERT INTO facts (fact_id, session_id, subject, predicate, object, source_msg_id) VALUES ('stale-fact', 'import-overwrite-4819', 'a', 'is', 'b', ?)",
+			)
+			.run(id);
+
+		importFromDict(
+			dest,
+			{
+				working_memory: [
+					{ id, content: "fresh replacement", session_id: "import-overwrite-4819", trust_tier: "IMPORTED" },
+				],
+			},
+			true,
+		);
+
+		expect(get(dest, id)?.content).toBe("fresh replacement");
+		const staleArtifacts =
+			(
+				dest.db.prepare("SELECT COUNT(*) AS count FROM annotations WHERE memory_id = ?").get(id) as {
+					count: number;
+				}
+			).count +
+			(
+				dest.db.prepare("SELECT COUNT(*) AS count FROM memory_embeddings WHERE memory_id = ?").get(id) as {
+					count: number;
+				}
+			).count +
+			(
+				dest.db.prepare("SELECT COUNT(*) AS count FROM facts WHERE source_msg_id = ?").get(id) as {
+					count: number;
+				}
+			).count;
+		expect(staleArtifacts).toBe(0);
 	});
 });
