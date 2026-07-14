@@ -60,6 +60,12 @@ import { opencodeGoUsageProvider } from "./usage/opencode-go";
 import { zaiRankingStrategy, zaiUsageProvider } from "./usage/zai";
 
 const USAGE_RANKING_METRIC_EPSILON = 1e-9;
+/**
+ * Primary (short, e.g. 5h) window used-fraction at or above which a candidate
+ * is demoted behind cooler siblings during ranking: a nearly exhausted short
+ * window means an imminent mid-session block, so drain urgency defers to it.
+ */
+const PRIMARY_WINDOW_HOT_FRACTION = 0.85;
 const OAUTH_BEARER_FINGERPRINT_HISTORY_LIMIT = 8;
 
 /** SHA-256 bearer fingerprint, so superseded OAuth token bytes never enter the identity cache. */
@@ -1102,9 +1108,9 @@ type UsageRankedCandidate<T extends AuthCredential> = UsageCandidate<T> & {
 	hasPriorityBoost: boolean;
 	planPriority: number;
 	secondaryUsed: number;
-	secondaryDrainRate: number;
+	secondaryRequiredDrain: number;
 	primaryUsed: number;
-	primaryDrainRate: number;
+	primaryRequiredDrain: number;
 	orderPos: number;
 };
 type RankedOAuthCandidate = UsageRankedCandidate<OAuthCredential>;
@@ -1798,7 +1804,6 @@ export class AuthStorage {
 		order: number[];
 		credentials: ApiKeySelection[];
 		options?: AuthApiKeyOptions;
-		sessionId?: string;
 		strategy: CredentialRankingStrategy;
 		rankingContext: CredentialRankingContext;
 		blockScope?: string;
@@ -1878,17 +1883,17 @@ export class AuthStorage {
 				hasPriorityBoost: strategy.hasPriorityBoost?.(primary) ?? false,
 				planPriority: 0,
 				secondaryUsed: this.#normalizeUsageFraction(secondaryTarget),
-				secondaryDrainRate: this.#computeWindowDrainRate(
+				secondaryRequiredDrain: this.#computeWindowRequiredDrain(
 					secondaryTarget,
 					nowMs,
 					strategy.windowDefaults.secondaryMs,
 				),
 				primaryUsed: this.#normalizeUsageFraction(primary),
-				primaryDrainRate: this.#computeWindowDrainRate(primary, nowMs, strategy.windowDefaults.primaryMs),
+				primaryRequiredDrain: this.#computeWindowRequiredDrain(primary, nowMs, strategy.windowDefaults.primaryMs),
 				orderPos,
 			});
 		}
-		return this.#orderUsageRankedCandidates(ranked, args.sessionId, "none");
+		return this.#orderUsageRankedCandidates(ranked, "none");
 	}
 
 	async #selectApiKeyCredential(
@@ -1929,7 +1934,6 @@ export class AuthStorage {
 			order,
 			credentials,
 			options,
-			sessionId,
 			strategy,
 			rankingContext,
 			blockScope,
@@ -3121,6 +3125,8 @@ export class AuthStorage {
 		options?: { sessionId?: string; baseUrl?: string },
 	): boolean {
 		if (this.#fetchUsageReportsOverride) return false;
+		const parseHeaders = this.#usageProviderResolver?.(provider)?.parseRateLimitHeaders;
+		if (!parseHeaders) return false;
 
 		const credential = this.#resolveActiveOAuthCredential(provider, options?.sessionId);
 		if (!credential) return false;
@@ -3129,11 +3135,14 @@ export class AuthStorage {
 			this.#buildUsageRequestForOauth(provider, credential, options?.baseUrl),
 		);
 		const now = Date.now();
-		const last = this.#usageHeaderIngestAt.get(cacheKey);
-		if (last !== undefined && now - last < USAGE_HEADER_INGEST_INTERVAL_MS) return false;
-
-		const parsedReport = this.#usageProviderResolver?.(provider)?.parseRateLimitHeaders?.(headers, now);
+		const parsedReport = parseHeaders(headers, now);
 		if (!parsedReport) return false;
+		// Throttled to one ingest per interval — except when a window reads
+		// exhausted: that snapshot must land immediately so the next getApiKey
+		// blocks the credential instead of burning a wire 429 on the wall.
+		const exhausted = parsedReport.limits.some(limit => this.#isUsageLimitExhausted(limit));
+		const last = this.#usageHeaderIngestAt.get(cacheKey);
+		if (!exhausted && last !== undefined && now - last < USAGE_HEADER_INGEST_INTERVAL_MS) return false;
 		const metadata: Record<string, unknown> = { ...(parsedReport.metadata ?? {}) };
 		if (credential.accountId && metadata.accountId === undefined) metadata.accountId = credential.accountId;
 		if (credential.email && metadata.email === undefined) metadata.email = credential.email;
@@ -3881,28 +3890,28 @@ export class AuthStorage {
 		return Math.min(Math.max(usedFraction, 0), 1);
 	}
 
-	/** Computes `usedFraction / elapsedHours` — consumption rate per hour within the current window. Lower drain rate = less pressure = preferred. */
-	#computeWindowDrainRate(limit: UsageLimit | undefined, nowMs: number, fallbackDurationMs: number): number {
-		const usedFraction = this.#normalizeUsageFraction(limit);
-		const durationMs = limit?.window?.durationMs ?? fallbackDurationMs;
-		if (!Number.isFinite(durationMs) || durationMs <= 0) {
-			return usedFraction;
-		}
+	/**
+	 * Computes the required drain rate: `headroomFraction / remainingHours` —
+	 * how fast the window's remaining quota must be consumed to fully use it
+	 * before it resets and expires. Higher = more headroom at risk of expiring
+	 * unused = ranked first, so selection chases quota that is about to be
+	 * wasted ("use it or lose it"). Without a reset clock the headroom
+	 * fraction alone is returned, degrading to most-headroom-first.
+	 */
+	#computeWindowRequiredDrain(limit: UsageLimit | undefined, nowMs: number, fallbackDurationMs: number): number {
+		const headroom = 1 - this.#normalizeUsageFraction(limit);
+		if (headroom <= 0) return 0;
 		const resetAt = this.#resolveWindowResetAt(limit?.window);
-		if (!Number.isFinite(resetAt)) {
-			return usedFraction;
+		if (resetAt === undefined) return headroom;
+		const durationMs = limit?.window?.durationMs ?? fallbackDurationMs;
+		let remainingMs = resetAt - nowMs;
+		if (Number.isFinite(durationMs) && durationMs > 0) {
+			remainingMs = Math.min(remainingMs, durationMs);
 		}
-		const remainingWindowMs = (resetAt as number) - nowMs;
-		const clampedRemainingWindowMs = Math.min(Math.max(remainingWindowMs, 0), durationMs);
-		const elapsedMs = durationMs - clampedRemainingWindowMs;
-		if (elapsedMs <= 0) {
-			return usedFraction;
-		}
-		const elapsedHours = elapsedMs / (60 * 60 * 1000);
-		if (!Number.isFinite(elapsedHours) || elapsedHours <= 0) {
-			return usedFraction;
-		}
-		return usedFraction / elapsedHours;
+		// Floor at one minute: a stale report whose reset already passed must
+		// not produce an unbounded urgency score.
+		const remainingHours = Math.max(remainingMs, 60_000) / (60 * 60 * 1000);
+		return headroom / remainingHours;
 	}
 
 	#compareUsageRankedCandidatePriority(
@@ -3921,11 +3930,28 @@ export class AuthStorage {
 			return left.planPriority - right.planPriority;
 		}
 		if (left.hasPriorityBoost !== right.hasPriorityBoost) return left.hasPriorityBoost ? -1 : 1;
-		let metric = compareUsageRankingMetric(left.secondaryDrainRate, right.secondaryDrainRate);
+		// Short-window guard: candidates whose primary (e.g. 5h) window is
+		// nearly exhausted rank behind cool ones regardless of drain urgency —
+		// overflow lands on the next-most-urgent cool account instead.
+		const leftHot = left.primaryUsed >= PRIMARY_WINDOW_HOT_FRACTION;
+		const rightHot = right.primaryUsed >= PRIMARY_WINDOW_HOT_FRACTION;
+		if (leftHot !== rightHot) return leftHot ? 1 : -1;
+		// Usage-backed candidates outrank unmeasured ones: required-drain
+		// scores are only comparable between measured windows, and the
+		// clockless headroom fallback (0..1) must not let an account whose
+		// usage fetch failed shadow a measured sibling.
+		const leftMeasured = left.usage !== null;
+		const rightMeasured = right.usage !== null;
+		if (leftMeasured !== rightMeasured) return leftMeasured ? -1 : 1;
+		// Required drain, descending: the account whose remaining quota must
+		// burn fastest to avoid expiring unused at its reset comes first, so
+		// staggered resets land at ~100% utilization instead of stranding
+		// headroom that a cooler sibling could have absorbed.
+		let metric = compareUsageRankingMetric(right.secondaryRequiredDrain, left.secondaryRequiredDrain);
 		if (metric !== 0) return metric;
 		metric = compareUsageRankingMetric(left.secondaryUsed, right.secondaryUsed);
 		if (metric !== 0) return metric;
-		metric = compareUsageRankingMetric(left.primaryDrainRate, right.primaryDrainRate);
+		metric = compareUsageRankingMetric(right.primaryRequiredDrain, left.primaryRequiredDrain);
 		if (metric !== 0) return metric;
 		metric = compareUsageRankingMetric(left.primaryUsed, right.primaryUsed);
 		if (metric !== 0) return metric;
@@ -3943,69 +3969,10 @@ export class AuthStorage {
 
 	#orderUsageRankedCandidates<T extends AuthCredential>(
 		candidates: UsageRankedCandidate<T>[],
-		sessionId: string | undefined,
 		planRequirement: OpenAICodexPlanRequirement,
 	): UsageCandidate<T>[] {
 		candidates.sort((left, right) => this.#compareUsageRankedCandidates(left, right, planRequirement));
-		if (!sessionId) {
-			return candidates.map(candidate => ({
-				selection: candidate.selection,
-				usage: candidate.usage,
-				usageChecked: candidate.usageChecked,
-			}));
-		}
-
-		const unblocked = candidates.filter(candidate => !candidate.blocked);
-		if (unblocked.length <= 1) {
-			return candidates.map(candidate => ({
-				selection: candidate.selection,
-				usage: candidate.usage,
-				usageChecked: candidate.usageChecked,
-			}));
-		}
-
-		const priorityByCandidate = new Map<UsageRankedCandidate<T>, number>();
-		let bucketIndex = 0;
-		let previous = unblocked[0];
-		const bucketByCandidate = new Map<UsageRankedCandidate<T>, number>();
-		for (const candidate of unblocked) {
-			if (
-				candidate !== previous &&
-				this.#compareUsageRankedCandidatePriority(previous, candidate, planRequirement) !== 0
-			) {
-				bucketIndex += 1;
-			}
-			bucketByCandidate.set(candidate, bucketIndex);
-			previous = candidate;
-		}
-		const maxBucket = bucketIndex;
-		for (const candidate of unblocked) {
-			const bucket = bucketByCandidate.get(candidate) ?? 0;
-			priorityByCandidate.set(candidate, maxBucket === 0 ? 0 : 1 - bucket / maxBucket);
-		}
-
-		let totalWeight = 0;
-		for (const candidate of unblocked) {
-			totalWeight += 1 + (priorityByCandidate.get(candidate) ?? 0);
-		}
-
-		const hit = ((Bun.hash.xxHash32(sessionId) >>> 0) / 2 ** 32) * totalWeight;
-		let cursor = 0;
-		let selected = unblocked[unblocked.length - 1];
-		for (const candidate of unblocked) {
-			cursor += 1 + (priorityByCandidate.get(candidate) ?? 0);
-			if (hit < cursor) {
-				selected = candidate;
-				break;
-			}
-		}
-
-		const ordered = [
-			selected,
-			...unblocked.filter(candidate => candidate !== selected),
-			...candidates.filter(candidate => candidate.blocked),
-		];
-		return ordered.map(candidate => ({
+		return candidates.map(candidate => ({
 			selection: candidate.selection,
 			usage: candidate.usage,
 			usageChecked: candidate.usageChecked,
@@ -4019,7 +3986,6 @@ export class AuthStorage {
 		planRequirement: OpenAICodexPlanRequirement;
 		credentials: OAuthSelection[];
 		options?: AuthApiKeyOptions;
-		sessionId?: string;
 		strategy: CredentialRankingStrategy;
 		rankingContext: CredentialRankingContext;
 		blockScope?: string;
@@ -4118,17 +4084,17 @@ export class AuthStorage {
 				hasPriorityBoost: strategy.hasPriorityBoost?.(primary) ?? false,
 				planPriority: getOpenAICodexPlanPriority(usage, args.planRequirement),
 				secondaryUsed: this.#normalizeUsageFraction(secondaryTarget),
-				secondaryDrainRate: this.#computeWindowDrainRate(
+				secondaryRequiredDrain: this.#computeWindowRequiredDrain(
 					secondaryTarget,
 					nowMs,
 					strategy.windowDefaults.secondaryMs,
 				),
 				primaryUsed: this.#normalizeUsageFraction(primary),
-				primaryDrainRate: this.#computeWindowDrainRate(primary, nowMs, strategy.windowDefaults.primaryMs),
+				primaryRequiredDrain: this.#computeWindowRequiredDrain(primary, nowMs, strategy.windowDefaults.primaryMs),
 				orderPos,
 			});
 		}
-		return this.#orderUsageRankedCandidates(ranked, args.sessionId, args.planRequirement);
+		return this.#orderUsageRankedCandidates(ranked, args.planRequirement);
 	}
 
 	/**
@@ -4196,7 +4162,6 @@ export class AuthStorage {
 					order: rankingOrder,
 					credentials,
 					options,
-					sessionId,
 					strategy: strategy!,
 					rankingContext,
 					blockScope,

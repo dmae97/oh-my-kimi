@@ -16579,10 +16579,12 @@ export class AgentSession {
 	}
 
 	#ingestProviderUsageHeaders(response: ProviderResponseMetadata, model?: Model): void {
-		if (model?.provider !== "anthropic") return;
-		this.#modelRegistry.authStorage.ingestUsageHeaders("anthropic", response.headers, {
+		const provider = model?.provider;
+		if (!provider) return;
+		// No-op for providers whose usage strategy lacks a header parser.
+		this.#modelRegistry.authStorage.ingestUsageHeaders(provider, response.headers, {
 			sessionId: this.agent.sessionId,
-			baseUrl: this.#modelRegistry.getProviderBaseUrl?.("anthropic"),
+			baseUrl: this.#modelRegistry.getProviderBaseUrl?.(provider),
 		});
 	}
 

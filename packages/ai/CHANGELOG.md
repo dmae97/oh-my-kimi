@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added OpenAI Codex rate-limit response-header ingestion (`x-codex-{primary,secondary}-*`): every successful response now refreshes the account's usage snapshot, so credential selection blocks an exhausted account and rotates to a sibling before the next request burns a wire 429.
+
+### Changed
+
+- Reworked multi-account credential ranking from lowest-consumption-pace to maximum required drain: accounts are now ordered by `headroom / hoursToReset` (descending) on their binding usage window, so quota that would expire unused at the next reset is burned first and staggered resets land at ~100% utilization. Accounts whose short (5h) window is ≥85% used are demoted behind cooler siblings to avoid imminent mid-session blocks, usage-backed accounts always outrank siblings whose usage fetch failed, and the weighted-random session spread was replaced by deterministic top-ranked selection.
+- Usage header ingestion now bypasses its 60-second throttle when any window reads exhausted, so the credential block lands immediately instead of after one more wire 429.
+
 ## [16.5.1] - 2026-07-14
 
 ### Added

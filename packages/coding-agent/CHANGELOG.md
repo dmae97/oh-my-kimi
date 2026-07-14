@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Provider rate-limit response headers are now ingested for every provider with a header parser (previously Anthropic-only), wiring OpenAI Codex responses into proactive account blocking so multi-account sessions rotate off an exhausted account without hitting a wire 429.
+
 ## [16.5.1] - 2026-07-14
 
 ### Changed
