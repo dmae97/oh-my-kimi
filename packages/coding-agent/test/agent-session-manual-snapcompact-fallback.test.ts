@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
-import type { Message } from "@oh-my-pi/pi-ai";
+import type { Message, Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -20,6 +20,10 @@ import { TempDir } from "@oh-my-pi/pi-utils";
  * to LLM-backed compaction in the same situation. The manual path MUST mirror
  * that behavior: warn, then summarize via the LLM fallback candidate chain
  * (which tries the active text→text model first).
+ *
+ * An *explicit* `/compact snapcompact` (mode override) is a deliberate no-LLM
+ * archive request, so it MUST keep failing locally instead of silently
+ * shipping the transcript to a provider.
  */
 describe("AgentSession manual snapcompact text-only fallback", () => {
 	let session: AgentSession | undefined;
@@ -39,7 +43,12 @@ describe("AgentSession manual snapcompact text-only fallback", () => {
 		}
 	});
 
-	it("falls back to LLM compaction instead of throwing on a text-only active model", async () => {
+	async function createHarness(): Promise<{
+		session: AgentSession;
+		sessionManager: SessionManager;
+		activeModel: Model;
+		notices: string[];
+	}> {
 		const activeModel = getBundledModel("aimlapi", "alibaba/qwen3-coder-480b-a35b-instruct");
 		if (!activeModel) throw new Error("Expected bundled text-only model");
 		expect(activeModel.input).not.toContain("image");
@@ -75,8 +84,7 @@ describe("AgentSession manual snapcompact text-only fallback", () => {
 			{ role: "user", content: "second question", timestamp: Date.now() },
 		];
 		for (const message of seed) sessionManager.appendMessage(message);
-		const firstKeptEntryId = sessionManager.getBranch()[0]?.id;
-		if (!firstKeptEntryId) throw new Error("Expected seeded branch entry");
+		if (!sessionManager.getBranch()[0]?.id) throw new Error("Expected seeded branch entry");
 
 		const settings = Settings.isolated({
 			"compaction.strategy": "snapcompact",
@@ -88,6 +96,12 @@ describe("AgentSession manual snapcompact text-only fallback", () => {
 			if (event.type === "notice" && event.source === "compaction") notices.push(event.message);
 		});
 
+		return { session, sessionManager, activeModel, notices };
+	}
+
+	it("falls back to LLM compaction instead of throwing on a text-only active model", async () => {
+		const harness = await createHarness();
+
 		const compactSpy = vi.spyOn(compactionModule, "compact").mockImplementation(async (preparation, model) => ({
 			summary: "llm summary",
 			shortSummary: "llm",
@@ -96,19 +110,38 @@ describe("AgentSession manual snapcompact text-only fallback", () => {
 			details: { provider: model.provider, model: model.id },
 		}));
 
-		const result = await session.compact();
+		const result = await harness.session.compact();
 
 		expect(result.summary).toBe("llm summary");
 		// LLM fallback ran; the active text-only model is tried first.
 		expect(compactSpy).toHaveBeenCalled();
 		const [, firstCandidate] = compactSpy.mock.calls[0]!;
-		expect(`${firstCandidate.provider}/${firstCandidate.id}`).toBe(`${activeModel.provider}/${activeModel.id}`);
-		expect(notices).toContain(
-			`snapcompact needs a vision-capable model (${activeModel.id} is text-only); falling back to LLM compaction`,
+		expect(`${firstCandidate.provider}/${firstCandidate.id}`).toBe(
+			`${harness.activeModel.provider}/${harness.activeModel.id}`,
 		);
-		expect(sessionManager.getBranch().find(entry => entry.type === "compaction")).toMatchObject({
+		expect(harness.notices).toContain(
+			`snapcompact needs a vision-capable model (${harness.activeModel.id} is text-only); falling back to LLM compaction`,
+		);
+		expect(harness.sessionManager.getBranch().find(entry => entry.type === "compaction")).toMatchObject({
 			type: "compaction",
 			summary: "llm summary",
 		});
+	});
+
+	it("still fails locally for explicit /compact snapcompact on a text-only model (no-LLM contract)", async () => {
+		const harness = await createHarness();
+
+		const compactSpy = vi.spyOn(compactionModule, "compact");
+
+		await expect(harness.session.compact(undefined, { mode: "snapcompact" })).rejects.toThrow(
+			`snapcompact cannot run locally: ${harness.activeModel.id} is text-only.`,
+		);
+
+		// Explicit no-LLM request must never reach the provider-backed summarizer.
+		expect(compactSpy).not.toHaveBeenCalled();
+		expect(harness.notices).toContain(
+			`snapcompact needs a vision-capable model (${harness.activeModel.id} is text-only)`,
+		);
+		expect(harness.sessionManager.getBranch().find(entry => entry.type === "compaction")).toBeUndefined();
 	});
 });
