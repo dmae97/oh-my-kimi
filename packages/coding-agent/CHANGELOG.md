@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `/guided-goal` throwing `Model not found` on websocket-only Codex models (e.g. `gpt-5.6-luna`): the interview oneshot now routes through the session's provider transport (`providerSessionState` + `preferWebsockets`) with an isolated session id instead of forcing an SSE fallback the Codex `/responses` endpoint rejects for those models — same class as the `/btw` regression. ([#5304](https://github.com/can1357/oh-my-pi/issues/5304))
+
 ## [16.4.8] - 2026-07-12
 
 ### Fixed

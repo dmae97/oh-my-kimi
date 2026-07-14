@@ -1,6 +1,6 @@
 import { instrumentedCompleteSimple, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
 import type { Tool } from "@oh-my-pi/pi-ai";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import { extractTextContent, extractToolCall, parseJsonPayload } from "../commit/utils";
 import guidedGoalInterviewPrompt from "../prompts/goals/guided-goal-interview.md" with { type: "text" };
 import guidedGoalSystemPrompt from "../prompts/goals/guided-goal-system.md" with { type: "text" };
@@ -106,6 +106,16 @@ export async function runGuidedGoalTurn(
 			reasoning: toReasoningEffort(thinkingLevel),
 			disableReasoning: shouldDisableReasoning(thinkingLevel),
 			toolChoice: { type: "tool", name: RESPOND_TOOL_NAME },
+			// Route through the session's provider transport so websocket-only Codex
+			// models (gpt-5.6-luna/sol/terra) get a websocket session instead of
+			// falling back to SSE — the Codex SSE /responses endpoint does not serve
+			// those ids and rejects the turn with "Model not found" (#5304, same class
+			// as the /btw regression in #5213). A unique session id keeps this oneshot's
+			// append-only turn state isolated from the main conversation.
+			sessionId: `${session.sessionId}:guided-goal:${Snowflake.next()}`,
+			promptCacheKey: session.sessionId,
+			preferWebsockets: session.preferWebsockets,
+			providerSessionState: session.providerSessionState,
 		},
 		{ telemetry: resolveTelemetry(session.agent.telemetry, session.sessionId), oneshotKind: "guided_goal_setup" },
 	);
