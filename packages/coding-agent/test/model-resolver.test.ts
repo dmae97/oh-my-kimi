@@ -10,6 +10,7 @@ import {
 	parseModelString,
 	pickDefaultAvailableModel,
 	resolveAgentModelPatterns,
+	resolveAgentPrewalkPattern,
 	resolveAllowedModels,
 	resolveCliModel,
 	resolveModelFromString,
@@ -734,6 +735,33 @@ describe("resolveModelRoleValue", () => {
 
 		expect(result.thinkingLevel).toBe("auto");
 		expect(result.explicitThinkingLevel).toBe(true);
+	});
+});
+describe("resolveAgentPrewalkPattern", () => {
+	test("agent definition alone decides: true → default target, pattern → custom, false/absent → off", () => {
+		expect(resolveAgentPrewalkPattern({ agentPrewalk: true })).toBe("@smol");
+		expect(resolveAgentPrewalkPattern({ agentPrewalk: "@very-smol" })).toBe("@very-smol");
+		expect(resolveAgentPrewalkPattern({ agentPrewalk: false })).toBeUndefined();
+		expect(resolveAgentPrewalkPattern({})).toBeUndefined();
+	});
+
+	test("settings override wins over the agent definition", () => {
+		expect(resolveAgentPrewalkPattern({ settingsOverride: "off", agentPrewalk: true })).toBeUndefined();
+		expect(resolveAgentPrewalkPattern({ settingsOverride: "off", agentPrewalk: "@very-smol" })).toBeUndefined();
+		expect(resolveAgentPrewalkPattern({ settingsOverride: "on", agentPrewalk: false })).toBe("@smol");
+		expect(resolveAgentPrewalkPattern({ settingsOverride: "openai/gpt-4o", agentPrewalk: false })).toBe(
+			"openai/gpt-4o",
+		);
+	});
+
+	test("override 'on' keeps the agent's custom target when one is defined", () => {
+		expect(resolveAgentPrewalkPattern({ settingsOverride: "on", agentPrewalk: "@very-smol" })).toBe("@very-smol");
+		expect(resolveAgentPrewalkPattern({ settingsOverride: "on" })).toBe("@smol");
+	});
+
+	test("blank override falls through to the agent definition", () => {
+		expect(resolveAgentPrewalkPattern({ settingsOverride: "  ", agentPrewalk: true })).toBe("@smol");
+		expect(resolveAgentPrewalkPattern({ settingsOverride: "", agentPrewalk: false })).toBeUndefined();
 	});
 });
 describe("resolveAgentModelPatterns", () => {

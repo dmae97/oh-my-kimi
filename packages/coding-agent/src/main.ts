@@ -31,6 +31,7 @@ import { applyStartupCwd } from "./cli/startup-cwd";
 import { findConfigFile } from "./config";
 import { ModelRegistry } from "./config/model-registry";
 import {
+	DEFAULT_PREWALK_TARGET,
 	expandRoleAlias,
 	getModelMatchPreferences,
 	resolveCliModel,
@@ -136,6 +137,7 @@ const HOST_DEFAULTED_SETTING_PATHS: SettingPath[] = [
 	"task.maxRecursionDepth",
 	"task.disabledAgents",
 	"task.agentModelOverrides",
+	"task.agentPrewalk",
 	// Memory subsystems are off-by-default for RPC/ACP hosts; embedders that want
 	// memory should opt in explicitly through their own settings layer.
 	"memory.backend",
@@ -938,13 +940,13 @@ export async function buildSessionOptions(
 			? true
 			: activeSettings.get("prewalk.enabled");
 	if (prewalkEnabled) {
-		const rolePattern = expandRoleAlias(parsed.prewalkInto ?? "@smol", activeSettings);
+		const rolePattern = expandRoleAlias(parsed.prewalkInto ?? DEFAULT_PREWALK_TARGET, activeSettings);
 		const resolved = resolveCliModel({ cliModel: rolePattern, modelRegistry, preferences: modelMatchPreferences });
 		if (resolved.warning) {
 			process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
 		}
 		if (resolved.error || !resolved.model) {
-			throw new Error(resolved.error ?? `Model "${parsed.prewalkInto ?? "@smol"}" not found`);
+			throw new Error(resolved.error ?? `Model "${parsed.prewalkInto ?? DEFAULT_PREWALK_TARGET}" not found`);
 		}
 		if (!modelRegistry.hasConfiguredAuth(resolved.model)) {
 			throw new Error(`No API key for ${resolved.model.provider}/${resolved.model.id}`);

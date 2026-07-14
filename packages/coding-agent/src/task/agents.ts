@@ -25,6 +25,7 @@ interface AgentFrontmatter {
 	model?: string | string[];
 	thinkingLevel?: string;
 	blocking?: boolean;
+	prewalk?: boolean | string;
 }
 
 interface EmbeddedAgentDef {
@@ -52,6 +53,9 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 			spawns: "*",
 			model: "@task",
 			thinkingLevel: AUTO_THINKING,
+			// Strong model plans and starts the implementation, then hands off to
+			// the smol role. Per-agent opt-out via /agents (task.agentPrewalk).
+			prewalk: true,
 		},
 		template: taskMd,
 	},

@@ -24,7 +24,7 @@ It covers runtime behavior as implemented today, including precedence, invalid-d
 Task agents normalize into `AgentDefinition` (`src/task/types.ts`):
 
 - `name`, `description`, `systemPrompt` (required for a valid loaded agent)
-- optional `tools`, `spawns`, `model`, `thinkingLevel`, `output`, `blocking`, `autoloadSkills`, `readSummarize`
+- optional `tools`, `spawns`, `model`, `thinkingLevel`, `output`, `blocking`, `autoloadSkills`, `readSummarize`, `prewalk`
 - `source`: `"bundled" | "user" | "project"`
 - optional `filePath`
 
@@ -36,6 +36,7 @@ Parsing comes from frontmatter via `parseAgentFields()` (`src/discovery/helpers.
 - backward-compat behavior: if `spawns` missing but `tools` includes `task`, `spawns` becomes `*`
 - `output` is passed through as opaque schema data
 - `read-summarize: false` (parsed as `readSummarize`) forces the subagent's `read` tool to return verbatim file content instead of structural summaries — `runSubprocess` applies it as a `read.summarize.enabled: false` override on the subagent's isolated settings (`src/task/executor.ts`). `scout` and `librarian` ship with it disabled. Defaults to enabled when the field is absent.
+- `prewalk: true` starts the subagent on its resolved model and hands off to the default prewalk target (the `smol` role) at its first edit/write, exactly like the session-level `--prewalk`; a string value (e.g. `prewalk: "@smol"` or `prewalk: "openai/gpt-5-mini"`) picks a custom target. The `task.agentPrewalk` settings record (agent name → `"on"` / `"off"` / pattern, toggled per agent from `/agents` with `P`) overrides the frontmatter. Resolution happens in `runSubprocess` (`src/task/executor.ts`); an unresolvable target or a target equal to the starting model skips the hand-off instead of failing the spawn.
 
 ## Bundled agents
 
@@ -44,7 +45,7 @@ Bundled agents are embedded at build time (`src/task/agents.ts`) using text impo
 `EMBEDDED_AGENT_DEFS` defines:
 
 - `scout`, `designer`, `reviewer`, `librarian` from prompt files
-- `task` and `sonic` from shared `task.md` body plus injected frontmatter
+- `task` and `sonic` from shared `task.md` body plus injected frontmatter; `task` ships with `prewalk: true` (default hand-off to the `smol` role, opt out per agent via `/agents` / `task.agentPrewalk`)
 
 Loading path:
 
@@ -184,5 +185,6 @@ When parent plan mode is enabled, `TaskTool.#runSpawn` builds an `effectiveAgent
 - prepends the plan-mode subagent system prompt
 - restricts tools to `read`, `search`, `find`, `lsp`, and `web_search`, plus `ast_grep`/`report_finding` when the agent's own tool list declares them (`PLAN_MODE_AGENT_TOOL_ALLOWLIST`)
 - clears child spawns
+- clears `prewalk` (read-only exploration must not receive the prewalk plan/implement nudges)
 
 The same `effectiveAgent` is used for subprocess launch, model/thinking overrides, and output-schema selection.
