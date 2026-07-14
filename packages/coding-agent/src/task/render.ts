@@ -291,8 +291,9 @@ function formatJsonScalar(value: unknown, _theme: Theme): string {
 export function formatTaskId(id: string): string {
 	// Ids are name-based (e.g. "Anna", "Anna-2"); a "." separates nesting levels
 	// (e.g. "Anna.Bob"). Render the hierarchy with a ">" breadcrumb.
-	const segments = id.split(".");
-	return segments.length < 2 ? id : segments.join(">");
+	const sanitizedId = sanitizeText(id);
+	const segments = sanitizedId.split(".");
+	return segments.length < 2 ? sanitizedId : segments.join(">");
 }
 
 const MISSING_YIELD_WARNING_PREFIX = "SYSTEM WARNING: Subagent exited without calling yield tool";
@@ -347,13 +348,13 @@ function renderJsonTreeLines(
 		const scalar = formatJsonScalar(val, theme);
 
 		if (scalar) {
-			const label = key ? theme.fg("muted", key) : theme.fg("muted", "value");
+			const label = key ? theme.fg("muted", sanitizeText(key)) : theme.fg("muted", "value");
 			pushLine(`${prefix}${iconScalar} ${label}: ${theme.fg("dim", scalar)}`);
 			return;
 		}
 
 		if (Array.isArray(val)) {
-			const header = key ? theme.fg("muted", key) : theme.fg("muted", "array");
+			const header = key ? theme.fg("muted", sanitizeText(key)) : theme.fg("muted", "array");
 			pushLine(`${prefix}${iconArray} ${header}`);
 			if (val.length === 0) {
 				pushLine(
@@ -385,7 +386,7 @@ function renderJsonTreeLines(
 		}
 
 		if (val && typeof val === "object") {
-			const header = key ? theme.fg("muted", key) : theme.fg("muted", "object");
+			const header = key ? theme.fg("muted", sanitizeText(key)) : theme.fg("muted", "object");
 			pushLine(`${prefix}${iconObject} ${header}`);
 			const entries = Object.entries(val as Record<string, unknown>);
 			if (entries.length === 0) {
@@ -418,7 +419,7 @@ function renderJsonTreeLines(
 			return;
 		}
 
-		const label = key ? theme.fg("muted", key) : theme.fg("muted", "value");
+		const label = key ? theme.fg("muted", sanitizeText(key)) : theme.fg("muted", "value");
 		pushLine(`${prefix}${iconScalar} ${label}: ${theme.fg("dim", sanitizeText(String(val)))}`);
 	};
 
@@ -625,10 +626,11 @@ function formatScalarInline(value: unknown, maxLen: number, _theme: Theme): stri
 	if (typeof value === "boolean") return String(value);
 	if (typeof value === "number") return String(value);
 	if (typeof value === "string") {
-		const firstLine = value.split("\n")[0].trim();
-		if (firstLine.length === 0) return `"" (${value.split("\n").length} lines)`;
+		const sanitizedValue = sanitizeText(value);
+		const firstLine = sanitizedValue.split("\n")[0].trim();
+		if (firstLine.length === 0) return `"" (${sanitizedValue.split("\n").length} lines)`;
 		const preview = truncateToWidth(firstLine, maxLen);
-		if (value.includes("\n")) return `"${preview}…" (${value.split("\n").length} lines)`;
+		if (sanitizedValue.includes("\n")) return `"${preview}…" (${sanitizedValue.split("\n").length} lines)`;
 		return `"${preview}"`;
 	}
 	if (Array.isArray(value)) return `[${value.length} items]`;
@@ -636,7 +638,7 @@ function formatScalarInline(value: unknown, maxLen: number, _theme: Theme): stri
 		const keys = Object.keys(value);
 		return `{${keys.length} keys}`;
 	}
-	return String(value);
+	return sanitizeText(String(value));
 }
 
 function formatOutputInline(data: unknown, theme: Theme, maxWidth = 80): string {
@@ -663,7 +665,7 @@ function formatOutputInline(data: unknown, theme: Theme, maxWidth = 80): string 
 
 	for (const [key, value] of entries) {
 		const valueStr = formatScalarInline(value, 24, theme);
-		const pairStr = `${key}=${valueStr}`;
+		const pairStr = `${sanitizeText(key)}=${valueStr}`;
 		const addLen = pairs.length > 0 ? pairStr.length + 2 : pairStr.length; // +2 for ", "
 
 		if (totalLen + addLen > maxWidth && pairs.length > 0) {
@@ -684,7 +686,7 @@ function formatOutputInline(data: unknown, theme: Theme, maxWidth = 80): string 
  */
 function taskFirstLine(task: unknown): string {
 	if (typeof task !== "string") return "";
-	const trimmed = task.trim();
+	const trimmed = sanitizeText(task).trim();
 	const newline = trimmed.indexOf("\n");
 	return newline === -1 ? trimmed : trimmed.slice(0, newline);
 }
@@ -792,7 +794,9 @@ function createAssignmentSectionRenderer(
 	// `renderResult` receives the raw tool args (unlike `renderCall`, which is
 	// fed through `repairTaskParams`), so undo any per-field double-encoding
 	// here too. The repair is idempotent on already-clean text.
-	const assignment = repairDoubleEncodedJsonString(typeof args?.task === "string" ? args.task : "").trim();
+	const assignment = sanitizeText(
+		repairDoubleEncodedJsonString(typeof args?.task === "string" ? args.task : ""),
+	).trim();
 	if (!assignment) return undefined;
 	return createMarkdownSectionRenderer(assignment, theme);
 }
@@ -806,7 +810,7 @@ function createContextSectionRenderer(
 	args: Partial<TaskParams> | undefined,
 	theme: Theme,
 ): AssignmentSectionRenderer | undefined {
-	const context = repairDoubleEncodedJsonString(typeof args?.context === "string" ? args.context : "").trim();
+	const context = sanitizeText(repairDoubleEncodedJsonString(typeof args?.context === "string" ? args.context : "")).trim();
 	if (!context) return undefined;
 	return createMarkdownSectionRenderer(context, theme);
 }
@@ -952,7 +956,7 @@ function renderAgentProgress(
 	// Current tool (if running) or most recent completed tool
 	if (progress.status === "running") {
 		if (progress.currentTool) {
-			let toolLine = `${continuePrefix}${theme.tree.hook} ${theme.fg("muted", progress.currentTool)}`;
+			let toolLine = `${continuePrefix}${theme.tree.hook} ${theme.fg("muted", sanitizeText(progress.currentTool))}`;
 			const toolDetail = progress.lastIntent ?? progress.currentToolArgs;
 			if (toolDetail) {
 				toolLine += `: ${theme.fg("dim", previewLine(sanitizeText(toolDetail), 40))}`;
@@ -967,7 +971,7 @@ function renderAgentProgress(
 		} else if (progress.recentTools.length > 0) {
 			// Show most recent completed tool when idle between tools
 			const recent = progress.recentTools[0];
-			let toolLine = `${continuePrefix}${theme.tree.hook} ${theme.fg("dim", recent.tool)}`;
+			let toolLine = `${continuePrefix}${theme.tree.hook} ${theme.fg("dim", sanitizeText(recent.tool))}`;
 			const toolDetail = progress.lastIntent ?? recent.args;
 			if (toolDetail) {
 				toolLine += `: ${theme.fg("dim", previewLine(sanitizeText(toolDetail), 40))}`;
@@ -1135,13 +1139,13 @@ function renderReviewResult(
 	if (summary.explanation) {
 		if (expanded) {
 			lines.push(`${continuePrefix}${theme.fg("dim", "Summary")}`);
-			const explanationLines = summary.explanation.split("\n");
+			const explanationLines = sanitizeText(summary.explanation).split("\n");
 			for (const line of explanationLines) {
 				lines.push(`${continuePrefix}  ${theme.fg("dim", replaceTabs(line))}`);
 			}
 		} else {
 			// Preview: first sentence or ~100 chars (flatten tabs/newlines first)
-			const flat = replaceTabs(summary.explanation).replace(/[\r\n]+/g, " ");
+			const flat = replaceTabs(sanitizeText(summary.explanation)).replace(/[\r\n]+/g, " ");
 			const firstSentence = flat.split(/[.!?]/)[0].trim();
 			const preview = truncateToWidth(`${firstSentence}.`, 100);
 			lines.push(`${continuePrefix}${theme.fg("dim", preview)}`);
@@ -1182,9 +1186,9 @@ function renderFindings(
 		const findingContinue = isLastFinding ? "   " : `${theme.tree.vertical}  `;
 
 		const { color } = getPriorityInfo(finding.priority);
-		const rawTitle = finding.title?.replace(/^\[P\d\]\s*/, "") ?? "Untitled";
+		const rawTitle = sanitizeText(finding.title?.replace(/^\[P\d\]\s*/, "") ?? "Untitled");
 		const titleText = replaceTabs(rawTitle).replace(/[\r\n]+/g, " ");
-		const loc = `${path.basename(finding.file_path || "<unknown>")}:${finding.line_start}`;
+		const loc = `${path.basename(sanitizeText(finding.file_path || "<unknown>"))}:${finding.line_start}`;
 
 		lines.push(
 			`${continuePrefix}${findingPrefix} ${theme.fg(color, `[${finding.priority}]`)} ${titleText} ${theme.fg("dim", loc)}`,
@@ -1193,7 +1197,7 @@ function renderFindings(
 		// Show body when expanded
 		if (expanded && finding.body) {
 			// Wrap body text
-			const bodyLines = finding.body.split("\n");
+			const bodyLines = sanitizeText(finding.body).split("\n");
 			for (const bodyLine of bodyLines) {
 				lines.push(`${continuePrefix}${findingContinue}${theme.fg("dim", replaceTabs(bodyLine))}`);
 			}
@@ -1245,7 +1249,7 @@ function renderAgentResult(
 					: "failed";
 
 	// Main status line: id: description [status] · stats · ⟨agent⟩
-	const trimmedDescription = result.description?.trim();
+	const trimmedDescription = result.description ? sanitizeText(result.description).trim() : undefined;
 	const description = trimmedDescription ? previewLine(trimmedDescription, 64) : undefined;
 	const displayId = formatTaskId(result.id);
 	const titlePart = description ? `${theme.bold(displayId)}: ${description}` : displayId;
@@ -1279,7 +1283,10 @@ function renderAgentResult(
 
 	if (aborted && result.abortReason) {
 		lines.push(
-			`${continuePrefix}${theme.fg("error", theme.status.aborted)} ${theme.fg("dim", previewLine(result.abortReason, 80))}`,
+			`${continuePrefix}${theme.fg("error", theme.status.aborted)} ${theme.fg(
+				"dim",
+				previewLine(sanitizeText(result.abortReason), 80),
+			)}`,
 		);
 	}
 	// Check for review result, preferring incremental yield sections and falling
