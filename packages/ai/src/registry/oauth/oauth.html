@@ -305,7 +305,7 @@
 			if (serverState.ok) {
 				app.classList.add("success", "countdown");
 				title.textContent = "Authentication Successful";
-				message.innerHTML = "You have successfully logged in.<br>This window will close automatically.";
+				message.innerHTML = "You have successfully logged in.<br>You can now close this tab.";
 				setTimeout(() => window.close(), 3000);
 			} else {
 				app.classList.add("error");
