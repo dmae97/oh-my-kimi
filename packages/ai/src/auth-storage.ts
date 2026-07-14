@@ -1933,6 +1933,8 @@ export class AuthStorage {
 			blockScope,
 		});
 		return candidates[0]?.selection ?? fallback;
+	}
+
 	#clearProviderSessionCredentialCache(provider: string): void {
 		try {
 			this.#store.deleteCachePrefix?.(`${SESSION_STICKY_CACHE_PREFIX}${provider}:`);
