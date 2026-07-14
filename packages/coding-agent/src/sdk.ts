@@ -1812,10 +1812,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// to mirror the AsyncJobManager ownership rule.
 		if (mcpManager && !options.parentTaskPrefix) MCPManager.setInstance(mcpManager);
 
-		// Add image tools when the active model or configured image providers can generate images.
-		const imageGenTools = await logger.time("getImageGenTools", () => getImageGenTools(modelRegistry, model));
-		if (imageGenTools.length > 0) {
-			customTools.push(...(imageGenTools as unknown as CustomTool[]));
+		// Add image tools when generation is enabled and either no explicit tool
+		// whitelist was given or it names `generate_image`. Unlike built-in tools
+		// (filtered in `createTools`), custom tools are force-activated via
+		// `alwaysInclude` below, so an explicit `--no-tools`/whitelist must be
+		// honored here or image-gen would leak past every filter (issue #5305).
+		const imageGenRequested = !options.toolNames || options.toolNames.includes("generate_image");
+		if (settings.get("generate_image.enabled") && imageGenRequested) {
+			const imageGenTools = await logger.time("getImageGenTools", () => getImageGenTools(modelRegistry, model));
+			if (imageGenTools.length > 0) {
+				customTools.push(...(imageGenTools as unknown as CustomTool[]));
+			}
 		}
 
 		if (settings.get("speechgen.enabled")) {

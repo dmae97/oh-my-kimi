@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a `generate_image.enabled` setting (Settings › Tools › Generate Image) so the image generation tool can be toggled like every other tool ([#5305](https://github.com/can1357/oh-my-pi/issues/5305))
+
+### Fixed
+
+- Fixed `generate_image` staying active under `--no-tools` and any explicit tool whitelist that omitted it; the tool now honors the whitelist and the new `generate_image.enabled` setting instead of being force-activated as a custom tool ([#5305](https://github.com/can1357/oh-my-pi/issues/5305))
+
 ## [16.4.8] - 2026-07-12
 
 ### Fixed
