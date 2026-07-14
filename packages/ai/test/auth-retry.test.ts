@@ -99,6 +99,26 @@ describe("withAuth", () => {
 		]);
 	});
 
+	it("switches credentials when OpenRouter exhausts the daily free-model allowance", async () => {
+		const keys: string[] = [];
+		const result = await withAuth(
+			ctx => (ctx.error === undefined || !ctx.lastChance ? "exhausted-key" : "healthy-key"),
+			async key => {
+				keys.push(key);
+				if (key === "healthy-key") return "success";
+				throw Object.assign(
+					new Error(
+						"429 Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model requests per day",
+					),
+					{ status: 429 },
+				);
+			},
+		);
+
+		expect(result).toBe("success");
+		expect(keys).toEqual(["exhausted-key", "healthy-key"]);
+	});
+
 	it("stops retrying when the resolver returns undefined", async () => {
 		const keys: string[] = [];
 		const original = authError();
