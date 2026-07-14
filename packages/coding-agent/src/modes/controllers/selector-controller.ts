@@ -714,7 +714,7 @@ export class SelectorController {
 						if (role === "default") {
 							const { switched } = await this.ctx.session.setModel(model, role, {
 								selector,
-								thinkingLevel: concreteThinking,
+								thinkingLevel: isAuto ? ThinkingLevel.Inherit : concreteThinking,
 								persist: true,
 								currentContextTokens,
 							});
