@@ -14,7 +14,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { HistoryProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls/history-protocol";
-import { resetRegisteredArtifactDirsForTests } from "@oh-my-pi/pi-coding-agent/internal-urls/registry-helpers";
+import { registerArtifactsDir, resetRegisteredArtifactDirsForTests } from "@oh-my-pi/pi-coding-agent/internal-urls/registry-helpers";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { CURRENT_SESSION_VERSION } from "@oh-my-pi/pi-coding-agent/session/session-entries";
@@ -356,6 +356,16 @@ describe("history:// protocol", () => {
 
 			const resource = await InternalUrlRouter.instance().resolve("history://Parent.Child");
 			expect(resource.content).toContain("# Parent.Child (on disk)");
+		});
+	});
+
+	it("skips a registered artifact candidate that is a file", async () => {
+		await withTempDir(async dir => {
+			const candidate = path.join(dir, "not-a-directory");
+			await Bun.write(candidate, "not a directory");
+			registerArtifactsDir(candidate);
+
+			await expect(new HistoryProtocolHandler().complete()).resolves.toEqual([]);
 		});
 	});
 });

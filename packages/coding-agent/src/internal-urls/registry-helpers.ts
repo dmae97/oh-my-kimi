@@ -71,7 +71,7 @@ export async function sessionFilesFromDisk(): Promise<Map<string, string>> {
 		try {
 			entries = await fs.readdir(dir, { withFileTypes: true });
 		} catch (err) {
-			if (isEnoent(err)) return;
+			if (isEnoent(err) || (err as NodeJS.ErrnoException).code === "ENOTDIR") return;
 			throw err;
 		}
 		for (const entry of entries) {
