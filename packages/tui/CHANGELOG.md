@@ -39,6 +39,7 @@
 ### Added
 
 - Added support for width-changing editor text decorators on standalone presentation lines, with decorated output safely truncated to the available content width.
+- Fixed animated Loader ANSI updates invalidating stable text layout, avoiding repeated wrapping and width measurement on shimmer-only frames ([#5230](https://github.com/can1357/oh-my-pi/issues/5230)).
 
 ## [16.4.5] - 2026-07-11
 
