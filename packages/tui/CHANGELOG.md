@@ -12,6 +12,9 @@
 
 - Fixed a rendering issue where resizing the terminal during forced renders (such as tool finalization or image reconciliation) caused the entire transcript to visibly replay and flicker. Forced renders are now consolidated into a single paint once the resize settles.
 
+### Fixed
+
+- Bounded the Markdown L2 render cache by weighted output size and excluded oversized renders, preventing a few large documents from occupying ordinary cache slots indefinitely ([#4820](https://github.com/can1357/oh-my-pi/issues/4820)).
 ## [16.4.7] - 2026-07-12
 
 ### Fixed

@@ -211,6 +211,18 @@ export interface NativeScrollbackCommittedRows {
 	setNativeScrollbackCommittedRows(rows: number): void;
 }
 
+/**
+ * A component that discards rows after they enter native scrollback implements
+ * this hook so a destructive full replay can rehydrate its complete frame.
+ */
+export interface NativeScrollbackReplay {
+	prepareNativeScrollbackReplay(): void;
+}
+
+function prepareNativeScrollbackReplay(component: Component): void {
+	(component as Component & Partial<NativeScrollbackReplay>).prepareNativeScrollbackReplay?.();
+}
+
 function setNativeScrollbackCommittedRows(component: Component, rows: number): void {
 	(component as Component & Partial<NativeScrollbackCommittedRows>).setNativeScrollbackCommittedRows?.(rows);
 }
@@ -2737,6 +2749,21 @@ export class TUI extends Container {
 			this.#componentRenderTargets.clear();
 			this.#renderResizeViewport(width, height);
 			return;
+		}
+
+		// A destructive replay erases native history and must receive the complete
+		// component frame. Give virtualized roots one compose to rehydrate rows
+		// they dropped after commit. Height-only and net-unchanged resize events
+		// count too: both enter the geometry rebuild path below.
+		const replayFullHistory =
+			this.#hasEverRendered &&
+			!resizeRepaintsInPlace() &&
+			(this.#clearScrollbackOnNextRender ||
+				this.#resizeEventPending ||
+				(this.#previousWidth > 0 && this.#previousWidth !== width) ||
+				(this.#previousHeight > 0 && this.#previousHeight !== height));
+		if (replayFullHistory) {
+			for (const child of this.children) prepareNativeScrollbackReplay(child);
 		}
 
 		// 1. Compose the frame. Bracket the render so the image budget observes

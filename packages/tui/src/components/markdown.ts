@@ -602,8 +602,21 @@ markdownParser.use({ extensions: [customHrExtension, mathBlockExtension, mathEnv
 // (Rust FFI) work for content/layout combinations already seen this session.
 
 const RENDER_CACHE_MAX = 256; // sane cap: ~256 distinct message × width combos
+const RENDER_CACHE_MAX_SIZE = 512 * 1024;
+const RENDER_CACHE_MAX_ENTRY_SIZE = 32 * 1024;
 const EMPTY_RENDER_LINES: readonly string[] = [];
-const renderCache = new LRUCache<string, readonly string[]>({ max: RENDER_CACHE_MAX });
+const renderCache = new LRUCache<string, readonly string[]>({
+	max: RENDER_CACHE_MAX,
+	maxSize: RENDER_CACHE_MAX_SIZE,
+	maxEntrySize: RENDER_CACHE_MAX_ENTRY_SIZE,
+	sizeCalculation: renderedLinesCacheSize,
+});
+
+function renderedLinesCacheSize(lines: readonly string[]): number {
+	let size = lines.length;
+	for (let i = 0; i < lines.length; i++) size += lines[i]!.length;
+	return Math.max(1, size);
+}
 
 // A reference-link definition (`[label]: dest`) resolves across the whole
 // document, so a split lex cannot reproduce it — disable the streaming fast path

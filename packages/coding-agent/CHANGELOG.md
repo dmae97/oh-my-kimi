@@ -45,6 +45,9 @@
 - Removed the `--prewalk-boomerang` feature and its associated configuration setting.
 - Removed the unreliable Bing and Yahoo HTML-scraping web search providers.
 
+### Fixed
+
+- Bounded transcript render retention after finalized rows enter native scrollback, while rehydrating the complete transcript before destructive resize/reset replays, so long resumed TUI sessions no longer retain every committed row or lose history on repaint ([#4820](https://github.com/can1357/oh-my-pi/issues/4820)).
 ## [16.4.8] - 2026-07-12
 
 ### Added
