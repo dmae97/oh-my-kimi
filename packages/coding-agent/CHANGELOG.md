@@ -130,6 +130,9 @@
 - Fixed tab reuse issues where hung navigation or unhandled modals would cause initialization to stall and trigger a force-kill
 - Improved search reliability for Perplexity provider by forcing retrieval for all queries
 - Fixed JS eval cells losing top-level `function` and `var` declarations across cells when the defining cell contained top-level `await` — the async wrapper scoped them to the cell's IIFE instead of publishing them to the worker global
+### Fixed
+
+- Fixed Pyright LSP semantic requests hanging during startup by sending the initial workspace configuration notification after `initialized`. ([#5276](https://github.com/can1357/oh-my-pi/issues/5276))
 
 ## [16.4.7] - 2026-07-12
 
