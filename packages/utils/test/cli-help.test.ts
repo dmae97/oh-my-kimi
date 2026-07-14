@@ -70,7 +70,7 @@ describe("run() usage errors", () => {
 			await expect(run({ bin: "omp", version: "0.0.0", argv: ["bench"], commands })).resolves.toBeUndefined();
 		} finally {
 			stderrSpy.mockRestore();
-			process.exitCode = prevExitCode;
+			process.exitCode = prevExitCode ?? 0;
 		}
 		const out = errs.join("");
 		expect(out).toContain("error: Missing required argument: models");
