@@ -4,7 +4,7 @@
  * Uses brush-core via native bindings for shell execution.
  */
 import { ExponentialYield } from "@oh-my-pi/pi-agent-core/utils/yield";
-import { executeShell, type MinimizerOptions, Shell, type ShellRunResult } from "@oh-my-pi/pi-natives";
+import { type MinimizerOptions, Shell, type ShellRunResult } from "@oh-my-pi/pi-natives";
 import { isExecutable, type ShellConfig } from "@oh-my-pi/pi-utils/procmgr";
 import { Settings, type ShellMinimizerSettings } from "../config/settings";
 import { OutputSink } from "../session/streaming-output";
@@ -250,6 +250,11 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		};
 	}
 
+	const shellOptions = {
+		sessionEnv: shellEnv,
+		snapshotPath: snapshotPath ?? undefined,
+		minimizer,
+	};
 	const sessionKey = buildSessionKey(shell, prefix, snapshotPath, shellEnv, options?.sessionKey, minimizer);
 	const persistentSessionBroken = brokenShellSessions.has(sessionKey);
 	if (persistentSessionBroken) {
@@ -264,13 +269,10 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 	const sessionBusy = shellSessionsInUse.has(sessionKey);
 	let shellSession = persistentSessionBroken || sessionBusy ? undefined : shellSessions.get(sessionKey);
 	if (!shellSession && !persistentSessionBroken && !sessionBusy) {
-		shellSession = new Shell({
-			sessionEnv: shellEnv,
-			snapshotPath: snapshotPath ?? undefined,
-			minimizer,
-		});
+		shellSession = new Shell(shellOptions);
 		shellSessions.set(sessionKey, shellSession);
 	}
+	const executionShell = shellSession ?? new Shell(shellOptions);
 	const ownsPersistentSession = shellSession !== undefined;
 	if (ownsPersistentSession) {
 		shellSessionsInUse.add(sessionKey);
@@ -278,13 +280,15 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 	const userSignal = options?.signal;
 	const runAbortController = new AbortController();
 	let abortCleanupPromise: Promise<void> | undefined;
+	const abortShell = (): Promise<void> => {
+		abortCleanupPromise ??= executionShell.abort().catch(() => undefined);
+		return abortCleanupPromise;
+	};
 	const abortCurrentExecution = () => {
 		if (!runAbortController.signal.aborted) {
 			runAbortController.abort();
 		}
-		if (shellSession && !abortCleanupPromise) {
-			abortCleanupPromise = shellSession.abort().catch(() => undefined);
-		}
+		void abortShell();
 	};
 	const abortDeferred = Promise.withResolvers<"abort">();
 	const abortHandler = () => {
@@ -317,38 +321,20 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 	let resetSession = false;
 
 	try {
-		const runPromise = shellSession
-			? shellSession.run(
-					{
-						command: finalCommand,
-						cwd: commandCwd,
-						env: commandEnv,
-						timeoutMs: nativeTimeoutMs,
-						signal: runAbortController.signal,
-					},
-					(err, chunk) => {
-						if (!err) {
-							enqueueChunk(chunk);
-						}
-					},
-				)
-			: executeShell(
-					{
-						command: finalCommand,
-						cwd: commandCwd,
-						env: commandEnv,
-						sessionEnv: shellEnv,
-						snapshotPath: snapshotPath ?? undefined,
-						minimizer,
-						timeoutMs: nativeTimeoutMs,
-						signal: runAbortController.signal,
-					},
-					(err, chunk) => {
-						if (!err) {
-							enqueueChunk(chunk);
-						}
-					},
-				);
+		const runPromise = executionShell.run(
+			{
+				command: finalCommand,
+				cwd: commandCwd,
+				env: commandEnv,
+				timeoutMs: nativeTimeoutMs,
+				signal: runAbortController.signal,
+			},
+			(err, chunk) => {
+				if (!err) {
+					enqueueChunk(chunk);
+				}
+			},
+		);
 
 		const ey = new ExponentialYield();
 		const winner = await ey.race<
@@ -361,11 +347,12 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 
 		if (winner.kind === "timeout" || winner.kind === "abort") {
 			acceptingChunks = false;
+			const cleanupPromise = abortShell();
 			if (shellSession) {
 				resetSession = true;
-				quarantineShellSession(sessionKey, runPromise, abortCleanupPromise);
+				quarantineShellSession(sessionKey, runPromise, cleanupPromise);
 			} else {
-				void runPromise.catch(() => undefined);
+				void Promise.allSettled([runPromise, cleanupPromise]);
 			}
 			return {
 				exitCode: undefined,

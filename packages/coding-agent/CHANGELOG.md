@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed overlapping Bash timeout and interrupt cleanup to explicitly abort isolated shells instead of leaving child processes running ([#5389](https://github.com/can1357/oh-my-pi/issues/5389)).
+
 ## [16.5.0] - 2026-07-13
 
 ### Breaking Changes
