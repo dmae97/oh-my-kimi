@@ -28,7 +28,7 @@ display(value) → None
 print(value, ...) → None
     Text output.
 read(path, offset?=1, limit?=None) → str
-    File as text; offset/limit 1-indexed lines. Accepts `local://…`.
+    File/resource text; offset/limit = 1-indexed lines. `local://…` works everywhere; Python/JS also accept top-level `read` URI schemes.
 write(path, content) → str
     Write file (creates parents) → resolved path. `local://…` persists across turns/subagents.
 env(key?=None, value?=None) → str | None | dict

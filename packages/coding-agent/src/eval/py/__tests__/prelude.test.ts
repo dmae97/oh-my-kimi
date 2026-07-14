@@ -1,6 +1,30 @@
 import { describe, expect, it } from "bun:test";
 import { PYTHON_PRELUDE } from "../prelude";
 
+const pythonPath = Bun.env.PYTHON ?? "python3";
+
+async function runPrelude(
+	code: string,
+	env: Record<string, string>,
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+	const prelude = PYTHON_PRELUDE.replace(
+		"from __future__ import annotations",
+		"from __future__ import annotations\n__omp_display = lambda *args, **kwargs: None",
+	);
+	const script = `${prelude}\n${code}`;
+	const proc = Bun.spawn([pythonPath, "-c", script], {
+		stdout: "pipe",
+		stderr: "pipe",
+		env: { ...process.env, ...env },
+	});
+	const [stdout, stderr, exitCode] = await Promise.all([
+		new Response(proc.stdout).text(),
+		new Response(proc.stderr).text(),
+		proc.exited,
+	]);
+	return { stdout, stderr, exitCode };
+}
+
 describe("python prelude", () => {
 	it("exposes read(path, offset?, limit?) with positional optional args", () => {
 		// The eval docs advertise `read(path, offset?=1, limit?=None)`. A
@@ -15,6 +39,41 @@ describe("python prelude", () => {
 		expect(signature).not.toContain("*,");
 		expect(signature).toContain("offset");
 		expect(signature).toContain("limit");
+	});
+
+	it("delegates artifact URI reads through the host read tool with line selectors", async () => {
+		const requests: unknown[] = [];
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: async request => {
+				requests.push(await request.json());
+				return Response.json({
+					ok: true,
+					value: { text: "artifact contents", details: { resolvedPath: "/tmp/21.txt" } },
+				});
+			},
+		});
+
+		try {
+			const result = await runPrelude(`print(read("artifact://21", 3, 2))`, {
+				PI_TOOL_BRIDGE_URL: server.url.toString(),
+				PI_TOOL_BRIDGE_TOKEN: "test-token",
+				PI_TOOL_BRIDGE_SESSION: "test-session",
+			});
+
+			expect(result).toEqual({ stdout: "artifact contents\n", stderr: "", exitCode: 0 });
+			expect(requests).toEqual([
+				{
+					session: "test-session",
+					run: null,
+					name: "read",
+					args: { path: "artifact://21:3-4" },
+				},
+			]);
+		} finally {
+			server.stop(true);
+		}
 	});
 
 	it("exposes isolation artifacts on the agent() handle node", () => {
