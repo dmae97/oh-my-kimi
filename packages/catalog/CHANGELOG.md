@@ -4,9 +4,9 @@
 
 ### Fixed
 
-- Fixed Z.ai GLM-5.2 on the `anthropic-messages` coding endpoint deriving `mode: "budget"` with five synthetic effort tiers instead of the wire-exact `anthropic-budget-effort` with `[high, max]`. The catalog now matches Z.ai's Anthropic proxy to the same two-tier reasoning scale as Umans, so `output_config.effort` is emitted on the wire.
-- Fixed stale cached model limits overriding updated static catalog limits after a static catalog fingerprint mismatch. ([#4956](https://github.com/can1357/oh-my-pi/issues/4956))
-- Fixed Cursor discovery to preserve `GetUsableModels` max-mode metadata for premium models and invalidate stale pre-max-mode cache rows. ([#4797](https://github.com/can1357/oh-my-pi/issues/4797))
+- Fixed reasoning effort mapping for Z.ai GLM-5.2 on the Anthropic messages endpoint to correctly use the two-tier scale (high, max) and emit output_config.effort.
+- Fixed an issue where stale cached model limits would override updated static catalog limits after a catalog fingerprint mismatch.
+- Fixed Cursor discovery to correctly preserve GetUsableModels max-mode metadata for premium models and invalidate stale cache entries.
 
 ## [16.4.3] - 2026-07-11
 
