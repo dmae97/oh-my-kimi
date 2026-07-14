@@ -234,6 +234,7 @@
 - Fixed macOS runtime diagnostics (e.g. `MallocStackLogging: can't turn off malloc stack logging because it was not enabled`) written directly to fd 2 by libmalloc painting into the TUI viewport. While the TUI owns the terminal, stderr is now redirected to the omp log file and restored at every ownership handoff (external editor, Ctrl+Z suspend, shutdown, crash restore); fatal crash reports still reach the real terminal.
 - Fixed custom model/provider config discovery so `~/.omp/agent/models.yaml` loads when `models.yml` is absent, while preserving `.yml` precedence and only migrating legacy `models.json` when neither YAML file exists. ([#5145](https://github.com/can1357/oh-my-pi/issues/5145))
 - Fixed throttled live command output holding a quiet final chunk until the command exited.
+- Fixed rpc-ui extension UI and host tool responses deadlocking login, session lifecycle, and queued commands while an active command awaited the same side channel. ([#5153](https://github.com/can1357/oh-my-pi/issues/5153))
 
 ## [16.4.2] - 2026-07-10
 
