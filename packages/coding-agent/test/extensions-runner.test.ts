@@ -72,6 +72,26 @@ describe("ExtensionRunner", () => {
 		};
 	};
 
+	it("exposes caller localProtocolOptions through extension context", async () => {
+		const localProtocolOptions = {
+			getArtifactsDir: () => tempDir.join("artifacts"),
+			getSessionId: () => "runner-session",
+		};
+		const result = await loadTestExtensions();
+		const runner = new ExtensionRunner(
+			result.extensions,
+			result.runtime,
+			tempDir.path(),
+			sessionManager,
+			modelRegistry,
+			undefined,
+			undefined,
+			localProtocolOptions,
+		);
+
+		expect(runner.createContext().localProtocolOptions).toBe(localProtocolOptions);
+	});
+
 	describe("shortcut conflicts", () => {
 		it("warns when extension shortcut conflicts with built-in", async () => {
 			const extCode = `

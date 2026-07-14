@@ -352,6 +352,7 @@
 - Fixed Cursor-provider turns whose assistant message contains intro text, tool calls, and trailing final text rendering the final answer above the tool output instead of at the transcript tail ([#4871](https://github.com/can1357/oh-my-pi/issues/4871)).
 - Fixed `omp -p` looking hung while a text-mode prompt is in flight by writing a one-shot working indicator to stderr before awaiting the model response. ([#4901](https://github.com/can1357/oh-my-pi/issues/4901))
 - Fixed autolearn auto-continue firing a capture turn after an aborted stop (Esc/cancel): the controller now skips any `agent_end` whose last assistant message has `stopReason: "aborted"`.
+- Fixed MCP tools receiving session image attachments as raw `local://...` URIs by resolving them to session-local filesystem paths before `tools/call` is sent ([#4946](https://github.com/can1357/oh-my-pi/issues/4946)).
 
 ## [16.3.12] - 2026-07-08
 
