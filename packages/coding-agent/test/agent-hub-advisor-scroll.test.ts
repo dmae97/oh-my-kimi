@@ -16,6 +16,15 @@ import { AgentTranscriptViewer } from "@oh-my-pi/pi-coding-agent/modes/component
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { CURRENT_SESSION_VERSION } from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import {
+	getKittyGraphics,
+	ImageBudget,
+	ImageProtocol,
+	setKittyGraphics,
+	setTerminalImageProtocol,
+	TERMINAL,
+	type TUI,
+} from "@oh-my-pi/pi-tui";
 import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
 
 const TS = new Date().toISOString();
@@ -64,6 +73,60 @@ function buildJsonl(): string {
 	return `${lines.join("\n")}\n`;
 }
 
+function buildImageJsonl(): string {
+	const usage = {
+		input: 1,
+		output: 1,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 2,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	};
+	const entries = [
+		JSON.stringify({ type: "session", version: CURRENT_SESSION_VERSION, id: "adv", timestamp: TS, cwd: "/tmp" }),
+		JSON.stringify({
+			type: "message",
+			id: "a0",
+			parentId: null,
+			timestamp: TS,
+			message: {
+				role: "assistant",
+				content: [
+					{ type: "toolCall", id: "image-call", name: "eval", arguments: { language: "py", code: "display" } },
+				],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "gpt-5.5",
+				usage,
+				stopReason: "toolUse",
+				timestamp: 1,
+			},
+		}),
+		JSON.stringify({
+			type: "message",
+			id: "t0",
+			parentId: "a0",
+			timestamp: TS,
+			message: {
+				role: "toolResult",
+				toolCallId: "image-call",
+				toolName: "eval",
+				content: [
+					{ type: "text", text: "displayed image" },
+					{
+						type: "image",
+						data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+						mimeType: "image/png",
+					},
+				],
+				isError: false,
+				timestamp: 2,
+			},
+		}),
+	];
+	return `${entries.join("\n")}\n`;
+}
+
 function messageLine(id: string, content: string): string {
 	return JSON.stringify({
 		type: "message",
@@ -74,7 +137,7 @@ function messageLine(id: string, content: string): string {
 	});
 }
 
-function makeViewer(file: string, remote?: AgentHubRemote) {
+function makeViewer(file: string, remote?: AgentHubRemote, ui?: TUI) {
 	const agents = new AgentRegistry();
 	agents.register({
 		id: "Main/advisor",
@@ -88,7 +151,7 @@ function makeViewer(file: string, remote?: AgentHubRemote) {
 	return new AgentTranscriptViewer({
 		agentId: "Main/advisor",
 		registry: agents,
-		ui: { requestRender: () => {}, requestComponentRender: () => {} } as never,
+		ui: ui ?? ({ requestRender: () => {}, requestComponentRender: () => {} } as never),
 		cwd: "/tmp",
 		remote,
 		expandKeys: ["ctrl+o"],
@@ -164,6 +227,37 @@ describe("AgentTranscriptViewer", () => {
 			expect(atTop).toContain("PROMPTMARKER");
 			expect(atBottom).not.toContain("PROMPTMARKER");
 		});
+	});
+
+	it("renders tool-result images through the shared Kitty placeholder budget", async () => {
+		await Settings.init({ inMemory: true, overrides: { "terminal.showImages": true } });
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "adv-view-image-"));
+		const file = path.join(dir, "__advisor.jsonl");
+		fs.writeFileSync(file, buildImageJsonl());
+		const previousProtocol = TERMINAL.imageProtocol;
+		const previousGraphics = getKittyGraphics();
+		setTerminalImageProtocol(ImageProtocol.Kitty);
+		setKittyGraphics({ unicodePlaceholders: true });
+		const imageBudget = new ImageBudget(8, () => {});
+		const ui = {
+			imageBudget,
+			requestRender: () => {},
+			requestComponentRender: () => {},
+		} as unknown as TUI;
+		const viewer = makeViewer(file, undefined, ui);
+		try {
+			imageBudget.beginPass();
+			const rendered = viewer.render(80).join("\n");
+			imageBudget.endPass();
+			expect(rendered).toContain("a=p,U=1");
+			expect(rendered).toContain("\u{10eeee}");
+			expect(imageBudget.takeTransmits().join("")).toContain("a=t");
+		} finally {
+			viewer.dispose();
+			setKittyGraphics(previousGraphics);
+			setTerminalImageProtocol(previousProtocol);
+			removeSyncWithRetries(dir);
+		}
 	});
 
 	it("clears stale content when the transcript file is deleted while open", async () => {

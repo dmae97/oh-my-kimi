@@ -83,6 +83,9 @@
 ### Fixed
 
 - Fixed switching from a vision model to a text-only model mid-session sending historical image blocks to the new provider, which rejected them; image content is now replaced with a text placeholder in outbound requests when the active model lacks image input ([#5400](https://github.com/can1357/oh-my-pi/issues/5400)).
+### Fixed
+
+- Fixed inline images in Agent Hub transcripts by routing replayed assistant and tool-result images through the shared image budget and Kitty placeholder renderer. ([#5381](https://github.com/can1357/oh-my-pi/issues/5381))
 
 ## [16.5.0] - 2026-07-13
 
