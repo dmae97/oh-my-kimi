@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed plugin installation failing when an ES module extension synchronously requires CommonJS helpers ([#5373](https://github.com/can1357/oh-my-pi/issues/5373)).
+
 ## [16.5.0] - 2026-07-13
 
 ### Breaking Changes

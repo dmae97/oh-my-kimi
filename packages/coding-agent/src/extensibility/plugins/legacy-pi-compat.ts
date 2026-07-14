@@ -1135,10 +1135,9 @@ async function realpathOrSelfUncached(p: string): Promise<string> {
  * Extension-local bare dependency entries are also included so their relative
  * children receive the reload mtime tag; bare imports inside those dependencies
  * remain native Bun resolutions to avoid taking over full third-party graphs.
- * CommonJS dependency entries stay native too, with one exception: napi-rs
- * style loaders whose bare requires resolve to `.node` addons are hooked so
- * their requires can be pinned to absolute paths (unresolvable by bare
- * specifier inside `bun build --compile` binaries).
+ * CommonJS modules reached through `require()` stay on Bun's native loader.
+ * The only exception is a module whose bare requires resolve to native addons:
+ * those require a synchronous hook that pins the addon to an absolute path.
  */
 async function collectExtensionModules(entryRealPath: string): Promise<Map<string, string>> {
 	const modules = new Map<string, string>();
@@ -1159,32 +1158,40 @@ async function collectExtensionModules(entryRealPath: string): Promise<Map<strin
 		let source: string;
 		try {
 			source = await Bun.file(file).text();
-			if (nativeAddonLoaderModulePaths.has(file)) {
-				// CJS requires cannot await an async onLoad hook. Resolve and
-				// rewrite native-addon paths before installing its sync hook.
-				source = await rewriteExtensionNativeAddonRequires(source, file);
-			}
 		} catch {
 			continue;
 		}
 		modules.set(file, source);
 		const dir = path.dirname(file);
 		const specifiers = new Set<string>();
+		const requiredSpecifiers = new Set<string>();
 		for (const match of source.matchAll(EXTENSION_GRAPH_SPECIFIER_REGEX)) {
 			if (match[2]) specifiers.add(match[2]);
 		}
 		for (const match of source.matchAll(NATIVE_ADDON_REQUIRE_SPECIFIER_REGEX)) {
-			if (match[2]) specifiers.add(match[2]);
+			if (match[2]) {
+				specifiers.add(match[2]);
+				requiredSpecifiers.add(match[2]);
+			}
 		}
 		for (const specifier of specifiers) {
 			try {
 				let resolved: string | null = null;
 				let nextFollowsBareDependencies = followBareDependencies;
+				const isRequired = requiredSpecifiers.has(specifier);
 				if (specifier.startsWith(".")) {
 					const candidate = Bun.resolveSync(specifier, dir);
-					resolved = hasSourceModuleExtension(candidate) ? await realpathOrSelf(candidate) : null;
+					if (
+						hasSourceModuleExtension(candidate) &&
+						(!isRequired || (await moduleRequiresNativeAddon(candidate)))
+					) {
+						resolved = await realpathOrSelf(candidate);
+					}
 				} else if (specifier.startsWith("#")) {
-					resolved = await resolvePackageImportSpecifier(specifier, file);
+					const candidate = await resolvePackageImportSpecifier(specifier, file);
+					if (candidate && (!isRequired || (await moduleRequiresNativeAddon(candidate)))) {
+						resolved = candidate;
+					}
 				} else if (
 					followBareDependencies &&
 					isBareExtensionDependencySpecifier(specifier) &&
@@ -1206,13 +1213,16 @@ async function collectExtensionModules(entryRealPath: string): Promise<Map<strin
 						isHookableEntry && isCommonJsEntry && dependencyEntry
 							? await moduleRequiresNativeAddon(dependencyEntry)
 							: false;
-					if (isHookableEntry && dependencyEntry && (!isCommonJsEntry || hookCommonJsEntry)) {
+					if (isHookableEntry && dependencyEntry && ((!isRequired && !isCommonJsEntry) || hookCommonJsEntry)) {
 						resolved = await realpathOrSelf(dependencyEntry);
-						if (hookCommonJsEntry) {
-							nativeAddonLoaderModulePaths.add(resolved);
-						}
+					}
+					if (resolved && hookCommonJsEntry) {
+						nativeAddonLoaderModulePaths.add(resolved);
 					}
 					nextFollowsBareDependencies = false;
+				}
+				if (resolved && isRequired) {
+					nativeAddonLoaderModulePaths.add(resolved);
 				}
 				if (resolved && !modules.has(resolved)) {
 					const queuedFollowsBareDependencies = queuedFollowBareDependencies.get(resolved) ?? false;
@@ -1223,6 +1233,12 @@ async function collectExtensionModules(entryRealPath: string): Promise<Map<strin
 			} catch {
 				// Unresolvable import (e.g. a type-only path); skip it.
 			}
+		}
+	}
+	for (const modulePath of nativeAddonLoaderModulePaths) {
+		const source = modules.get(modulePath);
+		if (source !== undefined) {
+			modules.set(modulePath, await rewriteExtensionNativeAddonRequires(source, modulePath));
 		}
 	}
 	return modules;
