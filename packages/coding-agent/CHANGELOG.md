@@ -74,6 +74,10 @@
 
 - Fixed `omp config list --json` truncating output at 64 KiB when stdout is piped ([#5309](https://github.com/can1357/oh-my-pi/issues/5309))
 
+### Fixed
+
+- Fixed vim-style `h`/`j`/`k`/`l` navigation under the Kitty keyboard protocol ([#5314](https://github.com/can1357/oh-my-pi/issues/5314))
+
 ### Removed
 
 - Removed the `--prewalk-boomerang` feature and its associated configuration setting.

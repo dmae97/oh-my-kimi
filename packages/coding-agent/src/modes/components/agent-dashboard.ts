@@ -1142,11 +1142,11 @@ export class AgentDashboard extends Container {
 			return;
 		}
 
-		if (matchesSelectUp(data) || data === "k") {
+		if (matchesSelectUp(data) || matchesKey(data, "k")) {
 			this.#moveSelection(-1);
 			return;
 		}
-		if (matchesSelectDown(data) || data === "j") {
+		if (matchesSelectDown(data) || matchesKey(data, "j")) {
 			this.#moveSelection(1);
 			return;
 		}

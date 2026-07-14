@@ -400,8 +400,8 @@ export class PlanReviewOverlay implements Component {
 		// Left/right always drive the slider. The sidebar sits beside the body
 		// (above this row), not the slider, so stealing left for it would strand
 		// the operator unable to step the model tier back — reach the ToC via Tab.
-		const isLeft = matchesKey(data, "left") || (this.#slider !== undefined && data === "h");
-		const isRight = matchesKey(data, "right") || (this.#slider !== undefined && data === "l");
+		const isLeft = matchesKey(data, "left") || (this.#slider !== undefined && matchesKey(data, "h"));
+		const isRight = matchesKey(data, "right") || (this.#slider !== undefined && matchesKey(data, "l"));
 		if (isLeft) {
 			this.#moveSlider(-1);
 			return;
@@ -410,12 +410,12 @@ export class PlanReviewOverlay implements Component {
 			this.#moveSlider(1);
 			return;
 		}
-		if (matchesSelectUp(data) || data === "k") {
+		if (matchesSelectUp(data) || matchesKey(data, "k")) {
 			if (this.#selectedIndex === this.#firstEnabledIndex()) this.#setFocus("body");
 			else this.#moveSelection(-1);
 			return;
 		}
-		if (matchesSelectDown(data) || data === "j") {
+		if (matchesSelectDown(data) || matchesKey(data, "j")) {
 			this.#moveSelection(1);
 			return;
 		}
@@ -427,13 +427,13 @@ export class PlanReviewOverlay implements Component {
 	}
 
 	#handleBody(data: string): void {
-		if (matchesKey(data, "left") || data === "h") {
+		if (matchesKey(data, "left") || matchesKey(data, "h")) {
 			if (this.#sidebarShown) this.#setFocus("toc");
 			return;
 		}
 		if (
 			matchesKey(data, "right") ||
-			data === "l" ||
+			matchesKey(data, "l") ||
 			matchesKey(data, "enter") ||
 			matchesKey(data, "return") ||
 			data === "\n"
@@ -444,12 +444,12 @@ export class PlanReviewOverlay implements Component {
 		// Vertical nav flows between regions at the edges: scrolling off the bottom
 		// drops into the actions ("next step"); scrolling off the top steps back up
 		// to the ToC.
-		if (matchesSelectUp(data) || data === "k") {
+		if (matchesSelectUp(data) || matchesKey(data, "k")) {
 			if (this.#scrollView.getScrollOffset() <= 0 && this.#sidebarShown) this.#setFocus("toc");
 			else this.#scrollView.scroll(-1);
 			return;
 		}
-		if (matchesSelectDown(data) || data === "j") {
+		if (matchesSelectDown(data) || matchesKey(data, "j")) {
 			if (this.#scrollView.getScrollOffset() >= this.#scrollView.getMaxScrollOffset()) this.#setFocus("actions");
 			else this.#scrollView.scroll(1);
 			return;
@@ -470,11 +470,11 @@ export class PlanReviewOverlay implements Component {
 	}
 
 	#handleToc(data: string): void {
-		if (matchesSelectUp(data) || data === "k") {
+		if (matchesSelectUp(data) || matchesKey(data, "k")) {
 			this.#moveTocCursor(-1);
 			return;
 		}
-		if (matchesSelectDown(data) || data === "j") {
+		if (matchesSelectDown(data) || matchesKey(data, "j")) {
 			// Past the last section, fall through to the actions ("next step").
 			if (this.#tocCursor >= this.#toc.length - 1) this.#setFocus("actions");
 			else this.#moveTocCursor(1);
@@ -482,7 +482,7 @@ export class PlanReviewOverlay implements Component {
 		}
 		if (
 			matchesKey(data, "right") ||
-			data === "l" ||
+			matchesKey(data, "l") ||
 			matchesKey(data, "enter") ||
 			matchesKey(data, "return") ||
 			data === "\n"
