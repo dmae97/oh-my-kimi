@@ -219,4 +219,19 @@ describe("transcript streaming commit (assistant text)", () => {
 		expect(codeRow).toBeGreaterThanOrEqual(0);
 		expect(rows.slice(codeRow, codeRow + 3)).toEqual(["  +a", "", "  +streaming"]);
 	});
+
+	it("does not duplicate a leading blank row when the streamed diff grows", () => {
+		const block = new StreamingMarkdownBlock();
+
+		block.setStreamingText("```diff\n\n+partial");
+		block.render(40);
+
+		block.setStreamingText("```diff\n\n+done\n-streaming");
+
+		const rows = block.render(40).map(row => Bun.stripANSI(row).trimEnd());
+		const fenceRow = rows.indexOf("```diff");
+
+		expect(fenceRow).toBeGreaterThanOrEqual(0);
+		expect(rows.slice(fenceRow, fenceRow + 5)).toEqual(["```diff", "", "  +done", "  -streaming", "```"]);
+	});
 });

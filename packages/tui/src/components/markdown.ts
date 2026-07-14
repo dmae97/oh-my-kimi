@@ -1499,7 +1499,7 @@ export class Markdown implements Component {
 		) {
 			if (completedText.length === cache.text.length) return cache.lines;
 			const lines = cache.lines.slice();
-			const addedText = completedText.slice(cache.text.length === 0 ? 0 : cache.text.length + 1);
+			const addedText = completedText.slice(cache.text.length + 1);
 			for (const codeLine of addedText.split("\n")) {
 				lines.push(...highlightCode(codeLine, lang));
 			}
