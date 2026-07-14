@@ -64,6 +64,20 @@ function isObject(value: unknown): value is Record<string, unknown> {
 	if (typeof value !== "object") return false;
 	return value !== null;
 }
+function isPendingToolCallDiagnostic(value: unknown): value is PendingToolCallDiagnostic {
+	if (!isObject(value) || typeof value.toolName !== "string") return false;
+	if ("toolCallId" in value && typeof value.toolCallId !== "string") return false;
+	if ("intent" in value && typeof value.intent !== "string") return false;
+	if ("assistantTimestamp" in value && typeof value.assistantTimestamp !== "number") return false;
+	if ("startedAt" in value && typeof value.startedAt !== "string") return false;
+	return true;
+}
+
+function readPendingToolCalls(value: unknown): PendingToolCallDiagnostic[] | undefined {
+	if (!Array.isArray(value) || !value.every(isPendingToolCallDiagnostic)) return undefined;
+	return value;
+}
+
 
 function readSessionExit(entry: SessionEntry): SessionExitData | undefined {
 	if (entry.type !== "custom" || entry.customType !== SESSION_EXIT_CUSTOM_TYPE || !isObject(entry.data)) {
@@ -81,7 +95,7 @@ function readSessionExit(entry: SessionEntry): SessionExitData | undefined {
 		reason,
 		kind,
 		recordedAt,
-		pendingToolCalls: entry.data.pendingToolCalls as PendingToolCallDiagnostic[] | undefined,
+		pendingToolCalls: readPendingToolCalls(entry.data.pendingToolCalls),
 	};
 }
 

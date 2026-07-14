@@ -328,6 +328,20 @@ describe("session exit diagnostics", () => {
 		});
 	});
 
+	it("ignores malformed pending tool diagnostics on normal exits", () => {
+		const sessionManager = SessionManager.inMemory();
+		sessionManager.appendMessage({ role: "user", content: "inspect the file", timestamp: Date.now() });
+		sessionManager.appendMessage(pendingAssistant);
+		sessionManager.appendCustomEntry(SESSION_EXIT_CUSTOM_TYPE, {
+			reason: "manual exit",
+			kind: "normal",
+			recordedAt: "2026-07-11T02:20:08.800Z",
+			pendingToolCalls: "not an array",
+		});
+
+		expect(createInterruptedTurnAbortMessage(sessionManager.getBranch())).toBeUndefined();
+	});
+
 	it("reconstructs an interrupted assistant tool-call tail", () => {
 		const sessionManager = SessionManager.inMemory();
 		sessionManager.appendMessage({ role: "user", content: "inspect the file", timestamp: Date.now() });
