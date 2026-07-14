@@ -71,6 +71,9 @@
 - Fixed Pyright LSP semantic requests hanging during startup.
 - Fixed Codex web search requests for GPT-5.6 Responses-Lite models.
 - Fixed custom model/provider configuration discovery to correctly load ~/.omp/agent/models.yaml when models.yml is absent.
+### Fixed
+
+- Fixed git plugin re-installs retaining stale commits by fetching Bun's cached clone before updating the lockfile pin ([#5401](https://github.com/can1357/oh-my-pi/issues/5401)).
 
 ## [16.5.0] - 2026-07-13
 
