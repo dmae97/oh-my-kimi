@@ -211,6 +211,16 @@ export class PluginManager {
 		}
 	}
 
+	async #removeDependencyEntry(pkgJsonPath: string, name: string): Promise<void> {
+		const pkgJson: { dependencies?: Record<string, string>; [key: string]: unknown } =
+			await Bun.file(pkgJsonPath).json();
+		if (!pkgJson.dependencies || !(name in pkgJson.dependencies)) {
+			return;
+		}
+		delete pkgJson.dependencies[name];
+		await Bun.write(pkgJsonPath, JSON.stringify(pkgJson, null, 2));
+	}
+
 	#collectInstalledNames(deps: Record<string, string>, config: PluginRuntimeConfig): Set<string> {
 		const installedNames = new Set<string>();
 		for (const name of Object.keys(deps)) {
@@ -450,6 +460,17 @@ export class PluginManager {
 		// validation throws.
 		let actualName: string | undefined;
 		try {
+			// Bun treats a dependency replacement from `repo#old-ref` to the same
+			// package at `repo`/`repo#new-ref` as a self-edge and bails with
+			// DependencyLoop. Remove only the stale manifest edge; rollback restores
+			// the original package.json and node_modules snapshot on failure.
+			if (gitSource && existingActualName) {
+				const installedSource = parseGitUrl(depsBefore[existingActualName] ?? "");
+				if (installedSource && installedSource.ref !== gitSource.ref) {
+					await this.#removeDependencyEntry(pkgJsonPath, existingActualName);
+				}
+			}
+
 			// Step 1: write the spec into plugins/package.json + node_modules.
 			const installProc = Bun.spawn(["bun", "install", packageInstallSpec], {
 				cwd: getPluginsDir(),

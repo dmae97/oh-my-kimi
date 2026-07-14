@@ -332,6 +332,7 @@
 - Fixed display of thinking blocks consisting entirely of hidden comment noise
 - Fixed gpt-5.6 reasoning summaries rendering literal `<!-- -->` sentinel lines in thinking blocks; empty HTML comments (and the unterminated `<!--` tail while streaming) are now dropped from the thinking display, and blocks reduced to pure comment noise are hidden entirely.
 - Fixed `ultrathink`, `orchestrate`, and `workflowz` magic keywords not triggering when adjacent to sentence punctuation or quotes while still ignoring inflections and path/file-extension occurrences. ([#4965](https://github.com/can1357/oh-my-pi/issues/4965))
+- Fixed `omp plugin install github:owner/repo --force` failing with Bun `DependencyLoop` when replacing an existing pinned git plugin source for the same repository; the installer now removes the stale pinned dependency edge before invoking Bun and restores it on rollback. ([#4960](https://github.com/can1357/oh-my-pi/issues/4960))
 
 ## [16.3.13] - 2026-07-09
 
