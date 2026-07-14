@@ -83,27 +83,65 @@ const LOOSE_HASHLINE_HEADER_RE = /^\s*\[[^#\r\n]+#[^ \t\r\n]*\]\s*$/;
 const EXECUTABLE_NOTICE = "[Notice: Made executable via chmod +x]";
 
 const BULK_DIRECTIVE_RE = /^#?(\d+)\s*[:=]\s*(@ours|@theirs|@base|@both)$/;
+/**
+ * The head of a per-id directive line — `<id>:` / `<id>=` (optionally `#`-prefixed),
+ * regardless of whether its value is a valid `@side` token. Used only to sharpen the
+ * error message when a directive block is malformed (e.g. `15: some literal text`).
+ */
+const BULK_DIRECTIVE_HEAD_RE = /^#?\d+\s*[:=]/;
+
+function truncateDirectiveLine(line: string): string {
+	return line.length > 60 ? `${line.slice(0, 57)}…` : line;
+}
 
 /**
  * Parse `conflict://*` per-id directive content: every non-empty line must be
- * `<id>: @side` (also accepted: `#<id> = @side`). Returns `null` when the
- * content is not directive-shaped (→ uniform bulk mode); throws on duplicate
- * ids so a typo never silently drops a resolution.
+ * `<id>: @side` (also accepted: `#<id> = @side`), where `@side` is one of
+ * `@ours` / `@theirs` / `@base` / `@both`.
+ *
+ * Returns `null` only when NO line is directive-shaped (→ uniform bulk mode).
+ * Throws on duplicate ids, and — critically — on a *partial* directive block:
+ * content that mixes valid `<id>: @side` lines with lines that aren't. Without
+ * that guard a per-id write carrying any non-token value (a literal or
+ * multi-line replacement, e.g. `15: <multi-line content>`) fell through to
+ * uniform bulk mode, which pasted the raw directive text verbatim into every
+ * block and still reported success. Per-id bulk is token-only; literal or
+ * multi-line replacements must go through individual `conflict://<N>` writes.
  */
 function parseBulkDirectives(content: string): Map<number, string> | null {
 	const map = new Map<number, string>();
+	const stray: string[] = [];
+	let sawDirective = false;
 	for (const raw of content.split("\n")) {
 		const line = raw.trim();
 		if (line.length === 0) continue;
 		const match = line.match(BULK_DIRECTIVE_RE);
-		if (!match) return null;
+		if (!match) {
+			stray.push(line);
+			continue;
+		}
+		sawDirective = true;
 		const id = Number.parseInt(match[1], 10);
 		if (map.has(id)) {
 			throw new ToolError(`Bulk directive lists conflict #${id} twice — each id may appear once.`);
 		}
 		map.set(id, match[2]);
 	}
-	return map.size > 0 ? map : null;
+	// No directive lines at all → not a per-id block; caller uses uniform mode.
+	if (!sawDirective) return null;
+	if (stray.length > 0) {
+		const sample = stray[0]!;
+		const tokenHint = BULK_DIRECTIVE_HEAD_RE.test(sample)
+			? `Per-id bulk only accepts the tokens @ours/@theirs/@base/@both — one side per id, single line. `
+			: "";
+		throw new ToolError(
+			`Malformed \`conflict://*\` per-id block: ${stray.length} line(s) are not \`<id>: @side\` directives (first: \`${truncateDirectiveLine(sample)}\`). ` +
+				tokenHint +
+				`Literal or multi-line replacement content isn't supported in a per-id block — resolve those blocks with individual \`write({ path: "conflict://<N>", content })\` calls (you can issue several at once). ` +
+				`For a pure pick-a-side pass, make every non-empty line \`<id>: @ours\` (or @theirs/@base/@both).`,
+		);
+	}
+	return map;
 }
 
 const writeSchema = type({

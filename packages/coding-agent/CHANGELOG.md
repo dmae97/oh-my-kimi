@@ -181,6 +181,7 @@
 - Fixed Advisor containment so hallucinated unavailable tool calls and output-only destructive directives quarantine the Advisor response and reset its private context instead of feeding contaminated text into later advice. ([#5181](https://github.com/can1357/oh-my-pi/issues/5181))
 - Fixed the built-in advisor treating empty `stop` completions without advice as successful reviews, so silent provider failures now enter the advisor retry/drop path. ([#5212](https://github.com/can1357/oh-my-pi/issues/5212))
 - Fixed `autolearn.autoContinue` treating the hidden capture turn's terminal empty assistant stop as a retryable empty response instead of successful completion. ([#5211](https://github.com/can1357/oh-my-pi/issues/5211))
+- Fixed advisor flagging issues the primary agent already resolved by coalescing late-arriving transcript deltas into the current batch before the advisor model call (instead of deferring them a full cycle), annotating advice with a staleness caveat when newer primary turns arrived during the model call, and tagging mid-turn `[in progress]` updates so the advisor withholds premature critique ([#4850](https://github.com/can1357/oh-my-pi/issues/4850)). Also fixed pre-existing unchecked inline casts in `#renderDelta` and `#dedupContextMessage` that suppressed type errors instead of using role-discriminant narrowing.
 
 ## [16.4.4] - 2026-07-11
 
