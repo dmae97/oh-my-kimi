@@ -1364,21 +1364,14 @@ export class Editor implements Component, Focusable {
 		} else if (kb.matches(data, "tui.editor.cursorLineEnd")) {
 			this.#moveToLineEnd();
 		}
-		// Page navigation (PageUp/PageDown)
+		// Page navigation (PageUp/PageDown): page the editor viewport only. On a
+		// short draft this is a no-op — it never steps prompt history (that stays
+		// on Up/Down), so an idle empty editor swallows the keys instead of
+		// surprising the user by loading the previous prompt (#4754).
 		else if (kb.matches(data, "tui.editor.pageUp")) {
-			if (this.#isEditorEmpty()) {
-				this.#navigateHistory(-1);
-			} else if (this.#historyIndex > -1 && this.#isOnFirstVisualLine()) {
-				this.#navigateHistory(-1);
-			} else {
-				this.#pageScroll(-1);
-			}
+			this.#pageScroll(-1);
 		} else if (kb.matches(data, "tui.editor.pageDown")) {
-			if (this.#historyIndex > -1 && this.#isOnLastVisualLine()) {
-				this.#navigateHistory(1);
-			} else {
-				this.#pageScroll(1);
-			}
+			this.#pageScroll(1);
 		}
 		// Forward delete (Fn+Backspace or Delete key, including Shift+Delete)
 		else if (kb.matches(data, "tui.editor.deleteCharForward") || matchesKey(data, "shift+delete")) {
