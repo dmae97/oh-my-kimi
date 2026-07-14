@@ -45,6 +45,7 @@ export function resolveHangulCompatibilityJamoWidthFromTerminalIdentity(
 }
 
 function shouldEnableModifyOtherKeysFallback(env: NodeJS.ProcessEnv = Bun.env): boolean {
+	if (isInsideTmux(env)) return false;
 	if (!env.SSH_CONNECTION && !env.SSH_TTY && !env.SSH_CLIENT) return true;
 	return TERMINAL.id !== "base" && TERMINAL.id !== "trueColor";
 }

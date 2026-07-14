@@ -17,6 +17,7 @@
 - Hid empty HTML comment separators in Markdown-rendered TUI output instead of displaying them literally ([#4911](https://github.com/can1357/oh-my-pi/issues/4911)).
 - Fixed automatic file completion treating punctuation, trailing spaces, and ambiguous slash-command text as paths, immediately dismissing slash autocomplete on Backspace and requiring selection before applying a sole forced file match ([#5376](https://github.com/can1357/oh-my-pi/issues/5376)).
 - Fixed Kitty graphics under tmux by wrapping every graphics command in DCS passthrough, preserving quiet mode across continuation chunks, and using Unicode placeholder cells for explicitly forced Kitty rendering so images follow pane scrolling and reflow. ([#5381](https://github.com/can1357/oh-my-pi/issues/5381))
+- Fixed tmux sessions becoming unresponsive after terminal capability replies by keeping keyboard input in legacy mode when the Kitty protocol is unavailable ([#5378](https://github.com/can1357/oh-my-pi/issues/5378)).
 
 ## [16.5.0] - 2026-07-13
 
