@@ -1,5 +1,5 @@
 import { describe, expect, it, spyOn } from "bun:test";
-import { Args, Command, type CommandEntry, Flags, run } from "../src/cli"
+import { Args, Command, type CommandEntry, Flags, run } from "../src/cli";
 
 class GoodCommand extends Command {
 	static description = "prints good things";
@@ -106,7 +106,9 @@ describe("run() usage errors", () => {
 		});
 		const prevExitCode = process.exitCode;
 		try {
-			await expect(run({ bin: "omp", version: "0.0.0", argv: ["bench", "--unknown"], commands })).resolves.toBeUndefined();
+			await expect(
+				run({ bin: "omp", version: "0.0.0", argv: ["bench", "--unknown"], commands }),
+			).resolves.toBeUndefined();
 		} finally {
 			stderrSpy.mockRestore();
 			process.exitCode = prevExitCode ?? 0;
