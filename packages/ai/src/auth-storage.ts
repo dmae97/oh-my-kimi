@@ -56,7 +56,7 @@ import {
 	listCodexResetCredits,
 } from "./usage/openai-codex-reset";
 import { opencodeGoUsageProvider } from "./usage/opencode-go";
-import { zaiUsageProvider } from "./usage/zai";
+import { zaiRankingStrategy, zaiUsageProvider } from "./usage/zai";
 
 const USAGE_RANKING_METRIC_EPSILON = 1e-9;
 const OAUTH_BEARER_FINGERPRINT_HISTORY_LIMIT = 8;
@@ -951,6 +951,7 @@ const DEFAULT_RANKING_STRATEGIES = new Map<Provider, CredentialRankingStrategy>(
 	["openai-codex", codexRankingStrategy],
 	["anthropic", claudeRankingStrategy],
 	["google-antigravity", antigravityRankingStrategy],
+	["zai", zaiRankingStrategy],
 ]);
 
 function resolveDefaultRankingStrategy(provider: Provider): CredentialRankingStrategy | undefined {
@@ -1075,16 +1076,22 @@ class AuthStorageUsageCache implements UsageCache {
 // ─────────────────────────────────────────────────────────────────────────────
 
 type StoredCredential = { id: number; credential: AuthCredential };
-type OAuthSelection = { credential: OAuthCredential; index: number };
+type CredentialSelection<T extends AuthCredential> = { credential: T; index: number };
+type OAuthSelection = CredentialSelection<OAuthCredential>;
+type ApiKeySelection = CredentialSelection<ApiKeyCredential>;
 type StoredOAuthSelection = { credentialId: number; credential: OAuthCredential; index: number };
 
-type OAuthCandidate = {
-	selection: OAuthSelection;
+type UsageCandidate<T extends AuthCredential> = {
+	selection: CredentialSelection<T>;
 	usage: UsageReport | null;
 	usageChecked: boolean;
 };
 
-type RankedOAuthCandidate = OAuthCandidate & {
+type OAuthCandidate = UsageCandidate<OAuthCredential>;
+type ApiKeyCandidate = UsageCandidate<ApiKeyCredential>;
+type UsageRankingResult<T extends AuthCredential> = UsageCandidate<T> & { blockedUntil: number | undefined };
+
+type UsageRankedCandidate<T extends AuthCredential> = UsageCandidate<T> & {
 	blocked: boolean;
 	blockedUntil?: number;
 	hasPriorityBoost: boolean;
@@ -1095,6 +1102,8 @@ type RankedOAuthCandidate = OAuthCandidate & {
 	primaryDrainRate: number;
 	orderPos: number;
 };
+type RankedOAuthCandidate = UsageRankedCandidate<OAuthCredential>;
+type RankedApiKeyCandidate = UsageRankedCandidate<ApiKeyCredential>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AuthStorage Class
@@ -1776,6 +1785,151 @@ export class AuthStorage {
 		}
 
 		return fallback;
+	}
+
+	async #rankApiKeySelections(args: {
+		providerKey: string;
+		provider: string;
+		order: number[];
+		credentials: ApiKeySelection[];
+		options?: AuthApiKeyOptions;
+		sessionId?: string;
+		strategy: CredentialRankingStrategy;
+		rankingContext: CredentialRankingContext;
+		blockScope?: string;
+	}): Promise<ApiKeyCandidate[]> {
+		const nowMs = Date.now();
+		const { strategy } = args;
+		const ranked: RankedApiKeyCandidate[] = [];
+		const usageTimeout = Math.max(5000, this.#usageRequestTimeoutMs * 1.5);
+		const usagePromise: Promise<Array<UsageRankingResult<ApiKeyCredential> | null>> = Promise.all(
+			args.order.map(async idx => {
+				const selection = args.credentials[idx];
+				if (!selection) return null;
+				const blockedUntil = this.#getCredentialBlockedUntil(
+					args.provider,
+					args.providerKey,
+					selection.index,
+					args.blockScope,
+				);
+				if (blockedUntil !== undefined) {
+					return { selection, usage: null, usageChecked: false, blockedUntil };
+				}
+				const usage = await this.#getUsageReport(args.provider, selection.credential, {
+					...args.options,
+					timeoutMs: this.#usageRequestTimeoutMs,
+				});
+				return { selection, usage, usageChecked: true, blockedUntil: undefined };
+			}),
+		);
+		const timeoutSignal = Promise.withResolvers<null>();
+		const timer = setTimeout(() => timeoutSignal.resolve(null), usageTimeout);
+		timer.unref?.();
+		const usageResults = await Promise.race([usagePromise, timeoutSignal.promise]).then(result => {
+			clearTimeout(timer);
+			if (result) return result;
+			return args.order.map(idx => {
+				const selection = args.credentials[idx];
+				if (!selection) return null;
+				const blockedUntil = this.#getCredentialBlockedUntil(
+					args.provider,
+					args.providerKey,
+					selection.index,
+					args.blockScope,
+				);
+				return { selection, usage: null, usageChecked: false, blockedUntil };
+			});
+		});
+
+		for (let orderPos = 0; orderPos < usageResults.length; orderPos += 1) {
+			const result = usageResults[orderPos];
+			if (!result) continue;
+			const { selection, usage, usageChecked } = result;
+			let { blockedUntil } = result;
+			let blocked = blockedUntil !== undefined;
+			const scopedLimits = usage ? this.#getScopedUsageLimits(strategy, usage, args.rankingContext) : undefined;
+			if (!blocked && scopedLimits && this.#isUsageLimitReached(scopedLimits)) {
+				const resetAtMs = this.#getUsageResetAtMs(scopedLimits, nowMs);
+				blockedUntil = resetAtMs ?? Date.now() + AuthStorage.#defaultBackoffMs;
+				this.#markCredentialBlocked(
+					args.provider,
+					args.providerKey,
+					selection.index,
+					blockedUntil,
+					args.blockScope,
+				);
+				blocked = true;
+			}
+			const windows = usage ? strategy.findWindowLimits(usage, args.rankingContext) : undefined;
+			const primary = windows?.primary;
+			const secondary = windows?.secondary;
+			const secondaryTarget = secondary ?? primary;
+			ranked.push({
+				selection,
+				usage,
+				usageChecked,
+				blocked,
+				blockedUntil,
+				hasPriorityBoost: strategy.hasPriorityBoost?.(primary) ?? false,
+				planPriority: 0,
+				secondaryUsed: this.#normalizeUsageFraction(secondaryTarget),
+				secondaryDrainRate: this.#computeWindowDrainRate(
+					secondaryTarget,
+					nowMs,
+					strategy.windowDefaults.secondaryMs,
+				),
+				primaryUsed: this.#normalizeUsageFraction(primary),
+				primaryDrainRate: this.#computeWindowDrainRate(primary, nowMs, strategy.windowDefaults.primaryMs),
+				orderPos,
+			});
+		}
+		return this.#orderUsageRankedCandidates(ranked, args.sessionId, "none");
+	}
+
+	async #selectApiKeyCredential(
+		provider: string,
+		sessionId: string | undefined,
+		options: AuthApiKeyOptions | undefined,
+		filter?: (credential: ApiKeyCredential) => boolean,
+	): Promise<ApiKeySelection | undefined> {
+		const credentials = this.#getCredentialsForProvider(provider)
+			.map((credential, index) => ({ credential, index }))
+			.filter((entry): entry is ApiKeySelection => {
+				if (entry.credential.type !== "api_key") return false;
+				return filter?.(entry.credential) ?? true;
+			});
+
+		if (credentials.length === 0) return undefined;
+		if (credentials.length === 1) return credentials[0];
+
+		const providerKey = this.#getProviderTypeKey(provider, "api_key");
+		const order = this.#getCredentialOrder(providerKey, sessionId, credentials.length);
+		const fallback = credentials[order[0]];
+		const strategy = this.#rankingStrategyResolver?.(provider);
+		if (!strategy) {
+			for (const idx of order) {
+				const candidate = credentials[idx];
+				if (!this.#isCredentialBlocked(provider, providerKey, candidate.index)) {
+					return candidate;
+				}
+			}
+			return fallback;
+		}
+
+		const rankingContext: CredentialRankingContext = { modelId: options?.modelId };
+		const blockScope = strategy.blockScope?.(rankingContext);
+		const candidates = await this.#rankApiKeySelections({
+			providerKey,
+			provider,
+			order,
+			credentials,
+			options,
+			sessionId,
+			strategy,
+			rankingContext,
+			blockScope,
+		});
+		return candidates[0]?.selection ?? fallback;
 	}
 
 	/**
@@ -2464,7 +2618,13 @@ export class AuthStorage {
 	// Queries provider usage endpoints to detect rate limits before they occur.
 	// ─────────────────────────────────────────────────────────────────────────────
 
-	#buildUsageCredential(credential: OAuthCredential): UsageCredential {
+	#buildUsageCredential(credential: AuthCredential): UsageCredential {
+		if (credential.type === "api_key") {
+			return {
+				type: "api_key",
+				apiKey: credential.key,
+			};
+		}
 		return {
 			type: "oauth",
 			accessToken: credential.access,
@@ -3247,26 +3407,36 @@ export class AuthStorage {
 
 	async #getUsageReport(
 		provider: Provider,
-		credential: OAuthCredential,
+		credential: AuthCredential,
 		options?: { baseUrl?: string; timeoutMs?: number; signal?: AbortSignal },
 	): Promise<UsageReport | null> {
 		// Store-level hook (e.g. `RemoteAuthCredentialStore`) is authoritative
-		// when present: the broker already aggregates usage from a less-throttled
-		// IP, and falling back to the local per-credential fetch would defeat the
-		// whole point of routing through it.
-		const storeHook = this.#store.getUsageReport?.bind(this.#store);
-		if (storeHook) {
-			const report = await storeHook(provider, credential, options?.signal);
-			if (report) {
-				this.#reconcileCodexUsageBlock(
-					this.#buildUsageRequestForOauth(provider, credential, options?.baseUrl),
-					report,
-				);
+		// when present for OAuth: the broker already aggregates usage from a
+		// less-throttled IP, and falling back to the local per-credential fetch
+		// would defeat the point of routing through it. API-key credentials do
+		// not have a broker per-credential hook, so they use the normal cached
+		// provider fetch path.
+		if (credential.type === "oauth") {
+			const storeHook = this.#store.getUsageReport?.bind(this.#store);
+			if (storeHook) {
+				const report = await storeHook(provider, credential, options?.signal);
+				if (report) {
+					this.#reconcileCodexUsageBlock(
+						this.#buildUsageRequestForOauth(provider, credential, options?.baseUrl),
+						report,
+					);
+				}
+				return report;
 			}
-			return report;
+		}
+		const usageCredential = this.#buildUsageCredential(credential);
+		if (credential.type === "api_key") {
+			const resolvedApiKey = await this.#configValueResolver(credential.key);
+			if (!resolvedApiKey) return null;
+			usageCredential.apiKey = resolvedApiKey;
 		}
 		return this.#fetchUsageCached(
-			this.#buildUsageRequestForOauth(provider, credential, options?.baseUrl),
+			this.#buildUsageRequest(provider, usageCredential, options?.baseUrl),
 			options?.timeoutMs ?? this.#usageRequestTimeoutMs,
 		);
 	}
@@ -3721,9 +3891,9 @@ export class AuthStorage {
 		return usedFraction / elapsedHours;
 	}
 
-	#compareRankedOAuthCandidatePriority(
-		left: RankedOAuthCandidate,
-		right: RankedOAuthCandidate,
+	#compareUsageRankedCandidatePriority(
+		left: UsageRankedCandidate<AuthCredential>,
+		right: UsageRankedCandidate<AuthCredential>,
 		planRequirement: OpenAICodexPlanRequirement,
 	): number {
 		if (left.blocked !== right.blocked) return left.blocked ? 1 : -1;
@@ -3748,21 +3918,21 @@ export class AuthStorage {
 		return 0;
 	}
 
-	#compareRankedOAuthCandidates(
-		left: RankedOAuthCandidate,
-		right: RankedOAuthCandidate,
+	#compareUsageRankedCandidates(
+		left: UsageRankedCandidate<AuthCredential>,
+		right: UsageRankedCandidate<AuthCredential>,
 		planRequirement: OpenAICodexPlanRequirement,
 	): number {
-		const priority = this.#compareRankedOAuthCandidatePriority(left, right, planRequirement);
+		const priority = this.#compareUsageRankedCandidatePriority(left, right, planRequirement);
 		return priority !== 0 ? priority : left.orderPos - right.orderPos;
 	}
 
-	#orderRankedOAuthCandidates(
-		candidates: RankedOAuthCandidate[],
+	#orderUsageRankedCandidates<T extends AuthCredential>(
+		candidates: UsageRankedCandidate<T>[],
 		sessionId: string | undefined,
 		planRequirement: OpenAICodexPlanRequirement,
-	): OAuthCandidate[] {
-		candidates.sort((left, right) => this.#compareRankedOAuthCandidates(left, right, planRequirement));
+	): UsageCandidate<T>[] {
+		candidates.sort((left, right) => this.#compareUsageRankedCandidates(left, right, planRequirement));
 		if (!sessionId) {
 			return candidates.map(candidate => ({
 				selection: candidate.selection,
@@ -3780,14 +3950,14 @@ export class AuthStorage {
 			}));
 		}
 
-		const priorityByCandidate = new Map<RankedOAuthCandidate, number>();
+		const priorityByCandidate = new Map<UsageRankedCandidate<T>, number>();
 		let bucketIndex = 0;
 		let previous = unblocked[0];
-		const bucketByCandidate = new Map<RankedOAuthCandidate, number>();
+		const bucketByCandidate = new Map<UsageRankedCandidate<T>, number>();
 		for (const candidate of unblocked) {
 			if (
 				candidate !== previous &&
-				this.#compareRankedOAuthCandidatePriority(previous, candidate, planRequirement) !== 0
+				this.#compareUsageRankedCandidatePriority(previous, candidate, planRequirement) !== 0
 			) {
 				bucketIndex += 1;
 			}
@@ -3944,7 +4114,7 @@ export class AuthStorage {
 				orderPos,
 			});
 		}
-		return this.#orderRankedOAuthCandidates(ranked, args.sessionId, args.planRequirement);
+		return this.#orderUsageRankedCandidates(ranked, args.sessionId, args.planRequirement);
 	}
 
 	/**
@@ -4582,12 +4752,11 @@ export class AuthStorage {
 		if (oauthResolved) {
 			return oauthResolved.apiKey;
 		}
-
-		const loginApiKeySelection = this.#selectCredentialByType(
+		const loginApiKeySelection = await this.#selectApiKeyCredential(
 			provider,
-			"api_key",
 			sessionId,
-			credential => credential.type === "api_key" && credential.source === "login",
+			options,
+			credential => credential.source === "login",
 		);
 		if (loginApiKeySelection) {
 			this.#recordSessionCredential(provider, sessionId, "api_key", loginApiKeySelection.index);
@@ -4601,12 +4770,11 @@ export class AuthStorage {
 
 		const envKey = getEnvApiKey(provider);
 		if (envKey) return envKey;
-
-		const apiKeySelection = this.#selectCredentialByType(
+		const apiKeySelection = await this.#selectApiKeyCredential(
 			provider,
-			"api_key",
 			sessionId,
-			credential => credential.type !== "api_key" || credential.source !== "login",
+			options,
+			credential => credential.source !== "login",
 		);
 		if (apiKeySelection) {
 			this.#recordSessionCredential(provider, sessionId, "api_key", apiKeySelection.index);
