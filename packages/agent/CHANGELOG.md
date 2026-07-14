@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Surfaced provider stream failures through the normal assistant message lifecycle so interactive clients show the terminal error instead of leaving users with a silent working spinner.
+
 ## [16.5.2] - 2026-07-14
 
 ### Fixed

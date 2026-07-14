@@ -64,12 +64,6 @@ function defaultConvertToLlm(messages: AgentMessage[]): Message[] {
 	});
 }
 
-const ANTHROPIC_OUTPUT_BLOCKED_PREFIX = "Output blocked by conten";
-
-function isAnthropicOutputBlockedError(message: string): boolean {
-	return message.includes(ANTHROPIC_OUTPUT_BLOCKED_PREFIX);
-}
-
 function refreshToolChoiceForActiveTools(
 	toolChoice: ToolChoice | undefined,
 	tools: AgentContext["tools"] = [],
@@ -1283,11 +1277,11 @@ export class Agent {
 				: err instanceof Error
 					? err.message
 					: String(err);
-			const shouldEmitVisibleOutputBlockedError = !stoppedForAbort && isAnthropicOutputBlockedError(errorMessage);
+			const shouldEmitVisibleError = !stoppedForAbort;
 			const assistantPartial = partial?.role === "assistant" ? partial : undefined;
 			const hadAssistantStart = assistantPartial !== undefined;
 			const errorMsg: AssistantMessage =
-				shouldEmitVisibleOutputBlockedError && assistantPartial
+				shouldEmitVisibleError && assistantPartial
 					? { ...assistantPartial, stopReason: "error", errorMessage }
 					: {
 							role: "assistant",
@@ -1308,7 +1302,7 @@ export class Agent {
 							timestamp: Date.now(),
 						};
 
-			if (shouldEmitVisibleOutputBlockedError) {
+			if (shouldEmitVisibleError) {
 				if (!hadAssistantStart) {
 					this.#state.streamMessage = errorMsg;
 					this.#emit({ type: "message_start", message: errorMsg });

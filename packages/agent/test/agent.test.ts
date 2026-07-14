@@ -184,7 +184,7 @@ describe("Agent", () => {
 		expect(lastMessage.errorMessage).toBe(errorText);
 	});
 
-	it("prompt() keeps unrelated provider stream failures out of the assistant lifecycle", async () => {
+	it("prompt() emits assistant error lifecycle for provider stream failures", async () => {
 		const mock = createMockModel({ responses: [] });
 		const errorText = "connection reset";
 		const agent = new Agent({
@@ -201,17 +201,25 @@ describe("Agent", () => {
 		await agent.prompt("trigger");
 		unsubscribe();
 
-		expect(events.some(event => event.type === "message_start" && event.message.role === "assistant")).toBe(false);
-		expect(events.some(event => event.type === "message_end" && event.message.role === "assistant")).toBe(false);
-		const agentEnd = events.find(event => event.type === "agent_end");
-		if (agentEnd?.type !== "agent_end") {
-			throw new Error("agent_end not emitted");
+		const assistantStartIndex = events.findIndex(
+			event => event.type === "message_start" && event.message.role === "assistant",
+		);
+		const assistantEndIndex = events.findIndex(
+			event => event.type === "message_end" && event.message.role === "assistant",
+		);
+		const turnEndIndex = events.findIndex(event => event.type === "turn_end");
+		const agentEndIndex = events.findIndex(event => event.type === "agent_end");
+		expect(assistantStartIndex).toBeGreaterThan(-1);
+		expect(assistantEndIndex).toBeGreaterThan(assistantStartIndex);
+		expect(turnEndIndex).toBeGreaterThan(assistantEndIndex);
+		expect(agentEndIndex).toBeGreaterThan(turnEndIndex);
+
+		const assistantEnd = events[assistantEndIndex];
+		if (assistantEnd?.type !== "message_end" || assistantEnd.message.role !== "assistant") {
+			throw new Error("assistant message_end not emitted");
 		}
-		const errorMessage = agentEnd.messages.find(message => message.role === "assistant");
-		if (errorMessage?.role !== "assistant") {
-			throw new Error("assistant error was not included in agent_end");
-		}
-		expect(errorMessage.errorMessage).toBe(errorText);
+		expect(assistantEnd.message.stopReason).toBe("error");
+		expect(assistantEnd.message.errorMessage).toBe(errorText);
 	});
 
 	it("prompt() finalizes an existing assistant stream for Anthropic output-blocked stream errors", async () => {
