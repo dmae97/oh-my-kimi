@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { type AuthCredentialStore, AuthStorage } from "../src/auth-storage";
 import type { UsageFetchContext, UsageFetchParams } from "../src/usage";
 import { cursorUsageProvider, parseCursorUsage } from "../src/usage/cursor";
 
@@ -133,6 +134,41 @@ describe("cursor usage provider", () => {
 			expect(report).not.toBeNull();
 			const limit = report?.limits[0];
 			expect(limit?.window?.resetsAt).toBe(Date.parse("2026-07-20T00:00:00.000Z"));
+		});
+	});
+
+	describe("default registration", () => {
+		it("registers Cursor in AuthStorage's default usage resolver", async () => {
+			const store: AuthCredentialStore = {
+				close() {},
+				listAuthCredentials() {
+					return [];
+				},
+				updateAuthCredential() {},
+				deleteAuthCredential() {},
+				tryDisableAuthCredentialIfMatches() {
+					return false;
+				},
+				replaceAuthCredentialsForProvider() {
+					return [];
+				},
+				upsertAuthCredentialForProvider() {
+					return [];
+				},
+				deleteAuthCredentialsForProvider() {},
+				getCache() {
+					return null;
+				},
+				setCache() {},
+				cleanExpiredCache() {},
+			};
+			const storage = new AuthStorage(store);
+			await storage.reload();
+			try {
+				expect(storage.usageProviderFor("cursor")).toBe(cursorUsageProvider);
+			} finally {
+				storage.close();
+			}
 		});
 	});
 
