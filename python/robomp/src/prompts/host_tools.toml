@@ -72,6 +72,13 @@ reason = "Internal diagnosis for the operator. Concrete, specific, blameless. NE
 [fetch_issue_thread]
 description = "Refetch the originating issue and its comments. Use sparingly."
 
+[gh_search_issues]
+description = "Search issues AND pull requests in the current repo (GitHub issue-search syntax; repo scope applied automatically). Use during triage to find duplicates and to check whether a merged PR already fixed the reported problem before classifying."
+
+[gh_search_issues.parameters]
+query = "GitHub issue-search syntax: bare keywords plus qualifiers like `is:pr`, `is:closed`, `is:merged`, `label:bug`, `in:title`, `author:<login>`. NEVER include a `repo:` qualifier — scope is applied automatically."
+limit = "Max results, 1-20. Default 10."
+
 [set_issue_labels]
 description = "Append labels to the originating issue/PR. NEVER removes existing labels."
 

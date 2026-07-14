@@ -1256,6 +1256,75 @@ def _build_fetch_thread(bindings: ToolBindings) -> HostTool[Any, Any]:
     )
 
 
+# ---------- gh_search_issues ----------
+_REPO_QUALIFIER_RE = re.compile(r"(?i)\brepo:")
+
+
+def _build_search_issues(bindings: ToolBindings) -> HostTool[Any, Any]:
+    """Read-only issue/PR search scoped to the current repo.
+
+    Exists so triage can find duplicates and already-merged fixes instead of
+    classifying blind; the inbound issue itself is filtered out of results.
+    """
+
+    def execute(args: dict[str, Any], _ctx: HostToolContext[Any]) -> str:
+        query = args.get("query")
+        if not isinstance(query, str) or not query.strip():
+            msg = "gh_search_issues requires a non-empty 'query'."
+            _audit(bindings, "gh_search_issues", args, error=msg)
+            _raise_command(msg)
+        query = query.strip()
+        if _REPO_QUALIFIER_RE.search(query):
+            msg = "gh_search_issues scopes to the current repo automatically; drop the 'repo:' qualifier."
+            _audit(bindings, "gh_search_issues", args, error=msg)
+            _raise_command(msg)
+        limit_raw = args.get("limit")
+        limit = max(1, min(int(limit_raw), 20)) if isinstance(limit_raw, int) else 10
+        try:
+            results = _run_coro(
+                bindings.loop,
+                bindings.github.search_issues(bindings.repo.full_name, query, limit=limit),
+            )
+        except GitHubError as exc:
+            _audit(bindings, "gh_search_issues", args, error=str(exc))
+            _raise_command(f"GitHub search failed: {exc.status} {exc.message}")
+        results = [s for s in results if s.is_pull_request or s.number != bindings.issue.number]
+        if not results:
+            _audit(bindings, "gh_search_issues", args, result={"matches": 0})
+            return f"No issues or PRs in {bindings.repo.full_name} match {query!r}."
+        lines = [f"# {len(results)} match(es) for {query!r} in {bindings.repo.full_name}"]
+        for s in results:
+            kind = "PR" if s.is_pull_request else "issue"
+            state = f"{s.state} ({s.state_reason})" if s.state_reason else s.state
+            labels = f" [{', '.join(s.labels)}]" if s.labels else ""
+            lines.append(
+                f"- #{s.number} ({kind}, {state}) {s.title} — @{s.author}, updated {s.updated_at[:10]}{labels}"
+            )
+        _audit(bindings, "gh_search_issues", args, result={"matches": len(results)})
+        return "\n".join(lines)
+
+    return host_tool(
+        name="gh_search_issues",
+        description=persona.host_tool_description("gh_search_issues"),
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": persona.host_tool_parameter_description("gh_search_issues", "query"),
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": persona.host_tool_parameter_description("gh_search_issues", "limit"),
+                },
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+        execute=execute,
+    )
+
+
 _PRIMARY_TYPES = ("bug", "enhancement", "question", "proposal", "documentation", "wontfix", "invalid", "duplicate")
 _AUTO_PR_CLASSIFICATIONS = frozenset({"bug", "documentation"})
 _PRIORITIES = ("prio:p0", "prio:p1", "prio:p2", "prio:p3")
@@ -1835,6 +1904,7 @@ def build(bindings: ToolBindings) -> tuple[HostTool[Any, Any], ...]:
         _build_mark_unable(bindings),
         _build_abort_task(bindings),
         _build_fetch_thread(bindings),
+        _build_search_issues(bindings),
     )
 
 

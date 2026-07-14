@@ -861,6 +861,82 @@ def test_classify_issue_wontfix_takes_comment_only_path(db: Database, tmp_path: 
     assert row is not None and row.classification == "wontfix"
 
 
+def test_gh_search_issues_scopes_repo_and_renders_matches(db: Database, tmp_path: Path) -> None:
+    """Search auto-prefixes the repo scope, surfaces PR/state_reason so triage can
+    spot prior fixes and not-planned precedents, and filters the inbound issue."""
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["q"] = request.url.params["q"]
+        return httpx.Response(
+            200,
+            json={
+                "total_count": 3,
+                "items": [
+                    {
+                        "number": 42,  # the inbound issue itself — must be filtered
+                        "title": "boom",
+                        "state": "open",
+                        "user": {"login": "alice"},
+                        "labels": [],
+                        "comments": 0,
+                        "updated_at": "2026-07-01T00:00:00Z",
+                        "created_at": "2026-07-01T00:00:00Z",
+                        "html_url": "https://example/42",
+                    },
+                    {
+                        "number": 30,
+                        "title": "same crash on resize",
+                        "state": "closed",
+                        "state_reason": "not_planned",
+                        "user": {"login": "bob"},
+                        "labels": [{"name": "wontfix"}],
+                        "comments": 3,
+                        "updated_at": "2026-06-01T00:00:00Z",
+                        "created_at": "2026-05-01T00:00:00Z",
+                        "html_url": "https://example/30",
+                    },
+                    {
+                        "number": 31,
+                        "title": "fix: resize crash",
+                        "state": "closed",
+                        "state_reason": "completed",
+                        "user": {"login": "bot"},
+                        "labels": [],
+                        "comments": 1,
+                        "updated_at": "2026-06-02T00:00:00Z",
+                        "created_at": "2026-06-02T00:00:00Z",
+                        "html_url": "https://example/pull/31",
+                        "pull_request": {"url": "https://example/pull/31"},
+                    },
+                ],
+            },
+        )
+
+    bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(handler))
+    try:
+        tool = next(x for x in build(bindings) if x.name == "gh_search_issues")
+        result = tool.execute({"query": "resize crash"}, _ctx())
+    finally:
+        _stop_loop(loop, t)
+    assert captured["q"] == "repo:octo/widget resize crash"
+    assert "#42" not in result  # inbound issue filtered out
+    assert "#30 (issue, closed (not_planned))" in result
+    assert "#31 (PR, closed (completed))" in result
+
+
+def test_gh_search_issues_rejects_repo_qualifier_and_empty_query(db: Database, tmp_path: Path) -> None:
+    bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(lambda r: httpx.Response(500)))
+    try:
+        tool = next(x for x in build(bindings) if x.name == "gh_search_issues")
+        with pytest.raises(RpcCommandError):
+            tool.execute({"query": "repo:evil/elsewhere secrets"}, _ctx())
+        with pytest.raises(RpcCommandError):
+            tool.execute({"query": "   "}, _ctx())
+    finally:
+        _stop_loop(loop, t)
+
+
 def test_classify_issue_rejects_bug_without_priority(db: Database, tmp_path: Path) -> None:
     bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(lambda r: httpx.Response(500)))
     try:

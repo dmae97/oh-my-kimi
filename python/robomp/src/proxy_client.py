@@ -204,6 +204,14 @@ class GitHubProxyClient:
         )
         return [_issue_summary_from(item) for item in (data.get("items") if isinstance(data, dict) else None) or []]
 
+    async def search_issues(self, repo: str, query: str, *, limit: int = 10) -> list[IssueSummary]:
+        data = await self._request(
+            "GET",
+            "/gh/v1/search_issues",
+            params={"repo": repo, "q": query, "limit": limit},
+        )
+        return [_issue_summary_from(item) for item in (data.get("items") if isinstance(data, dict) else None) or []]
+
     async def list_comments(self, repo: str, number: int) -> list[CommentInfo]:
         data = await self._request("GET", "/gh/v1/comments", params={"repo": repo, "number": number})
         return [_comment_from(item) for item in (data.get("items") if isinstance(data, dict) else None) or []]
@@ -498,6 +506,8 @@ def _issue_summary_from(data: Any) -> IssueSummary:
         updated_at=str(data.get("updated_at") or ""),
         created_at=str(data.get("created_at") or ""),
         html_url=str(data.get("html_url") or ""),
+        state_reason=str(data.get("state_reason") or ""),
+        is_pull_request=bool(data.get("is_pull_request")),
     )
 
 

@@ -16,7 +16,9 @@ Worktree is at cwd; the branch above is checked out and ready for commits **if**
 the classification calls for code. Drive the todo list to completion:
 
 1. **Triage first.** Read the body and any comments via `read` /
-   `fetch_issue_thread`, then call
+   `fetch_issue_thread`. Run `gh_search_issues` for duplicates and
+   already-merged fixes — the reporter may be on an older release than your
+   worktree. Then call
    `classify_issue(primary=..., priority=..., functional=[...], rationale=...)`.
    Apply the **merit gate** from the system prompt before picking `bug`:
    broken contract, demonstrated impact, deliberate-tradeoff check, upstream

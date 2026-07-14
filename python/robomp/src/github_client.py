@@ -116,6 +116,10 @@ class IssueSummary:
     updated_at: str
     created_at: str
     html_url: str
+    # `completed` / `not_planned` / `reopened` when closed; empty otherwise.
+    state_reason: str = ""
+    # Search results mix issues and PRs; list_issues always yields issues.
+    is_pull_request: bool = False
 
 
 @dataclass(slots=True, frozen=True)
@@ -335,23 +339,25 @@ class GitHubClient:
         for item in data or []:
             if "pull_request" in item:
                 continue  # GitHub's /issues endpoint also returns PRs; skip them.
-            user = item.get("user") or {}
-            labels_raw = item.get("labels") or []
-            out.append(
-                IssueSummary(
-                    repo=repo,
-                    number=int(item["number"]),
-                    title=str(item.get("title") or ""),
-                    state=str(item.get("state") or "open"),
-                    author=str(user.get("login") or ""),
-                    labels=tuple(str(lbl["name"]) if isinstance(lbl, dict) else str(lbl) for lbl in labels_raw),
-                    comments=int(item.get("comments") or 0),
-                    updated_at=str(item.get("updated_at") or ""),
-                    created_at=str(item.get("created_at") or ""),
-                    html_url=str(item.get("html_url") or ""),
-                )
-            )
+            out.append(_summary_from_item(repo, item))
         return out
+
+    async def search_issues(self, repo: str, query: str, *, limit: int = 10) -> list[IssueSummary]:
+        """Search issues AND pull requests in `repo` using GitHub issue-search syntax.
+
+        `query` takes bare keywords plus qualifiers (`is:pr`, `is:closed`,
+        `label:bug`, `in:title`, …); the `repo:` scope is applied here. Results
+        come back in GitHub's best-match order. `limit` is capped at 30 — this
+        serves triage lookups (duplicates, prior fixes), not pagination.
+        """
+        per_page = max(1, min(int(limit), 30))
+        data = await self.request(
+            "GET",
+            "/search/issues",
+            params={"q": f"repo:{repo} {query}".strip(), "per_page": per_page},
+        )
+        items = (data or {}).get("items") or []
+        return [_summary_from_item(repo, item) for item in items]
 
     async def list_comments(self, repo: str, number: int) -> list[CommentInfo]:
         data = await self.request("GET", f"/repos/{repo}/issues/{number}/comments", params={"per_page": 100})
@@ -573,6 +579,26 @@ def _pr_review_from_payload(data: Mapping[str, Any]) -> PullRequestReviewInfo:
         body=body,
         state=str(data.get("state") or ""),
         submitted_at=str(data.get("submitted_at") or data.get("created_at") or ""),
+    )
+
+
+def _summary_from_item(repo: str, item: Mapping[str, Any]) -> IssueSummary:
+    """Build an `IssueSummary` from a REST issue object (list or search shape)."""
+    user = item.get("user") or {}
+    labels_raw = item.get("labels") or []
+    return IssueSummary(
+        repo=repo,
+        number=int(item["number"]),
+        title=str(item.get("title") or ""),
+        state=str(item.get("state") or "open"),
+        author=str(user.get("login") or ""),
+        labels=tuple(str(lbl["name"]) if isinstance(lbl, dict) else str(lbl) for lbl in labels_raw),
+        comments=int(item.get("comments") or 0),
+        updated_at=str(item.get("updated_at") or ""),
+        created_at=str(item.get("created_at") or ""),
+        html_url=str(item.get("html_url") or ""),
+        state_reason=str(item.get("state_reason") or ""),
+        is_pull_request="pull_request" in item,
     )
 
 
