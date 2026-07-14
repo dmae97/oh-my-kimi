@@ -19,10 +19,12 @@ describe("withBridgeTimeoutPause", () => {
 				await Bun.sleep(80);
 				return "done";
 			},
+			{ deferExternalAbort: true },
 		);
 
 		expect(value).toBe("done");
 		expect(events.map(event => event.op)).toEqual([EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP]);
+		expect(events.every(event => event.deferExternalAbort === true)).toBe(true);
 
 		const settledCount = events.length;
 		await Bun.sleep(40);
@@ -75,27 +77,26 @@ class TestCancelledError extends Error {
 	}
 }
 
-it("defers external aborts until an in-flight bridge call resumes", async () => {
+it("defers external aborts until an in-flight agent bridge call resumes", async () => {
 	const abortController = new AbortController();
+	const entered = Promise.withResolvers<void>();
+	const triggerAbort = Promise.withResolvers<void>();
+	const observed = Promise.withResolvers<boolean>();
 	const release = Promise.withResolvers<void>();
-	let completed = false;
-	let kernelSignal: AbortSignal | undefined;
 	const kernel: GenericKernel<Record<string, string | null>> = {
 		async execute(_code, options) {
-			kernelSignal = options.signal;
+			entered.resolve();
+			await triggerAbort.promise;
 			options.onDisplay({
 				type: "status",
-				event: { op: EVAL_TIMEOUT_PAUSE_OP },
+				event: { op: EVAL_TIMEOUT_PAUSE_OP, deferExternalAbort: true },
 			} satisfies KernelDisplayOutput);
-
 			abortController.abort(new Error("external interrupt"));
-			expect(kernelSignal?.aborted).toBe(false);
-
+			observed.resolve(options.signal?.aborted ?? false);
 			await release.promise;
-			completed = true;
 			options.onDisplay({
 				type: "status",
-				event: { op: EVAL_TIMEOUT_RESUME_OP },
+				event: { op: EVAL_TIMEOUT_RESUME_OP, deferExternalAbort: true },
 			} satisfies KernelDisplayOutput);
 			return { status: "ok", cancelled: false, timedOut: false };
 		},
@@ -113,12 +114,57 @@ it("defers external aborts until an in-flight bridge call resumes", async () => 
 		formatTimeoutAnnotation: () => "timed out",
 	});
 
-	await Promise.resolve();
-	expect(completed).toBe(false);
-
+	await entered.promise;
+	triggerAbort.resolve();
+	expect(await observed.promise).toBe(false);
 	release.resolve();
 	const result = await resultPromise;
-	expect(completed).toBe(true);
+	expect(result.cancelled).toBe(true);
+	expect(result.exitCode).toBeUndefined();
+});
+
+it("does not defer external aborts for a completion bridge call", async () => {
+	const abortController = new AbortController();
+	const entered = Promise.withResolvers<void>();
+	const triggerAbort = Promise.withResolvers<void>();
+	const observed = Promise.withResolvers<boolean>();
+	const release = Promise.withResolvers<void>();
+	const kernel: GenericKernel<Record<string, string | null>> = {
+		async execute(_code, options) {
+			entered.resolve();
+			await triggerAbort.promise;
+			options.onDisplay({
+				type: "status",
+				event: { op: EVAL_TIMEOUT_PAUSE_OP },
+			} satisfies KernelDisplayOutput);
+			abortController.abort(new Error("external interrupt"));
+			observed.resolve(options.signal?.aborted ?? false);
+			await release.promise;
+			options.onDisplay({
+				type: "status",
+				event: { op: EVAL_TIMEOUT_RESUME_OP },
+			} satisfies KernelDisplayOutput);
+			return { status: "ok", cancelled: false, timedOut: false };
+		},
+	};
+
+	const resultPromise = executeWithKernelBase({
+		kernel,
+		code: "completion('slow')",
+		options: { signal: abortController.signal },
+		runIdPrefix: "test",
+		errorLogLabel: "test",
+		cancelledErrorClass: TestCancelledError,
+		buildKernelEnvPatch: () => ({}),
+		formatKernelTimeoutAnnotation: () => "kernel timed out",
+		formatTimeoutAnnotation: () => "timed out",
+	});
+
+	await entered.promise;
+	triggerAbort.resolve();
+	expect(await observed.promise).toBe(true);
+	release.resolve();
+	const result = await resultPromise;
 	expect(result.cancelled).toBe(true);
 	expect(result.exitCode).toBeUndefined();
 });

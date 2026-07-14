@@ -572,7 +572,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 		options.session.recordEvalSubagentUsage?.(result.usage?.output ?? 0);
 
 		return { result, mergeSummary, changesApplied };
-	});
+	}, { deferExternalAbort: true });
 
 	return {
 		text: structured ? result.output : result.output + mergeSummary,

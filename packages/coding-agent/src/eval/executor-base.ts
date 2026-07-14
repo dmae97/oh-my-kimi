@@ -198,6 +198,7 @@ function createBridgeAbortShield(source: AbortSignal | undefined): BridgeAbortSh
 
 	shield.signal = controller.signal;
 	shield.handleStatus = (event: JsStatusEvent): void => {
+		if (event.deferExternalAbort !== true) return;
 		if (event.op === EVAL_TIMEOUT_PAUSE_OP) {
 			pauseDepth++;
 			return;
