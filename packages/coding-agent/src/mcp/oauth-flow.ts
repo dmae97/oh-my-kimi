@@ -277,6 +277,8 @@ export interface MCPOAuthConfig {
 	authorizationUrl: string;
 	/** Token endpoint URL */
 	tokenUrl: string;
+	/** Dynamic client registration endpoint advertised by the authorization server. */
+	registrationUrl?: string;
 	/** Client ID (optional when already embedded in authorization URL) */
 	clientId?: string;
 	/** Client secret (optional for PKCE flows) */
@@ -561,7 +563,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	 * accept the later authorize request for the same scope set.
 	 */
 	async #tryRegisterClient(redirectUri: string): Promise<void> {
-		const registrationEndpoint = await this.#resolveRegistrationEndpoint();
+		const registrationEndpoint = this.config.registrationUrl;
 		if (!registrationEndpoint) return;
 
 		try {
@@ -616,56 +618,6 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 				detail: error instanceof Error ? truncateDetail(error.message) : undefined,
 			};
 		}
-	}
-
-	async #resolveRegistrationEndpoint(): Promise<string | null> {
-		const authorizationUrl = new URL(this.config.authorizationUrl);
-
-		// origin-root well-known; most servers serve metadata here.
-		const rootUrl = new URL("/.well-known/oauth-authorization-server", authorizationUrl.origin).toString();
-		const endpoint = await this.#tryWellKnownForRegistration(rootUrl);
-		if (endpoint) return endpoint;
-
-		// path-prefixed well-known for gateways (e.g. https://gateway.example.com/my-service/).
-		const normalizedPath = authorizationUrl.pathname.replace(/\/$/, "");
-		const lastSlash = normalizedPath.lastIndexOf("/");
-		// Bare-origin authorization URL — nothing further to try.
-		if (lastSlash < 0) return null;
-
-		// Single-segment paths are the gateway prefix itself; multi-segment paths
-		// drop the trailing segment (typically a service endpoint).
-		const prefixPath = lastSlash === 0 ? normalizedPath : normalizedPath.slice(0, lastSlash);
-		const prefixedUrl = new URL(
-			".well-known/oauth-authorization-server",
-			`${authorizationUrl.origin}${prefixPath}/`,
-		).toString();
-		const prefixedEndpoint = await this.#tryWellKnownForRegistration(prefixedUrl);
-		if (prefixedEndpoint) return prefixedEndpoint;
-
-		// RFC 8414 §3.1 path-ful issuer form: /.well-known/oauth-authorization-server/<path>.
-		const pathfulUrl = new URL(
-			`/.well-known/oauth-authorization-server${normalizedPath}`,
-			authorizationUrl.origin,
-		).toString();
-		return await this.#tryWellKnownForRegistration(pathfulUrl);
-	}
-
-	async #tryWellKnownForRegistration(wellKnownUrl: string): Promise<string | null> {
-		try {
-			const response = await this.#fetch(wellKnownUrl, {
-				method: "GET",
-				headers: { Accept: "application/json" },
-				signal: this.ctrl.signal,
-			});
-			if (!response.ok) return null;
-			const metadata = (await response.json()) as { registration_endpoint?: string };
-			if (metadata.registration_endpoint && metadata.registration_endpoint.trim() !== "") {
-				return metadata.registration_endpoint;
-			}
-		} catch {
-			// Ignore fetch/parse failures.
-		}
-		return null;
 	}
 
 	async #assertClientIdNotRequired(authorizationUrl: string): Promise<void> {

@@ -28,12 +28,6 @@ function mockProviderTokenEndpoint(onBody: (body: string) => void): FetchImpl {
 function mockFigmaRegistration(onRegistration: (payload: Record<string, unknown>) => void): FetchImpl {
 	return async (input, init) => {
 		const url = String(input);
-		if (url === "https://www.figma.com/.well-known/oauth-authorization-server") {
-			return new Response(JSON.stringify({ registration_endpoint: "https://www.figma.com/oauth/register" }), {
-				status: 200,
-				headers: { "Content-Type": "application/json" },
-			});
-		}
 		if (url === "https://www.figma.com/oauth/register") {
 			onRegistration(JSON.parse(String(init?.body)) as Record<string, unknown>);
 			return new Response(
@@ -68,6 +62,7 @@ describe("mcp oauth flow", () => {
 			{
 				authorizationUrl: "https://www.figma.com/oauth/mcp",
 				tokenUrl: "https://api.figma.com/v1/oauth/token",
+				registrationUrl: "https://www.figma.com/oauth/register",
 				fetch: mockFigmaRegistration(payload => {
 					registrationPayload = payload;
 				}),
@@ -93,6 +88,7 @@ describe("mcp oauth flow", () => {
 			{
 				authorizationUrl: "https://www.figma.com/oauth/mcp",
 				tokenUrl: "https://api.figma.com/v1/oauth/token",
+				registrationUrl: "https://www.figma.com/oauth/register",
 				scopes,
 				fetch: mockFigmaRegistration(payload => {
 					registrationPayload = payload;
@@ -573,6 +569,7 @@ describe("mcp oauth flow", () => {
 				{
 					authorizationUrl: "https://provider.example/authorize",
 					tokenUrl: "https://provider.example/token",
+					registrationUrl: "https://provider.example/register",
 					// No clientId, no redirectUri — pure DCR flow.
 					callbackPort: blockerPort,
 					fetch: fetchImpl,
@@ -618,6 +615,7 @@ describe("mcp oauth flow", () => {
 			{
 				authorizationUrl: "https://www.figma.com/oauth/mcp",
 				tokenUrl: "https://api.figma.com/v1/oauth/token",
+				registrationUrl: "https://www.figma.com/oauth/register",
 				fetch: mockFigmaRegistration(() => {}),
 			},
 			{},
@@ -683,6 +681,7 @@ describe("mcp oauth flow", () => {
 			{
 				authorizationUrl: "https://www.figma.com/oauth/mcp",
 				tokenUrl: "https://api.figma.com/v1/oauth/token",
+				registrationUrl: "https://api.figma.com/v1/oauth/mcp/register",
 				fetch: fetchImpl,
 			},
 			{},
