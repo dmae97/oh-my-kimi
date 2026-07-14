@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.5.2] - 2026-07-14
+
 ### Added
 
 - Added OpenAI Codex rate-limit response-header ingestion to proactively refresh account usage snapshots and rotate credentials before hitting 429 errors.

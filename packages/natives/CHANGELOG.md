@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.5.2] - 2026-07-14
+
 ### Fixed
 
 - Fixed an issue where Windows PTY callers were forced through shell command re-quoting by supporting direct executable and argument launching.

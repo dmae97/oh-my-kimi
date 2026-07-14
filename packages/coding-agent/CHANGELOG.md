@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.5.2] - 2026-07-14
+
 ### Breaking Changes
 
 - Removed the separate `selector` parameters from `read` and `grep`; line ranges and read modes must now be appended to `path`.
@@ -13,7 +15,6 @@
 ### Changed
 
 - Expanded provider rate-limit response header ingestion to all supported providers with header parsers (previously Anthropic-only), enabling proactive account rotation for multi-account sessions before hitting 429 errors.
-- Improved auto-compaction to automatically drop images and elide content when context is tight, and added persistent warning badges to the compaction divider when manual intervention is required.
 - Restored CPU model metadata in workstation prompts on non-Linux hosts.
 
 ### Fixed
@@ -58,7 +59,6 @@
 - Fixed manual `/compact` with the snapcompact strategy hard-failing on text-only active models.
 - Fixed the empty-editor `←←` gesture trapping input when opening the Agent Hub from persisted/parked subagents.
 - Fixed eval `read()` URI handling in Python and JS runtimes to correctly delegate URI reads and pass pagination arguments.
-- Fixed inconsistent history rendering and scrollback repainting when toggling the display setting for compacted items.
 - Fixed discovered plugin `.mcp.json` stdio servers launching relative `command` or `cwd` values against the session cwd instead of the plugin's config directory.
 - Fixed Model Hub DEFAULT role assignments with `auto` retaining a stale concrete reasoning suffix after restart.
 - Fixed configured `retry.fallbackChains` failing to engage on non-retryable provider errors.

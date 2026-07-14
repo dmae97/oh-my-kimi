@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.5.2] - 2026-07-14
+
 ### Fixed
 
 - Fixed animated Loader ANSI updates causing unnecessary text layout invalidation and re-wrapping on shimmer-only frames (#5230).

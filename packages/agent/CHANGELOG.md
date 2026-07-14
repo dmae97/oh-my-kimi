@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.5.2] - 2026-07-14
+
 ### Fixed
 
 - Improved session deadline abort signals to carry structured cancellation reasons, enabling timeout-aware tools to correctly classify deadline cancellations.

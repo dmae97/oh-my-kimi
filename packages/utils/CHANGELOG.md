@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.5.2] - 2026-07-14
+
 ### Fixed
 
 - Improved CLI argument and flag validation error output to display a concise error message and command usage instead of a minified code frame.
