@@ -284,6 +284,7 @@
 - Fixed `write` treating read-only internal URLs like `memory://root/memory_summary.md` as project-relative filesystem paths, prevented leaks such as `{cwd}/memory:/root/memory_summary.md`, and made `memory://root` prefer the calling session's cwd-specific memory root when multiple agents are live. ([#5075](https://github.com/can1357/oh-my-pi/issues/5075))
 - Fixed `memory://root` resolution leaking between live agents with different working directories by resolving file-backed memory roots from the calling session cwd before falling back to the global session registry. ([#5079](https://github.com/can1357/oh-my-pi/issues/5079))
 - Fixed todo reminders auto-continuing over interactive skill questions; text-only assistant questions now yield to the user without firing the incomplete-todo reminder loop. ([#5089](https://github.com/can1357/oh-my-pi/issues/5089))
+- Fixed MiniMax-M3 task subagents retrying empty `yield` results forever; repeated untyped `result: {}` submissions now abort the child with guidance instead of leaving the parent blocked. ([#5095](https://github.com/can1357/oh-my-pi/issues/5095))
 
 ## [16.4.0] - 2026-07-10
 
