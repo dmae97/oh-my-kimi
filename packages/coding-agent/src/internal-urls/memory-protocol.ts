@@ -29,10 +29,8 @@ export function memoryRootsFromRegistry(): string[] {
 }
 
 function memoryRootsForContext(context?: ResolveContext): string[] {
-	const roots = memoryRootsFromRegistry();
-	if (!context?.cwd) return roots;
-	const callerRoot = getMemoryRoot(getAgentDir(), context.cwd);
-	return [callerRoot, ...roots.filter(root => root !== callerRoot)];
+	if (context?.cwd) return [getMemoryRoot(getAgentDir(), context.cwd)];
+	return memoryRootsFromRegistry();
 }
 
 function ensureWithinRoot(targetPath: string, rootPath: string): void {
@@ -203,10 +201,9 @@ function renderMnemopiMemory(url: InternalUrl, hit: MnemopiScopedMemoryHit): Int
 
 /**
  * Protocol handler for memory:// URLs.
- *
- * Resolves the caller cwd's memory root first, then walks other active
- * sessions' roots. Parent and subagent sharing a cwd see the same file
- * regardless of registry order.
+ * Resolves file-backed roots against the calling session cwd when provided.
+ * Contextless callers fall back to the live-session registry for legacy
+ * cross-session lookups.
  */
 export class MemoryProtocolHandler implements ProtocolHandler {
 	readonly scheme = "memory";
