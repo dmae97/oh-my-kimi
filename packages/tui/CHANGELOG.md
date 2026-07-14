@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed automatic file completion treating punctuation, trailing spaces, and ambiguous slash-command text as paths, immediately dismissing slash autocomplete on Backspace and requiring selection before applying a sole forced file match ([#5376](https://github.com/can1357/oh-my-pi/issues/5376)).
+
 ## [16.5.0] - 2026-07-13
 
 ### Changed

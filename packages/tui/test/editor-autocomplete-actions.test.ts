@@ -150,6 +150,35 @@ describe("Editor slash autocomplete acceptance", () => {
 			fs.rmSync(baseDir, { recursive: true, force: true });
 		}
 	});
+	it("shows a sole forced file suggestion before applying it", async () => {
+		const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "editor-single-file-tab-"));
+		try {
+			fs.writeFileSync(path.join(baseDir, "alpha.ts"), "export {};\n");
+			const provider = new CombinedAutocompleteProvider([], baseDir);
+			const getForceFileSuggestions = provider.getForceFileSuggestions;
+			const requestHandled = Promise.withResolvers<void>();
+			provider.getForceFileSuggestions = async (lines, cursorLine, cursorCol) => {
+				const suggestions = await getForceFileSuggestions.call(provider, lines, cursorLine, cursorCol);
+				requestHandled.resolve();
+				return suggestions;
+			};
+			const editor = new Editor(defaultEditorTheme);
+			editor.setAutocompleteProvider(provider);
+			editor.setText("alp");
+
+			editor.handleInput("\t");
+			await requestHandled.promise;
+			await Promise.resolve();
+
+			expect(editor.getText()).toBe("alp");
+			expect(editor.isShowingAutocomplete()).toBe(true);
+
+			editor.handleInput("\t");
+			expect(editor.getText()).toBe("alpha.ts");
+		} finally {
+			fs.rmSync(baseDir, { recursive: true, force: true });
+		}
+	});
 });
 class SyncSlashProvider implements AutocompleteProvider {
 	async getSuggestions(
@@ -256,6 +285,19 @@ describe("Editor Enter handler sync slash completion", () => {
 		editor.handleInput("\x7f");
 
 		expect(editor.getText()).toBe("run a ");
+		expect(editor.isShowingAutocomplete()).toBe(false);
+	});
+
+	it("hides leading slash autocomplete immediately when Backspace removes the slash", async () => {
+		const editor = createSkillEditor();
+
+		editor.handleInput("/");
+		await Promise.resolve();
+		expect(editor.isShowingAutocomplete()).toBe(true);
+
+		editor.handleInput("\x7f");
+
+		expect(editor.getText()).toBe("");
 		expect(editor.isShowingAutocomplete()).toBe(false);
 	});
 

@@ -265,6 +265,38 @@ describe("CombinedAutocompleteProvider", () => {
 		});
 	});
 
+	describe("natural file completion triggers", () => {
+		it("uses only explicit path contexts during automatic updates", async () => {
+			const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "autocomplete-natural-trigger-"));
+			try {
+				fs.writeFileSync(path.join(baseDir, ".secret"), "secret\n");
+				fs.mkdirSync(path.join(baseDir, "src"));
+				fs.writeFileSync(path.join(baseDir, "src", "index.ts"), "export {};\n");
+				const provider = new CombinedAutocompleteProvider(
+					[{ name: "model", description: "Switch model" }],
+					baseDir,
+				);
+
+				for (const line of [".", "Sentence .", "Sentence ", "use src/in", "/tmp"]) {
+					expect(await provider.getSuggestions([line], 0, line.length)).toBeNull();
+				}
+
+				const explicitPath = "./src/in";
+				expect(
+					(await provider.getSuggestions([explicitPath], 0, explicitPath.length))?.items.map(item => item.value),
+				).toContain("./src/index.ts");
+				const forcedPath = "use src/in";
+				expect(
+					(await provider.getForceFileSuggestions([forcedPath], 0, forcedPath.length))?.items.map(
+						item => item.value,
+					),
+				).toContain("src/index.ts");
+			} finally {
+				fs.rmSync(baseDir, { recursive: true, force: true });
+			}
+		});
+	});
+
 	describe("absolute path completion", () => {
 		let baseDir: string;
 
