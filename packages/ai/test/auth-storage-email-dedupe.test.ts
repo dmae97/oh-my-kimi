@@ -843,7 +843,7 @@ describe("AuthStorage persistent session stickiness", () => {
 		}
 	});
 
-	it("re-resolves a persisted sticky to the same account by id after a lower-index credential is removed", async () => {
+	it("drops persisted session stickiness after a lower-index credential is removed", async () => {
 		const provider = "unit-sticky-invalidation";
 		const mk = (suffix: string): OAuthCredential => ({
 			type: "oauth",
@@ -853,50 +853,53 @@ describe("AuthStorage persistent session stickiness", () => {
 			projectId: `project-${suffix}`,
 			email: `user-${suffix}@example.com`,
 		});
+		const initialCredentials = [mk("a"), mk("b"), mk("c"), mk("d")];
+		const remainingCredentials = initialCredentials.slice(1);
 
 		let authStorage = new AuthStorage(new SqliteAuthCredentialStore(new Database(dbPath)));
-		// Four accounts so a one-slot index shift still lands on a *different* valid index.
-		await authStorage.set(provider, [mk("a"), mk("b"), mk("c"), mk("d")]);
+		await authStorage.set(provider, initialCredentials);
 		let rows = authStorage.listStoredCredentials(provider);
 
-		// Stick a session to an account whose index is >= 1 (so removing index 0
-		// shifts it) and <= len-2 (so the old recorded index still maps to a
-		// different live account — the resurrection-prone shape the review flagged).
+		const control = new AuthStorage(
+			new SqliteAuthCredentialStore(new Database(path.join(tempDir, "sticky-control.db"))),
+		);
+		await control.set(provider, remainingCredentials);
 		let session: string | undefined;
 		let stuckId = -1;
 		let stuckIndex = -1;
 		let stuckToken: string | undefined;
-		for (let i = 0; i < 256 && session === undefined; i++) {
-			const candidate = `sticky-probe-${i}`;
-			const token = await authStorage.getApiKey(provider, candidate);
-			const index = rows.findIndex(row => (row.credential as OAuthCredential).access === token);
-			if (index >= 1 && index <= rows.length - 2) {
-				session = candidate;
-				stuckIndex = index;
-				stuckId = rows[index].id;
-				stuckToken = token;
+		let freshToken: string | undefined;
+		try {
+			for (let i = 0; i < 256 && session === undefined; i++) {
+				const candidate = `sticky-probe-${i}`;
+				const token = await authStorage.getApiKey(provider, candidate);
+				const expectedFreshToken = await control.getApiKey(provider, candidate);
+				const index = rows.findIndex(row => (row.credential as OAuthCredential).access === token);
+				if (index >= 1 && index <= rows.length - 2 && token !== expectedFreshToken) {
+					session = candidate;
+					stuckIndex = index;
+					stuckId = rows[index].id;
+					stuckToken = token;
+					freshToken = expectedFreshToken;
+				}
 			}
+		} finally {
+			control.close();
 		}
 		expect(session).toBeDefined();
-		// The account that will slide into the OLD recorded index after the removal.
-		const shiftedToken = (rows[stuckIndex + 1].credential as OAuthCredential).access;
-		expect(shiftedToken).not.toBe(stuckToken);
+		expect(freshToken).toBeDefined();
 
-		// Remove the index-0 account (a different account) -> indices shift down by one.
 		expect(await authStorage.removeCredential(provider, rows[0].id)).toBe(true);
 		authStorage.close();
 
-		// Restart from the same DB.
 		authStorage = new AuthStorage(new SqliteAuthCredentialStore(new Database(dbPath)));
 		await authStorage.reload();
 		rows = authStorage.listStoredCredentials(provider);
 		expect(rows.findIndex(row => row.id === stuckId)).toBe(stuckIndex - 1);
 
-		// The persisted sticky must follow the credential id, not the stale index:
-		// route back to the same account, never the one now occupying the old index.
 		const resolved = await authStorage.getApiKey(provider, session);
 		authStorage.close();
-		expect(resolved).toBe(stuckToken);
-		expect(resolved).not.toBe(shiftedToken);
+		expect(resolved).toBe(freshToken);
+		expect(resolved).not.toBe(stuckToken);
 	});
 });

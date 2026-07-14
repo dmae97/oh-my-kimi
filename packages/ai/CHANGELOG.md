@@ -95,6 +95,9 @@
 - Fixed xai-oauth/grok-4.5 Responses requests to omit the unsupported reasoning.summary field while preserving the reasoning.effort payload.
 - Fixed Codex OAuth credential selection to re-check blocked accounts during ranking and clear stale usage-limit blocks once live usage indicates recovery.
 - Fixed sequential-cutoff reasoning summaries duplicating section headers across Codex reasoning items by tracking the cumulative summary response-globally, so replayed sections and replay-only items no longer re-emit text earlier thinking blocks already streamed.
+### Fixed
+
+- Fixed provider credential changes leaving persisted session-sticky OAuth credential mappings active, so existing sessions reselect accounts after login/logout instead of reusing stale `session:sticky:<provider>:<sessionId>` rows. ([#4982](https://github.com/can1357/oh-my-pi/issues/4982))
 
 ## [16.3.15] - 2026-07-09
 
