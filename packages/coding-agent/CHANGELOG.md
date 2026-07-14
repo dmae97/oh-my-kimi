@@ -96,6 +96,9 @@
 ### Fixed
 
 - Fixed plugin installation failing when an ES module extension synchronously requires CommonJS helpers ([#5373](https://github.com/can1357/oh-my-pi/issues/5373)).
+### Fixed
+
+- Fixed GitHub code search rejecting empty optional date placeholders before making a request ([#5370](https://github.com/can1357/oh-my-pi/issues/5370)).
 
 ## [16.5.0] - 2026-07-13
 

@@ -2,7 +2,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:te
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { ToolCall } from "@oh-my-pi/pi-ai";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
+import { validateToolArguments } from "@oh-my-pi/pi-ai/utils/validation";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import {
@@ -584,12 +586,54 @@ describe("github tool", () => {
 		expect(args).toContain("q=language:rust pushed:>=2026-05-01");
 	});
 
-	it("search_code: rejects since/until since GitHub code search has no date qualifier", async () => {
+	it("search_code: treats validated empty date placeholders as omitted", async () => {
 		const spy = vi.spyOn(git.github, "json").mockResolvedValue({ items: [] });
 		const tool = new GithubTool(createSession());
-		await expect(tool.execute("search-code", { op: "search_code", query: "foo", since: "3d" })).rejects.toThrow(
-			/search_code does not support since\/until/,
-		);
+		const request: ToolCall = {
+			type: "toolCall",
+			id: "search-code-empty-dates",
+			name: tool.name,
+			arguments: {
+				op: "search_code",
+				query: "transformer_infer.py",
+				repo: "ModelTC/LightX2V",
+				since: "",
+				until: "",
+				dateField: "created",
+			},
+		};
+
+		const result = await tool.execute(request.id, tool.parameters.assert(validateToolArguments(tool, request)));
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+		expect(text).toContain("No code matches found.");
+		expect(spy).toHaveBeenCalledTimes(1);
+		expect(spy.mock.calls[0]?.[1]).toContain("q=transformer_infer.py repo:ModelTC/LightX2V");
+	});
+
+	it("search_code: rejects validated non-empty since and until values", async () => {
+		const spy = vi.spyOn(git.github, "json").mockResolvedValue({ items: [] });
+		const tool = new GithubTool(createSession());
+		const requests: ToolCall[] = [
+			{
+				type: "toolCall",
+				id: "search-code-since",
+				name: tool.name,
+				arguments: { op: "search_code", query: "foo", since: "3d" },
+			},
+			{
+				type: "toolCall",
+				id: "search-code-until",
+				name: tool.name,
+				arguments: { op: "search_code", query: "foo", until: "2026-05-01" },
+			},
+		];
+
+		for (const request of requests) {
+			await expect(
+				tool.execute(request.id, tool.parameters.assert(validateToolArguments(tool, request))),
+			).rejects.toThrow(/search_code does not support since\/until/);
+		}
 		expect(spy).not.toHaveBeenCalled();
 	});
 
@@ -605,14 +649,20 @@ describe("github tool", () => {
 				},
 			],
 		});
-
 		const tool = new GithubTool(createSession());
-		const result = await tool.execute("search-code", {
-			op: "search_code",
-			query: "findThing",
-			repo: "owner/repo",
-			limit: 1,
-		});
+
+		const request: ToolCall = {
+			type: "toolCall",
+			id: "search-code-results",
+			name: tool.name,
+			arguments: {
+				op: "search_code",
+				query: "findThing",
+				repo: "owner/repo",
+				limit: 1,
+			},
+		};
+		const result = await tool.execute(request.id, tool.parameters.assert(validateToolArguments(tool, request)));
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
 		expect(text).toContain("# GitHub code search");
