@@ -74,6 +74,9 @@
 ### Fixed
 
 - Fixed git plugin re-installs retaining stale commits by fetching Bun's cached clone before updating the lockfile pin ([#5401](https://github.com/can1357/oh-my-pi/issues/5401)).
+### Fixed
+
+- Fixed overlapping Bash timeout and interrupt cleanup to explicitly abort isolated shells instead of leaving child processes running ([#5389](https://github.com/can1357/oh-my-pi/issues/5389)).
 
 ## [16.5.0] - 2026-07-13
 
