@@ -35,6 +35,7 @@ const CursorModelDetailsSchema = type({
 	displayModelId: OptionalDisplayNameSchema.default(undefined),
 	aliases: CursorAliasesSchema.default(() => []),
 	"thinkingDetails?": "unknown",
+	maxMode: "boolean = false",
 });
 
 const CursorModelsInnerSchema = type("unknown[]");
@@ -290,6 +291,7 @@ function normalizeCursorModel(
 			name,
 			baseUrl: baseUrlOverride ?? reference.baseUrl,
 			reasoning,
+			cursorMaxMode: details.maxMode,
 		};
 	}
 	return {
@@ -303,6 +305,7 @@ function normalizeCursorModel(
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: DEFAULT_CONTEXT_WINDOW,
 		maxTokens: DEFAULT_MAX_TOKENS,
+		cursorMaxMode: details.maxMode,
 	};
 }
 
