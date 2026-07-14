@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed markerless prose thinking preambles becoming session titles when title models omit the required `<title>` marker. ([#5252](https://github.com/can1357/oh-my-pi/issues/5252))
+
 ## [16.4.6] - 2026-07-12
 
 ### Added
