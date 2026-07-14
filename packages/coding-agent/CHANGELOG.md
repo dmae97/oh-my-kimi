@@ -14,6 +14,10 @@
 
 - Removed the unreliable Bing and Yahoo HTML-scraping web search providers
 
+### Fixed
+
+- Fixed Perplexity OAuth web search intermittently failing with `Perplexity authorization failed (401). Check API key or base URL.` when the consumer ask endpoint (`/rest/sse/perplexity_ask`) dropped its socket before responding. `getApiConfigs` was emitting the OAuth session JWT (which `getApiKey` returns while OAuth is the active origin) as a direct `api.perplexity.ai` api-key config, so a transient transport failure on the ask endpoint fell through and sent the session token as a Bearer to the direct API, whose 401 masked the real error. The direct api-key config is now suppressed when the active Perplexity credential origin is OAuth, and the OAuth ask request gets one transport-only retry (HTTP responses, including 401/429, are never retried). ([#5315](https://github.com/can1357/oh-my-pi/issues/5315))
+
 ## [16.4.8] - 2026-07-12
 ### Added
 
