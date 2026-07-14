@@ -164,6 +164,8 @@ describe("EventController mixed assistant text/tool rendering", () => {
 				partial: withSecondToolCall,
 			},
 		} as Extract<AgentSessionEvent, { type: "message_update" }>);
+		const liveLines = chatContainer.render(120).map(line => Bun.stripANSI(line));
+		expect(lineContaining(liveLines, INTRO_MARKER)).toBeLessThan(lineContaining(liveLines, MIDDLE_MARKER));
 		await controller.handleEvent({
 			type: "tool_execution_start",
 			toolCallId: TOOL_CALL_A_ID,
@@ -204,6 +206,7 @@ describe("EventController mixed assistant text/tool rendering", () => {
 
 		expect(introLine).toBeLessThan(toolResultALine);
 		expect(toolResultALine).toBeLessThan(middleLine);
+		expect(lines.filter(line => line.includes(MIDDLE_MARKER))).toHaveLength(1);
 		expect(middleLine).toBeLessThan(toolResultBLine);
 		expect(toolResultBLine).toBeLessThan(finalLine);
 	});

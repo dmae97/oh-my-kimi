@@ -84,6 +84,7 @@ export class EventController {
 	#readToolCallArgs = new Map<string, Record<string, unknown>>();
 	#readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
 	#toolTimelineComponents = new Map<string, Component>();
+	#postToolAssistantComponents = new Map<string, AssistantMessageComponent>();
 	#lastAssistantComponent: AssistantMessageComponent | undefined = undefined;
 	// Assistant component whose turn-ending error is currently mirrored in the
 	// pinned banner. Its inline `Error: …` line is suppressed while pinned and
@@ -260,24 +261,35 @@ export class EventController {
 		return true;
 	}
 
-	#insertAfterTranscriptComponent(anchor: Component | undefined, component: Component): void {
+	#insertAfterTranscriptComponent(anchor: Component | undefined, component: Component): boolean {
 		const children = this.ctx.chatContainer.children;
 		const anchorIndex = anchor ? children.indexOf(anchor) : -1;
+		if (anchorIndex < 0) return false;
+		if (children.slice(anchorIndex + 1).some(child => !this.ctx.chatContainer.isBlockUncommitted(child))) {
+			return false;
+		}
 		this.ctx.chatContainer.addChild(component);
-		if (anchorIndex < 0) return;
 		children.splice(children.length - 1, 1);
 		children.splice(anchorIndex + 1, 0, component);
+		return true;
 	}
 
-	#appendPostToolAssistantSegment(
+	#upsertPostToolAssistantSegment(
 		toolCallId: string,
 		segment: AssistantMessage | undefined,
 	): AssistantMessageComponent | undefined {
 		if (!segment || !assistantHasVisibleContent(segment)) return undefined;
+		const existing = this.#postToolAssistantComponents.get(toolCallId);
+		if (existing) {
+			existing.updateContent(segment);
+			return existing;
+		}
 		const component = createAssistantMessageComponent(this.ctx);
 		component.updateContent(segment);
-		component.markTranscriptBlockFinalized();
-		this.#insertAfterTranscriptComponent(this.#toolTimelineComponents.get(toolCallId), component);
+		this.#postToolAssistantComponents.set(toolCallId, component);
+		if (!this.#insertAfterTranscriptComponent(this.#toolTimelineComponents.get(toolCallId), component)) {
+			this.ctx.chatContainer.addChild(component);
+		}
 		return component;
 	}
 
@@ -309,6 +321,7 @@ export class EventController {
 		this.#renderedCustomMessages.clear();
 		this.#lastIntent = undefined;
 		this.#toolTimelineComponents.clear();
+		this.#postToolAssistantComponents.clear();
 		this.#backgroundTaskCallIds.clear();
 		this.#readToolCallArgs.clear();
 		this.#readToolCallAssistantComponents.clear();
@@ -394,6 +407,7 @@ export class EventController {
 
 	async #handleAgentStart(_event: Extract<AgentSessionEvent, { type: "agent_start" }>): Promise<void> {
 		this.#toolTimelineComponents.clear();
+		this.#postToolAssistantComponents.clear();
 		this.#lastIntent = undefined;
 		this.#readToolCallArgs.clear();
 		this.#readToolCallAssistantComponents.clear();
@@ -781,6 +795,9 @@ export class EventController {
 					}
 				}
 			}
+			for (const [toolCallId, segment] of timeline.afterToolCalls) {
+				this.#upsertPostToolAssistantSegment(toolCallId, segment);
+			}
 
 			// Update working message with intent from streamed tool arguments
 			for (const content of this.ctx.streamingMessage.content) {
@@ -889,7 +906,8 @@ export class EventController {
 			this.ctx.streamingComponent.markTranscriptBlockFinalized();
 			let lastPostToolAssistantComponent: AssistantMessageComponent | undefined;
 			for (const [toolCallId, segment] of displayTimeline.afterToolCalls) {
-				const component = this.#appendPostToolAssistantSegment(toolCallId, segment);
+				const component = this.#upsertPostToolAssistantSegment(toolCallId, segment);
+				component?.markTranscriptBlockFinalized();
 				if (component) lastPostToolAssistantComponent = component;
 			}
 			this.#lastAssistantComponent = lastPostToolAssistantComponent ?? this.ctx.streamingComponent;
@@ -1150,6 +1168,7 @@ export class EventController {
 		this.#readToolCallArgs.clear();
 		this.#readToolCallAssistantComponents.clear();
 		this.#toolTimelineComponents.clear();
+		this.#postToolAssistantComponents.clear();
 		this.#resetReadGroup();
 		// The turn is over: nothing else lands this turn, so the waiting poll is
 		// final history — seal it instead of letting its spinner tick while idle.
