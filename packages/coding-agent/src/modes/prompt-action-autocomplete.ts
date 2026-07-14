@@ -156,7 +156,12 @@ export class PromptActionAutocompleteProvider implements AutocompleteProvider {
 			const commandName = commandText.slice(1, spaceIndex);
 			const command = this.#commands.find(cmd => cmd.name === commandName || cmd.aliases?.includes(commandName));
 			if (command && (!("allowArgs" in command) || command.allowArgs !== false)) {
-				return this.#baseProvider.getSuggestions(lines, cursorLine, cursorCol);
+				const argumentSuggestions = await this.#baseProvider.getSuggestions(lines, cursorLine, cursorCol);
+				if (argumentSuggestions) return argumentSuggestions;
+				// No slash-argument completion for this input: fall through to
+				// internal-url completion only. `#` prompt-action tokens stay
+				// literal text inside slash command arguments.
+				return getInternalUrlSuggestions(textBeforeCursor, this.#basePath);
 			}
 		}
 

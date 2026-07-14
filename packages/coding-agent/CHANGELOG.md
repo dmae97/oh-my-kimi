@@ -147,6 +147,9 @@
 ### Fixed
 
 - Fixed the agent rebuilding a todo list the user just cleared with `/todo rm`: the manual-edit system reminder now states removal intent ("intentionally cleared/removed … Do NOT recreate/re-add") so the model stops re-populating the list without an explicit request. ([#5258](https://github.com/can1357/oh-my-pi/issues/5258))
+### Fixed
+
+- Fixed internal-URL autocomplete (`agent://`, `skill://`, `omp://`, etc.) not triggering inside slash command arguments: `allowArgs: true` commands returned the base provider's `null` result directly, short-circuiting the internal-URL fallthrough. Completion now falls through to internal-URL suggestions when a command has no argument completion (or its `getArgumentCompletions` yields no match), while `#` prompt-action tokens stay literal inside slash arguments. ([#5263](https://github.com/can1357/oh-my-pi/issues/5263))
 
 ## [16.4.6] - 2026-07-12
 
