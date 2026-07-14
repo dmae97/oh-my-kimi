@@ -144,6 +144,9 @@
 ### Fixed
 
 - Fixed markerless prose thinking preambles becoming session titles when title models omit the required `<title>` marker. ([#5252](https://github.com/can1357/oh-my-pi/issues/5252))
+### Fixed
+
+- Fixed the agent rebuilding a todo list the user just cleared with `/todo rm`: the manual-edit system reminder now states removal intent ("intentionally cleared/removed … Do NOT recreate/re-add") so the model stops re-populating the list without an explicit request. ([#5258](https://github.com/can1357/oh-my-pi/issues/5258))
 
 ## [16.4.6] - 2026-07-12
 
