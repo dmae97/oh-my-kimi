@@ -84,6 +84,10 @@ describe("issue #956: interactive /mcp test", () => {
 				for (const item of Array.isArray(content) ? content : [content]) addChild(item);
 				requestRender();
 			},
+			presentCommandOutput: (content: unknown) => {
+				for (const item of Array.isArray(content) ? content : [content]) addChild(item);
+				requestRender();
+			},
 			ui: { requestRender },
 			editor: {},
 			showError,

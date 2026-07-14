@@ -515,6 +515,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	collabHost?: CollabHost;
 	collabGuest?: CollabGuestLink;
 
+	#pendingCommandOutput: Component[] = [];
 	#pendingSlashCommands: SlashCommand[] = [];
 	#cleanupUnsubscribe?: () => void;
 	#signalTeardown?: SessionTeardown;
@@ -3488,6 +3489,24 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#mountChatChild(content as Component);
 		}
 		this.ui.requestRender();
+	}
+
+	/** Defer transcript command panels until the active turn can no longer grow above them. */
+	presentCommandOutput(content: Component | readonly Component[]): void {
+		if (!this.session.isStreaming) {
+			this.present(content);
+			return;
+		}
+		const items = Array.isArray(content) ? content : [content as Component];
+		this.#pendingCommandOutput.push(...items);
+	}
+
+	/** Mount every command panel queued while the agent was streaming. */
+	flushPendingCommandOutput(): void {
+		if (this.#pendingCommandOutput.length === 0) return;
+		const pending = this.#pendingCommandOutput;
+		this.#pendingCommandOutput = [];
+		this.present(pending);
 	}
 
 	#mountChatChild(item: Component): void {

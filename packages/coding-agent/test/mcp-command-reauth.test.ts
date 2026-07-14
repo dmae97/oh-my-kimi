@@ -59,6 +59,7 @@ function createController(authStorage: AuthStorage, mcpManagerOverrides: Record<
 	const controller = new MCPCommandController({
 		chatContainer: { addChild: vi.fn() },
 		present,
+		presentCommandOutput: present,
 		ui: { requestRender: vi.fn() },
 		editor,
 		showError,
