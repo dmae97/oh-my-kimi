@@ -222,6 +222,50 @@ describe("Agent", () => {
 		expect(assistantEnd.message.errorMessage).toBe(errorText);
 	});
 
+	it("pairs tool calls from failed partial streams with synthetic tool results", async () => {
+		const mock = createMockModel({ responses: [] });
+		const errorText = "connection reset after tool call";
+		const started = createAssistantMessage([
+			{ type: "toolCall", id: "tool-1", name: "alpha", arguments: { value: "hello" } },
+		]);
+		const agent = new Agent({
+			initialState: { model: mock.model, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: () => {
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					stream.push({ type: "start", partial: started });
+					stream.fail(new Error(errorText));
+				});
+				return stream;
+			},
+		});
+		const events: AgentEvent[] = [];
+		const unsubscribe = agent.subscribe(event => events.push(event));
+
+		await agent.prompt("trigger");
+		unsubscribe();
+
+		const toolResult = agent.state.messages.find(message => message.role === "toolResult");
+		expect(toolResult).toMatchObject({
+			role: "toolResult",
+			toolCallId: "tool-1",
+			toolName: "alpha",
+			isError: true,
+			details: {
+				__synthetic: true,
+				source: "assistant_stop_error",
+				executed: false,
+				upstreamError: errorText,
+			},
+		});
+
+		const turnEnd = events.find(event => event.type === "turn_end");
+		expect(turnEnd).toMatchObject({
+			type: "turn_end",
+			toolResults: [{ role: "toolResult", toolCallId: "tool-1", isError: true }],
+		});
+	});
+
 	it("prompt() finalizes an existing assistant stream for Anthropic output-blocked stream errors", async () => {
 		const mock = createMockModel({ responses: [] });
 		const errorText = "Output blocked by content filtering policy";

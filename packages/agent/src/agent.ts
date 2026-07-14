@@ -31,6 +31,7 @@ import {
 	abortReasonText,
 	agentLoop,
 	agentLoopContinue,
+	createSyntheticToolResultMessage,
 	normalizeMessagesForProvider,
 	normalizeTools,
 	resolveOwnedDialectFromEnv,
@@ -1311,8 +1312,31 @@ export class Agent {
 				this.appendMessage(errorMsg);
 				this.#state.error = errorMessage;
 				this.#emit({ type: "message_end", message: errorMsg });
-				this.#emit({ type: "turn_end", message: errorMsg, toolResults: [] });
-				this.#emit({ type: "agent_end", messages: [errorMsg] });
+				const toolResults: ToolResultMessage[] = [];
+				for (const block of errorMsg.content) {
+					if (block.type !== "toolCall") continue;
+					const toolResult = createSyntheticToolResultMessage(block, "error", errorMessage);
+					this.#emit({
+						type: "tool_execution_start",
+						toolCallId: block.id,
+						toolName: block.name,
+						args: block.arguments,
+						intent: block.intent,
+					});
+					this.#emit({
+						type: "tool_execution_end",
+						toolCallId: block.id,
+						toolName: block.name,
+						result: { content: toolResult.content, details: toolResult.details },
+						isError: true,
+					});
+					this.appendMessage(toolResult);
+					this.#emit({ type: "message_start", message: toolResult });
+					this.#emit({ type: "message_end", message: toolResult });
+					toolResults.push(toolResult);
+				}
+				this.#emit({ type: "turn_end", message: errorMsg, toolResults });
+				this.#emit({ type: "agent_end", messages: [errorMsg, ...toolResults] });
 			} else {
 				this.appendMessage(errorMsg);
 				this.#state.error = errorMessage;
