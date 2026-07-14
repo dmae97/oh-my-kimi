@@ -12,7 +12,7 @@
  */
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { isZodSchema, zodToWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
-import { $env, isRecord, readJsonl, Snowflake } from "@oh-my-pi/pi-utils";
+import { $env, isRecord, readLines, Snowflake } from "@oh-my-pi/pi-utils";
 import { reset as resetCapabilities } from "../../capability";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import {
@@ -1279,11 +1279,18 @@ export async function runRpcMode(
 		onHostUriResult: frame => hostUriBridge.handleResult(frame),
 	};
 
-	// Listen for JSON input using Bun's stdin. Frame dispatch lives in
-	// dispatchRpcInputFrame so it can be exercised directly by tests; see the
-	// helper's docstring for the concurrency contract.
-	for await (const parsed of readJsonl(Bun.stdin.stream())) {
+	// Listen for JSON input using Bun's stdin. Frames are read line-by-line and
+	// parsed here (not via readJsonl) so a single malformed line is reported as
+	// an error frame and the loop keeps running instead of throwing out of the
+	// generator and killing the whole process (issue #5194). Frame dispatch
+	// lives in dispatchRpcInputFrame so it can be exercised directly by tests;
+	// see the helper's docstring for the concurrency contract.
+	const decoder = new TextDecoder();
+	for await (const line of readLines(Bun.stdin.stream())) {
+		const text = decoder.decode(line).trim();
+		if (!text) continue;
 		try {
+			const parsed = JSON.parse(text);
 			const awaited = dispatchRpcInputFrame(parsed, dispatchFrameDeps);
 			if (awaited) {
 				await awaited;
