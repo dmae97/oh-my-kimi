@@ -86,7 +86,10 @@ export declare class PtySession {
   constructor()
   /** Start a shell command and stream output chunks via callback. */
   start(options: PtyStartOptions, onChunk?: ((error: Error | null, chunk: string) => void) | undefined | null): Promise<PtyRunResult>
-  /** Start an executable with separate arguments and stream output chunks via callback. */
+  /**
+   * Start an executable with separate arguments and stream output chunks via
+   * callback.
+   */
   startArgv(options: PtyArgvStartOptions, onChunk?: ((error: Error | null, chunk: string) => void) | undefined | null): Promise<PtyRunResult>
   /** Write raw input bytes to PTY stdin. */
   write(data: string): void

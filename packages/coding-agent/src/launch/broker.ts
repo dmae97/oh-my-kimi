@@ -431,7 +431,7 @@ class DaemonBroker {
 		if (spec.detached && spec.pty) {
 			throw new Error("A detached daemon cannot allocate a PTY");
 		}
-		if (process.platform === "win32" && [".bat", ".cmd"].includes(path.extname(spec.application).toLowerCase())) {
+		if (spec.pty && process.platform === "win32" && [".bat", ".cmd"].includes(path.extname(spec.application).toLowerCase())) {
 			throw new Error('Windows batch files require application "cmd.exe" with the batch path after "/c"');
 		}
 		const existing = this.#records.get(spec.name);
