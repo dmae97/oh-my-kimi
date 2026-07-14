@@ -96,6 +96,9 @@
 ### Fixed
 
 - Fixed `/guided-goal` throwing `Model not found` on websocket-only Codex models (e.g. `gpt-5.6-luna`): the interview now routes through the session's provider transport (`providerSessionState` + `preferWebsockets`) instead of forcing an SSE fallback the Codex `/responses` endpoint rejects for those models — same class as the `/btw` regression. The whole interview reuses a single isolated Codex side session, so a multi-question run shares one socket instead of leaking one per turn. ([#5304](https://github.com/can1357/oh-my-pi/issues/5304))
+### Fixed
+
+- Fixed `tool_result` extension handlers being unable to rewrite the model-visible content of a thrown tool failure while keeping it an error — `ExtensionToolWrapper` rethrew the original exception and discarded the replacement `content`/`details`; it now surfaces the modified result with `isError: true` ([#5302](https://github.com/can1357/oh-my-pi/issues/5302))
 
 ## [16.4.8] - 2026-07-12
 
