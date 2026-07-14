@@ -204,12 +204,18 @@ export abstract class Command {
 
 		// strict=false when command declares args (positionals must pass through)
 		// or when the command itself opts out
-		const { values: rawValues, positionals } = nodeParseArgs({
-			args: this.argv,
-			options,
-			allowPositionals: true,
-			strict,
-		});
+		const { values: rawValues, positionals } = (() => {
+			try {
+				return nodeParseArgs({
+					args: this.argv,
+					options,
+					allowPositionals: true,
+					strict,
+				});
+			} catch (error) {
+				throw new CliUsageError(error instanceof Error ? error.message : String(error));
+			}
+		})();
 
 		// Convert raw values to proper types and validate
 		const flags: Record<string, unknown> = {};

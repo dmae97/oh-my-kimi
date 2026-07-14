@@ -1,5 +1,5 @@
 import { describe, expect, it, spyOn } from "bun:test";
-import { Args, Command, type CommandEntry, Flags, run } from "@oh-my-pi/pi-utils/cli";
+import { Args, Command, type CommandEntry, Flags, run } from "../src/cli"
 
 class GoodCommand extends Command {
 	static description = "prints good things";
@@ -95,5 +95,24 @@ describe("run() usage errors", () => {
 		const out = writes.join("");
 		expect(out).toContain("$ omp bench MODELS... [FLAGS]");
 		expect(out).not.toContain("[MODELS]");
+	});
+
+	it("prints a concise usage error for an unknown flag", async () => {
+		const commands: CommandEntry[] = [{ name: "bench", load: async () => BenchLikeCommand }];
+		const errs: string[] = [];
+		const stderrSpy = spyOn(process.stderr, "write").mockImplementation(chunk => {
+			errs.push(String(chunk));
+			return true;
+		});
+		const prevExitCode = process.exitCode;
+		try {
+			await expect(run({ bin: "omp", version: "0.0.0", argv: ["bench", "--unknown"], commands })).resolves.toBeUndefined();
+		} finally {
+			stderrSpy.mockRestore();
+			process.exitCode = prevExitCode ?? 0;
+		}
+		const out = errs.join("");
+		expect(out).toContain("error: Unknown option '--unknown'");
+		expect(out).toContain("$ omp bench MODELS... [FLAGS]");
 	});
 });
