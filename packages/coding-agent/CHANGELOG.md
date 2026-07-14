@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed a bare `Request was aborted` provider abort that arrives as `stopReason: "error"` (a stalled or dropped stream reported as an error rather than an abort) never being auto-retried despite `retry.enabled`. The reason-less-abort retry gate now recognizes the empty generic-abort sentinel under either `stopReason: "aborted"` or `"error"`, while deliberate user interrupts, dispose-driven aborts, and streaming-edit guard aborts still settle without retry ([#5375](https://github.com/can1357/oh-my-pi/issues/5375)).
+
 ## [16.5.0] - 2026-07-13
 
 ### Breaking Changes
