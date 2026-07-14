@@ -797,6 +797,20 @@ describe("openai-codex concurrent reasoning summaries", () => {
 				delta: "Streaming ",
 			},
 			{
+				type: "response.reasoning_summary_part.done",
+				item_id: "reason_delta",
+				output_index: 0,
+				summary_index: 0,
+				part: { type: "summary_text", text: "Streaming " },
+			},
+			{
+				type: "response.reasoning_summary_part.added",
+				item_id: "reason_delta",
+				output_index: 0,
+				summary_index: 1,
+				part: { type: "summary_text", text: "" },
+			},
+			{
 				type: "response.reasoning_summary_text.delta",
 				item_id: "reason_delta",
 				output_index: 0,
@@ -822,8 +836,8 @@ describe("openai-codex concurrent reasoning summaries", () => {
 		}
 		const result = await stream.result();
 
-		expect(thinkingDeltas).toEqual(["Streaming ", "fallback"]);
-		expect(result.content.find(block => block.type === "thinking")?.thinking).toBe("Streaming fallback");
+		expect(thinkingDeltas).toEqual(["Streaming ", "\n\n", "fallback"]);
+		expect(result.content.find(block => block.type === "thinking")?.thinking).toBe("Streaming \n\nfallback");
 	});
 
 	it("deduplicates cumulative atomic summaries and ignores legacy deltas under sequential cutoff", async () => {
@@ -917,6 +931,13 @@ describe("openai-codex concurrent reasoning summaries", () => {
 				output_index: 0,
 				summary_index: 3,
 				text: "Plan\n\nPlanning details\n\nReview output",
+			},
+			{
+				type: "response.reasoning_summary_part.done",
+				item_id: "reason_1",
+				output_index: 0,
+				summary_index: 3,
+				part: { type: "summary_text", text: "Plan\n\nPlanning details\n\nInspect details" },
 			},
 			{
 				type: "response.output_item.done",

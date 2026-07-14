@@ -1847,7 +1847,7 @@ class CodexStreamProcessor {
 		if (eventType === "response.reasoning_summary_part.done") {
 			const entry = this.runtime.openItemForEvent(rawEvent);
 			if (this.#sequentialCutoffSummaries) {
-				this.runtime.queueSummaryDelta(entry, "\n\n");
+				if (entry && this.runtime.pendingSummaryDeltas.has(entry)) this.runtime.queueSummaryDelta(entry, "\n\n");
 				return firstTokenTime;
 			}
 			if (entry?.item.type === "reasoning" && entry.block?.type === "thinking") {
