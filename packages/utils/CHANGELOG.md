@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `parseFrontmatter`'s malformed-YAML fallback corrupting sibling values: one unparseable line (e.g. `scope: "text","thinking"`) forced every value through a raw key/value split that kept literal quotes. Each value is now reparsed independently as YAML, falling back to the raw trimmed string only for the lines that genuinely don't parse ([#4796](https://github.com/can1357/oh-my-pi/issues/4796)).
+
 ## [16.3.10] - 2026-07-06
 
 ### Added

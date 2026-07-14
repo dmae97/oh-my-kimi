@@ -43,4 +43,26 @@ Body content`;
 			expect.objectContaining({ err: expect.stringContaining("broken.md") }),
 		);
 	});
+
+	it("reparses each fallback value so one malformed line can't corrupt its siblings", () => {
+		// `scope: "text","thinking"` is not valid YAML, forcing the line-by-line
+		// fallback. The sibling `condition` value must not inherit literal quotes,
+		// and `enabled` must reparse to a boolean (issue #4796).
+		const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+		const content = `---
+condition: "(?i)pre.existing"
+scope: "text","thinking"
+enabled: true
+---
+Body`;
+
+		const result = parseFrontmatter(content, { source: "rule.md" });
+
+		expect(result.frontmatter.condition).toBe("(?i)pre.existing");
+		expect(result.frontmatter.enabled).toBe(true);
+		// The unrecoverable line survives as its raw trimmed string.
+		expect(result.frontmatter.scope).toBe('"text","thinking"');
+		expect(result.body).toBe("Body");
+		expect(warnSpy).toHaveBeenCalled();
+	});
 });
