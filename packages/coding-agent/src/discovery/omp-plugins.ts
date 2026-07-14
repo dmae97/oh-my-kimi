@@ -30,6 +30,7 @@ import { type CustomTool, toolCapability } from "../capability/tool";
 import type { LoadContext, LoadResult } from "../capability/types";
 import { buildRuleFromMarkdown, createSourceMeta, loadFilesFromDir, scanSkillsFromDir } from "./helpers";
 import { listOmpExtensionRoots, type OmpExtensionRoot } from "./omp-extension-roots";
+import { resolvePluginStdioPaths } from "./substitute-plugin-root";
 
 const PROVIDER_ID = "omp-plugins";
 const DISPLAY_NAME = "OMP Extension Packages";
@@ -301,14 +302,17 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 				warnings.push(`[omp-plugins] Skipping MCP server "${serverName}" in ${mcpPath}: missing command or url`);
 				continue;
 			}
+			// Root relative command/cwd at the plugin's config directory, not the
+			// session cwd (MCP stdio spawning resolves relative values there).
+			const rooted = resolvePluginStdioPaths({ command: cfg.command, cwd: cfg.cwd }, root.path);
 			items.push({
 				name: serverName,
 				...(cfg.enabled !== undefined && { enabled: cfg.enabled }),
 				...(cfg.timeout !== undefined && { timeout: cfg.timeout }),
-				...(cfg.command !== undefined && { command: cfg.command }),
+				...(rooted.command !== undefined && { command: rooted.command }),
 				...(cfg.args !== undefined && { args: cfg.args }),
 				...(cfg.env !== undefined && { env: cfg.env }),
-				...(cfg.cwd !== undefined && { cwd: cfg.cwd }),
+				...(rooted.cwd !== undefined && { cwd: rooted.cwd }),
 				...(cfg.url !== undefined && { url: cfg.url }),
 				...(cfg.headers !== undefined && { headers: cfg.headers }),
 				...(cfg.auth !== undefined && { auth: cfg.auth }),
