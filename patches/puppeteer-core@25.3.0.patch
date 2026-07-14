@@ -365,7 +365,7 @@ index 2322aa136a47b446e2a7b2c4f0bc751f2fb821d0..2116367ee34bb86948bf956c2afa2f69
 +                client.send('Page.addScriptToEvaluateOnNewDocument', {
 +                    source: `//# sourceURL=${PuppeteerURL.INTERNAL_URL}`,
 +                    worldName: UTILITY_WORLD_NAME,
-+                }).catch(debugError),
++                }).catch(debugCatchError),
                  ...(frame
                      ? Array.from(this.#scriptsToEvaluateOnNewDocument.values())
                      : []).map(script => {
@@ -458,7 +458,7 @@ index 2322aa136a47b446e2a7b2c4f0bc751f2fb821d0..2116367ee34bb86948bf956c2afa2f69
 +                worldName: UTILITY_WORLD_NAME,
 +                grantUniveralAccess: true,
 +            })
-+                .catch(debugError);
++                .catch(debugCatchError);
 +            const utilityId = iso && typeof iso.executionContextId === 'number' ? iso.executionContextId : undefined;
 +            if (utilityId !== undefined) {
 +                this.#onExecutionContextCreated({
@@ -499,7 +499,7 @@ index 2322aa136a47b446e2a7b2c4f0bc751f2fb821d0..2116367ee34bb86948bf956c2afa2f69
 +            }
 +        }
 +        catch (error) {
-+            debugError(error);
++            debugCatchError(error);
 +        }
 +    }
 +    // xxx-stealth: resolve a frame's MAIN-world execution context id without
@@ -524,7 +524,7 @@ index 2322aa136a47b446e2a7b2c4f0bc751f2fb821d0..2116367ee34bb86948bf956c2afa2f69
 +                expression: 'globalThis',
 +                serializationOptions: { serialization: 'idOnly' },
 +            })
-+                .catch(debugError);
++                .catch(debugCatchError);
 +            return parse(globalThis?.result?.objectId);
 +        }
 +        if (utilityId === undefined) {
@@ -536,21 +536,21 @@ index 2322aa136a47b446e2a7b2c4f0bc751f2fb821d0..2116367ee34bb86948bf956c2afa2f69
 +            contextId: utilityId,
 +            serializationOptions: { serialization: 'idOnly' },
 +        })
-+            .catch(debugError);
++            .catch(debugCatchError);
 +        const utilDocObjectId = utilDoc?.result?.objectId;
 +        if (typeof utilDocObjectId !== 'string') {
 +            return undefined;
 +        }
 +        const described = await session
 +            .send('DOM.describeNode', { objectId: utilDocObjectId })
-+            .catch(debugError);
++            .catch(debugCatchError);
 +        const backendNodeId = described?.node?.backendNodeId;
 +        if (typeof backendNodeId !== 'number') {
 +            return undefined;
 +        }
 +        const mainNode = await session
 +            .send('DOM.resolveNode', { backendNodeId })
-+            .catch(debugError);
++            .catch(debugCatchError);
 +        return parse(mainNode?.object?.objectId);
      }
      async #createIsolatedWorld(session, name) {
@@ -618,7 +618,7 @@ index 3d68f887920ded269eb641273a5a13dee235ae1d..dcdd86c8697c0dbd2dd2162c9a739dd9
 +                this.#world.setContext(new ExecutionContext(client, { id }, this.#world));
 +            }
 +        })
-+            .catch(debugError);
++            .catch(debugCatchError);
          this.#client.once('Inspector.workerScriptLoaded', () => {
              this.#workerLoaded.resolve();
          });
