@@ -15,6 +15,7 @@
 - Fixed an issue where streamed diff code fences retained unhighlighted rows in native scrollback when long transient blocks left the viewport before finalization ([#5126](https://github.com/can1357/oh-my-pi/issues/5126)).
 - Fixed native Windows Terminal sessions failing to detect mid-run light/dark theme changes when Mode 2031 appearance notifications are unavailable ([#5091](https://github.com/can1357/oh-my-pi/issues/5091)).
 - Hid empty HTML comment separators in Markdown-rendered TUI output instead of displaying them literally ([#4911](https://github.com/can1357/oh-my-pi/issues/4911)).
+- Fixed automatic file completion treating punctuation, trailing spaces, and ambiguous slash-command text as paths, immediately dismissing slash autocomplete on Backspace and requiring selection before applying a sole forced file match ([#5376](https://github.com/can1357/oh-my-pi/issues/5376)).
 
 ## [16.5.0] - 2026-07-13
 

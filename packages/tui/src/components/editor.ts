@@ -2077,15 +2077,13 @@ export class Editor implements Component, Focusable {
 		this.#resetKillSequence();
 		this.#recordUndoState();
 
-		let removedMidPromptSlashTrigger = false;
+		let removedSlashTrigger = false;
 
 		if (this.#state.cursorCol > 0) {
 			const line = this.#state.lines[this.#state.cursorLine] || "";
 			const textBeforeCursor = line.slice(0, this.#state.cursorCol);
 			const trailingSlashStart = findTrailingSlashCommandStart(textBeforeCursor);
-			removedMidPromptSlashTrigger =
-				trailingSlashStart === this.#state.cursorCol - 1 &&
-				(!this.#hasOnlyWhitespaceBeforeCursorLine() || textBeforeCursor.slice(0, trailingSlashStart).trim() !== "");
+			removedSlashTrigger = trailingSlashStart === this.#state.cursorCol - 1;
 			// An atomic placeholder token (image/paste marker) deletes as a unit, so a single
 			// backspace never leaves a half-eaten `[Paste #1, +30 lines` behind as stray text.
 			const token = this.#atomicTokenAt(line, this.#state.cursorCol - 1);
@@ -2125,7 +2123,7 @@ export class Editor implements Component, Focusable {
 
 		// Update or re-trigger autocomplete after backspace
 		if (this.#autocompleteState) {
-			if (removedMidPromptSlashTrigger) {
+			if (removedSlashTrigger) {
 				this.#cancelAutocomplete();
 				this.onAutocompleteUpdate?.();
 			} else {
@@ -3046,17 +3044,17 @@ export class Editor implements Component, Focusable {
 		} else if (this.#isInMidPromptSkillSlashContext()) {
 			await this.#handleSlashCommandCompletion();
 			if (!this.#autocompleteState) {
-				await this.#forceFileAutocomplete(true);
+				await this.#forceFileAutocomplete();
 			}
 		} else {
-			await this.#forceFileAutocomplete(true);
+			await this.#forceFileAutocomplete();
 		}
 	}
 	async #handleSlashCommandCompletion(): Promise<void> {
 		await this.#tryTriggerAutocomplete();
 	}
 
-	async #forceFileAutocomplete(explicitTab: boolean = false): Promise<void> {
+	async #forceFileAutocomplete(): Promise<void> {
 		if (!this.#autocompleteProvider) return;
 
 		// File-aware providers expose getForceFileSuggestions; slash-only ones fall back to regular completion.
@@ -3076,27 +3074,6 @@ export class Editor implements Component, Focusable {
 		if (requestId !== this.#autocompleteRequestId) return;
 
 		if (suggestions && Array.isArray(suggestions.items) && suggestions.items.length > 0) {
-			// If there's exactly one suggestion and this was an explicit Tab press, apply it immediately
-			if (explicitTab && suggestions.items.length === 1) {
-				const item = suggestions.items[0]!;
-				const result = this.#autocompleteProvider.applyCompletion(
-					this.#state.lines,
-					this.#state.cursorLine,
-					this.#state.cursorCol,
-					item,
-					suggestions.prefix,
-				);
-
-				this.#state.lines = result.lines;
-				this.#state.cursorLine = result.cursorLine;
-				this.#setCursorCol(result.cursorCol);
-
-				if (this.onChange) {
-					this.onChange(this.getText());
-				}
-				return;
-			}
-
 			this.#autocompletePrefix = suggestions.prefix;
 			this.#autocompleteList = this.#createAutocompleteList(suggestions.prefix, suggestions.items);
 			this.#autocompleteState = "force";

@@ -456,6 +456,10 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 						prefix: isMidPromptSkillLookup ? commandText : textBeforeCursor,
 					};
 				}
+				if (!isMidPromptSkillLookup && slashStart === leadingSlashStart && !commandText.slice(1).includes("/")) {
+					return null;
+				}
+
 				// A slash token with no matching command may still be an absolute
 				// path (`/tmp/fo` at prompt start, `see /tmp` mid-prompt); fall
 				// through to file-path completion.
@@ -679,15 +683,14 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 			return pathPrefix;
 		}
 
-		// For natural triggers, return if it looks like a path, ends with /, starts with ~/, .
-		// Only return empty string if the text looks like it's starting a path context
-		if (pathPrefix.includes("/") || pathPrefix.startsWith(".") || pathPrefix.startsWith("~/")) {
-			return pathPrefix;
-		}
-
-		// Return empty string only after a space (not for completely empty text)
-		// Empty text should not trigger file suggestions - that's for forced Tab completion
-		if (pathPrefix === "" && text.endsWith(" ")) {
+		// Automatic updates complete only unambiguous path syntax. Bare relative
+		// tokens remain available through explicit Tab completion.
+		if (
+			pathPrefix.startsWith("/") ||
+			pathPrefix.startsWith("./") ||
+			pathPrefix.startsWith("../") ||
+			pathPrefix.startsWith("~/")
+		) {
 			return pathPrefix;
 		}
 
