@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Rendered and persisted native OpenAI Responses `image_generation_call` results as session images ([#4768](https://github.com/can1357/oh-my-pi/issues/4768)).
+
 ## [16.3.11] - 2026-07-06
 
 ### Changed

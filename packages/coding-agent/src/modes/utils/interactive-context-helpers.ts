@@ -16,12 +16,15 @@ export function createAssistantMessageComponent(
 	ctx: InteractiveModeContext,
 	message?: AssistantMessage,
 ): AssistantMessageComponent {
-	return new AssistantMessageComponent(
-		message,
+	const component = new AssistantMessageComponent(
+		undefined,
 		ctx.effectiveHideThinkingBlock,
 		() => ctx.ui.requestRender(),
 		ctx.viewSession.extensionRunner?.getAssistantThinkingRenderers(),
 		ctx.ui.imageBudget,
 		ctx.proseOnlyThinking,
 	);
+	component.setImagesVisible(ctx.settings.get("terminal.showImages"));
+	if (message) component.updateContent(message);
+	return component;
 }

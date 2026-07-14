@@ -274,13 +274,15 @@ export class ChatTranscriptBuilder {
 		const hideThinkingBlock = this.deps.hideThinkingBlock?.() ?? false;
 		const proseOnlyThinking = this.deps.proseOnlyThinking ? this.deps.proseOnlyThinking() : true;
 		const assistantComponent = new AssistantMessageComponent(
-			message,
+			undefined,
 			hideThinkingBlock,
 			() => this.deps.requestRender(),
 			this.deps.getMessageRenderer ? undefined : [], // placeholder for thinkingRenderers
 			undefined, // placeholder for imageBudget
 			proseOnlyThinking,
 		);
+		assistantComponent.setImagesVisible(settings.get("terminal.showImages"));
+		assistantComponent.updateContent(message);
 		this.container.addChild(assistantComponent);
 
 		if (settings.get("display.cacheMissMarker")) {

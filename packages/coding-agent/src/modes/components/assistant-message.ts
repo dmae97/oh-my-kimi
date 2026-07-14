@@ -173,6 +173,7 @@ export class AssistantMessageComponent extends Container {
 	#lastMessage?: AssistantMessage;
 	#toolImagesByCallId = new Map<string, ImageContent[]>();
 	#convertedKittyImages = new Map<string, ImageContent>();
+	#showImages = true;
 	#kittyConversionsInFlight = new Set<string>();
 	#transcriptBlockFinalized: boolean;
 	/**
@@ -497,6 +498,15 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
+	/** Toggle rendering for assistant-native and tool-result images. */
+	setImagesVisible(visible: boolean): void {
+		if (this.#showImages === visible) return;
+		this.#showImages = visible;
+		if (this.#lastMessage) {
+			this.updateContent(this.#lastMessage, { transient: this.#lastUpdateTransient });
+		}
+	}
+
 	setToolResultImages(toolCallId: string, images: ImageContent[]): void {
 		if (!toolCallId) return;
 		const validImages = images.filter(img => img.type === "image" && img.data && img.mimeType);
@@ -514,19 +524,17 @@ export class AssistantMessageComponent extends Container {
 			this.#toolImagesByCallId.delete(toolCallId);
 		} else {
 			this.#toolImagesByCallId.set(toolCallId, validImages);
-			this.#convertToolImagesForKitty(toolCallId, validImages);
+			this.#convertImagesForKitty(validImages.map((image, index) => ({ image, key: `${toolCallId}:${index}` })));
 		}
 		if (this.#lastMessage) {
 			this.updateContent(this.#lastMessage, { transient: this.#lastUpdateTransient });
 		}
 	}
 
-	#convertToolImagesForKitty(toolCallId: string, images: ImageContent[]): void {
+	#convertImagesForKitty(entries: Array<{ image: ImageContent; key: string }>): void {
 		if (TERMINAL.imageProtocol !== ImageProtocol.Kitty) return;
-		for (let index = 0; index < images.length; index++) {
-			const image = images[index];
-			if (!image || image.mimeType === "image/png") continue;
-			const key = `${toolCallId}:${index}`;
+		for (const { image, key } of entries) {
+			if (image.mimeType === "image/png") continue;
 			if (this.#convertedKittyImages.has(key) || this.#kittyConversionsInFlight.has(key)) continue;
 			this.#kittyConversionsInFlight.add(key);
 			new Bun.Image(Buffer.from(image.data, "base64"))
@@ -550,11 +558,19 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
-	#renderToolImages(): void {
-		const imageEntries = Array.from(this.#toolImagesByCallId.entries()).flatMap(([toolCallId, images]) =>
+	#renderImages(message: AssistantMessage): void {
+		if (!this.#showImages) return;
+		const nativeEntries = message.content.flatMap((content, index) =>
+			content.type === "image" && content.data && content.mimeType
+				? [{ image: content, key: `native:${index}` }]
+				: [],
+		);
+		const toolEntries = Array.from(this.#toolImagesByCallId.entries()).flatMap(([toolCallId, images]) =>
 			images.map((image, index) => ({ image, key: `${toolCallId}:${index}` })),
 		);
+		const imageEntries = [...nativeEntries, ...toolEntries];
 		if (imageEntries.length === 0) return;
+		this.#convertImagesForKitty(imageEntries);
 
 		this.#contentContainer.addChild(new Spacer(1));
 		for (const { image, key } of imageEntries) {
@@ -620,7 +636,7 @@ export class AssistantMessageComponent extends Container {
 
 	#canFastPath(message: AssistantMessage): boolean {
 		for (const content of message.content) {
-			if (content.type === "toolCall") return false;
+			if (content.type === "toolCall" || content.type === "image") return false;
 		}
 		if (this.#toolImagesByCallId.size > 0) return false;
 		const errorPresentation = resolveAssistantErrorPresentation(message);
@@ -826,7 +842,7 @@ export class AssistantMessageComponent extends Container {
 			this.#stopThinkingAnimation();
 		}
 
-		this.#renderToolImages();
+		this.#renderImages(message);
 		const errorPresentation = resolveAssistantErrorPresentation(message);
 		const hasToolCalls = message.content.some(c => c.type === "toolCall");
 		if (errorPresentation.kind === "compact-recovered") {

@@ -130,7 +130,10 @@ function getMessageEntries(sessionManager: SessionManager): SessionMessageEntry[
 
 function getTextContent(message: Message): string | undefined {
 	if (typeof message.content === "string") return message.content;
-	return message.content.find(block => block.type === "text")?.text;
+	for (const block of message.content) {
+		if (block.type === "text") return block.text;
+	}
+	return undefined;
 }
 
 function findPersistedMessageEntry(

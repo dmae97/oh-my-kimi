@@ -1982,6 +1982,23 @@ export class AcpAgent implements Agent {
 					});
 					continue;
 				}
+				if (
+					item.type === "image" &&
+					"data" in item &&
+					typeof item.data === "string" &&
+					"mimeType" in item &&
+					typeof item.mimeType === "string"
+				) {
+					notifications.push({
+						sessionId,
+						update: {
+							sessionUpdate: "agent_message_chunk",
+							content: { type: "image", data: item.data, mimeType: item.mimeType },
+							messageId,
+						},
+					});
+					continue;
+				}
 				if (item.type === "thinking" && "thinking" in item && typeof item.thinking === "string") {
 					const thinking = canonicalizeMessage(item.thinking);
 					if (thinking.length === 0) continue;
