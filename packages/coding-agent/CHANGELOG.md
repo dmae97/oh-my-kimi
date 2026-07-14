@@ -80,6 +80,9 @@
 ### Fixed
 
 - Fixed a bare `Request was aborted` provider abort that arrives as `stopReason: "error"` (a stalled or dropped stream reported as an error rather than an abort) never being auto-retried despite `retry.enabled`. The reason-less-abort retry gate now recognizes the empty generic-abort sentinel under either `stopReason: "aborted"` or `"error"`, while deliberate user interrupts, dispose-driven aborts, and streaming-edit guard aborts still settle without retry ([#5375](https://github.com/can1357/oh-my-pi/issues/5375)).
+### Fixed
+
+- Fixed switching from a vision model to a text-only model mid-session sending historical image blocks to the new provider, which rejected them; image content is now replaced with a text placeholder in outbound requests when the active model lacks image input ([#5400](https://github.com/can1357/oh-my-pi/issues/5400)).
 
 ## [16.5.0] - 2026-07-13
 
