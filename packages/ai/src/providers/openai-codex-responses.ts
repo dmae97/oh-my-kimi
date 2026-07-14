@@ -100,6 +100,7 @@ import {
 	encodeResponsesToolCallId,
 	encodeTextSignatureV1,
 	finalizeCustomToolCallInputDone,
+	finalizeMessageText,
 	finalizePendingResponsesToolCalls,
 	finalizeReasoningThinking,
 	finalizeToolCallArgumentsDone,
@@ -1965,9 +1966,7 @@ class CodexStreamProcessor {
 		}
 
 		if (item.type === "message" && block?.type === "text") {
-			block.text = item.content
-				.map(content => (content.type === "output_text" ? content.text : content.refusal))
-				.join("");
+			block.text = finalizeMessageText(item, block.text);
 			const phase = item.phase === "commentary" || item.phase === "final_answer" ? item.phase : undefined;
 			block.textSignature = encodeTextSignatureV1(item.id, phase);
 			stream.push({
