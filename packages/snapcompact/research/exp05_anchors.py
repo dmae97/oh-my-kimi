@@ -35,7 +35,17 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import squad  # noqa: E402
-from bdf import _BLACK, _DARK, _WHITE, FontCfg, _row_palette, _sentence_indices, ensure_font, parse_bdf, render  # noqa: E402
+from bdf import (
+    _BLACK,
+    _DARK,
+    _WHITE,
+    FontCfg,
+    _row_palette,
+    _sentence_indices,
+    ensure_font,
+    parse_bdf,
+    render,
+)  # noqa: E402
 from final import MODELS, cached  # noqa: E402
 from providers import llm_complete, load_env_key  # noqa: E402
 from run import CACHE, FONTS, QA_CACHE, RESULTS, load_prompt, sha8  # noqa: E402
@@ -63,7 +73,9 @@ def ruler_capacity(cfg: FontCfg, size: int = SIZE) -> tuple[int, int, int]:
     return cols, rows, cols * rows
 
 
-def render_ruler(text: str, cfg: FontCfg, cache: Path, size: int = SIZE, variant: str = "sent") -> Image.Image:
+def render_ruler(
+    text: str, cfg: FontCfg, cache: Path, size: int = SIZE, variant: str = "sent"
+) -> Image.Image:
     """bdf.render() with a left row-number ruler every RULER_STEP rows.
 
     Content glyphs are shifted right by MARGIN_COLS cells; row indices are
@@ -73,9 +85,15 @@ def render_ruler(text: str, cfg: FontCfg, cache: Path, size: int = SIZE, variant
     ascent = cfg.ascent if cfg.ascent is not None else font_ascent
     cols, rows, cap = ruler_capacity(cfg, size)
     text = text[:cap]
-    sent_idx = _sentence_indices(text) if variant in ("sent", "dark-sent", "sent-dim") else None
+    sent_idx = (
+        _sentence_indices(text)
+        if variant in ("sent", "dark-sent", "sent-dim")
+        else None
+    )
     sent_palette = _DARK
-    img = Image.new("RGB", (size, size), _BLACK if variant in ("dark", "dark-sent") else _WHITE)
+    img = Image.new(
+        "RGB", (size, size), _BLACK if variant in ("dark", "dark-sent") else _WHITE
+    )
     px = img.load()
 
     def draw_glyph(ch: str, cell_col: int, y0: int, fg: tuple[int, int, int]) -> None:
@@ -160,9 +178,19 @@ def _ensure_png(png: Path, make) -> None:
     tmp.replace(png)
 
 
-def run_cell_chunk(model: str, cond: str, start: int, end: int, ctx: dict) -> list[dict]:
-    args, flow, paras, offsets, keys = ctx["args"], ctx["flow"], ctx["paras"], ctx["offsets"], ctx["keys"]
-    questions = squad.sample_chunk_questions(paras, offsets, start, end, args.qpc, args.seed)
+def run_cell_chunk(
+    model: str, cond: str, start: int, end: int, ctx: dict
+) -> list[dict]:
+    args, flow, paras, offsets, keys = (
+        ctx["args"],
+        ctx["flow"],
+        ctx["paras"],
+        ctx["offsets"],
+        ctx["keys"],
+    )
+    questions = squad.sample_chunk_questions(
+        paras, offsets, start, end, args.qpc, args.seed
+    )
     if not questions:
         return []
     chunk_text = flow[start:end]
@@ -171,9 +199,13 @@ def run_cell_chunk(model: str, cond: str, start: int, end: int, ctx: dict) -> li
     if cond == COND_RULER:
         cols, rows, _ = ruler_capacity(FONT, args.size)
         png = CACHE / f"exp05-ruler-{sha8(chunk_text, str(args.size))}.png"
-        _ensure_png(png, lambda: render_ruler(chunk_text, FONT, CACHE, args.size, "sent"))
+        _ensure_png(
+            png, lambda: render_ruler(chunk_text, FONT, CACHE, args.size, "sent")
+        )
         last_label = (rows - 1) // RULER_STEP * RULER_STEP
-        prompt = load_prompt("exp05-qa-image.md").format(cols=cols, rows=rows, last_label=last_label)
+        prompt = load_prompt("exp05-qa-image.md").format(
+            cols=cols, rows=rows, last_label=last_label
+        )
     else:  # control: baseline render, anti-transcription prompt only
         cols, rows = args.size // FONT.adv, args.size // FONT.pitch
         png = CACHE / f"exp05-ctl-{sha8(chunk_text, str(args.size))}.png"
@@ -187,11 +219,19 @@ def run_cell_chunk(model: str, cond: str, start: int, end: int, ctx: dict) -> li
         }
     ]
     qa = cached(
-        model, f"exp05-qa-{cond}", {"messages": messages, "effort": args.effort},
+        model,
+        f"exp05-qa-{cond}",
+        {"messages": messages, "effort": args.effort},
         lambda: dict(
             zip(
                 ("text", "usage", "stop"),
-                llm_complete(keys, model, messages, max_tokens=args.max_tokens, effort=args.effort),
+                llm_complete(
+                    keys,
+                    model,
+                    messages,
+                    max_tokens=args.max_tokens,
+                    effort=args.effort,
+                ),
             )
         ),
         args.fresh,
@@ -199,7 +239,9 @@ def run_cell_chunk(model: str, cond: str, start: int, end: int, ctx: dict) -> li
     answers, claimed_rows = parse_answers_rows(qa["text"], len(questions))
     records = []
     for q, a, crow in zip(questions, answers, claimed_rows):
-        trow = gold_row(chunk_text, q, end - start, cols) if cond == COND_RULER else None
+        trow = (
+            gold_row(chunk_text, q, end - start, cols) if cond == COND_RULER else None
+        )
         records.append(
             {
                 "model": model,
@@ -227,16 +269,27 @@ def aggregate(records: list[dict], price_in: float, price_out: float) -> dict:
     mean_f1 = sum(f1s) / n
     se = (sum((x - mean_f1) ** 2 for x in f1s) / (n * (n - 1))) ** 0.5 if n > 1 else 0.0
     us = [u for r in records if "usage" in r for u in r["usage"]]
-    tok = {k: sum(u.get(k, 0) for u in us) for k in ("in", "out", "cache_w", "cache_r", "reasoning")}
-    cost_in = (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in
+    tok = {
+        k: sum(u.get(k, 0) for u in us)
+        for k in ("in", "out", "cache_w", "cache_r", "reasoning")
+    }
+    cost_in = (
+        (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in
+    )
     cost_out = tok["out"] / 1e6 * price_out
-    loc = [(r["claimed_row"], r["true_row"]) for r in records if r["claimed_row"] is not None and r["true_row"] is not None]
+    loc = [
+        (r["claimed_row"], r["true_row"])
+        for r in records
+        if r["claimed_row"] is not None and r["true_row"] is not None
+    ]
     row_stats = {}
     if loc:
         errs = [abs(c - t) for c, t in loc]
         row_stats = {
             "row_n": len(loc),
-            "row_claimed_frac": round(sum(r["claimed_row"] is not None for r in records) / n, 3),
+            "row_claimed_frac": round(
+                sum(r["claimed_row"] is not None for r in records) / n, 3
+            ),
             "row_mae": round(sum(errs) / len(errs), 2),
             "row_within2": round(sum(e <= 2 for e in errs) / len(errs), 3),
             "row_within5": round(sum(e <= 5 for e in errs) / len(errs), 3),
@@ -291,16 +344,27 @@ def main() -> None:
     for length in lengths:
         paras = all_paras[:length]
         flow, offsets = squad.build_flow(paras)
-        ctx = {"args": args, "flow": flow, "paras": paras, "offsets": offsets, "keys": keys, "length": length}
+        ctx = {
+            "args": args,
+            "flow": flow,
+            "paras": paras,
+            "offsets": offsets,
+            "keys": keys,
+            "length": length,
+        }
         for model in models:
             for cond in conditions:
                 for start in range(0, len(flow), budget):
-                    tasks.append((model, cond, start, min(start + budget, len(flow)), ctx))
+                    tasks.append(
+                        (model, cond, start, min(start + budget, len(flow)), ctx)
+                    )
     print(f"grid: {len(tasks)} chunk tasks, chunk budget {budget} chars")
 
     records: list[dict] = []
     with ThreadPoolExecutor(args.workers) as pool:
-        futures = [pool.submit(run_cell_chunk, m, c, s, e, ctx) for m, c, s, e, ctx in tasks]
+        futures = [
+            pool.submit(run_cell_chunk, m, c, s, e, ctx) for m, c, s, e, ctx in tasks
+        ]
         for i, fut in enumerate(futures):
             records.extend(fut.result())
             print(f"  {i + 1}/{len(tasks)} tasks", flush=True)
@@ -313,10 +377,21 @@ def main() -> None:
     for model in models:
         for length in lengths:
             for cond in conditions:
-                sub = [r for r in records if r["model"] == model and r["length"] == length and r["cond"] == cond]
+                sub = [
+                    r
+                    for r in records
+                    if r["model"] == model
+                    and r["length"] == length
+                    and r["cond"] == cond
+                ]
                 if not sub:
                     continue
-                cell = {"model": model, "length": length, "condition": cond, **aggregate(sub, *MODELS[model])}
+                cell = {
+                    "model": model,
+                    "length": length,
+                    "condition": cond,
+                    **aggregate(sub, *MODELS[model]),
+                }
                 base = BASELINE.get((model, length))
                 if base:
                     cell["base_f1"] = base[0]
@@ -324,8 +399,13 @@ def main() -> None:
                     cell["base_cost"] = base[2]
                     cell["d_cost"] = round(cell["cost_usd"] - base[2], 4)
                 cells.append(cell)
-    (out_dir / "summary.json").write_text(json.dumps({"args": vars(args), "cells": cells}, indent=1))
-    fieldnames = sorted({k for c in cells for k in c}, key=lambda k: (k not in ("model", "length", "condition"), k))
+    (out_dir / "summary.json").write_text(
+        json.dumps({"args": vars(args), "cells": cells}, indent=1)
+    )
+    fieldnames = sorted(
+        {k for c in cells for k in c},
+        key=lambda k: (k not in ("model", "length", "condition"), k),
+    )
     with (out_dir / "matrix.csv").open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
         writer.writeheader()
@@ -335,7 +415,11 @@ def main() -> None:
         print(
             f"{c['model']:>26} L{c['length']:<4}{c['condition']:<24} n={c['n']:<4} em={c['em']:.3f} f1={c['f1']:.3f}±{c['f1_se']:.3f}"
             f" cost=${c['cost_usd']:.3f} out={c['tok_out']} reas={c['tok_reasoning']}"
-            + (f" rowMAE={c['row_mae']} w5={c['row_within5']}" if "row_mae" in c else "")
+            + (
+                f" rowMAE={c['row_mae']} w5={c['row_within5']}"
+                if "row_mae" in c
+                else ""
+            )
         )
     print(f"\n-> {out_dir}/records.jsonl, matrix.csv, summary.json")
 

@@ -1144,7 +1144,10 @@ def _parse_thinking_config(payload: object) -> ThinkingConfig | None:
     if not isinstance(raw_efforts, list):
         raise ValueError("model.thinking.efforts must be a list")
     efforts: tuple[Effort, ...] = tuple(
-        cast(Effort, _require_literal(item, _EFFORT_VALUES, field="model.thinking.efforts[]"))
+        cast(
+            Effort,
+            _require_literal(item, _EFFORT_VALUES, field="model.thinking.efforts[]"),
+        )
         for item in raw_efforts
     )
     return ThinkingConfig(

@@ -29,7 +29,11 @@ sys.path.insert(0, str(HERE))
 import squad  # noqa: E402
 from bdf import capacity, render  # noqa: E402
 from run import CACHE, FONTS, load_prompt  # noqa: E402
-from snapcompact_blackbox_occlusion import mask_cells, random_span, sample_answer_questions  # noqa: E402
+from snapcompact_blackbox_occlusion import (
+    mask_cells,
+    random_span,
+    sample_answer_questions,
+)  # noqa: E402
 
 DEFAULT_MODEL_DIR = (
     "/home/can/.cache/huggingface/hub/models--PaddlePaddle--PaddleOCR-VL/"
@@ -49,10 +53,16 @@ PALETTE = {
 }
 
 
-def ui_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+def ui_font(
+    size: int, bold: bool = False
+) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     candidates = [
-        "/System/Library/Fonts/Supplemental/Arial Bold.ttf" if bold else "/System/Library/Fonts/Supplemental/Arial.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf"
+        if bold
+        else "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        if bold
+        else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     ]
     for path in candidates:
         if path and Path(path).exists():
@@ -96,9 +106,18 @@ def normalize(arr: np.ndarray, scale: float | None = None) -> tuple[np.ndarray, 
     return np.clip(arr / scale, 0, 1), scale
 
 
-def draw_heatmap(draw: ImageDraw.ImageDraw, arr: np.ndarray, box: tuple[int, int, int, int], title: str, subtitle: str, color: tuple[int, int, int]) -> None:
+def draw_heatmap(
+    draw: ImageDraw.ImageDraw,
+    arr: np.ndarray,
+    box: tuple[int, int, int, int],
+    title: str,
+    subtitle: str,
+    color: tuple[int, int, int],
+) -> None:
     x0, y0, x1, y1 = box
-    draw.rounded_rectangle(box, radius=22, fill=PALETTE["panel"], outline=(31, 42, 50), width=1)
+    draw.rounded_rectangle(
+        box, radius=22, fill=PALETTE["panel"], outline=(31, 42, 50), width=1
+    )
     draw.text((x0 + 24, y0 + 18), title, fill=color, font=ui_font(26, True))
     draw.text((x0 + 24, y0 + 50), subtitle, fill=PALETTE["muted"], font=ui_font(15))
     hx0, hy0, hx1, hy1 = x0 + 58, y0 + 84, x1 - 28, y1 - 44
@@ -116,10 +135,23 @@ def draw_heatmap(draw: ImageDraw.ImageDraw, arr: np.ndarray, box: tuple[int, int
         y = round(hy0 + (r + 0.5) * ch)
         draw.text((x0 + 18, y - 8), str(r), fill=PALETTE["muted"], font=ui_font(12))
     draw.text((x0 + 16, hy0 - 4), "layer", fill=PALETTE["muted"], font=ui_font(12))
-    draw.text((hx0, y1 - 31), "image token sequence →", fill=PALETTE["muted"], font=ui_font(13))
+    draw.text(
+        (hx0, y1 - 31),
+        "image token sequence →",
+        fill=PALETTE["muted"],
+        font=ui_font(13),
+    )
 
 
-def crop_with_box(img: Image.Image, start: int, end: int, cols: int, adv: int, pitch: int, pad_cells: int = 34) -> Image.Image:
+def crop_with_box(
+    img: Image.Image,
+    start: int,
+    end: int,
+    cols: int,
+    adv: int,
+    pitch: int,
+    pad_cells: int = 34,
+) -> Image.Image:
     row0 = max(0, start // cols - 5)
     row1 = min(img.height // pitch, end // cols + 6)
     col0 = max(0, start % cols - pad_cells)
@@ -137,34 +169,65 @@ def crop_with_box(img: Image.Image, start: int, end: int, cols: int, adv: int, p
     return crop
 
 
-def paste_fit(canvas: Image.Image, img: Image.Image, box: tuple[int, int, int, int]) -> None:
+def paste_fit(
+    canvas: Image.Image, img: Image.Image, box: tuple[int, int, int, int]
+) -> None:
     x0, y0, x1, y1 = box
     scale = min((x1 - x0) / img.width, (y1 - y0) / img.height)
-    resized = img.resize((max(1, round(img.width * scale)), max(1, round(img.height * scale))), Image.Resampling.NEAREST)
-    canvas.paste(resized, (x0 + (x1 - x0 - resized.width) // 2, y0 + (y1 - y0 - resized.height) // 2))
+    resized = img.resize(
+        (max(1, round(img.width * scale)), max(1, round(img.height * scale))),
+        Image.Resampling.NEAREST,
+    )
+    canvas.paste(
+        resized,
+        (x0 + (x1 - x0 - resized.width) // 2, y0 + (y1 - y0 - resized.height) // 2),
+    )
 
 
 def make_prompt(q: str, cols: int, rows: int) -> str:
-    return load_prompt("qa-image.md").format(cols=cols, rows=rows) + f"\n\nQuestion: {q}\nAnswer with only the shortest extractive answer."
+    return (
+        load_prompt("qa-image.md").format(cols=cols, rows=rows)
+        + f"\n\nQuestion: {q}\nAnswer with only the shortest extractive answer."
+    )
 
 
 def to_device(batch: dict[str, Any], device: Any) -> dict[str, Any]:
     return {k: (v.to(device) if hasattr(v, "to") else v) for k, v in batch.items()}
 
 
-def hidden_token_matrix(model: Any, processor: Any, image: Image.Image, prompt_text: str, device: Any) -> tuple[list[np.ndarray], list[int], dict[str, Any]]:
+def hidden_token_matrix(
+    model: Any, processor: Any, image: Image.Image, prompt_text: str, device: Any
+) -> tuple[list[np.ndarray], list[int], dict[str, Any]]:
     import torch
 
-    messages = [{"role": "user", "content": [{"type": "image", "image": image}, {"type": "text", "text": prompt_text}]}]
-    templated = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": image},
+                {"type": "text", "text": prompt_text},
+            ],
+        }
+    ]
+    templated = processor.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
     batch = processor(images=image, text=templated, return_tensors="pt")
     image_token_id = processor.tokenizer.convert_tokens_to_ids(processor.image_token)
     ids = batch["input_ids"][0].tolist()
-    image_positions = [i for i, token_id in enumerate(ids) if token_id == image_token_id]
-    meta = {k: (v.tolist() if hasattr(v, "tolist") else v) for k, v in batch.items() if k in ("image_grid_thw",)}
+    image_positions = [
+        i for i, token_id in enumerate(ids) if token_id == image_token_id
+    ]
+    meta = {
+        k: (v.tolist() if hasattr(v, "tolist") else v)
+        for k, v in batch.items()
+        if k in ("image_grid_thw",)
+    }
     batch = to_device(batch, device)
     with torch.no_grad():
-        out = model(**batch, output_hidden_states=True, output_attentions=False, use_cache=False)
+        out = model(
+            **batch, output_hidden_states=True, output_attentions=False, use_cache=False
+        )
     matrices: list[np.ndarray] = []
     for hidden in out.hidden_states:
         token_hidden = hidden[0, image_positions, :].float().detach().cpu().numpy()
@@ -194,24 +257,70 @@ def render_tensor_card(
     gd = ImageDraw.Draw(glow)
     gd.ellipse((-260, -180, 850, 640), fill=(255, 83, 62, 30))
     gd.ellipse((1080, 110, 2240, 1320), fill=(77, 218, 255, 30))
-    canvas = Image.alpha_composite(canvas.convert("RGBA"), glow.filter(ImageFilter.GaussianBlur(80))).convert("RGB")
+    canvas = Image.alpha_composite(
+        canvas.convert("RGBA"), glow.filter(ImageFilter.GaussianBlur(80))
+    ).convert("RGB")
     draw = ImageDraw.Draw(canvas)
 
-    draw.text((58, 38), "SNAPCOMPACT WHITEBOX", fill=PALETTE["amber"], font=ui_font(22, True))
-    draw.text((58, 76), "The hidden-state scar of a missing answer", fill=PALETTE["ink"], font=ui_font(58, True))
-    draw.text((60, 148), "Each pixel below is a decoder layer × image-token bin. Bright = larger ||hidden(original) − hidden(masked)||.", fill=PALETTE["muted"], font=ui_font(24))
+    draw.text(
+        (58, 38), "SNAPCOMPACT WHITEBOX", fill=PALETTE["amber"], font=ui_font(22, True)
+    )
+    draw.text(
+        (58, 76),
+        "The hidden-state scar of a missing answer",
+        fill=PALETTE["ink"],
+        font=ui_font(58, True),
+    )
+    draw.text(
+        (60, 148),
+        "Each pixel below is a decoder layer × image-token bin. Bright = larger ||hidden(original) − hidden(masked)||.",
+        fill=PALETTE["muted"],
+        font=ui_font(24),
+    )
 
     # Left evidence panel.
-    draw.rounded_rectangle((58, 205, 700, 1098), radius=28, fill=PALETTE["panel"], outline=(31, 42, 50), width=1)
-    draw.text((90, 236), "the visual intervention", fill=PALETTE["ink"], font=ui_font(30, True))
-    draw.text((90, 274), "same prompt, same bitmap; only answer cells blanked", fill=PALETTE["muted"], font=ui_font(17))
-    crop = crop_with_box(base_img, record["answer_start"], record["answer_end"], cols, adv, pitch)
-    masked_crop = crop_with_box(answer_img, record["answer_start"], record["answer_end"], cols, adv, pitch)
+    draw.rounded_rectangle(
+        (58, 205, 700, 1098),
+        radius=28,
+        fill=PALETTE["panel"],
+        outline=(31, 42, 50),
+        width=1,
+    )
+    draw.text(
+        (90, 236),
+        "the visual intervention",
+        fill=PALETTE["ink"],
+        font=ui_font(30, True),
+    )
+    draw.text(
+        (90, 274),
+        "same prompt, same bitmap; only answer cells blanked",
+        fill=PALETTE["muted"],
+        font=ui_font(17),
+    )
+    crop = crop_with_box(
+        base_img, record["answer_start"], record["answer_end"], cols, adv, pitch
+    )
+    masked_crop = crop_with_box(
+        answer_img, record["answer_start"], record["answer_end"], cols, adv, pitch
+    )
     draw.text((90, 326), "ORIGINAL", fill=PALETTE["cyan"], font=ui_font(16, True))
-    draw.rounded_rectangle((90, 352, 668, 528), radius=14, fill=(244, 242, 230), outline=PALETTE["cyan"], width=3)
+    draw.rounded_rectangle(
+        (90, 352, 668, 528),
+        radius=14,
+        fill=(244, 242, 230),
+        outline=PALETTE["cyan"],
+        width=3,
+    )
     paste_fit(canvas, crop, (108, 368, 650, 512))
     draw.text((90, 568), "ANSWER ERASED", fill=PALETTE["red"], font=ui_font(16, True))
-    draw.rounded_rectangle((90, 594, 668, 770), radius=14, fill=(244, 242, 230), outline=PALETTE["red"], width=3)
+    draw.rounded_rectangle(
+        (90, 594, 668, 770),
+        radius=14,
+        fill=(244, 242, 230),
+        outline=PALETTE["red"],
+        width=3,
+    )
     paste_fit(canvas, masked_crop, (108, 610, 650, 754))
     question = record["q"]
     if len(question) > 72:
@@ -219,12 +328,43 @@ def render_tensor_card(
     draw.text((90, 828), "question", fill=PALETTE["muted"], font=ui_font(16, True))
     draw.text((90, 856), question, fill=PALETTE["ink"], font=ui_font(21))
     draw.text((90, 914), "gold answer", fill=PALETTE["muted"], font=ui_font(16, True))
-    draw.text((90, 942), str(record["answer_text"]), fill=PALETTE["amber"], font=ui_font(32, True))
-    draw.text((90, 1014), f"{summary['layers']} hidden layers × {summary['image_tokens']} image tokens", fill=PALETTE["muted"], font=ui_font(18))
+    draw.text(
+        (90, 942),
+        str(record["answer_text"]),
+        fill=PALETTE["amber"],
+        font=ui_font(32, True),
+    )
+    draw.text(
+        (90, 1014),
+        f"{summary['layers']} hidden layers × {summary['image_tokens']} image tokens",
+        fill=PALETTE["muted"],
+        font=ui_font(18),
+    )
 
-    draw_heatmap(draw, answer_heat, (742, 205, 1818, 488), "gold answer mask", "activation delta when the true answer is blanked", PALETTE["red"])
-    draw_heatmap(draw, random_heat, (742, 520, 1818, 803), "random equal-size mask", "control: blank the same number of glyph cells elsewhere", PALETTE["green"])
-    draw_heatmap(draw, ratio_heat, (742, 835, 1818, 1098), "answer / random ratio", "bright bands mark layers/tokens more sensitive to the answer region", PALETTE["amber"])
+    draw_heatmap(
+        draw,
+        answer_heat,
+        (742, 205, 1818, 488),
+        "gold answer mask",
+        "activation delta when the true answer is blanked",
+        PALETTE["red"],
+    )
+    draw_heatmap(
+        draw,
+        random_heat,
+        (742, 520, 1818, 803),
+        "random equal-size mask",
+        "control: blank the same number of glyph cells elsewhere",
+        PALETTE["green"],
+    )
+    draw_heatmap(
+        draw,
+        ratio_heat,
+        (742, 835, 1818, 1098),
+        "answer / random ratio",
+        "bright bands mark layers/tokens more sensitive to the answer region",
+        PALETTE["amber"],
+    )
 
     # Color scale.
     for i in range(220):
@@ -273,37 +413,67 @@ def main() -> None:
     fill = (255, 255, 255) if args.variant not in ("dark", "dark-sent") else (0, 0, 0)
     span_len = max(1, q["answer_end"] - q["answer_start"])
     rng = random.Random(args.seed * 101 + args.question_index)
-    rand_start, rand_end = random_span(rng, len(chunk), span_len, q["answer_start"], q["answer_end"])
-    answer_img = mask_cells(base_img, q["answer_start"], q["answer_end"], cols, cfg.adv, cfg.pitch, fill)
-    random_img = mask_cells(base_img, rand_start, rand_end, cols, cfg.adv, cfg.pitch, fill)
+    rand_start, rand_end = random_span(
+        rng, len(chunk), span_len, q["answer_start"], q["answer_end"]
+    )
+    answer_img = mask_cells(
+        base_img, q["answer_start"], q["answer_end"], cols, cfg.adv, cfg.pitch, fill
+    )
+    random_img = mask_cells(
+        base_img, rand_start, rand_end, cols, cfg.adv, cfg.pitch, fill
+    )
     base_img.save(img_dir / "original.png")
     answer_img.save(img_dir / "answer-mask.png")
     random_img.save(img_dir / "random-mask.png")
 
     print(f"loading {args.model_dir}", flush=True)
-    processor = AutoProcessor.from_pretrained(args.model_dir, local_files_only=True, trust_remote_code=True, use_fast=False)
+    processor = AutoProcessor.from_pretrained(
+        args.model_dir, local_files_only=True, trust_remote_code=True, use_fast=False
+    )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
-    model = AutoModel.from_pretrained(args.model_dir, local_files_only=True, trust_remote_code=True, dtype=dtype).to(device).eval()
+    model = (
+        AutoModel.from_pretrained(
+            args.model_dir, local_files_only=True, trust_remote_code=True, dtype=dtype
+        )
+        .to(device)
+        .eval()
+    )
 
     prompt = make_prompt(q["q"], cols, rows)
-    original, positions, meta = hidden_token_matrix(model, processor, base_img, prompt, device)
-    answer, answer_positions, _ = hidden_token_matrix(model, processor, answer_img, prompt, device)
-    random_mask, random_positions, _ = hidden_token_matrix(model, processor, random_img, prompt, device)
+    original, positions, meta = hidden_token_matrix(
+        model, processor, base_img, prompt, device
+    )
+    answer, answer_positions, _ = hidden_token_matrix(
+        model, processor, answer_img, prompt, device
+    )
+    random_mask, random_positions, _ = hidden_token_matrix(
+        model, processor, random_img, prompt, device
+    )
     if positions != answer_positions or positions != random_positions:
         raise SystemExit("image token positions changed across variants")
 
-    answer_delta = np.stack([np.linalg.norm(a - b, axis=1) for a, b in zip(original, answer)], axis=0)
-    random_delta = np.stack([np.linalg.norm(a - b, axis=1) for a, b in zip(original, random_mask)], axis=0)
+    answer_delta = np.stack(
+        [np.linalg.norm(a - b, axis=1) for a, b in zip(original, answer)], axis=0
+    )
+    random_delta = np.stack(
+        [np.linalg.norm(a - b, axis=1) for a, b in zip(original, random_mask)], axis=0
+    )
     ratio = answer_delta / np.maximum(random_delta, 1e-6)
 
     answer_binned = downsample_cols(answer_delta, args.bins)
     random_binned = downsample_cols(random_delta, args.bins)
     ratio_binned = downsample_cols(ratio, args.bins)
-    common_scale = float(np.quantile(np.concatenate([answer_binned.ravel(), random_binned.ravel()]), 0.98))
+    common_scale = float(
+        np.quantile(
+            np.concatenate([answer_binned.ravel(), random_binned.ravel()]), 0.98
+        )
+    )
     answer_norm, _ = normalize(answer_binned, common_scale)
     random_norm, _ = normalize(random_binned, common_scale)
-    ratio_norm, ratio_scale = normalize(ratio_binned, float(np.quantile(ratio_binned, 0.98)))
+    ratio_norm, ratio_scale = normalize(
+        ratio_binned, float(np.quantile(ratio_binned, 0.98))
+    )
 
     record = {
         "q": q["q"],
@@ -325,7 +495,9 @@ def main() -> None:
         "processor_meta": meta,
         "answer_delta_mean": float(answer_delta.mean()),
         "random_delta_mean": float(random_delta.mean()),
-        "answer_over_random_delta": float(answer_delta.mean() / max(random_delta.mean(), 1e-6)),
+        "answer_over_random_delta": float(
+            answer_delta.mean() / max(random_delta.mean(), 1e-6)
+        ),
         "common_delta_scale_p98": common_scale,
         "ratio_scale_p98": ratio_scale,
         "max_ratio_layer": int(np.argmax(ratio.mean(axis=1))),
@@ -345,7 +517,19 @@ def main() -> None:
         ratio_norm=ratio_norm,
     )
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=1))
-    render_tensor_card(out_dir / "tensor-heatmap.png", answer_norm, random_norm, ratio_norm, base_img, answer_img, record, cols, cfg.adv, cfg.pitch, summary)
+    render_tensor_card(
+        out_dir / "tensor-heatmap.png",
+        answer_norm,
+        random_norm,
+        ratio_norm,
+        base_img,
+        answer_img,
+        record,
+        cols,
+        cfg.adv,
+        cfg.pitch,
+        summary,
+    )
     print(json.dumps(summary, indent=1))
     print(f"results -> {out_dir}")
 

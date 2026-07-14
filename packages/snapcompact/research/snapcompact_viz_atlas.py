@@ -39,9 +39,13 @@ PURPLE = (183, 108, 255)
 
 def font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     candidates = [
-        "/System/Library/Fonts/Supplemental/Arial Bold.ttf" if bold else "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf"
+        if bold
+        else "/System/Library/Fonts/Supplemental/Arial.ttf",
         "/System/Library/Fonts/Supplemental/Avenir Next Condensed.ttc",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        if bold
+        else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     ]
     for path in candidates:
         if path and Path(path).exists():
@@ -82,11 +86,16 @@ def normalize_coords(coords: np.ndarray) -> np.ndarray:
     return out
 
 
-def kmeans(points: np.ndarray, k: int = 5, iters: int = 32) -> tuple[np.ndarray, np.ndarray]:
+def kmeans(
+    points: np.ndarray, k: int = 5, iters: int = 32
+) -> tuple[np.ndarray, np.ndarray]:
     # Deterministic farthest-point seeding avoids random output drift.
     centers = [points[np.argmax(points[:, 0] + points[:, 1])]]
     for _ in range(1, k):
-        dist = np.min(np.sum((points[:, None, :] - np.asarray(centers)[None, :, :]) ** 2, axis=2), axis=1)
+        dist = np.min(
+            np.sum((points[:, None, :] - np.asarray(centers)[None, :, :]) ** 2, axis=2),
+            axis=1,
+        )
         centers.append(points[int(np.argmax(dist))])
     c = np.asarray(centers, dtype=np.float32)
     labels = np.zeros(points.shape[0], dtype=np.int32)
@@ -103,7 +112,9 @@ def kmeans(points: np.ndarray, k: int = 5, iters: int = 32) -> tuple[np.ndarray,
     return labels, c
 
 
-def crop_answer_strip(img: Image.Image, start: int, end: int, cols: int, adv: int = 8, pitch: int = 13) -> Image.Image:
+def crop_answer_strip(
+    img: Image.Image, start: int, end: int, cols: int, adv: int = 8, pitch: int = 13
+) -> Image.Image:
     row0 = max(0, start // cols - 4)
     row1 = min(img.height // pitch, end // cols + 5)
     col0 = max(0, start % cols - 32)
@@ -118,11 +129,19 @@ def crop_answer_strip(img: Image.Image, start: int, end: int, cols: int, adv: in
     return crop
 
 
-def paste_fit(canvas: Image.Image, img: Image.Image, box: tuple[int, int, int, int]) -> None:
+def paste_fit(
+    canvas: Image.Image, img: Image.Image, box: tuple[int, int, int, int]
+) -> None:
     x0, y0, x1, y1 = box
     scale = min((x1 - x0) / img.width, (y1 - y0) / img.height)
-    resized = img.resize((max(1, round(img.width * scale)), max(1, round(img.height * scale))), Image.Resampling.NEAREST)
-    canvas.paste(resized, (x0 + (x1 - x0 - resized.width) // 2, y0 + (y1 - y0 - resized.height) // 2))
+    resized = img.resize(
+        (max(1, round(img.width * scale)), max(1, round(img.height * scale))),
+        Image.Resampling.NEAREST,
+    )
+    canvas.paste(
+        resized,
+        (x0 + (x1 - x0 - resized.width) // 2, y0 + (y1 - y0 - resized.height) // 2),
+    )
 
 
 def render_atlas_panel(
@@ -136,14 +155,26 @@ def render_atlas_panel(
     summary: dict,
     out_dir: Path,
 ) -> Image.Image:
-    cmap = LinearSegmentedColormap.from_list("scar", ["#182132", "#245d7a", "#48d8ff", "#ffd04e", "#ff493d"])
+    cmap = LinearSegmentedColormap.from_list(
+        "scar", ["#182132", "#245d7a", "#48d8ff", "#ffd04e", "#ff493d"]
+    )
     fig = plt.figure(figsize=(15.8, 10.6), dpi=170)
     fig.patch.set_facecolor("#04070c")
     ax = fig.add_axes((0.045, 0.06, 0.91, 0.88), facecolor="#07101a")
 
     x = points[:, 0]
     y = points[:, 1]
-    hb = ax.hexbin(x, y, C=ratio_strength, gridsize=46, reduce_C_function=np.mean, cmap=cmap, mincnt=1, linewidths=0, alpha=0.64)
+    hb = ax.hexbin(
+        x,
+        y,
+        C=ratio_strength,
+        gridsize=46,
+        reduce_C_function=np.mean,
+        cmap=cmap,
+        mincnt=1,
+        linewidths=0,
+        alpha=0.64,
+    )
     hb.set_clim(0.0, 1.0)
 
     cluster_colors = ["#46d8ff", "#ff4b3d", "#ffc644", "#87ff8b", "#b76cff"]
@@ -151,7 +182,14 @@ def render_atlas_panel(
         mask = labels == i
         if np.count_nonzero(mask) < 4:
             continue
-        ax.scatter(x[mask], y[mask], s=28 + answer_strength[mask] * 150, c=color, alpha=0.24, linewidths=0)
+        ax.scatter(
+            x[mask],
+            y[mask],
+            s=28 + answer_strength[mask] * 150,
+            c=color,
+            alpha=0.24,
+            linewidths=0,
+        )
         ax.scatter(
             x[mask],
             y[mask],
@@ -165,7 +203,15 @@ def render_atlas_panel(
         )
 
     hot = np.argsort(ratio_strength + answer_strength * 0.55)[-9:]
-    ax.scatter(x[hot], y[hot], s=210, facecolors="none", edgecolors="#fff0a8", linewidths=1.5, alpha=0.95)
+    ax.scatter(
+        x[hot],
+        y[hot],
+        s=210,
+        facecolors="none",
+        edgecolors="#fff0a8",
+        linewidths=1.5,
+        alpha=0.95,
+    )
     for rank, idx in enumerate(hot[-5:][::-1], 1):
         ax.text(
             x[idx] + 0.012,
@@ -177,12 +223,23 @@ def render_atlas_panel(
             path_effects=[pe.withStroke(linewidth=2.5, foreground="#05070a")],
         )
 
-    names = ["answer ridge", "control basin", "early glyph shore", "late-context upland", "ratio reef"]
+    names = [
+        "answer ridge",
+        "control basin",
+        "early glyph shore",
+        "late-context upland",
+        "ratio reef",
+    ]
     cluster_scores = []
     for i in range(len(centers)):
         mask = labels == i
-        cluster_scores.append((float(ratio_strength[mask].mean()) if np.any(mask) else 0.0, i))
-    order = {old: new for new, (_score, old) in enumerate(sorted(cluster_scores, reverse=True))}
+        cluster_scores.append(
+            (float(ratio_strength[mask].mean()) if np.any(mask) else 0.0, i)
+        )
+    order = {
+        old: new
+        for new, (_score, old) in enumerate(sorted(cluster_scores, reverse=True))
+    }
     for i, c in enumerate(centers):
         mask = labels == i
         if np.count_nonzero(mask) < 5:
@@ -277,14 +334,28 @@ def draw_shell(panel: Image.Image, summary: dict, data_dir: Path, out: Path) -> 
     gd.ellipse((-360, -240, 1000, 760), fill=(70, 216, 255, 32))
     gd.ellipse((1270, 210, 2740, 1610), fill=(255, 75, 61, 32))
     gd.ellipse((690, 920, 1740, 1780), fill=(255, 198, 68, 18))
-    canvas = Image.alpha_composite(canvas.convert("RGBA"), glow.filter(ImageFilter.GaussianBlur(90))).convert("RGB")
+    canvas = Image.alpha_composite(
+        canvas.convert("RGBA"), glow.filter(ImageFilter.GaussianBlur(90))
+    ).convert("RGB")
     draw = ImageDraw.Draw(canvas)
 
     draw.text((74, 48), "SNAPCOMPACT WHITEBOX", fill=AMBER, font=font(24, True))
-    draw.text((74, 88), "Activation Atlas of the missing answer", fill=INK, font=font(72, True))
-    draw.text((78, 178), "A PCA geography of image-token residual scars: where blanking the gold answer ‘2003’ moves the model differently than a random blank.", fill=MUTED, font=font(27))
+    draw.text(
+        (74, 88),
+        "Activation Atlas of the missing answer",
+        fill=INK,
+        font=font(72, True),
+    )
+    draw.text(
+        (78, 178),
+        "A PCA geography of image-token residual scars: where blanking the gold answer ‘2003’ moves the model differently than a random blank.",
+        fill=MUTED,
+        font=font(27),
+    )
 
-    draw.rounded_rectangle((74, 252, 590, 1390), radius=32, fill=PANEL, outline=(32, 45, 58), width=1)
+    draw.rounded_rectangle(
+        (74, 252, 590, 1390), radius=32, fill=PANEL, outline=(32, 45, 58), width=1
+    )
     q = summary["question"]
     cols = summary["geometry"]["cols"]
     original = Image.open(data_dir / "images" / "original.png").convert("RGB")
@@ -298,11 +369,27 @@ def draw_shell(panel: Image.Image, summary: dict, data_dir: Path, out: Path) -> 
     y = 314
     for title, img, color in strips:
         draw.text((110, y), title, fill=color, font=font(18, True))
-        draw.rounded_rectangle((110, y + 28, 554, y + 166), radius=16, fill=(242, 241, 229), outline=color, width=3)
-        paste_fit(canvas, crop_answer_strip(img, q["answer_start"], q["answer_end"], cols), (124, y + 42, 540, y + 152))
+        draw.rounded_rectangle(
+            (110, y + 28, 554, y + 166),
+            radius=16,
+            fill=(242, 241, 229),
+            outline=color,
+            width=3,
+        )
+        paste_fit(
+            canvas,
+            crop_answer_strip(img, q["answer_start"], q["answer_end"], cols),
+            (124, y + 42, 540, y + 152),
+        )
         y += 226
 
-    draw.rounded_rectangle((110, 1002, 554, 1300), radius=24, fill=(7, 11, 18), outline=(35, 51, 66), width=1)
+    draw.rounded_rectangle(
+        (110, 1002, 554, 1300),
+        radius=24,
+        fill=(7, 11, 18),
+        outline=(35, 51, 66),
+        width=1,
+    )
     metrics = [
         ("answer", q["answer_text"], AMBER, 48),
         ("layers", str(summary["layers"]), CYAN, 38),
@@ -314,9 +401,16 @@ def draw_shell(panel: Image.Image, summary: dict, data_dir: Path, out: Path) -> 
         draw.text((142, yy), label, fill=MUTED, font=font(16, True))
         draw.text((142, yy + 26), value, fill=color, font=font(size, True))
         yy += 68
-    draw.text((110, 1336), "Actual heatmaps.npz + summary.json; no schematic points.", fill=MUTED, font=font(18))
+    draw.text(
+        (110, 1336),
+        "Actual heatmaps.npz + summary.json; no schematic points.",
+        fill=MUTED,
+        font=font(18),
+    )
 
-    draw.rounded_rectangle((622, 252, 2326, 1390), radius=32, fill=PANEL, outline=(32, 45, 58), width=1)
+    draw.rounded_rectangle(
+        (622, 252, 2326, 1390), radius=32, fill=PANEL, outline=(32, 45, 58), width=1
+    )
     panel = panel.resize((1640, 1098), Image.Resampling.LANCZOS)
     canvas.paste(panel, (654, 272))
 
@@ -324,7 +418,15 @@ def draw_shell(panel: Image.Image, summary: dict, data_dir: Path, out: Path) -> 
     canvas.save(out, quality=95)
 
 
-def write_source_data(out_dir: Path, points: np.ndarray, labels: np.ndarray, ratio_strength: np.ndarray, answer_strength: np.ndarray, peak_layers: np.ndarray, explained: np.ndarray) -> None:
+def write_source_data(
+    out_dir: Path,
+    points: np.ndarray,
+    labels: np.ndarray,
+    ratio_strength: np.ndarray,
+    answer_strength: np.ndarray,
+    peak_layers: np.ndarray,
+    explained: np.ndarray,
+) -> None:
     np.savez_compressed(
         out_dir / "atlas_source.npz",
         points=points,
@@ -336,9 +438,29 @@ def write_source_data(out_dir: Path, points: np.ndarray, labels: np.ndarray, rat
     )
     with (out_dir / "atlas_points.csv").open("w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["token", "atlas_x", "atlas_y", "cluster", "ratio_strength", "answer_strength", "peak_layer"])
+        writer.writerow(
+            [
+                "token",
+                "atlas_x",
+                "atlas_y",
+                "cluster",
+                "ratio_strength",
+                "answer_strength",
+                "peak_layer",
+            ]
+        )
         for i in range(points.shape[0]):
-            writer.writerow([i, f"{points[i, 0]:.6f}", f"{points[i, 1]:.6f}", int(labels[i]), f"{ratio_strength[i]:.6f}", f"{answer_strength[i]:.6f}", int(peak_layers[i])])
+            writer.writerow(
+                [
+                    i,
+                    f"{points[i, 0]:.6f}",
+                    f"{points[i, 1]:.6f}",
+                    int(labels[i]),
+                    f"{ratio_strength[i]:.6f}",
+                    f"{answer_strength[i]:.6f}",
+                    int(peak_layers[i]),
+                ]
+            )
 
 
 def main() -> None:
@@ -357,7 +479,9 @@ def main() -> None:
     ratio = heatmaps["ratio"].astype(np.float32)
 
     contrast = np.log1p(answer) - np.log1p(random)
-    features = np.concatenate([contrast.T, np.log1p(ratio).T, np.log1p(answer).T], axis=1)
+    features = np.concatenate(
+        [contrast.T, np.log1p(ratio).T, np.log1p(answer).T], axis=1
+    )
     raw_coords, explained = pca2(features)
     points = normalize_coords(raw_coords)
     labels, centers = kmeans(points, k=5)
@@ -366,8 +490,20 @@ def main() -> None:
     answer_strength = quantile_norm(np.log1p(answer).mean(axis=0), 0.02, 0.99)
     peak_layers = np.argmax(ratio, axis=0).astype(np.int32)
 
-    write_source_data(out_dir, points, labels, ratio_strength, answer_strength, peak_layers, explained)
-    panel = render_atlas_panel(points, labels, centers, ratio_strength, answer_strength, peak_layers, explained, summary, out_dir)
+    write_source_data(
+        out_dir, points, labels, ratio_strength, answer_strength, peak_layers, explained
+    )
+    panel = render_atlas_panel(
+        points,
+        labels,
+        centers,
+        ratio_strength,
+        answer_strength,
+        peak_layers,
+        explained,
+        summary,
+        out_dir,
+    )
     out = out_dir / "atlas.png"
     draw_shell(panel, summary, data_dir, out)
     print(out)

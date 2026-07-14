@@ -33,9 +33,15 @@ GREEN = (127, 245, 148)
 
 def font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     candidates = [
-        "/System/Library/Fonts/Supplemental/Arial Bold.ttf" if bold else "/System/Library/Fonts/Supplemental/Arial.ttf",
-        "/System/Library/Fonts/Supplemental/Helvetica Bold.ttf" if bold else "/System/Library/Fonts/Supplemental/Helvetica.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf"
+        if bold
+        else "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Helvetica Bold.ttf"
+        if bold
+        else "/System/Library/Fonts/Supplemental/Helvetica.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        if bold
+        else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     ]
     for path in candidates:
         if Path(path).exists():
@@ -47,7 +53,9 @@ def clamp01(v: float) -> float:
     return max(0.0, min(1.0, v))
 
 
-def mix(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
+def mix(
+    a: tuple[int, int, int], b: tuple[int, int, int], t: float
+) -> tuple[int, int, int]:
     t = clamp01(t)
     return tuple(round(x + (y - x) * t) for x, y in zip(a, b))
 
@@ -59,11 +67,24 @@ def quantile_norm(values: np.ndarray, q: float = 0.97) -> np.ndarray:
     return np.clip(values / scale, 0, 1)
 
 
-def rounded_panel(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], radius: int = 34) -> None:
-    draw.rounded_rectangle(box, radius=radius, fill=PANEL, outline=(31, 41, 51), width=1)
+def rounded_panel(
+    draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], radius: int = 34
+) -> None:
+    draw.rounded_rectangle(
+        box, radius=radius, fill=PANEL, outline=(31, 41, 51), width=1
+    )
 
 
-def multiline(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str, *, fill: tuple[int, int, int], fnt: ImageFont.ImageFont, max_width: int, line_gap: int = 8) -> int:
+def multiline(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[int, int],
+    text: str,
+    *,
+    fill: tuple[int, int, int],
+    fnt: ImageFont.ImageFont,
+    max_width: int,
+    line_gap: int = 8,
+) -> int:
     words = text.split()
     lines: list[str] = []
     cur = ""
@@ -85,7 +106,9 @@ def multiline(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str, *, fill
     return y
 
 
-def crop_answer_region(img: Image.Image, summary: dict, pad_cells: int = 42) -> Image.Image:
+def crop_answer_region(
+    img: Image.Image, summary: dict, pad_cells: int = 42
+) -> Image.Image:
     q = summary["question"]
     cols = int(summary["geometry"]["cols"])
     rows = int(summary["geometry"]["rows"])
@@ -109,15 +132,34 @@ def crop_answer_region(img: Image.Image, summary: dict, pad_cells: int = 42) -> 
     return crop
 
 
-def paste_fit(canvas: Image.Image, img: Image.Image, box: tuple[int, int, int, int], *, resample: int = Image.Resampling.LANCZOS) -> None:
+def paste_fit(
+    canvas: Image.Image,
+    img: Image.Image,
+    box: tuple[int, int, int, int],
+    *,
+    resample: int = Image.Resampling.LANCZOS,
+) -> None:
     x0, y0, x1, y1 = box
     scale = min((x1 - x0) / img.width, (y1 - y0) / img.height)
     size = (max(1, round(img.width * scale)), max(1, round(img.height * scale)))
     resized = img.resize(size, resample)
-    canvas.paste(resized, (x0 + (x1 - x0 - size[0]) // 2, y0 + (y1 - y0 - size[1]) // 2))
+    canvas.paste(
+        resized, (x0 + (x1 - x0 - size[0]) // 2, y0 + (y1 - y0 - size[1]) // 2)
+    )
 
 
-def draw_bezier(draw: ImageDraw.ImageDraw, points: tuple[tuple[float, float], tuple[float, float], tuple[float, float], tuple[float, float]], *, fill: tuple[int, int, int, int], width: int) -> None:
+def draw_bezier(
+    draw: ImageDraw.ImageDraw,
+    points: tuple[
+        tuple[float, float],
+        tuple[float, float],
+        tuple[float, float],
+        tuple[float, float],
+    ],
+    *,
+    fill: tuple[int, int, int, int],
+    width: int,
+) -> None:
     p0, p1, p2, p3 = points
     coords: list[tuple[float, float]] = []
     for i in range(46):
@@ -131,7 +173,17 @@ def draw_bezier(draw: ImageDraw.ImageDraw, points: tuple[tuple[float, float], tu
 
 def token_groups(grid_side: int = 27, tiles: int = 3) -> list[dict[str, int | str]]:
     groups: list[dict[str, int | str]] = []
-    names = ["upper-left", "upper", "upper-right", "left", "center", "right", "lower-left", "lower", "lower-right"]
+    names = [
+        "upper-left",
+        "upper",
+        "upper-right",
+        "left",
+        "center",
+        "right",
+        "lower-left",
+        "lower",
+        "lower-right",
+    ]
     idx = 0
     for gy in range(tiles):
         y0 = round(gy * grid_side / tiles)
@@ -152,7 +204,9 @@ def group_indices(group: dict[str, int | str], grid_side: int = 27) -> np.ndarra
     return np.asarray(ids, dtype=np.int64)
 
 
-def build_metrics(answer: np.ndarray, random: np.ndarray, ratio: np.ndarray) -> tuple[list[dict], list[dict], np.ndarray, np.ndarray]:
+def build_metrics(
+    answer: np.ndarray, random: np.ndarray, ratio: np.ndarray
+) -> tuple[list[dict], list[dict], np.ndarray, np.ndarray]:
     layers, tokens = answer.shape
     grid_side = int(round(math.sqrt(tokens)))
     if grid_side * grid_side != tokens:
@@ -195,14 +249,21 @@ def build_metrics(answer: np.ndarray, random: np.ndarray, ratio: np.ndarray) -> 
                 "answer_delta_mean": float(answer[layer].mean()),
                 "random_delta_mean": float(random[layer].mean()),
                 "ratio_mean": float(ratio[layer].mean()),
-                "answer_minus_random_mean": float((answer[layer] - random[layer]).mean()),
+                "answer_minus_random_mean": float(
+                    (answer[layer] - random[layer]).mean()
+                ),
                 "edge_score": float(layer_score[layer].mean()),
             }
         )
     return group_rows, layer_rows, layer_score, layer_norm
 
 
-def draw_token_grid(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], token_strength: np.ndarray, group_rows: list[dict]) -> list[tuple[int, int]]:
+def draw_token_grid(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[int, int, int, int],
+    token_strength: np.ndarray,
+    group_rows: list[dict],
+) -> list[tuple[int, int]]:
     x0, y0, x1, y1 = box
     grid = token_strength.reshape(27, 27)
     norm = quantile_norm(grid, 0.985)
@@ -215,8 +276,18 @@ def draw_token_grid(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], t
             color = mix((13, 24, 34), ORANGE, v)
             if v > 0.72:
                 color = mix(color, GOLD, (v - 0.72) / 0.28)
-            draw.rectangle((gx + x * cell, gy + y * cell, gx + (x + 1) * cell - 1, gy + (y + 1) * cell - 1), fill=color)
-    draw.rectangle((gx - 1, gy - 1, gx + 27 * cell, gy + 27 * cell), outline=(70, 88, 101), width=2)
+            draw.rectangle(
+                (
+                    gx + x * cell,
+                    gy + y * cell,
+                    gx + (x + 1) * cell - 1,
+                    gy + (y + 1) * cell - 1,
+                ),
+                fill=color,
+            )
+    draw.rectangle(
+        (gx - 1, gy - 1, gx + 27 * cell, gy + 27 * cell), outline=(70, 88, 101), width=2
+    )
 
     centers: list[tuple[int, int]] = []
     scores = np.asarray([g["edge_score"] for g in group_rows], dtype=np.float32)
@@ -226,11 +297,17 @@ def draw_token_grid(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], t
         cy = gy + round((int(g["y0"]) + int(g["y1"])) * 0.5 * cell)
         centers.append((cx, cy))
         rad = round(8 + 19 * float(s))
-        draw.ellipse((cx - rad, cy - rad, cx + rad, cy + rad), outline=mix(BLUE, GOLD, float(s)), width=3)
+        draw.ellipse(
+            (cx - rad, cy - rad, cx + rad, cy + rad),
+            outline=mix(BLUE, GOLD, float(s)),
+            width=3,
+        )
     return centers
 
 
-def draw_layer_bands(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], layer_rows: list[dict]) -> list[tuple[int, int]]:
+def draw_layer_bands(
+    draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], layer_rows: list[dict]
+) -> list[tuple[int, int]]:
     x0, y0, x1, y1 = box
     scores = np.asarray([r["edge_score"] for r in layer_rows], dtype=np.float32)
     ratios = np.asarray([r["ratio_mean"] for r in layer_rows], dtype=np.float32)
@@ -245,14 +322,34 @@ def draw_layer_bands(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], 
         inset = round(26 * (1 - float(s)))
         color = mix((17, 27, 38), GOLD, float(rr) * 0.80)
         outline = mix((54, 71, 83), RED, float(s))
-        draw.rounded_rectangle((x0 + inset, yy0, x1 - inset, yy1), radius=8, fill=color, outline=outline, width=2)
-        draw.text((x0 - 74, yy0 + max(0, (yy1 - yy0 - 18) // 2)), f"L{int(row['layer']):02d}", fill=mix(MUTED, INK, float(s)), font=font(16, True))
+        draw.rounded_rectangle(
+            (x0 + inset, yy0, x1 - inset, yy1),
+            radius=8,
+            fill=color,
+            outline=outline,
+            width=2,
+        )
+        draw.text(
+            (x0 - 74, yy0 + max(0, (yy1 - yy0 - 18) // 2)),
+            f"L{int(row['layer']):02d}",
+            fill=mix(MUTED, INK, float(s)),
+            font=font(16, True),
+        )
         centers.append(((x0 + x1) // 2, (yy0 + yy1) // 2))
     return centers
 
 
-def render(summary: dict, answer: np.ndarray, random: np.ndarray, ratio: np.ndarray, result_dir: Path, out_dir: Path) -> dict:
-    group_rows, layer_rows, layer_score, layer_norm = build_metrics(answer, random, ratio)
+def render(
+    summary: dict,
+    answer: np.ndarray,
+    random: np.ndarray,
+    ratio: np.ndarray,
+    result_dir: Path,
+    out_dir: Path,
+) -> dict:
+    group_rows, layer_rows, layer_score, layer_norm = build_metrics(
+        answer, random, ratio
+    )
     w, h = 2400, 1350
     canvas = Image.new("RGB", (w, h), BG)
     draw = ImageDraw.Draw(canvas)
@@ -264,11 +361,18 @@ def render(summary: dict, answer: np.ndarray, random: np.ndarray, ratio: np.ndar
     gd.ellipse((-380, -260, 980, 640), fill=(255, 72, 82, 36))
     gd.ellipse((780, 70, 2320, 1420), fill=(83, 218, 255, 22))
     gd.ellipse((1440, -120, 2760, 860), fill=(255, 199, 74, 26))
-    canvas = Image.alpha_composite(canvas.convert("RGBA"), glow.filter(ImageFilter.GaussianBlur(90))).convert("RGB")
+    canvas = Image.alpha_composite(
+        canvas.convert("RGBA"), glow.filter(ImageFilter.GaussianBlur(90))
+    ).convert("RGB")
     draw = ImageDraw.Draw(canvas)
 
     draw.text((70, 44), "SNAPCOMPACT CIRCUIT TRACE", fill=GOLD, font=font(25, True))
-    draw.text((70, 82), "The answer glyphs light a decoder circuit", fill=INK, font=font(66, True))
+    draw.text(
+        (70, 82),
+        "The answer glyphs light a decoder circuit",
+        fill=INK,
+        font=font(66, True),
+    )
     multiline(
         draw,
         (72, 166),
@@ -292,59 +396,133 @@ def render(summary: dict, answer: np.ndarray, random: np.ndarray, ratio: np.ndar
 
     draw.text((94, 294), "1. bitmap intervention", fill=INK, font=font(30, True))
     draw.text((94, 334), "question targets one visible year", fill=MUTED, font=font(18))
-    draw.rounded_rectangle((94, 386, 488, 560), radius=16, fill=(240, 238, 224), outline=BLUE, width=3)
+    draw.rounded_rectangle(
+        (94, 386, 488, 560), radius=16, fill=(240, 238, 224), outline=BLUE, width=3
+    )
     paste_fit(canvas, crop, (108, 400, 474, 546), resample=Image.Resampling.NEAREST)
     draw.text((94, 574), "original answer region", fill=BLUE, font=font(18, True))
-    draw.rounded_rectangle((94, 654, 488, 828), radius=16, fill=(240, 238, 224), outline=RED, width=3)
-    paste_fit(canvas, masked_crop, (108, 668, 474, 814), resample=Image.Resampling.NEAREST)
+    draw.rounded_rectangle(
+        (94, 654, 488, 828), radius=16, fill=(240, 238, 224), outline=RED, width=3
+    )
+    paste_fit(
+        canvas, masked_crop, (108, 668, 474, 814), resample=Image.Resampling.NEAREST
+    )
     draw.text((94, 842), "blanked answer mask", fill=RED, font=font(18, True))
     draw.text((94, 930), "question", fill=MUTED, font=font(15, True))
-    multiline(draw, (94, 956), str(q["q"]), fill=INK, fnt=font(23), max_width=370, line_gap=8)
+    multiline(
+        draw, (94, 956), str(q["q"]), fill=INK, fnt=font(23), max_width=370, line_gap=8
+    )
     draw.text((94, 1070), "gold answer", fill=MUTED, font=font(15, True))
     draw.text((94, 1098), str(q["answer_text"]), fill=GOLD, font=font(52, True))
-    draw.text((94, 1172), f"global Δ ratio {summary['answer_over_random_delta']:.2f}×", fill=INK, font=font(22, True))
+    draw.text(
+        (94, 1172),
+        f"global Δ ratio {summary['answer_over_random_delta']:.2f}×",
+        fill=INK,
+        font=font(22, True),
+    )
 
     draw.text((600, 294), "2. image-token regions", fill=INK, font=font(30, True))
-    draw.text((600, 334), "27×27 token lattice, colored by circuit score", fill=MUTED, font=font(18))
+    draw.text(
+        (600, 334),
+        "27×27 token lattice, colored by circuit score",
+        fill=MUTED,
+        font=font(18),
+    )
     token_strength = layer_score.mean(axis=0)
-    token_centers = draw_token_grid(draw, (616, 392, 954, 730), token_strength, group_rows)
+    token_centers = draw_token_grid(
+        draw, (616, 392, 954, 730), token_strength, group_rows
+    )
     top_groups = sorted(group_rows, key=lambda g: g["edge_score"], reverse=True)[:4]
     draw.text((600, 794), "strongest token groups", fill=MUTED, font=font(16, True))
     y = 826
-    group_score_norm = quantile_norm(np.asarray([g["edge_score"] for g in group_rows], dtype=np.float32), 0.92)
+    group_score_norm = quantile_norm(
+        np.asarray([g["edge_score"] for g in group_rows], dtype=np.float32), 0.92
+    )
     for g in top_groups:
         s = float(group_score_norm[int(g["id"])])
-        draw.rounded_rectangle((600, y, 970, y + 62), radius=14, fill=PANEL_2, outline=mix((44, 58, 68), GOLD, s), width=2)
+        draw.rounded_rectangle(
+            (600, y, 970, y + 62),
+            radius=14,
+            fill=PANEL_2,
+            outline=mix((44, 58, 68), GOLD, s),
+            width=2,
+        )
         draw.text((620, y + 12), str(g["name"]), fill=INK, font=font(20, True))
-        draw.text((820, y + 12), f"{g['ratio_mean']:.2f}×", fill=mix(BLUE, GOLD, s), font=font(21, True))
-        draw.text((620, y + 38), f"Δ {g['answer_delta_mean']:.2f} vs {g['random_delta_mean']:.2f}", fill=MUTED, font=font(14))
+        draw.text(
+            (820, y + 12),
+            f"{g['ratio_mean']:.2f}×",
+            fill=mix(BLUE, GOLD, s),
+            font=font(21, True),
+        )
+        draw.text(
+            (620, y + 38),
+            f"Δ {g['answer_delta_mean']:.2f} vs {g['random_delta_mean']:.2f}",
+            fill=MUTED,
+            font=font(14),
+        )
         y += 78
 
     draw.text((1158, 294), "3. decoder layer bands", fill=INK, font=font(30, True))
-    draw.text((1158, 334), "band width/color follows per-layer answer specificity", fill=MUTED, font=font(18))
+    draw.text(
+        (1158, 334),
+        "band width/color follows per-layer answer specificity",
+        fill=MUTED,
+        font=font(18),
+    )
     layer_centers = draw_layer_bands(draw, (1246, 394, 1566, 1122), layer_rows)
 
     draw.text((1848, 294), "4. output answer", fill=INK, font=font(30, True))
-    draw.text((1848, 334), "residual stream converges on text", fill=MUTED, font=font(18))
-    draw.rounded_rectangle((1880, 462, 2274, 730), radius=34, fill=(10, 13, 18), outline=(73, 82, 92), width=2)
+    draw.text(
+        (1848, 334), "residual stream converges on text", fill=MUTED, font=font(18)
+    )
+    draw.rounded_rectangle(
+        (1880, 462, 2274, 730),
+        radius=34,
+        fill=(10, 13, 18),
+        outline=(73, 82, 92),
+        width=2,
+    )
     draw.text((1918, 500), "PaddleOCR-VL", fill=MUTED, font=font(20, True))
     draw.text((1918, 558), "answers", fill=INK, font=font(32, True))
     draw.text((1918, 606), str(q["answer_text"]), fill=GOLD, font=font(82, True))
-    draw.rounded_rectangle((1880, 820, 2274, 1034), radius=28, fill=PANEL_2, outline=(47, 62, 73), width=2)
-    draw.text((1918, 858), f"{summary['layers']} decoder layers", fill=INK, font=font(26, True))
-    draw.text((1918, 900), f"{summary['image_tokens']} image tokens", fill=MUTED, font=font(21))
-    draw.text((1918, 938), "edge thickness = grouped delta score", fill=MUTED, font=font(21))
-    draw.text((1918, 976), "edge color = answer/random ratio", fill=MUTED, font=font(21))
+    draw.rounded_rectangle(
+        (1880, 820, 2274, 1034), radius=28, fill=PANEL_2, outline=(47, 62, 73), width=2
+    )
+    draw.text(
+        (1918, 858),
+        f"{summary['layers']} decoder layers",
+        fill=INK,
+        font=font(26, True),
+    )
+    draw.text(
+        (1918, 900),
+        f"{summary['image_tokens']} image tokens",
+        fill=MUTED,
+        font=font(21),
+    )
+    draw.text(
+        (1918, 938), "edge thickness = grouped delta score", fill=MUTED, font=font(21)
+    )
+    draw.text(
+        (1918, 976), "edge color = answer/random ratio", fill=MUTED, font=font(21)
+    )
 
     # Edges live in a transparent layer so glow can sit behind node labels.
     edges = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     ed = ImageDraw.Draw(edges)
-    all_group_layer = np.asarray([g["layer_scores"] for g in group_rows], dtype=np.float32)
+    all_group_layer = np.asarray(
+        [g["layer_scores"] for g in group_rows], dtype=np.float32
+    )
     group_layer_norm = quantile_norm(all_group_layer, 0.965)
-    group_layer_ratio = np.asarray([g["layer_ratios"] for g in group_rows], dtype=np.float32)
+    group_layer_ratio = np.asarray(
+        [g["layer_ratios"] for g in group_rows], dtype=np.float32
+    )
     ratio_norm = quantile_norm(group_layer_ratio, 0.955)
 
-    selected_groups = [int(g["id"]) for g in sorted(group_rows, key=lambda g: g["edge_score"], reverse=True)[:7]]
+    selected_groups = [
+        int(g["id"])
+        for g in sorted(group_rows, key=lambda g: g["edge_score"], reverse=True)[:7]
+    ]
     selected_layers = [0, 1, 2, 3, 4, 5, 7, 9, 12, 15, 18]
     for gi in selected_groups:
         sx, sy = token_centers[gi]
@@ -356,10 +534,19 @@ def render(summary: dict, answer: np.ndarray, random: np.ndarray, ratio: np.ndar
             col = mix(BLUE, RED, float(ratio_norm[gi, li]))
             alpha = round(54 + 156 * strength)
             width = max(1, round(1 + 9 * strength))
-            draw_bezier(ed, ((sx + 18, sy), (1046, sy), (1110, ey), (ex - 162, ey)), fill=(*col, alpha), width=width)
+            draw_bezier(
+                ed,
+                ((sx + 18, sy), (1046, sy), (1110, ey), (ex - 162, ey)),
+                fill=(*col, alpha),
+                width=width,
+            )
 
-    layer_edge_norm = quantile_norm(np.asarray([r["edge_score"] for r in layer_rows], dtype=np.float32), 0.96)
-    layer_ratio_norm = quantile_norm(np.asarray([r["ratio_mean"] for r in layer_rows], dtype=np.float32), 0.96)
+    layer_edge_norm = quantile_norm(
+        np.asarray([r["edge_score"] for r in layer_rows], dtype=np.float32), 0.96
+    )
+    layer_ratio_norm = quantile_norm(
+        np.asarray([r["ratio_mean"] for r in layer_rows], dtype=np.float32), 0.96
+    )
     out_anchor = (1880, 596)
     for li in selected_layers:
         sx, sy = layer_centers[li]
@@ -367,7 +554,17 @@ def render(summary: dict, answer: np.ndarray, random: np.ndarray, ratio: np.ndar
         col = mix(GOLD, RED, float(layer_ratio_norm[li]))
         width = max(2, round(2 + 11 * strength))
         alpha = round(76 + 160 * strength)
-        draw_bezier(ed, ((sx + 162, sy), (1668, sy), (1748, out_anchor[1] + (sy - 760) * 0.18), out_anchor), fill=(*col, alpha), width=width)
+        draw_bezier(
+            ed,
+            (
+                (sx + 162, sy),
+                (1668, sy),
+                (1748, out_anchor[1] + (sy - 760) * 0.18),
+                out_anchor,
+            ),
+            fill=(*col, alpha),
+            width=width,
+        )
 
     edges = edges.filter(ImageFilter.GaussianBlur(0.18))
     canvas = Image.alpha_composite(canvas.convert("RGBA"), edges).convert("RGB")
@@ -383,12 +580,23 @@ def render(summary: dict, answer: np.ndarray, random: np.ndarray, ratio: np.ndar
 
     legend_x, legend_y = 590, 1168
     draw.text((legend_x, legend_y), "edge encoding", fill=INK, font=font(18, True))
-    for i, (lab, val, col) in enumerate([("weak", 0.20, BLUE), ("medium", 0.55, GOLD), ("answer-specific", 0.95, RED)]):
+    for i, (lab, val, col) in enumerate(
+        [("weak", 0.20, BLUE), ("medium", 0.55, GOLD), ("answer-specific", 0.95, RED)]
+    ):
         yy = legend_y + 38 + i * 32
-        draw.line((legend_x, yy, legend_x + 122, yy), fill=col, width=round(2 + 9 * val))
-        draw.text((legend_x + 146, yy - 12), lab, fill=MUTED if i < 2 else INK, font=font(16))
+        draw.line(
+            (legend_x, yy, legend_x + 122, yy), fill=col, width=round(2 + 9 * val)
+        )
+        draw.text(
+            (legend_x + 146, yy - 12), lab, fill=MUTED if i < 2 else INK, font=font(16)
+        )
 
-    draw.text((1158, 1164), "Data: heatmaps.npz answer_delta, random_delta, ratio. No schematic edges: every width/color is grouped from observed tensors.", fill=MUTED, font=font(17))
+    draw.text(
+        (1158, 1164),
+        "Data: heatmaps.npz answer_delta, random_delta, ratio. No schematic edges: every width/color is grouped from observed tensors.",
+        fill=MUTED,
+        font=font(17),
+    )
 
     out_dir.mkdir(parents=True, exist_ok=True)
     out_png = out_dir / "circuit.png"
@@ -419,7 +627,14 @@ def main() -> None:
     out_dir = Path(args.out_dir)
     summary = json.loads((result_dir / "summary.json").read_text())
     data = np.load(result_dir / "heatmaps.npz")
-    paths = render(summary, data["answer_delta"], data["random_delta"], data["ratio"], result_dir, out_dir)
+    paths = render(
+        summary,
+        data["answer_delta"],
+        data["random_delta"],
+        data["ratio"],
+        result_dir,
+        out_dir,
+    )
     print(paths["png"])
 
 

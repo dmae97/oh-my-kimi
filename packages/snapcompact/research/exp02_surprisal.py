@@ -129,7 +129,8 @@ _GRAYS = [(185, 185, 185), (135, 135, 135), (75, 75, 75), (0, 0, 0)]
 _LIGHT = [0.72, 0.55, 0.40, 0.22]  # lightness per bucket for sent hues
 _HUES = [0.0, 0.08, 0.3, 0.5, 0.62, 0.78]
 _SENT_SURP = [
-    [tuple(int(c * 255) for c in colorsys.hls_to_rgb(h, l, 0.95)) for l in _LIGHT] for h in _HUES
+    [tuple(int(c * 255) for c in colorsys.hls_to_rgb(h, l, 0.95)) for l in _LIGHT]
+    for h in _HUES
 ]
 _WHITE = (255, 255, 255)
 
@@ -158,7 +159,9 @@ def _shade_indices(text: str) -> list[int]:
     return out
 
 
-def render_surp(text: str, cfg, cache: Path, size: int = 1568, sent_hues: bool = False) -> Image.Image:
+def render_surp(
+    text: str, cfg, cache: Path, size: int = 1568, sent_hues: bool = False
+) -> Image.Image:
     """bdf.render() with the boolean dim_mask generalized to surprisal buckets."""
     glyphs, font_ascent = parse_bdf(ensure_font(cfg, cache))
     ascent = cfg.ascent if cfg.ascent is not None else font_ascent
@@ -257,9 +260,13 @@ def build_png(cond: str, render_text: str, size: int) -> Path:
     return png
 
 
-def run_chunk(model: str, cond: str, start: int, end: int, png: Path, render_chars: int, ctx: dict) -> list[dict]:
+def run_chunk(
+    model: str, cond: str, start: int, end: int, png: Path, render_chars: int, ctx: dict
+) -> list[dict]:
     args, keys = ctx["args"], ctx["keys"]
-    questions = squad.sample_chunk_questions(ctx["paras"], ctx["offsets"], start, end, args.qpc, args.seed)
+    questions = squad.sample_chunk_questions(
+        ctx["paras"], ctx["offsets"], start, end, args.qpc, args.seed
+    )
     if not questions:
         return []
     q_block = "\n".join(f"{i + 1}. {q['q']}" for i, q in enumerate(questions))
@@ -269,18 +276,30 @@ def run_chunk(model: str, cond: str, start: int, end: int, png: Path, render_cha
         {
             "role": "user",
             "content": [
-                {"text": load_prompt("exp02-qa-image.md").format(cols=cols, rows=rows, extra=extra)},
+                {
+                    "text": load_prompt("exp02-qa-image.md").format(
+                        cols=cols, rows=rows, extra=extra
+                    )
+                },
                 {"image_path": png},
                 {"text": q_block},
             ],
         }
     ]
     qa = cached(
-        model, "exp02-qa", {"messages": messages, "effort": args.effort},
+        model,
+        "exp02-qa",
+        {"messages": messages, "effort": args.effort},
         lambda: dict(
             zip(
                 ("text", "usage", "stop"),
-                llm_complete(keys, model, messages, max_tokens=args.max_tokens, effort=args.effort),
+                llm_complete(
+                    keys,
+                    model,
+                    messages,
+                    max_tokens=args.max_tokens,
+                    effort=args.effort,
+                ),
             )
         ),
         args.fresh,
@@ -315,8 +334,13 @@ def aggregate(records: list[dict], price_in: float, price_out: float) -> dict:
     mean_f1 = sum(f1s) / n
     se = (sum((x - mean_f1) ** 2 for x in f1s) / (n * (n - 1))) ** 0.5 if n > 1 else 0.0
     us = [u for r in records if "usage" in r for u in r["usage"]]
-    tok = {k: sum(u.get(k, 0) for u in us) for k in ("in", "out", "cache_w", "cache_r", "reasoning")}
-    cost_in = (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in
+    tok = {
+        k: sum(u.get(k, 0) for u in us)
+        for k in ("in", "out", "cache_w", "cache_r", "reasoning")
+    }
+    cost_in = (
+        (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in
+    )
     cost_out = tok["out"] / 1e6 * price_out
     pages = sum(1 for r in records if "chunk_orig_chars" in r)
     orig_chars = sum(r.get("chunk_orig_chars", 0) for r in records)
@@ -371,13 +395,21 @@ def main() -> None:
     for length in lengths:
         paras = all_paras[:length]
         flow, offsets = squad.build_flow(paras)
-        ctx = {"args": args, "paras": paras, "offsets": offsets, "keys": keys, "length": length}
+        ctx = {
+            "args": args,
+            "paras": paras,
+            "offsets": offsets,
+            "keys": keys,
+            "length": length,
+        }
         for cond in conditions:
             chunks = plan_chunks(flow, cond, args.size)
             for start, end in chunks:
                 orig = flow[start:end]
                 render_text = transform(orig) if cond == "img-6x10-disemv" else orig
-                png = build_png(cond, render_text, args.size)  # pre-render: no tmp races in pool
+                png = build_png(
+                    cond, render_text, args.size
+                )  # pre-render: no tmp races in pool
                 if cond == "img-6x10-disemv":
                     print(
                         f"  len={length} disemv chunk [{start},{end}): {end - start} orig -> "
@@ -385,7 +417,9 @@ def main() -> None:
                     )
                 for model in models:
                     tasks.append((model, cond, start, end, png, len(render_text), ctx))
-    print(f"grid: {len(models)} models x {len(lengths)} lengths x {len(conditions)} conditions = {len(tasks)} chunk tasks")
+    print(
+        f"grid: {len(models)} models x {len(lengths)} lengths x {len(conditions)} conditions = {len(tasks)} chunk tasks"
+    )
 
     records: list[dict] = []
     with ThreadPoolExecutor(args.workers) as pool:
@@ -402,17 +436,34 @@ def main() -> None:
     for model in models:
         for length in lengths:
             for cond in conditions:
-                sub = [r for r in records if r["model"] == model and r["length"] == length and r["cond"] == cond]
+                sub = [
+                    r
+                    for r in records
+                    if r["model"] == model
+                    and r["length"] == length
+                    and r["cond"] == cond
+                ]
                 if not sub:
                     continue
-                cells.append({"model": model, "length": length, "condition": cond, **aggregate(sub, *MODELS[model])})
-    (out_dir / "summary.json").write_text(json.dumps({"args": vars(args), "cells": cells}, indent=1))
+                cells.append(
+                    {
+                        "model": model,
+                        "length": length,
+                        "condition": cond,
+                        **aggregate(sub, *MODELS[model]),
+                    }
+                )
+    (out_dir / "summary.json").write_text(
+        json.dumps({"args": vars(args), "cells": cells}, indent=1)
+    )
     with (out_dir / "matrix.csv").open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=list(cells[0].keys()))
         writer.writeheader()
         writer.writerows(cells)
 
-    print(f"\n{'model':<26}{'len':>5}{'condition':<22}{'n':>4}{'EM':>7}{'F1':>7}{'se':>7}{'cost$':>8}{'dF1 vs base':>13}")
+    print(
+        f"\n{'model':<26}{'len':>5}{'condition':<22}{'n':>4}{'EM':>7}{'F1':>7}{'se':>7}{'cost$':>8}{'dF1 vs base':>13}"
+    )
     for c in cells:
         base = BASELINE.get((c["model"], c["length"]))
         d = f"{c['f1'] - base[0]:+.3f}" if base else "-"

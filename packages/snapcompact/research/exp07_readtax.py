@@ -43,8 +43,13 @@ from run import CACHE, FONTS, QA_CACHE, RESULTS, load_prompt, sha8  # noqa: E402
 MODELS = {"gpt-5.5": (2.0, 16.0), "google/gemini-3.5-flash": (0.6, 4.0)}
 LENGTHS = (50, 150)
 CONDITIONS = (
-    "baseline", "effort-low", "effort-minimal", "no-transcribe",
-    "locate-then-answer", "locate-low", "locate-none",
+    "baseline",
+    "effort-low",
+    "effort-minimal",
+    "no-transcribe",
+    "locate-then-answer",
+    "locate-low",
+    "locate-none",
 )
 FONT, VARIANT = "6x10", "sent"
 
@@ -63,10 +68,19 @@ def ensure_png(chunk_text: str, size: int) -> Path:
     return png
 
 
-def timed_call(keys: dict, model: str, messages: list[dict], max_tokens: int, effort: str | None) -> dict:
+def timed_call(
+    keys: dict, model: str, messages: list[dict], max_tokens: int, effort: str | None
+) -> dict:
     t0 = time.monotonic()
-    text, usage, stop = llm_complete(keys, model, messages, max_tokens=max_tokens, effort=effort)
-    return {"text": text, "usage": usage, "stop": stop, "latency_s": round(time.monotonic() - t0, 2)}
+    text, usage, stop = llm_complete(
+        keys, model, messages, max_tokens=max_tokens, effort=effort
+    )
+    return {
+        "text": text,
+        "usage": usage,
+        "stop": stop,
+        "latency_s": round(time.monotonic() - t0, 2),
+    }
 
 
 def probe_min_effort(keys: dict) -> str | None:
@@ -74,9 +88,16 @@ def probe_min_effort(keys: dict) -> str | None:
     for effort in ("minimal", "none"):
         try:
             llm_complete(
-                keys, "gpt-5.5",
-                [{"role": "user", "content": [{"text": "Reply with the single word OK."}]}],
-                max_tokens=64, effort=effort,
+                keys,
+                "gpt-5.5",
+                [
+                    {
+                        "role": "user",
+                        "content": [{"text": "Reply with the single word OK."}],
+                    }
+                ],
+                max_tokens=64,
+                effort=effort,
             )
             return effort
         except SystemExit as err:
@@ -84,9 +105,19 @@ def probe_min_effort(keys: dict) -> str | None:
     return None
 
 
-def run_cell_chunk(model: str, cond: str, start: int, end: int, ctx: dict) -> list[dict]:
-    args, flow, paras, offsets, keys = ctx["args"], ctx["flow"], ctx["paras"], ctx["offsets"], ctx["keys"]
-    questions = squad.sample_chunk_questions(paras, offsets, start, end, args.qpc, args.seed)
+def run_cell_chunk(
+    model: str, cond: str, start: int, end: int, ctx: dict
+) -> list[dict]:
+    args, flow, paras, offsets, keys = (
+        ctx["args"],
+        ctx["flow"],
+        ctx["paras"],
+        ctx["offsets"],
+        ctx["keys"],
+    )
+    questions = squad.sample_chunk_questions(
+        paras, offsets, start, end, args.qpc, args.seed
+    )
     if not questions:
         return []
     chunk_text = flow[start:end]
@@ -108,20 +139,33 @@ def run_cell_chunk(model: str, cond: str, start: int, end: int, ctx: dict) -> li
         ]
 
     if cond.startswith("locate"):
-        turn2_effort = {"locate-then-answer": None, "locate-low": "low", "locate-none": "none"}[cond]
+        turn2_effort = {
+            "locate-then-answer": None,
+            "locate-low": "low",
+            "locate-none": "none",
+        }[cond]
         locate_msgs = qa_messages("exp07-locate.md")
         locate = cached(
-            model, "exp07-locate", {"messages": locate_msgs, "effort": "low"},
+            model,
+            "exp07-locate",
+            {"messages": locate_msgs, "effort": "low"},
             lambda: timed_call(keys, model, locate_msgs, args.max_tokens, "low"),
             args.fresh,
         )
-        usage_rows.append(("locate", {**locate["usage"], "latency_s": locate.get("latency_s", 0)}))
+        usage_rows.append(
+            ("locate", {**locate["usage"], "latency_s": locate.get("latency_s", 0)})
+        )
         answer_msgs = locate_msgs + [
             {"role": "assistant", "content": [{"text": locate["text"]}]},
-            {"role": "user", "content": [{"text": load_prompt("exp07-answer-bands.md")}]},
+            {
+                "role": "user",
+                "content": [{"text": load_prompt("exp07-answer-bands.md")}],
+            },
         ]
         qa = cached(
-            model, "exp07-qa", {"cond": cond, "messages": answer_msgs, "effort": turn2_effort},
+            model,
+            "exp07-qa",
+            {"cond": cond, "messages": answer_msgs, "effort": turn2_effort},
             lambda: timed_call(keys, model, answer_msgs, args.max_tokens, turn2_effort),
             args.fresh,
         )
@@ -130,7 +174,9 @@ def run_cell_chunk(model: str, cond: str, start: int, end: int, ctx: dict) -> li
         effort = cond.removeprefix("effort-") if cond.startswith("effort-") else None
         messages = qa_messages(prompt_file)
         qa = cached(
-            model, "exp07-qa", {"cond": cond, "messages": messages, "effort": effort},
+            model,
+            "exp07-qa",
+            {"cond": cond, "messages": messages, "effort": effort},
             lambda: timed_call(keys, model, messages, args.max_tokens, effort),
             args.fresh,
         )
@@ -164,11 +210,18 @@ def aggregate(records: list[dict], price_in: float, price_out: float) -> dict:
     mean_f1 = sum(f1s) / n
     se = (sum((x - mean_f1) ** 2 for x in f1s) / (n * (n - 1))) ** 0.5 if n > 1 else 0.0
     us = [u for r in records if "usage" in r for u in r["usage"]]
-    tok = {k: sum(u.get(k, 0) for u in us) for k in ("in", "out", "cache_w", "cache_r", "reasoning")}
-    cost_in = (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in
+    tok = {
+        k: sum(u.get(k, 0) for u in us)
+        for k in ("in", "out", "cache_w", "cache_r", "reasoning")
+    }
+    cost_in = (
+        (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in
+    )
     cost_out = tok["out"] / 1e6 * price_out
     # Per-chunk latency = sum over phases (locate + qa for the two-turn protocol).
-    chunk_lat = [sum(u.get("latency_s", 0) for u in r["usage"]) for r in records if "usage" in r]
+    chunk_lat = [
+        sum(u.get("latency_s", 0) for u in r["usage"]) for r in records if "usage" in r
+    ]
     return {
         "n": n,
         "em": sum(r["em"] for r in records) / n,
@@ -212,10 +265,17 @@ def main() -> None:
         "openai": load_env_key("OPENAI_API_KEY", args.env),
         "openrouter": load_env_key("OPENROUTER_API_KEY", args.env),
     }
-    min_effort = probe_min_effort(keys) if "effort-minimal" in conditions and "gpt-5.5" in models else None
+    min_effort = (
+        probe_min_effort(keys)
+        if "effort-minimal" in conditions and "gpt-5.5" in models
+        else None
+    )
     print(f"lowest gpt-5.5 effort: {min_effort or 'unavailable -> condition skipped'}")
     if "effort-minimal" in conditions:
-        conditions = [f"effort-{min_effort}" if c == "effort-minimal" and min_effort else c for c in conditions]
+        conditions = [
+            f"effort-{min_effort}" if c == "effort-minimal" and min_effort else c
+            for c in conditions
+        ]
         conditions = [c for c in conditions if c != "effort-minimal"]
 
     budget = capacity(FONTS[FONT], args.size)[2]
@@ -224,20 +284,34 @@ def main() -> None:
     for length in lengths:
         paras = all_paras[:length]
         flow, offsets = squad.build_flow(paras)
-        ctx = {"args": args, "flow": flow, "paras": paras, "offsets": offsets, "keys": keys, "length": length}
+        ctx = {
+            "args": args,
+            "flow": flow,
+            "paras": paras,
+            "offsets": offsets,
+            "keys": keys,
+            "length": length,
+        }
         for model in models:
             for cond in conditions:
-                if cond in (f"effort-{min_effort}", "locate-none") and model != "gpt-5.5":
+                if (
+                    cond in (f"effort-{min_effort}", "locate-none")
+                    and model != "gpt-5.5"
+                ):
                     continue
                 if cond == "locate-none" and min_effort != "none":
                     continue
                 for start in range(0, len(flow), budget):
-                    tasks.append((model, cond, start, min(start + budget, len(flow)), ctx))
+                    tasks.append(
+                        (model, cond, start, min(start + budget, len(flow)), ctx)
+                    )
     print(f"grid: {len(tasks)} chunk tasks")
 
     records: list[dict] = []
     with ThreadPoolExecutor(args.workers) as pool:
-        futures = [pool.submit(run_cell_chunk, m, c, s, e, ctx) for m, c, s, e, ctx in tasks]
+        futures = [
+            pool.submit(run_cell_chunk, m, c, s, e, ctx) for m, c, s, e, ctx in tasks
+        ]
         for i, fut in enumerate(futures, 1):
             records.extend(fut.result())
             print(f"  {i}/{len(tasks)} tasks", flush=True)
@@ -250,11 +324,26 @@ def main() -> None:
     for model in models:
         for length in lengths:
             for cond in conditions:
-                sub = [r for r in records if r["model"] == model and r["length"] == length and r["cond"] == cond]
+                sub = [
+                    r
+                    for r in records
+                    if r["model"] == model
+                    and r["length"] == length
+                    and r["cond"] == cond
+                ]
                 if not sub:
                     continue
-                cells.append({"model": model, "length": length, "condition": cond, **aggregate(sub, *MODELS[model])})
-    (out_dir / "summary.json").write_text(json.dumps({"args": vars(args), "cells": cells}, indent=1))
+                cells.append(
+                    {
+                        "model": model,
+                        "length": length,
+                        "condition": cond,
+                        **aggregate(sub, *MODELS[model]),
+                    }
+                )
+    (out_dir / "summary.json").write_text(
+        json.dumps({"args": vars(args), "cells": cells}, indent=1)
+    )
     with (out_dir / "matrix.csv").open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=list(cells[0].keys()))
         writer.writeheader()
