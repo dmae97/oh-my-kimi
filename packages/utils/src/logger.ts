@@ -17,6 +17,42 @@ import DailyRotateFile from "winston-daily-rotate-file";
 import { getLogsDir } from "./dirs";
 import { drainModuleLoadEvents } from "./timing-buffer";
 
+/** Severity names accepted by the centralized logger. */
+export type LogLevel = "error" | "warn" | "info" | "debug";
+
+/** Structured log event forwarded to out-of-band sinks such as OpenTelemetry. */
+export interface LogEvent {
+	readonly level: LogLevel;
+	readonly message: string;
+	readonly context: Record<string, unknown> | undefined;
+	readonly timestamp: Date;
+}
+
+/** Receives each structured log event after the local transport path runs. */
+export type LogSink = (event: LogEvent) => void;
+
+const logSinks = new Set<LogSink>();
+
+/** Register an out-of-band log sink and return a disposer. */
+export function registerLogSink(sink: LogSink): () => void {
+	logSinks.add(sink);
+	return () => {
+		logSinks.delete(sink);
+	};
+}
+
+function emitToSinks(level: LogLevel, message: string, context: Record<string, unknown> | undefined): void {
+	if (logSinks.size === 0) return;
+	const event: LogEvent = { level, message, context, timestamp: new Date() };
+	for (const sink of logSinks) {
+		try {
+			sink(event);
+		} catch {
+			// Sinks are side channels; they must never break local logging.
+		}
+	}
+}
+
 /** Ensure a logs directory exists; return the resolved path. */
 function ensureDir(dir: string): string {
 	if (!fs.existsSync(dir)) {
@@ -148,6 +184,7 @@ export function error(message: string, context?: Record<string, unknown>): void 
 	} catch {
 		// Silently ignore logging failures
 	}
+	emitToSinks("error", message, context);
 }
 
 /**
@@ -161,6 +198,7 @@ export function warn(message: string, context?: Record<string, unknown>): void {
 	} catch {
 		// Silently ignore logging failures
 	}
+	emitToSinks("warn", message, context);
 }
 
 /**
@@ -174,6 +212,7 @@ export function info(message: string, context?: Record<string, unknown>): void {
 	} catch {
 		// Silently ignore logging failures
 	}
+	emitToSinks("info", message, context);
 }
 
 /**
@@ -187,6 +226,7 @@ export function debug(message: string, context?: Record<string, unknown>): void 
 	} catch {
 		// Silently ignore logging failures
 	}
+	emitToSinks("debug", message, context);
 }
 
 /**

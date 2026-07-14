@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a structured log sink API to the centralized logger (`registerLogSink`, `LogEvent`, `LogLevel`) so out-of-band consumers (e.g. OpenTelemetry log export) receive every `error`/`warn`/`info`/`debug` event after the local transport path runs, without disturbing existing file/console logging ([#4604](https://github.com/can1357/oh-my-pi/issues/4604)).
+
 ## [16.3.1] - 2026-07-02
 
 ### Fixed
