@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed internal-URL autocomplete (`agent://`, `skill://`, `omp://`, etc.) not triggering inside slash command arguments: `allowArgs: true` commands returned the base provider's `null` result directly, short-circuiting the internal-URL fallthrough. Completion now falls through to internal-URL suggestions when a command has no argument completion (or its `getArgumentCompletions` yields no match), while `#` prompt-action tokens stay literal inside slash arguments. ([#5263](https://github.com/can1357/oh-my-pi/issues/5263))
+
 ## [16.4.6] - 2026-07-12
 
 ### Added
