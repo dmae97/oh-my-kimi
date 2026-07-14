@@ -77,6 +77,9 @@
 
 - Fixed late terminal appearance subscribers missing the already-detected OSC 11 light/dark result, so theme auto-detection picks up the terminal appearance even when the response arrives before the UI subscribes ([#4731](https://github.com/can1357/oh-my-pi/issues/4731)).
 - Fixed slash command Tab completion reopening the file autocomplete drawer after accepting no-argument commands ([#4808](https://github.com/can1357/oh-my-pi/issues/4808)).
+### Fixed
+
+- Hid empty HTML comment separators in Markdown-rendered TUI output instead of showing `<!-- -->` literally ([#4911](https://github.com/can1357/oh-my-pi/issues/4911)).
 
 ## [16.3.12] - 2026-07-08
 

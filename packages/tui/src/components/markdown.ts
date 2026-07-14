@@ -86,6 +86,7 @@ function createHtmlNormalizationState(): HtmlNormalizationState {
 	return { lists: [], openItems: [], itemHasContent: [] };
 }
 
+const HTML_COMMENT_REGEX = /<!--[\s\S]*?-->/g;
 const HTML_TAG_REGEX = /<\/?(?:br|p|ol|ul|li|span|text|code|hr|blockquote)\b(?:\s[^>]*)?\s*\/?>/gi;
 // Block-level HTML that needs structural (not just textual) rendering: standalone
 // `<hr>` becomes a rule and balanced `<blockquote>…</blockquote>` renders with
@@ -136,11 +137,12 @@ function normalizeHtmlForTerminal(
 	let output = "";
 	let lastIndex = 0;
 	let inCode = false;
+	const withoutComments = raw.replace(HTML_COMMENT_REGEX, "");
 
-	for (const match of raw.matchAll(HTML_TAG_REGEX)) {
+	for (const match of withoutComments.matchAll(HTML_TAG_REGEX)) {
 		const tag = match[0];
 		const index = match.index ?? 0;
-		const textBeforeTag = normalizeHtmlEntitiesForTerminal(raw.slice(lastIndex, index));
+		const textBeforeTag = normalizeHtmlEntitiesForTerminal(withoutComments.slice(lastIndex, index));
 		const name = htmlTagName(tag);
 		// Most tags handled here are block-level. Inline contexts — span, text, and
 		// the content inside a `<code>` run — keep their surrounding whitespace
@@ -238,7 +240,7 @@ function normalizeHtmlForTerminal(
 		}
 	}
 
-	const remainingText = normalizeHtmlEntitiesForTerminal(raw.slice(lastIndex));
+	const remainingText = normalizeHtmlEntitiesForTerminal(withoutComments.slice(lastIndex));
 	markCurrentHtmlItemContent(state, remainingText);
 	return output + (inCode && codeHook ? codeHook(remainingText) : remainingText);
 }
