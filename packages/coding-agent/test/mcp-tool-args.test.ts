@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { CustomToolContext } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools";
 import { DeferredMCPTool, MCPTool, type MCPToolDefinition } from "@oh-my-pi/pi-coding-agent/mcp";
@@ -58,8 +59,9 @@ async function createLocalImageContext(
 	tempDir: TempDir,
 ): Promise<{ context: CustomToolContext; expectedPath: string }> {
 	const artifactsDir = tempDir.join("artifacts");
-	const expectedPath = path.join(artifactsDir, "local", "image-issue.png");
-	await Bun.write(expectedPath, "png bytes");
+	const writtenPath = path.join(artifactsDir, "local", "image-issue.png");
+	await Bun.write(writtenPath, "png bytes");
+	const expectedPath = await fs.realpath(writtenPath);
 	return {
 		context: {
 			localProtocolOptions: {
