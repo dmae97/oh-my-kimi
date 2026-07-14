@@ -697,9 +697,7 @@ def _run_rpc_blocking(
                 stop_reason = turn.assistant_message.get("stopReason")
                 if stop_reason == "error":
                     error_msg = turn.assistant_message.get("errorMessage") or "model returned error"
-                    raise RuntimeError(
-                        f"omp agent error (stopReason=error): {error_msg}"
-                    )
+                    raise RuntimeError(f"omp agent error (stopReason=error): {error_msg}")
             log.info(
                 "rpc_done",
                 extra={

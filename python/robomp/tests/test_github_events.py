@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+
 import pytest
 
 from robomp.github_events import (

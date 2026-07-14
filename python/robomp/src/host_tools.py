@@ -1256,7 +1256,7 @@ def _build_fetch_thread(bindings: ToolBindings) -> HostTool[Any, Any]:
     )
 
 
-_PRIMARY_TYPES = ("bug", "enhancement", "question", "proposal", "documentation", "invalid", "duplicate")
+_PRIMARY_TYPES = ("bug", "enhancement", "question", "proposal", "documentation", "wontfix", "invalid", "duplicate")
 _AUTO_PR_CLASSIFICATIONS = frozenset({"bug", "documentation"})
 _PRIORITIES = ("prio:p0", "prio:p1", "prio:p2", "prio:p3")
 _FUNCTIONAL = ("agent", "tool", "tui", "cli", "prompting", "sdk", "auth", "setup", "ux", "providers")

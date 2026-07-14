@@ -88,10 +88,11 @@ functional = "Zero or more functional labels. Unknown values dropped silently; o
 provider = "Only when provider-scoped; format `provider:<name>`. Omit otherwise."
 platform = "Only when platform materially affects reproduction; one of `platform:linux|macos|windows|wsl`. Omit otherwise."
 rationale = "One sentence explaining the classification."
-branch_slug = "Kebab-case slug, 1-50 chars `[a-z0-9-]`, no leading/trailing/double hyphen. Replaces the auto-generated slug in the working branch name. Provide for `bug`/`documentation`. Omit for non-PR workflows (`question`, `enhancement`, `proposal`, `invalid`, `duplicate`)."
+branch_slug = "Kebab-case slug, 1-50 chars `[a-z0-9-]`, no leading/trailing/double hyphen. Replaces the auto-generated slug in the working branch name. Provide for `bug`/`documentation`. Omit for non-PR workflows (`question`, `enhancement`, `proposal`, `wontfix`, `invalid`, `duplicate`)."
 
 [classify_issue.next_steps]
 bug = "reproduce → diagnose → fix → PR"
+wontfix = "post one gh_post_comment explaining the design rationale and what evidence would change the assessment; no repro, no PR; the maintainer decides whether to close"
 documentation = "fix the docs and open a PR using the four-section template"
 question = "answer in a single gh_post_comment; no PR, no repro"
 enhancement = "post one thoughtful gh_post_comment on feasibility/scope; no PR"
