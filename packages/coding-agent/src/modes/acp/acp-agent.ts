@@ -42,7 +42,7 @@ import {
 } from "@agentclientprotocol/sdk";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
-import { getBlobsDir, isEnoent, logger, VERSION } from "@oh-my-pi/pi-utils";
+import { getBlobsDir, isEnoent, logger, type postmortem, VERSION } from "@oh-my-pi/pi-utils";
 import { disableProvider, enableProvider, reset as resetCapabilities } from "../../capability";
 import { Settings } from "../../config/settings";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
@@ -1006,7 +1006,7 @@ export class AcpAgent implements Agent {
 		this.#connection.signal.addEventListener(
 			"abort",
 			() => {
-				void this.#disposeAllSessions();
+				void this.dispose();
 			},
 			{ once: true },
 		);
@@ -2316,7 +2316,7 @@ export class AcpAgent implements Agent {
 		}
 	}
 
-	async #disposeSessionRecord(record: ManagedSessionRecord): Promise<void> {
+	async #disposeSessionRecord(record: ManagedSessionRecord, reason?: postmortem.Reason): Promise<void> {
 		record.lifetimeUnsubscribe?.();
 		if (record.mcpManager) {
 			try {
@@ -2327,21 +2327,22 @@ export class AcpAgent implements Agent {
 			record.mcpManager = undefined;
 		}
 		try {
-			await record.session.dispose();
+			await record.session.dispose({ reason });
 		} catch (error) {
 			logger.warn("Failed to dispose ACP session", { error });
 		}
 	}
 
-	async #disposeStandaloneSession(session: AgentSession): Promise<void> {
+	async #disposeStandaloneSession(session: AgentSession, reason?: postmortem.Reason): Promise<void> {
 		try {
-			await session.dispose();
+			await session.dispose({ reason });
 		} catch (error) {
 			logger.warn("Failed to dispose ACP session", { error });
 		}
 	}
 
-	async #disposeAllSessions(): Promise<void> {
+	/** Dispose every session owned by this ACP connection and await persisted teardown. */
+	async dispose(reason?: postmortem.Reason): Promise<void> {
 		if (this.#disposePromise) {
 			await this.#disposePromise;
 			return;
@@ -2357,7 +2358,7 @@ export class AcpAgent implements Agent {
 							"ACP agent disposed before queued prompt could run",
 						);
 						await this.#cancelPromptForClose(record);
-						await this.#disposeSessionRecord(record);
+						await this.#disposeSessionRecord(record, reason);
 					} catch (error) {
 						logger.warn("Failed to clean up ACP session", { sessionId, error });
 					}
@@ -2367,7 +2368,7 @@ export class AcpAgent implements Agent {
 			const initialSession = this.#initialSession;
 			this.#initialSession = undefined;
 			if (initialSession) {
-				await this.#disposeStandaloneSession(initialSession);
+				await this.#disposeStandaloneSession(initialSession, reason);
 			}
 		})();
 

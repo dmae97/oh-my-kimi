@@ -6,6 +6,10 @@
 
 - Memoized non-message token totals (system prompt, tool schemas, skills) so the per-turn compaction and context-threshold paths recompute them at most once per input change instead of on every call. `getContextBreakdown` and `#estimateStoredContextTokens` previously re-tokenized the system prompt and every tool's wire schema (per-tool `JSON.stringify`) several times per turn over inputs that change at most once per turn.
 
+### Fixed
+
+- Fixed ACP stdio EOF/EPIPE disconnects bypassing awaited session teardown and leaving in-flight tool calls pending in persisted rollouts ([#4788](https://github.com/can1357/oh-my-pi/issues/4788)).
+
 ## [16.3.11] - 2026-07-06
 
 ### Changed

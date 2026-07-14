@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Added scoped graceful handling for stdio-write EPIPE rejections so protocol servers can await postmortem cleanup when their peer disconnects ([#4788](https://github.com/can1357/oh-my-pi/issues/4788)).
+
 ## [16.3.10] - 2026-07-06
 
 ### Added
