@@ -42,6 +42,9 @@
 ### Fixed
 
 - Fixed the `launch` tool failing to start Windows executables because PTY commands double-escaped the application and arguments ([#5416](https://github.com/can1357/oh-my-pi/issues/5416)).
+### Fixed
+
+- Fixed the built-in advisor treating a deliberate silent review (an empty `stop` completion that still spent output/reasoning tokens) as a failed turn, which triggered spurious retries and an "unavailable" warning; only content-less stops with no output signal are now retried ([#5493](https://github.com/can1357/oh-my-pi/issues/5493)).
 
 ## [16.5.1] - 2026-07-14
 

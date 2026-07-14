@@ -601,10 +601,26 @@ function getAdvisorEmptyResponseError(messages: readonly AgentMessage[]): Error 
 		sawAssistant = true;
 		if (message.stopReason !== "stop") return undefined;
 		if (hasAdvisorResponseContent(message)) return undefined;
+		// A content-less stop that still generated output tokens is a deliberate
+		// silent review — the documented verifier behavior ("prefer silence when
+		// the agent is on track"), not a provider malfunction. Only a stop that
+		// produced no output signal at all is a failed turn worth retrying (#5493).
+		if (producedAdvisorOutputSignal(message)) return undefined;
 	}
 	if (sawAssistant) return new Error("Advisor turn returned an empty stop response without advice");
 	if (messages.length > 0) return new Error("Advisor turn ended without an assistant response");
 	return undefined;
+}
+
+/**
+ * True when the assistant turn consumed output-side tokens (visible output or
+ * internal reasoning). Silent provider failures report zero here; a model that
+ * deliberately stayed silent still burns reasoning/output budget.
+ */
+function producedAdvisorOutputSignal(message: AssistantMessage): boolean {
+	const usage = message.usage;
+	if (!usage) return false;
+	return (usage.output ?? 0) > 0 || (usage.reasoningTokens ?? 0) > 0;
 }
 
 function hasAdvisorResponseContent(message: AssistantMessage): boolean {

@@ -1960,6 +1960,75 @@ describe("advisor", () => {
 			expect(runtime.backlog).toBe(0);
 		});
 
+		it("treats a content-less stop that generated output tokens as a successful silent review", async () => {
+			const turnErrors: unknown[] = [];
+			const failures: unknown[] = [];
+			const adviceNotes: string[] = [];
+			const state: { messages: AgentMessage[]; error?: string } = { messages: [] };
+			let promptCalls = 0;
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptCalls++;
+					state.messages.push({ role: "user", content: input, timestamp: promptCalls * 2 - 1 } as AgentMessage);
+					// A real model turn that CHOSE silence: it reasoned, spent
+					// output/reasoning tokens, and emitted no `advise` call. This is
+					// the documented verifier behavior, not a provider malfunction.
+					state.messages.push({
+						role: "assistant",
+						content: [],
+						api: "mock",
+						provider: "mock",
+						model: "mock-advisor",
+						usage: {
+							input: 1200,
+							output: 340,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 1540,
+							reasoningTokens: 300,
+						},
+						stopReason: "stop",
+						timestamp: promptCalls * 2,
+					} as unknown as AgentMessage);
+					state.error = undefined;
+				},
+				abort: () => {},
+				reset: () => {
+					state.messages.length = 0;
+					state.error = undefined;
+				},
+				rollbackTo: count => {
+					state.messages.length = count;
+					state.error = undefined;
+				},
+				state,
+			};
+			const messages: AgentMessage[] = [
+				{ role: "user", content: "Reply exactly: OK", timestamp: 1 } as AgentMessage,
+			];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: note => adviceNotes.push(note),
+				onTurnError: error => {
+					turnErrors.push(error);
+				},
+				notifyFailure: error => {
+					failures.push(error);
+				},
+			};
+			const runtime = new AdvisorRuntime(agent, host, 0);
+
+			runtime.onTurnEnd(messages);
+			await runtime.waitForCatchup(1000, 1);
+
+			// No retries, no failure hook, no unavailable notification.
+			expect(promptCalls).toBe(1);
+			expect(turnErrors).toEqual([]);
+			expect(failures).toEqual([]);
+			expect(adviceNotes).toEqual([]);
+			expect(runtime.backlog).toBe(0);
+		});
+
 		it("calls onTurnError with state.error before retrying the batch", async () => {
 			const promptInputs: string[] = [];
 			const turnErrors: unknown[] = [];
