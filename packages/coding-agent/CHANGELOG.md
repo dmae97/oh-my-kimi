@@ -160,6 +160,9 @@
 ### Fixed
 
 - Fixed the browser tool hanging indefinitely at the "Closing tab" phase when the headless Chromium process is wedged (a Windows failure mode): `disposeBrowserHandle` awaited Puppeteer's `browser.close()` with no timeout, so a process that never exits froze tab cleanup forever. The dispose now caps the close at 5s and force-kills the Chromium process tree on timeout so the tool call always releases. ([#5260](https://github.com/can1357/oh-my-pi/issues/5260))
+### Fixed
+
+- Fixed `history://` URLs (direct lookup, the bare `history://` index, and prompt-mode autocomplete) only surfacing agents still present in the in-memory `AgentRegistry`, so transcripts of unregistered one-shot helpers (`keepAlive: false`), released agents (Agent Hub / vibe kill), or any subagent after a session resume threw `Unknown agent` despite their `.jsonl` session file persisting on disk. `HistoryProtocolHandler` now falls back to scanning artifacts dirs for `<id>.jsonl` (excluding `__advisor*` and `.bak`) and loads them read-only, mirroring how `agent://` reads `.md` outputs off disk. Also documented `history://` in the system prompt's Internal URLs section. ([#5261](https://github.com/can1357/oh-my-pi/issues/5261))
 
 ## [16.4.6] - 2026-07-12
 
