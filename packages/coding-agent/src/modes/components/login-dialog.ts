@@ -108,12 +108,16 @@ export class LoginDialogComponent extends Container {
 	 * Show input for manual code/URL entry (for callback server providers)
 	 */
 	showManualInput(prompt: string): Promise<string> {
-		this.#contentContainer.addChild(new Spacer(1));
-		this.#contentContainer.addChild(new Text(theme.fg("dim", prompt), 1, 0));
+		// Invalid pastes re-prompt (the OAuth callback loop calls this again), so
+		// reuse the already-mounted input instead of stacking duplicate prompt and
+		// hint lines beneath the dialog. Reset the value so each retry starts clean.
 		if (!this.#contentContainer.children.includes(this.#input)) {
+			this.#contentContainer.addChild(new Spacer(1));
+			this.#contentContainer.addChild(new Text(theme.fg("dim", prompt), 1, 0));
 			this.#contentContainer.addChild(this.#input);
+			this.#contentContainer.addChild(new Text(theme.fg("dim", "(Escape to cancel)"), 1, 0));
 		}
-		this.#contentContainer.addChild(new Text(theme.fg("dim", "(Escape to cancel)"), 1, 0));
+		this.#input.setValue("");
 		this.#tui.requestRender();
 
 		const { promise, resolve, reject } = Promise.withResolvers<string>();
