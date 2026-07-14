@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the `agent://<parent>/<child>` slash form failing to resolve a nested subagent's output: the path segment was always treated as a jq JSON-extraction key against `<parent>.md`, so a precise-planner reading its own scout child (`agent://Plan/Scout`) got `Not found`. The slash is now a hierarchy separator first (`agent://Parent/Child` → `Parent.Child.md`), falling back to JSON extraction only when no nested output matches the path. ([#5238](https://github.com/can1357/oh-my-pi/issues/5238))
+
 ## [16.4.5] - 2026-07-11
 
 ### Breaking Changes

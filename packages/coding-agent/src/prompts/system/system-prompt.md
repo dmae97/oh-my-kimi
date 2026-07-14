@@ -56,7 +56,7 @@ Special URLs for internal resources; with most FS/bash tools they auto-resolve t
   {{#if hasMemoryRoot}}
 - `memory://root`: project memory summary
   {{/if}}
-- `agent://<id>`: agent output artifact; `/<path>` extracts a JSON field
+- `agent://<id>`: agent output artifact; `/<child>` reads a nested subagent's output, else `/<path>` extracts a JSON field
 - `artifact://<id>`: artifact content
 - `local://<name>.md`: plan artifacts or shared content for subagents
 {{#if hasObsidian}}
