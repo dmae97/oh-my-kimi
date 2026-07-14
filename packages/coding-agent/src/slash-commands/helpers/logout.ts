@@ -22,13 +22,16 @@ function nonEmpty(value: string | undefined): string | undefined {
 function oauthLabel(row: StoredAuthCredential): string {
 	const credential = row.credential;
 	if (credential.type !== "oauth") return `API key #${row.id}`;
-	return (
+	const base =
 		nonEmpty(credential.email) ??
 		nonEmpty(credential.accountId) ??
 		nonEmpty(credential.projectId) ??
 		nonEmpty(credential.enterpriseUrl) ??
-		`OAuth credential #${row.id}`
-	);
+		`OAuth credential #${row.id}`;
+	// Two subscriptions (orgs) can share one email — the org is the only
+	// user-visible way to tell which row a logout will remove.
+	const org = nonEmpty(credential.orgName) ?? nonEmpty(credential.orgId);
+	return org && org !== base ? `${base} (${org})` : base;
 }
 
 function oauthDetail(row: StoredAuthCredential, label: string): string {
@@ -53,6 +56,23 @@ function oauthMatchesActiveIdentity(
 ): boolean {
 	if (!activeIdentity || row.credential.type !== "oauth") return false;
 	const credential = row.credential;
+	// The org GATES the base identity rather than replacing it: mismatched org
+	// presence or different orgs never match — an org-scoped active session
+	// must not preselect the bare-email legacy row, and a bare-email active
+	// row must not mark org-scoped siblings active via the shared email. A
+	// SHARED org still requires the base-identity match below: two Team seats
+	// share one orgId yet own distinct rows. Only an org-only active identity
+	// (no base identifiers recovered at all) matches on the org alone.
+	if (activeIdentity.orgId !== undefined || credential.orgId !== undefined) {
+		if (credential.orgId !== activeIdentity.orgId) return false;
+		if (
+			activeIdentity.accountId === undefined &&
+			activeIdentity.email === undefined &&
+			activeIdentity.projectId === undefined
+		) {
+			return true;
+		}
+	}
 	return (
 		(activeIdentity.accountId !== undefined && credential.accountId === activeIdentity.accountId) ||
 		(activeIdentity.email !== undefined && credential.email === activeIdentity.email) ||

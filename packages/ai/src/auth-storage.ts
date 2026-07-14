@@ -167,8 +167,11 @@ export interface CredentialHealthResult {
 	type: AuthCredential["type"];
 	/** OAuth email if known on the stored credential or surfaced by the probe. */
 	email?: string;
-	/** OAuth account id / org id if known. */
+	/** OAuth account id if known. */
 	accountId?: string;
+	/** Organization/workspace the credential is scoped to (Anthropic multi-subscription). */
+	orgId?: string;
+	orgName?: string;
 	/** `true` when the refresh token lives on a remote broker (sentinel was present). */
 	remoteRefresh?: true;
 	ok: boolean | null;
@@ -607,6 +610,11 @@ const DEFAULT_USAGE_REQUEST_TIMEOUT_MS = 10_000;
 const USAGE_REPORT_CACHE_KEY_VERSION_OVERRIDES: Partial<Record<Provider, number>> = {
 	"google-antigravity": 2,
 	zai: 2,
+	// v2: cache identity gained an `org:` component so two subscriptions on one
+	// account email stop sharing a slot. The bump also retires pre-org entries —
+	// otherwise an org-less credential could replay another org's cached pool
+	// (incl. the 24h last-good fallback) via the old bare email/account key.
+	anthropic: 2,
 };
 const DEFAULT_OAUTH_REFRESH_TIMEOUT_MS = 10_000;
 /**
@@ -707,6 +715,22 @@ export interface OAuthAccess {
 	projectId?: string;
 	enterpriseUrl?: string;
 	apiEndpoint?: string;
+	/** Organization/workspace the credential is scoped to (Anthropic multi-subscription). */
+	orgId?: string;
+	orgName?: string;
+}
+
+/**
+ * Identity slice of the credential a successful {@link AuthStorage.login}
+ * stored — lets callers confirm WHICH account (and for Anthropic, which
+ * organization/subscription) was added, without exposing tokens.
+ */
+export interface OAuthLoginIdentity {
+	type: "oauth" | "api_key";
+	email?: string;
+	accountId?: string;
+	orgId?: string;
+	orgName?: string;
 }
 
 export interface OAuthAccessFailure {
@@ -716,6 +740,9 @@ export interface OAuthAccessFailure {
 	projectId?: string;
 	enterpriseUrl?: string;
 	apiEndpoint?: string;
+	/** Organization/workspace the credential is scoped to (Anthropic multi-subscription). */
+	orgId?: string;
+	orgName?: string;
 	error: string;
 }
 
@@ -729,6 +756,9 @@ export interface OAuthAccountIdentity {
 	accountId?: string;
 	email?: string;
 	projectId?: string;
+	/** Organization/workspace the credential is scoped to (Anthropic multi-subscription). */
+	orgId?: string;
+	orgName?: string;
 }
 
 export type OAuthAccessResolution = ({ ok: true } & OAuthAccess) | ({ ok: false } & OAuthAccessFailure);
@@ -745,6 +775,9 @@ export interface OAuthAccountSummary {
 	email?: string;
 	projectId?: string;
 	enterpriseUrl?: string;
+	/** Organization/workspace the credential is scoped to (Anthropic multi-subscription). */
+	orgId?: string;
+	orgName?: string;
 }
 export interface InvalidateCredentialMatchingOptions {
 	signal?: AbortSignal;
@@ -2098,6 +2131,8 @@ export class AuthStorage {
 						projectId: refreshed.projectId ?? current.projectId,
 						enterpriseUrl: refreshed.enterpriseUrl ?? current.enterpriseUrl,
 						apiEndpoint: refreshed.apiEndpoint ?? current.apiEndpoint,
+						orgId: refreshed.orgId ?? current.orgId,
+						orgName: refreshed.orgName ?? current.orgName,
 					};
 			if (this.#store.tryUpdateAuthCredentialIfMatches) {
 				if (
@@ -2322,7 +2357,13 @@ export class AuthStorage {
 		if (typeof preferred.projectId === "string" && preferred.projectId.length > 0) {
 			identity.projectId = preferred.projectId;
 		}
-		if (!identity.accountId && !identity.email && !identity.projectId) return undefined;
+		if (typeof preferred.orgId === "string" && preferred.orgId.length > 0) {
+			identity.orgId = preferred.orgId;
+		}
+		if (typeof preferred.orgName === "string" && preferred.orgName.length > 0) {
+			identity.orgName = preferred.orgName;
+		}
+		if (!identity.accountId && !identity.email && !identity.projectId && !identity.orgId) return undefined;
 		return identity;
 	}
 
@@ -2343,7 +2384,10 @@ export class AuthStorage {
 	}
 
 	/**
-	 * Login to an OAuth provider.
+	 * Login to an OAuth provider. Resolves with the stored credential's
+	 * identity slice (or `undefined` when nothing was stored) so callers can
+	 * surface which account — and for Anthropic, which organization — the
+	 * login registered.
 	 */
 	async login(
 		provider: OAuthProviderId,
@@ -2353,7 +2397,7 @@ export class AuthStorage {
 			/** onPrompt is required for some providers (github-copilot, openai-codex) */
 			onPrompt: (prompt: { message: string; placeholder?: string }) => Promise<string>;
 		},
-	): Promise<void> {
+	): Promise<OAuthLoginIdentity | undefined> {
 		// Only paste-code providers (fixed non-loopback redirect, e.g. GitLab Duo
 		// Agent's vscode:// URI) get a default manual-code prompt. For loopback OAuth
 		// providers the `OAuthCallbackFlow` would otherwise race this readline prompt
@@ -2381,7 +2425,7 @@ export class AuthStorage {
 		if (typeof result === "string") {
 			// Some flows (e.g. ollama) return "" to signal that no key was entered.
 			if (!result) {
-				return;
+				return undefined;
 			}
 			const newCredential: ApiKeyCredential = { type: "api_key", key: result, source: "login" };
 			const stored = this.#store.upsertAuthCredentialRemote
@@ -2392,13 +2436,20 @@ export class AuthStorage {
 				stored.map(entry => ({ id: entry.id, credential: entry.credential })),
 			);
 			this.#resetProviderAssignments(provider);
-			return;
+			return { type: "api_key" };
 		}
 		const newCredential: OAuthCredential = { type: "oauth", ...result };
 		// Use #upsertOAuthCredential to upsert the new credential.
 		// Any legacy api_key rows from older versions will be cleaned up so they do not
 		// shadow the new OAuth row, while preserving other active OAuth credentials.
 		await this.#upsertOAuthCredential(def.storeCredentialsAs ?? provider, newCredential);
+		return {
+			type: "oauth",
+			email: newCredential.email,
+			accountId: newCredential.accountId,
+			orgId: newCredential.orgId,
+			orgName: newCredential.orgName,
+		};
 	}
 
 	/**
@@ -2422,6 +2473,8 @@ export class AuthStorage {
 			accountId: credential.accountId,
 			projectId: credential.projectId,
 			email: credential.email,
+			orgId: credential.orgId,
+			orgName: credential.orgName,
 			enterpriseUrl: credential.enterpriseUrl,
 			apiEndpoint: credential.apiEndpoint,
 		};
@@ -2433,14 +2486,17 @@ export class AuthStorage {
 		if (accountId) parts.push(`account:${accountId}`);
 		const email = credential.email?.trim().toLowerCase();
 		if (email) parts.push(`email:${email}`);
+		const orgId = credential.orgId?.trim();
+		if (orgId) parts.push(`org:${orgId}`);
 		const projectId = credential.projectId?.trim();
 		if (projectId) parts.push(`project:${projectId}`);
 		const enterpriseUrl = credential.enterpriseUrl?.trim().toLowerCase();
 		if (enterpriseUrl) parts.push(`enterprise:${enterpriseUrl}`);
-		// Only fall back to a secret-derived key when a stable account identifier is unavailable.
-		// Including the token hash when accountId/email are present causes cache misses on
-		// every OAuth refresh — usage data is per-account, not per-token.
-		const hasStableIdentifier = Boolean(accountId || email);
+		// Only fall back to a secret-derived key when a stable account identifier is
+		// unavailable. Including the token hash when accountId/email/orgId are present
+		// causes cache misses on every OAuth refresh — usage data is per-account (or
+		// per-org for org-only anthropic rows), not per-token.
+		const hasStableIdentifier = Boolean(accountId || email || orgId);
 		if (!hasStableIdentifier) {
 			const secret = credential.apiKey?.trim() || credential.refreshToken?.trim() || credential.accessToken?.trim();
 			if (secret) {
@@ -2501,6 +2557,8 @@ export class AuthStorage {
 			accountId: credential.accountId,
 			projectId: credential.projectId,
 			email: credential.email,
+			orgId: credential.orgId,
+			orgName: credential.orgName,
 			enterpriseUrl: credential.enterpriseUrl,
 			apiEndpoint: credential.apiEndpoint,
 		};
@@ -2541,6 +2599,8 @@ export class AuthStorage {
 			email: refreshed.email ?? credential.email,
 			enterpriseUrl: refreshed.enterpriseUrl ?? credential.enterpriseUrl,
 			apiEndpoint: refreshed.apiEndpoint ?? credential.apiEndpoint,
+			orgId: refreshed.orgId ?? credential.orgId,
+			orgName: refreshed.orgName ?? credential.orgName,
 		};
 	}
 
@@ -2551,14 +2611,20 @@ export class AuthStorage {
 	 */
 	#findStoredCredentialIdForUsageCredential(provider: Provider, previous: UsageCredential): number | undefined {
 		const entries = this.#getStoredCredentials(provider);
+		// Broker-backed rows all carry REMOTE_REFRESH_SENTINEL as their refresh
+		// token — it identifies nothing, and comparing it would match the FIRST
+		// OAuth row regardless of which account/org is being refreshed.
+		const previousRefresh =
+			previous.refreshToken && previous.refreshToken !== REMOTE_REFRESH_SENTINEL ? previous.refreshToken : undefined;
 		const match = entries.find(entry => {
 			if (entry.credential.type !== "oauth") return false;
-			if (previous.refreshToken && entry.credential.refresh === previous.refreshToken) return true;
+			if (previousRefresh && entry.credential.refresh === previousRefresh) return true;
 			if (previous.accessToken && entry.credential.access === previous.accessToken) return true;
 			return (
 				entry.credential.accountId === previous.accountId &&
 				entry.credential.email === previous.email &&
-				entry.credential.projectId === previous.projectId
+				entry.credential.projectId === previous.projectId &&
+				entry.credential.orgId === previous.orgId
 			);
 		});
 		return match?.id;
@@ -2566,14 +2632,18 @@ export class AuthStorage {
 
 	#persistRefreshedUsageCredential(provider: Provider, previous: UsageCredential, next: UsageCredential): void {
 		const entries = this.#getStoredCredentials(provider);
+		// Same sentinel rule as #findStoredCredentialIdForUsageCredential above.
+		const previousRefresh =
+			previous.refreshToken && previous.refreshToken !== REMOTE_REFRESH_SENTINEL ? previous.refreshToken : undefined;
 		const index = entries.findIndex(entry => {
 			if (entry.credential.type !== "oauth") return false;
-			if (previous.refreshToken && entry.credential.refresh === previous.refreshToken) return true;
+			if (previousRefresh && entry.credential.refresh === previousRefresh) return true;
 			if (previous.accessToken && entry.credential.access === previous.accessToken) return true;
 			return (
 				entry.credential.accountId === previous.accountId &&
 				entry.credential.email === previous.email &&
-				entry.credential.projectId === previous.projectId
+				entry.credential.projectId === previous.projectId &&
+				entry.credential.orgId === previous.orgId
 			);
 		});
 		if (index === -1) return;
@@ -2589,6 +2659,8 @@ export class AuthStorage {
 			email: next.email,
 			enterpriseUrl: next.enterpriseUrl,
 			apiEndpoint: next.apiEndpoint,
+			orgId: next.orgId ?? existing.orgId,
+			orgName: next.orgName ?? existing.orgName,
 		});
 	}
 
@@ -2688,11 +2760,30 @@ export class AuthStorage {
 		if (providerImpl.supports && !providerImpl.supports(params)) return null;
 
 		try {
-			return await providerImpl.fetchUsage(params, {
+			const report = await providerImpl.fetchUsage(params, {
 				fetch: this.#usageFetch,
 				logger: this.#usageLogger,
 				listUsageCosts: query => this.#store.listUsageCosts?.(query) ?? [],
 			});
+			// Attribute the report to the credential's organization. The orgId and
+			// orgName fallbacks apply independently: Claude's usage endpoint stamps
+			// orgId from the `anthropic-organization-id` response header but never
+			// carries a display name, so the stored name must still be attached.
+			// Never attach the stored name over a DIFFERENT org's report.
+			if (report && params.credential.orgId !== undefined) {
+				const metadata = report.metadata ?? {};
+				const sameOrg = metadata.orgId === undefined || metadata.orgId === params.credential.orgId;
+				const needsOrgId = metadata.orgId === undefined;
+				const needsOrgName = sameOrg && params.credential.orgName !== undefined && metadata.orgName === undefined;
+				if (needsOrgId || needsOrgName) {
+					report.metadata = {
+						...metadata,
+						...(needsOrgId ? { orgId: params.credential.orgId } : {}),
+						...(needsOrgName ? { orgName: params.credential.orgName } : {}),
+					};
+				}
+			}
+			return report;
 		} catch (error) {
 			logger.debug("AuthStorage usage fetch failed", {
 				provider: request.provider,
@@ -2873,6 +2964,8 @@ export class AuthStorage {
 		if (credential.accountId && metadata.accountId === undefined) metadata.accountId = credential.accountId;
 		if (credential.email && metadata.email === undefined) metadata.email = credential.email;
 		if (credential.projectId && metadata.projectId === undefined) metadata.projectId = credential.projectId;
+		if (credential.orgId && metadata.orgId === undefined) metadata.orgId = credential.orgId;
+		if (credential.orgName && metadata.orgName === undefined) metadata.orgName = credential.orgName;
 		const report: UsageReport = { ...parsedReport, metadata };
 
 		const storeIngest = this.#store.ingestUsageReport?.bind(this.#store);
@@ -2999,7 +3092,28 @@ export class AuthStorage {
 		const identifiers: string[] = [];
 		const email = this.#getUsageReportMetadataValue(report, "email");
 		if (email) identifiers.push(`email:${email.toLowerCase()}`);
-		if (report.provider === "openai-codex" || report.provider === "anthropic") {
+		if (report.provider === "anthropic") {
+			// Anthropic: one account email can hold several organizations
+			// (Team seat + personal Max). Reports from different orgs must not
+			// merge — scope every identifier by org when the report carries one.
+			// When the email could not be recovered, fall back to the account
+			// (identical across orgs, hence the org qualifier is what keeps two
+			// subscriptions apart) so no-email reports still merge per org.
+			// Org-less reports (pre-upgrade caches) keep their bare identifiers
+			// and only merge among themselves.
+			if (identifiers.length === 0) {
+				const accountId =
+					this.#getUsageReportMetadataValue(report, "accountId") ?? this.#getUsageReportScopeAccountId(report);
+				if (accountId) identifiers.push(`account:${accountId}`);
+			}
+			const orgId = this.#getUsageReportMetadataValue(report, "orgId");
+			if (orgId) {
+				if (identifiers.length === 0) return [`anthropic:org:${orgId.toLowerCase()}`];
+				return identifiers.map(identifier => `anthropic:org:${orgId.toLowerCase()}|${identifier.toLowerCase()}`);
+			}
+			return identifiers.map(identifier => `anthropic:${identifier.toLowerCase()}`);
+		}
+		if (report.provider === "openai-codex") {
 			return identifiers.map(identifier => `${report.provider}:${identifier.toLowerCase()}`);
 		}
 		const projectId =
@@ -3313,6 +3427,8 @@ export class AuthStorage {
 			if (row.credential.type === "oauth") {
 				if (row.credential.email) base.email = row.credential.email;
 				if (row.credential.accountId) base.accountId = row.credential.accountId;
+				if (row.credential.orgId) base.orgId = row.credential.orgId;
+				if (row.credential.orgName) base.orgName = row.credential.orgName;
 				if (row.credential.refresh === REMOTE_REFRESH_SENTINEL) base.remoteRefresh = true;
 			}
 
@@ -4266,6 +4382,8 @@ export class AuthStorage {
 				projectId: result.newCredentials.projectId ?? selection.credential.projectId,
 				enterpriseUrl: result.newCredentials.enterpriseUrl ?? selection.credential.enterpriseUrl,
 				apiEndpoint: result.newCredentials.apiEndpoint ?? selection.credential.apiEndpoint,
+				orgId: result.newCredentials.orgId ?? selection.credential.orgId,
+				orgName: result.newCredentials.orgName ?? selection.credential.orgName,
 			};
 			if (credentialId !== undefined) {
 				const idx = this.#replaceCredentialById(provider, credentialId, updated);
@@ -4536,6 +4654,8 @@ export class AuthStorage {
 			projectId: credential.projectId,
 			enterpriseUrl: credential.enterpriseUrl,
 			apiEndpoint: credential.apiEndpoint,
+			orgId: credential.orgId,
+			orgName: credential.orgName,
 		};
 	}
 
@@ -4570,6 +4690,8 @@ export class AuthStorage {
 					email: selection.credential.email,
 					projectId: selection.credential.projectId,
 					enterpriseUrl: selection.credential.enterpriseUrl,
+					orgId: selection.credential.orgId,
+					orgName: selection.credential.orgName,
 					error: "OAuth access unavailable",
 				};
 			}
@@ -4582,6 +4704,8 @@ export class AuthStorage {
 				email: credential.email,
 				projectId: credential.projectId,
 				enterpriseUrl: credential.enterpriseUrl,
+				orgId: credential.orgId,
+				orgName: credential.orgName,
 			};
 		} catch (error) {
 			return {
@@ -4591,6 +4715,8 @@ export class AuthStorage {
 				email: selection.credential.email,
 				projectId: selection.credential.projectId,
 				enterpriseUrl: selection.credential.enterpriseUrl,
+				orgId: selection.credential.orgId,
+				orgName: selection.credential.orgName,
 				error: error instanceof Error ? error.message : String(error),
 			};
 		}
@@ -4613,6 +4739,8 @@ export class AuthStorage {
 			email: selection.credential.email,
 			projectId: selection.credential.projectId,
 			enterpriseUrl: selection.credential.enterpriseUrl,
+			orgId: selection.credential.orgId,
+			orgName: selection.credential.orgName,
 		}));
 	}
 
@@ -5255,6 +5383,8 @@ export class AuthStorage {
 				projectId: refreshed.projectId ?? attempted.projectId,
 				enterpriseUrl: refreshed.enterpriseUrl ?? attempted.enterpriseUrl,
 				apiEndpoint: refreshed.apiEndpoint ?? attempted.apiEndpoint,
+				orgId: refreshed.orgId ?? attempted.orgId,
+				orgName: refreshed.orgName ?? attempted.orgName,
 			};
 			// Persist by id: the array may have been reordered/shrunk while the
 			// refresh was in flight, so the pre-await positional index is unsafe. A
@@ -5522,7 +5652,26 @@ function toStoredAuthCredential(row: AuthRow, credential: AuthCredential): Store
 
 function resolveProviderCredentialIdentityKey(provider: string, identifiers: string[]): string | null {
 	const emailIdentifier = identifiers.find(identifier => identifier.startsWith("email:"));
-	if ((provider === "openai-codex" || provider === "anthropic") && emailIdentifier) return emailIdentifier;
+	if (provider === "anthropic") {
+		// One Anthropic account email can hold several organizations (e.g. a
+		// Team seat plus a personal Max plan), each with its own org-scoped
+		// token and limit pools. Scope identity by org so both subscriptions
+		// can be stored side by side. The qualifier rides on whichever base
+		// identity is available — the account UUID is IDENTICAL across the
+		// orgs of one login account, so an unqualified account/project
+		// fallback would still collapse two subscriptions whenever the email
+		// could not be recovered. Org-less credentials (rows written before
+		// org capture existed) keep their bare key.
+		const base =
+			emailIdentifier ??
+			identifiers.find(identifier => identifier.startsWith("account:")) ??
+			identifiers.find(identifier => identifier.startsWith("project:"));
+		const orgIdentifier = identifiers.find(identifier => identifier.startsWith("org:"));
+		if (base) return orgIdentifier ? `${base}|${orgIdentifier}` : base;
+		// No base identity at all: the org alone still distinguishes the row.
+		return orgIdentifier ?? null;
+	}
+	if (provider === "openai-codex" && emailIdentifier) return emailIdentifier;
 	const accountIdentifier = identifiers.find(identifier => identifier.startsWith("account:"));
 	if (accountIdentifier) return accountIdentifier;
 	if (emailIdentifier) return emailIdentifier;
@@ -5553,8 +5702,47 @@ function matchesReplacementCredential(
 	if (incoming.type === "api_key") {
 		return existing.type === "api_key" && existing.key === incoming.key;
 	}
-	const incomingIdentityKey = resolveCredentialIdentityKey(provider, incoming);
-	return incomingIdentityKey !== null && incomingIdentityKey === existingIdentityKey;
+	const incomingIdentifiers = extractOAuthCredentialIdentifiers(incoming);
+	const incomingIdentityKey = resolveProviderCredentialIdentityKey(provider, incomingIdentifiers);
+	if (incomingIdentityKey === null) return false;
+	if (incomingIdentityKey === existingIdentityKey) return true;
+	if (existingIdentityKey === null) return false;
+	// One-way upgrade, applied only when the INCOMING identity key carries the
+	// org qualifier (only anthropic keys do, so other providers never reach the
+	// checks below). An org-scoped login `org:<o>` claims (and re-keys) any
+	// existing row that denotes the same subscription:
+	//   - `org:<o>` — org-only row stored when identity recovery failed, claimed
+	//     once a later same-org login recovers a base identity;
+	//   - `<b>` for any base identity `<b>` (email/account/project) the incoming
+	//     credential carries — a pre-org legacy row, mirroring the pre-org
+	//     replace behavior;
+	//   - `<b>|org:<o>` for any such base — the same subscription keyed by a
+	//     different base, e.g. an account-keyed row stored while the email could
+	//     not be recovered, claimed once a later login recovers the email;
+	//   - any same-org row whose STORED credential shares a base identity with
+	//     the incoming one — a stored credential can retain identifiers its key
+	//     does not use (an email-keyed row also carries the account UUID), so a
+	//     later login that loses the email but keeps the account still updates
+	//     its row instead of duplicating the subscription.
+	// The reverse stays a non-match: an org-less credential only ever replaces
+	// via exact key equality above and must never clobber an org-scoped row.
+	const orgIdentifier = incomingIdentifiers.find(identifier => identifier.startsWith("org:"));
+	if (orgIdentifier === undefined) return false;
+	if (incomingIdentityKey !== orgIdentifier && !incomingIdentityKey.endsWith(`|${orgIdentifier}`)) return false;
+	if (existingIdentityKey === orgIdentifier) return true;
+	const existingIdentifiers =
+		existing.type === "oauth" && existingIdentityKey.endsWith(`|${orgIdentifier}`)
+			? extractOAuthCredentialIdentifiers(existing)
+			: null;
+	for (const identifier of incomingIdentifiers) {
+		const isBase =
+			identifier.startsWith("email:") || identifier.startsWith("account:") || identifier.startsWith("project:");
+		if (!isBase) continue;
+		if (existingIdentityKey === identifier) return true;
+		if (existingIdentityKey === `${identifier}|${orgIdentifier}`) return true;
+		if (existingIdentifiers?.includes(identifier)) return true;
+	}
+	return false;
 }
 
 function extractOAuthCredentialIdentifiers(credential: OAuthCredential): string[] {
@@ -5565,6 +5753,8 @@ function extractOAuthCredentialIdentifiers(credential: OAuthCredential): string[
 	if (email) identifiers.add(`email:${email}`);
 	const projectId = normalizeStoredAccountId(credential.projectId);
 	if (projectId) identifiers.add(`project:${projectId}`);
+	const orgId = normalizeStoredAccountId(credential.orgId);
+	if (orgId) identifiers.add(`org:${orgId}`);
 	const accessIdentifiers = extractOAuthTokenIdentifiers(credential.access) ?? [];
 	for (const identifier of accessIdentifiers) {
 		identifiers.add(identifier);

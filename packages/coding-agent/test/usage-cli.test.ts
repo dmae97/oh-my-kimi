@@ -139,6 +139,58 @@ describe("collectUnreportedAccounts", () => {
 		const unreported = collectUnreportedAccounts(anonymous, accounts);
 		expect(unreported).toEqual([{ provider: "cerebras", type: "api_key" }]);
 	});
+
+	it("attributes org-decisively when either side carries an org", () => {
+		const shared = "shared@example.test";
+		const orgAccounts: UsageAccountIdentity[] = [
+			{ provider: "anthropic", type: "oauth", email: shared, orgId: "org-team" },
+			{ provider: "anthropic", type: "oauth", email: shared, orgId: "org-max" },
+			{ provider: "anthropic", type: "oauth", email: shared },
+		];
+		const teamReport = {
+			...makeReport("anthropic", shared, []),
+			metadata: { email: shared, orgId: "org-team" },
+		};
+		// Only the Team org reported: Max and the org-less legacy row must both
+		// surface as unreported despite the shared email.
+		const unreported = collectUnreportedAccounts([teamReport], orgAccounts);
+		expect(unreported).toEqual([
+			{ provider: "anthropic", type: "oauth", email: shared, orgId: "org-max" },
+			{ provider: "anthropic", type: "oauth", email: shared },
+		]);
+		// Both sides org-less: the email fallback still covers the account.
+		const orglessReport = { ...makeReport("anthropic", shared, []), metadata: { email: shared } };
+		const orglessAccounts: UsageAccountIdentity[] = [{ provider: "anthropic", type: "oauth", email: shared }];
+		expect(collectUnreportedAccounts([orglessReport], orglessAccounts)).toEqual([]);
+	});
+
+	it("gates same-org coverage on the member's own identity", () => {
+		const org = "org-team";
+		const alice: UsageAccountIdentity = {
+			provider: "anthropic",
+			type: "oauth",
+			email: "alice@example.test",
+			accountId: "account-alice",
+			orgId: org,
+		};
+		const bob: UsageAccountIdentity = {
+			provider: "anthropic",
+			type: "oauth",
+			email: "bob@example.test",
+			accountId: "account-bob",
+			orgId: org,
+		};
+		const orgOnly: UsageAccountIdentity = { provider: "anthropic", type: "oauth", orgId: org };
+		const aliceReport = {
+			...makeReport("anthropic", alice.email!, []),
+			metadata: { email: alice.email, accountId: alice.accountId, orgId: org },
+		};
+		// Alice reported, Bob not: the sibling's same-org report must not count
+		// as Bob's coverage — two Team members share the org id but draw on
+		// per-user pools. An org-only account (no base identifiers to gate on)
+		// stays covered by any same-org report.
+		expect(collectUnreportedAccounts([aliceReport], [alice, bob, orgOnly])).toEqual([bob]);
+	});
 });
 
 describe("formatUsageBreakdown", () => {
