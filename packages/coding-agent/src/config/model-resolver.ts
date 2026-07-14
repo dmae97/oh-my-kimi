@@ -1293,7 +1293,7 @@ export async function resolveModelOverrideWithAuthFallback(
 		return { ...primary, authFallbackUsed: false };
 	}
 
-	return { ...fallback, authFallbackUsed: true };
+	return { ...fallback, authFallbackUsed: true, warning: primary.warning ?? fallback.warning };
 }
 
 /**

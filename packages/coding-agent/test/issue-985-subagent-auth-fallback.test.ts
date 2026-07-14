@@ -212,6 +212,49 @@ describe("issue #5325: sessionId forwarded to getApiKey for session-sticky OAuth
 		expect(result.model?.provider).toBe("opencode-zen");
 		expect(result.model?.id).toBe("qwen3.6-plus-free");
 	});
+	test("forwards sessionId to getApiKey for the fallback model", async () => {
+		const receivedSessionIds: string[] = [];
+		const registry: ModelLookupRegistry & { getApiKey(model: Model<Api>): Promise<string | undefined> } = {
+			getAvailable: () => [parentModel, unauthedTaskModel],
+			getApiKey: async (model: Model<Api>, sessionId?: string) => {
+				if (sessionId) receivedSessionIds.push(`${model.provider}:${sessionId}`);
+				if (model.provider === "opencode-zen") return undefined;
+				return sessionId ? "sk-resolved-token" : undefined;
+			},
+		} as never;
+
+		const result = await resolveModelOverrideWithAuthFallback(
+			["qwen3.6-plus-free"],
+			"deepseek/deepseek-v4-pro",
+			registry,
+			undefined,
+			"subagent-session-456",
+		);
+
+		expect(receivedSessionIds).toEqual([
+			"opencode-zen:subagent-session-456",
+			"deepseek:subagent-session-456",
+		]);
+		expect(result.authFallbackUsed).toBe(true);
+		expect(result.model?.provider).toBe("deepseek");
+	});
+	test("preserves the requested model warning when auth falls back", async () => {
+		const registry: ModelLookupRegistry & { getApiKey(model: Model<Api>): Promise<string | undefined> } = {
+			getAvailable: () => [parentModel, unauthedTaskModel],
+			getApiKey: async (model: Model<Api>) => (model.provider === "deepseek" ? "sk-test" : undefined),
+		} as never;
+
+		const result = await resolveModelOverrideWithAuthFallback(
+			["qwen3.6-plus-free:invalid"],
+			"deepseek/deepseek-v4-pro",
+			registry,
+		);
+
+		expect(result.authFallbackUsed).toBe(true);
+		expect(result.warning).toBe(
+			'Invalid thinking level "invalid" in pattern "qwen3.6-plus-free:invalid". Using default instead.',
+		);
+	});
 
 	test("still falls back when getApiKey returns undefined even with sessionId", async () => {
 		const registry: ModelLookupRegistry & { getApiKey(model: Model<Api>): Promise<string | undefined> } = {
