@@ -71,6 +71,7 @@
 - Fixed compatibility with xAI by automatically downgrading OpenAI-specific tool calls and image detail settings during message history replays.
 - Fixed a race condition in shared SQLite OAuth token refreshes by implementing durable credential ownership and compare-and-set persistence to prevent stale refresh failures.
 - Fixed OpenAI Codex requests to include the required version header for newly gated models.
+- Fixed OpenAI Chat Completions request parsing to accept assistant tool-call replay messages with `content: null` as absent content. ([#5121](https://github.com/can1357/oh-my-pi/issues/5121))
 
 ## [16.4.1] - 2026-07-10
 
