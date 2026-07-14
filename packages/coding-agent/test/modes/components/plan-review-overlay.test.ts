@@ -195,6 +195,22 @@ describe("PlanReviewOverlay", () => {
 		expect(out).not.toContain("para 199");
 	});
 
+	it("copies the current plan content on c and advertises the hotkey when available", () => {
+		const onCopyPlan = vi.fn();
+		const overlay = new PlanReviewOverlay(
+			"# Original plan\n\nold body",
+			{ promptTitle: "next", options: APPROVAL_OPTIONS },
+			{ onPick: vi.fn(), onCancel: vi.fn(), onCopyPlan },
+		);
+
+		overlay.setPlanContent("# Edited plan\n\nnew body");
+		expect(render(overlay)).toContain("c copy");
+		overlay.handleInput("c");
+
+		expect(onCopyPlan).toHaveBeenCalledTimes(1);
+		expect(onCopyPlan).toHaveBeenCalledWith("# Edited plan\n\nnew body\n");
+	});
+
 	// Plan with ≥2 headings + nesting, wide enough for the sidebar at width 80.
 	const SECTION_PLAN =
 		"# Overview\n\nintro body\n\n## Goal\n\ngoal body\n\n## Steps\n\nstep body\n\n# Risks\n\nrisk body\n";
@@ -320,6 +336,25 @@ describe("PlanReviewOverlay", () => {
 		const restored = render(overlay);
 		expect(restored).toContain("Goal");
 		expect(restored).toContain("goal body");
+	});
+
+	it("copies the edited plan after deleting a section in the overlay", () => {
+		const onCopyPlan = vi.fn();
+		const overlay = new PlanReviewOverlay(
+			SECTION_PLAN,
+			{ promptTitle: "next", options: APPROVAL_OPTIONS },
+			{ onPick: vi.fn(), onCancel: vi.fn(), onCopyPlan },
+		);
+		render(overlay);
+		overlay.handleInput(TAB); // -> toc (Overview)
+		overlay.handleInput(DOWN); // -> Goal
+		overlay.handleInput("d");
+		overlay.handleInput("c");
+
+		expect(onCopyPlan).toHaveBeenCalledTimes(1);
+		expect(onCopyPlan).toHaveBeenCalledWith(
+			"# Overview\n\nintro body\n\n## Steps\n\nstep body\n\n# Risks\n\nrisk body\n",
+		);
 	});
 
 	it("annotates a section and emits feedback for the Refine loop", () => {

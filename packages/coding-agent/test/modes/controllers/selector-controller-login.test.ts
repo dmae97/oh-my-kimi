@@ -44,6 +44,11 @@ describe("SelectorController login", () => {
 					refreshInBackground,
 				},
 			},
+			// The login flow swaps the editor slot for the cancellable dialog
+			// and restores it when the flow settles.
+			editorContainer: { clear: vi.fn(), addChild: vi.fn(), children: [] },
+			editor: {},
+			ui: { setFocus: vi.fn(), requestRender: vi.fn() },
 			showStatus: vi.fn(),
 			showError: vi.fn(),
 			present: vi.fn((block: unknown) => {
@@ -61,5 +66,51 @@ describe("SelectorController login", () => {
 		expect(refreshInBackground).toHaveBeenCalledTimes(1);
 		expect(refresh).not.toHaveBeenCalled();
 		expect(ctx.showError).not.toHaveBeenCalled();
+	});
+
+	it("Esc during a pending login aborts the flow and restores the editor", async () => {
+		const login = vi.fn(
+			(_provider: string, ctrl: { signal?: AbortSignal }) =>
+				new Promise<void>((_resolve, reject) => {
+					ctrl.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+				}),
+		);
+		const authStorage = { login } as unknown as AuthStorage;
+		const editorSlot: unknown[] = [];
+		const editor = {};
+		const presentedBlocks: unknown[] = [];
+		const ctx = {
+			oauthManualInput: { waitForInput: vi.fn(), clear: vi.fn() },
+			session: { modelRegistry: { authStorage, refreshInBackground: vi.fn() } },
+			editorContainer: {
+				clear: vi.fn(() => editorSlot.splice(0)),
+				addChild: vi.fn((child: unknown) => editorSlot.push(child)),
+				children: editorSlot,
+			},
+			editor,
+			ui: { setFocus: vi.fn(), requestRender: vi.fn() },
+			showStatus: vi.fn(),
+			showError: vi.fn(),
+			present: vi.fn((block: unknown) => {
+				presentedBlocks.push(block);
+			}),
+			openInBrowser: vi.fn(),
+		} as unknown as InteractiveModeContext;
+		const controller = new SelectorController(ctx);
+
+		const loginDone = controller.showOAuthSelector("login", "xai-oauth");
+		const dialog = editorSlot[0] as { handleInput(data: string): void };
+		expect(dialog).toBeDefined();
+		expect(dialog).not.toBe(editor);
+
+		dialog.handleInput("\x1b"); // Esc cancels the pairing wait
+		await loginDone;
+
+		// The abort is user-driven: no error surfaced, the cancellation is
+		// announced, and the editor owns the slot again.
+		expect(ctx.showError).not.toHaveBeenCalled();
+		expect(ctx.showStatus).toHaveBeenCalledWith("Login cancelled");
+		expect(editorSlot).toEqual([editor]);
+		expect(renderPresented(presentedBlocks)).not.toContain("Successfully logged in");
 	});
 });

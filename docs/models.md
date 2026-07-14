@@ -446,9 +446,9 @@ Supported model roles:
 
 - `default`, `smol`, `slow`, `vision`, `plan`, `designer`, `commit`, `tiny`, `task`, `advisor`
 
-The `tiny` role overrides the online model used for lightweight background tasks (session titles, memory, `auto`-thinking difficulty classification, unexpected-stop detection); when unset, these fall back to `pi/smol`. Pick one in `/models`.
+The `tiny` role overrides the online model used for lightweight background tasks (session titles, memory, `auto`-thinking difficulty classification, unexpected-stop detection); when unset, these fall back to `@smol`. Pick one in `/models`.
 
-Role aliases like `pi/smol` expand through `settings.modelRoles`. Each role value can also append a thinking selector such as `:minimal`, `:low`, `:medium`, or `:high`.
+Role aliases like `@smol` expand through `settings.modelRoles`; `*` selects `@default`. Quote `@` aliases in YAML values (`fable: "@slow"`). Each role value can also append a thinking selector such as `:minimal`, `:low`, `:medium`, or `:high`.
 
 If a role points at another role, the target model still inherits normally and any explicit suffix on the referring role wins for that role-specific use.
 
@@ -513,12 +513,11 @@ When a turn fails with a context overflow error (e.g. `context_length_exceeded`)
 
 ### Target selection
 
-Selection is model-driven, not role-driven:
+Selection is explicit and model-driven:
 
 1. `currentModel.contextPromotionTarget` (if configured)
-2. smallest larger-context model on the same provider + API
 
-Candidates are ignored unless credentials resolve (`ModelRegistry.getApiKey(...)`).
+Only the configured target is considered; context promotion does not automatically choose a larger same-provider/API sibling. Configured targets are ignored unless credentials resolve (`ModelRegistry.getApiKey(...)`).
 
 ### OpenAI Codex websocket handoff
 

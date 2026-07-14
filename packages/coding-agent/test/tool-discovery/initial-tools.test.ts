@@ -63,6 +63,11 @@ describe("BUILTIN_TOOLS public factory map", () => {
 		const missing = Object.keys(BUILTIN_TOOLS).filter(name => metadata.get(name)?.loadMode === undefined);
 		expect(missing).toEqual([]);
 	});
+	it("exposes launch instead of daemon", async () => {
+		const launch = await BUILTIN_TOOLS.launch(toolSession);
+		expect(launch?.name).toBe("launch");
+		expect(Object.hasOwn(BUILTIN_TOOLS, "daemon")).toBeFalse();
+	});
 });
 
 describe("built-in tool loadMode annotations", () => {

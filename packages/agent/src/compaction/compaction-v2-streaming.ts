@@ -27,7 +27,7 @@ import {
 	OPENAI_HEADER_VALUES,
 	OPENAI_HEADERS,
 } from "@oh-my-pi/pi-catalog/wire/codex";
-import { $env, logger } from "@oh-my-pi/pi-utils";
+import { $env, logger, stringifyJson } from "@oh-my-pi/pi-utils";
 
 // ============================================================================
 // Types & Configuration
@@ -305,10 +305,12 @@ async function attemptCompactionV2Streaming(
 		instructions: request.instructions,
 		stream: true,
 		store: false,
-		...(request.reasoning
+		...(request.reasoning || model.useResponsesLite
 			? {
 					// Lite implies gpt-5.4+, where codex-rs sends `all_turns` replay.
-					reasoning: model.useResponsesLite ? { ...request.reasoning, context: "all_turns" } : request.reasoning,
+					reasoning: model.useResponsesLite
+						? { ...(request.reasoning ?? {}), context: "all_turns" }
+						: request.reasoning,
 					include: ["reasoning.encrypted_content"],
 				}
 			: {}),
@@ -327,7 +329,7 @@ async function attemptCompactionV2Streaming(
 	const response = await fetchImpl(endpoint, {
 		method: "POST",
 		headers: buildCompactionV2Headers(model, apiKey, request, codexMetadata),
-		body: JSON.stringify(body),
+		body: stringifyJson(body),
 		signal,
 	});
 

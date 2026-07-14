@@ -142,7 +142,47 @@ describe("openai-codex reasoning.context", () => {
 			responsesLite: true,
 			reasoningContext: "auto",
 		});
-		expect(overridden.reasoning?.context).toBe("auto");
+		expect(overridden.reasoning?.context).toBe("all_turns");
+	});
+
+	it("enforces reasoning.context to be all_turns for the lite transport even when effort is unset or none", async () => {
+		const model = createCodexModel("gpt-5.5");
+
+		// Case 1: reasoningEffort is undefined (missing effort)
+		const missingEffort = await transformRequestBody({ model: model.id }, model, {
+			responsesLite: true,
+		});
+		expect(missingEffort.reasoning?.context).toBe("all_turns");
+		expect(missingEffort.reasoning?.effort).toBeUndefined();
+
+		// Case 2: reasoningEffort is explicitly "none" (effort set to off)
+		const noneEffort = await transformRequestBody({ model: model.id }, model, {
+			reasoningEffort: "none",
+			responsesLite: true,
+		});
+		expect(noneEffort.reasoning?.context).toBe("all_turns");
+		expect(noneEffort.reasoning?.effort).toBe("none");
+
+		// Case 3: Conflicting explicit reasoningContext with missing effort under Lite
+		const conflictingUnsetEffort = await transformRequestBody({ model: model.id }, model, {
+			responsesLite: true,
+			reasoningContext: "current_turn",
+		});
+		expect(conflictingUnsetEffort.reasoning?.context).toBe("all_turns");
+
+		// Case 4: Conflicting explicit reasoningContext with "none" effort under Lite
+		const conflictingNoneEffort = await transformRequestBody({ model: model.id }, model, {
+			reasoningEffort: "none",
+			responsesLite: true,
+			reasoningContext: "current_turn",
+		});
+		expect(conflictingNoneEffort.reasoning?.context).toBe("all_turns");
+
+		// Case 5: responsesLite is false and reasoningEffort is undefined (regular request with no effort)
+		const plainRequest = await transformRequestBody({ model: model.id }, model, {
+			responsesLite: false,
+		});
+		expect(plainRequest.reasoning).toBeUndefined();
 	});
 
 	// gpt-5.1-codex / gpt-5.3-codex / gpt-5.3-codex-spark reject `all_turns`
@@ -599,6 +639,7 @@ describe("openai-codex Responses Lite and client metadata wire format", () => {
 
 		expect(result.stopReason).toBe("stop");
 		expect(captured?.headers.get("x-openai-internal-codex-responses-lite")).toBe("true");
+		expect(captured?.body.reasoning).toEqual({ context: "all_turns" });
 		expect(captured?.body.input).toEqual([
 			{ type: "additional_tools", role: "developer", tools: [] },
 			{
@@ -624,10 +665,14 @@ describe("openai-codex Responses Lite and client metadata wire format", () => {
 		}).result();
 
 		expect(result.stopReason).toBe("stop");
-		expect(captured?.headers.get("x-openai-internal-codex-responses-lite")).toBe("true");
-		expect(captured?.body.instructions).toBeUndefined();
-		expect(captured?.body.tools).toBeUndefined();
-		expect((captured?.body.input as Array<Record<string, unknown>>)[0]?.type).toBe("additional_tools");
+		expect(captured).toBeDefined();
+		expect(captured!.headers.get("x-openai-internal-codex-responses-lite")).toBe("true");
+		expect(captured!.headers.get("version")).toBe("0.144.1");
+		const body = captured!.body;
+		expect(body.reasoning).toEqual({ context: "all_turns" });
+		expect(body.instructions).toBeUndefined();
+		expect(body.tools).toBeUndefined();
+		expect((body.input as Array<Record<string, unknown>>)[0]?.type).toBe("additional_tools");
 	});
 
 	it("omits the lite marker while retaining canonical client_metadata", async () => {

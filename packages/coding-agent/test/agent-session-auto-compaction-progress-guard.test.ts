@@ -11,6 +11,7 @@ import { loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensio
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import type { CompactionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getProjectAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 
@@ -413,6 +414,75 @@ describe("AgentSession auto-compaction progress guard", () => {
 		// Headroom was created, so the guard scheduled the agent-authored
 		// continuation prompt and stayed silent.
 		expect(promptSpy).toHaveBeenCalledTimes(1);
+		const noProgress = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes(NO_PROGRESS_FRAGMENT));
+		expect(noProgress.length).toBe(0);
+	});
+
+	it("rebases the in-flight prompt snapshot so mid-run compaction is not misread as a dead-end", async () => {
+		// Regression: the pending context snapshot is set once per prompt and
+		// lives for the whole run. A fresh compaction entry hides every earlier
+		// usage anchor from getContextBreakdown, which then fell back to the
+		// stale run-start figure until the next provider response — a run
+		// submitted above the recovery band (0.8 × 170k = 136k here) tripped the
+		// "freed too little context" warning even though compaction had
+		// genuinely shrunk the context (observed live: 312k → 86k real tokens,
+		// warning still emitted).
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		// Hold the initial prompt in flight so the pending snapshot stays alive
+		// through the compaction, exactly like a live tool-loop run. The second
+		// agent.prompt call is the scheduled auto-continue — the "headroom was
+		// seen" signal the test awaits.
+		const gate = Promise.withResolvers<void>();
+		const firstPromptCall = Promise.withResolvers<void>();
+		const secondPromptCall = Promise.withResolvers<void>();
+		let promptCalls = 0;
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockImplementation(() => {
+			promptCalls++;
+			if (promptCalls === 1) firstPromptCall.resolve();
+			if (promptCalls === 2) secondPromptCall.resolve();
+			return gate.promise as never;
+		});
+
+		const notices = collectNotices();
+		// The dead-end warning is the "no headroom was seen" signal: the headroom
+		// tail runs AFTER auto_compaction_end is emitted, so the test awaits one
+		// of the tail's two observable outcomes instead of the end event.
+		const noProgressSeen = Promise.withResolvers<void>();
+		session.subscribe(event => {
+			if (event.type === "notice" && event.message.includes(NO_PROGRESS_FRAGMENT)) noProgressSeen.resolve();
+		});
+
+		// ~150k-token prompt: above the recovery band, below the 170k threshold,
+		// so the pre-prompt maintenance pass stays quiet and the snapshot records
+		// the run-start size. agent.prompt is mocked, so the text never reaches
+		// the branch — it exists only in the in-flight snapshot.
+		const inFlightPrompt = session.prompt("x".repeat(600_000));
+		// The snapshot is written immediately before agent.prompt; awaiting the
+		// first (gated) call guarantees it is in place before the threshold turn
+		// lands — emitting earlier would race the submission pipeline and let
+		// compaction run against an unset snapshot.
+		await firstPromptCall.promise;
+
+		// Mid-run, the billed context crosses the threshold and compaction fires;
+		// the rewritten context (summary only) is tiny.
+		const assistantMsg = highUsageAssistant();
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
+		// Wait for the headroom verdict while the prompt is still gated —
+		// releasing the gate earlier would clear the snapshot and mask the
+		// regression. Fixed behavior schedules the auto-continue (second prompt
+		// call); the regression emits the dead-end warning instead.
+		await Promise.race([secondPromptCall.promise, noProgressSeen.promise]);
+
+		gate.resolve();
+		await inFlightPrompt;
+		await session.waitForIdle();
+
+		// The stale 150k run-start snapshot must not be measured as residual
+		// context: no dead-end warning, and the auto-continue prompt ran
+		// (initial call + continuation).
+		expect(promptSpy).toHaveBeenCalledTimes(2);
+		expect(continueSpy).not.toHaveBeenCalled();
 		const noProgress = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes(NO_PROGRESS_FRAGMENT));
 		expect(noProgress.length).toBe(0);
 	});
@@ -1161,5 +1231,68 @@ describe("AgentSession auto-compaction progress guard", () => {
 		expect(noProgress[0].level).toBe("warning");
 		const recovery = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes("dead-end recovery"));
 		expect(recovery.length).toBe(0);
+		// The dead-end is also stamped on the compaction entry so the transcript
+		// divider badges the pause and carries the warning across rebuilds/resume.
+		const compactionEntry = sessionManager
+			.getEntries()
+			.filter((e): e is CompactionEntry => e.type === "compaction")
+			.at(-1);
+		expect(compactionEntry?.warning).toContain(NO_PROGRESS_FRAGMENT);
+	});
+
+	it("auto-continues (no warning) when the image-drop tier frees an image-only tail", async () => {
+		// Elide cannot touch image content (collectShakeRegions skips image-only
+		// tool results and user-message images), so the rescue's second tier drops
+		// attached images — the automated `/shake images` remedy — and re-tests
+		// the recovery band before the guard is allowed to pause.
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
+		vi.spyOn(session.agent, "continue").mockResolvedValue();
+		let imagesDropped = false;
+		vi.spyOn(session, "getContextUsage").mockImplementation(() =>
+			imagesDropped
+				? { tokens: 1000, contextWindow: 200000, percent: 0.5 }
+				: { tokens: 190000, contextWindow: 200000, percent: 95 },
+		);
+		// Nothing elide-eligible in the oversized tail.
+		vi.spyOn(session, "shake").mockResolvedValue({
+			mode: "elide",
+			toolResultsDropped: 0,
+			blocksDropped: 0,
+			tokensFreed: 0,
+		});
+		const dropSpy = vi.spyOn(session, "dropImages").mockImplementation(async () => {
+			imagesDropped = true;
+			return { removed: 2 };
+		});
+
+		const notices = collectNotices();
+
+		const { promise: compactionDone, resolve: onCompactionDone } = Promise.withResolvers<void>();
+		session.subscribe(event => {
+			if (event.type === "auto_compaction_end") onCompactionDone();
+		});
+
+		const assistantMsg = highUsageAssistant();
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
+
+		await compactionDone;
+		await session.waitForIdle();
+
+		expect(dropSpy).toHaveBeenCalledTimes(1);
+		expect(promptSpy).toHaveBeenCalledTimes(1);
+		const noProgress = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes(NO_PROGRESS_FRAGMENT));
+		expect(noProgress.length).toBe(0);
+		const recovery = notices.filter(
+			n => n.source === NOTICE_SOURCE && n.message.includes("dropped 2 attached images"),
+		);
+		expect(recovery.length).toBe(1);
+		expect(recovery[0].level).toBe("info");
+		// A rescued pass must not stamp the dead-end warning on the entry.
+		const compactionEntry = sessionManager
+			.getEntries()
+			.filter((e): e is CompactionEntry => e.type === "compaction")
+			.at(-1);
+		expect(compactionEntry?.warning).toBeUndefined();
 	});
 });

@@ -351,11 +351,14 @@ function fingerprintStatic<TApi extends Api>(
 function mergeDynamicModel<TApi extends Api>(existingModel: Model<TApi>, dynamicModel: Model<TApi>): Model<TApi> {
 	// When discovery resolves the same model id to a different endpoint (e.g.
 	// a GitHub Copilot business/enterprise host), the bundled reference's
-	// capabilities are pinned to the canonical host and no longer apply —
-	// honour the dynamic value alone. Same-endpoint merges still OR-upgrade so
-	// a discovery that omits the capability flag doesn't drop bundled vision.
+	// capabilities are pinned to another endpoint and no longer apply. Copilot
+	// dynamic discovery also pre-applies the correct image fallback for omitted
+	// `supports.vision`, so its explicit `false` must not be OR-upgraded by the
+	// canonical bundled model.
 	const endpointChanged = existingModel.baseUrl !== dynamicModel.baseUrl;
-	const supportsImage = endpointChanged
+	const dynamicInputAuthoritative =
+		endpointChanged || (existingModel.provider === "github-copilot" && dynamicModel.provider === "github-copilot");
+	const supportsImage = dynamicInputAuthoritative
 		? dynamicModel.input.includes("image")
 		: existingModel.input.includes("image") || dynamicModel.input.includes("image");
 	// Re-build from spec stage: sparse compat comes from `compatConfig` (the

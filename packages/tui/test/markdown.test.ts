@@ -1830,11 +1830,11 @@ describe("Math rendering", () => {
 		expect(out).not.toContain("begin{cases}");
 	});
 
-	it("converts a $$-delimited matrix block to multi-line Unicode", () => {
+	it("converts a $$-delimited matrix block to a parenthesized grid", () => {
 		const md = new Markdown("$$\n\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}\n$$", 0, 0, defaultMarkdownTheme);
 		const out = plain(md);
-		expect(out).toContain("(a");
-		expect(out).toContain("d)");
+		expect(out).toContain("⎛ a");
+		expect(out).toContain("d ⎠");
 		expect(out).not.toContain("pmatrix");
 	});
 

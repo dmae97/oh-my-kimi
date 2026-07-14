@@ -101,41 +101,30 @@ describe("SnapcompactInlineTransformer", () => {
 		expect(await transformer.transform(context, makeModel({ input: ["text"] }))).toBe(context);
 	});
 
-	it("is a no-op for Copilot business/enterprise endpoints even when the model claims vision (#3387)", async () => {
+	it("treats Copilot business/enterprise endpoints as vision-capable when the model input includes image", async () => {
 		const transformer = new SnapcompactInlineTransformer(
 			withTestShape({ renderSystemPrompt: "all", renderToolResults: true }),
 		);
-		const context = makeContext();
-		const business = makeModel({
-			provider: "github-copilot",
-			baseUrl: "https://api.business.githubcopilot.com",
-			input: ["text", "image"],
-		});
-		expect(await transformer.transform(context, business)).toBe(context);
-		expect(
-			estimateInlineSavings({
-				options: withTestShape({ renderSystemPrompt: "all", renderToolResults: true }),
-				model: business,
-				systemPrompt: context.systemPrompt ?? [],
-				messages: context.messages,
-			}),
-		).toEqual({ visionCapable: false, savedTokens: 0 });
+		for (const baseUrl of ["https://api.business.githubcopilot.com", "https://copilot-api.ghe.example.com"]) {
+			const context = makeContext();
+			const model = makeModel({
+				provider: "github-copilot",
+				baseUrl,
+				input: ["text", "image"],
+			});
+			expect(
+				estimateInlineSavings({
+					options: withTestShape({ renderSystemPrompt: "all", renderToolResults: true }),
+					model,
+					systemPrompt: context.systemPrompt ?? [],
+					messages: context.messages,
+				}).visionCapable,
+			).toBe(true);
 
-		const enterprise = makeModel({
-			provider: "github-copilot",
-			baseUrl: "https://copilot-api.ghe.example.com",
-			input: ["text", "image"],
-		});
-		expect(await transformer.transform(context, enterprise)).toBe(context);
-
-		const personal = makeModel({
-			provider: "github-copilot",
-			baseUrl: "https://api.githubcopilot.com",
-			input: ["text", "image"],
-		});
-		const result = await transformer.transform(context, personal);
-		expect(result).not.toBe(context);
-		expect(imageCount(result)).toBeGreaterThan(0);
+			const result = await transformer.transform(context, model);
+			expect(result).not.toBe(context);
+			expect(imageCount(result)).toBeGreaterThan(0);
+		}
 	});
 
 	it("images large historical tool results, keeping small and most-recent ones as text", async () => {

@@ -119,6 +119,69 @@ describe("CombinedAutocompleteProvider", () => {
 			expect(result?.items.map(item => item.value)).toContain("/tmp/");
 		});
 
+		it("returns nothing for a prose token that only fuzzy-matches skill text", async () => {
+			const provider = new CombinedAutocompleteProvider(
+				[{ name: "skill:humanizer", description: "Remove signs of AI-generated writing from text" }],
+				"/tmp",
+			);
+			// "sign" fuzzy-matches the description ("signs") but is neither a
+			// name prefix nor a `skill:` query; the popup must close instead of
+			// hovering on an irrelevant skill (falls through to path completion,
+			// which has no /sign* entries either).
+			const line = "we should /sign";
+
+			const result = await provider.getSuggestions([line], 0, line.length);
+
+			expect(result).toBeNull();
+		});
+
+		it("matches skills by bare-name prefix mid-prompt", async () => {
+			const provider = new CombinedAutocompleteProvider(
+				[
+					{ name: "skill:humanizer", description: "Remove signs of AI writing" },
+					{ name: "skill:reviewer", description: "Code review" },
+				],
+				"/tmp",
+			);
+			const line = "polish this /hum";
+
+			const result = await provider.getSuggestions([line], 0, line.length);
+
+			expect(result?.prefix).toBe("/hum");
+			expect(result?.items.map(item => item.value)).toEqual(["skill:humanizer"]);
+		});
+
+		it("lists every skill while typing toward the skill: namespace mid-prompt", async () => {
+			const provider = new CombinedAutocompleteProvider(
+				[
+					{ name: "skill:humanizer", description: "Remove signs of AI writing" },
+					{ name: "skill:reviewer", description: "Code review" },
+					{ name: "model", description: "Switch model" },
+				],
+				"/tmp",
+			);
+			const line = "polish this /sk";
+
+			const result = await provider.getSuggestions([line], 0, line.length);
+
+			expect(result?.items.map(item => item.value)).toEqual(["skill:humanizer", "skill:reviewer"]);
+		});
+
+		it("keeps fuzzy matching for explicit skill: queries mid-prompt", async () => {
+			const provider = new CombinedAutocompleteProvider(
+				[
+					{ name: "skill:humanizer", description: "Remove signs of AI writing" },
+					{ name: "skill:reviewer", description: "Code review" },
+				],
+				"/tmp",
+			);
+			const line = "polish this /skill:hmnzr";
+
+			const result = await provider.getSuggestions([line], 0, line.length);
+
+			expect(result?.items.map(item => item.value)).toEqual(["skill:humanizer"]);
+		});
+
 		it("does not treat whitespace-only no-arg slash command arguments as file prefixes", async () => {
 			const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "autocomplete-quit-whitespace-"));
 			try {

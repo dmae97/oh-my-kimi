@@ -61,9 +61,26 @@ interface CancelOutcome {
 	message: string;
 }
 
+/**
+ * A live subagent from the AgentRegistry that has no backing job in the
+ * AsyncJobManager — e.g. an idle agent woken (or a parked agent revived) via
+ * `irc`, or a spawn owned by another agent. Surfaced by `list` and empty-poll
+ * snapshots so the job tool's picture matches the UI's running-agent count.
+ */
+interface AgentActivitySnapshot {
+	id: string;
+	parentId?: string;
+	/** Latest activity gist recorded by the registry (display-only). */
+	activity?: string;
+	/** Time since the agent was registered. */
+	ageMs: number;
+}
+
 export interface JobToolDetails {
 	jobs: JobSnapshot[];
 	cancelled?: { id: string; status: CancelStatus }[];
+	/** Running subagents not represented by a job row in this result. */
+	agents?: AgentActivitySnapshot[];
 }
 
 /**
@@ -118,7 +135,9 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 			if (params.cancel?.length || params.poll?.length) {
 				throw new ToolError("`list` cannot be combined with `poll` or `cancel`.");
 			}
-			return this.#buildResult(manager, manager.getAllJobs(ownerFilter), []);
+			const jobs = manager.getAllJobs(ownerFilter);
+			const agents = this.#runningAgentsOutsideJobs();
+			return this.#buildResult(manager, jobs, [], agents);
 		}
 
 		const cancelIds = params.cancel ?? [];
@@ -166,15 +185,37 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 				const cancelledJobs = this.#visibleJobs(manager, cancelIds, ownerId);
 				return this.#buildResult(manager, cancelledJobs, cancelOutcomes);
 			}
-			const message = requestedPollIds?.length
-				? `No matching jobs found for IDs: ${requestedPollIds.join(", ")}`
-				: "No running background jobs to wait for.";
+			// Zero pollable jobs is not necessarily "nothing running": agents
+			// woken via irc or owned by another agent run with no job entry.
+			// Report them so the snapshot matches the UI's running-agent count
+			// (task job ids are agent ids, so a stale poll id often names one).
+			const agents = this.#runningAgentsOutsideJobs();
+			const lines: string[] = [];
+			if (requestedPollIds?.length) {
+				lines.push(`No matching jobs found for IDs: ${requestedPollIds.join(", ")}`);
+				const registry = this.session.agentRegistry;
+				for (const id of requestedPollIds) {
+					const ref = registry?.get(id);
+					if (!ref) continue;
+					lines.push(
+						ref.status === "running"
+							? `- \`${id}\` is a running agent with no job entry — coordinate via \`irc\`; transcript at history://${id}`
+							: `- \`${id}\` is a ${ref.status} agent (its job is gone) — transcript at history://${id}`,
+					);
+				}
+			} else {
+				lines.push("No running background jobs to wait for.");
+			}
+			if (agents.length > 0) {
+				lines.push("", ...this.#describeAgents(agents));
+			}
 			return {
-				content: [{ type: "text", text: message }],
-				details: { jobs: [] },
+				content: [{ type: "text", text: lines.join("\n") }],
+				details: { jobs: [], ...(agents.length ? { agents } : {}) },
 				// Nothing found / nothing to wait for is noise once consumed —
-				// the follow-up call has already corrected course.
-				useless: true,
+				// the follow-up call has already corrected course. Running agents
+				// are real state the model may act on, so keep those results.
+				...(agents.length === 0 ? { useless: true } : {}),
 			};
 		}
 
@@ -266,6 +307,57 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 		return out;
 	}
 
+	/**
+	 * Running subagents from the registry that are not covered by one of the
+	 * caller's running jobs. Agents woken via `irc` (idle wake / park revival)
+	 * and spawns owned by another agent run with no AsyncJobManager entry, yet
+	 * the UI's agent badge counts them — a snapshot must account for that
+	 * activity instead of implying the system is quiet. Existence is already
+	 * public via the `irc` roster, so listing ids here leaks nothing new; job
+	 * *control* stays owner-scoped.
+	 */
+	#runningAgentsOutsideJobs(): AgentActivitySnapshot[] {
+		const registry = this.session.agentRegistry;
+		if (!registry) return [];
+		const selfId = this.session.getAgentId?.() ?? undefined;
+		// Cover = the caller's RUNNING jobs only. A settled job still sitting in
+		// delivery retention must not hide its agent if that agent was re-woken
+		// (e.g. via irc) and is running again without a job.
+		const covered = new Set<string>();
+		const manager = this.session.asyncJobManager;
+		if (manager) {
+			for (const job of manager.getRunningJobs(selfId ? { ownerId: selfId } : undefined)) {
+				covered.add(job.id);
+				if (job.agentId) covered.add(job.agentId);
+			}
+		}
+		const now = Date.now();
+		const out: AgentActivitySnapshot[] = [];
+		for (const ref of registry.list()) {
+			if (ref.kind !== "sub" || ref.status !== "running") continue;
+			if (ref.id === selfId || covered.has(ref.id)) continue;
+			out.push({
+				id: ref.id,
+				...(ref.parentId ? { parentId: ref.parentId } : {}),
+				...(ref.activity ? { activity: ref.activity } : {}),
+				ageMs: Math.max(0, now - ref.createdAt),
+			});
+		}
+		return out;
+	}
+
+	/** Model-facing lines for the running-agents section shared by `list` and empty-poll results. */
+	#describeAgents(agents: AgentActivitySnapshot[]): string[] {
+		const lines = [`## Running Agents (${agents.length}) — not job-backed\n`];
+		for (const agent of agents) {
+			const parent = agent.parentId ? ` (spawned by \`${agent.parentId}\`)` : "";
+			const activity = agent.activity ? ` — ${agent.activity}` : "";
+			lines.push(`- \`${agent.id}\`${parent} — up ${formatDuration(agent.ageMs)}${activity}`);
+		}
+		lines.push("", "These agents have no job entry; coordinate via `irc`, transcripts at `history://<id>`.");
+		return lines;
+	}
+
 	#snapshotJobs(
 		jobs: {
 			id: string;
@@ -305,6 +397,7 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 			errorText?: string;
 		}[],
 		cancelOutcomes: CancelOutcome[],
+		agents: AgentActivitySnapshot[] = [],
 	): AgentToolResult<JobToolDetails> {
 		// Deduplicate by id (cancelled jobs may also appear in the watched set).
 		const seen = new Set<string>();
@@ -350,9 +443,21 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 			}
 		}
 
+		if (agents.length > 0) {
+			if (lines.length > 0) lines.push("");
+			lines.push(...this.#describeAgents(agents));
+		}
+
+		// A tool result must never be empty text — the model cannot tell "no
+		// jobs" from a malfunction (reported exactly that way in QA).
+		if (lines.length === 0) {
+			lines.push("No background jobs.");
+		}
+
 		const details: JobToolDetails = {
 			jobs: jobResults,
 			...(cancelOutcomes.length ? { cancelled: cancelOutcomes.map(({ id, status }) => ({ id, status })) } : {}),
+			...(agents.length ? { agents } : {}),
 		};
 		return {
 			content: [{ type: "text", text: lines.join("\n").trimEnd() }],
@@ -463,8 +568,9 @@ export const jobToolRenderer = {
 		args?: JobRenderArgs,
 	): Component {
 		let jobs = result.details?.jobs ?? [];
+		const agents = result.details?.agents ?? [];
 
-		if (jobs.length === 0) {
+		if (jobs.length === 0 && agents.length === 0) {
 			const fallback = result.content?.find(c => c.type === "text")?.text || "No jobs to process";
 			const header = renderStatusLine({ icon: "warning", title: describeTarget(args) || "Job" }, uiTheme);
 			return new Text([header, formatEmptyMessage(fallback, uiTheme)].join("\n"), 0, 0);
@@ -474,7 +580,10 @@ export const jobToolRenderer = {
 			? !args.list && (!args.cancel || args.cancel.length === 0 || args.poll !== undefined)
 			: true;
 
-		if (!options.isPartial && isPollCall) {
+		// Agent-carrying results (list / empty-poll roster) are real snapshots,
+		// not displaceable waiting frames — only agentless polls collapse their
+		// still-running rows once sealed.
+		if (!options.isPartial && isPollCall && agents.length === 0) {
 			jobs = jobs.filter(job => job.status !== "running");
 			if (jobs.length === 0) {
 				return new Text("", 0, 0);
@@ -490,20 +599,26 @@ export const jobToolRenderer = {
 		if (counts.completed > 0) meta.push(uiTheme.fg("success", `${counts.completed} done`));
 		if (counts.failed > 0) meta.push(uiTheme.fg("error", `${counts.failed} failed`));
 		if (counts.cancelled > 0) meta.push(uiTheme.fg("warning", `${counts.cancelled} cancelled`));
+		if (agents.length > 0 && jobs.length > 0) {
+			meta.push(uiTheme.fg("accent", `${agents.length} agent${agents.length === 1 ? "" : "s"}`));
+		}
 
-		const headerIcon: ToolUIStatus = counts.failed > 0 ? "warning" : counts.running > 0 ? "info" : "success";
+		const headerIcon: ToolUIStatus =
+			counts.failed > 0 ? "warning" : counts.running > 0 || agents.length > 0 ? "info" : "success";
 		const jobsNoun = jobs.length === 1 ? "job" : "jobs";
 		const description =
-			counts.running > 0
-				? counts.running === jobs.length
-					? `waiting on ${jobs.length} ${jobsNoun}`
-					: `waiting on ${counts.running} of ${jobs.length} ${jobsNoun}`
-				: `${jobs.length} ${jobsNoun} settled`;
+			jobs.length === 0
+				? `${agents.length} running agent${agents.length === 1 ? "" : "s"} — no jobs`
+				: counts.running > 0
+					? counts.running === jobs.length
+						? `waiting on ${jobs.length} ${jobsNoun}`
+						: `waiting on ${counts.running} of ${jobs.length} ${jobsNoun}`
+					: `${jobs.length} ${jobsNoun} settled`;
 
 		const header = renderStatusLine(
 			{
 				icon: headerIcon,
-				spinnerFrame: counts.running > 0 ? options.spinnerFrame : undefined,
+				spinnerFrame: counts.running > 0 || agents.length > 0 ? options.spinnerFrame : undefined,
 				title: description,
 				meta,
 			},
@@ -598,7 +713,32 @@ export const jobToolRenderer = {
 					uiTheme,
 				);
 
-				const all = [header, ...itemLines].map(l => truncateToWidth(l, width, Ellipsis.Unicode));
+				// Agents run outside job control; render them as their own tree so
+				// they never skew the job counts or the "waiting on N jobs" title.
+				const agentLines =
+					agents.length === 0
+						? []
+						: renderTreeList<AgentActivitySnapshot>(
+								{
+									items: agents,
+									expanded,
+									maxCollapsed: COLLAPSED_LIST_LIMIT,
+									itemType: "agent",
+									renderItem: agent => {
+										const icon = formatStatusIcon("running", uiTheme, options.spinnerFrame);
+										const badge = formatBadge("agent", "accent", uiTheme);
+										const gist = agent.activity
+											? ` ${uiTheme.fg("toolOutput", truncateToWidth(replaceTabs(agent.activity), LABEL_MAX_WIDTH, Ellipsis.Unicode))}`
+											: "";
+										const parent = agent.parentId ? uiTheme.fg("dim", ` ← ${agent.parentId}`) : "";
+										const age = uiTheme.fg("dim", formatDuration(agent.ageMs));
+										return [`${icon} ${uiTheme.fg("muted", agent.id)} ${badge}${gist} ${age}${parent}`];
+									},
+								},
+								uiTheme,
+							);
+
+				const all = [header, ...itemLines, ...agentLines].map(l => truncateToWidth(l, width, Ellipsis.Unicode));
 				cached = { key, lines: all };
 				return all;
 			},

@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+## [16.5.0] - 2026-07-13
+
+### Added
+
+- Added an automated image-dropping rescue tier to compaction dead-end recovery.
+- Added visual warnings and detailed recovery instructions to the session timeline when compaction fails to free sufficient space.
+
+## [16.4.5] - 2026-07-11
+
+### Added
+
+- Added a process-global pause gate (`agentPauseGate`) to safely pause agent loops before model calls or tool executions, allowing them to be resumed later or aborted cleanly.
+
+## [16.4.3] - 2026-07-11
+
+### Fixed
+
+- Fixed an issue where skipped sibling tool results incorrectly reported that a queued user message caused the skip.
+
+## [16.4.2] - 2026-07-10
+
+### Fixed
+
+- Fixed serialization of BigInt tool arguments to prevent data loss during remote compaction.
+
+## [16.4.1] - 2026-07-10
+
+### Fixed
+
+- Enabled reasoning encryption content for all Responses Lite compaction requests
+
 ## [16.4.0] - 2026-07-10
 
 ### Added

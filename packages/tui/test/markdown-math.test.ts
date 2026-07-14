@@ -23,21 +23,22 @@ describe("Markdown math rendering", () => {
 		expect(line).toBe("energy xᵢ² + yⱼ² done");
 	});
 
-	it("renders an own-line $$…$$ matrix block across multiple lines", () => {
+	it("renders an own-line $$…$$ matrix block as a bracketed grid", () => {
 		const lines = renderLines("$$\n\\begin{bmatrix} a & b \\\\ c & d \\end{bmatrix}\n$$");
-		// Two rows, not collapsed onto one line.
-		expect(lines.length).toBe(2);
-		expect(lines[0].startsWith("[")).toBe(true);
-		expect(lines[lines.length - 1].endsWith("]")).toBe(true);
-		expect(lines.join("").replace(/[\s[\]]/g, "")).toBe("abcd");
+		// Two content rows around a centering gap row, in stretched brackets.
+		expect(lines.length).toBe(3);
+		expect(lines[0].startsWith("⎡")).toBe(true);
+		expect(lines[lines.length - 1].endsWith("⎦")).toBe(true);
+		expect(lines.join("").replace(/[\s⎡⎤⎢⎥⎣⎦]/g, "")).toBe("abcd");
 	});
 
-	it("stacks a \\[…\\] display fraction (quadratic formula)", () => {
+	it("stacks a \\[…\\] display quadratic formula with a drawn radical", () => {
 		const lines = renderLines("\\[\nx = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}\n\\]");
-		const barRow = lines.findIndex(line => line.includes("─"));
-		expect(barRow).toBeGreaterThan(0);
-		expect(lines[barRow]).toContain("x =");
-		expect(lines[barRow - 1]).toContain("-b ± √(b² - 4ac)");
+		const barRow = lines.findIndex(line => line.includes("x ="));
+		expect(barRow).toBeGreaterThan(1);
+		expect(lines[barRow]).toContain("───");
+		expect(lines[barRow - 1]).toContain("-b ± ╲│ b² - 4ac");
+		expect(lines[barRow - 2]).toContain("┌");
 		expect(lines[barRow + 1]).toContain("2a");
 	});
 
@@ -53,8 +54,8 @@ describe("Markdown math rendering", () => {
 	it("keeps display math inside a list item multi-line", () => {
 		const lines = renderLines("- result:\n\n  $$\n  \\begin{bmatrix} a \\\\ b \\end{bmatrix}\n  $$");
 		// The matrix rows must land on distinct lines (not flattened to "[a b]").
-		const openRow = lines.findIndex(line => line.includes("[a"));
-		const closeRow = lines.findIndex(line => line.includes("b]"));
+		const openRow = lines.findIndex(line => line.includes("⎡ a"));
+		const closeRow = lines.findIndex(line => line.includes("b ⎦"));
 		expect(openRow).toBeGreaterThanOrEqual(0);
 		expect(closeRow).toBeGreaterThan(openRow);
 	});

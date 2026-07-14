@@ -170,16 +170,7 @@ export declare function __ompInstallTokioRuntime(): void
  * `packages/natives/native/index.js` (which derives the name from
  * `package.json#version`).
  */
-export declare function __piNativesV16_4_0(): void
-
-/**
- * Apply conservative pre-execution rewrites to a bash command.
- *
- * Strips trailing `| head|tail [safe-args]` and redundant trailing `2>&1`
- * from each top-level pipeline. The full rules and bail conditions live in
- * `pi_shell::fixup`. Synchronous and cheap (one parse pass over the input).
- */
-export declare function applyBashFixups(command: string): BashFixupResult
+export declare function __piNativesV16_5_0(): void
 
 /**
  * Apply ast-grep rewrite rules to matching files; honors `dryRun` and returns
@@ -415,17 +406,6 @@ export interface AstReplaceResult {
   limitReached: boolean
   /** Parse or pattern errors when not failing the whole operation. */
   parseErrors?: Array<string>
-}
-
-/**
- * Result of [`apply_bash_fixups`]: a possibly-rewritten command plus the
- * substrings that were removed (in source order).
- */
-export interface BashFixupResult {
-  /** Possibly-rewritten command. Equal to the input when no fixup fired. */
-  command: string
-  /** Substrings removed, in source order — suitable for a user-facing notice. */
-  stripped: Array<string>
 }
 
 export interface BlockRange {

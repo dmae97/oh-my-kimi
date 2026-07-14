@@ -608,6 +608,17 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
 						return json(502, { error: message });
 					}
 				}
+				if (req.method === "POST" && pathname === "/v1/usage/stale") {
+					try {
+						opts.storage.invalidateUsageCache?.();
+						logger.info("auth-broker usage cache invalidated", { peer });
+						return json(200, { ok: true });
+					} catch (error) {
+						const message = error instanceof Error ? error.message : String(error);
+						logger.warn("auth-broker usage cache invalidation failed", { peer, error: message });
+						return json(500, { error: message });
+					}
+				}
 				const refreshMatch = req.method === "POST" ? pathname.match(REFRESH_ROUTE) : null;
 				if (refreshMatch) {
 					const id = Number.parseInt(refreshMatch[1], 10);

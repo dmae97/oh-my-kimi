@@ -1827,6 +1827,19 @@ describe("advisor", () => {
 			expect(text).toContain("read, grep, glob (default)");
 		});
 
+		it("renders an explicit no-tools advisor distinctly from the omitted default", async () => {
+			const uiTheme = await getThemeByName("dark");
+			if (!uiTheme) throw new Error("theme unavailable");
+			setThemeInstance(uiTheme);
+			const overlay = make({
+				advisors: [{ name: "Blank", tools: [] }],
+			});
+
+			const text = strip(overlay.render(200));
+			expect(text.toLowerCase()).toContain("no tools");
+			expect(text).not.toContain("read, grep, glob (default)");
+		});
+
 		it("moves the preview with keyboard selection and preserves an explicit tool set", async () => {
 			const uiTheme = await getThemeByName("dark");
 			if (!uiTheme) throw new Error("theme unavailable");

@@ -6,6 +6,8 @@ export * from "./agent-loop";
 export * from "./append-only-context";
 // Compaction
 export * from "./compaction";
+// Process-global pause gate
+export * from "./pause";
 // Proxy utilities
 export * from "./proxy";
 // Replay policy

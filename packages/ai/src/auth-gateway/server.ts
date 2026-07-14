@@ -32,7 +32,15 @@ import { completeSimple, streamSimple } from "../stream";
 import type { Api, AssistantMessageEventStream, Context, Model, SimpleStreamOptions } from "../types";
 import { deterministicUuid } from "../utils/deterministic-id";
 import { parseBind } from "../utils/parse-bind";
-import { captureRequestHeaders, corsHeaders, isAuthorized, json, resolvePeer, withCors } from "./http";
+import {
+	captureRequestHeaders,
+	corsHeaders,
+	gatewayResponseHeaders,
+	isAuthorized,
+	json,
+	resolvePeer,
+	withCors,
+} from "./http";
 import type {
 	AuthGatewayServerHandle,
 	AuthGatewayServerOptions,
@@ -334,6 +342,8 @@ async function handleFormatEndpoint(
 	req: Request,
 	peer: string,
 ): Promise<Response> {
+	const startedAt = performance.now();
+	const requestId = crypto.randomUUID();
 	const controller = mirrorRequestAbort(req);
 	if (controller.signal.aborted) return clientClosedResponse(route);
 
@@ -430,6 +440,7 @@ async function handleFormatEndpoint(
 	);
 
 	logger.info("auth-gateway request", {
+		requestId,
 		format: route.label,
 		model: parsed.modelId,
 		resolvedProvider: model.provider,
@@ -458,7 +469,11 @@ async function handleFormatEndpoint(
 				const classified = classifyGatewayError(errorMessage);
 				return route.module.formatError(classified.status, classified.type, errorMessage);
 			}
-			return json(200, route.module.encodeResponse(message, parsed.modelId));
+			return json(
+				200,
+				route.module.encodeResponse(message, parsed.modelId),
+				gatewayResponseHeaders(model, { requestId, message, startedAt }),
+			);
 		} catch (error) {
 			if (controller.signal.aborted) return clientClosedResponse(route);
 			const classified = classifyGatewayError(error);
@@ -493,6 +508,7 @@ async function handleFormatEndpoint(
 	return new Response(sseStream, {
 		status: 200,
 		headers: {
+			...gatewayResponseHeaders(model, { requestId }),
 			"Content-Type": "text/event-stream; charset=utf-8",
 			"Cache-Control": "no-cache",
 			Connection: "keep-alive",
@@ -519,6 +535,8 @@ async function handleFormatEndpoint(
  * path.
  */
 async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, peer: string): Promise<Response> {
+	const startedAt = performance.now();
+	const requestId = crypto.randomUUID();
 	const controller = mirrorRequestAbort(req);
 	const aborted = (): Response => piNative.formatError(499, "request_aborted", "client closed request");
 	if (controller.signal.aborted) return aborted();
@@ -605,6 +623,7 @@ async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, pe
 	streamOpts.sessionId ??= sessionId;
 
 	logger.info("auth-gateway request", {
+		requestId,
 		format: "pi-native",
 		model: parsed.modelId,
 		resolvedProvider: model.provider,
@@ -633,7 +652,7 @@ async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, pe
 				const classified = classifyGatewayError(errorMessage);
 				return piNative.formatError(classified.status, classified.type, errorMessage);
 			}
-			return json(200, { message });
+			return json(200, { message }, gatewayResponseHeaders(model, { requestId, message, startedAt }));
 		} catch (error) {
 			if (controller.signal.aborted) return aborted();
 			const classified = classifyGatewayError(error);
@@ -664,6 +683,7 @@ async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, pe
 	return new Response(sseStream, {
 		status: 200,
 		headers: {
+			...gatewayResponseHeaders(model, { requestId }),
 			"Content-Type": "text/event-stream; charset=utf-8",
 			"Cache-Control": "no-cache",
 			Connection: "keep-alive",

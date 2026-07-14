@@ -11,9 +11,11 @@ import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 
 describe("Codex model discovery", () => {
 	it("marks discovered models for provider-native V2 compaction", async () => {
+		let capturedHeaders: Headers | undefined;
 		const fetchFn: typeof fetch = Object.assign(
-			async () =>
-				new Response(
+			async (_input: string | URL | Request, init?: RequestInit) => {
+				capturedHeaders = new Headers(init?.headers);
+				return new Response(
 					JSON.stringify({
 						models: [
 							{
@@ -28,7 +30,8 @@ describe("Codex model discovery", () => {
 						],
 					}),
 					{ headers: { etag: "models-v1" } },
-				),
+				);
+			},
 			{ preconnect() {} },
 		);
 		const result = await fetchCodexModels({
@@ -38,6 +41,7 @@ describe("Codex model discovery", () => {
 			fetchFn,
 		});
 
+		expect(capturedHeaders?.get("version")).toBe("0.99.0");
 		expect(result?.etag).toBe("models-v1");
 		expect(result?.models).toHaveLength(1);
 		expect(result?.models[0]).toMatchObject({

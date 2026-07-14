@@ -12,9 +12,7 @@ use pi_shell::{
 	MinimizerResult as CoreMinimizerResult, Shell as CoreShell,
 	ShellExecuteOptions as CoreShellExecuteOptions, ShellOptions as CoreShellOptions,
 	ShellRunOptions as CoreShellRunOptions, ShellRunResult as CoreShellRunResult,
-	execute_shell as core_execute_shell,
-	fixup::{BashFixupResult as CoreBashFixupResult, apply_bash_fixups as core_apply_bash_fixups},
-	minimizer,
+	execute_shell as core_execute_shell, minimizer,
 };
 
 use crate::task;
@@ -354,32 +352,6 @@ async fn pump_chunks(rx: flume::Receiver<String>, mut forward: impl AsyncFnMut(S
 	}
 }
 
-/// Result of [`apply_bash_fixups`]: a possibly-rewritten command plus the
-/// substrings that were removed (in source order).
-#[napi(object)]
-pub struct BashFixupResult {
-	/// Possibly-rewritten command. Equal to the input when no fixup fired.
-	pub command:  String,
-	/// Substrings removed, in source order — suitable for a user-facing notice.
-	pub stripped: Vec<String>,
-}
-
-impl From<CoreBashFixupResult> for BashFixupResult {
-	fn from(value: CoreBashFixupResult) -> Self {
-		Self { command: value.command, stripped: value.stripped }
-	}
-}
-
-/// Apply conservative pre-execution rewrites to a bash command.
-///
-/// Strips trailing `| head|tail [safe-args]` and redundant trailing `2>&1`
-/// from each top-level pipeline. The full rules and bail conditions live in
-/// `pi_shell::fixup`. Synchronous and cheap (one parse pass over the input).
-#[napi]
-pub fn apply_bash_fixups(command: String) -> BashFixupResult {
-	core_apply_bash_fixups(&command).into()
-}
-
 #[cfg(test)]
 mod tests {
 	use std::time::Duration;
@@ -399,7 +371,7 @@ mod tests {
 	/// the pre-fix bridge (`flume::unbounded` + fire-and-forget
 	/// `ThreadsafeFunctionCallMode::NonBlocking`) the same harness accumulates
 	/// the producer's entire surplus in the queue (measured: a 32 MiB stream
-	/// queued all 33_554_432 bytes while the consumer stalled).
+	/// queued all `33_554_432` bytes while the consumer stalled).
 	#[tokio::test(flavor = "multi_thread")]
 	async fn bridge_pump_bounds_queue_and_delivers_all_bytes() {
 		const CHUNKS: usize = 512;

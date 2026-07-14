@@ -109,7 +109,7 @@ import {
 	obfuscateProviderContext,
 	SecretObfuscator,
 } from "./secrets";
-import { AgentSession } from "./session/agent-session";
+import { AgentSession, type PlanYolo, type Prewalk } from "./session/agent-session";
 import { discoverAuthStorage as discoverAuthStorageFromConfig } from "./session/auth-broker-config";
 import type { AuthStorage } from "./session/auth-storage";
 import {
@@ -161,6 +161,7 @@ import {
 	BUILTIN_TOOLS,
 	computeEssentialBuiltinNames,
 	createTools,
+	createVibeTools,
 	type DeferredDiagnosticsEntry,
 	discoverStartupLspServers,
 	EditTool,
@@ -191,6 +192,7 @@ import {
 import { normalizeToolName, normalizeToolNames } from "./tools/builtin-names";
 import { ToolContextStore } from "./tools/context";
 import { getImageGenTools } from "./tools/image-gen";
+import { isIrcEnabled } from "./tools/irc";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
 import { queueResolveHandler } from "./tools/resolve";
 import { ttsTool } from "./tools/tts";
@@ -405,6 +407,10 @@ export interface CreateAgentSessionOptions {
 	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Models available for cycling (Ctrl+P in interactive mode) */
 	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
+	/** Prewalk from the starting model to a fast/cheap target at the first edit/write once the todo list exists. */
+	prewalk?: Prewalk;
+	/** Force read-only plan mode at start, auto-approve on the model's first resolve call, then switch to execute. */
+	planYolo?: PlanYolo;
 
 	/** Provider-facing system prompt override. Replaces the fully rendered default blocks. */
 	systemPrompt?: string | string[] | ((defaultPrompt: string[]) => string | string[]);
@@ -1981,7 +1987,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 		}
 		// Resolve deferred --model/subagent patterns now that extension models are
-		// registered. Expand role aliases (`pi/smol`) and comma chains to concrete
+		// registered. Expand role aliases (`@smol`) and comma chains to concrete
 		// selectors first so deferred resolution accepts everything the immediate
 		// path (resolveModelOverride → resolveModelRoleValue) accepts.
 		if (!model && deferredModelPatterns.length > 0) {
@@ -2444,11 +2450,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				eagerTasks,
 				eagerTasksAlways,
 				taskBatch: settings.get("task.batch"),
+				taskMaxConcurrency: settings.get("task.maxConcurrency"),
+				taskIrcEnabled: isIrcEnabled(settings, options.taskDepth ?? 0),
 				secretsEnabled,
 				workspaceTree: workspaceTreePromise,
 				includeWorkspaceTree,
 				memoryRootEnabled: memoryBackend.id === "local",
-				model: settings.get("includeModelInPrompt") ? getActiveModelString() : undefined,
+				model: getActiveModelString(),
+				includeModelInPrompt: settings.get("includeModelInPrompt"),
 				personality: agentKind === "sub" ? "none" : settings.get("personality"),
 				renderMermaid: settings.get("tui.renderMermaid"),
 				activeRepoContext,
@@ -2858,6 +2867,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			agent,
 			pruneToolDescriptions: inlineToolDescriptors,
 			thinkingLevel: autoThinking ? AUTO_THINKING : effectiveThinkingLevel,
+			prewalk: options.prewalk,
+			planYolo: options.planYolo,
 			serviceTierByFamily: initialServiceTierByFamily,
 			sessionManager,
 			settings,
@@ -2879,6 +2890,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			skillsSettings: settings.getGroup("skills"),
 			modelRegistry,
 			toolRegistry,
+			createVibeTools:
+				(options.taskDepth ?? 0) === 0 && !options.parentTaskPrefix
+					? () => createVibeTools(toolSession)
+					: undefined,
 			builtInToolNames: builtInRegistryToolNames,
 			transformContext,
 			transformProviderContext,

@@ -25,7 +25,7 @@ export function createExtensionModelQuery(
 	return {
 		list: () => modelRegistry.getAvailable(),
 		current: () => getModel(),
-		// resolveModelRoleValue expands a role alias (`pi/slow`) to its full configured
+		// resolveModelRoleValue expands a role alias (`@slow`) to its full configured
 		// priority list and tries each pattern — the same path core selection uses — so a
 		// fallback model lower in the list still resolves. Plain model strings pass through
 		// as a single pattern.

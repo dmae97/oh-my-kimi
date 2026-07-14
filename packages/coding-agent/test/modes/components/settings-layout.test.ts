@@ -125,4 +125,14 @@ describe("settings layout", () => {
 		expect(description).toContain("fallback");
 		expect(description).toContain("selector");
 	});
+
+	it("exposes ask.enabled as a boolean under Available Tools", () => {
+		const def = getSettingsForTab("tools").find(def => def.path === "ask.enabled");
+
+		expect(def).toMatchObject({
+			type: "boolean",
+			label: "Ask",
+			group: "Available Tools",
+		});
+	});
 });

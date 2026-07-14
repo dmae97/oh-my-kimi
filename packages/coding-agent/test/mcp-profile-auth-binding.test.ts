@@ -202,7 +202,7 @@ describe("per-profile MCP OAuth binding", () => {
 			"embedded-client",
 			"embedded-secret",
 			SERVER_URL,
-			{ authorizationUrl: undefined, stripSameOriginResource: true },
+			{ authorizationUrl: undefined, stripSameOriginResource: true, signal: expect.any(AbortSignal) },
 		);
 		expect(authorizationHeader(prepared)).toBe("Bearer fresh-token");
 		// Embedded refresh material must survive rotation, or the *next* refresh
@@ -315,7 +315,7 @@ describe("per-profile MCP OAuth binding", () => {
 			"my-dcr-client",
 			undefined,
 			SERVER_URL,
-			{ authorizationUrl: undefined, stripSameOriginResource: true },
+			{ authorizationUrl: undefined, stripSameOriginResource: true, signal: expect.any(AbortSignal) },
 		);
 		expect(authorizationHeader(prepared)).toBe("Bearer fresh-token");
 	});

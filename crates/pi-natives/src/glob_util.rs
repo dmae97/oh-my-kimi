@@ -64,6 +64,29 @@ pub fn build_glob_pattern(glob: &str, recursive: bool) -> String {
 	fix_unclosed_braces(pattern)
 }
 
+/// Maximum walk depth (path components) a normalized glob pattern can match,
+/// or `usize::MAX` when unbounded.
+///
+/// Walk-relative globs compile with `literal_separator(true)`, so `*`, `?`,
+/// and `[...]` never cross `/` — a pattern with N literal segments can only
+/// match entries at most N components deep. Bounding the walk to that depth
+/// keeps non-recursive patterns (`*`, `dir/*.json`) from traversing an entire
+/// subtree they can never match into (the source of "narrow glob timed out on
+/// a populated directory" failures).
+///
+/// `**` matches any number of components and `{...}` alternations may contain
+/// `/`, so both disable the bound.
+pub fn walk_depth_bound(pattern: &str) -> usize {
+	if pattern.contains("**") || pattern.contains('{') {
+		return usize::MAX;
+	}
+	pattern
+		.split('/')
+		.filter(|seg| !seg.is_empty())
+		.count()
+		.max(1)
+}
+
 /// Compile a glob pattern string into a [`CompiledGlob`].
 ///
 /// When `recursive` is true, simple patterns (no path separators, no leading
@@ -218,6 +241,22 @@ mod tests {
 	#[test]
 	fn non_recursive_keeps_simple_pattern() {
 		assert_eq!(build_glob_pattern("*.ts", false), "*.ts");
+	}
+
+	#[test]
+	fn walk_depth_bound_counts_segments_for_bounded_patterns() {
+		assert_eq!(walk_depth_bound("*"), 1);
+		assert_eq!(walk_depth_bound("*.json"), 1);
+		assert_eq!(walk_depth_bound("dir/*.ts"), 2);
+		assert_eq!(walk_depth_bound("a/*/c.txt"), 3);
+	}
+
+	#[test]
+	fn walk_depth_bound_unbounded_for_recursive_and_brace_patterns() {
+		assert_eq!(walk_depth_bound("**/*"), usize::MAX);
+		assert_eq!(walk_depth_bound("src/**/*.ts"), usize::MAX);
+		// `{}` groups may contain `/`, so segment counting is unsound for them.
+		assert_eq!(walk_depth_bound("{a/b,c}/d.txt"), usize::MAX);
 	}
 
 	#[test]

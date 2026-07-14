@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+## [16.4.3] - 2026-07-11
+
+### Fixed
+
+- Fixed parsing of SAP AI Core Claude model IDs in version-first format (e.g., anthropic--claude-4.8-opus), restoring adaptive thinking metadata and capability gates.
+- Fixed GitHub Copilot Business and Enterprise model discovery to correctly preserve vision capabilities instead of downgrading models to text-only.
+
+## [16.4.2] - 2026-07-10
+
+### Fixed
+
+- Fixed OpenAI Codex model discovery to include the Codex version header alongside the client_version query parameter.
+
+## [16.4.1] - 2026-07-10
+
+### Added
+
+- Added GPT-5.6 Luna, Sol, and Terra models
+- Added perplexity-academic-researcher model
+
+### Changed
+
+- Updated context windows for multiple GPT-5.6 models
+- Increased max tokens for several models
+- Updated cache write costs for GPT-5.6 variants
+- Reduced pricing for select models
+
+### Removed
+
+- Removed the generated GPT-5.6 pro-reasoning aliases (`gpt-5.6-{luna,sol,terra}-pro`) from the `openai-codex` subscription provider — pro reasoning is not offered on subscriptions; the `openai` API-key aliases remain
+
 ## [16.4.0] - 2026-07-10
 
 ### Breaking Changes

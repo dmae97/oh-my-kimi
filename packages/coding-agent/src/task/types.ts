@@ -1,8 +1,8 @@
-import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import { $env } from "@oh-my-pi/pi-utils";
 import { type BaseType, type } from "arktype";
 import type { AgentSessionEvent } from "../session/agent-session";
+import type { ConfiguredThinkingLevel } from "../thinking";
 import type { NestedRepoPatch } from "./worktree";
 
 /** Source of an agent definition */
@@ -75,66 +75,53 @@ export interface SubagentLifecyclePayload {
 }
 
 /** Display cap for a normalized one-line label (roster line, registry `displayName`, prompt field). */
-export const ROLE_LABEL_MAX = 80;
-/** Schema bound on the raw `role` input, before it is label-normalized at every use site. */
-export const ROLE_INPUT_MAX = 256;
-const ROLE_INPUT_SCHEMA = `string <= ${ROLE_INPUT_MAX}` as const;
+export const LABEL_MAX = 80;
 
 export const taskItemSchema = type({
-	"id?": "string",
-	"description?": "string",
-	"role?": ROLE_INPUT_SCHEMA,
-	assignment: "string",
+	"name?": "string",
+	agent: "string = 'task'",
+	task: "string",
 	"+": "delete",
 });
 const taskItemSchemaIsolated = type({
-	"id?": "string",
-	"description?": "string",
-	"role?": ROLE_INPUT_SCHEMA,
-	assignment: "string",
+	"name?": "string",
+	agent: "string = 'task'",
+	task: "string",
 	"isolated?": "boolean",
 	"+": "delete",
 });
 
 /** Single task item. Fields are optional defensively: args stream in token by token. */
 export interface TaskItem {
-	/** Stable agent id; default = generated AdjectiveNoun. */
-	id?: string;
-	/** UI label, not seen by the subagent. */
-	description?: string;
-	/** Specialist role/expertise this subagent embodies; shapes its system-prompt identity and display name. */
-	role?: string;
+	/** Stable agent name; becomes the registry/IRC id. Default = generated AdjectiveNoun. */
+	name?: string;
+	/** Agent type to run this item (e.g. "scout"). Defaults to the spawn policy's default agent. */
+	agent?: string;
 	/** The work; required by the schema. */
-	assignment?: string;
+	task?: string;
 	/** Run this spawn in an isolated worktree (batch form; flat form carries it top-level). */
 	isolated?: boolean;
 }
 
 export const taskSchema = type({
+	"name?": "string",
 	agent: "string = 'task'",
-	"id?": "string",
-	"description?": "string",
-	"role?": ROLE_INPUT_SCHEMA,
-	assignment: "string",
+	task: "string",
 	"isolated?": "boolean",
 	"+": "delete",
 });
 const taskSchemaNoIsolation = type({
+	"name?": "string",
 	agent: "string = 'task'",
-	"id?": "string",
-	"description?": "string",
-	"role?": ROLE_INPUT_SCHEMA,
-	assignment: "string",
+	task: "string",
 	"+": "delete",
 });
 const taskSchemaBatch = type({
-	agent: "string = 'task'",
 	context: "string",
 	tasks: taskItemSchemaIsolated.array(),
 	"+": "delete",
 });
 const taskSchemaBatchNoIsolation = type({
-	agent: "string = 'task'",
 	context: "string",
 	tasks: taskItemSchema.array(),
 	"+": "delete",
@@ -165,37 +152,44 @@ function createTaskSchema(options: {
 	const agent = taskAgentSchemaRule(options.defaultAgent);
 	if (options.batchEnabled) {
 		if (options.isolationEnabled) {
-			return type.raw({
+			const item = type.raw({
+				"name?": "string",
 				agent,
+				task: "string",
+				"isolated?": "boolean",
+				"+": "delete",
+			});
+			return type.raw({
 				context: "string",
-				tasks: taskItemSchemaIsolated.array(),
+				tasks: item.array(),
 				"+": "delete",
 			});
 		}
-		return type.raw({
+		const item = type.raw({
+			"name?": "string",
 			agent,
+			task: "string",
+			"+": "delete",
+		});
+		return type.raw({
 			context: "string",
-			tasks: taskItemSchema.array(),
+			tasks: item.array(),
 			"+": "delete",
 		});
 	}
 	if (options.isolationEnabled) {
 		return type.raw({
+			"name?": "string",
 			agent,
-			"id?": "string",
-			"description?": "string",
-			"role?": ROLE_INPUT_SCHEMA,
-			assignment: "string",
+			task: "string",
 			"isolated?": "boolean",
 			"+": "delete",
 		});
 	}
 	return type.raw({
+		"name?": "string",
 		agent,
-		"id?": "string",
-		"description?": "string",
-		"role?": ROLE_INPUT_SCHEMA,
-		assignment: "string",
+		task: "string",
 		"+": "delete",
 	});
 }
@@ -226,21 +220,17 @@ export function getTaskSchema(options: {
 
 /**
  * Runtime params union over both wire shapes. The model sees exactly one shape
- * (`{ agent, context, tasks[] }` when `task.batch` is on, `{ agent, ...item }`
+ * (`{ context, tasks[] }` when `task.batch` is on, `{ name?, agent?, task }`
  * otherwise); runtime stays permissive so internal callers and stale
  * transcripts using the flat form keep working under either setting.
  */
 export interface TaskParams {
-	/** Agent type to spawn; omitted values resolve from the session spawn policy. */
+	/** Stable agent name (flat form). */
+	name?: string;
+	/** Agent type to spawn (flat form); omitted values resolve from the session spawn policy. */
 	agent?: string;
-	/** Stable agent id (flat form); default = generated AdjectiveNoun. */
-	id?: string;
-	/** UI label (flat form), not seen by the subagent. */
-	description?: string;
-	/** Specialist role/expertise this subagent embodies; shapes its system-prompt identity and display name. */
-	role?: string;
 	/** The work (flat form). */
-	assignment?: string;
+	task?: string;
 	/** Batch form (`task.batch`): one subagent per item. */
 	tasks?: TaskItem[];
 	/** Batch form: shared background prepended to every assignment; required by the batch schema. */
@@ -254,27 +244,17 @@ export interface TaskParams {
  * `displayName`, or a system-prompt field. Collapses every run of whitespace
  * AND control/format characters — including U+0085 NEL, ESC/ANSI, and the
  * zero-width separators that `\s` misses — to a single space, then caps length.
- * So untrusted text (a spawn `role`, a peer activity gist) can neither break the
- * line, inject prompt structure, nor smuggle terminal escapes. Caps at `max`
- * characters (clamped to >= 1; default `ROLE_LABEL_MAX`), appending an ellipsis when truncated.
+ * So untrusted text (a generated task label, a peer activity gist) can neither
+ * break the line, inject prompt structure, nor smuggle terminal escapes. Caps at
+ * `max` characters (clamped to >= 1; default `LABEL_MAX`), appending an ellipsis when truncated.
  */
-export function oneLineLabel(text: string, max = ROLE_LABEL_MAX): string {
+export function oneLineLabel(text: string, max = LABEL_MAX): string {
 	const oneLine = text.replace(/[\p{Cc}\p{Cf}\s]+/gu, " ").trim();
 	const cap = Math.max(1, max);
 	// Count/cut by code point, not UTF-16 code unit, so truncation can never
 	// split an astral character into a lone surrogate.
 	const chars = [...oneLine];
 	return chars.length > cap ? `${chars.slice(0, cap - 1).join("")}…` : oneLine;
-}
-
-/**
- * Display name for a spawned subagent: its tailored `role` (label-normalized)
- * when one is given, else the agent type's name. Empty/whitespace roles fall
- * back to the agent name.
- */
-export function resolveSubagentDisplayName(role: string | undefined, agentName: string): string {
-	const trimmed = role?.trim();
-	return trimmed ? oneLineLabel(trimmed) : agentName;
 }
 
 /**
@@ -318,7 +298,7 @@ export interface AgentDefinition {
 	tools?: string[];
 	spawns?: string[] | "*";
 	model?: string[];
-	thinkingLevel?: ThinkingLevel;
+	thinkingLevel?: ConfiguredThinkingLevel;
 	output?: unknown;
 	blocking?: boolean;
 	autoloadSkills?: string[];

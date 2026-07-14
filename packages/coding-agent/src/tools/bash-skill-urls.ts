@@ -66,7 +66,7 @@ export function resolveSkillUrlToPath(url: string, skills: readonly Skill[]): st
 	const hasRelativePath = rawPath !== "" && rawPath !== "/";
 
 	if (!hasRelativePath) {
-		return path.resolve(skill.filePath);
+		return path.resolve(skill.baseDir);
 	}
 
 	let relativePath: string;

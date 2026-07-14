@@ -586,7 +586,7 @@ export class Patcher {
 		const expected = exists ? section.fileHash : undefined;
 		// The 4-hex tag is content-derived: when the live text hashes to it,
 		// trust the match and apply directly. `storedSnapshotForTag` feeds the
-		// drift paths below (block resolution, 3-way recovery); on a 16-bit
+		// drift paths below (block resolution, anchor remapping); on a 16-bit
 		// tag collision it resolves to the most-recently recorded text.
 		const storedSnapshotForTag = expected === undefined ? null : this.snapshots.byHash(canonicalPath, expected);
 		const liveMatches = expected !== undefined && computeFileHash(normalized) === expected;
@@ -598,7 +598,7 @@ export class Patcher {
 		//   - live content matches the tag (or there is no tag) → resolve against
 		//     the live, normalized content;
 		//   - the file drifted → resolve against the tagged snapshot's text so the
-		//     resulting ranges flow through the 3-way-merge recovery below.
+		//     resulting ranges can be mapped to unchanged live lines below.
 		// When a block edit needs the tagged snapshot but it is unavailable, the
 		// range cannot be placed safely — reject with a MismatchError (re-read).
 		const blockResolutions: BlockResolution[] = [];
@@ -640,8 +640,8 @@ export class Patcher {
 			const result = applyEdits(normalized, resolved);
 			return withResolveWarnings({ ...result, warnings: [HEADTAIL_DRIFT_WARNING, ...(result.warnings ?? [])] });
 		}
-		// File drifted: try to replay the edit against the version the tag
-		// names and 3-way-merge it onto the live content.
+		// File drifted: map every anchor from the tagged snapshot to unchanged
+		// live lines. Recovery refuses changed or ambiguous targets.
 		const recovered = this.recovery.tryRecover({
 			path: canonicalPath,
 			currentText: normalized,

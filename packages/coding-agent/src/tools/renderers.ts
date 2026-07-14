@@ -24,12 +24,14 @@ import { grepToolRenderer } from "./grep";
 import { inspectImageToolRenderer } from "./inspect-image-renderer";
 import { ircToolRenderer } from "./irc";
 import { jobToolRenderer } from "./job";
+import { launchToolRenderer } from "./launch";
 import { recallToolRenderer, reflectToolRenderer, retainToolRenderer } from "./memory-render";
 import { readToolRenderer } from "./read";
 import { resolveToolRenderer } from "./resolve";
 import { searchToolBm25Renderer } from "./search-tool-bm25";
 import { sshToolRenderer } from "./ssh";
 import { todoToolRenderer } from "./todo";
+import { createVibeToolRenderer } from "./vibe";
 import { writeToolRenderer } from "./write";
 
 /**
@@ -92,6 +94,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	lsp: lspToolRenderer as ToolRenderer,
 	inspect_image: inspectImageToolRenderer as ToolRenderer,
 	irc: ircToolRenderer as ToolRenderer,
+	launch: launchToolRenderer as ToolRenderer,
 	read: readToolRenderer as ToolRenderer,
 	job: jobToolRenderer as ToolRenderer,
 	resolve: resolveToolRenderer as ToolRenderer,
@@ -111,5 +114,10 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	github: githubToolRenderer as ToolRenderer,
 	goal: goalToolRenderer as ToolRenderer,
 	web_search: webSearchToolRenderer as ToolRenderer,
+	vibe_spawn: createVibeToolRenderer("spawn") as ToolRenderer,
+	vibe_send: createVibeToolRenderer("send") as ToolRenderer,
+	vibe_wait: createVibeToolRenderer("wait") as ToolRenderer,
+	vibe_kill: createVibeToolRenderer("kill") as ToolRenderer,
+	vibe_list: createVibeToolRenderer("list") as ToolRenderer,
 	write: writeToolRenderer as ToolRenderer,
 };

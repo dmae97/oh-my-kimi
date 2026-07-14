@@ -369,7 +369,7 @@ describe("hashline — anchor-stale recovery via read snapshot cache", () => {
 			expect(finalLines).toContain("L8");
 
 			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-			expect(text).toMatch(/Recovered from a stale file hash using a previous read snapshot/);
+			expect(text).toMatch(/Recovered by remapping stale line anchors to unchanged current lines/);
 		});
 	});
 
@@ -437,7 +437,7 @@ describe("hashline — anchor-stale recovery via read snapshot cache", () => {
 			expect(finalLines).toContain("GAMMA");
 			expect(finalLines).not.toContain("gamma");
 			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-			expect(text).toMatch(/Recovered from a stale file hash using a previous read snapshot/);
+			expect(text).toMatch(/Recovered by remapping stale line anchors to unchanged current lines/);
 		});
 	});
 

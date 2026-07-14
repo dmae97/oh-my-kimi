@@ -228,6 +228,30 @@ describe("model thinking derivation", () => {
 		expect(openRouterAnthropic.thinking?.effortMap).toBeUndefined();
 	});
 
+	it("derives Anthropic adaptive thinking for SAP hai-proxy version-first Claude ids", () => {
+		const opus48 = createModel({
+			id: "anthropic--claude-4.8-opus",
+			api: "anthropic-messages",
+			provider: "custom",
+		});
+		const opus46 = createModel({
+			id: "anthropic--claude-4.6-opus",
+			api: "anthropic-messages",
+			provider: "custom",
+		});
+
+		expect(opus48.thinking).toEqual({
+			mode: "anthropic-adaptive",
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
+			supportsDisplay: true,
+		});
+		expect(getSupportedEfforts(opus48)).toEqual([Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max]);
+		expect(opus46.thinking).toEqual({
+			mode: "anthropic-adaptive",
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.Max],
+		});
+	});
+
 	it("maps GLM-5.2 reasoning effort per host dialect", () => {
 		const zai = createModel({
 			id: "glm-5.2",

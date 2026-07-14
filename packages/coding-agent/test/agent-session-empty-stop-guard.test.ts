@@ -270,6 +270,28 @@ describe("AgentSession empty stop guard", () => {
 		expect(emptyAssistantStops(activeBranchMessages)).toHaveLength(1);
 	});
 
+	it("emits failed auto-retry end when repeated empty stops exhaust the retry cap", async () => {
+		const { session, mock } = await createHarness([emptyStop(), emptyStop(), emptyStop(), emptyStop()]);
+		const retryEndEvents: Array<Extract<AgentSessionEvent, { type: "auto_retry_end" }>> = [];
+		session.subscribe(event => {
+			if (event.type === "auto_retry_end") {
+				retryEndEvents.push(event);
+			}
+		});
+
+		await expectPromptCompletes(session.prompt("answer without tools"));
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(4);
+		expect(retryEndEvents).toHaveLength(1);
+		expect(retryEndEvents[0]).toMatchObject({
+			type: "auto_retry_end",
+			success: false,
+			attempt: 3,
+		});
+		expect(retryEndEvents[0]?.finalError).toContain("empty stop");
+	});
+
 	it("ends auto-retry state when empty stop retries hit the cap", async () => {
 		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
 		const { session, mock } = await createHarness(

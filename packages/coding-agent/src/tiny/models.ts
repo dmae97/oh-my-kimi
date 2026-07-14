@@ -1,4 +1,4 @@
-/** Default session-title model: the online pi/smol path (no local download / on-device inference). */
+/** Default session-title model: the online @smol path (no local download / on-device inference). */
 export const ONLINE_TINY_TITLE_MODEL_KEY = "online";
 /** Local model the `tiny-models` CLI downloads when none is named. Not the session-title default — that is {@link ONLINE_TINY_TITLE_MODEL_KEY}. */
 export const DEFAULT_TINY_TITLE_LOCAL_MODEL_KEY = "lfm2-700m";
@@ -87,9 +87,9 @@ void TINY_TITLE_MODEL_VALUES_MATCH_REGISTRY;
 export const TINY_TITLE_MODEL_OPTIONS = [
 	{
 		value: ONLINE_TINY_TITLE_MODEL_KEY,
-		label: "Online (TINY role, else pi/smol)",
+		label: "Online (TINY role, else @smol)",
 		description:
-			"Online title generation: the TINY model role (set one in /models) when assigned, otherwise the online fallback (commit role, then pi/smol). No local download or on-device inference.",
+			"Online title generation: the TINY model role (set one in /models) when assigned, otherwise the online fallback (commit role, then @smol). No local download or on-device inference.",
 	},
 	...TINY_TITLE_LOCAL_MODELS.map(model => ({
 		value: model.key,
@@ -194,9 +194,9 @@ void TINY_MEMORY_MODEL_VALUES_MATCH_REGISTRY;
 export const TINY_MEMORY_MODEL_OPTIONS = [
 	{
 		value: ONLINE_MEMORY_MODEL_KEY,
-		label: "Online (TINY role, else smol)",
+		label: "Online (TINY role, else @smol)",
 		description:
-			"Use the online model: the TINY role from /models when set, otherwise pi/smol. No local model download or on-device inference.",
+			"Use the online model: the TINY role from /models when set, otherwise @smol. No local model download or on-device inference.",
 	},
 	...TINY_MEMORY_LOCAL_MODELS.map(model => ({
 		value: model.key,
@@ -256,9 +256,9 @@ export type AutoThinkingModelKey = TinyMemoryModelKey;
 export const AUTO_THINKING_MODEL_OPTIONS = [
 	{
 		value: ONLINE_AUTO_THINKING_MODEL_KEY,
-		label: "Online (TINY role, else smol)",
+		label: "Online (TINY role, else @smol)",
 		description:
-			"Classify prompt difficulty online with the TINY role model (set one in /models) or pi/smol; no local download or on-device inference.",
+			"Classify prompt difficulty online with the TINY role model (set one in /models) or @smol; no local download or on-device inference.",
 	},
 	...TINY_MEMORY_LOCAL_MODELS.map(model => ({
 		value: model.key,

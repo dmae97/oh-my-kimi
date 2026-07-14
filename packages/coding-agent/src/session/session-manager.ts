@@ -15,6 +15,7 @@ import {
 	getSessionsDir,
 	isEnoent,
 	logger,
+	stringifyJson,
 	toError,
 } from "@oh-my-pi/pi-utils";
 import { ArtifactManager } from "./artifacts";
@@ -539,7 +540,7 @@ export class SessionManager {
 	}
 
 	#lineFor(entry: FileEntry): string {
-		return `${JSON.stringify(prepareEntryForPersistence(entry, this.#blobs))}\n`;
+		return `${stringifyJson(prepareEntryForPersistence(entry, this.#blobs)) ?? "null"}\n`;
 	}
 
 	#titleSlotLine(): string {

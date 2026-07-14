@@ -1,8 +1,8 @@
 /**
  * Harness documentation index for the `omp://` protocol.
  *
- * Compiled binaries and the prepacked npm bundle inline a compressed index from
- * `docs-index.generated.txt` (populated by `gen:docs` at build time). The format is two lines:
+ * Compiled binaries and the prepacked npm bundle inline a compressed index of the
+ * docs (injected via `process.env.PI_DOCS_EMBED` at build time). The format is two lines:
  *   1. a plain JSON array of the sorted doc file names, and
  *   2. a base64 gzip blob of the index-aligned doc bodies (`string[]`).
  * Listing/completion (`getDocFilenames`) parses only the small first line and
@@ -16,7 +16,8 @@ import * as path from "node:path";
 import { promisify } from "node:util";
 import { gunzip } from "node:zlib";
 import { Glob } from "bun";
-import docsEmbed from "./docs-index.generated.txt";
+
+const docsEmbed = process.env.PI_DOCS_EMBED ?? "";
 
 const gunzipAsync = promisify(gunzip);
 
@@ -82,8 +83,8 @@ function getIndex(): DocsIndex {
 	const decoded = decodeDocsIndex(docsEmbed);
 	if (decoded === null) {
 		throw new Error(
-			"Malformed embedded docs index (docs-index.generated.txt): non-empty payload without a newline separator. " +
-				"Rebuild with `bun run gen:docs`.",
+			"Malformed embedded docs index: non-empty payload without a newline separator. " +
+				"Rebuild the binary or bundle.",
 		);
 	}
 	index = decoded;

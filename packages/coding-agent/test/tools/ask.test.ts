@@ -2,11 +2,16 @@ import { beforeAll, describe, expect, it, vi } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { ExtensionUISelectItem } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
+import type {
+	ExtensionAskDialogQuestion,
+	ExtensionAskDialogResult,
+	ExtensionUISelectItem,
+} from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { getThemeByName, initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { AskTool, askToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/ask";
 import { ToolAbortError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
+import { type } from "arktype";
 
 function createSession(overrides: Partial<ToolSession> = {}): ToolSession {
 	return {
@@ -20,7 +25,7 @@ function createSession(overrides: Partial<ToolSession> = {}): ToolSession {
 }
 
 function createContext(args: {
-	select: (
+	select?: (
 		prompt: string,
 		options: ExtensionUISelectItem[],
 		dialogOptions?: {
@@ -42,13 +47,18 @@ function createContext(args: {
 		dialogOptions?: { signal?: AbortSignal },
 		editorOptions?: { promptStyle?: boolean },
 	) => Promise<string | undefined>;
+	askDialog?: (
+		questions: ExtensionAskDialogQuestion[],
+		dialogOptions?: any,
+	) => Promise<ExtensionAskDialogResult | undefined>;
 	abort?: () => void;
 }): AgentToolContext {
 	// AgentToolContext includes many runtime fields; tests only need UI + abort behavior.
 	return {
 		hasUI: true,
 		ui: {
-			select: args.select,
+			...(args.select ? { select: args.select } : {}),
+			...(args.askDialog ? { askDialog: args.askDialog } : {}),
 			editor: (
 				title: string,
 				prefill?: string,
@@ -1526,5 +1536,159 @@ describe("askToolRenderer malformed call args", () => {
 		expect(text).toContain("Real question");
 		expect(text).toContain("BareString");
 		expect(text).toContain("Proper");
+	});
+});
+
+describe("AskTool rich ask dialog", () => {
+	it("accepts new schema fields (header, preview, note) and maps them into AskToolDetails", async () => {
+		const tool = new AskTool(createSession());
+		const askDialog = vi.fn().mockResolvedValue({
+			kind: "submit",
+			results: [
+				{
+					id: "q1",
+					question: "Q1?",
+					options: ["Option A"],
+					multi: false,
+					selectedOptions: ["Option A"],
+					note: "My Custom Note",
+					timedOut: undefined,
+				},
+			],
+		});
+		const context = createContext({ askDialog });
+
+		const result = await tool.execute(
+			"call-rich-dialog",
+			{
+				questions: [
+					{
+						id: "q1",
+						question: "Q1?",
+						header: "Chip Header",
+						options: [{ label: "Option A", preview: "My Preview" }],
+					},
+				],
+			},
+			undefined,
+			undefined,
+			context,
+		);
+
+		expect(askDialog).toHaveBeenCalledTimes(1);
+		// Check that header and preview were forwarded
+		expect(askDialog.mock.calls[0][0]).toEqual([
+			{
+				id: "q1",
+				question: "Q1?",
+				header: "Chip Header",
+				options: [{ label: "Option A", preview: "My Preview" }],
+			},
+		]);
+
+		// Verify result contains details with note mapping
+		expect(result.details).toEqual({
+			question: "Q1?",
+			options: ["Option A"],
+			multi: false,
+			selectedOptions: ["Option A"],
+			customInput: undefined,
+			note: "My Custom Note",
+			timedOut: undefined,
+		});
+	});
+
+	it("aborts and throws ToolAbortError when askDialog returns undefined", async () => {
+		const tool = new AskTool(createSession());
+		const abort = vi.fn();
+		const askDialog = vi.fn().mockResolvedValue(undefined);
+		const context = createContext({ askDialog, abort });
+
+		await expect(
+			tool.execute(
+				"call-rich-dialog-cancel",
+				{
+					questions: [{ id: "q1", question: "Q1?", options: [{ label: "Option A" }] }],
+				},
+				undefined,
+				undefined,
+				context,
+			),
+		).rejects.toThrow(ToolAbortError);
+
+		expect(abort).toHaveBeenCalledTimes(1);
+	});
+
+	it("returns chat redirect result when askDialog returns kind chat", async () => {
+		const tool = new AskTool(createSession());
+		const abort = vi.fn();
+		const askDialog = vi.fn().mockResolvedValue({ kind: "chat" });
+		const context = createContext({ askDialog, abort });
+
+		const result = await tool.execute(
+			"call-rich-dialog-chat",
+			{
+				questions: [{ id: "q1", question: "Q1?", options: [{ label: "Option A" }] }],
+			},
+			undefined,
+			undefined,
+			context,
+		);
+
+		expect(abort).not.toHaveBeenCalled();
+		expect(result.details).toEqual({ chatRedirect: true, questions: ["Q1?"] });
+		expect(result.content[0]?.type).toBe("text");
+		expect((result.content[0] as { text: string }).text).toContain("chat about this");
+	});
+
+	it("ignores preview and header in degraded select path", async () => {
+		const tool = new AskTool(createSession());
+		const select = vi.fn().mockResolvedValue("Option A");
+		const context = createContext({ select });
+
+		await tool.execute(
+			"call-degraded",
+			{
+				questions: [
+					{
+						id: "q1",
+						question: "Q1?",
+						header: "Chip Header",
+						options: [{ label: "Option A", description: "Desc A", preview: "My Preview" }],
+					},
+				],
+			},
+			undefined,
+			undefined,
+			context,
+		);
+
+		expect(select).toHaveBeenCalledTimes(1);
+		// verify preview/header are NOT forwarded to select options
+		expect(select.mock.calls[0][1]).toEqual([{ label: "Option A", description: "Desc A" }, "Other (type your own)"]);
+	});
+
+	it("rejects reserved-label collision in parameters validation", async () => {
+		const tool = new AskTool(createSession());
+
+		const valid = tool.parameters({
+			questions: [{ id: "q1", question: "Q?", options: [{ label: "ok" }] }],
+		});
+		expect(valid instanceof type.errors).toBe(false);
+
+		const reservedOther = tool.parameters({
+			questions: [{ id: "q1", question: "Q?", options: [{ label: "Other (type your own)" }] }],
+		});
+		expect(reservedOther instanceof type.errors).toBe(true);
+
+		const reservedChat = tool.parameters({
+			questions: [{ id: "q1", question: "Q?", options: [{ label: "Chat about this" }] }],
+		});
+		expect(reservedChat instanceof type.errors).toBe(true);
+
+		const reservedNext = tool.parameters({
+			questions: [{ id: "q1", question: "Q?", options: [{ label: "Next →" }] }],
+		});
+		expect(reservedNext instanceof type.errors).toBe(true);
 	});
 });

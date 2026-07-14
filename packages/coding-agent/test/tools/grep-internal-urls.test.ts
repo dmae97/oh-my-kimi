@@ -182,6 +182,24 @@ describe("GrepTool internal URL resolution", () => {
 		expect(getResultText(findResult)).toContain("guide.md");
 	});
 
+	it("walks bare skill:// roots for search and find", async () => {
+		await registerSkillDirectory();
+		const session = createSession({ hasEditTool: true });
+		const searchTool = new GrepTool(session);
+		const findTool = new GlobTool(session);
+
+		const searchResult = await searchTool.execute("test-search", {
+			pattern: "deep needle",
+			path: "skill://demo",
+		});
+		const findResult = await findTool.execute("test-find", {
+			path: "skill://demo",
+		});
+
+		expect(getResultText(searchResult)).toContain("deep needle");
+		expect(getResultText(findResult)).toContain("guide.md");
+	});
+
 	it("resolves artifact:// URL to backing file and greps it", async () => {
 		const content = "line one\nfound the needle here\nline three\n";
 		await Bun.write(path.join(artifactsDir, "5.bash.log"), content);

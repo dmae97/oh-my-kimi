@@ -604,9 +604,10 @@ export class Settings {
 	}
 
 	/**
-	 * Set a model role (helper for modelRoles record).
+	 * Set a model role (helper for modelRoles record). Passing `undefined`
+	 * clears the role from the persisted record and any runtime override.
 	 */
-	setModelRole(role: ModelRole | string, modelId: string): void {
+	setModelRole(role: ModelRole | string, modelId: string | undefined): void {
 		const current = this.#modelRolesFromLayer(this.#global);
 		const runtimeOverrides = getByPath(this.#overrides, ["modelRoles"]);
 		const updateRuntimeOverride =
@@ -615,12 +616,20 @@ export class Settings {
 			!Array.isArray(runtimeOverrides) &&
 			Object.hasOwn(runtimeOverrides, role);
 
-		current[role] = modelId;
+		if (modelId === undefined) {
+			delete current[role];
+		} else {
+			current[role] = modelId;
+		}
 		this.set("modelRoles", current);
 
 		if (updateRuntimeOverride) {
 			const nextRuntimeOverride = this.#modelRolesFromLayer(this.#overrides);
-			nextRuntimeOverride[role] = modelId;
+			if (modelId === undefined) {
+				delete nextRuntimeOverride[role];
+			} else {
+				nextRuntimeOverride[role] = modelId;
+			}
 			this.override("modelRoles", nextRuntimeOverride);
 		}
 	}

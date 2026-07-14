@@ -6,6 +6,64 @@
 
 - Fixed OpenAI Responses `content_filter` terminal events being auto-retried as provider finish errors; content-filtered turns now remain hard failures without the same-model retry loop.
 
+## [16.5.0] - 2026-07-13
+
+### Added
+
+- Added diagnostic response headers to auth-gateway inference endpoints, including request IDs (x-request-id/request-id), LiteLLM model metadata (x-litellm-model-id/x-litellm-model-api-base), and performance/cost metrics (x-litellm-response-cost, x-litellm-response-duration-ms, openai-processing-ms) on non-streaming responses.
+
+### Changed
+
+- Updated Google and Google Vertex providers to always use streamGenerateContent requests.
+
+### Fixed
+
+- Fixed empty provider responses (such as from Cloud Code Assist API) being classified as non-retryable, allowing session retries and model-fallback chains to engage instead of failing the turn.
+
+### Removed
+
+- Removed automatic /interactions chaining for follow-up turns in Google provider calls, along with the useInteractionsApi, storeInteraction, and previousInteractionId stream options.
+
+## [16.4.6] - 2026-07-12
+
+### Added
+
+- Added asynchronous `invalidateUsageCache` method to clear cached usage reports
+- Added support for cross-service usage cache invalidation between AuthStorage and AuthBroker
+
+### Fixed
+
+- Fixed OAuth credential resolution returning "No API key found" when every plan-eligible OpenAI Codex account was rate-limit blocked and the only unblocked account failed the model's plan gate: resolution now runs a last-resort ladder that first yields a plan-fitting account regardless of usage blocks (so callers get real usage-limit retry semantics), then tries every account with the plan filter dropped before reporting no credential
+
+## [16.4.5] - 2026-07-11
+
+### Fixed
+
+- Fixed an issue in GLM tool calling where missing or malformed argument closers (such as `<arg_value>` mistyped as `</arg_key>`) caused subsequent arguments to be swallowed or merged into a single field, affecting both in-band and native tool calling.
+
+## [16.4.3] - 2026-07-11
+
+### Fixed
+
+- Fixed auth database upgrades from schema v5 by creating the OAuth credential refresh-lease table before lease statements are prepared.
+- Fixed an issue in the Responses API where empty tool results were incorrectly serialized with a "(see attached image)" placeholder, causing models to look for non-existent attachments.
+- Fixed OpenAI Responses server non-streaming envelopes to always include the required "incomplete_details" field, using null for completed responses.
+- Preserved Cloud Code Assist tool schemas when mixed-type unions carry branch-local validation descriptions.
+
+## [16.4.2] - 2026-07-10
+
+### Fixed
+
+- Fixed compatibility with xAI by automatically downgrading OpenAI-specific tool calls and image detail settings during message history replays.
+- Fixed a race condition in shared SQLite OAuth token refreshes by implementing durable credential ownership and compare-and-set persistence to prevent stale refresh failures.
+- Fixed OpenAI Codex requests to include the required version header for newly gated models.
+
+## [16.4.1] - 2026-07-10
+
+### Changed
+
+- Enforced `all_turns` reasoning context for all Responses Lite requests
+
 ## [16.4.0] - 2026-07-10
 
 ### Added

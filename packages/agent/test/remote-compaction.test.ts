@@ -178,6 +178,38 @@ describe("buildOpenAiNativeHistory custom tool calls", () => {
 		expect(items.find(item => item.type === "function_call")).toBeDefined();
 		expect(items.find(item => item.type === "custom_tool_call")).toBeUndefined();
 	});
+
+	test("preserves bigint tool arguments as exact decimal strings", () => {
+		const assistant: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{
+					type: "toolCall",
+					id: "call_lookup_1|fc_lookup_1",
+					name: "lookup",
+					arguments: { rowId: 9_007_199_254_740_993n },
+				},
+			],
+			timestamp: Date.now(),
+			provider: "openai",
+			model: "gpt-5",
+			api: "openai-responses",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+		};
+
+		const items = buildOpenAiNativeHistory([assistant], makeOpenAiModel());
+		const call = items.find(item => item.type === "function_call");
+
+		expect(call?.arguments).toBe('{"rowId":"9007199254740993"}');
+	});
 });
 
 const ZERO_USAGE = {
@@ -446,6 +478,8 @@ describe("Responses Lite remote compaction", () => {
 		tools?: unknown;
 		input?: Array<Record<string, unknown>>;
 		client_metadata?: unknown;
+		reasoning?: Record<string, unknown>;
+		include?: string[];
 	}
 
 	interface CapturedLiteExchange {
@@ -501,8 +535,9 @@ describe("Responses Lite remote compaction", () => {
 		);
 
 		expect(captured?.headers.get("x-openai-internal-codex-responses-lite")).toBe("true");
+		expect(captured?.body.reasoning).toEqual({ context: "all_turns" });
+		expect(captured?.body.include).toEqual(["reasoning.encrypted_content"]);
 		expect(captured?.body.instructions).toBeUndefined();
-		expect(captured?.body.tools).toBeUndefined();
 		expect(captured?.body.client_metadata).toBeUndefined();
 		expect(captured?.headers.get("x-codex-installation-id")).toBe(TEST_INSTALLATION_ID);
 		expect(captured?.headers.get("session-id")).toBe("codex-compaction-session");
@@ -552,8 +587,9 @@ describe("Responses Lite remote compaction", () => {
 		});
 
 		expect(captured?.headers.get("x-openai-internal-codex-responses-lite")).toBe("true");
+		expect(captured?.body.reasoning).toEqual({ context: "all_turns" });
+		expect(captured?.body.include).toEqual(["reasoning.encrypted_content"]);
 		expect(captured?.body.instructions).toBeUndefined();
-		expect(captured?.body.tools).toBeUndefined();
 		if (!isRecord(captured?.body.client_metadata)) throw new Error("expected V2 client_metadata");
 		const v2ClientMetadata = captured.body.client_metadata;
 		const v2TurnMetadata = parseCodexTurnMetadata(v2ClientMetadata["x-codex-turn-metadata"]);

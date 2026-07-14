@@ -2,6 +2,230 @@
 
 ## [Unreleased]
 
+## [16.5.0] - 2026-07-13
+
+### Breaking Changes
+
+- Replaced the `--reasoning-slide-*` flag family with a unified `--prewalk` mechanism (`--prewalk`, `--prewalk-into <model>`, and `--no-prewalk`) to manage model handoffs during execution.
+
+### Added
+
+- Added a new `--prewalk` execution flow (with `--prewalk-into <model>` and `--no-prewalk` overrides) that starts tasks on a strong model for planning and todo initialization before handing off to a faster, cheaper model for implementation.
+ - Added a status line annotation for the active prewalk phase (armed or active).
+ - Added the `tui.scrollbackRebuild` setting to gate the erase-and-replay native scrollback rebuild mechanism (defaults to off).
+- Added a display setting to toggle between collapsing or keeping compacted history inline in live session displays.
+- Added a compact session-only model picker (Alt+P) for quick model switching, featuring `@` search to quickly list and apply configured quick roles.
+- Redesigned Agent Hub entries into a cleaner two-line card layout showing identity, active model, reasoning level, age, and task description.
+- Added a project-scoped `launch` tool (gated by `launch.enabled`) for managing shared long-running services and debuggers, featuring readiness probes, bounded logs, PTY input, restart policies, and automatic teardown.
+- Added support for `detached` launches, allowing standalone services to survive broker shutdowns and reconnect to subsequent sessions.
+
+### Changed
+
+- Updated JSON logs (`--mode json`) to include provider payloads in auto-compaction events.
+- Updated tangential agent forks (`/tan`) to ignore parent session history and focus exclusively on the new request, hardening isolation with cleared todo lists and concurrent editing warnings.
+- Added visual markers in the transcript for elided tool calls that have no corresponding result.
+- Updated the status event log to prioritize the most recent entries in the display window.
+- Upgraded `@agentclientprotocol/sdk` to version 1.2.1.
+
+### Fixed
+
+- Fixed terminal scrollback duplication issues with expanded streaming edit previews (Ctrl+O) by using a viewport-sized tail window.
+- Fixed custom model role resolution and alias parsing, ensuring canonical role selectors (`@role`) and thinking suffixes resolve correctly across all configuration surfaces.
+- Fixed quadratic growth in JSON logs by eliding redundant message snapshots and payloads.
+- Fixed prompt cache misses and incorrect cache key pinning for `/tan` and `/fork` clones.
+- Fixed inconsistent history rendering and scrollback repainting when toggling the display setting for compacted items.
+- Fixed `retry.fallbackChains` failing to engage on non-retryable provider errors, ensuring the agent correctly falls back to the next candidate model.
+- Improved auto-compaction to automatically drop images and elide content when context is tight, and added persistent warning badges when manual intervention is required.
+- Fixed backgrounded Bash blocks continuing to repaint with live output; they now freeze with a compact job notice while completion is delivered separately.
+- Fixed rendering, status display, and PTY control sequence formatting issues in the `launch` tool.
+- Fixed in-process shell builtins (including `stat`, `date`, `sed`, `mktemp`, `tail`, `find`, `base64`, and `ln`) to correctly detect and translate macOS/BSD-style arguments and flags, preventing failures caused by GNU-only assumptions.
+
+### Removed
+
+- Removed the `--prewalk-boomerang` feature and its associated configuration setting.
+- Removed the unreliable Bing and Yahoo HTML-scraping web search providers.
+
+## [16.4.8] - 2026-07-12
+
+### Added
+
+- Added a predicate form to the browser run's `wait()` helper: `wait(fn, { timeout?, interval? })` polls the function (sync or async) until truthy and resolves with that value, failing with a named timeout error (deadline clamped under the cell budget so it always beats the opaque whole-cell timeout) instead of Bun's `sleep expects a number` or a whole-cell stall from in-page polling Promises; both `wait` forms now register in the stall diagnosis of cell timeouts
+- Added `--reasoning-slide-model` and `--reasoning-slide-turns` to switch a running agent from its initial model after a fixed number of completed assistant turns
+- Added `--reasoning-slide-plan` (with `--reasoning-slide-plan-at`) to steer a hidden deep-planning nudge into the run before the reasoning slide; the switch is held until a substantial plan turn actually lands (bounded by a grace window) and the nudge is scrubbed from the LLM context at the switch so the fast model inherits only the produced plan
+- Added `--reasoning-slide-on-action` to trigger the reasoning slide at the first completed turn that ran an edit/write tool instead of a fixed turn count (bash is excluded — it doubles as exploration)
+
+### Changed
+
+- Replaced the Alt+P / `/switch` temporary model selector's fullscreen /models hub with a compact full-width floating overlay anchored above the editor (~40% of the terminal height): just the searchable model list — no provider sidebar or role management — with the session's active model highlighted and preselected
+- Improved tab recovery after timeouts by automatically clearing pending navigation and JS dialogs
+- Made `tab.goto` navigation failures catchable with a named error instead of triggering a whole-cell timeout
+- Made `tab.evaluate` run in the page's main JavaScript world so page-defined globals are available without a directive
+- Enhanced cell timeout messages to include identification of stalled operations and blocking JS dialogs
+- Browser `run` on a tab the supervisor force-killed now reports the kill reason instead of a bare "not alive"
+- Refined agent workflow to prioritize smoke testing and reduce mandatory upfront test generation
+
+### Fixed
+
+- Fixed the eval tool's status-event tree truncating from the bottom: the newest `log()` progress lines were hidden behind an `… N more` marker while the oldest stayed visible; the tree now shows a tail window behind an `… N earlier` marker, and the expanded view widens to the viewport instead of a fixed 10 events
+- Fixed the `//!world=main` directive being silently ignored for string expressions passed to raw Puppeteer evaluation APIs
+- Fixed tab reuse issues where hung navigation or unhandled modals would cause initialization to stall and trigger a force-kill
+- Improved search reliability for Perplexity provider by forcing retrieval for all queries
+- Fixed JS eval cells losing top-level `function` and `var` declarations across cells when the defining cell contained top-level `await` — the async wrapper scoped them to the cell's IIFE instead of publishing them to the worker global
+
+## [16.4.7] - 2026-07-12
+
+### Added
+
+- Enabled Home and End keyboard navigation in the model browser
+- Added a `c` hotkey in the plan-review overlay that copies the current reviewed plan markdown to the system clipboard, including in-overlay edits.
+
+### Changed
+
+- Streamlined list view styling by removing inline model role chips from row entries
+- Reworked /models hub selection visuals: the background highlight band is reserved for mouse hover, the keyboard position is a cursor glyph drawn only in the pane that owns the arrow keys, and the sidebar's active scope renders as a bold accent label
+- Removed the redundant "login" label from inactive (locked) provider entries in the Model Hub sidebar
+
+### Fixed
+
+- Fixed PageUp/PageDown in the model browser wrapping past the list edges instead of clamping
+- Fixed the hover highlight sticking to the last hovered model row when the pointer moved into the provider sidebar
+
+## [16.4.6] - 2026-07-12
+
+### Added
+
+- Added `invalidate` action to the usage command to clear cached usage reports
+- Added model-oriented keys and wildcard entries to `retry.fallbackChains`: a `provider/model-id` key attaches a fallback chain to that exact model, a `provider/*` key covers every current or future model of a provider, and a `provider/*` chain entry keeps the failing model's id while swapping the provider (`google-antigravity/x` → `google/x`) — so fallbacks survive role and model reassignments without config edits. Keys resolve by specificity: exact model, then provider wildcard, then role, then `default`.
+- Added fallback-chain editing to the /models Roles view: each role's `retry.fallbackChains` entries render as indented rows beneath it, `f` picks a fallback model to append, Enter on an entry replaces it, `x`/backspace removes it, and `[`/`]` (or shift+↑/↓) reorder the chain.
+- Added model-keyed fallback management to the /models Roles view: model and `provider/*` chains render as a separate section below the roles (divider + "+ New fallback…" row for creating one by picking the protected model, then keying it by model or provider), with the same replace/remove/reorder editing as role chains; the model strip gains `fallbacks:<model>` and `fallbacks:<provider>/*` chips as shortcuts.
+- Added `/queue <message>` plus `->` / `=>` composer shorthand for follow-up messages that wait until the agent yields. The shorthand opens a dim `Queueing` header and splits sequential numeric, Roman-numeral, or alphabetic lists into separately highlighted queue entries.
+- Added per-model TPS/TTFT tracking: every completed assistant turn folds its timing into recency-weighted aggregates in `~/.omp/agent.db`, and the /models browser shows measured speed — a right-aligned `118t/s` column on wide terminals (plus TTFT, e.g. `0.9s 118t/s`, when wider) and `~118t/s · 0.9s ttft` facts in the selection detail line — with no dependency on the `omp stats` session scan.
+
+### Changed
+
+- Retain completed and abandoned tasks in session history for improved context on resume
+- Changed the Model Hub `retry-fallback` strip chip to append the model to the default fallback chain instead of prepending it, matching the chain-building order of the Roles view (already-registered models are a no-op).
+- Changed per-model perf recording (`recordModelPerf`) to be deferred like prompt history: samples are batched and written to `agent.db` in one transaction ~100ms later, keeping SQLite writes off the turn-completion hot path.
+
+### Fixed
+
+- Fixed failure to trigger model fallback when the retry budget is exhausted by credential rotation
+- Fixed uncontrollable mouse-wheel scrolling in the /models hub: the wheel moved the selection (one step per wheel event, so a single trackpad flick skipped many rows) and wrapped from the bottom back to the top. Wheel scrolling now pans the list viewport only, clamps at the ends, and leaves the selection where it is; keyboard navigation still scrolls the selection into view. Likewise, the wheel over the provider sidebar no longer switches the active scope (or triggers provider refreshes) — it just scrolls the sidebar.
+- Fixed TPS being inflated several-fold when a provider hides reasoning tokens until late in the stream (e.g. `google/gemini-3.5` vs `google-vertex/gemini-3.5` reporting 648 vs 186 TPS for identical durations): `omp bench`, the per-turn usage row, and the /models perf aggregates now measure tokens/sec over the total request duration instead of the post-TTFT decode window, matching `omp stats`. Stored perf aggregates are purged and re-backfilled from stats history with the corrected math on first launch.
+- Fixed the model-perf stats.db backfill freezing the TUI (~30s on multi-million-row stats databases) when /models triggered it: the import is now fire-and-forget, walks the newest rows in small chunks with event-loop yields between them, and is bounded to 90 days / 256 newest samples per model — beyond either bound the recency decay would erase the contribution anyway.
+- Fixed compiled release binaries bundling `fastembed` and baking the build-machine `@anush008/tokenizers` path; native runtime dependencies now stay external for every compiled build path so Mnemopi resolves its on-demand install instead. ([#5195](https://github.com/can1357/oh-my-pi/issues/5195))
+- Fixed `/btw` side-channel turns on Codex models such as `gpt-5.6-luna` by preserving the session websocket preference instead of forcing SSE, and made Esc dismiss the active `/btw` panel before interrupting loop/maintenance work. ([#5213](https://github.com/can1357/oh-my-pi/issues/5213))
+- Fixed the Model Hub role-assignment strip hiding the selected chip once the row overflowed; the strip now scrolls horizontally, truncating passed chips behind a leading ellipsis so the selection (plus one chip of lookahead) stays visible.
+- Fixed mouse hover and clicks in the /models Roles view landing one row above the pointer (the row mapping subtracted the status row twice).
+- Fixed model search keeping the most-recently-used model on top of the results: match quality now ranks first (an exact `gpt-5.5` beats the active `gpt-5.6-sol`), with MRU order only breaking ties between equally good matches.
+
+## [16.4.5] - 2026-07-11
+
+### Breaking Changes
+
+- Reworked the task tool wire schema: moved the top-level agent field into individual task items, renamed assignment to task and id to name, and removed the role and description fields. UI labels are now automatically generated from the task text.
+
+### Added
+
+- Introduced a fullscreen, mouse-supported Model Hub (via /model) featuring a sidebar of scopes, metadata-aligned model tables, inline role/thinking assignment strips, custom role creation, quick-switch cycle editing, and manual provider refreshing.
+- Added a /pause command to freeze all active agents (main, subagents, and advisor) at their next safe step, allowing manual repository edits mid-run before resuming.
+- Added support for per-ID bulk conflict directives via write({ path: "conflict://*", content: "..." }) to resolve multiple conflicts in a single call.
+- Added auto as a valid thinking-level in agent frontmatter, which is now the default for the bundled task subagent.
+- Added rich, interactive, fixed-height ask dialogs featuring question tabs, option previews, notes, and multi-select toggles.
+
+### Changed
+
+- Redesigned OAuth logins to run inside a cancellable dialog (aborted via Esc) rather than an inescapable pairing prompt.
+- Reworked the subagent soft request budget to gracefully steer child agents to wrap up and yield partial findings instead of silently terminating them, and raised the default budget to 200 requests.
+- Updated task rendering to retain the agent type badge on live progress and finished result rows.
+
+### Fixed
+
+- Fixed issues where in-flight tool calls or task blocks would disappear from the chat during mid-turn transcript rebuilds or when background jobs settled.
+- Fixed mixed blocking and non-blocking task batches degrading all spawns to synchronous execution; execution mode is now correctly handled per item.
+- Fixed budget-stopped subagents becoming unreachable, allowing them to remain adopted and resumable via irc with full context.
+- Fixed code duplication in write conflict://<N> when models pasted lines adjacent to the marker block.
+- Fixed visible per-keystroke lag when searching in the /resume session picker by caching search targets and debouncing SQLite lookups.
+- Fixed compiled Linux binary extension loading failures related to bundled web-search header generation data paths.
+- Fixed job list and empty-poll snapshots returning empty output, ensuring running subagents without backing jobs are properly listed.
+- Fixed agents getting stuck waiting for messages from peers that have already stopped running.
+- Fixed compiled Linux binary extension loading when bundled web-search header generation cannot read `header-generator` data files from the build-time path. ([#5178](https://github.com/can1357/oh-my-pi/issues/5178))
+- Fixed plugin custom tool loading to skip and report invalid feature entries instead of crashing startup when a plugin dependency tree leaves one feature unresolved. ([#5189](https://github.com/can1357/oh-my-pi/issues/5189))
+
+## [16.4.4] - 2026-07-11
+
+### Changed
+
+- Optimized session title generation and auto-thinking classification for sub-billion-parameter tiny models (such as LFM2) by rewriting system prompts, improving input truncation to preserve message context, and unifying preprocessing to filter out noise like ANSI codes, XML tags, and long commit hashes.
+
+### Fixed
+
+- Fixed an issue where the Windows binary exited silently without running the CLI, which also caused `omp update` to roll back.
+- Fixed native Windows binary compatibility on older Windows 10 CPUs by building the `omp-windows-x64.exe` release asset with a baseline x64 runtime instead of AVX2. (#5172)
+- Fixed `GenerateImage` rejecting OpenAI Codex-compatible proxy bearer keys when the token does not expose a `chatgpt-account-id`. (#5174)
+- Fixed context promotion documentation to accurately reflect the `contextPromotionTarget` runtime behavior and `contextPromotion.enabled` default. (#5163)
+
+## [16.4.3] - 2026-07-11
+
+### Added
+
+- Added /vibe mode, allowing the model to act as a director driving persistent background worker sessions (fast and good tiers) with dedicated session tools (vibe_spawn, vibe_send, vibe_wait, vibe_kill, vibe_list) and a live TUI "TV wall" showing active worker activity, tool traces, and streamed output.
+- Added multiple credential-free web search providers (Google, Bing, Yahoo, Startpage, Ecosia, Mojeek) with stealth-browser escalation, bot challenge detection, and recency filters, alongside a parallel public ("Public Web") provider that aggregates and deduplicates results across all engines.
+- Added PCRE2 fallback support for grep lookaround and backreferences when the default Rust regex engine rejects a pattern.
+- Added a helpful stderr hint when launching omp acp from an interactive terminal to clarify that the command communicates via JSON-RPC over stdout.
+
+### Changed
+
+- Reduced browser action timeout from 15s to 8s to improve agent iteration speed.
+- Refined agent delegation logic to prioritize top-level planning by the primary agent, discourage single-agent delegation, and handle prerequisite work inline.
+- Optimized credential-free web search engine ordering and routing, prioritizing Startpage and Ecosia, and using randomized desktop Chrome profiles with stealth-browser escalation for blocked requests.
+
+### Fixed
+
+- Fixed advisor config preserving an explicit empty tool list so `/advisor config` can disable all advisor tools. ([#5155](https://github.com/can1357/oh-my-pi/issues/5155))
+- Fixed npm bundle generation failing on Linux with E2BIG by building dist/cli.js in-process via Bun.build instead of passing the embedded docs payload as a CLI --define argument.
+- Fixed compiled-binary extensions failing to load native .node FFI dependencies by resolving platform-specific packages against the extension's own node_modules.
+- Fixed a hang in omp search and omp q CLI commands by ensuring the AuthStorage connection is properly closed upon completion.
+- Fixed write blocking for the full LSP diagnostics poll by deferring slow diagnostics to a late-diagnostics channel.
+- Fixed multiple browser and puppeteer tool issues, including locator action timeouts, missing console/print output buffering, missing fill() method on element handles, and incorrect viewport screenshots on multi-tab setups.
+- Improved browser selector error diagnostics to report match counts and abort early on empty matches instead of waiting for the full timeout.
+- Fixed silent failures, duplicate error messages, and unhandled provider errors in ACP mode when errors occurred before streaming assistant text.
+- Fixed glob reporting contradictory "no files found" messages on timeout by explicitly stating the scan was incomplete.
+- Fixed read adding unwanted context padding to raw range selectors (e.g., raw:31-31).
+- Fixed first-run interactive startup rendering the entire changelog when the last-seen marker is missing or unreadable (#5135).
+- Fixed empty local-model stop responses exhausting retries without displaying a user-visible error (#5128).
+- Fixed serialization of BigInt values in tool arguments during session compaction.
+- Fixed GPT-5.6 over-delegating work by centralizing task fan-out and concurrency policy in the system prompt.
+- Fixed session title generation including leaked thinking markup from OpenAI-compatible endpoints (#5122).
+- Fixed bare skill://<name> path-only resolution for bash, grep, and glob to resolve to the skill directory instead of SKILL.md (#5087).
+- Fixed macOS stdio MCP servers missing Apple Events TCC prompts by spawning MCP children via the correct Bun.spawn overload (#5085).
+- Fixed the /move directory picker drawing a narrow 68-column frame inside wider overlays (#5067).
+- Fixed snapcompact inline imaging for GitHub Copilot Business and Enterprise models (#4779).
+- Fixed omp commit agent sessions to ensure valid proposals are committed before teardown, handle missing host outputs with non-zero exits, and prevent forcing GPG_TTY on signing-enabled repositories (#4794).
+
+### Removed
+
+- Removed the bundled plan subagent from available task agents.
+
+## [16.4.2] - 2026-07-10
+
+### Fixed
+
+- Fixed an issue where BigInt values in tool arguments failed to serialize during session compaction.
+- Resolved an issue where GPT-5.6 over-delegated tasks by refining task fan-out and concurrency policies in the system prompt.
+- Fixed a race condition in concurrent MCP OAuth token refreshes across processes, ensuring rotating refresh tokens are only refreshed once and preventing stale token errors from clearing valid credentials.
+
+## [16.4.1] - 2026-07-10
+
+### Changed
+
+- Reduced agent bias against large diffs and refactors in advisor prompts
+- Updated advisor blocker criteria to prioritize explicit user instructions over plan size
+
+### Fixed
+
+- Fixed MCP OAuth dynamic client registration omitting discovered scopes on the RFC 7591 registration body. Providers such as Clerk bind DCR-created clients to only the scopes declared at registration, then reject the subsequent authorize request when it asks for `openid` (from `scopes_supported`). Registration now includes `config.scopes` when present, matching Claude Code and the scopes already sent on authorize.
+
 ## [16.4.0] - 2026-07-10
 
 ### Breaking Changes

@@ -273,7 +273,7 @@ mod tests {
 		d
 	}
 
-	/// `CF_DIBV5` as PixPin (Qt) places it, after arboard's
+	/// `CF_DIBV5` as `PixPin` (Qt) places it, after arboard's
 	/// `maybe_tweak_header` rewrite: a 124-byte `BITMAPV5HEADER` carrying
 	/// `BI_BITFIELDS` compression with the BGRA masks embedded in the header
 	/// and pixels immediately after it. This is the exact buffer shape that

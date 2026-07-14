@@ -4,7 +4,7 @@
 
 import type { Message, ToolCall } from "@oh-my-pi/pi-ai";
 import { type Dialect, getDialectDefinition } from "@oh-my-pi/pi-ai/dialect";
-import { formatGroupedPaths, prompt } from "@oh-my-pi/pi-utils";
+import { formatGroupedPaths, prompt, stringifyJson } from "@oh-my-pi/pi-utils";
 import type { AgentMessage } from "../types";
 import fileOperationsTemplate from "./prompts/file-operations.md" with { type: "text" };
 import summarizationSystemPrompt from "./prompts/summarization-system.md" with { type: "text" };
@@ -309,7 +309,7 @@ function renderToolCalls(calls: ToolCall[]): string {
 	return calls
 		.map(call => {
 			const argsStr = Object.entries(call.arguments as Record<string, unknown>)
-				.map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+				.map(([k, v]) => `${k}=${stringifyJson(v) ?? "null"}`)
 				.join(", ");
 			return `${call.name}(${argsStr})`;
 		})

@@ -32,6 +32,14 @@ type ModelCost = { input: number; output: number; cacheRead: number; cacheWrite:
 type UsageCost = Usage["cost"];
 type CostTokens = Pick<Usage, "input" | "output" | "cacheRead" | "cacheWrite">;
 
+const ZERO_USAGE_COST: UsageCost = {
+	input: 0,
+	output: 0,
+	cacheRead: 0,
+	cacheWrite: 0,
+	total: 0,
+};
+
 interface CostBackfillRow {
 	id: number;
 	provider: string;
@@ -302,11 +310,14 @@ function calculateCatalogCost(provider: string, modelId: string, tokens: CostTok
 }
 
 function resolveStoredCost(stats: MessageStats): UsageCost {
-	if (stats.usage.cost.total !== 0) {
-		return stats.usage.cost;
+	// `usage.cost` was optional in older session files. Although current
+	// MessageStats requires it, parsed JSONL can still carry that legacy shape.
+	const storedCost: UsageCost | undefined = stats.usage.cost;
+	if (storedCost && storedCost.total !== 0) {
+		return storedCost;
 	}
 
-	return calculateCatalogCost(stats.provider, stats.model, stats.usage) ?? stats.usage.cost;
+	return calculateCatalogCost(stats.provider, stats.model, stats.usage) ?? storedCost ?? ZERO_USAGE_COST;
 }
 
 function backfillMissingCatalogCosts(database: Database): void {

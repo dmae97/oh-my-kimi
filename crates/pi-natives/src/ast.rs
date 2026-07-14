@@ -1065,12 +1065,23 @@ fn ast_edit_blocking(
 		'patterns: for (_pattern, rewrite, compiled) in &compiled_rules {
 			for matched in ast.root().find_all(compiled.clone()) {
 				ct.heartbeat()?;
+				let edit = matched.replace_by(rewrite.as_str());
+				// Multiple rules matching the same node with the same output are one
+				// deterministic edit; list and count it once instead of staging a
+				// duplicate that trips the apply-time overlap check.
+				let duplicate = file_changes.iter().any(|entry: &PendingFileChange| {
+					entry.edit.position == edit.position
+						&& entry.edit.deleted_length == edit.deleted_length
+						&& entry.edit.inserted_text == edit.inserted_text
+				});
+				if duplicate {
+					continue;
+				}
 				if changes.len() + file_changes.len() >= max_replacements as usize {
 					limit_reached = true;
 					reached_max_replacements = true;
 					break 'patterns;
 				}
-				let edit = matched.replace_by(rewrite.as_str());
 				let range = matched.range();
 				let start = matched.start_pos();
 				let end = matched.end_pos();
@@ -1332,6 +1343,58 @@ mod tests {
 			Edit::<String> { position: 2, deleted_length: 1, inserted_text: b"y".to_vec() },
 		];
 		assert!(apply_edits(source, &edits).is_err());
+	}
+
+	#[test]
+	fn dedupes_byte_identical_edits() {
+		let source = "abcdef";
+		let edits = vec![
+			Edit::<String> { position: 1, deleted_length: 3, inserted_text: b"x".to_vec() },
+			Edit::<String> { position: 1, deleted_length: 3, inserted_text: b"x".to_vec() },
+		];
+		let output = apply_edits(source, &edits).expect("identical edits should collapse to one");
+		assert_eq!(output, "axef");
+	}
+
+	#[test]
+	fn ast_edit_dedupes_identical_matches_across_rules() {
+		let unique = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.expect("system time should be after UNIX_EPOCH")
+			.as_nanos();
+		let root = std::env::temp_dir().join(format!("pi-ast-dedupe-{unique}"));
+		fs::create_dir_all(&root).expect("temp dedupe dir should be created");
+		let tree = TempTree { root };
+		let file_path = tree.root.join("a.ts");
+		fs::write(&file_path, "const b = foo(bar);\n").expect("temp file a.ts should be written");
+
+		// Both rules match the same call node and produce the byte-identical
+		// replacement; the deterministic edit must apply once, not error as an
+		// ambiguous overlap.
+		let mut rewrites = HashMap::new();
+		rewrites.insert("foo($X)".to_string(), "qux($X)".to_string());
+		rewrites.insert("foo(bar)".to_string(), "qux(bar)".to_string());
+
+		let result = ast_edit_blocking(
+			task::CancelToken::default(),
+			Some(rewrites),
+			Some("ts".to_string()),
+			Some(tree.root.to_string_lossy().into_owned()),
+			None,
+			None,
+			None,
+			Some(false),
+			None,
+			None,
+			None,
+		)
+		.expect("identical duplicate matches should apply cleanly");
+
+		assert_eq!(result.total_replacements, 1, "duplicate match must be counted once");
+		assert_eq!(
+			fs::read_to_string(&file_path).expect("a.ts should be readable"),
+			"const b = qux(bar);\n",
+		);
 	}
 
 	fn make_apply_failure_tree() -> TempTree {

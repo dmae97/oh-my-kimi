@@ -1,14 +1,11 @@
-import type { FetchImpl } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 import type { ModelSpec } from "../types";
-import { discoveryFetch, isRecord } from "../utils";
-import { CODEX_BASE_URL, OPENAI_HEADER_VALUES, OPENAI_HEADERS } from "../wire/codex";
+import { discoveryFetch } from "../utils";
+import { CODEX_BASE_URL, CODEX_CLIENT_VERSION, OPENAI_HEADER_VALUES, OPENAI_HEADERS } from "../wire/codex";
 
 const DEFAULT_MODEL_LIST_PATHS = ["/codex/models", "/models"] as const;
 const DEFAULT_CONTEXT_WINDOW = 272_000;
 const DEFAULT_MAX_TOKENS = 128_000;
-const DEFAULT_CODEX_CLIENT_VERSION = "0.99.0";
-const NPM_CODEX_LATEST_URL = "https://registry.npmjs.org/@openai%2Fcodex/latest";
 const CODEX_REMOTE_COMPACTION = {
 	enabled: true,
 	api: "openai-codex-responses",
@@ -64,8 +61,6 @@ export interface CodexModelDiscoveryOptions {
 	signal?: AbortSignal;
 	/** Optional fetch implementation override for tests. */
 	fetchFn?: typeof fetch;
-	/** Optional registry fetch implementation override for client version lookup. */
-	registryFetchFn?: typeof fetch;
 }
 
 /**
@@ -86,12 +81,8 @@ export async function fetchCodexModels(options: CodexModelDiscoveryOptions): Pro
 	const fetchFn = discoveryFetch(options.fetchFn);
 	const baseUrl = normalizeBaseUrl(options.baseUrl);
 	const paths = normalizePaths(options.paths);
-	const headers = buildCodexHeaders(options);
-	const clientVersion = await resolveCodexClientVersion(
-		options.clientVersion,
-		options.registryFetchFn ?? fetchFn,
-		options.signal,
-	);
+	const clientVersion = normalizeClientVersion(options.clientVersion) ?? CODEX_CLIENT_VERSION;
+	const headers = buildCodexHeaders(options, clientVersion);
 
 	let sawSuccessfulResponse = false;
 	for (const path of paths) {
@@ -156,7 +147,7 @@ function buildModelsUrl(baseUrl: string, path: string, clientVersion: string | u
 	return url.toString();
 }
 
-function buildCodexHeaders(options: CodexModelDiscoveryOptions): Headers {
+function buildCodexHeaders(options: CodexModelDiscoveryOptions, clientVersion: string): Headers {
 	const headers = new Headers(options.headers);
 	headers.set("Authorization", `Bearer ${options.accessToken}`);
 	if (options.accountId && options.accountId.trim().length > 0) {
@@ -164,40 +155,9 @@ function buildCodexHeaders(options: CodexModelDiscoveryOptions): Headers {
 	}
 	headers.set(OPENAI_HEADERS.BETA, OPENAI_HEADER_VALUES.BETA_RESPONSES);
 	headers.set(OPENAI_HEADERS.ORIGINATOR, OPENAI_HEADER_VALUES.ORIGINATOR_CODEX);
+	headers.set(OPENAI_HEADERS.VERSION, clientVersion);
 	headers.set("accept", "application/json");
 	return headers;
-}
-
-async function resolveCodexClientVersion(
-	clientVersion: string | undefined,
-	fetchFn: FetchImpl,
-	signal: AbortSignal | undefined,
-): Promise<string> {
-	const normalizedClientVersion = normalizeClientVersion(clientVersion);
-	if (normalizedClientVersion) {
-		return normalizedClientVersion;
-	}
-	try {
-		const response = await fetchFn(NPM_CODEX_LATEST_URL, {
-			method: "GET",
-			headers: { Accept: "application/json" },
-			signal,
-		});
-		if (!response.ok) {
-			return DEFAULT_CODEX_CLIENT_VERSION;
-		}
-		const payload: unknown = await response.json();
-		if (!isRecord(payload)) {
-			return DEFAULT_CODEX_CLIENT_VERSION;
-		}
-		const npmVersion = normalizeClientVersion(payload.version);
-		return npmVersion ?? DEFAULT_CODEX_CLIENT_VERSION;
-	} catch (error) {
-		if (isAbortError(error)) {
-			throw error;
-		}
-		return DEFAULT_CODEX_CLIENT_VERSION;
-	}
 }
 
 function normalizeClientVersion(value: unknown): string | undefined {
@@ -209,10 +169,6 @@ function normalizeClientVersion(value: unknown): string | undefined {
 		return undefined;
 	}
 	return trimmed;
-}
-
-function isAbortError(error: unknown): error is Error {
-	return error instanceof Error && error.name === "AbortError";
 }
 
 function normalizeCodexModels(payload: unknown, baseUrl: string): ModelSpec<"openai-codex-responses">[] | null {

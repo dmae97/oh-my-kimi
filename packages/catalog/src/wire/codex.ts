@@ -4,10 +4,16 @@
 
 export const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 
+/**
+ * Pinned OpenAI Codex client version (corresponds to @openai/codex package version).
+ */
+export const CODEX_CLIENT_VERSION = "0.144.1";
+
 export const OPENAI_HEADERS = {
 	BETA: "OpenAI-Beta",
 	ACCOUNT_ID: "chatgpt-account-id",
 	ORIGINATOR: "originator",
+	VERSION: "version",
 	SESSION_ID: "session_id",
 	CONVERSATION_ID: "conversation_id",
 	SCOPED_SESSION_ID: "session-id",

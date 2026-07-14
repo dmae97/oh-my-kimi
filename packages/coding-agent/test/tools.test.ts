@@ -1414,6 +1414,7 @@ function b() {
 
 		it("should auto-background long-running commands when enabled", async () => {
 			const deliveries: Array<{ jobId: string; text: string }> = [];
+			const updates: string[] = [];
 			const asyncJobManager = new AsyncJobManager({
 				onJobComplete: async (jobId, text) => {
 					deliveries.push({ jobId, text });
@@ -1435,13 +1436,20 @@ function b() {
 				),
 			);
 
-			const result = await autoBackgroundBashTool.execute("test-call-9-auto-running", {
-				command: "printf 'start\\n'; sleep 0.03; printf 'done\\n'",
-			});
+			const result = await autoBackgroundBashTool.execute(
+				"test-call-9-auto-running",
+				{
+					command: "printf 'start\\n'; sleep 0.03; printf 'done\\n'",
+				},
+				undefined,
+				update => {
+					updates.push(update.content?.find(block => block.type === "text")?.text ?? "");
+				},
+			);
 
 			expect(result.details?.async?.state).toBe("running");
 			expect(result.details?.async?.type).toBe("bash");
-			expect(getTextOutput(result)).toContain("Background job");
+			expect(getTextOutput(result)).toContain("Backgrounded as job");
 			expect(getTextOutput(result)).toContain("start");
 
 			const jobId = result.details?.async?.jobId;
@@ -1450,11 +1458,13 @@ function b() {
 			}
 			const runningJob = asyncJobManager.getJob(jobId);
 			expect(runningJob?.status).toBe("running");
+			const updatesAtBackground = updates.slice();
 			await runningJob?.promise;
 			await asyncJobManager.drainDeliveries({ timeoutMs: 1 });
 			expect(deliveries).toHaveLength(1);
 			expect(deliveries[0]?.jobId).toBe(jobId);
 			expect(deliveries[0]?.text).toContain("done");
+			expect(updates).toEqual(updatesAtBackground);
 			await asyncJobManager.dispose();
 		});
 
@@ -1495,7 +1505,7 @@ function b() {
 
 			expect(result.details?.timeoutSeconds).toBe(0.05);
 			expect(result.details?.async?.state).toBe("running");
-			expect(getTextOutput(result)).toContain("Background job");
+			expect(getTextOutput(result)).toContain("Backgrounded as job");
 			const jobId = result.details?.async?.jobId;
 			if (!jobId) {
 				throw new Error("expected an auto-backgrounded job id");

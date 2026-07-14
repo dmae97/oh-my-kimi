@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [16.5.0] - 2026-07-13
+
+### Fixed
+
+- Fixed a critical issue where ambiguous swaps could silently delete range boundaries.
+- Prevented incorrect auto-repairing of structural closing lines when payload placement is ambiguous.
+- Fixed a bug in stale-hash recovery that could incorrectly relocate edits onto duplicated context after the original target changed.
+
 ## [16.3.3] - 2026-07-02
 
 ### Breaking Changes

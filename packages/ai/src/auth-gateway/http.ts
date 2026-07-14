@@ -5,17 +5,48 @@
  * and peer-resolution logic.
  */
 import { timingSafeEqual as nodeTimingSafeEqual } from "node:crypto";
+import type { Api, AssistantMessage, Model } from "../types";
 
 const JSON_HEADERS = {
 	"Content-Type": "application/json",
 	"X-Content-Type-Options": "nosniff",
 } as const;
 
-export function json(status: number, body: unknown): Response {
+export function json(status: number, body: unknown, headers?: Record<string, string>): Response {
 	return new Response(JSON.stringify(body) ?? "null", {
 		status,
-		headers: JSON_HEADERS,
+		headers: headers ? { ...JSON_HEADERS, ...headers } : JSON_HEADERS,
 	});
+}
+
+/**
+ * Diagnostic response headers for translated inference requests, mirroring the
+ * names existing gateway-aware clients already parse: `x-request-id` /
+ * `request-id` (surfaced as `_request_id` by the OpenAI and Anthropic SDKs,
+ * matches the gateway log line), LiteLLM's model-resolution and cost headers,
+ * and OpenAI's `openai-processing-ms`. Model/request-id headers are always
+ * present; `message` — the final assistant message, available only on
+ * non-streaming responses — adds the computed cost, and `startedAt` the wall
+ * time. Streaming responses send headers before usage exists, so they carry
+ * only the identity headers.
+ */
+export function gatewayResponseHeaders(
+	model: Model<Api>,
+	info: { requestId: string; message?: AssistantMessage; startedAt?: number },
+): Record<string, string> {
+	const headers: Record<string, string> = {
+		"x-request-id": info.requestId,
+		"request-id": info.requestId,
+		"x-litellm-model-id": model.id,
+	};
+	if (model.baseUrl) headers["x-litellm-model-api-base"] = model.baseUrl;
+	if (info.message) headers["x-litellm-response-cost"] = info.message.usage.cost.total.toString();
+	if (info.startedAt !== undefined) {
+		const elapsed = (performance.now() - info.startedAt).toFixed(0);
+		headers["x-litellm-response-duration-ms"] = elapsed;
+		headers["openai-processing-ms"] = elapsed;
+	}
+	return headers;
 }
 
 export function resolvePeer(req: Request): string {
@@ -165,6 +196,8 @@ const CORS_HEADERS: Record<string, string> = {
 	"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 	"Access-Control-Allow-Headers":
 		"authorization, content-type, anthropic-version, anthropic-beta, openai-organization, openai-project, x-stainless-*, x-api-key",
+	"Access-Control-Expose-Headers":
+		"x-request-id, request-id, x-litellm-model-id, x-litellm-model-api-base, x-litellm-response-cost, x-litellm-response-duration-ms, openai-processing-ms",
 	"Access-Control-Max-Age": "86400",
 };
 

@@ -457,9 +457,6 @@ export class TtsrManager {
 				strictness: AstMatchStrictness.Smart,
 				limit: 1,
 			});
-			if (result.parseErrors && result.parseErrors.length > 0) {
-				logger.debug("TTSR ast match reported parse errors", { parseErrors: result.parseErrors });
-			}
 			return result.totalMatches > 0;
 		} catch (error) {
 			logger.warn("TTSR ast match failed, treating as no match", {

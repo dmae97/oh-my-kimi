@@ -34,6 +34,23 @@ export default class Index extends Command {
 		plan: Flags.string({
 			description: "Plan model for architectural planning (or PI_PLAN_MODEL env)",
 		}),
+		prewalk: Flags.boolean({
+			description:
+				"Switch from the active model to a fast/cheap model at the first edit/write after the plan's todo list exists (default off; see prewalk.enabled)",
+		}),
+		"no-prewalk": Flags.boolean({
+			description: "Disable prewalk even if prewalk.enabled is set",
+		}),
+		"prewalk-into": Flags.string({
+			description: 'Target model for prewalk (default the "smol" role)',
+		}),
+		"plan-yolo": Flags.boolean({
+			description:
+				"Force read-only plan mode at start, auto-approve the plan on the model's first resolve call, then switch to --plan-yolo-into to implement it",
+		}),
+		"plan-yolo-into": Flags.string({
+			description: 'Target model for plan-yolo execution (default the "smol" role)',
+		}),
 		provider: Flags.string({
 			description: "Provider to use (legacy; prefer --model)",
 		}),

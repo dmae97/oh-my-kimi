@@ -136,6 +136,32 @@ describe("auto thinking classifier helpers", () => {
 		}
 	});
 
+	it("uses shared tiny-message preprocessing before local classification", async () => {
+		let classifierPrompt = "";
+		const fixture = await createLocalClassifierFixture("qwen2.5-1.5b");
+		vi.spyOn(tinyModelClient, "complete").mockImplementation(async (_modelKey, promptText) => {
+			classifierPrompt = promptText;
+			return "moderate";
+		});
+
+		try {
+			await classifyDifficulty(
+				"\u001b[31minvestigate failure\u001b[0m 54783db3f0f17c74cae81976f0e825a909deb71e\n```\nnoisy code\n```",
+				{
+					settings: fixture.settings,
+					registry: fixture.registry,
+					model: fixture.model,
+				},
+			);
+
+			expect(classifierPrompt).toContain("investigate failure 54783db");
+			expect(classifierPrompt).not.toContain("54783db3f0f17c74cae81976f0e825a909deb71e");
+			expect(classifierPrompt).not.toContain("noisy code");
+		} finally {
+			fixture.cleanup();
+		}
+	});
+
 	it("uses a reasoning-safe online classifier budget when the catalog disables reasoning", async () => {
 		const baseModel = getBundledModel("anthropic", "claude-sonnet-4-6");
 		if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.6 model");

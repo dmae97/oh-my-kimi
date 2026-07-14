@@ -47,6 +47,18 @@ describe("buildNonInteractiveEnv", () => {
 		expect(env.LANG).toBeUndefined();
 		expect(env.LC_ALL).toBeUndefined();
 	});
+
+	it("does not invent a bogus GPG_TTY", () => {
+		const env = buildNonInteractiveEnv(undefined, {}, "linux");
+
+		expect(env).not.toHaveProperty("GPG_TTY");
+	});
+
+	it("preserves per-command GPG_TTY overrides", () => {
+		const env = buildNonInteractiveEnv({ GPG_TTY: "/dev/pts/7" }, {}, "linux");
+
+		expect(env.GPG_TTY).toBe("/dev/pts/7");
+	});
 });
 
 it("keeps launch .env.local values out of child shell config", async () => {

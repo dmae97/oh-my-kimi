@@ -232,5 +232,40 @@ describe("job renderer task-result preview", () => {
 			expect(output).toContain("Job3 running");
 			expect(output).toContain("waiting on 2 of 3 jobs");
 		});
+
+		it("renders agent rows for running agents outside job control", () => {
+			const result = {
+				content: [{ type: "text" as const, text: "" }],
+				details: {
+					jobs: [],
+					agents: [{ id: "Worker", parentId: "Main", activity: "grepping the tree", ageMs: 65_000 }],
+				},
+			};
+			const component = jobToolRenderer.renderResult(
+				result,
+				{ expanded: true, isPartial: false } as Parameters<typeof jobToolRenderer.renderResult>[1],
+				theme,
+				{ list: true },
+			);
+			const output = Bun.stripANSI((component.render(120) as readonly string[]).join("\n"));
+			expect(output).toContain("1 running agent — no jobs");
+			expect(output).toContain("Worker");
+			expect(output).toContain("grepping the tree");
+		});
+
+		it("keeps a sealed bare-poll result visible when it carries an agent roster", () => {
+			const result = {
+				content: [{ type: "text" as const, text: "No running background jobs to wait for." }],
+				details: { jobs: [], agents: [{ id: "Worker", ageMs: 1_000 }] },
+			};
+			const component = jobToolRenderer.renderResult(
+				result,
+				{ expanded: true, isPartial: false } as Parameters<typeof jobToolRenderer.renderResult>[1],
+				theme,
+				{ poll: [] },
+			);
+			const output = Bun.stripANSI((component.render(120) as readonly string[]).join("\n"));
+			expect(output).toContain("Worker");
+		});
 	});
 });

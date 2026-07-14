@@ -4,6 +4,8 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import type { ResolvedRoleModel } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 let settingsState: SettingsTestState | undefined;
@@ -25,7 +27,7 @@ describe("selector setting side effects", () => {
 		const controller = new SelectorController({
 			statusLine: { updateSettings },
 			ui: { requestRender },
-		} as unknown as ConstructorParameters<typeof SelectorController>[0]);
+		} as unknown as InteractiveModeContext);
 
 		Settings.instance.override("git.enabled", false);
 		controller.handleSettingChange("git.enabled", false);
@@ -47,7 +49,7 @@ describe("selector setting side effects", () => {
 		const requestRender = vi.fn();
 		const controller = new SelectorController({
 			ui: { invalidate, requestRender },
-		} as unknown as ConstructorParameters<typeof SelectorController>[0]);
+		} as unknown as InteractiveModeContext);
 
 		controller.handleSettingChange("tui.tight", true);
 
@@ -76,16 +78,31 @@ describe("selector setting side effects", () => {
 		});
 		const showStatus = vi.fn();
 		const showError = vi.fn();
+		let captured: unknown;
 		const controller = new SelectorController({
-			ui: { requestRender: vi.fn(), setFocus: vi.fn() },
-			editorContainer: { clear: vi.fn(), addChild: vi.fn() },
+			ui: {
+				requestRender: vi.fn(),
+				setFocus: vi.fn(),
+				showOverlay: vi.fn((component: unknown) => {
+					captured = component;
+					return { hide: vi.fn() };
+				}),
+				terminal: { rows: 40 },
+			},
+			editorContainer: { clear: vi.fn(), addChild: vi.fn(), children: [] },
 			editor: {},
 			settings,
 			session: {
 				model: undefined,
 				modelRegistry: {
 					getAll: () => [fallback],
+					getAvailable: () => [fallback],
+					getError: () => undefined,
+					refresh: async () => {},
+					refreshProvider: async () => {},
 					getDiscoverableProviders: () => [],
+					getProviderDiscoveryState: () => undefined,
+					authStorage: { hasAuth: () => false },
 				},
 				scopedModels: [{ model: fallback }],
 				getContextUsage: () => undefined,
@@ -95,33 +112,111 @@ describe("selector setting side effects", () => {
 			keybindings: { getKeys: () => [] },
 			showStatus,
 			showError,
-		} as unknown as ConstructorParameters<typeof SelectorController>[0]);
-		let selector: { handleInput(input: string): void; render(width: number): string[] } | undefined;
-		controller.showSelector = create => {
-			const result = create(() => {});
-			selector = result.component as typeof selector;
-		};
+		} as unknown as InteractiveModeContext);
 
 		controller.showModelSelector();
-		if (!selector) throw new Error("Expected model selector to be shown");
-		selector.handleInput("\n");
-		for (let attempt = 0; attempt < 20; attempt++) {
-			const selectedLine = stripVTControlCharacters(selector.render(220).join("\n"))
-				.split("\n")
-				.find(line => {
-					if (!line.includes("Set as DEFAULT retry fallback")) return false;
-					const trimmed = line.trimStart();
-					return trimmed.startsWith("❯") || trimmed.startsWith("▸") || trimmed.startsWith(">");
-				});
-			if (selectedLine) break;
-			selector.handleInput("\x1b[B");
-			if (attempt === 19) throw new Error("Default retry fallback action was not selectable");
+		const hub = captured as
+			| { handleInput(data: string): void; render(width: number): string[]; dispose(): void }
+			| undefined;
+		if (!hub) throw new Error("Expected model hub overlay to be shown");
+		try {
+			hub.handleInput("\n");
+			const frame = stripVTControlCharacters(hub.render(220).join("\n"));
+			expect(frame).toContain("retry-fallback");
+			hub.handleInput("\x1b[D");
+			hub.handleInput("\n");
+			await Promise.resolve();
+
+			expect(showError).not.toHaveBeenCalled();
+			expect(settings.get("retry.fallbackChains")).toEqual({ default: ["test/retry-fallback-model"] });
+			expect(showStatus).toHaveBeenCalledWith("Default fallbacks: test/retry-fallback-model");
+		} finally {
+			hub.dispose();
 		}
-		selector.handleInput("\n");
+	});
+
+	it("applies an @ quick role through the role-switch session API", async () => {
+		const testTheme = await getThemeByName("dark");
+		if (!testTheme) throw new Error("Failed to load dark theme for quick-role picker test");
+		setThemeInstance(testTheme);
+
+		const smol = buildModel({
+			id: "smol-model",
+			name: "smol-model",
+			api: "ollama-chat",
+			baseUrl: "https://example.com",
+			reasoning: false,
+			provider: "test",
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 1024,
+		});
+		const slow = buildModel({
+			id: "slow-model",
+			name: "slow-model",
+			api: "ollama-chat",
+			baseUrl: "https://example.com",
+			reasoning: false,
+			provider: "test",
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 1024,
+		});
+		const quickRoles: ResolvedRoleModel[] = [
+			{ role: "smol", model: smol, explicitThinkingLevel: false },
+			{ role: "slow", model: slow, explicitThinkingLevel: false },
+		];
+		const applyRoleModel = vi.fn(async () => {});
+		const setModelTemporary = vi.fn(async () => {});
+		const showModelCycleTrack = vi.fn();
+		const showError = vi.fn();
+		let picker: { handleInput(data: string): void } | undefined;
+		const settings = Settings.isolated({ cycleOrder: ["smol", "slow"] });
+		const controller = new SelectorController({
+			ui: {
+				requestRender: vi.fn(),
+				setFocus: vi.fn(),
+				showOverlay: vi.fn((component: unknown) => {
+					picker = component as { handleInput(data: string): void };
+					return { hide: vi.fn() };
+				}),
+				terminal: { rows: 40 },
+			},
+			editorContainer: { clear: vi.fn(), addChild: vi.fn(), children: [] },
+			editor: {},
+			settings,
+			session: {
+				model: slow,
+				modelRegistry: {
+					getAll: () => [smol, slow],
+					getAvailable: () => [smol, slow],
+					getError: () => undefined,
+					refresh: async () => {},
+				},
+				scopedModels: [{ model: smol }, { model: slow }],
+				getContextUsage: () => undefined,
+				getRoleModelCycle: () => ({ models: quickRoles, currentIndex: 1 }),
+				applyRoleModel,
+				setModelTemporary,
+			},
+			statusLine: { invalidate: vi.fn() },
+			updateEditorBorderColor: vi.fn(),
+			keybindings: { getKeys: () => [] },
+			showModelCycleTrack,
+			showError,
+		} as unknown as InteractiveModeContext);
+
+		controller.showModelSelector({ temporaryOnly: true });
+		if (!picker) throw new Error("Expected temporary model picker overlay");
+		picker.handleInput("@");
+		picker.handleInput("\n");
 		await Promise.resolve();
 
+		expect(applyRoleModel).toHaveBeenCalledWith(quickRoles[1]);
+		expect(setModelTemporary).not.toHaveBeenCalled();
+		expect(showModelCycleTrack).toHaveBeenCalledTimes(1);
 		expect(showError).not.toHaveBeenCalled();
-		expect(settings.get("retry.fallbackChains")).toEqual({ default: ["test/retry-fallback-model"] });
-		expect(showStatus).toHaveBeenCalledWith("Default fallback model: test/retry-fallback-model");
 	});
 });

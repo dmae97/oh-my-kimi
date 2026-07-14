@@ -1,3 +1,4 @@
+import { stringifyJson as stringifyJsonValue } from "@oh-my-pi/pi-utils";
 import type { AssistantMessage, Message, ToolCall, ToolResultMessage } from "../types";
 import type { DialectRenderOptions, DialectToolResult } from "./types";
 
@@ -15,7 +16,7 @@ export function harmonyRecipient(name: string): string {
 }
 
 export function stringifyJson(value: unknown): string {
-	return JSON.stringify(value) ?? "null";
+	return stringifyJsonValue(value) ?? "null";
 }
 
 export function escapeXmlAttr(value: string): string {

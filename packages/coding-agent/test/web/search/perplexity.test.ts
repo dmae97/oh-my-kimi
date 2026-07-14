@@ -356,9 +356,11 @@ describe("Perplexity OAuth request shape", () => {
 
 		// The consumer ask endpoint has no system slot; prepending the prompt makes
 		// the model refuse ("I don't have web-search tools in this turn").
-		expect(body?.query_str).toBe("quic vs tcp");
-		expect((body?.params as Record<string, unknown>).query_str).toBe("quic vs tcp");
-		expect((body?.params as Record<string, unknown>).model_preference).toBe("experimental");
+		expect(body).toBeDefined();
+		expect(body!.query_str).toBe("quic vs tcp");
+		const params = body!.params as Record<string, unknown>;
+		expect(params.query_str).toBe("quic vs tcp");
+		expect(params.model_preference).toBe("experimental");
 		// The ask endpoint authenticates via the next-auth session cookie; a bearer
 		// header is ignored and silently downgrades to the anonymous `turbo` model.
 		expect(headers?.get("cookie")).toBe("__Secure-next-auth.session-token=test-oauth-token");

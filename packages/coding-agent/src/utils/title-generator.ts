@@ -4,6 +4,7 @@
 import * as path from "node:path";
 
 import { type Api, type AssistantMessage, completeSimple, type Model } from "@oh-my-pi/pi-ai";
+import { StreamMarkupHealing } from "@oh-my-pi/pi-ai/utils/stream-markup-healing";
 import { isTerminalHeadless, logger, prompt } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 
@@ -11,8 +12,9 @@ import { resolveRoleSelection } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import titleMarkerInstruction from "../prompts/system/title-marker-instruction.md" with { type: "text" };
 import titleSystemPrompt from "../prompts/system/title-system.md" with { type: "text" };
+import { formatTitleUserMessage } from "../tiny/message-preproc";
 import { isTinyTitleLocalModelKey, ONLINE_TINY_TITLE_MODEL_KEY } from "../tiny/models";
-import { formatTitleUserMessage, isLowSignalTitleInput, normalizeGeneratedTitle } from "../tiny/text";
+import { isLowSignalTitleInput, normalizeGeneratedTitle } from "../tiny/text";
 import { tinyTitleClient } from "../tiny/title-client";
 
 const TITLE_SYSTEM_PROMPT = prompt.render(titleSystemPrompt);
@@ -32,7 +34,12 @@ const TERMINAL_TITLE_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
 const TITLE_MAX_TOKENS = 1024;
 
 /** Matches the title the model wraps in `<title>...</title>`. */
-const TITLE_MARKER_RE = /<title>([\s\S]*?)<\/title>/i;
+const TITLE_MARKER_GLOBAL_RE = /<title>([\s\S]*?)<\/title>|<title\s*\/>|<title>\s*$/gi;
+const TITLE_VISIBILITY_SENTINEL = "\uE000omp-title-visible\uE000";
+const THINKING_TAG_ENVELOPE_RE = /<(think|thinking|reasoning)>\s*[\s\S]*?<\/\1>/gi;
+const THINKING_FENCE_ENVELOPE_RE = /```(?:thinking|reasoning)\b[\s\S]*?```/gi;
+const LEADING_THINKING_TAG_RE = /^\s*<(think|thinking|reasoning)>\s*[\s\S]*?<\/\1>\s*/i;
+const LEADING_THINKING_FENCE_RE = /^\s*```(?:thinking|reasoning)\b[\s\S]*?```\s*/i;
 
 function getTitleModel(registry: ModelRegistry, settings: Settings, currentModel?: Model<Api>): Model<Api> | undefined {
 	const availableModels = registry.getAvailable();
@@ -241,12 +248,69 @@ function extractGeneratedTitle(contentBlocks: AssistantMessage["content"]): stri
 			textTitle += content.text;
 		}
 	}
-	// Stay lenient: prefer the marker when the model closed it, otherwise
-	// accept a plain sentence after stripping any stray/unclosed tag fragment
-	// (e.g. output truncated before the closing tag).
-	const marker = TITLE_MARKER_RE.exec(textTitle);
-	const candidate = marker ? marker[1].trim() : textTitle.replace(/<\/?title>/gi, "").trim();
-	return unwrapJsonTitle(candidate);
+	// Stay lenient: prefer the first closed title marker in visible text, then
+	// fall back to a plain sentence after stripping only known leading leaked
+	// thinking envelopes plus any stray/unclosed title tag fragment.
+	const markedTitle = extractVisibleMarkedTitle(textTitle);
+	const cleanedTextTitle =
+		markedTitle ??
+		stripLeadingLeakedThinkingMarkup(textTitle)
+			.replace(/<\/?title>/gi, "")
+			.trim();
+	return unwrapJsonTitle(cleanedTextTitle);
+}
+
+function extractVisibleMarkedTitle(text: string): string | undefined {
+	TITLE_MARKER_GLOBAL_RE.lastIndex = 0;
+	let marker: RegExpExecArray | null = TITLE_MARKER_GLOBAL_RE.exec(text);
+	while (marker !== null) {
+		const content = marker[1];
+		if (isVisibleTitleMarker(text, marker.index)) return content?.trim() ?? "";
+		marker = TITLE_MARKER_GLOBAL_RE.exec(text);
+	}
+	return undefined;
+}
+
+function isVisibleTitleMarker(text: string, markerIndex: number): boolean {
+	if (isInsideKnownThinkingEnvelope(text, markerIndex)) return false;
+	return stripLeakedThinkingMarkup(`${text.slice(0, markerIndex)}${TITLE_VISIBILITY_SENTINEL}`).endsWith(
+		TITLE_VISIBILITY_SENTINEL,
+	);
+}
+
+function isInsideKnownThinkingEnvelope(text: string, index: number): boolean {
+	return (
+		isInsideEnvelopeMatchedBy(THINKING_TAG_ENVELOPE_RE, text, index) ||
+		isInsideEnvelopeMatchedBy(THINKING_FENCE_ENVELOPE_RE, text, index)
+	);
+}
+
+function isInsideEnvelopeMatchedBy(pattern: RegExp, text: string, index: number): boolean {
+	pattern.lastIndex = 0;
+	let marker = pattern.exec(text);
+	while (marker !== null) {
+		const start = marker.index;
+		const end = start + marker[0].length;
+		if (index > start && index < end) return true;
+		if (start > index) return false;
+		marker = pattern.exec(text);
+	}
+	return false;
+}
+
+function stripLeadingLeakedThinkingMarkup(text: string): string {
+	let current = text;
+	while (true) {
+		const withoutTag = current.replace(LEADING_THINKING_TAG_RE, "");
+		const withoutFence = withoutTag.replace(LEADING_THINKING_FENCE_RE, "");
+		if (withoutFence === current) return current;
+		current = withoutFence;
+	}
+}
+
+function stripLeakedThinkingMarkup(text: string): string {
+	const healer = new StreamMarkupHealing({ pattern: "thinking" });
+	return healer.feed(text) + healer.flushPending();
 }
 
 /**

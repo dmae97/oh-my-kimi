@@ -151,6 +151,14 @@ fn score_fuzzy_path(
 	score
 }
 
+/// Directory depth of a relative match path (trailing slash ignored).
+/// Used as a sort tie-break so equally scored matches surface shallow paths
+/// first — `@scripts` should rank cwd-root `scripts/` above
+/// `packages/*/scripts/`.
+fn path_depth(path: &str) -> usize {
+	path.trim_end_matches('/').matches('/').count()
+}
+
 struct FuzzyFindConfig {
 	query:       String,
 	path:        String,
@@ -228,7 +236,12 @@ fn fuzzy_find_sync(config: FuzzyFindConfig, ct: task::CancelToken) -> Result<Fuz
 		.collect();
 	let mut scored = score_entries(&entries, &query_lower, &normalized_query, &query_chars, &ct)?;
 
-	scored.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
+	scored.sort_by(|a, b| {
+		b.score
+			.cmp(&a.score)
+			.then_with(|| path_depth(&a.path).cmp(&path_depth(&b.path)))
+			.then_with(|| a.path.cmp(&b.path))
+	});
 	let total_matches = crate::utils::clamp_u32(scored.len() as u64);
 	let matches = scored.into_iter().take(max_results).collect();
 	Ok(FuzzyFindResult { matches, total_matches })
@@ -329,6 +342,43 @@ mod tests {
 				.iter()
 				.map(|entry| entry.path.as_str())
 				.collect::<Vec<_>>()
+		);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn fuzzy_find_ranks_shallow_paths_first_on_score_tie() {
+		let root = TempDirGuard::new();
+		// Same-named directories at different depths all score identically
+		// (exact basename match + directory bonus); the shallow one must win.
+		fs::create_dir_all(root.path().join("scripts")).expect("create root scripts dir");
+		fs::create_dir_all(root.path().join(".omp/skills/opt/scripts"))
+			.expect("create hidden nested scripts dir");
+		fs::create_dir_all(root.path().join("packages/ai/scripts"))
+			.expect("create nested scripts dir");
+
+		let result = fuzzy_find_sync(
+			FuzzyFindConfig {
+				query:       "scripts".to_string(),
+				path:        root.path().to_string_lossy().into_owned(),
+				hidden:      Some(true),
+				gitignore:   Some(false),
+				max_results: Some(10),
+				cache:       Some(false),
+			},
+			task::CancelToken::default(),
+		)
+		.expect("fuzzy find succeeds");
+
+		let paths: Vec<&str> = result
+			.matches
+			.iter()
+			.map(|entry| entry.path.as_str())
+			.collect();
+		assert_eq!(
+			paths.first(),
+			Some(&"scripts/"),
+			"expected cwd-root scripts/ to rank first, got {paths:?}"
 		);
 	}
 }

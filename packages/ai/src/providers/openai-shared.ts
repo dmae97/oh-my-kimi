@@ -27,6 +27,7 @@ import {
 	logger,
 	parseStreamingJson,
 	parseStreamingJsonThrottled,
+	stringifyJson,
 	structuredCloneJSON,
 } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
@@ -1356,6 +1357,65 @@ export function convertResponsesInputContent(
 	return normalizedContent.length > 0 ? normalizedContent : undefined;
 }
 
+/**
+ * Map freeform custom-tool wire names back to the internal tool name for
+ * providers that only accept function_call / function_call_output.
+ * Built once per request; `apply_patch` → `edit` is the OMP default.
+ */
+function buildCustomToolWireNameMap(tools: readonly Tool[] | undefined): ReadonlyMap<string, string> | undefined {
+	if (!tools?.length) return undefined;
+	const map = new Map<string, string>();
+	for (const tool of tools) {
+		if (tool.customWireName) map.set(tool.customWireName, tool.name);
+	}
+	return map.size > 0 ? map : undefined;
+}
+
+function resolveReplayCustomToolName(wireName: string, wireNameMap: ReadonlyMap<string, string> | undefined): string {
+	return wireNameMap?.get(wireName) ?? (wireName === "apply_patch" ? "edit" : wireName);
+}
+
+/**
+ * Downgrade OpenAI-only custom tool items when the target model does not
+ * advertise freeform custom tools (`applyPatchToolType === "freeform"`).
+ * No-op (returns the same array reference) when freeform is supported.
+ */
+function adaptResponsesReplayItemsForModel(
+	input: ResponseInput,
+	supportsCustomToolCalls: boolean,
+	wireNameMap: ReadonlyMap<string, string> | undefined,
+): ResponseInput {
+	if (supportsCustomToolCalls) return input;
+
+	let changed = false;
+	const adapted: ResponseInput = [];
+	for (const item of input) {
+		if (item.type === "custom_tool_call") {
+			changed = true;
+			adapted.push({
+				type: "function_call",
+				...(item.id ? { id: item.id } : {}),
+				call_id: item.call_id,
+				name: resolveReplayCustomToolName(item.name, wireNameMap),
+				arguments: JSON.stringify({ input: item.input }),
+				...(item.namespace ? { namespace: item.namespace } : {}),
+			});
+			continue;
+		}
+		if (item.type === "custom_tool_call_output") {
+			changed = true;
+			adapted.push({
+				type: "function_call_output",
+				call_id: item.call_id,
+				output: item.output,
+			});
+			continue;
+		}
+		adapted.push(item);
+	}
+	return changed ? adapted : input;
+}
+
 export interface BuildResponsesInputOptions<TApi extends Api> {
 	model: Model<TApi>;
 	context: Context;
@@ -1380,6 +1440,15 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 		messages.push({ role: options.systemRole as "system" | "developer", content: systemPrompt });
 	}
 
+	// Compat is resolved by the catalog (e.g. Copilot / xai-oauth reject
+	// `detail: "original"`). Do not re-branch on provider id here.
+	const supportsImageDetailOriginal = options.supportsImageDetailOriginal;
+	// Freeform custom tools (`custom_tool_call`) only when the catalog says so;
+	// same gate as tool conversion (`applyPatchToolType === "freeform"`).
+	const supportsCustomToolCalls = options.model.applyPatchToolType === "freeform";
+	const customToolWireNameMap = supportsCustomToolCalls
+		? undefined
+		: buildCustomToolWireNameMap(options.context.tools);
 	let knownCallIds = new Set<string>();
 	const customCallIds = new Set<string>();
 	const transformedMessages = transformMessages(
@@ -1407,7 +1476,12 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 				}) ??
 					false);
 			if (historyItems && shouldReplayPayloadItems) {
-				messages.push(...sanitizeOpenAIResponsesHistoryItemsForReplay(filterReasoning(historyItems)));
+				const sanitizedItems = sanitizeOpenAIResponsesHistoryItemsForReplay(filterReasoning(historyItems), {
+					supportsImageDetailOriginal,
+				});
+				messages.push(
+					...adaptResponsesReplayItemsForModel(sanitizedItems, supportsCustomToolCalls, customToolWireNameMap),
+				);
 				knownCallIds = collectKnownCallIds(messages);
 				for (const id of collectCustomCallIds(messages)) customCallIds.add(id);
 				msgIndex++;
@@ -1416,7 +1490,7 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 			const content = convertResponsesInputContent(
 				msg.content,
 				options.model.input.includes("image"),
-				options.supportsImageDetailOriginal,
+				supportsImageDetailOriginal,
 			);
 			if (!content) continue;
 			messages.push({
@@ -1444,9 +1518,17 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 			const historyItems = providerPayload?.items;
 			let suppressHiddenEmptyFallback = false;
 			if (historyItems) {
-				const sanitizedHistoryItems = sanitizeOpenAIResponsesAssistantHistoryItemsForReplay(
+				const rawSanitizedHistoryItems = sanitizeOpenAIResponsesAssistantHistoryItemsForReplay(
 					filterReasoning(historyItems),
+					{ supportsImageDetailOriginal },
 				);
+				const sanitizedHistoryItems = rawSanitizedHistoryItems
+					? adaptResponsesReplayItemsForModel(
+							rawSanitizedHistoryItems,
+							supportsCustomToolCalls,
+							customToolWireNameMap,
+						)
+					: undefined;
 				if (nativeReplayEnabled && sanitizedHistoryItems) {
 					if (providerPayload?.dt) {
 						messages.push(...sanitizedHistoryItems);
@@ -1469,6 +1551,8 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 				suppressHiddenEmptyFallback ? false : includeThinkingSignatures,
 				customCallIds,
 				options.preserveAssistantMessageIds,
+				supportsCustomToolCalls,
+				customToolWireNameMap,
 			);
 			const outputItems = suppressHiddenEmptyFallback
 				? sanitizeOpenAIResponsesAssistantFallbackItemsForReplay(convertedOutputItems)
@@ -1481,9 +1565,10 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 				msg,
 				options.model,
 				options.strictResponsesPairing,
-				options.supportsImageDetailOriginal,
+				supportsImageDetailOriginal,
 				knownCallIds,
 				customCallIds,
+				supportsCustomToolCalls,
 			);
 		}
 		msgIndex++;
@@ -1516,6 +1601,8 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 	includeThinkingSignatures = true,
 	customCallIds?: Set<string>,
 	preserveMessageIds = false,
+	supportsCustomToolCalls = true,
+	customToolWireNameMap?: ReadonlyMap<string, string>,
 ): ResponseInput {
 	const outputItems: ResponseInput = [];
 	let unsignedTextBlocks = 0;
@@ -1587,7 +1674,7 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 			itemId = undefined;
 		}
 		knownCallIds.add(normalized.callId);
-		if (block.customWireName) {
+		if (block.customWireName && supportsCustomToolCalls) {
 			const rawInput = typeof block.arguments?.input === "string" ? block.arguments.input : "";
 			customCallIds?.add(normalized.callId);
 			outputItems.push({
@@ -1599,12 +1686,16 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 			} as ResponseInput[number]);
 			continue;
 		}
+		const functionName =
+			block.customWireName && !supportsCustomToolCalls
+				? resolveReplayCustomToolName(block.customWireName, customToolWireNameMap)
+				: block.name;
 		outputItems.push({
 			type: "function_call",
 			...(itemId ? { id: itemId } : {}),
 			call_id: normalized.callId,
-			name: block.name,
-			arguments: JSON.stringify(block.arguments),
+			name: functionName,
+			arguments: stringifyJson(block.arguments) ?? "null",
 		});
 	}
 
@@ -1619,6 +1710,7 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 	supportsImageDetailOriginal: boolean,
 	knownCallIds: ReadonlySet<string>,
 	customCallIds?: ReadonlySet<string>,
+	supportsCustomToolCalls = true,
 ): void {
 	const supportsImages = model.input.includes("image");
 	const textResult = toolResult.content
@@ -1628,12 +1720,19 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 	const hasImages = toolResult.content.some((block): block is ImageContent => block.type === "image");
 	const omittedImages = hasImages && !supportsImages;
 	const normalized = normalizeResponsesToolCallId(toolResult.toolCallId);
+	// "(see attached image)" is only truthful when the result actually carries
+	// images (they ride as a separate user message on the Responses API). A
+	// genuinely empty text result (empty file read, silent tool) must stay
+	// empty — the placeholder sent models chasing an attachment that never
+	// existed.
 	const output = (
 		omittedImages
 			? joinTextWithImagePlaceholder(textResult, true)
 			: textResult.length > 0
 				? textResult
-				: "(see attached image)"
+				: hasImages
+					? "(see attached image)"
+					: ""
 	).toWellFormed();
 	if (strictResponsesPairing && !knownCallIds.has(normalized.callId)) {
 		// Strict backends (Azure, Copilot) reject unpaired outputs outright, but
@@ -1648,7 +1747,7 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 		} as ResponseInput[number]);
 		return;
 	}
-	if (customCallIds?.has(normalized.callId)) {
+	if (supportsCustomToolCalls && customCallIds?.has(normalized.callId)) {
 		messages.push({
 			type: "custom_tool_call_output",
 			call_id: normalized.callId,
