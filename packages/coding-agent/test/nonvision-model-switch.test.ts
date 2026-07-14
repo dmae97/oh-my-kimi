@@ -47,7 +47,7 @@ describe("model switch from vision to text-only", () => {
 
 				const messages = text.calls.at(-1)?.context.messages ?? [];
 				expect(
-					messages.flatMap(message => (Array.isArray(message.content) ? message.content : [])),
+					messages.flatMap<unknown>(message => (Array.isArray(message.content) ? message.content : [])),
 				).not.toContainEqual(expect.objectContaining({ type: "image" }));
 			} finally {
 				await session.dispose();
