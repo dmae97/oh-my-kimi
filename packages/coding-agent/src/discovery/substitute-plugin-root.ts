@@ -50,7 +50,7 @@ export function resolvePluginStdioPaths(
 	configDir: string,
 ): { command?: string; cwd?: string } {
 	const resolved: { command?: string; cwd?: string } = {};
-	if (config.cwd !== undefined) {
+	if (typeof config.cwd === "string") {
 		resolved.cwd = path.isAbsolute(config.cwd) ? config.cwd : path.resolve(configDir, config.cwd);
 	}
 	if (config.command !== undefined) {

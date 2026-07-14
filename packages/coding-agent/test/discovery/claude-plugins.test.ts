@@ -481,6 +481,7 @@ describe("listClaudePluginRoots", () => {
 				mcpServers: {
 					"computer-use": { command: "./bin/SkyComputerUseClient", args: ["mcp"], cwd: "." },
 					bare: { command: "npx", args: ["-y", "@some/mcp"] },
+					invalidCwd: { command: "npx", cwd: 1 },
 				},
 			}),
 		);
@@ -492,12 +493,15 @@ describe("listClaudePluginRoots", () => {
 		});
 		const local = result.all.find(item => item.name === "computer-use:computer-use");
 		const bare = result.all.find(item => item.name === "computer-use:bare");
+		const invalidCwd = result.all.find(item => item.name === "computer-use:invalidCwd");
 
 		expect(local?.command).toBe(path.join(pluginPath, "bin", "SkyComputerUseClient"));
 		expect(local?.cwd).toBe(pluginPath);
 		// Bare executables must keep resolving through PATH, not the plugin dir.
 		expect(bare?.command).toBe("npx");
 		expect(bare?.cwd).toBeUndefined();
+		expect(invalidCwd?.command).toBe("npx");
+		expect(invalidCwd?.cwd).toBeUndefined();
 	});
 
 	test("reads slash commands directory from plugin manifest slash-commands field", async () => {
