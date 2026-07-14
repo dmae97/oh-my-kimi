@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed OpenAI Codex discovery to replace stale bundled models with the authenticated account catalog, preventing unsupported models from remaining selectable. ([#5364](https://github.com/can1357/oh-my-pi/issues/5364))
+
 ## [16.4.3] - 2026-07-11
 
 ### Fixed
