@@ -32,6 +32,7 @@
 
 ### Fixed
 
+- Fixed `/review` aborting entirely when GitHub rejects a pull request's aggregate diff with HTTP 406 for exceeding the 20,000-line limit: `gh pr diff` now falls back to the paginated per-file endpoint (`/repos/{owner}/{repo}/pulls/{n}/files`) and reassembles a synthetic unified diff, keeping files with omitted (binary/too-large) patches visible with an explicit marker ([#5350](https://github.com/can1357/oh-my-pi/issues/5350))
 - Fixed `/tan` and `/fork` clones cold-missing the provider prompt cache: the per-turn supersede/useless-result prune rewrote the live context without persisting it, so file-based forks and resume rebuilt a divergent (un-pruned) prefix and re-wrote the entire cache
 - Fixed `/tan` pinning the clone's prompt-cache key to the parent's session id instead of the parent's effective cache key, dropping shard affinity when the parent was itself a fork or tan
 - Fixed inconsistent history rendering when toggling the display setting for compacted items
