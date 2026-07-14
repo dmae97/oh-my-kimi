@@ -172,6 +172,7 @@
 - Fixed OAuth `launchUrl` advertisement for flows whose redirect never returns to the local callback server: custom-scheme redirects (e.g. GitLab Duo's `vscode://` URI, which `new URL` parses without complaint) and fixed non-loopback hosts no longer receive a `http://localhost:<port>/launch` copy target that misrepresents the callback endpoint and resolves nowhere for remote users.
 - Codex load balancing: clear stale persisted and in-memory usage-limit blocks for an `openai-codex` account when a fresh live usage report shows it is allowed and below all limits, including broker-backed gateway snapshots, so traffic returns to recovered accounts instead of funneling to one sibling.
 - Fixed Cursor `max_mode` requests to send discovered max-mode metadata on both model payload fields. ([#4797](https://github.com/can1357/oh-my-pi/issues/4797))
+- Fixed `auth-broker` config discovery ignoring nested `auth.broker.url` / `auth.broker.token` YAML keys. `readConfigYaml` only read the literal flat dotted key, so standard nested YAML was silently dropped; it now resolves both nested and flat forms (nested wins). ([#4734](https://github.com/can1357/oh-my-pi/issues/4734))
 
 ## [16.3.11] - 2026-07-06
 
