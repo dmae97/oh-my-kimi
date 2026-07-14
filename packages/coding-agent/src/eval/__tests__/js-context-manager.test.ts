@@ -371,20 +371,20 @@ describe.skipIf(process.platform === "win32")("JavaScript eval process isolation
 		await disposeAllVmContexts();
 	});
 
-	it("runs spawned commands under an isolated POSIX session", async () => {
+	it("runs spawned commands in the isolated POSIX process group", async () => {
 		using tempDir = TempDir.createSync("@omp-js-process-isolation-");
 		const session = makeSession(tempDir.path());
 		const evalSessionId = `js-isolation:${crypto.randomUUID()}`;
 		const result = await executeJs(
 			[
-				`const child = Bun.spawn(["/bin/sh", "-c", 'sid=$(ps -o sid= -p $$); printf "%s %s\\n" "$sid" "$PPID"'], { stdout: "pipe" });`,
+				`const child = Bun.spawn(["/bin/sh", "-c", 'pgid=$(ps -o pgid= -p $$); printf "%s %s\\n" "$pgid" "$PPID"'], { stdout: "pipe" });`,
 				"return await new Response(child.stdout).text();",
 			].join("\n"),
 			{ cwd: tempDir.path(), sessionId: evalSessionId, session },
 		);
-		const [sessionId, parentProcessId] = result.output.trim().split(/\s+/).map(Number);
+		const [processGroupId, parentProcessId] = result.output.trim().split(/\s+/).map(Number);
 		expect(parentProcessId).not.toBe(process.pid);
-		expect(sessionId).toBe(parentProcessId);
+		expect(processGroupId).toBe(parentProcessId);
 
 		await executeJs("var saved = 41; function increment(value) { return value + 1; }", {
 			cwd: tempDir.path(),
