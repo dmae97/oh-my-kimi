@@ -150,6 +150,9 @@
 ### Fixed
 
 - Fixed internal-URL autocomplete (`agent://`, `skill://`, `omp://`, etc.) not triggering inside slash command arguments: `allowArgs: true` commands returned the base provider's `null` result directly, short-circuiting the internal-URL fallthrough. Completion now falls through to internal-URL suggestions when a command has no argument completion (or its `getArgumentCompletions` yields no match), while `#` prompt-action tokens stay literal inside slash arguments. ([#5263](https://github.com/can1357/oh-my-pi/issues/5263))
+### Fixed
+
+- Fixed the browser tool hanging indefinitely at the "Closing tab" phase when the headless Chromium process is wedged (a Windows failure mode): `disposeBrowserHandle` awaited Puppeteer's `browser.close()` with no timeout, so a process that never exits froze tab cleanup forever. The dispose now caps the close at 5s and force-kills the Chromium process tree on timeout so the tool call always releases. ([#5260](https://github.com/can1357/oh-my-pi/issues/5260))
 
 ## [16.4.6] - 2026-07-12
 
