@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Cursor OAuth and access-token usage reporting to `omp usage` via Cursor's account usage endpoint.
+
 ### Fixed
 
 - Fixed OpenAI Responses `content_filter` terminal events being auto-retried as provider finish errors; content-filtered turns now remain hard failures without the same-model retry loop.
@@ -50,7 +54,6 @@
 
 - Added asynchronous `invalidateUsageCache` method to clear cached usage reports
 - Added support for cross-service usage cache invalidation between AuthStorage and AuthBroker
-- Added Cursor OAuth and access-token usage reporting to `omp usage` via Cursor's account usage endpoint.
 
 ### Fixed
 
