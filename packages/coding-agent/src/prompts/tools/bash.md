@@ -1,72 +1,25 @@
-Runs commands in the embedded shell — terminal ops: git, bun, cargo, python.
+Runs commands in the embedded shell. NOT full GNU Bash — invokes real binaries with simple args.
 
-# When to use bash — and when not to
-
-The shell invokes **real binaries** with simple args. It is NOT full GNU Bash.
-
-Use bash ONLY for: a single binary call, or one short pipeline that COMPUTES a fact and does not depend on shell-specific regex/quoting (`wc -l`, `sort | uniq -c`, `comm`, `diff`, a checksum, `git status`).
-{{#if hasLaunch}}Long-running service, watcher, debugger, REPL, or process needing later input? MUST use `launch`, not bash.{{/if}}
-
-{{#if hasEval}}Anything below → `eval` cell, not bash:
-- Inline interpreter scripts (`-e`/`-c`/`--eval`) when an eval runtime exists for that language
-- Heredocs (`<<EOF`), `while`/`for`/`if`/`case` shell control flow
-- `$(…)` command substitution nested inside another command
-- Pipelines with more than two stages, or stages that need control flow or quote/JSON escaping
-- Multiline commands, `&&`-chains mixing control flow
-- Quote/JSON escaping that fights the shell
-{{else}}Anything below means you are writing a shell program, not invoking one. Prefer a purpose-built tool, a checked-in script, or a single repo command instead:
-- Inline interpreter scripts (`-e`/`-c`/`--eval`)
-- Heredocs (`<<EOF`), `while`/`for`/`if`/`case` shell control flow
-- `$(…)` command substitution nested inside another command
-- Pipelines with more than two stages, or stages that need control flow or quote/JSON escaping
-- Multiline commands, `&&`-chains mixing control flow
-- Quote/JSON escaping that fights the shell
-{{/if}}
-{{#if hasGrep}}- GNU grep BRE extensions are not guaranteed in the embedded shell: use `grep -E 'json|tool'` for alternation instead of `grep 'json\|tool'`; use the built-in `grep` tool with `pattern: "json|tool"` (Rust regex, so `\bword\b` works there){{#if hasEval}}, or `eval` for exact text processing{{/if}}.{{else}}- GNU grep BRE extensions are not guaranteed in the embedded shell: use `grep -E 'json|tool'` for alternation instead of `grep 'json\|tool'`{{#if hasEval}}, or use `eval` for exact text processing{{/if}}.{{/if}}
+Use ONLY for: single binary call or short pipeline that COMPUTES a fact (`wc -l`, `sort | uniq -c`, `comm`, `diff`, checksum, `git status`).
+{{#if hasLaunch}}Services, watchers, debuggers, REPLs → `launch`.{{/if}}
+{{#if hasEval}}Inline scripts, heredocs, shell control flow, `$(…)`, multi-stage pipelines, `&&`-chains, quote/JSON escaping → `eval` cells.{{else}}Inline scripts, heredocs, shell control flow, `$(…)`, multi-stage pipelines, `&&`-chains → purpose-built tool or checked-in script.{{/if}}
+GNU grep BRE not guaranteed: use `grep -E 'a|b'` not `grep 'a\|b'`{{#if hasGrep}}; prefer built-in `grep` tool{{/if}}.
 
 <instruction>
-- `cwd` sets the working dir, not `cd dir && …`
-- `env: { NAME: "…" }` for multiline / quote-heavy / untrusted values; reference `$NAME`
-- Quote expansions (`"$NAME"`) to preserve exact content
-- `pty: true` only when the command needs a real terminal (`sudo`, `ssh` needing input); default `false`
-- `;` only when later commands should run despite earlier failures
-- Multiple bash calls per message run concurrently. NEVER split order-dependent commands across parallel calls — chain with `&&` in one call.
-- Internal URIs (`skill://`, `agent://`, …) auto-resolve to FS paths
-{{#if hasEval}}- Need exact pipeline semantics (`cmd | head`, multi-stage filtering) or output truncation? Prefer `eval` and process the stream directly.{{else}}- Need exact pipeline semantics (`cmd | head`, multi-stage filtering) or output truncation? Use a checked-in script, purpose-built tool, or single command that owns the output shape.{{/if}}
-{{#if asyncEnabled}}
-- `async: true` defers reporting for finite commands that need no later input; completion arrives as a follow-up.
-{{/if}}
+- `cwd` sets working dir (not `cd dir && …`). `env: { NAME: "…" }` for multiline/quote-heavy values; `"$NAME"` to expand.
+- `pty: true` only for real terminal needs (`sudo`, `ssh`); default `false`.
+- Multiple calls run concurrently; NEVER split order-dependent commands — chain with `&&` in one call (`;` only to continue past failure).
+- Internal URIs (`skill://`, `agent://`, …) auto-resolve to FS paths.
+{{#if asyncEnabled}}- `async: true` defers reporting for finite commands needing no later input.{{/if}}
 </instruction>
 
 <critical>
-{{#if hasEval}}- The embedded shell invokes real binaries with simple args; it is NOT full GNU Bash and NOT a scripting surface. Loops, conditionals, heredocs, inline interpreter scripts (`-e`/`-c`/`--eval`) when an eval runtime exists, several piped stages, exact pipeline semantics, or quote/JSON escaping mean you're writing a program → use `eval` cells: restartable, stateful, and free of shell-quoting traps.{{else}}- The embedded shell invokes real binaries with simple args; it is NOT full GNU Bash and NOT a scripting surface. Loops, conditionals, heredocs, inline interpreter scripts, several piped stages, exact pipeline semantics, or quote/JSON escaping mean you're writing a shell program; use a purpose-built tool or checked-in script instead.{{/if}}
-{{#if hasGrep}}- NEVER shell out to search content or files: `grep/rg` → `grep`.{{else}}- Avoid shelling out for broad content search; use an active search/read tool when one is available.{{/if}}
-{{#if hasRead}}{{#if hasGlob}}- NEVER use `ls` or `find` to list or locate files — `ls` → `read` (a directory path lists entries), `find` → the `glob` tool (globbing). This is non-negotiable, even for a single quick listing.{{else}}- Prefer `read` for known file and directory reads. Only use shell listing when no file-listing tool is active.{{/if}}{{else}}{{#if hasGlob}}- Prefer `glob` for file discovery; avoid `find` when `glob` is active.{{else}}- If no file read/listing tool is active, keep shell inspection narrow and state that limitation.{{/if}}{{/if}}
-- Avoid head/tail/redirections: stderr already merged; long output auto-truncated, FULL capture kept at `artifact://<id>`.
-{{#if hasLaunch}}- NEVER launch daemons, watchers, dev servers, debuggers, or REPLs through bash/background shell syntax — use `launch`.{{/if}}
+{{#if hasGrep}}- NEVER shell out to search: `grep`/`rg` → built-in `grep`.{{/if}}
+{{#if hasRead}}{{#if hasGlob}}- NEVER use `ls` or `find` — `ls` → `read`, `find` → `glob`. NON-NEGOTIABLE.{{/if}}{{/if}}
+- Avoid head/tail/redirections: stderr merged, output auto-truncated, full capture at `artifact://<id>`.
+{{#if hasLaunch}}- NEVER launch daemons/watchers/servers/debuggers/REPLs through bash — use `launch`.{{/if}}
 </critical>
 
-<output>
-- Returns output (stderr merged into stdout); exit code shown on non-zero exit.
-- Truncated output → `artifact://<id>` (linked in metadata).
-</output>
-
-{{#if asyncEnabled}}
-# Timeout and async
-
-- `timeout` is seconds; nonzero values are clamped to `1..3600` and the process is killed on elapse. Set `timeout: 0` only for finite commands whose completion is cancellation-owned.
-- `async: true` defers only reporting; it does NOT extend a nonzero timeout.
-{{#if hasLaunch}}- Need a service, watcher, debugger, REPL, or later stdin? MUST use `launch`. NEVER use `cmd &`, `nohup`, or async bash as a process supervisor.{{else}}- Need a long-running process or >3600s run? Use an external process supervisor; avoid detached shell jobs you cannot later observe or stop.{{/if}}
-{{/if}}
-{{#if autoBackgroundEnabled}}
-
-## Auto-background
-
-- A long-running foreground call may convert to a background job; the final result arrives as a follow-up tool call. NOT a failure — don't retry or wait synchronously.
-- Need the result inline (e.g. piping into another command)? Raise `timeout` above expected duration{{#if asyncEnabled}}, or set `async: true` up front{{/if}}.
-{{/if}}
-
-# Output minimizer
-
-- Long output truncated; test/lint runner output filtered to failures. When visible text changed, a `[raw output: artifact://<id>]` footer links the full capture — read it if a run looks suspicious or you need exact bytes.
-- No footer = what you see is exactly what the command emitted.
+{{#if asyncEnabled}}- `timeout`: nonzero clamped 1–3600, killed on elapse. `0` only for cancellation-owned. `async: true` defers reporting only, doesn't extend timeout.{{/if}}
+{{#if autoBackgroundEnabled}}- Long foreground calls may auto-background; result arrives as follow-up — NOT a failure. Need inline? Raise timeout{{#if asyncEnabled}} or `async: true`{{/if}}.{{/if}}
+- Long output truncated, test/lint filtered to failures. `[raw output: artifact://<id>]` footer links full capture. No footer = what you see is exact output.
