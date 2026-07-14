@@ -471,13 +471,8 @@ function isResponseCueLine(line: string): boolean {
 function isAwaitingUserAnswer(message: AssistantMessage): boolean {
 	const text = assistantText(message);
 	if (!text) return false;
-	const tailLines = text
-		.split(/\r?\n/)
-		.map(line => line.trim())
-		.filter(Boolean)
-		.slice(-6);
-	const lastLine = tailLines.at(-1);
-	return tailLines.some(isQuestionPromptLine) || (lastLine !== undefined && isResponseCueLine(lastLine));
+	const lastLine = text.split(/\r?\n/).at(-1)?.trim();
+	return lastLine !== undefined && (isQuestionPromptLine(lastLine) || isResponseCueLine(lastLine));
 }
 /** `customType` for the hidden mid-run todo nudge; `display: false`, so it reaches
  *  the model but never renders in the TUI or transcript. */

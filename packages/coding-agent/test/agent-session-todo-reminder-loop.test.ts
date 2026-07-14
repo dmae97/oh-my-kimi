@@ -186,6 +186,20 @@ describe("AgentSession todo reminder self-continuation suppression", () => {
 		expect(continueSpy).not.toHaveBeenCalled();
 	});
 
+	it("still reminds when the assistant answers its own prompt-shaped question", async () => {
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+
+		emitTextOnlyStop(
+			"Which configuration should this use?\nUse the existing default; the remaining todo items still need work.",
+		);
+		await withTimeout(firstReminderPromise, 1000, "todo_reminder never fired");
+		await session.waitForIdle();
+
+		expect(reminderAttempts).toEqual([1]);
+		expect(todoReminderTranscriptEntry()).toBeDefined();
+		expect(continueSpy).toHaveBeenCalledTimes(1);
+	});
+
 	it("still reminds and continues when ordinary prose contains answer", async () => {
 		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
 
