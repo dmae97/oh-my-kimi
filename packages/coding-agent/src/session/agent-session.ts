@@ -1520,7 +1520,7 @@ function isTerminalTextAssistantAnswer(message: AgentMessage | undefined): messa
 			if (part.text.trim().length > 0) hasText = true;
 			continue;
 		}
-		if (part.type === "thinking") continue;
+		if (part.type === "thinking" || part.type === "redactedThinking" || part.type === "fallback") continue;
 		return false;
 	}
 	return hasText;
@@ -3092,7 +3092,10 @@ export class AgentSession {
 	 */
 	#hasTerminalTextAnswerWithoutQueuedWork(): boolean {
 		if (this.agent.hasQueuedMessages() || this.#pendingNextTurnMessages.length > 0) return false;
-		return isTerminalTextAssistantAnswer(this.agent.state.messages.at(-1));
+		const messages = this.agent.state.messages;
+		let tail = messages.length - 1;
+		while (tail >= 0 && isAdvisorCard(messages[tail])) tail--;
+		return isTerminalTextAssistantAnswer(messages[tail]);
 	}
 
 	#routeAdvice(advisor: ActiveAdvisor, note: string, severity?: AdvisorSeverity): void {

@@ -267,6 +267,50 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		expect(advisorMock.calls.length).toBeGreaterThanOrEqual(1);
 		expect(mock.calls.length).toBe(1);
 	});
+
+	it("preserves another late advisor concern after an existing advisor card", async () => {
+		const { session, mock } = await createCompletedAdvisorSession();
+
+		await session.prompt("answer with exactly one line");
+		await session.waitForIdle();
+		session.agent.state.messages.push({
+			role: "custom",
+			...advisorCard("first late concern"),
+			timestamp: Date.now(),
+		});
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		const advisor = session.getAdvisorAgent();
+		if (!advisor) throw new Error("Expected advisor agent to be live");
+
+		await advisor.prompt("inspect the completed turn");
+		await session.waitForIdle();
+
+		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(2);
+		expect(mock.calls.length).toBe(1);
+	});
+
+	it("preserves late advice after terminal text with provider metadata blocks", async () => {
+		const { session, mock } = await createCompletedAdvisorSession();
+
+		await session.prompt("answer with exactly one line");
+		await session.waitForIdle();
+		const answer = session.agent.state.messages.at(-1);
+		if (answer?.role !== "assistant") throw new Error("Expected terminal assistant answer");
+		answer.content.push(
+			{ type: "redactedThinking", data: "opaque provider reasoning" },
+			{ type: "fallback", from: { model: "first" }, to: { model: "second" } },
+		);
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		const advisor = session.getAdvisorAgent();
+		if (!advisor) throw new Error("Expected advisor agent to be live");
+
+		await advisor.prompt("inspect the completed turn");
+		await session.waitForIdle();
+
+		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(1);
+		expect(mock.calls.length).toBe(1);
+	});
+
 	it("preserves an advisor concern steered before the user interrupt, without auto-resuming", async () => {
 		const { session, sessionManager, mock, streamStarted } = await createParkedSession();
 		const persisted = capturePersistedAdvice(sessionManager);
