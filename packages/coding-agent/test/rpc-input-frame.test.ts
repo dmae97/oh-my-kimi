@@ -282,8 +282,9 @@ describe("RpcInputDispatcher", () => {
 		const { deps, outputs } = makeDeps(async command => ({
 			id: command.id,
 			type: "response",
-			command: command.type,
+			command: "prompt",
 			success: true,
+			data: { agentInvoked: false },
 		}));
 		const dispatcher = new RpcInputDispatcher({ deps });
 

@@ -49,11 +49,11 @@ describe("resolveProviderCandidates", () => {
 	});
 
 	it("omits excluded providers without resolving them", () => {
-		setExcludedSearchProviders(["bing", "google"]);
+		setExcludedSearchProviders(["duckduckgo", "google"]);
 
 		const candidates = resolveProviderCandidates("exa");
 
-		expect(candidates.map(candidate => candidate.id)).not.toContain("bing");
+		expect(candidates.map(candidate => candidate.id)).not.toContain("duckduckgo");
 		expect(candidates.map(candidate => candidate.id)).not.toContain("google");
 	});
 });

@@ -256,7 +256,7 @@ describe("executeSearch abort propagation", () => {
 				provider: "exa",
 				sources: [{ title: "Preferred result", url: "https://example.com/preferred" }],
 			})),
-			fakeProvider("bing", fallbackSearch),
+			fakeProvider("duckduckgo", fallbackSearch),
 		]);
 
 		const tool = new WebSearchTool(FAKE_SESSION);
