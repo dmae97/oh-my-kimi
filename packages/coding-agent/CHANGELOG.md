@@ -6,6 +6,10 @@
 
 - Memoized non-message token totals (system prompt, tool schemas, skills) so the per-turn compaction and context-threshold paths recompute them at most once per input change instead of on every call. `getContextBreakdown` and `#estimateStoredContextTokens` previously re-tokenized the system prompt and every tool's wire schema (per-tool `JSON.stringify`) several times per turn over inputs that change at most once per turn.
 
+### Fixed
+
+- Fixed the empty-editor `←←` gesture trapping input when it opens the Agent Hub from persisted/parked subagents: the hub raised by that gesture now accepts the editor's tap state (`armCloseTap`), so the same `←←` that opened it also arms its close and a single `←` dismisses it instead of requiring a fresh `←←` ([#4780](https://github.com/can1357/oh-my-pi/issues/4780)).
+
 ## [16.3.11] - 2026-07-06
 
 ### Changed
