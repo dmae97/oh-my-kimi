@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed tmux sessions becoming unresponsive after terminal capability replies by keeping keyboard input in legacy mode when the Kitty protocol is unavailable ([#5378](https://github.com/can1357/oh-my-pi/issues/5378)).
+
 ## [16.5.0] - 2026-07-13
 
 ### Changed
