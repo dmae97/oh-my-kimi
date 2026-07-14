@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.5.1] - 2026-07-14
+
 ### Added
 
 - Added Cursor OAuth and access-token usage reporting to `omp usage` via Cursor's account usage endpoint.

@@ -2086,9 +2086,9 @@ dependencies = [
 
 [[package]]
 name = "icu_time_data"
-version = "2.2.0"
+version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f2f8aeca682d874a5247084aa4fb7d1cef9ba45d889c21209a8818dcaaa0ec9"
+checksum = "2e0ee79a0bb29772465234bfbad6ea04fbc5220bef9fa4f318cc53eb8897070e"
 
 [[package]]
 name = "icy_sixel"
@@ -3264,7 +3264,7 @@ dependencies = [
 
 [[package]]
 name = "pi-ast"
-version = "16.5.0"
+version = "16.5.1"
 dependencies = [
  "anyhow",
  "ast-grep-core",
@@ -3333,7 +3333,7 @@ dependencies = [
 
 [[package]]
 name = "pi-iso"
-version = "16.5.0"
+version = "16.5.1"
 dependencies = [
  "async-trait",
  "libc",
@@ -3345,7 +3345,7 @@ dependencies = [
 
 [[package]]
 name = "pi-natives"
-version = "16.5.0"
+version = "16.5.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3398,7 +3398,7 @@ dependencies = [
 
 [[package]]
 name = "pi-shell"
-version = "16.5.0"
+version = "16.5.1"
 dependencies = [
  "anyhow",
  "brush-builtins",
@@ -3482,7 +3482,7 @@ dependencies = [
 
 [[package]]
 name = "pi-walker"
-version = "16.5.0"
+version = "16.5.1"
 dependencies = [
  "dashmap",
  "globset",
@@ -4525,9 +4525,9 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "1.1.2+spec-1.1.0"
+version = "1.1.3+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81f3d15e84cbcd896376e6730314d59fb5a87f31e4b038454184435cd57defee"
+checksum = "53c96ecdfa941c8fc4fcaed14f99ada8ebed502eef533015095a07e3301d4c3c"
 dependencies = [
  "indexmap",
  "serde_core",
@@ -4549,9 +4549,9 @@ dependencies = [
 
 [[package]]
 name = "toml_edit"
-version = "0.25.12+spec-1.1.0"
+version = "0.25.13+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2153edc6955a6c354fad8f5efd38b6a8769bdccf9fe50f8e1329f81b0baa5d7"
+checksum = "6975367e4d2ef766d86af01ffad14b622fecc8d4357a998fbc4deb6e9bacaf9b"
 dependencies = [
  "indexmap",
  "toml_datetime",
@@ -4570,9 +4570,9 @@ dependencies = [
 
 [[package]]
 name = "toml_writer"
-version = "1.1.1+spec-1.1.0"
+version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "756daf9b1013ebe47a8776667b466417e2d4c5679d441c26230efd9ef78692db"
+checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 
 [[package]]
 name = "tracing"

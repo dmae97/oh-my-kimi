@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.5.1] - 2026-07-14
+
 ### Changed
 
 - Enhanced Anthropic credential and usage management to support organization-scoped accounts, including displaying organization names in /usage, /logout, omp token --list, and OAuth login success messages, resolving active-account matching for shared organizations, and deduplicating identities during migration.

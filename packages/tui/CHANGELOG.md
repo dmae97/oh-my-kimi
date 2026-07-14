@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.5.1] - 2026-07-14
+
 ### Fixed
 
 - Optimized the Markdown rendering cache to prevent large documents from indefinitely occupying cache slots, improving memory usage and performance ([#4820](https://github.com/can1357/oh-my-pi/issues/4820)).

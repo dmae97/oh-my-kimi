@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.5.1] - 2026-07-14
+
 ### Fixed
 
 - Fixed reasoning effort mapping for Z.ai GLM-5.2 on the Anthropic messages endpoint to correctly use the two-tier scale (high, max) and emit output_config.effort.

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.5.1] - 2026-07-14
+
 ### Added
 
 - Added terminal stderr guard utilities (suppressTerminalStderr and restoreTerminalStderr) to prevent macOS runtime diagnostics from corrupting TUI viewports while ensuring crash reports remain visible.
