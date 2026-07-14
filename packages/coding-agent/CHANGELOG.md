@@ -28,7 +28,7 @@
 - Fixed eval cells treating `timeout: 0` as a one-second deadline and reporting session-deadline cancellations as user aborts.
 - Fixed MCP OAuth dynamic client registration for pathful authorization-server issuers by preserving the discovered registration endpoint.
 - Fixed the `launch` tool failing to start Windows executables due to double-escaped PTY commands and arguments.
-- Fixed the built-in advisor treating deliberate silent reviews as failed turns, preventing spurious retries.
+- Fixed the built-in advisor warning `Advisor unavailable` for silent reviews: a content-less stop is a valid "nothing to add" outcome and is never retried or warned about, regardless of reported token usage ([#5212](https://github.com/can1357/oh-my-pi/issues/5212) follow-up).
 - Fixed `read`, `edit`, and `grep` tools failing on paths with a stray leading colon emitted by some models.
 - Fixed git plugin re-installs retaining stale commits by fetching Bun's cached clone before updating the lockfile pin.
 - Fixed overlapping Bash timeout and interrupt cleanup to explicitly abort isolated shells instead of leaving child processes running.

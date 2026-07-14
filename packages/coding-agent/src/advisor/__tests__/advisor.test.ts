@@ -1856,22 +1856,16 @@ describe("advisor", () => {
 			expect(failures).toHaveLength(2);
 		});
 
-		it("treats an empty stop turn without advise as a failed advisor turn", async () => {
-			const promptInputs: string[] = [];
+		it("accepts a zero-usage empty stop as a successful silent review", async () => {
 			const turnErrors: unknown[] = [];
 			const failures: unknown[] = [];
 			const adviceNotes: string[] = [];
 			const rollbackCalls: number[] = [];
-			const lengthsBeforePrompt: number[] = [];
-			const events: string[] = [];
 			const state: { messages: AgentMessage[]; error?: string } = { messages: [] };
 			let promptCalls = 0;
 			const agent: AdvisorAgent = {
 				prompt: async input => {
 					promptCalls++;
-					promptInputs.push(input);
-					lengthsBeforePrompt.push(state.messages.length);
-					events.push(`prompt:${promptCalls}`);
 					state.messages.push({ role: "user", content: input, timestamp: promptCalls * 2 - 1 } as AgentMessage);
 					state.messages.push({
 						role: "assistant",
@@ -1879,13 +1873,7 @@ describe("advisor", () => {
 						api: "mock",
 						provider: "mock",
 						model: "mock-advisor",
-						usage: {
-							input: 0,
-							output: 0,
-							cacheRead: 0,
-							cacheWrite: 0,
-							totalTokens: 0,
-						},
+						usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
 						stopReason: "stop",
 						timestamp: promptCalls * 2,
 					} as unknown as AgentMessage);
@@ -1909,54 +1897,84 @@ describe("advisor", () => {
 				enqueueAdvice: note => adviceNotes.push(note),
 				onTurnError: error => {
 					turnErrors.push(error);
-					events.push(`hook:${error instanceof Error ? error.message : String(error)}`);
 				},
 				notifyFailure: error => {
 					failures.push(error);
-					events.push(`notify:${error instanceof Error ? error.message : String(error)}`);
 				},
 			};
 			const runtime = new AdvisorRuntime(agent, host, 0);
 
+			// A model that says nothing and yields completed its review; no retry,
+			// no rollback, no "Advisor unavailable" notification.
 			runtime.onTurnEnd(messages);
 			await runtime.waitForCatchup(1000, 1);
 
-			expect(promptInputs).toHaveLength(3);
-			expect(promptInputs[0]).toContain("aaa");
-			expect(promptInputs[1]).toBe(promptInputs[0]);
-			expect(promptInputs[2]).toBe(promptInputs[0]);
-			expect(lengthsBeforePrompt).toEqual([0, 0, 0]);
-			expect(rollbackCalls).toEqual([0, 0, 0]);
-			expect(turnErrors).toHaveLength(3);
-			const turnErrorMessages = turnErrors.map(error =>
-				(error instanceof Error ? error.message : String(error)).toLowerCase(),
-			);
-			for (const message of turnErrorMessages) {
-				expect(message).toContain("advisor");
-				expect(message).toContain("empty");
-				expect(message).toContain("response");
-			}
-			expect(failures).toHaveLength(1);
-			const failure = failures[0];
-			if (!(failure instanceof Error)) throw new Error("expected advisor failure error");
-			expect(failure.message.toLowerCase()).toContain("advisor");
-			expect(failure.message.toLowerCase()).toContain("empty");
-			expect(failure.message.toLowerCase()).toContain("response");
-			expect(events).toHaveLength(7);
-			expect(events[0]).toBe("prompt:1");
-			expect(events[1].startsWith("hook:")).toBe(true);
-			expect(events[1].toLowerCase()).toContain("empty");
-			expect(events[2]).toBe("prompt:2");
-			expect(events[3].startsWith("hook:")).toBe(true);
-			expect(events[3].toLowerCase()).toContain("empty");
-			expect(events[4]).toBe("prompt:3");
-			expect(events[5].startsWith("hook:")).toBe(true);
-			expect(events[5].toLowerCase()).toContain("empty");
-			expect(events[6].toLowerCase()).toContain("empty");
-			expect(events[6].startsWith("notify:")).toBe(true);
+			expect(promptCalls).toBe(1);
+			expect(turnErrors).toEqual([]);
+			expect(failures).toEqual([]);
+			expect(rollbackCalls).toEqual([]);
 			expect(adviceNotes).toEqual([]);
-			expect(state.messages).toHaveLength(0);
-			expect(state.error).toBeUndefined();
+			expect(state.messages).toHaveLength(2);
+			expect(runtime.backlog).toBe(0);
+		});
+
+		it("never warns for consecutive zero-usage silent stops — a quiet session is a valid session", async () => {
+			const turnErrors: unknown[] = [];
+			const failures: unknown[] = [];
+			const state: { messages: AgentMessage[]; error?: string } = { messages: [] };
+			let promptCalls = 0;
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptCalls++;
+					state.messages.push({ role: "user", content: input, timestamp: promptCalls * 2 - 1 } as AgentMessage);
+					state.messages.push({
+						role: "assistant",
+						content: [],
+						api: "mock",
+						provider: "mock",
+						model: "mock-advisor",
+						usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
+						stopReason: "stop",
+						timestamp: promptCalls * 2,
+					} as unknown as AgentMessage);
+					state.error = undefined;
+				},
+				abort: () => {},
+				reset: () => {
+					state.messages.length = 0;
+					state.error = undefined;
+				},
+				rollbackTo: count => {
+					state.messages.length = count;
+					state.error = undefined;
+				},
+				state,
+			};
+			const messages: AgentMessage[] = [{ role: "user", content: "turn-0", timestamp: 1 } as AgentMessage];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+				onTurnError: error => {
+					turnErrors.push(error);
+				},
+				notifyFailure: error => {
+					failures.push(error);
+				},
+			};
+			const runtime = new AdvisorRuntime(agent, host, 0);
+
+			// Five consecutive turns where the advisor has nothing to add: every one
+			// completes as a single successful prompt — no retries, no rollbacks, no
+			// "Advisor unavailable" notification, ever.
+			for (let i = 0; i < 5; i++) {
+				if (i > 0) messages.push({ role: "user", content: `turn-${i}`, timestamp: i + 1 } as AgentMessage);
+				runtime.onTurnEnd(messages);
+				await runtime.waitForCatchup(1000, 1);
+			}
+
+			expect(promptCalls).toBe(5);
+			expect(turnErrors).toEqual([]);
+			expect(failures).toEqual([]);
 			expect(runtime.backlog).toBe(0);
 		});
 

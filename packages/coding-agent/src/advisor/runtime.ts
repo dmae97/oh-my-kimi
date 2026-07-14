@@ -532,10 +532,13 @@ export class AdvisorRuntime {
 					// as a failed turn so endpoint rejections trip the retry path.
 					const promptError = this.agent.state.error;
 					if (promptError) throw new Error(promptError);
-					const emptyResponseError = getAdvisorEmptyResponseError(
-						this.agent.state.messages.slice(messageSnapshot),
-					);
-					if (emptyResponseError) throw emptyResponseError;
+					// A content-less stop is a deliberate silent review — the documented
+					// verifier behavior ("prefer silence when the agent is on track") — and
+					// completes the turn. Sessions can legitimately have nothing to advise
+					// on for any number of consecutive turns, so silence is never warned
+					// about (#5216 did, spamming "Advisor unavailable" at quiet models).
+					const turnError = getAdvisorTurnError(this.agent.state.messages.slice(messageSnapshot));
+					if (turnError) throw turnError;
 					success = true;
 					this.#consecutiveFailures = 0;
 					this.#failureNotified = false;
@@ -594,52 +597,15 @@ export class AdvisorRuntime {
 	}
 }
 
-function getAdvisorEmptyResponseError(messages: readonly AgentMessage[]): Error | undefined {
-	let sawAssistant = false;
-	for (const message of messages) {
-		if (message.role !== "assistant") continue;
-		sawAssistant = true;
-		if (message.stopReason !== "stop") return undefined;
-		if (hasAdvisorResponseContent(message)) return undefined;
-		// A content-less stop that still generated output tokens is a deliberate
-		// silent review — the documented verifier behavior ("prefer silence when
-		// the agent is on track"), not a provider malfunction. Only a stop that
-		// produced no output signal at all is a failed turn worth retrying (#5493).
-		if (producedAdvisorOutputSignal(message)) return undefined;
-	}
-	if (sawAssistant) return new Error("Advisor turn returned an empty stop response without advice");
-	if (messages.length > 0) return new Error("Advisor turn ended without an assistant response");
-	return undefined;
-}
-
 /**
- * True when the assistant turn consumed output-side tokens (visible output or
- * internal reasoning). Silent provider failures report zero here; a model that
- * deliberately stayed silent still burns reasoning/output budget.
+ * The only malformed advisor turn shape: the prompt resolved but produced no
+ * assistant response at all. Everything an assistant message carries — advice,
+ * reasoning, or deliberate silence (empty `stop`) — is a completed review.
  */
-function producedAdvisorOutputSignal(message: AssistantMessage): boolean {
-	const usage = message.usage;
-	if (!usage) return false;
-	return (usage.output ?? 0) > 0 || (usage.reasoningTokens ?? 0) > 0;
-}
-
-function hasAdvisorResponseContent(message: AssistantMessage): boolean {
-	return message.content.some(block => {
-		switch (block.type) {
-			case "text":
-				return block.text.trim().length > 0;
-			case "thinking":
-				return block.thinking.trim().length > 0;
-			case "redactedThinking":
-				return block.data.length > 0;
-			case "toolCall":
-				return block.name.trim().length > 0;
-			case "fallback":
-				return false;
-			default:
-				return false;
-		}
-	});
+function getAdvisorTurnError(messages: readonly AgentMessage[]): Error | undefined {
+	if (messages.length === 0) return undefined;
+	if (messages.some(message => message.role === "assistant")) return undefined;
+	return new Error("Advisor turn ended without an assistant response");
 }
 
 type TextualContent = string | readonly (TextContent | ImageContent)[];
