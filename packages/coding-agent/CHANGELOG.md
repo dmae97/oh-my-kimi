@@ -49,6 +49,9 @@
 ### Fixed
 
 - Fixed the built-in advisor treating a deliberate silent review (an empty `stop` completion that still spent output/reasoning tokens) as a failed turn, which triggered spurious retries and an "unavailable" warning; only content-less stops with no output signal are now retried ([#5493](https://github.com/can1357/oh-my-pi/issues/5493)).
+### Fixed
+
+- Fixed `read`, `edit`, and `grep` hard-failing on paths with a stray leading colon (e.g. `:/abs/path`, `:../rel`) that some models intermittently emit; the mangled prefix is now stripped before resolution ([#5508](https://github.com/can1357/oh-my-pi/issues/5508)).
 
 ## [16.5.1] - 2026-07-14
 
