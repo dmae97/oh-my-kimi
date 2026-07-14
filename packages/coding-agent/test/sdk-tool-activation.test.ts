@@ -445,6 +445,8 @@ describe("createAgentSession defaultInactive tool activation", () => {
 			expect(normal.getAllToolNames()).toEqual(
 				expect.arrayContaining([
 					"generate_image",
+					"read",
+					"yield",
 					"tts",
 					"default_active_tool",
 					"sdk_custom_tool",

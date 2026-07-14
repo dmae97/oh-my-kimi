@@ -517,8 +517,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	};
 	readonly label = "Task";
 	readonly summary = "Spawn subagents to complete delegated tasks";
-	readonly strict = true;
-	readonly loadMode = "essential";
+	readonly strict = false;
 	readonly renderResult = renderResult;
 	// Suppress the streaming call preview once a (partial or final) result exists
 	// so the task renders as ONE block that transitions in place — not a pending
