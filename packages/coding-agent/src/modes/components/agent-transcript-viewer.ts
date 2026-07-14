@@ -496,9 +496,9 @@ export class AgentTranscriptViewer implements Component {
 			this.deps.requestRender();
 			return true;
 		}
-		if (data === "j" || matchesSelectDown(data)) {
+		if (matchesKey(data, "j") || matchesSelectDown(data)) {
 			this.#scrollView.scroll(1);
-		} else if (data === "k" || matchesSelectUp(data)) {
+		} else if (matchesKey(data, "k") || matchesSelectUp(data)) {
 			this.#scrollView.scroll(-1);
 		} else if (data === "g") {
 			this.#scrollView.scrollToTop();

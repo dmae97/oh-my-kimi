@@ -503,14 +503,14 @@ export class AgentHubOverlayComponent extends Container {
 			}
 			return;
 		}
-		if (keyData === "j" || matchesSelectDown(keyData)) {
+		if (matchesKey(keyData, "j") || matchesSelectDown(keyData)) {
 			if (this.#rows.length > 0) {
 				this.#selectedRow = Math.min(this.#selectedRow + 1, this.#rows.length - 1);
 			}
 			this.#requestRender();
 			return;
 		}
-		if (keyData === "k" || matchesSelectUp(keyData)) {
+		if (matchesKey(keyData, "k") || matchesSelectUp(keyData)) {
 			if (this.#rows.length > 0) {
 				this.#selectedRow = Math.max(this.#selectedRow - 1, 0);
 			}

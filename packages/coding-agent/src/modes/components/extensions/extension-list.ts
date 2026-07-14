@@ -449,12 +449,12 @@ export class ExtensionList implements Component {
 
 	handleInput(data: string): void {
 		// Navigation
-		if (matchesSelectUp(data) || data === "k") {
+		if (matchesSelectUp(data) || matchesKey(data, "k")) {
 			this.#moveSelectionUp();
 			return;
 		}
 
-		if (matchesSelectDown(data) || data === "j") {
+		if (matchesSelectDown(data) || matchesKey(data, "j")) {
 			this.#moveSelectionDown();
 			return;
 		}

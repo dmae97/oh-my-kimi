@@ -10,6 +10,10 @@
 
 - Updated status event log to prioritize the most recent entries in the display window
 
+### Fixed
+
+- Fixed vim-style `h`/`j`/`k`/`l` navigation under the Kitty keyboard protocol ([#5314](https://github.com/can1357/oh-my-pi/issues/5314))
+
 ### Removed
 
 - Removed the unreliable Bing and Yahoo HTML-scraping web search providers
