@@ -278,6 +278,27 @@ describe("RpcInputDispatcher", () => {
 		]);
 	});
 
+	test("malformed frames emit a parse error without ending the input reader", () => {
+		const { deps, outputs } = makeDeps(async command => ({
+			id: command.id,
+			type: "response",
+			command: command.type,
+			success: true,
+		}));
+		const dispatcher = new RpcInputDispatcher({ deps });
+
+		dispatcher.dispatch(null);
+
+		expect(outputs).toEqual([
+			expect.objectContaining({
+				type: "response",
+				command: "parse",
+				success: false,
+				error: expect.stringContaining("Failed to parse command:"),
+			}),
+		]);
+	});
+
 	test("ordinary commands stay serialized while first command is blocked", async () => {
 		const releaseFirst = Promise.withResolvers<void>();
 		const started: string[] = [];

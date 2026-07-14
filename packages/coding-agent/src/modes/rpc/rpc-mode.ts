@@ -354,23 +354,28 @@ export class RpcInputDispatcher {
 
 	/** Accept a parsed input frame without blocking the stdin reader. */
 	dispatch(parsed: unknown): void {
-		if (dispatchRpcControlFrame(parsed, this.#deps)) return;
+		try {
+			if (dispatchRpcControlFrame(parsed, this.#deps)) return;
 
-		const command = parsed as RpcCommand;
-		if (command.type === "bash") {
-			dispatchRpcInputFrame(command, this.#deps);
-			return;
+			const command = parsed as RpcCommand;
+			if (command.type === "bash") {
+				dispatchRpcInputFrame(command, this.#deps);
+				return;
+			}
+
+			const task = this.#tail.then(
+				() => this.#dispatchSerialCommand(command),
+				() => this.#dispatchSerialCommand(command),
+			);
+			this.#tail = task.catch(() => {});
+			this.#tasks.add(task);
+			void task.finally(() => {
+				this.#tasks.delete(task);
+			});
+		} catch (err: unknown) {
+			const message = err instanceof Error ? err.message : String(err);
+			this.#deps.output(this.#deps.errorResponse(undefined, "parse", `Failed to parse command: ${message}`));
 		}
-
-		const task = this.#tail.then(
-			() => this.#dispatchSerialCommand(command),
-			() => this.#dispatchSerialCommand(command),
-		);
-		this.#tail = task.catch(() => {});
-		this.#tasks.add(task);
-		void task.finally(() => {
-			this.#tasks.delete(task);
-		});
 	}
 
 	/** Await every accepted serial command, including commands queued before EOF. */
