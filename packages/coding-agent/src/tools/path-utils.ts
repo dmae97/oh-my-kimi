@@ -147,8 +147,14 @@ export function expandTilde(filePath: string, home?: string): string {
 }
 
 export function expandPath(filePath: string): string {
+	// Some models intermittently prefix an otherwise-valid path with a stray
+	// `:` (e.g. `:/abs/path`, `:../rel`). No real path starts with `:` and it
+	// never begins a selector against an absolute/relative path, so strip it
+	// before resolution — mirroring the `@`-prefix normalization above and the
+	// implicit stripping `write` already tolerates (issue #5508).
+	const deColoned = /^:(?=[/~]|\.\.?\/)/.test(filePath) ? filePath.slice(1) : filePath;
 	const normalized = stripWindowsExtendedLengthPathPrefix(
-		stripFileUrl(normalizeUnicodeSpaces(normalizeAtPrefix(filePath))),
+		stripFileUrl(normalizeUnicodeSpaces(normalizeAtPrefix(deColoned))),
 	);
 	return expandTilde(normalized);
 }

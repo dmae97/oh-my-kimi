@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `read`, `edit`, and `grep` hard-failing on paths with a stray leading colon (e.g. `:/abs/path`, `:../rel`) that some models intermittently emit; the mangled prefix is now stripped before resolution ([#5508](https://github.com/can1357/oh-my-pi/issues/5508)).
+
 ## [16.5.1] - 2026-07-14
 
 ### Changed
