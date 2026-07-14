@@ -96,6 +96,9 @@
 
 - Updated cost and token configurations for various models across providers
 - Renamed several models for consistency (e.g., MiniMax M3, Gemma 4 31B, Qwen variants)
+### Fixed
+
+- Fixed stale cached model limits overriding updated static catalog limits after a static catalog fingerprint mismatch. ([#4956](https://github.com/can1357/oh-my-pi/issues/4956))
 
 ## [16.3.12] - 2026-07-08
 
