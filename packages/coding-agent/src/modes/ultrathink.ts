@@ -1,5 +1,6 @@
 import ultrathinkNotice from "../prompts/system/ultrathink-notice.md" with { type: "text" };
 import { createGradientHighlighter, type KeywordHighlighter } from "./gradient-highlight";
+import { magicKeywordRegex } from "./magic-keyword-boundary";
 import { keywordInProse } from "./markdown-prose";
 
 /**
@@ -13,15 +14,15 @@ import { keywordInProse } from "./markdown-prose";
  * trigger either behavior.
  */
 
-// Detection: lowercase keyword flanked by whitespace or a string edge. Non-global so `.test` stays stateless.
-const ULTRATHINK_WORD = /(?<!\S)ultrathink(?!\S)/;
+// Detection: lowercase keyword flanked by prose punctuation, whitespace, or a string edge.
+const ULTRATHINK_WORD = magicKeywordRegex("ultrathink");
 
 /** Hidden system notice appended after a user message that mentions "ultrathink". */
 export const ULTRATHINK_NOTICE: string = ultrathinkNotice.trim();
 
 /**
  * Whether `text` contains the standalone keyword "ultrathink" (lowercase,
- * whitespace-delimited) in prose — never inside a code block, inline code span,
+ * prose-delimited) in prose — never inside a code block, inline code span,
  * or XML/HTML section.
  */
 export function containsUltrathink(text: string): boolean {
@@ -35,7 +36,7 @@ export function containsUltrathink(text: string): boolean {
  */
 export const highlightUltrathink: KeywordHighlighter = createGradientHighlighter({
 	probe: /ultrathink/,
-	highlight: /(?<!\S)ultrathink(?!\S)/g,
+	highlight: magicKeywordRegex("ultrathink", "g"),
 	stops: 14,
 	hue: t => t * 330,
 });

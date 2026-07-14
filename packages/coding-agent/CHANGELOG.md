@@ -331,6 +331,7 @@
 - Improved rendering of raw thinking blocks by stripping empty HTML comment noise
 - Fixed display of thinking blocks consisting entirely of hidden comment noise
 - Fixed gpt-5.6 reasoning summaries rendering literal `<!-- -->` sentinel lines in thinking blocks; empty HTML comments (and the unterminated `<!--` tail while streaming) are now dropped from the thinking display, and blocks reduced to pure comment noise are hidden entirely.
+- Fixed `ultrathink`, `orchestrate`, and `workflowz` magic keywords not triggering when adjacent to sentence punctuation or quotes while still ignoring inflections and path/file-extension occurrences. ([#4965](https://github.com/can1357/oh-my-pi/issues/4965))
 
 ## [16.3.13] - 2026-07-09
 
