@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Kitty graphics under tmux by wrapping every graphics command in DCS passthrough, preserving quiet mode across continuation chunks, and using Unicode placeholder cells for explicitly forced Kitty rendering so images follow pane scrolling and reflow. ([#5381](https://github.com/can1357/oh-my-pi/issues/5381))
+
 ## [16.5.0] - 2026-07-13
 
 ### Changed

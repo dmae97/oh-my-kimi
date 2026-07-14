@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed inline images in Agent Hub transcripts by routing replayed assistant and tool-result images through the shared image budget and Kitty placeholder renderer. ([#5381](https://github.com/can1357/oh-my-pi/issues/5381))
+
 ## [16.5.0] - 2026-07-13
 
 ### Breaking Changes

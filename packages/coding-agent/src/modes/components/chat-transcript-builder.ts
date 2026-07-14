@@ -278,7 +278,7 @@ export class ChatTranscriptBuilder {
 			hideThinkingBlock,
 			() => this.deps.requestRender(),
 			this.deps.getMessageRenderer ? undefined : [], // placeholder for thinkingRenderers
-			undefined, // placeholder for imageBudget
+			this.deps.ui.imageBudget,
 			proseOnlyThinking,
 		);
 		this.container.addChild(assistantComponent);
@@ -332,8 +332,9 @@ export class ChatTranscriptBuilder {
 				content.name,
 				content.arguments,
 				{
-					// Images can't be sliced through the scroll viewport; keep them off.
-					showImages: false,
+					// Stable ids and Kitty placeholder cells keep images anchored
+					// while the transcript viewport scrolls and reflows.
+					showImages: settings.get("terminal.showImages"),
 					editFuzzyThreshold: settings.get("edit.fuzzyThreshold"),
 					editAllowFuzzy: settings.get("edit.fuzzyMatch"),
 					liveRegion: this.container,
