@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the `launch` tool failing to start Windows executables because PTY commands double-escaped the application and arguments ([#5416](https://github.com/can1357/oh-my-pi/issues/5416)).
+
 ## [16.5.1] - 2026-07-14
 
 ### Changed
