@@ -109,13 +109,14 @@ function AssistantBody({
 			case "toolCall": {
 				const act = active.get(block.id);
 				const result = results.get(block.id);
+				const args = act?.args ?? block.arguments;
 				return (
 					<ToolCard
 						key={block.id}
 						toolCallId={block.id}
 						name={block.name}
 						intent={block.intent ?? act?.intent}
-						args={block.arguments}
+						args={args}
 						result={result}
 						host={host}
 						running={!result && (act !== undefined || pending)}
@@ -263,16 +264,22 @@ export function Transcript(props: TranscriptProps): ReactNode {
 		if (el !== null && lockRef.current) el.scrollTop = el.scrollHeight;
 	}, [entries, stream, activeTools, working]);
 
-	// Active tools not already represented as toolCall blocks in the stream ghost.
-	const streamIds = new Set<string>();
+	// Active tools not already represented as toolCall blocks in committed rows or the stream ghost.
+	const renderedToolIds = new Set<string>();
+	for (const entry of entries) {
+		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+		for (const block of entry.message.content) {
+			if (block.type === "toolCall") renderedToolIds.add(block.id);
+		}
+	}
 	if (stream !== null) {
 		for (const block of stream.content) {
-			if (block.type === "toolCall") streamIds.add(block.id);
+			if (block.type === "toolCall") renderedToolIds.add(block.id);
 		}
 	}
 	const tailTools: ActiveTool[] = [];
 	for (const tool of activeTools.values()) {
-		if (!streamIds.has(tool.toolCallId)) tailTools.push(tool);
+		if (!renderedToolIds.has(tool.toolCallId)) tailTools.push(tool);
 	}
 
 	return (
@@ -317,7 +324,7 @@ export function Transcript(props: TranscriptProps): ReactNode {
 					))}
 				</Row>
 			)}
-			{working && stream === null && (
+			{working && stream === null && activeTools.size === 0 && (
 				<Row kind="assistant" gutter="agent">
 					<div className="tr-shimmer">thinking…</div>
 				</Row>
