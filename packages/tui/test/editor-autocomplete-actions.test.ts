@@ -205,6 +205,28 @@ class SyncSlashProvider implements AutocompleteProvider {
 }
 
 describe("Editor Enter handler sync slash completion", () => {
+	async function createRelocatedModelPopup() {
+		const editor = new Editor(defaultEditorTheme);
+		editor.setAutocompleteProvider(
+			new CombinedAutocompleteProvider([{ name: "model", description: "Switch AI model" }], "/tmp"),
+		);
+		const submissions: string[] = [];
+		editor.onSubmit = text => {
+			submissions.push(text);
+		};
+
+		editor.handleInput("/mo");
+		await Promise.resolve();
+		expect(editor.isShowingAutocomplete()).toBe(true);
+
+		editor.handleInput("\x01"); // Ctrl+A: move before the command.
+		editor.handleInput("fix ");
+		editor.handleInput("\x05"); // Ctrl+E: return to the stale command prefix.
+		expect(editor.getText()).toBe("fix /mo");
+
+		return { editor, submissions };
+	}
+
 	it("opens mid-prompt skill autocomplete and inserts the skill token without wiping the draft on Tab", async () => {
 		const editor = new Editor(defaultEditorTheme);
 		editor.setAutocompleteProvider(
@@ -259,6 +281,24 @@ describe("Editor Enter handler sync slash completion", () => {
 
 		expect(editor.getText()).toBe("fix bug /skill:security-scan ");
 		expect(submitted).toBeUndefined();
+	});
+
+	it("submits the raw draft when Enter sees a relocated non-skill popup", async () => {
+		const { editor, submissions } = await createRelocatedModelPopup();
+
+		editor.handleInput("\r");
+
+		expect(submissions).toEqual(["fix /mo"]);
+		expect(editor.getText()).toBe("");
+	});
+
+	it("leaves the raw draft when Tab sees a relocated non-skill popup", async () => {
+		const { editor, submissions } = await createRelocatedModelPopup();
+
+		editor.handleInput("\t");
+
+		expect(submissions).toEqual([]);
+		expect(editor.getText()).toBe("fix /mo");
 	});
 
 	it("preserves Tab file completion for an absolute path token after prose", async () => {
