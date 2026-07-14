@@ -60,6 +60,24 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		expect(mod.html).toBe("<html>PLAN-UI</html>");
 	});
 
+	it("loads CommonJS helpers required by an ES module extension", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "cjs-helper-ext", version: "1.0.0" }),
+			"config.js": 'module.exports = { value: "config-ok" };\n',
+			"index.js": [
+				'import { createRequire } from "node:module";',
+				"const require = createRequire(import.meta.url);",
+				'const { value } = require("./config.js");',
+				"export { value };",
+				"export default function (pi) { void pi; }",
+			].join("\n"),
+		});
+
+		const mod = (await loadLegacyPiModule(path.join(dir, "index.js"))) as { value: string };
+
+		expect(mod.value).toBe("config-ok");
+	});
+
 	it("reloads an edited entry module without polluting fileURLToPath-derived paths", async () => {
 		const entrySource = (version: string): string =>
 			[

@@ -90,6 +90,9 @@
 ### Fixed
 
 - Fixed OSC 5522 paste in direct API-key login prompts being routed to the hidden main chat editor instead of the focused credential field ([#5394](https://github.com/can1357/oh-my-pi/issues/5394)).
+### Fixed
+
+- Fixed plugin installation failing when an ES module extension synchronously requires CommonJS helpers ([#5373](https://github.com/can1357/oh-my-pi/issues/5373)).
 
 ## [16.5.0] - 2026-07-13
 
