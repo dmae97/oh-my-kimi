@@ -57,6 +57,30 @@ if "__omp_prelude_loaded__" not in globals():
 
     _OMP_INTERNAL_URL_RE = re.compile(r"^([a-z][a-z0-9+.-]*)://(.*)$", re.IGNORECASE)
 
+    def _should_delegate_read(path: str | Path) -> bool:
+        return (
+            isinstance(path, str)
+            and _OMP_INTERNAL_URL_RE.match(path) is not None
+            and not path.lower().startswith("local://")
+        )
+
+    def _read_line_selector(offset: int, limit: int | None) -> str | None:
+        if offset <= 1 and limit is None:
+            return None
+        start = max(1, offset)
+        if limit is None:
+            return f"{start}-"
+        return f"{start}-{start + limit - 1}"
+
+    def _read_tool_text(path: str, selector: str | None) -> str:
+        args = {"path": path}
+        if selector is not None:
+            args["selector"] = selector
+        result = _bridge_call("read", args)
+        if isinstance(result, dict) and "text" in result:
+            return result["text"]
+        return result
+
     def _resolve_omp_path(path: str | Path) -> Path:
         """Map a helper path to a real filesystem Path.
 
@@ -94,7 +118,11 @@ if "__omp_prelude_loaded__" not in globals():
         return Path(resolved)
 
     def read(path: str | Path, offset: int = 1, limit: int | None = None) -> str:
-        """Read file contents. offset/limit are 1-indexed line numbers."""
+        """Read file or read-tool URI contents. offset/limit are 1-indexed lines."""
+        if _should_delegate_read(path):
+            if limit is not None and limit <= 0:
+                return ""
+            return _read_tool_text(path, _read_line_selector(offset, limit))
         p = _resolve_omp_path(path)
         data = p.read_text(encoding="utf-8")
         lines = data.splitlines(keepends=True)

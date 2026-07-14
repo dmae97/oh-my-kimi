@@ -28,6 +28,9 @@
 
 ### Removed
 
+- Fixed eval `read()` URI handling: Python rejected every non-`local://` URI before host resolution, while JS pagination appended ranges to opaque resource URIs; Python now delegates URI reads through the session `read` tool and both runtimes pass `offset`/`limit` through its explicit selector argument ([#5353](https://github.com/can1357/oh-my-pi/issues/5353)).
+- Fixed `/tan` and `/fork` clones cold-missing the provider prompt cache: the per-turn supersede/useless-result prune rewrote the live context without persisting it, so file-based forks and resume rebuilt a divergent (un-pruned) prefix and re-wrote the entire cache
+- Fixed `/tan` pinning the clone's prompt-cache key to the parent's session id instead of the parent's effective cache key, dropping shard affinity when the parent was itself a fork or tan
 - Fixed inconsistent history rendering when toggling the display setting for compacted items
 - Fixed discovered plugin `.mcp.json` stdio servers launching relative `command`/`cwd` values against the session cwd instead of the plugin's config directory, which broke bundled ChatGPT/Codex plugins such as Computer Use (`ENOENT` spawning `./…` from an unrelated cwd). Relative `cwd` and path-like `command` (`./`, `../`) discovered by the `claude-plugins`/`omp-plugins` providers now resolve against the `.mcp.json` directory; bare executables like `npx` are left untouched. ([#5330](https://github.com/can1357/oh-my-pi/issues/5330))
 - Fixed Model Hub DEFAULT role assignments with `auto` retaining a stale concrete reasoning suffix, which restored the old level after restart ([#5326](https://github.com/can1357/oh-my-pi/issues/5326))
