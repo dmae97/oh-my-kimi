@@ -4,11 +4,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { getActiveSkills } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import type { Skill } from "@oh-my-pi/pi-coding-agent/sdk";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
+import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils/dirs";
 import { cleanupTempHome } from "./helpers/temp-home-cleanup";
 
 function createIsolatedSkillsSettings(): Settings {
@@ -132,6 +134,94 @@ Loaded via symbolic link.
 
 		expect(session.skills.some((s: Skill) => s.name === "test-skill")).toBe(true);
 	});
+
+	it("refreshSkills reloads project skills on an existing session", async () => {
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			sessionManager: SessionManager.inMemory(tempDir),
+			modelRegistry: sharedModelRegistry,
+			settings: createIsolatedSkillsSettings(),
+		});
+
+		expect(session.skills.some((s: Skill) => s.name === "runtime-added-skill")).toBe(false);
+
+		const runtimeSkillDir = path.join(tempDir, ".omp", "skills", "runtime-added-skill");
+		fs.mkdirSync(runtimeSkillDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(runtimeSkillDir, "SKILL.md"),
+			`---
+name: runtime-added-skill
+description: Added after the session is created.
+---
+
+# Runtime Added Skill
+
+This skill is added after session creation.
+`,
+		);
+
+		await session.refreshSkills();
+
+		expect(session.skills.some((s: Skill) => s.name === "runtime-added-skill")).toBe(true);
+
+		removeSyncWithRetries(runtimeSkillDir);
+
+		await session.refreshSkills();
+
+		expect(session.skills.some((s: Skill) => s.name === "runtime-added-skill")).toBe(false);
+	});
+
+	it("manage_skill hot-registers managed skills in the active session", async () => {
+		const originalAgentDir = getAgentDir();
+		const managedAgentDir = path.join(tempHomeDir, ".omp", "agent");
+		setAgentDir(managedAgentDir);
+		const settings = createIsolatedSkillsSettings();
+		settings.set("autolearn.enabled", true);
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: managedAgentDir,
+			sessionManager: SessionManager.inMemory(tempDir),
+			modelRegistry: sharedModelRegistry,
+			settings,
+		});
+
+		try {
+			const manageSkill = session.getToolByName("manage_skill");
+			expect(manageSkill).toBeDefined();
+			await manageSkill!.execute("manage-skill-create", {
+				action: "create",
+				name: "runtime-managed-skill",
+				description: "Created by manage_skill during the session.",
+				body: "# Runtime Managed Skill\n\nUse this immediately.",
+			});
+
+			expect(session.skills.some(skill => skill.name === "runtime-managed-skill")).toBe(true);
+			expect(getActiveSkills().some(skill => skill.name === "runtime-managed-skill")).toBe(true);
+			expect(session.agent.state.systemPrompt.join("\n")).toContain("runtime-managed-skill");
+			const readSkill = session.getToolByName("read");
+			expect(readSkill).toBeDefined();
+			const readResult = await readSkill!.execute("read-managed-skill", { path: "skill://runtime-managed-skill" });
+			expect(
+				readResult.content.some(part => part.type === "text" && part.text.includes("# Runtime Managed Skill")),
+			).toBe(true);
+
+			await manageSkill!.execute("manage-skill-delete", {
+				action: "delete",
+				name: "runtime-managed-skill",
+			});
+			expect(session.skills.some(skill => skill.name === "runtime-managed-skill")).toBe(false);
+			expect(getActiveSkills().some(skill => skill.name === "runtime-managed-skill")).toBe(false);
+			expect(session.agent.state.systemPrompt.join("\n")).not.toContain("runtime-managed-skill");
+			await expect(
+				readSkill!.execute("read-deleted-managed-skill", { path: "skill://runtime-managed-skill" }),
+			).rejects.toThrow(/Unknown skill/);
+		} finally {
+			await session.dispose();
+			setAgentDir(originalAgentDir);
+		}
+	});
+
 	it("should have empty skills when options.skills is empty array (--no-skills)", async () => {
 		const { session } = await createAgentSession({
 			cwd: tempDir,

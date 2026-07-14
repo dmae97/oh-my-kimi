@@ -725,15 +725,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			description: `${loaded.command.description} (${loaded.source})`,
 		}));
 
-		// Build skill commands from session.skills (if enabled)
-		const skillCommandList: SlashCommand[] = [];
-		if (settings.get("skills.enableSkillCommands")) {
-			for (const skill of this.session.skills) {
-				const commandName = `skill:${skill.name}`;
-				this.skillCommands.set(commandName, skill);
-				skillCommandList.push({ name: commandName, description: skill.description });
-			}
-		}
+		const skillCommandList = this.#rebuildSkillCommandsFromSession();
 
 		const builtinCommands = buildTuiBuiltinSlashCommands({ ctx: this });
 		// Store pending commands for init() where file commands are loaded async
@@ -1069,6 +1061,27 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.session.setTitleSystemPrompt(resolved);
 	}
 
+	#rebuildSkillCommandsFromSession(): SlashCommand[] {
+		const commands: SlashCommand[] = [];
+		this.skillCommands.clear();
+		if (this.session.skillsSettings?.enableSkillCommands !== false) {
+			for (const skill of this.session.skills) {
+				const commandName = `skill:${skill.name}`;
+				this.skillCommands.set(commandName, skill);
+				commands.push({ name: commandName, description: skill.description });
+			}
+		}
+		return commands;
+	}
+
+	/** Reload session skills and the `/skill:<name>` command list. */
+	async refreshSkillState(): Promise<void> {
+		await this.session.refreshSkills();
+		const retainedCommands = this.#pendingSlashCommands.filter(command => !command.name.startsWith("skill:"));
+		const skillCommands = this.#rebuildSkillCommandsFromSession();
+		this.#pendingSlashCommands = [...retainedCommands, ...skillCommands];
+	}
+
 	/** Reload slash commands and autocomplete for the provided working directory. */
 	async refreshSlashCommandState(cwd?: string): Promise<void> {
 		const basePath = cwd ?? this.sessionManager.getCwd();
@@ -1167,6 +1180,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		clearClaudePluginRootsCache();
 		await this.refreshTitleSystemPrompt(newCwd);
 		resetCapabilities();
+		await this.refreshSkillState();
 		await this.refreshSlashCommandState(newCwd);
 		await this.session.refreshSshTool({ activateIfAvailable: true });
 		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());

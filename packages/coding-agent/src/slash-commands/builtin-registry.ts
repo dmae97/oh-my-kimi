@@ -2198,6 +2198,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			// listClaudePluginRoots re-reads from disk on next access.
 			const projectPath = await resolveActiveProjectRegistryPath(runtime.ctx.sessionManager.getCwd());
 			clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
+			await runtime.ctx.refreshSkillState();
 			await runtime.ctx.refreshSlashCommandState();
 			await runtime.ctx.session.refreshSshTool({ activateIfAvailable: true });
 			runtime.ctx.showStatus("Plugins reloaded.");
@@ -2537,6 +2538,7 @@ export async function executeBuiltinSlashCommand(
 			reloadPlugins: async () => {
 				const projectPath = await resolveActiveProjectRegistryPath(ctx.sessionManager.getCwd());
 				clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
+				await ctx.refreshSkillState();
 				await ctx.refreshSlashCommandState();
 				await ctx.session.refreshSshTool({ activateIfAvailable: true });
 			},
