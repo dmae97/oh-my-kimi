@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `auth-broker` config discovery ignoring nested `auth.broker.url` / `auth.broker.token` YAML keys. `readConfigYaml` only read the literal flat dotted key, so standard nested YAML was silently dropped; it now resolves both nested and flat forms (nested wins). ([#4734](https://github.com/can1357/oh-my-pi/issues/4734))
+
 ## [16.3.11] - 2026-07-06
 
 ### Fixed
