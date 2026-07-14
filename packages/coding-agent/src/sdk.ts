@@ -116,6 +116,7 @@ import {
 	type CustomMessage,
 	convertToLlm,
 	LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
+	replaceLlmImagesWithText,
 	USER_INTERRUPT_LABEL,
 	wrapSteeringForModel,
 } from "./session/messages";
@@ -2618,36 +2619,25 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 		const slashCommands = await slashCommandsPromise;
 
-		// Create convertToLlm wrapper that filters images if blockImages is enabled (defense-in-depth)
+		// Keep image blocks off the wire when they'd be rejected: either the user
+		// disabled images (`images.blockImages`) or the active model has no vision
+		// support. The latter covers switching from a vision model to a text-only
+		// one mid-session — historical image blocks would otherwise be replayed to
+		// a provider that 400s on them (#5400). Read both dynamically so a `/model`
+		// switch or setting change takes effect on the next turn.
 		const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
 			const converted = convertToLlm(messages);
-			// Check setting dynamically so mid-session changes take effect
-			if (!settings.get("images.blockImages")) {
-				return converted;
+			if (settings.get("images.blockImages")) {
+				return replaceLlmImagesWithText(converted, "Image reading is disabled.");
 			}
-			// Filter out ImageContent from all messages, replacing with text placeholder
-			return converted.map(msg => {
-				if (msg.role === "user" || msg.role === "toolResult") {
-					const content = msg.content;
-					if (Array.isArray(content)) {
-						const hasImages = content.some(c => c.type === "image");
-						if (hasImages) {
-							const filteredContent = content
-								.map(c =>
-									c.type === "image" ? { type: "text" as const, text: "Image reading is disabled." } : c,
-								)
-								.filter((c, i, arr) => {
-									// Dedupe consecutive "Image reading is disabled." texts
-									if (!(c.type === "text" && c.text === "Image reading is disabled." && i > 0)) return true;
-									const prev = arr[i - 1];
-									return !(prev.type === "text" && prev.text === "Image reading is disabled.");
-								});
-							return { ...msg, content: filteredContent };
-						}
-					}
-				}
-				return msg;
-			});
+			const activeModel = agent?.state.model ?? model;
+			if (activeModel && !activeModel.input.includes("image")) {
+				return replaceLlmImagesWithText(
+					converted,
+					"[image omitted: the active model does not support image input]",
+				);
+			}
+			return converted;
 		};
 
 		// Final convertToLlm: live provider replay drops API-level refusal errors,
