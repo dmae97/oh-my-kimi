@@ -21,11 +21,13 @@ function makeSession(opts: { spawns?: string | null; backends?: Record<string, b
 function wireCellFields(tool: EvalTool): {
 	languages: string[];
 	languageDescription?: string;
+	timeoutDescription?: string;
 	codeDescription?: string;
 } {
 	const wire = toolWireSchema(tool as unknown as AiTool) as {
 		properties?: {
 			language?: { enum?: string[]; const?: string; description?: string };
+			timeout?: { description?: string };
 			code?: { description?: string };
 		};
 	};
@@ -36,7 +38,12 @@ function wireCellFields(tool: EvalTool): {
 		: typeof language?.const === "string"
 			? [language.const]
 			: [];
-	return { languages, languageDescription: language?.description, codeDescription: props?.code?.description };
+	return {
+		languages,
+		languageDescription: language?.description,
+		codeDescription: props?.code?.description,
+		timeoutDescription: props?.timeout?.description,
+	};
 }
 
 describe("eval tool description", () => {
@@ -57,6 +64,13 @@ describe("eval tool description", () => {
 		const denied = new EvalTool(makeSession({ spawns: "" })).description;
 		expect(wildcard).toContain("agent(prompt");
 		expect(denied).not.toContain("agent(prompt");
+	});
+
+	it("documents zero as the unlimited timeout value", () => {
+		const tool = new EvalTool(makeSession({}));
+		const fields = wireCellFields(tool);
+		expect(fields.timeoutDescription).toContain("0 disables the cell timeout");
+		expect(tool.description).toContain("`0` disables the cell timeout");
 	});
 });
 

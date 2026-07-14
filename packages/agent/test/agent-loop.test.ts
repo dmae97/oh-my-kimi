@@ -2855,9 +2855,11 @@ describe("agentLoopContinue with AgentMessage", () => {
 		// loop hands it. The merged deadline signal must fire and cancel the request,
 		// surfacing the deadline reason on the synthesized aborted message.
 		let providerSignalAborted = false;
+		let providerSignalReason: unknown;
 		const stream = agentLoop([createUserMessage("Wait")], context, config, undefined, (_model, _context, options) => {
 			options?.signal?.addEventListener("abort", () => {
 				providerSignalAborted = true;
+				providerSignalReason = options.signal?.reason;
 			});
 			return new AssistantMessageEventStream();
 		});
@@ -2865,6 +2867,9 @@ describe("agentLoopContinue with AgentMessage", () => {
 		const messages = await stream.result();
 
 		expect(providerSignalAborted).toBe(true);
+		if (!(providerSignalReason instanceof DOMException)) throw new Error("Expected a DOMException deadline reason");
+		expect(providerSignalReason.name).toBe("TimeoutError");
+		expect(providerSignalReason.message).toBe("Deadline exceeded");
 		const finalMessage = messages[messages.length - 1];
 		expect(finalMessage.role).toBe("assistant");
 		if (finalMessage.role !== "assistant") throw new Error("Expected assistant message");

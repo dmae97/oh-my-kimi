@@ -15,10 +15,10 @@ export interface ExecutorBackendExecOptions {
 	 * driven entirely by `signal`, which the eval tool arms as a watchdog that
 	 * pauses on bridge timeout-control status events and fires a `TimeoutError`
 	 * reason only while the Python/JS runtime owns control. Backends use this
-	 * value only for timeout-annotation text and as cold-start headroom; they MUST
-	 * NOT derive a competing wall-clock timer from it.
+	 * value only for timeout-annotation text and as cold-start headroom; undefined
+	 * disables the cell timeout. Backends MUST NOT derive a competing wall-clock timer from it.
 	 */
-	idleTimeoutMs: number;
+	idleTimeoutMs?: number;
 	reset: boolean;
 	onChunk: (chunk: string) => void;
 	/**
