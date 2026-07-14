@@ -84,7 +84,10 @@ const ADVISOR_OUTPUT_ONLY_HAZARDS: readonly AdvisorOutputHazard[] = [
 		label: "instruction override",
 		pattern: /\bignore\s+(?:all\s+)?(?:prior|previous|earlier)\s+(?:user\s+)?instructions\b/i,
 	},
-	{ label: "destructive shell command", pattern: /\brm\s+-[a-z]*r[a-z]*f[a-z]*(?:\s|$)/i },
+	{
+		label: "destructive shell command",
+		pattern: /\brm\s+(?=(?:-[a-z]+\s*)*-[a-z]*r[a-z]*)(?=(?:-[a-z]+\s*)*-[a-z]*f[a-z]*)(?:-[a-z]+\s*)+/i,
+	},
 	{ label: "denial instruction", pattern: /\bdeny\s+(?:this|it|the\s+request)\s+if\s+(?:asked|questioned)\b/i },
 ];
 
@@ -120,8 +123,21 @@ export function quarantineAdvisorUnsafeOutput(
 	const generatedText = generatedParts.join("\n");
 	if (generatedText) {
 		const labels: string[] = [];
+		const matchedLabels: string[] = [];
 		for (const hazard of ADVISOR_OUTPUT_ONLY_HAZARDS) {
-			if (hazard.pattern.test(generatedText) && !hazard.pattern.test(sourceText)) labels.push(hazard.label);
+			if (!hazard.pattern.test(generatedText)) continue;
+			matchedLabels.push(hazard.label);
+			if (!hazard.pattern.test(sourceText)) labels.push(hazard.label);
+		}
+		// A transcript can quote a destructive command while the advisor turns it
+		// into a new instruction. The output-only override remains sufficient
+		// provenance to quarantine that combination.
+		if (
+			matchedLabels.includes("destructive shell command") &&
+			labels.includes("instruction override") &&
+			!labels.includes("destructive shell command")
+		) {
+			labels.push("destructive shell command");
 		}
 		if (labels.includes("destructive shell command") || labels.length >= 3) {
 			reasons.push(`generated output-only destructive directives: ${labels.join(", ")}`);
@@ -462,7 +478,9 @@ export class AdvisorRuntime {
 						logger.debug("advisor onTurnError hook failed", { err: String(hookErr) });
 					}
 					if (err instanceof AdvisorOutputQuarantinedError) {
+						const rePrime = this.#pending.length > 0 ? this.#latestMessages : undefined;
 						this.#resetAdvisorContext(true, true);
+						if (rePrime) this.onTurnEnd(rePrime);
 						continue;
 					}
 					// The hook awaits; a reset during it invalidates this batch like the
