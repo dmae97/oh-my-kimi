@@ -15993,7 +15993,7 @@ export class AgentSession {
 			// User message: leaf = parent (null if root), text goes to editor
 			newLeafId = targetEntry.parentId;
 			editorText = this.#extractUserMessageText(targetEntry.message.content);
-		} else if (targetEntry.type === "custom_message") {
+		} else if (targetEntry.type === "custom_message" && targetEntry.customType !== SKILL_PROMPT_MESSAGE_TYPE) {
 			// Custom message: leaf = parent (null if root), text goes to editor
 			newLeafId = targetEntry.parentId;
 			editorText =
@@ -16004,7 +16004,10 @@ export class AgentSession {
 							.map(c => c.text)
 							.join("");
 		} else {
-			// Non-user message: leaf = selected node
+			// Non-user message (or a user-invoked skill-prompt injection): land the
+			// leaf on the selected node so it stays on the active branch. Skill
+			// prompts are custom_message entries but must not be re-editable — their
+			// content is a large expanded body, not a user turn (issue #5374).
 			newLeafId = targetId;
 		}
 

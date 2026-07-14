@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `/tree` navigation onto a `/skill:` injection node landing on the entry before it (dropping the skill off the active branch and prefilling the editor with the expanded skill body); selecting a skill injection now lands the leaf on the injection node ([#5374](https://github.com/can1357/oh-my-pi/issues/5374)).
+
 ## [16.5.0] - 2026-07-13
 
 ### Breaking Changes
