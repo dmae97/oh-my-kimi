@@ -6,6 +6,8 @@ The shell invokes **real binaries** with simple args. It is NOT full GNU Bash.
 
 Use bash ONLY for: a single binary call, or one short pipeline that COMPUTES a fact and does not depend on shell-specific regex/quoting (`wc -l`, `sort | uniq -c`, `comm`, `diff`, a checksum, `git status`).
 
+GitHub repository file? MUST use `github` `file_read` when available; otherwise `read`. NEVER use `curl`/`wget`.
+
 Anything below → `eval` cell, not bash:
 - Inline interpreter scripts (`-e`/`-c`/`--eval`) when an eval runtime exists for that language
 - Heredocs (`<<EOF`), `while`/`for`/`if`/`case` shell control flow

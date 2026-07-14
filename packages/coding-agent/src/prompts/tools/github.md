@@ -1,8 +1,9 @@
-Op-based `gh` wrapper: repos, PRs, search, checkout, push, Actions watch. Read an issue/PR via `issue://<N>`/`pr://<N>`. PR diffs: `pr://<N>/diff` (file listing), `pr://<N>/diff/<i>` (file slice, 1-indexed), `pr://<N>/diff/all` (full diff).
+Op-based `gh` wrapper: repos, repository files, PRs, search, checkout, push, Actions watch. Read an issue/PR via `issue://<N>`/`pr://<N>`. PR diffs: `pr://<N>/diff` (file listing), `pr://<N>/diff/<i>` (file slice, 1-indexed), `pr://<N>/diff/all` (full diff).
 
 <instruction>
 Pick op via `op`. Beyond the field descriptions, per op:
 - `repo_view` — omit `repo` to view the current checkout.
+- `file_read` — reads `path` from `repo`; omit `repo` for the current checkout and `branch` for its default branch.
 - `pr_create` — `head` defaults to the current branch.
 - `pr_checkout` — checks PR(s) out into dedicated git worktrees, not your working tree; pass an array of `pr` to batch multiple in one call.
 - `pr_push` — requires the branch to have been checked out first via `op: pr_checkout`.
@@ -15,3 +16,7 @@ Pick op via `op`. Beyond the field descriptions, per op:
 <output>
 Concise summary per op. `run_watch` failures save full logs to a session artifact.
 </output>
+
+<critical>
+GitHub-hosted repository file? MUST use `file_read`; NEVER `curl`/`wget`.
+</critical>
