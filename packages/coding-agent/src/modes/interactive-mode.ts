@@ -4160,7 +4160,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.#selectorController.showDebugSelector();
 	}
 
-	showAgentHub(options?: { requireContent?: boolean }): void {
+	showAgentHub(options?: { requireContent?: boolean; armCloseTap?: boolean }): void {
 		this.#selectorController.showAgentHub(this.#observerRegistry, options);
 	}
 

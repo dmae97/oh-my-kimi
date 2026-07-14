@@ -192,10 +192,13 @@ describe("Agent hub double-← gating", () => {
 		let shown: AgentHubOverlayComponent | undefined;
 		const shownReady = Promise.withResolvers<AgentHubOverlayComponent>();
 		const editor = {};
+		const focusTargets: unknown[] = [];
 		const ctx = {
 			keybindings: { getKeys: () => [] },
 			ui: {
-				setFocus: () => {},
+				setFocus: (target: unknown) => {
+					focusTargets.push(target);
+				},
 				requestRender: () => {},
 			},
 			editor,
@@ -215,7 +218,13 @@ describe("Agent hub double-← gating", () => {
 			hideThinkingBlock: false,
 		};
 		const controller = new SelectorController(ctx as unknown as InteractiveModeContext);
-		return { controller, shown: () => shown, shownReady: shownReady.promise };
+		return {
+			controller,
+			editor,
+			shown: () => shown,
+			shownReady: shownReady.promise,
+			focusTargets,
+		};
 	}
 
 	function registerWorker(agents: AgentRegistry) {
@@ -284,6 +293,34 @@ describe("Agent hub double-← gating", () => {
 
 		expect(shown()).toBeDefined();
 		shown()!.dispose();
+	});
+
+	it("armCloseTap lets a single ← dismiss the hub the opening ←← raised", () => {
+		const agents = new AgentRegistry();
+		// A parked/persisted agent opens the hub under requireContent (issue #4780).
+		agents.register({
+			id: "Parked",
+			displayName: "Parked",
+			kind: "sub",
+			parentId: "Main",
+			session: { subscribe: () => () => {} } as unknown as AgentSession,
+			sessionFile: null,
+			status: "parked",
+		});
+		const { controller, editor, shown, focusTargets } = setup(agents);
+
+		controller.showAgentHub(new SessionObserverRegistry(), { requireContent: true, armCloseTap: true });
+
+		const hub = shown();
+		expect(hub).toBeDefined();
+		expect(focusTargets.at(-1)).toBe(hub);
+
+		// One ← — the editor's detector consumed the ←← that opened the hub — now
+		// closes it, returning focus to the editor. Without armCloseTap this ← only
+		// primes the hub's fresh detector and the user stays trapped.
+		hub!.handleInput("\x1b[D");
+
+		expect(focusTargets.at(-1)).toBe(editor);
 	});
 });
 
