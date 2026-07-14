@@ -184,6 +184,17 @@ describe("task live progress rendering", () => {
 		expect(collapsedText).not.toContain("line 1");
 		expect(collapsedText).not.toContain("raw output:");
 	});
+	it("sanitizes control sequences from expanded subagent recent output", () => {
+		setViewportRows(40);
+		const progress = makeProgress(["safe after \x1b[2Kclear", "raw\rprompt"]);
+
+		const text = renderProgressText(progress, true, uiTheme);
+
+		expect(text).toContain("safe after clear");
+		expect(text).toContain("rawprompt");
+		expect(text).not.toContain("\x1b[2K");
+		expect(text).not.toContain("\r");
+	});
 
 	it("caps collapsed nested task progress at four rows plus an elision line", () => {
 		setViewportRows(40);
