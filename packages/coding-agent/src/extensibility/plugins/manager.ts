@@ -12,6 +12,7 @@ import {
 	logger,
 } from "@oh-my-pi/pi-utils";
 import { withExitGuard } from "../utils";
+import { refreshBunGitCache } from "./bun-git-cache";
 import { type GitSource, parseGitUrl } from "./git-url";
 import { installLegacyPiSpecifierShim, loadLegacyPiModule } from "./legacy-pi-compat";
 import { resolvePluginManifestEntries } from "./loader";
@@ -500,14 +501,13 @@ export class PluginManager {
 
 			// Step 2: refresh the git lockfile pin when re-installing an existing
 			// git plugin. `bun install <spec>` is a no-op when the spec matches the
-			// lockfile entry — it never re-resolves the remote ref — so re-running
-			// `omp plugin install github:owner/repo` would silently keep the user on
-			// the original resolved commit even after upstream moved (#3063).
-			// `bun update <name>` re-resolves the ref against the remote and
-			// rewrites the pin; SHA-pinned refs stay put because the commit can't
-			// move. First-time installs skip this — the initial `bun install` already
-			// fetched HEAD. Rollback is handled by the outer catch.
+			// lockfile entry, while `bun update <name>` resolves through Bun's bare
+			// clone cache. Fetch the matching cache clone first so a stale cached
+			// ref cannot silently preserve the old pin (#3063, #5401). First-time
+			// installs skip this because the initial `bun install` populated the
+			// cache from the remote. Rollback is handled by the outer catch.
 			if (gitSource && existingActualName) {
+				await refreshBunGitCache(gitSource, getPluginsDir());
 				const updateProc = Bun.spawn(["bun", "update", actualName], {
 					cwd: getPluginsDir(),
 					stdin: "ignore",
