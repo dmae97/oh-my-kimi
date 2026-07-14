@@ -34,4 +34,4 @@ const transport: Transport = {
 	},
 };
 
-new WorkerCore(transport);
+new WorkerCore(transport, { mode: "isolated" });

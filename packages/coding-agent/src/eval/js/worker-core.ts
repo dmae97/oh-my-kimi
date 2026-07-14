@@ -1,5 +1,3 @@
-import { isMainThread } from "node:worker_threads";
-import { postmortem } from "@oh-my-pi/pi-utils";
 import { ToolError } from "../../tools/tool-errors";
 import { JsRuntime, type RuntimeHooks } from "./shared/runtime";
 import type {
@@ -26,6 +24,23 @@ interface ActiveRun {
 }
 
 type RunResult = Extract<WorkerOutbound, { type: "result" }>;
+
+export type WorkerCoreOptions =
+	| {
+			mode: "isolated";
+			/**
+			 * Mirror the session cwd onto the real process cwd so cell code using
+			 * `process.cwd()`, relative paths, or child processes without an explicit
+			 * `cwd` resolves against the project. Only the dedicated subprocess may
+			 * pass this: `process.chdir` is unavailable in Worker threads and would
+			 * mutate the host's own cwd on the inline fallback.
+			 */
+			chdir?: (cwd: string) => void;
+	  }
+	| {
+			mode: "inline";
+			interceptUnhandledRejections(handler: (reason: unknown) => boolean): () => void;
+	  };
 
 /** Finished-cell filenames retained for attributing rejections that surface after the run settled. */
 const RECENT_CELL_FILES_MAX = 256;
@@ -82,9 +97,11 @@ export class WorkerCore {
 	#recentCellFiles = new Set<string>();
 	#unsubscribe: () => void;
 	#uninstallRejectionGuard: () => void;
+	#options: WorkerCoreOptions;
 
-	constructor(transport: Transport) {
+	constructor(transport: Transport, options: WorkerCoreOptions) {
 		this.#transport = transport;
+		this.#options = options;
 		this.#unsubscribe = transport.onMessage(msg => this.#handle(msg));
 		this.#uninstallRejectionGuard = this.#installRejectionGuard();
 	}
@@ -98,8 +115,8 @@ export class WorkerCore {
 	 * without a usable stack, while anything else keeps its default fatality.
 	 */
 	#installRejectionGuard(): () => void {
-		if (isMainThread) {
-			return postmortem.interceptUnhandledRejections(reason => this.#consumeRejection(reason));
+		if (this.#options.mode === "inline") {
+			return this.#options.interceptUnhandledRejections(reason => this.#consumeRejection(reason));
 		}
 		const onRejection = (reason: unknown): void => {
 			if (this.#consumeRejection(reason)) return;
@@ -161,7 +178,7 @@ export class WorkerCore {
 				return true;
 			}
 		}
-		if (!isMainThread && this.#runs.size > 0) {
+		if (this.#options.mode === "isolated" && this.#runs.size > 0) {
 			// Dedicated eval worker: during a live run, a rejection without a cell
 			// frame (e.g. `Promise.reject("msg")` or a library-created reason) is
 			// still cell activity — nothing else runs user code in this realm.
@@ -206,7 +223,8 @@ export class WorkerCore {
 		}
 	}
 
-	#ensureRuntime(snapshot: SessionSnapshot): JsRuntime {
+	#ensureRuntime(snapshot: SessionSnapshot, currentRunId?: string): JsRuntime {
+		this.#syncProcessCwd(snapshot.cwd, currentRunId);
 		if (this.#runtime) {
 			this.#runtime.setCwd(snapshot.cwd);
 			return this.#runtime;
@@ -219,6 +237,41 @@ export class WorkerCore {
 		return this.#runtime;
 	}
 
+	#syncProcessCwd(cwd: string, currentRunId?: string): void {
+		if (this.#options.mode !== "isolated" || !this.#options.chdir) return;
+		try {
+			if (process.cwd() === cwd) return;
+		} catch {
+			// The current cwd was deleted; the chdir below is the recovery.
+		}
+		// Process cwd is realm-wide state. Moving it while another cell is mid-run
+		// would silently redirect that cell's `process.cwd()`, relative fs access,
+		// and child spawns, so keep it in place; this run still resolves against
+		// its own virtual cwd, and the next cell to start alone lands the move.
+		for (const runId of this.#runs.keys()) {
+			if (runId === currentRunId) continue;
+			this.#transport.send({
+				type: "log",
+				level: "warn",
+				msg: "JS eval subprocess kept its process cwd: other cells are mid-run",
+				meta: { cwd },
+			});
+			return;
+		}
+		try {
+			this.#options.chdir(cwd);
+		} catch (error) {
+			// `process.chdir` throws when the session cwd no longer exists; keep
+			// the cell on the runtime's virtual cwd instead of failing the run.
+			this.#transport.send({
+				type: "log",
+				level: "warn",
+				msg: "JS eval subprocess could not enter the session cwd",
+				meta: { cwd, error: errorPayload(error) },
+			});
+		}
+	}
+
 	async #runOne(runId: string, code: string, filename: string, snapshot: SessionSnapshot): Promise<void> {
 		const active: ActiveRun = { runId, filename, pendingTools: new Map(), floatingRejections: [] };
 		this.#runs.set(runId, active);
@@ -229,7 +282,7 @@ export class WorkerCore {
 		};
 		let result: RunResult;
 		try {
-			const runtime = this.#ensureRuntime(snapshot);
+			const runtime = this.#ensureRuntime(snapshot, runId);
 			runtime.setCwd(snapshot.cwd);
 			const value = await runtime.run(code, filename, hooks, { runId, cwd: snapshot.cwd });
 			runtime.displayValue(value, hooks);
@@ -263,7 +316,15 @@ export class WorkerCore {
 		const id = `tc-${active.runId}-${crypto.randomUUID()}`;
 		const { promise, resolve, reject } = Promise.withResolvers<unknown>();
 		active.pendingTools.set(id, { runId: active.runId, resolve, reject });
-		this.#transport.send({ type: "tool-call", id, runId: active.runId, name, args });
+		try {
+			this.#transport.send({ type: "tool-call", id, runId: active.runId, name, args });
+		} catch (error) {
+			// Non-serializable args (DataCloneError from postMessage / IPC send).
+			// No reply will ever arrive; fail this call instead of stranding a
+			// pending entry until close.
+			active.pendingTools.delete(id);
+			reject(error);
+		}
 		return await promise;
 	}
 
