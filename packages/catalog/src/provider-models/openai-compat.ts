@@ -1887,6 +1887,7 @@ function openCodeModelManagerOptions(
 	const references = createBundledReferenceMap<Api>(providerId);
 	return {
 		providerId,
+		dynamicModelsAuthoritative: true,
 		...(apiKey && {
 			fetchDynamicModels: () =>
 				fetchOpenAICompatibleModels<Api>({
