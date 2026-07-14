@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed PageUp/PageDown on an idle (empty) prompt editor stepping through prompt history like the Up/Down arrows instead of paging the draft. The paging keys now only scroll the editor viewport (a no-op on a short draft) and never touch prompt history ([#4754](https://github.com/can1357/oh-my-pi/issues/4754)).
+
 ## [16.3.10] - 2026-07-06
 
 ### Fixed

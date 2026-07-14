@@ -1936,6 +1936,27 @@ describe("Editor component", () => {
 			expect(editor.getCursor()).toEqual({ line: 6, col: 2 });
 		});
 
+		it("PageUp/PageDown on an idle editor never step prompt history (#4754)", () => {
+			const editor = new Editor(defaultEditorTheme);
+
+			editor.addToHistory("first prompt");
+			editor.addToHistory("second prompt");
+			editor.render(80);
+			expect(editor.getText()).toBe("");
+
+			editor.handleInput("\x1b[5~"); // PageUp on empty editor
+			expect(editor.getText()).toBe("");
+
+			editor.handleInput("\x1b[6~"); // PageDown on empty editor
+			expect(editor.getText()).toBe("");
+
+			// While browsing history (entered via Up), PageUp must not advance it.
+			editor.handleInput("\x1b[A"); // Up - shows "second prompt"
+			expect(editor.getText()).toBe("second prompt");
+			editor.handleInput("\x1b[5~"); // PageUp - stays put
+			expect(editor.getText()).toBe("second prompt");
+		});
+
 		it("moves correctly through wrapped visual lines without getting stuck", () => {
 			const editor = new Editor(defaultEditorTheme);
 
