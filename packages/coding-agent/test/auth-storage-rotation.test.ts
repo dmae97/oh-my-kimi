@@ -2,17 +2,11 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-1: import { type OAuthCredential, type UsageProvider, withAuth } from "@oh-my-pi/pi-ai";
-2: import type { OAuthCredentials, OAuthProviderId } from "@oh-my-pi/pi-ai/oauth/types";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-3: @both
+import { type OAuthCredential, type UsageProvider, withAuth } from "@oh-my-pi/pi-ai";
 import * as oauth from "@oh-my-pi/pi-ai/oauth";
-1: import { type OAuthCredential, type UsageProvider, withAuth } from "@oh-my-pi/pi-ai";
-2: import type { OAuthCredentials, OAuthProviderId } from "@oh-my-pi/pi-ai/oauth/types";
+import type { OAuthCredentials, OAuthProviderId } from "@oh-my-pi/pi-ai/oauth/types";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-3: @both
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import { createApiKeyResolver } from "../src/config/api-key-resolver";
@@ -201,10 +195,189 @@ describe("AuthStorage account rotation", () => {
 		expect(await authStorage.getApiKey("openai-codex", sessionId)).toBe(stickyKey);
 	});
 
-1: import { type OAuthCredential, type UsageProvider, withAuth } from "@oh-my-pi/pi-ai";
-2: import type { OAuthCredentials, OAuthProviderId } from "@oh-my-pi/pi-ai/oauth/types";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-3: @both
+	test("API key resolver re-resolves after a concurrent OAuth refresh makes a 401 bearer stale", async () => {
+		const resolvedKeys = ["stale-access", "refreshed-access"];
+		const rotationTargets: Array<string | undefined> = [];
+		const registry: Parameters<typeof createApiKeyResolver>[0] = {
+			async getApiKeyForProvider() {
+				return resolvedKeys.shift();
+			},
+			authStorage: {
+				async rotateSessionCredential(_provider, _sessionId, options) {
+					rotationTargets.push(options?.apiKey);
+					return false;
+				},
+			},
+		};
+		const resolver = createApiKeyResolver(registry, "openai-codex", {
+			sessionId: "concurrent-oauth-refresh",
+		});
+
+		const initial = await resolver({ lastChance: false, error: undefined });
+		const refreshed = await resolver({
+			lastChance: true,
+			error: Object.assign(new Error("401 authentication_error"), { status: 401 }),
+			previousKey: initial,
+		});
+
+		expect(initial).toBe("stale-access");
+		expect(refreshed).toBe("refreshed-access");
+		expect(rotationTargets).toEqual(["stale-access"]);
+	});
+
+	test("API key resolver stops when a usage-limit rotation has no unblocked sibling", async () => {
+		const resolvedKeys = ["quota-blocked-B", "quota-blocked-A"];
+		const registry: Parameters<typeof createApiKeyResolver>[0] = {
+			async getApiKeyForProvider() {
+				return resolvedKeys.shift();
+			},
+			authStorage: {
+				async rotateSessionCredential() {
+					return false;
+				},
+			},
+		};
+		const attemptedKeys: string[] = [];
+
+		await expect(
+			withAuth(createApiKeyResolver(registry, "openai-codex"), async key => {
+				attemptedKeys.push(key);
+				throw Object.assign(new Error("You have hit your ChatGPT usage limit (pro plan). Try again later."), {
+					status: 429,
+				});
+			}),
+		).rejects.toThrow("usage limit");
+
+		expect(attemptedKeys).toEqual(["quota-blocked-B"]);
+		expect(resolvedKeys).toEqual(["quota-blocked-A"]);
+	});
+
+	test("withAuth reaches a fourth healthy Codex OAuth sibling through ModelRegistry", async () => {
+		await authStorage.set("openai-codex", [
+			{
+				type: "oauth",
+				access: "access-a",
+				refresh: "refresh-a",
+				expires: Date.now() + 60_000,
+				accountId: "acct-a",
+			},
+			{
+				type: "oauth",
+				access: "access-b",
+				refresh: "refresh-b",
+				expires: Date.now() + 60_000,
+				accountId: "acct-b",
+			},
+			{
+				type: "oauth",
+				access: "access-c",
+				refresh: "refresh-c",
+				expires: Date.now() + 60_000,
+				accountId: "acct-c",
+			},
+			{
+				type: "oauth",
+				access: "access-d",
+				refresh: "refresh-d",
+				expires: Date.now() + 60_000,
+				accountId: "acct-d",
+			},
+		]);
+
+		const model = getBundledModel("openai-codex", "gpt-5.5");
+		if (!model) {
+			throw new Error("Expected bundled Codex test model to exist");
+		}
+
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		const attemptedKeys: string[] = [];
+		const result = await withAuth(modelRegistry.resolver(model, "codex-four-oauth-session"), async key => {
+			attemptedKeys.push(key);
+			if (key !== "access-d") {
+				throw new Error("You have hit your ChatGPT usage limit (pro plan). Try again later.");
+			}
+			return key;
+		});
+
+		expect(result).toBe("access-d");
+		expect(attemptedKeys.at(-1)).toBe("access-d");
+		expect([...attemptedKeys].sort()).toEqual(["access-a", "access-b", "access-c", "access-d"]);
+		expect(new Set(attemptedKeys).size).toBe(4);
+	});
+
+	test("provider login invalidates only that provider's persisted session stickiness", async () => {
+		const targetInitialCredentials: OAuthCredential[] = [
+			{
+				type: "oauth",
+				access: "target-access-a",
+				refresh: "target-refresh-a",
+				expires: Date.now() + 3600_000,
+				accountId: "target-acct-a",
+				email: "target-a@example.com",
+			},
+			{
+				type: "oauth",
+				access: "target-access-b",
+				refresh: "target-refresh-b",
+				expires: Date.now() + 3600_000,
+				accountId: "target-acct-b",
+				email: "target-b@example.com",
+			},
+		];
+		const targetAddedCredential: OAuthCredential = {
+			type: "oauth",
+			access: "target-access-c",
+			refresh: "target-refresh-c",
+			expires: Date.now() + 3600_000,
+			accountId: "target-acct-c",
+			email: "target-c@example.com",
+		};
+		const targetFinalCredentials = [...targetInitialCredentials, targetAddedCredential];
+		const { sessionId, stickyKey, freshKey } = await findSessionWhereFreshSelectionChanges(
+			targetProvider,
+			targetInitialCredentials,
+			targetFinalCredentials,
+		);
+
+		await authStorage.set(unrelatedProvider, [
+			{
+				type: "oauth",
+				access: "unrelated-access-a",
+				refresh: "unrelated-refresh-a",
+				expires: Date.now() + 3600_000,
+				accountId: "unrelated-acct-a",
+				email: "unrelated-a@example.com",
+			},
+			{
+				type: "oauth",
+				access: "unrelated-access-b",
+				refresh: "unrelated-refresh-b",
+				expires: Date.now() + 3600_000,
+				accountId: "unrelated-acct-b",
+				email: "unrelated-b@example.com",
+			},
+		]);
+		const unrelatedSessionId = "issue-4982-unrelated-session";
+		const unrelatedStickyKey = await authStorage.getApiKey(unrelatedProvider, unrelatedSessionId);
+		expect(unrelatedStickyKey).toMatch(/^unrelated-access-/);
+
+		const { type: _type, ...loginCredential } = targetAddedCredential;
+		nextLoginCredential = loginCredential;
+		await authStorage.login(targetProvider, {
+			onAuth: () => {},
+			onPrompt: async () => "",
+		});
+		nextLoginCredential = undefined;
+
+		authStorage.close();
+		authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"), {
+			usageProviderResolver: provider => (provider === "openai-codex" ? usageProvider : undefined),
+		});
+		await authStorage.reload();
+
+		const reloadedTargetKey = await authStorage.getApiKey(targetProvider, sessionId);
+		expect(reloadedTargetKey).toBe(freshKey);
+		expect(reloadedTargetKey).not.toBe(stickyKey);
+		expect(await authStorage.getApiKey(unrelatedProvider, unrelatedSessionId)).toBe(unrelatedStickyKey);
 	});
 });

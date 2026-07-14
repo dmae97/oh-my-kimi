@@ -2269,10 +2269,14 @@ describe("advisor", () => {
 				state: { messages: [] },
 			};
 			const messages: AgentMessage[] = [{ role: "user", content: "aaa", timestamp: 1 } as AgentMessage];
-			const runtime = new AdvisorRuntime(agent, {
-				snapshotMessages: () => messages,
-				enqueueAdvice: () => {},
-			}, 0);
+			const runtime = new AdvisorRuntime(
+				agent,
+				{
+					snapshotMessages: () => messages,
+					enqueueAdvice: () => {},
+				},
+				0,
+			);
 
 			runtime.onTurnEnd(messages);
 			await firstPromptStarted;

@@ -2,10 +2,64 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `omp usage` and the in-session `/usage` view now show the Anthropic organization next to the account for org-scoped credentials (with `--redact` masking applied per part in the CLI, falling back to the org id when no display name is available), attribute "no usage data" rows per organization, and match the "in use by this session" marker by organization so only the active subscription is flagged. The OAuth login success message names the account and organization that was stored — a login landing on an unintended subscription is visible immediately.
+- `/logout` labels Anthropic accounts with their organization and marks only the credential of the active organization as active; `omp token --list` shows the organization next to each account. Two subscriptions sharing one email are distinguishable when selecting which to remove or mint a token for.
+- `omp auth-broker migrate --from-local` dedupes Anthropic OAuth identities per organization, so a Team seat already on the broker no longer blocks uploading the personal plan under the same email.
+- The status line invalidates its cached usage when the session rotates to a different Anthropic organization (previously the old subscription's quota could linger for the cache TTL), and `omp auth-gateway check` labels each credential with its organization so a failing row says which subscription needs re-login.
+- `omp usage` "no usage data" attribution is org-decisive whenever either the stored account or a report carries an organization: an org-less legacy credential whose own fetch failed is no longer hidden by an org-attributed sibling report sharing the same email.
+- Active-account matching for `/usage`, `/logout`, and `omp token --list` now treats a shared organization as a qualifier rather than a match: two Anthropic Team seats in one org (same org id, per-user pools) no longer flag each other's rows or reports as "in use by this session" — the base identity (account/email/project) is still required, with org-only sessions matching on the org alone.
+- `omp usage` "no usage data" coverage now requires the member's own identity within a shared organization: a sibling Team member's same-org report no longer counts as coverage for an account whose own report is missing, while an org-only account remains covered by any same-org report.
+- `omp auth-broker migrate --from-local` reruns now recognize an already-migrated org-only Anthropic row (login recovered neither email nor account) by its organization id instead of re-uploading it, which could overwrite the broker's newer refresh token with the stale local one.
+
 ### Fixed
 
 - Fixed Codex web search requests for GPT-5.6 Responses-Lite models, including `gpt-5.6-sol`. ([#5286](https://github.com/can1357/oh-my-pi/issues/5286))
 - Fixed subagent model and thinking level intermittently resolving to the parent session's model instead of the configured `modelRoles.task` selector ([#5325](https://github.com/can1357/oh-my-pi/issues/5325)). The pre-flight auth check in `resolveModelOverrideWithAuthFallback` called `getApiKey` without a session id, so providers with session-sticky OAuth credentials returned `undefined` even though the credential was usable once the subagent session started. The subagent's id is now forwarded as the session id so session-sticky credentials resolve correctly. Model resolution warnings (e.g. invalid thinking level in a pattern) are also now logged instead of silently dropped.
+- Bounded transcript render retention after finalized rows enter native scrollback, while rehydrating the complete transcript before destructive resize/reset replays, so long resumed TUI sessions no longer retain every committed row or lose history on repaint ([#4820](https://github.com/can1357/oh-my-pi/issues/4820)).
+- Fixed `/tan` and `/fork` clones cold-missing the provider prompt cache: the per-turn supersede/useless-result prune rewrote the live context without persisting it, so file-based forks and resume rebuilt a divergent (un-pruned) prefix and re-wrote the entire cache
+- Fixed `/tan` pinning the clone's prompt-cache key to the parent's session id instead of the parent's effective cache key, dropping shard affinity when the parent was itself a fork or tan
+- Fixed eval kernels inheriting the interactive terminal session, allowing subprocesses to take the foreground process group and suspend the CLI with `zsh: suspended (tty input)` ([#5327](https://github.com/can1357/oh-my-pi/pull/5327) by [@masonc15](https://github.com/masonc15))
+- Fixed the JS eval subprocess killing itself — erasing all session state — when a cell passed a non-serializable value (e.g. a function) into a bridge tool call; the `DataCloneError` now rejects that call inside the cell, matching Worker `postMessage` semantics ([#5327](https://github.com/can1357/oh-my-pi/pull/5327) by [@masonc15](https://github.com/masonc15))
+- Fixed inconsistent history rendering when toggling the display setting for compacted items
+- Fixed configured `retry.fallbackChains` never engaging on non-retryable provider errors (e.g. "Cloud Code Assist API returned an empty response"): a hard error on a model covered by a fallback chain now switches to the next candidate instead of failing the turn, while still never backoff-retrying the failing model itself
+- Fixed transcript rebuilds (compaction, `/compact`, and toggling history display) repainting content below stale scrollback when collapsing history; rebuilds now correctly clear the scrollback buffer when history is collapsed
+- Improved auto-compaction to automatically drop images and elide content when context is tight, and added persistent warning badges to the compaction divider when manual intervention is required
+- Fixed backgrounded Bash blocks continuing to repaint with live and final job output; they now freeze with a compact job notice while completion is delivered separately
+- Fixed the downshift plan nudge silently ending the run with no code written when the model answered with a text-only reply (no tool call): the agent loop treats a tool-call-free turn as a natural stop and never prompts again, which the nudge's own "write the plan in your next reply" instruction makes common. The nudge now explicitly tells the model this is a checkpoint, not a final answer, and the session forces one more turn whenever a post-nudge reply lands with zero tool calls
+- Fixed launch tool rendering stacking a stale pending header over a bare `✓ Launch` line and raw text: the tool now uses a merged registry renderer with one per-op status header (op, target, `state · pid · uptime` meta), stripped log cursor suffixes, capped collapsed log/list previews, and a launch tool glyph
+- Fixed confusing launch start/wait results when readiness timed out with the log pattern already matched (readiness needs log AND port): the result printed a contradictory `Ready: <match>` next to `Readiness timed out` without naming the failing condition. Daemon snapshots now carry the unmet conditions (`readyPending`), and start/wait results state exactly what never happened (e.g. `port 3100 on 127.0.0.1 never accepted connections`); the TUI shows a `waiting on port` badge on starting daemons
+- Fixed the in-process `stat` builtin mangling BSD-style invocations like `stat -f "%Sm %N" file` (macOS muscle memory): GNU `-f` means `--file-system`, so the format string was treated as a file operand — printing filesystem info for the real operands and erroring with `cannot read file system information for '%Sm %N'`. A `-f` whose format value contains `%` is now detected as BSD syntax and translated to the GNU equivalent (`%Sm`→`%y`, `%N`→`%n`, `%z`→`%s`, epoch/`S`-form times, owner/group/permission and `H`/`L` sub-field directives, `-L`/`-n`/`-q`/`-F` flag clusters, with `%n`/`%t` as literal newline/tab); directives with no GNU counterpart fail with a clear `unsupported BSD format directive` error
+- Fixed the remaining GNU-flavored shell builtins that broke under macOS/BSD muscle memory, using the same unambiguous-detection approach as the `stat` fix (only invocations that are invalid or nonsensical under GNU semantics are reinterpreted; unsupported BSD forms fail loudly instead of producing wrong output): `date -r <epoch>` formats the epoch when no such file exists (GNU `-r FILE` mtime preserved), signed `date -v±N<unit>` adjustments translate to `-d` relative dates and `-j` is accepted (`-j -f` strptime parse mode and field-set `-v` error clearly); `sed -i '' 's/…/…/' file` drops the BSD empty backup-suffix token instead of treating it as the script; `mktemp -t prefix` without X's creates `$TMPDIR/prefix.XXXXXXXXXX` (the GNU `too few X's` error path); `tail -r` reverses input by delegating to `tac` (with `-n`/`-c`/`-f` combinations erroring clearly); `find -E` maps to `-regextype posix-extended` ahead of the expression; `base64 -D` decodes as an alias of `-d`; and `ln -sfh` works via a `-h` alias of `--no-dereference` (clap's `-h` help short is dropped to match real GNU/BSD ln; `--help` unchanged)
+- Fixed temporary model picks (`Alt+P`, `/switch`, `/model --temporary`) ignoring explicit thinking suffixes from matching configured model roles. ([#5290](https://github.com/can1357/oh-my-pi/issues/5290))
+- Fixed ModelRegistry/AuthStorage resolvers to continue replay-safe usage/account-quota turns across every distinct eligible credential and return exhaustion when no sibling switches, instead of re-resolving the same failed credential.
+- Fixed preferred web search providers failing before execution when an unrelated fallback provider could not initialize. ([#5182](https://github.com/can1357/oh-my-pi/pull/5182) by [@wolfiesch](https://github.com/wolfiesch))
+- Fixed Advisor containment so hallucinated unavailable tool calls and output-only destructive directives quarantine the Advisor response and reset its private context instead of feeding contaminated text into later advice. ([#5181](https://github.com/can1357/oh-my-pi/issues/5181))
+- Fixed the built-in advisor treating empty `stop` completions without advice as successful reviews, so silent provider failures now enter the advisor retry/drop path. ([#5212](https://github.com/can1357/oh-my-pi/issues/5212))
+- Fixed `autolearn.autoContinue` treating the hidden capture turn's terminal empty assistant stop as a retryable empty response instead of successful completion. ([#5211](https://github.com/can1357/oh-my-pi/issues/5211))
+- Fixed advisor flagging issues the primary agent already resolved by coalescing late-arriving transcript deltas into the current batch before the advisor model call (instead of deferring them a full cycle), annotating advice with a staleness caveat when newer primary turns arrived during the model call, and tagging mid-turn `[in progress]` updates so the advisor withholds premature critique ([#4850](https://github.com/can1357/oh-my-pi/issues/4850)). Also fixed pre-existing unchecked inline casts in `#renderDelta` and `#dedupContextMessage` that suppressed type errors instead of using role-discriminant narrowing.
+- Fixed sub-agent progress rendering leaking raw terminal control bytes into the parent TUI. ([#5159](https://github.com/can1357/oh-my-pi/issues/5159))
+- Fixed `--continue <session-id>` falling back to an unrelated latest session when the requested session does not exist.
+- Fixed resumed sessions retaining an unterminated turn after an abnormal process exit.
+- Fixed macOS runtime diagnostics (e.g. `MallocStackLogging: can't turn off malloc stack logging because it was not enabled`) written directly to fd 2 by libmalloc painting into the TUI viewport. While the TUI owns the terminal, stderr is now redirected to the omp log file and restored at every ownership handoff (external editor, Ctrl+Z suspend, shutdown, crash restore); fatal crash reports still reach the real terminal.
+- Fixed custom model/provider config discovery so `~/.omp/agent/models.yaml` loads when `models.yml` is absent, while preserving `.yml` precedence and only migrating legacy `models.json` when neither YAML file exists. ([#5145](https://github.com/can1357/oh-my-pi/issues/5145))
+- Fixed throttled live command output holding a quiet final chunk until the command exited.
+- Fixed rpc-ui extension UI and host tool responses deadlocking login, session lifecycle, and queued commands while an active command awaited the same side channel. ([#5153](https://github.com/can1357/oh-my-pi/issues/5153))
+- Fixed `write` treating read-only internal URLs like `memory://root/memory_summary.md` as project-relative filesystem paths, prevented leaks such as `{cwd}/memory:/root/memory_summary.md`, and made `memory://root` prefer the calling session's cwd-specific memory root when multiple agents are live. ([#5075](https://github.com/can1357/oh-my-pi/issues/5075))
+- Fixed `memory://root` resolution leaking between live agents with different working directories by resolving file-backed memory roots from the calling session cwd before falling back to the global session registry. ([#5079](https://github.com/can1357/oh-my-pi/issues/5079))
+- Fixed todo reminders auto-continuing over interactive skill questions; text-only assistant questions now yield to the user without firing the incomplete-todo reminder loop. ([#5089](https://github.com/can1357/oh-my-pi/issues/5089))
+- Fixed MiniMax-M3 task subagents retrying empty `yield` results forever; repeated untyped `result: {}` submissions now abort the child with guidance instead of leaving the parent blocked. ([#5095](https://github.com/can1357/oh-my-pi/issues/5095))
+- Fixed `omp update` on npm-managed Windows installs so npm `.cmd`/`.ps1`/`.bat` launchers update through npm instead of being overwritten by downloaded release binaries. ([#5053](https://github.com/can1357/oh-my-pi/issues/5053))
+- Fixed Python eval `agent()` bridge calls losing in-flight subagent work when the parent cell receives an external abort; the kernel abort is now deferred until already-started bridge calls settle, and new bridge calls are rejected after the abort is pending. ([#5005](https://github.com/can1357/oh-my-pi/issues/5005))
+- Fixed `--max-time` duration values like `5s`, `10m`, and `1h` being ignored instead of configuring a session deadline. ([#5041](https://github.com/can1357/oh-my-pi/issues/5041))
+- Fixed `ultrathink`, `orchestrate`, and `workflowz` magic keywords not triggering when adjacent to sentence punctuation or quotes while still ignoring inflections and path/file-extension occurrences. ([#4965](https://github.com/can1357/oh-my-pi/issues/4965))
+- Fixed `omp plugin install github:owner/repo --force` failing with Bun `DependencyLoop` when replacing an existing pinned git plugin source for the same repository; the installer now removes the stale pinned dependency edge before invoking Bun and restores it on rollback. ([#4960](https://github.com/can1357/oh-my-pi/issues/4960))
+- Fixed Cursor-provider turns whose assistant message contains intro text, tool calls, and trailing final text rendering the final answer above the tool output instead of at the transcript tail ([#4871](https://github.com/can1357/oh-my-pi/issues/4871)).
+- Fixed `omp -p` looking hung while a text-mode prompt is in flight by writing a one-shot working indicator to stderr before awaiting the model response. ([#4901](https://github.com/can1357/oh-my-pi/issues/4901))
+- Fixed autolearn auto-continue firing a capture turn after an aborted stop (Esc/cancel): the controller now skips any `agent_end` whose last assistant message has `stopReason: "aborted"`.
+- Fixed MCP tools receiving session image attachments as raw `local://...` URIs by resolving them to session-local filesystem paths before `tools/call` is sent ([#4946](https://github.com/can1357/oh-my-pi/issues/4946)).
+- Fixed late advisor concerns after a terminal primary answer starting a duplicate primary turn when no queued work remains ([#4840](https://github.com/can1357/oh-my-pi/issues/4840)).
 
 ## [16.5.0] - 2026-07-13
 
@@ -50,24 +104,6 @@
 - Removed the `--prewalk-boomerang` feature and its associated configuration setting.
 - Removed the unreliable Bing and Yahoo HTML-scraping web search providers.
 
-### Fixed
-
-- Bounded transcript render retention after finalized rows enter native scrollback, while rehydrating the complete transcript before destructive resize/reset replays, so long resumed TUI sessions no longer retain every committed row or lose history on repaint ([#4820](https://github.com/can1357/oh-my-pi/issues/4820)).
-- Fixed `/tan` and `/fork` clones cold-missing the provider prompt cache: the per-turn supersede/useless-result prune rewrote the live context without persisting it, so file-based forks and resume rebuilt a divergent (un-pruned) prefix and re-wrote the entire cache
-- Fixed `/tan` pinning the clone's prompt-cache key to the parent's session id instead of the parent's effective cache key, dropping shard affinity when the parent was itself a fork or tan
-- Fixed eval kernels inheriting the interactive terminal session, allowing subprocesses to take the foreground process group and suspend the CLI with `zsh: suspended (tty input)` ([#5327](https://github.com/can1357/oh-my-pi/pull/5327) by [@masonc15](https://github.com/masonc15))
-- Fixed the JS eval subprocess killing itself — erasing all session state — when a cell passed a non-serializable value (e.g. a function) into a bridge tool call; the `DataCloneError` now rejects that call inside the cell, matching Worker `postMessage` semantics ([#5327](https://github.com/can1357/oh-my-pi/pull/5327) by [@masonc15](https://github.com/masonc15))
-- Fixed inconsistent history rendering when toggling the display setting for compacted items
-- Fixed configured `retry.fallbackChains` never engaging on non-retryable provider errors (e.g. "Cloud Code Assist API returned an empty response"): a hard error on a model covered by a fallback chain now switches to the next candidate instead of failing the turn, while still never backoff-retrying the failing model itself
-- Fixed transcript rebuilds (compaction, `/compact`, and toggling history display) repainting content below stale scrollback when collapsing history; rebuilds now correctly clear the scrollback buffer when history is collapsed
-- Improved auto-compaction to automatically drop images and elide content when context is tight, and added persistent warning badges to the compaction divider when manual intervention is required
-- Fixed backgrounded Bash blocks continuing to repaint with live and final job output; they now freeze with a compact job notice while completion is delivered separately
-- Fixed the downshift plan nudge silently ending the run with no code written when the model answered with a text-only reply (no tool call): the agent loop treats a tool-call-free turn as a natural stop and never prompts again, which the nudge's own "write the plan in your next reply" instruction makes common. The nudge now explicitly tells the model this is a checkpoint, not a final answer, and the session forces one more turn whenever a post-nudge reply lands with zero tool calls
-- Fixed launch tool rendering stacking a stale pending header over a bare `✓ Launch` line and raw text: the tool now uses a merged registry renderer with one per-op status header (op, target, `state · pid · uptime` meta), stripped log cursor suffixes, capped collapsed log/list previews, and a launch tool glyph
-- Fixed confusing launch start/wait results when readiness timed out with the log pattern already matched (readiness needs log AND port): the result printed a contradictory `Ready: <match>` next to `Readiness timed out` without naming the failing condition. Daemon snapshots now carry the unmet conditions (`readyPending`), and start/wait results state exactly what never happened (e.g. `port 3100 on 127.0.0.1 never accepted connections`); the TUI shows a `waiting on port` badge on starting daemons
-- Fixed the in-process `stat` builtin mangling BSD-style invocations like `stat -f "%Sm %N" file` (macOS muscle memory): GNU `-f` means `--file-system`, so the format string was treated as a file operand — printing filesystem info for the real operands and erroring with `cannot read file system information for '%Sm %N'`. A `-f` whose format value contains `%` is now detected as BSD syntax and translated to the GNU equivalent (`%Sm`→`%y`, `%N`→`%n`, `%z`→`%s`, epoch/`S`-form times, owner/group/permission and `H`/`L` sub-field directives, `-L`/`-n`/`-q`/`-F` flag clusters, with `%n`/`%t` as literal newline/tab); directives with no GNU counterpart fail with a clear `unsupported BSD format directive` error
-- Fixed the remaining GNU-flavored shell builtins that broke under macOS/BSD muscle memory, using the same unambiguous-detection approach as the `stat` fix (only invocations that are invalid or nonsensical under GNU semantics are reinterpreted; unsupported BSD forms fail loudly instead of producing wrong output): `date -r <epoch>` formats the epoch when no such file exists (GNU `-r FILE` mtime preserved), signed `date -v±N<unit>` adjustments translate to `-d` relative dates and `-j` is accepted (`-j -f` strptime parse mode and field-set `-v` error clearly); `sed -i '' 's/…/…/' file` drops the BSD empty backup-suffix token instead of treating it as the script; `mktemp -t prefix` without X's creates `$TMPDIR/prefix.XXXXXXXXXX` (the GNU `too few X's` error path); `tail -r` reverses input by delegating to `tac` (with `-n`/`-c`/`-f` combinations erroring clearly); `find -E` maps to `-regextype posix-extended` ahead of the expression; `base64 -D` decodes as an alias of `-d`; and `ln -sfh` works via a `-h` alias of `--no-dereference` (clap's `-h` help short is dropped to match real GNU/BSD ln; `--help` unchanged)
-
 ## [16.4.8] - 2026-07-12
 
 ### Added
@@ -94,7 +130,6 @@
 - Fixed tab reuse issues where hung navigation or unhandled modals would cause initialization to stall and trigger a force-kill
 - Improved search reliability for Perplexity provider by forcing retrieval for all queries
 - Fixed JS eval cells losing top-level `function` and `var` declarations across cells when the defining cell contained top-level `await` — the async wrapper scoped them to the cell's IIFE instead of publishing them to the worker global
-- Fixed temporary model picks (`Alt+P`, `/switch`, `/model --temporary`) ignoring explicit thinking suffixes from matching configured model roles. ([#5290](https://github.com/can1357/oh-my-pi/issues/5290))
 
 ## [16.4.7] - 2026-07-12
 
@@ -113,9 +148,6 @@
 
 - Fixed PageUp/PageDown in the model browser wrapping past the list edges instead of clamping
 - Fixed the hover highlight sticking to the last hovered model row when the pointer moved into the provider sidebar
-### Fixed
-
-- Fixed ModelRegistry/AuthStorage resolvers to continue replay-safe usage/account-quota turns across every distinct eligible credential and return exhaustion when no sibling switches, instead of re-resolving the same failed credential.
 
 ## [16.4.6] - 2026-07-12
 
@@ -145,7 +177,6 @@
 - Fixed the Model Hub role-assignment strip hiding the selected chip once the row overflowed; the strip now scrolls horizontally, truncating passed chips behind a leading ellipsis so the selection (plus one chip of lookahead) stays visible.
 - Fixed mouse hover and clicks in the /models Roles view landing one row above the pointer (the row mapping subtracted the status row twice).
 - Fixed model search keeping the most-recently-used model on top of the results: match quality now ranks first (an exact `gpt-5.5` beats the active `gpt-5.6-sol`), with MRU order only breaking ties between equally good matches.
-- Fixed preferred web search providers failing before execution when an unrelated fallback provider could not initialize. ([#5182](https://github.com/can1357/oh-my-pi/pull/5182) by [@wolfiesch](https://github.com/wolfiesch))
 
 ## [16.4.5] - 2026-07-11
 
@@ -179,10 +210,6 @@
 - Fixed agents getting stuck waiting for messages from peers that have already stopped running.
 - Fixed compiled Linux binary extension loading when bundled web-search header generation cannot read `header-generator` data files from the build-time path. ([#5178](https://github.com/can1357/oh-my-pi/issues/5178))
 - Fixed plugin custom tool loading to skip and report invalid feature entries instead of crashing startup when a plugin dependency tree leaves one feature unresolved. ([#5189](https://github.com/can1357/oh-my-pi/issues/5189))
-- Fixed Advisor containment so hallucinated unavailable tool calls and output-only destructive directives quarantine the Advisor response and reset its private context instead of feeding contaminated text into later advice. ([#5181](https://github.com/can1357/oh-my-pi/issues/5181))
-- Fixed the built-in advisor treating empty `stop` completions without advice as successful reviews, so silent provider failures now enter the advisor retry/drop path. ([#5212](https://github.com/can1357/oh-my-pi/issues/5212))
-- Fixed `autolearn.autoContinue` treating the hidden capture turn's terminal empty assistant stop as a retryable empty response instead of successful completion. ([#5211](https://github.com/can1357/oh-my-pi/issues/5211))
-- Fixed advisor flagging issues the primary agent already resolved by coalescing late-arriving transcript deltas into the current batch before the advisor model call (instead of deferring them a full cycle), annotating advice with a staleness caveat when newer primary turns arrived during the model call, and tagging mid-turn `[in progress]` updates so the advisor withholds premature critique ([#4850](https://github.com/can1357/oh-my-pi/issues/4850)). Also fixed pre-existing unchecked inline casts in `#renderDelta` and `#dedupContextMessage` that suppressed type errors instead of using role-discriminant narrowing.
 
 ## [16.4.4] - 2026-07-11
 
@@ -196,25 +223,6 @@
 - Fixed native Windows binary compatibility on older Windows 10 CPUs by building the `omp-windows-x64.exe` release asset with a baseline x64 runtime instead of AVX2. (#5172)
 - Fixed `GenerateImage` rejecting OpenAI Codex-compatible proxy bearer keys when the token does not expose a `chatgpt-account-id`. (#5174)
 - Fixed context promotion documentation to accurately reflect the `contextPromotionTarget` runtime behavior and `contextPromotion.enabled` default. (#5163)
-### Changed
-
-- `omp usage` and the in-session `/usage` view now show the Anthropic organization next to the account for org-scoped credentials (with `--redact` masking applied per part in the CLI, falling back to the org id when no display name is available), attribute "no usage data" rows per organization, and match the "in use by this session" marker by organization so only the active subscription is flagged. The OAuth login success message names the account and organization that was stored — a login landing on an unintended subscription is visible immediately.
-- `/logout` labels Anthropic accounts with their organization and marks only the credential of the active organization as active; `omp token --list` shows the organization next to each account. Two subscriptions sharing one email are distinguishable when selecting which to remove or mint a token for.
-- `omp auth-broker migrate --from-local` dedupes Anthropic OAuth identities per organization, so a Team seat already on the broker no longer blocks uploading the personal plan under the same email.
-- The status line invalidates its cached usage when the session rotates to a different Anthropic organization (previously the old subscription's quota could linger for the cache TTL), and `omp auth-gateway check` labels each credential with its organization so a failing row says which subscription needs re-login.
-- `omp usage` "no usage data" attribution is org-decisive whenever either the stored account or a report carries an organization: an org-less legacy credential whose own fetch failed is no longer hidden by an org-attributed sibling report sharing the same email.
-- Active-account matching for `/usage`, `/logout`, and `omp token --list` now treats a shared organization as a qualifier rather than a match: two Anthropic Team seats in one org (same org id, per-user pools) no longer flag each other's rows or reports as "in use by this session" — the base identity (account/email/project) is still required, with org-only sessions matching on the org alone.
-- `omp usage` "no usage data" coverage now requires the member's own identity within a shared organization: a sibling Team member's same-org report no longer counts as coverage for an account whose own report is missing, while an org-only account remains covered by any same-org report.
-- `omp auth-broker migrate --from-local` reruns now recognize an already-migrated org-only Anthropic row (login recovered neither email nor account) by its organization id instead of re-uploading it, which could overwrite the broker's newer refresh token with the stale local one.
-### Fixed
-
-- Fixed sub-agent progress rendering leaking raw terminal control bytes into the parent TUI. ([#5159](https://github.com/can1357/oh-my-pi/issues/5159))
-### Fixed
-
-- Fixed `--continue <session-id>` falling back to an unrelated latest session when the requested session does not exist.
-### Fixed
-
-- Fixed resumed sessions retaining an unterminated turn after an abnormal process exit.
 
 ## [16.4.3] - 2026-07-11
 
@@ -257,12 +265,6 @@
 ### Removed
 
 - Removed the bundled plan subagent from available task agents.
-### Fixed
-
-- Fixed macOS runtime diagnostics (e.g. `MallocStackLogging: can't turn off malloc stack logging because it was not enabled`) written directly to fd 2 by libmalloc painting into the TUI viewport. While the TUI owns the terminal, stderr is now redirected to the omp log file and restored at every ownership handoff (external editor, Ctrl+Z suspend, shutdown, crash restore); fatal crash reports still reach the real terminal.
-- Fixed custom model/provider config discovery so `~/.omp/agent/models.yaml` loads when `models.yml` is absent, while preserving `.yml` precedence and only migrating legacy `models.json` when neither YAML file exists. ([#5145](https://github.com/can1357/oh-my-pi/issues/5145))
-- Fixed throttled live command output holding a quiet final chunk until the command exited.
-- Fixed rpc-ui extension UI and host tool responses deadlocking login, session lifecycle, and queued commands while an active command awaited the same side channel. ([#5153](https://github.com/can1357/oh-my-pi/issues/5153))
 
 ## [16.4.2] - 2026-07-10
 
@@ -282,10 +284,6 @@
 ### Fixed
 
 - Fixed MCP OAuth dynamic client registration omitting discovered scopes on the RFC 7591 registration body. Providers such as Clerk bind DCR-created clients to only the scopes declared at registration, then reject the subsequent authorize request when it asks for `openid` (from `scopes_supported`). Registration now includes `config.scopes` when present, matching Claude Code and the scopes already sent on authorize.
-- Fixed `write` treating read-only internal URLs like `memory://root/memory_summary.md` as project-relative filesystem paths, prevented leaks such as `{cwd}/memory:/root/memory_summary.md`, and made `memory://root` prefer the calling session's cwd-specific memory root when multiple agents are live. ([#5075](https://github.com/can1357/oh-my-pi/issues/5075))
-- Fixed `memory://root` resolution leaking between live agents with different working directories by resolving file-backed memory roots from the calling session cwd before falling back to the global session registry. ([#5079](https://github.com/can1357/oh-my-pi/issues/5079))
-- Fixed todo reminders auto-continuing over interactive skill questions; text-only assistant questions now yield to the user without firing the incomplete-todo reminder loop. ([#5089](https://github.com/can1357/oh-my-pi/issues/5089))
-- Fixed MiniMax-M3 task subagents retrying empty `yield` results forever; repeated untyped `result: {}` submissions now abort the child with guidance instead of leaving the parent blocked. ([#5095](https://github.com/can1357/oh-my-pi/issues/5095))
 
 ## [16.4.0] - 2026-07-10
 
@@ -314,9 +312,6 @@
 - Fixed subagent yield tool calls being discarded when a soft request budget aborts the assistant turn before the yield event completes.
 - Fixed --tools filtering in interactive sessions incorrectly disabling deferred MCP tools from configured servers.
 - Fixed kept-alive task subagents entering infinite provider-call loops after an IRC wake and terminal yield.
-- Fixed `omp update` on npm-managed Windows installs so npm `.cmd`/`.ps1`/`.bat` launchers update through npm instead of being overwritten by downloaded release binaries. ([#5053](https://github.com/can1357/oh-my-pi/issues/5053))
-- Fixed Python eval `agent()` bridge calls losing in-flight subagent work when the parent cell receives an external abort; the kernel abort is now deferred until already-started bridge calls settle, and new bridge calls are rejected after the abort is pending. ([#5005](https://github.com/can1357/oh-my-pi/issues/5005))
-- Fixed `--max-time` duration values like `5s`, `10m`, and `1h` being ignored instead of configuring a session deadline. ([#5041](https://github.com/can1357/oh-my-pi/issues/5041))
 
 ## [16.3.15] - 2026-07-09
 
@@ -333,8 +328,6 @@
 - Improved rendering of raw thinking blocks by stripping empty HTML comment noise
 - Fixed display of thinking blocks consisting entirely of hidden comment noise
 - Fixed gpt-5.6 reasoning summaries rendering literal `<!-- -->` sentinel lines in thinking blocks; empty HTML comments (and the unterminated `<!--` tail while streaming) are now dropped from the thinking display, and blocks reduced to pure comment noise are hidden entirely.
-- Fixed `ultrathink`, `orchestrate`, and `workflowz` magic keywords not triggering when adjacent to sentence punctuation or quotes while still ignoring inflections and path/file-extension occurrences. ([#4965](https://github.com/can1357/oh-my-pi/issues/4965))
-- Fixed `omp plugin install github:owner/repo --force` failing with Bun `DependencyLoop` when replacing an existing pinned git plugin source for the same repository; the installer now removes the stale pinned dependency edge before invoking Bun and restores it on rollback. ([#4960](https://github.com/can1357/oh-my-pi/issues/4960))
 
 ## [16.3.13] - 2026-07-09
 
@@ -351,12 +344,6 @@
 - Fixed the streamed `write` tool's collapsed pending tail preview leaving stale rows above the first partial-result frame in the TUI; the first result now replays the viewport like the SSH placeholder seam already did ([#4477](https://github.com/can1357/oh-my-pi/issues/4477))
 - Fixed first-run setup ignoring a pre-seeded `config.yaml`: the settings loader now treats `config.yml` and `config.yaml` as equivalent existing main config files, writes back to the existing extension, and only creates canonical `config.yml` for fresh installs. ([#4914](https://github.com/can1357/oh-my-pi/issues/4914))
 - Fixed extension `sendUserMessage()` without `deliverAs` surfacing `AgentBusyError` during active streams; omitted `deliverAs` now queues a steer through the normal prompt flow, and ACP/RPC skill-command prompts queue while streaming (RPC honors the prompt command's `streamingBehavior`, defaulting to steer) ([#4923](https://github.com/can1357/oh-my-pi/issues/4923)).
-### Fixed
-
-- Fixed Cursor-provider turns whose assistant message contains intro text, tool calls, and trailing final text rendering the final answer above the tool output instead of at the transcript tail ([#4871](https://github.com/can1357/oh-my-pi/issues/4871)).
-- Fixed `omp -p` looking hung while a text-mode prompt is in flight by writing a one-shot working indicator to stderr before awaiting the model response. ([#4901](https://github.com/can1357/oh-my-pi/issues/4901))
-- Fixed autolearn auto-continue firing a capture turn after an aborted stop (Esc/cancel): the controller now skips any `agent_end` whose last assistant message has `stopReason: "aborted"`.
-- Fixed MCP tools receiving session image attachments as raw `local://...` URIs by resolving them to session-local filesystem paths before `tools/call` is sent ([#4946](https://github.com/can1357/oh-my-pi/issues/4946)).
 
 ## [16.3.12] - 2026-07-08
 
@@ -406,7 +393,6 @@
 - Fixed retry fallback model recovery by exposing `retry.fallbackChains` in `/settings`, adding a `/model` action to assign the selected default fallback model, and clearing a selected model's retry cooldown marker on manual model switches. ([#4533](https://github.com/can1357/oh-my-pi/issues/4533))
 - Fixed `/handoff` and auto-handoff skipping extension lifecycle hooks by emitting cancellable `session_before_switch` hooks and a `session_switch` with `reason: "handoff"` after the replacement session is ready ([#4434](https://github.com/can1357/oh-my-pi/issues/4434)).
 - Fixed TTSR stream interrupts so only the tool call whose stream matched a rule receives the rule-named abort result; sibling tool-call placeholders now use a neutral abort reason ([#2783](https://github.com/can1357/oh-my-pi/issues/2783)).
-- Fixed late advisor concerns after a terminal primary answer starting a duplicate primary turn when no queued work remains ([#4840](https://github.com/can1357/oh-my-pi/issues/4840)).
 
 ## [16.3.11] - 2026-07-06
 

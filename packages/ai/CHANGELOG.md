@@ -5,6 +5,26 @@
 ### Fixed
 
 - Fixed OpenAI Responses `content_filter` terminal events being auto-retried as provider finish errors; content-filtered turns now remain hard failures without the same-model retry loop.
+- Fixed provider-agnostic replay-safe usage/account-quota failures to rotate through every distinct eligible credential instead of stopping after the fixed a/b/c ladder, while preserving transient-429 backoff, cycle/abort guards, exact failed-credential targeting despite stale session stickiness, and a finite safety ceiling.
+- Healed GLM in-band tool calls whose `<arg_value>` closer is missing or mistyped as `</arg_key>`; the scanner now ends the value at the next-pair signature instead of swallowing the remaining arguments into one field.
+- Healed the same `arg_key`/`arg_value` spill when it arrives through native tool calling (provider parses the in-band syntax server-side): as a last resort after validation and coercion fail, contaminated string arguments are split at the spill boundary and the swallowed pairs restored.
+- Fixed Anthropic logins silently replacing the stored credential when one account email holds multiple organizations (e.g. a Team seat plus a personal Max plan). Credentials are now identified by email + organization: the login flow captures the organization from the token exchange (with a `claude_cli/bootstrap` fallback), both subscriptions store side by side, and the existing multi-account rotation treats them as separate accounts. Legacy email-keyed rows are claimed in place by the first org-scoped login with the same email, and an org-less credential never clobbers org-scoped rows. Usage reports and the per-credential usage cache also partition by organization so the two subscriptions' limit pools no longer merge into one confused row.
+- Fixed broker-served usage routing for org-scoped credentials: `RemoteAuthCredentialStore` now matches aggregate reports and keys header-ingest overlays by organization first, so with a Team seat exhausted and a personal Max healthy under one email, each credential receives its own pool instead of whichever report appeared first. The Anthropic usage-cache key version was bumped so pre-org cache entries (including the 24h last-good fallback) cannot be replayed across organizations.
+- Fixed OAuth access results (`getOAuthAccess`, `getOAuthAccesses`, `getOAuthAccessAt`) and `checkCredentials` health results dropping the organization: they now carry `orgId`/`orgName` so consumers that key or label per-account results (e.g. `omp dry-balance --bench`, `omp auth-gateway check`) can tell two same-email subscriptions apart. Active-account matching is org-decisive whenever either side carries an organization — an org-scoped session no longer flags the legacy bare-email row, and a legacy-row session no longer flags org-scoped siblings, via the shared email. `getOAuthAccountIdentity` also preserves org-only identities instead of discarding them.
+- Fixed usage-path OAuth refreshes on broker-backed credentials persisting the rotated token into the wrong row: the shared `REMOTE_REFRESH_SENTINEL` refresh value is no longer treated as row identity when locating the row to update, so with two same-email organizations the refreshed token lands on the org that was actually refreshed.
+- Fixed the org qualifier only riding on email-based Anthropic identities: when the login email cannot be recovered (token response omits it and the bootstrap fallback fails), the account/project fallback keys are now org-qualified too — the account UUID is identical across the orgs of one login account, so a second subscription could otherwise still replace the first on the no-email path. The same one-way legacy upgrade applies to bare account/project keys, usage-report dedupe falls back to the org-qualified account for no-email reports, and broker report routing is org-decisive on either side (an org-less legacy credential no longer receives an org-attributed sibling's pool).
+- Fixed an org-only Anthropic credential row (stored when login recovered neither email nor account) never being claimed by a later login of the same organization that does recover the identity — the row is now upgraded and re-keyed in place instead of duplicating the subscription.
+- Fixed broker usage report routing and header-overlay keying/merging to require the member's own identity (account/email/project) within a shared organization, so two Team members sharing one org id no longer receive each other's per-user pools — a member's missing report surfaces as "no usage data" instead of a sibling's numbers, while an org-only credential still matches its lone same-org report.
+- Fixed an Anthropic credential row stored under a fallback identity (e.g. account-keyed because email recovery failed) never being claimed when a later login of the same subscription recovers the email: an org-scoped login now matches an existing row by any of its base identities (email/account/project), bare or org-qualified, instead of only its primary key — org-less logins keep matching by exact key only.
+- Fixed the remaining asymmetries of the org-scoped claiming and cache rules: a same-org login now also claims an existing row when the STORED credential shares a base identity with the incoming one (e.g. an email-keyed row whose credential carries the account UUID is updated in place by a later login that loses the email but keeps the account), and org-only credentials treat the organization as a stable usage-cache identity so token rotation no longer churns their cache keys and fragments usage history.
+- Fixed OpenAI Responses and Codex Responses message finalization preserving streamed text when `output_item.done` arrives with empty content. ([#5146](https://github.com/can1357/oh-my-pi/issues/5146))
+- Fixed OpenAI Chat Completions request parsing to accept assistant tool-call replay messages with `content: null` as absent content. ([#5121](https://github.com/can1357/oh-my-pi/issues/5121))
+- Fixed provider credential changes leaving persisted session-sticky OAuth credential mappings active, so existing sessions reselect accounts after login/logout instead of reusing stale `session:sticky:<provider>:<sessionId>` rows. ([#4982](https://github.com/can1357/oh-my-pi/issues/4982))
+- Fixed concurrent reasoning summaries to ignore legacy streaming events under cutoff contract
+- Fixed Codex saved-reset redemption to include the selected account in the consume request body, so `/usage reset` applies to the chosen OpenAI account in multi-account setups. ([#5054](https://github.com/can1357/oh-my-pi/issues/5054))
+- Fixed the OAuth completion page copy to tell users they can close the tab manually when browsers such as Firefox ignore best-effort `window.close()` calls. ([#4855](https://github.com/can1357/oh-my-pi/issues/4855))
+- Fixed Cursor `max_mode` requests to send discovered max-mode metadata on both model payload fields. ([#4797](https://github.com/can1357/oh-my-pi/issues/4797))
+- Fixed `auth-broker` config discovery ignoring nested `auth.broker.url` / `auth.broker.token` YAML keys. `readConfigYaml` only read the literal flat dotted key, so standard nested YAML was silently dropped; it now resolves both nested and flat forms (nested wins). ([#4734](https://github.com/can1357/oh-my-pi/issues/4734))
 
 ## [16.5.0] - 2026-07-13
 
@@ -23,9 +43,6 @@
 ### Removed
 
 - Removed automatic /interactions chaining for follow-up turns in Google provider calls, along with the useInteractionsApi, storeInteraction, and previousInteractionId stream options.
-### Fixed
-
-- Fixed provider-agnostic replay-safe usage/account-quota failures to rotate through every distinct eligible credential instead of stopping after the fixed a/b/c ladder, while preserving transient-429 backoff, cycle/abort guards, exact failed-credential targeting despite stale session stickiness, and a finite safety ceiling.
 
 ## [16.4.6] - 2026-07-12
 
@@ -43,17 +60,6 @@
 ### Fixed
 
 - Fixed an issue in GLM tool calling where missing or malformed argument closers (such as `<arg_value>` mistyped as `</arg_key>`) caused subsequent arguments to be swallowed or merged into a single field, affecting both in-band and native tool calling.
-- Healed GLM in-band tool calls whose `<arg_value>` closer is missing or mistyped as `</arg_key>`; the scanner now ends the value at the next-pair signature instead of swallowing the remaining arguments into one field.
-- Healed the same `arg_key`/`arg_value` spill when it arrives through native tool calling (provider parses the in-band syntax server-side): as a last resort after validation and coercion fail, contaminated string arguments are split at the spill boundary and the swallowed pairs restored.
-- Fixed Anthropic logins silently replacing the stored credential when one account email holds multiple organizations (e.g. a Team seat plus a personal Max plan). Credentials are now identified by email + organization: the login flow captures the organization from the token exchange (with a `claude_cli/bootstrap` fallback), both subscriptions store side by side, and the existing multi-account rotation treats them as separate accounts. Legacy email-keyed rows are claimed in place by the first org-scoped login with the same email, and an org-less credential never clobbers org-scoped rows. Usage reports and the per-credential usage cache also partition by organization so the two subscriptions' limit pools no longer merge into one confused row.
-- Fixed broker-served usage routing for org-scoped credentials: `RemoteAuthCredentialStore` now matches aggregate reports and keys header-ingest overlays by organization first, so with a Team seat exhausted and a personal Max healthy under one email, each credential receives its own pool instead of whichever report appeared first. The Anthropic usage-cache key version was bumped so pre-org cache entries (including the 24h last-good fallback) cannot be replayed across organizations.
-- Fixed OAuth access results (`getOAuthAccess`, `getOAuthAccesses`, `getOAuthAccessAt`) and `checkCredentials` health results dropping the organization: they now carry `orgId`/`orgName` so consumers that key or label per-account results (e.g. `omp dry-balance --bench`, `omp auth-gateway check`) can tell two same-email subscriptions apart. Active-account matching is org-decisive whenever either side carries an organization — an org-scoped session no longer flags the legacy bare-email row, and a legacy-row session no longer flags org-scoped siblings, via the shared email. `getOAuthAccountIdentity` also preserves org-only identities instead of discarding them.
-- Fixed usage-path OAuth refreshes on broker-backed credentials persisting the rotated token into the wrong row: the shared `REMOTE_REFRESH_SENTINEL` refresh value is no longer treated as row identity when locating the row to update, so with two same-email organizations the refreshed token lands on the org that was actually refreshed.
-- Fixed the org qualifier only riding on email-based Anthropic identities: when the login email cannot be recovered (token response omits it and the bootstrap fallback fails), the account/project fallback keys are now org-qualified too — the account UUID is identical across the orgs of one login account, so a second subscription could otherwise still replace the first on the no-email path. The same one-way legacy upgrade applies to bare account/project keys, usage-report dedupe falls back to the org-qualified account for no-email reports, and broker report routing is org-decisive on either side (an org-less legacy credential no longer receives an org-attributed sibling's pool).
-- Fixed an org-only Anthropic credential row (stored when login recovered neither email nor account) never being claimed by a later login of the same organization that does recover the identity — the row is now upgraded and re-keyed in place instead of duplicating the subscription.
-- Fixed broker usage report routing and header-overlay keying/merging to require the member's own identity (account/email/project) within a shared organization, so two Team members sharing one org id no longer receive each other's per-user pools — a member's missing report surfaces as "no usage data" instead of a sibling's numbers, while an org-only credential still matches its lone same-org report.
-- Fixed an Anthropic credential row stored under a fallback identity (e.g. account-keyed because email recovery failed) never being claimed when a later login of the same subscription recovers the email: an org-scoped login now matches an existing row by any of its base identities (email/account/project), bare or org-qualified, instead of only its primary key — org-less logins keep matching by exact key only.
-- Fixed the remaining asymmetries of the org-scoped claiming and cache rules: a same-org login now also claims an existing row when the STORED credential shares a base identity with the incoming one (e.g. an email-keyed row whose credential carries the account UUID is updated in place by a later login that loses the email but keeps the account), and org-only credentials treat the organization as a stable usage-cache identity so token rotation no longer churns their cache keys and fragments usage history.
 
 ## [16.4.3] - 2026-07-11
 
@@ -63,7 +69,6 @@
 - Fixed an issue in the Responses API where empty tool results were incorrectly serialized with a "(see attached image)" placeholder, causing models to look for non-existent attachments.
 - Fixed OpenAI Responses server non-streaming envelopes to always include the required "incomplete_details" field, using null for completed responses.
 - Preserved Cloud Code Assist tool schemas when mixed-type unions carry branch-local validation descriptions.
-- Fixed OpenAI Responses and Codex Responses message finalization preserving streamed text when `output_item.done` arrives with empty content. ([#5146](https://github.com/can1357/oh-my-pi/issues/5146))
 
 ## [16.4.2] - 2026-07-10
 
@@ -72,7 +77,6 @@
 - Fixed compatibility with xAI by automatically downgrading OpenAI-specific tool calls and image detail settings during message history replays.
 - Fixed a race condition in shared SQLite OAuth token refreshes by implementing durable credential ownership and compare-and-set persistence to prevent stale refresh failures.
 - Fixed OpenAI Codex requests to include the required version header for newly gated models.
-- Fixed OpenAI Chat Completions request parsing to accept assistant tool-call replay messages with `content: null` as absent content. ([#5121](https://github.com/can1357/oh-my-pi/issues/5121))
 
 ## [16.4.1] - 2026-07-10
 
@@ -101,11 +105,6 @@
 - Fixed xai-oauth/grok-4.5 Responses requests to omit the unsupported reasoning.summary field while preserving the reasoning.effort payload.
 - Fixed Codex OAuth credential selection to re-check blocked accounts during ranking and clear stale usage-limit blocks once live usage indicates recovery.
 - Fixed sequential-cutoff reasoning summaries duplicating section headers across Codex reasoning items by tracking the cumulative summary response-globally, so replayed sections and replay-only items no longer re-emit text earlier thinking blocks already streamed.
-### Fixed
-
-- Fixed provider credential changes leaving persisted session-sticky OAuth credential mappings active, so existing sessions reselect accounts after login/logout instead of reusing stale `session:sticky:<provider>:<sessionId>` rows. ([#4982](https://github.com/can1357/oh-my-pi/issues/4982))
-- Fixed concurrent reasoning summaries to ignore legacy streaming events under cutoff contract
-- Fixed Codex saved-reset redemption to include the selected account in the consume request body, so `/usage reset` applies to the chosen OpenAI account in multi-account setups. ([#5054](https://github.com/can1357/oh-my-pi/issues/5054))
 
 ## [16.3.15] - 2026-07-09
 
@@ -170,12 +169,7 @@
 - Fixed OpenAI Codex WebSocket continuations to treat proxy stale-anchor codes such as `codex_previous_response_stale` as an expired `previous_response_id` chain — same recovery class as the OpenAI-standard `previous_response_not_found` — so the turn is retried with full context instead of surfacing the error to the user ([#4624](https://github.com/can1357/oh-my-pi/issues/4624)).
 - Fixed Azure Foundry Anthropic utility requests to omit the structured-output beta whenever strict tools are disabled, preventing `structured_outputs not supported in your workspace` failures for Sonnet 5 compaction ([#4679](https://github.com/can1357/oh-my-pi/issues/4679)).
 - Fixed OAuth `launchUrl` advertisement for flows whose redirect never returns to the local callback server: custom-scheme redirects (e.g. GitLab Duo's `vscode://` URI, which `new URL` parses without complaint) and fixed non-loopback hosts no longer receive a `http://localhost:<port>/launch` copy target that misrepresents the callback endpoint and resolves nowhere for remote users.
-- Fixed the OAuth completion page copy to tell users they can close the tab manually when browsers such as Firefox ignore best-effort `window.close()` calls. ([#4855](https://github.com/can1357/oh-my-pi/issues/4855))
-### Fixed
-
 - Codex load balancing: clear stale persisted and in-memory usage-limit blocks for an `openai-codex` account when a fresh live usage report shows it is allowed and below all limits, including broker-backed gateway snapshots, so traffic returns to recovered accounts instead of funneling to one sibling.
-- Fixed Cursor `max_mode` requests to send discovered max-mode metadata on both model payload fields. ([#4797](https://github.com/can1357/oh-my-pi/issues/4797))
-- Fixed `auth-broker` config discovery ignoring nested `auth.broker.url` / `auth.broker.token` YAML keys. `readConfigYaml` only read the literal flat dotted key, so standard nested YAML was silently dropped; it now resolves both nested and flat forms (nested wins). ([#4734](https://github.com/can1357/oh-my-pi/issues/4734))
 
 ## [16.3.11] - 2026-07-06
 

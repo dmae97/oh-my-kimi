@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed compaction summary inputs escaping Harmony control tokens so Copilot `gpt-5.6-*` models no longer reject serialized analysis-channel markers. ([#5184](https://github.com/can1357/oh-my-pi/issues/5184))
+
 ## [16.5.0] - 2026-07-13
 
 ### Added
@@ -14,9 +18,6 @@
 ### Added
 
 - Added a process-global pause gate (`agentPauseGate`) to safely pause agent loops before model calls or tool executions, allowing them to be resumed later or aborted cleanly.
-### Fixed
-
-- Fixed compaction summary inputs escaping Harmony control tokens so Copilot `gpt-5.6-*` models no longer reject serialized analysis-channel markers. ([#5184](https://github.com/can1357/oh-my-pi/issues/5184))
 
 ## [16.4.3] - 2026-07-11
 

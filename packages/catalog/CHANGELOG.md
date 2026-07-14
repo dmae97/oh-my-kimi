@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Z.ai GLM-5.2 on the `anthropic-messages` coding endpoint deriving `mode: "budget"` with five synthetic effort tiers instead of the wire-exact `anthropic-budget-effort` with `[high, max]`. The catalog now matches Z.ai's Anthropic proxy to the same two-tier reasoning scale as Umans, so `output_config.effort` is emitted on the wire.
+- Fixed stale cached model limits overriding updated static catalog limits after a static catalog fingerprint mismatch. ([#4956](https://github.com/can1357/oh-my-pi/issues/4956))
+- Fixed Cursor discovery to preserve `GetUsableModels` max-mode metadata for premium models and invalidate stale pre-max-mode cache rows. ([#4797](https://github.com/can1357/oh-my-pi/issues/4797))
+
 ## [16.4.3] - 2026-07-11
 
 ### Fixed
@@ -14,9 +20,6 @@
 ### Fixed
 
 - Fixed OpenAI Codex model discovery to include the Codex version header alongside the client_version query parameter.
-### Fixed
-
-- Fixed Z.ai GLM-5.2 on the `anthropic-messages` coding endpoint deriving `mode: "budget"` with five synthetic effort tiers instead of the wire-exact `anthropic-budget-effort` with `[high, max]`. The catalog now matches Z.ai's Anthropic proxy to the same two-tier reasoning scale as Umans, so `output_config.effort` is emitted on the wire.
 
 ## [16.4.1] - 2026-07-10
 
@@ -96,9 +99,6 @@
 
 - Updated cost and token configurations for various models across providers
 - Renamed several models for consistency (e.g., MiniMax M3, Gemma 4 31B, Qwen variants)
-### Fixed
-
-- Fixed stale cached model limits overriding updated static catalog limits after a static catalog fingerprint mismatch. ([#4956](https://github.com/can1357/oh-my-pi/issues/4956))
 
 ## [16.3.12] - 2026-07-08
 
@@ -107,9 +107,6 @@
 - Fixed LiteLLM discovery stopping at `/model_group/info` when that endpoint omitted `supports_vision`; it now continues to `/model/info` and preserves `model_info.supports_vision=true` for vision-capable proxy models. ([#4747](https://github.com/can1357/oh-my-pi/issues/4747))
 - Fixed LiteLLM discovery to fall back to bundled catalog metadata when `models.dev` lacks a model reference, preserving reasoning and thinking support for models such as `glm-5.2`. ([#4695](https://github.com/can1357/oh-my-pi/issues/4695))
 - Detected Azure AI Inference / Foundry Anthropic routes as strict-tool-incompatible so resolved Anthropic compat disables strict tools before request construction ([#4679](https://github.com/can1357/oh-my-pi/issues/4679)).
-### Fixed
-
-- Fixed Cursor discovery to preserve `GetUsableModels` max-mode metadata for premium models and invalidate stale pre-max-mode cache rows. ([#4797](https://github.com/can1357/oh-my-pi/issues/4797))
 
 ## [16.3.11] - 2026-07-06
 

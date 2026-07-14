@@ -810,7 +810,9 @@ function createContextSectionRenderer(
 	args: Partial<TaskParams> | undefined,
 	theme: Theme,
 ): AssignmentSectionRenderer | undefined {
-	const context = sanitizeText(repairDoubleEncodedJsonString(typeof args?.context === "string" ? args.context : "")).trim();
+	const context = sanitizeText(
+		repairDoubleEncodedJsonString(typeof args?.context === "string" ? args.context : ""),
+	).trim();
 	if (!context) return undefined;
 	return createMarkdownSectionRenderer(context, theme);
 }

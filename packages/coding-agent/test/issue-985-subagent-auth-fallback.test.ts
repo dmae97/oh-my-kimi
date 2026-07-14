@@ -231,10 +231,7 @@ describe("issue #5325: sessionId forwarded to getApiKey for session-sticky OAuth
 			"subagent-session-456",
 		);
 
-		expect(receivedSessionIds).toEqual([
-			"opencode-zen:subagent-session-456",
-			"deepseek:subagent-session-456",
-		]);
+		expect(receivedSessionIds).toEqual(["opencode-zen:subagent-session-456", "deepseek:subagent-session-456"]);
 		expect(result.authFallbackUsed).toBe(true);
 		expect(result.model?.provider).toBe("deepseek");
 	});

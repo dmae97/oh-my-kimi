@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Bounded the Markdown L2 render cache by weighted output size and excluded oversized renders, preventing a few large documents from occupying ordinary cache slots indefinitely ([#4820](https://github.com/can1357/oh-my-pi/issues/4820)).
+- Fixed unmanaged macOS stderr writes (libmalloc/framework diagnostics) corrupting the viewport: `ProcessTerminal` now suppresses fd 2 via the pi-utils stderr guard while it owns the terminal and restores it in `stop()` and the emergency-restore path.
+- Fixed streamed diff code fences retaining unhighlighted rows in native scrollback when long transient blocks leave the viewport before finalization ([#5126](https://github.com/can1357/oh-my-pi/issues/5126)).
+- Fixed native Windows Terminal sessions missing mid-run light/dark theme changes when Mode 2031 appearance notifications are unavailable by polling OSC 11 only on that host path ([#5091](https://github.com/can1357/oh-my-pi/issues/5091)).
+- Hid empty HTML comment separators in Markdown-rendered TUI output instead of showing `<!-- -->` literally ([#4911](https://github.com/can1357/oh-my-pi/issues/4911)).
+
 ## [16.5.0] - 2026-07-13
 
 ### Changed
@@ -12,9 +20,6 @@
 
 - Fixed a rendering issue where resizing the terminal during forced renders (such as tool finalization or image reconciliation) caused the entire transcript to visibly replay and flicker. Forced renders are now consolidated into a single paint once the resize settles.
 
-### Fixed
-
-- Bounded the Markdown L2 render cache by weighted output size and excluded oversized renders, preventing a few large documents from occupying ordinary cache slots indefinitely ([#4820](https://github.com/can1357/oh-my-pi/issues/4820)).
 ## [16.4.7] - 2026-07-12
 
 ### Fixed
@@ -37,12 +42,6 @@
 
 - Fixed an issue where the mid-prompt `/` autocomplete popup lingered indefinitely on non-path and non-skill tokens. Autocomplete matching is now properly gated to explicit skill namespaces, queries, and prefixes, preventing stale popups from incorrectly rewriting input on Tab or Enter.
 - Fixed idle Loader animation driving the full TUI render pipeline on every spinner tick by directly rewriting the Loader's visible rows when geometry is unchanged, reducing idle render work while preserving fallback repaint paths ([#5192](https://github.com/can1357/oh-my-pi/issues/5192)).
-### Fixed
-
-- Fixed unmanaged macOS stderr writes (libmalloc/framework diagnostics) corrupting the viewport: `ProcessTerminal` now suppresses fd 2 via the pi-utils stderr guard while it owns the terminal and restores it in `stop()` and the emergency-restore path.
-### Fixed
-
-- Fixed streamed diff code fences retaining unhighlighted rows in native scrollback when long transient blocks leave the viewport before finalization ([#5126](https://github.com/can1357/oh-my-pi/issues/5126)).
 
 ## [16.4.1] - 2026-07-10
 
@@ -58,9 +57,6 @@
 
 - Improved row alignment and spacing for `align`, `gather`, and `array` environments
 - Updated matrix environments to render as baseline-aligned grids with stretched brackets
-### Fixed
-
-- Fixed native Windows Terminal sessions missing mid-run light/dark theme changes when Mode 2031 appearance notifications are unavailable by polling OSC 11 only on that host path ([#5091](https://github.com/can1357/oh-my-pi/issues/5091)).
 
 ## [16.4.0] - 2026-07-10
 
@@ -80,9 +76,6 @@
 
 - Fixed late terminal appearance subscribers missing the already-detected OSC 11 light/dark result, so theme auto-detection picks up the terminal appearance even when the response arrives before the UI subscribes ([#4731](https://github.com/can1357/oh-my-pi/issues/4731)).
 - Fixed slash command Tab completion reopening the file autocomplete drawer after accepting no-argument commands ([#4808](https://github.com/can1357/oh-my-pi/issues/4808)).
-### Fixed
-
-- Hid empty HTML comment separators in Markdown-rendered TUI output instead of showing `<!-- -->` literally ([#4911](https://github.com/can1357/oh-my-pi/issues/4911)).
 
 ## [16.3.12] - 2026-07-08
 
