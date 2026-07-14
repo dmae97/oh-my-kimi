@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed GitHub code search rejecting empty optional date placeholders before making a request ([#5370](https://github.com/can1357/oh-my-pi/issues/5370)).
+
 ## [16.5.0] - 2026-07-13
 
 ### Breaking Changes
