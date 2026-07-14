@@ -107,4 +107,19 @@ describe("print mode working indicator", () => {
 			await run;
 		}
 	});
+
+	it("writes the text-mode working indicator once across successive prompts", async () => {
+		const delayed = createDelayedSession(makeAssistantMessage("final answer"));
+		const run = runPrintMode(delayed.session, {
+			mode: "text",
+			initialMessage: "hello",
+			messages: ["follow-up"],
+		});
+
+		await delayed.promptStarted;
+		delayed.resolvePrompt();
+		await run;
+
+		expect(stderrOutput.join("")).toBe("Working...\n");
+	});
 });
