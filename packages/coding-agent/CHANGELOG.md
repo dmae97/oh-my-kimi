@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed eval cells treating `timeout: 0` as a one-second deadline and reporting session-deadline cancellation as a user abort ([#5250](https://github.com/can1357/oh-my-pi/issues/5250)).
+
 ## [16.4.6] - 2026-07-12
 
 ### Added

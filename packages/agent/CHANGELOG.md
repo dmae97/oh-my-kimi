@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed session deadline abort signals carrying a generic string reason, allowing timeout-aware tools to classify deadline cancellation ([#5250](https://github.com/can1357/oh-my-pi/issues/5250)).
+
 ## [16.4.5] - 2026-07-11
 
 ### Added

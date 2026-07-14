@@ -766,12 +766,13 @@ async function runLoopBody(
 	let deadlineTimer: Timer | undefined;
 	if (config.deadline !== undefined) {
 		const deadlineAbortController = new AbortController();
+		const deadlineReason = new DOMException("Deadline exceeded", "TimeoutError");
 		const delay = config.deadline - Date.now();
 		if (delay <= 0) {
-			deadlineAbortController.abort("Deadline exceeded");
+			deadlineAbortController.abort(deadlineReason);
 		} else {
 			deadlineTimer = setTimeout(() => {
-				deadlineAbortController.abort("Deadline exceeded");
+				deadlineAbortController.abort(deadlineReason);
 			}, delay);
 		}
 		signal = signal ? AbortSignal.any([signal, deadlineAbortController.signal]) : deadlineAbortController.signal;
