@@ -168,6 +168,23 @@ describe("guided goal setup", () => {
 		expect(requestOptions?.sessionId).not.toBe("session-1");
 	});
 
+	it("reuses a supplied side session id across interview turns", async () => {
+		const complete = spyOn(core, "instrumentedCompleteSimple").mockResolvedValue(
+			mockResponse({ kind: "question", question: "What is done?" }) as never,
+		);
+		const session = createSession();
+		const sideSessionId = "session-1:guided-goal:fixed";
+
+		// Regression (#5471 review): a multi-question interview must share one Codex
+		// side session so it does not leak a websocket-only socket per turn and trip
+		// websocket_connection_limit_reached (which drops back to the rejected SSE path).
+		await runGuidedGoalTurn(session, { messages: [{ role: "user", content: "Ship it" }], sideSessionId });
+		await runGuidedGoalTurn(session, { messages: [{ role: "user", content: "More" }], sideSessionId });
+
+		expect(complete.mock.calls[0]?.[2]?.sessionId).toBe(sideSessionId);
+		expect(complete.mock.calls[1]?.[2]?.sessionId).toBe(sideSessionId);
+	});
+
 	it("falls back to slow when plan is unavailable", async () => {
 		const complete = spyOn(core, "instrumentedCompleteSimple").mockResolvedValue(
 			mockResponse({ kind: "ready", objective: "Deliver the confirmed feature." }) as never,
