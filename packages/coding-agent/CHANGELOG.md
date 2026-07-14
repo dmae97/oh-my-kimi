@@ -70,6 +70,10 @@
 - Fixed rendering, status display, and PTY control sequence formatting issues in the `launch` tool.
 - Fixed in-process shell builtins (including `stat`, `date`, `sed`, `mktemp`, `tail`, `find`, `base64`, and `ln`) to correctly detect and translate macOS/BSD-style arguments and flags, preventing failures caused by GNU-only assumptions.
 
+### Fixed
+
+- Fixed `omp config list --json` truncating output at 64 KiB when stdout is piped ([#5309](https://github.com/can1357/oh-my-pi/issues/5309))
+
 ### Removed
 
 - Removed the `--prewalk-boomerang` feature and its associated configuration setting.
