@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Mnemopi local embeddings on Windows loading an unrelated `onnxruntime.dll` from the inherited system path instead of fastembed's cached ORT runtime. ([#4849](https://github.com/can1357/oh-my-pi/issues/4849))
+
 ## [16.3.9] - 2026-07-06
 
 ### Fixed
