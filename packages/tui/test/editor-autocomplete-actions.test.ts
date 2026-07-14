@@ -248,7 +248,7 @@ describe("Editor Enter handler sync slash completion", () => {
 			submitted = text;
 		};
 
-		editor.setText("explain this\n");
+		editor.setText("fix bug ");
 		editor.handleInput("/");
 		await Promise.resolve();
 
@@ -257,7 +257,7 @@ describe("Editor Enter handler sync slash completion", () => {
 		editor.handleInput("security");
 		editor.handleInput("\r");
 
-		expect(editor.getText()).toBe("explain this\n/skill:security-scan ");
+		expect(editor.getText()).toBe("fix bug /skill:security-scan ");
 		expect(submitted).toBeUndefined();
 	});
 

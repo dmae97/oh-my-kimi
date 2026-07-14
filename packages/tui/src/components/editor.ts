@@ -2876,12 +2876,12 @@ export class Editor implements Component, Focusable {
 	 * - Exact match → always safe.
 	 * - Path branch is safe when the prefix is still a live suffix of the text; the
 	 *   provider's default slice at `cursorCol - prefix.length` then hits the right span.
-	 * - Slash branch re-anchors when both the prefix and the current text carry a
-	 *   leading slash command and the current slash token is clean (no whitespace or
-	 *   inner slash), matching `applyCompletion`'s slash-branch guard. It only
-	 *   engages for command-shaped selections: absolute-path completions (`/tmp/fo`
-	 *   via the no-command-match fall-through) share the leading-slash prefix shape
-	 *   but must use the live-suffix path rule so the apply slice stays anchored.
+	 * - Slash branch re-anchors when the prefix is command-shaped and the current
+	 *   text carries either a leading submitted command or a trailing mid-prompt
+	 *   slash token. The live token must remain clean (no whitespace or inner slash),
+	 *   matching `applyCompletion`'s slash-branch guard. Absolute-path completions
+	 *   (`/tmp/fo` via the no-command-match fall-through) share the leading-slash
+	 *   prefix shape but use the live-suffix path rule instead.
 	 * - `@`-file branch re-anchors via `#extractAtPrefix`; safe when the current text
 	 *   still ends in a whitespace-anchored `@<token>`.
 	 * - Everything else is stale — accepting it would corrupt the buffer (issue #4295).
@@ -2890,9 +2890,11 @@ export class Editor implements Component, Focusable {
 		if (currentTextBeforeCursor === this.#autocompletePrefix) return true;
 
 		if (findLeadingSlashCommandStart(this.#autocompletePrefix) !== null && !this.#selectedCompletionIsPath()) {
-			const currentLeadingStart = findLeadingSlashCommandStart(currentTextBeforeCursor);
-			if (currentLeadingStart !== null) {
-				const token = currentTextBeforeCursor.slice(currentLeadingStart);
+			const currentSlashStart =
+				findLeadingSlashCommandStart(currentTextBeforeCursor) ??
+				findTrailingSlashCommandStart(currentTextBeforeCursor);
+			if (currentSlashStart !== null) {
+				const token = currentTextBeforeCursor.slice(currentSlashStart);
 				if (!token.includes(" ") && !token.slice(1).includes("/")) return true;
 			}
 			return false;
