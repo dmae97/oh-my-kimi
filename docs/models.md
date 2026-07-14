@@ -1,4 +1,4 @@
-# Model and Provider Configuration (`models.yml`)
+# Model and Provider Configuration (`models.yml` / `models.yaml`)
 
 This document describes how the coding-agent currently loads models, applies overrides, resolves credentials, and chooses models at runtime.
 
@@ -14,16 +14,17 @@ Primary implementation files:
 
 ## Config file location and legacy behavior
 
-Default config path:
+Default config paths, in precedence order:
 
 - `~/.omp/agent/models.yml`
+- `~/.omp/agent/models.yaml`
 
 Legacy behavior still present:
 
-- If `models.yml` is missing and `models.json` exists at the same location, it is migrated to `models.yml`.
+- If both YAML files are missing and `models.json` exists at the same location, it is migrated to `models.yml`.
 - Explicit `.json` / `.jsonc` config paths are still supported when passed programmatically to `ModelRegistry`.
 
-## `models.yml` shape
+## `models.yml` / `models.yaml` shape
 
 ```yaml
 providers:
@@ -158,7 +159,7 @@ Successful command outputs are cached for the process lifetime so the command is
 ModelRegistry pipeline (on refresh):
 
 1. Load built-in providers/models from `@oh-my-pi/pi-catalog` (`getBundledProviders` / `getBundledModels`).
-2. Load `models.yml` custom config.
+2. Load `models.yml` / `models.yaml` custom config.
 3. Apply provider overrides (`baseUrl`, `headers`, `disableStrictTools`) to built-in models.
 4. Apply `modelOverrides` (per provider + model id).
 5. Merge custom `models`:
@@ -734,11 +735,11 @@ providers:
 
 ## Legacy consumer caveat
 
-Most model configuration now flows through `models.yml` via `ModelRegistry`. Explicit `.json` / `.jsonc` paths remain supported only when passed programmatically to `ModelRegistry`; the default user config is `~/.omp/agent/models.yml`.
+Most model configuration now flows through `models.yml` / `models.yaml` via `ModelRegistry`. Explicit `.json` / `.jsonc` paths remain supported only when passed programmatically to `ModelRegistry`; the default user config prefers `~/.omp/agent/models.yml`, then falls back to `~/.omp/agent/models.yaml`.
 
 ## Failure mode
 
-If `models.yml` fails schema or validation checks:
+If `models.yml` / `models.yaml` fails schema or validation checks:
 
 - registry keeps operating with built-in models
 - error is exposed via `ModelRegistry.getError()` and surfaced in UI/notifications
