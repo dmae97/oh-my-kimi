@@ -94,6 +94,7 @@
 - Fixed tab reuse issues where hung navigation or unhandled modals would cause initialization to stall and trigger a force-kill
 - Improved search reliability for Perplexity provider by forcing retrieval for all queries
 - Fixed JS eval cells losing top-level `function` and `var` declarations across cells when the defining cell contained top-level `await` — the async wrapper scoped them to the cell's IIFE instead of publishing them to the worker global
+- Fixed temporary model picks (`Alt+P`, `/switch`, `/model --temporary`) ignoring explicit thinking suffixes from matching configured model roles. ([#5290](https://github.com/can1357/oh-my-pi/issues/5290))
 
 ## [16.4.7] - 2026-07-12
 

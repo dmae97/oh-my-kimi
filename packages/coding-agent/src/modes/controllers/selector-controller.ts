@@ -634,7 +634,8 @@ export class SelectorController {
 				onPick: async (model, selector) => {
 					try {
 						// Session-only: update agent state but don't persist the model to settings.
-						await this.ctx.session.setModelTemporary(model);
+						const roleThinkingLevel = this.ctx.session.resolveTemporaryModelThinkingLevel(model);
+						await this.ctx.session.setModelTemporary(model, roleThinkingLevel);
 						this.ctx.statusLine.invalidate();
 						this.ctx.updateEditorBorderColor();
 						const roleSelectorHint = this.ctx.keybindings.getKeys("app.model.select")[0] ?? "Alt+M";
@@ -777,6 +778,7 @@ export class SelectorController {
 						this.ctx.showError(error instanceof Error ? error.message : String(error));
 					}
 				},
+
 				onLoginRequest: providerId => {
 					done();
 					void this.#loginThenReopenModelHub(providerId);

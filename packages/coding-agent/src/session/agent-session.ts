@@ -187,7 +187,7 @@ import {
 	resolveModelOverride,
 	resolveModelRoleValue,
 } from "../config/model-resolver";
-import { MODEL_ROLE_IDS, MODEL_ROLES } from "../config/model-roles";
+import { getKnownRoleIds, MODEL_ROLE_IDS, MODEL_ROLES } from "../config/model-roles";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import { buildServiceTierByFamily, serviceTierForAllFamilies, serviceTierSettingToTier } from "../config/service-tier";
 import type { Settings, SkillsSettings } from "../config/settings";
@@ -7786,6 +7786,30 @@ export class AgentSession {
 	 */
 	resolveRoleModelWithThinking(role: string): ResolvedModelRoleValue {
 		return this.#resolveRoleModelFull(role, this.#modelRegistry.getAvailable(), this.model);
+	}
+
+	/**
+	 * Resolve the explicit thinking suffix that should apply when a temporary
+	 * picker selects a model already assigned to a configured role.
+	 */
+	resolveTemporaryModelThinkingLevel(model: Model): ConfiguredThinkingLevel | undefined {
+		const availableModels = this.#modelRegistry.getAvailable();
+		if (availableModels.length === 0) return undefined;
+
+		const matchPreferences = getModelMatchPreferences(this.settings);
+		for (const role of getKnownRoleIds(this.settings)) {
+			const roleValue = this.settings.getModelRole(role);
+			if (!roleValue) continue;
+
+			const resolved = resolveModelRoleValue(roleValue, availableModels, {
+				settings: this.settings,
+				matchPreferences,
+			});
+			if (!resolved.explicitThinkingLevel || resolved.thinkingLevel === undefined || !resolved.model) continue;
+			if (modelsAreEqual(resolved.model, model)) return resolved.thinkingLevel;
+		}
+
+		return undefined;
 	}
 
 	get promptTemplates(): ReadonlyArray<PromptTemplate> {
