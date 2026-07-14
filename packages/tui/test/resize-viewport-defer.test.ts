@@ -341,6 +341,54 @@ describe("non-multiplexer resize viewport fast path", () => {
 		});
 	});
 
+	it("keeps a forced render mid-drag on the viewport fast path instead of a destructive normal-screen replay", async () => {
+		await withEnvPatch(NO_MULTIPLEXER_ENV, async () => {
+			const term = new VirtualTerminal(40, 10, 1000);
+			const { tui, scheduler } = makeTui(term);
+			try {
+				tui.start();
+				await scheduler.flushImmediates(term);
+
+				// One drag SIGWINCH enters the fast path and borrows the alt screen.
+				term.resize(60, 10);
+				await scheduler.flushImmediates(term);
+				expect(tui.resizeViewportActive).toBe(true);
+
+				const baselineFull = tui.fullRedraws;
+				const baselinePaints = tui.resizeViewportPaints;
+				const writes = captureWrites(term);
+
+				// A FORCED render lands mid-drag (tool finalization, resetDisplay,
+				// image reconciliation — routine during a live agent session). It must
+				// stay on the viewport fast path: preempting leaves the borrowed
+				// alternate screen and runs the geometry-rebuild full paint on the
+				// normal screen — ED3 plus an O(history) replay the user watches
+				// scroll through the viewport — and the settle then replays the whole
+				// transcript a second time.
+				tui.requestRender(true);
+				await scheduler.flushImmediates(term);
+
+				// Still mid-drag, still on the alternate screen: a viewport-only
+				// paint, no full redraw, no scrollback erase, no alt-screen exit.
+				expect(tui.resizeViewportActive).toBe(true);
+				expect(tui.resizeViewportPaints).toBeGreaterThan(baselinePaints);
+				expect(tui.fullRedraws).toBe(baselineFull);
+				expect(writes.join("")).not.toContain(ALT_SCREEN_EXIT);
+				expect(eraseScrollbackCount(writes)).toBe(0);
+
+				// The forced intent folds into the settle: exactly one authoritative
+				// full paint with exactly one ED3 once the drag goes quiet.
+				await scheduler.flushAll(term);
+				expect(tui.resizeViewportActive).toBe(false);
+				expect(tui.fullRedraws).toBe(baselineFull + 1);
+				expect(eraseScrollbackCount(writes)).toBe(1);
+				expect(visible(term).at(-1)).toBe("b14-y");
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+
 	it("does not leave a pending settle paint after stop()", async () => {
 		await withEnvPatch(NO_MULTIPLEXER_ENV, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);

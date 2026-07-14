@@ -208,15 +208,6 @@ export const RECOVERY_EXTERNAL_WARNING =
 export const RECOVERY_SESSION_CHAIN_WARNING =
 	"Recovered from a stale file hash using an earlier in-session snapshot (a prior edit in this session advanced the hash).";
 
-/**
- * `Recovery`: session-chain replay fast-path. Less certain than
- * {@link RECOVERY_SESSION_CHAIN_WARNING} — the 3-way merge refused, the
- * anchor-content gate passed, but a coincidental insert+delete earlier in
- * the chain could still misplace an anchor — hence the verify hedge.
- */
-export const RECOVERY_SESSION_REPLAY_WARNING =
-	"Recovered by replaying your edits onto the current file content (a prior in-session edit changed the lines you re-targeted with a stale hash). Verify the diff matches your intent.";
-
 /** `Recovery`: stale anchors were relocated to unchanged live lines after drift. */
 export const RECOVERY_LINE_REMAP_WARNING =
 	"Recovered by remapping stale line anchors to unchanged current lines (file changed since the tagged read). Verify the diff matches your intent.";

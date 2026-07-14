@@ -19,7 +19,7 @@ export interface ArmSummary {
 	run: RunRow;
 	/** Arm label: job name minus the experiment prefix. */
 	arm: string;
-	/** Human config line: models plus downshift description when known. */
+	/** Human config line: models plus prewalk description when known. */
 	config: string;
 	/** Observed pass% over decided trials. */
 	passPct: number | null;
@@ -67,11 +67,11 @@ export function armOf(jobName: string): string {
 	return jobName.length > exp.length ? jobName.slice(exp.length + 1) : jobName;
 }
 
-function downshiftLabel(downshiftJson: string | null): string {
-	if (!downshiftJson) return "";
+function prewalkLabel(prewalkJson: string | null): string {
+	if (!prewalkJson) return "";
 	try {
 		// Historical rows may hold legacy reasoning-slide JSON ({model, turns, onAction, plan}).
-		const parsed = JSON.parse(downshiftJson) as {
+		const parsed = JSON.parse(prewalkJson) as {
 			into?: string;
 			model?: string;
 			turns?: number;
@@ -118,7 +118,7 @@ export function summarizeArm(run: RunRow, traces: TraceRow[]): ArmSummary {
 	return {
 		run,
 		arm: armOf(run.jobName),
-		config: `${run.benchmark} · ${run.models}${downshiftLabel(run.downshift)}`,
+		config: `${run.benchmark} · ${run.models}${prewalkLabel(run.prewalk)}`,
 		passPct,
 		costPerTask,
 		meanTrialMs,
@@ -204,7 +204,7 @@ export function buildExperiments(store: RunStore): ExperimentSummary[] {
 	for (const [id, runs] of groups) {
 		out.push({
 			id,
-			goal: store.getExperimentGoal(id),
+			goal: store.getExperimentMeta(id)?.goal ?? "",
 			arms: runs.length,
 			runningArms: runs.filter(r => r.status === "running").length,
 			datasets: [...new Set(runs.map(r => r.dataset).filter(Boolean))],
@@ -216,6 +216,26 @@ export function buildExperiments(store: RunStore): ExperimentSummary[] {
 			costUsd: runs.reduce((a, r) => a + r.costUsd, 0),
 			createdAt: Math.min(...runs.map(r => r.createdAt)),
 			updatedAt: Math.max(...runs.map(r => r.finishedAt ?? Date.now())),
+		});
+	}
+	// Registered-but-empty experiments (created via POST /api/experiments, no
+	// arms yet) are still browsable: zeroed rollups, goal from the meta row.
+	for (const meta of store.listExperimentMeta()) {
+		if (groups.has(meta.id)) continue;
+		out.push({
+			id: meta.id,
+			goal: meta.goal,
+			arms: 0,
+			runningArms: 0,
+			datasets: [],
+			nTotal: 0,
+			done: 0,
+			pass: 0,
+			fail: 0,
+			error: 0,
+			costUsd: 0,
+			createdAt: meta.updatedAt,
+			updatedAt: meta.updatedAt,
 		});
 	}
 	out.sort((a, b) => b.updatedAt - a.updatedAt);
@@ -259,7 +279,11 @@ export function pickMergedTrials(traces: TraceRow[]): TraceRow[] {
 
 export function experimentDetail(store: RunStore, id: string): ExperimentDetail | null {
 	const runs = store.listRuns().filter(r => experimentOf(r.jobName) === id);
-	if (runs.length === 0) return null;
+	if (runs.length === 0) {
+		// Registered but armless (POST /api/experiments): still readable.
+		const meta = store.getExperimentMeta(id);
+		return meta ? { id, goal: meta.goal, arms: [], tasks: [], matrix: {} } : null;
+	}
 	// One row per CANONICAL arm: `-fix`/`-backfill` re-runs merge into their
 	// base arm — per-task best trial, summed spend.
 	const groups = new Map<string, RunRow[]>();
@@ -347,5 +371,5 @@ export function experimentDetail(store: RunStore, id: string): ExperimentDetail 
 	// "reference rows, then treatments".
 	const roleRank = (role: string) => (role === "baseline" ? 0 : role === "variant" ? 1 : 2);
 	arms.sort((a, b) => roleRank(a.run.role) - roleRank(b.run.role) || a.arm.localeCompare(b.arm));
-	return { id, goal: store.getExperimentGoal(id), arms, tasks: [...tasks].sort(), matrix };
+	return { id, goal: store.getExperimentMeta(id)?.goal ?? "", arms, tasks: [...tasks].sort(), matrix };
 }

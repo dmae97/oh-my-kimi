@@ -260,9 +260,6 @@ import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with {
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
 import parentIrcSteerTemplate from "../prompts/steering/parent-irc.md" with { type: "text" };
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
-import downshiftChecklistPrompt from "../prompts/system/downshift-checklist.md" with { type: "text" };
-import downshiftContinuePrompt from "../prompts/system/downshift-continue.md" with { type: "text" };
-import downshiftPlanPrompt from "../prompts/system/downshift-plan.md" with { type: "text" };
 import eagerTaskPrompt from "../prompts/system/eager-task.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
 import emptyStopRetryTemplate from "../prompts/system/empty-stop-retry.md" with { type: "text" };
@@ -277,6 +274,9 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 	type: "text",
 };
 import planYoloHandoffPrompt from "../prompts/system/plan-yolo-handoff.md" with { type: "text" };
+import prewalkChecklistPrompt from "../prompts/system/prewalk-checklist.md" with { type: "text" };
+import prewalkContinuePrompt from "../prompts/system/prewalk-continue.md" with { type: "text" };
+import prewalkPlanPrompt from "../prompts/system/prewalk-plan.md" with { type: "text" };
 import rewindReportTemplate from "../prompts/system/rewind-report.md" with { type: "text" };
 import sideChannelNoToolsReminder from "../prompts/system/side-channel-no-tools.md" with { type: "text" };
 import thinkingLoopRedirectTemplate from "../prompts/system/thinking-loop-redirect.md" with { type: "text" };
@@ -420,29 +420,29 @@ const MID_RUN_TODO_NUDGE_MUTATING_TOOLS: Record<string, true> = {
 /** `customType` for the hidden mid-run todo nudge; `display: false`, so it reaches
  *  the model but never renders in the TUI or transcript. */
 const MID_RUN_TODO_NUDGE_MESSAGE_TYPE = "mid-run-todo-nudge";
-/** Hidden plan nudge injected by downshift; scrubbed from the LLM context
+/** Hidden plan nudge injected by prewalk; scrubbed from the LLM context
  *  when the switch happens. */
-const DOWNSHIFT_PLAN_MESSAGE_TYPE = "downshift-plan";
+const PREWALK_PLAN_MESSAGE_TYPE = "prewalk-plan";
 /** Hidden safety-net nudge forcing one more turn after a text-only reply to
  *  the plan nudge, which would otherwise end the run with no code written. */
-const DOWNSHIFT_CONTINUE_MESSAGE_TYPE = "downshift-continue";
+const PREWALK_CONTINUE_MESSAGE_TYPE = "prewalk-continue";
 /** Hidden "verify before finishing" checklist steered into the run at the
  *  switch, aimed at the fast model's specific failure patterns: partial
  *  multi-site fixes, unnecessarily broad rewrites, and reported-test-only
  *  verification. */
-const DOWNSHIFT_CHECKLIST_MESSAGE_TYPE = "downshift-checklist";
+const PREWALK_CHECKLIST_MESSAGE_TYPE = "prewalk-checklist";
 /** Tools whose first successful call triggers the switch — once the todo
- *  gate is open (see {@link AgentSession.#downshiftTodoSeen}). Bash is
+ *  gate is open (see {@link AgentSession.#prewalkTodoSeen}). Bash is
  *  deliberately excluded: it doubles as exploration (ls/cat) and fired
  *  turn-1 switches in practice. `todo` is deliberately NOT a trigger: firing
  *  at the todo init handed the fast model 100% of the implementation with
  *  zero started work and measurably regressed pass rates. */
-const DOWNSHIFT_ACTION_TOOLS: Record<string, true> = {
+const PREWALK_ACTION_TOOLS: Record<string, true> = {
 	edit: true,
 	write: true,
 };
 /** `customType` for the hidden hand-off message steered to the target model
- *  once PlanYolo auto-approves the plan. Unlike downshift's plan nudge this
+ *  once PlanYolo auto-approves the plan. Unlike prewalk's plan nudge this
  *  is never scrubbed — it IS the instruction the target model acts on. */
 const PLAN_YOLO_HANDOFF_MESSAGE_TYPE = "plan-yolo-handoff";
 /** Abort reason for the Gemini reasoning-header runaway interrupt. Surfaced on the
@@ -713,7 +713,7 @@ export interface AsyncJobSnapshot {
 
 export type { ShakeMode, ShakeResult };
 /**
- * Downshift: switches an active session one-way from its starting model to
+ * Prewalk: switches an active session one-way from its starting model to
  * a fast/cheap `target` at the first completed turn that runs an edit/write
  * tool once the todo list exists. A hidden plan nudge asks the starting
  * model to write a plan, initialize its todo list from it, and start; the
@@ -723,7 +723,7 @@ export type { ShakeMode, ShakeResult };
  * finishing. Both are always on — this is the one mechanism that won out
  * over turn-count and ungated variants in testing.
  */
-export interface Downshift {
+export interface Prewalk {
 	target: Model;
 	thinkingLevel?: ConfiguredThinkingLevel;
 }
@@ -755,8 +755,8 @@ export interface AgentSessionConfig {
 	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 	/** Initial session thinking selector. */
 	thinkingLevel?: ConfiguredThinkingLevel;
-	/** Downshift from the starting model to a fast/cheap target at the first edit/write once the todo list exists. */
-	downshift?: Downshift;
+	/** Prewalk from the starting model to a fast/cheap target at the first edit/write once the todo list exists. */
+	prewalk?: Prewalk;
 	/** Force read-only plan mode at start, auto-approve on the model's first
 	 *  `resolve` call, then switch to the target to implement. */
 	planYolo?: PlanYolo;
@@ -1678,13 +1678,13 @@ export class AgentSession {
 	#autoThinking: boolean = false;
 	/** The level `auto` last resolved to (for UI); undefined until a turn is classified. */
 	#autoResolvedLevel: Effort | undefined;
-	#downshift: Downshift | undefined;
+	#prewalk: Prewalk | undefined;
 	/** True once the plan nudge has been queued; scrubbed from context at the switch. */
-	#downshiftPlanInjected = false;
-	/** True once any successful `todo` call landed — opens the downshift
+	#prewalkPlanInjected = false;
+	/** True once any successful `todo` call landed — opens the prewalk
 	 *  trigger gate: the switch fires at the first edit/write AFTER the todo
 	 *  list exists (sessions without a todo tool skip the gate). */
-	#downshiftTodoSeen = false;
+	#prewalkTodoSeen = false;
 	#planYolo: PlanYolo | undefined;
 	#planYoloPreviousTools: string[] | undefined;
 	#planYoloArmed = false;
@@ -2178,10 +2178,10 @@ export class AgentSession {
 		this.#emit(pending);
 	}
 
-	/** Advance the one-way downshift switch at a completed assistant-turn boundary. */
-	async #advanceDownshift(liveMessages: AgentMessage[], context: AgentTurnEndContext | undefined): Promise<void> {
-		const downshift = this.#downshift;
-		if (!downshift || context?.message.role !== "assistant") return;
+	/** Advance the one-way prewalk switch at a completed assistant-turn boundary. */
+	async #advancePrewalk(liveMessages: AgentMessage[], context: AgentTurnEndContext | undefined): Promise<void> {
+		const prewalk = this.#prewalk;
+		if (!prewalk || context?.message.role !== "assistant") return;
 
 		// Structural safety net: every branch below assumes the agent loop will
 		// run another turn. It won't if THIS turn had no tool calls — the loop
@@ -2191,11 +2191,11 @@ export class AgentSession {
 		// silently killing production SWE-bench runs before any code was ever
 		// written. Force one more turn only in that specific, self-created
 		// hazard window.
-		if (this.#downshiftPlanInjected && context.toolResults.length === 0) {
+		if (this.#prewalkPlanInjected && context.toolResults.length === 0) {
 			this.agent.steer({
 				role: "custom",
-				customType: DOWNSHIFT_CONTINUE_MESSAGE_TYPE,
-				content: downshiftContinuePrompt,
+				customType: PREWALK_CONTINUE_MESSAGE_TYPE,
+				content: prewalkContinuePrompt,
 				attribution: "agent",
 				display: false,
 				timestamp: Date.now(),
@@ -2209,24 +2209,24 @@ export class AgentSession {
 		// the fast model the whole implementation cold. Sessions without a todo
 		// tool skip the gate.
 		if (context.toolResults.some(result => result.toolName === "todo")) {
-			this.#downshiftTodoSeen = true;
+			this.#prewalkTodoSeen = true;
 		}
-		const todoGateOpen = this.#downshiftTodoSeen || !this.#toolRegistry.has("todo");
+		const todoGateOpen = this.#prewalkTodoSeen || !this.#toolRegistry.has("todo");
 		const action = todoGateOpen
-			? context.toolResults.find(result => DOWNSHIFT_ACTION_TOOLS[result.toolName])
+			? context.toolResults.find(result => PREWALK_ACTION_TOOLS[result.toolName])
 			: undefined;
 		if (!action) {
-			if (!this.#downshiftPlanInjected) {
-				this.#downshiftPlanInjected = true;
+			if (!this.#prewalkPlanInjected) {
+				this.#prewalkPlanInjected = true;
 				this.agent.steer({
 					role: "custom",
-					customType: DOWNSHIFT_PLAN_MESSAGE_TYPE,
-					content: downshiftPlanPrompt,
+					customType: PREWALK_PLAN_MESSAGE_TYPE,
+					content: prewalkPlanPrompt,
 					display: false,
 					attribution: "agent",
 					timestamp: Date.now(),
 				});
-				this.emitNotice("info", "Downshift: injected deep-plan nudge.", "downshift");
+				this.emitNotice("info", "Prewalk: injected deep-plan nudge.", "prewalk");
 			}
 			return;
 		}
@@ -2236,24 +2236,24 @@ export class AgentSession {
 			await this.#waitForSessionMessagePersistence(toolResult);
 		}
 
-		this.#scrubDownshiftPlanNudge(liveMessages);
-		const target = downshift.target;
+		this.#scrubPrewalkPlanNudge(liveMessages);
+		const target = prewalk.target;
 		if (this.model && modelsAreEqual(this.model, target)) {
-			this.#downshift = undefined;
+			this.#prewalk = undefined;
 			return;
 		}
 
-		await this.setModelTemporary(target, downshift.thinkingLevel, { ephemeral: true });
-		this.#downshift = undefined;
+		await this.setModelTemporary(target, prewalk.thinkingLevel, { ephemeral: true });
+		this.#prewalk = undefined;
 		this.emitNotice(
 			"info",
-			`Downshift: switched to ${target.provider}/${target.id} after first ${action.toolName} call.`,
-			"downshift",
+			`Prewalk: switched to ${target.provider}/${target.id} after first ${action.toolName} call.`,
+			"prewalk",
 		);
 		this.agent.steer({
 			role: "custom",
-			customType: DOWNSHIFT_CHECKLIST_MESSAGE_TYPE,
-			content: downshiftChecklistPrompt,
+			customType: PREWALK_CHECKLIST_MESSAGE_TYPE,
+			content: prewalkChecklistPrompt,
 			attribution: "agent",
 			display: false,
 			timestamp: Date.now(),
@@ -2261,35 +2261,35 @@ export class AgentSession {
 	}
 
 	/**
-	 * Arm downshift outside the normal startup path (the `/downshift` slash
+	 * Arm prewalk outside the normal startup path (the `/prewalk` slash
 	 * command): sets the target and immediately steers the plan nudge rather
 	 * than waiting for the next turn boundary, since an explicit manual
-	 * invocation means "start this now." A no-op with a notice if a downshift
+	 * invocation means "start this now." A no-op with a notice if a prewalk
 	 * is already armed and waiting.
 	 */
-	armDownshift(target: Model, thinkingLevel?: ConfiguredThinkingLevel): void {
-		if (this.#downshift) {
+	armPrewalk(target: Model, thinkingLevel?: ConfiguredThinkingLevel): void {
+		if (this.#prewalk) {
 			this.emitNotice(
 				"info",
-				`Downshift: already armed for ${this.#downshift.target.provider}/${this.#downshift.target.id}, waiting for the first edit/write.`,
-				"downshift",
+				`Prewalk: already armed for ${this.#prewalk.target.provider}/${this.#prewalk.target.id}, waiting for the first edit/write.`,
+				"prewalk",
 			);
 			return;
 		}
-		this.#downshift = { target, thinkingLevel };
-		this.#downshiftPlanInjected = true;
+		this.#prewalk = { target, thinkingLevel };
+		this.#prewalkPlanInjected = true;
 		this.agent.steer({
 			role: "custom",
-			customType: DOWNSHIFT_PLAN_MESSAGE_TYPE,
-			content: downshiftPlanPrompt,
+			customType: PREWALK_PLAN_MESSAGE_TYPE,
+			content: prewalkPlanPrompt,
 			display: false,
 			attribution: "agent",
 			timestamp: Date.now(),
 		});
 		this.emitNotice(
 			"info",
-			`Downshift: armed for ${target.provider}/${target.id} — will switch at the first edit/write once the todo list exists.`,
-			"downshift",
+			`Prewalk: armed for ${target.provider}/${target.id} — will switch at the first edit/write once the todo list exists.`,
+			"prewalk",
 		);
 	}
 
@@ -2299,12 +2299,12 @@ export class AgentSession {
 	 * Splices the loop's live context array in place (the run streams from
 	 * it) and mirrors the removal into agent state. The persisted transcript
 	 * keeps the message for audit; a session reload re-materializes it,
-	 * which is acceptable for downshift's single-run lifecycle.
+	 * which is acceptable for prewalk's single-run lifecycle.
 	 */
-	#scrubDownshiftPlanNudge(liveMessages: AgentMessage[]): void {
-		if (!this.#downshiftPlanInjected) return;
+	#scrubPrewalkPlanNudge(liveMessages: AgentMessage[]): void {
+		if (!this.#prewalkPlanInjected) return;
 		const isPlanNudge = (m: AgentMessage): boolean =>
-			m.role === "custom" && m.customType === DOWNSHIFT_PLAN_MESSAGE_TYPE;
+			m.role === "custom" && m.customType === PREWALK_PLAN_MESSAGE_TYPE;
 		for (let i = liveMessages.length - 1; i >= 0; i--) {
 			if (isPlanNudge(liveMessages[i])) liveMessages.splice(i, 1);
 		}
@@ -2445,8 +2445,8 @@ export class AgentSession {
 		} else {
 			this.#thinkingLevel = config.thinkingLevel;
 		}
-		if (config.downshift) {
-			this.#downshift = config.downshift;
+		if (config.prewalk) {
+			this.#prewalk = config.prewalk;
 		}
 		if (config.planYolo) {
 			this.#planYolo = config.planYolo;
@@ -2525,7 +2525,7 @@ export class AgentSession {
 				});
 				if (detection) this.#maybeInjectToolCallLoopRedirect(messages, detection);
 			}
-			await this.#advanceDownshift(messages, context);
+			await this.#advancePrewalk(messages, context);
 			this.#advisorPrimaryTurnsCompleted++;
 			if (this.#advisors.length > 0) {
 				for (const a of this.#advisors) {
@@ -7509,6 +7509,11 @@ export class AgentSession {
 		return this.#planModeState;
 	}
 
+	/** Prewalk state, if armed and active */
+	getPrewalkState(): Prewalk | undefined {
+		return this.#prewalk;
+	}
+
 	setPlanModeState(state: PlanModeState | undefined): void {
 		this.#planModeState = state;
 		if (state?.enabled) {
@@ -9685,7 +9690,7 @@ export class AgentSession {
 		const all = this.#modelRegistry.getAvailable();
 		const patterns = this.settings.get("enabledModels");
 		if (!patterns || patterns.length === 0) return all;
-		return filterAvailableModelsByEnabledPatterns(all, patterns);
+		return filterAvailableModelsByEnabledPatterns(all, patterns, this.settings);
 	}
 
 	// =========================================================================

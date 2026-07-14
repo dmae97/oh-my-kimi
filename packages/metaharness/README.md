@@ -1,4 +1,4 @@
-# @oh-my-pi/harbor-manager
+# @oh-my-pi/pi-metaharness
 
 One manager for repository benchmarks. Harbor, TypeScript edit, and SnapCompact
 runs use the same experiment → run → trace model, SQLite store, REST/SSE API,
@@ -30,8 +30,19 @@ bun run serve --port 4700
 ## Server
 
 - `GET /` — experiments, runs, normalized traces, and a launch form for every benchmark.
-- `GET /api/experiments` — experiment summaries across all benchmark types.
-- `GET /api/runs` — uniform run rows with benchmark, score, progress, spend, and tokens.
+- `GET /api/experiments[?q=]` — experiment summaries across all benchmark types
+  (`q` filters by id/goal substring).
+- `POST /api/experiments` — register an experiment before its first arm. Body
+  `{ "id": "sb2", "goal": "..." }`; the id is the dash-free token job names
+  group under (`sb2-n8` → experiment `sb2`).
+- `GET /api/experiments/:id` — arms, per-task matrix, and calibrated projections.
+- `PUT /api/experiments/:id` — update the goal and per-run role/note/label.
+- `POST /api/experiments/:id/arms` — launch a comparable arm; sample + config
+  inherited from a sibling.
+- `DELETE /api/experiments/:id` — delete every arm (DB rows **and** job dirs)
+  plus the goal row; rejected while any arm is running.
+- `GET /api/runs[?experiment=&status=&benchmark=]` — uniform run rows with
+  benchmark, score, progress, spend, and tokens.
 - `POST /api/runs` — launch through a benchmark adapter. Body:
 
   ```json
@@ -48,14 +59,24 @@ bun run serve --port 4700
   ```
 
   `benchmark` is `harbor`, `edit`, or `snapcompact`. Harbor uses `dataset`,
-  `include`, `timeoutMultiplier`, and `downshift`; edit uses `include` as task IDs;
+  `include`, `timeoutMultiplier`, and `prewalk`; edit uses `include` as task IDs;
   SnapCompact uses `conditions` and treats `tasks` as the passage limit.
 - `GET /api/runs/:name` — `{ run, traces }` (syncs native artifacts on read).
-- `DELETE /api/runs/:name` — cancel a manager-launched run.
+- `POST /api/runs/:name/cancel` — cancel a manager-launched run.
+- `DELETE /api/runs/:name` — permanently delete a finished run (DB row **and**
+  job dir; a surviving dir would be re-discovered on restart); rejected while
+  the run is live.
+- `POST /api/runs/:name/resume` — resume an incomplete harbor run in place:
+  completed trials (and their spend) are reused, interrupted/pending trials
+  re-run, and errored trials retried (body `{ "filterErrorTypes": [...] }`
+  overrides the retry set, which defaults to every exception type in the job's
+  `result.json`). The runner recovers the original launch flags from
+  `_bench/<name>/runner-config.json` (snapshotted at launch) or the run's
+  `manager.json` — nothing needs re-specifying.
 - `GET /api/runs/:name/traces/:trace[?raw=1]` — normalized or native trace.
 - `GET /api/events` — SSE stream of run-list snapshots (sent on change).
 
-State lives in `<jobs-dir>/_manager/harbor-manager.sqlite`; the filesystem
+State lives in `<jobs-dir>/_manager/metaharness.sqlite`; the filesystem
 stays the source of truth and historical CLI runs are auto-discovered.
 
 ## Harbor runner options (excerpt)
@@ -77,6 +98,8 @@ stays the source of truth and historical CLI runs are auto-discovered.
 | `--gateway-url <url>` | `http://host.docker.internal:4000` | `http://192.168.64.1:4000` under `--environment apple-container` |
 | `--no-gateway` | off | Pass host provider keys into containers instead |
 | `-o, --jobs-dir <path>` | `<repo>/runs/harbor` | Shared with the server |
+| `--resume <name\|path>` | — | Resume that job dir via `harbor job resume`; original flags recovered automatically |
+| `--filter-error-type <T>` | `CancelledError` | With `--resume`: also re-run completed trials that errored with exception type `T` (repeatable) |
 | `--dry-run` | off | Print the harbor command + models.yml and exit |
 
 ## Outputs
@@ -85,6 +108,24 @@ stays the source of truth and historical CLI runs are auto-discovered.
 - `<jobs-dir>/_bench/<jobName>/report.md` — markdown summary table.
 - `<jobs-dir>/_bench/<jobName>/harbor.log` — full Harbor output.
 - `<jobs-dir>/_manager/logs/<jobName>.log` — runner output for API-launched runs.
+
+## Trace reports
+
+`scripts/trace-report.ts` turns one run trace into a narrative markdown report
+(numbered Turn Log with one grounded sentence per assistant turn, harness
+notices in place, then a Story Arc and — for failed runs — a failure analysis).
+It map/reduces the normalized trace through two cheap OpenRouter models
+(defaults: `inclusionai/ling-2.6-flash` per turn, `openai/gpt-oss-120b` for the
+arc; ~$0.001 per report). API keys resolve through omp's auth storage.
+
+```bash
+bun scripts/trace-report.ts <run> <trace> [--focus "reviewer notes"] [--out report.md]
+bun scripts/trace-report.ts "sb3-ntg|django__django-12325__ddQroP4"   # run|trace also accepted
+```
+
+Flags: `--base` (server, default `http://localhost:4700`), `--tiny` / `--synth`
+(`<provider>/<model-id>` overrides), `--focus` (extra reviewer context, e.g. the
+known-correct fix for a failed task), `--concurrency` (default 8).
 
 ## Caveats
 

@@ -57,34 +57,54 @@ describe("editToolRenderer", () => {
 		expect(rendered).toContain("packages/coding-agent/src/edit/renderer.ts");
 	});
 
-	it("lifts the streaming diff tail window when expanded", async () => {
+	it("windows the expanded streaming diff to the viewport tail", async () => {
 		const uiTheme = await getUiTheme();
-		const diff = Array.from({ length: 20 }, (_, index) =>
-			index === 0 ? "-head-line-1" : `+tail-line-${index + 1}`,
-		).join("\n");
-		const renderPreview = (expanded: boolean): string =>
-			Bun.stripANSI(
-				editToolRenderer
-					.renderCall(
-						{ file_path: "/tmp/preview.ts", previewDiff: diff },
-						{ expanded, isPartial: true, spinnerFrame: 0, renderContext: { editMode: "replace" } },
-						uiTheme,
-					)
-					.render(200)
-					.join("\n"),
-			);
+		// Pin a tall viewport so previewWindowRows() (rows - reserve) lands at 30:
+		// collapsed stays at the 12-row fixed tail, expanded widens to 30.
+		const originalRowsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+		Object.defineProperty(process.stdout, "rows", { value: 50, configurable: true });
+		try {
+			const makeDiff = (length: number): string =>
+				Array.from({ length }, (_, index) => (index === 0 ? "-head-line-1" : `+tail-line-${index + 1}`)).join("\n");
+			const renderPreview = (diff: string, expanded: boolean): string =>
+				Bun.stripANSI(
+					editToolRenderer
+						.renderCall(
+							{ file_path: "/tmp/preview.ts", previewDiff: diff },
+							{ expanded, isPartial: true, spinnerFrame: 0, renderContext: { editMode: "replace" } },
+							uiTheme,
+						)
+						.render(200)
+						.join("\n"),
+				);
 
-		const collapsed = renderPreview(false);
-		expect(collapsed).toContain("tail-line-20");
-		expect(collapsed).not.toContain("head-line-1");
-		expect(collapsed).toContain("more lines above");
-		expect(collapsed).toContain("(preview)");
+			const collapsed = renderPreview(makeDiff(20), false);
+			expect(collapsed).toContain("tail-line-20");
+			expect(collapsed).not.toContain("head-line-1");
+			expect(collapsed).toContain("more lines above");
+			expect(collapsed).toContain("(preview)");
 
-		const expanded = renderPreview(true);
-		expect(expanded).toContain("head-line-1");
-		expect(expanded).toContain("tail-line-20");
-		expect(expanded).not.toContain("more lines above");
-		expect(expanded).not.toContain("(preview)");
+			// Within the viewport window, expanded shows the whole diff.
+			const expanded = renderPreview(makeDiff(20), true);
+			expect(expanded).toContain("head-line-1");
+			expect(expanded).toContain("tail-line-20");
+			expect(expanded).not.toContain("more lines above");
+			expect(expanded).not.toContain("(preview)");
+
+			// Beyond it, expanded stays a viewport-sized tail window: an unbounded
+			// live preview scrolls above the native-scrollback commit boundary and
+			// freezes a stale snapshot that duplicates the block at finalize.
+			const expandedTall = renderPreview(makeDiff(40), true);
+			expect(expandedTall).toContain("tail-line-40");
+			expect(expandedTall).not.toContain("head-line-1");
+			expect(expandedTall).toContain("more lines above");
+		} finally {
+			if (originalRowsDescriptor) {
+				Object.defineProperty(process.stdout, "rows", originalRowsDescriptor);
+			} else {
+				Reflect.deleteProperty(process.stdout, "rows");
+			}
+		}
 	});
 
 	it("uses hashline input headers for streaming call path without apply_patch errors", async () => {

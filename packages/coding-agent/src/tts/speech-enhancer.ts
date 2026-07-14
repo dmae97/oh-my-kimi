@@ -70,10 +70,10 @@ export class SpeechEnhancer {
 	async rewrite(block: string, signal?: AbortSignal): Promise<string | null> {
 		try {
 			const { settings, registry, sessionId } = this.#deps;
-			// `pi/tiny` expands a configured `modelRoles.tiny` and otherwise falls
+			// `@tiny` expands a configured `modelRoles.tiny` and otherwise falls
 			// through tiny's alias to the smol priority chain — unlike bare role
 			// lookup, this resolves even with no roles configured.
-			const model = resolveModelRoleValue("pi/tiny", registry.getAvailable(), {
+			const model = resolveModelRoleValue("@tiny", registry.getAvailable(), {
 				settings,
 				matchPreferences: getModelMatchPreferences(settings),
 			}).model;

@@ -175,7 +175,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 
 		const result = await runSubprocess({
 			...baseOptions,
-			agent: { ...baseAgent, model: ["pi/task"] },
+			agent: { ...baseAgent, model: ["@task"] },
 			id: "subagent-thinking-precedence",
 			settings,
 			modelRegistry: createModelRegistry(model),
@@ -199,7 +199,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 
 		const result = await runSubprocess({
 			...baseOptions,
-			agent: { ...baseAgent, model: ["pi/task"] },
+			agent: { ...baseAgent, model: ["@task"] },
 			id: "subagent-thinking-default",
 			settings,
 			modelRegistry: createModelRegistry(model),

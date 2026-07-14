@@ -14,11 +14,12 @@ import * as path from "node:path";
  * process renders a live dashboard (progress / success% / spend / tokens / ETA)
  * by polling each trial's `result.json`. On completion it writes a markdown report.
  *
- *   harbor-manager harbor --model anthropic/claude-sonnet-4-6 --tasks 20 --concurrency 4
- *   harbor-manager harbor --agent oracle --tasks 2        # cheap pipeline smoke
- *   harbor-manager harbor --help
+ *   metaharness harbor --model anthropic/claude-sonnet-4-6 --tasks 20 --concurrency 4
+ *   metaharness harbor --agent oracle --tasks 2        # cheap pipeline smoke
+ *   metaharness harbor --help
  */
 import type { Server } from "bun";
+import { harborRunnerArgs, type LaunchRequest } from "./launch-args";
 
 // ────────────────────────────────────────────────────────────────────── config
 
@@ -76,6 +77,10 @@ export interface Config {
 	cleanup: boolean;
 	cleanupForce: boolean;
 	hostNetwork: boolean;
+	/** Job name (or job dir path) to resume via `harbor job resume` instead of starting a new run. */
+	resume: string | null;
+	/** With resume: evict+re-run completed trials that errored with these exception types. */
+	filterErrorTypes: string[];
 	/** Harbor environment backend running the task containers. */
 	envType: "docker" | "apple-container";
 	passthrough: string[];
@@ -115,15 +120,17 @@ function defaultConfig(): Config {
 		cleanup: false,
 		cleanupForce: false,
 		hostNetwork: false,
+		resume: null,
+		filterErrorTypes: [],
 		envType: "docker",
 		passthrough: [],
 		env: {},
 	};
 }
 
-const HELP = `harbor-manager runner (local omp)
+const HELP = `metaharness runner (local omp)
 
-Usage: harbor-manager harbor [options] [-- <extra harbor args>]
+Usage: metaharness harbor [options] [-- <extra harbor args>]
 
 Commands:
   cleanup                        Force-remove ALL leftover Harbor containers + networks, then exit
@@ -166,6 +173,11 @@ Environment:
 Output / control:
   -o, --jobs-dir <path>          Default <repo>/runs/harbor
       --job-name <name>          Default <model>-<timestamp>
+      --resume <name|path>       Resume that job dir: the original launch flags are recovered
+                                 automatically (runner-config.json / manager.json), completed
+                                 trials are kept and paid for once, the rest re-run
+      --filter-error-type <T>    With --resume: also re-run completed trials whose exception
+                                 type is <T> (repeatable; CancelledError is always evicted)
       --dry-run                  Print the harbor command + models.yml and exit
       --cleanup                  Clean up stale and exited Harbor Docker resources safely before starting (docker only)
       --cleanup-force            Force-stop and remove ALL previous Harbor Docker containers and networks (docker only)
@@ -296,6 +308,12 @@ export function parseArgs(argv: string[]): Config {
 			case "--job-name":
 				cfg.jobName = take(arg);
 				break;
+			case "--resume":
+				cfg.resume = take(arg);
+				break;
+			case "--filter-error-type":
+				cfg.filterErrorTypes.push(take(arg));
+				break;
 			case "--timeout-multiplier":
 				cfg.timeoutMultiplier = Number(take(arg));
 				break;
@@ -353,6 +371,70 @@ export function parseArgs(argv: string[]): Config {
 	return cfg;
 }
 
+// ─────────────────────────────────────────────────────────────────── resume
+
+/** manager.json launch record written by RunStore.registerLaunch. */
+interface ManagerRecord {
+	benchmark?: string;
+	dataset?: string;
+	config?: LaunchRequest;
+}
+
+/**
+ * Recover the original launch Config for `--resume <job>` — nothing needs
+ * re-specifying. Prefers the exact Config snapshot recorded at launch
+ * (`_bench/<job>/runner-config.json`), falling back to rebuilding runner argv
+ * from the manager.json launch record of API-launched runs. The job dir's own
+ * harbor config.json decides the container backend: harbor rejects a resume
+ * whose reconstructed config differs from the recorded one.
+ */
+export function resolveResumeConfig(cli: Config): Config {
+	const spec = cli.resume as string;
+	const jobsDir = spec.includes(path.sep) ? path.dirname(path.resolve(spec)) : cli.jobsDir;
+	const jobName = path.basename(spec);
+	const jobDir = path.join(jobsDir, jobName);
+	const jobConfig = readJson(path.join(jobDir, "config.json")) as { environment?: { type?: string } } | null;
+	if (!jobConfig) throw new Error(`--resume: ${jobDir} has no harbor config.json (not a harbor job dir)`);
+
+	let cfg: Config | null = null;
+	const saved = readJson(path.join(jobsDir, "_bench", jobName, "runner-config.json"));
+	if (saved && typeof saved === "object") {
+		cfg = { ...defaultConfig(), ...(saved as Partial<Config>) };
+	} else {
+		const manager = readJson(path.join(jobDir, "manager.json")) as ManagerRecord | null;
+		if (manager?.config) {
+			if (manager.benchmark && manager.benchmark !== "harbor") {
+				throw new Error(`--resume supports only harbor runs (${jobName} is ${manager.benchmark})`);
+			}
+			const dataset = manager.config.dataset ?? manager.dataset ?? "terminal-bench@2.0";
+			cfg = parseArgs(harborRunnerArgs(manager.config, { jobsDir, jobName, dataset }));
+		}
+	}
+	if (!cfg) {
+		throw new Error(
+			`--resume: no recorded launch config for ${jobName} ` +
+				`(missing both _bench/${jobName}/runner-config.json and ${jobName}/manager.json)`,
+		);
+	}
+	cfg.jobsDir = jobsDir;
+	cfg.jobName = jobName;
+	cfg.resume = spec;
+	// The recorded backend wins over any reconstruction-time preference
+	// (e.g. apple-container auto-detection added after the original run).
+	const recorded = jobConfig.environment?.type;
+	if ((recorded === "docker" || recorded === "apple-container") && cfg.envType !== recorded) {
+		if (recorded === "apple-container" && cfg.gatewayUrl === DOCKER_GATEWAY_URL) cfg.gatewayUrl = VMNET_GATEWAY_URL;
+		else if (recorded === "docker" && cfg.gatewayUrl === VMNET_GATEWAY_URL) cfg.gatewayUrl = DOCKER_GATEWAY_URL;
+		cfg.envType = recorded;
+	}
+	// Knobs owned by the resume invocation, not the original launch.
+	cfg.filterErrorTypes = cli.filterErrorTypes;
+	cfg.passthrough = cli.passthrough;
+	cfg.dryRun = cli.dryRun;
+	cfg.cleanup = cli.cleanup;
+	cfg.cleanupForce = cli.cleanupForce;
+	return cfg;
+}
 // ──────────────────────────────────────────────────────────────────── helpers
 
 const isTTY = Boolean(process.stdout.isTTY);
@@ -444,6 +526,114 @@ function readJson(file: string): unknown {
 	}
 }
 
+/** Running usage totals for one live trial's transcript, plus the parse cursor. */
+interface CostProbe {
+	/** Bytes of the transcript already consumed. */
+	offset: number;
+	/** Trailing partial line carried to the next read (bytes, so multi-byte chars survive chunking). */
+	remainder: Buffer;
+	/** True while discarding an oversized line (resync at the next newline). */
+	discarding: boolean;
+	costUsd: number;
+	tokIn: number;
+	tokOut: number;
+	tokCache: number;
+}
+
+/** Incremental parse state per live transcript path. Entries are dropped once the trial finishes. */
+const costProbes = new Map<string, CostProbe>();
+
+/** First sight of an already-huge transcript: parse only its tail (undercounts cost, never OOMs). */
+const COST_PROBE_FIRST_SCAN_BYTES = 16 * 1024 * 1024;
+/** A single line longer than this is bloat/corruption, never a usage event: skip it. */
+const COST_PROBE_MAX_LINE_BYTES = 4 * 1024 * 1024;
+const COST_PROBE_CHUNK_BYTES = 1024 * 1024;
+
+/** Accumulate assistant `message_end` usage from one complete transcript line. */
+function probeLine(line: string, probe: CostProbe): void {
+	const trimmed = line.trim();
+	if (!trimmed) return;
+	try {
+		const event = JSON.parse(trimmed);
+		if (event?.type !== "message_end") return;
+		const message = event.message;
+		if (!message || typeof message !== "object" || message.role !== "assistant") return;
+		const usage = message.usage;
+		if (!usage || typeof usage !== "object") return;
+		probe.tokIn += num(usage.input) + num(usage.cacheRead);
+		probe.tokOut += num(usage.output);
+		probe.tokCache += num(usage.cacheRead);
+		const cost = usage.cost;
+		if (cost && typeof cost === "object") probe.costUsd += num(cost.total);
+	} catch {
+		/* Ignore malformed lines from incomplete writes */
+	}
+}
+
+/**
+ * Realtime usage for a still-running trial, read incrementally from its
+ * `agent/omp.txt` JSONL. Only bytes appended since the previous call are read
+ * and parsed — both this runner's render loop and the manager's 2s sync tick
+ * call this for every live trial, and a full-file reread used to block the
+ * event loop for seconds (and OOM outright on runaway multi-GB transcripts).
+ */
+function probeTrialCost(ompLogPath: string): CostProbe | null {
+	let size: number;
+	try {
+		size = fs.statSync(ompLogPath).size;
+	} catch {
+		return costProbes.get(ompLogPath) ?? null;
+	}
+	let probe = costProbes.get(ompLogPath);
+	if (!probe || size < probe.offset) {
+		// New (or truncated/rotated) transcript. Skip a pre-existing giant head.
+		probe = {
+			offset: Math.max(0, size - COST_PROBE_FIRST_SCAN_BYTES),
+			remainder: Buffer.alloc(0),
+			discarding: size > COST_PROBE_FIRST_SCAN_BYTES, // resync to the next full line
+			costUsd: 0,
+			tokIn: 0,
+			tokOut: 0,
+			tokCache: 0,
+		};
+		costProbes.set(ompLogPath, probe);
+	}
+	if (size === probe.offset) return probe;
+	let fd: number;
+	try {
+		fd = fs.openSync(ompLogPath, "r");
+	} catch {
+		return probe;
+	}
+	try {
+		const chunk = Buffer.allocUnsafe(COST_PROBE_CHUNK_BYTES);
+		for (;;) {
+			const read = fs.readSync(fd, chunk, 0, chunk.length, probe.offset);
+			if (read <= 0) break;
+			probe.offset += read;
+			const data = Buffer.concat([probe.remainder, chunk.subarray(0, read)]);
+			let start = 0;
+			for (;;) {
+				const nl = data.indexOf(0x0a, start);
+				if (nl === -1) break;
+				if (probe.discarding) probe.discarding = false;
+				else probeLine(data.subarray(start, nl).toString("utf8"), probe);
+				start = nl + 1;
+			}
+			probe.remainder = data.subarray(start);
+			if (probe.remainder.length > COST_PROBE_MAX_LINE_BYTES) {
+				probe.remainder = Buffer.alloc(0);
+				probe.discarding = true;
+			}
+		}
+	} catch {
+		/* keep whatever was accumulated; retry next tick */
+	} finally {
+		fs.closeSync(fd);
+	}
+	return probe;
+}
+
 /** Parse one trial directory into a Trial, or null if it isn't a trial dir yet. */
 function parseTrial(dir: string, name: string): Trial | null {
 	const resultPath = path.join(dir, "result.json");
@@ -456,43 +646,12 @@ function parseTrial(dir: string, name: string): Trial | null {
 			/* ignore */
 		}
 
-		// Try to parse realtime cost from the live agent omp.txt log if it exists
-		let costUsd = 0;
-		let tokIn = 0;
-		let tokOut = 0;
-		let tokCache = 0;
-		const ompLogPath = path.join(dir, "agent", "omp.txt");
-		if (fs.existsSync(ompLogPath)) {
-			try {
-				const content = fs.readFileSync(ompLogPath, "utf8");
-				for (const line of content.split("\n")) {
-					const trimmed = line.trim();
-					if (!trimmed) continue;
-					try {
-						const event = JSON.parse(trimmed);
-						if (event && event.type === "message_end") {
-							const message = event.message;
-							if (message && typeof message === "object" && message.role === "assistant") {
-								const usage = message.usage;
-								if (usage && typeof usage === "object") {
-									tokIn += num(usage.input) + num(usage.cacheRead);
-									tokOut += num(usage.output);
-									tokCache += num(usage.cacheRead);
-									const cost = usage.cost;
-									if (cost && typeof cost === "object") {
-										costUsd += num(cost.total);
-									}
-								}
-							}
-						}
-					} catch {
-						/* Ignore malformed lines from incomplete writes */
-					}
-				}
-			} catch {
-				/* ignore */
-			}
-		}
+		// Realtime cost from the live agent omp.txt log, parsed incrementally.
+		const probe = probeTrialCost(path.join(dir, "agent", "omp.txt"));
+		const costUsd = probe?.costUsd ?? 0;
+		const tokIn = probe?.tokIn ?? 0;
+		const tokOut = probe?.tokOut ?? 0;
+		const tokCache = probe?.tokCache ?? 0;
 
 		return {
 			name,
@@ -506,6 +665,8 @@ function parseTrial(dir: string, name: string): Trial | null {
 			detail: "",
 		};
 	}
+	// Trial finished: usage now comes from result.json; drop the live-parse state.
+	costProbes.delete(path.join(dir, "agent", "omp.txt"));
 	const raw = readJson(resultPath);
 	if (!raw || typeof raw !== "object") return null;
 	const r = raw as Record<string, unknown>;
@@ -1059,7 +1220,13 @@ function buildMountsJson(source: SourceMount | null): string | null {
 }
 
 function deriveProviders(cfg: Config): string[] {
-	const set = new Set<string>(cfg.providers);
+	// Explicit --providers is authoritative: it's the escape hatch for routing
+	// only SOME providers through the gateway (e.g. oauth-only openai-codex)
+	// while the model's own provider authenticates directly via a forwarded
+	// env key. The model-provider + anthropic/openai-codex additions are the
+	// DEFAULT for when the flag is absent.
+	if (cfg.providers.length > 0) return [...new Set(cfg.providers)];
+	const set = new Set<string>();
 	for (const m of cfg.models) {
 		const slash = m.indexOf("/");
 		if (slash > 0) set.add(m.slice(0, slash));
@@ -1073,7 +1240,7 @@ function deriveProviders(cfg: Config): string[] {
 
 function writeModelsYaml(benchDir: string, cfg: Config): string {
 	const providers = deriveProviders(cfg);
-	const lines = ["# Generated by harbor-manager — auth via host pm2 gateway.", "providers:"];
+	const lines = ["# Generated by metaharness — auth via host pm2 gateway.", "providers:"];
 	for (const p of providers) {
 		lines.push(`  ${p}:`);
 		lines.push(`    baseUrl: ${cfg.gatewayUrl}`);
@@ -1166,6 +1333,20 @@ function buildHarborArgs(
 		void tarball;
 	} else {
 		a.push("-a", cfg.agent);
+	}
+	a.push(...cfg.passthrough);
+	return a;
+}
+/**
+ * `harbor job resume` argv for an existing job dir: trial dirs with a
+ * result.json are kept (their spend is reused), the rest re-run. Explicit
+ * `-f` values REPLACE harbor's CancelledError default, so it is always
+ * re-added alongside the caller's filters.
+ */
+export function buildResumeArgs(cfg: Config, jobDir: string): string[] {
+	const a: string[] = ["job", "resume", "-p", jobDir];
+	if (cfg.filterErrorTypes.length > 0) {
+		for (const t of new Set(["CancelledError", ...cfg.filterErrorTypes])) a.push("-f", t);
 	}
 	a.push(...cfg.passthrough);
 	return a;
@@ -1376,6 +1557,11 @@ async function runBenchmark(cfg: Config): Promise<BenchmarkRun> {
 	const jobDir = path.join(cfg.jobsDir, jobName);
 	const benchDir = path.join(cfg.jobsDir, "_bench", jobName);
 	fs.mkdirSync(benchDir, { recursive: true });
+	if (!cfg.resume && !cfg.dryRun) {
+		// Snapshot the resolved launch config so a later `--resume <job>` can
+		// rebuild the exact same invocation without re-specifying flags.
+		fs.writeFileSync(path.join(benchDir, "runner-config.json"), JSON.stringify({ ...cfg, jobName }, null, "\t"));
+	}
 
 	const version = readPkgVersion();
 
@@ -1413,7 +1599,9 @@ async function runBenchmark(cfg: Config): Promise<BenchmarkRun> {
 	const composeOverlayPath = cfg.envType === "docker" ? writeComposeOverlay(benchDir, cfg, source) : null;
 	const mountsJson = cfg.envType === "docker" ? null : buildMountsJson(source);
 
-	const harborArgs = buildHarborArgs(cfg, jobName, modelsYaml, tarball, composeOverlayPath, mountsJson);
+	const harborArgs = cfg.resume
+		? buildResumeArgs(cfg, jobDir)
+		: buildHarborArgs(cfg, jobName, modelsYaml, tarball, composeOverlayPath, mountsJson);
 	const harborEnv = buildHarborEnv(cfg, modelsYaml, tarball, version, source);
 	const logPath = path.join(benchDir, "harbor.log");
 	if (cfg.dryRun) {
@@ -1455,7 +1643,9 @@ async function runBenchmark(cfg: Config): Promise<BenchmarkRun> {
 		stdin: "ignore",
 	});
 
-	const expected = Math.max(1, cfg.tasks * cfg.attempts * cfg.models.length);
+	const expected = cfg.resume
+		? (readJobResult(jobDir)?.nTotal ?? Math.max(1, cfg.tasks * cfg.attempts * cfg.models.length))
+		: Math.max(1, cfg.tasks * cfg.attempts * cfg.models.length);
 	const st: RenderState = { cfg, jobDir, logPath, startMs: Date.now(), expected, tick: 0 };
 
 	if (isTTY) process.stdout.write(`${ESC}?1049h${ESC}?25l`); // alt screen, hide cursor
@@ -1525,7 +1715,8 @@ async function main(): Promise<void> {
 		runDockerCleanup(true);
 		return;
 	}
-	const cfg = parseArgs(argv);
+	let cfg = parseArgs(argv);
+	if (cfg.resume) cfg = resolveResumeConfig(cfg);
 	const exitCode = (await runBenchmark(cfg)).exitCode;
 	process.exit(exitCode);
 }

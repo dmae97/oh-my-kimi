@@ -1,16 +1,23 @@
 #!/usr/bin/env bun
 /**
- * harbor-manager server: REST + SSE API over the run store, static web
+ * metaharness server: REST + SSE API over the run store, static web
  * dashboard, and a launcher that spawns the CLI runner as a managed child.
  *
  *   bun src/server.ts [--port 4700] [--jobs-dir <path>]
  *
  * API:
- *   GET    /api/experiments               → experiment summaries across all benchmarks
- *   GET    /api/runs                      → RunRow[]
+ *   GET    /api/experiments[?q=]          → experiment summaries across all benchmarks
+ *   POST   /api/experiments               → register an experiment (id + goal) before its first arm
+ *   GET    /api/experiments/:id           → experiment detail (arms, task matrix)
+ *   PUT    /api/experiments/:id           → update goal + per-run role/note/label
+ *   DELETE /api/experiments/:id           → delete all arms (rows + job dirs) and the goal row
+ *   POST   /api/experiments/:id/arms      → launch a comparable arm
+ *   GET    /api/runs[?experiment=&status=&benchmark=] → RunRow[]
  *   POST   /api/runs                      → launch any benchmark
  *   GET    /api/runs/:name                → { run, traces }
- *   DELETE /api/runs/:name                → cancel a managed run
+ *   POST   /api/runs/:name/cancel         → cancel a managed run
+ *   POST   /api/runs/:name/resume         → resume an incomplete harbor run
+ *   DELETE /api/runs/:name                → delete a finished run (row + job dir)
  *   GET    /api/runs/:name/traces/:trace  → normalized trace
  *   GET    /api/events                    → SSE: run-list snapshots on change
  */
@@ -19,7 +26,8 @@ import * as path from "node:path";
 import type { Server, Subprocess } from "bun";
 import { BENCHMARK_DEFINITIONS } from "./benchmarks";
 import { buildExperiments, experimentDetail, experimentOf } from "./experiments";
-import { type BenchmarkKind, type RunRole, type RunRow, RunStore } from "./store";
+import { harborRunnerArgs, type LaunchRequest } from "./launch-args";
+import { type LaunchRecord, type RunRole, type RunRow, RunStore } from "./store";
 
 /** PUT /api/experiments/:id body — goal and per-run role/note/label metadata. */
 export interface ExperimentMetaUpdate {
@@ -27,50 +35,27 @@ export interface ExperimentMetaUpdate {
 	runs?: Record<string, { role?: RunRole; note?: string; label?: string }>;
 }
 
-const INDEX_HTML_PATH = new URL("./web/index.html", import.meta.url).pathname;
+/** POST /api/experiments body — pre-registers an experiment id with a goal. */
+export interface CreateExperimentRequest {
+	/** Dash-free token; runs group into it as `<id>-<arm>` job names. */
+	id: string;
+	goal?: string;
+}
+
+import indexHtml from "./web/index.html";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
 const PKG_DIR = path.resolve(import.meta.dir, "..");
 const DEFAULT_JOBS_DIR = path.join(REPO_ROOT, "runs", "harbor");
 
-/** POST /api/runs body. Mirrors the runner CLI surface we actually use. */
-export interface LaunchRequest {
-	/** Benchmark adapter to execute. */
-	benchmark?: BenchmarkKind;
-	model: string;
-	dataset?: string;
-	/** Task count for a dataset sample, or omit when `include` is given. */
-	tasks?: number;
-	/** Explicit task names (passed as repeated --include). */
-	include?: string[];
-	concurrency?: number;
-	/** SnapCompact conditions; ignored by other benchmarks. */
-	conditions?: string[];
-	timeoutMultiplier?: number;
-	attempts?: number;
-	agent?: string;
-	jobName?: string;
-	webSearch?: boolean;
-	/** Downshift to a fast/cheap model at the first edit/write once the todo list exists; `into` overrides the default "smol" target. */
-	downshift?: { into?: string };
-	/** Role of this run inside its experiment (baseline vs treatment). */
-	role?: RunRole;
-	/** One-line description of what this arm tests. */
-	note?: string;
-	/** Experiment goal; upserted for the run's experiment (job-name prefix). */
-	goal?: string;
-	/** Use prebuilt dist/omp-linux-* binaries instead of the default source mount. */
-	prebuiltBinaries?: boolean;
-	/** Extra raw runner args, appended verbatim. */
-	extraArgs?: string[];
-}
+export type { LaunchRequest } from "./launch-args";
 
 /** POST /api/experiments/:id/arms body — a new comparable arm; sample+config inherited. */
 export interface AddArmRequest {
 	/** Arm label; becomes the `<id>-<arm>` job name. */
 	arm: string;
 	model: string;
-	downshift?: LaunchRequest["downshift"];
+	prewalk?: LaunchRequest["prewalk"];
 	/** Explicit task sample; skips sibling inheritance when provided. */
 	include?: string[];
 	role?: RunRole;
@@ -105,12 +90,30 @@ function parseServerArgs(argv: string[]): { port: number; jobsDir: string } {
 	return { port, jobsDir };
 }
 
+/** Job names are single path segments; anything else could escape the jobs dir. */
+function assertSafeJobName(jobName: string): void {
+	if (!jobName || jobName === "." || jobName === ".." || /[/\\]/.test(jobName)) {
+		throw new Error(`invalid job name: ${jobName}`);
+	}
+}
+
+/** True when `pid` names a live process (signal-0 probe). */
+function pidAlive(pid: number | null): boolean {
+	if (pid == null) return false;
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 /**
  * Resolve the launch request for a new arm added to an existing experiment.
  * Inherits the experiment's benchmark, dataset, and — crucially — the exact
  * task sample from a sibling arm (its recorded `include`, else its observed
  * trial tasks) so the arm is directly comparable. Only per-arm knobs (model,
- * downshift, role, note, extra args) come from `req`. Throws if the experiment has
+ * prewalk, role, note, extra args) come from `req`. Throws if the experiment has
  * no runs to inherit from or the arm name is taken.
  */
 export function resolveArmLaunch(store: RunStore, experimentId: string, req: AddArmRequest): LaunchRequest {
@@ -174,9 +177,10 @@ export function resolveArmLaunch(store: RunStore, experimentId: string, req: Add
 		prebuiltBinaries: cfg.prebuiltBinaries === true || undefined,
 		conditions: conditions.length > 0 ? conditions : undefined,
 		jobName,
-		downshift: req.downshift,
+		prewalk: req.prewalk,
 		role: req.role,
 		note: req.note,
+		environment: cfg.environment === "docker" || cfg.environment === "apple-container" ? cfg.environment : undefined,
 		extraArgs: req.extraArgs,
 	};
 }
@@ -188,7 +192,7 @@ export class ManagerServer {
 	#lastSnapshot = "";
 	#syncTimer: Timer | undefined;
 	#server: Server<undefined> | null = null;
-	#appBundleCode: string | null = null;
+	#stopped = false;
 	readonly jobsDir: string;
 
 	constructor(jobsDir: string, dbPath?: string) {
@@ -207,12 +211,20 @@ export class ManagerServer {
 		this.#server = Bun.serve({
 			port,
 			idleTimeout: 0,
+			// Bun bundles the dashboard (React + TSX) from the HTML import and
+			// serves it on the same port as the API — one process, no Vite.
+			routes: { "/": indexHtml },
+			// Only `hmr`: the `console: true` mirror adds another dev-client
+			// stream with the same teardown hazard (see isDevStreamTeardown)
+			// for little value.
+			development: process.env.NODE_ENV !== "production" && { hmr: true },
 			fetch: request => this.#route(request),
 		});
 		return this.#server;
 	}
 
 	async stop(): Promise<void> {
+		this.#stopped = true;
 		clearInterval(this.#syncTimer);
 		for (const client of this.#sse) {
 			client.state = SseState.Closed;
@@ -234,22 +246,6 @@ export class ManagerServer {
 		}
 	}
 
-	/** Bundle the React dashboard once per process; served at /app.tsx (matches the Vite dev entry). */
-	async #appBundle(): Promise<string> {
-		if (this.#appBundleCode !== null) return this.#appBundleCode;
-		const result = await Bun.build({
-			entrypoints: [path.join(import.meta.dir, "web", "app.tsx")],
-			target: "browser",
-			minify: true,
-			define: { "process.env.NODE_ENV": '"production"' },
-		});
-		if (!result.success) {
-			throw new Error(`dashboard bundle failed:\n${result.logs.map(l => l.message).join("\n")}`);
-		}
-		this.#appBundleCode = await result.outputs[0].text();
-		return this.#appBundleCode;
-	}
-
 	#broadcast(frame: string): void {
 		const bytes = new TextEncoder().encode(frame);
 		for (const client of this.#sse) {
@@ -267,20 +263,22 @@ export class ManagerServer {
 		const url = new URL(request.url);
 		const p = url.pathname;
 		try {
-			if (p === "/" || p === "/index.html") {
-				return new Response(Bun.file(INDEX_HTML_PATH));
-			}
-			if (p === "/app.tsx") {
-				return new Response(await this.#appBundle(), {
-					headers: { "content-type": "text/javascript; charset=utf-8" },
-				});
-			}
 			if (p === "/api/events") return this.#sseResponse();
 			if (p === "/api/benchmarks" && request.method === "GET") {
 				return Response.json(BENCHMARK_DEFINITIONS);
 			}
 			if (p === "/api/experiments" && request.method === "GET") {
-				return Response.json(buildExperiments(this.#store));
+				const q = url.searchParams.get("q")?.toLowerCase() ?? "";
+				const experiments = buildExperiments(this.#store);
+				return Response.json(
+					q
+						? experiments.filter(e => e.id.toLowerCase().includes(q) || e.goal.toLowerCase().includes(q))
+						: experiments,
+				);
+			}
+			if (p === "/api/experiments" && request.method === "POST") {
+				const body = (await request.json()) as CreateExperimentRequest;
+				return Response.json(this.createExperiment(body), { status: 201 });
 			}
 			const expMatch = p.match(/^\/api\/experiments\/([^/]+)$/);
 			if (expMatch) {
@@ -288,6 +286,11 @@ export class ManagerServer {
 				if (request.method === "PUT") {
 					const body = (await request.json()) as ExperimentMetaUpdate;
 					return Response.json(this.updateExperimentMeta(id, body));
+				}
+				if (request.method === "DELETE") {
+					const result = this.deleteExperiment(id);
+					if (!result) return Response.json({ error: "experiment not found" }, { status: 404 });
+					return Response.json(result);
 				}
 				const detail = experimentDetail(this.#store, id);
 				if (!detail) return Response.json({ error: "experiment not found" }, { status: 404 });
@@ -300,16 +303,36 @@ export class ManagerServer {
 				return Response.json(this.addArm(id, body), { status: 201 });
 			}
 			if (p === "/api/runs" && request.method === "GET") {
-				return Response.json(this.#store.listRuns());
+				const experiment = url.searchParams.get("experiment");
+				const status = url.searchParams.get("status");
+				const benchmark = url.searchParams.get("benchmark");
+				let runs = this.#store.listRuns();
+				if (experiment) runs = runs.filter(r => experimentOf(r.jobName) === experiment);
+				if (status) runs = runs.filter(r => r.status === status);
+				if (benchmark) runs = runs.filter(r => r.benchmark === benchmark);
+				return Response.json(runs);
 			}
 			if (p === "/api/runs" && request.method === "POST") {
 				const body = (await request.json()) as LaunchRequest;
 				return Response.json(this.launch(body), { status: 201 });
 			}
+			const resumeMatch = p.match(/^\/api\/runs\/([^/]+)\/resume$/);
+			if (resumeMatch && request.method === "POST") {
+				const jobName = decodeURIComponent(resumeMatch[1]);
+				const body = (await request.json().catch(() => ({}))) as { filterErrorTypes?: string[] };
+				return Response.json(this.resume(jobName, body), { status: 201 });
+			}
+			const cancelMatch = p.match(/^\/api\/runs\/([^/]+)\/cancel$/);
+			if (cancelMatch && request.method === "POST") {
+				return Response.json(this.cancel(decodeURIComponent(cancelMatch[1])));
+			}
 			const runMatch = p.match(/^\/api\/runs\/([^/]+)$/);
 			if (runMatch) {
 				const jobName = decodeURIComponent(runMatch[1]);
-				if (request.method === "DELETE") return Response.json(this.cancel(jobName));
+				if (request.method === "DELETE") {
+					if (!this.deleteRun(jobName)) return Response.json({ error: "run not found" }, { status: 404 });
+					return Response.json({ jobName, deleted: true });
+				}
 				const run = this.#store.syncRun(jobName);
 				if (!run) return Response.json({ error: "run not found" }, { status: 404 });
 				return Response.json({ run, traces: this.#store.listTraces(jobName) });
@@ -389,43 +412,74 @@ export class ManagerServer {
 			if (request.conditions?.length) argv.push("--conditions", request.conditions.join(","));
 		} else {
 			cwd = PKG_DIR;
-			argv = [
-				"bun",
-				"src/runner.ts",
-				"--model",
-				request.model,
-				"-d",
-				dataset,
-				"--job-name",
-				jobName,
-				"--jobs-dir",
-				this.jobsDir,
-			];
-			if (request.agent) argv.push("--agent", request.agent);
-			if (request.tasks !== undefined) argv.push("--tasks", String(request.tasks));
-			if (request.concurrency !== undefined) argv.push("--concurrency", String(request.concurrency));
-			if (request.attempts !== undefined) argv.push("--attempts", String(request.attempts));
-			if (request.timeoutMultiplier !== undefined)
-				argv.push("--timeout-multiplier", String(request.timeoutMultiplier));
-			if (request.webSearch) argv.push("--web-search");
-			for (const task of request.include ?? []) argv.push("--include", task);
-			if (request.downshift) {
-				argv.push("--agent-arg", "--downshift");
-				if (request.downshift.into) {
-					argv.push("--agent-arg", "--downshift-into", "--agent-arg", request.downshift.into);
-					const provider = request.downshift.into.split("/", 1)[0];
-					if (provider && request.downshift.into.includes("/")) argv.push("--providers", provider);
-				}
-			}
-			if (request.prebuiltBinaries) {
-				for (const name of ["omp-linux-arm64", "omp-linux-x64"]) {
-					const binary = path.join(REPO_ROOT, "packages", "coding-agent", "dist", name);
-					if (fs.existsSync(binary)) argv.push("--binary", binary);
-				}
-			}
+			argv = ["bun", "src/runner.ts", ...harborRunnerArgs(request, { jobsDir: this.jobsDir, jobName, dataset })];
 		}
-		argv.push(...(request.extraArgs ?? []));
+		if (benchmark !== "harbor") argv.push(...(request.extraArgs ?? []));
 
+		const pid = this.#spawnRunner(argv, cwd, {
+			benchmark,
+			jobName,
+			dataset,
+			agent: request.agent ?? "omp",
+			models: [request.model],
+			prewalk: request.prewalk,
+			config: { ...request },
+			role: request.role,
+			note: request.note,
+		});
+		if (request.goal) this.#store.setExperimentGoal(experimentOf(jobName), request.goal);
+		return { jobName, pid };
+	}
+
+	/**
+	 * Resume a harbor run in place via the runner's `--resume`: completed
+	 * trials (and their spend) are reused, interrupted/pending trials re-run,
+	 * and errored trials are evicted for retry. The runner recovers the
+	 * original launch flags from the run's recorded config, so nothing needs
+	 * re-specifying. `filterErrorTypes` overrides the default retry set
+	 * (every exception type recorded in the job's result.json).
+	 */
+	resume(jobName: string, opts: { filterErrorTypes?: string[] } = {}): { jobName: string; pid: number } {
+		const run = this.#store.getRun(jobName);
+		if (!run) throw new Error(`run ${jobName} not found`);
+		if (run.benchmark !== "harbor")
+			throw new Error(`resume supports only harbor runs (${jobName} is ${run.benchmark})`);
+		// Trust liveness, not the recorded status: a runner killed while a
+		// previous server instance owned it leaves a stale `running` row with a
+		// dead (or null) pid and nobody to fire markExit.
+		if (this.#runLive(run)) {
+			throw new Error(`run ${jobName} is already running`);
+		}
+		if (run.status === "running") this.#store.markExit(jobName, null, true);
+		const jobDir = path.join(this.jobsDir, jobName);
+		if (!fs.existsSync(path.join(jobDir, "config.json"))) {
+			throw new Error(`${jobName} has no harbor config.json to resume from`);
+		}
+		const argv = ["bun", "src/runner.ts", "--resume", jobName, "--jobs-dir", this.jobsDir];
+		for (const t of opts.filterErrorTypes ?? erroredExceptionTypes(jobDir)) argv.push("--filter-error-type", t);
+		let prewalk: LaunchRequest["prewalk"];
+		try {
+			prewalk = run.prewalk ? (JSON.parse(run.prewalk) as { into?: string }) : undefined;
+		} catch {
+			prewalk = undefined;
+		}
+		const pid = this.#spawnRunner(argv, PKG_DIR, {
+			benchmark: "harbor",
+			jobName,
+			dataset: run.dataset,
+			agent: run.agent,
+			models: run.models ? run.models.split(",") : [],
+			prewalk,
+			config: run.config,
+			role: run.role,
+			note: run.note,
+		});
+		return { jobName, pid };
+	}
+
+	/** Spawn a detached runner child, wire its exit back into the store, and register the run. */
+	#spawnRunner(argv: string[], cwd: string, record: Omit<LaunchRecord, "pid">): number {
+		const jobName = record.jobName;
 		const logDir = path.join(this.jobsDir, "_manager", "logs");
 		fs.mkdirSync(logDir, { recursive: true });
 		const logFile = fs.openSync(path.join(logDir, `${jobName}.log`), "w");
@@ -434,10 +488,19 @@ export class ManagerServer {
 			stdout: logFile,
 			stderr: logFile,
 			env: { ...process.env },
+			// Own process group: a manager restart (Ctrl+C / --hot dev cycle) must
+			// not deliver terminal signals to runners — that killed live runs.
+			detached: true,
 		});
 		const child: ManagedChild = { proc, jobName, cancelled: false };
 		this.#children.set(jobName, child);
 		proc.exited.then(exitCode => {
+			try {
+				fs.closeSync(logFile);
+			} catch {}
+			// A retired instance (--hot reload) must not touch the closed store;
+			// the successor's pid sweep reconciles this run from disk instead.
+			if (this.#stopped) return;
 			this.#store.markExit(jobName, exitCode, child.cancelled);
 			// Final sync AFTER the terminal state: the ticker only revisits
 			// running rows, so the last-2s trial results would otherwise be lost.
@@ -445,33 +508,83 @@ export class ManagerServer {
 			this.#children.delete(jobName);
 			this.#tick();
 		});
-		this.#store.registerLaunch({
-			benchmark,
-			jobName,
-			dataset,
-			agent: request.agent ?? "omp",
-			models: [request.model],
-			downshift: request.downshift,
-			config: { ...request },
-			pid: proc.pid,
-			role: request.role,
-			note: request.note,
-		});
-		if (request.goal) this.#store.setExperimentGoal(experimentOf(jobName), request.goal);
+		this.#store.registerLaunch({ ...record, pid: proc.pid });
 		this.#tick();
-		return { jobName, pid: proc.pid };
+		return proc.pid;
+	}
+
+	/** Liveness check that survives manager restarts: managed child, or a running row with a live pid. */
+	#runLive(run: RunRow): boolean {
+		return this.#children.has(run.jobName) || (run.status === "running" && pidAlive(run.pid));
+	}
+
+	/** Register an experiment id (with an optional goal) so it is browsable before its first arm. */
+	createExperiment(req: CreateExperimentRequest): { id: string; goal: string } {
+		const id = req.id?.trim() ?? "";
+		// Dashes are structurally impossible: `experimentOf` groups job names by
+		// the token before the first dash, so a dashed id could never own a run.
+		if (!/^[A-Za-z0-9_.]+$/.test(id)) {
+			throw new Error("experiment id must be a non-empty token of [A-Za-z0-9_.] (runs group as `<id>-<arm>`)");
+		}
+		const goal = req.goal ?? this.#store.getExperimentMeta(id)?.goal ?? "";
+		this.#store.setExperimentGoal(id, goal);
+		return { id, goal };
 	}
 
 	/** Apply goal + per-run role/note metadata; used by the UI and for backfill. */
 	updateExperimentMeta(id: string, update: ExperimentMetaUpdate): { id: string; updatedRuns: string[] } {
 		if (update.goal !== undefined) this.#store.setExperimentGoal(id, update.goal);
 		const updatedRuns: string[] = [];
-		for (const [jobName, meta] of Object.entries(update.runs ?? {})) {
+		for (const jobName in update.runs) {
 			if (experimentOf(jobName) !== id) continue;
-			if (this.#store.setRunMeta(jobName, meta)) updatedRuns.push(jobName);
+			if (this.#store.setRunMeta(jobName, update.runs[jobName])) updatedRuns.push(jobName);
 		}
 		this.#tick();
 		return { id, updatedRuns };
+	}
+
+	/**
+	 * Delete an experiment: every arm's DB row, job dir, and manager log, plus
+	 * the goal row. Refuses while any arm is live (cancel first — deleting a
+	 * job dir under a writing runner would corrupt it). Returns null when the
+	 * id names neither runs nor a registered experiment.
+	 */
+	deleteExperiment(id: string): { id: string; deletedRuns: string[] } | null {
+		const runs = this.#store.listRuns().filter(r => experimentOf(r.jobName) === id);
+		if (runs.length === 0 && !this.#store.getExperimentMeta(id)) return null;
+		const live = runs.filter(r => this.#runLive(r));
+		if (live.length > 0) {
+			throw new Error(
+				`experiment ${id} has running arms (${live.map(r => r.jobName).join(", ")}); cancel them first`,
+			);
+		}
+		for (const run of runs) this.#destroyRun(run.jobName);
+		this.#store.deleteExperimentMeta(id);
+		this.#tick();
+		return { id, deletedRuns: runs.map(r => r.jobName) };
+	}
+
+	/**
+	 * Permanently delete a run: DB row + trials, job dir, and manager log.
+	 * Disk removal is not optional — discover() would resurrect a surviving
+	 * job dir as a fresh row on the next restart. Refuses while the run is
+	 * live; returns false when the run is unknown.
+	 */
+	deleteRun(jobName: string): boolean {
+		const run = this.#store.getRun(jobName);
+		if (!run) return false;
+		if (this.#runLive(run)) throw new Error(`run ${jobName} is running; cancel it first`);
+		this.#destroyRun(jobName);
+		this.#tick();
+		return true;
+	}
+
+	/** Remove a run's DB rows and on-disk artifacts (job dir + manager log). */
+	#destroyRun(jobName: string): void {
+		assertSafeJobName(jobName);
+		this.#store.deleteRun(jobName);
+		fs.rmSync(path.join(this.jobsDir, jobName), { recursive: true, force: true });
+		fs.rmSync(path.join(this.jobsDir, "_manager", "logs", `${jobName}.log`), { force: true });
 	}
 
 	/** Add a comparable arm to an existing experiment, inheriting its sample + config. */
@@ -540,7 +653,7 @@ export class ManagerServer {
 		if (!file.startsWith(`${path.resolve(jobDir)}${path.sep}`) || !fs.existsSync(file)) {
 			return Response.json({ error: "trace not found" }, { status: 404 });
 		}
-		const text = fs.readFileSync(file, "utf8");
+		const text = readTextTail(file, TRACE_READ_CAP_BYTES);
 		if (!file.endsWith(".txt")) {
 			if (raw) return new Response(text, { headers: { "content-type": "text/plain; charset=utf-8" } });
 			return Response.json({
@@ -590,16 +703,83 @@ export class ManagerServer {
 		return Response.json({ jobName, trace: traceName, entries: entries.slice(-n), totalEvents: lines.length });
 	}
 }
+/**
+ * Exception types recorded in a job's result.json — the errored trials a
+ * resume retries by default (reward-0 fails are completed results and stay).
+ */
+function erroredExceptionTypes(jobDir: string): string[] {
+	try {
+		const raw = JSON.parse(fs.readFileSync(path.join(jobDir, "result.json"), "utf8")) as {
+			stats?: { evals?: Record<string, { exception_stats?: Record<string, unknown> }> };
+		};
+		const types = new Set<string>();
+		for (const ev of Object.values(raw.stats?.evals ?? {})) {
+			for (const t of Object.keys(ev.exception_stats ?? {})) types.add(t);
+		}
+		return [...types];
+	} catch {
+		return [];
+	}
+}
+
+/** Trace files can be runaway-huge; the viewer only shows a tail anyway. */
+const TRACE_READ_CAP_BYTES = 32 * 1024 * 1024;
+
+/** Last `cap` bytes of a file as text, dropping a leading partial line when truncated. */
+function readTextTail(file: string, cap: number): string {
+	const size = fs.statSync(file).size;
+	if (size <= cap) return fs.readFileSync(file, "utf8");
+	const fd = fs.openSync(file, "r");
+	try {
+		const buf = Buffer.allocUnsafe(cap);
+		const read = fs.readSync(fd, buf, 0, cap, size - cap);
+		const text = buf.subarray(0, read).toString("utf8");
+		const nl = text.indexOf("\n");
+		return nl === -1 ? text : text.slice(nl + 1);
+	} finally {
+		fs.closeSync(fd);
+	}
+}
+
+/**
+ * Bun's dev server (HMR websocket, browser error reports, console mirror)
+ * reads client streams that a tab disconnect or `--hot` reload tears down
+ * mid-read. The resulting `AbortError: ERR_STREAM_RELEASE_LOCK` surfaces as
+ * an unhandled rejection from Bun internals — fatal by default, which would
+ * kill the manager and orphan every running benchmark job.
+ */
+function isDevStreamTeardown(err: unknown): boolean {
+	return err instanceof Error && (err as Error & { code?: string }).code === "ERR_STREAM_RELEASE_LOCK";
+}
 
 if (import.meta.main) {
+	// `bun --hot` re-evaluates this module in-place: retire the previous
+	// instance first, or its sync ticker and sqlite connection leak per reload.
+	const host = globalThis as typeof globalThis & {
+		__metaharnessServer?: ManagerServer;
+		__metaharnessHooks?: boolean;
+	};
+	await host.__metaharnessServer?.stop();
 	const { port, jobsDir } = parseServerArgs(process.argv.slice(2));
 	const manager = new ManagerServer(jobsDir);
+	host.__metaharnessServer = manager;
 	const server = manager.start(port);
-	process.stdout.write(`harbor-manager listening on http://localhost:${server.port} (jobs: ${jobsDir})\n`);
-	const shutdown = async () => {
-		await manager.stop();
-		process.exit(0);
-	};
-	process.on("SIGINT", shutdown);
-	process.on("SIGTERM", shutdown);
+	process.stdout.write(`metaharness listening on http://localhost:${server.port} (jobs: ${jobsDir})\n`);
+	// Process-wide hooks register once; `--hot` re-evals reuse them via `host`.
+	if (!host.__metaharnessHooks) {
+		host.__metaharnessHooks = true;
+		const shutdown = async () => {
+			await host.__metaharnessServer?.stop();
+			process.exit(0);
+		};
+		process.on("SIGINT", shutdown);
+		process.on("SIGTERM", shutdown);
+		process.on("unhandledRejection", err => {
+			if (isDevStreamTeardown(err)) {
+				process.stderr.write("ignored dev-server stream teardown (ERR_STREAM_RELEASE_LOCK)\n");
+				return;
+			}
+			throw err; // preserve fail-fast for real bugs
+		});
+	}
 }

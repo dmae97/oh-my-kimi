@@ -229,7 +229,7 @@ describe("Patcher with a block resolver", () => {
 		const patcher = new Patcher({ fs, snapshots, blockResolver: stubResolver });
 
 		// `block 2` resolves against the SNAPSHOT → span [2,3] → replace
-		// "line1","line2"; recovery 3-way-merges the change onto the live file.
+		// "line1","line2"; recovery maps that unchanged span onto the live file.
 		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP.BLK 2:\n+NEW`));
 
 		expect(result.sections[0]?.op).toBe("update");

@@ -2,7 +2,7 @@
 name: scout
 description: MUST be used for exploratory codebase research, rapid code analysis, and broad pattern searches. Fast read-only scout returning compressed context for handoff.
 tools: read, grep, glob, web_search
-model: pi/smol
+model: "@smol"
 thinking-level: medium
 read-summarize: false
 output:

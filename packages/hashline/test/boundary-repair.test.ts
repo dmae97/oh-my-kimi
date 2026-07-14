@@ -607,8 +607,8 @@ describe("boundary-balance repair through stale-snapshot recovery", () => {
 	// Recovery composes `applyEdits` to compute the intended change, so the
 	// boundary repair runs there too. The snapshot (what the model read)
 	// carries the structure; the live file has drifted far from the edit
-	// region, so the stale-hash 3-way merge succeeds and the repaired
-	// (de-duplicated) hunk lands without doubling the closer.
+	// region, so anchor recovery succeeds and the repaired (de-duplicated)
+	// hunk lands without doubling the closer.
 	it("de-duplicates a closer while recovering from a drifted file", () => {
 		const snapshotLines = [
 			'import { x } from "y";',
@@ -628,7 +628,7 @@ describe("boundary-balance repair through stale-snapshot recovery", () => {
 		];
 		const snapshotText = `${snapshotLines.join("\n")}\n`;
 		// Live file drifted only at the tail (line 13) — far outside the edit
-		// region (lines 4-6), so the 3-way merge applies cleanly.
+		// region (lines 4-6), so unchanged-anchor recovery succeeds.
 		const currentText = snapshotText.replace("const tail = 0;", "const tail = 99;");
 
 		const store = new InMemorySnapshotStore();

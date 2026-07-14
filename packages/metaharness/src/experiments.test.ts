@@ -24,7 +24,7 @@ function runRow(overrides: Partial<RunRow>): RunRow {
 		agent: "omp",
 		models: "anthropic/claude-opus-4-8",
 		label: "",
-		downshift: null,
+		prewalk: null,
 		config: {},
 		role: "",
 		note: "",
@@ -125,11 +125,11 @@ describe("summarizeArm", () => {
 		expect(finished.costPerTask).toBeCloseTo(1, 5);
 	});
 
-	it("describes the downshift config in the arm line", () => {
+	it("describes the prewalk config in the arm line", () => {
 		const arm = summarizeArm(
 			runRow({
 				jobName: "sb2-nact",
-				downshift: JSON.stringify({ into: "google/gemini-3.5-flash" }),
+				prewalk: JSON.stringify({ into: "google/gemini-3.5-flash" }),
 			}),
 			[],
 		);
@@ -140,7 +140,7 @@ describe("summarizeArm", () => {
 		const arm = summarizeArm(
 			runRow({
 				jobName: "sb2-nact",
-				downshift: JSON.stringify({ model: "google/gemini-3.5-flash", onAction: true, plan: true }),
+				prewalk: JSON.stringify({ model: "google/gemini-3.5-flash", onAction: true, plan: true }),
 			}),
 			[],
 		);

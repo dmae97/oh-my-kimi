@@ -13,21 +13,21 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 /**
- * Downshift: one-way switch from the starting model to a fast/cheap target
+ * Prewalk: one-way switch from the starting model to a fast/cheap target
  * at the first completed turn that starts execution — an edit/write tool,
  * or the todo-list init the plan nudge asks for — with a hidden plan nudge
  * before the switch and a hidden verify-before-finishing checklist after
  * it. This is the single mechanism that won out over fixed-turn and
  * ungated variants in benchmark testing — see the plan nudge / checklist /
- * continuation-safety-net prompts under `src/prompts/system/downshift-*.md`.
+ * continuation-safety-net prompts under `src/prompts/system/prewalk-*.md`.
  */
-describe("AgentSession downshift", () => {
+describe("AgentSession prewalk", () => {
 	let tempDir: TempDir;
 	let authStorage: AuthStorage;
 	let session: AgentSession | undefined;
 
 	beforeEach(async () => {
-		tempDir = TempDir.createSync("@pi-downshift-");
+		tempDir = TempDir.createSync("@pi-prewalk-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 	});
@@ -110,7 +110,7 @@ describe("AgentSession downshift", () => {
 		});
 	}
 
-	it("downshifts at the first edit/write after the todo gate opens; bash and todo don't trigger", async () => {
+	it("prewalks at the first edit/write after the todo gate opens; bash and todo don't trigger", async () => {
 		const primary = modelOrThrow("claude-sonnet-4-5");
 		const target = modelOrThrow("claude-sonnet-4-6");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
@@ -155,7 +155,7 @@ describe("AgentSession downshift", () => {
 			settings: Settings.isolated({ "compaction.enabled": false }),
 			modelRegistry,
 			toolRegistry,
-			downshift: { target },
+			prewalk: { target },
 		});
 
 		await session.prompt("do the task");
@@ -217,7 +217,7 @@ describe("AgentSession downshift", () => {
 			settings: Settings.isolated({ "compaction.enabled": false }),
 			modelRegistry,
 			toolRegistry,
-			downshift: { target },
+			prewalk: { target },
 		});
 
 		await session.prompt("do the task");
@@ -277,7 +277,7 @@ describe("AgentSession downshift", () => {
 				[recordTool.name, recordTool as AgentTool],
 				[writeTool.name, writeTool as AgentTool],
 			]),
-			downshift: { target },
+			prewalk: { target },
 		});
 
 		await session.prompt("do the task");
@@ -292,13 +292,13 @@ describe("AgentSession downshift", () => {
 		expect(session.model?.id).toBe(target.id);
 	});
 
-	it("armDownshift (the /downshift slash command) pre-arms the switch for the very next edit/write", async () => {
+	it("armPrewalk (the /prewalk slash command) pre-arms the switch for the very next edit/write", async () => {
 		const primary = modelOrThrow("claude-sonnet-4-5");
 		const target = modelOrThrow("claude-sonnet-4-6");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 
-		// No `downshift` in the session config — this simulates a session that
-		// was NOT started with --downshift, forced on via the slash command.
+		// No `prewalk` in the session config — this simulates a session that
+		// was NOT started with --prewalk, forced on via the slash command.
 		const mock = createMockModel({ responses: [toolCall("t1", "write"), { content: ["done"] }] });
 		const requested: string[] = [];
 		const agent = new Agent({
@@ -325,8 +325,8 @@ describe("AgentSession downshift", () => {
 		});
 
 		// Arming twice back-to-back must stay a single, idempotent arm.
-		session.armDownshift(target);
-		session.armDownshift(target);
+		session.armPrewalk(target);
+		session.armPrewalk(target);
 
 		await session.prompt("do the task");
 

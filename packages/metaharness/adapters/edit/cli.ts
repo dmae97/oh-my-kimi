@@ -11,7 +11,7 @@ import { type BenchmarkConfig, runBenchmark } from "./runner";
 const EDIT_PACKAGE = path.resolve(import.meta.dir, "..", "..", "..", "typescript-edit-benchmark");
 
 async function extractFixtures(): Promise<{ dir: string; temp: TempDir }> {
-	const temp = await TempDir.create("@harbor-edit-fixtures-");
+	const temp = await TempDir.create("@metaharness-edit-fixtures-");
 	const archive = new Bun.Archive(await Bun.file(path.join(EDIT_PACKAGE, "fixtures.tar.gz")).arrayBuffer());
 	for (const [filePath, file] of await archive.files()) {
 		await Bun.write(path.join(temp.path(), filePath), file);

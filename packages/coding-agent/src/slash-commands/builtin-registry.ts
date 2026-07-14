@@ -462,11 +462,11 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
-		name: "downshift",
-		description: "Switch to a fast/cheap model at the next action (works even without --downshift)",
-		acpDescription: "Downshift at the next action",
+		name: "prewalk",
+		description: "Switch to a fast/cheap model at the next action (works even without --prewalk)",
+		acpDescription: "Prewalk at the next action",
 		handle: async (_command, runtime) => {
-			const rolePattern = expandRoleAlias("pi/smol", runtime.settings);
+			const rolePattern = expandRoleAlias("@smol", runtime.settings);
 			const resolved = resolveCliModel({
 				cliModel: rolePattern,
 				modelRegistry: runtime.session.modelRegistry,
@@ -478,9 +478,9 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			if (!runtime.session.modelRegistry.hasConfiguredAuth(resolved.model)) {
 				return usage(`No API key for ${resolved.model.provider}/${resolved.model.id}`, runtime);
 			}
-			runtime.session.armDownshift(resolved.model, resolved.thinkingLevel);
+			runtime.session.armPrewalk(resolved.model, resolved.thinkingLevel);
 			await runtime.output(
-				`Downshift on: switching to ${resolved.model.provider}/${resolved.model.id} at the next edit/write (todo-gated).`,
+				`Prewalk on: switching to ${resolved.model.provider}/${resolved.model.id} at the next edit/write (todo-gated).`,
 			);
 			return commandConsumed();
 		},

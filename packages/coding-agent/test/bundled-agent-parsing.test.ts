@@ -12,7 +12,7 @@ describe("bundled agent parsing", () => {
 
 		expect(reviewer).toBeDefined();
 		expect(reviewer?.source).toBe("bundled");
-		expect(reviewer?.model).toEqual(["pi/slow"]);
+		expect(reviewer?.model).toEqual(["@slow"]);
 		expect(reviewer?.thinkingLevel).toBeUndefined();
 	});
 
@@ -20,7 +20,7 @@ describe("bundled agent parsing", () => {
 		const task = getBundledAgent("task");
 
 		expect(task).toBeDefined();
-		expect(task?.model).toEqual(["pi/task"]);
+		expect(task?.model).toEqual(["@task"]);
 		expect(task?.thinkingLevel).toBe(AUTO_THINKING);
 	});
 

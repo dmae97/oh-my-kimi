@@ -50,7 +50,7 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 			name: "task",
 			description: "General-purpose subagent with full capabilities for delegated multi-step tasks",
 			spawns: "*",
-			model: "pi/task",
+			model: "@task",
 			thinkingLevel: AUTO_THINKING,
 		},
 		template: taskMd,
@@ -60,7 +60,7 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 		frontmatter: {
 			name: "sonic",
 			description: "Low-reasoning agent for strictly mechanical updates or data collection only",
-			model: "pi/smol",
+			model: "@smol",
 			thinkingLevel: Effort.Medium,
 		},
 		template: taskMd,

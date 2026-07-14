@@ -473,6 +473,10 @@ export class SelectorController {
 				this.ctx.ui.requestRender();
 				break;
 
+			case "tui.scrollbackRebuild":
+				this.ctx.ui.setScrollbackRebuild(value as boolean);
+				break;
+
 			case "tui.renderMermaid":
 				setMarkdownMermaidRendering(value as boolean);
 				this.ctx.session.refreshBaseSystemPrompt().catch(err => {

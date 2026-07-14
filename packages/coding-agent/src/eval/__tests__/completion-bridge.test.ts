@@ -193,7 +193,7 @@ describe("runEvalCompletion", () => {
 		expect(resolved).toEqual(["p/smol", "p/default", "p/slow"]);
 	});
 
-	it("prefers the session active model for the default tier, falling back to pi/default", async () => {
+	it("prefers the session active model for the default tier, falling back to @default", async () => {
 		const spy = vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "ok" }));
 		const session = makeSession({ available: [SMOL, DEFAULT, SLOW], activeModel: "p/slow" });
 

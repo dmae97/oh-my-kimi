@@ -351,10 +351,17 @@ async function elicitFromAcpClient(
 			finish(undefined);
 		});
 	const response = await promise;
-	if (response?.action !== "accept" || !response.content) {
+	if (!isAcceptedElicitation(response) || !response.content) {
 		return undefined;
 	}
 	return response.content.value;
+}
+
+/** Narrows a `CreateElicitationResponse` to the accepted-with-content branch; the SDK's `action: string` catch-all arm otherwise defeats literal narrowing on `action !== "accept"`. */
+function isAcceptedElicitation(
+	response: CreateElicitationResponse | undefined,
+): response is Extract<CreateElicitationResponse, { action: "accept" }> {
+	return response?.action === "accept";
 }
 
 /**

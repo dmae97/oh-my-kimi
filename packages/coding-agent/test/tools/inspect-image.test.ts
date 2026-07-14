@@ -352,7 +352,7 @@ describe("InspectImageTool", () => {
 		expect(stub.calls).toHaveLength(0);
 	});
 
-	it("falls back to pi/default when vision role is unset", async () => {
+	it("falls back to @default when vision role is unset", async () => {
 		const imagePath = path.join(testDir, "screen.png");
 		fs.writeFileSync(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
 

@@ -2,9 +2,11 @@
 
 ## [Unreleased]
 
+## [16.5.0] - 2026-07-13
+
 ### Changed
 
-- Changed archived transcript rendering to compact `¶user:`, `¶think:`, `¶ai:`, and `¶call:` scopes; repeated adjacent scopes now continue as plain lines, tool-call intents trail calls as `//` comments, and the compaction prompt documents the format.
+- Updated archived transcript rendering to use a more compact format with `¶user:`, `¶think:`, `¶ai:`, and `¶call:` scopes, omitting repeated adjacent scope headers and appending tool-call intents as comments.
 
 ## [16.3.7] - 2026-07-05
 

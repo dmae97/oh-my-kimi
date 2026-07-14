@@ -19,7 +19,7 @@ afterEach(() => {
 });
 
 function makeJobsDir(): string {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harbor-manager-test-"));
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "metaharness-test-"));
 	cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
 	return dir;
 }
@@ -145,9 +145,7 @@ describe("RunStore", () => {
 		store.discover();
 		store.setExperimentGoal("exp", "does the treatment beat the baseline?");
 		expect(store.setRunMeta("exp-base", { role: "baseline", note: "plain model" })).toBe(true);
-		expect(store.setRunMeta("exp-treat", { role: "variant", note: "downshift flash", label: "flash@edit" })).toBe(
-			true,
-		);
+		expect(store.setRunMeta("exp-treat", { role: "variant", note: "prewalk flash", label: "flash@edit" })).toBe(true);
 		expect(store.setRunMeta("exp-missing", { role: "variant" })).toBe(false);
 
 		const detail = experimentDetail(store, "exp");
@@ -155,18 +153,18 @@ describe("RunStore", () => {
 		// ArmSummary.arm resolves to the display label when one is set.
 		expect(detail?.arms.map(a => [a.arm, a.run.role, a.run.note, a.run.label])).toEqual([
 			["base", "baseline", "plain model", ""],
-			["flash@edit", "variant", "downshift flash", "flash@edit"],
+			["flash@edit", "variant", "prewalk flash", "flash@edit"],
 		]);
 
 		// Partial updates keep the omitted fields.
-		expect(store.setRunMeta("exp-treat", { note: "downshift flash v2" })).toBe(true);
+		expect(store.setRunMeta("exp-treat", { note: "prewalk flash v2" })).toBe(true);
 		const treat = store.getRun("exp-treat");
 		expect(treat?.label).toBe("flash@edit");
 		expect(treat?.role).toBe("variant");
-		expect(treat?.note).toBe("downshift flash v2");
+		expect(treat?.note).toBe("prewalk flash v2");
 	});
 
-	it("finalizes running rows whose owning process died", () => {
+	it("releases a dead runner's pid without failing a possibly-live orphan", () => {
 		const jobsDir = makeJobsDir();
 		writeFixtureJob(jobsDir, "job-b");
 		const store = new RunStore(jobsDir);
@@ -181,7 +179,26 @@ describe("RunStore", () => {
 		});
 		const rows = store.syncActive();
 		expect(rows).toHaveLength(1);
-		expect(store.getRun("job-b")?.status).toBe("failed");
+		// The runner is only a monitor: its death must not fail the run while
+		// the job dir is fresh (an orphaned harbor may still be writing trials).
+		const row = store.getRun("job-b");
+		expect(row?.pid).toBeNull();
+		expect(row?.status).toBe("running");
+
+		// Once harbor stamps the terminal marker, the same sweep completes it.
+		const jobDir = path.join(jobsDir, "job-b");
+		fs.writeFileSync(
+			path.join(jobDir, "result.json"),
+			JSON.stringify({
+				n_total_trials: 3,
+				stats: { n_running_trials: 0, n_pending_trials: 0 },
+				finished_at: "2026-07-12T11:00:00",
+			}),
+		);
+		store.syncActive();
+		const finished = store.getRun("job-b");
+		expect(finished?.status).toBe("complete");
+		expect(finished?.finishedAt).toBe(Date.parse("2026-07-12T11:00:00"));
 	});
 });
 
@@ -221,10 +238,13 @@ describe("ManagerServer API", () => {
 		});
 		expect(badLaunch.status).toBe(400);
 
-		const cancelUnknown = (await (await fetch(`${base}/api/runs/nope`, { method: "DELETE" })).json()) as {
+		const cancelUnknown = (await (await fetch(`${base}/api/runs/nope/cancel`, { method: "POST" })).json()) as {
 			cancelled: boolean;
 		};
 		expect(cancelUnknown.cancelled).toBe(false);
+
+		const deleteUnknown = await fetch(`${base}/api/runs/nope`, { method: "DELETE" });
+		expect(deleteUnknown.status).toBe(404);
 	});
 
 	it("serves edit and SnapCompact metrics and native traces through one API", async () => {
@@ -302,6 +322,147 @@ describe("ManagerServer API", () => {
 		).json()) as { entries: Array<{ kind: string }> };
 		expect(snapTrace.entries.map(entry => entry.kind)).toEqual(["question", "answer", "reference"]);
 	});
+	it("guards resume: unknown, non-harbor, running, and config-less runs are rejected", async () => {
+		const jobsDir = makeJobsDir();
+		const manager = new ManagerServer(jobsDir);
+		manager.store.registerLaunch({
+			benchmark: "edit",
+			jobName: "edit-x",
+			dataset: "typescript-edit",
+			agent: "edit",
+			models: ["m/x"],
+			pid: process.pid,
+		});
+		manager.store.markExit("edit-x", 1);
+		// A live harbor run: pid is this test process, never marked exited.
+		manager.store.registerLaunch({
+			benchmark: "harbor",
+			jobName: "job-live",
+			dataset: "terminal-bench@2.0",
+			agent: "omp",
+			models: ["m/x"],
+			pid: process.pid,
+		});
+		// A failed harbor run whose job dir has no harbor config.json.
+		manager.store.registerLaunch({
+			benchmark: "harbor",
+			jobName: "job-bare",
+			dataset: "terminal-bench@2.0",
+			agent: "omp",
+			models: ["m/x"],
+			pid: process.pid,
+		});
+		manager.store.markExit("job-bare", 1);
+		const server = manager.start(0);
+		cleanups.push(() => {
+			void manager.stop();
+		});
+		const base = `http://localhost:${server.port}`;
+		const resumeError = async (name: string): Promise<string> => {
+			const res = await fetch(`${base}/api/runs/${name}/resume`, { method: "POST" });
+			expect(res.status).toBe(400);
+			return ((await res.json()) as { error: string }).error;
+		};
+
+		expect(await resumeError("nope")).toMatch(/not found/);
+		expect(await resumeError("edit-x")).toMatch(/only harbor/);
+		expect(await resumeError("job-live")).toMatch(/already running/);
+		expect(await resumeError("job-bare")).toMatch(/no harbor config.json/);
+	});
+
+	it("experiment CRUD: create is browsable, delete removes rows + job dirs, live arms are protected", async () => {
+		const jobsDir = makeJobsDir();
+		const manager = new ManagerServer(jobsDir);
+		// Two finished arms of experiment `crud` and one live run in a different experiment.
+		for (const jobName of ["crud-base", "crud-treat"]) {
+			manager.store.registerLaunch({
+				benchmark: "harbor",
+				jobName,
+				dataset: "terminal-bench@2.0",
+				agent: "omp",
+				models: ["m/x"],
+				pid: process.pid,
+			});
+			manager.store.markExit(jobName, 0);
+		}
+		manager.store.registerLaunch({
+			benchmark: "harbor",
+			jobName: "live-run",
+			dataset: "terminal-bench@2.0",
+			agent: "omp",
+			models: ["m/x"],
+			pid: process.pid,
+		});
+		const server = manager.start(0);
+		cleanups.push(() => {
+			void manager.stop();
+		});
+		const base = `http://localhost:${server.port}`;
+
+		// Create: registered id is browsable before any run exists.
+		const created = await fetch(`${base}/api/experiments`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ id: "fresh", goal: "does X beat Y?" }),
+		});
+		expect(created.status).toBe(201);
+		const list = (await (await fetch(`${base}/api/experiments`)).json()) as Array<{
+			id: string;
+			goal: string;
+			arms: number;
+		}>;
+		const fresh = list.find(e => e.id === "fresh");
+		expect(fresh).toMatchObject({ goal: "does X beat Y?", arms: 0 });
+		const freshDetail = (await (await fetch(`${base}/api/experiments/fresh`)).json()) as {
+			goal: string;
+			arms: unknown[];
+		};
+		expect(freshDetail).toMatchObject({ goal: "does X beat Y?", arms: [] });
+
+		// Create: dashed / empty ids can never own a run — rejected.
+		for (const id of ["bad-id", ""]) {
+			const res = await fetch(`${base}/api/experiments`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ id }),
+			});
+			expect(res.status).toBe(400);
+		}
+
+		// Browse: list filters.
+		const filtered = (await (await fetch(`${base}/api/runs?experiment=crud`)).json()) as Array<{
+			jobName: string;
+		}>;
+		expect(filtered.map(r => r.jobName).sort()).toEqual(["crud-base", "crud-treat"]);
+		const running = (await (await fetch(`${base}/api/runs?status=running`)).json()) as Array<{
+			jobName: string;
+		}>;
+		expect(running.map(r => r.jobName)).toEqual(["live-run"]);
+		const q = (await (await fetch(`${base}/api/experiments?q=fresh`)).json()) as Array<{ id: string }>;
+		expect(q.map(e => e.id)).toEqual(["fresh"]);
+
+		// Delete run: live runs are protected, finished runs vanish from DB and disk.
+		const liveDelete = await fetch(`${base}/api/runs/live-run`, { method: "DELETE" });
+		expect(liveDelete.status).toBe(400);
+		const runDelete = await fetch(`${base}/api/runs/crud-treat`, { method: "DELETE" });
+		expect(runDelete.status).toBe(200);
+		expect(fs.existsSync(path.join(jobsDir, "crud-treat"))).toBe(false);
+		expect(manager.store.getRun("crud-treat")).toBeNull();
+
+		// Delete experiment: remaining arm rows + dirs + goal row all go; 404 after.
+		const expDelete = (await (await fetch(`${base}/api/experiments/crud`, { method: "DELETE" })).json()) as {
+			deletedRuns: string[];
+		};
+		expect(expDelete.deletedRuns).toEqual(["crud-base"]);
+		expect(fs.existsSync(path.join(jobsDir, "crud-base"))).toBe(false);
+		expect((await fetch(`${base}/api/experiments/crud`)).status).toBe(404);
+		expect((await fetch(`${base}/api/experiments/unknown`, { method: "DELETE" })).status).toBe(404);
+
+		// Delete experiment with a live arm: refused, nothing removed.
+		const liveExpDelete = await fetch(`${base}/api/experiments/live`, { method: "DELETE" });
+		expect(liveExpDelete.status).toBe(400);
+		expect(manager.store.getRun("live-run")).not.toBeNull();
+	});
 });
 
 describe("resolveArmLaunch", () => {
@@ -328,8 +489,8 @@ describe("resolveArmLaunch", () => {
 			arm: "n8",
 			model: "google/gemini-3.5-flash",
 			role: "variant",
-			note: "downshift@flash",
-			downshift: { into: "google/gemini-3.5-flash" },
+			note: "prewalk@flash",
+			prewalk: { into: "google/gemini-3.5-flash" },
 		});
 
 		expect(launch.jobName).toBe("exp-n8");
@@ -340,7 +501,7 @@ describe("resolveArmLaunch", () => {
 		expect(launch.timeoutMultiplier).toBe(2);
 		expect(launch.model).toBe("google/gemini-3.5-flash");
 		expect(launch.role).toBe("variant");
-		expect(launch.downshift?.into).toBe("google/gemini-3.5-flash");
+		expect(launch.prewalk?.into).toBe("google/gemini-3.5-flash");
 	});
 
 	it("prefers the sibling with a recorded include list over newer include-less siblings", () => {

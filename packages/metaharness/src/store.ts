@@ -27,13 +27,13 @@ export interface RunRow {
 	dataset: string;
 	agent: string;
 	models: string;
-	/** JSON downshift config (`{ into?: string }`); older rows may hold legacy reasoning-slide JSON. */
-	downshift: string | null;
+	/** JSON prewalk config (`{ into?: string }`); older rows may hold legacy reasoning-slide JSON. */
+	prewalk: string | null;
 	/** Benchmark-specific launch configuration. */
 	config: Record<string, unknown>;
 	/** Role inside the experiment (baseline vs treatment); "" when unspecified. */
 	role: RunRole;
-	/** One-line description of what this arm tests (e.g. "downshift→flash at first edit/write"). */
+	/** One-line description of what this arm tests (e.g. "prewalk→flash at first edit/write"). */
 	note: string;
 	/** Display-name override for the arm; "" falls back to the jobName-derived arm label. */
 	label: string;
@@ -72,13 +72,20 @@ export interface TraceRow {
 	tracePath: string | null;
 }
 
+/** Row in the `experiments` table: goal metadata keyed by experiment id. */
+export interface ExperimentMeta {
+	id: string;
+	goal: string;
+	updatedAt: number;
+}
+
 export interface LaunchRecord {
 	benchmark: BenchmarkKind;
 	jobName: string;
 	dataset: string;
 	agent: string;
 	models: string[];
-	downshift?: { into?: string };
+	prewalk?: { into?: string };
 	pid: number;
 	role?: RunRole;
 	note?: string;
@@ -92,7 +99,7 @@ CREATE TABLE IF NOT EXISTS runs (
 	dataset TEXT NOT NULL DEFAULT '',
 	agent TEXT NOT NULL DEFAULT 'omp',
 	models TEXT NOT NULL DEFAULT '',
-	downshift TEXT,
+	prewalk TEXT,
 	role TEXT NOT NULL DEFAULT '',
 	note TEXT NOT NULL DEFAULT '',
 	label TEXT NOT NULL DEFAULT '',
@@ -139,6 +146,40 @@ CREATE TABLE IF NOT EXISTS experiments (
 /** Directory names inside the jobs root that are not Harbor job dirs. */
 const NON_JOB_DIRS = new Set(["_bench", "_manager"]);
 
+/** True when a bun:sqlite error is a transient busy/recovery lock. */
+function isBusyLock(err: unknown): boolean {
+	if (err && typeof err === "object" && "code" in err) {
+		const code = err.code;
+		return typeof code === "string" && code.startsWith("SQLITE_BUSY");
+	}
+	return false;
+}
+
+/**
+ * Enable WAL journaling, tolerating a briefly locked database.
+ *
+ * `PRAGMA journal_mode = WAL` needs a momentary exclusive lock. When another
+ * connection holds the DB — a restarting manager, or a WAL mid-recovery —
+ * SQLite returns `SQLITE_BUSY`/`SQLITE_BUSY_RECOVERY`. The busy handler that
+ * `busy_timeout` installs is not invoked for recovery locks, so retry the
+ * pragma explicitly before surfacing the failure.
+ */
+function enableWal(db: Database): void {
+	const attempts = 10;
+	for (let attempt = 1; attempt <= attempts; attempt++) {
+		try {
+			db.run("PRAGMA journal_mode = WAL");
+			return;
+		} catch (err) {
+			if (attempt < attempts && isBusyLock(err)) {
+				Bun.sleepSync(100);
+				continue;
+			}
+			throw err;
+		}
+	}
+}
+
 export class RunStore {
 	#db: Database;
 	readonly jobsDir: string;
@@ -146,8 +187,9 @@ export class RunStore {
 	constructor(jobsDir: string, dbPath?: string) {
 		this.jobsDir = jobsDir;
 		fs.mkdirSync(path.join(jobsDir, "_manager"), { recursive: true });
-		this.#db = new Database(dbPath ?? path.join(jobsDir, "_manager", "harbor-manager.sqlite"));
-		this.#db.run("PRAGMA journal_mode = WAL");
+		this.#db = new Database(dbPath ?? path.join(jobsDir, "_manager", "metaharness.sqlite"));
+		this.#db.run("PRAGMA busy_timeout = 5000");
+		enableWal(this.#db);
 		this.#db.run(SCHEMA);
 		const runColumns = new Set(
 			(this.#db.query("PRAGMA table_info(runs)").all() as Array<{ name: string }>).map(c => c.name),
@@ -165,11 +207,11 @@ export class RunStore {
 		if (!runColumns.has("metrics_json")) {
 			this.#db.run("ALTER TABLE runs ADD COLUMN metrics_json TEXT NOT NULL DEFAULT '{}'");
 		}
-		if (runColumns.has("slide") && !runColumns.has("downshift")) {
-			this.#db.run("ALTER TABLE runs RENAME COLUMN slide TO downshift");
+		if (runColumns.has("slide") && !runColumns.has("prewalk")) {
+			this.#db.run("ALTER TABLE runs RENAME COLUMN slide TO prewalk");
 		}
-		if (!runColumns.has("slide") && !runColumns.has("downshift")) {
-			this.#db.run("ALTER TABLE runs ADD COLUMN downshift TEXT");
+		if (!runColumns.has("slide") && !runColumns.has("prewalk")) {
+			this.#db.run("ALTER TABLE runs ADD COLUMN prewalk TEXT");
 		}
 		const traceColumns = new Set(
 			(this.#db.query("PRAGMA table_info(trials)").all() as Array<{ name: string }>).map(c => c.name),
@@ -187,7 +229,7 @@ export class RunStore {
 		this.#db
 			.query(
 				`INSERT INTO runs
-				 (job_name, benchmark, dataset, agent, models, downshift, role, note, config_json, status, pid, created_at)
+				 (job_name, benchmark, dataset, agent, models, prewalk, role, note, config_json, status, pid, created_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)
 				 ON CONFLICT(job_name) DO UPDATE SET
 					benchmark = excluded.benchmark, pid = excluded.pid, status = 'running',
@@ -201,7 +243,7 @@ export class RunStore {
 				launch.dataset,
 				launch.agent,
 				launch.models.join(","),
-				launch.downshift ? JSON.stringify(launch.downshift) : null,
+				launch.prewalk ? JSON.stringify(launch.prewalk) : null,
 				launch.role ?? "",
 				launch.note ?? "",
 				JSON.stringify(launch.config ?? {}),
@@ -223,9 +265,39 @@ export class RunStore {
 			.run(id, goal, Date.now());
 	}
 
-	getExperimentGoal(id: string): string {
-		const row = this.#db.query("SELECT goal FROM experiments WHERE id = ?").get(id) as { goal: string } | null;
-		return row?.goal ?? "";
+	/** Stored experiment metadata, or null when the id was never registered. */
+	getExperimentMeta(id: string): ExperimentMeta | null {
+		const row = this.#db.query("SELECT id, goal, updated_at FROM experiments WHERE id = ?").get(id) as {
+			id: string;
+			goal: string;
+			updated_at: number;
+		} | null;
+		return row ? { id: row.id, goal: row.goal, updatedAt: row.updated_at } : null;
+	}
+
+	/** Every registered experiment row, newest first. */
+	listExperimentMeta(): ExperimentMeta[] {
+		const rows = this.#db
+			.query("SELECT id, goal, updated_at FROM experiments ORDER BY updated_at DESC")
+			.all() as Array<{
+			id: string;
+			goal: string;
+			updated_at: number;
+		}>;
+		return rows.map(r => ({ id: r.id, goal: r.goal, updatedAt: r.updated_at }));
+	}
+
+	/** Drop the experiment metadata row (run rows are deleted separately via deleteRun). */
+	deleteExperimentMeta(id: string): void {
+		this.#db.query("DELETE FROM experiments WHERE id = ?").run(id);
+	}
+
+	/** Delete a run row and its trials; returns false when the run is unknown. */
+	deleteRun(jobName: string): boolean {
+		if (!this.getRun(jobName)) return false;
+		this.#db.query("DELETE FROM trials WHERE job_name = ?").run(jobName);
+		this.#db.query("DELETE FROM runs WHERE job_name = ?").run(jobName);
+		return true;
 	}
 
 	/** Set role/note/label metadata on an existing run row. */
@@ -296,6 +368,15 @@ export class RunStore {
 				trace_path = excluded.trace_path, updated_at = excluded.updated_at`,
 		);
 		const tx = this.#db.transaction(() => {
+			// Prune rows whose trial dirs vanished from disk (a resume deletes
+			// interrupted trial dirs and re-runs the task under a fresh suffix) —
+			// otherwise phantom `running` rows haunt the dashboard forever.
+			if (snapshot.traces.length > 0) {
+				const names = snapshot.traces.map(t => t.name);
+				this.#db
+					.query(`DELETE FROM trials WHERE job_name = ? AND name NOT IN (${names.map(() => "?").join(",")})`)
+					.run(jobName, ...names);
+			}
 			for (const trace of snapshot.traces) {
 				upsert.run(
 					jobName,
@@ -331,10 +412,12 @@ export class RunStore {
 					JSON.stringify(snapshot.metrics),
 					jobName,
 				);
-			// Historical Harbor runs have no owning process. Infer their terminal
-			// state from result metadata or directory freshness.
-			if (row.benchmark === "harbor" && row.pid === null && row.finishedAt === null && row.status !== "cancelled") {
-				const result = readJobResult(jobDir);
+			// Runs with no owning process (historical dirs, or a runner that died
+			// with a previous manager). Infer terminal state from result metadata
+			// or directory freshness — an orphaned harbor child may still be
+			// running and writing trials, so a fresh dir stays "running".
+			if (row.pid === null && row.finishedAt === null && row.status !== "cancelled") {
+				const result = row.benchmark === "harbor" ? readJobResult(jobDir) : null;
 				let status: RunStatus;
 				let finishedAt: number | null = null;
 				if (result?.finishedAt != null) {
@@ -364,11 +447,13 @@ export class RunStore {
 		}>;
 		const out: RunRow[] = [];
 		for (const { job_name } of active) {
-			// A pid-owning run whose process died without markExit (manager restart)
-			// is finalized here so it doesn't stay "running" forever.
+			// A pid-owning run whose runner died without markExit (manager
+			// restart) loses its pid here; syncRun's disk inference then decides
+			// the real status — the workload may have completed, or may still be
+			// running as an orphan.
 			const row = this.getRun(job_name);
 			if (row?.pid != null && !processAlive(row.pid)) {
-				this.markExit(job_name, null);
+				this.#db.query("UPDATE runs SET pid = NULL WHERE job_name = ?").run(job_name);
 			}
 			const synced = this.syncRun(job_name);
 			if (synced) out.push(synced);
@@ -424,7 +509,7 @@ function rowToRun(r: Record<string, unknown>): RunRow {
 		dataset: String(r.dataset),
 		agent: String(r.agent),
 		models: String(r.models),
-		downshift: r.downshift === null ? null : String(r.downshift),
+		prewalk: r.prewalk === null ? null : String(r.prewalk),
 		config: JSON.parse(String(r.config_json ?? "{}")),
 		role: String(r.role ?? "") as RunRole,
 		note: String(r.note ?? ""),
