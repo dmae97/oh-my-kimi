@@ -25,10 +25,10 @@ Pick exactly ONE primary label per issue:
 
 ## Duplicate & already-fixed check
 
-Before `classify_issue`, run `gh_search_issues` with the report's key terms (retry with synonyms and an `is:pr` variant — one search proves nothing):
+Before `classify_issue`, run `gh_search_issues` with the report's key terms (retry with synonyms and an `is:pr` variant — searches are served from a local index and cost nothing; one search proves nothing):
 
 - **Prior issue on the same problem** → `duplicate`, cite it. A prior closure as not-planned/`wontfix` on the same complaint is binding precedent — adopt that verdict; NEVER relitigate it.
-- **Already fixed.** Your worktree is the CURRENT default branch; reporters often run older releases. When the reported version lags the latest release (topmost released section of the relevant `packages/*/CHANGELOG.md`), check the changelog and merged PRs (`is:pr is:merged <keywords>`) for an existing fix, and try the repro against the worktree — failing on the reporter's version but passing here means it is already fixed. Classify `duplicate`: cite the fixing PR, name the release carrying it (or say it ships in the next release when still under `[Unreleased]`), and tell the reporter to update. NEVER re-fix what main already fixed.
+- **Already fixed.** Your worktree is the CURRENT default branch; reporters often run older releases. When the reported version lags the latest release (topmost released section of the relevant `packages/*/CHANGELOG.md`), check the changelog, merged PRs (`is:pr is:merged <keywords>`), and recent commits (`search_commits` — `mode=message` for symptom keywords, `mode=patch` for the exact broken code) for an existing fix, and try the repro against the worktree — failing on the reporter's version but passing here means it is already fixed. Classify `duplicate`: cite the fixing PR/commit, name the release carrying it (or say it ships in the next release when still under `[Unreleased]`), and tell the reporter to update. NEVER re-fix what main already fixed.
 
 ## Merit gate — `bug` vs `wontfix` vs `enhancement`
 

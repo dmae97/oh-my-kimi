@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import threading
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,7 @@ from omp_rpc import HostToolContext, RpcCommandError
 
 from robomp import host_tools
 from robomp.db import Database
-from robomp.github_client import GitHubClient, IssueInfo, RepoInfo
+from robomp.github_client import GitHubClient, IssueIndexEntry, IssueInfo, RepoInfo
 from robomp.host_tools import AbortController, ToolBindings, build
 from robomp.sandbox import LocalGitTransport, Workspace
 
@@ -935,6 +936,98 @@ def test_gh_search_issues_rejects_repo_qualifier_and_empty_query(db: Database, t
             tool.execute({"query": "   "}, _ctx())
     finally:
         _stop_loop(loop, t)
+
+
+def test_gh_search_issues_serves_from_local_index_once_synced(db: Database, tmp_path: Path) -> None:
+    """With a sync watermark present the tool answers from SQLite: qualifiers
+    become filters, merged PRs render as `merged`, and NO GitHub call happens."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("local-index search must not call GitHub")
+
+    bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(handler))
+    db.set_issue_index_watermark("octo/widget", "2026-07-01T00:00:00Z")
+    db.upsert_issue_index(
+        IssueIndexEntry(
+            repo="octo/widget",
+            number=31,
+            is_pull_request=True,
+            title="fix: resize crash",
+            body="handles narrow terminals",
+            state="closed",
+            state_reason="",
+            merged_at="2026-06-02T00:00:00Z",
+            author="bot",
+            labels=(),
+            comments=1,
+            created_at="2026-06-02T00:00:00Z",
+            updated_at="2026-06-02T00:00:00Z",
+            html_url="https://example/pull/31",
+        )
+    )
+    db.upsert_issue_index(
+        IssueIndexEntry(
+            repo="octo/widget",
+            number=30,
+            is_pull_request=False,
+            title="resize crash report",
+            body="",
+            state="closed",
+            state_reason="not_planned",
+            merged_at="",
+            author="bob",
+            labels=("wontfix",),
+            comments=3,
+            created_at="2026-05-01T00:00:00Z",
+            updated_at="2026-06-01T00:00:00Z",
+            html_url="https://example/30",
+        )
+    )
+    try:
+        tool = next(x for x in build(bindings) if x.name == "gh_search_issues")
+        result = tool.execute({"query": "resize crash"}, _ctx())
+        pr_only = tool.execute({"query": "resize crash is:merged"}, _ctx())
+    finally:
+        _stop_loop(loop, t)
+    assert "#30 (issue, closed (not_planned))" in result
+    assert "#31 (PR, merged)" in result
+    assert "#31" in pr_only and "#30" not in pr_only
+
+
+def _git_repo_with_commits(bindings) -> None:
+    """Turn the stub workspace repo_dir into a git repo with two commits."""
+    repo = str(bindings.workspace.repo_dir)
+    ident = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+    subprocess.run(["git", "init", "-q", "-b", "main", repo], check=True)
+    Path(repo, "a.txt").write_text("plain start\n", encoding="utf-8")
+    subprocess.run(["git", "-C", repo, "add", "."], check=True)
+    subprocess.run(["git", "-C", repo, *ident, "commit", "-q", "-m", "feat: initial import"], check=True)
+    Path(repo, "a.txt").write_text("plain start\nsplitPathAndSel guard\n", encoding="utf-8")
+    subprocess.run(["git", "-C", repo, "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", repo, *ident, "commit", "-q", "-m", "fix(tools): colon selector literal paths"],
+        check=True,
+    )
+
+
+def test_search_commits_message_and_patch_modes(db: Database, tmp_path: Path) -> None:
+    """message mode greps commit messages; patch mode pickaxes diff content.
+    Without an origin ref the search falls back to HEAD instead of failing."""
+    bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(lambda r: httpx.Response(500)))
+    _git_repo_with_commits(bindings)
+    try:
+        tool = next(x for x in build(bindings) if x.name == "search_commits")
+        by_message = tool.execute({"query": "colon selector"}, _ctx())
+        by_patch = tool.execute({"query": "splitPathAndSel", "mode": "patch"}, _ctx())
+        none = tool.execute({"query": "nonexistent-topic"}, _ctx())
+        with pytest.raises(RpcCommandError):
+            tool.execute({"query": "x", "mode": "bogus"}, _ctx())
+    finally:
+        _stop_loop(loop, t)
+    assert "fix(tools): colon selector literal paths" in by_message
+    assert "feat: initial import" not in by_message
+    assert "fix(tools): colon selector literal paths" in by_patch
+    assert none.startswith("No commits")
 
 
 def test_classify_issue_rejects_bug_without_priority(db: Database, tmp_path: Path) -> None:

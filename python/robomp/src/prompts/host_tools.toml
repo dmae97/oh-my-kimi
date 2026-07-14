@@ -73,11 +73,20 @@ reason = "Internal diagnosis for the operator. Concrete, specific, blameless. NE
 description = "Refetch the originating issue and its comments. Use sparingly."
 
 [gh_search_issues]
-description = "Search issues AND pull requests in the current repo (GitHub issue-search syntax; repo scope applied automatically). Use during triage to find duplicates and to check whether a merged PR already fixed the reported problem before classifying."
+description = "Search issues AND pull requests in the current repo. Served from a local index of every issue/PR (webhook-fed, periodically reconciled), so calls are free — search liberally during triage to find duplicates and already-merged fixes before classifying."
 
 [gh_search_issues.parameters]
-query = "GitHub issue-search syntax: bare keywords plus qualifiers like `is:pr`, `is:closed`, `is:merged`, `label:bug`, `in:title`, `author:<login>`. NEVER include a `repo:` qualifier — scope is applied automatically."
+query = "GitHub issue-search syntax: bare keywords plus qualifiers like `is:pr`, `is:closed`, `is:merged`, `label:bug`, `author:<login>`. NEVER include a `repo:` qualifier — scope is applied automatically."
 limit = "Max results, 1-20. Default 10."
+
+[search_commits]
+description = "Search the default branch's commit history. `mode=message` greps commit messages (case-insensitive regex); `mode=patch` finds commits whose diff adds/removes the literal query string — use it to check whether the broken code path was already touched by a fix."
+
+[search_commits.parameters]
+query = "Regex for `mode=message`; literal string for `mode=patch`."
+mode = "`message` (default) searches commit messages; `patch` pickaxe-searches diff content."
+paths = "Optional path filters (files or directories) to narrow the walk."
+limit = "Max commits, 1-30. Default 10."
 
 [set_issue_labels]
 description = "Append labels to the originating issue/PR. NEVER removes existing labels."
