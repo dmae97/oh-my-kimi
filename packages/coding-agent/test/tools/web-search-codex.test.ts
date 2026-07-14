@@ -223,24 +223,24 @@ describe("searchCodex model selection", () => {
 		}
 	});
 
-	it("uses the built-in default model when PI_CODEX_WEB_SEARCH_MODEL is unset", async () => {
+	it("uses GPT-5.6 Luna as the first bundled default", async () => {
 		delete process.env.PI_CODEX_WEB_SEARCH_MODEL;
-		const result = await searchCodex(makeSearchParams("default codex model", mockCodexFetch("gpt-5.5")));
+		const result = await searchCodex(makeSearchParams("default codex model", mockCodexFetch("gpt-5.6-luna")));
 
 		expect(capturedRequest).not.toBeNull();
 		expect(capturedRequest?.url).toBe("https://chatgpt.com/backend-api/codex/responses");
-		expect(capturedRequest?.body?.model).toBe("gpt-5.5");
-		expect(result.model).toBe("gpt-5.5");
+		expect(capturedRequest?.body?.model).toBe("gpt-5.6-luna");
+		expect(result.model).toBe("gpt-5.6-luna");
 		expect(result.sources).toEqual([{ title: "Example Article", url: "https://example.com/article" }]);
 	});
 
 	it("falls back to the default model when PI_CODEX_WEB_SEARCH_MODEL is blank", async () => {
 		process.env.PI_CODEX_WEB_SEARCH_MODEL = "   ";
-		const result = await searchCodex(makeSearchParams("blank codex model", mockCodexFetch("gpt-5.5")));
+		const result = await searchCodex(makeSearchParams("blank codex model", mockCodexFetch("gpt-5.6-luna")));
 
 		expect(capturedRequest).not.toBeNull();
-		expect(capturedRequest?.body?.model).toBe("gpt-5.5");
-		expect(result.model).toBe("gpt-5.5");
+		expect(capturedRequest?.body?.model).toBe("gpt-5.6-luna");
+		expect(result.model).toBe("gpt-5.6-luna");
 	});
 
 	it("retries the next bundled default when Codex rejects a model for ChatGPT accounts", async () => {
@@ -257,20 +257,20 @@ describe("searchCodex model selection", () => {
 
 			const requestedModel = capturedRequest.body?.model;
 			if (calls === 1) {
-				expect(requestedModel).toBe("gpt-5.5");
+				expect(requestedModel).toBe("gpt-5.6-luna");
 				return Promise.resolve(
 					new Response(
 						JSON.stringify({
-							detail: "The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account.",
+							detail: "The 'gpt-5.6-luna' model is not supported when using Codex with a ChatGPT account.",
 						}),
 						{ status: 400, headers: { "Content-Type": "application/json" } },
 					),
 				);
 			}
 
-			expect(requestedModel).toBe("gpt-5.4");
+			expect(requestedModel).toBe("gpt-5.6-terra");
 			return Promise.resolve(
-				new Response(makeSseResponse("gpt-5.4"), {
+				new Response(makeSseResponse("gpt-5.6-terra"), {
 					status: 200,
 					headers: { "Content-Type": "text/event-stream" },
 				}),
@@ -280,17 +280,53 @@ describe("searchCodex model selection", () => {
 		const result = await searchCodex(makeSearchParams("retry unsupported default", fetchMock));
 
 		expect(calls).toBe(2);
-		expect(result.model).toBe("gpt-5.4");
+		expect(result.model).toBe("gpt-5.6-terra");
 		expect(result.sources).toEqual([{ title: "Example Article", url: "https://example.com/article" }]);
 	});
 
-	it("uses PI_CODEX_WEB_SEARCH_MODEL when provided", async () => {
-		process.env.PI_CODEX_WEB_SEARCH_MODEL = "gpt-5.4-mini";
-		const result = await searchCodex(makeSearchParams("overridden codex model", mockCodexFetch("gpt-5.4-mini")));
+	it("encodes explicit gpt-5.6-sol as a Responses-Lite request", async () => {
+		process.env.PI_CODEX_WEB_SEARCH_MODEL = "gpt-5.6-sol";
+		const result = await searchCodex(makeSearchParams("Sol web search", mockCodexFetch("gpt-5.6-sol")));
 
 		expect(capturedRequest).not.toBeNull();
-		expect(capturedRequest?.body?.model).toBe("gpt-5.4-mini");
-		expect(result.model).toBe("gpt-5.4-mini");
+		const headers = new Headers(capturedRequest?.headers);
+		expect(headers.get("x-openai-internal-codex-responses-lite")).toBe("true");
+		expect(headers.get("session-id")).toBeTruthy();
+		expect(headers.get("thread-id")).toBeTruthy();
+		expect(headers.get("x-codex-window-id")).toBeTruthy();
+		expect(capturedRequest?.body).toEqual(
+			expect.objectContaining({
+				model: "gpt-5.6-sol",
+				tool_choice: { type: "web_search" },
+				reasoning: { context: "all_turns" },
+				parallel_tool_calls: false,
+				input: [
+					{
+						type: "additional_tools",
+						role: "developer",
+						tools: [{ type: "web_search", search_context_size: "high" }],
+					},
+					{
+						type: "message",
+						role: "developer",
+						content: [{ type: "input_text", text: "Codex test system prompt" }],
+					},
+					{
+						type: "message",
+						role: "user",
+						content: [{ type: "input_text", text: "Sol web search" }],
+					},
+				],
+				client_metadata: expect.objectContaining({
+					session_id: headers.get("session-id"),
+					thread_id: headers.get("thread-id"),
+					"x-codex-window-id": headers.get("x-codex-window-id"),
+				}),
+			}),
+		);
+		expect(capturedRequest?.body?.tools).toBeUndefined();
+		expect(capturedRequest?.body?.instructions).toBeUndefined();
+		expect(result.model).toBe("gpt-5.6-sol");
 	});
 
 	it("does not retry default candidates when PI_CODEX_WEB_SEARCH_MODEL is explicitly unsupported", async () => {

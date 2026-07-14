@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Codex web search requests for GPT-5.6 Responses-Lite models, including `gpt-5.6-sol`. ([#5286](https://github.com/can1357/oh-my-pi/issues/5286))
+
 ## [16.5.0] - 2026-07-13
 
 ### Breaking Changes
