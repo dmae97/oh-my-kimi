@@ -1484,6 +1484,55 @@ describe("AuthStorage codex oauth ranking", () => {
 		expect(apiKey).toBe("api-acct-low-usage");
 	});
 
+	test("keeps an eligible Codex session credential when usage headroom makes its sibling rank better", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+
+		const modelId = "gpt-5.6-sol";
+		const sessionId = "codex-sticky-usage-rerank";
+		const accounts = [
+			{ id: "acct-sticky-usage-a", email: "sticky-usage-a@example.com" },
+			{ id: "acct-sticky-usage-b", email: "sticky-usage-b@example.com" },
+		];
+		const reportByAccount: Record<string, UsageReport> = {};
+		const setUsedFraction = (report: UsageReport, usedFraction: number): void => {
+			const used = usedFraction * 100;
+			for (const limit of report.limits) {
+				limit.amount.used = used;
+				limit.amount.remaining = 100 - used;
+				limit.amount.usedFraction = usedFraction;
+				limit.amount.remainingFraction = 1 - usedFraction;
+				limit.status = usedFraction >= 1 ? "exhausted" : usedFraction >= 0.9 ? "warning" : "ok";
+			}
+		};
+
+		await authStorage.set(
+			"openai-codex",
+			accounts.map(account => ({ type: "oauth", ...createCredential(account.id, account.email) })),
+		);
+		for (const account of accounts) {
+			const report = createCodexUsageReport({
+				accountId: account.id,
+				primary: { usedFraction: 0.25, resetInMs: 30 * 60 * 1000 },
+				secondary: { usedFraction: 0.25, resetInMs: 6 * 24 * 60 * 60 * 1000 },
+				metadata: { planType: "business", email: account.email },
+			});
+			reportByAccount[account.id] = report;
+			usageByAccount.set(account.id, report);
+		}
+
+		const firstApiKey = await authStorage.getApiKey("openai-codex", sessionId, { modelId });
+		if (!firstApiKey) throw new Error("expected initial Codex credential");
+		const stickyAccount = firstApiKey.replace(/^api-/, "");
+		const siblingAccount = stickyAccount === accounts[0]!.id ? accounts[1]!.id : accounts[0]!.id;
+		const stickyReport = reportByAccount[stickyAccount];
+		const siblingReport = reportByAccount[siblingAccount];
+		if (!stickyReport || !siblingReport) throw new Error("expected reports for both Codex accounts");
+
+		setUsedFraction(stickyReport, 0.85);
+		setUsedFraction(siblingReport, 0.01);
+		expect(await authStorage.getApiKey("openai-codex", sessionId, { modelId })).toBe(firstApiKey);
+	});
+
 	test("reranks a Terra session on a Go account when it switches to Sol", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 

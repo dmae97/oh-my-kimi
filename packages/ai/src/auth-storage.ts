@@ -3775,10 +3775,10 @@ export class AuthStorage {
 			sessionPreferredCredential !== undefined &&
 			(sessionPreferredCredential.refresh.trim().length > 0 ||
 				Date.now() + OAUTH_REFRESH_SKEW_MS < sessionPreferredCredential.expires);
-		// Skip ranking only when the session already has a working preferred credential — re-ranking
-		// mid-session causes account switches that cold-start the server-side prompt cache. New sessions
-		// (no preference) and sessions whose preferred is blocked still rank, so we pick the account
-		// with the most headroom proactively and fall back intelligently when rate-limited.
+		// Skip ranking only when the session already has a working preferred credential.
+		// Plan-requiring Codex models still rank to verify the sticky account's tier,
+		// but an eligible sticky account is promoted back below so usage-headroom
+		// changes cannot silently move an active session to a sibling account.
 		const sessionPreferredIsAvailable =
 			sessionPreferredIndex !== undefined &&
 			sessionPreferredCanRefreshOrUse &&
@@ -3803,17 +3803,6 @@ export class AuthStorage {
 					.filter((selection): selection is { credential: OAuthCredential; index: number } => Boolean(selection))
 					.map(selection => ({ selection, usage: null, usageChecked: false }));
 
-		if (sessionPreferredIndex !== undefined && !hasPlanRequirement) {
-			const sessionPreferredCandidate = candidates.findIndex(
-				candidate =>
-					!this.#isCredentialBlocked(provider, providerKey, candidate.selection.index, blockScope) &&
-					candidate.selection.index === sessionPreferredIndex,
-			);
-			if (sessionPreferredCandidate > 0) {
-				const [preferred] = candidates.splice(sessionPreferredCandidate, 1);
-				candidates.unshift(preferred);
-			}
-		}
 		// Step (b) of the auth-retry policy: when `forceRefresh` is set, re-mint
 		// the session-preferred credential (or the first candidate when no
 		// session preference exists yet) even if its cached token still looks
@@ -3889,6 +3878,24 @@ export class AuthStorage {
 		const enforcePlanRequirement =
 			hasPlanRequirement &&
 			candidates.some(candidate => getOpenAICodexPlanEligibility(candidate.usage, planRequirement) === true);
+
+		if (sessionPreferredIndex !== undefined) {
+			const sessionPreferredCandidate = candidates.findIndex(
+				candidate =>
+					!this.#isCredentialBlocked(provider, providerKey, candidate.selection.index, blockScope) &&
+					candidate.selection.index === sessionPreferredIndex,
+			);
+			if (sessionPreferredCandidate > 0) {
+				const preferred = candidates[sessionPreferredCandidate]!;
+				const planEligibility = hasPlanRequirement
+					? getOpenAICodexPlanEligibility(preferred.usage, planRequirement)
+					: true;
+				if (planEligibility === true || !enforcePlanRequirement) {
+					candidates.splice(sessionPreferredCandidate, 1);
+					candidates.unshift(preferred);
+				}
+			}
+		}
 
 		const fallback = candidates[0];
 

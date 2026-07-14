@@ -6,6 +6,7 @@
 
 - Healed GLM in-band tool calls whose `<arg_value>` closer is missing or mistyped as `</arg_key>`; the scanner now ends the value at the next-pair signature instead of swallowing the remaining arguments into one field.
 - Healed the same `arg_key`/`arg_value` spill when it arrives through native tool calling (provider parses the in-band syntax server-side): as a last resort after validation and coercion fail, contaminated string arguments are split at the spill boundary and the swallowed pairs restored.
+- Fixed plan-gated OpenAI Codex models (Sol/Luna) silently re-routing an active session to a sibling OAuth account when usage headroom changed: `AuthStorage.#resolveOAuthSelection` now promotes the session-preferred credential back to the front of the ranked candidates whenever it is still usable, unblocked, and plan-eligible, so a session stays sticky unless the sticky account is blocked, exhausted, or ineligible for the current model ([#5203](https://github.com/can1357/oh-my-pi/issues/5203)).
 
 ## [16.4.3] - 2026-07-11
 
