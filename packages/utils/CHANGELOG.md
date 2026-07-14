@@ -7,6 +7,9 @@
 ### Added
 
 - Added `AsyncDrain`, the deferred write-batching helper previously private to the coding-agent's prompt-history storage; now shared with model-perf recording.
+### Added
+
+- Added a terminal stderr guard (`suppressTerminalStderr`/`restoreTerminalStderr`): dup2-redirects fd 2 to the omp log file while a TUI owns the terminal so macOS runtime diagnostics cannot paint into the viewport. The postmortem fatal handlers restore fd 2 before printing so crash reports stay visible.
 
 ## [16.4.2] - 2026-07-10
 

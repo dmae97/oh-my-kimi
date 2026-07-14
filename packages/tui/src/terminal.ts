@@ -1,6 +1,14 @@
 import { dlopen, FFIType, ptr } from "bun:ffi";
 import * as fs from "node:fs";
-import { $env, isBunTestRuntime, isTerminalHeadless, logger, postmortem } from "@oh-my-pi/pi-utils";
+import {
+	$env,
+	isBunTestRuntime,
+	isTerminalHeadless,
+	logger,
+	postmortem,
+	restoreTerminalStderr,
+	suppressTerminalStderr,
+} from "@oh-my-pi/pi-utils";
 import { setKittyProtocolActive } from "./keys";
 import { StdinBuffer } from "./stdin-buffer";
 import {
@@ -275,6 +283,9 @@ function createConsoleCodepageGuard(): (() => void) | null {
  */
 export function emergencyTerminalRestore(): void {
 	try {
+		// Crash paths must surface subsequent stderr (fatal reports) on the
+		// real terminal; no-op when the stderr guard is inactive.
+		restoreTerminalStderr();
 		const terminal = activeTerminal;
 		if (terminal) {
 			terminal.stop();
@@ -550,6 +561,11 @@ export class ProcessTerminal implements Terminal {
 		// Register for emergency cleanup
 		activeTerminal = this;
 		terminalEverStarted = true;
+
+		// Keep unmanaged fd-2 writes (macOS libmalloc/framework diagnostics) off
+		// the viewport while we own the terminal; released in stop(). See
+		// stderr-guard in pi-utils (mirrors openai/codex#24459).
+		suppressTerminalStderr();
 
 		// Save previous state and enable raw mode
 		this.#wasRaw = process.stdin.isRaw || false;
@@ -1268,6 +1284,11 @@ export class ProcessTerminal implements Terminal {
 		if (activeTerminal === this) {
 			activeTerminal = null;
 		}
+
+		// Release terminal ownership of fd 2 first so external programs,
+		// suspend, and shutdown see the real stderr even if a later teardown
+		// step throws.
+		restoreTerminalStderr();
 
 		if (this.#clearProgressTimer()) {
 			this.#safeWrite(TERMINAL_PROGRESS_CLEAR_SEQUENCE);
