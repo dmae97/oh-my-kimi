@@ -64,6 +64,7 @@
 
 - Fixed handoff generation retrying with `toolChoice: "auto"` when custom OpenAI-compatible providers reject `toolChoice: "none"` with an auto-only 400. ([#4715](https://github.com/can1357/oh-my-pi/issues/4715))
 - Fixed generic remote compaction against OpenAI-compatible `/chat/completions` endpoints (for example llama.cpp `openai-completions`) by sending chat messages instead of the custom `{ systemPrompt, prompt }` summarizer payload. ([#4630](https://github.com/can1357/oh-my-pi/issues/4630))
+- Fixed a false "Skipped due to queued user message" tool result that discarded work an interruptible tool had already completed: steering while a tool was in flight aborted its signal, and a tool that then finished with a genuine error result (e.g. a command exiting non-zero) had its real output clobbered by the skip placeholder. Completed tool executions now keep their real result; only tools genuinely cut off before returning are reported as skipped ([#4752](https://github.com/can1357/oh-my-pi/issues/4752)).
 
 ## [16.3.7] - 2026-07-05
 
