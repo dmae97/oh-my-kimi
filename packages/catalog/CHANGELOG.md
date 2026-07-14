@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Extended the reasoning `streamIdleTimeoutMs` floor (300s) to native Kimi K2.7 Code (`kimi-k2.7-code` / `kimi-k2.7-code-highspeed`), which previously fell through to the 120s default and aborted on long reasoning turns ([#4836](https://github.com/can1357/oh-my-pi/issues/4836)).
+
 ## [16.3.11] - 2026-07-06
 
 ### Added

@@ -37,8 +37,8 @@ const GLM_CODING_PLAN_MODEL_PATTERN = /(^|\/)glm-5(?:[.-]|$)/i;
 const GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS = 600_000;
 /** Direct DeepSeek reasoning models stall between thinking and answer phases. */
 const DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS = 300_000;
-/** Kimi K2.6 can spend several minutes reasoning before the first visible token. */
-const KIMI_K26_REASONING_STREAM_IDLE_TIMEOUT_MS = 300_000;
+/** Kimi K2.6 and native K2.7 Code can spend several minutes reasoning before the first visible token. */
+const KIMI_REASONING_STREAM_IDLE_TIMEOUT_MS = 300_000;
 /**
  * Native Kimi K2.7 Code requires `thinking.type: "enabled"` and rejects
  * disabled thinking. Match the public id, its Fast variant, and the
@@ -383,8 +383,8 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 				? ALIBABA_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS
 				: isXiaomiMimo
 					? XIAOMI_MIMO_STREAM_IDLE_TIMEOUT_MS
-					: spec.reasoning && isKimiK26ModelId(spec.id)
-						? KIMI_K26_REASONING_STREAM_IDLE_TIMEOUT_MS
+					: spec.reasoning && (isKimiK26ModelId(spec.id) || matchesKimiK27CodeFamily(spec))
+						? KIMI_REASONING_STREAM_IDLE_TIMEOUT_MS
 						: spec.reasoning && isDirectDeepseekApi
 							? DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS
 							: isLocalOpenAICompatBackend
