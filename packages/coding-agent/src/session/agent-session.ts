@@ -14037,19 +14037,23 @@ export class AgentSession {
 	}
 
 	/**
-	 * Retry an empty, reason-less provider abort: a turn that ended `aborted`
-	 * with no content and the generic sentinel (bare `abort()`), but only while
-	 * the session is neither aborting nor tearing down. A user/lifecycle abort
-	 * (`#abortInProgress`), a dispose-driven abort (`#isDisposed`), or a
-	 * session-induced streaming-edit guard abort (`#streamingEditAbortTriggered` —
-	 * auto-generated-file guard or failed-patch preview) is deliberate and MUST
-	 * settle the turn instead: routing it through retry would orphan
-	 * `#retryPromise` on a continuation the guard skips (hanging the in-flight
-	 * `prompt()`) or silently undo the guard's intended abort.
+	 * Retry an empty, reason-less provider abort: a turn with no content that
+	 * carries the generic sentinel (bare `abort()`), whether the provider
+	 * finalized it as `stopReason: "aborted"` or leaked it as `stopReason:
+	 * "error"` (a stalled/dropped stream reported as an error rather than an
+	 * abort — issue #5375). Only fires while the session is neither aborting nor
+	 * tearing down. A user/lifecycle abort (`#abortInProgress`), a dispose-driven
+	 * abort (`#isDisposed`), or a session-induced streaming-edit guard abort
+	 * (`#streamingEditAbortTriggered` — auto-generated-file guard or failed-patch
+	 * preview) is deliberate and MUST settle the turn instead: routing it through
+	 * retry would orphan `#retryPromise` on a continuation the guard skips
+	 * (hanging the in-flight `prompt()`) or silently undo the guard's intended
+	 * abort. Deliberate user interrupts (`UserInterrupt`) and silent aborts carry
+	 * their own marker, not the generic sentinel, so they never match here.
 	 */
 	#isRetryableReasonlessAbort(message: AssistantMessage): boolean {
 		if (
-			message.stopReason !== "aborted" ||
+			(message.stopReason !== "aborted" && message.stopReason !== "error") ||
 			message.content.length !== 0 ||
 			this.#abortInProgress ||
 			this.#isDisposed ||
@@ -14059,7 +14063,7 @@ export class AgentSession {
 		}
 
 		const id = this.#classifyRetryMessage(message);
-		if (AIError.is(id, AIError.Flag.Abort)) return true;
+		if (message.stopReason === "aborted" && AIError.is(id, AIError.Flag.Abort)) return true;
 		if (!this.#isGenericAbortSentinel(message)) return false;
 
 		message.errorId = AIError.create(AIError.Flag.Abort);
