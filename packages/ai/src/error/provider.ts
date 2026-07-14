@@ -36,8 +36,8 @@ export class ProviderResponseError extends Error {
 		this.name = "ProviderResponseError";
 		this.provider = options.provider;
 		this.kind = options.kind ?? "output";
-		// A safety filter block is a terminal provider finish, not a transient fault.
-		if (this.kind === "content-blocked") attach(this, create(Flag.ProviderFinishError));
+		// A safety filter block is terminal and intentionally non-retryable.
+		if (this.kind === "content-blocked") attach(this, create(Flag.ContentBlocked));
 		// An incomplete stream (connection dropped / truncated before any terminal
 		// event) or an empty body never produced any content — the request didn't
 		// complete, so it is safe to retry and eligible for model fallback. The

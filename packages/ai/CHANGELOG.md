@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed OpenAI Responses `content_filter` terminal events being auto-retried as provider finish errors; content-filtered turns now remain hard failures without the same-model retry loop.
+
 ## [16.5.0] - 2026-07-13
 
 ### Added
