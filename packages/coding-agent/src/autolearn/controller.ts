@@ -132,7 +132,7 @@ export class AutoLearnController {
 					display: false,
 					attribution: "user",
 				},
-				{ deliverAs: "nextTurn", triggerTurn: true },
+				{ deliverAs: "nextTurn", triggerTurn: true, acceptTerminalEmptyStop: true },
 			)
 			.then(started => {
 				if (!started) this.#suppressNext = false;
