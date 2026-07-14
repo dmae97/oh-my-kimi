@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed browser tabs hanging indefinitely at `Closing <tab>` when a worker, CDP target, browser process, or cmux surface stalls during teardown; close deadlines now release the operation with backend, tab, and pending-resource diagnostics. ([#5259](https://github.com/can1357/oh-my-pi/issues/5259))
+
 ## [16.4.6] - 2026-07-12
 
 ### Added

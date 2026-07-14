@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger, withTimeout } from "@oh-my-pi/pi-utils";
 import type { Subprocess } from "bun";
 import type { Browser, CDPSession } from "puppeteer-core";
 import { ToolAbortError, ToolError } from "../tool-errors";
@@ -39,6 +39,15 @@ export interface CmuxBrowserHandle extends BrowserHandleCommon {
 }
 
 export type BrowserHandle = PuppeteerBrowserHandle | CmuxBrowserHandle;
+
+/** Controls bounded browser-handle teardown and identifies the owning resource in timeout diagnostics. */
+export interface ReleaseBrowserOptions {
+	kill: boolean;
+	timeoutMs?: number;
+	resource?: string;
+}
+
+const DEFAULT_BROWSER_CLOSE_TIMEOUT_MS = 5_000;
 
 const browsers = new Map<string, BrowserHandle>();
 
@@ -214,7 +223,7 @@ export function holdBrowser(handle: BrowserHandle): void {
 	handle.refCount++;
 }
 
-export async function releaseBrowser(handle: BrowserHandle, opts: { kill: boolean }): Promise<void> {
+export async function releaseBrowser(handle: BrowserHandle, opts: ReleaseBrowserOptions): Promise<void> {
 	handle.refCount = Math.max(0, handle.refCount - 1);
 	if (handle.refCount === 0) {
 		// Only evict if the registry still points at THIS handle. After a disconnect,
@@ -225,17 +234,32 @@ export async function releaseBrowser(handle: BrowserHandle, opts: { kill: boolea
 	}
 }
 
-async function disposeBrowserHandle(handle: BrowserHandle, opts: { kill: boolean }): Promise<void> {
+async function disposeBrowserHandle(handle: BrowserHandle, opts: ReleaseBrowserOptions): Promise<void> {
 	if ("client" in handle) {
 		handle.client.close();
 		return;
 	}
 	if (handle.kind.kind === "headless") {
 		if (handle.browser.connected) {
+			const timeoutMs = opts.timeoutMs ?? DEFAULT_BROWSER_CLOSE_TIMEOUT_MS;
+			const resource = opts.resource ?? handle.key;
+			const timeoutMessage = `Timed out after ${timeoutMs}ms closing headless browser for ${resource}; pending resource: Puppeteer Browser.close()`;
 			try {
-				await handle.browser.close();
+				await withTimeout(handle.browser.close(), timeoutMs, timeoutMessage);
 			} catch (err) {
-				logger.debug("Failed to close headless browser", { error: (err as Error).message });
+				if (err instanceof Error && err.message === timeoutMessage) {
+					const process = handle.browser.process();
+					try {
+						handle.browser.disconnect();
+					} catch {}
+					try {
+						process?.kill();
+					} catch {}
+					throw new ToolError(timeoutMessage);
+				}
+				logger.debug("Failed to close headless browser", {
+					error: err instanceof Error ? err.message : String(err),
+				});
 			}
 		}
 		return;
