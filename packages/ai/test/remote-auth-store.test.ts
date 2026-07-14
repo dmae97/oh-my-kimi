@@ -661,6 +661,59 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 		}
 	});
 
+	test("does not trust a lone org-less candidate from a mixed aggregate without its base identity", async () => {
+		const brokerClient = new AuthBrokerClient({ url: "http://127.0.0.1:9", token: "unused" });
+		const now = Date.now();
+		const orgReport: UsageReport = {
+			provider: "anthropic",
+			fetchedAt: now,
+			limits: [],
+			metadata: { email: "alice@example.com", accountId: "account-alice", orgId: "org-team" },
+		};
+		const legacyReport: UsageReport = {
+			provider: "anthropic",
+			fetchedAt: now,
+			limits: [],
+			metadata: { email: "carol@example.com", accountId: "account-carol" },
+		};
+		vi.spyOn(brokerClient, "fetchUsage").mockResolvedValue({
+			generatedAt: now,
+			reports: [orgReport, legacyReport],
+		});
+		const remoteStore = new RemoteAuthCredentialStore({
+			client: brokerClient,
+			streamSnapshots: false,
+			initialSnapshot: {
+				generation: 1,
+				generatedAt: now,
+				serverNowMs: now,
+				refresher: { enabled: false, intervalMs: 0, skewMs: 0, nextSweepInMs: Number.MAX_SAFE_INTEGER },
+				credentials: [],
+			},
+		});
+		const bobCredential = {
+			type: "oauth" as const,
+			access: "remote-access-bob",
+			refresh: REMOTE_REFRESH_SENTINEL,
+			expires: now + 120_000,
+			accountId: "account-bob",
+			email: "bob@example.com",
+		};
+		const bobOverlay: UsageReport = {
+			provider: "anthropic",
+			fetchedAt: now,
+			limits: [],
+			metadata: { email: "bob@example.com", accountId: "account-bob" },
+		};
+		try {
+			expect(await remoteStore.getUsageReport("anthropic", bobCredential)).toBeNull();
+			expect(remoteStore.ingestUsageReport("anthropic", bobCredential, bobOverlay)).toBe(true);
+			expect(await remoteStore.fetchUsageReports()).toHaveLength(3);
+		} finally {
+			remoteStore.close();
+		}
+	});
+
 	test("RemoteAuthCredentialStore reads snapshot blocks and applies upserts before broker acknowledgement", () => {
 		const futureBlock = Date.now() + 60_000;
 		const laterBlock = futureBlock + 60_000;

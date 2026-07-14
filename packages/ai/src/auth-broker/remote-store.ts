@@ -1045,7 +1045,7 @@ function matchUsageReport(reports: UsageReport[], provider: Provider, credential
 		report => !readMetadataString((report.metadata ?? {}) as Record<string, unknown>, "orgId"),
 	);
 	if (candidates.length === 0) return null;
-	if (candidates.length === 1) return candidates[0];
+	if (all.length === 1 && candidates.length === 1) return candidates[0];
 	for (const report of candidates) {
 		if (reportMatchesIdentity(report, accountId, email, projectId)) return report;
 	}
@@ -1094,7 +1094,7 @@ function findMatchingReportIndex(reports: UsageReport[], overlay: UsageReport): 
 		candidate => !readMetadataString((candidate.report.metadata ?? {}) as Record<string, unknown>, "orgId"),
 	);
 	if (candidates.length === 0) return -1;
-	if (candidates.length === 1) return candidates[0]!.index;
+	if (all.length === 1 && candidates.length === 1) return candidates[0]!.index;
 	for (const candidate of candidates) {
 		if (reportMatchesIdentity(candidate.report, accountId, email, projectId)) return candidate.index;
 	}
