@@ -350,6 +350,7 @@ import {
 import { findCompactMode } from "./compact-modes";
 import {
 	collectPendingToolCalls,
+	createInterruptedTurnAbortMessage,
 	SESSION_EXIT_CUSTOM_TYPE,
 	type SessionExitData,
 	summarizeToolArguments,
@@ -15521,7 +15522,7 @@ export class AgentSession {
 			this.#rekeyHindsightMemoryForCurrentSessionId();
 			this.#rekeyMnemopiMemoryForCurrentSessionId();
 
-			const sessionContext = this.buildDisplaySessionContext();
+			let sessionContext = this.buildDisplaySessionContext();
 			const didReloadConversationChange =
 				previousSessionContext !== undefined &&
 				this.#didSessionMessagesChange(previousSessionContext.messages, sessionContext.messages);
@@ -15576,6 +15577,20 @@ export class AgentSession {
 					} else {
 						this.agent.setModel(match);
 					}
+				}
+			}
+
+			const model = this.model;
+			if (model) {
+				const interruptedTurnAbort = createInterruptedTurnAbortMessage(this.sessionManager.getBranch(), {
+					api: model.api,
+					provider: model.provider,
+					model: model.id,
+				});
+				if (interruptedTurnAbort) {
+					this.sessionManager.appendMessage(interruptedTurnAbort);
+					sessionContext = this.buildDisplaySessionContext();
+					this.agent.replaceMessages(sessionContext.messages);
 				}
 			}
 

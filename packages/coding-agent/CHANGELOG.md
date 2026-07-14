@@ -190,6 +190,9 @@
 ### Fixed
 
 - Fixed `--continue <session-id>` falling back to an unrelated latest session when the requested session does not exist.
+### Fixed
+
+- Fixed resumed sessions retaining an unterminated turn after an abnormal process exit.
 
 ## [16.4.3] - 2026-07-11
 
