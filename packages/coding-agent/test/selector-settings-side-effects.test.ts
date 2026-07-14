@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { ResolvedRoleModel } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AUTO_THINKING } from "@oh-my-pi/pi-coding-agent/thinking";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 let settingsState: SettingsTestState | undefined;
@@ -55,6 +59,98 @@ describe("selector setting side effects", () => {
 
 		expect(invalidate).toHaveBeenCalledTimes(1);
 		expect(requestRender).toHaveBeenCalledTimes(1);
+	});
+
+	it("clears stale default role thinking when auto is selected", async () => {
+		const testTheme = await getThemeByName("dark");
+		if (!testTheme) throw new Error("Failed to load dark theme for model selector test");
+		setThemeInstance(testTheme);
+
+		const previousModel = getBundledModel("openai", "gpt-5.5");
+		const nextModel = getBundledModel("openai", "gpt-5.6");
+		if (!previousModel || !nextModel) throw new Error("Expected bundled OpenAI models for selector test");
+
+		const settings = Settings.isolated({
+			defaultThinkingLevel: ThinkingLevel.High,
+			modelRoles: { default: `${previousModel.provider}/${previousModel.id}:high` },
+		});
+		const setModel = vi.fn(async () => ({ switched: true }));
+		const autoApplied = Promise.withResolvers<void>();
+		const setThinkingLevel = vi.fn((level: ThinkingLevel | typeof AUTO_THINKING, persist: boolean) => {
+			if (level === AUTO_THINKING && persist) {
+				settings.set("defaultThinkingLevel", level);
+				autoApplied.resolve();
+			}
+		});
+		let captured: unknown;
+		const controller = new SelectorController({
+			ui: {
+				requestRender: vi.fn(),
+				setFocus: vi.fn(),
+				showOverlay: vi.fn((component: unknown) => {
+					captured = component;
+					return { hide: vi.fn() };
+				}),
+				terminal: { rows: 40 },
+			},
+			editorContainer: { clear: vi.fn(), addChild: vi.fn(), children: [] },
+			editor: {},
+			settings,
+			session: {
+				model: nextModel,
+				modelRegistry: {
+					getAll: () => [previousModel, nextModel],
+					getAvailable: () => [previousModel, nextModel],
+					getError: () => undefined,
+					refresh: async () => {},
+					refreshProvider: async () => {},
+					getDiscoverableProviders: () => [],
+					getProviderDiscoveryState: () => undefined,
+					authStorage: { hasAuth: () => false },
+				},
+				scopedModels: [{ model: nextModel }],
+				getContextUsage: () => undefined,
+				setModel,
+				setThinkingLevel,
+			},
+			statusLine: { invalidate: vi.fn() },
+			updateEditorBorderColor: vi.fn(),
+			keybindings: { getKeys: () => [] },
+			showStatus: vi.fn(),
+			showError: vi.fn(),
+		} as unknown as InteractiveModeContext);
+
+		controller.showModelSelector();
+		const hub = captured as
+			| { handleInput(data: string): void; render(width: number): string[]; dispose(): void }
+			| undefined;
+		if (!hub) throw new Error("Expected model hub overlay to be shown");
+		try {
+			hub.handleInput("\x1b[A"); // All models → Roles.
+			hub.handleInput("\n"); // Enter the role rows.
+			hub.handleInput("\n"); // Assign DEFAULT.
+			hub.handleInput("\n"); // Pick the scoped replacement model.
+
+			const levels = [ThinkingLevel.Inherit, ThinkingLevel.Off, AUTO_THINKING, ...getSupportedEfforts(nextModel)];
+			const highIndex = levels.indexOf(ThinkingLevel.High);
+			const autoIndex = levels.indexOf(AUTO_THINKING);
+			if (highIndex < autoIndex) throw new Error("Expected auto before high in the thinking strip");
+			for (let i = autoIndex; i < highIndex; i++) hub.handleInput("\x1b[D");
+			hub.handleInput("\n");
+			await autoApplied.promise;
+
+			expect(setModel).toHaveBeenLastCalledWith(
+				nextModel,
+				"default",
+				expect.objectContaining({
+					thinkingLevel: ThinkingLevel.Inherit,
+					persist: true,
+				}),
+			);
+			expect(setThinkingLevel).toHaveBeenLastCalledWith(AUTO_THINKING, true);
+		} finally {
+			hub.dispose();
+		}
 	});
 
 	it("replaces malformed default retry fallback chains from the model selector action", async () => {
