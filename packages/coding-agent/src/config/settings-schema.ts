@@ -3592,6 +3592,16 @@ export const SETTINGS_SCHEMA = {
 			description: "Enable the tts tool for on-device (Kokoro) or xAI Grok Voice speech-file synthesis",
 		},
 	},
+	"generate_image.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			group: "Available Tools",
+			label: "Generate Image",
+			description: "Enable the generate_image tool for text-to-image generation and editing",
+		},
+	},
 
 	"inspect_image.enabled": {
 		type: "boolean",
