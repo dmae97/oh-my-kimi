@@ -32,6 +32,7 @@
 
 ### Fixed
 
+- Fixed `/clear` autocomplete selecting `/autoresearch`; `/clear` now starts a new session as an alias for `/new` ([#5349](https://github.com/can1357/oh-my-pi/issues/5349))
 - Fixed `/tan` and `/fork` clones cold-missing the provider prompt cache: the per-turn supersede/useless-result prune rewrote the live context without persisting it, so file-based forks and resume rebuilt a divergent (un-pruned) prefix and re-wrote the entire cache
 - Fixed `/tan` pinning the clone's prompt-cache key to the parent's session id instead of the parent's effective cache key, dropping shard affinity when the parent was itself a fork or tan
 - Fixed inconsistent history rendering when toggling the display setting for compacted items
