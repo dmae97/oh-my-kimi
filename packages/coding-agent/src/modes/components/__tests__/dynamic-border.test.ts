@@ -20,7 +20,7 @@ describe("DynamicBorder", () => {
 		try {
 			const script = [
 				`import { DynamicBorder } from ${JSON.stringify(componentPath)};`,
-				"const custom = new DynamicBorder(str => `<${str}>`);",
+				'const custom = new DynamicBorder(str => "<" + str + ">");',
 				`if (JSON.stringify(custom.render(4)) !== JSON.stringify(["<────>"])) process.exit(1);`,
 				"const plain = new DynamicBorder();",
 				`if (JSON.stringify(plain.render(3)) !== JSON.stringify(["───"])) process.exit(2);`,

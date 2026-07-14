@@ -181,28 +181,6 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			expect(output).not.toContain("line 40");
 		});
 
-		it("uses explicit `selector` to read lines from a literal selector-shaped filename deterministically", async () => {
-			const literal = path.join(tmpDir, "test:1-2");
-			const longerLiteral = path.join(tmpDir, "test:1-2:5-6");
-			const lines = Array.from({ length: 40 }, (_, i) => `literal line ${i + 1}`).join("\n");
-			await Bun.write(literal, `${lines}\n`);
-			await Bun.write(longerLiteral, "wrong longer literal\n");
-
-			const session = createSession();
-			session.settings.set("read.summarize.enabled", false);
-			const tool = new ReadTool(session);
-			const result = await tool.execute("read-explicit-selector-literal", {
-				path: literal,
-				selector: "5-6",
-			});
-			const output = getText(result);
-
-			expect(output).toContain("literal line 5");
-			expect(output).toContain("literal line 6");
-			expect(output).not.toContain("literal line 30");
-			expect(output).not.toContain("wrong longer literal");
-		});
-
 		it("reads a literal file that looks like an archive selector (`data.zip:1-2`)", async () => {
 			// A real POSIX file whose name ends in a selector-shaped tail after an
 			// archive extension. The archive resolver would otherwise open `data.zip`
@@ -256,25 +234,6 @@ describe("literal colon filename resolution (issue #4618)", () => {
 
 			expect(output).toContain("needle");
 			expect(output).not.toMatch(/not found/i);
-		});
-
-		it("uses explicit `selector` to grep a literal selector-shaped filename deterministically", async () => {
-			const literal = path.join(tmpDir, "test:1-2");
-			const longerLiteral = path.join(tmpDir, "test:1-2:2-2");
-			await Bun.write(literal, "needle outside\nneedle inside\nneedle outside again\n");
-			await Bun.write(longerLiteral, "wrong longer literal needle\n");
-
-			const tool = new GrepTool(createSession());
-			const result = await tool.execute("grep-explicit-selector-literal", {
-				pattern: "needle",
-				path: literal,
-				selector: "2-2",
-			});
-			const output = getText(result);
-
-			expect(output).toContain("needle inside");
-			expect(output).not.toContain("needle outside again");
-			expect(output).not.toContain("wrong longer literal");
 		});
 
 		it("searches a shell-escaped literal file whose name ends in a selector-shaped suffix", async () => {

@@ -39,19 +39,17 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 	const callHelper = (name, ...args) => globalThis.__omp_helpers__[name](...args);
 	const hasScheme = path => typeof path === "string" && /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(path);
 	const shouldDelegateRead = path => hasScheme(path) && !path.toLowerCase().startsWith("local://");
-	const readLineSelector = options => {
+	const withReadLineSelector = (path, options) => {
 		const offset = typeof options.offset === "number" ? options.offset : 1;
 		const limit = typeof options.limit === "number" ? options.limit : undefined;
-		if (offset <= 1 && limit === undefined) return undefined;
+		if (offset <= 1 && limit === undefined) return path;
 		if (limit !== undefined && limit <= 0) return null;
 		const start = Math.max(1, offset);
-		if (limit === undefined) return `${start}-`;
-		return `${start}-${start + limit - 1}`;
+		if (limit === undefined) return `${path}:${start}-`;
+		return `${path}:${start}-${start + limit - 1}`;
 	};
-	const readToolText = async (path, selector) => {
-		const args = { path };
-		if (selector !== undefined) args.selector = selector;
-		const res = await globalThis.__omp_call_tool__("read", args);
+	const readToolText = async path => {
+		const res = await globalThis.__omp_call_tool__("read", { path });
 		return res && typeof res === "object" && "text" in res ? res.text : res;
 	};
 
@@ -59,8 +57,8 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 	const read = async (path, opts, ...rest) => {
 		const options = optionsArg("read", opts, rest, ["offset", "limit"], "{ offset, limit }");
 		if (shouldDelegateRead(path)) {
-			const selector = readLineSelector(options);
-			return selector === null ? "" : readToolText(path, selector);
+			const toolPath = withReadLineSelector(path, options);
+			return toolPath === null ? "" : readToolText(toolPath);
 		}
 		return callHelper("read", path, options);
 	};

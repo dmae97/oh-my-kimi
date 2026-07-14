@@ -72,11 +72,8 @@ if "__omp_prelude_loaded__" not in globals():
             return f"{start}-"
         return f"{start}-{start + limit - 1}"
 
-    def _read_tool_text(path: str, selector: str | None) -> str:
-        args = {"path": path}
-        if selector is not None:
-            args["selector"] = selector
-        result = _bridge_call("read", args)
+    def _read_tool_text(path: str) -> str:
+        result = _bridge_call("read", {"path": path})
         if isinstance(result, dict) and "text" in result:
             return result["text"]
         return result
@@ -122,7 +119,9 @@ if "__omp_prelude_loaded__" not in globals():
         if _should_delegate_read(path):
             if limit is not None and limit <= 0:
                 return ""
-            return _read_tool_text(path, _read_line_selector(offset, limit))
+            selector = _read_line_selector(offset, limit)
+            tool_path = path if selector is None else f"{path}:{selector}"
+            return _read_tool_text(tool_path)
         p = _resolve_omp_path(path)
         data = p.read_text(encoding="utf-8")
         lines = data.splitlines(keepends=True)

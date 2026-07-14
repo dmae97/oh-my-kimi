@@ -107,7 +107,7 @@ describe("eval js agent() handle", () => {
 });
 
 describe("eval js read() URI delegation", () => {
-	it("passes line selectors separately from opaque MCP resource paths", async () => {
+	it("appends line selectors to delegated URI paths", async () => {
 		const calls: Array<{ name: string; args: unknown }> = [];
 		const sandbox = loadPrelude(async (name, args) => {
 			calls.push({ name, args });
@@ -120,7 +120,7 @@ describe("eval js read() URI delegation", () => {
 		expect(calls).toEqual([
 			{
 				name: "read",
-				args: { path: "mcp://server/resource", selector: "10-14" },
+				args: { path: "mcp://server/resource:10-14" },
 			},
 		]);
 	});

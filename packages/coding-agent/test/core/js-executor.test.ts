@@ -339,8 +339,8 @@ describe("executeJs", () => {
 
 	it("delegates URI reads through the read tool with positional slicing", async () => {
 		const execute = vi.fn(async (_toolCallId: string, args: unknown): Promise<AgentToolResult> => {
-			const record = args as { path: string; selector?: string };
-			return { content: [{ type: "text", text: record.selector === "1-1400" ? "wide" : "limited" }] };
+			const record = args as { path: string };
+			return { content: [{ type: "text", text: record.path.endsWith(":1-1400") ? "wide" : "limited" }] };
 		});
 		const toolSession: ToolSession = {
 			...session,
@@ -366,13 +366,13 @@ describe("executeJs", () => {
 		expect(execute).toHaveBeenNthCalledWith(
 			1,
 			expect.stringMatching(/^js-read-/),
-			{ path: "artifact://15:raw", selector: "1-1400", [INTENT_FIELD]: "js prelude" },
+			{ path: "artifact://15:raw:1-1400", [INTENT_FIELD]: "js prelude" },
 			expect.any(AbortSignal),
 		);
 		expect(execute).toHaveBeenNthCalledWith(
 			2,
 			expect.stringMatching(/^js-read-/),
-			{ path: "artifact://15:raw", selector: "1-2", [INTENT_FIELD]: "js prelude" },
+			{ path: "artifact://15:raw:1-2", [INTENT_FIELD]: "js prelude" },
 			expect.any(AbortSignal),
 		);
 	});

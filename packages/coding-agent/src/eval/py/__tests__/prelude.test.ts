@@ -41,7 +41,7 @@ describe("python prelude", () => {
 		expect(signature).toContain("limit");
 	});
 
-	it("passes delegated URI selectors separately from opaque resource paths", async () => {
+	it("appends line selectors to delegated URI paths", async () => {
 		const requests: unknown[] = [];
 		const server = Bun.serve({
 			hostname: "127.0.0.1",
@@ -75,13 +75,13 @@ describe("python prelude", () => {
 					session: "test-session",
 					run: null,
 					name: "read",
-					args: { path: "artifact://21", selector: "3-4" },
+					args: { path: "artifact://21:3-4" },
 				},
 				{
 					session: "test-session",
 					run: null,
 					name: "read",
-					args: { path: "mcp://server/resource", selector: "10-14" },
+					args: { path: "mcp://server/resource:10-14" },
 				},
 			]);
 		} finally {

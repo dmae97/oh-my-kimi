@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed the separate `selector` parameters from `read` and `grep`; line ranges and read modes must now be appended to `path`.
+
 ### Added
 
 - Added a `generate_image.enabled` setting (Settings › Tools › Generate Image) to allow toggling the image generation tool.
