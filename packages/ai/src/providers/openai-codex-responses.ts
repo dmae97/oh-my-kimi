@@ -3748,27 +3748,38 @@ async function openCodexSseEventStream(
 			sentModelsEtagHeader: headers.has(X_MODELS_ETAG_HEADER),
 		});
 	// `wrapCodexSseStream` arms the iterator-level idle watchdog only after this
-	// fetch resolves. A pre-response timer still bounds time-to-first-byte (a
-	// proxy that accepts the POST but never sends headers would otherwise hang
-	// forever, since `timeout: false` disables Bun's native ceiling — issue
-	// #2422). It MUST be cleared the instant headers arrive: an absolute
-	// `AbortSignal.timeout` would keep aborting the actively-streaming body.
-	const watchdog = armPreResponseTimeout(signal, firstEventTimeoutMs);
+	// fetch resolves. Each transport attempt needs its own pre-response timer:
+	// the retry loop's base signal remains reserved for caller cancellation, so
+	// an internal timeout stays retryable while an explicit abort fails fast.
+	let clearPreResponseTimeout: (() => void) | undefined;
+	const fetchAttempt: FetchImpl = async (input, init) => {
+		try {
+			return await (fetchOverride ?? fetch)(input, init);
+		} finally {
+			clearPreResponseTimeout?.();
+			clearPreResponseTimeout = undefined;
+		}
+	};
 	let response: Response;
 	try {
 		response = await fetchWithRetry(url, {
 			method: "POST",
 			headers,
 			body: JSON.stringify(body),
-			signal: watchdog.signal,
+			signal,
+			prepareInit: () => {
+				const watchdog = armPreResponseTimeout(signal, firstEventTimeoutMs);
+				clearPreResponseTimeout = watchdog.clear;
+				return { signal: watchdog.signal };
+			},
 			maxAttempts: CODEX_MAX_RETRIES + 1,
 			defaultDelayMs: attempt => CODEX_RETRY_DELAY_MS * (attempt + 1),
 			maxDelayMs: CODEX_RATE_LIMIT_BUDGET_MS,
-			fetch: fetchOverride,
+			fetch: fetchAttempt,
 			timeout: false,
 		});
 	} finally {
-		watchdog.clear();
+		clearPreResponseTimeout?.();
 	}
 	CODEX_DEBUG &&
 		logger.debug("[codex] codex response", {

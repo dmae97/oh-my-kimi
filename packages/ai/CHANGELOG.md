@@ -49,6 +49,8 @@
 ### Removed
 
 - Removed automatic /interactions chaining for follow-up turns in Google provider calls, along with the useInteractionsApi, storeInteraction, and previousInteractionId stream options.
+- Fixed empty provider responses (e.g. "Cloud Code Assist API returned an empty response") being classified as non-retryable: `ProviderResponseError` with kind `empty-body` now carries the transient flag, so session retry and configured model-fallback chains engage instead of hard-failing the turn
+- Fixed OpenAI Codex pre-response watchdog timeouts bypassing transport and session retries by giving each request attempt an independent timeout signal while preserving caller aborts as non-retryable ([#5329](https://github.com/can1357/oh-my-pi/issues/5329))
 
 ## [16.4.6] - 2026-07-12
 

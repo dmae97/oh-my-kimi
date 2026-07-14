@@ -98,12 +98,12 @@ export function getOpenAIStreamFirstEventTimeoutMs(
  * pre-response request (issue #2422 regression: large `write` tool-call streams
  * died at the budget with `TimeoutError: The operation timed out.` despite
  * deltas actively flowing). This arms a `clearTimeout`-able timer instead;
- * callers MUST `clear()` as soon as `fetchWithRetry` resolves (headers in) so
- * the body stream is left to the iterator-level idle watchdog. The timer aborts
- * with a `TimeoutError` matching `AbortSignal.timeout`, so a genuine pre-response
- * stall behaves exactly as the prior code did — `fetchWithRetry` normalizes the
- * abort to "Request was aborted" either way (only a post-headers abort ever
- * surfaced the raw `"The operation timed out."`, which clearing now prevents).
+ * callers MUST `clear()` as soon as the guarded transport attempt settles so
+ * the body stream is left to the iterator-level idle watchdog.
+ *
+ * Retrying callers MUST arm a fresh guard for each transport attempt and keep
+ * the retry loop's base signal reserved for caller cancellation. Reusing the
+ * guard as the loop signal makes its timeout indistinguishable from cancellation.
  *
  * Returns the caller signal unchanged (and a no-op `clear`) when no positive
  * timeout is configured.

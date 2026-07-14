@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { scheduler } from "node:timers/promises";
 import { streamSimple } from "@oh-my-pi/pi-ai";
 import {
 	getOpenAICodexTransportDetails,
@@ -41,6 +42,7 @@ afterEach(() => {
 	global.WebSocket = originalWebSocket;
 	setAgentDir(originalAgentDir);
 	restoreEnv("PI_CODEX_WEBSOCKET_V2", originalCodexWebSocketV2);
+	vi.useRealTimers();
 	vi.restoreAllMocks();
 });
 
@@ -1856,6 +1858,93 @@ describe("openai-codex streaming", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 		expect(result.stopReason).toBe("stop");
 		expect(result.content.find(block => block.type === "text")?.text).toBe("Hello after retry");
+	});
+
+	it("retries a pre-response watchdog timeout with a fresh attempt signal", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		vi.useFakeTimers();
+		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+		const { promise: firstAttemptStarted, resolve: markFirstAttemptStarted } = Promise.withResolvers<void>();
+		const signals: AbortSignal[] = [];
+		let requestCount = 0;
+		const fetchMock: FetchImpl = async (input, init) => {
+			requestCount += 1;
+			const requestSignal = getRequestSignal(input, init);
+			if (!requestSignal) throw new Error("expected Codex request signal");
+			signals.push(requestSignal);
+			if (requestCount === 1) {
+				const { promise, reject } = Promise.withResolvers<Response>();
+				if (requestSignal.aborted) {
+					reject(requestSignal.reason);
+				} else {
+					requestSignal.addEventListener("abort", () => reject(requestSignal.reason), { once: true });
+				}
+				markFirstAttemptStarted();
+				return promise;
+			}
+			return new Response(createStatefulCodexSse("Recovered after watchdog timeout", "resp_watchdog_retry"), {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		};
+		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
+
+		const resultPromise = streamOpenAICodexResponses(model, createCodexTestContext(), {
+			apiKey: token,
+			fetch: fetchMock,
+			streamFirstEventTimeoutMs: 10,
+		}).result();
+		await firstAttemptStarted;
+		vi.advanceTimersByTime(10);
+		const result = await resultPromise;
+
+		expect(requestCount).toBe(2);
+		expect(signals[0]).not.toBe(signals[1]);
+		expect(signals[0]?.aborted).toBe(true);
+		expect(signals[0]?.reason).toBeInstanceOf(DOMException);
+		expect(signals[0]?.reason).toHaveProperty("name", "TimeoutError");
+		expect(signals[1]?.aborted).toBe(false);
+		expect(result.stopReason).toBe("stop");
+		expect(result.content.find(block => block.type === "text")?.text).toBe("Recovered after watchdog timeout");
+	});
+
+	it("does not retry a caller abort before response headers", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const controller = new AbortController();
+		const { promise: requestStarted, resolve: markRequestStarted } = Promise.withResolvers<void>();
+		let requestCount = 0;
+		const fetchMock: FetchImpl = async (input, init) => {
+			requestCount += 1;
+			const requestSignal = getRequestSignal(input, init);
+			if (!requestSignal) throw new Error("expected Codex request signal");
+			const { promise, reject } = Promise.withResolvers<Response>();
+			if (requestSignal.aborted) {
+				reject(requestSignal.reason);
+			} else {
+				requestSignal.addEventListener("abort", () => reject(requestSignal.reason), { once: true });
+			}
+			markRequestStarted();
+			return promise;
+		};
+		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
+
+		const resultPromise = streamOpenAICodexResponses(model, createCodexTestContext(), {
+			apiKey: token,
+			fetch: fetchMock,
+			signal: controller.signal,
+			streamFirstEventTimeoutMs: 60_000,
+		}).result();
+		await requestStarted;
+		controller.abort();
+		const result = await resultPromise;
+
+		expect(requestCount).toBe(1);
+		expect(result.stopReason).toBe("aborted");
+		expect(result.errorMessage).toBe("Request was aborted");
 	});
 
 	it("sets conversation_id/session_id headers and prompt_cache_key when sessionId is provided", async () => {
