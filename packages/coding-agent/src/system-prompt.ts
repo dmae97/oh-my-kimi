@@ -254,7 +254,7 @@ async function getCachedGpu(): Promise<string | undefined> {
 }
 
 async function getCpuModel(): Promise<string | undefined> {
-	if (process.platform !== "linux") return undefined;
+	if (process.platform !== "linux") return os.cpus()[0]?.model;
 	try {
 		const cpuInfo = await Bun.file("/proc/cpuinfo").text();
 		const match = /^model name\s*:\s*(.+)$/m.exec(cpuInfo);

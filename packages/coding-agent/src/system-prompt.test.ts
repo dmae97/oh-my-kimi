@@ -198,3 +198,39 @@ describe.skipIf(process.platform !== "linux")("system prompt CPU model", () => {
 		}
 	});
 });
+
+describe("non-Linux system prompt CPU model", () => {
+	it("includes the model returned by os.cpus", async () => {
+		const originalPlatform = process.platform;
+		Object.defineProperty(process, "platform", { value: "darwin" });
+		const cpus = spyOn(os, "cpus").mockImplementation(() => [
+			{
+				model: "Synthetic Non-Linux CPU",
+				speed: 0,
+				times: { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 },
+			},
+		]);
+		try {
+			const systemPrompt = await buildSystemPrompt({
+				resolvedCustomPrompt: "Base prompt",
+				contextFiles: [],
+				skills: [],
+				rules: [],
+				workspaceTree: {
+					rootPath: import.meta.dir,
+					rendered: "",
+					truncated: false,
+					totalLines: 0,
+					agentsMdFiles: [],
+				},
+				activeRepoContext: null,
+			});
+
+			expect(cpus).toHaveBeenCalledTimes(1);
+			expect(systemPrompt.systemPrompt.join("\n")).toContain("- CPU: Synthetic Non-Linux CPU");
+		} finally {
+			cpus.mockRestore();
+			Object.defineProperty(process, "platform", { value: originalPlatform });
+		}
+	});
+});
