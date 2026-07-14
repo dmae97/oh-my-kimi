@@ -136,6 +136,8 @@ export class PlanReviewOverlay implements Component {
 	#tocCursor = 0;
 	#sidebarShown = false;
 	#pendingScrollToToc = false;
+	/** Last meaningful relative body position, retained while a frame cannot scroll. */
+	#scrollProgress = 0;
 
 	// Click hit-testing, rebuilt every render. Keys are 0-based rendered-line
 	// indices (== screen rows, since the fullscreen overlay paints from row 0).
@@ -194,6 +196,7 @@ export class PlanReviewOverlay implements Component {
 	setPlanContent(planContent: string): void {
 		this.#setSections(planContent);
 		this.#scrollView.scrollToTop();
+		this.#scrollProgress = 0;
 		this.#tocCursor = 0;
 		// A wholesale external-editor swap supersedes prior in-overlay deletions.
 		this.#deleted = [];
@@ -337,6 +340,7 @@ export class PlanReviewOverlay implements Component {
 			if (event.wheel !== null) {
 				// Scroll wheel: three rows per notch.
 				this.#scrollView.scroll(event.wheel * 3);
+				this.#captureScrollProgress();
 				return true;
 			}
 			if (event.release) return true;
@@ -439,13 +443,21 @@ export class PlanReviewOverlay implements Component {
 		// drops into the actions ("next step"); scrolling off the top steps back up
 		// to the ToC.
 		if (matchesSelectUp(data) || data === "k") {
-			if (this.#scrollView.getScrollOffset() <= 0 && this.#sidebarShown) this.#setFocus("toc");
-			else this.#scrollView.scroll(-1);
+			if (this.#scrollView.getScrollOffset() <= 0 && this.#sidebarShown) {
+				this.#setFocus("toc");
+			} else {
+				this.#scrollView.scroll(-1);
+				this.#captureScrollProgress();
+			}
 			return;
 		}
 		if (matchesSelectDown(data) || data === "j") {
-			if (this.#scrollView.getScrollOffset() >= this.#scrollView.getMaxScrollOffset()) this.#setFocus("actions");
-			else this.#scrollView.scroll(1);
+			if (this.#scrollView.getScrollOffset() >= this.#scrollView.getMaxScrollOffset()) {
+				this.#setFocus("actions");
+			} else {
+				this.#scrollView.scroll(1);
+				this.#captureScrollProgress();
+			}
 			return;
 		}
 		this.#handleBodyScroll(data);
@@ -458,9 +470,17 @@ export class PlanReviewOverlay implements Component {
 	 * before this runs, so here it only ever sees the paging/fast keys.
 	 */
 	#handleBodyScroll(data: string): void {
-		if (this.#scrollView.handleScrollKey(data)) return;
-		if (data === "g") this.#scrollView.scrollToTop();
-		else if (data === "G") this.#scrollView.scrollToBottom();
+		if (this.#scrollView.handleScrollKey(data)) {
+			this.#captureScrollProgress();
+			return;
+		}
+		if (data === "g") {
+			this.#scrollView.scrollToTop();
+			this.#scrollProgress = 0;
+		} else if (data === "G") {
+			this.#scrollView.scrollToBottom();
+			this.#scrollProgress = 1;
+		}
 	}
 
 	#handleToc(data: string): void {
@@ -511,7 +531,10 @@ export class PlanReviewOverlay implements Component {
 		const sectionIndex = this.#toc[this.#tocCursor];
 		if (sectionIndex === undefined) return;
 		const offset = this.#sectionOffsets[sectionIndex];
-		if (offset !== undefined) this.#scrollView.setScrollOffset(offset);
+		if (offset !== undefined) {
+			this.#scrollView.setScrollOffset(offset);
+			this.#captureScrollProgress();
+		}
 	}
 
 	/** Greatest ToC position whose section starts at or above the scroll offset. */
@@ -683,6 +706,23 @@ export class PlanReviewOverlay implements Component {
 		return parts.join(sep);
 	}
 
+	/**
+	 * Retain relative progress across reflow frames. A non-scrollable intermediate
+	 * frame has no meaningful offset, so it must not erase the last scroll position.
+	 */
+	#captureScrollProgress(): void {
+		const maxOffset = this.#scrollView.getMaxScrollOffset();
+		if (maxOffset > 0) this.#scrollProgress = this.#scrollView.getScrollOffset() / maxOffset;
+	}
+
+	#layoutBody(lines: readonly string[], height: number): void {
+		this.#captureScrollProgress();
+		this.#scrollView.setLines(lines);
+		this.#scrollView.setHeight(height);
+		const maxOffset = this.#scrollView.getMaxScrollOffset();
+		if (maxOffset > 0) this.#scrollView.setScrollOffset(Math.round(this.#scrollProgress * maxOffset));
+	}
+
 	/** Build the concatenated body lines and record each section's start row. */
 	#buildBody(bodyContentWidth: number): string[] {
 		const lines: string[] = [];
@@ -800,8 +840,7 @@ export class PlanReviewOverlay implements Component {
 		const regionRows = Math.max(MIN_BODY_ROWS, termHeight - chrome);
 
 		const bodyLines = this.#buildBody(bodyContentWidth);
-		this.#scrollView.setLines(bodyLines);
-		this.#scrollView.setHeight(regionRows);
+		this.#layoutBody(bodyLines, regionRows);
 		if (this.#pendingScrollToToc) {
 			this.#pendingScrollToToc = false;
 			this.#scrubBodyToToc();
