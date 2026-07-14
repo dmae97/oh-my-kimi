@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed OpenCode Zen and Go discovery to replace stale bundled models with each provider's live model catalog. ([#4769](https://github.com/can1357/oh-my-pi/issues/4769))
+- Fixed OpenCode Zen and Go discovery to replace stale bundled models with each provider's live model catalog.
 
 ## [16.5.1] - 2026-07-14
 

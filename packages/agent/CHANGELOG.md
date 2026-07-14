@@ -4,8 +4,8 @@
 
 ### Fixed
 
-- Fixed session deadline abort signals carrying a generic string reason, allowing timeout-aware tools to classify deadline cancellation ([#5250](https://github.com/can1357/oh-my-pi/issues/5250)).
-- Fixed a false "Skipped due to queued user message" tool result that discarded work an interruptible tool had already completed: steering while a tool was in flight aborted its signal, and a tool that then finished with a genuine error result (e.g. a command exiting non-zero) had its real output clobbered by the skip placeholder. Completed tool executions now keep their real result; only tools genuinely cut off before returning are reported as skipped ([#4752](https://github.com/can1357/oh-my-pi/issues/4752)).
+- Improved session deadline abort signals to carry structured cancellation reasons, enabling timeout-aware tools to correctly classify deadline cancellations.
+- Fixed an issue where completed tool executions were incorrectly marked as skipped (clobbering their actual results) if a user message was queued while the tool was in flight.
 
 ## [16.5.1] - 2026-07-14
 

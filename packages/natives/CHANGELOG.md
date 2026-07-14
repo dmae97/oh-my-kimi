@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed Windows PTY callers being forced through shell command re-quoting by adding direct executable-and-argument launching ([#5416](https://github.com/can1357/oh-my-pi/issues/5416)).
+- Fixed an issue where Windows PTY callers were forced through shell command re-quoting by supporting direct executable and argument launching.
 
 ## [16.4.6] - 2026-07-12
 

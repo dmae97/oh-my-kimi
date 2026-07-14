@@ -4,7 +4,8 @@
 
 ### Fixed
 
-- CLI arg/flag validation errors (e.g. `omp bench` with no model) now print a concise `error:` message plus the command usage line instead of dumping a minified `dist/cli.js` code frame; required variadic positionals render as `MODELS...` in usage rather than the misleading optional `[MODELS]` ([#5369](https://github.com/can1357/oh-my-pi/issues/5369)).
+- Improved CLI argument and flag validation error output to display a concise error message and command usage instead of a minified code frame.
+- Corrected required variadic positionals to render as `MODELS...` instead of `[MODELS]` in usage help.
 
 ## [16.5.1] - 2026-07-14
 

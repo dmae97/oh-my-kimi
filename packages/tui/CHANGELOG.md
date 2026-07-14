@@ -2,17 +2,14 @@
 
 ## [Unreleased]
 
-### Added
-
-- Fixed animated Loader ANSI updates invalidating stable text layout, avoiding repeated wrapping and width measurement on shimmer-only frames ([#5230](https://github.com/can1357/oh-my-pi/issues/5230)).
-
 ### Fixed
 
-- Fixed `Ctrl+W` (delete word backward) stopping at underscores in snake_case identifiers; `_` is now classified as a word character so `allowed_openai_params` deletes as a single word ([#4776](https://github.com/can1357/oh-my-pi/issues/4776)).
-- Fixed automatic file completion treating punctuation, trailing spaces, and ambiguous slash-command text as paths, immediately dismissing slash autocomplete on Backspace and requiring selection before applying a sole forced file match ([#5376](https://github.com/can1357/oh-my-pi/issues/5376)).
-- Fixed Kitty graphics under tmux by wrapping every graphics command in DCS passthrough, preserving quiet mode across continuation chunks, and using Unicode placeholder cells for explicitly forced Kitty rendering so images follow pane scrolling and reflow. ([#5381](https://github.com/can1357/oh-my-pi/issues/5381))
-- Fixed tmux sessions becoming unresponsive after terminal capability replies by keeping keyboard input in legacy mode when the Kitty protocol is unavailable ([#5378](https://github.com/can1357/oh-my-pi/issues/5378)).
-- Fixed PageUp/PageDown on an idle (empty) prompt editor stepping through prompt history like the Up/Down arrows instead of paging the draft. The paging keys now only scroll the editor viewport (a no-op on a short draft) and never touch prompt history ([#4754](https://github.com/can1357/oh-my-pi/issues/4754)).
+- Fixed animated Loader ANSI updates causing unnecessary text layout invalidation and re-wrapping on shimmer-only frames (#5230).
+- Fixed Ctrl+W (delete word backward) stopping at underscores in snake_case identifiers, treating them as single words (#4776).
+- Fixed automatic file completion incorrectly treating punctuation, trailing spaces, and slash-command text as paths, and improved autocomplete dismissal behavior (#5376).
+- Fixed Kitty graphics rendering under tmux, ensuring images correctly follow pane scrolling and reflow (#5381).
+- Fixed tmux sessions becoming unresponsive after terminal capability replies by falling back to legacy keyboard input mode when the Kitty protocol is unavailable (#5378).
+- Fixed PageUp and PageDown keys on an empty prompt editor incorrectly navigating prompt history instead of scrolling the editor viewport (#4754).
 
 ## [16.5.1] - 2026-07-14
 
