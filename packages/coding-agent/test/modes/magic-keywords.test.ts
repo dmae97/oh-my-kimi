@@ -87,6 +87,20 @@ describe("hasMagicKeyword", () => {
 		}
 	});
 
+	it("rejects keywords used as code symbols or calls", () => {
+		for (const text of [
+			"ultrathink()",
+			"orchestrate()",
+			"workflowz()",
+			"foo::ultrathink",
+			"foo::orchestrate",
+			"foo::workflowz",
+		]) {
+			expect(hasMagicKeyword(text)).toBe(false);
+			expect(highlightMagicKeywords(text)).toBe(text);
+		}
+	});
+
 	it("rejects casing, inflections, old workflow names, and paths", () => {
 		expect(hasMagicKeyword("Ultrathink")).toBe(false);
 		expect(hasMagicKeyword("ORCHESTRATE")).toBe(false);

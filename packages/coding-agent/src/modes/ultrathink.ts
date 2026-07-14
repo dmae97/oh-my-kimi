@@ -9,7 +9,7 @@ import { keywordInProse } from "./markdown-prose";
  * Typing the standalone word in the input editor paints it with a rainbow
  * gradient ({@link highlightUltrathink}); submitting a message that mentions it
  * appends a hidden {@link ULTRATHINK_NOTICE} nudging the model toward careful
- * multi-step reasoning. Matching is whitespace-delimited and case-sensitive
+ * multi-step reasoning. Matching is prose-delimited and case-sensitive
  * (lowercase only), so "ultrathinking", "Ultrathink", or "ultrathink.ts" never
  * trigger either behavior.
  */
