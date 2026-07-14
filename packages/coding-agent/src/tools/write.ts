@@ -898,9 +898,13 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 					}
 					return { content: [{ type: "text", text: resultText }], details: {} };
 				}
-				// Schemes without a `write` hook fall through to existing logic
-				// (local:// resolves to a backing file via plan-mode-guard) or are
-				// rejected downstream when no backing file exists.
+				if (scheme !== "local") {
+					throw new ToolError(
+						`${scheme}:// URLs are read-only for write; use the protocol-specific tool for mutations.`,
+					);
+				}
+				// local:// is backed by the session-local artifact sandbox and is
+				// resolved by resolvePlanPath below so write/read share the same root.
 			}
 
 			const conflictUri = parseConflictUri(path);
