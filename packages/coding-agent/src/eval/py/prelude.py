@@ -64,18 +64,19 @@ if "__omp_prelude_loaded__" not in globals():
             and not path.lower().startswith("local://")
         )
 
-    def _with_read_line_selector(path: str, offset: int, limit: int | None) -> str | None:
+    def _read_line_selector(offset: int, limit: int | None) -> str | None:
         if offset <= 1 and limit is None:
-            return path
-        if limit is not None and limit <= 0:
             return None
         start = max(1, offset)
         if limit is None:
-            return f"{path}:{start}-"
-        return f"{path}:{start}-{start + limit - 1}"
+            return f"{start}-"
+        return f"{start}-{start + limit - 1}"
 
-    def _read_tool_text(path: str) -> str:
-        result = _bridge_call("read", {"path": path})
+    def _read_tool_text(path: str, selector: str | None) -> str:
+        args = {"path": path}
+        if selector is not None:
+            args["selector"] = selector
+        result = _bridge_call("read", args)
         if isinstance(result, dict) and "text" in result:
             return result["text"]
         return result
@@ -119,8 +120,9 @@ if "__omp_prelude_loaded__" not in globals():
     def read(path: str | Path, offset: int = 1, limit: int | None = None) -> str:
         """Read file or read-tool URI contents. offset/limit are 1-indexed lines."""
         if _should_delegate_read(path):
-            tool_path = _with_read_line_selector(path, offset, limit)
-            return "" if tool_path is None else _read_tool_text(tool_path)
+            if limit is not None and limit <= 0:
+                return ""
+            return _read_tool_text(path, _read_line_selector(offset, limit))
         p = _resolve_omp_path(path)
         data = p.read_text(encoding="utf-8")
         lines = data.splitlines(keepends=True)
