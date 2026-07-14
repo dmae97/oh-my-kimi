@@ -461,6 +461,10 @@ export class AdvisorRuntime {
 					// successful empty cycle.
 					const promptError = this.agent.state.error;
 					if (promptError) throw new Error(promptError);
+					const emptyResponseError = getAdvisorEmptyResponseError(
+						this.agent.state.messages.slice(messageSnapshot),
+					);
+					if (emptyResponseError) throw emptyResponseError;
 					success = true;
 					this.#consecutiveFailures = 0;
 					this.#failureNotified = false;
@@ -518,6 +522,38 @@ export class AdvisorRuntime {
 			this.#busy = false;
 		}
 	}
+}
+
+function getAdvisorEmptyResponseError(messages: readonly AgentMessage[]): Error | undefined {
+	let sawAssistant = false;
+	for (const message of messages) {
+		if (message.role !== "assistant") continue;
+		sawAssistant = true;
+		if (message.stopReason !== "stop") return undefined;
+		if (hasAdvisorResponseContent(message)) return undefined;
+	}
+	if (sawAssistant) return new Error("Advisor turn returned an empty stop response without advice");
+	if (messages.length > 0) return new Error("Advisor turn ended without an assistant response");
+	return undefined;
+}
+
+function hasAdvisorResponseContent(message: AssistantMessage): boolean {
+	return message.content.some(block => {
+		switch (block.type) {
+			case "text":
+				return block.text.trim().length > 0;
+			case "thinking":
+				return block.thinking.trim().length > 0;
+			case "redactedThinking":
+				return block.data.length > 0;
+			case "toolCall":
+				return block.name.trim().length > 0;
+			case "fallback":
+				return false;
+			default:
+				return false;
+		}
+	});
 }
 
 type TextualContent = string | readonly (TextContent | ImageContent)[];
