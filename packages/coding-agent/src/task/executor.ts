@@ -2325,14 +2325,22 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				thinkingLevel: resolvedThinkingLevel,
 				explicitThinkingLevel,
 				authFallbackUsed,
+				warning: modelResolutionWarning,
 			} = await awaitAbortable(
 				resolveModelOverrideWithAuthFallback(
 					modelPatterns,
 					options.parentActiveModelPattern,
 					modelRegistry,
 					settings,
+					id,
 				),
 			);
+			if (modelResolutionWarning) {
+				logger.warn("Subagent model resolution warning", {
+					warning: modelResolutionWarning,
+					requested: modelPatterns,
+				});
+			}
 			if (authFallbackUsed && model) {
 				logger.warn("Subagent model has no working credentials; falling back to parent session model", {
 					requested: modelPatterns,

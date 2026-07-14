@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed subagent model and thinking level intermittently resolving to the parent session's model instead of the configured `modelRoles.task` selector ([#5325](https://github.com/can1357/oh-my-pi/issues/5325)). The pre-flight auth check in `resolveModelOverrideWithAuthFallback` called `getApiKey` without a session id, so providers with session-sticky OAuth credentials returned `undefined` even though the credential was usable once the subagent session started. The subagent's id is now forwarded as the session id so session-sticky credentials resolve correctly. Model resolution warnings (e.g. invalid thinking level in a pattern) are also now logged instead of silently dropped.
+
 ## [16.5.0] - 2026-07-13
 
 ### Breaking Changes
