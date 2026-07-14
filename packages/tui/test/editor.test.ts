@@ -661,6 +661,11 @@ describe("Editor component", () => {
 			editor.handleInput("\x17");
 			expect(editor.getText()).toBe("foo bar");
 
+			// snake_case identifier deletes as a single word (issue #4776)
+			editor.setText("allowed_openai_params");
+			editor.handleInput("\x17");
+			expect(editor.getText()).toBe("");
+
 			// Delete across multiple lines
 			editor.setText("line one\nline two");
 			editor.handleInput("\x17");
