@@ -1876,6 +1876,16 @@ function openCodeBaseUrlForApi(api: Api, basePath: string): string {
 	return api === "anthropic-messages" ? basePath : `${basePath}/v1`;
 }
 
+function openCodeModelCacheProviderId(
+	providerId: "opencode-go" | "opencode-zen",
+	apiKey: string | undefined,
+	discoveryBaseUrl: string,
+): string {
+	// OpenCode catalogs are entitlement-scoped; isolate authoritative rows by credential and endpoint.
+	const scope = `${apiKey ?? ""}\u0000${discoveryBaseUrl}`;
+	return `${providerId}:models-v1:${Bun.hash(scope).toString(36)}`;
+}
+
 function openCodeModelManagerOptions(
 	providerId: "opencode-go" | "opencode-zen",
 	defaultBasePath: string,
@@ -1887,6 +1897,7 @@ function openCodeModelManagerOptions(
 	const references = createBundledReferenceMap<Api>(providerId);
 	return {
 		providerId,
+		cacheProviderId: openCodeModelCacheProviderId(providerId, apiKey, discoveryBaseUrl),
 		dynamicModelsAuthoritative: true,
 		...(apiKey && {
 			fetchDynamicModels: () =>
