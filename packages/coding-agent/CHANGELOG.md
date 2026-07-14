@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `tool_result` extension handlers being unable to rewrite the model-visible content of a thrown tool failure while keeping it an error — `ExtensionToolWrapper` rethrew the original exception and discarded the replacement `content`/`details`; it now surfaces the modified result with `isError: true` ([#5302](https://github.com/can1357/oh-my-pi/issues/5302))
+
 ## [16.4.8] - 2026-07-12
 
 ### Fixed

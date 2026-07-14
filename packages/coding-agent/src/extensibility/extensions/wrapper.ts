@@ -1,7 +1,7 @@
 /**
  * Tool wrappers for extensions.
  */
-import type { AgentTool, AgentToolContext, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, Static, TextContent, TSchema } from "@oh-my-pi/pi-ai";
 import type { Settings } from "../../config/settings";
 import type { Theme } from "../../modes/theme/theme";
@@ -110,7 +110,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<TDetails, TParameters>,
 		context?: AgentToolContext,
-	) {
+	): Promise<AgentToolResult<TDetails, TParameters>> {
 		// 1. Check approval policy (before extension handlers).
 		// CLI `--auto-approve` / `--yolo` sets approval mode to yolo.
 		// User `tools.approval.<tool>` policies are still applied in all modes.
@@ -237,23 +237,23 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				const modifiedContent: (TextContent | ImageContent)[] = resultResult.content ?? result.content;
 				const modifiedDetails = (resultResult.details ?? result.details) as TDetails;
 
-				// Extension can override error status
-				if (resultResult.isError === true && !executionError) {
-					// Extension marks a successful result as error
-					const textBlocks = (modifiedContent ?? []).filter((c): c is TextContent => c.type === "text");
-					const errorText = textBlocks.map(t => t.text).join("\n") || "Tool result marked as error by extension";
-					throw new Error(errorText);
-				}
-				if (resultResult.isError === false && executionError) {
-					// Extension clears the error - return success
-					return { content: modifiedContent, details: modifiedDetails };
-				}
+				// Effective error state: an explicit handler override wins; otherwise the
+				// original execution outcome stands. This lets a handler rewrite a failed
+				// call's model-visible content/details while keeping it an error, flip a
+				// failure to success, or flag a success as an error.
+				const effectiveError = resultResult.isError ?? !!executionError;
 
-				// Error status unchanged, but content/details may be modified
-				if (executionError) {
-					throw executionError;
-				}
-				return { content: modifiedContent, details: modifiedDetails };
+				// Return the (possibly modified) result carrying the error flag rather than
+				// rethrowing the original exception. The agent loop honors
+				// `AgentToolResult.isError` and surfaces it as a tool error on the wire (see
+				// `coerceToolResult` in agent-loop), so replacement failure content reaches
+				// the model while the call remains an error — the original exception text is
+				// no longer forced through, which previously discarded the replacement.
+				return {
+					content: modifiedContent,
+					details: modifiedDetails,
+					...(effectiveError ? { isError: true } : {}),
+				};
 			}
 		}
 
