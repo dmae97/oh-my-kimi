@@ -151,7 +151,6 @@ export class StructuredSubagentError extends Error {
 }
 
 const PLAN_MODE_TOOLS = ["read", "grep", "glob", "web_search"] as const;
-const PLAN_MODE_AGENT_TOOL_ALLOWLIST = new Set(["ast_grep", "report_finding"]);
 
 function renderSubagentPrompt(assignment: string): string {
 	return prompt.render(subagentUserPromptTemplate, { assignment: assignment.trim() });
@@ -185,11 +184,7 @@ function resolveSchema(request: StructuredSubagentRequest, agent: AgentDefinitio
 function createPlanModeAgent(agent: AgentDefinition): AgentDefinition {
 	const tools = [
 		...PLAN_MODE_TOOLS,
-		...(agent.tools ?? []).filter(
-			tool =>
-				PLAN_MODE_AGENT_TOOL_ALLOWLIST.has(tool) &&
-				!PLAN_MODE_TOOLS.includes(tool as (typeof PLAN_MODE_TOOLS)[number]),
-		),
+		...(agent.tools ?? []).filter(tool => tool === "ast_grep"),
 	];
 	return {
 		...agent,

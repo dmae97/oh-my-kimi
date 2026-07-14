@@ -488,6 +488,9 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	// Auto-include AST counterparts when their text-based sibling is present.
 	// Restricted callers own the active list and must not have it widened.
 	if (requestedTools && !restrictToolNames) {
+		if (goalModeActive && !requestedTools.includes("goal")) {
+			requestedTools.push("goal");
+		}
 		if (
 			requestedTools.includes("grep") &&
 			!requestedTools.includes("ast_grep") &&

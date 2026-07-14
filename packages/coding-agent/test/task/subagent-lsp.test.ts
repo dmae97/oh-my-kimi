@@ -263,7 +263,7 @@ describe("subagent LSP availability", () => {
 		}
 	});
 
-	it("applies plan-mode subagent tools, preserves read-only agent tools, and honors task.enableLsp", async () => {
+	it("clamps plan-mode mixed-capability tools despite ordinary settings", async () => {
 		mockAgents({
 			name: "task",
 			description: "Reviewer-like task agent",
@@ -277,12 +277,16 @@ describe("subagent LSP availability", () => {
 		const tool = await TaskTool.create(createSession({ planMode, taskEnableLsp: true }));
 		await tool.execute("tool-call", TEST_TASK);
 
-		const toolNames = getOptions()?.toolNames;
-		expect(getOptions()?.enableLsp).toBe(true);
-		expect(toolNames).toEqual(["read", "grep", "glob", "lsp", "web_search", "ast_grep", "hub"]);
-		expect(toolNames).not.toContain("bash");
-		expect(toolNames).not.toContain("memory_edit");
-		expect(toolNames).not.toContain("retain");
-		expect(toolNames).not.toContain("todo");
+		const options = getOptions();
+		expect(options?.enableLsp).toBe(false);
+		expect(options?.enableIrc).toBe(false);
+		expect(options?.restrictToolNames).toBe(true);
+		expect(options?.toolNames).toEqual(["read", "grep", "glob", "web_search", "ast_grep"]);
+		expect(options?.toolNames).not.toContain("lsp");
+		expect(options?.toolNames).not.toContain("hub");
+		expect(options?.toolNames).not.toContain("bash");
+		expect(options?.toolNames).not.toContain("memory_edit");
+		expect(options?.toolNames).not.toContain("retain");
+		expect(options?.toolNames).not.toContain("todo");
 	});
 });

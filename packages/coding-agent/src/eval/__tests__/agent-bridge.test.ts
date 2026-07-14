@@ -254,7 +254,7 @@ describe("runEvalAgent", () => {
 	});
 
 	it("runs plan-mode eval agents with an attenuated policy", async () => {
-		mockAgents([{ ...taskAgent, tools: ["ast_grep", "report_finding", "write"] }]);
+		mockAgents([{ ...taskAgent, tools: ["ast_grep", "write"] }]);
 		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
 
 		await expect(
@@ -269,7 +269,6 @@ describe("runEvalAgent", () => {
 			"glob",
 			"web_search",
 			"ast_grep",
-			"report_finding",
 		]);
 		expect(runSpy.mock.calls[0]?.[0].agent.spawns).toBeUndefined();
 		await expect(
