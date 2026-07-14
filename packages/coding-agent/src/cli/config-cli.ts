@@ -241,7 +241,7 @@ export async function runConfigCommand(cmd: ConfigCommandArgs): Promise<void> {
 
 	switch (cmd.action) {
 		case "list":
-			handleList(cmd.flags);
+			await handleList(cmd.flags);
 			break;
 		case "get":
 			handleGet(cmd.key, cmd.flags);
@@ -261,7 +261,19 @@ export async function runConfigCommand(cmd: ConfigCommandArgs): Promise<void> {
 	}
 }
 
-function handleList(flags: { json?: boolean }): void {
+async function writeStdout(text: string): Promise<void> {
+	const pending = Promise.withResolvers<void>();
+	process.stdout.write(text, error => {
+		if (error) {
+			pending.reject(error);
+			return;
+		}
+		pending.resolve();
+	});
+	await pending.promise;
+}
+
+async function handleList(flags: { json?: boolean }): Promise<void> {
 	const defs = ALL_SETTING_PATHS.map(path => findSettingDef(path)).filter((def): def is CliSettingDef => !!def);
 
 	if (flags.json) {
@@ -273,7 +285,7 @@ function handleList(flags: { json?: boolean }): void {
 				description: def.description,
 			};
 		}
-		console.log(JSON.stringify(result, null, 2));
+		await writeStdout(`${JSON.stringify(result, null, 2)}\n`);
 		return;
 	}
 

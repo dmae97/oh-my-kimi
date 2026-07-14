@@ -10,6 +10,10 @@
 
 - Updated status event log to prioritize the most recent entries in the display window
 
+### Fixed
+
+- Fixed `omp config list --json` truncating output at 64 KiB when stdout is piped ([#5309](https://github.com/can1357/oh-my-pi/issues/5309))
+
 ### Removed
 
 - Removed the unreliable Bing and Yahoo HTML-scraping web search providers
