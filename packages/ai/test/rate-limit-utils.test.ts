@@ -120,6 +120,19 @@ describe("isUsageLimit", () => {
 		).toBe(true);
 	});
 
+	// Anthropic returns a `rate_limit_error` when the account's monthly spend
+	// cap is hit ("This request would exceed your account's monthly spend
+	// limit."). Without the `spend limit` branch the message classifies as a
+	// transient rate limit, so `isProviderRetryableError` retries it until the
+	// local deadline instead of surfacing the quota error (issue #4787).
+	it("detects Anthropic monthly spend-limit as a credential-rotatable usage limit", () => {
+		expect(
+			isUsageLimit(
+				'429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s monthly spend limit. Please try again later."}}',
+			),
+		).toBe(true);
+	});
+
 	it("detects bare 'quota reached' phrasing", () => {
 		expect(isUsageLimit("quota reached")).toBe(true);
 		expect(isUsageLimit("quota_reached")).toBe(true);
