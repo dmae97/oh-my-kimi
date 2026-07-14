@@ -2,9 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+
+- Fixed animated Loader ANSI updates invalidating stable text layout, avoiding repeated wrapping and width measurement on shimmer-only frames ([#5230](https://github.com/can1357/oh-my-pi/issues/5230)).
+
 ### Fixed
 
 - Fixed `Ctrl+W` (delete word backward) stopping at underscores in snake_case identifiers; `_` is now classified as a word character so `allowed_openai_params` deletes as a single word ([#4776](https://github.com/can1357/oh-my-pi/issues/4776)).
+- Fixed automatic file completion treating punctuation, trailing spaces, and ambiguous slash-command text as paths, immediately dismissing slash autocomplete on Backspace and requiring selection before applying a sole forced file match ([#5376](https://github.com/can1357/oh-my-pi/issues/5376)).
+- Fixed Kitty graphics under tmux by wrapping every graphics command in DCS passthrough, preserving quiet mode across continuation chunks, and using Unicode placeholder cells for explicitly forced Kitty rendering so images follow pane scrolling and reflow. ([#5381](https://github.com/can1357/oh-my-pi/issues/5381))
+- Fixed tmux sessions becoming unresponsive after terminal capability replies by keeping keyboard input in legacy mode when the Kitty protocol is unavailable ([#5378](https://github.com/can1357/oh-my-pi/issues/5378)).
+- Fixed PageUp/PageDown on an idle (empty) prompt editor stepping through prompt history like the Up/Down arrows instead of paging the draft. The paging keys now only scroll the editor viewport (a no-op on a short draft) and never touch prompt history ([#4754](https://github.com/can1357/oh-my-pi/issues/4754)).
 
 ## [16.5.1] - 2026-07-14
 
@@ -15,9 +23,6 @@
 - Fixed an issue where streamed diff code fences retained unhighlighted rows in native scrollback when long transient blocks left the viewport before finalization ([#5126](https://github.com/can1357/oh-my-pi/issues/5126)).
 - Fixed native Windows Terminal sessions failing to detect mid-run light/dark theme changes when Mode 2031 appearance notifications are unavailable ([#5091](https://github.com/can1357/oh-my-pi/issues/5091)).
 - Hid empty HTML comment separators in Markdown-rendered TUI output instead of displaying them literally ([#4911](https://github.com/can1357/oh-my-pi/issues/4911)).
-- Fixed automatic file completion treating punctuation, trailing spaces, and ambiguous slash-command text as paths, immediately dismissing slash autocomplete on Backspace and requiring selection before applying a sole forced file match ([#5376](https://github.com/can1357/oh-my-pi/issues/5376)).
-- Fixed Kitty graphics under tmux by wrapping every graphics command in DCS passthrough, preserving quiet mode across continuation chunks, and using Unicode placeholder cells for explicitly forced Kitty rendering so images follow pane scrolling and reflow. ([#5381](https://github.com/can1357/oh-my-pi/issues/5381))
-- Fixed tmux sessions becoming unresponsive after terminal capability replies by keeping keyboard input in legacy mode when the Kitty protocol is unavailable ([#5378](https://github.com/can1357/oh-my-pi/issues/5378)).
 
 ## [16.5.0] - 2026-07-13
 
@@ -40,7 +45,6 @@
 ### Added
 
 - Added support for width-changing editor text decorators on standalone presentation lines, with decorated output safely truncated to the available content width.
-- Fixed animated Loader ANSI updates invalidating stable text layout, avoiding repeated wrapping and width measurement on shimmer-only frames ([#5230](https://github.com/can1357/oh-my-pi/issues/5230)).
 
 ## [16.4.5] - 2026-07-11
 
@@ -96,7 +100,6 @@
 - Fixed mid-prompt skill autocomplete so Tab and Enter accept the highlighted `/skill:<name>` suggestion and Backspace dismisses the popup immediately after removing the triggering slash ([#4619](https://github.com/can1357/oh-my-pi/issues/4619)).
 - Fixed submitted slash-command arguments treating `@` file-reference tokens as prompt-composer autocomplete triggers when the command does not define argument completions. ([#4600](https://github.com/can1357/oh-my-pi/issues/4600))
 - Fixed box-drawing tree lines (`├── item` — directory layouts, decision trees) in prose shearing apart when they wrap: continuation rows now hang under the node text with ancestor rails carried through (`├` → `│`, `└` → blank) instead of restarting at column 0. Applies to prose paragraphs (including inside blockquotes) only when a line with a branch-connector prefix (`├──`, `└─`, …) actually overflows; fitting lines, non-tree prose, and code blocks render byte-for-byte as before.
-- Fixed PageUp/PageDown on an idle (empty) prompt editor stepping through prompt history like the Up/Down arrows instead of paging the draft. The paging keys now only scroll the editor viewport (a no-op on a short draft) and never touch prompt history ([#4754](https://github.com/can1357/oh-my-pi/issues/4754)).
 
 ## [16.3.10] - 2026-07-06
 
