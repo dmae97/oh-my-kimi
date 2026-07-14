@@ -421,7 +421,7 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 						// Preserve the full text-before-cursor for submitted slash
 						// commands so the editor's Enter-staleness check still applies
 						// completion for `  /sk`. Mid-prompt skill lookup keeps only
-						// the slash token because accepting it replaces the whole draft.
+						// the slash token because acceptance replaces only that token.
 						prefix: isMidPromptSkillLookup ? commandText : textBeforeCursor,
 					};
 				}

@@ -1159,11 +1159,12 @@ export class Editor implements Component, Focusable {
 					return;
 				}
 
-				// If Enter was pressed on a slash command (not an absolute-path
-				// completion sharing the leading-slash prefix), apply and submit
+				// If Enter was pressed on a submitted slash command (not an absolute-path
+				// completion sharing the leading-slash prefix), apply and submit.
 				if (
 					(kb.matches(data, "tui.input.submit") || data === "\n") &&
 					findLeadingSlashCommandStart(this.#autocompletePrefix) !== null &&
+					this.#isInSubmittedSlashCommandContext() &&
 					!this.#selectedCompletionIsPath()
 				) {
 					// Check for stale autocomplete state due to debounce
@@ -1192,7 +1193,7 @@ export class Editor implements Component, Focusable {
 					}
 					// Don't return - fall through to submission logic
 				}
-				// If Enter was pressed on a file path, apply completion
+				// Otherwise, apply the completion without submitting the surrounding draft.
 				else if (kb.matches(data, "tui.input.submit") || data === "\n") {
 					// Check for stale autocomplete state due to buffer edits since last refresh.
 					const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";

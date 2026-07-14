@@ -232,6 +232,35 @@ describe("Editor Enter handler sync slash completion", () => {
 		expect(editor.getText()).toBe("explain this\n/skill:security-scan ");
 	});
 
+	it("inserts a mid-prompt skill token without submitting on Enter", async () => {
+		const editor = new Editor(defaultEditorTheme);
+		editor.setAutocompleteProvider(
+			new CombinedAutocompleteProvider(
+				[
+					{ name: "skill:security-scan", description: "Security scan" },
+					{ name: "model", description: "Switch model" },
+				],
+				"/tmp",
+			),
+		);
+		let submitted: string | undefined;
+		editor.onSubmit = text => {
+			submitted = text;
+		};
+
+		editor.setText("explain this\n");
+		editor.handleInput("/");
+		await Promise.resolve();
+
+		expect(editor.isShowingAutocomplete()).toBe(true);
+
+		editor.handleInput("security");
+		editor.handleInput("\r");
+
+		expect(editor.getText()).toBe("explain this\n/skill:security-scan ");
+		expect(submitted).toBeUndefined();
+	});
+
 	it("preserves Tab file completion for an absolute path token after prose", async () => {
 		let forceFileCalls = 0;
 		const editor = new Editor(defaultEditorTheme);
