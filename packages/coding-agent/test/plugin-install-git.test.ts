@@ -23,6 +23,14 @@ import * as piUtils from "@oh-my-pi/pi-utils";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import type { Subprocess } from "bun";
 
+function textStream(text: string): ReadableStream<Uint8Array> {
+	const body = new Response(text).body;
+	if (!body) {
+		throw new Error("Failed to create response stream");
+	}
+	return body;
+}
+
 function emptyStream(): ReadableStream<Uint8Array> {
 	const body = new Response("").body;
 	if (!body) {
@@ -310,6 +318,16 @@ describe("PluginManager.install with git sources", () => {
 					stdout: emptyStream(),
 					stderr: emptyStream(),
 					exited: prepare.then(() => 0),
+				} as Subprocess;
+			}
+
+			if (cmd[1] === "pm") {
+				expect(cmd).toEqual(["bun", "pm", "cache"]);
+				return {
+					pid: 3,
+					stdout: textStream(path.join(tmpRoot, "no-such-bun-cache")),
+					stderr: emptyStream(),
+					exited: Promise.resolve(0),
 				} as Subprocess;
 			}
 
