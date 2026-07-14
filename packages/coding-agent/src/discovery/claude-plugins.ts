@@ -24,7 +24,7 @@ import {
 	scanSkillsFromDir,
 } from "./helpers";
 
-import { substitutePluginRoot } from "./substitute-plugin-root";
+import { resolvePluginStdioPaths, substitutePluginRoot } from "./substitute-plugin-root";
 
 const PROVIDER_ID = "claude-plugins";
 const DISPLAY_NAME = "Claude Code Marketplace";
@@ -441,14 +441,20 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 				continue;
 			}
 			const namespacedName = root.plugin ? `${root.plugin}:${serverName}` : serverName;
+			const substitutedCommand =
+				raw.command !== undefined ? substitutePluginRoot(raw.command, root.path) : undefined;
+			const substitutedCwd = raw.cwd !== undefined ? substitutePluginRoot(raw.cwd, root.path) : undefined;
+			// Root relative command/cwd at the plugin's config directory, not the
+			// session cwd (MCP stdio spawning resolves relative values there).
+			const rooted = resolvePluginStdioPaths({ command: substitutedCommand, cwd: substitutedCwd }, root.path);
 			const server: MCPServer = {
 				name: namespacedName,
 				...(raw.enabled !== undefined && { enabled: raw.enabled }),
 				...(raw.timeout !== undefined && { timeout: raw.timeout }),
-				...(raw.command !== undefined && { command: substitutePluginRoot(raw.command, root.path) }),
+				...(rooted.command !== undefined && { command: rooted.command }),
 				...(raw.args !== undefined && { args: substitutePluginRoot(raw.args, root.path) }),
 				...(raw.env !== undefined && { env: substitutePluginRoot(raw.env, root.path) }),
-				...(raw.cwd !== undefined && { cwd: substitutePluginRoot(raw.cwd, root.path) }),
+				...(rooted.cwd !== undefined && { cwd: rooted.cwd }),
 				...(raw.url !== undefined && { url: expandEnvVarsDeep(raw.url) }),
 				...(raw.headers !== undefined && { headers: expandEnvVarsDeep(raw.headers) }),
 				...(raw.auth !== undefined && { auth: raw.auth }),

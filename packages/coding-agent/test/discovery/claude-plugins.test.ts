@@ -453,6 +453,53 @@ describe("listClaudePluginRoots", () => {
 		}
 	});
 
+	test("resolves relative path-like command and cwd against the plugin config directory", async () => {
+		const pluginsDir = path.join(tempDir, ".claude", "plugins");
+		const pluginPath = path.join(tempDir, "plugins", "computer-use");
+		await fs.mkdir(pluginsDir, { recursive: true });
+		await fs.mkdir(pluginPath, { recursive: true });
+		await fs.writeFile(
+			path.join(pluginsDir, "installed_plugins.json"),
+			JSON.stringify({
+				version: 2,
+				plugins: {
+					"computer-use@openai-bundled": [
+						{
+							scope: "user",
+							installPath: pluginPath,
+							version: "1.0.0",
+							installedAt: "2026-06-01T00:00:00Z",
+							lastUpdated: "2026-06-01T00:00:00Z",
+						},
+					],
+				},
+			}),
+		);
+		await fs.writeFile(
+			path.join(pluginPath, ".mcp.json"),
+			JSON.stringify({
+				mcpServers: {
+					"computer-use": { command: "./bin/SkyComputerUseClient", args: ["mcp"], cwd: "." },
+					bare: { command: "npx", args: ["-y", "@some/mcp"] },
+				},
+			}),
+		);
+
+		// Session cwd is deliberately outside the plugin directory.
+		const result = await loadCapability<MCPServer>(mcpCapability.id, {
+			cwd: path.join(tempDir, "elsewhere"),
+			providers: ["claude-plugins"],
+		});
+		const local = result.all.find(item => item.name === "computer-use:computer-use");
+		const bare = result.all.find(item => item.name === "computer-use:bare");
+
+		expect(local?.command).toBe(path.join(pluginPath, "bin", "SkyComputerUseClient"));
+		expect(local?.cwd).toBe(pluginPath);
+		// Bare executables must keep resolving through PATH, not the plugin dir.
+		expect(bare?.command).toBe("npx");
+		expect(bare?.cwd).toBeUndefined();
+	});
+
 	test("reads slash commands directory from plugin manifest slash-commands field", async () => {
 		const pluginsDir = path.join(tempDir, ".claude", "plugins");
 		const pluginPath = path.join(tempDir, "plugins", "manifest-commands");
