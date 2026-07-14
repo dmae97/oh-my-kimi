@@ -394,6 +394,59 @@ describe("imageGenTool", () => {
 		expect(result.details?.provider).toBe("xai");
 	});
 
+	it("falls back to xAI after the active OpenAI provider HTTP failure", async () => {
+		const requestUrls: string[] = [];
+		const fetchMock = (async (input: string | URL | Request) => {
+			const url = input.toString();
+			requestUrls.push(url);
+			if (url.startsWith("https://api.openai.com/")) {
+				return new Response(JSON.stringify({ error: { message: "model unavailable" } }), {
+					status: 404,
+					headers: { "content-type": "application/json" },
+				});
+			}
+			return new Response(
+				JSON.stringify({ data: [{ b64_json: Buffer.from("openai-fallback-xai-image").toString("base64") }] }),
+				{ status: 200, headers: { "content-type": "application/json" } },
+			);
+		}) as unknown as typeof fetch;
+		const model = {
+			api: "openai-responses",
+			provider: "openai",
+			id: "gpt-5.5",
+			name: "GPT 5.5",
+			baseUrl: "https://api.openai.com/v1",
+		} as Model;
+		const ctx: CustomToolContext = {
+			fetch: fetchMock,
+			sessionManager: {
+				getCwd: () => "/tmp",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKey: async () => "test-openai-key",
+				getApiKeyForProvider: async (provider: string) => (provider === "xai-oauth" ? "test-xai-token" : undefined),
+				getProviderBaseUrl: () => undefined,
+				getAll: () => [],
+				authStorage: {
+					hasNonEnvCredential: (provider: string) => provider === "xai-oauth",
+					rotateSessionCredential: async () => false,
+				},
+				resolver: () => async () => "test-openai-key",
+			} as unknown as ModelRegistry,
+			model,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		const result = await imageGenTool.execute("call-openai-fallback-xai", { subject: "a cat" }, undefined, ctx);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+
+		expect(requestUrls).toEqual(["https://api.openai.com/v1/responses", "https://api.x.ai/v1/images/generations"]);
+		expect(result.details?.provider).toBe("xai");
+	});
+
 	it("falls back to xAI after an earlier provider HTTP failure", async () => {
 		const requestUrls: string[] = [];
 		const fetchMock = (async (input: string | URL | Request) => {

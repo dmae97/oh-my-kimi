@@ -906,9 +906,10 @@ async function generateOpenAIHostedImage(
 
 	if (!response.ok) {
 		const errorText = await response.text();
-		throw Object.assign(
-			new Error(`OpenAI image request failed (${response.status}): ${getOpenAIResponseErrorMessage(errorText)}`),
-			{ status: response.status },
+		throw new ProviderHttpError(
+			`OpenAI image request failed (${response.status}): ${getOpenAIResponseErrorMessage(errorText)}`,
+			response.status,
+			{ headers: response.headers },
 		);
 	}
 
