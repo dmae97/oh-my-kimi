@@ -144,6 +144,37 @@ function parseBulkDirectives(content: string): Map<number, string> | null {
 	return map;
 }
 
+/**
+ * Resolve per-id directives, preferring the pre-strip `raw` content and falling
+ * back to the hashline-stripped `stripped` content.
+ *
+ * Raw is preferred because the `<id>:` directive heads look exactly like
+ * hashline `LINE:` prefixes and would be eaten by stripping. When the two
+ * contents are identical (hashline mode off) a single parse decides everything,
+ * so a malformed-block error propagates straight through — the previous
+ * `?? parseBulkDirectives(...)` chain would have swallowed it and silently
+ * degraded to uniform bulk mode, pasting the raw directive text into every
+ * block. When they differ, a malformed raw block still defers to a *clean*
+ * stripped block, but otherwise surfaces its error rather than degrading.
+ */
+function resolveBulkDirectives(raw: string, stripped: string): Map<number, string> | null {
+	if (raw === stripped) return parseBulkDirectives(raw);
+	let rawResult: Map<number, string> | null;
+	try {
+		rawResult = parseBulkDirectives(raw);
+	} catch (rawError) {
+		let fallback: Map<number, string> | null = null;
+		try {
+			fallback = parseBulkDirectives(stripped);
+		} catch {
+			fallback = null;
+		}
+		if (fallback) return fallback;
+		throw rawError;
+	}
+	return rawResult ?? parseBulkDirectives(stripped);
+}
+
 const writeSchema = type({
 	path: type("string").describe("file path"),
 	content: type("string").describe("file content"),
@@ -754,7 +785,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		// winner — one call instead of one write per conflict. Parsed from the
 		// PRE-strip content: hashline prefix stripping would otherwise eat the
 		// `<id>: ` heads as echoed line numbers.
-		const directives = parseBulkDirectives(rawContent) ?? parseBulkDirectives(replacementContent);
+		const directives = resolveBulkDirectives(rawContent, replacementContent);
 		if (directives) {
 			const known = new Set(allEntries.map(entry => entry.id));
 			const unknown = [...directives.keys()].filter(id => !known.has(id));
