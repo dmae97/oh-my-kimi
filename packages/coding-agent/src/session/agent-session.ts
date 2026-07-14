@@ -11675,6 +11675,7 @@ export class AgentSession {
 		} else {
 			this.sessionManager.branch(targetParentId);
 		}
+		this.sessionManager.appendCustomEntry("accepted-terminal-empty-stop");
 	}
 
 	/**

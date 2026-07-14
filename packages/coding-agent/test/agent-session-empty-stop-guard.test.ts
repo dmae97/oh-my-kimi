@@ -71,6 +71,7 @@ function thinkingOnlyStop(): MockResponse {
 async function createHarness(
 	responses: MockResponse[],
 	settingsOverrides: SettingsOverrides = {},
+	persistSession = false,
 ): Promise<Harness & { mock: MockModel }> {
 	const tempDir = TempDir.createSync("@pi-empty-stop-guard-");
 	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
@@ -88,7 +89,9 @@ async function createHarness(
 	});
 	settings.setModelRole("default", `${mock.provider}/${mock.id}`);
 
-	const sessionManager = SessionManager.inMemory(tempDir.path());
+	const sessionManager = persistSession
+		? SessionManager.create(tempDir.path(), tempDir.path())
+		: SessionManager.inMemory(tempDir.path());
 	const tools = [recordTool as AgentTool];
 	const agent = new Agent({
 		getApiKey: () => "test-key",
@@ -401,7 +404,7 @@ describe("AgentSession empty stop guard", () => {
 	});
 
 	it("accepts an auto-learn capture turn that ends with an empty terminal stop", async () => {
-		const { session, mock } = await createHarness(
+		const { session, mock, tempDir } = await createHarness(
 			[
 				recordCall("learn-alpha", "call-record-learn-alpha"),
 				recordCall("learn-beta", "call-record-learn-beta"),
@@ -413,6 +416,7 @@ describe("AgentSession empty stop guard", () => {
 				"autolearn.autoContinue": true,
 				"autolearn.minToolCalls": 2,
 			},
+			true,
 		);
 		const retryEndEvents: Array<Extract<AgentSessionEvent, { type: "auto_retry_end" }>> = [];
 		session.subscribe(event => {
@@ -436,6 +440,21 @@ describe("AgentSession empty stop guard", () => {
 		expect(emptyAssistantStops(branchMessagesAfterCapture)).toHaveLength(0);
 		expect(
 			session.sessionManager
+				.getBranch()
+				.some(entry => entry.type === "custom_message" && entry.customType === "autolearn-nudge"),
+		).toBe(false);
+
+		await session.sessionManager.flush();
+		const sessionFile = session.sessionManager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected persistent Auto-Learn test session");
+		const reloadedSession = await SessionManager.open(sessionFile, tempDir.path());
+		const reloadedBranchMessages = reloadedSession
+			.getBranch()
+			.filter(entry => entry.type === "message")
+			.map(entry => entry.message as AgentMessage);
+		expect(emptyAssistantStops(reloadedBranchMessages)).toHaveLength(0);
+		expect(
+			reloadedSession
 				.getBranch()
 				.some(entry => entry.type === "custom_message" && entry.customType === "autolearn-nudge"),
 		).toBe(false);
