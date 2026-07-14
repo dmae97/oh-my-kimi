@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Restored CPU model metadata in workstation prompts on non-Linux hosts while retaining the cheap `/proc/cpuinfo` lookup on Linux ([#4755](https://github.com/can1357/oh-my-pi/issues/4755)).
+
 ## [16.3.11] - 2026-07-06
 
 ### Changed
