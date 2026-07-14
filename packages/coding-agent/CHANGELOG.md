@@ -187,6 +187,9 @@
 ### Fixed
 
 - Fixed sub-agent progress rendering leaking raw terminal control bytes into the parent TUI. ([#5159](https://github.com/can1357/oh-my-pi/issues/5159))
+### Fixed
+
+- Fixed `--continue <session-id>` falling back to an unrelated latest session when the requested session does not exist.
 
 ## [16.4.3] - 2026-07-11
 

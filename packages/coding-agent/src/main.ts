@@ -636,6 +636,27 @@ async function getChangelogForDisplay(parsed: Args): Promise<string | undefined>
 	return undefined;
 }
 
+const SESSION_ID_ARG_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function normalizeContinueSessionArgs(parsed: Args, rawArgs?: readonly string[]): void {
+	if (!parsed.continue || parsed.resume || parsed.fork) return;
+
+	let message: string | undefined;
+	if (parsed.unrecognizedFlags.length === 0 && parsed.messages.length === 1) {
+		message = parsed.messages[0]?.trim();
+	} else if (rawArgs) {
+		const continueIndex = rawArgs.findIndex(arg => arg === "--continue" || arg === "-c");
+		message = rawArgs[continueIndex + 1]?.trim();
+	}
+	if (!message || !SESSION_ID_ARG_RE.test(message)) return;
+
+	const messageIndex = parsed.messages.indexOf(message);
+	if (messageIndex === -1) return;
+	parsed.resume = message;
+	parsed.continue = false;
+	parsed.messages.splice(messageIndex, 1);
+}
+
 /** Resolves CLI session flags into an existing, forked, in-memory, or cancelled session manager. */
 export async function createSessionManager(
 	parsed: Args,
@@ -665,6 +686,8 @@ export async function createSessionManager(
 	if (parsed.noSession) {
 		return SessionManager.inMemory();
 	}
+	normalizeContinueSessionArgs(parsed);
+
 	if (typeof parsed.resume === "string") {
 		const sessionArg = parsed.resume;
 		if (sessionArg.includes("/") || sessionArg.includes("\\") || sessionArg.endsWith(".jsonl")) {
@@ -1188,6 +1211,11 @@ export async function runRootCommand(
 		);
 	}
 
+	// Resolve an explicit `--continue <id>` before extension flags are loaded.
+	// Reading the token immediately after `--continue` distinguishes the session
+	// id from UUID-shaped values owned by later extension flags.
+	normalizeContinueSessionArgs(parsedArgs, rawArgs);
+
 	// Create session manager based on CLI flags. SessionResolutionError signals a
 	// user-facing failure (unknown --resume/--fork id, non-interactive fork
 	// prompt, --fork with --no-session): print + exit cleanly instead of letting
@@ -1386,6 +1414,7 @@ export async function runRootCommand(
 			},
 		};
 		const initialArgs = applyExtensionFlags(extensionFlagSink, rawArgs) ?? parsedArgs;
+		normalizeContinueSessionArgs(initialArgs, rawArgs);
 		// Fail fast on stale/typo flags (e.g. `omp --list-models`) now that we
 		// know the real extension flag set. Without this check the unrecognized
 		// token gets silently consumed and any following positional leaks as the
