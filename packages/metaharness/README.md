@@ -109,6 +109,24 @@ stays the source of truth and historical CLI runs are auto-discovered.
 - `<jobs-dir>/_bench/<jobName>/harbor.log` — full Harbor output.
 - `<jobs-dir>/_manager/logs/<jobName>.log` — runner output for API-launched runs.
 
+## Trace reports
+
+`scripts/trace-report.ts` turns one run trace into a narrative markdown report
+(numbered Turn Log with one grounded sentence per assistant turn, harness
+notices in place, then a Story Arc and — for failed runs — a failure analysis).
+It map/reduces the normalized trace through two cheap OpenRouter models
+(defaults: `inclusionai/ling-2.6-flash` per turn, `openai/gpt-oss-120b` for the
+arc; ~$0.001 per report). API keys resolve through omp's auth storage.
+
+```bash
+bun scripts/trace-report.ts <run> <trace> [--focus "reviewer notes"] [--out report.md]
+bun scripts/trace-report.ts "sb3-ntg|django__django-12325__ddQroP4"   # run|trace also accepted
+```
+
+Flags: `--base` (server, default `http://localhost:4700`), `--tiny` / `--synth`
+(`<provider>/<model-id>` overrides), `--focus` (extra reviewer context, e.g. the
+known-correct fix for a failed task), `--concurrency` (default 8).
+
 ## Caveats
 
 - **Network policy.** On Harbor's local Docker backend only **public**

@@ -157,6 +157,7 @@
         "@oh-my-pi/hashline": "catalog:",
         "@oh-my-pi/pi-agent-core": "catalog:",
         "@oh-my-pi/pi-ai": "catalog:",
+        "@oh-my-pi/pi-catalog": "catalog:",
         "@oh-my-pi/pi-coding-agent": "catalog:",
         "@oh-my-pi/pi-utils": "catalog:",
         "@oh-my-pi/typescript-edit-benchmark": "workspace:*",
