@@ -314,6 +314,7 @@
 - Fixed --tools filtering in interactive sessions incorrectly disabling deferred MCP tools from configured servers.
 - Fixed kept-alive task subagents entering infinite provider-call loops after an IRC wake and terminal yield.
 - Fixed `omp update` on npm-managed Windows installs so npm `.cmd`/`.ps1`/`.bat` launchers update through npm instead of being overwritten by downloaded release binaries. ([#5053](https://github.com/can1357/oh-my-pi/issues/5053))
+- Fixed Python eval `agent()` bridge calls losing in-flight subagent work when the parent cell receives an external abort; the kernel abort is now deferred until already-started bridge calls settle, and new bridge calls are rejected after the abort is pending. ([#5005](https://github.com/can1357/oh-my-pi/issues/5005))
 
 ## [16.3.15] - 2026-07-09
 
