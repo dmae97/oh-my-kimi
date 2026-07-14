@@ -19,7 +19,8 @@ the classification calls for code. Drive the todo list to completion:
    `fetch_issue_thread`, then call
    `classify_issue(primary=..., priority=..., functional=[...], rationale=...)`.
    Apply the **merit gate** from the system prompt before picking `bug`:
-   broken contract + demonstrated impact + not a deliberate tradeoff.
+   broken contract, demonstrated impact, deliberate-tradeoff check, upstream
+   vs this-repo cause, and premise verification must ALL pass.
    You NEVER post a comment, push, or open a PR before this step.
 
 2. **Follow the workflow branch** the classification dictates — see the system
