@@ -44,13 +44,14 @@ describe("error-id classification", () => {
 	});
 
 	it("keeps provider content filters non-retryable", () => {
-		const error = new AIError.ProviderResponseError("incomplete: content_filter", {
+		const error = new AIError.ProviderResponseError("Provider returned error finish_reason: content_filter", {
 			provider: "openrouter",
 			kind: "content-blocked",
 		});
 		const id = AIError.classify(error, "openai-responses");
 		expect(AIError.is(id, AIError.Flag.ContentBlocked)).toBe(true);
-		expect(AIError.is(id, AIError.Flag.ProviderFinishError)).toBe(false);
+		expect(AIError.is(id, AIError.Flag.ProviderFinishError)).toBe(true);
+		expect(AIError.is(id, AIError.Flag.Transient)).toBe(true);
 		expect(AIError.retriable(id)).toBe(false);
 	});
 

@@ -204,6 +204,7 @@ export function is(id: number | undefined, flag: Flag): boolean {
 }
 
 export function retriable(id: number | undefined, opts?: { replayUnsafe?: boolean }): boolean {
+	if (is(id, Flag.ContentBlocked)) return false;
 	if (is(id, Flag.MalformedFunctionCall)) return true;
 	if (opts?.replayUnsafe) return false;
 	return ((id ?? 0) & RETRIABLE_KINDS) !== 0;
