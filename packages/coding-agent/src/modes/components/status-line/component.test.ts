@@ -36,6 +36,7 @@ function makeSessionWithLastMessage(lastMessage: unknown, prewalkArmed: boolean 
 		getPrewalkState: () => (prewalkArmed ? { target: { id: "cheap-model", provider: "openai" } } : undefined),
 		getAsyncJobSnapshot: () => undefined,
 		isAdvisorActive: () => false,
+		getAdvisorStatusOverview: () => ({ configured: false, advisors: [] }),
 		isFastModeActive: () => false,
 		configuredThinkingLevel: () => undefined,
 		modelRegistry: {
