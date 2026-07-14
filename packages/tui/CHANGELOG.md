@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `Ctrl+W` (delete word backward) stopping at underscores in snake_case identifiers; `_` is now classified as a word character so `allowed_openai_params` deletes as a single word ([#4776](https://github.com/can1357/oh-my-pi/issues/4776)).
+
 ## [16.3.10] - 2026-07-06
 
 ### Fixed
