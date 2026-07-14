@@ -40,6 +40,8 @@ const THINKING_TAG_ENVELOPE_RE = /<(think|thinking|reasoning)>\s*[\s\S]*?<\/\1>/
 const THINKING_FENCE_ENVELOPE_RE = /```(?:thinking|reasoning)\b[\s\S]*?```/gi;
 const LEADING_THINKING_TAG_RE = /^\s*<(think|thinking|reasoning)>\s*[\s\S]*?<\/\1>\s*/i;
 const LEADING_THINKING_FENCE_RE = /^\s*```(?:thinking|reasoning)\b[\s\S]*?```\s*/i;
+const LEADING_PROSE_THINKING_PREAMBLE_RE =
+	/^[ \t]*(?:(?:here(?:['’]s| is)[ \t]+(?:a|the|my)[ \t]+)|my[ \t]+)?(?:thinking|thought|reasoning)[ \t]+process[ \t]*:?[ \t]*(?:\r?\n|$)/i;
 
 function getTitleModel(registry: ModelRegistry, settings: Settings, currentModel?: Model<Api>): Model<Api> | undefined {
 	const availableModels = registry.getAvailable();
@@ -250,13 +252,15 @@ function extractGeneratedTitle(contentBlocks: AssistantMessage["content"]): stri
 	}
 	// Stay lenient: prefer the first closed title marker in visible text, then
 	// fall back to a plain sentence after stripping only known leading leaked
-	// thinking envelopes plus any stray/unclosed title tag fragment.
+	// thinking envelopes plus any stray/unclosed title tag fragment. Reject a
+	// prose thinking preamble only on the markerless path: a later marked title
+	// remains authoritative.
 	const markedTitle = extractVisibleMarkedTitle(textTitle);
-	const cleanedTextTitle =
-		markedTitle ??
-		stripLeadingLeakedThinkingMarkup(textTitle)
-			.replace(/<\/?title>/gi, "")
-			.trim();
+	if (markedTitle !== undefined) return unwrapJsonTitle(markedTitle);
+	const cleanedTextTitle = stripLeadingLeakedThinkingMarkup(textTitle)
+		.replace(/<\/?title>/gi, "")
+		.trim();
+	if (LEADING_PROSE_THINKING_PREAMBLE_RE.test(cleanedTextTitle)) return "";
 	return unwrapJsonTitle(cleanedTextTitle);
 }
 

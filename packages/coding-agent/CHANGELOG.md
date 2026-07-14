@@ -133,6 +133,9 @@
 
 - Fixed PageUp/PageDown in the model browser wrapping past the list edges instead of clamping
 - Fixed the hover highlight sticking to the last hovered model row when the pointer moved into the provider sidebar
+### Fixed
+
+- Fixed markerless prose thinking preambles becoming session titles when title models omit the required `<title>` marker. ([#5252](https://github.com/can1357/oh-my-pi/issues/5252))
 
 ## [16.4.6] - 2026-07-12
 
