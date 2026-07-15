@@ -183,7 +183,7 @@ So deeper levels cannot spawn further tasks even if the agent definition include
 When parent plan mode is enabled, `TaskTool.#runSpawn` builds an `effectiveAgent` before launching subprocesses:
 
 - prepends the plan-mode subagent system prompt
-- restricts tools to `read`, `search`, `find`, `lsp`, and `web_search`, plus `ast_grep`/`report_finding` when the agent's own tool list declares them (`PLAN_MODE_AGENT_TOOL_ALLOWLIST`)
+- restricts tools to `read`, `search`, `find`, `lsp`, and `web_search`, plus `ast_grep` when the agent's own tool list declares it (`PLAN_MODE_AGENT_TOOL_ALLOWLIST`)
 - clears child spawns
 - clears `prewalk` (read-only exploration must not receive the prewalk plan/implement nudges)
 

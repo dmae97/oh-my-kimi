@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Tool discovery (`search-tool-bm25`) and discovery mode settings removed
+- Plan approval workflow changed: `resolve { action: "apply", extra: { title } }` → write slug to `xd://propose`
+- `irc`, `job`, `launch` tools replaced by `hub` with unified API
+
+### Added
+
+- Added `xd://` virtual device protocol for mounting tools as URLs readable/writable via read/write tools
+- Added `hub` tool consolidating agent peer messaging, background job control, and supervised long-running processes (replacing `irc`, `job`, and `launch`)
+- Added `tools.xdev` setting to enable xd:// device mounting (default: true)
+- Added `edit.enforceSeenLines` setting for opt-in seen-line guard rejecting edits on lines not fully displayed (default: false)
+- Added `ToolLoadMode` type clarifying "essential" vs "discoverable" tool presentation
+- Added an optional `satisfies` predicate to `SoftToolRequirement`: compliance can now require a specific invocation shape (e.g. a `write` targeting a virtual device path) instead of any call to `toolName`; escalation still forces `toolName`.
+
+### Changed
+
+- Plan approval now uses `xd://propose` write instead of `resolve` tool action
+- Tool discovery system removed; `search-tool-bm25` tool no longer available
+- Tool loading behavior: discoverable tools now mounted under xd:// or surfaced via BM25 search instead of staying top-level
+
+### Removed
+
+- Removed `resolve` tool; plan approval and preview actions now use xd:// writes
+- Removed `irc`, `job`, and `launch` tools (consolidated into `hub`)
+- Removed tool discovery settings: `tools.discoveryMode`, `tools.essentialOverride`, `mcp.discoveryMode`, `mcp.discoveryDefaultServers`
+
 ## [16.5.2] - 2026-07-14
 
 ### Fixed

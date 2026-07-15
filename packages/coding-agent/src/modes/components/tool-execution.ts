@@ -20,7 +20,7 @@ import type { Theme } from "../../modes/theme/theme";
 import { getThemeEpoch, theme } from "../../modes/theme/theme";
 import { BASH_DEFAULT_PREVIEW_LINES } from "../../tools/bash";
 import { EVAL_DEFAULT_PREVIEW_LINES } from "../../tools/eval";
-import { isWaitingPollDetails } from "../../tools/job";
+import { isWaitingPollDetails } from "../../tools/hub";
 import {
 	formatArgsInline,
 	JSON_TREE_MAX_DEPTH_COLLAPSED,
@@ -75,7 +75,7 @@ function stripTrailingUnbalancedRemoval(diff: string | undefined): string | unde
 	return lines.slice(0, lastAddIdx + 1).join("\n");
 }
 
-type DisplaceableToolName = "job" | "todo";
+type DisplaceableToolName = "hub" | "todo";
 
 function isTodoToolDetails(details: unknown): details is TodoToolDetails {
 	return (
@@ -92,7 +92,7 @@ function displaceableToolName(
 	isPartial: boolean,
 ): DisplaceableToolName | undefined {
 	if (result.isError === true) return undefined;
-	if (toolName === "job" && isWaitingPollDetails(result.details)) return "job";
+	if (toolName === "hub" && isWaitingPollDetails(result.details)) return "hub";
 	if (toolName === "todo" && !isPartial && isTodoToolDetails(result.details)) return "todo";
 	return undefined;
 }
@@ -273,7 +273,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	// late result still repaints instead of stranding the streaming preview.
 	#sealed = false;
 	// Tool result snapshots that may be superseded by a later same-tool call
-	// while still in the transcript live region. `job` uses this for repeated
+	// while still in the transcript live region. `hub` uses this for repeated
 	// all-running polls; `todo` uses it for per-turn state snapshots so only the
 	// latest list remains visible.
 	#displaceableByToolName: DisplaceableToolName | undefined;
@@ -610,7 +610,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			this.#toolName !== "todo" &&
 			!isBackgroundAsyncRunning &&
 			(pendingCallConsumesSpinner || partialResultConsumesSpinner);
-		const needsSpinner = isStreamingArgs || isLivePartialTool || this.#displaceableByToolName === "job";
+		const needsSpinner = isStreamingArgs || isLivePartialTool || this.#displaceableByToolName === "hub";
 		if (needsSpinner && !this.#spinnerInterval) {
 			const frameCount = theme.spinnerFrames.length;
 			const frame = sharedSpinnerFrame(frameCount);
@@ -1195,6 +1195,14 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 				if (fallback) context.editStreamingFallback = fallback;
 			}
 			context.renderDiff = renderDiff;
+		} else if (this.#toolName === "write") {
+			// Device-dispatch previews delegate to the mounted tool's own renderer;
+			// expose the session's xd:// registry so custom/MCP renderers survive dispatch.
+			const writeTool = this.#tool as
+				| { session?: { xdevRegistry?: { get(name: string): AgentTool | undefined } } }
+				| undefined;
+			const registry = writeTool?.session?.xdevRegistry;
+			if (registry) context.resolveXdevMounted = (name: string) => registry.get(name);
 		}
 
 		return context;

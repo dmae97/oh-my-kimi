@@ -73,4 +73,22 @@ describe("generate_image tool gating", () => {
 		const names = await activeToolNames(Settings.isolated({}), ["read", "generate_image"]);
 		expect(names).toContain("generate_image");
 	});
+
+	it("exposes generate_image as an xd:// device (not top-level) in a default session", async () => {
+		// Default session (no explicit --tools) with tools.xdev on: image-gen is a
+		// discoverable custom tool, so it mounts as an xd:// device instead of
+		// shipping its schema top-level.
+		const { session } = await createAgentSession({
+			cwd: registryDir,
+			agentDir: registryDir,
+			modelRegistry,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({}),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+		});
+		sessions.push(session);
+		expect(session.getActiveToolNames()).not.toContain("generate_image");
+		expect(session.getXdevToolEntries().map(entry => entry.name)).toContain("generate_image");
+	});
 });

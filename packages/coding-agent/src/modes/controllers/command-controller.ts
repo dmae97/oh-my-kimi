@@ -515,7 +515,10 @@ export class CommandController {
 	}
 
 	handleToolsCommand(): void {
-		const tools = buildToolsMarkdown({ tools: this.ctx.session.agent.state.tools });
+		const tools = buildToolsMarkdown({
+			tools: this.ctx.session.agent.state.tools,
+			xdevTools: this.ctx.session.getXdevToolEntries(),
+		});
 		showMarkdownPanel(this.ctx, "Available Tools", tools);
 	}
 

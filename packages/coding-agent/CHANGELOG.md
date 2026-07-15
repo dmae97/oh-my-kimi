@@ -2,22 +2,42 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Merged the `irc`, `job`, and `launch` tools into a single `hub` tool (`loadMode: "essential"`). Messaging keeps its op names (`send`/`inbox`/`list`); job control maps `{poll}` → `op:"wait"` + `ids`, `{cancel}` → `op:"cancel"` + `ids`, and `{list:true}` → `op:"jobs"`; process supervision keeps `start`/`logs`/`stop`/`restart`/`describe` with the broker's `list` renamed to `op:"ps"`, and `send`/`wait` route to a process when they carry `name`. The unified `wait` races watched background jobs against incoming peer messages and returns on the first event, replacing the old `irc wait` / `job poll` split. TUI and collab-web rendering are unchanged per op family. SDK: `IrcTool`, `JobTool`, `LaunchTool`, `IrcDetails`, and `JobToolDetails` are removed; use `HubTool`, `CoordinationDetails`, `LaunchToolDetails`, and `hubToolRenderer` from `tools/hub` (`isIrcEnabled`, `isWaitingPollDetails`, and `createIrcMessageCard` moved there). The default `model.toolCallLoopGuard.exemptTools` is now `["hub"]`.
+- Removed the hidden `resolve` tool. Staged actions now finalize through three plain-text resolution devices: `xd://resolve` (apply preview), `xd://reject` (discard preview), and `xd://propose` (submit a plan slug/title for approval). The `write` tool is auto-included whenever a deferrable tool is present (`createTools`) or plan mode is enabled (`createAgentSession`), replacing the auto-included `resolve` tool. SDK: `ResolveTool` and `HIDDEN_TOOLS.resolve` are removed; use `dispatchResolutionDevice()` / `queueResolveHandler()` from `tools/resolve`. Plan-mode prompts and the preview reminder now teach the device-write call shapes when they become relevant.
+- Unified tool presentation on `loadMode` (`essential` | `discoverable`), replacing the custom-tool `xdev?: boolean` opt-out. Custom, extension, MCP, RPC host, image-generation, and TTS tools now default to `discoverable` and mount under `xd://` when enabled (set `loadMode: "essential"` to stay top-level). `generate_image`/`tts`/MCP tools are exposed as `xd://` devices in a default session instead of shipping their schemas top-level.
+- Removed the BM25 tool-discovery system: the `search_tool_bm25` tool, the `tools.discoveryMode` / `mcp.discoveryMode` / `mcp.discoveryDefaultServers` settings, and per-tool MCP selection. `xd://` is now the sole transport for discoverable tools; every connected MCP tool is enabled and mounted under `xd://`. SDK: `search_tool_bm25`, the `tool-discovery` module, and the `AgentSession` discovery/MCP-selection methods (`getDiscoverableTools`, `activateDiscoveredTools`, `isMCPDiscoveryEnabled`, …) are removed.
+
 ### Added
 
+- Added the `edit.enforceSeenLines` setting (default off) to gate the hashline seen-line guard. When off, hashline tags validate on content hash alone and any anchor into the tagged content applies; when on, edits anchored on lines a prior `read`/`grep` never displayed are rejected.
 - Added per-agent prewalk for subagents: a `prewalk` frontmatter field (`true` = hand off to the default prewalk target, a string = custom target model pattern) and a `task.agentPrewalk` settings override toggled per agent from the `/agents` dashboard with `P`. The bundled generic `task` agent ships with prewalk enabled by default (skipped when the target resolves to the subagent's own starting model, and never armed for plan-mode spawns). Prewalk-armed subagents keep the normally parent-owned `todo` tool so the plan-nudge → todo → hand-off flow works, and the prewalk todo gate now keys on the active tool set instead of the registry so a deactivated todo tool can no longer stall the switch.
+- Added `xd://` virtual tool devices (setting `tools.xdev`, default on): built-ins declaring `loadMode: "discoverable"` (browser, debug, lsp, ast_grep/ast_edit, github, web_search, ...) are unmounted from the request's tools array entirely and driven through the tools the model already has: `read xd://` lists mounted devices, `read xd://<tool>` returns docs + JSON schema, and `write xd://<tool>` with a JSON args object as content executes the tool. Args validate against the mounted tool's real schema (returned on mismatch), and the tools array (and prompt-cache prefix) never changes shape when devices mount or unmount mid-session. `todo`, `ask`, and `grep` stay top-level for their harness integrations; `/tools` lists mounted devices; and `xd://` writes render with the mounted tool's own TUI renderer — streamed call previews draw nothing until the path is provably not an `xd://` device, then forward the incrementally decoded JSON content as live inner args. Explicit `--tools read,...,xdev` lists opt lean sets into the same mounting; `tools.discoveryMode: "all"` takes precedence when active. Full docs + JSON schema for every mounted device are inlined into the system prompt's `xd://` section, so no discovery `read` is required before first use; `read xd://<tool>` remains available for on-demand re-fetch.
 
 ### Changed
 
+- Made the hashline seen-line guard opt-in and off by default (see `edit.enforceSeenLines`), and stopped excluding column-clipped (>512-char) lines from a snapshot's seen set: a displayed line now counts as seen even when its display was column-truncated, so single-line edits on long lines found via `read`/`grep` apply without a separate full-width re-read.
 - Changed the default `astGrep.enabled` setting to `false`
 - Batched todo operations with real tool calls to prevent solo todo turns and extra round trips
+- Changed every bundled TTSR rule to warn without interrupting generation.
+- Renamed the system prompt's project-context section wrapper from `<context>` to `<repo-rules>` to stop it colliding with the `task` tool's `context` parameter under in-band XML tool dialects: models were closing `<parameter name="context">` with a stray `</context>` (primed by the ambient section tag) and emitting sibling params as bare `<tasks>` elements, so `tasks` arrived missing.
+- Rendered `read xd://` calls in the compact grouped read view instead of a full tool-execution card; other internal URLs (`skill://`, `agent://`, …) still render full so their resolved content stays visible.
 
-- Added the `edit.enforceSeenLines` setting (default off) to gate the hashline seen-line guard. When off, hashline tags validate on content hash alone and any anchor into the tagged content applies; when on, edits anchored on lines a prior `read`/`grep` never displayed are rejected.
+### Removed
+
+- Removed the `tools.essentialOverride` setting; essential tools are configured through device mounting
+- Removed `mcp_tool_selection` session message type; MCP tool discovery now uses device mounting instead
+- Removed the legacy `report_finding` tool; reviewer agents record findings through incremental `yield` sections (`type: ["findings"]`). SDK: `reportFindingTool` and `HIDDEN_TOOLS.report_finding` are removed (the `FindingDetails` shape and `parseFindingDetails` helper remain for reviewer rendering).
+- Removed the `ssh` agent tool (remote command execution). The `ssh://` read/write/search protocol, the `omp ssh` host-management CLI, and SSH host discovery are retained. SDK: `SshTool`/`loadSshTool`, the `ssh/ssh-executor` module, and `AgentSession.refreshSshTool` are removed.
+- Removed the `xdev` `--tools` token; the `xd://` device system now mounts only via the `tools.xdev` setting (the `--tools ...,xdev` opt-in and `HIDDEN_TOOLS.xdev` are gone).
+
 ### Fixed
 
 - Fixed Bash internal URLs remaining unresolved when used as unquoted arguments inside command substitutions ([#5535](https://github.com/can1357/oh-my-pi/issues/5535)).
+- Fixed `--tools` silently dropping hidden tool names (`xdev`, `yield`, ...); hidden built-ins are now addressable per the `hidden` tool contract.
 - Fixed the built-in `fd` printing `fd: Broken pipe (os error 32)` when a downstream pipeline reader exited early (e.g. `fd … | head`); it now exits silently with 141 (128+SIGPIPE), matching real fd.
 - Fixed prewalk repeatedly continuing after a bash-only task such as `commit` had already completed ([#5551](https://github.com/can1357/oh-my-pi/issues/5551)).
-- Made the hashline seen-line guard opt-in and off by default (see `edit.enforceSeenLines`), and stopped excluding column-clipped (>512-char) lines from a snapshot's seen set: a displayed line now counts as seen even when its display was column-truncated, so single-line edits on long lines found via `read`/`grep` apply without a separate full-width re-read.
 - Fixed the Bash tool hanging when in-process commands read process substitution operands such as `<(cmd)` ([#5557](https://github.com/can1357/oh-my-pi/issues/5557)).
 - Fixed `/share` and `/export` web views rendering inline Markdown inside list items as literal text ([#5567](https://github.com/can1357/oh-my-pi/issues/5567)).
 

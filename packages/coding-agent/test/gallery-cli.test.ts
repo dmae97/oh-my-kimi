@@ -91,9 +91,9 @@ describe("gallery harness", () => {
 
 	it("renders curated failed states as failures", async () => {
 		const cases = [
-			["irc_inbox", "IRC inbox failed: message store unavailable.", "IRC inbox empty"],
-			["irc_list", "IRC list failed: agent hub is unavailable.", "no other agents"],
-			["job", "Subagent exited 1: Redis connection string is missing.", "cancelled"],
+			["hub_inbox", "IRC inbox failed: message store unavailable.", "IRC inbox empty"],
+			["hub_list", "IRC list failed: agent hub is unavailable.", "no other agents"],
+			["hub_jobs", "Subagent exited 1: Redis connection string is missing.", "cancelled"],
 		] as const;
 
 		for (const [name, expected, forbidden] of cases) {

@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced the `irc`/`job` tool renderers (and their legacy `await`/`poll`/`cancel_job` aliases) with a single `hub` renderer that dispatches per op family — messaging, background jobs, and process supervision — keeping the existing irc/job visuals.
+- Collab-web renders successful `xd://` device dispatches through the inner tool's renderer: a `write` result carrying `details.xdev` (execute mode) resolves the renderer by `xdev.tool`, uses `xdev.args`, and swaps in `xdev.inner` as details, with the card labeled `xd://<tool>` (preserves generated-image thumbnails and MCP/autoresearch presentation).
+
+### Removed
+
+- Removed custom visualization for `search_tool_bm25` tool; falls back to generic rendering
+
 ## [16.5.1] - 2026-07-14
 
 ### Fixed

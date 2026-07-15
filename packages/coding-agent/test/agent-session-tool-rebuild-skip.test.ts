@@ -66,7 +66,6 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 	});
 
 	interface NewSessionOptions {
-		mcpDiscoveryEnabled?: boolean;
 		getMcpServerInstructions?: () => Map<string, string> | undefined;
 		getLocalCalendarDate?: () => string;
 	}
@@ -100,7 +99,6 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 			rebuildSystemPrompt: async (toolNames, _tools) => ({
 				systemPrompt: [await rebuildSystemPrompt(toolNames)],
 			}),
-			mcpDiscoveryEnabled: options.mcpDiscoveryEnabled,
 			getMcpServerInstructions: options.getMcpServerInstructions,
 			getLocalCalendarDate: options.getLocalCalendarDate,
 		});
@@ -158,23 +156,21 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		const a = createMcpCustomTool("mcp__nucleus_search", "nucleus", "search", "Search");
 		const b = createMcpCustomTool("mcp__nucleus_explain", "nucleus", "explain", "Explain");
 
-		// Bring both into the registry; only `mcp__nucleus_search` becomes active per
-		// the agent's initial tool set.
+		// Connected MCP tools are all enabled after refresh.
 		await session.refreshMCPTools([a, b]);
 		const baseline = rebuildCount;
 		expect(baseline).toBeGreaterThanOrEqual(1);
 
-		// Activate the previously-inactive tool: the active list grew, signature must
-		// change, rebuild must fire.
-		await session.setActiveToolsByName(["read", "mcp__nucleus_search", "mcp__nucleus_explain"]);
+		// Remove one active tool: the active list shrinks, so rebuild must fire.
+		await session.setActiveToolsByName(["read", "mcp__nucleus_search"]);
 		expect(rebuildCount).toBe(baseline + 1);
 
 		// Same list again: skip.
-		await session.setActiveToolsByName(["read", "mcp__nucleus_search", "mcp__nucleus_explain"]);
+		await session.setActiveToolsByName(["read", "mcp__nucleus_search"]);
 		expect(rebuildCount).toBe(baseline + 1);
 
-		// Drop one: rebuild fires again.
-		await session.setActiveToolsByName(["read", "mcp__nucleus_search"]);
+		// Restore it: rebuild fires again.
+		await session.setActiveToolsByName(["read", "mcp__nucleus_search", "mcp__nucleus_explain"]);
 		expect(rebuildCount).toBe(baseline + 2);
 	});
 
@@ -246,7 +242,7 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		expect(rebuildCount).toBe(2);
 	});
 
-	it("ignores incidental insertion order in the refresh argument", async () => {
+	it("rebuilds when the refresh argument tool order changes", async () => {
 		let rebuildCount = 0;
 		const { session } = newSession(async toolNames => {
 			rebuildCount++;
@@ -256,14 +252,13 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		const a = createMcpCustomTool("mcp__nucleus_a", "nucleus", "a", "A");
 		const b = createMcpCustomTool("mcp__nucleus_b", "nucleus", "b", "B");
 
-		// `refreshMCPTools` re-derives the active tool set from the registry using the
-		// session's existing ordering, so passing the same content in a different order
-		// must not mutate the signature.
+		// All connected MCP tools are active, so their ordering contributes to the
+		// rendered prompt and changing it must rebuild.
 		await session.refreshMCPTools([a, b]);
 		expect(rebuildCount).toBe(1);
 
 		await session.refreshMCPTools([b, a]);
-		expect(rebuildCount).toBe(1);
+		expect(rebuildCount).toBe(2);
 	});
 
 	it("rebuilds when an MCP tool's label changes", async () => {
@@ -320,35 +315,30 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		expect(rebuildCount).toBe(3);
 	});
 
-	it("rebuilds when a discoverable (inactive) registry tool's metadata changes", async () => {
-		// With MCP discovery on, the rebuilt prompt summarizes ALL discoverable MCP
-		// tools — including ones not in the active set. The signature must capture the
-		// full registry; otherwise a description change to a discoverable-but-inactive
-		// tool would silently leave a stale summary in the cached prompt.
+	it("rebuilds when an MCP registry tool's metadata changes", async () => {
+		// All connected MCP tools are enabled. The signature must capture the full
+		// registry so a description change cannot leave stale prompt metadata cached.
 		let rebuildCount = 0;
-		const { session } = newSession(
-			async toolNames => {
-				rebuildCount++;
-				return `tools:${toolNames.join(",")}`;
-			},
-			{ mcpDiscoveryEnabled: true },
-		);
+		const { session } = newSession(async toolNames => {
+			rebuildCount++;
+			return `tools:${toolNames.join(",")}`;
+		}, {});
 
 		const active = createMcpCustomTool("mcp__nucleus_search", "nucleus", "search", "Search");
-		const discoverable = createMcpCustomTool("mcp__nucleus_explain", "nucleus", "explain", "Explain v1");
+		const secondary = createMcpCustomTool("mcp__nucleus_explain", "nucleus", "explain", "Explain v1");
 
-		await session.refreshMCPTools([active, discoverable]);
+		await session.refreshMCPTools([active, secondary]);
 		const baseline = rebuildCount;
 		expect(baseline).toBeGreaterThanOrEqual(1);
 
 		// Same registry: skip.
-		await session.refreshMCPTools([active, discoverable]);
+		await session.refreshMCPTools([active, secondary]);
 		expect(rebuildCount).toBe(baseline);
 
-		// Mutate the discoverable (NOT active) tool's description: signature must
-		// differ via the registrySegment branch and force a rebuild.
-		const discoverableV2 = createMcpCustomTool("mcp__nucleus_explain", "nucleus", "explain", "Explain v2");
-		await session.refreshMCPTools([active, discoverableV2]);
+		// Mutate the secondary tool's description: the signature must differ and force
+		// a rebuild.
+		const secondaryV2 = createMcpCustomTool("mcp__nucleus_explain", "nucleus", "explain", "Explain v2");
+		await session.refreshMCPTools([active, secondaryV2]);
 		expect(rebuildCount).toBe(baseline + 1);
 	});
 	it("rebuilds when an MCP tool's customWireName changes", async () => {
@@ -388,22 +378,20 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 	it("rebuilds when a tool's getter-based description reflects new settings state", async () => {
 		// Built-in tools whose prompt-rendered metadata depends on settings expose
 		// `description` via getters that re-evaluate on every access (TaskTool reads
-		// task.disabledAgents/maxConcurrency/isolation.mode/simple/async.enabled,
-		// SearchToolBm25Tool reads the discoverable MCP tool count, EditTool resolves
-		// through the current edit-mode definition). The signature reads `tool.description`
-		// live each call, so a settings flip that mutates the rendered string MUST differ
-		// the signature on the next `#applyActiveToolsByName`. Defending this contract
-		// against a future refactor that caches per-tool description strings.
+		// task.disabledAgents/maxConcurrency/isolation.mode/simple/async.enabled, and
+		// EditTool resolves through the current edit-mode definition). The signature
+		// reads `tool.description` live each call, so a settings flip that mutates the
+		// rendered string must change the signature on the next
+		// `#applyActiveToolsByName`.
 		let rebuildCount = 0;
 		const { session } = newSession(
 			async toolNames => {
 				rebuildCount++;
 				return `tools:${toolNames.join(",")}`;
 			},
-			// Discovery-on so the dynamic tool participates in the registry segment too,
-			// matching the production pattern where `TaskTool` and friends are always
-			// reachable via the registry.
-			{ mcpDiscoveryEnabled: true },
+			// The dynamic tool is active, so the signature reads its description via
+			// the active tool metadata segment.
+			{},
 		);
 
 		// Reuse the initially-active MCP name so the tool stays in the active list

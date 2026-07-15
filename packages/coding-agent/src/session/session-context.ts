@@ -64,10 +64,6 @@ export interface SessionContext {
 	models: Record<string, string>;
 	/** Names of TTSR rules that have been injected this session */
 	injectedTtsrRules: string[];
-	/** MCP tool names selected through discovery for this session branch. */
-	selectedMCPToolNames: string[];
-	/** Whether this branch contains an explicit persisted MCP selection entry. */
-	hasPersistedMCPToolSelection: boolean;
 	/** Active mode (e.g. "plan") or "none" if no special mode is active */
 	mode: string;
 	/** Mode-specific data from the last mode_change entry */
@@ -179,8 +175,6 @@ export function buildSessionContext(
 			serviceTier: undefined,
 			models: {},
 			injectedTtsrRules: [],
-			selectedMCPToolNames: [],
-			hasPersistedMCPToolSelection: false,
 			mode: "none",
 		};
 	}
@@ -199,8 +193,6 @@ export function buildSessionContext(
 			serviceTier: undefined,
 			models: {},
 			injectedTtsrRules: [],
-			selectedMCPToolNames: [],
-			hasPersistedMCPToolSelection: false,
 			mode: "none",
 		};
 	}
@@ -221,8 +213,6 @@ export function buildSessionContext(
 	const models: Record<string, string> = {};
 	let compaction: CompactionEntry | null = null;
 	const injectedTtsrRulesSet = new Set<string>();
-	let selectedMCPToolNames: string[] = [];
-	let hasPersistedMCPToolSelection = false;
 	let mode = "none";
 	let modeData: Record<string, unknown> | undefined;
 	// Track whether an explicit `model_change` with role="default" has been
@@ -265,9 +255,6 @@ export function buildSessionContext(
 			for (const ruleName of entry.injectedRules) {
 				injectedTtsrRulesSet.add(ruleName);
 			}
-		} else if (entry.type === "mcp_tool_selection") {
-			selectedMCPToolNames = [...entry.selectedToolNames];
-			hasPersistedMCPToolSelection = true;
 		} else if (entry.type === "mode_change") {
 			mode = entry.mode;
 			modeData = entry.data;
@@ -519,8 +506,6 @@ export function buildSessionContext(
 		serviceTier,
 		models,
 		injectedTtsrRules,
-		selectedMCPToolNames,
-		hasPersistedMCPToolSelection,
 		mode,
 		modeData,
 	};

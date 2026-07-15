@@ -200,7 +200,6 @@ function getMessageFromEntry(entry: SessionEntry): AgentMessage | undefined {
 		case "label":
 		case "service_tier_change":
 		case "ttsr_injection":
-		case "mcp_tool_selection":
 		case "session_init":
 		case "mode_change":
 			return undefined;

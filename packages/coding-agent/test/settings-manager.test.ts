@@ -694,17 +694,6 @@ describe("Settings", () => {
 			expect(settings.get("grep.enabled")).toBe(true);
 		});
 
-		it("migrates legacy tool names in persisted essential overrides", async () => {
-			await writeSettings({
-				tools: { essentialOverride: ["read", "find", "search", "grep"] },
-				"tools.essentialOverride": ["find", "search", "read"],
-			});
-
-			const settings = await Settings.init({ cwd: projectDir, agentDir });
-
-			expect(settings.get("tools.essentialOverride")).toEqual(["read", "glob", "grep"]);
-		});
-
 		it("migrates from settings.json containing comments", async () => {
 			const jsonPath = path.join(agentDir, "settings.json");
 			await fs.promises.writeFile(

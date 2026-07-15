@@ -1,7 +1,7 @@
 /**
  * CustomToolAdapter wraps CustomTool instances into AgentTool for use with the agent.
  */
-import type { AgentTool, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type { AgentTool, AgentToolUpdateCallback, ToolLoadMode } from "@oh-my-pi/pi-agent-core";
 import type { Static, TSchema } from "@oh-my-pi/pi-ai";
 import type { Theme } from "../../modes/theme/theme";
 import { applyToolProxy } from "../tool-proxy";
@@ -15,6 +15,7 @@ export class CustomToolAdapter<TParams extends TSchema = TSchema, TDetails = any
 	declare description: string;
 	declare parameters: TParams;
 	readonly strict: boolean | undefined;
+	readonly loadMode: ToolLoadMode;
 
 	constructor(
 		private tool: CustomTool<TParams, TDetails>,
@@ -22,6 +23,7 @@ export class CustomToolAdapter<TParams extends TSchema = TSchema, TDetails = any
 	) {
 		applyToolProxy(tool, this);
 		this.strict = tool.strict;
+		this.loadMode = tool.loadMode ?? "discoverable";
 	}
 
 	execute(

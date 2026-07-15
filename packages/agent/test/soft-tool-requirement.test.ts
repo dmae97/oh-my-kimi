@@ -134,6 +134,64 @@ describe("agentLoop soft tool requirement", () => {
 		expect(peekResult).toBeDefined();
 	});
 
+	it("uses the satisfies predicate over bare name matching for compliance", async () => {
+		let pendingPreview = true;
+		const writeRuns: string[] = [];
+		const reminder = createUserMessage("<system-reminder>Write the resolution to /xdev/resolve.</system-reminder>");
+		const writeSchema = type({ path: "string" });
+		const writeTool: AgentTool<typeof writeSchema, Record<string, never>> = {
+			name: "write",
+			label: "Write",
+			description: "Write a file or device",
+			parameters: writeSchema,
+			async execute(_id, args) {
+				writeRuns.push(args.path);
+				if (args.path === "/xdev/resolve") pendingPreview = false;
+				return { content: [{ type: "text", text: "written" }], details: {} };
+			},
+		};
+		const getToolChoice = (): SoftToolRequirement | undefined =>
+			pendingPreview
+				? {
+						soft: true,
+						id: "preview-1",
+						toolName: "write",
+						satisfies: toolCall => toolCall.name === "write" && toolCall.arguments?.path === "/xdev/resolve",
+						reminder: [reminder],
+					}
+				: undefined;
+		const context: AgentContext = { systemPrompt: ["sys"], messages: [], tools: [writeTool] };
+		const mock = createMockModel({
+			responses: [
+				// Turn 1: right tool name, wrong target — the predicate rejects it.
+				{ content: [{ type: "toolCall", id: "w1", name: "write", arguments: { path: "/tmp/out.md" } }] },
+				// Turn 2: forced to write; this call satisfies the predicate.
+				{ content: [{ type: "toolCall", id: "w2", name: "write", arguments: { path: "/xdev/resolve" } }] },
+				{ content: ["done"] },
+			],
+		});
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			getToolChoice,
+		};
+
+		const stream = agentLoop([createUserMessage("go")], context, config, undefined, mock.stream);
+		for await (const _ of stream) {
+			// drain
+		}
+		const messages = await stream.result();
+
+		// The non-satisfying write was skipped, not executed; only the device write ran.
+		expect(writeRuns).toEqual(["/xdev/resolve"]);
+		// Escalation still forces the requirement's toolName.
+		expect(mock.calls[0]?.options?.toolChoice).toBeUndefined();
+		expect(mock.calls[1]?.options?.toolChoice).toEqual({ type: "tool", name: "write" });
+		// The skipped write call still produced a paired tool result (API pairing).
+		const skipped = messages.find(m => m.role === "toolResult" && m.toolCallId === "w1");
+		expect(skipped).toBeDefined();
+	});
+
 	it("does not yield while the requirement is unmet — escalates after a bare-text turn", async () => {
 		const h = makeSoftResolveHarness();
 		const context: AgentContext = { systemPrompt: ["sys"], messages: [], tools: h.tools };

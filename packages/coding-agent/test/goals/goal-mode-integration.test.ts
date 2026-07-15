@@ -11,7 +11,6 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { normalizeCustomMessagePayload } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import type { DiscoverableTool } from "@oh-my-pi/pi-coding-agent/tool-discovery/tool-index";
 import { createTools, type Tool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import type { TodoPhase } from "@oh-my-pi/pi-coding-agent/tools/todo";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -304,71 +303,6 @@ describe("InteractiveMode goal mode integration", () => {
 		expect(content).not.toContain("\u2028");
 		expect(content).not.toContain("\u2029");
 		expect(content.match(/<\/todo_context>/g)).toHaveLength(1);
-	});
-
-	it("includes no-activation todo state when todo is discoverable but search is inactive", async () => {
-		harness.settings.set("tools.discoveryMode", "all");
-		await harness.mode.handleGoalModeCommand("Ship the release");
-		harness.session.setTodoPhases([
-			{
-				name: "Verification",
-				tasks: [{ content: "Run focused checks", status: "pending" }],
-			},
-		]);
-		expect(harness.session.getActiveToolNames()).not.toContain("todo");
-		expect(harness.session.getActiveToolNames()).not.toContain("search_tool_bm25");
-		expect(harness.session.getDiscoverableTools({ source: "builtin" }).some(tool => tool.name === "todo")).toBe(true);
-		const sendCustomMessage = vi.spyOn(harness.session, "sendCustomMessage").mockResolvedValue(false);
-
-		await harness.session.sendGoalModeContext({ deliverAs: "steer" });
-
-		const message = normalizeCustomMessagePayload(sendCustomMessage.mock.calls[0]?.[0]);
-		const content = typeof message.content === "string" ? message.content : "";
-		expect(message?.customType).toBe("goal-mode-context");
-		expect(content).toContain("<todo_context>");
-		expect(content).toContain("Run focused checks");
-		expect(content).toContain("read-only progress state");
-		expect(content).toContain("not active in this turn");
-		expect(content).toContain("do not claim todo updates unless a later turn exposes the tool");
-		expect(content).not.toContain("activate `todo` first");
-		expect(content).not.toContain("call the `todo` tool first");
-	});
-
-	it("advertises todo activation only when search tool is active", async () => {
-		harness.settings.set("tools.discoveryMode", "all");
-		Object.assign(harness.toolSession, {
-			isToolDiscoveryEnabled: () => harness.session.isToolDiscoveryEnabled(),
-			getSelectedDiscoveredToolNames: () => harness.session.getSelectedDiscoveredToolNames(),
-			activateDiscoveredTools: (toolNames: string[]) => harness.session.activateDiscoveredTools(toolNames),
-			getDiscoverableTools: (filter?: { source?: DiscoverableTool["source"] }) =>
-				harness.session.getDiscoverableTools(filter),
-		});
-		for (const tool of await createTools(harness.toolSession, ["search_tool_bm25"])) {
-			harness.toolRegistry.set(tool.name, tool);
-		}
-		await harness.session.setActiveToolsByName(["read", "search_tool_bm25"]);
-		await harness.mode.handleGoalModeCommand("Ship the release");
-		harness.session.setTodoPhases([
-			{
-				name: "Verification",
-				tasks: [{ content: "Run focused checks", status: "pending" }],
-			},
-		]);
-		expect(harness.session.getActiveToolNames()).not.toContain("todo");
-		expect(harness.session.getActiveToolNames()).toContain("search_tool_bm25");
-		const sendCustomMessage = vi.spyOn(harness.session, "sendCustomMessage").mockResolvedValue(false);
-
-		await harness.session.sendGoalModeContext({ deliverAs: "steer" });
-
-		const message = normalizeCustomMessagePayload(sendCustomMessage.mock.calls[0]?.[0]);
-		const content = typeof message.content === "string" ? message.content : "";
-		expect(message?.customType).toBe("goal-mode-context");
-		expect(content).toContain("<todo_context>");
-		expect(content).toContain("Run focused checks");
-		expect(content).toContain("read-only progress state");
-		expect(content).toContain("discoverable but not active");
-		expect(content).toContain("call `search_tool_bm25` to activate `todo` first");
-		expect(content).not.toContain("do not claim todo updates unless a later turn exposes the tool");
 	});
 
 	it("omits persisted todo state when todo tool is inactive", async () => {
