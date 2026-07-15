@@ -6,6 +6,7 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { EditTool } from "@oh-my-pi/pi-coding-agent/edit";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import {
+	expandPath,
 	probeLiteralPathExists,
 	resolveToCwd,
 	splitPathAndSel,
@@ -361,6 +362,23 @@ describe("leading-colon path recovery (issue #5508)", () => {
 		// lookahead only fires before `/`, `~/`, `./`, or `../`.
 		expect(resolveToCwd(":raw", tmpDir)).toBe(path.join(tmpDir, ":raw"));
 		expect(resolveToCwd(":name.txt", tmpDir)).toBe(path.join(tmpDir, ":name.txt"));
+	});
+
+	it("strips a leading colon before Windows path shapes in expandPath (issue #5624)", () => {
+		// Windows native paths mangled with a stray leading colon: drive-letter
+		// absolutes and `\`/`.\`/`..\` relative forms. expandPath runs before any
+		// path.resolve, so the strip is platform-independent.
+		expect(expandPath(":C:\\repo\\file.ts")).toBe("C:\\repo\\file.ts");
+		expect(expandPath(":.\\src")).toBe(".\\src");
+		expect(expandPath(":..\\sibling")).toBe("..\\sibling");
+		expect(expandPath(":\\\\server\\share")).toBe("\\\\server\\share");
+	});
+
+	it("does not strip a colon before a bare drive letter without a path (expandPath)", () => {
+		// `:selector` shapes still round-trip; the drive-letter branch requires
+		// the `<letter>:` colon to follow, distinguishing `:C:\x` from `:cache`.
+		expect(expandPath(":raw")).toBe(":raw");
+		expect(expandPath(":cache")).toBe(":cache");
 	});
 
 	it("read opens a file addressed with a leading colon", async () => {
