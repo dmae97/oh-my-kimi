@@ -1,7 +1,9 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { AsyncJobManager } from "../src/async/job-manager";
 import { Settings, settings } from "../src/config/settings";
 import { getThemeByName, setThemeInstance, type Theme } from "../src/modes/theme/theme";
-import { jobsRenderResult } from "../src/tools/hub/jobs";
+import type { ToolSession } from "../src/tools";
+import { jobsRenderResult, snapshotJobs } from "../src/tools/hub/jobs";
 import type { CoordinationDetails } from "../src/tools/hub/types";
 
 const ansiPattern = /\x1b\[[0-9;]*m/g;
@@ -61,6 +63,36 @@ describe("hub jobs task model badges", () => {
 
 		expect(text).toContain(selector);
 		expect(text.split(selector).length - 1).toBe(1);
+	});
+
+	it("renders the latest runtime selector from a running task job snapshot", async () => {
+		settings.override("task.showResolvedModelBadge", true);
+		const selector = "openai-codex/gpt-5.6-luna:max";
+		const reported = Promise.withResolvers<void>();
+		const finish = Promise.withResolvers<string>();
+		const manager = new AsyncJobManager({ onJobComplete: () => {} });
+		const id = manager.register(
+			"task",
+			"Architect",
+			async ({ reportProgress }) => {
+				await reportProgress("running", {
+					progress: [{ id: "Architect", resolvedModel: selector }],
+				});
+				reported.resolve();
+				return finish.promise;
+			},
+			{ id: "Architect" },
+		);
+		await reported.promise;
+
+		const session = { asyncJobManager: manager } as unknown as ToolSession;
+		const text = renderJobText({ jobs: snapshotJobs(session, manager.getAllJobs()) });
+
+		expect(text).toContain(selector);
+		expect(text.split(selector).length - 1).toBe(1);
+
+		finish.resolve("done");
+		await manager.getJob(id)?.promise;
 	});
 
 	it("hides a task job's resolved model selector when the badge setting is disabled", () => {
