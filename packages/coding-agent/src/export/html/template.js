@@ -1386,7 +1386,7 @@
           },
           // Text content: escape HTML tags
           text(token) {
-            return escapeHtmlTags(escapeHtml(token.text));
+            return token.tokens ? this.parser.parseInline(token.tokens) : escapeHtmlTags(escapeHtml(token.text));
           },
           // Inline code: escape HTML
           codespan(token) {
