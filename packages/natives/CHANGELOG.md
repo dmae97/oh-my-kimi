@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed the in-process `grep` builtin treating GNU basic-regex `\|` as a literal pipe, so default and `-G` searches now accept escaped alternation while `-E`, `-F`, and `-P` retain their selected regex dialects.
+- Fixed the in-process grep builtin to correctly handle escaped alternation (\|) in default and -G (GNU basic-regex) searches, while preserving the correct regex dialects for -E, -F, and -P.
 
 ## [16.5.2] - 2026-07-14
 

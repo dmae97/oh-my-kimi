@@ -2,11 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Improved Ollama streaming performance by parsing NDJSON response bytes directly instead of decoding and buffering network chunks as text.
+
 ### Fixed
 
-- Fixed Cursor TLS connection resets escaping the provider stream as process-fatal uncaught exceptions, allowing the active turn to fail or retry without terminating the session. ([#5593](https://github.com/can1357/oh-my-pi/issues/5593))
-- Parsed Ollama NDJSON response bytes directly instead of decoding and buffering every network chunk as text. ([#5542](https://github.com/can1357/oh-my-pi/issues/5542))
-- Fixed Amazon Bedrock stream error handling for non-`Error` values that `JSON.stringify` cannot serialize ([#5539](https://github.com/can1357/oh-my-pi/issues/5539)).
+- Fixed Cursor TLS connection resets causing process-fatal uncaught exceptions, allowing the active turn to fail or retry gracefully without terminating the session.
+- Fixed Amazon Bedrock stream error handling to correctly handle non-Error values that cannot be serialized by JSON.stringify.
 
 ## [16.5.2] - 2026-07-14
 
