@@ -48,11 +48,14 @@ Every question MUST change the plan or settle a load-bearing choice. Batch them.
 {{#if reentry}}
 ## Re-entry
 
+You are re-entering plan mode with a NEW request. That new request is the primary input and MUST be planned; the existing plan is only reference. You NEVER narrow the turn to reconciling the old plan and drop the new request.
+
 <procedure>
-1. Read the existing plan.
-2. Compare the new request against it.
-3. Different task → overwrite it. Same task continuing → update it and delete outdated sections.
-4. Write your plan's `<slug>`/title as plain text to `xd://propose` when complete.
+1. Read the new request and make it the plan you build this turn.
+2. Read the existing plan as reference only.
+3. Same task continuing → update that plan with `{{editToolName}}` and delete outdated sections. Different task → leave that plan in place and write a fresh `local://<slug>-plan.md` for the new request.
+4. If the old plan has unfinished or broken work the new request depends on, fold those corrections INTO the new plan — combine, never substitute the old fix for the new request.
+5. Call `resolve` with `action: "apply"` and `extra: { title }` when the new request is decision-complete.
 </procedure>
 {{/if}}
 
