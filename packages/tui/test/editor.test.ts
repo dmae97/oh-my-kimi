@@ -853,11 +853,22 @@ describe("Editor component", () => {
 			}
 		});
 
+		it("keeps the terminal-cursor editor compact by default", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.focused = true;
+			editor.setUseTerminalCursor(true);
+			editor.setText("ast");
+
+			const lines = editor.render(20).map(line => stripVTControlCharacters(line.replaceAll(CURSOR_MARKER, "")));
+			expect(lines).toEqual(["+------------------+", "+- ast            -+"]);
+		});
+
 		it("keeps terminal-local IME preedit from displacing the editor border (#5563)", async () => {
 			const width = 20;
 			const terminal = new VirtualTerminal(width, 6, 1_000);
 			const tui = new TUI(terminal, true);
 			const editor = new Editor(defaultEditorTheme);
+			editor.setImeSafeCursorLayout(true);
 			tui.addChild(editor);
 			tui.setFocus(editor);
 

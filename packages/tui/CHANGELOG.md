@@ -6,10 +6,7 @@
 
 - Display LaTeX now renders `\underbrace`/`\overbrace` (and the bracket/paren variants) as drawn horizontal braces with centered labels, and stacks `\overset`/`\underset`/`\stackrel` annotations above/below the base instead of falling back to flat inline glyphs.
 - Display LaTeX renders multi-letter script words (`N_{turns}`) as raised/lowered blocks instead of ragged per-character Unicode sub/superscript glyphs; single letters and digits keep the compact Unicode forms.
-
-### Fixed
-
-- Fixed macOS IME marked text displacing the prompt editor border when entering fullwidth CJK punctuation ([#5563](https://github.com/can1357/oh-my-pi/issues/5563)).
+- Added opt-in `Editor.setImeSafeCursorLayout()` protection for macOS IME preedit while retaining the compact bordered layout by default ([#5563](https://github.com/can1357/oh-my-pi/issues/5563)).
 
 ## [16.5.2] - 2026-07-14
 

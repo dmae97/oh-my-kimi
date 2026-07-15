@@ -680,6 +680,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.errorBannerContainer = new AnchoredLiveContainer();
 		this.modelCycleContainer = new AnchoredLiveContainer();
 		this.editor = new CustomEditor(getEditorTheme());
+		this.editor.setImeSafeCursorLayout(settings.get("tui.imeSafeCursor"));
 		this.editor.setUseTerminalCursor(this.ui.getShowHardwareCursor());
 		this.editor.setAutocompleteMaxVisible(settings.get("autocompleteMaxVisible"));
 		this.editor.onAutocompleteCancel = () => {
@@ -3669,6 +3670,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		factory: ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => CustomEditor) | undefined,
 	): void {
 		const previousEditor = this.editor;
+		nextEditor.setImeSafeCursorLayout(this.settings.get("tui.imeSafeCursor"));
 		const previousText = previousEditor.getText();
 		const nextEditor = factory
 			? factory(this.ui, getEditorTheme(), this.keybindings)
