@@ -77,3 +77,20 @@ test("relative path-like command and cwd resolve against the Codex config direct
 	expect(bare?.command).toBe("npx");
 	expect(bare?.cwd).toBeUndefined();
 });
+
+test("path-like command resolves against a subdirectory cwd, not the config directory (#5562 review)", async () => {
+	const codexDir = path.join(tempHome, ".codex");
+	await fs.writeFile(
+		path.join(codexDir, "config.toml"),
+		["[mcp_servers.nested]", 'command = "./bin/mcp"', 'args = ["serve"]', 'cwd = "server"', ""].join("\n"),
+	);
+
+	const servers = await loadCodexServers();
+	const nested = servers.find(s => s.name === "nested");
+
+	// The transport spawns the subprocess with the rooted cwd; a relative command
+	// is resolved by the OS from there. cwd="server" + command="./bin/mcp" must
+	// resolve to <codexDir>/server/bin/mcp, not <codexDir>/bin/mcp.
+	expect(nested?.cwd).toBe(path.join(codexDir, "server"));
+	expect(nested?.command).toBe(path.join(codexDir, "server", "bin", "mcp"));
+});

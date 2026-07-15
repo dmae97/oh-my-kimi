@@ -32,7 +32,7 @@ export function substitutePluginRoot<T>(value: T, rootPath: string): T {
 
 /**
  * Rebase relative filesystem values in a discovered plugin stdio config against
- * the directory of the `.mcp.json` that declared them.
+ * the directory of the `.mcp.json`/`config.toml` that declared them.
  *
  * External plugin configs (bundled ChatGPT/Codex plugins, Claude marketplace
  * plugins) express `command`/`cwd` relative to their own config file, but MCP
@@ -42,7 +42,11 @@ export function substitutePluginRoot<T>(value: T, rootPath: string): T {
  *
  * - relative `cwd` → resolved against `configDir`;
  * - path-like `command` (`./`, `../`, or the Windows `.\`/`..\` forms) →
- *   resolved against `configDir`;
+ *   resolved against the rooted `cwd` when one is given, else `configDir`.
+ *   The transport spawns the subprocess with the rooted `cwd` as its process
+ *   cwd (see `mcp/transports/stdio.ts`), so the OS resolves a relative command
+ *   from there — e.g. `cwd = "server"`, `command = "./bin/mcp"` must resolve to
+ *   `<configDir>/server/bin/mcp`, not `<configDir>/bin/mcp`;
  * - bare executables (`npx`, `uvx`, …) and absolute paths are left untouched.
  */
 export function resolvePluginStdioPaths(
@@ -55,7 +59,10 @@ export function resolvePluginStdioPaths(
 	}
 	if (config.command !== undefined) {
 		const isPathLike = /^\.\.?[/\\]/.test(config.command);
-		resolved.command = isPathLike ? path.resolve(configDir, config.command) : config.command;
+		// Path-like commands resolve from the rooted cwd (the subprocess's actual
+		// working directory) when set, otherwise from the config directory.
+		const commandBase = resolved.cwd ?? configDir;
+		resolved.command = isPathLike ? path.resolve(commandBase, config.command) : config.command;
 	}
 	return resolved;
 }
