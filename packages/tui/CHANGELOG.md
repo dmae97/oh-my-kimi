@@ -8,6 +8,10 @@
 - Display LaTeX renders multi-letter script words (`N_{turns}`) as raised/lowered blocks instead of ragged per-character Unicode sub/superscript glyphs; single letters and digits keep the compact Unicode forms.
 - Added opt-in `Editor.setImeSafeCursorLayout()` protection for macOS IME preedit while retaining the compact bordered layout by default ([#5563](https://github.com/can1357/oh-my-pi/issues/5563)).
 
+### Fixed
+
+- Fixed `@` file-reference and path completion falling through incorrectly inside slash command arguments when command-specific argument completion has no matches ([#5580](https://github.com/can1357/oh-my-pi/issues/5580)).
+
 ## [16.5.2] - 2026-07-14
 
 ### Fixed

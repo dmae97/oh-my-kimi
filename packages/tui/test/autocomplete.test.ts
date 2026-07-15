@@ -199,7 +199,7 @@ describe("CombinedAutocompleteProvider", () => {
 			}
 		});
 
-		it("treats @ file-reference tokens as literal text inside slash command arguments without completions", async () => {
+		it("returns @ file-reference completions inside slash command arguments without command completions", async () => {
 			const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "autocomplete-rename-args-"));
 			try {
 				fs.writeFileSync(path.join(baseDir, "copy-target.ts"), "export {};\n");
@@ -210,7 +210,8 @@ describe("CombinedAutocompleteProvider", () => {
 				const line = "/rename repro @";
 				const result = await provider.getSuggestions([line], 0, line.length);
 
-				expect(result).toBeNull();
+				expect(result?.prefix).toBe("@");
+				expect(result?.items.map(item => item.value)).toContain("@copy-target.ts");
 			} finally {
 				fs.rmSync(baseDir, { recursive: true, force: true });
 			}
@@ -259,6 +260,37 @@ describe("CombinedAutocompleteProvider", () => {
 					prefix: "repro @",
 					items: [{ value: "repro @literal", label: "Keep @ in the title" }],
 				});
+			} finally {
+				fs.rmSync(baseDir, { recursive: true, force: true });
+			}
+		});
+
+		it("falls back to path completions when slash command argument completions have no match", async () => {
+			const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "autocomplete-rename-path-"));
+			try {
+				fs.mkdirSync(path.join(baseDir, "src"));
+				fs.writeFileSync(path.join(baseDir, "src", "app.ts"), "export {};\n");
+				const provider = new CombinedAutocompleteProvider(
+					[
+						{
+							name: "btw",
+							description: "Ask a side question",
+							allowArgs: true,
+							getArgumentCompletions(argumentPrefix) {
+								if (argumentPrefix === "option") {
+									return [{ value: "option", label: "option" }];
+								}
+								return null;
+							},
+						},
+					],
+					baseDir,
+				);
+				const line = "/btw ./src/ap";
+				const result = await provider.getSuggestions([line], 0, line.length);
+
+				expect(result?.prefix).toBe("./src/ap");
+				expect(result?.items.map(item => item.value)).toContain("./src/app.ts");
 			} finally {
 				fs.rmSync(baseDir, { recursive: true, force: true });
 			}
