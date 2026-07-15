@@ -36,6 +36,7 @@
 
 ### Fixed
 
+- Fixed independently keyed extension hook statuses sharing one truncated line; each status now renders on its own deterministic line ([#5617](https://github.com/can1357/oh-my-pi/issues/5617)).
 - Fixed a bug where a nested configuration value (like `dev.autoqa.consent` / `dev.autoqaConsent`) would incorrectly satisfy a parent key lookup (like `dev.autoqa`), causing Auto QA to be enabled and prompt for consent by default when it should have been disabled.
 - Fixed compiled appserver startup deadlocking before socket creation when user extensions were present.
 - Fixed Bash internal URLs remaining unresolved when used as unquoted arguments inside command substitutions.
