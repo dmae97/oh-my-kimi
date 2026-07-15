@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -12,7 +12,10 @@ import {
 	splitPathAndSelPreferringLiteral,
 } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
+import { GrepOutputMode } from "@oh-my-pi/pi-natives";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { runGrepCommand } from "../../src/cli/grep-cli";
+import { initTheme } from "../../src/modes/theme/theme";
 import { GrepTool } from "../../src/tools/grep";
 
 function getText(result: { content: Array<{ type: string; text?: string }> }): string {
@@ -407,5 +410,52 @@ describe("leading-colon path recovery (issue #5508)", () => {
 		expect(result.isError).toBeFalsy();
 		expect(getText(result)).not.toMatch(/not found/i);
 		expect(await Bun.file(abs).text()).toBe("replaced\nsecond\n");
+	});
+});
+
+// Regression: the `omp grep` CLI subcommand resolved its path argument with a
+// bare `path.resolve`, bypassing `expandPath`, so the leading-colon strip from
+// #5529 never reached it — see issue #5624.
+describe("grep CLI subcommand leading-colon path (issue #5624)", () => {
+	let tmpDir: string;
+
+	beforeEach(async () => {
+		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "grep-cli-colon-"));
+		await initTheme();
+	});
+
+	afterEach(async () => {
+		await removeWithRetries(tmpDir);
+	});
+
+	it("strips a leading colon before an absolute path", async () => {
+		const abs = path.join(tmpDir, "colon-grep-cli.txt");
+		await Bun.write(abs, "needle line A\nneedle line B\n");
+
+		const lines: string[] = [];
+		const logSpy = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+			lines.push(args.map(String).join(" "));
+		});
+		const errSpy = spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+			lines.push(args.map(String).join(" "));
+		});
+		try {
+			await runGrepCommand({
+				pattern: "needle",
+				path: `:${abs}`,
+				limit: 20,
+				context: 2,
+				mode: GrepOutputMode.Content,
+				gitignore: true,
+			});
+		} finally {
+			logSpy.mockRestore();
+			errSpy.mockRestore();
+		}
+
+		const output = lines.join("\n");
+		expect(output).toContain(`Searching in: ${abs}`);
+		expect(output).toContain("needle line A");
+		expect(output).not.toMatch(/not found/i);
 	});
 });
