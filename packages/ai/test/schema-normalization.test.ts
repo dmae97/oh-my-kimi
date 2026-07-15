@@ -289,13 +289,20 @@ describe("normalizeSchemaForGoogle", () => {
 				propertyValue: true,
 				attributeValue: false,
 			},
+			dependentSchemas: {
+				hasFoo: true,
+				hasBar: false,
+			},
 		};
 		const expectedProps = { propertyValue: {}, attributeValue: { not: {} } };
+		const expectedDependentSchemas = { hasFoo: {}, hasBar: { not: {} } };
 
 		const google = normalizeSchemaForGoogle(schema) as Record<string, unknown>;
 		expect(google.properties).toEqual(expectedProps);
+		expect(google.dependentSchemas).toEqual(expectedDependentSchemas);
 		const cca = normalizeSchemaForCCA(schema) as Record<string, unknown>;
 		expect(cca.properties).toEqual(expectedProps);
+		expect(cca.dependentSchemas).toEqual(expectedDependentSchemas);
 
 		// Root-level and array-branch booleans are covered by the same choke point.
 		expect(normalizeSchemaForGoogle(true)).toEqual({});

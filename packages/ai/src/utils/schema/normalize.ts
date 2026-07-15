@@ -55,7 +55,7 @@ export interface NormalizeSchemaOptions {
 }
 
 interface NormalizeSchemaWalkOptions extends NormalizeSchemaOptions {
-	insideProperties: boolean;
+	insideSchemaMap: boolean;
 	/**
 	 * True when the value currently being walked occupies a JSON Schema
 	 * *subschema* slot (root, combiner branch, `items`, a property value, …).
@@ -86,21 +86,37 @@ const CCA_FORBIDDEN_COMBINERS = new Set(["anyOf", "oneOf", "allOf"]);
  * Keywords whose value is a single subschema (draft 2020-12). A bare `true` /
  * `false` in one of these slots is a boolean subschema to coerce (issue #5604).
  */
-const SUBSCHEMA_VALUE_KEYS = new Set([
-	"items",
-	"additionalItems",
-	"unevaluatedItems",
-	"not",
-	"if",
-	"then",
-	"else",
-	"contains",
-	"propertyNames",
-	"contentSchema",
-]);
+const SUBSCHEMA_VALUE_KEYS: Record<string, true> = {
+	items: true,
+	additionalItems: true,
+	unevaluatedItems: true,
+	not: true,
+	if: true,
+	// biome-ignore lint/suspicious/noThenProperty: JSON Schema keyword
+	then: true,
+	else: true,
+	contains: true,
+	propertyNames: true,
+	contentSchema: true,
+};
 
 /** Keywords whose value is an array of subschemas. */
-const SUBSCHEMA_ARRAY_KEYS = new Set(["anyOf", "oneOf", "allOf", "prefixItems"]);
+const SUBSCHEMA_ARRAY_KEYS: Record<string, true> = {
+	anyOf: true,
+	oneOf: true,
+	allOf: true,
+	prefixItems: true,
+};
+
+/** Keywords whose object value maps arbitrary names to subschemas. */
+const SUBSCHEMA_MAP_KEYS: Record<string, true> = {
+	properties: true,
+	patternProperties: true,
+	dependencies: true,
+	dependentSchemas: true,
+	$defs: true,
+	definitions: true,
+};
 
 const CLOUD_CODE_ASSIST_CLAUDE_FALLBACK_SCHEMA = {
 	type: "object",
@@ -286,8 +302,8 @@ function normalizeSchemaNode(value: unknown, options: NormalizeSchemaWalkOptions
 }
 
 function normalizeSchemaObjectNode(value: JsonObject, options: NormalizeSchemaWalkOptions): unknown {
-	let obj = options.normalizeFieldNames && !options.insideProperties ? applySnakeCaseRenames(value) : value;
-	if (options.collapseNullFields && !options.insideProperties) {
+	let obj = options.normalizeFieldNames && !options.insideSchemaMap ? applySnakeCaseRenames(value) : value;
+	if (options.collapseNullFields && !options.insideSchemaMap) {
 		obj = preHandleNullFields(obj);
 	}
 	const result: JsonObject = {};
@@ -334,16 +350,18 @@ function normalizeSchemaObjectNode(value: JsonObject, options: NormalizeSchemaWa
 		for (const key in obj) {
 			if (!Object.hasOwn(obj, key) || key === combiner || outHasOwn(result, key)) continue;
 			const entry = obj[key];
-			if (!options.insideProperties && options.unsupportedFields(key)) {
+			if (!options.insideSchemaMap && options.unsupportedFields(key)) {
 				spill = pushStrippedDescriptionEntry(spill, key, entry, options);
 				continue;
 			}
 			if (options.stripNullableKeyword && key === "nullable") continue;
 			result[key] = normalizeSchemaNode(entry, {
 				...options,
-				insideProperties: !options.insideProperties && key === "properties",
+				insideSchemaMap: !options.insideSchemaMap && Object.hasOwn(SUBSCHEMA_MAP_KEYS, key),
 				booleanIsSubschema:
-					options.insideProperties || SUBSCHEMA_VALUE_KEYS.has(key) || SUBSCHEMA_ARRAY_KEYS.has(key),
+					options.insideSchemaMap ||
+					Object.hasOwn(SUBSCHEMA_VALUE_KEYS, key) ||
+					Object.hasOwn(SUBSCHEMA_ARRAY_KEYS, key),
 			});
 		}
 		applyDescriptionSpill(result, spill, options);
@@ -354,7 +372,7 @@ function normalizeSchemaObjectNode(value: JsonObject, options: NormalizeSchemaWa
 	for (const key in obj) {
 		if (!Object.hasOwn(obj, key)) continue;
 		const entry = obj[key];
-		if (!options.insideProperties && options.unsupportedFields(key)) {
+		if (!options.insideSchemaMap && options.unsupportedFields(key)) {
 			spill = pushStrippedDescriptionEntry(spill, key, entry, options);
 			continue;
 		}
@@ -365,8 +383,11 @@ function normalizeSchemaObjectNode(value: JsonObject, options: NormalizeSchemaWa
 		}
 		result[key] = normalizeSchemaNode(entry, {
 			...options,
-			insideProperties: !options.insideProperties && key === "properties",
-			booleanIsSubschema: options.insideProperties || SUBSCHEMA_VALUE_KEYS.has(key) || SUBSCHEMA_ARRAY_KEYS.has(key),
+			insideSchemaMap: !options.insideSchemaMap && Object.hasOwn(SUBSCHEMA_MAP_KEYS, key),
+			booleanIsSubschema:
+				options.insideSchemaMap ||
+				Object.hasOwn(SUBSCHEMA_VALUE_KEYS, key) ||
+				Object.hasOwn(SUBSCHEMA_ARRAY_KEYS, key),
 		});
 	}
 
@@ -933,7 +954,7 @@ export function normalizeSchema(value: unknown, options: NormalizeSchemaOptions)
 	const dereferenced = dereferenceJsonSchema(upgraded);
 	let normalized = normalizeSchemaNode(dereferenced, {
 		...options,
-		insideProperties: false,
+		insideSchemaMap: false,
 		booleanIsSubschema: true,
 	});
 	if (options.stripResidualCombinersFixpoint) {
@@ -1071,15 +1092,6 @@ export function normalizeSchemaForMoonshot(value: unknown): unknown {
 // Ollama — Go schema parser compatibility
 // ---------------------------------------------------------------------------
 
-const OLLAMA_SCHEMA_ARRAY_KEYS = new Set(["anyOf", "oneOf", "allOf", "prefixItems"]);
-const OLLAMA_SCHEMA_MAP_KEYS = new Set([
-	"properties",
-	"patternProperties",
-	"dependencies",
-	"dependentSchemas",
-	"$defs",
-	"definitions",
-]);
 const OLLAMA_SCHEMA_VALUE_KEYS = new Set([
 	"items",
 	"additionalItems",
@@ -1161,7 +1173,7 @@ export function sanitizeSchemaForOllama(schema: JsonObject): JsonObject {
 			}
 
 			let next = child;
-			if (OLLAMA_SCHEMA_MAP_KEYS.has(key) && isJsonObject(child)) {
+			if (Object.hasOwn(SUBSCHEMA_MAP_KEYS, key) && isJsonObject(child)) {
 				let mapChanged = false;
 				const mapOutput: JsonObject = {};
 				for (const childKey in child) {
@@ -1172,7 +1184,7 @@ export function sanitizeSchemaForOllama(schema: JsonObject): JsonObject {
 					mapOutput[childKey] = normalizedChild;
 				}
 				next = mapChanged ? mapOutput : child;
-			} else if (OLLAMA_SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(child)) {
+			} else if (Object.hasOwn(SUBSCHEMA_ARRAY_KEYS, key) && Array.isArray(child)) {
 				let arrayChanged = false;
 				const arrayOutput = child.map(item => {
 					const normalizedItem = normalizeNode(item);
