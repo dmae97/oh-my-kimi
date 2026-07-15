@@ -1748,7 +1748,7 @@ export class AgentSession {
 	#prewalk: Prewalk | undefined;
 	/** True once the plan nudge has been queued; scrubbed from context at the switch. */
 	#prewalkPlanInjected = false;
-	/** True until the first assistant turn after the plan nudge completes. */
+	/** Armed by plan/tool progress; consumed by one text-only continuation. */
 	#prewalkContinuePending = false;
 	/** True once any successful `todo` call landed — opens the prewalk
 	 *  trigger gate: the switch fires at the first edit/write AFTER the todo
@@ -2254,17 +2254,17 @@ export class AgentSession {
 			this.#prewalkTodoSeen = true;
 		}
 
-		// The plan nudge asks for a prose plan (optionally alongside the todo
-		// init) before implementation begins. The agent loop treats a text-only
-		// reply as terminal, so without help the run ends before any code is
-		// written. The continuation net forces exactly one more turn: it stays
-		// armed across any number of pre-implementation tool turns (exploratory
-		// read/record/bash and the todo init alike) and fires on the first
-		// text-only reply, whenever it arrives. Firing at most once bounds the
-		// hazard: a task that genuinely finishes without an edit/write (e.g. a
-		// bash-only commit) gets a single "continue" nudge and then ends when it
-		// replies text-only again, rather than looping forever (#5551).
-		if (this.#prewalkContinuePending && context.toolResults.length === 0) {
+		// The plan nudge asks for a prose plan before implementation begins,
+		// but the agent loop treats each text-only reply as terminal. Tool
+		// progress re-arms one continuation, allowing split flows such as
+		// plan → todo → prose → read → prose → edit/write. Consuming the arm
+		// before steering also detects completion: two consecutive text-only
+		// replies have no intervening progress, so the second ends naturally
+		// instead of producing the #5551 loop.
+		const hasToolResults = context.toolResults.length > 0;
+		if (this.#prewalkPlanInjected && hasToolResults) {
+			this.#prewalkContinuePending = true;
+		} else if (this.#prewalkContinuePending) {
 			this.#prewalkContinuePending = false;
 			this.agent.steer({
 				role: "custom",

@@ -351,25 +351,25 @@ describe("AgentSession prewalk", () => {
 		expect(session.model?.id).toBe(primary.id);
 	});
 
-	it("keeps the continuation net armed across a todo-only turn so a following prose reply still implements", async () => {
-		// Regression: the plan nudge asks for a prose plan plus the todo init.
-		// A model that answers the nudge with a todo-only turn, then a prose
-		// follow-up, must not end the run before any edit/write — the todo turn
-		// is part of planning, not completion, so the continuation net stays
-		// armed until an action tool runs.
+	it("re-arms continuation after tool progress between prose turns", async () => {
+		// Regression: a normal prewalk can split planning across several turns:
+		// prose plan, todo init, then prose before implementation. Each tool
+		// progress segment must earn one continuation so the second prose turn
+		// cannot end the run before edit/write.
 		const primary = modelOrThrow("claude-sonnet-4-5");
 		const target = modelOrThrow("claude-sonnet-4-6");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 
-		// Turn 1: read-only (nudge injected after). Turn 2: todo — plan
-		// captured, gate opens, net stays armed. Turn 3: prose — must be
-		// bridged, not treated as terminal. Turn 4: write — switch.
+		// Turn 1: read-only (nudge injected after). Turn 2: prose plan —
+		// bridged. Turn 3: todo — gate opens and re-arms the net. Turn 4:
+		// prose — bridged again. Turn 5: write — switch.
 		const mock = createMockModel({
 			responses: [
 				toolCall("t1", "record"),
-				toolCall("t2", "todo"),
+				{ content: [{ type: "text", text: "Here is the plan." }], stopReason: "stop" },
+				toolCall("t3", "todo"),
 				{ content: [{ type: "text", text: "Plan captured, starting now." }], stopReason: "stop" },
-				toolCall("t4", "write"),
+				toolCall("t5", "write"),
 				{ content: ["done"] },
 			],
 		});
@@ -401,6 +401,7 @@ describe("AgentSession prewalk", () => {
 		await session.prompt("do the task");
 
 		expect(requested).toEqual([
+			`${primary.provider}/${primary.id}`,
 			`${primary.provider}/${primary.id}`,
 			`${primary.provider}/${primary.id}`,
 			`${primary.provider}/${primary.id}`,
