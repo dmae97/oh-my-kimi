@@ -105,6 +105,9 @@
 - Fixed `--reasoning-slide-plan` silently ending the run with no code written when the model answered with a text-only reply.
 - Fixed launch tool rendering issues, including stacked pending headers and confusing start/wait results when readiness timed out.
 - Fixed the in-process `stat` and other GNU-flavored shell builtins (such as `date`, `sed`, `mktemp`, `tail`, `find`, `base64`, and `ln`) mangling or failing on macOS/BSD-style invocations.
+### Fixed
+
+- Fixed async task job rows omitting resolved subagent model and reasoning badges when `task.showResolvedModelBadge` is enabled. ([#5060](https://github.com/can1357/oh-my-pi/issues/5060))
 
 ## [16.5.1] - 2026-07-14
 
@@ -383,9 +386,6 @@
 - Fixed subagent yield tool calls being discarded when a soft request budget aborts the assistant turn before the yield event completes.
 - Fixed --tools filtering in interactive sessions incorrectly disabling deferred MCP tools from configured servers.
 - Fixed kept-alive task subagents entering infinite provider-call loops after an IRC wake and terminal yield.
-### Fixed
-
-- Fixed async task job rows omitting resolved subagent model and reasoning badges when `task.showResolvedModelBadge` is enabled. ([#5060](https://github.com/can1357/oh-my-pi/issues/5060))
 
 ## [16.3.15] - 2026-07-09
 
