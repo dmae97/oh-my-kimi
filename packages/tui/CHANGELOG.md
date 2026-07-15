@@ -8,6 +8,10 @@
 - Display LaTeX renders multi-letter script words (`N_{turns}`) as raised/lowered blocks instead of ragged per-character Unicode sub/superscript glyphs; single letters and digits keep the compact Unicode forms.
 - Added opt-in `Editor.setImeSafeCursorLayout()` protection for macOS IME preedit while retaining the compact bordered layout by default ([#5563](https://github.com/can1357/oh-my-pi/issues/5563)).
 
+### Fixed
+
+- Fixed SIXEL image rendering stripping a horizontal slice from images when the cell height was not a multiple of 6. SIXEL encodes in 6-pixel vertical bands; a non-multiple-of-6 height was padded, causing the terminal to allocate an extra row that the TUI did not reserve — the next line of content then overwrote the bottom of the image. The encode height is now rounded down to the largest multiple of 6 within the requested row budget, eliminating padding without exceeding the caller's height cap, and the width is scaled by the same ratio to preserve the image aspect ratio.
+
 ## [16.5.2] - 2026-07-14
 
 ### Fixed
