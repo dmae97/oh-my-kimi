@@ -429,7 +429,16 @@ describe("Anthropic request fingerprint alignment", () => {
 
 	it("gates the effort beta and field off google-vertex requests (#5614)", async () => {
 		let capturedBeta: string | undefined;
-		let capturedBody: { output_config?: { effort?: unknown } } | undefined;
+		let capturedBody:
+			| {
+					output_config?: { effort?: unknown };
+					fallbacks?: Array<{
+						model: string;
+						max_tokens?: number;
+						output_config?: { effort?: unknown };
+					}>;
+			  }
+			| undefined;
 		const fetchMock = (async (_input: string | URL | Request, init?: RequestInit) => {
 			capturedBeta = (init?.headers as Record<string, string> | undefined)?.["anthropic-beta"];
 			capturedBody = JSON.parse(String(init?.body ?? "{}"));
@@ -441,7 +450,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		// Claude on Vertex uses api "anthropic-messages" and the rawPredict adapter,
 		// which rejects any `anthropic-beta` HTTP header value it doesn't understand.
 		// The effort beta must ride the body (`anthropic_beta`) instead — since this
-		// path can't deliver it there, both the beta and the effort field are dropped.
+		// path can't deliver it there, primary and fallback effort fields are dropped.
 		const vertexModel: Model<"anthropic-messages"> = buildModel({
 			...ANTHROPIC_MODEL_SPEC,
 			id: "claude-haiku-4-5@20260101",
@@ -458,11 +467,23 @@ describe("Anthropic request fingerprint alignment", () => {
 		await streamAnthropic(
 			vertexModel,
 			{ systemPrompt: ["Stay concise."], messages: [{ role: "user", content: "Hi", timestamp: Date.now() }] },
-			{ apiKey: "vertex-adc", thinkingEnabled: true, fetch: fetchMock },
+			{
+				apiKey: "vertex-adc",
+				thinkingEnabled: true,
+				fetch: fetchMock,
+				fallbacks: [
+					{
+						model: "claude-sonnet-4-6@20260101",
+						max_tokens: 4_096,
+						output_config: { effort: "high" },
+					},
+				],
+			},
 		).result();
 
 		expect(capturedBeta ?? "").not.toContain("effort-2025-11-24");
 		expect(capturedBody?.output_config?.effort).toBeUndefined();
+		expect(capturedBody?.fallbacks).toEqual([{ model: "claude-sonnet-4-6@20260101", max_tokens: 4_096 }]);
 	});
 
 	it("adds the context-management beta to API-key thinking requests", async () => {

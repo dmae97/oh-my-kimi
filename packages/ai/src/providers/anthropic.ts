@@ -1752,6 +1752,23 @@ const streamAnthropicOnce = (
 			let forceDemoteUnsignedThinking = providerSessionState?.replayUnsignedThinkingDisabled ?? false;
 			const mergedCallerHeaders = mergeHeaders(model.headers, options?.headers);
 			const umansGatewayWebSearchHeader = getUmansWebSearchHeader(model, mergedCallerHeaders);
+			// Keep fallback payloads aligned with the top-level Vertex effort gate:
+			// no nested effort field means the fallback scan cannot re-add its beta.
+			let fallbacks = options?.fallbacks;
+			if (
+				model.provider === "google-vertex" &&
+				fallbacks?.some(entry => entry.output_config?.effort !== undefined)
+			) {
+				fallbacks = fallbacks.map(entry => {
+					const outputConfig = entry.output_config;
+					if (outputConfig?.effort === undefined) return entry;
+					return {
+						...entry,
+						output_config:
+							outputConfig.task_budget === undefined ? undefined : { task_budget: outputConfig.task_budget },
+					};
+				});
+			}
 
 			let client: AnthropicMessagesClientLike;
 			let isOAuthToken: boolean;
@@ -1821,11 +1838,11 @@ const streamAnthropicOnce = (
 				// `output_config.task_budget`) reuse the same top-level betas
 				// Anthropic requires for the primary request, so scan the chain
 				// and add every companion beta the fallback entries touch.
-				if (options?.fallbacks?.length) {
+				if (fallbacks?.length) {
 					if (!extraBetas.includes(serverSideFallbackBeta)) {
 						extraBetas.push(serverSideFallbackBeta);
 					}
-					for (const entry of options.fallbacks) {
+					for (const entry of fallbacks) {
 						if (entry.speed === "fast" && !extraBetas.includes(fastModeBeta)) {
 							extraBetas.push(fastModeBeta);
 						}
@@ -1867,6 +1884,7 @@ const streamAnthropicOnce = (
 					disableStrictTools,
 					umansGatewayWebSearchHeader !== undefined,
 					forceDemoteUnsignedThinking,
+					fallbacks,
 				);
 				if (disableStrictTools) {
 					dropAnthropicStrictTools(nextParams);
@@ -1893,9 +1911,9 @@ const streamAnthropicOnce = (
 
 			// Opt-in flag: the response parser only honors `fallback` content
 			// blocks and `usage.iterations` when the current request opted into
-			// the server-side-fallback beta chain. Leaving `options.fallbacks`
-			// unset preserves the pre-fallback stream shape on every event.
-			const serverSideFallback = !!options?.fallbacks?.length;
+			// server-side-fallback beta chain. Leaving `fallbacks` unset preserves
+			// the pre-fallback stream shape on every event.
+			const serverSideFallback = !!fallbacks?.length;
 			type Block = (
 				| ThinkingContent
 				| RedactedThinkingContent
@@ -3142,6 +3160,7 @@ function buildParams(
 	disableStrictTools = false,
 	useUmansGatewayWebSearch = false,
 	forceDemoteUnsignedThinking = false,
+	fallbacks = options?.fallbacks,
 ): MessageCreateParamsStreaming {
 	// A session-scoped auto-demote (learned from a live signing 400) clones the
 	// resolved compat with `replayUnsignedThinking: false` so every subsequent
@@ -3280,7 +3299,7 @@ function buildParams(
 	const params: MessageCreateParamsStreaming = {
 		model: options?.requestModelId ?? model.requestModelId ?? model.id,
 		messages: convertAnthropicMessages(context.messages, effectiveModel, isOAuthToken, {
-			serverSideFallbackEnabled: !!options?.fallbacks?.length,
+			serverSideFallbackEnabled: !!fallbacks?.length,
 		}),
 		...(systemBlocks && { system: systemBlocks }),
 		...(tools !== undefined && { tools }),
@@ -3289,7 +3308,7 @@ function buildParams(
 		...(thinking && { thinking }),
 		...(contextManagement && { context_management: contextManagement }),
 		...(outputConfig && { output_config: outputConfig }),
-		...(options?.fallbacks?.length ? { fallbacks: options.fallbacks } : {}),
+		...(fallbacks?.length ? { fallbacks } : {}),
 		stream: true,
 	};
 
