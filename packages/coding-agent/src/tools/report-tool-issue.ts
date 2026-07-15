@@ -11,7 +11,7 @@
  * dispatch path.
  *
  * Before the first record lands, the user's consent is checked. If they've
- * never been asked (`dev.autoqa.consent === "unset"`) the process-global
+ * never been asked (`dev.autoqaConsent === "unset"`) the process-global
  * consent handler — wired by `InteractiveMode` to a Yes/No popup — is invoked
  * exactly once and the decision is persisted. Subsequent calls (including from
  * subagents) read the cached decision without prompting.
@@ -128,7 +128,7 @@ let persistentConsentSettings: Settings | null = null;
  * subagent boundaries (subagents share this module instance), so a grant in
  * the parent applies immediately to children — including children that spawned
  * BEFORE the grant and would otherwise see a stale snapshot of
- * `dev.autoqa.consent` in their isolated `Settings`.
+ * `dev.autoqaConsent` in their isolated `Settings`.
  *
  * `null` = never asked, never cached.
  */
@@ -163,7 +163,7 @@ export function __resetAutoQaConsentForTests(): void {
 
 function readPersistedConsent(settings: Settings | undefined): boolean | null {
 	if (!settings) return null;
-	const stored = settings.get("dev.autoqa.consent");
+	const stored = settings.get("dev.autoqaConsent");
 	if (stored === "granted") return true;
 	if (stored === "denied") return false;
 	return null;
@@ -172,13 +172,13 @@ function readPersistedConsent(settings: Settings | undefined): boolean | null {
 function persistConsent(localSettings: Settings | undefined, granted: boolean): void {
 	const value = granted ? "granted" : "denied";
 	try {
-		localSettings?.set("dev.autoqa.consent", value);
+		localSettings?.set("dev.autoqaConsent", value);
 	} catch (error) {
 		logger.warn("Failed to persist auto-QA consent to local settings snapshot", { error: String(error) });
 	}
 	if (persistentConsentSettings && persistentConsentSettings !== localSettings) {
 		try {
-			persistentConsentSettings.set("dev.autoqa.consent", value);
+			persistentConsentSettings.set("dev.autoqaConsent", value);
 		} catch (error) {
 			logger.warn("Failed to persist auto-QA consent to persistent settings", { error: String(error) });
 		}
@@ -280,7 +280,7 @@ export interface FlushResult {
  */
 export interface FlushOptions {
 	/**
-	 * Skip the `dev.autoqa.consent === "granted"` gate in
+	 * Skip the `dev.autoqaConsent === "granted"` gate in
 	 * {@link resolvePushConfig}. Endpoint configuration is still required.
 	 * Reserved for explicit user-driven pushes (CLI `grievances push`,
 	 * future debug recipes); never set from the device's auto-flush path.
@@ -345,7 +345,7 @@ function resolvePushConfig(settings: Settings | undefined, bypassConsent: boolea
 	// user clearly intends to ship regardless of dialog state. The
 	// `PI_AUTO_QA_PUSH` env flag stays as a CI/headless override too.
 	if (!bypassConsent) {
-		const consented = settings?.get("dev.autoqa.consent") === "granted";
+		const consented = settings?.get("dev.autoqaConsent") === "granted";
 		if (!consented && !$flag("PI_AUTO_QA_PUSH")) return null;
 	}
 

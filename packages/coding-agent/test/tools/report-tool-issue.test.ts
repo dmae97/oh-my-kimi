@@ -60,7 +60,7 @@ function pushSettings(overrides: Record<string, unknown> = {}): Settings {
 		"dev.autoqa": true,
 		// Consent is the push opt-in; `granted` is what `resolvePushConfig`
 		// gates on (or `PI_AUTO_QA_PUSH=1` for headless overrides).
-		"dev.autoqa.consent": "granted",
+		"dev.autoqaConsent": "granted",
 		"dev.autoqaPush.endpoint": "https://qa.example.com/grievances",
 		...overrides,
 	});
@@ -110,7 +110,7 @@ describe("flushGrievances", () => {
 		const fetchSpy = vi.fn(async () => new Response("unexpected", { status: 200 }));
 
 		// `denied` is the user-facing kill switch for push.
-		const result = await flushGrievances(db, pushSettings({ "dev.autoqa.consent": "denied" }), {
+		const result = await flushGrievances(db, pushSettings({ "dev.autoqaConsent": "denied" }), {
 			fetch: mockFetch(fetchSpy),
 		});
 

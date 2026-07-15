@@ -6,6 +6,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { CustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { XdevRegistry } from "@oh-my-pi/pi-coding-agent/tools/xdev";
 import { type } from "arktype";
 
 // Cache-stability invariant: when MCP servers reconnect with byte-identical tool
@@ -68,6 +69,7 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 	interface NewSessionOptions {
 		getMcpServerInstructions?: () => Map<string, string> | undefined;
 		getLocalCalendarDate?: () => string;
+		xdevRegistry?: XdevRegistry;
 	}
 
 	function newSession(
@@ -101,6 +103,7 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 			}),
 			getMcpServerInstructions: options.getMcpServerInstructions,
 			getLocalCalendarDate: options.getLocalCalendarDate,
+			xdevRegistry: options.xdevRegistry,
 		});
 		sessions.push(session);
 		return { session };
@@ -496,5 +499,54 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		instructions.set("nucleus", `${"B".repeat(4000)}_tail_v2`);
 		await session.refreshMCPTools([tool]);
 		expect(rebuildCount).toBe(2);
+	});
+
+	it("announces xd:// mount deltas as steered notices instead of rebuilding the prompt", async () => {
+		let rebuildCount = 0;
+		const { session } = newSession(
+			async toolNames => {
+				rebuildCount++;
+				return `tools:${toolNames.join(",")}`;
+			},
+			{ xdevRegistry: new XdevRegistry([]) },
+		);
+		const search = createMcpCustomTool("mcp__nucleus_search", "nucleus", "search", "Search nucleus");
+		const fetch = createMcpCustomTool("mcp__nucleus_fetch", "nucleus", "fetch", "Fetch nucleus");
+		const noticeTexts = () =>
+			session.agent
+				.peekSteeringQueue()
+				.flatMap(msg =>
+					msg.role === "custom" && msg.customType === "xdev-mount-notice" && typeof msg.content === "string"
+						? [msg.content]
+						: [],
+				);
+
+		// First refresh: initial signature record → one rebuild; the MCP tool is
+		// discoverable, so it mounts as a device and is announced.
+		await session.refreshMCPTools([search]);
+		expect(rebuildCount).toBe(1);
+		expect(noticeTexts().at(-1)).toContain("xd://mcp__nucleus_search");
+
+		// Mount-only change: NO rebuild (prompt stays byte-stable), a notice
+		// announces the new device.
+		await session.refreshMCPTools([search, fetch]);
+		expect(rebuildCount).toBe(1);
+		const mountNotice = noticeTexts().at(-1) ?? "";
+		expect(mountNotice).toContain("became available");
+		expect(mountNotice).toContain("xd://mcp__nucleus_fetch");
+		expect(mountNotice).not.toContain("No longer mounted");
+
+		// Unmount: still no rebuild, the removal is announced.
+		await session.refreshMCPTools([search]);
+		expect(rebuildCount).toBe(1);
+		const unmountNotice = noticeTexts().at(-1) ?? "";
+		expect(unmountNotice).toContain("No longer mounted");
+		expect(unmountNotice).toContain("xd://mcp__nucleus_fetch");
+
+		// Identical refresh: no new notice, no rebuild.
+		const noticeCount = noticeTexts().length;
+		await session.refreshMCPTools([search]);
+		expect(rebuildCount).toBe(1);
+		expect(noticeTexts().length).toBe(noticeCount);
 	});
 });

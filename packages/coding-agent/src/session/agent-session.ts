@@ -11829,7 +11829,7 @@ export class AgentSession {
 			return false;
 		}
 
-		const remindersMax = this.settings.get("todo.reminders.max");
+		const remindersMax = this.settings.get("todo.remindersMax");
 		if (this.#todoReminderCount >= remindersMax) {
 			logger.debug("Todo completion: max reminders reached", { count: this.#todoReminderCount });
 			return false;

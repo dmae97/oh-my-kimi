@@ -820,10 +820,9 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 
 	/**
 	 * True while the last painted pending-call shape opted into a full viewport
-	 * repaint at the first result (`forceFirstResultViewportRepaint`) — e.g. the
-	 * streamed SSH placeholder (`⏳ SSH: […]` / `$ …`) or a collapsed write tail
-	 * window, both of which the first result render re-anchors instead of
-	 * preserving. Kept as a per-paint fact so a topology-changing update that
+	 * repaint at the first result (`forceFirstResultViewportRepaint`) — e.g. a
+	 * collapsed write tail window, which the first result render re-anchors
+	 * instead of preserving. Kept as a per-paint fact so a topology-changing update that
 	 * lands before the pending rows reach the terminal skips the reset.
 	 */
 	#needsFirstResultViewportRepaintAtRender(): boolean {
