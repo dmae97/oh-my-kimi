@@ -34,6 +34,7 @@
 
 ### Fixed
 
+- Documented the `ultrathink`, `orchestrate`, and `workflowz` magic keywords, including their effects, matching rules, and settings ([#5590](https://github.com/can1357/oh-my-pi/issues/5590)).
 - Fixed Bash internal URLs remaining unresolved when used as unquoted arguments inside command substitutions ([#5535](https://github.com/can1357/oh-my-pi/issues/5535)).
 - Fixed `--tools` silently dropping hidden tool names (`xdev`, `yield`, ...); hidden built-ins are now addressable per the `hidden` tool contract.
 - Fixed the built-in `fd` printing `fd: Broken pipe (os error 32)` when a downstream pipeline reader exited early (e.g. `fd … | head`); it now exits silently with 141 (128+SIGPIPE), matching real fd.

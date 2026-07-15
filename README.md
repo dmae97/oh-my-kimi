@@ -274,6 +274,16 @@ Setting-gated, off by default: `github`, `inspect_image`, `tts`, `checkpoint`, `
 
 [Full reference →](https://omp.sh/docs/tools)
 
+### Prompt controls
+
+Three standalone, lowercase words opt a turn into specialized agent behavior:
+
+- `ultrathink` — request careful multi-step reasoning and the highest supported automatic thinking effort.
+- `orchestrate` — run substantial independent work through parallel subagents and verify each phase.
+- `workflowz` — build a deterministic multi-subagent workflow with the active `task` tool.
+
+They trigger only in prose, not inside code spans, fenced code blocks, XML/HTML sections, identifiers, or paths. See [Magic keywords](docs/magic-keywords.md) for exact matching rules and configuration.
+
 ## Forty-plus providers, hundreds of models, _one /model away_.
 
 Roles route work by intent. `default` for normal turns. `smol` for cheap subagent fan-out. `slow` for deep reasoning. `plan` for plan mode. `commit` for changelogs. Override at launch with `--smol`, `--slow`, or `--plan`; cycle through the configured models for the active role with `Ctrl+P`. Swap the active model mid-session with the `/model` slash command.
