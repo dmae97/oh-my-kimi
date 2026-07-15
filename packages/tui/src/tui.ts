@@ -473,7 +473,7 @@ export interface OverlayHandle {
 /**
  * Container - a component that contains other components
  */
-export class Container implements Component {
+export class Container implements Component, NativeScrollbackCommittedRows, NativeScrollbackReplay {
 	children: Component[] = [];
 
 	// Memoized concatenation of the children's latest renders. Children are
@@ -541,6 +541,34 @@ export class Container implements Component {
 		for (const child of this.children) {
 			child.dispose?.();
 		}
+	}
+
+	/**
+	 * Split the committed prefix from the container's most recently rendered
+	 * rows across its children. The memoized child arrays are the exact geometry
+	 * that produced that frame; when the child list was invalidated or rebuilt,
+	 * there is no safe old-to-new coordinate mapping, so propagation waits for
+	 * the next render/post-emit publication.
+	 */
+	setNativeScrollbackCommittedRows(rows: number): void {
+		const refs = this.#memoChildLines;
+		if (this.#memoLines === undefined || refs.length !== this.children.length) return;
+		const committed = Number.isFinite(rows) ? Math.max(0, Math.trunc(rows)) : 0;
+		let offset = 0;
+		for (let i = 0; i < this.children.length; i++) {
+			const childRows = refs[i];
+			if (childRows === undefined) return;
+			setNativeScrollbackCommittedRows(
+				this.children[i]!,
+				Math.min(childRows.length, Math.max(0, committed - offset)),
+			);
+			offset += childRows.length;
+		}
+	}
+
+	/** Recursively discard layout locks that are meaningful only to the old tape. */
+	prepareNativeScrollbackReplay(): void {
+		for (const child of this.children) prepareNativeScrollbackReplay(child);
 	}
 
 	render(width: number): readonly string[] {
