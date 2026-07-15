@@ -78,6 +78,7 @@ describe("Warp CLI-agent events", () => {
 	it("maps approval requests to Warp permission requests", () => {
 		enableWarpProtocol();
 		const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		vi.spyOn(terminalCapabilities, "isInsideTmux").mockReturnValue(false);
 		const handlers = new Map<string, RegisteredHandler>();
 		const api = {
 			on(event: string, handler: RegisteredHandler): void {
