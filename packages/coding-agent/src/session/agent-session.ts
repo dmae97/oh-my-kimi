@@ -1748,6 +1748,8 @@ export class AgentSession {
 	#prewalk: Prewalk | undefined;
 	/** True once the plan nudge has been queued; scrubbed from context at the switch. */
 	#prewalkPlanInjected = false;
+	/** True until the first assistant turn after the plan nudge completes. */
+	#prewalkContinuePending = false;
 	/** True once any successful `todo` call landed — opens the prewalk
 	 *  trigger gate: the switch fires at the first edit/write AFTER the todo
 	 *  list exists (sessions without an ACTIVE todo tool skip the gate). */
@@ -2247,23 +2249,22 @@ export class AgentSession {
 		const prewalk = this.#prewalk;
 		if (!prewalk || context?.message.role !== "assistant") return;
 
-		// Structural safety net: every branch below assumes the agent loop will
-		// run another turn. It won't if THIS turn had no tool calls — the loop
-		// treats a text-only turn as "the agent is done" and ends the session
-		// with no further prompting. The plan nudge explicitly asks for a prose
-		// reply, which makes a text-only turn common right after it — observed
-		// silently killing production SWE-bench runs before any code was ever
-		// written. Force one more turn only in that specific, self-created
-		// hazard window.
-		if (this.#prewalkPlanInjected && context.toolResults.length === 0) {
-			this.agent.steer({
-				role: "custom",
-				customType: PREWALK_CONTINUE_MESSAGE_TYPE,
-				content: prewalkContinuePrompt,
-				attribution: "agent",
-				display: false,
-				timestamp: Date.now(),
-			});
+		// The plan nudge can produce a prose-only reply, which the agent loop
+		// treats as completion before any implementation starts. Keep the
+		// safety net open only for the turn immediately following that nudge:
+		// once the model calls any tool, later text-only completion is genuine.
+		if (this.#prewalkContinuePending) {
+			this.#prewalkContinuePending = false;
+			if (context.toolResults.length === 0) {
+				this.agent.steer({
+					role: "custom",
+					customType: PREWALK_CONTINUE_MESSAGE_TYPE,
+					content: prewalkContinuePrompt,
+					attribution: "agent",
+					display: false,
+					timestamp: Date.now(),
+				});
+			}
 		}
 
 		// Todo gate: the plan nudge instructs "finish the plan, then init the
@@ -2284,6 +2285,7 @@ export class AgentSession {
 		if (!action) {
 			if (!this.#prewalkPlanInjected) {
 				this.#prewalkPlanInjected = true;
+				this.#prewalkContinuePending = true;
 				this.agent.steer({
 					role: "custom",
 					customType: PREWALK_PLAN_MESSAGE_TYPE,
@@ -2344,6 +2346,7 @@ export class AgentSession {
 		}
 		this.#prewalk = { target, thinkingLevel };
 		this.#prewalkPlanInjected = true;
+		this.#prewalkContinuePending = true;
 		this.agent.steer({
 			role: "custom",
 			customType: PREWALK_PLAN_MESSAGE_TYPE,
