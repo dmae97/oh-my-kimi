@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Bash command timeouts now render with a warning (yellow) border instead of an error (red) border, reflecting that the timeout ran its course rather than the command failed. `isError` remains `true` on the result so the model still knows the command did not complete normally. The `timedOut` flag is now propagated from the bash executor to distinguish timeouts from user aborts.
+
 ## [16.5.2] - 2026-07-14
 
 ### Breaking Changes
