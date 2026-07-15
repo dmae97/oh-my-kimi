@@ -112,7 +112,6 @@ import {
 	clearAnthropicFastModeFallback,
 	deriveClaudeDeviceId,
 	Effort,
-	isUsageLimitOutcome,
 	parseRateLimitReason,
 	realizesPriorityServiceTier,
 	resolveModelServiceTier,
@@ -130,7 +129,6 @@ import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { MacOSPowerAssertion } from "@oh-my-pi/pi-natives";
 import {
 	escapeXmlText,
-	extractHttpStatusFromError,
 	extractRetryHint,
 	formatDuration,
 	getAgentDbPath,
@@ -3099,7 +3097,7 @@ export class AgentSession {
 					// only — other failures keep the plain retry/notify path (never
 					// suspect-mark a credential on a transient advisor error).
 					const message = error instanceof Error ? error.message : String(error);
-					if (!isUsageLimitOutcome(extractHttpStatusFromError(error), message)) return;
+					if (!AIError.isUsageLimit(error)) return;
 					const result = await this.#modelRegistry.authStorage.markUsageLimitReached(
 						advisorModel.provider,
 						advisorProviderSessionId,
