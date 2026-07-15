@@ -7,14 +7,15 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { jobToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/job";
 import { prompt } from "@oh-my-pi/pi-utils";
 import taskSummaryTemplate from "../src/prompts/tools/task-summary.md" with { type: "text" };
+import { hubToolRenderer } from "../src/tools/hub";
 
 function renderLines(resultText: string): string {
 	const result = {
 		content: [{ type: "text", text: "" }],
 		details: {
+			op: "wait" as const,
 			jobs: [
 				{
 					id: "SpawnProbe",
@@ -27,9 +28,9 @@ function renderLines(resultText: string): string {
 			],
 		},
 	};
-	const component = jobToolRenderer.renderResult(
+	const component = hubToolRenderer.renderResult(
 		result,
-		{ expanded: true } as Parameters<typeof jobToolRenderer.renderResult>[1],
+		{ expanded: true } as Parameters<typeof hubToolRenderer.renderResult>[1],
 		theme,
 	);
 	return (component.render(120) as readonly string[]).join("\n");
@@ -140,13 +141,13 @@ describe("job renderer task-result preview", () => {
 		it("shows all jobs when isPartial is true", () => {
 			const result = {
 				content: [{ type: "text" as const, text: "" }],
-				details: { jobs: jobsData },
+				details: { op: "wait" as const, jobs: jobsData },
 			};
-			const component = jobToolRenderer.renderResult(
+			const component = hubToolRenderer.renderResult(
 				result,
-				{ expanded: true, isPartial: true } as Parameters<typeof jobToolRenderer.renderResult>[1],
+				{ expanded: true, isPartial: true } as Parameters<typeof hubToolRenderer.renderResult>[1],
 				theme,
-				{ poll: [] },
+				{ op: "wait", ids: [] },
 			);
 			const output = Bun.stripANSI((component.render(120) as readonly string[]).join("\n"));
 			expect(output).toContain("Job1 running");
@@ -158,13 +159,13 @@ describe("job renderer task-result preview", () => {
 		it("shows only finished jobs when isPartial is false and it is a poll call", () => {
 			const result = {
 				content: [{ type: "text" as const, text: "" }],
-				details: { jobs: jobsData },
+				details: { op: "wait" as const, jobs: jobsData },
 			};
-			const component = jobToolRenderer.renderResult(
+			const component = hubToolRenderer.renderResult(
 				result,
-				{ expanded: true, isPartial: false } as Parameters<typeof jobToolRenderer.renderResult>[1],
+				{ expanded: true, isPartial: false } as Parameters<typeof hubToolRenderer.renderResult>[1],
 				theme,
-				{ poll: [] },
+				{ op: "wait", ids: [] },
 			);
 			const output = Bun.stripANSI((component.render(120) as readonly string[]).join("\n"));
 			expect(output).not.toContain("Job1 running");
@@ -185,13 +186,13 @@ describe("job renderer task-result preview", () => {
 			];
 			const result = {
 				content: [{ type: "text" as const, text: "" }],
-				details: { jobs: runningJobsOnly },
+				details: { op: "wait" as const, jobs: runningJobsOnly },
 			};
-			const component = jobToolRenderer.renderResult(
+			const component = hubToolRenderer.renderResult(
 				result,
-				{ expanded: true, isPartial: false } as Parameters<typeof jobToolRenderer.renderResult>[1],
+				{ expanded: true, isPartial: false } as Parameters<typeof hubToolRenderer.renderResult>[1],
 				theme,
-				{ poll: [] },
+				{ op: "wait", ids: [] },
 			);
 			const lines = component.render(120) as readonly string[];
 			expect(lines).toHaveLength(0);
@@ -200,13 +201,13 @@ describe("job renderer task-result preview", () => {
 		it("does not collapse running jobs when isPartial is false and list is true", () => {
 			const result = {
 				content: [{ type: "text" as const, text: "" }],
-				details: { jobs: jobsData },
+				details: { op: "jobs" as const, jobs: jobsData },
 			};
-			const component = jobToolRenderer.renderResult(
+			const component = hubToolRenderer.renderResult(
 				result,
-				{ expanded: true, isPartial: false } as Parameters<typeof jobToolRenderer.renderResult>[1],
+				{ expanded: true, isPartial: false } as Parameters<typeof hubToolRenderer.renderResult>[1],
 				theme,
-				{ list: true },
+				{ op: "jobs" },
 			);
 			const output = Bun.stripANSI((component.render(120) as readonly string[]).join("\n"));
 			expect(output).toContain("Job1 running");
@@ -218,13 +219,13 @@ describe("job renderer task-result preview", () => {
 		it("does not collapse running jobs when isPartial is false and cancel-only is true", () => {
 			const result = {
 				content: [{ type: "text" as const, text: "" }],
-				details: { jobs: jobsData },
+				details: { op: "cancel" as const, jobs: jobsData },
 			};
-			const component = jobToolRenderer.renderResult(
+			const component = hubToolRenderer.renderResult(
 				result,
-				{ expanded: true, isPartial: false } as Parameters<typeof jobToolRenderer.renderResult>[1],
+				{ expanded: true, isPartial: false } as Parameters<typeof hubToolRenderer.renderResult>[1],
 				theme,
-				{ cancel: ["Job1"] },
+				{ op: "cancel", ids: ["Job1"] },
 			);
 			const output = Bun.stripANSI((component.render(120) as readonly string[]).join("\n"));
 			expect(output).toContain("Job1 running");
@@ -237,15 +238,16 @@ describe("job renderer task-result preview", () => {
 			const result = {
 				content: [{ type: "text" as const, text: "" }],
 				details: {
+					op: "jobs" as const,
 					jobs: [],
 					agents: [{ id: "Worker", parentId: "Main", activity: "grepping the tree", ageMs: 65_000 }],
 				},
 			};
-			const component = jobToolRenderer.renderResult(
+			const component = hubToolRenderer.renderResult(
 				result,
-				{ expanded: true, isPartial: false } as Parameters<typeof jobToolRenderer.renderResult>[1],
+				{ expanded: true, isPartial: false } as Parameters<typeof hubToolRenderer.renderResult>[1],
 				theme,
-				{ list: true },
+				{ op: "jobs" },
 			);
 			const output = Bun.stripANSI((component.render(120) as readonly string[]).join("\n"));
 			expect(output).toContain("1 running agent — no jobs");
@@ -256,13 +258,13 @@ describe("job renderer task-result preview", () => {
 		it("keeps a sealed bare-poll result visible when it carries an agent roster", () => {
 			const result = {
 				content: [{ type: "text" as const, text: "No running background jobs to wait for." }],
-				details: { jobs: [], agents: [{ id: "Worker", ageMs: 1_000 }] },
+				details: { op: "wait" as const, jobs: [], agents: [{ id: "Worker", ageMs: 1_000 }] },
 			};
-			const component = jobToolRenderer.renderResult(
+			const component = hubToolRenderer.renderResult(
 				result,
-				{ expanded: true, isPartial: false } as Parameters<typeof jobToolRenderer.renderResult>[1],
+				{ expanded: true, isPartial: false } as Parameters<typeof hubToolRenderer.renderResult>[1],
 				theme,
-				{ poll: [] },
+				{ op: "wait", ids: [] },
 			);
 			const output = Bun.stripANSI((component.render(120) as readonly string[]).join("\n"));
 			expect(output).toContain("Worker");

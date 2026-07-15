@@ -1,14 +1,12 @@
 export const BUILTIN_TOOL_NAMES = [
 	"read",
 	"bash",
-	"launch",
 	"edit",
 	"ast_grep",
 	"ast_edit",
 	"ask",
 	"debug",
 	"eval",
-	"ssh",
 	"github",
 	"glob",
 	"grep",
@@ -18,11 +16,9 @@ export const BUILTIN_TOOL_NAMES = [
 	"checkpoint",
 	"rewind",
 	"task",
-	"job",
-	"irc",
+	"hub",
 	"todo",
 	"web_search",
-	"search_tool_bm25",
 	"write",
 	"memory_edit",
 	"retain",
@@ -33,6 +29,11 @@ export const BUILTIN_TOOL_NAMES = [
 ] as const;
 
 export type BuiltinToolName = (typeof BUILTIN_TOOL_NAMES)[number];
+
+/** Hidden built-ins: constructible and `--tools`-addressable, but never part of the default active set. */
+export const HIDDEN_TOOL_NAMES = ["yield", "goal"] as const;
+
+export type HiddenToolName = (typeof HIDDEN_TOOL_NAMES)[number];
 
 const LEGACY_BUILTIN_TOOL_NAME_ALIASES: ReadonlyMap<string, BuiltinToolName> = new Map([
 	["search", "grep"],
@@ -56,4 +57,9 @@ export function normalizeToolNames(names: Iterable<string>): string[] {
 		out.push(normalized);
 	}
 	return out;
+}
+
+/** MCP tool names carry the `mcp__<server>_<tool>` prefix minted by `createMCPToolName`. */
+export function isMCPToolName(name: string): boolean {
+	return name.startsWith("mcp__");
 }

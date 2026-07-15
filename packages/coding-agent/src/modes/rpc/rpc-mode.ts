@@ -507,6 +507,7 @@ function normalizeHostToolDefinitions(tools: RpcHostToolDefinition[]): RpcHostTo
 			description,
 			parameters: tool.parameters,
 			hidden: tool.hidden === true,
+			loadMode: tool.loadMode ?? "discoverable",
 		};
 	});
 }
@@ -914,7 +915,6 @@ export async function runRpcMode(
 		clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
 		resetCapabilities();
 		session.setSlashCommands(await loadSlashCommands({ cwd }));
-		await session.refreshSshTool({ activateIfAvailable: true });
 		await emitAvailableCommandsUpdate();
 	};
 	const emitAvailableCommandsUpdate = async () => {

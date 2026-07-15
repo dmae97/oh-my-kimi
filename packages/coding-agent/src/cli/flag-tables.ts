@@ -177,18 +177,16 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 				.map(s => s.trim())
 				.filter(Boolean),
 		);
-		const valid: string[] = [];
-		for (const name of names) {
-			if (deps.builtinToolNames.includes(name)) {
-				valid.push(name);
-			} else {
-				deps.logger.warn("Unknown tool passed to --tools", {
-					tool: name,
-					validTools: deps.builtinToolNames,
-				});
-			}
+		// An unknown name silently narrowing the toolset is worse than a failed
+		// launch: scripts keep running believing the tool is available (e.g. a
+		// stale `--tools bash,ssh` after the ssh tool's removal).
+		const unknown = names.filter(name => !deps.builtinToolNames.includes(name));
+		if (unknown.length > 0) {
+			throw new CliUsageError(
+				`Unknown tool${unknown.length === 1 ? "" : "s"} in --tools: ${unknown.join(", ")}. Valid tools: ${deps.builtinToolNames.join(", ")}.`,
+			);
 		}
-		result.tools = valid;
+		result.tools = names;
 	},
 	"--thinking": (result, value, deps) => {
 		const thinking = deps.parseThinking(value);

@@ -166,19 +166,22 @@ export async function collectBundledPiEntries(): Promise<BundledPiEntry[]> {
 	return entries;
 }
 
-function renderVirtualModule(entries: readonly BundledPiEntry[]): string {
-	const imports = entries.map(entry => `import * as ${entry.binding} from ${JSON.stringify(entry.importSpecifier)};`);
+/** Render the lazy loader registry; exported so tests can execute the generated module. */
+export function __renderLegacyPiVirtualModule(entries: readonly BundledPiEntry[]): string {
+	const loaders = entries.map(
+		entry => `const ${entry.binding} = () => import(${JSON.stringify(entry.importSpecifier)});`,
+	);
 	const modules = entries.map(entry => `\t${JSON.stringify(entry.key)}: ${entry.binding},`);
-	return [...imports, "", "export const BUNDLED_PI_MODULES = {", ...modules, "};", ""].join("\n");
+	return [...loaders, "", "export const BUNDLED_PI_MODULE_LOADERS = {", ...modules, "};", ""].join("\n");
 }
 
 /**
- * Build plugin that materializes the legacy Pi module graph entirely in
- * memory. Bun still needs static import edges at compile time, but no generated
- * source or key-list file is written to the repository.
+ * Build plugin that materializes lazy legacy Pi module loaders entirely in
+ * memory. Literal dynamic imports retain every compile-time edge without
+ * evaluating unrelated host modules during extension bootstrap.
  */
 export async function createLegacyPiVirtualModulePlugin(): Promise<Bun.BunPlugin> {
-	const source = renderVirtualModule(await collectBundledPiEntries());
+	const source = __renderLegacyPiVirtualModule(await collectBundledPiEntries());
 	return {
 		name: "omp:legacy-pi-modules",
 		setup(build) {

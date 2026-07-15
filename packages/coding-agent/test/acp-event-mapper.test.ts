@@ -991,6 +991,45 @@ describe("ACP event mapper", () => {
 		expect(update.locations).toEqual([{ path: "src/current.ts" }, { path: "src/old.ts" }, { path: "src/new.ts" }]);
 	});
 
+	it("maps xd:// device writes to an execute call with no fabricated file location", () => {
+		const update = buildToolCallStartUpdate({
+			toolCallId: "toolu_xd_write",
+			toolName: "write",
+			args: { path: "xd://github", content: '{"op":"repo_view"}' },
+			cwd: path.resolve("/repo"),
+		});
+
+		expectAcpStructure(arkSessionNotification, { sessionId: "session-1", update });
+		expect(update).toMatchObject({
+			sessionUpdate: "tool_call",
+			title: "xd://github",
+			kind: "execute",
+		});
+		expect("locations" in update).toBe(false);
+	});
+
+	it("keeps xd:// discovery reads as read kind and plain file writes as edit", () => {
+		const discovery = buildToolCallStartUpdate({
+			toolCallId: "toolu_xd_read",
+			toolName: "read",
+			args: { path: "xd://lsp" },
+		});
+		expect(discovery).toMatchObject({ title: "xd://lsp", kind: "read" });
+		expect("locations" in discovery).toBe(false);
+
+		const fileWrite = buildToolCallStartUpdate({
+			toolCallId: "toolu_file_write",
+			toolName: "write",
+			args: { path: "src/foo.ts", content: "x" },
+			cwd: path.resolve("/repo"),
+		});
+		expect(fileWrite).toMatchObject({
+			title: "write: src/foo.ts",
+			kind: "edit",
+			locations: [{ path: path.resolve("/repo", "src/foo.ts") }],
+		});
+	});
+
 	it("rejects mutated ACP notification discriminators", () => {
 		const [notification] = mapAgentSessionEventToAcpSessionUpdates(
 			{

@@ -647,6 +647,10 @@ fn run_fd_sync(
 				0
 			}
 		},
+		// A closed downstream reader (`fd … | head`) surfaces as BrokenPipe on
+		// stdout writes. Real fd dies silently from SIGPIPE; mirror that with
+		// exit 141 (128+SIGPIPE) and no diagnostic.
+		Err(err) if err.kind() == io::ErrorKind::BrokenPipe => 141,
 		Err(err) => {
 			let _ = writeln!(stderr, "fd: {err}");
 			2
@@ -1650,7 +1654,7 @@ mod tests {
 	use brush_core::openfiles::OpenFile;
 	use clap::Parser;
 
-	use super::{FdCli, cancel_heartbeat, search};
+	use super::{FdCli, cancel_heartbeat, run_fd_sync, search};
 
 	static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -1801,6 +1805,30 @@ mod tests {
 			"stdout should list the match: {out:?}"
 		);
 		assert!(err.is_empty(), "stderr should stay clean on success: {err:?}");
+		let _ = fs::remove_dir_all(&tree);
+	}
+
+	#[test]
+	fn broken_pipe_on_stdout_is_silent_and_exits_141() {
+		// Regression: `fd … | head` printed "fd: Broken pipe (os error 32)"
+		// when the downstream builtin closed the read end early. Real fd dies
+		// silently from SIGPIPE; the builtin must map BrokenPipe to exit 141
+		// with no stderr diagnostic.
+		let tree = seeded_tree("epipe");
+		let (reader, writer) = std::io::pipe().expect("pipe");
+		drop(reader); // downstream reader (e.g. `head`) already exited
+		let mut stdout = OpenFile::from(writer);
+		let (stderr_capture, stderr_file) = capture_file("stderr-epipe");
+		let mut stderr = OpenFile::from(stderr_file);
+		let cancelled = AtomicBool::new(false);
+		let argv = ["fd", "haystack", tree.to_str().expect("utf8 path")]
+			.map(std::ffi::OsString::from)
+			.to_vec();
+		let code = run_fd_sync(argv, tree.clone(), &mut stdout, &mut stderr, &cancelled);
+		drop(stderr);
+		assert_eq!(code, 141, "BrokenPipe must map to 128+SIGPIPE");
+		let err = read_all(&stderr_capture);
+		assert!(err.is_empty(), "stderr must stay clean on a broken pipe: {err:?}");
 		let _ = fs::remove_dir_all(&tree);
 	}
 }

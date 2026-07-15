@@ -137,14 +137,15 @@ All providers use `parseFrontmatter` (`utils/frontmatter.ts`) with these semanti
 
 1. Frontmatter is parsed only when content starts with `---` and has a closing `\n---`.
 2. Body is trimmed after frontmatter extraction.
-3. If YAML parse fails:
-   - warning is logged,
-   - parser falls back to simple `key: value` line parsing (`^([\w-]+):\s*(.*)$`).
+3. If whole-document YAML parsing fails:
+   - a warning is logged,
+   - the parser falls back to simple `key: value` line parsing (`^([\w-]+):\s*(.*)$`),
+   - each captured value is reparsed independently as YAML, and only values that still fail parsing remain raw trimmed strings.
 
-Ambiguity consequences:
+Fallback limitations:
 
-- Fallback parser does not support arrays, nested objects, or quoting rules.
-- Fallback values become strings (for example `alwaysApply: true` becomes string `"true"`), so providers requiring boolean/string types may drop metadata.
+- Multiline arrays, nested objects, and other indentation-dependent YAML structures are not reconstructed. A valid one-line flow value (for example `[text, thinking]`) can still survive the per-value reparse.
+- An individually malformed value remains a raw string; providers requiring a boolean, list, or object may drop that metadata.
 - `ttsr_trigger` works in fallback (underscore key); hyphenated keys like `thinking-level` also parse and are normalized to camelCase (`thinkingLevel`) — key normalization applies to the YAML path too.
 - Files without valid frontmatter still load as rules with empty metadata and full content body.
 
@@ -226,9 +227,33 @@ After rule discovery in `createAgentSession` (`sdk.ts`), `bucketRules(...)` appl
 
 ### `condition`, `astCondition`, `scope`, and `interruptMode`
 
-- `condition` is the regex TTSR trigger field; legacy `ttsr_trigger` / `ttsrTrigger` are accepted as fallback inputs during parsing.
-- `astCondition` is the ast-grep trigger field: a string or list of structural patterns, kept verbatim (no glob inference). It only matches on edit/write tool streams, where the language is inferred from the file path. A rule may set `condition`, `astCondition`, or both.
-- `scope` narrows TTSR matching scope. A `condition` token that looks like a file glob becomes `tool:edit(<glob>)` and `tool:write(<glob>)` scope entries plus catch-all condition `.*`; `astCondition` tokens never trigger this shorthand.
+- `condition` is the regex TTSR trigger field; legacy `ttsr_trigger` / `ttsrTrigger` are accepted as fallback inputs during parsing. A leading `(?i)`, `(?m)`, or `(?s)` inline flag group is translated to the equivalent JavaScript `RegExp` flags.
+- `astCondition` is the ast-grep trigger field: a string or YAML sequence of structural patterns, kept verbatim (no glob inference). It only matches on edit/write tool streams, where the language is inferred from the file path. A rule may set `condition`, `astCondition`, or both.
+- `scope` narrows TTSR matching to an allowlist of stream surfaces. It accepts either a comma-separated YAML string or a YAML sequence. Omitting it watches assistant prose (`text`) and all tool arguments (`tool`), but not thinking.
+
+  ```yaml
+  # Prose and thinking; equivalent forms:
+  scope: "text, thinking"
+  ```
+
+  ```yaml
+  scope: [text, thinking]
+  ```
+
+  ```yaml
+  # A block-style YAML sequence is also valid:
+  scope:
+    - text
+    - thinking
+  ```
+
+  ```yaml
+  # Only TypeScript source snapshots produced by edit/write:
+  scope: "tool:edit(*.ts), tool:write(*.ts)"
+  ```
+
+  Valid tokens are `text`, `thinking`, `tool` (or `toolcall`), and `tool:<name>(<path-glob>)`. Do not write `scope: "text","thinking"`: adjacent quoted scalars are not valid YAML; put the comma inside one string or use a YAML sequence.
+- A `condition` token that looks like a file glob becomes `tool:edit(<glob>)` and `tool:write(<glob>)` scope entries plus catch-all condition `.*`; `astCondition` tokens never trigger this shorthand.
 - `interruptMode` can override the global TTSR interrupt mode for the rule.
 
 ## 7. System prompt inclusion path

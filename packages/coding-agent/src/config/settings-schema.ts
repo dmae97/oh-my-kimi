@@ -285,7 +285,7 @@ const EMPTY_STRING_ARRAY: string[] = [];
 const EMPTY_STRING_RECORD: Record<string, string> = {};
 const EMPTY_NUMBER_RECORD: Record<string, number> = {};
 const DEFAULT_CYCLE_ORDER: string[] = ["smol", "default", "slow"];
-const DEFAULT_TOOL_CALL_LOOP_EXEMPT_TOOLS: string[] = ["job", "irc"];
+const DEFAULT_TOOL_CALL_LOOP_EXEMPT_TOOLS: string[] = ["hub"];
 const EMPTY_MODEL_TAGS_RECORD: ModelTagsSettings = {};
 const HINDSIGHT_RECALL_TYPES_DEFAULT: string[] = ["world", "experience"];
 export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [
@@ -333,22 +333,22 @@ export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [
 	},
 	{
 		pattern: "^\\s*nohup\\s+|(?<!&)\\&\\s*$",
-		tool: "launch",
+		tool: "hub",
 		message:
-			"Use the `launch` tool instead of nohup or background shell syntax so the process stays observable and managed.",
+			'Use the `hub` tool (`op:"start"`) instead of nohup or background shell syntax so the process stays observable and managed.',
 	},
 	{
 		pattern:
 			"^\\s*(?:(?:bun|npm|pnpm|yarn)\\s+(?:run\\s+)?(?:dev|start)(?:\\s|$)|(?:vite|next\\s+dev|nuxt\\s+dev|nodemon|lldb|gdb|tail\\s+-f)(?:\\s|$)|docker\\s+compose\\s+up(?!.*(?:\\s-d(?:\\s|$)|--detach))(?:\\s|$))",
-		tool: "launch",
+		tool: "hub",
 		message:
-			"Use the `launch` tool for services, watchers, and debuggers so other omp instances can observe and control them.",
+			'Use the `hub` tool (`op:"start"`) for services, watchers, and debuggers so other omp instances can observe and control them.',
 	},
 	{
 		pattern:
 			"^\\s*(?:(?:bun|npm|pnpm|yarn)\\s+(?:run\\s+)?\\S+|cargo\\s+watch|watchexec|pytest|vitest|jest|tsc)(?:.|\\n)*(?:--watch|-w)(?:\\s|$)",
-		tool: "launch",
-		message: "Use the `launch` tool for watch mode so its output, input, and lifecycle stay managed.",
+		tool: "hub",
+		message: 'Use the `hub` tool (`op:"start"`) for watch mode so its output, input, and lifecycle stay managed.',
 	},
 ];
 
@@ -724,7 +724,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Output Limits",
 			label: "Output Column Cap",
 			description:
-				"Per-line byte cap for streaming tool outputs (bash, ssh, python, js eval) and `read`. Lines wider than this are ellipsis-truncated; remaining bytes up to the next newline are dropped. 0 disables.",
+				"Per-line byte cap for streaming tool outputs (bash, python, js eval) and `read`. Lines wider than this are ellipsis-truncated; remaining bytes up to the next newline are dropped. 0 disables.",
 			options: [
 				{ value: "0", label: "Off", description: "No per-line cap" },
 				{ value: "256", label: "256", description: "Tight" },
@@ -979,6 +979,17 @@ export const SETTINGS_SCHEMA = {
 			group: "Display",
 			label: "Show Hardware Cursor",
 			description: "Show terminal cursor for IME support",
+		},
+	},
+
+	"tui.imeSafeCursor": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "IME-Safe Prompt Layout",
+			description: "Move the prompt's bottom border to a separate row so macOS IME preedit cannot displace it",
 		},
 	},
 
@@ -3012,6 +3023,17 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"edit.enforceSeenLines": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "files",
+			group: "Editing",
+			label: "Enforce Seen-Line Guard",
+			description: "Reject edits anchored on lines a prior read/search never displayed in full",
+		},
+	},
+
 	readLineNumbers: {
 		type: "boolean",
 		default: false,
@@ -3403,7 +3425,7 @@ export const SETTINGS_SCHEMA = {
 					value: "write",
 					label: "Write",
 					description:
-						"Auto-approve read-only and write tools; require confirmation for exec tools such as bash, eval, browser, task, and ssh.",
+						"Auto-approve read-only and write tools; require confirmation for exec tools such as bash, eval, browser, and task.",
 				},
 				{
 					value: "yolo",
@@ -3438,7 +3460,7 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"todo.reminders.max": {
+	"todo.remindersMax": {
 		type: "number",
 		default: 3,
 		ui: {
@@ -3538,7 +3560,7 @@ export const SETTINGS_SCHEMA = {
 
 	"astGrep.enabled": {
 		type: "boolean",
-		default: true,
+		default: false,
 		ui: {
 			tab: "tools",
 			group: "Available Tools",
@@ -3599,7 +3621,8 @@ export const SETTINGS_SCHEMA = {
 			tab: "tools",
 			group: "Available Tools",
 			label: "Generate Image",
-			description: "Enable the generate_image tool for text-to-image generation and editing",
+			description:
+				"Enable the generate_image tool (text-to-image generation and editing). Exposed as an xd:// device when tools.xdev is on.",
 		},
 	},
 
@@ -3831,7 +3854,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Execution",
 			label: "Max Poll Time",
 			description:
-				"How long the poll tool waits for background job updates before returning the current state. A fixed value waits that exact duration every time. `smart` adapts: it starts at 5s and lengthens with each back-to-back poll (up to 5m), then resets to 5s after about a minute without polling.",
+				"How long a `hub` wait watches background jobs before returning the current state. A fixed value waits that exact duration every time. `smart` adapts: it starts at 5s and lengthens with each back-to-back wait (up to 5m), then resets to 5s after about a minute without waiting.",
 			options: [
 				{ value: "5s", label: "5 seconds" },
 				{ value: "10s", label: "10 seconds" },
@@ -3850,7 +3873,8 @@ export const SETTINGS_SCHEMA = {
 			tab: "tools",
 			group: "Execution",
 			label: "IRC Timeout",
-			description: "Default timeout for irc wait (and send await:true) in milliseconds; 0 disables the timeout",
+			description:
+				"Default timeout for hub message waits (and send await:true) in milliseconds; 0 disables the timeout",
 			options: [
 				{ value: "0", label: "Disabled" },
 				{ value: "30000", label: "30 seconds" },
@@ -3866,29 +3890,15 @@ export const SETTINGS_SCHEMA = {
 		default: 60_000,
 	},
 
-	// Tool Discovery
-	"tools.discoveryMode": {
-		type: "enum",
-		values: ["auto", "off", "mcp-only", "all"] as const,
-		default: "auto",
+	"tools.xdev": {
+		type: "boolean",
+		default: true,
 		ui: {
 			tab: "tools",
 			group: "Discovery & MCP",
-			label: "Tool Discovery",
+			label: "xd:// Tools",
 			description:
-				"Hide tools behind a search tool to save tokens. 'auto' hides MCP tools once the tool set has more than 40 tools; 'mcp-only' always hides MCP tools; 'all' hides all non-essential built-ins too.",
-		},
-	},
-
-	"tools.essentialOverride": {
-		type: "array",
-		default: [] as string[],
-		ui: {
-			tab: "tools",
-			group: "Discovery & MCP",
-			label: "Essential Tools Override",
-			description:
-				"Override the always-loaded built-in tools (default: read, bash, edit, write, glob, eval). Leave empty to use defaults.",
+				"Mount rarely-used (discoverable) tools under xd:// device URLs driven via read/write instead of shipping their schemas on every request. Disable to expose every enabled tool top-level.",
 		},
 	},
 
@@ -3901,28 +3911,6 @@ export const SETTINGS_SCHEMA = {
 			group: "Discovery & MCP",
 			label: "MCP Project Config",
 			description: "Load .mcp.json/mcp.json from project root",
-		},
-	},
-
-	"mcp.discoveryMode": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "tools",
-			group: "Discovery & MCP",
-			label: "MCP Tool Discovery",
-			description: "Hide MCP tools by default and expose them through a tool discovery tool",
-		},
-	},
-
-	"mcp.discoveryDefaultServers": {
-		type: "array",
-		default: [] as string[],
-		ui: {
-			tab: "tools",
-			group: "Discovery & MCP",
-			label: "MCP Discovery Default Servers",
-			description: "Keep MCP tools from these servers visible while discovery mode hides other MCP tools",
 		},
 	},
 
@@ -4263,6 +4251,21 @@ export const SETTINGS_SCHEMA = {
 	"task.agentModelOverrides": {
 		type: "record",
 		default: {} as Record<string, string>,
+	},
+	"task.agentPrewalk": {
+		type: "record",
+		default: {} as Record<string, string>,
+	},
+	"task.prewalk": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tasks",
+			group: "Subagents",
+			label: "Generic Task Prewalk",
+			description:
+				"Arm prewalk for the bundled generic `task` subagent: it starts on its resolved model, plans and begins the implementation, then hands off to the 'smol' role at its first edit/write. Per-agent overrides (task.agentPrewalk, toggled with P in /agents) and user agent `prewalk` frontmatter apply regardless of this toggle.",
+		},
 	},
 
 	"tasks.todoClearDelay": {
@@ -5021,8 +5024,10 @@ export const SETTINGS_SCHEMA = {
 	 *
 	 * Owned by `packages/coding-agent/src/tools/report-tool-issue.ts` via the
 	 * process-global consent handler registered by `InteractiveMode`.
+	 *
+	 * @default "unset"
 	 */
-	"dev.autoqa.consent": {
+	"dev.autoqaConsent": {
 		type: "enum",
 		values: ["unset", "granted", "denied"] as const,
 		default: "unset" as const,

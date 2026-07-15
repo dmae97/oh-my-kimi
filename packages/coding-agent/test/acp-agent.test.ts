@@ -183,8 +183,6 @@ class FakeAgentSession {
 		// no-op for tests
 	}
 
-	async refreshSshTool(_options?: { activateIfAvailable?: boolean }): Promise<void> {}
-
 	async setModel(model: Model): Promise<void> {
 		this.model = model;
 	}
@@ -316,14 +314,14 @@ class FakeAgentSession {
 		this.planModeState = state;
 	}
 
-	standingResolveHandler: ((input: unknown) => Promise<unknown> | unknown) | undefined;
+	planProposalHandler: ((title: string) => Promise<unknown> | unknown) | undefined;
 
-	setStandingResolveHandler(handler: ((input: unknown) => Promise<unknown> | unknown) | null): void {
-		this.standingResolveHandler = handler ?? undefined;
+	setPlanProposalHandler(handler: ((title: string) => Promise<unknown> | unknown) | null): void {
+		this.planProposalHandler = handler ?? undefined;
 	}
 
-	peekStandingResolveHandler(): ((input: unknown) => Promise<unknown> | unknown) | undefined {
-		return this.standingResolveHandler;
+	peekPlanProposalHandler(): ((title: string) => Promise<unknown> | unknown) | undefined {
+		return this.planProposalHandler;
 	}
 
 	planReferencePath: string | undefined;
@@ -614,20 +612,20 @@ describe("ACP agent", () => {
 				: undefined;
 		expect(currentModeConfig?.currentValue).toBe("plan");
 
-		// Regression for #1869: entering plan mode must wire a standing
-		// resolve handler so the agent's `resolve { action: "apply" }` has a
-		// gate to dispatch to instead of throwing "No pending action".
-		expect(typeof session.standingResolveHandler).toBe("function");
+		// Regression for #1869: entering plan mode must wire a plan-proposal
+		// handler so the agent's `xd://propose` write has a gate to dispatch to
+		// instead of erroring with no approval path.
+		expect(typeof session.planProposalHandler).toBe("function");
 
 		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "default" });
 		expect(session.planModeState).toBeUndefined();
-		expect(session.standingResolveHandler).toBeUndefined();
+		expect(session.planProposalHandler).toBeUndefined();
 
 		harness.abortController.abort();
 		await Bun.sleep(0);
 	});
 
-	it("plan-approval standing handler errors when the plan file is missing", async () => {
+	it("plan-proposal handler errors when the plan file is missing", async () => {
 		const harness = await createHarness();
 		Settings.instance.set("plan.enabled", true);
 
@@ -635,23 +633,21 @@ describe("ACP agent", () => {
 		const session = harness.findSession(created.sessionId)!;
 		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "plan" });
 
-		const handler = session.standingResolveHandler;
+		const handler = session.planProposalHandler;
 		expect(typeof handler).toBe("function");
 
 		// No plan file written → handler surfaces a ToolError telling the
 		// agent to write the plan before requesting approval.
-		await expect(handler!({ action: "apply", reason: "Plan done.", extra: { title: "demo" } })).rejects.toThrow(
-			/Plan file not found/,
-		);
+		await expect(handler!("demo")).rejects.toThrow(/Plan file not found/);
 		// Plan mode must remain active so the agent can recover.
 		expect(session.planModeState?.enabled).toBe(true);
-		expect(typeof session.standingResolveHandler).toBe("function");
+		expect(typeof session.planProposalHandler).toBe("function");
 
 		harness.abortController.abort();
 		await Bun.sleep(0);
 	});
 
-	it("plan-approval standing handler approves the agent-named plan and exits plan mode on apply", async () => {
+	it("plan-proposal handler approves the agent-named plan and exits plan mode on submit", async () => {
 		const harness = await createHarness();
 		Settings.instance.set("plan.enabled", true);
 
@@ -670,26 +666,22 @@ describe("ACP agent", () => {
 		await Bun.write(planPath, "# Words Counter\n\nFile contents.");
 
 		const updatesBefore = harness.updates.length;
-		const handler = session.standingResolveHandler!;
-		const result = (await handler({
-			action: "apply",
-			reason: "Plan complete and self-contained.",
-			extra: { title: "words-counter" },
-		})) as {
+		const handler = session.planProposalHandler!;
+		const result = (await handler("words-counter")) as {
 			content: Array<{ type: string; text: string }>;
-			details: { sourceToolName: string; sourceResultDetails: { planFilePath: string; title: string } };
+			details: { planFilePath: string; title: string; planExists: boolean };
 		};
 
 		// Plan-approval payload is shaped for `event-controller` / ACP renderers.
-		expect(result.details.sourceToolName).toBe("plan_approval");
-		expect(result.details.sourceResultDetails.title).toBe("words-counter");
-		expect(result.details.sourceResultDetails.planFilePath).toBe("local://words-counter-plan.md");
+		expect(result.details.title).toBe("words-counter");
+		expect(result.details.planFilePath).toBe("local://words-counter-plan.md");
+		expect(result.details.planExists).toBe(true);
 		expect(result.content[0]?.text).toMatch(/Plan approved/);
 		// Plan file keeps its agent-chosen name — no rename.
 		expect(await Bun.file(planPath).exists()).toBe(true);
 		// Mode + handler are cleared; the agent regains write tools next turn.
 		expect(session.planModeState).toBeUndefined();
-		expect(session.standingResolveHandler).toBeUndefined();
+		expect(session.planProposalHandler).toBeUndefined();
 		expect(session.planReferencePath).toBe("local://words-counter-plan.md");
 		const approvalUpdates = harness.updates.slice(updatesBefore);
 		// Mode-change notifications reached the client so Zed's UI and config
@@ -716,7 +708,7 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
-	it("plan-approval standing handler treats dismissed elicitation as refine, never approves", async () => {
+	it("plan-proposal handler treats dismissed elicitation as refine, never approves", async () => {
 		// Regression for the P1 review finding on #1870: when a form-capable
 		// ACP client dismissed/cancelled the elicitation, the handler was
 		// returning the dismissal as approval — silently granting write
@@ -741,20 +733,16 @@ describe("ACP agent", () => {
 		await Bun.write(planPath, "# Words Counter\n\nFile contents.");
 
 		const updatesBefore = harness.updates.length;
-		const handler = session.standingResolveHandler!;
-		const result = (await handler({
-			action: "apply",
-			reason: "Plan complete.",
-			extra: { title: "words-counter" },
-		})) as { content: Array<{ type: string; text: string }> };
+		const handler = session.planProposalHandler!;
+		const result = (await handler("words-counter")) as { content: Array<{ type: string; text: string }> };
 
 		expect(result.content[0]?.text).toMatch(/refinement requested/i);
 		// Plan file stays put; no rename, no write-access grant.
 		expect(await Bun.file(planPath).exists()).toBe(true);
 		expect(await Bun.file(resolveLocalUrlToPath("local://words-counter.md", localOptions)).exists()).toBe(false);
-		// Plan mode + standing handler stay active so the agent can iterate.
+		// Plan mode + proposal handler stay active so the agent can iterate.
 		expect(session.planModeState?.enabled).toBe(true);
-		expect(typeof session.standingResolveHandler).toBe("function");
+		expect(typeof session.planProposalHandler).toBe("function");
 		expect(session.planReferencePath).toBeUndefined();
 		// No mode-exit notifications were emitted.
 		const postDismissUpdates = harness.updates.slice(updatesBefore);

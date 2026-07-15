@@ -475,10 +475,6 @@ export interface BuildSystemPromptOptions {
 	rules?: Array<{ name: string; description?: string; path: string; globs?: string[] }>;
 	/** Intent field name injected into every tool schema. If set, explains the field in the prompt. */
 	intentField?: string;
-	/** Whether MCP tool discovery is active for this prompt build. */
-	mcpDiscoveryMode?: boolean;
-	/** Discoverable MCP server summaries to advertise when discovery mode is active. */
-	mcpDiscoveryServerSummaries?: string[];
 	/** Encourage the agent to delegate via tasks unless changes are trivial. */
 	eagerTasks?: boolean;
 	/** When true, the Eager Tasks section uses the hard MUST/ONLY wording (`task.eager: always`) rather than the softer `preferred` nudge. */
@@ -509,6 +505,12 @@ export interface BuildSystemPromptOptions {
 	renderMermaid?: boolean;
 	/** Pre-resolved nested active repo context. Undefined resolves from cwd. */
 	activeRepoContext?: ActiveRepoContext | null;
+	/** Tools mounted under `xd://`; renders the protocol section when non-empty. */
+	xdevTools?: Array<{ name: string; summary: string }>;
+	/** Full docs + JSON schema for every `xd://`-mounted tool, inlined into the protocol section so no discovery `read` is needed. */
+	xdevDocs?: string;
+	/** Whether Auto-QA grievance reporting is enabled; renders the `xd://report_issue` note. */
+	autoQaEnabled?: boolean;
 }
 
 /** Result of building provider-facing system prompt messages. */
@@ -539,8 +541,6 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		rules,
 		alwaysApplyRules,
 		intentField,
-		mcpDiscoveryMode = false,
-		mcpDiscoveryServerSummaries = [],
 		eagerTasks = false,
 		eagerTasksAlways = false,
 		taskBatch = true,
@@ -554,6 +554,9 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		personality = "default",
 		includeWorkspaceTree = false,
 		renderMermaid = true,
+		xdevTools = [],
+		xdevDocs = "",
+		autoQaEnabled = false,
 		activeRepoContext: providedActiveRepoContext,
 	} = options;
 	const inlineToolDescriptors = providedInlineToolDescriptors ?? false;
@@ -719,6 +722,12 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 
 	// Build tool descriptions for system prompt rendering.
 	const toolPromptNames = new Map<string, string>(toolNames.map(name => [name, tools?.get(name)?.wireName ?? name]));
+	// xd://-mounted tools count as present for prompt gates ({{#has tools "lsp"}})
+	// and resolve their own name as the reference — the xd:// section explains
+	// the access path. The Tool Inventory list stays limited to real defs.
+	for (const mounted of xdevTools) {
+		if (!toolPromptNames.has(mounted.name)) toolPromptNames.set(mounted.name, mounted.name);
+	}
 	const toolRefs = Object.fromEntries(toolPromptNames.entries());
 	const toolInfo = toolNames.map(name => ({
 		name: toolPromptNames.get(name) ?? name,
@@ -765,7 +774,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		systemPromptCustomization: effectiveSystemPromptCustomization,
 		customPrompt: resolvedCustomPrompt,
 		appendPrompt: resolvedAppendPrompt ?? "",
-		tools: toolNames,
+		tools: [...new Set([...toolNames, ...xdevTools.map(mounted => mounted.name)])],
 		toolInfo,
 		toolInventory,
 		inlineToolDescriptors,
@@ -786,9 +795,6 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		personality: personality === "none" ? "" : PERSONALITY_SPECS[personality].trim(),
 		intentTracing: !!intentField,
 		intentField: intentField ?? "",
-		mcpDiscoveryMode,
-		hasMCPDiscoveryServers: mcpDiscoveryServerSummaries.length > 0,
-		mcpDiscoveryServerSummaries,
 		eagerTasks,
 		eagerTasksAlways,
 		taskBatch,
@@ -799,6 +805,9 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		hasObsidian: hasObsidian(),
 		includeWorkspaceTree,
 		renderMermaid,
+		xdevTools,
+		xdevDocs,
+		autoQaEnabled,
 	};
 	const rendered = prompt.render(resolvedCustomPrompt ? customSystemPromptTemplate : systemPromptTemplate, data);
 	const systemPrompt = [rendered];

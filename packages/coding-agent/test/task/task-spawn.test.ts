@@ -140,7 +140,7 @@ describe("task spawn routing", () => {
 
 		expect(job!.status).toBe("completed");
 		expect(job!.resultText).toContain("Spawnling is now idle");
-		expect(job!.resultText).toContain("message it via `irc` to follow up");
+		expect(job!.resultText).toContain("message it via `hub` to follow up");
 		expect(job!.resultText).toContain("history://Spawnling");
 		expect(runSpy).toHaveBeenCalledTimes(1);
 	});

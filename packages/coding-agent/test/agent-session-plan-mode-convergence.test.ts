@@ -1,12 +1,12 @@
 /**
- * Contract: plan mode converges on `ask`/`resolve` regardless of how a turn
+ * Contract: plan mode converges on `ask`/`write xd://propose` regardless of how a turn
  * ends, and non-user producers cannot keep it spinning.
  *
  *  T1. An advisor concern in plan mode is recorded as a visible card but never
  *      wakes an autonomous primary turn.
  *  T2. An idle IRC message in plan mode is folded into context ("injected"),
  *      not woken.
- *  T3. A plan-mode turn that stops without `ask`/`resolve` is reminded at the
+ *  T3. A plan-mode turn that stops without a decision tool call is reminded at the
  *      terminal settle, bounded by PLAN_MODE_REMINDER_MAX (then yields to the
  *      user), and either decision tool resets the counter.
  */
@@ -87,7 +87,6 @@ describe("AgentSession plan-mode convergence", () => {
 		} finally {
 			session = undefined;
 			for (const authStorage of authStorages.splice(0)) authStorage.close();
-			// dispose() awaits the agent teardown above; no wall-clock wait needed.
 			await tempDir?.remove();
 		}
 	});
@@ -100,15 +99,15 @@ describe("AgentSession plan-mode convergence", () => {
 		if (!model) throw new Error("Expected bundled anthropic model to exist");
 
 		const askTool = makeTool("ask");
-		const resolveTool = makeTool("resolve");
+		const writeTool = makeTool("write");
 		const readTool = makeTool("read");
 
 		const mock = createMockModel({ responses });
 		const agent = new Agent({
 			getApiKey: () => "test-key",
-			// All three tools active so a scripted ask/resolve/read call (and a
+			// All three tools active so a scripted ask/write/read call (and a
 			// forced "required" choice) can actually execute (isToolChoiceActive).
-			initialState: { model, systemPrompt: ["Test"], tools: [askTool, resolveTool, readTool], messages: [] },
+			initialState: { model, systemPrompt: ["Test"], tools: [askTool, writeTool, readTool], messages: [] },
 			streamFn: mock.stream,
 		});
 
@@ -141,10 +140,10 @@ describe("AgentSession plan-mode convergence", () => {
 			modelRegistry,
 			toolRegistry: new Map<string, AgentTool>([
 				["ask", askTool],
-				["resolve", resolveTool],
+				["write", writeTool],
 				["read", readTool],
 			]),
-			builtInToolNames: ["ask", "resolve", "read"],
+			builtInToolNames: ["ask", "write", "read"],
 			advisorTools: [],
 			advisorStreamFn,
 			sideStreamFn,
@@ -176,9 +175,7 @@ describe("AgentSession plan-mode convergence", () => {
 			m => m.role === "custom" && m.customType === "advisor",
 		);
 		expect(advisorCards.length).toBeGreaterThanOrEqual(1);
-		// The note was preserved/recorded, not used to wake the primary.
 		expect(harness.mock.calls.length).toBe(0);
-		// The advisor model actually ran (the test drove the routeAdvice seam).
 		expect(harness.advisorMock?.calls.length ?? 0).toBeGreaterThanOrEqual(1);
 	});
 
@@ -204,20 +201,16 @@ describe("AgentSession plan-mode convergence", () => {
 		registry.register({ id: "peer", displayName: "peer", kind: "sub", session: null, status: "running" });
 		try {
 			const bus = IrcBus.global();
-			// Park the sender's reply waiter first (timeout 0 = no wall-clock timer;
-			// a broken auto-reply path fails via the test runner's own timeout).
 			const replyPromise = bus.wait("peer", { from: "me" }, 0);
 			const msg: IrcMessage = { id: "m2", from: "peer", to: "me", body: "blocked on you — status?", ts: Date.now() };
 
 			const outcome = await harness.session.deliverIrcMessage(msg, { expectsReply: true });
 			expect(outcome).toBe("injected");
 
-			// The ephemeral side-channel turn answered the sender for real.
 			const reply = await replyPromise;
 			expect(reply?.replyTo).toBe("m2");
 			expect(reply?.body).toContain("still planning");
 			expect(harness.sideMock?.calls.length).toBe(1);
-			// The primary loop never woke: no model call, no assistant turn.
 			expect(harness.mock.calls.length).toBe(0);
 			expect(harness.session.agent.state.messages.some(m => m.role === "assistant")).toBe(false);
 		} finally {
@@ -226,9 +219,6 @@ describe("AgentSession plan-mode convergence", () => {
 	});
 
 	it("T3a: convergence reminders are bounded by the cap, then yield to the user", async () => {
-		// Alternating text-stop / read cascade: each text stop with awaiting=false
-		// escalates a reminder; each read clears awaiting (not the count). The 7th
-		// text stop lands with awaiting=false AND count===cap → cap guard yields.
 		const harness = await createPlanSession([
 			{ content: ["planning A"] },
 			{ content: [{ type: "toolCall", name: "read", arguments: { path: "a" } }] },
@@ -239,26 +229,31 @@ describe("AgentSession plan-mode convergence", () => {
 			{ content: ["planning D"] },
 		]);
 
-		// Todos are ENABLED (default) with an incomplete item, so a missing plan-mode
-		// gate in #checkTodoCompletion would inject a todo reminder and schedule an
-		// 8th continuation past the cap — the mock.calls.length === 7 assertion below
-		// is the behavioral guard for that bypass.
 		harness.session.setTodoPhases([{ name: "Plan", tasks: [{ content: "draft the plan", status: "pending" }] }]);
 
 		await harness.session.prompt("make a plan");
 		await harness.session.waitForIdle();
 
-		// Exactly PLAN_MODE_REMINDER_MAX (3) reminders, then a cap-yield (no 4th,
-		// no further continuation), and plan mode is still on (not silently exited).
 		expect(countReminders(harness.session.agent.state.messages)).toBe(3);
 		expect(harness.mock.calls.length).toBe(7);
 		expect(harness.session.getPlanModeState()?.enabled).toBe(true);
 	});
 
-	it("T3b: a resolve call resets the convergence counter", async () => {
+	it("T3b: a propose write resets the convergence counter", async () => {
 		const harness = await createPlanSession([
 			{ content: ["planning A"] },
-			{ content: [{ type: "toolCall", name: "resolve", arguments: { action: "discard", reason: "test reset" } }] },
+			{
+				content: [
+					{
+						type: "toolCall",
+						name: "write",
+						arguments: {
+							path: "xd://propose",
+							content: "test-reset",
+						},
+					},
+				],
+			},
 			{ content: ["planning B"] },
 			{ content: ["planning C"] },
 		]);
@@ -266,9 +261,6 @@ describe("AgentSession plan-mode convergence", () => {
 		await harness.session.prompt("make a plan");
 		await harness.session.waitForIdle();
 
-		// reminder #1 (text) → resolve resets → reminder #2 (text) → awaiting latch
-		// suppresses on the final text stop. Two reminders proves the reset re-armed
-		// the budget; four model calls proves no runaway.
 		expect(countReminders(harness.session.agent.state.messages)).toBe(2);
 		expect(harness.mock.calls.length).toBe(4);
 	});

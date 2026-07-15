@@ -24,7 +24,7 @@ function createTestSession(): ToolSession {
 		hasUI: true,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
-		settings: Settings.isolated(),
+		settings: Settings.isolated({ "tools.xdev": false }),
 	};
 }
 
@@ -154,10 +154,10 @@ describe("builtin tool schemas provider compatibility", () => {
 		expect(typeSchema?.anyOf).toBeUndefined();
 	});
 
-	it("asserts that browser tool schema root has 'type: \"object\"' for Codex and OpenAI Responses compatibility", async () => {
+	it('asserts that browser tool schema root stays `type: "object"` when discoverable tools are mounted', async () => {
 		const toolSchemas = await collectToolSchemas();
 		const browserEntry = toolSchemas.find(tool => tool.name === "browser");
 		expect(browserEntry).toBeDefined();
-		expect(browserEntry?.schema.type).toBe("object");
+		expect(asSchemaObject(browserEntry?.schema)?.type).toBe("object");
 	});
 });

@@ -32,7 +32,6 @@ import type { ModelRole } from "../config/model-roles";
 import { loadCapability } from "../discovery";
 import { isLightTheme, setAutoThemeMapping, setColorBlindMode, setSymbolPreset } from "../modes/theme/theme";
 import { AgentStorage } from "../session/agent-storage";
-import { normalizeToolName } from "../tools/builtin-names";
 import { type EditMode, normalizeEditMode } from "../utils/edit-mode";
 import { withFileLock } from "./file-lock";
 import {
@@ -1195,43 +1194,6 @@ export class Settings {
 			delete raw["search.contextAfter"];
 		}
 
-		// 3. Tool-name arrays use wire IDs too. Preserve user overrides across
-		// the rename without duplicating entries if they already added grep/glob.
-		const migrateToolNameList = (names: unknown): unknown => {
-			if (!Array.isArray(names)) return names;
-			const out: unknown[] = [];
-			const seen = new Set<string>();
-			for (const name of names) {
-				const migrated = typeof name === "string" ? normalizeToolName(name) : name;
-				if (typeof migrated === "string") {
-					if (seen.has(migrated)) continue;
-					seen.add(migrated);
-				}
-				out.push(migrated);
-			}
-			return out;
-		};
-		const ensureToolsObject = (): Record<string, unknown> => {
-			const current = raw.tools;
-			if (current && typeof current === "object" && !Array.isArray(current)) {
-				return current as Record<string, unknown>;
-			}
-			const created: Record<string, unknown> = {};
-			raw.tools = created;
-			return created;
-		};
-		const toolsObj = raw.tools as Record<string, unknown> | undefined;
-		if (toolsObj && "essentialOverride" in toolsObj) {
-			toolsObj.essentialOverride = migrateToolNameList(toolsObj.essentialOverride);
-		}
-		if ("tools.essentialOverride" in raw) {
-			const nestedToolsObj = ensureToolsObject();
-			if (!("essentialOverride" in nestedToolsObj)) {
-				nestedToolsObj.essentialOverride = migrateToolNameList(raw["tools.essentialOverride"]);
-			}
-			delete raw["tools.essentialOverride"];
-		}
-
 		// Also clean up any empty nested objects we might have created or left behind
 		if (raw.glob && typeof raw.glob === "object" && Object.keys(raw.glob).length === 0) {
 			delete raw.glob;
@@ -1290,6 +1252,25 @@ export class Settings {
 		}
 		if (tierTouched) raw.tier = tierObj;
 		delete raw.fastModeScope;
+
+		// BM25 tool discovery removal: tools.discoveryMode / tools.essentialOverride /
+		// mcp.discoveryMode / mcp.discoveryDefaultServers are gone with no
+		// replacement (`tools.xdev` stays at its own default). Dead keys are
+		// deleted so they stop lingering in config.yml.
+		const toolsObj = raw.tools as Record<string, unknown> | undefined;
+		if (toolsObj) {
+			delete toolsObj.discoveryMode;
+			delete toolsObj.essentialOverride;
+		}
+		delete raw["tools.discoveryMode"];
+		delete raw["tools.essentialOverride"];
+		const mcpObj = raw.mcp as Record<string, unknown> | undefined;
+		if (mcpObj) {
+			delete mcpObj.discoveryMode;
+			delete mcpObj.discoveryDefaultServers;
+		}
+		delete raw["mcp.discoveryMode"];
+		delete raw["mcp.discoveryDefaultServers"];
 
 		return raw;
 	}

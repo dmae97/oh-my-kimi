@@ -162,4 +162,25 @@ describe("parseAgentFields", () => {
 	test("returns undefined readSummarize when field absent", () => {
 		expect(parseAgentFields({ name: "explore", description: "desc" })?.readSummarize).toBeUndefined();
 	});
+	test("parses prewalk from boolean frontmatter", () => {
+		expect(parseAgentFields({ name: "worker", description: "desc", prewalk: true })?.prewalk).toBe(true);
+		expect(parseAgentFields({ name: "worker", description: "desc", prewalk: false })?.prewalk).toBe(false);
+	});
+
+	test("parses prewalk boolean strings as booleans", () => {
+		expect(parseAgentFields({ name: "worker", description: "desc", prewalk: "true" })?.prewalk).toBe(true);
+		expect(parseAgentFields({ name: "worker", description: "desc", prewalk: "false" })?.prewalk).toBe(false);
+	});
+
+	test("parses prewalk model pattern strings", () => {
+		expect(parseAgentFields({ name: "worker", description: "desc", prewalk: " @smol " })?.prewalk).toBe("@smol");
+		expect(parseAgentFields({ name: "worker", description: "desc", prewalk: "openai/gpt-5-mini" })?.prewalk).toBe(
+			"openai/gpt-5-mini",
+		);
+	});
+
+	test("ignores empty and absent prewalk values", () => {
+		expect(parseAgentFields({ name: "worker", description: "desc", prewalk: "  " })?.prewalk).toBeUndefined();
+		expect(parseAgentFields({ name: "worker", description: "desc" })?.prewalk).toBeUndefined();
+	});
 });

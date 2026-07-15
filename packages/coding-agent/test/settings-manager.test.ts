@@ -694,15 +694,18 @@ describe("Settings", () => {
 			expect(settings.get("grep.enabled")).toBe(true);
 		});
 
-		it("migrates legacy tool names in persisted essential overrides", async () => {
+		it("drops dead BM25-discovery keys and leaves tools.xdev at its default", async () => {
 			await writeSettings({
-				tools: { essentialOverride: ["read", "find", "search", "grep"] },
-				"tools.essentialOverride": ["find", "search", "read"],
+				tools: { discoveryMode: "off", essentialOverride: ["read"] },
+				mcp: { discoveryMode: "auto", discoveryDefaultServers: ["gh"] },
 			});
 
 			const settings = await Settings.init({ cwd: projectDir, agentDir });
 
-			expect(settings.get("tools.essentialOverride")).toEqual(["read", "glob", "grep"]);
+			// No migration mapping: legacy discovery intent is discarded, xdev
+			// keeps its own default. An explicit xdev value is untouched.
+			expect(settings.get("tools.xdev")).toBe(true);
+			expect(settings.isConfigured("tools.xdev")).toBe(false);
 		});
 
 		it("migrates from settings.json containing comments", async () => {

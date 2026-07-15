@@ -73,6 +73,12 @@ export interface PatcherOptions {
 	 * host did not wire a resolver). Plain line-range ops never need it.
 	 */
 	blockResolver?: BlockResolver;
+	/**
+	 * Enforce the seen-line guard: reject anchored edits on lines the read/search
+	 * that minted the tag never displayed. Defaults to `true`. When `false`, tags
+	 * validate on content hash alone and any anchor into the tagged content applies.
+	 */
+	enforceSeenLines?: boolean;
 }
 
 /** Per-section result returned by {@link Patcher.apply} / {@link Patcher.commit}. */
@@ -197,6 +203,7 @@ export class Patcher {
 	readonly snapshots: SnapshotStore;
 	readonly recovery: Recovery;
 	readonly blockResolver: BlockResolver | undefined;
+	readonly #enforceSeenLines: boolean;
 
 	constructor(options: PatcherOptions) {
 		if (!options.snapshots) {
@@ -206,6 +213,7 @@ export class Patcher {
 		this.snapshots = options.snapshots;
 		this.recovery = new Recovery(options.snapshots);
 		this.blockResolver = options.blockResolver;
+		this.#enforceSeenLines = options.enforceSeenLines ?? true;
 	}
 
 	/**
@@ -628,7 +636,9 @@ export class Patcher {
 			// The line numbers in `edits` index the exact content the tag names.
 			// Reject any anchor the read never displayed: editing lines the model
 			// has not seen is the off-by-memory mistake that mangles files.
-			if (expected !== undefined) this.#assertSeenLines(section, expected, matchedSnapshot);
+			if (expected !== undefined && this.#enforceSeenLines) {
+				this.#assertSeenLines(section, expected, matchedSnapshot);
+			}
 			const result = applyEdits(normalized, resolved);
 			return withResolveWarnings(blockResolutions.length > 0 ? { ...result, blockResolutions } : result);
 		}

@@ -2,6 +2,7 @@
 description: Result type aliases must include a defaulted error type parameter
 condition: "type\\s+Result<[A-Za-z_]\\w*>\\s*="
 scope: "tool:edit(*.rs), tool:write(*.rs)"
+interruptMode: never
 ---
 
 `Result` aliases must expose the error type as a defaulted parameter.

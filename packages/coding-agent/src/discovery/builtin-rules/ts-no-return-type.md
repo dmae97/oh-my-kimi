@@ -2,6 +2,7 @@
 description: "Do not use `ReturnType<typeof fn>` — name the type explicitly"
 condition: "ReturnType<"
 scope: "tool:edit(*.ts), tool:edit(*.tsx), tool:write(*.ts), tool:write(*.tsx)"
+interruptMode: never
 ---
 
 Do not publish contracts through `ReturnType<typeof fn>`. Name the type at the module that owns the value and import that name at consumers.

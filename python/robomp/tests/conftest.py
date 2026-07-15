@@ -97,6 +97,10 @@ def _baseline_env(tmp_path: Path) -> dict[str, str]:
         # cache flip `ROBOMP_NATIVES_CACHE_ENABLED=true` explicitly.
         "ROBOMP_NATIVES_CACHE_ROOT": str(tmp_path / "natives-cache"),
         "ROBOMP_NATIVES_CACHE_ENABLED": "false",
+        # Same reasoning for the issue-index reconciler: its first tick would
+        # spin connect-retries against the .invalid proxy URL inside server
+        # tests. Tests that want it construct IssueIndexSync directly.
+        "ROBOMP_ISSUE_INDEX_SYNC_SECONDS": "0",
     }
 
 

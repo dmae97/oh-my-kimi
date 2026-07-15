@@ -7,7 +7,7 @@ const DEFAULT_RETENTION_MS = 5 * 60 * 1000;
 const DEFAULT_MAX_RUNNING_JOBS = 15;
 
 /**
- * Adaptive ("smart") `job` poll-wait ladder (ms). A tight poll loop climbs
+ * Adaptive ("smart") `hub` poll-wait ladder (ms). A tight poll loop climbs
  * these rungs so each immediate re-poll backs off and stops spending turns on
  * "still running" frames; the floor (first rung) is the shortest wait and the
  * top rung is the longest a smart poll will ever block. Only used when
@@ -327,7 +327,7 @@ export class AsyncJobManager {
 	}
 
 	/**
-	 * Compute the next adaptive ("smart") wait (ms) for a blocking `job` poll by
+	 * Compute the next adaptive ("smart") wait (ms) for a blocking `hub` wait by
 	 * the given owner. Consecutive polls — those starting within
 	 * POLL_ESCALATION_RESET_MS of the previous poll returning — climb
 	 * POLL_WAIT_LADDER_MS so a tight wait loop backs off; a longer gap means the

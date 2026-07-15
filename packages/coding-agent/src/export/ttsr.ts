@@ -8,7 +8,7 @@
 import * as path from "node:path";
 import { AstMatchStrictness, astMatch } from "@oh-my-pi/pi-natives";
 import { logger } from "@oh-my-pi/pi-utils";
-import type { Rule } from "../capability/rule";
+import { compileRuleCondition, type Rule } from "../capability/rule";
 import type { TtsrSettings } from "../config/settings";
 
 export type TtsrMatchSource = "text" | "thinking" | "tool";
@@ -103,7 +103,7 @@ export class TtsrManager {
 		const compiled: RegExp[] = [];
 		for (const pattern of rule.condition ?? []) {
 			try {
-				compiled.push(new RegExp(pattern));
+				compiled.push(compileRuleCondition(pattern));
 			} catch (error) {
 				logger.warn("TTSR condition has invalid regex pattern, skipping condition", {
 					ruleName: rule.name,
