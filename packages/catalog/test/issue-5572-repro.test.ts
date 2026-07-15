@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
+import { buildAnthropicClientOptions, streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
 import type { Context, TJsonSchema, Tool } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
@@ -54,6 +54,20 @@ describe("issue #5572 — custom Anthropic endpoints reject eager_input_streamin
 		const payload = (await promise) as { tools?: Array<Record<string, unknown>> };
 		expect(payload.tools).toHaveLength(1);
 		expect(payload.tools?.[0]).not.toHaveProperty("eager_input_streaming");
+	});
+
+	it("omits the legacy fine-grained streaming beta from custom endpoint requests", () => {
+		const model = buildModel(CUSTOM_MODEL_SPEC);
+		const options = buildAnthropicClientOptions({
+			model,
+			apiKey: "sk-ant-test",
+			extraBetas: [],
+			stream: true,
+			interleavedThinking: false,
+			hasTools: true,
+		});
+
+		expect(options.defaultHeaders["anthropic-beta"] ?? "").not.toContain("fine-grained-tool-streaming-2025-05-14");
 	});
 
 	it("keeps eager tool input streaming on the official Anthropic endpoint", () => {

@@ -2682,7 +2682,8 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	const compat = model.compat;
 	const disableStrictTools = disableStrictToolsOverride ?? compat.disableStrictTools;
 	const needsInterleavedBeta = interleavedThinking && !model.thinking?.supportsDisplay;
-	const needsFineGrainedToolStreamingBeta = hasTools && !compat.supportsEagerToolInputStreaming;
+	const needsFineGrainedToolStreamingBeta =
+		hasTools && compat.officialEndpoint && !compat.supportsEagerToolInputStreaming;
 	const oauthToken = isOAuth ?? isAnthropicOAuthToken(apiKey);
 	const baseUrl = resolveAnthropicBaseUrl(model, apiKey);
 	const foundryCustomHeaders = resolveAnthropicCustomHeaders(model);
@@ -2699,9 +2700,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	if (model.provider === "github-copilot") {
 		const copilotApiKey = parseGitHubCopilotApiKey(apiKey).accessToken;
 		// The GitHub Copilot Anthropic proxy doesn't accept Anthropic beta
-		// features (and the catalog already forces `supportsEagerToolInputStreaming
-		// = false` for this host, so `needsFineGrainedToolStreamingBeta` is true
-		// whenever tools are present). Forward only caller-supplied betas.
+		// features. Forward only caller-supplied betas.
 		const betaFeatures = [...extraBetas];
 		const defaultHeaders = mergeHeaders(
 			{
