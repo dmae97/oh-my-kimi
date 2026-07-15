@@ -16,6 +16,7 @@
 - Fixed Bash internal URLs remaining unresolved when used as unquoted arguments inside command substitutions ([#5535](https://github.com/can1357/oh-my-pi/issues/5535)).
 - Fixed the built-in `fd` printing `fd: Broken pipe (os error 32)` when a downstream pipeline reader exited early (e.g. `fd … | head`); it now exits silently with 141 (128+SIGPIPE), matching real fd.
 - Fixed prewalk repeatedly continuing after a bash-only task such as `commit` had already completed ([#5551](https://github.com/can1357/oh-my-pi/issues/5551)).
+- Fixed plan-mode re-entry dropping a new plan request when a prior plan artifact existed: the re-entry prompt led with the old plan and contradicted the plan-file guidance, so weak models only reconciled the incomplete previous plan. Re-entry now anchors on the new request and folds any old-plan corrections into it ([#5576](https://github.com/can1357/oh-my-pi/issues/5576)).
 
 ## [16.5.2] - 2026-07-14
 
