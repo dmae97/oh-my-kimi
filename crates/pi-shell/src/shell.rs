@@ -3216,6 +3216,20 @@ mod tests {
 	}
 
 	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn uutils_diff_reads_process_substitution_fds() {
+		let (result, output) = time::timeout(
+			Duration::from_secs(5),
+			run_command_capture("diff <(echo a) <(echo b)", None, None, CancelToken::default()),
+		)
+		.await
+		.expect("process substitution should not hang");
+
+		assert_eq!(result.exit_code, Some(1));
+		assert!(output.contains("-a\n+b\n"), "diff output missing changed lines: {output:?}");
+	}
+
+	#[cfg(unix)]
 	fn printf_minimizer(
 		settings_path: &std::path::Path,
 		max_capture_bytes: Option<u32>,

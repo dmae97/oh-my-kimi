@@ -13,6 +13,7 @@
 ### Fixed
 
 - Fixed Bash internal URLs remaining unresolved when used as unquoted arguments inside command substitutions ([#5535](https://github.com/can1357/oh-my-pi/issues/5535)).
+- Fixed the Bash tool hanging when in-process commands read process substitution operands such as `<(cmd)` ([#5557](https://github.com/can1357/oh-my-pi/issues/5557)).
 
 ## [16.5.2] - 2026-07-14
 
