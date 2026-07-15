@@ -983,9 +983,24 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					const forwardSyncProgress: AgentToolUpdateCallback<TaskToolDetails> = async update => {
 						const nextProgress = update.details?.progress?.[0];
 						if (nextProgress) {
-							Object.assign(progress, nextProgress);
+							// The job body owns status and identity (id/index/agent);
+							// copy only the live metrics the subagent streams so the
+							// polling row reflects the resolved model, reasoning level,
+							// and running counters without reverting the "running"
+							// status back to the subagent's initial "pending" snapshot.
+							progress.resolvedModel = nextProgress.resolvedModel;
+							progress.tokens = nextProgress.tokens;
+							progress.requests = nextProgress.requests;
+							progress.contextTokens = nextProgress.contextTokens;
+							progress.contextWindow = nextProgress.contextWindow;
+							progress.cost = nextProgress.cost;
+							progress.toolCount = nextProgress.toolCount;
+							progress.currentTool = nextProgress.currentTool;
+							progress.lastIntent = nextProgress.lastIntent;
 							progress.recentTools = nextProgress.recentTools.slice();
 							progress.recentOutput = nextProgress.recentOutput.slice();
+							progress.retryState = nextProgress.retryState;
+							progress.retryFailure = nextProgress.retryFailure;
 						}
 						const updateText =
 							update.content.find(part => part.type === "text")?.text ?? `Running background task ${agentId}...`;
