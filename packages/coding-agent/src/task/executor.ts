@@ -543,9 +543,7 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 				rawOutput = rawOutput ? `${SUBAGENT_WARNING_NULL_YIELD}\n\n${rawOutput}` : SUBAGENT_WARNING_NULL_YIELD;
 			} else {
 				const { validator, error: schemaError, normalized } = buildOutputValidator(outputSchema);
-				const completeData = assembled.rawText
-					? assembled.data
-					: parseStringifiedJson(assembled.data ?? null);
+				const completeData = assembled.rawText ? assembled.data : parseStringifiedJson(assembled.data ?? null);
 				const validation = validator?.validate(completeData);
 				const failure =
 					validation && !validation.success

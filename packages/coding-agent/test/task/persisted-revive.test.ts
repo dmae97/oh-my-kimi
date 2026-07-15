@@ -35,6 +35,7 @@ function createRef(sessionFile: string): AgentRef {
 
 function createRevivedSession(activeToolNames: string[][]): AgentSession {
 	return {
+		getMountedXdevToolNames: () => [],
 		setActiveToolsByName: async (names: string[]) => {
 			activeToolNames.push(names);
 		},
