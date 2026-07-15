@@ -132,4 +132,34 @@ describe("read and write route xd:// device URLs", () => {
 			await removeWithRetries(tempDir);
 		}
 	});
+
+	it("docsAll truncates external (dynamic-mount) descriptions to the cap; built-ins and read xd:// stay full", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "write-xdev-external-"));
+		try {
+			const session = xdevSession(tempDir);
+			await createTools(session);
+			const registry = session.xdevRegistry;
+			if (!registry) throw new Error("expected xdev registry");
+			const mounted = registry.list();
+
+			const longDescription = `LEDE ${"y".repeat(XdevRegistry.EXTERNAL_DESCRIPTION_CAP * 3)} TAIL`;
+			const external = Object.create(mounted[0]!) as (typeof mounted)[number];
+			Object.defineProperty(external, "name", { value: "mcp_external_tool" });
+			Object.defineProperty(external, "description", { value: longDescription });
+			registry.reconcile([external]);
+
+			const docs = registry.docsAll();
+			// External device: schema section present, description cut at the cap.
+			expect(docs).toContain("## mcp_external_tool");
+			expect(docs).toContain("LEDE ");
+			expect(docs).not.toContain("TAIL");
+			expect(docs).toContain("… (full docs: read xd://mcp_external_tool)");
+			// Built-in devices keep their full curated description.
+			expect(docs).toContain(mounted[0]!.description ?? "");
+			// On-demand docs return the untruncated text.
+			expect(registry.docs("mcp_external_tool")).toContain("TAIL");
+		} finally {
+			await removeWithRetries(tempDir);
+		}
+	});
 });

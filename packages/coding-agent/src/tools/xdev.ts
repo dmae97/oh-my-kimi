@@ -84,18 +84,22 @@ function schemaDeclaresIntentField(schema: unknown): boolean {
 	return !!props && typeof props === "object" && "i" in props;
 }
 
-function renderDocs(inst: Tool, heading = "#"): string {
+function renderDocs(inst: Tool, heading = "#", descriptionCap?: number): string {
 	const schema = JSON.stringify(toolWireSchema(inst as AiTool), null, 1);
+	let description = inst.description ?? "";
+	if (descriptionCap !== undefined && description.length > descriptionCap) {
+		description = `${description.slice(0, descriptionCap).trimEnd()}… (full docs: read ${XD_URL_PREFIX}${inst.name})`;
+	}
 	return [
 		`${heading} ${inst.name}${inst.label ? ` — ${inst.label}` : ""}`,
 		"",
-		inst.description ?? "",
+		description,
 		"",
-		`${heading}# Parameters (JSON schema)`,
+		`${heading}# Schema`,
 		"```json",
 		schema,
 		"```",
-		`Execute by writing the JSON args object to ${XD_URL_PREFIX}${inst.name}.`,
+		`Execute by writing JSON to ${XD_URL_PREFIX}${inst.name}.`,
 	].join("\n");
 }
 
@@ -237,19 +241,27 @@ export class XdevRegistry {
 	/** A single device's docs above this size never inline: one pathological
 	 *  MCP description must not starve every later device. */
 	static readonly DOCS_PER_DEVICE_CAP = 10_000;
+	/** Description cap for EXTERNAL devices (dynamic mounts: MCP, custom,
+	 *  extension, …) in the system-prompt embedding. Built-in devices inline
+	 *  their full curated docs; external descriptions are server-controlled
+	 *  prose the model can re-fetch, so only the lede earns prompt space. */
+	static readonly EXTERNAL_DESCRIPTION_CAP = 200;
 
 	/**
 	 * Docs + schema for mounted devices, nested under `##` headings for
 	 * system-prompt embedding. Inlines full docs in catalog order (built-ins
 	 * first) until {@link DOCS_TOTAL_BUDGET} is spent; the rest are listed by
 	 * name + summary with a pointer to on-demand `read xd://<tool>` docs.
+	 * Dynamic mounts embed at most {@link EXTERNAL_DESCRIPTION_CAP} description
+	 * chars (schema always intact); `read xd://<tool>` returns the full text.
 	 */
 	docsAll(): string {
 		const sections: string[] = [];
 		const overflow: Tool[] = [];
 		let used = 0;
 		for (const tool of this.list()) {
-			const docs = renderDocs(tool, "##");
+			const descriptionCap = this.#dynamic.has(tool.name) ? XdevRegistry.EXTERNAL_DESCRIPTION_CAP : undefined;
+			const docs = renderDocs(tool, "##", descriptionCap);
 			if (docs.length > XdevRegistry.DOCS_PER_DEVICE_CAP || used + docs.length > XdevRegistry.DOCS_TOTAL_BUDGET) {
 				overflow.push(tool);
 				continue;

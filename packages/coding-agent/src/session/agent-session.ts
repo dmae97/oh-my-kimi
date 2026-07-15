@@ -286,6 +286,7 @@ import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { t
 import ttsrToolReminderTemplate from "../prompts/system/ttsr-tool-reminder.md" with { type: "text" };
 import unexpectedStopRetryTemplate from "../prompts/system/unexpected-stop-retry.md" with { type: "text" };
 import vibeModeActivePrompt from "../prompts/system/vibe-mode-active.md" with { type: "text" };
+import xdevMountNoticePrompt from "../prompts/system/xdev-mount-notice.md" with { type: "text" };
 import { AgentRegistry } from "../registry/agent-registry";
 import {
 	deobfuscateAssistantContent,
@@ -403,7 +404,7 @@ const PLAN_MODE_REMINDER_MAX = 3;
  */
 const MID_RUN_TODO_NUDGE_MUTATION_THRESHOLD = 12;
 /** Mid-run nudges per prompt cycle. Deliberately tighter than
- *  `todo.reminders.max` (the stop-time budget): this is a gentle hidden hint,
+ *  `todo.remindersMax` (the stop-time budget): this is a gentle hidden hint,
  *  not an escalation ladder. */
 const MID_RUN_TODO_NUDGE_MAX_PER_CYCLE = 2;
 /** Tool results that count as landed work for the mid-run todo nudge. */
@@ -481,6 +482,9 @@ const PREWALK_CONTINUE_MESSAGE_TYPE = "prewalk-continue";
  *  multi-site fixes, unnecessarily broad rewrites, and reported-test-only
  *  verification. */
 const PREWALK_CHECKLIST_MESSAGE_TYPE = "prewalk-checklist";
+/** Hidden steered notice announcing a mid-session `xd://` mount/unmount delta
+ *  (see {@link AgentSession.#notifyXdevMountDelta}). */
+const XDEV_MOUNT_NOTICE_MESSAGE_TYPE = "xdev-mount-notice";
 /** Tools whose first successful call triggers the switch — once the todo
  *  gate is open (see {@link AgentSession.#prewalkTodoSeen}). Bash is
  *  deliberately excluded: it doubles as exploration (ls/cat) and fired
@@ -6754,8 +6758,10 @@ export class AgentSession {
 		// Reconcile the dynamic `xd://` mounts: newly-active discoverable tools are
 		// mounted, deactivated ones dropped (built-in devices are preserved). A
 		// removed or disconnected tool must not stay callable through a stale device.
+		const previousMounted = this.#mountedXdevToolNames;
 		this.#mountedXdevToolNames = new Set(mountedTools.map(tool => tool.name));
 		this.#xdevRegistry?.reconcile(mountedTools);
+		this.#notifyXdevMountDelta(previousMounted);
 		this.#setActiveToolNames?.(validToolNames);
 		this.agent.setTools(tools);
 
@@ -6778,6 +6784,37 @@ export class AgentSession {
 				this.#promptModelKey = this.#currentPromptModelKey();
 			}
 		}
+	}
+
+	/**
+	 * Announce a mid-session `xd://` mount delta to the model as a steered
+	 * system notice instead of rewriting the system prompt: the prompt (and
+	 * its provider cache prefix) stays byte-stable across MCP connects and
+	 * disconnects, and the model learns about new devices from the notice
+	 * (docs + schema stay one `read xd://<tool>` away). The full docs join
+	 * the system prompt opportunistically on the next unrelated rebuild.
+	 */
+	#notifyXdevMountDelta(previousMounted: ReadonlySet<string>): void {
+		const registry = this.#xdevRegistry;
+		if (!registry) return;
+		const current = this.#mountedXdevToolNames;
+		const addedNames = [...current].filter(name => !previousMounted.has(name));
+		const removed = [...previousMounted].filter(name => !current.has(name)).map(name => ({ name }));
+		if (addedNames.length === 0 && removed.length === 0) return;
+		const summaries = new Map(registry.entries().map(entry => [entry.name, entry.summary]));
+		const added = addedNames.map(name => ({ name, summary: summaries.get(name) ?? "" }));
+		this.agent.steer({
+			role: "custom",
+			customType: XDEV_MOUNT_NOTICE_MESSAGE_TYPE,
+			content: prompt.render(xdevMountNoticePrompt, { added, removed }),
+			attribution: "agent",
+			display: false,
+			timestamp: Date.now(),
+		});
+		const parts: string[] = [];
+		if (added.length > 0) parts.push(`mounted ${added.map(entry => entry.name).join(", ")}`);
+		if (removed.length > 0) parts.push(`unmounted ${removed.map(entry => entry.name).join(", ")}`);
+		this.emitNotice("info", `xd://: ${parts.join("; ")}`, "xdev");
 	}
 
 	/**
@@ -6913,11 +6950,13 @@ export class AgentSession {
 			entries.sort();
 			instructionsSegment = entries.join("\u0006");
 		}
-		// The xd:// device inventory (built-in + dynamic mounts) is rendered into the
-		// prompt, so a mount/unmount must differ the signature and trigger a rebuild.
-		const mountedSegment = this.#xdevRegistry ? this.#xdevRegistry.list().map(describeTool).join("\u0008") : "";
+		// The xd:// device inventory is deliberately NOT part of the signature:
+		// a mount/unmount announces itself via `#notifyXdevMountDelta` instead of
+		// rewriting the system prompt, so MCP connects/disconnects keep the
+		// prompt (and its provider cache prefix) byte-stable. Rebuilds triggered
+		// by other inputs pick up the current device docs opportunistically.
 		const date = this.#getLocalCalendarDate();
-		return `${nameSegment}\u0003${descriptionSegment}\u0007${instructionsSegment}\u0009${mountedSegment}|${date}`;
+		return `${nameSegment}\u0003${descriptionSegment}\u0007${instructionsSegment}|${date}`;
 	}
 
 	/**

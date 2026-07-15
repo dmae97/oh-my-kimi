@@ -1254,18 +1254,10 @@ export class Settings {
 		delete raw.fastModeScope;
 
 		// BM25 tool discovery removal: tools.discoveryMode / tools.essentialOverride /
-		// mcp.discoveryMode / mcp.discoveryDefaultServers are gone. The one intent
-		// worth carrying over is discoveryMode "off" ("no discovery layer, every
-		// tool ships top-level"), whose modern equivalent is disabling the xd://
-		// transport; the other values map to the default (xdev on). Dead keys are
+		// mcp.discoveryMode / mcp.discoveryDefaultServers are gone with no
+		// replacement (`tools.xdev` stays at its own default). Dead keys are
 		// deleted so they stop lingering in config.yml.
 		const toolsObj = raw.tools as Record<string, unknown> | undefined;
-		const legacyDiscoveryMode = toolsObj?.discoveryMode ?? raw["tools.discoveryMode"];
-		if (legacyDiscoveryMode === "off" && toolsObj?.xdev === undefined && raw["tools.xdev"] === undefined) {
-			const toolsRoot = toolsObj ?? {};
-			toolsRoot.xdev = false;
-			raw.tools = toolsRoot;
-		}
 		if (toolsObj) {
 			delete toolsObj.discoveryMode;
 			delete toolsObj.essentialOverride;
