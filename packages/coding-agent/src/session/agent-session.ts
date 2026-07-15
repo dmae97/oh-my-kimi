@@ -2255,28 +2255,25 @@ export class AgentSession {
 		}
 
 		// The plan nudge asks for a prose plan (optionally alongside the todo
-		// init) before implementation begins; the agent loop would treat that
-		// text-only reply as terminal and end the run with no code written, so
-		// the continuation net forces one more turn. It stays armed across a
-		// todo-only turn — the plan is captured but the prose follow-up and the
-		// first edit/write are still to come — and disarms the moment the model
-		// takes any other action without a prose plan, so a task that finishes
-		// with a prose reply after only non-planning tools (e.g. a bash-only
-		// commit) is never forced to loop.
-		if (this.#prewalkContinuePending) {
-			if (context.toolResults.length === 0) {
-				this.#prewalkContinuePending = false;
-				this.agent.steer({
-					role: "custom",
-					customType: PREWALK_CONTINUE_MESSAGE_TYPE,
-					content: prewalkContinuePrompt,
-					attribution: "agent",
-					display: false,
-					timestamp: Date.now(),
-				});
-			} else if (!todoCalledThisTurn) {
-				this.#prewalkContinuePending = false;
-			}
+		// init) before implementation begins. The agent loop treats a text-only
+		// reply as terminal, so without help the run ends before any code is
+		// written. The continuation net forces exactly one more turn: it stays
+		// armed across any number of pre-implementation tool turns (exploratory
+		// read/record/bash and the todo init alike) and fires on the first
+		// text-only reply, whenever it arrives. Firing at most once bounds the
+		// hazard: a task that genuinely finishes without an edit/write (e.g. a
+		// bash-only commit) gets a single "continue" nudge and then ends when it
+		// replies text-only again, rather than looping forever (#5551).
+		if (this.#prewalkContinuePending && context.toolResults.length === 0) {
+			this.#prewalkContinuePending = false;
+			this.agent.steer({
+				role: "custom",
+				customType: PREWALK_CONTINUE_MESSAGE_TYPE,
+				content: prewalkContinuePrompt,
+				attribution: "agent",
+				display: false,
+				timestamp: Date.now(),
+			});
 		}
 
 		// Todo gate: the plan nudge instructs "finish the plan, then init the

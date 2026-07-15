@@ -292,16 +292,25 @@ describe("AgentSession prewalk", () => {
 		expect(session.model?.id).toBe(target.id);
 	});
 
-	it("does not continue a completed bash-only task after the plan-nudge window closes", async () => {
+	it("bounds a completed bash-only task to a single continuation instead of looping", async () => {
+		// Regression (#5551): with no edit/write ever run, the continuation net
+		// used to re-fire on every text-only reply, looping forever. It must
+		// fire at most once — one "continue" nudge — then let the next text-only
+		// reply end the run. No mock fallback: a stray extra turn rejects.
 		const primary = modelOrThrow("claude-sonnet-4-5");
 		const target = modelOrThrow("claude-sonnet-4-6");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 
+		// Turn 1: record (nudge injected after). Turn 2: bash — not an action
+		// tool. Turn 3: prose — the single continuation fires. Turn 4: prose
+		// again — no more continuation, run ends. A 5th call would exhaust the
+		// script and reject.
 		const mock = createMockModel({
 			responses: [
 				toolCall("t1", "record"),
 				toolCall("t2", "bash"),
 				{ content: [{ type: "text", text: "Commit complete." }], stopReason: "stop" },
+				{ content: [{ type: "text", text: "Nothing left to do." }], stopReason: "stop" },
 			],
 		});
 		const requested: string[] = [];
@@ -331,11 +340,15 @@ describe("AgentSession prewalk", () => {
 
 		await session.prompt("commit the current changes");
 
+		// Exactly one continuation: 4 turns, all on the primary (no edit/write,
+		// so no switch), then a clean stop.
 		expect(requested).toEqual([
 			`${primary.provider}/${primary.id}`,
 			`${primary.provider}/${primary.id}`,
 			`${primary.provider}/${primary.id}`,
+			`${primary.provider}/${primary.id}`,
 		]);
+		expect(session.model?.id).toBe(primary.id);
 	});
 
 	it("keeps the continuation net armed across a todo-only turn so a following prose reply still implements", async () => {
