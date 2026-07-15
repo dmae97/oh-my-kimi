@@ -180,6 +180,9 @@ describe("terminal image rendering", () => {
 		});
 
 		expect(result).not.toBeNull();
+		// SIXEL height is rounded DOWN to a multiple of 6 (band size) so it
+		// never exceeds the caller's maxHeightCells cap. With 10px cells and
+		// maxHeightCells=2, targetHeightPx=18 (not 20), rows=2 — within cap.
 		expect(result?.rows).toBe(2);
 		expect((result?.sequence ?? "").startsWith("\x1bP")).toBe(true);
 	});
