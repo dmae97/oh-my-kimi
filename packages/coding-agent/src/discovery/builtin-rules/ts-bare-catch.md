@@ -2,6 +2,7 @@
 description: Use bare `catch {` when the error binding is unused
 condition: "catch \\(_"
 scope: "tool:edit(*.ts), tool:edit(*.tsx), tool:write(*.ts), tool:write(*.tsx)"
+interruptMode: never
 ---
 
 Use bare `catch {}` when the caught value is unused. An underscore-prefixed binding adds noise and still allocates a local name.

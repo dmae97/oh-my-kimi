@@ -4,6 +4,7 @@ condition:
   - "\\(ref mut "
   - "\\(ref [a-z_]"
 scope: "tool:edit(*.rs), tool:write(*.rs)"
+interruptMode: never
 ---
 
 Use match ergonomics instead of explicit `ref` / `ref mut` patterns. Borrow the scrutinee and let bindings receive references.

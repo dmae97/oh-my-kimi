@@ -2,6 +2,7 @@
 description: "Use `import type`, not `import('pkg').Type` in type positions"
 condition: "import\\("
 scope: "tool:edit(*.ts), tool:edit(*.tsx), tool:write(*.ts), tool:write(*.tsx)"
+interruptMode: never
 ---
 
 Use top-level `import type` declarations for type-only dependencies. NEVER write `import("pkg").Type` inside source annotations.
