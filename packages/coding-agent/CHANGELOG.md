@@ -437,6 +437,7 @@
 - Fixed retry fallback model recovery by exposing `retry.fallbackChains` in `/settings`, adding a `/model` action to assign the selected default fallback model, and clearing a selected model's retry cooldown marker on manual model switches. ([#4533](https://github.com/can1357/oh-my-pi/issues/4533))
 - Fixed `/handoff` and auto-handoff skipping extension lifecycle hooks by emitting cancellable `session_before_switch` hooks and a `session_switch` with `reason: "handoff"` after the replacement session is ready ([#4434](https://github.com/can1357/oh-my-pi/issues/4434)).
 - Fixed TTSR stream interrupts so only the tool call whose stream matched a rule receives the rule-named abort result; sibling tool-call placeholders now use a neutral abort reason ([#2783](https://github.com/can1357/oh-my-pi/issues/2783)).
+- Fixed TTSR rules with a leading `(?i)`/`(?m)`/`(?s)` inline regex flag never registering: `new RegExp("(?i)...")` throws in Bun/JS, so the condition failed to compile and the rule was silently dropped. Leading inline flag groups are now translated to native `RegExp` flags. Also recover `scope` tokens and sibling values from malformed frontmatter (e.g. `scope: "text","thinking"`), which previously left literal quotes on the parsed values ([#4796](https://github.com/can1357/oh-my-pi/issues/4796)).
 
 ## [16.3.11] - 2026-07-06
 
