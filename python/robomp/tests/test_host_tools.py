@@ -842,6 +842,25 @@ def test_classify_issue_question_skips_repro_path(db: Database, tmp_path: Path) 
     assert row is not None and row.classification == "question"
 
 
+def test_classify_issue_wontfix_takes_comment_only_path(db: Database, tmp_path: Path) -> None:
+    """`wontfix` is a non-PR primary: labels land, classification persists, and the
+    echoed next step routes to a single explanatory comment — no repro, no PR."""
+    transport = httpx.MockTransport(lambda r: httpx.Response(200, json=[{"name": "wontfix"}, {"name": "triaged"}]))
+    bindings, loop, t = _bindings(db, tmp_path, transport)
+    try:
+        tool = next(x for x in build(bindings) if x.name == "classify_issue")
+        result = tool.execute(
+            {"primary": "wontfix", "rationale": "intentional design tradeoff, no demonstrated impact"},
+            _ctx(),
+        )
+    finally:
+        _stop_loop(loop, t)
+    assert "wontfix" in result
+    assert "no PR" in result
+    row = db.get_issue(bindings.issue_key)
+    assert row is not None and row.classification == "wontfix"
+
+
 def test_classify_issue_rejects_bug_without_priority(db: Database, tmp_path: Path) -> None:
     bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(lambda r: httpx.Response(500)))
     try:
@@ -1302,7 +1321,9 @@ def test_impl_gate_allows_later_authorized_event_to_reach_repo_commands(
     assert calls
 
 
-def test_impl_gate_ignores_skipped_authorized_event(db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_impl_gate_ignores_skipped_authorized_event(
+    db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     calls: list[list[str] | tuple[str, ...]] = []
 
     def record_repo_command(_bindings: ToolBindings, cmd: list[str] | tuple[str, ...], *, timeout: float | None = None):

@@ -82,10 +82,10 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
 
 ## Flow
 1. `WebSearchTool.execute()` in `packages/coding-agent/src/web/search/index.ts` delegates directly to `executeSearch()`.
-2. `executeSearch()` chooses a provider list:
-   - if `params.provider` is set and not `"auto"`, it loads that provider with `getSearchProvider()`; if `isExplicitlyAvailable()` returns true, the list is `[that provider]`, otherwise it falls back to `resolveProviderChain(authStorage, "auto")`.
-   - otherwise it calls `resolveProviderChain()` with the module-global preferred provider from `packages/coding-agent/src/web/search/provider.ts`.
-3. `resolveProviderChain()` lazily loads each provider module on demand and returns only available providers. If a preferred provider is set, it is tried first (gated by `isExplicitlyAvailable()`), then the static `SEARCH_PROVIDER_ORDER` excluding that provider, each gated by `isAvailable()`. Providers in the excluded set (`setExcludedSearchProviders()`) are skipped entirely, including as the preferred candidate.
+2. `executeSearch()` computes ordered provider candidates without loading their modules:
+   - if `params.provider` is set and not `"auto"`, it loads that provider only to check `isExplicitlyAvailable()`; if false, it uses the auto candidates.
+   - otherwise it uses the module-global preferred provider from `packages/coding-agent/src/web/search/provider.ts`.
+3. `resolveProviderCandidates()` puts an included preferred provider first (gated by `isExplicitlyAvailable()`), then `SEARCH_PROVIDER_ORDER` excluding it. Excluded providers are skipped entirely, including as the preferred candidate. As `executeSearch()` walks those candidates, it loads a module and checks availability only when the candidate is reached.
 4. If no providers are available (for example, after excluding DuckDuckGo and lacking configured keyed/OAuth providers), `executeSearch()` returns `Error: No web search provider configured.` with `details.response.provider = "none"`.
 5. For each provider in order, `executeSearch()` calls `provider.search()` with:
    - `query`,
@@ -102,8 +102,8 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
 ## Modes / Variants
 - **Provider selection**
   - **Forced provider**: internal callers may pass `provider`; unavailable forced providers fall back to the auto chain instead of hard-failing (`packages/coding-agent/src/web/search/index.ts`). This field is not in the model-facing schema.
-  - **Preferred provider**: `setPreferredSearchProvider()` sets a module-global default used by `resolveProviderChain()`. `packages/coding-agent/src/sdk.ts` and `packages/coding-agent/src/modes/controllers/selector-controller.ts` wire this from settings.
-  - **Excluded providers**: `setExcludedSearchProviders()` records providers `resolveProviderChain()` must never return, including as fallbacks. Wired from the `providers.webSearchExclude` setting (`providers.webSearch` drives the preferred provider) in `packages/coding-agent/src/sdk.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, and `packages/coding-agent/src/modes/controllers/selector-controller.ts`.
+  - **Preferred provider**: `setPreferredSearchProvider()` sets a module-global default used by `resolveProviderCandidates()`. `packages/coding-agent/src/sdk.ts` and `packages/coding-agent/src/modes/controllers/selector-controller.ts` wire this from settings.
+  - **Excluded providers**: `setExcludedSearchProviders()` records providers `resolveProviderCandidates()` must skip, including as fallbacks. Wired from the `providers.webSearchExclude` setting (`providers.webSearch` drives the preferred provider) in `packages/coding-agent/src/sdk.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, and `packages/coding-agent/src/modes/controllers/selector-controller.ts`.
   - **Auto chain order** (25 providers): `perplexity`, `gemini`, `anthropic`, `codex`, `xai`, `zai`, `exa`, `tinyfish`, `jina`, `kagi`, `tavily`, `firecrawl`, `brave`, `kimi`, `parallel`, `synthetic`, `searxng`, `duckduckgo`, `bing`, `yahoo`, `startpage`, `google`, `ecosia`, `mojeek`, `public` (`SEARCH_PROVIDER_ORDER` in `packages/coding-agent/src/web/search/types.ts`). `public` is explicit-only: its `isAvailable()` returns `false` so the auto chain never fans out implicitly.
 - **Provider adapters**
   - **Perplexity** — `packages/coding-agent/src/web/search/providers/perplexity.ts`
@@ -274,7 +274,7 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
 
 ## Notes
 - The model-facing schema does not expose `provider`, but internal callers can force one through `SearchQueryParams`.
-- `resolveProviderChain()` lazily imports provider modules and caches singleton instances. Just asking for labels via `getSearchProviderLabel()` does not trigger those imports.
+- `executeSearch()` walks `resolveProviderCandidates()` lazily; `resolveProviderChain()` remains a compatibility helper that loads every candidate. Provider instances are cached, and asking for labels via `getSearchProviderLabel()` does not trigger imports.
 - Most providers treat `limit` and `num_search_results` as the same number because adapters pass `params.numSearchResults ?? params.limit`. Perplexity preserves both concepts. TinyFish uses the collapsed value as a local cap, serializes `num_results` per page, and paginates with `page` when more results are needed. xAI sends that collapsed value as `search_parameters.max_search_results` and applies the same precedence locally after parsing to cap returned sources/citations (`10` default, `30` max).
 - `recency` is implemented by Brave, Perplexity, Tavily, SearXNG, Kagi, TinyFish, Firecrawl, xAI, DuckDuckGo, Bing, Yahoo, Startpage, Google, and Mojeek (Ecosia ignores it; Public Web passes it through). The model-facing prompt does not name specific providers.
 - `packages/coding-agent/src/config/settings-schema.ts` uses the shared `SEARCH_PROVIDER_PREFERENCES` / `SEARCH_PROVIDER_OPTIONS` metadata, so the settings selector and setup wizard expose `auto` plus every provider in the auto chain.

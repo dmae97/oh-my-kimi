@@ -21,6 +21,7 @@ separate cohort and excluded from interval math.
 Outputs:
   scripts/session-stats/out/selector-coverage.png
 """
+
 from __future__ import annotations
 
 import argparse
@@ -49,6 +50,7 @@ _RANGE_RE = re.compile(r"^(\d+)(?:([-+])(\d+))?$")
 
 # --------------------------------------------------------------------------- #
 # Selector parsing
+
 
 def parse_selector(path: str) -> tuple[str, int | None, int | None, str]:
     """Returns (base_path, start, end, kind)."""
@@ -79,7 +81,9 @@ def parse_selector(path: str) -> tuple[str, int | None, int | None, str]:
     return base, start, start + DEFAULT_PAGE - 1, "range"
 
 
-def args_to_interval(arg_json: str | None) -> tuple[str, int | None, int | None, str] | None:
+def args_to_interval(
+    arg_json: str | None,
+) -> tuple[str, int | None, int | None, str] | None:
     """Decode arg_json into (base, start, end, kind)."""
     if not arg_json:
         return None
@@ -96,7 +100,12 @@ def args_to_interval(arg_json: str | None) -> tuple[str, int | None, int | None,
     # Legacy offset/limit.
     offset = obj.get("offset")
     limit = obj.get("limit")
-    if isinstance(offset, int) and isinstance(limit, int) and offset >= 1 and limit >= 1:
+    if (
+        isinstance(offset, int)
+        and isinstance(limit, int)
+        and offset >= 1
+        and limit >= 1
+    ):
         return path, offset, offset + limit - 1, "range"
     if isinstance(offset, int) and offset >= 1:
         return path, offset, offset + DEFAULT_PAGE - 1, "range"
@@ -107,6 +116,7 @@ def args_to_interval(arg_json: str | None) -> tuple[str, int | None, int | None,
 
 # --------------------------------------------------------------------------- #
 # Coverage math
+
 
 def merge_intervals(ivs: list[tuple[int, int]]) -> list[tuple[int, int]]:
     """Merge overlapping / adjacent intervals. Inclusive bounds."""
@@ -123,9 +133,7 @@ def merge_intervals(ivs: list[tuple[int, int]]) -> list[tuple[int, int]]:
     return out
 
 
-def classify_followup(
-    s: int, e: int, init_s: int, init_e: int
-) -> str:
+def classify_followup(s: int, e: int, init_s: int, init_e: int) -> str:
     """Where does follow-up [s,e] land relative to initial [init_s, init_e]?"""
     if s >= init_s and e <= init_e:
         return "inside"
@@ -144,6 +152,7 @@ def classify_followup(
 # --------------------------------------------------------------------------- #
 # Pull
 
+
 def iter_reads(conn: sqlite3.Connection, since_ms: int):
     sql = """
         SELECT session_file, seq, timestamp, arg_json
@@ -156,7 +165,9 @@ def iter_reads(conn: sqlite3.Connection, since_ms: int):
 
 def collect(conn, since_ms) -> dict[tuple[str, str], list[tuple[int, int, int, str]]]:
     """key (session, file) -> ordered list of (seq, start, end, kind)."""
-    by_key: dict[tuple[str, str], list[tuple[int, int | None, int | None, str]]] = defaultdict(list)
+    by_key: dict[tuple[str, str], list[tuple[int, int | None, int | None, str]]] = (
+        defaultdict(list)
+    )
     for session, seq, _ts, arg_json in iter_reads(conn, since_ms):
         parsed = args_to_interval(arg_json)
         if parsed is None:
@@ -170,6 +181,7 @@ def collect(conn, since_ms) -> dict[tuple[str, str], list[tuple[int, int, int, s
 
 # --------------------------------------------------------------------------- #
 # Analyze
+
 
 def analyze(by_key: dict) -> dict:
     """Compute coverage statistics over (session, file) groups whose FIRST
@@ -213,23 +225,27 @@ def analyze(by_key: dict) -> dict:
         gap_lines = span - covered_lines
         extra_lines = max(0, covered_lines - init_size)  # new lines past initial
 
-        eligible.append({
-            "session": session,
-            "file": base,
-            "init_start": s0,
-            "init_end": e0,
-            "init_size": init_size,
-            "n_followups": len(followups),
-            "n_range_followups": sum(1 for k in followup_kinds if k in ("range", "default")),
-            "n_raw_followups": sum(1 for k in followup_kinds if k == "raw"),
-            "first_followup_pos": first_followup_pos,
-            "intervals": merged,
-            "regions": regions,
-            "covered": covered_lines,
-            "extra_lines": extra_lines,
-            "span": span,
-            "gap_lines": gap_lines,
-        })
+        eligible.append(
+            {
+                "session": session,
+                "file": base,
+                "init_start": s0,
+                "init_end": e0,
+                "init_size": init_size,
+                "n_followups": len(followups),
+                "n_range_followups": sum(
+                    1 for k in followup_kinds if k in ("range", "default")
+                ),
+                "n_raw_followups": sum(1 for k in followup_kinds if k == "raw"),
+                "first_followup_pos": first_followup_pos,
+                "intervals": merged,
+                "regions": regions,
+                "covered": covered_lines,
+                "extra_lines": extra_lines,
+                "span": span,
+                "gap_lines": gap_lines,
+            }
+        )
     return {
         "eligible": eligible,
         "first_kind": dict(first_kind_counts),
@@ -242,18 +258,18 @@ def analyze(by_key: dict) -> dict:
 
 POS_ORDER = ["forward", "backward", "inside", "both", "gap-above", "gap-below"]
 POS_COLORS = {
-    "forward":   "#2563eb",
-    "backward":  "#0f766e",
-    "inside":    "#9ca3af",
-    "both":      "#7c3aed",
+    "forward": "#2563eb",
+    "backward": "#0f766e",
+    "inside": "#9ca3af",
+    "both": "#7c3aed",
     "gap-above": "#dc2626",
     "gap-below": "#d97706",
 }
 POS_HELP = {
-    "forward":   "extended past initial end",
-    "backward":  "extended before initial start",
-    "inside":    "re-read inside the initial range",
-    "both":      "extended on both sides",
+    "forward": "extended past initial end",
+    "backward": "extended before initial start",
+    "inside": "re-read inside the initial range",
+    "both": "extended on both sides",
     "gap-above": "disjoint hop above initial",
     "gap-below": "disjoint hop below initial",
 }
@@ -269,7 +285,7 @@ def report(stats: dict) -> None:
         n = first_kind.get(k, 0)
         if n == 0:
             continue
-        print(f"  {k:<10} {n:>8,}  {100*n/total_pairs:>5.1f}%")
+        print(f"  {k:<10} {n:>8,}  {100 * n / total_pairs:>5.1f}%")
     print(f"  total      {total_pairs:>8,}")
 
     if not eligible:
@@ -280,8 +296,12 @@ def report(stats: dict) -> None:
     with_followup = sum(1 for e in eligible if e["n_followups"] > 0)
     with_range_followup = sum(1 for e in eligible if e["n_range_followups"] > 0)
     print(f"\nfor {n:,} (session, file) pairs whose first read was a range:")
-    print(f"  any follow-up read         : {with_followup:>8,}  ({100*with_followup/n:.1f}%)")
-    print(f"  follow-up with a range     : {with_range_followup:>8,}  ({100*with_range_followup/n:.1f}%)")
+    print(
+        f"  any follow-up read         : {with_followup:>8,}  ({100 * with_followup / n:.1f}%)"
+    )
+    print(
+        f"  follow-up with a range     : {with_range_followup:>8,}  ({100 * with_range_followup / n:.1f}%)"
+    )
     print()
     print("  ----- follow-up position breakdown (all follow-up reads) -----")
     positions = stats["followup_pos"]
@@ -290,32 +310,36 @@ def report(stats: dict) -> None:
         v = positions.get(k, 0)
         if v == 0:
             continue
-        print(f"  {k:<10} {v:>8,}  ({100*v/total_pos:>5.1f}%)  -- {POS_HELP[k]}")
+        print(f"  {k:<10} {v:>8,}  ({100 * v / total_pos:>5.1f}%)  -- {POS_HELP[k]}")
 
     # Region count distribution.
     regions = np.array([e["regions"] for e in eligible], dtype=np.int64)
     print(f"\ndisjoint regions in final coverage (per session/file):")
-    print(f"  mean={regions.mean():.2f}  median={int(np.median(regions))}  "
-          f"p90={int(np.percentile(regions,90))}  max={int(regions.max())}")
+    print(
+        f"  mean={regions.mean():.2f}  median={int(np.median(regions))}  "
+        f"p90={int(np.percentile(regions, 90))}  max={int(regions.max())}"
+    )
     edges = [1, 2, 3, 4, 6, 11, 10**6]
     labels = ["1 (contig)", "2", "3", "4-5", "6-10", "11+"]
     hist, _ = np.histogram(regions, bins=edges)
     for label, nb in zip(labels, hist):
-        print(f"  {label:<10} {nb:>8,}  ({100*nb/regions.size:>5.1f}%)")
+        print(f"  {label:<10} {nb:>8,}  ({100 * nb / regions.size:>5.1f}%)")
 
     # Extra lines vs initial (only when follow-ups exist).
     fu = [e for e in eligible if e["n_range_followups"] > 0]
     extra = np.array([e["extra_lines"] for e in fu], dtype=np.int64)
     if extra.size:
         print(f"\nextra lines covered beyond initial range (n={extra.size:,}):")
-        print(f"  mean={extra.mean():.0f}  median={int(np.median(extra))}  "
-              f"p75={int(np.percentile(extra,75))}  p90={int(np.percentile(extra,90))}  "
-              f"max={int(extra.max())}")
+        print(
+            f"  mean={extra.mean():.0f}  median={int(np.median(extra))}  "
+            f"p75={int(np.percentile(extra, 75))}  p90={int(np.percentile(extra, 90))}  "
+            f"max={int(extra.max())}"
+        )
         edges = [0, 1, 51, 201, 501, 2001, 10**9]
         labels = ["0 (no new)", "1-50", "51-200", "201-500", "501-2000", "2000+"]
         hist, _ = np.histogram(extra, bins=edges)
         for label, nb in zip(labels, hist):
-            print(f"  {label:<12} {nb:>8,}  ({100*nb/extra.size:>5.1f}%)")
+            print(f"  {label:<12} {nb:>8,}  ({100 * nb / extra.size:>5.1f}%)")
 
     # Coverage ratio.
     init_sizes = np.array([e["init_size"] for e in fu], dtype=np.int64)
@@ -325,12 +349,15 @@ def report(stats: dict) -> None:
             ratio = np.where(init_sizes > 0, covered / init_sizes, np.nan)
         ratio = ratio[np.isfinite(ratio)]
         print(f"\ntotal covered / initial size:")
-        print(f"  mean={ratio.mean():.2f}x  median={np.median(ratio):.2f}x  "
-              f"p90={np.percentile(ratio,90):.2f}x")
+        print(
+            f"  mean={ratio.mean():.2f}x  median={np.median(ratio):.2f}x  "
+            f"p90={np.percentile(ratio, 90):.2f}x"
+        )
 
 
 # --------------------------------------------------------------------------- #
 # Plot
+
 
 def plot(stats: dict, since: str) -> Path | None:
     eligible = stats["eligible"]
@@ -352,11 +379,15 @@ def plot(stats: dict, since: str) -> Path | None:
         colors = [POS_COLORS[k] for k in keys]
         bars = ax.bar(keys, vals, color=colors, edgecolor="#111", linewidth=0.5)
         for bar, v, k in zip(bars, vals, keys):
-            ax.text(bar.get_x() + bar.get_width() / 2, v + 1.0,
-                    f"{v:.1f}%\nn={pos[k]:,}", ha="center", va="bottom", fontsize=8)
-        ax.set_title(
-            f"where do follow-up reads land vs initial range  (n={total:,})"
-        )
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                v + 1.0,
+                f"{v:.1f}%\nn={pos[k]:,}",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
+        ax.set_title(f"where do follow-up reads land vs initial range  (n={total:,})")
         ax.set_ylabel("share of follow-up reads")
         ax.set_ylim(0, max(vals) + 12)
         ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0f}%"))
@@ -372,8 +403,14 @@ def plot(stats: dict, since: str) -> Path | None:
     colors = ["#16a34a"] + ["#2563eb"] * 5
     bars = ax.bar(labels, pct, color=colors, edgecolor="#111", linewidth=0.5)
     for bar, p, h in zip(bars, pct, hist):
-        ax.text(bar.get_x() + bar.get_width() / 2, p + 1.5,
-                f"{p:.1f}%\nn={h:,}", ha="center", va="bottom", fontsize=8)
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            p + 1.5,
+            f"{p:.1f}%\nn={h:,}",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
     ax.set_title(f"disjoint regions in final coverage  (n={regions.size:,})")
     ax.set_ylabel("share of (session, file) pairs")
     ax.set_ylim(0, max(pct.max() + 12, 20))
@@ -391,8 +428,14 @@ def plot(stats: dict, since: str) -> Path | None:
         pct = 100 * hist / extra.size
         bars = ax.bar(labels, pct, color="#d97706", edgecolor="#7c2d12", linewidth=0.5)
         for bar, p, h in zip(bars, pct, hist):
-            ax.text(bar.get_x() + bar.get_width() / 2, p + 1.5,
-                    f"{p:.1f}%\nn={h:,}", ha="center", va="bottom", fontsize=8)
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                p + 1.5,
+                f"{p:.1f}%\nn={h:,}",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
         ax.set_title(
             f"extra lines covered beyond initial range\n"
             f"(only pairs that follow up, n={extra.size:,})"
@@ -413,23 +456,37 @@ def plot(stats: dict, since: str) -> Path | None:
         ratio.sort()
         cdf = np.arange(1, ratio.size + 1) / ratio.size
         ax.plot(ratio, cdf, color="#0f766e", linewidth=1.9)
-        ax.axvline(1.0, color="#9ca3af", linestyle="--", linewidth=1.0,
-                   label="covered = initial")
+        ax.axvline(
+            1.0,
+            color="#9ca3af",
+            linestyle="--",
+            linewidth=1.0,
+            label="covered = initial",
+        )
         for q in (0.5, 0.9):
             x = np.interp(q, cdf, ratio)
             ax.scatter([x], [q], color="#dc2626", s=22, zorder=3)
-            ax.annotate(f"p{int(q*100)}={x:.2f}x", (x, q),
-                        textcoords="offset points", xytext=(6, -8), fontsize=9)
+            ax.annotate(
+                f"p{int(q * 100)}={x:.2f}x",
+                (x, q),
+                textcoords="offset points",
+                xytext=(6, -8),
+                fontsize=9,
+            )
         ax.set_xscale("log")
         ax.set_xlim(0.8, max(ratio.max(), 10))
         ax.set_xlabel("total covered lines / initial range  (×, log)")
         ax.set_ylabel("CDF of pairs with follow-up")
-        ax.set_title(f"how much of the file does the session end up reading? (n={ratio.size:,})")
+        ax.set_title(
+            f"how much of the file does the session end up reading? (n={ratio.size:,})"
+        )
         ax.set_ylim(0, 1.01)
         ax.legend(loc="lower right", frameon=False)
         ax.grid(True, which="both", alpha=0.25, linestyle="--")
 
-    fig.suptitle(f"selector reads — coverage map analysis (since {since})", fontsize=13, y=0.995)
+    fig.suptitle(
+        f"selector reads — coverage map analysis (since {since})", fontsize=13, y=0.995
+    )
     fig.tight_layout()
     p = OUT_DIR / "selector-coverage.png"
     fig.savefig(p, bbox_inches="tight")
@@ -439,6 +496,7 @@ def plot(stats: dict, since: str) -> Path | None:
 
 # --------------------------------------------------------------------------- #
 # Examples
+
 
 def dump_examples(stats: dict, k: int = 8) -> None:
     """Print a few coverage-map examples for sanity / intuition."""
@@ -456,7 +514,11 @@ def dump_examples(stats: dict, k: int = 8) -> None:
     for r in sorted(buckets.keys()):
         candidates = buckets[r]
         # Prefer ones with non-default initial windows.
-        non_default = [c for c in candidates if (c["init_start"], c["init_end"]) != (1, DEFAULT_PAGE)]
+        non_default = [
+            c
+            for c in candidates
+            if (c["init_start"], c["init_end"]) != (1, DEFAULT_PAGE)
+        ]
         chosen = non_default[0] if non_default else candidates[0]
         picks.append(chosen)
         if len(picks) >= k:
@@ -483,20 +545,30 @@ def dump_examples(stats: dict, k: int = 8) -> None:
                 bar[i] = "▓"
         bar_str = "".join(bar)
         file_short = e["file"][-50:]
-        print(f"  [{bar_str}] regions={e['regions']:>2} "
-              f"init=[{e['init_start']},{e['init_end']}] "
-              f"covered={e['covered']:>4} span={e['span']:>4}  {file_short}")
+        print(
+            f"  [{bar_str}] regions={e['regions']:>2} "
+            f"init=[{e['init_start']},{e['init_end']}] "
+            f"covered={e['covered']:>4} span={e['span']:>4}  {file_short}"
+        )
 
 
 # --------------------------------------------------------------------------- #
 # Entry
 
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
-    ap.add_argument("--since", default=DEFAULT_SINCE,
-                    help=f"only reads at or after this date (default {DEFAULT_SINCE})")
-    ap.add_argument("--examples", type=int, default=8,
-                    help="how many coverage-map examples to print (default 8)")
+    ap.add_argument(
+        "--since",
+        default=DEFAULT_SINCE,
+        help=f"only reads at or after this date (default {DEFAULT_SINCE})",
+    )
+    ap.add_argument(
+        "--examples",
+        type=int,
+        default=8,
+        help="how many coverage-map examples to print (default 8)",
+    )
     args = ap.parse_args()
 
     since = datetime.strptime(args.since, "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -508,8 +580,10 @@ def main() -> int:
     by_key = collect(conn, since_ms)
     conn.close()
 
-    print(f"loaded {sum(len(v) for v in by_key.values()):,} read calls across "
-          f"{len(by_key):,} (session, file) pairs since {args.since}")
+    print(
+        f"loaded {sum(len(v) for v in by_key.values()):,} read calls across "
+        f"{len(by_key):,} (session, file) pairs since {args.since}"
+    )
 
     stats = analyze(by_key)
     report(stats)

@@ -17,6 +17,8 @@ const stdoutRowsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "ro
 const stdinSetRawModeDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "setRawMode");
 const originalWslDistroName = Bun.env.WSL_DISTRO_NAME;
 const originalWslInterop = Bun.env.WSL_INTEROP;
+const originalWtSession = Bun.env.WT_SESSION;
+const originalTermProgram = Bun.env.TERM_PROGRAM;
 
 // These suites drive the real ProcessTerminal start()/probe pipeline, so they
 // opt out of the test-default headless suppression and restore it per case.
@@ -56,6 +58,8 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		restoreProperty(process, "platform", processPlatformDescriptor);
 		restoreEnv("WSL_INTEROP", originalWslInterop);
 		restoreEnv("WSL_DISTRO_NAME", originalWslDistroName);
+		restoreEnv("WT_SESSION", originalWtSession);
+		restoreEnv("TERM_PROGRAM", originalTermProgram);
 	});
 
 	function setupTerminal() {
@@ -228,6 +232,29 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		vi.advanceTimersByTime(10 * 60_000);
 
 		expect(queryCount()).toBe(afterInitial);
+
+		terminal.stop();
+	});
+
+	it("periodically re-queries OSC 11 under native Windows Terminal when Mode 2031 is unavailable (#5091)", () => {
+		vi.useFakeTimers();
+		Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+		Bun.env.WT_SESSION = "test-wt-session";
+		Bun.env.TERM_PROGRAM = "Windows_Terminal";
+		const { terminal, queryCount } = setupTerminal();
+
+		process.stdin.emit("data", "\x1b]11;rgb:0000/0000/0000\x07");
+		process.stdin.emit("data", "\x1b[?2031;0$y");
+		// Drain startup sentinels in send order: keyboard, OSC 11, DEC 2026,
+		// DEC 2048, DEC 2031, and xterm ?1010/?1011.
+		for (let i = 0; i < 7; i++) {
+			process.stdin.emit("data", "\x1b[?1;2c");
+		}
+		const afterStartup = queryCount();
+
+		vi.advanceTimersByTime(30_000);
+
+		expect(queryCount()).toBe(afterStartup + 1);
 
 		terminal.stop();
 	});

@@ -22,9 +22,10 @@ class ModalProbe implements Component {
 const originalSshConnection = Bun.env.SSH_CONNECTION;
 const originalSshTty = Bun.env.SSH_TTY;
 const originalSshClient = Bun.env.SSH_CLIENT;
+const originalTmux = Bun.env.TMUX;
 const originalTerminalId = TERMINAL.id;
 
-function restoreEnv(name: "SSH_CONNECTION" | "SSH_TTY" | "SSH_CLIENT", value: string | undefined): void {
+function restoreEnv(name: "SSH_CONNECTION" | "SSH_TTY" | "SSH_CLIENT" | "TMUX", value: string | undefined): void {
 	if (value === undefined) {
 		delete Bun.env[name];
 		return;
@@ -41,6 +42,7 @@ describe("ProcessTerminal kitty keyboard progressive-enhancement ordering", () =
 		restoreEnv("SSH_CONNECTION", originalSshConnection);
 		restoreEnv("SSH_TTY", originalSshTty);
 		restoreEnv("SSH_CLIENT", originalSshClient);
+		restoreEnv("TMUX", originalTmux);
 		Object.defineProperty(TERMINAL, "id", { value: originalTerminalId, configurable: true });
 	});
 
@@ -98,6 +100,23 @@ describe("ProcessTerminal kitty keyboard progressive-enhancement ordering", () =
 		delete Bun.env.SSH_TTY;
 		delete Bun.env.SSH_CLIENT;
 		Object.defineProperty(TERMINAL, "id", { value: "base", configurable: true });
+		harness = createProcessTerminalRenderHarness(100, 30);
+		await harness.settle();
+		harness.writes.length = 0;
+
+		await harness.feed("\x1b[?1;2c");
+
+		const out = harness.writes.join("");
+		expect(harness.terminal.kittyProtocolActive).toBe(false);
+		expect(out).not.toContain("\x1b[>4;2m");
+		expect(harness.terminal.keyboardEnhancementEnterSequence).toBeNull();
+	});
+
+	it("keeps legacy keyboard input under tmux when kitty is unavailable", async () => {
+		Bun.env.TMUX = "/tmp/tmux-501/default,1234,0";
+		delete Bun.env.SSH_CONNECTION;
+		delete Bun.env.SSH_TTY;
+		delete Bun.env.SSH_CLIENT;
 		harness = createProcessTerminalRenderHarness(100, 30);
 		await harness.settle();
 		harness.writes.length = 0;

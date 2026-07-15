@@ -98,14 +98,24 @@ def body_font(size: float) -> ImageFont.FreeTypeFont:
 
 
 def mono_font(size: float) -> ImageFont.FreeTypeFont:
-    for path in ["/System/Library/Fonts/Monaco.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"]:
+    for path in [
+        "/System/Library/Fonts/Monaco.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    ]:
         f = font_at(path, size)
         if f is not None:
             return f
     return ImageFont.load_default()
 
 
-def tracked(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str, font, fill, tracking: float = 0.0) -> int:
+def tracked(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[int, int],
+    text: str,
+    font,
+    fill,
+    tracking: float = 0.0,
+) -> int:
     """Draw text with letterspacing; returns end x."""
     x, y = xy
     t = u(tracking)
@@ -115,7 +125,9 @@ def tracked(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str, font, fil
     return int(x)
 
 
-def tracked_width(draw: ImageDraw.ImageDraw, text: str, font, tracking: float = 0.0) -> float:
+def tracked_width(
+    draw: ImageDraw.ImageDraw, text: str, font, tracking: float = 0.0
+) -> float:
     t = u(tracking)
     return sum(draw.textlength(ch, font=font) + t for ch in text) - (t if text else 0)
 
@@ -131,9 +143,15 @@ def bezier(p0, p1, p2, n=64):
 
 
 def load_data():
-    conv = json.loads((ROOT / "results" / "qwen-carrier-convergence-n12" / "summary.json").read_text())
-    entry = json.loads((ROOT / "results" / "qwen-token-entry-q3" / "token_entry.json").read_text())
-    carrier = Image.open(ROOT / "results" / "qwen-logit-lens-q3" / "images" / "image-carrier.png").convert("RGB")
+    conv = json.loads(
+        (ROOT / "results" / "qwen-carrier-convergence-n12" / "summary.json").read_text()
+    )
+    entry = json.loads(
+        (ROOT / "results" / "qwen-token-entry-q3" / "token_entry.json").read_text()
+    )
+    carrier = Image.open(
+        ROOT / "results" / "qwen-logit-lens-q3" / "images" / "image-carrier.png"
+    ).convert("RGB")
     if carrier.size != (1568, 1568):
         carrier = carrier.resize((1568, 1568), Image.LANCZOS)
 
@@ -149,14 +167,22 @@ def load_data():
         "n": n_q,
     }
     assert stats["layer"] == 19 and abs(stats["matched"] - 0.66) < 0.01
-    assert abs(stats["rsa"] - 0.85) < 0.01 and stats["retrieved"] == 12 and stats["n"] == 12
+    assert (
+        abs(stats["rsa"] - 0.85) < 0.01
+        and stats["retrieved"] == 12
+        and stats["n"] == 12
+    )
 
     toks = {t["i"]: t for t in entry["tokens"]}
     answer = [t for t in entry["tokens"] if t["answer"]]
     assert [t["str"] for t in answer] == ["spect", "acular"]
     assert [t["id"] for t in answer] == [67082, 23006]
-    ctx_before = "…" + "".join(toks[i]["str"] for i in range(23, 32))  # " make the 50th Super Bowl \""
-    ctx_after = "".join(toks[i]["str"] for i in range(34, 39)) + "…"  # "\" and that it would"
+    ctx_before = "…" + "".join(
+        toks[i]["str"] for i in range(23, 32)
+    )  # " make the 50th Super Bowl \""
+    ctx_after = (
+        "".join(toks[i]["str"] for i in range(34, 39)) + "…"
+    )  # "\" and that it would"
 
     grid = entry["image_grid"]  # 56
     word_idx = entry["image_answer_token_indices"][:4]  # [310, 311, 312, 313]
@@ -225,7 +251,12 @@ def additive_base() -> np.ndarray:
         n = 9
         for k in range(n):
             f = k / (n - 1)
-            y0 = PANEL_TOP + 120 + f * (PANEL_BOT - PANEL_TOP - 240) + rng.uniform(-14, 14)
+            y0 = (
+                PANEL_TOP
+                + 120
+                + f * (PANEL_BOT - PANEL_TOP - 240)
+                + rng.uniform(-14, 14)
+            )
             ang = (f - 0.5) * 1.45 + rng.uniform(-0.07, 0.07)
             r = 168
             x2 = CORE[0] - x_sign * r * math.cos(ang)
@@ -242,7 +273,10 @@ def additive_base() -> np.ndarray:
                 i = int(t * len(pts))
                 px, py = u(pts[i][0]), u(pts[i][1])
                 rr = u(3.2)
-                gd.ellipse([px - rr, py - rr, px + rr, py + rr], fill=tuple(int(c * fade) for c in color))
+                gd.ellipse(
+                    [px - rr, py - rr, px + rr, py + rr],
+                    fill=tuple(int(c * fade) for c in color),
+                )
 
     streams(LP[2], 1.0, AMBER)
     streams(RP[0], -1.0, CYAN)
@@ -255,12 +289,16 @@ def additive_base() -> np.ndarray:
     layer = Image.new("RGB", (W, H), (0, 0, 0))
     ld = ImageDraw.Draw(layer)
     tw = ld.textlength(CORE_WORD, font=f)
-    ld.text((u(CORE[0]) - tw / 2, u(CORE[1] - 54)), CORE_WORD, font=f, fill=(255, 232, 170))
+    ld.text(
+        (u(CORE[0]) - tw / 2, u(CORE[1] - 54)), CORE_WORD, font=f, fill=(255, 232, 170)
+    )
     img += np.asarray(layer.filter(ImageFilter.GaussianBlur(u(9))), np.float32) * 0.8
     return img
 
 
-def head_bars(ov: ImageDraw.ImageDraw, x: float, y_mid: float, values, color, label: str):
+def head_bars(
+    ov: ImageDraw.ImageDraw, x: float, y_mid: float, values, color, label: str
+):
     """Tiny bar strip of a real 10-dim vector head, centered on its axis."""
     vmax = max(abs(v) for v in values)
     bw, gap, amp = 24, 11, 26
@@ -281,11 +319,24 @@ def draw_left_panel(ov: ImageDraw.ImageDraw, answer, ctx, counts, heads):
     pad = 44
     ctx_before, ctx_after = ctx
 
-    tracked(ov, (u(x0 + pad), u(y0 + 34)), "TEXT CARRIER", label_font(30), AMBER, tracking=5)
+    tracked(
+        ov, (u(x0 + pad), u(y0 + 34)), "TEXT CARRIER", label_font(30), AMBER, tracking=5
+    )
     sub = f"{counts['text_tokens']:,} BPE TOKENS"
     f_sub = label_font(21)
-    tracked(ov, (int(u(x1 - pad) - tracked_width(ov, sub, f_sub, 2)), u(y0 + 42)), sub, f_sub, MUTED, tracking=2)
-    ov.line([u(x0 + pad), u(y0 + 88), u(x1 - pad), u(y0 + 88)], fill=(*DIVIDER, 255), width=u(1.2))
+    tracked(
+        ov,
+        (int(u(x1 - pad) - tracked_width(ov, sub, f_sub, 2)), u(y0 + 42)),
+        sub,
+        f_sub,
+        MUTED,
+        tracking=2,
+    )
+    ov.line(
+        [u(x0 + pad), u(y0 + 88), u(x1 - pad), u(y0 + 88)],
+        fill=(*DIVIDER, 255),
+        width=u(1.2),
+    )
 
     f_ctx = mono_font(23)
     ov.text((u(x0 + pad), u(y0 + 116)), ctx_before, font=f_ctx, fill=(110, 118, 126))
@@ -306,7 +357,9 @@ def draw_left_panel(ov: ImageDraw.ImageDraw, answer, ctx, counts, heads):
             width=u(1.6),
         )
         ov.text((u(px + 20), u(py + 14)), s, font=f_tok, fill=(255, 224, 150))
-        ov.text((u(px + 20), u(py + 110)), f"id {t['id']}", font=f_id, fill=(196, 156, 72))
+        ov.text(
+            (u(px + 20), u(py + 110)), f"id {t['id']}", font=f_id, fill=(196, 156, 72)
+        )
         px += wpx + 40 + 22
 
     ov.text((u(x0 + pad), u(y0 + 330)), ctx_after, font=f_ctx, fill=(110, 118, 126))
@@ -323,7 +376,12 @@ def draw_left_panel(ov: ImageDraw.ImageDraw, answer, ctx, counts, heads):
 
     fy = y0 + 500
     f_fact = body_font(23)
-    ov.text((u(x0 + pad), u(fy)), f"{counts['chars']:,} characters of one SQuAD passage,", font=f_fact, fill=MUTED)
+    ov.text(
+        (u(x0 + pad), u(fy)),
+        f"{counts['chars']:,} characters of one SQuAD passage,",
+        font=f_fact,
+        fill=MUTED,
+    )
     ov.text(
         (u(x0 + pad), u(fy + 36)),
         f"tokenized into {counts['text_tokens']:,} ids, each a {counts['embed_dim']:,}-dim row",
@@ -332,15 +390,35 @@ def draw_left_panel(ov: ImageDraw.ImageDraw, answer, ctx, counts, heads):
     )
 
 
-def draw_right_panel(base_img: Image.Image, ov: ImageDraw.ImageDraw, carrier: Image.Image, word_idx, counts, heads):
+def draw_right_panel(
+    base_img: Image.Image,
+    ov: ImageDraw.ImageDraw,
+    carrier: Image.Image,
+    word_idx,
+    counts,
+    heads,
+):
     x0, y0, x1, _ = RP
     pad = 44
 
-    tracked(ov, (u(x0 + pad), u(y0 + 34)), "IMAGE CARRIER", label_font(30), CYAN, tracking=5)
+    tracked(
+        ov, (u(x0 + pad), u(y0 + 34)), "IMAGE CARRIER", label_font(30), CYAN, tracking=5
+    )
     sub = f"{counts['image_tokens']:,} PATCHES"
     f_sub = label_font(21)
-    tracked(ov, (int(u(x1 - pad) - tracked_width(ov, sub, f_sub, 2)), u(y0 + 42)), sub, f_sub, MUTED, tracking=2)
-    ov.line([u(x0 + pad), u(y0 + 88), u(x1 - pad), u(y0 + 88)], fill=(*DIVIDER, 255), width=u(1.2))
+    tracked(
+        ov,
+        (int(u(x1 - pad) - tracked_width(ov, sub, f_sub, 2)), u(y0 + 42)),
+        sub,
+        f_sub,
+        MUTED,
+        tracking=2,
+    )
+    ov.line(
+        [u(x0 + pad), u(y0 + 88), u(x1 - pad), u(y0 + 88)],
+        fill=(*DIVIDER, 255),
+        width=u(1.2),
+    )
 
     # Crop: patch rows 4..8, cols 27..38 of the 56x56 grid (28px cells).
     pp = counts["patch_px"]
@@ -357,18 +435,32 @@ def draw_right_panel(base_img: Image.Image, ov: ImageDraw.ImageDraw, carrier: Im
     cell = pp * scale  # 56 in 2400-space
     grid_color = (CYAN[0], CYAN[1], CYAN[2], 46)
     for c in range(c1 - c0 + 1):
-        ov.line([u(bx + c * cell), u(by), u(bx + c * cell), u(by + disp_h)], fill=grid_color, width=u(1))
+        ov.line(
+            [u(bx + c * cell), u(by), u(bx + c * cell), u(by + disp_h)],
+            fill=grid_color,
+            width=u(1),
+        )
     for r in range(r1 - r0 + 1):
-        ov.line([u(bx), u(by + r * cell), u(bx + disp_w), u(by + r * cell)], fill=grid_color, width=u(1))
+        ov.line(
+            [u(bx), u(by + r * cell), u(bx + disp_w), u(by + r * cell)],
+            fill=grid_color,
+            width=u(1),
+        )
 
     # Highlight the four answer patches (grid row 5, cols 30..33) as one run.
     grid = counts["grid"]
     gr, gc = word_idx[0] // grid, word_idx[0] % grid
     hx, hy = bx + (gc - c0) * cell, by + (gr - r0) * cell
     hw = len(word_idx) * cell
-    ov.rectangle([u(hx), u(hy), u(hx + hw), u(hy + cell)], outline=(*CYAN, 240), width=u(2.4))
+    ov.rectangle(
+        [u(hx), u(hy), u(hx + hw), u(hy + cell)], outline=(*CYAN, 240), width=u(2.4)
+    )
     for k in range(1, len(word_idx)):
-        ov.line([u(hx + k * cell), u(hy), u(hx + k * cell), u(hy + cell)], fill=(*CYAN, 130), width=u(1.2))
+        ov.line(
+            [u(hx + k * cell), u(hy), u(hx + k * cell), u(hy + cell)],
+            fill=(*CYAN, 130),
+            width=u(1.2),
+        )
 
     ov.text(
         (u(bx), u(by + disp_h + 18)),
@@ -389,7 +481,12 @@ def draw_right_panel(base_img: Image.Image, ov: ImageDraw.ImageDraw, carrier: Im
 
     fy = y0 + 500
     f_fact = body_font(23)
-    ov.text((u(bx), u(fy)), "the same passage, rendered to a 1568 × 1568 px bitmap,", font=f_fact, fill=MUTED)
+    ov.text(
+        (u(bx), u(fy)),
+        "the same passage, rendered to a 1568 × 1568 px bitmap,",
+        font=f_fact,
+        fill=MUTED,
+    )
     ov.text(
         (u(bx), u(fy + 36)),
         f"seen as {counts['image_tokens']:,} patches of {counts['patch_px']} px, each a {counts['visual_dim']:,}-dim vector",
@@ -427,7 +524,14 @@ def draw_core(ov: ImageDraw.ImageDraw, stats):
     cap = f"BY LAYER {stats['layer']} OF {stats['n_layers'] - 1}, ONE SHARED STATE"
     f_c = label_font(23)
     cw = tracked_width(ov, cap, f_c, 4)
-    tracked(ov, (int(u(CORE[0]) - cw / 2), u(CORE[1] + 96)), cap, f_c, (228, 222, 196), tracking=4)
+    tracked(
+        ov,
+        (int(u(CORE[0]) - cw / 2), u(CORE[1] + 96)),
+        cap,
+        f_c,
+        (228, 222, 196),
+        tracking=4,
+    )
 
 
 def draw_stats_strip(ov: ImageDraw.ImageDraw, stats):
@@ -460,7 +564,9 @@ def rounded_panel(overlay: ImageDraw.ImageDraw, box, accent, alpha_fill=216):
     x0, y0, x1, y1 = (u(v) for v in box)
     r = u(22)
     overlay.rounded_rectangle([x0, y0, x1, y1], radius=r, fill=(*PANEL, alpha_fill))
-    overlay.rounded_rectangle([x0, y0, x1, y1], radius=r, outline=(*accent, 70), width=u(1.4))
+    overlay.rounded_rectangle(
+        [x0, y0, x1, y1], radius=r, outline=(*accent, 70), width=u(1.4)
+    )
 
 
 def main() -> None:

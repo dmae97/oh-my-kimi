@@ -1,8 +1,10 @@
 import { beforeAll, describe, expect, it, vi } from "bun:test";
+import { LoginDialogComponent } from "@oh-my-pi/pi-coding-agent/modes/components/login-dialog";
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import type { TUI } from "@oh-my-pi/pi-tui";
 
 interface RenderableBlock {
 	render(width: number): string[];
@@ -112,5 +114,15 @@ describe("SelectorController login", () => {
 		expect(ctx.showStatus).toHaveBeenCalledWith("Login cancelled");
 		expect(editorSlot).toEqual([editor]);
 		expect(renderPresented(presentedBlocks)).not.toContain("Successfully logged in");
+	});
+	it("routes enhanced paste into a direct API-key prompt", async () => {
+		const tui = { requestRender: vi.fn() } as unknown as TUI;
+		const dialog = new LoginDialogComponent(tui, "openrouter", vi.fn());
+		const prompt = dialog.showPrompt("Paste your OpenRouter API key");
+
+		dialog.pasteText("OMP_PASTE_TEST_123");
+		dialog.handleInput("\n");
+
+		await expect(prompt).resolves.toBe("OMP_PASTE_TEST_123");
 	});
 });

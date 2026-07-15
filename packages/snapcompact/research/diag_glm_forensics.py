@@ -26,14 +26,25 @@ from run import CACHE, QA_CACHE, load_prompt, sha8  # noqa: E402
 def build_batches(shape_name: str, chars: int, n_questions: int, qpb: int, seed: int):
     paras = squad.load_paragraphs(CACHE)
     flow, offsets = squad.build_flow(paras, chars)
-    questions = squad.sample_chunk_questions(paras, offsets, 0, len(flow), n_questions, seed)
+    questions = squad.sample_chunk_questions(
+        paras, offsets, 0, len(flow), n_questions, seed
+    )
     shape = SHAPES[shape_name]
-    frame_dir = CACHE / f"prod-frames-{shape_name}-{sha8(flow, json.dumps(shape, sort_keys=True))}"
+    frame_dir = (
+        CACHE
+        / f"prod-frames-{shape_name}-{sha8(flow, json.dumps(shape, sort_keys=True))}"
+    )
     pngs = sorted(frame_dir.glob("page-*.png"))
     repeat = shape.get("lineRepeat", 1)
-    cols = (SIZE // shape["cellWidth"] - 3) // 2 if shape.get("columns") == 2 else SIZE // shape["cellWidth"]
+    cols = (
+        (SIZE // shape["cellWidth"] - 3) // 2
+        if shape.get("columns") == 2
+        else SIZE // shape["cellWidth"]
+    )
     rows = SIZE // shape["cellHeight"] // repeat
-    preamble = load_prompt("qa-image-multi.md").format(k=len(pngs), cols=cols, rows=rows)
+    preamble = load_prompt("qa-image-multi.md").format(
+        k=len(pngs), cols=cols, rows=rows
+    )
     if shape.get("columns") == 2:
         preamble += (
             "\nNote: each image lays text out as two word-wrapped newspaper columns separated by a gutter; "
@@ -45,7 +56,11 @@ def build_batches(shape_name: str, chars: int, n_questions: int, qpb: int, seed:
             "background, then repeated on a pale highlight band. The copies show identical characters; "
             "cross-check between them when a glyph is hard to read, and do not treat copies as separate text."
         )
-    ctx_blocks = [{"text": preamble}, *({"image_path": p} for p in pngs), {"text": "End of images.", "cache": True}]
+    ctx_blocks = [
+        {"text": preamble},
+        *({"image_path": p} for p in pngs),
+        {"text": "End of images.", "cache": True},
+    ]
     batches = []
     for b in range(0, len(questions), qpb):
         batch = questions[b : b + qpb]
@@ -66,11 +81,15 @@ def main() -> None:
     ap.add_argument("--effort", default=None)
     args = ap.parse_args()
 
-    pngs, batches = build_batches(args.shape, args.chars, args.questions, args.qpb, args.seed)
+    pngs, batches = build_batches(
+        args.shape, args.chars, args.questions, args.qpb, args.seed
+    )
     print(f"frames={len(pngs)} batches={len(batches)}")
     for i, (batch, messages) in enumerate(batches):
         payload = {"messages": messages, "effort": args.effort}
-        key = sha8(args.model, "qa-mono-prod", json.dumps(payload, sort_keys=True, default=str))
+        key = sha8(
+            args.model, "qa-mono-prod", json.dumps(payload, sort_keys=True, default=str)
+        )
         path = QA_CACHE / f"{key}.json"
         print(f"\n=== batch {i + 1} key={key} cached={path.exists()} ===")
         for j, q in enumerate(batch):

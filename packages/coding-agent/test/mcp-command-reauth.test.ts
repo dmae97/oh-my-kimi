@@ -177,6 +177,72 @@ describe("/mcp auth commands", () => {
 		expect(savedServer?.auth).toBeUndefined();
 	});
 
+	test("uses the registration endpoint discovered from a pathful issuer", async () => {
+		const authStorage = freshAuthStorage();
+		await authStorage.reload();
+		const resourceMetadataUrl = "https://gateway.example.com/.well-known/oauth-protected-resource/my-service/mcp";
+		vi.spyOn(mcpClient, "connectToServer").mockRejectedValue(
+			new Error(`HTTP 401: WWW-Authenticate: Bearer resource_metadata="${resourceMetadataUrl}"`),
+		);
+		const registrationRequests: string[] = [];
+		const fetchMock = Object.assign(
+			async (input: string | URL | Request, init?: RequestInit | BunFetchRequestInit): Promise<Response> => {
+				const url = String(input);
+				if (url === resourceMetadataUrl) {
+					return new Response(
+						JSON.stringify({
+							resource: "https://gateway.example.com/my-service/mcp",
+							authorization_servers: ["https://auth.example.com/auth/v1"],
+						}),
+						{ status: 200, headers: { "Content-Type": "application/json" } },
+					);
+				}
+				if (url === "https://auth.example.com/.well-known/oauth-authorization-server/auth/v1") {
+					return new Response(
+						JSON.stringify({
+							issuer: "https://auth.example.com/auth/v1",
+							authorization_endpoint: "https://auth.example.com/auth/v1/oauth/authorize",
+							token_endpoint: "https://auth.example.com/auth/v1/oauth/token",
+							registration_endpoint: "https://auth.example.com/auth/v1/oauth/register",
+						}),
+						{ status: 200, headers: { "Content-Type": "application/json" } },
+					);
+				}
+				if (url === "https://auth.example.com/auth/v1/oauth/register" && init?.method === "POST") {
+					registrationRequests.push(url);
+					return new Response(JSON.stringify({ client_id: "pathful-dcr-client" }), {
+						status: 201,
+						headers: { "Content-Type": "application/json" },
+					});
+				}
+				return new Response("not found", { status: 404 });
+			},
+			{ preconnect: globalThis.fetch.preconnect },
+		);
+		vi.spyOn(globalThis, "fetch").mockImplementation(fetchMock);
+		vi.spyOn(oauthFlow.MCPOAuthFlow.prototype, "login").mockImplementation(async function (
+			this: oauthFlow.MCPOAuthFlow,
+		) {
+			const { url } = await this.generateAuthUrl("state", "http://127.0.0.1:53192/callback");
+			expect(new URL(url).searchParams.get("client_id")).toBe("pathful-dcr-client");
+			return {
+				access: "fresh-access",
+				refresh: "fresh-refresh",
+				expires: Date.now() + 3_600_000,
+			};
+		});
+		const { controller, showError } = createController(authStorage);
+
+		await controller.handle("/mcp reauth envserver");
+
+		expect(showError).not.toHaveBeenCalled();
+		expect(registrationRequests).toEqual(["https://auth.example.com/auth/v1/oauth/register"]);
+		expect(authStorage.get(oauthFlow.mcpOAuthCredentialId(EXPANDED_SERVER_URL))).toMatchObject({
+			type: "oauth",
+			clientId: "pathful-dcr-client",
+		});
+	});
+
 	test("reuses embedded DCR client secret during reauth token exchange", async () => {
 		const authStorage = freshAuthStorage();
 		await authStorage.reload();

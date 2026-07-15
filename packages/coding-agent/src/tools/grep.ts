@@ -48,7 +48,6 @@ import {
 	type LineRange,
 	parseLineRanges,
 	pathTargetsSsh,
-	probeLiteralPathExists,
 	type ResolvedSearchTarget,
 	resolveReadPath,
 	resolveToolSearchScope,
@@ -78,9 +77,6 @@ const searchSchema = type({
 	pattern: type("string").describe("regex pattern"),
 	"path?": searchPathEntry.describe(
 		'file, directory, glob, internal URL, or "<file>:<lines>" selector to search; pass several as a semicolon-delimited list ("src; tests"). Omitted -> searches the workspace root (".")',
-	),
-	"selector?": type("string").describe(
-		'line selector applied to every searched file (e.g. "50-100", "50+10", "50-100,200-300"); never a path like "/"',
 	),
 	"case?": type("boolean").describe("case-sensitive search"),
 	"gitignore?": type("boolean").describe("respect gitignore"),
@@ -126,7 +122,6 @@ interface GrepPathSpec {
 	clean: string;
 	literalFilesystemMatch?: boolean;
 	ranges?: [LineRange, ...LineRange[]];
-	rangeSource?: "explicit" | "path";
 }
 
 /**
@@ -154,39 +149,9 @@ function isReadSelectorGrammar(sel: string): boolean {
 	return lower === "raw" || lower === "conflicts" || parseLineRanges(sel) !== null;
 }
 
-async function parsePathSpecs(
-	rawEntries: readonly string[],
-	cwd: string,
-	explicitSelector?: string,
-): Promise<GrepPathSpec[]> {
-	const normalizedSelector = explicitSelector?.trim() || undefined;
-	const explicitRanges = normalizedSelector === undefined ? undefined : parseLineRanges(normalizedSelector);
-	if (normalizedSelector !== undefined && !explicitRanges) {
-		throw new ToolError(
-			`selector "${normalizedSelector}" is invalid — use line ranges like "50-100", "50+10", or "50-100,200-300" without a leading colon`,
-		);
-	}
+async function parsePathSpecs(rawEntries: readonly string[], cwd: string): Promise<GrepPathSpec[]> {
 	const specs: GrepPathSpec[] = [];
 	for (const entry of rawEntries) {
-		if (explicitRanges) {
-			// Separate selector parameter makes `path` deterministic: first try the
-			// exact local filesystem path (with read-path normalization), then let
-			// archive/internal/URL resolution handle non-literal structured paths.
-			const rawPathHasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(entry);
-			const probe = rawPathHasScheme ? "missing" : await probeLiteralPathExists(entry, cwd);
-			// `"unknown"` covers EACCES/IO where we cannot confirm existence — treat
-			// it as a literal so a real file such as `test:1-2` under an unreadable
-			// parent is never silently reinterpreted as `test` + selector.
-			const literalMatch = probe !== "missing";
-			specs.push({
-				original: entry,
-				clean: literalMatch && !rawPathHasScheme ? resolveReadPath(entry, cwd) : entry,
-				literalFilesystemMatch: literalMatch,
-				ranges: explicitRanges,
-				rangeSource: "explicit",
-			});
-			continue;
-		}
 		// Internal URLs (`artifact://`, `skill://`, …) use the URL-aware splitter,
 		// which peels selector-shaped tails only for selector-capable schemes and
 		// leaves opaque ones (`mcp://`) intact. Unlike filesystem paths, their
@@ -212,7 +177,6 @@ async function parsePathSpecs(
 		const literalFilesystemMatch = strictSplit.sel !== undefined && split.sel === undefined;
 		let clean = literalFilesystemMatch ? resolveReadPath(entry, cwd) : entry;
 		let ranges: [LineRange, ...LineRange[]] | undefined;
-		let rangeSource: "path" | undefined;
 		if (!literalFilesystemMatch && split.sel) {
 			const parsed = parseLineRanges(split.sel);
 			if (!parsed) {
@@ -225,14 +189,12 @@ async function parsePathSpecs(
 			}
 			clean = split.path;
 			ranges = parsed;
-			rangeSource = "path";
 		}
 		specs.push({
 			original: entry,
 			clean,
 			literalFilesystemMatch,
 			ranges,
-			rangeSource: ranges ? rangeSource : undefined,
 		});
 	}
 	return specs;
@@ -950,7 +912,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 		_onUpdate?: AgentToolUpdateCallback<GrepToolDetails>,
 		_toolContext?: AgentToolContext,
 	): Promise<AgentToolResult<GrepToolDetails>> {
-		const { pattern, path: rawPath, selector, case: caseSensitive, gitignore, skip } = params;
+		const { pattern, path: rawPath, case: caseSensitive, gitignore, skip } = params;
 
 		return untilAborted(signal, async () => {
 			// Preserve the pattern verbatim — leading/trailing whitespace is
@@ -968,7 +930,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 			const scopedPaths = toPathList(rawPath);
 			const effectivePaths = scopedPaths.length > 0 ? scopedPaths : ["."];
 			const rawEntries = await expandDelimitedPathEntries(effectivePaths, this.session.cwd);
-			const pathSpecs = await parsePathSpecs(rawEntries, this.session.cwd, selector);
+			const pathSpecs = await parsePathSpecs(rawEntries, this.session.cwd);
 			const materializedExternalPaths = new Map<string, string>();
 			const materializeExternalUrlForSearch = async (rawPath: string) => {
 				const target = parseReadUrlTarget(rawPath);
@@ -1002,7 +964,6 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 				const searchablePaths = internalResolution.paths;
 				const { virtualResources, virtualPathSet, virtualInputIndexes } = internalResolution;
 				const rangesByAbsPath = new Map<string, LineRange[]>();
-				const globalRanges = pathSpecs.find(spec => spec.rangeSource === "explicit")?.ranges;
 
 				if (
 					archiveUnreadable.length > 0 &&
@@ -1062,7 +1023,6 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					for (let idx = 0; idx < pathSpecs.length; idx++) {
 						const spec = pathSpecs[idx];
 						if (!spec.ranges) continue;
-						if (spec.rangeSource === "explicit") continue;
 						if (virtualInputIndexes.has(idx)) continue;
 						const resolved = internalResolution.resolvedPathsByInput[idx];
 						if (!resolved) continue;
@@ -1268,11 +1228,11 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					throw err;
 				}
 				result = mergeGrepResults(result, virtualResult, nativeMaxCount);
-				if (rangesByAbsPath.size > 0 || globalRanges) {
+				if (rangesByAbsPath.size > 0) {
 					const filteredMatches: GrepMatch[] = [];
 					for (const match of result.matches) {
 						const abs = matchAbsolutePath(match.path, searchPath);
-						const ranges = rangesByAbsPath.get(abs) ?? globalRanges;
+						const ranges = rangesByAbsPath.get(abs);
 						if (!ranges) {
 							// Path has no line-range constraint (e.g. a peer entry without `:N-M`).
 							filteredMatches.push(match);

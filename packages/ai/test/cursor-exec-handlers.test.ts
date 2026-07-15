@@ -34,9 +34,23 @@ const cursorModel: Model<"cursor-agent"> = buildModel({
 	maxTokens: 1,
 });
 
-function captureCursorPayload(context: Context): Promise<AgentRunRequest> {
+const cursorMaxModeModel: Model<"cursor-agent"> = buildModel({
+	id: "cursor-composer-2.5-max",
+	name: "Cursor Composer 2.5 Max",
+	api: "cursor-agent",
+	provider: "cursor",
+	baseUrl: "",
+	reasoning: false,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 1,
+	maxTokens: 1,
+	cursorMaxMode: true,
+});
+
+function captureCursorPayload(context: Context, model: Model<"cursor-agent"> = cursorModel): Promise<AgentRunRequest> {
 	const { promise, resolve, reject } = Promise.withResolvers<AgentRunRequest>();
-	streamCursor(cursorModel, context, {
+	streamCursor(model, context, {
 		apiKey: "test-token",
 		onPayload: payload => {
 			if (isAgentRunRequest(payload)) {
@@ -174,6 +188,19 @@ describe("Cursor request action encoding", () => {
 		});
 
 		expect(payload.action?.action.case).toBe("userMessageAction");
+	});
+
+	it("sends Cursor max-mode metadata on model details and requested model", async () => {
+		const payload = await captureCursorPayload(
+			{
+				messages: [{ role: "user", content: "continue", timestamp: 0 }],
+			},
+			cursorMaxModeModel,
+		);
+
+		expect(payload.modelDetails?.maxMode).toBe(true);
+		expect(payload.requestedModel?.modelId).toBe("cursor-composer-2.5-max");
+		expect(payload.requestedModel?.maxMode).toBe(true);
 	});
 
 	it("uses a resume action when a tool result is the final context message", async () => {

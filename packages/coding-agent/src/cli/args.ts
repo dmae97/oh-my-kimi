@@ -13,6 +13,7 @@ import {
 	STRING_SETTERS,
 	STRING_VALUE_FLAGS,
 } from "./flag-tables";
+import { CliUsageError } from "./usage-error";
 
 export type Mode = "text" | "json" | "rpc" | "acp" | "rpc-ui";
 
@@ -306,6 +307,17 @@ export function reportUnrecognizedFlags(
 	const flags = args.unrecognizedFlags;
 	const plural = flags.length === 1 ? "" : "s";
 	write(`${chalk.red(`Error: unknown flag${plural}: ${flags.join(", ")}`)}\n`);
+	write(`Run \`${APP_NAME} --help\` for available flags.\n`);
+	return true;
+}
+
+/** Emit a clean CLI usage error without an internal stack trace. */
+export function reportCliUsageError(
+	error: unknown,
+	write: (text: string) => void = text => process.stderr.write(text),
+): boolean {
+	if (!(error instanceof CliUsageError)) return false;
+	write(`${chalk.red(`Error: ${error.message}`)}\n`);
 	write(`Run \`${APP_NAME} --help\` for available flags.\n`);
 	return true;
 }

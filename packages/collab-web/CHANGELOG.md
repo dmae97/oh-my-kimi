@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [16.5.1] - 2026-07-14
+
+### Fixed
+
+- Fixed an issue in the live collaboration transcript where duplicate tool cards and a stale "thinking..." shimmer were rendered while a committed tool call was running.
+
 ## [16.3.7] - 2026-07-05
 
 ### Fixed

@@ -41,6 +41,19 @@ export function shouldHideKernelWindow(opts: {
 }
 
 /**
+ * Keep eval kernels outside the host's POSIX terminal session.
+ *
+ * User code can start an interactive shell which calls `tcsetpgrp(3)`. If the
+ * kernel shares OMP's session, that shell can replace OMP as the controlling
+ * terminal's foreground process group and the host is then stopped by SIGTTIN
+ * on its next stdin read. Bun implements `detached: true` with `setsid(2)` on
+ * POSIX, making the kernel a session leader with no controlling terminal.
+ */
+export function shouldDetachKernel(platform: NodeJS.Platform): boolean {
+	return platform !== "win32";
+}
+
+/**
  * TTY-based fallback used when the Win32 console probe is unavailable.
  *
  * Returns `true` if any of stdin/stdout/stderr is currently a TTY. This

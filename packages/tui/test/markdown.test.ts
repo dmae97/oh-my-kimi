@@ -1221,6 +1221,25 @@ bar`,
 			).toBeTruthy();
 		});
 
+		it("should hide standalone empty HTML comments between visible text", () => {
+			const markdown = new Markdown(
+				"Before visible text\n\n<!-- -->\n\nAfter visible text",
+				0,
+				0,
+				defaultMarkdownTheme,
+			);
+
+			const plain = markdown
+				.render(80)
+				.map(line => stripVTControlCharacters(line))
+				.join("\n");
+
+			expect(plain).toContain("Before visible text");
+			expect(plain).toContain("After visible text");
+			expect(plain).not.toContain("<!--");
+			expect(plain).not.toContain("-->");
+		});
+
 		it("should strip inline span and text HTML tags but keep their contents", () => {
 			const markdown = new Markdown("<span></span><text>▃</text>", 0, 0, defaultMarkdownTheme);
 
@@ -1516,6 +1535,18 @@ describe("Markdown.render reference stability", () => {
 		const a = new Markdown("Shared markdown body", 1, 0, defaultMarkdownTheme);
 		const b = new Markdown("Shared markdown body", 1, 0, defaultMarkdownTheme);
 		expect(b.render(40)).toBe(a.render(40));
+	});
+
+	it("does not share oversized renders through the L2 cache", () => {
+		const width = 80;
+		const paragraph = `cache-budget sentinel ${"x".repeat(120)}`;
+		const largeText = Array.from({ length: 160 }, (_, index) => `Paragraph ${index}: ${paragraph}`).join("\n\n");
+
+		const first = new Markdown(largeText, 0, 0, defaultMarkdownTheme).render(width);
+		const second = new Markdown(largeText, 0, 0, defaultMarkdownTheme).render(width);
+
+		expect(second).toEqual(first);
+		expect(second).not.toBe(first);
 	});
 
 	it("returns a new reference with updated content after setText", () => {

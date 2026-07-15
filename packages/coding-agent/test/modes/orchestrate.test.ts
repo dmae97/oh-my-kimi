@@ -22,7 +22,13 @@ describe("orchestrate keyword detection", () => {
 		expect(containsOrchestrate("do it now\norchestrate")).toBe(true);
 	});
 
-	it("ignores casing, inflections, punctuation-adjacent, and path-embedded forms", () => {
+	it("matches the lowercase word beside prose punctuation and quotes", () => {
+		for (const text of ["do it. orchestrate.", "please orchestrate, then report", 'say "orchestrate" now']) {
+			expect(containsOrchestrate(text)).toBe(true);
+		}
+	});
+
+	it("ignores casing, inflections, and path-embedded forms", () => {
 		expect(containsOrchestrate("Orchestrate")).toBe(false);
 		expect(containsOrchestrate("ORCHESTRATE")).toBe(false);
 		expect(containsOrchestrate("orchestrated the build")).toBe(false);
@@ -30,9 +36,8 @@ describe("orchestrate keyword detection", () => {
 		expect(containsOrchestrate("a clean orchestration")).toBe(false);
 		expect(containsOrchestrate("it orchestrates well")).toBe(false);
 		expect(containsOrchestrate("reorchestrate everything")).toBe(false);
-		// The reported bug: a path/extension is not whitespace, so the word never triggers.
+		// A path/extension must not trigger even though sentence punctuation does.
 		expect(containsOrchestrate("packages/coding-agent/src/modes/orchestrate.ts")).toBe(false);
-		expect(containsOrchestrate("do it. orchestrate.")).toBe(false);
 		expect(containsOrchestrate("nothing to see here")).toBe(false);
 	});
 
@@ -53,9 +58,16 @@ describe("orchestrate keyword highlighting", () => {
 		expect(Bun.stripANSI(decorated)).toBe("please orchestrate this");
 	});
 
+	it("decorates punctuation-adjacent prose while preserving visible text", () => {
+		const input = 'please "orchestrate," then continue';
+		const decorated = highlightOrchestrate(input);
+		expect(decorated).not.toBe(input);
+		expect(Bun.stripANSI(decorated)).toBe(input);
+	});
+
 	it("leaves text without the standalone keyword untouched", () => {
 		expect(highlightOrchestrate("nothing here")).toBe("nothing here");
-		// Probe hits the substring but the whitespace boundary fails — no decoration.
+		// Probe hits the substring but token/path boundaries fail — no decoration.
 		expect(highlightOrchestrate("orchestrated builds")).toBe("orchestrated builds");
 		expect(highlightOrchestrate("Orchestrate this")).toBe("Orchestrate this");
 		// The reported bug: a filename must not be painted.

@@ -43,40 +43,82 @@ SHAPES = [
         FontCfg("6x12", "6x12", 6, 12),
         "dim",
         1,
-        {"font": "6x12", "cellWidth": 6, "cellHeight": 12, "variant": "bw", "stopwordDim": True,
-         "lineRepeat": 1, "frameSize": SIZE, "frameTokenEstimate": 3300},
+        {
+            "font": "6x12",
+            "cellWidth": 6,
+            "cellHeight": 12,
+            "variant": "bw",
+            "stopwordDim": True,
+            "lineRepeat": 1,
+            "frameSize": SIZE,
+            "frameTokenEstimate": 3300,
+        },
     ),
     (
         "8x13-bw",
         FontCfg("8x13", "8x13", 8, 13),
         "bw",
         1,
-        {"font": "8x13", "cellWidth": 8, "cellHeight": 13, "variant": "bw",
-         "lineRepeat": 1, "frameSize": SIZE, "frameTokenEstimate": 3300},
+        {
+            "font": "8x13",
+            "cellWidth": 8,
+            "cellHeight": 13,
+            "variant": "bw",
+            "lineRepeat": 1,
+            "frameSize": SIZE,
+            "frameTokenEstimate": 3300,
+        },
     ),
     (
         "8on16-bw",
         FontCfg("8on16", "8x13", 8, 16),
         "bw",
         1,
-        {"font": "8x13", "cellWidth": 8, "cellHeight": 16, "stretch": False, "variant": "bw",
-         "lineRepeat": 1, "frameSize": SIZE, "frameTokenEstimate": 3300},
+        {
+            "font": "8x13",
+            "cellWidth": 8,
+            "cellHeight": 16,
+            "stretch": False,
+            "variant": "bw",
+            "lineRepeat": 1,
+            "frameSize": SIZE,
+            "frameTokenEstimate": 3300,
+        },
     ),
     (
         "doc-8on16-bw",
         FontCfg("8on16", "8x13", 8, 16),
         "bw",
         2,
-        {"font": "8x13", "cellWidth": 8, "cellHeight": 16, "stretch": False, "variant": "bw", "columns": 2,
-         "lineRepeat": 1, "frameSize": SIZE, "frameTokenEstimate": 3300},
+        {
+            "font": "8x13",
+            "cellWidth": 8,
+            "cellHeight": 16,
+            "stretch": False,
+            "variant": "bw",
+            "columns": 2,
+            "lineRepeat": 1,
+            "frameSize": SIZE,
+            "frameTokenEstimate": 3300,
+        },
     ),
     (
         "doc-8on16-sent-dim",
         FontCfg("8on16", "8x13", 8, 16),
         "sent-dim",
         2,
-        {"font": "8x13", "cellWidth": 8, "cellHeight": 16, "stretch": False, "variant": "sent", "columns": 2,
-         "stopwordDim": True, "lineRepeat": 1, "frameSize": SIZE, "frameTokenEstimate": 3300},
+        {
+            "font": "8x13",
+            "cellWidth": 8,
+            "cellHeight": 16,
+            "stretch": False,
+            "variant": "sent",
+            "columns": 2,
+            "stopwordDim": True,
+            "lineRepeat": 1,
+            "frameSize": SIZE,
+            "frameTokenEstimate": 3300,
+        },
     ),
 ]
 
@@ -162,7 +204,9 @@ def render_research(flow: str, cfg: FontCfg, variant: str, columns: int) -> Imag
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--keep", action="store_true", help="keep PNG pairs in .cache/parity")
+    ap.add_argument(
+        "--keep", action="store_true", help="keep PNG pairs in .cache/parity"
+    )
     args = ap.parse_args()
     PARITY.mkdir(parents=True, exist_ok=True)
 
@@ -179,7 +223,13 @@ def main() -> None:
         ref = render_research(flow, cfg, variant, columns)
         out_png = PARITY / f"{name}.prod.png"
         proc = subprocess.run(
-            ["bun", str(HERE / "parity_render.ts"), str(text_file), json.dumps(shape), str(out_png)],
+            [
+                "bun",
+                str(HERE / "parity_render.ts"),
+                str(text_file),
+                json.dumps(shape),
+                str(out_png),
+            ],
             capture_output=True,
             text=True,
         )
@@ -192,7 +242,9 @@ def main() -> None:
         # reference renders the full square. Compare the printed region
         # pixel-exact and require everything below it to be blank.
         if got.width != ref.width or got.height > ref.height:
-            print(f"FAIL {name}: size {got.size} incompatible with reference {ref.size}")
+            print(
+                f"FAIL {name}: size {got.size} incompatible with reference {ref.size}"
+            )
             failures += 1
             continue
         rpx, gpx = ref.load(), got.load()

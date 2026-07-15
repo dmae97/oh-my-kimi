@@ -84,9 +84,6 @@ interface DaemonLogRead {
 function quoteShellArg(value: string): string {
 	return `'${value.replaceAll("'", `'\\''`)}'`;
 }
-function quoteCmdArg(value: string): string {
-	return `"${value.replaceAll('"', '""')}"`;
-}
 
 function terminalState(state: DaemonSnapshot["state"]): boolean {
 	return state === "exited" || state === "failed";
@@ -434,6 +431,13 @@ class DaemonBroker {
 		if (spec.detached && spec.pty) {
 			throw new Error("A detached daemon cannot allocate a PTY");
 		}
+		if (
+			spec.pty &&
+			process.platform === "win32" &&
+			[".bat", ".cmd"].includes(path.extname(spec.application).toLowerCase())
+		) {
+			throw new Error('Windows batch files require application "cmd.exe" with the batch path after "/c"');
+		}
 		const existing = this.#records.get(spec.name);
 		if (existing) await this.#refreshDetached(existing);
 		if (existing && !terminalState(existing.snapshot.state)) {
@@ -520,38 +524,47 @@ class DaemonBroker {
 	}
 
 	async #launchPty(record: ManagedDaemon, generation: number): Promise<void> {
-		const pidPath = path.join(record.dir, "process.pid");
-		await fs.rm(pidPath, { force: true });
-		const argv = [record.spec.application, ...record.spec.args];
-		const command =
-			process.platform === "win32"
-				? argv.map(quoteCmdArg).join(" ")
-				: [`printf '%s' "$$" > ${quoteShellArg(pidPath)}`, `exec ${argv.map(quoteShellArg).join(" ")}`].join("; ");
 		const session = new PtySession();
 		record.pty = session;
-		const shell = process.platform === "win32" ? process.env.COMSPEC : process.env.SHELL;
-		void session
-			.start(
+		const options = {
+			cwd: record.spec.cwd,
+			env: workerEnvFromParent({ TERM: "xterm-256color", ...record.spec.env }),
+			cols: DAEMON_PTY_COLUMNS,
+			rows: DAEMON_PTY_ROWS,
+		};
+		const onChunk = (error: Error | null, chunk: string): void => {
+			if (generation !== record.generation) return;
+			if (error) record.log?.append(`PTY output error: ${error.message}\n`);
+			if (chunk) this.#onOutput(record, generation, chunk);
+		};
+		let run: Promise<PtyRunResult>;
+		if (process.platform === "win32") {
+			run = session.startArgv(
 				{
-					command,
-					cwd: record.spec.cwd,
-					env: workerEnvFromParent({ TERM: "xterm-256color", ...record.spec.env }),
-					cols: DAEMON_PTY_COLUMNS,
-					rows: DAEMON_PTY_ROWS,
-					shell,
+					application: record.spec.application,
+					args: record.spec.args,
+					...options,
 				},
-				(error, chunk) => {
-					if (generation !== record.generation) return;
-					if (error) record.log?.append(`PTY output error: ${error.message}\n`);
-					if (chunk) this.#onOutput(record, generation, chunk);
-				},
-			)
+				onChunk,
+			);
+		} else {
+			const pidPath = path.join(record.dir, "process.pid");
+			await fs.rm(pidPath, { force: true });
+			const argv = [record.spec.application, ...record.spec.args];
+			const command = [
+				`printf '%s' "$$" > ${quoteShellArg(pidPath)}`,
+				`exec ${argv.map(quoteShellArg).join(" ")}`,
+			].join("; ");
+			run = session.start({ command, shell: process.env.SHELL, ...options }, onChunk);
+		}
+		void run
 			.then(result => this.#onPtyExit(record, generation, result))
 			.catch(error =>
 				this.#settle(record, generation, undefined, error instanceof Error ? error.message : String(error)),
 			);
 
 		if (process.platform === "win32") return;
+		const pidPath = path.join(record.dir, "process.pid");
 		const deadline = Date.now() + 5_000;
 		const pidFile = Bun.file(pidPath);
 		while (Date.now() < deadline && generation === record.generation) {

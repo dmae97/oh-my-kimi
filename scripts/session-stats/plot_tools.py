@@ -15,6 +15,7 @@ N by total tokens (default 10); override with --top N or --tools a,b,c.
 
 Output: scripts/session-stats/out/tool-trends.png + standalone panels.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -39,9 +40,18 @@ TOOL_ALIAS = {"grep": "search"}
 
 # 10-class qualitative palette (tab10) — distinct hues for line + area work.
 PALETTE = [
-    "#1f77b4", "#d62728", "#2ca02c", "#ff7f0e", "#9467bd",
-    "#8c564b", "#17becf", "#e377c2", "#bcbd22", "#7f7f7f",
-    "#393b79", "#637939",
+    "#1f77b4",
+    "#d62728",
+    "#2ca02c",
+    "#ff7f0e",
+    "#9467bd",
+    "#8c564b",
+    "#17becf",
+    "#e377c2",
+    "#bcbd22",
+    "#7f7f7f",
+    "#393b79",
+    "#637939",
 ]
 
 
@@ -55,6 +65,7 @@ def normalize_case_sql(col: str) -> str:
 
 # --------------------------------------------------------------------------- #
 # Data access
+
 
 def _connect() -> sqlite3.Connection:
     if not DB_PATH.exists():
@@ -148,7 +159,10 @@ def fetch_per_call(conn: sqlite3.Connection, tools: list[str]) -> dict[str, dict
     out: dict[str, dict] = {}
     for t, rows in by_tool.items():
         if not rows:
-            out[t] = {"ts": np.array([], dtype=np.int64), "tok": np.array([], dtype=np.int64)}
+            out[t] = {
+                "ts": np.array([], dtype=np.int64),
+                "tok": np.array([], dtype=np.int64),
+            }
             continue
         ts = np.fromiter((r[0] for r in rows), dtype=np.int64, count=len(rows))
         tok = np.fromiter((r[1] for r in rows), dtype=np.int64, count=len(rows))
@@ -159,6 +173,7 @@ def fetch_per_call(conn: sqlite3.Connection, tools: list[str]) -> dict[str, dict
 
 # --------------------------------------------------------------------------- #
 # Helpers
+
 
 def smooth(y: np.ndarray, w: int = 7) -> np.ndarray:
     if w <= 1 or len(y) < w:
@@ -208,7 +223,10 @@ def weekly_median(ts_ms: np.ndarray, tok: np.ndarray) -> tuple[np.ndarray, np.nd
         if hi > lo:
             p50[i] = np.percentile(tok[lo:hi], 50)
     week_dates = np.array(
-        [datetime.fromtimestamp(int(w) * WEEK_MS / 1000, tz=timezone.utc) for w in weeks]
+        [
+            datetime.fromtimestamp(int(w) * WEEK_MS / 1000, tz=timezone.utc)
+            for w in weeks
+        ]
     )
     return week_dates, p50
 
@@ -216,10 +234,15 @@ def weekly_median(ts_ms: np.ndarray, tok: np.ndarray) -> tuple[np.ndarray, np.nd
 # --------------------------------------------------------------------------- #
 # Panels
 
-def panel_total_tokens(ax: plt.Axes, daily: dict, tools: list[str], colors: dict) -> None:
+
+def panel_total_tokens(
+    ax: plt.Axes, daily: dict, tools: list[str], colors: dict
+) -> None:
     dates = daily["dates"]
     series = [smooth(daily[t]["args"] + daily[t]["results"]) for t in tools]
-    ax.stackplot(dates, series, labels=tools, colors=[colors[t] for t in tools], alpha=0.9)
+    ax.stackplot(
+        dates, series, labels=tools, colors=[colors[t] for t in tools], alpha=0.9
+    )
     ax.set_title("Daily token volume (args + results, 7d MA)")
     ax.set_ylabel("tokens / day")
     ax.yaxis.set_major_formatter(plt.FuncFormatter(millions))
@@ -227,17 +250,23 @@ def panel_total_tokens(ax: plt.Axes, daily: dict, tools: list[str], colors: dict
     style_time_axis(ax)
 
 
-def panel_call_counts(ax: plt.Axes, daily: dict, tools: list[str], colors: dict) -> None:
+def panel_call_counts(
+    ax: plt.Axes, daily: dict, tools: list[str], colors: dict
+) -> None:
     dates = daily["dates"]
     for t in tools:
-        ax.plot(dates, smooth(daily[t]["calls"]), label=t, color=colors[t], linewidth=1.6)
+        ax.plot(
+            dates, smooth(daily[t]["calls"]), label=t, color=colors[t], linewidth=1.6
+        )
     ax.set_title("Daily call count (7d MA)")
     ax.set_ylabel("calls / day")
     ax.legend(loc="upper left", frameon=False, ncol=2, fontsize=9)
     style_time_axis(ax)
 
 
-def panel_mean_per_call(ax: plt.Axes, daily: dict, tools: list[str], colors: dict) -> None:
+def panel_mean_per_call(
+    ax: plt.Axes, daily: dict, tools: list[str], colors: dict
+) -> None:
     dates = daily["dates"]
     for t in tools:
         totals = daily[t]["args"] + daily[t]["results"]
@@ -265,7 +294,9 @@ def panel_cumulative(ax: plt.Axes, daily: dict, tools: list[str], colors: dict) 
     style_time_axis(ax)
 
 
-def panel_weekly_median(ax: plt.Axes, per_call: dict, tools: list[str], colors: dict) -> None:
+def panel_weekly_median(
+    ax: plt.Axes, per_call: dict, tools: list[str], colors: dict
+) -> None:
     for t in tools:
         w, p50 = weekly_median(per_call[t]["ts"], per_call[t]["tok"])
         if w.size == 0:
@@ -279,8 +310,12 @@ def panel_weekly_median(ax: plt.Axes, per_call: dict, tools: list[str], colors: 
     style_time_axis(ax)
 
 
-def panel_histogram(ax: plt.Axes, per_call: dict, tools: list[str], colors: dict) -> None:
-    all_tok = np.concatenate([per_call[t]["tok"] for t in tools if per_call[t]["tok"].size])
+def panel_histogram(
+    ax: plt.Axes, per_call: dict, tools: list[str], colors: dict
+) -> None:
+    all_tok = np.concatenate(
+        [per_call[t]["tok"] for t in tools if per_call[t]["tok"].size]
+    )
     if all_tok.size == 0:
         return
     hi = max(all_tok.max(), 10)
@@ -311,6 +346,7 @@ def panel_histogram(ax: plt.Axes, per_call: dict, tools: list[str], colors: dict
 
 # --------------------------------------------------------------------------- #
 # Entry
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
@@ -364,12 +400,12 @@ def main() -> int:
     print(f"wrote {combined}")
 
     panels: tuple[tuple[str, Callable, dict], ...] = (
-        ("daily-tokens",         panel_total_tokens,  daily),
-        ("daily-calls",          panel_call_counts,   daily),
-        ("tokens-per-call",      panel_mean_per_call, daily),
-        ("cumulative-tokens",    panel_cumulative,    daily),
-        ("per-call-median",      panel_weekly_median, per_call),
-        ("per-call-histogram",   panel_histogram,     per_call),
+        ("daily-tokens", panel_total_tokens, daily),
+        ("daily-calls", panel_call_counts, daily),
+        ("tokens-per-call", panel_mean_per_call, daily),
+        ("cumulative-tokens", panel_cumulative, daily),
+        ("per-call-median", panel_weekly_median, per_call),
+        ("per-call-histogram", panel_histogram, per_call),
     )
     for name, fn, src in panels:
         f2, ax = plt.subplots(figsize=(11, 5))

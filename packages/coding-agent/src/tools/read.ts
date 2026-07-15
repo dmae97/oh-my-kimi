@@ -748,10 +748,7 @@ function splitPdfImageMemberReadPath(readPath: string): { pdfPath: string; membe
 
 const readSchema = type({
 	path: type("string").describe(
-		'Local path, internal URI (e.g. "omp://", "issue://123", "pr://123"), or URL. Inline :<sel> is still accepted for compatibility.',
-	),
-	"selector?": type("string").describe(
-		'selector without a leading colon (e.g. "50-100", "raw", "raw:50-100", "conflicts"); keeps `path` literal when filenames contain colons',
+		"Local path, internal URI (e.g. memory://, skill://), or URL. Inline selectors are supported.",
 	),
 });
 
@@ -2122,11 +2119,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		_toolContext?: AgentToolContext,
 	): Promise<AgentToolResult<ReadToolDetails>> {
 		let { path: readPath } = params;
-		let explicitSelector = params.selector?.trim() || undefined;
-		let explicitParsedSelector = explicitSelector === undefined ? undefined : parseSel(explicitSelector);
-		if (explicitSelector !== undefined && explicitParsedSelector?.kind === "none") {
-			throw invalidSelector(explicitSelector);
-		}
 		if (readPath.startsWith("file://")) {
 			readPath = expandPath(readPath);
 		}
@@ -2147,13 +2139,8 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			if (!this.session.settings.get("fetch.enabled")) {
 				throw new ToolError("URL reads are disabled by settings.");
 			}
-			if (explicitParsedSelector?.kind === "conflicts") {
-				throw new ToolError("The explicit read selector `conflicts` is only supported for local files.");
-			}
-			const urlRaw =
-				explicitParsedSelector === undefined ? parsedUrlTarget.raw : isRawSelector(explicitParsedSelector);
-			const urlRanges =
-				explicitParsedSelector?.kind === "lines" ? explicitParsedSelector.ranges : parsedUrlTarget.ranges;
+			const urlRaw = parsedUrlTarget.raw;
+			const urlRanges = parsedUrlTarget.ranges;
 			if (urlRanges !== undefined && urlRanges.length > 1) {
 				const cached = await loadReadUrlCacheEntry(
 					this.session,
@@ -2169,14 +2156,8 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					immutable: true,
 				});
 			}
-			const urlRange = urlRanges?.[0];
-			const urlOffset = explicitParsedSelector?.kind === "lines" ? urlRange?.startLine : parsedUrlTarget.offset;
-			const urlLimit =
-				explicitParsedSelector?.kind === "lines" && urlRange
-					? urlRange.endLine !== undefined
-						? urlRange.endLine - urlRange.startLine + 1
-						: undefined
-					: parsedUrlTarget.limit;
+			const urlOffset = parsedUrlTarget.offset;
+			const urlLimit = parsedUrlTarget.limit;
 			if (urlOffset !== undefined || urlLimit !== undefined) {
 				const cached = await loadReadUrlCacheEntry(
 					this.session,
@@ -2202,10 +2183,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		// Use the internal-URL-aware splitter so malformed selectors are peeled
 		// off the URL and surfaced via parseSel rather than confusing handlers.
 		const internalRouter = InternalUrlRouter.instance();
+		let promotedSelector: string | undefined;
 		if (internalRouter.canHandle(readPath)) {
-			const internalTarget =
-				explicitSelector === undefined ? splitInternalUrlSel(readPath) : { path: readPath, sel: explicitSelector };
-			const parsed = explicitParsedSelector ?? parseSel(internalTarget.sel);
+			const internalTarget = splitInternalUrlSel(readPath);
+			const parsed = parseSel(internalTarget.sel);
 			if (internalTarget.sel !== undefined && parsed.kind === "none") {
 				throw new ToolError(
 					`Invalid selector ':${internalTarget.sel}' on '${internalTarget.path}'. Use :N, :N-M, :N+K, :N- (open-ended), a comma-separated list of ranges, :raw, or a range combined with raw (e.g. :raw:50-100).`,
@@ -2223,15 +2204,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				});
 				if (localFile) {
 					readPath = localFile.path;
-					// Promote the URL-embedded selector into the explicit-selector state so
-					// downstream literal-preferring routing does NOT re-split the synthesized
-					// `${localFile.path}:${sel}` string — a sibling literal file at that name
-					// would otherwise shadow the intended local:// URL selector semantics
-					// (issue #4618 reviewer feedback on c493d12).
-					if (explicitSelector === undefined && internalTarget.sel !== undefined) {
-						explicitSelector = internalTarget.sel;
-						explicitParsedSelector = parsed;
-					}
+					// Preserve a local:// selector separately so a sibling literal file
+					// cannot shadow the URL's selector semantics during filesystem routing.
+					promotedSelector = internalTarget.sel;
 				} else {
 					return this.#handleInternalUrl(internalTarget.path, parsed, signal);
 				}
@@ -2246,16 +2221,14 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 		// Prefer a literal filesystem match over selector interpretation so real
 		// POSIX filenames containing selector-looking suffixes win over structured
-		// archive / sqlite / pdf-image dispatch. With explicit `selector`, `path`
-		// is exact: `path: "test:1-2", selector: "1-2"` means "lines 1-2 from
-		// the literal file test:1-2", without recursively depending on whether a
-		// longer `test:1-2:1-2` filename also exists (issue #4618).
+		// archive / sqlite / pdf-image dispatch. A selector promoted from local://
+		// remains separate so it cannot be mistaken for part of the resolved path.
 		const literalSplit =
-			explicitSelector === undefined
+			promotedSelector === undefined
 				? await splitPathAndSelPreferringLiteral(readPath, this.session.cwd)
-				: { path: readPath, sel: explicitSelector };
+				: { path: readPath, sel: promotedSelector };
 		const rawPathIsLiteral =
-			explicitSelector !== undefined
+			promotedSelector !== undefined
 				? readPath.includes(":") && (await probeLiteralPathExists(readPath, this.session.cwd)) !== "missing"
 				: literalSplit.sel === undefined && splitPathAndSel(readPath).sel !== undefined;
 
@@ -2263,9 +2236,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			const archivePath = await this.#resolveArchiveReadPath(readPath, suffixCache, signal);
 			if (archivePath) {
 				const archiveSubPath =
-					explicitSelector === undefined
+					promotedSelector === undefined
 						? splitPathAndSel(archivePath.archiveSubPath)
-						: { path: archivePath.archiveSubPath, sel: explicitSelector };
+						: { path: archivePath.archiveSubPath, sel: promotedSelector };
 				const archiveParsed = parseSel(archiveSubPath.sel);
 				return this.#readArchive(
 					readPath,
@@ -3319,8 +3292,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 interface ReadRenderArgs {
 	path?: unknown;
 	file_path?: unknown;
-	selector?: unknown;
-	sel?: string;
 	// Legacy fields from old schema — tolerated for in-flight tool calls during transition
 	offset?: number;
 	limit?: number;
@@ -3384,20 +3355,10 @@ function formatReadPathLink(
 
 export const readToolRenderer = {
 	renderCall(args: ReadRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
-		const baseRawPath =
-			typeof args.file_path === "string" ? args.file_path : typeof args.path === "string" ? args.path : "";
-		const explicitSelector =
-			typeof args.selector === "string"
-				? args.selector.trim().replace(/^:+/, "")
-				: args.sel?.trim().replace(/^:+/, "");
 		const rawPath =
-			explicitSelector && explicitSelector.length > 0 ? `${baseRawPath}:${explicitSelector}` : baseRawPath;
-		if (isReadableUrlPath(baseRawPath)) {
-			return renderReadUrlCall(
-				{ path: rawPath, raw: args.raw || explicitSelector?.toLowerCase() === "raw" },
-				_options,
-				uiTheme,
-			);
+			typeof args.file_path === "string" ? args.file_path : typeof args.path === "string" ? args.path : "";
+		if (isReadableUrlPath(rawPath)) {
+			return renderReadUrlCall({ path: rawPath, raw: args.raw }, _options, uiTheme);
 		}
 
 		const offset = args.offset;
@@ -3438,14 +3399,8 @@ export const readToolRenderer = {
 		if (result.isError) {
 			const rawErrorText = result.content?.find(c => c.type === "text")?.text ?? "";
 			const errorText = (rawErrorText || "Unknown error").replace(/^Error:\s*/, "");
-			const baseRawPath =
-				typeof args?.file_path === "string" ? args.file_path : typeof args?.path === "string" ? args.path : "";
-			const explicitSelector =
-				typeof args?.selector === "string"
-					? args.selector.trim().replace(/^:+/, "")
-					: args?.sel?.trim().replace(/^:+/, "");
 			const rawPath =
-				explicitSelector && explicitSelector.length > 0 ? `${baseRawPath}:${explicitSelector}` : baseRawPath;
+				typeof args?.file_path === "string" ? args.file_path : typeof args?.path === "string" ? args.path : "";
 			const filePath =
 				formatReadPathLink(rawPath, { offset: args?.offset, sourcePath: readSourceFsPath(result.details) }) ||
 				shortenPath(rawPath);
@@ -3472,14 +3427,8 @@ export const readToolRenderer = {
 		// echo next to the styled warning line below.
 		const contentText = details?.displayContent?.text ?? stripOutputNotice(rawText, details?.meta);
 		const imageContent = result.content?.find(c => c.type === "image");
-		const baseRawPath =
-			typeof args?.file_path === "string" ? args.file_path : typeof args?.path === "string" ? args.path : "";
-		const explicitSelector =
-			typeof args?.selector === "string"
-				? args.selector.trim().replace(/^:+/, "")
-				: args?.sel?.trim().replace(/^:+/, "");
 		const rawPath =
-			explicitSelector && explicitSelector.length > 0 ? `${baseRawPath}:${explicitSelector}` : baseRawPath;
+			typeof args?.file_path === "string" ? args.file_path : typeof args?.path === "string" ? args.path : "";
 		const renderPath = splitReadRenderPath(rawPath);
 		const lang = getLanguageFromPath(renderPath.path);
 

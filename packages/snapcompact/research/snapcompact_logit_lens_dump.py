@@ -43,7 +43,11 @@ def main() -> None:
     args = ap.parse_args()
 
     import torch
-    from transformers import AutoProcessor, AutoTokenizer, Qwen2_5_VLForConditionalGeneration
+    from transformers import (
+        AutoProcessor,
+        AutoTokenizer,
+        Qwen2_5_VLForConditionalGeneration,
+    )
 
     out_dir = HERE / "results" / args.out
     img_dir = out_dir / "images"
@@ -61,21 +65,55 @@ def main() -> None:
     img.save(img_dir / "image-carrier.png")
 
     print(f"loading {args.model_dir}", flush=True)
-    processor = AutoProcessor.from_pretrained(args.model_dir, local_files_only=True, trust_remote_code=True, use_fast=False)
-    tokenizer = AutoTokenizer.from_pretrained(args.model_dir, local_files_only=True, trust_remote_code=True)
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(args.model_dir, local_files_only=True, trust_remote_code=True, dtype=torch.bfloat16, device_map="auto").eval()
+    processor = AutoProcessor.from_pretrained(
+        args.model_dir, local_files_only=True, trust_remote_code=True, use_fast=False
+    )
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model_dir, local_files_only=True, trust_remote_code=True
+    )
+    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        args.model_dir,
+        local_files_only=True,
+        trust_remote_code=True,
+        dtype=torch.bfloat16,
+        device_map="auto",
+    ).eval()
     device = next(model.parameters()).device
 
-    prompt = load_prompt("qa-image.md").format(cols=cols, rows=rows) + f"\n\nQuestion: {q['q']}\nAnswer with only the shortest extractive answer."
-    messages = [{"role": "user", "content": [{"type": "image", "image": img}, {"type": "text", "text": prompt}]}]
-    templated = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    prompt = (
+        load_prompt("qa-image.md").format(cols=cols, rows=rows)
+        + f"\n\nQuestion: {q['q']}\nAnswer with only the shortest extractive answer."
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": img},
+                {"type": "text", "text": prompt},
+            ],
+        }
+    ]
+    templated = processor.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
     batch = processor(images=img, text=templated, return_tensors="pt")
     image_token_id = processor.tokenizer.convert_tokens_to_ids(processor.image_token)
     ids = batch["input_ids"][0].tolist()
-    image_positions = [i for i, token_id in enumerate(ids) if token_id == image_token_id]
+    image_positions = [
+        i for i, token_id in enumerate(ids) if token_id == image_token_id
+    ]
     n_tokens = len(image_positions)
     grid = int(round(n_tokens**0.5))
-    answer_indices = image_answer_token_indices(q["answer_start"], q["answer_end"], cols, cfg.adv, cfg.pitch, img.width, img.height, n_tokens)
+    answer_indices = image_answer_token_indices(
+        q["answer_start"],
+        q["answer_end"],
+        cols,
+        cfg.adv,
+        cfg.pitch,
+        img.width,
+        img.height,
+        n_tokens,
+    )
 
     # Controls: blank-region tokens far from any text row boundary effects.
     control_indices = []
@@ -83,7 +121,9 @@ def main() -> None:
         row_far = (answer_indices[0] // grid + grid // 2) % grid
         for k in range(args.control_tokens):
             control_indices.append(row_far * grid + (answer_indices[0] % grid + k))
-    track = [("answer", idx) for idx in answer_indices] + [("control", idx) for idx in control_indices]
+    track = [("answer", idx) for idx in answer_indices] + [
+        ("control", idx) for idx in control_indices
+    ]
     track_positions = [image_positions[idx] for _kind, idx in track]
 
     batch = {k: (v.to(device) if hasattr(v, "to") else v) for k, v in batch.items()}
@@ -92,7 +132,9 @@ def main() -> None:
 
     norm = model.model.language_model.norm
     lm_head = model.lm_head
-    answer_token_ids = tokenizer(q["answer_text"], add_special_tokens=False)["input_ids"]
+    answer_token_ids = tokenizer(q["answer_text"], add_special_tokens=False)[
+        "input_ids"
+    ]
     answer_token_strs = [tokenizer.decode([t]) for t in answer_token_ids]
 
     lens: list[dict[str, Any]] = []
@@ -109,18 +151,34 @@ def main() -> None:
                     "token_index": int(idx),
                     "grid_rc": [int(idx // grid), int(idx % grid)],
                     "top": [
-                        {"str": tokenizer.decode([int(topi[ti, k])]), "id": int(topi[ti, k]), "p": round(float(topv[ti, k]), 5)}
+                        {
+                            "str": tokenizer.decode([int(topi[ti, k])]),
+                            "id": int(topi[ti, k]),
+                            "p": round(float(topv[ti, k]), 5),
+                        }
                         for k in range(args.topk)
                     ],
-                    "answer_token_p": [round(float(probs[ti, t]), 6) for t in answer_token_ids],
+                    "answer_token_p": [
+                        round(float(probs[ti, t]), 6) for t in answer_token_ids
+                    ],
                 }
                 lens.append(entry)
             print(f"layer {layer} done", flush=True)
 
     dump = {
         "args": vars(args),
-        "question": {"q": q["q"], "answer_text": q["answer_text"], "answer_start": q["answer_start"], "answer_end": q["answer_end"]},
-        "geometry": {"cols": cols, "rows": rows, "image_w": img.width, "image_h": img.height},
+        "question": {
+            "q": q["q"],
+            "answer_text": q["answer_text"],
+            "answer_start": q["answer_start"],
+            "answer_end": q["answer_end"],
+        },
+        "geometry": {
+            "cols": cols,
+            "rows": rows,
+            "image_w": img.width,
+            "image_h": img.height,
+        },
         "image_tokens": n_tokens,
         "image_grid": grid,
         "token_pixel_size": 28,
@@ -134,8 +192,20 @@ def main() -> None:
     (out_dir / "logit_lens.json").write_text(json.dumps(dump, indent=1))
     # Quick console summary: best layer per answer token.
     for kind, idx in track:
-        best = max((e for e in lens if e["token_index"] == idx), key=lambda e: max(e["answer_token_p"]))
-        print(kind, idx, "best layer", best["layer"], "p", max(best["answer_token_p"]), "top1", best["top"][0]["str"])
+        best = max(
+            (e for e in lens if e["token_index"] == idx),
+            key=lambda e: max(e["answer_token_p"]),
+        )
+        print(
+            kind,
+            idx,
+            "best layer",
+            best["layer"],
+            "p",
+            max(best["answer_token_p"]),
+            "top1",
+            best["top"][0]["str"],
+        )
     print(f"results -> {out_dir}")
 
 

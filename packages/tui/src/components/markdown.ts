@@ -86,6 +86,7 @@ function createHtmlNormalizationState(): HtmlNormalizationState {
 	return { lists: [], openItems: [], itemHasContent: [] };
 }
 
+const HTML_COMMENT_REGEX = /<!--[\s\S]*?-->/g;
 const HTML_TAG_REGEX = /<\/?(?:br|p|ol|ul|li|span|text|code|hr|blockquote)\b(?:\s[^>]*)?\s*\/?>/gi;
 // Block-level HTML that needs structural (not just textual) rendering: standalone
 // `<hr>` becomes a rule and balanced `<blockquote>…</blockquote>` renders with
@@ -136,11 +137,12 @@ function normalizeHtmlForTerminal(
 	let output = "";
 	let lastIndex = 0;
 	let inCode = false;
+	const withoutComments = raw.replace(HTML_COMMENT_REGEX, "");
 
-	for (const match of raw.matchAll(HTML_TAG_REGEX)) {
+	for (const match of withoutComments.matchAll(HTML_TAG_REGEX)) {
 		const tag = match[0];
 		const index = match.index ?? 0;
-		const textBeforeTag = normalizeHtmlEntitiesForTerminal(raw.slice(lastIndex, index));
+		const textBeforeTag = normalizeHtmlEntitiesForTerminal(withoutComments.slice(lastIndex, index));
 		const name = htmlTagName(tag);
 		// Most tags handled here are block-level. Inline contexts — span, text, and
 		// the content inside a `<code>` run — keep their surrounding whitespace
@@ -238,7 +240,7 @@ function normalizeHtmlForTerminal(
 		}
 	}
 
-	const remainingText = normalizeHtmlEntitiesForTerminal(raw.slice(lastIndex));
+	const remainingText = normalizeHtmlEntitiesForTerminal(withoutComments.slice(lastIndex));
 	markCurrentHtmlItemContent(state, remainingText);
 	return output + (inCode && codeHook ? codeHook(remainingText) : remainingText);
 }
@@ -602,8 +604,21 @@ markdownParser.use({ extensions: [customHrExtension, mathBlockExtension, mathEnv
 // (Rust FFI) work for content/layout combinations already seen this session.
 
 const RENDER_CACHE_MAX = 256; // sane cap: ~256 distinct message × width combos
+const RENDER_CACHE_MAX_SIZE = 512 * 1024;
+const RENDER_CACHE_MAX_ENTRY_SIZE = 32 * 1024;
 const EMPTY_RENDER_LINES: readonly string[] = [];
-const renderCache = new LRUCache<string, readonly string[]>({ max: RENDER_CACHE_MAX });
+const renderCache = new LRUCache<string, readonly string[]>({
+	max: RENDER_CACHE_MAX,
+	maxSize: RENDER_CACHE_MAX_SIZE,
+	maxEntrySize: RENDER_CACHE_MAX_ENTRY_SIZE,
+	sizeCalculation: renderedLinesCacheSize,
+});
+
+function renderedLinesCacheSize(lines: readonly string[]): number {
+	let size = lines.length;
+	for (let i = 0; i < lines.length; i++) size += lines[i]!.length;
+	return Math.max(1, size);
+}
 
 // A reference-link definition (`[label]: dest`) resolves across the whole
 // document, so a split lex cannot reproduce it — disable the streaming fast path
@@ -937,6 +952,11 @@ interface StreamPrefixLineCache extends RenderSignature {
 	tokenCount: number;
 	lines: readonly string[];
 }
+interface StreamingDiffLineCache extends RenderSignature {
+	lang: string | undefined;
+	text: string;
+	lines: readonly string[];
+}
 
 export class Markdown implements Component {
 	#text: string;
@@ -979,8 +999,12 @@ export class Markdown implements Component {
 	// True while #renderStreamingContentLines renders the frozen token range:
 	// frozen code blocks highlight even in transient mode so their bytes match
 	// the finalized render (they render once into the prefix line cache, so
-	// the FFI cost is amortized); the volatile tail stays unhighlighted.
+	// the FFI cost is amortized). The volatile tail normally stays
+	// unhighlighted; streaming diff fences line-highlight completed rows so
+	// semantic colors reach native scrollback before rows leave the viewport.
 	#renderingFrozenPrefix = false;
+	#streamingDiffLineCache?: StreamingDiffLineCache;
+	#activeRenderSignature?: RenderSignature;
 
 	#ignoreTight = false;
 
@@ -1190,9 +1214,15 @@ export class Markdown implements Component {
 
 		// Parse markdown to HTML-like tokens
 		const tokens = this.#lexTokens(normalizedText);
-		const contentLines = this.transientRenderCache
-			? this.#renderStreamingContentLines(tokens, normalizedText, signature, contentWidth)
-			: this.#renderContentLines(tokens, 0, tokens.length, contentWidth, signature);
+		let contentLines: string[];
+		this.#activeRenderSignature = signature;
+		try {
+			contentLines = this.transientRenderCache
+				? this.#renderStreamingContentLines(tokens, normalizedText, signature, contentWidth)
+				: this.#renderContentLines(tokens, 0, tokens.length, contentWidth, signature);
+		} finally {
+			this.#activeRenderSignature = undefined;
+		}
 		const emptyLines = this.#renderEmptyPaddingLines(signature);
 
 		// Combine top padding, content, and bottom padding
@@ -1386,6 +1416,122 @@ export class Markdown implements Component {
 		return contentLines;
 	}
 
+	#renderCodeBodyLines(token: Token, codeIndent: string): string[] {
+		const bodyLines: string[] = [];
+		const tokenText = "text" in token && typeof token.text === "string" ? token.text : "";
+		const lang = "lang" in token && typeof token.lang === "string" ? token.lang : undefined;
+		const normalizedLang = lang?.toLowerCase();
+		const canStreamDiff =
+			this.transientRenderCache &&
+			!this.#renderingFrozenPrefix &&
+			this.#theme.highlightCode &&
+			(normalizedLang === "diff" || normalizedLang === "patch" || normalizedLang === "udiff");
+
+		if (this.#theme.highlightCode && (!this.transientRenderCache || this.#renderingFrozenPrefix)) {
+			const highlightedLines = this.#theme.highlightCode(tokenText, lang);
+			for (const hlLine of highlightedLines) {
+				bodyLines.push(`${codeIndent}${hlLine}`);
+			}
+			return bodyLines;
+		}
+
+		if (canStreamDiff) {
+			const closedFence = this.#codeTokenHasClosingFence(token);
+			const lineEnd = tokenText.lastIndexOf("\n");
+			if (closedFence || lineEnd >= 0) {
+				const completedText = closedFence ? tokenText : tokenText.slice(0, lineEnd);
+				for (const hlLine of this.#highlightStreamingDiffLines(completedText, lang)) {
+					bodyLines.push(`${codeIndent}${hlLine}`);
+				}
+				if (!closedFence) {
+					for (const codeLine of tokenText.slice(lineEnd + 1).split("\n")) {
+						bodyLines.push(`${codeIndent}${this.#theme.codeBlock(codeLine)}`);
+					}
+				}
+				return bodyLines;
+			}
+		}
+
+		for (const codeLine of tokenText.split("\n")) {
+			bodyLines.push(`${codeIndent}${this.#theme.codeBlock(codeLine)}`);
+		}
+		return bodyLines;
+	}
+
+	#codeTokenHasClosingFence(token: Token): boolean {
+		const raw = "raw" in token && typeof token.raw === "string" ? token.raw : "";
+		const firstLineEnd = raw.indexOf("\n");
+		if (firstLineEnd < 0) return false;
+		const openingLine = raw.slice(0, firstLineEnd);
+		const openingTrimmed = openingLine.trimStart();
+		const openingIndent = openingLine.length - openingTrimmed.length;
+		if (openingIndent > 3) return false;
+		const fenceChar = openingTrimmed.charAt(0);
+		if (fenceChar !== "`" && fenceChar !== "~") return false;
+		let fenceLength = 0;
+		while (openingTrimmed.charAt(fenceLength) === fenceChar) fenceLength++;
+		if (fenceLength < 3) return false;
+
+		let lineStart = firstLineEnd + 1;
+		while (lineStart <= raw.length) {
+			const lineEnd = raw.indexOf("\n", lineStart);
+			const line = lineEnd >= 0 ? raw.slice(lineStart, lineEnd) : raw.slice(lineStart);
+			const trimmed = line.trimStart();
+			const indent = line.length - trimmed.length;
+			let closingLength = 0;
+			while (trimmed.charAt(closingLength) === fenceChar) closingLength++;
+			if (indent <= 3 && closingLength >= fenceLength && trimmed.slice(closingLength).trim().length === 0) {
+				return true;
+			}
+			if (lineEnd < 0) break;
+			lineStart = lineEnd + 1;
+		}
+		return false;
+	}
+
+	#highlightStreamingDiffLines(completedText: string, lang: string | undefined): readonly string[] {
+		const highlightCode = this.#theme.highlightCode;
+		if (!highlightCode) return [];
+		const signature = this.#activeRenderSignature;
+		const cache = this.#streamingDiffLineCache;
+		if (
+			signature &&
+			cache &&
+			completedText.startsWith(cache.text) &&
+			(cache.text.length === completedText.length || completedText.charCodeAt(cache.text.length) === 0x0a) &&
+			cache.lang === lang &&
+			cache.width === signature.width &&
+			cache.paddingX === signature.paddingX &&
+			cache.paddingY === signature.paddingY &&
+			cache.codeBlockIndent === signature.codeBlockIndent &&
+			cache.themeId === signature.themeId &&
+			cache.defaultTextStyleId === signature.defaultTextStyleId &&
+			cache.imageProtocol === signature.imageProtocol &&
+			cache.hyperlinks === signature.hyperlinks &&
+			cache.textSizing === signature.textSizing &&
+			cache.bgColorProbe === signature.bgColorProbe &&
+			cache.headingProbe === signature.headingProbe
+		) {
+			if (completedText.length === cache.text.length) return cache.lines;
+			const lines = cache.lines.slice();
+			const addedText = completedText.slice(cache.text.length + 1);
+			for (const codeLine of addedText.split("\n")) {
+				lines.push(...highlightCode(codeLine, lang));
+			}
+			this.#streamingDiffLineCache = { ...signature, lang, text: completedText, lines };
+			return lines;
+		}
+
+		const lines: string[] = [];
+		for (const codeLine of completedText.split("\n")) {
+			lines.push(...highlightCode(codeLine, lang));
+		}
+		if (signature) {
+			this.#streamingDiffLineCache = { ...signature, lang, text: completedText, lines };
+		}
+		return lines;
+	}
+
 	#renderEmptyPaddingLines(signature: RenderSignature): string[] {
 		const emptyLine = padding(signature.width);
 		const emptyLines: string[] = [];
@@ -1563,17 +1709,8 @@ export class Markdown implements Component {
 
 				const codeIndent = padding(this.#codeBlockIndent);
 				lines.push(this.#theme.codeBlockBorder(`\`\`\`${token.lang || ""}`));
-				if (this.#theme.highlightCode && (!this.transientRenderCache || this.#renderingFrozenPrefix)) {
-					const highlightedLines = this.#theme.highlightCode(token.text, token.lang);
-					for (const hlLine of highlightedLines) {
-						lines.push(`${codeIndent}${hlLine}`);
-					}
-				} else {
-					// Split code by newlines and style each line
-					const codeLines = token.text.split("\n");
-					for (const codeLine of codeLines) {
-						lines.push(`${codeIndent}${this.#theme.codeBlock(codeLine)}`);
-					}
+				for (const bodyLine of this.#renderCodeBodyLines(token, codeIndent)) {
+					lines.push(bodyLine);
 				}
 				lines.push(this.#theme.codeBlockBorder("```"));
 				if (nextTokenType && nextTokenType !== "space") {
@@ -1953,16 +2090,8 @@ export class Markdown implements Component {
 				// Code block in list item
 				const codeIndent = padding(this.#codeBlockIndent);
 				lines.push({ text: this.#theme.codeBlockBorder(`\`\`\`${token.lang || ""}`), nested: false });
-				if (this.#theme.highlightCode && (!this.transientRenderCache || this.#renderingFrozenPrefix)) {
-					const highlightedLines = this.#theme.highlightCode(token.text, token.lang);
-					for (const hlLine of highlightedLines) {
-						lines.push({ text: `${codeIndent}${hlLine}`, nested: false });
-					}
-				} else {
-					const codeLines = token.text.split("\n");
-					for (const codeLine of codeLines) {
-						lines.push({ text: `${codeIndent}${this.#theme.codeBlock(codeLine)}`, nested: false });
-					}
+				for (const bodyLine of this.#renderCodeBodyLines(token, codeIndent)) {
+					lines.push({ text: bodyLine, nested: false });
 				}
 				lines.push({ text: this.#theme.codeBlockBorder("```"), nested: false });
 			} else if (isMathToken(token)) {

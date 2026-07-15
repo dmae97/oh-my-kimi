@@ -32,6 +32,8 @@ export const oauthCredentialSchema = type({
 	"projectId?": "string",
 	"email?": "string",
 	"accountId?": "string",
+	"orgId?": "string",
+	"orgName?": "string",
 });
 
 /** OAuth credential as it appears in broker snapshots — refresh replaced with sentinel. */
@@ -45,6 +47,8 @@ export const remoteOauthCredentialSchema = type({
 	"projectId?": "string",
 	"email?": "string",
 	"accountId?": "string",
+	"orgId?": "string",
+	"orgName?": "string",
 });
 
 export const apiKeyCredentialSchema = type({

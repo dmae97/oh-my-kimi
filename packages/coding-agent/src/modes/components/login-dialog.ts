@@ -164,6 +164,11 @@ export class LoginDialogComponent extends Container {
 		this.#tui.requestRender();
 	}
 
+	/** Route non-bracketed paste transports into the active login input. */
+	pasteText(text: string): void {
+		this.#input.pasteText(text);
+	}
+
 	handleInput(data: string): void {
 		const kb = getKeybindings();
 

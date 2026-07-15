@@ -35,6 +35,7 @@ import {
 	buildIrcMessageCard,
 	normalizeToolArgs,
 	resolveAssistantErrorPresentation,
+	splitAssistantMessageToolTimeline,
 } from "../utils/transcript-render-helpers";
 import { createAdvisorMessageCard } from "./advisor-message";
 import { AssistantMessageComponent } from "./assistant-message";
@@ -273,12 +274,13 @@ export class ChatTranscriptBuilder {
 	#appendAssistantMessage(message: Extract<AgentMessage, { role: "assistant" }>): void {
 		const hideThinkingBlock = this.deps.hideThinkingBlock?.() ?? false;
 		const proseOnlyThinking = this.deps.proseOnlyThinking ? this.deps.proseOnlyThinking() : true;
+		const timeline = splitAssistantMessageToolTimeline(message);
 		const assistantComponent = new AssistantMessageComponent(
-			message,
+			timeline.beforeTools,
 			hideThinkingBlock,
 			() => this.deps.requestRender(),
 			this.deps.getMessageRenderer ? undefined : [], // placeholder for thinkingRenderers
-			undefined, // placeholder for imageBudget
+			this.deps.ui.imageBudget,
 			proseOnlyThinking,
 		);
 		this.container.addChild(assistantComponent);
@@ -301,11 +303,24 @@ export class ChatTranscriptBuilder {
 		const errorPresentation = resolveAssistantErrorPresentation(message);
 		const hasErrorStop = errorPresentation.kind === "full";
 		const errorMessage = hasErrorStop ? errorPresentation.text : null;
+		const appendAssistantSegment = (segment: Extract<AgentMessage, { role: "assistant" }> | undefined) => {
+			if (!segment || !assistantHasVisibleContent(segment)) return;
+			const component = new AssistantMessageComponent(
+				segment,
+				hideThinkingBlock,
+				() => this.deps.requestRender(),
+				this.deps.getMessageRenderer ? undefined : [],
+				undefined,
+				proseOnlyThinking,
+			);
+			this.container.addChild(component);
+		};
 
 		for (const content of message.content) {
 			if (content.type !== "toolCall") continue;
 			this.#resolveWaitingPoll(content.name);
 
+			const afterToolSegment = timeline.afterToolCalls.get(content.id);
 			if (
 				content.name === "read" &&
 				readArgsHaveTarget(content.arguments) &&
@@ -319,10 +334,15 @@ export class ChatTranscriptBuilder {
 						false,
 						content.id,
 					);
+				} else if (afterToolSegment) {
+					const group = this.#ensureReadGroup();
+					group.updateArgs(content.arguments, content.id);
+					this.#pendingTools.set(content.id, group);
 				} else {
 					const normalizedArgs = normalizeToolArgs(content.arguments);
 					this.#readArgs.set(content.id, normalizedArgs);
 				}
+				appendAssistantSegment(afterToolSegment);
 				continue;
 			}
 
@@ -332,8 +352,9 @@ export class ChatTranscriptBuilder {
 				content.name,
 				content.arguments,
 				{
-					// Images can't be sliced through the scroll viewport; keep them off.
-					showImages: false,
+					// Stable ids and Kitty placeholder cells keep images anchored
+					// while the transcript viewport scrolls and reflows.
+					showImages: settings.get("terminal.showImages"),
 					editFuzzyThreshold: settings.get("edit.fuzzyThreshold"),
 					editAllowFuzzy: settings.get("edit.fuzzyMatch"),
 					liveRegion: this.container,
@@ -355,6 +376,7 @@ export class ChatTranscriptBuilder {
 			} else {
 				this.#pendingTools.set(content.id, component);
 			}
+			appendAssistantSegment(afterToolSegment);
 		}
 
 		this.#pendingUsage =

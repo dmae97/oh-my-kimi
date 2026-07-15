@@ -93,6 +93,7 @@ describe("mcp oauth flow", () => {
 			{
 				authorizationUrl: "https://www.figma.com/oauth/mcp",
 				tokenUrl: "https://api.figma.com/v1/oauth/token",
+				registrationUrl: "https://www.figma.com/oauth/register",
 				scopes,
 				fetch: mockFigmaRegistration(payload => {
 					registrationPayload = payload;
@@ -573,6 +574,7 @@ describe("mcp oauth flow", () => {
 				{
 					authorizationUrl: "https://provider.example/authorize",
 					tokenUrl: "https://provider.example/token",
+					registrationUrl: "https://provider.example/register",
 					// No clientId, no redirectUri — pure DCR flow.
 					callbackPort: blockerPort,
 					fetch: fetchImpl,
@@ -618,6 +620,7 @@ describe("mcp oauth flow", () => {
 			{
 				authorizationUrl: "https://www.figma.com/oauth/mcp",
 				tokenUrl: "https://api.figma.com/v1/oauth/token",
+				registrationUrl: "https://www.figma.com/oauth/register",
 				fetch: mockFigmaRegistration(() => {}),
 			},
 			{},
@@ -683,6 +686,7 @@ describe("mcp oauth flow", () => {
 			{
 				authorizationUrl: "https://www.figma.com/oauth/mcp",
 				tokenUrl: "https://api.figma.com/v1/oauth/token",
+				registrationUrl: "https://api.figma.com/v1/oauth/mcp/register",
 				fetch: fetchImpl,
 			},
 			{},

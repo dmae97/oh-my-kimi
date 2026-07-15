@@ -83,27 +83,96 @@ const LOOSE_HASHLINE_HEADER_RE = /^\s*\[[^#\r\n]+#[^ \t\r\n]*\]\s*$/;
 const EXECUTABLE_NOTICE = "[Notice: Made executable via chmod +x]";
 
 const BULK_DIRECTIVE_RE = /^#?(\d+)\s*[:=]\s*(@ours|@theirs|@base|@both)$/;
+/**
+ * The head of a per-id directive line — `<id>:` / `<id>=` (optionally `#`-prefixed),
+ * regardless of whether its value is a valid `@side` token. Used only to sharpen the
+ * error message when a directive block is malformed (e.g. `15: some literal text`).
+ */
+const BULK_DIRECTIVE_HEAD_RE = /^#?\d+\s*[:=]/;
+
+function truncateDirectiveLine(line: string): string {
+	return line.length > 60 ? `${line.slice(0, 57)}…` : line;
+}
 
 /**
  * Parse `conflict://*` per-id directive content: every non-empty line must be
- * `<id>: @side` (also accepted: `#<id> = @side`). Returns `null` when the
- * content is not directive-shaped (→ uniform bulk mode); throws on duplicate
- * ids so a typo never silently drops a resolution.
+ * `<id>: @side` (also accepted: `#<id> = @side`), where `@side` is one of
+ * `@ours` / `@theirs` / `@base` / `@both`.
+ *
+ * Returns `null` only when NO line is directive-shaped (→ uniform bulk mode).
+ * Throws on duplicate ids, and — critically — on a *partial* directive block:
+ * content that mixes valid `<id>: @side` lines with lines that aren't. Without
+ * that guard a per-id write carrying any non-token value (a literal or
+ * multi-line replacement, e.g. `15: <multi-line content>`) fell through to
+ * uniform bulk mode, which pasted the raw directive text verbatim into every
+ * block and still reported success. Per-id bulk is token-only; literal or
+ * multi-line replacements must go through individual `conflict://<N>` writes.
  */
 function parseBulkDirectives(content: string): Map<number, string> | null {
 	const map = new Map<number, string>();
+	const stray: string[] = [];
+	let sawDirective = false;
 	for (const raw of content.split("\n")) {
 		const line = raw.trim();
 		if (line.length === 0) continue;
 		const match = line.match(BULK_DIRECTIVE_RE);
-		if (!match) return null;
+		if (!match) {
+			stray.push(line);
+			continue;
+		}
+		sawDirective = true;
 		const id = Number.parseInt(match[1], 10);
 		if (map.has(id)) {
 			throw new ToolError(`Bulk directive lists conflict #${id} twice — each id may appear once.`);
 		}
 		map.set(id, match[2]);
 	}
-	return map.size > 0 ? map : null;
+	// No directive lines at all → not a per-id block; caller uses uniform mode.
+	if (!sawDirective) return null;
+	if (stray.length > 0) {
+		const sample = stray[0]!;
+		const tokenHint = BULK_DIRECTIVE_HEAD_RE.test(sample)
+			? `Per-id bulk only accepts the tokens @ours/@theirs/@base/@both — one side per id, single line. `
+			: "";
+		throw new ToolError(
+			`Malformed \`conflict://*\` per-id block: ${stray.length} line(s) are not \`<id>: @side\` directives (first: \`${truncateDirectiveLine(sample)}\`). ` +
+				tokenHint +
+				`Literal or multi-line replacement content isn't supported in a per-id block — resolve those blocks with individual \`write({ path: "conflict://<N>", content })\` calls (you can issue several at once). ` +
+				`For a pure pick-a-side pass, make every non-empty line \`<id>: @ours\` (or @theirs/@base/@both).`,
+		);
+	}
+	return map;
+}
+
+/**
+ * Resolve per-id directives, preferring the pre-strip `raw` content and falling
+ * back to the hashline-stripped `stripped` content.
+ *
+ * Raw is preferred because the `<id>:` directive heads look exactly like
+ * hashline `LINE:` prefixes and would be eaten by stripping. When the two
+ * contents are identical (hashline mode off) a single parse decides everything,
+ * so a malformed-block error propagates straight through — the previous
+ * `?? parseBulkDirectives(...)` chain would have swallowed it and silently
+ * degraded to uniform bulk mode, pasting the raw directive text into every
+ * block. When they differ, a malformed raw block still defers to a *clean*
+ * stripped block, but otherwise surfaces its error rather than degrading.
+ */
+function resolveBulkDirectives(raw: string, stripped: string): Map<number, string> | null {
+	if (raw === stripped) return parseBulkDirectives(raw);
+	let rawResult: Map<number, string> | null;
+	try {
+		rawResult = parseBulkDirectives(raw);
+	} catch (rawError) {
+		let fallback: Map<number, string> | null = null;
+		try {
+			fallback = parseBulkDirectives(stripped);
+		} catch {
+			fallback = null;
+		}
+		if (fallback) return fallback;
+		throw rawError;
+	}
+	return rawResult ?? parseBulkDirectives(stripped);
 }
 
 const writeSchema = type({
@@ -716,7 +785,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		// winner — one call instead of one write per conflict. Parsed from the
 		// PRE-strip content: hashline prefix stripping would otherwise eat the
 		// `<id>: ` heads as echoed line numbers.
-		const directives = parseBulkDirectives(rawContent) ?? parseBulkDirectives(replacementContent);
+		const directives = resolveBulkDirectives(rawContent, replacementContent);
 		if (directives) {
 			const known = new Set(allEntries.map(entry => entry.id));
 			const unknown = [...directives.keys()].filter(id => !known.has(id));
@@ -898,9 +967,13 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 					}
 					return { content: [{ type: "text", text: resultText }], details: {} };
 				}
-				// Schemes without a `write` hook fall through to existing logic
-				// (local:// resolves to a backing file via plan-mode-guard) or are
-				// rejected downstream when no backing file exists.
+				if (scheme !== "local") {
+					throw new ToolError(
+						`${scheme}:// URLs are read-only for write; use the protocol-specific tool for mutations.`,
+					);
+				}
+				// local:// is backed by the session-local artifact sandbox and is
+				// resolved by resolvePlanPath below so write/read share the same root.
 			}
 
 			const conflictUri = parseConflictUri(path);

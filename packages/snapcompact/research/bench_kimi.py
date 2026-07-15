@@ -42,16 +42,25 @@ def fireworks_complete(messages: list[dict], max_tokens: int) -> tuple[str, dict
         return [
             {"type": "text", "text": b["text"]}
             if "text" in b
-            else {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_png_b64(b['image_path'])}"}}
+            else {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/png;base64,{_png_b64(b['image_path'])}"
+                },
+            }
             for b in blocks
         ]
 
     body = {
         "model": FW_MODEL,
-        "messages": [{"role": m["role"], "content": content(m["content"])} for m in messages],
+        "messages": [
+            {"role": m["role"], "content": content(m["content"])} for m in messages
+        ],
         "max_tokens": max_tokens,
     }
-    out = _post(FW_URL, body, {"authorization": f"Bearer {load_env_key('FIREWORKS_API_KEY')}"})
+    out = _post(
+        FW_URL, body, {"authorization": f"Bearer {load_env_key('FIREWORKS_API_KEY')}"}
+    )
     choice = (out.get("choices") or [{}])[0]
     text = (choice.get("message") or {}).get("content") or ""
     if isinstance(text, list):
@@ -62,9 +71,15 @@ def fireworks_complete(messages: list[dict], max_tokens: int) -> tuple[str, dict
         "out": u.get("completion_tokens", 0),
         "cache_w": 0,
         "cache_r": 0,
-        "reasoning": (u.get("completion_tokens_details") or {}).get("reasoning_tokens", 0),
+        "reasoning": (u.get("completion_tokens_details") or {}).get(
+            "reasoning_tokens", 0
+        ),
     }
-    stop = "max_tokens" if choice.get("finish_reason") == "length" else (choice.get("finish_reason") or "")
+    stop = (
+        "max_tokens"
+        if choice.get("finish_reason") == "length"
+        else (choice.get("finish_reason") or "")
+    )
     return text, usage, stop
 
 
@@ -81,28 +96,50 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--shape-json", required=True)
     ap.add_argument("--name", required=True)
-    ap.add_argument("--route", default="openrouter", choices=["openrouter", "fireworks"])
+    ap.add_argument(
+        "--route", default="openrouter", choices=["openrouter", "fireworks"]
+    )
     ap.add_argument("--chars", type=int, default=400_000)
     ap.add_argument("--questions", type=int, default=25)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--max-tokens", type=int, default=32768)
-    ap.add_argument("--frame-tokens", type=float, default=None, help="expected billed tokens per frame (bill sanity)")
+    ap.add_argument(
+        "--frame-tokens",
+        type=float,
+        default=None,
+        help="expected billed tokens per frame (bill sanity)",
+    )
     ap.add_argument("--fresh", action="store_true")
     args = ap.parse_args()
 
     shape, label = json.loads(args.shape_json), args.name
-    keys = {"openrouter": load_env_key("OPENROUTER_API_KEY"), "anthropic": "", "openai": ""}
+    keys = {
+        "openrouter": load_env_key("OPENROUTER_API_KEY"),
+        "anthropic": "",
+        "openai": "",
+    }
     paras = squad.load_paragraphs(CACHE)
     flow, offsets = squad.build_flow(paras, args.chars)
-    questions = squad.sample_chunk_questions(paras, offsets, 0, len(flow), args.questions, args.seed)
+    questions = squad.sample_chunk_questions(
+        paras, offsets, 0, len(flow), args.questions, args.seed
+    )
 
     # Production frames, same dir-keying convention as mono_prod.py (reuses its renders).
-    frame_dir = CACHE / f"prod-frames-{label}-{sha8(flow, json.dumps(shape, sort_keys=True))}"
+    frame_dir = (
+        CACHE / f"prod-frames-{label}-{sha8(flow, json.dumps(shape, sort_keys=True))}"
+    )
     if not frame_dir.exists() or not any(frame_dir.iterdir()):
         flow_file = CACHE / f"prod-flow-{sha8(flow)}.txt"
         flow_file.write_text(flow)
         subprocess.run(
-            ["bun", str(HERE / "render_pages.ts"), str(flow_file), json.dumps(shape), str(frame_dir)], check=True
+            [
+                "bun",
+                str(HERE / "render_pages.ts"),
+                str(flow_file),
+                json.dumps(shape),
+                str(frame_dir),
+            ],
+            check=True,
         )
     pngs = sorted(frame_dir.glob("page-*.png"))
     n_frames = len(pngs)
@@ -130,37 +167,63 @@ def main() -> None:
             continue
         chunk_pngs = pngs[lo:hi]
         frames_sent += len(chunk_pngs)
-        preamble = load_prompt("qa-image-multi.md").format(k=len(chunk_pngs), cols=cols, rows=rows)
-        ctx = [{"text": preamble}, *({"image_path": p} for p in chunk_pngs), {"text": "End of images.", "cache": True}]
+        preamble = load_prompt("qa-image-multi.md").format(
+            k=len(chunk_pngs), cols=cols, rows=rows
+        )
+        ctx = [
+            {"text": preamble},
+            *({"image_path": p} for p in chunk_pngs),
+            {"text": "End of images.", "cache": True},
+        ]
         q_block = "\n".join(f"{i + 1}. {q['q']}" for i, q in enumerate(qs))
         messages = [{"role": "user", "content": [*ctx, {"text": q_block}]}]
-        tag = "qa-mono-prod-chunk8" if args.route == "openrouter" else "qa-mono-prod-chunk8-fw"
+        tag = (
+            "qa-mono-prod-chunk8"
+            if args.route == "openrouter"
+            else "qa-mono-prod-chunk8-fw"
+        )
         if args.route == "openrouter":
             fn = lambda m=messages: dict(  # noqa: E731
-                zip(("text", "usage", "stop"), llm_complete(keys, OR_MODEL, m, max_tokens=args.max_tokens, effort=None))
+                zip(
+                    ("text", "usage", "stop"),
+                    llm_complete(
+                        keys, OR_MODEL, m, max_tokens=args.max_tokens, effort=None
+                    ),
+                )
             )
         else:
             fn = lambda m=messages: dict(  # noqa: E731
                 zip(("text", "usage", "stop"), fireworks_complete(m, args.max_tokens))
             )
-        qa = cached(OR_MODEL, tag, {"messages": messages, "effort": None}, fn, args.fresh)
+        qa = cached(
+            OR_MODEL, tag, {"messages": messages, "effort": None}, fn, args.fresh
+        )
         for q, a in zip(qs, squad.parse_numbered(qa["text"], len(qs))):
             answers_by_q[q["q"]] = a
         usages.append(qa["usage"])
         stops.append(qa["stop"])
-        print(f"  chunk {ci} frames[{lo}:{hi}] nq={len(qs)} in={qa['usage']['in']} stop={qa['stop']}")
+        print(
+            f"  chunk {ci} frames[{lo}:{hi}] nq={len(qs)} in={qa['usage']['in']} stop={qa['stop']}"
+        )
 
     rows_out = [
         {
-            "model": OR_MODEL, "cond": f"bench-{label}", "pos_rel": q["pos_rel"], "q": q["q"],
-            "answer": answers_by_q.get(q["q"], ""), "golds": q["golds"],
+            "model": OR_MODEL,
+            "cond": f"bench-{label}",
+            "pos_rel": q["pos_rel"],
+            "q": q["q"],
+            "answer": answers_by_q.get(q["q"], ""),
+            "golds": q["golds"],
             "em": squad.exact_match(answers_by_q.get(q["q"], ""), q["golds"]),
             "f1": squad.f1(answers_by_q.get(q["q"], ""), q["golds"]),
             "abstained": "unreadable" in answers_by_q.get(q["q"], "").lower(),
         }
         for q in questions
     ]
-    u = {k: sum(x[k] for x in usages) for k in ("in", "out", "cache_w", "cache_r", "reasoning")}
+    u = {
+        k: sum(x[k] for x in usages)
+        for k in ("in", "out", "cache_w", "cache_r", "reasoning")
+    }
     price_in, price_out = MODELS[OR_MODEL] if args.route == "openrouter" else FW_PRICE
     cost = u["in"] / 1e6 * price_in + u["out"] / 1e6 * price_out
     quart = []
@@ -170,16 +233,30 @@ def main() -> None:
     expect_frame = args.frame_tokens or (math.ceil(size / 28) ** 2 + 5)
     bill_ratio = u["in"] / (frames_sent * expect_frame) if frames_sent else float("nan")
     summary = {
-        "cond": f"bench-{label}", "route": args.route, "n": len(rows_out), "imgs": n_frames,
-        "frames_sent": frames_sent, "chunks": chunks,
+        "cond": f"bench-{label}",
+        "route": args.route,
+        "n": len(rows_out),
+        "imgs": n_frames,
+        "frames_sent": frames_sent,
+        "chunks": chunks,
         "em": sum(r["em"] for r in rows_out) / len(rows_out),
         "f1": sum(r["f1"] for r in rows_out) / len(rows_out),
         "abst": sum(r["abstained"] for r in rows_out),
-        "tok_in": u["in"], "tok_out": u["out"], "reas": u["reasoning"], "cost": cost,
-        "expect_frame_tokens": expect_frame, "bill_ratio": round(bill_ratio, 3),
-        "chars_per_dollar": args.chars / cost, "chars_per_mtok_in": args.chars / u["in"] * 1e6,
-        "stop": next((s for s in stops if s == "max_tokens"), stops[-1] if stops else ""),
-        "q1": quart[0], "q2": quart[1], "q3": quart[2], "q4": quart[3],
+        "tok_in": u["in"],
+        "tok_out": u["out"],
+        "reas": u["reasoning"],
+        "cost": cost,
+        "expect_frame_tokens": expect_frame,
+        "bill_ratio": round(bill_ratio, 3),
+        "chars_per_dollar": args.chars / cost,
+        "chars_per_mtok_in": args.chars / u["in"] * 1e6,
+        "stop": next(
+            (s for s in stops if s == "max_tokens"), stops[-1] if stops else ""
+        ),
+        "q1": quart[0],
+        "q2": quart[1],
+        "q3": quart[2],
+        "q4": quart[3],
     }
     out_dir = RESULTS / f"bench-kimi-{label}"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -190,7 +267,9 @@ def main() -> None:
         f"tok_in={u['in']} bill_ratio={summary['bill_ratio']} ${cost:.3f} "
         f"chars/$={summary['chars_per_dollar']:.0f}"
     )
-    print("F1 by quartile: " + "  ".join(f"q{i + 1}={v:.3f}" for i, v in enumerate(quart)))
+    print(
+        "F1 by quartile: " + "  ".join(f"q{i + 1}={v:.3f}" for i, v in enumerate(quart))
+    )
 
 
 if __name__ == "__main__":

@@ -76,11 +76,11 @@ export class AutoLearnController {
 			return;
 		}
 		if (event.type === "agent_end") {
-			this.#onAgentEnd();
+			this.#onAgentEnd(event);
 		}
 	}
 
-	#onAgentEnd(): void {
+	#onAgentEnd(event: Extract<AgentSessionEvent, { type: "agent_end" }>): void {
 		// Snapshot and reset every turn: the counter describes only the
 		// just-finished turn, so below-threshold, disabled, and plan-mode stops
 		// must not let tool calls accumulate into a later turn.
@@ -94,6 +94,18 @@ export class AutoLearnController {
 		if (this.#suppressNext) {
 			this.#suppressNext = false;
 			return;
+		}
+		// Never nudge a turn that ended in an abort (ESC, cancel, etc.). The
+		// abort flag on the session is unreliable by the time agent_end is
+		// deferred to subscribers; read stopReason from the event messages.
+		for (let i = event.messages.length - 1; i >= 0; i--) {
+			const message = event.messages[i];
+			if (message && typeof message === "object" && "role" in message && message.role === "assistant") {
+				if ("stopReason" in message && message.stopReason === "aborted") {
+					return;
+				}
+				break;
+			}
 		}
 		// Honor a live opt-out: the subscription outlives the setting, so re-check
 		// the current flag rather than trusting install-time state.
@@ -132,7 +144,7 @@ export class AutoLearnController {
 					display: false,
 					attribution: "user",
 				},
-				{ deliverAs: "nextTurn", triggerTurn: true },
+				{ deliverAs: "nextTurn", triggerTurn: true, acceptTerminalEmptyStop: true },
 			)
 			.then(started => {
 				if (!started) this.#suppressNext = false;

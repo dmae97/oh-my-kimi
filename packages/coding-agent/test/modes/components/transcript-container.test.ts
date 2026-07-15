@@ -348,6 +348,26 @@ describe("TranscriptContainer", () => {
 		expect(container.render(40)).toEqual(["history", "", "live", "", "finalized-below-0", "finalized-below-1"]);
 		expect(container.getNativeScrollbackLiveRegionStart()).toBe(2);
 	});
+	it("drops committed finalized head rows and rehydrates them for a full replay", () => {
+		const container = new TranscriptContainer();
+		const history = new CountingFinalizedBlock(["committed-history"]);
+		const tail = new CountingFinalizedBlock(["retained-tail"]);
+		container.addChild(history);
+		container.addChild(tail);
+
+		expect(container.render(40)).toEqual(["committed-history", "", "retained-tail"]);
+		container.setNativeScrollbackCommittedRows(2);
+		expect(container.render(40)).toEqual(["retained-tail"]);
+		expect(history.renderCount).toBe(1);
+
+		container.prepareNativeScrollbackReplay();
+		// The TUI supplies its previous committed count immediately before the
+		// replay render; the complete frame must still survive this one compose.
+		container.setNativeScrollbackCommittedRows(2);
+		expect(container.render(40)).toEqual(["committed-history", "", "retained-tail"]);
+		expect(history.renderCount).toBe(2);
+	});
+
 	it("does not re-render finalized rows already committed to native scrollback", () => {
 		const container = new TranscriptContainer();
 		const committed = new CountingFinalizedBlock(["committed"]);
@@ -655,6 +675,19 @@ describe("TranscriptContainer isBlockUncommitted", () => {
 		expect(container.isBlockUncommitted(block)).toBe(false);
 	});
 
+	it("keeps compacted committed blocks marked committed", () => {
+		const container = new TranscriptContainer();
+		const committed = new StreamingBlock(["committed"], true);
+		container.addChild(committed);
+		container.addChild(new StreamingBlock(["tail"], true));
+
+		expect(container.render(40)).toEqual(["committed", "", "tail"]);
+		container.setNativeScrollbackCommittedRows(2);
+		expect(container.render(40)).toEqual(["tail"]);
+
+		expect(container.isBlockUncommitted(committed)).toBe(false);
+	});
+
 	it("keeps empty-render blocks uncommitted after committed rows advance", () => {
 		const container = new TranscriptContainer();
 		container.addChild(new MutableBlock(["history"]));
@@ -666,6 +699,26 @@ describe("TranscriptContainer isBlockUncommitted", () => {
 		expect(container.isBlockUncommitted(empty)).toBe(true);
 		container.setNativeScrollbackCommittedRows(100);
 		expect(container.isBlockUncommitted(empty)).toBe(true);
+	});
+
+	it("survives sparse compacted segment holes when checking uncommitted status", () => {
+		const container = new TranscriptContainer();
+		const committed = new StreamingBlock(["committed"], true);
+		const live = new StreamingBlock(["live"], true);
+		container.addChild(committed);
+		container.addChild(live);
+
+		expect(container.render(40)).toEqual(["committed", "", "live"]);
+		container.setNativeScrollbackCommittedRows(2);
+		// Compaction first rewrites the compacted prefix into zero-row placeholders.
+		expect(container.render(40)).toEqual(["live"]);
+		// The next render only repopulates from #compactedChildStart, leaving a
+		// sparse hole at the compacted index. Retiring IRC/ephemeral cards walks
+		// every segment and must not crash on those undefined entries.
+		expect(container.render(40)).toEqual(["live"]);
+		expect(() => container.isBlockUncommitted(live)).not.toThrow();
+		expect(() => container.isBlockUncommitted(committed)).not.toThrow();
+		expect(container.isBlockUncommitted(committed)).toBe(false);
 	});
 });
 

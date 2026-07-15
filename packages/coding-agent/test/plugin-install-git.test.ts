@@ -23,12 +23,38 @@ import * as piUtils from "@oh-my-pi/pi-utils";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import type { Subprocess } from "bun";
 
+function textStream(text: string): ReadableStream<Uint8Array> {
+	const body = new Response(text).body;
+	if (!body) {
+		throw new Error("Failed to create response stream");
+	}
+	return body;
+}
+
 function emptyStream(): ReadableStream<Uint8Array> {
 	const body = new Response("").body;
 	if (!body) {
 		throw new Error("Failed to create empty response stream");
 	}
 	return body;
+}
+
+async function runCommand(command: string[], cwd: string): Promise<string> {
+	const proc = Bun.spawn(command, {
+		cwd,
+		stdin: "ignore",
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const [exitCode, stdout, stderr] = await Promise.all([
+		proc.exited,
+		new Response(proc.stdout).text(),
+		new Response(proc.stderr).text(),
+	]);
+	if (exitCode !== 0) {
+		throw new Error(`${command.join(" ")} failed (${exitCode}): ${stderr}`);
+	}
+	return stdout.trim();
 }
 
 describe("PluginManager.install with git sources", () => {
@@ -161,7 +187,7 @@ describe("PluginManager.install with git sources", () => {
 		expect(result.version).toBe("1.0.0");
 	});
 
-	test("re-installing a github plugin runs `bun update` to refresh the stale lockfile pin (#3063)", async () => {
+	test("refreshes Bun's git cache before updating a re-installed github plugin (#3063)", async () => {
 		// Seed plugins/package.json + node_modules with a previously-installed
 		// github plugin. `findGitPackageName` matches the new install spec to
 		// this existing dep (by repository identity), which is the signal the
@@ -184,6 +210,8 @@ describe("PluginManager.install with git sources", () => {
 			path.join(seedDir, "package.json"),
 			JSON.stringify({ name: "stale-plugin", version: "0.1.0" }, null, 2),
 		);
+		const cacheDir = path.join(tmpRoot, "bun-cache");
+		await fs.mkdir(cacheDir);
 
 		const spawnedCommands: string[][] = [];
 		vi.spyOn(Bun, "spawn").mockImplementation(((cmd: string[]) => {
@@ -200,6 +228,16 @@ describe("PluginManager.install with git sources", () => {
 					exited: Promise.resolve(0),
 				} as Subprocess;
 			}
+			if (cmd[1] === "pm") {
+				const stdout = new Response(`${cacheDir}\n`).body;
+				if (!stdout) throw new Error("Failed to create cache path stream");
+				return {
+					pid: 2,
+					stdout,
+					stderr: emptyStream(),
+					exited: Promise.resolve(0),
+				} as Subprocess;
+			}
 			// The follow-up call: simulate bun resolving the upstream HEAD to a
 			// newer commit and bumping the on-disk version. The manager should
 			// read the new version from package.json after this step returns.
@@ -211,7 +249,7 @@ describe("PluginManager.install with git sources", () => {
 				);
 			})();
 			return {
-				pid: 2,
+				pid: 3,
 				stdout: emptyStream(),
 				stderr: emptyStream(),
 				exited: prepare.then(() => 0),
@@ -224,8 +262,92 @@ describe("PluginManager.install with git sources", () => {
 		expect(result.version).toBe("0.1.6");
 		expect(spawnedCommands).toEqual([
 			["bun", "install", "github:foo/bar"],
+			["bun", "pm", "cache"],
 			["bun", "update", "stale-plugin"],
 		]);
+	});
+
+	test("removes an existing pinned git dependency before installing the unpinned source (#4960)", async () => {
+		await Bun.write(
+			pluginsPkgJson,
+			JSON.stringify(
+				{
+					name: "omp-plugins",
+					private: true,
+					dependencies: { "replaced-plugin": "github:foo/bar#v1.0.0" },
+				},
+				null,
+				2,
+			),
+		);
+		const seedDir = path.join(pluginsNodeModules, "replaced-plugin");
+		await fs.mkdir(seedDir, { recursive: true });
+		await Bun.write(
+			path.join(seedDir, "package.json"),
+			JSON.stringify({ name: "replaced-plugin", version: "1.0.0" }, null, 2),
+		);
+
+		const spawnedCommands: string[][] = [];
+		vi.spyOn(Bun, "spawn").mockImplementation(((cmd: string[]) => {
+			spawnedCommands.push([...cmd]);
+			if (cmd[1] === "install") {
+				expect(cmd).toEqual(["bun", "install", "github:foo/bar"]);
+				const prepare = (async () => {
+					const packageJson = await Bun.file(pluginsPkgJson).json();
+					expect(packageJson.dependencies?.["replaced-plugin"]).toBeUndefined();
+
+					await Bun.write(
+						pluginsPkgJson,
+						JSON.stringify(
+							{
+								name: "omp-plugins",
+								private: true,
+								dependencies: { "replaced-plugin": "github:foo/bar" },
+							},
+							null,
+							2,
+						),
+					);
+					await Bun.write(
+						path.join(seedDir, "package.json"),
+						JSON.stringify({ name: "replaced-plugin", version: "1.1.0" }, null, 2),
+					);
+				})();
+				return {
+					pid: 1,
+					stdout: emptyStream(),
+					stderr: emptyStream(),
+					exited: prepare.then(() => 0),
+				} as Subprocess;
+			}
+
+			if (cmd[1] === "pm") {
+				expect(cmd).toEqual(["bun", "pm", "cache"]);
+				return {
+					pid: 3,
+					stdout: textStream(path.join(tmpRoot, "no-such-bun-cache")),
+					stderr: emptyStream(),
+					exited: Promise.resolve(0),
+				} as Subprocess;
+			}
+
+			expect(cmd).toEqual(["bun", "update", "replaced-plugin"]);
+			return {
+				pid: 2,
+				stdout: emptyStream(),
+				stderr: emptyStream(),
+				exited: Promise.resolve(0),
+			} as Subprocess;
+		}) as typeof Bun.spawn);
+
+		const mgr = new PluginManager(tmpRoot);
+		const result = await mgr.install("github:foo/bar");
+
+		expect(result.name).toBe("replaced-plugin");
+		expect(result.version).toBe("1.1.0");
+		expect(spawnedCommands[0]).toEqual(["bun", "install", "github:foo/bar"]);
+		const packageJson = await Bun.file(pluginsPkgJson).json();
+		expect(packageJson.dependencies).toEqual({ "replaced-plugin": "github:foo/bar" });
 	});
 
 	test("first-time github install does NOT run `bun update` (no existing pin to refresh)", async () => {
@@ -328,6 +450,71 @@ describe("PluginManager.install with git sources", () => {
 			new Promise<never>((_, reject) => setTimeout(() => reject(new Error("install deadlocked")), 2000)),
 		]);
 		expect(installed.name).toBe("real-name");
+	});
+
+	test("refreshes Bun's cached git clone before updating an existing plugin (#5401)", async () => {
+		const sourceDir = path.join(tmpRoot, "source");
+		const httpRoot = path.join(tmpRoot, "http");
+		const remoteDir = path.join(httpRoot, "testuser", "remote.git");
+		const cacheDir = path.join(tmpRoot, "bun-cache");
+		await fs.mkdir(sourceDir, { recursive: true });
+		await fs.mkdir(path.dirname(remoteDir), { recursive: true });
+		await runCommand(["git", "init", "-b", "main"], sourceDir);
+		await runCommand(["git", "config", "user.name", "Plugin test"], sourceDir);
+		await runCommand(["git", "config", "user.email", "plugin-test@example.com"], sourceDir);
+		await Bun.write(
+			path.join(sourceDir, "package.json"),
+			JSON.stringify({ name: "@test/pi-package", version: "1.0.0" }, null, 2),
+		);
+		await runCommand(["git", "add", "package.json"], sourceDir);
+		await runCommand(["git", "commit", "-m", "version A"], sourceDir);
+		await runCommand(["git", "clone", "--bare", sourceDir, remoteDir], tmpRoot);
+		await runCommand(["git", "update-server-info"], remoteDir);
+
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(request) {
+				const url = new URL(request.url);
+				const relativePath = decodeURIComponent(url.pathname).replace(/^\/+/, "");
+				const filePath = path.resolve(httpRoot, relativePath);
+				if (!filePath.startsWith(`${httpRoot}${path.sep}`)) {
+					return new Response("Not found", { status: 404 });
+				}
+				try {
+					return new Response(await Bun.file(filePath).arrayBuffer(), {
+						headers: { "Content-Type": "application/octet-stream" },
+					});
+				} catch {
+					return new Response("Not found", { status: 404 });
+				}
+			},
+		});
+
+		try {
+			await Bun.write(
+				pluginsPkgJson,
+				JSON.stringify({ name: "omp-plugins", private: true, dependencies: {} }, null, 2),
+			);
+			await Bun.write(path.join(pluginsDir, "bunfig.toml"), `[install.cache]\ndir = ${JSON.stringify(cacheDir)}\n`);
+			const spec = `git+http://127.0.0.1:${server.port}/testuser/remote.git#main`;
+			const mgr = new PluginManager(tmpRoot);
+			expect((await mgr.install(spec)).version).toBe("1.0.0");
+
+			await Bun.write(
+				path.join(sourceDir, "package.json"),
+				JSON.stringify({ name: "@test/pi-package", version: "2.0.0" }, null, 2),
+			);
+			await runCommand(["git", "add", "package.json"], sourceDir);
+			await runCommand(["git", "commit", "-m", "version B"], sourceDir);
+			await runCommand(["git", "push", remoteDir, "main"], sourceDir);
+			await runCommand(["git", "update-server-info"], remoteDir);
+
+			const reinstalled = await mgr.install(spec);
+			expect(reinstalled.version).toBe("2.0.0");
+		} finally {
+			await server.stop(true);
+		}
 	});
 
 	test("rejects git specs containing shell metacharacters", async () => {

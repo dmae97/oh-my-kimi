@@ -463,6 +463,63 @@ describe("write resolves conflicts via conflict://N", () => {
 		await expect(promise).rejects.toThrow(/unknown conflict id\(s\) #7/);
 	});
 
+	it("rejects a per-id block that mixes directives with literal content instead of leaking it", async () => {
+		const filePath = path.join(tempDir, "directives-mixed.ts");
+		await Bun.write(filePath, TWO_BLOCKS);
+		const original = await Bun.file(filePath).text();
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+		const write = await getTool(session, "write");
+
+		await read.execute("read-directives-mixed", { path: "directives-mixed.ts" });
+		// #1 picks a side, but #2 carries multi-line literal content. Previously this
+		// fell through to uniform bulk mode and pasted the raw directive text into
+		// every block while reporting success. It must now hard-fail.
+		const promise = write.execute("write-directives-mixed", {
+			path: "conflict://*",
+			content: "1: @ours\n2: combined line A\ncombined line B\n",
+		});
+		await expect(promise).rejects.toThrow(/Malformed `conflict:\/\/\*` per-id block/);
+		// File untouched — the markers are still present, nothing leaked.
+		expect(await Bun.file(filePath).text()).toBe(original);
+		// Ids stay registered for a corrected retry.
+		expect(session.conflictHistory?.get(1)).toBeDefined();
+		expect(session.conflictHistory?.get(2)).toBeDefined();
+	});
+
+	it("rejects a per-id line whose value is not a recognized @side token", async () => {
+		const filePath = path.join(tempDir, "directives-badtoken.ts");
+		await Bun.write(filePath, TWO_BLOCKS);
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+		const write = await getTool(session, "write");
+
+		await read.execute("read-directives-badtoken", { path: "directives-badtoken.ts" });
+		const promise = write.execute("write-directives-badtoken", {
+			path: "conflict://*",
+			content: "1: @ours\n2: @mine",
+		});
+		await expect(promise).rejects.toThrow(/only accepts the tokens @ours\/@theirs\/@base\/@both/);
+		expect(await Bun.file(filePath).text()).toBe(TWO_BLOCKS);
+	});
+
+	it("still treats pure-literal content as a uniform bulk write (no false directive rejection)", async () => {
+		const filePath = path.join(tempDir, "directives-literal.ts");
+		await Bun.write(filePath, TWO_WAY);
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+		const write = await getTool(session, "write");
+
+		await read.execute("read-directives-literal", { path: "directives-literal.ts" });
+		// No line is `<id>: @side`, so this is a uniform replacement, not a per-id block.
+		const result = await write.execute("write-directives-literal", {
+			path: "conflict://*",
+			content: "resolvedApi(x)\n",
+		});
+		expect(getText(result)).toContain("Resolved 1 conflict");
+		expect(await Bun.file(filePath).text()).toBe("line 1\nresolvedApi(x)\nline N\n");
+	});
+
 	it("can resolve two blocks in the same file by id, in either order", async () => {
 		const filePath = path.join(tempDir, "two.ts");
 		await Bun.write(filePath, TWO_BLOCKS);

@@ -766,12 +766,13 @@ async function runLoopBody(
 	let deadlineTimer: Timer | undefined;
 	if (config.deadline !== undefined) {
 		const deadlineAbortController = new AbortController();
+		const deadlineReason = new DOMException("Deadline exceeded", "TimeoutError");
 		const delay = config.deadline - Date.now();
 		if (delay <= 0) {
-			deadlineAbortController.abort("Deadline exceeded");
+			deadlineAbortController.abort(deadlineReason);
 		} else {
 			deadlineTimer = setTimeout(() => {
-				deadlineAbortController.abort("Deadline exceeded");
+				deadlineAbortController.abort(deadlineReason);
 			}, delay);
 		}
 		signal = signal ? AbortSignal.any([signal, deadlineAbortController.signal]) : deadlineAbortController.signal;
@@ -2132,19 +2133,21 @@ async function executeToolCalls(
 
 		const interrupted = interruptState.triggered;
 		const perToolAborted = record.signal.aborted;
-		const abortedDuringExecution = perToolAborted && isError;
-		if (interrupted && perToolAborted && isError) {
-			// This tool's own signal fired AND it failed — it was cut off before producing
-			// a usable result, so report it as skipped.
+		const abortedDuringExecution = perToolAborted && isError && !completedToolExecution;
+		if (interrupted && perToolAborted && isError && !completedToolExecution) {
+			// This tool's own signal fired AND it failed to produce a result: `tool.execute()`
+			// never returned (it threw on the abort), so it was genuinely cut off before
+			// producing usable output. Report it as skipped.
 			record.skipped = true;
 			emitToolResult(record, createSkippedToolResult(interruptState.source), true);
 		} else {
-			// No interrupt on this signal, or the tool finished (successfully or with a
-			// genuine error) before the interrupt landed. Keep its real result: a completed
-			// tool already ran its side effects, so the model must see what actually
-			// happened rather than a false "skipped". A peer-IRC interrupt on the batch
-			// leaves non-interruptible tools' signals untouched — their genuine errors
-			// survive here instead of being clobbered into "skipped".
+			// No interrupt on this signal, or the tool finished before the interrupt landed
+			// (`completedToolExecution`) — even if the signal aborted around completion. Keep
+			// its real result: a completed tool already ran its side effects, so the model must
+			// see what actually happened (a genuine non-zero exit / error result) rather than a
+			// false "skipped" that discards work the tool performed (#4752). A peer-IRC interrupt
+			// on the batch leaves non-interruptible tools' signals untouched — their genuine
+			// errors survive here too.
 			emitToolResult(record, result, isError);
 		}
 

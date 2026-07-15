@@ -585,7 +585,7 @@ describe("AuthStorage usage cache: terminal refresh failure", () => {
 		// is in the past (so `get()` misses) but the entry is still reachable via
 		// `getStale()`. Mirrors what the prior poll would have written.
 		const lastGood = makeReport("a@example.com");
-		const cacheKey = "usage_cache:report:anthropic:default:oauth|account:account-1|email:a@example.com";
+		const cacheKey = "usage_cache:report:2:anthropic:default:oauth|account:account-1|email:a@example.com";
 		cache.set(cacheKey, {
 			value: JSON.stringify({ value: lastGood, expiresAt: 1 }),
 			expiresAtSec: Math.floor((Date.now() + 24 * 60 * 60_000) / 1000),
@@ -663,7 +663,7 @@ describe("AuthStorage usage cache: terminal refresh failure", () => {
 		};
 
 		const lastGood = makeReport("b@example.com");
-		const cacheKey = "usage_cache:report:anthropic:default:oauth|account:account-2|email:b@example.com";
+		const cacheKey = "usage_cache:report:2:anthropic:default:oauth|account:account-2|email:b@example.com";
 		cache.set(cacheKey, {
 			value: JSON.stringify({ value: lastGood, expiresAt: 1 }),
 			expiresAtSec: Math.floor((Date.now() + 24 * 60 * 60_000) / 1000),
@@ -687,6 +687,59 @@ describe("AuthStorage usage cache: terminal refresh failure", () => {
 			expect(reports).toHaveLength(1);
 			expect(reports[0]?.metadata?.email).toBe("b@example.com");
 			expect(rows[0].disabledCause).toBeNull();
+		} finally {
+			storage.close();
+			vi.restoreAllMocks();
+		}
+	});
+});
+
+describe("AuthStorage usage cache: org-only identity stability", () => {
+	it("keeps the cache entry across a token rotation for an org-only credential", async () => {
+		// Identity recovery failed at login: the credential carries neither
+		// accountId nor email — only the org. The usage-cache identity must key
+		// off the org instead of a token hash, or every OAuth refresh would
+		// churn the cache key and fragment the usage history.
+		const credential: AuthCredential = {
+			type: "oauth",
+			access: "oat-initial",
+			refresh: "refresh-initial",
+			expires: Date.now() + 3_600_000,
+			orgId: "org-team-1111",
+		};
+		const row: StoredAuthCredential = { id: 1, provider: "anthropic", credential, disabledCause: null };
+		const store = makeStore([row]);
+		const storage = new AuthStorage(store, {
+			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
+		});
+		await storage.reload();
+		try {
+			let calls = 0;
+			vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async () => {
+				calls += 1;
+				return makeReport("org-only");
+			});
+
+			const first = anthropicReports(await storage.fetchUsageReports());
+			expect(first).toHaveLength(1);
+			expect(calls).toBe(1);
+			const reportKeysBefore = [...store.cache.keys()].filter(key => key.startsWith("usage_cache:report:")).sort();
+			expect(reportKeysBefore).toHaveLength(1);
+
+			// An OAuth refresh rotates both tokens. The rotated credential must
+			// resolve to the SAME cache entry — served from cache, no refetch.
+			row.credential = { ...credential, access: "oat-rotated", refresh: "refresh-rotated" };
+			await storage.reload();
+
+			const second = anthropicReports(await storage.fetchUsageReports());
+			expect(second).toHaveLength(1);
+			expect(calls).toBe(1);
+			const reportKeysAfter = [...store.cache.keys()].filter(key => key.startsWith("usage_cache:report:")).sort();
+			expect(reportKeysAfter).toEqual(reportKeysBefore);
+			for (const key of reportKeysAfter) {
+				expect(key).toContain("org:org-team-1111");
+				expect(key).not.toContain("secret:");
+			}
 		} finally {
 			storage.close();
 			vi.restoreAllMocks();

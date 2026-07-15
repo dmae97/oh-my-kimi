@@ -210,10 +210,34 @@ export function isSearchProviderExcluded(id: SearchProviderId): boolean {
 	return excludedProvIds.has(id);
 }
 
+export interface SearchProviderCandidate {
+	id: SearchProviderId;
+	explicit: boolean;
+}
+
+/** Return provider candidates in fallback order without loading their modules. */
+export function resolveProviderCandidates(
+	preferredProvider: SearchProviderId | "auto" = preferredProvId,
+): SearchProviderCandidate[] {
+	const candidates: SearchProviderCandidate[] = [];
+
+	if (preferredProvider !== "auto" && !isSearchProviderExcluded(preferredProvider)) {
+		candidates.push({ id: preferredProvider, explicit: true });
+	}
+
+	for (const id of SEARCH_PROVIDER_ORDER) {
+		if (id === preferredProvider || isSearchProviderExcluded(id)) continue;
+		candidates.push({ id, explicit: false });
+	}
+
+	return candidates;
+}
+
 /**
- * Determine which providers are configured and currently available.
- * Each candidate is loaded (and its `isAvailable()` called) only as the chain
- * is walked, so unconfigured providers never pay the load cost.
+ * Resolve the complete available provider chain.
+ *
+ * This compatibility helper loads every candidate. Search execution should use
+ * {@link resolveProviderCandidates} so fallback modules load only when reached.
  */
 export async function resolveProviderChain(
 	authStorage: AuthStorage,
@@ -221,19 +245,12 @@ export async function resolveProviderChain(
 ): Promise<SearchProvider[]> {
 	const providers: SearchProvider[] = [];
 
-	if (preferredProvider !== "auto" && !isSearchProviderExcluded(preferredProvider)) {
-		const provider = await getSearchProvider(preferredProvider);
-		if (await provider.isExplicitlyAvailable(authStorage)) {
-			providers.push(provider);
-		}
-	}
-
-	for (const id of SEARCH_PROVIDER_ORDER) {
-		if (id === preferredProvider || isSearchProviderExcluded(id)) continue;
-		const provider = await getSearchProvider(id);
-		if (await provider.isAvailable(authStorage)) {
-			providers.push(provider);
-		}
+	for (const candidate of resolveProviderCandidates(preferredProvider)) {
+		const provider = await getSearchProvider(candidate.id);
+		const available = candidate.explicit
+			? await provider.isExplicitlyAvailable(authStorage)
+			: await provider.isAvailable(authStorage);
+		if (available) providers.push(provider);
 	}
 
 	return providers;

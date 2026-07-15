@@ -366,6 +366,69 @@ describe("lsp regressions", () => {
 		}
 	});
 
+	it("sends initial workspace configuration after initialized before semantic requests (#5276)", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-initial-config-");
+		let receivedInitialConfiguration = false;
+		try {
+			const server = installFakeLsp((message, srv) => {
+				if (message.method === "initialize") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: { capabilities: { hoverProvider: true } } });
+				} else if (message.method === "workspace/didChangeConfiguration") {
+					receivedInitialConfiguration = true;
+				} else if (message.method === "textDocument/hover" && receivedInitialConfiguration) {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: { contents: "configured hover" } });
+				} else if (message.method === "shutdown") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: null });
+				} else if (message.method === "exit") {
+					srv.exit(0);
+				}
+			});
+			const settings = {
+				"typescript-language-server": {
+					preferences: {
+						includePackageJsonAutoImports: "on",
+						importModuleSpecifierPreference: "non-relative",
+					},
+					inlayHints: {
+						includeInlayEnumMemberValueHints: true,
+						includeInlayParameterNameHints: "all",
+					},
+				},
+			};
+			const config: ServerConfig = {
+				command: "fake-lsp",
+				fileTypes: ["ts"],
+				rootMarkers: [],
+				settings,
+			};
+
+			const client = await lspClient.getOrCreateClient(config, tempDir.path(), 1_000);
+			const result = await lspClient.sendRequest(
+				client,
+				"textDocument/hover",
+				{
+					textDocument: { uri: fileToUri(path.join(tempDir.path(), "src", "configured.ts")) },
+					position: { line: 0, character: 0 },
+				},
+				undefined,
+				50,
+			);
+
+			expect(result).toEqual({ contents: "configured hover" });
+			const methods = server.received.map(message => message.method);
+			expect(methods.slice(0, 4)).toEqual([
+				"initialize",
+				"initialized",
+				"workspace/didChangeConfiguration",
+				"textDocument/hover",
+			]);
+			expect(server.received[2].params).toEqual({ settings: config.settings });
+		} finally {
+			await lspClient.shutdownAll();
+			tempDir.removeSync();
+		}
+	});
+
 	it("accepts dynamic capability registration before semantic requests", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-dynamic-registration-");
 		try {

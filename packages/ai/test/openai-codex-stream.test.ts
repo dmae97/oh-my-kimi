@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { scheduler } from "node:timers/promises";
 import { streamSimple } from "@oh-my-pi/pi-ai";
 import {
 	getOpenAICodexTransportDetails,
@@ -41,6 +42,7 @@ afterEach(() => {
 	global.WebSocket = originalWebSocket;
 	setAgentDir(originalAgentDir);
 	restoreEnv("PI_CODEX_WEBSOCKET_V2", originalCodexWebSocketV2);
+	vi.useRealTimers();
 	vi.restoreAllMocks();
 });
 
@@ -471,6 +473,157 @@ describe("openai-codex streaming", () => {
 
 		expect(result.stopReason).toBe("stop");
 		expect(capturedText).toEqual({ verbosity: "low" });
+	});
+
+	async function runCodexSseEvents(events: unknown[]) {
+		const token = createCodexTestToken();
+		const context = createCodexTestContext();
+		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
+		const sse = `${events.map(event => `data: ${JSON.stringify(event)}`).join("\n\n")}\n\n`;
+		const fetchMock: FetchImpl = async () =>
+			new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+		const textEndContents: string[] = [];
+
+		const stream = streamOpenAICodexResponses(model, context, {
+			apiKey: token,
+			fetch: fetchMock,
+		});
+		const readPromise = (async () => {
+			for await (const event of stream) {
+				if (event.type === "text_end") textEndContents.push(event.content);
+			}
+		})();
+		const result = await stream.result();
+		await readPromise;
+
+		return { result, textEndContents };
+	}
+
+	for (const testCase of [
+		{
+			name: "absent terminal content preserves streamed text",
+			deltas: ["Hello", " world"],
+			expectedText: "Hello world",
+		},
+		{
+			name: "empty terminal content preserves streamed text",
+			deltas: ["Hello", " world"],
+			terminalContent: [],
+			expectedText: "Hello world",
+		},
+		{
+			name: "identical terminal text is not appended to streamed text",
+			deltas: ["Same text"],
+			terminalContent: [{ type: "output_text", text: "Same text", annotations: [] }],
+			expectedText: "Same text",
+		},
+		{
+			name: "terminal text replaces streamed text",
+			deltas: ["draft text"],
+			terminalContent: [{ type: "output_text", text: "final text", annotations: [] }],
+			expectedText: "final text",
+		},
+		{
+			name: "explicit empty terminal text clears streamed text",
+			deltas: ["draft text"],
+			terminalContent: [{ type: "output_text", text: "", annotations: [] }],
+			expectedText: "",
+		},
+		{
+			name: "terminal refusal replaces streamed text",
+			deltas: ["draft text"],
+			terminalContent: [{ type: "refusal", refusal: "I cannot help with that." }],
+			expectedText: "I cannot help with that.",
+		},
+	]) {
+		it(`finalizes message text when ${testCase.name}`, async () => {
+			const doneItem =
+				"terminalContent" in testCase
+					? {
+							type: "message",
+							id: "msg_1",
+							role: "assistant",
+							status: "completed",
+							content: testCase.terminalContent,
+						}
+					: { type: "message", id: "msg_1", role: "assistant", status: "completed" };
+			const events = [
+				{
+					type: "response.output_item.added",
+					output_index: 0,
+					item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
+				},
+				...testCase.deltas.map(delta => ({
+					type: "response.output_text.delta",
+					output_index: 0,
+					item_id: "msg_1",
+					delta,
+				})),
+				{ type: "response.output_item.done", output_index: 0, item: doneItem },
+				{
+					type: "response.completed",
+					response: {
+						id: "resp_1",
+						status: "completed",
+						usage: {
+							input_tokens: 5,
+							output_tokens: 3,
+							total_tokens: 8,
+							input_tokens_details: { cached_tokens: 0 },
+						},
+					},
+				},
+			];
+
+			const { result, textEndContents } = await runCodexSseEvents(events);
+
+			expect(result.content.find(block => block.type === "text")?.text).toBe(testCase.expectedText);
+			expect(textEndContents).toEqual([testCase.expectedText]);
+		});
+	}
+
+	it("keeps separate message output items from concatenating", async () => {
+		const { result, textEndContents } = await runCodexSseEvents([
+			{
+				type: "response.output_item.added",
+				output_index: 0,
+				item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
+			},
+			{ type: "response.output_text.delta", output_index: 0, item_id: "msg_1", delta: "First" },
+			{
+				type: "response.output_item.done",
+				output_index: 0,
+				item: { type: "message", id: "msg_1", role: "assistant", status: "completed", content: [] },
+			},
+			{
+				type: "response.output_item.added",
+				output_index: 1,
+				item: { type: "message", id: "msg_2", role: "assistant", status: "in_progress", content: [] },
+			},
+			{ type: "response.output_text.delta", output_index: 1, item_id: "msg_2", delta: "Second" },
+			{
+				type: "response.output_item.done",
+				output_index: 1,
+				item: { type: "message", id: "msg_2", role: "assistant", status: "completed", content: [] },
+			},
+			{
+				type: "response.completed",
+				response: {
+					id: "resp_1",
+					status: "completed",
+					usage: {
+						input_tokens: 5,
+						output_tokens: 3,
+						total_tokens: 8,
+						input_tokens_details: { cached_tokens: 0 },
+					},
+				},
+			},
+		]);
+
+		const textBlocks = result.content.filter(block => block.type === "text");
+		expect(textBlocks.map(block => block.text)).toEqual(["First", "Second"]);
+		expect(textEndContents).toEqual(["First", "Second"]);
 	});
 
 	it("preserves streamed reasoning when the done item has no summary text", async () => {
@@ -1705,6 +1858,93 @@ describe("openai-codex streaming", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 		expect(result.stopReason).toBe("stop");
 		expect(result.content.find(block => block.type === "text")?.text).toBe("Hello after retry");
+	});
+
+	it("retries a pre-response watchdog timeout with a fresh attempt signal", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		vi.useFakeTimers();
+		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+		const { promise: firstAttemptStarted, resolve: markFirstAttemptStarted } = Promise.withResolvers<void>();
+		const signals: AbortSignal[] = [];
+		let requestCount = 0;
+		const fetchMock: FetchImpl = async (input, init) => {
+			requestCount += 1;
+			const requestSignal = getRequestSignal(input, init);
+			if (!requestSignal) throw new Error("expected Codex request signal");
+			signals.push(requestSignal);
+			if (requestCount === 1) {
+				const { promise, reject } = Promise.withResolvers<Response>();
+				if (requestSignal.aborted) {
+					reject(requestSignal.reason);
+				} else {
+					requestSignal.addEventListener("abort", () => reject(requestSignal.reason), { once: true });
+				}
+				markFirstAttemptStarted();
+				return promise;
+			}
+			return new Response(createStatefulCodexSse("Recovered after watchdog timeout", "resp_watchdog_retry"), {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		};
+		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
+
+		const resultPromise = streamOpenAICodexResponses(model, createCodexTestContext(), {
+			apiKey: token,
+			fetch: fetchMock,
+			streamFirstEventTimeoutMs: 10,
+		}).result();
+		await firstAttemptStarted;
+		vi.advanceTimersByTime(10);
+		const result = await resultPromise;
+
+		expect(requestCount).toBe(2);
+		expect(signals[0]).not.toBe(signals[1]);
+		expect(signals[0]?.aborted).toBe(true);
+		expect(signals[0]?.reason).toBeInstanceOf(DOMException);
+		expect(signals[0]?.reason).toHaveProperty("name", "TimeoutError");
+		expect(signals[1]?.aborted).toBe(false);
+		expect(result.stopReason).toBe("stop");
+		expect(result.content.find(block => block.type === "text")?.text).toBe("Recovered after watchdog timeout");
+	});
+
+	it("does not retry a caller abort before response headers", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const controller = new AbortController();
+		const { promise: requestStarted, resolve: markRequestStarted } = Promise.withResolvers<void>();
+		let requestCount = 0;
+		const fetchMock: FetchImpl = async (input, init) => {
+			requestCount += 1;
+			const requestSignal = getRequestSignal(input, init);
+			if (!requestSignal) throw new Error("expected Codex request signal");
+			const { promise, reject } = Promise.withResolvers<Response>();
+			if (requestSignal.aborted) {
+				reject(requestSignal.reason);
+			} else {
+				requestSignal.addEventListener("abort", () => reject(requestSignal.reason), { once: true });
+			}
+			markRequestStarted();
+			return promise;
+		};
+		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
+
+		const resultPromise = streamOpenAICodexResponses(model, createCodexTestContext(), {
+			apiKey: token,
+			fetch: fetchMock,
+			signal: controller.signal,
+			streamFirstEventTimeoutMs: 60_000,
+		}).result();
+		await requestStarted;
+		controller.abort();
+		const result = await resultPromise;
+
+		expect(requestCount).toBe(1);
+		expect(result.stopReason).toBe("aborted");
+		expect(result.errorMessage).toBe("Request was aborted");
 	});
 
 	it("sets conversation_id/session_id headers and prompt_cache_key when sessionId is provided", async () => {

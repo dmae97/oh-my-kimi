@@ -1602,14 +1602,18 @@ describe("AgentSession retry fallback", () => {
 		expect(lastAssistant.errorMessage).toBe(envelopeError);
 	});
 
-	it("does not auto-retry generic Request was aborted. errors", async () => {
+	it("auto-retries a bare Request was aborted error-stop turn (issue #5375)", async () => {
 		const model = getBundledModel("openai", "gpt-4o-mini");
 		if (!model) {
 			throw new Error("Expected bundled OpenAI test model to exist");
 		}
 
 		const requestedModels: string[] = [];
-		const mock = createMockModel({ handler: () => ({ throw: "Request was aborted." }) });
+		// A stalled/dropped stream that the provider surfaces as stopReason:"error"
+		// carrying the bare abort sentinel, then a clean recovery on the retry.
+		const mock = createMockModel({
+			responses: [{ throw: "Request was aborted." }, { content: ["recovered after bare abort error"] }],
+		});
 		const agent = new Agent({
 			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
@@ -1637,17 +1641,23 @@ describe("AgentSession retry fallback", () => {
 			settings,
 			modelRegistry,
 		});
+		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
 		const { retryStartEvents, retryEndEvents } = trackRetryEvents(session);
 
-		await session.prompt("Do not retry generic abort text");
+		await session.prompt("Retry the bare abort error");
 		await session.waitForIdle();
 
-		expect(requestedModels).toEqual([`${model.provider}/${model.id}`]);
-		expect(retryStartEvents).toHaveLength(0);
-		expect(retryEndEvents).toHaveLength(0);
+		// Same model, retried once (no model fallback for a reason-less abort).
+		expect(requestedModels).toEqual([`${model.provider}/${model.id}`, `${model.provider}/${model.id}`]);
+		expect(retryStartEvents).toHaveLength(1);
+		expect(retryEndEvents).toHaveLength(1);
+		expect(retryEndEvents[0]).toMatchObject({ success: true, attempt: 1 });
 		const lastAssistant = getLastAssistantMessage(session);
-		expect(lastAssistant.stopReason).toBe("error");
-		expect(lastAssistant.errorMessage).toBe("Request was aborted.");
+		expect(lastAssistant.stopReason).toBe("stop");
+		expect(lastAssistant.content).toContainEqual({
+			type: "text",
+			text: "recovered after bare abort error",
+		});
 	});
 
 	it("matches plain fallback roles for compat-routed primary models", async () => {

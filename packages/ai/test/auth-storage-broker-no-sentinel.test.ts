@@ -70,6 +70,7 @@ describe("AuthStorage broker sentinel refresh", () => {
 
 		expect(access).toEqual({
 			accessToken: "broker-access-rotated",
+			credentialId: expect.any(Number),
 			accountId: "broker-account",
 			email: "broker@example.com",
 			projectId: "broker-project",

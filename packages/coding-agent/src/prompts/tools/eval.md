@@ -10,7 +10,7 @@ Fields:
 - `language` — {{#if py}}`"py"` IPython kernel{{/if}}{{#ifAll py js}}, {{/ifAll}}{{#if js}}`"js"` persistent JavaScript VM{{/if}}{{#if rb}}{{#ifAny py js}}, {{/ifAny}}`"rb"` persistent Ruby kernel{{/if}}{{#if jl}}{{#ifAny py js rb}}, {{/ifAny}}`"jl"` persistent Julia kernel{{/if}}.
 - `code` — cell body, verbatim. Newlines/quotes JSON-encoded; no fences, no headers.
 - `title` (optional) — short transcript label (e.g. `"imports"`).
-- `timeout` (optional) — seconds. Raise only for heavy compute or long non-agent tool calls.
+- `timeout` (optional) — seconds; `0` disables the cell timeout. Raise only for heavy compute or long non-agent tool calls.
 - `reset` (optional) — wipe this language's kernel first.{{#ifAll py js}} Per-language: a `py` reset never touches the JS VM.{{/ifAll}}
 
 {{#if py}}Live event loop: use top-level `await` directly; `asyncio.run(…)` raises "cannot be called from a running event loop".{{/if}}
@@ -28,7 +28,7 @@ display(value) → None
 print(value, ...) → None
     Text output.
 read(path, offset?=1, limit?=None) → str
-    File as text; offset/limit 1-indexed lines. Accepts `local://…`.
+    File/resource text; offset/limit = 1-indexed lines. `local://…` works everywhere; Python/JS also accept top-level `read` URI schemes.
 write(path, content) → str
     Write file (creates parents) → resolved path. `local://…` persists across turns/subagents.
 env(key?=None, value?=None) → str | None | dict

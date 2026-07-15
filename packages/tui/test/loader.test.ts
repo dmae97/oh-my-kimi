@@ -134,6 +134,29 @@ describe("Loader component", () => {
 		loader.stop();
 	});
 
+	it("reuses text layout when only animated ANSI styling changes", () => {
+		vi.useFakeTimers();
+		let colorFrame = 0;
+		const ui = { synchronizedOutput: true, requestDirectWrite: vi.fn(), requestComponentRender: vi.fn() };
+		const colorMessage = ((text: string) => `\x1b[3${colorFrame++ % 3}m${text}\x1b[0m`) as LoaderMessageColorFn & {
+			animated: true;
+		};
+		colorMessage.animated = true;
+		const loader = new Loader(ui as unknown as TUI, text => text, colorMessage, "Checking", ["⠸"]);
+		const stringWidth = spyOn(Bun, "stringWidth");
+
+		const initial = loader.render(40);
+		stringWidth.mockClear();
+		vi.advanceTimersByTime(34);
+		const animated = loader.render(40);
+
+		expect(ui.requestDirectWrite).toHaveBeenCalledTimes(2);
+		expect(stringWidth).not.toHaveBeenCalled();
+		expect(initial[1]).not.toBe(animated[1]);
+		expect(visibleWidth(initial[1])).toBe(visibleWidth(animated[1]));
+		loader.stop();
+	});
+
 	it("holds animated message-only frames when synchronized output is unavailable", () => {
 		vi.useFakeTimers();
 		setSystemTime(new Date(1_000));

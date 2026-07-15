@@ -341,6 +341,19 @@ export class AgentHubOverlayComponent extends Container {
 	}
 
 	/**
+	 * Seed the table's left-left close detector with the current time so a single
+	 * subsequent `←` (within {@link LEFT_TAP_WINDOW_MS}) dismisses the hub.
+	 *
+	 * The editor's own double-tap detector consumes the `←←` that opens the hub,
+	 * leaving this detector at its fresh `0` — without this handoff the user would
+	 * have to press `←←` a second time to escape. Called by the opener when the hub
+	 * was raised by that gesture.
+	 */
+	armCloseTap(): void {
+		this.#lastLeftTap = Date.now();
+	}
+
+	/**
 	 * Open the fullscreen transcript viewer for an agent id (public for table Enter
 	 * and tests). Mounts {@link AgentTranscriptViewer} as a `fullscreen` overlay so it
 	 * owns the alternate screen; the hub table stays mounted underneath and is
@@ -573,14 +586,14 @@ export class AgentHubOverlayComponent extends Container {
 			}
 			return;
 		}
-		if (keyData === "j" || matchesSelectDown(keyData)) {
+		if (matchesKey(keyData, "j") || matchesSelectDown(keyData)) {
 			if (this.#rows.length > 0) {
 				this.#selectedRow = Math.min(this.#selectedRow + 1, this.#rows.length - 1);
 			}
 			this.#requestRender();
 			return;
 		}
-		if (keyData === "k" || matchesSelectUp(keyData)) {
+		if (matchesKey(keyData, "k") || matchesSelectUp(keyData)) {
 			if (this.#rows.length > 0) {
 				this.#selectedRow = Math.max(this.#selectedRow - 1, 0);
 			}

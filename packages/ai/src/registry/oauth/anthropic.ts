@@ -79,13 +79,33 @@ interface AnthropicTokenResponse {
 	refresh_token: string;
 	expires_in: number;
 	account?: { uuid?: string; email_address?: string };
+	organization?: { uuid?: string; name?: string };
 }
 
 interface AnthropicBootstrapResponse {
 	oauth_account?: {
 		account_uuid?: string;
 		account_email?: string;
+		organization_uuid?: string;
+		organization_name?: string;
 	};
+}
+
+/**
+ * Account + organization identity slice resolved from the token response
+ * and/or the `/api/claude_cli/bootstrap` endpoint. The organization is the
+ * subscription workspace the token draws limits from — one account email can
+ * hold several (e.g. a Team seat plus a personal Max plan).
+ */
+interface AnthropicIdentity {
+	accountId?: string;
+	email?: string;
+	orgId?: string;
+	orgName?: string;
+}
+
+function nonEmpty(value: string | undefined): string | undefined {
+	return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function parseOAuthTokenResponse(responseBody: string, operation: string): AnthropicTokenResponse {
@@ -100,28 +120,23 @@ function parseOAuthTokenResponse(responseBody: string, operation: string): Anthr
 }
 
 /**
- * Lift the OAuth response's `account: { uuid, email_address }` block onto
- * {@link OAuthCredentials} so downstream identity propagation (e.g.
- * `metadata.user_id.account_uuid`, usage tracking) works without a separate
- * `/api/oauth/profile` round-trip. Returns `undefined` for either field when
- * the response omits it or carries a non-string / empty value.
+ * Lift the OAuth response's `account: { uuid, email_address }` and
+ * `organization: { uuid, name }` blocks onto {@link OAuthCredentials} so
+ * downstream identity propagation (e.g. `metadata.user_id.account_uuid`,
+ * usage tracking, org-scoped credential identity) works without a separate
+ * `/api/oauth/profile` round-trip. Returns `undefined` for any field the
+ * response omits or carries as a non-string / empty value.
  */
-function extractAccountFromTokenResponse(data: AnthropicTokenResponse): {
-	accountId?: string;
-	email?: string;
-} {
-	const accountUuid = data.account?.uuid;
-	const emailAddress = data.account?.email_address;
+function extractAccountFromTokenResponse(data: AnthropicTokenResponse): AnthropicIdentity {
 	return {
-		accountId: typeof accountUuid === "string" && accountUuid.length > 0 ? accountUuid : undefined,
-		email: typeof emailAddress === "string" && emailAddress.length > 0 ? emailAddress : undefined,
+		accountId: nonEmpty(data.account?.uuid),
+		email: nonEmpty(data.account?.email_address),
+		orgId: nonEmpty(data.organization?.uuid),
+		orgName: nonEmpty(data.organization?.name),
 	};
 }
 
-async function fetchBootstrapIdentity(
-	accessToken: string,
-	fetchImpl: FetchImpl,
-): Promise<{ accountId?: string; email?: string }> {
+async function fetchBootstrapIdentity(accessToken: string, fetchImpl: FetchImpl): Promise<AnthropicIdentity> {
 	const url = `${BOOTSTRAP_URL}?entrypoint=cli&model=${encodeURIComponent(CLAUDE_CODE_BOOTSTRAP_MODEL)}`;
 	const response = await fetchImpl(url, {
 		method: "GET",
@@ -150,25 +165,36 @@ async function fetchBootstrapIdentity(
 			{ kind: "validation", provider: "anthropic", cause: error },
 		);
 	}
-	const accountUuid = data.oauth_account?.account_uuid;
-	const accountEmail = data.oauth_account?.account_email;
 	return {
-		accountId: typeof accountUuid === "string" && accountUuid.length > 0 ? accountUuid : undefined,
-		email: typeof accountEmail === "string" && accountEmail.length > 0 ? accountEmail : undefined,
+		accountId: nonEmpty(data.oauth_account?.account_uuid),
+		email: nonEmpty(data.oauth_account?.account_email),
+		orgId: nonEmpty(data.oauth_account?.organization_uuid),
+		orgName: nonEmpty(data.oauth_account?.organization_name),
 	};
 }
 
+/**
+ * Resolve account (and optionally organization) identity for a token
+ * response. `includeOrg` is login-only: the org an access token is scoped to
+ * is captured once when the credential is created and deliberately never
+ * refreshed afterwards — rewriting identity during background token
+ * refreshes could silently re-key stored credentials.
+ */
 async function resolveAccountIdentity(
 	data: AnthropicTokenResponse,
 	fetchImpl: FetchImpl,
-): Promise<{ accountId?: string; email?: string }> {
+	options?: { includeOrg?: boolean },
+): Promise<AnthropicIdentity> {
 	const identity = extractAccountFromTokenResponse(data);
-	if (identity.accountId && identity.email) return identity;
+	const orgSatisfied = !options?.includeOrg || identity.orgId !== undefined;
+	if (identity.accountId && identity.email && orgSatisfied) return identity;
 	try {
 		const bootstrap = await fetchBootstrapIdentity(data.access_token, fetchImpl);
 		return {
 			accountId: identity.accountId ?? bootstrap.accountId,
 			email: identity.email ?? bootstrap.email,
+			orgId: identity.orgId ?? bootstrap.orgId,
+			orgName: identity.orgName ?? bootstrap.orgName,
 		};
 	} catch {
 		return identity;
@@ -243,7 +269,9 @@ export class AnthropicOAuthFlow extends OAuthCallbackFlow {
 		}
 
 		const tokenData = parseOAuthTokenResponse(responseBody, "token exchange");
-		const { accountId, email } = await resolveAccountIdentity(tokenData, this.#fetch);
+		const { accountId, email, orgId, orgName } = await resolveAccountIdentity(tokenData, this.#fetch, {
+			includeOrg: true,
+		});
 
 		return {
 			refresh: tokenData.refresh_token,
@@ -251,6 +279,8 @@ export class AnthropicOAuthFlow extends OAuthCallbackFlow {
 			expires: Date.now() + tokenData.expires_in * 1000 - 5 * 60 * 1000,
 			accountId,
 			email,
+			orgId,
+			orgName,
 		};
 	}
 }
@@ -299,6 +329,9 @@ export async function refreshAnthropicToken(
 	}
 
 	const data = parseOAuthTokenResponse(responseBody, "token refresh");
+	// Deliberately no `includeOrg` and no org fields on the result: the org a
+	// credential is scoped to is fixed at login. Callers merge refresh results
+	// over the stored credential, so omitting org here preserves it verbatim.
 	const { accountId, email } = await resolveAccountIdentity(data, fetchImpl);
 
 	return {

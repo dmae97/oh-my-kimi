@@ -139,6 +139,58 @@ describe("collectUnreportedAccounts", () => {
 		const unreported = collectUnreportedAccounts(anonymous, accounts);
 		expect(unreported).toEqual([{ provider: "cerebras", type: "api_key" }]);
 	});
+
+	it("attributes org-decisively when either side carries an org", () => {
+		const shared = "shared@example.test";
+		const orgAccounts: UsageAccountIdentity[] = [
+			{ provider: "anthropic", type: "oauth", email: shared, orgId: "org-team" },
+			{ provider: "anthropic", type: "oauth", email: shared, orgId: "org-max" },
+			{ provider: "anthropic", type: "oauth", email: shared },
+		];
+		const teamReport = {
+			...makeReport("anthropic", shared, []),
+			metadata: { email: shared, orgId: "org-team" },
+		};
+		// Only the Team org reported: Max and the org-less legacy row must both
+		// surface as unreported despite the shared email.
+		const unreported = collectUnreportedAccounts([teamReport], orgAccounts);
+		expect(unreported).toEqual([
+			{ provider: "anthropic", type: "oauth", email: shared, orgId: "org-max" },
+			{ provider: "anthropic", type: "oauth", email: shared },
+		]);
+		// Both sides org-less: the email fallback still covers the account.
+		const orglessReport = { ...makeReport("anthropic", shared, []), metadata: { email: shared } };
+		const orglessAccounts: UsageAccountIdentity[] = [{ provider: "anthropic", type: "oauth", email: shared }];
+		expect(collectUnreportedAccounts([orglessReport], orglessAccounts)).toEqual([]);
+	});
+
+	it("gates same-org coverage on the member's own identity", () => {
+		const org = "org-team";
+		const alice: UsageAccountIdentity = {
+			provider: "anthropic",
+			type: "oauth",
+			email: "alice@example.test",
+			accountId: "account-alice",
+			orgId: org,
+		};
+		const bob: UsageAccountIdentity = {
+			provider: "anthropic",
+			type: "oauth",
+			email: "bob@example.test",
+			accountId: "account-bob",
+			orgId: org,
+		};
+		const orgOnly: UsageAccountIdentity = { provider: "anthropic", type: "oauth", orgId: org };
+		const aliceReport = {
+			...makeReport("anthropic", alice.email!, []),
+			metadata: { email: alice.email, accountId: alice.accountId, orgId: org },
+		};
+		// Alice reported, Bob not: the sibling's same-org report must not count
+		// as Bob's coverage — two Team members share the org id but draw on
+		// per-user pools. An org-only account (no base identifiers to gate on)
+		// stays covered by any same-org report.
+		expect(collectUnreportedAccounts([aliceReport], [alice, bob, orgOnly])).toEqual([bob]);
+	});
 });
 
 describe("formatUsageBreakdown", () => {
@@ -279,6 +331,44 @@ describe("formatUsageBreakdown", () => {
 		expect(text).toContain("0.40× quota left");
 	});
 
+	it("renders Cursor request quotas in the usage breakdown", () => {
+		const now = Date.parse("2026-01-01T00:00:00.000Z");
+		const reports: UsageReport[] = [
+			{
+				provider: "cursor",
+				fetchedAt: now,
+				metadata: { email: "cursor@example.test" },
+				limits: [
+					{
+						id: "cursor:requests:gpt-4",
+						label: "gpt-4 requests",
+						scope: { provider: "cursor", windowId: "monthly" },
+						window: {
+							id: "monthly",
+							label: "Monthly",
+							resetsAt: Date.parse("2026-02-01T00:00:00.000Z"),
+						},
+						amount: {
+							unit: "requests",
+							used: 150,
+							limit: 500,
+							remaining: 350,
+							usedFraction: 0.3,
+							remainingFraction: 0.7,
+						},
+						status: "ok",
+					},
+				],
+			},
+		];
+
+		const text = stripVTControlCharacters(formatUsageBreakdown(reports, [], now));
+		expect(text).toContain("Cursor");
+		expect(text).toContain("gpt-4 requests");
+		expect(text).toContain("150 / 500 requests");
+		expect(text).toContain("30.0% used");
+		expect(text).toContain("resets in 31d");
+	});
 	it("renders saved reset expiry state for future and expired credits", () => {
 		const now = Date.parse("2026-01-01T00:00:00.000Z");
 		const reports: UsageReport[] = [

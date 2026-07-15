@@ -2,6 +2,11 @@
  * Shared helpers for internal-url protocol handlers that resolve IDs against
  * registered agent sessions.
  */
+
+import type { Dirent } from "node:fs";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { isEnoent } from "@oh-my-pi/pi-utils";
 import { AgentRegistry } from "../registry/agent-registry";
 
 const extraArtifactsDirs = new Set<string>();
@@ -35,9 +40,53 @@ export function artifactsDirsFromRegistry(): string[] {
 		if (!dirs.includes(dir)) dirs.push(dir);
 	};
 	for (const ref of AgentRegistry.global().list()) {
-		addDir(ref.session?.sessionManager.getArtifactsDir());
+		addDir(ref.session?.sessionManager?.getArtifactsDir());
 		if (ref.sessionFile) addDir(ref.sessionFile.slice(0, -6));
 	}
 	for (const dir of extraArtifactsDirs) addDir(dir);
 	return dirs;
+}
+
+/**
+ * Recursively scan artifacts dirs for agent session transcripts, keyed by
+ * agent id (the `.jsonl` basename). Used by `history://` so transcripts of
+ * agents no longer in the registry (unregistered one-shot helpers, released
+ * agents, or any agent after session resume) remain reachable — mirroring how
+ * `agent://` reads `.md` outputs straight off disk.
+ *
+ * Layout follows `task/index.ts`: a subagent's transcript is
+ * `<artifactsDir>/<AgentId>.jsonl`, and its own children nest one level deeper
+ * under `<artifactsDir>/<AgentId>/<AgentId>.<ChildId>.jsonl`. Advisor
+ * transcripts (`__advisor*.jsonl`) are observability-only and excluded;
+ * EPERM-rewrite backups (`.bak`) are skipped. When the same id appears in
+ * multiple dirs, the first hit wins (registry dirs are scanned first).
+ */
+export async function sessionFilesFromDisk(): Promise<Map<string, string>> {
+	const found = new Map<string, string>();
+	const seenDirs = new Set<string>();
+	const scan = async (dir: string, depth: number): Promise<void> => {
+		if (depth > 8 || seenDirs.has(dir)) return;
+		seenDirs.add(dir);
+		let entries: Dirent[];
+		try {
+			entries = await fs.readdir(dir, { withFileTypes: true });
+		} catch (err) {
+			if (isEnoent(err) || (err as NodeJS.ErrnoException).code === "ENOTDIR") return;
+			throw err;
+		}
+		for (const entry of entries) {
+			if (entry.isDirectory()) {
+				await scan(path.join(dir, entry.name), depth + 1);
+				continue;
+			}
+			if (!entry.isFile()) continue;
+			const name = entry.name;
+			if (!name.endsWith(".jsonl")) continue;
+			if (name.startsWith("__advisor")) continue;
+			const id = name.slice(0, -".jsonl".length);
+			if (!found.has(id)) found.set(id, path.join(dir, name));
+		}
+	};
+	for (const dir of artifactsDirsFromRegistry()) await scan(dir, 0);
+	return found;
 }

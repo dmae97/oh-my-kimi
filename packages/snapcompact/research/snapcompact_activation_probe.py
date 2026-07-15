@@ -29,7 +29,11 @@ sys.path.insert(0, str(HERE))
 import squad  # noqa: E402
 from bdf import capacity, render  # noqa: E402
 from run import CACHE, FONTS, load_prompt  # noqa: E402
-from snapcompact_blackbox_occlusion import mask_cells, random_span, sample_answer_questions  # noqa: E402
+from snapcompact_blackbox_occlusion import (
+    mask_cells,
+    random_span,
+    sample_answer_questions,
+)  # noqa: E402
 
 DEFAULT_MODEL_DIR = (
     "/home/can/.cache/huggingface/hub/models--PaddlePaddle--PaddleOCR-VL/"
@@ -77,20 +81,36 @@ def to_device(batch: dict[str, Any], device: Any) -> dict[str, Any]:
     return {k: (v.to(device) if hasattr(v, "to") else v) for k, v in batch.items()}
 
 
-def hidden_features(model: Any, processor: Any, *, image: Image.Image | None, text: str, device: Any) -> list[np.ndarray]:
+def hidden_features(
+    model: Any, processor: Any, *, image: Image.Image | None, text: str, device: Any
+) -> list[np.ndarray]:
     import torch
 
     if image is None:
         messages = [{"role": "user", "content": [{"type": "text", "text": text}]}]
-        templated = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        templated = processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
         batch = processor(text=templated, return_tensors="pt")
     else:
-        messages = [{"role": "user", "content": [{"type": "image", "image": image}, {"type": "text", "text": text}]}]
-        templated = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": text},
+                ],
+            }
+        ]
+        templated = processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
         batch = processor(images=image, text=templated, return_tensors="pt")
     batch = to_device(batch, device)
     with torch.no_grad():
-        out = model(**batch, output_hidden_states=True, output_attentions=False, use_cache=False)
+        out = model(
+            **batch, output_hidden_states=True, output_attentions=False, use_cache=False
+        )
     feats: list[np.ndarray] = []
     for h in out.hidden_states:
         # Mean-pool the prompt sequence. This avoids brittle alignment between
@@ -136,19 +156,38 @@ def main() -> None:
     fill = (255, 255, 255) if args.variant not in ("dark", "dark-sent") else (0, 0, 0)
 
     print(f"loading {args.model_dir}", flush=True)
-    processor = AutoProcessor.from_pretrained(args.model_dir, local_files_only=True, trust_remote_code=True, use_fast=False)
+    processor = AutoProcessor.from_pretrained(
+        args.model_dir, local_files_only=True, trust_remote_code=True, use_fast=False
+    )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
-    model = AutoModel.from_pretrained(args.model_dir, local_files_only=True, trust_remote_code=True, dtype=dtype).to(device).eval()
+    model = (
+        AutoModel.from_pretrained(
+            args.model_dir, local_files_only=True, trust_remote_code=True, dtype=dtype
+        )
+        .to(device)
+        .eval()
+    )
 
-    feature_sets: dict[str, list[list[np.ndarray]]] = {"text": [], "image": [], "answer_mask": [], "random_mask": []}
+    feature_sets: dict[str, list[list[np.ndarray]]] = {
+        "text": [],
+        "image": [],
+        "answer_mask": [],
+        "random_mask": [],
+    }
     records: list[dict[str, Any]] = []
     for qi, q in enumerate(questions):
         span_len = max(1, q["answer_end"] - q["answer_start"])
         rng = random.Random(args.seed * 31 + qi)
-        rand_start, rand_end = random_span(rng, len(chunk), span_len, q["answer_start"], q["answer_end"])
-        answer_img = mask_cells(base_img, q["answer_start"], q["answer_end"], cols, cfg.adv, cfg.pitch, fill)
-        random_img = mask_cells(base_img, rand_start, rand_end, cols, cfg.adv, cfg.pitch, fill)
+        rand_start, rand_end = random_span(
+            rng, len(chunk), span_len, q["answer_start"], q["answer_end"]
+        )
+        answer_img = mask_cells(
+            base_img, q["answer_start"], q["answer_end"], cols, cfg.adv, cfg.pitch, fill
+        )
+        random_img = mask_cells(
+            base_img, rand_start, rand_end, cols, cfg.adv, cfg.pitch, fill
+        )
         answer_path = img_dir / f"q{qi}-answer-mask.png"
         random_path = img_dir / f"q{qi}-random-mask.png"
         answer_img.save(answer_path)
@@ -160,10 +199,26 @@ def main() -> None:
             f"<reference>{chunk}</reference>\n\nQuestion: {q['q']}\n"
             "Answer with only the shortest extractive answer."
         )
-        feature_sets["text"].append(hidden_features(model, processor, image=None, text=text_prompt, device=device))
-        feature_sets["image"].append(hidden_features(model, processor, image=base_img, text=img_prompt, device=device))
-        feature_sets["answer_mask"].append(hidden_features(model, processor, image=answer_img, text=img_prompt, device=device))
-        feature_sets["random_mask"].append(hidden_features(model, processor, image=random_img, text=img_prompt, device=device))
+        feature_sets["text"].append(
+            hidden_features(
+                model, processor, image=None, text=text_prompt, device=device
+            )
+        )
+        feature_sets["image"].append(
+            hidden_features(
+                model, processor, image=base_img, text=img_prompt, device=device
+            )
+        )
+        feature_sets["answer_mask"].append(
+            hidden_features(
+                model, processor, image=answer_img, text=img_prompt, device=device
+            )
+        )
+        feature_sets["random_mask"].append(
+            hidden_features(
+                model, processor, image=random_img, text=img_prompt, device=device
+            )
+        )
         records.append(
             {
                 "question_index": qi,
@@ -201,7 +256,11 @@ def main() -> None:
                 "cos_image_random_mask": paired_cosine(img, rnd),
                 "answer_delta_norm": float(answer_delta.mean()),
                 "random_delta_norm": float(random_delta.mean()),
-                "answer_over_random_delta": float(answer_delta.mean() / random_delta.mean()) if random_delta.mean() else float("inf"),
+                "answer_over_random_delta": float(
+                    answer_delta.mean() / random_delta.mean()
+                )
+                if random_delta.mean()
+                else float("inf"),
             }
         )
 

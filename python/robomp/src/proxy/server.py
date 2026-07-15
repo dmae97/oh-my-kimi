@@ -182,6 +182,7 @@ def _require_review_comments(value: Any) -> list[dict[str, Any]]:
         comments.append(comment)
     return comments
 
+
 def _pool_dir(cfg: Settings, repo: str) -> Path:
     _validate_repo_name(repo)
     return Path(cfg.workspace_root) / "_pool" / repo.replace("/", "__")

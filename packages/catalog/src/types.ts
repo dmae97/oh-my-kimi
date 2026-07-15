@@ -718,6 +718,8 @@ export interface Model<TApi extends Api = Api> {
 	supportsTools?: boolean;
 	/** GitLab Duo Workflow root namespace selected during catalog discovery. */
 	gitlabDuoWorkflowRootNamespaceId?: string;
+	/** Cursor `max_mode` request flag returned by `GetUsableModels` for premium models that require max mode. */
+	cursorMaxMode?: boolean;
 	cost: {
 		input: number; // $/million tokens
 		output: number; // $/million tokens

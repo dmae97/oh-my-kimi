@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS issues (
   session_dir    TEXT,
   pr_number      INTEGER,
   state          TEXT NOT NULL,
-  classification TEXT,         -- bug|enhancement|question|proposal|documentation|invalid|duplicate
+  classification TEXT,         -- bug|enhancement|question|proposal|documentation|wontfix|invalid|duplicate
   updated_at     TEXT NOT NULL
 );
 

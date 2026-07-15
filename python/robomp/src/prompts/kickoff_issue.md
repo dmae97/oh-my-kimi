@@ -18,6 +18,8 @@ the classification calls for code. Drive the todo list to completion:
 1. **Triage first.** Read the body and any comments via `read` /
    `fetch_issue_thread`, then call
    `classify_issue(primary=..., priority=..., functional=[...], rationale=...)`.
+   Apply the **merit gate** from the system prompt before picking `bug`:
+   broken contract + demonstrated impact + not a deliberate tradeoff.
    You NEVER post a comment, push, or open a PR before this step.
 
 2. **Follow the workflow branch** the classification dictates — see the system
@@ -25,6 +27,7 @@ the classification calls for code. Drive the todo list to completion:
    - `bug` / `documentation` → ack comment → reproduce → fix → PR.
    - `question` → one comment, then stop.
    - `enhancement` / `proposal` → one thoughtful comment, then stop.
+   - `wontfix` → one comment explaining the design rationale, then stop.
    - `invalid` / `duplicate` → one brief comment, then stop.
 
 3. If `bug` and you cannot reproduce after a real attempt, call

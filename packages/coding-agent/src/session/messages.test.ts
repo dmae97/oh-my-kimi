@@ -5,6 +5,7 @@ import {
 	type CustomMessage,
 	convertToLlm,
 	INTERRUPTED_THINKING_MESSAGE_TYPE,
+	replaceLlmImagesWithText,
 	SKILL_PROMPT_MESSAGE_TYPE,
 	type SkillPromptDetails,
 } from "./messages";
@@ -121,5 +122,70 @@ describe("convertToLlm", () => {
 			"text",
 			"thinking",
 		]);
+	});
+});
+
+describe("replaceLlmImagesWithText", () => {
+	it("replaces image blocks in user, developer, and tool-result messages with the placeholder", () => {
+		const converted = convertToLlm([
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "look" },
+					{ type: "image", data: "aaaa", mimeType: "image/png" },
+				],
+				attribution: "user",
+				timestamp: 1,
+			},
+			{
+				role: "toolResult",
+				toolCallId: "c1",
+				toolName: "inspect_image",
+				content: [{ type: "image", data: "bbbb", mimeType: "image/png" }],
+				isError: false,
+				timestamp: 2,
+			},
+		]);
+
+		const scrubbed = replaceLlmImagesWithText(converted, "[image omitted]");
+
+		expect(scrubbed).not.toBe(converted);
+		const types = scrubbed.flatMap(m => (Array.isArray(m.content) ? m.content.map(b => b.type) : []));
+		expect(types).not.toContain("image");
+		const user = scrubbed.find(m => m.role === "user");
+		expect(Array.isArray(user?.content) && user.content.map(b => (b.type === "text" ? b.text : b.type))).toEqual([
+			"look",
+			"[image omitted]",
+		]);
+		const toolResult = scrubbed.find(m => m.role === "toolResult");
+		expect(Array.isArray(toolResult?.content) && toolResult.content).toEqual([
+			{ type: "text", text: "[image omitted]" },
+		]);
+	});
+
+	it("collapses consecutive image blocks into a single placeholder", () => {
+		const converted = convertToLlm([
+			{
+				role: "user",
+				content: [
+					{ type: "image", data: "aaaa", mimeType: "image/png" },
+					{ type: "image", data: "bbbb", mimeType: "image/png" },
+				],
+				attribution: "user",
+				timestamp: 1,
+			},
+		]);
+
+		const scrubbed = replaceLlmImagesWithText(converted, "[image omitted]");
+		const user = scrubbed.find(m => m.role === "user");
+		expect(Array.isArray(user?.content) && user.content).toEqual([{ type: "text", text: "[image omitted]" }]);
+	});
+
+	it("returns the same array reference when there are no image blocks", () => {
+		const converted = convertToLlm([
+			{ role: "user", content: [{ type: "text", text: "hi" }], attribution: "user", timestamp: 1 },
+		]);
+
+		expect(replaceLlmImagesWithText(converted, "[image omitted]")).toBe(converted);
 	});
 });

@@ -185,6 +185,57 @@ describe("prompt action autocomplete", () => {
 		});
 	});
 
+	it("falls through to internal-url completion for allowArgs commands without argument completions", async () => {
+		const provider = createPromptActionAutocompleteProvider({
+			commands: [{ name: "btw", description: "By the way", allowArgs: true }],
+			basePath: process.cwd(),
+			keybindings: AppKeybindingsManager.inMemory(),
+			copyCurrentLine: () => {},
+			copyPrompt: () => {},
+			undo: () => {},
+			moveCursorToMessageEnd: () => {},
+			moveCursorToMessageStart: () => {},
+			moveCursorToLineStart: () => {},
+			moveCursorToLineEnd: () => {},
+		});
+
+		const line = "/btw omp://";
+		const suggestions = await provider.getSuggestions([line], 0, line.length);
+
+		expect(suggestions).not.toBeNull();
+		expect(suggestions?.prefix).toBe("omp://");
+		expect(suggestions?.items.length).toBeGreaterThan(0);
+	});
+
+	it("falls through to internal-url completion when getArgumentCompletions yields no match", async () => {
+		const provider = createPromptActionAutocompleteProvider({
+			commands: [
+				{
+					name: "mcp",
+					description: "MCP",
+					allowArgs: true,
+					getArgumentCompletions: () => null,
+				},
+			],
+			basePath: process.cwd(),
+			keybindings: AppKeybindingsManager.inMemory(),
+			copyCurrentLine: () => {},
+			copyPrompt: () => {},
+			undo: () => {},
+			moveCursorToMessageEnd: () => {},
+			moveCursorToMessageStart: () => {},
+			moveCursorToLineStart: () => {},
+			moveCursorToLineEnd: () => {},
+		});
+
+		const line = "/mcp omp://";
+		const suggestions = await provider.getSuggestions([line], 0, line.length);
+
+		expect(suggestions).not.toBeNull();
+		expect(suggestions?.prefix).toBe("omp://");
+		expect(suggestions?.items.length).toBeGreaterThan(0);
+	});
+
 	it("delegates trySyncSlashCompletion to CombinedAutocompleteProvider", () => {
 		const provider = createPromptActionAutocompleteProvider({
 			commands: [{ name: "model", description: "Switch AI model" }],

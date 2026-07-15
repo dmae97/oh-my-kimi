@@ -269,25 +269,6 @@ describe("tool schema validation (post-sanitization)", () => {
 		expect(allViolations).toEqual([]);
 	});
 
-	it("read path schema advertises local, URL, and internal URI targets", async () => {
-		const session = createTestSession();
-		const tools = await createTools(session);
-		const readTool = tools.find(tool => tool.name === "read");
-		if (!readTool?.parameters) throw new Error("read tool parameters missing");
-
-		const schema = toolWireSchema(readTool) as {
-			properties?: { path?: { description?: string } };
-		};
-		const description = schema.properties?.path?.description ?? "";
-
-		expect(description).toContain("Local path");
-		expect(description).toContain("internal URI");
-		expect(description).toContain("URL");
-		expect(description).toContain("omp://");
-		expect(description).toContain("issue://123");
-		expect(description).toContain("pr://123");
-	});
-
 	it("bash schema and prompt advertise the timeout clamp and zero-disable", async () => {
 		const session = createTestSession();
 		session.settings.set("async.enabled", true);

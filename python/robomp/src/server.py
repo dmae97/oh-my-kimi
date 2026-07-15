@@ -656,7 +656,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if event is None:
             raise HTTPException(404, f"unknown delivery {delivery_id}")
         if event.state != "running":
-            raise HTTPException(409, f"delivery {delivery_id} is {event.state}; only running deliveries can be cancelled")
+            raise HTTPException(
+                409, f"delivery {delivery_id} is {event.state}; only running deliveries can be cancelled"
+            )
 
         pool: WorkerPool = bag["pool"]
         fired = await pool.cancel_event(delivery_id)

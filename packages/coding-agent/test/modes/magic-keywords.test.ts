@@ -22,6 +22,16 @@ describe("highlightMagicKeywords", () => {
 		}
 	});
 
+	it("paints punctuation-adjacent prose keywords without changing visible text", () => {
+		const input = 'first "ultrathink," then orchestrate. Finally workflowz!';
+		const decorated = highlightMagicKeywords(input);
+		expect(decorated).not.toBe(input);
+		expect(Bun.stripANSI(decorated)).toBe(input);
+		for (const keyword of ["ultrathink", "orchestrate", "workflowz"]) {
+			expect(decorated).not.toContain(keyword);
+		}
+	});
+
 	it("never paints keywords inside code spans, fenced blocks, or XML sections", () => {
 		const input = "`ultrathink`\n```\norchestrate\n```\n<x>workflowz</x>";
 		expect(highlightMagicKeywords(input)).toBe(input);
@@ -71,10 +81,36 @@ describe("hasMagicKeyword", () => {
 		expect(hasMagicKeyword("just workflowz the steps")).toBe(true);
 	});
 
-	it("rejects keywords embedded in longer words or paths", () => {
+	it("detects standalone keywords beside prose punctuation and quotes", () => {
+		for (const text of ["please ultrathink.", 'say "orchestrate" now', "then workflowz, please"]) {
+			expect(hasMagicKeyword(text)).toBe(true);
+		}
+	});
+
+	it("rejects keywords used as code symbols or calls", () => {
+		for (const text of [
+			"ultrathink()",
+			"orchestrate()",
+			"workflowz()",
+			"foo::ultrathink",
+			"foo::orchestrate",
+			"foo::workflowz",
+		]) {
+			expect(hasMagicKeyword(text)).toBe(false);
+			expect(highlightMagicKeywords(text)).toBe(text);
+		}
+	});
+
+	it("rejects casing, inflections, old workflow names, and paths", () => {
+		expect(hasMagicKeyword("Ultrathink")).toBe(false);
+		expect(hasMagicKeyword("ORCHESTRATE")).toBe(false);
+		expect(hasMagicKeyword("workflow")).toBe(false);
+		expect(hasMagicKeyword("workflows")).toBe(false);
 		expect(hasMagicKeyword("ultrathinking is fun")).toBe(false);
-		expect(hasMagicKeyword("orchestrate.ts is a file")).toBe(false);
 		expect(hasMagicKeyword("workflowzed already")).toBe(false);
+		expect(hasMagicKeyword("src/modes/ultrathink.ts")).toBe(false);
+		expect(hasMagicKeyword("orchestrate.ts is a file")).toBe(false);
+		expect(hasMagicKeyword("packages/coding-agent/test/modes/workflowz.test.ts")).toBe(false);
 	});
 
 	it("rejects keywords inside code spans, fences, and xml sections", () => {

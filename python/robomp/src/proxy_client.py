@@ -11,10 +11,10 @@ to short-circuit the network.
 
 from __future__ import annotations
 
-import json
 import asyncio
-import time
+import json
 import logging
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any

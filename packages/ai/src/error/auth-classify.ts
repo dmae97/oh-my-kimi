@@ -1,5 +1,5 @@
 import { extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
-import { isOAuthExpiry } from "./flags";
+import { isOAuthExpiry, isUsageLimit } from "./flags";
 import { isUsageLimitOutcome } from "./rate-limit";
 
 /**
@@ -21,6 +21,7 @@ export function isDefinitiveOAuthFailure(errorMsg: string): boolean {
  * upstream-backoff lane.
  */
 export function isAuthRetryableError(error: unknown): boolean {
+	if (isUsageLimit(error)) return true;
 	const httpStatus = extractHttpStatusFromError(error);
 	if (httpStatus === 401) return true;
 	const message = error instanceof Error ? error.message : typeof error === "string" ? error : undefined;

@@ -25,7 +25,11 @@ from providers import _png_b64, _post, load_env_key  # noqa: E402
 from run import CACHE  # noqa: E402
 
 ROUTES = {
-    "openrouter": ("https://openrouter.ai/api/v1/chat/completions", "OPENROUTER_API_KEY", "moonshotai/kimi-k2.6"),
+    "openrouter": (
+        "https://openrouter.ai/api/v1/chat/completions",
+        "OPENROUTER_API_KEY",
+        "moonshotai/kimi-k2.6",
+    ),
     "fireworks": (
         "https://api.fireworks.ai/inference/v1/chat/completions",
         "FIREWORKS_API_KEY",
@@ -55,10 +59,22 @@ def frame_at(px: int) -> Path:
 
 def ask(route: str, content: list[dict]) -> dict:
     url, key_var, model = ROUTES[route]
-    body = {"model": model, "messages": [{"role": "user", "content": content}], "max_tokens": 64}
-    out = _post(url, body, {"authorization": f"Bearer {load_env_key(key_var)}", "user-agent": "bench/1.0"})
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": content}],
+        "max_tokens": 64,
+    }
+    out = _post(
+        url,
+        body,
+        {"authorization": f"Bearer {load_env_key(key_var)}", "user-agent": "bench/1.0"},
+    )
     choice = (out.get("choices") or [{}])[0]
-    return {"usage": out.get("usage", {}), "provider": out.get("provider"), "finish": choice.get("finish_reason")}
+    return {
+        "usage": out.get("usage", {}),
+        "provider": out.get("provider"),
+        "finish": choice.get("finish_reason"),
+    }
 
 
 def main() -> None:
@@ -71,7 +87,10 @@ def main() -> None:
     base = ask(args.route, [tail])["usage"].get("prompt_tokens", 0)
     print(f"route={args.route} text-only prompt_tokens={base}")
     for px in (int(s) for s in args.sizes.split(",")):
-        img = {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_png_b64(frame_at(px))}"}}
+        img = {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{_png_b64(frame_at(px))}"},
+        }
         try:
             r = ask(args.route, [img, tail])
         except SystemExit as e:

@@ -9,7 +9,9 @@ from PIL import Image
 
 XORG_RAW = "https://gitlab.freedesktop.org/xorg/font/misc-misc/-/raw/master/{name}.bdf"
 TOM_THUMB = "https://robey.lag.net/downloads/tom-thumb.bdf"
-UNSCII_HEX = "https://raw.githubusercontent.com/viznut/unscii/master/fontfiles/{name}.hex"
+UNSCII_HEX = (
+    "https://raw.githubusercontent.com/viznut/unscii/master/fontfiles/{name}.hex"
+)
 
 
 @dataclass(frozen=True)
@@ -21,7 +23,9 @@ class FontCfg:
     adv: int  # x advance per character cell, px
     pitch: int  # y advance per row, px
     ascent: int | None = None  # override; default from FONT_ASCENT
-    native: tuple[int, int] | None = None  # rasterize at this cell size, then resize (stretch) to adv x pitch
+    native: tuple[int, int] | None = (
+        None  # rasterize at this cell size, then resize (stretch) to adv x pitch
+    )
     repeat: int = 1  # render each text line this many times (copy 0 plain, later copies bg-highlighted)
 
 
@@ -32,7 +36,11 @@ def ensure_font(cfg: FontCfg, cache: Path) -> Path:
         if hexfont:
             url = UNSCII_HEX.format(name=cfg.source)
         else:
-            url = TOM_THUMB if cfg.source == "tom-thumb" else XORG_RAW.format(name=cfg.source)
+            url = (
+                TOM_THUMB
+                if cfg.source == "tom-thumb"
+                else XORG_RAW.format(name=cfg.source)
+            )
         urllib.request.urlretrieve(url, path)
     return path
 
@@ -84,9 +92,21 @@ def load_font(cfg: FontCfg, cache: Path) -> tuple[dict[int, dict], int]:
 _HUES = [0.0, 0.08, 0.3, 0.5, 0.62, 0.78]
 _DARK = [tuple(int(c * 255) for c in colorsys.hls_to_rgb(h, 0.22, 0.95)) for h in _HUES]
 _PALE = [tuple(int(c * 255) for c in colorsys.hls_to_rgb(h, 0.94, 0.6)) for h in _HUES]
-_BRIGHT = [tuple(int(c * 255) for c in colorsys.hls_to_rgb(h, 0.70, 0.95)) for h in _HUES]
+_BRIGHT = [
+    tuple(int(c * 255) for c in colorsys.hls_to_rgb(h, 0.70, 0.95)) for h in _HUES
+]
 
-VARIANTS = ("color", "zebra", "bw", "sent", "dark", "dark-sent", "dim", "sent-dim", "dark-sent-dim")
+VARIANTS = (
+    "color",
+    "zebra",
+    "bw",
+    "sent",
+    "dark",
+    "dark-sent",
+    "dim",
+    "sent-dim",
+    "dark-sent-dim",
+)
 _BLACK = (0, 0, 0)
 _WHITE = (255, 255, 255)
 _GRAY = (232, 232, 232)
@@ -104,7 +124,9 @@ _STOPWORDS = frozenset(
 )
 
 
-def _row_palette(variant: str, row: int) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+def _row_palette(
+    variant: str, row: int
+) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
     """(background, default glyph) colors for a row under the given render variant."""
     if variant == "color":
         return _PALE[row % 6], _DARK[row % 6]
@@ -155,7 +177,12 @@ def capacity(cfg: FontCfg, size: int = 1568, columns: int = 1) -> tuple[int, int
 
 
 def render(
-    text: str, cfg: FontCfg, cache: Path, size: int = 1568, variant: str = "color", columns: int = 1
+    text: str,
+    cfg: FontCfg,
+    cache: Path,
+    size: int = 1568,
+    variant: str = "color",
+    columns: int = 1,
 ) -> Image.Image:
     """Fill a size x size grid with `text`; styling per `variant`.
 
@@ -182,8 +209,16 @@ def render(
     ascent = cfg.ascent if cfg.ascent is not None else font_ascent
     cols, rows, cap = capacity(cfg, size, columns)
     text = text[:cap]
-    sent_idx = _sentence_indices(text) if variant in ("sent", "dark-sent", "sent-dim", "dark-sent-dim") else None
-    dim_mask = _stopword_mask(text) if variant in ("dim", "sent-dim", "dark-sent-dim") else None
+    sent_idx = (
+        _sentence_indices(text)
+        if variant in ("sent", "dark-sent", "sent-dim", "dark-sent-dim")
+        else None
+    )
+    dim_mask = (
+        _stopword_mask(text)
+        if variant in ("dim", "sent-dim", "dark-sent-dim")
+        else None
+    )
     sent_palette = _BRIGHT if variant in ("dark-sent", "dark-sent-dim") else _DARK
     dark_bg = variant in ("dark", "dark-sent", "dark-sent-dim")
     base_color = _BLACK if dark_bg else _WHITE
@@ -239,7 +274,9 @@ def render(
             for y in range(canvas_h):
                 px[x, y] = rule
     if cfg.native is not None:
-        img = img.resize((canvas_w * cfg.adv // aw, canvas_h * cfg.pitch // ph), Image.LANCZOS)
+        img = img.resize(
+            (canvas_w * cfg.adv // aw, canvas_h * cfg.pitch // ph), Image.LANCZOS
+        )
     if img.size != (size, size):
         out = Image.new("RGB", (size, size), base_color)
         out.paste(img, (0, 0))

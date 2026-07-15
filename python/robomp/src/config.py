@@ -306,8 +306,7 @@ class Settings(BaseSettings):
     @property
     def maintainer_logins(self) -> frozenset[str]:
         items = [
-            piece.strip().lstrip("@").lower().removesuffix("[bot]")
-            for piece in self.maintainer_logins_raw.split(",")
+            piece.strip().lstrip("@").lower().removesuffix("[bot]") for piece in self.maintainer_logins_raw.split(",")
         ]
         return frozenset(item for item in items if item)
 

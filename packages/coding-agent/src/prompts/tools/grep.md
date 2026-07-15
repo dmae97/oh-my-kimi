@@ -2,8 +2,7 @@ Greps files using regex.
 
 <instruction>
 - Supports Rust regex and PCRE2 syntax.
-- `path`: SHOULD scope to a known path (e.g. `src`); pass several as a delimited list (`src; tests`). Use `selector` only for line-number filtering, never path/root selection (`"/"` belongs in `path`).
-- Literal colon filename + line range? Use `selector` (e.g. `{"path":"test:1-2","selector":"1-2"}`), not recursive `path:"test:1-2:1-2"`.
+- `path`: SHOULD scope to a known path (e.g. `src`); pass several as a delimited list (`src; tests`). Append a line selector to one file path (e.g. `src/foo.ts:50-100`); selectors never choose the search root.
 - Cross-line patterns detected from literal `\n` or `\\n` in `pattern`.
 </instruction>
 

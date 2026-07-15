@@ -7,6 +7,10 @@ import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 
 const LEFT = "\x1b[D";
 const RIGHT = "\x1b[C";
+const KITTY_H = "\x1b[104;1u";
+const KITTY_J = "\x1b[106;1u";
+const KITTY_K = "\x1b[107;1u";
+const KITTY_L = "\x1b[108;1u";
 
 beforeAll(async () => {
 	await initTheme();
@@ -92,6 +96,27 @@ describe("HookSelectorComponent model slider", () => {
 		// The slider never triggers option selection or cancellation.
 		expect(h.selected).toEqual([]);
 		expect(h.cancelled).toBe(0);
+	});
+
+	it("supports vim navigation encoded with the Kitty keyboard protocol", () => {
+		const down = makeHarness();
+		down.component.handleInput(KITTY_J);
+		down.component.handleInput("\n");
+		expect(down.selected).toEqual(["Refine plan"]);
+
+		const up = makeHarness();
+		up.component.handleInput("\x1b[B");
+		up.component.handleInput(KITTY_K);
+		up.component.handleInput("\n");
+		expect(up.selected).toEqual(["Approve and execute"]);
+
+		const left = makeHarness(modelSlider(1));
+		left.component.handleInput(KITTY_H);
+		expect(left.changes).toEqual([0]);
+
+		const right = makeHarness(modelSlider(1));
+		right.component.handleInput(KITTY_L);
+		expect(right.changes).toEqual([2]);
 	});
 
 	it("clamps at both edges and only fires onChange on real movement", () => {

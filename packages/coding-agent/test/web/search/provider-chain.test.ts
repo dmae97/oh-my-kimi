@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import type { AuthStorage } from "@oh-my-pi/pi-ai";
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import {
+	resolveProviderCandidates,
 	resolveProviderChain,
 	setExcludedSearchProviders,
 	setPreferredSearchProvider,
@@ -35,6 +36,26 @@ afterEach(() => {
 	setPreferredSearchProvider("auto");
 	setExcludedSearchProviders([]);
 	restoreEnv();
+});
+
+describe("resolveProviderCandidates", () => {
+	it("orders the preferred provider before unloaded fallbacks", () => {
+		const candidates = resolveProviderCandidates("exa");
+
+		expect(candidates[0]).toEqual({ id: "exa", explicit: true });
+		expect(candidates.slice(1).map(candidate => candidate.id)).toEqual(
+			SEARCH_PROVIDER_ORDER.filter(id => id !== "exa"),
+		);
+	});
+
+	it("omits excluded providers without resolving them", () => {
+		setExcludedSearchProviders(["duckduckgo", "google"]);
+
+		const candidates = resolveProviderCandidates("exa");
+
+		expect(candidates.map(candidate => candidate.id)).not.toContain("duckduckgo");
+		expect(candidates.map(candidate => candidate.id)).not.toContain("google");
+	});
 });
 
 describe("resolveProviderChain", () => {

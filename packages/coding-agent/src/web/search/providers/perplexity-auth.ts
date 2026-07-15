@@ -44,17 +44,26 @@ export async function getApiConfigs(
 	const useResponses = $env.PI_PERPLEXITY_RESPONSES === "1";
 	const configs: ApiConfig[] = [];
 
-	const perplexityKey = await authStorage.getApiKey("perplexity", sessionId, options);
-	if (perplexityKey) {
-		configs.push({
-			type: "api_key",
-			apiKey: perplexityKey,
-			provider: "perplexity",
-			chatBaseUrl: PERPLEXITY_CHAT_BASE_URL,
-			responsesBaseUrl: PERPLEXITY_RESPONSES_BASE_URL,
-			modelPrefix: "",
-			useResponses,
-		});
+	// A Perplexity OAuth session and a real API key are mutually exclusive here:
+	// when the active credential origin is OAuth, `getApiKey("perplexity")`
+	// returns the OAuth session JWT (OAuth wins in AuthStorage.getApiKey), not an
+	// api.perplexity.ai key. Emitting it as a direct api-key config makes the
+	// search loop send the session token as a Bearer to the direct API endpoint,
+	// which rejects it with 401 and masks the real (transport) failure — see #5315.
+	// Skip the direct config in that case; the OAuth ask-endpoint method covers it.
+	if (authStorage.getCredentialOrigin("perplexity")?.kind !== "oauth") {
+		const perplexityKey = await authStorage.getApiKey("perplexity", sessionId, options);
+		if (perplexityKey) {
+			configs.push({
+				type: "api_key",
+				apiKey: perplexityKey,
+				provider: "perplexity",
+				chatBaseUrl: PERPLEXITY_CHAT_BASE_URL,
+				responsesBaseUrl: PERPLEXITY_RESPONSES_BASE_URL,
+				modelPrefix: "",
+				useResponses,
+			});
+		}
 	}
 
 	const openrouterKey = await authStorage.getApiKey("openrouter", sessionId, options);

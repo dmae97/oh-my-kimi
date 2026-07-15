@@ -1372,6 +1372,82 @@ describe("agentLoop with AgentMessage", () => {
 		).toBe(true);
 	});
 
+	it("keeps a completed error result instead of clobbering it into skipped when a steer aborts the signal (#4752)", async () => {
+		// A steer lands while an interruptible tool is in flight, aborting its shared
+		// signal via the mid-batch watch poll. The tool nonetheless runs to completion
+		// and returns a genuine error result (e.g. `ls` on a missing path exiting
+		// non-zero). Its real output MUST survive — not be replaced by the "Skipped due
+		// to queued user message" placeholder, which discards work the tool performed.
+		const toolSchema = type({});
+		let steerReady = false;
+		let drained = false;
+
+		const tool: AgentTool<typeof toolSchema, Record<string, never>> = {
+			name: "lslike",
+			label: "Lslike",
+			description: "Completes with an error result even after its signal aborts",
+			parameters: toolSchema,
+			interruptible: true,
+			async execute(_toolCallId, _params, signal) {
+				steerReady = true;
+				// Wait for the steering-watch poll to abort our signal, then finish
+				// anyway with a real error result (no wall-clock sleep — await the abort).
+				if (!signal?.aborted) {
+					const { promise, resolve } = Promise.withResolvers<void>();
+					signal?.addEventListener("abort", () => resolve(), { once: true });
+					await promise;
+				}
+				expect(signal?.aborted).toBe(true);
+				return {
+					content: [{ type: "text", text: "ls: cannot access X: No such file or directory" }],
+					details: {},
+					isError: true,
+				};
+			},
+		};
+
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const mock = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", id: "tool-1", name: "lslike", arguments: {} }] },
+				{ content: ["done"] },
+			],
+		});
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			interruptMode: "immediate",
+			hasSteeringMessages: () => steerReady && !drained,
+			getSteeringMessages: async () => {
+				if (steerReady && !drained) {
+					drained = true;
+					return [createUserMessage("interrupt")];
+				}
+				return [];
+			},
+		};
+
+		const events: AgentEvent[] = [];
+		for await (const event of agentLoop([createUserMessage("start")], context, config, undefined, mock.stream)) {
+			events.push(event);
+		}
+
+		const toolEnds = events.filter(
+			(e): e is Extract<AgentEvent, { type: "tool_execution_end" }> => e.type === "tool_execution_end",
+		);
+		expect(toolEnds.length).toBe(1);
+		const content = toolEnds[0].result.content[0];
+		expect(content?.type).toBe("text");
+		if (content?.type !== "text") throw new Error("tool result must be text");
+		expect(content.text).toContain("No such file or directory");
+		expect(content.text).not.toContain("Skipped due to queued user message");
+		expect(toolEnds[0].isError).toBe(true);
+		// The steer is still delivered at the injection boundary.
+		expect(
+			events.some(e => e.type === "message_start" && e.message.role === "user" && e.message.content === "interrupt"),
+		).toBe(true);
+	});
+
 	it("drains queued IRC interrupts by aborting an interruptible tool mid-wait", async () => {
 		const toolSchema = type({});
 		let ircReady = false;
@@ -2855,9 +2931,11 @@ describe("agentLoopContinue with AgentMessage", () => {
 		// loop hands it. The merged deadline signal must fire and cancel the request,
 		// surfacing the deadline reason on the synthesized aborted message.
 		let providerSignalAborted = false;
+		let providerSignalReason: unknown;
 		const stream = agentLoop([createUserMessage("Wait")], context, config, undefined, (_model, _context, options) => {
 			options?.signal?.addEventListener("abort", () => {
 				providerSignalAborted = true;
+				providerSignalReason = options.signal?.reason;
 			});
 			return new AssistantMessageEventStream();
 		});
@@ -2865,6 +2943,9 @@ describe("agentLoopContinue with AgentMessage", () => {
 		const messages = await stream.result();
 
 		expect(providerSignalAborted).toBe(true);
+		if (!(providerSignalReason instanceof DOMException)) throw new Error("Expected a DOMException deadline reason");
+		expect(providerSignalReason.name).toBe("TimeoutError");
+		expect(providerSignalReason.message).toBe("Deadline exceeded");
 		const finalMessage = messages[messages.length - 1];
 		expect(finalMessage.role).toBe("assistant");
 		if (finalMessage.role !== "assistant") throw new Error("Expected assistant message");

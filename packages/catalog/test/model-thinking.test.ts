@@ -674,6 +674,23 @@ describe("model thinking derivation", () => {
 		expect(devin.thinking?.effortMap).toBeUndefined();
 		expect(devin.thinking?.efforts).toEqual([Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max]);
 	});
+	it("classifies Z.ai GLM-5.2 on the anthropic-messages coding endpoint as budget-effort with high/max", () => {
+		// Z.ai's anthropic-messages proxy (api.z.ai/api/anthropic) serves
+		// GLM-5.2 with the same two-tier high/max reasoning scale as Umans.
+		// The catalog must derive mode:"anthropic-budget-effort" (not plain
+		// "budget" with five synthetic tiers) so the wire encoder emits
+		// output_config.effort instead of only thinking.budget_tokens.
+		const model = createModel({
+			id: "glm-5.2",
+			api: "anthropic-messages",
+			provider: "zai",
+			baseUrl: "https://api.z.ai/api/anthropic",
+		});
+
+		expect(model.thinking?.mode).toBe("anthropic-budget-effort");
+		expect(getSupportedEfforts(model)).toEqual([Effort.High, Effort.Max]);
+		expect(model.thinking?.effortMap).toBeUndefined();
+	});
 });
 
 describe("model thinking runtime helpers", () => {

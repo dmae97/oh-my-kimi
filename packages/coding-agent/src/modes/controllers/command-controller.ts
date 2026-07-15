@@ -1454,14 +1454,22 @@ function formatWindowSuffix(label: string, windowLabel: string, uiTheme: typeof 
 	return uiTheme.fg("dim", `(${windowLabel})`);
 }
 
+/** ` (org)` suffix when the report is org-attributed — two subscriptions can share one email. */
+function orgSuffix(report: UsageReport): string {
+	const orgName = report.metadata?.orgName;
+	const orgId = report.metadata?.orgId;
+	const org = typeof orgName === "string" && orgName ? orgName : typeof orgId === "string" ? orgId : undefined;
+	return org ? ` (${org})` : "";
+}
+
 function formatAccountLabel(limit: UsageLimit, report: UsageReport, index: number): string {
 	const email = report.metadata?.email;
-	if (typeof email === "string" && email) return email;
+	if (typeof email === "string" && email) return `${email}${orgSuffix(report)}`;
 	const accountId =
 		typeof report.metadata?.accountId === "string" && report.metadata.accountId
 			? report.metadata.accountId
 			: limit.scope.accountId || undefined;
-	if (accountId) return accountId;
+	if (accountId) return `${accountId}${orgSuffix(report)}`;
 	const projectId =
 		typeof report.metadata?.projectId === "string" && report.metadata.projectId
 			? report.metadata.projectId
@@ -1472,9 +1480,9 @@ function formatAccountLabel(limit: UsageLimit, report: UsageReport, index: numbe
 
 function formatUnlimitedReportLabel(report: UsageReport, index: number): string {
 	const email = report.metadata?.email;
-	if (typeof email === "string" && email) return email;
+	if (typeof email === "string" && email) return `${email}${orgSuffix(report)}`;
 	const accountId = report.metadata?.accountId;
-	if (typeof accountId === "string" && accountId) return accountId;
+	if (typeof accountId === "string" && accountId) return `${accountId}${orgSuffix(report)}`;
 	const projectId = report.metadata?.projectId;
 	if (typeof projectId === "string" && projectId) return projectId;
 	return `account ${index + 1}`;

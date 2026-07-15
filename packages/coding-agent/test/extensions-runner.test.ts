@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core";
+import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { discoverAndLoadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import {
@@ -71,6 +72,26 @@ describe("ExtensionRunner", () => {
 			errors: result.errors.filter(error => isTestScoped(error.path)),
 		};
 	};
+
+	it("exposes caller localProtocolOptions through extension context", async () => {
+		const localProtocolOptions = {
+			getArtifactsDir: () => tempDir.join("artifacts"),
+			getSessionId: () => "runner-session",
+		};
+		const result = await loadTestExtensions();
+		const runner = new ExtensionRunner(
+			result.extensions,
+			result.runtime,
+			tempDir.path(),
+			sessionManager,
+			modelRegistry,
+			undefined,
+			undefined,
+			localProtocolOptions,
+		);
+
+		expect(runner.createContext().localProtocolOptions).toBe(localProtocolOptions);
+	});
 
 	describe("shortcut conflicts", () => {
 		it("warns when extension shortcut conflicts with built-in", async () => {
@@ -835,6 +856,99 @@ describe("ExtensionRunner", () => {
 				details: { source: "ext1" },
 				isError: true,
 			});
+		});
+	});
+
+	describe("tool_result rewrite of thrown failures", () => {
+		const throwingTool: AgentTool = {
+			name: "boom",
+			label: "Boom",
+			description: "always throws",
+			parameters: {} as never,
+			execute: async () => {
+				throw new Error("original explosion");
+			},
+		};
+
+		const okTool: AgentTool = {
+			name: "fine",
+			label: "Fine",
+			description: "always succeeds",
+			parameters: {} as never,
+			execute: async () => ({ content: [{ type: "text" as const, text: "success" }] }),
+		};
+
+		const firstText = (result: { content: readonly (TextContent | ImageContent)[] }): string | undefined => {
+			const block = result.content[0];
+			return block?.type === "text" ? block.text : undefined;
+		};
+
+		const runnerFor = async (extCode: string): Promise<ExtensionRunner> => {
+			fs.writeFileSync(path.join(extensionsDir, "rewrite.ts"), extCode);
+			const result = await loadTestExtensions();
+			return new ExtensionRunner(result.extensions, result.runtime, tempDir.path(), sessionManager, modelRegistry);
+		};
+
+		it("surfaces replacement content while keeping the call an error", async () => {
+			const runner = await runnerFor(`
+				export default function(pi) {
+					pi.on("tool_result", (event) => {
+						if (!event.isError) return;
+						return {
+							content: [{ type: "text", text: "Enriched recovery guidance" }],
+							details: { enriched: true },
+							isError: true,
+						};
+					});
+				}
+			`);
+			const wrapper = new ExtensionToolWrapper(throwingTool, runner);
+			const res = await wrapper.execute("call-rewrite", {} as never, undefined, undefined, undefined);
+			expect(firstText(res)).toBe("Enriched recovery guidance");
+			expect(res.isError).toBe(true);
+			expect(res.details).toEqual({ enriched: true });
+		});
+
+		it("preserves the original exception when no handler modifies the result", async () => {
+			const runner = await runnerFor(`
+				export default function(pi) {
+					pi.on("tool_result", () => {});
+				}
+			`);
+			const wrapper = new ExtensionToolWrapper(throwingTool, runner);
+			await expect(wrapper.execute("call-untouched", {} as never, undefined, undefined, undefined)).rejects.toThrow(
+				"original explosion",
+			);
+		});
+
+		it("converts a failure to success when a handler clears isError", async () => {
+			const runner = await runnerFor(`
+				export default function(pi) {
+					pi.on("tool_result", (event) => {
+						if (!event.isError) return;
+						return { content: [{ type: "text", text: "recovered" }], isError: false };
+					});
+				}
+			`);
+			const wrapper = new ExtensionToolWrapper(throwingTool, runner);
+			const res = await wrapper.execute("call-cleared", {} as never, undefined, undefined, undefined);
+			expect(firstText(res)).toBe("recovered");
+			expect(res.isError).toBeUndefined();
+		});
+
+		it("marks a successful result as an error when a handler sets isError", async () => {
+			const runner = await runnerFor(`
+				export default function(pi) {
+					pi.on("tool_result", () => ({
+						content: [{ type: "text", text: "now failing" }],
+						isError: true,
+					}));
+				}
+			`);
+			const wrapper = new ExtensionToolWrapper(okTool, runner);
+			const res = await wrapper.execute("call-flagged", {} as never, undefined, undefined, undefined);
+			expect(firstText(res)).toBe("now failing");
+			expect(res.isError).toBe(true);
 		});
 	});
 

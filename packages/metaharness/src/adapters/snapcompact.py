@@ -38,6 +38,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 RESEARCH = HERE.parents[2] / "snapcompact" / "research"
 
+
 def find_agent_prompts() -> Path:
     for parent in HERE.parents:
         for candidate in (
@@ -110,7 +111,9 @@ def agent_prompt(name: str) -> str:
     return re.sub(r"\{\{#if .*?\{\{/if\}\}\n?", "", text, flags=re.DOTALL)
 
 
-def cached_complete(api_key: str, model: str, messages: list[dict], fresh: bool, **kw) -> tuple[str, dict]:
+def cached_complete(
+    api_key: str, model: str, messages: list[dict], fresh: bool, **kw
+) -> tuple[str, dict]:
     """complete() with response caching keyed on the full request payload.
 
     Truncated responses (stop_reason == max_tokens) are never cached and never
@@ -135,8 +138,15 @@ def parse_condition(name: str) -> dict:
         return {"name": name, "kind": name}
     m = re.fullmatch(r"img-([a-z0-9]+)-([a-z-]+)", name)
     if not m or m.group(1) not in FONTS or m.group(2) not in VARIANTS:
-        raise SystemExit(f"bad condition {name!r}; expected text|compact|handoff|img-<font>-<variant>")
-    return {"name": name, "kind": "image", "font": FONTS[m.group(1)], "variant": m.group(2)}
+        raise SystemExit(
+            f"bad condition {name!r}; expected text|compact|handoff|img-<font>-<variant>"
+        )
+    return {
+        "name": name,
+        "kind": "image",
+        "font": FONTS[m.group(1)],
+        "variant": m.group(2),
+    }
 
 
 def run_chunk(cond: dict, start: int, end: int, ctx_args: dict) -> list[dict]:
@@ -148,7 +158,9 @@ def run_chunk(cond: dict, start: int, end: int, ctx_args: dict) -> list[dict]:
         ctx_args["offsets"],
         ctx_args["api_key"],
     )
-    questions = squad.sample_chunk_questions(paras, offsets, start, end, args.qpc, args.seed)
+    questions = squad.sample_chunk_questions(
+        paras, offsets, start, end, args.qpc, args.seed
+    )
     if not questions:
         return []
     chunk_text = flow[start:end]
@@ -157,21 +169,41 @@ def run_chunk(cond: dict, start: int, end: int, ctx_args: dict) -> list[dict]:
     png = cols = rows = None
     context = chunk_text
     if cond["kind"] == "image":
-        salt = ("dimv2",) if cond["variant"] == "dim" else ()  # cache-bust pre-fix sticky-fg dim renders
-        png = CACHE / f"img-{cond['font'].name}-{cond['variant']}-{sha8(chunk_text, str(args.size), *salt)}.png"
+        salt = (
+            ("dimv2",) if cond["variant"] == "dim" else ()
+        )  # cache-bust pre-fix sticky-fg dim renders
+        png = (
+            CACHE
+            / f"img-{cond['font'].name}-{cond['variant']}-{sha8(chunk_text, str(args.size), *salt)}.png"
+        )
         if not png.exists():
-            render(chunk_text, cond["font"], CACHE, args.size, cond["variant"]).save(png)
+            render(chunk_text, cond["font"], CACHE, args.size, cond["variant"]).save(
+                png
+            )
         cols, rows, _ = capacity(cond["font"], args.size)
     elif cond["kind"] in ("compact", "handoff"):
-        prompt_file = {"compact": "compaction-summary.md", "handoff": "handoff-document.md"}[cond["kind"]]
+        prompt_file = {
+            "compact": "compaction-summary.md",
+            "handoff": "handoff-document.md",
+        }[cond["kind"]]
         gen_messages = [
-            {"role": "user", "content": load_prompt("session-frame.md").format(context=chunk_text)},
-            {"role": "assistant", "content": "Noted. I have read the passages and will keep them in mind."},
+            {
+                "role": "user",
+                "content": load_prompt("session-frame.md").format(context=chunk_text),
+            },
+            {
+                "role": "assistant",
+                "content": "Noted. I have read the passages and will keep them in mind.",
+            },
             {"role": "user", "content": agent_prompt(prompt_file)},
         ]
         context, gen_usage = cached_complete(
-            api_key, args.model, gen_messages, args.fresh,
-            system=agent_prompt("summarization-system.md"), max_tokens=4096,
+            api_key,
+            args.model,
+            gen_messages,
+            args.fresh,
+            system=agent_prompt("summarization-system.md"),
+            max_tokens=4096,
         )
         usage_rows.append(("summarize", gen_usage))
 
@@ -183,16 +215,30 @@ def run_chunk(cond: dict, start: int, end: int, ctx_args: dict) -> list[dict]:
         q_block = "\n".join(f"{i + 1}. {q['q']}" for i, q in enumerate(batch))
         if cond["kind"] == "image":
             carrier = image_block(png)
-            preamble = {"type": "text", "text": load_prompt("qa-image.md").format(cols=cols, rows=rows)}
+            preamble = {
+                "type": "text",
+                "text": load_prompt("qa-image.md").format(cols=cols, rows=rows),
+            }
         else:
-            carrier = {"type": "text", "text": load_prompt("qa-text.md").format(context=context)}
+            carrier = {
+                "type": "text",
+                "text": load_prompt("qa-text.md").format(context=context),
+            }
             preamble = None
         if use_cache:
             carrier["cache_control"] = {"type": "ephemeral"}
-        content = ([preamble] if preamble else []) + [carrier, {"type": "text", "text": q_block}]
+        content = ([preamble] if preamble else []) + [
+            carrier,
+            {"type": "text", "text": q_block},
+        ]
         messages = [{"role": "user", "content": content}]
         text, usage = cached_complete(
-            api_key, args.model, messages, args.fresh, max_tokens=args.max_tokens, effort=args.effort
+            api_key,
+            args.model,
+            messages,
+            args.fresh,
+            max_tokens=args.max_tokens,
+            effort=args.effort,
         )
         usage_rows.append(("qa", usage))
         answers.extend(squad.parse_numbered(text, len(batch)))
@@ -225,7 +271,9 @@ def run_chunk(cond: dict, start: int, end: int, ctx_args: dict) -> list[dict]:
     return records
 
 
-def aggregate(name: str, records: list[dict], price_in: float, price_out: float) -> dict:
+def aggregate(
+    name: str, records: list[dict], price_in: float, price_out: float
+) -> dict:
     n = len(records)
     f1s = [r["f1"] for r in records]
     mean_f1 = sum(f1s) / n
@@ -251,7 +299,8 @@ def aggregate(name: str, records: list[dict], price_in: float, price_out: float)
         "cache_w": cache_w,
         "cache_r": cache_r,
         # Anthropic pricing: cache write 1.25x input, cache read 0.1x input (5m TTL).
-        "cost_usd": (tok_in + 1.25 * cache_w + 0.1 * cache_r) / 1e6 * price_in + tok_out / 1e6 * price_out,
+        "cost_usd": (tok_in + 1.25 * cache_w + 0.1 * cache_r) / 1e6 * price_in
+        + tok_out / 1e6 * price_out,
         "f1_by_quartile": quart,
     }
 
@@ -261,23 +310,59 @@ def main() -> None:
     ap.add_argument("--model", default="claude-fable-5")
     ap.add_argument("--conditions", default=DEFAULT_CONDITIONS)
     ap.add_argument("--qpc", type=int, default=30, help="questions sampled per chunk")
-    ap.add_argument("--qpb", type=int, default=0, help="questions per API call (batches the chunk); 0 = all at once")
-    ap.add_argument("--cache", choices=["auto", "on", "off"], default="auto",
-                    help="prompt-cache the carrier block; auto = on when --qpb is set")
-    ap.add_argument("--max-tokens", type=int, default=8192, help="output budget per QA call (incl. thinking)")
-    ap.add_argument("--effort", choices=["low", "medium", "high", "xhigh", "max"], default=None,
-                    help="adaptive-thinking effort for QA calls; default = provider default")
+    ap.add_argument(
+        "--qpb",
+        type=int,
+        default=0,
+        help="questions per API call (batches the chunk); 0 = all at once",
+    )
+    ap.add_argument(
+        "--cache",
+        choices=["auto", "on", "off"],
+        default="auto",
+        help="prompt-cache the carrier block; auto = on when --qpb is set",
+    )
+    ap.add_argument(
+        "--max-tokens",
+        type=int,
+        default=8192,
+        help="output budget per QA call (incl. thinking)",
+    )
+    ap.add_argument(
+        "--effort",
+        choices=["low", "medium", "high", "xhigh", "max"],
+        default=None,
+        help="adaptive-thinking effort for QA calls; default = provider default",
+    )
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--size", type=int, default=1568)
     ap.add_argument("--workers", type=int, default=4)
-    ap.add_argument("--limit-chars", type=int, default=0, help="cap corpus size; 0 = full dev set")
-    ap.add_argument("--limit-paras", type=int, default=0, help="cap corpus to first N passages; 0 = all")
+    ap.add_argument(
+        "--limit-chars", type=int, default=0, help="cap corpus size; 0 = full dev set"
+    )
+    ap.add_argument(
+        "--limit-paras",
+        type=int,
+        default=0,
+        help="cap corpus to first N passages; 0 = all",
+    )
     ap.add_argument("--fresh", action="store_true", help="ignore cached responses")
-    ap.add_argument("--report", action="store_true", help="aggregate cached records only; no API calls")
-    ap.add_argument("--price-in", type=float, default=10.0, help="$ per 1M input tokens")
-    ap.add_argument("--price-out", type=float, default=50.0, help="$ per 1M output tokens")
+    ap.add_argument(
+        "--report",
+        action="store_true",
+        help="aggregate cached records only; no API calls",
+    )
+    ap.add_argument(
+        "--price-in", type=float, default=10.0, help="$ per 1M input tokens"
+    )
+    ap.add_argument(
+        "--price-out", type=float, default=50.0, help="$ per 1M output tokens"
+    )
     ap.add_argument("--env", default="~/.env")
-    ap.add_argument("--output-dir", help="write records.jsonl and summary.json directly to this directory")
+    ap.add_argument(
+        "--output-dir",
+        help="write records.jsonl and summary.json directly to this directory",
+    )
     args = ap.parse_args()
 
     CACHE.mkdir(exist_ok=True)
@@ -301,26 +386,43 @@ def main() -> None:
     if args.limit_paras:
         paras = paras[: args.limit_paras]
     flow, offsets = squad.build_flow(paras, args.limit_chars or None)
-    conditions = [parse_condition(c.strip()) for c in args.conditions.split(",") if c.strip()]
+    conditions = [
+        parse_condition(c.strip()) for c in args.conditions.split(",") if c.strip()
+    ]
 
     tasks: list[tuple[dict, int, int]] = []
     for cond in conditions:
-        budget = capacity(cond["font"], args.size)[2] if cond["kind"] == "image" else TEXT_CHUNK
+        budget = (
+            capacity(cond["font"], args.size)[2]
+            if cond["kind"] == "image"
+            else TEXT_CHUNK
+        )
         for start in range(0, len(flow), budget):
             tasks.append((cond, start, min(start + budget, len(flow))))
-    calls = len(tasks) + sum(1 for c, *_ in tasks if c["kind"] in ("compact", "handoff"))
+    calls = len(tasks) + sum(
+        1 for c, *_ in tasks if c["kind"] in ("compact", "handoff")
+    )
     print(
         f"corpus={len(flow):,} chars ({len(offsets):,} passages), {len(conditions)} conditions, "
         f"{len(tasks)} chunks, <= {calls} API calls, qpc={args.qpc}, model={args.model}"
     )
 
     api_key = "" if args.report else load_api_key(args.env)
-    ctx_args = {"args": args, "flow": flow, "paras": paras, "offsets": offsets, "api_key": api_key}
+    ctx_args = {
+        "args": args,
+        "flow": flow,
+        "paras": paras,
+        "offsets": offsets,
+        "api_key": api_key,
+    }
     records: list[dict] = []
     done = 0
     with (run_dir / "records.jsonl").open("w") as records_file:
         with ThreadPoolExecutor(args.workers) as pool:
-            futures = [pool.submit(run_chunk, cond, start, end, ctx_args) for cond, start, end in tasks]
+            futures = [
+                pool.submit(run_chunk, cond, start, end, ctx_args)
+                for cond, start, end in tasks
+            ]
             for fut in futures:
                 chunk_records = fut.result()
                 records.extend(chunk_records)
@@ -332,12 +434,19 @@ def main() -> None:
                     print(f"  {done}/{len(tasks)} chunks", flush=True)
 
     rows = [
-        aggregate(cond["name"], [r for r in records if r["cond"] == cond["name"]], args.price_in, args.price_out)
+        aggregate(
+            cond["name"],
+            [r for r in records if r["cond"] == cond["name"]],
+            args.price_in,
+            args.price_out,
+        )
         for cond in conditions
         if any(r["cond"] == cond["name"] for r in records)
     ]
     rows.sort(key=lambda r: -r["f1"])
-    (run_dir / "summary.json").write_text(json.dumps({"args": vars(args), "rows": rows}, indent=1))
+    (run_dir / "summary.json").write_text(
+        json.dumps({"args": vars(args), "rows": rows}, indent=1)
+    )
 
     hdr = (
         f"{'condition':<15}{'n':>6}{'EM':>7}{'F1':>7}{'±se':>6}{'abst':>6}"
@@ -351,7 +460,9 @@ def main() -> None:
         )
     print(f"\n{'condition':<15}  F1 by position quartile (Q1..Q4)")
     for r in rows:
-        cells = "  ".join("  -  " if q is None else f"{q:.3f}" for q in r["f1_by_quartile"])
+        cells = "  ".join(
+            "  -  " if q is None else f"{q:.3f}" for q in r["f1_by_quartile"]
+        )
         print(f"{r['name']:<15}  {cells}")
     print(f"\nresults -> {run_dir}/")
 

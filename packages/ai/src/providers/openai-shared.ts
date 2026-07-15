@@ -1978,6 +1978,11 @@ export function appendMessageTextDelta(
 	}
 	stream.push({ type: "text_delta", contentIndex, delta, partial: output });
 }
+/** Chooses final message text while treating non-empty terminal content as authoritative. */
+export function finalizeMessageText(item: ResponseOutputMessage, streamedText: string): string {
+	if (!item.content?.length) return streamedText || "";
+	return item.content.map(part => (part.type === "output_text" ? (part.text ?? "") : (part.refusal ?? ""))).join("");
+}
 
 export function accumulateToolCallArgumentsDelta(
 	block: ResponsesToolCallBlock,
@@ -2455,9 +2460,7 @@ export async function processResponsesStream<TApi extends Api>(
 				closeOpenItem(event.output_index, item.id, entry);
 			} else if (item.type === "message") {
 				const block = entry?.block.type === "text" ? entry.block : undefined;
-				const text = item.content
-					.map(part => (part.type === "output_text" ? (part.text ?? "") : (part.refusal ?? "")))
-					.join("");
+				const text = finalizeMessageText(item, block?.text ?? "");
 				const textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
 				let contentIndex: number;
 				if (block) {
