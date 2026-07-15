@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed a loopback `litellm` proxy fronting a local llama.cpp/vLLM server aborting long prefills with `stream timed out while waiting for the first event` and retry-looping. `litellm` is excluded from `isLocalOpenAICompatBackend` to keep `replayReasoningContent` off proxies (which could 400 an unrelated cloud upstream), but that exclusion also stripped the 300s local stream-timeout floor, leaving the 100s default; a slow reprocess (llama.cpp `non-consecutive token position` KV thrash) then exceeded it. The timeout floor now applies to any loopback/RFC1918 backend, including proxies, while reasoning replay stays gated to first-party local providers. ([#4786](https://github.com/can1357/oh-my-pi/issues/4786))
+
 ## [16.3.11] - 2026-07-06
 
 ### Added
