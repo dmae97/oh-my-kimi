@@ -47,17 +47,16 @@ describe("task spawn policy surfaces", () => {
 		expect(parsed).toEqual({ agent: "fact-finder", task: "check" });
 	});
 
-	it("renders the restricted spawn default in the task description", async () => {
+	it("filters the agent list to the restricted spawn policy in the description", async () => {
 		vi.spyOn(taskDiscovery, "discoverAgents").mockResolvedValue({
 			agents: [factFinderAgent, oracleAgent],
 			projectAgentsDir: null,
 		});
 
-		const tool = await TaskTool.create(makeSession("fact-finder,oracle"));
+		const tool = await TaskTool.create(makeSession("fact-finder"));
 		const description = tool.description;
 
-		expect(description).toContain("the general-purpose worker (`fact-finder`)");
-		expect(description).toContain("Current spawn policy allows: `fact-finder`, `oracle`.");
-		expect(description).not.toContain("(`task`)");
+		expect(description).toContain("### fact-finder");
+		expect(description).not.toContain("### oracle");
 	});
 });

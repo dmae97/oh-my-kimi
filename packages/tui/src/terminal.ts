@@ -12,12 +12,12 @@ import {
 import { setKittyProtocolActive } from "./keys";
 import { StdinBuffer } from "./stdin-buffer";
 import {
+	isInsideTerminalMultiplexer,
 	isInsideTmux,
 	NotifyProtocol,
 	setCellDimensions,
 	setOsc99Supported,
 	TERMINAL,
-	wrapTmuxPassthrough,
 } from "./terminal-capabilities";
 import { type HangulCompatibilityJamoWidth, setHangulCompatibilityJamoWidth } from "./utils";
 
@@ -1042,6 +1042,15 @@ export class ProcessTerminal implements Terminal {
 
 	#shouldQueryOsc99Support(): boolean {
 		if (TERMINAL.notifyProtocol !== NotifyProtocol.Osc99) return false;
+		// Never probe inside a terminal multiplexer. tmux/screen forward the
+		// passthrough-wrapped `p=?` query to the outer terminal, but cannot route
+		// the capability reply back to the pane that sent it (tmux/tmux#4386,
+		// tmux/tmux#3964), so the reply leaks into the pane as literal text and
+		// its bytes perturb input (issue #5582 — the notification sibling of the
+		// graphics-probe leak #5381). Rich notifications fall back to the
+		// single-line OSC 99 form until confirmation, and delivery still uses the
+		// passthrough/BEL path (#3395).
+		if (isInsideTerminalMultiplexer($env)) return false;
 		return !isBunTestRuntime() || $env.PI_TUI_OSC99_PROBE === "1";
 	}
 
@@ -1055,14 +1064,9 @@ export class ProcessTerminal implements Terminal {
 		const id = `omp-probe-${nextOsc99ProbeId++}`;
 		this.#osc99PendingId = id;
 		this.#da1SentinelOwners.push({ kind: "osc99Probe", id });
-		// Wrap the probe under tmux so terminals behind `allow-passthrough on`
-		// can still respond (mirroring how `TerminalInfo.sendNotification`
-		// wraps notification deliveries). Without it the probe is swallowed
-		// inside tmux even when the outer terminal speaks OSC 99, and rich
-		// notifications stay permanently downgraded to the single-line fallback.
-		const probe = `\x1b]99;i=${id}:p=?;\x1b\\`;
-		const sequence = isInsideTmux() ? wrapTmuxPassthrough(probe) : probe;
-		this.#safeWrite(`${sequence}\x1b[c`);
+		// The probe never runs under a multiplexer (see #shouldQueryOsc99Support),
+		// so it is always sent directly to the terminal.
+		this.#safeWrite(`\x1b]99;i=${id}:p=?;\x1b\\\x1b[c`);
 	}
 
 	#handleOsc99CapabilityResponse(metaRaw: string, payload: string): boolean {

@@ -11,7 +11,7 @@
  *
  * Every turn runs as an AsyncJobManager job, so a completed turn self-delivers
  * into the director's conversation exactly like an async `task` result, and
- * `vibe_wait` can block on the first settling turn with `job`-poll semantics.
+ * `vibe_wait` can block on the first settling turn with `hub`-wait semantics.
  */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -357,7 +357,7 @@ export class VibeSessionRegistry {
 
 	/**
 	 * Block until one watched session's in-flight turn settles, the timeout
-	 * elapses, or `signal` aborts — `job` poll semantics. Settled turns are
+	 * elapses, or `signal` aborts — `hub` wait semantics. Settled turns are
 	 * acknowledged against the job manager so their results are not delivered
 	 * a second time as async follow-ups.
 	 */

@@ -111,7 +111,11 @@ describe("createAgentSession defaultInactive tool activation", () => {
 			expect(session.getAllToolNames()).toEqual(
 				expect.arrayContaining(["default_active_tool", "default_inactive_tool"]),
 			);
-			expect(session.getActiveToolNames()).toContain("default_active_tool");
+			// Discoverable extension tools mount as xd:// devices, not top-level active tools.
+			const deviceNames = session.getXdevToolEntries().map(entry => entry.name);
+			expect(deviceNames).toContain("default_active_tool");
+			expect(session.getActiveToolNames()).not.toContain("default_active_tool");
+			expect(deviceNames).not.toContain("default_inactive_tool");
 			expect(session.getActiveToolNames()).not.toContain("default_inactive_tool");
 			expect(session.systemPrompt.join("\n")).toContain("default_active_tool");
 			expect(session.systemPrompt.join("\n")).not.toContain("default_inactive_tool");
@@ -180,14 +184,14 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		}
 	});
 
-	it("keeps the hidden resolve tool registered for plan mode even when no deferrable tool is requested", async () => {
-		// Regression for #1428: plan mode submits its finalized plan via
-		// `resolve { action: "apply" }` dispatched through a standing handler
-		// (interactive-mode.ts: `setStandingResolveHandler`). With an explicit
+	it("keeps the write tool registered for plan mode even when no deferrable tool is requested", async () => {
+		// Regression for #1428 (adapted to the xd://propose device): plan mode
+		// submits its finalized plan by writing the chosen slug/title to
+		// xd://propose, dispatched through the plan-proposal handler
+		// (interactive-mode.ts: `setPlanProposalHandler`). With an explicit
 		// read-only `toolNames` (e.g. `read`, `search`, `find`, `web_search`)
-		// the registry has no `deferrable` tool, so the previous gate dropped
-		// `resolve` from the registry and plan mode silently activated without
-		// it — leaving the agent stuck after drafting the plan.
+		// the registry has no `write` and no `deferrable` tool; dropping it would
+		// silently activate plan mode with no way to submit the plan.
 		const tempDir = makeTempDir();
 
 		const { session } = await createAgentSession({
@@ -196,13 +200,13 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		});
 
 		try {
-			expect(session.getToolByName("resolve")).toBeDefined();
+			expect(session.getToolByName("write")).toBeDefined();
 		} finally {
 			await session.dispose();
 		}
 	});
 
-	it("drops the hidden resolve tool when neither a deferrable tool nor plan mode can use it", async () => {
+	it("does not force write into the registry when neither a deferrable tool nor plan mode needs it", async () => {
 		const tempDir = makeTempDir();
 
 		const settings = Settings.isolated();
@@ -215,7 +219,7 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		});
 
 		try {
-			expect(session.getToolByName("resolve")).toBeUndefined();
+			expect(session.getToolByName("write")).toBeUndefined();
 		} finally {
 			await session.dispose();
 		}
@@ -273,7 +277,9 @@ describe("createAgentSession defaultInactive tool activation", () => {
 
 		try {
 			expect(session.getToolByName("tts")).toBeDefined();
-			expect(session.getActiveToolNames()).toContain("tts");
+			// tts is a discoverable custom tool → mounted as an xd:// device, not top-level.
+			expect(session.getXdevToolEntries().map(entry => entry.name)).toContain("tts");
+			expect(session.getActiveToolNames()).not.toContain("tts");
 		} finally {
 			await session.dispose();
 		}

@@ -25,6 +25,7 @@ interface AgentFrontmatter {
 	model?: string | string[];
 	thinkingLevel?: string;
 	blocking?: boolean;
+	prewalk?: boolean | string;
 }
 
 interface EmbeddedAgentDef {
@@ -52,6 +53,10 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 			spawns: "*",
 			model: "@task",
 			thinkingLevel: AUTO_THINKING,
+			// No `prewalk` frontmatter: the generic task hand-off (strong model
+			// plans, then hands off to the smol role) is armed by the
+			// `task.prewalk` setting (default off) or per agent via /agents
+			// (task.agentPrewalk).
 		},
 		template: taskMd,
 	},

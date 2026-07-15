@@ -5,6 +5,20 @@
 ### Fixed
 
 - Surfaced provider stream failures through the normal assistant message lifecycle so interactive clients show the terminal error instead of leaving users with a silent working spinner.
+## [17.0.0] - 2026-07-15
+
+### Breaking Changes
+
+- Replaced the irc, job, and launch tools with a unified hub tool.
+- Removed the tool discovery system (including the search-tool-bm25 tool) and its associated configuration settings (tools.discoveryMode, tools.essentialOverride, mcp.discoveryMode, and mcp.discoveryDefaultServers).
+- Removed the resolve tool; plan approval and preview actions now use writes to the xd://propose virtual device path.
+
+### Added
+
+- Introduced the xd:// virtual device protocol for mounting tools as URLs readable/writable via read/write tools, configurable via the new tools.xdev setting (defaults to true).
+- Added the hub tool, consolidating agent peer messaging, background job control, and supervised long-running processes.
+- Added the edit.enforceSeenLines configuration setting (defaults to false) to optionally reject edits on lines that have not been fully displayed.
+- Added the ToolLoadMode type and an optional satisfies predicate to SoftToolRequirement to support compliance checks against specific invocation shapes (such as writing to a virtual device path).
 
 ## [16.5.2] - 2026-07-14
 

@@ -9,6 +9,7 @@ import type {
 	AgentToolUpdateCallback,
 	ToolApproval,
 	ToolApprovalDecision,
+	ToolLoadMode,
 	ToolTier,
 } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
@@ -208,6 +209,8 @@ export interface CustomTool<TParams extends TSchema = TSchema, TDetails = any> {
 	parameters: TParams;
 	/** If true, tool is excluded unless explicitly listed in --tools or agent's tools field */
 	hidden?: boolean;
+	/** How this tool is presented when enabled. See {@link ToolLoadMode}. Custom tools default to `"discoverable"`; set `"essential"` to stay top-level. */
+	loadMode?: ToolLoadMode;
 	/** If true, tool may stage deferred changes that require explicit resolve/discard. */
 	deferrable?: boolean;
 	/** MCP server name for discovery/search metadata when this tool fronts an MCP server. */

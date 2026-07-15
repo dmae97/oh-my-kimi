@@ -10,7 +10,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { JobTool } from "@oh-my-pi/pi-coding-agent/tools/job";
+import { type CoordinationDetails, HubTool } from "../src/tools/hub";
 
 const managers: AsyncJobManager[] = [];
 
@@ -55,14 +55,14 @@ afterEach(async () => {
 	}
 });
 
-describe("job list snapshot", () => {
-	test("empty list reports 'no jobs' instead of empty output", async () => {
-		const tool = new JobTool(createToolSession({ manager: createManager(), agentId: "Main" }));
+describe("hub jobs snapshot", () => {
+	test("empty jobs snapshot reports 'no jobs' instead of empty output", async () => {
+		const tool = new HubTool(createToolSession({ manager: createManager(), agentId: "Main" }));
 
-		const result = await tool.execute("call", { list: true });
+		const result = await tool.execute("call", { op: "jobs" });
 
 		expect(resultText(result)).toBe("No background jobs.");
-		expect(result.details?.jobs).toEqual([]);
+		expect((result.details as CoordinationDetails)?.jobs).toEqual([]);
 	});
 
 	test("list surfaces running subagents that have no backing job", async () => {
@@ -72,11 +72,11 @@ describe("job list snapshot", () => {
 		registry.setStatus("Idler", "idle");
 		registry.register({ id: "advisor", displayName: "advisor", kind: "advisor", session: null });
 		registry.register({ id: "Main", displayName: "Main", kind: "main", session: null });
-		const tool = new JobTool(createToolSession({ manager: createManager(), registry, agentId: "Main" }));
+		const tool = new HubTool(createToolSession({ manager: createManager(), registry, agentId: "Main" }));
 
-		const result = await tool.execute("call", { list: true });
+		const result = await tool.execute("call", { op: "jobs" });
 
-		expect(result.details?.agents?.map(agent => agent.id)).toEqual(["Worker"]);
+		expect((result.details as CoordinationDetails)?.agents?.map(agent => agent.id)).toEqual(["Worker"]);
 		const text = resultText(result);
 		expect(text).toContain("Running Agents (1)");
 		expect(text).toContain("Worker");
@@ -94,12 +94,12 @@ describe("job list snapshot", () => {
 		registerRunningSub(registry, "vibe-1");
 		// Woken via irc: running agent with no job at all.
 		registerRunningSub(registry, "Loner");
-		const tool = new JobTool(createToolSession({ manager, registry, agentId: "Main" }));
+		const tool = new HubTool(createToolSession({ manager, registry, agentId: "Main" }));
 
-		const result = await tool.execute("call", { list: true });
+		const result = await tool.execute("call", { op: "jobs" });
 
-		expect(result.details?.jobs.map(job => job.id).sort()).toEqual(["AgentA", "vibe-1-t1"]);
-		expect(result.details?.agents?.map(agent => agent.id)).toEqual(["Loner"]);
+		expect((result.details as CoordinationDetails)?.jobs?.map(job => job.id).sort()).toEqual(["AgentA", "vibe-1-t1"]);
+		expect((result.details as CoordinationDetails)?.agents?.map(agent => agent.id)).toEqual(["Loner"]);
 		manager.cancel("AgentA");
 		manager.cancel("vibe-1-t1");
 	});
@@ -111,45 +111,45 @@ describe("job list snapshot", () => {
 		await manager.waitForAll();
 		// The agent was re-woken (e.g. via irc) after its job completed.
 		registerRunningSub(registry, "AgentB");
-		const tool = new JobTool(createToolSession({ manager, registry, agentId: "Main" }));
+		const tool = new HubTool(createToolSession({ manager, registry, agentId: "Main" }));
 
-		const result = await tool.execute("call", { list: true });
+		const result = await tool.execute("call", { op: "jobs" });
 
-		expect(result.details?.jobs.find(job => job.id === "AgentB")?.status).toBe("completed");
-		expect(result.details?.agents?.map(agent => agent.id)).toEqual(["AgentB"]);
+		expect((result.details as CoordinationDetails)?.jobs?.find(job => job.id === "AgentB")?.status).toBe("completed");
+		expect((result.details as CoordinationDetails)?.agents?.map(agent => agent.id)).toEqual(["AgentB"]);
 	});
 });
 
-describe("job poll with no matching jobs", () => {
-	test("bare poll with nothing running stays a useless no-op message", async () => {
-		const tool = new JobTool(createToolSession({ manager: createManager(), agentId: "Main" }));
+describe("hub wait with no matching jobs", () => {
+	test("bare wait with nothing running stays a useless no-op message", async () => {
+		const tool = new HubTool(createToolSession({ manager: createManager(), agentId: "Main" }));
 
-		const result = await tool.execute("call", {});
+		const result = await tool.execute("call", { op: "wait" });
 
 		expect(resultText(result)).toBe("No running background jobs to wait for.");
 		expect(result.useless).toBe(true);
 	});
 
-	test("bare poll reports running agents outside job control", async () => {
+	test("bare wait reports running agents outside job control", async () => {
 		const registry = new AgentRegistry();
 		registerRunningSub(registry, "Worker");
-		const tool = new JobTool(createToolSession({ manager: createManager(), registry, agentId: "Main" }));
+		const tool = new HubTool(createToolSession({ manager: createManager(), registry }));
 
-		const result = await tool.execute("call", {});
+		const result = await tool.execute("call", { op: "wait" });
 
 		const text = resultText(result);
 		expect(text).toContain("No running background jobs to wait for.");
 		expect(text).toContain("Worker");
-		expect(result.details?.agents?.map(agent => agent.id)).toEqual(["Worker"]);
+		expect((result.details as CoordinationDetails)?.agents?.map(agent => agent.id)).toEqual(["Worker"]);
 		expect(result.useless).toBeUndefined();
 	});
 
-	test("polling an agent id that has no job explains the agent's state", async () => {
+	test("waiting on an agent id that has no job explains the agent's state", async () => {
 		const registry = new AgentRegistry();
 		registerRunningSub(registry, "Worker");
-		const tool = new JobTool(createToolSession({ manager: createManager(), registry, agentId: "Main" }));
+		const tool = new HubTool(createToolSession({ manager: createManager(), registry, agentId: "Main" }));
 
-		const result = await tool.execute("call", { poll: ["Worker"] });
+		const result = await tool.execute("call", { op: "wait", ids: ["Worker"] });
 
 		const text = resultText(result);
 		expect(text).toContain("No matching jobs found for IDs: Worker");

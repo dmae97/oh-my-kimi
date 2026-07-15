@@ -27,11 +27,11 @@ describe("resolveAutoQaConsent", () => {
 		expect(await resolveAutoQaConsent(settings)).toBe(false);
 		// Default-deny must NOT persist anything — the next process invocation
 		// gets to re-prompt instead of being silently stuck on "no".
-		expect(settings.get("dev.autoqa.consent")).toBe("unset");
+		expect(settings.get("dev.autoqaConsent")).toBe("unset");
 	});
 
 	it("returns persisted `granted` without invoking the handler", async () => {
-		const settings = Settings.isolated({ "dev.autoqa.consent": "granted" });
+		const settings = Settings.isolated({ "dev.autoqaConsent": "granted" });
 		let calls = 0;
 		setAutoQaConsentHandler(async () => {
 			calls += 1;
@@ -42,7 +42,7 @@ describe("resolveAutoQaConsent", () => {
 	});
 
 	it("returns persisted `denied` without invoking the handler", async () => {
-		const settings = Settings.isolated({ "dev.autoqa.consent": "denied" });
+		const settings = Settings.isolated({ "dev.autoqaConsent": "denied" });
 		let calls = 0;
 		setAutoQaConsentHandler(async () => {
 			calls += 1;
@@ -75,8 +75,8 @@ describe("resolveAutoQaConsent", () => {
 		expect(await b).toBe(true);
 		expect(await c).toBe(true);
 		expect(calls).toBe(1);
-		expect(local.get("dev.autoqa.consent")).toBe("granted");
-		expect(persistent.get("dev.autoqa.consent")).toBe("granted");
+		expect(local.get("dev.autoqaConsent")).toBe("granted");
+		expect(persistent.get("dev.autoqaConsent")).toBe("granted");
 	});
 
 	it("persists a `denied` decision so the next call short-circuits", async () => {
@@ -91,8 +91,8 @@ describe("resolveAutoQaConsent", () => {
 		expect(await resolveAutoQaConsent(local)).toBe(false);
 		expect(await resolveAutoQaConsent(local)).toBe(false);
 		expect(calls).toBe(1);
-		expect(local.get("dev.autoqa.consent")).toBe("denied");
-		expect(persistent.get("dev.autoqa.consent")).toBe("denied");
+		expect(local.get("dev.autoqaConsent")).toBe("denied");
+		expect(persistent.get("dev.autoqaConsent")).toBe("denied");
 	});
 
 	it("does not cache or persist when the handler throws (allows re-prompt)", async () => {
@@ -108,7 +108,7 @@ describe("resolveAutoQaConsent", () => {
 		// transient, not a stuck "no".
 		expect(await resolveAutoQaConsent(settings)).toBe(false);
 		expect(calls).toBe(2);
-		expect(settings.get("dev.autoqa.consent")).toBe("unset");
+		expect(settings.get("dev.autoqaConsent")).toBe("unset");
 	});
 
 	it("does not cache or persist when the handler returns null (dismiss/ESC)", async () => {
@@ -126,8 +126,8 @@ describe("resolveAutoQaConsent", () => {
 		// Second call must re-prompt — a stray ESC isn't a permanent opt-out.
 		expect(await resolveAutoQaConsent(local)).toBe(false);
 		expect(calls).toBe(2);
-		expect(local.get("dev.autoqa.consent")).toBe("unset");
-		expect(persistent.get("dev.autoqa.consent")).toBe("unset");
+		expect(local.get("dev.autoqaConsent")).toBe("unset");
+		expect(persistent.get("dev.autoqaConsent")).toBe("unset");
 	});
 
 	it("falls back to the registered persistent settings when the local snapshot is unset", async () => {
@@ -135,7 +135,7 @@ describe("resolveAutoQaConsent", () => {
 		// (which lost the consent edit made on the parent), but the host's
 		// persistent Settings carries the real decision.
 		const subagentLocal = Settings.isolated();
-		const hostPersistent = Settings.isolated({ "dev.autoqa.consent": "granted" });
+		const hostPersistent = Settings.isolated({ "dev.autoqaConsent": "granted" });
 		let calls = 0;
 		setAutoQaConsentHandler(async () => {
 			calls += 1;

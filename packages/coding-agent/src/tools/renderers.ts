@@ -21,18 +21,15 @@ import { evalToolRenderer } from "./eval-render";
 import { githubToolRenderer } from "./gh-renderer";
 import { globToolRenderer } from "./glob";
 import { grepToolRenderer } from "./grep";
+import { hubToolRenderer } from "./hub";
 import { inspectImageToolRenderer } from "./inspect-image-renderer";
-import { ircToolRenderer } from "./irc";
-import { jobToolRenderer } from "./job";
-import { launchToolRenderer } from "./launch";
 import { recallToolRenderer, reflectToolRenderer, retainToolRenderer } from "./memory-render";
 import { readToolRenderer } from "./read";
-import { resolveToolRenderer } from "./resolve";
-import { searchToolBm25Renderer } from "./search-tool-bm25";
-import { sshToolRenderer } from "./ssh";
+import { resolveRenderer } from "./resolve";
 import { todoToolRenderer } from "./todo";
 import { createVibeToolRenderer } from "./vibe";
 import { writeToolRenderer } from "./write";
+import { setXdevRendererLookup } from "./xdev";
 
 /**
  * Per-renderer opt-in for a full viewport replay when the first result
@@ -93,16 +90,16 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	grep: grepToolRenderer as ToolRenderer,
 	lsp: lspToolRenderer as ToolRenderer,
 	inspect_image: inspectImageToolRenderer as ToolRenderer,
-	irc: ircToolRenderer as ToolRenderer,
-	launch: launchToolRenderer as ToolRenderer,
+	hub: hubToolRenderer as ToolRenderer,
 	read: readToolRenderer as ToolRenderer,
-	job: jobToolRenderer as ToolRenderer,
-	resolve: resolveToolRenderer as ToolRenderer,
+	// Keyed by xd:// resolution-device names: the write dispatch delegates here
+	// by dispatch tool, and historical `resolve` tool transcripts still render
+	// through the `resolve` entry. Both devices carry the same ResolveDetails.
+	resolve: resolveRenderer as ToolRenderer,
+	reject: resolveRenderer as ToolRenderer,
 	retain: retainToolRenderer as ToolRenderer,
 	recall: recallToolRenderer as ToolRenderer,
 	reflect: reflectToolRenderer as ToolRenderer,
-	search_tool_bm25: searchToolBm25Renderer as ToolRenderer,
-	ssh: sshToolRenderer as ToolRenderer,
 	// Lazy getter: `taskToolRenderer` lives in a module that closes an import
 	// cycle back here (task/renderer → task/render → … → tools/renderers), so
 	// reading it at init order-dependently hits its temporal dead zone. Deferring
@@ -121,3 +118,8 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	vibe_list: createVibeToolRenderer("list") as ToolRenderer,
 	write: writeToolRenderer as ToolRenderer,
 };
+
+// Wire the xd:// render delegation. Injected (instead of the xdev module
+// importing this module) to avoid the renderers → tool modules → sdk →
+// tools/index → xdev import cycle.
+setXdevRendererLookup(name => toolRenderers[name]);

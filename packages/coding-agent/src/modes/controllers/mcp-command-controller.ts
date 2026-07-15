@@ -1178,7 +1178,7 @@ export class MCPCommandController {
 			if (isConnected && this.ctx.mcpManager) {
 				const serverTools = this.ctx.mcpManager.getTools().filter(t => t.mcpServerName === name);
 				if (serverTools.length > 0) {
-					const currentActive = this.ctx.session.getActiveToolNames();
+					const currentActive = this.ctx.session.getEnabledToolNames();
 					const toActivate = serverTools.map(t => t.name).filter(n => this.ctx.session.getToolByName(n));
 					if (toActivate.length > 0) {
 						await this.ctx.session.setActiveToolsByName([...new Set([...currentActive, ...toActivate])]);

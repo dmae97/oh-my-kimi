@@ -114,7 +114,7 @@ Stdout and stderr are merged before the model sees them. Definite non-zero exit 
   - Invalidates `github-cache` rows before execution when the command contains a mutating `gh issue`/`gh pr` subcommand, so later `issue://`/`pr://` reads see post-mutation state (`invalidateGithubCacheForBashCommand`).
 - User-visible prompts / interactive UI
   - PTY mode opens a TUI overlay titled `Console` and forwards input to the PTY.
-  - Background start messages note that the result is delivered automatically when complete and that the `job` tool can poll until then.
+  - Background start messages note that the result is delivered automatically when complete and that the `hub` tool can wait on it until then.
 - Background work / cancellation
   - Async and auto-background jobs continue after the initial tool return.
   - Cancellation aborts the native run; PTY overlay dismissal also kills the PTY.

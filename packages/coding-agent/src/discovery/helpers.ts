@@ -232,6 +232,8 @@ export interface ParsedAgentFields {
 	autoloadSkills?: string[];
 	readSummarize?: boolean;
 	blocking?: boolean;
+	/** `true` = prewalk into the default target; string = prewalk into that model pattern. */
+	prewalk?: boolean | string;
 }
 
 /**
@@ -286,10 +288,28 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 	const model = parseModelList(frontmatter.model);
 	const blocking = parseBoolean(frontmatter.blocking);
 	const readSummarize = parseBoolean(frontmatter.readSummarize);
+	// prewalk: true → hand off to the default prewalk target; "<pattern>" → custom target.
+	let prewalk: boolean | string | undefined = parseBoolean(frontmatter.prewalk);
+	if (prewalk === undefined && typeof frontmatter.prewalk === "string") {
+		const trimmed = frontmatter.prewalk.trim();
+		if (trimmed) prewalk = trimmed;
+	}
 	const autoloadSkills = parseArrayOrCSV(frontmatter.autoloadSkills)
 		?.map(s => s.trim())
 		.filter(Boolean);
-	return { name, description, tools, spawns, model, output, thinkingLevel, blocking, autoloadSkills, readSummarize };
+	return {
+		name,
+		description,
+		tools,
+		spawns,
+		model,
+		output,
+		thinkingLevel,
+		blocking,
+		autoloadSkills,
+		readSummarize,
+		prewalk,
+	};
 }
 
 async function globIf(

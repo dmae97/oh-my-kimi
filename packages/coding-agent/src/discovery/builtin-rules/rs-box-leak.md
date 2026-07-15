@@ -2,6 +2,7 @@
 description: Never use Box::leak - it intentionally leaks memory
 condition: "Box::leak"
 scope: "tool:edit(*.rs), tool:write(*.rs)"
+interruptMode: never
 ---
 
 Never use `Box::leak` to satisfy a lifetime. It intentionally leaks the allocation for the rest of the process.

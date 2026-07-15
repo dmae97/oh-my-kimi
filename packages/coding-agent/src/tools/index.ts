@@ -29,8 +29,6 @@ import type { ToolChoiceQueue } from "../session/tool-choice-queue";
 import { TaskTool } from "../task";
 import type { AgentOutputManager } from "../task/output-manager";
 import { canSpawnAtDepth } from "../task/types";
-import { countToolsForAutoDiscovery, resolveEffectiveToolDiscoveryMode } from "../tool-discovery/mode";
-import type { DiscoverableTool, DiscoverableToolSearchIndex } from "../tool-discovery/tool-index";
 import type { EventBus } from "../utils/event-bus";
 import { WebSearchTool } from "../web/search";
 import type { WorkspaceTree } from "../workspace-tree";
@@ -39,7 +37,7 @@ import { AstEditTool } from "./ast-edit";
 import { AstGrepTool } from "./ast-grep";
 import { BashTool } from "./bash";
 import { BrowserTool } from "./browser";
-import { type BuiltinToolName, normalizeToolNames } from "./builtin-names";
+import { type BuiltinToolName, type HiddenToolName, normalizeToolNames } from "./builtin-names";
 import { type CheckpointState, CheckpointTool, type CompletedRewindState, RewindTool } from "./checkpoint";
 import { DebugTool } from "./debug";
 import { EvalTool } from "./eval";
@@ -47,10 +45,8 @@ import { resolveEvalBackends } from "./eval-backends";
 import { GithubTool } from "./gh";
 import { GlobTool } from "./glob";
 import { GrepTool } from "./grep";
+import { HubTool } from "./hub";
 import { InspectImageTool } from "./inspect-image";
-import { IrcTool, isIrcEnabled } from "./irc";
-import { JobTool } from "./job";
-import { LaunchTool } from "./launch";
 import { LearnTool } from "./learn";
 import { ManageSkillTool } from "./manage-skill";
 import { MemoryEditTool } from "./memory-edit";
@@ -59,13 +55,10 @@ import { MemoryReflectTool } from "./memory-reflect";
 import { MemoryRetainTool } from "./memory-retain";
 import { wrapToolWithMetaNotice } from "./output-meta";
 import { ReadTool } from "./read";
-import { createReportToolIssueTool, isAutoQaEnabled } from "./report-tool-issue";
-import { ResolveTool } from "./resolve";
-import { reportFindingTool } from "./review";
-import { SearchToolBm25Tool } from "./search-tool-bm25";
-import { loadSshTool } from "./ssh";
+import type { PlanProposalHandler } from "./resolve";
 import { type TodoPhase, TodoTool } from "./todo";
 import { WriteTool } from "./write";
+import { isMountableUnderXdev, XdevRegistry } from "./xdev";
 import { YieldTool } from "./yield";
 
 export * from "../edit";
@@ -86,11 +79,9 @@ export * from "./eval-backends";
 export * from "./gh";
 export * from "./glob";
 export * from "./grep";
+export * from "./hub";
 export * from "./image-gen";
 export * from "./inspect-image";
-export * from "./irc";
-export * from "./job";
-export * from "./launch";
 export * from "./learn";
 export * from "./manage-skill";
 export * from "./memory-edit";
@@ -101,12 +92,11 @@ export * from "./read";
 export * from "./report-tool-issue";
 export * from "./resolve";
 export * from "./review";
-export * from "./search-tool-bm25";
-export * from "./ssh";
 export * from "./todo";
 export * from "./tts";
 export * from "./vibe";
 export * from "./write";
+export * from "./xdev";
 export * from "./yield";
 
 /** Tool type (AgentTool from pi-ai) */
@@ -124,13 +114,6 @@ export type ImageAttachmentEntry = {
 	uri: string;
 	image: ImageContent;
 };
-
-export type {
-	DiscoverableTool,
-	DiscoverableToolSearchIndex,
-	DiscoverableToolSearchResult,
-	DiscoverableToolSource,
-} from "../tool-discovery/tool-index";
 
 /**
  * A late LSP diagnostics result that arrived after the edit/write tool already
@@ -205,6 +188,9 @@ export interface ToolSession {
 	outputSchema?: unknown;
 	/** Whether to include the yield tool by default */
 	requireYieldTool?: boolean;
+	/** Session starts with a prewalk hand-off armed. Keeps `todo` in yield-gated
+	 *  (subagent) registries: the prewalk plan nudge + todo gate need it. */
+	prewalkArmed?: boolean;
 	/** Task recursion depth (0 = top-level, 1 = first child, etc.) */
 	taskDepth?: number;
 	/** Get shared eval executor session ID. Subagents inherit this to share JS/Python/Ruby/Julia state. */
@@ -231,6 +217,8 @@ export interface ToolSession {
 	isToolActive?: (name: string) => boolean;
 	/** Update the active built-in tool predicate when a session changes tools mid-run. */
 	setActiveToolNames?: (names: Iterable<string>) => void;
+	/** Tools mounted under `xd://` (set by createTools when `tools.xdev` is active); read/write consult it at execute time. */
+	xdevRegistry?: XdevRegistry;
 	/** Agent registry for IRC routing across live sessions. */
 	agentRegistry?: AgentRegistry;
 	/** Get artifacts directory for artifact:// URLs */
@@ -296,45 +284,27 @@ export interface ToolSession {
 	getTodoPhases?: () => TodoPhase[];
 	/** Replace cached todo phases for this session. */
 	setTodoPhases?: (phases: TodoPhase[]) => void;
-	/** Whether MCP tool discovery is active for this session. */
-	isMCPDiscoveryEnabled?: () => boolean;
-	/** Get MCP tools activated by prior search_tool_bm25 calls. */
-	getSelectedMCPToolNames?: () => string[];
-	/** Merge MCP tool selections into the active session tool set. */
-	activateDiscoveredMCPTools?: (toolNames: string[]) => Promise<string[]>;
-	// ── Generic tool discovery (unified — covers built-in + MCP + extension) ──
-	/** Whether any form of tool discovery is active (tools.discoveryMode !== "off" or mcp.discoveryMode). */
-	isToolDiscoveryEnabled?: () => boolean;
-	/** Get all hidden-but-discoverable tools for search_tool_bm25 prompts. */
-	getDiscoverableTools?: (filter?: {
-		source?: import("../tool-discovery/tool-index").DiscoverableToolSource;
-	}) => DiscoverableTool[];
-	/** Get the cached generic discoverable search index. */
-	getDiscoverableToolSearchIndex?: () => DiscoverableToolSearchIndex;
-	/** Get tool names activated by prior search_tool_bm25 calls (all sources). */
-	getSelectedDiscoveredToolNames?: () => string[];
-	/** Merge tool selections into the active session tool set. */
-	activateDiscoveredTools?: (toolNames: string[]) => Promise<string[]>;
 	/** The tool-choice queue used to force forthcoming tool invocations and carry invocation handlers. */
 	getToolChoiceQueue?(): ToolChoiceQueue;
 	/** Build a model-provider-specific ToolChoice that targets the named tool, or undefined if unsupported. */
 	buildToolChoice?(toolName: string): ToolChoice | undefined;
 	/** Steer a hidden custom message into the conversation (e.g. a preview reminder). */
 	steer?(message: { customType: string; content: string; details?: unknown }): void;
-	/** Peek the currently in-flight tool-choice queue directive's invocation handler. Used by the `resolve` tool to dispatch to the pending action. */
+	/** Peek the currently in-flight tool-choice queue directive's invocation handler. Used by
+	 *  the `xd://resolve` and `xd://reject` dispatch to reach the pending action. */
 	peekQueueInvoker?(): ((input: unknown) => Promise<unknown> | unknown) | undefined;
-	/** Peek the most-recently registered non-forcing pending preview invoker. The `resolve`
-	 *  tool dispatches to it so a staged preview resolves WITHOUT forcing tool_choice — the
-	 *  agent-loop's SoftToolRequirement lifecycle owns reminder injection and escalation. */
+	/** Peek the most-recently registered non-forcing pending preview invoker. A `write` to
+	 *  `xd://resolve` or `xd://reject` dispatches to it so a staged preview resolves
+	 *  WITHOUT forcing tool_choice — the agent-loop's SoftToolRequirement lifecycle owns
+	 *  reminder injection and escalation. */
 	peekPendingInvoker?(): ((input: unknown) => Promise<unknown> | unknown) | undefined;
-	/** Clear stale pending preview markers when `resolve` cannot dispatch them. */
+	/** Clear stale pending preview markers when a resolution dispatch cannot run them. */
 	clearPendingInvokers?(): void;
-	/** Peek the long-lived "standing" resolve handler registered by a mode (e.g. plan mode).
-	 *  Consulted by the `resolve` tool as a fallback when no queue invoker is in flight,
-	 *  letting modes accept `resolve` invocations without forcing the tool choice every turn. */
-	peekStandingResolveHandler?(): ((input: unknown) => Promise<unknown> | unknown) | undefined;
-	/** Register or clear the standing resolve handler. Passing `null` clears it. */
-	setStandingResolveHandler?(handler: ((input: unknown) => Promise<unknown> | unknown) | null): void;
+	/** Peek the plan-proposal handler installed by plan mode. `xd://propose` dispatches the
+	 *  written plan title to it. */
+	peekPlanProposalHandler?(): PlanProposalHandler | undefined;
+	/** Register or clear the plan-proposal handler. Passing `null` clears it. */
+	setPlanProposalHandler?(handler: PlanProposalHandler | null): void;
 	/** Get active checkpoint state if any. */
 	getCheckpointState?: () => CheckpointState | undefined;
 	/** Set or clear active checkpoint state. */
@@ -385,65 +355,6 @@ export interface ToolSession {
 
 export type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;
 
-export type BuiltinToolLoadMode = "essential" | "discoverable";
-
-/** Default essential tool names when tools.essentialOverride is empty. */
-export const DEFAULT_ESSENTIAL_TOOL_NAMES: readonly string[] = [
-	"read",
-	"bash",
-	"launch",
-	"edit",
-	"write",
-	"glob",
-	"eval",
-] as const;
-
-/**
- * Resolve the active essential built-in tool names from settings.
- * Returns `tools.essentialOverride` if non-empty (filtered to known built-ins),
- * otherwise `DEFAULT_ESSENTIAL_TOOL_NAMES`.
- */
-export function computeEssentialBuiltinNames(settings: Settings): string[] {
-	const override = settings.get("tools.essentialOverride") ?? [];
-	const cleaned = normalizeToolNames(override.map(name => name.trim()).filter(Boolean));
-	if (cleaned.length > 0) {
-		return cleaned.filter(name => name in BUILTIN_TOOLS);
-	}
-	return [...DEFAULT_ESSENTIAL_TOOL_NAMES];
-}
-
-/**
- * Filter the initial active tool set when `tools.discoveryMode === "all"`.
- *
- * Non-essential discoverable built-ins are hidden — the model rediscovers them
- * via `search_tool_bm25` and activates them on demand. A tool survives hiding
- * when it is essential, explicitly requested, restored from a prior selection,
- * or required by a forced tool_choice feature (`forceActive`). The last case is
- * load-bearing: a named tool_choice (e.g. the eager `todo` prelude) must
- * reference a tool present in the request, or the provider rejects it with 400.
- */
-export function filterInitialToolsForDiscoveryAll(
-	initialToolNames: string[],
-	opts: {
-		loadModeOf: (name: string) => BuiltinToolLoadMode | undefined;
-		essentialNames: ReadonlySet<string>;
-		explicitlyRequested: ReadonlySet<string>;
-		restored: ReadonlySet<string>;
-		forceActive: ReadonlySet<string>;
-	},
-): string[] {
-	return initialToolNames.filter(name => {
-		const loadMode = opts.loadModeOf(name);
-		if (!loadMode) return true; // not a built-in — leave MCP/custom/extension to existing logic
-		if (loadMode === "essential") return true;
-		if (opts.essentialNames.has(name)) return true;
-		if (opts.explicitlyRequested.has(name)) return true;
-		if (opts.restored.has(name)) return true;
-		if (opts.forceActive.has(name)) return true;
-		return false;
-	});
-}
-
 /**
  * Public callable factory map. External callers may invoke `BUILTIN_TOOLS.read(session)` or
  * `BUILTIN_TOOLS[name](session)` to construct a tool directly.
@@ -451,14 +362,12 @@ export function filterInitialToolsForDiscoveryAll(
 export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	read: s => new ReadTool(s),
 	bash: s => new BashTool(s),
-	launch: s => new LaunchTool(s),
 	edit: s => new EditTool(s),
 	ast_grep: s => new AstGrepTool(s),
 	ast_edit: s => new AstEditTool(s),
 	ask: AskTool.createIf,
 	debug: DebugTool.createIf,
 	eval: s => new EvalTool(s),
-	ssh: loadSshTool,
 	github: GithubTool.createIf,
 	glob: s => new GlobTool(s, { rootPathAlias: true }),
 	grep: s => new GrepTool(s),
@@ -468,11 +377,9 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	checkpoint: CheckpointTool.createIf,
 	rewind: RewindTool.createIf,
 	task: s => TaskTool.create(s),
-	job: s => new JobTool(s),
-	irc: IrcTool.createIf,
+	hub: s => new HubTool(s),
 	todo: s => new TodoTool(s),
 	web_search: s => new WebSearchTool(s),
-	search_tool_bm25: SearchToolBm25Tool.createIf,
 	write: s => new WriteTool(s),
 	memory_edit: MemoryEditTool.createIf,
 	retain: MemoryRetainTool.createIf,
@@ -482,11 +389,8 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	manage_skill: ManageSkillTool.createIf,
 };
 
-export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
+export const HIDDEN_TOOLS: Record<HiddenToolName, ToolFactory> = {
 	yield: s => new YieldTool(s),
-	report_finding: () => reportFindingTool,
-	report_tool_issue: s => createReportToolIssueTool(s),
-	resolve: s => new ResolveTool(s),
 	goal: s => new GoalTool(s),
 };
 
@@ -596,23 +500,15 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 			}
 		}
 	}
-	// Resolve effective tool discovery mode.
-	// tools.discoveryMode controls the new modes; mcp.discoveryMode remains a back-compat alias for "mcp-only".
-	const effectiveDiscoveryMode = resolveEffectiveToolDiscoveryMode(
-		session.settings,
-		countToolsForAutoDiscovery(requestedTools ?? Object.keys(BUILTIN_TOOLS)),
-	);
-	const discoveryActive = effectiveDiscoveryMode !== "off";
-
 	const allTools: Record<string, ToolFactory> = { ...BUILTIN_TOOLS, ...HIDDEN_TOOLS };
 	const isToolAllowed = (name: string) => {
 		if (name === "goal") return goalEnabled && goalModeActive;
 		if (name === "lsp") return enableLsp && session.settings.get("lsp.enabled");
 		if (name === "bash") return session.settings.get("bash.enabled");
-		if (name === "launch") return session.settings.get("launch.enabled");
 		if (name === "eval") return allowEval;
 		if (name === "debug") return session.settings.get("debug.enabled");
-		if (name === "todo") return !includeYield && session.settings.get("todo.enabled");
+		if (name === "todo")
+			return (!includeYield || session.prewalkArmed === true) && session.settings.get("todo.enabled");
 		if (name === "glob") return session.settings.get("glob.enabled");
 		if (name === "grep") return session.settings.get("grep.enabled");
 		if (name === "github") return session.settings.get("github.enabled");
@@ -620,12 +516,9 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "ast_edit") return session.settings.get("astEdit.enabled");
 		if (name === "inspect_image") return session.settings.get("inspect_image.enabled");
 		if (name === "web_search") return session.settings.get("web_search.enabled");
-		// search_tool_bm25 is allowed when either legacy mcp.discoveryMode or new tools.discoveryMode is active.
-		if (name === "search_tool_bm25") return discoveryActive;
 		if (name === "ask") return session.settings.get("ask.enabled");
 		if (name === "browser") return session.settings.get("browser.enabled");
 		if (name === "checkpoint" || name === "rewind") return session.settings.get("checkpoint.enabled");
-		if (name === "irc") return isIrcEnabled(session.settings, session.taskDepth ?? 0);
 		if (name === "retain" || name === "recall" || name === "reflect") {
 			return ["hindsight", "mnemopi"].includes(session.settings.get("memory.backend") ?? "");
 		}
@@ -649,7 +542,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const filteredRequestedTools = requestedTools?.filter(name => name in allTools && isToolAllowed(name));
 	const baseEntries =
 		filteredRequestedTools !== undefined
-			? filteredRequestedTools.filter(name => name !== "resolve").map(name => [name, allTools[name]] as const)
+			? filteredRequestedTools.map(name => [name, allTools[name]] as const)
 			: [
 					...Object.entries(BUILTIN_TOOLS)
 						.filter(([name]) => isToolAllowed(name))
@@ -671,28 +564,43 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 			return tool ? wrapToolWithMetaNotice(tool) : null;
 		}),
 	);
-	const tools = baseResults.filter((r): r is Tool => r !== null);
-	if (!tools.some(tool => tool.name === "resolve")) {
-		const resolveTool = await logger.time("createTools:resolve", HIDDEN_TOOLS.resolve, session);
-		if (resolveTool) {
-			tools.push(wrapToolWithMetaNotice(resolveTool));
+	let tools = baseResults.filter((r): r is Tool => r !== null);
+
+	// xd:// mounting: unmount discoverable built-ins from the tools array and
+	// expose them as virtual device URLs driven through read/write. Active for
+	// default tool sets when `tools.xdev` is enabled.
+	const xdevEnabled = requestedTools === undefined && session.settings.get("tools.xdev");
+	if (xdevEnabled) {
+		const mounted: Tool[] = [];
+		const kept: Tool[] = [];
+		for (const tool of tools) {
+			const mountable = isMountableUnderXdev(tool) && tool.name in BUILTIN_TOOLS;
+			(mountable ? mounted : kept).push(tool);
+		}
+		session.xdevRegistry = new XdevRegistry(mounted);
+		tools = kept;
+		const finalActiveNames = new Set(tools.map(tool => tool.name));
+		if (session.setActiveToolNames) {
+			session.setActiveToolNames(finalActiveNames);
+		} else {
+			session.isToolActive = name => finalActiveNames.has(name);
 		}
 	}
-
-	// Auto-inject report_tool_issue when autoqa is enabled (env or setting).
-	// Injected unconditionally into every agent, regardless of requested tool list.
-	const autoQA = isAutoQaEnabled(session.settings);
-	if (autoQA && !tools.some(t => t.name === "report_tool_issue")) {
-		// Build the enum from tools we just constructed via BUILTIN_TOOLS / HIDDEN_TOOLS.
-		// Extension overrides (e.g. a user's custom `bash`) get added later by
-		// other code paths, so they're absent here — exactly what we want; MCP /
-		// extension tools never end up in the report enum.
-		const activeBuiltinNames = tools
-			.map(t => t.name)
-			.filter(name => (name in BUILTIN_TOOLS || name in HIDDEN_TOOLS) && name !== "report_tool_issue");
-		const qaTool = createReportToolIssueTool(session, activeBuiltinNames);
-		if (qaTool) {
-			tools.push(wrapToolWithMetaNotice(qaTool));
+	// The xd:// transport rides read/write: `read xd://` lists+documents devices,
+	// `write xd://<tool>` executes them. Staged previews from deferrable tools
+	// (e.g. ast_edit) also resolve through a `write` to xd://resolve/reject. Retain
+	// both whenever any device is mounted or a deferrable tool can stage one.
+	const xdevMounted = (session.xdevRegistry?.size ?? 0) > 0;
+	if ((tools.some(tool => tool.deferrable === true) || xdevMounted) && !tools.some(tool => tool.name === "write")) {
+		const writeTool = await logger.time("createTools:write", BUILTIN_TOOLS.write, session);
+		if (writeTool) {
+			tools.push(wrapToolWithMetaNotice(writeTool));
+		}
+	}
+	if (xdevMounted && !tools.some(tool => tool.name === "read")) {
+		const readTool = await logger.time("createTools:read", BUILTIN_TOOLS.read, session);
+		if (readTool) {
+			tools.push(wrapToolWithMetaNotice(readTool));
 		}
 	}
 

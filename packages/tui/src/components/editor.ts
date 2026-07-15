@@ -382,6 +382,7 @@ export class Editor implements Component, Focusable {
 
 	#theme: EditorTheme;
 	#useTerminalCursor = false;
+	#imeSafeCursorLayout = false;
 
 	/** When set, replaces the normal cursor glyph at end-of-text with this ANSI-styled string. */
 	cursorOverride: string | undefined;
@@ -537,6 +538,11 @@ export class Editor implements Component, Focusable {
 	 */
 	setUseTerminalCursor(useTerminalCursor: boolean): void {
 		this.#useTerminalCursor = useTerminalCursor;
+	}
+
+	/** Render a dedicated bottom border so terminal-local IME preedit cannot shift editor chrome. */
+	setImeSafeCursorLayout(enabled: boolean): void {
+		this.#imeSafeCursorLayout = enabled;
 	}
 
 	getUseTerminalCursor(): boolean {
@@ -866,6 +872,7 @@ export class Editor implements Component, Focusable {
 			let displayWidth = visibleWidth(layoutLine.text);
 			let cursorPaddingOverflow = 0;
 			let decorated = false;
+			let imeSafeCursorTail = false;
 			const showPromptGutter = promptGutter !== undefined && visibleIndex === 0;
 			const gutterText =
 				promptGutter === undefined ? "" : showPromptGutter ? promptGutter.firstLine : promptGutter.continuation;
@@ -922,7 +929,13 @@ export class Editor implements Component, Focusable {
 				if (marker) {
 					const before = displayText.slice(0, layoutLine.cursorPos);
 					const after = displayText.slice(layoutLine.cursorPos);
-					if (after.length === 0 && inlineHint) {
+					if (this.#imeSafeCursorLayout && after.length === 0 && borderVisible) {
+						// Terminal frontends render IME marked text locally before committed bytes
+						// reach the application. Keep the end-of-input cursor row empty to its
+						// right so that insertion cannot shift box chrome onto the next row.
+						displayText = before + marker;
+						imeSafeCursorTail = true;
+					} else if (after.length === 0 && inlineHint) {
 						const availWidth = Math.max(0, lineContentWidth - displayWidth);
 						const hintText = hintStyle(truncateToWidth(inlineHint, availWidth));
 						displayText = before + marker + hintText;
@@ -1022,6 +1035,15 @@ export class Editor implements Component, Focusable {
 			// trailing `─`, but never the corner/vertical bar itself.
 			const isLastLine = visibleIndex === visibleLayoutLines.length - 1;
 			const rightChromeCells = Math.max(1, paddingX + 1 - cursorPaddingOverflow);
+			if (isLastLine && imeSafeCursorTail) {
+				const leftBorder = this.borderColor(`${box.vertical}${padding(paddingX)}`);
+				const bottomBorder = this.borderColor(
+					`${box.bottomLeft}${box.horizontal.repeat(Math.max(0, width - 2))}${box.bottomRight}`,
+				);
+				result.push(leftBorder + displayText);
+				result.push(bottomBorder);
+				continue;
+			}
 			if (isLastLine) {
 				const rightPad = Math.max(0, rightChromeCells - 2);
 				const includeHorizontal = rightChromeCells >= 2;

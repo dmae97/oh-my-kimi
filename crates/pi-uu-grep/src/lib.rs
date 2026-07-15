@@ -13,6 +13,7 @@
 mod rg;
 
 use std::{
+	borrow::Cow,
 	ffi::{OsStr, OsString},
 	fs::File,
 	io::{self, BufWriter, Read, Write},
@@ -603,6 +604,76 @@ fn escape_literal(pat: &str) -> String {
 	out
 }
 
+/// Translate GNU BRE `\|` alternation into the syntax accepted by
+/// `grep-regex`, without rewriting escaped pipes inside character classes.
+fn normalize_basic_alternation(pattern: &str) -> Cow<'_, str> {
+	let bytes = pattern.as_bytes();
+	let mut output = None;
+	let mut copied = 0;
+	let mut index = 0;
+	let mut in_class = false;
+
+	while index < bytes.len() {
+		if bytes[index] == b'\\' {
+			let run_start = index;
+			while index < bytes.len() && bytes[index] == b'\\' {
+				index += 1;
+			}
+			let slash_count = index - run_start;
+			if !in_class && slash_count % 2 == 1 && index < bytes.len() && bytes[index] == b'|' {
+				let normalized = output.get_or_insert_with(|| String::with_capacity(pattern.len()));
+				normalized.push_str(&pattern[copied..index - 1]);
+				normalized.push('|');
+				copied = index + 1;
+				index += 1;
+				continue;
+			}
+			if slash_count % 2 == 1 && index < bytes.len() {
+				index += 1;
+			}
+			continue;
+		}
+
+		match bytes[index] {
+			b'[' if !in_class => in_class = true,
+			b']' if in_class => in_class = false,
+			_ => {},
+		}
+		index += 1;
+	}
+
+	if let Some(mut normalized) = output {
+		normalized.push_str(&pattern[copied..]);
+		Cow::Owned(normalized)
+	} else {
+		Cow::Borrowed(pattern)
+	}
+}
+
+fn build_default_matcher<P: AsRef<str>>(
+	builder: &RegexMatcherBuilder,
+	patterns: &[P],
+) -> Result<RegexMatcher, String> {
+	let error = match builder.build_many(patterns) {
+		Ok(matcher) => return Ok(matcher),
+		Err(error) => error,
+	};
+	let sanitized: Vec<String> = patterns
+		.iter()
+		.map(|pattern| {
+			let pattern = pattern.as_ref();
+			if builder.build(pattern).is_ok() {
+				pattern.to_owned()
+			} else {
+				escape_literal(pattern)
+			}
+		})
+		.collect();
+	builder
+		.build_many(&sanitized)
+		.map_err(|_| error.to_string())
+}
+
 /// Compile all patterns using the last-selected matcher mode.
 fn build_matcher(
 	patterns: &[String],
@@ -644,28 +715,18 @@ fn build_matcher(
 			.map_err(|error| error.to_string());
 	}
 
-	match builder.build_many(patterns) {
-		Ok(matcher) => Ok(CompiledMatcher::Rust(matcher)),
-		Err(error) if mode == MatchMode::Default => {
-			// The historical builtin accepts ERE syntax by default but falls
-			// back to literals per malformed alternative.
-			let sanitized: Vec<String> = patterns
-				.iter()
-				.map(|pattern| {
-					if builder.build(pattern).is_ok() {
-						pattern.clone()
-					} else {
-						escape_literal(pattern)
-					}
-				})
-				.collect();
-			builder
-				.build_many(&sanitized)
-				.map(CompiledMatcher::Rust)
-				.map_err(|_| error.to_string())
-		},
-		Err(error) => Err(error.to_string()),
+	if mode == MatchMode::Default {
+		let normalized: Vec<_> = patterns
+			.iter()
+			.map(|pattern| normalize_basic_alternation(pattern))
+			.collect();
+		return build_default_matcher(&builder, &normalized).map(CompiledMatcher::Rust);
 	}
+
+	builder
+		.build_many(patterns)
+		.map(CompiledMatcher::Rust)
+		.map_err(|error| error.to_string())
 }
 
 /// A search sink that renders GNU-compatible records and tracks selection.
@@ -1617,6 +1678,16 @@ mod tests {
 		assert_eq!(code, 0);
 		assert!(stdout.contains("foooo"));
 		assert!(!stdout.contains("bar"));
+	}
+
+	#[test]
+	fn default_mode_supports_gnu_basic_alternation() {
+		let input = "\"tools.xdev\": {}\n\"tools.toolbox\": {}\n\"tools.other\": {}\n";
+		let (code, stdout, stderr) = run_grep(&["-c", r"tools.xdev\|tools.toolbox"], input);
+
+		assert_eq!(code, 0, "{stderr}");
+		assert!(stderr.is_empty(), "{stderr}");
+		assert_eq!(stdout, "2\n");
 	}
 
 	#[test]

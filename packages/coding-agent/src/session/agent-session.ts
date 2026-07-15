@@ -170,7 +170,6 @@ import {
 } from "../advisor";
 import { type AsyncJob, type AsyncJobDeliveryState, AsyncJobManager } from "../async";
 import { classifyDifficulty } from "../auto-thinking/classifier";
-import { reset as resetCapabilities } from "../capability";
 import type { Rule } from "../capability/rule";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import type { ModelRegistry } from "../config/model-registry";
@@ -198,7 +197,6 @@ import {
 	validateProviderMaxInFlightRequests,
 } from "../config/settings";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
-import { loadCapability } from "../discovery";
 import { expandApplyPatchToEntries, normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../edit";
 import { getFileSnapshotStore } from "../edit/file-snapshot-store";
 import { disposeJuliaKernelSessionsByOwner } from "../eval/jl/executor";
@@ -288,6 +286,7 @@ import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { t
 import ttsrToolReminderTemplate from "../prompts/system/ttsr-tool-reminder.md" with { type: "text" };
 import unexpectedStopRetryTemplate from "../prompts/system/unexpected-stop-retry.md" with { type: "text" };
 import vibeModeActivePrompt from "../prompts/system/vibe-mode-active.md" with { type: "text" };
+import xdevMountNoticePrompt from "../prompts/system/xdev-mount-notice.md" with { type: "text" };
 import { AgentRegistry } from "../registry/agent-registry";
 import {
 	deobfuscateAssistantContent,
@@ -296,7 +295,6 @@ import {
 	obfuscateProviderContext,
 	type SecretObfuscator,
 } from "../secrets/obfuscator";
-import { invalidateHostMetadata } from "../ssh/connection-manager";
 import { usesCodexTaskPrompt } from "../task/prompt-policy";
 import {
 	AUTO_THINKING,
@@ -311,27 +309,24 @@ import {
 } from "../thinking";
 import { formatTitleConversationContext, type TitleConversationTurn } from "../tiny/message-preproc";
 import { shutdownTinyTitleClient } from "../tiny/title-client";
-import { countToolsForAutoDiscovery, resolveEffectiveToolDiscoveryMode } from "../tool-discovery/mode";
-import {
-	buildDiscoverableToolSearchIndex,
-	collectDiscoverableTools,
-	type DiscoverableTool,
-	type DiscoverableToolSearchIndex,
-	filterBySource,
-	isMCPToolName,
-	selectDiscoverableToolNamesByServer,
-} from "../tool-discovery/tool-index";
 import { assertEditableFile } from "../tools/auto-generated-guard";
 import { releaseTabsForOwner } from "../tools/browser/tab-supervisor";
-import { normalizeToolNames } from "../tools/builtin-names";
+import { isMCPToolName, normalizeToolNames } from "../tools/builtin-names";
 import type { CheckpointState, CompletedRewindState } from "../tools/checkpoint";
 import { outputMeta, wrapToolWithMetaNotice } from "../tools/output-meta";
 import { normalizeLocalScheme, resolveToCwd } from "../tools/path-utils";
-import { isAutoQaEnabled } from "../tools/report-tool-issue";
-import { buildResolveReminderMessage, type ResolveToolDetails, runResolveInvocation } from "../tools/resolve";
+import {
+	buildResolveReminderMessage,
+	isPreviewResolutionToolCall,
+	isProposeToolCall,
+	type PlanProposalHandler,
+	PROPOSE_DEVICE_NAME,
+	writeDeviceDispatch,
+} from "../tools/resolve";
 import { getLatestTodoPhasesFromEntries, type TodoItem, type TodoPhase } from "../tools/todo";
 import { ToolAbortError, ToolError } from "../tools/tool-errors";
 import { clampTimeout } from "../tools/tool-timeouts";
+import { isMountableUnderXdev, type XdevRegistry } from "../tools/xdev";
 import { parseCommandArgs } from "../utils/command-args";
 import { type EditMode, resolveEditMode } from "../utils/edit-mode";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
@@ -396,7 +391,6 @@ import { YieldQueue } from "./yield-queue";
 
 const SESSION_STOP_CONTINUATION_CAP = 8;
 const PLAN_MODE_REMINDER_MAX = 3;
-const PLAN_DECISION_TOOLS = new Set(["ask", "resolve"]);
 
 /**
  * Mutating tool results (`bash`/`eval`/`edit`/`write`/`ast_edit`) without the
@@ -410,7 +404,7 @@ const PLAN_DECISION_TOOLS = new Set(["ask", "resolve"]);
  */
 const MID_RUN_TODO_NUDGE_MUTATION_THRESHOLD = 12;
 /** Mid-run nudges per prompt cycle. Deliberately tighter than
- *  `todo.reminders.max` (the stop-time budget): this is a gentle hidden hint,
+ *  `todo.remindersMax` (the stop-time budget): this is a gentle hidden hint,
  *  not an escalation ladder. */
 const MID_RUN_TODO_NUDGE_MAX_PER_CYCLE = 2;
 /** Tool results that count as landed work for the mid-run todo nudge. */
@@ -488,6 +482,9 @@ const PREWALK_CONTINUE_MESSAGE_TYPE = "prewalk-continue";
  *  multi-site fixes, unnecessarily broad rewrites, and reported-test-only
  *  verification. */
 const PREWALK_CHECKLIST_MESSAGE_TYPE = "prewalk-checklist";
+/** Hidden steered notice announcing a mid-session `xd://` mount/unmount delta
+ *  (see {@link AgentSession.#notifyXdevMountDelta}). */
+const XDEV_MOUNT_NOTICE_MESSAGE_TYPE = "xdev-mount-notice";
 /** Tools whose first successful call triggers the switch — once the todo
  *  gate is open (see {@link AgentSession.#prewalkTodoSeen}). Bash is
  *  deliberately excluded: it doubles as exploration (ls/cat) and fired
@@ -815,7 +812,7 @@ export interface AgentSessionConfig {
 	/** Prewalk from the starting model to a fast/cheap target at the first edit/write once the todo list exists. */
 	prewalk?: Prewalk;
 	/** Force read-only plan mode at start, auto-approve on the model's first
-	 *  `resolve` call, then switch to the target to implement. */
+	 *  plan proposal (`write xd://propose`), then switch to the target to implement. */
 	planYolo?: PlanYolo;
 
 	/** Initial per-family service tiers (OpenAI / Anthropic / Google) for the live session. */
@@ -883,8 +880,12 @@ export interface AgentSessionConfig {
 	rebuildSystemPrompt?: (toolNames: string[], tools: Map<string, AgentTool>) => Promise<{ systemPrompt: string[] }>;
 	/** Local calendar date provider used by prompt-cache invalidation. Defaults to the host local date. */
 	getLocalCalendarDate?: () => string;
-	/** Rebuild the SSH tool from current capability discovery results. */
-	reloadSshTool?: () => Promise<AgentTool | null>;
+	/** Entries of tools mounted under `xd://` (name + one-line summary), for /tools display. */
+	getXdevToolEntries?: () => Array<{ name: string; summary: string }>;
+	/** Session-owned `xd://` device registry; reconciled as the active tool set changes. */
+	xdevRegistry?: XdevRegistry;
+	/** Discoverable tools mounted under `xd://` in the initial enabled set (startup partition in `sdk.ts`). */
+	initialMountedXdevToolNames?: string[];
 	requestedToolNames?: ReadonlySet<string>;
 	/**
 	 * Optional accessor for live MCP server instructions. Read by the session's
@@ -893,16 +894,6 @@ export interface AgentSessionConfig {
 	 * signature comparison and silently keep a stale prompt cached.
 	 */
 	getMcpServerInstructions?: () => Map<string, string> | undefined;
-	/** Enable hidden-by-default MCP tool discovery for this session. */
-	mcpDiscoveryEnabled?: boolean;
-	/** MCP tool names to activate for the current session when discovery mode is enabled. */
-	initialSelectedMCPToolNames?: string[];
-	/** Whether constructor-provided MCP defaults should be persisted immediately. */
-	persistInitialMCPToolSelection?: boolean;
-	/** MCP server names whose tools should seed discovery-mode sessions whenever those servers are connected. */
-	defaultSelectedMCPServerNames?: string[];
-	/** MCP tool names that should seed brand-new sessions created from this AgentSession. */
-	defaultSelectedMCPToolNames?: string[];
 	/** TTSR manager for time-traveling stream rules */
 	ttsrManager?: TtsrManager;
 	/** Secret obfuscator for deobfuscating streaming edit content */
@@ -1730,6 +1721,8 @@ export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
 	readonly settings: Settings;
+	/** Entries of tools mounted under `xd://`; empty when virtual devices are unmounted. */
+	getXdevToolEntries: () => Array<{ name: string; summary: string }>;
 	readonly yieldQueue: YieldQueue;
 	fileSnapshotStore?: InMemorySnapshotStore;
 	#autoApprove: boolean;
@@ -1748,9 +1741,11 @@ export class AgentSession {
 	#prewalk: Prewalk | undefined;
 	/** True once the plan nudge has been queued; scrubbed from context at the switch. */
 	#prewalkPlanInjected = false;
+	/** Armed by plan/tool progress; consumed by one text-only continuation. */
+	#prewalkContinuePending = false;
 	/** True once any successful `todo` call landed — opens the prewalk
 	 *  trigger gate: the switch fires at the first edit/write AFTER the todo
-	 *  list exists (sessions without a todo tool skip the gate). */
+	 *  list exists (sessions without an ACTIVE todo tool skip the gate). */
 	#prewalkTodoSeen = false;
 	#planYolo: PlanYolo | undefined;
 	#planYoloPreviousTools: string[] | undefined;
@@ -1934,7 +1929,6 @@ export class AgentSession {
 		| undefined;
 	#getLocalCalendarDate: () => string;
 	#getMcpServerInstructions: (() => Map<string, string> | undefined) | undefined;
-	#reloadSshTool: (() => Promise<AgentTool | null>) | undefined;
 	#setActiveToolNames: ((names: Iterable<string>) => void) | undefined;
 	#disconnectOwnedMcpManager: (() => Promise<void>) | undefined;
 	#requestedToolNames: ReadonlySet<string> | undefined;
@@ -1954,17 +1948,12 @@ export class AgentSession {
 	 * to decide whether the cached prompt is stale.
 	 */
 	#promptModelKey: string | undefined;
-	#mcpDiscoveryEnabled = false;
-	#discoverableMCPTools = new Map<string, DiscoverableTool>();
-	#selectedMCPToolNames = new Set<string>();
-	// Generic tool discovery (covers built-in + MCP + extension when tools.discoveryMode === "all")
-	#discoverableToolSearchIndex: DiscoverableToolSearchIndex | null = null;
-	#selectedDiscoveredToolNames = new Set<string>();
 	#builtInToolNames = new Set<string>();
 	#rpcHostToolNames = new Set<string>();
-	#defaultSelectedMCPServerNames = new Set<string>();
-	#defaultSelectedMCPToolNames = new Set<string>();
-	#sessionDefaultSelectedMCPToolNames = new Map<string, string[]>();
+	/** Session-owned `xd://` device registry (built-ins + dynamic mounts); `undefined` when the transport is off. */
+	#xdevRegistry: XdevRegistry | undefined;
+	/** Names of discoverable tools currently mounted under `xd://` (dynamic mounts only, not built-in devices). */
+	#mountedXdevToolNames = new Set<string>();
 
 	// TTSR manager for time-traveling stream rules
 	#ttsrManager: TtsrManager | undefined = undefined;
@@ -1979,7 +1968,7 @@ export class AgentSession {
 	#ttsrResumeResolve: (() => void) | undefined = undefined;
 
 	/** One-shot flag for expected internal plan-mode aborts. Approval actions may
-	 *  abort the post-`resolve` continuation before compaction, execution, or
+	 *  abort the post-approval continuation before compaction, execution, or
 	 *  manual refinement. Consumed inside `#handleAgentEvent` for the matching
 	 *  `message_end` + `stopReason: "aborted"`; callers clear it in `finally` so
 	 *  it cannot leak into later unrelated aborts. */
@@ -2247,15 +2236,24 @@ export class AgentSession {
 		const prewalk = this.#prewalk;
 		if (!prewalk || context?.message.role !== "assistant") return;
 
-		// Structural safety net: every branch below assumes the agent loop will
-		// run another turn. It won't if THIS turn had no tool calls — the loop
-		// treats a text-only turn as "the agent is done" and ends the session
-		// with no further prompting. The plan nudge explicitly asks for a prose
-		// reply, which makes a text-only turn common right after it — observed
+		const todoCalledThisTurn = context.toolResults.some(result => result.toolName === "todo");
+		if (todoCalledThisTurn) {
+			this.#prewalkTodoSeen = true;
+		}
+
+		// The plan nudge asks for a prose plan before implementation begins,
+		// but the agent loop treats each text-only reply as terminal — observed
 		// silently killing production SWE-bench runs before any code was ever
-		// written. Force one more turn only in that specific, self-created
-		// hazard window.
-		if (this.#prewalkPlanInjected && context.toolResults.length === 0) {
+		// written. Tool progress re-arms one continuation, allowing split flows
+		// such as plan → todo → prose → read → prose → edit/write. Consuming the
+		// arm before steering also detects completion: two consecutive text-only
+		// replies have no intervening progress, so the second ends naturally
+		// instead of producing the #5551 loop.
+		const hasToolResults = context.toolResults.length > 0;
+		if (this.#prewalkPlanInjected && hasToolResults) {
+			this.#prewalkContinuePending = true;
+		} else if (this.#prewalkContinuePending) {
+			this.#prewalkContinuePending = false;
 			this.agent.steer({
 				role: "custom",
 				customType: PREWALK_CONTINUE_MESSAGE_TYPE,
@@ -2270,18 +2268,18 @@ export class AgentSession {
 		// todo list from it and start" — so the switch waits until a todo list
 		// exists AND the model has actually started implementing (first
 		// edit/write). The todo call itself never triggers: firing there handed
-		// the fast model the whole implementation cold. Sessions without a todo
-		// tool skip the gate.
-		if (context.toolResults.some(result => result.toolName === "todo")) {
-			this.#prewalkTodoSeen = true;
-		}
-		const todoGateOpen = this.#prewalkTodoSeen || !this.#toolRegistry.has("todo");
+		// the fast model the whole implementation cold. The gate keys on the
+		// ACTIVE tool set, not the registry: a registered-but-deactivated todo
+		// (e.g. a restricted active-tool slate) is uncallable and would
+		// deadlock the switch.
+		const todoGateOpen = this.#prewalkTodoSeen || !this.getActiveToolNames().includes("todo");
 		const action = todoGateOpen
 			? context.toolResults.find(result => PREWALK_ACTION_TOOLS[result.toolName])
 			: undefined;
 		if (!action) {
 			if (!this.#prewalkPlanInjected) {
 				this.#prewalkPlanInjected = true;
+				this.#prewalkContinuePending = true;
 				this.agent.steer({
 					role: "custom",
 					customType: PREWALK_PLAN_MESSAGE_TYPE,
@@ -2342,6 +2340,7 @@ export class AgentSession {
 		}
 		this.#prewalk = { target, thinkingLevel };
 		this.#prewalkPlanInjected = true;
+		this.#prewalkContinuePending = true;
 		this.agent.steer({
 			role: "custom",
 			customType: PREWALK_PLAN_MESSAGE_TYPE,
@@ -2379,18 +2378,17 @@ export class AgentSession {
 
 	/**
 	 * Lazily arm PlanYolo before the first prompt is built: restricts tools to
-	 * the plan-mode read-only set (plus `resolve`/`write`, both normally
-	 * discovery-hidden), marks plan-mode state so `#buildPlanModeMessage`
-	 * injects the standard plan-mode-active instructions on this and every
-	 * following prompt, and registers the auto-approve resolve handler.
+	 * the plan-mode read-only set (plus `write`, which carries the resolution
+	 * devices including `xd://propose`), marks plan-mode state so
+	 * `#buildPlanModeMessage` injects the standard plan-mode-active instructions
+	 * on this and every following prompt, and registers the auto-approve plan-proposal handler.
 	 * Idempotent — a no-op once armed or when PlanYolo is not configured.
 	 */
 	async #armPlanYoloIfNeeded(): Promise<void> {
 		if (!this.#planYolo || this.#planYoloArmed) return;
 		this.#planYoloArmed = true;
-		const previousTools = this.getActiveToolNames();
-		const augmentations = ["resolve"];
-		if (this.hasBuiltInTool("write")) augmentations.push("write");
+		const previousTools = this.getEnabledToolNames();
+		const augmentations = this.hasBuiltInTool("write") ? ["write"] : [];
 		await this.setActiveToolsByName([...new Set([...previousTools, ...augmentations])]);
 		this.#planYoloPreviousTools = previousTools;
 		this.setPlanModeState({
@@ -2398,63 +2396,58 @@ export class AgentSession {
 			planFilePath: this.getPlanReferencePath() || "local://PLAN.md",
 			workflow: "parallel",
 		});
-		this.setStandingResolveHandler(input => this.#runPlanYoloApprovalResolve(input));
+		this.setPlanProposalHandler(title => this.#approvePlanYoloProposal(title));
 	}
 
 	/**
-	 * Standing resolve handler while PlanYolo's plan phase is active. Auto-
-	 * approves the instant the model calls `resolve { action: "apply" }` for
-	 * the plan — no interactive review, the headless counterpart to plan
-	 * mode's "Approve and execute" — then restores tools, exits plan-mode
-	 * state, switches to the configured `target`, and hands off the approved
-	 * plan for it to implement.
+	 * Plan-proposal handler while PlanYolo's plan phase is active. Auto-approves
+	 * the instant the model writes the plan slug/title to `xd://propose` — no
+	 * interactive review, the headless counterpart to plan mode's "Approve and
+	 * execute" — then restores tools, exits plan-mode state, switches to the
+	 * configured `target`, and hands off the approved plan for it to implement.
 	 */
-	#runPlanYoloApprovalResolve(input: unknown): Promise<AgentToolResult<ResolveToolDetails>> {
-		return runResolveInvocation(input as Parameters<typeof runResolveInvocation>[0], {
-			sourceToolName: "plan_approval",
-			label: "Plan ready for approval",
-			apply: async (_reason, extra) => {
-				const planYolo = this.#planYolo;
-				const state = this.getPlanModeState();
-				if (!planYolo || !state?.enabled) {
-					throw new ToolError("Plan mode is not active.");
-				}
-				const { planFilePath, title } = await resolveApprovedPlan({
-					suppliedTitle: extra?.title,
-					statePlanFilePath: state.planFilePath,
-					readPlan: url => this.#readPlanYoloFile(url),
-					listPlanFiles: () => this.#listPlanYoloFiles(),
-				});
-				const previousTools = this.#planYoloPreviousTools;
-				if (previousTools) {
-					await this.setActiveToolsByName(previousTools);
-				}
-				this.setStandingResolveHandler(null);
-				this.setPlanModeState(undefined);
-				this.#planYolo = undefined;
-				this.#planYoloPreviousTools = undefined;
-				await this.setModelTemporary(planYolo.target, planYolo.thinkingLevel, { ephemeral: true });
-				this.emitNotice(
-					"info",
-					`Plan-yolo: plan approved, switched to ${planYolo.target.provider}/${planYolo.target.id} to implement "${title}".`,
-					"plan-yolo",
-				);
-				this.agent.steer({
-					role: "custom",
-					customType: PLAN_YOLO_HANDOFF_MESSAGE_TYPE,
-					content: prompt.render(planYoloHandoffPrompt, { planFilePath, title }),
-					attribution: "agent",
-					display: false,
-					timestamp: Date.now(),
-				});
-				return {
-					content: [
-						{ type: "text" as const, text: `Plan approved. Implementing now with ${planYolo.target.id}.` },
-					],
-					details: { planFilePath, title, planExists: true },
-				};
-			},
+	#approvePlanYoloProposal(title: string): Promise<AgentToolResult<unknown>> {
+		return this.#finalizePlanYoloProposal(title);
+	}
+
+	async #finalizePlanYoloProposal(title: string): Promise<AgentToolResult<unknown>> {
+		const planYolo = this.#planYolo;
+		const state = this.getPlanModeState();
+		if (!planYolo || !state?.enabled) {
+			throw new ToolError("Plan mode is not active.");
+		}
+		const { planFilePath, title: resolvedTitle } = await resolveApprovedPlan({
+			suppliedTitle: title,
+			statePlanFilePath: state.planFilePath,
+			readPlan: url => this.#readPlanYoloFile(url),
+			listPlanFiles: () => this.#listPlanYoloFiles(),
 		});
+		const previousTools = this.#planYoloPreviousTools;
+		if (previousTools) {
+			await this.setActiveToolsByName(previousTools);
+		}
+		this.setPlanProposalHandler(null);
+		this.setPlanModeState(undefined);
+		this.#planYolo = undefined;
+		this.#planYoloPreviousTools = undefined;
+		await this.setModelTemporary(planYolo.target, planYolo.thinkingLevel, { ephemeral: true });
+		this.emitNotice(
+			"info",
+			`Plan-yolo: plan approved, switched to ${planYolo.target.provider}/${planYolo.target.id} to implement "${resolvedTitle}".`,
+			"plan-yolo",
+		);
+		this.agent.steer({
+			role: "custom",
+			customType: PLAN_YOLO_HANDOFF_MESSAGE_TYPE,
+			content: prompt.render(planYoloHandoffPrompt, { planFilePath, title: resolvedTitle }),
+			attribution: "agent",
+			display: false,
+			timestamp: Date.now(),
+		});
+		return {
+			content: [{ type: "text" as const, text: `Plan approved. Implementing now with ${planYolo.target.id}.` }],
+			details: { planFilePath, title: resolvedTitle, planExists: true },
+		};
 	}
 
 	async #readPlanYoloFile(planFilePath: string): Promise<string | null> {
@@ -2623,7 +2616,7 @@ export class AgentSession {
 		// Background-job completions / late diagnostics are pulled into the run at
 		// each step boundary as non-interrupting asides. Peer IRCs share the aside
 		// injection boundary, but also expose a non-consuming interrupt peek so
-		// `job poll` / `irc wait` can return early before the boundary drains them.
+		// `hub` waits can return early before the boundary drains them.
 		this.agent.hasIrcInterrupts = () => this.#pendingIrcInterrupts.length > 0;
 		this.agent.setAsideMessageProvider(() => {
 			const pendingIrc = [...this.#pendingIrcInterrupts, ...this.#pendingIrcAsides];
@@ -2640,32 +2633,13 @@ export class AgentSession {
 		this.#rebuildSystemPrompt = config.rebuildSystemPrompt;
 		this.#getLocalCalendarDate = config.getLocalCalendarDate ?? formatLocalCalendarDate;
 		this.#getMcpServerInstructions = config.getMcpServerInstructions;
-		this.#reloadSshTool = config.reloadSshTool;
+		this.getXdevToolEntries = config.getXdevToolEntries ?? (() => []);
+		this.#xdevRegistry = config.xdevRegistry;
+		this.#mountedXdevToolNames = new Set(config.initialMountedXdevToolNames ?? []);
 		this.#setActiveToolNames = config.setActiveToolNames;
 		this.#disconnectOwnedMcpManager = config.disconnectOwnedMcpManager;
 		this.#baseSystemPrompt = this.agent.state.systemPrompt;
 		this.#promptModelKey = this.#currentPromptModelKey();
-		this.#mcpDiscoveryEnabled = config.mcpDiscoveryEnabled ?? false;
-		this.#setDiscoverableMCPTools(this.#collectDiscoverableMCPToolsFromRegistry());
-		this.#selectedMCPToolNames = new Set(config.initialSelectedMCPToolNames ?? []);
-		this.#defaultSelectedMCPServerNames = new Set(config.defaultSelectedMCPServerNames ?? []);
-		this.#defaultSelectedMCPToolNames = new Set(config.defaultSelectedMCPToolNames ?? []);
-		this.#pruneSelectedMCPToolNames();
-		const persistedSelectedMCPToolNames = this.buildDisplaySessionContext().selectedMCPToolNames;
-		const currentSelectedMCPToolNames = this.getSelectedMCPToolNames();
-		const persistInitialMCPToolSelection =
-			config.persistInitialMCPToolSelection ?? this.sessionManager.getBranch().length === 0;
-		if (
-			this.#mcpDiscoveryEnabled &&
-			persistInitialMCPToolSelection &&
-			!this.#selectedMCPToolNamesMatch(persistedSelectedMCPToolNames, currentSelectedMCPToolNames)
-		) {
-			this.sessionManager.appendMCPToolSelection(currentSelectedMCPToolNames);
-		}
-		this.#rememberSessionDefaultSelectedMCPToolNames(
-			this.sessionManager.getSessionFile(),
-			this.#getConfiguredDefaultSelectedMCPToolNames(),
-		);
 		this.#ttsrManager = config.ttsrManager;
 		this.#obfuscator = config.obfuscator;
 		this.#agentId = config.agentId;
@@ -3468,7 +3442,8 @@ export class AgentSession {
 	 *      consuming (advances the queue generator);
 	 *   2. else, when a non-forcing preview is pending, a {@link SoftToolRequirement} — a
 	 *      PEEK (advances/pops nothing), so the agent-loop injects the reminder once per head
-	 *      and escalates to a forced `resolve` only if the model declines. A compliant turn
+	 *      and escalates to a forced `write` only if the model declines to
+	 *      resolve via `xd://resolve` or `xd://reject`. A compliant turn
 	 *      pays ZERO tool_choice change (no prompt-cache messages-cache invalidation);
 	 *   3. else undefined.
 	 */
@@ -3480,19 +3455,23 @@ export class AgentSession {
 			return {
 				soft: true,
 				id: head.id,
-				toolName: "resolve",
+				// Preview resolution is a `write` to xd://resolve or xd://reject;
+				// only those exact shapes satisfy the requirement — a plain write
+				// elsewhere is a detour.
+				toolName: "write",
+				satisfies: isPreviewResolutionToolCall,
 				reminder: [buildResolveReminderMessage(head.sourceToolName)],
 			};
 		}
 		return undefined;
 	}
 
-	/** Peek the head non-forcing pending preview invoker, for the `resolve` tool's dispatch. */
+	/** Peek the head non-forcing pending preview invoker, for the preview-resolution dispatch. */
 	peekPendingInvoker(): ((input: unknown) => Promise<unknown> | unknown) | undefined {
 		return this.#toolChoiceQueue.peekPendingInvoker();
 	}
 
-	/** Clear stale non-forcing pending preview invokers after `resolve` proves none can run. */
+	/** Clear stale non-forcing pending preview invokers after a resolve dispatch proves none can run. */
 	clearPendingInvokers(): void {
 		this.#toolChoiceQueue.clearPendingInvokers();
 	}
@@ -3523,22 +3502,20 @@ export class AgentSession {
 		return this.#toolChoiceQueue;
 	}
 
-	/** Peek the in-flight directive's invocation handler for use by the resolve tool. */
+	/** Peek the in-flight directive's invocation handler for the preview-resolution dispatch. */
 	peekQueueInvoker(): ((input: unknown) => Promise<unknown> | unknown) | undefined {
 		return this.#toolChoiceQueue.peekInFlightInvoker();
 	}
 
-	/** Standing (long-lived) handler the `resolve` tool falls back to when no
-	 *  queue invoker is in flight. Used by plan mode so the agent can submit
-	 *  approval via `resolve` without forcing the tool choice every turn. */
-	#standingResolveHandler: ((input: unknown) => Promise<unknown> | unknown) | undefined;
+	/** Plan-proposal handler consulted by `xd://propose` while plan mode is active. */
+	#planProposalHandler: PlanProposalHandler | undefined;
 
-	peekStandingResolveHandler(): ((input: unknown) => Promise<unknown> | unknown) | undefined {
-		return this.#standingResolveHandler;
+	peekPlanProposalHandler(): PlanProposalHandler | undefined {
+		return this.#planProposalHandler;
 	}
 
-	setStandingResolveHandler(handler: ((input: unknown) => Promise<unknown> | unknown) | null): void {
-		this.#standingResolveHandler = handler ?? undefined;
+	setPlanProposalHandler(handler: PlanProposalHandler | null): void {
+		this.#planProposalHandler = handler ?? undefined;
 	}
 
 	#sessionSwitchReconciler: (() => Promise<void>) | undefined;
@@ -3655,7 +3632,7 @@ export class AgentSession {
 	 * a settle observed now is a scheduling pause rather than a terminal stop:
 	 * stop-time passes (todo reminder, session_stop hooks) defer to the settle
 	 * reached once the session is fully idle. Suppressed deliveries
-	 * (acknowledged, or watched by an in-flight `job` poll) never wake the loop,
+	 * (acknowledged, or watched by an in-flight `hub` wait) never wake the loop,
 	 * so they don't count.
 	 */
 	#hasPendingAsyncWake(): boolean {
@@ -4187,7 +4164,10 @@ export class AgentSession {
 				await this.#goalRuntime.onToolCompleted(event.toolName);
 			}
 			this.#planModeReminderAwaitingProgress = false;
-			if (this.#isPlanDecisionTool(event.toolName)) {
+			if (
+				event.toolName === "ask" ||
+				writeDeviceDispatch(event.toolName, event.result)?.tool === PROPOSE_DEVICE_NAME
+			) {
 				this.#planModeReminderCount = 0;
 				this.#planModeReminderAwaitingProgress = false;
 			}
@@ -6511,72 +6491,8 @@ export class AgentSession {
 		return this.#retryAttempt;
 	}
 
-	#collectDiscoverableMCPToolsFromRegistry(): Map<string, DiscoverableTool> {
-		const mcpTools = filterBySource(collectDiscoverableTools(this.#toolRegistry.values()), "mcp");
-		return new Map(mcpTools.map(tool => [tool.name, tool] as const));
-	}
-
-	#setDiscoverableMCPTools(discoverableMCPTools: Map<string, DiscoverableTool>): void {
-		this.#discoverableMCPTools = discoverableMCPTools;
-		this.#invalidateDiscoveryCaches();
-	}
-
-	/** Single point for invalidating cached discovery indices. Call after any change that can
-	 *  affect which tools should be discoverable: registry mutations (refreshMCPTools,
-	 *  refreshRpcHostTools) or active-tool mutations (#applyActiveToolsByName). */
-	#invalidateDiscoveryCaches(): void {
-		this.#discoverableToolSearchIndex = null;
-	}
-
-	#filterSelectableMCPToolNames(toolNames: Iterable<string>): string[] {
-		return Array.from(toolNames).filter(name => this.#discoverableMCPTools.has(name) && this.#toolRegistry.has(name));
-	}
-
-	#getConfiguredDefaultSelectedMCPToolNames(): string[] {
-		return this.#filterSelectableMCPToolNames([
-			...this.#defaultSelectedMCPToolNames,
-			...selectDiscoverableToolNamesByServer(
-				this.#discoverableMCPTools.values(),
-				this.#defaultSelectedMCPServerNames,
-			),
-		]);
-	}
-
-	#pruneSelectedMCPToolNames(): void {
-		this.#selectedMCPToolNames = new Set(this.#filterSelectableMCPToolNames(this.#selectedMCPToolNames));
-	}
-
-	#selectedMCPToolNamesMatch(left: string[], right: string[]): boolean {
-		return left.length === right.length && left.every((name, index) => name === right[index]);
-	}
-
-	#rememberSessionDefaultSelectedMCPToolNames(
-		sessionFile: string | null | undefined,
-		toolNames: Iterable<string>,
-	): void {
-		if (!sessionFile) return;
-		this.#sessionDefaultSelectedMCPToolNames.set(
-			path.resolve(sessionFile),
-			this.#filterSelectableMCPToolNames(toolNames),
-		);
-	}
-
-	#getSessionDefaultSelectedMCPToolNames(sessionFile: string | null | undefined): string[] {
-		if (!sessionFile) return [];
-		return this.#sessionDefaultSelectedMCPToolNames.get(path.resolve(sessionFile)) ?? [];
-	}
-
-	#persistSelectedMCPToolNamesIfChanged(previousSelectedMCPToolNames: string[]): void {
-		if (!this.#mcpDiscoveryEnabled) return;
-		const nextSelectedMCPToolNames = this.getSelectedMCPToolNames();
-		if (this.#selectedMCPToolNamesMatch(previousSelectedMCPToolNames, nextSelectedMCPToolNames)) {
-			return;
-		}
-		this.sessionManager.appendMCPToolSelection(nextSelectedMCPToolNames);
-	}
-
 	#getActiveNonMCPToolNames(): string[] {
-		return this.getActiveToolNames().filter(name => !isMCPToolName(name) && this.#toolRegistry.has(name));
+		return this.getEnabledToolNames().filter(name => !isMCPToolName(name) && this.#toolRegistry.has(name));
 	}
 
 	/**
@@ -6585,6 +6501,22 @@ export class AgentSession {
 	 */
 	getActiveToolNames(): string[] {
 		return this.agent.state.tools.map(t => t.name);
+	}
+
+	/**
+	 * Enabled tool names: top-level active tools plus discoverable tools mounted
+	 * under `xd://`. Reconcile callers (MCP refresh, discovery, plan/goal mode)
+	 * build their next active set from this so a mount survives an active-set
+	 * change; {@link getActiveToolNames} stays the top-level-only view.
+	 */
+	getEnabledToolNames(): string[] {
+		if (this.#mountedXdevToolNames.size === 0) return this.getActiveToolNames();
+		return [...this.getActiveToolNames(), ...this.#mountedXdevToolNames];
+	}
+
+	/** Names of discoverable tools currently mounted under `xd://` (dynamic mounts). */
+	getMountedXdevToolNames(): string[] {
+		return [...this.#mountedXdevToolNames];
 	}
 
 	/** Whether the edit tool is registered in this session. */
@@ -6648,7 +6580,6 @@ export class AgentSession {
 		for (const name of this.#installedVibeToolNames) {
 			this.#toolRegistry.delete(name);
 			this.#builtInToolNames.delete(name);
-			this.#selectedDiscoveredToolNames.delete(name);
 		}
 		this.#installedVibeToolNames.clear();
 		await this.#applyActiveToolsByName(nextToolNames);
@@ -6682,146 +6613,10 @@ export class AgentSession {
 		}
 	}
 
-	isMCPDiscoveryEnabled(): boolean {
-		return this.#mcpDiscoveryEnabled;
-	}
-
-	/**
-	 * Flip MCP discovery on after deferred discovery learns the real tool count.
-	 * UI sessions resolve `tools.discoveryMode: "auto"` before MCP servers
-	 * connect, so a large MCP toolset discovered later must be able to upgrade
-	 * the session from the force-activate path to the discovery path. One-way:
-	 * discovery is never downgraded mid-session.
-	 */
-	enableMCPDiscovery(): void {
-		this.#mcpDiscoveryEnabled = true;
-	}
-
 	getSelectedMCPToolNames(): string[] {
-		if (!this.#mcpDiscoveryEnabled) {
-			return this.getActiveToolNames().filter(name => isMCPToolName(name) && this.#toolRegistry.has(name));
-		}
-		return this.#filterSelectableMCPToolNames(this.#selectedMCPToolNames);
-	}
-
-	async activateDiscoveredMCPTools(toolNames: string[]): Promise<string[]> {
-		const nextSelectedMCPToolNames = new Set(this.#selectedMCPToolNames);
-		const activated: string[] = [];
-		for (const name of toolNames) {
-			if (!isMCPToolName(name) || !this.#discoverableMCPTools.has(name) || !this.#toolRegistry.has(name)) {
-				continue;
-			}
-			nextSelectedMCPToolNames.add(name);
-			activated.push(name);
-		}
-		if (activated.length === 0) {
-			return [];
-		}
-		const nextActive = [
-			...this.#getActiveNonMCPToolNames(),
-			...this.#filterSelectableMCPToolNames(nextSelectedMCPToolNames),
-		];
-		await this.setActiveToolsByName(nextActive);
-		return [...new Set(activated)];
-	}
-
-	// ── Generic tool discovery (covers built-in + MCP + extension) ────────────
-
-	/** Resolve effective discovery mode from the current registry size. */
-	#resolveEffectiveDiscoveryMode(): "off" | "mcp-only" | "all" {
-		const mode = resolveEffectiveToolDiscoveryMode(
-			this.settings,
-			countToolsForAutoDiscovery(this.#toolRegistry.keys()),
-		);
-		if (mode !== "off") return mode;
-		return this.#mcpDiscoveryEnabled ? "mcp-only" : "off";
-	}
-
-	isToolDiscoveryEnabled(): boolean {
-		return this.#resolveEffectiveDiscoveryMode() !== "off";
-	}
-
-	getDiscoverableTools(filter?: { source?: DiscoverableTool["source"] }): DiscoverableTool[] {
-		// For "all" mode we combine built-in registry entries + MCP tools.
-		// For "mcp-only" mode we only return MCP tools.
-		const mode = this.#resolveEffectiveDiscoveryMode();
-		const activeNames = new Set(this.getActiveToolNames());
-		const mcpTools = Array.from(this.#discoverableMCPTools.values()).filter(t => !activeNames.has(t.name));
-		const builtinTools: DiscoverableTool[] = mode === "all" ? this.#collectDiscoverableBuiltinTools() : [];
-		const allTools = [...builtinTools, ...mcpTools];
-		return filter?.source ? allTools.filter(t => t.source === filter.source) : allTools;
-	}
-
-	/** Collect built-in tools the model can discover via search_tool_bm25. Restricted to tool
-	 *  definitions whose `loadMode === "discoverable"`. This keeps hidden/internal tools
-	 *  (resolve, yield, report_finding, report_tool_issue) out of the index
-	 *  and avoids mislabeling extension/custom default-inactive tools as built-ins. */
-	#collectDiscoverableBuiltinTools(): DiscoverableTool[] {
-		const activeNames = new Set(this.getActiveToolNames());
-		const result: DiscoverableTool[] = [];
-		for (const tool of this.#toolRegistry.values()) {
-			if (tool.loadMode !== "discoverable") continue;
-			if (activeNames.has(tool.name)) continue;
-			const collected = collectDiscoverableTools([tool], { source: "builtin" });
-			result.push(...collected);
-		}
-		return result;
-	}
-
-	getDiscoverableToolSearchIndex(): DiscoverableToolSearchIndex {
-		if (!this.#discoverableToolSearchIndex) {
-			this.#discoverableToolSearchIndex = buildDiscoverableToolSearchIndex(this.getDiscoverableTools());
-		}
-		return this.#discoverableToolSearchIndex;
-	}
-
-	/** Invalidate the generic search index cache (call after tool set changes).
-	 *  Delegates to {@link #invalidateDiscoveryCaches} so all discovery-related caches stay in sync. */
-	#invalidateDiscoverableToolSearchIndex(): void {
-		this.#invalidateDiscoveryCaches();
-	}
-
-	getSelectedDiscoveredToolNames(): string[] {
-		// Union of MCP-selected and generic non-MCP selected. Non-MCP selections are only
-		// selected while they are still active; otherwise BM25 must be able to rediscover them.
-		const activeNames = new Set(this.getActiveToolNames());
-		const mcpSelected = this.getSelectedMCPToolNames();
-		const nonMcpSelected = Array.from(this.#selectedDiscoveredToolNames).filter(
-			name => activeNames.has(name) && this.#toolRegistry.has(name) && !isMCPToolName(name),
-		);
-		return [...new Set([...mcpSelected, ...nonMcpSelected])];
-	}
-
-	async activateDiscoveredTools(toolNames: string[]): Promise<string[]> {
-		const mcpNames = toolNames.filter(isMCPToolName);
-		const nonMcpNames = toolNames.filter(name => !isMCPToolName(name));
-		const activated: string[] = [];
-
-		// Activate MCP tools via existing path
-		if (mcpNames.length > 0) {
-			const activatedMcp = await this.activateDiscoveredMCPTools(mcpNames);
-			activated.push(...activatedMcp);
-		}
-
-		// Activate non-MCP tools (built-ins that are in the registry but not currently active)
-		if (nonMcpNames.length > 0) {
-			const currentActiveNames = new Set(this.getActiveToolNames());
-			const newlyAdded: string[] = [];
-			for (const name of nonMcpNames) {
-				if (this.#toolRegistry.has(name) && !currentActiveNames.has(name)) {
-					newlyAdded.push(name);
-					this.#selectedDiscoveredToolNames.add(name);
-					activated.push(name);
-				}
-			}
-			if (newlyAdded.length > 0) {
-				const nextActive = [...this.getActiveToolNames(), ...newlyAdded];
-				await this.setActiveToolsByName(nextActive);
-				this.#invalidateDiscoverableToolSearchIndex();
-			}
-		}
-
-		return [...new Set(activated)];
+		// Every connected MCP tool is enabled; presentation (top-level vs xd://) is
+		// decided by loadMode. Return the enabled MCP tools in the current set.
+		return this.getEnabledToolNames().filter(name => isMCPToolName(name) && this.#toolRegistry.has(name));
 	}
 
 	/**
@@ -6942,48 +6737,33 @@ export class AgentSession {
 		);
 	}
 
-	async #applyActiveToolsByName(
-		toolNames: string[],
-		options?: { persistMCPSelection?: boolean; previousSelectedMCPToolNames?: string[] },
-	): Promise<void> {
+	async #applyActiveToolsByName(toolNames: string[]): Promise<void> {
 		toolNames = normalizeToolNames(toolNames);
-		const previousSelectedMCPToolNames = options?.previousSelectedMCPToolNames ?? this.getSelectedMCPToolNames();
 		const tools: AgentTool[] = [];
 		const validToolNames: string[] = [];
+		const mountedTools: AgentTool[] = [];
 		for (const name of toolNames) {
 			const tool = this.#toolRegistry.get(name);
-			if (tool) {
+			if (!tool) continue;
+			// Discoverable tools are presented as `xd://` devices (kept out of the
+			// top-level schema) when the transport is active; everything else stays
+			// top-level. `loadMode` decides presentation only — selection is upstream.
+			if (this.#xdevRegistry && isMountableUnderXdev(tool)) {
+				mountedTools.push(tool);
+			} else {
 				tools.push(this.#wrapToolForAcpPermission(tool));
 				validToolNames.push(name);
 			}
 		}
-		// Auto-QA tool must survive any runtime tool-set mutation.
-		if (isAutoQaEnabled(this.settings) && !validToolNames.includes("report_tool_issue")) {
-			const qaTool = this.#toolRegistry.get("report_tool_issue");
-			if (qaTool) {
-				tools.push(this.#wrapToolForAcpPermission(qaTool));
-				validToolNames.push("report_tool_issue");
-			}
-		}
-		if (this.#mcpDiscoveryEnabled) {
-			this.#selectedMCPToolNames = new Set(
-				validToolNames.filter(
-					name => isMCPToolName(name) && this.#discoverableMCPTools.has(name) && this.#toolRegistry.has(name),
-				),
-			);
-		}
+		// Reconcile the dynamic `xd://` mounts: newly-active discoverable tools are
+		// mounted, deactivated ones dropped (built-in devices are preserved). A
+		// removed or disconnected tool must not stay callable through a stale device.
+		const previousMounted = this.#mountedXdevToolNames;
+		this.#mountedXdevToolNames = new Set(mountedTools.map(tool => tool.name));
+		this.#xdevRegistry?.reconcile(mountedTools);
+		this.#notifyXdevMountDelta(previousMounted);
 		this.#setActiveToolNames?.(validToolNames);
-		const activeNameSet = new Set(validToolNames);
-		for (const name of Array.from(this.#selectedDiscoveredToolNames)) {
-			if (!activeNameSet.has(name) || isMCPToolName(name) || !this.#toolRegistry.has(name)) {
-				this.#selectedDiscoveredToolNames.delete(name);
-			}
-		}
 		this.agent.setTools(tools);
-
-		// Active tool set changed → discoverable tool list (which excludes already-active tools)
-		// is now stale. Invalidate before any prompt-template hook reads the discovery list.
-		this.#invalidateDiscoveryCaches();
 
 		// Rebuild base system prompt with new tool set, but only when the tool set
 		// actually changed. MCP servers can reconnect at arbitrary times and call
@@ -7004,48 +6784,37 @@ export class AgentSession {
 				this.#promptModelKey = this.#currentPromptModelKey();
 			}
 		}
-		if (options?.persistMCPSelection !== false) {
-			this.#persistSelectedMCPToolNamesIfChanged(previousSelectedMCPToolNames);
-		}
 	}
 
 	/**
-	 * Reload the SSH tool from disk-backed capability discovery and make the
-	 * refreshed definition visible to the next model call without restarting.
+	 * Announce a mid-session `xd://` mount delta to the model as a steered
+	 * system notice instead of rewriting the system prompt: the prompt (and
+	 * its provider cache prefix) stays byte-stable across MCP connects and
+	 * disconnects, and the model learns about new devices from the notice
+	 * (docs + schema stay one `read xd://<tool>` away). The full docs join
+	 * the system prompt opportunistically on the next unrelated rebuild.
 	 */
-	async refreshSshTool(options?: { activateIfAvailable?: boolean }): Promise<void> {
-		resetCapabilities();
-		if (!this.#reloadSshTool) return;
-		const previousSshTool = this.#toolRegistry.get("ssh");
-		const previousActiveToolNames = this.getActiveToolNames();
-		const hadSshTool = previousSshTool !== undefined;
-		const wasActive = previousActiveToolNames.includes("ssh");
-		const previousHostNames =
-			previousSshTool && "hostNames" in previousSshTool && Array.isArray(previousSshTool.hostNames)
-				? [...previousSshTool.hostNames]
-				: [];
-		const candidateHostNames = new Set(previousHostNames);
-		const capability = await loadCapability<{ name: string }>("ssh", { cwd: this.sessionManager.getCwd() });
-		for (const host of capability.items) {
-			if (typeof host?.name === "string") {
-				candidateHostNames.add(host.name);
-			}
-		}
-		await invalidateHostMetadata(candidateHostNames);
-		const sshAllowed = this.#requestedToolNames === undefined || this.#requestedToolNames.has("ssh");
-		const refreshedTool = await this.#reloadSshTool();
-		if (refreshedTool) {
-			this.#toolRegistry.set(refreshedTool.name, refreshedTool);
-		} else {
-			this.#toolRegistry.delete("ssh");
-			this.#selectedDiscoveredToolNames.delete("ssh");
-		}
-
-		const nextActive = previousActiveToolNames.filter(name => name !== "ssh" && this.#toolRegistry.has(name));
-		if (refreshedTool && sshAllowed && (wasActive || (options?.activateIfAvailable && !hadSshTool))) {
-			nextActive.push(refreshedTool.name);
-		}
-		await this.#applyActiveToolsByName(nextActive);
+	#notifyXdevMountDelta(previousMounted: ReadonlySet<string>): void {
+		const registry = this.#xdevRegistry;
+		if (!registry) return;
+		const current = this.#mountedXdevToolNames;
+		const addedNames = [...current].filter(name => !previousMounted.has(name));
+		const removed = [...previousMounted].filter(name => !current.has(name)).map(name => ({ name }));
+		if (addedNames.length === 0 && removed.length === 0) return;
+		const summaries = new Map(registry.entries().map(entry => [entry.name, entry.summary]));
+		const added = addedNames.map(name => ({ name, summary: summaries.get(name) ?? "" }));
+		this.agent.steer({
+			role: "custom",
+			customType: XDEV_MOUNT_NOTICE_MESSAGE_TYPE,
+			content: prompt.render(xdevMountNoticePrompt, { added, removed }),
+			attribution: "agent",
+			display: false,
+			timestamp: Date.now(),
+		});
+		const parts: string[] = [];
+		if (added.length > 0) parts.push(`mounted ${added.map(entry => entry.name).join(", ")}`);
+		if (removed.length > 0) parts.push(`unmounted ${removed.map(entry => entry.name).join(", ")}`);
+		this.emitNotice("info", `xd://: ${parts.join("; ")}`, "xdev");
 	}
 
 	/**
@@ -7058,25 +6827,6 @@ export class AgentSession {
 		await this.#applyActiveToolsByName(toolNames);
 	}
 
-	async #restoreMCPSelectionsForSessionContext(
-		sessionContext: SessionContext,
-		options?: { fallbackSelectedMCPToolNames?: Iterable<string> },
-	): Promise<void> {
-		if (!this.#mcpDiscoveryEnabled) return;
-		const nextActiveNonMCPToolNames = this.#getActiveNonMCPToolNames();
-		const fallbackSelectedMCPToolNames =
-			options?.fallbackSelectedMCPToolNames ?? this.#getConfiguredDefaultSelectedMCPToolNames();
-		const restoredMCPToolNames = sessionContext.hasPersistedMCPToolSelection
-			? this.#filterSelectableMCPToolNames(sessionContext.selectedMCPToolNames)
-			: this.#filterSelectableMCPToolNames(fallbackSelectedMCPToolNames);
-		this.#rememberSessionDefaultSelectedMCPToolNames(
-			this.sessionFile,
-			this.#getConfiguredDefaultSelectedMCPToolNames(),
-		);
-		await this.#applyActiveToolsByName([...nextActiveNonMCPToolNames, ...restoredMCPToolNames], {
-			persistMCPSelection: false,
-		});
-	}
 	/** Rebuild the base system prompt using the current active tool set. */
 	async refreshBaseSystemPrompt(): Promise<void> {
 		if (!this.#rebuildSystemPrompt) return;
@@ -7189,17 +6939,6 @@ export class AgentSession {
 		const describeTool = (tool: AgentTool): string =>
 			`${tool.name}=${tool.label ?? ""}|${tool.description ?? ""}|${tool.customWireName ?? ""}`;
 		const descriptionSegment = tools.map(describeTool).join("\u0002");
-		let registrySegment = "";
-		if (this.#mcpDiscoveryEnabled) {
-			// Registry iteration order is not load-bearing for the prompt content, so we
-			// sort to keep the signature insensitive to incidental insertion order.
-			const entries: string[] = [];
-			for (const tool of this.#toolRegistry.values()) {
-				entries.push(describeTool(tool));
-			}
-			entries.sort();
-			registrySegment = entries.join("\u0004");
-		}
 		let instructionsSegment = "";
 		const serverInstructions = this.#getMcpServerInstructions?.();
 		if (serverInstructions && serverInstructions.size > 0) {
@@ -7211,21 +6950,22 @@ export class AgentSession {
 			entries.sort();
 			instructionsSegment = entries.join("\u0006");
 		}
+		// The xd:// device inventory is deliberately NOT part of the signature:
+		// a mount/unmount announces itself via `#notifyXdevMountDelta` instead of
+		// rewriting the system prompt, so MCP connects/disconnects keep the
+		// prompt (and its provider cache prefix) byte-stable. Rebuilds triggered
+		// by other inputs pick up the current device docs opportunistically.
 		const date = this.#getLocalCalendarDate();
-		return `${nameSegment}\u0003${descriptionSegment}\u0005${registrySegment}\u0007${instructionsSegment}|${date}`;
+		return `${nameSegment}\u0003${descriptionSegment}\u0007${instructionsSegment}|${date}`;
 	}
 
 	/**
-	 * Replace MCP tools in the registry and recompute the visible MCP tool set immediately.
-	 * This allows /mcp add/remove/reauth to take effect without restarting the session.
-	 *
-	 * @param mcpTools The new MCP tools to register.
-	 * @param options.activateAll When true, force-activates every newly registered MCP tool
-	 *   regardless of prior selection state. Used when MCP discovery is disabled and tools
-	 *   arrive after initial session activation.
+	 * Replace MCP tools in the registry and enable them immediately. Every
+	 * connected MCP tool becomes available (mounted under `xd://` when that
+	 * transport is active, else top-level). Lets `/mcp add/remove/reauth` take
+	 * effect without restarting the session.
 	 */
-	async refreshMCPTools(mcpTools: CustomTool[], options?: { activateAll?: boolean }): Promise<void> {
-		const previousSelectedMCPToolNames = this.getSelectedMCPToolNames();
+	async refreshMCPTools(mcpTools: CustomTool[]): Promise<void> {
 		const existingNames = Array.from(this.#toolRegistry.keys());
 		for (const name of existingNames) {
 			if (isMCPToolName(name)) {
@@ -7254,33 +6994,10 @@ export class AgentSession {
 			this.#toolRegistry.set(finalTool.name, finalTool);
 		}
 
-		this.#setDiscoverableMCPTools(this.#collectDiscoverableMCPToolsFromRegistry());
-		this.#pruneSelectedMCPToolNames();
-		if (!this.buildDisplaySessionContext().hasPersistedMCPToolSelection) {
-			this.#selectedMCPToolNames = new Set([
-				...this.#selectedMCPToolNames,
-				...this.#getConfiguredDefaultSelectedMCPToolNames(),
-			]);
-		}
-		this.#rememberSessionDefaultSelectedMCPToolNames(
-			this.sessionFile,
-			this.#getConfiguredDefaultSelectedMCPToolNames(),
-		);
-
-		if (options?.activateAll) {
-			// Force-activate every newly registered MCP tool. This path is used
-			// when MCP discovery is disabled and tools arrive after initial
-			// activation — without it, getSelectedMCPToolNames() returns only
-			// already-active tools (circular deadlock: tools can only become
-			// active if they're already active).
-			const newMcpNames = mcpTools.map(t => t.name);
-			const nextActive = [...new Set([...this.#getActiveNonMCPToolNames(), ...newMcpNames])];
-			await this.#applyActiveToolsByName(nextActive, { previousSelectedMCPToolNames });
-			return;
-		}
-
-		const nextActive = [...this.#getActiveNonMCPToolNames(), ...this.getSelectedMCPToolNames()];
-		await this.#applyActiveToolsByName(nextActive, { previousSelectedMCPToolNames });
+		// Every connected MCP tool is enabled; re-derive the active set from the
+		// current non-MCP tools plus all freshly registered MCP tools.
+		const nextActive = [...new Set([...this.#getActiveNonMCPToolNames(), ...mcpTools.map(tool => tool.name)])];
+		await this.#applyActiveToolsByName(nextActive);
 	}
 
 	/**
@@ -7300,7 +7017,7 @@ export class AgentSession {
 		}
 
 		const previousRpcHostToolNames = new Set(this.#rpcHostToolNames);
-		const previousActiveToolNames = this.getActiveToolNames();
+		const previousActiveToolNames = this.getEnabledToolNames();
 		for (const name of previousRpcHostToolNames) {
 			this.#toolRegistry.delete(name);
 		}
@@ -7314,11 +7031,6 @@ export class AgentSession {
 			this.#toolRegistry.set(finalTool.name, finalTool);
 			this.#rpcHostToolNames.add(finalTool.name);
 		}
-
-		// Registry contents changed — invalidate discovery caches so the next BM25 lookup sees
-		// the new RPC-host tool set. (#applyActiveToolsByName below also invalidates, but doing
-		// it here too keeps the contract local to "registry mutated".)
-		this.#invalidateDiscoveryCaches();
 
 		const activeNonRpcToolNames = previousActiveToolNames.filter(name => !previousRpcHostToolNames.has(name));
 		const preservedRpcToolNames = previousActiveToolNames.filter(
@@ -7950,12 +7662,8 @@ export class AgentSession {
 
 	#buildGoalTodoContext(): string | undefined {
 		if (!this.settings.get("todo.enabled")) return undefined;
-		const activeToolNames = this.getActiveToolNames();
-		const canCallTodoTool = activeToolNames.includes("todo");
-		const canDiscoverTodoTool =
-			!canCallTodoTool && this.getDiscoverableTools({ source: "builtin" }).some(tool => tool.name === "todo");
-		const canActivateTodoTool = canDiscoverTodoTool && activeToolNames.includes("search_tool_bm25");
-		if (!canCallTodoTool && !canDiscoverTodoTool) return undefined;
+		const canCallTodoTool = this.getActiveToolNames().includes("todo");
+		if (!canCallTodoTool) return undefined;
 		const phases = this.getTodoPhases().filter(phase => phase.tasks.length > 0);
 		if (phases.length === 0) return undefined;
 
@@ -7977,7 +7685,6 @@ export class AgentSession {
 
 		return prompt.render(goalTodoContextPrompt, {
 			canCallTodoTool,
-			canActivateTodoTool,
 			closed: String(closed),
 			open: String(open),
 			phases: promptPhases,
@@ -9370,12 +9077,6 @@ export class AgentSession {
 	 */
 	async newSession(options?: NewSessionOptions): Promise<boolean> {
 		const previousSessionFile = this.sessionFile;
-		const nextDiscoverySessionToolNames = this.#mcpDiscoveryEnabled
-			? [
-					...this.#getActiveNonMCPToolNames(),
-					...this.#filterSelectableMCPToolNames(this.#defaultSelectedMCPToolNames),
-				]
-			: undefined;
 
 		// Emit session_before_switch event with reason "new" (can be cancelled)
 		if (this.#extensionRunner?.hasHandlers("session_before_switch")) {
@@ -9428,16 +9129,6 @@ export class AgentSession {
 
 		this.sessionManager.appendThinkingLevelChange(this.thinkingLevel, this.configuredThinkingLevel());
 		this.sessionManager.appendServiceTierChange(this.#serviceTierEntry());
-		if (nextDiscoverySessionToolNames) {
-			await this.#applyActiveToolsByName(nextDiscoverySessionToolNames, { persistMCPSelection: false });
-			if (this.getSelectedMCPToolNames().length > 0) {
-				this.sessionManager.appendMCPToolSelection(this.getSelectedMCPToolNames());
-			}
-		}
-		this.#rememberSessionDefaultSelectedMCPToolNames(
-			this.sessionFile,
-			this.#getConfiguredDefaultSelectedMCPToolNames(),
-		);
 
 		this.#todoReminderCount = 0;
 		this.#todoReminderAwaitingProgress = false;
@@ -11890,7 +11581,6 @@ export class AgentSession {
 		if (activeMessages) {
 			activeMessages.splice(0, activeMessages.length, ...sessionContext.messages);
 		}
-		await this.#restoreMCPSelectionsForSessionContext(sessionContext);
 		this.agent.replaceMessages(activeMessages ?? sessionContext.messages);
 		this.#resetAdvisorSessionState();
 		this.#syncTodoPhasesFromBranch();
@@ -11898,8 +11588,9 @@ export class AgentSession {
 		this.#checkpointState = undefined;
 		this.#pendingRewindReport = undefined;
 	}
-	#isPlanDecisionTool(name: string): boolean {
-		return PLAN_DECISION_TOOLS.has(name);
+	/** Plan-mode decision affordances: `ask`, or plan approval via `write xd://propose`. */
+	#isPlanDecisionTool(toolCall: { name: string; arguments?: Record<string, unknown> }): boolean {
+		return toolCall.name === "ask" || isProposeToolCall(toolCall);
 	}
 
 	async #enforcePlanModeDecisionAtSettle(): Promise<boolean> {
@@ -11915,7 +11606,7 @@ export class AgentSession {
 		}
 
 		const calledDecisionTool = assistantMessage.content.some(
-			content => content.type === "toolCall" && this.#isPlanDecisionTool(content.name),
+			content => content.type === "toolCall" && this.#isPlanDecisionTool(content),
 		);
 		if (calledDecisionTool) {
 			this.#planModeReminderCount = 0;
@@ -11934,9 +11625,9 @@ export class AgentSession {
 			logger.debug("Plan mode convergence: reminder cap reached; yielding to user");
 			return false;
 		}
-		const hasRequiredTools = this.#toolRegistry.has("ask") && this.#toolRegistry.has("resolve");
+		const hasRequiredTools = this.#toolRegistry.has("ask") && this.#toolRegistry.has("write");
 		if (!hasRequiredTools) {
-			logger.warn("Plan mode enforcement skipped because ask/resolve tools are unavailable", {
+			logger.warn("Plan mode enforcement skipped because ask/write tools are unavailable", {
 				activeToolNames: this.agent.state.tools.map(tool => tool.name),
 			});
 			return false;
@@ -12017,9 +11708,9 @@ export class AgentSession {
 			}
 		}
 
-		// Must check the active tool set, not just the registry: tool discovery
-		// (tools.discoveryMode === "all") can register `todo` while hiding it from
-		// the exposed tools. Forcing a named tool_choice for an inactive tool makes
+		// Must check the active tool set, not just the registry: a registered
+		// tool can be hidden from the exposed tools (e.g. unmounted under the
+		// xd:// transport). Forcing a named tool_choice for an inactive tool makes
 		// the provider reject the request (HTTP 400).
 		if (!this.getActiveToolNames().includes("todo")) {
 			logger.warn("Eager todo enforcement skipped because todo is not active", {
@@ -12138,7 +11829,7 @@ export class AgentSession {
 			return false;
 		}
 
-		const remindersMax = this.settings.get("todo.reminders.max");
+		const remindersMax = this.settings.get("todo.remindersMax");
 		if (this.#todoReminderCount >= remindersMax) {
 			logger.debug("Todo completion: max reminders reached", { count: this.#todoReminderCount });
 			return false;
@@ -15711,16 +15402,12 @@ export class AgentSession {
 		const previousAutoThinking = this.#autoThinking;
 		const previousAutoResolvedLevel = this.#autoResolvedLevel;
 		const previousServiceTierByFamily = this.#serviceTierByFamily;
-		const previousSelectedMCPToolNames = new Set(this.#selectedMCPToolNames);
 		const previousTools = [...this.agent.state.tools];
 		const previousBaseSystemPrompt = this.#baseSystemPrompt;
 		const previousSystemPrompt = this.agent.state.systemPrompt;
 		const previousBaseSystemPromptBeforeMemoryPromotion = this.#baseSystemPromptBeforeMemoryPromotion;
 		const previousFreshProviderSessionId = this.#freshProviderSessionId;
 		const previousInheritedProviderPromptCacheKey = this.#inheritedProviderPromptCacheKey;
-		const previousFallbackSelectedMCPToolNames = previousSessionFile
-			? this.#getSessionDefaultSelectedMCPToolNames(previousSessionFile)
-			: undefined;
 
 		// Snapshot the full checkpoint runtime state: the success path calls
 		// #rehydrateCheckpointRewindState(), which clears and rebuilds all four
@@ -15750,8 +15437,6 @@ export class AgentSession {
 			const didReloadConversationChange =
 				previousSessionContext !== undefined &&
 				this.#didSessionMessagesChange(previousSessionContext.messages, sessionContext.messages);
-			const fallbackSelectedMCPToolNames = this.#getSessionDefaultSelectedMCPToolNames(sessionPath);
-			await this.#restoreMCPSelectionsForSessionContext(sessionContext, { fallbackSelectedMCPToolNames });
 			this.#rehydrateCheckpointRewindState();
 
 			// Emit session_switch event to hooks
@@ -15879,28 +15564,7 @@ export class AgentSession {
 			this.#syncAgentSessionId(previousSessionState.sessionId);
 			this.#rekeyHindsightMemoryForCurrentSessionId();
 			this.#rekeyMnemopiMemoryForCurrentSessionId();
-			let restoreMcpError: unknown;
-			try {
-				// `previousSessionContext` was skipped on different-session switches to
-				// avoid materializing the previous session's heavy compaction payload
-				// in the success path; rebuild it here on demand from the restored
-				// state so MCP selection restoration still has its inputs.
-				const mcpRestoreContext = previousSessionContext ?? this.buildDisplaySessionContext();
-				await this.#restoreMCPSelectionsForSessionContext(mcpRestoreContext, {
-					fallbackSelectedMCPToolNames: previousFallbackSelectedMCPToolNames,
-				});
-			} catch (mcpError) {
-				restoreMcpError = mcpError;
-				logger.warn("Failed to restore MCP selections after switch error", {
-					previousSessionFile,
-					targetSessionFile: sessionPath,
-					error: String(mcpError),
-				});
-				this.#selectedMCPToolNames = new Set(previousSelectedMCPToolNames);
-				this.agent.setTools(previousTools);
-				this.#baseSystemPrompt = previousBaseSystemPrompt;
-				this.agent.setSystemPrompt(previousSystemPrompt);
-			}
+			this.agent.setTools(previousTools);
 			this.#baseSystemPrompt = previousBaseSystemPrompt;
 			this.#baseSystemPromptBeforeMemoryPromotion = previousBaseSystemPromptBeforeMemoryPromotion;
 			this.agent.setSystemPrompt(previousSystemPrompt);
@@ -15924,9 +15588,6 @@ export class AgentSession {
 			this.#syncTodoPhasesFromBranch();
 			this.#resetAllAdvisorRuntimes();
 			this.#reconnectToAgent();
-			if (restoreMcpError) {
-				throw restoreMcpError;
-			}
 			throw error;
 		}
 	}
@@ -15992,8 +15653,6 @@ export class AgentSession {
 
 		// Reload messages from entries (works for both file and in-memory mode)
 		const sessionContext = this.buildDisplaySessionContext();
-
-		await this.#restoreMCPSelectionsForSessionContext(sessionContext);
 
 		// Emit session_branch event to hooks (after branch completes)
 		if (this.#extensionRunner) {
@@ -16085,7 +15744,6 @@ export class AgentSession {
 		await this.#resetMemoryContextForNewTranscript();
 
 		const sessionContext = this.buildDisplaySessionContext();
-		await this.#restoreMCPSelectionsForSessionContext(sessionContext);
 
 		if (this.#extensionRunner) {
 			await this.#extensionRunner.emit({
@@ -16269,7 +15927,6 @@ export class AgentSession {
 		// Update agent state — build display context to populate agent messages.
 		const stateContext = this.sessionManager.buildSessionContext();
 		const displayContext = deobfuscateSessionContext(stateContext, this.#obfuscator);
-		await this.#restoreMCPSelectionsForSessionContext(displayContext);
 		this.agent.replaceMessages(displayContext.messages);
 		this.#rehydrateCheckpointRewindState();
 		this.#resetAdvisorSessionState();

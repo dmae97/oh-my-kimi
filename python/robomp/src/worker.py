@@ -198,7 +198,7 @@ def _ensure_agent_run_dir() -> None:
         return
     try:
         run_dir.mkdir(parents=True, exist_ok=True)
-        for root, dirs, files in os.walk(run_dir):
+        for root, _dirs, files in os.walk(run_dir):
             root_path = Path(root)
             os.chown(root_path, -1, gid)
             root_path.chmod(0o2770)

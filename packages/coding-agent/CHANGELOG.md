@@ -2,6 +2,53 @@
 
 ## [Unreleased]
 
+## [17.0.0] - 2026-07-15
+
+### Breaking Changes
+
+- Merged the `irc`, `job`, and `launch` tools into a single unified `hub` tool (`loadMode: "essential"`). Messaging, job control, and process supervision operations are now routed through this single tool. SDK: `IrcTool`, `JobTool`, `LaunchTool`, `IrcDetails`, and `JobToolDetails` have been removed in favor of `HubTool`, `CoordinationDetails`, `LaunchToolDetails`, and `hubToolRenderer` from `tools/hub`.
+- Removed the hidden `resolve` tool. Staged actions are now finalized through three plain-text resolution devices: `xd://resolve` (apply preview), `xd://reject` (discard preview), and `xd://propose` (submit a plan slug/title for approval). The `write` tool is now auto-included whenever a deferrable tool is present or plan mode is enabled. SDK: `ResolveTool` and `HIDDEN_TOOLS.resolve` have been removed in favor of `dispatchResolutionDevice()` and `queueResolveHandler()`.
+- Unified tool presentation on `loadMode` (`essential` | `discoverable`), replacing the custom-tool `xdev?: boolean` opt-out. Custom, extension, MCP, RPC host, image-generation, and TTS tools now default to `discoverable` and mount under `xd://` when enabled. `generate_image`, `tts`, and MCP tools are now exposed as `xd://` devices in default sessions instead of shipping their schemas top-level.
+- Removed the BM25 tool-discovery system, including the `search_tool_bm25` tool, the `tools.discoveryMode`, `mcp.discoveryMode`, and `mcp.discoveryDefaultServers` settings, and per-tool MCP selection. All connected MCP tools are now enabled and mounted under the `xd://` transport. SDK: `search_tool_bm25`, the `tool-discovery` module, and associated `AgentSession` discovery/MCP-selection methods have been removed.
+- Removed the legacy `report_finding` tool. Reviewer agents now record findings through incremental `yield` sections. SDK: `reportFindingTool` and `HIDDEN_TOOLS.report_finding` have been removed.
+- Removed the `ssh` agent tool (remote command execution). The `ssh://` read/write/search protocol, the `omp ssh` host-management CLI, and SSH host discovery are retained. SDK: `SshTool`, `loadSshTool`, the `ssh/ssh-executor` module, and `AgentSession.refreshSshTool` have been removed.
+- Removed the `tools.essentialOverride` setting, the `mcp_tool_selection` session message type, and the `xdev` `--tools` token.
+
+### Added
+
+- Added `xd://` virtual tool devices (controlled by the `tools.xdev` setting, default on), allowing mounted tools to be discovered via `read xd://`, documented via `read xd://<tool>`, and executed via `write xd://<tool>`.
+- Added the `edit.enforceSeenLines` setting (default off) to gate the hashline seen-line guard. When enabled, edits anchored on lines that a prior `read` or `grep` never displayed are rejected.
+- Added per-agent prewalk for subagents, featuring a `prewalk` frontmatter field, a `task.agentPrewalk` settings override toggled from the `/agents` dashboard, and a `task.prewalk` boolean (default off) to arm the bundled generic `task` agent.
+
+### Changed
+
+- Renamed `"dev.autoqa.consent"` to `"dev.autoqaConsent"` and `"todo.reminders.max"` to `"todo.remindersMax"` to eliminate nested configuration prefix collisions in standard JSON/YAML.
+- Made the hashline seen-line guard opt-in and off by default, and stopped excluding column-clipped (>512-char) lines from a snapshot's seen set, allowing single-line edits on long lines to apply without a full-width re-read.
+- Changed the default `astGrep.enabled` setting to `false`.
+- Batched todo operations with real tool calls to prevent solo todo turns and extra round trips.
+- Changed all bundled TTSR rules to warn instead of interrupting generation.
+- Renamed the system prompt's project-context section wrapper from `<context>` to `<repo-rules>` to prevent collisions with the `task` tool's `context` parameter under in-band XML tool dialects.
+- Rendered `read xd://` calls in a compact grouped read view instead of a full tool-execution card.
+- Updated `--tools` to reject unknown tool names with a usage error instead of silently narrowing the toolset.
+- Capped the `xd://` device docs inlined into the system prompt to a 48k-char budget (10k per device) to prevent large MCP catalogs from bloating requests; devices past the cap are listed by name and summary and fetched on demand. External (dynamic-mount) tool descriptions embed at most 200 chars — schemas stay intact, full text via `read xd://<tool>`.
+- Dead BM25-discovery settings keys (`tools.discoveryMode`, `tools.essentialOverride`, `mcp.discoveryMode`, `mcp.discoveryDefaultServers`) are cleaned from configs on load; `tools.xdev` keeps its default (`true`).
+- Mid-session `xd://` mount changes (e.g. MCP connect/disconnect) no longer rewrite the system prompt: the delta is announced to the model as a steered system notice ("these tools became available" / "no longer mounted"), so the provider prompt cache stays intact; device docs join the prompt on the next unrelated rebuild.
+
+### Fixed
+
+- Fixed a bug where a nested configuration value (like `dev.autoqa.consent` / `dev.autoqaConsent`) would incorrectly satisfy a parent key lookup (like `dev.autoqa`), causing Auto QA to be enabled and prompt for consent by default when it should have been disabled.
+- Fixed compiled appserver startup deadlocking before socket creation when user extensions were present.
+- Fixed Bash internal URLs remaining unresolved when used as unquoted arguments inside command substitutions.
+- Fixed `--tools` silently dropping hidden tool names like `xdev` and `yield`.
+- Fixed the built-in `fd` printing broken pipe errors when a downstream pipeline reader exited early; it now exits silently with status 141.
+- Fixed prewalk repeatedly continuing after a bash-only task (such as `commit`) had already completed.
+- Fixed the Bash tool hanging when in-process commands read process substitution operands.
+- Fixed `/share` and `/export` web views rendering inline Markdown inside list items as literal text.
+- Fixed plan-mode re-entry dropping a new plan request when a prior plan artifact existed; re-entry now anchors on the new request and folds old-plan corrections into it.
+- Fixed ACP clients rendering `xd://` device dispatches as file edits; they now map to an `execute`-kind tool call titled with the device URL.
+- Fixed non-yolo approval modes double-prompting for `xd://` device dispatches.
+- Fixed TTSR rules with leading inline regex flags failing to compile and being silently dropped in Bun/JS environments, and recovered scope tokens and sibling values from malformed frontmatter.
+
 ## [16.5.2] - 2026-07-14
 
 ### Breaking Changes

@@ -952,11 +952,25 @@ export function renderImage(
 
 	if (TERMINAL.imageProtocol === ImageProtocol.Sixel) {
 		try {
-			const targetWidthPx = Math.max(1, fit.columns * cellDims.widthPx);
-			const targetHeightPx = Math.max(1, fit.rows * cellDims.heightPx);
+			// SIXEL encodes in 6-pixel vertical bands. A height that is not a
+			// multiple of 6 is padded with transparent rows, but the terminal
+			// still allocates cell rows for the padded height. When the padded
+			// height crosses a cell boundary the terminal uses one more row
+			// than fit.rows, so the next line of content overwrites the bottom
+			// of the image — a visible slice stripped from the image. Round the
+			// encode height DOWN to the largest multiple of 6 that fits within
+			// the requested row budget, so the band boundary aligns without
+			// padding and the reserved row count never exceeds fit.rows. Scale
+			// the width by the same ratio so resize_exact preserves the aspect
+			// ratio instead of squashing the image vertically.
+			const rawHeightPx = Math.max(1, fit.rows * cellDims.heightPx);
+			const targetHeightPx = Math.max(6, Math.floor(rawHeightPx / 6) * 6);
+			const heightScale = targetHeightPx / rawHeightPx;
+			const targetWidthPx = Math.max(1, Math.round(fit.columns * cellDims.widthPx * heightScale));
+			const rows = Math.max(1, Math.ceil(targetHeightPx / cellDims.heightPx));
 			const decoded = new Uint8Array(Buffer.from(base64Data, "base64"));
 			const sequence = encodeSixel(decoded, targetWidthPx, targetHeightPx);
-			return { sequence, rows: fit.rows };
+			return { sequence, rows };
 		} catch {
 			return null;
 		}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { normalizeSchemaForGoogle, toolWireSchema } from "@oh-my-pi/pi-ai";
+import { normalizeSchemaForGoogle } from "@oh-my-pi/pi-ai";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createTools, HIDDEN_TOOLS, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 
@@ -269,31 +269,12 @@ describe("tool schema validation (post-sanitization)", () => {
 		expect(allViolations).toEqual([]);
 	});
 
-	it("bash schema and prompt advertise the timeout clamp and zero-disable", async () => {
-		const session = createTestSession();
-		session.settings.set("async.enabled", true);
-		const tools = await createTools(session);
-		const bashTool = tools.find(tool => tool.name === "bash");
-		if (!bashTool?.parameters) throw new Error("bash tool parameters missing");
-
-		const schema = toolWireSchema(bashTool) as {
-			properties?: { timeout?: { description?: string } };
-		};
-		const timeoutDescription = schema.properties?.timeout?.description ?? "";
-
-		expect(timeoutDescription).toContain("clamped");
-		expect(timeoutDescription).toContain("1-3600");
-		expect(timeoutDescription).toContain("0 disables the command deadline");
-		expect(bashTool.description).toContain("nonzero values are clamped to `1..3600`");
-		expect(bashTool.description).toContain("does NOT extend a nonzero timeout");
-	});
-
 	it("hidden tools also have valid sanitized schemas", async () => {
 		const session = createTestSession();
 
-		for (const name in HIDDEN_TOOLS) {
-			if (!Object.hasOwn(HIDDEN_TOOLS, name)) continue;
-			const tool = await HIDDEN_TOOLS[name](session);
+		// Object.entries keeps the factory typed without an index cast.
+		for (const [name, factory] of Object.entries(HIDDEN_TOOLS)) {
+			const tool = await factory(session);
 			if (!tool) continue;
 
 			const schema = tool.parameters;

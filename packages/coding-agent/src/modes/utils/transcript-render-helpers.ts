@@ -13,7 +13,7 @@ import {
 	resolveAbortLabel,
 	shouldRenderAbortReason,
 } from "../../session/messages";
-import { createIrcMessageCard } from "../../tools/irc";
+import { createIrcMessageCard } from "../../tools/hub";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/render-utils";
 import { canonicalizeMessage } from "../../utils/thinking-display";
 import { TranscriptBlock } from "../components/transcript-container";

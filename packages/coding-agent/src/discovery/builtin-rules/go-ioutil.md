@@ -2,6 +2,7 @@
 description: "Use io and os instead of the deprecated io/ioutil package"
 condition: '"io/ioutil"'
 scope: "tool:edit(*.go), tool:write(*.go)"
+interruptMode: never
 ---
 
 `io/ioutil` has been deprecated since Go 1.16. Every function moved to `io` or `os` with the same behavior. Do not import it in new code.

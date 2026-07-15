@@ -116,6 +116,34 @@ class IssueSummary:
     updated_at: str
     created_at: str
     html_url: str
+    # `completed` / `not_planned` / `reopened` when closed; empty otherwise.
+    state_reason: str = ""
+    # Search results mix issues and PRs; list_issues always yields issues.
+    is_pull_request: bool = False
+
+
+@dataclass(slots=True, frozen=True)
+class IssueIndexEntry:
+    """Full projection of an issue/PR for the local search index (includes body).
+
+    Produced by `GitHubClient.list_issue_index_entries` / webhook payloads and
+    stored verbatim in the orchestrator's `issue_index` table.
+    """
+
+    repo: str
+    number: int
+    is_pull_request: bool
+    title: str
+    body: str
+    state: str  # open | closed
+    state_reason: str  # completed | not_planned | reopened | ""
+    merged_at: str  # ISO timestamp for merged PRs; "" otherwise
+    author: str
+    labels: tuple[str, ...]
+    comments: int
+    created_at: str
+    updated_at: str
+    html_url: str
 
 
 @dataclass(slots=True, frozen=True)
@@ -335,23 +363,50 @@ class GitHubClient:
         for item in data or []:
             if "pull_request" in item:
                 continue  # GitHub's /issues endpoint also returns PRs; skip them.
-            user = item.get("user") or {}
-            labels_raw = item.get("labels") or []
-            out.append(
-                IssueSummary(
-                    repo=repo,
-                    number=int(item["number"]),
-                    title=str(item.get("title") or ""),
-                    state=str(item.get("state") or "open"),
-                    author=str(user.get("login") or ""),
-                    labels=tuple(str(lbl["name"]) if isinstance(lbl, dict) else str(lbl) for lbl in labels_raw),
-                    comments=int(item.get("comments") or 0),
-                    updated_at=str(item.get("updated_at") or ""),
-                    created_at=str(item.get("created_at") or ""),
-                    html_url=str(item.get("html_url") or ""),
-                )
-            )
+            out.append(_summary_from_item(repo, item))
         return out
+
+    async def search_issues(self, repo: str, query: str, *, limit: int = 10) -> list[IssueSummary]:
+        """Search issues AND pull requests in `repo` using GitHub issue-search syntax.
+
+        `query` takes bare keywords plus qualifiers (`is:pr`, `is:closed`,
+        `label:bug`, `in:title`, …); the `repo:` scope is applied here. Results
+        come back in GitHub's best-match order. `limit` is capped at 30 — this
+        serves triage lookups (duplicates, prior fixes), not pagination.
+        """
+        per_page = max(1, min(int(limit), 30))
+        data = await self.request(
+            "GET",
+            "/search/issues",
+            params={"q": f"repo:{repo} {query}".strip(), "per_page": per_page},
+        )
+        items = (data or {}).get("items") or []
+        return [_summary_from_item(repo, item) for item in items]
+
+    async def list_issue_index_entries(
+        self,
+        repo: str,
+        *,
+        since: str | None = None,
+        page: int = 1,
+        per_page: int = 100,
+    ) -> list[IssueIndexEntry]:
+        """One page of issues AND PRs (with bodies) for the local search index.
+
+        `since` is GitHub's ISO `updated_at` lower bound; omit for a full
+        backfill. Callers page from 1 until a short page comes back.
+        """
+        params: dict[str, Any] = {
+            "state": "all",
+            "per_page": max(1, min(int(per_page), 100)),
+            "page": max(1, int(page)),
+            "sort": "updated",
+            "direction": "asc",
+        }
+        if since:
+            params["since"] = since
+        data = await self.request("GET", f"/repos/{repo}/issues", params=params)
+        return [index_entry_from_issue_object(repo, item) for item in (data or [])]
 
     async def list_comments(self, repo: str, number: int) -> list[CommentInfo]:
         data = await self.request("GET", f"/repos/{repo}/issues/{number}/comments", params={"per_page": 100})
@@ -576,6 +631,80 @@ def _pr_review_from_payload(data: Mapping[str, Any]) -> PullRequestReviewInfo:
     )
 
 
+def _summary_from_item(repo: str, item: Mapping[str, Any]) -> IssueSummary:
+    """Build an `IssueSummary` from a REST issue object (list or search shape)."""
+    user = item.get("user") or {}
+    labels_raw = item.get("labels") or []
+    return IssueSummary(
+        repo=repo,
+        number=int(item["number"]),
+        title=str(item.get("title") or ""),
+        state=str(item.get("state") or "open"),
+        author=str(user.get("login") or ""),
+        labels=tuple(str(lbl["name"]) if isinstance(lbl, dict) else str(lbl) for lbl in labels_raw),
+        comments=int(item.get("comments") or 0),
+        updated_at=str(item.get("updated_at") or ""),
+        created_at=str(item.get("created_at") or ""),
+        html_url=str(item.get("html_url") or ""),
+        state_reason=str(item.get("state_reason") or ""),
+        is_pull_request="pull_request" in item,
+    )
+
+
+def index_entry_from_issue_object(repo: str, item: Mapping[str, Any]) -> IssueIndexEntry:
+    """Build an `IssueIndexEntry` from a REST *issue-shaped* object.
+
+    Accepts both plain issues and the issue representation of a PR (webhook
+    `issues`/`issue_comment` payloads, `/repos/{repo}/issues` items): PRs carry
+    a `pull_request` sub-object holding `merged_at`.
+    """
+    user = item.get("user") or {}
+    labels_raw = item.get("labels") or []
+    pr_obj = item.get("pull_request")
+    is_pr = pr_obj is not None
+    merged_at = str(pr_obj.get("merged_at") or "") if isinstance(pr_obj, Mapping) else ""
+    return IssueIndexEntry(
+        repo=repo,
+        number=int(item["number"]),
+        is_pull_request=is_pr,
+        title=str(item.get("title") or ""),
+        body=str(item.get("body") or ""),
+        state=str(item.get("state") or "open"),
+        state_reason=str(item.get("state_reason") or ""),
+        merged_at=merged_at,
+        author=str(user.get("login") or ""),
+        labels=tuple(str(lbl["name"]) if isinstance(lbl, dict) else str(lbl) for lbl in labels_raw),
+        comments=int(item.get("comments") or 0),
+        created_at=str(item.get("created_at") or ""),
+        updated_at=str(item.get("updated_at") or ""),
+        html_url=str(item.get("html_url") or ""),
+    )
+
+
+def index_entry_from_pr_object(repo: str, item: Mapping[str, Any]) -> IssueIndexEntry:
+    """Build an `IssueIndexEntry` from a REST *pull-request-shaped* object
+    (webhook `pull_request*` payloads), where `merged_at` sits at the top level.
+    """
+    user = item.get("user") or {}
+    labels_raw = item.get("labels") or []
+    return IssueIndexEntry(
+        repo=repo,
+        number=int(item["number"]),
+        is_pull_request=True,
+        title=str(item.get("title") or ""),
+        body=str(item.get("body") or ""),
+        state=str(item.get("state") or "open"),
+        state_reason="",
+        merged_at=str(item.get("merged_at") or ""),
+        author=str(user.get("login") or ""),
+        labels=tuple(str(lbl["name"]) if isinstance(lbl, dict) else str(lbl) for lbl in labels_raw),
+        comments=int(item.get("comments") or 0),
+        created_at=str(item.get("created_at") or ""),
+        updated_at=str(item.get("updated_at") or ""),
+        html_url=str(item.get("html_url") or ""),
+    )
+
+
 def _pr_file_from_payload(data: Mapping[str, Any]) -> PullRequestFileInfo:
     return PullRequestFileInfo(
         path=str(data.get("filename") or data.get("path") or ""),
@@ -637,6 +766,7 @@ __all__ = [
     "CommentInfo",
     "GitHubClient",
     "GitHubError",
+    "IssueIndexEntry",
     "IssueInfo",
     "IssueSummary",
     "PullRequestFileInfo",
@@ -645,5 +775,7 @@ __all__ = [
     "ReactionInfo",
     "RepoInfo",
     "ReviewCommentInfo",
+    "index_entry_from_issue_object",
+    "index_entry_from_pr_object",
     "parse_issue_payload",
 ]

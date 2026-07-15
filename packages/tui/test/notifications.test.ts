@@ -291,16 +291,18 @@ describe("terminal notifications", () => {
 		expect(writes).toEqual(["\x1b]99;;ping\x1b\\\x07"]);
 	});
 
-	it("under tmux, the OSC 99 capability probe is wrapped in DCS passthrough", () => {
+	it("under tmux, the OSC 99 capability probe is suppressed (reply cannot route back to the pane)", () => {
 		Bun.env.PI_TUI_OSC99_PROBE = "1";
 		Bun.env.TMUX = "/tmp/tmux-1000/default,1234,0";
 		mutableTerminal.notifyProtocol = NotifyProtocol.Osc99;
 		const { terminal, writes } = setupProcessTerminal();
 		try {
-			const probe = writes.find(
-				w => w.startsWith("\x1bPtmux;\x1b\x1b]99;i=omp-probe-") && w.endsWith("\x1b\x1b\\\x1b\\\x1b[c"),
-			);
-			expect(probe).toBeDefined();
+			// tmux forwards the passthrough probe to the outer terminal but cannot
+			// route the `p=?` reply back to the sending pane, so the reply would
+			// leak into the pane as text (#5582). The probe must not fire at all.
+			const probe = writes.find(w => w.includes("]99;i=omp-probe-") && w.includes(":p=?"));
+			expect(probe).toBeUndefined();
+			expect(isOsc99Supported()).toBe(false);
 		} finally {
 			terminal.stop();
 		}

@@ -11,8 +11,8 @@ import { AssistantMessageComponent } from "../../modes/components/assistant-mess
 import { detectCacheInvalidation } from "../../modes/components/cache-invalidation-marker";
 import {
 	ReadToolGroupComponent,
+	readArgsCollapseIntoGroup,
 	readArgsHaveTarget,
-	readArgsTargetInternalUrl,
 } from "../../modes/components/read-tool-group";
 import { TodoReminderComponent } from "../../modes/components/todo-reminder";
 import { ToolExecutionComponent } from "../../modes/components/tool-execution";
@@ -20,12 +20,11 @@ import { TtsrNotificationComponent } from "../../modes/components/ttsr-notificat
 import { createUsageRowBlock } from "../../modes/components/usage-row";
 import { getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext, TodoPhase } from "../../modes/types";
-import type { PlanApprovalDetails } from "../../plan-mode/approved-plan";
 import idleRecapPrompt from "../../prompts/system/recap-user.md" with { type: "text" };
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { isSilentAbort, readQueueChipText, resolveAbortLabel } from "../../session/messages";
 import { previewLine, TRUNCATE_LENGTHS } from "../../tools/render-utils";
-import type { ResolveToolDetails } from "../../tools/resolve";
+import { PROPOSE_DEVICE_NAME, writeDeviceDispatch } from "../../tools/resolve";
 import { nextActionableTask } from "../../tools/todo";
 import { SpeechEnhancer } from "../../tts/speech-enhancer";
 import { vocalizer } from "../../tts/vocalizer";
@@ -102,8 +101,8 @@ export class EventController {
 	// Insertion-ordered IRC cards not yet retired; values are the transcript
 	// components each card contributed (see #retireIrcCard for the guard).
 	#liveIrcCards = new Map<string, Component[]>();
-	// Most recent `job` tool block whose result still had every watched job
-	// running. Kept un-finalized (live) so the next `job` call displaces it —
+	// Most recent `hub` tool block whose result still had every watched job
+	// running. Kept un-finalized (live) so the next `hub` call displaces it —
 	// one persistent poll instead of a stack of "waiting on N jobs" frames —
 	// and sealed in place the moment anything else lands below it.
 	#displaceablePollComponent: ToolExecutionComponent | undefined = undefined;
@@ -576,7 +575,7 @@ export class EventController {
 
 	/**
 	 * Resolve the pending displaceable poll block before the next block lands.
-	 * A follow-up `job` call displaces it — the stale "waiting on N jobs" frame
+	 * A follow-up `hub` call displaces it — the stale "waiting on N jobs" frame
 	 * is removed so repeated polls read as one persistent poll — while anything
 	 * else seals it in place as final history. Removal is gated on none of the
 	 * block's rows having entered native scrollback: rows already on the tape
@@ -588,7 +587,7 @@ export class EventController {
 		if (!previous) return;
 		this.#displaceablePollComponent = undefined;
 		if (
-			nextToolName === "job" &&
+			nextToolName === "hub" &&
 			previous.isDisplaceableBlock() &&
 			this.ctx.chatContainer.isBlockUncommitted(previous)
 		) {
@@ -724,11 +723,11 @@ export class EventController {
 				if (content.name === "read") {
 					if (!readArgsHaveTarget(content.arguments)) {
 						// Args still streaming — defer until path is parseable so we can route to the
-						// read group (regular files) vs ToolExecutionComponent (internal URLs).
+						// read group (files + xd:// devices) vs ToolExecutionComponent (other internal URLs).
 						// Creating either component now would lock the read into the wrong shape.
 						continue;
 					}
-					if (!readArgsTargetInternalUrl(content.arguments)) {
+					if (readArgsCollapseIntoGroup(content.arguments)) {
 						if (!this.ctx.pendingTools.has(content.id)) this.#resolveDisplaceablePoll(content.name);
 						this.#trackReadToolCall(content.id, content.arguments);
 						const component = this.ctx.pendingTools.get(content.id);
@@ -742,7 +741,7 @@ export class EventController {
 						}
 						continue;
 					}
-					// Internal URL read falls through to ToolExecutionComponent below.
+					// Other internal-URL reads fall through to ToolExecutionComponent below.
 				}
 
 				// Preserve the raw partial JSON only for renderers that need to surface fields before the JSON object closes.
@@ -938,7 +937,7 @@ export class EventController {
 		this.#updateWorkingMessageFromIntent(event.intent);
 		this.#resolveDisplaceablePoll(event.toolName);
 		if (!this.ctx.pendingTools.has(event.toolCallId)) {
-			if (event.toolName === "read" && readArgsHaveTarget(event.args) && !readArgsTargetInternalUrl(event.args)) {
+			if (event.toolName === "read" && readArgsCollapseIntoGroup(event.args)) {
 				this.#trackReadToolCall(event.toolCallId, event.args);
 				const component = this.ctx.pendingTools.get(event.toolCallId);
 				if (component) {
@@ -1071,8 +1070,8 @@ export class EventController {
 					this.#backgroundTaskCallIds.delete(event.toolCallId);
 				}
 				if (component instanceof ToolExecutionComponent && component.isDisplaceableBlock()) {
-					if (event.toolName === "job" && component.canBeDisplacedBy("job")) {
-						// Remember the waiting poll so the next `job` call can displace it.
+					if (event.toolName === "hub" && component.canBeDisplacedBy("hub")) {
+						// Remember the waiting poll so the next `hub` call can displace it.
 						this.#displaceablePollComponent = component;
 					} else if (event.toolName === "todo" && component.canBeDisplacedBy("todo")) {
 						// Successful todo update supersedes the prior live snapshot. A failed
@@ -1106,13 +1105,27 @@ export class EventController {
 				`Todo update failed${textContent ? `: ${textContent}` : ". Progress may be stale until todo succeeds."}`,
 			);
 		}
-		if (event.toolName === "resolve" && !event.isError) {
-			const details = event.result.details as ResolveToolDetails | undefined;
-			if (details?.sourceToolName === "plan_approval" && details.action === "apply") {
-				const planDetails = details.sourceResultDetails as PlanApprovalDetails | undefined;
-				if (planDetails) {
-					await this.ctx.handlePlanApproval(planDetails);
-				}
+		// Plan approval rides a `write` to xd://propose: the dispatch metadata on
+		// the write details carries the approval payload as `inner`.
+		if (!event.isError) {
+			const dispatch = writeDeviceDispatch(event.toolName, event.result);
+			const details =
+				dispatch?.tool === PROPOSE_DEVICE_NAME && dispatch.mode === "execute" ? dispatch.inner : undefined;
+			if (
+				details &&
+				typeof details === "object" &&
+				"planFilePath" in details &&
+				"title" in details &&
+				"planExists" in details &&
+				typeof details.planFilePath === "string" &&
+				typeof details.title === "string" &&
+				typeof details.planExists === "boolean"
+			) {
+				await this.ctx.handlePlanApproval({
+					planFilePath: details.planFilePath,
+					title: details.title,
+					planExists: details.planExists,
+				});
 			}
 		}
 	}

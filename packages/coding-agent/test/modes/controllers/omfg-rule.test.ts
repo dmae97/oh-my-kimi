@@ -97,6 +97,11 @@ describe("omfg rule parsing", () => {
 		expect("error" in invalidRegex ? invalidRegex.error : "").toContain("Invalid condition regex");
 	});
 
+	it("accepts a leading inline regex flag in generated conditions", () => {
+		const result = mustParse(ruleJson({ name: "no-preexisting", condition: "(?i)pre.existing", scope: "text" }));
+		expect(result.rule.condition).toEqual(["(?i)pre.existing"]);
+	});
+
 	it("sanitizes generated names to slugs", () => {
 		expect(sanitizeRuleName("  Caps & Spaces!!  ")).toBe("caps-spaces");
 		expect(sanitizeRuleName("already_ok-123")).toBe("already_ok-123");
@@ -125,6 +130,15 @@ describe("ruleMatchesAssistantHistory", () => {
 		const { rule } = mustParse(ruleJson({ name: "no-handwave", condition: "cut corners", scope: "text" }));
 		const messages: AgentMessage[] = [
 			createAssistantMessage([{ type: "text", text: "I should not cut corners here." }]),
+		];
+
+		expect(ruleMatchesAssistantHistory(rule, messages)).toBe(true);
+	});
+
+	it("matches case-insensitively when the condition leads with (?i)", () => {
+		const { rule } = mustParse(ruleJson({ name: "no-preexisting", condition: "(?i)pre.existing", scope: "text" }));
+		const messages: AgentMessage[] = [
+			createAssistantMessage([{ type: "text", text: "These are Pre-existing failures." }]),
 		];
 
 		expect(ruleMatchesAssistantHistory(rule, messages)).toBe(true);

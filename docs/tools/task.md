@@ -51,9 +51,9 @@ There is no per-call `schema` parameter. Structured output comes from the agent 
 The tool returns one text block plus `details: TaskToolDetails`.
 
 Background response (`async.enabled=true`):
-- `content`: `` Spawned agent `<id>` (job `<jobId>`). The result will be delivered when it yields. ... `` plus a coordination hint (`irc` DM when enabled, otherwise `job`). A batch call instead returns `` Spawned N background agents using <agent types>. ... `` (the deduped per-item agent types, comma-joined) with a per-agent `- `<id>` (job `<jobId>`)` listing.
+- `content`: `` Spawned agent `<id>` (job `<jobId>`). The result will be delivered when it yields. ... `` plus a coordination hint (`hub` DM when messaging is enabled, otherwise `hub` job control). A batch call instead returns `` Spawned N background agents using <agent types>. ... `` (the deduped per-item agent types, comma-joined) with a per-agent `- `<id>` (job `<jobId>`)` listing.
 - `details`: `{ projectAgentsDir, results, totalDurationMs, progress: [<AgentProgress per spawn>], async: { state, jobId, type: "task" } }`. The call keeps one shared `progress[]` snapshot; `async.jobId` is the first started job and `async.state` aggregates over the async spawns ("running" until every job settles, "failed" if any spawn failed) — jobs that settled before the call returned are already reflected. A mixed call's `results` carries the blocking spawns' inline `SingleResult`s (pure background calls return `results: []`).
-- Live progress keeps streaming into the same tool block via `onUpdate(...)`; each final result arrives later as an async-result injection into the parent conversation. The delivery text appends a follow-up hint: `` <id> is now idle — message it via `irc` to follow up; transcript at history://<id> `` (aborted variant points at the transcript only).
+- Live progress keeps streaming into the same tool block via `onUpdate(...)`; each final result arrives later as an async-result injection into the parent conversation. The delivery text appends a follow-up hint: `` <id> is now idle — message it via `hub` to follow up; transcript at history://<id> `` (aborted variant points at the transcript only).
 
 Settled response (`async.enabled=false`, no job manager, every item's agent `blocking: true`, or async job body):
 - `content`: summary rendered from `packages/coding-agent/src/prompts/tools/task-summary.md` with a preview capped at 5000 chars; `agent://<id>` holds the full output. A sync batch concatenates the per-spawn summaries.
@@ -64,7 +64,7 @@ Settled response (`async.enabled=false`, no job manager, every item's agent `blo
 - status: `exitCode`, optional `error`, optional `aborted`, optional `abortReason`, optional `retryFailure`
 - output: `output`, `stderr`, `truncated`, `durationMs`, `tokens`, `requests`, optional `contextTokens`/`contextWindow`
 - artifact metadata: `outputPath?`, `patchPath?`, `branchName?`, `nestedPatches?`, `outputMeta?`
-- extracted tool data: `extractedToolData?` from registered subprocess tool handlers such as `yield` and `report_finding`
+- extracted tool data: `extractedToolData?` from registered subprocess tool handlers such as `yield`
 
 Artifacts and side channels:
 - Every subagent with an artifacts dir writes `<id>.md`; `agent://<id>` resolves to that file.
@@ -90,13 +90,13 @@ Artifacts and side channels:
 10. Artifacts dir comes from the parent session file when available, otherwise a temp dir. When the session is executing an approved plan, the plan reference is handed to the subagent.
 11. Non-isolated spawns call `runSubprocess(...)` directly with parent cwd; isolated spawns run inside the isolation workspace, then commit to a branch (`mergeMode === "branch"`) or capture a patch, and always clean up the workspace.
 12. `runSubprocess(...)` creates a child agent session with an isolated settings snapshot (forcing `async.enabled = false` and `bash.autoBackground.enabled = false` — subagents are internally synchronous), child `agentId` equal to the allocated id, child internal URL router/`AgentOutputManager`, output schema, the shared `context` (batch calls) in the system prompt's `CONTEXT` section, and the IRC peer roster in the system prompt.
-13. Child tool availability: explicit `agent.tools` if provided; auto-add `task` when the agent has `spawns` and depth allows; strip `task` at `task.maxRecursionDepth`; ensure `irc` is present in explicit tool lists; expand `exec` to `eval` + `bash`; strip parent-owned `todo`.
-14. The child must finish through the hidden `yield` tool; up to 3 reminder prompts, the last forcing `toolChoice = yield` when supported. `finalizeSubprocessOutput(...)` reconciles raw text, `yield` payloads, structured schemas, `report_finding` data, and abort states.
+13. Child tool availability: explicit `agent.tools` if provided; auto-add `task` when the agent has `spawns` and depth allows; strip `task` at `task.maxRecursionDepth`; ensure `hub` is present in explicit tool lists; expand `exec` to `eval` + `bash`; strip parent-owned `todo` — unless the spawn is prewalk-armed, whose plan nudge + todo gate need the child to commit its own todo list before the model hand-off.
+14. The child must finish through the hidden `yield` tool; up to 3 reminder prompts, the last forcing `toolChoice = yield` when supported. `finalizeSubprocessOutput(...)` reconciles raw text, `yield` payloads, structured schemas, and abort states.
 15. End-of-run lifecycle (keep-alive, in `runSubprocess`'s finalizer):
     - hard abort (caller signal / wall-clock / budget) → registry status `aborted`, session disposed — terminal;
     - isolated run → status `parked` without a reviver (workspace is merged + cleaned, so the session is not revivable; transcript stays readable via `history://`), then session disposed and detached;
     - everything else (success and failure alike) → status `idle` with the live session attached, and `AgentLifecycleManager.global().adopt(id, { idleTtlMs, revive })` arms the park timer. The reviver reopens the session JSONL (park closed the writer, so the single-writer lock is taken cleanly).
-16. Lifecycle thereafter: `idle` agents are parked after `task.agentIdleTtlMs` (session disposed; `AgentRef` + session file retained); messaging (`irc`) or the Agent Hub revives them back to `idle`. `"Main"` is never parked.
+16. Lifecycle thereafter: `idle` agents are parked after `task.agentIdleTtlMs` (session disposed; `AgentRef` + session file retained); messaging (`hub`) or the Agent Hub revives them back to `idle`. `"Main"` is never parked.
 
 ## Modes / Variants
 - Execution mode
@@ -127,7 +127,7 @@ Artifacts and side channels:
   - Allocates session-scoped output ids through `AgentOutputManager` so `agent://` stays unique across invocations.
   - Shares the parent `local://` root and `ArtifactManager` with subagents.
 - Background work / cancellation
-  - `job cancel` (or parent tool-call abort) cancels background jobs; parent tool-call abort cancels sync runs through the call signal. A hard-aborted run lands `aborted` and is torn down.
+  - `hub` cancel (or parent tool-call abort) cancels background jobs; parent tool-call abort cancels sync runs through the call signal. A hard-aborted run lands `aborted` and is torn down.
   - Missing-`yield` recovery sends up to three internal reminder prompts to the child session.
 
 ## Limits & Caps
@@ -157,8 +157,8 @@ Artifacts and side channels:
 ## Notes
 - Parallelism is parallel `task` calls in one assistant message — or, with `task.batch`, a `tasks[]` batch in one call; either way the session-scoped semaphore bounds the fan-out. With `async.enabled=true`, each spawn is an independent background job.
 - Shared background convention without batch mode: write it once to a `local://` file and reference that path in each spawn's `task` — subagents share the parent's `local://` root. With `task.batch`, the required `context` parameter carries the shared background directly into each spawn's system prompt.
-- Prefer messaging an existing agent (`irc`) over a fresh spawn for follow-up work: it already holds the relevant context. `irc` op:"list" shows idle/parked candidates; messaging a parked agent revives it. `history://<id>` shows what an agent has done.
-- `irc` availability is derived, not configured (`isIrcEnabled` in `packages/coding-agent/src/tools/irc.ts`): it exists exactly when there is someone to message — the session can spawn subagents, or it is a subagent itself. Messaging is the only follow-up path to a finished subagent, so task without irc would strand idle agents.
+- Prefer messaging an existing agent (`hub`) over a fresh spawn for follow-up work: it already holds the relevant context. `hub` op:"list" shows idle/parked candidates; messaging a parked agent revives it. `history://<id>` shows what an agent has done.
+- Peer-messaging availability is derived, not configured (`isIrcEnabled` in `packages/coding-agent/src/tools/hub/messaging.ts`): it exists exactly when there is someone to message — the session can spawn subagents, or it is a subagent itself. Messaging is the only follow-up path to a finished subagent, so task without hub messaging would strand idle agents.
 - Subagents are internally synchronous: the executor forces `async.enabled = false` and `bash.autoBackground.enabled = false` in the child settings snapshot, so there are no fire-and-forget grandchildren.
 - Agent discovery precedence is first-wins by exact name: project `.omp` agents dir before the user `.omp` dir (task agents only load from `.omp` roots; `.claude`/`.codex`/`.gemini` agent dirs are skipped), Claude plugin agent dirs after config dirs, bundled agents last. Create-time discovery is memoized per cwd for the prompt description; execution-time discovery stays fresh.
 - Child sessions do not inherit conversation history. Built-in carry-over is the workspace tree/skills/context files, the shared `local://` root, and the approved-plan reference when one exists.
