@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ImageContent, TextContent } from "@oh-my-pi/pi-ai";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import { logger } from "@oh-my-pi/pi-utils";
 import { obfuscateToolArguments, type SecretObfuscator } from "../secrets/obfuscator";
 import { formatSessionHistoryMarkdown, PRIMARY_CONTEXT_CUSTOM_TYPES } from "../session/session-history-format";
@@ -196,16 +197,6 @@ interface CatchupWaiter {
 	timer?: NodeJS.Timeout;
 }
 
-/**
- * Classify a provider error as quota/rate-limit exhaustion. These errors are
- * transient but persist for minutes (until the quota window resets), so the
- * runtime pauses the advisor and auto-resumes after a cooldown instead of
- * burning 3 retries and dropping the backlog.
- */
-function isQuotaError(err: unknown): boolean {
-	const msg = err instanceof Error ? err.message : String(err);
-	return /\b(quota|rate.?limit|429|insufficient_quota|usage.?limit|credit)\b/i.test(msg);
-}
 export class AdvisorRuntime {
 	#lastCount = 0;
 	/** Last-shown body, keyed by primary-context customType (plan/goal mode rules,
@@ -576,7 +567,7 @@ export class AdvisorRuntime {
 					// reset, not a transient failure — drop the stale batch.
 					if (this.#epoch !== epoch) continue;
 					this.#rollbackFailedTurn(messageSnapshot);
-					if (isQuotaError(err)) {
+					if (AIError.isUsageLimit(err)) {
 						logger.warn("advisor quota exhausted", { err: String(err) });
 						// Call the usage-limit hook so AgentSession can block the
 						// exhausted credential via markUsageLimitReached before pausing.
@@ -596,13 +587,15 @@ export class AdvisorRuntime {
 								await this.agent.prompt(batch);
 								const retryError = this.agent.state.error;
 								if (retryError) throw new Error(retryError);
+								const retryTurnError = getAdvisorTurnError(this.agent.state.messages.slice(retrySnapshot));
+								if (retryTurnError) throw retryTurnError;
 								success = true;
 								this.#consecutiveFailures = 0;
 								this.#failureNotified = false;
 							} catch (retryErr) {
 								this.#rollbackFailedTurn(retrySnapshot);
 								if (this.#epoch !== epoch) continue;
-								if (isQuotaError(retryErr)) {
+								if (AIError.isUsageLimit(retryErr)) {
 									// Second quota on the sibling credential — mark it too,
 									// then enter quota pause (both credentials exhausted).
 									logger.warn("advisor quota exhausted on switched credential", { err: String(retryErr) });

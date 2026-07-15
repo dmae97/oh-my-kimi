@@ -2443,7 +2443,7 @@ describe("advisor", () => {
 			const agent: AdvisorAgent = {
 				prompt: async input => {
 					promptInputs.push(input);
-					throw new Error("insufficient_quota: you have exceeded your rate limit");
+					throw new Error("resource_exhausted");
 				},
 				abort: () => {},
 				reset: () => {},
@@ -2614,6 +2614,43 @@ describe("advisor", () => {
 			expect(promptInputs).toHaveLength(2);
 			expect(runtime.quotaExhausted).toBe(false);
 			expect(quotaNotified).toBe(false);
+			expect(runtime.backlog).toBe(0);
+		});
+
+		it("requeues when a switched retry produces no assistant response", async () => {
+			const promptInputs: string[] = [];
+			const state = { messages: [] as AgentMessage[] };
+			let callCount = 0;
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					callCount++;
+					if (callCount === 1) throw new Error("insufficient_quota");
+					if (callCount === 2) {
+						state.messages.push({ role: "user", content: input, timestamp: Date.now() } as AgentMessage);
+					}
+				},
+				abort: () => {},
+				reset: () => {},
+				rollbackTo: count => state.messages.splice(count),
+				state,
+			};
+			const hookErrors: unknown[] = [];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => [],
+				enqueueAdvice: () => {},
+				onTurnError: async error => {
+					hookErrors.push(error);
+					return hookErrors.length === 1;
+				},
+			};
+			const runtime = new AdvisorRuntime(agent, host, 0);
+
+			runtime.onTurnEnd([{ role: "user", content: "quota-turn", timestamp: 1 } as AgentMessage]);
+			await runtime.waitForCatchup(1000, 1);
+
+			expect(promptInputs).toHaveLength(3);
+			expect(hookErrors).toHaveLength(2);
 			expect(runtime.backlog).toBe(0);
 		});
 
