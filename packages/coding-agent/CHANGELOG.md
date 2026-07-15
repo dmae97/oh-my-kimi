@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added per-agent prewalk for subagents: a `prewalk` frontmatter field (`true` = hand off to the default prewalk target, a string = custom target model pattern) and a `task.agentPrewalk` settings override toggled per agent from the `/agents` dashboard with `P`. The bundled generic `task` agent ships with prewalk enabled by default (skipped when the target resolves to the subagent's own starting model, and never armed for plan-mode spawns).
+- Added per-agent prewalk for subagents: a `prewalk` frontmatter field (`true` = hand off to the default prewalk target, a string = custom target model pattern) and a `task.agentPrewalk` settings override toggled per agent from the `/agents` dashboard with `P`. The bundled generic `task` agent ships with prewalk enabled by default (skipped when the target resolves to the subagent's own starting model, and never armed for plan-mode spawns). Prewalk-armed subagents keep the normally parent-owned `todo` tool so the plan-nudge → todo → hand-off flow works, and the prewalk todo gate now keys on the active tool set instead of the registry so a deactivated todo tool can no longer stall the switch.
 
 ### Changed
 

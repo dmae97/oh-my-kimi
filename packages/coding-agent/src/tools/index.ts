@@ -205,6 +205,9 @@ export interface ToolSession {
 	outputSchema?: unknown;
 	/** Whether to include the yield tool by default */
 	requireYieldTool?: boolean;
+	/** Session starts with a prewalk hand-off armed. Keeps `todo` in yield-gated
+	 *  (subagent) registries: the prewalk plan nudge + todo gate need it. */
+	prewalkArmed?: boolean;
 	/** Task recursion depth (0 = top-level, 1 = first child, etc.) */
 	taskDepth?: number;
 	/** Get shared eval executor session ID. Subagents inherit this to share JS/Python/Ruby/Julia state. */
@@ -612,7 +615,8 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "launch") return session.settings.get("launch.enabled");
 		if (name === "eval") return allowEval;
 		if (name === "debug") return session.settings.get("debug.enabled");
-		if (name === "todo") return !includeYield && session.settings.get("todo.enabled");
+		if (name === "todo")
+			return (!includeYield || session.prewalkArmed === true) && session.settings.get("todo.enabled");
 		if (name === "glob") return session.settings.get("glob.enabled");
 		if (name === "grep") return session.settings.get("grep.enabled");
 		if (name === "github") return session.settings.get("github.enabled");

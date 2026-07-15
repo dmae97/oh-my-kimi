@@ -2575,9 +2575,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				});
 			}
 
+			// Todos are parent-owned bookkeeping and stripped from subagents —
+			// except under prewalk, whose plan nudge + todo gate require the
+			// subagent to commit its own todo list before the hand-off.
+			const isParentOwnedTool = (name: string): boolean => !prewalk && name === "todo";
 			const subagentToolNames = session.getActiveToolNames();
-			const parentOwnedToolNames = new Set(["todo"]);
-			const filteredSubagentTools = subagentToolNames.filter(name => !parentOwnedToolNames.has(name));
+			const filteredSubagentTools = subagentToolNames.filter(name => !isParentOwnedTool(name));
 			if (filteredSubagentTools.length !== subagentToolNames.length) {
 				await awaitAbortable(session.setActiveToolsByName(filteredSubagentTools));
 			}
@@ -2635,7 +2638,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						getActiveTools: () => session.getActiveToolNames(),
 						getAllTools: () => session.getAllToolNames(),
 						setActiveTools: (toolNames: string[]) =>
-							session.setActiveToolsByName(toolNames.filter(name => !parentOwnedToolNames.has(name))),
+							session.setActiveToolsByName(toolNames.filter(name => !isParentOwnedTool(name))),
 						getCommands: () => getSessionSlashCommands(session),
 						setModel: model => runExtensionSetModel(session, model),
 						getThinkingLevel: () => session.thinkingLevel,

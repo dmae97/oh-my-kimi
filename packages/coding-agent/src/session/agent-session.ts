@@ -1750,7 +1750,7 @@ export class AgentSession {
 	#prewalkPlanInjected = false;
 	/** True once any successful `todo` call landed — opens the prewalk
 	 *  trigger gate: the switch fires at the first edit/write AFTER the todo
-	 *  list exists (sessions without a todo tool skip the gate). */
+	 *  list exists (sessions without an ACTIVE todo tool skip the gate). */
 	#prewalkTodoSeen = false;
 	#planYolo: PlanYolo | undefined;
 	#planYoloPreviousTools: string[] | undefined;
@@ -2270,12 +2270,14 @@ export class AgentSession {
 		// todo list from it and start" — so the switch waits until a todo list
 		// exists AND the model has actually started implementing (first
 		// edit/write). The todo call itself never triggers: firing there handed
-		// the fast model the whole implementation cold. Sessions without a todo
-		// tool skip the gate.
+		// the fast model the whole implementation cold. The gate keys on the
+		// ACTIVE tool set, not the registry: a registered-but-deactivated todo
+		// (e.g. a restricted active-tool slate) is uncallable and would
+		// deadlock the switch.
 		if (context.toolResults.some(result => result.toolName === "todo")) {
 			this.#prewalkTodoSeen = true;
 		}
-		const todoGateOpen = this.#prewalkTodoSeen || !this.#toolRegistry.has("todo");
+		const todoGateOpen = this.#prewalkTodoSeen || !this.getActiveToolNames().includes("todo");
 		const action = todoGateOpen
 			? context.toolResults.find(result => PREWALK_ACTION_TOOLS[result.toolName])
 			: undefined;

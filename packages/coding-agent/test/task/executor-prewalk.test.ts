@@ -24,16 +24,19 @@ import type { AgentDefinition, SingleResult } from "@oh-my-pi/pi-coding-agent/ta
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 
-function yieldEmittingSession(): AgentSession {
+function yieldEmittingSession(initialTools: string[] = ["read", "yield"]): AgentSession {
 	const listeners: Array<(event: AgentSessionEvent) => void> = [];
+	let activeTools = initialTools;
 	const session = {
 		state: { messages: [] },
 		agent: { state: { systemPrompt: ["test"] } },
 		model: undefined,
 		extensionRunner: undefined,
 		sessionManager: { appendSessionInit: () => {} },
-		getActiveToolNames: () => ["read", "yield"],
-		setActiveToolsByName: async (_toolNames: string[]) => {},
+		getActiveToolNames: () => activeTools,
+		setActiveToolsByName: async (toolNames: string[]) => {
+			activeTools = toolNames;
+		},
 		subscribe: (listener: (event: AgentSessionEvent) => void) => {
 			listeners.push(listener);
 			return () => {
@@ -205,6 +208,36 @@ describe("runSubprocess per-agent prewalk", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(spy.mock.calls[0]?.[0]?.prewalk).toBeUndefined();
+	});
+	it("keeps the todo tool active for a prewalk-armed subagent (the todo gate needs it)", async () => {
+		const session = yieldEmittingSession(["read", "todo", "yield"]);
+		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
+
+		const result = await runSubprocess({
+			...baseOptions("subagent-prewalk-todo-kept", Settings.isolated()),
+			agent: {
+				...baseAgent,
+				model: [`${primary.provider}/${primary.id}`],
+				prewalk: `${target.provider}/${target.id}`,
+			},
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(session.getActiveToolNames()).toContain("todo");
+	});
+
+	it("strips the parent-owned todo tool from non-prewalk subagents", async () => {
+		const session = yieldEmittingSession(["read", "todo", "yield"]);
+		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
+
+		const result = await runSubprocess({
+			...baseOptions("subagent-no-prewalk-todo-stripped", Settings.isolated()),
+			agent: { ...baseAgent, model: [`${primary.provider}/${primary.id}`] },
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(session.getActiveToolNames()).not.toContain("todo");
+		expect(session.getActiveToolNames()).toContain("read");
 	});
 });
 // Plan-mode spawns are read-only exploration: the task tool must strip a
