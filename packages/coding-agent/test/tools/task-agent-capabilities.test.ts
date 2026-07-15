@@ -28,11 +28,10 @@ describe("task agent capability descriptions", () => {
 			expect(agentByName(agents, name).readSummarize).toBeUndefined();
 		}
 	});
-	it("ships the generic task agent with prewalk enabled, all other bundled agents without", () => {
+	it("ships every bundled agent without prewalk; hand-off is opt-in via task.agentPrewalk", () => {
 		const agents = loadBundledAgents();
 
-		expect(agentByName(agents, "task").prewalk).toBe(true);
-		for (const name of ["scout", "sonic", "reviewer", "designer", "librarian"]) {
+		for (const name of ["task", "scout", "sonic", "reviewer", "designer", "librarian"]) {
 			expect(agentByName(agents, name).prewalk).toBeUndefined();
 		}
 	});

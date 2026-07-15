@@ -694,6 +694,27 @@ describe("Settings", () => {
 			expect(settings.get("grep.enabled")).toBe(true);
 		});
 
+		it("maps legacy tools.discoveryMode 'off' to tools.xdev false and drops dead discovery keys", async () => {
+			await writeSettings({
+				tools: { discoveryMode: "off", essentialOverride: ["read"] },
+				mcp: { discoveryMode: "auto", discoveryDefaultServers: ["gh"] },
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			expect(settings.get("tools.xdev")).toBe(false);
+		});
+
+		it("keeps tools.xdev default for non-'off' legacy discovery modes and honors an explicit xdev", async () => {
+			await writeSettings({ tools: { discoveryMode: "auto" } });
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			expect(settings.get("tools.xdev")).toBe(true);
+
+			await writeSettings({ tools: { discoveryMode: "off", xdev: true } });
+			const explicit = await Settings.init({ cwd: projectDir, agentDir });
+			expect(explicit.get("tools.xdev")).toBe(true);
+		});
+
 		it("migrates from settings.json containing comments", async () => {
 			const jsonPath = path.join(agentDir, "settings.json");
 			await fs.promises.writeFile(

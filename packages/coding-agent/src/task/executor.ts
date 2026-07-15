@@ -2309,12 +2309,15 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// Per-agent prewalk: the agent definition's `prewalk` frontmatter or the
 			// `task.agentPrewalk` settings override hands the subagent off to a
 			// fast/cheap target at its first edit/write — the same mechanism as the
-			// session-level --prewalk. Resolution failures skip prewalk instead of
-			// failing the spawn.
+			// session-level --prewalk. The bundled generic `task` agent has no
+			// frontmatter default; the `task.prewalk` toggle (default off) arms it.
+			// Resolution failures skip prewalk instead of failing the spawn.
 			let prewalk: Prewalk | undefined;
+			const genericTaskPrewalk =
+				agent.source === "bundled" && agent.name === "task" && settings.get("task.prewalk") ? true : undefined;
 			const prewalkPattern = resolveAgentPrewalkPattern({
 				settingsOverride: settings.get("task.agentPrewalk")[agent.name],
-				agentPrewalk: agent.prewalk,
+				agentPrewalk: agent.prewalk ?? genericTaskPrewalk,
 			});
 			if (prewalkPattern) {
 				const resolvedPrewalk = resolveModelOverride([prewalkPattern], modelRegistry, settings);

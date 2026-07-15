@@ -2220,12 +2220,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		// `write` and refine it with `edit`, and plan approval itself is a `write`
 		// to `xd://propose`. Both must be in the active set or the agent falls
 		// back to `edit` on a non-existent file and stalls — and cannot submit the plan.
-		// `edit` is an essential built-in so it survives `tools.discoveryMode ===
-		// "all"`; re-activate `write` here only when the current registry entry is
-		// the built-in write tool (issue #3165). A shadowing extension tool named
-		// `write` must stay inactive because plan mode's read-only guarantee relies
-		// on the built-in write/edit guard. The standing handler below consumes
-		// plan-approval dispatches.
+		// `edit` is an essential built-in and always ships top-level; re-activate
+		// `write` here only when the current registry entry is the built-in write
+		// tool (issue #3165). A shadowing extension tool named `write` must stay
+		// inactive because plan mode's read-only guarantee relies on the built-in
+		// write/edit guard. The standing handler below consumes plan-approval
+		// dispatches.
 		const planAugmentations: string[] = [];
 		if (this.session.hasBuiltInTool("write")) {
 			planAugmentations.push("write");

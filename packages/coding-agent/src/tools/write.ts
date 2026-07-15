@@ -1019,7 +1019,10 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 									_toolCallId,
 									signal,
 									onUpdate as AgentToolUpdateCallback,
-									context,
+									// The write tool's own gate just resolved approval at this
+									// device's tier (see #approval above) — mark it so a wrapped
+									// inner tool does not prompt a second time.
+									context ? { ...context, xdevApproved: true } : undefined,
 								);
 								xdResult = {
 									content: result.content,

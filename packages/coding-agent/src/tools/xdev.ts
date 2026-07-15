@@ -227,11 +227,47 @@ export class XdevRegistry {
 		return renderDocs(this.#resolve(name));
 	}
 
-	/** Full docs + schema for every mounted device, nested under a `##` heading for system-prompt embedding. */
+	/**
+	 * Char budget for the full docs inlined into the system prompt. Large MCP
+	 * catalogs previously shipped every schema top-level; without a cap they
+	 * would bloat every request. Devices past the budget fall back to a
+	 * one-line summary — their docs stay one `read xd://<tool>` away.
+	 */
+	static readonly DOCS_TOTAL_BUDGET = 48_000;
+	/** A single device's docs above this size never inline: one pathological
+	 *  MCP description must not starve every later device. */
+	static readonly DOCS_PER_DEVICE_CAP = 10_000;
+
+	/**
+	 * Docs + schema for mounted devices, nested under `##` headings for
+	 * system-prompt embedding. Inlines full docs in catalog order (built-ins
+	 * first) until {@link DOCS_TOTAL_BUDGET} is spent; the rest are listed by
+	 * name + summary with a pointer to on-demand `read xd://<tool>` docs.
+	 */
 	docsAll(): string {
-		return this.list()
-			.map(tool => renderDocs(tool, "##"))
-			.join("\n\n");
+		const sections: string[] = [];
+		const overflow: Tool[] = [];
+		let used = 0;
+		for (const tool of this.list()) {
+			const docs = renderDocs(tool, "##");
+			if (docs.length > XdevRegistry.DOCS_PER_DEVICE_CAP || used + docs.length > XdevRegistry.DOCS_TOTAL_BUDGET) {
+				overflow.push(tool);
+				continue;
+			}
+			used += docs.length;
+			sections.push(docs);
+		}
+		if (overflow.length > 0) {
+			sections.push(
+				[
+					"## Additional devices (docs on demand)",
+					...overflow.map(tool => `- ${XD_URL_PREFIX}${tool.name} — ${toolSummary(tool)}`),
+					"",
+					`Read ${XD_URL_PREFIX}<tool> for full docs + JSON schema before first use.`,
+				].join("\n"),
+			);
+		}
+		return sections.join("\n\n");
 	}
 
 	#resolve(name: string): Tool {

@@ -4256,6 +4256,17 @@ export const SETTINGS_SCHEMA = {
 		type: "record",
 		default: {} as Record<string, string>,
 	},
+	"task.prewalk": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tools",
+			group: "Subagents",
+			label: "Generic Task Prewalk",
+			description:
+				"Arm prewalk for the bundled generic `task` subagent: it starts on its resolved model, plans and begins the implementation, then hands off to the 'smol' role at its first edit/write. Per-agent overrides (task.agentPrewalk, toggled with P in /agents) and user agent `prewalk` frontmatter apply regardless of this toggle.",
+		},
+	},
 
 	"tasks.todoClearDelay": {
 		type: "number",
