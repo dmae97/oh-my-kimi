@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, setSystemTime, vi } from "bun:test";
 import type { AuthStorage, CredentialOriginKind, FetchImpl } from "@oh-my-pi/pi-ai";
+import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { searchXAI, XAIProvider } from "@oh-my-pi/pi-coding-agent/web/search/providers/xai";
 import { SearchProviderError } from "@oh-my-pi/pi-coding-agent/web/search/types";
 
@@ -116,6 +117,13 @@ function citationUrls(prefix: string, count: number): string[] {
 	return Array.from({ length: count }, (_, index) => `https://example.com/${prefix}-${index + 1}`);
 }
 
+const proxyXaiRegistry = {
+	getAll: () => [],
+	find: () => undefined,
+	getProviderBaseUrl: (provider: string) => (provider === "xai-oauth" ? "https://proxy.example/v1/" : undefined),
+	getProviderHeaders: (provider: string) => (provider === "xai-oauth" ? { "X-Proxy-Tenant": "tenant-1" } : undefined),
+} as unknown as ModelRegistry;
+
 describe("xAI web search provider", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
@@ -169,6 +177,53 @@ describe("xAI web search provider", () => {
 		expect(capture.capturedRequest?.headers).toMatchObject({
 			Authorization: "Bearer test-xai-oauth-token",
 		});
+	});
+
+	it("uses configured xai-oauth endpoint, API key, and headers together", async () => {
+		const capture = captureFetch({ id: "resp_proxy", model: "grok-4.3", output_text: "proxy answer" });
+
+		await searchXAI({
+			...makeParams(
+				capture.fetchMock,
+				makeAuthStorage({
+					"xai-oauth": { key: "proxy-key", kind: "config" },
+				}),
+			),
+			modelRegistry: proxyXaiRegistry,
+		});
+
+		expect(capture.capturedRequest).not.toBeNull();
+		expect(capture.capturedRequest?.url).toBe("https://proxy.example/v1/responses");
+		expect(capture.capturedRequest?.headers).toMatchObject({
+			"Content-Type": "application/json",
+			Authorization: "Bearer proxy-key",
+			"X-Proxy-Tenant": "tenant-1",
+		});
+	});
+
+	it("never sends official xAI OAuth credentials to a configured custom endpoint", async () => {
+		const capture = captureFetch({ id: "must_not_send", output_text: "unexpected" });
+
+		try {
+			await searchXAI({
+				...makeParams(
+					capture.fetchMock,
+					makeAuthStorage({
+						"xai-oauth": { key: "official-oauth-token", kind: "oauth" },
+					}),
+				),
+				modelRegistry: proxyXaiRegistry,
+			});
+			expect.unreachable("official xAI OAuth credentials should be rejected for a custom endpoint");
+		} catch (error) {
+			expect(error).toBeInstanceOf(SearchProviderError);
+			expect(error).toHaveProperty(
+				"message",
+				'Refusing to send official xAI OAuth credentials to custom endpoint https://proxy.example/v1. Configure an API key for provider "xai-oauth".',
+			);
+		}
+
+		expect(capture.capturedRequests).toHaveLength(0);
 	});
 
 	it("prefers dedicated xAI OAuth credentials over xAI API keys", async () => {
