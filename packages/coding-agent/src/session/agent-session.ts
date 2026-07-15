@@ -1748,7 +1748,7 @@ export class AgentSession {
 	#prewalk: Prewalk | undefined;
 	/** True once the plan nudge has been queued; scrubbed from context at the switch. */
 	#prewalkPlanInjected = false;
-	/** True until the first assistant turn after the plan nudge completes. */
+	/** Armed by plan/tool progress; consumed by one text-only continuation. */
 	#prewalkContinuePending = false;
 	/** True once any successful `todo` call landed — opens the prewalk
 	 *  trigger gate: the switch fires at the first edit/write AFTER the todo
@@ -2249,22 +2249,31 @@ export class AgentSession {
 		const prewalk = this.#prewalk;
 		if (!prewalk || context?.message.role !== "assistant") return;
 
-		// The plan nudge can produce a prose-only reply, which the agent loop
-		// treats as completion before any implementation starts. Keep the
-		// safety net open only for the turn immediately following that nudge:
-		// once the model calls any tool, later text-only completion is genuine.
-		if (this.#prewalkContinuePending) {
+		const todoCalledThisTurn = context.toolResults.some(result => result.toolName === "todo");
+		if (todoCalledThisTurn) {
+			this.#prewalkTodoSeen = true;
+		}
+
+		// The plan nudge asks for a prose plan before implementation begins,
+		// but the agent loop treats each text-only reply as terminal. Tool
+		// progress re-arms one continuation, allowing split flows such as
+		// plan → todo → prose → read → prose → edit/write. Consuming the arm
+		// before steering also detects completion: two consecutive text-only
+		// replies have no intervening progress, so the second ends naturally
+		// instead of producing the #5551 loop.
+		const hasToolResults = context.toolResults.length > 0;
+		if (this.#prewalkPlanInjected && hasToolResults) {
+			this.#prewalkContinuePending = true;
+		} else if (this.#prewalkContinuePending) {
 			this.#prewalkContinuePending = false;
-			if (context.toolResults.length === 0) {
-				this.agent.steer({
-					role: "custom",
-					customType: PREWALK_CONTINUE_MESSAGE_TYPE,
-					content: prewalkContinuePrompt,
-					attribution: "agent",
-					display: false,
-					timestamp: Date.now(),
-				});
-			}
+			this.agent.steer({
+				role: "custom",
+				customType: PREWALK_CONTINUE_MESSAGE_TYPE,
+				content: prewalkContinuePrompt,
+				attribution: "agent",
+				display: false,
+				timestamp: Date.now(),
+			});
 		}
 
 		// Todo gate: the plan nudge instructs "finish the plan, then init the
@@ -2275,9 +2284,6 @@ export class AgentSession {
 		// ACTIVE tool set, not the registry: a registered-but-deactivated todo
 		// (e.g. a restricted active-tool slate) is uncallable and would
 		// deadlock the switch.
-		if (context.toolResults.some(result => result.toolName === "todo")) {
-			this.#prewalkTodoSeen = true;
-		}
 		const todoGateOpen = this.#prewalkTodoSeen || !this.getActiveToolNames().includes("todo");
 		const action = todoGateOpen
 			? context.toolResults.find(result => PREWALK_ACTION_TOOLS[result.toolName])
