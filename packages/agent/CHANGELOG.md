@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [17.0.0] - 2026-07-15
+
 ### Breaking Changes
 
 - Replaced the irc, job, and launch tools with a unified hub tool.

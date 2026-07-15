@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [17.0.0] - 2026-07-15
+
 ### Changed
 
 - Improved Ollama streaming performance by parsing NDJSON response bytes directly instead of decoding and buffering network chunks as text.

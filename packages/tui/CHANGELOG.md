@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [17.0.0] - 2026-07-15
+
 ### Added
 
 - Improved LaTeX rendering for \underbrace, \overbrace, \overset, \underset, and \stackrel to use drawn horizontal braces with centered labels and stacked annotations instead of flat inline glyphs.

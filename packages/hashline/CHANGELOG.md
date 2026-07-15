@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [17.0.0] - 2026-07-15
+
 ### Added
 
 - Added `enforceSeenLines` option to `PatcherOptions` (defaulting to `true`) to control whether seen-line validation is enforced on anchored edits, allowing tags to validate on content hash alone when disabled.
