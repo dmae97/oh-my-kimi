@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Batched complete SSE lines into one UTF-8 decode per source chunk, avoiding per-line decoder overhead during active response streaming. ([#5542](https://github.com/can1357/oh-my-pi/issues/5542))
+
 ## [16.5.2] - 2026-07-14
 
 ### Fixed
