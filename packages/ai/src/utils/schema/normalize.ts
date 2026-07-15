@@ -26,7 +26,7 @@ import { enter, epochNext, exit, once, stamp } from "./stamps";
 import { isJsonObject, isJsonObjectEmpty, type JsonObject } from "./types";
 import { decontaminateZodInstance } from "./zod-decontaminate";
 
-export type ResidualSchemaIncompatibility = "type-array" | "type-null" | "nullable" | "combiners";
+export type ResidualSchemaIncompatibility = "type-array" | "type-null" | "nullable" | "combiners" | "not";
 
 export interface NormalizeSchemaOptions {
 	unsupportedFields: (key: string) => boolean;
@@ -70,6 +70,7 @@ interface ResidualIncompatibilityChecks {
 	typeNull: boolean;
 	nullable: boolean;
 	combiners: boolean;
+	not: boolean;
 }
 
 const SNAKE_TO_CAMEL_RENAMES = new Map<string, string>([
@@ -895,6 +896,7 @@ function createResidualIncompatibilityChecks(
 		typeNull: false,
 		nullable: false,
 		combiners: false,
+		not: false,
 	};
 	for (const check of checks) {
 		switch (check) {
@@ -906,6 +908,9 @@ function createResidualIncompatibilityChecks(
 				break;
 			case "nullable":
 				result.nullable = true;
+				break;
+			case "not":
+				result.not = true;
 				break;
 			case "combiners":
 				result.combiners = true;
@@ -919,10 +924,11 @@ function hasResidualSchemaIncompatibilities(
 	value: unknown,
 	checks: ResidualIncompatibilityChecks,
 	epoch: number = epochNext(),
+	insideSchemaMap = false,
 ): boolean {
 	if (Array.isArray(value)) {
 		if (!once(value, epoch)) return false;
-		return value.some(entry => hasResidualSchemaIncompatibilities(entry, checks, epoch));
+		return value.some(entry => hasResidualSchemaIncompatibilities(entry, checks, epoch, insideSchemaMap));
 	}
 	if (!isJsonObject(value)) {
 		return false;
@@ -934,14 +940,22 @@ function hasResidualSchemaIncompatibilities(
 	if (checks.typeArray && Array.isArray(value.type)) return true;
 	if (checks.typeNull && value.type === "null") return true;
 	if (checks.nullable && Object.hasOwn(value, "nullable")) return true;
-	if (checks.combiners) {
+	if (!insideSchemaMap && checks.not && Object.hasOwn(value, "not")) return true;
+	if (!insideSchemaMap && checks.combiners) {
 		for (const combiner of CCA_FORBIDDEN_COMBINERS) {
 			if (Array.isArray(value[combiner])) return true;
 		}
 	}
 	for (const k in value) {
 		if (!Object.hasOwn(value, k)) continue;
-		if (hasResidualSchemaIncompatibilities(value[k], checks, epoch)) {
+		if (
+			hasResidualSchemaIncompatibilities(
+				value[k],
+				checks,
+				epoch,
+				!insideSchemaMap && Object.hasOwn(SUBSCHEMA_MAP_KEYS, k),
+			)
+		) {
 			return true;
 		}
 	}
@@ -1014,7 +1028,7 @@ export function normalizeSchemaForCCA(value: unknown): unknown {
 		inferTypeForBareEnum: true,
 		dropNonScalarEnum: false,
 		foldOneOfIntoAnyOf: false,
-		rejectResidualIncompatibilities: ["type-array", "type-null", "nullable", "combiners"],
+		rejectResidualIncompatibilities: ["type-array", "type-null", "nullable", "combiners", "not"],
 		validateAndFallback: { fallback: CLOUD_CODE_ASSIST_CLAUDE_FALLBACK_SCHEMA },
 	});
 }

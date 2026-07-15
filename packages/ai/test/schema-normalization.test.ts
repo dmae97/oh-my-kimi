@@ -282,7 +282,7 @@ describe("normalizeSchemaForGoogle", () => {
 		expect(sanitized.required).toEqual(["additionalProperties"]);
 	});
 
-	it("coerces boolean subschemas to object equivalents on the Google/CCA wire (issue #5604)", () => {
+	it("coerces boolean subschemas to object equivalents on the Google wire (issue #5604)", () => {
 		const schema = {
 			type: "object",
 			properties: {
@@ -294,21 +294,39 @@ describe("normalizeSchemaForGoogle", () => {
 				hasBar: false,
 			},
 		};
-		const expectedProps = { propertyValue: {}, attributeValue: { not: {} } };
-		const expectedDependentSchemas = { hasFoo: {}, hasBar: { not: {} } };
-
 		const google = normalizeSchemaForGoogle(schema) as Record<string, unknown>;
-		expect(google.properties).toEqual(expectedProps);
-		expect(google.dependentSchemas).toEqual(expectedDependentSchemas);
-		const cca = normalizeSchemaForCCA(schema) as Record<string, unknown>;
-		expect(cca.properties).toEqual(expectedProps);
-		expect(cca.dependentSchemas).toEqual(expectedDependentSchemas);
 
+		expect(google.properties).toEqual({ propertyValue: {}, attributeValue: { not: {} } });
+		expect(google.dependentSchemas).toEqual({ hasFoo: {}, hasBar: { not: {} } });
 		// Root-level and array-branch booleans are covered by the same choke point.
 		expect(normalizeSchemaForGoogle(true)).toEqual({});
 		expect(normalizeSchemaForGoogle(false)).toEqual({ not: {} });
 		expect(normalizeSchemaForGoogle({ anyOf: [true, { type: "string" }] })).toEqual({
 			anyOf: [{}, { type: "string" }],
+		});
+	});
+
+	it("falls back when a false subschema produces unsupported `not` on the CCA wire", () => {
+		const fallback = { type: "object", properties: {} };
+
+		expect(
+			normalizeSchemaForCCA({
+				type: "object",
+				properties: { propertyValue: true },
+				dependentSchemas: { hasFoo: true },
+			}),
+		).toEqual({
+			type: "object",
+			properties: { propertyValue: {} },
+			dependentSchemas: { hasFoo: {} },
+		});
+		expect(normalizeSchemaForCCA(false)).toEqual(fallback);
+		expect(normalizeSchemaForCCA({ type: "object", properties: { attributeValue: false } })).toEqual(fallback);
+		expect(normalizeSchemaForCCA({ type: "object", dependentSchemas: { hasBar: false } })).toEqual(fallback);
+		// A property named `not` is a schema-map entry, not the unsupported keyword.
+		expect(normalizeSchemaForCCA({ type: "object", properties: { not: { type: "string" } } })).toEqual({
+			type: "object",
+			properties: { not: { type: "string" } },
 		});
 	});
 
