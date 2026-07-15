@@ -579,6 +579,9 @@ export class AdvisorRuntime {
 						} catch (hookErr) {
 							logger.debug("advisor onTurnError hook failed", { err: String(hookErr) });
 						}
+						if (this.#epoch !== epoch) {
+							continue;
+						}
 						if (switched) {
 							// Sibling credential available — retry once with the new key.
 							const retrySnapshot = this.agent.state.messages.length;

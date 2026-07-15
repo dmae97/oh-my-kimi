@@ -2686,6 +2686,53 @@ describe("advisor", () => {
 			expect(runtime.quotaExhausted).toBe(true);
 			expect(quotaNotified).toBe(true);
 		});
+		it("drops stale quota handling when reset happens during onTurnError", async () => {
+			const promptInputs: string[] = [];
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					if (input.includes("stale-turn")) {
+						throw new Error("insufficient_quota: you have exceeded your rate limit");
+					}
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			let quotaNotified = 0;
+			let hookInvocations = 0;
+			const { promise: hookEntered, resolve: allowHook } = Promise.withResolvers<void>();
+			const { promise: hookProceed, resolve: proceedHook } = Promise.withResolvers<void>();
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => [],
+				enqueueAdvice: () => {},
+				onTurnError: async () => {
+					hookInvocations++;
+					allowHook();
+					await hookProceed;
+					return false;
+				},
+				notifyQuotaExhausted: () => {
+					quotaNotified++;
+				},
+			};
+			const runtime = new AdvisorRuntime(agent, host, 0);
+
+			runtime.onTurnEnd([{ role: "user", content: "stale-turn", timestamp: 1 } as AgentMessage]);
+			await hookEntered;
+			runtime.reset();
+			runtime.onTurnEnd([{ role: "user", content: "fresh-turn", timestamp: 2 } as AgentMessage]);
+			proceedHook();
+			await runtime.waitForCatchup(1000, 1);
+
+			expect(hookInvocations).toBe(1);
+			expect(promptInputs).toHaveLength(2);
+			expect(promptInputs[0]).toContain("stale-turn");
+			expect(promptInputs[1]).toContain("fresh-turn");
+			expect(runtime.quotaExhausted).toBe(false);
+			expect(runtime.backlog).toBe(0);
+			expect(quotaNotified).toBe(0);
+		});
 		it("uses generic failure path when switched retry hits a non-quota error", async () => {
 			const promptInputs: string[] = [];
 			let callCount = 0;
