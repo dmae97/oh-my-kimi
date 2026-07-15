@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Fixed Cursor TLS connection resets escaping the provider stream as process-fatal uncaught exceptions, allowing the active turn to fail or retry without terminating the session. ([#5593](https://github.com/can1357/oh-my-pi/issues/5593))
 - Parsed Ollama NDJSON response bytes directly instead of decoding and buffering every network chunk as text. ([#5542](https://github.com/can1357/oh-my-pi/issues/5542))
 - Fixed Amazon Bedrock stream error handling for non-`Error` values that `JSON.stringify` cannot serialize ([#5539](https://github.com/can1357/oh-my-pi/issues/5539)).
 
