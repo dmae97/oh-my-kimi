@@ -510,7 +510,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 			for (const block of output.content) {
 				if (block.type === "toolCall") clearStreamingPartialJson(block);
 			}
-			const baseMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			const baseMessage = error instanceof Error ? error.message : (JSON.stringify(error) ?? String(error));
 			// Enrich error with thinking block diagnostics for signature-related failures
 			let diagnostics = "";
 			if (baseMessage.includes("signature") || baseMessage.includes("thinking")) {

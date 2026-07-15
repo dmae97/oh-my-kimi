@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Amazon Bedrock stream error handler crashing with `TypeError: undefined is not an object (evaluating 'baseMessage.includes')` when a non-`Error` value is thrown and `JSON.stringify` returns `undefined` ([#5539](https://github.com/can1357/oh-my-pi/issues/5539)).
+
 ## [16.5.2] - 2026-07-14
 
 ### Added

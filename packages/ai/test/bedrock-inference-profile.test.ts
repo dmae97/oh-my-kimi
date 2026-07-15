@@ -148,3 +148,22 @@ describe("Bedrock cross-region inference-profile geo routing", () => {
 		});
 	});
 });
+
+describe("Bedrock error handling", () => {
+	// Regression (#5539): a non-`Error` thrown inside the stream body where
+	// `JSON.stringify` returns `undefined` (e.g. `undefined`, a function, a
+	// circular object) must not crash the catch block via `baseMessage.includes(...)`.
+	// The stream must close cleanly with an error result instead of an unhandled
+	// `TypeError: undefined is not an object (evaluating 'baseMessage.includes')`.
+	test("surfaces a stream error when a non-Error value is thrown", async () => {
+		const result = await streamBedrock(profileModel, userContext(), {
+			bearerToken: "test-token",
+			maxTokens: 16,
+			onPayload: () => {
+				throw undefined;
+			},
+		}).result();
+
+		expect(result.stopReason).toBe("error");
+	});
+});
