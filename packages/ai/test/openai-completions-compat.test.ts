@@ -196,6 +196,7 @@ describe("openai-completions compatibility", () => {
 			supportsStrictMode: true,
 			toolStrictMode: "none",
 			supportsReasoningParams: true,
+			supportsSamplingParams: true,
 			alwaysSendMaxTokens: false,
 			isOpenRouterHost: false,
 			isVercelGatewayHost: false,

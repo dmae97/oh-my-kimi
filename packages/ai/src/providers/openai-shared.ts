@@ -2717,7 +2717,9 @@ type CommonSamplingOptions = Pick<
 export function applyCommonResponsesSamplingParams<P extends CommonResponsesParams>(
 	params: P,
 	options: CommonSamplingOptions | undefined,
-	model: Pick<Model, "provider" | "api" | "id" | "omitMaxOutputTokens" | "maxTokens">,
+	model: Pick<Model, "provider" | "api" | "id" | "omitMaxOutputTokens" | "maxTokens"> & {
+		compat: Pick<ResolvedOpenAISharedCompat, "supportsSamplingParams">;
+	},
 ): void {
 	if (options?.maxTokens && !model.omitMaxOutputTokens) {
 		params.max_output_tokens = Math.min(
@@ -2726,12 +2728,16 @@ export function applyCommonResponsesSamplingParams<P extends CommonResponsesPara
 			OPENAI_MAX_OUTPUT_TOKENS,
 		);
 	}
-	if (options?.temperature !== undefined) params.temperature = options.temperature;
-	if (options?.topP !== undefined) params.top_p = options.topP;
-	if (options?.topK !== undefined) params.top_k = options.topK;
-	if (options?.minP !== undefined) params.min_p = options.minP;
-	if (options?.presencePenalty !== undefined) params.presence_penalty = options.presencePenalty;
-	if (options?.repetitionPenalty !== undefined) params.repetition_penalty = options.repetitionPenalty;
+	// OpenAI proprietary reasoning models (o-series, gpt-5+) reject explicit
+	// sampling params with a 400 on every serving host (#5606).
+	if (model.compat.supportsSamplingParams) {
+		if (options?.temperature !== undefined) params.temperature = options.temperature;
+		if (options?.topP !== undefined) params.top_p = options.topP;
+		if (options?.topK !== undefined) params.top_k = options.topK;
+		if (options?.minP !== undefined) params.min_p = options.minP;
+		if (options?.presencePenalty !== undefined) params.presence_penalty = options.presencePenalty;
+		if (options?.repetitionPenalty !== undefined) params.repetition_penalty = options.repetitionPenalty;
+	}
 	applyOpenAIServiceTier(params, options?.serviceTier, model);
 }
 

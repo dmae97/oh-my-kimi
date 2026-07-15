@@ -18,6 +18,7 @@ import {
 	isKimiK26ModelId,
 	isKimiModelId,
 	isMimoModelIdOrName,
+	isOpenAISamplingRestrictedModelId,
 	isQwenModelId,
 	modelFamilyToken,
 } from "../identity/family";
@@ -409,6 +410,9 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		supportsReasoningEffort: !isGrok && !isXiaomiMimo && (!(isZai || isZhipu) || supportsZaiReasoningEffort),
 		// GitHub Copilot's chat-completions endpoint rejects reasoning params wholesale.
 		supportsReasoningParams: provider !== "github-copilot",
+		// OpenAI proprietary reasoning models (o-series, gpt-5+) reject explicit
+		// temperature/top_p/… with a 400 on every serving host (#5606).
+		supportsSamplingParams: !isOpenAISamplingRestrictedModelId(spec.id),
 		reasoningEffortMap: isMimoReasoningEffortModel ? MIMO_REASONING_EFFORT_MAP : {},
 		supportsUsageInStreaming: !isCerebras,
 		// pi-ai's thinking-loop guard is gemini-only; default the flag from the
@@ -604,6 +608,9 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 			spec.provider !== "xai-oauth" && !modelMatchesHost({ provider: spec.provider, baseUrl }, "githubCopilot"),
 		reasoningEffortMap: {},
 		supportsReasoningParams: true,
+		// OpenAI proprietary reasoning models (o-series, gpt-5+) reject explicit
+		// temperature/top_p/… with a 400 on every serving host (#5606).
+		supportsSamplingParams: !isOpenAISamplingRestrictedModelId(id),
 		thinkingFormat,
 		reasoningDisableMode: resolveReasoningDisableMode(thinkingFormat),
 		omitReasoningEffort: false,

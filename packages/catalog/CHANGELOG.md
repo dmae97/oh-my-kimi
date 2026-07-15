@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added resolved OpenAI sampling-parameter compatibility metadata for o-series and GPT-5+ models.
+
 ## [16.5.2] - 2026-07-14
 
 ### Fixed
