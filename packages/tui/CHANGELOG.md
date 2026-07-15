@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Display LaTeX now renders `\underbrace`/`\overbrace` (and the bracket/paren variants) as drawn horizontal braces with centered labels, and stacks `\overset`/`\underset`/`\stackrel` annotations above/below the base instead of falling back to flat inline glyphs.
+- Display LaTeX renders multi-letter script words (`N_{turns}`) as raised/lowered blocks instead of ragged per-character Unicode sub/superscript glyphs; single letters and digits keep the compact Unicode forms.
+
 ## [16.5.2] - 2026-07-14
 
 ### Fixed

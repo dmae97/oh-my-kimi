@@ -191,12 +191,53 @@ describe("latexToBlock (2-D layout)", () => {
 		expect(latexToBlock("x_q^q").map(line => line.trimEnd())).toEqual([" q", "x", " q"]);
 	});
 
+	it("boxes multi-letter script words instead of ragged Unicode glyphs", () => {
+		// t/u/r/n/s all have Unicode subscript forms, but the mixed glyph
+		// heights read ragged; words get a real lowered box.
+		expect(latexToBlock("N_{turns} + 1").map(line => line.trimEnd())).toEqual(["N      + 1", " turns"]);
+		expect(latexToBlock("x^{ab}").map(line => line.trimEnd())).toEqual([" ab", "x"]);
+		// Single letters and digits keep compact Unicode scripts.
+		expect(latexToBlock("x_i + y_1")).toEqual(["xᵢ + y₁"]);
+	});
+
 	it("pins both scripts of a tall base in one shared column", () => {
 		expect(latexToBlock("\\begin{bmatrix} a & b \\\\ c & d \\end{bmatrix}_0^T").map(line => line.trimEnd())).toEqual([
 			"⎡ a  b ⎤ᵀ",
 			"⎢      ⎥",
 			"⎣ c  d ⎦₀",
 		]);
+	});
+	it("draws a labeled underbrace with the baseline on the content", () => {
+		expect(latexToBlock("x + \\underbrace{a+b}_{\\text{sum}}").map(line => line.trimEnd())).toEqual([
+			"x + a+b",
+			"    ╰┬╯",
+			"    sum",
+		]);
+	});
+
+	it("draws a labeled overbrace above the content", () => {
+		expect(latexToBlock("\\overbrace{a+b}^{\\text{sum}} + x").map(line => line.trimEnd())).toEqual([
+			"sum",
+			"╭┴╮",
+			"a+b + x",
+		]);
+	});
+
+	it("centers content and label on the wider of the two", () => {
+		expect(latexToBlock("\\underbrace{ab}_{\\text{longer label}}").map(line => line.trimEnd())).toEqual([
+			"     ab",
+			"    ╰┬╯",
+			"longer label",
+		]);
+	});
+
+	it("draws an unlabeled underbrace", () => {
+		expect(latexToBlock("\\underbrace{a+b+c}").map(line => line.trimEnd())).toEqual(["a+b+c", "╰─┬─╯"]);
+	});
+
+	it("stacks \\overset above and \\underset below the base on its baseline", () => {
+		expect(latexToBlock("A \\overset{!}{=} B").map(line => line.trimEnd())).toEqual(["  !", "A = B"]);
+		expect(latexToBlock("A \\underset{0}{=} B").map(line => line.trimEnd())).toEqual(["A = B", "  0"]);
 	});
 
 	it("aligns align-environment rows on the & column", () => {
