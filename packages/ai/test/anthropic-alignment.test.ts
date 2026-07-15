@@ -427,6 +427,44 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(capturedBeta).toContain("mid-conversation-system-2026-04-07");
 	});
 
+	it("gates the effort beta and field off google-vertex requests (#5614)", async () => {
+		let capturedBeta: string | undefined;
+		let capturedBody: { output_config?: { effort?: unknown } } | undefined;
+		const fetchMock = (async (_input: string | URL | Request, init?: RequestInit) => {
+			capturedBeta = (init?.headers as Record<string, string> | undefined)?.["anthropic-beta"];
+			capturedBody = JSON.parse(String(init?.body ?? "{}"));
+			return new Response(
+				JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "captured" } }),
+				{ status: 400, headers: { "Content-Type": "application/json" } },
+			);
+		}) as typeof fetch;
+		// Claude on Vertex uses api "anthropic-messages" and the rawPredict adapter,
+		// which rejects any `anthropic-beta` HTTP header value it doesn't understand.
+		// The effort beta must ride the body (`anthropic_beta`) instead — since this
+		// path can't deliver it there, both the beta and the effort field are dropped.
+		const vertexModel: Model<"anthropic-messages"> = buildModel({
+			...ANTHROPIC_MODEL_SPEC,
+			id: "claude-haiku-4-5@20260101",
+			name: "Claude Haiku via Vertex",
+			provider: "google-vertex",
+			baseUrl:
+				"https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5/publishers/anthropic/models/claude-haiku-4-5:rawPredict",
+			thinking: {
+				mode: "anthropic-adaptive",
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+			},
+		});
+
+		await streamAnthropic(
+			vertexModel,
+			{ systemPrompt: ["Stay concise."], messages: [{ role: "user", content: "Hi", timestamp: Date.now() }] },
+			{ apiKey: "vertex-adc", thinkingEnabled: true, fetch: fetchMock },
+		).result();
+
+		expect(capturedBeta ?? "").not.toContain("effort-2025-11-24");
+		expect(capturedBody?.output_config?.effort).toBeUndefined();
+	});
+
 	it("adds the context-management beta to API-key thinking requests", async () => {
 		let capturedBeta: string | undefined;
 		const fetchMock = (async (_input: string | URL | Request, init?: RequestInit) => {

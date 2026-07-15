@@ -1776,6 +1776,10 @@ const streamAnthropicOnce = (
 				// the toggle cannot 400); the beta must accompany the field in both.
 				// MiniMax uses `thinking.type:"adaptive"` itself as the control surface,
 				// so the sentinel "adaptive" value intentionally sends no output_config.
+				// Skip Vertex rawPredict: that adapter needs betas in the body
+				// (`anthropic_beta`), not as an `anthropic-beta` HTTP header, so the
+				// effort field is dropped from the body there too (see buildParams) and
+				// advertising the beta would only earn a 400 (#5614).
 				const sendsAdaptiveEffortPin =
 					options?.thinkingEnabled === false &&
 					model.thinking?.mode === "anthropic-adaptive" &&
@@ -1783,6 +1787,7 @@ const streamAnthropicOnce = (
 					!usesAdaptiveThinkingTagOnly(model);
 				if (
 					model.reasoning &&
+					model.provider !== "google-vertex" &&
 					((options?.thinkingEnabled && options.effort !== "adaptive") || sendsAdaptiveEffortPin) &&
 					!extraBetas.includes(effortBeta)
 				) {
@@ -3255,9 +3260,12 @@ function buildParams(
 		? { edits: [{ type: "clear_thinking_20251015" as const, keep: "all" as const }] }
 		: undefined;
 
-	// Pre-compute output_config.
+	// Pre-compute output_config. Skip `effort` on Vertex rawPredict: it requires
+	// the `effort-2025-11-24` beta, which that adapter can only accept in the body
+	// (`anthropic_beta`), never as the `anthropic-beta` HTTP header this path sets
+	// — so the field is dropped alongside the beta to avoid a 400 (#5614).
 	const outputConfigEntries: AnthropicOutputConfig = {};
-	if (outputConfigEffort) outputConfigEntries.effort = outputConfigEffort;
+	if (outputConfigEffort && model.provider !== "google-vertex") outputConfigEntries.effort = outputConfigEffort;
 	if (options?.taskBudget) outputConfigEntries.task_budget = options.taskBudget;
 	const outputConfig = Object.keys(outputConfigEntries).length ? outputConfigEntries : undefined;
 
