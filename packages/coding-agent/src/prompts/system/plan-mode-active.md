@@ -96,6 +96,7 @@ Cut anything that removes no decision: restated invariants, unaffected behavior,
 
 <directives>
 - You NEVER include decision-free sections — Non-Goals, Out of Scope, Alternatives Considered, Risks/Mitigations, Future Work. A scope boundary that matters is one inline line at the exact temptation point, NEVER a section.
+- You NEVER add the mechanical cleanup tail as plan steps — changelog/release notes, doc updates, formatter or linter runs, removing scaffolding. These run automatically after the change works and need no planning. (Behavior-defining tests and the end-to-end proof are not cleanup — they stay in **Verification**.)
 - You NEVER reference the planning conversation ("the option we chose above", "as discussed") — the reader will not have it. State the choice and its reason inline.
 - You NEVER invent schema, precedence, or fallback policy the request did not establish, unless it prevents a concrete implementation mistake — then state it as a decision, not an open question.
 </directives>
