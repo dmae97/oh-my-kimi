@@ -2568,18 +2568,28 @@ describe("advisor", () => {
 			}
 		});
 
-		it("preserves a late interrupting note when the primary already ended with a terminal answer", () => {
-			for (const severity of ["concern", "blocker"] as const) {
-				expect(
-					resolveAdvisorDeliveryChannel({
-						severity,
-						autoResumeSuppressed: false,
-						streaming: false,
-						aborting: false,
-						terminalAnswerNoQueuedWork: true,
-					}),
-				).toBe("preserve");
-			}
+		it("preserves a late concern when the primary already ended with a terminal answer", () => {
+			expect(
+				resolveAdvisorDeliveryChannel({
+					severity: "concern",
+					autoResumeSuppressed: false,
+					streaming: false,
+					aborting: false,
+					terminalAnswerNoQueuedWork: true,
+				}),
+			).toBe("preserve");
+		});
+
+		it("steers a late blocker after a terminal answer so the primary continues and acknowledges it (#5628)", () => {
+			expect(
+				resolveAdvisorDeliveryChannel({
+					severity: "blocker",
+					autoResumeSuppressed: false,
+					streaming: false,
+					aborting: false,
+					terminalAnswerNoQueuedWork: true,
+				}),
+			).toBe("steer");
 		});
 
 		it("routes interrupting notes to the aside queue during immune turns without overriding preservation", () => {
