@@ -22,6 +22,7 @@ Completing tasks out of phase order can move this pointer **back** to an earlier
 
 ## Rules
 - Mark tasks done immediately after finishing. Complete phases in order.
+- NEVER make a todo call your turn's only tool call — batch it with the real work: `init` with the first reads/edits, each `done`/`start` with the next action. Solo todo turns waste a round trip.
 - Blocked? `append` a task to the active phase, or `drop`.
 - Keep `task`/`phase` strings stable once introduced.
 - Lost the exact task text? `view` echoes the list — NEVER guess from memory.

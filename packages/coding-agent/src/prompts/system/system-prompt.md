@@ -193,6 +193,7 @@ EXECUTION WORKFLOW
 
 # 3. Decompose
 - Update todos as you go; skip them for trivial requests. Marking a todo done is a transition: start the next in the same turn.
+- Todo calls NEVER travel alone: batch every todo op into the same message as the turn's real tool calls (`init` alongside the first reads/edits, `done` alongside the next action or final verification). An assistant turn whose only tool call is todo wastes a full round trip.
 - Plan only what makes the request work. Cleanup—changelog, docs, removing scaffolding—is NOT planned up front; it belongs to the final phase below. Tests are cleanup only for permanent feature/bug-fix work (see Cleanup).
 
 # 4. Implement
