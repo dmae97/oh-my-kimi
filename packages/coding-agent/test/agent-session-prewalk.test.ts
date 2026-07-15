@@ -338,6 +338,65 @@ describe("AgentSession prewalk", () => {
 		]);
 	});
 
+	it("keeps the continuation net armed across a todo-only turn so a following prose reply still implements", async () => {
+		// Regression: the plan nudge asks for a prose plan plus the todo init.
+		// A model that answers the nudge with a todo-only turn, then a prose
+		// follow-up, must not end the run before any edit/write — the todo turn
+		// is part of planning, not completion, so the continuation net stays
+		// armed until an action tool runs.
+		const primary = modelOrThrow("claude-sonnet-4-5");
+		const target = modelOrThrow("claude-sonnet-4-6");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+
+		// Turn 1: read-only (nudge injected after). Turn 2: todo — plan
+		// captured, gate opens, net stays armed. Turn 3: prose — must be
+		// bridged, not treated as terminal. Turn 4: write — switch.
+		const mock = createMockModel({
+			responses: [
+				toolCall("t1", "record"),
+				toolCall("t2", "todo"),
+				{ content: [{ type: "text", text: "Plan captured, starting now." }], stopReason: "stop" },
+				toolCall("t4", "write"),
+				{ content: ["done"] },
+			],
+		});
+		const requested: string[] = [];
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model: primary,
+				systemPrompt: ["Test"],
+				tools: [recordTool as AgentTool, writeTool as AgentTool, todoTool as AgentTool],
+				messages: [],
+				thinkingLevel: Effort.Medium,
+			},
+			convertToLlm,
+			streamFn: (model, context, options) => {
+				requested.push(`${model.provider}/${model.id}`);
+				return mock.stream(model, context, options);
+			},
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry,
+			toolRegistry,
+			prewalk: { target },
+		});
+
+		await session.prompt("do the task");
+
+		expect(requested).toEqual([
+			`${primary.provider}/${primary.id}`,
+			`${primary.provider}/${primary.id}`,
+			`${primary.provider}/${primary.id}`,
+			`${primary.provider}/${primary.id}`,
+			`${target.provider}/${target.id}`,
+		]);
+		expect(session.model?.id).toBe(target.id);
+	});
+
 	it("skips the todo gate when todo is registered but not active (subagent-style restricted slates)", async () => {
 		// Regression: the gate used to key on the tool REGISTRY, so a session
 		// whose active-tool slate excluded `todo` (subagents strip it) while the

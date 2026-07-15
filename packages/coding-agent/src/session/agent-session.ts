@@ -2249,13 +2249,23 @@ export class AgentSession {
 		const prewalk = this.#prewalk;
 		if (!prewalk || context?.message.role !== "assistant") return;
 
-		// The plan nudge can produce a prose-only reply, which the agent loop
-		// treats as completion before any implementation starts. Keep the
-		// safety net open only for the turn immediately following that nudge:
-		// once the model calls any tool, later text-only completion is genuine.
+		const todoCalledThisTurn = context.toolResults.some(result => result.toolName === "todo");
+		if (todoCalledThisTurn) {
+			this.#prewalkTodoSeen = true;
+		}
+
+		// The plan nudge asks for a prose plan (optionally alongside the todo
+		// init) before implementation begins; the agent loop would treat that
+		// text-only reply as terminal and end the run with no code written, so
+		// the continuation net forces one more turn. It stays armed across a
+		// todo-only turn — the plan is captured but the prose follow-up and the
+		// first edit/write are still to come — and disarms the moment the model
+		// takes any other action without a prose plan, so a task that finishes
+		// with a prose reply after only non-planning tools (e.g. a bash-only
+		// commit) is never forced to loop.
 		if (this.#prewalkContinuePending) {
-			this.#prewalkContinuePending = false;
 			if (context.toolResults.length === 0) {
+				this.#prewalkContinuePending = false;
 				this.agent.steer({
 					role: "custom",
 					customType: PREWALK_CONTINUE_MESSAGE_TYPE,
@@ -2264,6 +2274,8 @@ export class AgentSession {
 					display: false,
 					timestamp: Date.now(),
 				});
+			} else if (!todoCalledThisTurn) {
+				this.#prewalkContinuePending = false;
 			}
 		}
 
@@ -2275,9 +2287,6 @@ export class AgentSession {
 		// ACTIVE tool set, not the registry: a registered-but-deactivated todo
 		// (e.g. a restricted active-tool slate) is uncallable and would
 		// deadlock the switch.
-		if (context.toolResults.some(result => result.toolName === "todo")) {
-			this.#prewalkTodoSeen = true;
-		}
 		const todoGateOpen = this.#prewalkTodoSeen || !this.getActiveToolNames().includes("todo");
 		const action = todoGateOpen
 			? context.toolResults.find(result => PREWALK_ACTION_TOOLS[result.toolName])
