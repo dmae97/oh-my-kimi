@@ -1200,6 +1200,7 @@ export class Agent {
 		};
 
 		let partial: AgentMessage | null = null;
+		const completedToolCallIds = new Set<string>();
 
 		try {
 			const stream = messages
@@ -1217,6 +1218,9 @@ export class Agent {
 					case "message_update":
 						partial = event.message;
 						this.#state.streamMessage = event.message;
+						if (event.assistantMessageEvent.type === "toolcall_end") {
+							completedToolCallIds.add(event.assistantMessageEvent.toolCall.id);
+						}
 						break;
 
 					case "message_end":
@@ -1281,9 +1285,19 @@ export class Agent {
 			const shouldEmitVisibleError = !stoppedForAbort;
 			const assistantPartial = partial?.role === "assistant" ? partial : undefined;
 			const hadAssistantStart = assistantPartial !== undefined;
+			const bufferedCursorResults = this.#cursorToolResultBuffer.map(({ toolResult }) => toolResult);
+			const retainedToolCallIds = new Set(completedToolCallIds);
+			for (const { toolCallId } of bufferedCursorResults) retainedToolCallIds.add(toolCallId);
 			const errorMsg: AssistantMessage =
 				shouldEmitVisibleError && assistantPartial
-					? { ...assistantPartial, stopReason: "error", errorMessage }
+					? {
+							...assistantPartial,
+							content: assistantPartial.content.filter(
+								block => block.type !== "toolCall" || retainedToolCallIds.has(block.id),
+							),
+							stopReason: "error",
+							errorMessage,
+						}
 					: {
 							role: "assistant",
 							content: [{ type: "text", text: "" }],
@@ -1313,7 +1327,6 @@ export class Agent {
 				this.#state.error = errorMessage;
 				this.#emit({ type: "message_end", message: errorMsg });
 				const toolResults: ToolResultMessage[] = [];
-				const bufferedCursorResults = this.#cursorToolResultBuffer.map(({ toolResult }) => toolResult);
 				this.#cursorToolResultBuffer = [];
 				const bufferedCursorToolCallIds = new Set(bufferedCursorResults.map(({ toolCallId }) => toolCallId));
 				for (const toolResult of bufferedCursorResults) {

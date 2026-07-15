@@ -226,15 +226,15 @@ describe("Agent", () => {
 	it("pairs tool calls from failed partial streams with synthetic tool results", async () => {
 		const mock = createMockModel({ responses: [] });
 		const errorText = "connection reset after tool call";
-		const started = createAssistantMessage([
-			{ type: "toolCall", id: "tool-1", name: "alpha", arguments: { value: "hello" } },
-		]);
+		const toolCall = { type: "toolCall" as const, id: "tool-1", name: "alpha", arguments: { value: "hello" } };
+		const started = createAssistantMessage([toolCall]);
 		const agent = new Agent({
 			initialState: { model: mock.model, systemPrompt: ["Test"], tools: [], messages: [] },
 			streamFn: () => {
 				const stream = new AssistantMessageEventStream();
 				queueMicrotask(() => {
 					stream.push({ type: "start", partial: started });
+					stream.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial: started });
 					stream.fail(new Error(errorText));
 				});
 				return stream;
@@ -265,6 +265,30 @@ describe("Agent", () => {
 			type: "turn_end",
 			toolResults: [{ role: "toolResult", toolCallId: "tool-1", isError: true }],
 		});
+	});
+
+	it("drops incomplete tool calls when a partial stream fails before toolcall_end", async () => {
+		const mock = createMockModel({ responses: [] });
+		const started = createAssistantMessage([{ type: "toolCall", id: "tool-1", name: "alpha", arguments: {} }]);
+		const agent = new Agent({
+			initialState: { model: mock.model, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: () => {
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					stream.push({ type: "start", partial: started });
+					stream.push({ type: "toolcall_start", contentIndex: 0, partial: started });
+					stream.push({ type: "toolcall_delta", contentIndex: 0, delta: '{"value":', partial: started });
+					stream.fail(new Error("connection reset during tool arguments"));
+				});
+				return stream;
+			},
+		});
+
+		await agent.prompt("trigger");
+
+		const assistant = agent.state.messages.find(message => message.role === "assistant");
+		expect(assistant?.content.some(block => block.type === "toolCall")).toBe(false);
+		expect(agent.state.messages.some(message => message.role === "toolResult")).toBe(false);
 	});
 
 	it("preserves buffered Cursor results when a partial stream fails", async () => {
