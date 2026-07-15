@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { isInsideTmux, TERMINAL, wrapTmuxPassthrough } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import { VERSION } from "@oh-my-pi/pi-utils/dirs";
-import type { ExtensionFactory } from "../extensibility/extensions/types";
+import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions/types";
 
 const WARP_CLI_AGENT_PROTOCOL_VERSION = 1;
 const WARP_CLI_AGENT_SENTINEL = "warp://cli-agent";
@@ -19,7 +19,6 @@ export type WarpEvent = Readonly<Record<string, WarpEventValue | undefined>>;
 
 export interface WarpEventEmitterOptions {
 	sessionId: string;
-	isSubagent: boolean;
 }
 
 export interface WarpEventEmitter {
@@ -27,13 +26,13 @@ export interface WarpEventEmitter {
 }
 
 /**
- * Creates the Warp event transport for an interactive top-level TUI session.
- * TUI startup owns construction, so ACP, RPC, print, and other headless modes
- * never create an emitter.
+ * Creates the Warp event transport for a top-level interactive TUI session.
+ * The caller MUST enforce that install-site invariant; the sole production
+ * caller is gated by `isInteractive`, so ACP, RPC, print, headless, and
+ * subagent sessions never construct an emitter.
  */
 export function createWarpEventEmitter(options: WarpEventEmitterOptions): WarpEventEmitter | undefined {
 	if (
-		options.isSubagent ||
 		TERMINAL.id !== "warp" ||
 		!(Number(process.env.WARP_CLI_AGENT_PROTOCOL_VERSION) >= WARP_CLI_AGENT_PROTOCOL_VERSION)
 	) {
@@ -68,18 +67,35 @@ function lastAssistantText(messages: readonly AgentMessage[]): string {
 	return "";
 }
 
+function truncateResponse(text: string): string {
+	let end = 0;
+	let count = 0;
+	for (const codePoint of text) {
+		if (count === 200) break;
+		end += codePoint.length;
+		count++;
+	}
+	return text.slice(0, end);
+}
+
 /** Internal event bridge installed only by the top-level interactive TUI runner. */
 export function createWarpEventBridgeExtension(): ExtensionFactory {
 	return api => {
 		let emitter: WarpEventEmitter | undefined;
 		let lastPrompt: string | undefined;
 
-		api.on("session_start", (_event, ctx) => {
-			emitter = createWarpEventEmitter({
-				sessionId: ctx.sessionManager.getSessionId(),
-				isSubagent: false,
-			});
+		const rebuildEmitter = (ctx: ExtensionContext): void => {
+			lastPrompt = undefined;
+			emitter = createWarpEventEmitter({ sessionId: ctx.sessionManager.getSessionId() });
 			emitter?.emit({ event: "session_start" });
+		};
+
+		api.on("session_start", (_event, ctx) => {
+			rebuildEmitter(ctx);
+		});
+
+		api.on("session_switch", (_event, ctx) => {
+			rebuildEmitter(ctx);
 		});
 
 		api.on("input", event => {
@@ -116,7 +132,7 @@ export function createWarpEventBridgeExtension(): ExtensionFactory {
 			emitter?.emit({
 				event: "stop",
 				query: lastPrompt,
-				response: lastAssistantText(event.messages).slice(0, 200),
+				response: truncateResponse(lastAssistantText(event.messages)),
 			});
 		});
 	};
