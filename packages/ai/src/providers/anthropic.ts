@@ -1167,6 +1167,15 @@ function resolveAnthropicBaseUrl(model: Model<"anthropic-messages">, apiKey?: st
 	return normalizeAnthropicBaseUrl(model.baseUrl);
 }
 
+function resolveEagerToolInputStreamingSupport(
+	model: Model<"anthropic-messages">,
+	effectiveBaseUrl: string | undefined,
+): boolean {
+	if (!model.compat.supportsEagerToolInputStreaming) return false;
+	if (isOfficialAnthropicApiUrl(effectiveBaseUrl)) return true;
+	return normalizeAnthropicBaseUrl(model.baseUrl) === effectiveBaseUrl;
+}
+
 function parseAnthropicCustomHeaders(rawHeaders: string | undefined): Record<string, string> | undefined {
 	const source = rawHeaders?.trim();
 	if (!source) return undefined;
@@ -1741,6 +1750,7 @@ const streamAnthropicOnce = (
 			}
 			const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
 			const baseUrl = resolveAnthropicBaseUrl(model, apiKey) ?? "https://api.anthropic.com";
+			const supportsEagerToolInputStreaming = resolveEagerToolInputStreamingSupport(model, baseUrl);
 			const providerSessionState = getAnthropicProviderSessionState(
 				options?.providerSessionState,
 				baseUrl,
@@ -1854,15 +1864,12 @@ const streamAnthropicOnce = (
 			}
 			const preparedContext = await prepareAnthropicManyImageContext(context, model.input.includes("image"));
 			const prepareParams = async (): Promise<MessageCreateParamsStreaming> => {
-				let nextParams = buildParams(
-					model,
-					preparedContext,
-					isOAuthToken,
-					options,
+				let nextParams = buildParams(model, preparedContext, isOAuthToken, options, {
 					disableStrictTools,
-					umansGatewayWebSearchHeader !== undefined,
+					useUmansGatewayWebSearch: umansGatewayWebSearchHeader !== undefined,
 					forceDemoteUnsignedThinking,
-				);
+					supportsEagerToolInputStreaming,
+				});
 				if (disableStrictTools) {
 					dropAnthropicStrictTools(nextParams);
 				}
@@ -2682,10 +2689,11 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	const compat = model.compat;
 	const disableStrictTools = disableStrictToolsOverride ?? compat.disableStrictTools;
 	const needsInterleavedBeta = interleavedThinking && !model.thinking?.supportsDisplay;
-	const needsFineGrainedToolStreamingBeta =
-		hasTools && compat.officialEndpoint && !compat.supportsEagerToolInputStreaming;
 	const oauthToken = isOAuth ?? isAnthropicOAuthToken(apiKey);
 	const baseUrl = resolveAnthropicBaseUrl(model, apiKey);
+	const supportsEagerToolInputStreaming = resolveEagerToolInputStreamingSupport(model, baseUrl);
+	const needsFineGrainedToolStreamingBeta =
+		hasTools && isOfficialAnthropicApiUrl(baseUrl) && !supportsEagerToolInputStreaming;
 	const foundryCustomHeaders = resolveAnthropicCustomHeaders(model);
 	const tlsFetchOptions = buildClaudeCodeTlsFetchOptions(model, baseUrl);
 	// Disable Bun's native ~300s pre-response fetch timeout (issue #2422).
@@ -3128,15 +3136,26 @@ function extractClaudeCodeFirstUserMessageText(messages: readonly Message[]): st
 	return "";
 }
 
+type AnthropicParamBuildOptions = {
+	disableStrictTools: boolean;
+	useUmansGatewayWebSearch: boolean;
+	forceDemoteUnsignedThinking: boolean;
+	supportsEagerToolInputStreaming: boolean;
+};
+
 function buildParams(
 	model: Model<"anthropic-messages">,
 	context: Context,
 	isOAuthToken: boolean,
-	options?: AnthropicOptions,
-	disableStrictTools = false,
-	useUmansGatewayWebSearch = false,
-	forceDemoteUnsignedThinking = false,
+	options: AnthropicOptions | undefined,
+	buildOptions: AnthropicParamBuildOptions,
 ): MessageCreateParamsStreaming {
+	const {
+		disableStrictTools,
+		useUmansGatewayWebSearch,
+		forceDemoteUnsignedThinking,
+		supportsEagerToolInputStreaming,
+	} = buildOptions;
 	// A session-scoped auto-demote (learned from a live signing 400) clones the
 	// resolved compat with `replayUnsignedThinking: false` so every subsequent
 	// downstream read (convertAnthropicMessages, transformMessages) sees the
@@ -3164,7 +3183,7 @@ function buildParams(
 			context.tools,
 			isOAuthToken,
 			disableStrictTools || model.provider === "github-copilot",
-			model.compat.supportsEagerToolInputStreaming,
+			supportsEagerToolInputStreaming,
 			model.compat.escapeBuiltinToolNames,
 			useUmansGatewayWebSearch,
 		);
