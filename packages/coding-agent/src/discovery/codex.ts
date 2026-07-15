@@ -153,10 +153,11 @@ function extractMCPServersFromToml(
 	const result: Record<string, Partial<MCPServer>> = {};
 
 	for (const [name, config] of Object.entries(codexServers)) {
-		// Root relative command/cwd at the Codex config directory, not the session
-		// cwd (MCP stdio spawning resolves relative values there). Matches the
-		// claude-plugins/omp-plugins providers fixed in #5481.
-		const rooted = resolvePluginStdioPaths({ command: config.command, cwd: config.cwd }, configDir);
+		// Root relative cwd/command against the Codex config directory. Codex
+		// spawns the process with the resolved cwd, so a relative command is
+		// resolved by the OS from there — pass "cwd" so e.g. cwd="server",
+		// command="./bin/mcp" resolves to <configDir>/server/bin/mcp.
+		const rooted = resolvePluginStdioPaths({ command: config.command, cwd: config.cwd }, configDir, "cwd");
 		const server: Partial<MCPServer> = {
 			...(rooted.command !== undefined && { command: rooted.command }),
 			args: config.args,
