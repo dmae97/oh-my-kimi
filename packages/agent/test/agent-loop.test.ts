@@ -3383,4 +3383,53 @@ describe("agentLoop empty toolUse stop (issue #5600)", () => {
 		expect(AIError.is(assistant.errorId, AIError.Flag.Transient)).toBe(true);
 		expect(AIError.retriable(assistant.errorId)).toBe(true);
 	});
+
+	it("reclassifies a toolUse turn whose only tool call never reached toolcall_end", async () => {
+		const echoCalls: string[] = [];
+		const toolSchema = type({ value: "string" });
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(id, params) {
+				echoCalls.push(id);
+				return { content: [{ type: "text", text: `echoed: ${params.value}` }], details: { value: params.value } };
+			},
+		};
+		const context: AgentContext = { systemPrompt: ["You are helpful."], messages: [], tools: [tool] };
+		// The stream drops mid-tool-call: toolcall_start + a partial delta land an
+		// incomplete toolCall block in content, but toolcall_end never fires, so the
+		// id is absent from completedToolCallIds. The provider still finalizes with
+		// stopReason=toolUse. The incomplete call must NOT be dispatched.
+		const streamFn = () => {
+			const stream = new AssistantMessageEventStream();
+			const partial = createAssistantMessage(
+				[{ type: "toolCall", id: "tc-partial", name: "echo", arguments: {} }],
+				"toolUse",
+			);
+			stream.push({ type: "start", partial });
+			stream.push({ type: "toolcall_start", contentIndex: 0, partial });
+			stream.push({ type: "toolcall_delta", contentIndex: 0, delta: '{"val', partial });
+			stream.end(partial);
+			return stream;
+		};
+		const config: AgentLoopConfig = { model: createMockModel().model, convertToLlm: identityConverter };
+
+		const stream = agentLoop([createUserMessage("run echo")], context, config, undefined, streamFn);
+		for await (const _event of stream) {
+			// drain
+		}
+		const messages = await stream.result();
+		const assistant = messages.find((m): m is AssistantMessage => m.role === "assistant");
+		if (!assistant) throw new Error("expected an assistant message");
+
+		// The incomplete call is stripped and the turn is routed through retry.
+		expect(echoCalls).toHaveLength(0);
+		expect(assistant.stopReason).toBe("error");
+		expect(assistant.content.filter(b => b.type === "toolCall")).toHaveLength(0);
+		expect(messages.some(m => m.role === "toolResult")).toBe(false);
+		expect(AIError.is(assistant.errorId, AIError.Flag.Transient)).toBe(true);
+		expect(AIError.retriable(assistant.errorId)).toBe(true);
+	});
 });
