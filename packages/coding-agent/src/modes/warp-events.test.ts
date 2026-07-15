@@ -104,9 +104,20 @@ describe("Warp CLI-agent events", () => {
 			approvalMode: "always-ask",
 		});
 
-		const event = write.mock.calls[0]?.[0];
-		expect(event).toContain('"event":"permission_request"');
-		expect(event).toContain('"agent":"omp"');
-		expect(event).toContain('"tool_name":"bash"');
+		const osc = write.mock.calls[0]?.[0] as string;
+		const prefix = "\x1b]777;notify;warp://cli-agent;";
+		expect(osc.startsWith(prefix)).toBe(true);
+		expect(osc.endsWith("\x07")).toBe(true);
+		const body = JSON.parse(osc.slice(prefix.length, osc.length - 1));
+		expect(body).toEqual({
+			event: "permission_request",
+			tool_name: "bash",
+			summary: "omp wants to run bash",
+			v: 1,
+			agent: "omp",
+			session_id: "session-123",
+			cwd: process.cwd(),
+			plugin_version: VERSION,
+		});
 	});
 });
