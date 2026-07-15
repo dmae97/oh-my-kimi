@@ -11,6 +11,7 @@
 ### Fixed
 
 - Fixed SIXEL image rendering stripping a horizontal slice from images when the cell height was not a multiple of 6. SIXEL encodes in 6-pixel vertical bands; a non-multiple-of-6 height was padded, causing the terminal to allocate an extra row that the TUI did not reserve — the next line of content then overwrote the bottom of the image. The encode height is now rounded down to the largest multiple of 6 within the requested row budget, eliminating padding without exceeding the caller's height cap, and the width is scaled by the same ratio to preserve the image aspect ratio.
+- Fixed the Kitty OSC 99 desktop-notification capability probe (`p=?`) firing under tmux/screen, where the multiplexer forwards the passthrough query to the outer terminal but cannot route the reply back to the sending pane — the capability list leaked into the pane as text and its bytes switched panes ([#5582](https://github.com/can1357/oh-my-pi/issues/5582)). The probe is now suppressed inside a multiplexer (rich notifications fall back to the single-line OSC 99 form until confirmed), mirroring the graphics-probe fix in #5381.
 
 ## [16.5.2] - 2026-07-14
 
