@@ -81,6 +81,7 @@ function createFakeSession(config: FakeSessionConfig = {}): FakeSessionHandle {
 		extensionRunner: undefined as never,
 		sessionManager: { appendSessionInit: () => {} } as never,
 		getActiveToolNames: () => ["read", "yield"],
+		getEnabledToolNames: () => ["read", "yield"],
 		setActiveToolsByName: async (_names: string[]) => {},
 		subscribe: (listener: (event: AgentSessionEvent) => void) => {
 			if (config.events?.length) {

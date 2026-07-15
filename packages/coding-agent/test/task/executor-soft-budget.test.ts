@@ -62,6 +62,7 @@ function createMockSession(
 		extensionRunner: undefined as never,
 		sessionManager: { appendSessionInit: () => {} } as never,
 		getActiveToolNames: () => ["read", "yield"],
+		getEnabledToolNames: () => ["read", "yield"],
 		setActiveToolsByName: async () => {},
 		subscribe: (listener: (event: AgentSessionEvent) => void) => {
 			listeners.push(listener);
