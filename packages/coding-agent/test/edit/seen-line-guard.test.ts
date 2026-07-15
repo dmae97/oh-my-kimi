@@ -19,7 +19,7 @@ function createSession(cwd: string): ToolSession {
 		getSessionSpawns: () => "*",
 		getArtifactsDir: () => path.join(cwd, "artifacts"),
 		allocateOutputArtifact: async () => ({ id: "artifact-1", path: path.join(cwd, "artifact-1.log") }),
-		settings: Settings.isolated(),
+		settings: Settings.isolated({ "edit.enforceSeenLines": true }),
 		enableLsp: false,
 	} as ToolSession;
 }
@@ -331,12 +331,11 @@ describe("read → edit seen-line guard", () => {
 		expect(await Bun.file(file).text()).toBe(`${lines.join("\n")}\n`);
 	});
 
-	it("does not mark column-clipped read lines as seen", async () => {
+	it("marks column-clipped read lines as seen (clipped-line check removed)", async () => {
 		// A 4KB single line — the read tool's column cap (default 512 chars)
-		// clips this into `<prefix>…` in the numbered output. The clipped line
-		// number MUST stay out of the tag's seenLines, or a subsequent edit
-		// anchored there would slip past the seen-line guard having seen only
-		// the first 512 chars.
+		// clips this into `<prefix>…` in the numbered output. The clipped-line
+		// exclusion was removed, so the displayed line counts as seen and a
+		// follow-up edit anchored there applies even with the guard enabled.
 		const file = path.join(tmpDir, "wide.txt");
 		const wide = "a".repeat(4096);
 		const content = `head\n${wide}\nfoot\n`;
@@ -347,14 +346,10 @@ describe("read → edit seen-line guard", () => {
 		const tag = tagFromOutput(resultText(read));
 
 		const seen = getFileSnapshotStore(session).byHash(canonicalSnapshotKey(file), tag)?.seenLines;
-		expect(seen?.has(2)).toBe(false);
+		expect(seen?.has(2)).toBe(true);
 
-		// A straight edit anchored at the clipped line 2 is still rejected —
-		// the seen-line guard fires because the model only saw the prefix.
-		await expect(
-			executeHashlineSingle(execOptions(`[wide.txt#${tag}]\nSWAP 2.=2:\n+REPLACED`, session)),
-		).rejects.toThrow(/never displayed \(it showed/);
-		expect(await Bun.file(file).text()).toBe(content);
+		await executeHashlineSingle(execOptions(`[wide.txt#${tag}]\nSWAP 2.=2:\n+REPLACED`, session));
+		expect(await Bun.file(file).text()).toBe("head\nREPLACED\nfoot\n");
 	});
 });
 
@@ -381,7 +376,11 @@ describe("search → edit seen-line guard", () => {
 			getArtifactsDir: () => path.join(cwd, "artifacts"),
 			allocateOutputArtifact: async () => ({ id: "artifact-1", path: path.join(cwd, "artifact-1.log") }),
 			// Zero context so the seen set is exactly the matched lines.
-			settings: Settings.isolated({ "grep.contextBefore": 0, "grep.contextAfter": 0 }),
+			settings: Settings.isolated({
+				"grep.contextBefore": 0,
+				"grep.contextAfter": 0,
+				"edit.enforceSeenLines": true,
+			}),
 			enableLsp: false,
 		} as ToolSession;
 	}
@@ -417,5 +416,33 @@ describe("search → edit seen-line guard", () => {
 			/never displayed \(it showed/,
 		);
 		expect(await Bun.file(file).text()).toBe(`${lines.join("\n")}\n`);
+	});
+});
+
+describe("seen-line guard disabled by default", () => {
+	let tmpDir: string;
+
+	beforeAll(async () => {
+		await Settings.init({ inMemory: true });
+	});
+	beforeEach(async () => {
+		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "seen-line-off-"));
+	});
+	afterEach(async () => {
+		await removeWithRetries(tmpDir);
+	});
+
+	it("applies an edit on an unseen line when edit.enforceSeenLines is off (default)", async () => {
+		const file = path.join(tmpDir, "notes.txt");
+		await Bun.write(file, CONTENT);
+		// createSession enables the guard; a default session leaves it off.
+		const session = { ...createSession(tmpDir), settings: Settings.isolated() } as ToolSession;
+
+		const read = await new ReadTool(session).execute("r1", { path: `${file}:1-3` });
+		const tag = tagFromOutput(resultText(read));
+
+		// Line 12 was never displayed, but the guard is disabled, so it applies.
+		await executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 12.=12:\n+EDITED`, session));
+		expect(await Bun.file(file).text()).toContain("EDITED");
 	});
 });
