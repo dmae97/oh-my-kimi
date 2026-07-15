@@ -866,6 +866,7 @@ export class Editor implements Component, Focusable {
 			let displayWidth = visibleWidth(layoutLine.text);
 			let cursorPaddingOverflow = 0;
 			let decorated = false;
+			let imeSafeCursorTail = false;
 			const showPromptGutter = promptGutter !== undefined && visibleIndex === 0;
 			const gutterText =
 				promptGutter === undefined ? "" : showPromptGutter ? promptGutter.firstLine : promptGutter.continuation;
@@ -931,6 +932,10 @@ export class Editor implements Component, Focusable {
 						displayText = this.#renderTerminalCursorMarker(before, marker, lineContentWidth);
 					} else {
 						displayText = before + marker + after;
+						// Terminal frontends render IME marked text locally before committed bytes
+						// reach the application. Keep the end-of-input cursor row empty to its
+						// right so that insertion cannot shift box chrome onto the next row.
+						imeSafeCursorTail = after.length === 0 && borderVisible;
 					}
 				}
 			} else if (hasCursor && !this.#useTerminalCursor) {
@@ -1022,6 +1027,15 @@ export class Editor implements Component, Focusable {
 			// trailing `─`, but never the corner/vertical bar itself.
 			const isLastLine = visibleIndex === visibleLayoutLines.length - 1;
 			const rightChromeCells = Math.max(1, paddingX + 1 - cursorPaddingOverflow);
+			if (isLastLine && imeSafeCursorTail) {
+				const leftBorder = this.borderColor(`${box.vertical}${padding(paddingX)}`);
+				const bottomBorder = this.borderColor(
+					`${box.bottomLeft}${box.horizontal.repeat(Math.max(0, width - 2))}${box.bottomRight}`,
+				);
+				result.push(leftBorder + displayText);
+				result.push(bottomBorder);
+				continue;
+			}
 			if (isLastLine) {
 				const rightPad = Math.max(0, rightChromeCells - 2);
 				const includeHorizontal = rightChromeCells >= 2;
