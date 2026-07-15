@@ -1994,10 +1994,13 @@ export class ModelRegistry {
 		return this.#models.find(m => m.provider === provider && m.baseUrl)?.baseUrl;
 	}
 	/**
-	 * Get the configured headers associated with a provider, if any model defines them.
+	 * Get provider-level headers without including per-model overrides.
 	 */
 	getProviderHeaders(provider: string): Record<string, string> | undefined {
-		return this.#models.find(model => model.provider === provider && model.headers)?.headers;
+		return createLiveConfigHeaders([
+			this.#providerOverrides.get(provider)?.headers,
+			this.#runtimeProviderOverrides.get(provider)?.headers,
+		]);
 	}
 
 	/**
