@@ -4260,7 +4260,7 @@ export const SETTINGS_SCHEMA = {
 		type: "boolean",
 		default: false,
 		ui: {
-			tab: "tools",
+			tab: "tasks",
 			group: "Subagents",
 			label: "Generic Task Prewalk",
 			description:

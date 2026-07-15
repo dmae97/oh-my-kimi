@@ -114,8 +114,8 @@ describe("ast_grep parse errors", () => {
 		}
 	});
 
-	it("keeps multi-target paging globally ordered without truncating match totals", async () => {
-		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-grep-multi-page-"));
+	it("keeps multi-target results globally ordered and skip does not truncate match totals", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-grep-multi-skip-"));
 		try {
 			const earlyDir = path.join(tempDir, "a");
 			const lateDir = path.join(tempDir, "z");
@@ -134,24 +134,21 @@ describe("ast_grep parse errors", () => {
 			const tool = tools.find(entry => entry.name === "ast_grep");
 			expect(tool).toBeDefined();
 
-			const result = await tool!.execute("ast-grep-multi-page", {
+			// skip spans the globally merged ordering (a/* before z/*), so skipping
+			// past a.ts's 8 matches must surface only z.ts — while matchCount still
+			// reports the untruncated total across both targets.
+			const result = await tool!.execute("ast-grep-multi-skip", {
 				pat: "sharedSymbol",
 				path: `${earlyDir};${lateDir}`,
-				page: 2,
-				pageSize: 10,
+				skip: 8,
 			});
 			const text = result.content.find(content => content.type === "text")?.text ?? "";
-			const details = result.details as
-				| { matchCount?: number; hasMore?: boolean; page?: number; pageSize?: number }
-				| undefined;
+			const details = result.details as { matchCount?: number; limitReached?: boolean } | undefined;
 
 			expect(details?.matchCount).toBe(16);
-			expect(details?.hasMore).toBe(false);
-			expect(details?.page).toBe(2);
-			expect(details?.pageSize).toBe(10);
-			expect(text).toContain("Page 2 of 2");
-			expect(text).toContain("a.ts");
+			expect(details?.limitReached).toBe(false);
 			expect(text).toContain("z.ts");
+			expect(text).not.toContain("a.ts");
 		} finally {
 			await removeWithRetries(tempDir);
 		}
