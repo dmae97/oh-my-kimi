@@ -2831,6 +2831,47 @@ describe("advisor", () => {
 			// newly exhausted sibling on the second quota error.
 			expect(hookErrors).toHaveLength(2);
 		});
+
+		it("keeps rotating while another credential is immediately available", async () => {
+			const promptInputs: string[] = [];
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					if (promptInputs.length <= 2) {
+						throw new Error("429 Too Many Requests: quota exceeded");
+					}
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const hookErrors: unknown[] = [];
+			let quotaNotified = false;
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => [],
+				enqueueAdvice: () => {},
+				onTurnError: async error => {
+					hookErrors.push(error);
+					return true;
+				},
+				notifyQuotaExhausted: () => {
+					quotaNotified = true;
+				},
+			};
+			const runtime = new AdvisorRuntime(agent, host, 0);
+
+			const messages: AgentMessage[] = [
+				{ role: "user", content: "triple-credential", timestamp: 1 } as AgentMessage,
+			];
+			runtime.onTurnEnd(messages);
+			await runtime.waitForCatchup(1000, 1);
+
+			expect(promptInputs).toHaveLength(3);
+			expect(hookErrors).toHaveLength(2);
+			expect(runtime.quotaExhausted).toBe(false);
+			expect(quotaNotified).toBe(false);
+			expect(runtime.backlog).toBe(0);
+		});
 	});
 
 	describe("advisor default tools", () => {

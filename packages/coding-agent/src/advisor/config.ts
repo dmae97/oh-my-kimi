@@ -172,8 +172,7 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 				model: entry.model?.trim() || undefined,
 				tools: filterAdvisorTools(entry.tools, item.path),
 				instructions,
-				// Preserve `false` explicitly — `enabled` defaults to `true` when absent.
-				enabled: entry.enabled === false ? false : undefined,
+				enabled: entry.enabled,
 			});
 		}
 	}
@@ -261,36 +260,65 @@ export async function loadWatchdogConfigFile(filePath: string): Promise<Watchdog
 			model: a.model?.trim() || undefined,
 			tools: a.tools === undefined ? undefined : [...a.tools],
 			instructions: a.instructions?.trim() ? a.instructions : undefined,
-			// Preserve `false` explicitly — `enabled` defaults to `true` when absent,
-			// so we only emit the field when the user sets it to `false` in YAML.
-			enabled: a.enabled === false ? false : undefined,
+			enabled: a.enabled,
 		})),
 	};
 }
 
 /**
- * Serialize an editable doc back to block-style `WATCHDOG.yml` text via Bun's
- * `YAML.stringify` (the same API the repo uses for other hand-editable config),
- * omitting empty fields. Round-trips through {@link loadWatchdogConfigFile}.
+ * Serialize an editable doc back to canonical, hand-editable `WATCHDOG.yml`.
+ * Multiline instruction fields use literal block scalars while scalar quoting
+ * delegates to Bun's YAML encoder. Round-trips through {@link loadWatchdogConfigFile}.
  * Returns `""` for an empty doc.
  */
-export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
-	const out: { instructions?: string; advisors?: AdvisorConfig[] } = {};
-	if (doc.instructions?.trim()) out.instructions = doc.instructions;
-	if (doc.advisors.length > 0) {
-		out.advisors = doc.advisors.map(a => {
-			const entry: AdvisorConfig = { name: a.name };
-			if (a.model?.trim()) entry.model = a.model;
-			if (a.tools !== undefined) entry.tools = [...a.tools];
-			if (a.instructions?.trim()) entry.instructions = a.instructions;
-			// Explicit `=== false` — must not use truthy check or `false` is dropped.
-			if (a.enabled === false) entry.enabled = false;
-			return entry;
-		});
+
+function appendYamlString(lines: string[], indent: string, key: string, value: string): void {
+	if (!value.includes("\n")) {
+		lines.push(`${indent}${key}: ${YAML.stringify(value)}`);
+		return;
 	}
-	if (out.instructions === undefined && out.advisors === undefined) return "";
-	const text = YAML.stringify(out, null, 2);
-	return text.endsWith("\n") ? text : `${text}\n`;
+
+	const normalized = value.replaceAll("\r\n", "\n");
+	let trailingNewlines = 0;
+	for (let index = normalized.length - 1; index >= 0 && normalized[index] === "\n"; index--) {
+		trailingNewlines++;
+	}
+	const chomp = trailingNewlines === 0 ? "|2-" : trailingNewlines === 1 ? "|2" : "|2+";
+	const body = trailingNewlines === 0 ? normalized : normalized.slice(0, -trailingNewlines);
+	lines.push(`${indent}${key}: ${chomp}`);
+	for (const line of body.split("\n")) {
+		lines.push(`${indent}  ${line}`);
+	}
+	for (let index = 1; index < trailingNewlines; index++) {
+		lines.push(`${indent}  `);
+	}
+}
+
+export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
+	const lines: string[] = [];
+	if (doc.instructions?.trim()) appendYamlString(lines, "", "instructions", doc.instructions);
+	if (doc.advisors.length > 0) {
+		lines.push("advisors:");
+		for (const advisor of doc.advisors) {
+			lines.push(`  - name: ${YAML.stringify(advisor.name)}`);
+			if (advisor.model?.trim()) lines.push(`    model: ${YAML.stringify(advisor.model)}`);
+			if (advisor.tools !== undefined) {
+				if (advisor.tools.length === 0) {
+					lines.push("    tools: []");
+				} else {
+					lines.push("    tools:");
+					for (const tool of advisor.tools) {
+						lines.push(`      - ${YAML.stringify(tool)}`);
+					}
+				}
+			}
+			if (advisor.instructions?.trim()) {
+				appendYamlString(lines, "    ", "instructions", advisor.instructions);
+			}
+			if (advisor.enabled !== undefined) lines.push(`    enabled: ${advisor.enabled}`);
+		}
+	}
+	return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
 }
 
 /**

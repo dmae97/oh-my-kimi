@@ -583,7 +583,7 @@ export class AdvisorRuntime {
 							continue;
 						}
 						if (switched) {
-							// Sibling credential available — retry once with the new key.
+							// Sibling credential available — retry with the newly selected key.
 							const retrySnapshot = this.agent.state.messages.length;
 							try {
 								this.host.beginAdvisorUpdate?.();
@@ -599,15 +599,18 @@ export class AdvisorRuntime {
 								this.#rollbackFailedTurn(retrySnapshot);
 								if (this.#epoch !== epoch) continue;
 								if (AIError.isUsageLimit(retryErr)) {
-									// Second quota on the sibling credential — mark it too,
-									// then enter quota pause (both credentials exhausted).
 									logger.warn("advisor quota exhausted on switched credential", { err: String(retryErr) });
+									let retrySwitched = false;
 									try {
-										await this.host.onTurnError?.(retryErr);
+										retrySwitched = (await this.host.onTurnError?.(retryErr)) === true;
 									} catch (hookErr) {
 										logger.debug("advisor onTurnError hook failed", { err: String(hookErr) });
 									}
 									if (this.#epoch !== epoch) continue;
+									if (retrySwitched) {
+										this.#pending.unshift({ text: batch, turns: finalTurns, wip });
+										continue;
+									}
 									this.#quotaExhausted = true;
 									this.#consecutiveFailures = 0;
 									this.#failureNotified = false;
