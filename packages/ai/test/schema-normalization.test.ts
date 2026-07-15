@@ -252,7 +252,7 @@ describe("normalizeSchemaForGoogle", () => {
 		expect(sanitized.enum).toEqual([null]);
 	});
 
-	it("preserves a property schema literally named additionalProperties inside properties", () => {
+	it("coerces a boolean subschema literally named additionalProperties inside properties", () => {
 		const sanitized = normalizeSchemaForGoogle({
 			type: "object",
 			properties: {
@@ -262,20 +262,47 @@ describe("normalizeSchemaForGoogle", () => {
 		}) as Record<string, unknown>;
 
 		const properties = sanitized.properties as Record<string, unknown>;
+		// The key survives (it is a property, not the stripped keyword), but its
+		// boolean subschema value coerces to the object form (issue #5604).
 		expect(Object.hasOwn(properties, "additionalProperties")).toBe(true);
-		expect(properties.additionalProperties).toBe(false);
+		expect(properties.additionalProperties).toEqual({ not: {} });
 	});
 
-	it("preserves boolean schemas for a single property literally named additionalProperties", () => {
-		const schema = {
+	it("coerces a boolean subschema for a single property literally named additionalProperties", () => {
+		const sanitized = normalizeSchemaForGoogle({
 			type: "object",
 			properties: {
 				additionalProperties: false,
 			},
 			required: ["additionalProperties"],
-		} as const;
+		}) as Record<string, unknown>;
 
-		expect(normalizeSchemaForGoogle(schema)).toEqual(schema);
+		const properties = sanitized.properties as Record<string, unknown>;
+		expect(properties.additionalProperties).toEqual({ not: {} });
+		expect(sanitized.required).toEqual(["additionalProperties"]);
+	});
+
+	it("coerces boolean subschemas to object equivalents on the Google/CCA wire (issue #5604)", () => {
+		const schema = {
+			type: "object",
+			properties: {
+				propertyValue: true,
+				attributeValue: false,
+			},
+		};
+		const expectedProps = { propertyValue: {}, attributeValue: { not: {} } };
+
+		const google = normalizeSchemaForGoogle(schema) as Record<string, unknown>;
+		expect(google.properties).toEqual(expectedProps);
+		const cca = normalizeSchemaForCCA(schema) as Record<string, unknown>;
+		expect(cca.properties).toEqual(expectedProps);
+
+		// Root-level and array-branch booleans are covered by the same choke point.
+		expect(normalizeSchemaForGoogle(true)).toEqual({});
+		expect(normalizeSchemaForGoogle(false)).toEqual({ not: {} });
+		expect(normalizeSchemaForGoogle({ anyOf: [true, { type: "string" }] })).toEqual({
+			anyOf: [{}, { type: "string" }],
+		});
 	});
 
 	it("inlines local $ref / $defs entries for Google compatibility", () => {

@@ -56,6 +56,13 @@ export interface NormalizeSchemaOptions {
 
 interface NormalizeSchemaWalkOptions extends NormalizeSchemaOptions {
 	insideProperties: boolean;
+	/**
+	 * True when the value currently being walked occupies a JSON Schema
+	 * *subschema* slot (root, combiner branch, `items`, a property value, …).
+	 * Only then is a bare `true`/`false` a boolean subschema to coerce; in a
+	 * keyword slot (`nullable`, `enum` entries, `additionalProperties`) it stays.
+	 */
+	booleanIsSubschema: boolean;
 }
 
 interface ResidualIncompatibilityChecks {
@@ -74,6 +81,26 @@ const SNAKE_TO_CAMEL_RENAMES = new Map<string, string>([
 
 const JSON_SCHEMA_COMBINERS = ["anyOf", "oneOf"] as const;
 const CCA_FORBIDDEN_COMBINERS = new Set(["anyOf", "oneOf", "allOf"]);
+
+/**
+ * Keywords whose value is a single subschema (draft 2020-12). A bare `true` /
+ * `false` in one of these slots is a boolean subschema to coerce (issue #5604).
+ */
+const SUBSCHEMA_VALUE_KEYS = new Set([
+	"items",
+	"additionalItems",
+	"unevaluatedItems",
+	"not",
+	"if",
+	"then",
+	"else",
+	"contains",
+	"propertyNames",
+	"contentSchema",
+]);
+
+/** Keywords whose value is an array of subschemas. */
+const SUBSCHEMA_ARRAY_KEYS = new Set(["anyOf", "oneOf", "allOf", "prefixItems"]);
 
 const CLOUD_CODE_ASSIST_CLAUDE_FALLBACK_SCHEMA = {
 	type: "object",
@@ -236,6 +263,15 @@ function normalizeSchemaNode(value: unknown, options: NormalizeSchemaWalkOptions
 			exit(value);
 		}
 	}
+	if (typeof value === "boolean") {
+		// A bare boolean is a JSON Schema subschema only in a subschema slot.
+		// The Google/CCA protobuf Schema wire has no representation for it
+		// (issue #5604): `true` accepts anything -> `{}`, `false` accepts nothing
+		// -> `{ not: {} }`. In a keyword slot (`nullable`, `enum` entry, …) a
+		// boolean is a plain value and is left untouched.
+		if (!options.booleanIsSubschema) return value;
+		return value ? {} : { not: {} };
+	}
 	if (!isJsonObject(value)) {
 		return value;
 	}
@@ -306,6 +342,8 @@ function normalizeSchemaObjectNode(value: JsonObject, options: NormalizeSchemaWa
 			result[key] = normalizeSchemaNode(entry, {
 				...options,
 				insideProperties: !options.insideProperties && key === "properties",
+				booleanIsSubschema:
+					options.insideProperties || SUBSCHEMA_VALUE_KEYS.has(key) || SUBSCHEMA_ARRAY_KEYS.has(key),
 			});
 		}
 		applyDescriptionSpill(result, spill, options);
@@ -328,6 +366,7 @@ function normalizeSchemaObjectNode(value: JsonObject, options: NormalizeSchemaWa
 		result[key] = normalizeSchemaNode(entry, {
 			...options,
 			insideProperties: !options.insideProperties && key === "properties",
+			booleanIsSubschema: options.insideProperties || SUBSCHEMA_VALUE_KEYS.has(key) || SUBSCHEMA_ARRAY_KEYS.has(key),
 		});
 	}
 
@@ -895,6 +934,7 @@ export function normalizeSchema(value: unknown, options: NormalizeSchemaOptions)
 	let normalized = normalizeSchemaNode(dereferenced, {
 		...options,
 		insideProperties: false,
+		booleanIsSubschema: true,
 	});
 	if (options.stripResidualCombinersFixpoint) {
 		normalized = stripResidualCombiners(normalized);
