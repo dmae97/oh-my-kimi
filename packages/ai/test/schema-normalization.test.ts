@@ -283,21 +283,15 @@ describe("normalizeSchemaForGoogle", () => {
 	});
 
 	it("coerces boolean subschemas to object equivalents on the Google wire (issue #5604)", () => {
-		const schema = {
+		const google = normalizeSchemaForGoogle({
 			type: "object",
 			properties: {
 				propertyValue: true,
 				attributeValue: false,
 			},
-			dependentSchemas: {
-				hasFoo: true,
-				hasBar: false,
-			},
-		};
-		const google = normalizeSchemaForGoogle(schema) as Record<string, unknown>;
+		}) as Record<string, unknown>;
 
 		expect(google.properties).toEqual({ propertyValue: {}, attributeValue: { not: {} } });
-		expect(google.dependentSchemas).toEqual({ hasFoo: {}, hasBar: { not: {} } });
 		// Root-level and array-branch booleans are covered by the same choke point.
 		expect(normalizeSchemaForGoogle(true)).toEqual({});
 		expect(normalizeSchemaForGoogle(false)).toEqual({ not: {} });
@@ -306,23 +300,39 @@ describe("normalizeSchemaForGoogle", () => {
 		});
 	});
 
-	it("falls back when a false subschema produces unsupported `not` on the CCA wire", () => {
-		const fallback = { type: "object", properties: {} };
+	it("strips draft-2019 conditional keywords the OpenAPI-style wire cannot model", () => {
+		// `dependentSchemas`/`dependencies`/`dependentRequired` have no Google
+		// OpenAPI Schema representation and are not caught by residual checks, so
+		// they must be dropped before serialization on both transports.
+		const input = {
+			type: "object",
+			properties: { propertyValue: true },
+			dependentSchemas: { hasFoo: true },
+			dependentRequired: { hasFoo: ["propertyValue"] },
+		};
+		const expected = { type: "object", properties: { propertyValue: {} } };
 
+		expect(normalizeSchemaForGoogle(input)).toEqual(expected);
+		expect(normalizeSchemaForCCA(input)).toEqual(expected);
+
+		// The MCP path keeps conditional keywords and still coerces their boolean
+		// subschema entries.
 		expect(
-			normalizeSchemaForCCA({
+			normalizeSchemaForMCP({
 				type: "object",
-				properties: { propertyValue: true },
-				dependentSchemas: { hasFoo: true },
+				dependentSchemas: { hasFoo: true, hasBar: false },
 			}),
 		).toEqual({
 			type: "object",
-			properties: { propertyValue: {} },
-			dependentSchemas: { hasFoo: {} },
+			dependentSchemas: { hasFoo: {}, hasBar: { not: {} } },
 		});
+	});
+
+	it("falls back when a false subschema produces unsupported `not` on the CCA wire", () => {
+		const fallback = { type: "object", properties: {} };
+
 		expect(normalizeSchemaForCCA(false)).toEqual(fallback);
 		expect(normalizeSchemaForCCA({ type: "object", properties: { attributeValue: false } })).toEqual(fallback);
-		expect(normalizeSchemaForCCA({ type: "object", dependentSchemas: { hasBar: false } })).toEqual(fallback);
 		// A property named `not` is a schema-map entry, not the unsupported keyword.
 		expect(normalizeSchemaForCCA({ type: "object", properties: { not: { type: "string" } } })).toEqual({
 			type: "object",
