@@ -1172,8 +1172,18 @@ function resolveEagerToolInputStreamingSupport(
 	effectiveBaseUrl: string | undefined,
 ): boolean {
 	if (!model.compat.supportsEagerToolInputStreaming) return false;
+	// First-party Anthropic endpoints accept the per-tool flag.
 	if (isOfficialAnthropicApiUrl(effectiveBaseUrl)) return true;
-	return normalizeAnthropicBaseUrl(model.baseUrl) === effectiveBaseUrl;
+	// Non-official effective endpoint. `supportsEagerToolInputStreaming` may be
+	// stale-true here because compat is materialized once at build time and is
+	// never rebuilt for a baseUrl-only reroute — either a runtime provider
+	// override (`pi.registerProvider("anthropic", { baseUrl })`) or Foundry
+	// (`CLAUDE_CODE_USE_FOUNDRY`). Both leave the canonical model's resolved
+	// compat in place. `officialEndpoint` records whether compat was built for
+	// the canonical Anthropic URL, so only endpoints whose compat was authored
+	// for a non-official host (an explicit `compat.supportsEagerToolInputStreaming`
+	// opt-in on a custom `baseUrl`) still send the field.
+	return !model.compat.officialEndpoint;
 }
 
 function parseAnthropicCustomHeaders(rawHeaders: string | undefined): Record<string, string> | undefined {
