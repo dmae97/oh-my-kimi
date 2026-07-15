@@ -526,6 +526,44 @@ describe("Markdown component", () => {
 			expect(widenedBorders[3]).toBe(borders[3]);
 		});
 
+		it("does not lock a quoted table until the table itself enters native scrollback", () => {
+			const initial = `> > Intro sentence deliberately long enough to wrap across several physical quote rows before the table.
+> >
+> > | Entry | Value |
+> > | --- | --- |
+> > | short | R000 |`;
+			const beforeCommit = `${initial}
+> > | medium-width-entry | R001 |`;
+			const afterCommit = `${beforeCommit}
+> > | entry-that-is-even-wider-than-the-locked-layout | R002 |`;
+			const markdown = new Markdown(initial, 0, 0, defaultMarkdownTheme);
+			markdown.transientRenderCache = true;
+
+			const tableGeometry = (lines: readonly string[]): { start: number; border: string } => {
+				const plain = lines.map(line => stripVTControlCharacters(line).trimEnd());
+				const header = plain.findIndex(line => line.includes("Entry") && line.includes("Value"));
+				expect(header).toBeGreaterThan(0);
+				return { start: header - 1, border: plain[header - 1]! };
+			};
+
+			const initialLines = markdown.render(48);
+			const initialTable = tableGeometry(initialLines);
+			expect(initialTable.start).toBeGreaterThan(2);
+			// Commit only the quote prose; the nested table remains wholly live.
+			markdown.setNativeScrollbackCommittedRows(initialTable.start);
+
+			markdown.setText(beforeCommit);
+			const growingLines = markdown.render(48);
+			const growingTable = tableGeometry(growingLines);
+			expect(growingTable.border).not.toBe(initialTable.border);
+
+			markdown.setNativeScrollbackCommittedRows(growingTable.start + 1);
+			markdown.setText(afterCommit);
+			const lockedLines = markdown.render(48);
+			expect(tableGeometry(lockedLines).border).toBe(growingTable.border);
+			expect(lockedLines.some(line => stripVTControlCharacters(line).includes("R002"))).toBe(true);
+		});
+
 		it("recomputes a locked streamed table after resize or non-append replacement", () => {
 			const short = `| Entry | Value |
 | --- | --- |

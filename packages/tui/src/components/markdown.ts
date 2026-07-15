@@ -1309,7 +1309,7 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 		try {
 			contentLines = this.transientRenderCache
 				? this.#renderStreamingContentLines(tokens, normalizedText, signature, contentWidth)
-				: this.#renderContentLines(tokens, 0, tokens.length, contentWidth, signature);
+				: this.#renderContentLines(tokens, 0, tokens.length, contentWidth, signature, 0, 0);
 		} finally {
 			this.#activeRenderSignature = undefined;
 			this.#activeTableRenderSpecs = undefined;
@@ -1374,16 +1374,18 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 		const frozenText = this.#streamPrefixText;
 		const frozenTokenCount = this.#streamPrefixTokens?.length ?? 0;
 		if (frozenText === undefined || frozenTokenCount === 0 || !normalizedText.startsWith(frozenText)) {
-			return this.#renderContentLines(tokens, 0, tokens.length, contentWidth, signature);
+			return this.#renderContentLines(tokens, 0, tokens.length, contentWidth, signature, 0, 0);
 		}
 
 		const contentLines: string[] = [];
 		const reusablePrefix = this.#matchingStreamPrefixLineCache(normalizedText, frozenText, signature);
 		let renderedUntil = 0;
+		let renderedSourceOffset = 0;
 		if (reusablePrefix && reusablePrefix.tokenCount <= frozenTokenCount) {
 			contentLines.push(...reusablePrefix.lines);
 			this.#activeTableRenderSpecs?.push(...reusablePrefix.tables);
 			renderedUntil = reusablePrefix.tokenCount;
+			renderedSourceOffset = reusablePrefix.text.length;
 		}
 
 		if (renderedUntil < frozenTokenCount) {
@@ -1399,6 +1401,7 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 						contentWidth,
 						signature,
 						contentLines.length,
+						renderedSourceOffset,
 					),
 				);
 			} finally {
@@ -1437,6 +1440,7 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 					contentWidth,
 					signature,
 					contentLines.length,
+					frozenText.length,
 				),
 			);
 		}
@@ -1472,16 +1476,17 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 		end: number,
 		contentWidth: number,
 		signature: RenderSignature,
-		rowOffset = 0,
+		rowOffset: number,
+		startingSourceOffset: number,
 	): string[] {
 		const wrappedLines: string[] = [];
-		let sourceOffset = 0;
-		for (let i = 0; i < start; i++) sourceOffset += tokens[i]!.raw.length;
+		let sourceOffset = startingSourceOffset;
 		for (let i = start; i < end; i++) {
 			const token = tokens[i];
 			const nextToken = tokens[i + 1];
 			const tableSpecStart = this.#activeTableRenderSpecs?.length ?? 0;
-			const tokenRowStart = rowOffset + wrappedLines.length;
+			const tokenWrappedRowStart = wrappedLines.length;
+			const tokenRowStart = rowOffset + tokenWrappedRowStart;
 			const renderedTokenLines = this.#renderToken(
 				token,
 				contentWidth,
@@ -1489,6 +1494,7 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 				undefined,
 				`offset:${sourceOffset}`,
 			);
+			const tokenLineOffsets = [0];
 			for (const line of renderedTokenLines) {
 				// Skip wrapping for image protocol lines and OSC 66 sized headings
 				// (would corrupt escape sequences / split the indivisible sized span).
@@ -1497,25 +1503,27 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 				} else {
 					wrappedLines.push(...wrapTextWithAnsi(line, contentWidth));
 				}
+				tokenLineOffsets.push(wrappedLines.length - tokenWrappedRowStart);
 			}
-			const tokenRowEnd = rowOffset + wrappedLines.length;
 			const tableSpecs = this.#activeTableRenderSpecs;
 			if (tableSpecs !== undefined) {
 				for (let specIndex = tableSpecStart; specIndex < tableSpecs.length; specIndex++) {
 					const spec = tableSpecs[specIndex]!;
+					let relativeStart: number;
+					let relativeEnd: number;
 					if (token.type === "table") {
-						// A top-level table's own rows are already width-bounded, so none
-						// wrap here. Exclude the optional inter-block blank from its span.
-						spec.startRow = tokenRowStart;
-						spec.endRow = Math.min(tokenRowEnd, tokenRowStart + spec.lineCount);
+						// Exclude the optional inter-block blank from a top-level table's span.
+						relativeStart = 0;
+						relativeEnd = Math.min(renderedTokenLines.length, spec.lineCount);
 					} else {
-						// Tables nested in a blockquote inherit the enclosing token's span.
-						// This is conservative (it may lock within the quote's prose head)
-						// but remains structural and can never confuse unrelated text for
-						// a table border.
-						spec.startRow = tokenRowStart;
-						spec.endRow = tokenRowEnd;
+						// Container renderers express nested table spans relative to their
+						// returned lines. Preserve that exact span through this final wrap.
+						if (spec.startRow < 0 || spec.endRow <= spec.startRow) continue;
+						relativeStart = Math.min(renderedTokenLines.length, spec.startRow);
+						relativeEnd = Math.min(renderedTokenLines.length, spec.endRow);
 					}
+					spec.startRow = tokenRowStart + tokenLineOffsets[relativeStart]!;
+					spec.endRow = tokenRowStart + tokenLineOffsets[relativeEnd]!;
 				}
 			}
 			sourceOffset += token.raw.length;
@@ -1908,26 +1916,59 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 				const quoteContentWidth = Math.max(1, width - 2);
 				const quoteTokens = token.tokens || [];
 				const renderedQuoteLines: string[] = [];
+				const blockquoteSpecStart = this.#activeTableRenderSpecs?.length ?? 0;
 
 				for (let i = 0; i < quoteTokens.length; i++) {
 					const quoteToken = quoteTokens[i];
 					const nextQuoteToken = quoteTokens[i + 1];
-					renderedQuoteLines.push(
-						...this.#renderToken(
-							quoteToken,
-							quoteContentWidth,
-							nextQuoteToken?.type,
-							quoteInlineStyleContext,
-							`${tokenKey}/quote:${i}`,
-						),
+					const quoteTokenRowStart = renderedQuoteLines.length;
+					const quoteSpecStart = this.#activeTableRenderSpecs?.length ?? 0;
+					const quoteTokenLines = this.#renderToken(
+						quoteToken,
+						quoteContentWidth,
+						nextQuoteToken?.type,
+						quoteInlineStyleContext,
+						`${tokenKey}/quote:${i}`,
 					);
+					renderedQuoteLines.push(...quoteTokenLines);
+
+					const tableSpecs = this.#activeTableRenderSpecs;
+					if (tableSpecs !== undefined) {
+						for (let specIndex = quoteSpecStart; specIndex < tableSpecs.length; specIndex++) {
+							const spec = tableSpecs[specIndex]!;
+							if (spec.startRow < 0) {
+								// Direct child tables initially have no row coordinates. Their
+								// structural line count excludes any inter-block blank.
+								spec.startRow = quoteTokenRowStart;
+								spec.endRow = quoteTokenRowStart + Math.min(quoteTokenLines.length, spec.lineCount);
+							} else {
+								// A nested blockquote already mapped the table into its own
+								// returned rows; translate those rows into this quote's input.
+								spec.startRow += quoteTokenRowStart;
+								spec.endRow += quoteTokenRowStart;
+							}
+						}
+					}
 				}
 
 				while (renderedQuoteLines.length > 0 && renderedQuoteLines[renderedQuoteLines.length - 1] === "") {
 					renderedQuoteLines.pop();
 				}
 
-				lines.push(...this.#applyQuoteBorder(renderedQuoteLines, width));
+				const quoteRowOffsets: number[] = [];
+				const borderedQuoteLines = this.#applyQuoteBorder(renderedQuoteLines, width, quoteRowOffsets);
+				const tableSpecs = this.#activeTableRenderSpecs;
+				if (tableSpecs !== undefined) {
+					for (let specIndex = blockquoteSpecStart; specIndex < tableSpecs.length; specIndex++) {
+						const spec = tableSpecs[specIndex]!;
+						if (spec.startRow < 0 || spec.endRow <= spec.startRow) continue;
+						const relativeStart = Math.min(renderedQuoteLines.length, spec.startRow);
+						const relativeEnd = Math.min(renderedQuoteLines.length, spec.endRow);
+						spec.startRow = quoteRowOffsets[relativeStart]!;
+						spec.endRow = quoteRowOffsets[relativeEnd]!;
+					}
+				}
+				lines.push(...borderedQuoteLines);
 				if (nextTokenType && nextTokenType !== "space") {
 					lines.push(""); // Add spacing after blockquotes (unless space token follows)
 				}
@@ -1974,7 +2015,7 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 	 * Wrap already-rendered lines in the blockquote border and quote styling.
 	 * `width` is the full content width; the border reserves two cells.
 	 */
-	#applyQuoteBorder(renderedLines: string[], width: number): string[] {
+	#applyQuoteBorder(renderedLines: string[], width: number, sourceRowOffsets?: number[]): string[] {
 		const quoteStyle = (text: string) => this.#theme.quote(this.#theme.italic(text));
 		const quoteStylePrefix = this.#getStylePrefix(quoteStyle);
 		const applyQuoteStyle = (line: string): string => {
@@ -1986,11 +2027,13 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 		};
 		const quoteContentWidth = Math.max(1, width - 2);
 		const lines: string[] = [];
+		sourceRowOffsets?.push(0);
 		for (const quoteLine of renderedLines) {
 			const styledLine = applyQuoteStyle(quoteLine);
 			for (const wrappedLine of wrapTextWithAnsi(styledLine, quoteContentWidth)) {
 				lines.push(this.#theme.quoteBorder(`${this.#theme.symbols.quoteBorder} `) + wrappedLine);
 			}
+			sourceRowOffsets?.push(lines.length);
 		}
 		return lines;
 	}
