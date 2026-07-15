@@ -1558,7 +1558,12 @@ async function streamAssistantResponse(
 				detachAbortListener?.();
 			}
 
-			let trailing = await response.result();
+			let trailing = reclassifyEmptyToolUseStop(
+				recoverTransientErrorToolTurn(
+					retainCompletedToolCalls(await response.result(), completedToolCallIds),
+					context.tools ?? [],
+				),
+			);
 			if (harmonyMitigationEnabled) {
 				const detection = detectHarmonyLeakInAssistantMessage(trailing);
 				if (detection) {

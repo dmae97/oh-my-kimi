@@ -3352,4 +3352,35 @@ describe("agentLoop empty toolUse stop (issue #5600)", () => {
 		expect(firstAssistant.errorMessage).toBeUndefined();
 		expect(messages.some(m => m.role === "toolResult")).toBe(true);
 	});
+
+	it("reclassifies an empty toolUse turn finalized by end(result) with no terminal event", async () => {
+		const context: AgentContext = { systemPrompt: ["You are helpful."], messages: [], tools: [] };
+		// A provider/wrapper that settles the stream via end(result) instead of
+		// yielding a terminal `done`/`error` event drives the trailing-result
+		// finalization branch. The empty toolUse turn must be reclassified there too.
+		const streamFn = () => {
+			const stream = new AssistantMessageEventStream();
+			const partial = createAssistantMessage([{ type: "thinking", thinking: "planning..." }], "toolUse");
+			stream.push({ type: "start", partial });
+			stream.push({ type: "thinking_start", contentIndex: 0, partial });
+			stream.push({ type: "thinking_delta", contentIndex: 0, delta: "planning...", partial });
+			stream.push({ type: "thinking_end", contentIndex: 0, content: "planning...", partial });
+			stream.end(partial);
+			return stream;
+		};
+		const config: AgentLoopConfig = { model: createMockModel().model, convertToLlm: identityConverter };
+
+		const stream = agentLoop([createUserMessage("Hello")], context, config, undefined, streamFn);
+		for await (const _event of stream) {
+			// drain
+		}
+		const messages = await stream.result();
+		const assistant = messages.find((m): m is AssistantMessage => m.role === "assistant");
+		if (!assistant) throw new Error("expected an assistant message");
+
+		expect(assistant.stopReason).toBe("error");
+		expect(assistant.content.filter(b => b.type === "toolCall")).toHaveLength(0);
+		expect(AIError.is(assistant.errorId, AIError.Flag.Transient)).toBe(true);
+		expect(AIError.retriable(assistant.errorId)).toBe(true);
+	});
 });
