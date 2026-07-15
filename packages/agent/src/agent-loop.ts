@@ -1451,9 +1451,11 @@ async function streamAssistantResponse(
 
 					const event = next.value;
 					if (event.type === "done" || event.type === "error") {
-						let finalMessage = recoverTransientErrorToolTurn(
-							retainCompletedToolCalls(await response.result(), completedToolCallIds),
-							context.tools ?? [],
+						let finalMessage = reclassifyEmptyToolUseStop(
+							recoverTransientErrorToolTurn(
+								retainCompletedToolCalls(await response.result(), completedToolCallIds),
+								context.tools ?? [],
+							),
 						);
 						if (harmonyMitigationEnabled) {
 							const detection = detectHarmonyLeakInAssistantMessage(finalMessage);
@@ -1648,6 +1650,32 @@ function recoverTransientErrorToolTurn(
 		errorMessage: undefined,
 		errorId: undefined,
 		errorStatus: undefined,
+	};
+}
+
+/** Synthetic error text for a `toolUse` stop that carried no tool call blocks. */
+const EMPTY_TOOL_USE_STOP_MESSAGE =
+	"Stream closed before the tool call was emitted (socket connection closed unexpectedly): provider reported toolUse stop with no tool call blocks.";
+
+/**
+ * Reclassify a `toolUse` stop that carried zero tool call blocks as a
+ * retryable transport error. Providers (confirmed Bedrock + extended thinking,
+ * issue #5600) finalize a dropped stream with `stop_reason: "tool_use"` when the
+ * socket closes after the thinking block but before the tool call JSON streams.
+ * The loop would otherwise treat it as a successful turn: dispatch zero tools,
+ * render an empty tool widget, and never retry. Stamping `stopReason: "error"`
+ * with the {@link AIError.Flag.Transient} bit routes it through the standard
+ * retry-with-backoff path. The bit is set explicitly (not left to text
+ * classification) so retry fires regardless of message-pattern drift.
+ */
+function reclassifyEmptyToolUseStop(message: AssistantMessage): AssistantMessage {
+	if (message.stopReason !== "toolUse") return message;
+	if (message.content.some(block => block.type === "toolCall")) return message;
+	return {
+		...message,
+		stopReason: "error",
+		errorMessage: EMPTY_TOOL_USE_STOP_MESSAGE,
+		errorId: AIError.create(AIError.Flag.Transient),
 	};
 }
 

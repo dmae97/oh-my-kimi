@@ -15,6 +15,7 @@ import type {
 	ToolCallContext,
 } from "@oh-my-pi/pi-agent-core/types";
 import type { AssistantMessage, AssistantMessageEvent, Message, ToolResultMessage } from "@oh-my-pi/pi-ai";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
@@ -3284,5 +3285,71 @@ describe("agentLoop kCursorExecResolved (issue #4348)", () => {
 		if (executionStarts[0]?.type !== "tool_execution_start") throw new Error("expected tool_execution_start");
 		expect(executionStarts[0].toolCallId).toBe("runnable-1");
 		expect(executionStarts[0].toolName).toBe("echo");
+	});
+});
+
+describe("agentLoop empty toolUse stop (issue #5600)", () => {
+	it("reclassifies a toolUse stop with zero tool call blocks as a retryable transient error", async () => {
+		const context: AgentContext = { systemPrompt: ["You are helpful."], messages: [], tools: [] };
+		// Provider closed the stream after the thinking block but before the tool
+		// call JSON was emitted: stopReason=toolUse, no toolCall content blocks.
+		const mock = createMockModel({
+			responses: [{ content: [{ type: "thinking", thinking: "planning..." }], stopReason: "toolUse" }],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const stream = agentLoop([createUserMessage("Hello")], context, config, undefined, mock.stream);
+		for await (const _event of stream) {
+			// drain
+		}
+		const messages = await stream.result();
+		const assistant = messages.find((m): m is AssistantMessage => m.role === "assistant");
+		if (!assistant) throw new Error("expected an assistant message");
+
+		// The empty tool-use turn is surfaced as an error, not a silent success.
+		expect(assistant.stopReason).toBe("error");
+		expect(assistant.content.filter(b => b.type === "toolCall")).toHaveLength(0);
+		expect(assistant.errorMessage).toBeDefined();
+		// The synthesized error carries the Transient classifier bit so
+		// AgentSession's retry path fires regardless of message-text matching.
+		expect(AIError.is(assistant.errorId, AIError.Flag.Transient)).toBe(true);
+		expect(AIError.retriable(assistant.errorId)).toBe(true);
+	});
+
+	it("leaves a toolUse stop that carries a tool call block untouched", async () => {
+		const toolSchema = type({ value: "string" });
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_id, params) {
+				return { content: [{ type: "text", text: `echoed: ${params.value}` }], details: { value: params.value } };
+			},
+		};
+		const context: AgentContext = { systemPrompt: ["You are helpful."], messages: [], tools: [tool] };
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [{ type: "toolCall", id: "tc-1", name: "echo", arguments: { value: "hi" } }],
+					stopReason: "toolUse",
+				},
+				{ content: ["done"] },
+			],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const stream = agentLoop([createUserMessage("run echo")], context, config, undefined, mock.stream);
+		for await (const _event of stream) {
+			// drain
+		}
+		const messages = await stream.result();
+		const firstAssistant = messages.find((m): m is AssistantMessage => m.role === "assistant");
+		if (!firstAssistant) throw new Error("expected an assistant message");
+
+		// A real tool call under toolUse is dispatched normally, never reclassified.
+		expect(firstAssistant.stopReason).toBe("toolUse");
+		expect(firstAssistant.errorMessage).toBeUndefined();
+		expect(messages.some(m => m.role === "toolResult")).toBe(true);
 	});
 });
