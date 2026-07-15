@@ -303,6 +303,22 @@ describe("github copilot model limits mapping", () => {
 		// not the OpenAI global reference (1050k).
 		expect(model?.contextWindow).toBe(272_000);
 	});
+	it("routes mai-code models to the openai-responses endpoint (#5612)", async () => {
+		// Copilot's /chat/completions rejects mai-* models with
+		// `unsupported_api_for_model` (400); they are served only via /responses.
+		const { models } = await discoverCopilotModels({
+			data: [
+				{
+					id: "mai-code-1-flash-picker",
+					name: "MAI-Code-1-Flash",
+				},
+			],
+		});
+
+		const model = models.find(candidate => candidate.id === "mai-code-1-flash-picker");
+		expect(model).toBeDefined();
+		expect(model?.api).toBe("openai-responses");
+	});
 });
 
 /**
