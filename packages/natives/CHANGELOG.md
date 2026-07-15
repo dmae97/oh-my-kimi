@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the in-process `grep` builtin treating GNU basic-regex `\|` as a literal pipe, so default and `-G` searches now accept escaped alternation while `-E`, `-F`, and `-P` retain their selected regex dialects.
+
 ## [16.5.2] - 2026-07-14
 
 ### Fixed
