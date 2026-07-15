@@ -88126,9 +88126,9 @@
 				"text"
 			],
 			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
+				"input": 0.6,
+				"output": 2.2,
+				"cacheRead": 0.11,
 				"cacheWrite": 0
 			},
 			"contextWindow": 131072,
@@ -88155,9 +88155,9 @@
 				"text"
 			],
 			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
+				"input": 0.2,
+				"output": 1.1,
+				"cacheRead": 0.03,
 				"cacheWrite": 0
 			},
 			"contextWindow": 131072,
@@ -88214,8 +88214,8 @@
 				"image"
 			],
 			"cost": {
-				"input": 0,
-				"output": 0,
+				"input": 0.6,
+				"output": 1.8,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
@@ -88243,9 +88243,9 @@
 				"text"
 			],
 			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
+				"input": 0.6,
+				"output": 2.2,
+				"cacheRead": 0.11,
 				"cacheWrite": 0
 			},
 			"contextWindow": 204800,
@@ -88273,8 +88273,8 @@
 				"image"
 			],
 			"cost": {
-				"input": 0,
-				"output": 0,
+				"input": 0.3,
+				"output": 0.9,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
@@ -88302,9 +88302,9 @@
 				"text"
 			],
 			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
+				"input": 0.6,
+				"output": 2.2,
+				"cacheRead": 0.11,
 				"cacheWrite": 0
 			},
 			"contextWindow": 204800,
@@ -88389,9 +88389,9 @@
 				"text"
 			],
 			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
+				"input": 1,
+				"output": 3.2,
+				"cacheRead": 0.2,
 				"cacheWrite": 0
 			},
 			"contextWindow": 204800,
@@ -88418,9 +88418,9 @@
 				"text"
 			],
 			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
+				"input": 1.2,
+				"output": 4,
+				"cacheRead": 0.24,
 				"cacheWrite": 0
 			},
 			"contextWindow": 200000,
@@ -88447,9 +88447,9 @@
 				"text"
 			],
 			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
+				"input": 1.4,
+				"output": 4.4,
+				"cacheRead": 0.26,
 				"cacheWrite": 0
 			},
 			"contextWindow": 200000,
@@ -88476,9 +88476,9 @@
 				"text"
 			],
 			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
+				"input": 1.4,
+				"output": 4.4,
+				"cacheRead": 0.26,
 				"cacheWrite": 0
 			},
 			"contextWindow": 1000000,
@@ -88503,9 +88503,9 @@
 				"image"
 			],
 			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
+				"input": 1.2,
+				"output": 4,
+				"cacheRead": 0.24,
 				"cacheWrite": 0
 			},
 			"contextWindow": 200000,
