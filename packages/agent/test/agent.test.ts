@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { Agent, type AgentEvent, type AgentTool, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { type SimpleStreamOptions, z } from "@oh-my-pi/pi-ai";
+import { type SimpleStreamOptions, type ToolResultMessage, z } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { kCursorExecResolved } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { createAssistantMessage } from "./helpers";
 
@@ -263,6 +264,51 @@ describe("Agent", () => {
 		expect(turnEnd).toMatchObject({
 			type: "turn_end",
 			toolResults: [{ role: "toolResult", toolCallId: "tool-1", isError: true }],
+		});
+	});
+
+	it("preserves buffered Cursor results when a partial stream fails", async () => {
+		const mock = createMockModel({ responses: [] });
+		const errorText = "connection reset after Cursor exec";
+		const toolCall = {
+			type: "toolCall" as const,
+			id: "cursor-tool-1",
+			name: "shell",
+			arguments: { command: "pwd" },
+			[kCursorExecResolved]: true,
+		};
+		const started = createAssistantMessage([toolCall]);
+		const realToolResult: ToolResultMessage = {
+			role: "toolResult",
+			toolCallId: toolCall.id,
+			toolName: toolCall.name,
+			content: [{ type: "text", text: "/workspace" }],
+			isError: false,
+			timestamp: Date.now(),
+		};
+		const agent = new Agent({
+			initialState: { model: mock.model, systemPrompt: ["Test"], tools: [], messages: [] },
+			cursorOnToolResult: message => message,
+			streamFn: (_model, _context, options) => {
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(async () => {
+					await options?.cursorOnToolResult?.(realToolResult);
+					stream.push({ type: "start", partial: started });
+					stream.fail(new Error(errorText));
+				});
+				return stream;
+			},
+		});
+
+		await agent.prompt("trigger");
+
+		const toolResults = agent.state.messages.filter(message => message.role === "toolResult");
+		expect(toolResults).toHaveLength(1);
+		expect(toolResults[0]).toMatchObject({
+			toolCallId: toolCall.id,
+			toolName: toolCall.name,
+			content: [{ type: "text", text: "/workspace" }],
+			isError: false,
 		});
 	});
 

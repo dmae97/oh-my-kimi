@@ -1313,8 +1313,18 @@ export class Agent {
 				this.#state.error = errorMessage;
 				this.#emit({ type: "message_end", message: errorMsg });
 				const toolResults: ToolResultMessage[] = [];
+				const bufferedCursorResults = this.#cursorToolResultBuffer.map(({ toolResult }) => toolResult);
+				this.#cursorToolResultBuffer = [];
+				const bufferedCursorToolCallIds = new Set(bufferedCursorResults.map(({ toolCallId }) => toolCallId));
+				for (const toolResult of bufferedCursorResults) {
+					this.appendMessage(toolResult);
+					this.#emit({ type: "message_start", message: toolResult });
+					this.#emit({ type: "message_end", message: toolResult });
+					toolResults.push(toolResult);
+				}
 				for (const block of errorMsg.content) {
 					if (block.type !== "toolCall") continue;
+					if (bufferedCursorToolCallIds.has(block.id)) continue;
 					const toolResult = createSyntheticToolResultMessage(block, "error", errorMessage);
 					this.#emit({
 						type: "tool_execution_start",
