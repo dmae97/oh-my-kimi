@@ -7,6 +7,7 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 	InputEvent,
+	SessionBranchEvent,
 	SessionStartEvent,
 	SessionSwitchEvent,
 	ToolApprovalRequestedEvent,
@@ -166,6 +167,50 @@ describe("Warp CLI-agent events", () => {
 		expect(bodies).toEqual([
 			expect.objectContaining({ event: "session_start", session_id: "session-new" }),
 			expect.objectContaining({ event: "prompt_submit", session_id: "session-new" }),
+		]);
+		expect(bodies[1]).not.toHaveProperty("query");
+	});
+
+	it("rebuilds the emitter and resets prompt state after a session branch", () => {
+		enableWarpProtocol();
+		const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		vi.spyOn(terminalCapabilities, "isInsideTmux").mockReturnValue(false);
+		const handlers = new Map<string, RegisteredHandler>();
+		const api = {
+			on(event: string, handler: RegisteredHandler): void {
+				handlers.set(event, handler);
+			},
+		} as never as ExtensionAPI;
+		let sessionId = "session-old";
+		const context = { sessionManager: { getSessionId: () => sessionId } } as never as ExtensionContext;
+
+		createWarpEventBridgeExtension()(api);
+		const sessionStart = handlers.get("session_start") as never as (
+			event: SessionStartEvent,
+			context: ExtensionContext,
+		) => void;
+		const sessionBranch = handlers.get("session_branch") as never as (
+			event: SessionBranchEvent,
+			context: ExtensionContext,
+		) => void;
+		const input = handlers.get("input") as never as (event: InputEvent) => void;
+		const agentStart = handlers.get("agent_start") as never as (event: AgentStartEvent) => void;
+		sessionStart({ type: "session_start" }, context);
+		input({ type: "input", text: "old prompt", source: "interactive" });
+		sessionId = "session-branched";
+		write.mockClear();
+
+		sessionBranch({ type: "session_branch", previousSessionFile: undefined }, context);
+		agentStart({ type: "agent_start" });
+
+		const prefix = "\x1b]777;notify;warp://cli-agent;";
+		const bodies = write.mock.calls.map(call => {
+			const osc = call[0] as string;
+			return JSON.parse(osc.slice(prefix.length, osc.length - 1)) as Record<string, unknown>;
+		});
+		expect(bodies).toEqual([
+			expect.objectContaining({ event: "session_start", session_id: "session-branched" }),
+			expect.objectContaining({ event: "prompt_submit", session_id: "session-branched" }),
 		]);
 		expect(bodies[1]).not.toHaveProperty("query");
 	});

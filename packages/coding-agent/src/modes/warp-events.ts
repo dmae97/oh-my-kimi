@@ -84,19 +84,15 @@ export function createWarpEventBridgeExtension(): ExtensionFactory {
 		let emitter: WarpEventEmitter | undefined;
 		let lastPrompt: string | undefined;
 
-		const rebuildEmitter = (ctx: ExtensionContext): void => {
+		const rebuildEmitter = (_event: unknown, ctx: ExtensionContext): void => {
 			lastPrompt = undefined;
 			emitter = createWarpEventEmitter({ sessionId: ctx.sessionManager.getSessionId() });
 			emitter?.emit({ event: "session_start" });
 		};
 
-		api.on("session_start", (_event, ctx) => {
-			rebuildEmitter(ctx);
-		});
-
-		api.on("session_switch", (_event, ctx) => {
-			rebuildEmitter(ctx);
-		});
+		api.on("session_start", rebuildEmitter);
+		api.on("session_switch", rebuildEmitter);
+		api.on("session_branch", rebuildEmitter);
 
 		api.on("input", event => {
 			lastPrompt = event.text;
