@@ -291,6 +291,53 @@ describe("AgentSession prewalk", () => {
 		]);
 		expect(session.model?.id).toBe(target.id);
 	});
+
+	it("does not continue a completed bash-only task after the plan-nudge window closes", async () => {
+		const primary = modelOrThrow("claude-sonnet-4-5");
+		const target = modelOrThrow("claude-sonnet-4-6");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+
+		const mock = createMockModel({
+			responses: [
+				toolCall("t1", "record"),
+				toolCall("t2", "bash"),
+				{ content: [{ type: "text", text: "Commit complete." }], stopReason: "stop" },
+			],
+		});
+		const requested: string[] = [];
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model: primary,
+				systemPrompt: ["Test"],
+				tools: [recordTool as AgentTool, bashTool as AgentTool],
+				messages: [],
+				thinkingLevel: Effort.Medium,
+			},
+			convertToLlm,
+			streamFn: (model, context, options) => {
+				requested.push(`${model.provider}/${model.id}`);
+				return mock.stream(model, context, options);
+			},
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry,
+			toolRegistry,
+			prewalk: { target },
+		});
+
+		await session.prompt("commit the current changes");
+
+		expect(requested).toEqual([
+			`${primary.provider}/${primary.id}`,
+			`${primary.provider}/${primary.id}`,
+			`${primary.provider}/${primary.id}`,
+		]);
+	});
+
 	it("skips the todo gate when todo is registered but not active (subagent-style restricted slates)", async () => {
 		// Regression: the gate used to key on the tool REGISTRY, so a session
 		// whose active-tool slate excluded `todo` (subagents strip it) while the
