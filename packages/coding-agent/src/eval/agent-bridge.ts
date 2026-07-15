@@ -86,25 +86,6 @@ function trimToUndefined(value: string | undefined): string | undefined {
 	return trimmed ? trimmed : undefined;
 }
 
-function formatEvalIsolationRecoveryHint(hint: string): string {
-	const prefix = "Recovery preserved at ";
-	const recovery = hint.trim();
-	if (!recovery.startsWith(prefix)) return hint;
-	const entries = recovery.slice(prefix.length).replace(/\.$/, "").split(", ");
-	return entries
-		.map(entry =>
-			entry.startsWith("branch ")
-				? ` Captured branch preserved as ${entry.slice("branch ".length)}.`
-				: ` Captured patch preserved at ${entry}.`,
-		)
-		.join("");
-}
-
-async function buildEvalIsolationRecoveryHint(result: SingleResult, artifactsDir: string): Promise<string> {
-	const recoveryHint = await buildStructuredSubagentRecoveryHint(result, artifactsDir);
-	return formatEvalIsolationRecoveryHint(recoveryHint);
-}
-
 function emitProgressStatus(emitStatus: ((event: JsStatusEvent) => void) | undefined, progress: AgentProgress): void {
 	if (!emitStatus) return;
 	const preview = (progress.assignment ?? progress.task ?? "").split("\n")[0]?.slice(0, 120);
@@ -188,12 +169,12 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 			const failureMessage = buildSubagentFailureMessage(policy.agentName, result)
 				.replace(/<\/?system-notification>/g, "")
 				.trim();
-			const recoveryHint = policy.isIsolated ? await buildEvalIsolationRecoveryHint(result, artifactsDir) : "";
+			const recoveryHint = policy.isIsolated ? await buildStructuredSubagentRecoveryHint(result, artifactsDir) : "";
 			throw new ToolError(`${failureMessage}${recoveryHint}`);
 		}
 		if (policy.isIsolated && changesApplied === false) {
 			const summary = mergeSummary.replace(/<\/?system-notification>/g, "").trim();
-			const recoveryHint = await buildEvalIsolationRecoveryHint(result, artifactsDir);
+			const recoveryHint = await buildStructuredSubagentRecoveryHint(result, artifactsDir);
 			throw new ToolError(
 				`agent() isolated apply failed for ${result.id}${summary ? `: ${summary}` : ""}${recoveryHint}`,
 			);
@@ -202,7 +183,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 		const structuredOutput = result.structuredOutput;
 		const structured = structuredOutput?.source !== undefined && structuredOutput.source !== "none";
 		if (structured && mergeSummary.includes("<system-notification>")) {
-			const recoveryHint = await buildEvalIsolationRecoveryHint(result, artifactsDir);
+			const recoveryHint = await buildStructuredSubagentRecoveryHint(result, artifactsDir);
 			throw new ToolError(
 				`agent() isolated nested patch apply failed for ${result.id}: ${mergeSummary.replace(/<\/?system-notification>/g, "").trim()}${recoveryHint}`,
 			);
