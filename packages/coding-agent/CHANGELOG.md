@@ -8,6 +8,7 @@
 
 ### Changed
 
+- Changed the default `astGrep.enabled` setting to `false`
 - Batched todo operations with real tool calls to prevent solo todo turns and extra round trips
 
 ### Fixed
