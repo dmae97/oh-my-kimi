@@ -87,8 +87,6 @@ const CURSOR_END_NO_SYNC = "";
 // coordinates so columns/rows past 223 are reported.
 const MOUSE_TRACKING_ON = "\x1b[?1000h\x1b[?1003h\x1b[?1006h";
 const MOUSE_TRACKING_OFF = "\x1b[?1006l\x1b[?1003l\x1b[?1000l";
-const ALT_SCREEN_ENTER = "\x1b[?1049h";
-const ALT_SCREEN_EXIT = "\x1b[?1049l";
 
 type InputListenerResult = { consume?: boolean; data?: string } | undefined;
 type InputListener = (data: string) => InputListenerResult;
@@ -1076,11 +1074,6 @@ export class TUI extends Container {
 	// `#fullRedrawCount`: these never enter native scrollback and exist only for
 	// the lifetime of the drag. Exposed for tests/diagnostics.
 	#resizeViewportPaintCount = 0;
-	// During a live resize drag the terminal's normal buffer may reflow full-width
-	// rows before our repaint lands. Borrow the alternate screen for throwaway
-	// resize frames so width changes truncate the transient viewport instead of
-	// pushing wrapped fragments into native scrollback.
-	#resizeAltActive = false;
 	#stopped = false;
 	// Always-on event-loop lag probe. The high default threshold keeps it quiet;
 	// it only logs `ui.loop-blocked` (with the current loop phase) when a frame
@@ -1519,13 +1512,15 @@ export class TUI extends Container {
 		this.#watchdog.start();
 		this.#ghosttyInitialImageDelayDone = false;
 		this.#ghosttyImageReadyAtMs = this.#renderScheduler.now() + TUI.#GHOSTTY_INITIAL_IMAGE_DELAY_MS;
-		// A DECRQM report for mode 2026 is authoritative: enable synchronized
-		// output when the terminal reports support (upgrading conservatively
-		// defaulted-off hosts like zellij/tmux-master/foot) and disable it when
-		// the terminal reports it unsupported. An explicit user opt-out/force
-		// (resolved at construction) still wins, so skip the probe in that case.
-		this.terminal.onPrivateModeReport?.((mode, supported) => {
-			if (mode !== 2026) return;
+		// A confirmed DECRPM report for mode 2026 is authoritative: enable
+		// synchronized output when the terminal reports support and disable it for
+		// an explicit unsupported status. A DA1 sentinel without a DECRPM reply is
+		// inconclusive: many terminals implement synchronized output without
+		// implementing DECRQM, so retain the statically detected default instead of
+		// exposing destructive full paints. An explicit user opt-out/force still
+		// wins, so skip every probe result in that case.
+		this.terminal.onPrivateModeReport?.((mode, supported, confirmed = true) => {
+			if (mode !== 2026 || !confirmed) return;
 			if (synchronizedOutputUserOverride() !== null) return;
 			this.#setSynchronizedOutput(supported);
 		});
@@ -1743,11 +1738,6 @@ export class TUI extends Container {
 	}
 
 	stop(): void {
-		// Leave the alt buffer first so the teardown cursor math below runs against
-		// the restored normal screen (which #previousLines still describes).
-		if (this.#resizeAltActive) {
-			this.terminal.write(this.#leaveResizeAltSequence());
-		}
 		if (this.#altActive) {
 			const enhancementExit = this.#keyboardEnhancementExit();
 			this.terminal.write(`${MOUSE_TRACKING_OFF}${enhancementExit}\x1b[?1049l`);
@@ -2709,6 +2699,7 @@ export class TUI extends Container {
 		// Fullscreen alt-screen short-circuit. While the topmost visible overlay
 		// requests it, borrow the terminal's alternate buffer and paint only the
 		// modal there; the normal screen and all accounting stay untouched.
+		let deferredAltExit = "";
 		const wantAlt = this.#wantsAltScreen();
 		if (wantAlt && !this.#altActive) {
 			// Enhanced keyboard modes can be buffer-local: re-push the active
@@ -2726,7 +2717,13 @@ export class TUI extends Container {
 			this.#altEnterHeight = height;
 		} else if (!wantAlt && this.#altActive) {
 			const enhancementExit = this.#keyboardEnhancementExit();
-			this.terminal.write(`${MOUSE_TRACKING_OFF}${enhancementExit}\x1b[?1049l`);
+			const exitSequence = `${MOUSE_TRACKING_OFF}${enhancementExit}\x1b[?1049l`;
+			// Session replacement can finish while a fullscreen selector is still
+			// covering the old normal buffer. Keep the overlay visible until the
+			// replacement is ready, then fuse the buffer restore into that full paint;
+			// a standalone exit exposes the stale session for one terminal frame.
+			if (this.#clearScrollbackOnNextRender) deferredAltExit = exitSequence;
+			else this.terminal.write(exitSequence);
 			setAltScreenActive(false);
 			this.#forgetHardwareCursorState();
 			this.#altActive = false;
@@ -3055,6 +3052,7 @@ export class TUI extends Container {
 				chunkTo,
 				windowTop,
 				cursorTrackingLineCount,
+				leadingSequence: deferredAltExit,
 			});
 			this.#committedPrefix = rawFrame.slice(0, chunkTo);
 			this.#committedPrefixAuditRows = Math.min(chunkTo, finalBoundary);
@@ -3434,6 +3432,7 @@ export class TUI extends Container {
 			chunkTo: number;
 			windowTop: number;
 			cursorTrackingLineCount: number;
+			leadingSequence: string;
 		},
 	): void {
 		this.#fullRedrawCount += 1;
@@ -3471,7 +3470,7 @@ export class TUI extends Container {
 				paintCursorPos = paint.cursorPos;
 			}
 		}
-		let buffer = this.#paintBeginSequence + this.#leaveResizeAltSequence() + purgeSequence;
+		let buffer = this.#paintBeginSequence + options.leadingSequence + purgeSequence;
 		if (options.clearScrollback) {
 			// Clear native history without blanking the live viewport first. The
 			// replay below rewrites every visible row from home, including blanks,
@@ -3671,34 +3670,15 @@ export class TUI extends Container {
 		return this.terminal.kittyEnableSequence ? "\x1b[<u" : "";
 	}
 
-	#enterResizeAltSequence(): string {
-		if (this.#resizeAltActive || this.#altActive) return "";
-		this.#resizeAltActive = true;
-		setAltScreenActive(true);
-		this.#forgetHardwareCursorState();
-		this.#recordHardwareCursorHidden();
-		return `${ALT_SCREEN_ENTER}${this.#keyboardEnhancementEnter()}`;
-	}
-
-	#leaveResizeAltSequence(): string {
-		if (!this.#resizeAltActive) return "";
-		const enhancementExit = this.#keyboardEnhancementExit();
-		this.#resizeAltActive = false;
-		setAltScreenActive(false);
-		this.#forgetHardwareCursorState();
-		return `${enhancementExit}${ALT_SCREEN_EXIT}`;
-	}
-
 	/**
-	 * Emit a throwaway viewport repaint for the resize fast path as an alternate-
-	 * screen per-row overwrite. The normal buffer may reflow full-width rows on a
-	 * width change before the app can repaint; keeping the drag on the alternate
-	 * screen makes those transient resizes truncate instead of pushing wrapped
-	 * fragments into native scrollback. Normal-screen history is rebuilt once at
-	 * settle via `#emitFullPaint`.
+	 * Emit a throwaway viewport repaint for the resize fast path as an in-place
+	 * per-row overwrite. Switching buffers exposes the saved normal screen before
+	 * the authoritative settle paint on terminals without effective DEC 2026,
+	 * which is the resize flicker this fast path exists to avoid. The normal
+	 * screen is therefore rewritten directly; history is rebuilt once at settle.
 	 */
 	#emitResizeViewport(window: readonly string[], height: number, contentRows: number, width: number): void {
-		let buffer = `${this.#paintBeginSequence + this.#enterResizeAltSequence()}\x1b[H`;
+		let buffer = `${this.#paintBeginSequence}\x1b[H`;
 		for (let r = 0; r < height; r++) {
 			if (r > 0) buffer += "\r\n";
 			buffer += this.#lineRewriteSequence(window[r] ?? "", width);

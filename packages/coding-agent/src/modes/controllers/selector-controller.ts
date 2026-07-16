@@ -1110,12 +1110,10 @@ export class SelectorController {
 		// every project's history when the cwd has nothing to resume. See #3099.
 		const historyStorage = this.ctx.historyStorage;
 		const historyMatcher = historyStorage ? (query: string) => historyStorage.matchingSessionIds(query) : undefined;
-		// Fullscreen session picker on the alternate screen (the /settings idiom):
-		// the overlay borrows the alt buffer and enables mouse tracking (wheel
-		// scroll + click-to-resume) for its lifetime, leaving the transcript
-		// untouched underneath. Anchored top-left at full size so a mouse row maps
-		// directly to a rendered line (the overlay paints from screen row 0), and
-		// `fillHeight` pads the body so the footer pins to the screen bottom.
+		// Keep the fullscreen picker on the alternate buffer while a selected
+		// session is loaded and its transcript is rebuilt. Closing it first exposes
+		// the stale normal buffer for the entire async switch on terminals without
+		// effective synchronized output.
 		let overlayHandle: OverlayHandle | undefined;
 		const done = () => {
 			overlayHandle?.hide();
@@ -1125,8 +1123,11 @@ export class SelectorController {
 		const selector = new SessionSelectorComponent(
 			sessions,
 			async (session: SessionInfo) => {
-				done();
-				await this.handleResumeSession(session.path);
+				try {
+					await this.handleResumeSession(session.path);
+				} finally {
+					done();
+				}
 			},
 			() => {
 				done();

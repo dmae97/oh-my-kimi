@@ -349,7 +349,7 @@ default-on only for kitty/ghostty (`PI_NO_KITTY_PLACEHOLDERS` /
 | `PI_HARDWARE_CURSOR=1` | Show the real hardware cursor instead of a rendered one. |
 | `PI_NOTIFICATIONS=off\|0\|false` | Suppress terminal notifications. |
 | `PI_DEBUG_REDRAW=1` | Log the chosen render intent + ledger state per frame to the debug log. |
-| `PI_TUI_RESIZE_IN_PLACE=1\|0` | Force resize to repaint in place (no alt-screen borrow, no ED3 rewrap) on / off. Default-on for terminals that re-report size on alt-screen toggles (Warp). |
+| `PI_TUI_RESIZE_IN_PLACE=1\|0` | `1` preserves terminal-managed history and repaints after settle; `0` uses viewport-only drag paints plus one settled ED3 history rewrap. Neither path borrows the alternate screen. Default-on for terminals that re-report size on buffer toggles (Warp). |
 
 Removed with the old engine: `PI_TUI_ED3_SAFE` (no ED3-risk lever exists),
 `PI_CLEAR_ON_SHRINK` (shrinks always clear exactly), `PI_TUI_DEBUG` (per-render
