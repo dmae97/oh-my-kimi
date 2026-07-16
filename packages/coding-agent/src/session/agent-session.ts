@@ -2981,6 +2981,7 @@ export class AgentSession {
 			// tool. A default read-only advisor (advise/read/grep/glob) never gets
 			// to delete workspace files it was never granted (issue #5680 review).
 			const advisorCanMutateFiles = advisorToolMap.has("write") || advisorToolMap.has("edit");
+			if (advisorCanMutateFiles) availableAdvisorToolNames.add("delete");
 			const advisorCursorExecHandlers = new CursorExecHandlers({
 				cwd: this.sessionManager.getCwd(),
 				tools: advisorToolMap,
