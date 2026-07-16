@@ -234,6 +234,20 @@ describe("isUsageLimitOutcome", () => {
 		expect(isUsageLimitOutcome(429, message)).toBe(true);
 	});
 
+	it("rotates on xAI Grok Build 402 usage-balance exhaustion regardless of status", () => {
+		const message = "402 Grok Build usage balance exhausted";
+		expect(isUsageLimitOutcome(402, message)).toBe(true);
+		expect(isUsageLimitOutcome(undefined, message)).toBe(true);
+		expect(isUsageLimit(message)).toBe(true);
+	});
+
+	it("treats 402 as a usage-limit status (opaque body rotates, informative non-quota body does not)", () => {
+		expect(isUsageLimitStatus(402)).toBe(true);
+		expect(isUsageLimitOutcome(402, undefined)).toBe(true);
+		expect(isUsageLimitOutcome(402, "HTTP 402")).toBe(true);
+		expect(isUsageLimitOutcome(402, "A subscription is required for this endpoint")).toBe(false);
+	});
+
 	it("does not rotate on auth/invalid-request statuses with unrelated bodies", () => {
 		expect(isUsageLimitOutcome(401, "Invalid API key")).toBe(false);
 		expect(isUsageLimitOutcome(400, "invalid_request_error: model unsupported")).toBe(false);
