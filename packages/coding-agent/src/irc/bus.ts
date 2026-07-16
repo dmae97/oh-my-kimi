@@ -127,12 +127,24 @@ export class IrcBus {
 			};
 		}
 
+		// Gate through ensureLive only when the recipient may be mid-park or
+		// parked. Main/non-adopted live peers skip this (they have no park
+		// lifecycle), and pending waiters still win without a session.
+		const lifecycle = this.#lifecycle();
+		const needsLifecycleGate =
+			ref.status === "parked" || lifecycle.isParking(message.to) || lifecycle.has(message.to);
+
+		const priorSession = ref.session;
 		let revived = false;
-		if (ref.status === "parked") {
+		if (needsLifecycleGate) {
 			try {
-				await this.#lifecycle().ensureLive(message.to);
-				revived = true;
+				const liveSession = await lifecycle.ensureLive(message.to);
+				// Revival = we did not keep the same live instance (parked start, or
+				// park completed and a fresh session was rebuilt).
+				revived = !priorSession || liveSession !== priorSession;
 			} catch (error) {
+				// Not revivable / released / revive failed. Do not buffer: a permanent
+				// failure must not inflate unread counts or pretend delivery is pending.
 				return {
 					to: message.to,
 					outcome: "failed",

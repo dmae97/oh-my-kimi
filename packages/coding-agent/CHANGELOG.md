@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed a race where hub/IRC `send` and `ensureLive` could hand out or inject into a subagent session mid-`park` dispose: park now detaches and flips status to `parked` before `session.dispose()`, concurrent `ensureLive` cancels a pre-detach park or waits then revives, and IRC delivery always gates through `ensureLive` so receipts/unread counts stay truthful ([#5633](https://github.com/can1357/oh-my-pi/issues/5633)).
+
 ## [17.0.0] - 2026-07-15
 
 ### Breaking Changes
