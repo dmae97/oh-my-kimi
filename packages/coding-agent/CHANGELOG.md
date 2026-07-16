@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fixed command error in `hub` tool with a non-POSIX shell ([#5682](https://github.com/can1357/oh-my-pi/pull/5682))
+
 ## [17.0.1] - 2026-07-16
 
 ### Changed

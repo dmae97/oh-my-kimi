@@ -3,7 +3,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Process, type PtyRunResult, PtySession } from "@oh-my-pi/pi-natives";
-import { isEexist, isEnoent, logger, postmortem, sanitizeText } from "@oh-my-pi/pi-utils";
+import { isEexist, isEnoent, logger, postmortem, procmgr, sanitizeText } from "@oh-my-pi/pi-utils";
 import { truncateHead, truncateHeadBytes, truncateTail, truncateTailBytes } from "../session/streaming-output";
 import { workerEnvFromParent } from "../subprocess/worker-client";
 import { daemonBrokerEndpoint } from "./paths";
@@ -555,7 +555,8 @@ class DaemonBroker {
 				`printf '%s' "$$" > ${quoteShellArg(pidPath)}`,
 				`exec ${argv.map(quoteShellArg).join(" ")}`,
 			].join("; ");
-			run = session.start({ command, shell: process.env.SHELL, ...options }, onChunk);
+			const shell = procmgr.resolveBasicShell() ?? "sh";
+			run = session.start({ command, shell, ...options }, onChunk);
 		}
 		void run
 			.then(result => this.#onPtyExit(record, generation, result))
