@@ -1,6 +1,6 @@
 /// <reference path="./legacy-pi-virtual-modules.d.ts" />
 import * as fs from "node:fs";
-import { isBuiltin } from "node:module";
+import { createRequire, isBuiltin } from "node:module";
 import * as path from "node:path";
 import * as url from "node:url";
 import { isCompiledBinary, stripWindowsExtendedLengthPathPrefix } from "@oh-my-pi/pi-utils";
@@ -1112,6 +1112,72 @@ const EXTENSION_GRAPH_SPECIFIER_REGEX = /((?:from\s+|import\s+|import\s*\(\s*)["
 // the previous load.
 const extensionGraphHookModules = new Map<string, Set<string>>();
 const commonJsModuleSources = new Map<string, string>();
+const COMMONJS_REQUIRE_GLOBAL = "__ompLegacyPiRequireGraphModule";
+const commonJsModuleDefinitions = new Map<string, { source: string; filename: string; dirname: string }>();
+const commonJsModuleCache = new Map<
+	string,
+	{
+		exports: unknown;
+		filename: string;
+		id: string;
+		path: string;
+		require: NodeJS.Require;
+		loaded: boolean;
+	}
+>();
+const commonJsTypeScriptTranspiler = new Bun.Transpiler({ loader: "ts" });
+
+function evaluateGraphCommonJs(modulePath: string): unknown {
+	const cached = commonJsModuleCache.get(modulePath);
+	if (cached) {
+		return cached.exports;
+	}
+	const definition = commonJsModuleDefinitions.get(modulePath);
+	if (!definition) {
+		throw new Error(`Missing graph-owned CommonJS definition: ${modulePath}`);
+	}
+
+	const nativeRequire = createRequire(definition.filename);
+	const module = {
+		exports: {},
+		filename: definition.filename,
+		id: definition.filename,
+		path: definition.dirname,
+		require: nativeRequire,
+		loaded: false,
+	};
+	commonJsModuleCache.set(modulePath, module);
+	const graphRequire: NodeJS.Require = Object.assign(
+		(specifier: string) => {
+			const resolved = nativeRequire.resolve(specifier);
+			let graphPath = resolved;
+			try {
+				graphPath = fs.realpathSync(resolved);
+			} catch {
+				// Builtins and virtual modules have no filesystem realpath.
+			}
+			return commonJsModuleDefinitions.has(graphPath) ? evaluateGraphCommonJs(graphPath) : nativeRequire(specifier);
+		},
+		{
+			resolve: nativeRequire.resolve,
+			cache: nativeRequire.cache,
+			extensions: nativeRequire.extensions,
+			main: nativeRequire.main,
+		},
+	);
+	module.require = graphRequire;
+	const execute = new Function("exports", "require", "module", "__filename", "__dirname", definition.source);
+	try {
+		execute.call(module.exports, module.exports, graphRequire, module, definition.filename, definition.dirname);
+		module.loaded = true;
+		return module.exports;
+	} catch (error) {
+		commonJsModuleCache.delete(modulePath);
+		throw error;
+	}
+}
+
+Reflect.set(globalThis, COMMONJS_REQUIRE_GLOBAL, evaluateGraphCommonJs);
 
 let legacyPiLoadTag = 0;
 
@@ -1255,13 +1321,12 @@ async function collectExtensionModules(entryRealPath: string): Promise<Map<strin
 }
 
 /**
- * Wrap graph-owned CommonJS source in a synchronous ESM default export.
- * Resolving from the owning package preserves dependency resolution; linkedom's
- * canvas bridge uses its bundled fallback because OMP does not ship native canvas.
+ * The shared evaluator gives ESM default imports and sibling `require()` calls
+ * the same `module.exports` value and cycle-aware cache. Linkedom's canvas
+ * bridge uses its bundled fallback because OMP does not ship native canvas.
  */
 async function synthesizeCommonJsDefaultModule(modulePath: string, source: string): Promise<string> {
 	const packageRoot = await findPackageRoot(modulePath);
-	const packageJsonPath = packageRoot ? path.join(packageRoot, "package.json") : modulePath;
 	let targetPath = modulePath;
 	let commonJsSource = source;
 	if (packageRoot) {
@@ -1277,19 +1342,17 @@ async function synthesizeCommonJsDefaultModule(modulePath: string, source: strin
 		commonJsSource = firstLineEnd === -1 ? "" : commonJsSource.slice(firstLineEnd + 1);
 	}
 
-	const specifier = packageRoot ? `./${path.relative(packageRoot, targetPath).split(path.sep).join("/")}` : targetPath;
 	const targetDir = path.dirname(targetPath);
-	return [
-		'import { createRequire as __ompCreateRequire } from "node:module";',
-		`const __ompPackageRequire = __ompCreateRequire(${JSON.stringify(packageJsonPath)});`,
-		`const __ompFilename = __ompPackageRequire.resolve(${JSON.stringify(specifier)});`,
-		"const __ompRequire = __ompCreateRequire(__ompFilename);",
-		`const __ompModule = { exports: {}, filename: __ompFilename, id: __ompFilename, path: ${JSON.stringify(targetDir)}, require: __ompRequire };`,
-		"(function (exports, require, module, __filename, __dirname) {",
-		commonJsSource,
-		`}).call(__ompModule.exports, __ompModule.exports, __ompRequire, __ompModule, __ompFilename, ${JSON.stringify(targetDir)});`,
-		"export default __ompModule.exports;",
-	].join("\n");
+	const executableSource = targetPath.endsWith(".cts")
+		? commonJsTypeScriptTranspiler.transformSync(commonJsSource)
+		: commonJsSource;
+	commonJsModuleDefinitions.set(modulePath, {
+		source: executableSource,
+		filename: targetPath,
+		dirname: targetDir,
+	});
+	commonJsModuleCache.delete(modulePath);
+	return `export default globalThis[${JSON.stringify(COMMONJS_REQUIRE_GLOBAL)}](${JSON.stringify(modulePath)});\n`;
 }
 
 /**
