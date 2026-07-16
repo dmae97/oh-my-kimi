@@ -389,6 +389,8 @@ export interface CreateAgentSessionOptions {
 	modelPatternAuthFallback?: string;
 	/** Role name used to install retry fallbacks after deferred subagent patterns resolve. */
 	modelPatternFallbackRole?: string;
+	/** Validated default retry chain to install when a deferred singleton pattern resolves. */
+	modelPatternDefaultFallbackChain?: string[];
 	/** Thinking selector. Default: from settings, else unset */
 	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Models available for cycling (Ctrl+P in interactive mode) */
@@ -2117,6 +2119,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 						if (seenSelectors.has(fallbackSelector)) continue;
 						seenSelectors.add(fallbackSelector);
 						fallbackSelectors.push(fallbackSelector);
+					}
+					if (fallbackSelectors.length === 0) {
+						for (const selector of options.modelPatternDefaultFallbackChain ?? []) {
+							if (typeof selector !== "string" || seenSelectors.has(selector)) continue;
+							seenSelectors.add(selector);
+							fallbackSelectors.push(selector);
+						}
 					}
 					if (fallbackSelectors.length > 0) {
 						const modelRoles: Record<string, string> = {};

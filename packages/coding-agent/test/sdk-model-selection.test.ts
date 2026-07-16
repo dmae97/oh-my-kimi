@@ -244,6 +244,32 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		}
 	});
 
+	test("installs an inherited fallback chain for a deferred singleton modelPattern", async () => {
+		const settings = Settings.isolated({
+			"retry.fallbackChains": {
+				default: ["runtime-provider/runtime-reasoning-model"],
+			},
+		});
+		settings.setModelRole("default", "runtime-provider/runtime-reasoning-model");
+		const { session } = await createAgentSession({
+			...(await buildSessionOptions("runtime-provider/runtime-model")),
+			settings,
+			modelPatternFallbackRole: "subagent:deferred-default",
+			modelPatternDefaultFallbackChain: ["runtime-provider/runtime-reasoning-model"],
+		});
+
+		try {
+			expect(session.model?.provider).toBe("runtime-provider");
+			expect(session.model?.id).toBe("runtime-model");
+			expect(session.settings.getModelRole("subagent:deferred-default")).toBe("runtime-provider/runtime-model");
+			expect(session.settings.get("retry.fallbackChains")["subagent:deferred-default"]).toEqual([
+				"runtime-provider/runtime-reasoning-model",
+			]);
+		} finally {
+			await session.dispose();
+		}
+	});
+
 	test("splits deferred comma-delimited modelPattern and installs fallback chain", async () => {
 		const { session } = await createAgentSession({
 			...(await buildSessionOptions("runtime-provider/runtime-model,runtime-provider/runtime-reasoning-model")),
