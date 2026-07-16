@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { AuthStorage } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -11,6 +12,7 @@ import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
+import { type } from "arktype";
 
 // Regression for issue #5305: image-gen is registered as a custom tool, and
 // custom tools are force-activated regardless of the `toolNames` filter. Before
@@ -69,6 +71,7 @@ describe("generate_image tool gating", () => {
 		const { session } = await createAgentSession({
 			cwd: registryDir,
 			agentDir: registryDir,
+			enableMCP: false,
 			modelRegistry,
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({ "plan.enabled": false }),
@@ -190,6 +193,38 @@ describe("generate_image tool gating", () => {
 		await session.refreshMCPTools([]);
 
 		expect(session.getXdevToolEntries().map(entry => entry.name)).toContain(ambientTool.name);
+		expect(session.getActiveToolNames()).toContain("write");
+	});
+
+	it("activates write when an RPC host tool mounts under xd://", async () => {
+		const { session } = await createAgentSession({
+			cwd: registryDir,
+			agentDir: registryDir,
+			modelRegistry,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "plan.enabled": false, "generate_image.enabled": false }),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			enableMCP: false,
+			toolNames: ["read"],
+		});
+		sessions.push(session);
+		expect(session.getXdevToolEntries()).toEqual([]);
+		expect(session.getActiveToolNames()).not.toContain("write");
+
+		const rpcTool: AgentTool = {
+			name: "rpc_search",
+			label: "RPC Search",
+			description: "Search RPC host data",
+			parameters: type({}),
+			loadMode: "discoverable",
+			async execute() {
+				return { content: [] };
+			},
+		};
+		await session.refreshRpcHostTools([rpcTool]);
+
+		expect(session.getXdevToolEntries().map(entry => entry.name)).toContain("rpc_search");
 		expect(session.getActiveToolNames()).toContain("write");
 	});
 });

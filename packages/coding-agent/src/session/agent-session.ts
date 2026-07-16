@@ -843,6 +843,8 @@ export interface AgentSessionConfig {
 	builtInToolNames?: Iterable<string>;
 	/** Update tool-session predicates that render guidance from the live active tool set. */
 	setActiveToolNames?: (names: Iterable<string>) => void;
+	/** Register the write transport lazily when runtime xdev mounts first need it. */
+	ensureWriteRegistered?: () => Promise<void>;
 	/** Current session pre-LLM message transform pipeline */
 	transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => AgentMessage[] | Promise<AgentMessage[]>;
 	/**
@@ -1940,6 +1942,7 @@ export class AgentSession {
 	#getLocalCalendarDate: () => string;
 	#getMcpServerInstructions: (() => Map<string, string> | undefined) | undefined;
 	#setActiveToolNames: ((names: Iterable<string>) => void) | undefined;
+	#ensureWriteRegistered: (() => Promise<void>) | undefined;
 	#disconnectOwnedMcpManager: (() => Promise<void>) | undefined;
 	#presentationPinnedToolNames: ReadonlySet<string> | undefined;
 	#baseSystemPrompt: string[];
@@ -2546,6 +2549,7 @@ export class AgentSession {
 		this.#createVibeTools = config.createVibeTools;
 		this.#builtInToolNames = new Set(config.builtInToolNames ?? []);
 		this.#presentationPinnedToolNames = config.presentationPinnedToolNames;
+		this.#ensureWriteRegistered = config.ensureWriteRegistered;
 		this.#transformContext = config.transformContext ?? (messages => messages);
 		this.#transformProviderContext = config.transformProviderContext;
 		this.#sideStreamFn = config.sideStreamFn ?? streamSimple;
@@ -6761,8 +6765,7 @@ export class AgentSession {
 			const tool = this.#toolRegistry.get(name);
 			if (!tool) continue;
 			// Discoverable tools are presented as `xd://` devices (kept out of the
-			// top-level schema) when the transport is active; everything else stays
-			// top-level. `loadMode` decides presentation only — selection is upstream.
+			// top-level schema) when the transport is active; presentation pins stay top-level.
 			if (
 				this.#xdevRegistry &&
 				this.#presentationPinnedToolNames?.has(name) !== true &&
@@ -6774,16 +6777,32 @@ export class AgentSession {
 				validToolNames.push(name);
 			}
 		}
-		// Reconcile the dynamic `xd://` mounts: newly-active discoverable tools are
-		// mounted, deactivated ones dropped (built-in devices are preserved). A
-		// removed or disconnected tool must not stay callable through a stale device.
+
+		const pinnedWrite = this.#presentationPinnedToolNames?.has("write") === true;
+		const activeDeferrableTool = tools.some(tool => tool.deferrable === true);
+		const transportNeeded =
+			mountedTools.length > 0 || activeDeferrableTool || this.settings.get("plan.enabled") || pinnedWrite;
+		if (transportNeeded) {
+			await this.#ensureWriteRegistered?.();
+			const write = this.#toolRegistry.get("write");
+			if (write && !validToolNames.includes("write")) {
+				tools.push(this.#wrapToolForAcpPermission(write));
+				validToolNames.push("write");
+			}
+		} else if (this.#presentationPinnedToolNames !== undefined) {
+			const writeNameIndex = validToolNames.indexOf("write");
+			if (writeNameIndex >= 0) validToolNames.splice(writeNameIndex, 1);
+			const writeToolIndex = tools.findIndex(tool => tool.name === "write");
+			if (writeToolIndex >= 0) tools.splice(writeToolIndex, 1);
+		}
+
+		// Reconcile dynamic `xd://` mounts; absent tools must not remain callable.
 		const previousMounted = this.#mountedXdevToolNames;
 		this.#mountedXdevToolNames = new Set(mountedTools.map(tool => tool.name));
 		this.#xdevRegistry?.reconcile(mountedTools);
 		this.#notifyXdevMountDelta(previousMounted);
 		this.#setActiveToolNames?.(validToolNames);
 		this.agent.setTools(tools);
-
 		// Rebuild base system prompt with new tool set, but only when the tool set
 		// actually changed. MCP servers can reconnect at arbitrary times and call
 		// `refreshMCPTools` -> `#applyActiveToolsByName` even though the resulting
@@ -7041,31 +7060,10 @@ export class AgentSession {
 			this.#toolRegistry.set(finalTool.name, finalTool);
 		}
 
-		// Every connected MCP tool is enabled. Keep write while any selected device,
-		// deferrable tool, plan flow, or presentation pin still needs the transport.
-		const nextActive = new Set([...this.#getActiveNonMCPToolNames(), ...mcpTools.map(tool => tool.name)]);
-		const incomingMcpDevice =
-			this.#xdevRegistry !== undefined &&
-			mcpTools.some(tool => {
-				const registered = this.#toolRegistry.get(tool.name);
-				return (
-					registered !== undefined &&
-					this.#presentationPinnedToolNames?.has(tool.name) !== true &&
-					isMountableUnderXdev(registered)
-				);
-			});
-		const remainingNonMcpDevice = [...this.#mountedXdevToolNames].some(name => !isMCPToolName(name));
-		const activeDeferrableTool = [...nextActive].some(name => this.#toolRegistry.get(name)?.deferrable === true);
-		const pinnedWrite = this.#presentationPinnedToolNames?.has("write") === true;
-		const transportNeeded =
-			incomingMcpDevice ||
-			remainingNonMcpDevice ||
-			activeDeferrableTool ||
-			this.settings.get("plan.enabled") ||
-			pinnedWrite;
-		if (transportNeeded && this.#toolRegistry.has("write")) nextActive.add("write");
-		else if (this.#presentationPinnedToolNames !== undefined) nextActive.delete("write");
-		await this.#applyActiveToolsByName([...nextActive]);
+		// Every connected MCP tool is selected; centralized repartitioning owns
+		// presentation pins and write-transport activation/removal.
+		const nextActive = [...new Set([...this.#getActiveNonMCPToolNames(), ...mcpTools.map(tool => tool.name)])];
+		await this.#applyActiveToolsByName(nextActive);
 	}
 
 	/**

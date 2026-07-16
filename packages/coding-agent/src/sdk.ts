@@ -2247,15 +2247,21 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			builtInRegistryToolNames.delete("edit");
 		}
 
-		const ensureWriteRegistered = async (): Promise<void> => {
-			if (toolRegistry.has("write")) return;
-			const writeTool = await logger.time("createTools:write:session", BUILTIN_TOOLS.write, toolSession);
-			if (!writeTool) return;
-			toolRegistry.set(
-				writeTool.name,
-				new ExtensionToolWrapper(wrapToolWithMetaNotice(writeTool), extensionRunner) as Tool,
-			);
-			builtInRegistryToolNames.add(writeTool.name);
+		let writeRegistration: Promise<void> | undefined;
+		const ensureWriteRegistered = (): Promise<void> => {
+			if (toolRegistry.has("write")) return Promise.resolve();
+			writeRegistration ??= (async () => {
+				const writeTool = await logger.time("createTools:write:session", BUILTIN_TOOLS.write, toolSession);
+				if (!writeTool || toolRegistry.has("write")) return;
+				toolRegistry.set(
+					writeTool.name,
+					new ExtensionToolWrapper(wrapToolWithMetaNotice(writeTool), extensionRunner) as Tool,
+				);
+				builtInRegistryToolNames.add(writeTool.name);
+			})().finally(() => {
+				writeRegistration = undefined;
+			});
+			return writeRegistration;
 		};
 
 		// Existing staged/device paths need write registered before active-set assembly.
@@ -2768,6 +2774,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			initialMountedXdevToolNames,
 			presentationPinnedToolNames: explicitlyRequestedToolNameSet,
 			setActiveToolNames,
+			ensureWriteRegistered,
 			getMcpServerInstructions: mcpManager
 				? () => {
 						const raw = mcpManager.getServerInstructions();
