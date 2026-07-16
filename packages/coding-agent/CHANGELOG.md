@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `startup.quiet` still rendering the `xdev: xd://: mounted …` status line when MCP tools connect; quiet startup now suppresses only the user-visible mount notice while retaining the hidden model-facing device update ([#5670](https://github.com/can1357/oh-my-pi/issues/5670)).
+
 ## [17.0.1] - 2026-07-16
 
 ### Changed
