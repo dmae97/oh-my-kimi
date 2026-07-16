@@ -1705,6 +1705,11 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				return usage(`Directory does not exist: ${resolvedPath}`, runtime);
 			}
 			try {
+				await runtime.settings.flush();
+			} catch (err) {
+				return usage(`Failed to save pending settings: ${errorMessage(err)}`, runtime);
+			}
+			try {
 				await runtime.sessionManager.moveTo(resolvedPath);
 			} catch (err) {
 				return usage(`Move failed: ${errorMessage(err)}`, runtime);

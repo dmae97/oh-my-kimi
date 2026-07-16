@@ -1,4 +1,7 @@
 import { afterEach, beforeAll, describe, expect, type Mock, test, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
@@ -208,6 +211,24 @@ describe("ModelHub", () => {
 			expect(defaultRow).not.toContain("inherit");
 			expect(smolRow).toContain("auto");
 		});
+		test("thinking-only edits preserve the model and scope from the persisted role layer", () => {
+			const storedModel = makeModel("test", "global-role-model");
+			const effectiveModel = makeModel("test", "runtime-role-model");
+			const settings = Settings.isolated({ modelRoleStorage: "project" });
+			settings.setModelRole("default", `${storedModel.provider}/${storedModel.id}`);
+			settings.overrideModelRoles({ default: `${effectiveModel.provider}/${effectiveModel.id}` });
+			const { hub, onAssign } = createHub({ models: [storedModel, effectiveModel], scoped: true, settings });
+
+			hub.handleInput(UP); // All models → Roles.
+			hub.handleInput("\n"); // Dive into role rows on DEFAULT.
+			hub.handleInput("t");
+			hub.handleInput("\x1b[C"); // Inherit → off.
+			hub.handleInput("\n");
+
+			expect(onAssign.mock.calls[0]?.[0]).toBe(storedModel);
+			expect(onAssign.mock.calls[0]?.[1]).toBe("default");
+			expect(onAssign.mock.calls[0]?.[4]).toBe("global");
+		});
 
 		test("x clears a configured role back to auto-selection", () => {
 			const model = makeModel("test", "worker-model");
@@ -343,6 +364,8 @@ describe("ModelHub", () => {
 			const strip = footerLine(hub.render(220));
 			expect(strip).toContain("default");
 			expect(strip).toContain("retry-fallback");
+			expect(strip).not.toContain("project default");
+			expect(strip).not.toContain("global default");
 
 			hub.handleInput("\n"); // assign to default (first chip)
 			expect(onAssign).toHaveBeenCalledTimes(1);
@@ -351,6 +374,7 @@ describe("ModelHub", () => {
 			expect(call?.[1]).toBe("default");
 			expect(call?.[2]).toBe(ThinkingLevel.Inherit);
 			expect(call?.[3]).toBe("openai/gpt-5.5");
+			expect(call?.[4]).toBe("global");
 
 			// The thinking strip follows immediately, scoped to the model's
 			// real ladder: gpt-5.5 tops out at xhigh — no invented max tier.
@@ -358,6 +382,185 @@ describe("ModelHub", () => {
 			expect(thinking).toContain("inherit");
 			expect(thinking).toContain("xhigh");
 			expect(thinking).not.toContain("max");
+		});
+		test("project storage exposes project and global role actions with callback scopes", () => {
+			const model = makeModel("test", "scoped-role-model");
+			const settings = Settings.isolated({ modelRoleStorage: "project" });
+			const projectHarness = createHub({ models: [model], scoped: true, settings });
+
+			projectHarness.hub.handleInput("\n");
+			const projectStrip = footerLine(projectHarness.hub.render(220));
+			expect(projectStrip).toContain("project default");
+			expect(projectStrip).toContain("global default");
+			projectHarness.hub.handleInput("\n");
+			expect(projectHarness.onAssign.mock.calls[0]?.[4]).toBe("project");
+
+			const globalHarness = createHub({ models: [model], scoped: true, settings });
+			globalHarness.hub.handleInput("\n");
+			globalHarness.hub.handleInput(DOWN);
+			globalHarness.hub.handleInput("\n");
+			expect(globalHarness.onAssign.mock.calls[0]?.[4]).toBe("global");
+		});
+		test("shadowed global assignments unassign from the global chip", () => {
+			const globalModel = makeModel("test", "a-global-role-model");
+			const projectModel = makeModel("test", "z-project-role-model");
+			const settings = Settings.isolated({ modelRoleStorage: "project" });
+			settings.setModelRole("default", `${globalModel.provider}/${globalModel.id}`);
+			settings.setProjectModelRole("default", `${projectModel.provider}/${projectModel.id}`);
+			const { hub, onAssign, onUnassign } = createHub({
+				models: [globalModel, projectModel],
+				scoped: true,
+				settings,
+			});
+
+			hub.handleInput("\t"); // Sidebar → model list.
+			hub.handleInput(DOWN); // Effective project model → shadowed global model.
+			hub.handleInput("\n");
+			hub.handleInput(DOWN); // Project default → global default.
+			hub.handleInput("\n");
+
+			expect(onUnassign).toHaveBeenCalledWith("default", "global");
+			expect(onAssign).not.toHaveBeenCalled();
+		});
+		test("overlay tombstones do not hide stored scoped default assignments", async () => {
+			const model = makeModel("test", "claude-haiku-4.5");
+			const selector = `${model.provider}/${model.id}`;
+			const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-model-hub-"));
+			const cwd = path.join(root, "project");
+			const agentDir = path.join(root, "agent");
+			const overlayPath = path.join(root, "overlay.yml");
+
+			try {
+				await Bun.write(
+					path.join(agentDir, "config.yml"),
+					`modelRoleStorage: project\nmodelRoles:\n  default: ${selector}\n  smol: ${selector}\n`,
+				);
+				await Bun.write(
+					path.join(cwd, ".omp", "config.yml"),
+					`modelRoles:\n  default: ${selector}\n  smol: ${selector}\n`,
+				);
+				await Bun.write(overlayPath, "modelRoles:\n  default: null\n  smol: null\n");
+				const settings = await Settings.loadReadOnly({ cwd, agentDir, configFiles: [overlayPath] });
+				expect(settings.getModelRole("default")).toBeUndefined();
+				expect(settings.getGlobalModelRole("default")).toBe(selector);
+				expect(settings.getProjectModelRole("default")).toBe(selector);
+
+				const projectDefault = createHub({ models: [model], scoped: true, settings });
+				expect(normalize(projectDefault.hub.render(220))).toContain("○smol");
+				projectDefault.hub.handleInput("\n");
+				projectDefault.hub.handleInput("\n");
+				expect(projectDefault.onUnassign).toHaveBeenCalledWith("default", "project");
+				expect(projectDefault.onAssign).not.toHaveBeenCalled();
+
+				const globalDefault = createHub({ models: [model], scoped: true, settings });
+				globalDefault.hub.handleInput("\n");
+				globalDefault.hub.handleInput(DOWN);
+				globalDefault.hub.handleInput("\n");
+				expect(globalDefault.onUnassign).toHaveBeenCalledWith("default", "global");
+				expect(globalDefault.onAssign).not.toHaveBeenCalled();
+
+				const projectAutoSelected = createHub({ models: [model], scoped: true, settings });
+				projectAutoSelected.hub.handleInput("\n");
+				projectAutoSelected.hub.handleInput(DOWN);
+				projectAutoSelected.hub.handleInput(DOWN);
+				projectAutoSelected.hub.handleInput("\n");
+				expect(projectAutoSelected.onUnassign).toHaveBeenCalledWith("smol", "project");
+				expect(projectAutoSelected.onAssign).not.toHaveBeenCalled();
+
+				const globalAutoSelected = createHub({ models: [model], scoped: true, settings });
+				globalAutoSelected.hub.handleInput("\n");
+				globalAutoSelected.hub.handleInput(DOWN);
+				globalAutoSelected.hub.handleInput(DOWN);
+				globalAutoSelected.hub.handleInput(DOWN);
+				globalAutoSelected.hub.handleInput("\n");
+				expect(globalAutoSelected.onUnassign).toHaveBeenCalledWith("smol", "global");
+				expect(globalAutoSelected.onAssign).not.toHaveBeenCalled();
+			} finally {
+				await fs.rm(root, { recursive: true, force: true });
+			}
+		});
+
+		test("auto-selected roles remain assignable when the selected scope has no stored role", () => {
+			const model = makeModel("test", "claude-haiku-4.5");
+			const settings = Settings.isolated({ modelRoleStorage: "project" });
+			const { hub, onAssign, onUnassign } = createHub({ models: [model], scoped: true, settings });
+			expect(normalize(hub.render(220))).toContain("○smol");
+
+			hub.handleInput("\n");
+			hub.handleInput(DOWN);
+			hub.handleInput(DOWN);
+			hub.handleInput("\n");
+
+			expect(onAssign.mock.calls[0]?.[1]).toBe("smol");
+			expect(onAssign.mock.calls[0]?.[4]).toBe("project");
+			expect(onUnassign).not.toHaveBeenCalled();
+		});
+
+		test("global assignments preserve thinking from the global role instead of the project override", () => {
+			const configuredModel = getBundledModel("openai", "gpt-5.5");
+			const targetModel = getBundledModel("openai", "gpt-5.6");
+			if (!configuredModel || !targetModel) {
+				throw new Error("Expected bundled OpenAI models for scoped thinking test");
+			}
+			const selector = `${configuredModel.provider}/${configuredModel.id}`;
+			const settings = Settings.isolated({ modelRoleStorage: "project" });
+			settings.setModelRole("smol", `${selector}:low,missing/unavailable:high`);
+			settings.setModelRole("default", "@smol");
+			settings.setProjectModelRole("smol", `${selector}:high`);
+			settings.setProjectModelRole("default", "@smol");
+			const { hub, onAssign } = createHub({ models: [configuredModel, targetModel], scoped: true, settings });
+
+			hub.handleInput("\t"); // Sidebar → model list.
+			hub.handleInput(DOWN); // Effective configured model → assignment target.
+			hub.handleInput("\n");
+			hub.handleInput(DOWN); // Project default → global default.
+			hub.handleInput("\n");
+
+			expect(onAssign.mock.calls[0]?.[2]).toBe(ThinkingLevel.Low);
+			expect(onAssign.mock.calls[0]?.[4]).toBe("global");
+			hub.handleInput("\n"); // Reapply the preselected global thinking level.
+			expect(onAssign.mock.calls[1]?.[2]).toBe(ThinkingLevel.Low);
+			expect(onAssign.mock.calls[1]?.[4]).toBe("global");
+		});
+		test("project-scope alias falls back to the global role when the project role is absent", () => {
+			const configuredModel = getBundledModel("openai", "gpt-5.5");
+			const targetModel = getBundledModel("openai", "gpt-5.6");
+			if (!configuredModel || !targetModel) {
+				throw new Error("Expected bundled OpenAI models for project alias fallback test");
+			}
+			const selector = `${configuredModel.provider}/${configuredModel.id}`;
+			const settings = Settings.isolated({ modelRoleStorage: "project" });
+			// Global smol selects a concrete model with :low plus an unavailable
+			// fallback — the alias must resolve to this, not built-in priority.
+			settings.setModelRole("smol", `${selector}:low,missing/unavailable:high`);
+			// Global default also points at @smol — another project/effective
+			// conflict that would expose merged-resolution contamination if the
+			// alias lookup consulted merged settings instead of project-first.
+			settings.setModelRole("default", "@smol");
+			// Project default is @smol; project smol is absent — the alias must
+			// fall back to the global smol, not built-in priority defaults.
+			settings.setProjectModelRole("default", "@smol");
+
+			// Assignment thinking: the preserved level comes from the global
+			// smol fallback (:low), not built-in priority defaults (Inherit).
+			const assignHub = createHub({ models: [configuredModel, targetModel], scoped: true, settings });
+			assignHub.hub.handleInput("\t"); // Sidebar → model list.
+			assignHub.hub.handleInput(DOWN); // gpt-5.5 → gpt-5.6.
+			assignHub.hub.handleInput("\n"); // Open the role strip for gpt-5.6.
+			assignHub.hub.handleInput("\n"); // Assign to "project default" (first chip).
+			expect(assignHub.onAssign).toHaveBeenCalledTimes(1);
+			expect(assignHub.onAssign.mock.calls[0]?.[1]).toBe("default");
+			expect(assignHub.onAssign.mock.calls[0]?.[2]).toBe(ThinkingLevel.Low);
+			expect(assignHub.onAssign.mock.calls[0]?.[4]).toBe("project");
+
+			// Chip classification: on gpt-5.5, the project default chip is
+			// "assigned here" because @smol falls back to global smol → gpt-5.5.
+			const classifyHub = createHub({ models: [configuredModel, targetModel], scoped: true, settings });
+			classifyHub.hub.handleInput("\t"); // Sidebar → model list.
+			classifyHub.hub.handleInput("\n"); // Open the role strip for gpt-5.5.
+			classifyHub.hub.handleInput("\n"); // Select "project default" (first chip).
+			expect(classifyHub.onUnassign).toHaveBeenCalledWith("default", "project");
+			expect(classifyHub.onAssign).not.toHaveBeenCalled();
 		});
 
 		test("renders max as a real final tier on max-capable models (gpt-5.6)", () => {

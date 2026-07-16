@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an opt-in per-project model role storage mode with global fallback from the model selector.
+
 ## [17.0.1] - 2026-07-16
 
 ### Changed

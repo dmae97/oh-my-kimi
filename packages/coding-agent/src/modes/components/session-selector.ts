@@ -879,6 +879,10 @@ export class SessionSelectorComponent extends Container {
 	lockInput(): void {
 		this.#inputLocked = true;
 	}
+	/** Re-enable input after a failed resume so the user can pick again. */
+	unlockInput(): void {
+		this.#inputLocked = false;
+	}
 
 	/**
 	 * Dispose the session list explicitly: while the delete-confirmation dialog

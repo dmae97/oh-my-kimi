@@ -13,7 +13,11 @@ import {
 	saveWatchdogConfigFile,
 } from "../../advisor";
 import { reset as resetCapabilities } from "../../capability";
-import { formatModelSelectorValue, resolveAdvisorRoleSelection } from "../../config/model-resolver";
+import {
+	formatModelSelectorValue,
+	resolveAdvisorRoleSelection,
+	resolveModelRoleValue,
+} from "../../config/model-resolver";
 import { getRoleInfo } from "../../config/model-roles";
 import { settings } from "../../config/settings";
 import { disableProvider, enableProvider } from "../../discovery";
@@ -46,7 +50,12 @@ import {
 	type ResetUsageAccount,
 	toResetUsageAccounts,
 } from "../../slash-commands/helpers/reset-usage";
-import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../../thinking";
+import {
+	AUTO_THINKING,
+	type ConfiguredThinkingLevel,
+	concreteThinkingLevel,
+	parseConfiguredThinkingLevel,
+} from "../../thinking";
 import {
 	isImageProviderPreference,
 	isSearchProviderId,
@@ -68,7 +77,7 @@ import { ExtensionDashboard } from "../components/extensions";
 import { HistorySearchComponent } from "../components/history-search";
 import { LoginDialogComponent } from "../components/login-dialog";
 import { LogoutAccountSelectorComponent } from "../components/logout-account-selector";
-import { ModelHubComponent } from "../components/model-hub";
+import { ModelHubComponent, type ModelRoleSelectionScope } from "../components/model-hub";
 import { ModelPickerComponent } from "../components/model-picker";
 import { OAuthSelectorComponent } from "../components/oauth-selector";
 import { PluginSelectorComponent } from "../components/plugin-selector";
@@ -87,6 +96,15 @@ const MANUAL_LOGIN_PROMPT = "Paste the authorization code (or full redirect URL)
 
 export class SelectorController {
 	constructor(private ctx: InteractiveModeContext) {}
+	#defaultRoleMutationTail = Promise.resolve();
+
+	async #acquireDefaultRoleMutation(): Promise<() => void> {
+		const previous = this.#defaultRoleMutationTail;
+		const { promise, resolve } = Promise.withResolvers<void>();
+		this.#defaultRoleMutationTail = previous.then(() => promise);
+		await previous;
+		return resolve;
+	}
 
 	async #refreshOAuthProviderAuthState(): Promise<void> {
 		const oauthProviders = getOAuthProviders();
@@ -710,55 +728,169 @@ export class SelectorController {
 			this.ctx.session.modelRegistry,
 			this.ctx.session.scopedModels,
 			{
-				onAssign: async (model, role, thinkingLevel, selector) => {
+				onAssign: async (model, role, thinkingLevel, selector, scope?: ModelRoleSelectionScope) => {
+					const releaseDefaultMutation = role === "default" ? await this.#acquireDefaultRoleMutation() : undefined;
+					const configuredStorage = this.ctx.settings.get("modelRoleStorage");
+					const targetScope = configuredStorage === "project" ? (scope ?? "project") : "global";
 					// `auto` is session-global: never baked into a per-role model value
 					// (it can't round-trip through `model:<level>`). Apply it to the session
 					// separately and persist via `defaultThinkingLevel`.
 					const isAuto = thinkingLevel === AUTO_THINKING;
 					const concreteThinking = isAuto || thinkingLevel === undefined ? undefined : thinkingLevel;
 					const selectorValue = selector ?? `${model.provider}/${model.id}`;
+					const scopeLabel =
+						configuredStorage === "project" ? `${targetScope === "project" ? "Project" : "Global"} ` : "";
+					const defaultStatusLabel = configuredStorage === "project" ? `${scopeLabel}default` : "Default";
 					try {
 						if (role === "default") {
-							const { switched } = await this.ctx.session.setModel(model, role, {
-								selector,
-								thinkingLevel: isAuto ? ThinkingLevel.Inherit : concreteThinking,
-								persist: true,
-								currentContextTokens,
-							});
-							if (isAuto) {
-								if (switched) {
-									this.ctx.session.setThinkingLevel(AUTO_THINKING, true);
-								} else {
+							const effectiveProvenance = this.ctx.settings.getModelRoleProvenance("default");
+							const shadowedGlobal =
+								configuredStorage === "project" &&
+								targetScope === "global" &&
+								(effectiveProvenance === "project" ||
+									effectiveProvenance === "overlay" ||
+									(effectiveProvenance === "runtime" &&
+										this.ctx.settings.isProjectModelRoleRuntimeOverrideActive("default")));
+							const shadowedProject =
+								configuredStorage === "project" &&
+								targetScope === "project" &&
+								effectiveProvenance === "overlay";
+							if (shadowedGlobal) {
+								this.ctx.settings.setModelRole(
+									"default",
+									formatModelSelectorValue(selectorValue, concreteThinking),
+								);
+								if (isAuto) {
 									this.ctx.settings.set("defaultThinkingLevel", AUTO_THINKING);
 								}
-							} else if (switched && concreteThinking && concreteThinking !== ThinkingLevel.Inherit) {
-								this.ctx.session.setThinkingLevel(concreteThinking);
-							}
-							if (switched) {
+							} else if (shadowedProject) {
+								this.ctx.settings.setProjectModelRole(
+									"default",
+									formatModelSelectorValue(selectorValue, concreteThinking),
+								);
+								if (isAuto) {
+									this.ctx.settings.set("defaultThinkingLevel", AUTO_THINKING);
+								}
+							} else {
+								const { switched } = await this.ctx.session.setModel(model, role, {
+									selector,
+									thinkingLevel: isAuto ? ThinkingLevel.Inherit : concreteThinking,
+									persist: targetScope === "global",
+									currentContextTokens,
+								});
+								if (!switched) return;
+								if (targetScope === "project") {
+									this.ctx.settings.setProjectModelRole(
+										"default",
+										formatModelSelectorValue(selectorValue, concreteThinking),
+									);
+								}
+								if (isAuto) {
+									this.ctx.session.setThinkingLevel(AUTO_THINKING, true);
+								} else if (concreteThinking && concreteThinking !== ThinkingLevel.Inherit) {
+									this.ctx.session.setThinkingLevel(concreteThinking);
+								}
 								this.ctx.statusLine.invalidate();
 								this.ctx.updateEditorBorderColor();
 							}
-							this.ctx.showStatus(`Default model: ${selector ?? model.id}`);
+							this.ctx.showStatus(`${defaultStatusLabel} model: ${selector ?? model.id}`);
 						} else {
 							// Other roles (smol, slow, custom): update settings, not the current model.
-							this.ctx.settings.setModelRole(role, formatModelSelectorValue(selectorValue, concreteThinking));
+							const modelRoleValue = formatModelSelectorValue(selectorValue, concreteThinking);
+							if (targetScope === "project") {
+								this.ctx.settings.setProjectModelRole(role, modelRoleValue);
+							} else {
+								this.ctx.settings.setModelRole(role, modelRoleValue);
+							}
 							if (isAuto) {
 								this.ctx.session.setThinkingLevel(AUTO_THINKING, true);
 							}
 							const roleInfo = getRoleInfo(role, settings);
-							this.ctx.showStatus(`${roleInfo?.name ?? role} model: ${selector ?? model.id}`);
+							this.ctx.showStatus(`${scopeLabel}${roleInfo?.name ?? role} model: ${selector ?? model.id}`);
 						}
 					} catch (error) {
 						this.ctx.showError(error instanceof Error ? error.message : String(error));
+					} finally {
+						releaseDefaultMutation?.();
+						hub?.refreshAfterExternalMutation();
 					}
 				},
-				onUnassign: role => {
+				onUnassign: async (role, scope?: ModelRoleSelectionScope) => {
+					const releaseDefaultMutation = role === "default" ? await this.#acquireDefaultRoleMutation() : undefined;
+					const configuredStorage = this.ctx.settings.get("modelRoleStorage");
+					const targetScope = configuredStorage === "project" ? (scope ?? "project") : "global";
+					const scopeLabel =
+						configuredStorage === "project" ? `${targetScope === "project" ? "Project" : "Global"} ` : "";
 					try {
-						this.ctx.settings.setModelRole(role, undefined);
+						const previousEffectiveRoleValue =
+							role === "default" ? this.ctx.settings.getModelRole("default") : undefined;
+						if (targetScope === "project") {
+							this.ctx.settings.clearProjectModelRole(role);
+						} else {
+							this.ctx.settings.setModelRole(role, undefined);
+						}
 						const roleInfo = getRoleInfo(role, settings);
-						this.ctx.showStatus(`${roleInfo?.name ?? role} role cleared — auto-selection applies`);
+						this.ctx.showStatus(`${scopeLabel}${roleInfo?.name ?? role} role cleared — auto-selection applies`);
+						// Clearing either persisted scope can also remove a captured
+						// runtime override. When that changes the effective default,
+						// resolve the newly exposed persisted layer and switch the live
+						// session without writing it back to global settings. Overlay
+						// and runtime provenance remain authoritative and session-neutral.
+						if (role === "default") {
+							const fallbackRoleValue = this.ctx.settings.getModelRole("default");
+							const fallbackProvenance = this.ctx.settings.getModelRoleProvenance("default");
+							const exposesPersistedFallback =
+								fallbackProvenance === "project" || fallbackProvenance === "global";
+							if (
+								fallbackRoleValue &&
+								fallbackRoleValue !== previousEffectiveRoleValue &&
+								exposesPersistedFallback
+							) {
+								const scopedModels = this.ctx.session.scopedModels.map(sm => sm.model);
+								const availableModels =
+									scopedModels.length > 0 ? scopedModels : this.ctx.session.getAvailableModels();
+								const resolved = resolveModelRoleValue(fallbackRoleValue, availableModels, {
+									settings: this.ctx.settings,
+								});
+								if (resolved.model) {
+									const fallbackModel = resolved.model;
+									const isAuto = resolved.thinkingLevel === AUTO_THINKING;
+									let concreteThinking = concreteThinkingLevel(resolved.thinkingLevel);
+									let isAutoFromDefault = false;
+									if (!resolved.explicitThinkingLevel && !concreteThinking) {
+										const defaultLevel = parseConfiguredThinkingLevel(
+											this.ctx.settings.get("defaultThinkingLevel"),
+										);
+										if (defaultLevel === AUTO_THINKING) {
+											isAutoFromDefault = true;
+										} else if (defaultLevel) {
+											concreteThinking = defaultLevel;
+										}
+									}
+									const effectiveIsAuto = isAuto || isAutoFromDefault;
+									const { switched } = await this.ctx.session.setModel(fallbackModel, "default", {
+										persist: false,
+										thinkingLevel: effectiveIsAuto
+											? ThinkingLevel.Inherit
+											: (concreteThinking ?? ThinkingLevel.Inherit),
+										currentContextTokens,
+									});
+									if (!switched) return;
+									if (effectiveIsAuto) {
+										this.ctx.session.setThinkingLevel(AUTO_THINKING, true);
+									} else if (concreteThinking && concreteThinking !== ThinkingLevel.Inherit) {
+										this.ctx.session.setThinkingLevel(concreteThinking);
+									}
+									this.ctx.statusLine.invalidate();
+									this.ctx.updateEditorBorderColor();
+								}
+							}
+						}
 					} catch (error) {
 						this.ctx.showError(error instanceof Error ? error.message : String(error));
+					} finally {
+						releaseDefaultMutation?.();
+						hub?.refreshAfterExternalMutation();
 					}
 				},
 				onFallbackChainChange: (role, chain) => {
@@ -1124,10 +1256,16 @@ export class SelectorController {
 			sessions,
 			async (session: SessionInfo) => {
 				selector.lockInput();
+				let keepOpen = false;
 				try {
-					await this.handleResumeSession(session.path);
+					const success = await this.handleResumeSession(session.path);
+					if (!success) {
+						keepOpen = true;
+						selector.unlockInput();
+						this.ctx.ui.requestRender();
+					}
 				} finally {
-					done();
+					if (!keepOpen) done();
 				}
 			},
 			() => {
@@ -1205,13 +1343,23 @@ export class SelectorController {
 		return true;
 	}
 
-	async handleResumeSession(sessionPath: string): Promise<void> {
-		this.ctx.clearTransientSessionUi();
-
+	async handleResumeSession(sessionPath: string, options?: { settingsFlushed?: boolean }): Promise<boolean> {
 		const previousCwd = this.ctx.sessionManager.getCwd();
+		// Flush pending settings writes before switching sessions so a save
+		// failure leaves the session, process project dir, and Settings in the
+		// source scope — the switch below mutates the SessionManager cwd.
+		if (!options?.settingsFlushed) {
+			try {
+				await this.ctx.settings.flush();
+			} catch (err) {
+				this.ctx.showError(`Failed to save pending settings: ${err instanceof Error ? err.message : String(err)}`);
+				return false;
+			}
+		}
 		// Switch session via AgentSession (emits hook and tool session events). The
 		// SessionManager adopts the resumed session's own cwd when it differs.
 		await this.ctx.session.switchSession(sessionPath);
+		this.ctx.clearTransientSessionUi();
 		const newCwd = this.ctx.sessionManager.getCwd();
 		const movedProject = normalizePathForComparison(newCwd) !== normalizePathForComparison(previousCwd);
 		if (movedProject) {
@@ -1226,6 +1374,7 @@ export class SelectorController {
 		this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 		await this.ctx.reloadTodos();
 		this.ctx.showStatus(movedProject ? `Resumed session in ${shortenPath(newCwd)}` : "Resumed session");
+		return true;
 	}
 
 	async handleSessionDeleteCommand(): Promise<void> {
