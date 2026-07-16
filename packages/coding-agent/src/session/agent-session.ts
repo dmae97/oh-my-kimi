@@ -1134,6 +1134,13 @@ export interface PerAdvisorStat {
  * primary-scoped state (turn counters, interrupt latches, the shared yield
  * channel) stays on the session.
  */
+interface AdvisorRetryFallbackState {
+	role: string;
+	originalSelector: string;
+	originalThinkingLevel: ThinkingLevel;
+	lastAppliedThinkingLevel: ThinkingLevel;
+}
+
 interface ActiveAdvisor {
 	/** Display name from config ("default" for the legacy no-YAML advisor). */
 	name: string;
@@ -1152,8 +1159,8 @@ interface ActiveAdvisor {
 	thinkingLevel: ThinkingLevel;
 	/** Provider credential/session identity retained across advisor model switches. */
 	providerSessionId: string | undefined;
-	/** Chain key currently driving this advisor's fallback progression. */
-	retryFallbackRole?: string;
+	/** Active chain state retained until the configured primary can be restored. */
+	retryFallback?: AdvisorRetryFallbackState;
 	/** A switched advisor model has not yet completed its first successful turn. */
 	retryFallbackPendingSuccess: boolean;
 	/** Stable key for the resolved runtime inputs that require a rebuild to change. */
@@ -3054,12 +3061,13 @@ export class AgentSession {
 				beginAdvisorUpdate: () => advisorRef.emissionGuard.beginUpdate(),
 				onTurnError: (error, failedMessages) => this.#recoverAdvisorTurn(advisorRef, error, failedMessages),
 				onTurnSuccess: async () => {
-					if (!advisorRef.retryFallbackPendingSuccess || !advisorRef.retryFallbackRole) return;
+					const fallback = advisorRef.retryFallback;
+					if (!advisorRef.retryFallbackPendingSuccess || !fallback) return;
 					advisorRef.retryFallbackPendingSuccess = false;
 					await this.#emitSessionEvent({
 						type: "retry_fallback_succeeded",
 						model: formatRetryFallbackSelector(advisorRef.agent.state.model, advisorRef.thinkingLevel),
-						role: advisorRef.retryFallbackRole,
+						role: fallback.role,
 					});
 				},
 				notifyFailure: error => {
@@ -3250,6 +3258,57 @@ export class AgentSession {
 		});
 	}
 
+	/** Switch one advisor model while preserving its context and effort invariants. */
+	#setAdvisorModel(advisor: ActiveAdvisor, model: Model, requestedThinkingLevel: ThinkingLevel): ThinkingLevel {
+		const resolvedThinkingLevel = resolveThinkingLevelForModel(model, requestedThinkingLevel);
+		const nextThinkingLevel = resolvedThinkingLevel ?? ThinkingLevel.Inherit;
+		advisor.agent.setModel(model);
+		advisor.agent.setThinkingLevel(toReasoningEffort(nextThinkingLevel));
+		advisor.agent.setDisableReasoning(shouldDisableReasoning(nextThinkingLevel));
+		advisor.agent.appendOnlyContext?.invalidateForModelChange();
+		advisor.model = model;
+		advisor.thinkingLevel = nextThinkingLevel;
+		return nextThinkingLevel;
+	}
+
+	/** Restore an advisor's configured primary once its fallback cooldown expires. */
+	async #maybeRestoreAdvisorRetryFallbackPrimary(advisor: ActiveAdvisor): Promise<void> {
+		const fallback = advisor.retryFallback;
+		if (!fallback || this.#getRetryFallbackRevertPolicy() !== "cooldown-expiry") return;
+
+		const originalSelector = parseRetryFallbackSelector(fallback.originalSelector, this.#modelRegistry);
+		if (!originalSelector) {
+			advisor.retryFallback = undefined;
+			advisor.retryFallbackPendingSuccess = false;
+			return;
+		}
+		const currentSelector = formatRetryFallbackSelector(advisor.agent.state.model, advisor.thinkingLevel);
+		if (currentSelector === originalSelector.raw) {
+			if (!this.#isRetryFallbackSelectorSuppressed(originalSelector)) {
+				advisor.retryFallback = undefined;
+				advisor.retryFallbackPendingSuccess = false;
+			}
+			return;
+		}
+		if (this.#isRetryFallbackSelectorSuppressed(originalSelector)) return;
+
+		const resolvedPrimary = resolveModelOverride([originalSelector.raw], this.#modelRegistry, this.settings);
+		const primaryModel =
+			resolvedPrimary.model ?? this.#modelRegistry.find(originalSelector.provider, originalSelector.id);
+		if (!primaryModel) return;
+		const apiKey = await this.#modelRegistry.getApiKey(primaryModel, advisor.providerSessionId);
+		if (!apiKey) return;
+
+		const thinkingToApply =
+			advisor.thinkingLevel === fallback.lastAppliedThinkingLevel
+				? fallback.originalThinkingLevel
+				: advisor.thinkingLevel;
+		this.#setAdvisorModel(advisor, primaryModel, thinkingToApply);
+		this.settings.getStorage()?.recordModelUsage(formatModelStringWithRouting(primaryModel));
+		advisor.retryFallback = undefined;
+		advisor.retryFallbackPendingSuccess = false;
+	}
+
 	/**
 	 * Apply the advisor's configured provider-failure fallback chain after
 	 * same-provider credential rotation has no usable sibling.
@@ -3299,7 +3358,7 @@ export class AgentSession {
 
 		const retrySettings = this.settings.getGroup("retry");
 		if (!retrySettings.enabled || !retrySettings.modelFallback) return false;
-		const role = advisor.retryFallbackRole ?? this.#resolveRetryFallbackRole(currentSelector, currentModel);
+		const role = advisor.retryFallback?.role ?? this.#resolveRetryFallbackRole(currentSelector, currentModel);
 		if (!role || this.#findRetryFallbackCandidates(role, currentSelector, currentModel).length === 0) return false;
 
 		this.#noteRetryFallbackCooldown(currentSelector, retryAfterMs, message);
@@ -3311,16 +3370,19 @@ export class AgentSession {
 			const apiKey = await this.#modelRegistry.getApiKey(candidate, advisor.providerSessionId);
 			if (!apiKey) continue;
 
-			const requestedThinkingLevel = selector.thinkingLevel ?? advisor.thinkingLevel;
-			const resolvedThinkingLevel = resolveThinkingLevelForModel(candidate, requestedThinkingLevel);
-			const nextThinkingLevel = resolvedThinkingLevel ?? ThinkingLevel.Inherit;
-			advisor.agent.setModel(candidate);
-			advisor.agent.setThinkingLevel(toReasoningEffort(nextThinkingLevel));
-			advisor.agent.setDisableReasoning(shouldDisableReasoning(nextThinkingLevel));
-			advisor.agent.appendOnlyContext?.invalidateForModelChange();
-			advisor.model = candidate;
-			advisor.thinkingLevel = nextThinkingLevel;
-			advisor.retryFallbackRole = role;
+			const originalThinkingLevel = advisor.thinkingLevel;
+			const requestedThinkingLevel = selector.thinkingLevel ?? originalThinkingLevel;
+			const nextThinkingLevel = this.#setAdvisorModel(advisor, candidate, requestedThinkingLevel);
+			if (advisor.retryFallback) {
+				advisor.retryFallback.lastAppliedThinkingLevel = nextThinkingLevel;
+			} else {
+				advisor.retryFallback = {
+					role,
+					originalSelector: currentSelector,
+					originalThinkingLevel,
+					lastAppliedThinkingLevel: nextThinkingLevel,
+				};
+			}
 			advisor.retryFallbackPendingSuccess = true;
 			this.settings.getStorage()?.recordModelUsage(formatModelStringWithRouting(candidate));
 			await this.#emitSessionEvent({
@@ -3346,10 +3408,7 @@ export class AgentSession {
 		// keeps its suffix across a promotion); only the model changes.
 		const advisorThinkingLevel = advisor.thinkingLevel;
 		try {
-			advisor.agent.setModel(targetModel);
-			advisor.agent.setThinkingLevel(toReasoningEffort(advisorThinkingLevel));
-			advisor.agent.setDisableReasoning(shouldDisableReasoning(advisorThinkingLevel));
-			advisor.agent.appendOnlyContext?.invalidateForModelChange();
+			this.#setAdvisorModel(advisor, targetModel, advisorThinkingLevel);
 			logger.debug("Advisor context promotion switched model on overflow", {
 				advisor: advisor.name,
 				from: `${currentModel.provider}/${currentModel.id}`,
@@ -3368,6 +3427,7 @@ export class AgentSession {
 	}
 
 	async #maintainAdvisorContext(advisor: ActiveAdvisor, incomingTokens: number): Promise<boolean> {
+		await this.#maybeRestoreAdvisorRetryFallbackPrimary(advisor);
 		const agent = advisor.agent;
 
 		const compactionSettings = this.settings.getGroup("compaction");

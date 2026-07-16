@@ -229,8 +229,11 @@ describe("AgentSession retry fallback", () => {
 			throw new Error("Expected bundled advisor fallback models to exist");
 		}
 
-		const mainMock = createMockModel({ responses: [{ content: ["Primary complete"] }] });
+		const mainMock = createMockModel({
+			responses: [{ content: ["Primary complete"] }, { content: ["Primary complete again"] }],
+		});
 		const advisorMock = createMockModel();
+		let advisorPrimaryAttempts = 0;
 		const requestedAdvisorModels: string[] = [];
 		const fallbackAppliedEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>> = [];
 		const fallbackSucceededEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_succeeded" }>> = [];
@@ -257,6 +260,7 @@ describe("AgentSession retry fallback", () => {
 			"advisor.syncBacklog": "1",
 		});
 		settings.setModelRole("advisor", advisorPrimarySelector);
+		vi.spyOn(modelRegistry.authStorage, "markUsageLimitReached").mockResolvedValue({ switched: false });
 
 		session = new AgentSession({
 			agent,
@@ -267,10 +271,12 @@ describe("AgentSession retry fallback", () => {
 			advisorStreamFn: (model, context, options) => {
 				const selector = `${model.provider}/${model.id}`;
 				requestedAdvisorModels.push(selector);
-				if (selector === advisorPrimarySelector) {
+				if (selector === advisorPrimarySelector && advisorPrimaryAttempts++ === 0) {
 					advisorMock.push({
-						throw: "Devin stream error failed_precondition: Your daily usage quota has been exhausted.",
+						throw: "Devin stream error failed_precondition: Your daily usage quota has been exhausted. Your quota will reset after 1s.",
 					});
+				} else if (selector === advisorPrimarySelector) {
+					advisorMock.push({ content: ["Advisor primary restored"] });
 				} else if (selector === advisorFallbackSelector) {
 					advisorMock.push({ content: ["Advisor recovered"] });
 				} else {
@@ -312,6 +318,17 @@ describe("AgentSession retry fallback", () => {
 			},
 		]);
 		expect(advisorFailures).toEqual([]);
+
+		const afterCooldown = Date.now() + 2_000;
+		vi.spyOn(Date, "now").mockReturnValue(afterCooldown);
+		await session.prompt("Complete another primary turn after the advisor cooldown");
+		await session.waitForIdle();
+
+		expect(requestedAdvisorModels).toEqual([advisorPrimarySelector, advisorFallbackSelector, advisorPrimarySelector]);
+		expect(session.getAdvisorAgent()?.state.model).toMatchObject({
+			provider: advisorPrimary.provider,
+			id: advisorPrimary.id,
+		});
 	});
 
 	it("activates a model-keyed fallback chain without any role assignment", async () => {
