@@ -627,6 +627,38 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		expect(rewritten).toContain('require("./local.node")');
 	});
 
+	it("preserves native-addon rewrites inside wrapped CommonJS dependencies", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "native-cjs-consumer", version: "1.0.0", type: "module" }),
+			"index.js": [
+				'import loader from "native-loader";',
+				"export const loadSource = loader.load.toString();",
+				"export default function (pi) { void pi; }",
+			].join("\n"),
+			"node_modules/native-loader/package.json": JSON.stringify({
+				name: "native-loader",
+				version: "1.0.0",
+				main: "index.cjs",
+			}),
+			"node_modules/native-loader/index.cjs":
+				'module.exports = { load: () => require("@fixture/native-platform") };\n',
+			"node_modules/native-loader/node_modules/@fixture/native-platform/package.json": JSON.stringify({
+				name: "@fixture/native-platform",
+				version: "1.0.0",
+				main: "binding.node",
+			}),
+			"node_modules/native-loader/node_modules/@fixture/native-platform/binding.node": "native fixture",
+		});
+
+		const mod = await loadLegacyPiModule(path.join(dir, "index.js"));
+		const loadSource = Reflect.get(Object(mod), "loadSource");
+		const addon = await fs.realpath(
+			path.join(dir, "node_modules/native-loader/node_modules/@fixture/native-platform/binding.node"),
+		);
+
+		expect(loadSource).toContain(addon.replaceAll("\\", "/"));
+	});
+
 	it("remaps legacy pi-ai utils/oauth subpaths to registry OAuth exports", async () => {
 		const dir = await writePackage({
 			"package.json": JSON.stringify({ name: "legacy-oauth-ext", version: "1.0.0" }),
