@@ -1993,6 +1993,15 @@ export class ModelRegistry {
 	getProviderBaseUrl(provider: string): string | undefined {
 		return this.#models.find(m => m.provider === provider && m.baseUrl)?.baseUrl;
 	}
+	/**
+	 * Get provider-level headers without including per-model overrides.
+	 */
+	getProviderHeaders(provider: string): Record<string, string> | undefined {
+		return createLiveConfigHeaders([
+			this.#providerOverrides.get(provider)?.headers,
+			this.#runtimeProviderOverrides.get(provider)?.headers,
+		]);
+	}
 
 	/**
 	 * Get API key for a model.
