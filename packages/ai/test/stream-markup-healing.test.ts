@@ -544,6 +544,16 @@ describe("StreamMarkupHealing thinking pattern", () => {
 		expect(heal(block)).toEqual({ text: block, thinking: "" });
 	});
 
+	// Issue #5665 (review follow-up): a fenced block only closes on its own fence
+	// line. An inline backtick run inside the block (a `` ``` `` string literal)
+	// must not exit code mode early and let a later literal think tag be healed.
+	it("keeps a fenced block open across an inner triple-backtick literal", () => {
+		const literal = `<${"think"}>literal</${"think"}>`;
+		const block = `\`\`\`md\nconst fence = '\`\`\`';\n${literal}\n\`\`\`\nafter`;
+		expect(heal(block)).toEqual({ text: block, thinking: "" });
+		expect(heal(...block)).toEqual({ text: block, thinking: "" });
+	});
+
 	it("still heals a leaked think tag outside inline code", () => {
 		const literal = `<${"think"}>`;
 		expect(heal(`before \`code\` ${literal}secret</think> after`)).toEqual({
