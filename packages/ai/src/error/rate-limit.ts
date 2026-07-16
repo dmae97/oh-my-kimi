@@ -19,6 +19,7 @@ const SERVER_ERROR_BACKOFF_MS = 20 * 1000; // 20s
 const ACCOUNT_RATE_LIMIT_PATTERN =
 	/\baccount(?:'s)?\b[^\n]{0,80}\brate.?limit\b|\brate.?limit\b[^\n]{0,80}\baccount\b/i;
 const INSUFFICIENT_BALANCE_PATTERN = /insufficient.?balance/i;
+const SPEND_LIMIT_PATTERN = /spend.?limit/i;
 
 /**
  * Classify a rate-limit error message into a reason category.
@@ -51,6 +52,10 @@ export function parseRateLimitReason(errorMessage: string): RateLimitReason {
 	}
 
 	if (ACCOUNT_RATE_LIMIT_PATTERN.test(errorMessage)) {
+		return "QUOTA_EXHAUSTED";
+	}
+
+	if (SPEND_LIMIT_PATTERN.test(errorMessage)) {
 		return "QUOTA_EXHAUSTED";
 	}
 
@@ -163,5 +168,5 @@ export function isOpaqueStatusBody(message: string): boolean {
  * {@link isUsageLimitOutcome} uses it for the account-rotation decision.
  */
 export function matchesUsageLimitText(errorMessage: string): boolean {
-	return USAGE_LIMIT_PATTERN.test(errorMessage) || ACCOUNT_RATE_LIMIT_PATTERN.test(errorMessage);
+	return USAGE_LIMIT_PATTERN.test(errorMessage) || SPEND_LIMIT_PATTERN.test(errorMessage) || ACCOUNT_RATE_LIMIT_PATTERN.test(errorMessage);
 }
