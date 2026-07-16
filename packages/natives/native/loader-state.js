@@ -604,7 +604,18 @@ export function validateLoadedBindings(ctx, bindings, candidate) {
 	const residentSentinel = Object.keys(bindings).find(
 		key => key !== ctx.versionSentinelExport && /^__piNativesV[A-Za-z0-9_]+$/.test(key),
 	);
-	if (residentSentinel) {
+	// A prior sentinel alone cannot distinguish a resident old module from an
+	// actually stale file: `require` returns the same exports in both cases.
+	// The restart diagnosis is valid only when the selected file itself carries
+	// the current sentinel; otherwise a restart would simply reload stale disk.
+	let diskHasExpectedSentinel = false;
+	try {
+		diskHasExpectedSentinel = fs.readFileSync(candidate).includes(ctx.versionSentinelExport);
+	} catch {
+		// The successful require above normally guarantees readability. If the
+		// file disappears concurrently, retain the safe reinstall diagnosis.
+	}
+	if (residentSentinel && diskHasExpectedSentinel) {
 		const residentVersion = residentSentinel.slice("__piNativesV".length).replace(/_/g, ".");
 		throw new Error(
 			`Loaded ${candidate}, which exposes the @oh-my-pi/pi-natives@${residentVersion} version ` +
