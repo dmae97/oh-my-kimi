@@ -467,6 +467,66 @@ describe("resolveStdioSpawnCommand", () => {
 		}
 	});
 
+	it("neutralizes percent syntax in the resolved .cmd path so cmd.exe launches the real shim", async () => {
+		// A project/PATH directory can legally contain `%` on NTFS. cmd.exe
+		// expands `%VAR%` across the whole /c string before launching the batch
+		// file, so an un-escaped command token like C:\work\%TOKEN%\server.cmd
+		// would resolve to a different path. The command token must be escaped
+		// the same way arguments are.
+		const base = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-cmdpct-"));
+		const dir = path.join(base, "%TOKEN%");
+		try {
+			await fs.mkdir(dir, { recursive: true });
+			const shim = path.join(dir, "server.cmd");
+			await Bun.write(shim, "@echo off\r\n");
+
+			const result = await resolveStdioSpawnCommand(
+				{ type: "stdio", command: shim, args: ["serve"] },
+				{
+					cwd: base,
+					env: {
+						COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+						PATH: "",
+						PATHEXT: ".cmd",
+					},
+					platform: "win32",
+				},
+			);
+
+			const escapedShim = shim.replace("%TOKEN%", "%%cd:~,%TOKEN%%cd:~,%");
+			expect(result.cmd).toEqual([
+				"C:\\Windows\\System32\\cmd.exe",
+				"/d",
+				"/e:ON",
+				"/v:OFF",
+				"/c",
+				`""${escapedShim}" serve"`,
+			]);
+			// No live `%TOKEN%` reference survives for cmd.exe to expand.
+			expect(result.cmd.at(-1)).not.toContain(`${path.join(base, "%TOKEN%")}`);
+			expect(result.windowsVerbatimArguments).toBe(true);
+		} finally {
+			await removeWithRetries(base);
+		}
+	});
+
+	it("rejects a resolved .cmd command path containing characters that cannot round-trip through cmd.exe", async () => {
+		await expect(
+			resolveStdioSpawnCommand(
+				{ type: "stdio", command: "C:\\work\\ser\rver.cmd", args: ["serve"] },
+				{
+					cwd: "C:\\project",
+					env: {
+						COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+						PATH: "",
+						PATHEXT: ".COM;.EXE;.BAT;.CMD",
+					},
+					platform: "win32",
+				},
+			),
+		).rejects.toThrow(/command cannot contain NUL, CR, or LF/);
+	});
+
 	it("leaves non-Windows commands untouched", async () => {
 		const result = await resolveStdioSpawnCommand(
 			{ type: "stdio", command: "codegraph", args: ["serve", "--mcp"] },

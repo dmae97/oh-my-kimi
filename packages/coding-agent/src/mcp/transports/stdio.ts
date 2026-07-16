@@ -231,29 +231,22 @@ function resolveComSpec(env: Record<string, string | undefined>): string {
 const CMD_SAFE_ARG = /^[A-Za-z0-9#$*+\-./:?@\\_]+$/;
 
 /**
- * Escape one argument for `cmd.exe`'s command-line pre-parse so a `.cmd`/`.bat`
- * shim receives it verbatim.
+ * Escape the interior of a `cmd.exe`-quoted token: neutralize `%VAR%` expansion
+ * and double any backslash run that precedes a quote (including the caller's
+ * closing quote) so `CommandLineToArgvW` delivers the backslashes literally.
  *
- * `cmd.exe` re-splits the `/c` string and expands `%VAR%` *before* the shim's
- * `CommandLineToArgvW` parse runs, so libuv's default `\"`-style quoting is
- * insufficient and lets crafted args inject commands (BatBadBut,
- * CVE-2024-24576). This applies the documented mitigation: percent →
- * `%%cd:~,%` (expands to nothing, leaving a literal `%`), double the
- * backslashes in front of a quote, `"` → `""`, and wrap in quotes when the arg
- * is empty, ends in `\`, or holds any non-allow-listed byte.
+ * `cmd.exe` re-parses the whole `/c` string and expands `%…%` *before* the
+ * batch shim's own argv split runs, so both the command path and every argument
+ * must pass through this. Percent → `%%cd:~,%` (which expands to nothing,
+ * leaving a literal `%`) and `"` → `""` are the documented BatBadBut mitigation
+ * (CVE-2024-24576). The caller supplies the surrounding double quotes.
  *
- * @throws when the argument contains NUL, CR, or LF, none of which round-trip
- *   through `cmd.exe`.
  * @see https://flatt.tech/research/posts/batbadbut-you-cant-securely-execute-commands-on-windows/
  */
-function escapeCmdBatchArg(arg: string): string {
-	if (/[\0\r\n]/.test(arg)) {
-		throw new Error("Windows batch MCP argument cannot contain NUL, CR, or LF characters");
-	}
-	const needsQuotes = arg.length === 0 || arg.endsWith("\\") || !CMD_SAFE_ARG.test(arg);
-	let out = needsQuotes ? '"' : "";
+function escapeCmdQuotedInterior(value: string): string {
+	let out = "";
 	let backslashes = 0;
-	for (const ch of arg) {
+	for (const ch of value) {
 		if (ch === "\\") {
 			backslashes += 1;
 			out += ch;
@@ -269,11 +262,35 @@ function escapeCmdBatchArg(arg: string): string {
 			out += ch;
 		}
 	}
-	if (needsQuotes) {
-		out += "\\".repeat(backslashes);
-		out += '"';
-	}
+	// Double the trailing backslash run so it stays literal before the closing
+	// quote the caller appends.
+	out += "\\".repeat(backslashes);
 	return out;
+}
+
+/** Reject bytes that cannot round-trip through `cmd.exe`'s `/c` command line. */
+function assertCmdBatchToken(value: string, kind: "command" | "argument"): void {
+	// NUL/LF act as an end-of-command marker and CR is stripped, so any of them
+	// would silently truncate or corrupt the launch.
+	if (/[\0\r\n]/.test(value)) {
+		throw new Error(`Windows batch MCP ${kind} cannot contain NUL, CR, or LF characters`);
+	}
+}
+
+/**
+ * Escape one argument for `cmd.exe`'s command-line pre-parse so a `.cmd`/`.bat`
+ * shim receives it verbatim. Quotes only when the argument is empty, ends in a
+ * backslash, or holds a byte outside {@link CMD_SAFE_ARG}; the quoted body is
+ * escaped by {@link escapeCmdQuotedInterior}.
+ *
+ * @throws when the argument contains NUL, CR, or LF (see {@link assertCmdBatchToken}).
+ */
+function escapeCmdBatchArg(arg: string): string {
+	assertCmdBatchToken(arg, "argument");
+	const needsQuotes = arg.length === 0 || arg.endsWith("\\") || !CMD_SAFE_ARG.test(arg);
+	// An unquoted arg is pure allow-list bytes (no `%`, `"`, or trailing `\`), so
+	// it needs no interior escaping.
+	return needsQuotes ? `"${escapeCmdQuotedInterior(arg)}"` : arg;
 }
 
 /**
@@ -281,14 +298,16 @@ function escapeCmdBatchArg(arg: string): string {
  * MCP command.
  *
  * The trailing element is a single `/c` string wrapped in an outer quote pair
- * that `cmd.exe` strips (its opening-quote rule), with the command quoted and
- * every argument escaped by {@link escapeCmdBatchArg}. `/e:ON` keeps command
- * extensions on (required for the `%%cd:~,%` trick) and `/v:OFF` disables
- * delayed expansion. The result MUST be spawned with
+ * that `cmd.exe` strips (its opening-quote rule). The command token is always
+ * quoted and, like every argument, escaped so a `%` in the resolved path (e.g.
+ * `C:\work\%TOKEN%\server.cmd`) is not expanded before the shim launches.
+ * `/e:ON` keeps command extensions on (required for the `%%cd:~,%` trick) and
+ * `/v:OFF` disables delayed expansion. The result MUST be spawned with
  * `windowsVerbatimArguments` so libuv passes it through unmodified.
  */
 function buildCmdExeArgv(comspec: string, command: string, args: readonly string[]): string[] {
-	let line = `""${command}"`;
+	assertCmdBatchToken(command, "command");
+	let line = `""${escapeCmdQuotedInterior(command)}"`;
 	for (const arg of args) line += ` ${escapeCmdBatchArg(arg)}`;
 	line += '"';
 	return [comspec, "/d", "/e:ON", "/v:OFF", "/c", line];
