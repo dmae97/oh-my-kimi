@@ -5385,6 +5385,21 @@ export class AuthStorage {
 			Date.now() + AuthStorage.#defaultBackoffMs,
 		);
 
+		if (target && AIError.isInvalidatedOAuthTokenError(error)) {
+			const disabledCause = message ?? "upstream reported invalidated OAuth token";
+			const deleted = this.#store.deleteAuthCredentialRemote
+				? await this.#store.deleteAuthCredentialRemote(target.id, disabledCause)
+				: this.disableCredentialById(target.id, disabledCause);
+			if (deleted) {
+				const latestRows = this.#store.listAuthCredentials(provider);
+				this.#setStoredCredentials(
+					provider,
+					latestRows.map(row => ({ id: row.id, credential: row.credential })),
+				);
+			}
+			return deleted && hasSibling;
+		}
+
 		if (target) {
 			const markSuspect = this.#store.markCredentialSuspect?.bind(this.#store);
 			if (markSuspect) {

@@ -20,6 +20,7 @@ import { getCustomApi } from "./api-registry";
 import { createAuthRetryKeyState, isApiKeyResolver, resolveNextAuthRetryKey } from "./auth-retry";
 import * as AIError from "./error";
 import { ProviderHttpError } from "./error";
+import { isInvalidatedOAuthTokenError } from "./error/auth-classify";
 import { isUsageLimitOutcome } from "./error/rate-limit";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
 import type { AnthropicOptions } from "./providers/anthropic";
@@ -979,6 +980,7 @@ function isRetryableUpstreamError(error: unknown, status: number | undefined, me
 	// `parseRateLimitReason` and stay in the provider's own backoff layer
 	// instead of burning siblings.
 	if (AIError.isUsageLimit(error)) return true;
+	if (isInvalidatedOAuthTokenError(error)) return true;
 	if (status === 401) return true;
 	return isUsageLimitOutcome(status, message);
 }

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Automatically invalidate and rotate OAuth credentials when an "invalidated oauth token" error occurs
+
 ## [17.0.1] - 2026-07-16
 
 ### Fixed
