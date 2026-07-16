@@ -319,6 +319,50 @@ describe("github copilot model limits mapping", () => {
 		expect(model).toBeDefined();
 		expect(model?.api).toBe("openai-responses");
 	});
+	it("invalidates a cached MAI-Code completion route after the endpoint migration", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-copilot-mai-cache-"));
+		const cacheDbPath = path.join(tempDir, "models.db");
+		const cacheProviderId = "github-copilot-mai-cache-test";
+		try {
+			const oldManager = createModelManager({
+				providerId: "github-copilot",
+				cacheProviderId,
+				cacheDbPath,
+				staticModels: [],
+				fetchDynamicModels: async () => [
+					{
+						id: "mai-code-1-flash-picker",
+						name: "MAI-Code-1-Flash",
+						api: "openai-completions" as const,
+						provider: "github-copilot",
+						baseUrl: "https://api.githubcopilot.com",
+						reasoning: true,
+						input: ["text"],
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: 256_000,
+						maxTokens: 128_000,
+					},
+				],
+			});
+			await oldManager.refresh("online");
+
+			const fetchMock = vi.fn(async () => {
+				throw new Error("a fresh cache must avoid discovery");
+			});
+			const manager = createModelManager({
+				...githubCopilotModelManagerOptions({ apiKey: "copilot-test-key", fetch: fetchMock }),
+				cacheProviderId,
+				cacheDbPath,
+			});
+			const { models } = await manager.refresh("online-if-uncached");
+			const model = models.find(candidate => candidate.id === "mai-code-1-flash-picker");
+
+			expect(fetchMock).not.toHaveBeenCalled();
+			expect(model?.api).toBe("openai-responses");
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
 });
 
 /**
