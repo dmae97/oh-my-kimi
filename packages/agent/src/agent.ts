@@ -1172,7 +1172,7 @@ export class Agent {
 					await Bun.sleep(0);
 				}
 				context.systemPrompt = this.#state.systemPrompt;
-				context.tools = this.#toolsForModel(model);
+				context.tools = this.#toolsForModel(this.#state.model ?? model);
 			},
 			cursorExecHandlers: this.#cursorExecHandlers,
 			cursorOnToolResult,
