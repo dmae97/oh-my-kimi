@@ -36,6 +36,38 @@ export type TerminalId =
 	| "base"
 	| "trueColor";
 
+const CMUX_NOTIFICATION_TITLE = "Oh My Pi";
+const CMUX_SURFACE_ID_PATTERN = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/iu;
+
+/**
+ * Route a notification through cmux when the process belongs to a concrete
+ * surface. Workspace/socket state alone is not enough: only the injected
+ * surface UUID identifies the pane that should receive the notification.
+ * Returns whether cmux owns delivery so the caller can preserve every existing
+ * terminal fallback unchanged when no valid surface is present.
+ */
+function sendCmuxNotification(message: string | TerminalNotification, env: NodeJS.ProcessEnv = Bun.env): boolean {
+	const surfaceId = env.CMUX_SURFACE_ID?.trim();
+	if (!surfaceId || !CMUX_SURFACE_ID_PATTERN.test(surfaceId)) return false;
+
+	const title =
+		typeof message === "string" ? CMUX_NOTIFICATION_TITLE : message.title?.trim() || CMUX_NOTIFICATION_TITLE;
+	const body = typeof message === "string" ? message : (message.body ?? "");
+	try {
+		const child = Bun.spawn({
+			cmd: ["cmux", "notify", "--surface", surfaceId, "--title", title, "--body", body],
+			stdin: "ignore",
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		child.unref();
+	} catch {
+		// A missing cmux binary leaves delivery to the existing terminal fallback.
+		return false;
+	}
+	return true;
+}
+
 function hasNeedleBefore(line: string, needle: string, limit: number): boolean {
 	const index = line.indexOf(needle);
 	return index !== -1 && index + needle.length <= limit;
@@ -111,6 +143,7 @@ export class TerminalInfo {
 
 	sendNotification(message: string | TerminalNotification): void {
 		if (isNotificationSuppressed() || isTerminalHeadless()) return;
+		if (sendCmuxNotification(message)) return;
 		const formatted = this.formatNotification(message);
 		// Under tmux, terminals whose notify protocol is OSC 9 / OSC 99 would
 		// otherwise lose the notification entirely: tmux does not forward bare
