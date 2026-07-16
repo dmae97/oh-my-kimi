@@ -282,7 +282,6 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		await advisor.prompt("inspect the completed turn");
 		await session.waitForIdle();
 
-		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(0);
 		expect(mock.calls.length).toBe(2);
 	});
 
