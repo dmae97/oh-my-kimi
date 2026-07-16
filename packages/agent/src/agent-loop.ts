@@ -1707,23 +1707,11 @@ function reclassifyEmptyToolUseStop(
 ): AssistantMessage {
 	if (message.stopReason !== "toolUse") return message;
 	const isIncomplete = (id: string): boolean => streamedToolCallIds.has(id) && !completedToolCallIds.has(id);
-	let hasIncompleteToolCall = false;
-	let hasUsableToolCall = false;
-	for (const block of message.content) {
-		if (block.type !== "toolCall") continue;
-		if (isIncomplete(block.id)) {
-			hasIncompleteToolCall = true;
-		} else {
-			hasUsableToolCall = true;
-		}
-	}
-	const content = hasIncompleteToolCall
-		? message.content.filter(block => block.type !== "toolCall" || !isIncomplete(block.id))
-		: message.content;
-	if (hasUsableToolCall) return hasIncompleteToolCall ? { ...message, content } : message;
+	const hasUsableToolCall = message.content.some(block => block.type === "toolCall" && !isIncomplete(block.id));
+	if (hasUsableToolCall) return message;
 	return {
 		...message,
-		content,
+		content: message.content.filter(block => block.type !== "toolCall"),
 		stopReason: "error",
 		errorMessage: EMPTY_TOOL_USE_STOP_MESSAGE,
 		errorId: AIError.create(AIError.Flag.Transient),

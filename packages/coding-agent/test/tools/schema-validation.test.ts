@@ -196,10 +196,12 @@ describe("normalizeSchemaForGoogle", () => {
 		expect(items.enum).toEqual(["only"]);
 	});
 
-	it("passes through primitives unchanged", () => {
+	it("passes through non-boolean primitives and coerces boolean schemas", () => {
 		expect(normalizeSchemaForGoogle("string")).toBe("string");
 		expect(normalizeSchemaForGoogle(123)).toBe(123);
-		expect(normalizeSchemaForGoogle(true)).toBe(true);
+		// Google's wire cannot encode JSON Schema boolean subschemas; `true`
+		// (accept anything) coerces to the equivalent empty schema.
+		expect(normalizeSchemaForGoogle(true)).toEqual({});
 		expect(normalizeSchemaForGoogle(null)).toBe(null);
 	});
 

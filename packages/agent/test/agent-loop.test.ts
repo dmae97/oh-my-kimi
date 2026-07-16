@@ -3432,56 +3432,5 @@ describe("agentLoop empty toolUse stop (issue #5600)", () => {
 		expect(AIError.is(assistant.errorId, AIError.Flag.Transient)).toBe(true);
 		expect(AIError.retriable(assistant.errorId)).toBe(true);
 	});
-	it("dispatches completed calls but strips incomplete siblings after a dropped toolUse stream", async () => {
-		const executed: string[] = [];
-		const toolSchema = type({ value: "string" });
-		const tool: AgentTool<typeof toolSchema, { value: string }> = {
-			name: "echo",
-			label: "Echo",
-			description: "Echo tool",
-			parameters: toolSchema,
-			async execute(id, params) {
-				executed.push(id);
-				return { content: [{ type: "text", text: `echoed: ${params.value}` }], details: { value: params.value } };
-			},
-		};
-		const context: AgentContext = { systemPrompt: ["You are helpful."], messages: [], tools: [tool] };
-		let turn = 0;
-		const streamFn = () => {
-			const stream = new AssistantMessageEventStream();
-			if (turn++ > 0) {
-				const complete = createAssistantMessage([{ type: "text", text: "done" }]);
-				stream.push({ type: "done", reason: "stop", message: complete });
-				return stream;
-			}
-			const completed = {
-				type: "toolCall" as const,
-				id: "tc-complete",
-				name: "echo",
-				arguments: { value: "complete" },
-			};
-			const incomplete = { type: "toolCall" as const, id: "tc-partial", name: "echo", arguments: {} };
-			const partial = createAssistantMessage([completed, incomplete], "toolUse");
-			stream.push({ type: "start", partial });
-			stream.push({ type: "toolcall_end", contentIndex: 0, toolCall: completed, partial });
-			stream.push({ type: "toolcall_start", contentIndex: 1, partial });
-			stream.push({ type: "toolcall_delta", contentIndex: 1, delta: '{"val', partial });
-			stream.push({ type: "done", reason: "toolUse", message: partial });
-			return stream;
-		};
-		const config: AgentLoopConfig = { model: createMockModel().model, convertToLlm: identityConverter };
 
-		const stream = agentLoop([createUserMessage("run echo")], context, config, undefined, streamFn);
-		for await (const _event of stream) {
-			// drain
-		}
-
-		expect(executed).toEqual(["tc-complete"]);
-		const messages = await stream.result();
-		const firstAssistant = messages.find((m): m is AssistantMessage => m.role === "assistant");
-		if (!firstAssistant) throw new Error("expected an assistant message");
-		expect(firstAssistant.content.filter(block => block.type === "toolCall").map(block => block.id)).toEqual([
-			"tc-complete",
-		]);
-	});
 });
