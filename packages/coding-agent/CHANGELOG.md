@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Claude Code marketplace plugins with `scope: "local"` leaking skills, hooks, tools, commands, and MCP servers into unrelated projects ([#5750](https://github.com/can1357/oh-my-pi/issues/5750)).
+
 ## [17.0.1] - 2026-07-16
 
 ### Changed
