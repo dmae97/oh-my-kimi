@@ -520,6 +520,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	collabGuest?: CollabGuestLink;
 
 	#pendingCommandOutput: Component[] = [];
+	#pendingCommandOutputSessionId: string | undefined;
 	#pendingSlashCommands: SlashCommand[] = [];
 	/** Built-in editor autocomplete provider, before extension wrapping. */
 	#baseAutocompleteProvider: AutocompleteProvider | undefined;
@@ -3745,15 +3746,26 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.present(content);
 			return;
 		}
+		const sessionId = this.sessionManager.getSessionId();
+		if (
+			this.#pendingCommandOutput.length > 0 &&
+			this.#pendingCommandOutputSessionId !== sessionId
+		) {
+			this.#pendingCommandOutput = [];
+		}
+		this.#pendingCommandOutputSessionId = sessionId;
 		const items = Array.isArray(content) ? content : [content as Component];
 		this.#pendingCommandOutput.push(...items);
 	}
 
-	/** Mount every command panel queued while the agent was streaming. */
+	/** Mount every command panel queued for the current session while the agent was streaming. */
 	flushPendingCommandOutput(): void {
 		if (this.#pendingCommandOutput.length === 0) return;
 		const pending = this.#pendingCommandOutput;
+		const pendingSessionId = this.#pendingCommandOutputSessionId;
 		this.#pendingCommandOutput = [];
+		this.#pendingCommandOutputSessionId = undefined;
+		if (pendingSessionId !== this.sessionManager.getSessionId()) return;
 		this.present(pending);
 	}
 

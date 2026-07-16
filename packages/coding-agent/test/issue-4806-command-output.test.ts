@@ -78,4 +78,19 @@ describe("issue #4806 command output during streaming", () => {
 		const transcript = mode.chatContainer.render(80).join("\n");
 		expect(transcript.match(/Available Tools/g)).toHaveLength(1);
 	});
+
+	it("drops deferred slash-command output when the session changes before agent_end", async () => {
+		const streamedReply = new Text("old session is streaming", 0, 0);
+		mode.chatContainer.addChild(streamedReply);
+		const previousSessionId = session.sessionManager.getSessionId();
+
+		mode.handleToolsCommand();
+		await session.newSession();
+
+		expect(session.sessionManager.getSessionId()).not.toBe(previousSessionId);
+		streaming = false;
+		await mode.eventController.handleEvent({ type: "agent_end", messages: [] } as AgentSessionEvent);
+
+		expect(mode.chatContainer.children).toEqual([streamedReply]);
+	});
 });
