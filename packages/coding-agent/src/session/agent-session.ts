@@ -233,6 +233,7 @@ import type {
 	TurnEndEvent,
 	TurnStartEvent,
 } from "../extensibility/extensions";
+import { ManagedTimers } from "../extensibility/extensions/managed-timers";
 import { createExtensionModelQuery } from "../extensibility/extensions/model-api";
 import type { CompactOptions, ContextUsage } from "../extensibility/extensions/types";
 import { ExtensionToolWrapper } from "../extensibility/extensions/wrapper";
@@ -1901,6 +1902,12 @@ export class AgentSession {
 	#isDisposed = false;
 	// Extension system
 	#extensionRunner: ExtensionRunner | undefined = undefined;
+	/**
+	 * Backs `ctx.setInterval`/`setTimeout`/`clearTimer` for the runner-less
+	 * command-context fallback (SDK embeddings with no extension runner). Lazily
+	 * created; cleared on dispose alongside the runner's own timers (#5664).
+	 */
+	#fallbackExtensionTimers: ManagedTimers | undefined = undefined;
 	#turnIndex = 0;
 	#messageEndPersistenceTail: Promise<void> = Promise.resolve();
 	#pendingMessageEndPersistence = new Map<string, Promise<void>>();
@@ -6262,6 +6269,10 @@ export class AgentSession {
 		} catch (error) {
 			logger.warn("Failed to emit session_shutdown event", { error: String(error) });
 		}
+		// Clear any timers extensions scheduled via `ctx.setInterval`/`ctx.setTimeout`
+		// so their background work does not outlive the session (issue #5664).
+		this.#extensionRunner?.clearManagedTimers();
+		this.#fallbackExtensionTimers?.clearAll();
 		// Abort post-prompt work so the drain below can complete. Without this, a
 		// deferred-handoff task that has already advanced into
 		// `await this.handoff(...) → generateHandoff(...)` keeps awaiting a live LLM stream
@@ -8346,7 +8357,18 @@ export class AgentSession {
 				await this.reload();
 			},
 			getSystemPrompt: () => this.systemPrompt,
+			setInterval: (callback, ms, ...args) => this.#fallbackTimers().setInterval(callback, ms, ...args),
+			setTimeout: (callback, ms, ...args) => this.#fallbackTimers().setTimeout(callback, ms, ...args),
+			clearTimer: timer => this.#fallbackTimers().clear(timer),
 		};
+	}
+
+	/** Lazily create the runner-less command-context timer registry (#5664). */
+	#fallbackTimers(): ManagedTimers {
+		this.#fallbackExtensionTimers ??= new ManagedTimers((event, error) =>
+			logger.warn("Extension timer callback threw", { event, error }),
+		);
+		return this.#fallbackExtensionTimers;
 	}
 
 	/**
