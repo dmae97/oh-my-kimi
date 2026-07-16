@@ -76,6 +76,7 @@ import {
 	applyOpenAIExtraBody,
 	applyOpenAIGatewayRouting,
 	applyOpenAIServiceTier,
+	applyOpenRouterReportedCost,
 	applyWireModelIdTransform,
 	calculateOpenAIUsageAccounting,
 	clearOpenAIStrictToolsState,
@@ -1629,6 +1630,7 @@ export function parseChunkUsage(
 		...(premiumRequests !== undefined ? { premiumRequests } : {}),
 	};
 	calculateCost(model, usage);
+	applyOpenRouterReportedCost(model, usage, rawUsage);
 	return usage;
 }
 

@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added GPT-5.6 Luna, Sol, and Terra entries for Amazon Bedrock, Azure, and Cloudflare
+- Added KAT-Coder Air/Pro V2.5 entries across Kilo, OpenRouter, NanoGPT, and Vercel
+- Added Inkling model entries for Baseten and Vercel AI Gateway
+- Added Umans DeepSeek V4 Pro DSpark as an experimental model listing
+- Added Claude Opus 4.7 Fast and 4.8 Fast on Vercel AI Gateway
+- Added Workers AI GLM-5.2, Muse Spark 1.1, Stealth GPT-5.6 Sol, and nano-gpt-help entries
+
+### Changed
+
+- Added image input and reasoning support to several existing Codeium and Kilo GPT-5.6 models
+- Enabled image input and reasoning for Gemini Flash Latest and Grok 4.5
+- Renamed many model labels for consistency, including Claude, Grok, DeepSeek, GLM, and Gemi­ni names
+- Updated pricing for many existing models, including input, output, and cache cost values
+- Updated context window and max token limits for many catalog models across providers
+
 ## [16.5.2] - 2026-07-14
 
 ### Fixed
