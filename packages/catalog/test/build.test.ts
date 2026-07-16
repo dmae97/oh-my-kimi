@@ -297,6 +297,10 @@ describe("openai-completions wire-quirk compat detection", () => {
 		expect(
 			buildOpenAICompat(completionsSpec({ ...kimiOverrides, id: "kimi-k2.7-code-highspeed" })).streamIdleTimeoutMs,
 		).toBe(300_000);
+		// K2.7 Code on non-native OpenAI-compatible hosts keeps their default.
+		expect(
+			buildOpenAICompat(completionsSpec({ id: "kimi-k2.7-code", reasoning: true })).streamIdleTimeoutMs,
+		).toBeUndefined();
 		// A non-Kimi reasoning model on a generic host keeps the runtime default.
 		expect(
 			buildOpenAICompat(completionsSpec({ id: "some-reasoner", reasoning: true })).streamIdleTimeoutMs,

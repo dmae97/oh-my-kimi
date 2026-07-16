@@ -364,7 +364,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 				? ALIBABA_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS
 				: isXiaomiMimo
 					? XIAOMI_MIMO_STREAM_IDLE_TIMEOUT_MS
-					: spec.reasoning && (isKimiK26ModelId(spec.id) || matchesKimiK27CodeFamily(spec))
+					: spec.reasoning && (isKimiK26ModelId(spec.id) || (isMoonshotKimi && matchesKimiK27CodeFamily(spec)))
 						? KIMI_REASONING_STREAM_IDLE_TIMEOUT_MS
 						: spec.reasoning && isDirectDeepseekApi
 							? DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS
