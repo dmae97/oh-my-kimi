@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Bounded default `ptree.ChildProcess` stderr retention to the existing 32 KiB tail instead of retaining every raw chunk; long-lived subprocesses (LSP/DAP/RPC) no longer grow OMP memory with their stderr volume. Full capture must now be selected at spawn time via `spawn(cmd, { stderr: "full" })` / `exec(cmd, { stderr: "full" })`, and a retroactive `wait({ stderr: "full" })` on a default child throws instead of returning truncated data ([#5759](https://github.com/can1357/oh-my-pi/issues/5759)).
+
 ## [17.0.1] - 2026-07-16
 
 ### Fixed
