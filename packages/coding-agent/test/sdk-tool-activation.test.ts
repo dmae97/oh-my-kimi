@@ -228,6 +228,36 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		}
 	});
 
+	it("does not activate write merely because plan mode is available", async () => {
+		const tempDir = makeTempDir();
+		const { session } = await createAgentSession({
+			...baseOptions(tempDir),
+			toolNames: ["read"],
+		});
+
+		try {
+			await session.setActiveToolsByName(["read"]);
+			expect(session.getActiveToolNames()).not.toContain("write");
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	it("preserves write explicitly selected by a runtime caller", async () => {
+		const tempDir = makeTempDir();
+		const { session } = await createAgentSession({
+			...baseOptions(tempDir),
+			toolNames: ["read"],
+		});
+
+		try {
+			await session.setActiveToolsByName(["read", "write"]);
+			await session.refreshMCPTools([]);
+			expect(session.getActiveToolNames()).toContain("write");
+		} finally {
+			await session.dispose();
+		}
+	});
 	it("registers vibe tools only during explicit vibe activation", async () => {
 		const tempDir = makeTempDir();
 		const { session } = await createAgentSession(baseOptions(tempDir));

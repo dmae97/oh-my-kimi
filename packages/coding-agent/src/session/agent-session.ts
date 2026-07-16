@@ -1945,6 +1945,7 @@ export class AgentSession {
 	#ensureWriteRegistered: (() => Promise<void>) | undefined;
 	#disconnectOwnedMcpManager: (() => Promise<void>) | undefined;
 	#presentationPinnedToolNames: ReadonlySet<string> | undefined;
+	#runtimeSelectedToolNames: ReadonlySet<string> | undefined;
 	#baseSystemPrompt: string[];
 	#baseSystemPromptBeforeMemoryPromotion: string[] | undefined;
 	/**
@@ -6762,18 +6763,18 @@ export class AgentSession {
 		const validToolNames: string[] = [];
 		const mountedTools: AgentTool[] = [];
 		const xdevReadAvailable =
-			this.#presentationPinnedToolNames === undefined || this.#presentationPinnedToolNames.has("read");
+			(this.#presentationPinnedToolNames === undefined && this.#runtimeSelectedToolNames === undefined) ||
+			this.#presentationPinnedToolNames?.has("read") === true ||
+			this.#runtimeSelectedToolNames?.has("read") === true;
+
 		for (const name of toolNames) {
 			const tool = this.#toolRegistry.get(name);
 			if (!tool) continue;
 			// Discoverable tools are presented as `xd://` devices (kept out of the
-			// top-level schema) when the transport is active; presentation pins stay top-level.
-			if (
-				this.#xdevRegistry &&
-				xdevReadAvailable &&
-				this.#presentationPinnedToolNames?.has(name) !== true &&
-				isMountableUnderXdev(tool)
-			) {
+			// top-level schema) when read transport is available; presentation pins stay top-level.
+			const presentationPinned =
+				this.#presentationPinnedToolNames?.has(name) === true || this.#runtimeSelectedToolNames?.has(name) === true;
+			if (this.#xdevRegistry && xdevReadAvailable && !presentationPinned && isMountableUnderXdev(tool)) {
 				mountedTools.push(tool);
 			} else {
 				tools.push(this.#wrapToolForAcpPermission(tool));
@@ -6781,10 +6782,12 @@ export class AgentSession {
 			}
 		}
 
-		const pinnedWrite = this.#presentationPinnedToolNames?.has("write") === true;
+		const pinnedWrite =
+			this.#presentationPinnedToolNames?.has("write") === true ||
+			this.#runtimeSelectedToolNames?.has("write") === true;
 		const activeDeferrableTool = tools.some(tool => tool.deferrable === true);
 		const transportNeeded =
-			mountedTools.length > 0 || activeDeferrableTool || this.settings.get("plan.enabled") || pinnedWrite;
+			mountedTools.length > 0 || activeDeferrableTool || this.#planModeState?.enabled === true || pinnedWrite;
 		if (transportNeeded) {
 			await this.#ensureWriteRegistered?.();
 			const write = this.#toolRegistry.get("write");
@@ -6792,25 +6795,23 @@ export class AgentSession {
 				tools.push(this.#wrapToolForAcpPermission(write));
 				validToolNames.push("write");
 			}
-		} else if (this.#presentationPinnedToolNames !== undefined) {
+		} else if (this.#presentationPinnedToolNames !== undefined || this.#runtimeSelectedToolNames !== undefined) {
 			const writeNameIndex = validToolNames.indexOf("write");
 			if (writeNameIndex >= 0) validToolNames.splice(writeNameIndex, 1);
 			const writeToolIndex = tools.findIndex(tool => tool.name === "write");
 			if (writeToolIndex >= 0) tools.splice(writeToolIndex, 1);
 		}
 
-		// Reconcile dynamic `xd://` mounts; absent tools must not remain callable.
+		// Reconcile dynamic `xd://` mounts; removed devices must not stay callable.
 		const previousMounted = this.#mountedXdevToolNames;
 		this.#mountedXdevToolNames = new Set(mountedTools.map(tool => tool.name));
 		this.#xdevRegistry?.reconcile(mountedTools);
 		this.#notifyXdevMountDelta(previousMounted);
 		this.#setActiveToolNames?.(validToolNames);
 		this.agent.setTools(tools);
-		// Rebuild base system prompt with new tool set, but only when the tool set
-		// actually changed. MCP servers can reconnect at arbitrary times and call
-		// `refreshMCPTools` -> `#applyActiveToolsByName` even though the resulting
-		// tool list is byte-identical. Skipping the rebuild keeps the system prompt
-		// stable, which is required for Anthropic prompt caching to keep hitting.
+
+		// Rebuild only when the top-level tool signature changes. Mount deltas are
+		// announced separately so provider prompt-cache prefixes stay stable.
 		if (this.#rebuildSystemPrompt) {
 			const signature = this.#computeAppliedToolSignature(validToolNames, tools);
 			if (signature !== this.#lastAppliedToolSignature) {
@@ -6893,6 +6894,7 @@ export class AgentSession {
 	 * Changes take effect before the next model call.
 	 */
 	async setActiveToolsByName(toolNames: string[]): Promise<void> {
+		this.#runtimeSelectedToolNames = new Set(normalizeToolNames(toolNames));
 		await this.#applyActiveToolsByName(toolNames);
 	}
 
