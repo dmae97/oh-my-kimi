@@ -10,6 +10,7 @@ import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream"
 import {
 	AgentClientMessageSchema,
 	AgentServerMessageSchema,
+	DeleteArgsSchema,
 	ExecServerMessageSchema,
 	McpArgsSchema,
 	ReadArgsSchema,
@@ -282,5 +283,51 @@ describe("CursorExecHandlers advise routing (issue #5680)", () => {
 
 		expect(written.length).toBe(1);
 		expect(decodeMcpResultCase(written[0])).toBe("toolNotFound");
+	});
+});
+
+// Regression for the #5686 review: Cursor's native `delete` frame removes files
+// directly (bypassing the tool map), so a read-only advisor that was granted no
+// mutating tool must not be able to delete workspace files.
+describe("CursorExecHandlers native delete gating (issue #5680)", () => {
+	let cwd: string;
+
+	beforeEach(async () => {
+		cwd = await fs.mkdtemp(path.join(os.tmpdir(), "cursor-delete-test-"));
+	});
+
+	afterEach(async () => {
+		await removeWithRetries(cwd);
+	});
+
+	it("rejects native delete and preserves the file when allowNativeDelete is false", async () => {
+		const target = path.join(cwd, "victim.txt");
+		await Bun.write(target, "keep me");
+		const handlers = new CursorExecHandlers({
+			cwd,
+			tools: new Map(),
+			allowNativeDelete: false,
+		});
+
+		const result = await handlers.delete(create(DeleteArgsSchema, { toolCallId: "call-del", path: target }));
+
+		expect(result.isError).toBe(true);
+		expect(result.content).toEqual([{ type: "text", text: 'Tool "delete" not available' }]);
+		expect(await Bun.file(target).exists()).toBe(true);
+	});
+
+	it("performs native delete when allowNativeDelete is true", async () => {
+		const target = path.join(cwd, "victim.txt");
+		await Bun.write(target, "remove me");
+		const handlers = new CursorExecHandlers({
+			cwd,
+			tools: new Map(),
+			allowNativeDelete: true,
+		});
+
+		const result = await handlers.delete(create(DeleteArgsSchema, { toolCallId: "call-del", path: target }));
+
+		expect(result.isError).toBe(false);
+		expect(await Bun.file(target).exists()).toBe(false);
 	});
 });

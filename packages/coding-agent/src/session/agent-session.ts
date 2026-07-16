@@ -2976,9 +2976,15 @@ export class AgentSession {
 			// own tools (including the MCP `advise` tool) return `toolNotFound` and
 			// no advice is ever routed (issue #5680). Mirrors the primary agent's
 			// bridge (`sdk.ts`), scoped to this advisor's granted tool set.
+			// Cursor's native `delete` frame removes files directly, bypassing the
+			// tool map, so gate it on the advisor actually holding a file-mutating
+			// tool. A default read-only advisor (advise/read/grep/glob) never gets
+			// to delete workspace files it was never granted (issue #5680 review).
+			const advisorCanMutateFiles = advisorToolMap.has("write") || advisorToolMap.has("edit");
 			const advisorCursorExecHandlers = new CursorExecHandlers({
 				cwd: this.sessionManager.getCwd(),
 				tools: advisorToolMap,
+				allowNativeDelete: advisorCanMutateFiles,
 			});
 			const advisorAgent = new Agent({
 				initialState: {
