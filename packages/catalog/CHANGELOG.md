@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Umans PAYG models showing as "Free" in `/models` by sourcing the provider's published per-token rates instead of the all-zero coding-plan catalog ([#5733](https://github.com/can1357/oh-my-pi/issues/5733)).
+
 ## [17.0.1] - 2026-07-16
 
 ### Added
