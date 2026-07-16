@@ -121,3 +121,34 @@ describe("CursorExecHandlers error results", () => {
 		expect(end?.isError).toBe(true);
 	});
 });
+
+describe("CursorExecHandlers mounted tool bridge", () => {
+	it("executes MCP tools resolved from the xd:// registry", async () => {
+		const mountedTool: AgentTool = {
+			name: "mcp__fixture_report",
+			label: "Fixture Report",
+			description: "reports a fixture result",
+			parameters: type({}),
+			async execute() {
+				return { content: [{ type: "text", text: "reported" }], details: {} };
+			},
+		};
+		const handlers = new CursorExecHandlers({
+			cwd: ".",
+			tools: new Map(),
+			getTool: name => (name === mountedTool.name ? mountedTool : undefined),
+		});
+
+		const result = await handlers.mcp({
+			name: mountedTool.name,
+			providerIdentifier: "pi-agent",
+			toolName: mountedTool.name,
+			toolCallId: "call-mounted",
+			args: {},
+			rawArgs: {},
+		});
+
+		expect(result.isError).toBe(false);
+		expect(result.content).toEqual([{ type: "text", text: "reported" }]);
+	});
+});

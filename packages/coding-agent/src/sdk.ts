@@ -2272,6 +2272,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const cursorExecHandlers = new CursorExecHandlers({
 			cwd,
 			tools: toolRegistry,
+			getTool: name => toolSession.xdevRegistry?.get(name),
 			getToolContext: () => toolContextStore.getContext(),
 			emitEvent: event => cursorEventEmitter?.(event),
 		});
@@ -2629,6 +2630,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				return settingsAwareStreamFn(streamModel, context, streamOptions);
 			},
 			cursorExecHandlers,
+			getCursorTools: () => [...(toolSession.xdevRegistry?.list() ?? [])],
 			transformToolCallArguments: (args, _toolName) => {
 				let result = args;
 				const maxTimeout = settings.get("tools.maxTimeout");

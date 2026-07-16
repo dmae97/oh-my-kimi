@@ -19,6 +19,7 @@ import { resolveToCwd } from "./tools/path-utils";
 interface CursorExecBridgeOptions {
 	cwd: string;
 	tools: Map<string, AgentTool>;
+	getTool?: (name: string) => AgentTool | undefined;
 	getToolContext?: () => AgentToolContext | undefined;
 	emitEvent?: (event: AgentEvent) => void;
 }
@@ -53,7 +54,7 @@ async function executeTool(
 	toolCallId: string,
 	args: Record<string, unknown>,
 ): Promise<ToolResultMessage> {
-	const tool = options.tools.get(toolName);
+	const tool = options.tools.get(toolName) ?? options.getTool?.(toolName);
 	if (!tool) {
 		const result = buildToolErrorResult(`Tool "${toolName}" not available`);
 		return createToolResultMessage(toolCallId, toolName, result, true);
@@ -327,7 +328,7 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 	async mcp(call: CursorMcpCall) {
 		const toolName = call.toolName || call.name;
 		const toolCallId = decodeToolCallId(call.toolCallId);
-		const tool = this.options.tools.get(toolName);
+		const tool = this.options.tools.get(toolName) ?? this.options.getTool?.(toolName);
 		if (!tool) {
 			const availableTools = Array.from(this.options.tools.keys()).filter(name => name.startsWith("mcp__"));
 			const message = formatMcpToolErrorMessage(toolName, availableTools);
