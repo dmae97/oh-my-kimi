@@ -47,6 +47,13 @@ export interface CmuxBrowserHandle extends BrowserHandleCommon {
 
 export type BrowserHandle = PuppeteerBrowserHandle | CmuxBrowserHandle;
 
+/** Controls bounded browser-handle teardown and identifies the owning resource in timeout diagnostics. */
+export interface ReleaseBrowserOptions {
+	kill: boolean;
+	timeoutMs?: number;
+	resource?: string;
+}
+
 const browsers = new Map<string, BrowserHandle>();
 
 function browserKey(kind: BrowserKind): string {
@@ -221,7 +228,7 @@ export function holdBrowser(handle: BrowserHandle): void {
 	handle.refCount++;
 }
 
-export async function releaseBrowser(handle: BrowserHandle, opts: { kill: boolean }): Promise<void> {
+export async function releaseBrowser(handle: BrowserHandle, opts: ReleaseBrowserOptions): Promise<void> {
 	handle.refCount = Math.max(0, handle.refCount - 1);
 	if (handle.refCount === 0) {
 		// Only evict if the registry still points at THIS handle. After a disconnect,
@@ -232,7 +239,7 @@ export async function releaseBrowser(handle: BrowserHandle, opts: { kill: boolea
 	}
 }
 
-async function disposeBrowserHandle(handle: BrowserHandle, opts: { kill: boolean }): Promise<void> {
+async function disposeBrowserHandle(handle: BrowserHandle, opts: ReleaseBrowserOptions): Promise<void> {
 	if ("client" in handle) {
 		handle.client.close();
 		return;
