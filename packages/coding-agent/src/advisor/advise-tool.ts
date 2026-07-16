@@ -106,8 +106,11 @@ export function isAdvisorInterruptImmuneTurnActive(opts: {
  *   the live turn while one is streaming, or (when idle) a triggered turn so the
  *   advice is acted on immediately.
  * - If the primary tail is already a terminal text answer and there is no queued
- *   work, late interrupting advice is preserved as a visible card instead of
- *   waking the primary to restate completion.
+ *   work, a late `concern` is preserved as a visible card instead of waking the
+ *   primary to restate completion. A `blocker` is the exception: it means the
+ *   agent handed off broken or unexercised work, so it still steers a triggered
+ *   turn to force the primary to acknowledge and continue before the turn is
+ *   considered done (#5628) — deferring it to the next user turn is the bug.
  * - After a deliberate user interrupt (`autoResumeSuppressed`) the advisor must
  *   not auto-resume the stopped run. While the agent is idle — or still tearing
  *   the interrupted turn down (`aborting`) — the note is preserved as a visible
@@ -129,7 +132,8 @@ export function resolveAdvisorDeliveryChannel(opts: {
 }): AdvisorDeliveryChannel {
 	if (!isInterruptingSeverity(opts.severity)) return "aside";
 	if (opts.autoResumeSuppressed && (opts.aborting || !opts.streaming)) return "preserve";
-	if (opts.terminalAnswerNoQueuedWork && !opts.streaming && !opts.aborting) return "preserve";
+	if (opts.terminalAnswerNoQueuedWork && opts.severity !== "blocker" && !opts.streaming && !opts.aborting)
+		return "preserve";
 	if (opts.interruptImmuneTurnActive) return "aside";
 	return "steer";
 }
