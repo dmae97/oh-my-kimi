@@ -121,14 +121,79 @@ describe("Warp CLI-agent events", () => {
 		enableWarpProtocol();
 		const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
 		const tmux = vi.spyOn(terminalCapabilities, "isInsideTmux").mockReturnValue(true);
-		const wrap = vi.spyOn(terminalCapabilities, "wrapTmuxPassthrough").mockImplementation(osc => `wrapped:${osc}`);
+		const wrap = vi.spyOn(terminalCapabilities, "wrapTmuxPassthrough");
 		const emitter = createWarpEventEmitter({ sessionId: "session-123" });
 
 		emitter?.emit({ event: "stop" });
 
 		expect(tmux).toHaveBeenCalledTimes(1);
 		expect(wrap).toHaveBeenCalledWith(expect.stringContaining("warp://cli-agent"));
-		expect(write).toHaveBeenCalledWith(expect.stringContaining("wrapped:\x1b]777;notify;warp://cli-agent;"));
+		const written = write.mock.calls[0]?.[0] as string;
+		// Real DCS wrap ends with ST; attention events append outer BEL after it.
+		expect(written.startsWith("\x1bPtmux;")).toBe(true);
+		expect(written.endsWith("\x1b\\\x07")).toBe(true);
+	});
+
+	const attentionEvents = ["stop", "stop_failure", "permission_request", "question_asked"] as const;
+	const nonAttentionEvents = [
+		"session_start",
+		"prompt_submit",
+		"tool_complete",
+		"permission_replied",
+		"custom_event",
+	] as const;
+
+	for (const eventName of attentionEvents) {
+		it(`rings tmux outer BEL for attention event ${eventName}`, () => {
+			enableWarpProtocol();
+			const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+			vi.spyOn(terminalCapabilities, "isInsideTmux").mockReturnValue(true);
+			const emitter = createWarpEventEmitter({ sessionId: "session-123" });
+
+			emitter?.emit({ event: eventName });
+
+			const written = write.mock.calls[0]?.[0] as string;
+			// Outer BEL after DCS ST; OSC's own \x07 is interior to the passthrough.
+			expect(written.startsWith("\x1bPtmux;")).toBe(true);
+			expect(written.endsWith("\x07\x1b\\\x07")).toBe(true);
+			expect(written.slice(0, -1).endsWith("\x07\x1b\\")).toBe(true);
+		});
+	}
+
+	for (const eventName of nonAttentionEvents) {
+		it(`does not ring tmux outer BEL for non-attention event ${eventName}`, () => {
+			enableWarpProtocol();
+			const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+			vi.spyOn(terminalCapabilities, "isInsideTmux").mockReturnValue(true);
+			const emitter = createWarpEventEmitter({ sessionId: "session-123" });
+
+			emitter?.emit({ event: eventName });
+
+			const written = write.mock.calls[0]?.[0] as string;
+			// DCS ST only — OSC terminator is inside the wrap, not an outer BEL.
+			expect(written.startsWith("\x1bPtmux;")).toBe(true);
+			expect(written.endsWith("\x07\x1b\\")).toBe(true);
+			expect(written.endsWith("\x07\x1b\\\x07")).toBe(false);
+		});
+	}
+
+	it("leaves direct-terminal OSC unchanged without outer BEL after OSC terminator", () => {
+		enableWarpProtocol();
+		const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		vi.spyOn(terminalCapabilities, "isInsideTmux").mockReturnValue(false);
+		const wrap = vi.spyOn(terminalCapabilities, "wrapTmuxPassthrough");
+		const emitter = createWarpEventEmitter({ sessionId: "session-123" });
+
+		for (const eventName of [...attentionEvents, ...nonAttentionEvents]) {
+			write.mockClear();
+			emitter?.emit({ event: eventName });
+			const written = write.mock.calls[0]?.[0] as string;
+			expect(written.startsWith(OSC_PREFIX)).toBe(true);
+			expect(written.endsWith("\x07")).toBe(true);
+			// Exactly one trailing BEL (OSC terminator), not an extra attention BEL.
+			expect(written.endsWith("\x07\x07")).toBe(false);
+			expect(wrap).not.toHaveBeenCalled();
+		}
 	});
 
 	it("creates an emitter from protocol version alone even when terminal id is base", () => {

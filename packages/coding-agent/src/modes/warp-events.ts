@@ -7,6 +7,12 @@ import { isSilentAbort, isUserInterruptAbort, SKILL_PROMPT_MESSAGE_TYPE } from "
 
 const WARP_CLI_AGENT_PROTOCOL_VERSION = 1;
 const WARP_CLI_AGENT_SENTINEL = "warp://cli-agent";
+const WARP_ATTENTION_EVENTS: Record<string, true> = {
+	stop: true,
+	stop_failure: true,
+	permission_request: true,
+	question_asked: true,
+};
 
 /** True when Warp has negotiated the structured CLI-agent OSC protocol. */
 export function isWarpCliAgentProtocolActive(): boolean {
@@ -58,7 +64,18 @@ export function createWarpEventEmitter(options: WarpEventEmitterOptions): WarpEv
 				plugin_version: VERSION,
 			};
 			const osc = `\x1b]777;notify;${WARP_CLI_AGENT_SENTINEL};${JSON.stringify(body)}\x07`;
-			process.stdout.write(isInsideTmux() ? wrapTmuxPassthrough(osc) : osc);
+			if (!isInsideTmux()) {
+				process.stdout.write(osc);
+				return;
+			}
+			// DCS-wrap every OSC so Warp can parse it under allow-passthrough.
+			// Outer BEL after DCS is only for attention-worthy events so tmux
+			// monitor-bell flags the pane; the OSC's own trailing \x07 is its
+			// terminator and does not drive the outer bell after wrapping.
+			const wrapped = wrapTmuxPassthrough(osc);
+			const eventName = event.event;
+			const ring = typeof eventName === "string" && Object.hasOwn(WARP_ATTENTION_EVENTS, eventName);
+			process.stdout.write(ring ? `${wrapped}\x07` : wrapped);
 		},
 	};
 }
