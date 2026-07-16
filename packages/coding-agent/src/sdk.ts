@@ -2247,25 +2247,24 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			builtInRegistryToolNames.delete("edit");
 		}
 
-		// Staged actions (tool previews, plan approval) resolve through `write`
-		// to the resolution devices (`xd://resolve`, `xd://reject`,
-		// `xd://propose`), so `write` must stay in the registry whenever any
-		// code path can stage one: a deferrable tool, or plan mode installing a
-		// plan-proposal handler (issue #1428). Dropping it on read-only sessions
-		// (e.g. plan-mode toolset `read`, `search`, `find`, `web_search`) leaves
-		// plan mode unable to exit through the intended path.
+		const ensureWriteRegistered = async (): Promise<void> => {
+			if (toolRegistry.has("write")) return;
+			const writeTool = await logger.time("createTools:write:session", BUILTIN_TOOLS.write, toolSession);
+			if (!writeTool) return;
+			toolRegistry.set(
+				writeTool.name,
+				new ExtensionToolWrapper(wrapToolWithMetaNotice(writeTool), extensionRunner) as Tool,
+			);
+			builtInRegistryToolNames.add(writeTool.name);
+		};
+
+		// Existing staged/device paths need write registered before active-set assembly.
+		// Deferred MCP also registers it now, but refresh activates it only after a server connects.
 		const hasDeferrableTools = Array.from(toolRegistry.values()).some(tool => tool.deferrable === true);
 		const hasXdevTools = (toolSession.xdevRegistry?.size ?? 0) > 0;
 		const planModeAvailable = settings.get("plan.enabled");
-		if ((hasDeferrableTools || hasXdevTools || planModeAvailable) && !toolRegistry.has("write")) {
-			const writeTool = await logger.time("createTools:write:session", BUILTIN_TOOLS.write, toolSession);
-			if (writeTool) {
-				toolRegistry.set(
-					writeTool.name,
-					new ExtensionToolWrapper(wrapToolWithMetaNotice(writeTool), extensionRunner) as Tool,
-				);
-				builtInRegistryToolNames.add(writeTool.name);
-			}
+		if (hasDeferrableTools || hasXdevTools || planModeAvailable || deferMCPDiscoveryForUI) {
+			await ensureWriteRegistered();
 		}
 
 		let cursorEventEmitter: ((event: AgentEvent) => void) | undefined;
@@ -2418,6 +2417,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			registeredTools.filter(tool => tool.definition.defaultInactive).map(tool => tool.definition.name),
 		);
 		const requestedActiveToolNames = normalizedRequested.filter(name => name !== "goal");
+		const explicitlyRequestedToolNameSet = explicitlyRequestedToolNames
+			? new Set(explicitlyRequestedToolNames)
+			: undefined;
 		const initialRequestedActiveToolNames = options.toolNames
 			? requestedActiveToolNames
 			: requestedActiveToolNames.filter(name => !defaultInactiveToolNames.has(name));
@@ -2449,24 +2451,28 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		});
 		hasRegistered = true;
 
-		// Partition the initial enabled set for the xd:// transport: discoverable
-		// tools become mounted devices; the rest stay top-level. The registry
-		// already holds the built-in devices (mounted in createTools); this
-		// reconciles the initial dynamic mounts (image-gen, TTS, startup MCP,
-		// active extension tools) and drops them from the top-level names so they
-		// never ship a schema. Presentation only — selection already happened.
+		// Partition the initial enabled set for the xd:// transport: ambient
+		// discoverable tools become mounted devices, while explicitly requested
+		// tools keep their top-level presentation. The registry already holds the
+		// default-set built-in devices from createTools; this reconciles dynamic
+		// mounts (image-gen, TTS, startup MCP, active extension tools).
 		let initialMountedXdevToolNames: string[] = [];
 		if (toolSession.xdevRegistry) {
 			const topLevelToolNames: string[] = [];
 			const mountedTools: Tool[] = [];
 			for (const name of initialToolNames) {
 				const tool = toolRegistry.get(name);
-				if (tool && isMountableUnderXdev(tool)) mountedTools.push(tool);
+				const explicitlyRequested = explicitlyRequestedToolNameSet?.has(name) === true;
+				if (tool && !explicitlyRequested && isMountableUnderXdev(tool)) mountedTools.push(tool);
 				else topLevelToolNames.push(name);
 			}
 			toolSession.xdevRegistry.reconcile(mountedTools);
 			initialMountedXdevToolNames = mountedTools.map(tool => tool.name);
 			initialToolNames = topLevelToolNames;
+			if (initialMountedXdevToolNames.length > 0) {
+				await ensureWriteRegistered();
+				if (!initialToolNames.includes("write")) initialToolNames.push("write");
+			}
 		}
 
 		setActiveToolNames(initialToolNames);

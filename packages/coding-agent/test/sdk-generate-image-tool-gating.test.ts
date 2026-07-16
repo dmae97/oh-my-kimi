@@ -6,6 +6,7 @@ import { AuthStorage } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { CustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -69,7 +70,7 @@ describe("generate_image tool gating", () => {
 		expect(names).not.toContain("generate_image");
 	});
 
-	it("includes generate_image when explicitly requested and enabled", async () => {
+	it("includes generate_image top-level when explicitly requested and enabled", async () => {
 		const names = await activeToolNames(Settings.isolated({}), ["read", "generate_image"]);
 		expect(names).toContain("generate_image");
 	});
@@ -90,5 +91,48 @@ describe("generate_image tool gating", () => {
 		sessions.push(session);
 		expect(session.getActiveToolNames()).not.toContain("generate_image");
 		expect(session.getXdevToolEntries().map(entry => entry.name)).toContain("generate_image");
+	});
+
+	it("keeps explicit discoverable tools top-level while mounting ambient MCP-shaped custom tools", async () => {
+		let mcpCalls = 0;
+		const mcpTool = {
+			name: "mcp__test__search",
+			label: "test/search",
+			description: "Search the test MCP server",
+			parameters: { type: "object", properties: {} },
+			mcpServerName: "test",
+			mcpToolName: "search",
+			execute: async () => {
+				mcpCalls++;
+				return { content: [{ type: "text" as const, text: "ok" }] };
+			},
+		} as CustomTool;
+		const { session } = await createAgentSession({
+			cwd: registryDir,
+			agentDir: registryDir,
+			modelRegistry,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({}),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			toolNames: ["read", "generate_image"],
+			customTools: [mcpTool],
+		});
+		sessions.push(session);
+
+		expect(session.getActiveToolNames()).toContain("generate_image");
+		expect(session.getActiveToolNames()).not.toContain(mcpTool.name);
+		expect(session.getXdevToolEntries().map(entry => entry.name)).toContain(mcpTool.name);
+		expect(session.getXdevToolEntries().map(entry => entry.name)).not.toContain("generate_image");
+		expect(session.getAllToolNames()).toContain(mcpTool.name);
+		expect(session.getActiveToolNames()).toContain("write");
+		const writeTool = session.getToolByName("write");
+		expect(writeTool).toBeDefined();
+		const result = await writeTool!.execute("mcp-xdev-dispatch", {
+			path: `xd://${mcpTool.name}`,
+			content: "{}",
+		});
+		expect(result.content.find(part => part.type === "text")?.text).toBe("ok");
+		expect(mcpCalls).toBe(1);
 	});
 });

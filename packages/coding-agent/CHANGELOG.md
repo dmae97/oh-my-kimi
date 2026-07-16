@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed explicit-tool sessions bypassing `xd://` presentation for ambient discoverable custom and MCP tools, which sent their schemas top-level and could exceed provider tool limits or trigger schema-compatibility errors.
+
 ## [17.0.1] - 2026-07-16
 
 ### Changed

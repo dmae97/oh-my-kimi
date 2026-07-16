@@ -568,15 +568,16 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	);
 	let tools = baseResults.filter((r): r is Tool => r !== null);
 
-	// xd:// mounting: unmount discoverable built-ins from the tools array and
-	// expose them as virtual device URLs driven through read/write. Active for
-	// default tool sets when `tools.xdev` is enabled.
-	const xdevEnabled = requestedTools === undefined && session.settings.get("tools.xdev");
+	// Always create the xd:// registry when enabled so SDK assembly can mount
+	// discoverable custom/MCP tools later. Explicitly requested built-ins keep
+	// their top-level presentation; default tool sets mount discoverable built-ins.
+	const xdevEnabled = session.settings.get("tools.xdev");
+	const mountBuiltinTools = requestedTools === undefined;
 	if (xdevEnabled) {
 		const mounted: Tool[] = [];
 		const kept: Tool[] = [];
 		for (const tool of tools) {
-			const mountable = isMountableUnderXdev(tool) && tool.name in BUILTIN_TOOLS;
+			const mountable = mountBuiltinTools && isMountableUnderXdev(tool) && tool.name in BUILTIN_TOOLS;
 			(mountable ? mounted : kept).push(tool);
 		}
 		session.xdevRegistry = new XdevRegistry(mounted);

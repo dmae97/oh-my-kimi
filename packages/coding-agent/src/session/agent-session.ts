@@ -7036,9 +7036,20 @@ export class AgentSession {
 			this.#toolRegistry.set(finalTool.name, finalTool);
 		}
 
-		// Every connected MCP tool is enabled; re-derive the active set from the
-		// current non-MCP tools plus all freshly registered MCP tools.
+		// Every connected MCP tool is enabled. When xdev presents them as devices,
+		// keep the registered write transport active so they remain callable.
 		const nextActive = [...new Set([...this.#getActiveNonMCPToolNames(), ...mcpTools.map(tool => tool.name)])];
+		if (
+			this.#xdevRegistry &&
+			mcpTools.some(tool => {
+				const registered = this.#toolRegistry.get(tool.name);
+				return registered !== undefined && isMountableUnderXdev(registered);
+			}) &&
+			this.#toolRegistry.has("write") &&
+			!nextActive.includes("write")
+		) {
+			nextActive.push("write");
+		}
 		await this.#applyActiveToolsByName(nextActive);
 	}
 

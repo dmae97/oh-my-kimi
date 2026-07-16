@@ -135,8 +135,11 @@ describe("createAgentSession defaultInactive tool activation", () => {
 
 		try {
 			expect(session.getActiveToolNames()).toEqual(
-				expect.arrayContaining(["read", "default_active_tool", "default_inactive_tool"]),
+				expect.arrayContaining(["read", "default_inactive_tool", "write"]),
 			);
+			expect(session.getActiveToolNames()).not.toContain("default_active_tool");
+			expect(session.getXdevToolEntries().map(entry => entry.name)).toContain("default_active_tool");
+			expect(session.getXdevToolEntries().map(entry => entry.name)).not.toContain("default_inactive_tool");
 			expect(session.systemPrompt.join("\n")).toContain("default_inactive_tool");
 		} finally {
 			await session.dispose();

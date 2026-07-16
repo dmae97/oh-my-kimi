@@ -9,7 +9,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
-import { SERVER_INSTRUCTIONS, TOOL_NAME } from "./fixtures/instructions-mcp";
+import { SERVER_INSTRUCTIONS, TOOL_NAME, TOOL_RESULT } from "./fixtures/instructions-mcp";
 
 // Contract: a deferred interactive (`hasUI`) session runs MCP discovery off the
 // first-paint path, so an MCP server's `instructions` are not available when the
@@ -137,19 +137,22 @@ describe("createAgentSession MCP server instructions (deferred UI)", () => {
 		try {
 			expect(session.getActiveToolNames()).toContain("read");
 
-			// Deferred MCP discovery is fire-and-forget and exposes no promise or
-			// event; fake timers cannot drive the real subprocess handshake, so we
-			// poll the live active-tool state and exit as soon as the fixture tool
-			// appears.
+			// Deferred discovery mounts MCP under xd:// and activates write as its transport.
 			const deadline = Date.now() + 12_000;
-			let activeToolNames = session.getActiveToolNames();
-			while (!activeToolNames.includes(MCP_TOOL_NAME) && Date.now() < deadline) {
+			let deviceNames = session.getXdevToolEntries().map(entry => entry.name);
+			while (!deviceNames.includes(MCP_TOOL_NAME) && Date.now() < deadline) {
 				await Bun.sleep(50);
-				activeToolNames = session.getActiveToolNames();
+				deviceNames = session.getXdevToolEntries().map(entry => entry.name);
 			}
 
-			expect(activeToolNames).toContain("read");
-			expect(activeToolNames).toContain(MCP_TOOL_NAME);
+			expect(session.getActiveToolNames()).toContain("read");
+			expect(session.getActiveToolNames()).toContain("write");
+			expect(session.getActiveToolNames()).not.toContain(MCP_TOOL_NAME);
+			expect(deviceNames).toContain(MCP_TOOL_NAME);
+			const write = session.getToolByName("write");
+			expect(write).toBeDefined();
+			const result = await write!.execute("deferred-mcp-call", { path: `xd://${MCP_TOOL_NAME}`, content: "{}" });
+			expect(result.content.find(part => part.type === "text")?.text).toBe(TOOL_RESULT);
 		} finally {
 			await session.dispose();
 		}
