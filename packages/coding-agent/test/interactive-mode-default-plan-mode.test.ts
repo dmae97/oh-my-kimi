@@ -147,6 +147,22 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		expect(session?.getActiveToolNames()).not.toContain("write");
 	});
 
+	it("removes plan-only write when exiting to the previous read-only tool set", async () => {
+		const writeTool = makeTool("write");
+		const created = createHarness(Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }), {
+			extraRegistryTools: [writeTool],
+			builtInToolNames: ["read", "write"],
+		});
+		await created.init({ suppressWelcomeIntro: true });
+		expect(session?.getActiveToolNames()).toContain("write");
+
+		await created.handlePlanModeCommand();
+
+		expect(created.planModeEnabled).toBe(false);
+		expect(session?.getPlanModeState()).toBeUndefined();
+		expect(session?.getActiveToolNames()).toEqual(["read"]);
+	});
+
 	it("does not enter plan mode at startup by default", async () => {
 		const created = createHarness(Settings.isolated({ "compaction.enabled": false }));
 

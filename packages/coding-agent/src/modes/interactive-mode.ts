@@ -2120,11 +2120,11 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	async #clearTransientModeState(): Promise<void> {
 		if (this.planModeEnabled || this.planModePaused) {
+			this.session.setPlanModeState(undefined);
 			if (this.#planModePreviousTools !== undefined) {
 				await this.session.setActiveToolsByName(this.#planModePreviousTools);
 			}
 			this.session.setPlanProposalHandler?.(null);
-			this.session.setPlanModeState(undefined);
 			this.planModeEnabled = false;
 			this.planModePaused = false;
 			this.planModePlanFilePath = undefined;
@@ -2345,6 +2345,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 
+		this.session.setPlanModeState(undefined);
 		const previousTools = this.#planModePreviousTools;
 		if (previousTools && previousTools.length > 0) {
 			await this.session.setActiveToolsByName(previousTools);
@@ -2371,7 +2372,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			}
 		}
 		this.session.setPlanProposalHandler?.(null);
-		this.session.setPlanModeState(undefined);
 		this.planModeEnabled = false;
 		// Suppress cache-miss marker on the next turn: plan exit changes the system
 		// prompt, which predictably invalidates the cache.

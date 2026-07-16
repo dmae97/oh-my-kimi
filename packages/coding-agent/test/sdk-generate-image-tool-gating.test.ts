@@ -126,6 +126,17 @@ describe("generate_image tool gating", () => {
 		expect(session.getXdevToolEntries().map(entry => entry.name)).toContain("generate_image");
 	});
 
+	it("keeps carried mounted devices under xd after runtime tool selection", async () => {
+		const ambientTool = customTool("ambient_search");
+		const session = await sessionWithCustomTools(["read"], [ambientTool]);
+		expect(session.getXdevToolEntries().map(entry => entry.name)).toContain(ambientTool.name);
+
+		await session.setActiveToolsByName(session.getEnabledToolNames());
+
+		expect(session.getActiveToolNames()).not.toContain(ambientTool.name);
+		expect(session.getXdevToolEntries().map(entry => entry.name)).toContain(ambientTool.name);
+	});
+
 	it("keeps explicit discoverable tools top-level while mounting ambient MCP-shaped custom tools", async () => {
 		let mcpCalls = 0;
 		const mcpTool = {

@@ -6905,7 +6905,8 @@ export class AgentSession {
 	 * Changes take effect before the next model call.
 	 */
 	async setActiveToolsByName(toolNames: string[]): Promise<void> {
-		this.#runtimeSelectedToolNames = new Set(normalizeToolNames(toolNames));
+		const mounted = this.#mountedXdevToolNames;
+		this.#runtimeSelectedToolNames = new Set(normalizeToolNames(toolNames).filter(name => !mounted.has(name)));
 		await this.#applyActiveToolsByName(toolNames);
 	}
 
