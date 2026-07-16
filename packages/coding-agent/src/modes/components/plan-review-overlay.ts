@@ -477,7 +477,9 @@ export class PlanReviewOverlay implements Component {
 	 */
 	#handleBodyScroll(data: string): void {
 		if (this.#scrollView.handleScrollKey(data)) {
-			this.#captureScrollProgress();
+			if (matchesKey(data, "home")) this.#scrollProgress = 0;
+			else if (matchesKey(data, "end")) this.#scrollProgress = 1;
+			else this.#captureScrollProgress();
 			return;
 		}
 		if (data === "g") {
