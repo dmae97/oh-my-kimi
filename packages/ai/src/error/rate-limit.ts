@@ -102,7 +102,8 @@ export function calculateRateLimitBackoffMs(reason: RateLimitReason): number {
 
 /** Detect usage/quota limit errors in error messages (persistent, requires credential switch). */
 const USAGE_LIMIT_PATTERN =
-	/usage.?limit|usage_limit_reached|usage_not_included|limit_reached|quota.?(?:exceeded|reached|insufficient)|额度不足|额度耗尽|resource.?exhausted|exhausted your capacity|quota will reset|insufficient.?(?:balance|quota)|spend.?limit/i;
+	/usage.?limit|usage_limit_reached|usage_not_included|limit_reached|quota.?(?:exceeded|reached|insufficient)|额度不足|额度耗尽|resource.?exhausted|exhausted your capacity|quota will reset|insufficient.?(?:balance|quota)|run out of credits|out of credits|spending[- _]?limit|personal-team-blocked/i;
+const SPEND_LIMIT_PATTERN = /spend.?limit/i;
 
 /**
  * HTTP status codes that, absent richer body classification, represent an
@@ -159,5 +160,5 @@ export function isOpaqueStatusBody(message: string): boolean {
  * {@link isUsageLimitOutcome} uses it for the account-rotation decision.
  */
 export function matchesUsageLimitText(errorMessage: string): boolean {
-	return USAGE_LIMIT_PATTERN.test(errorMessage) || ACCOUNT_RATE_LIMIT_PATTERN.test(errorMessage);
+	return USAGE_LIMIT_PATTERN.test(errorMessage) || SPEND_LIMIT_PATTERN.test(errorMessage) || ACCOUNT_RATE_LIMIT_PATTERN.test(errorMessage);
 }
