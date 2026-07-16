@@ -83,7 +83,7 @@ import { UserMessageSelectorComponent } from "../components/user-message-selecto
 import type { SessionObserverRegistry } from "../session-observer-registry";
 import { buildCopyTargets } from "../utils/copy-targets";
 
-const MANUAL_LOGIN_TIP = "Tip: You can complete pairing with /login <redirect URL>.";
+const MANUAL_LOGIN_PROMPT = "Paste the authorization code (or full redirect URL), then press Enter:";
 
 export class SelectorController {
 	constructor(private ctx: InteractiveModeContext) {}
@@ -1273,7 +1273,6 @@ export class SelectorController {
 	 */
 	async #handleOAuthLogin(providerId: string): Promise<boolean> {
 		this.ctx.showStatus(`Logging in to ${providerId}…`);
-		const manualInput = this.ctx.oauthManualInput;
 		const useManualInput = PASTE_CODE_LOGIN_PROVIDERS.has(providerId);
 		let restored = false;
 		const restoreEditor = () => {
@@ -1301,16 +1300,19 @@ export class SelectorController {
 					// The dialog renders the full URL (SSH-safe copy target) and
 					// opens the browser best-effort.
 					dialog.showAuth(info.url, info.instructions, info.launchUrl);
-					if (useManualInput) {
-						dialog.showProgress(MANUAL_LOGIN_TIP);
-					}
 				},
 				onPrompt: (prompt: { message: string; placeholder?: string }) =>
 					dialog.showPrompt(prompt.message, prompt.placeholder),
 				onProgress: (message: string) => {
 					dialog.showProgress(message);
 				},
-				onManualCodeInput: useManualInput ? () => manualInput.waitForInput(providerId) : undefined,
+				// Paste-code providers (e.g. Codex) may need the user to paste the
+				// fallback redirect URL when the loopback callback can't complete
+				// (headless/remote/Windows). Mount a focused input in the dialog so
+				// the paste lands somewhere the OAuth flow consumes — the hidden
+				// editor's `/login <url>` path is unreachable while the dialog holds
+				// focus (#5339).
+				onManualCodeInput: useManualInput ? () => dialog.showManualInput(MANUAL_LOGIN_PROMPT) : undefined,
 			});
 			this.ctx.session.modelRegistry.refreshInBackground();
 			const block = new TranscriptBlock();
@@ -1339,9 +1341,6 @@ export class SelectorController {
 			this.ctx.showError(`Login failed: ${error instanceof Error ? error.message : String(error)}`);
 			return false;
 		} finally {
-			if (useManualInput) {
-				manualInput.clear(`Manual OAuth input cleared for ${providerId}`);
-			}
 			restoreEditor();
 		}
 	}
