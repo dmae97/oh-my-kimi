@@ -128,7 +128,7 @@ export async function withHostGuard<T>(fn: () => Promise<T>): Promise<T> {
 		hostGuardStdinWasRaw = stdin.isRaw ?? false;
 		const snapshot = {} as Record<StdinGuardEvent, StdinGuardListener[]>;
 		for (const event of HOST_GUARD_STDIN_EVENTS) {
-			snapshot[event] = stdin.listeners(event) as StdinGuardListener[];
+			snapshot[event] = stdin.rawListeners(event) as StdinGuardListener[];
 		}
 		hostGuardStdinListeners = snapshot;
 	}
@@ -150,10 +150,19 @@ export async function withHostGuard<T>(fn: () => Promise<T>): Promise<T> {
 				const stdin = process.stdin;
 				for (const event of HOST_GUARD_STDIN_EVENTS) {
 					const before = hostGuardStdinListeners[event];
-					for (const listener of stdin.listeners(event) as StdinGuardListener[]) {
-						if (!before.includes(listener)) {
-							stdin.removeListener(event, listener);
-						}
+					// Reconcile the stream back to the pre-load snapshot: drop any
+					// listener the module added, and reinstate any snapshot listener
+					// it removed (e.g. a factory calling `removeAllListeners("data")`
+					// would otherwise permanently strip ProcessTerminal's input
+					// handler, leaving the parent TUI deaf). removeAllListeners then
+					// re-adding in snapshot order restores both membership and order.
+					const current = stdin.rawListeners(event) as StdinGuardListener[];
+					const added = current.some(listener => !before.includes(listener));
+					const removed = before.some(listener => !current.includes(listener));
+					if (!added && !removed) continue;
+					stdin.removeAllListeners(event);
+					for (const listener of before) {
+						stdin.on(event, listener);
 					}
 				}
 				if (

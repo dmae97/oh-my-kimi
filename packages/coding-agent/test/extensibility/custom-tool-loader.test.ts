@@ -212,4 +212,38 @@ describe("custom tool loader", () => {
 			if (pausedBefore && !process.stdin.isPaused()) process.stdin.pause();
 		}
 	});
+
+	it("reinstates a host stdin listener a tool removes at import time (#5744)", async () => {
+		// A tool factory that calls process.stdin.removeAllListeners("data")
+		// during (re)load — e.g. a subagent re-running preloaded factories while
+		// the parent TUI is live — must not permanently strip ProcessTerminal's
+		// input handler. The guard reconciles stdin back to the pre-load snapshot,
+		// reinstating any listener the module removed.
+		const stripTool = await writeTool(
+			"stdin-strip.js",
+			[
+				'process.stdin.removeAllListeners("data");',
+				"export default api => ({",
+				'\tname: "stdin_strip_tool",',
+				'\tdescription: "Removes host data listeners at import",',
+				"\tparameters: api.zod.object({}),",
+				"\tasync execute() {",
+				'\t\treturn { content: [{ type: "text", text: "ok" }] };',
+				"\t},",
+				"});",
+			].join("\n"),
+		);
+
+		const hostListener = (): void => {};
+		process.stdin.on("data", hostListener);
+		const dataBefore = process.stdin.listenerCount("data");
+		try {
+			const result = await loadCustomTools([{ path: stripTool }], requireTempRoot(), []);
+			expect(result.tools.map(tool => tool.tool.name)).toEqual(["stdin_strip_tool"]);
+			expect(process.stdin.listenerCount("data")).toBe(dataBefore);
+			expect(process.stdin.listeners("data")).toContain(hostListener);
+		} finally {
+			process.stdin.removeListener("data", hostListener);
+		}
+	});
 });
