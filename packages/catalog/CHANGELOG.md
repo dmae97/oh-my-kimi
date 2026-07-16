@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed `openai-codex` GPT-5.6 Luna/Sol/Terra `contextWindow` regressing from 372000 to 272000: Codex discovery falls back to `DEFAULT_CONTEXT_WINDOW` (272000) when upstream omits `context_window`, overwriting the previously-bundled hard capacity. Pinned these SKUs to the upstream-declared 372000 in `applyOpenAICatalogPolicy` ([#5705](https://github.com/can1357/oh-my-pi/issues/5705)).
+- Fixed `openai-codex` GPT-5.6 Luna/Sol/Terra `contextWindow` regressing from 372000 to 272000: when upstream omits `context_window`, Codex discovery fell back to the generic `DEFAULT_CONTEXT_WINDOW` (272000), which both overwrote the bundled hard capacity on regen and — for logged-in Codex users — re-overwrote it on every live discovery refresh. Codex discovery now falls back to the upstream-declared 372000 for GPT-5.6 SKUs, and `applyOpenAICatalogPolicy` pins the same value at generation time ([#5705](https://github.com/can1357/oh-my-pi/issues/5705)).
 
 ## [17.0.1] - 2026-07-16
 
