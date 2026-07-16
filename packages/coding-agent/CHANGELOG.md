@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the editor status line silently dropping lower-priority segments in narrow terminals; configured segments now flow onto continuation rows in priority order ([#5749](https://github.com/can1357/oh-my-pi/issues/5749)).
+
 ## [17.0.1] - 2026-07-16
 
 ### Changed

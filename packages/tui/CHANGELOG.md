@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Changed `EditorTopBorder` to expose ordered `lines` instead of one `content`/`width` pair, allowing the editor to frame every continuation row rather than truncate one oversized status row ([#5749](https://github.com/can1357/oh-my-pi/issues/5749)).
+
 ## [17.0.1] - 2026-07-16
 
 ### Added

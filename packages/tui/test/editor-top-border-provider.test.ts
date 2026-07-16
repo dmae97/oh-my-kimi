@@ -21,7 +21,7 @@ import { Editor, type EditorTopBorder } from "@oh-my-pi/pi-tui/components/editor
 import { defaultEditorTheme } from "./test-themes";
 
 function stubTopBorder(label: string): EditorTopBorder {
-	return { content: label, width: label.length };
+	return { lines: [{ content: label, width: label.length }] };
 }
 
 describe("Editor lazy top-border provider (#4145)", () => {
@@ -89,5 +89,23 @@ describe("Editor lazy top-border provider (#4145)", () => {
 		expect(widths).toHaveLength(2);
 		expect(widths[0]).toBe(editor.getTopBorderAvailableWidth(80));
 		expect(widths[1]).toBe(editor.getTopBorderAvailableWidth(120));
+	});
+});
+
+describe("Editor top-border continuation lines", () => {
+	it("frames every status row without truncating later rows", () => {
+		const editor = new Editor(defaultEditorTheme);
+		editor.setTopBorder({
+			lines: [
+				{ content: "PRIMARY", width: 7 },
+				{ content: "CONTINUATION", width: 12 },
+			],
+		});
+
+		const frame = editor.render(24);
+
+		expect(frame[0]).toContain("PRIMARY");
+		expect(frame[1]).toContain("CONTINUATION");
+		expect(frame[1]).toContain(defaultEditorTheme.symbols.boxRound.vertical);
 	});
 });

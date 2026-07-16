@@ -352,11 +352,18 @@ export interface EditorTheme {
 	hintStyle?: (text: string) => string;
 }
 
-export interface EditorTopBorder {
-	/** The status content (already styled) */
+/** One styled row supplied for the editor's top border. */
+export interface EditorTopBorderLine {
+	/** Status content with any ANSI styling already applied. */
 	content: string;
-	/** Visible width of the content */
+	/** Visible cell width of {@link content}. */
 	width: number;
+}
+
+/** Ordered status rows rendered above the editor input. */
+export interface EditorTopBorder {
+	/** Styled rows in display order; the first row forms the box top. */
+	lines: readonly EditorTopBorderLine[];
 }
 
 interface HistoryEntry {
@@ -839,18 +846,26 @@ export class Editor implements Component, Focusable {
 			// wants the coalesced path; falling back to eager keeps existing
 			// setTopBorder callers working unchanged.
 			const topBorder = this.#topBorderProvider ? this.#topBorderProvider(topFillWidth) : this.#topBorderContent;
-			if (topBorder) {
-				const { content, width: statusWidth } = topBorder;
-				if (statusWidth <= topFillWidth) {
-					// Status fits - add fill after it
-					const fillWidth = topFillWidth - statusWidth;
-					result.push(topLeft + content + this.borderColor(box.horizontal.repeat(fillWidth)) + topRight);
-				} else {
-					// Status too long - truncate it
-					const truncated = truncateToWidth(content, Math.max(0, topFillWidth - 1));
-					const truncatedWidth = visibleWidth(truncated);
-					const fillWidth = Math.max(0, topFillWidth - truncatedWidth);
-					result.push(topLeft + truncated + this.borderColor(box.horizontal.repeat(fillWidth)) + topRight);
+			if (topBorder?.lines.length) {
+				for (let index = 0; index < topBorder.lines.length; index++) {
+					const line = topBorder.lines[index]!;
+					let content = line.content;
+					let contentWidth = line.width;
+					if (contentWidth > topFillWidth) {
+						content = truncateToWidth(content, topFillWidth);
+						contentWidth = visibleWidth(content);
+					}
+					const fillWidth = Math.max(0, topFillWidth - contentWidth);
+					if (index === 0) {
+						result.push(topLeft + content + this.borderColor(box.horizontal.repeat(fillWidth)) + topRight);
+					} else {
+						result.push(
+							this.borderColor(`${box.vertical}${padding(paddingX)}`) +
+								content +
+								padding(fillWidth) +
+								this.borderColor(`${padding(paddingX)}${box.vertical}`),
+						);
+					}
 				}
 			} else {
 				result.push(topLeft + horizontal.repeat(topFillWidth) + topRight);
