@@ -4666,8 +4666,8 @@ export class AgentSession {
 				await emitAgentEndNotification({ willContinue: true });
 				return;
 			}
-			await this.#emitSessionStopEvent(settledMessages, msg);
-			await emitAgentEndNotification();
+			const sessionStopWillContinue = await this.#emitSessionStopEvent(settledMessages, msg);
+			await emitAgentEndNotification(sessionStopWillContinue ? { willContinue: true } : undefined);
 		}
 	};
 
@@ -5894,11 +5894,14 @@ export class AgentSession {
 		});
 	}
 
+	/** @returns true when a hidden session_stop continuation turn was scheduled. */
 	async #emitSessionStopEvent(
 		messages: AgentMessage[],
 		lastAssistantMessage = this.getLastAssistantMessage(),
-	): Promise<void> {
-		if (this.#agentKind === "sub" || !this.#extensionRunner?.hasHandlers("session_stop")) return;
+	): Promise<boolean> {
+		if (this.#agentKind === "sub" || !this.#extensionRunner?.hasHandlers("session_stop")) {
+			return false;
+		}
 		const generation = this.#promptGeneration;
 		const result = await this.#extensionRunner.emitSessionStop({
 			messages,
@@ -5910,12 +5913,12 @@ export class AgentSession {
 		});
 		if (this.#promptGeneration !== generation || this.#abortInProgress || this.#isDisposed) {
 			this.#resetSessionStopContinuationState();
-			return;
+			return false;
 		}
 		const additionalContext = this.#sessionStopContinuationContext(result);
 		if (!additionalContext) {
 			this.#resetSessionStopContinuationState();
-			return;
+			return false;
 		}
 		if (this.#sessionStopContinuationCount >= SESSION_STOP_CONTINUATION_CAP) {
 			logger.warn("session_stop continuation cap reached", {
@@ -5923,7 +5926,7 @@ export class AgentSession {
 				cap: SESSION_STOP_CONTINUATION_CAP,
 			});
 			this.#resetSessionStopContinuationState();
-			return;
+			return false;
 		}
 		this.#sessionStopContinuationCount++;
 		this.#sessionStopHookActive = true;
@@ -5938,6 +5941,7 @@ export class AgentSession {
 			},
 			true,
 		);
+		return true;
 	}
 
 	/** Emit extension events based on session events */
