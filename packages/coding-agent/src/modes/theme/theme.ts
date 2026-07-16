@@ -614,8 +614,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.throughput": "\uf0e4",
 	// pick:  | alt:  
 	"icon.host": "\uf109",
-	// pick:  | alt:  
-	"icon.session": "\uf550",
+	// pick: 󰁑 (nf-md-arrow_left_bold_hexagon_outline) | alt:  
+	"icon.session": "\u{f0051}",
 	// pick:  | alt: 
 	"icon.package": "\uf487",
 	// pick:  | alt:  
