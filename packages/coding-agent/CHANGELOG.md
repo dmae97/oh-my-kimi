@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the advisor skipping the next real user instruction after auto-learn accepted and pruned a terminal empty assistant stop; advisor transcript cursors now detect rewritten prefixes and re-prime before slicing the next update ([#5731](https://github.com/can1357/oh-my-pi/issues/5731)).
+
 ## [17.0.1] - 2026-07-16
 
 ### Changed
