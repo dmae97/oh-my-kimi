@@ -99,4 +99,58 @@ describe("issue #5756 — moonshot kimi-k3 pricing and wire format", () => {
 		expect(body.max_tokens).toBeDefined();
 		expect(body.max_completion_tokens).toBeUndefined();
 	});
+
+	it("keeps reasoning_effort=max on forced-tool-choice turns (mandatory K3 reasoning)", async () => {
+		// K3 always reasons via `reasoning_effort: "max"`. The K2.x Kimi
+		// `disableReasoningOnForcedToolChoice` rule (Moonshot 400s on forced
+		// tool_choice + the binary `thinking` block, #827) must NOT strip K3's
+		// effort, or plan-mode `toolChoice` turns run without the required
+		// reasoning (#5758 review).
+		const model = buildModel(await discoverKimiK3());
+		let body: Record<string, unknown> = {};
+		const fetchMock = (async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+			const raw = typeof init?.body === "string" ? init.body : "";
+			body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+			return new Response(
+				encodeSseChunks([
+					{
+						choices: [
+							{
+								index: 0,
+								delta: {
+									role: "assistant",
+									tool_calls: [
+										{ index: 0, id: "c1", type: "function", function: { name: "plan", arguments: "{}" } },
+									],
+								},
+								finish_reason: null,
+							},
+						],
+					},
+					{
+						choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+						usage: { prompt_tokens: 1, completion_tokens: 1 },
+					},
+				]),
+				{ status: 200, headers: { "content-type": "text/event-stream" } },
+			);
+		}) as typeof fetch;
+
+		const context: Context = {
+			messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
+			tools: [{ name: "plan", description: "plan", parameters: { type: "object", properties: {} } }],
+		};
+		const stream = streamOpenAICompletions(model, context, {
+			apiKey: "test-key",
+			reasoning: "max",
+			toolChoice: { type: "tool", name: "plan" },
+			fetch: fetchMock,
+		});
+		for await (const _ of stream) {
+			// drain
+		}
+
+		expect(body.reasoning_effort).toBe("max");
+		expect("thinking" in body).toBe(false);
+	});
 });

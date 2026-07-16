@@ -435,7 +435,12 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		// every call since the family can otherwise emit very long reasoning traces
 		// before the final answer.
 		alwaysSendMaxTokens: isKimiModel,
-		disableReasoningOnForcedToolChoice: isKimiModel || isAnthropicModel,
+		// Native Kimi K3 always reasons via `reasoning_effort: "max"` (never the
+		// K2.x binary `thinking` block that #827's forced-tool-choice conflict is
+		// about), so suppressing its effort would strip the mandatory `max` from
+		// normal forced-tool turns (e.g. plan-mode `toolChoice: "required"`) and
+		// leave K3 in an unsupported mode (#5758 review).
+		disableReasoningOnForcedToolChoice: (isKimiModel && !isMoonshotKimiK3) || isAnthropicModel,
 		disableReasoningOnToolChoice: isDeepseekFamily && Boolean(spec.reasoning) && !isOpenRouter,
 		supportsToolChoice: !isDirectDeepseekReasoning,
 		supportsForcedToolChoice: !requiresEnabledThinking,
