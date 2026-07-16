@@ -55,10 +55,11 @@ function messageText(message: AgentMessage): string {
 	const content = message.content;
 	if (typeof content === "string") return content;
 	if (!Array.isArray(content)) return "";
-	return content
-		.filter(block => block.type === "text")
-		.map(block => block.text)
-		.join("\n");
+	const text: string[] = [];
+	for (const block of content) {
+		if (block.type === "text") text.push(block.text);
+	}
+	return text.join("\n");
 }
 
 function countReminders(messages: readonly AgentMessage[]): number {

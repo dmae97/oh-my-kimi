@@ -1538,15 +1538,20 @@ function queuedTextContent(message: AgentMessage): string | undefined {
 	if (!("content" in message)) return undefined;
 	const content = message.content;
 	if (typeof content === "string") return content;
-	return content.find((part): part is TextContent => part.type === "text")?.text;
+	for (const part of content) {
+		if (part.type === "text") return part.text;
+	}
+	return undefined;
 }
 
 function queuedImageContent(message: AgentMessage): ImageContent[] | undefined {
 	if (!("content" in message) || typeof message.content === "string") return undefined;
-	const images = message.content.filter(
-		(part): part is ImageContent =>
-			part.type === "image" && typeof part.data === "string" && typeof part.mimeType === "string",
-	);
+	const images: ImageContent[] = [];
+	for (const part of message.content) {
+		if (part.type === "image" && typeof part.data === "string" && typeof part.mimeType === "string") {
+			images.push(part);
+		}
+	}
 	return images.length > 0 ? images : undefined;
 }
 

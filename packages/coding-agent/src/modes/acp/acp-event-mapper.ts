@@ -272,6 +272,14 @@ function mapAssistantMessageUpdate(
 	let text: string;
 	const progress = options.getMessageProgress?.(event.message);
 	switch (event.assistantMessageEvent.type) {
+		case "image_end":
+			return [
+				toSessionNotification(sessionId, {
+					sessionUpdate: "agent_message_chunk",
+					content: event.assistantMessageEvent.content,
+					messageId: options.getMessageId?.(event.message),
+				}),
+			];
 		case "text_delta":
 			sessionUpdate = "agent_message_chunk";
 			text = event.assistantMessageEvent.delta;

@@ -706,7 +706,14 @@ export interface ContextSnapshot {
 
 export interface AssistantMessage {
 	role: "assistant";
-	content: (TextContent | ThinkingContent | RedactedThinkingContent | AnthropicFallbackContent | ToolCall)[];
+	content: (
+		| TextContent
+		| ThinkingContent
+		| RedactedThinkingContent
+		| AnthropicFallbackContent
+		| ImageContent
+		| ToolCall
+	)[];
 	api: Api;
 	provider: Provider;
 	model: string;
@@ -893,6 +900,7 @@ export type AssistantMessageEvent =
 	| { type: "thinking_start"; contentIndex: number; partial: AssistantMessage }
 	| { type: "thinking_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
 	| { type: "thinking_end"; contentIndex: number; content: string; partial: AssistantMessage }
+	| { type: "image_end"; contentIndex: number; content: ImageContent; partial: AssistantMessage }
 	| { type: "toolcall_start"; contentIndex: number; partial: AssistantMessage }
 	| { type: "toolcall_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
 	| { type: "toolcall_end"; contentIndex: number; toolCall: ToolCall; partial: AssistantMessage }
