@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed unknown `__omp_worker_*` CLI selectors exiting 0 with empty output instead of erroring; an unrecognized worker-host selector now writes `Error: unknown worker selector: …` to stderr and exits nonzero, so a stale or mistyped selector can no longer look healthy to a parent process or install smoke path ([#5712](https://github.com/can1357/oh-my-pi/issues/5712)).
+
 ## [17.0.1] - 2026-07-16
 
 ### Changed
