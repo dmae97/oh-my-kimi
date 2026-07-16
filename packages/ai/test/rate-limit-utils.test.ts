@@ -60,6 +60,14 @@ describe("parseRateLimitReason", () => {
 		).toBe("QUOTA_EXHAUSTED");
 	});
 
+	it("classifies Anthropic monthly spend limits as QUOTA_EXHAUSTED", () => {
+		expect(
+			parseRateLimitReason(
+				'429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s monthly spend limit. Please try again later."}}',
+			),
+		).toBe("QUOTA_EXHAUSTED");
+	});
+
 	it("classifies OpenCode Go insufficient balance as QUOTA_EXHAUSTED", () => {
 		expect(
 			parseRateLimitReason("401 Insufficient balance. Manage your billing here: https://opencode.ai/workspace/demo"),

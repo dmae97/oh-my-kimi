@@ -67,6 +67,8 @@ export function parseRateLimitReason(errorMessage: string): RateLimitReason {
 		lower.includes("exhausted") ||
 		lower.includes("quota") ||
 		lower.includes("usage limit") ||
+		lower.includes("spend limit") ||
+		lower.includes("spend-limit") ||
 		INSUFFICIENT_BALANCE_PATTERN.test(errorMessage)
 	) {
 		return "QUOTA_EXHAUSTED";
