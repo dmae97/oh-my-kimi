@@ -1141,11 +1141,16 @@ async fn run_shell_command_once(
 			}
 		}
 	});
+	// Let pipeline consumers flush output after cancellation kills their
+	// producers. The outer run cancellation remains bounded, and this delayed
+	// fallback still releases readers whose writers never close.
+	const CANCEL_READER_GRACE: Duration = Duration::from_millis(500);
 	let cancel_bridge = tokio::spawn({
 		let cancel_token = cancel_token.clone();
 		let reader_cancel = reader_cancel.clone();
 		async move {
 			cancel_token.cancelled().await;
+			time::sleep(CANCEL_READER_GRACE).await;
 			reader_cancel.cancel();
 		}
 	});

@@ -10,6 +10,10 @@
 
 - Updated status event log to prioritize the most recent entries in the display window
 
+### Fixed
+
+- Fixed Windows bash crashes when a piped command times out while flushing output; explicit-timeout watchdogs now wait for bounded native teardown instead of returning mid-drain. ([#5316](https://github.com/can1357/oh-my-pi/issues/5316))
+
 ### Removed
 
 - Removed the unreliable Bing and Yahoo HTML-scraping web search providers
