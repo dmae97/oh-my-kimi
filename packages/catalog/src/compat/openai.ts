@@ -358,7 +358,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 	// for minutes while reasoning or cold-loading weights; widen the idle
 	// timeout so warm-ups stop aborting and retrying.
 	const streamIdleTimeoutMs =
-		GLM_CODING_PLAN_MODEL_PATTERN.test(spec.id) && (isZai || isZhipu)
+		GLM_CODING_PLAN_MODEL_PATTERN.test(spec.id) && (isZai || isZhipu || isOpenCodeHost)
 			? GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS
 			: provider === "alibaba-coding-plan"
 				? ALIBABA_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS
