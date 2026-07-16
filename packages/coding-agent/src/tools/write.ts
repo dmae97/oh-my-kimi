@@ -402,8 +402,9 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			// Decode the device JSON payload and evaluate the mounted tool's own
 			// approval (which may be argument-dependent, e.g. ast_edit is read-tier
 			// for internal-URL paths, debug is read-tier for inspection actions).
-			// Malformed JSON, non-object payloads, and missing content stay exec so
-			// the gate fails closed — the dispatch itself rejects them too.
+			// Malformed JSON, non-object payloads, missing content, and approval
+			// functions that reject schema-invalid objects stay exec so the gate
+			// fails closed — the dispatch itself rejects invalid arguments too.
 			const rawContent = (args as Partial<WriteParams>).content;
 			if (typeof rawContent !== "string") return "exec";
 			let parsed: unknown;
@@ -413,7 +414,11 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				return "exec";
 			}
 			if (!isRecord(parsed)) return "exec";
-			return resolveToolTier(inst, parsed);
+			try {
+				return resolveToolTier(inst, parsed);
+			} catch {
+				return "exec";
+			}
 		}
 		// Remote SSH writes open an outbound connection and run a remote shell —
 		// gate them like the exec-tier `ssh` tool, ahead of the handler-write

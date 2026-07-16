@@ -115,11 +115,13 @@ describe("read and write route xd:// device URLs", () => {
 			expect(tier("xd://debug", JSON.stringify({ action: "sessions" }))).toBe("read");
 			expect(tier("xd://debug", JSON.stringify({ action: "launch", program: "./app" }))).toBe("exec");
 
-			// Fail closed: malformed JSON, non-object payloads, missing content,
-			// and unknown devices all stay exec so the gate never under-prompts.
+			// Fail closed: malformed JSON, non-object or schema-invalid payloads,
+			// missing content, and unknown devices all stay exec so the gate never
+			// under-prompts.
 			expect(tier("xd://ast_edit", "{ not json")).toBe("exec");
 			expect(tier("xd://ast_edit", "[1,2,3]")).toBe("exec");
 			expect(tier("xd://ast_edit", '"a string"')).toBe("exec");
+			expect(tier("xd://ast_edit", JSON.stringify({ paths: [null] }))).toBe("exec");
 			expect(approval({ path: "xd://ast_edit" })).toBe("exec");
 			expect(tier("xd://no_such_device", "{}")).toBe("exec");
 		} finally {
