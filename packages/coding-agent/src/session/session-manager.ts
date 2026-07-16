@@ -935,6 +935,26 @@ export class SessionManager {
 		};
 	}
 
+	/**
+	 * Create an independent manager for the current logical session and branch.
+	 * The clone shares the storage backend but owns its entry index and writer, so
+	 * callers can finish session-owned work after this manager switches elsewhere.
+	 * Set `persist` false when the original session is intentionally being dropped.
+	 */
+	cloneCurrentSession(options?: { persist?: boolean }): SessionManager {
+		const persist = options?.persist ?? this.#persist;
+		const clone = new SessionManager(this.#cwd, this.#sessionDir, persist, this.#storage);
+		clone.#suppressBreadcrumb = true;
+		clone.restoreState(this.captureState());
+		if (!persist) {
+			clone.#sessionFile = undefined;
+			clone.#fileIsCurrent = false;
+			clone.#rewriteRequired = false;
+			clone.#forceFileCreation = false;
+		}
+		return clone;
+	}
+
 	restoreState(snapshot: SessionManagerStateSnapshot): void {
 		this.#closeWriterEventually();
 		this.#diskTail = Promise.resolve();
@@ -1467,6 +1487,34 @@ export class SessionManager {
 	): string {
 		const entry: SessionMessageEntry = { type: "message", ...this.#freshEntryFields(), message };
 		this.#recordEntry(entry);
+		return entry.id;
+	}
+
+	/**
+	 * Append to a non-active branch without changing the current leaf.
+	 * Used by work that retains ownership of a branch across tree navigation.
+	 */
+	appendMessageToBranch(
+		message:
+			| Message
+			| CustomMessage
+			| HookMessage
+			| BashExecutionMessage
+			| PythonExecutionMessage
+			| FileMentionMessage,
+		parentId: string | null,
+	): string {
+		if (parentId !== null && !this.#index.has(parentId)) throw new Error(`Entry ${parentId} not found`);
+		const activeLeafId = this.#index.leafId();
+		const entry: SessionMessageEntry = {
+			type: "message",
+			id: generateId(this.#index),
+			parentId,
+			timestamp: nowIso(),
+			message,
+		};
+		this.#recordEntry(entry);
+		this.#index.setLeaf(activeLeafId);
 		return entry.id;
 	}
 

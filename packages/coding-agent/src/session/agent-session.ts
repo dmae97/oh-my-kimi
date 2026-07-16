@@ -393,6 +393,34 @@ import { YieldQueue } from "./yield-queue";
 const SESSION_STOP_CONTINUATION_CAP = 8;
 const PLAN_MODE_REMINDER_MAX = 3;
 
+type BashAppendDestination =
+	| { kind: "current"; manager: SessionManager }
+	| { kind: "detached"; manager: SessionManager }
+	| { kind: "branch"; manager: SessionManager; parentId: string | null };
+
+interface BashSessionTarget {
+	sessionId: string;
+	refs: number;
+	destination?: BashAppendDestination;
+	pending?: Promise<BashAppendDestination>;
+}
+
+interface PendingBashMessage {
+	target: BashSessionTarget;
+	message: BashExecutionMessage;
+}
+
+interface BashSessionTransition {
+	oldTarget: BashSessionTarget;
+	newTarget: BashSessionTarget;
+	oldSessionId: string;
+	oldSessionFile: string | undefined;
+	oldLeafId: string | null;
+	detachedManager: SessionManager | undefined;
+	resolveOld: ((destination: BashAppendDestination) => void) | undefined;
+	resolveNew: (destination: BashAppendDestination) => void;
+}
+
 /**
  * Mutating tool results (`bash`/`eval`/`edit`/`write`/`ast_edit`) without the
  * agent touching the `todo` tool that trip the mid-run reconciliation nudge.
@@ -1864,7 +1892,8 @@ export class AgentSession {
 
 	// Bash execution state
 	#bashAbortControllers = new Set<AbortController>();
-	#pendingBashMessages: BashExecutionMessage[] = [];
+	#pendingBashMessages: PendingBashMessage[] = [];
+	#bashSessionTarget!: BashSessionTarget;
 
 	// Python execution state
 	#evalAbortControllers = new Set<AbortController>();
@@ -2494,6 +2523,11 @@ export class AgentSession {
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
+		this.#bashSessionTarget = {
+			sessionId: this.sessionManager.getSessionId(),
+			refs: 0,
+			destination: { kind: "current", manager: this.sessionManager },
+		};
 		this.settings = config.settings;
 		this.#autoApprove = config.autoApprove === true;
 		// Power assertions are taken per turn (see #beginInFlight); nothing acquired here.
@@ -8072,7 +8106,7 @@ export class AgentSession {
 		const generation = this.#promptGeneration;
 		try {
 			// Flush any pending bash messages before the new prompt
-			this.#flushPendingBashMessages();
+			await this.#flushPendingBashMessages();
 			this.#flushPendingPythonMessages();
 			this.#flushPendingIrcAsides();
 
@@ -9139,27 +9173,36 @@ export class AgentSession {
 		await this.abort();
 		this.#cancelOwnAsyncJobs();
 		this.#closeAllProviderSessions("new session");
-		this.agent.reset();
-		if (options?.drop && previousSessionFile) {
-			// Detach the advisor recorder feed and drain its writer BEFORE deleting the
-			// old artifacts dir: `await this.abort()` only stops the primary, so a still-
-			// running advisor turn could otherwise finish, emit `message_end`, and recreate
-			// `<old>/__advisor.jsonl`. #resetAdvisorSessionState (after newSession) re-primes
-			// the advisor and re-attaches the feed at the new session's path.
-			for (const a of this.#advisors) {
-				a.agentUnsubscribe?.();
-				a.agentUnsubscribe = undefined;
-				await a.recorder.close();
+		await this.#flushPendingBashMessages();
+		const bashTransition = this.#beginBashSessionTransition({ persistDetached: options?.drop !== true });
+		let sessionTransitioned = false;
+		try {
+			this.agent.reset();
+			if (options?.drop && previousSessionFile) {
+				// Detach the advisor recorder feed and drain its writer BEFORE deleting the
+				// old artifacts dir: `await this.abort()` only stops the primary, so a still-
+				// running advisor turn could otherwise finish, emit `message_end`, and recreate
+				// `<old>/__advisor.jsonl`. #resetAdvisorSessionState (after newSession) re-primes
+				// the advisor and re-attaches the feed at the new session's path.
+				for (const a of this.#advisors) {
+					a.agentUnsubscribe?.();
+					a.agentUnsubscribe = undefined;
+					await a.recorder.close();
+				}
+				try {
+					await this.sessionManager.dropSession(previousSessionFile);
+				} catch (err) {
+					logger.error("Failed to delete session during /drop", { err });
+				}
+			} else {
+				await this.sessionManager.flush();
 			}
-			try {
-				await this.sessionManager.dropSession(previousSessionFile);
-			} catch (err) {
-				logger.error("Failed to delete session during /drop", { err });
-			}
-		} else {
-			await this.sessionManager.flush();
+			await this.sessionManager.newSession(options);
+			this.#markBashSessionTransition(bashTransition);
+			sessionTransitioned = true;
+		} finally {
+			this.#finishBashSessionTransition(bashTransition, sessionTransitioned);
 		}
-		await this.sessionManager.newSession(options);
 
 		this.#clearCheckpointRuntimeState();
 		this.setTodoPhases([]);
@@ -9225,14 +9268,25 @@ export class AgentSession {
 			}
 		}
 
+		await this.#flushPendingBashMessages();
 		// Flush current session to ensure all entries are written
 		await this.sessionManager.flush();
+		const bashTransition = this.#beginBashSessionTransition();
 
 		// Fork the session (creates new session file with same entries)
-		const forkResult = await this.sessionManager.fork();
+		let forkResult: { oldSessionFile: string; newSessionFile: string } | undefined;
+		try {
+			forkResult = await this.sessionManager.fork();
+		} catch (error) {
+			this.#finishBashSessionTransition(bashTransition, false);
+			throw error;
+		}
 		if (!forkResult) {
+			this.#finishBashSessionTransition(bashTransition, false);
 			return false;
 		}
+		this.#markBashSessionTransition(bashTransition);
+		this.#finishBashSessionTransition(bashTransition, true);
 
 		// Copy artifacts directory if it exists
 		const oldArtifactDir = forkResult.oldSessionFile.slice(0, -6);
@@ -10608,9 +10662,20 @@ export class AgentSession {
 					return undefined;
 				}
 			}
+			await this.#flushPendingBashMessages();
 			await this.sessionManager.flush();
+			const bashTransition = this.#beginBashSessionTransition();
 			this.#cancelOwnAsyncJobs();
-			await this.sessionManager.newSession(previousSessionFile ? { parentSession: previousSessionFile } : undefined);
+			let sessionTransitioned = false;
+			try {
+				await this.sessionManager.newSession(
+					previousSessionFile ? { parentSession: previousSessionFile } : undefined,
+				);
+				this.#markBashSessionTransition(bashTransition);
+				sessionTransitioned = true;
+			} finally {
+				this.#finishBashSessionTransition(bashTransition, sessionTransitioned);
+			}
 
 			this.#clearCheckpointRuntimeState();
 			// agent.reset() clears the core steering/follow-up queues. Preserve any queued
@@ -11503,11 +11568,13 @@ export class AgentSession {
 
 		if (!branchEntry) return;
 		const targetParentId = prunePrompt ? parentEntry.parentId : branchEntry.parentId;
-		if (targetParentId === null) {
-			this.sessionManager.resetLeaf();
-		} else {
-			this.sessionManager.branch(targetParentId);
-		}
+		this.#withBashBranchTransition(() => {
+			if (targetParentId === null) {
+				this.sessionManager.resetLeaf();
+			} else {
+				this.sessionManager.branch(targetParentId);
+			}
+		});
 		this.sessionManager.appendCustomEntry("accepted-terminal-empty-stop");
 	}
 
@@ -11534,11 +11601,13 @@ export class AgentSession {
 		if (!branchEntry) {
 			return;
 		}
-		if (branchEntry.parentId === null) {
-			this.sessionManager.resetLeaf();
-		} else {
-			this.sessionManager.branch(branchEntry.parentId);
-		}
+		this.#withBashBranchTransition(() => {
+			if (branchEntry.parentId === null) {
+				this.sessionManager.resetLeaf();
+			} else {
+				this.sessionManager.branch(branchEntry.parentId);
+			}
+		});
 	}
 
 	#isSameAssistantMessage(left: AssistantMessage, right: AssistantMessage): boolean {
@@ -11593,16 +11662,18 @@ export class AgentSession {
 		if (!checkpointState) {
 			return;
 		}
-		try {
-			this.sessionManager.branchWithSummary(checkpointState.checkpointEntryId, report, {
-				startedAt: checkpointState.startedAt,
-			});
-		} catch (error) {
-			logger.warn("Rewind branch checkpoint missing, falling back to root", {
-				error: error instanceof Error ? error.message : String(error),
-			});
-			this.sessionManager.branchWithSummary(null, report, { startedAt: checkpointState.startedAt });
-		}
+		this.#withBashBranchTransition(() => {
+			try {
+				this.sessionManager.branchWithSummary(checkpointState.checkpointEntryId, report, {
+					startedAt: checkpointState.startedAt,
+				});
+			} catch (error) {
+				logger.warn("Rewind branch checkpoint missing, falling back to root", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+				this.sessionManager.branchWithSummary(null, report, { startedAt: checkpointState.startedAt });
+			}
+		});
 
 		const rewoundAt = new Date().toISOString();
 		const details = { report, startedAt: checkpointState.startedAt, rewoundAt };
@@ -14706,71 +14777,22 @@ export class AgentSession {
 	// Bash Execution
 	// =========================================================================
 
-	async #saveBashOriginalArtifact(originalText: string): Promise<string | undefined> {
+	async #saveBashOriginalArtifact(target: BashSessionTarget, originalText: string): Promise<string | undefined> {
 		try {
-			return await this.sessionManager.saveArtifact(originalText, "bash-original");
+			const destination = target.destination ?? (await target.pending);
+			return await destination?.manager.saveArtifact(originalText, "bash-original");
 		} catch {
 			return undefined;
 		}
 	}
 
-	/**
-	 * Execute a bash command.
-	 * Adds result to agent context and session.
-	 * @param command The bash command to execute
-	 * @param onChunk Optional streaming callback for output
-	 * @param options.excludeFromContext If true, command output won't be sent to LLM (!! prefix)
-	 * @param options.useUserShell If true, allow caller to request configured user-shell routing
-	 */
-	async executeBash(
+	#createBashMessage(
 		command: string,
-		onChunk?: (chunk: string) => void,
-		options?: { excludeFromContext?: boolean; useUserShell?: boolean },
-	): Promise<BashResult> {
-		const excludeFromContext = options?.excludeFromContext === true;
-		const cwd = this.sessionManager.getCwd();
-
-		if (this.#extensionRunner?.hasHandlers("user_bash")) {
-			const hookResult = await this.#extensionRunner.emitUserBash({
-				type: "user_bash",
-				command,
-				excludeFromContext,
-				cwd,
-			});
-			if (hookResult?.result) {
-				this.recordBashResult(command, hookResult.result, options);
-				return hookResult.result;
-			}
-		}
-
-		const abortController = new AbortController();
-		this.#bashAbortControllers.add(abortController);
-
-		try {
-			const result = await executeBashCommand(command, {
-				onChunk,
-				signal: abortController.signal,
-				sessionKey: this.sessionId,
-				cwd,
-				timeout: clampTimeout("bash") * 1000,
-				onMinimizedSave: originalText => this.#saveBashOriginalArtifact(originalText),
-				useUserShell: options?.useUserShell,
-			});
-
-			this.recordBashResult(command, result, options);
-			return result;
-		} finally {
-			this.#bashAbortControllers.delete(abortController);
-		}
-	}
-
-	/**
-	 * Record a bash execution result in session history.
-	 * Used by executeBash and by extensions that handle bash execution themselves.
-	 */
-	recordBashResult(command: string, result: BashResult, options?: { excludeFromContext?: boolean }): void {
+		result: BashResult,
+		options?: { excludeFromContext?: boolean },
+	): BashExecutionMessage {
 		const meta = outputMeta().truncationFromSummary(result, { direction: "tail" }).get();
-		const bashMessage: BashExecutionMessage = {
+		return {
 			role: "bashExecution",
 			command,
 			output: result.output,
@@ -14781,18 +14803,237 @@ export class AgentSession {
 			timestamp: Date.now(),
 			excludeFromContext: options?.excludeFromContext,
 		};
+	}
 
-		// If agent is streaming, defer adding to avoid breaking tool_use/tool_result ordering
-		if (this.isStreaming) {
-			// Queue for later - will be flushed on agent_end
-			this.#pendingBashMessages.push(bashMessage);
-		} else {
-			// Add to agent state immediately
-			this.agent.appendMessage(bashMessage);
+	#captureBashSessionTarget(): BashSessionTarget {
+		this.#bashSessionTarget.refs++;
+		return this.#bashSessionTarget;
+	}
 
-			// Save to session
-			this.sessionManager.appendMessage(bashMessage);
+	async #releaseBashSessionTarget(target: BashSessionTarget): Promise<void> {
+		if (target.refs <= 0) throw new Error("Bash session target released more than once");
+		target.refs--;
+		if (target.refs === 0 && target.destination?.kind === "detached") {
+			await target.destination.manager.close();
 		}
+	}
+
+	#appendBashMessage(destination: BashAppendDestination, message: BashExecutionMessage): void {
+		switch (destination.kind) {
+			case "current":
+				this.agent.appendMessage(message);
+				destination.manager.appendMessage(message);
+				break;
+			case "detached":
+				destination.manager.appendMessage(message);
+				break;
+			case "branch":
+				destination.parentId = destination.manager.appendMessageToBranch(message, destination.parentId);
+				break;
+		}
+	}
+
+	async #appendOwnedBashMessage(target: BashSessionTarget, message: BashExecutionMessage): Promise<void> {
+		try {
+			const destination = target.destination ?? (await target.pending);
+			if (!destination) throw new Error("Bash session target has no append destination");
+			this.#appendBashMessage(destination, message);
+		} finally {
+			await this.#releaseBashSessionTarget(target);
+		}
+	}
+
+	async #recordBashResultForTarget(
+		target: BashSessionTarget,
+		command: string,
+		result: BashResult,
+		options?: { excludeFromContext?: boolean },
+	): Promise<void> {
+		const message = this.#createBashMessage(command, result, options);
+		if (this.isStreaming && target === this.#bashSessionTarget) {
+			this.#pendingBashMessages.push({ target, message });
+			return;
+		}
+		await this.#appendOwnedBashMessage(target, message);
+	}
+
+	/** Run a leaf rewrite while retaining any in-flight bash on its originating branch. */
+	#withBashBranchTransition<T>(mutate: () => T): T {
+		const bashTransition = this.#beginBashSessionTransition();
+		let branchTransitioned = false;
+		try {
+			const result = mutate();
+			this.#markBashSessionTransition(bashTransition);
+			branchTransitioned = true;
+			return result;
+		} finally {
+			this.#finishBashSessionTransition(bashTransition, branchTransitioned);
+		}
+	}
+
+	/**
+	 * Snapshot the session/branch that owns any in-flight bash before a transition.
+	 * When an owner is still active, its target is detached to a clone so a failed
+	 * or intentionally dropped transition never redirects the late result.
+	 */
+	#beginBashSessionTransition(options?: { persistDetached?: boolean }): BashSessionTransition {
+		const oldTarget = this.#bashSessionTarget;
+		let detachedManager: SessionManager | undefined;
+		let resolveOld: ((destination: BashAppendDestination) => void) | undefined;
+		if (oldTarget.refs > 0) {
+			detachedManager = this.sessionManager.cloneCurrentSession({ persist: options?.persistDetached });
+			const pendingOld = Promise.withResolvers<BashAppendDestination>();
+			oldTarget.destination = undefined;
+			oldTarget.pending = pendingOld.promise;
+			resolveOld = pendingOld.resolve;
+		}
+
+		const pendingNew = Promise.withResolvers<BashAppendDestination>();
+		return {
+			oldTarget,
+			newTarget: {
+				sessionId: this.sessionManager.getSessionId(),
+				refs: 0,
+				pending: pendingNew.promise,
+			},
+			oldSessionId: this.sessionManager.getSessionId(),
+			oldSessionFile: this.sessionManager.getSessionFile(),
+			oldLeafId: this.sessionManager.getLeafId(),
+			detachedManager,
+			resolveOld,
+			resolveNew: pendingNew.resolve,
+		};
+	}
+
+	/** Adopt the transition's new target as the live bash owner. */
+	#markBashSessionTransition(transition: BashSessionTransition): void {
+		transition.newTarget.sessionId = this.sessionManager.getSessionId();
+		this.#bashSessionTarget = transition.newTarget;
+	}
+
+	/**
+	 * Resolve the pending append destinations opened by {@link #beginBashSessionTransition}.
+	 * On success the old owner keeps its original session/branch (same file → current or
+	 * branch destination; different file → detached clone); on failure both fall back to
+	 * the still-current manager and the clone is discarded.
+	 */
+	#finishBashSessionTransition(transition: BashSessionTransition, success: boolean): void {
+		const currentDestination: BashAppendDestination = { kind: "current", manager: this.sessionManager };
+		let oldDestination: BashAppendDestination = currentDestination;
+		if (success && transition.resolveOld) {
+			const currentFile = this.sessionManager.getSessionFile();
+			const sameFile =
+				transition.oldSessionFile === currentFile ||
+				(transition.oldSessionFile !== undefined &&
+					currentFile !== undefined &&
+					path.resolve(transition.oldSessionFile) === path.resolve(currentFile));
+			const sameSession = transition.oldSessionId === this.sessionManager.getSessionId() && sameFile;
+			if (sameSession) {
+				oldDestination =
+					transition.oldLeafId === this.sessionManager.getLeafId()
+						? currentDestination
+						: { kind: "branch", manager: this.sessionManager, parentId: transition.oldLeafId };
+			} else if (transition.detachedManager) {
+				oldDestination = { kind: "detached", manager: transition.detachedManager };
+			}
+		}
+
+		if (transition.resolveOld) {
+			transition.oldTarget.pending = undefined;
+			transition.oldTarget.destination = oldDestination;
+			transition.resolveOld(oldDestination);
+		}
+
+		transition.newTarget.pending = undefined;
+		transition.newTarget.destination = currentDestination;
+		if (!success) transition.newTarget.sessionId = this.sessionManager.getSessionId();
+		transition.resolveNew(currentDestination);
+
+		if (transition.detachedManager && (oldDestination.kind !== "detached" || transition.oldTarget.refs === 0)) {
+			void transition.detachedManager.close().catch(error => {
+				logger.warn("Failed to close detached bash session writer", { error: String(error) });
+			});
+		}
+	}
+
+	/**
+	 * Execute a bash command and retain the session/branch that owned its start.
+	 * @param command The bash command to execute
+	 * @param onChunk Optional streaming callback for output
+	 * @param options.excludeFromContext If true, command output won't be sent to LLM (!! prefix)
+	 * @param options.useUserShell If true, allow caller to request configured user-shell routing
+	 */
+	async executeBash(
+		command: string,
+		onChunk?: (chunk: string) => void,
+		options?: { excludeFromContext?: boolean; useUserShell?: boolean },
+	): Promise<BashResult> {
+		const target = this.#captureBashSessionTarget();
+		let targetTransferred = false;
+		const excludeFromContext = options?.excludeFromContext === true;
+		const cwd = this.sessionManager.getCwd();
+
+		try {
+			if (this.#extensionRunner?.hasHandlers("user_bash")) {
+				const hookResult = await this.#extensionRunner.emitUserBash({
+					type: "user_bash",
+					command,
+					excludeFromContext,
+					cwd,
+				});
+				if (hookResult?.result) {
+					targetTransferred = true;
+					await this.#recordBashResultForTarget(target, command, hookResult.result, options);
+					return hookResult.result;
+				}
+			}
+
+			const abortController = new AbortController();
+			this.#bashAbortControllers.add(abortController);
+			let result: BashResult;
+			try {
+				result = await executeBashCommand(command, {
+					onChunk,
+					signal: abortController.signal,
+					sessionKey: target.sessionId,
+					cwd,
+					timeout: clampTimeout("bash") * 1000,
+					onMinimizedSave: originalText => this.#saveBashOriginalArtifact(target, originalText),
+					useUserShell: options?.useUserShell,
+				});
+			} finally {
+				this.#bashAbortControllers.delete(abortController);
+			}
+
+			targetTransferred = true;
+			await this.#recordBashResultForTarget(target, command, result, options);
+			return result;
+		} finally {
+			if (!targetTransferred) await this.#releaseBashSessionTarget(target);
+		}
+	}
+
+	/** Record a bash result supplied outside executeBash in the current ownership scope. */
+	recordBashResult(command: string, result: BashResult, options?: { excludeFromContext?: boolean }): void {
+		const target = this.#captureBashSessionTarget();
+		const message = this.#createBashMessage(command, result, options);
+		if (this.isStreaming && target === this.#bashSessionTarget) {
+			this.#pendingBashMessages.push({ target, message });
+			return;
+		}
+
+		if (target.destination) {
+			try {
+				this.#appendBashMessage(target.destination, message);
+			} finally {
+				void this.#releaseBashSessionTarget(target);
+			}
+			return;
+		}
+
+		void this.#appendOwnedBashMessage(target, message).catch(error => {
+			logger.error("Failed to record bash result in its owning session", { error: String(error) });
+		});
 	}
 
 	/**
@@ -14814,22 +15055,14 @@ export class AgentSession {
 		return this.#pendingBashMessages.length > 0;
 	}
 
-	/**
-	 * Flush pending bash messages to agent state and session.
-	 * Called after agent turn completes to maintain proper message ordering.
-	 */
-	#flushPendingBashMessages(): void {
+	/** Flush pending bash messages after the active turn without changing their ownership. */
+	async #flushPendingBashMessages(): Promise<void> {
 		if (this.#pendingBashMessages.length === 0) return;
-
-		for (const bashMessage of this.#pendingBashMessages) {
-			// Add to agent state
-			this.agent.appendMessage(bashMessage);
-
-			// Save to session
-			this.sessionManager.appendMessage(bashMessage);
-		}
-
+		const pending = this.#pendingBashMessages;
 		this.#pendingBashMessages = [];
+		for (const { target, message } of pending) {
+			await this.#appendOwnedBashMessage(target, message);
+		}
 	}
 
 	// =========================================================================
@@ -15422,9 +15655,11 @@ export class AgentSession {
 		this.#disconnectFromAgent();
 		await this.abort({ goalReason: "internal" });
 
+		await this.#flushPendingBashMessages();
 		// Flush pending writes before switching so restore snapshots reflect committed state.
 		await this.sessionManager.flush();
 		const previousSessionState = this.sessionManager.captureState();
+		const bashTransition = this.#beginBashSessionTransition();
 		// Only same-session reloads compare against the prior context to detect
 		// rollback edits (`#didSessionMessagesChange` below). Building it for a
 		// different-session switch is a pure waste — and on huge pre-fix sessions
@@ -15469,6 +15704,7 @@ export class AgentSession {
 
 		try {
 			await this.sessionManager.setSessionFile(sessionPath);
+			this.#markBashSessionTransition(bashTransition);
 			if (switchingToDifferentSession) {
 				this.#freshProviderSessionId = undefined;
 				this.#clearInheritedProviderPromptCacheKey();
@@ -15602,6 +15838,7 @@ export class AgentSession {
 					error: String(error),
 				});
 			}
+			this.#finishBashSessionTransition(bashTransition, true);
 			return true;
 		} catch (error) {
 			this.sessionManager.restoreState(previousSessionState);
@@ -15633,6 +15870,7 @@ export class AgentSession {
 			this.#syncTodoPhasesFromBranch();
 			this.#resetAllAdvisorRuntimes();
 			this.#reconnectToAgent();
+			this.#finishBashSessionTransition(bashTransition, false);
 			throw error;
 		}
 	}
@@ -15678,14 +15916,23 @@ export class AgentSession {
 		this.#pendingNextTurnMessages = [];
 		this.#scheduledHiddenNextTurnGeneration = undefined;
 
+		await this.#flushPendingBashMessages();
 		// Flush pending writes before branching
 		await this.sessionManager.flush();
+		const bashTransition = this.#beginBashSessionTransition();
 		this.#cancelOwnAsyncJobs();
 
-		if (!selectedEntry.parentId) {
-			await this.sessionManager.newSession({ parentSession: previousSessionFile });
-		} else {
-			this.sessionManager.createBranchedSession(selectedEntry.parentId);
+		let sessionTransitioned = false;
+		try {
+			if (!selectedEntry.parentId) {
+				await this.sessionManager.newSession({ parentSession: previousSessionFile });
+			} else {
+				this.sessionManager.createBranchedSession(selectedEntry.parentId);
+			}
+			this.#markBashSessionTransition(bashTransition);
+			sessionTransitioned = true;
+		} finally {
+			this.#finishBashSessionTransition(bashTransition, sessionTransitioned);
 		}
 		this.#rehydrateCheckpointRewindState();
 		this.#syncTodoPhasesFromBranch();
@@ -15769,10 +16016,19 @@ export class AgentSession {
 			await this.abort({ goalReason: "internal", reason: "branching /btw" });
 			this.agent.replaceQueues([], []);
 		}
+		await this.#flushPendingBashMessages();
 		await this.sessionManager.flush();
+		const bashTransition = this.#beginBashSessionTransition();
 		this.#cancelOwnAsyncJobs();
 
-		this.sessionManager.createBranchedSession(leafId);
+		let sessionTransitioned = false;
+		try {
+			this.sessionManager.createBranchedSession(leafId);
+			this.#markBashSessionTransition(bashTransition);
+			sessionTransitioned = true;
+		} finally {
+			this.#finishBashSessionTransition(bashTransition, sessionTransitioned);
+		}
 
 		this.#rehydrateCheckpointRewindState();
 		this.sessionManager.appendMessage({
@@ -15828,6 +16084,7 @@ export class AgentSession {
 		/** Raw session context built during navigation — pass to renderInitialMessages to skip a second O(N) walk. */
 		sessionContext?: SessionContext;
 	}> {
+		await this.#flushPendingBashMessages();
 		const oldLeafId = this.sessionManager.getLeafId();
 
 		// No-op if already at target
@@ -15955,18 +16212,28 @@ export class AgentSession {
 
 		// Switch leaf (with or without summary)
 		// Summary is attached at the navigation target position (newLeafId), not the old branch
+		const bashTransition = this.#beginBashSessionTransition();
 		let summaryEntry: BranchSummaryEntry | undefined;
-		if (summaryText) {
-			// Create summary at target position (can be null for root)
-			const summaryId = this.sessionManager.branchWithSummary(newLeafId, summaryText, summaryDetails, fromExtension);
-
-			summaryEntry = this.sessionManager.getEntry(summaryId) as BranchSummaryEntry;
-		} else if (newLeafId === null) {
-			// No summary, navigating to root - reset leaf
-			this.sessionManager.resetLeaf();
-		} else {
-			// No summary, navigating to non-root
-			this.sessionManager.branch(newLeafId);
+		let branchTransitioned = false;
+		try {
+			if (summaryText) {
+				// Create summary at target position (can be null for root)
+				const summaryId = this.sessionManager.branchWithSummary(
+					newLeafId,
+					summaryText,
+					summaryDetails,
+					fromExtension,
+				);
+				summaryEntry = this.sessionManager.getEntry(summaryId) as BranchSummaryEntry;
+			} else if (newLeafId === null) {
+				this.sessionManager.resetLeaf();
+			} else {
+				this.sessionManager.branch(newLeafId);
+			}
+			this.#markBashSessionTransition(bashTransition);
+			branchTransitioned = true;
+		} finally {
+			this.#finishBashSessionTransition(bashTransition, branchTransitioned);
 		}
 
 		// Update agent state — build display context to populate agent messages.
