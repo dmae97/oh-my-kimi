@@ -4421,6 +4421,9 @@ export class AgentSession {
 		// Check auto-retry and auto-compaction after agent completes
 		if (event.type === "agent_end") {
 			const settledMessages = this.agent.state.messages;
+			// TTSR retry work runs concurrently and clears the live flag before
+			// maintenance can emit agent_end, so preserve the state at settle entry.
+			const ttsrAbortPendingAtAgentEnd = this.#ttsrAbortPending;
 			const emitAgentEndNotification = async (options?: { willContinue?: boolean }) => {
 				await this.#emitAgentEndNotification(settledMessages, options);
 			};
@@ -4568,11 +4571,13 @@ export class AgentSession {
 				}
 			}
 
-			// A deliberate abort should settle the current turn, not trigger queued continuations.
+			// A deliberate abort should settle the current turn, not trigger queued
+			// continuations — except TTSR self-repair, which already scheduled a
+			// hidden retry while #ttsrAbortPending is still true.
 			if (msg.stopReason === "aborted") {
 				this.#resolveRetry();
 				this.#resetSessionStopContinuationState();
-				await emitAgentEndNotification();
+				await emitAgentEndNotification(ttsrAbortPendingAtAgentEnd ? { willContinue: true } : undefined);
 				return;
 			}
 			// Fireworks Fast variants degrade to their base model on a failed turn —
@@ -4643,7 +4648,7 @@ export class AgentSession {
 			}
 			if (msg.stopReason !== "error") {
 				if (this.#enforceRewindBeforeYield()) {
-					await emitAgentEndNotification();
+					await emitAgentEndNotification({ willContinue: true });
 					return;
 				}
 				const planModeContinuationScheduled = await this.#enforcePlanModeDecisionAtSettle();

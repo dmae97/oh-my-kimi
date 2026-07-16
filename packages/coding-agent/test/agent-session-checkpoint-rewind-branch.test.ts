@@ -6,11 +6,14 @@ import { z } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockContent, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
+import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { RewindTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 const checkpointSchema = z.object({ goal: z.string() });
@@ -67,7 +70,10 @@ function signedThinking(thinking: string, thinkingSignature: string): MockConten
 	return { type: "thinking", thinking, thinkingSignature } as unknown as MockContent;
 }
 
-async function createHarness(responses: MockResponse[]): Promise<Harness & { mock: MockModel }> {
+async function createHarness(
+	responses: MockResponse[],
+	options?: { onAgentEnd?: (willContinue: boolean | undefined) => void },
+): Promise<Harness & { mock: MockModel }> {
 	const tempDir = TempDir.createSync("@pi-checkpoint-rewind-branch-");
 	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 	authStorage.setRuntimeApiKey("mock", "test-key");
@@ -96,12 +102,29 @@ async function createHarness(responses: MockResponse[]): Promise<Harness & { moc
 		streamFn: mock.stream,
 	});
 
+	const sessionManager = SessionManager.inMemory(tempDir.path());
+	let extensionRunner: ExtensionRunner | undefined;
+	if (options?.onAgentEnd) {
+		const runtime = new ExtensionRuntime();
+		const extension = await loadExtensionFromFactory(
+			pi => {
+				pi.on("agent_end", event => options.onAgentEnd?.(event.willContinue));
+			},
+			tempDir.path(),
+			new EventBus(),
+			runtime,
+			"capture-agent-end",
+		);
+		extensionRunner = new ExtensionRunner([extension], runtime, tempDir.path(), sessionManager, modelRegistry);
+	}
+
 	const session = new AgentSession({
 		agent,
-		sessionManager: SessionManager.inMemory(tempDir.path()),
+		sessionManager,
 		settings,
 		modelRegistry,
 		toolRegistry: new Map(tools.map(tool => [tool.name, tool])),
+		extensionRunner,
 	});
 	const harness = { session, authStorage, tempDir, extraSessions: [] };
 	activeHarnesses.push(harness);
@@ -418,5 +441,43 @@ describe("AgentSession checkpoint rewind branch context", () => {
 		expect(rewindResult.content.some(part => part.type === "text" && part.text.includes("Rewind requested"))).toBe(
 			true,
 		);
+	});
+
+	it("marks extension agent_end willContinue when enforceRewindBeforeYield continues", async () => {
+		const agentEnds: Array<boolean | undefined> = [];
+
+		const report = "findings: enforced rewind before yield";
+		const { session, mock } = await createHarness(
+			[
+				{
+					content: [
+						{ type: "toolCall", id: "call_checkpoint", name: "checkpoint", arguments: { goal: "inspect" } },
+					],
+					stopReason: "toolUse",
+				},
+				// Text-only stop while checkpoint is open → #enforceRewindBeforeYield.
+				{ content: ["done without rewind"], stopReason: "stop" },
+				{
+					content: [{ type: "toolCall", id: "call_rewind", name: "rewind", arguments: { report } }],
+					stopReason: "toolUse",
+				},
+				{ content: ["terminal after rewind"], stopReason: "stop" },
+			],
+			{ onAgentEnd: willContinue => agentEnds.push(willContinue) },
+		);
+
+		await session.prompt("investigate with a checkpoint then yield early");
+		await session.waitForIdle();
+
+		// Intermediate enforceRewindBeforeYield settle, then terminal post-rewind settle.
+		expect(agentEnds.length).toBeGreaterThanOrEqual(2);
+		const continuing = agentEnds.filter(willContinue => willContinue === true);
+		expect(continuing).toHaveLength(1);
+		const intermediateIndex = agentEnds.indexOf(true);
+		expect(intermediateIndex).toBeGreaterThanOrEqual(0);
+		expect(intermediateIndex).toBeLessThan(agentEnds.length - 1);
+		expect(agentEnds.at(-1)).toBeFalsy();
+		expect(mock.calls.length).toBeGreaterThanOrEqual(3);
+		expect(expectLastAssistant(session.messages).stopReason).toBe("stop");
 	});
 });
