@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Rendered user and host transcript messages as Markdown and separated adjacent assistant content blocks. ([#5559](https://github.com/can1357/oh-my-pi/issues/5559))
+
 ## [17.0.0] - 2026-07-15
 
 ### Changed
@@ -12,9 +16,6 @@
 ### Removed
 
 - Removed custom visualization for the search_tool_bm25 tool, which now falls back to generic rendering.
-### Fixed
-
-- Rendered user and host transcript messages as Markdown and separated adjacent assistant content blocks. ([#5559](https://github.com/can1357/oh-my-pi/issues/5559))
 
 ## [16.5.1] - 2026-07-14
 
