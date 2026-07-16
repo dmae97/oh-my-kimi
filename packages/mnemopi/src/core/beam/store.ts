@@ -236,28 +236,28 @@ function trimWorkingMemory(beam: BeamMemoryState): void {
 	if (!Number.isFinite(limit) || limit <= 0) return;
 	const ttlHours = beam.config.workingMemoryTtlHours;
 	const cutoff = toUtcIso(new Date(Date.now() - ttlHours * 3_600_000));
-	const ids = (
-		beam.db
-			.prepare(`
-				SELECT id FROM working_memory
-				WHERE session_id = ?
-				  AND consolidated_at IS NULL
-				  AND trust_tier IS NOT 'IMPORTED'
-				  AND (
-					timestamp < ? OR
-					id NOT IN (
-						SELECT id FROM working_memory
-						WHERE session_id = ? AND consolidated_at IS NULL AND trust_tier IS NOT 'IMPORTED'
-						ORDER BY timestamp DESC
-						LIMIT ?
-					)
-				  )
-			`)
-			.all(beam.sessionId, cutoff, beam.sessionId, limit) as { id: string }[]
-	).map(row => row.id);
-	if (ids.length === 0) return;
-	const placeholders = ids.map(() => "?").join(", ");
 	transaction(beam.db, () => {
+		const ids = (
+			beam.db
+				.prepare(`
+					SELECT id FROM working_memory
+					WHERE session_id = ?
+					  AND consolidated_at IS NULL
+					  AND trust_tier IS NOT 'IMPORTED'
+					  AND (
+						timestamp < ? OR
+						id NOT IN (
+							SELECT id FROM working_memory
+							WHERE session_id = ? AND consolidated_at IS NULL AND trust_tier IS NOT 'IMPORTED'
+							ORDER BY timestamp DESC
+							LIMIT ?
+						)
+					  )
+				`)
+				.all(beam.sessionId, cutoff, beam.sessionId, limit) as { id: string }[]
+		).map(row => row.id);
+		if (ids.length === 0) return;
+		const placeholders = ids.map(() => "?").join(", ");
 		beam.db
 			.prepare(`DELETE FROM working_memory WHERE id IN (${placeholders}) AND session_id = ?`)
 			.run(...ids, beam.sessionId);
