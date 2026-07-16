@@ -5,6 +5,7 @@
 ### Fixed
 
 - Automatically invalidate and rotate OAuth credentials when an "invalidated oauth token" error occurs
+- Fixed `kimi-code` Anthropic-format requests ignoring custom provider base URLs ([#5722](https://github.com/can1357/oh-my-pi/issues/5722)).
 
 ## [17.0.1] - 2026-07-16
 
