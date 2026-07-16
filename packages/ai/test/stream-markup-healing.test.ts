@@ -523,6 +523,35 @@ describe("StreamMarkupHealing thinking pattern", () => {
 		expect(heal("see <div>content</div> end")).toEqual({ text: "see <div>content</div> end", thinking: "" });
 	});
 
+	// Issue #5665: a literal reasoning tag inside a Markdown inline-code span was
+	// read as a leaked <think> boundary, splitting the visible row into
+	// text + thinking and corrupting the rendered Markdown.
+	it("keeps a literal think tag inside inline code as visible text", () => {
+		const literal = `<${"think"}>`;
+		const row = `| [#1203 MiniMax CN leaks \`${literal}\` text](https://x) | Fixed | PR merged |`;
+		expect(heal(row)).toEqual({ text: row, thinking: "" });
+	});
+
+	it("keeps a literal think tag inside inline code when streamed char by char", () => {
+		const literal = `<${"think"}>`;
+		const row = `prefix \`${literal}\` suffix`;
+		expect(heal(...row)).toEqual({ text: row, thinking: "" });
+	});
+
+	it("keeps a literal think tag inside a fenced code block as visible text", () => {
+		const literal = `<${"think"}>`;
+		const block = `\`\`\`md\n${literal}\n\`\`\`\nafter`;
+		expect(heal(block)).toEqual({ text: block, thinking: "" });
+	});
+
+	it("still heals a leaked think tag outside inline code", () => {
+		const literal = `<${"think"}>`;
+		expect(heal(`before \`code\` ${literal}secret</think> after`)).toEqual({
+			text: "before `code`  after",
+			thinking: "secret",
+		});
+	});
+
 	it("emits one balanced thinking boundary for a healed fence", () => {
 		const scanner = new ThinkingInbandScanner();
 		const events: InbandScanEvent[] = [...scanner.feed("a```thinking\nx\n```b"), ...scanner.flush()];

@@ -32,6 +32,8 @@ export class ThinkingInbandScanner implements InbandScanner {
 	#thinking = "";
 	/** Fence-aware close-matcher while inside a ` ```thinking ` block; undefined otherwise. */
 	#fenced: FencedThinkingScanner | undefined;
+	/** Backtick count that closes the Markdown code span/fence we are inside; 0 when not in code. */
+	#codeTicks = 0;
 
 	feed(text: string): InbandScanEvent[] {
 		if (text.length === 0) return [];
@@ -86,20 +88,48 @@ export class ThinkingInbandScanner implements InbandScanner {
 				this.#closeTag = "";
 				continue;
 			}
-
-			const tag = findEarliestOpen(this.#buffer);
-			if (!tag) {
-				const hold = final ? 0 : partialSuffixOverlapAny(this.#buffer, OPENS);
+			if (this.#codeTicks > 0) {
+				// Inside a Markdown code span/fence: pass text through verbatim and
+				// suppress reasoning-tag detection until the closing backtick run.
+				const close = findBacktickRun(this.#buffer, 0, this.#codeTicks);
+				if (close !== -1 && (final || close + this.#codeTicks < this.#buffer.length)) {
+					const end = close + this.#codeTicks;
+					events.push({ type: "text", text: this.#buffer.slice(0, end) });
+					this.#buffer = this.#buffer.slice(end);
+					this.#codeTicks = 0;
+					continue;
+				}
+				// No committed close yet: emit text, holding a trailing backtick run
+				// (it may still grow into — or past — the closing delimiter).
+				const hold = final ? 0 : trailingBacktickRun(this.#buffer);
 				const emit = this.#buffer.slice(0, this.#buffer.length - hold);
 				if (emit.length > 0) events.push({ type: "text", text: emit });
 				this.#buffer = this.#buffer.slice(this.#buffer.length - hold);
+				if (final) this.#codeTicks = 0;
 				break;
 			}
-			if (tag.index > 0) events.push({ type: "text", text: this.#buffer.slice(0, tag.index) });
-			this.#buffer = this.#buffer.slice(tag.index + tag.open.length);
-			this.#closeTag = tag.close;
+
+			const hit = scanVisible(this.#buffer, final);
+			if (hit.kind === "none") {
+				events.push({ type: "text", text: this.#buffer });
+				this.#buffer = "";
+				break;
+			}
+			if (hit.index > 0) events.push({ type: "text", text: this.#buffer.slice(0, hit.index) });
+			if (hit.kind === "hold") {
+				this.#buffer = this.#buffer.slice(hit.index);
+				break;
+			}
+			if (hit.kind === "code") {
+				events.push({ type: "text", text: this.#buffer.slice(hit.index, hit.index + hit.ticks) });
+				this.#buffer = this.#buffer.slice(hit.index + hit.ticks);
+				this.#codeTicks = hit.ticks;
+				continue;
+			}
+			this.#buffer = this.#buffer.slice(hit.index + hit.tag.open.length);
+			this.#closeTag = hit.tag.close;
 			this.#thinking = "";
-			if (tag.fenced) this.#fenced = new FencedThinkingScanner();
+			if (hit.tag.fenced) this.#fenced = new FencedThinkingScanner();
 			events.push({ type: "thinkingStart" });
 		}
 		return events;
@@ -112,11 +142,62 @@ export class ThinkingInbandScanner implements InbandScanner {
 	}
 }
 
-function findEarliestOpen(buffer: string): (Tag & { index: number }) | undefined {
-	let best: (Tag & { index: number }) | undefined;
-	for (const tag of TAGS) {
-		const index = buffer.indexOf(tag.open);
-		if (index !== -1 && (!best || index < best.index)) best = { ...tag, index };
+/** Outcome of scanning idle visible text for the next reasoning-tag or code-span boundary. */
+type VisibleHit =
+	| { readonly kind: "tag"; readonly index: number; readonly tag: Tag }
+	| { readonly kind: "code"; readonly index: number; readonly ticks: number }
+	| { readonly kind: "hold"; readonly index: number }
+	| { readonly kind: "none" };
+
+/**
+ * Walk idle visible text for the earliest boundary: a leaked reasoning-tag open,
+ * a Markdown code-span/fence opener (a backtick run), or — when more chunks may
+ * follow — a held partial delimiter at the buffer tail.
+ *
+ * Reasoning tags win at any position so the gemini ` ```thinking ` fence is
+ * healed instead of being read as a code fence. Backtick runs enter code mode so
+ * a literal `<think>` inside inline code or a fenced block stays visible text.
+ */
+function scanVisible(buffer: string, final: boolean): VisibleHit {
+	for (let i = 0; i < buffer.length; i++) {
+		const tag = TAGS.find(candidate => buffer.startsWith(candidate.open, i));
+		if (tag) return { kind: "tag", index: i, tag };
+		if (!final && isOpenPrefix(buffer, i)) return { kind: "hold", index: i };
+		if (buffer[i] === "`") {
+			const ticks = backtickRun(buffer, i);
+			if (!final && i + ticks === buffer.length) return { kind: "hold", index: i };
+			return { kind: "code", index: i, ticks };
+		}
 	}
-	return best;
+	return { kind: "none" };
+}
+
+/** True when `buffer.slice(from)` is a strict prefix of some reasoning-tag open. */
+function isOpenPrefix(buffer: string, from: number): boolean {
+	const rest = buffer.length - from;
+	return OPENS.some(open => open.length > rest && open.startsWith(buffer.slice(from)));
+}
+
+/** Length of the maximal backtick run beginning at `from`. */
+function backtickRun(buffer: string, from: number): number {
+	let end = from;
+	while (end < buffer.length && buffer[end] === "`") end++;
+	return end - from;
+}
+
+/** Index of the first maximal backtick run of exactly `ticks` at/after `from`, else -1. */
+function findBacktickRun(buffer: string, from: number, ticks: number): number {
+	for (let i = buffer.indexOf("`", from); i !== -1; i = buffer.indexOf("`", i)) {
+		const run = backtickRun(buffer, i);
+		if (run === ticks) return i;
+		i += run;
+	}
+	return -1;
+}
+
+/** Length of a backtick run that ends at the buffer tail; 0 when the tail is not a backtick. */
+function trailingBacktickRun(buffer: string): number {
+	let start = buffer.length;
+	while (start > 0 && buffer[start - 1] === "`") start--;
+	return buffer.length - start;
 }

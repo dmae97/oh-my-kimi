@@ -5,6 +5,7 @@
 ### Fixed
 
 - Automatically invalidate and rotate OAuth credentials when an "invalidated oauth token" error occurs
+- Fixed leaked-thinking healing consuming a literal reasoning tag (e.g. `` `<think>` ``) inside a Markdown inline-code span or fenced code block as a reasoning boundary, which split the visible text into `text` + `thinking` blocks and corrupted the rendered Markdown ([#5665](https://github.com/can1357/oh-my-pi/issues/5665)).
 
 ## [17.0.1] - 2026-07-16
 
