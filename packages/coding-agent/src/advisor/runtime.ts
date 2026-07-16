@@ -51,14 +51,18 @@ export interface AdvisorRuntimeHost {
 	/**
 	 * Called with the error of every failed advisor turn, before the retry sleep
 	 * or the dropped-after-3 path. Lets the host apply credential-level remedies
-	 * the advisor loop lacks: the in-stream a/b/c auth retry rotates through
-	 * sibling credentials within one request but never blocks the LAST failing
-	 * one — the primary agent's retry pipeline does that via
-	 * `markUsageLimitReached`, so without this hook the advisor re-picks the
-	 * same usage-limited account on every retry. Errors thrown here are logged
-	 * and swallowed.
+	 * and configured model fallback that the advisor loop cannot perform itself.
+	 * Return `true` after switching models so the same clean batch is retried
+	 * immediately with a fresh failure budget. `failedMessages` contains the
+	 * failed prompt's appended turns before rollback. Errors thrown here are
+	 * logged and swallowed.
 	 */
-	onTurnError?(error: unknown): Promise<void> | void;
+	onTurnError?(
+		error: unknown,
+		failedMessages: readonly AgentMessage[],
+	): Promise<boolean | undefined> | boolean | undefined;
+	/** Called after a successful advisor turn so the host can finish fallback lifecycle reporting. */
+	onTurnSuccess?(): Promise<void> | void;
 	/** Surface a non-recovering advisor failure to the host UI without adding model-visible context. */
 	notifyFailure?(error: unknown): void;
 }
@@ -542,14 +546,23 @@ export class AdvisorRuntime {
 					success = true;
 					this.#consecutiveFailures = 0;
 					this.#failureNotified = false;
+					if (this.host.onTurnSuccess) {
+						try {
+							await this.host.onTurnSuccess();
+						} catch (hookErr) {
+							logger.debug("advisor onTurnSuccess hook failed", { err: String(hookErr) });
+						}
+					}
 				} catch (err) {
 					// reset()/dispose() aborts the in-flight prompt; treat it as a
 					// reset, not a transient failure — drop the stale batch.
 					if (this.#epoch !== epoch) continue;
+					const failedMessages = this.agent.state.messages.slice(messageSnapshot);
 					this.#rollbackFailedTurn(messageSnapshot);
 					logger.debug("advisor turn failed", { err: String(err) });
+					let recovered = false;
 					try {
-						await this.host.onTurnError?.(err);
+						recovered = (await this.host.onTurnError?.(err, failedMessages)) === true;
 					} catch (hookErr) {
 						logger.debug("advisor onTurnError hook failed", { err: String(hookErr) });
 					}
@@ -563,6 +576,12 @@ export class AdvisorRuntime {
 					}
 					// Epoch guard after the async error hook.
 					if (this.#epoch !== epoch) continue;
+					if (recovered) {
+						this.#consecutiveFailures = 0;
+						this.#failureNotified = false;
+						this.#pending.unshift({ text: batch, turns: finalTurns, wip });
+						continue;
+					}
 					this.#consecutiveFailures++;
 					if (this.#consecutiveFailures >= 3) {
 						logger.warn("advisor failed consecutively 3 times; dropping backlog to prevent stall");

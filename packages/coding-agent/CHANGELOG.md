@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed built-in advisors retrying a quota- or rate-limited provider until becoming unavailable instead of applying the matching `retry.fallbackChains` model chain; advisor fallbacks now emit the same applied and succeeded lifecycle events as primary-agent fallbacks ([#5740](https://github.com/can1357/oh-my-pi/issues/5740)).
+
 ## [17.0.1] - 2026-07-16
 
 ### Changed
