@@ -125,7 +125,7 @@ async function loadFastembedOnce(): Promise<FastembedModule> {
 		if (manifest.version !== FASTEMBED_SPEC) {
 			throw new Error(`Cannot find package fastembed@${FASTEMBED_SPEC}; resolved ${String(manifest.version)}`);
 		}
-		return loadResolvedFastembed(requireDirect.resolve("fastembed"), path.dirname(manifestPath));
+		return await loadResolvedFastembed(requireDirect.resolve("fastembed"), path.dirname(manifestPath));
 	} catch (error) {
 		if (!isRecoverableFastembedLoadError(error)) throw error;
 		logger.debug("mnemopi: fastembed not loadable, using on-demand runtime install", {
