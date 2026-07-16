@@ -6761,6 +6761,8 @@ export class AgentSession {
 		const tools: AgentTool[] = [];
 		const validToolNames: string[] = [];
 		const mountedTools: AgentTool[] = [];
+		const xdevReadAvailable =
+			this.#presentationPinnedToolNames === undefined || this.#presentationPinnedToolNames.has("read");
 		for (const name of toolNames) {
 			const tool = this.#toolRegistry.get(name);
 			if (!tool) continue;
@@ -6768,6 +6770,7 @@ export class AgentSession {
 			// top-level schema) when the transport is active; presentation pins stay top-level.
 			if (
 				this.#xdevRegistry &&
+				xdevReadAvailable &&
 				this.#presentationPinnedToolNames?.has(name) !== true &&
 				isMountableUnderXdev(tool)
 			) {

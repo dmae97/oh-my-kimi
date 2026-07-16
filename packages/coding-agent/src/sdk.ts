@@ -2425,6 +2425,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const explicitlyRequestedToolNameSet = explicitlyRequestedToolNames
 			? new Set(explicitlyRequestedToolNames)
 			: undefined;
+		const xdevReadAvailable =
+			explicitlyRequestedToolNameSet === undefined || explicitlyRequestedToolNameSet.has("read");
 		const initialRequestedActiveToolNames = options.toolNames
 			? requestedActiveToolNames
 			: requestedActiveToolNames.filter(name => !defaultInactiveToolNames.has(name));
@@ -2468,7 +2470,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			for (const name of initialToolNames) {
 				const tool = toolRegistry.get(name);
 				const explicitlyRequested = explicitlyRequestedToolNameSet?.has(name) === true;
-				if (tool && !explicitlyRequested && isMountableUnderXdev(tool)) mountedTools.push(tool);
+				if (tool && xdevReadAvailable && !explicitlyRequested && isMountableUnderXdev(tool))
+					mountedTools.push(tool);
 				else topLevelToolNames.push(name);
 			}
 			toolSession.xdevRegistry.reconcile(mountedTools);

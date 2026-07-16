@@ -192,4 +192,44 @@ describe("createAgentSession MCP server instructions (deferred UI)", () => {
 			await session.dispose();
 		}
 	}, 20_000);
+
+	it("keeps deferred tools top-level when an explicit session omitted read", async () => {
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			modelRegistry,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({}),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableLsp: false,
+			skipPythonPreflight: true,
+			enableMCP: true,
+			hasUI: true,
+			toolNames: ["bash"],
+		});
+		try {
+			const deadline = Date.now() + 12_000;
+			let prompt = session.systemPrompt.join("\n");
+			while (!prompt.includes(SERVER_INSTRUCTIONS) && Date.now() < deadline) {
+				await Bun.sleep(50);
+				prompt = session.systemPrompt.join("\n");
+			}
+			let activeNames = session.getActiveToolNames();
+			while (!activeNames.includes(MCP_TOOL_NAME) && Date.now() < deadline) {
+				await Bun.sleep(50);
+				activeNames = session.getActiveToolNames();
+			}
+
+			expect(activeNames).not.toContain("read");
+			expect(activeNames).toContain(MCP_TOOL_NAME);
+			expect(session.getXdevToolEntries().map(entry => entry.name)).not.toContain(MCP_TOOL_NAME);
+		} finally {
+			await session.dispose();
+		}
+	}, 20_000);
 });

@@ -196,6 +196,15 @@ describe("generate_image tool gating", () => {
 		expect(session.getActiveToolNames()).toContain("write");
 	});
 
+	it("keeps ambient custom tools top-level when an explicit session omitted read", async () => {
+		const ambientTool = customTool("ambient_search");
+		const session = await sessionWithCustomTools(["bash"], [ambientTool]);
+
+		expect(session.getActiveToolNames()).not.toContain("read");
+		expect(session.getActiveToolNames()).toContain(ambientTool.name);
+		expect(session.getXdevToolEntries().map(entry => entry.name)).not.toContain(ambientTool.name);
+	});
+
 	it("activates write when an RPC host tool mounts under xd://", async () => {
 		const { session } = await createAgentSession({
 			cwd: registryDir,
