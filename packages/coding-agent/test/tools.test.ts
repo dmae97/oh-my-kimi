@@ -1328,10 +1328,10 @@ function b() {
 
 		it("should write truncated output to artifacts", async () => {
 			const result = await bashTool.execute("test-call-8-artifact", {
-				// A single line past the 768-byte column cap is the minimal output
-				// that trips truncation + artifact spill; the old 60K-arg brace
-				// expansion paid ~60ms of shell time to prove the same path.
-				command: "printf 'a%.0s' {1..2000}",
+				// Emit well past the ~50KB inline window across many lines so the
+				// output is genuinely window-truncated (not merely column-capped),
+				// which is what allocates the spill artifact.
+				command: "seq 1 30000",
 			});
 
 			const artifactId = result.details?.meta?.truncation?.artifactId;

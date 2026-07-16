@@ -1,6 +1,6 @@
 import type { OAuthAccess } from "./auth-storage";
 import * as AIError from "./error";
-import { isAuthRetryableError } from "./error/auth-classify";
+import { isAuthRetryableError, isInvalidatedOAuthTokenError } from "./error/auth-classify";
 import { isUsageLimit } from "./error/flags";
 import { isUsageLimitOutcome } from "./error/rate-limit";
 
@@ -90,7 +90,7 @@ export const AUTH_RETRY_STEPS: readonly boolean[] = [false, true];
 export const AUTH_RETRY_MAX_ATTEMPTS = 64;
 
 function isDirectCredentialRotationError(error: unknown): boolean {
-	if (isUsageLimit(error)) return true;
+	if (isUsageLimit(error) || isInvalidatedOAuthTokenError(error)) return true;
 	const status = AIError.status(error);
 	const message = error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
 	return isUsageLimitOutcome(status, message);

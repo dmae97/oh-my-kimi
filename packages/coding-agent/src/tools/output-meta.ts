@@ -191,6 +191,13 @@ export class OutputMetaBuilder {
 
 	/** Add truncation info from OutputSummary. No-op if not truncated. */
 	truncationFromSummary(summary: OutputSummary, options: TruncationSummaryOptions): this {
+		// A per-line column cap only trims individual lines (with a `…` marker);
+		// it is not a window/byte truncation, so surface it as its own limit
+		// notice rather than a "Showing lines X-Y … limit" range. This runs even
+		// when the output is otherwise complete (`truncated === false`).
+		if (summary.columnMax != null && summary.columnMax > 0 && (summary.columnTruncatedLines ?? 0) > 0) {
+			this.columnTruncated(summary.columnMax);
+		}
 		if (!summary.truncated) return this;
 
 		const { direction, startLine = 1, totalFileLines } = options;

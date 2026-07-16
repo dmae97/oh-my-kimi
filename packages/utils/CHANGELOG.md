@@ -2,9 +2,18 @@
 
 ## [Unreleased]
 
+## [17.0.1] - 2026-07-16
+
 ### Fixed
 
-- Batched complete SSE lines into one UTF-8 decode per source chunk, avoiding per-line decoder overhead during active response streaming. ([#5542](https://github.com/can1357/oh-my-pi/issues/5542))
+- Added scoped graceful handling for stdio-write EPIPE rejections so protocol servers can await postmortem cleanup when their peer disconnects ([#4788](https://github.com/can1357/oh-my-pi/issues/4788)).
+
+## [17.0.0] - 2026-07-15
+
+### Fixed
+
+- Improved SSE streaming performance by batching complete lines into a single UTF-8 decode per chunk, reducing decoder overhead.
+- Fixed an issue in `parseFrontmatter` where a single malformed YAML line would corrupt sibling values by parsing each line independently.
 
 ## [16.5.2] - 2026-07-14
 
@@ -44,9 +53,6 @@
 ### Fixed
 
 - Fixed child shell environment filtering to drop launch-directory `.env.local` values that Bun auto-loaded before OMP starts command shells. ([#4723](https://github.com/can1357/oh-my-pi/issues/4723))
-### Fixed
-
-- Fixed `parseFrontmatter`'s malformed-YAML fallback corrupting sibling values: one unparseable line (e.g. `scope: "text","thinking"`) forced every value through a raw key/value split that kept literal quotes. Each value is now reparsed independently as YAML, falling back to the raw trimmed string only for the lines that genuinely don't parse ([#4796](https://github.com/can1357/oh-my-pi/issues/4796)).
 
 ## [16.3.10] - 2026-07-06
 

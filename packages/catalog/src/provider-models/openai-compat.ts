@@ -3724,7 +3724,8 @@ export interface GithubCopilotModelManagerConfig {
 
 const COPILOT_ANTHROPIC_MODEL_PATTERN = /^claude-(haiku|sonnet|opus|fable|mythos)-\d/;
 const isCopilotResponsesModelId = (modelId: string): boolean =>
-	modelId.startsWith("gpt-5") || modelId.startsWith("oswe");
+	modelId.startsWith("gpt-5") || modelId.startsWith("oswe") || modelId.startsWith("mai-");
+const COPILOT_CACHE_INVALIDATED_MODEL_IDS = ["mai-code-1-flash-picker"];
 
 function inferCopilotApi(modelId: string): Api {
 	if (COPILOT_ANTHROPIC_MODEL_PATTERN.test(modelId)) {
@@ -3888,6 +3889,7 @@ export function githubCopilotModelManagerOptions(config?: GithubCopilotModelMana
 	const resolveReference = createReferenceResolver(providerRefs);
 	return {
 		providerId: "github-copilot",
+		dropCachedModelIdsOnStaticMismatch: COPILOT_CACHE_INVALIDATED_MODEL_IDS,
 		...(apiKey && {
 			fetchDynamicModels: async () => {
 				const longContextVariants: ModelSpec<Api>[] = [];
@@ -4505,7 +4507,12 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CORE: readonly ModelsDevProviderDescriptor
 
 const MODELS_DEV_PROVIDER_DESCRIPTORS_CODING_PLANS: readonly ModelsDevProviderDescriptor[] = [
 	// --- zAI ---
-	anthropicMessagesDescriptor("zai-coding-plan", "zai", "https://api.z.ai/api/anthropic"),
+	// Source the models.dev `zai` (pay-as-you-go) key rather than `zai-coding-plan`:
+	// the coding-plan key reports all-$0 subscription rates, which surface every GLM
+	// SKU as "Free" in `/models`. The PAYG key carries the real per-token rates for
+	// the identical model ids, so the enumerated token costs line up with the other
+	// subscription providers for comparison (issue #5598).
+	anthropicMessagesDescriptor("zai", "zai", "https://api.z.ai/api/anthropic"),
 	// --- Umans AI Coding Plan ---
 	anthropicMessagesDescriptor("umans-ai-coding-plan", "umans", UMANS_BASE_URL),
 	// --- Xiaomi ---

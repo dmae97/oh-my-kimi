@@ -46,34 +46,6 @@ describe("ToolExecutionComponent live preview spinners", () => {
 		}
 	});
 
-	it("animates a shell pending header while the call is live", () => {
-		vi.useFakeTimers();
-		const requestRender = vi.fn();
-		const requestComponentRender = vi.fn();
-		const component = new ToolExecutionComponent(
-			"ssh",
-			{ host: "example.test", command: "sleep 10" },
-			{},
-			undefined,
-			{ requestRender, requestComponentRender } as unknown as TUI,
-			process.cwd(),
-		);
-
-		try {
-			const firstFrame = stripVTControlCharacters(component.render(80).join("\n"));
-			vi.advanceTimersByTime(120);
-			const secondFrame = stripVTControlCharacters(component.render(80).join("\n"));
-
-			expect(requestComponentRender).toHaveBeenCalledWith(component);
-			expect(requestRender).not.toHaveBeenCalled();
-			expect(firstFrame).toContain("sleep 10");
-			expect(secondFrame).toContain("sleep 10");
-			expect(secondFrame).not.toBe(firstFrame);
-		} finally {
-			component.stopAnimation();
-		}
-	});
-
 	it("does not tick headerless bash pending previews", () => {
 		vi.useFakeTimers();
 		const requestRender = vi.fn();

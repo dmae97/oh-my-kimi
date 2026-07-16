@@ -19,7 +19,14 @@ const context: Context = {
 	messages: [{ role: "user", content: "ping", timestamp: 0 }],
 };
 
-function createSseResponse(): Response {
+function createSseResponse(
+	usage: Record<string, unknown> = {
+		input_tokens: 1,
+		output_tokens: 1,
+		total_tokens: 2,
+		input_tokens_details: { cached_tokens: 0 },
+	},
+): Response {
 	return new Response(
 		`data: ${JSON.stringify({
 			type: "response.output_item.added",
@@ -37,12 +44,7 @@ function createSseResponse(): Response {
 				type: "response.completed",
 				response: {
 					status: "completed",
-					usage: {
-						input_tokens: 1,
-						output_tokens: 1,
-						total_tokens: 2,
-						input_tokens_details: { cached_tokens: 0 },
-					},
+					usage,
 				},
 			})}\n\n`,
 		{ status: 200, headers: { "content-type": "text/event-stream" } },
@@ -297,6 +299,43 @@ describe("OpenRouter pseudo API dual-surface request parity", () => {
 });
 
 describe("OpenRouter Responses request shape", () => {
+	it("uses OpenRouter's reported account charge instead of the catalog estimate", async () => {
+		const providerCost = 0.73;
+		const fetchMock: FetchImpl = vi.fn(async () =>
+			createSseResponse({
+				input_tokens: 1_000_000,
+				output_tokens: 100_000,
+				total_tokens: 1_100_000,
+				input_tokens_details: { cached_tokens: 0 },
+				cost: providerCost,
+			}),
+		);
+		const stream = streamOpenAIResponses(
+			buildOpenRouterResponsesModel({
+				cost: { input: 0.435, output: 0.87, cacheRead: 0.003625, cacheWrite: 0 },
+			}),
+			context,
+			{ apiKey: "test-key", fetch: fetchMock },
+		);
+		let message: AssistantMessage | undefined;
+		for await (const event of stream) {
+			if (event.type === "done") {
+				message = event.message;
+				break;
+			}
+			if (event.type === "error") throw event.error;
+		}
+		if (!message) throw new Error("Expected completed OpenRouter response");
+
+		expect(message.usage.cost.total).toBe(providerCost);
+		const componentTotal =
+			message.usage.cost.input +
+			message.usage.cost.output +
+			message.usage.cost.cacheRead +
+			message.usage.cost.cacheWrite;
+		expect(componentTotal).toBeCloseTo(providerCost);
+	});
+
 	it("appends openrouterVariant only when the resolved model id has no variant after the final slash", async () => {
 		const suffixed = await captureRequest(buildOpenRouterResponsesModel(), { openrouterVariant: "nitro" });
 		expect(suffixed.body.model).toBe("anthropic/claude-haiku-latest:nitro");

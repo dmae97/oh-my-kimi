@@ -48,6 +48,67 @@ export function fastembedRuntimeInstallPlan(): FastembedRuntimeInstallPlan {
 }
 let fastembedLoad: Promise<FastembedModule> | null = null;
 
+/** Inputs for selecting the Windows DLL directory paired with a fastembed installation. */
+export interface WindowsFastembedRuntimeOptions {
+	/** Resolved fastembed package entry whose dependency graph owns the ORT binding. */
+	fastembedEntry: string;
+	/** Directory containing fastembed's manifest and nested dependency graph. */
+	fastembedPackageDir: string;
+	/** Native architecture to select; defaults to the current process architecture. */
+	arch?: string;
+	/** Environment receiving the DLL search path; defaults to the subprocess environment. */
+	env?: NodeJS.ProcessEnv;
+}
+
+/** The ORT module and DLL directory selected from fastembed's own dependency graph. */
+export interface WindowsFastembedRuntime {
+	/** Resolved entry for fastembed's own ONNX Runtime dependency. */
+	ortEntry: string;
+	/** Package directory containing the selected ORT manifest and native assets. */
+	ortPackageDir: string;
+	/** Directory prepended to `PATH` so Windows finds the paired native DLL. */
+	dllDir: string;
+}
+
+/**
+ * Prepend the ORT DLL directory paired with fastembed before Bun loads its
+ * native binding. Compiled Windows binaries extract `.node` files to a
+ * temporary directory, so the default DLL search can otherwise select an
+ * unrelated `onnxruntime.dll` from the inherited system path.
+ */
+export async function prepareWindowsFastembedRuntime({
+	fastembedEntry,
+	fastembedPackageDir,
+	arch = process.arch,
+	env = process.env,
+}: WindowsFastembedRuntimeOptions): Promise<WindowsFastembedRuntime> {
+	const nestedNodeModules = path.join(fastembedPackageDir, "node_modules");
+	const rootNodeModules = path.dirname(fastembedPackageDir);
+	const nestedOrtEntry = resolveRuntimeModule(nestedNodeModules, "onnxruntime-node");
+	const ortEntry = nestedOrtEntry ?? resolveRuntimeModule(rootNodeModules, "onnxruntime-node");
+	const ortPackageDir = path.join(nestedOrtEntry ? nestedNodeModules : rootNodeModules, "onnxruntime-node");
+	if (!ortEntry) {
+		throw new Error(`Cannot find module onnxruntime-node beside ${fastembedEntry}`);
+	}
+	const dllGlob = new Bun.Glob(`bin/napi-*/win32/${arch}/onnxruntime.dll`);
+	let dllDir: string | undefined;
+	for await (const dll of dllGlob.scan({ cwd: ortPackageDir, absolute: true, onlyFiles: true })) {
+		dllDir = path.dirname(dll);
+		break;
+	}
+	if (!dllDir) {
+		throw new Error(`Cannot find module onnxruntime-node Windows DLL for ${arch} beside ${ortEntry}`);
+	}
+
+	const currentPath = env.PATH;
+	const normalizedDllDir = path.resolve(dllDir).toLowerCase();
+	const alreadyPresent = currentPath
+		?.split(path.delimiter)
+		.some(entry => path.resolve(entry).toLowerCase() === normalizedDllDir);
+	if (!alreadyPresent) env.PATH = currentPath ? `${dllDir}${path.delimiter}${currentPath}` : dllDir;
+	return { ortEntry, ortPackageDir, dllDir };
+}
+
 export function loadFastembed(): Promise<FastembedModule> {
 	fastembedLoad ??= loadFastembedOnce().catch(error => {
 		fastembedLoad = null;
@@ -57,16 +118,14 @@ export function loadFastembed(): Promise<FastembedModule> {
 }
 
 async function loadFastembedOnce(): Promise<FastembedModule> {
-	// Dynamic imports: both packages are optional peers that eagerly load
-	// native addons and may be absent at runtime — a static import would load
-	// the addon at module-init and crash every consumer without the peers.
 	try {
-		// Preload the pinned ORT before fastembed's nested ORT — only on Windows,
-		// where loading the older binding first triggers a DLL-reuse crash.
-		if (process.platform === "win32") {
-			await import("onnxruntime-node");
+		const requireDirect = createRequire(import.meta.url);
+		const manifestPath = requireDirect.resolve("fastembed/package.json");
+		const manifest: { version?: unknown } = requireDirect(manifestPath);
+		if (manifest.version !== FASTEMBED_SPEC) {
+			throw new Error(`Cannot find package fastembed@${FASTEMBED_SPEC}; resolved ${String(manifest.version)}`);
 		}
-		return await import("fastembed");
+		return await loadResolvedFastembed(requireDirect.resolve("fastembed"), path.dirname(manifestPath));
 	} catch (error) {
 		if (!isRecoverableFastembedLoadError(error)) throw error;
 		logger.debug("mnemopi: fastembed not loadable, using on-demand runtime install", {
@@ -74,6 +133,16 @@ async function loadFastembedOnce(): Promise<FastembedModule> {
 		});
 		return loadFromRuntimeInstall();
 	}
+}
+
+async function loadResolvedFastembed(entry: string, fastembedPackageDir: string): Promise<FastembedModule> {
+	const requireFastembed = createRequire(entry);
+	if (process.platform === "win32") {
+		const { ortEntry } = await prepareWindowsFastembedRuntime({ fastembedEntry: entry, fastembedPackageDir });
+		requireFastembed(ortEntry);
+	}
+	const loaded: FastembedModule = requireFastembed(entry);
+	return loaded;
 }
 
 async function loadFromRuntimeInstall(): Promise<FastembedModule> {
@@ -89,14 +158,9 @@ async function loadFromRuntimeInstall(): Promise<FastembedModule> {
 	// onnxruntime-node, @anush008/tokenizers → platform binding, …) through
 	// the runtime cache.
 	installRuntimeModuleResolver({ runtimeNodeModules: nodeModules });
-	if (process.platform === "win32") {
-		const ortEntry = resolveRuntimeModule(nodeModules, "onnxruntime-node");
-		if (ortEntry) createRequire(ortEntry)(ortEntry);
-	}
 	const entry = resolveRuntimeModule(nodeModules, "fastembed");
 	if (!entry) throw new Error(`fastembed runtime install at ${runtimeDir} has no loadable entry`);
-	const requireRuntime = createRequire(entry);
-	return requireRuntime(entry) as FastembedModule;
+	return loadResolvedFastembed(entry, path.join(nodeModules, "fastembed"));
 }
 
 function isRecoverableFastembedLoadError(error: unknown): boolean {

@@ -3460,7 +3460,7 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"todo.reminders.max": {
+	"todo.remindersMax": {
 		type: "number",
 		default: 3,
 		ui: {
@@ -4256,6 +4256,17 @@ export const SETTINGS_SCHEMA = {
 		type: "record",
 		default: {} as Record<string, string>,
 	},
+	"task.prewalk": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tasks",
+			group: "Subagents",
+			label: "Generic Task Prewalk",
+			description:
+				"Arm prewalk for the bundled generic `task` subagent: it starts on its resolved model, plans and begins the implementation, then hands off to the 'smol' role at its first edit/write. Per-agent overrides (task.agentPrewalk, toggled with P in /agents) and user agent `prewalk` frontmatter apply regardless of this toggle.",
+		},
+	},
 
 	"tasks.todoClearDelay": {
 		type: "number",
@@ -4468,7 +4479,8 @@ export const SETTINGS_SCHEMA = {
 				{
 					value: "auto",
 					label: "Auto",
-					description: "Priority: GPT model image tool > Antigravity > xAI > OpenRouter > Gemini",
+					description:
+						"Priority: active session provider > GPT model image tool > Antigravity > xAI > OpenRouter > Gemini",
 				},
 				{ value: "openai", label: "OpenAI", description: "Uses the active GPT Responses/Codex model" },
 				{
@@ -5013,8 +5025,10 @@ export const SETTINGS_SCHEMA = {
 	 *
 	 * Owned by `packages/coding-agent/src/tools/report-tool-issue.ts` via the
 	 * process-global consent handler registered by `InteractiveMode`.
+	 *
+	 * @default "unset"
 	 */
-	"dev.autoqa.consent": {
+	"dev.autoqaConsent": {
 		type: "enum",
 		values: ["unset", "granted", "denied"] as const,
 		default: "unset" as const,

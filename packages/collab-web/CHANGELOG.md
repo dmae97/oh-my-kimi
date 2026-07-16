@@ -2,14 +2,22 @@
 
 ## [Unreleased]
 
+## [17.0.1] - 2026-07-16
+
+### Fixed
+
+- Rendered user and host transcript messages as Markdown and separated adjacent assistant content blocks. ([#5559](https://github.com/can1357/oh-my-pi/issues/5559))
+
+## [17.0.0] - 2026-07-15
+
 ### Changed
 
-- Replaced the `irc`/`job` tool renderers (and their legacy `await`/`poll`/`cancel_job` aliases) with a single `hub` renderer that dispatches per op family — messaging, background jobs, and process supervision — keeping the existing irc/job visuals.
-- Collab-web renders successful `xd://` device dispatches through the inner tool's renderer: a `write` result carrying `details.xdev` (execute mode) resolves the renderer by `xdev.tool`, uses `xdev.args`, and swaps in `xdev.inner` as details, with the card labeled `xd://<tool>` (preserves generated-image thumbnails and MCP/autoresearch presentation).
+- Consolidated the legacy irc and job tool renderers into a unified hub renderer for messaging, background jobs, and process supervision, while preserving existing visual styles.
+- Enhanced rendering for xd:// device dispatches to resolve through their inner tool's renderer, preserving generated-image thumbnails and MCP/autoresearch presentations under a unified xd://<tool> card label.
 
 ### Removed
 
-- Removed custom visualization for `search_tool_bm25` tool; falls back to generic rendering
+- Removed custom visualization for the search_tool_bm25 tool, which now falls back to generic rendering.
 
 ## [16.5.1] - 2026-07-14
 

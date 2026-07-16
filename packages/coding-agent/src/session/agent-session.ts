@@ -170,6 +170,7 @@ import {
 } from "../advisor";
 import { type AsyncJob, type AsyncJobDeliveryState, AsyncJobManager } from "../async";
 import { classifyDifficulty } from "../auto-thinking/classifier";
+import { reset as resetCapabilities } from "../capability";
 import type { Rule } from "../capability/rule";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import type { ModelRegistry } from "../config/model-registry";
@@ -237,7 +238,7 @@ import type { CompactOptions, ContextUsage } from "../extensibility/extensions/t
 import { ExtensionToolWrapper } from "../extensibility/extensions/wrapper";
 import type { HookCommandContext } from "../extensibility/hooks/types";
 import type { RecoveredRetryError } from "../extensibility/shared-events";
-import type { Skill, SkillWarning } from "../extensibility/skills";
+import { loadSkills, type Skill, type SkillWarning, setActiveSkills } from "../extensibility/skills";
 import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
 import { GoalRuntime } from "../goals/runtime";
 import type { Goal, GoalModeState } from "../goals/state";
@@ -286,6 +287,7 @@ import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { t
 import ttsrToolReminderTemplate from "../prompts/system/ttsr-tool-reminder.md" with { type: "text" };
 import unexpectedStopRetryTemplate from "../prompts/system/unexpected-stop-retry.md" with { type: "text" };
 import vibeModeActivePrompt from "../prompts/system/vibe-mode-active.md" with { type: "text" };
+import xdevMountNoticePrompt from "../prompts/system/xdev-mount-notice.md" with { type: "text" };
 import { AgentRegistry } from "../registry/agent-registry";
 import {
 	deobfuscateAssistantContent,
@@ -313,7 +315,7 @@ import { releaseTabsForOwner } from "../tools/browser/tab-supervisor";
 import { isMCPToolName, normalizeToolNames } from "../tools/builtin-names";
 import type { CheckpointState, CompletedRewindState } from "../tools/checkpoint";
 import { outputMeta, wrapToolWithMetaNotice } from "../tools/output-meta";
-import { normalizeLocalScheme, resolveToCwd } from "../tools/path-utils";
+import { isInternalUrlPath, normalizeLocalScheme, resolveToCwd } from "../tools/path-utils";
 import {
 	buildResolveReminderMessage,
 	isPreviewResolutionToolCall,
@@ -403,7 +405,7 @@ const PLAN_MODE_REMINDER_MAX = 3;
  */
 const MID_RUN_TODO_NUDGE_MUTATION_THRESHOLD = 12;
 /** Mid-run nudges per prompt cycle. Deliberately tighter than
- *  `todo.reminders.max` (the stop-time budget): this is a gentle hidden hint,
+ *  `todo.remindersMax` (the stop-time budget): this is a gentle hidden hint,
  *  not an escalation ladder. */
 const MID_RUN_TODO_NUDGE_MAX_PER_CYCLE = 2;
 /** Tool results that count as landed work for the mid-run todo nudge. */
@@ -481,6 +483,9 @@ const PREWALK_CONTINUE_MESSAGE_TYPE = "prewalk-continue";
  *  multi-site fixes, unnecessarily broad rewrites, and reported-test-only
  *  verification. */
 const PREWALK_CHECKLIST_MESSAGE_TYPE = "prewalk-checklist";
+/** Hidden steered notice announcing a mid-session `xd://` mount/unmount delta
+ *  (see {@link AgentSession.#notifyXdevMountDelta}). */
+const XDEV_MOUNT_NOTICE_MESSAGE_TYPE = "xdev-mount-notice";
 /** Tools whose first successful call triggers the switch — once the todo
  *  gate is open (see {@link AgentSession.#prewalkTodoSeen}). Bash is
  *  deliberately excluded: it doubles as exploration (ls/cat) and fired
@@ -823,6 +828,8 @@ export interface AgentSessionConfig {
 	skills?: Skill[];
 	/** Skill loading warnings (already captured by SDK) */
 	skillWarnings?: SkillWarning[];
+	/** Whether runtime reloads may rediscover disk-backed skills for this session. */
+	skillsReloadable?: boolean;
 	/** Custom commands (TypeScript slash commands) */
 	customCommands?: LoadedCustomCommand[];
 	skillsSettings?: SkillsSettings;
@@ -1532,15 +1539,20 @@ function queuedTextContent(message: AgentMessage): string | undefined {
 	if (!("content" in message)) return undefined;
 	const content = message.content;
 	if (typeof content === "string") return content;
-	return content.find((part): part is TextContent => part.type === "text")?.text;
+	for (const part of content) {
+		if (part.type === "text") return part.text;
+	}
+	return undefined;
 }
 
 function queuedImageContent(message: AgentMessage): ImageContent[] | undefined {
 	if (!("content" in message) || typeof message.content === "string") return undefined;
-	const images = message.content.filter(
-		(part): part is ImageContent =>
-			part.type === "image" && typeof part.data === "string" && typeof part.mimeType === "string",
-	);
+	const images: ImageContent[] = [];
+	for (const part of message.content) {
+		if (part.type === "image" && typeof part.data === "string" && typeof part.mimeType === "string") {
+			images.push(part);
+		}
+	}
 	return images.length > 0 ? images : undefined;
 }
 
@@ -1737,6 +1749,8 @@ export class AgentSession {
 	#prewalk: Prewalk | undefined;
 	/** True once the plan nudge has been queued; scrubbed from context at the switch. */
 	#prewalkPlanInjected = false;
+	/** Armed by plan/tool progress; consumed by one text-only continuation. */
+	#prewalkContinuePending = false;
 	/** True once any successful `todo` call landed — opens the prewalk
 	 *  trigger gate: the switch fires at the first edit/write AFTER the todo
 	 *  list exists (sessions without an ACTIVE todo tool skip the gate). */
@@ -1901,6 +1915,7 @@ export class AgentSession {
 	#mcpPromptCommands: LoadedCustomCommand[] = [];
 
 	#skillsSettings: SkillsSettings | undefined;
+	#skillsReloadable: boolean;
 
 	// Model registry for API key resolution
 	#modelRegistry: ModelRegistry;
@@ -2230,15 +2245,24 @@ export class AgentSession {
 		const prewalk = this.#prewalk;
 		if (!prewalk || context?.message.role !== "assistant") return;
 
-		// Structural safety net: every branch below assumes the agent loop will
-		// run another turn. It won't if THIS turn had no tool calls — the loop
-		// treats a text-only turn as "the agent is done" and ends the session
-		// with no further prompting. The plan nudge explicitly asks for a prose
-		// reply, which makes a text-only turn common right after it — observed
+		const todoCalledThisTurn = context.toolResults.some(result => result.toolName === "todo");
+		if (todoCalledThisTurn) {
+			this.#prewalkTodoSeen = true;
+		}
+
+		// The plan nudge asks for a prose plan before implementation begins,
+		// but the agent loop treats each text-only reply as terminal — observed
 		// silently killing production SWE-bench runs before any code was ever
-		// written. Force one more turn only in that specific, self-created
-		// hazard window.
-		if (this.#prewalkPlanInjected && context.toolResults.length === 0) {
+		// written. Tool progress re-arms one continuation, allowing split flows
+		// such as plan → todo → prose → read → prose → edit/write. Consuming the
+		// arm before steering also detects completion: two consecutive text-only
+		// replies have no intervening progress, so the second ends naturally
+		// instead of producing the #5551 loop.
+		const hasToolResults = context.toolResults.length > 0;
+		if (this.#prewalkPlanInjected && hasToolResults) {
+			this.#prewalkContinuePending = true;
+		} else if (this.#prewalkContinuePending) {
+			this.#prewalkContinuePending = false;
 			this.agent.steer({
 				role: "custom",
 				customType: PREWALK_CONTINUE_MESSAGE_TYPE,
@@ -2264,6 +2288,7 @@ export class AgentSession {
 		if (!action) {
 			if (!this.#prewalkPlanInjected) {
 				this.#prewalkPlanInjected = true;
+				this.#prewalkContinuePending = true;
 				this.agent.steer({
 					role: "custom",
 					customType: PREWALK_PLAN_MESSAGE_TYPE,
@@ -2324,6 +2349,7 @@ export class AgentSession {
 		}
 		this.#prewalk = { target, thinkingLevel };
 		this.#prewalkPlanInjected = true;
+		this.#prewalkContinuePending = true;
 		this.agent.steer({
 			role: "custom",
 			customType: PREWALK_PLAN_MESSAGE_TYPE,
@@ -2499,6 +2525,7 @@ export class AgentSession {
 		this.#skills = config.skills ?? [];
 		this.#skillWarnings = config.skillWarnings ?? [];
 		this.#customCommands = config.customCommands ?? [];
+		this.#skillsReloadable = config.skillsReloadable ?? true;
 		this.#skillsSettings = config.skillsSettings;
 		this.#modelRegistry = config.modelRegistry;
 		// Resolve the wire service-tier per request so the Fireworks Priority
@@ -3093,11 +3120,11 @@ export class AgentSession {
 	/**
 	 * Route one accepted advice note from `advisor` to the primary. Concern and
 	 * blocker interrupt the running agent through the steering channel; once the
-	 * loop has yielded, `triggerTurn` resumes it. If the loop already ended with a
-	 * terminal text answer and no queued work remains, the note is preserved as an
-	 * advisor card instead of waking a duplicate completion turn. After a deliberate
-	 * user interrupt auto-resume is suppressed while idle/unwinding (the note
-	 * becomes a preserved card re-entering on resume); a live-streaming turn is
+	 * loop has yielded, `triggerTurn` resumes it. After a terminal text answer with
+	 * no queued work, a concern is preserved as a visible advisor card, while a
+	 * blocker wakes the primary to acknowledge work it handed off incorrectly.
+	 * After a deliberate user interrupt auto-resume is suppressed while idle/unwinding
+	 * (the note becomes a preserved card re-entering on resume); a live-streaming turn is
 	 * steered in directly. A plain nit always rides the non-interrupting YieldQueue
 	 * aside. Suppression by the per-advisor emission guard drops the note silently —
 	 * the model still saw `Recorded.`, so it isn't tempted to rephrase the same note
@@ -3154,10 +3181,19 @@ export class AgentSession {
 			});
 			return;
 		}
-		this.#recordAdvisorInterruptDelivered();
-		if (this.#planModeState?.enabled) {
-			// Plan mode: record advice visibly in context but never wake an
-			// autonomous turn — only user-driven turns converge on ask/resolve.
+		// A steered interrupting note only continues the run when the session can
+		// actually start (or is already running) a turn. Two idle cases cannot, so
+		// `sendCustomMessage({ triggerTurn: true })` would silently bury the card in
+		// `#pendingNextTurnMessages` until the next user prompt — strictly worse than
+		// the visible preserved card. Preserve instead:
+		//  - Plan mode: only user-driven turns converge on ask/resolve.
+		//  - ACP bridges with `deferAgentInitiatedTurns`: the client cannot show an
+		//    agent-initiated turn as busy, so idle triggers are refused (#5628 review).
+		const cannotAutoTrigger =
+			!this.agent.state.isStreaming &&
+			this.#clientBridge?.deferAgentInitiatedTurns === true &&
+			!this.#allowAcpAgentInitiatedTurns;
+		if (this.#planModeState?.enabled || cannotAutoTrigger) {
 			this.#preserveAdvisorCard({
 				role: "custom",
 				customType: "advisor",
@@ -3169,6 +3205,11 @@ export class AgentSession {
 			});
 			return;
 		}
+		// Arm the post-interrupt immune window only now that a turn is actually
+		// being steered/triggered. A merely preserved card never interrupts, so
+		// arming earlier would downgrade the next `advisor.immuneTurns` worth of
+		// real concerns/blockers to skip-idle-flush asides (#5628 review).
+		this.#recordAdvisorInterruptDelivered();
 		void this.sendCustomMessage(
 			{ customType: "advisor", content, display: true, attribution: "agent", details },
 			{ deliverAs: "steer", triggerTurn: true },
@@ -5568,10 +5609,9 @@ export class AgentSession {
 
 		// `local://` URLs (e.g. local://PLAN.md for plan-mode) resolve to a real
 		// on-disk artifacts path; pre-caching works as long as we ask the
-		// local-protocol handler. Other internal-scheme URLs (agent://, skill://,
-		// rule://, mcp://, artifact://) have no stable filesystem representation;
-		// skip pre-cache entirely for those — the edit tool itself will reject
-		// them through its normal dispatch path.
+		// local-protocol handler. Other internal-scheme URLs have no local
+		// filesystem representation; skip pre-cache entirely for those — the
+		// edit tool itself will reject them through its normal dispatch path.
 		const resolvedPath = this.#resolveSessionFsPath(path);
 		if (resolvedPath === undefined) return undefined;
 
@@ -5671,9 +5711,8 @@ export class AgentSession {
 	 * - `local://` URLs route through the local-protocol handler so they map
 	 *   onto the session's on-disk artifacts directory; pre-caching, ENOENT
 	 *   handling, and post-edit invalidation all work normally.
-	 * - Other internal-scheme URLs (agent://, skill://, rule://, mcp://,
-	 *   artifact://) have no stable filesystem path; this returns `undefined`
-	 *   so callers skip filesystem-only operations.
+	 * - Other internal-scheme URLs have no local filesystem path; this returns
+	 *   `undefined` so callers skip filesystem-only operations.
 	 * - Cwd-relative and absolute paths resolve via `resolveToCwd`.
 	 */
 	#resolveSessionFsPath(filePath: string): string | undefined {
@@ -5681,15 +5720,7 @@ export class AgentSession {
 		if (normalized.startsWith("local:")) {
 			return resolveLocalUrlToPath(normalized, this.#localProtocolOptions());
 		}
-		if (
-			normalized.startsWith("agent://") ||
-			normalized.startsWith("skill://") ||
-			normalized.startsWith("rule://") ||
-			normalized.startsWith("mcp://") ||
-			normalized.startsWith("artifact://")
-		) {
-			return undefined;
-		}
+		if (isInternalUrlPath(normalized)) return undefined;
 		return resolveToCwd(normalized, this.sessionManager.getCwd());
 	}
 
@@ -6741,8 +6772,10 @@ export class AgentSession {
 		// Reconcile the dynamic `xd://` mounts: newly-active discoverable tools are
 		// mounted, deactivated ones dropped (built-in devices are preserved). A
 		// removed or disconnected tool must not stay callable through a stale device.
+		const previousMounted = this.#mountedXdevToolNames;
 		this.#mountedXdevToolNames = new Set(mountedTools.map(tool => tool.name));
 		this.#xdevRegistry?.reconcile(mountedTools);
+		this.#notifyXdevMountDelta(previousMounted);
 		this.#setActiveToolNames?.(validToolNames);
 		this.agent.setTools(tools);
 
@@ -6765,6 +6798,65 @@ export class AgentSession {
 				this.#promptModelKey = this.#currentPromptModelKey();
 			}
 		}
+	}
+
+	/**
+	 * Announce a mid-session `xd://` mount delta to the model as a steered
+	 * system notice instead of rewriting the system prompt: the prompt (and
+	 * its provider cache prefix) stays byte-stable across MCP connects and
+	 * disconnects, and the model learns about new devices from the notice
+	 * (docs + schema stay one `read xd://<tool>` away). The full docs join
+	 * the system prompt opportunistically on the next unrelated rebuild.
+	 */
+	#notifyXdevMountDelta(previousMounted: ReadonlySet<string>): void {
+		const registry = this.#xdevRegistry;
+		if (!registry) return;
+		const current = this.#mountedXdevToolNames;
+		const addedNames = [...current].filter(name => !previousMounted.has(name));
+		const removed = [...previousMounted].filter(name => !current.has(name)).map(name => ({ name }));
+		if (addedNames.length === 0 && removed.length === 0) return;
+		const summaries = new Map(registry.entries().map(entry => [entry.name, entry.summary]));
+		const added = addedNames.map(name => ({ name, summary: summaries.get(name) ?? "" }));
+		this.agent.steer({
+			role: "custom",
+			customType: XDEV_MOUNT_NOTICE_MESSAGE_TYPE,
+			content: prompt.render(xdevMountNoticePrompt, { added, removed }),
+			attribution: "agent",
+			display: false,
+			timestamp: Date.now(),
+		});
+		const parts: string[] = [];
+		if (added.length > 0) parts.push(`mounted ${added.map(entry => entry.name).join(", ")}`);
+		if (removed.length > 0) parts.push(`unmounted ${removed.map(entry => entry.name).join(", ")}`);
+		this.emitNotice("info", `xd://: ${parts.join("; ")}`, "xdev");
+	}
+
+	/**
+	 * Rediscover disk-backed skills and rebuild prompt-facing state without
+	 * recreating the session. Explicit skill snapshots (`--no-skills`,
+	 * SDK-provided `skills`) remain fixed for the lifetime of the session.
+	 */
+	async refreshSkills(): Promise<void> {
+		if (!this.#skillsReloadable) {
+			return;
+		}
+
+		resetCapabilities();
+		const skillsSettings = this.settings.getGroup("skills");
+		const discovered = await loadSkills({
+			...skillsSettings,
+			cwd: this.sessionManager.getCwd(),
+			disabledExtensions: this.settings.get("disabledExtensions") ?? [],
+		});
+		this.#skills = discovered.skills;
+		this.#skillWarnings = discovered.warnings;
+		this.#skillsSettings = skillsSettings;
+
+		if (this.#agentKind === "main") {
+			setActiveSkills(this.#skills);
+		}
+		await this.refreshBaseSystemPrompt();
+		this.#notifyCommandMetadataChanged();
 	}
 
 	/**
@@ -6900,11 +6992,13 @@ export class AgentSession {
 			entries.sort();
 			instructionsSegment = entries.join("\u0006");
 		}
-		// The xd:// device inventory (built-in + dynamic mounts) is rendered into the
-		// prompt, so a mount/unmount must differ the signature and trigger a rebuild.
-		const mountedSegment = this.#xdevRegistry ? this.#xdevRegistry.list().map(describeTool).join("\u0008") : "";
+		// The xd:// device inventory is deliberately NOT part of the signature:
+		// a mount/unmount announces itself via `#notifyXdevMountDelta` instead of
+		// rewriting the system prompt, so MCP connects/disconnects keep the
+		// prompt (and its provider cache prefix) byte-stable. Rebuilds triggered
+		// by other inputs pick up the current device docs opportunistically.
 		const date = this.#getLocalCalendarDate();
-		return `${nameSegment}\u0003${descriptionSegment}\u0007${instructionsSegment}\u0009${mountedSegment}|${date}`;
+		return `${nameSegment}\u0003${descriptionSegment}\u0007${instructionsSegment}|${date}`;
 	}
 
 	/**
@@ -8212,8 +8306,11 @@ export class AgentSession {
 			},
 			hasPendingMessages: () => this.queuedMessageCount > 0,
 			shutdown: () => {
-				void this.dispose();
-				process.exit(0);
+				// Await the idempotent dispose() before exiting so the browser
+				// reaper and other bounded teardown complete — a fire-and-forget
+				// `void this.dispose()` raced process.exit() and could leave an
+				// OMP-owned Chromium alive (#5643).
+				void this.dispose().finally(() => process.exit(0));
 			},
 			getContextUsage: () => this.getContextUsage(),
 			waitForIdle: () => this.waitForIdle(),
@@ -11656,9 +11753,9 @@ export class AgentSession {
 			}
 		}
 
-		// Must check the active tool set, not just the registry: tool discovery
-		// (tools.discoveryMode === "all") can register `todo` while hiding it from
-		// the exposed tools. Forcing a named tool_choice for an inactive tool makes
+		// Must check the active tool set, not just the registry: a registered
+		// tool can be hidden from the exposed tools (e.g. unmounted under the
+		// xd:// transport). Forcing a named tool_choice for an inactive tool makes
 		// the provider reject the request (HTTP 400).
 		if (!this.getActiveToolNames().includes("todo")) {
 			logger.warn("Eager todo enforcement skipped because todo is not active", {
@@ -11777,7 +11874,7 @@ export class AgentSession {
 			return false;
 		}
 
-		const remindersMax = this.settings.get("todo.reminders.max");
+		const remindersMax = this.settings.get("todo.remindersMax");
 		if (this.#todoReminderCount >= remindersMax) {
 			logger.debug("Todo completion: max reminders reached", { count: this.#todoReminderCount });
 			return false;

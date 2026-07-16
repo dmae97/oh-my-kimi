@@ -150,6 +150,48 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 		remoteStore.close();
 	});
 
+	test("invalidated OAuth tokens disable the remote row and rotate to a sibling", async () => {
+		serverStore!.upsertAuthCredentialForProvider("anthropic", {
+			type: "oauth",
+			access: "server-access-2",
+			refresh: "server-refresh-2",
+			expires: Date.now() + 120_000,
+			accountId: "account-2",
+			email: "b@example.com",
+		});
+		await serverStorage!.reload();
+		const seededRows = serverStore!.listAuthCredentials("anthropic");
+		expect(seededRows).toHaveLength(2);
+		const failedRow = seededRows[0];
+		if (failedRow?.credential.type !== "oauth") throw new Error("expected failed OAuth row");
+
+		const brokerClient = new AuthBrokerClient({ url: handle!.url, token });
+		const initialResult = await brokerClient.fetchSnapshot();
+		if (initialResult.status !== 200) throw new Error("expected snapshot");
+		const remoteStore = new RemoteAuthCredentialStore({
+			client: brokerClient,
+			initialSnapshot: initialResult.snapshot,
+		});
+		const clientStorage = new AuthStorage(remoteStore);
+		const first = {
+			accessToken: failedRow.credential.access,
+			credentialId: failedRow.id,
+		};
+
+		const rotated = await clientStorage.rotateSessionCredential("anthropic", "invalidated-session", {
+			error: new Error("Encountered invalidated oauth token for user, failing request"),
+			apiKey: first.accessToken,
+			credentialId: first.credentialId,
+		});
+
+		expect(rotated).toBe(true);
+		expect(serverStore!.listAuthCredentials("anthropic").map(row => row.id)).not.toContain(first.credentialId);
+		const next = await clientStorage.getOAuthAccess("anthropic", "invalidated-session");
+		expect(next?.credentialId).not.toBe(first.credentialId);
+		clientStorage.close();
+		remoteStore.close();
+	});
+
 	test("RemoteAuthCredentialStore rejects writes from the client", () => {
 		const remoteStore = new RemoteAuthCredentialStore({
 			client: new AuthBrokerClient({ url: handle!.url, token }),

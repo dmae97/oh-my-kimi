@@ -159,12 +159,14 @@ function isFirstTokenEvent(event: AssistantMessageEvent): boolean {
 		case "text_end":
 		case "thinking_end":
 			return event.content.length > 0;
+		case "image_end":
+			return true;
 		default:
 			return false;
 	}
 }
 
-/** Final message carries visible output — non-empty text/thinking or a tool call. */
+/** Final message carries visible output — non-empty text/thinking, an image, or a tool call. */
 function hasVisibleFinalContent(message: AssistantMessage): boolean {
 	return message.content.some(block => {
 		switch (block.type) {
@@ -172,6 +174,7 @@ function hasVisibleFinalContent(message: AssistantMessage): boolean {
 				return block.text.length > 0;
 			case "thinking":
 				return block.thinking.length > 0;
+			case "image":
 			case "redactedThinking":
 			case "toolCall":
 				return true;

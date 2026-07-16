@@ -4,7 +4,7 @@ import { HookEditorComponent } from "@oh-my-pi/pi-coding-agent/modes/components/
 import { ExtensionUiController } from "@oh-my-pi/pi-coding-agent/modes/controllers/extension-ui-controller";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import { setKeybindings, type TUI } from "@oh-my-pi/pi-tui";
+import { CURSOR_MARKER, isFocusable, setKeybindings, type TUI } from "@oh-my-pi/pi-tui";
 
 beforeAll(async () => {
 	const theme = await getThemeByName("dark");
@@ -362,6 +362,18 @@ describe("HookEditorComponent prompt-style mode", () => {
 		expect(rendered).toContain(" enter or ctrl+q submit  esc cancel");
 		expect(rendered).not.toContain("shift+enter newline");
 		expect(rendered).toContain("ctrl+g external editor");
+	});
+
+	it("anchors the hardware cursor while entering an Other response", () => {
+		const component = new HookEditorComponent(createTui(), "Prompt", undefined, vi.fn(), vi.fn(), {
+			promptStyle: true,
+		});
+		if (!isFocusable(component)) throw new Error("Hook editor must forward focus to its inner editor");
+
+		component.focused = true;
+		component.setUseTerminalCursor?.(true);
+
+		expect(component.render(120).some(line => line.includes(CURSOR_MARKER))).toBe(true);
 	});
 
 	it("keeps the prompt gutter visible after typing in prompt-style mode", () => {

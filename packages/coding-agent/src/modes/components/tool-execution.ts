@@ -40,7 +40,7 @@ import {
 } from "../../tools/render-utils";
 import { type FirstResultViewportRepaint, toolRenderers } from "../../tools/renderers";
 import { TODO_STRIKE_TOTAL_FRAMES, type TodoToolDetails } from "../../tools/todo";
-import { isFramedBlockComponent, renderStatusLine, WidthAwareText } from "../../tui";
+import { isFramedBlockComponent, markFramedBlockComponent, renderStatusLine, WidthAwareText } from "../../tui";
 import { sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
 import { renderDiff } from "./diff";
 
@@ -148,6 +148,68 @@ function getArgsWithStreamedTextInput(args: unknown): unknown {
 	return input === undefined ? args : { ...record, input };
 }
 
+type ToolRendererStage = "call" | "result";
+
+class SafeToolRendererComponent implements Component {
+	#toolName: string;
+	#stage: ToolRendererStage;
+	#component: Component;
+	#fallback: () => Component | undefined;
+	#warned = false;
+	readonly wantsKeyRelease: boolean | undefined;
+
+	constructor(
+		toolName: string,
+		stage: ToolRendererStage,
+		component: Component,
+		fallback: () => Component | undefined,
+	) {
+		this.#toolName = toolName;
+		this.#stage = stage;
+		this.#component = component;
+		this.#fallback = fallback;
+		this.wantsKeyRelease = component.wantsKeyRelease;
+		if (isFramedBlockComponent(component)) {
+			markFramedBlockComponent(this);
+		}
+	}
+
+	render(width: number): readonly string[] {
+		try {
+			return this.#component.render(width);
+		} catch (err) {
+			if (!this.#warned) {
+				this.#warned = true;
+				logger.warn("Tool renderer failed", { tool: this.#toolName, stage: this.#stage, error: String(err) });
+			}
+			return this.#fallback()?.render(width) ?? [];
+		}
+	}
+
+	handleInput(data: string): void {
+		const handleInput = this.#component.handleInput;
+		if (handleInput === undefined) return;
+		handleInput.call(this.#component, data);
+	}
+
+	invalidate(): void {
+		const invalidate = this.#component.invalidate;
+		if (invalidate === undefined) return;
+		invalidate.call(this.#component);
+	}
+
+	setIgnoreTight(ignore: boolean): void {
+		const setIgnoreTight = this.#component.setIgnoreTight;
+		if (setIgnoreTight === undefined) return;
+		setIgnoreTight.call(this.#component, ignore);
+	}
+
+	dispose(): void {
+		const dispose = this.#component.dispose;
+		if (dispose === undefined) return;
+		dispose.call(this.#component);
+	}
+}
 /**
  * Transcript-side probe telling a block whether it is still inside the live
  * (repaintable) region. Implemented by `TranscriptContainer`; injected rather
@@ -155,6 +217,14 @@ function getArgsWithStreamedTextInput(args: unknown): unknown {
  */
 export interface TranscriptLiveRegionProbe {
 	isBlockInLiveRegion(component: Component): boolean;
+}
+
+/** Minimal TUI surface ToolExecutionComponent uses to schedule repaints and share image budget. */
+export interface ToolExecutionUi {
+	requestRender(): void;
+	requestComponentRender(component: Component): void;
+	resetDisplay(): void;
+	imageBudget?: TUI["imageBudget"];
 }
 
 export interface ToolExecutionOptions {
@@ -240,7 +310,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	// forcing the common image-free result to re-shape on every resize tick.
 	#renderedImageCount = 0;
 	#tool?: AgentTool;
-	#ui: TUI;
+	#ui: ToolExecutionUi;
 	#cwd: string;
 	#result?: {
 		content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
@@ -308,7 +378,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		args: any,
 		options: ToolExecutionOptions = {},
 		tool: AgentTool | undefined,
-		ui: TUI,
+		ui: ToolExecutionUi,
 		cwd: string = getProjectDir(),
 		_toolCallId?: string,
 	) {
@@ -820,10 +890,9 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 
 	/**
 	 * True while the last painted pending-call shape opted into a full viewport
-	 * repaint at the first result (`forceFirstResultViewportRepaint`) — e.g. the
-	 * streamed SSH placeholder (`⏳ SSH: […]` / `$ …`) or a collapsed write tail
-	 * window, both of which the first result render re-anchors instead of
-	 * preserving. Kept as a per-paint fact so a topology-changing update that
+	 * repaint at the first result (`forceFirstResultViewportRepaint`) — e.g. a
+	 * collapsed write tail window, which the first result render re-anchors
+	 * instead of preserving. Kept as a per-paint fact so a topology-changing update that
 	 * lands before the pending rows reach the terminal skips the reset.
 	 */
 	#needsFirstResultViewportRepaintAtRender(): boolean {
@@ -903,8 +972,17 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 				if (tool.renderCall) {
 					try {
 						const callArgs = this.#getCallArgsForRender();
-						const callComponent = tool.renderCall(callArgs, this.#renderState, theme);
-						if (callComponent) this.#contentBox.addChild(callComponent as Component);
+						const callComponent = tool.renderCall(callArgs, this.#renderState, theme) as Component | undefined;
+						if (callComponent) {
+							this.#contentBox.addChild(
+								new SafeToolRendererComponent(
+									this.#toolName,
+									"call",
+									callComponent,
+									() => new Text(theme.fg("toolTitle", theme.bold(this.#toolLabel)), 0, 0),
+								),
+							);
+						}
 					} catch (err) {
 						logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
 						// Fall back to default on error
@@ -935,7 +1013,15 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 						theme,
 						this.#args,
 					);
-					if (resultComponent) this.#contentBox.addChild(resultComponent);
+					if (resultComponent) {
+						this.#contentBox.addChild(
+							new SafeToolRendererComponent(this.#toolName, "result", resultComponent, () => {
+								const output = this.#getTextOutput();
+								if (!output) return undefined;
+								return new Text(theme.fg("toolOutput", replaceTabs(output)), 0, 0);
+							}),
+						);
+					}
 				} catch (err) {
 					logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
 					// Fall back to showing raw output on error
@@ -992,7 +1078,11 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 							this.#renderState,
 							theme,
 						);
-						if (resultComponent) fileBox.addChild(resultComponent);
+						if (resultComponent) {
+							fileBox.addChild(
+								new SafeToolRendererComponent(this.#toolName, "result", resultComponent, () => undefined),
+							);
+						}
 					} catch (err) {
 						logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
 					}
@@ -1039,7 +1129,16 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 					try {
 						const callArgs = this.#getCallArgsForRender();
 						const callComponent = renderer.renderCall(callArgs, this.#renderState, theme);
-						if (callComponent) this.#contentBox.addChild(callComponent);
+						if (callComponent) {
+							this.#contentBox.addChild(
+								new SafeToolRendererComponent(
+									this.#toolName,
+									"call",
+									callComponent,
+									() => new Text(theme.fg("toolTitle", theme.bold(this.#toolLabel)), 0, 0),
+								),
+							);
+						}
 					} catch (err) {
 						logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
 						// Fall back to default on error
@@ -1060,7 +1159,15 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 							theme,
 							this.#getCallArgsForRender(),
 						);
-						if (resultComponent) this.#contentBox.addChild(resultComponent);
+						if (resultComponent) {
+							this.#contentBox.addChild(
+								new SafeToolRendererComponent(this.#toolName, "result", resultComponent, () => {
+									const output = this.#getTextOutput();
+									if (!output) return undefined;
+									return new Text(theme.fg("toolOutput", replaceTabs(output)), 0, 0);
+								}),
+							);
+						}
 					} catch (err) {
 						logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
 						// Fall back to showing raw output on error

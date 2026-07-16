@@ -142,6 +142,54 @@ const mockMaxSuffixModels: Model<Api>[] = [
 		contextWindow: 128000,
 		maxTokens: 8192,
 	}),
+	buildModel({
+		id: "coding-router:low",
+		name: "NanoGPT Coding Router Low",
+		api: "openai-completions",
+		provider: "nanogpt",
+		baseUrl: "https://nano-gpt.com/api/v1",
+		reasoning: true,
+		thinking: {
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+		},
+		input: ["text"],
+		cost: { input: 0.14, output: 0.28, cacheRead: 0.028, cacheWrite: 0 },
+		contextWindow: 128000,
+		maxTokens: 8192,
+	}),
+];
+
+// Sibling models where one id is a prefix of the other AND the longer id embeds
+// a thinking-tier token (`-highspeed` contains `high`). Regression fixture for
+// the fuzzy match swallowing a `:high` thinking suffix into the longer id.
+const mockThinkingSuffixSiblingModels: Model<"openai-completions">[] = [
+	buildModel({
+		id: "kimi-for-coding",
+		name: "K2.7 Code",
+		api: "openai-completions",
+		provider: "kimi-code",
+		baseUrl: "https://api.kimi.com/coding/v1",
+		reasoning: true,
+		thinking: { mode: "effort", efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High] },
+		input: ["text", "image"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 262144,
+		maxTokens: 32000,
+	}),
+	buildModel({
+		id: "kimi-for-coding-highspeed",
+		name: "K2.7 Code Highspeed",
+		api: "openai-completions",
+		provider: "kimi-code",
+		baseUrl: "https://api.kimi.com/coding/v1",
+		reasoning: true,
+		thinking: { mode: "effort", efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High] },
+		input: ["text", "image"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 262144,
+		maxTokens: 32000,
+	}),
 ];
 
 const mockAutoSuffixModels: Model<Api>[] = [
@@ -463,12 +511,43 @@ describe("parseModelPattern", () => {
 			expect(result.warning).toBeUndefined();
 		});
 
+		test("fuzzy selectors preserve literal models ending in a thinking-level suffix", () => {
+			const result = parseModelPattern("router:low", mockMaxSuffixModels);
+			expect(result.model?.id).toBe("coding-router:low");
+			expect(result.thinkingLevel).toBeUndefined();
+			expect(result.explicitThinkingLevel).toBe(false);
+		});
+
 		test("literal model ids ending in auto win over the auto sentinel alias", () => {
 			const result = parseModelPattern("example/runtime:auto", mockAutoSuffixModels);
 			expect(result.model?.id).toBe("runtime:auto");
 			expect(result.thinkingLevel).toBeUndefined();
 			expect(result.explicitThinkingLevel).toBe(false);
 			expect(result.warning).toBeUndefined();
+		});
+
+		test("thinking suffix is stripped before fuzzy match, never absorbed into a longer sibling id", () => {
+			// `kimi-for-coding:high` must resolve to the standard model at high effort,
+			// not fuzzy-match `kimi-for-coding-highspeed` (issue #5151).
+			const result = parseModelPattern("kimi-code/kimi-for-coding:high", mockThinkingSuffixSiblingModels);
+			expect(result.model?.id).toBe("kimi-for-coding");
+			expect(result.thinkingLevel).toBe(Effort.High);
+			expect(result.explicitThinkingLevel).toBe(true);
+			expect(result.warning).toBeUndefined();
+		});
+
+		test("bare id thinking suffix is stripped before fuzzy match against a longer sibling", () => {
+			const result = parseModelPattern("kimi-for-coding:high", mockThinkingSuffixSiblingModels);
+			expect(result.model?.id).toBe("kimi-for-coding");
+			expect(result.thinkingLevel).toBe(Effort.High);
+			expect(result.explicitThinkingLevel).toBe(true);
+		});
+
+		test("the longer sibling still resolves exactly with its own thinking suffix", () => {
+			const result = parseModelPattern("kimi-code/kimi-for-coding-highspeed:high", mockThinkingSuffixSiblingModels);
+			expect(result.model?.id).toBe("kimi-for-coding-highspeed");
+			expect(result.thinkingLevel).toBe(Effort.High);
+			expect(result.explicitThinkingLevel).toBe(true);
 		});
 	});
 

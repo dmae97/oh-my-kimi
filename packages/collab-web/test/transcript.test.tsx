@@ -112,3 +112,36 @@ describe("Transcript live tool rendering", () => {
 		expect(html).toContain("thinking…");
 	});
 });
+
+describe("Transcript message Markdown", () => {
+	it("renders host strings and guest text blocks as Markdown", () => {
+		const entries: SessionEntry[] = [
+			{
+				type: "message",
+				id: "host-markdown",
+				parentId: null,
+				timestamp: "2026-07-15T00:00:00Z",
+				message: {
+					role: "user",
+					content: "Use `381866285601915778`",
+					timestamp: 1,
+				},
+			},
+			{
+				type: "custom_message",
+				id: "guest-markdown",
+				parentId: "host-markdown",
+				timestamp: "2026-07-15T00:00:01Z",
+				customType: "collab-prompt",
+				content: [{ type: "text", text: "Guest uses **Markdown**" }],
+				details: { from: "guest" },
+				display: true,
+			},
+		];
+
+		const html = renderTranscript({ entries, working: false });
+
+		expect(countElements(html, ".tr-row--user .tr-md code")).toBe(1);
+		expect(countElements(html, ".tr-row--user .tr-md strong")).toBe(1);
+	});
+});

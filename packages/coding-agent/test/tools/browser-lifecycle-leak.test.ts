@@ -16,7 +16,7 @@
  * spied so no real cmux socket / puppeteer process is needed.
  */
 
-import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import type { CmuxKind } from "@oh-my-pi/pi-coding-agent/tools/browser/cmux/rpc";
 import { CmuxSocketClient } from "@oh-my-pi/pi-coding-agent/tools/browser/cmux/socket-client";
 import { acquireBrowser, getBrowsersMapForTest } from "@oh-my-pi/pi-coding-agent/tools/browser/registry";
@@ -171,5 +171,38 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 		const releasedA = await releaseTabsForOwner("session-A", { kill: false });
 		expect(releasedA).toBe(1);
 		expect(getTabsMapForTest().has("reuse-tab")).toBe(false);
+	});
+});
+
+describe("browser lifecycle — close deadlines", () => {
+	afterEach(async () => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+		await drainAllTabs();
+	});
+
+	it("rejects a stuck close with the backend, tab, and pending resource", async () => {
+		vi.useFakeTimers();
+		spyOn(CmuxSocketClient.prototype, "connect").mockResolvedValue(undefined);
+		spyOn(CmuxSocketClient.prototype, "close").mockImplementation(() => undefined);
+		const stuck = Promise.withResolvers<Record<string, unknown>>();
+		spyOn(CmuxSocketClient.prototype, "request").mockImplementation(async method => {
+			if (method === "browser.open_split") return { surface_id: "probe-surface", url: "about:blank" };
+			if (method === "surface.close") return await stuck.promise;
+			return {};
+		});
+
+		const kind: CmuxKind = { kind: "cmux", socketPath: "/tmp/omp-close-deadline.sock" };
+		const browser = await acquireBrowser(kind, { cwd: "/tmp" });
+		await acquireTab("probe", browser, { timeoutMs: 1_000 });
+
+		const close = releaseTab("probe", { timeoutMs: 100 });
+		vi.advanceTimersByTime(100);
+
+		await expect(close).rejects.toThrow(
+			'Timed out after 100ms closing cmux browser tab "probe"; pending resource: cmux surface "probe-surface" (surface.close)',
+		);
+		expect(getTabsMapForTest().has("probe")).toBe(false);
+		expect(getBrowsersMapForTest().size).toBe(0);
 	});
 });

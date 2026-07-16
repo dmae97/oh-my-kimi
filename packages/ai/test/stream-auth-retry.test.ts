@@ -199,6 +199,41 @@ describe("streamSimple resolver auth retry", () => {
 		expect(keys).toEqual(["old-key", "new-key"]);
 	});
 
+	it("retries when Codex reports an invalidated OAuth token without an HTTP status", async () => {
+		const keys: unknown[] = [];
+		registerCustomApi(
+			API,
+			(_model: Model<Api>, _context: Context, options?: SimpleStreamOptions) => {
+				pushKey(keys, options);
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					if (keys.length === 1) {
+						stream.push({ type: "start", partial: assistant() });
+						stream.push({
+							type: "error",
+							reason: "error",
+							error: assistantError("Encountered invalidated oauth token for user, failing request"),
+						});
+						return;
+					}
+					ok(stream);
+				});
+				return stream;
+			},
+			SOURCE_ID,
+		);
+
+		const stream = streamSimple(model(), context, {
+			apiKey: async ctx => (ctx.error === undefined ? "invalidated-key" : "healthy-key"),
+		});
+		for await (const _event of stream) {
+			// drain
+		}
+
+		expect((await stream.result()).content).toEqual([{ type: "text", text: "ok" }]);
+		expect(keys).toEqual(["invalidated-key", "healthy-key"]);
+	});
+
 	it("does not retry after replay-unsafe content has been emitted", async () => {
 		let retryResolves = 0;
 		const failure = authError();

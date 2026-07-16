@@ -183,6 +183,7 @@ type AssistantToolCallBlock = Extract<AssistantContentBlock, { type: "toolCall" 
 function snapshotAssistantContentBlock(block: AssistantContentBlock): AssistantContentBlock {
 	switch (block.type) {
 		case "text":
+		case "image":
 			return { ...block };
 		case "thinking":
 			return { ...block };
@@ -224,6 +225,7 @@ function snapshotAssistantMessageEvent(
 		case "text_start":
 		case "text_delta":
 		case "text_end":
+		case "image_end":
 		case "thinking_start":
 		case "thinking_delta":
 		case "thinking_end":
@@ -1525,6 +1527,7 @@ async function streamAssistantResponse(
 						case "text_start":
 						case "text_delta":
 						case "text_end":
+						case "image_end":
 						case "thinking_start":
 						case "thinking_delta":
 						case "thinking_end":

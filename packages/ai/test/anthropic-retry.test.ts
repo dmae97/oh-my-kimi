@@ -83,6 +83,16 @@ describe("isProviderRetryableError", () => {
 		).toBe(false);
 		expect(isProviderRetryableError(new Error("usage_limit_reached"))).toBe(false);
 		expect(isProviderRetryableError(new Error("You have hit your ChatGPT usage limit"))).toBe(false);
+		// Anthropic monthly spend-cap 429 (issue #4787): must not retry, or the
+		// provider loop burns its budget on minutes-long retry-after backoff and
+		// surfaces "Deadline exceeded" instead of the quota error.
+		expect(
+			isProviderRetryableError(
+				new Error(
+					'429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s monthly spend limit. Please try again later."}}',
+				),
+			),
+		).toBe(false);
 		// A generic transient rate limit (no account/usage framing) still retries.
 		expect(isProviderRetryableError(new Error("Rate limit exceeded"))).toBe(true);
 	});

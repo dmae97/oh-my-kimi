@@ -7,6 +7,7 @@ import * as themeModule from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { ToolChoiceQueue } from "@oh-my-pi/pi-coding-agent/session/tool-choice-queue";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { writeToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/write";
+import { XdevRegistry } from "@oh-my-pi/pi-coding-agent/tools/xdev";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 // xdev mounting is default-on: discoverable tools like ast_edit unmount into
@@ -104,5 +105,61 @@ describe("read and write route xd:// device URLs", () => {
 		// instead of throwing ReferenceError inside a generic Write frame.
 		const rendered = writeToolRenderer.renderCall({ path: "xd://ast_edit", content }, options, uiTheme);
 		expect(rendered).toBeDefined();
+	});
+
+	it("docsAll inlines small device docs and falls back to a listing past the caps", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "write-xdev-docs-"));
+		try {
+			const session = xdevSession(tempDir);
+			await createTools(session);
+			const mounted = session.xdevRegistry?.list() ?? [];
+			expect(mounted.length).toBeGreaterThan(0);
+
+			// One device with a pathological description must fall back to the
+			// listing without starving the rest of the catalog.
+			const giant = Object.create(mounted[0]!) as (typeof mounted)[number];
+			Object.defineProperty(giant, "name", { value: "giant_mcp_tool" });
+			Object.defineProperty(giant, "description", { value: "x".repeat(XdevRegistry.DOCS_PER_DEVICE_CAP + 1) });
+			const registry = new XdevRegistry([...mounted, giant]);
+
+			const docs = registry.docsAll();
+			expect(docs.length).toBeLessThan(XdevRegistry.DOCS_TOTAL_BUDGET + XdevRegistry.DOCS_PER_DEVICE_CAP);
+			expect(docs).toContain(`## ${mounted[0]!.name}`);
+			expect(docs).toContain("## Additional devices (docs on demand)");
+			expect(docs).toContain("- xd://giant_mcp_tool —");
+			expect(docs).not.toContain("## giant_mcp_tool");
+		} finally {
+			await removeWithRetries(tempDir);
+		}
+	});
+
+	it("docsAll truncates external (dynamic-mount) descriptions to the cap; built-ins and read xd:// stay full", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "write-xdev-external-"));
+		try {
+			const session = xdevSession(tempDir);
+			await createTools(session);
+			const registry = session.xdevRegistry;
+			if (!registry) throw new Error("expected xdev registry");
+			const mounted = registry.list();
+
+			const longDescription = `LEDE ${"y".repeat(XdevRegistry.EXTERNAL_DESCRIPTION_CAP * 3)} TAIL`;
+			const external = Object.create(mounted[0]!) as (typeof mounted)[number];
+			Object.defineProperty(external, "name", { value: "mcp_external_tool" });
+			Object.defineProperty(external, "description", { value: longDescription });
+			registry.reconcile([external]);
+
+			const docs = registry.docsAll();
+			// External device: schema section present, description cut at the cap.
+			expect(docs).toContain("## mcp_external_tool");
+			expect(docs).toContain("LEDE ");
+			expect(docs).not.toContain("TAIL");
+			expect(docs).toContain("… (full docs: read xd://mcp_external_tool)");
+			// Built-in devices keep their full curated description.
+			expect(docs).toContain(mounted[0]!.description ?? "");
+			// On-demand docs return the untruncated text.
+			expect(registry.docs("mcp_external_tool")).toContain("TAIL");
+		} finally {
+			await removeWithRetries(tempDir);
+		}
 	});
 });

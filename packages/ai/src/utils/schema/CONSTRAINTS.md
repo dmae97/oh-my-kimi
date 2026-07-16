@@ -69,6 +69,7 @@ Schemas sent on the Google JSON Schema path MUST follow:
      - `minItems`, `maxItems`, `minLength`, `maxLength`
      - `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`
      - `pattern`, `format`
+     - `dependencies`, `dependentSchemas`, `dependentRequired`
    - Important: keys inside a `properties` object are treated as property names and MUST NOT be stripped by keyword match.
    - Human-meaningful stripped keys (`pattern`, `format`, min/max constraints, `default`, `examples`, etc.) are appended to the sibling `description` as an Anthropic-style spill block: `{pattern: "^foo$", minimum: 0}`. Structural/meta keys such as `$ref`, `$defs`, and `additionalProperties` are not spilled.
 

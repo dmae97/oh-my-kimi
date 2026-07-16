@@ -589,13 +589,18 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 		expect(writes).not.toContain("\x1b[?2048l");
 	});
 
-	it("falls back to unsupported when the DA1 sentinel beats the DECRPM reply", () => {
+	it("marks a missing DECRPM response as inconclusive when the DA1 sentinel arrives", () => {
 		const { terminal, reports } = setup();
+		const confirmations: boolean[] = [];
+		terminal.onPrivateModeReport?.((mode, _supported, confirmed) => {
+			if (mode === 2026) confirmations.push(confirmed ?? true);
+		});
 		// Drain keyboard + osc11 sentinels, then 2026's DA1 (no DECRPM arrived).
 		process.stdin.emit("data", "\x1b[?1;2c");
 		process.stdin.emit("data", "\x1b[?1;2c");
 		process.stdin.emit("data", "\x1b[?1;2c");
 		expect(reports).toContainEqual({ mode: 2026, supported: false });
+		expect(confirmations).toEqual([false]);
 		terminal.stop();
 	});
 

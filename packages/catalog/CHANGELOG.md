@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+## [17.0.1] - 2026-07-16
+
+### Added
+
+- Added GPT-5.6 Luna, Sol, and Terra entries for Amazon Bedrock, Azure, and Cloudflare
+- Added KAT-Coder Air/Pro V2.5 entries across Kilo, OpenRouter, NanoGPT, and Vercel
+- Added Inkling model entries for Baseten and Vercel AI Gateway
+- Added Umans DeepSeek V4 Pro DSpark as an experimental model listing
+- Added Claude Opus 4.7 Fast and 4.8 Fast on Vercel AI Gateway
+- Added Workers AI GLM-5.2, Muse Spark 1.1, Stealth GPT-5.6 Sol, and nano-gpt-help entries
+
+### Changed
+
+- Added image input and reasoning support to several existing Codeium and Kilo GPT-5.6 models
+- Enabled image input and reasoning for Gemini Flash Latest and Grok 4.5
+- Renamed many model labels for consistency, including Claude, Grok, DeepSeek, GLM, and Gemi­ni names
+- Updated pricing for many existing models, including input, output, and cache cost values
+- Updated context window and max token limits for many catalog models across providers
+
+### Fixed
+
+- Fixed Z.AI (GLM) coding-plan token costs all showing as "Free" in `/models`: the `zai` provider descriptor sourced the models.dev `zai-coding-plan` key (all-$0 subscription rates) instead of the `zai` pay-as-you-go key, which carries the real per-token rates for the identical GLM ids ([#5598](https://github.com/can1357/oh-my-pi/issues/5598)).
+- Fixed custom Anthropic endpoints receiving the first-party-only `eager_input_streaming` tool field by default ([#5572](https://github.com/can1357/oh-my-pi/issues/5572)).
+- Added resolved OpenAI sampling-parameter compatibility metadata for o-series and GPT-5+ models.
+- Fixed GitHub Copilot `mai-code-1-flash-picker` (and other `mai-*` models) to route through the `/responses` endpoint instead of `/chat/completions`, which rejected them with `400 unsupported_api_for_model` ([#5612](https://github.com/can1357/oh-my-pi/issues/5612)).
+- Extended the reasoning `streamIdleTimeoutMs` floor (300s) to native Kimi K2.7 Code (`kimi-k2.7-code` / `kimi-k2.7-code-highspeed`), which previously fell through to the 120s default and aborted on long reasoning turns ([#4836](https://github.com/can1357/oh-my-pi/issues/4836)).
+- Fixed GLM-5.x coding-plan streams via the OpenCode Go/Zen gateways (`opencode.ai/zen/…`) timing out with `OpenAI completions stream stalled while waiting for the next event` during slow plan-writing/reasoning phases. The 600s idle-timeout floor for GLM coding-plan SKUs was gated to the native Z.AI/Zhipu hosts only, so OpenCode-fronted GLM fell back to the 120s default watchdog. ([#4758](https://github.com/can1357/oh-my-pi/issues/4758))
+
 ## [16.5.2] - 2026-07-14
 
 ### Fixed

@@ -623,11 +623,18 @@ function findExactModelReferenceMatch(modelReference: string, availableModels: M
  * 4. provider-scoped fuzzy match,
  * 5. substring match with the alias-vs-dated pick.
  * Returns the matched model or undefined if no match found.
+ *
+ * `exactOnly` stops after the exact phases (1-3), skipping the fuzzy/substring
+ * fallbacks (4-5). Callers use it to resolve the full selector exactly before
+ * a trailing `:<level>` thinking suffix is split off, so the suffix can never
+ * be fuzzily absorbed into a longer sibling id (e.g. `kimi-for-coding:high`
+ * must not match `kimi-for-coding-highspeed`).
  */
 function matchModel(
 	modelPattern: string,
 	availableModels: Model<Api>[],
 	context: ModelPreferenceContext,
+	options?: { exactOnly?: boolean },
 ): Model<Api> | undefined {
 	const exactRefMatch = findExactModelReferenceMatch(modelPattern, availableModels);
 	if (exactRefMatch) {
@@ -662,6 +669,14 @@ function matchModel(
 			const preferred = bareAlias ? aliasMatches.filter(m => bareAlias.providers.includes(m.provider)) : [];
 			return pickPreferredModel(preferred.length > 0 ? preferred : aliasMatches, context);
 		}
+	}
+
+	// Exact phases exhausted. Fuzzy/substring fallbacks (below) subsequence-match
+	// the whole pattern and would let a trailing `:<level>` thinking suffix bleed
+	// into a longer sibling id; callers that still hold an unstripped suffix ask
+	// for exact-only so the suffix is split off before any fuzzy attempt.
+	if (options?.exactOnly) {
+		return undefined;
 	}
 	// Check for provider/modelId format — fuzzy match within provider only.
 	const slashIndex = modelPattern.indexOf("/");
@@ -766,17 +781,33 @@ function parseModelPatternWithContext(
 	context: ModelPreferenceContext,
 	options?: { allowInvalidThinkingSelectorFallback?: boolean },
 ): ParsedModelResult {
-	// Try exact match first
-	const exactMatch = matchModel(pattern, availableModels, context);
+	// Exact match on the full pattern first (no fuzzy): a literal id that
+	// contains a colon (`coding-router:max`) wins over any suffix split.
+	const exactMatch = matchModel(pattern, availableModels, context, { exactOnly: true });
 	if (exactMatch) {
 		return { model: exactMatch, thinkingLevel: undefined, warning: undefined, explicitThinkingLevel: false };
 	}
 
-	// No match - try stripping a valid thinking suffix and recursing.
-	// `max` is accepted only after the full pattern failed, so literal model IDs
-	// ending in `:max` keep winning over the thinking suffix.
+	// Prefer a fuzzy match whose actual id ends in the suffix, preserving
+	// shorthand selectors for literal tier models such as `router:low`. Other
+	// fuzzy results (e.g. `kimi-for-coding-highspeed`) cannot absorb the suffix.
 	const { base, level } = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS);
 	if (level) {
+		const literalSuffixMatch = matchModel(pattern, availableModels, context);
+		if (literalSuffixMatch?.id.toLowerCase().endsWith(`:${level}`)) {
+			return {
+				model: literalSuffixMatch,
+				thinkingLevel: undefined,
+				warning: undefined,
+				explicitThinkingLevel: false,
+			};
+		}
+
+		// Strip a valid thinking suffix and recurse before accepting any other
+		// fuzzy match, so `:<level>` cannot be absorbed into a longer sibling
+		// id (e.g. `kimi-for-coding:high` must not match
+		// `kimi-for-coding-highspeed`). `max` is accepted only after the exact
+		// match above failed, so literal model IDs ending in `:max` keep winning.
 		const result = parseModelPatternWithContext(base, availableModels, context, options);
 		if (result.model) {
 			// Only use this thinking level if no warning from inner recursion
@@ -789,6 +820,13 @@ function parseModelPatternWithContext(
 			};
 		}
 		return result;
+	}
+
+	// No valid thinking suffix: fall back to fuzzy/substring matching on the
+	// whole pattern.
+	const fallbackMatch = matchModel(pattern, availableModels, context);
+	if (fallbackMatch) {
+		return { model: fallbackMatch, thinkingLevel: undefined, warning: undefined, explicitThinkingLevel: false };
 	}
 
 	const lastColonIndex = pattern.lastIndexOf(":");

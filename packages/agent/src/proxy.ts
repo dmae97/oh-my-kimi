@@ -8,6 +8,7 @@ import {
 	type Context,
 	EventStream,
 	type FetchImpl,
+	type ImageContent,
 	type Model,
 	type SimpleStreamOptions,
 	type StopReason,
@@ -47,6 +48,7 @@ export type ProxyAssistantMessageEvent =
 	| { type: "thinking_start"; contentIndex: number }
 	| { type: "thinking_delta"; contentIndex: number; delta: string }
 	| { type: "thinking_end"; contentIndex: number; contentSignature?: string }
+	| { type: "image_end"; contentIndex: number; content: ImageContent }
 	| { type: "toolcall_start"; contentIndex: number; id: string; toolName: string }
 	| { type: "toolcall_delta"; contentIndex: number; delta: string }
 	| { type: "toolcall_end"; contentIndex: number }
@@ -314,6 +316,15 @@ function processProxyEvent(
 			}
 			throw new Error("Received thinking_end for non-thinking content");
 		}
+
+		case "image_end":
+			partial.content[proxyEvent.contentIndex] = proxyEvent.content;
+			return {
+				type: "image_end",
+				contentIndex: proxyEvent.contentIndex,
+				content: proxyEvent.content,
+				partial,
+			};
 
 		case "toolcall_start":
 			partial.content[proxyEvent.contentIndex] = {

@@ -60,6 +60,7 @@ const OpenAICompatFields = {
 	"strictResponsesPairing?": "boolean",
 	"supportsImageDetailOriginal?": "boolean",
 	// anthropic-messages compat flags (same `compat` slot, per-api interpretation)
+	"supportsEagerToolInputStreaming?": "boolean",
 	"requiresToolResultId?": "boolean",
 	"replayUnsignedThinking?": "boolean",
 } as const;

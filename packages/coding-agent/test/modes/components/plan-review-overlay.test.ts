@@ -180,6 +180,93 @@ describe("PlanReviewOverlay", () => {
 		expect(backToTop).not.toContain("para 199");
 	});
 
+	it("preserves scroll progress across a transient non-scrollable render", () => {
+		const originalRows = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+		const setRows = (rows: number): void => {
+			Object.defineProperty(process.stdout, "rows", { configurable: true, value: rows });
+		};
+		const codeRows = Array.from({ length: 400 }, (_, i) => `L${String(i).padStart(3, "0")}`).join("\n");
+		const overlay = new PlanReviewOverlay(
+			`# Plan\n\n\`\`\`\n${codeRows}\n\`\`\`\n`,
+			{ promptTitle: "next", options: APPROVAL_OPTIONS },
+			{ onPick: vi.fn(), onCancel: vi.fn() },
+		);
+
+		try {
+			setRows(40);
+			render(overlay);
+			overlay.handleInput("G");
+			const bottom = render(overlay);
+			expect(bottom).toContain("L399");
+			expect(bottom).not.toContain("L000");
+
+			setRows(1000);
+			render(overlay);
+			setRows(40);
+			const restored = render(overlay);
+			expect(restored).toContain("L399");
+			expect(restored).not.toContain("L000");
+		} finally {
+			if (originalRows) Object.defineProperty(process.stdout, "rows", originalRows);
+			else Reflect.deleteProperty(process.stdout, "rows");
+		}
+	});
+
+	it("honors Home while a transient render is non-scrollable", () => {
+		const originalRows = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+		const setRows = (rows: number): void => {
+			Object.defineProperty(process.stdout, "rows", { configurable: true, value: rows });
+		};
+		const codeRows = Array.from({ length: 400 }, (_, i) => `L${String(i).padStart(3, "0")}`).join("\n");
+		const overlay = new PlanReviewOverlay(
+			`# Plan\n\n\`\`\`\n${codeRows}\n\`\`\`\n`,
+			{ promptTitle: "next", options: APPROVAL_OPTIONS },
+			{ onPick: vi.fn(), onCancel: vi.fn() },
+		);
+
+		try {
+			setRows(40);
+			render(overlay);
+			overlay.handleInput("G");
+			setRows(1000);
+			render(overlay);
+			overlay.handleInput("\x1b[H");
+			setRows(40);
+			const restored = render(overlay);
+			expect(restored).toContain("L000");
+			expect(restored).not.toContain("L399");
+		} finally {
+			if (originalRows) Object.defineProperty(process.stdout, "rows", originalRows);
+			else Reflect.deleteProperty(process.stdout, "rows");
+		}
+	});
+
+	it("honors End while a transient render is non-scrollable", () => {
+		const originalRows = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+		const setRows = (rows: number): void => {
+			Object.defineProperty(process.stdout, "rows", { configurable: true, value: rows });
+		};
+		const codeRows = Array.from({ length: 400 }, (_, i) => `L${String(i).padStart(3, "0")}`).join("\n");
+		const overlay = new PlanReviewOverlay(
+			`# Plan\n\n\`\`\`\n${codeRows}\n\`\`\`\n`,
+			{ promptTitle: "next", options: APPROVAL_OPTIONS },
+			{ onPick: vi.fn(), onCancel: vi.fn() },
+		);
+
+		try {
+			setRows(1000);
+			render(overlay);
+			overlay.handleInput("\x1b[F");
+			setRows(40);
+			const restored = render(overlay);
+			expect(restored).toContain("L399");
+			expect(restored).not.toContain("L000");
+		} finally {
+			if (originalRows) Object.defineProperty(process.stdout, "rows", originalRows);
+			else Reflect.deleteProperty(process.stdout, "rows");
+		}
+	});
+
 	it("swaps the displayed plan and resets scroll on setPlanContent", () => {
 		const longPlan = Array.from({ length: 200 }, (_, i) => `para ${i}`).join("\n\n");
 		const overlay = new PlanReviewOverlay(

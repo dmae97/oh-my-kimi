@@ -83,7 +83,7 @@ import { UserMessageSelectorComponent } from "../components/user-message-selecto
 import type { SessionObserverRegistry } from "../session-observer-registry";
 import { buildCopyTargets } from "../utils/copy-targets";
 
-const MANUAL_LOGIN_TIP = "Tip: You can complete pairing with /login <redirect URL>.";
+const MANUAL_LOGIN_PROMPT = "Paste the authorization code (or full redirect URL), then press Enter:";
 
 export class SelectorController {
 	constructor(private ctx: InteractiveModeContext) {}
@@ -188,6 +188,7 @@ export class SelectorController {
 					onPluginsChanged: async () => {
 						const projectPath = await resolveActiveProjectRegistryPath(this.ctx.sessionManager.getCwd());
 						clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
+						await this.ctx.refreshSkillState();
 						await this.ctx.refreshSlashCommandState();
 						resetCapabilities();
 						this.ctx.ui.requestRender();
@@ -1109,12 +1110,10 @@ export class SelectorController {
 		// every project's history when the cwd has nothing to resume. See #3099.
 		const historyStorage = this.ctx.historyStorage;
 		const historyMatcher = historyStorage ? (query: string) => historyStorage.matchingSessionIds(query) : undefined;
-		// Fullscreen session picker on the alternate screen (the /settings idiom):
-		// the overlay borrows the alt buffer and enables mouse tracking (wheel
-		// scroll + click-to-resume) for its lifetime, leaving the transcript
-		// untouched underneath. Anchored top-left at full size so a mouse row maps
-		// directly to a rendered line (the overlay paints from screen row 0), and
-		// `fillHeight` pads the body so the footer pins to the screen bottom.
+		// Keep the fullscreen picker on the alternate buffer while a selected
+		// session is loaded and its transcript is rebuilt. Closing it first exposes
+		// the stale normal buffer for the entire async switch on terminals without
+		// effective synchronized output.
 		let overlayHandle: OverlayHandle | undefined;
 		const done = () => {
 			overlayHandle?.hide();
@@ -1124,8 +1123,12 @@ export class SelectorController {
 		const selector = new SessionSelectorComponent(
 			sessions,
 			async (session: SessionInfo) => {
-				done();
-				await this.handleResumeSession(session.path);
+				selector.lockInput();
+				try {
+					await this.handleResumeSession(session.path);
+				} finally {
+					done();
+				}
 			},
 			() => {
 				done();
@@ -1272,7 +1275,6 @@ export class SelectorController {
 	 */
 	async #handleOAuthLogin(providerId: string): Promise<boolean> {
 		this.ctx.showStatus(`Logging in to ${providerId}…`);
-		const manualInput = this.ctx.oauthManualInput;
 		const useManualInput = PASTE_CODE_LOGIN_PROVIDERS.has(providerId);
 		let restored = false;
 		const restoreEditor = () => {
@@ -1300,16 +1302,19 @@ export class SelectorController {
 					// The dialog renders the full URL (SSH-safe copy target) and
 					// opens the browser best-effort.
 					dialog.showAuth(info.url, info.instructions, info.launchUrl);
-					if (useManualInput) {
-						dialog.showProgress(MANUAL_LOGIN_TIP);
-					}
 				},
 				onPrompt: (prompt: { message: string; placeholder?: string }) =>
 					dialog.showPrompt(prompt.message, prompt.placeholder),
 				onProgress: (message: string) => {
 					dialog.showProgress(message);
 				},
-				onManualCodeInput: useManualInput ? () => manualInput.waitForInput(providerId) : undefined,
+				// Paste-code providers (e.g. Codex) may need the user to paste the
+				// fallback redirect URL when the loopback callback can't complete
+				// (headless/remote/Windows). Mount a focused input in the dialog so
+				// the paste lands somewhere the OAuth flow consumes — the hidden
+				// editor's `/login <url>` path is unreachable while the dialog holds
+				// focus (#5339).
+				onManualCodeInput: useManualInput ? () => dialog.showManualInput(MANUAL_LOGIN_PROMPT) : undefined,
 			});
 			this.ctx.session.modelRegistry.refreshInBackground();
 			const block = new TranscriptBlock();
@@ -1338,9 +1343,6 @@ export class SelectorController {
 			this.ctx.showError(`Login failed: ${error instanceof Error ? error.message : String(error)}`);
 			return false;
 		} finally {
-			if (useManualInput) {
-				manualInput.clear(`Manual OAuth input cleared for ${providerId}`);
-			}
 			restoreEditor();
 		}
 	}

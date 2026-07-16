@@ -86,4 +86,16 @@ export interface SelectCpuVariantResult {
 
 export function selectCpuVariant(input: SelectCpuVariantInput): SelectCpuVariantResult;
 
+export interface ValidateLoadedBindingsContext {
+	isWorkspaceLoad: boolean;
+	packageVersion: string;
+	versionSentinelExport: string;
+}
+
+export function validateLoadedBindings(
+	ctx: ValidateLoadedBindingsContext,
+	bindings: Record<string, unknown>,
+	candidate: string,
+): void;
+
 export function loadNative(): Record<string, unknown>;

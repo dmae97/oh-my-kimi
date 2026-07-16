@@ -11,7 +11,7 @@ import type {
 import type { ImageContent, Static, TextContent, TSchema } from "@oh-my-pi/pi-ai";
 import type { Settings } from "../../config/settings";
 import type { Theme } from "../../modes/theme/theme";
-import { type ApprovalMode, formatApprovalPrompt, requiresApproval } from "../../tools/approval";
+import { type ApprovalMode, formatApprovalPrompt, resolveApproval } from "../../tools/approval";
 import { normalizeToolEventInput, resolveToolEventInput } from "../tool-event-input";
 import { applyToolProxy } from "../tool-proxy";
 import type { ExtensionRunner } from "./runner";
@@ -127,7 +127,21 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		const configuredMode = (settings?.get("tools.approvalMode") ?? "yolo") as ApprovalMode;
 		const approvalMode: ApprovalMode = cliAutoApprove ? "yolo" : configuredMode;
 		const userPolicies = (settings?.get("tools.approval") ?? {}) as Record<string, unknown>;
-		const approvalCheck = requiresApproval(this.tool, params, approvalMode, userPolicies);
+		const resolved = resolveApproval(this.tool, params, approvalMode, userPolicies);
+		if (resolved.policy === "deny") {
+			throw new Error(
+				`Tool "${this.tool.name}" is blocked by user policy.\n` +
+					`To allow: remove "tools.approval.${this.tool.name}: deny" from config.`,
+			);
+		}
+		// An xd:// device dispatch already cleared the write tool's outer gate at
+		// this tool's tier — re-prompting would double-ask for one action. Explicit
+		// per-tool "prompt" policies and tool-demanded overrides still prompt.
+		const explicitPrompt = resolved.override || Object.hasOwn(userPolicies, this.tool.name);
+		const approvalCheck = {
+			required: resolved.policy === "prompt" && (explicitPrompt || context?.xdevApproved !== true),
+			reason: resolved.reason,
+		};
 
 		if (approvalCheck.required) {
 			const hasApprovalHandlers =

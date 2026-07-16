@@ -694,6 +694,20 @@ describe("Settings", () => {
 			expect(settings.get("grep.enabled")).toBe(true);
 		});
 
+		it("drops dead BM25-discovery keys and leaves tools.xdev at its default", async () => {
+			await writeSettings({
+				tools: { discoveryMode: "off", essentialOverride: ["read"] },
+				mcp: { discoveryMode: "auto", discoveryDefaultServers: ["gh"] },
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			// No migration mapping: legacy discovery intent is discarded, xdev
+			// keeps its own default. An explicit xdev value is untouched.
+			expect(settings.get("tools.xdev")).toBe(true);
+			expect(settings.isConfigured("tools.xdev")).toBe(false);
+		});
+
 		it("migrates from settings.json containing comments", async () => {
 			const jsonPath = path.join(agentDir, "settings.json");
 			await fs.promises.writeFile(

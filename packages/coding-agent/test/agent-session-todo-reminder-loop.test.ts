@@ -131,7 +131,7 @@ describe("AgentSession todo reminder self-continuation suppression", () => {
 				"compaction.enabled": false,
 				"todo.enabled": true,
 				"todo.reminders": true,
-				"todo.reminders.max": 3,
+				"todo.remindersMax": 3,
 			}),
 			modelRegistry,
 		});

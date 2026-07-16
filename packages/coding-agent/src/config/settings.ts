@@ -1253,6 +1253,25 @@ export class Settings {
 		if (tierTouched) raw.tier = tierObj;
 		delete raw.fastModeScope;
 
+		// BM25 tool discovery removal: tools.discoveryMode / tools.essentialOverride /
+		// mcp.discoveryMode / mcp.discoveryDefaultServers are gone with no
+		// replacement (`tools.xdev` stays at its own default). Dead keys are
+		// deleted so they stop lingering in config.yml.
+		const toolsObj = raw.tools as Record<string, unknown> | undefined;
+		if (toolsObj) {
+			delete toolsObj.discoveryMode;
+			delete toolsObj.essentialOverride;
+		}
+		delete raw["tools.discoveryMode"];
+		delete raw["tools.essentialOverride"];
+		const mcpObj = raw.mcp as Record<string, unknown> | undefined;
+		if (mcpObj) {
+			delete mcpObj.discoveryMode;
+			delete mcpObj.discoveryDefaultServers;
+		}
+		delete raw["mcp.discoveryMode"];
+		delete raw["mcp.discoveryDefaultServers"];
+
 		return raw;
 	}
 

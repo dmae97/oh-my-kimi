@@ -1187,6 +1187,7 @@ export class EventController {
 		// final history — seal it instead of letting its spinner tick while idle.
 		this.#resolveDisplaceablePoll();
 		this.#resolveDisplaceableTodo();
+		this.ctx.flushPendingCommandOutput();
 		this.#lastAssistantComponent = undefined;
 		this.ctx.ui.requestRender();
 		this.#scheduleIdleCompaction();

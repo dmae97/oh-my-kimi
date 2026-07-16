@@ -64,10 +64,10 @@ export interface SlashCommandRuntime {
 	/** Re-advertise the available command list (no-op outside ACP). */
 	refreshCommands: () => Promise<void> | void;
 	/**
-	 * Reload plugin state (caches, slash command registry, project registries)
-	 * and re-emit available commands. Used by `/reload-plugins`, `/move`, and
-	 * `/marketplace`/`/plugins` mutations so the session sees a consistent view
-	 * after plugin or project-scope changes.
+	 * Reload plugin state (caches, skills, slash command registry, project
+	 * registries) and re-emit available commands. Used by `/reload-plugins`,
+	 * `/move`, and `/marketplace`/`/plugins` mutations so the session sees a
+	 * consistent view after plugin or project-scope changes.
 	 */
 	reloadPlugins: () => Promise<void>;
 	notifyTitleChanged?: () => Promise<void> | void;

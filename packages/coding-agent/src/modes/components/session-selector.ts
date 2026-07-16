@@ -760,6 +760,7 @@ export class SessionSelectorComponent extends Container {
 	#globalSessions: SessionInfo[] | null = null;
 	#scope: "folder" | "all" = "folder";
 	#toggling = false;
+	#inputLocked = false;
 	// 0-based line where the session list begins within this component's own
 	// render, captured each frame. The fullscreen picker overlay paints from
 	// screen row 0, so a mouse row maps to `row - #listLineOffset` inside the
@@ -874,6 +875,10 @@ export class SessionSelectorComponent extends Container {
 	setOnRequestRender(callback: () => void): void {
 		this.#onRequestRender = callback;
 	}
+	/** Ignore input after selection while the host resumes the session. */
+	lockInput(): void {
+		this.#inputLocked = true;
+	}
 
 	/**
 	 * Dispose the session list explicitly: while the delete-confirmation dialog
@@ -972,6 +977,7 @@ export class SessionSelectorComponent extends Container {
 	}
 
 	handleInput(keyData: string): void {
+		if (this.#inputLocked) return;
 		if (keyData.startsWith("\x1b[<")) {
 			this.#handleMouse(keyData);
 			return;

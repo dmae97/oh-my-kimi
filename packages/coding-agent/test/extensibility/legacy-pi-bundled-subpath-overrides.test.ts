@@ -1,6 +1,9 @@
 import { describe, expect, it } from "bun:test";
+import * as path from "node:path";
+import * as url from "node:url";
 import { __buildLegacyPiPackageRootOverrides } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/legacy-pi-compat";
-import { collectBundledPiEntries } from "../../scripts/legacy-pi-virtual-module";
+import { TempDir } from "@oh-my-pi/pi-utils";
+import { __renderLegacyPiVirtualModule, collectBundledPiEntries } from "../../scripts/legacy-pi-virtual-module";
 
 const bundledModuleKeys = new Set((await collectBundledPiEntries()).map(entry => entry.key));
 
@@ -14,6 +17,50 @@ const bundledModuleKeys = new Set((await collectBundledPiEntries()).map(entry =>
 // the same `omp-legacy-pi-bundled:` virtual namespace as package roots without
 // a generated registry or duplicate key list.
 describe("legacy pi compat compiled-mode subpath overrides (issue #3442)", () => {
+	it("does not evaluate unrelated host modules while loading the registry", async () => {
+		using tempDir = TempDir.createSync("@omp-legacy-pi-loaders-");
+		const alphaPath = path.join(tempDir.path(), "alpha.ts");
+		const betaPath = path.join(tempDir.path(), "beta.ts");
+		const registryPath = path.join(tempDir.path(), "registry.ts");
+		await Bun.write(alphaPath, 'Reflect.set(globalThis, "__alphaLoads", 1);\nexport const value = "alpha";\n');
+		await Bun.write(betaPath, 'Reflect.set(globalThis, "__betaLoads", 1);\nexport const value = "beta";\n');
+		const registry = __renderLegacyPiVirtualModule([
+			{ key: "alpha", binding: "bundledAlpha", importSpecifier: url.pathToFileURL(alphaPath).href },
+			{ key: "beta", binding: "bundledBeta", importSpecifier: url.pathToFileURL(betaPath).href },
+		]);
+		await Bun.write(
+			registryPath,
+			`${registry}
+const beforeAlpha = Reflect.get(globalThis, "__alphaLoads") ?? 0;
+const beforeBeta = Reflect.get(globalThis, "__betaLoads") ?? 0;
+await BUNDLED_PI_MODULE_LOADERS.alpha();
+const afterAlpha = Reflect.get(globalThis, "__alphaLoads") ?? 0;
+const betaAfterAlpha = Reflect.get(globalThis, "__betaLoads") ?? 0;
+await BUNDLED_PI_MODULE_LOADERS.beta();
+process.stdout.write(JSON.stringify([
+	beforeAlpha,
+	beforeBeta,
+	afterAlpha,
+	betaAfterAlpha,
+	Reflect.get(globalThis, "__alphaLoads") ?? 0,
+	Reflect.get(globalThis, "__betaLoads") ?? 0,
+]));
+`,
+		);
+		const proc = Bun.spawn([process.execPath, registryPath], {
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [exitCode, stdout, stderr] = await Promise.all([
+			proc.exited,
+			new Response(proc.stdout).text(),
+			new Response(proc.stderr).text(),
+		]);
+		expect(exitCode).toBe(0);
+		expect(stderr).toBe("");
+		expect(JSON.parse(stdout)).toEqual([0, 0, 1, 0, 1, 1]);
+	});
+
 	it("serves @oh-my-pi/pi-ai/oauth through the bundled virtual namespace in compiled mode", () => {
 		const overrides = __buildLegacyPiPackageRootOverrides(true, bundledModuleKeys);
 		expect(overrides["@oh-my-pi/pi-ai/oauth"]).toBe("omp-legacy-pi-bundled:@oh-my-pi/pi-ai/oauth");

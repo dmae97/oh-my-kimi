@@ -79,6 +79,17 @@ function isNonEmptyString(value: unknown): value is string {
  */
 function truncateForPersistence(obj: unknown, blobStore: BlobStore, key?: string): unknown {
 	if (obj === null || obj === undefined) return obj;
+	if (
+		typeof obj === "object" &&
+		"type" in obj &&
+		obj.type === "image_generation_call" &&
+		"result" in obj &&
+		typeof obj.result === "string" &&
+		!isBlobRef(obj.result) &&
+		obj.result.length >= BLOB_EXTERNALIZE_THRESHOLD
+	) {
+		return { ...obj, result: externalizeImageDataSync(blobStore, obj.result) };
+	}
 	if (shouldExternalizeImagePayload(obj, key)) {
 		return { ...obj, data: externalizeImageDataSync(blobStore, obj.data, obj.mimeType) };
 	}
