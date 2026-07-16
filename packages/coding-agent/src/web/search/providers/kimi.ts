@@ -1,7 +1,10 @@
 /**
  * Kimi Web Search Provider
  *
- * Uses Moonshot Kimi Code search API to retrieve web results.
+ * Uses the Kimi Code search API to retrieve web results. This is the Kimi Code
+ * membership service, distinct from the Moonshot Open Platform — it requires a
+ * Kimi Code Console credential (`omp /login kimi-code` or an explicit
+ * `MOONSHOT_SEARCH_API_KEY` / `KIMI_SEARCH_API_KEY`), not `MOONSHOT_API_KEY`.
  * Endpoint: POST https://api.kimi.com/coding/v1/search
  */
 import { type ApiKey, type AuthStorage, type FetchImpl, withAuth } from "@oh-my-pi/pi-ai";
@@ -58,11 +61,17 @@ function resolveBaseUrl(): string {
 }
 
 /**
- * Resolve the Kimi search credential. Highest precedence is the static env key;
- * otherwise an AuthStorage-backed resolver for whichever stored provider id
- * holds a key (`moonshot` first, then `kimi-code`), so a stale token triggers
- * the central force-refresh / sibling-rotate retry. Returns `undefined` when
- * neither is configured.
+ * Resolve the Kimi Code search credential. Highest precedence is the explicit
+ * search-key env override; otherwise an AuthStorage-backed resolver for a
+ * stored `kimi-code` credential (from `omp /login kimi-code`), so a stale token
+ * triggers the central force-refresh / sibling-rotate retry. Returns
+ * `undefined` when neither is configured.
+ *
+ * The endpoint (`https://api.kimi.com/coding/v1/search`) is the Kimi Code
+ * membership service, which has a different credential system from the Moonshot
+ * Open Platform (`https://api.moonshot.ai`). A stored `moonshot` credential
+ * (or `MOONSHOT_API_KEY`) is NOT accepted here — it 401s against Kimi Code
+ * (issue #5762).
  */
 async function resolveKey(
 	authStorage: AuthStorage,
@@ -72,10 +81,8 @@ async function resolveKey(
 	const envKey = asTrimmed($env.MOONSHOT_SEARCH_API_KEY) ?? asTrimmed($env.KIMI_SEARCH_API_KEY);
 	if (envKey) return envKey;
 
-	for (const provider of ["moonshot", "kimi-code"] as const) {
-		const stored = await authStorage.getApiKey(provider, sessionId, { signal });
-		if (stored) return authStorage.resolver(provider, { sessionId });
-	}
+	const stored = await authStorage.getApiKey("kimi-code", sessionId, { signal });
+	if (stored) return authStorage.resolver("kimi-code", { sessionId });
 	return undefined;
 }
 
@@ -127,7 +134,7 @@ export async function searchKimi(params: KimiSearchParams): Promise<SearchRespon
 	const keyOrResolver = await resolveKey(params.authStorage, params.sessionId, params.signal);
 	if (!keyOrResolver) {
 		throw new Error(
-			"Kimi search credentials not found. Set MOONSHOT_SEARCH_API_KEY, KIMI_SEARCH_API_KEY, MOONSHOT_API_KEY, or login with 'omp /login moonshot'.",
+			"Kimi search credentials not found. Kimi web search uses the Kimi Code service (api.kimi.com); set MOONSHOT_SEARCH_API_KEY / KIMI_SEARCH_API_KEY to a Kimi Code Console key, or login with 'omp /login kimi-code'. A Moonshot Open Platform key (MOONSHOT_API_KEY) is not accepted here.",
 		);
 	}
 
@@ -176,7 +183,6 @@ export class KimiProvider extends SearchProvider {
 		return (
 			!!asTrimmed($env.MOONSHOT_SEARCH_API_KEY) ||
 			!!asTrimmed($env.KIMI_SEARCH_API_KEY) ||
-			authStorage.hasAuth("moonshot") ||
 			authStorage.hasAuth("kimi-code")
 		);
 	}
