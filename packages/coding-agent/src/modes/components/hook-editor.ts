@@ -7,7 +7,7 @@
  *   (Ctrl+Q / Ctrl+Enter) submits, bordered popup
  * - Prompt-style (ask): Enter submits, Shift+Enter inserts newline, legacy ask chrome
  */
-import { Container, Editor, matchesKey, Spacer, Text, type TUI } from "@oh-my-pi/pi-tui";
+import { Container, Editor, type Focusable, matchesKey, Spacer, Text, type TUI } from "@oh-my-pi/pi-tui";
 import { getEditorTheme, theme } from "../../modes/theme/theme";
 import {
 	matchesAppExternalEditor,
@@ -22,12 +22,15 @@ export interface HookEditorOptions {
 	promptStyle?: boolean;
 }
 
-export class HookEditorComponent extends Container {
+/** Interactive multiline dialog used by hooks and the ask tool's Other response. */
+export class HookEditorComponent extends Container implements Focusable {
 	#editor: Editor;
 	#onSubmitCallback: (value: string) => void;
 	#onCancelCallback: () => void;
 	#tui: TUI;
 	#promptStyle: boolean;
+	/** Focus state mirrored to the nested editor during rendering. */
+	focused = false;
 
 	constructor(
 		tui: TUI,
@@ -73,6 +76,18 @@ export class HookEditorComponent extends Container {
 
 		this.addChild(new Spacer(1));
 		this.addChild(new DynamicBorder());
+	}
+
+	/** Keep the nested editor's software/hardware cursor mode aligned with the dialog focus target. */
+	setUseTerminalCursor(useTerminalCursor: boolean): void {
+		if (this.#editor.getUseTerminalCursor() === useTerminalCursor) return;
+		this.#editor.setUseTerminalCursor(useTerminalCursor);
+	}
+
+	/** Render the dialog after forwarding its focus state to the nested editor. */
+	override render(width: number): readonly string[] {
+		this.#editor.focused = this.focused;
+		return super.render(width);
 	}
 
 	handleInput(keyData: string): void {
