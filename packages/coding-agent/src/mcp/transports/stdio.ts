@@ -54,6 +54,18 @@ export interface StdioSpawnCommand {
 	 * grandchildren keep stdout routed through our pipe (#3544).
 	 */
 	detached: boolean;
+	/**
+	 * Pass argv to `Bun.spawn` verbatim (Windows only), suppressing the
+	 * default libuv backslash-quoting.
+	 *
+	 * Set when `cmd` already holds a `cmd.exe /d /e:ON /v:OFF /c "<line>"`
+	 * command line escaped for `cmd.exe`'s parser (see `buildCmdExeArgv`).
+	 * libuv's quoting targets `CommandLineToArgvW`, not `cmd.exe`, so letting
+	 * it re-quote a batch launch would corrupt arguments and re-open the
+	 * `%VAR%` / quote-injection holes the escaping closes (BatBadBut,
+	 * CVE-2024-24576).
+	 */
+	windowsVerbatimArguments?: boolean;
 }
 
 /** Inputs used to resolve platform-specific stdio spawn behavior. */
@@ -212,6 +224,76 @@ function resolveComSpec(env: Record<string, string | undefined>): string {
 	return comspec && comspec.length > 0 ? comspec : "cmd.exe";
 }
 
+// Argument bytes cmd.exe delivers unchanged without quoting. Anything outside
+// this set (spaces, quotes, `%`, shell metacharacters, non-ASCII) forces the
+// quoted+escaped path below. Mirrors the fuzz-tested allow-list from Zig's
+// BatBadBut mitigation.
+const CMD_SAFE_ARG = /^[A-Za-z0-9#$*+\-./:?@\\_]+$/;
+
+/**
+ * Escape one argument for `cmd.exe`'s command-line pre-parse so a `.cmd`/`.bat`
+ * shim receives it verbatim.
+ *
+ * `cmd.exe` re-splits the `/c` string and expands `%VAR%` *before* the shim's
+ * `CommandLineToArgvW` parse runs, so libuv's default `\"`-style quoting is
+ * insufficient and lets crafted args inject commands (BatBadBut,
+ * CVE-2024-24576). This applies the documented mitigation: percent →
+ * `%%cd:~,%` (expands to nothing, leaving a literal `%`), double the
+ * backslashes in front of a quote, `"` → `""`, and wrap in quotes when the arg
+ * is empty, ends in `\`, or holds any non-allow-listed byte.
+ *
+ * @throws when the argument contains NUL, CR, or LF, none of which round-trip
+ *   through `cmd.exe`.
+ * @see https://flatt.tech/research/posts/batbadbut-you-cant-securely-execute-commands-on-windows/
+ */
+function escapeCmdBatchArg(arg: string): string {
+	if (/[\0\r\n]/.test(arg)) {
+		throw new Error("Windows batch MCP argument cannot contain NUL, CR, or LF characters");
+	}
+	const needsQuotes = arg.length === 0 || arg.endsWith("\\") || !CMD_SAFE_ARG.test(arg);
+	let out = needsQuotes ? '"' : "";
+	let backslashes = 0;
+	for (const ch of arg) {
+		if (ch === "\\") {
+			backslashes += 1;
+			out += ch;
+		} else if (ch === '"') {
+			out += "\\".repeat(backslashes);
+			out += '""';
+			backslashes = 0;
+		} else if (ch === "%") {
+			out += "%%cd:~,%";
+			backslashes = 0;
+		} else {
+			backslashes = 0;
+			out += ch;
+		}
+	}
+	if (needsQuotes) {
+		out += "\\".repeat(backslashes);
+		out += '"';
+	}
+	return out;
+}
+
+/**
+ * Build the `cmd.exe` argv for a Windows `.cmd`/`.bat` (or unresolved bare)
+ * MCP command.
+ *
+ * The trailing element is a single `/c` string wrapped in an outer quote pair
+ * that `cmd.exe` strips (its opening-quote rule), with the command quoted and
+ * every argument escaped by {@link escapeCmdBatchArg}. `/e:ON` keeps command
+ * extensions on (required for the `%%cd:~,%` trick) and `/v:OFF` disables
+ * delayed expansion. The result MUST be spawned with
+ * `windowsVerbatimArguments` so libuv passes it through unmodified.
+ */
+function buildCmdExeArgv(comspec: string, command: string, args: readonly string[]): string[] {
+	let line = `""${command}"`;
+	for (const arg of args) line += ` ${escapeCmdBatchArg(arg)}`;
+	line += '"';
+	return [comspec, "/d", "/e:ON", "/v:OFF", "/c", line];
+}
+
 /**
  * Resolve the subprocess argv used to launch an MCP stdio server.
  *
@@ -222,7 +304,7 @@ function resolveComSpec(env: Record<string, string | undefined>): string {
  * only appends `.exe` for extensionless names — `.cmd`/`.bat` are never
  * tried, so `npx` (which exists only as `npx.cmd` on Windows) crashes the
  * subprocess immediately. When the resolver can't pin the command down,
- * route through `cmd.exe /d /s /c` so Windows's own PATHEXT lookup runs.
+ * route through `cmd.exe` so Windows's own PATHEXT lookup runs.
  */
 export async function resolveStdioSpawnCommand(
 	config: MCPStdioServerConfig,
@@ -248,9 +330,10 @@ export async function resolveStdioSpawnCommand(
 	if (!needsCmdExe) return { cmd: [resolvedCommand, ...args], windowsHide, detached };
 
 	return {
-		cmd: [resolveComSpec(options.env), "/d", "/c", resolvedCommand, ...args],
+		cmd: buildCmdExeArgv(resolveComSpec(options.env), resolvedCommand, args),
 		windowsHide,
 		detached,
+		windowsVerbatimArguments: true,
 	};
 }
 
@@ -365,6 +448,7 @@ export class StdioTransport implements MCPTransport {
 			stderr: "pipe",
 			windowsHide: spawnCommand.windowsHide,
 			detached: spawnCommand.detached,
+			windowsVerbatimArguments: spawnCommand.windowsVerbatimArguments,
 		});
 
 		this.#connected = true;

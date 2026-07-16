@@ -25,7 +25,15 @@ describe("resolveStdioSpawnCommand", () => {
 				},
 			);
 
-			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/c", shim, "serve", "--mcp"]);
+			expect(result.cmd).toEqual([
+				"C:\\Windows\\System32\\cmd.exe",
+				"/d",
+				"/e:ON",
+				"/v:OFF",
+				"/c",
+				`""${shim}" serve --mcp"`,
+			]);
+			expect(result.windowsVerbatimArguments).toBe(true);
 			expect(result.windowsHide).toBe(true);
 			expect(result.detached).toBe(false);
 		} finally {
@@ -55,7 +63,15 @@ describe("resolveStdioSpawnCommand", () => {
 				},
 			);
 
-			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/c", localShim, "serve"]);
+			expect(result.cmd).toEqual([
+				"C:\\Windows\\System32\\cmd.exe",
+				"/d",
+				"/e:ON",
+				"/v:OFF",
+				"/c",
+				`""${localShim}" serve"`,
+			]);
+			expect(result.windowsVerbatimArguments).toBe(true);
 			expect(result.windowsHide).toBe(true);
 			expect(result.detached).toBe(false);
 		} finally {
@@ -106,7 +122,15 @@ describe("resolveStdioSpawnCommand", () => {
 				},
 			);
 
-			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/c", shim, "-y", "mcp-gdb"]);
+			expect(result.cmd).toEqual([
+				"C:\\Windows\\System32\\cmd.exe",
+				"/d",
+				"/e:ON",
+				"/v:OFF",
+				"/c",
+				`""${shim}" -y mcp-gdb"`,
+			]);
+			expect(result.windowsVerbatimArguments).toBe(true);
 			expect(result.windowsHide).toBe(false);
 			expect(result.detached).toBe(false);
 		} finally {
@@ -200,7 +224,15 @@ describe("resolveStdioSpawnCommand", () => {
 				},
 			);
 
-			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/c", shim, "serve"]);
+			expect(result.cmd).toEqual([
+				"C:\\Windows\\System32\\cmd.exe",
+				"/d",
+				"/e:ON",
+				"/v:OFF",
+				"/c",
+				`""${shim}" serve"`,
+			]);
+			expect(result.windowsVerbatimArguments).toBe(true);
 			expect(result.windowsHide).toBe(true);
 			expect(result.detached).toBe(false);
 		} finally {
@@ -208,7 +240,7 @@ describe("resolveStdioSpawnCommand", () => {
 		}
 	});
 
-	it("preserves percent-delimited args when routing .cmd shims through cmd.exe", async () => {
+	it("neutralizes percent-delimited args so cmd.exe cannot expand them before the .cmd shim", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-percent-"));
 		try {
 			const shim = path.join(tempDir, "codegraph.cmd");
@@ -227,15 +259,18 @@ describe("resolveStdioSpawnCommand", () => {
 				},
 			);
 
+			// `%TOKEN%` -> `%%cd:~,%TOKEN%%cd:~,%`: `%cd:~,%` expands to nothing,
+			// so cmd.exe leaves a literal `%TOKEN%` for the shim instead of
+			// substituting an environment variable (BatBadBut / CVE-2024-24576).
 			expect(result.cmd).toEqual([
 				"C:\\Windows\\System32\\cmd.exe",
 				"/d",
+				"/e:ON",
+				"/v:OFF",
 				"/c",
-				shim,
-				"serve",
-				"--header",
-				"Authorization=%TOKEN%",
+				`""${shim}" serve --header "Authorization=%%cd:~,%TOKEN%%cd:~,%""`,
 			]);
+			expect(result.windowsVerbatimArguments).toBe(true);
 			expect(result.windowsHide).toBe(true);
 			expect(result.detached).toBe(false);
 		} finally {
@@ -243,7 +278,7 @@ describe("resolveStdioSpawnCommand", () => {
 		}
 	});
 
-	it("preserves quoted JSON args when routing .cmd shims through cmd.exe", async () => {
+	it("doubles embedded quotes so cmd.exe delivers JSON args to the .cmd shim intact", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-quotes-"));
 		try {
 			const shim = path.join(tempDir, "codegraph.cmd");
@@ -262,7 +297,15 @@ describe("resolveStdioSpawnCommand", () => {
 				},
 			);
 
-			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/c", shim, "--config", '{"a":"b&c|d"}']);
+			expect(result.cmd).toEqual([
+				"C:\\Windows\\System32\\cmd.exe",
+				"/d",
+				"/e:ON",
+				"/v:OFF",
+				"/c",
+				`""${shim}" --config "{""a"":""b&c|d""}""`,
+			]);
+			expect(result.windowsVerbatimArguments).toBe(true);
 			expect(result.windowsHide).toBe(true);
 			expect(result.detached).toBe(false);
 		} finally {
@@ -297,7 +340,15 @@ describe("resolveStdioSpawnCommand", () => {
 				},
 			);
 
-			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/c", shim, "serve", "--mcp"]);
+			expect(result.cmd).toEqual([
+				"C:\\Windows\\System32\\cmd.exe",
+				"/d",
+				"/e:ON",
+				"/v:OFF",
+				"/c",
+				`""${shim}" serve --mcp"`,
+			]);
+			expect(result.windowsVerbatimArguments).toBe(true);
 			expect(result.windowsHide).toBe(true);
 			expect(result.detached).toBe(false);
 		} finally {
@@ -305,7 +356,7 @@ describe("resolveStdioSpawnCommand", () => {
 		}
 	});
 
-	it("passes explicit Windows .cmd commands and argv separately to cmd.exe", async () => {
+	it("wraps explicit Windows .cmd commands in an escaped cmd.exe command line", async () => {
 		const result = await resolveStdioSpawnCommand(
 			{ type: "stdio", command: "codegraph.cmd", args: ["serve", "--mcp"] },
 			{
@@ -319,7 +370,15 @@ describe("resolveStdioSpawnCommand", () => {
 			},
 		);
 
-		expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/c", "codegraph.cmd", "serve", "--mcp"]);
+		expect(result.cmd).toEqual([
+			"C:\\Windows\\System32\\cmd.exe",
+			"/d",
+			"/e:ON",
+			"/v:OFF",
+			"/c",
+			`""codegraph.cmd" serve --mcp"`,
+		]);
+		expect(result.windowsVerbatimArguments).toBe(true);
 		expect(result.windowsHide).toBe(true);
 		expect(result.detached).toBe(false);
 	});
@@ -349,13 +408,63 @@ describe("resolveStdioSpawnCommand", () => {
 		expect(result.cmd).toEqual([
 			"C:\\Windows\\System32\\cmd.exe",
 			"/d",
+			"/e:ON",
+			"/v:OFF",
 			"/c",
-			"npx",
-			"-y",
-			"cloakbrowser-mcp@latest",
+			`""npx" -y cloakbrowser-mcp@latest"`,
 		]);
+		expect(result.windowsVerbatimArguments).toBe(true);
 		expect(result.windowsHide).toBe(true);
 		expect(result.detached).toBe(false);
+	});
+
+	it("escapes command-injection payloads in .cmd shim args instead of leaving them live for cmd.exe", async () => {
+		// BatBadBut / CVE-2024-24576: cmd.exe re-parses the /c string and
+		// expands variables before the shim's argv split, so a crafted arg such
+		// as `"&calc.exe` or `%CMDCMDLINE:~-1%&calc.exe` could break out and run
+		// an attacker command. The escaped line MUST keep each `&` inside quotes
+		// and split every `%` with `%cd:~,%` (which expands to nothing), so no
+		// live `%VAR%` reference or bare `&calc.exe` reaches cmd.exe.
+		const result = await resolveStdioSpawnCommand(
+			{ type: "stdio", command: "npx", args: ['"&calc.exe', "%CMDCMDLINE:~-1%&calc.exe"] },
+			{
+				cwd: "C:\\project",
+				env: {
+					COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+					PATH: "",
+					PATHEXT: ".COM;.EXE;.BAT;.CMD",
+				},
+				platform: "win32",
+			},
+		);
+
+		const line = result.cmd.at(-1) ?? "";
+		expect(line).toBe(`""npx" """&calc.exe" "%%cd:~,%CMDCMDLINE:~-1%%cd:~,%&calc.exe""`);
+		// Every raw `%` is broken by an inserted `%cd:~,%`, so no substring
+		// remains that cmd.exe would expand as `%…%` (the `~-1` extraction that
+		// pulls a literal quote out of `%CMDCMDLINE%` can no longer fire).
+		expect(line).not.toContain("%CMDCMDLINE:~-1%&");
+		expect(line.split("&calc.exe").length - 1).toBe(2);
+		expect(result.windowsVerbatimArguments).toBe(true);
+	});
+
+	it("rejects .cmd shim args containing characters that cannot round-trip through cmd.exe", async () => {
+		for (const bad of ["a\0b", "a\rb", "a\nb"]) {
+			await expect(
+				resolveStdioSpawnCommand(
+					{ type: "stdio", command: "npx", args: [bad] },
+					{
+						cwd: "C:\\project",
+						env: {
+							COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+							PATH: "",
+							PATHEXT: ".COM;.EXE;.BAT;.CMD",
+						},
+						platform: "win32",
+					},
+				),
+			).rejects.toThrow(/NUL, CR, or LF/);
+		}
 	});
 
 	it("leaves non-Windows commands untouched", async () => {
