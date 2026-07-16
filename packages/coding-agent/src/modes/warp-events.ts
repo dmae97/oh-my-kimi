@@ -8,6 +8,11 @@ import { isSilentAbort, isUserInterruptAbort, SKILL_PROMPT_MESSAGE_TYPE } from "
 const WARP_CLI_AGENT_PROTOCOL_VERSION = 1;
 const WARP_CLI_AGENT_SENTINEL = "warp://cli-agent";
 
+/** True when Warp has negotiated the structured CLI-agent OSC protocol. */
+export function isWarpCliAgentProtocolActive(): boolean {
+	return Number(process.env.WARP_CLI_AGENT_PROTOCOL_VERSION) >= WARP_CLI_AGENT_PROTOCOL_VERSION;
+}
+
 export type WarpEventValue =
 	| string
 	| number
@@ -35,7 +40,7 @@ export interface WarpEventEmitter {
  * subagent sessions never construct an emitter.
  */
 export function createWarpEventEmitter(options: WarpEventEmitterOptions): WarpEventEmitter | undefined {
-	if (!(Number(process.env.WARP_CLI_AGENT_PROTOCOL_VERSION) >= WARP_CLI_AGENT_PROTOCOL_VERSION)) {
+	if (!isWarpCliAgentProtocolActive()) {
 		return undefined;
 	}
 

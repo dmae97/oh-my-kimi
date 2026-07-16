@@ -20,12 +20,24 @@ import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { TERMINAL } from "@oh-my-pi/pi-tui";
 
+const originalWarpProtocolVersion = process.env.WARP_CLI_AGENT_PROTOCOL_VERSION;
+
+function restoreWarpProtocolEnvironment(): void {
+	if (originalWarpProtocolVersion === undefined) {
+		delete process.env.WARP_CLI_AGENT_PROTOCOL_VERSION;
+	} else {
+		process.env.WARP_CLI_AGENT_PROTOCOL_VERSION = originalWarpProtocolVersion;
+	}
+}
+
 beforeAll(() => {
 	initTheme();
 });
 
 beforeEach(async () => {
 	resetSettingsForTest();
+	// Neutral baseline for notification gates; afterEach restores the suite's inherited value.
+	delete process.env.WARP_CLI_AGENT_PROTOCOL_VERSION;
 	const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-abortguard-"));
 	await Settings.init({ inMemory: true, cwd: tempDir });
 });
@@ -33,6 +45,7 @@ beforeEach(async () => {
 afterEach(() => {
 	vi.restoreAllMocks();
 	resetSettingsForTest();
+	restoreWarpProtocolEnvironment();
 });
 
 type StopReason = "stop" | "aborted" | "error";
@@ -99,6 +112,15 @@ describe("EventController.sendCompletionNotification — abort guard", () => {
 	it("honors the existing completion.notify=off gate", () => {
 		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
 		settings.override("completion.notify", "off");
+		const controller = new EventController(makeContext(makeAssistantMessage("stop")));
+		controller.sendCompletionNotification();
+		expect(spy).toHaveBeenCalledTimes(0);
+	});
+
+	it("skips legacy completion notify when Warp CLI-agent protocol is active", () => {
+		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		settings.override("completion.notify", "on");
+		process.env.WARP_CLI_AGENT_PROTOCOL_VERSION = "1";
 		const controller = new EventController(makeContext(makeAssistantMessage("stop")));
 		controller.sendCompletionNotification();
 		expect(spy).toHaveBeenCalledTimes(0);

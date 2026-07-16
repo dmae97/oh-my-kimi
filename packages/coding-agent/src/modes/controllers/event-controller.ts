@@ -31,6 +31,7 @@ import { vocalizer } from "../../tts/vocalizer";
 import { canonicalizeMessage } from "../../utils/thinking-display";
 import { interruptHint } from "../shared";
 import { createAssistantMessageComponent } from "../utils/interactive-context-helpers";
+import { isWarpCliAgentProtocolActive } from "../warp-events";
 import {
 	assistantHasVisibleContent,
 	assistantUsageIsBilled,
@@ -1563,6 +1564,10 @@ export class EventController {
 	sendCompletionNotification(): void {
 		const notify = settings.get("completion.notify");
 		if (notify === "off") return;
+
+		// Warp structured OSC 777 already drives native completion UX when the
+		// protocol is negotiated — avoid a second legacy desktop/OSC-9 toast.
+		if (isWarpCliAgentProtocolActive()) return;
 
 		// Skip when the turn was aborted (e.g. ask cancelled with Ctrl+C) or
 		// errored — those are not "Task complete" events. Mirrors the gate
