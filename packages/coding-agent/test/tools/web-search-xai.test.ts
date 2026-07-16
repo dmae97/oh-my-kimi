@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, setSystemTime, vi } from "bun:test";
 import type { AuthStorage, CredentialOriginKind, FetchImpl } from "@oh-my-pi/pi-ai";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { runSearchQuery } from "@oh-my-pi/pi-coding-agent/web/search";
 import { searchXAI, XAIProvider } from "@oh-my-pi/pi-coding-agent/web/search/providers/xai";
 import { SearchProviderError } from "@oh-my-pi/pi-coding-agent/web/search/types";
 
@@ -199,6 +200,34 @@ describe("xAI web search provider", () => {
 			Authorization: "Bearer proxy-key",
 			"X-Proxy-Tenant": "tenant-1",
 		});
+	});
+
+	it("uses a supplied registry's auth storage with its xAI transport", async () => {
+		const capture = captureFetch({ id: "resp_registry", model: "grok-4.3", output_text: "registry answer" });
+		const authStorage = makeAuthStorage({
+			"xai-oauth": { key: "registry-proxy-key", kind: "config" },
+		});
+		const modelRegistry = {
+			...proxyXaiRegistry,
+			authStorage,
+		} as unknown as ModelRegistry;
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = capture.fetchMock;
+		try {
+			const result = await runSearchQuery(
+				{ query: "registry search", provider: "xai" },
+				{ modelRegistry, sessionId: "session-xai-test" },
+			);
+
+			expect(result.details.response.provider).toBe("xai");
+			expect(capture.capturedRequest?.url).toBe("https://proxy.example/v1/responses");
+			expect(capture.capturedRequest?.headers).toMatchObject({
+				Authorization: "Bearer registry-proxy-key",
+				"X-Proxy-Tenant": "tenant-1",
+			});
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
 	});
 
 	it("never sends official xAI OAuth credentials to a configured custom endpoint", async () => {

@@ -251,8 +251,8 @@ export async function runSearchQuery(
 	params: SearchQueryParams,
 	options: { authStorage?: AuthStorage; modelRegistry?: ModelRegistry; sessionId?: string; signal?: AbortSignal } = {},
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details: SearchRenderDetails }> {
-	const createdAuthStorage = options.authStorage ? undefined : await discoverAuthStorage();
-	const authStorage = options.authStorage ?? createdAuthStorage;
+	const createdAuthStorage = options.authStorage || options.modelRegistry ? undefined : await discoverAuthStorage();
+	const authStorage = options.authStorage ?? options.modelRegistry?.authStorage ?? createdAuthStorage;
 	if (!authStorage) {
 		throw new Error("Failed to initialize authentication storage");
 	}
