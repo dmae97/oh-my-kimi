@@ -80,15 +80,19 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 	} {
 		const readTool = createBasicTool("read", "Read");
 		const initialMcp = createMcpCustomTool("mcp__nucleus_search", "nucleus", "search", "Search nucleus");
+		const writeTool = createBasicTool("write", "Write");
 		const toolRegistry = new Map<string, AgentTool>([
 			[readTool.name, readTool],
 			[initialMcp.name, initialMcp as unknown as AgentTool],
 		]);
+		if (options.xdevRegistry) toolRegistry.set(writeTool.name, writeTool);
 		const agent = new Agent({
 			initialState: {
 				model: createModel(),
 				systemPrompt: ["initial"],
-				tools: [readTool, initialMcp as unknown as AgentTool],
+				tools: options.xdevRegistry
+					? [readTool, writeTool, initialMcp as unknown as AgentTool]
+					: [readTool, initialMcp as unknown as AgentTool],
 				messages: [],
 			},
 		});
@@ -98,6 +102,8 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 			settings: Settings.isolated({ "compaction.enabled": false }),
 			modelRegistry: {} as never,
 			toolRegistry,
+			builtInToolNames: options.xdevRegistry ? ["read", "write"] : ["read"],
+			ensureWriteRegistered: async () => options.xdevRegistry !== undefined,
 			rebuildSystemPrompt: async (toolNames, _tools) => ({
 				systemPrompt: [await rebuildSystemPrompt(toolNames)],
 			}),
