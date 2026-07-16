@@ -2292,18 +2292,14 @@ function syntheticDetailsFor(
 }
 
 /**
- * Create a tool result for a tool call that was emitted by the assistant but
- * never invoked locally. Maintains the tool_use / tool_result pairing the
- * provider API requires, and tags {@link SyntheticToolResultDetails} so
- * consumers can distinguish this from a real local tool failure without
- * string-matching the content (#4321).
+ * Create the persisted synthetic result for a tool call that was emitted by
+ * the assistant but never invoked locally.
  */
-function createAbortedToolResult(
+export function createSyntheticToolResultMessage(
 	toolCall: Extract<AssistantMessage["content"][number], { type: "toolCall" }>,
-	stream: EventStream<AgentEvent, AgentMessage[]>,
 	reason: "aborted" | "error" | "skipped" | "length",
 	errorMessage?: string,
-): ToolResultMessage {
+): ToolResultMessage<SyntheticToolResultDetails> {
 	const message =
 		reason === "aborted"
 			? "Tool execution was aborted"
@@ -2313,9 +2309,31 @@ function createAbortedToolResult(
 					? "Tool call was not executed because the assistant ended its turn"
 					: "Tool call was not executed because the provider stream ended with an error before the tool could run";
 	const details = syntheticDetailsFor(reason, errorMessage);
-	const result: AgentToolResult<SyntheticToolResultDetails> = {
+	return {
+		role: "toolResult",
+		toolCallId: toolCall.id,
+		toolName: toolCall.name,
 		content: [{ type: "text", text: errorMessage ? `${message}: ${errorMessage}` : `${message}.` }],
 		details,
+		isError: true,
+		timestamp: Date.now(),
+	};
+}
+
+/**
+ * Create and emit a tool result for a tool call that was emitted by the
+ * assistant but never invoked locally.
+ */
+function createAbortedToolResult(
+	toolCall: Extract<AssistantMessage["content"][number], { type: "toolCall" }>,
+	stream: EventStream<AgentEvent, AgentMessage[]>,
+	reason: "aborted" | "error" | "skipped" | "length",
+	errorMessage?: string,
+): ToolResultMessage {
+	const toolResultMessage = createSyntheticToolResultMessage(toolCall, reason, errorMessage);
+	const result: AgentToolResult<SyntheticToolResultDetails> = {
+		content: toolResultMessage.content,
+		details: toolResultMessage.details,
 	};
 
 	stream.push({
@@ -2332,17 +2350,6 @@ function createAbortedToolResult(
 		result,
 		isError: true,
 	});
-
-	const toolResultMessage: ToolResultMessage<SyntheticToolResultDetails> = {
-		role: "toolResult",
-		toolCallId: toolCall.id,
-		toolName: toolCall.name,
-		content: result.content,
-		details,
-		isError: true,
-		timestamp: Date.now(),
-	};
-
 	stream.push({ type: "message_start", message: toolResultMessage });
 	stream.push({ type: "message_end", message: toolResultMessage });
 
