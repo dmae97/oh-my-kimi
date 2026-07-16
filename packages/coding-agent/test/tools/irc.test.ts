@@ -192,10 +192,7 @@ describe("IRC", () => {
 		});
 
 		it("send during pre-detach park keeps the live session and does not revive", async () => {
-			let resolveDispose!: () => void;
-			const disposeGate = new Promise<void>(r => {
-				resolveDispose = r;
-			});
+			const { promise: disposeGate, resolve: resolveDispose } = Promise.withResolvers<void>();
 			let disposeCalls = 0;
 			const delivered: IrcMessage[] = [];
 			const session = {
@@ -242,10 +239,7 @@ describe("IRC", () => {
 		});
 
 		it("send after park detaches waits for dispose, revives, and delivers once", async () => {
-			let resolveDispose!: () => void;
-			const disposeGate = new Promise<void>(r => {
-				resolveDispose = r;
-			});
+			const { promise: disposeGate, resolve: resolveDispose } = Promise.withResolvers<void>();
 			let disposeCalls = 0;
 			const oldSession = {
 				deliverIrcMessage: async () => {
@@ -308,10 +302,7 @@ describe("IRC", () => {
 		});
 
 		it("multiple concurrent sends during park coalesce revive and all deliver", async () => {
-			let resolveDispose!: () => void;
-			const disposeGate = new Promise<void>(r => {
-				resolveDispose = r;
-			});
+			const { promise: disposeGate, resolve: resolveDispose } = Promise.withResolvers<void>();
 			const oldSession = {
 				deliverIrcMessage: async () => {
 					throw new Error("dying session must not receive mail");
