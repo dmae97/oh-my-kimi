@@ -1123,6 +1123,7 @@ export class SelectorController {
 		const selector = new SessionSelectorComponent(
 			sessions,
 			async (session: SessionInfo) => {
+				selector.lockInput();
 				try {
 					await this.handleResumeSession(session.path);
 				} finally {

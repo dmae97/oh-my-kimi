@@ -145,6 +145,13 @@ describe("SelectorController session replacement overlay", () => {
 		expect(handleResume).toHaveBeenCalledWith(session.path);
 		expect(hide).not.toHaveBeenCalled();
 
+		// The selector remains mounted until resume finishes, but it must not accept
+		// a second selection or cancel the overlay during that interval.
+		selector!.handleInput("\n");
+		selector!.handleInput("\x1b");
+		expect(handleResume).toHaveBeenCalledTimes(1);
+		expect(hide).not.toHaveBeenCalled();
+
 		resumed.resolve();
 		await overlayHidden.promise;
 		expect(hide).toHaveBeenCalledTimes(1);

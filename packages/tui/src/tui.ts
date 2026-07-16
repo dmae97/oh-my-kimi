@@ -1089,6 +1089,9 @@ export class TUI extends Container {
 	#altPreviousLines: string[] = [];
 	#altEnterWidth = 0;
 	#altEnterHeight = 0;
+	// Holds an alternate-screen exit until its replacement full paint can emit it
+	// atomically. It must survive a deferred Ghostty image frame.
+	#pendingAltExit = "";
 
 	// Persistent composed frame. The render override splices only rows at/after
 	// the stable prefix each frame; cursor markers are stripped at ingestion so
@@ -1738,12 +1741,14 @@ export class TUI extends Container {
 	}
 
 	stop(): void {
-		if (this.#altActive) {
-			const enhancementExit = this.#keyboardEnhancementExit();
-			this.terminal.write(`${MOUSE_TRACKING_OFF}${enhancementExit}\x1b[?1049l`);
+		if (this.#altActive || this.#pendingAltExit) {
+			const exitSequence =
+				this.#pendingAltExit || `${MOUSE_TRACKING_OFF}${this.#keyboardEnhancementExit()}\x1b[?1049l`;
+			this.terminal.write(exitSequence);
 			setAltScreenActive(false);
 			this.#altActive = false;
 			this.#altPreviousLines = [];
+			this.#pendingAltExit = "";
 		}
 		if (TERMINAL.imageProtocol === ImageProtocol.Kitty) {
 			for (const id of this.#imageBudget.takeAllTransmittedIds()) {
@@ -2699,7 +2704,7 @@ export class TUI extends Container {
 		// Fullscreen alt-screen short-circuit. While the topmost visible overlay
 		// requests it, borrow the terminal's alternate buffer and paint only the
 		// modal there; the normal screen and all accounting stay untouched.
-		let deferredAltExit = "";
+		let deferredAltExit = this.#pendingAltExit;
 		const wantAlt = this.#wantsAltScreen();
 		if (wantAlt && !this.#altActive) {
 			// Enhanced keyboard modes can be buffer-local: re-push the active
@@ -2722,8 +2727,10 @@ export class TUI extends Container {
 			// covering the old normal buffer. Keep the overlay visible until the
 			// replacement is ready, then fuse the buffer restore into that full paint;
 			// a standalone exit exposes the stale session for one terminal frame.
-			if (this.#clearScrollbackOnNextRender) deferredAltExit = exitSequence;
-			else this.terminal.write(exitSequence);
+			if (this.#clearScrollbackOnNextRender) {
+				this.#pendingAltExit = exitSequence;
+				deferredAltExit = exitSequence;
+			} else this.terminal.write(exitSequence);
 			setAltScreenActive(false);
 			this.#forgetHardwareCursorState();
 			this.#altActive = false;
@@ -3054,6 +3061,7 @@ export class TUI extends Container {
 				cursorTrackingLineCount,
 				leadingSequence: deferredAltExit,
 			});
+			this.#pendingAltExit = "";
 			this.#committedPrefix = rawFrame.slice(0, chunkTo);
 			this.#committedPrefixAuditRows = Math.min(chunkTo, finalBoundary);
 			this.#clearScrollbackOnNextRender = false;
