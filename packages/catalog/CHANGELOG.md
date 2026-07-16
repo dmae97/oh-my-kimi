@@ -21,6 +21,9 @@
 ### Fixed
 
 - Fixed Z.AI (GLM) coding-plan token costs all showing as "Free" in `/models`: the `zai` provider descriptor sourced the models.dev `zai-coding-plan` key (all-$0 subscription rates) instead of the `zai` pay-as-you-go key, which carries the real per-token rates for the identical GLM ids ([#5598](https://github.com/can1357/oh-my-pi/issues/5598)).
+### Fixed
+
+- Fixed custom Anthropic endpoints receiving the first-party-only `eager_input_streaming` tool field by default ([#5572](https://github.com/can1357/oh-my-pi/issues/5572)).
 
 ## [16.5.2] - 2026-07-14
 

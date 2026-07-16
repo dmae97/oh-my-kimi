@@ -1682,13 +1682,14 @@ describe("Anthropic request fingerprint alignment", () => {
 				FOUNDRY_BASE_URL: "https://foundry.example.com/anthropic/",
 				ANTHROPIC_CUSTOM_HEADERS: "user-id: alice, x-route: engineering",
 			},
-			() => {
+			async () => {
 				const options = buildAnthropicClientOptions({
 					model: ANTHROPIC_MODEL,
 					apiKey: "foundry-token",
 					extraBetas: [],
 					stream: true,
 					interleavedThinking: false,
+					hasTools: true,
 					dynamicHeaders: {},
 				});
 
@@ -1697,6 +1698,24 @@ describe("Anthropic request fingerprint alignment", () => {
 				expect(options.defaultHeaders["X-Api-Key"]).toBeUndefined();
 				expect(options.defaultHeaders["user-id"]).toBe("alice");
 				expect(options.defaultHeaders["x-route"]).toBe("engineering");
+				expect(options.defaultHeaders["anthropic-beta"] ?? "").not.toContain(
+					"fine-grained-tool-streaming-2025-05-14",
+				);
+
+				const payload = await captureAnthropicPayload(ANTHROPIC_MODEL, {
+					systemPrompt: ["Stay concise."],
+					messages: [{ role: "user", content: "Hi", timestamp: 0 }],
+					tools: [
+						{
+							name: "ping",
+							description: "ping",
+							parameters: { type: "object", properties: {}, additionalProperties: false },
+						},
+					],
+				});
+				expect(payload).toMatchObject({
+					tools: [expect.not.objectContaining({ eager_input_streaming: expect.anything() })],
+				});
 			},
 		);
 	});
