@@ -723,6 +723,60 @@ describe("InteractiveMode plan review rendering", () => {
 		});
 	});
 
+	it("hides the review overlay before the blocking execution turn resolves", async () => {
+		// Regression (issue #5688): the flicker fix moved #hidePlanReview out of the
+		// picker's `finish` and into a `closePlanReview()` reached only AFTER
+		// #approvePlan returns. #approvePlan awaits `session.prompt(planApproved)`,
+		// which blocks for the whole execution turn — so the operator stayed stuck on
+		// the plan-review screen until work finished. The overlay must be hidden once
+		// execution BEGINS (after the async transcript rebuild), not when it ends.
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nKeep context.");
+
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
+
+		// Drive the pick synchronously the moment the real overlay mounts: move to
+		// "Approve and keep context" (index 2) — that branch keeps the session, so no
+		// clear machinery runs — and confirm with Enter. `showOverlay` runs inside
+		// `showPlanReview`, so the pick resolves the picker promise without a wait.
+		const overlayHandle = { hide: vi.fn() };
+		vi.spyOn(mode.ui, "showOverlay").mockImplementation(component => {
+			const overlay = component as PlanReviewOverlay;
+			overlay.handleInput("j");
+			overlay.handleInput("j");
+			overlay.handleInput("\n");
+			return overlayHandle as never;
+		});
+
+		// Block the execution dispatch until released, mirroring a real turn that
+		// streams for a long time. Record whether the overlay was already hidden when
+		// the blocking prompt began, and signal that the prompt was reached.
+		const gate = Promise.withResolvers<boolean>();
+		const promptEntered = Promise.withResolvers<void>();
+		let hiddenWhenPromptEntered: boolean | undefined;
+		vi.spyOn(session, "prompt").mockImplementation(async () => {
+			hiddenWhenPromptEntered = overlayHandle.hide.mock.calls.length > 0;
+			promptEntered.resolve();
+			return gate.promise;
+		});
+
+		const approval = mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
+
+		// Await the real dispatch signal instead of a wall-clock guess.
+		await promptEntered.promise;
+		expect(hiddenWhenPromptEntered).toBe(true);
+		expect(overlayHandle.hide).toHaveBeenCalledTimes(1);
+
+		gate.resolve(true);
+		await approval;
+	});
+
 	it("queues the approved plan as a synthetic follow-up when a turn is already in flight", async () => {
 		// Regression: the previous fix aborted the in-flight turn and re-dispatched
 		// the plan-approved prompt. When the in-flight turn was an operator turn

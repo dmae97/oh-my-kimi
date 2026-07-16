@@ -2851,6 +2851,17 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.#applyPlanExecutionModel(options.executionModel);
 		}
 
+		// Close the review overlay now that the flicker-prone async rebuild is done
+		// (#exitPlanMode / compaction restored the transcript, tools and model are
+		// back). The synthetic execution turn dispatched below blocks in
+		// `session.prompt` for the whole run, so deferring the hide until #approvePlan
+		// returns would strand the operator on the plan-review screen while work
+		// proceeds (issue #5688). Hiding here — after the rebuild, before dispatch —
+		// keeps issue #5319's stale-buffer guard intact. `#hidePlanReview` is
+		// idempotent, so the caller's trailing `closePlanReview()` is a safe no-op.
+		this.#hidePlanReview();
+		this.ui.requestRender();
+
 		if (compactOutcome === "cancelled") {
 			// Explicit abort: honor it. `executeCompaction` already surfaced
 			// `showError("Compaction cancelled")`; we add the deferred-dispatch
