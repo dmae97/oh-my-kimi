@@ -142,6 +142,22 @@ const mockMaxSuffixModels: Model<Api>[] = [
 		contextWindow: 128000,
 		maxTokens: 8192,
 	}),
+	buildModel({
+		id: "coding-router:low",
+		name: "NanoGPT Coding Router Low",
+		api: "openai-completions",
+		provider: "nanogpt",
+		baseUrl: "https://nano-gpt.com/api/v1",
+		reasoning: true,
+		thinking: {
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+		},
+		input: ["text"],
+		cost: { input: 0.14, output: 0.28, cacheRead: 0.028, cacheWrite: 0 },
+		contextWindow: 128000,
+		maxTokens: 8192,
+	}),
 ];
 
 // Sibling models where one id is a prefix of the other AND the longer id embeds
@@ -493,6 +509,13 @@ describe("parseModelPattern", () => {
 			expect(result.thinkingLevel).toBeUndefined();
 			expect(result.explicitThinkingLevel).toBe(false);
 			expect(result.warning).toBeUndefined();
+		});
+
+		test("fuzzy selectors preserve literal models ending in a thinking-level suffix", () => {
+			const result = parseModelPattern("router:low", mockMaxSuffixModels);
+			expect(result.model?.id).toBe("coding-router:low");
+			expect(result.thinkingLevel).toBeUndefined();
+			expect(result.explicitThinkingLevel).toBe(false);
 		});
 
 		test("literal model ids ending in auto win over the auto sentinel alias", () => {

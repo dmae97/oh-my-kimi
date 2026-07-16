@@ -788,13 +788,26 @@ function parseModelPatternWithContext(
 		return { model: exactMatch, thinkingLevel: undefined, warning: undefined, explicitThinkingLevel: false };
 	}
 
-	// Strip a valid thinking suffix and recurse BEFORE any fuzzy match, so a
-	// `:<level>` suffix can never be subsequence-absorbed into a longer sibling
-	// id (e.g. `kimi-for-coding:high` must not match `kimi-for-coding-highspeed`).
-	// `max` is accepted only after the exact match above failed, so literal model
-	// IDs ending in `:max` keep winning over the thinking suffix.
+	// Prefer a fuzzy match whose actual id ends in the suffix, preserving
+	// shorthand selectors for literal tier models such as `router:low`. Other
+	// fuzzy results (e.g. `kimi-for-coding-highspeed`) cannot absorb the suffix.
 	const { base, level } = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS);
 	if (level) {
+		const literalSuffixMatch = matchModel(pattern, availableModels, context);
+		if (literalSuffixMatch?.id.toLowerCase().endsWith(`:${level}`)) {
+			return {
+				model: literalSuffixMatch,
+				thinkingLevel: undefined,
+				warning: undefined,
+				explicitThinkingLevel: false,
+			};
+		}
+
+		// Strip a valid thinking suffix and recurse before accepting any other
+		// fuzzy match, so `:<level>` cannot be absorbed into a longer sibling
+		// id (e.g. `kimi-for-coding:high` must not match
+		// `kimi-for-coding-highspeed`). `max` is accepted only after the exact
+		// match above failed, so literal model IDs ending in `:max` keep winning.
 		const result = parseModelPatternWithContext(base, availableModels, context, options);
 		if (result.model) {
 			// Only use this thinking level if no warning from inner recursion
