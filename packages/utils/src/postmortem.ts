@@ -27,6 +27,7 @@ const callbackList: ((reason: Reason) => Promise<void> | void)[] = [];
 // Tracks cleanup run state (to prevent recursion/reentry issues)
 let cleanupStage: "idle" | "running" | "complete" = "idle";
 const CLEANUP_DEADLINE_MS = 10_000;
+let cleanupPromise: Promise<void> | undefined;
 let stdioDisconnectRegistrations = 0;
 
 /**
@@ -41,7 +42,7 @@ function runCleanup(reason: Reason): Promise<void> {
 			cleanupStage = "running";
 			break;
 		case "running":
-			return Promise.resolve();
+			return cleanupPromise ?? Promise.resolve();
 		case "complete":
 			return Promise.resolve();
 	}
@@ -68,9 +69,10 @@ function runCleanup(reason: Reason): Promise<void> {
 		deadline.resolve();
 	}, CLEANUP_DEADLINE_MS);
 	deadlineTimer.unref();
-	return Promise.race([cleanupSettled, deadline.promise]).finally(() => {
+	cleanupPromise = Promise.race([cleanupSettled, deadline.promise]).finally(() => {
 		clearTimeout(deadlineTimer);
 	});
+	return cleanupPromise;
 }
 
 // Register signal and error event handlers to trigger cleanup before exit.
@@ -90,6 +92,11 @@ export function classifyBrokenPipe(err: Error): BrokenPipeSource | undefined {
 	if (err.syscall === "send") return "ipc-send";
 	if (err.syscall === "write") return "stdio-write";
 	return undefined;
+}
+
+/** Whether an EPIPE came from an IPC `send()` to an optional worker. */
+export function isIpcSendEpipe(err: Error): boolean {
+	return classifyBrokenPipe(err) === "ipc-send";
 }
 
 /**
