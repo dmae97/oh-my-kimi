@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [17.0.1] - 2026-07-16
+
 ### Added
 
 - Added native cmux notification delivery targeted to the current terminal surface.

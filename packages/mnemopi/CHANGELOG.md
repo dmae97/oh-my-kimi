@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [17.0.1] - 2026-07-16
+
 ### Fixed
 
 - Fixed working-memory TTL trim silently deleting restored or imported durable rows: rows keeping `consolidated_at = NULL` with an old `timestamp` are no longer trimmed when flagged `IMPORTED`, `importFromDict` stamps imported rows as consolidated, and every working-memory delete path (trim, `forgetWorking`, force-import overwrite) now cascades linked annotations, embeddings, facts, memoria projections, gists, and graph edges instead of leaving orphans. ([#4819](https://github.com/can1357/oh-my-pi/issues/4819))
