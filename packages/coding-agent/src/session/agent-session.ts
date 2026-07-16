@@ -4421,8 +4421,8 @@ export class AgentSession {
 		// Check auto-retry and auto-compaction after agent completes
 		if (event.type === "agent_end") {
 			const settledMessages = this.agent.state.messages;
-			const emitAgentEndNotification = async () => {
-				await this.#emitAgentEndNotification(settledMessages);
+			const emitAgentEndNotification = async (options?: { willContinue?: boolean }) => {
+				await this.#emitAgentEndNotification(settledMessages, options);
 			};
 			const usage = this.getSessionStats().tokens;
 			await this.#goalRuntime.onAgentEnd({
@@ -4524,7 +4524,7 @@ export class AgentSession {
 			// active-goal threshold pre-empt below.
 			if (await this.#handleEmptyAssistantStop(msg)) {
 				maintenanceRoute("empty-stop-handled");
-				await emitAgentEndNotification();
+				await emitAgentEndNotification({ willContinue: true });
 				return;
 			}
 
@@ -4547,21 +4547,23 @@ export class AgentSession {
 						automaticContinuationBlocked: compactionResult.automaticContinuationBlocked === true,
 					});
 					this.#resolveRetry();
-					await emitAgentEndNotification();
+					await emitAgentEndNotification(
+						compactionResult.continuationScheduled ? { willContinue: true } : undefined,
+					);
 					return;
 				}
 			}
 
 			if (await this.#handleUnexpectedAssistantStop(msg)) {
 				maintenanceRoute("unexpected-stop-handled");
-				await emitAgentEndNotification();
+				await emitAgentEndNotification({ willContinue: true });
 				return;
 			}
 
 			if (this.#isRetryableReasonlessAbort(msg)) {
 				const didRetry = await this.#handleRetryableError(msg, { allowModelFallback: false });
 				if (didRetry) {
-					await emitAgentEndNotification();
+					await emitAgentEndNotification({ willContinue: true });
 					return;
 				}
 			}
@@ -4579,14 +4581,14 @@ export class AgentSession {
 			if (this.#isFireworksFastFallbackEligible(msg)) {
 				const didRetry = await this.#handleRetryableError(msg, { fireworksFastFallback: true });
 				if (didRetry) {
-					await emitAgentEndNotification();
+					await emitAgentEndNotification({ willContinue: true });
 					return;
 				}
 			}
 			if (this.#isRetryableError(msg)) {
 				const didRetry = await this.#handleRetryableError(msg);
 				if (didRetry) {
-					await emitAgentEndNotification();
+					await emitAgentEndNotification({ willContinue: true });
 					return;
 				}
 			} else if (this.#isHardErrorFallbackEligible(msg)) {
@@ -4597,7 +4599,7 @@ export class AgentSession {
 				// backoff-retry of the failing model) when no switch happens.
 				const didRetry = await this.#handleRetryableError(msg, { hardErrorFallback: true });
 				if (didRetry) {
-					await emitAgentEndNotification();
+					await emitAgentEndNotification({ willContinue: true });
 					return;
 				}
 			}
@@ -4636,7 +4638,7 @@ export class AgentSession {
 				compactionResult.continuationScheduled ||
 				compactionResult.automaticContinuationBlocked
 			) {
-				await emitAgentEndNotification();
+				await emitAgentEndNotification(compactionResult.continuationScheduled ? { willContinue: true } : undefined);
 				return;
 			}
 			if (msg.stopReason !== "error") {
@@ -4646,12 +4648,12 @@ export class AgentSession {
 				}
 				const planModeContinuationScheduled = await this.#enforcePlanModeDecisionAtSettle();
 				if (planModeContinuationScheduled) {
-					await emitAgentEndNotification();
+					await emitAgentEndNotification({ willContinue: true });
 					return;
 				}
 				const todoContinuationScheduled = await this.#checkTodoCompletion(msg);
 				if (todoContinuationScheduled) {
-					await emitAgentEndNotification();
+					await emitAgentEndNotification({ willContinue: true });
 					return;
 				}
 			}
@@ -4661,7 +4663,7 @@ export class AgentSession {
 			// the session is fully idle (the todo reminder above defers the same
 			// way inside #checkTodoCompletion).
 			if (this.#hasPendingAsyncWake()) {
-				await emitAgentEndNotification();
+				await emitAgentEndNotification({ willContinue: true });
 				return;
 			}
 			await this.#emitSessionStopEvent(settledMessages, msg);
@@ -5884,8 +5886,12 @@ export class AgentSession {
 		return undefined;
 	}
 
-	async #emitAgentEndNotification(messages: AgentMessage[]): Promise<void> {
-		await this.#extensionRunner?.emit({ type: "agent_end", messages });
+	async #emitAgentEndNotification(messages: AgentMessage[], options?: { willContinue?: boolean }): Promise<void> {
+		await this.#extensionRunner?.emit({
+			type: "agent_end",
+			messages,
+			willContinue: options?.willContinue,
+		});
 	}
 
 	async #emitSessionStopEvent(

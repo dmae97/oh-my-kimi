@@ -68,10 +68,7 @@ function userMessageStart(text: string, overrides: Partial<MessageStartEvent["me
 	};
 }
 
-function skillPromptStart(
-	text: string,
-	attribution: "user" | "agent" = "user",
-): MessageStartEvent {
+function skillPromptStart(text: string, attribution: "user" | "agent" = "user"): MessageStartEvent {
 	return {
 		type: "message_start",
 		message: {
@@ -505,6 +502,60 @@ describe("Warp CLI-agent events", () => {
 			error_type: "aborted",
 			query: "prompt aborted",
 			response: "provider cancelled stream",
+		});
+	});
+
+	it("suppresses stop OSC when agent_end willContinue", () => {
+		enableWarpProtocol();
+		const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		vi.spyOn(terminalCapabilities, "isInsideTmux").mockReturnValue(false);
+		const handlers = createHandlers();
+		const context = bridgeContext();
+		const sessionStart = handlers.get("session_start") as never as (
+			event: SessionStartEvent,
+			context: ExtensionContext,
+		) => void;
+		const messageStart = handlers.get("message_start") as never as (event: MessageStartEvent) => void;
+		const agentEnd = handlers.get("agent_end") as never as (event: AgentEndEvent) => void;
+
+		sessionStart({ type: "session_start" }, context);
+		write.mockClear();
+
+		messageStart(userMessageStart("retry me"));
+		const afterSubmit = write.mock.calls.length;
+		agentEnd({
+			type: "agent_end",
+			willContinue: true,
+			messages: [
+				{
+					role: "assistant",
+					content: [],
+					stopReason: "error",
+					errorMessage: "rate limited",
+				} as never,
+			],
+		});
+		expect(write.mock.calls.length).toBe(afterSubmit);
+		expect(parseBodies(write).some(body => body.event === "stop" || body.event === "stop_failure")).toBe(false);
+
+		// Without the flag, the same messages still emit a terminal failure stop.
+		write.mockClear();
+		messageStart(userMessageStart("final error"));
+		agentEnd({
+			type: "agent_end",
+			messages: [
+				{
+					role: "assistant",
+					content: [],
+					stopReason: "error",
+					errorMessage: "rate limited",
+				} as never,
+			],
+		});
+		expect(parseBodies(write).at(-1)).toMatchObject({
+			event: "stop_failure",
+			query: "final error",
+			response: "rate limited",
 		});
 	});
 

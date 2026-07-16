@@ -10,6 +10,7 @@ import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream"
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -207,6 +208,72 @@ describe("AgentSession retry delay cap", () => {
 		const last = lastAssistant(session);
 		expect(last.stopReason).toBe("stop");
 		expect(last.content).toContainEqual({ type: "text", text: "recovered after stream read retry" });
+	});
+
+	it("marks extension agent_end willContinue when auto-retry schedules a continue", async () => {
+		const model = getBundledModel("openai", "gpt-5");
+		if (!model) {
+			throw new Error("Expected bundled OpenAI test model to exist");
+		}
+		authStorage.setRuntimeApiKey("openai", "openai-test-key");
+
+		const mock = createMockModel({
+			responses: [
+				{ throw: "Error Code stream_read_error: stream_read_error" },
+				{ content: ["recovered after stream read retry"], stopReason: "stop" },
+			],
+		});
+		const agent = new Agent({
+			getApiKey: requestedModel => `${requestedModel.provider}-test-key`,
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (requestedModel, context, options) => mock.stream(requestedModel, context, options),
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.maxDelayMs": 5_000,
+			"retry.maxRetries": 1,
+			"retry.modelFallback": false,
+		});
+		settings.setModelRole("default", `${model.provider}/${model.id}`);
+
+		const extensionEmits: Array<{ type: string; willContinue?: boolean }> = [];
+		// Partial ExtensionRunner double — same pattern as sibling agent-session tests;
+		// only emit surfaces used on the auto-retry path are implemented.
+		const extensionRunner = {
+			emit: async (event: { type: string; willContinue?: boolean }) => {
+				extensionEmits.push({ type: event.type, willContinue: event.willContinue });
+			},
+			emitBeforeAgentStart: async () => undefined,
+			hasHandlers: () => false,
+			emitSessionStop: async () => undefined,
+		} as unknown as ExtensionRunner;
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+			extensionRunner,
+		});
+
+		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+
+		await session.prompt("Trigger stream read retry");
+		await session.waitForIdle();
+
+		const agentEnds = extensionEmits.filter(event => event.type === "agent_end");
+		expect(agentEnds.length).toBeGreaterThanOrEqual(2);
+		// First settle is the failed attempt that scheduled continue; final settle is terminal.
+		expect(agentEnds[0]?.willContinue).toBe(true);
+		expect(agentEnds.at(-1)?.willContinue).toBeFalsy();
+		expect(lastAssistant(session).stopReason).toBe("stop");
 	});
 
 	it("rolls through four sibling credentials inside one AgentSession prompt before delay-cap retry", async () => {

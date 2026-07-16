@@ -195,6 +195,9 @@ export function createWarpEventBridgeExtension(): ExtensionFactory {
 		});
 
 		api.on("agent_end", event => {
+			if (event.willContinue) {
+				return;
+			}
 			const stop = lastAssistantStop(event.messages);
 			emitter?.emit({
 				event: stop.event,
