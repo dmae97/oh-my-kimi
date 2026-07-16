@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed OpenRouter cost reporting to use the provider's authoritative account charge instead of catalog token-price estimates on both Responses and Chat Completions streams.
+- Fixed Cursor streams reporting success before late CONNECT or gRPC terminal failures were observed, and rejecting transport ends without `turnEnded` ([#5634](https://github.com/can1357/oh-my-pi/issues/5634)).
 
 ## [17.0.0] - 2026-07-15
 
