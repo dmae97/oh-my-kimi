@@ -45,14 +45,25 @@ import { ToolError } from "./tool-errors";
 export const XDEV_KEEP_TOP_LEVEL: Record<string, true> = { todo: true, ask: true, grep: true };
 
 /**
+ * Tools that carry the `xd://` transport itself and therefore can never be
+ * mounted as devices: `read xd://` lists/documents devices and
+ * `write xd://<tool>` executes them. Demoting either leaves every mounted
+ * device unreachable (issue #5764), so they stay top-level regardless of a
+ * declared `loadMode`.
+ */
+export const XDEV_TRANSPORT_TOOLS: Record<string, true> = { read: true, write: true };
+
+/**
  * Whether an enabled tool is presented under `xd://` (rather than top-level)
  * while the `xd://` transport is active. Discoverable tools mount unless they
- * are pinned top-level by {@link XDEV_KEEP_TOP_LEVEL}; essential tools never do.
- * The caller gates this on the transport being active (a session-owned
+ * are pinned top-level by {@link XDEV_KEEP_TOP_LEVEL} or carry the transport
+ * itself ({@link XDEV_TRANSPORT_TOOLS}); essential tools never do. The caller
+ * gates this on the transport being active (a session-owned
  * {@link XdevRegistry} existing).
  */
 export function isMountableUnderXdev(tool: { name: string; loadMode?: ToolLoadMode }): boolean {
-	return tool.loadMode === "discoverable" && !(tool.name in XDEV_KEEP_TOP_LEVEL);
+	if (tool.name in XDEV_TRANSPORT_TOOLS || tool.name in XDEV_KEEP_TOP_LEVEL) return false;
+	return tool.loadMode === "discoverable";
 }
 
 /** Dispatch metadata carried on write-tool details for renderer delegation. */

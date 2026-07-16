@@ -74,6 +74,7 @@ export * from "./bash";
 export * from "./browser";
 export * from "./checkpoint";
 export * from "./debug";
+export * from "./essential-tools";
 export * from "./eval";
 export * from "./eval-backends";
 export * from "./gh";
