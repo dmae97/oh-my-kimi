@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -30,8 +30,11 @@ describe("generate_image tool gating", () => {
 		modelRegistry = new ModelRegistry(authStorage);
 	});
 
-	afterAll(async () => {
-		for (const session of sessions) await session.dispose().catch(() => {});
+	afterEach(async () => {
+		for (const session of sessions.splice(0)) await session.dispose().catch(() => {});
+	});
+
+	afterAll(() => {
 		authStorage.close();
 		if (fs.existsSync(registryDir)) removeSyncWithRetries(registryDir);
 	});
@@ -49,6 +52,33 @@ describe("generate_image tool gating", () => {
 		});
 		sessions.push(session);
 		return session.getActiveToolNames();
+	}
+
+	function customTool(name: string, mcp = false): CustomTool {
+		return {
+			name,
+			label: name,
+			description: name,
+			parameters: { type: "object", properties: {} },
+			...(mcp ? { mcpServerName: "test", mcpToolName: "search" } : {}),
+			execute: async () => ({ content: [] }),
+		} as CustomTool;
+	}
+
+	async function sessionWithCustomTools(toolNames: string[], customTools: CustomTool[]): Promise<AgentSession> {
+		const { session } = await createAgentSession({
+			cwd: registryDir,
+			agentDir: registryDir,
+			modelRegistry,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "plan.enabled": false }),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			toolNames,
+			customTools,
+		});
+		sessions.push(session);
+		return session;
 	}
 
 	it("excludes generate_image from a restricted tool whitelist", async () => {
@@ -134,5 +164,32 @@ describe("generate_image tool gating", () => {
 		});
 		expect(result.content.find(part => part.type === "text")?.text).toBe("ok");
 		expect(mcpCalls).toBe(1);
+	});
+
+	it("drops transport-only write after the last MCP device disconnects", async () => {
+		const session = await sessionWithCustomTools(["read"], [customTool("mcp__test__search", true)]);
+		expect(session.getActiveToolNames()).toContain("write");
+
+		await session.refreshMCPTools([]);
+
+		expect(session.getActiveToolNames()).not.toContain("write");
+	});
+
+	it("preserves explicitly requested write after MCP devices disconnect", async () => {
+		const session = await sessionWithCustomTools(["read", "write"], [customTool("mcp__test__search", true)]);
+
+		await session.refreshMCPTools([]);
+
+		expect(session.getActiveToolNames()).toContain("write");
+	});
+
+	it("preserves write while a non-MCP device remains mounted", async () => {
+		const ambientTool = customTool("ambient_search");
+		const session = await sessionWithCustomTools(["read"], [ambientTool, customTool("mcp__test__search", true)]);
+
+		await session.refreshMCPTools([]);
+
+		expect(session.getXdevToolEntries().map(entry => entry.name)).toContain(ambientTool.name);
+		expect(session.getActiveToolNames()).toContain("write");
 	});
 });

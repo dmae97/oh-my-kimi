@@ -2412,7 +2412,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 		const requestedToolNames = explicitlyRequestedToolNames ?? toolNamesFromRegistry;
 		const normalizedRequested = requestedToolNames.filter(name => toolRegistry.has(name));
-		const requestedToolNameSet = new Set(normalizedRequested);
 		const defaultInactiveToolNames = new Set(
 			registeredTools.filter(tool => tool.definition.defaultInactive).map(tool => tool.definition.name),
 		);
@@ -2767,7 +2766,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			getXdevToolEntries: () => toolSession.xdevRegistry?.entries() ?? [],
 			xdevRegistry: toolSession.xdevRegistry,
 			initialMountedXdevToolNames,
-			requestedToolNames: requestedToolNameSet,
+			presentationPinnedToolNames: explicitlyRequestedToolNameSet,
 			setActiveToolNames,
 			getMcpServerInstructions: mcpManager
 				? () => {

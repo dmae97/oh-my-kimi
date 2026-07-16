@@ -889,7 +889,8 @@ export interface AgentSessionConfig {
 	xdevRegistry?: XdevRegistry;
 	/** Discoverable tools mounted under `xd://` in the initial enabled set (startup partition in `sdk.ts`). */
 	initialMountedXdevToolNames?: string[];
-	requestedToolNames?: ReadonlySet<string>;
+	/** Explicit/effective names pinned top-level during runtime repartitioning. */
+	presentationPinnedToolNames?: ReadonlySet<string>;
 	/**
 	 * Optional accessor for live MCP server instructions. Read by the session's
 	 * `rebuildSystemPrompt`-skip optimization to detect server-side instruction
@@ -1940,7 +1941,7 @@ export class AgentSession {
 	#getMcpServerInstructions: (() => Map<string, string> | undefined) | undefined;
 	#setActiveToolNames: ((names: Iterable<string>) => void) | undefined;
 	#disconnectOwnedMcpManager: (() => Promise<void>) | undefined;
-	#requestedToolNames: ReadonlySet<string> | undefined;
+	#presentationPinnedToolNames: ReadonlySet<string> | undefined;
 	#baseSystemPrompt: string[];
 	#baseSystemPromptBeforeMemoryPromotion: string[] | undefined;
 	/**
@@ -2544,7 +2545,7 @@ export class AgentSession {
 		this.#toolRegistry = config.toolRegistry ?? new Map();
 		this.#createVibeTools = config.createVibeTools;
 		this.#builtInToolNames = new Set(config.builtInToolNames ?? []);
-		this.#requestedToolNames = config.requestedToolNames;
+		this.#presentationPinnedToolNames = config.presentationPinnedToolNames;
 		this.#transformContext = config.transformContext ?? (messages => messages);
 		this.#transformProviderContext = config.transformProviderContext;
 		this.#sideStreamFn = config.sideStreamFn ?? streamSimple;
@@ -6762,7 +6763,11 @@ export class AgentSession {
 			// Discoverable tools are presented as `xd://` devices (kept out of the
 			// top-level schema) when the transport is active; everything else stays
 			// top-level. `loadMode` decides presentation only — selection is upstream.
-			if (this.#xdevRegistry && isMountableUnderXdev(tool)) {
+			if (
+				this.#xdevRegistry &&
+				this.#presentationPinnedToolNames?.has(name) !== true &&
+				isMountableUnderXdev(tool)
+			) {
 				mountedTools.push(tool);
 			} else {
 				tools.push(this.#wrapToolForAcpPermission(tool));
@@ -7036,21 +7041,31 @@ export class AgentSession {
 			this.#toolRegistry.set(finalTool.name, finalTool);
 		}
 
-		// Every connected MCP tool is enabled. When xdev presents them as devices,
-		// keep the registered write transport active so they remain callable.
-		const nextActive = [...new Set([...this.#getActiveNonMCPToolNames(), ...mcpTools.map(tool => tool.name)])];
-		if (
-			this.#xdevRegistry &&
+		// Every connected MCP tool is enabled. Keep write while any selected device,
+		// deferrable tool, plan flow, or presentation pin still needs the transport.
+		const nextActive = new Set([...this.#getActiveNonMCPToolNames(), ...mcpTools.map(tool => tool.name)]);
+		const incomingMcpDevice =
+			this.#xdevRegistry !== undefined &&
 			mcpTools.some(tool => {
 				const registered = this.#toolRegistry.get(tool.name);
-				return registered !== undefined && isMountableUnderXdev(registered);
-			}) &&
-			this.#toolRegistry.has("write") &&
-			!nextActive.includes("write")
-		) {
-			nextActive.push("write");
-		}
-		await this.#applyActiveToolsByName(nextActive);
+				return (
+					registered !== undefined &&
+					this.#presentationPinnedToolNames?.has(tool.name) !== true &&
+					isMountableUnderXdev(registered)
+				);
+			});
+		const remainingNonMcpDevice = [...this.#mountedXdevToolNames].some(name => !isMCPToolName(name));
+		const activeDeferrableTool = [...nextActive].some(name => this.#toolRegistry.get(name)?.deferrable === true);
+		const pinnedWrite = this.#presentationPinnedToolNames?.has("write") === true;
+		const transportNeeded =
+			incomingMcpDevice ||
+			remainingNonMcpDevice ||
+			activeDeferrableTool ||
+			this.settings.get("plan.enabled") ||
+			pinnedWrite;
+		if (transportNeeded && this.#toolRegistry.has("write")) nextActive.add("write");
+		else if (this.#presentationPinnedToolNames !== undefined) nextActive.delete("write");
+		await this.#applyActiveToolsByName([...nextActive]);
 	}
 
 	/**
