@@ -70,6 +70,7 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		getMcpServerInstructions?: () => Map<string, string> | undefined;
 		getLocalCalendarDate?: () => string;
 		xdevRegistry?: XdevRegistry;
+		lazyWrite?: boolean;
 	}
 
 	function newSession(
@@ -85,13 +86,15 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 			[readTool.name, readTool],
 			[initialMcp.name, initialMcp as unknown as AgentTool],
 		]);
-		if (options.xdevRegistry) toolRegistry.set(writeTool.name, writeTool);
+		if (options.xdevRegistry && !options.lazyWrite) toolRegistry.set(writeTool.name, writeTool);
 		const agent = new Agent({
 			initialState: {
 				model: createModel(),
 				systemPrompt: ["initial"],
 				tools: options.xdevRegistry
-					? [readTool, writeTool, initialMcp as unknown as AgentTool]
+					? options.lazyWrite
+						? [readTool, initialMcp as unknown as AgentTool]
+						: [readTool, writeTool, initialMcp as unknown as AgentTool]
 					: [readTool, initialMcp as unknown as AgentTool],
 				messages: [],
 			},
@@ -102,8 +105,12 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 			settings: Settings.isolated({ "compaction.enabled": false }),
 			modelRegistry: {} as never,
 			toolRegistry,
-			builtInToolNames: options.xdevRegistry ? ["read", "write"] : ["read"],
-			ensureWriteRegistered: async () => options.xdevRegistry !== undefined,
+			builtInToolNames: options.xdevRegistry && !options.lazyWrite ? ["read", "write"] : ["read"],
+			ensureWriteRegistered: async () => {
+				if (!options.xdevRegistry) return false;
+				if (!toolRegistry.has("write")) toolRegistry.set("write", writeTool);
+				return true;
+			},
 			rebuildSystemPrompt: async (toolNames, _tools) => ({
 				systemPrompt: [await rebuildSystemPrompt(toolNames)],
 			}),
@@ -554,5 +561,32 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		await session.refreshMCPTools([search]);
 		expect(rebuildCount).toBe(1);
 		expect(noticeTexts().length).toBe(noticeCount);
+	});
+
+	it("keeps lazy write registration while rolling back applied state on rebuild failure", async () => {
+		let failRebuild = true;
+		const xdevRegistry = new XdevRegistry([]);
+		const { session } = newSession(
+			async toolNames => {
+				if (failRebuild) throw new Error("rebuild failed");
+				return `tools:${toolNames.join(",")}`;
+			},
+			{ xdevRegistry, lazyWrite: true },
+		);
+		const search = createMcpCustomTool("mcp__nucleus_search", "nucleus", "search", "Search nucleus");
+		const activeBefore = session.getActiveToolNames();
+		const mountedBefore = session.getMountedXdevToolNames();
+
+		await expect(session.refreshMCPTools([search])).rejects.toThrow("rebuild failed");
+
+		expect(session.getActiveToolNames()).toEqual(activeBefore);
+		expect(session.getMountedXdevToolNames()).toEqual(mountedBefore);
+		expect(session.getToolByName("write")).toBeDefined();
+		expect(session.hasBuiltInTool("write")).toBe(true);
+
+		failRebuild = false;
+		await session.refreshMCPTools([search]);
+		expect(session.getActiveToolNames()).toContain("write");
+		expect(session.getMountedXdevToolNames()).toContain(search.name);
 	});
 });

@@ -2438,8 +2438,13 @@ export class AgentSession {
 		});
 		this.setPlanModeState(undefined);
 		const previousTools = this.#planYoloPreviousTools;
-		if (previousTools) {
-			await this.setActiveToolsByName(previousTools);
+		try {
+			if (previousTools) {
+				await this.setActiveToolsByName(previousTools);
+			}
+		} catch (error) {
+			this.setPlanModeState(state);
+			throw error;
 		}
 		this.setPlanProposalHandler(null);
 		this.#planYolo = undefined;
@@ -6816,23 +6821,42 @@ export class AgentSession {
 		}
 
 		const previousMounted = this.#mountedXdevToolNames;
+		const previousMountedTools = [...previousMounted].flatMap(name => {
+			const tool = this.#xdevRegistry?.get(name);
+			return tool ? [tool] : [];
+		});
+		const previousActiveToolNames = this.getActiveToolNames();
 		this.#mountedXdevToolNames = new Set(mountedTools.map(tool => tool.name));
 		this.#xdevRegistry?.reconcile(mountedTools);
-		this.#notifyXdevMountDelta(previousMounted);
 		this.#setActiveToolNames?.(validToolNames);
-		this.agent.setTools(tools);
 
-		if (this.#rebuildSystemPrompt) {
-			const signature = this.#computeAppliedToolSignature(validToolNames, tools);
-			if (signature !== this.#lastAppliedToolSignature) {
-				if (this.#lastAppliedToolSignature !== undefined) this.#clearInheritedProviderPromptCacheKey();
-				const built = await this.#rebuildSystemPrompt(validToolNames, this.#toolRegistry);
-				this.#baseSystemPrompt = built.systemPrompt;
-				this.#baseSystemPromptBeforeMemoryPromotion = undefined;
-				this.agent.setSystemPrompt(this.#baseSystemPrompt);
-				this.#lastAppliedToolSignature = signature;
-				this.#promptModelKey = this.#currentPromptModelKey();
+		let rebuiltSystemPrompt: string[] | undefined;
+		let rebuiltSignature: string | undefined;
+		try {
+			if (this.#rebuildSystemPrompt) {
+				const signature = this.#computeAppliedToolSignature(validToolNames, tools);
+				if (signature !== this.#lastAppliedToolSignature) {
+					const built = await this.#rebuildSystemPrompt(validToolNames, this.#toolRegistry);
+					rebuiltSystemPrompt = built.systemPrompt;
+					rebuiltSignature = signature;
+				}
 			}
+		} catch (error) {
+			this.#mountedXdevToolNames = previousMounted;
+			this.#xdevRegistry?.reconcile(previousMountedTools);
+			this.#setActiveToolNames?.(previousActiveToolNames);
+			throw error;
+		}
+
+		this.#notifyXdevMountDelta(previousMounted);
+		this.agent.setTools(tools);
+		if (rebuiltSystemPrompt && rebuiltSignature) {
+			if (this.#lastAppliedToolSignature !== undefined) this.#clearInheritedProviderPromptCacheKey();
+			this.#baseSystemPrompt = rebuiltSystemPrompt;
+			this.#baseSystemPromptBeforeMemoryPromotion = undefined;
+			this.agent.setSystemPrompt(this.#baseSystemPrompt);
+			this.#lastAppliedToolSignature = rebuiltSignature;
+			this.#promptModelKey = this.#currentPromptModelKey();
 		}
 	}
 
@@ -6903,8 +6927,23 @@ export class AgentSession {
 	 */
 	async setActiveToolsByName(toolNames: string[]): Promise<void> {
 		const mounted = this.#mountedXdevToolNames;
-		this.#runtimeSelectedToolNames = new Set(normalizeToolNames(toolNames).filter(name => !mounted.has(name)));
-		await this.#applyActiveToolsByName(toolNames);
+		const normalized = normalizeToolNames(toolNames);
+		const transportWriteActive =
+			this.#builtInToolNames.has("write") &&
+			this.getActiveToolNames().includes("write") &&
+			this.#presentationPinnedToolNames?.has("write") !== true &&
+			this.#runtimeSelectedToolNames?.has("write") !== true &&
+			(mounted.size > 0 || this.#planModeState?.enabled === true);
+		const previousRuntimeSelectedToolNames = this.#runtimeSelectedToolNames;
+		this.#runtimeSelectedToolNames = new Set(
+			normalized.filter(name => !mounted.has(name) && !(name === "write" && transportWriteActive)),
+		);
+		try {
+			await this.#applyActiveToolsByName(normalized);
+		} catch (error) {
+			this.#runtimeSelectedToolNames = previousRuntimeSelectedToolNames;
+			throw error;
+		}
 	}
 
 	/** Rebuild the base system prompt using the current active tool set. */

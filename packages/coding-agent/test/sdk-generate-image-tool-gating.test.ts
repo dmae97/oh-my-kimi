@@ -189,6 +189,16 @@ describe("generate_image tool gating", () => {
 		expect(session.getActiveToolNames()).not.toContain("write");
 	});
 
+	it("does not pin transport-only write during enabled-set round trips", async () => {
+		const session = await sessionWithCustomTools(["read"], [customTool("mcp__test__search", true)]);
+		expect(session.getActiveToolNames()).toContain("write");
+
+		await session.setActiveToolsByName(session.getEnabledToolNames());
+		await session.refreshMCPTools([]);
+
+		expect(session.getActiveToolNames()).not.toContain("write");
+	});
+
 	it("preserves explicitly requested write after MCP devices disconnect", async () => {
 		const session = await sessionWithCustomTools(["read", "write"], [customTool("mcp__test__search", true)]);
 
