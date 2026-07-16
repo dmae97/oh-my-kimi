@@ -2852,8 +2852,8 @@ export class AuthStorage {
 			email: next.email,
 			enterpriseUrl: next.enterpriseUrl,
 			apiEndpoint: next.apiEndpoint,
-			orgId: next.orgId ?? existing.orgId,
-			orgName: next.orgName ?? existing.orgName,
+			orgId: next.orgId ?? entry.credential.orgId,
+			orgName: next.orgName ?? entry.credential.orgName,
 		});
 	}
 

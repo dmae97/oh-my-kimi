@@ -212,7 +212,7 @@ describe("xAI web search provider", () => {
 			authStorage,
 		} as unknown as ModelRegistry;
 		const originalFetch = globalThis.fetch;
-		globalThis.fetch = capture.fetchMock;
+		globalThis.fetch = Object.assign(capture.fetchMock, { preconnect: originalFetch.preconnect });
 		try {
 			const result = await runSearchQuery(
 				{ query: "registry search", provider: "xai" },

@@ -409,7 +409,7 @@ describe("AuthStorage OAuth refresh race", () => {
 			forceRefresh: true,
 			credentialFromRow: credential => credential,
 			async refresh(current) {
-				store.updateAuthCredential(credentialId, {
+				store!.updateAuthCredential(credentialId, {
 					...current,
 					access: "access-from-peer",
 					refresh: "refresh-from-peer",
