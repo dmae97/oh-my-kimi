@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed all keyboard input dying after the first keypress when a `~/.claude/tools` (or `.omp/tools`) module attaches a stdin consumer at import time — e.g. an MCP `StdioServerTransport` constructed at module top level, or a bare `process.stdin.resume()`. The custom-tool/extension/hook/plugin loader guard now snapshots and restores `process.stdin` (listeners, paused state, raw mode) around third-party module evaluation, so a hijacked stdin reader can no longer starve the TUI's own listener ([#5618](https://github.com/can1357/oh-my-pi/issues/5618)).
+
 ## [17.0.0] - 2026-07-15
 
 ### Breaking Changes

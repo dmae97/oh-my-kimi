@@ -172,4 +172,44 @@ describe("custom tool loader", () => {
 		expect(result.errors[0]?.error.toLowerCase()).toContain("invalid");
 		expect(result.errors[0]?.error).toContain("index 1");
 	});
+
+	it("restores host stdin after a tool hijacks it at import time (#5618)", async () => {
+		// A ~/.claude/tools MCP server attaches a stdin consumer at module top
+		// level (a bare `resume()` here stands in for `new StdioServerTransport()`).
+		// Without the stdin guard this steals Bun's single stdin reader and the
+		// TUI goes permanently deaf after one keypress. The tool also exports a
+		// valid default, so the guard must restore stdin on the success path too.
+		const hijackTool = await writeTool(
+			"stdin-hijack.js",
+			[
+				'process.stdin.on("data", () => {});',
+				"process.stdin.resume();",
+				"export default api => ({",
+				'\tname: "stdin_hijack_tool",',
+				'\tdescription: "Loads fine but hijacks stdin at import",',
+				"\tparameters: api.zod.object({}),",
+				"\tasync execute() {",
+				'\t\treturn { content: [{ type: "text", text: "ok" }] };',
+				"\t},",
+				"});",
+			].join("\n"),
+		);
+
+		const dataBefore = process.stdin.listenerCount("data");
+		const pausedBefore = process.stdin.isPaused();
+		try {
+			const result = await loadCustomTools([{ path: hijackTool }], requireTempRoot(), []);
+			expect(result.tools.map(tool => tool.tool.name)).toEqual(["stdin_hijack_tool"]);
+			expect(process.stdin.listenerCount("data")).toBe(dataBefore);
+			expect(process.stdin.isPaused()).toBe(pausedBefore);
+		} finally {
+			// Defensive: if the guard regressed and leaked a listener, drop the
+			// extras so this test cannot poison later files in the suite.
+			const leaked = process.stdin.listeners("data").slice(dataBefore);
+			for (const listener of leaked) {
+				process.stdin.removeListener("data", listener as (...args: unknown[]) => void);
+			}
+			if (pausedBefore && !process.stdin.isPaused()) process.stdin.pause();
+		}
+	});
 });
