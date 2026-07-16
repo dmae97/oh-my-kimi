@@ -545,16 +545,11 @@ type SemanticToolResult = {
  */
 function semanticToolResult(toolName: string | undefined, result: unknown): SemanticToolResult | undefined {
 	if (toolName === "checkpoint" || toolName === "rewind") {
-		const details =
-			result && typeof result === "object" && "details" in result ? result.details : undefined;
+		const details = result && typeof result === "object" && "details" in result ? result.details : undefined;
 		return { toolName, details };
 	}
 	const dispatch = writeDeviceDispatch(toolName ?? "", result);
-	if (
-		!dispatch ||
-		dispatch.mode !== "execute" ||
-		(dispatch.tool !== "checkpoint" && dispatch.tool !== "rewind")
-	) {
+	if (dispatch?.mode !== "execute" || (dispatch.tool !== "checkpoint" && dispatch.tool !== "rewind")) {
 		return undefined;
 	}
 	return { toolName: dispatch.tool, details: dispatch.inner };
@@ -4410,13 +4405,7 @@ export class AgentSession {
 					this.#invalidateFileCacheForPath(editedPath);
 				}
 				const phases = details?.phases;
-				if (
-					toolName === "todo" &&
-					!isError &&
-					details &&
-					Array.isArray(phases) &&
-					phases.every(isTodoPhase)
-				) {
+				if (toolName === "todo" && !isError && details && Array.isArray(phases) && phases.every(isTodoPhase)) {
 					this.setTodoPhases(phases);
 					if (this.#isTodoInitResult(details, toolCallId)) {
 						this.#scheduleReplanTitleRefresh();
@@ -4447,14 +4436,13 @@ export class AgentSession {
 						checkpointMessageCount: this.agent.state.messages.length,
 						checkpointEntryId,
 						startedAt:
-							(semanticDetails && stringProperty(semanticDetails, "startedAt")) ??
-							new Date().toISOString(),
+							(semanticDetails && stringProperty(semanticDetails, "startedAt")) ?? new Date().toISOString(),
 					};
 					this.#pendingRewindReport = undefined;
 					this.#lastCompletedRewind = undefined;
 				}
 				if (semanticResult?.toolName === "rewind" && !isError && this.#checkpointState) {
-					const detailReport = semanticDetails ? stringProperty(semanticDetails, "report")?.trim() ?? "" : "";
+					const detailReport = semanticDetails ? (stringProperty(semanticDetails, "report")?.trim() ?? "") : "";
 					const textReport = content?.find(part => part.type === "text")?.text?.trim() ?? "";
 					const report = detailReport || textReport;
 					if (report.length > 0) {

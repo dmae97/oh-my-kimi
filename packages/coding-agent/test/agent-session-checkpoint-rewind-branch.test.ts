@@ -35,10 +35,7 @@ const xdevWriteTool: AgentTool<typeof xdevWriteSchema, unknown> = {
 		const args = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
 		const goal = "goal" in args && typeof args.goal === "string" ? args.goal : undefined;
 		const report = "report" in args && typeof args.report === "string" ? args.report : undefined;
-		const inner =
-			tool === "checkpoint"
-				? { goal, startedAt: "2026-01-01T00:00:00.000Z" }
-				: { report, rewound: true };
+		const inner = tool === "checkpoint" ? { goal, startedAt: "2026-01-01T00:00:00.000Z" } : { report, rewound: true };
 		return {
 			content: [{ type: "text" as const, text: `${tool} via xdev` }],
 			details: {
@@ -624,9 +621,10 @@ describe("AgentSession checkpoint rewind branch context", () => {
 			startedAt: "2026-01-01T00:00:00.000Z",
 		});
 		expect(reloadedSession.getLastCompletedRewind()).toBeUndefined();
-		await expect(rewindToolForSession(reloadedSession).execute("call_rewind_after_xdev_resume", {
-			report: "post-resume findings",
-		})).resolves.toMatchObject({ details: { report: "post-resume findings", rewound: true } });
+		await expect(
+			rewindToolForSession(reloadedSession).execute("call_rewind_after_xdev_resume", {
+				report: "post-resume findings",
+			}),
+		).resolves.toMatchObject({ details: { report: "post-resume findings", rewound: true } });
 	});
-
 });
