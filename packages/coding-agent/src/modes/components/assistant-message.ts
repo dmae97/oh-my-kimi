@@ -558,22 +558,12 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
-	#renderImages(message: AssistantMessage): void {
-		if (!this.#showImages) return;
-		const nativeEntries = message.content.flatMap((content, index) =>
-			content.type === "image" && content.data && content.mimeType
-				? [{ image: content, key: `native:${index}` }]
-				: [],
-		);
-		const toolEntries = Array.from(this.#toolImagesByCallId.entries()).flatMap(([toolCallId, images]) =>
-			images.map((image, index) => ({ image, key: `${toolCallId}:${index}` })),
-		);
-		const imageEntries = [...nativeEntries, ...toolEntries];
-		if (imageEntries.length === 0) return;
-		this.#convertImagesForKitty(imageEntries);
+	#renderImageEntries(entries: Array<{ image: ImageContent; key: string }>, withLeadingSpacer: boolean): void {
+		if (!this.#showImages || entries.length === 0) return;
+		this.#convertImagesForKitty(entries);
 
-		this.#contentContainer.addChild(new Spacer(1));
-		for (const { image, key } of imageEntries) {
+		if (withLeadingSpacer) this.#contentContainer.addChild(new Spacer(1));
+		for (const { image, key } of entries) {
 			const displayImage =
 				TERMINAL.imageProtocol === ImageProtocol.Kitty && image.mimeType !== "image/png"
 					? this.#convertedKittyImages.get(key)
@@ -591,6 +581,13 @@ export class AssistantMessageComponent extends Container {
 			}
 			this.#contentContainer.addChild(new Text(theme.fg("toolOutput", `[Image: ${image.mimeType}]`), 1, 0));
 		}
+	}
+
+	#renderToolImages(): void {
+		const entries = Array.from(this.#toolImagesByCallId.entries()).flatMap(([toolCallId, images]) =>
+			images.map((image, index) => ({ image, key: `${toolCallId}:${index}` })),
+		);
+		this.#renderImageEntries(entries, true);
 	}
 
 	#appendThinkingExtensions(contentIndex: number, thinkingIndex: number, text: string): void {
@@ -785,6 +782,7 @@ export class AssistantMessageComponent extends Container {
 		const hasVisibleContent = message.content.some(
 			c =>
 				(c.type === "text" && canonicalizeMessage(c.text)) ||
+				(c.type === "image" && c.data && c.mimeType) ||
 				(!this.hideThinkingBlock &&
 					c.type === "thinking" &&
 					resolveThinkingDisplay(c, this.proseOnlyThinking).visible),
@@ -792,6 +790,7 @@ export class AssistantMessageComponent extends Container {
 
 		// Render content in order
 		let thinkingIndex = 0;
+		let hasRenderedContent = false;
 		for (let i = 0; i < message.content.length; i++) {
 			const content = message.content[i];
 			if (content.type === "text" && canonicalizeMessage(content.text)) {
@@ -801,6 +800,7 @@ export class AssistantMessageComponent extends Container {
 				md.transientRenderCache = this.#lastUpdateTransient;
 				this.#contentContainer.addChild(md);
 				captureItems?.push({ md, contentIndex: i, blockType: "text", lastText: trimmed });
+				hasRenderedContent = true;
 			} else if (content.type === "thinking" && resolveThinkingDisplay(content, this.proseOnlyThinking).visible) {
 				const thinkingText = resolveThinkingDisplay(content, this.proseOnlyThinking).text;
 				if (this.hideThinkingBlock) {
@@ -814,6 +814,7 @@ export class AssistantMessageComponent extends Container {
 					.some(
 						c =>
 							(c.type === "text" && canonicalizeMessage(c.text)) ||
+							(c.type === "image" && c.data && c.mimeType) ||
 							(c.type === "thinking" && resolveThinkingDisplay(c, this.proseOnlyThinking).visible),
 					);
 
@@ -826,10 +827,14 @@ export class AssistantMessageComponent extends Container {
 				this.#contentContainer.addChild(md);
 				captureItems?.push({ md, contentIndex: i, blockType: "thinking", lastText: thinkingText });
 				this.#appendThinkingExtensions(i, thinkingIndex, thinkingText);
+				hasRenderedContent = true;
 				thinkingIndex += 1;
 				if (hasVisibleContentAfter) {
 					this.#contentContainer.addChild(new Spacer(1));
 				}
+			} else if (content.type === "image" && content.data && content.mimeType) {
+				this.#renderImageEntries([{ image: content, key: `native:${i}` }], hasRenderedContent);
+				hasRenderedContent ||= this.#showImages;
 			}
 		}
 
@@ -842,7 +847,7 @@ export class AssistantMessageComponent extends Container {
 			this.#stopThinkingAnimation();
 		}
 
-		this.#renderImages(message);
+		this.#renderToolImages();
 		const errorPresentation = resolveAssistantErrorPresentation(message);
 		const hasToolCalls = message.content.some(c => c.type === "toolCall");
 		if (errorPresentation.kind === "compact-recovered") {

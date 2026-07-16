@@ -272,3 +272,25 @@ describe("transformMessages drops malformed (empty-name) tool calls", () => {
 		expect(toolResults[0]?.toolName).toBe("read");
 	});
 });
+
+describe("transformMessages drops assistant images from provider replay", () => {
+	it("preserves replayable text while removing native image artifacts", () => {
+		const messages: Message[] = [
+			{ role: "user", content: "Draw a dot", timestamp: 1 },
+			assistant(
+				[
+					{ type: "text", text: "Here it is." },
+					{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+				],
+				2,
+			),
+		];
+
+		const transformed = transformMessages(messages, model);
+
+		expect(transformed[1]).toMatchObject({
+			role: "assistant",
+			content: [{ type: "text", text: "Here it is." }],
+		});
+	});
+});

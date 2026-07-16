@@ -17,7 +17,7 @@ export function createAssistantMessageComponent(
 	message?: AssistantMessage,
 ): AssistantMessageComponent {
 	const component = new AssistantMessageComponent(
-		undefined,
+		message,
 		ctx.effectiveHideThinkingBlock,
 		() => ctx.ui.requestRender(),
 		ctx.viewSession.extensionRunner?.getAssistantThinkingRenderers(),
@@ -25,6 +25,5 @@ export function createAssistantMessageComponent(
 		ctx.proseOnlyThinking,
 	);
 	component.setImagesVisible(ctx.settings.get("terminal.showImages"));
-	if (message) component.updateContent(message);
 	return component;
 }
