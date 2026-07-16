@@ -237,7 +237,7 @@ import type { CompactOptions, ContextUsage } from "../extensibility/extensions/t
 import { ExtensionToolWrapper } from "../extensibility/extensions/wrapper";
 import type { HookCommandContext } from "../extensibility/hooks/types";
 import type { RecoveredRetryError } from "../extensibility/shared-events";
-import type { Skill, SkillWarning } from "../extensibility/skills";
+import { loadSkills, type Skill, type SkillWarning, setActiveSkills } from "../extensibility/skills";
 import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
 import { GoalRuntime } from "../goals/runtime";
 import type { Goal, GoalModeState } from "../goals/state";
@@ -827,6 +827,8 @@ export interface AgentSessionConfig {
 	skills?: Skill[];
 	/** Skill loading warnings (already captured by SDK) */
 	skillWarnings?: SkillWarning[];
+	/** Whether runtime reloads may rediscover disk-backed skills for this session. */
+	skillsReloadable?: boolean;
 	/** Custom commands (TypeScript slash commands) */
 	customCommands?: LoadedCustomCommand[];
 	skillsSettings?: SkillsSettings;
@@ -1907,6 +1909,7 @@ export class AgentSession {
 	#mcpPromptCommands: LoadedCustomCommand[] = [];
 
 	#skillsSettings: SkillsSettings | undefined;
+	#skillsReloadable: boolean;
 
 	// Model registry for API key resolution
 	#modelRegistry: ModelRegistry;
@@ -2516,6 +2519,7 @@ export class AgentSession {
 		this.#skills = config.skills ?? [];
 		this.#skillWarnings = config.skillWarnings ?? [];
 		this.#customCommands = config.customCommands ?? [];
+		this.#skillsReloadable = config.skillsReloadable ?? true;
 		this.#skillsSettings = config.skillsSettings;
 		this.#modelRegistry = config.modelRegistry;
 		// Resolve the wire service-tier per request so the Fireworks Priority
@@ -6829,6 +6833,33 @@ export class AgentSession {
 		if (added.length > 0) parts.push(`mounted ${added.map(entry => entry.name).join(", ")}`);
 		if (removed.length > 0) parts.push(`unmounted ${removed.map(entry => entry.name).join(", ")}`);
 		this.emitNotice("info", `xd://: ${parts.join("; ")}`, "xdev");
+	}
+
+	/**
+	 * Rediscover disk-backed skills and rebuild prompt-facing state without
+	 * recreating the session. Explicit skill snapshots (`--no-skills`,
+	 * SDK-provided `skills`) remain fixed for the lifetime of the session.
+	 */
+	async refreshSkills(): Promise<void> {
+		if (!this.#skillsReloadable) {
+			return;
+		}
+
+		resetCapabilities();
+		const skillsSettings = this.settings.getGroup("skills");
+		const discovered = await loadSkills({
+			...skillsSettings,
+			cwd: this.sessionManager.getCwd(),
+			disabledExtensions: this.settings.get("disabledExtensions") ?? [],
+		});
+		this.#skills = discovered.skills;
+		this.#skillWarnings = discovered.warnings;
+		this.#skillsSettings = skillsSettings;
+
+		if (this.#agentKind === "main") {
+			setActiveSkills(this.#skills);
+		}
+		await this.refreshBaseSystemPrompt();
 	}
 
 	/**

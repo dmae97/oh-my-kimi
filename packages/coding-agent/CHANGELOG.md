@@ -405,6 +405,7 @@
 - Fixed subagent yield tool calls being discarded when a soft request budget aborts the assistant turn before the yield event completes.
 - Fixed --tools filtering in interactive sessions incorrectly disabling deferred MCP tools from configured servers.
 - Fixed kept-alive task subagents entering infinite provider-call loops after an IRC wake and terminal yield.
+- Fixed `/reload-plugins`, plugin setting changes, and `manage_skill` writes leaving runtime skills and `skill://` resolution stale until restart; sessions now rediscover enabled skills and rebuild `/skill:<name>` commands before the next prompt ([#4996](https://github.com/can1357/oh-my-pi/issues/4996)).
 
 ## [16.3.15] - 2026-07-09
 

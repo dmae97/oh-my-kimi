@@ -160,7 +160,9 @@ export interface ToolSession {
 	/** Pre-loaded workspace tree (forwarded to subagents to skip re-scanning) */
 	workspaceTree?: WorkspaceTree;
 	/** Pre-loaded skills */
-	skills?: Skill[];
+	skills?: readonly Skill[];
+	/** Rediscover live session skills after a tool mutates their backing files. */
+	refreshSkills?: () => Promise<void>;
 	/** Pre-loaded prompt templates */
 	promptTemplates?: PromptTemplate[];
 	/** Pre-loaded rules (forwarded to subagents to skip re-discovery). */

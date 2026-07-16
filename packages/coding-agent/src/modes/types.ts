@@ -347,6 +347,8 @@ export interface InteractiveModeContext {
 	): Promise<CompactionOutcome>;
 	openInBrowser(urlOrPath: string): void;
 	refreshSlashCommandState(cwd?: string): Promise<void>;
+	/** Reload session skills and derived `/skill:<name>` commands. */
+	refreshSkillState(): Promise<void>;
 	applyCwdChange(newCwd: string): Promise<void>;
 
 	// Selector handling
