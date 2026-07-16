@@ -592,6 +592,36 @@ describe("AuthStorage usage cache: terminal refresh failure", () => {
 		}
 	});
 
+	it("suppresses last-good fallback when an expired OAuth access token has a definitive refresh failure", async () => {
+		const row = oauthRow(3, "expired@example.com");
+		if (row.credential.type !== "oauth") throw new Error("expected OAuth test credential");
+		row.credential.expires = Date.now() - 1000;
+		const store = makeStore([row]);
+		const cacheKey = "usage_cache:report:anthropic:default:oauth|account:account-3|email:expired@example.com";
+		store.cache.set(cacheKey, {
+			value: JSON.stringify({ value: makeReport("expired@example.com"), expiresAt: 1 }),
+			expiresAtSec: Math.floor((Date.now() + 24 * 60 * 60_000) / 1000),
+		});
+		const storage = new AuthStorage(store, {
+			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
+			refreshOAuthCredential: async () => {
+				throw new Error("OAuth refresh failed: 400 invalid_grant: refresh token revoked");
+			},
+		});
+		await storage.reload();
+		const fetchSpy = vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockResolvedValue(null);
+		try {
+			expect(anthropicReports(await storage.fetchUsageReports())).toHaveLength(0);
+			expect(fetchSpy).toHaveBeenCalledTimes(1);
+			expect(row.disabledCause).toBeNull();
+			const cached = JSON.parse(store.cache.get(cacheKey)!.value);
+			expect(cached.value).toBeNull();
+		} finally {
+			storage.close();
+			vi.restoreAllMocks();
+		}
+	});
+
 	it("preserves last-good fallback for transient (non-definitive) refresh failures", async () => {
 		// Mirror image: a 502 from the token endpoint is transient — we keep the
 		// row, fall back to the prior good report, and try again next poll.

@@ -392,6 +392,39 @@ describe("AuthStorage OAuth refresh race", () => {
 		}
 	});
 
+	test("returns the targeted OAuth row after a compare-and-set refresh loss", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+
+		const expires = Date.now() - 60_000;
+		await authStorage.set("unit-oauth-cas-loss", [
+			{ type: "oauth", access: "access-first", refresh: "refresh-first", expires },
+			{ type: "oauth", access: "access-target", refresh: "refresh-target", expires },
+		]);
+		const credentialId = store.listAuthCredentials("unit-oauth-cas-loss")[1]?.id;
+		expect(credentialId).toBeDefined();
+		if (credentialId === undefined) return;
+
+		const result = await authStorage.refreshStoredOAuthCredential("unit-oauth-cas-loss", {
+			credentialId,
+			forceRefresh: true,
+			credentialFromRow: credential => credential,
+			async refresh(current) {
+				store.updateAuthCredential(credentialId, {
+					...current,
+					access: "access-from-peer",
+					refresh: "refresh-from-peer",
+				});
+				return { ...current, access: "access-from-this-process", refresh: "refresh-from-this-process" };
+			},
+		});
+
+		expect(result.refreshed).toBe(false);
+		expect(result.credential).toMatchObject({ access: "access-from-peer", refresh: "refresh-from-peer" });
+		const rows = store.listAuthCredentials("unit-oauth-cas-loss");
+		expect(rows[0]?.credential).toMatchObject({ type: "oauth", access: "access-first" });
+		expect(rows[1]?.credential).toMatchObject({ type: "oauth", access: "access-from-peer" });
+	});
+
 	test("syncs peer-updated SQLite OAuth rows before returning access tokens", async () => {
 		if (!authStorage || !store) throw new Error("test setup failed");
 

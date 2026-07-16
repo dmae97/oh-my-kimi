@@ -2291,7 +2291,7 @@ export class AuthStorage {
 							return { credential: undefined, refreshed: false, removed: true };
 						}
 						await this.reload();
-						const latest = this.get(provider);
+						const latest = this.#getStoredCredentials(provider).find(entry => entry.id === row.id)?.credential;
 						return {
 							credential: latest?.type === "oauth" ? options.credentialFromRow(latest) : undefined,
 							refreshed: false,
@@ -2341,7 +2341,7 @@ export class AuthStorage {
 					)
 				) {
 					await this.reload();
-					const latest = this.get(provider);
+					const latest = this.#getStoredCredentials(provider).find(entry => entry.id === row.id)?.credential;
 					return {
 						credential: latest?.type === "oauth" ? options.credentialFromRow(latest) : undefined,
 						refreshed: false,
@@ -2833,8 +2833,12 @@ export class AuthStorage {
 		return match?.id;
 	}
 
-	#persistRefreshedUsageCredential(provider: Provider, previous: UsageCredential, next: UsageCredential): void {
-		const credentialId = this.#findStoredCredentialIdForUsageCredential(provider, previous);
+	#persistRefreshedUsageCredential(
+		provider: Provider,
+		previous: UsageCredential,
+		next: UsageCredential,
+		credentialId = this.#findStoredCredentialIdForUsageCredential(provider, previous),
+	): void {
 		if (credentialId === undefined) return;
 		const entry = this.#getStoredCredentials(provider).find(candidate => candidate.id === credentialId);
 		if (entry?.credential.type !== "oauth") return;
@@ -2889,7 +2893,12 @@ export class AuthStorage {
 						timeoutSignal,
 					);
 					const refreshedCredential = this.#mergeRefreshedUsageCredential(request.credential, refreshed);
-					this.#persistRefreshedUsageCredential(request.provider, request.credential, refreshedCredential);
+					this.#persistRefreshedUsageCredential(
+						request.provider,
+						request.credential,
+						refreshedCredential,
+						refreshableCredentialId,
+					);
 					params = {
 						...request,
 						credential: refreshedCredential,
@@ -2898,6 +2907,16 @@ export class AuthStorage {
 					};
 				} catch (error) {
 					const errorMsg = String(error);
+					if (
+						request.credential.expiresAt <= Date.now() &&
+						AIError.isDefinitiveOAuthFailure(errorMsg)
+					) {
+						// The current access token is unusable, so don't replay an
+						// old usage report after its rotating refresh token is revoked.
+						// This changes cache state only; usage polling remains
+						// non-authoritative about the credential lifecycle.
+						this.#usageCache.set(this.#buildUsageReportCacheKey(request), { value: null, expiresAt: 0 });
+					}
 					// Usage polling is advisory. A refresh can fail while the current
 					// access token remains valid inside the refresh skew, so probe with
 					// that token and never mutate credential state from this path.
@@ -3641,6 +3660,7 @@ export class AuthStorage {
 							row.provider as Provider,
 							initialRequest.credential,
 							refreshedCredential,
+							row.id,
 						);
 						params = {
 							...params,
