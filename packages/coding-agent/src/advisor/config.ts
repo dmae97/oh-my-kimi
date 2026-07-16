@@ -253,16 +253,17 @@ export async function loadWatchdogConfigFile(filePath: string): Promise<Watchdog
 		logger.warn("Advisor config: invalid schema for edit", { path: filePath, error: result.summary });
 		return { advisors: [] };
 	}
-	return {
-		instructions: result.instructions?.trim() ? result.instructions : undefined,
-		advisors: (result.advisors ?? []).map(a => ({
-			name: a.name,
-			model: a.model?.trim() || undefined,
-			tools: a.tools === undefined ? undefined : [...a.tools],
-			instructions: a.instructions?.trim() ? a.instructions : undefined,
-			enabled: a.enabled,
-		})),
-	};
+	const advisors = (result.advisors ?? []).map(a => {
+		const advisor: AdvisorConfig = { name: a.name };
+		if (a.model?.trim()) advisor.model = a.model;
+		if (a.tools !== undefined) advisor.tools = [...a.tools];
+		if (a.instructions?.trim()) advisor.instructions = a.instructions;
+		if (a.enabled !== undefined) advisor.enabled = a.enabled;
+		return advisor;
+	});
+	const doc: WatchdogConfigDoc = { advisors };
+	if (result.instructions?.trim()) doc.instructions = result.instructions;
+	return doc;
 }
 
 /**
@@ -273,11 +274,11 @@ export async function loadWatchdogConfigFile(filePath: string): Promise<Watchdog
  */
 
 function appendYamlString(lines: string[], indent: string, key: string, value: string): void {
-	if (!value.includes("\n")) {
+	const hasSignificantLeadingWhitespace = value.split("\n").some(line => /^[ \t]/.test(line));
+	if (!value.includes("\n") || hasSignificantLeadingWhitespace) {
 		lines.push(`${indent}${key}: ${YAML.stringify(value)}`);
 		return;
 	}
-
 	const normalized = value.replaceAll("\r\n", "\n");
 	let trailingNewlines = 0;
 	for (let index = normalized.length - 1; index >= 0 && normalized[index] === "\n"; index--) {
