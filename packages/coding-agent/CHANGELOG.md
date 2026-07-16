@@ -42,7 +42,7 @@
 - Fixed `/share` and `/export` web views rendering inline Markdown inside list items as literal text ([#5567](https://github.com/can1357/oh-my-pi/issues/5567)).
 ### Added
 
-- Added native Warp CLI-agent events for rich session status, tool approvals, and completion notifications.
+- Added native Warp CLI-agent events for rich session status, tool approvals, and completion notifications ([#5592](https://github.com/can1357/oh-my-pi/pull/5592) by [@metaphorics](https://github.com/metaphorics)).
 
 ## [16.5.2] - 2026-07-14
 
