@@ -554,6 +554,18 @@ describe("StreamMarkupHealing thinking pattern", () => {
 		expect(heal(...block)).toEqual({ text: block, thinking: "" });
 	});
 
+	// Issue #5665 (review follow-up): CommonMark treats a fence indented by up to
+	// three spaces as fenced code. The scanner must still open a fenced block (not
+	// an inline span) so an inner triple-backtick literal does not close it early.
+	it("recognizes a fence indented up to three spaces as a fenced block", () => {
+		const literal = `<${"think"}>literal</${"think"}>`;
+		for (const indent of ["", " ", "   "]) {
+			const block = `${indent}\`\`\`md\nconst fence = '\`\`\`';\n${literal}\n${indent}\`\`\`\nafter`;
+			expect(heal(block)).toEqual({ text: block, thinking: "" });
+			expect(heal(...block)).toEqual({ text: block, thinking: "" });
+		}
+	});
+
 	it("still heals a leaked think tag outside inline code", () => {
 		const literal = `<${"think"}>`;
 		expect(heal(`before \`code\` ${literal}secret</think> after`)).toEqual({

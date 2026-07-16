@@ -36,8 +36,12 @@ export class ThinkingInbandScanner implements InbandScanner {
 	#codeTicks = 0;
 	/** True when {@link #codeTicks} opened a fenced block (closes on a fence line), not an inline span. */
 	#codeFenced = false;
-	/** Last visible character emitted; `\n` initially so a leading fence is recognized at line start. */
-	#prevChar = "\n";
+	/**
+	 * Leading-space count on the current output line, or -1 once a non-space
+	 * character has appeared. Starts at 0 (line start) so a fence opening the
+	 * stream — or one indented ≤3 spaces, as CommonMark allows — is recognized.
+	 */
+	#lineIndent = 0;
 
 	feed(text: string): InbandScanEvent[] {
 		if (text.length === 0) return [];
@@ -109,11 +113,11 @@ export class ThinkingInbandScanner implements InbandScanner {
 				break;
 			}
 			if (hit.kind === "code") {
-				const atLineStart = this.#prevChar === "\n";
+				const fenced = hit.ticks >= 3 && this.#lineIndent >= 0 && this.#lineIndent <= 3;
 				this.#emitText(this.#buffer.slice(hit.index, hit.index + hit.ticks), events);
 				this.#buffer = this.#buffer.slice(hit.index + hit.ticks);
 				this.#codeTicks = hit.ticks;
-				this.#codeFenced = hit.ticks >= 3 && atLineStart;
+				this.#codeFenced = fenced;
 				continue;
 			}
 			this.#buffer = this.#buffer.slice(hit.index + hit.tag.open.length);
@@ -176,7 +180,7 @@ export class ThinkingInbandScanner implements InbandScanner {
 	#emitText(text: string, events: InbandScanEvent[]): void {
 		if (text.length === 0) return;
 		events.push({ type: "text", text });
-		this.#prevChar = text[text.length - 1]!;
+		this.#lineIndent = trailingLineIndent(text, this.#lineIndent);
 	}
 
 	#emitThinking(delta: string, events: InbandScanEvent[]): void {
@@ -243,6 +247,21 @@ function trailingBacktickRun(buffer: string): number {
 	let start = buffer.length;
 	while (start > 0 && buffer[start - 1] === "`") start--;
 	return buffer.length - start;
+}
+
+/**
+ * Leading-space count of the line at the tail of `text`, continuing from the
+ * prior line's `indent` state (see {@link ThinkingInbandScanner.#lineIndent}).
+ * Returns -1 once any non-space character has appeared on the current line.
+ */
+function trailingLineIndent(text: string, prior: number): number {
+	const lastNl = text.lastIndexOf("\n");
+	let indent = lastNl === -1 ? prior : 0;
+	for (let i = lastNl + 1; i < text.length; i++) {
+		if (indent === -1) break;
+		indent = text[i] === " " ? indent + 1 : -1;
+	}
+	return indent;
 }
 
 /**
