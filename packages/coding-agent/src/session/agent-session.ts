@@ -546,9 +546,7 @@ type SemanticToolResult = {
 function semanticToolResult(toolName: string | undefined, result: unknown): SemanticToolResult | undefined {
 	if (toolName === "checkpoint" || toolName === "rewind") {
 		const details =
-			result && typeof result === "object" && "details" in result
-				? (result as { details?: unknown }).details
-				: undefined;
+			result && typeof result === "object" && "details" in result ? result.details : undefined;
 		return { toolName, details };
 	}
 	const dispatch = writeDeviceDispatch(toolName ?? "", result);
@@ -560,6 +558,19 @@ function semanticToolResult(toolName: string | undefined, result: unknown): Sema
 		return undefined;
 	}
 	return { toolName: dispatch.tool, details: dispatch.inner };
+}
+
+function isTodoPhase(value: unknown): value is TodoPhase {
+	if (!isRecord(value) || typeof value.name !== "string" || !Array.isArray(value.tasks)) return false;
+	return value.tasks.every(
+		task =>
+			isRecord(task) &&
+			typeof task.content === "string" &&
+			(task.status === "pending" ||
+				task.status === "in_progress" ||
+				task.status === "completed" ||
+				task.status === "abandoned"),
+	);
 }
 
 function completedRewindFromEntry(entry: SessionEntry): CompletedRewindState | undefined {
@@ -574,19 +585,18 @@ function completedRewindFromEntry(entry: SessionEntry): CompletedRewindState | u
 		reportFromRewindReportContent(customMessageContentText(entry.content));
 	return report.length > 0 ? { report, startedAt, rewoundAt } : undefined;
 }
-
-function isSuccessfulCheckpointEntry(entry: SessionEntry): boolean {
+function isSuccessfulCheckpointEntry(
+	entry: SessionEntry,
+): entry is SessionEntry & { type: "message"; message: Extract<AgentMessage, { role: "toolResult" }> } {
 	if (entry.type !== "message" || entry.message.role !== "toolResult" || entry.message.isError === true) {
 		return false;
 	}
-	const message = entry.message as Extract<AgentMessage, { role: "toolResult" }>;
-	return semanticToolResult(message.toolName, message)?.toolName === "checkpoint";
+	return semanticToolResult(entry.message.toolName, entry.message)?.toolName === "checkpoint";
 }
 
 function checkpointStartedAtFromEntry(entry: SessionEntry): string | undefined {
-	if (!isSuccessfulCheckpointEntry(entry) || entry.type !== "message") return undefined;
-	const message = entry.message as Extract<AgentMessage, { role: "toolResult" }>;
-	const details = semanticToolResult(message.toolName, message)?.details;
+	if (!isSuccessfulCheckpointEntry(entry)) return undefined;
+	const details = semanticToolResult(entry.message.toolName, entry.message)?.details;
 	if (details && typeof details === "object") {
 		const startedAt = stringProperty(details, "startedAt");
 		if (startedAt) return startedAt;
@@ -4386,34 +4396,34 @@ export class AgentSession {
 				}
 			}
 			if (event.message.role === "toolResult") {
-				const { toolName, toolCallId, details, isError, content } = event.message as {
-					toolCallId?: string;
-					toolName?: string;
-					details?: { op?: string; path?: string; phases?: TodoPhase[]; report?: string; startedAt?: string };
-					isError?: boolean;
-					content?: Array<TextContent | ImageContent>;
-				};
+				const { toolName, toolCallId, isError, content } = event.message;
+				const details = isRecord(event.message.details) ? event.message.details : undefined;
 				const semanticResult = semanticToolResult(toolName, event.message);
-				const semanticDetails =
-					semanticResult?.details && typeof semanticResult.details === "object"
-						? semanticResult.details
-						: undefined;
+				const semanticDetails = isRecord(semanticResult?.details) ? semanticResult.details : undefined;
 				// A tool actually ran. Clear the post-reminder suppression: the agent did
 				// productive work in response to the prior nudge, so the next text-only stop
 				// is allowed to escalate to the next reminder if todos remain incomplete.
 				this.#todoReminderAwaitingProgress = false;
 				// Invalidate streaming edit cache when edit tool completes to prevent stale data
-				if (toolName === "edit" && details?.path) {
-					this.#invalidateFileCacheForPath(details.path);
+				const editedPath = details ? getStringProperty(details, "path") : undefined;
+				if (toolName === "edit" && editedPath) {
+					this.#invalidateFileCacheForPath(editedPath);
 				}
-				if (toolName === "todo" && !isError && Array.isArray(details?.phases)) {
-					this.setTodoPhases(details.phases);
+				const phases = details?.phases;
+				if (
+					toolName === "todo" &&
+					!isError &&
+					details &&
+					Array.isArray(phases) &&
+					phases.every(isTodoPhase)
+				) {
+					this.setTodoPhases(phases);
 					if (this.#isTodoInitResult(details, toolCallId)) {
 						this.#scheduleReplanTitleRefresh();
 					}
 				}
 				if (toolName === "todo" && isError) {
-					const errorText = content?.find(part => part.type === "text")?.text;
+					const errorText = content.find(part => part.type === "text")?.text;
 					const reminderText = [
 						"<system-reminder>",
 						"todo failed, so todo progress is not visible to the user.",

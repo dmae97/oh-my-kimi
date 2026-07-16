@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed xdev-routed checkpoint and rewind writes not tracking checkpoint state and leaving rewinding results in rebuilt provider and session context.
+
 ## [17.0.1] - 2026-07-16
 
 ### Changed

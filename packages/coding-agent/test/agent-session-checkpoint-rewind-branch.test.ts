@@ -24,12 +24,21 @@ const xdevWriteTool: AgentTool<typeof xdevWriteSchema, unknown> = {
 	description: "Dispatch a write to an xd:// device",
 	parameters: xdevWriteSchema,
 	async execute(_toolCallId, params) {
-		const args = JSON.parse(params.content) as { goal?: string; report?: string };
 		const tool = params.path === "xd://checkpoint" ? "checkpoint" : "rewind";
+		if (/^\s*(?:\?|help)?\s*$/i.test(params.content)) {
+			return {
+				content: [{ type: "text" as const, text: `${tool} docs via xdev` }],
+				details: { xdev: { tool, mode: "help" } },
+			};
+		}
+		const parsed: unknown = JSON.parse(params.content);
+		const args = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+		const goal = "goal" in args && typeof args.goal === "string" ? args.goal : undefined;
+		const report = "report" in args && typeof args.report === "string" ? args.report : undefined;
 		const inner =
 			tool === "checkpoint"
-				? { goal: args.goal, startedAt: "2026-01-01T00:00:00.000Z" }
-				: { report: args.report, rewound: true };
+				? { goal, startedAt: "2026-01-01T00:00:00.000Z" }
+				: { report, rewound: true };
 		return {
 			content: [{ type: "text" as const, text: `${tool} via xdev` }],
 			details: {
@@ -233,9 +242,33 @@ describe("AgentSession checkpoint rewind branch context", () => {
 		expect(finalThinking?.thinkingSignature).toBe("sig_after_rewind");
 	});
 
+	it("does not start checkpoint tracking for xdev help envelopes", async () => {
+		const { session } = await createHarness(
+			[
+				{
+					content: [
+						{
+							type: "toolCall",
+							id: "call_checkpoint_help",
+							name: "write",
+							arguments: { path: "xd://checkpoint", content: "help" },
+						},
+					],
+					stopReason: "toolUse",
+				},
+				{ content: ["DONE"], stopReason: "stop" },
+			],
+			[xdevWriteTool],
+		);
+
+		await session.prompt("show checkpoint help");
+
+		expect(session.getCheckpointState()).toBeUndefined();
+	});
+
 	it("tracks checkpoint and rewind through execute xdev write results", async () => {
 		const report = "findings: xdev wrapper";
-		const { session } = await createHarness(
+		const { session, mock } = await createHarness(
 			[
 				{
 					content: [
@@ -271,6 +304,18 @@ describe("AgentSession checkpoint rewind branch context", () => {
 		);
 
 		await session.prompt("investigate with an xdev checkpoint");
+
+		const finalCall = mock.calls.at(-1);
+		if (!finalCall) throw new Error("Expected final post-rewind provider call");
+		expect(
+			finalCall.context.messages.some(
+				message => message.role === "toolResult" && message.toolCallId === "call_rewind_xdev",
+			),
+		).toBe(false);
+		expect(
+			session.messages.some(message => message.role === "toolResult" && message.toolCallId === "call_rewind_xdev"),
+		).toBe(false);
+		expect(session.messages).toEqual(session.sessionManager.buildSessionContext().messages);
 
 		expect(session.getLastCompletedRewind()).toEqual({
 			report,
