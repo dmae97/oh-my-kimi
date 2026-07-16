@@ -185,6 +185,10 @@ This skill is added after session creation.
 			modelRegistry: sharedModelRegistry,
 			settings,
 		});
+		let commandMetadataChanges = 0;
+		const unsubscribeCommandMetadata = session.subscribeCommandMetadataChanged(() => {
+			commandMetadataChanges++;
+		});
 
 		try {
 			const manageSkill = session.getToolByName("manage_skill");
@@ -197,6 +201,7 @@ This skill is added after session creation.
 			});
 
 			expect(session.skills.some(skill => skill.name === "runtime-managed-skill")).toBe(true);
+			expect(commandMetadataChanges).toBe(1);
 			expect(getActiveSkills().some(skill => skill.name === "runtime-managed-skill")).toBe(true);
 			expect(session.agent.state.systemPrompt.join("\n")).toContain("runtime-managed-skill");
 			const readSkill = session.getToolByName("read");
@@ -213,11 +218,13 @@ This skill is added after session creation.
 			expect(session.skills.some(skill => skill.name === "runtime-managed-skill")).toBe(false);
 			expect(getActiveSkills().some(skill => skill.name === "runtime-managed-skill")).toBe(false);
 			expect(session.agent.state.systemPrompt.join("\n")).not.toContain("runtime-managed-skill");
+			expect(commandMetadataChanges).toBe(2);
 			await expect(
 				readSkill!.execute("read-deleted-managed-skill", { path: "skill://runtime-managed-skill" }),
 			).rejects.toThrow(/Unknown skill/);
 		} finally {
 			await session.dispose();
+			unsubscribeCommandMetadata();
 			setAgentDir(originalAgentDir);
 		}
 	});

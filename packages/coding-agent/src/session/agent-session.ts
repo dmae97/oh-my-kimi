@@ -6860,6 +6860,7 @@ export class AgentSession {
 			setActiveSkills(this.#skills);
 		}
 		await this.refreshBaseSystemPrompt();
+		this.#notifyCommandMetadataChanged();
 	}
 
 	/**
