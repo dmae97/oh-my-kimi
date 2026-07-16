@@ -197,6 +197,7 @@ import {
 	onModelRolesChanged,
 	validateProviderMaxInFlightRequests,
 } from "../config/settings";
+import { CursorExecHandlers } from "../cursor";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { expandApplyPatchToEntries, normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../edit";
 import { getFileSnapshotStore } from "../edit/file-snapshot-store";
@@ -2921,11 +2922,16 @@ export class AgentSession {
 
 			const names = config.tools === undefined ? ADVISOR_DEFAULT_TOOL_NAMES : new Set(config.tools);
 			const tools = (this.#advisorTools ?? []).filter(t => names.has(t.name));
+			const advisorLoopTools: AgentTool<any>[] = [adviseTool, ...tools];
+			const advisorToolMap = new Map<string, AgentTool>();
 			const availableAdvisorToolNames = new Set<string>();
-			availableAdvisorToolNames.add(adviseTool.name);
-			for (const tool of tools) {
+			for (const tool of advisorLoopTools) {
 				availableAdvisorToolNames.add(tool.name);
-				if (tool.customWireName !== undefined) availableAdvisorToolNames.add(tool.customWireName);
+				advisorToolMap.set(tool.name, tool);
+				if (tool.customWireName !== undefined) {
+					availableAdvisorToolNames.add(tool.customWireName);
+					advisorToolMap.set(tool.customWireName, tool);
+				}
 			}
 			let quarantinedAdvisorOutput: string | undefined;
 			let currentAdvisorInput = "";
@@ -2965,17 +2971,28 @@ export class AgentSession {
 			// Codex request identity remains UUID-shaped while local labels keep the
 			// `-advisor` suffix.
 			const advisorPromptCacheKey = this.agent.promptCacheKey ?? advisorProviderSessionId;
+			// On the Cursor provider every tool runs server-side and is dispatched
+			// back through `cursorExecHandlers`; without this bridge the advisor's
+			// own tools (including the MCP `advise` tool) return `toolNotFound` and
+			// no advice is ever routed (issue #5680). Mirrors the primary agent's
+			// bridge (`sdk.ts`), scoped to this advisor's granted tool set.
+			const advisorCursorExecHandlers = new CursorExecHandlers({
+				cwd: this.sessionManager.getCwd(),
+				tools: advisorToolMap,
+			});
 			const advisorAgent = new Agent({
 				initialState: {
 					systemPrompt,
 					model: advisorModel,
 					thinkingLevel: toReasoningEffort(advisorThinkingLevel),
-					tools: [adviseTool, ...tools],
+					tools: advisorLoopTools,
 				},
 				appendOnlyContext,
 				sessionId: advisorProviderSessionId,
 				promptCacheKey: advisorPromptCacheKey,
 				providerSessionState: this.#providerSessionState,
+				cursorExecHandlers: advisorCursorExecHandlers,
+				cwdResolver: () => this.sessionManager.getCwd(),
 				preferWebsockets: this.#preferWebsockets,
 				getApiKey: requestModel => this.#modelRegistry.resolver(requestModel, advisorProviderSessionId),
 				streamFn: this.#advisorStreamFn,

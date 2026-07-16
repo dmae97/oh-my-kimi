@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the built-in advisor silently doing nothing when its model routes through the `cursor` provider: the advisor runs in its own `Agent` that was constructed without `cursorExecHandlers`, so on Cursor — where every tool executes server-side and is dispatched back through the client's exec handlers — each advisor tool call (including the MCP `advise` tool) came back `toolNotFound`/"tool not available" and no advice was ever routed. The advisor `Agent` now gets a Cursor exec bridge scoped to its own granted tool set, mirroring the primary agent ([#5680](https://github.com/can1357/oh-my-pi/issues/5680)).
+
 ## [17.0.1] - 2026-07-16
 
 ### Changed
