@@ -8994,7 +8994,7 @@ export class AgentSession {
 			firstMessage,
 			this.#modelRegistry,
 			this.settings,
-			this.sessionManager.getSessionId(),
+			this.sessionId,
 			this.model,
 			provider => this.agent.metadataForProvider(provider),
 			this.#titleSystemPrompt,

@@ -27,12 +27,13 @@ afterEach(async () => {
 });
 
 describe("AgentSession title generation disposal", () => {
-	it("aborts an in-flight automatic title request when disposal begins", async () => {
+	it("uses the active provider session and aborts an in-flight title request during disposal", async () => {
 		tempDir = TempDir.createSync("@pi-title-dispose-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const providerSessionId = "provider-session";
 
 		const settings = Settings.isolated({
 			"compaction.enabled": false,
@@ -44,11 +45,15 @@ describe("AgentSession title generation disposal", () => {
 			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
 			streamFn: createMockModel({ responses: [{ content: ["Done"] }] }).stream,
 		});
+		const modelRegistry = new ModelRegistry(authStorage);
+		const getApiKey = vi.spyOn(modelRegistry, "getApiKey");
+		const resolver = vi.spyOn(modelRegistry, "resolver");
 		session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),
 			settings,
-			modelRegistry: new ModelRegistry(authStorage),
+			modelRegistry,
+			providerSessionId,
 		});
 		const started = Promise.withResolvers<void>();
 		const response = Promise.withResolvers<ai.AssistantMessage>();
@@ -62,6 +67,8 @@ describe("AgentSession title generation disposal", () => {
 
 		const generation = session.generateTitle("Investigate shutdown");
 		await started.promise;
+		expect(getApiKey.mock.calls[0]?.[1]).toBe(providerSessionId);
+		expect(resolver.mock.calls[0]?.[1]).toBe(providerSessionId);
 		session.beginDispose();
 
 		expect(requestSignal?.aborted).toBe(true);
