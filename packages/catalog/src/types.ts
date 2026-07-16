@@ -327,6 +327,15 @@ export interface OpenAICompat {
 	toolStrictMode?: "all_strict" | "none";
 	/** Whether request shaping may send reasoning params at all. Default: auto-detected (disabled for GitHub Copilot chat-completions). */
 	supportsReasoningParams?: boolean;
+	/**
+	 * Whether the endpoint accepts explicit sampling parameters (`temperature`,
+	 * `top_p`, `top_k`, `min_p`, penalties). OpenAI proprietary reasoning models
+	 * (o-series, gpt-5+) reject them with `400 Unsupported parameter:
+	 * 'temperature' is not supported with this model` on every serving host
+	 * (official, Azure, GitHub Copilot). When unset, auto-detected from the
+	 * model id. Default: true. Issue #5606.
+	 */
+	supportsSamplingParams?: boolean;
 	/** Always send a max-token field when the caller did not provide one. Default: auto-detected (Kimi-family models derive TPM limits from max_tokens). */
 	alwaysSendMaxTokens?: boolean;
 	/** Whether Responses-API tool-call/result history must be strictly paired. Default: auto-detected (Azure OpenAI, GitHub Copilot). */
@@ -464,6 +473,7 @@ export interface ResolvedOpenAISharedCompat {
 	supportsReasoningEffort: boolean;
 	reasoningEffortMap: Partial<Record<Effort, string>>;
 	supportsReasoningParams: boolean;
+	supportsSamplingParams: boolean;
 	thinkingFormat: OpenAIReasoningFormat;
 	reasoningDisableMode: OpenAIReasoningDisableMode;
 	omitReasoningEffort: boolean;
@@ -516,6 +526,7 @@ export type ResolvedOpenAICompat = ResolvedOpenAISharedCompat &
 			| "supportsReasoningEffort"
 			| "reasoningEffortMap"
 			| "supportsReasoningParams"
+			| "supportsSamplingParams"
 			| "thinkingFormat"
 			| "reasoningDisableMode"
 			| "omitReasoningEffort"

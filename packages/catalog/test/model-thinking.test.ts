@@ -584,6 +584,31 @@ describe("model thinking derivation", () => {
 		expect(fable.compat.supportsSamplingParams).toBe(false);
 	});
 
+	it("bakes sampling-param rejection into OpenAI reasoning compat (#5606)", () => {
+		// GitHub Copilot Responses gpt-5.6 — the reported failing model.
+		const luna = createModel({
+			id: "gpt-5.6-luna",
+			api: "openai-responses",
+			provider: "github-copilot",
+			baseUrl: "https://api.githubcopilot.com",
+		});
+		const gpt5 = createModel({ id: "gpt-5", api: "openai-responses", provider: "openai" });
+		const gpt5Mini = createModel({ id: "gpt-5-mini", api: "openai-completions", provider: "openai" });
+		const gpt5Chat = createModel({ id: "gpt-5-chat-latest", api: "openai-responses", provider: "openai" });
+		const oThree = createModel({ id: "o3-mini", api: "openai-responses", provider: "openai" });
+		// Non-restricted OpenAI + non-OpenAI models keep sampling support.
+		const gpt4o = createModel({ id: "gpt-4o", api: "openai-responses", provider: "openai", reasoning: false });
+		const kimi = createModel({ id: "kimi-k2.6", api: "openai-completions", provider: "moonshot" });
+
+		expect(luna.compat.supportsSamplingParams).toBe(false);
+		expect(gpt5.compat.supportsSamplingParams).toBe(false);
+		expect(gpt5Mini.compat.supportsSamplingParams).toBe(false);
+		expect(gpt5Chat.compat.supportsSamplingParams).toBe(false);
+		expect(oThree.compat.supportsSamplingParams).toBe(false);
+		expect(gpt4o.compat.supportsSamplingParams).toBe(true);
+		expect(kimi.compat.supportsSamplingParams).toBe(true);
+	});
+
 	it("encodes effort-dial-less reasoners as thinking: undefined", () => {
 		const model = createModel({
 			id: "grok-build",

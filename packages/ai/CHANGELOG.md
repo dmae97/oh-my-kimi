@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed OpenRouter cost reporting to use the provider's authoritative account charge instead of catalog token-price estimates on both Responses and Chat Completions streams.
+- Fixed OpenAI Responses and Chat Completions requests forwarding unsupported sampling parameters such as `temperature` to o-series and GPT-5+ models, preventing 400 errors for mnemopi memory calls through GitHub Copilot GPT-5.6 Luna. ([#5606](https://github.com/can1357/oh-my-pi/issues/5606))
 
 ## [17.0.0] - 2026-07-15
 
