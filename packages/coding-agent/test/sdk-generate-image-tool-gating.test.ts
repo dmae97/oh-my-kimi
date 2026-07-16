@@ -264,6 +264,27 @@ describe("generate_image tool gating", () => {
 		expect(session.getActiveToolNames()).toContain(rpcTool.name);
 		expect(session.getXdevToolEntries().map(entry => entry.name)).not.toContain(rpcTool.name);
 	});
+
+	it("keeps newly discovered tools top-level after runtime read removal", async () => {
+		const session = await sessionWithCustomTools(["read", "bash"], []);
+		await session.setActiveToolsByName(["bash"]);
+
+		const rpcTool: AgentTool = {
+			name: "rpc_without_read",
+			label: "RPC Without Read",
+			description: "Search RPC host data",
+			parameters: type({}),
+			loadMode: "discoverable",
+			async execute() {
+				return { content: [] };
+			},
+		};
+		await session.refreshRpcHostTools([rpcTool]);
+
+		expect(session.getActiveToolNames()).not.toContain("read");
+		expect(session.getActiveToolNames()).toContain(rpcTool.name);
+		expect(session.getXdevToolEntries().map(entry => entry.name)).not.toContain(rpcTool.name);
+	});
 	it("activates write when an RPC host tool mounts under xd://", async () => {
 		const { session } = await createAgentSession({
 			cwd: registryDir,
