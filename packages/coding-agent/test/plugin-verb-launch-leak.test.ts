@@ -88,6 +88,14 @@ describe("documented-but-unregistered plugin verbs do not leak to launch (#2935)
 		}
 	});
 
+	test("plugin ids after documented flags hint instead of leaking to launch", () => {
+		for (const verb of ["uninstall", "upgrade", "enable", "disable"] as const) {
+			const result = resolveCliArgv([verb, "--scope", "project", "code-review@claude-plugins-official"]);
+			expect(result).not.toHaveProperty("argv");
+			expect(result).toHaveProperty("error");
+		}
+	});
+
 	test("prose prompts beginning with the new verbs still route to launch (#4845)", () => {
 		expect(resolveCliArgv(["upgrade", "the", "deps"])).toEqual({
 			argv: ["launch", "upgrade", "the", "deps"],

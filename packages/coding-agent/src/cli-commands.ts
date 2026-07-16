@@ -100,7 +100,10 @@ export function reservedTopLevelWordMessage(argv: readonly string[]): string | u
 	const second = argv[1];
 	if (second === undefined) return hint;
 	if (first === "marketplace" && MARKETPLACE_SUBCOMMANDS[second]) return hint;
-	if (second.includes("@")) return hint;
+	for (let index = 1; index < argv.length; index += 1) {
+		const arg = argv[index];
+		if (!arg.startsWith("-") && arg.includes("@")) return hint;
+	}
 	return undefined;
 }
 
