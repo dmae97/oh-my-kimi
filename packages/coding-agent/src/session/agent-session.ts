@@ -7449,6 +7449,11 @@ export class AgentSession {
 			.filter((tool): tool is AgentTool => tool !== undefined)
 			.map(tool => this.#wrapToolForAcpPermission(tool));
 		this.agent.setTools(activeTools);
+		const mountedTools = [...this.#mountedXdevToolNames]
+			.map(name => this.#toolRegistry.get(name))
+			.filter((tool): tool is AgentTool => tool !== undefined)
+			.map(tool => this.#wrapToolForAcpPermission(tool));
+		this.#xdevRegistry?.reconcile(mountedTools);
 	}
 
 	#clearCheckpointRuntimeState(): void {

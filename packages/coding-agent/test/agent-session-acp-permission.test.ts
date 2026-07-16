@@ -77,7 +77,7 @@ async function createSession(
 	tools: AgentTool[],
 	bridge?: ClientBridge,
 	settingsOverrides: Partial<Record<SettingPath, unknown>> = {},
-	options?: { xdevRegistry?: XdevRegistry; builtInToolNames?: string[] },
+	options?: { xdevRegistry?: XdevRegistry; builtInToolNames?: string[]; initialMountedXdevToolNames?: string[] },
 ): Promise<AgentSession> {
 	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 	if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
@@ -105,6 +105,7 @@ async function createSession(
 		toolRegistry: new Map(tools.map(t => [t.name, t])),
 		xdevRegistry: options?.xdevRegistry,
 		builtInToolNames: options?.builtInToolNames,
+		initialMountedXdevToolNames: options?.initialMountedXdevToolNames,
 	});
 
 	if (bridge) sess.setClientBridge(bridge);
@@ -280,6 +281,40 @@ it("mounted destructive tools retain the ACP permission gate", async () => {
 	expect(session.getActiveToolNames()).not.toContain("delete");
 	await mountedDelete!.execute(
 		"call-mounted-delete",
+		{ path: "/tmp/gone.ts" },
+		undefined,
+		undefined as never,
+		undefined as never,
+	);
+
+	expect(permissionSpy).toHaveBeenCalledTimes(1);
+	expect(deleteTool.executeCalls).toBe(1);
+});
+
+it("startup-mounted destructive tools gain the ACP permission gate when the bridge attaches", async () => {
+	const readTool = makeFakeTool("read");
+	const writeTool = makeFakeTool("write");
+	const deleteTool = makeFakeTool("delete");
+	deleteTool.loadMode = "discoverable";
+	const bridge = makeBridge({ outcome: "selected", optionId: "allow_once", kind: "allow_once" });
+	const permissionSpy = spyOn(bridge, "requestPermission");
+	const xdevRegistry = new XdevRegistry([]);
+	xdevRegistry.reconcile([deleteTool]);
+	session = await createSession(
+		[readTool, writeTool, deleteTool],
+		bridge,
+		{},
+		{
+			xdevRegistry,
+			builtInToolNames: ["read", "write"],
+			initialMountedXdevToolNames: ["delete"],
+		},
+	);
+
+	const mountedDelete = xdevRegistry.get("delete");
+	expect(mountedDelete).toBeDefined();
+	await mountedDelete!.execute(
+		"call-startup-delete",
 		{ path: "/tmp/gone.ts" },
 		undefined,
 		undefined as never,
