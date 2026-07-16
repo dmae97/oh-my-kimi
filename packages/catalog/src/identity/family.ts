@@ -42,6 +42,16 @@ export const isKimiK26ModelId = memo((modelId: string): boolean => {
 });
 
 /**
+ * Kimi K3 in any namespace form (`kimi-k3`, `kimi-k3.1`, `kimi-k3-turbo`,
+ * `moonshotai/kimi-k3`). K3 always reasons and drives thinking via OpenAI-style
+ * `reasoning_effort: "max"`, not the K2.x binary `thinking: { type }` block —
+ * see the moonshot discovery mapper and `buildOpenAICompat`.
+ */
+export const isKimiK3ModelId = memo((modelId: string): boolean => {
+	return /(^|\/)kimi-k3(?:\.\d+)?(?:[-.:_]|$)/i.test(modelId);
+});
+
+/**
  * Claude ids in any namespace form: bare (`claude-*`), path-namespaced
  * (`anthropic/claude.x`), or dot-prefixed (`us.anthropic.claude-…`,
  * `global.anthropic.claude-…`, `au.anthropic.claude-…` — Bedrock cross-region

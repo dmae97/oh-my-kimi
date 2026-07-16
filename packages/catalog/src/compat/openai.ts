@@ -15,6 +15,7 @@ import {
 	isDeepseekModelIdOrName,
 	isGlm52ReasoningEffortModelId,
 	isGrokReasoningEffortCapable,
+	isKimiK3ModelId,
 	isKimiK26ModelId,
 	isKimiModelId,
 	isMimoModelIdOrName,
@@ -247,6 +248,11 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 	const isKimiModel = isKimiModelId(spec.id);
 	const isMoonshotNative = modelMatchesHost(hostModel, "moonshotNative");
 	const isMoonshotKimi = isKimiModel && isMoonshotNative;
+	// Kimi K3 (native) always reasons via OpenAI-style `reasoning_effort: "max"`
+	// and does NOT accept the K2.x binary `thinking: { type }` block, so it must
+	// stay on the "openai" thinking dialect even though it is a Moonshot-native
+	// Kimi model (#5756).
+	const isMoonshotKimiK3 = isMoonshotKimi && isKimiK3ModelId(spec.id);
 	const requiresEnabledThinking = isMoonshotKimi && matchesKimiK27CodeFamily(spec);
 	const usesMoonshotKimiPreservedThinking = isMoonshotKimi && isKimiK26ModelId(spec.id);
 	const isAnthropicModel =
@@ -364,7 +370,10 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 				? ALIBABA_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS
 				: isXiaomiMimo
 					? XIAOMI_MIMO_STREAM_IDLE_TIMEOUT_MS
-					: spec.reasoning && (isKimiK26ModelId(spec.id) || (isMoonshotKimi && matchesKimiK27CodeFamily(spec)))
+					: spec.reasoning &&
+							(isKimiK26ModelId(spec.id) ||
+								isMoonshotKimiK3 ||
+								(isMoonshotKimi && matchesKimiK27CodeFamily(spec)))
 						? KIMI_REASONING_STREAM_IDLE_TIMEOUT_MS
 						: spec.reasoning && isDirectDeepseekApi
 							? DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS
@@ -385,7 +394,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 					? "openrouter"
 					: "raw";
 	const thinkingFormat: ResolvedOpenAISharedCompat["thinkingFormat"] =
-		isZai || isZhipu || isMoonshotKimi || isXiaomiMimo
+		(isMoonshotKimi && !isMoonshotKimiK3) || isZai || isZhipu || isXiaomiMimo
 			? "zai"
 			: isOpenRouter
 				? "openrouter"
