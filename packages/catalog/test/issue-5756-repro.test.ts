@@ -95,8 +95,9 @@ describe("issue #5756 — moonshot kimi-k3 pricing and wire format", () => {
 
 		expect(body.reasoning_effort).toBe("max");
 		expect("thinking" in body).toBe(false);
-		// Moonshot-native Kimi rate-limits on max_tokens, not max_completion_tokens.
-		expect(body.max_tokens).toBeDefined();
+		// Moonshot-native Kimi rate-limits on max_tokens, not
+		// max_completion_tokens; K3's default reaches its advertised 131K cap.
+		expect(body.max_tokens).toBe(131_072);
 		expect(body.max_completion_tokens).toBeUndefined();
 	});
 
@@ -143,6 +144,7 @@ describe("issue #5756 — moonshot kimi-k3 pricing and wire format", () => {
 		const stream = streamOpenAICompletions(model, context, {
 			apiKey: "test-key",
 			reasoning: "max",
+			maxTokens: 131_072,
 			toolChoice: { type: "tool", name: "plan" },
 			fetch: fetchMock,
 		});
@@ -152,5 +154,6 @@ describe("issue #5756 — moonshot kimi-k3 pricing and wire format", () => {
 
 		expect(body.reasoning_effort).toBe("max");
 		expect("thinking" in body).toBe(false);
+		expect(body.max_tokens).toBe(131_072);
 	});
 });

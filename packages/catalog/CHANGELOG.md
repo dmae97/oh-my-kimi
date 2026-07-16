@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed native `moonshot/kimi-k3` being labeled "Free" with no capabilities: the discovered id has no bundled/models.dev reference, so it fell through to zero cost, null limits, text-only input, and no reasoning. It now carries Moonshot's official K3 pricing (`$3` input / `$0.30` cache-hit / `$15` output), a 1,048,576-token context window, image input, and reasoning that routes through OpenAI-style `reasoning_effort: "max"` (K3 does not use the K2.x `thinking` block). Native K3 is also exempt from the Kimi forced-tool-choice reasoning suppression (a K2.x-only Moonshot conflict), so plan-mode forced tool turns keep the mandatory `max` effort ([#5756](https://github.com/can1357/oh-my-pi/issues/5756)).
+- Fixed native `moonshot/kimi-k3` being labeled "Free" with no capabilities: the discovered id has no bundled/models.dev reference, so it fell through to zero cost, null limits, text-only input, and no reasoning. It now carries Moonshot's official K3 pricing (`$3` input / `$0.30` cache-hit / `$15` output), a 1,048,576-token context window, image input, and reasoning that routes through OpenAI-style `reasoning_effort: "max"` (K3 does not use the K2.x `thinking` block). Native K3 is also exempt from the Kimi forced-tool-choice reasoning suppression (a K2.x-only Moonshot conflict), so plan-mode forced tool turns keep the mandatory `max` effort; its documented 131,072-token output cap is allowed through the Chat Completions request clamp instead of being reduced to the generic 64,000-token ceiling ([#5756](https://github.com/can1357/oh-my-pi/issues/5756)).
 
 ## [17.0.1] - 2026-07-16
 
