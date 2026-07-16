@@ -1,6 +1,6 @@
 /// <reference path="./legacy-pi-virtual-modules.d.ts" />
 import * as fs from "node:fs";
-import { createRequire, isBuiltin } from "node:module";
+import { isBuiltin } from "node:module";
 import * as path from "node:path";
 import * as url from "node:url";
 import { isCompiledBinary, stripWindowsExtendedLengthPathPrefix } from "@oh-my-pi/pi-utils";
@@ -1111,9 +1111,7 @@ const EXTENSION_GRAPH_SPECIFIER_REGEX = /((?:from\s+|import\s+|import\s*\(\s*)["
 // reloads install supplemental hooks only for modules added to the graph since
 // the previous load.
 const extensionGraphHookModules = new Map<string, Set<string>>();
-const COMMONJS_MODULES_GLOBAL = "__ompLegacyPiCommonJsModules";
-const commonJsModuleExports = new Map<string, unknown>();
-Reflect.set(globalThis, COMMONJS_MODULES_GLOBAL, commonJsModuleExports);
+const commonJsModuleSources = new Map<string, string>();
 
 let legacyPiLoadTag = 0;
 
@@ -1257,27 +1255,41 @@ async function collectExtensionModules(entryRealPath: string): Promise<Map<strin
 }
 
 /**
- * Load a graph-owned CommonJS module before its hook is installed and expose
- * the value through a synchronous ESM wrapper. Anchoring `createRequire` at the
- * owning package preserves its dependency resolution; linkedom's canvas bridge
- * goes directly to its bundled fallback because OMP does not ship native canvas.
+ * Wrap graph-owned CommonJS source in a synchronous ESM default export.
+ * Resolving from the owning package preserves dependency resolution; linkedom's
+ * canvas bridge uses its bundled fallback because OMP does not ship native canvas.
  */
-async function synthesizeCommonJsDefaultModule(modulePath: string): Promise<string> {
+async function synthesizeCommonJsDefaultModule(modulePath: string, source: string): Promise<string> {
 	const packageRoot = await findPackageRoot(modulePath);
 	const packageJsonPath = packageRoot ? path.join(packageRoot, "package.json") : modulePath;
 	let targetPath = modulePath;
+	let commonJsSource = source;
 	if (packageRoot) {
 		const manifest = await readPackageManifest(packageRoot);
 		const packageRelativePath = path.relative(packageRoot, modulePath).split(path.sep).join("/");
 		if (manifest?.name === "linkedom" && packageRelativePath === "commonjs/canvas.cjs") {
 			targetPath = path.join(packageRoot, "commonjs", "canvas-shim.cjs");
+			commonJsSource = await Bun.file(targetPath).text();
 		}
 	}
+	if (commonJsSource.startsWith("#!")) {
+		const firstLineEnd = commonJsSource.indexOf("\n");
+		commonJsSource = firstLineEnd === -1 ? "" : commonJsSource.slice(firstLineEnd + 1);
+	}
 
-	const requireFromPackage = createRequire(packageJsonPath);
 	const specifier = packageRoot ? `./${path.relative(packageRoot, targetPath).split(path.sep).join("/")}` : targetPath;
-	commonJsModuleExports.set(modulePath, requireFromPackage(specifier));
-	return `export default globalThis[${JSON.stringify(COMMONJS_MODULES_GLOBAL)}].get(${JSON.stringify(modulePath)});\n`;
+	const targetDir = path.dirname(targetPath);
+	return [
+		'import { createRequire as __ompCreateRequire } from "node:module";',
+		`const __ompPackageRequire = __ompCreateRequire(${JSON.stringify(packageJsonPath)});`,
+		`const __ompFilename = __ompPackageRequire.resolve(${JSON.stringify(specifier)});`,
+		"const __ompRequire = __ompCreateRequire(__ompFilename);",
+		`const __ompModule = { exports: {}, filename: __ompFilename, id: __ompFilename, path: ${JSON.stringify(targetDir)}, require: __ompRequire };`,
+		"(function (exports, require, module, __filename, __dirname) {",
+		commonJsSource,
+		`}).call(__ompModule.exports, __ompModule.exports, __ompRequire, __ompModule, __ompFilename, ${JSON.stringify(targetDir)});`,
+		"export default __ompModule.exports;",
+	].join("\n");
 }
 
 /**
@@ -1289,14 +1301,16 @@ async function synthesizeCommonJsDefaultModule(modulePath: string): Promise<stri
 async function installExtensionGraphHook(
 	entryRealPath: string,
 	modules: Map<string, string>,
+	commonJsPaths: Set<string>,
 ): Promise<{ asyncModules: Map<string, string>; syncSourceModules: Map<string, string> }> {
 	const asyncModules = new Map<string, string>();
-	const commonJsModules = new Map<string, string>();
 	const syncSourceModules = new Map<string, string>();
 	for (const [modulePath, source] of modules) {
 		const extension = path.extname(modulePath);
 		if (extension === ".cjs" || extension === ".cts") {
-			commonJsModules.set(modulePath, await synthesizeCommonJsDefaultModule(modulePath));
+			if (!commonJsPaths.has(modulePath)) {
+				throw new Error(`Missing CommonJS compatibility source: ${modulePath}`);
+			}
 		} else if (nativeAddonLoaderModulePaths.has(modulePath)) {
 			syncSourceModules.set(modulePath, source);
 		} else {
@@ -1333,21 +1347,21 @@ async function installExtensionGraphHook(
 		});
 	}
 
-	if (commonJsModules.size > 0) {
-		const alternation = [...commonJsModules.keys()].map(escapeRegExp).join("|");
+	if (commonJsPaths.size > 0) {
+		const alternation = [...commonJsPaths].map(escapeRegExp).join("|");
 		const filter = new RegExp(`^(?:${alternation})(?:\\?mtime=\\d+)?$`);
-		const hookId = Bun.hash(`${entryRealPath}\0commonjs\0${[...commonJsModules.keys()].join("\0")}`).toString(36);
+		const hookId = Bun.hash(`${entryRealPath}\0commonjs\0${[...commonJsPaths].join("\0")}`).toString(36);
 		Bun.plugin({
 			name: `omp:legacy-pi-ext:${hookId}`,
 			setup(build) {
 				build.onLoad({ filter, namespace: "file" }, args => {
 					const queryIndex = args.path.indexOf("?mtime=");
 					const sourcePath = queryIndex >= 0 ? args.path.slice(0, queryIndex) : args.path;
-					const source = commonJsModules.get(sourcePath);
+					const source = commonJsModuleSources.get(sourcePath);
 					if (source === undefined) {
 						throw new Error(`Missing CommonJS compatibility module: ${sourcePath}`);
 					}
-					return { contents: source, loader: "js" };
+					return { contents: source, loader: getLoader(sourcePath) };
 				});
 			},
 		});
@@ -1387,6 +1401,12 @@ async function installExtensionGraphHook(
  */
 async function ensureExtensionGraphHook(entryRealPath: string): Promise<{ clear(): void } | undefined> {
 	const currentModules = await collectExtensionModules(entryRealPath);
+	for (const [modulePath, source] of currentModules) {
+		const extension = path.extname(modulePath);
+		if (extension === ".cjs" || extension === ".cts") {
+			commonJsModuleSources.set(modulePath, await synthesizeCommonJsDefaultModule(modulePath, source));
+		}
+	}
 	let hookedModules = extensionGraphHookModules.get(entryRealPath);
 	if (!hookedModules) {
 		hookedModules = new Set<string>();
@@ -1394,16 +1414,24 @@ async function ensureExtensionGraphHook(entryRealPath: string): Promise<{ clear(
 	}
 
 	const pendingModules = new Map<string, string>();
+	const pendingCommonJsPaths = new Set<string>();
 	for (const [modulePath, source] of currentModules) {
 		if (!hookedModules.has(modulePath)) {
 			pendingModules.set(modulePath, source);
+			if (commonJsModuleSources.has(modulePath)) {
+				pendingCommonJsPaths.add(modulePath);
+			}
 		}
 	}
 	if (pendingModules.size === 0) {
 		return undefined;
 	}
 
-	const { asyncModules, syncSourceModules } = await installExtensionGraphHook(entryRealPath, pendingModules);
+	const { asyncModules, syncSourceModules } = await installExtensionGraphHook(
+		entryRealPath,
+		pendingModules,
+		pendingCommonJsPaths,
+	);
 	for (const modulePath of pendingModules.keys()) {
 		hookedModules.add(modulePath);
 	}

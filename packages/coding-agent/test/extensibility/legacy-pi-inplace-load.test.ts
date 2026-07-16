@@ -108,6 +108,31 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		expect(Reflect.get(Object(mod), "canvasValue")).toBe("linkedom-canvas-shim");
 	});
 
+	it("reloads an edited CommonJS helper imported from ESM", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "cjs-reload-ext", version: "1.0.0", type: "module" }),
+			"index.js": [
+				'import helper from "./helper.cjs";',
+				"export const helperValue = helper.value;",
+				"export default function (pi) { void pi; }",
+			].join("\n"),
+			"helper.cjs": 'module.exports = { value: "v1" };\n',
+		});
+		const entry = path.join(dir, "index.js");
+		const helper = path.join(dir, "helper.cjs");
+
+		const first = await loadLegacyPiModule(entry);
+		expect(Reflect.get(Object(first), "helperValue")).toBe("v1");
+
+		const firstHelperStat = await fs.stat(helper);
+		await fs.writeFile(helper, 'module.exports = { value: "v2" };\n', "utf8");
+		const bumpedHelperMtime = new Date(Math.ceil(firstHelperStat.mtimeMs) + 2_000);
+		await fs.utimes(helper, bumpedHelperMtime, bumpedHelperMtime);
+
+		const second = await loadLegacyPiModule(entry);
+		expect(Reflect.get(Object(second), "helperValue")).toBe("v2");
+	});
+
 	it("reloads an edited entry module without polluting fileURLToPath-derived paths", async () => {
 		const entrySource = (version: string): string =>
 			[
