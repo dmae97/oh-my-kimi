@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed linked legacy pi extensions failing to load when they import `DefaultPackageManager` or linkedom: the coding-agent compatibility shim now enumerates OMP extension paths with plugin metadata, and extension-graph CommonJS modules load through synchronous default-export bridges with linkedom's bundled canvas fallback. ([#5658](https://github.com/can1357/oh-my-pi/issues/5658))
+
 ## [17.0.1] - 2026-07-16
 
 ### Changed

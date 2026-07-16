@@ -78,6 +78,36 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		expect(mod.value).toBe("config-ok");
 	});
 
+	it("loads a default import from linkedom's CommonJS canvas fallback", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "linkedom-consumer", version: "1.0.0", type: "module" }),
+			"index.js": 'export { canvasValue } from "linkedom";\n',
+			"node_modules/linkedom/package.json": JSON.stringify({
+				name: "linkedom",
+				version: "0.18.12",
+				type: "module",
+				exports: "./index.js",
+			}),
+			"node_modules/linkedom/index.js": [
+				'import Canvas from "./commonjs/canvas.cjs";',
+				"export const canvasValue = Canvas.createCanvas();",
+			].join("\n"),
+			"node_modules/linkedom/commonjs/canvas.cjs": [
+				"try {",
+				'  module.exports = require("canvas");',
+				"} catch {",
+				'  module.exports = require("./canvas-shim.cjs");',
+				"}",
+			].join("\n"),
+			"node_modules/linkedom/commonjs/canvas-shim.cjs":
+				'module.exports = { createCanvas: () => "linkedom-canvas-shim" };\n',
+		});
+
+		const mod = await loadLegacyPiModule(path.join(dir, "index.js"));
+
+		expect(Reflect.get(Object(mod), "canvasValue")).toBe("linkedom-canvas-shim");
+	});
+
 	it("reloads an edited entry module without polluting fileURLToPath-derived paths", async () => {
 		const entrySource = (version: string): string =>
 			[
