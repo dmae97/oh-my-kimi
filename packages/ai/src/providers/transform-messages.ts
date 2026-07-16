@@ -316,21 +316,31 @@ export function redactSensitiveCredentials(text: string): string {
 	});
 }
 
-function redactSensitiveInObject(val: unknown): unknown {
+function redactSensitiveInObject(val: unknown): { result: unknown; changed: boolean } {
 	if (typeof val === "string") {
-		return redactSensitiveCredentials(val);
+		const redacted = redactSensitiveCredentials(val);
+		return { result: redacted, changed: redacted !== val };
 	}
 	if (Array.isArray(val)) {
-		return val.map(redactSensitiveInObject);
+		let changed = false;
+		const result = val.map(item => {
+			const res = redactSensitiveInObject(item);
+			if (res.changed) changed = true;
+			return res.result;
+		});
+		return { result, changed };
 	}
 	if (val !== null && typeof val === "object") {
+		let changed = false;
 		const res: Record<string, unknown> = {};
 		for (const [k, v] of Object.entries(val)) {
-			res[k] = redactSensitiveInObject(v);
+			const sub = redactSensitiveInObject(v);
+			if (sub.changed) changed = true;
+			res[k] = sub.result;
 		}
-		return res;
+		return { result: res, changed };
 	}
-	return val;
+	return { result: val, changed: false };
 }
 
 function redactSensitiveCredentialsInMessages(messages: Message[]): Message[] {
@@ -391,8 +401,8 @@ function redactSensitiveCredentialsInMessages(messages: Message[]): Message[] {
 					}
 				} else if (block.type === "toolCall") {
 					if (block.arguments) {
-						const redactedArgs = redactSensitiveInObject(block.arguments);
-						if (JSON.stringify(redactedArgs) !== JSON.stringify(block.arguments)) {
+						const { result: redactedArgs, changed: argsChanged } = redactSensitiveInObject(block.arguments);
+						if (argsChanged) {
 							changed = true;
 							const castArgs =
 								redactedArgs && typeof redactedArgs === "object" && !Array.isArray(redactedArgs)
