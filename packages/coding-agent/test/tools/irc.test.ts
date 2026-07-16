@@ -191,6 +191,39 @@ describe("IRC", () => {
 			expect(receipt.error).toBeTruthy();
 		});
 
+		it("custom-registry bus delivers live without gating on global park state for the same id", async () => {
+			// Global lifecycle has this id adopted + mid-park; a bus on a separate
+			// registry must NOT consult that unrelated state for its live recipient.
+			const globalStub = makeFakeSession();
+			registry.register({
+				id: "0-Sub",
+				displayName: "task",
+				kind: "sub",
+				session: globalStub.session,
+				sessionFile: "/tmp/0-Sub.jsonl",
+				status: "idle",
+			});
+			const { promise: neverDispose } = Promise.withResolvers<void>();
+			globalStub.session.dispose = (async () => {
+				await neverDispose;
+			}) as AgentSession["dispose"];
+			AgentLifecycleManager.global().adopt("0-Sub", { idleTtlMs: 0 });
+			void AgentLifecycleManager.global().park("0-Sub");
+			expect(AgentLifecycleManager.global().has("0-Sub")).toBe(true);
+
+			const customRegistry = new AgentRegistry();
+			const customBus = new IrcBus(customRegistry);
+			const live = makeFakeSession();
+			live.setOutcome("injected");
+			customRegistry.register({ id: "0-Sub", displayName: "task", kind: "sub", session: live.session });
+
+			const receipt = await customBus.send({ from: "0-Main", to: "0-Sub", body: "hi" });
+
+			expect(receipt).toEqual({ to: "0-Sub", outcome: "injected" });
+			expect(live.delivered.map(msg => msg.body)).toEqual(["hi"]);
+			expect(globalStub.delivered).toEqual([]);
+		});
+
 		it("send during pre-detach park keeps the live session and does not revive", async () => {
 			const { promise: disposeGate, resolve: resolveDispose } = Promise.withResolvers<void>();
 			let disposeCalls = 0;

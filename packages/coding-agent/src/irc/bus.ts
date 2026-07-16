@@ -127,12 +127,19 @@ export class IrcBus {
 			};
 		}
 
-		// Gate through ensureLive only when the recipient may be mid-park or
-		// parked. Main/non-adopted live peers skip this (they have no park
-		// lifecycle), and pending waiters still win without a session.
+		// A `parked` recipient always needs the lifecycle to revive it — this is
+		// read from *this* bus's registry, so it holds for any registry. The
+		// mid-park / adopted checks below query the lifecycle's own state, which
+		// only describes the registry it manages: consult them only when the
+		// lifecycle owns this bus's registry, otherwise a custom-registry bus
+		// (fallen back to the global manager) would gate a live recipient on
+		// unrelated global park state. Main/non-adopted live peers skip the gate,
+		// and pending waiters still win without a session.
 		const lifecycle = this.#lifecycle();
+		const lifecycleOwnsRegistry = lifecycle.manages(this.#registry);
 		const needsLifecycleGate =
-			ref.status === "parked" || lifecycle.isParking(message.to) || lifecycle.has(message.to);
+			ref.status === "parked" ||
+			(lifecycleOwnsRegistry && (lifecycle.isParking(message.to) || lifecycle.has(message.to)));
 
 		const priorSession = ref.session;
 		let revived = false;
