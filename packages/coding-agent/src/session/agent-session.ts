@@ -1860,6 +1860,7 @@ export class AgentSession {
 	 *  generation path. Refresh via {@link AgentSession.setTitleSystemPrompt} when
 	 *  the session cwd changes. */
 	#titleSystemPrompt: string | undefined;
+	#titleGenerationAbortController = new AbortController();
 	#toolChoiceQueue = new ToolChoiceQueue();
 
 	// Bash execution state
@@ -6226,6 +6227,7 @@ export class AgentSession {
 	 */
 	beginDispose(): void {
 		this.#isDisposed = true;
+		this.#titleGenerationAbortController.abort();
 		this.#flushPendingIrcAsides();
 		this.yieldQueue.clear();
 		this.agent.setAsideMessageProvider(undefined);
@@ -8982,16 +8984,26 @@ export class AgentSession {
 		this.#replanTitleRefreshInFlight = refresh;
 	}
 
-	async #refreshTitleAfterReplan(context: string, sessionId: string): Promise<void> {
-		const title = await generateSessionTitle(
-			context,
+	/**
+	 * Generate an automatic session title tied to this session's lifecycle.
+	 * Input and replan callers share the signal so disposal cancels provider and
+	 * local-worker requests instead of leaving background inference alive.
+	 */
+	generateTitle(firstMessage: string): Promise<string | null> {
+		return generateSessionTitle(
+			firstMessage,
 			this.#modelRegistry,
 			this.settings,
-			sessionId,
+			this.sessionManager.getSessionId(),
 			this.model,
 			provider => this.agent.metadataForProvider(provider),
 			this.#titleSystemPrompt,
+			this.#titleGenerationAbortController.signal,
 		);
+	}
+
+	async #refreshTitleAfterReplan(context: string, sessionId: string): Promise<void> {
+		const title = await this.generateTitle(context);
 		if (!title) return;
 		if (this.sessionManager.getSessionId() !== sessionId) return;
 		if (!this.settings.get("title.refreshOnReplan")) return;
