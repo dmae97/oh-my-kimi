@@ -2851,17 +2851,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.#applyPlanExecutionModel(options.executionModel);
 		}
 
-		// Close the review overlay now that the flicker-prone async rebuild is done
-		// (#exitPlanMode / compaction restored the transcript, tools and model are
-		// back). The synthetic execution turn dispatched below blocks in
-		// `session.prompt` for the whole run, so deferring the hide until #approvePlan
-		// returns would strand the operator on the plan-review screen while work
-		// proceeds (issue #5688). Hiding here — after the rebuild, before dispatch —
-		// keeps issue #5319's stale-buffer guard intact. `#hidePlanReview` is
-		// idempotent, so the caller's trailing `closePlanReview()` is a safe no-op.
-		this.#hidePlanReview();
-		this.ui.requestRender();
-
 		if (compactOutcome === "cancelled") {
 			// Explicit abort: honor it. `executeCompaction` already surfaced
 			// `showError("Compaction cancelled")`; we add the deferred-dispatch
@@ -2892,6 +2881,18 @@ export class InteractiveMode implements InteractiveModeContext {
 			planFilePath: options.planFilePath,
 			contextPreserved: options.preserveContext === true,
 		});
+		// Close the review overlay only now — after the async title write and plan
+		// prompt are prepared, immediately before the execution turn is queued. The
+		// synthetic prompt below blocks in `session.prompt` for the whole run, so
+		// hiding here (rather than after #approvePlan returns) keeps the operator off
+		// the stale plan-review screen (issue #5688) while #5319's stale-buffer guard
+		// stays intact. Deferring the hide past the awaited `setSessionName` also
+		// prevents restored editor focus from letting operator keystrokes submit a
+		// normal turn ahead of the approved execution turn (PR #5689 review).
+		// `#hidePlanReview` is idempotent, so the caller's trailing `closePlanReview()`
+		// — and the cancelled/error early returns above — stay safe no-ops.
+		this.#hidePlanReview();
+		this.ui.requestRender();
 		// A user turn queued during compaction was already fired by
 		// `flushCompactionQueue` before we returned from `handleCompactCommand`; the
 		// old abort-then-prompt path would have discarded that operator turn AND
