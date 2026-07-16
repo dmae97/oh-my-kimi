@@ -1397,6 +1397,12 @@ async function streamAssistantResponse(
 			let partialMessage: AssistantMessage | null = null;
 			let addedPartial = false;
 			const completedToolCallIds = new Set<string>();
+			// Ids of tool calls delivered via granular streaming (`toolcall_start` /
+			// `toolcall_delta`). A streamed id absent from `completedToolCallIds`
+			// never reached `toolcall_end` — the stream dropped mid-call. Atomic
+			// deliveries (a single `done`/`end(result)` message, e.g. Cursor) emit
+			// no granular events, so their tool calls are never flagged incomplete.
+			const streamedToolCallIds = new Set<string>();
 
 			const responseIterator = response[Symbol.asyncIterator]();
 			const finishAbortedStream = async (): Promise<AssistantMessage> => {
@@ -1451,9 +1457,13 @@ async function streamAssistantResponse(
 
 					const event = next.value;
 					if (event.type === "done" || event.type === "error") {
-						let finalMessage = recoverTransientErrorToolTurn(
-							retainCompletedToolCalls(await response.result(), completedToolCallIds),
-							context.tools ?? [],
+						let finalMessage = reclassifyEmptyToolUseStop(
+							recoverTransientErrorToolTurn(
+								retainCompletedToolCalls(await response.result(), completedToolCallIds),
+								context.tools ?? [],
+							),
+							streamedToolCallIds,
+							completedToolCallIds,
 						);
 						if (harmonyMitigationEnabled) {
 							const detection = detectHarmonyLeakInAssistantMessage(finalMessage);
@@ -1505,6 +1515,7 @@ async function streamAssistantResponse(
 							if (addedPartial) {
 								context.messages[context.messages.length - 1] = partialMessage;
 								completedToolCallIds.clear();
+								streamedToolCallIds.clear();
 								// `message` and `assistantMessageEvent.partial` intentionally share one
 								// immutable snapshot of the streaming partial: every message_update
 								// consumer treats both as read-only, so cloning the identical partial
@@ -1532,6 +1543,10 @@ async function streamAssistantResponse(
 						case "toolcall_delta":
 						case "toolcall_end":
 							if (partialMessage) {
+								if (event.type === "toolcall_start" || event.type === "toolcall_delta") {
+									const block = event.partial.content[event.contentIndex];
+									if (block?.type === "toolCall") streamedToolCallIds.add(block.id);
+								}
 								if (event.type === "toolcall_end") {
 									completedToolCallIds.add(event.toolCall.id);
 								}
@@ -1556,7 +1571,14 @@ async function streamAssistantResponse(
 				detachAbortListener?.();
 			}
 
-			let trailing = await response.result();
+			let trailing = reclassifyEmptyToolUseStop(
+				recoverTransientErrorToolTurn(
+					retainCompletedToolCalls(await response.result(), completedToolCallIds),
+					context.tools ?? [],
+				),
+				streamedToolCallIds,
+				completedToolCallIds,
+			);
 			if (harmonyMitigationEnabled) {
 				const detection = detectHarmonyLeakInAssistantMessage(trailing);
 				if (detection) {
@@ -1648,6 +1670,48 @@ function recoverTransientErrorToolTurn(
 		errorMessage: undefined,
 		errorId: undefined,
 		errorStatus: undefined,
+	};
+}
+
+/** Synthetic error text for a `toolUse` stop that yielded no usable tool call. */
+const EMPTY_TOOL_USE_STOP_MESSAGE =
+	"Stream closed before the tool call was emitted (socket connection closed unexpectedly): provider reported toolUse stop with no usable tool call blocks.";
+
+/**
+ * Reclassify a `toolUse` stop that produced no *usable* tool call as a
+ * retryable transport error. Providers (confirmed Bedrock + extended thinking,
+ * issue #5600) finalize a dropped stream with `stop_reason: "tool_use"` when the
+ * socket closes after the thinking block but before the tool call JSON streams.
+ * The loop would otherwise treat it as a successful turn: dispatch zero (or
+ * partially-parsed) tools, render an empty tool widget, and never retry.
+ * Stamping `stopReason: "error"` with the {@link AIError.Flag.Transient} bit
+ * routes it through the standard retry-with-backoff path. The bit is set
+ * explicitly (not left to text classification) so retry fires regardless of
+ * message-pattern drift.
+ *
+ * A tool call is *usable* unless it was streamed granularly (`streamedToolCallIds`)
+ * but never reached `toolcall_end` (`completedToolCallIds`) — that combination
+ * means the stream dropped mid-`toolcall_delta`, leaving empty or partially
+ * parsed arguments. Atomic deliveries (a single `done`/`end(result)` message,
+ * e.g. Cursor) emit no granular events, so their tool calls are never streamed
+ * and stay usable. When no usable tool call remains, the incomplete blocks are
+ * stripped so the outer loop cannot dispatch them before the retry fires.
+ */
+function reclassifyEmptyToolUseStop(
+	message: AssistantMessage,
+	streamedToolCallIds: ReadonlySet<string>,
+	completedToolCallIds: ReadonlySet<string>,
+): AssistantMessage {
+	if (message.stopReason !== "toolUse") return message;
+	const isIncomplete = (id: string): boolean => streamedToolCallIds.has(id) && !completedToolCallIds.has(id);
+	const hasUsableToolCall = message.content.some(block => block.type === "toolCall" && !isIncomplete(block.id));
+	if (hasUsableToolCall) return message;
+	return {
+		...message,
+		content: message.content.filter(block => block.type !== "toolCall"),
+		stopReason: "error",
+		errorMessage: EMPTY_TOOL_USE_STOP_MESSAGE,
+		errorId: AIError.create(AIError.Flag.Transient),
 	};
 }
 

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Reclassified a `toolUse` stop that carries zero tool call blocks (a provider stream that closed after the thinking block but before the tool call JSON was emitted) as a retryable transient error instead of a silent successful turn, so the standard retry-with-backoff path fires rather than rendering an empty tool widget ([#5600](https://github.com/can1357/oh-my-pi/issues/5600)).
+
 ## [17.0.0] - 2026-07-15
 
 ### Breaking Changes
