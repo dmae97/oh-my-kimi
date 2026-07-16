@@ -507,6 +507,7 @@
 - Fixed `/handoff` and auto-handoff skipping extension lifecycle hooks by emitting cancellable `session_before_switch` hooks and a `session_switch` with `reason: "handoff"` after the replacement session is ready ([#4434](https://github.com/can1357/oh-my-pi/issues/4434)).
 - Fixed TTSR stream interrupts so only the tool call whose stream matched a rule receives the rule-named abort result; sibling tool-call placeholders now use a neutral abort reason ([#2783](https://github.com/can1357/oh-my-pi/issues/2783)).
 - Fixed documented `omp marketplace`/`discover`/`upgrade`/`uninstall`/`enable`/`disable` CLI verbs silently leaking to the model as a launch prompt instead of managing plugins. `omp marketplace add xyz` (and similar multi-word invocations following the documented `omp plugin <action>` grammar) now surface a hint pointing at the real `omp plugin <action>` command, while genuine prose prompts beginning with these words still route to `launch` ([#4845](https://github.com/can1357/oh-my-pi/issues/4845)).
+- Fixed `/mcp`, `/mcp list`, and `/tools` output duplicating in terminal scrollback when invoked during agent streaming by deferring command panels until the active turn ends ([#4806](https://github.com/can1357/oh-my-pi/issues/4806)).
 
 ## [16.3.11] - 2026-07-06
 

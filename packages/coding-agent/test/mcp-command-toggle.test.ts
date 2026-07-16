@@ -53,6 +53,7 @@ function createController() {
 	const controller = new MCPCommandController({
 		chatContainer: { addChild: vi.fn() },
 		present: vi.fn(),
+		presentCommandOutput: vi.fn(),
 		ui: { requestRender: vi.fn() },
 		editor: {},
 		showError: vi.fn(),
