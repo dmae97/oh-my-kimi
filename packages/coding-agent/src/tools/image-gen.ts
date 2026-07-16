@@ -1052,6 +1052,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 			const requestSignal = ptree.combineSignals(signal, IMAGE_TIMEOUT);
 			const fetchImpl = ctx.fetch ?? fetch;
 			const failures: Array<{ provider: ImageProvider; error: ProviderHttpError }> = [];
+			let unsupportedAspectRatioProvider: ImageProvider | undefined;
 			let foundCredentials = false;
 			let resolvedImageCache: InlineImageData[] | undefined;
 
@@ -1082,7 +1083,14 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 										? DEFAULT_XAI_IMAGE_MODEL
 										: DEFAULT_MODEL;
 					const resolvedModel = provider === "openrouter" ? resolveOpenRouterModel(model) : model;
-					assertImageAspectRatioSupported(provider, params.aspect_ratio);
+					if (
+						params.aspect_ratio &&
+						provider !== "xai" &&
+						!COMMON_IMAGE_ASPECT_RATIO_SET.has(params.aspect_ratio)
+					) {
+						unsupportedAspectRatioProvider ??= provider;
+						continue;
+					}
 					if (provider === "openai" || provider === "openai-codex") {
 						if (!apiKey.model) {
 							throw new Error("Missing active GPT model for OpenAI image generation");
@@ -1598,6 +1606,10 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 				throw new Error(
 					"No image API credentials found. Use a GPT Responses/Codex model with OpenAI credentials, login with google-antigravity or xAI Grok OAuth, or set XAI_API_KEY, OPENROUTER_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY.",
 				);
+			}
+
+			if (failures.length === 0 && unsupportedAspectRatioProvider) {
+				assertImageAspectRatioSupported(unsupportedAspectRatioProvider, params.aspect_ratio);
 			}
 
 			throw new AggregateError(

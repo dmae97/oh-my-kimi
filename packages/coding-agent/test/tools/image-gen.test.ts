@@ -474,4 +474,62 @@ describe("imageGenTool", () => {
 		]);
 		expect(result.details?.provider).toBe("xai");
 	});
+	it("skips active providers that do not support the requested aspect ratio", async () => {
+		const requestUrls: string[] = [];
+		const fetchMock = (async (input: string | URL | Request) => {
+			const url = input.toString();
+			requestUrls.push(url);
+			if (!url.startsWith("https://api.x.ai/")) {
+				throw new Error(`Unexpected provider request: ${url}`);
+			}
+			return new Response(
+				JSON.stringify({ data: [{ b64_json: Buffer.from("xai-aspect-ratio-image").toString("base64") }] }),
+				{ status: 200, headers: { "content-type": "application/json" } },
+			);
+		}) as unknown as typeof fetch;
+		const model = {
+			api: "google-generative-ai",
+			provider: "google",
+			id: "gemini-3-pro-image-preview",
+			name: "Gemini 3 Pro Image",
+			baseUrl: "https://generativelanguage.googleapis.com",
+		} as Model;
+		const ctx: CustomToolContext = {
+			fetch: fetchMock,
+			sessionManager: {
+				getCwd: () => "/tmp",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKey: async () => undefined,
+				getApiKeyForProvider: async (provider: string) => {
+					if (provider === "google") return "test-gemini-token";
+					if (provider === "xai-oauth") return "test-xai-token";
+					return undefined;
+				},
+				getProviderBaseUrl: () => undefined,
+				getAll: () => [],
+				authStorage: {
+					hasNonEnvCredential: (provider: string) => provider === "xai-oauth",
+					rotateSessionCredential: async () => false,
+				},
+				resolver: (provider: string) => async () => (provider === "google" ? "test-gemini-token" : "test-xai-token"),
+			} as unknown as ModelRegistry,
+			model,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		const result = await imageGenTool.execute(
+			"call-gemini-aspect-ratio-fallback",
+			{ subject: "a cat", aspect_ratio: "3:2" },
+			undefined,
+			ctx,
+		);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+
+		expect(requestUrls).toEqual(["https://api.x.ai/v1/images/generations"]);
+		expect(result.details?.provider).toBe("xai");
+	});
 });
