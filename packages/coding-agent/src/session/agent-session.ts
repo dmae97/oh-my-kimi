@@ -3114,7 +3114,7 @@ export class AgentSession {
 	 * no queued work, a concern is preserved as a visible advisor card, while a
 	 * blocker wakes the primary to acknowledge work it handed off incorrectly.
 	 * After a deliberate user interrupt auto-resume is suppressed while idle/unwinding
-	 * (the note becomes a preserved card re-entering on resume); a live-streaming turn
+	 * (the note becomes a preserved card re-entering on resume); a live-streaming turn is
 	 * steered in directly. A plain nit always rides the non-interrupting YieldQueue
 	 * aside. Suppression by the per-advisor emission guard drops the note silently —
 	 * the model still saw `Recorded.`, so it isn't tempted to rephrase the same note
