@@ -3286,4 +3286,3 @@ describe("agentLoop kCursorExecResolved (issue #4348)", () => {
 		expect(executionStarts[0].toolName).toBe("echo");
 	});
 });
-

@@ -8306,8 +8306,11 @@ export class AgentSession {
 			},
 			hasPendingMessages: () => this.queuedMessageCount > 0,
 			shutdown: () => {
-				void this.dispose();
-				process.exit(0);
+				// Await the idempotent dispose() before exiting so the browser
+				// reaper and other bounded teardown complete — a fire-and-forget
+				// `void this.dispose()` raced process.exit() and could leave an
+				// OMP-owned Chromium alive (#5643).
+				void this.dispose().finally(() => process.exit(0));
 			},
 			getContextUsage: () => this.getContextUsage(),
 			waitForIdle: () => this.waitForIdle(),

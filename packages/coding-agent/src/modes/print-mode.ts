@@ -144,10 +144,15 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 				!isSilentAbort(assistantMsg)
 			) {
 				const errorLine = sanitizeText(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
-				// Flush before this hard exit — it bypasses the awaited postmortem.quit()
-				// in main(), and the postmortem `exit` handler can't await, so the error
-				// spans would otherwise stay buffered in the batch processor and drop.
+				// This branch hard-exits, bypassing the `await session.dispose()` at
+				// the end of runPrintMode. Flush telemetry and dispose the session
+				// HERE so error spans reach the exporter (the postmortem `exit`
+				// handler can't await) and the browser reaper installed in
+				// `dispose()` (releaseTabsForOwner) actually runs — otherwise an
+				// OMP-owned Chromium survives this exit (issue #5643). `dispose()`
+				// is idempotent, so the unreachable call below is a harmless no-op.
 				await flushTelemetryExport();
+				await session.dispose();
 				const flushed = process.stderr.write(`${errorLine}\n`);
 				if (flushed) {
 					process.exit(1);

@@ -1347,9 +1347,12 @@ export async function runRpcMode(
 	const shutdownCoordinator = new RpcShutdownCoordinator({
 		isShutdownRequested: () => shutdownState.requested,
 		performShutdown: async () => {
-			if (session.extensionRunner?.hasHandlers("session_shutdown")) {
-				await session.extensionRunner.emit({ type: "session_shutdown" });
-			}
+			// Route through the idempotent session.dispose() so the browser
+			// reaper (releaseTabsForOwner) and other bounded teardown run before
+			// the process exits. dispose() also emits `session_shutdown`, so we
+			// must NOT emit it separately here or the event fires twice. Skipping
+			// dispose left OMP-owned Chromium alive after RPC shutdown (#5643).
+			await session.dispose();
 			process.exit(0);
 		},
 	});
@@ -1385,5 +1388,10 @@ export async function runRpcMode(
 	await inputDispatcher.drain();
 	await shutdownCoordinator.drain();
 	subagentRegistry?.dispose();
+	// Dispose the main session before exiting so the browser reaper and other
+	// bounded teardown run on the stdin-EOF path too (#5643). Idempotent: a
+	// prior pi.shutdown() through the coordinator makes this await settle
+	// immediately.
+	await session.dispose();
 	process.exit(0);
 }
