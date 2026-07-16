@@ -419,12 +419,13 @@ describe("Warp CLI-agent events", () => {
 			],
 		});
 		expect(parseBodies(write).at(-1)).toMatchObject({
-			event: "stop",
+			event: "stop_failure",
+			error_type: "error",
 			query: "prompt error",
 			response: "rate limited",
 		});
 
-		// Normal text content is preferred over errorMessage.
+		// Normal text content is preferred over errorMessage; error stopReason still fails the turn.
 		write.mockClear();
 		messageStart(userMessageStart("prompt text"));
 		agentEnd({
@@ -439,12 +440,13 @@ describe("Warp CLI-agent events", () => {
 			],
 		});
 		expect(parseBodies(write).at(-1)).toMatchObject({
-			event: "stop",
+			event: "stop_failure",
+			error_type: "error",
 			query: "prompt text",
 			response: "visible answer",
 		});
 
-		// Silent abort marker must not surface as the stop response.
+		// Silent abort marker must not surface as the stop response or fail the turn.
 		write.mockClear();
 		messageStart(userMessageStart("prompt silent"));
 		agentEnd({
@@ -463,8 +465,9 @@ describe("Warp CLI-agent events", () => {
 			query: "prompt silent",
 			response: "",
 		});
+		expect(parseBodies(write).at(-1)).not.toHaveProperty("error_type");
 
-		// User interrupt labels stay suppressed; non-user abort reasons surface.
+		// User interrupt labels stay suppressed; non-user abort reasons surface as failures.
 		write.mockClear();
 		messageStart(userMessageStart("prompt interrupt"));
 		agentEnd({
@@ -498,7 +501,8 @@ describe("Warp CLI-agent events", () => {
 			],
 		});
 		expect(parseBodies(write).at(-1)).toMatchObject({
-			event: "stop",
+			event: "stop_failure",
+			error_type: "aborted",
 			query: "prompt aborted",
 			response: "provider cancelled stream",
 		});

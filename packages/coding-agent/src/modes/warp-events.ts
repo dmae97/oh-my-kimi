@@ -45,6 +45,7 @@ export function createWarpEventEmitter(options: WarpEventEmitterOptions): WarpEv
 			const body = {
 				...event,
 				v: WARP_CLI_AGENT_PROTOCOL_VERSION,
+				// Warp resolves this via CLIAgent.command_prefix(); OhMyPi is "omp".
 				agent: "omp",
 				session_id: options.sessionId,
 				cwd,
@@ -57,30 +58,51 @@ export function createWarpEventEmitter(options: WarpEventEmitterOptions): WarpEv
 	};
 }
 
-function lastAssistantText(messages: readonly AgentMessage[]): string {
+type LastAssistantStop = {
+	response: string;
+	event: "stop" | "stop_failure";
+	error_type?: "error" | "aborted";
+};
+
+function lastAssistantStop(messages: readonly AgentMessage[]): LastAssistantStop {
 	for (let index = messages.length - 1; index >= 0; index--) {
 		const message = messages[index];
 		if (message.role !== "assistant") continue;
+
 		const text = message.content
 			.filter(content => content.type === "text")
 			.map(content => content.text)
 			.join("");
+
+		let response = "";
 		if (text.length > 0) {
-			return text;
+			response = text;
+		} else {
+			const errorMessage = message.errorMessage;
+			if (typeof errorMessage === "string" && errorMessage.length > 0 && !isSilentAbort(message)) {
+				if (message.stopReason === "error") {
+					response = errorMessage;
+				} else if (message.stopReason === "aborted" && !isUserInterruptAbort(message)) {
+					response = errorMessage;
+				}
+			}
 		}
-		const errorMessage = message.errorMessage;
-		if (typeof errorMessage !== "string" || errorMessage.length === 0 || isSilentAbort(message)) {
-			return "";
-		}
+
 		if (message.stopReason === "error") {
-			return errorMessage;
+			return { response, event: "stop_failure", error_type: "error" };
 		}
-		if (message.stopReason === "aborted" && !isUserInterruptAbort(message)) {
-			return errorMessage;
+		if (
+			message.stopReason === "aborted" &&
+			!isSilentAbort(message) &&
+			!isUserInterruptAbort(message) &&
+			typeof message.errorMessage === "string" &&
+			message.errorMessage.length > 0
+		) {
+			return { response, event: "stop_failure", error_type: "aborted" };
 		}
-		return "";
+		return { response, event: "stop" };
 	}
-	return "";
+	return { response: "", event: "stop" };
 }
 
 function truncateEventText(text: string): string {
@@ -173,10 +195,12 @@ export function createWarpEventBridgeExtension(): ExtensionFactory {
 		});
 
 		api.on("agent_end", event => {
+			const stop = lastAssistantStop(event.messages);
 			emitter?.emit({
-				event: "stop",
+				event: stop.event,
 				query: activePrompt,
-				response: truncateEventText(lastAssistantText(event.messages)),
+				response: truncateEventText(stop.response),
+				...(stop.error_type !== undefined ? { error_type: stop.error_type } : {}),
 			});
 		});
 	};
