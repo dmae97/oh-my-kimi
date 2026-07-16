@@ -16,6 +16,7 @@ import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { IrcBus, type IrcMessage } from "@oh-my-pi/pi-coding-agent/irc/bus";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -94,7 +95,7 @@ describe("AgentSession plan-mode convergence", () => {
 
 	async function createPlanSession(
 		responses: MockResponse[],
-		options?: { advisorResponses?: MockResponse[]; sideResponses?: MockResponse[] },
+		options?: { advisorResponses?: MockResponse[]; sideResponses?: MockResponse[]; planYolo?: boolean },
 	): Promise<PlanHarness> {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected bundled anthropic model to exist");
@@ -108,7 +109,12 @@ describe("AgentSession plan-mode convergence", () => {
 			getApiKey: () => "test-key",
 			// All three tools active so a scripted ask/write/read call (and a
 			// forced "required" choice) can actually execute (isToolChoiceActive).
-			initialState: { model, systemPrompt: ["Test"], tools: [askTool, writeTool, readTool], messages: [] },
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: options?.planYolo ? [readTool] : [askTool, writeTool, readTool],
+				messages: [],
+			},
 			streamFn: mock.stream,
 		});
 
@@ -148,8 +154,9 @@ describe("AgentSession plan-mode convergence", () => {
 			advisorTools: [],
 			advisorStreamFn,
 			sideStreamFn,
+			planYolo: options?.planYolo ? { target: model } : undefined,
 		});
-		created.setPlanModeState({ enabled: true, planFilePath: "local://PLAN.md" });
+		if (!options?.planYolo) created.setPlanModeState({ enabled: true, planFilePath: "local://PLAN.md" });
 		session = created;
 		return { session: created, mock, advisorMock, sideMock };
 	}
@@ -291,5 +298,33 @@ describe("AgentSession plan-mode convergence", () => {
 
 		expect(countReminders(harness.session.agent.state.messages)).toBe(2);
 		expect(harness.mock.calls.length).toBe(4);
+	});
+
+	it("restores the pre-plan tool set after PlanYolo approval", async () => {
+		const harness = await createPlanSession(
+			[
+				{ content: ["planning A"] },
+				{ content: ["planning B"] },
+				{ content: ["planning C"] },
+				{ content: ["planning D"] },
+			],
+			{ planYolo: true },
+		);
+		await harness.session.prompt("make a plan");
+		await harness.session.waitForIdle();
+		expect(harness.session.getPlanModeState()?.enabled).toBe(true);
+		expect(harness.session.getActiveToolNames()).toContain("write");
+
+		const planPath = resolveLocalUrlToPath("local://demo-plan.md", {
+			getArtifactsDir: () => harness.session.sessionManager.getArtifactsDir(),
+			getSessionId: () => harness.session.sessionManager.getSessionId(),
+		});
+		await Bun.write(planPath, "# Demo plan\n\nImplement it.\n");
+		const handler = harness.session.peekPlanProposalHandler();
+		expect(handler).toBeDefined();
+		await handler!("demo");
+
+		expect(harness.session.getPlanModeState()).toBeUndefined();
+		expect(harness.session.getActiveToolNames()).toEqual(["read"]);
 	});
 });
