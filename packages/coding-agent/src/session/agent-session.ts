@@ -2436,12 +2436,12 @@ export class AgentSession {
 			readPlan: url => this.#readPlanYoloFile(url),
 			listPlanFiles: () => this.#listPlanYoloFiles(),
 		});
+		this.setPlanModeState(undefined);
 		const previousTools = this.#planYoloPreviousTools;
 		if (previousTools) {
 			await this.setActiveToolsByName(previousTools);
 		}
 		this.setPlanProposalHandler(null);
-		this.setPlanModeState(undefined);
 		this.#planYolo = undefined;
 		this.#planYoloPreviousTools = undefined;
 		await this.setModelTemporary(planYolo.target, planYolo.thinkingLevel, { ephemeral: true });
