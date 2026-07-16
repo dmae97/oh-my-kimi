@@ -464,23 +464,23 @@ describe("Anthropic request fingerprint alignment", () => {
 			},
 		});
 
-		await streamAnthropic(
-	vertexModel,
-	{ systemPrompt: ["Stay concise."], messages: [{ role: "user", content: "Hi", timestamp: Date.now() }] },
-	{
-		apiKey: "vertex-adc",
-		thinkingEnabled: true,
-		effort: "high",
-		fetch: fetchMock,
-		fallbacks: [
+				await streamAnthropic(
+			vertexModel,
+			{ systemPrompt: ["Stay concise."], messages: [{ role: "user", content: "Hi", timestamp: Date.now() }] },
+			{
+				apiKey: "vertex-adc",
+				thinkingEnabled: true,
+				effort: "high",
+				fetch: fetchMock,
+				fallbacks: [
 					{
 						model: "claude-sonnet-4-6@20260101",
 						max_tokens: 4_096,
 						output_config: { effort: "high" },
 					},
 				],
-	},
-).result();
+			},
+		).result();
 
 		expect(capturedBeta ?? "").not.toContain("effort-2025-11-24");
 		expect(capturedBody?.output_config?.effort).toBeUndefined();
