@@ -19,6 +19,10 @@
 - Fixed SIXEL image rendering where images with cell heights not divisible by 6 would have their bottom portion overwritten by subsequent content.
 - Fixed an issue where the Kitty OSC 99 desktop-notification capability probe would leak raw text into the terminal pane when running inside a multiplexer like tmux or screen.
 
+### Fixed
+
+- Fixed `@` file-reference and path completion falling through incorrectly inside slash command arguments when command-specific argument completion has no matches ([#5580](https://github.com/can1357/oh-my-pi/issues/5580)).
+
 ## [16.5.2] - 2026-07-14
 
 ### Fixed
