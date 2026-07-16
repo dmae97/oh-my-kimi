@@ -363,7 +363,9 @@ describe("InteractiveMode plan review rendering", () => {
 
 		overlay.handleInput("\x1b");
 		await expect(choice).resolves.toBeUndefined();
-		expect(overlayHandle.hide).toHaveBeenCalled();
+		// showPlanReview no longer hides on settle: the plan-approval caller fuses
+		// #hidePlanReview() with the replacement paint to avoid stale-buffer flicker.
+		expect(overlayHandle.hide).not.toHaveBeenCalled();
 	});
 
 	it("Refine with no annotations silently aborts approval and returns to the editor", async () => {
