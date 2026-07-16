@@ -25,6 +25,9 @@
 
 - Fixed custom Anthropic endpoints receiving the first-party-only `eager_input_streaming` tool field by default ([#5572](https://github.com/can1357/oh-my-pi/issues/5572)).
 - Added resolved OpenAI sampling-parameter compatibility metadata for o-series and GPT-5+ models.
+### Fixed
+
+- Fixed GitHub Copilot `mai-code-1-flash-picker` (and other `mai-*` models) to route through the `/responses` endpoint instead of `/chat/completions`, which rejected them with `400 unsupported_api_for_model` ([#5612](https://github.com/can1357/oh-my-pi/issues/5612)).
 
 ## [16.5.2] - 2026-07-14
 
