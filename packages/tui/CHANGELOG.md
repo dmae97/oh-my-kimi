@@ -26,6 +26,10 @@
 
 - Fixed `@` file-reference and path completion falling through incorrectly inside slash command arguments when command-specific argument completion has no matches ([#5580](https://github.com/can1357/oh-my-pi/issues/5580)).
 
+### Fixed
+
+- Fixed streamed Markdown tables reflowing rows already written to native scrollback when later cells widen a column.
+
 ## [16.5.2] - 2026-07-14
 
 ### Fixed
