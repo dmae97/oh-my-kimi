@@ -464,7 +464,7 @@ describe("Anthropic request fingerprint alignment", () => {
 			},
 		});
 
-				await streamAnthropic(
+		await streamAnthropic(
 			vertexModel,
 			{ systemPrompt: ["Stay concise."], messages: [{ role: "user", content: "Hi", timestamp: Date.now() }] },
 			{
