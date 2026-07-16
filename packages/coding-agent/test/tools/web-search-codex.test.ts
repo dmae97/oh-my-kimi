@@ -297,7 +297,7 @@ describe("searchCodex model selection", () => {
 		expect(capturedRequest?.body).toEqual(
 			expect.objectContaining({
 				model: "gpt-5.6-sol",
-				tool_choice: { type: "web_search" },
+				tool_choice: "auto",
 				reasoning: { context: "all_turns" },
 				parallel_tool_calls: false,
 				input: [
@@ -327,6 +327,22 @@ describe("searchCodex model selection", () => {
 		expect(capturedRequest?.body?.tools).toBeUndefined();
 		expect(capturedRequest?.body?.instructions).toBeUndefined();
 		expect(result.model).toBe("gpt-5.6-sol");
+	});
+
+	it("never leaves a forced hosted tool_choice on a Responses-Lite request (#5771)", async () => {
+		process.env.PI_CODEX_WEB_SEARCH_MODEL = "gpt-5.6-sol";
+		await searchCodex(makeSearchParams("forced choice guard", mockCodexFetch("gpt-5.6-sol")));
+
+		const body = capturedRequest?.body;
+		expect(body).not.toBeNull();
+		// Lite moves tools into `additional_tools` and drops top-level `tools`;
+		// a forced hosted choice against absent top-level tools is rejected 400.
+		const additionalTools = (body?.input as Array<Record<string, unknown>>)?.[0];
+		expect(additionalTools?.type).toBe("additional_tools");
+		expect(additionalTools?.tools).toEqual([{ type: "web_search", search_context_size: "high" }]);
+		expect(body?.tools).toBeUndefined();
+		expect(body?.tool_choice).toBe("auto");
+		expect(body?.tool_choice).not.toEqual({ type: "web_search" });
 	});
 
 	it("does not retry default candidates when PI_CODEX_WEB_SEARCH_MODEL is explicitly unsupported", async () => {
