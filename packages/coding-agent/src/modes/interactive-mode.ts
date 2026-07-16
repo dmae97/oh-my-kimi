@@ -56,8 +56,15 @@ import { reset as resetCapabilities } from "../capability";
 import type { CollabGuestLink } from "../collab/guest";
 import type { CollabHost } from "../collab/host";
 import { KeybindingsManager } from "../config/keybindings";
+import type { ResolvedModelRoleValue } from "../config/model-resolver";
 import { applyProviderGlobalsFromSettings } from "../config/provider-globals";
-import { isSettingsInitialized, onStatusLineSessionAccentChanged, Settings, settings } from "../config/settings";
+import {
+	isSettingsInitialized,
+	onModelRolesChanged,
+	onStatusLineSessionAccentChanged,
+	Settings,
+	settings,
+} from "../config/settings";
 import { clearClaudePluginRootsCache } from "../discovery/helpers";
 import type {
 	AutocompleteProviderFactory,
@@ -88,6 +95,7 @@ import {
 	resolveApprovedPlan,
 	resolvePlanTitle,
 } from "../plan-mode/approved-plan";
+import { resolvePlanModelTransition } from "../plan-mode/model-transition";
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with {
 	type: "text",
@@ -1021,6 +1029,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			onStatusLineSessionAccentChanged(() => {
 				this.#syncStatusLineSettings();
 				this.#handleSessionAccentInputsChanged();
+			}),
+		);
+		this.#eventBusUnsubscribers.push(
+			onModelRolesChanged(() => {
+				void this.#reapplyPlanModeModelOnRoleChange();
 			}),
 		);
 		this.#eventBusUnsubscribers.push(
@@ -2080,27 +2093,54 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!resolved.model) return;
 
 		const currentModel = this.session.model;
-		const sameModel = modelsAreEqual(currentModel, resolved.model);
-		const planThinkingLevel = resolved.explicitThinkingLevel ? resolved.thinkingLevel : undefined;
-
+		// Capture the pre-plan model so #exitPlanMode can restore it. Only the
+		// entry path records this — a mid-planning role change (below) leaves the
+		// active model on the plan role, so overwriting here would restore the old
+		// plan model instead of the user's real pre-plan model.
 		this.#planModePreviousModelState = currentModel
 			? { model: currentModel, thinkingLevel: this.session.configuredThinkingLevel() }
 			: undefined;
 
-		if (!sameModel) {
-			if (this.session.isStreaming) {
-				this.#pendingModelSwitch = { model: resolved.model, thinkingLevel: planThinkingLevel };
+		await this.#applyPlanModelTransition(currentModel, resolved);
+	}
+
+	/**
+	 * Re-resolve the `plan` role and move the active model onto it. Fires when
+	 * the plan role is reassigned while plan mode is active: the active model IS
+	 * the plan model there, so a settings-only change would otherwise leave the
+	 * current turn on the model plan mode was entered with (issue #5657). No-op
+	 * outside plan mode — role reassignment for an inactive role only touches
+	 * settings.
+	 */
+	async #reapplyPlanModeModelOnRoleChange(): Promise<void> {
+		if (!this.planModeEnabled) return;
+		const resolved = this.session.resolveRoleModelWithThinking("plan");
+		if (!resolved.model) return;
+		await this.#applyPlanModelTransition(this.session.model, resolved);
+	}
+
+	/** Apply (or defer) the model/thinking change implied by the resolved plan role. */
+	async #applyPlanModelTransition(currentModel: Model | undefined, resolved: ResolvedModelRoleValue): Promise<void> {
+		const transition = resolvePlanModelTransition(currentModel, resolved, this.session.isStreaming);
+		switch (transition.kind) {
+			case "none":
 				return;
-			}
-			try {
-				await this.session.setModelTemporary(resolved.model, planThinkingLevel);
-			} catch (error) {
-				this.showWarning(
-					`Failed to switch to plan model for plan mode: ${error instanceof Error ? error.message : String(error)}`,
-				);
-			}
-		} else if (planThinkingLevel) {
-			this.session.setThinkingLevel(planThinkingLevel);
+			case "thinking":
+				this.session.setThinkingLevel(transition.thinkingLevel);
+				return;
+			case "apply":
+				if (transition.deferred) {
+					this.#pendingModelSwitch = { model: transition.model, thinkingLevel: transition.thinkingLevel };
+					return;
+				}
+				try {
+					await this.session.setModelTemporary(transition.model, transition.thinkingLevel);
+				} catch (error) {
+					this.showWarning(
+						`Failed to switch to plan model for plan mode: ${error instanceof Error ? error.message : String(error)}`,
+					);
+				}
+				return;
 		}
 	}
 
