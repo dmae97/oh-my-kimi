@@ -2318,23 +2318,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			isDirectory = stat.isDirectory();
 		} catch (error) {
 			if (isNotFoundError(error)) {
-				let recoveredApprovedPlan = false;
-				const approvedPlanPath = this.#approvedPlanAlias(absolutePath);
-				if (approvedPlanPath) {
-					try {
-						const approvedPlanStat = await Bun.file(approvedPlanPath).stat();
-						absolutePath = approvedPlanPath;
-						fileSize = approvedPlanStat.size;
-						isDirectory = approvedPlanStat.isDirectory();
-						recoveredApprovedPlan = true;
-					} catch {
-						// The referenced plan disappeared after resolution; continue through
-						// ordinary suffix recovery and the original not-found error.
-					}
-				}
-
-				// Attempt unique suffix resolution before falling back to fuzzy suggestions
-				if (!recoveredApprovedPlan && !isRemoteMountPath(absolutePath)) {
+				// Attempt unique suffix resolution before falling back to the approved-plan
+				// alias or fuzzy suggestions. Existing workspace files retain precedence.
+				if (!isRemoteMountPath(absolutePath)) {
 					const suffixMatch = await this.#findSuffixMatchCached(suffixCache, localReadPath, signal);
 					if (suffixMatch) {
 						try {
@@ -2344,7 +2330,25 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 							isDirectory = retryStat.isDirectory();
 							suffixResolution = { from: localReadPath, to: suffixMatch.displayPath };
 						} catch {
-							// Suffix match candidate no longer stats — fall through to error path
+							// Suffix match candidate no longer stats — continue through
+							// approved-plan recovery and the original not-found error.
+						}
+					}
+				}
+
+				let recoveredApprovedPlan = false;
+				if (!suffixResolution) {
+					const approvedPlanPath = this.#approvedPlanAlias(absolutePath);
+					if (approvedPlanPath) {
+						try {
+							const approvedPlanStat = await Bun.file(approvedPlanPath).stat();
+							absolutePath = approvedPlanPath;
+							fileSize = approvedPlanStat.size;
+							isDirectory = approvedPlanStat.isDirectory();
+							recoveredApprovedPlan = true;
+						} catch {
+							// The referenced plan disappeared after resolution; continue through
+							// the ordinary delimited-path fallback and not-found error.
 						}
 					}
 				}

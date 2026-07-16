@@ -140,4 +140,21 @@ describe("read → edit round-trip for out-of-cwd files", () => {
 		expect(textOutput(result)).toContain("Workspace content.");
 		expect(textOutput(result)).not.toContain("Artifact content.");
 	});
+
+	it("prefers a unique workspace suffix match over the approved local plan alias", async () => {
+		const artifactsDir = path.join(outDir, "artifacts");
+		const planFilePath = "local://windows-packaging-plan.md";
+		const planPath = path.join(artifactsDir, "local", "windows-packaging-plan.md");
+		const workspacePlanPath = path.join(cwdDir, "docs", "windows-packaging-plan.md");
+		await Bun.write(planPath, "# Local plan\n\nArtifact content.\n");
+		await Bun.write(workspacePlanPath, "# Workspace plan\n\nNested workspace content.\n");
+
+		const session = createSession(cwdDir, { artifactsDir, planFilePath });
+		const result = await new ReadTool(session).execute("read-workspace-suffix-plan", {
+			path: "windows-packaging-plan.md",
+		});
+
+		expect(textOutput(result)).toContain("Nested workspace content.");
+		expect(textOutput(result)).not.toContain("Artifact content.");
+	});
 });
