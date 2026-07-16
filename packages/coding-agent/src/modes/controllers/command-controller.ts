@@ -1303,7 +1303,7 @@ export class CommandController {
 }
 
 const BAR_WIDTH_MAX = 24;
-const BAR_WIDTH_MIN = 4;
+const COLUMN_WIDTH_MIN = 4;
 
 function renderJobLine(job: AsyncJobSnapshotItem, now: number): string {
 	const duration = formatDuration(Math.max(0, now - job.startTime));
@@ -1571,7 +1571,7 @@ function renderUsageBar(limit: UsageLimit, uiTheme: typeof theme, barWidth: numb
 }
 
 /**
- * Pick a per-column width so n bars + a trailing amount string fit in `available` columns.
+ * Pick a per-account column width so the columns and trailing amount fit in `available`.
  * Falls back to the minimum when the terminal is too narrow rather than wrapping.
  */
 function resolveColumnWidth(count: number, available: number, trailing: number): number {
@@ -1580,10 +1580,7 @@ function resolveColumnWidth(count: number, available: number, trailing: number):
 	const gaps = count - 1;
 	const spaceForBars = available - indent - gaps - (trailing > 0 ? trailing + 1 : 0);
 	const ideal = Math.floor(spaceForBars / count);
-	const min = BAR_WIDTH_MIN;
-	const max = BAR_WIDTH_MAX;
-	if (ideal < min) return min;
-	if (ideal > max) return max;
+	if (ideal < COLUMN_WIDTH_MIN) return COLUMN_WIDTH_MIN;
 	return ideal;
 }
 
@@ -1719,6 +1716,7 @@ export function renderUsageReports(
 		const sectionCount = renderableGroups.reduce((max, g) => Math.max(max, g.sortedLimits.length), 0);
 		const sectionTrailing = renderableGroups.reduce((max, g) => Math.max(max, visibleWidth(g.amountText)), 0);
 		const sectionColumnWidth = resolveColumnWidth(sectionCount, availableWidth, sectionTrailing);
+		const sectionBarWidth = Math.min(sectionColumnWidth, BAR_WIDTH_MAX);
 
 		for (const { group, sortedLimits, sortedReports, amountText } of renderableGroups) {
 			const status = resolveAggregateStatus(sortedLimits);
@@ -1736,7 +1734,7 @@ export function renderUsageReports(
 			);
 			lines.push(`  ${accountLabels.join(" ")}`.trimEnd());
 			const bars = sortedLimits.map(limit =>
-				padColumn(renderUsageBar(limit, uiTheme, sectionColumnWidth), sectionColumnWidth),
+				padColumn(renderUsageBar(limit, uiTheme, sectionBarWidth), sectionColumnWidth),
 			);
 			lines.push(`  ${bars.join(" ")} ${amountText}`.trimEnd());
 			const resetText = sortedLimits.length <= 1 ? resolveResetRange(sortedLimits, nowMs) : null;
