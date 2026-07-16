@@ -172,6 +172,83 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * Migrate a v17 leaf rename that used to nest under a boolean parent path
+ * (`dev.autoqa.consent` → `dev.autoqaConsent`, `todo.reminders.max` →
+ * `todo.remindersMax`). Pre-rename configs left the leaf beneath the parent,
+ * so the parent path resolved to an object and truthy checks like
+ * `isAutoQaEnabled` treated a consent-only container as "enabled".
+ *
+ * Handles nested (`{ parent: { leaf } }`) and quoted-dotted (`"parent.leaf"`)
+ * legacy sources. An explicit new key always wins; a separately configured
+ * boolean parent is preserved; an irrecoverable object-valued parent (only ever
+ * a container for the old leaf) is dropped so the schema default applies.
+ */
+function migrateNestedLeafRename(
+	raw: RawSettings,
+	root: string,
+	parent: string,
+	oldLeaf: string,
+	newLeaf: string,
+	isLeafValue: (value: unknown) => boolean,
+): void {
+	const rootObj = isRecord(raw[root]) ? (raw[root] as Record<string, unknown>) : undefined;
+	const nestedParent = rootObj?.[parent];
+	const flatParent = raw[`${root}.${parent}`];
+	const oldParentPath = `${root}.${parent}`;
+
+	const candidates = [
+		rootObj?.[newLeaf],
+		raw[`${root}.${newLeaf}`],
+		isRecord(nestedParent) ? nestedParent[oldLeaf] : undefined,
+		raw[`${oldParentPath}.${oldLeaf}`],
+	];
+	const resolvedLeaf = candidates.find(isLeafValue);
+
+	const recoveredParent =
+		typeof nestedParent === "boolean" ? nestedParent : typeof flatParent === "boolean" ? flatParent : undefined;
+
+	const ensureRoot = (): Record<string, unknown> => {
+		const current = raw[root];
+		if (isRecord(current)) return current;
+		const created: Record<string, unknown> = {};
+		raw[root] = created;
+		return created;
+	};
+
+	if (resolvedLeaf !== undefined) {
+		const target = ensureRoot();
+		if (!isLeafValue(target[newLeaf])) {
+			target[newLeaf] = resolvedLeaf;
+		}
+	}
+
+	// Strip legacy leaf sources (nested + flat dotted).
+	delete raw[`${oldParentPath}.${oldLeaf}`];
+	delete raw[`${root}.${newLeaf}`];
+	if (isRecord(raw[root]) && isRecord((raw[root] as Record<string, unknown>)[parent])) {
+		const parentObj = (raw[root] as Record<string, unknown>)[parent] as Record<string, unknown>;
+		delete parentObj[oldLeaf];
+		if (Object.keys(parentObj).length === 0) {
+			delete (raw[root] as Record<string, unknown>)[parent];
+		}
+	}
+
+	// The parent path must be a boolean or absent — never a leftover object.
+	if (recoveredParent !== undefined) {
+		const target = ensureRoot();
+		if (typeof target[parent] !== "boolean") {
+			target[parent] = recoveredParent;
+		}
+	} else if (isRecord(raw[root]) && isRecord((raw[root] as Record<string, unknown>)[parent])) {
+		delete (raw[root] as Record<string, unknown>)[parent];
+	}
+	delete raw[oldParentPath];
+	if (isRecord(raw[root]) && Object.keys(raw[root] as Record<string, unknown>).length === 0) {
+		delete raw[root];
+	}
+}
+
 function modelRoleValueFromUnknown(value: unknown): string | undefined {
 	if (typeof value === "string") return value;
 	if (!Array.isArray(value)) return undefined;
@@ -1252,6 +1329,26 @@ export class Settings {
 		}
 		if (tierTouched) raw.tier = tierObj;
 		delete raw.fastModeScope;
+
+		// v17 renames that used to nest under a boolean parent path:
+		//   dev.autoqa.consent -> dev.autoqaConsent
+		//   todo.reminders.max -> todo.remindersMax
+		migrateNestedLeafRename(
+			raw,
+			"dev",
+			"autoqa",
+			"consent",
+			"autoqaConsent",
+			value => value === "unset" || value === "granted" || value === "denied",
+		);
+		migrateNestedLeafRename(
+			raw,
+			"todo",
+			"reminders",
+			"max",
+			"remindersMax",
+			value => typeof value === "number" && Number.isFinite(value),
+		);
 
 		// BM25 tool discovery removal: tools.discoveryMode / tools.essentialOverride /
 		// mcp.discoveryMode / mcp.discoveryDefaultServers are gone with no
