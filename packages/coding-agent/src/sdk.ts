@@ -2247,17 +2247,18 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			builtInRegistryToolNames.delete("edit");
 		}
 
-		let writeRegistration: Promise<void> | undefined;
-		const ensureWriteRegistered = (): Promise<void> => {
-			if (toolRegistry.has("write")) return Promise.resolve();
+		let writeRegistration: Promise<boolean> | undefined;
+		const ensureWriteRegistered = (): Promise<boolean> => {
+			if (toolRegistry.has("write")) return Promise.resolve(builtInRegistryToolNames.has("write"));
 			writeRegistration ??= (async () => {
 				const writeTool = await logger.time("createTools:write:session", BUILTIN_TOOLS.write, toolSession);
-				if (!writeTool || toolRegistry.has("write")) return;
+				if (!writeTool || toolRegistry.has("write")) return builtInRegistryToolNames.has("write");
 				toolRegistry.set(
 					writeTool.name,
 					new ExtensionToolWrapper(wrapToolWithMetaNotice(writeTool), extensionRunner) as Tool,
 				);
 				builtInRegistryToolNames.add(writeTool.name);
+				return true;
 			})().finally(() => {
 				writeRegistration = undefined;
 			});
@@ -2474,12 +2475,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					mountedTools.push(tool);
 				else topLevelToolNames.push(name);
 			}
-			toolSession.xdevRegistry.reconcile(mountedTools);
-			initialMountedXdevToolNames = mountedTools.map(tool => tool.name);
-			initialToolNames = topLevelToolNames;
-			if (initialMountedXdevToolNames.length > 0) {
-				await ensureWriteRegistered();
-				if (!initialToolNames.includes("write")) initialToolNames.push("write");
+			const writeTransportAvailable = mountedTools.length === 0 || (await ensureWriteRegistered());
+			if (writeTransportAvailable) {
+				toolSession.xdevRegistry.reconcile(mountedTools);
+				initialMountedXdevToolNames = mountedTools.map(tool => tool.name);
+				initialToolNames = topLevelToolNames;
+				if (initialMountedXdevToolNames.length > 0 && !initialToolNames.includes("write"))
+					initialToolNames.push("write");
+			} else {
+				toolSession.xdevRegistry.reconcile([]);
 			}
 		}
 

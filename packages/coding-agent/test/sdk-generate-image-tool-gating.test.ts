@@ -205,6 +205,30 @@ describe("generate_image tool gating", () => {
 		expect(session.getXdevToolEntries().map(entry => entry.name)).not.toContain(ambientTool.name);
 	});
 
+	it("keeps ambient tools top-level when write is shadowed by a custom tool", async () => {
+		const ambientTool = customTool("ambient_search");
+		const shadowWrite = customTool("write");
+		const session = await sessionWithCustomTools(["read"], [ambientTool, shadowWrite]);
+
+		expect(session.hasBuiltInTool("write")).toBe(false);
+		expect(session.getActiveToolNames()).toContain(ambientTool.name);
+		expect(session.getXdevToolEntries().map(entry => entry.name)).not.toContain(ambientTool.name);
+
+		const rpcTool: AgentTool = {
+			name: "rpc_shadow_search",
+			label: "RPC Shadow Search",
+			description: "Search RPC host data",
+			parameters: type({}),
+			loadMode: "discoverable",
+			async execute() {
+				return { content: [] };
+			},
+		};
+		await session.refreshRpcHostTools([rpcTool]);
+		expect(session.hasBuiltInTool("write")).toBe(false);
+		expect(session.getActiveToolNames()).toContain(rpcTool.name);
+		expect(session.getXdevToolEntries().map(entry => entry.name)).not.toContain(rpcTool.name);
+	});
 	it("activates write when an RPC host tool mounts under xd://", async () => {
 		const { session } = await createAgentSession({
 			cwd: registryDir,

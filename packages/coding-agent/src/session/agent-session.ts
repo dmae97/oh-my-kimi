@@ -844,7 +844,7 @@ export interface AgentSessionConfig {
 	/** Update tool-session predicates that render guidance from the live active tool set. */
 	setActiveToolNames?: (names: Iterable<string>) => void;
 	/** Register the write transport lazily when runtime xdev mounts first need it. */
-	ensureWriteRegistered?: () => Promise<void>;
+	ensureWriteRegistered?: () => Promise<boolean>;
 	/** Current session pre-LLM message transform pipeline */
 	transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => AgentMessage[] | Promise<AgentMessage[]>;
 	/**
@@ -1942,7 +1942,7 @@ export class AgentSession {
 	#getLocalCalendarDate: () => string;
 	#getMcpServerInstructions: (() => Map<string, string> | undefined) | undefined;
 	#setActiveToolNames: ((names: Iterable<string>) => void) | undefined;
-	#ensureWriteRegistered: (() => Promise<void>) | undefined;
+	#ensureWriteRegistered: (() => Promise<boolean>) | undefined;
 	#disconnectOwnedMcpManager: (() => Promise<void>) | undefined;
 	#presentationPinnedToolNames: ReadonlySet<string> | undefined;
 	#runtimeSelectedToolNames: ReadonlySet<string> | undefined;
@@ -6759,22 +6759,35 @@ export class AgentSession {
 
 	async #applyActiveToolsByName(toolNames: string[]): Promise<void> {
 		toolNames = normalizeToolNames(toolNames);
-		const tools: AgentTool[] = [];
-		const validToolNames: string[] = [];
-		const mountedTools: AgentTool[] = [];
+		const selectedTools = toolNames.flatMap(name => {
+			const tool = this.#toolRegistry.get(name);
+			return tool ? [{ name, tool }] : [];
+		});
 		const xdevReadAvailable =
 			(this.#presentationPinnedToolNames === undefined && this.#runtimeSelectedToolNames === undefined) ||
 			this.#presentationPinnedToolNames?.has("read") === true ||
 			this.#runtimeSelectedToolNames?.has("read") === true;
+		const isPresentationPinned = (name: string): boolean =>
+			this.#presentationPinnedToolNames?.has(name) === true || this.#runtimeSelectedToolNames?.has(name) === true;
+		const mountCandidates = selectedTools.filter(
+			({ name, tool }) =>
+				this.#xdevRegistry !== undefined &&
+				xdevReadAvailable &&
+				!isPresentationPinned(name) &&
+				isMountableUnderXdev(tool),
+		);
 
-		for (const name of toolNames) {
-			const tool = this.#toolRegistry.get(name);
-			if (!tool) continue;
-			// Discoverable tools are presented as `xd://` devices (kept out of the
-			// top-level schema) when read transport is available; presentation pins stay top-level.
-			const presentationPinned =
-				this.#presentationPinnedToolNames?.has(name) === true || this.#runtimeSelectedToolNames?.has(name) === true;
-			if (this.#xdevRegistry && xdevReadAvailable && !presentationPinned && isMountableUnderXdev(tool)) {
+		let builtInWriteAvailable = this.#builtInToolNames.has("write");
+		if (mountCandidates.length > 0 && !builtInWriteAvailable) {
+			builtInWriteAvailable = (await this.#ensureWriteRegistered?.()) === true;
+			if (builtInWriteAvailable) this.#builtInToolNames.add("write");
+		}
+		const mountNames = builtInWriteAvailable ? new Set(mountCandidates.map(({ name }) => name)) : new Set<string>();
+		const tools: AgentTool[] = [];
+		const validToolNames: string[] = [];
+		const mountedTools: AgentTool[] = [];
+		for (const { name, tool } of selectedTools) {
+			if (mountNames.has(name)) {
 				mountedTools.push(tool);
 			} else {
 				tools.push(this.#wrapToolForAcpPermission(tool));
@@ -6782,27 +6795,29 @@ export class AgentSession {
 			}
 		}
 
-		const pinnedWrite =
-			this.#presentationPinnedToolNames?.has("write") === true ||
-			this.#runtimeSelectedToolNames?.has("write") === true;
+		const pinnedWrite = isPresentationPinned("write");
 		const activeDeferrableTool = tools.some(tool => tool.deferrable === true);
-		const transportNeeded =
-			mountedTools.length > 0 || activeDeferrableTool || this.#planModeState?.enabled === true || pinnedWrite;
-		if (transportNeeded) {
-			await this.#ensureWriteRegistered?.();
+		const transportNeeded = mountedTools.length > 0 || activeDeferrableTool || this.#planModeState?.enabled === true;
+		if (transportNeeded && !builtInWriteAvailable) {
+			builtInWriteAvailable = (await this.#ensureWriteRegistered?.()) === true;
+			if (builtInWriteAvailable) this.#builtInToolNames.add("write");
+		}
+		if (transportNeeded && builtInWriteAvailable) {
 			const write = this.#toolRegistry.get("write");
 			if (write && !validToolNames.includes("write")) {
 				tools.push(this.#wrapToolForAcpPermission(write));
 				validToolNames.push("write");
 			}
-		} else if (this.#presentationPinnedToolNames !== undefined || this.#runtimeSelectedToolNames !== undefined) {
+		} else if (
+			!pinnedWrite &&
+			(this.#presentationPinnedToolNames !== undefined || this.#runtimeSelectedToolNames !== undefined)
+		) {
 			const writeNameIndex = validToolNames.indexOf("write");
-			if (writeNameIndex >= 0) validToolNames.splice(writeNameIndex, 1);
-			const writeToolIndex = tools.findIndex(tool => tool.name === "write");
+			if (writeNameIndex >= 0 && this.#builtInToolNames.has("write")) validToolNames.splice(writeNameIndex, 1);
+			const writeToolIndex = tools.findIndex(tool => tool.name === "write" && this.#builtInToolNames.has("write"));
 			if (writeToolIndex >= 0) tools.splice(writeToolIndex, 1);
 		}
 
-		// Reconcile dynamic `xd://` mounts; removed devices must not stay callable.
 		const previousMounted = this.#mountedXdevToolNames;
 		this.#mountedXdevToolNames = new Set(mountedTools.map(tool => tool.name));
 		this.#xdevRegistry?.reconcile(mountedTools);
@@ -6810,14 +6825,10 @@ export class AgentSession {
 		this.#setActiveToolNames?.(validToolNames);
 		this.agent.setTools(tools);
 
-		// Rebuild only when the top-level tool signature changes. Mount deltas are
-		// announced separately so provider prompt-cache prefixes stay stable.
 		if (this.#rebuildSystemPrompt) {
 			const signature = this.#computeAppliedToolSignature(validToolNames, tools);
 			if (signature !== this.#lastAppliedToolSignature) {
-				if (this.#lastAppliedToolSignature !== undefined) {
-					this.#clearInheritedProviderPromptCacheKey();
-				}
+				if (this.#lastAppliedToolSignature !== undefined) this.#clearInheritedProviderPromptCacheKey();
 				const built = await this.#rebuildSystemPrompt(validToolNames, this.#toolRegistry);
 				this.#baseSystemPrompt = built.systemPrompt;
 				this.#baseSystemPromptBeforeMemoryPromotion = undefined;
