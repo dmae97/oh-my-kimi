@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Windows stdio MCP servers launched through `.cmd` shims failing with `Transport closed`; `cmd.exe /c` now receives the command and arguments as separate spawn arguments instead of a `/s /c` string with a quoted command token ([#5696](https://github.com/can1357/oh-my-pi/issues/5696)).
+
 ## [17.0.1] - 2026-07-16
 
 ### Changed

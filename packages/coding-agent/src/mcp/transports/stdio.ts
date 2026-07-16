@@ -203,23 +203,6 @@ async function resolveWindowsNpmShimCommand(
 	};
 }
 
-function quoteCmdArg(value: string): string {
-	if (value.length === 0) return '""';
-	let result = '"';
-	for (const char of value) {
-		if (char === '"') {
-			result += '^"';
-		} else if (char === "^") {
-			result += "^^";
-		} else if (char === "%") {
-			result += "^%";
-		} else {
-			result += char;
-		}
-	}
-	return `${result}"`;
-}
-
 function isWindowsBatchCommand(command: string): boolean {
 	return WINDOWS_BATCH_EXTENSIONS.has(path.extname(command).toLowerCase());
 }
@@ -227,12 +210,6 @@ function isWindowsBatchCommand(command: string): boolean {
 function resolveComSpec(env: Record<string, string | undefined>): string {
 	const comspec = getCaseInsensitiveEnv(env, "COMSPEC");
 	return comspec && comspec.length > 0 ? comspec : "cmd.exe";
-}
-
-/** `cmd /s /c` strips one outer quote pair; keep inner argv quotes intact. */
-function buildCmdExeCommand(command: string, args: readonly string[]): string {
-	const quotedCommand = [command, ...args].map(quoteCmdArg).join(" ");
-	return `"${quotedCommand}"`;
 }
 
 /**
@@ -271,7 +248,7 @@ export async function resolveStdioSpawnCommand(
 	if (!needsCmdExe) return { cmd: [resolvedCommand, ...args], windowsHide, detached };
 
 	return {
-		cmd: [resolveComSpec(options.env), "/d", "/s", "/c", buildCmdExeCommand(resolvedCommand, args)],
+		cmd: [resolveComSpec(options.env), "/d", "/c", resolvedCommand, ...args],
 		windowsHide,
 		detached,
 	};

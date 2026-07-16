@@ -25,13 +25,7 @@ describe("resolveStdioSpawnCommand", () => {
 				},
 			);
 
-			expect(result.cmd).toEqual([
-				"C:\\Windows\\System32\\cmd.exe",
-				"/d",
-				"/s",
-				"/c",
-				`""${shim}" "serve" "--mcp""`,
-			]);
+			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/c", shim, "serve", "--mcp"]);
 			expect(result.windowsHide).toBe(true);
 			expect(result.detached).toBe(false);
 		} finally {
@@ -61,7 +55,7 @@ describe("resolveStdioSpawnCommand", () => {
 				},
 			);
 
-			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/s", "/c", `""${localShim}" "serve""`]);
+			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/c", localShim, "serve"]);
 			expect(result.windowsHide).toBe(true);
 			expect(result.detached).toBe(false);
 		} finally {
@@ -112,7 +106,7 @@ describe("resolveStdioSpawnCommand", () => {
 				},
 			);
 
-			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/s", "/c", `""${shim}" "-y" "mcp-gdb""`]);
+			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/c", shim, "-y", "mcp-gdb"]);
 			expect(result.windowsHide).toBe(false);
 			expect(result.detached).toBe(false);
 		} finally {
@@ -206,7 +200,7 @@ describe("resolveStdioSpawnCommand", () => {
 				},
 			);
 
-			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/s", "/c", `""${shim}" "serve""`]);
+			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/c", shim, "serve"]);
 			expect(result.windowsHide).toBe(true);
 			expect(result.detached).toBe(false);
 		} finally {
@@ -214,7 +208,7 @@ describe("resolveStdioSpawnCommand", () => {
 		}
 	});
 
-	it("escapes percent-delimited args before routing .cmd shims through cmd.exe", async () => {
+	it("preserves percent-delimited args when routing .cmd shims through cmd.exe", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-percent-"));
 		try {
 			const shim = path.join(tempDir, "codegraph.cmd");
@@ -236,9 +230,11 @@ describe("resolveStdioSpawnCommand", () => {
 			expect(result.cmd).toEqual([
 				"C:\\Windows\\System32\\cmd.exe",
 				"/d",
-				"/s",
 				"/c",
-				`""${shim}" "serve" "--header" "Authorization=^%TOKEN^%""`,
+				shim,
+				"serve",
+				"--header",
+				"Authorization=%TOKEN%",
 			]);
 			expect(result.windowsHide).toBe(true);
 			expect(result.detached).toBe(false);
@@ -247,7 +243,7 @@ describe("resolveStdioSpawnCommand", () => {
 		}
 	});
 
-	it("escapes quoted JSON args before routing .cmd shims through cmd.exe", async () => {
+	it("preserves quoted JSON args when routing .cmd shims through cmd.exe", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-quotes-"));
 		try {
 			const shim = path.join(tempDir, "codegraph.cmd");
@@ -266,13 +262,7 @@ describe("resolveStdioSpawnCommand", () => {
 				},
 			);
 
-			expect(result.cmd).toEqual([
-				"C:\\Windows\\System32\\cmd.exe",
-				"/d",
-				"/s",
-				"/c",
-				`""${shim}" "--config" "{^"a^":^"b&c|d^"}""`,
-			]);
+			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/c", shim, "--config", '{"a":"b&c|d"}']);
 			expect(result.windowsHide).toBe(true);
 			expect(result.detached).toBe(false);
 		} finally {
@@ -307,13 +297,7 @@ describe("resolveStdioSpawnCommand", () => {
 				},
 			);
 
-			expect(result.cmd).toEqual([
-				"C:\\Windows\\System32\\cmd.exe",
-				"/d",
-				"/s",
-				"/c",
-				`""${shim}" "serve" "--mcp""`,
-			]);
+			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/c", shim, "serve", "--mcp"]);
 			expect(result.windowsHide).toBe(true);
 			expect(result.detached).toBe(false);
 		} finally {
@@ -321,7 +305,7 @@ describe("resolveStdioSpawnCommand", () => {
 		}
 	});
 
-	it("wraps explicit Windows .cmd commands with cmd.exe while preserving quoted argv", async () => {
+	it("passes explicit Windows .cmd commands and argv separately to cmd.exe", async () => {
 		const result = await resolveStdioSpawnCommand(
 			{ type: "stdio", command: "codegraph.cmd", args: ["serve", "--mcp"] },
 			{
@@ -335,13 +319,7 @@ describe("resolveStdioSpawnCommand", () => {
 			},
 		);
 
-		expect(result.cmd).toEqual([
-			"C:\\Windows\\System32\\cmd.exe",
-			"/d",
-			"/s",
-			"/c",
-			`""codegraph.cmd" "serve" "--mcp""`,
-		]);
+		expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/c", "codegraph.cmd", "serve", "--mcp"]);
 		expect(result.windowsHide).toBe(true);
 		expect(result.detached).toBe(false);
 	});
@@ -371,9 +349,10 @@ describe("resolveStdioSpawnCommand", () => {
 		expect(result.cmd).toEqual([
 			"C:\\Windows\\System32\\cmd.exe",
 			"/d",
-			"/s",
 			"/c",
-			`""npx" "-y" "cloakbrowser-mcp@latest""`,
+			"npx",
+			"-y",
+			"cloakbrowser-mcp@latest",
 		]);
 		expect(result.windowsHide).toBe(true);
 		expect(result.detached).toBe(false);
