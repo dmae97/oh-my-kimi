@@ -3,7 +3,6 @@ import type { TUI } from "@oh-my-pi/pi-tui";
 import { initTheme } from "../theme/theme";
 import { LoginDialogComponent } from "./login-dialog";
 
-
 /** Minimal TUI stub — the dialog only calls requestRender/setFocus. */
 function makeDialog(): LoginDialogComponent {
 	const tui = { requestRender() {}, setFocus() {} } as unknown as TUI;

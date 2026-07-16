@@ -18,7 +18,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { validateLoadedBindings } from "../native/loader-state.js";
 
-const unusedCandidate = "/home/u/.bun/install/global/node_modules/@oh-my-pi/pi-natives-linux-x64/pi_natives.linux-x64.node";
+const unusedCandidate =
+	"/home/u/.bun/install/global/node_modules/@oh-my-pi/pi-natives-linux-x64/pi_natives.linux-x64.node";
 
 async function withCandidate(contents: string, test: (candidate: string) => void) {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-natives-sentinel-"));
@@ -62,7 +63,9 @@ describe("issue 4812: pi-natives sentinel process-stale diagnosis", () => {
 		const ctx = ctxFor("16.3.11");
 		const stale = { __piNativesV16_3_10: () => {}, grep: () => {} };
 		await withCandidate("__piNativesV16_3_10", candidate => {
-			expect(() => validateLoadedBindings(ctx, stale, candidate)).toThrow("from a different release than this loader");
+			expect(() => validateLoadedBindings(ctx, stale, candidate)).toThrow(
+				"from a different release than this loader",
+			);
 			expect(() => validateLoadedBindings(ctx, stale, candidate)).toThrow("reinstall to re-sync");
 			expect(() => validateLoadedBindings(ctx, stale, candidate)).not.toThrow("restart omp");
 		});

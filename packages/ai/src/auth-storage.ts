@@ -2907,10 +2907,7 @@ export class AuthStorage {
 					};
 				} catch (error) {
 					const errorMsg = String(error);
-					if (
-						request.credential.expiresAt <= Date.now() &&
-						AIError.isDefinitiveOAuthFailure(errorMsg)
-					) {
+					if (request.credential.expiresAt <= Date.now() && AIError.isDefinitiveOAuthFailure(errorMsg)) {
 						// The current access token is unusable, so don't replay an
 						// old usage report after its rotating refresh token is revoked.
 						// This changes cache state only; usage polling remains

@@ -565,7 +565,6 @@ describe("AuthStorage usage cache: terminal refresh failure", () => {
 			cleanExpiredCache() {},
 		};
 
-
 		const storage = new AuthStorage(store, {
 			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
 			refreshOAuthCredential: async () => {

@@ -3454,7 +3454,12 @@ describe("agentLoop empty toolUse stop (issue #5600)", () => {
 				stream.push({ type: "done", reason: "stop", message: complete });
 				return stream;
 			}
-			const completed = { type: "toolCall" as const, id: "tc-complete", name: "echo", arguments: { value: "complete" } };
+			const completed = {
+				type: "toolCall" as const,
+				id: "tc-complete",
+				name: "echo",
+				arguments: { value: "complete" },
+			};
 			const incomplete = { type: "toolCall" as const, id: "tc-partial", name: "echo", arguments: {} };
 			const partial = createAssistantMessage([completed, incomplete], "toolUse");
 			stream.push({ type: "start", partial });
@@ -3475,6 +3480,8 @@ describe("agentLoop empty toolUse stop (issue #5600)", () => {
 		const messages = await stream.result();
 		const firstAssistant = messages.find((m): m is AssistantMessage => m.role === "assistant");
 		if (!firstAssistant) throw new Error("expected an assistant message");
-		expect(firstAssistant.content.filter(block => block.type === "toolCall").map(block => block.id)).toEqual(["tc-complete"]);
+		expect(firstAssistant.content.filter(block => block.type === "toolCall").map(block => block.id)).toEqual([
+			"tc-complete",
+		]);
 	});
 });

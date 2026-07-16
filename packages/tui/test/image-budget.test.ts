@@ -781,7 +781,11 @@ describe("TUI inline-image budget", () => {
 			scheduleRender: (callback: () => void, delayMs: number) => {
 				const entry = { delayMs, callback, canceled: false };
 				scheduled.push(entry);
-				return { cancel: () => { entry.canceled = true; } };
+				return {
+					cancel: () => {
+						entry.canceled = true;
+					},
+				};
 			},
 		};
 

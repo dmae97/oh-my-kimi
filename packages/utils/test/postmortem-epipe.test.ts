@@ -17,8 +17,7 @@ if (childFlagIndex >= 0) {
 	void Promise.reject(err);
 	const keepAlive = Promise.withResolvers<void>();
 	await keepAlive.promise;
-}
-else if (process.argv.includes(raceChildFlag)) {
+} else if (process.argv.includes(raceChildFlag)) {
 	const marker = process.argv[process.argv.indexOf(raceChildFlag) + 1];
 	if (!marker) throw new Error("Missing cleanup marker path");
 	let cleanupComplete = false;

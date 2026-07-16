@@ -164,7 +164,9 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		};
 	}
 
-	async function createCompletedAdvisorSession(severity: "concern" | "blocker" = "concern"): Promise<CompletedAdvisorHarness> {
+	async function createCompletedAdvisorSession(
+		severity: "concern" | "blocker" = "concern",
+	): Promise<CompletedAdvisorHarness> {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({
 			responses: [

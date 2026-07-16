@@ -3747,10 +3747,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		const sessionId = this.sessionManager.getSessionId();
-		if (
-			this.#pendingCommandOutput.length > 0 &&
-			this.#pendingCommandOutputSessionId !== sessionId
-		) {
+		if (this.#pendingCommandOutput.length > 0 && this.#pendingCommandOutputSessionId !== sessionId) {
 			this.#pendingCommandOutput = [];
 		}
 		this.#pendingCommandOutputSessionId = sessionId;

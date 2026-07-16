@@ -880,7 +880,6 @@ export class SessionSelectorComponent extends Container {
 		this.#inputLocked = true;
 	}
 
-
 	/**
 	 * Dispose the session list explicitly: while the delete-confirmation dialog
 	 * is mounted the list is detached from the child tree, so Container's

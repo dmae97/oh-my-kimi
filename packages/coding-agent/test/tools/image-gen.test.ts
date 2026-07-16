@@ -513,7 +513,8 @@ describe("imageGenTool", () => {
 					hasNonEnvCredential: (provider: string) => provider === "xai-oauth",
 					rotateSessionCredential: async () => false,
 				},
-				resolver: (provider: string) => async () => (provider === "google" ? "test-gemini-token" : "test-xai-token"),
+				resolver: (provider: string) => async () =>
+					provider === "google" ? "test-gemini-token" : "test-xai-token",
 			} as unknown as ModelRegistry,
 			model,
 			isIdle: () => true,
