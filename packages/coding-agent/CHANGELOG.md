@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Plan Review capturing mouse drags as pointer events, preventing native terminal text selection ([#5711](https://github.com/can1357/oh-my-pi/issues/5711)).
+
 ## [17.0.1] - 2026-07-16
 
 ### Changed

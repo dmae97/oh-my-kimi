@@ -3310,6 +3310,48 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
+		it("leaves native text selection available for selection-first fullscreen overlays", async () => {
+			const term = new VirtualTerminal(40, 8, 200);
+			const writes = captureWrites(term);
+			const tui = new TUI(term);
+			tui.addChild(new MutableLinesComponent(rows("base-", 8)));
+
+			try {
+				tui.start();
+				await settle(term);
+
+				const showFrom = writes.length;
+				const handle = tui.showOverlay(new MutableLinesComponent(["SELECTABLE PLAN TEXT"]), {
+					anchor: "bottom-center",
+					width: "100%",
+					maxHeight: "100%",
+					margin: 0,
+					fullscreen: true,
+					mouseTracking: false,
+				});
+				await settle(term);
+
+				const modalWrites = writes.slice(showFrom).join("");
+				expect(modalWrites).toContain("\x1b[?1049h");
+				expect(modalWrites).not.toContain("\x1b[?1000h");
+				expect(modalWrites).not.toContain("\x1b[?1003h");
+				expect(modalWrites).not.toContain("\x1b[?1006h");
+				expect(visible(term).some(line => line.includes("SELECTABLE PLAN TEXT"))).toBeTrue();
+
+				const hideFrom = writes.length;
+				handle.hide();
+				await settle(term);
+
+				const hideWrites = writes.slice(hideFrom).join("");
+				expect(hideWrites).toContain("\x1b[?1049l");
+				expect(hideWrites).not.toContain("\x1b[?1000l");
+				expect(hideWrites).not.toContain("\x1b[?1003l");
+				expect(hideWrites).not.toContain("\x1b[?1006l");
+			} finally {
+				tui.stop();
+			}
+		});
+
 		it("falls back to kittyEnableSequence for legacy custom terminals", async () => {
 			const term = new LegacyKeyboardVirtualTerminal(40, 8, 200);
 			const writes = captureWrites(term);
