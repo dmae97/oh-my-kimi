@@ -1,5 +1,6 @@
 import { $env } from "@oh-my-pi/pi-utils";
 import type { ResponseInput, ResponseInputItem } from "./providers/openai-responses-wire";
+import { redactSensitiveCredentials } from "./providers/transform-messages";
 import type { CacheRetention, OpenAIResponsesHistoryPayload, ProviderPayload } from "./types";
 
 type OpenAIResponsesReplayItem = ResponseInput[number];
@@ -9,7 +10,9 @@ export { isRecord } from "@oh-my-pi/pi-utils";
 export function normalizeSystemPrompts(systemPrompt: readonly string[] | string | undefined | null): string[] {
 	if (systemPrompt === undefined || systemPrompt === null) return [];
 	const prompts = Array.isArray(systemPrompt) ? systemPrompt : typeof systemPrompt === "string" ? [systemPrompt] : [];
-	return prompts.map(prompt => prompt.toWellFormed()).filter(prompt => prompt.trim().length > 0);
+	return prompts
+		.map(prompt => redactSensitiveCredentials(prompt.toWellFormed()))
+		.filter(prompt => prompt.trim().length > 0);
 }
 
 export function normalizeToolCallId(id: string): string {
