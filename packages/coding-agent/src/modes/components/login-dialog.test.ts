@@ -3,12 +3,6 @@ import type { TUI } from "@oh-my-pi/pi-tui";
 import { initTheme } from "../theme/theme";
 import { LoginDialogComponent } from "./login-dialog";
 
-const BRACKETED_PASTE_START = "\x1b[200~";
-const BRACKETED_PASTE_END = "\x1b[201~";
-
-function bracketedPaste(text: string): string {
-	return `${BRACKETED_PASTE_START}${text}${BRACKETED_PASTE_END}`;
-}
 
 /** Minimal TUI stub — the dialog only calls requestRender/setFocus. */
 function makeDialog(): LoginDialogComponent {
@@ -26,13 +20,13 @@ describe("LoginDialogComponent manual code input", () => {
 		// URL through the focused dialog. Without a mounted input, the paste is
 		// dropped and login never completes.
 		const dialog = makeDialog();
-		dialog.showAuth("https://auth.openai.com/oauth/authorize?state=abc", "instructions");
+		dialog.showProgress("Waiting for callback");
 
 		const pending = dialog.showManualInput("Paste the authorization code:");
 		expect(dialog.render(80).join("\n")).toContain("Paste the authorization code");
 
 		const url = "http://localhost:1455/auth/callback?code=THECODE&state=abc";
-		dialog.handleInput(bracketedPaste(url));
+		dialog.pasteText(url);
 		dialog.handleInput("\r");
 
 		expect(await pending).toBe(url);
@@ -42,7 +36,7 @@ describe("LoginDialogComponent manual code input", () => {
 		// The OAuth callback loop re-invokes onManualCodeInput after an invalid
 		// paste; the second prompt must not append a duplicate input/hint block.
 		const dialog = makeDialog();
-		dialog.showAuth("https://auth.openai.com/oauth/authorize?state=abc");
+		dialog.showProgress("Waiting for callback");
 
 		const first = dialog.showManualInput("Paste the code:");
 		dialog.handleInput("garbage");
@@ -56,7 +50,7 @@ describe("LoginDialogComponent manual code input", () => {
 		expect(rendered).not.toContain("garbage");
 
 		const url = "http://localhost:1455/auth/callback?code=OK&state=abc";
-		dialog.handleInput(url);
+		dialog.pasteText(url);
 		dialog.handleInput("\r");
 		expect(await second).toBe(url);
 	});
