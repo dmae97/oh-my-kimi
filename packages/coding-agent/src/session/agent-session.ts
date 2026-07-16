@@ -3110,11 +3110,11 @@ export class AgentSession {
 	/**
 	 * Route one accepted advice note from `advisor` to the primary. Concern and
 	 * blocker interrupt the running agent through the steering channel; once the
-	 * loop has yielded, `triggerTurn` resumes it. If the loop already ended with a
-	 * terminal text answer and no queued work remains, the note is preserved as an
-	 * advisor card instead of waking a duplicate completion turn. After a deliberate
-	 * user interrupt auto-resume is suppressed while idle/unwinding (the note
-	 * becomes a preserved card re-entering on resume); a live-streaming turn is
+	 * loop has yielded, `triggerTurn` resumes it. After a terminal text answer with
+	 * no queued work, a concern is preserved as a visible advisor card, while a
+	 * blocker wakes the primary to acknowledge work it handed off incorrectly.
+	 * After a deliberate user interrupt auto-resume is suppressed while idle/unwinding
+	 * (the note becomes a preserved card re-entering on resume); a live-streaming turn
 	 * steered in directly. A plain nit always rides the non-interrupting YieldQueue
 	 * aside. Suppression by the per-advisor emission guard drops the note silently —
 	 * the model still saw `Recorded.`, so it isn't tempted to rephrase the same note
