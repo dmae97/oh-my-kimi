@@ -24,6 +24,37 @@ afterEach(async () => {
 	setPreferredImageProvider("auto");
 });
 
+function createAntigravityXAIContext(model: Model | undefined, fetchMock: typeof fetch): CustomToolContext {
+	const antigravityCredentials = JSON.stringify({ token: "test-antigravity-token", projectId: "test-project" });
+	return {
+		fetch: fetchMock,
+		sessionManager: {
+			getCwd: () => "/tmp",
+			getSessionId: () => "test-session",
+		} as unknown as ReadonlySessionManager,
+		modelRegistry: {
+			getApiKey: async () => undefined,
+			getApiKeyForProvider: async (provider: string) => {
+				if (provider === "google-antigravity") return antigravityCredentials;
+				if (provider === "xai-oauth") return "test-xai-token";
+				return undefined;
+			},
+			getProviderBaseUrl: () => undefined,
+			getAll: () => [],
+			authStorage: {
+				hasNonEnvCredential: (provider: string) => provider === "xai-oauth",
+				rotateSessionCredential: async () => false,
+			},
+			resolver: (provider: string) => async () =>
+				provider === "google-antigravity" ? antigravityCredentials : "test-xai-token",
+		} as unknown as ModelRegistry,
+		model,
+		isIdle: () => true,
+		hasQueuedMessages: () => false,
+		abort: () => {},
+	};
+}
+
 describe("imageGenTool", () => {
 	it("registers without resolving image provider credentials", async () => {
 		const modelRegistry = {
@@ -332,5 +363,115 @@ describe("imageGenTool", () => {
 		const savedPath = result.details?.imagePaths[0];
 		if (!savedPath) throw new Error("Expected generated image path");
 		expect(await Bun.file(savedPath).bytes()).toEqual(Buffer.from("fake-xai-image"));
+	});
+
+	it("prefers the active xAI provider over unrelated credentialed providers", async () => {
+		const requestUrls: string[] = [];
+		const fetchMock = (async (input: string | URL | Request) => {
+			const url = input.toString();
+			requestUrls.push(url);
+			if (!url.startsWith("https://api.x.ai/")) {
+				throw new Error(`Unexpected provider request: ${url}`);
+			}
+			return new Response(
+				JSON.stringify({ data: [{ b64_json: Buffer.from("active-xai-image").toString("base64") }] }),
+				{ status: 200, headers: { "content-type": "application/json" } },
+			);
+		}) as unknown as typeof fetch;
+		const model = {
+			api: "openai-completions",
+			provider: "xai-oauth",
+			id: "grok-4.5",
+			name: "Grok 4.5",
+			baseUrl: "https://api.x.ai/v1",
+		} as Model;
+		const ctx = createAntigravityXAIContext(model, fetchMock);
+
+		const result = await imageGenTool.execute("call-active-xai", { subject: "a cat" }, undefined, ctx);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+
+		expect(requestUrls).toEqual(["https://api.x.ai/v1/images/generations"]);
+		expect(result.details?.provider).toBe("xai");
+	});
+
+	it("falls back to xAI after the active OpenAI provider HTTP failure", async () => {
+		const requestUrls: string[] = [];
+		const fetchMock = (async (input: string | URL | Request) => {
+			const url = input.toString();
+			requestUrls.push(url);
+			if (url.startsWith("https://api.openai.com/")) {
+				return new Response(JSON.stringify({ error: { message: "model unavailable" } }), {
+					status: 404,
+					headers: { "content-type": "application/json" },
+				});
+			}
+			return new Response(
+				JSON.stringify({ data: [{ b64_json: Buffer.from("openai-fallback-xai-image").toString("base64") }] }),
+				{ status: 200, headers: { "content-type": "application/json" } },
+			);
+		}) as unknown as typeof fetch;
+		const model = {
+			api: "openai-responses",
+			provider: "openai",
+			id: "gpt-5.5",
+			name: "GPT 5.5",
+			baseUrl: "https://api.openai.com/v1",
+		} as Model;
+		const ctx: CustomToolContext = {
+			fetch: fetchMock,
+			sessionManager: {
+				getCwd: () => "/tmp",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKey: async () => "test-openai-key",
+				getApiKeyForProvider: async (provider: string) => (provider === "xai-oauth" ? "test-xai-token" : undefined),
+				getProviderBaseUrl: () => undefined,
+				getAll: () => [],
+				authStorage: {
+					hasNonEnvCredential: (provider: string) => provider === "xai-oauth",
+					rotateSessionCredential: async () => false,
+				},
+				resolver: () => async () => "test-openai-key",
+			} as unknown as ModelRegistry,
+			model,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		const result = await imageGenTool.execute("call-openai-fallback-xai", { subject: "a cat" }, undefined, ctx);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+
+		expect(requestUrls).toEqual(["https://api.openai.com/v1/responses", "https://api.x.ai/v1/images/generations"]);
+		expect(result.details?.provider).toBe("xai");
+	});
+
+	it("falls back to xAI after an earlier provider HTTP failure", async () => {
+		const requestUrls: string[] = [];
+		const fetchMock = (async (input: string | URL | Request) => {
+			const url = input.toString();
+			requestUrls.push(url);
+			if (url.includes("streamGenerateContent")) {
+				return new Response(JSON.stringify({ error: { message: "image endpoint unavailable" } }), {
+					status: 404,
+					headers: { "content-type": "application/json" },
+				});
+			}
+			return new Response(
+				JSON.stringify({ data: [{ b64_json: Buffer.from("fallback-xai-image").toString("base64") }] }),
+				{ status: 200, headers: { "content-type": "application/json" } },
+			);
+		}) as unknown as typeof fetch;
+		const ctx = createAntigravityXAIContext(undefined, fetchMock);
+
+		const result = await imageGenTool.execute("call-fallback-xai", { subject: "a cat" }, undefined, ctx);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+
+		expect(requestUrls).toEqual([
+			"https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+			"https://api.x.ai/v1/images/generations",
+		]);
+		expect(result.details?.provider).toBe("xai");
 	});
 });
