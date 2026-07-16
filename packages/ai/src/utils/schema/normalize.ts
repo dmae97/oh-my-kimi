@@ -29,6 +29,8 @@ import { decontaminateZodInstance } from "./zod-decontaminate";
 export type ResidualSchemaIncompatibility = "type-array" | "type-null" | "nullable" | "combiners" | "not";
 
 export interface NormalizeSchemaOptions {
+	/** Coerce JSON Schema boolean subschemas for providers whose wire cannot encode them. */
+	coerceBooleanSubschemas?: boolean;
 	unsupportedFields: (key: string) => boolean;
 	normalizeFieldNames: boolean;
 	collapseNullFields: boolean;
@@ -286,7 +288,7 @@ function normalizeSchemaNode(value: unknown, options: NormalizeSchemaWalkOptions
 		// (issue #5604): `true` accepts anything -> `{}`, `false` accepts nothing
 		// -> `{ not: {} }`. In a keyword slot (`nullable`, `enum` entry, …) a
 		// boolean is a plain value and is left untouched.
-		if (!options.booleanIsSubschema) return value;
+		if (!options.coerceBooleanSubschemas || !options.booleanIsSubschema) return value;
 		return value ? {} : { not: {} };
 	}
 	if (!isJsonObject(value)) {
@@ -991,6 +993,7 @@ export function normalizeSchema(value: unknown, options: NormalizeSchemaOptions)
 
 export function normalizeSchemaForGoogle(value: unknown): unknown {
 	return normalizeSchema(value, {
+		coerceBooleanSubschemas: true,
 		unsupportedFields: isGoogleUnsupportedSchemaField,
 		normalizeFieldNames: true,
 		collapseNullFields: true,
@@ -1012,6 +1015,7 @@ export function normalizeSchemaForGoogle(value: unknown): unknown {
 
 export function normalizeSchemaForCCA(value: unknown): unknown {
 	return normalizeSchema(value, {
+		coerceBooleanSubschemas: true,
 		unsupportedFields: isGoogleUnsupportedSchemaField,
 		normalizeFieldNames: true,
 		collapseNullFields: false,

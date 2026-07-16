@@ -315,8 +315,7 @@ describe("normalizeSchemaForGoogle", () => {
 		expect(normalizeSchemaForGoogle(input)).toEqual(expected);
 		expect(normalizeSchemaForCCA(input)).toEqual(expected);
 
-		// The MCP path keeps conditional keywords and still coerces their boolean
-		// subschema entries.
+		// MCP accepts native JSON Schema booleans, so it preserves them.
 		expect(
 			normalizeSchemaForMCP({
 				type: "object",
@@ -324,7 +323,7 @@ describe("normalizeSchemaForGoogle", () => {
 			}),
 		).toEqual({
 			type: "object",
-			dependentSchemas: { hasFoo: {}, hasBar: { not: {} } },
+			dependentSchemas: { hasFoo: true, hasBar: false },
 		});
 	});
 
@@ -1275,6 +1274,13 @@ describe("normalizeSchemaForMoonshot", () => {
 		expect(props.extra.additionalProperties).toBe(true);
 		expect(props.skip.anyOf).toEqual([{ type: "number" }, { type: "null" }]);
 		expect(props.limit).toEqual({ type: "integer", default: 10 });
+	});
+
+	it("preserves boolean subschemas rather than synthesizing MFJS-forbidden not", () => {
+		expect(normalizeSchemaForMoonshot({ type: "object", properties: { forbidden: false } })).toEqual({
+			type: "object",
+			properties: { forbidden: false },
+		});
 	});
 
 	it("folds oneOf into anyOf (the only MFJS combinator)", () => {
