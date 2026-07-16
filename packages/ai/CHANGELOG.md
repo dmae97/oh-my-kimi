@@ -59,6 +59,7 @@
 - Updated the OAuth completion page to instruct users to close the tab manually when the browser blocks automatic window closing. ([#4855])
 - Fixed Cursor `max_mode` requests to correctly send max-mode metadata on both model payload fields. ([#4797])
 - Fixed configuration discovery to support both nested and flat YAML formats for `auth.broker.url` and `auth.broker.token` keys. ([#4734])
+- Fixed concurrent provider OAuth refreshes by serializing rotating-token updates across processes, fencing stale writes, and preventing background usage probes from disabling otherwise usable credentials ([#5396](https://github.com/can1357/oh-my-pi/issues/5396)).
 
 ## [16.5.0] - 2026-07-13
 
