@@ -531,6 +531,37 @@ function reportFromRewindReportContent(content: string): string {
 	return report.trim();
 }
 
+type SemanticCheckpointToolName = "checkpoint" | "rewind";
+
+type SemanticToolResult = {
+	toolName: SemanticCheckpointToolName;
+	details?: unknown;
+};
+
+/**
+ * Normalize checkpoint/rewind results across native calls and `write xd://`
+ * dispatches. Xdev keeps the wrapped tool's result details under `xdev.inner`,
+ * while direct calls put them on the result itself.
+ */
+function semanticToolResult(toolName: string | undefined, result: unknown): SemanticToolResult | undefined {
+	if (toolName === "checkpoint" || toolName === "rewind") {
+		const details =
+			result && typeof result === "object" && "details" in result
+				? (result as { details?: unknown }).details
+				: undefined;
+		return { toolName, details };
+	}
+	const dispatch = writeDeviceDispatch(toolName ?? "", result);
+	if (
+		!dispatch ||
+		dispatch.mode !== "execute" ||
+		(dispatch.tool !== "checkpoint" && dispatch.tool !== "rewind")
+	) {
+		return undefined;
+	}
+	return { toolName: dispatch.tool, details: dispatch.inner };
+}
+
 function completedRewindFromEntry(entry: SessionEntry): CompletedRewindState | undefined {
 	if (entry.type !== "custom_message" || entry.customType !== "rewind-report") return undefined;
 	const details = entry.details;
@@ -544,20 +575,18 @@ function completedRewindFromEntry(entry: SessionEntry): CompletedRewindState | u
 	return report.length > 0 ? { report, startedAt, rewoundAt } : undefined;
 }
 
-function isSuccessfulCheckpointEntry(entry: SessionEntry): entry is SessionMessageEntry & {
-	message: { role: "toolResult"; toolName: "checkpoint"; isError?: false };
-} {
-	return (
-		entry.type === "message" &&
-		entry.message.role === "toolResult" &&
-		entry.message.toolName === "checkpoint" &&
-		entry.message.isError !== true
-	);
+function isSuccessfulCheckpointEntry(entry: SessionEntry): boolean {
+	if (entry.type !== "message" || entry.message.role !== "toolResult" || entry.message.isError === true) {
+		return false;
+	}
+	const message = entry.message as Extract<AgentMessage, { role: "toolResult" }>;
+	return semanticToolResult(message.toolName, message)?.toolName === "checkpoint";
 }
 
 function checkpointStartedAtFromEntry(entry: SessionEntry): string | undefined {
-	if (!isSuccessfulCheckpointEntry(entry)) return undefined;
-	const details = entry.message.details;
+	if (!isSuccessfulCheckpointEntry(entry) || entry.type !== "message") return undefined;
+	const message = entry.message as Extract<AgentMessage, { role: "toolResult" }>;
+	const details = semanticToolResult(message.toolName, message)?.details;
 	if (details && typeof details === "object") {
 		const startedAt = stringProperty(details, "startedAt");
 		if (startedAt) return startedAt;
@@ -3986,7 +4015,7 @@ export class AgentSession {
 		}
 		const skipPersistedRewindResult =
 			message.role === "toolResult" &&
-			message.toolName === "rewind" &&
+			semanticToolResult(message.toolName, message)?.toolName === "rewind" &&
 			this.#rewoundToolResultIds.delete(message.toolCallId);
 		if (!skipPersistedRewindResult) {
 			this.#appendSessionMessage(message);
@@ -4364,6 +4393,11 @@ export class AgentSession {
 					isError?: boolean;
 					content?: Array<TextContent | ImageContent>;
 				};
+				const semanticResult = semanticToolResult(toolName, event.message);
+				const semanticDetails =
+					semanticResult?.details && typeof semanticResult.details === "object"
+						? semanticResult.details
+						: undefined;
 				// A tool actually ran. Clear the post-reminder suppression: the agent did
 				// productive work in response to the prior nudge, so the next text-only stop
 				// is allowed to escalate to the next reminder if todos remain incomplete.
@@ -4397,18 +4431,20 @@ export class AgentSession {
 						{ deliverAs: "nextTurn" },
 					);
 				}
-				if (toolName === "checkpoint" && !isError) {
+				if (semanticResult?.toolName === "checkpoint" && !isError) {
 					const checkpointEntryId = this.sessionManager.getEntries().at(-1)?.id ?? null;
 					this.#checkpointState = {
 						checkpointMessageCount: this.agent.state.messages.length,
 						checkpointEntryId,
-						startedAt: details?.startedAt ?? new Date().toISOString(),
+						startedAt:
+							(semanticDetails && stringProperty(semanticDetails, "startedAt")) ??
+							new Date().toISOString(),
 					};
 					this.#pendingRewindReport = undefined;
 					this.#lastCompletedRewind = undefined;
 				}
-				if (toolName === "rewind" && !isError && this.#checkpointState) {
-					const detailReport = typeof details?.report === "string" ? details.report.trim() : "";
+				if (semanticResult?.toolName === "rewind" && !isError && this.#checkpointState) {
+					const detailReport = semanticDetails ? stringProperty(semanticDetails, "report")?.trim() ?? "" : "";
 					const textReport = content?.find(part => part.type === "text")?.text?.trim() ?? "";
 					const report = detailReport || textReport;
 					if (report.length > 0) {
@@ -11575,8 +11611,10 @@ export class AgentSession {
 		if (this.#pendingRewindReport) return this.#pendingRewindReport;
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const message = messages[i];
-			if (message?.role !== "toolResult" || message.toolName !== "rewind" || message.isError) continue;
-			const details = message.details;
+			if (message?.role !== "toolResult" || message.isError) continue;
+			const semanticResult = semanticToolResult(message.toolName, message);
+			if (semanticResult?.toolName !== "rewind") continue;
+			const details = semanticResult.details;
 			const detailReport =
 				details && typeof details === "object" && "report" in details && typeof details.report === "string"
 					? details.report.trim()
@@ -11617,7 +11655,7 @@ export class AgentSession {
 
 		if (activeMessages) {
 			for (const message of activeMessages) {
-				if (message.role === "toolResult" && message.toolName === "rewind") {
+				if (message.role === "toolResult" && semanticToolResult(message.toolName, message)?.toolName === "rewind") {
 					this.#rewoundToolResultIds.add(message.toolCallId);
 				}
 			}
