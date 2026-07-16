@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed orphaned TUI processes with revoked terminal descriptors remaining alive after a fatal error and amplifying shared log-rotation races into runaway memory, file-descriptor, swap, and disk consumption ([#5716](https://github.com/can1357/oh-my-pi/issues/5716)).
+
 ## [17.0.1] - 2026-07-16
 
 ### Changed

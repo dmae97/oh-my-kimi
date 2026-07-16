@@ -5,6 +5,8 @@
  * in response to process exit, signals, or fatal exceptions. It is intended to
  * allow reliably releasing resources or shutting down subprocesses, files, sockets, etc.
  */
+
+import * as fs from "node:fs";
 import inspector from "node:inspector";
 import { isMainThread } from "node:worker_threads";
 import { logger } from ".";
@@ -68,7 +70,6 @@ function runCleanup(reason: Reason): Promise<void> {
 		cleanupStage = "complete";
 		deadline.resolve();
 	}, CLEANUP_DEADLINE_MS);
-	deadlineTimer.unref();
 	cleanupPromise = Promise.race([cleanupSettled, deadline.promise]).finally(() => {
 		clearTimeout(deadlineTimer);
 	});
@@ -175,6 +176,23 @@ function formatFatalError(label: string, err: Error): string {
 	return `\n[${label}] ${name}: ${message}${formattedStack}\n`;
 }
 
+async function exitAfterFatal(label: string, logMessage: string, err: Error, reason: Reason): Promise<void> {
+	const forcedExit = setTimeout(() => process.exit(1), CLEANUP_DEADLINE_MS);
+	try {
+		restoreTerminalStderr();
+		// A revoked terminal can make stream writes raise another fatal error. Use
+		// the descriptor directly so failure stays synchronous and contained.
+		try {
+			fs.writeSync(2, formatFatalError(label, err));
+		} catch {}
+		logger.error(logMessage, { err });
+		await runCleanup(reason);
+	} finally {
+		clearTimeout(forcedExit);
+		process.exit(1);
+	}
+}
+
 if (isMainThread) {
 	process
 		.on("SIGINT", async () => {
@@ -193,15 +211,7 @@ if (isMainThread) {
 				logger.warn("Ignoring expected cleanup exception", { err });
 				return;
 			}
-			// fd 2 may be redirected to the log while a TUI owns the terminal
-			// (stderr-guard); re-point it at the real terminal so the fatal
-			// report is visible. Terminal modes are restored moments later by
-			// the terminal-restore cleanup callback inside runCleanup().
-			restoreTerminalStderr();
-			process.stderr.write(formatFatalError("Uncaught Exception", err));
-			logger.error("Uncaught exception", { err });
-			await runCleanup(Reason.UNCAUGHT_EXCEPTION);
-			process.exit(1);
+			await exitAfterFatal("Uncaught Exception", "Uncaught exception", err, Reason.UNCAUGHT_EXCEPTION);
 		})
 		.on("unhandledRejection", async reason => {
 			const err = reason instanceof Error ? reason : new Error(String(reason));
@@ -237,12 +247,7 @@ if (isMainThread) {
 					});
 				}
 			}
-			// See uncaughtException above: surface the report on the real stderr.
-			restoreTerminalStderr();
-			process.stderr.write(formatFatalError("Unhandled Rejection", err));
-			logger.error("Unhandled rejection", { err });
-			await runCleanup(Reason.UNHANDLED_REJECTION);
-			process.exit(1);
+			await exitAfterFatal("Unhandled Rejection", "Unhandled rejection", err, Reason.UNHANDLED_REJECTION);
 		})
 		.on("exit", async () => {
 			void runCleanup(Reason.EXIT); // fire and forget (exit imminent)

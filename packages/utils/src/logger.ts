@@ -1,7 +1,7 @@
 /**
  * Centralized logger for omp.
  *
- * Default: rotating `~/.omp/logs/omp.<DATE>.log`, no console output (writing
+ * Default: rotating `~/.omp/logs/omp.<DATE>.<PID>.log`, no console output (writing
  * to stdout/stderr would corrupt the TUI). Long-running headless services
  * (the auth broker, etc.) call {@link setTransports} to swap in a console
  * transport so a process supervisor (pm2, journald, k8s) captures the logs.
@@ -76,11 +76,11 @@ function getLogFormat(): winston.Logform.Format {
 function makeFileTransport(dir?: string): winston.transport {
 	return new DailyRotateFile({
 		dirname: ensureDir(dir ?? getLogsDir()),
-		filename: "omp.%DATE%.log",
+		filename: `omp.%DATE%.${process.pid}.log`,
 		datePattern: "YYYY-MM-DD",
 		maxSize: "10m",
 		maxFiles: 5,
-		zippedArchive: true,
+		zippedArchive: false,
 	});
 }
 
