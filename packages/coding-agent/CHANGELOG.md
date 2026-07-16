@@ -510,6 +510,7 @@
 - Fixed `/mcp`, `/mcp list`, and `/tools` output duplicating in terminal scrollback when invoked during agent streaming by deferring command panels until the active turn ends ([#4806](https://github.com/can1357/oh-my-pi/issues/4806)).
 - Fixed bash/eval/ssh output that was only per-line column-capped being misreported as byte-window truncation, which appended a bogus `Showing lines X-Y of Z (…B limit). Read artifact://N for full output` footer even though every line was shown. Column-cap trimming now surfaces solely as the `Some lines truncated to N chars` notice ([#4735](https://github.com/can1357/oh-my-pi/issues/4735)).
 - Fixed the `nerd` status-line preset's session icon using a removed Nerd Fonts v2 codepoint instead of the current Nerd Fonts v3 mapping ([#4795](https://github.com/can1357/oh-my-pi/issues/4795)).
+- Fixed omp crashing at startup (`TypeError: undefined is not an object (evaluating 'this.#theme.symbols.boxRound')`) after installing a plugin whose custom editor subclasses `CustomEditor`/`Editor` and forwards the upstream-pi `super(tui, theme, keybindings)` constructor — the arg order that `setEditorComponent`'s factory contract advertises. `CustomEditor` now resolves the real `EditorTheme` by shape rather than position and captures a leading `TUI` for plugin overrides ([#4766](https://github.com/can1357/oh-my-pi/issues/4766)).
 
 ## [16.3.11] - 2026-07-06
 
