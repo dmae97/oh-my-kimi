@@ -80,6 +80,8 @@ it("agent:// slash form resolves a nested subagent child (hierarchy separator)",
 	const parentOwnDir = parentSessionFile.slice(0, -6);
 	await fs.mkdir(parentOwnDir, { recursive: true });
 	await fs.writeFile(path.join(parentOwnDir, "Parent.Child.md"), "child capsule");
+	// Parent output may be in the root dir; the nested child must still win.
+	await fs.writeFile(path.join(rootArtifactsDir, "Parent.md"), JSON.stringify({ Child: "wrong base output" }));
 
 	const fakeSession = {
 		sessionManager: { getArtifactsDir: () => sharedArtifactManager.dir },
