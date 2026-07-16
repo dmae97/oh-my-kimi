@@ -3,6 +3,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { isInsideTmux, wrapTmuxPassthrough } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import { VERSION } from "@oh-my-pi/pi-utils/dirs";
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions/types";
+import { isSilentAbort, isUserInterruptAbort, SKILL_PROMPT_MESSAGE_TYPE } from "../session/messages";
 
 const WARP_CLI_AGENT_PROTOCOL_VERSION = 1;
 const WARP_CLI_AGENT_SENTINEL = "warp://cli-agent";
@@ -20,6 +21,7 @@ export type WarpEvent = Readonly<Record<string, WarpEventValue | undefined>>;
 
 export interface WarpEventEmitterOptions {
 	sessionId: string;
+	getCwd?: () => string;
 }
 
 export interface WarpEventEmitter {
@@ -39,7 +41,7 @@ export function createWarpEventEmitter(options: WarpEventEmitterOptions): WarpEv
 
 	return {
 		emit(event): void {
-			const cwd = process.cwd();
+			const cwd = options.getCwd?.() ?? process.cwd();
 			const body = {
 				...event,
 				v: WARP_CLI_AGENT_PROTOCOL_VERSION,
@@ -59,10 +61,24 @@ function lastAssistantText(messages: readonly AgentMessage[]): string {
 	for (let index = messages.length - 1; index >= 0; index--) {
 		const message = messages[index];
 		if (message.role !== "assistant") continue;
-		return message.content
+		const text = message.content
 			.filter(content => content.type === "text")
 			.map(content => content.text)
 			.join("");
+		if (text.length > 0) {
+			return text;
+		}
+		const errorMessage = message.errorMessage;
+		if (typeof errorMessage !== "string" || errorMessage.length === 0 || isSilentAbort(message)) {
+			return "";
+		}
+		if (message.stopReason === "error") {
+			return errorMessage;
+		}
+		if (message.stopReason === "aborted" && !isUserInterruptAbort(message)) {
+			return errorMessage;
+		}
+		return "";
 	}
 	return "";
 }
@@ -78,13 +94,24 @@ function truncateEventText(text: string): string {
 	return text.slice(0, end);
 }
 
-function userMessageText(message: Extract<AgentMessage, { role: "user" }>): string {
-	if (typeof message.content === "string") {
-		return message.content;
+function messageText(content: unknown): string {
+	if (typeof content === "string") {
+		return content;
 	}
-	return message.content
-		.filter(content => content.type === "text")
-		.map(content => content.text)
+	if (!Array.isArray(content)) {
+		return "";
+	}
+	return content
+		.filter(
+			(block): block is { type: "text"; text: string } =>
+				!!block &&
+				typeof block === "object" &&
+				"type" in block &&
+				block.type === "text" &&
+				"text" in block &&
+				typeof block.text === "string",
+		)
+		.map(block => block.text)
 		.join("");
 }
 
@@ -93,10 +120,12 @@ export function createWarpEventBridgeExtension(): ExtensionFactory {
 	return api => {
 		let emitter: WarpEventEmitter | undefined;
 		let activePrompt: string | undefined;
+		let getCwd: (() => string) | undefined;
 
 		const rebuildEmitter = (_event: unknown, ctx: ExtensionContext): void => {
 			activePrompt = undefined;
-			emitter = createWarpEventEmitter({ sessionId: ctx.sessionManager.getSessionId() });
+			getCwd = () => ctx.sessionManager.getCwd();
+			emitter = createWarpEventEmitter({ sessionId: ctx.sessionManager.getSessionId(), getCwd });
 			emitter?.emit({ event: "session_start" });
 		};
 
@@ -105,11 +134,19 @@ export function createWarpEventBridgeExtension(): ExtensionFactory {
 		api.on("session_branch", rebuildEmitter);
 
 		api.on("message_start", event => {
-			const message = event.message;
-			if (message.role !== "user" || message.synthetic || message.attribution === "agent") {
+			const message = event.message as AgentMessage;
+			if (message.role === "user") {
+				if (message.synthetic || message.attribution === "agent") {
+					return;
+				}
+			} else if (
+				message.role !== "custom" ||
+				message.customType !== SKILL_PROMPT_MESSAGE_TYPE ||
+				message.attribution !== "user"
+			) {
 				return;
 			}
-			activePrompt = truncateEventText(userMessageText(message));
+			activePrompt = truncateEventText(messageText(message.content));
 			emitter?.emit({ event: "prompt_submit", query: activePrompt });
 		});
 

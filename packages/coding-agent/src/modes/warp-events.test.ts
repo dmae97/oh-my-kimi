@@ -14,6 +14,7 @@ import type {
 	SessionSwitchEvent,
 	ToolApprovalRequestedEvent,
 } from "../extensibility/extensions/types";
+import { SILENT_ABORT_MARKER, SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../session/messages";
 import { createWarpEventBridgeExtension, createWarpEventEmitter } from "./warp-events";
 
 const originalTerminalId = terminalCapabilities.TERMINAL.id;
@@ -65,6 +66,32 @@ function userMessageStart(text: string, overrides: Partial<MessageStartEvent["me
 			...overrides,
 		} as MessageStartEvent["message"],
 	};
+}
+
+function skillPromptStart(
+	text: string,
+	attribution: "user" | "agent" = "user",
+): MessageStartEvent {
+	return {
+		type: "message_start",
+		message: {
+			role: "custom",
+			customType: SKILL_PROMPT_MESSAGE_TYPE,
+			content: text,
+			display: true,
+			attribution,
+			timestamp: Date.now(),
+		} as MessageStartEvent["message"],
+	};
+}
+
+function bridgeContext(sessionId = "session-123", cwd = process.cwd()): ExtensionContext {
+	return {
+		sessionManager: {
+			getSessionId: () => sessionId,
+			getCwd: () => cwd,
+		},
+	} as never as ExtensionContext;
 }
 
 afterEach(() => {
@@ -139,12 +166,48 @@ describe("Warp CLI-agent events", () => {
 		expect(write).not.toHaveBeenCalled();
 	});
 
+	it("uses session cwd for envelope cwd and project", () => {
+		enableWarpProtocol();
+		const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		vi.spyOn(terminalCapabilities, "isInsideTmux").mockReturnValue(false);
+		const sessionCwd = "/tmp/session-project-root";
+		const sessionProject = path.basename(sessionCwd);
+
+		const emitter = createWarpEventEmitter({
+			sessionId: "session-123",
+			getCwd: () => sessionCwd,
+		});
+		emitter?.emit({ event: "stop" });
+
+		const directBody = parseBodies(write)[0];
+		expect(directBody).toMatchObject({
+			event: "stop",
+			cwd: sessionCwd,
+			project: sessionProject,
+		});
+		expect(directBody?.cwd).not.toBe(process.cwd());
+
+		write.mockClear();
+		const handlers = createHandlers();
+		const sessionStart = handlers.get("session_start") as never as (
+			event: SessionStartEvent,
+			context: ExtensionContext,
+		) => void;
+		sessionStart({ type: "session_start" }, bridgeContext("session-123", sessionCwd));
+		const body = parseBodies(write)[0];
+		expect(body).toMatchObject({
+			event: "session_start",
+			cwd: sessionCwd,
+			project: sessionProject,
+		});
+	});
+
 	it("does not resubmit prompts for agent continuations", () => {
 		enableWarpProtocol();
 		const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
 		vi.spyOn(terminalCapabilities, "isInsideTmux").mockReturnValue(false);
 		const handlers = createHandlers();
-		const context = { sessionManager: { getSessionId: () => "session-123" } } as never as ExtensionContext;
+		const context = bridgeContext();
 		const sessionStart = handlers.get("session_start") as never as (
 			event: SessionStartEvent,
 			context: ExtensionContext,
@@ -178,12 +241,13 @@ describe("Warp CLI-agent events", () => {
 			project,
 		});
 	});
+
 	it("keeps the active query until queued follow-up begins", () => {
 		enableWarpProtocol();
 		const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
 		vi.spyOn(terminalCapabilities, "isInsideTmux").mockReturnValue(false);
 		const handlers = createHandlers();
-		const context = { sessionManager: { getSessionId: () => "session-123" } } as never as ExtensionContext;
+		const context = bridgeContext();
 		const sessionStart = handlers.get("session_start") as never as (
 			event: SessionStartEvent,
 			context: ExtensionContext,
@@ -243,7 +307,7 @@ describe("Warp CLI-agent events", () => {
 		const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
 		vi.spyOn(terminalCapabilities, "isInsideTmux").mockReturnValue(false);
 		const handlers = createHandlers();
-		const context = { sessionManager: { getSessionId: () => "session-123" } } as never as ExtensionContext;
+		const context = bridgeContext();
 		const sessionStart = handlers.get("session_start") as never as (
 			event: SessionStartEvent,
 			context: ExtensionContext,
@@ -273,12 +337,179 @@ describe("Warp CLI-agent events", () => {
 		});
 	});
 
+	it("treats user-attributed skill prompts as submissions", () => {
+		enableWarpProtocol();
+		const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		vi.spyOn(terminalCapabilities, "isInsideTmux").mockReturnValue(false);
+		const handlers = createHandlers();
+		const context = bridgeContext();
+		const sessionStart = handlers.get("session_start") as never as (
+			event: SessionStartEvent,
+			context: ExtensionContext,
+		) => void;
+		const messageStart = handlers.get("message_start") as never as (event: MessageStartEvent) => void;
+		const agentEnd = handlers.get("agent_end") as never as (event: AgentEndEvent) => void;
+
+		sessionStart({ type: "session_start" }, context);
+		write.mockClear();
+
+		messageStart(skillPromptStart("skill body as query", "user"));
+		agentEnd({
+			type: "agent_end",
+			messages: [{ role: "assistant", content: [{ type: "text", text: "skill answer" }] } as never],
+		});
+
+		let bodies = parseBodies(write);
+		expect(bodies).toEqual([
+			expect.objectContaining({ event: "prompt_submit", query: "skill body as query", project }),
+			expect.objectContaining({
+				event: "stop",
+				query: "skill body as query",
+				response: "skill answer",
+				project,
+			}),
+		]);
+
+		// Agent-attributed skill-shaped custom messages are not user submissions.
+		write.mockClear();
+		messageStart(userMessageStart("prompt A"));
+		messageStart(skillPromptStart("auto skill", "agent"));
+		agentEnd({
+			type: "agent_end",
+			messages: [{ role: "assistant", content: [{ type: "text", text: "answer A" }] } as never],
+		});
+		bodies = parseBodies(write);
+		expect(bodies.filter(body => body.event === "prompt_submit")).toEqual([
+			expect.objectContaining({ event: "prompt_submit", query: "prompt A", project }),
+		]);
+		expect(bodies.at(-1)).toMatchObject({
+			event: "stop",
+			query: "prompt A",
+			response: "answer A",
+			project,
+		});
+	});
+
+	it("falls back to non-silent assistant errorMessage on empty stop responses", () => {
+		enableWarpProtocol();
+		const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		vi.spyOn(terminalCapabilities, "isInsideTmux").mockReturnValue(false);
+		const handlers = createHandlers();
+		const context = bridgeContext();
+		const sessionStart = handlers.get("session_start") as never as (
+			event: SessionStartEvent,
+			context: ExtensionContext,
+		) => void;
+		const messageStart = handlers.get("message_start") as never as (event: MessageStartEvent) => void;
+		const agentEnd = handlers.get("agent_end") as never as (event: AgentEndEvent) => void;
+
+		sessionStart({ type: "session_start" }, context);
+		write.mockClear();
+
+		messageStart(userMessageStart("prompt error"));
+		agentEnd({
+			type: "agent_end",
+			messages: [
+				{
+					role: "assistant",
+					content: [],
+					stopReason: "error",
+					errorMessage: "rate limited",
+				} as never,
+			],
+		});
+		expect(parseBodies(write).at(-1)).toMatchObject({
+			event: "stop",
+			query: "prompt error",
+			response: "rate limited",
+		});
+
+		// Normal text content is preferred over errorMessage.
+		write.mockClear();
+		messageStart(userMessageStart("prompt text"));
+		agentEnd({
+			type: "agent_end",
+			messages: [
+				{
+					role: "assistant",
+					content: [{ type: "text", text: "visible answer" }],
+					stopReason: "error",
+					errorMessage: "rate limited",
+				} as never,
+			],
+		});
+		expect(parseBodies(write).at(-1)).toMatchObject({
+			event: "stop",
+			query: "prompt text",
+			response: "visible answer",
+		});
+
+		// Silent abort marker must not surface as the stop response.
+		write.mockClear();
+		messageStart(userMessageStart("prompt silent"));
+		agentEnd({
+			type: "agent_end",
+			messages: [
+				{
+					role: "assistant",
+					content: [],
+					stopReason: "aborted",
+					errorMessage: SILENT_ABORT_MARKER,
+				} as never,
+			],
+		});
+		expect(parseBodies(write).at(-1)).toMatchObject({
+			event: "stop",
+			query: "prompt silent",
+			response: "",
+		});
+
+		// User interrupt labels stay suppressed; non-user abort reasons surface.
+		write.mockClear();
+		messageStart(userMessageStart("prompt interrupt"));
+		agentEnd({
+			type: "agent_end",
+			messages: [
+				{
+					role: "assistant",
+					content: [],
+					stopReason: "aborted",
+					errorMessage: USER_INTERRUPT_LABEL,
+				} as never,
+			],
+		});
+		expect(parseBodies(write).at(-1)).toMatchObject({
+			event: "stop",
+			query: "prompt interrupt",
+			response: "",
+		});
+
+		write.mockClear();
+		messageStart(userMessageStart("prompt aborted"));
+		agentEnd({
+			type: "agent_end",
+			messages: [
+				{
+					role: "assistant",
+					content: [],
+					stopReason: "aborted",
+					errorMessage: "provider cancelled stream",
+				} as never,
+			],
+		});
+		expect(parseBodies(write).at(-1)).toMatchObject({
+			event: "stop",
+			query: "prompt aborted",
+			response: "provider cancelled stream",
+		});
+	});
+
 	it("caps prompt queries and stop responses at 200 Unicode code points without breaking JSON", () => {
 		enableWarpProtocol();
 		const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
 		vi.spyOn(terminalCapabilities, "isInsideTmux").mockReturnValue(false);
 		const handlers = createHandlers();
-		const context = { sessionManager: { getSessionId: () => "session-123" } } as never as ExtensionContext;
+		const context = bridgeContext();
 		const sessionStart = handlers.get("session_start") as never as (
 			event: SessionStartEvent,
 			context: ExtensionContext,
@@ -313,7 +544,12 @@ describe("Warp CLI-agent events", () => {
 		vi.spyOn(terminalCapabilities, "isInsideTmux").mockReturnValue(false);
 		const handlers = createHandlers();
 		let sessionId = "session-old";
-		const context = { sessionManager: { getSessionId: () => sessionId } } as never as ExtensionContext;
+		const context = {
+			sessionManager: {
+				getSessionId: () => sessionId,
+				getCwd: () => process.cwd(),
+			},
+		} as never as ExtensionContext;
 		const sessionStart = handlers.get("session_start") as never as (
 			event: SessionStartEvent,
 			context: ExtensionContext,
@@ -355,7 +591,12 @@ describe("Warp CLI-agent events", () => {
 		vi.spyOn(terminalCapabilities, "isInsideTmux").mockReturnValue(false);
 		const handlers = createHandlers();
 		let sessionId = "session-old";
-		const context = { sessionManager: { getSessionId: () => sessionId } } as never as ExtensionContext;
+		const context = {
+			sessionManager: {
+				getSessionId: () => sessionId,
+				getCwd: () => process.cwd(),
+			},
+		} as never as ExtensionContext;
 		const sessionStart = handlers.get("session_start") as never as (
 			event: SessionStartEvent,
 			context: ExtensionContext,
@@ -400,9 +641,7 @@ describe("Warp CLI-agent events", () => {
 			event: SessionStartEvent,
 			context: ExtensionContext,
 		) => void;
-		sessionStart({ type: "session_start" }, {
-			sessionManager: { getSessionId: () => "session-123" },
-		} as never as ExtensionContext);
+		sessionStart({ type: "session_start" }, bridgeContext());
 		write.mockClear();
 
 		const approvalRequested = handlers.get("tool_approval_requested") as never as (
