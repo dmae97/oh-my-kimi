@@ -190,6 +190,11 @@ describe("shouldBypassProxy NO_PROXY rules", () => {
 		expect(shouldBypassProxy(new URL("https://api.sakana.ai/v1"))).toBe(false);
 		expect(shouldBypassProxy(new URL("http://api.sakana.ai:8080/v1"))).toBe(true);
 	});
+
+	it("uses port 443 for secure websocket targets", () => {
+		Bun.env.NO_PROXY = "api.sakana.ai:443";
+		expect(shouldBypassProxy(new URL("wss://api.sakana.ai/v1"))).toBe(true);
+	});
 });
 
 describe("wrapFetchForProxy", () => {

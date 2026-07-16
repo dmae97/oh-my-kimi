@@ -1466,7 +1466,7 @@ describe("openai-codex streaming", () => {
 
 	it("bypasses configured proxies for NO_PROXY websocket targets", async () => {
 		Bun.env.PI_PROXY_CODEX_PROXY_TEST = "http://127.0.0.1:7890";
-		Bun.env.NO_PROXY = "chatgpt.com";
+		Bun.env.NO_PROXY = "chatgpt.com:443";
 		__resetProxyCache();
 		let capturedProxy: string | undefined;
 		class NoProxyWebSocket extends MockWebSocket {
