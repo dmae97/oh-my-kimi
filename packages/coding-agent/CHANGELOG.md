@@ -13,6 +13,11 @@
 - Fixed `/quit` and `/exit` hanging during interactive shutdown by making the mnemopi dispose path retain the current session and flush in-flight extractions without sleeping the bank; the `/memory enqueue` path and end-of-session backend enqueue still perform full cross-session consolidation. ([#3641](https://github.com/can1357/oh-my-pi/issues/3641))
 
 ## [17.0.3] - 2026-07-17
+### Fixed
+
+- Fixed disabling **Show Inline Images** leaving previously rendered Kitty graphics over the Ghostty/tmux transcript. The runtime toggle now updates tool and assistant image owners, deletes tracked terminal graphics before replay, and retains hidden read images so they can return when re-enabled.
+
+## [17.0.1] - 2026-07-16
 
 ### Changed
 

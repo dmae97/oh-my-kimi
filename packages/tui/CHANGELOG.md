@@ -25,6 +25,9 @@
 - Fixed Markdown rendering incorrectly turning local file paths containing `www.` or protocol sequences into HTTP links by requiring a valid GFM left boundary for autolinks.
 - Fixed terminal resize behavior by restoring alternate-screen rendering during drag frames, preventing wrapped fragments from polluting native scrollback while preserving the overlay-exit flicker fix.
 - Added optional right-border scrollbar to the `Editor` component (`setScrollbarVisible`): shows a thumb glyph on the right border when content overflows `maxHeight`, enabling scrollable multi-line editors (e.g. advisor instructions) without losing the submit hint off-screen.
+### Fixed
+
+- Added live-session cleanup for tracked Kitty graphics so consumers can delete retained inline images before replaying text fallbacks.
 
 ## [17.0.1] - 2026-07-16
 

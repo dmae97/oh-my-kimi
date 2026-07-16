@@ -13,18 +13,21 @@
  * one-entry block).
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
 import { ReadToolGroupComponent } from "@oh-my-pi/pi-coding-agent/modes/components/read-tool-group";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { Container } from "@oh-my-pi/pi-tui";
+import { type Component, Container, Image, ImageProtocol, setTerminalImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
 
 beforeAll(async () => {
 	await initTheme(false, undefined, undefined, "dark", "light");
 });
+
+const originalImageProtocol = TERMINAL.imageProtocol;
 
 beforeEach(async () => {
 	resetSettingsForTest();
@@ -33,6 +36,7 @@ beforeEach(async () => {
 
 afterEach(() => {
 	resetSettingsForTest();
+	setTerminalImageProtocol(originalImageProtocol);
 	vi.restoreAllMocks();
 });
 
@@ -104,6 +108,12 @@ function header(group: ReadToolGroupComponent): string {
 	return Bun.stripANSI(group.render(120).join("\n")).split("\n")[0] ?? "";
 }
 
+function hasImageComponent(component: Component): boolean {
+	if (component instanceof Image) return true;
+	if (!("children" in component) || !Array.isArray(component.children)) return false;
+	return component.children.some(child => hasImageComponent(child));
+}
+
 describe("EventController read-group accretion", () => {
 	it("collapses a run of single-read completions into one group (mixed/empty thinking)", async () => {
 		const { controller, chatContainer } = createFixture();
@@ -154,5 +164,34 @@ describe("EventController read-group accretion", () => {
 		// A visible-reasoning completion breaks the run and finalizes the prior group.
 		await streamCompletion(controller, [thinking("done exploring"), read("b.ts:1-50")]);
 		expect(group!.isTranscriptBlockFinalized()).toBe(true);
+	});
+
+	it("retains live read images while hidden so the visibility toggle can reveal them", async () => {
+		Settings.instance.override("terminal.showImages", false);
+		setTerminalImageProtocol(ImageProtocol.Sixel);
+		const { controller, chatContainer } = createFixture();
+		const toolCall = read("hidden.png");
+		await streamCompletion(controller, [toolCall]);
+		const image: ImageContent = {
+			type: "image",
+			data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==",
+			mimeType: "image/png",
+		};
+
+		await controller.handleEvent({
+			type: "tool_execution_end",
+			toolCallId: toolCall.type === "toolCall" ? toolCall.id : "",
+			toolName: "read",
+			result: { content: [image], isError: false },
+			isError: false,
+		} as AgentSessionEvent);
+
+		const assistant = chatContainer.children.find(
+			(child): child is AssistantMessageComponent => child instanceof AssistantMessageComponent,
+		);
+		expect(assistant).toBeDefined();
+		expect(hasImageComponent(assistant!)).toBe(false);
+		assistant?.setImagesVisible(true);
+		expect(hasImageComponent(assistant!)).toBe(true);
 	});
 });
