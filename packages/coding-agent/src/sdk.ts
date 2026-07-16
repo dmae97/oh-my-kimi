@@ -2427,7 +2427,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			? new Set(explicitlyRequestedToolNames)
 			: undefined;
 		const xdevReadAvailable =
-			explicitlyRequestedToolNameSet === undefined || explicitlyRequestedToolNameSet.has("read");
+			builtInRegistryToolNames.has("read") &&
+			(explicitlyRequestedToolNameSet === undefined || explicitlyRequestedToolNameSet.has("read"));
 		const initialRequestedActiveToolNames = options.toolNames
 			? requestedActiveToolNames
 			: requestedActiveToolNames.filter(name => !defaultInactiveToolNames.has(name));

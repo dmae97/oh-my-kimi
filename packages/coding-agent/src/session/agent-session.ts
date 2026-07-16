@@ -6764,9 +6764,10 @@ export class AgentSession {
 			return tool ? [{ name, tool }] : [];
 		});
 		const xdevReadAvailable =
-			(this.#presentationPinnedToolNames === undefined && this.#runtimeSelectedToolNames === undefined) ||
-			this.#presentationPinnedToolNames?.has("read") === true ||
-			this.#runtimeSelectedToolNames?.has("read") === true;
+			this.#builtInToolNames.has("read") &&
+			((this.#presentationPinnedToolNames === undefined && this.#runtimeSelectedToolNames === undefined) ||
+				this.#presentationPinnedToolNames?.has("read") === true ||
+				this.#runtimeSelectedToolNames?.has("read") === true);
 		const isPresentationPinned = (name: string): boolean =>
 			this.#presentationPinnedToolNames?.has(name) === true || this.#runtimeSelectedToolNames?.has(name) === true;
 		const mountCandidates = selectedTools.filter(
