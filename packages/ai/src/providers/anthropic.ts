@@ -1772,6 +1772,23 @@ const streamAnthropicOnce = (
 			let forceDemoteUnsignedThinking = providerSessionState?.replayUnsignedThinkingDisabled ?? false;
 			const mergedCallerHeaders = mergeHeaders(model.headers, options?.headers);
 			const umansGatewayWebSearchHeader = getUmansWebSearchHeader(model, mergedCallerHeaders);
+			// Keep fallback payloads aligned with the top-level Vertex effort gate:
+			// no nested effort field means the fallback scan cannot re-add its beta.
+			let fallbacks = options?.fallbacks;
+			if (
+				model.provider === "google-vertex" &&
+				fallbacks?.some(entry => entry.output_config?.effort !== undefined)
+			) {
+				fallbacks = fallbacks.map(entry => {
+					const outputConfig = entry.output_config;
+					if (outputConfig?.effort === undefined) return entry;
+					return {
+						...entry,
+						output_config:
+							outputConfig.task_budget === undefined ? undefined : { task_budget: outputConfig.task_budget },
+					};
+				});
+			}
 
 			let client: AnthropicMessagesClientLike;
 			let isOAuthToken: boolean;
@@ -1796,6 +1813,10 @@ const streamAnthropicOnce = (
 				// the toggle cannot 400); the beta must accompany the field in both.
 				// MiniMax uses `thinking.type:"adaptive"` itself as the control surface,
 				// so the sentinel "adaptive" value intentionally sends no output_config.
+				// Skip Vertex rawPredict: that adapter needs betas in the body
+				// (`anthropic_beta`), not as an `anthropic-beta` HTTP header, so the
+				// effort field is dropped from the body there too (see buildParams) and
+				// advertising the beta would only earn a 400 (#5614).
 				const sendsAdaptiveEffortPin =
 					options?.thinkingEnabled === false &&
 					model.thinking?.mode === "anthropic-adaptive" &&
@@ -1803,6 +1824,7 @@ const streamAnthropicOnce = (
 					!usesAdaptiveThinkingTagOnly(model);
 				if (
 					model.reasoning &&
+					model.provider !== "google-vertex" &&
 					((options?.thinkingEnabled && options.effort !== "adaptive") || sendsAdaptiveEffortPin) &&
 					!extraBetas.includes(effortBeta)
 				) {
@@ -1836,11 +1858,11 @@ const streamAnthropicOnce = (
 				// `output_config.task_budget`) reuse the same top-level betas
 				// Anthropic requires for the primary request, so scan the chain
 				// and add every companion beta the fallback entries touch.
-				if (options?.fallbacks?.length) {
+				if (fallbacks?.length) {
 					if (!extraBetas.includes(serverSideFallbackBeta)) {
 						extraBetas.push(serverSideFallbackBeta);
 					}
-					for (const entry of options.fallbacks) {
+					for (const entry of fallbacks) {
 						if (entry.speed === "fast" && !extraBetas.includes(fastModeBeta)) {
 							extraBetas.push(fastModeBeta);
 						}
@@ -1879,6 +1901,7 @@ const streamAnthropicOnce = (
 					useUmansGatewayWebSearch: umansGatewayWebSearchHeader !== undefined,
 					forceDemoteUnsignedThinking,
 					supportsEagerToolInputStreaming,
+					fallbacks,
 				});
 				if (disableStrictTools) {
 					dropAnthropicStrictTools(nextParams);
@@ -1905,9 +1928,9 @@ const streamAnthropicOnce = (
 
 			// Opt-in flag: the response parser only honors `fallback` content
 			// blocks and `usage.iterations` when the current request opted into
-			// the server-side-fallback beta chain. Leaving `options.fallbacks`
-			// unset preserves the pre-fallback stream shape on every event.
-			const serverSideFallback = !!options?.fallbacks?.length;
+			// server-side-fallback beta chain. Leaving `fallbacks` unset preserves
+			// the pre-fallback stream shape on every event.
+			const serverSideFallback = !!fallbacks?.length;
 			type Block = (
 				| ThinkingContent
 				| RedactedThinkingContent
@@ -3151,6 +3174,8 @@ type AnthropicParamBuildOptions = {
 	useUmansGatewayWebSearch: boolean;
 	forceDemoteUnsignedThinking: boolean;
 	supportsEagerToolInputStreaming: boolean;
+	/** Sanitized server-side fallback entries; defaults to `options?.fallbacks` when omitted. */
+	fallbacks?: AnthropicOptions["fallbacks"];
 };
 
 function buildParams(
@@ -3165,6 +3190,7 @@ function buildParams(
 		useUmansGatewayWebSearch,
 		forceDemoteUnsignedThinking,
 		supportsEagerToolInputStreaming,
+		fallbacks = options?.fallbacks,
 	} = buildOptions;
 	// A session-scoped auto-demote (learned from a live signing 400) clones the
 	// resolved compat with `replayUnsignedThinking: false` so every subsequent
@@ -3283,9 +3309,12 @@ function buildParams(
 		? { edits: [{ type: "clear_thinking_20251015" as const, keep: "all" as const }] }
 		: undefined;
 
-	// Pre-compute output_config.
+	// Pre-compute output_config. Skip `effort` on Vertex rawPredict: it requires
+	// the `effort-2025-11-24` beta, which that adapter can only accept in the body
+	// (`anthropic_beta`), never as the `anthropic-beta` HTTP header this path sets
+	// — so the field is dropped alongside the beta to avoid a 400 (#5614).
 	const outputConfigEntries: AnthropicOutputConfig = {};
-	if (outputConfigEffort) outputConfigEntries.effort = outputConfigEffort;
+	if (outputConfigEffort && model.provider !== "google-vertex") outputConfigEntries.effort = outputConfigEffort;
 	if (options?.taskBudget) outputConfigEntries.task_budget = options.taskBudget;
 	const outputConfig = Object.keys(outputConfigEntries).length ? outputConfigEntries : undefined;
 
@@ -3300,7 +3329,7 @@ function buildParams(
 	const params: MessageCreateParamsStreaming = {
 		model: options?.requestModelId ?? model.requestModelId ?? model.id,
 		messages: convertAnthropicMessages(context.messages, effectiveModel, isOAuthToken, {
-			serverSideFallbackEnabled: !!options?.fallbacks?.length,
+			serverSideFallbackEnabled: !!fallbacks?.length,
 		}),
 		...(systemBlocks && { system: systemBlocks }),
 		...(tools !== undefined && { tools }),
@@ -3309,7 +3338,7 @@ function buildParams(
 		...(thinking && { thinking }),
 		...(contextManagement && { context_management: contextManagement }),
 		...(outputConfig && { output_config: outputConfig }),
-		...(options?.fallbacks?.length ? { fallbacks: options.fallbacks } : {}),
+		...(fallbacks?.length ? { fallbacks } : {}),
 		stream: true,
 	};
 
