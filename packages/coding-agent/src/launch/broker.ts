@@ -555,7 +555,7 @@ class DaemonBroker {
 				`printf '%s' "$$" > ${quoteShellArg(pidPath)}`,
 				`exec ${argv.map(quoteShellArg).join(" ")}`,
 			].join("; ");
-			const shell = procmgr.resolveBasicShell() ?? "sh";
+			const shell = procmgr.getShellConfig().shell;
 			run = session.start({ command, shell, ...options }, onChunk);
 		}
 		void run
