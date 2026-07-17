@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Increased maxTokens from 32,768 to 65,536 for Kimi K2.7-Code models on Fireworks
+
 ## [17.0.1] - 2026-07-16
 
 ### Added

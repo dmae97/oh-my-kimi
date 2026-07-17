@@ -132,8 +132,9 @@ describe("Fireworks control-plane serverless discovery", () => {
 		expect(kimi.provider).toBe("fireworks");
 		expect(kimi.baseUrl).toBe("https://api.fireworks.ai/inference/v1");
 		expect(kimi.contextWindow).toBe(262144);
-		// Kimi family clamps to the published 32,768 output cap.
-		expect(kimi.maxTokens).toBe(32768);
+		// K2.7-Code is excluded from the K2.5/K2.6 cap and uses Fireworks'
+		// reported 65,536 output ceiling.
+		expect(kimi.maxTokens).toBe(65536);
 		expect(kimi.input).toEqual(["text", "image"]);
 		// Control plane reports no reasoning bit; serverless chat LLMs default on.
 		expect(kimi.reasoning).toBe(true);

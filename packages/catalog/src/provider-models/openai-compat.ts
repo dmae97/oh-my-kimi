@@ -1494,13 +1494,31 @@ export function zhipuCodingPlanModelManagerOptions(
 export const FIREWORKS_KIMI_MAX_TOKENS = 32_768;
 
 /**
- * Returns true for any Kimi K2.x public model id served by Fireworks-backed
- * providers (`fireworks` direct, `firepass` router). Matches both the public
- * catalog id (`kimi-k2.5`, `kimi-k2.6`, `kimi-k2.6-turbo`) and the canonical
- * Fireworks wire id (`accounts/fireworks/{models,routers}/kimi-k2…`).
+ * Fireworks' output ceiling for Kimi K2.7-Code specifically. Its `/v1/models`
+ * generic `max_completion_tokens` is 65,536 and Fireworks serves it in full —
+ * verified with a single completion emitting 58,971 output tokens and
+ * `max_tokens: 200000` accepted without error. Unlike the older K2.5/K2.6
+ * family (see {@link FIREWORKS_KIMI_MAX_TOKENS}), K2.7-Code is not clamped to
+ * 32,768; that ceiling only truncated it.
+ */
+export const FIREWORKS_KIMI_K27_CODE_MAX_TOKENS = 65_536;
+
+/**
+ * Returns true for the Kimi K2.5 / K2.6 family served by Fireworks-backed
+ * providers (`fireworks` direct, `firepass` router) that share the 32,768
+ * `maxTokens` ceiling. Matches both the public catalog id (`kimi-k2.5`,
+ * `kimi-k2.6`, `kimi-k2.6-turbo`) and the canonical Fireworks wire id
+ * (`accounts/fireworks/{models,routers}/kimi-k2…`).
+ *
+ * K2.7-Code (incl. `-fast` / `-highspeed`) is deliberately excluded: unlike the
+ * earlier K2 family it serves its full context on Fireworks — verified with a
+ * single completion emitting 58,971 output tokens and `max_tokens: 200000`
+ * accepted without error — so the 32,768 cap would only truncate it. It inherits
+ * Fireworks' reported `max_completion_tokens` (65,536) instead.
  */
 export function isFireworksKimiK2ModelId(modelId: string): boolean {
 	const trimmed = modelId.toLowerCase();
+	if (/kimi[-._]?k2(?:[._-]?|p)7[-._]?code/.test(trimmed)) return false;
 	if (trimmed.startsWith("kimi-k2")) return true;
 	return /\/kimi-k2(?:p\d+)?(?:[._-]|$)/.test(trimmed);
 }
@@ -1657,9 +1675,14 @@ function mapFireworksControlPlaneModel(
 	const supportsImage = toBoolean(record.supportsImageInput) === true;
 	const supportsTools = toBoolean(record.supportsTools);
 	const contextWindow = toPositiveNumber(record.contextLength, reference?.contextWindow ?? null);
-	// The control plane reports no max-output budget; default the Kimi family to
-	// its published cap, everyone else to the discovery fallback, then clamp.
-	const fallbackMaxTokens = isFireworksKimiK2ModelId(publicModelId) ? FIREWORKS_KIMI_MAX_TOKENS : null;
+	// The control plane reports no max-output budget. Default K2.7-Code to its
+	// verified 65,536 ceiling, the older K2.5/K2.6 family to the clamped 32,768,
+	// everyone else to the discovery fallback, then clamp.
+	const fallbackMaxTokens = isKimiK27CodeModelId(publicModelId)
+		? FIREWORKS_KIMI_K27_CODE_MAX_TOKENS
+		: isFireworksKimiK2ModelId(publicModelId)
+			? FIREWORKS_KIMI_MAX_TOKENS
+			: null;
 	const maxTokens = clampFireworksKimiMaxTokens(publicModelId, reference?.maxTokens ?? fallbackMaxTokens);
 	const base: ModelSpec<"openai-completions"> = reference ?? {
 		id: publicModelId,
