@@ -92,25 +92,37 @@ export async function quarantineCorruptModelFile(message: string, cacheDir?: str
 	return true;
 }
 
-/** @internal exported for tests — the production seam stays {@link setLocalModelInitializer}. */
+const SIDECAR_ERROR_RE =
+	/(?:Config file not found at .*config|Tokenizer file not found at .*tokenizer|Tokens map file not found at .*special_tokens_map)/u;
+
+/**
+ * Shared local-model initializer: FlagEmbedding.init with BOTH cache heals.
+ * Missing sidecars (config/tokenizer/tokens map) re-fetch and retry; a
+ * corrupt model blob (Protobuf parse failure) quarantines the file and
+ * retries THROUGH the sidecar heal, so a cache that is broken in both ways
+ * still recovers in one pass. Also the initializer the embed worker uses in
+ * its subprocess; the in-process seam stays {@link setLocalModelInitializer}.
+ */
 export async function defaultLocalModelInitializer(options: LocalModelInitOptions): Promise<LocalEmbeddingModel> {
 	const { FlagEmbedding } = await loadFastembed();
+	const initWithSidecarHeal = async (): Promise<LocalEmbeddingModel> => {
+		try {
+			return await FlagEmbedding.init(options);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "";
+			if (!SIDECAR_ERROR_RE.test(message)) throw error;
+			if (!(await ensureFastembedModelSidecars(options.model, options.cacheDir))) throw error;
+			return FlagEmbedding.init(options);
+		}
+	};
 	try {
-		return await FlagEmbedding.init(options);
+		return await initWithSidecarHeal();
 	} catch (error) {
 		const message = error instanceof Error ? error.message : "";
 		if (/Protobuf parsing failed/i.test(message) && (await quarantineCorruptModelFile(message, options.cacheDir))) {
-			return FlagEmbedding.init(options);
+			return initWithSidecarHeal();
 		}
-		if (
-			!/(?:Config file not found at .*config|Tokenizer file not found at .*tokenizer|Tokens map file not found at .*special_tokens_map)/u.test(
-				message,
-			)
-		) {
-			throw error;
-		}
-		if (!(await ensureFastembedModelSidecars(options.model, options.cacheDir))) throw error;
-		return FlagEmbedding.init(options);
+		throw error;
 	}
 }
 
