@@ -2388,7 +2388,14 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 	 */
 	#wrapCellText(text: string, maxWidth: number): string[] {
 		const cellWidth = Math.max(1, maxWidth);
-		return splitTerminalLines(text).flatMap(line => wrapTextWithAnsi(line, cellWidth));
+		// Wrap the whole cell in one call so wrapTextWithAnsi() balances OSC 8
+		// hyperlink state across explicit newlines (e.g. `<br>` rendered as \n);
+		// per-fragment wrapping would drop the reopened link on later rows.
+		const wrapped = wrapTextWithAnsi(text, cellWidth);
+		while (wrapped.length > 1 && wrapped[wrapped.length - 1] === "") {
+			wrapped.pop();
+		}
+		return wrapped;
 	}
 
 	/**

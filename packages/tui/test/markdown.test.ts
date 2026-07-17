@@ -1451,6 +1451,49 @@ bar`,
 			);
 		});
 
+		it("should balance OSC 8 links across explicit newlines in a table cell", () => {
+			const issueUrl = "https://github.com/can1357/oh-my-pi/issues/5860";
+			const markdown = new Markdown(
+				`| Issue | Title |
+|---|---|
+| [first<br>second](${issueUrl}) | plain title cell |`,
+				0,
+				0,
+				defaultMarkdownTheme,
+			);
+
+			const lines = markdown.render(40).map(inspectHyperlinks);
+			const firstRow = lines.find(line => line.visible.includes("first"));
+			const secondRow = lines.find(line => line.visible.includes("second"));
+			expect(firstRow).toBeDefined();
+			expect(secondRow).toBeDefined();
+			if (!firstRow || !secondRow) throw new Error("Expected both wrapped label rows");
+
+			// No cell border or padding may carry the link on either physical row.
+			for (const line of lines) {
+				for (let i = 0; i < line.visible.length; i++) {
+					if (line.visible[i] === "|") expect(line.targets[i]).toBeNull();
+				}
+			}
+
+			// Both label fragments split by <br> must still target the full URL.
+			for (const [row, label] of [
+				[firstRow, "first"],
+				[secondRow, "second"],
+			] as const) {
+				const start = row.visible.indexOf(label);
+				expect(row.targets.slice(start, start + label.length)).toEqual(new Array(label.length).fill(issueUrl));
+				const separator = row.visible.indexOf("|", start);
+				expect(row.targets.slice(start + label.length, separator)).toEqual(
+					new Array(separator - start - label.length).fill(null),
+				);
+			}
+
+			expect(new Set(lines.flatMap(line => line.targets).filter(target => target !== null))).toEqual(
+				new Set([issueUrl]),
+			);
+		});
+
 		it("should show URL for explicit markdown links with different text", () => {
 			const markdown = new Markdown("[click here](https://example.com)", 0, 0, defaultMarkdownTheme);
 

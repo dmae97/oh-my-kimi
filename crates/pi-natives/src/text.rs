@@ -1128,7 +1128,11 @@ fn wrap_single_line(line: &[u16], width: usize, tab_width: usize) -> SmallVec<[V
 	}
 
 	if visible_width_u16(line, tab_width) <= width {
-		return smallvec![line.to_vec()];
+		let mut only = line.to_vec();
+		let mut state = WrapState::new();
+		update_state_from_text(line, &mut state);
+		write_hyperlink_close(&state, &mut only);
+		return smallvec![only];
 	}
 
 	let tokens = split_into_tokens_with_ansi(line);
