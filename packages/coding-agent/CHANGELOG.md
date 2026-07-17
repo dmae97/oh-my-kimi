@@ -9,6 +9,18 @@
 ## [17.0.1] - 2026-07-16
 
 ### Changed
+- Made the hashline seen-line guard opt-in and off by default (see `edit.enforceSeenLines`), and stopped excluding column-clipped (>512-char) lines from a snapshot's seen set: a displayed line now counts as seen even when its display was column-truncated, so single-line edits on long lines found via `read`/`grep` apply without a separate full-width re-read.
+- Changed the default `astGrep.enabled` setting to `false`
+- Batched todo operations with real tool calls to prevent solo todo turns and extra round trips
+- Changed every bundled TTSR rule to warn without interrupting generation.
+- Renamed the system prompt's project-context section wrapper from `<context>` to `<repo-rules>` to stop it colliding with the `task` tool's `context` parameter under in-band XML tool dialects: models were closing `<parameter name="context">` with a stray `</context>` (primed by the ambient section tag) and emitting sibling params as bare `<tasks>` elements, so `tasks` arrived missing.
+- Rendered `read xd://` calls in the compact grouped read view instead of a full tool-execution card; other internal URLs (`skill://`, `agent://`, …) still render full so their resolved content stays visible.
+
+### Fixed
+
+- Made the model selector status messages use the role tag (`SMOL`, `SLOW`) instead of the display name (`Fast`, `Thinking`), matching the rest of the TUI and CLI/env role terminology ([#5585](https://github.com/can1357/oh-my-pi/issues/5585)).
+
+### Removed
 
 - Fixed a crash when a plugin/custom tool renderer returns a component that throws during its later `render()` pass (e.g. `TypeError: th.bold is not a function` from a plugin that styles its header off an object without a `bold` method). `ToolExecutionComponent` now wraps every renderer-returned call/result component so a throwing `render()` degrades to the safe fallback (tool label or raw result text) instead of taking down the transcript ([#4978](https://github.com/can1357/oh-my-pi/issues/4978)).
 
