@@ -291,6 +291,7 @@ describe("GitLab Duo Workflow provider protocol", () => {
 	it("builds startRequest goal as a bare ChatML transcript with tool-run linkage", () => {
 		const patToken = `${"glpat"}-abcdefgh12345678ijkl`;
 		const sessionCookie = "_gitlab_session=0123456789abcdef0123456789abcdef";
+		const credentialTokens = [patToken, sessionCookie];
 
 		const replayContext: Context = {
 			systemPrompt: [`OMP system instructions: preserve the local tool bridge. token ${patToken}`],

@@ -22,7 +22,22 @@ export interface AdvisorConfig {
 	model?: string;
 	tools?: string[];
 	instructions?: string;
+	/** Per-advisor on/off toggle (default `true`). When `false`, the advisor
+	 *  stays in the roster but its runtime is never built — it shows `○` in
+	 *  the status line and `/advisor status` rather than disappearing. */
+	enabled?: boolean;
 }
+
+/**
+ * Runtime health of a single advisor, surfaced in stats and the status line.
+ * - `running` — actively processing primary turns
+ * - `paused` — user-toggled off via per-advisor switch (runtime disposed)
+ * - `quota_exhausted` — provider returned a quota/rate-limit error; the
+ *   runtime auto-retries after a cooldown so it can resume without user action
+ * - `error` — repeated transient failures; backlog dropped to prevent stall
+ * - `no_model` — no model resolved for this advisor's role/explicit model
+ */
+export type AdvisorRuntimeStatus = "running" | "paused" | "quota_exhausted" | "error" | "no_model";
 
 /**
  * The result of walking the `WATCHDOG.yml`/`WATCHDOG.yaml` search path: the
@@ -39,6 +54,7 @@ const advisorEntrySchema = type({
 	"model?": "string",
 	"tools?": "string[]",
 	"instructions?": "string",
+	"enabled?": "boolean",
 });
 
 const watchdogYamlSchema = type({
@@ -156,6 +172,7 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 				model: entry.model?.trim() || undefined,
 				tools: filterAdvisorTools(entry.tools, item.path),
 				instructions,
+				enabled: entry.enabled,
 			});
 		}
 	}
@@ -236,38 +253,73 @@ export async function loadWatchdogConfigFile(filePath: string): Promise<Watchdog
 		logger.warn("Advisor config: invalid schema for edit", { path: filePath, error: result.summary });
 		return { advisors: [] };
 	}
-	return {
-		instructions: result.instructions?.trim() ? result.instructions : undefined,
-		advisors: (result.advisors ?? []).map(a => ({
-			name: a.name,
-			model: a.model?.trim() || undefined,
-			tools: a.tools === undefined ? undefined : [...a.tools],
-			instructions: a.instructions?.trim() ? a.instructions : undefined,
-		})),
-	};
+	const advisors = (result.advisors ?? []).map(a => {
+		const advisor: AdvisorConfig = { name: a.name };
+		if (a.model?.trim()) advisor.model = a.model;
+		if (a.tools !== undefined) advisor.tools = [...a.tools];
+		if (a.instructions?.trim()) advisor.instructions = a.instructions;
+		if (a.enabled !== undefined) advisor.enabled = a.enabled;
+		return advisor;
+	});
+	const doc: WatchdogConfigDoc = { advisors };
+	if (result.instructions?.trim()) doc.instructions = result.instructions;
+	return doc;
 }
 
 /**
- * Serialize an editable doc back to block-style `WATCHDOG.yml` text via Bun's
- * `YAML.stringify` (the same API the repo uses for other hand-editable config),
- * omitting empty fields. Round-trips through {@link loadWatchdogConfigFile}.
+ * Serialize an editable doc back to canonical, hand-editable `WATCHDOG.yml`.
+ * Multiline instruction fields use literal block scalars while scalar quoting
+ * delegates to Bun's YAML encoder. Round-trips through {@link loadWatchdogConfigFile}.
  * Returns `""` for an empty doc.
  */
-export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
-	const out: { instructions?: string; advisors?: AdvisorConfig[] } = {};
-	if (doc.instructions?.trim()) out.instructions = doc.instructions;
-	if (doc.advisors.length > 0) {
-		out.advisors = doc.advisors.map(a => {
-			const entry: AdvisorConfig = { name: a.name };
-			if (a.model?.trim()) entry.model = a.model;
-			if (a.tools !== undefined) entry.tools = [...a.tools];
-			if (a.instructions?.trim()) entry.instructions = a.instructions;
-			return entry;
-		});
+
+function appendYamlString(lines: string[], indent: string, key: string, value: string): void {
+	const hasSignificantLeadingWhitespace = value.split("\n").some(line => /^[ \t]/.test(line));
+	if (!value.includes("\n") || hasSignificantLeadingWhitespace) {
+		lines.push(`${indent}${key}: ${YAML.stringify(value)}`);
+		return;
 	}
-	if (out.instructions === undefined && out.advisors === undefined) return "";
-	const text = YAML.stringify(out, null, 2);
-	return text.endsWith("\n") ? text : `${text}\n`;
+	const normalized = value.replaceAll("\r\n", "\n");
+	let trailingNewlines = 0;
+	for (let index = normalized.length - 1; index >= 0 && normalized[index] === "\n"; index--) {
+		trailingNewlines++;
+	}
+	const chomp = trailingNewlines === 0 ? "|2-" : trailingNewlines === 1 ? "|2" : "|2+";
+	const body = trailingNewlines === 0 ? normalized : normalized.slice(0, -trailingNewlines);
+	lines.push(`${indent}${key}: ${chomp}`);
+	for (const line of body.split("\n")) {
+		lines.push(`${indent}  ${line}`);
+	}
+	for (let index = 1; index < trailingNewlines; index++) {
+		lines.push(`${indent}  `);
+	}
+}
+
+export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
+	const lines: string[] = [];
+	if (doc.instructions?.trim()) appendYamlString(lines, "", "instructions", doc.instructions);
+	if (doc.advisors.length > 0) {
+		lines.push("advisors:");
+		for (const advisor of doc.advisors) {
+			lines.push(`  - name: ${YAML.stringify(advisor.name)}`);
+			if (advisor.model?.trim()) lines.push(`    model: ${YAML.stringify(advisor.model)}`);
+			if (advisor.tools !== undefined) {
+				if (advisor.tools.length === 0) {
+					lines.push("    tools: []");
+				} else {
+					lines.push("    tools:");
+					for (const tool of advisor.tools) {
+						lines.push(`      - ${YAML.stringify(tool)}`);
+					}
+				}
+			}
+			if (advisor.instructions?.trim()) {
+				appendYamlString(lines, "    ", "instructions", advisor.instructions);
+			}
+			if (advisor.enabled !== undefined) lines.push(`    enabled: ${advisor.enabled}`);
+		}
+	}
+	return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
 }
 
 /**

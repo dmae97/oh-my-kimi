@@ -66,6 +66,22 @@ export interface AdvisorRuntimeHost {
 	onTurnSuccess?(): Promise<void> | void;
 	/** Surface a non-recovering advisor failure to the host UI without adding model-visible context. */
 	notifyFailure?(error: unknown): void;
+	/** Signal that the advisor paused on a quota/rate-limit after host-level
+	 *  recovery (credential switch, fallback chain) declined. Cleared only by
+	 *  an explicit reset (`/new`, config rebuild, session restart). */
+	notifyQuotaExhausted?(): void;
+}
+
+/**
+ * A request rejection that no amount of retrying can fix for this advisor
+ * configuration: the provider refuses the model/request shape outright (e.g.
+ * "The 'gpt-5.3-codex-spark' model is not supported when using Codex with a
+ * ChatGPT account", code=invalid_request_error). Distinct from quota errors,
+ * which pause via the dedicated quota path and auto-resume on reset.
+ */
+function isPermanentAdvisorError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return /invalid_request_error|model[_ ]not[_ ]found|is not supported when|does not exist/i.test(message);
 }
 
 const ADVISOR_QUARANTINE_PREFIX = "Advisor response quarantined";
@@ -183,6 +199,14 @@ export function buildAdvisorQuarantineSourceText(currentInput: string, messages:
  */
 const MAX_COALESCE_ROUNDS = 3;
 
+const ADVISOR_RENDER_OPTIONS = {
+	includeThinking: true,
+	includeToolIntent: true,
+	watchedRoles: true,
+	expandPrimaryContext: true,
+	expandEditDiffs: true,
+} as const;
+
 interface PendingDelta {
 	text: string;
 	rawMessages: AgentMessage[];
@@ -235,6 +259,20 @@ export class AdvisorRuntime {
 	#backlog = 0;
 	#consecutiveFailures = 0;
 	#failureNotified = false;
+	/** Completed 3-failure backlog-drop cycles since the last success/reset. */
+	#droppedBacklogs = 0;
+	/**
+	 * Hard stop after repeated drop cycles or a permanent request rejection
+	 * (e.g. "model not supported"): without it the advisor re-attempts on every
+	 * new delta forever, and in a shared daemon that unbounded churn burns CPU
+	 * and starves every hosted session's event loop. Cleared only by an
+	 * explicit {@link reset} (config rebuild, /new, session restart).
+	 */
+	#halted = false;
+	/** True from the moment an advisor turn fails until one succeeds (or an
+	 *  explicit reset/seed). While set, {@link waitForCatchup} resolves
+	 *  immediately: the primary agent NEVER parks on a failing advisor. */
+	#failing = false;
 	#latestMessages?: AgentMessage[];
 	#waiters: CatchupWaiter[] = [];
 	/** Bumped by every external {@link reset}/{@link dispose}. A drain iteration
@@ -243,6 +281,13 @@ export class AdvisorRuntime {
 	 *  being retried/requeued into the post-reset conversation. */
 	#epoch = 0;
 	disposed = false;
+	/** Quota/rate-limit pause state. When `true`, the advisor stops processing
+	 *  turns and drops new deltas until an explicit {@link reset} clears it
+	 *  (triggered by `/new`, config rebuild, or session restart). There is no
+	 *  timer-based auto-resume: provider quota windows (5h/7d) are far longer
+	 *  than any reasonable timer, and premature retries waste calls and
+	 *  re-trigger the same error. */
+	#quotaExhausted = false;
 
 	constructor(
 		private readonly agent: AdvisorAgent,
@@ -252,6 +297,16 @@ export class AdvisorRuntime {
 
 	get backlog(): number {
 		return this.#backlog;
+	}
+	get quotaExhausted(): boolean {
+		return this.#quotaExhausted;
+	}
+	get failureNotified(): boolean {
+		return this.#failureNotified;
+	}
+	/** True after the runtime hard-stopped on repeated or permanent failures. */
+	get halted(): boolean {
+		return this.#halted;
 	}
 
 	/**
@@ -277,11 +332,32 @@ export class AdvisorRuntime {
 	 *   the delta and forwarded to the reprime path so it is never silently dropped.
 	 */
 	onTurnEnd(messages?: AgentMessage[], opts?: { willContinue?: boolean }): void {
-		if (this.disposed) return;
+		if (this.disposed || this.#quotaExhausted || this.#halted) return;
 		const all = messages ?? this.host.snapshotMessages();
 		this.#latestMessages = all;
 		const wip = opts?.willContinue ?? false;
-		const rendered = this.#renderDelta(all, wip);
+		let rendered: Omit<PendingDelta, "turns" | "overflowRecovery"> | null = null;
+		// #renderDelta advances the cursor/prefix/dedup state before formatting
+		// can throw; snapshot them so a formatter bug loses NOTHING — the next
+		// turn re-renders this delta (a prefix change mid-render self-heals via
+		// the fingerprint scan, at worst costing one full replay).
+		const cursorBefore = this.#lastCount;
+		const prefixBefore = this.#deliveredPrefix.slice();
+		const seenBefore = [...this.#seenContext];
+		try {
+			rendered = this.#renderDelta(all, wip);
+		} catch (err) {
+			// A render bug must never propagate into the primary agent's
+			// turn-end callback: the advisor skips this delta and stops gating
+			// the catch-up wait until a turn succeeds.
+			this.#lastCount = cursorBefore;
+			this.#deliveredPrefix = prefixBefore;
+			this.#seenContext.clear();
+			for (const [key, value] of seenBefore) this.#seenContext.set(key, value);
+			this.#failing = true;
+			this.#wakeAllWaiters();
+			logger.warn("advisor delta render failed", { err: String(err) });
+		}
 		if (rendered) {
 			this.#pending.push({ ...rendered, turns: 1 });
 			this.#backlog++;
@@ -291,7 +367,18 @@ export class AdvisorRuntime {
 	}
 
 	waitForCatchup(maxMs: number, threshold: number, signal?: AbortSignal): Promise<void> {
-		if (this.disposed || signal?.aborted || this.#backlog < threshold) return Promise.resolve();
+		if (
+			this.disposed ||
+			signal?.aborted ||
+			this.#backlog < threshold ||
+			this.#quotaExhausted ||
+			this.#halted ||
+			// An advisor mid-failure/retry must NEVER gate the primary agent:
+			// its backlog cannot drain until the retry cycle resolves, and the
+			// primary would otherwise park for the full catch-up budget.
+			this.#failing
+		)
+			return Promise.resolve();
 		const { promise, resolve } = Promise.withResolvers<void>();
 		let waiter!: CatchupWaiter;
 		const finish = (): void => {
@@ -354,6 +441,25 @@ export class AdvisorRuntime {
 	}
 
 	/**
+	 * Account one completed 3-failure backlog-drop cycle. Repeated cycles (or a
+	 * single permanent request rejection, e.g. "model not supported") hard-stop
+	 * the runtime: in a shared daemon, unbounded advisor churn re-builds heavy
+	 * context on every new delta and starves every hosted session's event loop.
+	 * Only an explicit {@link reset} (config rebuild, /new, restart) resumes.
+	 */
+	#noteDroppedBacklog(error: unknown): void {
+		this.#droppedBacklogs++;
+		if (this.#droppedBacklogs < 3 && !isPermanentAdvisorError(error)) return;
+		this.#halted = true;
+		this.#pending = [];
+		this.#wakeAllWaiters();
+		logger.warn("advisor halted after repeated failures; use /advisor or reload config to re-enable", {
+			droppedBacklogs: this.#droppedBacklogs,
+			err: String(error),
+		});
+	}
+
+	/**
 	 * Re-prime the advisor after a history rewrite (compaction, session
 	 * switch/resume, branch). Clears the advisor's own (non-persisted) context
 	 * and rewinds the cursor to 0 so the NEXT turn replays the full current —
@@ -362,6 +468,10 @@ export class AdvisorRuntime {
 	 */
 	reset(): void {
 		this.#epoch++;
+		this.#quotaExhausted = false;
+		this.#halted = false;
+		this.#failing = false;
+		this.#droppedBacklogs = 0;
 		this.#resetAdvisorContext(true, true);
 	}
 
@@ -380,6 +490,8 @@ export class AdvisorRuntime {
 		this.#pending = [];
 		this.#backlog = 0;
 		this.#consecutiveFailures = 0;
+		this.#failing = false;
+		this.#droppedBacklogs = 0;
 		this.#failureNotified = false;
 		this.#clearSeenContext();
 		this.#wakeAllWaiters();
@@ -392,13 +504,7 @@ export class AdvisorRuntime {
 		if (delta.length === 0) return null;
 		const obfuscator = this.host.obfuscator;
 		const formattedDelta = obfuscator?.hasSecrets() ? obfuscateAdvisorDelta(obfuscator, delta) : delta;
-		const md = formatSessionHistoryMarkdown(formattedDelta, {
-			includeThinking: true,
-			includeToolIntent: true,
-			watchedRoles: true,
-			expandPrimaryContext: true,
-			expandEditDiffs: true,
-		});
+		const md = formatSessionHistoryMarkdown(formattedDelta, ADVISOR_RENDER_OPTIONS);
 		if (!md.trim()) return null;
 		const heading = wip ? "### Session update [in progress — more steps follow]" : "### Session update";
 		return `${heading}\n\n${md}`;
@@ -683,8 +789,10 @@ export class AdvisorRuntime {
 					const turnError = getAdvisorTurnError(this.agent.state.messages.slice(messageSnapshot));
 					if (turnError) throw turnError;
 					success = true;
+					this.#failing = false;
 					this.#consecutiveFailures = 0;
 					this.#failureNotified = false;
+					this.#droppedBacklogs = 0;
 					if (this.host.onTurnSuccess) {
 						try {
 							await this.host.onTurnSuccess();
@@ -696,6 +804,12 @@ export class AdvisorRuntime {
 					// reset()/dispose() aborts the in-flight prompt; treat it as a
 					// reset, not a transient failure — drop the stale batch.
 					if (this.#epoch !== epoch) continue;
+					// Release any parked primary-agent waiters IMMEDIATELY — before
+					// the async onTurnError hook or any retry sleep — and refuse new
+					// parks until a turn succeeds. A failing advisor must never hold
+					// the primary on the catch-up gate.
+					this.#failing = true;
+					this.#wakeAllWaiters();
 					const failedMessages = this.agent.state.messages.slice(messageSnapshot);
 					const terminalFailure = this.#terminalAssistantFailure(messageSnapshot);
 					const terminalFailureId =
@@ -742,6 +856,32 @@ export class AdvisorRuntime {
 						});
 						continue;
 					}
+					if (AIError.isUsageLimit(err)) {
+						// Host recovery (credential switch / fallback chain) declined:
+						// pause on the quota latch instead of burning retries — provider
+						// quota windows (5h/7d) outlast any retry budget. The batch is
+						// requeued and the backlog stays visible so reset() replays it.
+						logger.warn("advisor quota exhausted", { err: String(err) });
+						this.#quotaExhausted = true;
+						this.#consecutiveFailures = 0;
+						this.#failureNotified = false;
+						this.#clearSeenContext();
+						this.#pending.unshift({
+							text: batch,
+							rawMessages,
+							renderRevision: this.#renderRevision,
+							turns: finalTurns,
+							wip,
+							overflowRecovery: recoveringOverflow || undefined,
+						});
+						this.#wakeAllWaiters();
+						try {
+							this.host.notifyQuotaExhausted?.();
+						} catch (notifyErr) {
+							logger.warn("advisor quota notification failed", { err: String(notifyErr) });
+						}
+						break;
+					}
 					if (!terminalFailureRetriable) {
 						logger.warn("advisor terminal failure is non-retriable; dropping bounded batch");
 						this.#notifyFailureOnce(err);
@@ -749,6 +889,7 @@ export class AdvisorRuntime {
 						// The dropped batch may carry primary-context we never delivered; drop
 						// the seen-state too so queued raw deltas re-expand before delivery.
 						this.#clearSeenContext();
+						this.#noteDroppedBacklog(err);
 						success = true;
 					} else if (contextOverflow) {
 						this.#clearAdvisorContextAtCurrentCursor();
@@ -782,6 +923,7 @@ export class AdvisorRuntime {
 							// The dropped batch may carry primary-context we never delivered; drop
 							// the seen-state too so queued raw deltas re-expand before delivery.
 							this.#clearSeenContext();
+							this.#noteDroppedBacklog(err);
 							success = true;
 						} else {
 							this.#pending.unshift({

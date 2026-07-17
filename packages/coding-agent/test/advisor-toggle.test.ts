@@ -1,8 +1,10 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
+import * as AIError from "@oh-my-pi/pi-ai/error";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -283,5 +285,59 @@ describe("AgentSession advisor toggle", () => {
 
 		expect(sessionB.isAdvisorEnabled()).toBe(true);
 		expect(sessionB.isAdvisorActive()).toBe(true);
+	});
+
+	it("exposes provider sessionId on live advisor stats", () => {
+		session.settings.setModelRole("advisor", `${model.provider}/${model.id}`);
+		session.toggleAdvisorEnabled();
+
+		const stats = session.getAdvisorStats();
+		expect(stats.advisors).toHaveLength(1);
+		const sid = stats.advisors[0].sessionId!;
+		// Full UUIDv7 — must not contain the display-label "-advisor" suffix
+		expect(sid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+		expect(sid).not.toContain("-advisor");
+	});
+	it("marks structurally classified advisor usage limits", async () => {
+		const mock = createMockModel({ responses: [{ content: ["primary complete"] }] });
+		const primaryAgent = new Agent({
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: mock.stream,
+		});
+		const settings = Settings.isolated({ "compaction.enabled": false });
+		settings.setModelRole("advisor", `${model.provider}/${model.id}`);
+		const quotaSession = new AgentSession({
+			agent: primaryAgent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+			advisorTools: [],
+		});
+
+		try {
+			expect(quotaSession.setAdvisorEnabled(true)).toBe(true);
+			const advisorAgent = quotaSession.getAdvisorAgent();
+			if (!advisorAgent) throw new Error("Expected advisor agent to exist");
+			vi.spyOn(advisorAgent, "prompt").mockRejectedValue(
+				new AIError.ProviderHttpError("Generic provider failure", 429, { code: "insufficient_quota" }),
+			);
+			const markUsageLimitReached = vi
+				.spyOn(authStorage, "markUsageLimitReached")
+				.mockResolvedValue({ switched: false });
+
+			await quotaSession.prompt("Trigger advisor");
+			await quotaSession.waitForIdle();
+
+			expect(markUsageLimitReached).toHaveBeenCalledTimes(1);
+			expect(markUsageLimitReached.mock.calls[0]?.[0]).toBe(model.provider);
+		} finally {
+			await quotaSession.dispose();
+			vi.restoreAllMocks();
+		}
 	});
 });

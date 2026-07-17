@@ -298,6 +298,13 @@ export class SelectorController {
 				close: done,
 				requestRender: () => this.ctx.ui.requestRender(),
 				notify: message => this.ctx.showStatus(message),
+				getAdvisorStats: () => this.ctx.session.getAdvisorStats().advisors,
+				getUsageReports: async () => this.ctx.session.fetchUsageReports?.() ?? null,
+				resolveActiveAccount: (provider, sessionId) =>
+					this.ctx.session.modelRegistry.authStorage.getOAuthAccountIdentity(
+						provider,
+						sessionId ?? this.ctx.session.sessionId,
+					),
 			});
 			overlayHandle = this.ctx.ui.showOverlay(overlay, {
 				anchor: "bottom-center",

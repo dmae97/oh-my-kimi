@@ -16,7 +16,7 @@
  * `save` callback.
  */
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Model } from "@oh-my-pi/pi-ai";
+import type { Model, UsageReport } from "@oh-my-pi/pi-ai";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import {
 	type Component,
@@ -38,6 +38,9 @@ import {
 import type { ModelRegistry } from "../../config/model-registry";
 import { formatModelSelectorValue } from "../../config/model-resolver";
 import type { Settings } from "../../config/settings";
+import type { PerAdvisorStat } from "../../session/agent-session";
+import type { OAuthAccountIdentity } from "../../session/auth-storage";
+import { formatCompactQuota } from "../controllers/command-controller";
 import { getSelectListTheme, theme } from "../theme/theme";
 import { HookEditorComponent } from "./hook-editor";
 import { buildBrowserItems, ModelBrowser, sortModelItems } from "./model-browser";
@@ -63,6 +66,11 @@ export interface AdvisorConfigCallbacks {
 	requestRender: () => void;
 	/** Surface a transient status/warning line to the user. */
 	notify: (message: string) => void;
+	/** Live advisor usage stats; lets the preview show tokens/cost per advisor. */
+	getAdvisorStats?: () => PerAdvisorStat[];
+	getUsageReports?: () => Promise<UsageReport[] | null>;
+	/** Resolve the active OAuth identity for quota filtering (per-advisor account stickiness). */
+	resolveActiveAccount?: (provider: string, sessionId?: string) => OAuthAccountIdentity | undefined;
 }
 
 export interface AdvisorConfigDeps {
@@ -126,6 +134,8 @@ export class AdvisorConfigOverlayComponent implements Component {
 	#cb: AdvisorConfigCallbacks;
 	#scope: AdvisorConfigScope;
 	#doc: WatchdogConfigDoc;
+	/** Cached usage reports (quota/window/reset) prefetched on overlay open. */
+	#cachedReports: UsageReport[] | null = null;
 	#dirty = false;
 
 	#screen: Screen = "list";
@@ -157,6 +167,16 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#doc = doc;
 		this.#ensureRosterVisible();
 		this.#showList();
+		// Prefetch usage reports for quota display; non-fatal if unavailable.
+		if (callbacks.getUsageReports) {
+			void callbacks
+				.getUsageReports()
+				.then(r => {
+					this.#cachedReports = r;
+					this.#cb.requestRender();
+				})
+				.catch(() => {});
+		}
 	}
 
 	// ───────────────────────────── render ─────────────────────────────
@@ -275,6 +295,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const lines = [
 			theme.bold(advisor.name || "(unnamed)"),
 			"",
+			`${theme.fg("dim", "Enabled:")} ${advisor.enabled === false ? "○ off" : "● on"}`,
 			`${theme.fg("dim", "Model:")} ${model}`,
 			`${theme.fg("dim", "Tools:")} ${tools}`,
 			"",
@@ -282,6 +303,34 @@ export class AdvisorConfigOverlayComponent implements Component {
 		];
 		const instr = advisor.instructions?.trim();
 		lines.push(...(instr ? wrap(instr, bodyWidth) : [theme.fg("muted", "(none)")]));
+		// Show live usage stats when available from the session.
+		const liveStat = this.#cb.getAdvisorStats?.()?.find(s => s.name === (advisor.name || "default"));
+		if (liveStat && (liveStat.status === "running" || liveStat.status === "quota_exhausted")) {
+			lines.push("", theme.fg("dim", "Usage:"));
+			const spendParts: string[] = [
+				`${liveStat.tokens.input.toLocaleString()} in`,
+				`${liveStat.tokens.output.toLocaleString()} out`,
+			];
+			if (liveStat.tokens.cacheRead > 0) spendParts.push(`${liveStat.tokens.cacheRead.toLocaleString()} cache`);
+			lines.push(theme.fg("dim", `  Tokens: ${spendParts.join(", ")}`));
+			if (liveStat.cost > 0) lines.push(theme.fg("dim", `  Cost: $${liveStat.cost.toFixed(4)}`));
+			if (liveStat.contextWindow > 0) {
+				const pct = Math.round((liveStat.contextTokens / liveStat.contextWindow) * 100);
+				lines.push(
+					theme.fg(
+						"dim",
+						`  Context: ${liveStat.contextTokens.toLocaleString()}/${liveStat.contextWindow.toLocaleString()} (${pct}%)`,
+					),
+				);
+			}
+		}
+		const quotaProvider =
+			(advisor.model?.includes("/") ? advisor.model.split("/")[0] : null) ?? liveStat?.model?.provider;
+		if (this.#cachedReports && quotaProvider) {
+			const activeAccount = this.#cb.resolveActiveAccount?.(quotaProvider, liveStat?.sessionId);
+			const quota = formatCompactQuota(quotaProvider, this.#cachedReports, Date.now(), activeAccount);
+			if (quota) lines.push(theme.fg("dim", `  ${quota}`));
+		}
 		return lines.map(line => truncateToWidth(line, bodyWidth));
 	}
 
@@ -311,7 +360,8 @@ export class AdvisorConfigOverlayComponent implements Component {
 			advisor.name === "default" &&
 			!advisor.model?.trim() &&
 			advisor.tools === undefined &&
-			!advisor.instructions?.trim()
+			!advisor.instructions?.trim() &&
+			advisor.enabled !== false
 		);
 	}
 
@@ -325,7 +375,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#ensureRosterVisible();
 		const items: SelectItem[] = this.#doc.advisors.map((advisor, index) => ({
 			value: `advisor:${index}`,
-			label: advisor.name || "(unnamed)",
+			label: `${advisor.enabled === false ? "○" : "●"} ${advisor.name || "(unnamed)"}`,
 			description: this.#advisorSummary(advisor),
 		}));
 		items.push({ value: "add", label: "+ Add advisor" });
@@ -395,6 +445,11 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const toolsDescription = formatAdvisorTools(advisor.tools, "no tools");
 		const items: SelectItem[] = [
 			{ value: "name", label: "Name", description: advisor.name },
+			{
+				value: "toggleEnabled",
+				label: "Enabled",
+				description: advisor.enabled === false ? "○ off" : "● on",
+			},
 			{ value: "model", label: "Model", description: modelDescription },
 		];
 		if (advisor.model?.trim()) {
@@ -414,6 +469,13 @@ export class AdvisorConfigOverlayComponent implements Component {
 
 	#onDetailSelect(index: number, field: string): void {
 		switch (field) {
+			case "toggleEnabled": {
+				const a = this.#doc.advisors[index];
+				a.enabled = a.enabled === false ? undefined : false;
+				this.#dirty = true;
+				this.#showDetail(index);
+				return;
+			}
 			case "name":
 				this.#showNameEditor(index);
 				return;

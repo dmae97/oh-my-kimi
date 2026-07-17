@@ -237,6 +237,7 @@ describe("AgentSession retry fallback", () => {
 		const requestedAdvisorModels: string[] = [];
 		const fallbackAppliedEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>> = [];
 		const fallbackSucceededEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_succeeded" }>> = [];
+		const fallbackSucceeded = Promise.withResolvers<void>();
 		const advisorFailures: string[] = [];
 		const advisorPrimarySelector = `${advisorPrimary.provider}/${advisorPrimary.id}`;
 		const advisorFallbackSelector = `${advisorFallback.provider}/${advisorFallback.id}`;
@@ -287,7 +288,10 @@ describe("AgentSession retry fallback", () => {
 		});
 		session.subscribe(event => {
 			if (event.type === "retry_fallback_applied") fallbackAppliedEvents.push(event);
-			if (event.type === "retry_fallback_succeeded") fallbackSucceededEvents.push(event);
+			if (event.type === "retry_fallback_succeeded") {
+				fallbackSucceededEvents.push(event);
+				fallbackSucceeded.resolve();
+			}
 			if (event.type === "notice" && event.source === "advisor" && event.message.includes("unavailable")) {
 				advisorFailures.push(event.message);
 			}
@@ -296,6 +300,10 @@ describe("AgentSession retry fallback", () => {
 		expect(session.setAdvisorEnabled(true)).toBe(true);
 		await session.prompt("Complete one primary turn");
 		await session.waitForIdle();
+		// The catch-up gate releases immediately while the advisor is mid-failure
+		// (a failing advisor must never park the primary), so waitForIdle can
+		// return before the fallback retry lands — await the success event.
+		await fallbackSucceeded.promise;
 
 		expect(requestedAdvisorModels).toEqual([advisorPrimarySelector, advisorFallbackSelector]);
 		expect(session.getAdvisorAgent()?.state.model).toMatchObject({

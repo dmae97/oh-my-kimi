@@ -16,6 +16,10 @@ function createModelContext(advisorActive: boolean): SegmentContext {
 			isAutoThinking: false,
 			autoResolvedThinkingLevel: () => undefined,
 			isAdvisorActive: () => advisorActive,
+			getAdvisorStatusOverview: () => ({
+				configured: advisorActive,
+				advisors: advisorActive ? [{ name: "default", status: "running" }] : [],
+			}),
 		} as unknown as SegmentContext["session"],
 		width: 120,
 		compactThinkingLevel: false,
@@ -53,12 +57,30 @@ function createModelContext(advisorActive: boolean): SegmentContext {
 }
 
 describe("status line model segment advisor badge", () => {
-	it("appends a success-colored ++ badge when the advisor is active", () => {
+	it("appends a success-colored ++ badge when all advisors run", () => {
 		const rendered = renderSegment("model", createModelContext(true));
 		expect(rendered.content).toContain("Test Model");
-		// The badge carries the success color, kept distinct from the statusLineModel
-		// name color (which several themes alias to `accent`).
 		expect(rendered.content).toContain(theme.fg("success", "++"));
+	});
+
+	it("colors the badge by the worst roster status", () => {
+		const ctx = createModelContext(true);
+		ctx.session.getAdvisorStatusOverview = () => ({
+			configured: true,
+			advisors: [
+				{ name: "a", status: "running" },
+				{ name: "b", status: "quota_exhausted" },
+			],
+		});
+		expect(renderSegment("model", ctx).content).toContain(theme.fg("warning", "++"));
+		ctx.session.getAdvisorStatusOverview = () => ({
+			configured: true,
+			advisors: [
+				{ name: "a", status: "error" },
+				{ name: "b", status: "quota_exhausted" },
+			],
+		});
+		expect(renderSegment("model", ctx).content).toContain(theme.fg("error", "++"));
 	});
 
 	it("omits the badge when the advisor is inactive", () => {
@@ -72,6 +94,7 @@ describe("status line model segment compact thinking level", () => {
 	function createThinkingContext(compactThinkingLevel: boolean): SegmentContext {
 		return {
 			...createModelContext(false),
+			compactThinkingLevel,
 			session: {
 				state: {
 					model: { id: "test-model", name: "Test Model", thinking: true },
@@ -81,8 +104,8 @@ describe("status line model segment compact thinking level", () => {
 				isAutoThinking: false,
 				autoResolvedThinkingLevel: () => undefined,
 				isAdvisorActive: () => false,
+				getAdvisorStatusOverview: () => ({ configured: false, advisors: [] }),
 			} as unknown as SegmentContext["session"],
-			compactThinkingLevel,
 		};
 	}
 
