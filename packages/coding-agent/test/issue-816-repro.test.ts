@@ -94,6 +94,47 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 		expect(setModelSpy).not.toHaveBeenCalled();
 	});
 
+	it("discards a deferred plan-role change when the role returns to the active model", async () => {
+		await mode.init({ suppressWelcomeIntro: true });
+		await mode.handlePlanModeCommand();
+		const activePlanModel = session.model;
+		const haiku = modelRegistry.find("anthropic", "claude-haiku-4-5");
+		const opus = modelRegistry.find("anthropic", "claude-opus-4-5");
+		if (!activePlanModel || !haiku || !opus) throw new Error("Expected plan models");
+		const replacementPlanModel =
+			activePlanModel.provider === haiku.provider && activePlanModel.id === haiku.id ? opus : haiku;
+
+		let isStreaming = false;
+		Object.defineProperty(session, "isStreaming", { configurable: true, get: () => isStreaming });
+
+		isStreaming = true;
+		session.settings.setModelRole("plan", `${replacementPlanModel.provider}/${replacementPlanModel.id}`);
+		session.settings.setModelRole("plan", `${activePlanModel.provider}/${activePlanModel.id}`);
+		isStreaming = false;
+
+		const setModelSpy = vi.spyOn(session, "setModelTemporary").mockResolvedValue(undefined);
+		await mode.flushPendingModelSwitch();
+
+		expect(setModelSpy).not.toHaveBeenCalled();
+	});
+
+	it("applies a plan-role reassignment to an active plan session", async () => {
+		await mode.init({ suppressWelcomeIntro: true });
+		await mode.handlePlanModeCommand();
+		const activePlanModel = session.model;
+		const haiku = modelRegistry.find("anthropic", "claude-haiku-4-5");
+		const opus = modelRegistry.find("anthropic", "claude-opus-4-5");
+		if (!activePlanModel || !haiku || !opus) throw new Error("Expected plan models");
+		const replacementPlanModel =
+			activePlanModel.provider === haiku.provider && activePlanModel.id === haiku.id ? opus : haiku;
+
+		const setModelSpy = vi.spyOn(session, "setModelTemporary").mockResolvedValue(undefined);
+		session.settings.setModelRole("plan", `${replacementPlanModel.provider}/${replacementPlanModel.id}`);
+		await Promise.resolve();
+
+		expect(setModelSpy).toHaveBeenCalledWith(replacementPlanModel, undefined);
+	});
+
 	it("does not enter plan mode when plan.enabled is false", async () => {
 		session.settings.set("plan.enabled", false);
 		const warning = vi.spyOn(mode, "showWarning").mockImplementation(() => {});
