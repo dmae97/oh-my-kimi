@@ -173,10 +173,10 @@ async function registerProviders(signalConfig: SignalConfig): Promise<void> {
 		const exporter = new OTLPLogExporter();
 		logProvider = new LoggerProvider({
 			resource,
-			processors: [new BatchLogRecordProcessor(exporter)],
+			processors: [new BatchLogRecordProcessor({ exporter })],
 		});
 		logs.setGlobalLoggerProvider(logProvider);
-		otelLogger = logs.getLogger("@oh-my-pi/pi-coding-agent");
+		otelLogger = logProvider.getLogger("@oh-my-pi/pi-coding-agent");
 		unregisterLogSink = logger.registerLogSink(event => {
 			emitOtelLog(
 				event.level,

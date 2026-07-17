@@ -105,7 +105,7 @@ const server = Bun.serve({
 	port: 0,
 	async fetch(req) {
 		const path = new URL(req.url).pathname;
-		if (req.method === "POST" && req.headers.get("content-type") === "application/x-protobuf") {
+		if (req.method === "POST" && req.headers.get("content-type")?.startsWith("application/x-protobuf")) {
 			const body = await req.arrayBuffer();
 			if (path.endsWith("/v1/metrics")) metricPayloads.push(new Uint8Array(body));
 			if (body.byteLength > 0) {
