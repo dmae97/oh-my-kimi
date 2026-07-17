@@ -4536,8 +4536,11 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CODING_PLANS: readonly ModelsDevProviderDe
 	// the identical model ids, so the enumerated token costs line up with the other
 	// subscription providers for comparison (issue #5598).
 	anthropicMessagesDescriptor("zai", "zai", "https://api.z.ai/api/anthropic"),
-	// --- Umans AI Coding Plan ---
-	anthropicMessagesDescriptor("umans-ai-coding-plan", "umans", UMANS_BASE_URL),
+	// --- Umans AI ---
+	// Source the pay-as-you-go catalog: the coding-plan key publishes subscription
+	// costs as zero, while `/models/info` omits pricing entirely. The generator
+	// overlays these rates onto the authoritative endpoint discovery (issue #5733).
+	anthropicMessagesDescriptor("umans-ai", "umans", UMANS_BASE_URL),
 	// --- Xiaomi ---
 	openAiCompletionsDescriptor("xiaomi", "xiaomi", "https://api.xiaomimimo.com/v1", {
 		defaultContextWindow: 262144,
