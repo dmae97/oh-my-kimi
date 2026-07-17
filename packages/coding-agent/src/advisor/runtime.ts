@@ -2,6 +2,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
+import { type CursorExecResolvedCarrier, kCursorExecResolved } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { logger } from "@oh-my-pi/pi-utils";
 import { obfuscateToolArguments, type SecretObfuscator } from "../secrets/obfuscator";
 import { formatSessionHistoryMarkdown, PRIMARY_CONTEXT_CUSTOM_TYPES } from "../session/session-history-format";
@@ -129,7 +130,20 @@ export function quarantineAdvisorUnsafeOutput(
 	const unavailableToolNames = new Set<string>();
 	const generatedParts: string[] = [];
 	for (const block of message.content) {
-		if (block.type === "toolCall" && !availableToolNames.has(block.name)) unavailableToolNames.add(block.name);
+		// Cursor exec-channel native blocks (bash/read/grep/...) are stamped
+		// kCursorExecResolved: they already ran server-side through the
+		// advisor-scoped CursorExecHandlers bridge, which rejects ungranted
+		// tools in-band ("Tool not available") and lets the model self-correct.
+		// Quarantining them would discard the legitimate advise emitted in the
+		// same turn (issue #5900). The scoped bridge is the grant gate here, not
+		// this pre-dispatch check.
+		if (
+			block.type === "toolCall" &&
+			!availableToolNames.has(block.name) &&
+			(block as CursorExecResolvedCarrier)[kCursorExecResolved] !== true
+		) {
+			unavailableToolNames.add(block.name);
+		}
 		if (block.type === "toolCall" && block.name === "advise" && typeof block.arguments.note === "string") {
 			generatedParts.push(block.arguments.note);
 		}
