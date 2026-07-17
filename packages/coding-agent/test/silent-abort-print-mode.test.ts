@@ -131,7 +131,10 @@ describe("Print-mode silent-abort regression", () => {
 			content: [],
 		});
 
-		const session = createMockSession([errorMsg]);
+		let disposeOptions: AgentSessionDisposeOptions | undefined;
+		const session = createMockSession([errorMsg], async options => {
+			disposeOptions = options;
+		});
 		await runPrintMode(session, { mode: "text" });
 
 		// A real error SHOULD be written to stderr
@@ -139,6 +142,7 @@ describe("Print-mode silent-abort regression", () => {
 		expect(stderrText).toContain("Rate limit exceeded");
 		// process.exit(1) SHOULD have been called
 		expect(exitSpy).toHaveBeenCalledWith(1);
+		expect(disposeOptions?.mnemopiConsolidateTimeoutMs).toBe(SHUTDOWN_CONSOLIDATE_BUDGET_MS);
 	});
 
 	it("prints thinking blocks only when printThoughts is enabled", async () => {
