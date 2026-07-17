@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed non-raw `read` line selectors returning context outside the requested inclusive range ([#5802](https://github.com/can1357/oh-my-pi/issues/5802)).
+
 ## [17.0.2] - 2026-07-17
 
 ### Added
