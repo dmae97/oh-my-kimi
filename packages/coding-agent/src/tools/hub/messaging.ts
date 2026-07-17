@@ -17,6 +17,7 @@ import type { RenderResultOptions } from "../../extensibility/custom-tools/types
 import { IrcBus, type IrcDeliveryReceipt, type IrcMessage } from "../../irc/bus";
 import type { Theme } from "../../modes/theme/theme";
 import { type AgentRegistry, MAIN_AGENT_ID } from "../../registry/agent-registry";
+import { registerPersistedSubagents } from "../../registry/persisted-agents";
 import { canSpawnAtDepth } from "../../task/types";
 import { Ellipsis, renderStatusLine, renderTreeList, truncateToWidth } from "../../tui";
 import {
@@ -81,10 +82,22 @@ export function messageResult(senderId: string, waited: IrcMessage): AgentToolRe
 	};
 }
 
-export function executeList(registry: AgentRegistry, senderId: string): AgentToolResult<CoordinationDetails> {
+/**
+ * List every addressable peer, restoring parked refs from disk when a resumed
+ * session has no in-memory roster.
+ */
+export async function executeList(
+	registry: AgentRegistry,
+	senderId: string,
+): Promise<AgentToolResult<CoordinationDetails>> {
+	let refs = registry.list();
+	if (!refs.some(ref => ref.id !== senderId && ref.status !== "aborted" && ref.kind !== "advisor")) {
+		await registerPersistedSubagents(registry, registry.get(senderId)?.sessionFile);
+		refs = registry.list();
+	}
+
 	const bus = IrcBus.global();
-	const peers = registry
-		.list()
+	const peers = refs
 		.filter(ref => ref.id !== senderId && ref.status !== "aborted" && ref.kind !== "advisor")
 		.map(ref => ({
 			id: ref.id,
