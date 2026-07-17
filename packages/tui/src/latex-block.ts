@@ -11,7 +11,8 @@
 // fractions and `\binom`, stretch delimiters (`\left…\right`, tall bare parens,
 // matrix brackets), render matrix/cases/array environments as baseline-aligned
 // grids, place big-operator limits (`\sum`, `\lim`, `\int\limits`) above and
-// below the symbol, draw radicals, raise/lower block scripts, and
+// below the symbol, draw radicals, raise/lower block scripts, draw labeled
+// horizontal braces (`\underbrace{x}_{lbl}`), stack `\overset`/`\underset`, and
 // align `&` columns in `align`-family environments. Flat runs — symbols, fonts,
 // colors, inline scripts — are delegated to `latexToUnicode`.
 //
@@ -124,6 +125,25 @@ const INTEGRAL_OPERATORS: Record<string, true> = {
 	idotsint: true,
 	intop: true,
 	smallint: true,
+};
+
+// Horizontal brace/bracket decorations drawn as a rule row beside the content,
+// with an optional limits-style label beyond the rule (`\underbrace{x}_{lbl}`).
+interface HBraceSpec {
+	left: string;
+	mid: string;
+	center: string;
+	right: string;
+	over: boolean;
+}
+
+const HBRACE_COMMANDS: Record<string, HBraceSpec> = {
+	overbrace: { left: "╭", mid: "─", center: "┴", right: "╮", over: true },
+	underbrace: { left: "╰", mid: "─", center: "┬", right: "╯", over: false },
+	overbracket: { left: "┌", mid: "─", center: "─", right: "┐", over: true },
+	underbracket: { left: "└", mid: "─", center: "─", right: "┘", over: false },
+	overparen: { left: "╭", mid: "─", center: "─", right: "╮", over: true },
+	underparen: { left: "╰", mid: "─", center: "─", right: "╯", over: false },
 };
 
 // Vertical delimiter piece characters: `only` for single-line content, then
@@ -361,6 +381,31 @@ function limitsBox(glyph: Box, sub: Box | null, sup: Box | null): Box {
 	for (const line of glyph.lines) lines.push(center(line, width));
 	if (sub) for (const line of sub.lines) lines.push(center(line, width));
 	return { lines, baseline, width };
+}
+
+/**
+ * `\underbrace{content}_{label}` / `\overbrace{content}^{label}`: the content
+ * with a drawn horizontal brace beside it and the label centered beyond the
+ * brace. The baseline stays on the content so neighbors align with it.
+ */
+function hbraceBox(content: Box, spec: HBraceSpec, label: Box | null): Box {
+	const braceWidth = Math.max(content.width, 3);
+	const width = Math.max(braceWidth, label?.width ?? 0);
+	const lead = (braceWidth - 3) >> 1;
+	const brace = center(
+		spec.left + spec.mid.repeat(lead) + spec.center + spec.mid.repeat(braceWidth - 3 - lead) + spec.right,
+		width,
+	);
+	const contentLines = content.lines.map(line => center(line, width));
+	const labelLines = label === null ? [] : label.lines.map(line => center(line, width));
+	if (spec.over) {
+		return {
+			lines: [...labelLines, brace, ...contentLines],
+			baseline: labelLines.length + 1 + content.baseline,
+			width,
+		};
+	}
+	return { lines: [...contentLines, brace, ...labelLines], baseline: content.baseline, width };
 }
 
 /**
@@ -878,6 +923,59 @@ function parseExpr(src: string, ctx: Ctx = ROOT_CTX): Box {
 				i = bottom.end;
 				continue;
 			}
+			if (name && HBRACE_COMMANDS[name]) {
+				flush();
+				const spec = HBRACE_COMMANDS[name];
+				const arg = readArg(src, j);
+				// Limits-style scripts: the brace-side script is the label; an
+				// opposite-side script attaches as a regular corner script.
+				let subText: string | null = null;
+				let supText: string | null = null;
+				let m = arg.end;
+				for (;;) {
+					let n = m;
+					while (src[n] === " ") n++;
+					if (src[n] === "_" && subText === null) {
+						const s = readArg(src, n + 1);
+						subText = s.text;
+						m = s.end;
+						continue;
+					}
+					if (src[n] === "^" && supText === null) {
+						const s = readArg(src, n + 1);
+						supText = s.text;
+						m = s.end;
+						continue;
+					}
+					break;
+				}
+				const labelText = spec.over ? supText : subText;
+				const otherText = spec.over ? subText : supText;
+				let box = hbraceBox(
+					parseExpr(arg.text, inner()),
+					spec,
+					labelText === null ? null : parseExpr(labelText, inner()),
+				);
+				if (otherText !== null) {
+					const other = parseExpr(otherText, inner());
+					box = attachScripts(box, spec.over ? other : null, spec.over ? null : other);
+				}
+				boxes.push(paint(box));
+				i = m;
+				continue;
+			}
+			if (name === "overset" || name === "underset" || name === "stackrel") {
+				flush();
+				const anno = readArg(src, j);
+				const base = readArg(src, anno.end);
+				const annoBox = parseExpr(anno.text, inner());
+				const baseBox = parseExpr(base.text, inner());
+				boxes.push(
+					paint(limitsBox(baseBox, name === "underset" ? annoBox : null, name === "underset" ? null : annoBox)),
+				);
+				i = base.end;
+				continue;
+			}
 			if (name === "sqrt") {
 				let k = j;
 				while (src[k] === " ") k++;
@@ -1108,8 +1206,18 @@ function parseExpr(src: string, ctx: Ctx = ROOT_CTX): Box {
 				const flat = latexToUnicode(raw);
 				return flat.startsWith("^") || flat.startsWith("_");
 			};
+			// Multi-letter script words (`N_{turns}`) would convert per-char into
+			// Unicode glyphs of uneven height and read ragged; box them too.
+			// Commands are stripped: their output (`\prime` → ′) is not letters.
+			const ragged = (raw: string | undefined): boolean => {
+				if (raw === undefined) return false;
+				const letters = scriptArgOf(raw)
+					.replace(/\\[A-Za-z]+/g, "")
+					.match(/[A-Za-z]/g);
+				return letters !== null && letters.length >= 2;
+			};
 			const tall = (supBox !== null && supBox.lines.length > 1) || (subBox !== null && subBox.lines.length > 1);
-			if (tall || unconvertible(supText) || unconvertible(subText)) {
+			if (tall || unconvertible(supText) || unconvertible(subText) || ragged(supText) || ragged(subText)) {
 				// Block script (`x^{\frac{1}{2}}`, `x^q`): raise/lower the boxes
 				// against the run or box they follow.
 				flush();

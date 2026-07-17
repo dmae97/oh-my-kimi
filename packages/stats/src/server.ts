@@ -184,7 +184,7 @@ const ensureClientBuild = async () => {
 /**
  * Handle API requests.
  */
-async function handleApi(req: Request): Promise<Response> {
+export async function handleApi(req: Request): Promise<Response> {
 	const url = new URL(req.url);
 	const path = url.pathname;
 
@@ -229,7 +229,7 @@ async function handleApi(req: Request): Promise<Response> {
 
 	if (path === "/api/stats/errors") {
 		const limit = url.searchParams.get("limit");
-		const stats = await getRecentErrors(limit ? parseInt(limit, 10) : undefined);
+		const stats = await getRecentErrors(range, limit ? parseInt(limit, 10) : undefined);
 		return Response.json(stats);
 	}
 

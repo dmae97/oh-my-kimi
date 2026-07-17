@@ -94,7 +94,7 @@ describe("AgentSession tool-call loop guard", () => {
 			"todo.enabled": false,
 			"model.toolCallLoopGuard.enabled": true,
 			"model.toolCallLoopGuard.threshold": 5,
-			"model.toolCallLoopGuard.exemptTools": ["job", "irc"],
+			"model.toolCallLoopGuard.exemptTools": ["hub"],
 		});
 		settings.setModelRole("default", `${model.provider}/${model.id}`);
 		session = new AgentSession({

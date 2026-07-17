@@ -13,7 +13,7 @@ import {
 	resolveAbortLabel,
 	shouldRenderAbortReason,
 } from "../../session/messages";
-import { createIrcMessageCard } from "../../tools/irc";
+import { createIrcMessageCard } from "../../tools/hub";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/render-utils";
 import { canonicalizeMessage } from "../../utils/thinking-display";
 import { TranscriptBlock } from "../components/transcript-container";
@@ -125,12 +125,13 @@ export function buildFileMentionBlock(files: FileMentionMessage["files"], indent
 }
 
 /**
- * Whether an assistant turn has visible text or thinking content (after
- * canonicalization) — i.e. content that closes the current read-tool run.
+ * Whether an assistant turn has visible text, thinking, or image content — i.e.
+ * content that closes the current read-tool run.
  */
 export function assistantHasVisibleContent(message: AssistantAgentMessage): boolean {
 	return message.content.some(
 		content =>
+			content.type === "image" ||
 			(content.type === "text" && canonicalizeMessage(content.text)) ||
 			(content.type === "thinking" && canonicalizeMessage(content.thinking)),
 	);

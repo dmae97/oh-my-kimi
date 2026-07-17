@@ -44,9 +44,10 @@ import { ReadTool } from "../tools/read";
 import { formatBytes } from "../tools/render-utils";
 import { WriteTool } from "../tools/write";
 import { EventBus } from "../utils/event-bus";
-import { loadExtensionFromFactory, loadExtensions } from "./extensions";
+import { discoverExtensionPaths, loadExtensionFromFactory, loadExtensions } from "./extensions";
 import { ExtensionRuntime } from "./extensions/loader";
 import type { ExtensionFactory, ToolDefinition } from "./extensions/types";
+import { getEnabledPlugins, resolvePluginExtensionPaths, type ScopedInstalledPlugin } from "./plugins/loader";
 import type { Skill } from "./skills";
 import { loadSkillsFromDir } from "./skills";
 import { Type } from "./typebox";
@@ -654,6 +655,100 @@ export const SettingsManager = {
 		return Settings.isolated();
 	},
 } as const;
+
+/** Scope used by the legacy package manager for discovered resources. */
+export type SourceScope = "user" | "project" | "temporary";
+
+/** Discovery metadata exposed alongside a legacy package resource path. */
+export interface PathMetadata {
+	source: string;
+	scope: SourceScope;
+	origin: "package" | "top-level";
+	baseDir?: string;
+}
+
+/** One extension, skill, prompt, or theme resolved by the legacy package manager. */
+export interface ResolvedResource {
+	path: string;
+	enabled: boolean;
+	metadata: PathMetadata;
+}
+
+/** Resource groups returned by {@link DefaultPackageManager.resolve}. */
+export interface ResolvedPaths {
+	extensions: ResolvedResource[];
+	skills: ResolvedResource[];
+	prompts: ResolvedResource[];
+	themes: ResolvedResource[];
+}
+
+/** Action a legacy caller requests when a configured package is unavailable. */
+export type MissingSourceAction = "install" | "skip" | "error";
+
+/** Construction inputs accepted by the legacy package manager. */
+export interface DefaultPackageManagerOptions {
+	cwd: string;
+	agentDir: string;
+	settingsManager: Settings | Promise<Settings>;
+}
+
+/**
+ * Enumerates the extensions OMP would load through the historical package
+ * manager surface used by legacy extensions.
+ */
+export class DefaultPackageManager {
+	#cwd: string;
+	#agentDir: string;
+	#settingsManager: Settings | Promise<Settings>;
+
+	constructor(options: DefaultPackageManagerOptions) {
+		this.#cwd = options.cwd;
+		this.#agentDir = options.agentDir;
+		this.#settingsManager = options.settingsManager;
+	}
+
+	/** Resolve enabled extension paths with their OMP plugin provenance. */
+	async resolve(_onMissing?: (source: string) => Promise<MissingSourceAction>): Promise<ResolvedPaths> {
+		const settings = await this.#settingsManager;
+		const configuredPaths = settings.get("extensions") ?? [];
+		const disabledExtensionIds = settings.get("disabledExtensions") ?? [];
+		const [extensionPaths, plugins] = await Promise.all([
+			discoverExtensionPaths(configuredPaths, this.#cwd, disabledExtensionIds),
+			getEnabledPlugins(this.#cwd),
+		]);
+		const pluginByExtensionPath = new Map<string, ScopedInstalledPlugin>();
+		for (const plugin of plugins) {
+			for (const extensionPath of resolvePluginExtensionPaths(plugin)) {
+				pluginByExtensionPath.set(path.resolve(extensionPath), plugin);
+			}
+		}
+
+		const extensions = extensionPaths.map(extensionPath => {
+			const resolvedPath = path.resolve(extensionPath);
+			const plugin = pluginByExtensionPath.get(resolvedPath);
+			const agentDirRelative = path.relative(path.resolve(this.#agentDir), resolvedPath);
+			const metadata: PathMetadata = plugin
+				? {
+						source: `npm:${plugin.name}`,
+						scope: plugin.scope,
+						origin: "package",
+						baseDir: plugin.path,
+					}
+				: {
+						source: "auto",
+						scope:
+							agentDirRelative === "" ||
+							(!agentDirRelative.startsWith("..") && !path.isAbsolute(agentDirRelative))
+								? "user"
+								: "project",
+						origin: "top-level",
+					};
+			return { path: resolvedPath, enabled: true, metadata };
+		});
+
+		return { extensions, skills: [], prompts: [], themes: [] };
+	}
+}
 
 /**
  * Resource-loader compatibility layer for legacy pi extensions.

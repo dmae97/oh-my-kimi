@@ -1,4 +1,4 @@
-import { getPuppeteerDir, logger, postmortem, Snowflake, workerHostEntry } from "@oh-my-pi/pi-utils";
+import { getPuppeteerDir, logger, postmortem, Snowflake, withTimeout, workerHostEntry } from "@oh-my-pi/pi-utils";
 import type { Page, Target } from "puppeteer-core";
 import { callSessionTool } from "../../eval/js/tool-bridge";
 import { webpExclusionForModel } from "../../utils/image-loading";
@@ -123,6 +123,8 @@ export interface RunInTabOptions {
 
 export interface ReleaseTabOptions {
 	kill?: boolean;
+	/** Maximum time for each asynchronous cleanup resource before close fails with diagnostics. */
+	timeoutMs?: number;
 }
 
 const tabs = new Map<string, TabSession>();
@@ -135,6 +137,22 @@ const GRACE_MS = 750;
 // mapped to the kill reason. Lets the next `run` on that name explain WHY the tab
 // vanished instead of a bare "not alive". Cleared when the name is opened again.
 const killedTabs = new Map<string, string>();
+const DEFAULT_TAB_CLOSE_TIMEOUT_MS = 5_000;
+
+async function waitForTabCleanup<T>(
+	tab: TabSession,
+	timeoutMs: number,
+	pendingResource: string,
+	promise: Promise<T>,
+): Promise<T> {
+	const message = `Timed out after ${timeoutMs}ms closing ${tab.kindTag} browser tab ${JSON.stringify(tab.name)}; pending resource: ${pendingResource}`;
+	try {
+		return await withTimeout(promise, timeoutMs, message);
+	} catch (error) {
+		if (error instanceof Error && error.message === message) throw new ToolError(message);
+		throw error;
+	}
+}
 
 export function getTab(name: string): TabSession | undefined {
 	return tabs.get(name);
@@ -519,26 +537,42 @@ export async function releaseTab(name: string, opts: ReleaseTabOptions = {}): Pr
 		pending.reject(closeError);
 	}
 	tab.pending.clear();
+	const timeoutMs = opts.timeoutMs ?? DEFAULT_TAB_CLOSE_TIMEOUT_MS;
 	if (tab.backend === "cmux") {
-		let nonLastCloseError: unknown;
+		let closeError: unknown;
 		if (wasAlive && tab.cmuxOwnsSurface) {
 			try {
-				await tab.browser.client.request("surface.close", { surface_id: tab.targetId });
+				await waitForTabCleanup(
+					tab,
+					timeoutMs,
+					`cmux surface ${JSON.stringify(tab.targetId)} (surface.close)`,
+					tab.browser.client.request("surface.close", { surface_id: tab.targetId }, { timeoutMs }),
+				);
 			} catch (err) {
 				if (isLastSurfaceCloseError(err)) {
 					logger.debug("Leaving cmux browser surface open because it is the last surface in the workspace", {
 						error: err instanceof Error ? err.message : String(err),
 					});
 				} else {
-					nonLastCloseError = err;
+					closeError = err;
 				}
 			}
 		}
-		await releaseBrowser(tab.browser, { kill: opts.kill ?? false });
-		tabs.delete(name);
-		if (nonLastCloseError) throw nonLastCloseError;
+		try {
+			await releaseBrowser(tab.browser, {
+				kill: opts.kill ?? false,
+				timeoutMs,
+				resource: `tab ${JSON.stringify(name)}`,
+			});
+		} catch (error) {
+			closeError ??= error;
+		} finally {
+			tabs.delete(name);
+		}
+		if (closeError) throw closeError;
 		return true;
 	}
+	let cleanupError: unknown;
 	let forced = false;
 	if (wasAlive) {
 		try {
@@ -549,9 +583,30 @@ export async function releaseTab(name: string, opts: ReleaseTabOptions = {}): Pr
 		}
 	}
 	await tab.worker.terminate().catch(() => undefined);
-	if (forced && tab.kindTag === "headless") await closeOrphanTarget(tab);
-	await releaseBrowser(tab.browser, { kill: opts.kill ?? false });
-	tabs.delete(name);
+	if (forced && tab.kindTag === "headless") {
+		try {
+			await waitForTabCleanup(
+				tab,
+				timeoutMs,
+				`orphan CDP target ${JSON.stringify(tab.targetId)} (Page.close)`,
+				closeOrphanTarget(tab),
+			);
+		} catch (error) {
+			cleanupError = error;
+		}
+	}
+	try {
+		await releaseBrowser(tab.browser, {
+			kill: opts.kill ?? false,
+			timeoutMs,
+			resource: `tab ${JSON.stringify(name)}`,
+		});
+	} catch (error) {
+		cleanupError ??= error;
+	} finally {
+		tabs.delete(name);
+	}
+	if (cleanupError) throw cleanupError;
 	return true;
 }
 

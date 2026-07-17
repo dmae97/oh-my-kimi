@@ -36,7 +36,7 @@ import {
 import { normalizeToLF } from "../edit/normalize";
 import { isNotebookPath, readEditableNotebookText } from "../edit/notebook";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import { InternalUrlRouter, resolveLocalUrlToFile } from "../internal-urls";
+import { InternalUrlRouter, resolveLocalUrlToFile, resolveLocalUrlToPath } from "../internal-urls";
 import { type ResolvedArtifactFile, resolveArtifactFile } from "../internal-urls/artifact-protocol";
 import { parseInternalUrl } from "../internal-urls/parse";
 import type { InternalUrl } from "../internal-urls/types";
@@ -107,6 +107,8 @@ import {
 	splitPathAndSelPreferringLiteral,
 } from "./path-utils";
 import { formatBytes, replaceTabs, shortenPath, wrapBrackets } from "./render-utils";
+import { REPORT_ISSUE_DEVICE_NAME, reportIssueDeviceUsage } from "./report-tool-issue";
+import { isResolutionDeviceName, resolutionDeviceUsage } from "./resolve";
 import {
 	executeReadQuery,
 	getRowByKey,
@@ -918,6 +920,32 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		});
 	}
 
+	/**
+	 * Recover the active approved plan when a model rewrites its `local://` URL
+	 * as a same-basename path in the working-directory root.
+	 *
+	 * Only missing cwd-root paths qualify, so a real working-tree file always
+	 * wins and unrelated paths cannot escape into the session artifact sandbox.
+	 */
+	#approvedPlanAlias(missingAbsolutePath: string): string | undefined {
+		const planReferencePath = this.session.getPlanReferencePath?.();
+		if (!planReferencePath?.startsWith("local:")) return undefined;
+
+		const requestedPath = path.resolve(missingAbsolutePath);
+		if (path.dirname(requestedPath) !== path.resolve(this.session.cwd)) return undefined;
+
+		const localProtocolOptions = this.session.localProtocolOptions ?? {
+			getArtifactsDir: () => this.session.getArtifactsDir?.() ?? null,
+			getSessionId: () => this.session.getSessionId?.() ?? null,
+		};
+		try {
+			const approvedPlanPath = resolveLocalUrlToPath(planReferencePath, localProtocolOptions);
+			return path.basename(requestedPath) === path.basename(approvedPlanPath) ? approvedPlanPath : undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
 	async #tryReadDelimitedPaths(
 		readPath: string,
 		signal?: AbortSignal,
@@ -1599,7 +1627,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const displayLineByNumber = new Map<number, string>();
 		const fullLines = rawSelector ? undefined : await readBracketContextFullLines(absolutePath, fileSize);
 		let columnTruncated = 0;
-		const clippedLines = new Set<number>();
 		let displayContent: { text: string; startLine: number; lineNumbers?: Array<number | null> } | undefined;
 
 		for (const range of ranges) {
@@ -1647,7 +1674,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						if (!cloned) cloned = collectedLines.slice();
 						cloned[i] = text;
 						columnTruncated = maxColumns;
-						clippedLines.add(range.startLine + i);
 					}
 				}
 				if (cloned) displayLines = cloned;
@@ -1679,7 +1705,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						const truncated = truncateLine(sourceText, maxColumns);
 						if (truncated.wasTruncated) {
 							columnTruncated = maxColumns;
-							clippedLines.add(lineNumber);
 						}
 						return truncated.text;
 					},
@@ -1698,7 +1723,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		if (shouldAddHashLines && outputText) {
 			const tag = await recordFileSnapshot(this.session, absolutePath);
 			if (tag) {
-				recordSeenLinesFromBody(this.session, absolutePath, tag, outputText, clippedLines);
+				recordSeenLinesFromBody(this.session, absolutePath, tag, outputText);
 				outputText = `${formatReadHashlineHeader(formatPathRelativeToCwd(absolutePath, this.session.cwd), tag)}\n${outputText}`;
 			}
 		} else if (rawSelector && visibleSpans.length > 0) {
@@ -2293,7 +2318,8 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			isDirectory = stat.isDirectory();
 		} catch (error) {
 			if (isNotFoundError(error)) {
-				// Attempt unique suffix resolution before falling back to fuzzy suggestions
+				// Attempt unique suffix resolution before falling back to the approved-plan
+				// alias or fuzzy suggestions. Existing workspace files retain precedence.
 				if (!isRemoteMountPath(absolutePath)) {
 					const suffixMatch = await this.#findSuffixMatchCached(suffixCache, localReadPath, signal);
 					if (suffixMatch) {
@@ -2304,12 +2330,30 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 							isDirectory = retryStat.isDirectory();
 							suffixResolution = { from: localReadPath, to: suffixMatch.displayPath };
 						} catch {
-							// Suffix match candidate no longer stats — fall through to error path
+							// Suffix match candidate no longer stats — continue through
+							// approved-plan recovery and the original not-found error.
 						}
 					}
 				}
 
+				let recoveredApprovedPlan = false;
 				if (!suffixResolution) {
+					const approvedPlanPath = this.#approvedPlanAlias(absolutePath);
+					if (approvedPlanPath) {
+						try {
+							const approvedPlanStat = await Bun.file(approvedPlanPath).stat();
+							absolutePath = approvedPlanPath;
+							fileSize = approvedPlanStat.size;
+							isDirectory = approvedPlanStat.isDirectory();
+							recoveredApprovedPlan = true;
+						} catch {
+							// The referenced plan disappeared after resolution; continue through
+							// the ordinary delimited-path fallback and not-found error.
+						}
+					}
+				}
+
+				if (!recoveredApprovedPlan && !suffixResolution) {
 					const delimitedResult = await this.#tryReadDelimitedPaths(readPath, signal);
 					if (delimitedResult) return delimitedResult;
 					throw new ToolError(`Path '${localReadPath}' not found`);
@@ -2569,7 +2613,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					// ellipsis-truncated text made every long-line file uneditable on
 					// the next edit attempt.
 					let displayLines: string[] = collectedLines;
-					const clippedLines = new Set<number>();
 					if (!rawSelector && maxColumns > 0) {
 						let cloned: string[] | undefined;
 						for (let i = 0; i < collectedLines.length; i++) {
@@ -2578,7 +2621,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 								if (!cloned) cloned = collectedLines.slice();
 								cloned[i] = text;
 								columnTruncated = maxColumns;
-								clippedLines.add(startLineDisplay + i);
 							}
 						}
 						if (cloned) displayLines = cloned;
@@ -2663,7 +2705,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 									const truncated = truncateLine(sourceText, maxColumns);
 									if (truncated.wasTruncated) {
 										columnTruncated = maxColumns;
-										clippedLines.add(lineNumber);
 									}
 									return truncated.text;
 								},
@@ -2738,7 +2779,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					}
 
 					if (hashContext?.tag) {
-						recordSeenLinesFromBody(this.session, absolutePath, hashContext.tag, outputText, clippedLines);
+						recordSeenLinesFromBody(this.session, absolutePath, hashContext.tag, outputText);
 					}
 					if (rawSelector && !firstLineExceedsLimit && collectedLines.length > 0) {
 						await recordFileSnapshot(
@@ -3129,6 +3170,15 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			signal,
 			localProtocolOptions: this.session.localProtocolOptions,
 			skills: this.session.skills,
+			xd: {
+				read: async name => {
+					if (name === REPORT_ISSUE_DEVICE_NAME) return reportIssueDeviceUsage();
+					if (name && isResolutionDeviceName(name)) return resolutionDeviceUsage(name);
+					const registry = this.session.xdevRegistry;
+					if (!registry || registry.size === 0) throw new ToolError("xd:// is not mounted in this session.");
+					return name === null ? registry.listing() : registry.docs(name);
+				},
+			},
 		});
 		const details: ReadToolDetails = { resolvedPath: resource.sourcePath, contentType: resource.contentType };
 

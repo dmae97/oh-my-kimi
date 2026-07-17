@@ -269,6 +269,7 @@ function stripImageDetails(input: unknown[]): void {
 export interface CodexLiteShapedBody {
 	instructions?: unknown;
 	tools?: unknown;
+	tool_choice?: unknown;
 	input?: unknown;
 	parallel_tool_calls?: unknown;
 }
@@ -278,9 +279,14 @@ export interface CodexLiteShapedBody {
  * `build_responses_request` with `use_responses_lite`): strips pinned image
  * detail, forces parallel tool calling off, moves tools into a leading
  * `additional_tools` developer item and the base instructions into a
- * developer message, then omits top-level `instructions`/`tools`. Shared by
- * normal turns and both remote-compaction paths — codex-rs routes
- * `/responses/compact` through the same builder.
+ * developer message, then omits top-level `instructions`/`tools`. Because the
+ * rewrite removes top-level `tools`, a forced hosted-tool choice (e.g.
+ * `{ type: "web_search" }`) would leave the backend unable to validate the
+ * choice against a tools collection and it rejects the request with HTTP 400
+ * (#5771). Such choices must fall back to `"auto"`; explicit string constraints
+ * such as `"none"` and `"required"` remain valid. Shared by normal turns and
+ * both remote-compaction paths — codex-rs routes `/responses/compact` through
+ * the same builder.
  */
 export function applyCodexResponsesLiteShape(body: CodexLiteShapedBody): void {
 	const input = Array.isArray(body.input) ? body.input : [];
@@ -297,6 +303,9 @@ export function applyCodexResponsesLiteShape(body: CodexLiteShapedBody): void {
 		});
 	}
 	body.input = [...prefix, ...input];
+	if (body.tool_choice !== "none" && body.tool_choice !== "required") {
+		body.tool_choice = "auto";
+	}
 	delete body.instructions;
 	delete body.tools;
 }

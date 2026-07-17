@@ -60,9 +60,11 @@ describe("builtin-defaults rule provider", () => {
 		expect(lazylock?.condition).toHaveLength(2);
 	});
 
-	it("preserves a per-rule interruptMode override from frontmatter", async () => {
+	it("forces every bundled rule to warn without interrupting", async () => {
 		const rules = await loadBuiltinRules();
-		expect(rules.find(r => r.name === "ts-set-map")?.interruptMode).toBe("never");
+		for (const rule of rules) {
+			expect(rule.interruptMode, rule.name).toBe("never");
+		}
 	});
 
 	it("fires the no-test-timers rule on real timers in *.test.ts but not plain *.ts", async () => {

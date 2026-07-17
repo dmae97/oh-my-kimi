@@ -633,16 +633,12 @@ fn unbounded_tail<T: Read>(reader: &mut BufReader<T>, settings: &Settings) -> UR
 		},
 		_ => {},
 	}
-	#[cfg(not(target_os = "windows"))]
+	// pi-uutils: upstream emulates Unix SIGPIPE on Windows by calling
+	// `std::process::exit(13)` on a broken-pipe flush. That would kill the
+	// long-lived host shell process. An in-process builtin must never
+	// `process::exit`; let the broken pipe surface as a normal `io::Error` and
+	// propagate to the caller, matching every other pi-uutils builtin.
 	writer.flush()?;
-
-	// SIGPIPE is not available on Windows.
-	#[cfg(target_os = "windows")]
-	writer.flush().inspect_err(|err| {
-		if err.kind() == ErrorKind::BrokenPipe {
-			std::process::exit(13);
-		}
-	})?;
 	Ok(())
 }
 
@@ -854,5 +850,48 @@ mod tests {
 		});
 
 		assert_ne!(code, 0, "broken pipe must surface as a non-zero exit, not a panic");
+	}
+
+	#[test]
+	fn unbounded_tail_broken_pipe_does_not_abort() {
+		use std::{
+			collections::HashMap,
+			ffi::OsString,
+			io::{self, Cursor, ErrorKind, Write},
+			sync::{Arc, atomic::AtomicBool},
+		};
+
+		// Same broken-pipe consumer as above, but here stdin is a plain reader
+		// so `tail_stdin` always takes the streaming `unbounded_tail` path — the
+		// one the reported repro (`seq ... | tail -n 3 | head -n 0`) exercises,
+		// and where the Windows SIGPIPE emulation used to `std::process::exit`.
+		struct BrokenPipeWriter;
+		impl Write for BrokenPipeWriter {
+			fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+				Err(io::Error::new(ErrorKind::BrokenPipe, "Broken pipe"))
+			}
+
+			fn flush(&mut self) -> io::Result<()> {
+				Err(io::Error::new(ErrorKind::BrokenPipe, "Broken pipe"))
+			}
+		}
+
+		let input = b"1\n2\n3\n4\n5\n".to_vec();
+		let io = pi_uutils_ctx::ScopeIo {
+			stdin:                 Box::new(Cursor::new(input)),
+			stdin_fd:              None,
+			stdin_is_search_input: false,
+			stdout:                Box::new(BrokenPipeWriter),
+			stderr:                Box::new(io::sink()),
+			cwd:                   std::env::temp_dir(),
+			env:                   HashMap::new(),
+			cancel:                Arc::new(AtomicBool::new(false)),
+		};
+
+		let code = pi_uutils_ctx::scope(io, || {
+			crate::run(vec![OsString::from("tail"), OsString::from("-n"), OsString::from("3")])
+		});
+
+		assert_ne!(code, 0, "broken pipe must surface as a non-zero exit, not process::exit");
 	}
 }

@@ -292,6 +292,175 @@ describe("AgentSession prewalk", () => {
 		expect(session.model?.id).toBe(target.id);
 	});
 
+	it("bounds a completed bash-only task to a single continuation instead of looping", async () => {
+		// Regression (#5551): with no edit/write ever run, the continuation net
+		// used to re-fire on every text-only reply, looping forever. It must
+		// fire at most once — one "continue" nudge — then let the next text-only
+		// reply end the run. No mock fallback: a stray extra turn rejects.
+		const primary = modelOrThrow("claude-sonnet-4-5");
+		const target = modelOrThrow("claude-sonnet-4-6");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+
+		// Turn 1: record (nudge injected after). Turn 2: bash — not an action
+		// tool. Turn 3: prose — the single continuation fires. Turn 4: prose
+		// again — no more continuation, run ends. A 5th call would exhaust the
+		// script and reject.
+		const mock = createMockModel({
+			responses: [
+				toolCall("t1", "record"),
+				toolCall("t2", "bash"),
+				{ content: [{ type: "text", text: "Commit complete." }], stopReason: "stop" },
+				{ content: [{ type: "text", text: "Nothing left to do." }], stopReason: "stop" },
+			],
+		});
+		const requested: string[] = [];
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model: primary,
+				systemPrompt: ["Test"],
+				tools: [recordTool as AgentTool, bashTool as AgentTool],
+				messages: [],
+				thinkingLevel: Effort.Medium,
+			},
+			convertToLlm,
+			streamFn: (model, context, options) => {
+				requested.push(`${model.provider}/${model.id}`);
+				return mock.stream(model, context, options);
+			},
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry,
+			toolRegistry,
+			prewalk: { target },
+		});
+
+		await session.prompt("commit the current changes");
+
+		// Exactly one continuation: 4 turns, all on the primary (no edit/write,
+		// so no switch), then a clean stop.
+		expect(requested).toEqual([
+			`${primary.provider}/${primary.id}`,
+			`${primary.provider}/${primary.id}`,
+			`${primary.provider}/${primary.id}`,
+			`${primary.provider}/${primary.id}`,
+		]);
+		expect(session.model?.id).toBe(primary.id);
+	});
+
+	it("re-arms continuation after tool progress between prose turns", async () => {
+		// Regression: a normal prewalk can split planning across several turns:
+		// prose plan, todo init, then prose before implementation. Each tool
+		// progress segment must earn one continuation so the second prose turn
+		// cannot end the run before edit/write.
+		const primary = modelOrThrow("claude-sonnet-4-5");
+		const target = modelOrThrow("claude-sonnet-4-6");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+
+		// Turn 1: read-only (nudge injected after). Turn 2: prose plan —
+		// bridged. Turn 3: todo — gate opens and re-arms the net. Turn 4:
+		// prose — bridged again. Turn 5: write — switch.
+		const mock = createMockModel({
+			responses: [
+				toolCall("t1", "record"),
+				{ content: [{ type: "text", text: "Here is the plan." }], stopReason: "stop" },
+				toolCall("t3", "todo"),
+				{ content: [{ type: "text", text: "Plan captured, starting now." }], stopReason: "stop" },
+				toolCall("t5", "write"),
+				{ content: ["done"] },
+			],
+		});
+		const requested: string[] = [];
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model: primary,
+				systemPrompt: ["Test"],
+				tools: [recordTool as AgentTool, writeTool as AgentTool, todoTool as AgentTool],
+				messages: [],
+				thinkingLevel: Effort.Medium,
+			},
+			convertToLlm,
+			streamFn: (model, context, options) => {
+				requested.push(`${model.provider}/${model.id}`);
+				return mock.stream(model, context, options);
+			},
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry,
+			toolRegistry,
+			prewalk: { target },
+		});
+
+		await session.prompt("do the task");
+
+		expect(requested).toEqual([
+			`${primary.provider}/${primary.id}`,
+			`${primary.provider}/${primary.id}`,
+			`${primary.provider}/${primary.id}`,
+			`${primary.provider}/${primary.id}`,
+			`${primary.provider}/${primary.id}`,
+			`${target.provider}/${target.id}`,
+		]);
+		expect(session.model?.id).toBe(target.id);
+	});
+
+	it("skips the todo gate when todo is registered but not active (subagent-style restricted slates)", async () => {
+		// Regression: the gate used to key on the tool REGISTRY, so a session
+		// whose active-tool slate excluded `todo` (subagents strip it) while the
+		// registry still contained it could never open the gate — the model
+		// cannot call an inactive tool — and prewalk never fired.
+		const primary = modelOrThrow("claude-sonnet-4-5");
+		const target = modelOrThrow("claude-sonnet-4-6");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+
+		// Turn 1: read-only (nudge injected after). Turn 2: write — first
+		// edit/write must switch immediately; no todo call is possible.
+		const mock = createMockModel({
+			responses: [toolCall("t1", "record"), toolCall("t2", "write"), { content: ["done"] }],
+		});
+		const requested: string[] = [];
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model: primary,
+				systemPrompt: ["Test"],
+				// Active slate excludes todo; the session toolRegistry still has it.
+				tools: [recordTool as AgentTool, writeTool as AgentTool],
+				messages: [],
+				thinkingLevel: Effort.Medium,
+			},
+			convertToLlm,
+			streamFn: (model, context, options) => {
+				requested.push(`${model.provider}/${model.id}`);
+				return mock.stream(model, context, options);
+			},
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry,
+			toolRegistry,
+			prewalk: { target },
+		});
+
+		await session.prompt("do the task");
+
+		expect(requested).toEqual([
+			`${primary.provider}/${primary.id}`,
+			`${primary.provider}/${primary.id}`,
+			`${target.provider}/${target.id}`,
+		]);
+		expect(session.model?.id).toBe(target.id);
+	});
+
 	it("armPrewalk (the /prewalk slash command) pre-arms the switch for the very next edit/write", async () => {
 		const primary = modelOrThrow("claude-sonnet-4-5");
 		const target = modelOrThrow("claude-sonnet-4-6");

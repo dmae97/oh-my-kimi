@@ -4,6 +4,7 @@ condition:
   - "once_cell::"
   - "OnceLock::new"
 scope: "tool:edit(*.rs), tool:write(*.rs)"
+interruptMode: never
 ---
 
 Prefer `std::sync::LazyLock` over `OnceLock` and the `once_cell` crate when the initializer is known at declaration time.

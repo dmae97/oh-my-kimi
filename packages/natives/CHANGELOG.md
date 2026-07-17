@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `uv run --extra <package> pytest ...` bypassing native pytest minimization because the wrapper parser mistook the `--extra` value for the executable.
+- Fixed timed-out shell pipelines cancelling their output reader while the final stage was still flushing, which dropped captured output and could terminate Windows hosts during teardown. ([#5316](https://github.com/can1357/oh-my-pi/issues/5316))
+
+## [17.0.1] - 2026-07-16
+
+### Fixed
+
+- Fixed the pi-natives version sentinel emitting "reinstall to re-sync" when a long-lived process survives an in-place upgrade: the loader now detects that the resident addon exposes a *prior* release's sentinel and reports "omp was upgraded while this session was running — restart to pick up the new version (disk is already consistent)" instead of misdiagnosing it as a stale on-disk file ([#4812](https://github.com/can1357/oh-my-pi/issues/4812)).
+
+## [17.0.0] - 2026-07-15
+
+### Fixed
+
+- Fixed the in-process grep builtin to correctly handle escaped alternation (\|) in default and -G (GNU basic-regex) searches, while preserving the correct regex dialects for -E, -F, and -P.
+
 ## [16.5.2] - 2026-07-14
 
 ### Fixed

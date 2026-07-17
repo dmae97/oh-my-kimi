@@ -282,6 +282,31 @@ describe("openai-completions wire-quirk compat detection", () => {
 		expect(buildOpenAICompat(completionsSpec()).reasoningDeltasMayBeCumulative).toBe(false);
 	});
 
+	it("extends the reasoning stream idle floor to Kimi K2.6 and K2.7 Code, not other reasoning models", () => {
+		const kimiOverrides = {
+			provider: "moonshot",
+			baseUrl: "https://api.moonshot.ai/v1",
+			reasoning: true,
+		} as const;
+		expect(buildOpenAICompat(completionsSpec({ ...kimiOverrides, id: "kimi-k2.6" })).streamIdleTimeoutMs).toBe(
+			300_000,
+		);
+		expect(buildOpenAICompat(completionsSpec({ ...kimiOverrides, id: "kimi-k2.7-code" })).streamIdleTimeoutMs).toBe(
+			300_000,
+		);
+		expect(
+			buildOpenAICompat(completionsSpec({ ...kimiOverrides, id: "kimi-k2.7-code-highspeed" })).streamIdleTimeoutMs,
+		).toBe(300_000);
+		// K2.7 Code on non-native OpenAI-compatible hosts keeps their default.
+		expect(
+			buildOpenAICompat(completionsSpec({ id: "kimi-k2.7-code", reasoning: true })).streamIdleTimeoutMs,
+		).toBeUndefined();
+		// A non-Kimi reasoning model on a generic host keeps the runtime default.
+		expect(
+			buildOpenAICompat(completionsSpec({ id: "some-reasoner", reasoning: true })).streamIdleTimeoutMs,
+		).toBeUndefined();
+	});
+
 	it("maps the remaining provider-keyed wire quirks", () => {
 		expect(buildOpenAICompat(completionsSpec({ provider: "ollama" })).emptyLengthFinishIsContextError).toBe(true);
 		expect(buildOpenAICompat(completionsSpec()).emptyLengthFinishIsContextError).toBe(false);

@@ -70,6 +70,7 @@ describe("isAuthRetryableError", () => {
 		// credentials won't help an org/global limit.
 		expect(isAuthRetryableError(Object.assign(new Error("429 too many requests"), { status: 429 }))).toBe(false);
 		expect(isAuthRetryableError("Error: 401 unauthorized")).toBe(true);
+		expect(isAuthRetryableError("Encountered invalidated oauth token for user, failing request")).toBe(true);
 		// xAI SuperGrok surfaces account exhaustion as 403 + "run out of credits" /
 		// spending-limit, not 429. Must rotate so multi-account xai-oauth pools work.
 		expect(
@@ -312,6 +313,26 @@ describe("withAuth", () => {
 		expect(keys).toEqual(["k0"]);
 	});
 
+	it("switches credentials when OpenRouter exhausts the daily free-model allowance", async () => {
+		const keys: string[] = [];
+		const result = await withAuth(
+			ctx => (ctx.error === undefined || !ctx.lastChance ? "exhausted-key" : "healthy-key"),
+			async key => {
+				keys.push(key);
+				if (key === "healthy-key") return "success";
+				throw Object.assign(
+					new Error(
+						"429 Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model requests per day",
+					),
+					{ status: 429 },
+				);
+			},
+		);
+
+		expect(result).toBe("success");
+		expect(keys).toEqual(["exhausted-key", "healthy-key"]);
+	});
+
 	it("stops retrying when the resolver returns undefined", async () => {
 		const keys: string[] = [];
 		const original = authError();
@@ -490,6 +511,25 @@ describe("withOAuthAccess", () => {
 			"rotate",
 			{ forceRefresh: undefined },
 		]);
+	});
+
+	it("invalidates and rotates directly when upstream reports an invalidated OAuth token", async () => {
+		const storage = fakeStorage({
+			initial: access("dead", { credentialId: 1 }),
+			rotated: access("sibling", { credentialId: 2 }),
+		});
+		const attempts: string[] = [];
+		const result = await withOAuthAccess(storage, "prov", async a => {
+			attempts.push(a.accessToken);
+			if (a.accessToken === "dead") {
+				throw new Error("Encountered invalidated oauth token for user, failing request");
+			}
+			return "ok";
+		});
+
+		expect(result).toBe("ok");
+		expect(attempts).toEqual(["dead", "sibling"]);
+		expect(storage.calls).toEqual([{ forceRefresh: undefined }, "rotate", { forceRefresh: undefined }]);
 	});
 
 	it("rotates directly to a sibling on usage limits", async () => {

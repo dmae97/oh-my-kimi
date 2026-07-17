@@ -295,6 +295,92 @@ describe("streaming tool output never sprays duplicate scrollback banners", () =
 		}
 	}, 30_000);
 
+	test("finalizes a width-growing streamed table exactly once", async () => {
+		const rows = 8;
+		stubStdoutRows(rows);
+		const term = new VirtualTerminal(80, rows);
+		Object.defineProperty(term, "isNativeViewportAtBottom", { configurable: true, value: () => undefined });
+		const scheduler = makeDrainableScheduler();
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
+		// Exercise the default append-only path directly; erase-and-replay would
+		// hide the duplicate-history regression this test is meant to catch.
+		tui.setScrollbackRebuild(false);
+		const transcript = new TranscriptContainer();
+		const assistant = new AssistantMessageComponent(undefined, false);
+		transcript.addChild(assistant);
+		tui.addChild(transcript);
+
+		const entries = [
+			"alpha",
+			"beta-entry",
+			"gamma-component",
+			"delta-module",
+			"epsilon-adapter",
+			"zeta-runner",
+			"eta-service",
+			"theta-provider",
+			"iota-component-with-later-width-growth",
+			"kappa-component-with-later-width-growth",
+		];
+		const markers = entries.map((_, index) => `R${index.toString().padStart(3, "0")}`);
+		const table = (count: number): string =>
+			[
+				"| Entry | Col A | Col B | Col C | Col D |",
+				"| --- | --- | --- | --- | --- |",
+				...entries.slice(0, count).map((entry, index) => `| ${entry} | - | ${markers[index]} | - | - |`),
+			].join("\n");
+
+		try {
+			tui.start();
+			scheduler.flush();
+			await term.flush();
+
+			for (let count = 1; count <= 8; count++) {
+				assistant.updateContent(makeAssistantMessage([{ type: "text", text: table(count) }]), {
+					transient: true,
+				});
+				tui.requestRender();
+				scheduler.flush();
+				await term.flush();
+			}
+
+			const midRows = plainScrollBuffer(term);
+			const headerIndex = midRows.findIndex(row => row.includes("Entry"));
+			expect(headerIndex).toBeGreaterThanOrEqual(0);
+			expect(headerIndex).toBeLessThan(term.getBufferPosition().baseY);
+			expect(midRows.filter(row => row.includes("Entry"))).toHaveLength(1);
+
+			for (let count = 9; count <= entries.length; count++) {
+				assistant.updateContent(makeAssistantMessage([{ type: "text", text: table(count) }]), {
+					transient: true,
+				});
+				tui.requestRender();
+				scheduler.flush();
+				await term.flush();
+			}
+
+			assistant.updateContent(makeAssistantMessage([{ type: "text", text: table(entries.length) }]), {
+				transient: false,
+			});
+			assistant.markTranscriptBlockFinalized();
+			for (let i = 0; i < 2; i++) {
+				tui.requestRender();
+				scheduler.flush();
+				await term.flush();
+			}
+
+			const finalRows = plainScrollBuffer(term);
+			expect(finalRows.filter(row => row.includes("Entry"))).toHaveLength(1);
+			expect(markers.map(marker => finalRows.filter(row => row.includes(marker)).length)).toEqual(
+				markers.map(() => 1),
+			);
+		} finally {
+			assistant.dispose();
+			tui.stop();
+			await term.flush();
+		}
+	}, 30_000);
+
 	test("expanded live eval output records painted rows without spraying after settle", async () => {
 		const rows = 8;
 		stubStdoutRows(rows);

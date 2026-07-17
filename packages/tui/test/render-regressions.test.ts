@@ -129,6 +129,18 @@ class LegacyKeyboardVirtualTerminal extends VirtualTerminal {
 	}
 }
 
+class PrivateModeProbeTerminal extends VirtualTerminal {
+	#callback: ((mode: number, supported: boolean, confirmed?: boolean) => void) | undefined;
+
+	onPrivateModeReport(callback: (mode: number, supported: boolean, confirmed?: boolean) => void): void {
+		this.#callback = callback;
+	}
+
+	reportPrivateMode(mode: number, supported: boolean, confirmed: boolean): void {
+		this.#callback?.(mode, supported, confirmed);
+	}
+}
+
 function rows(prefix: string, count: number): string[] {
 	return Array.from({ length: count }, (_v, i) => `${prefix}${i}`);
 }
@@ -1384,6 +1396,83 @@ describe("TUI terminal-state regressions", () => {
 			} finally {
 				tui.stop();
 				setTerminalScreenToScrollback(saved);
+			}
+		});
+
+		it("keeps destructive paints synchronized when DECRQM is unavailable", async () => {
+			await withEnvPatch(
+				{
+					TERM_FEATURES: "Sy",
+					PI_NO_SYNC_OUTPUT: undefined,
+					PI_FORCE_SYNC_OUTPUT: undefined,
+					PI_TUI_SYNC_OUTPUT: undefined,
+				},
+				async () => {
+					const term = new PrivateModeProbeTerminal(20, 3);
+					const component = new MutableLinesComponent(rows("old-", 6));
+					const tui = new TUI(term);
+					tui.addChild(component);
+
+					try {
+						tui.start();
+						await settle(term);
+						const writes = captureWrites(term);
+
+						// A DA1 sentinel without DECRPM is inconclusive. Terminals such as
+						// xterm.js can implement synchronized output without implementing
+						// the query, so the static TERM_FEATURES capability must survive.
+						term.reportPrivateMode(2026, false, false);
+						expect(tui.synchronizedOutput).toBe(true);
+
+						component.setLines(rows("resumed-", 8));
+						tui.requestRender(true, { clearScrollback: true });
+						await settle(term);
+
+						const paint = writes.find(write => write.includes("\x1b[3J"));
+						expect(paint).toBeDefined();
+						expect(paint).toContain("\x1b[?2026h");
+						expect(paint).toContain("\x1b[?2026l");
+						expect(visible(term)).toEqual(["resumed-5", "resumed-6", "resumed-7"]);
+					} finally {
+						tui.stop();
+					}
+				},
+			);
+		});
+
+		it("fuses fullscreen overlay exit into a pending session replacement paint", async () => {
+			const term = new VirtualTerminal(24, 4);
+			const component = new MutableLinesComponent(rows("old-session-", 8));
+			const tui = new TUI(term);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				const overlay = tui.showOverlay(new MutableLinesComponent(["session selector"]), {
+					width: "100%",
+					maxHeight: "100%",
+					fullscreen: true,
+				});
+				await settle(term);
+
+				// Session loading finishes behind the still-visible selector. The forced
+				// replacement remains pending while the fullscreen path owns the frame.
+				component.setLines(rows("resumed-", 9));
+				tui.requestRender(true, { clearScrollback: true });
+				await settle(term);
+
+				const writes = captureWrites(term);
+				overlay.hide();
+				await settle(term);
+
+				const exits = writes.filter(write => write.includes("\x1b[?1049l"));
+				expect(exits).toHaveLength(1);
+				expect(exits[0]).toContain("\x1b[3J");
+				expect(exits[0]).toContain("resumed-8");
+				expect(visible(term)).toEqual(["resumed-5", "resumed-6", "resumed-7", "resumed-8"]);
+			} finally {
+				tui.stop();
 			}
 		});
 	});
@@ -3216,6 +3305,48 @@ describe("TUI terminal-state regressions", () => {
 				// Transcript is back on the normal screen after leaving the alt buffer.
 				expect(visible(term).some(line => line.includes("base-"))).toBeTrue();
 				expect(visible(term).some(line => line.includes("MODAL-0"))).toBeFalse();
+			} finally {
+				tui.stop();
+			}
+		});
+
+		it("leaves native text selection available for selection-first fullscreen overlays", async () => {
+			const term = new VirtualTerminal(40, 8, 200);
+			const writes = captureWrites(term);
+			const tui = new TUI(term);
+			tui.addChild(new MutableLinesComponent(rows("base-", 8)));
+
+			try {
+				tui.start();
+				await settle(term);
+
+				const showFrom = writes.length;
+				const handle = tui.showOverlay(new MutableLinesComponent(["SELECTABLE PLAN TEXT"]), {
+					anchor: "bottom-center",
+					width: "100%",
+					maxHeight: "100%",
+					margin: 0,
+					fullscreen: true,
+					mouseTracking: false,
+				});
+				await settle(term);
+
+				const modalWrites = writes.slice(showFrom).join("");
+				expect(modalWrites).toContain("\x1b[?1049h");
+				expect(modalWrites).not.toContain("\x1b[?1000h");
+				expect(modalWrites).not.toContain("\x1b[?1003h");
+				expect(modalWrites).not.toContain("\x1b[?1006h");
+				expect(visible(term).some(line => line.includes("SELECTABLE PLAN TEXT"))).toBeTrue();
+
+				const hideFrom = writes.length;
+				handle.hide();
+				await settle(term);
+
+				const hideWrites = writes.slice(hideFrom).join("");
+				expect(hideWrites).toContain("\x1b[?1049l");
+				expect(hideWrites).not.toContain("\x1b[?1000l");
+				expect(hideWrites).not.toContain("\x1b[?1003l");
+				expect(hideWrites).not.toContain("\x1b[?1006l");
 			} finally {
 				tui.stop();
 			}

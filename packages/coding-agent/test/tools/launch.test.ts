@@ -42,6 +42,86 @@ async function shutdown(client: DaemonBrokerClient): Promise<void> {
 	client.close();
 }
 
+async function startPtyDaemonWithShell(shell: string, initialMarker: string, expectedMarker: string): Promise<void> {
+	const projectDir = await tempDir("omp-daemon-shell-project-");
+	const runtimeDir = await tempDir("omp-daemon-shell-runtime-");
+	const runner = `
+		import { createDaemonBrokerClient } from "./src/launch/client";
+
+		const projectDir = ${JSON.stringify(projectDir)};
+		const runtimeDir = ${JSON.stringify(runtimeDir)};
+		const expectedMarker = ${JSON.stringify(expectedMarker)};
+		const client = await createDaemonBrokerClient(projectDir, {
+			runtimeDir,
+			idleGraceMs: 5_000,
+		});
+		try {
+			const started = await client.request({
+				op: "start",
+				spec: {
+					name: "shell",
+					application: process.execPath,
+					args: [
+						"-e",
+						"process.stdout.write(process.env.OMP_TEST_SHELL_MARKER); process.stdout.write(String.fromCharCode(10)); process.stdin.resume();",
+					],
+					env: {},
+					cwd: projectDir,
+					pty: true,
+					ready: { log: expectedMarker, timeoutMs: 5_000 },
+					restart: "no",
+					persist: false,
+					detached: false,
+				},
+				owner: "shell-test",
+			});
+			if (started.op !== "start") throw new Error("unexpected start response");
+			if (started.daemon.state !== "ready") {
+				const logs = await client.request({
+					op: "logs",
+					name: "shell",
+					lines: 20,
+					head: false,
+					follow: false,
+					timeoutMs: 1_000,
+				});
+				throw new Error(
+					"daemon did not become ready: " +
+						(started.daemon.exitReason ?? "unknown error") +
+						"; logs: " +
+						(logs.op === "logs" ? logs.text : "unavailable"),
+				);
+			}
+			process.stdout.write(JSON.stringify({ state: started.daemon.state, readyTimedOut: started.readyTimedOut }));
+			await client.request({ op: "stop", name: "shell", timeoutMs: 2_000 });
+		} finally {
+			try {
+				await client.request({ op: "shutdown" });
+			} catch {
+				// A last-client shutdown may already have closed the broker.
+			}
+			client.close();
+		}
+	`;
+	const child = Bun.spawn([process.execPath, "--eval", runner], {
+		cwd: path.resolve(import.meta.dir, "../.."),
+		env: {
+			...process.env,
+			SHELL: shell,
+			OMP_TEST_SHELL_MARKER: initialMarker,
+		},
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const [exitCode, stdout, stderr] = await Promise.all([
+		child.exited,
+		new Response(child.stdout).text(),
+		new Response(child.stderr).text(),
+	]);
+	expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
+	expect(JSON.parse(stdout)).toEqual({ state: "ready", readyTimedOut: false });
+}
+
 afterEach(async () => {
 	while (cleanupDirs.length > 0) {
 		const dir = cleanupDirs.pop();
@@ -131,6 +211,24 @@ setInterval(() => {}, 1000);
 			await shutdown(first);
 			second.close();
 		}
+	}, 20_000);
+
+	it("uses a basic shell when the login shell cannot run POSIX commands", async () => {
+		if (process.platform === "win32") return;
+		const shellPath = path.join(await tempDir("omp-daemon-nonposix-shell-"), "csh");
+		await Bun.write(shellPath, "#!/bin/sh\nexit 1\n");
+		await fs.chmod(shellPath, 0o755);
+
+		await startPtyDaemonWithShell(shellPath, "basic-shell", "basic-shell");
+	}, 20_000);
+
+	it("preserves compatible login shells for PTY daemons", async () => {
+		if (process.platform === "win32") return;
+		const shellPath = path.join(await tempDir("omp-daemon-posix-shell-"), "zsh");
+		await Bun.write(shellPath, '#!/bin/sh\nexport OMP_TEST_SHELL_MARKER="compatible-shell"\nexec /bin/sh "$@"\n');
+		await fs.chmod(shellPath, 0o755);
+
+		await startPtyDaemonWithShell(shellPath, "basic-shell", "compatible-shell");
 	}, 20_000);
 
 	it("stops non-persistent daemons after the last project omp exits", async () => {

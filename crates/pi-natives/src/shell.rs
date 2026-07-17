@@ -558,4 +558,31 @@ mod tests {
 			.expect("shell run should return");
 		assert!(result.cancelled);
 	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn timeout_drains_pipeline_output_before_stopping_reader() {
+		let shell = CoreShell::new(None);
+		let (tx, rx) = flume::unbounded::<String>();
+		let result = shell
+			.run(
+				CoreShellRunOptions {
+					command:    "yes x | tail -5".to_string(),
+					cwd:        None,
+					env:        None,
+					timeout_ms: Some(50),
+				},
+				Some(tx),
+				CancelToken::new(Some(50)),
+			)
+			.await
+			.expect("shell run");
+
+		let mut output = String::new();
+		while let Ok(chunk) = rx.recv_async().await {
+			output.push_str(&chunk);
+		}
+
+		assert!(result.timed_out);
+		assert_eq!(output.lines().filter(|line| *line == "x").count(), 5);
+	}
 }

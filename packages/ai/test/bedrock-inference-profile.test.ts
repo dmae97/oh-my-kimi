@@ -148,3 +148,24 @@ describe("Bedrock cross-region inference-profile geo routing", () => {
 		});
 	});
 });
+
+describe("Bedrock error handling", () => {
+	const circular: Record<string, unknown> = {};
+	circular.self = circular;
+
+	test.each([
+		["undefined", undefined],
+		["BigInt", 1n],
+		["circular object", circular],
+	])("surfaces a stream error when %s is thrown", async (_name, thrown) => {
+		const result = await streamBedrock(profileModel, userContext(), {
+			bearerToken: "test-token",
+			maxTokens: 16,
+			onPayload: () => {
+				throw thrown;
+			},
+		}).result();
+
+		expect(result.stopReason).toBe("error");
+	});
+});

@@ -206,6 +206,16 @@ describe("expandInternalUrls", () => {
 		);
 	});
 
+	it("expands an unquoted URL inside a double-quoted command substitution", async () => {
+		const skills = [createSkill("valid-skill", "/tmp/skills/valid-skill")];
+		const command = 'echo "$(realpath skill://valid-skill/SKILL.md 2>&1)"';
+		const expectedPath = path.join(skills[0].baseDir, "SKILL.md");
+
+		await expect(expandInternalUrls(command, { skills })).resolves.toBe(
+			`echo "$(realpath ${shellEscape(expectedPath)} 2>&1)"`,
+		);
+	});
+
 	it("leaves literal internal URLs embedded in quoted text unchanged", async () => {
 		const router = createInternalRouter({
 			"memory://root/summary.md": { sourcePath: "/tmp/memories/summary.md" },

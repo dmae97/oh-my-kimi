@@ -127,12 +127,31 @@ export class IrcBus {
 			};
 		}
 
+		// A `parked` recipient always needs the lifecycle to revive it — this is
+		// read from *this* bus's registry, so it holds for any registry. The
+		// mid-park / adopted checks below query the lifecycle's own state, which
+		// only describes the registry it manages: consult them only when the
+		// lifecycle owns this bus's registry, otherwise a custom-registry bus
+		// (fallen back to the global manager) would gate a live recipient on
+		// unrelated global park state. Main/non-adopted live peers skip the gate,
+		// and pending waiters still win without a session.
+		const lifecycle = this.#lifecycle();
+		const lifecycleOwnsRegistry = lifecycle.manages(this.#registry);
+		const needsLifecycleGate =
+			ref.status === "parked" ||
+			(lifecycleOwnsRegistry && (lifecycle.isParking(message.to) || lifecycle.has(message.to)));
+
+		const priorSession = ref.session;
 		let revived = false;
-		if (ref.status === "parked") {
+		if (needsLifecycleGate) {
 			try {
-				await this.#lifecycle().ensureLive(message.to);
-				revived = true;
+				const liveSession = await lifecycle.ensureLive(message.to);
+				// Revival = we did not keep the same live instance (parked start, or
+				// park completed and a fresh session was rebuilt).
+				revived = !priorSession || liveSession !== priorSession;
 			} catch (error) {
+				// Not revivable / released / revive failed. Do not buffer: a permanent
+				// failure must not inflate unread counts or pretend delivery is pending.
 				return {
 					to: message.to,
 					outcome: "failed",

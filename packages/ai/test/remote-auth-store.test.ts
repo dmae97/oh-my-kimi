@@ -150,6 +150,48 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 		remoteStore.close();
 	});
 
+	test("invalidated OAuth tokens disable the remote row and rotate to a sibling", async () => {
+		serverStore!.upsertAuthCredentialForProvider("anthropic", {
+			type: "oauth",
+			access: "server-access-2",
+			refresh: "server-refresh-2",
+			expires: Date.now() + 120_000,
+			accountId: "account-2",
+			email: "b@example.com",
+		});
+		await serverStorage!.reload();
+		const seededRows = serverStore!.listAuthCredentials("anthropic");
+		expect(seededRows).toHaveLength(2);
+		const failedRow = seededRows[0];
+		if (failedRow?.credential.type !== "oauth") throw new Error("expected failed OAuth row");
+
+		const brokerClient = new AuthBrokerClient({ url: handle!.url, token });
+		const initialResult = await brokerClient.fetchSnapshot();
+		if (initialResult.status !== 200) throw new Error("expected snapshot");
+		const remoteStore = new RemoteAuthCredentialStore({
+			client: brokerClient,
+			initialSnapshot: initialResult.snapshot,
+		});
+		const clientStorage = new AuthStorage(remoteStore);
+		const first = {
+			accessToken: failedRow.credential.access,
+			credentialId: failedRow.id,
+		};
+
+		const rotated = await clientStorage.rotateSessionCredential("anthropic", "invalidated-session", {
+			error: new Error("Encountered invalidated oauth token for user, failing request"),
+			apiKey: first.accessToken,
+			credentialId: first.credentialId,
+		});
+
+		expect(rotated).toBe(true);
+		expect(serverStore!.listAuthCredentials("anthropic").map(row => row.id)).not.toContain(first.credentialId);
+		const next = await clientStorage.getOAuthAccess("anthropic", "invalidated-session");
+		expect(next?.credentialId).not.toBe(first.credentialId);
+		clientStorage.close();
+		remoteStore.close();
+	});
+
 	test("RemoteAuthCredentialStore rejects writes from the client", () => {
 		const remoteStore = new RemoteAuthCredentialStore({
 			client: new AuthBrokerClient({ url: handle!.url, token }),
@@ -990,6 +1032,18 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 		// response without waiting for the long-poll snapshot tick.
 		expect(clientStorage.get("kagi")).toEqual({ type: "api_key", key: "new-key" });
 		clientStorage.close();
+	});
+	test("snapshot with a login-sourced api_key passes client wire validation", async () => {
+		// Regression: keys stored via the /login flow carry `source: "login"`.
+		// exportSnapshot() forwards them verbatim; the client wire schema used
+		// to reject the field ("credentials[0].credential.source must be removed").
+		await serverStorage!.set("custom-host", { type: "api_key", key: "sk-custom", source: "login" });
+
+		const brokerClient = new AuthBrokerClient({ url: handle!.url, token });
+		const result = await brokerClient.fetchSnapshot();
+		if (result.status !== 200) throw new Error("expected snapshot");
+		const entry = result.snapshot.credentials.find(candidate => candidate.provider === "custom-host");
+		expect(entry?.credential).toEqual({ type: "api_key", key: "sk-custom", source: "login" });
 	});
 
 	test("client AuthStorage.remove disables every broker-side credential for the provider (logout)", async () => {

@@ -21,6 +21,19 @@ const OPENAI_MODEL: Model<"openai-completions"> = buildModel({
 	maxTokens: 8_192,
 });
 
+const OPENROUTER_MODEL: Model<"openai-completions"> = buildModel({
+	id: "deepseek/deepseek-v4-flash",
+	name: "DeepSeek V4 Flash",
+	api: "openai-completions",
+	provider: "openrouter",
+	baseUrl: "https://openrouter.ai/api/v1",
+	reasoning: true,
+	input: ["text"],
+	cost: { input: 0.098, output: 0.196, cacheRead: 0.02, cacheWrite: 0 },
+	contextWindow: 1_048_576,
+	maxTokens: 384_000,
+});
+
 function blankUsage(): Usage {
 	return {
 		input: 0,
@@ -52,6 +65,21 @@ describe("openai-completions parseChunkUsage", () => {
 		expect(usage.cacheRead).toBe(200);
 		expect(usage.totalTokens).toBe(1_100);
 		expect(usage.reasoningTokens).toBe(40);
+	});
+
+	it("uses OpenRouter's reported account charge instead of the catalog estimate", () => {
+		const usage = parseChunkUsage(
+			{
+				prompt_tokens: 1_000_000,
+				completion_tokens: 100_000,
+				cost: 0.42,
+			},
+			OPENROUTER_MODEL,
+			undefined,
+		);
+
+		expect(usage.cost.total).toBe(0.42);
+		expect(usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite).toBeCloseTo(0.42);
 	});
 
 	it("omits reasoningTokens when no reasoning_tokens are reported", () => {

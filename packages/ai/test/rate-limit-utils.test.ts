@@ -61,6 +61,14 @@ describe("parseRateLimitReason", () => {
 		).toBe("QUOTA_EXHAUSTED");
 	});
 
+	it("classifies Anthropic monthly spend limits as QUOTA_EXHAUSTED", () => {
+		expect(
+			parseRateLimitReason(
+				'429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s monthly spend limit. Please try again later."}}',
+			),
+		).toBe("QUOTA_EXHAUSTED");
+	});
+
 	it("classifies OpenCode Go insufficient balance as QUOTA_EXHAUSTED", () => {
 		expect(
 			parseRateLimitReason("401 Insufficient balance. Manage your billing here: https://opencode.ai/workspace/demo"),
@@ -117,6 +125,19 @@ describe("isUsageLimit", () => {
 		expect(
 			isUsageLimit(
 				"Cloud Code Assist API error (429): Individual quota reached. Contact your administrator to enable overages.",
+			),
+		).toBe(true);
+	});
+
+	// Anthropic returns a `rate_limit_error` when the account's monthly spend
+	// cap is hit ("This request would exceed your account's monthly spend
+	// limit."). Without the `spend limit` branch the message classifies as a
+	// transient rate limit, so `isProviderRetryableError` retries it until the
+	// local deadline instead of surfacing the quota error (issue #4787).
+	it("detects Anthropic monthly spend-limit as a credential-rotatable usage limit", () => {
+		expect(
+			isUsageLimit(
+				'429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s monthly spend limit. Please try again later."}}',
 			),
 		).toBe(true);
 	});
@@ -211,6 +232,21 @@ describe("isUsageLimitOutcome", () => {
 		expect(isUsageLimitOutcome(403, message)).toBe(true);
 		expect(isUsageLimitOutcome(undefined, message)).toBe(true);
 		expect(isUsageLimitOutcome(429, message)).toBe(true);
+	});
+
+	it("rotates on xAI Grok Build 402 usage-balance exhaustion regardless of status", () => {
+		const message = "402 Grok Build usage balance exhausted";
+		expect(isUsageLimitOutcome(402, message)).toBe(true);
+		expect(isUsageLimitOutcome(undefined, message)).toBe(true);
+		expect(isUsageLimit(message)).toBe(true);
+	});
+
+	it("treats 402 as a usage-limit status (opaque body rotates, informative non-quota body does not)", () => {
+		expect(isUsageLimitStatus(402)).toBe(true);
+		expect(isUsageLimitOutcome(402, undefined)).toBe(true);
+		expect(isUsageLimitOutcome(402, "HTTP 402")).toBe(true);
+		expect(isUsageLimitOutcome(402, "A subscription is required for this endpoint")).toBe(false);
+		expect(isUsageLimit(new ProviderHttpError("HTTP 402", 402))).toBe(true);
 	});
 
 	it("does not rotate on auth/invalid-request statuses with unrelated bodies", () => {

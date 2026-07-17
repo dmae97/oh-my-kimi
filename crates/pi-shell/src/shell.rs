@@ -1141,11 +1141,16 @@ async fn run_shell_command_once(
 			}
 		}
 	});
+	// Let pipeline consumers flush output after cancellation kills their
+	// producers. The outer run cancellation remains bounded, and this delayed
+	// fallback still releases readers whose writers never close.
+	const CANCEL_READER_GRACE: Duration = Duration::from_millis(500);
 	let cancel_bridge = tokio::spawn({
 		let cancel_token = cancel_token.clone();
 		let reader_cancel = reader_cancel.clone();
 		async move {
 			cancel_token.cancelled().await;
+			time::sleep(CANCEL_READER_GRACE).await;
 			reader_cancel.cancel();
 		}
 	});
@@ -3213,6 +3218,20 @@ mod tests {
 		path.push(format!("pi-shell-{prefix}-{}-{nonce}", std::process::id()));
 		std::fs::create_dir_all(&path).expect("create temp dir");
 		path
+	}
+
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn uutils_diff_reads_process_substitution_fds() {
+		let (result, output) = time::timeout(
+			Duration::from_secs(5),
+			run_command_capture("diff <(echo a) <(echo b)", None, None, CancelToken::default()),
+		)
+		.await
+		.expect("process substitution should not hang");
+
+		assert_eq!(result.exit_code, Some(1));
+		assert!(output.contains("-a\n+b\n"), "diff output missing changed lines: {output:?}");
 	}
 
 	#[cfg(unix)]

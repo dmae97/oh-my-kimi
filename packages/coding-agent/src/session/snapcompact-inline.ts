@@ -85,7 +85,7 @@ interface SystemPromptImageTarget {
 }
 
 const CONTEXT_SECTION_PATTERNS = [
-	/<context>\n[\s\S]*?\n<\/context>/g,
+	/<repo-rules>\n[\s\S]*?\n<\/repo-rules>/g,
 	/## Context\n<instructions>\n[\s\S]*?\n<\/instructions>/g,
 ] as const;
 

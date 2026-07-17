@@ -54,19 +54,15 @@ function ThinkingBlock({ text, redacted }: { text: string; redacted?: boolean })
 	);
 }
 
-/** Plain text + image thumbnails for user / custom message content. */
+/** Markdown + image thumbnails for user / custom message content. */
 function MsgContent({ content }: { content: string | readonly (TextContent | ImageContent)[] }): ReactNode {
-	if (typeof content === "string") return <div className="tr-text">{content}</div>;
+	if (typeof content === "string") return <Markdown text={content} />;
 	return (
 		<>
 			{content.map((block, i) => {
 				switch (block.type) {
 					case "text":
-						return (
-							<div key={i} className="tr-text">
-								{block.text}
-							</div>
-						);
+						return <Markdown key={i} text={block.text} />;
 					case "image":
 						return (
 							<img

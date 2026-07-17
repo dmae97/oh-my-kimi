@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, UsageLimit, UsageReport } from "@oh-my-pi/pi-ai";
-import { type Component, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
+import { type Component, type EditorTopBorder, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { getProjectDir } from "@oh-my-pi/pi-utils";
 import { settings } from "../../../config/settings";
 import type { AgentSession } from "../../../session/agent-session";
@@ -1131,7 +1131,7 @@ export class StatusLineComponent implements Component {
 		return theme.fg("statusLineSubagents", `${theme.icon.agents} ${this.#subagentCount} ${noun}`);
 	}
 
-	#buildStatusLine(width: number): string {
+	#buildStatusLine(width: number): string[] {
 		const effectiveSettings = this.#resolveSettings();
 		const includePath =
 			hasPathSegment(effectiveSettings.leftSegments) || hasPathSegment(effectiveSettings.rightSegments);
@@ -1166,15 +1166,12 @@ export class StatusLineComponent implements Component {
 		const sepAnsi = theme.getFgAnsi("statusLineSep");
 		const subagentBadge = this.#subagentBadgeText();
 
-		// Collect visible segment contents
 		const leftParts: string[] = [];
-		const leftSegIds: StatusLineSegmentId[] = [];
 		for (const segId of effectiveSettings.leftSegments) {
 			if (subagentBadge && segId === "subagents") continue;
 			const rendered = renderSegment(segId, ctx);
 			if (rendered.visible && rendered.content) {
 				leftParts.push(rendered.content);
-				leftSegIds.push(segId);
 			}
 		}
 
@@ -1194,10 +1191,9 @@ export class StatusLineComponent implements Component {
 		if (subagentBadge) {
 			rightParts.unshift(subagentBadge);
 		}
-		const topFillWidth = Math.max(0, width);
-		const left = [...leftParts];
-		const right = [...rightParts];
+		if (leftParts.length === 0 && rightParts.length === 0) return [];
 
+		const topFillWidth = Math.max(0, width);
 		const leftSepWidth = visibleWidth(separatorDef.left);
 		const rightSepWidth = visibleWidth(separatorDef.right);
 		// Transparent mode drops powerline caps (they need a bg fill to bridge),
@@ -1212,64 +1208,33 @@ export class StatusLineComponent implements Component {
 			return partsWidth + sepTotal + 2 + capWidth;
 		};
 
-		let leftWidth = groupWidth(left, leftCapWidth, leftSepWidth);
-		let rightWidth = groupWidth(right, rightCapWidth, rightSepWidth);
-		const totalWidth = () => leftWidth + rightWidth + (left.length > 0 && right.length > 0 ? 1 : 0);
-
-		if (topFillWidth > 0) {
-			while (totalWidth() > topFillWidth && right.length > 0) {
-				right.pop();
-				rightWidth = groupWidth(right, rightCapWidth, rightSepWidth);
-			}
-			// Shrink path before dropping left segments — path is the only elastic segment
-			const pathIdx = leftSegIds.indexOf("path");
-			if (pathIdx >= 0 && totalWidth() > topFillWidth) {
-				const overflow = totalWidth() - topFillWidth;
-				const currentPathVW = visibleWidth(left[pathIdx]);
-				const minPathVW = 8; // icon + ellipsis + a few chars
-				const shrinkable = currentPathVW - minPathVW;
-				if (shrinkable > 0) {
-					const shrinkBy = Math.min(shrinkable, overflow);
-					const currentMaxLen = ctx.options.path?.maxLength ?? 40;
-					let newMaxLen = Math.max(4, Math.min(currentMaxLen, currentPathVW) - shrinkBy);
-					const pathCtx = (maxLen: number): SegmentContext => ({
-						...ctx,
-						options: { ...ctx.options, path: { ...ctx.options.path, maxLength: maxLen } },
-					});
-					let reRendered = renderSegment("path", pathCtx(newMaxLen));
-					if (reRendered.visible && reRendered.content) {
-						// maxLength governs path text, not icon prefix; iterate to compensate
-						for (let i = 0; i < 8; i++) {
-							const saved = currentPathVW - visibleWidth(reRendered.content);
-							if (saved >= shrinkBy) break;
-							const nextMaxLen = Math.max(4, newMaxLen - (shrinkBy - saved));
-							if (nextMaxLen >= newMaxLen) break; // no progress or hit floor
-							newMaxLen = nextMaxLen;
-							const adjusted = renderSegment("path", pathCtx(newMaxLen));
-							if (!adjusted.visible || !adjusted.content) break;
-							reRendered = adjusted;
-						}
-						left[pathIdx] = reRendered.content;
-						leftWidth = groupWidth(left, leftCapWidth, leftSepWidth);
+		// Preset order is priority order: fill rows with left segments first, then
+		// right segments. A segment wider than one row is clipped only after it has
+		// been isolated, so it never displaces or discards later segments.
+		const groups: Array<{ left: string[]; right: string[] }> = [{ left: [], right: [] }];
+		if (topFillWidth === 0) {
+			groups[0]!.left.push(...leftParts);
+			groups[0]!.right.push(...rightParts);
+		} else {
+			const orderedParts: Array<{ side: "left" | "right"; parts: string[] }> = [
+				{ side: "left", parts: leftParts },
+				{ side: "right", parts: rightParts },
+			];
+			for (const { side, parts } of orderedParts) {
+				for (const part of parts) {
+					let current = groups[groups.length - 1]!;
+					const currentSide = current[side];
+					currentSide.push(part);
+					const leftWidth = groupWidth(current.left, leftCapWidth, leftSepWidth);
+					const rightWidth = groupWidth(current.right, rightCapWidth, rightSepWidth);
+					const totalWidth = leftWidth + rightWidth + (leftWidth > 0 && rightWidth > 0 ? 1 : 0);
+					if (totalWidth > topFillWidth && current.left.length + current.right.length > 1) {
+						currentSide.pop();
+						current = { left: [], right: [] };
+						current[side].push(part);
+						groups.push(current);
 					}
 				}
-			}
-			const leftOverflowDropIndex = (): number => {
-				// Preserve the current working directory as long as possible. The
-				// previous right-to-left pop could collapse a normal-width bar to
-				// just the model segment, hiding the path before less-critical left
-				// segments such as model/mode/collab were removed.
-				for (let i = leftSegIds.length - 1; i >= 0; i--) {
-					if (leftSegIds[i] !== "path") return i;
-				}
-				return left.length - 1;
-			};
-
-			while (totalWidth() > topFillWidth && left.length > 0) {
-				const dropIdx = leftOverflowDropIndex();
-				left.splice(dropIdx, 1);
-				leftSegIds.splice(dropIdx, 1);
-				leftWidth = groupWidth(left, leftCapWidth, leftSepWidth);
 			}
 		}
 
@@ -1295,35 +1260,46 @@ export class StatusLineComponent implements Component {
 			return content;
 		};
 
-		const leftGroup = renderGroup(left, "left");
-		const rightGroup = renderGroup(right, "right");
-		if (!leftGroup && !rightGroup) return "";
-
-		if (topFillWidth === 0 || left.length === 0 || right.length === 0) {
-			return leftGroup + (leftGroup && rightGroup ? " " : "") + rightGroup;
-		}
-
-		const gapWidth = Math.max(1, topFillWidth - leftWidth - rightWidth);
 		const sessionName =
 			effectiveSettings.sessionAccent !== false ? this.session.sessionManager?.getSessionName() : undefined;
 		const accentHex = sessionName
 			? getSessionAccentHex(sessionName, theme.getMajorThemeColorHexes(), theme.accentSurfaceLuminance)
 			: undefined;
 		const gapColor = getSessionAccentAnsi(accentHex) ?? theme.getFgAnsi("border");
-		const gapFill = `${gapColor}${theme.boxRound.horizontal.repeat(gapWidth)}\x1b[39m`;
-		return leftGroup + gapFill + rightGroup;
+		const lines: string[] = [];
+		for (const group of groups) {
+			const leftGroup = renderGroup(group.left, "left");
+			const rightGroup = renderGroup(group.right, "right");
+			if (!leftGroup && !rightGroup) continue;
+
+			let content = leftGroup || rightGroup;
+			if (leftGroup && rightGroup) {
+				const leftWidth = groupWidth(group.left, leftCapWidth, leftSepWidth);
+				const rightWidth = groupWidth(group.right, rightCapWidth, rightSepWidth);
+				const gapWidth = Math.max(1, topFillWidth - leftWidth - rightWidth);
+				content = `${leftGroup}${gapColor}${theme.boxRound.horizontal.repeat(gapWidth)}\x1b[39m${rightGroup}`;
+			}
+			if (topFillWidth > 0 && visibleWidth(content) > topFillWidth) {
+				content = truncateToWidth(content, topFillWidth);
+			}
+			lines.push(content);
+		}
+		return lines;
 	}
 
-	getTopBorder(width: number): { content: string; width: number } {
-		let content = this.#buildStatusLine(width);
-		if (this.#focusedAgentId && content) {
+	/** Builds the prioritized status rows consumed by the editor's top border. */
+	getTopBorder(width: number): EditorTopBorder {
+		let contents = this.#buildStatusLine(width);
+		if (this.#focusedAgentId) {
 			// Dim the whole bar while focus-proxied. Group/cap terminators emit full
 			// `\x1b[0m` resets that would cancel faint mid-bar, so re-open it after each.
-			content = `\x1b[2m${content.replaceAll("\x1b[0m", "\x1b[0m\x1b[2m")}\x1b[22m`;
+			contents = contents.map(content => `\x1b[2m${content.replaceAll("\x1b[0m", "\x1b[0m\x1b[2m")}\x1b[22m`);
 		}
 		return {
-			content,
-			width: visibleWidth(content),
+			lines: contents.map(content => ({
+				content,
+				width: visibleWidth(content),
+			})),
 		};
 	}
 
@@ -1334,10 +1310,8 @@ export class StatusLineComponent implements Component {
 			return [];
 		}
 
-		const sortedStatuses = Array.from(this.#hookStatuses.entries())
+		return Array.from(this.#hookStatuses.entries())
 			.sort(([a], [b]) => a.localeCompare(b))
-			.map(([, text]) => sanitizeStatusText(text));
-		const hookLine = sortedStatuses.join(" ");
-		return [truncateToWidth(hookLine, width)];
+			.map(([, text]) => truncateToWidth(sanitizeStatusText(text), width));
 	}
 }

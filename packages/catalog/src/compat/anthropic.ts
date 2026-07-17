@@ -109,7 +109,7 @@ export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): Res
 		signingEndpoint,
 		disableStrictTools: isAzure,
 		disableAdaptiveThinking: false,
-		supportsEagerToolInputStreaming: !isCopilot,
+		supportsEagerToolInputStreaming: official,
 		// Long cache retention is only sent to the official API by default;
 		// proxies opt in explicitly via `compat.supportsLongCacheRetention: true`.
 		supportsLongCacheRetention: official,

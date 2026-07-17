@@ -55,10 +55,11 @@ function getMessageText(message: AgentMessage): string {
 	if (!Array.isArray(message.content)) {
 		return "";
 	}
-	return message.content
-		.filter(isTextContentBlock)
-		.map(content => content.text)
-		.join("\n");
+	const text: string[] = [];
+	for (const content of message.content) {
+		if (isTextContentBlock(content)) text.push(content.text);
+	}
+	return text.join("\n");
 }
 
 describe("AgentSession eager task prelude", () => {

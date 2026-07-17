@@ -199,7 +199,7 @@ describe("CombinedAutocompleteProvider", () => {
 			}
 		});
 
-		it("treats @ file-reference tokens as literal text inside slash command arguments without completions", async () => {
+		it("returns @ file-reference completions inside slash command arguments without command completions", async () => {
 			const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "autocomplete-rename-args-"));
 			try {
 				fs.writeFileSync(path.join(baseDir, "copy-target.ts"), "export {};\n");
@@ -210,7 +210,8 @@ describe("CombinedAutocompleteProvider", () => {
 				const line = "/rename repro @";
 				const result = await provider.getSuggestions([line], 0, line.length);
 
-				expect(result).toBeNull();
+				expect(result?.prefix).toBe("@");
+				expect(result?.items.map(item => item.value)).toContain("@copy-target.ts");
 			} finally {
 				fs.rmSync(baseDir, { recursive: true, force: true });
 			}
@@ -259,6 +260,37 @@ describe("CombinedAutocompleteProvider", () => {
 					prefix: "repro @",
 					items: [{ value: "repro @literal", label: "Keep @ in the title" }],
 				});
+			} finally {
+				fs.rmSync(baseDir, { recursive: true, force: true });
+			}
+		});
+
+		it("falls back to path completions when slash command argument completions have no match", async () => {
+			const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "autocomplete-rename-path-"));
+			try {
+				fs.mkdirSync(path.join(baseDir, "src"));
+				fs.writeFileSync(path.join(baseDir, "src", "app.ts"), "export {};\n");
+				const provider = new CombinedAutocompleteProvider(
+					[
+						{
+							name: "btw",
+							description: "Ask a side question",
+							allowArgs: true,
+							getArgumentCompletions(argumentPrefix) {
+								if (argumentPrefix === "option") {
+									return [{ value: "option", label: "option" }];
+								}
+								return null;
+							},
+						},
+					],
+					baseDir,
+				);
+				const line = "/btw ./src/ap";
+				const result = await provider.getSuggestions([line], 0, line.length);
+
+				expect(result?.prefix).toBe("./src/ap");
+				expect(result?.items.map(item => item.value)).toContain("./src/app.ts");
 			} finally {
 				fs.rmSync(baseDir, { recursive: true, force: true });
 			}
@@ -830,6 +862,23 @@ describe("trySyncSlashCompletion", () => {
 		const result = provider.trySyncSlashCompletion("/providers");
 		expect(result).not.toBeNull();
 		expect(result!.items[0]?.value).toBe("providers");
+	});
+
+	it("prefers an exact alias over an earlier same-prefix command (/q -> quit, not queue)", () => {
+		const provider = new CombinedAutocompleteProvider(
+			[
+				{ name: "queue", description: "Queue a message for after the agent yields" },
+				{ name: "quit", aliases: ["q"], description: "Quit the application" },
+			],
+			"/tmp",
+		);
+		const result = provider.trySyncSlashCompletion("/q");
+		expect(result).not.toBeNull();
+		// The sync-completion path applies items[0] on Enter. Even though `queue`
+		// is registered first and shares the `q` prefix, the exact `q` alias on
+		// `quit` must win (score 1000 > 900) so /q + Enter dispatches the `q`
+		// alias, which resolves to `quit` (#5335).
+		expect(result!.items[0]?.value).toBe("q");
 	});
 
 	it("uses aliases when completing slash command arguments", async () => {

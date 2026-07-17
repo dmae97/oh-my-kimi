@@ -400,6 +400,41 @@ describe("processResponsesStream: lost output_item.added recovery", () => {
 		expect(end?.content).toBe("Recovered text");
 	});
 
+	test("normalizes a completed native image generation call into visible assistant content", async () => {
+		const output = makeOutput();
+		const emitted: EmittedEvent[] = [];
+		const stream = { push: (event: unknown) => emitted.push(event as EmittedEvent), end: () => {} } as never;
+		const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+		await processResponsesStream(
+			makeStream([
+				{
+					type: "response.output_item.done",
+					output_index: 0,
+					item: {
+						type: "image_generation_call",
+						id: "ig_1",
+						status: "completed",
+						result: data,
+					},
+				},
+				{ type: "response.completed", response: { id: "resp_image", status: "completed" } },
+			]),
+			output,
+			stream,
+			makeModel(),
+		);
+
+		expect(output.content).toEqual([{ type: "image", data, mimeType: "image/png" }]);
+		const end = emitted.find(event => event.type === "image_end");
+		expect(end).toEqual({
+			type: "image_end",
+			contentIndex: 0,
+			content: { type: "image", data, mimeType: "image/png" },
+			partial: output,
+		});
+	});
+
 	test("routes reasoning finalization by output_index when item ids are absent", async () => {
 		const output = makeOutput();
 		const stream = { push: () => {}, end: () => {} } as never;

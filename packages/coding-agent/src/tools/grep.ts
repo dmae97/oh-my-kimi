@@ -1432,17 +1432,6 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					}, 0);
 					let lastEmittedLine: number | undefined;
 					const gutterPad = " ".repeat(lineNumberWidth + 1);
-					// Track match/context lines whose displayed text was
-					// column-truncated by the native (see `crates/pi-natives/src/grep.rs`
-					// `truncate_line`, marker `...` at max_columns). Excluded from
-					// seenLines so a follow-up edit anchored at that line still
-					// requires a full-width re-read — the model saw only the
-					// prefix. The native currently propagates `truncated` only on
-					// the match line; context lines fall back to a length check
-					// against `DEFAULT_MAX_COLUMN` as a conservative heuristic.
-					const clippedLines = new Set<number>();
-					const isNativeTruncated = (line: string): boolean =>
-						line.length >= DEFAULT_MAX_COLUMN && line.endsWith("...");
 					for (const match of fileMatches) {
 						const pushLine = (lineNumber: number, line: string, isMatch: boolean) => {
 							if (lastEmittedLine !== undefined && lineNumber > lastEmittedLine + 1) {
@@ -1456,31 +1445,20 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 						if (match.contextBefore) {
 							for (const ctx of match.contextBefore) {
 								pushLine(ctx.lineNumber, ctx.line, false);
-								if (isNativeTruncated(ctx.line)) clippedLines.add(ctx.lineNumber);
 							}
 						}
 						pushLine(match.lineNumber, match.line, true);
-						if (match.truncated) {
-							linesTruncated = true;
-							clippedLines.add(match.lineNumber);
-						}
+						if (match.truncated) linesTruncated = true;
 						if (match.contextAfter) {
 							for (const ctx of match.contextAfter) {
 								pushLine(ctx.lineNumber, ctx.line, false);
-								if (isNativeTruncated(ctx.line)) clippedLines.add(ctx.lineNumber);
 							}
 						}
 						fileMatchCounts.set(relativePath, (fileMatchCounts.get(relativePath) ?? 0) + 1);
 					}
 					if (hashContext?.tag) {
 						const absoluteFilePath = path.resolve(this.session.cwd, relativePath);
-						recordSeenLinesFromBody(
-							this.session,
-							absoluteFilePath,
-							hashContext.tag,
-							modelOut.join("\n"),
-							clippedLines,
-						);
+						recordSeenLinesFromBody(this.session, absoluteFilePath, hashContext.tag, modelOut.join("\n"));
 					}
 					return { model: modelOut, display: displayOut };
 				};

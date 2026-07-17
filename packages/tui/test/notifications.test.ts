@@ -20,6 +20,9 @@ const originalOsc99Probe = Bun.env.PI_TUI_OSC99_PROBE;
 const originalTmux = Bun.env.TMUX;
 const originalZellij = Bun.env.ZELLIJ;
 const originalPiNotifications = Bun.env.PI_NOTIFICATIONS;
+const originalCmuxSurfaceId = Bun.env.CMUX_SURFACE_ID;
+const originalCmuxWorkspaceId = Bun.env.CMUX_WORKSPACE_ID;
+const originalCmuxSocketPath = Bun.env.CMUX_SOCKET_PATH;
 const mutableTerminal = TERMINAL as unknown as { notifyProtocol: NotifyProtocol };
 const originalNotifyProtocol = mutableTerminal.notifyProtocol;
 
@@ -74,6 +77,9 @@ describe("terminal notifications", () => {
 		// assertions never see a stray inherited TMUX leaking the DCS wrap in.
 		delete Bun.env.TMUX;
 		delete Bun.env.ZELLIJ;
+		delete Bun.env.CMUX_SURFACE_ID;
+		delete Bun.env.CMUX_WORKSPACE_ID;
+		delete Bun.env.CMUX_SOCKET_PATH;
 		// `PI_NOTIFICATIONS=off` is set in this workspace's CI env, which would
 		// short-circuit `sendNotification` before it writes anything. Clear it
 		// so the delivery-path assertions actually observe stdout writes.
@@ -89,6 +95,9 @@ describe("terminal notifications", () => {
 		restoreEnv("TMUX", originalTmux);
 		restoreEnv("ZELLIJ", originalZellij);
 		restoreEnv("PI_NOTIFICATIONS", originalPiNotifications);
+		restoreEnv("CMUX_SURFACE_ID", originalCmuxSurfaceId);
+		restoreEnv("CMUX_WORKSPACE_ID", originalCmuxWorkspaceId);
+		restoreEnv("CMUX_SOCKET_PATH", originalCmuxSocketPath);
 		restoreProperty(process.stdin, "isTTY", stdinIsTtyDescriptor);
 		restoreProperty(process.stdout, "isTTY", stdoutIsTtyDescriptor);
 		restoreProperty(process.stdin, "setRawMode", stdinSetRawModeDescriptor);
@@ -180,6 +189,96 @@ describe("terminal notifications", () => {
 	it("wraps an OSC payload in tmux's DCS passthrough envelope with doubled ESCs", () => {
 		const payload = "\x1b]99;;Hello\x1b\\";
 		expect(wrapTmuxPassthrough(payload)).toBe("\x1bPtmux;\x1b\x1b]99;;Hello\x1b\x1b\\\x1b\\");
+	});
+
+	it("routes a real cmux surface notification exactly once with explicit argv fields", () => {
+		Bun.env.CMUX_SURFACE_ID = "123e4567-e89b-12d3-a456-426614174000";
+		mutableTerminal.notifyProtocol = NotifyProtocol.Osc99;
+		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const unref = vi.fn();
+		const spawn = vi.spyOn(Bun, "spawn").mockImplementation((..._args: unknown[]) => ({ unref }) as never);
+
+		TERMINAL.sendNotification({ title: "--title=spoof", body: "--surface other" });
+
+		expect(spawn).toHaveBeenCalledTimes(1);
+		expect(spawn).toHaveBeenCalledWith({
+			cmd: [
+				"cmux",
+				"notify",
+				"--surface",
+				"123e4567-e89b-12d3-a456-426614174000",
+				"--title",
+				"--title=spoof",
+				"--body",
+				"--surface other",
+			],
+			stdin: "ignore",
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		expect(unref).toHaveBeenCalledTimes(1);
+		expect(stdout).not.toHaveBeenCalled();
+	});
+
+	it("keeps the existing OSC fallback for cmux workspace or socket state without a surface", () => {
+		mutableTerminal.notifyProtocol = NotifyProtocol.Osc99;
+		const writes: string[] = [];
+		vi.spyOn(process.stdout, "write").mockImplementation(chunk => {
+			writes.push(typeof chunk === "string" ? chunk : chunk.toString());
+			return true;
+		});
+		const spawn = vi.spyOn(Bun, "spawn").mockImplementation((..._args: unknown[]) => ({ unref: vi.fn() }) as never);
+
+		Bun.env.CMUX_WORKSPACE_ID = "workspace:1";
+		TERMINAL.sendNotification("workspace");
+		delete Bun.env.CMUX_WORKSPACE_ID;
+		Bun.env.CMUX_SOCKET_PATH = "/tmp/cmux.sock";
+		TERMINAL.sendNotification("socket");
+
+		expect(spawn).not.toHaveBeenCalled();
+		expect(writes).toEqual(["\x1b]99;;workspace\x1b\\", "\x1b]99;;socket\x1b\\"]);
+	});
+
+	it("rejects option-like cmux surface values and retains the existing fallback", () => {
+		Bun.env.CMUX_SURFACE_ID = "--help";
+		mutableTerminal.notifyProtocol = NotifyProtocol.Osc99;
+		const writes: string[] = [];
+		vi.spyOn(process.stdout, "write").mockImplementation(chunk => {
+			writes.push(typeof chunk === "string" ? chunk : chunk.toString());
+			return true;
+		});
+		const spawn = vi.spyOn(Bun, "spawn").mockImplementation((..._args: unknown[]) => ({ unref: vi.fn() }) as never);
+
+		TERMINAL.sendNotification("ping");
+
+		expect(spawn).not.toHaveBeenCalled();
+		expect(writes).toEqual(["\x1b]99;;ping\x1b\\"]);
+	});
+
+	it("falls back to the terminal protocol when cmux cannot be spawned", () => {
+		Bun.env.CMUX_SURFACE_ID = "123e4567-e89b-12d3-a456-426614174000";
+		mutableTerminal.notifyProtocol = NotifyProtocol.Osc99;
+		const writes: string[] = [];
+		vi.spyOn(process.stdout, "write").mockImplementation(chunk => {
+			writes.push(typeof chunk === "string" ? chunk : chunk.toString());
+			return true;
+		});
+		vi.spyOn(Bun, "spawn").mockImplementation(() => {
+			throw new Error("ENOENT");
+		});
+
+		expect(() => TERMINAL.sendNotification("ping")).not.toThrow();
+		expect(writes).toEqual(["\x1b]99;;ping\x1b\\"]);
+	});
+
+	it("unrefs a lingering cmux child so notification delivery cannot pin process exit", () => {
+		Bun.env.CMUX_SURFACE_ID = "123e4567-e89b-12d3-a456-426614174000";
+		const unref = vi.fn();
+		vi.spyOn(Bun, "spawn").mockImplementation((..._args: unknown[]) => ({ unref }) as never);
+
+		TERMINAL.sendNotification("ping");
+
+		expect(unref).toHaveBeenCalledTimes(1);
 	});
 
 	it("under tmux, OSC-protocol sendNotification wraps for passthrough and appends BEL", () => {
@@ -291,16 +390,18 @@ describe("terminal notifications", () => {
 		expect(writes).toEqual(["\x1b]99;;ping\x1b\\\x07"]);
 	});
 
-	it("under tmux, the OSC 99 capability probe is wrapped in DCS passthrough", () => {
+	it("under tmux, the OSC 99 capability probe is suppressed (reply cannot route back to the pane)", () => {
 		Bun.env.PI_TUI_OSC99_PROBE = "1";
 		Bun.env.TMUX = "/tmp/tmux-1000/default,1234,0";
 		mutableTerminal.notifyProtocol = NotifyProtocol.Osc99;
 		const { terminal, writes } = setupProcessTerminal();
 		try {
-			const probe = writes.find(
-				w => w.startsWith("\x1bPtmux;\x1b\x1b]99;i=omp-probe-") && w.endsWith("\x1b\x1b\\\x1b\\\x1b[c"),
-			);
-			expect(probe).toBeDefined();
+			// tmux forwards the passthrough probe to the outer terminal but cannot
+			// route the `p=?` reply back to the sending pane, so the reply would
+			// leak into the pane as text (#5582). The probe must not fire at all.
+			const probe = writes.find(w => w.includes("]99;i=omp-probe-") && w.includes(":p=?"));
+			expect(probe).toBeUndefined();
+			expect(isOsc99Supported()).toBe(false);
 		} finally {
 			terminal.stop();
 		}

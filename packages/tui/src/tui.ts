@@ -18,7 +18,17 @@
 import * as fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import { $flag, getDebugLogPath } from "@oh-my-pi/pi-utils";
-import { DEFAULT_MAX_INLINE_IMAGES, ImageBudget } from "./components/image";
+import {
+	DEFAULT_MAX_INLINE_IMAGES,
+	getDirectKittyPlacementRows,
+	getDirectKittyRowWidth,
+	ImageBudget,
+	isDirectKittyContinuation,
+	isDirectKittyPlacement,
+	positionDirectKittyContinuation,
+	unwrapDirectKittyContinuation,
+	unwrapDirectKittyPlacement,
+} from "./components/image";
 import { planDeccaraFills } from "./deccara";
 import { isKeyRelease, matchesKey } from "./keys";
 import { LoopWatchdog } from "./loop-watchdog";
@@ -80,15 +90,13 @@ const CURSOR_BEGIN = `${HIDE_CURSOR}${SYNC_OUTPUT_BEGIN}`;
 const CURSOR_BEGIN_NO_SYNC = HIDE_CURSOR;
 const CURSOR_END = SYNC_OUTPUT_END;
 const CURSOR_END_NO_SYNC = "";
-// Mouse reporting, enabled only for the lifetime of a fullscreen overlay so the
-// rest of the app keeps the terminal's native text selection. 1000h = button
-// click tracking, 1003h = any-motion tracking so overlays can light up hover
-// targets (the pointer moving with no button held), 1006h = SGR extended
-// coordinates so columns/rows past 223 are reported.
+// Mouse reporting is scoped to fullscreen overlays that opt into pointer
+// interaction. 1000h = button click tracking, 1003h = any-motion tracking for
+// hover targets, and 1006h = SGR extended coordinates past column/row 223.
+// Selection-first overlays leave these modes disabled so the terminal retains
+// native text selection.
 const MOUSE_TRACKING_ON = "\x1b[?1000h\x1b[?1003h\x1b[?1006h";
 const MOUSE_TRACKING_OFF = "\x1b[?1006l\x1b[?1003l\x1b[?1000l";
-const ALT_SCREEN_ENTER = "\x1b[?1049h";
-const ALT_SCREEN_EXIT = "\x1b[?1049l";
 
 type InputListenerResult = { consume?: boolean; data?: string } | undefined;
 type InputListener = (data: string) => InputListenerResult;
@@ -456,6 +464,11 @@ export interface OverlayOptions {
 	 * unchanged and still draw over the transcript on the normal screen.
 	 */
 	fullscreen?: boolean;
+	/**
+	 * Enable terminal mouse reporting while fullscreen. Defaults on; disable it
+	 * when native terminal text selection takes precedence over pointer events.
+	 */
+	mouseTracking?: boolean;
 }
 
 /**
@@ -473,7 +486,7 @@ export interface OverlayHandle {
 /**
  * Container - a component that contains other components
  */
-export class Container implements Component {
+export class Container implements Component, NativeScrollbackCommittedRows, NativeScrollbackReplay {
 	children: Component[] = [];
 
 	// Memoized concatenation of the children's latest renders. Children are
@@ -541,6 +554,34 @@ export class Container implements Component {
 		for (const child of this.children) {
 			child.dispose?.();
 		}
+	}
+
+	/**
+	 * Split the committed prefix from the container's most recently rendered
+	 * rows across its children. The memoized child arrays are the exact geometry
+	 * that produced that frame; when the child list was invalidated or rebuilt,
+	 * there is no safe old-to-new coordinate mapping, so propagation waits for
+	 * the next render/post-emit publication.
+	 */
+	setNativeScrollbackCommittedRows(rows: number): void {
+		const refs = this.#memoChildLines;
+		if (this.#memoLines === undefined || refs.length !== this.children.length) return;
+		const committed = Number.isFinite(rows) ? Math.max(0, Math.trunc(rows)) : 0;
+		let offset = 0;
+		for (let i = 0; i < this.children.length; i++) {
+			const childRows = refs[i];
+			if (childRows === undefined) return;
+			setNativeScrollbackCommittedRows(
+				this.children[i]!,
+				Math.min(childRows.length, Math.max(0, committed - offset)),
+			);
+			offset += childRows.length;
+		}
+	}
+
+	/** Recursively discard layout locks that are meaningful only to the old tape. */
+	prepareNativeScrollbackReplay(): void {
+		for (const child of this.children) prepareNativeScrollbackReplay(child);
 	}
 
 	render(width: number): readonly string[] {
@@ -1048,11 +1089,6 @@ export class TUI extends Container {
 	// `#fullRedrawCount`: these never enter native scrollback and exist only for
 	// the lifetime of the drag. Exposed for tests/diagnostics.
 	#resizeViewportPaintCount = 0;
-	// During a live resize drag the terminal's normal buffer may reflow full-width
-	// rows before our repaint lands. Borrow the alternate screen for throwaway
-	// resize frames so width changes truncate the transient viewport instead of
-	// pushing wrapped fragments into native scrollback.
-	#resizeAltActive = false;
 	#stopped = false;
 	// Always-on event-loop lag probe. The high default threshold keeps it quiet;
 	// it only logs `ui.loop-blocked` (with the current loop phase) when a frame
@@ -1065,9 +1101,13 @@ export class TUI extends Container {
 	// untouched, so exiting reconciles cleanly against the terminal-restored
 	// normal screen. #altPreviousLines is the last alt frame, for repaint-skip.
 	#altActive = false;
+	#altMouseTrackingActive = false;
 	#altPreviousLines: string[] = [];
 	#altEnterWidth = 0;
 	#altEnterHeight = 0;
+	// Holds an alternate-screen exit until its replacement full paint can emit it
+	// atomically. It must survive a deferred Ghostty image frame.
+	#pendingAltExit = "";
 
 	// Persistent composed frame. The render override splices only rows at/after
 	// the stable prefix each frame; cursor markers are stripped at ingestion so
@@ -1491,13 +1531,15 @@ export class TUI extends Container {
 		this.#watchdog.start();
 		this.#ghosttyInitialImageDelayDone = false;
 		this.#ghosttyImageReadyAtMs = this.#renderScheduler.now() + TUI.#GHOSTTY_INITIAL_IMAGE_DELAY_MS;
-		// A DECRQM report for mode 2026 is authoritative: enable synchronized
-		// output when the terminal reports support (upgrading conservatively
-		// defaulted-off hosts like zellij/tmux-master/foot) and disable it when
-		// the terminal reports it unsupported. An explicit user opt-out/force
-		// (resolved at construction) still wins, so skip the probe in that case.
-		this.terminal.onPrivateModeReport?.((mode, supported) => {
-			if (mode !== 2026) return;
+		// A confirmed DECRPM report for mode 2026 is authoritative: enable
+		// synchronized output when the terminal reports support and disable it for
+		// an explicit unsupported status. A DA1 sentinel without a DECRPM reply is
+		// inconclusive: many terminals implement synchronized output without
+		// implementing DECRQM, so retain the statically detected default instead of
+		// exposing destructive full paints. An explicit user opt-out/force still
+		// wins, so skip every probe result in that case.
+		this.terminal.onPrivateModeReport?.((mode, supported, confirmed = true) => {
+			if (mode !== 2026 || !confirmed) return;
 			if (synchronizedOutputUserOverride() !== null) return;
 			this.#setSynchronizedOutput(supported);
 		});
@@ -1715,17 +1757,15 @@ export class TUI extends Container {
 	}
 
 	stop(): void {
-		// Leave the alt buffer first so the teardown cursor math below runs against
-		// the restored normal screen (which #previousLines still describes).
-		if (this.#resizeAltActive) {
-			this.terminal.write(this.#leaveResizeAltSequence());
-		}
-		if (this.#altActive) {
-			const enhancementExit = this.#keyboardEnhancementExit();
-			this.terminal.write(`${MOUSE_TRACKING_OFF}${enhancementExit}\x1b[?1049l`);
+		if (this.#altActive || this.#pendingAltExit) {
+			const mouseExit = this.#altMouseTrackingActive ? MOUSE_TRACKING_OFF : "";
+			const exitSequence = this.#pendingAltExit || `${mouseExit}${this.#keyboardEnhancementExit()}\x1b[?1049l`;
+			this.terminal.write(exitSequence);
 			setAltScreenActive(false);
 			this.#altActive = false;
+			this.#altMouseTrackingActive = false;
 			this.#altPreviousLines = [];
+			this.#pendingAltExit = "";
 		}
 		if (TERMINAL.imageProtocol === ImageProtocol.Kitty) {
 			for (const id of this.#imageBudget.takeAllTransmittedIds()) {
@@ -2492,6 +2532,48 @@ export class TUI extends Container {
 		}
 	}
 
+	#clipOverlayLines(lines: readonly string[], maxHeight: number, fromBottom: boolean): readonly string[] {
+		const limit = Number.isFinite(maxHeight) ? Math.max(0, Math.trunc(maxHeight)) : lines.length;
+
+		const blocks: (readonly string[])[] = [];
+		for (let index = 0; index < lines.length; ) {
+			if (isDirectKittyContinuation(lines[index]!)) {
+				// Never surface a continuation whose placement was clipped away.
+				index++;
+				continue;
+			}
+			let end = index + 1;
+			if (isDirectKittyPlacement(lines[index]!)) {
+				while (end < lines.length && isDirectKittyContinuation(lines[end]!)) end++;
+				if (end - index !== getDirectKittyPlacementRows(lines[index]!)) {
+					index = end;
+					continue;
+				}
+			}
+			blocks.push(lines.slice(index, end));
+			index = end;
+		}
+
+		const selected: string[] = [];
+		let remaining = limit;
+		if (fromBottom) {
+			for (let index = blocks.length - 1; index >= 0 && remaining > 0; index--) {
+				const block = blocks[index]!;
+				if (block.length > remaining) continue;
+				selected.unshift(...block);
+				remaining -= block.length;
+			}
+		} else {
+			for (const block of blocks) {
+				if (remaining <= 0) break;
+				if (block.length > remaining) continue;
+				selected.push(...block);
+				remaining -= block.length;
+			}
+		}
+		return selected;
+	}
+
 	/**
 	 * Composite all visible overlays into the window slice (screen
 	 * coordinates, in stack order, later = on top). Overlays never touch the
@@ -2507,14 +2589,9 @@ export class TUI extends Container {
 			// Get layout with height=0 first to determine width and maxHeight
 			// (width and maxHeight don't depend on overlay height).
 			const { width, maxHeight } = this.#resolveOverlayLayout(options, 0, termWidth, termHeight);
-			let overlayLines = component.render(width);
-			if (overlayLines.length > maxHeight) {
-				const anchor = options?.anchor ?? "center";
-				overlayLines =
-					anchor === "bottom-left" || anchor === "bottom-center" || anchor === "bottom-right"
-						? overlayLines.slice(overlayLines.length - maxHeight)
-						: overlayLines.slice(0, maxHeight);
-			}
+			const anchor = options?.anchor ?? "center";
+			const fromBottom = anchor === "bottom-left" || anchor === "bottom-center" || anchor === "bottom-right";
+			const overlayLines = this.#clipOverlayLines(component.render(width), maxHeight, fromBottom);
 			const { row, col } = this.#resolveOverlayLayout(options, overlayLines.length, termWidth, termHeight);
 			for (let i = 0; i < overlayLines.length; i++) {
 				const idx = row + i;
@@ -2535,20 +2612,40 @@ export class TUI extends Container {
 		overlayWidth: number,
 		totalWidth: number,
 	): string {
-		if (TERMINAL.isImageLine(baseLine)) return baseLine;
+		const positionedDirectKittyContinuation = positionDirectKittyContinuation(overlayLine, startCol);
+		if (positionedDirectKittyContinuation !== null) return positionedDirectKittyContinuation;
+		if (
+			unwrapDirectKittyPlacement(baseLine) !== null ||
+			isDirectKittyContinuation(baseLine) ||
+			TERMINAL.isImageLine(baseLine)
+		) {
+			return baseLine;
+		}
 
-		// Single pass through baseLine extracts both before and after segments
-		const afterStart = startCol + overlayWidth;
+		// A direct Kitty placement clears its reserved rows when unwrapped. Keep
+		// the base segments in the framed row so that clear is followed by the
+		// text on both sides of a narrow overlay. Its marker has zero terminal
+		// width, so account for its declared cell width explicitly.
+		const directKittyWidth = isDirectKittyPlacement(overlayLine) ? getDirectKittyRowWidth(overlayLine) : null;
+		const effectiveOverlayWidth = Math.max(overlayWidth, directKittyWidth ?? 0);
+
+		// Single pass through baseLine extracts both before and after segments.
+		const afterStart = startCol + effectiveOverlayWidth;
 		const base = extractSegments(baseLine, startCol, afterStart, totalWidth - afterStart, true);
 
-		// Extract overlay with width tracking (strict=true to exclude wide chars at boundary)
-		const overlay = sliceWithWidth(overlayLine, 0, overlayWidth, true);
+		// Extract overlay with width tracking (strict=true to exclude wide chars at boundary).
+		// Direct Kitty marker control bytes occupy no text cells; its capability
+		// frame supplies their actual cell footprint.
+		const overlay =
+			directKittyWidth === null
+				? sliceWithWidth(overlayLine, 0, overlayWidth, true)
+				: { text: overlayLine, width: directKittyWidth };
 
 		// Pad segments to target widths
 		const beforePad = Math.max(0, startCol - base.beforeWidth);
-		const overlayPad = Math.max(0, overlayWidth - overlay.width);
+		const overlayPad = Math.max(0, effectiveOverlayWidth - overlay.width);
 		const actualBeforeWidth = Math.max(startCol, base.beforeWidth);
-		const actualOverlayWidth = Math.max(overlayWidth, overlay.width);
+		const actualOverlayWidth = Math.max(effectiveOverlayWidth, overlay.width);
 		const afterTarget = Math.max(0, totalWidth - actualBeforeWidth - actualOverlayWidth);
 		const afterPad = Math.max(0, afterTarget - base.afterWidth);
 
@@ -2654,6 +2751,10 @@ export class TUI extends Container {
 	}
 
 	#terminalLine(line: string): string {
+		const directKittyPlacement = unwrapDirectKittyPlacement(line);
+		if (directKittyPlacement !== null) return directKittyPlacement;
+		const directKittyContinuation = unwrapDirectKittyContinuation(line);
+		if (directKittyContinuation !== null) return directKittyContinuation;
 		if (TERMINAL.isImageLine(line)) return line;
 		const coalesced = coalesceAdjacentSgr(line);
 		return coalesced + (line.includes("\x1b]8;") ? LINE_TERMINATOR : SEGMENT_RESET);
@@ -2681,27 +2782,42 @@ export class TUI extends Container {
 		// Fullscreen alt-screen short-circuit. While the topmost visible overlay
 		// requests it, borrow the terminal's alternate buffer and paint only the
 		// modal there; the normal screen and all accounting stay untouched.
-		const wantAlt = this.#wantsAltScreen();
+		let deferredAltExit = this.#pendingAltExit;
+		const topOverlay = this.#getTopmostVisibleOverlay();
+		const wantAlt = topOverlay?.options?.fullscreen === true;
+		const wantMouseTracking = wantAlt && topOverlay.options?.mouseTracking !== false;
 		if (wantAlt && !this.#altActive) {
 			// Enhanced keyboard modes can be buffer-local: re-push the active
 			// modified-key reporting sequence on the freshly entered alternate
 			// screen, or Esc/modified keys revert to legacy encoding inside
 			// fullscreen overlays (Ghostty/kitty/iTerm2).
-			this.terminal.write(`\x1b[?1049h${this.#keyboardEnhancementEnter()}${MOUSE_TRACKING_ON}`);
+			const mouseEnter = wantMouseTracking ? MOUSE_TRACKING_ON : "";
+			this.terminal.write(`\x1b[?1049h${this.#keyboardEnhancementEnter()}${mouseEnter}`);
 			setAltScreenActive(true);
 			this.terminal.hideCursor();
 			this.#forgetHardwareCursorState();
 			this.#recordHardwareCursorHidden();
 			this.#altActive = true;
+			this.#altMouseTrackingActive = wantMouseTracking;
 			this.#altPreviousLines = [];
 			this.#altEnterWidth = width;
 			this.#altEnterHeight = height;
 		} else if (!wantAlt && this.#altActive) {
+			const mouseExit = this.#altMouseTrackingActive ? MOUSE_TRACKING_OFF : "";
 			const enhancementExit = this.#keyboardEnhancementExit();
-			this.terminal.write(`${MOUSE_TRACKING_OFF}${enhancementExit}\x1b[?1049l`);
+			const exitSequence = `${mouseExit}${enhancementExit}\x1b[?1049l`;
+			// Session replacement can finish while a fullscreen selector is still
+			// covering the old normal buffer. Keep the overlay visible until the
+			// replacement is ready, then fuse the buffer restore into that full paint;
+			// a standalone exit exposes the stale session for one terminal frame.
+			if (this.#clearScrollbackOnNextRender) {
+				this.#pendingAltExit = exitSequence;
+				deferredAltExit = exitSequence;
+			} else this.terminal.write(exitSequence);
 			setAltScreenActive(false);
 			this.#forgetHardwareCursorState();
 			this.#altActive = false;
+			this.#altMouseTrackingActive = false;
 			this.#altPreviousLines = [];
 			// A resize while on the alt buffer reflowed the terminal's saved
 			// normal screen; it no longer matches our accounting, so force the
@@ -2709,6 +2825,9 @@ export class TUI extends Container {
 			if (width !== this.#altEnterWidth || height !== this.#altEnterHeight) {
 				this.#resizeEventPending = true;
 			}
+		} else if (wantMouseTracking !== this.#altMouseTrackingActive) {
+			this.terminal.write(wantMouseTracking ? MOUSE_TRACKING_ON : MOUSE_TRACKING_OFF);
+			this.#altMouseTrackingActive = wantMouseTracking;
 		}
 		if (this.#altActive) {
 			this.#componentRenderTargets.clear();
@@ -3027,7 +3146,9 @@ export class TUI extends Container {
 				chunkTo,
 				windowTop,
 				cursorTrackingLineCount,
+				leadingSequence: deferredAltExit,
 			});
+			this.#pendingAltExit = "";
 			this.#committedPrefix = rawFrame.slice(0, chunkTo);
 			this.#committedPrefixAuditRows = Math.min(chunkTo, finalBoundary);
 			this.#clearScrollbackOnNextRender = false;
@@ -3143,7 +3264,7 @@ export class TUI extends Container {
 	}
 
 	#prepareLine(raw: string, width: number): PreparedLine {
-		if (TERMINAL.isImageLine(raw)) {
+		if (unwrapDirectKittyPlacement(raw) !== null || isDirectKittyContinuation(raw) || TERMINAL.isImageLine(raw)) {
 			return { raw, width, line: raw };
 		}
 		const source = this.#lineFitSource(raw, width);
@@ -3295,6 +3416,10 @@ export class TUI extends Container {
 	}
 
 	#lineRewriteSequence(line: string, width: number): string {
+		const directKittyPlacement = unwrapDirectKittyPlacement(line);
+		if (directKittyPlacement !== null) return directKittyPlacement;
+		const directKittyContinuation = unwrapDirectKittyContinuation(line);
+		if (directKittyContinuation !== null) return directKittyContinuation;
 		if (TERMINAL.isImageLine(line)) return ERASE_LINE + line;
 		const terminalLine = this.#terminalLine(line);
 		const asciiWidth = this.#ansiAsciiLineWidth(line, width);
@@ -3406,6 +3531,7 @@ export class TUI extends Container {
 			chunkTo: number;
 			windowTop: number;
 			cursorTrackingLineCount: number;
+			leadingSequence: string;
 		},
 	): void {
 		this.#fullRedrawCount += 1;
@@ -3443,7 +3569,7 @@ export class TUI extends Container {
 				paintCursorPos = paint.cursorPos;
 			}
 		}
-		let buffer = this.#paintBeginSequence + this.#leaveResizeAltSequence() + purgeSequence;
+		let buffer = this.#paintBeginSequence + options.leadingSequence + purgeSequence;
 		if (options.clearScrollback) {
 			// Clear native history without blanking the live viewport first. The
 			// replay below rewrites every visible row from home, including blanks,
@@ -3643,34 +3769,15 @@ export class TUI extends Container {
 		return this.terminal.kittyEnableSequence ? "\x1b[<u" : "";
 	}
 
-	#enterResizeAltSequence(): string {
-		if (this.#resizeAltActive || this.#altActive) return "";
-		this.#resizeAltActive = true;
-		setAltScreenActive(true);
-		this.#forgetHardwareCursorState();
-		this.#recordHardwareCursorHidden();
-		return `${ALT_SCREEN_ENTER}${this.#keyboardEnhancementEnter()}`;
-	}
-
-	#leaveResizeAltSequence(): string {
-		if (!this.#resizeAltActive) return "";
-		const enhancementExit = this.#keyboardEnhancementExit();
-		this.#resizeAltActive = false;
-		setAltScreenActive(false);
-		this.#forgetHardwareCursorState();
-		return `${enhancementExit}${ALT_SCREEN_EXIT}`;
-	}
-
 	/**
-	 * Emit a throwaway viewport repaint for the resize fast path as an alternate-
-	 * screen per-row overwrite. The normal buffer may reflow full-width rows on a
-	 * width change before the app can repaint; keeping the drag on the alternate
-	 * screen makes those transient resizes truncate instead of pushing wrapped
-	 * fragments into native scrollback. Normal-screen history is rebuilt once at
-	 * settle via `#emitFullPaint`.
+	 * Emit a throwaway viewport repaint for the resize fast path as an in-place
+	 * per-row overwrite. Switching buffers exposes the saved normal screen before
+	 * the authoritative settle paint on terminals without effective DEC 2026,
+	 * which is the resize flicker this fast path exists to avoid. The normal
+	 * screen is therefore rewritten directly; history is rebuilt once at settle.
 	 */
 	#emitResizeViewport(window: readonly string[], height: number, contentRows: number, width: number): void {
-		let buffer = `${this.#paintBeginSequence + this.#enterResizeAltSequence()}\x1b[H`;
+		let buffer = `${this.#paintBeginSequence}\x1b[H`;
 		for (let r = 0; r < height; r++) {
 			if (r > 0) buffer += "\r\n";
 			buffer += this.#lineRewriteSequence(window[r] ?? "", width);
@@ -3683,16 +3790,6 @@ export class TUI extends Container {
 		if (parkUp > 0) buffer += `\x1b[${parkUp}A`;
 		buffer += this.#paintEndSequence;
 		this.terminal.write(buffer);
-	}
-
-	/** Topmost visible overlay requests the alternate-screen buffer. */
-	#wantsAltScreen(): boolean {
-		for (let i = this.overlayStack.length - 1; i >= 0; i--) {
-			const entry = this.overlayStack[i]!;
-			if (!this.#isOverlayVisible(entry)) continue;
-			return entry.options?.fullscreen === true;
-		}
-		return false;
 	}
 
 	/**

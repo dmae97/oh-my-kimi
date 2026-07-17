@@ -9,7 +9,7 @@
 
 use std::{
 	collections::HashMap,
-	ffi::OsString,
+	ffi::{OsStr, OsString},
 	io::{self, Read, Write},
 	panic::catch_unwind,
 	sync::{
@@ -18,6 +18,8 @@ use std::{
 	},
 };
 
+#[cfg(unix)]
+use brush_core::ShellFd;
 use brush_core::{
 	Error,
 	builtins::{BoxFuture, ContentOptions, ContentType, Registration},
@@ -30,6 +32,34 @@ use brush_core::{
 /// Signature of a patched uutils `run` entry point: consumes `argv` (with the
 /// command name at index 0) and returns a process-style exit code.
 type UutilRun = fn(Vec<OsString>) -> i32;
+
+#[cfg(unix)]
+fn process_substitution_fd(arg: &OsStr) -> Option<ShellFd> {
+	let fd = arg.to_str()?.strip_prefix("/dev/fd/")?.parse().ok()?;
+	(fd > OpenFiles::STDERR_FD).then_some(fd)
+}
+
+#[cfg(unix)]
+fn materialize_process_substitution_fds<SE: ShellExtensions>(
+	context: &ExecutionContext<'_, SE>,
+	argv: &mut [OsString],
+) -> Result<Vec<std::os::fd::OwnedFd>, Error> {
+	use std::os::fd::AsRawFd as _;
+
+	let mut fds = Vec::new();
+	for arg in argv {
+		let Some(shell_fd) = process_substitution_fd(arg) else {
+			continue;
+		};
+		let Some(file) = context.try_fd(shell_fd) else {
+			continue;
+		};
+		let fd = file.try_borrow_as_fd()?.try_clone_to_owned()?;
+		*arg = OsString::from(format!("/dev/fd/{}", fd.as_raw_fd()));
+		fds.push(fd);
+	}
+	Ok(fds)
+}
 
 /// Drives a patched uutils utility to completion under a [`pi_uutils_ctx`]
 /// scope derived from the command execution context.
@@ -76,14 +106,18 @@ async fn run_uutil<SE: ShellExtensions>(
 
 	// brush passes the command name as the first `CommandArg`, which is exactly
 	// the argv[0] uutils' argument parsing expects.
-	let argv: Vec<OsString> = args
+	let mut argv: Vec<OsString> = args
 		.iter()
 		.map(|arg| OsString::from(arg.to_string()))
 		.collect();
+	#[cfg(unix)]
+	let process_substitution_fds = materialize_process_substitution_fds(&context, &mut argv)?;
 
 	drop(context);
 
 	let mut handle = tokio::task::spawn_blocking(move || {
+		#[cfg(unix)]
+		let _process_substitution_fds = process_substitution_fds;
 		let stdin: Box<dyn Read + Send> = match stdin {
 			Some(file) => Box::new(file),
 			None => Box::new(io::empty()),

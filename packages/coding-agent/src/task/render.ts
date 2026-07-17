@@ -27,11 +27,11 @@ import {
 	truncateToWidth,
 } from "../tools/render-utils";
 import {
+	type FindingDetails,
 	type FindingPriority,
 	getPriorityInfo,
 	PRIORITY_LABELS,
-	parseReportFindingDetails,
-	type ReportFindingDetails,
+	parseFindingDetails,
 	type SubmitReviewDetails,
 } from "../tools/review";
 import { framedBlock, renderStatusLine } from "../tui";
@@ -118,7 +118,7 @@ function appendAgentStats(
 	return line;
 }
 
-function formatFindingSummary(findings: ReportFindingDetails[], theme: Theme): string {
+function formatFindingSummary(findings: FindingDetails[], theme: Theme): string {
 	if (findings.length === 0) return theme.fg("dim", "Findings: none");
 
 	const counts: { [P in FindingPriority]?: number } = {};
@@ -137,11 +137,11 @@ function formatFindingSummary(findings: ReportFindingDetails[], theme: Theme): s
 	return `${theme.fg("dim", "Findings:")} ${parts.join(theme.sep.dot)}`;
 }
 
-function normalizeReportFindings(value: unknown): ReportFindingDetails[] {
+function normalizeFindings(value: unknown): FindingDetails[] {
 	if (!Array.isArray(value)) return [];
-	const findings: ReportFindingDetails[] = [];
+	const findings: FindingDetails[] = [];
 	for (const item of value) {
-		const finding = parseReportFindingDetails(item);
+		const finding = parseFindingDetails(item);
 		if (finding) findings.push(finding);
 	}
 	return findings;
@@ -152,7 +152,7 @@ const REVIEWER_ARRAY_LABELS: ReadonlySet<string> = new Set(["findings"]);
 
 function extractIncrementalReviewResult(
 	items: RenderYieldItem[],
-): { summary: SubmitReviewDetails; findings: ReportFindingDetails[] } | undefined {
+): { summary: SubmitReviewDetails; findings: FindingDetails[] } | undefined {
 	const yieldItems: YieldItem[] = items.map(item => ({
 		data: item.data,
 		type: item.type,
@@ -179,7 +179,7 @@ function extractIncrementalReviewResult(
 			explanation,
 			confidence,
 		},
-		findings: normalizeReportFindings(record.findings),
+		findings: normalizeFindings(record.findings),
 	};
 }
 
@@ -1001,12 +1001,11 @@ function renderAgentProgress(
 
 	// Render extracted tool data inline (e.g., review findings)
 	if (progress.extractedToolData) {
-		// For completed tasks, prefer review verdicts assembled from incremental
-		// yield sections. Fall back to the legacy `report_finding` side-channel.
+		// For completed tasks, render review verdicts assembled from incremental
+		// yield sections.
 		if (progress.status === "completed") {
 			const completeData = normalizeYieldData(progress.extractedToolData.yield);
 			const incrementalReview = extractIncrementalReviewResult(completeData);
-			const reportFindingData = normalizeReportFindings(progress.extractedToolData.report_finding);
 			if (incrementalReview) {
 				lines.push(
 					...renderReviewResult(
@@ -1024,7 +1023,7 @@ function renderAgentProgress(
 				.filter(d => d && typeof d === "object" && "overall_correctness" in d);
 			if (reviewData.length > 0) {
 				const summary = reviewData[reviewData.length - 1];
-				const findings = reportFindingData;
+				const findings: FindingDetails[] = [];
 				lines.push(...renderReviewResult(summary, findings, continuePrefix, expanded, theme));
 				return lines; // Review result handles its own rendering
 			}
@@ -1034,15 +1033,6 @@ function renderAgentProgress(
 			const dataArray = progress.extractedToolData[toolName];
 			if (toolName === "yield") {
 				lines.push(...renderTypedYieldSections(dataArray, continuePrefix, expanded, theme));
-				continue;
-			}
-
-			// Handle report_finding with tree formatting
-			if (toolName === "report_finding") {
-				const findings = normalizeReportFindings(dataArray);
-				if (findings.length === 0) continue;
-				lines.push(`${continuePrefix}${formatFindingSummary(findings, theme)}`);
-				lines.push(...renderFindings(findings, continuePrefix, expanded, theme));
 				continue;
 			}
 
@@ -1117,7 +1107,7 @@ function renderAgentProgress(
  */
 function renderReviewResult(
 	summary: SubmitReviewDetails,
-	findings: ReportFindingDetails[],
+	findings: FindingDetails[],
 	continuePrefix: string,
 	expanded: boolean,
 	theme: Theme,
@@ -1167,12 +1157,7 @@ function renderReviewResult(
 /**
  * Render review findings list.
  */
-function renderFindings(
-	findings: ReportFindingDetails[],
-	continuePrefix: string,
-	expanded: boolean,
-	theme: Theme,
-): string[] {
+function renderFindings(findings: FindingDetails[], continuePrefix: string, expanded: boolean, theme: Theme): string[] {
 	const lines: string[] = [];
 
 	// Sort by priority (lower = more severe) when collapsed to show most important first
@@ -1291,14 +1276,12 @@ function renderAgentResult(
 			)}`,
 		);
 	}
-	// Check for review result, preferring incremental yield sections and falling
-	// back to the legacy `report_finding` side-channel.
+	// Check for review result from incremental yield sections.
 	// `normalizeYieldData` guards against a stray non-array `yield` slot —
 	// optional chaining on `.map` only short-circuits on null/undefined and
 	// would otherwise crash the renderer with `TypeError: completeData?.map
 	// is not a function` when the slot is a plain object (see issue #1987).
 	const completeData = normalizeYieldData(result.extractedToolData?.yield);
-	const reportFindingData = normalizeReportFindings(result.extractedToolData?.report_finding);
 	const incrementalReview = extractIncrementalReviewResult(completeData);
 
 	if (incrementalReview) {
@@ -1316,18 +1299,8 @@ function renderAgentResult(
 
 	if (submitReviewData) {
 		const summary = submitReviewData[submitReviewData.length - 1];
-		const findings = reportFindingData;
+		const findings: FindingDetails[] = [];
 		lines.push(...renderReviewResult(summary, findings, continuePrefix, expanded, theme));
-		return lines;
-	}
-	if (reportFindingData.length > 0) {
-		const hasCompleteData = completeData.length > 0;
-		const message = hasCompleteData
-			? "Review verdict missing expected fields"
-			: "Review incomplete (yield not called)";
-		lines.push(`${continuePrefix}${theme.fg("warning", theme.status.warning)} ${theme.fg("dim", message)}`);
-		lines.push(`${continuePrefix}${formatFindingSummary(reportFindingData, theme)}`);
-		lines.push(...renderFindings(reportFindingData, continuePrefix, expanded, theme));
 		return lines;
 	}
 
@@ -1345,8 +1318,6 @@ function renderAgentResult(
 				}
 				continue;
 			}
-			// Skip review tools - handled above
-			if (toolName === "report_finding") continue;
 
 			const isTaskTool = toolName === "task";
 			if (isTaskTool && (dataArray as unknown[]).length > 0) {

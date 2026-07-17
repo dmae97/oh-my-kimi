@@ -344,6 +344,25 @@ describe("openai-codex Responses Lite input shaping", () => {
 		expect(noTools.parallel_tool_calls).toBe(false);
 	});
 
+	it("falls back from forced hosted tool choices without weakening explicit tool-use constraints", async () => {
+		const model = createCodexModel("gpt-5.6-terra");
+		const tools = [{ type: "function", name: "handoff", parameters: { type: "object" } }];
+
+		const forced = await transformRequestBody(
+			{ model: model.id, tools, tool_choice: { type: "web_search" } },
+			model,
+			{ responsesLite: true },
+		);
+		expect(forced.tool_choice).toBe("auto");
+		expect(forced.tools).toBeUndefined();
+
+		const disabled = await transformRequestBody({ model: model.id, tools, tool_choice: "none" }, model, {
+			responsesLite: true,
+		});
+		expect(disabled.tool_choice).toBe("none");
+		expect(disabled.tools).toBeUndefined();
+	});
+
 	it("moves instructions and tools into input items under lite", async () => {
 		const model = createCodexModel("gpt-5.6-terra");
 		const tools = [{ type: "function", name: "shot", parameters: { type: "object" } }];

@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { Image, ImageBudget } from "@oh-my-pi/pi-tui/components/image";
+import { Box } from "@oh-my-pi/pi-tui/components/box";
+import {
+	Image,
+	ImageBudget,
+	isDirectKittyContinuation,
+	positionDirectKittyContinuation,
+	positionDirectKittyPlacement,
+	unwrapDirectKittyContinuation,
+	unwrapDirectKittyPlacement,
+} from "@oh-my-pi/pi-tui/components/image";
 import { getKittyGraphics, setKittyGraphics } from "@oh-my-pi/pi-tui/kitty-graphics";
 import {
 	type CellDimensions,
@@ -180,11 +189,14 @@ describe("terminal image rendering", () => {
 		});
 
 		expect(result).not.toBeNull();
+		// SIXEL height is rounded DOWN to a multiple of 6 (band size) so it
+		// never exceeds the caller's maxHeightCells cap. With 10px cells and
+		// maxHeightCells=2, targetHeightPx=18 (not 20), rows=2 — within cap.
 		expect(result?.rows).toBe(2);
 		expect((result?.sequence ?? "").startsWith("\x1bP")).toBe(true);
 	});
 
-	it("moves back up before multi-row direct Kitty output and restores the cursor below it", () => {
+	it("places multi-row direct Kitty output before reserved rows so it survives scrollback", () => {
 		terminal.imageProtocol = ImageProtocol.Kitty;
 		const image = new Image(
 			BASE64_DUMMY,
@@ -195,16 +207,70 @@ describe("terminal image rendering", () => {
 		);
 
 		const lines = image.render(20);
-		const imageLine = lines.at(-1) ?? "";
+		const imageLine = lines[0] ?? "";
+		const placementIndex = imageLine.indexOf("\x1b_Ga=T");
 
 		expect(lines).toHaveLength(3);
-		expect(lines.slice(0, -1)).toEqual(["\x1b[0m", "\x1b[0m"]);
-		expect(imageLine.startsWith("\x1b7\x1b[2A")).toBe(true);
-		expect(imageLine).toContain("\x1b_Ga=T");
+		expect(placementIndex).toBeGreaterThan(-1);
+		const beforePlacement = imageLine.slice(0, placementIndex);
+		expect(beforePlacement.match(/\x1b\[2K/g) ?? []).toHaveLength(3);
+		expect(beforePlacement.match(/\r\n/g) ?? []).toHaveLength(2);
+		expect(beforePlacement.indexOf("\x1b[2A")).toBeGreaterThan(beforePlacement.lastIndexOf("\r\n"));
+		expect(lines.slice(1).every(line => !line.includes("\x1b_G") && !line.includes("\x1b[K"))).toBe(true);
 		expect(imageLine).toContain("C=1");
 		expect(imageLine).toContain("c=3");
 		expect(imageLine).toContain("r=3");
-		expect(imageLine.endsWith("\x1b8")).toBe(true);
+	});
+
+	it("preserves Box padding and borders around direct Kitty image rows", () => {
+		terminal.imageProtocol = ImageProtocol.Kitty;
+		const image = new Image(
+			BASE64_DUMMY,
+			"image/png",
+			{ fallbackColor: text => text },
+			{ maxWidthCells: 10, maxHeightCells: 3 },
+			SQUARE_DIMENSIONS,
+		);
+		const box = new Box(2, 0, undefined, {
+			chars: {
+				topLeft: "+",
+				topRight: "+",
+				bottomLeft: "+",
+				bottomRight: "+",
+				horizontal: "-",
+				vertical: "|",
+			},
+		});
+		box.setIgnoreTight(true);
+		box.addChild(image);
+
+		const rows = box.render(20);
+		const placement = unwrapDirectKittyPlacement(rows[1] ?? "");
+		const continuation = unwrapDirectKittyContinuation(rows[2] ?? "");
+		const positionedPlacement = unwrapDirectKittyPlacement(positionDirectKittyPlacement(rows[1] ?? "", 5) ?? "");
+		const positionedContinuation = unwrapDirectKittyContinuation(
+			positionDirectKittyContinuation(rows[2] ?? "", 5) ?? "",
+		);
+
+		expect(rows).toHaveLength(5);
+		expect(placement).not.toBeNull();
+		expect(placement).toStartWith("\x1b[0m\x1b[2K");
+		expect((placement ?? "").indexOf("|  ")).toBeGreaterThan((placement ?? "").lastIndexOf("\x1b[2K"));
+		expect(placement).toContain("\x1b[4G\x1b_G");
+		expect(placement).toEndWith("|");
+		expect(continuation).not.toBeNull();
+		expect(continuation).toStartWith("|  ");
+		expect(continuation).toContain("\x1b[3C");
+		expect(continuation).toEndWith("|");
+		expect(positionedPlacement).toStartWith("\x1b[0m\x1b[2K");
+		expect(positionedPlacement).toContain("\x1b[6G|  ");
+		expect(positionedPlacement).toContain("\x1b[9G\x1b_G");
+		expect(positionedContinuation).toStartWith("\x1b[6G|  ");
+		expect(positionedContinuation).toContain("\x1b[3C");
+	});
+	it("does not treat marker-shaped external text as internal direct Kitty rows", () => {
+		expect(unwrapDirectKittyPlacement("\x1b]pi:img:p\x07untrusted")).toBeNull();
+		expect(isDirectKittyContinuation("\x1b]pi:img:c\x07")).toBe(false);
 	});
 
 	it("does not emit cursor movement around single-row direct Kitty output", () => {

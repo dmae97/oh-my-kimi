@@ -111,8 +111,8 @@ describe("default echo/printf redirect rule", () => {
 	});
 });
 
-describe("default launch rules", () => {
-	const tools = ["launch"];
+describe("default hub start rules", () => {
+	const tools = ["hub"];
 
 	it.each([
 		"bun run dev",
@@ -121,10 +121,10 @@ describe("default launch rules", () => {
 		"bun test --watch",
 		"nohup server",
 		"server &",
-	])("routes %s to launch", command => {
+	])("routes %s to hub start", command => {
 		const result = checkBashInterception(command, tools, DEFAULT_BASH_INTERCEPTOR_RULES);
 		expect(result.block).toBe(true);
-		expect(result.suggestedTool).toBe("launch");
+		expect(result.suggestedTool).toBe("hub");
 	});
 
 	it.each([

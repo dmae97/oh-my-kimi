@@ -219,7 +219,7 @@ Stealth's on by default, so pages see a normal user instead of a headless bot. T
 
 ## Whatever the task needs, _it's already in the box_.
 
-32 tools live in the same namespace as `read` and `bash`. Pin the active set with `--tools read,edit,bash,…` and the rest stay hidden but indexed — `search_tool_bm25` pulls them back in mid-session when `tools.discoveryMode` says so.
+32 tools live in the same namespace as `read` and `bash`. Pin the active set with `--tools read,edit,bash,…`; rarely used discoverable tools stay behind `xd://` devices. `read xd://` lists them, and `write xd://<tool>` runs one when `tools.xdev` is enabled.
 
 **Files & search**
 
@@ -245,9 +245,8 @@ Stealth's on by default, so pages see a normal user instead of a headless bot. T
 **Coordination**
 
 - `task` — fan out subagents in parallel, optionally workspace-isolated.
-- `irc` — short prose between live agents in this process.
+- `hub` — message live agents, wait on or cancel background jobs, and supervise long-running processes.
 - `todo` — ordered mutations over the session todo list with phase tracking.
-- `job` — wait on or cancel background jobs.
 - `ask` — structured follow-up questions for interactive runs.
 
 **Outside the box**
@@ -270,11 +269,20 @@ Stealth's on by default, so pages see a normal user instead of a headless bot. T
 **Misc**
 
 - `resolve` — apply or discard a queued preview action.
-- `search_tool_bm25` — BM25 over the hidden tool index; activates top matches mid-session.
 
-Setting-gated, off by default: `github`, `inspect_image`, `tts`, `checkpoint`, `rewind`, `search_tool_bm25`, `retain`, `recall`, `reflect`. Flip them on once, scoped per project.
+Setting-gated, off by default: `github`, `inspect_image`, `tts`, `checkpoint`, `rewind`, `retain`, `recall`, `reflect`. Flip them on once, scoped per project.
 
 [Full reference →](https://omp.sh/docs/tools)
+
+### Prompt controls
+
+Three standalone, lowercase words opt a turn into specialized agent behavior:
+
+- `ultrathink` — request careful multi-step reasoning and the highest supported automatic thinking effort.
+- `orchestrate` — run substantial independent work through parallel subagents and verify each phase.
+- `workflowz` — build a deterministic multi-subagent workflow with the active `task` tool.
+
+They trigger only in prose, not inside code spans, fenced code blocks, XML/HTML sections, identifiers, or paths. See [Magic keywords](docs/magic-keywords.md) for exact matching rules and configuration.
 
 ## Forty-plus providers, hundreds of models, _one /model away_.
 

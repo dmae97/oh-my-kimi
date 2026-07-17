@@ -47,7 +47,6 @@ import {
 	BUILTIN_TOOLS,
 	HIDDEN_TOOLS,
 	createTools,
-	ResolveTool,
 } from "@oh-my-pi/pi-coding-agent";
 
 // Auth and models setup
@@ -108,22 +107,20 @@ await session.prompt("Hello");
 
 ## Resolve preview workflow (AST edit apply/discard)
 
-`ast_edit` now always returns a preview. To finalize, call hidden `resolve` with a required reason.
+`ast_edit` now always returns a preview. To finalize, write plain text to the appropriate virtual device with the `write` tool.
 
-- `action: "apply"` → commit pending preview changes
-- `action: "discard"` → drop pending preview changes
-- `reason: string` is required for both paths
+- `xd://resolve` → apply the pending preview; body = reason text
+- `xd://reject` → discard the pending preview; body = reason text
 
-`createAgentSession()` / `createTools()` include `resolve` automatically, even when filtering `toolNames`.
-If you are composing tools manually, use `HIDDEN_TOOLS.resolve` (or `ResolveTool`) and wire the same `pendingActionStore`.
+`createAgentSession()` / `createTools()` auto-include `write` whenever a deferrable tool (e.g. `ast_edit`) is present, so the devices are always reachable.
 
 ```typescript
-const tools = await createTools(toolSession, ["ast_edit"]); // resolve is auto-included
-const resolveTool = tools.find(t => t.name === "resolve") as ResolveTool;
+const tools = await createTools(toolSession, ["ast_edit"]); // write is auto-included
+const writeTool = tools.find(t => t.name === "write")!;
 
-await resolveTool.execute("call-1", {
-  action: "apply",
-  reason: "Preview matches expected replacements",
+await writeTool.execute("call-1", {
+  path: "xd://resolve",
+  content: "Preview matches expected replacements",
 });
 ```
 ## Options

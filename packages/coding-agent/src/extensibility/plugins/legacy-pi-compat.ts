@@ -1,6 +1,6 @@
 /// <reference path="./legacy-pi-virtual-modules.d.ts" />
 import * as fs from "node:fs";
-import { isBuiltin } from "node:module";
+import { createRequire, isBuiltin } from "node:module";
 import * as path from "node:path";
 import * as url from "node:url";
 import { isCompiledBinary, stripWindowsExtendedLengthPathPrefix } from "@oh-my-pi/pi-utils";
@@ -16,43 +16,52 @@ const IS_COMPILED_BINARY = isCompiledBinary();
 // embedded entries. Bun.plugin `onResolve` also no longer fires for transitive
 // imports inside runtime-loaded extensions.
 //
-// Compiled builds therefore keep live JS-heap references to the host packages
-// and serve requested surfaces through `omp-legacy-pi-bundled:<key>` synthetic
-// modules. `scripts/legacy-pi-virtual-module.ts` derives the static import edges
+// Compiled builds retain lazy loaders for host packages and serve requested
+// surfaces through `omp-legacy-pi-bundled:<key>` synthetic modules.
+// `scripts/legacy-pi-virtual-module.ts` derives literal dynamic-import edges
 // from current package exports inside a Bun build plugin: no generated source
-// or duplicate key list exists on disk. Runtime extension loading stays lazy —
-// the virtual module is evaluated only when an extension requests a host
-// package — but the compiler still sees every possible edge at build time.
+// or duplicate key list exists on disk. Deferring each host module evaluation
+// avoids cycles with an extension-loading command that is itself in the
+// retained package graph.
 const BUNDLED_VIRTUAL_SCHEME = "omp-legacy-pi-bundled:";
 const BUNDLED_VIRTUAL_NAMESPACE = "omp-legacy-pi-bundled";
 const BUNDLED_MODULES_GLOBAL = "__ompLegacyPiBundledModules";
 const TYPEBOX_BUNDLED_MODULE_KEY = "typebox";
 
-type BundledModules = Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+type BundledModule = Readonly<Record<string, unknown>>;
+type BundledModules = Readonly<Record<string, BundledModule>>;
+type BundledModuleLoaders = Readonly<Record<string, () => Promise<BundledModule>>>;
 
-let bundledModulesPromise: Promise<BundledModules> | null = null;
+const loadedBundledModules: Record<string, BundledModule> = {};
+let bundledModuleLoadersPromise: Promise<BundledModuleLoaders> | null = null;
 
 /**
- * Lazy-load the build-supplied host modules and stash them on `globalThis` for
- * the synthetic module source emitted by `synthesizeBundledModuleSource`.
+ * Load the build-supplied module registry without evaluating its host modules.
  *
- * `globalThis` is the bridge: each `omp-legacy-pi-bundled:<key>` source string
- * becomes a separate ES module and cannot close over this file's lexical scope.
- * The dynamic import is intentional conditional build code. Dev/test runs
- * never execute it; binary builds resolve the literal through the in-memory
- * plugin in `scripts/legacy-pi-virtual-module.ts`.
+ * `globalThis` bridges the synthetic ES modules, which cannot close over this
+ * file's lexical scope. Dev/test runs never execute the conditional import;
+ * binary builds resolve it through the in-memory build plugin.
  */
-function ensureBundledModulesLoaded(): Promise<BundledModules> {
+function ensureBundledModuleLoadersLoaded(): Promise<BundledModuleLoaders> {
 	if (!IS_COMPILED_BINARY) {
 		return Promise.reject(new Error("omp:legacy-pi-shim: bundled modules are only available in compiled mode"));
 	}
-	if (!bundledModulesPromise) {
-		bundledModulesPromise = import("omp-legacy-pi-modules").then(module => {
-			Reflect.set(globalThis, BUNDLED_MODULES_GLOBAL, module.BUNDLED_PI_MODULES);
-			return module.BUNDLED_PI_MODULES;
+	if (!bundledModuleLoadersPromise) {
+		bundledModuleLoadersPromise = import("omp-legacy-pi-modules").then(module => {
+			Reflect.set(globalThis, BUNDLED_MODULES_GLOBAL, loadedBundledModules);
+			return module.BUNDLED_PI_MODULE_LOADERS;
 		});
 	}
-	return bundledModulesPromise;
+	return bundledModuleLoadersPromise;
+}
+
+async function loadBundledModule(moduleKey: string): Promise<void> {
+	const loaders = await ensureBundledModuleLoadersLoaded();
+	const loader = loaders[moduleKey];
+	if (!loader) {
+		throw new Error(`omp:legacy-pi-shim: no bundled module registered for ${moduleKey}`);
+	}
+	loadedBundledModules[moduleKey] = await loader();
 }
 
 function bundledModuleVirtualSpecifier(moduleKey: string): string {
@@ -95,8 +104,8 @@ function synthesizeBundledModuleSourceFromModules(moduleKey: string, modules: Bu
  * `omp-legacy-pi-bundled:<key>` import.
  */
 async function synthesizeBundledModuleSource(moduleKey: string): Promise<string> {
-	const modules = await ensureBundledModulesLoaded();
-	return synthesizeBundledModuleSourceFromModules(moduleKey, modules);
+	await loadBundledModule(moduleKey);
+	return synthesizeBundledModuleSourceFromModules(moduleKey, loadedBundledModules);
 }
 
 /** Test seam for the virtual module's named/default export forwarding. */
@@ -369,14 +378,14 @@ export function __buildLegacyPiPackageRootOverrides(
 let legacyPiPackageRootOverrides = __buildLegacyPiPackageRootOverrides(IS_COMPILED_BINARY);
 let legacyPiOverridesReadyPromise: Promise<void> | null = null;
 
-/** Complete compiled-mode overrides once from the lazily evaluated host modules. */
+/** Complete compiled-mode overrides from the lazy host-module registry. */
 function ensureLegacyPiOverridesReady(): Promise<void> {
 	if (!IS_COMPILED_BINARY) {
 		return Promise.resolve();
 	}
 	if (!legacyPiOverridesReadyPromise) {
-		legacyPiOverridesReadyPromise = ensureBundledModulesLoaded().then(modules => {
-			legacyPiPackageRootOverrides = __buildLegacyPiPackageRootOverrides(true, Object.keys(modules));
+		legacyPiOverridesReadyPromise = ensureBundledModuleLoadersLoaded().then(loaders => {
+			legacyPiPackageRootOverrides = __buildLegacyPiPackageRootOverrides(true, Object.keys(loaders));
 		});
 	}
 	return legacyPiOverridesReadyPromise;
@@ -1102,6 +1111,74 @@ const EXTENSION_GRAPH_SPECIFIER_REGEX = /((?:from\s+|import\s+|import\s*\(\s*)["
 // reloads install supplemental hooks only for modules added to the graph since
 // the previous load.
 const extensionGraphHookModules = new Map<string, Set<string>>();
+const commonJsModuleSources = new Map<string, string>();
+const commonJsFallbackModulePaths = new Map<string, string>();
+const COMMONJS_REQUIRE_GLOBAL = "__ompLegacyPiRequireGraphModule";
+const commonJsModuleDefinitions = new Map<string, { source: string; filename: string; dirname: string }>();
+const commonJsModuleCache = new Map<
+	string,
+	{
+		exports: unknown;
+		filename: string;
+		id: string;
+		path: string;
+		require: NodeJS.Require;
+		loaded: boolean;
+	}
+>();
+const commonJsTypeScriptTranspiler = new Bun.Transpiler({ loader: "ts" });
+
+function evaluateGraphCommonJs(modulePath: string): unknown {
+	const cached = commonJsModuleCache.get(modulePath);
+	if (cached) {
+		return cached.exports;
+	}
+	const definition = commonJsModuleDefinitions.get(modulePath);
+	if (!definition) {
+		throw new Error(`Missing graph-owned CommonJS definition: ${modulePath}`);
+	}
+
+	const nativeRequire = createRequire(definition.filename);
+	const module = {
+		exports: {},
+		filename: definition.filename,
+		id: definition.filename,
+		path: definition.dirname,
+		require: nativeRequire,
+		loaded: false,
+	};
+	commonJsModuleCache.set(modulePath, module);
+	const graphRequire: NodeJS.Require = Object.assign(
+		(specifier: string) => {
+			const resolved = nativeRequire.resolve(specifier);
+			let graphPath = resolved;
+			try {
+				graphPath = fs.realpathSync(resolved);
+			} catch {
+				// Builtins and virtual modules have no filesystem realpath.
+			}
+			return commonJsModuleDefinitions.has(graphPath) ? evaluateGraphCommonJs(graphPath) : nativeRequire(specifier);
+		},
+		{
+			resolve: nativeRequire.resolve,
+			cache: nativeRequire.cache,
+			extensions: nativeRequire.extensions,
+			main: nativeRequire.main,
+		},
+	);
+	module.require = graphRequire;
+	const execute = new Function("exports", "require", "module", "__filename", "__dirname", definition.source);
+	try {
+		execute.call(module.exports, module.exports, graphRequire, module, definition.filename, definition.dirname);
+		module.loaded = true;
+		return module.exports;
+	} catch (error) {
+		commonJsModuleCache.delete(modulePath);
+		throw error;
+	}
+}
+
+Reflect.set(globalThis, COMMONJS_REQUIRE_GLOBAL, evaluateGraphCommonJs);
 
 let legacyPiLoadTag = 0;
 
@@ -1135,9 +1212,9 @@ async function realpathOrSelfUncached(p: string): Promise<string> {
  * Extension-local bare dependency entries are also included so their relative
  * children receive the reload mtime tag; bare imports inside those dependencies
  * remain native Bun resolutions to avoid taking over full third-party graphs.
- * CommonJS modules reached through `require()` stay on Bun's native loader.
- * The only exception is a module whose bare requires resolve to native addons:
- * those require a synchronous hook that pins the addon to an absolute path.
+ * CommonJS modules reached through `require()` stay on Bun's native loader
+ * unless they resolve native addons. CommonJS reached through ESM imports stays
+ * graph-owned so the load hook can expose its exports through an ESM default.
  */
 async function collectExtensionModules(entryRealPath: string): Promise<Map<string, string>> {
 	const modules = new Map<string, string>();
@@ -1245,20 +1322,105 @@ async function collectExtensionModules(entryRealPath: string): Promise<Map<strin
 }
 
 /**
- * Install exact-path load hooks for the current extension graph. ESM/TS source
- * retains the async rewrite path. Native-addon CJS loaders use a synchronous
- * hook with source pre-rewritten during graph collection; Bun rejects a CJS
- * `require()` whose onLoad callback returns a promise.
+ * Discovers CommonJS export names Bun normally exposes to ESM importers. The
+ * bridge must declare them statically because its default export is synthetic.
  */
-function installExtensionGraphHook(
+function collectCommonJsNamedExports(source: string): string[] {
+	const names = new Set<string>();
+	const assignmentPattern = /(?:^|[;\n])\s*(?:exports|module\.exports)\.([A-Za-z_$][\w$]*)\s*=/gm;
+	for (const match of source.matchAll(assignmentPattern)) {
+		const name = match[1];
+		if (name && name !== "default") {
+			names.add(name);
+		}
+	}
+	const objectPattern = /module\.exports\s*=\s*\{([\s\S]*?)\}/g;
+	for (const objectMatch of source.matchAll(objectPattern)) {
+		const propertyPattern = /(?:^|,)\s*(?:([A-Za-z_$][\w$]*)\s*(?=[:,]|$)|["']([A-Za-z_$][\w$]*)["']\s*:)/g;
+		for (const propertyMatch of objectMatch[1]?.matchAll(propertyPattern) ?? []) {
+			const name = propertyMatch[1] ?? propertyMatch[2];
+			if (name && name !== "default") {
+				names.add(name);
+			}
+		}
+	}
+	return [...names];
+}
+
+/**
+ * The shared evaluator gives ESM imports and sibling `require()` calls the
+ * same `module.exports` value and cycle-aware cache.
+ */
+function synthesizeCommonJsDefaultModule(modulePath: string, source: string, targetPath = modulePath): string {
+	let commonJsSource = source;
+	if (commonJsSource.startsWith("#!")) {
+		const firstLineEnd = commonJsSource.indexOf("\n");
+		commonJsSource = firstLineEnd === -1 ? "" : commonJsSource.slice(firstLineEnd + 1);
+	}
+
+	const executableSource = targetPath.endsWith(".cts")
+		? commonJsTypeScriptTranspiler.transformSync(commonJsSource)
+		: commonJsSource;
+	commonJsModuleDefinitions.set(modulePath, {
+		source: executableSource,
+		filename: targetPath,
+		dirname: path.dirname(targetPath),
+	});
+	commonJsModuleCache.delete(modulePath);
+	const exportsBinding = "__ompLegacyPiCommonJsExports";
+	const namedExports = collectCommonJsNamedExports(executableSource)
+		.map(
+			(name, index) =>
+				`const __ompLegacyPiCommonJsExport${index} = ${exportsBinding}[${JSON.stringify(name)}]; export { __ompLegacyPiCommonJsExport${index} as ${name} };`,
+		)
+		.join("\n");
+	return `const ${exportsBinding} = globalThis[${JSON.stringify(COMMONJS_REQUIRE_GLOBAL)}](${JSON.stringify(modulePath)});\nexport default ${exportsBinding};\n${namedExports}\n`;
+}
+
+/**
+ * Linkedom's canvas bridge uses its bundled fallback because OMP does not ship
+ * native canvas.
+ */
+async function prepareCommonJsDefaultModule(modulePath: string, source: string): Promise<string> {
+	const packageRoot = await findPackageRoot(modulePath);
+	if (!packageRoot) {
+		return synthesizeCommonJsDefaultModule(modulePath, source);
+	}
+	const manifest = await readPackageManifest(packageRoot);
+	const packageRelativePath = path.relative(packageRoot, modulePath).split(path.sep).join("/");
+	if (manifest?.name !== "linkedom" || packageRelativePath !== "commonjs/canvas.cjs") {
+		return synthesizeCommonJsDefaultModule(modulePath, source);
+	}
+
+	const targetPath = path.join(packageRoot, "commonjs", "canvas-shim.cjs");
+	commonJsFallbackModulePaths.set(modulePath, targetPath);
+	return synthesizeCommonJsDefaultModule(modulePath, await Bun.file(targetPath).text(), targetPath);
+}
+
+/**
+ * Install exact-path load hooks for the current extension graph. ESM/TS source
+ * retains the async rewrite path. CommonJS wrappers and native-addon loaders
+ * stay synchronous because Bun rejects `require()` targets backed by async
+ * `onLoad` callbacks.
+ */
+async function installExtensionGraphHook(
 	entryRealPath: string,
 	modules: Map<string, string>,
-): { asyncModules: Map<string, string>; syncCommonJsModules: Map<string, string> } {
+	commonJsPaths: Set<string>,
+): Promise<{ asyncModules: Map<string, string>; syncSourceModules: Map<string, string> }> {
 	const asyncModules = new Map<string, string>();
-	const syncCommonJsModules = new Map<string, string>();
+	const syncSourceModules = new Map<string, string>();
 	for (const [modulePath, source] of modules) {
-		const destination = nativeAddonLoaderModulePaths.has(modulePath) ? syncCommonJsModules : asyncModules;
-		destination.set(modulePath, source);
+		const extension = path.extname(modulePath);
+		if (extension === ".cjs" || extension === ".cts") {
+			if (!commonJsPaths.has(modulePath)) {
+				throw new Error(`Missing CommonJS compatibility source: ${modulePath}`);
+			}
+		} else if (nativeAddonLoaderModulePaths.has(modulePath)) {
+			syncSourceModules.set(modulePath, source);
+		} else {
+			asyncModules.set(modulePath, source);
+		}
 	}
 
 	if (asyncModules.size > 0) {
@@ -1290,17 +1452,42 @@ function installExtensionGraphHook(
 		});
 	}
 
-	if (syncCommonJsModules.size > 0) {
-		const alternation = [...syncCommonJsModules.keys()].map(escapeRegExp).join("|");
+	if (commonJsPaths.size > 0) {
+		const alternation = [...commonJsPaths].map(escapeRegExp).join("|");
 		const filter = new RegExp(`^(?:${alternation})(?:\\?mtime=\\d+)?$`);
-		const hookId = Bun.hash(`${entryRealPath}\0sync-cjs\0${[...syncCommonJsModules.keys()].join("\0")}`).toString(36);
+		const hookId = Bun.hash(`${entryRealPath}\0commonjs\0${[...commonJsPaths].join("\0")}`).toString(36);
 		Bun.plugin({
 			name: `omp:legacy-pi-ext:${hookId}`,
 			setup(build) {
 				build.onLoad({ filter, namespace: "file" }, args => {
 					const queryIndex = args.path.indexOf("?mtime=");
 					const sourcePath = queryIndex >= 0 ? args.path.slice(0, queryIndex) : args.path;
-					const source = syncCommonJsModules.get(sourcePath);
+					const source =
+						commonJsModuleSources.get(sourcePath) ??
+						synthesizeCommonJsDefaultModule(
+							sourcePath,
+							fs.readFileSync(commonJsFallbackModulePaths.get(sourcePath) ?? sourcePath, "utf8"),
+							commonJsFallbackModulePaths.get(sourcePath) ?? sourcePath,
+						);
+					return { contents: source, loader: getLoader(sourcePath) };
+				});
+			},
+		});
+	}
+
+	if (syncSourceModules.size > 0) {
+		const alternation = [...syncSourceModules.keys()].map(escapeRegExp).join("|");
+		const filter = new RegExp(`^(?:${alternation})(?:\\?mtime=\\d+)?$`);
+		const hookId = Bun.hash(`${entryRealPath}\0sync-source\0${[...syncSourceModules.keys()].join("\0")}`).toString(
+			36,
+		);
+		Bun.plugin({
+			name: `omp:legacy-pi-ext:${hookId}`,
+			setup(build) {
+				build.onLoad({ filter, namespace: "file" }, args => {
+					const queryIndex = args.path.indexOf("?mtime=");
+					const sourcePath = queryIndex >= 0 ? args.path.slice(0, queryIndex) : args.path;
+					const source = syncSourceModules.get(sourcePath);
 					if (source === undefined) {
 						throw new Error(`Missing pre-rewritten CommonJS extension source: ${sourcePath}`);
 					}
@@ -1309,7 +1496,7 @@ function installExtensionGraphHook(
 			},
 		});
 	}
-	return { asyncModules, syncCommonJsModules };
+	return { asyncModules, syncSourceModules };
 }
 
 /**
@@ -1322,6 +1509,14 @@ function installExtensionGraphHook(
  */
 async function ensureExtensionGraphHook(entryRealPath: string): Promise<{ clear(): void } | undefined> {
 	const currentModules = await collectExtensionModules(entryRealPath);
+	const commonJsPaths = new Set<string>();
+	for (const [modulePath, source] of currentModules) {
+		const extension = path.extname(modulePath);
+		if (extension === ".cjs" || extension === ".cts") {
+			commonJsModuleSources.set(modulePath, await prepareCommonJsDefaultModule(modulePath, source));
+			commonJsPaths.add(modulePath);
+		}
+	}
 	let hookedModules = extensionGraphHookModules.get(entryRealPath);
 	if (!hookedModules) {
 		hookedModules = new Set<string>();
@@ -1329,23 +1524,40 @@ async function ensureExtensionGraphHook(entryRealPath: string): Promise<{ clear(
 	}
 
 	const pendingModules = new Map<string, string>();
+	const pendingCommonJsPaths = new Set<string>();
 	for (const [modulePath, source] of currentModules) {
 		if (!hookedModules.has(modulePath)) {
 			pendingModules.set(modulePath, source);
+			if (commonJsPaths.has(modulePath)) {
+				pendingCommonJsPaths.add(modulePath);
+			}
 		}
 	}
-	if (pendingModules.size === 0) {
+	if (pendingModules.size === 0 && commonJsPaths.size === 0) {
 		return undefined;
 	}
 
-	const { asyncModules, syncCommonJsModules } = installExtensionGraphHook(entryRealPath, pendingModules);
-	for (const modulePath of pendingModules.keys()) {
-		hookedModules.add(modulePath);
+	let asyncModules = new Map<string, string>();
+	let syncSourceModules = new Map<string, string>();
+	if (pendingModules.size > 0) {
+		({ asyncModules, syncSourceModules } = await installExtensionGraphHook(
+			entryRealPath,
+			pendingModules,
+			pendingCommonJsPaths,
+		));
+		for (const modulePath of pendingModules.keys()) {
+			hookedModules.add(modulePath);
+		}
 	}
 	return {
 		clear() {
 			asyncModules.clear();
-			syncCommonJsModules.clear();
+			syncSourceModules.clear();
+			for (const modulePath of commonJsPaths) {
+				commonJsModuleSources.delete(modulePath);
+				commonJsModuleDefinitions.delete(modulePath);
+				commonJsModuleCache.delete(modulePath);
+			}
 		},
 	};
 }

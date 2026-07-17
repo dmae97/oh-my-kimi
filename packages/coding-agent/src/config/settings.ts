@@ -32,7 +32,6 @@ import type { ModelRole } from "../config/model-roles";
 import { loadCapability } from "../discovery";
 import { isLightTheme, setAutoThemeMapping, setColorBlindMode, setSymbolPreset } from "../modes/theme/theme";
 import { AgentStorage } from "../session/agent-storage";
-import { normalizeToolName } from "../tools/builtin-names";
 import { type EditMode, normalizeEditMode } from "../utils/edit-mode";
 import { withFileLock } from "./file-lock";
 import {
@@ -171,6 +170,83 @@ function stringArrayFromUnknown(value: unknown): string[] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Migrate a v17 leaf rename that used to nest under a boolean parent path
+ * (`dev.autoqa.consent` → `dev.autoqaConsent`, `todo.reminders.max` →
+ * `todo.remindersMax`). Pre-rename configs left the leaf beneath the parent,
+ * so the parent path resolved to an object and truthy checks like
+ * `isAutoQaEnabled` treated a consent-only container as "enabled".
+ *
+ * Handles nested (`{ parent: { leaf } }`) and quoted-dotted (`"parent.leaf"`)
+ * legacy sources. An explicit new key always wins; a separately configured
+ * boolean parent is preserved; an irrecoverable object-valued parent (only ever
+ * a container for the old leaf) is dropped so the schema default applies.
+ */
+function migrateNestedLeafRename(
+	raw: RawSettings,
+	root: string,
+	parent: string,
+	oldLeaf: string,
+	newLeaf: string,
+	isLeafValue: (value: unknown) => boolean,
+): void {
+	const rootObj = isRecord(raw[root]) ? (raw[root] as Record<string, unknown>) : undefined;
+	const nestedParent = rootObj?.[parent];
+	const flatParent = raw[`${root}.${parent}`];
+	const oldParentPath = `${root}.${parent}`;
+
+	const candidates = [
+		rootObj?.[newLeaf],
+		raw[`${root}.${newLeaf}`],
+		isRecord(nestedParent) ? nestedParent[oldLeaf] : undefined,
+		raw[`${oldParentPath}.${oldLeaf}`],
+	];
+	const resolvedLeaf = candidates.find(isLeafValue);
+
+	const recoveredParent =
+		typeof nestedParent === "boolean" ? nestedParent : typeof flatParent === "boolean" ? flatParent : undefined;
+
+	const ensureRoot = (): Record<string, unknown> => {
+		const current = raw[root];
+		if (isRecord(current)) return current;
+		const created: Record<string, unknown> = {};
+		raw[root] = created;
+		return created;
+	};
+
+	if (resolvedLeaf !== undefined) {
+		const target = ensureRoot();
+		if (!isLeafValue(target[newLeaf])) {
+			target[newLeaf] = resolvedLeaf;
+		}
+	}
+
+	// Strip legacy leaf sources (nested + flat dotted).
+	delete raw[`${oldParentPath}.${oldLeaf}`];
+	delete raw[`${root}.${newLeaf}`];
+	if (isRecord(raw[root]) && isRecord((raw[root] as Record<string, unknown>)[parent])) {
+		const parentObj = (raw[root] as Record<string, unknown>)[parent] as Record<string, unknown>;
+		delete parentObj[oldLeaf];
+		if (Object.keys(parentObj).length === 0) {
+			delete (raw[root] as Record<string, unknown>)[parent];
+		}
+	}
+
+	// The parent path must be a boolean or absent — never a leftover object.
+	if (recoveredParent !== undefined) {
+		const target = ensureRoot();
+		if (typeof target[parent] !== "boolean") {
+			target[parent] = recoveredParent;
+		}
+	} else if (isRecord(raw[root]) && isRecord((raw[root] as Record<string, unknown>)[parent])) {
+		delete (raw[root] as Record<string, unknown>)[parent];
+	}
+	delete raw[oldParentPath];
+	if (isRecord(raw[root]) && Object.keys(raw[root] as Record<string, unknown>).length === 0) {
+		delete raw[root];
+	}
 }
 
 function modelRoleValueFromUnknown(value: unknown): string | undefined {
@@ -1195,43 +1271,6 @@ export class Settings {
 			delete raw["search.contextAfter"];
 		}
 
-		// 3. Tool-name arrays use wire IDs too. Preserve user overrides across
-		// the rename without duplicating entries if they already added grep/glob.
-		const migrateToolNameList = (names: unknown): unknown => {
-			if (!Array.isArray(names)) return names;
-			const out: unknown[] = [];
-			const seen = new Set<string>();
-			for (const name of names) {
-				const migrated = typeof name === "string" ? normalizeToolName(name) : name;
-				if (typeof migrated === "string") {
-					if (seen.has(migrated)) continue;
-					seen.add(migrated);
-				}
-				out.push(migrated);
-			}
-			return out;
-		};
-		const ensureToolsObject = (): Record<string, unknown> => {
-			const current = raw.tools;
-			if (current && typeof current === "object" && !Array.isArray(current)) {
-				return current as Record<string, unknown>;
-			}
-			const created: Record<string, unknown> = {};
-			raw.tools = created;
-			return created;
-		};
-		const toolsObj = raw.tools as Record<string, unknown> | undefined;
-		if (toolsObj && "essentialOverride" in toolsObj) {
-			toolsObj.essentialOverride = migrateToolNameList(toolsObj.essentialOverride);
-		}
-		if ("tools.essentialOverride" in raw) {
-			const nestedToolsObj = ensureToolsObject();
-			if (!("essentialOverride" in nestedToolsObj)) {
-				nestedToolsObj.essentialOverride = migrateToolNameList(raw["tools.essentialOverride"]);
-			}
-			delete raw["tools.essentialOverride"];
-		}
-
 		// Also clean up any empty nested objects we might have created or left behind
 		if (raw.glob && typeof raw.glob === "object" && Object.keys(raw.glob).length === 0) {
 			delete raw.glob;
@@ -1290,6 +1329,45 @@ export class Settings {
 		}
 		if (tierTouched) raw.tier = tierObj;
 		delete raw.fastModeScope;
+
+		// v17 renames that used to nest under a boolean parent path:
+		//   dev.autoqa.consent -> dev.autoqaConsent
+		//   todo.reminders.max -> todo.remindersMax
+		migrateNestedLeafRename(
+			raw,
+			"dev",
+			"autoqa",
+			"consent",
+			"autoqaConsent",
+			value => value === "unset" || value === "granted" || value === "denied",
+		);
+		migrateNestedLeafRename(
+			raw,
+			"todo",
+			"reminders",
+			"max",
+			"remindersMax",
+			value => typeof value === "number" && Number.isFinite(value),
+		);
+
+		// BM25 tool discovery removal: tools.discoveryMode / tools.essentialOverride /
+		// mcp.discoveryMode / mcp.discoveryDefaultServers are gone with no
+		// replacement (`tools.xdev` stays at its own default). Dead keys are
+		// deleted so they stop lingering in config.yml.
+		const toolsObj = raw.tools as Record<string, unknown> | undefined;
+		if (toolsObj) {
+			delete toolsObj.discoveryMode;
+			delete toolsObj.essentialOverride;
+		}
+		delete raw["tools.discoveryMode"];
+		delete raw["tools.essentialOverride"];
+		const mcpObj = raw.mcp as Record<string, unknown> | undefined;
+		if (mcpObj) {
+			delete mcpObj.discoveryMode;
+			delete mcpObj.discoveryDefaultServers;
+		}
+		delete raw["mcp.discoveryMode"];
+		delete raw["mcp.discoveryDefaultServers"];
 
 		return raw;
 	}

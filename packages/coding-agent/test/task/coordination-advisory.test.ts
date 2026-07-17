@@ -11,10 +11,10 @@ import subagentSystemPromptTemplate from "../../src/prompts/system/subagent-syst
 const item = (): TaskItem => ({ task: "do the thing" });
 
 describe("buildCoordinationAdvisory", () => {
-	it("suggests irc coordination for >=2 siblings with capacity and irc enabled", () => {
+	it("suggests hub coordination for >=2 siblings with capacity and hub messaging enabled", () => {
 		const advice = buildCoordinationAdvisory([item(), item()], true, true);
 		expect(advice).toBeDefined();
-		expect(advice).toContain("`irc`");
+		expect(advice).toContain("`hub`");
 	});
 
 	it("stays silent for a single spawn", () => {

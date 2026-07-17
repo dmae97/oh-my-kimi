@@ -352,11 +352,18 @@ export interface EditorTheme {
 	hintStyle?: (text: string) => string;
 }
 
-export interface EditorTopBorder {
-	/** The status content (already styled) */
+/** One styled row supplied for the editor's top border. */
+export interface EditorTopBorderLine {
+	/** Status content with any ANSI styling already applied. */
 	content: string;
-	/** Visible width of the content */
+	/** Visible cell width of {@link content}. */
 	width: number;
+}
+
+/** Ordered status rows rendered above the editor input. */
+export interface EditorTopBorder {
+	/** Styled rows in display order; the first row forms the box top. */
+	lines: readonly EditorTopBorderLine[];
 }
 
 interface HistoryEntry {
@@ -382,6 +389,7 @@ export class Editor implements Component, Focusable {
 
 	#theme: EditorTheme;
 	#useTerminalCursor = false;
+	#imeSafeCursorLayout = false;
 
 	/** When set, replaces the normal cursor glyph at end-of-text with this ANSI-styled string. */
 	cursorOverride: string | undefined;
@@ -467,12 +475,13 @@ export class Editor implements Component, Focusable {
 	onAutocompleteCancel?: () => void;
 	disableSubmit: boolean = false;
 
-	// Custom top border (for status line integration). Either an eager `content`
+	// Custom top border (for status line integration). Either an eager border
 	// (set once, reused every frame) or a `provider` that recomputes lazily just
 	// before the editor paints — the second form lets the host coalesce
 	// per-event rebuilds down to one per rendered frame (see #4145).
 	#topBorderContent?: EditorTopBorder;
 	#topBorderProvider?: (availableWidth: number) => EditorTopBorder | undefined;
+	#topBorderLineCount = 1;
 	#borderVisible = true;
 
 	constructor(theme: EditorTheme) {
@@ -537,6 +546,11 @@ export class Editor implements Component, Focusable {
 	 */
 	setUseTerminalCursor(useTerminalCursor: boolean): void {
 		this.#useTerminalCursor = useTerminalCursor;
+	}
+
+	/** Render a dedicated bottom border so terminal-local IME preedit cannot shift editor chrome. */
+	setImeSafeCursorLayout(enabled: boolean): void {
+		this.#imeSafeCursorLayout = enabled;
 	}
 
 	getUseTerminalCursor(): boolean {
@@ -689,7 +703,7 @@ export class Editor implements Component, Focusable {
 
 	#getVisibleContentHeight(contentLines: number): number {
 		if (this.#maxHeight === undefined) return contentLines;
-		const verticalChrome = this.#borderVisible ? 2 : 0;
+		const verticalChrome = this.#borderVisible ? Math.max(2, this.#topBorderLineCount + 1) : 0;
 		return Math.max(1, this.#maxHeight - verticalChrome);
 	}
 
@@ -817,6 +831,16 @@ export class Editor implements Component, Focusable {
 		const topRight = this.borderColor(`${box.horizontal.repeat(paddingX)}${box.topRight}`);
 		const bottomLeft = this.borderColor(`${box.bottomLeft}${box.horizontal}${padding(Math.max(0, paddingX - 1))}`);
 		const horizontal = this.borderColor(box.horizontal);
+		const topFillWidth = Math.max(0, width - borderWidth * 2);
+		// Provider (lazy) wins over eager content — a host that installs both
+		// wants the coalesced path; falling back to eager keeps existing
+		// setTopBorder callers working unchanged.
+		const topBorder = borderVisible
+			? this.#topBorderProvider
+				? this.#topBorderProvider(topFillWidth)
+				: this.#topBorderContent
+			: undefined;
+		this.#topBorderLineCount = topBorder?.lines.length ?? 1;
 
 		// Layout the text
 		const layoutLines = this.#layoutText(layoutWidth);
@@ -828,23 +852,26 @@ export class Editor implements Component, Focusable {
 
 		if (borderVisible) {
 			// Render top border: ╭─ [status content] ────────────────╮
-			const topFillWidth = Math.max(0, width - borderWidth * 2);
-			// Provider (lazy) wins over eager content — a host that installs both
-			// wants the coalesced path; falling back to eager keeps existing
-			// setTopBorder callers working unchanged.
-			const topBorder = this.#topBorderProvider ? this.#topBorderProvider(topFillWidth) : this.#topBorderContent;
-			if (topBorder) {
-				const { content, width: statusWidth } = topBorder;
-				if (statusWidth <= topFillWidth) {
-					// Status fits - add fill after it
-					const fillWidth = topFillWidth - statusWidth;
-					result.push(topLeft + content + this.borderColor(box.horizontal.repeat(fillWidth)) + topRight);
-				} else {
-					// Status too long - truncate it
-					const truncated = truncateToWidth(content, Math.max(0, topFillWidth - 1));
-					const truncatedWidth = visibleWidth(truncated);
-					const fillWidth = Math.max(0, topFillWidth - truncatedWidth);
-					result.push(topLeft + truncated + this.borderColor(box.horizontal.repeat(fillWidth)) + topRight);
+			if (topBorder?.lines.length) {
+				for (let index = 0; index < topBorder.lines.length; index++) {
+					const line = topBorder.lines[index]!;
+					let content = line.content;
+					let contentWidth = line.width;
+					if (contentWidth > topFillWidth) {
+						content = truncateToWidth(content, topFillWidth);
+						contentWidth = visibleWidth(content);
+					}
+					const fillWidth = Math.max(0, topFillWidth - contentWidth);
+					if (index === 0) {
+						result.push(topLeft + content + this.borderColor(box.horizontal.repeat(fillWidth)) + topRight);
+					} else {
+						result.push(
+							this.borderColor(`${box.vertical}${padding(paddingX)}`) +
+								content +
+								padding(fillWidth) +
+								this.borderColor(`${padding(paddingX)}${box.vertical}`),
+						);
+					}
 				}
 			} else {
 				result.push(topLeft + horizontal.repeat(topFillWidth) + topRight);
@@ -852,8 +879,9 @@ export class Editor implements Component, Focusable {
 		}
 
 		// Render each layout line
-		// Emit hardware cursor marker only when focused and not showing autocomplete
-		const emitCursorMarker = this.focused && !this.#autocompleteState;
+		// Keep the hardware cursor at the text insertion point while autocomplete
+		// rows render below it; terminals use that position to anchor IME candidates.
+		const emitCursorMarker = this.focused;
 		const lineContentWidth = contentAreaWidth;
 
 		// Compute inline hint text (dim ghost text after cursor)
@@ -866,6 +894,7 @@ export class Editor implements Component, Focusable {
 			let displayWidth = visibleWidth(layoutLine.text);
 			let cursorPaddingOverflow = 0;
 			let decorated = false;
+			let imeSafeCursorTail = false;
 			const showPromptGutter = promptGutter !== undefined && visibleIndex === 0;
 			const gutterText =
 				promptGutter === undefined ? "" : showPromptGutter ? promptGutter.firstLine : promptGutter.continuation;
@@ -922,7 +951,13 @@ export class Editor implements Component, Focusable {
 				if (marker) {
 					const before = displayText.slice(0, layoutLine.cursorPos);
 					const after = displayText.slice(layoutLine.cursorPos);
-					if (after.length === 0 && inlineHint) {
+					if (this.#imeSafeCursorLayout && after.length === 0 && borderVisible) {
+						// Terminal frontends render IME marked text locally before committed bytes
+						// reach the application. Keep the end-of-input cursor row empty to its
+						// right so that insertion cannot shift box chrome onto the next row.
+						displayText = before + marker;
+						imeSafeCursorTail = true;
+					} else if (after.length === 0 && inlineHint) {
 						const availWidth = Math.max(0, lineContentWidth - displayWidth);
 						const hintText = hintStyle(truncateToWidth(inlineHint, availWidth));
 						displayText = before + marker + hintText;
@@ -1022,6 +1057,15 @@ export class Editor implements Component, Focusable {
 			// trailing `─`, but never the corner/vertical bar itself.
 			const isLastLine = visibleIndex === visibleLayoutLines.length - 1;
 			const rightChromeCells = Math.max(1, paddingX + 1 - cursorPaddingOverflow);
+			if (isLastLine && imeSafeCursorTail) {
+				const leftBorder = this.borderColor(`${box.vertical}${padding(paddingX)}`);
+				const bottomBorder = this.borderColor(
+					`${box.bottomLeft}${box.horizontal.repeat(Math.max(0, width - 2))}${box.bottomRight}`,
+				);
+				result.push(leftBorder + displayText);
+				result.push(bottomBorder);
+				continue;
+			}
 			if (isLastLine) {
 				const rightPad = Math.max(0, rightChromeCells - 2);
 				const includeHorizontal = rightChromeCells >= 2;
@@ -1166,11 +1210,12 @@ export class Editor implements Component, Focusable {
 					return;
 				}
 
-				// If Enter was pressed on a slash command (not an absolute-path
-				// completion sharing the leading-slash prefix), apply and submit
+				// If Enter was pressed on a submitted slash command (not an absolute-path
+				// completion sharing the leading-slash prefix), apply and submit.
 				if (
 					(kb.matches(data, "tui.input.submit") || data === "\n") &&
 					findLeadingSlashCommandStart(this.#autocompletePrefix) !== null &&
+					this.#isInSubmittedSlashCommandContext() &&
 					!this.#selectedCompletionIsPath()
 				) {
 					const selected = this.#autocompleteList.getSelectedItem();
@@ -1199,7 +1244,7 @@ export class Editor implements Component, Focusable {
 					}
 					// Don't return - fall through to submission logic
 				}
-				// If Enter was pressed on a file path, apply completion
+				// Otherwise, apply the completion without submitting the surrounding draft.
 				else if (kb.matches(data, "tui.input.submit") || data === "\n") {
 					const selected = this.#autocompleteList.getSelectedItem();
 					// Check for stale autocomplete state due to buffer edits since last refresh.
@@ -2892,8 +2937,8 @@ export class Editor implements Component, Focusable {
 	 *   via the no-command-match fall-through) share the leading-slash prefix shape
 	 *   but must use the live-suffix path rule so the apply slice stays anchored.
 	 * - Mid-prompt skill branch re-anchors when the popup item is a skill and the
-	 *   current text still ends in a trailing slash token, matching the provider's
-	 *   mid-prompt replacement branch.
+	 *   current text still ends in a matching trailing slash token, preventing a
+	 *   stale selection from replacing a newer skill prefix.
 	 * - `@`-file branch re-anchors via `#extractAtPrefix`; safe when the current text
 	 *   still ends in a whitespace-anchored `@<token>`.
 	 * - Everything else is stale — accepting it would corrupt the buffer (issue #4295).

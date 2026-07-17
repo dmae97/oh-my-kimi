@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Recent Errors now honors the selected dashboard time range before returning the newest 50 failures ([#5282](https://github.com/can1357/oh-my-pi/issues/5282))
+
 ## [16.4.7] - 2026-07-12
 
 ### Fixed

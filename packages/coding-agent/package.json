@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "@oh-my-pi/pi-coding-agent",
-  "version": "16.5.2",
+  "version": "17.0.1",
   "description": "Coding agent CLI with read, bash, edit, write tools and session management",
   "homepage": "https://omp.sh",
   "author": "Can Boluk",
@@ -92,7 +92,8 @@
     "sherpa-onnx-node": "1.13.2"
   },
   "devDependencies": {
-    "@types/bun": "catalog:"
+    "@types/bun": "catalog:",
+    "marked": "catalog:"
   },
   "engines": {
     "bun": ">=1.3.14"
@@ -536,13 +537,17 @@
       "types": "./src/task/*.ts",
       "import": "./src/task/*.ts"
     },
-    "./tool-discovery/*": {
-      "types": "./src/tool-discovery/*.ts",
-      "import": "./src/tool-discovery/*.ts"
-    },
     "./tools": {
       "types": "./src/tools/index.ts",
       "import": "./src/tools/index.ts"
+    },
+    "./tools/hub": {
+      "types": "./src/tools/hub/index.ts",
+      "import": "./src/tools/hub/index.ts"
+    },
+    "./tools/hub/*": {
+      "types": "./src/tools/hub/*.ts",
+      "import": "./src/tools/hub/*.ts"
     },
     "./tools/*": {
       "types": "./src/tools/*.ts",

@@ -1,6 +1,6 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Message, TextContent } from "@oh-my-pi/pi-ai";
+import type { Message } from "@oh-my-pi/pi-ai";
 import { getAgentDir as getDefaultAgentDir, logger, parseJsonlLenient, toError } from "@oh-my-pi/pi-utils";
 import { computeDefaultSessionDir } from "./session-paths";
 import { FileSessionStorage, type SessionStorage } from "./session-storage";
@@ -108,10 +108,11 @@ function sessionDisplayName(info: SessionInfo): string {
 
 function extractTextFromContent(content: Message["content"]): string {
 	if (typeof content === "string") return content;
-	return content
-		.filter((block): block is TextContent => block.type === "text")
-		.map(block => block.text)
-		.join(" ");
+	const text: string[] = [];
+	for (const block of content) {
+		if (block.type === "text") text.push(block.text);
+	}
+	return text.join(" ");
 }
 
 /**

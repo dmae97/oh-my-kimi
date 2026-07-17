@@ -259,7 +259,25 @@ describe("AssistantMessageComponent thinking renderers", () => {
 	});
 });
 
-describe("AssistantMessageComponent tool images", () => {
+describe("AssistantMessageComponent images", () => {
+	it("renders native assistant images in content order and honors image visibility", () => {
+		const message: AssistantMessage = {
+			...createAssistantMessage(""),
+			content: [
+				{ type: "text", text: "Before image" },
+				{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+				{ type: "text", text: "After image" },
+			],
+		};
+		const component = new AssistantMessageComponent(message);
+
+		const rendered = Bun.stripANSI(component.render(80).join("\n"));
+		expect(rendered.indexOf("Before image")).toBeLessThan(rendered.indexOf("[Image: image/png]"));
+		expect(rendered.indexOf("[Image: image/png]")).toBeLessThan(rendered.indexOf("After image"));
+		component.setImagesVisible(false);
+		expect(Bun.stripANSI(component.render(80).join("\n"))).not.toContain("[Image: image/png]");
+	});
+
 	it("converts WebP tool images for Kitty terminal rendering", async () => {
 		const webpBase64 = Buffer.from(
 			await Bun.file(path.join(import.meta.dir, "../../../../../assets/python.webp")).arrayBuffer(),
