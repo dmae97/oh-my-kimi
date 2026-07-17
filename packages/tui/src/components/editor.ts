@@ -1189,11 +1189,12 @@ export class Editor implements Component, Focusable {
 					return;
 				}
 
-				// If Enter was pressed on a slash command (not an absolute-path
-				// completion sharing the leading-slash prefix), apply and submit
+				// If Enter was pressed on a submitted slash command (not an absolute-path
+				// completion sharing the leading-slash prefix), apply and submit.
 				if (
 					(kb.matches(data, "tui.input.submit") || data === "\n") &&
 					findLeadingSlashCommandStart(this.#autocompletePrefix) !== null &&
+					this.#isInSubmittedSlashCommandContext() &&
 					!this.#selectedCompletionIsPath()
 				) {
 					const selected = this.#autocompleteList.getSelectedItem();
@@ -1222,7 +1223,7 @@ export class Editor implements Component, Focusable {
 					}
 					// Don't return - fall through to submission logic
 				}
-				// If Enter was pressed on a file path, apply completion
+				// Otherwise, apply the completion without submitting the surrounding draft.
 				else if (kb.matches(data, "tui.input.submit") || data === "\n") {
 					const selected = this.#autocompleteList.getSelectedItem();
 					// Check for stale autocomplete state due to buffer edits since last refresh.
@@ -2915,8 +2916,8 @@ export class Editor implements Component, Focusable {
 	 *   via the no-command-match fall-through) share the leading-slash prefix shape
 	 *   but must use the live-suffix path rule so the apply slice stays anchored.
 	 * - Mid-prompt skill branch re-anchors when the popup item is a skill and the
-	 *   current text still ends in a trailing slash token, matching the provider's
-	 *   mid-prompt replacement branch.
+	 *   current text still ends in a matching trailing slash token, preventing a
+	 *   stale selection from replacing a newer skill prefix.
 	 * - `@`-file branch re-anchors via `#extractAtPrefix`; safe when the current text
 	 *   still ends in a whitespace-anchored `@<token>`.
 	 * - Everything else is stale — accepting it would corrupt the buffer (issue #4295).
