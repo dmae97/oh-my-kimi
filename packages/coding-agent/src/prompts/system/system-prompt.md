@@ -57,7 +57,7 @@ Special URLs for internal resources; with most FS/bash tools they auto-resolve t
 - `memory://root`: project memory summary
   {{/if}}
 - `agent://<id>`: agent output artifact; `/<child>` reads a nested subagent's output, else `/<path>` extracts a JSON field
-- `history://<id>`: read-only markdown transcript of an agent (live, parked, or released); bare `history://` lists all agents. Serves any agent whose session file persists on disk, not just registered peers.
+- `history://<id>`: read-only markdown transcript of an agent (live, parked, or released); bare `history://` lists all agents. Serves registered agents process-wide plus persisted subagents discoverable from their artifact trees; does not discover unregistered top-level sessions solely from their persisted session files.
 - `artifact://<id>`: artifact content
 - `local://<name>.md`: plan artifacts or shared content for subagents
 {{#if hasObsidian}}
