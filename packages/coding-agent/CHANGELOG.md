@@ -13,6 +13,7 @@
 - Fixed collapsed todo views hiding the in-progress task in large phases. Both the transient `Todo` tool result and the sticky `Todos` HUD now share one walking-viewport policy: completed/abandoned tasks are omitted, every active task (the in-progress one, or a pending task a live subagent is executing) is pulled to the head in todo order, remaining rows fill with the following pending tasks, and an explicit `… N more active todos` summary is shown when active work alone exceeds the preview cap ([#5873](https://github.com/can1357/oh-my-pi/issues/5873)).
 - Fixed legacy provider extensions failing to load when they use the historical synchronous auth-storage surface ([#5879](https://github.com/can1357/oh-my-pi/issues/5879)).
 - Fixed orphaned detached MCP stdio server process trees surviving session dispose by escalating stdin-EOF → group SIGTERM → group SIGKILL on close() (#5578)
+- Fixed `/new` starting an unsolicited old-context provider turn when a hidden steer (e.g. an `xd://` mount notice) was queued: the session transition is now an atomic boundary, so a queued steer/follow-up can no longer auto-resume against the pre-`/new` context while the session is disconnected mid-transition. `/compact` still resumes a steer/follow-up that arrives while it runs, draining the queue once it reconnects ([#5800](https://github.com/can1357/oh-my-pi/issues/5800)).
 
 ## [17.0.2] - 2026-07-17
 
