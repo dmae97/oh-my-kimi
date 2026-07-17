@@ -385,6 +385,9 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	async generateAuthUrl(state: string, redirectUri: string): Promise<{ url: string; instructions?: string }> {
 		if (!this.#resolvedClientId) {
 			await this.#tryRegisterClient(redirectUri);
+			if (!this.#resolvedClientId && this.#registrationFailure) {
+				throw this.#missingClientIdError();
+			}
 		}
 
 		const authUrl = new URL(this.config.authorizationUrl);
