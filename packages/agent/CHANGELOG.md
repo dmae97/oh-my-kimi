@@ -5,6 +5,8 @@
 ### Fixed
 
 - Surfaced provider stream failures through the normal assistant message lifecycle so interactive clients show the terminal error instead of leaving users with a silent working spinner.
+- Fixed Cursor provider contexts omitting host-supplied MCP tools from main and side-channel requests ([#5650](https://github.com/can1357/oh-my-pi/issues/5650)).
+
 ## [17.0.0] - 2026-07-15
 
 ### Breaking Changes

@@ -2269,9 +2269,22 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 
 		let cursorEventEmitter: ((event: AgentEvent) => void) | undefined;
+		// Built-in xd:// devices (ast_edit, debug, browser, lsp, web_search) are
+		// mounted in createTools BEFORE this loop wraps registry entries in
+		// ExtensionToolWrapper, so the registry holds them unwrapped. The normal
+		// `write xd://<tool>` path runs approval through the wrapped `write` tool's
+		// tier gate, but Cursor invokes advertised devices via `tool.execute()`
+		// directly — so wrap unwrapped devices here to keep the approval/deny/prompt
+		// gate. Dynamic mounts (custom/MCP) already come from the wrapped registry.
+		const resolveCursorDevice = (name: string): AgentTool | undefined => {
+			const device = toolSession.xdevRegistry?.get(name);
+			if (!device) return undefined;
+			return device instanceof ExtensionToolWrapper ? device : new ExtensionToolWrapper(device, extensionRunner);
+		};
 		const cursorExecHandlers = new CursorExecHandlers({
 			cwd,
 			tools: toolRegistry,
+			getTool: resolveCursorDevice,
 			getToolContext: () => toolContextStore.getContext(),
 			emitEvent: event => cursorEventEmitter?.(event),
 		});
@@ -2629,6 +2642,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				return settingsAwareStreamFn(streamModel, context, streamOptions);
 			},
 			cursorExecHandlers,
+			getCursorTools: () => [...(toolSession.xdevRegistry?.list() ?? [])],
 			transformToolCallArguments: (args, _toolName) => {
 				let result = args;
 				const maxTimeout = settings.get("tools.maxTimeout");

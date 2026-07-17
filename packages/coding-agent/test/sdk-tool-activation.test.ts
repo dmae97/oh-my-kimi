@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { CustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
 import {
 	type CreateAgentSessionOptions,
 	createAgentSession,
@@ -119,6 +120,41 @@ describe("createAgentSession defaultInactive tool activation", () => {
 			expect(session.getActiveToolNames()).not.toContain("default_inactive_tool");
 			expect(session.systemPrompt.join("\n")).toContain("default_active_tool");
 			expect(session.systemPrompt.join("\n")).not.toContain("default_inactive_tool");
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	it("forwards built-in and external xd:// devices to Cursor provider contexts", async () => {
+		const tempDir = makeTempDir();
+		const cursorModel = getBundledModel("cursor", "composer-1.5");
+		if (!cursorModel) throw new Error("expected bundled Cursor model");
+		const { session } = await createAgentSession({
+			...baseOptions(tempDir),
+			model: cursorModel,
+		});
+		const externalMcpTool: CustomTool = {
+			name: "mcp__fixture_report",
+			label: "fixture/report",
+			description: "Report a fixture result.",
+			parameters: type({}),
+			strict: true,
+			mcpServerName: "fixture",
+			mcpToolName: "report",
+			async execute() {
+				return { content: [{ type: "text", text: "reported" }] };
+			},
+		};
+
+		try {
+			await session.refreshMCPTools([externalMcpTool]);
+			const deviceNames = session.getXdevToolEntries().map(entry => entry.name);
+			expect(deviceNames).toEqual(expect.arrayContaining(["ast_edit", "mcp__fixture_report"]));
+			expect(session.getActiveToolNames()).not.toContain("mcp__fixture_report");
+
+			const context = await session.agent.buildSideRequestContext([]);
+			const providerToolNames = context.tools?.map(tool => tool.name);
+			expect(providerToolNames).toEqual(expect.arrayContaining(["ast_edit", "mcp__fixture_report"]));
 		} finally {
 			await session.dispose();
 		}

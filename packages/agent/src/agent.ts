@@ -262,6 +262,8 @@ export interface AgentOptions {
 	 * Cursor exec handlers for local tool execution.
 	 */
 	cursorExecHandlers?: CursorExecHandlers;
+	/** Additional tools Cursor executes through its MCP request-context bridge, resolved before each provider call. */
+	getCursorTools?: () => AgentTool[];
 
 	/**
 	 * Cursor tool result callback for exec tool responses.
@@ -363,6 +365,7 @@ export class Agent {
 	#maxRetryDelayMs?: number;
 	#getToolContext?: (toolCall?: ToolCallContext) => AgentToolContext | undefined;
 	#cursorExecHandlers?: CursorExecHandlers;
+	#getCursorTools?: () => AgentTool[];
 	#cursorOnToolResult?: CursorToolResultHandler;
 	#cwd?: string;
 	#cwdResolver?: () => string | undefined;
@@ -445,6 +448,7 @@ export class Agent {
 		this.#onSseEvent = opts.onSseEvent;
 		this.#getToolContext = opts.getToolContext;
 		this.#cursorExecHandlers = opts.cursorExecHandlers;
+		this.#getCursorTools = opts.getCursorTools;
 		this.#cursorOnToolResult = opts.cursorOnToolResult;
 		this.#cwd = opts.cwd;
 		this.#cwdResolver = opts.cwdResolver;
@@ -689,6 +693,22 @@ export class Agent {
 		this.#appendOnlyContext = manager;
 	}
 
+	#toolsForModel(model: Model): AgentTool[] {
+		if (model.api !== "cursor-agent" || !this.#getCursorTools) return this.#state.tools;
+		const cursorTools = this.#getCursorTools();
+		if (cursorTools.length === 0) return this.#state.tools;
+
+		const names = new Set(this.#state.tools.map(tool => tool.name));
+		let merged: AgentTool[] | undefined;
+		for (const tool of cursorTools) {
+			if (names.has(tool.name)) continue;
+			merged ??= this.#state.tools.slice();
+			merged.push(tool);
+			names.add(tool.name);
+		}
+		return merged ?? this.#state.tools;
+	}
+
 	/**
 	 * Assemble the provider Context for a side-channel (no-loop) request, mirroring
 	 * the main loop's prefix (system + normalized tools) so it shares the prompt
@@ -713,7 +733,7 @@ export class Agent {
 		const tools = ownedDialect
 			? []
 			: (normalizeTools(
-					this.#state.tools,
+					this.#toolsForModel(model),
 					this.#intentTracing,
 					preferredDialect(model.id),
 					this.#pruneToolDescriptions,
@@ -1147,7 +1167,7 @@ export class Agent {
 					await Bun.sleep(0);
 				}
 				context.systemPrompt = this.#state.systemPrompt;
-				context.tools = this.#state.tools;
+				context.tools = this.#toolsForModel(this.#state.model ?? model);
 			},
 			cursorExecHandlers: this.#cursorExecHandlers,
 			cursorOnToolResult,

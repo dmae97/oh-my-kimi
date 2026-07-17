@@ -3,10 +3,12 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { create } from "@bufbuild/protobuf";
-import type { AgentEvent, AgentTool } from "@oh-my-pi/pi-agent-core";
+import type { AgentEvent, AgentTool, AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { ReadArgsSchema, ShellArgsSchema } from "@oh-my-pi/pi-catalog/discovery/cursor-gen/agent_pb";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { CursorExecHandlers } from "@oh-my-pi/pi-coding-agent/cursor";
+import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
+import { ExtensionToolWrapper } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { GrepTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
@@ -119,5 +121,73 @@ describe("CursorExecHandlers error results", () => {
 		expect(stdout).toEqual(["Enriched recovery guidance"]);
 		const end = events.find(event => event.type === "tool_execution_end");
 		expect(end?.isError).toBe(true);
+	});
+});
+
+describe("CursorExecHandlers mounted tool bridge", () => {
+	it("executes MCP tools resolved from the xd:// registry", async () => {
+		const mountedTool: AgentTool = {
+			name: "mcp__fixture_report",
+			label: "Fixture Report",
+			description: "reports a fixture result",
+			parameters: type({}),
+			async execute() {
+				return { content: [{ type: "text", text: "reported" }], details: {} };
+			},
+		};
+		const handlers = new CursorExecHandlers({
+			cwd: ".",
+			tools: new Map(),
+			getTool: name => (name === mountedTool.name ? mountedTool : undefined),
+		});
+
+		const result = await handlers.mcp({
+			name: mountedTool.name,
+			providerIdentifier: "pi-agent",
+			toolName: mountedTool.name,
+			toolCallId: "call-mounted",
+			args: {},
+			rawArgs: {},
+		});
+
+		expect(result.isError).toBe(false);
+		expect(result.content).toEqual([{ type: "text", text: "reported" }]);
+	});
+
+	it("routes wrapped mounted devices through the approval gate", async () => {
+		let executed = false;
+		const device: AgentTool = {
+			name: "ast_edit",
+			label: "AST Edit",
+			description: "structural edit device",
+			parameters: type({}),
+			async execute() {
+				executed = true;
+				return { content: [{ type: "text", text: "edited" }], details: {} };
+			},
+		};
+		// The deny path throws inside resolveApproval before the runner is touched,
+		// so a bare runner stub suffices to prove the gate runs.
+		const wrapped = new ExtensionToolWrapper(device, {} as unknown as ExtensionRunner);
+		const settings = Settings.isolated({ "tools.approval": { ast_edit: "deny" } });
+		const handlers = new CursorExecHandlers({
+			cwd: ".",
+			tools: new Map(),
+			getTool: name => (name === device.name ? (wrapped as unknown as AgentTool) : undefined),
+			getToolContext: () => ({ settings }) as AgentToolContext,
+		});
+
+		const result = await handlers.mcp({
+			name: device.name,
+			providerIdentifier: "pi-agent",
+			toolName: device.name,
+			toolCallId: "call-denied",
+			args: {},
+			rawArgs: {},
+		});
+
+		expect(result.isError).toBe(true);
+		expect(executed).toBe(false);
+		expect(result.content.find(block => block.type === "text")?.text).toContain("blocked by user policy");
 	});
 });
