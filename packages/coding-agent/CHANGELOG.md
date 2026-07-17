@@ -23,6 +23,7 @@
 - Rendered `read xd://` calls in the compact grouped read view instead of a full tool-execution card; other internal URLs (`skill://`, `agent://`, …) still render full so their resolved content stays visible.
 
 ### Fixed
+- Fixed Cursor responses streams stalling after an exec-channel tool completed without automatically recovering. The session now continues from the already-buffered tool result instead of replaying the side-effecting request. ([#5790](https://github.com/can1357/oh-my-pi/issues/5790))
 
 - Fixed linked legacy pi extensions failing to load when they import `DefaultPackageManager` or linkedom: the coding-agent compatibility shim now enumerates OMP extension paths with plugin metadata, and extension-graph CommonJS modules load through synchronous default-export bridges with linkedom's bundled canvas fallback. ([#5658](https://github.com/can1357/oh-my-pi/issues/5658))
 - Fixed the advisor retrying terminal, non-retriable provider failures (e.g. blocked prompts) three times before giving up; such failures now drop the bounded batch after a single attempt while transient failures keep the 3-attempt retry path ([#5468](https://github.com/can1357/oh-my-pi/pull/5468)).
