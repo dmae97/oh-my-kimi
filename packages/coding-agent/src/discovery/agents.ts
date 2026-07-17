@@ -1,5 +1,5 @@
 /**
- * Agents (standard) Provider
+ * Agent Dirs (.agent/.agents) Provider
  *
  * Loads skills, rules, prompts, commands, context files, and system prompts
  * from .agent/ and .agents/ directories at both user (~/) and project levels.
@@ -24,7 +24,7 @@ import {
 } from "./helpers";
 
 const PROVIDER_ID = "agents";
-const DISPLAY_NAME = "Agents (standard)";
+const DISPLAY_NAME = "Agent Dirs (.agent/.agents)";
 const PRIORITY = 70;
 const AGENT_DIR_CANDIDATES = [".agent", ".agents"] as const;
 
