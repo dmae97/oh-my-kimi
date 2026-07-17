@@ -39,7 +39,12 @@ export const SEARCH_PROVIDER_OPTIONS = [
 	{ value: "tavily", label: "Tavily", description: "Requires TAVILY_API_KEY" },
 	{ value: "firecrawl", label: "Firecrawl", description: "Requires FIRECRAWL_API_KEY" },
 	{ value: "brave", label: "Brave", description: "Requires BRAVE_API_KEY" },
-	{ value: "kimi", label: "Kimi", description: "Requires MOONSHOT_SEARCH_API_KEY or MOONSHOT_API_KEY" },
+	{
+		value: "kimi",
+		label: "Kimi",
+		description:
+			"Kimi Code search (requires a Kimi Code Console key via KIMI_SEARCH_API_KEY/MOONSHOT_SEARCH_API_KEY or /login kimi-code; not MOONSHOT_API_KEY)",
+	},
 	{ value: "parallel", label: "Parallel", description: "Requires PARALLEL_API_KEY" },
 	{ value: "synthetic", label: "Synthetic", description: "Requires SYNTHETIC_API_KEY" },
 	{ value: "searxng", label: "SearXNG", description: "Requires SEARXNG_ENDPOINT or searxng.endpoint" },
