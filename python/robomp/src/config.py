@@ -129,6 +129,11 @@ class Settings(BaseSettings):
     rate_limit_default: int = Field(3, alias="ROBOMP_RATE_LIMIT_DEFAULT")
     rate_limit_contributor: int = Field(10, alias="ROBOMP_RATE_LIMIT_CONTRIBUTOR")
     rate_limit_unlimited_raw: str = Field("", alias="ROBOMP_RATE_LIMIT_UNLIMITED")
+    # How often the dispatcher sweeps deferred rate-limited events back into the
+    # queue as their submitters' rolling windows free up. The empty-queue path
+    # promotes immediately; this periodic sweep guarantees progress even while a
+    # sustained ordinary queue keeps `claim_next_event` returning work.
+    deferred_promotion_scan_seconds: float = Field(60.0, alias="ROBOMP_DEFERRED_PROMOTION_SCAN_SECONDS")
     # Logins (comma-separated, `@` prefix optional, case-insensitive) whose `@bot_login`
     # mentions are treated as authoritative directives. These accounts also
     # bypass rate limiting regardless of `author_association`.
