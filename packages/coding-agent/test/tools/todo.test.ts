@@ -524,6 +524,16 @@ describe("selectCollapsedTodos walking viewport (#5873)", () => {
 		expect(contents(sel).some(c => ["Task 8", "Task 9", "Task 10"].includes(c))).toBe(false);
 	});
 
+	it("keeps a summary when actives exactly fill the cap but pending remains", () => {
+		// 5 matched actives + 1 trailing pending, cap 5. The active-overflow branch
+		// must NOT swallow the hidden pending work with an empty summary (#5878).
+		const tasks = mk(6, []);
+		const matched = (t: TodoItem) => ["Task 1", "Task 2", "Task 3", "Task 4", "Task 5"].includes(t.content);
+		const sel = selectCollapsedTodos(tasks, matched, 5);
+		expect(contents(sel)).toEqual(["Task 1", "Task 2", "Task 3", "Task 4", "Task 5"]);
+		expect(sel.summary).toBe("… 1 more todo");
+	});
+
 	it("returns the whole open set with no summary when it fits", () => {
 		const sel = selectCollapsedTodos(mk(3, [2]), never, 5);
 		expect(contents(sel)).toEqual(["Task 1", "Task 2", "Task 3"]);

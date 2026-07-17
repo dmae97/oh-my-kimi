@@ -263,11 +263,14 @@ export function selectCollapsedTodos<T extends { status: TodoStatus }>(
 	if (base.length <= cap) return { items: base, summary: "" };
 
 	const active = base.filter(task => isActiveTodo(task, isMatched));
-	if (active.length >= cap) {
+	// Only when active work strictly exceeds the cap do we drop pending rows and
+	// count hidden *actives*. At exactly `cap` actives, fall through so the normal
+	// branch still surfaces any following pending work in the summary.
+	if (active.length > cap) {
 		const hiddenActive = active.length - cap;
 		return {
 			items: active.slice(0, cap),
-			summary: hiddenActive > 0 ? `… ${hiddenActive} more active ${pluralize("todo", hiddenActive)}` : "",
+			summary: `… ${hiddenActive} more active ${pluralize("todo", hiddenActive)}`,
 		};
 	}
 
