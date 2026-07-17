@@ -114,7 +114,7 @@ describe("AgentSession per-turn prune persistence", () => {
 		const message = session.agent.state.messages.find(
 			candidate => candidate.role === "toolResult" && candidate.toolCallId === BIG_CALL_ID,
 		);
-		if (message?.role !== "toolResult" || !Array.isArray(message.content)) {
+		if (!message || message.role !== "toolResult" || !Array.isArray(message.content)) {
 			throw new Error("Expected the seeded tool result in live agent state");
 		}
 		const text = message.content.find(block => block.type === "text");
@@ -156,7 +156,7 @@ describe("AgentSession per-turn prune persistence", () => {
 		const rebuilt = reloaded
 			.buildSessionContext()
 			.messages.find(candidate => candidate.role === "toolResult" && candidate.toolCallId === BIG_CALL_ID);
-		if (rebuilt?.role !== "toolResult" || !Array.isArray(rebuilt.content)) {
+		if (!rebuilt || rebuilt.role !== "toolResult" || !Array.isArray(rebuilt.content)) {
 			throw new Error("Expected the seeded tool result in the from-disk rebuild");
 		}
 		const rebuiltText = rebuilt.content.find(block => block.type === "text");
