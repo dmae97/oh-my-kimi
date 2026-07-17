@@ -108,6 +108,39 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		expect(Reflect.get(Object(mod), "canvasValue")).toBe("linkedom-canvas-shim");
 	});
 
+	it("preserves named ESM imports from CommonJS helpers", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "named-cjs-ext", version: "1.0.0", type: "module" }),
+			"index.js": [
+				'import { value } from "./helper.cjs";',
+				"export { value };",
+				"export default function (pi) { void pi; }",
+			].join("\n"),
+			"helper.cjs": 'module.exports = { value: "named-cjs-ok" };\n',
+		});
+
+		const mod = (await loadLegacyPiModule(path.join(dir, "index.js"))) as { value: string };
+
+		expect(mod.value).toBe("named-cjs-ok");
+	});
+
+	it("reads a lazy CommonJS helper at import time", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "lazy-cjs-ext", version: "1.0.0", type: "module" }),
+			"index.js": [
+				'export const loadValue = () => import("./helper.cjs").then(mod => mod.default.value);',
+				"export default function (pi) { void pi; }",
+			].join("\n"),
+			"helper.cjs": 'module.exports = { value: "v1" };\n',
+		});
+		const helper = path.join(dir, "helper.cjs");
+		const mod = (await loadLegacyPiModule(path.join(dir, "index.js"))) as { loadValue(): Promise<string> };
+
+		await fs.writeFile(helper, 'module.exports = { value: "v2" };\n', "utf8");
+
+		expect(await mod.loadValue()).toBe("v2");
+	});
+
 	it("reloads an edited CommonJS helper imported from ESM", async () => {
 		const dir = await writePackage({
 			"package.json": JSON.stringify({ name: "cjs-reload-ext", version: "1.0.0", type: "module" }),

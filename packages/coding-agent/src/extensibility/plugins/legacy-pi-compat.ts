@@ -1112,6 +1112,7 @@ const EXTENSION_GRAPH_SPECIFIER_REGEX = /((?:from\s+|import\s+|import\s*\(\s*)["
 // the previous load.
 const extensionGraphHookModules = new Map<string, Set<string>>();
 const commonJsModuleSources = new Map<string, string>();
+const commonJsFallbackModulePaths = new Map<string, string>();
 const COMMONJS_REQUIRE_GLOBAL = "__ompLegacyPiRequireGraphModule";
 const commonJsModuleDefinitions = new Map<string, { source: string; filename: string; dirname: string }>();
 const commonJsModuleCache = new Map<
@@ -1321,38 +1322,79 @@ async function collectExtensionModules(entryRealPath: string): Promise<Map<strin
 }
 
 /**
- * The shared evaluator gives ESM default imports and sibling `require()` calls
- * the same `module.exports` value and cycle-aware cache. Linkedom's canvas
- * bridge uses its bundled fallback because OMP does not ship native canvas.
+ * Discovers CommonJS export names Bun normally exposes to ESM importers. The
+ * bridge must declare them statically because its default export is synthetic.
  */
-async function synthesizeCommonJsDefaultModule(modulePath: string, source: string): Promise<string> {
-	const packageRoot = await findPackageRoot(modulePath);
-	let targetPath = modulePath;
-	let commonJsSource = source;
-	if (packageRoot) {
-		const manifest = await readPackageManifest(packageRoot);
-		const packageRelativePath = path.relative(packageRoot, modulePath).split(path.sep).join("/");
-		if (manifest?.name === "linkedom" && packageRelativePath === "commonjs/canvas.cjs") {
-			targetPath = path.join(packageRoot, "commonjs", "canvas-shim.cjs");
-			commonJsSource = await Bun.file(targetPath).text();
+function collectCommonJsNamedExports(source: string): string[] {
+	const names = new Set<string>();
+	const assignmentPattern = /(?:^|[;\n])\s*(?:exports|module\.exports)\.([A-Za-z_$][\w$]*)\s*=/gm;
+	for (const match of source.matchAll(assignmentPattern)) {
+		const name = match[1];
+		if (name && name !== "default") {
+			names.add(name);
 		}
 	}
+	const objectPattern = /module\.exports\s*=\s*\{([\s\S]*?)\}/g;
+	for (const objectMatch of source.matchAll(objectPattern)) {
+		const propertyPattern = /(?:^|,)\s*(?:([A-Za-z_$][\w$]*)\s*(?=[:,]|$)|["']([A-Za-z_$][\w$]*)["']\s*:)/g;
+		for (const propertyMatch of objectMatch[1]?.matchAll(propertyPattern) ?? []) {
+			const name = propertyMatch[1] ?? propertyMatch[2];
+			if (name && name !== "default") {
+				names.add(name);
+			}
+		}
+	}
+	return [...names];
+}
+
+/**
+ * The shared evaluator gives ESM imports and sibling `require()` calls the
+ * same `module.exports` value and cycle-aware cache.
+ */
+function synthesizeCommonJsDefaultModule(modulePath: string, source: string, targetPath = modulePath): string {
+	let commonJsSource = source;
 	if (commonJsSource.startsWith("#!")) {
 		const firstLineEnd = commonJsSource.indexOf("\n");
 		commonJsSource = firstLineEnd === -1 ? "" : commonJsSource.slice(firstLineEnd + 1);
 	}
 
-	const targetDir = path.dirname(targetPath);
 	const executableSource = targetPath.endsWith(".cts")
 		? commonJsTypeScriptTranspiler.transformSync(commonJsSource)
 		: commonJsSource;
 	commonJsModuleDefinitions.set(modulePath, {
 		source: executableSource,
 		filename: targetPath,
-		dirname: targetDir,
+		dirname: path.dirname(targetPath),
 	});
 	commonJsModuleCache.delete(modulePath);
-	return `export default globalThis[${JSON.stringify(COMMONJS_REQUIRE_GLOBAL)}](${JSON.stringify(modulePath)});\n`;
+	const exportsBinding = "__ompLegacyPiCommonJsExports";
+	const namedExports = collectCommonJsNamedExports(executableSource)
+		.map(
+			(name, index) =>
+				`const __ompLegacyPiCommonJsExport${index} = ${exportsBinding}[${JSON.stringify(name)}]; export { __ompLegacyPiCommonJsExport${index} as ${name} };`,
+		)
+		.join("\n");
+	return `const ${exportsBinding} = globalThis[${JSON.stringify(COMMONJS_REQUIRE_GLOBAL)}](${JSON.stringify(modulePath)});\nexport default ${exportsBinding};\n${namedExports}\n`;
+}
+
+/**
+ * Linkedom's canvas bridge uses its bundled fallback because OMP does not ship
+ * native canvas.
+ */
+async function prepareCommonJsDefaultModule(modulePath: string, source: string): Promise<string> {
+	const packageRoot = await findPackageRoot(modulePath);
+	if (!packageRoot) {
+		return synthesizeCommonJsDefaultModule(modulePath, source);
+	}
+	const manifest = await readPackageManifest(packageRoot);
+	const packageRelativePath = path.relative(packageRoot, modulePath).split(path.sep).join("/");
+	if (manifest?.name !== "linkedom" || packageRelativePath !== "commonjs/canvas.cjs") {
+		return synthesizeCommonJsDefaultModule(modulePath, source);
+	}
+
+	const targetPath = path.join(packageRoot, "commonjs", "canvas-shim.cjs");
+	commonJsFallbackModulePaths.set(modulePath, targetPath);
+	return synthesizeCommonJsDefaultModule(modulePath, await Bun.file(targetPath).text(), targetPath);
 }
 
 /**
@@ -1420,10 +1462,13 @@ async function installExtensionGraphHook(
 				build.onLoad({ filter, namespace: "file" }, args => {
 					const queryIndex = args.path.indexOf("?mtime=");
 					const sourcePath = queryIndex >= 0 ? args.path.slice(0, queryIndex) : args.path;
-					const source = commonJsModuleSources.get(sourcePath);
-					if (source === undefined) {
-						throw new Error(`Missing CommonJS compatibility module: ${sourcePath}`);
-					}
+					const source =
+						commonJsModuleSources.get(sourcePath) ??
+						synthesizeCommonJsDefaultModule(
+							sourcePath,
+							fs.readFileSync(commonJsFallbackModulePaths.get(sourcePath) ?? sourcePath, "utf8"),
+							commonJsFallbackModulePaths.get(sourcePath) ?? sourcePath,
+						);
 					return { contents: source, loader: getLoader(sourcePath) };
 				});
 			},
@@ -1464,10 +1509,12 @@ async function installExtensionGraphHook(
  */
 async function ensureExtensionGraphHook(entryRealPath: string): Promise<{ clear(): void } | undefined> {
 	const currentModules = await collectExtensionModules(entryRealPath);
+	const commonJsPaths = new Set<string>();
 	for (const [modulePath, source] of currentModules) {
 		const extension = path.extname(modulePath);
 		if (extension === ".cjs" || extension === ".cts") {
-			commonJsModuleSources.set(modulePath, await synthesizeCommonJsDefaultModule(modulePath, source));
+			commonJsModuleSources.set(modulePath, await prepareCommonJsDefaultModule(modulePath, source));
+			commonJsPaths.add(modulePath);
 		}
 	}
 	let hookedModules = extensionGraphHookModules.get(entryRealPath);
@@ -1481,27 +1528,36 @@ async function ensureExtensionGraphHook(entryRealPath: string): Promise<{ clear(
 	for (const [modulePath, source] of currentModules) {
 		if (!hookedModules.has(modulePath)) {
 			pendingModules.set(modulePath, source);
-			if (commonJsModuleSources.has(modulePath)) {
+			if (commonJsPaths.has(modulePath)) {
 				pendingCommonJsPaths.add(modulePath);
 			}
 		}
 	}
-	if (pendingModules.size === 0) {
+	if (pendingModules.size === 0 && commonJsPaths.size === 0) {
 		return undefined;
 	}
 
-	const { asyncModules, syncSourceModules } = await installExtensionGraphHook(
-		entryRealPath,
-		pendingModules,
-		pendingCommonJsPaths,
-	);
-	for (const modulePath of pendingModules.keys()) {
-		hookedModules.add(modulePath);
+	let asyncModules = new Map<string, string>();
+	let syncSourceModules = new Map<string, string>();
+	if (pendingModules.size > 0) {
+		({ asyncModules, syncSourceModules } = await installExtensionGraphHook(
+			entryRealPath,
+			pendingModules,
+			pendingCommonJsPaths,
+		));
+		for (const modulePath of pendingModules.keys()) {
+			hookedModules.add(modulePath);
+		}
 	}
 	return {
 		clear() {
 			asyncModules.clear();
 			syncSourceModules.clear();
+			for (const modulePath of commonJsPaths) {
+				commonJsModuleSources.delete(modulePath);
+				commonJsModuleDefinitions.delete(modulePath);
+				commonJsModuleCache.delete(modulePath);
+			}
 		},
 	};
 }
