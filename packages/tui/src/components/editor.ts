@@ -475,12 +475,13 @@ export class Editor implements Component, Focusable {
 	onAutocompleteCancel?: () => void;
 	disableSubmit: boolean = false;
 
-	// Custom top border (for status line integration). Either an eager `content`
+	// Custom top border (for status line integration). Either an eager border
 	// (set once, reused every frame) or a `provider` that recomputes lazily just
 	// before the editor paints — the second form lets the host coalesce
 	// per-event rebuilds down to one per rendered frame (see #4145).
 	#topBorderContent?: EditorTopBorder;
 	#topBorderProvider?: (availableWidth: number) => EditorTopBorder | undefined;
+	#topBorderLineCount = 1;
 	#borderVisible = true;
 
 	constructor(theme: EditorTheme) {
@@ -702,7 +703,7 @@ export class Editor implements Component, Focusable {
 
 	#getVisibleContentHeight(contentLines: number): number {
 		if (this.#maxHeight === undefined) return contentLines;
-		const verticalChrome = this.#borderVisible ? 2 : 0;
+		const verticalChrome = this.#borderVisible ? Math.max(2, this.#topBorderLineCount + 1) : 0;
 		return Math.max(1, this.#maxHeight - verticalChrome);
 	}
 
@@ -830,6 +831,16 @@ export class Editor implements Component, Focusable {
 		const topRight = this.borderColor(`${box.horizontal.repeat(paddingX)}${box.topRight}`);
 		const bottomLeft = this.borderColor(`${box.bottomLeft}${box.horizontal}${padding(Math.max(0, paddingX - 1))}`);
 		const horizontal = this.borderColor(box.horizontal);
+		const topFillWidth = Math.max(0, width - borderWidth * 2);
+		// Provider (lazy) wins over eager content — a host that installs both
+		// wants the coalesced path; falling back to eager keeps existing
+		// setTopBorder callers working unchanged.
+		const topBorder = borderVisible
+			? this.#topBorderProvider
+				? this.#topBorderProvider(topFillWidth)
+				: this.#topBorderContent
+			: undefined;
+		this.#topBorderLineCount = topBorder?.lines.length ?? 1;
 
 		// Layout the text
 		const layoutLines = this.#layoutText(layoutWidth);
@@ -841,11 +852,6 @@ export class Editor implements Component, Focusable {
 
 		if (borderVisible) {
 			// Render top border: ╭─ [status content] ────────────────╮
-			const topFillWidth = Math.max(0, width - borderWidth * 2);
-			// Provider (lazy) wins over eager content — a host that installs both
-			// wants the coalesced path; falling back to eager keeps existing
-			// setTopBorder callers working unchanged.
-			const topBorder = this.#topBorderProvider ? this.#topBorderProvider(topFillWidth) : this.#topBorderContent;
 			if (topBorder?.lines.length) {
 				for (let index = 0; index < topBorder.lines.length; index++) {
 					const line = topBorder.lines[index]!;

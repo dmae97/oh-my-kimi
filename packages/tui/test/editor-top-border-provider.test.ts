@@ -17,7 +17,7 @@
  * 4. Clearing the provider falls back to the eager slot.
  */
 import { describe, expect, it } from "bun:test";
-import { Editor, type EditorTopBorder } from "@oh-my-pi/pi-tui/components/editor";
+import { Editor, type EditorTopBorder } from "../src/components/editor";
 import { defaultEditorTheme } from "./test-themes";
 
 function stubTopBorder(label: string): EditorTopBorder {
@@ -93,7 +93,7 @@ describe("Editor lazy top-border provider (#4145)", () => {
 });
 
 describe("Editor top-border continuation lines", () => {
-	it("frames every status row without truncating later rows", () => {
+	it("frames every status row and stays within the height cap", () => {
 		const editor = new Editor(defaultEditorTheme);
 		editor.setTopBorder({
 			lines: [
@@ -101,11 +101,17 @@ describe("Editor top-border continuation lines", () => {
 				{ content: "CONTINUATION", width: 12 },
 			],
 		});
+		editor.setMaxHeight(4);
+		editor.setText("first\nsecond");
+		editor.focused = true;
+		editor.setUseTerminalCursor(true);
+		editor.setImeSafeCursorLayout(true);
 
 		const frame = editor.render(24);
 
 		expect(frame[0]).toContain("PRIMARY");
 		expect(frame[1]).toContain("CONTINUATION");
 		expect(frame[1]).toContain(defaultEditorTheme.symbols.boxRound.vertical);
+		expect(frame).toHaveLength(4);
 	});
 });
