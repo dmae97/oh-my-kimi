@@ -12,12 +12,18 @@
  * the same module identity as a direct `@oh-my-pi/pi-coding-agent` import.
  */
 
+import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import type { TSchema } from "@oh-my-pi/pi-ai";
+import { type AuthCredential, SqliteAuthCredentialStore, type TSchema } from "@oh-my-pi/pi-ai";
 import { Text } from "@oh-my-pi/pi-tui";
-import { getAgentDir, getProjectDir, parseFrontmatter as parseOmpFrontmatter } from "@oh-my-pi/pi-utils";
+import {
+	getAgentDbPath,
+	getAgentDir,
+	getProjectDir,
+	parseFrontmatter as parseOmpFrontmatter,
+} from "@oh-my-pi/pi-utils";
 import type { PromptTemplate } from "../config/prompt-templates";
 import { type SettingPath, Settings } from "../config/settings";
 import { EditTool } from "../edit";
@@ -1286,6 +1292,42 @@ export async function createAgentSession(
 	}
 
 	return ompCreateAgentSession(forwarded);
+}
+
+/**
+ * Synchronous auth storage surface retained for legacy extensions.
+ *
+ * Modern OMP auth storage is asynchronous, while older provider extensions
+ * call `AuthStorage.create().get()` during module initialization.
+ */
+export class AuthStorage {
+	static create(): AuthStorage {
+		return new AuthStorage();
+	}
+
+	get(provider: string): AuthCredential | undefined {
+		const store = new SqliteAuthCredentialStore(new Database(getAgentDbPath()));
+		try {
+			return store.listAuthCredentials(provider)[0]?.credential;
+		} finally {
+			store.close();
+		}
+	}
+
+	set(provider: string, credential: AuthCredential): void {
+		const store = new SqliteAuthCredentialStore(new Database(getAgentDbPath()));
+		try {
+			store.upsertAuthCredentialForProvider(provider, credential);
+		} finally {
+			store.close();
+		}
+	}
+}
+
+/** Read the first active credential for a legacy extension provider. */
+export function readStoredCredential(provider: string): AuthCredential | undefined {
+	const storage = AuthStorage.create();
+	return storage.get(provider);
 }
 
 export * from "../index";
