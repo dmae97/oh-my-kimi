@@ -31,7 +31,7 @@
 | `query` | string | No | Workspace symbol query, code-action selector/filter, or LSP method name for `action=request`. |
 | `new_name` | string | No | Required for `rename` and `rename_file`. |
 | `apply` | boolean | No | For `rename`/`rename_file`, apply unless explicitly `false`. For `code_actions`, list unless explicitly `true`. |
-| `timeout` | number | No | Seconds, clamped by `clampTimeout("lsp", ...)` to `5..60`, default `20`. |
+| `timeout` | number | No | Seconds, clamped by `clampTimeout("lsp", ...)` to `5..300`, default `20`. |
 | `payload` | string | No | JSON string for `action=request`; overrides auto-built params. |
 
 ## Outputs
@@ -268,7 +268,7 @@ Same as `definition`, but sends `textDocument/implementation` and reports `imple
   - Background message readers persist for each live client until process exit/shutdown.
 
 ## Limits & Caps
-- Tool timeout clamp: default `20`, min `5`, max `60` seconds — `TOOL_TIMEOUTS.lsp` in `packages/coding-agent/src/tools/tool-timeouts.ts`.
+- Tool timeout clamp: default `20`, min `5`, max `300` seconds — `TOOL_TIMEOUTS.lsp` in `packages/coding-agent/src/tools/tool-timeouts.ts`.
 - LSP request default timeout inside `sendRequest()`: `30_000ms` — `DEFAULT_REQUEST_TIMEOUT_MS` in `packages/coding-agent/src/lsp/client.ts`.
 - Warmup initialize timeout default: `5_000ms` — `WARMUP_TIMEOUT_MS` in `packages/coding-agent/src/lsp/client.ts`.
 - Project-load wait fallback: `15_000ms` — `PROJECT_LOAD_TIMEOUT_MS` in `packages/coding-agent/src/lsp/client.ts`.
