@@ -103,13 +103,13 @@ export interface UserMessageStats {
 	yelling: number;
 	/** Profanity hits */
 	profanity: number;
-	/** Catch-all upset signal: drama runs + `noooo`/`ughh`/... + `dude` + `..` */
+	/** Catch-all upset signal: drama runs + `noooo`/`ughh`/... + `dude` + `:(` */
 	anguish: number;
 	/** Corrective negation ("no", "nope", "thats not what i meant") */
 	negation: number;
 	/** User repeating themselves ("i meant", "still doesnt work", "like i said") */
 	repetition: number;
-	/** Second-person reproach ("you didnt", "you broke", "stop X-ing") */
+	/** Second-person reproach ("you didnt", "why did you", "stop X-ing") */
 	blame: number;
 }
 

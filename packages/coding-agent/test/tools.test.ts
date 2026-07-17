@@ -11,7 +11,6 @@ import { EditTool } from "@oh-my-pi/pi-coding-agent/edit";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
-import { JobTool } from "@oh-my-pi/pi-coding-agent/tools/job";
 import { wrapToolWithMetaNotice } from "@oh-my-pi/pi-coding-agent/tools/output-meta";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import * as toolTimeouts from "@oh-my-pi/pi-coding-agent/tools/tool-timeouts";
@@ -20,6 +19,7 @@ import { unzip } from "@oh-my-pi/pi-coding-agent/utils/zip";
 import { $which, removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import { GlobTool } from "../src/tools/glob";
 import { DEFAULT_FILE_LIMIT, GrepTool, MULTI_FILE_PER_FILE_MATCHES } from "../src/tools/grep";
+import { HubTool } from "../src/tools/hub";
 
 // Helper to extract text from content blocks
 function getTextOutput(result: any): string {
@@ -1328,10 +1328,10 @@ function b() {
 
 		it("should write truncated output to artifacts", async () => {
 			const result = await bashTool.execute("test-call-8-artifact", {
-				// A single line past the 768-byte column cap is the minimal output
-				// that trips truncation + artifact spill; the old 60K-arg brace
-				// expansion paid ~60ms of shell time to prove the same path.
-				command: "printf 'a%.0s' {1..2000}",
+				// Emit well past the ~50KB inline window across many lines so the
+				// output is genuinely window-truncated (not merely column-capped),
+				// which is what allocates the spill artifact.
+				command: "seq 1 30000",
 			});
 
 			const artifactId = result.details?.meta?.truncation?.artifactId;
@@ -1386,6 +1386,7 @@ function b() {
 
 		it("should auto-background long-running commands when enabled", async () => {
 			const deliveries: Array<{ jobId: string; text: string }> = [];
+			const updates: string[] = [];
 			const asyncJobManager = new AsyncJobManager({
 				onJobComplete: async (jobId, text) => {
 					deliveries.push({ jobId, text });
@@ -1407,13 +1408,20 @@ function b() {
 				),
 			);
 
-			const result = await autoBackgroundBashTool.execute("test-call-9-auto-running", {
-				command: "printf 'start\\n'; sleep 0.03; printf 'done\\n'",
-			});
+			const result = await autoBackgroundBashTool.execute(
+				"test-call-9-auto-running",
+				{
+					command: "printf 'start\\n'; sleep 0.03; printf 'done\\n'",
+				},
+				undefined,
+				update => {
+					updates.push(update.content?.find(block => block.type === "text")?.text ?? "");
+				},
+			);
 
 			expect(result.details?.async?.state).toBe("running");
 			expect(result.details?.async?.type).toBe("bash");
-			expect(getTextOutput(result)).toContain("Background job");
+			expect(getTextOutput(result)).toContain("Backgrounded as job");
 			expect(getTextOutput(result)).toContain("start");
 
 			const jobId = result.details?.async?.jobId;
@@ -1422,11 +1430,13 @@ function b() {
 			}
 			const runningJob = asyncJobManager.getJob(jobId);
 			expect(runningJob?.status).toBe("running");
+			const updatesAtBackground = updates.slice();
 			await runningJob?.promise;
 			await asyncJobManager.drainDeliveries({ timeoutMs: 1 });
 			expect(deliveries).toHaveLength(1);
 			expect(deliveries[0]?.jobId).toBe(jobId);
 			expect(deliveries[0]?.text).toContain("done");
+			expect(updates).toEqual(updatesAtBackground);
 			await asyncJobManager.dispose();
 		});
 
@@ -1467,7 +1477,7 @@ function b() {
 
 			expect(result.details?.timeoutSeconds).toBe(0.05);
 			expect(result.details?.async?.state).toBe("running");
-			expect(getTextOutput(result)).toContain("Background job");
+			expect(getTextOutput(result)).toContain("Backgrounded as job");
 			const jobId = result.details?.async?.jobId;
 			if (!jobId) {
 				throw new Error("expected an auto-backgrounded job id");
@@ -1490,6 +1500,21 @@ function b() {
 			expect(output).toContain("Timeout clamped to 3600s (requested 7200s; allowed range 1-3600s).");
 			expect(result.details?.timeoutSeconds).toBe(3600);
 			expect(result.details?.requestedTimeoutSeconds).toBe(7200);
+		});
+
+		it("should disable the command deadline when timeout is zero", async () => {
+			vi.spyOn(toolTimeouts, "clampTimeout").mockReturnValue(0.05);
+
+			const result = await bashTool.execute("test-call-timeout-disabled", {
+				command: "printf 'start\\n'; sleep 0.1; printf 'done\\n'",
+				timeout: 0,
+			});
+
+			const output = getTextOutput(result);
+			expect(output).toContain("start");
+			expect(output).toContain("done");
+			expect(result.details?.timeoutDisabled).toBe(true);
+			expect(result.details?.timeoutSeconds).toBeUndefined();
 		});
 
 		it("should respect timeout", async () => {
@@ -1551,7 +1576,7 @@ function b() {
 		});
 	});
 
-	describe("JobTool", () => {
+	describe("HubTool", () => {
 		it("should wait for jobs and acknowledge deliveries to prevent race conditions", async () => {
 			const manager = new AsyncJobManager({
 				onJobComplete: async () => {},
@@ -1559,12 +1584,12 @@ function b() {
 			const session = createTestToolSession(testDir, Settings.isolated({ "bash.autoBackground.enabled": true }), {
 				asyncJobManager: manager,
 			});
-			const jobTool = new JobTool(session);
+			const jobTool = new HubTool(session);
 
 			const jobId = manager.register("bash", "test job", async () => "success");
 
 			// Job is running, call poll
-			const resultPromise = jobTool.execute("test-call-poll-1", { poll: [jobId] });
+			const resultPromise = jobTool.execute("test-call-poll-1", { op: "wait", ids: [jobId] });
 
 			// Ensure poll finished
 			const result = await resultPromise;
@@ -1584,35 +1609,35 @@ function b() {
 			const session = createTestToolSession(testDir, Settings.isolated({ "bash.autoBackground.enabled": true }), {
 				asyncJobManager: manager,
 			});
-			const jobTool = new JobTool(session);
+			const jobTool = new HubTool(session);
 			const gate = Promise.withResolvers<string>();
 			const jobId = manager.register("bash", "long job", () => gate.promise);
 
 			// Poll cut short while the job is still running: a pure "still
 			// waiting" snapshot carries no information once consumed.
 			const controller = new AbortController();
-			const pollPromise = jobTool.execute("test-call-useless-poll", { poll: [jobId] }, controller.signal);
+			const pollPromise = jobTool.execute("test-call-useless-poll", { op: "wait", ids: [jobId] }, controller.signal);
 			controller.abort();
 			const polled = await pollPromise;
 			expect(polled.useless).toBe(true);
 
 			// A list snapshot showing only running jobs is equally uneventful.
-			const listed = await jobTool.execute("test-call-useless-list", { list: true });
+			const listed = await jobTool.execute("test-call-useless-list", { op: "jobs" });
 			expect(listed.useless).toBe(true);
 
 			// Once the job settles, the result is informative — flag absent.
 			gate.resolve("done");
-			const settled = await jobTool.execute("test-call-useless-settled", { poll: [jobId] });
+			const settled = await jobTool.execute("test-call-useless-settled", { op: "wait", ids: [jobId] });
 			expect(getTextOutput(settled)).toContain("Completed");
 			expect(settled.useless).toBeUndefined();
 
 			// Nothing left to wait for: noise once consumed.
-			const idle = await jobTool.execute("test-call-useless-idle", {});
+			const idle = await jobTool.execute("test-call-useless-idle", { op: "wait" });
 			expect(getTextOutput(idle)).toContain("No running background jobs");
 			expect(idle.useless).toBe(true);
 
 			// A poll naming unknown ids found nothing — equally uneventful.
-			const missing = await jobTool.execute("test-call-useless-missing", { poll: ["no-such-job"] });
+			const missing = await jobTool.execute("test-call-useless-missing", { op: "wait", ids: ["no-such-job"] });
 			expect(getTextOutput(missing)).toContain("No matching jobs found");
 			expect(missing.useless).toBe(true);
 		});

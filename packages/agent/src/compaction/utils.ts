@@ -4,7 +4,7 @@
 
 import type { Message, ToolCall } from "@oh-my-pi/pi-ai";
 import { type Dialect, getDialectDefinition } from "@oh-my-pi/pi-ai/dialect";
-import { formatGroupedPaths, prompt } from "@oh-my-pi/pi-utils";
+import { formatGroupedPaths, prompt, stringifyJson } from "@oh-my-pi/pi-utils";
 import type { AgentMessage } from "../types";
 import fileOperationsTemplate from "./prompts/file-operations.md" with { type: "text" };
 import summarizationSystemPrompt from "./prompts/summarization-system.md" with { type: "text" };
@@ -207,9 +207,19 @@ export function truncateToolResultForSummary(text: string): string {
 	return `${text.slice(0, TOOL_RESULT_MAX_CHARS)}\n\n[... ${truncatedChars} more characters truncated]`;
 }
 
+const HARMONY_CONTROL_TOKEN_RE = /<\|(start|end|message|channel|constrain|return|call)\|>/g;
+
 /**
- * Serialize LLM messages to text for summarization.
- * This prevents the model from treating it as a conversation to continue.
+ * Serialize LLM messages as plain summary input without provider control tokens.
+ */
+export function serializeConversationForSummary(messages: Message[], dialect?: Dialect): string {
+	const conversation = serializeConversation(messages, dialect);
+	if (dialect !== "harmony") return conversation;
+	return conversation.replace(HARMONY_CONTROL_TOKEN_RE, "<\\|$1\\|>");
+}
+
+/**
+ * Serialize LLM messages to transcript text.
  * Call convertToLlm() first to handle custom message types.
  */
 export function serializeConversation(messages: Message[], dialect?: Dialect): string {
@@ -309,7 +319,7 @@ function renderToolCalls(calls: ToolCall[]): string {
 	return calls
 		.map(call => {
 			const argsStr = Object.entries(call.arguments as Record<string, unknown>)
-				.map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+				.map(([k, v]) => `${k}=${stringifyJson(v) ?? "null"}`)
 				.join(", ");
 			return `${call.name}(${argsStr})`;
 		})

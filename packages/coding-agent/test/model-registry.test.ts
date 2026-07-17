@@ -268,6 +268,8 @@ describe("ModelRegistry", () => {
 		let anthropicHeadersOnly: ModelRegistry;
 		let anthropicAuthHeader: ModelRegistry;
 		let mixGoogleCustom: ModelRegistry;
+		let xaiModelScopedHeaders: ModelRegistry;
+		let otherXaiModelId: string;
 		beforeAll(() => {
 			anthropicProxy = readonlyRegistry({
 				providers: { anthropic: overrideConfig("https://my-proxy.example.com/v1") },
@@ -297,6 +299,21 @@ describe("ModelRegistry", () => {
 						[{ id: "gemini-custom" }],
 						"google-generative-ai",
 					),
+				},
+			});
+			const otherXaiModel = sharedBuiltin
+				.getAll()
+				.find(model => model.provider === "xai" && model.id !== "grok-4.3");
+			if (!otherXaiModel) throw new Error("Expected another bundled xAI model");
+			otherXaiModelId = otherXaiModel.id;
+			xaiModelScopedHeaders = readonlyRegistry({
+				providers: {
+					xai: {
+						headers: { "X-Provider-Tenant": "search-tenant" },
+						modelOverrides: {
+							[otherXaiModelId]: { headers: { "X-Model-Tenant": "other-model-tenant" } },
+						},
+					},
 				},
 			});
 		});
@@ -329,6 +346,15 @@ describe("ModelRegistry", () => {
 			for (const model of anthropicModels) {
 				expect(model.headers?.["X-Custom-Header"]).toBe("custom-only");
 			}
+		});
+
+		test("provider header lookup excludes unrelated model overrides", () => {
+			expect(xaiModelScopedHeaders.find("xai", otherXaiModelId)?.headers?.["X-Model-Tenant"]).toBe(
+				"other-model-tenant",
+			);
+			expect({ ...xaiModelScopedHeaders.getProviderHeaders("xai") }).toEqual({
+				"X-Provider-Tenant": "search-tenant",
+			});
 		});
 
 		test("authHeader override applies bearer auth to built-in models without custom models", () => {
@@ -511,6 +537,7 @@ describe("ModelRegistry", () => {
 		let customCompat: ModelRegistry;
 		let customModelCompat: ModelRegistry;
 		let customResponsesCompat: ModelRegistry;
+		let customAnthropicCompat: ModelRegistry;
 		beforeAll(() => {
 			providerCompat = readonlyRegistry({
 				providers: {
@@ -544,6 +571,28 @@ describe("ModelRegistry", () => {
 								cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 								contextWindow: 1000,
 								maxTokens: 100,
+							},
+						],
+					},
+				},
+			});
+			customAnthropicCompat = readonlyRegistry({
+				providers: {
+					"anthropic-proxy": {
+						baseUrl: "https://example.com/v1/messages",
+						apiKey: "ANTHROPIC_PROXY_KEY",
+						api: "anthropic-messages",
+						compat: {
+							supportsEagerToolInputStreaming: true,
+						},
+						models: [
+							{
+								id: "claude-haiku-4.5",
+								reasoning: false,
+								input: ["text"],
+								cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+								contextWindow: 200_000,
+								maxTokens: 8_192,
 							},
 						],
 					},
@@ -632,6 +681,11 @@ describe("ModelRegistry", () => {
 			expect(compat?.supportsUsageInStreaming).toBe(false);
 			expect(compat?.maxTokensField).toBe("max_tokens");
 			expect(compat?.cacheControlFormat).toBe("anthropic");
+		});
+
+		test("custom Anthropic providers can opt into eager tool input streaming", () => {
+			const model = customAnthropicCompat.find("anthropic-proxy", "claude-haiku-4.5");
+			expect(model?.compat).toMatchObject({ supportsEagerToolInputStreaming: true });
 		});
 
 		test("custom Responses providers can disable original image detail", () => {
@@ -1095,14 +1149,11 @@ describe("ModelRegistry", () => {
 			});
 		});
 
-		test("custom models preserve explicit thinking and gain backfilled wire facts", () => {
+		test("custom models preserve explicit thinking verbatim", () => {
 			const model = getModelsForProvider(thinkingCustom, "anthropic").find(m => m.id === "claude-custom");
-			expect(model?.thinking).toEqual({
-				...customThinking,
-				// Versionless claude ids resolve to the 4-tier adaptive wire map,
-				// filtered to the declared efforts (no xhigh).
-				effortMap: { minimal: "low" },
-			});
+			// Adaptive effort ladders are wire-exact — explicit thinking passes
+			// through without a backfilled effortMap.
+			expect(model?.thinking).toEqual(customThinking);
 		});
 
 		test("model overrides can replace canonical thinking metadata", () => {

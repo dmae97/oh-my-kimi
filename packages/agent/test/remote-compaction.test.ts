@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import {
 	type CompactionPreparation,
 	compact,
@@ -13,14 +13,41 @@ import {
 	getCompactionV2PreserveData,
 	requestCompactionV2Streaming,
 	requestOpenAiRemoteCompaction,
+	requestRemoteCompaction,
 	shouldUseCompactionV2Streaming,
 	shouldUseOpenAiRemoteCompaction,
 } from "@oh-my-pi/pi-agent-core/compaction/openai";
 import * as ai from "@oh-my-pi/pi-ai";
-import type { AssistantMessage, FetchImpl, Model, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
+import { getOpenAICodexTransportDetails } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
+import type {
+	AssistantMessage,
+	CodexCompactionContext,
+	FetchImpl,
+	Model,
+	ProviderSessionState,
+	ToolResultMessage,
+} from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
-import { isRecord } from "@oh-my-pi/pi-utils";
+import * as piUtils from "@oh-my-pi/pi-utils";
+
+const { isRecord } = piUtils;
+const TEST_INSTALLATION_ID = "00000000-0000-4000-8000-000000000001";
+const TEST_CODEX_COMPACTION: CodexCompactionContext = {
+	operationId: "compaction-operation-1",
+	trigger: "auto",
+	reason: "context_limit",
+	phase: "pre_turn",
+	strategy: "memento",
+};
+
+beforeEach(() => {
+	vi.spyOn(piUtils, "getInstallId").mockReturnValue(TEST_INSTALLATION_ID);
+});
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
 function makeOpenAiModel(overrides: Partial<ModelSpec<"openai-responses">> = {}): Model<"openai-responses"> {
 	return buildModel({
@@ -150,6 +177,38 @@ describe("buildOpenAiNativeHistory custom tool calls", () => {
 		const items = buildOpenAiNativeHistory([assistant], makeOpenAiModel());
 		expect(items.find(item => item.type === "function_call")).toBeDefined();
 		expect(items.find(item => item.type === "custom_tool_call")).toBeUndefined();
+	});
+
+	test("preserves bigint tool arguments as exact decimal strings", () => {
+		const assistant: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{
+					type: "toolCall",
+					id: "call_lookup_1|fc_lookup_1",
+					name: "lookup",
+					arguments: { rowId: 9_007_199_254_740_993n },
+				},
+			],
+			timestamp: Date.now(),
+			provider: "openai",
+			model: "gpt-5",
+			api: "openai-responses",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+		};
+
+		const items = buildOpenAiNativeHistory([assistant], makeOpenAiModel());
+		const call = items.find(item => item.type === "function_call");
+
+		expect(call?.arguments).toBe('{"rowId":"9007199254740993"}');
 	});
 });
 
@@ -392,6 +451,400 @@ describe("requestCompactionV2Streaming", () => {
 	});
 });
 
+describe("Responses Lite remote compaction", () => {
+	function makeCodexLiteModel(
+		overrides: Partial<ModelSpec<"openai-codex-responses">> = {},
+	): Model<"openai-codex-responses"> {
+		return buildModel({
+			id: "gpt-5.6-terra",
+			name: "GPT-5.6 Terra",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.example/backend-api",
+			reasoning: true,
+			preferWebsockets: false,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 372000,
+			maxTokens: 128000,
+			useResponsesLite: true,
+			remoteCompaction: { enabled: true, api: "openai-codex-responses", v2StreamingEnabled: true },
+			...overrides,
+		});
+	}
+
+	interface CapturedLiteRequest {
+		instructions?: unknown;
+		tools?: unknown;
+		input?: Array<Record<string, unknown>>;
+		client_metadata?: unknown;
+		reasoning?: Record<string, unknown>;
+		include?: string[];
+	}
+
+	interface CapturedLiteExchange {
+		body: CapturedLiteRequest;
+		headers: Headers;
+	}
+
+	function parseCodexTurnMetadata(value: unknown): Record<string, unknown> {
+		if (typeof value !== "string") throw new Error("expected x-codex-turn-metadata");
+		const parsed: unknown = JSON.parse(value);
+		if (!isRecord(parsed)) throw new Error("expected Codex turn metadata object");
+		return parsed;
+	}
+
+	function captureLite(init: RequestInit | undefined): CapturedLiteExchange {
+		if (!init?.headers || init.headers instanceof Headers || Array.isArray(init.headers)) {
+			throw new Error("Expected remote compaction to send headers as a plain object");
+		}
+		return {
+			body: JSON.parse(String(init.body)) as CapturedLiteRequest,
+			headers: new Headers(init.headers),
+		};
+	}
+
+	function captureStreamLite(init: RequestInit | undefined): CapturedLiteExchange {
+		if (!init?.headers) throw new Error("Expected local compaction request headers");
+		return {
+			body: JSON.parse(String(init.body)) as CapturedLiteRequest,
+			headers: new Headers(init.headers),
+		};
+	}
+
+	test("V1 compaction sends the lite header and input-item instructions", async () => {
+		const model = makeCodexLiteModel();
+		let captured: CapturedLiteExchange | undefined;
+		const fetchMock: FetchImpl = async (_input, init) => {
+			captured = captureLite(init);
+			return Response.json({ output: [{ type: "compaction", encrypted_content: "enc" }] });
+		};
+
+		await requestOpenAiRemoteCompaction(
+			model,
+			"test-key",
+			[{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+			"compact instructions",
+			undefined,
+			{
+				fetch: fetchMock,
+				sessionId: "codex-compaction-session",
+				providerSessionState: new Map<string, ProviderSessionState>(),
+				codexCompaction: TEST_CODEX_COMPACTION,
+			},
+		);
+
+		expect(captured?.headers.get("x-openai-internal-codex-responses-lite")).toBe("true");
+		expect(captured?.body.reasoning).toEqual({ context: "all_turns" });
+		expect(captured?.body.include).toEqual(["reasoning.encrypted_content"]);
+		expect(captured?.body.instructions).toBeUndefined();
+		expect(captured?.body.client_metadata).toBeUndefined();
+		expect(captured?.headers.get("x-codex-installation-id")).toBe(TEST_INSTALLATION_ID);
+		expect(captured?.headers.get("session-id")).toBe("codex-compaction-session");
+		const v1TurnMetadata = parseCodexTurnMetadata(captured?.headers.get("x-codex-turn-metadata"));
+		expect(v1TurnMetadata.request_kind).toBe("compaction");
+		expect(v1TurnMetadata.compaction).toEqual({
+			trigger: "auto",
+			reason: "context_limit",
+			implementation: "responses_compact",
+			phase: "pre_turn",
+			strategy: "memento",
+		});
+		expect(captured?.body.input?.[0]).toEqual({ type: "additional_tools", role: "developer", tools: [] });
+		expect(captured?.body.input?.[1]).toEqual({
+			type: "message",
+			role: "developer",
+			content: [{ type: "input_text", text: "compact instructions" }],
+		});
+	});
+
+	test("V2 streaming compaction applies the lite rewrite and keeps the trigger last", async () => {
+		const model = makeCodexLiteModel();
+		const request = buildCompactionV2Request(
+			model,
+			[{ type: "message", role: "user", content: [{ type: "input_text", text: "real user" }] }],
+			"compact instructions",
+			{ sessionId: "codex-compaction-session" },
+		);
+		let captured: CapturedLiteExchange | undefined;
+		const fetchMock: FetchImpl = async (_input, init) => {
+			captured = captureLite(init);
+			return sseResponse([
+				{
+					type: "response.output_item.done",
+					output_index: 0,
+					item: { type: "compaction", encrypted_content: "enc" },
+				},
+				{ type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } },
+			]);
+		};
+
+		expect(shouldUseCompactionV2Streaming(model)).toBe(true);
+		await requestCompactionV2Streaming(model, "test-key", request, undefined, {
+			fetch: fetchMock,
+			providerSessionState: new Map<string, ProviderSessionState>(),
+			codexCompaction: TEST_CODEX_COMPACTION,
+		});
+
+		expect(captured?.headers.get("x-openai-internal-codex-responses-lite")).toBe("true");
+		expect(captured?.body.reasoning).toEqual({ context: "all_turns" });
+		expect(captured?.body.include).toEqual(["reasoning.encrypted_content"]);
+		expect(captured?.body.instructions).toBeUndefined();
+		if (!isRecord(captured?.body.client_metadata)) throw new Error("expected V2 client_metadata");
+		const v2ClientMetadata = captured.body.client_metadata;
+		const v2TurnMetadata = parseCodexTurnMetadata(v2ClientMetadata["x-codex-turn-metadata"]);
+		expect(captured.headers.get("x-codex-installation-id")).toBeNull();
+		expect(v2ClientMetadata["x-codex-installation-id"]).toBe(TEST_INSTALLATION_ID);
+		expect(v2ClientMetadata.session_id).toBe(captured.headers.get("session-id"));
+		expect(v2ClientMetadata.thread_id).toBe(captured.headers.get("thread-id"));
+		expect(v2TurnMetadata.request_kind).toBe("compaction");
+		expect(v2TurnMetadata.compaction).toEqual({
+			trigger: "auto",
+			reason: "context_limit",
+			implementation: "responses_compaction_v2",
+			phase: "pre_turn",
+			strategy: "memento",
+		});
+		expect(captured?.body.input?.[0]).toEqual({ type: "additional_tools", role: "developer", tools: [] });
+		expect(captured?.body.input?.[1]).toEqual({
+			type: "message",
+			role: "developer",
+			content: [{ type: "input_text", text: "compact instructions" }],
+		});
+		expect(captured?.body.input?.at(-1)).toEqual({ type: "compaction_trigger" });
+	});
+
+	test("compact fan-out keeps local Codex summaries on one classified turn", async () => {
+		const model = makeCodexLiteModel();
+		const captured: CapturedLiteExchange[] = [];
+		const fetchMock: FetchImpl = async (_input, init) => {
+			captured.push(captureStreamLite(init));
+			return sseResponse([
+				{
+					type: "response.output_item.added",
+					output_index: 0,
+					item: { type: "message", id: "msg_summary", role: "assistant", status: "in_progress", content: [] },
+				},
+				{
+					type: "response.content_part.added",
+					output_index: 0,
+					content_index: 0,
+					part: { type: "output_text", text: "" },
+				},
+				{ type: "response.output_text.delta", output_index: 0, content_index: 0, delta: "local summary" },
+				{
+					type: "response.output_item.done",
+					output_index: 0,
+					item: {
+						type: "message",
+						id: "msg_summary",
+						role: "assistant",
+						status: "completed",
+						content: [{ type: "output_text", text: "local summary" }],
+					},
+				},
+				{
+					type: "response.completed",
+					response: {
+						status: "completed",
+						usage: {
+							input_tokens: 8,
+							output_tokens: 2,
+							total_tokens: 10,
+							input_tokens_details: { cached_tokens: 0 },
+						},
+					},
+				},
+			]);
+		};
+		const preparation: CompactionPreparation = {
+			firstKeptEntryId: "kept-1",
+			messagesToSummarize: [{ role: "user", content: "long history", timestamp: 1 }],
+			turnPrefixMessages: [],
+			recentMessages: [{ role: "user", content: "recent", timestamp: 2 }],
+			isSplitTurn: false,
+			tokensBefore: 100_000,
+			fileOps: createFileOps(),
+			settings: {
+				...DEFAULT_COMPACTION_SETTINGS,
+				remoteEnabled: false,
+				remoteStreamingV2Enabled: false,
+			},
+		};
+
+		const result = await compact(preparation, model, "test-key", undefined, undefined, {
+			fetch: fetchMock,
+			sessionId: "codex-compaction-session",
+			providerSessionState: new Map<string, ProviderSessionState>(),
+			codexCompaction: TEST_CODEX_COMPACTION,
+		});
+
+		expect(result.summary).toContain("local summary");
+		expect(captured).toHaveLength(2);
+		const turnIds: string[] = [];
+		for (const exchange of captured) {
+			if (!isRecord(exchange.body.client_metadata)) throw new Error("expected local client_metadata");
+			const clientMetadata = exchange.body.client_metadata;
+			const turnMetadata = parseCodexTurnMetadata(clientMetadata["x-codex-turn-metadata"]);
+			expect(exchange.headers.get("x-codex-installation-id")).toBeNull();
+			expect(clientMetadata["x-codex-installation-id"]).toBe(TEST_INSTALLATION_ID);
+			expect(turnMetadata.request_kind).toBe("compaction");
+			expect(turnMetadata.compaction).toEqual({
+				trigger: "auto",
+				reason: "context_limit",
+				implementation: "responses",
+				phase: "pre_turn",
+				strategy: "memento",
+			});
+			if (typeof turnMetadata.turn_id !== "string") throw new Error("expected Codex turn id");
+			turnIds.push(turnMetadata.turn_id);
+		}
+		expect(new Set(turnIds).size).toBe(1);
+	});
+
+	test("local Codex compaction isolates and closes transient websocket sessions", async () => {
+		const originalWebSocket = global.WebSocket;
+		const sockets: AgentCompactionWebSocket[] = [];
+		let responseCount = 0;
+
+		class AgentCompactionWebSocket {
+			static readonly CONNECTING = 0;
+			static readonly OPEN = 1;
+			static readonly CLOSING = 2;
+			static readonly CLOSED = 3;
+
+			readyState = AgentCompactionWebSocket.CONNECTING;
+			binaryType: "blob" | "arraybuffer" | "nodebuffer" = "blob";
+			onopen: ((event: Event) => void) | null = null;
+			onmessage: ((event: MessageEvent) => void) | null = null;
+			onerror: ((event: Event) => void) | null = null;
+			onclose: ((event: Event) => void) | null = null;
+			readonly handshakeHeaders = {
+				"x-codex-turn-state": `agent-compaction-state-${sockets.length}`,
+			};
+
+			constructor(
+				readonly url: string,
+				readonly options?: { headers?: Record<string, string> },
+			) {
+				sockets.push(this);
+				queueMicrotask(() => {
+					this.readyState = AgentCompactionWebSocket.OPEN;
+					this.onopen?.(new Event("open"));
+				});
+			}
+
+			send(_data: string): void {
+				responseCount += 1;
+				const responseId = `response-${responseCount}`;
+				const messageId = `message-${responseCount}`;
+				const text = sockets[0] === this ? "main response" : "local summary";
+				const events: Record<string, unknown>[] = [
+					{
+						type: "response.output_item.added",
+						item: { type: "message", id: messageId, role: "assistant", status: "in_progress", content: [] },
+					},
+					{ type: "response.content_part.added", part: { type: "output_text", text: "" } },
+					{ type: "response.output_text.delta", delta: text },
+					{
+						type: "response.output_item.done",
+						item: {
+							type: "message",
+							id: messageId,
+							role: "assistant",
+							status: "completed",
+							content: [{ type: "output_text", text }],
+						},
+					},
+					{
+						type: "response.done",
+						response: {
+							id: responseId,
+							status: "completed",
+							usage: {
+								input_tokens: 8,
+								output_tokens: 2,
+								total_tokens: 10,
+								input_tokens_details: { cached_tokens: 0 },
+							},
+						},
+					},
+				];
+				for (const event of events) {
+					this.onmessage?.({ data: JSON.stringify(event) } as MessageEvent);
+				}
+			}
+
+			close(): void {
+				this.readyState = AgentCompactionWebSocket.CLOSED;
+			}
+		}
+
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		try {
+			global.WebSocket = AgentCompactionWebSocket as unknown as typeof WebSocket;
+			const model = makeCodexLiteModel({ preferWebsockets: true });
+			const sessionId = "agent-compaction-isolation";
+			const fetchMock: FetchImpl = async () => {
+				throw new Error("Codex websocket compaction unexpectedly used SSE");
+			};
+			const main = await ai
+				.streamSimple(
+					model,
+					{
+						systemPrompt: ["You are a helpful assistant."],
+						messages: [{ role: "user", content: "Start the turn", timestamp: Date.now() }],
+					},
+					{ apiKey: "test-key", fetch: fetchMock, sessionId, providerSessionState },
+				)
+				.result();
+			expect(main.stopReason).toBe("stop");
+			expect(sockets).toHaveLength(1);
+			expect(sockets[0]?.readyState).toBe(AgentCompactionWebSocket.OPEN);
+
+			const preparation: CompactionPreparation = {
+				firstKeptEntryId: "kept-1",
+				messagesToSummarize: [{ role: "user", content: "long history", timestamp: 1 }],
+				turnPrefixMessages: [],
+				recentMessages: [{ role: "user", content: "recent", timestamp: 2 }],
+				isSplitTurn: false,
+				tokensBefore: 100_000,
+				fileOps: createFileOps(),
+				settings: {
+					...DEFAULT_COMPACTION_SETTINGS,
+					remoteEnabled: false,
+					remoteStreamingV2Enabled: false,
+				},
+			};
+			const result = await compact(preparation, model, "test-key", undefined, undefined, {
+				fetch: fetchMock,
+				sessionId,
+				providerSessionState,
+				codexCompaction: TEST_CODEX_COMPACTION,
+			});
+
+			expect(result.summary).toContain("local summary");
+			expect(sockets).toHaveLength(3);
+			expect(sockets[0]?.readyState).toBe(AgentCompactionWebSocket.OPEN);
+			expect(sockets[1]?.readyState).toBe(AgentCompactionWebSocket.CLOSED);
+			expect(sockets[2]?.readyState).toBe(AgentCompactionWebSocket.CLOSED);
+			expect(
+				getOpenAICodexTransportDetails(model, {
+					sessionId,
+					providerSessionState,
+				}),
+			).toMatchObject({
+				websocketConnected: true,
+				hasTurnState: true,
+			});
+		} finally {
+			for (const state of providerSessionState.values()) state.close();
+			providerSessionState.clear();
+			global.WebSocket = originalWebSocket;
+		}
+	});
+});
+
 test("uses configured OpenAI-compatible compaction for custom providers", async () => {
 	const model = makeOpenAiModel({
 		provider: "cliproxy-codex",
@@ -537,6 +990,76 @@ describe("requestOpenAiRemoteCompaction timeout", () => {
 				{ fetch: fetchMock, timeoutMs: 20 },
 			),
 		).rejects.toMatchObject({ name: "TimeoutError" });
+	});
+});
+
+describe("requestRemoteCompaction wire formats", () => {
+	test("uses OpenAI chat completions format for /chat/completions endpoints", async () => {
+		const model = buildModel({
+			id: "catalog-selection-id",
+			name: "Qwopus 3.6 35B-A3B Coder",
+			requestModelId: "provider-wire-id",
+			remoteCompaction: { model: "provider-compact-wire-id" },
+			api: "openai-completions",
+			provider: "local-llama",
+			baseUrl: "http://127.0.0.1:8001/v1",
+			headers: { "x-local-llama": "1" },
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 131072,
+			maxTokens: 4096,
+		});
+		let sentBody: unknown;
+		const fetchMock: FetchImpl = async (_input, init) => {
+			if (typeof init?.body !== "string") throw new Error("missing remote compaction request body");
+			sentBody = JSON.parse(init.body) as unknown;
+			const headers = new Headers(init.headers);
+			expect(headers.get("authorization")).toBe("Bearer local-key");
+			expect(headers.get("x-local-llama")).toBe("1");
+			return new Response(JSON.stringify({ choices: [{ message: { content: "remote summary" } }] }), {
+				headers: { "content-type": "application/json" },
+			});
+		};
+
+		const result = await requestRemoteCompaction(
+			"http://127.0.0.1:8001/v1/chat/completions",
+			{ systemPrompt: "summarize", prompt: "<conversation>hello</conversation>" },
+			undefined,
+			{ fetch: fetchMock, model, apiKey: "local-key" },
+		);
+
+		expect(result).toEqual({ summary: "remote summary" });
+		expect(sentBody).toEqual({
+			model: "provider-compact-wire-id",
+			messages: [
+				{ role: "system", content: "summarize" },
+				{ role: "user", content: "<conversation>hello</conversation>" },
+			],
+			stream: false,
+		});
+	});
+
+	test("keeps the generic omp summarizer format for other endpoints", async () => {
+		let sentBody: unknown;
+		const fetchMock: FetchImpl = async (_input, init) => {
+			if (typeof init?.body !== "string") throw new Error("missing remote compaction request body");
+			sentBody = JSON.parse(init.body) as unknown;
+			expect(new Headers(init.headers).get("authorization")).toBeNull();
+			return new Response(JSON.stringify({ summary: "generic summary", shortSummary: "generic" }), {
+				headers: { "content-type": "application/json" },
+			});
+		};
+
+		const result = await requestRemoteCompaction(
+			"https://compaction.example.test/summarize",
+			{ systemPrompt: "summarize", prompt: "<conversation>hello</conversation>" },
+			undefined,
+			{ fetch: fetchMock, apiKey: "unused-for-generic" },
+		);
+
+		expect(result).toEqual({ summary: "generic summary", shortSummary: "generic" });
+		expect(sentBody).toEqual({ systemPrompt: "summarize", prompt: "<conversation>hello</conversation>" });
 	});
 });
 
@@ -769,6 +1292,53 @@ describe("compact() remote compaction failure handling", () => {
 			}),
 		).rejects.toThrow();
 		expect(completeSpy).not.toHaveBeenCalled();
+	});
+
+	test("uses configured chat completions endpoints for openai-completions remote compaction", async () => {
+		const completeSpy = vi.spyOn(ai, "completeSimple").mockResolvedValue(localSummaryMessage("local fallback"));
+		const preparation = makePreparation();
+		preparation.settings = {
+			...preparation.settings,
+			remoteEndpoint: "http://127.0.0.1:8001/v1/chat/completions",
+			remoteStreamingV2Enabled: false,
+		};
+		const model = buildModel({
+			id: "catalog-selection-id",
+			name: "Qwopus 3.6 35B-A3B Coder",
+			requestModelId: "provider-wire-id",
+			api: "openai-completions",
+			provider: "local-llama",
+			baseUrl: "http://127.0.0.1:8001/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 131072,
+			maxTokens: 4096,
+		});
+		const requestBodies: unknown[] = [];
+		const fetchMock: FetchImpl = async (_input, init) => {
+			if (typeof init?.body !== "string") throw new Error("missing remote compaction request body");
+			requestBodies.push(JSON.parse(init.body) as unknown);
+			expect(new Headers(init.headers).get("authorization")).toBe("Bearer local-key");
+			const summary = requestBodies.length === 1 ? "remote history summary" : "remote short summary";
+			return new Response(JSON.stringify({ choices: [{ message: { content: summary } }] }), {
+				headers: { "content-type": "application/json" },
+			});
+		};
+
+		const result = await compact(preparation, model, "local-key", undefined, undefined, {
+			fetch: fetchMock,
+		});
+
+		expect(result.summary).toContain("remote history summary");
+		expect(result.shortSummary).toBe("remote short summary");
+		expect(completeSpy).not.toHaveBeenCalled();
+		expect(requestBodies).toHaveLength(2);
+		expect(requestBodies[0]).toMatchObject({
+			model: "provider-wire-id",
+			messages: [{ role: "system" }, { role: "user", content: expect.stringContaining("long history") }],
+			stream: false,
+		});
 	});
 
 	test("remote compact server failure without abort still falls back to local summarization", async () => {

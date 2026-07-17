@@ -14,6 +14,9 @@ export interface UserMessageMetrics {
 	 * Number of "yelling" sentences: sentences where more than half of the
 	 * alphabetic characters are uppercase (and there are enough letters to
 	 * make the ratio meaningful - short acronyms like "OK" don't count).
+	 * A sentence also needs either two uppercase runs ("WHAT THE HELL") or
+	 * one elongated run ("CMOOON") so a lone acronym/env var ("use JSON",
+	 * "HOME=/tmp") doesn't register.
 	 */
 	yelling: number;
 	/** Profanity hits (word-boundary, case-insensitive). */
@@ -26,11 +29,11 @@ export interface UserMessageMetrics {
 	 *
 	 * Sum of:
 	 * - drama runs: 3+ `!` / `?` (with `1`-mishit fallout)
-	 * - elongated interjections: `noooo`, `ahhhh`, `ughhh`, `argh`, `stooop`,
-	 *   `whyyy`, `fuuu(ck)`, `shiiit`, `wtfff`, `omggg`, `yessss`, `helpp`,
-	 *   `goddd`, `dammm`, `bruhh`
+	 * - interjections, elongated where the short form is ambiguous:
+	 *   `noooo`, `ahhh`, `ugh(h)`, `argh`, `grr`, `stooop`, `whyyy`,
+	 *   `fuuu(ck)`, `wtfff`, `omggg`, `yesss`, `goddd`, `bruhh`
 	 * - standalone `dude`
-	 * - dot runs: `..`, `...`, `....+`
+	 * - sad emoticons: `:(`, `;(`, `:-(((`
 	 */
 	anguish: number;
 	/**
@@ -38,9 +41,14 @@ export interface UserMessageMetrics {
 	 *
 	 * Counted on the same prose-only body as {@link anguish}.
 	 *
-	 * - line-leading `no` / `nope` / `nah` / `nvm` / `wrong` / `incorrect`
+	 * - line-leading `nope` / `nah` / `nvm` / `wrong` / `incorrect`
 	 *   (word-bounded, so `now`, `nobody`, `north` don't match)
+	 * - line-leading `no` when used as an interjection - followed by
+	 *   punctuation, end-of-text, or a discourse word (`no i meant`,
+	 *   `no, wait`). Determiner `no` (`no extensions to the page`,
+	 *   `no auto start`) doesn't count.
 	 * - `that(?:'s)? not (what|right|it)` and `not what i (meant|asked|said|wanted)`
+	 * - `makes (no|zero) sense`
 	 */
 	negation: number;
 	/**
@@ -59,6 +67,7 @@ export interface UserMessageMetrics {
 	 * Direct second-person reproach pinned on the agent:
 	 *
 	 * - `you (didn't|did not|broke|missed|forgot|keep|always|never|still|ignored)`
+	 * - `why (would|did) (you|u)`
 	 * - sentence-leading `stop <verb>ing` imperatives
 	 */
 	blame: number;
@@ -69,9 +78,13 @@ export interface UserMessageMetrics {
  *
  * Broad English coverage: f-/s-word families and their censored variants,
  * mild swears, intelligence-based insults, body-part insults, British/
- * Australian/Irish slang, religious exclamations, chat acronyms, and
- * frustration interjections. Curated to exclude racial, homophobic, and
- * other identity slurs.
+ * Australian/Irish slang, religious exclamations, and chat acronyms.
+ * Curated to exclude racial, homophobic, and other identity slurs, and
+ * words whose dominant use in a coding corpus is technical rather than
+ * profane (`dummy` data, `blast` radius, config `knob`, `trash` bin,
+ * CRUD, `garbage` files) or plain opinion (`useless`, `awful`, `meh`,
+ * `hate`). Pure frustration interjections (`ugh`, `argh`, `grr`) are
+ * scored as anguish instead.
  */
 const PROFANITY: readonly string[] = [
 	// f-word family
@@ -183,8 +196,6 @@ const PROFANITY: readonly string[] = [
 	"hecks",
 	"heckin",
 	"gosh",
-	"blast",
-	"blasted",
 	"bloody",
 	"bollocks",
 	"bollox",
@@ -197,7 +208,6 @@ const PROFANITY: readonly string[] = [
 	"crapped",
 	"crapping",
 	"crapload",
-	"crapshoot",
 	"crapola",
 	// piss family
 	"piss",
@@ -281,7 +291,6 @@ const PROFANITY: readonly string[] = [
 	"cockblock",
 	"cocksucker",
 	"cocksuckers",
-	"knob",
 	"knobhead",
 	"knobheads",
 	"knobend",
@@ -327,8 +336,6 @@ const PROFANITY: readonly string[] = [
 	"dumber",
 	"dumbest",
 	"dumbo",
-	"dummy",
-	"dummies",
 	"fool",
 	"fools",
 	"foolish",
@@ -387,31 +394,13 @@ const PROFANITY: readonly string[] = [
 	"bugger",
 	"buggered",
 	// generic aggression / dismissal
-	"hate",
-	"hated",
-	"hates",
-	"hating",
-	"hateful",
 	"suck",
 	"sucks",
 	"sucked",
 	"sucking",
 	"sucky",
 	"suckage",
-	"trash",
 	"trashy",
-	"trashed",
-	"garbage",
-	"crud",
-	"crudded",
-	// quality-dismissal ("this is garbage / pointless")
-	"useless",
-	"pointless",
-	"horrible",
-	"awful",
-	"worthless",
-	"ridiculous",
-	"nonsense",
 	// religious exclamations
 	"jesus",
 	"christ",
@@ -439,26 +428,6 @@ const PROFANITY: readonly string[] = [
 	"lmfao",
 	"fubar",
 	"snafu",
-	// frustration interjections
-	"ugh",
-	"ughh",
-	"ughhh",
-	"urgh",
-	"argh",
-	"arghh",
-	"arghhh",
-	"arrgh",
-	"blah",
-	"bleh",
-	"meh",
-	"yikes",
-	"yeesh",
-	"oof",
-	"gah",
-	"gahh",
-	"grr",
-	"grrr",
-	"grrrr",
 ];
 
 const PROFANITY_RE = new RegExp(String.raw`\b(?:${PROFANITY.join("|")})\b`, "gi");
@@ -473,16 +442,18 @@ const YELLING_THRESHOLD = 0.5;
 const DRAMA_RE = /[!?][!?1]{2,}/g;
 const WORD_RE = /\S+/g;
 
-// Elongated anguish/exasperation interjections. Each alternative is a
-// case-insensitive word-bounded pattern that requires *real* elongation
-// (so plain "no" / "argh" / "ahh" / "god" don't fire). Picked to avoid
-// hex / base64 contamination via the surrounding `\b` plus letter-only
-// alternatives.
+// Anguish/exasperation interjections. Each alternative is a case-insensitive
+// word-bounded pattern. Interjections whose short form collides with normal
+// prose ("no", "ahh", "why", "yes", "god") require *real* elongation;
+// unambiguous ones ("ugh", "argh", "grr") match their plain form too.
+// Picked to avoid hex / base64 contamination via the surrounding `\b` plus
+// letter-only alternatives.
 const ANGUISH_PATTERNS: readonly string[] = [
 	"no{3,}", //          nooo, noooooo
 	"a+h{2,}", //         ahh, aaaahhh
-	"u+g+h{2,}", //       ughh, uuugh
+	"u+r?g+h+", //        ugh, ughh, urgh, uuugh
 	"a+r+g+h+", //        argh, aaargh, arrgghhh
+	"g+r{2,}", //         grr, grrrr
 	"st+o{3,}p+", //      stooop, sttooopp
 	"w+h+y{3,}", //       whyyy, whyyyyy
 	"f+u{3,}c*k*", //     fuuu, fuuuck
@@ -494,9 +465,13 @@ const ANGUISH_PATTERNS: readonly string[] = [
 ];
 const ANGUISH_RE = new RegExp(String.raw`\b(?:${ANGUISH_PATTERNS.join("|")})\b`, "gi");
 const DUDE_RE = /\bdude\b/gi;
-// Runs of 2+ dots. Captures `..` (lazy trail-off), `...` (tentative
-// ellipsis), and `....+` (exasperation) in a single signal.
-const ELLIPSIS_RE = /\.{2,}/g;
+// Sad emoticons (`:(` and friends). Requires a leading boundary so pasted
+// code/regex fragments like `foo:(bar)` don't fire; `\(+` folds `:(((` into
+// one hit. 46 corpus hits, ~90% genuinely deflated.
+const SAD_EMOTICON_RE = /(?<=^|[\s.!?])[:;]-?\(+/g;
+// Dot runs (`..` / `...` / `....`) are deliberately NOT counted: on a real
+// corpus they are dominated by neutral trail-offs, template placeholders
+// (`{{href...}}`) and range syntax, not exasperation.
 
 // --- Frustration signals ----------------------------------------------------
 // Each set of patterns below is tuned against ~42k real user prompts so the
@@ -506,10 +481,18 @@ const ELLIPSIS_RE = /\.{2,}/g;
 // trimmed prose body (no `m` flag) - in practice mid-message lines that
 // start with `no`/`Wrong`/`No JSDoc warning` are list items, pasted error
 // text or descriptive statements, not actual corrections. Real frustration
-// negation overwhelmingly opens the message.
-const NEGATION_LEAD_RE = /^[ \t]*(?:no|nope|nah|nvm|wrong|incorrect)\b/gi;
+// negation overwhelmingly opens the message. Bare `no` only counts as an
+// interjection - followed by punctuation, end-of-text, or a discourse word -
+// so determiner uses ("no extensions to the page", "no auto start") don't
+// score. A hyphen only counts as a separator when it doesn't glue a compound
+// (`no - not that` yes, `no-op change` no). Note: the bare-`no` branch
+// deliberately has no trailing `\b`, so emphatic misspellings like `nou ...`
+// / `nono ...` also count (via `no` + follower `u`/`no`) - on the real
+// corpus every such hit is a genuine correction.
+const NEGATION_LEAD_RE =
+	/^[ \t]*(?:(?:nope|nah|nvm|wrong|incorrect)\b|no(?=\s*(?:[,.!?;:\u2013\u2014]|-(?!\w)|$|(?:i|im|u|you|ur|we|it|its|that|thats|this|the|they|theyre|he|she|man|dude|bro|wait|dont|not|stop|just|again|please|plz|but|actually|literally|seriously|sorry|no|never|nothing|wtf|why|what|wrong)\b)))/gi;
 const NEGATION_PHRASE_RE =
-	/\b(?:that['\u2019]?s\s+not\s+(?:what|right|it)|not\s+what\s+i\s+(?:meant|asked|said|wanted))\b/gi;
+	/\b(?:that['\u2019]?s\s+not\s+(?:what|right|it)|not\s+what\s+i\s+(?:meant|asked|said|wanted)|makes\s+(?:no|zero)\s+sense)\b/gi;
 
 // User repeating themselves. The recall pattern accepts an optional
 // `like ` / `as ` prefix so "like i said" doesn't double-count with bare
@@ -526,6 +509,10 @@ const REPETITION_STILL_RE =
 // Direct second-person reproach. `you` alone is too generic (>7k hits in
 // short prose), so we anchor it to a small set of accusatory verbs.
 const BLAME_YOU_RE = /\byou\s+(?:didn['\u2019]?t|did\s+not|broke|missed|forgot|keep|always|never|still|ignored)\b/gi;
+// `why would/did you ...` is reproach even when politely phrased. Bare
+// `why you` / `why are you` are dominated by neutral how-does-this-work
+// questions, so only the past/conditional forms count.
+const BLAME_WHY_RE = /\bwhy\s+(?:would|did)\s+(?:you|u)\b/gi;
 // `stop <verb>ing` is only frustration when it's an imperative - require it
 // to start a sentence (line start or after a sentence-terminating punctuator).
 const BLAME_STOP_RE = /(?:^|(?<=[.!?\n]))\s*stop\s+\w+ing\b/gim;
@@ -540,6 +527,11 @@ const XML_TAG_BARE_RE = /<\/?[A-Za-z][\w-]*\b[^>]*\/?>/g;
 const INLINE_CODE_RE = /`[^`\n]*`/g;
 const URL_RE = /\bhttps?:\/\/\S+/gi;
 const FILE_MENTION_RE = /(^|\s)@[\w./-]+/g;
+// Dotted tokens: filenames (`AGENTS.md`), dotted identifiers (`Bun.file`),
+// versions (`1.2.3`). Stripped so SENTENCE_RE doesn't split them into
+// all-caps fragments ("Follow AGENTS.md and ..." -> "Follow AGENTS") that
+// register as yelling.
+const DOTTED_TOKEN_RE = /(?<=^|[\s("'[])[\w-]+(?:\.[\w-]+)+(?=$|[\s)"'\],:;!?]|\.(?!\w))/g;
 const QUOTE_LINE_RE = /^[ \t]*>.*$/gm;
 // Harness placeholders the TUI substitutes for binary/non-text user input.
 // Strip them so real frustration signals on later lines aren't masked off
@@ -561,11 +553,27 @@ function countMatches(text: string, re: RegExp): number {
 	return count;
 }
 
+// A sentence needs 2+ uppercase runs ("WHAT THE HELL"), or a single elongated
+// run with a tripled letter ("CMOOON"), before its caps ratio can count as
+// yelling. A lone acronym / identifier / env var ("Follow AGENTS", "use
+// JSON", "HOME=/tmp") never does.
+const UPPER_RUN_RE = /\p{Lu}{2,}/gu;
+const TRIPLED_LETTER_RE = /(\p{Lu})\1\1/u;
+
+function isShoutedSentence(sentence: string): boolean {
+	const runs = sentence.match(UPPER_RUN_RE);
+	if (!runs) return false;
+	if (runs.length >= 2) return true;
+	return runs[0].length >= YELLING_MIN_LETTERS && TRIPLED_LETTER_RE.test(runs[0]);
+}
+
 /**
  * Count sentences where the share of uppercase letters exceeds
  * {@link YELLING_THRESHOLD}. Sentences shorter than
  * {@link YELLING_MIN_LETTERS} alphabetic characters are ignored so that
- * short acronyms ("OK", "WIP", "TODO") don't register as yelling.
+ * short acronyms ("OK", "WIP", "TODO") don't register as yelling, and the
+ * caps must span multiple words (or one elongated shout) - see
+ * {@link isShoutedSentence}.
  */
 function countYellingSentences(text: string): number {
 	let count = 0;
@@ -576,7 +584,7 @@ function countYellingSentences(text: string): number {
 		const letters = countMatches(sentence, LETTER_RE);
 		if (letters >= YELLING_MIN_LETTERS) {
 			const upper = countMatches(sentence, UPPER_LETTER_RE);
-			if (upper / letters > YELLING_THRESHOLD) count++;
+			if (upper / letters > YELLING_THRESHOLD && isShoutedSentence(sentence)) count++;
 		}
 		match = SENTENCE_RE.exec(text);
 	}
@@ -597,6 +605,7 @@ function stripStructuredContent(text: string): string {
 		.replace(INLINE_CODE_RE, " ")
 		.replace(URL_RE, " ")
 		.replace(FILE_MENTION_RE, "$1 ")
+		.replace(DOTTED_TOKEN_RE, " ")
 		.replace(QUOTE_LINE_RE, "")
 		.replace(IMAGE_MARKER_RE, " ")
 		.replace(ANSI_ESCAPE_RE, "");
@@ -654,11 +663,12 @@ export function computeUserMessageMetrics(text: string): UserMessageMetrics {
 		countMatches(prose, DRAMA_RE) +
 		countMatches(prose, ANGUISH_RE) +
 		countMatches(prose, DUDE_RE) +
-		countMatches(prose, ELLIPSIS_RE);
+		countMatches(prose, SAD_EMOTICON_RE);
 
 	const negation = countMatches(prose, NEGATION_LEAD_RE) + countMatches(prose, NEGATION_PHRASE_RE);
 	const repetition = countMatches(prose, REPETITION_RECALL_RE) + countMatches(prose, REPETITION_STILL_RE);
-	const blame = countMatches(prose, BLAME_YOU_RE) + countMatches(prose, BLAME_STOP_RE);
+	const blame =
+		countMatches(prose, BLAME_YOU_RE) + countMatches(prose, BLAME_WHY_RE) + countMatches(prose, BLAME_STOP_RE);
 
 	return {
 		chars,

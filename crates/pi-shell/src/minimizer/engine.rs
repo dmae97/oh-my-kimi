@@ -523,6 +523,7 @@ mod tests {
 	};
 
 	static CONFIG_COUNTER: AtomicUsize = AtomicUsize::new(0);
+	pub static TEST_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
 	use super::*;
 	use crate::minimizer::MinimizerOptions;
@@ -758,6 +759,7 @@ strip_lines_matching = [".*"]
 
 	#[test]
 	fn segmented_chain_supported_command_does_not_record_unknown() {
+		let _guard = TEST_LOCK.lock();
 		// Phase 7 (Mode α resolution): supported chains route through
 		// filters::dispatch via the chain decomposer instead of falling
 		// back to passthrough. The unknown-command counter must remain
@@ -1228,6 +1230,7 @@ mod pipeline_integration_tests {
 
 	#[test]
 	fn unknown_command_counter_increments() {
+		let _guard = super::tests::TEST_LOCK.lock();
 		reset_unknown_command_count();
 		let cfg = MinimizerConfig::from_options(&MinimizerOptions {
 			enabled: Some(true),

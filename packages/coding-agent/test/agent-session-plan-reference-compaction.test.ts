@@ -50,10 +50,11 @@ function getMessageText(message: AgentMessage): string {
 	if (!("content" in message)) return "";
 	if (typeof message.content === "string") return message.content;
 	if (!Array.isArray(message.content)) return "";
-	return message.content
-		.filter(isTextContentBlock)
-		.map(content => content.text)
-		.join("\n");
+	const text: string[] = [];
+	for (const content of message.content) {
+		if (isTextContentBlock(content)) text.push(content.text);
+	}
+	return text.join("\n");
 }
 
 function createAssistantResponse(text: string) {

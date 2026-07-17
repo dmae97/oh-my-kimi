@@ -44,10 +44,15 @@ def make_text_prompt(chunk: str, question: str) -> str:
 
 
 def make_image_prompt(cols: int, rows: int, question: str) -> str:
-    return load_prompt("qa-image.md").format(cols=cols, rows=rows) + f"\n\nQuestion: {question}\nAnswer with only the shortest extractive answer."
+    return (
+        load_prompt("qa-image.md").format(cols=cols, rows=rows)
+        + f"\n\nQuestion: {question}\nAnswer with only the shortest extractive answer."
+    )
 
 
-def capture_last_token(model: Any, processor: Any, device: Any, text: str, image: Image.Image | None) -> tuple[np.ndarray, str]:
+def capture_last_token(
+    model: Any, processor: Any, device: Any, text: str, image: Image.Image | None
+) -> tuple[np.ndarray, str]:
     """Return per-layer hidden state at the final prompt position plus a short generation."""
     import torch
 
@@ -55,7 +60,11 @@ def capture_last_token(model: Any, processor: Any, device: Any, text: str, image
     if image is not None:
         content.append({"type": "image", "image": image})
     content.append({"type": "text", "text": text})
-    templated = processor.apply_chat_template([{"role": "user", "content": content}], tokenize=False, add_generation_prompt=True)
+    templated = processor.apply_chat_template(
+        [{"role": "user", "content": content}],
+        tokenize=False,
+        add_generation_prompt=True,
+    )
     if image is not None:
         batch = processor(images=image, text=templated, return_tensors="pt")
     else:
@@ -64,8 +73,12 @@ def capture_last_token(model: Any, processor: Any, device: Any, text: str, image
     with torch.no_grad():
         out = model(**batch, output_hidden_states=True, use_cache=False)
         generated = model.generate(**batch, max_new_tokens=16, do_sample=False)
-    states = np.stack([h[0, -1, :].float().detach().cpu().numpy() for h in out.hidden_states], axis=0)
-    answer = processor.batch_decode(generated[:, batch["input_ids"].shape[1] :], skip_special_tokens=True)[0].strip()
+    states = np.stack(
+        [h[0, -1, :].float().detach().cpu().numpy() for h in out.hidden_states], axis=0
+    )
+    answer = processor.batch_decode(
+        generated[:, batch["input_ids"].shape[1] :], skip_special_tokens=True
+    )[0].strip()
     return states.astype(np.float32, copy=False), answer
 
 
@@ -100,7 +113,9 @@ def main() -> None:
     paras = squad.load_paragraphs(CACHE)[: args.limit_paras]
     flow, offsets = squad.build_flow(paras)
     chunk = flow[: min(len(flow), budget)]
-    questions = sample_answer_questions(paras, offsets, 0, len(chunk), args.questions * 2, args.seed)
+    questions = sample_answer_questions(
+        paras, offsets, 0, len(chunk), args.questions * 2, args.seed
+    )
     # Deduplicate gold answers so the RSA geometry has distinct content per row.
     seen: set[str] = set()
     picked: list[dict[str, Any]] = []
@@ -117,16 +132,28 @@ def main() -> None:
     img.save(img_dir / "image-carrier.png")
 
     print(f"loading {args.model_dir}", flush=True)
-    processor = AutoProcessor.from_pretrained(args.model_dir, local_files_only=True, trust_remote_code=True, use_fast=False)
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(args.model_dir, local_files_only=True, trust_remote_code=True, dtype=torch.bfloat16, device_map="auto").eval()
+    processor = AutoProcessor.from_pretrained(
+        args.model_dir, local_files_only=True, trust_remote_code=True, use_fast=False
+    )
+    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        args.model_dir,
+        local_files_only=True,
+        trust_remote_code=True,
+        dtype=torch.bfloat16,
+        device_map="auto",
+    ).eval()
     device = next(model.parameters()).device
 
     text_states: list[np.ndarray] = []
     image_states: list[np.ndarray] = []
     records: list[dict[str, Any]] = []
     for qi, q in enumerate(picked):
-        t_states, t_answer = capture_last_token(model, processor, device, make_text_prompt(chunk, q["q"]), None)
-        i_states, i_answer = capture_last_token(model, processor, device, make_image_prompt(cols, rows, q["q"]), img)
+        t_states, t_answer = capture_last_token(
+            model, processor, device, make_text_prompt(chunk, q["q"]), None
+        )
+        i_states, i_answer = capture_last_token(
+            model, processor, device, make_image_prompt(cols, rows, q["q"]), img
+        )
         text_states.append(t_states)
         image_states.append(i_states)
         records.append(
@@ -142,7 +169,10 @@ def main() -> None:
                 "agree": squad.f1(t_answer, [i_answer]) >= 0.99,
             }
         )
-        print(f"{qi + 1}/{len(picked)} text={t_answer!r} image={i_answer!r} gold={q['answer_text']!r}", flush=True)
+        print(
+            f"{qi + 1}/{len(picked)} text={t_answer!r} image={i_answer!r} gold={q['answer_text']!r}",
+            flush=True,
+        )
 
     text_arr = np.stack(text_states, axis=0)  # [Q, L, D]
     image_arr = np.stack(image_states, axis=0)
@@ -173,7 +203,9 @@ def main() -> None:
                 "mismatched_cosine": mismatched,
                 "separation": matched - mismatched,
                 "rsa_pearson": rsa,
-                "match_rank_accuracy": float((np.argmax(cross, axis=1) == np.arange(n_q)).mean()),
+                "match_rank_accuracy": float(
+                    (np.argmax(cross, axis=1) == np.arange(n_q)).mean()
+                ),
             }
         )
         text_sim_by_layer[layer] = text_sim
@@ -204,7 +236,12 @@ def main() -> None:
         cross_sim=cross_sim_by_layer,
     )
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=1))
-    print(json.dumps({k: v for k, v in summary.items() if k not in ("per_layer", "records")}, indent=1))
+    print(
+        json.dumps(
+            {k: v for k, v in summary.items() if k not in ("per_layer", "records")},
+            indent=1,
+        )
+    )
     print(f"results -> {out_dir}")
 
 

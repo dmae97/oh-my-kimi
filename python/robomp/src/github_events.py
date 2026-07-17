@@ -206,7 +206,13 @@ def _pr_review_pr(pr: Mapping[str, Any], repo: str, action: str, bot_login: str)
         return RouteDecision("skip", None, repo, None, "PR missing number")
     login, assoc = _submitter_info(pr)
     return RouteDecision(
-        "queue", "review_pr", repo, issue_key(repo, number), f"pull_request.{action}", submitter=login, association=assoc
+        "queue",
+        "review_pr",
+        repo,
+        issue_key(repo, number),
+        f"pull_request.{action}",
+        submitter=login,
+        association=assoc,
     )
 
 

@@ -7,6 +7,8 @@ description: Write system prompts, tool docs, and agent definitions. Project tag
 
 Project house style. Dense, imperative, RFC-keyed.
 
+Targeting small models (≤2B, tiny/on-device like LFM2)? You MUST read [small-models.md](small-models.md) — the rules below assume frontier-class instruction following; several invert at that scale.
+
 ## Tags
 
 Tags are structural markers — the agent treats them as authoritative and literal. Each tag means exactly what its name says. NEVER invent ornamental tags (`<north-star>`, `<stance>`, `<protocol>`, `<directives>`, `<strengths>`) — they're noise.

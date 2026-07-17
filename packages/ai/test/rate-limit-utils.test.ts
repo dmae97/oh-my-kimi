@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { ProviderHttpError } from "@oh-my-pi/pi-ai/error";
 import { isUsageLimit } from "@oh-my-pi/pi-ai/error/flags";
 import {
 	calculateRateLimitBackoffMs,
@@ -56,6 +57,14 @@ describe("parseRateLimitReason", () => {
 		expect(
 			parseRateLimitReason(
 				'429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s rate limit. Please try again later."}}',
+			),
+		).toBe("QUOTA_EXHAUSTED");
+	});
+
+	it("classifies Anthropic monthly spend limits as QUOTA_EXHAUSTED", () => {
+		expect(
+			parseRateLimitReason(
+				'429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s monthly spend limit. Please try again later."}}',
 			),
 		).toBe("QUOTA_EXHAUSTED");
 	});
@@ -120,6 +129,19 @@ describe("isUsageLimit", () => {
 		).toBe(true);
 	});
 
+	// Anthropic returns a `rate_limit_error` when the account's monthly spend
+	// cap is hit ("This request would exceed your account's monthly spend
+	// limit."). Without the `spend limit` branch the message classifies as a
+	// transient rate limit, so `isProviderRetryableError` retries it until the
+	// local deadline instead of surfacing the quota error (issue #4787).
+	it("detects Anthropic monthly spend-limit as a credential-rotatable usage limit", () => {
+		expect(
+			isUsageLimit(
+				'429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s monthly spend limit. Please try again later."}}',
+			),
+		).toBe(true);
+	});
+
 	it("detects bare 'quota reached' phrasing", () => {
 		expect(isUsageLimit("quota reached")).toBe(true);
 		expect(isUsageLimit("quota_reached")).toBe(true);
@@ -131,12 +153,32 @@ describe("isUsageLimit", () => {
 		expect(isUsageLimit("额度耗尽")).toBe(true);
 	});
 
+	it("detects xAI Grok SuperGrok credit exhaustion as a credential-rotatable usage limit", () => {
+		// xAI returns HTTP 403 with (type=personal-team-blocked:spending-limit), not a
+		// 429 usage_limit_reached. Without this match, multi-account xai-oauth pools
+		// stick to the exhausted credential instead of rotating siblings.
+		const message =
+			"403 You have run out of credits or need a Grok subscription. Add credits at https://grok.com/?_s=usage or upgrade at https://grok.com/supergrok.\nYou have run out of credits or need a Grok subscription. Add credits at https://grok.com/?_s=usage or upgrade at https://grok.com/supergrok. (type=personal-team-blocked:spending-limit)";
+		expect(isUsageLimit(message)).toBe(true);
+		expect(isUsageLimit(Object.assign(new Error(message), { status: 403 }))).toBe(true);
+		expect(parseRateLimitReason(message)).toBe("QUOTA_EXHAUSTED");
+	});
+
 	it("detects OpenAI quota payload codes as credential-rotatable usage limits", () => {
 		for (const message of ["insufficient_quota", "usage_limit_exceeded", "usage_limit_reached"]) {
 			expect(isUsageLimit(message)).toBe(true);
 		}
 		expect(isUsageLimitStatus(429)).toBe(true);
 		expect(isUsageLimitStatus(400)).toBe(false);
+	});
+
+	it("detects structured provider usage codes without quota wording", () => {
+		expect(isUsageLimit(new ProviderHttpError("Generic provider failure", 429, { code: "insufficient_quota" }))).toBe(
+			true,
+		);
+		expect(isUsageLimit(new ProviderHttpError("Generic provider failure", 429, { code: "rate_limit_error" }))).toBe(
+			false,
+		);
 	});
 });
 
@@ -182,6 +224,29 @@ describe("isUsageLimitOutcome", () => {
 		expect(
 			isUsageLimitOutcome(403, "403 订阅额度不足或未配置订阅: subscription quota insufficient, need=14447"),
 		).toBe(true);
+	});
+
+	it("rotates on xAI Grok 403 credit/spending-limit exhaustion regardless of status", () => {
+		const message =
+			"403 You have run out of credits or need a Grok subscription. Add credits at https://grok.com/?_s=usage or upgrade at https://grok.com/supergrok. (type=personal-team-blocked:spending-limit)";
+		expect(isUsageLimitOutcome(403, message)).toBe(true);
+		expect(isUsageLimitOutcome(undefined, message)).toBe(true);
+		expect(isUsageLimitOutcome(429, message)).toBe(true);
+	});
+
+	it("rotates on xAI Grok Build 402 usage-balance exhaustion regardless of status", () => {
+		const message = "402 Grok Build usage balance exhausted";
+		expect(isUsageLimitOutcome(402, message)).toBe(true);
+		expect(isUsageLimitOutcome(undefined, message)).toBe(true);
+		expect(isUsageLimit(message)).toBe(true);
+	});
+
+	it("treats 402 as a usage-limit status (opaque body rotates, informative non-quota body does not)", () => {
+		expect(isUsageLimitStatus(402)).toBe(true);
+		expect(isUsageLimitOutcome(402, undefined)).toBe(true);
+		expect(isUsageLimitOutcome(402, "HTTP 402")).toBe(true);
+		expect(isUsageLimitOutcome(402, "A subscription is required for this endpoint")).toBe(false);
+		expect(isUsageLimit(new ProviderHttpError("HTTP 402", 402))).toBe(true);
 	});
 
 	it("does not rotate on auth/invalid-request statuses with unrelated bodies", () => {

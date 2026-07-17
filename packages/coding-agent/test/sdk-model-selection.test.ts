@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Effort } from "@oh-my-pi/pi-ai";
+import { Effort, type FetchImpl } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry, type ProviderConfigInput } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -211,7 +213,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		settings.setModelRole("smol", "runtime-provider/runtime-model");
 
 		const { session, modelFallbackMessage } = await createAgentSession({
-			...(await buildSessionOptions("pi/smol")),
+			...(await buildSessionOptions("@smol")),
 			settings,
 		});
 
@@ -263,7 +265,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 	test("does not apply default role thinking override when modelPattern is explicit", async () => {
 		const settings = Settings.isolated({ defaultThinkingLevel: "off" });
 		settings.setModelRole("smol", "runtime-provider/runtime-reasoning-model");
-		settings.setModelRole("default", "pi/smol:high");
+		settings.setModelRole("default", "@smol:high");
 
 		const { session } = await createAgentSession({
 			...(await buildSessionOptions("runtime-provider/runtime-reasoning-model")),
@@ -275,7 +277,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		expect(session.thinkingLevel).toBe("off");
 	});
 
-	test("normalizes max default thinking level from settings", async () => {
+	test("clamps a max default thinking level to the model's ladder ceiling", async () => {
 		const settings = Settings.isolated({ defaultThinkingLevel: "max" });
 
 		const { session } = await createAgentSession({
@@ -285,6 +287,8 @@ describe("createAgentSession deferred model pattern resolution", () => {
 
 		expect(session.model?.provider).toBe("runtime-provider");
 		expect(session.model?.id).toBe("runtime-reasoning-model");
+		// The extension model has no explicit ladder; the inferred fallback tops
+		// out at xhigh, so the real max level clamps down.
 		expect(session.thinkingLevel).toBe(Effort.XHigh);
 	});
 
@@ -331,6 +335,77 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		} finally {
 			getApiKeySpy.mockRestore();
 			authStorage.close();
+		}
+	});
+
+	test("refreshes cached llama.cpp vision metadata for the startup default model", async () => {
+		const authStorage = await AuthStorage.create(path.join(tempDir, "llama-vision-auth.db"));
+		authStoragesToClose.push(authStorage);
+		const modelsPath = path.join(tempDir, "llama-vision-models.yml");
+		const cacheDbPath = path.join(tempDir, "models.db");
+		const cachedModel = buildModel({
+			id: "vision-model",
+			name: "vision-model",
+			provider: "llama.cpp",
+			api: "openai-responses",
+			baseUrl: "http://127.0.0.1:8080",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 32768,
+		});
+		writeModelCache("llama.cpp", Date.now(), [cachedModel], true, "", cacheDbPath);
+
+		const fetchMock: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:8080/models") {
+				return new Response(
+					JSON.stringify({ data: [{ id: "vision-model", object: "model", meta: { n_ctx: 239104 } }] }),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url === "http://127.0.0.1:8080/props") {
+				return new Response(
+					JSON.stringify({
+						default_generation_settings: {
+							n_ctx: 239104,
+							params: { max_tokens: -1, n_predict: -1 },
+						},
+						modalities: { vision: true },
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const modelRegistry = new ModelRegistry(authStorage, modelsPath, { fetch: fetchMock });
+		const settings = Settings.isolated();
+		settings.setModelRole("default", "llama.cpp/vision-model");
+
+		expect(modelRegistry.find("llama.cpp", "vision-model")?.input).toEqual(["text"]);
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			authStorage,
+			modelRegistry,
+			settings,
+			sessionManager: SessionManager.inMemory(),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+		});
+
+		try {
+			expect(session.model?.input).toEqual(["text", "image"]);
+			expect(modelRegistry.find("llama.cpp", "vision-model")?.input).toEqual(["text", "image"]);
+		} finally {
+			await session.dispose();
 		}
 	});
 

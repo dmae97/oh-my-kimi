@@ -147,6 +147,62 @@ describe("SpeakableStream segment length cap", () => {
 		for (const segment of all) expect(segment.length).toBeLessThanOrEqual(280);
 		expect(all.join(" ")).toBe(run);
 	});
+
+	it("keeps a single long punctuated sentence under the cap by cutting clauses", () => {
+		const sentence =
+			"The overnight rehearsal gave the whole launch team a useful scare, " +
+			"because the backup sensor reported a shallow dip near the intake, " +
+			"the navigation laptop briefly lost its shared clock, " +
+			"the deck crew found two crates mislabeled beside the winch, " +
+			"the weather desk revised the noon window twice, " +
+			"and the captain still wanted the first survey pass finished before the harbor traffic thickened. ";
+
+		expect(sentence.length).toBeGreaterThan(280);
+		expect(sentence.trimEnd()).toMatch(/\.$/);
+
+		const { all } = speak(sentence);
+
+		expect(all.length).toBeGreaterThan(1);
+		for (const segment of all) expect(segment.length).toBeLessThanOrEqual(280);
+		for (const segment of all.slice(0, -1)) expect(segment).toMatch(/[,;:—–]$/);
+		expect(all[all.length - 1]).toMatch(/[.!?…][)\]"'»”’]?$/);
+	});
+
+	it("force-splits the first segment when the first clause boundary is past the cap", () => {
+		const sentence =
+			"The maintenance lead reviewed the pressure logs from every pump station while the night operator compared " +
+			"the handwritten readings with the telemetry archive and the safety observer watched the intake screens for " +
+			"any sign of vibration or cavitation during the cold start sequence that followed the battery swap and calibration " +
+			"pass after midnight and the backup technician confirmed that the spare controller stayed online through each valve " +
+			"check and relay reset, then the control room marked the trial as stable and prepared the morning report. ";
+		const firstComma = sentence.indexOf(",");
+
+		expect(sentence.length).toBeGreaterThan(280);
+		expect(firstComma).toBeGreaterThan(280);
+
+		const { all } = speak(sentence);
+
+		expect(all.length).toBeGreaterThan(1);
+		expect(all[0].length).toBeLessThanOrEqual(140);
+		for (const segment of all) expect(segment.length).toBeLessThanOrEqual(280);
+	});
+});
+
+describe("SpeakableStream drain segmentation", () => {
+	const longParagraph =
+		"Morning fog rolled over the harbor as the crew finished loading the research skiff. " +
+		"The tide had been gentle all week, but the forecast called for a quick turn after noon. " +
+		"Mara asked everyone to check the ropes again, confirm the battery packs were dry, and keep the spare radio close. " +
+		"By the time the first buoy blinked on the horizon, the engine note had settled and a clean lane of water opened ahead.\n";
+
+	it("drains a large newline-terminated paragraph at sentence or clause boundaries", () => {
+		expect(longParagraph.length).toBeGreaterThan(280);
+
+		const { all } = speak(longParagraph);
+
+		expect(all.length).toBeGreaterThan(1);
+		for (const segment of all) expect(segment).toMatch(/[.!?…,:;—–][)\]"'»”’]?$/);
+	});
 });
 
 describe("SpeakableStream abbreviations", () => {

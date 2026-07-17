@@ -88,10 +88,11 @@ function getMessageText(message: AgentMessage): string {
 	if (!Array.isArray(message.content)) {
 		return "";
 	}
-	return message.content
-		.filter(isTextContentBlock)
-		.map(content => content.text)
-		.join("\n");
+	const text: string[] = [];
+	for (const content of message.content) {
+		if (isTextContentBlock(content)) text.push(content.text);
+	}
+	return text.join("\n");
 }
 
 describe("AgentSession eager todo enforcement", () => {
@@ -297,14 +298,7 @@ describe("AgentSession eager todo enforcement", () => {
 		session.sessionManager.appendMessage(priorAssistant);
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
-			content: [
-				{
-					type: "toolCall",
-					id: "call-title",
-					name: "set_title",
-					arguments: { title: "Parser recovery replan" },
-				},
-			],
+			content: [{ type: "text", text: "<title>Parser recovery replan</title>" }],
 		} as never);
 		scriptedResponses = [
 			createToolCallAssistantMessage("todo", {
@@ -344,14 +338,7 @@ describe("AgentSession eager todo enforcement", () => {
 		session.sessionManager.appendMessage(priorUser);
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
-			content: [
-				{
-					type: "toolCall",
-					id: "call-title",
-					name: "set_title",
-					arguments: { title: "plan/parser-diagnostics" },
-				},
-			],
+			content: [{ type: "text", text: "<title>plan/parser-diagnostics</title>" }],
 		} as never);
 		scriptedResponses = [
 			createToolCallAssistantMessage("todo", {
@@ -367,7 +354,8 @@ describe("AgentSession eager todo enforcement", () => {
 
 		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
 		const request = completeSimpleMock.mock.calls[0]?.[1] as { systemPrompt?: string[] } | undefined;
-		expect(request?.systemPrompt).toEqual([customPrompt]);
+		expect(request?.systemPrompt?.[0]).toBe(customPrompt);
+		expect(request?.systemPrompt?.[1]).toContain("<title>");
 	});
 
 	it("does not refresh todo-init titles when the current title is user-authored", async () => {

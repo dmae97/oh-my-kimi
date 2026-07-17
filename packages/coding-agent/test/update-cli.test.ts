@@ -10,6 +10,7 @@ import {
 	buildHomebrewUpdateArgs,
 	buildMiseForceInstallArgs,
 	buildMiseUpgradeArgs,
+	buildNpmInstallArgs,
 	parseUpdateArgs,
 	pruneBunInstallCache,
 	replaceBinaryForUpdate,
@@ -75,6 +76,20 @@ describe("update-cli install target detection", () => {
 		expect(method).toBe("bun");
 	});
 
+	it("uses npm update when prioritized omp is inside an npm global bin", () => {
+		const method = resolveUpdateMethodForTest("/Users/test/.npm-global/bin/omp", undefined, {
+			npmBinDir: "/Users/test/.npm-global/bin",
+		});
+
+		expect(method).toBe("npm");
+	});
+
+	it("uses npm update for Windows npm command shims even when no package-manager bin dirs were detected", () => {
+		const method = resolveUpdateMethodForTest("C:\\Users\\test\\AppData\\Roaming\\npm\\omp.cmd", undefined);
+
+		expect(method).toBe("npm");
+	});
+
 	it("uses binary update when prioritized omp is outside bun global bin", () => {
 		const method = resolveUpdateMethodForTest("/Users/test/.local/bin/omp", "/Users/test/.bun/bin");
 
@@ -133,6 +148,16 @@ describe("update-cli package manager commands", () => {
 	it("targets the mise GitHub backend tool and force-reinstalls the checked version when requested", () => {
 		expect(buildMiseUpgradeArgs()).toEqual(["upgrade", "github:can1357/oh-my-pi", "--bump"]);
 		expect(buildMiseForceInstallArgs("15.10.5")).toEqual(["install", "--force", "github:can1357/oh-my-pi@15.10.5"]);
+	});
+
+	it("pins npm package installs to the official registry and the checked native package versions", () => {
+		const args = buildNpmInstallArgs("16.3.15", "win32-x64");
+
+		expect(args.slice(0, 2)).toEqual(["install", "-g"]);
+		expect(args).toContain("--registry=https://registry.npmjs.org/");
+		expect(args).toContain("@oh-my-pi/pi-coding-agent@16.3.15");
+		expect(args).toContain("@oh-my-pi/pi-natives@16.3.15");
+		expect(args).toContain("@oh-my-pi/pi-natives-win32-x64@16.3.15");
 	});
 });
 

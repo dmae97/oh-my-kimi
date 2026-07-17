@@ -40,7 +40,7 @@ TUI rendering adds presentation-only truncation from `packages/coding-agent/src/
 ## Flow
 1. `InspectImageTool.execute(...)` rejects immediately if `images.blockImages` is enabled in session settings.
 2. It reads `session.modelRegistry`; missing registry, empty registry, missing API key, or unresolved model each raise `ToolError` from `packages/coding-agent/src/tools/inspect-image.ts`.
-3. Model selection tries, in order, `pi/vision`, `pi/default`, the active model string from the session, then `availableModels[0]`. `expandRoleAlias(...)` and `resolveModelFromString(...)` handle each lookup.
+3. Model selection tries, in order, `@vision`, `@default`, the active model string from the session, then `availableModels[0]`. `expandRoleAlias(...)` and `resolveModelFromString(...)` handle each lookup.
 4. The chosen model must advertise `input.includes("image")`; otherwise execution fails before reading the file.
 5. `loadImageInput(...)` in `packages/coding-agent/src/utils/image-loading.ts` resolves the path with `resolveReadPath(...)`, detects MIME type with `readImageMetadata(...)`, and rejects files larger than `MAX_IMAGE_INPUT_BYTES` (`20 * 1024 * 1024`, 20 MiB) using `ImageInputTooLargeError`.
 6. `readImageMetadata(...)` in `packages/utils/src/mime.ts` inspects file headers only. Supported detected MIME types are `image/png`, `image/jpeg`, `image/gif`, and `image/webp`.

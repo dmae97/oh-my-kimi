@@ -2,6 +2,7 @@
 """
 Shared helpers for edit benchmark scripts.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -21,13 +22,19 @@ from typing import Any, Callable
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "python/omp-rpc/src"))
 
-from omp_rpc import MessageEndEvent, MessageStartEvent, MessageUpdateEvent, RpcClient, ToolExecutionStartEvent  # noqa: E402
+from omp_rpc import (
+    MessageEndEvent,
+    MessageStartEvent,
+    MessageUpdateEvent,
+    RpcClient,
+    ToolExecutionStartEvent,
+)  # noqa: E402
 
 MODELS = [
     "openrouter/moonshotai/kimi-k2.5",
     "openrouter/anthropic/claude-haiku-4.5",
     "openrouter/google/gemini-3.1-flash-lite-preview",
-    "openrouter/z-ai/glm-4.7-20251222:nitro"
+    "openrouter/z-ai/glm-4.7-20251222:nitro",
     # "openrouter/anthropic/claude-sonnet-4.6",
     # "openrouter/google/gemini-3-flash-preview",
     # "openrouter/z-ai/glm-5-turbo",
@@ -457,6 +464,7 @@ mod tests {
 }
 """
 
+
 def _compute_edit_diff() -> str:
     initial_lines = INITIAL_CONTENT.splitlines(keepends=True)
     expected_lines = EXPECTED_CONTENT.splitlines(keepends=True)
@@ -526,13 +534,17 @@ class VerbosePrinter:
             sys.stderr.flush()
             self._open_kind = None
 
-    def emit_delta(self, kind: str, delta: str, content_index: int | None = None) -> None:
+    def emit_delta(
+        self, kind: str, delta: str, content_index: int | None = None
+    ) -> None:
         if not delta:
             return
 
         if content_index is not None:
             key = (kind, content_index)
-            self._seen_block_lengths[key] = self._seen_block_lengths.get(key, 0) + len(delta)
+            self._seen_block_lengths[key] = self._seen_block_lengths.get(key, 0) + len(
+                delta
+            )
 
         with _PRINT_LOCK:
             if self._open_kind != kind:
@@ -553,7 +565,9 @@ class VerbosePrinter:
             sys.stderr.flush()
 
     def emit_tool_call(self, tool_name: str, args: Any) -> None:
-        rendered_args = json.dumps(args, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        rendered_args = json.dumps(
+            args, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
         with _PRINT_LOCK:
             if self._open_kind is not None:
                 sys.stderr.write("\n")
@@ -597,7 +611,10 @@ class VerbosePrinter:
         if not isinstance(content, list):
             return
 
-        has_redacted = any(isinstance(block, dict) and block.get("type") == "redactedThinking" for block in content)
+        has_redacted = any(
+            isinstance(block, dict) and block.get("type") == "redactedThinking"
+            for block in content
+        )
         if not has_redacted:
             return
 
@@ -624,7 +641,9 @@ def resolve_omp_bin(raw: str | None) -> str:
         return repo_bin
     found = shutil.which("omp")
     if not found:
-        raise SystemExit("Could not find `omp` on PATH and could not resolve the repo CLI. Set --omp-bin or OMP_BIN.")
+        raise SystemExit(
+            "Could not find `omp` on PATH and could not resolve the repo CLI. Set --omp-bin or OMP_BIN."
+        )
     return found
 
 
@@ -654,7 +673,7 @@ def install_verbose_logging(
         with _PRINT_LOCK:
             sys.stderr.write(
                 f"[{model.removeprefix('openrouter/')}] verbose> "
-                "no thinking level requested; pass --thinking low|medium|high|xhigh if the provider exposes reasoning.\n"
+                "no thinking level requested; pass --thinking low|medium|high|xhigh|max if the provider exposes reasoning.\n"
             )
             sys.stderr.flush()
 
@@ -672,9 +691,13 @@ def install_verbose_logging(
         message_event = event.assistant_message_event
         event_type = message_event["type"]
         if event_type == "text_delta":
-            printer.emit_delta("text", message_event["delta"], message_event["contentIndex"])
+            printer.emit_delta(
+                "text", message_event["delta"], message_event["contentIndex"]
+            )
         elif event_type == "thinking_delta":
-            printer.emit_delta("thinking", message_event["delta"], message_event["contentIndex"])
+            printer.emit_delta(
+                "thinking", message_event["delta"], message_event["contentIndex"]
+            )
 
     def handle_message_end(event: MessageEndEvent) -> None:
         if not include_messages:
@@ -744,7 +767,6 @@ def run_benchmark_for_model(
         ) as client:
             client.install_headless_ui()
             verbose_cleanup = install_verbose_logging(client, model, log_mode, thinking)
-
 
             def handle_tool_count(event: ToolExecutionStartEvent) -> None:
                 nonlocal edit_tool_calls, turns_used
@@ -816,11 +838,15 @@ def run_benchmark_for_model(
     )
 
 
-async def run_all(spec: BenchmarkSpec, args: argparse.Namespace) -> dict[str, dict[str, Any]]:
+async def run_all(
+    spec: BenchmarkSpec, args: argparse.Namespace
+) -> dict[str, dict[str, Any]]:
     omp_bin = resolve_omp_bin(args.omp_bin)
 
     timestamp = time.strftime("%Y%m%d-%H%M%S")
-    workspace_root = Path(tempfile.gettempdir()) / f"{spec.workspace_prefix}-{timestamp}"
+    workspace_root = (
+        Path(tempfile.gettempdir()) / f"{spec.workspace_prefix}-{timestamp}"
+    )
     workspace_root.mkdir(parents=True, exist_ok=True)
 
     selected_models = args.models or MODELS
@@ -839,7 +865,9 @@ async def run_all(spec: BenchmarkSpec, args: argparse.Namespace) -> dict[str, di
                 omp_bin=omp_bin,
                 workspace=workspace,
                 timeout=args.timeout,
-                log_mode="verbose" if args.verbose else ("print" if args.print else None),
+                log_mode="verbose"
+                if args.verbose
+                else ("print" if args.print else None),
                 thinking=args.thinking,
                 max_turns=args.max_turns,
             )
@@ -914,7 +942,7 @@ def parse_args(description: str) -> argparse.Namespace:
     )
     parser.add_argument(
         "--thinking",
-        choices=["off", "minimal", "low", "medium", "high", "xhigh"],
+        choices=["off", "minimal", "low", "medium", "high", "xhigh", "max"],
         default="medium",
         help="Request a specific thinking level for models that support reasoning (default: medium).",
     )

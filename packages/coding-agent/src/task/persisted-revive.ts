@@ -113,7 +113,7 @@ export function createPersistedSubagentReviverFactory(
 			// Clamp the active set to the persisted list: createAgentSession's
 			// `alwaysInclude` can re-add non-defaultInactive extension/custom tools
 			// the original run didn't carry. Unknown/missing names are ignored.
-			await session.setActiveToolsByName(init.tools);
+			await session.setActiveToolsByName([...init.tools, ...session.getMountedXdevToolNames()]);
 			// Cold revives must drive registry status themselves — createAgentSession
 			// doesn't wire this generically (the live path does it in the executor).
 			// Without it the idle-TTL timer never clears on a turn and the lifecycle

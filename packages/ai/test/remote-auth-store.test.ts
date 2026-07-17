@@ -9,6 +9,7 @@ import {
 	type CredentialBlockResponse,
 	type FetchSnapshotResult,
 	RemoteAuthCredentialStore,
+	type SnapshotResponse,
 	startAuthBroker,
 } from "@oh-my-pi/pi-ai/auth-broker";
 import { snapshotResponseSchema } from "@oh-my-pi/pi-ai/auth-broker/wire-schemas";
@@ -149,6 +150,48 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 		remoteStore.close();
 	});
 
+	test("invalidated OAuth tokens disable the remote row and rotate to a sibling", async () => {
+		serverStore!.upsertAuthCredentialForProvider("anthropic", {
+			type: "oauth",
+			access: "server-access-2",
+			refresh: "server-refresh-2",
+			expires: Date.now() + 120_000,
+			accountId: "account-2",
+			email: "b@example.com",
+		});
+		await serverStorage!.reload();
+		const seededRows = serverStore!.listAuthCredentials("anthropic");
+		expect(seededRows).toHaveLength(2);
+		const failedRow = seededRows[0];
+		if (failedRow?.credential.type !== "oauth") throw new Error("expected failed OAuth row");
+
+		const brokerClient = new AuthBrokerClient({ url: handle!.url, token });
+		const initialResult = await brokerClient.fetchSnapshot();
+		if (initialResult.status !== 200) throw new Error("expected snapshot");
+		const remoteStore = new RemoteAuthCredentialStore({
+			client: brokerClient,
+			initialSnapshot: initialResult.snapshot,
+		});
+		const clientStorage = new AuthStorage(remoteStore);
+		const first = {
+			accessToken: failedRow.credential.access,
+			credentialId: failedRow.id,
+		};
+
+		const rotated = await clientStorage.rotateSessionCredential("anthropic", "invalidated-session", {
+			error: new Error("Encountered invalidated oauth token for user, failing request"),
+			apiKey: first.accessToken,
+			credentialId: first.credentialId,
+		});
+
+		expect(rotated).toBe(true);
+		expect(serverStore!.listAuthCredentials("anthropic").map(row => row.id)).not.toContain(first.credentialId);
+		const next = await clientStorage.getOAuthAccess("anthropic", "invalidated-session");
+		expect(next?.credentialId).not.toBe(first.credentialId);
+		clientStorage.close();
+		remoteStore.close();
+	});
+
 	test("RemoteAuthCredentialStore rejects writes from the client", () => {
 		const remoteStore = new RemoteAuthCredentialStore({
 			client: new AuthBrokerClient({ url: handle!.url, token }),
@@ -219,6 +262,112 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 		expect(fetchSpy).toHaveBeenCalledTimes(1);
 
 		remoteStore.close();
+	});
+
+	test("broker block snapshots invalidate cached usage before the next fetchUsageReports", async () => {
+		const brokerClient = new AuthBrokerClient({ url: "http://127.0.0.1:9", token: "unused" });
+		const now = Date.now();
+		const blockedUntilMs = now + 60_000;
+		const credentialEntry = {
+			id: 7,
+			provider: "anthropic" as const,
+			credential: {
+				type: "oauth" as const,
+				access: "remote-access",
+				refresh: REMOTE_REFRESH_SENTINEL,
+				expires: now + 120_000,
+				accountId: "remote-account",
+				email: "remote@example.com",
+			},
+			identityKey: "email:remote@example.com",
+			rotatesInMs: null,
+		};
+		const initialSnapshot: SnapshotResponse = {
+			generation: 1,
+			generatedAt: now,
+			serverNowMs: now,
+			refresher: { enabled: false, intervalMs: 0, skewMs: 0, nextSweepInMs: Number.MAX_SAFE_INTEGER },
+			credentials: [credentialEntry],
+		};
+		const blockedSnapshot: SnapshotResponse = {
+			...initialSnapshot,
+			generation: 2,
+			generatedAt: now + 1,
+			serverNowMs: now + 1,
+			credentials: [
+				{
+					...credentialEntry,
+					blocks: [{ providerKey: "anthropic:oauth", blockScope: "tier:fable", blockedUntilMs }],
+				},
+			],
+		};
+		const healthyReport: UsageReport = {
+			provider: "anthropic",
+			fetchedAt: now,
+			limits: [
+				{
+					id: "anthropic:7d:fable",
+					label: "Claude 7 Day (Fable)",
+					scope: { provider: "anthropic", windowId: "7d", tier: "fable" },
+					window: { id: "7d", label: "7 Day" },
+					amount: { used: 10, limit: 100, usedFraction: 0.1, unit: "percent" },
+					status: "ok",
+				},
+			],
+			metadata: { accountId: "remote-account", email: "remote@example.com", brokerFetch: "before-block" },
+		};
+		const blockedReport: UsageReport = {
+			provider: "anthropic",
+			fetchedAt: now + 1,
+			limits: [
+				{
+					id: "anthropic:7d:fable",
+					label: "Claude 7 Day (Fable)",
+					scope: { provider: "anthropic", windowId: "7d", tier: "fable" },
+					window: { id: "7d", label: "7 Day" },
+					amount: { used: 100, limit: 100, usedFraction: 1, unit: "percent" },
+					status: "exhausted",
+				},
+			],
+			metadata: { accountId: "remote-account", email: "remote@example.com", brokerFetch: "after-block" },
+		};
+		const fetchUsageSpy = vi
+			.spyOn(brokerClient, "fetchUsage")
+			.mockResolvedValueOnce({ generatedAt: now, reports: [healthyReport] })
+			.mockResolvedValueOnce({ generatedAt: now + 1, reports: [blockedReport] });
+		const backgroundSnapshotFetch = Promise.withResolvers<FetchSnapshotResult>();
+		vi.spyOn(brokerClient, "fetchSnapshot")
+			.mockReturnValueOnce(backgroundSnapshotFetch.promise)
+			.mockResolvedValueOnce({
+				status: 200,
+				generation: blockedSnapshot.generation,
+				snapshot: blockedSnapshot,
+			});
+		const remoteStore = new RemoteAuthCredentialStore({
+			client: brokerClient,
+			streamSnapshots: false,
+			initialSnapshot,
+		});
+		try {
+			const first = await remoteStore.fetchUsageReports();
+			expect(fetchUsageSpy).toHaveBeenCalledTimes(1);
+			expect(first).not.toBeNull();
+			expect(first?.[0]?.metadata?.brokerFetch).toBe("before-block");
+			expect(requireLimit(first![0]!, "anthropic:7d:fable").status).toBe("ok");
+
+			await remoteStore.refreshSnapshot();
+			expect(remoteStore.getCredentialBlock(7, "anthropic:oauth", "tier:fable")).toBe(blockedUntilMs);
+
+			const second = await remoteStore.fetchUsageReports();
+			expect(fetchUsageSpy).toHaveBeenCalledTimes(2);
+			expect(second).not.toBeNull();
+			expect(second?.[0]?.metadata?.brokerFetch).toBe("after-block");
+			const afterBlockLimit = requireLimit(second![0]!, "anthropic:7d:fable");
+			expect(afterBlockLimit.status).toBe("exhausted");
+			expect(afterBlockLimit.amount.usedFraction).toBe(1);
+		} finally {
+			remoteStore.close();
+		}
 	});
 
 	test("getUsageReport caches broker fetch failure for USAGE_CACHE_TTL_MS", async () => {
@@ -317,6 +466,294 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 		expect(validated.credentials[1]!.blocks).toEqual([
 			{ providerKey: "anthropic:oauth", blockScope: "tier:fable", blockedUntilMs: futureBlock },
 		]);
+	});
+
+	test("getUsageReport routes each org-scoped credential to its own org's report", async () => {
+		// Two subscriptions (orgs) on one account email: the broker aggregate
+		// carries both pools. Matching by shared email/account would hand the
+		// healthy Max credential the exhausted Team report (and vice versa).
+		const brokerClient = new AuthBrokerClient({ url: "http://127.0.0.1:9", token: "unused" });
+		const now = Date.now();
+		const makeCredential = (id: number, orgId?: string) => ({
+			type: "oauth" as const,
+			access: `remote-access-${id}`,
+			refresh: REMOTE_REFRESH_SENTINEL,
+			expires: now + 120_000,
+			accountId: "account-shared",
+			email: "shared@example.com",
+			orgId,
+		});
+		const makeOrgReport = (orgId: string, usedFraction: number, status: "ok" | "exhausted"): UsageReport => ({
+			provider: "anthropic",
+			fetchedAt: now,
+			limits: [
+				{
+					id: "anthropic:5h",
+					label: "Claude 5 Hour",
+					scope: { provider: "anthropic", windowId: "5h" },
+					window: { id: "5h", label: "5 Hour" },
+					amount: { used: usedFraction * 100, limit: 100, usedFraction, unit: "percent" },
+					status,
+				},
+			],
+			metadata: { email: "shared@example.com", accountId: "account-shared", orgId },
+		});
+		vi.spyOn(brokerClient, "fetchUsage").mockResolvedValue({
+			generatedAt: now,
+			reports: [makeOrgReport("org-team", 1, "exhausted"), makeOrgReport("org-max", 0.1, "ok")],
+		});
+		const remoteStore = new RemoteAuthCredentialStore({
+			client: brokerClient,
+			streamSnapshots: false,
+			initialSnapshot: {
+				generation: 1,
+				generatedAt: now,
+				serverNowMs: now,
+				refresher: { enabled: false, intervalMs: 0, skewMs: 0, nextSweepInMs: Number.MAX_SAFE_INTEGER },
+				credentials: [
+					{
+						id: 1,
+						provider: "anthropic",
+						credential: makeCredential(1, "org-team"),
+						identityKey: "email:shared@example.com|org:org-team",
+						rotatesInMs: null,
+					},
+					{
+						id: 2,
+						provider: "anthropic",
+						credential: makeCredential(2, "org-max"),
+						identityKey: "email:shared@example.com|org:org-max",
+						rotatesInMs: null,
+					},
+				],
+			},
+		});
+		try {
+			const teamReport = await remoteStore.getUsageReport("anthropic", makeCredential(1, "org-team"));
+			expect(teamReport?.metadata?.orgId).toBe("org-team");
+			expect(requireLimit(teamReport!, "anthropic:5h").status).toBe("exhausted");
+
+			const maxReport = await remoteStore.getUsageReport("anthropic", makeCredential(2, "org-max"));
+			expect(maxReport?.metadata?.orgId).toBe("org-max");
+			expect(requireLimit(maxReport!, "anthropic:5h").status).toBe("ok");
+
+			// An org-less (legacy) credential must not receive an org-attributed
+			// sibling's pool via the shared email/account — "no usage data" is
+			// the correct answer.
+			const legacyReport = await remoteStore.getUsageReport("anthropic", makeCredential(3));
+			expect(legacyReport).toBeNull();
+		} finally {
+			remoteStore.close();
+		}
+	});
+
+	test("getUsageReport gates same-org siblings on the member's own identity", async () => {
+		// Two Team members share the org id but draw on per-user pools: the
+		// shared org is a gate, not a match, so Bob must never receive Alice's
+		// report just because it is the first (or only) same-org candidate.
+		const brokerClient = new AuthBrokerClient({ url: "http://127.0.0.1:9", token: "unused" });
+		const now = Date.now();
+		const makeMemberCredential = (name: string, orgId?: string) => ({
+			type: "oauth" as const,
+			access: `remote-access-${name}`,
+			refresh: REMOTE_REFRESH_SENTINEL,
+			expires: now + 120_000,
+			...(name === "org-only" ? {} : { accountId: `account-${name}`, email: `${name}@example.com` }),
+			orgId,
+		});
+		const makeMemberReport = (
+			name: string,
+			orgId: string,
+			usedFraction: number,
+			status: "ok" | "exhausted",
+		): UsageReport => ({
+			provider: "anthropic",
+			fetchedAt: now,
+			limits: [
+				{
+					id: "anthropic:5h",
+					label: "Claude 5 Hour",
+					scope: { provider: "anthropic", windowId: "5h" },
+					window: { id: "5h", label: "5 Hour" },
+					amount: { used: usedFraction * 100, limit: 100, usedFraction, unit: "percent" },
+					status,
+				},
+			],
+			metadata: { email: `${name}@example.com`, accountId: `account-${name}`, orgId },
+		});
+		// Bob's report deliberately precedes Alice's so a first-same-org match
+		// would hand his pool to Alice; org-duo holds only Dave's report.
+		vi.spyOn(brokerClient, "fetchUsage").mockResolvedValue({
+			generatedAt: now,
+			reports: [
+				makeMemberReport("bob", "org-team", 0.1, "ok"),
+				makeMemberReport("alice", "org-team", 1, "exhausted"),
+				makeMemberReport("dave", "org-duo", 0.5, "ok"),
+			],
+		});
+		const remoteStore = new RemoteAuthCredentialStore({
+			client: brokerClient,
+			streamSnapshots: false,
+			initialSnapshot: {
+				generation: 1,
+				generatedAt: now,
+				serverNowMs: now,
+				refresher: { enabled: false, intervalMs: 0, skewMs: 0, nextSweepInMs: Number.MAX_SAFE_INTEGER },
+				credentials: [],
+			},
+		});
+		try {
+			// Each member routes to their OWN pool inside the shared org.
+			const aliceReport = await remoteStore.getUsageReport("anthropic", makeMemberCredential("alice", "org-team"));
+			expect(aliceReport?.metadata?.accountId).toBe("account-alice");
+			expect(requireLimit(aliceReport!, "anthropic:5h").status).toBe("exhausted");
+			const bobReport = await remoteStore.getUsageReport("anthropic", makeMemberCredential("bob", "org-team"));
+			expect(bobReport?.metadata?.accountId).toBe("account-bob");
+			expect(requireLimit(bobReport!, "anthropic:5h").status).toBe("ok");
+
+			// Erin's own report is missing: the lone same-org sibling report
+			// (Dave's) must not stand in for hers — "no usage data" is correct.
+			expect(await remoteStore.getUsageReport("anthropic", makeMemberCredential("erin", "org-duo"))).toBeNull();
+
+			// An org-only credential (no base identifiers) still matches on the
+			// org alone, but only when the same-org report is unambiguous.
+			const duoReport = await remoteStore.getUsageReport("anthropic", makeMemberCredential("org-only", "org-duo"));
+			expect(duoReport?.metadata?.accountId).toBe("account-dave");
+			expect(await remoteStore.getUsageReport("anthropic", makeMemberCredential("org-only", "org-team"))).toBeNull();
+
+			// Header-ingest overlays partition per member too: Alice's ingest
+			// must merge into HER aggregate row, not Bob's earlier same-org row.
+			const overlay: UsageReport = {
+				provider: "anthropic",
+				fetchedAt: now,
+				limits: [
+					{
+						id: "anthropic:5h",
+						label: "Claude 5 Hour",
+						scope: { provider: "anthropic", windowId: "5h" },
+						window: { id: "5h", label: "5 Hour" },
+						amount: { used: 90, limit: 100, usedFraction: 0.9, unit: "percent" },
+						status: "ok",
+					},
+				],
+				metadata: { email: "alice@example.com", accountId: "account-alice", orgId: "org-team" },
+			};
+			expect(remoteStore.ingestUsageReport("anthropic", makeMemberCredential("alice", "org-team"), overlay)).toBe(
+				true,
+			);
+			const merged = await remoteStore.fetchUsageReports();
+			const mergedAlice = merged?.find(report => report.metadata?.accountId === "account-alice");
+			const mergedBob = merged?.find(report => report.metadata?.accountId === "account-bob");
+			expect(requireLimit(mergedAlice!, "anthropic:5h").amount.used).toBe(90);
+			expect(requireLimit(mergedBob!, "anthropic:5h").amount.used).toBe(10);
+			const bobAfterIngest = await remoteStore.getUsageReport("anthropic", makeMemberCredential("bob", "org-team"));
+			expect(requireLimit(bobAfterIngest!, "anthropic:5h").amount.used).toBe(10);
+		} finally {
+			remoteStore.close();
+		}
+	});
+
+	test("getUsageReport never hands an org-less aggregate to an org-scoped credential", async () => {
+		// Presence mismatch is a non-match in BOTH directions: when every
+		// surviving report is org-less (e.g. a legacy sibling row supplied the
+		// sole report because the scoped row's own fetch failed), the scoped
+		// credential must get "no usage data" — not the legacy row's pool.
+		const brokerClient = new AuthBrokerClient({ url: "http://127.0.0.1:9", token: "unused" });
+		const now = Date.now();
+		const orgLessReport: UsageReport = {
+			provider: "anthropic",
+			fetchedAt: now,
+			limits: [
+				{
+					id: "anthropic:5h",
+					label: "Claude 5 Hour",
+					scope: { provider: "anthropic", windowId: "5h" },
+					window: { id: "5h", label: "5 Hour" },
+					amount: { used: 100, limit: 100, usedFraction: 1, unit: "percent" },
+					status: "exhausted",
+				},
+			],
+			metadata: { email: "shared@example.com", accountId: "account-shared" },
+		};
+		vi.spyOn(brokerClient, "fetchUsage").mockResolvedValue({ generatedAt: now, reports: [orgLessReport] });
+		const remoteStore = new RemoteAuthCredentialStore({
+			client: brokerClient,
+			streamSnapshots: false,
+			initialSnapshot: {
+				generation: 1,
+				generatedAt: now,
+				serverNowMs: now,
+				refresher: { enabled: false, intervalMs: 0, skewMs: 0, nextSweepInMs: Number.MAX_SAFE_INTEGER },
+				credentials: [],
+			},
+		});
+		try {
+			const scoped = await remoteStore.getUsageReport("anthropic", {
+				type: "oauth",
+				access: "remote-access-scoped",
+				refresh: REMOTE_REFRESH_SENTINEL,
+				expires: now + 120_000,
+				accountId: "account-shared",
+				email: "shared@example.com",
+				orgId: "org-team",
+			});
+			expect(scoped).toBeNull();
+		} finally {
+			remoteStore.close();
+		}
+	});
+
+	test("does not trust a lone org-less candidate from a mixed aggregate without its base identity", async () => {
+		const brokerClient = new AuthBrokerClient({ url: "http://127.0.0.1:9", token: "unused" });
+		const now = Date.now();
+		const orgReport: UsageReport = {
+			provider: "anthropic",
+			fetchedAt: now,
+			limits: [],
+			metadata: { email: "alice@example.com", accountId: "account-alice", orgId: "org-team" },
+		};
+		const legacyReport: UsageReport = {
+			provider: "anthropic",
+			fetchedAt: now,
+			limits: [],
+			metadata: { email: "carol@example.com", accountId: "account-carol" },
+		};
+		vi.spyOn(brokerClient, "fetchUsage").mockResolvedValue({
+			generatedAt: now,
+			reports: [orgReport, legacyReport],
+		});
+		const remoteStore = new RemoteAuthCredentialStore({
+			client: brokerClient,
+			streamSnapshots: false,
+			initialSnapshot: {
+				generation: 1,
+				generatedAt: now,
+				serverNowMs: now,
+				refresher: { enabled: false, intervalMs: 0, skewMs: 0, nextSweepInMs: Number.MAX_SAFE_INTEGER },
+				credentials: [],
+			},
+		});
+		const bobCredential = {
+			type: "oauth" as const,
+			access: "remote-access-bob",
+			refresh: REMOTE_REFRESH_SENTINEL,
+			expires: now + 120_000,
+			accountId: "account-bob",
+			email: "bob@example.com",
+		};
+		const bobOverlay: UsageReport = {
+			provider: "anthropic",
+			fetchedAt: now,
+			limits: [],
+			metadata: { email: "bob@example.com", accountId: "account-bob" },
+		};
+		try {
+			expect(await remoteStore.getUsageReport("anthropic", bobCredential)).toBeNull();
+			expect(remoteStore.ingestUsageReport("anthropic", bobCredential, bobOverlay)).toBe(true);
+			expect(await remoteStore.fetchUsageReports()).toHaveLength(3);
+		} finally {
+			remoteStore.close();
+		}
 	});
 
 	test("RemoteAuthCredentialStore reads snapshot blocks and applies upserts before broker acknowledgement", () => {
@@ -596,6 +1033,18 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 		expect(clientStorage.get("kagi")).toEqual({ type: "api_key", key: "new-key" });
 		clientStorage.close();
 	});
+	test("snapshot with a login-sourced api_key passes client wire validation", async () => {
+		// Regression: keys stored via the /login flow carry `source: "login"`.
+		// exportSnapshot() forwards them verbatim; the client wire schema used
+		// to reject the field ("credentials[0].credential.source must be removed").
+		await serverStorage!.set("custom-host", { type: "api_key", key: "sk-custom", source: "login" });
+
+		const brokerClient = new AuthBrokerClient({ url: handle!.url, token });
+		const result = await brokerClient.fetchSnapshot();
+		if (result.status !== 200) throw new Error("expected snapshot");
+		const entry = result.snapshot.credentials.find(candidate => candidate.provider === "custom-host");
+		expect(entry?.credential).toEqual({ type: "api_key", key: "sk-custom", source: "login" });
+	});
 
 	test("client AuthStorage.remove disables every broker-side credential for the provider (logout)", async () => {
 		serverStore!.saveApiKey("kagi", "k1");
@@ -622,6 +1071,25 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 
 		expect(serverStore!.listAuthCredentials("kagi")).toEqual([]);
 		expect(clientStorage.get("kagi")).toBeUndefined();
+		clientStorage.close();
+	});
+
+	test("client AuthStorage invalidateUsageCache notifies broker to invalidate server-side cache", async () => {
+		const brokerClient = new AuthBrokerClient({ url: handle!.url, token });
+		const initialResult = await brokerClient.fetchSnapshot();
+		if (initialResult.status !== 200) throw new Error("expected snapshot");
+		const remoteStore = new RemoteAuthCredentialStore({
+			client: brokerClient,
+			initialSnapshot: initialResult.snapshot,
+		});
+		const clientStorage = new AuthStorage(remoteStore);
+		await clientStorage.reload();
+
+		const serverInvalidateSpy = vi.spyOn(serverStorage!, "invalidateUsageCache");
+
+		await remoteStore.invalidateUsageCache();
+
+		expect(serverInvalidateSpy).toHaveBeenCalled();
 		clientStorage.close();
 	});
 });

@@ -285,8 +285,6 @@ function buildUsageLimit(args: {
 		label: usageWindow.label,
 		scope: {
 			provider: "openai-codex",
-			accountId: args.accountId,
-			tier: args.planType,
 			windowId: usageWindow.id,
 			shared: true,
 		},
@@ -346,11 +344,44 @@ function buildAdditionalUsageLimit(args: {
 	};
 }
 
+/**
+ * Parse Codex `x-codex-{primary,secondary}-*` rate-limit response headers into
+ * a usage report. The backend attaches these snapshots to every response, so
+ * ingesting them lets credential selection block an exhausted account before
+ * the next request burns a wire 429.
+ */
+export function parseCodexRateLimitHeaders(headers: Record<string, string>, now = Date.now()): UsageReport | null {
+	const parseWindow = (key: "primary" | "secondary"): ParsedUsageWindow | undefined => {
+		const usedPercent = toNumber(headers[`x-codex-${key}-used-percent`]);
+		if (usedPercent === undefined) return undefined;
+		const windowMinutes = toNumber(headers[`x-codex-${key}-window-minutes`]);
+		const resetAt = toNumber(headers[`x-codex-${key}-reset-at`]);
+		return {
+			usedPercent,
+			limitWindowSeconds: windowMinutes === undefined ? undefined : windowMinutes * 60,
+			resetAt,
+		};
+	};
+	const primary = parseWindow("primary");
+	const secondary = parseWindow("secondary");
+	if (!primary && !secondary) return null;
+	const limits: UsageLimit[] = [];
+	if (primary) limits.push(buildUsageLimit({ key: "primary", window: primary, nowMs: now }));
+	if (secondary) limits.push(buildUsageLimit({ key: "secondary", window: secondary, nowMs: now }));
+	return {
+		provider: "openai-codex",
+		fetchedAt: now,
+		limits,
+		metadata: { source: "ratelimit-headers" },
+	};
+}
+
 export const openaiCodexUsageProvider: UsageProvider = {
 	id: "openai-codex",
 	supports(params: UsageFetchParams): boolean {
 		return params.provider === "openai-codex" && params.credential.type === "oauth";
 	},
+	parseRateLimitHeaders: parseCodexRateLimitHeaders,
 	async fetchUsage(params: UsageFetchParams, ctx: UsageFetchContext): Promise<UsageReport | null> {
 		if (params.provider !== "openai-codex") return null;
 		const { credential } = params;
@@ -507,6 +538,9 @@ export const openaiCodexUsageProvider: UsageProvider = {
 const FIVE_HOUR_MS = 5 * 60 * 60 * 1000;
 
 export const codexRankingStrategy: CredentialRankingStrategy = {
+	blockScope() {
+		return "shared";
+	},
 	findWindowLimits(report) {
 		const findLimit = (key: "primary" | "secondary"): UsageLimit | undefined => {
 			const direct = report.limits.find(l => l.id === `openai-codex:${key}`);

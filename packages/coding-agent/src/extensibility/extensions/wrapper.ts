@@ -1,11 +1,18 @@
 /**
  * Tool wrappers for extensions.
  */
-import type { AgentTool, AgentToolContext, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type {
+	AgentTool,
+	AgentToolContext,
+	AgentToolResult,
+	AgentToolUpdateCallback,
+	ToolLoadMode,
+} from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, Static, TextContent, TSchema } from "@oh-my-pi/pi-ai";
 import type { Settings } from "../../config/settings";
 import type { Theme } from "../../modes/theme/theme";
-import { type ApprovalMode, formatApprovalPrompt, requiresApproval } from "../../tools/approval";
+import { type ApprovalMode, formatApprovalPrompt, resolveApproval } from "../../tools/approval";
+import { defaultLoadModeForToolName } from "../../tools/essential-tools";
 import { normalizeToolEventInput, resolveToolEventInput } from "../tool-event-input";
 import { applyToolProxy } from "../tool-proxy";
 import type { ExtensionRunner } from "./runner";
@@ -23,12 +30,14 @@ export class RegisteredToolAdapter implements AgentTool<any, any, any> {
 
 	renderCall?: (args: any, options: any, theme: any) => any;
 	renderResult?: (result: any, options: any, theme: any, args?: any) => any;
+	readonly loadMode: ToolLoadMode;
 
 	constructor(
 		private registeredTool: RegisteredTool,
 		private runner: ExtensionRunner,
 	) {
 		applyToolProxy(registeredTool.definition, this);
+		this.loadMode = defaultLoadModeForToolName(registeredTool.definition.name, registeredTool.definition.loadMode);
 
 		// Only define render methods when the underlying definition provides them.
 		// If these exist unconditionally on the prototype, ToolExecutionComponent
@@ -110,7 +119,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<TDetails, TParameters>,
 		context?: AgentToolContext,
-	) {
+	): Promise<AgentToolResult<TDetails, TParameters>> {
 		// 1. Check approval policy (before extension handlers).
 		// CLI `--auto-approve` / `--yolo` sets approval mode to yolo.
 		// User `tools.approval.<tool>` policies are still applied in all modes.
@@ -119,7 +128,21 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		const configuredMode = (settings?.get("tools.approvalMode") ?? "yolo") as ApprovalMode;
 		const approvalMode: ApprovalMode = cliAutoApprove ? "yolo" : configuredMode;
 		const userPolicies = (settings?.get("tools.approval") ?? {}) as Record<string, unknown>;
-		const approvalCheck = requiresApproval(this.tool, params, approvalMode, userPolicies);
+		const resolved = resolveApproval(this.tool, params, approvalMode, userPolicies);
+		if (resolved.policy === "deny") {
+			throw new Error(
+				`Tool "${this.tool.name}" is blocked by user policy.\n` +
+					`To allow: remove "tools.approval.${this.tool.name}: deny" from config.`,
+			);
+		}
+		// An xd:// device dispatch already cleared the write tool's outer gate at
+		// this tool's tier — re-prompting would double-ask for one action. Explicit
+		// per-tool "prompt" policies and tool-demanded overrides still prompt.
+		const explicitPrompt = resolved.override || Object.hasOwn(userPolicies, this.tool.name);
+		const approvalCheck = {
+			required: resolved.policy === "prompt" && (explicitPrompt || context?.xdevApproved !== true),
+			reason: resolved.reason,
+		};
 
 		if (approvalCheck.required) {
 			const hasApprovalHandlers =
@@ -237,23 +260,23 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				const modifiedContent: (TextContent | ImageContent)[] = resultResult.content ?? result.content;
 				const modifiedDetails = (resultResult.details ?? result.details) as TDetails;
 
-				// Extension can override error status
-				if (resultResult.isError === true && !executionError) {
-					// Extension marks a successful result as error
-					const textBlocks = (modifiedContent ?? []).filter((c): c is TextContent => c.type === "text");
-					const errorText = textBlocks.map(t => t.text).join("\n") || "Tool result marked as error by extension";
-					throw new Error(errorText);
-				}
-				if (resultResult.isError === false && executionError) {
-					// Extension clears the error - return success
-					return { content: modifiedContent, details: modifiedDetails };
-				}
+				// Effective error state: an explicit handler override wins; otherwise the
+				// original execution outcome stands. This lets a handler rewrite a failed
+				// call's model-visible content/details while keeping it an error, flip a
+				// failure to success, or flag a success as an error.
+				const effectiveError = resultResult.isError ?? !!executionError;
 
-				// Error status unchanged, but content/details may be modified
-				if (executionError) {
-					throw executionError;
-				}
-				return { content: modifiedContent, details: modifiedDetails };
+				// Return the (possibly modified) result carrying the error flag rather than
+				// rethrowing the original exception. The agent loop honors
+				// `AgentToolResult.isError` and surfaces it as a tool error on the wire (see
+				// `coerceToolResult` in agent-loop), so replacement failure content reaches
+				// the model while the call remains an error — the original exception text is
+				// no longer forced through, which previously discarded the replacement.
+				return {
+					content: modifiedContent,
+					details: modifiedDetails,
+					...(effectiveError ? { isError: true } : {}),
+				};
 			}
 		}
 

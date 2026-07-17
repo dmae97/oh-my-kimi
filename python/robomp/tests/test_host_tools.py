@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import threading
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,7 @@ from omp_rpc import HostToolContext, RpcCommandError
 
 from robomp import host_tools
 from robomp.db import Database
-from robomp.github_client import GitHubClient, IssueInfo, RepoInfo
+from robomp.github_client import GitHubClient, IssueIndexEntry, IssueInfo, RepoInfo
 from robomp.host_tools import AbortController, ToolBindings, build
 from robomp.sandbox import LocalGitTransport, Workspace
 
@@ -842,6 +843,193 @@ def test_classify_issue_question_skips_repro_path(db: Database, tmp_path: Path) 
     assert row is not None and row.classification == "question"
 
 
+def test_classify_issue_wontfix_takes_comment_only_path(db: Database, tmp_path: Path) -> None:
+    """`wontfix` is a non-PR primary: labels land, classification persists, and the
+    echoed next step routes to a single explanatory comment — no repro, no PR."""
+    transport = httpx.MockTransport(lambda r: httpx.Response(200, json=[{"name": "wontfix"}, {"name": "triaged"}]))
+    bindings, loop, t = _bindings(db, tmp_path, transport)
+    try:
+        tool = next(x for x in build(bindings) if x.name == "classify_issue")
+        result = tool.execute(
+            {"primary": "wontfix", "rationale": "intentional design tradeoff, no demonstrated impact"},
+            _ctx(),
+        )
+    finally:
+        _stop_loop(loop, t)
+    assert "wontfix" in result
+    assert "no PR" in result
+    row = db.get_issue(bindings.issue_key)
+    assert row is not None and row.classification == "wontfix"
+
+
+def test_gh_search_issues_scopes_repo_and_renders_matches(db: Database, tmp_path: Path) -> None:
+    """Search auto-prefixes the repo scope, surfaces PR/state_reason so triage can
+    spot prior fixes and not-planned precedents, and filters the inbound issue."""
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["q"] = request.url.params["q"]
+        return httpx.Response(
+            200,
+            json={
+                "total_count": 3,
+                "items": [
+                    {
+                        "number": 42,  # the inbound issue itself — must be filtered
+                        "title": "boom",
+                        "state": "open",
+                        "user": {"login": "alice"},
+                        "labels": [],
+                        "comments": 0,
+                        "updated_at": "2026-07-01T00:00:00Z",
+                        "created_at": "2026-07-01T00:00:00Z",
+                        "html_url": "https://example/42",
+                    },
+                    {
+                        "number": 30,
+                        "title": "same crash on resize",
+                        "state": "closed",
+                        "state_reason": "not_planned",
+                        "user": {"login": "bob"},
+                        "labels": [{"name": "wontfix"}],
+                        "comments": 3,
+                        "updated_at": "2026-06-01T00:00:00Z",
+                        "created_at": "2026-05-01T00:00:00Z",
+                        "html_url": "https://example/30",
+                    },
+                    {
+                        "number": 31,
+                        "title": "fix: resize crash",
+                        "state": "closed",
+                        "state_reason": "completed",
+                        "user": {"login": "bot"},
+                        "labels": [],
+                        "comments": 1,
+                        "updated_at": "2026-06-02T00:00:00Z",
+                        "created_at": "2026-06-02T00:00:00Z",
+                        "html_url": "https://example/pull/31",
+                        "pull_request": {"url": "https://example/pull/31"},
+                    },
+                ],
+            },
+        )
+
+    bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(handler))
+    try:
+        tool = next(x for x in build(bindings) if x.name == "gh_search_issues")
+        result = tool.execute({"query": "resize crash"}, _ctx())
+    finally:
+        _stop_loop(loop, t)
+    assert captured["q"] == "repo:octo/widget resize crash"
+    assert "#42" not in result  # inbound issue filtered out
+    assert "#30 (issue, closed (not_planned))" in result
+    assert "#31 (PR, closed (completed))" in result
+
+
+def test_gh_search_issues_rejects_repo_qualifier_and_empty_query(db: Database, tmp_path: Path) -> None:
+    bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(lambda r: httpx.Response(500)))
+    try:
+        tool = next(x for x in build(bindings) if x.name == "gh_search_issues")
+        with pytest.raises(RpcCommandError):
+            tool.execute({"query": "repo:evil/elsewhere secrets"}, _ctx())
+        with pytest.raises(RpcCommandError):
+            tool.execute({"query": "   "}, _ctx())
+    finally:
+        _stop_loop(loop, t)
+
+
+def test_gh_search_issues_serves_from_local_index_once_synced(db: Database, tmp_path: Path) -> None:
+    """With a sync watermark present the tool answers from SQLite: qualifiers
+    become filters, merged PRs render as `merged`, and NO GitHub call happens."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("local-index search must not call GitHub")
+
+    bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(handler))
+    db.set_issue_index_watermark("octo/widget", "2026-07-01T00:00:00Z")
+    db.upsert_issue_index(
+        IssueIndexEntry(
+            repo="octo/widget",
+            number=31,
+            is_pull_request=True,
+            title="fix: resize crash",
+            body="handles narrow terminals",
+            state="closed",
+            state_reason="",
+            merged_at="2026-06-02T00:00:00Z",
+            author="bot",
+            labels=(),
+            comments=1,
+            created_at="2026-06-02T00:00:00Z",
+            updated_at="2026-06-02T00:00:00Z",
+            html_url="https://example/pull/31",
+        )
+    )
+    db.upsert_issue_index(
+        IssueIndexEntry(
+            repo="octo/widget",
+            number=30,
+            is_pull_request=False,
+            title="resize crash report",
+            body="",
+            state="closed",
+            state_reason="not_planned",
+            merged_at="",
+            author="bob",
+            labels=("wontfix",),
+            comments=3,
+            created_at="2026-05-01T00:00:00Z",
+            updated_at="2026-06-01T00:00:00Z",
+            html_url="https://example/30",
+        )
+    )
+    try:
+        tool = next(x for x in build(bindings) if x.name == "gh_search_issues")
+        result = tool.execute({"query": "resize crash"}, _ctx())
+        pr_only = tool.execute({"query": "resize crash is:merged"}, _ctx())
+    finally:
+        _stop_loop(loop, t)
+    assert "#30 (issue, closed (not_planned))" in result
+    assert "#31 (PR, merged)" in result
+    assert "#31" in pr_only and "#30" not in pr_only
+
+
+def _git_repo_with_commits(bindings) -> None:
+    """Turn the stub workspace repo_dir into a git repo with two commits."""
+    repo = str(bindings.workspace.repo_dir)
+    ident = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+    subprocess.run(["git", "init", "-q", "-b", "main", repo], check=True)
+    Path(repo, "a.txt").write_text("plain start\n", encoding="utf-8")
+    subprocess.run(["git", "-C", repo, "add", "."], check=True)
+    subprocess.run(["git", "-C", repo, *ident, "commit", "-q", "-m", "feat: initial import"], check=True)
+    Path(repo, "a.txt").write_text("plain start\nsplitPathAndSel guard\n", encoding="utf-8")
+    subprocess.run(["git", "-C", repo, "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", repo, *ident, "commit", "-q", "-m", "fix(tools): colon selector literal paths"],
+        check=True,
+    )
+
+
+def test_search_commits_message_and_patch_modes(db: Database, tmp_path: Path) -> None:
+    """message mode greps commit messages; patch mode pickaxes diff content.
+    Without an origin ref the search falls back to HEAD instead of failing."""
+    bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(lambda r: httpx.Response(500)))
+    _git_repo_with_commits(bindings)
+    try:
+        tool = next(x for x in build(bindings) if x.name == "search_commits")
+        by_message = tool.execute({"query": "colon selector"}, _ctx())
+        by_patch = tool.execute({"query": "splitPathAndSel", "mode": "patch"}, _ctx())
+        none = tool.execute({"query": "nonexistent-topic"}, _ctx())
+        with pytest.raises(RpcCommandError):
+            tool.execute({"query": "x", "mode": "bogus"}, _ctx())
+    finally:
+        _stop_loop(loop, t)
+    assert "fix(tools): colon selector literal paths" in by_message
+    assert "feat: initial import" not in by_message
+    assert "fix(tools): colon selector literal paths" in by_patch
+    assert none.startswith("No commits")
+
+
 def test_classify_issue_rejects_bug_without_priority(db: Database, tmp_path: Path) -> None:
     bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(lambda r: httpx.Response(500)))
     try:
@@ -1302,7 +1490,9 @@ def test_impl_gate_allows_later_authorized_event_to_reach_repo_commands(
     assert calls
 
 
-def test_impl_gate_ignores_skipped_authorized_event(db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_impl_gate_ignores_skipped_authorized_event(
+    db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     calls: list[list[str] | tuple[str, ...]] = []
 
     def record_repo_command(_bindings: ToolBindings, cmd: list[str] | tuple[str, ...], *, timeout: float | None = None):
@@ -2303,7 +2493,8 @@ def test_gh_push_branch_runs_fix_and_check_before_pushing(
     # Both gates ran, and fix preceded check (both have one call recorded).
     assert fix_calls.read_text() == "called"
     assert check_calls.read_text() == "called"
-    # The formatter's diff was committed by the bot as a `style: bun run fix` commit.
+    # The formatter's diff was amended into the agent's HEAD commit — no
+    # standalone `style:` commit; subject and author are retained.
     log = subprocess.run(
         ["git", "-C", str(ws.repo_dir), "log", "--format=%an <%ae> %s", "-n", "2"],
         capture_output=True,
@@ -2311,7 +2502,17 @@ def test_gh_push_branch_runs_fix_and_check_before_pushing(
         check=True,
     )
     lines = log.stdout.strip().splitlines()
-    assert lines[0].startswith("robomp-bot <robomp-bot@example.invalid> style: bun run fix"), lines
+    assert lines[0] == "robomp-bot <robomp-bot@example.invalid> feat: follow-up", lines
+    assert lines[1] == "robomp-bot <robomp-bot@example.invalid> init", lines
+    assert (ws.repo_dir / "src.txt").read_text() == "formatted\n"
+    # HEAD's tree contains the formatter output (not just the worktree).
+    show = subprocess.run(
+        ["git", "-C", str(ws.repo_dir), "show", "HEAD:src.txt"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert show.stdout == "formatted\n"
     # And the branch ended up on the remote at the new head.
     assert result.startswith(f"pushed {ws.branch} ")
     refs = subprocess.run(
@@ -2920,10 +3121,10 @@ def test_gh_push_branch_skip_checks_still_refuses_dirty_worktree(
     assert not any(r.startswith("refs/heads/farm/") for r in refs.stdout.splitlines()), refs.stdout
 
 
-def test_gh_open_pr_runs_fix_then_check_and_commits_fixup(
+def test_gh_open_pr_runs_fix_then_check_and_amends_formatter_diff(
     db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """gh_open_pr runs `bun run fix`, commits any diff as the bot, then runs `bun check`."""
+    """gh_open_pr runs `bun run fix`, amends any diff into HEAD, then runs `bun check`."""
     import os
     import subprocess
 
@@ -3078,7 +3279,8 @@ def test_gh_open_pr_runs_fix_then_check_and_commits_fixup(
     # Both bun stages ran, and fix preceded check.
     assert fix_calls.read_text() == "called"
     assert check_calls.read_text() == "called"
-    # The formatter diff was committed by the bot as a "style:" commit.
+    # The formatter diff was amended into HEAD — subject and author retained,
+    # no standalone "style:" commit, and HEAD's tree holds the formatted file.
     log = subprocess.run(
         ["git", "-C", str(ws.repo_dir), "log", "--format=%an|%ae|%s", "-2"],
         capture_output=True,
@@ -3086,8 +3288,15 @@ def test_gh_open_pr_runs_fix_then_check_and_commits_fixup(
         check=True,
     )
     lines = log.stdout.strip().splitlines()
-    assert lines[0] == "robomp-bot|robomp-bot@example.invalid|style: bun run fix"
-    assert lines[1].endswith("|feat: initial change")
+    assert lines[0] == "robomp-bot|robomp-bot@example.invalid|feat: initial change"
+    assert lines[1].endswith("|init")
+    show = subprocess.run(
+        ["git", "-C", str(ws.repo_dir), "show", "HEAD:src.txt"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert show.stdout == "formatted\n"
     # Worktree is clean again (gate before push would have rejected otherwise).
     status = subprocess.run(
         ["git", "-C", str(ws.repo_dir), "status", "--porcelain"],
@@ -3113,8 +3322,8 @@ def test_gh_open_pr_refuses_dirty_worktree_before_fix(
 ) -> None:
     """A pre-existing uncommitted edit MUST cause gh_open_pr (and gh_push_branch)
     to refuse BEFORE `bun run fix` runs — otherwise `git add -A` after fix
-    would silently fold the unrelated edit into the `style: bun run fix`
-    commit and ship it in the PR."""
+    would silently amend the unrelated edit into the agent's HEAD commit
+    and ship it in the PR."""
     import os
     import subprocess
 
@@ -3272,14 +3481,6 @@ def test_gh_open_pr_refuses_dirty_worktree_before_fix(
         check=True,
     )
     assert "src.txt" in status.stdout
-    # No commit named "style: bun run fix" exists.
-    log = subprocess.run(
-        ["git", "-C", str(ws.repo_dir), "log", "--format=%s"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    assert "style: bun run fix" not in log.stdout
     # Origin's farm/* branch was never created — push refused before reaching the network.
     refs = subprocess.run(
         ["git", "-C", str(bare), "for-each-ref", "--format=%(refname)"],

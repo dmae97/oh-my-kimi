@@ -9,6 +9,7 @@ import {
 import { formatKeyHints, type KeybindingsManager } from "../config/keybindings";
 import { isSettingsInitialized, settings } from "../config/settings";
 import { applyEmojiCompletion, getEmojiSuggestions, isEmojiPrefix, tryEmojiInlineReplace } from "./emoji-autocomplete";
+import { getGithubRefContext, getGithubRefSuggestions } from "./github-ref-autocomplete";
 import {
 	applyInternalUrlCompletion,
 	getInternalUrlSuggestions,
@@ -94,6 +95,36 @@ function getPromptActionPrefix(textBeforeCursor: string): string | null {
 	return textBeforeCursor.slice(hashIndex);
 }
 
+function applyGithubRefCompletion(
+	lines: string[],
+	cursorLine: number,
+	cursorCol: number,
+	item: AutocompleteItem,
+	prefix: string,
+): { lines: string[]; cursorLine: number; cursorCol: number } | null {
+	if (!getGithubRefContext(prefix)) return null;
+	const scheme: "pr" | "issue" | null = item.value.startsWith("pr://")
+		? "pr"
+		: item.value.startsWith("issue://")
+			? "issue"
+			: null;
+	if (!scheme) return { lines, cursorLine, cursorCol };
+
+	const currentLine = lines[cursorLine] || "";
+	const liveContext = getGithubRefContext(currentLine.slice(0, cursorCol));
+	if (!liveContext || (liveContext.qualifier && liveContext.qualifier !== scheme)) {
+		return { lines, cursorLine, cursorCol };
+	}
+
+	return applyInternalUrlCompletion(
+		lines,
+		cursorLine,
+		cursorCol,
+		{ ...item, value: `${scheme}://${liveContext.number}` },
+		liveContext.prefix,
+	);
+}
+
 export class PromptActionAutocompleteProvider implements AutocompleteProvider {
 	#commands: SlashCommand[];
 	#baseProvider: CombinedAutocompleteProvider;
@@ -125,10 +156,17 @@ export class PromptActionAutocompleteProvider implements AutocompleteProvider {
 			const commandName = commandText.slice(1, spaceIndex);
 			const command = this.#commands.find(cmd => cmd.name === commandName || cmd.aliases?.includes(commandName));
 			if (command && (!("allowArgs" in command) || command.allowArgs !== false)) {
-				return this.#baseProvider.getSuggestions(lines, cursorLine, cursorCol);
+				const argumentSuggestions = await this.#baseProvider.getSuggestions(lines, cursorLine, cursorCol);
+				if (argumentSuggestions) return argumentSuggestions;
+				// No slash-argument completion for this input: fall through to
+				// internal-url completion only. `#` prompt-action tokens stay
+				// literal text inside slash command arguments.
+				return getInternalUrlSuggestions(textBeforeCursor, this.#basePath);
 			}
 		}
 
+		const githubRefSuggestions = getGithubRefSuggestions(textBeforeCursor);
+		if (githubRefSuggestions) return githubRefSuggestions;
 		const promptActionPrefix = getPromptActionPrefix(textBeforeCursor);
 		if (promptActionPrefix) {
 			const query = promptActionPrefix.slice(1).toLowerCase();
@@ -176,6 +214,8 @@ export class PromptActionAutocompleteProvider implements AutocompleteProvider {
 		cursorCol: number;
 		onApplied?: () => void;
 	} {
+		const githubRefCompletion = applyGithubRefCompletion(lines, cursorLine, cursorCol, item, prefix);
+		if (githubRefCompletion) return githubRefCompletion;
 		if (prefix.startsWith("#") && isPromptActionItem(item)) {
 			if (item.actionId === "undo") {
 				return {

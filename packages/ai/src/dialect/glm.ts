@@ -272,8 +272,19 @@ export class GLMInbandScanner implements InbandScanner {
 
 	#consumeValue(final: boolean, events: InbandScanEvent[]): boolean {
 		const close = this.#buffer.indexOf(ARG_VALUE_CLOSE);
+		const heal = scanValueHeal(this.#buffer, close === -1 ? this.#buffer.length : close);
+		if (heal.kind === "heal") {
+			this.#streamValue(this.#buffer.slice(0, heal.valueEnd), events);
+			if (heal.trimValue && this.#call) this.#call.valueRaw = this.#call.valueRaw.trimEnd();
+			this.#appendCallRaw(this.#buffer.slice(heal.valueEnd, heal.resumeAt));
+			this.#buffer = this.#buffer.slice(heal.resumeAt);
+			this.#endValue();
+			this.#state = "body";
+			return true;
+		}
 		if (close === -1) {
-			const hold = final ? 0 : partialSuffixOverlap(this.#buffer, ARG_VALUE_CLOSE);
+			const healHold = heal.kind === "partial" ? this.#buffer.length - heal.start : 0;
+			const hold = final ? 0 : Math.max(partialSuffixOverlap(this.#buffer, ARG_VALUE_CLOSE), healHold);
 			const emit = this.#buffer.slice(0, this.#buffer.length - hold);
 			this.#streamValue(emit, events);
 			this.#buffer = this.#buffer.slice(this.#buffer.length - hold);
@@ -387,6 +398,118 @@ function minFound(...values: readonly number[]): number {
 		if (best === -1 || value < best) best = value;
 	}
 	return best;
+}
+
+/** Max whitespace tolerated between heal-signature tags before giving up. */
+const HEAL_WS_MAX = 32;
+/** Max key length considered plausible for an inlined `<arg_key>…</arg_key>` pair. */
+const HEAL_KEY_MAX = 128;
+
+/**
+ * Result of scanning a streaming `<arg_value>` body for a forgotten or
+ * mistyped `</arg_value>` closer.
+ *
+ * - `heal`: a repair signature starts inside the value; the value ends at
+ *   `valueEnd` and parsing resumes at `resumeAt` in "body" state.
+ *   `trimValue` marks boundaries inferred from separator formatting, whose
+ *   trailing whitespace belongs to the syntax, not the value.
+ * - `partial`: a signature may be forming at `start` but the buffer ends
+ *   before it can be confirmed; the caller must hold `start..` back from
+ *   streaming.
+ */
+type ValueHealScan =
+	| { kind: "none" }
+	| { kind: "partial"; start: number }
+	| { kind: "heal"; valueEnd: number; resumeAt: number; trimValue: boolean };
+
+type HealFollow = { kind: "match"; resumeAt: number } | { kind: "partial" } | { kind: "none" };
+
+type TagPrefixMatch = "match" | "partial" | "none";
+
+/**
+ * Finds the earliest heal signature starting before `limit` (the legit
+ * `</arg_value>` close, or end of buffer when absent). Two signatures repair
+ * a value whose closer the model botched:
+ *
+ * - Wrong closer: `</arg_key>` followed by `<arg_key>`, `</tool_call>`, or
+ *   `</arg_value>` — the model closed the value with the wrong tag.
+ * - Missing closer: a complete `<arg_key>…</arg_key>` + `<arg_value>`
+ *   sequence — the model started the next pair without closing the value.
+ *
+ * Without repair, either mistake swallows every following pair into the
+ * current value until the next `</arg_value>` anywhere in the stream.
+ */
+function scanValueHeal(text: string, limit: number): ValueHealScan {
+	for (let at = text.indexOf("<"); at !== -1 && at < limit; at = text.indexOf("<", at + 1)) {
+		const scan = matchHealSignature(text, at);
+		if (scan.kind !== "none") return scan;
+	}
+	return { kind: "none" };
+}
+
+function matchHealSignature(text: string, start: number): ValueHealScan {
+	const wrongCloser = matchTagPrefix(text, start, ARG_KEY_CLOSE);
+	if (wrongCloser === "partial") return { kind: "partial", start };
+	if (wrongCloser === "match") {
+		const follow = matchHealFollow(text, start + ARG_KEY_CLOSE.length);
+		if (follow.kind === "partial") return { kind: "partial", start };
+		if (follow.kind === "match")
+			return { kind: "heal", valueEnd: start, resumeAt: follow.resumeAt, trimValue: false };
+		return { kind: "none" };
+	}
+
+	const nextKey = matchTagPrefix(text, start, ARG_KEY_OPEN);
+	if (nextKey === "partial") return { kind: "partial", start };
+	if (nextKey === "none") return { kind: "none" };
+	let at = start + ARG_KEY_OPEN.length;
+	const keyEnd = Math.min(text.length, at + HEAL_KEY_MAX);
+	while (at < keyEnd && text[at] !== "<" && text[at] !== "\n") at++;
+	if (at === text.length) return { kind: "partial", start };
+	if (text[at] !== "<") return { kind: "none" };
+	const keyClose = matchTagPrefix(text, at, ARG_KEY_CLOSE);
+	if (keyClose === "partial") return { kind: "partial", start };
+	if (keyClose === "none") return { kind: "none" };
+	at = skipHealWhitespace(text, at + ARG_KEY_CLOSE.length);
+	if (at === -1) return { kind: "none" };
+	if (at === text.length) return { kind: "partial", start };
+	const value = matchTagPrefix(text, at, ARG_VALUE_OPEN);
+	if (value === "partial") return { kind: "partial", start };
+	if (value === "none") return { kind: "none" };
+	return { kind: "heal", valueEnd: start, resumeAt: start, trimValue: true };
+}
+
+/** Matches the tag expected after a wrong `</arg_key>` closer. */
+function matchHealFollow(text: string, from: number): HealFollow {
+	const at = skipHealWhitespace(text, from);
+	if (at === -1) return { kind: "none" };
+	if (at === text.length) return { kind: "partial" };
+	for (const tag of [ARG_KEY_OPEN, TOOL_CLOSE]) {
+		const match = matchTagPrefix(text, at, tag);
+		if (match === "match") return { kind: "match", resumeAt: at };
+		if (match === "partial") return { kind: "partial" };
+	}
+	const close = matchTagPrefix(text, at, ARG_VALUE_CLOSE);
+	if (close === "match") return { kind: "match", resumeAt: at + ARG_VALUE_CLOSE.length };
+	if (close === "partial") return { kind: "partial" };
+	return { kind: "none" };
+}
+
+/** Skips whitespace from `from`; -1 when the run exceeds {@link HEAL_WS_MAX}. */
+function skipHealWhitespace(text: string, from: number): number {
+	let at = from;
+	while (at < text.length && " \n\t\r".includes(text[at]!)) {
+		at++;
+		if (at - from > HEAL_WS_MAX) return -1;
+	}
+	return at;
+}
+
+function matchTagPrefix(text: string, at: number, tag: string): TagPrefixMatch {
+	const available = Math.min(text.length - at, tag.length);
+	for (let k = 0; k < available; k++) {
+		if (text.charCodeAt(at + k) !== tag.charCodeAt(k)) return "none";
+	}
+	return available === tag.length ? "match" : "partial";
 }
 
 function renderToolCall(call: ToolCall, options: DialectRenderOptions = {}): string {

@@ -3,6 +3,7 @@ import {
 	type AutocompleteProvider,
 	findLeadingSlashCommandStart,
 	findTrailingSlashCommandStart,
+	midPromptSkillTokenMatches,
 } from "../autocomplete";
 import { BracketedPasteHandler, decodeReencodedPasteControls } from "../bracketed-paste";
 import { getKeybindings, type KeybindingsManager } from "../keybindings";
@@ -21,7 +22,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "../utils";
-import { SelectList, type SelectListLayoutOptions, type SelectListTheme } from "./select-list";
+import { type SelectItem, SelectList, type SelectListLayoutOptions, type SelectListTheme } from "./select-list";
 
 const AUTOCOMPLETE_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
 	overflowSearch: false,
@@ -31,7 +32,6 @@ const SLASH_COMMAND_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
 	minPrimaryColumnWidth: 12,
 	maxPrimaryColumnWidth: 32,
 	overflowSearch: false,
-	wrapDescription: true,
 };
 
 function sanitizeLoadedText(text: string): string {
@@ -352,11 +352,18 @@ export interface EditorTheme {
 	hintStyle?: (text: string) => string;
 }
 
-export interface EditorTopBorder {
-	/** The status content (already styled) */
+/** One styled row supplied for the editor's top border. */
+export interface EditorTopBorderLine {
+	/** Status content with any ANSI styling already applied. */
 	content: string;
-	/** Visible width of the content */
+	/** Visible cell width of {@link content}. */
 	width: number;
+}
+
+/** Ordered status rows rendered above the editor input. */
+export interface EditorTopBorder {
+	/** Styled rows in display order; the first row forms the box top. */
+	lines: readonly EditorTopBorderLine[];
 }
 
 interface HistoryEntry {
@@ -382,14 +389,15 @@ export class Editor implements Component, Focusable {
 
 	#theme: EditorTheme;
 	#useTerminalCursor = false;
+	#imeSafeCursorLayout = false;
 
 	/** When set, replaces the normal cursor glyph at end-of-text with this ANSI-styled string. */
 	cursorOverride: string | undefined;
 	/** Display width of the cursorOverride glyph (needed because override may contain ANSI escapes). */
 	cursorOverrideWidth: number | undefined;
-	/** Optional hook that styles displayed input text with zero-width ANSI escapes.
-	 *  MUST preserve visible width (may only add SGR codes, never glyphs). Applied per
-	 *  layout line to the user-text segments — never to the cursor glyph or inline hint. */
+	/** Optional hook that decorates displayed user text after source-text layout.
+	 *  Width-changing output is allowed on lines without the cursor; it is truncated
+	 *  to the content width rather than reflowed. Cursor glyphs and inline hints are excluded. */
 	decorateText: ((text: string) => string) | undefined;
 	#promptGutter: string | undefined;
 
@@ -467,12 +475,13 @@ export class Editor implements Component, Focusable {
 	onAutocompleteCancel?: () => void;
 	disableSubmit: boolean = false;
 
-	// Custom top border (for status line integration). Either an eager `content`
+	// Custom top border (for status line integration). Either an eager border
 	// (set once, reused every frame) or a `provider` that recomputes lazily just
 	// before the editor paints — the second form lets the host coalesce
 	// per-event rebuilds down to one per rendered frame (see #4145).
 	#topBorderContent?: EditorTopBorder;
 	#topBorderProvider?: (availableWidth: number) => EditorTopBorder | undefined;
+	#topBorderLineCount = 1;
 	#borderVisible = true;
 
 	constructor(theme: EditorTheme) {
@@ -537,6 +546,11 @@ export class Editor implements Component, Focusable {
 	 */
 	setUseTerminalCursor(useTerminalCursor: boolean): void {
 		this.#useTerminalCursor = useTerminalCursor;
+	}
+
+	/** Render a dedicated bottom border so terminal-local IME preedit cannot shift editor chrome. */
+	setImeSafeCursorLayout(enabled: boolean): void {
+		this.#imeSafeCursorLayout = enabled;
 	}
 
 	getUseTerminalCursor(): boolean {
@@ -689,7 +703,7 @@ export class Editor implements Component, Focusable {
 
 	#getVisibleContentHeight(contentLines: number): number {
 		if (this.#maxHeight === undefined) return contentLines;
-		const verticalChrome = this.#borderVisible ? 2 : 0;
+		const verticalChrome = this.#borderVisible ? Math.max(2, this.#topBorderLineCount + 1) : 0;
 		return Math.max(1, this.#maxHeight - verticalChrome);
 	}
 
@@ -817,6 +831,16 @@ export class Editor implements Component, Focusable {
 		const topRight = this.borderColor(`${box.horizontal.repeat(paddingX)}${box.topRight}`);
 		const bottomLeft = this.borderColor(`${box.bottomLeft}${box.horizontal}${padding(Math.max(0, paddingX - 1))}`);
 		const horizontal = this.borderColor(box.horizontal);
+		const topFillWidth = Math.max(0, width - borderWidth * 2);
+		// Provider (lazy) wins over eager content — a host that installs both
+		// wants the coalesced path; falling back to eager keeps existing
+		// setTopBorder callers working unchanged.
+		const topBorder = borderVisible
+			? this.#topBorderProvider
+				? this.#topBorderProvider(topFillWidth)
+				: this.#topBorderContent
+			: undefined;
+		this.#topBorderLineCount = topBorder?.lines.length ?? 1;
 
 		// Layout the text
 		const layoutLines = this.#layoutText(layoutWidth);
@@ -828,23 +852,26 @@ export class Editor implements Component, Focusable {
 
 		if (borderVisible) {
 			// Render top border: ╭─ [status content] ────────────────╮
-			const topFillWidth = Math.max(0, width - borderWidth * 2);
-			// Provider (lazy) wins over eager content — a host that installs both
-			// wants the coalesced path; falling back to eager keeps existing
-			// setTopBorder callers working unchanged.
-			const topBorder = this.#topBorderProvider ? this.#topBorderProvider(topFillWidth) : this.#topBorderContent;
-			if (topBorder) {
-				const { content, width: statusWidth } = topBorder;
-				if (statusWidth <= topFillWidth) {
-					// Status fits - add fill after it
-					const fillWidth = topFillWidth - statusWidth;
-					result.push(topLeft + content + this.borderColor(box.horizontal.repeat(fillWidth)) + topRight);
-				} else {
-					// Status too long - truncate it
-					const truncated = truncateToWidth(content, Math.max(0, topFillWidth - 1));
-					const truncatedWidth = visibleWidth(truncated);
-					const fillWidth = Math.max(0, topFillWidth - truncatedWidth);
-					result.push(topLeft + truncated + this.borderColor(box.horizontal.repeat(fillWidth)) + topRight);
+			if (topBorder?.lines.length) {
+				for (let index = 0; index < topBorder.lines.length; index++) {
+					const line = topBorder.lines[index]!;
+					let content = line.content;
+					let contentWidth = line.width;
+					if (contentWidth > topFillWidth) {
+						content = truncateToWidth(content, topFillWidth);
+						contentWidth = visibleWidth(content);
+					}
+					const fillWidth = Math.max(0, topFillWidth - contentWidth);
+					if (index === 0) {
+						result.push(topLeft + content + this.borderColor(box.horizontal.repeat(fillWidth)) + topRight);
+					} else {
+						result.push(
+							this.borderColor(`${box.vertical}${padding(paddingX)}`) +
+								content +
+								padding(fillWidth) +
+								this.borderColor(`${padding(paddingX)}${box.vertical}`),
+						);
+					}
 				}
 			} else {
 				result.push(topLeft + horizontal.repeat(topFillWidth) + topRight);
@@ -852,8 +879,9 @@ export class Editor implements Component, Focusable {
 		}
 
 		// Render each layout line
-		// Emit hardware cursor marker only when focused and not showing autocomplete
-		const emitCursorMarker = this.focused && !this.#autocompleteState;
+		// Keep the hardware cursor at the text insertion point while autocomplete
+		// rows render below it; terminals use that position to anchor IME candidates.
+		const emitCursorMarker = this.focused;
 		const lineContentWidth = contentAreaWidth;
 
 		// Compute inline hint text (dim ghost text after cursor)
@@ -866,6 +894,7 @@ export class Editor implements Component, Focusable {
 			let displayWidth = visibleWidth(layoutLine.text);
 			let cursorPaddingOverflow = 0;
 			let decorated = false;
+			let imeSafeCursorTail = false;
 			const showPromptGutter = promptGutter !== undefined && visibleIndex === 0;
 			const gutterText =
 				promptGutter === undefined ? "" : showPromptGutter ? promptGutter.firstLine : promptGutter.continuation;
@@ -922,7 +951,13 @@ export class Editor implements Component, Focusable {
 				if (marker) {
 					const before = displayText.slice(0, layoutLine.cursorPos);
 					const after = displayText.slice(layoutLine.cursorPos);
-					if (after.length === 0 && inlineHint) {
+					if (this.#imeSafeCursorLayout && after.length === 0 && borderVisible) {
+						// Terminal frontends render IME marked text locally before committed bytes
+						// reach the application. Keep the end-of-input cursor row empty to its
+						// right so that insertion cannot shift box chrome onto the next row.
+						displayText = before + marker;
+						imeSafeCursorTail = true;
+					} else if (after.length === 0 && inlineHint) {
 						const availWidth = Math.max(0, lineContentWidth - displayWidth);
 						const hintText = hintStyle(truncateToWidth(inlineHint, availWidth));
 						displayText = before + marker + hintText;
@@ -1001,6 +1036,13 @@ export class Editor implements Component, Focusable {
 			if (!decorated) {
 				displayText = this.#decorate(displayText);
 			}
+			if (!hasCursor) {
+				displayWidth = visibleWidth(displayText);
+				if (displayWidth > lineContentWidth) {
+					displayText = truncateToWidth(displayText, lineContentWidth);
+					displayWidth = visibleWidth(displayText);
+				}
+			}
 
 			const linePad = padding(Math.max(0, lineContentWidth - displayWidth));
 
@@ -1015,6 +1057,15 @@ export class Editor implements Component, Focusable {
 			// trailing `─`, but never the corner/vertical bar itself.
 			const isLastLine = visibleIndex === visibleLayoutLines.length - 1;
 			const rightChromeCells = Math.max(1, paddingX + 1 - cursorPaddingOverflow);
+			if (isLastLine && imeSafeCursorTail) {
+				const leftBorder = this.borderColor(`${box.vertical}${padding(paddingX)}`);
+				const bottomBorder = this.borderColor(
+					`${box.bottomLeft}${box.horizontal.repeat(Math.max(0, width - 2))}${box.bottomRight}`,
+				);
+				result.push(leftBorder + displayText);
+				result.push(bottomBorder);
+				continue;
+			}
 			if (isLastLine) {
 				const rightPad = Math.max(0, rightChromeCells - 2);
 				const includeHorizontal = rightChromeCells >= 2;
@@ -1119,16 +1170,16 @@ export class Editor implements Component, Focusable {
 
 				// If Tab was pressed, always apply the selection
 				if (kb.matches(data, "tui.input.tab")) {
+					const selected = this.#autocompleteList.getSelectedItem();
 					// Check for stale autocomplete state due to buffer edits since last refresh
 					// (destructive keys or paste can outrun the debounced update).
 					const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";
 					const currentTextBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
-					if (!this.#autocompletePrefixMatchesCursorText(currentTextBeforeCursor)) {
+					if (!this.#autocompletePrefixMatchesCursorText(currentTextBeforeCursor, selected)) {
 						// Autocomplete is stale - silently cancel; Tab has no fallback action here.
 						this.#cancelAutocomplete();
 						return;
 					}
-					const selected = this.#autocompleteList.getSelectedItem();
 					if (selected && this.#autocompleteProvider) {
 						const shouldChainSlashCommandAutocomplete = this.#isSlashCommandNameAutocompleteSelection();
 						const result = this.#autocompleteProvider.applyCompletion(
@@ -1159,19 +1210,22 @@ export class Editor implements Component, Focusable {
 					return;
 				}
 
-				// If Enter was pressed on a slash command, apply completion and submit
+				// If Enter was pressed on a submitted slash command (not an absolute-path
+				// completion sharing the leading-slash prefix), apply and submit.
 				if (
 					(kb.matches(data, "tui.input.submit") || data === "\n") &&
-					findLeadingSlashCommandStart(this.#autocompletePrefix) !== null
+					findLeadingSlashCommandStart(this.#autocompletePrefix) !== null &&
+					this.#isInSubmittedSlashCommandContext() &&
+					!this.#selectedCompletionIsPath()
 				) {
+					const selected = this.#autocompleteList.getSelectedItem();
 					// Check for stale autocomplete state due to debounce
 					const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";
 					const currentTextBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
-					if (!this.#autocompletePrefixMatchesCursorText(currentTextBeforeCursor)) {
+					if (!this.#autocompletePrefixMatchesCursorText(currentTextBeforeCursor, selected)) {
 						// Autocomplete is stale - cancel and fall through to normal submission
 						this.#cancelAutocomplete();
 					} else {
-						const selected = this.#autocompleteList.getSelectedItem();
 						if (selected && this.#autocompleteProvider) {
 							const result = this.#autocompleteProvider.applyCompletion(
 								this.#state.lines,
@@ -1190,16 +1244,16 @@ export class Editor implements Component, Focusable {
 					}
 					// Don't return - fall through to submission logic
 				}
-				// If Enter was pressed on a file path, apply completion
+				// Otherwise, apply the completion without submitting the surrounding draft.
 				else if (kb.matches(data, "tui.input.submit") || data === "\n") {
+					const selected = this.#autocompleteList.getSelectedItem();
 					// Check for stale autocomplete state due to buffer edits since last refresh.
 					const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";
 					const currentTextBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
-					if (!this.#autocompletePrefixMatchesCursorText(currentTextBeforeCursor)) {
+					if (!this.#autocompletePrefixMatchesCursorText(currentTextBeforeCursor, selected)) {
 						// Autocomplete is stale - cancel and fall through to normal submission
 						this.#cancelAutocomplete();
 					} else {
-						const selected = this.#autocompleteList.getSelectedItem();
 						if (selected && this.#autocompleteProvider) {
 							const result = this.#autocompleteProvider.applyCompletion(
 								this.#state.lines,
@@ -1355,21 +1409,14 @@ export class Editor implements Component, Focusable {
 		} else if (kb.matches(data, "tui.editor.cursorLineEnd")) {
 			this.#moveToLineEnd();
 		}
-		// Page navigation (PageUp/PageDown)
+		// Page navigation (PageUp/PageDown): page the editor viewport only. On a
+		// short draft this is a no-op — it never steps prompt history (that stays
+		// on Up/Down), so an idle empty editor swallows the keys instead of
+		// surprising the user by loading the previous prompt (#4754).
 		else if (kb.matches(data, "tui.editor.pageUp")) {
-			if (this.#isEditorEmpty()) {
-				this.#navigateHistory(-1);
-			} else if (this.#historyIndex > -1 && this.#isOnFirstVisualLine()) {
-				this.#navigateHistory(-1);
-			} else {
-				this.#pageScroll(-1);
-			}
+			this.#pageScroll(-1);
 		} else if (kb.matches(data, "tui.editor.pageDown")) {
-			if (this.#historyIndex > -1 && this.#isOnLastVisualLine()) {
-				this.#navigateHistory(1);
-			} else {
-				this.#pageScroll(1);
-			}
+			this.#pageScroll(1);
 		}
 		// Forward delete (Fn+Backspace or Delete key, including Shift+Delete)
 		else if (kb.matches(data, "tui.editor.deleteCharForward") || matchesKey(data, "shift+delete")) {
@@ -2068,8 +2115,13 @@ export class Editor implements Component, Focusable {
 		this.#resetKillSequence();
 		this.#recordUndoState();
 
+		let removedSlashTrigger = false;
+
 		if (this.#state.cursorCol > 0) {
 			const line = this.#state.lines[this.#state.cursorLine] || "";
+			const textBeforeCursor = line.slice(0, this.#state.cursorCol);
+			const trailingSlashStart = findTrailingSlashCommandStart(textBeforeCursor);
+			removedSlashTrigger = trailingSlashStart === this.#state.cursorCol - 1;
 			// An atomic placeholder token (image/paste marker) deletes as a unit, so a single
 			// backspace never leaves a half-eaten `[Paste #1, +30 lines` behind as stray text.
 			const token = this.#atomicTokenAt(line, this.#state.cursorCol - 1);
@@ -2109,7 +2161,12 @@ export class Editor implements Component, Focusable {
 
 		// Update or re-trigger autocomplete after backspace
 		if (this.#autocompleteState) {
-			this.#debouncedUpdateAutocomplete();
+			if (removedSlashTrigger) {
+				this.#cancelAutocomplete();
+				this.onAutocompleteUpdate?.();
+			} else {
+				this.#debouncedUpdateAutocomplete();
+			}
 		} else {
 			// If autocomplete was cancelled (no matches), re-trigger if we're in a completable context
 			const currentLine = this.#state.lines[this.#state.cursorLine] || "";
@@ -2875,15 +2932,40 @@ export class Editor implements Component, Focusable {
 	 *   provider's default slice at `cursorCol - prefix.length` then hits the right span.
 	 * - Slash branch re-anchors when both the prefix and the current text carry a
 	 *   leading slash command and the current slash token is clean (no whitespace or
-	 *   inner slash), matching `applyCompletion`'s slash-branch guard.
+	 *   inner slash), matching `applyCompletion`'s slash-branch guard. It only
+	 *   engages for command-shaped selections: absolute-path completions (`/tmp/fo`
+	 *   via the no-command-match fall-through) share the leading-slash prefix shape
+	 *   but must use the live-suffix path rule so the apply slice stays anchored.
+	 * - Mid-prompt skill branch re-anchors when the popup item is a skill and the
+	 *   current text still ends in a matching trailing slash token, preventing a
+	 *   stale selection from replacing a newer skill prefix.
 	 * - `@`-file branch re-anchors via `#extractAtPrefix`; safe when the current text
 	 *   still ends in a whitespace-anchored `@<token>`.
 	 * - Everything else is stale — accepting it would corrupt the buffer (issue #4295).
 	 */
-	#autocompletePrefixMatchesCursorText(currentTextBeforeCursor: string): boolean {
+	#autocompletePrefixMatchesCursorText(currentTextBeforeCursor: string, item?: SelectItem | null): boolean {
 		if (currentTextBeforeCursor === this.#autocompletePrefix) return true;
 
-		if (findLeadingSlashCommandStart(this.#autocompletePrefix) !== null) {
+		if (item?.value.startsWith("skill:") && findTrailingSlashCommandStart(this.#autocompletePrefix) !== null) {
+			const currentTrailingStart = findTrailingSlashCommandStart(currentTextBeforeCursor);
+			if (currentTrailingStart !== null) {
+				const token = currentTextBeforeCursor.slice(currentTrailingStart);
+				if (!token.includes(" ") && !token.slice(1).includes("/")) {
+					// Guard the timing window where the popup was built for an earlier
+					// query (e.g. bare `/`) and the user typed further characters before
+					// the 100 ms debounced refresh fired: accept the stale skill only
+					// when the refreshed popup would still surface it (same gate as
+					// buildMidPromptSkillCompletions). `tmp` after a bare slash
+					// therefore falls through to file completion instead of rewriting
+					// the user's `/tmp` to `/skill:…`.
+					const lowerToken = token.slice(1).toLowerCase();
+					if (midPromptSkillTokenMatches(lowerToken, item.value, item.description)) return true;
+				}
+			}
+			return false;
+		}
+
+		if (findLeadingSlashCommandStart(this.#autocompletePrefix) !== null && !this.#selectedCompletionIsPath()) {
 			const currentLeadingStart = findLeadingSlashCommandStart(currentTextBeforeCursor);
 			if (currentLeadingStart !== null) {
 				const token = currentTextBeforeCursor.slice(currentLeadingStart);
@@ -2897,6 +2979,19 @@ export class Editor implements Component, Focusable {
 		}
 
 		return currentTextBeforeCursor.endsWith(this.#autocompletePrefix);
+	}
+
+	/**
+	 * Whether the current popup selection inserts a file path rather than a
+	 * slash command. Leading-slash prefixes are ambiguous: the provider falls
+	 * through to absolute-path completion when no command matches, and those
+	 * item values start with `/` (or `"` when quoted) while command values are
+	 * bare names.
+	 */
+	#selectedCompletionIsPath(): boolean {
+		const selected = this.#autocompleteList?.getSelectedItem();
+		if (!selected) return false;
+		return selected.value.startsWith("/") || selected.value.startsWith('"');
 	}
 
 	#isSlashCommandNameAutocompleteSelection(): boolean {
@@ -2987,22 +3082,17 @@ export class Editor implements Component, Focusable {
 		} else if (this.#isInMidPromptSkillSlashContext()) {
 			await this.#handleSlashCommandCompletion();
 			if (!this.#autocompleteState) {
-				await this.#forceFileAutocomplete(true);
+				await this.#forceFileAutocomplete();
 			}
 		} else {
-			await this.#forceFileAutocomplete(true);
+			await this.#forceFileAutocomplete();
 		}
 	}
 	async #handleSlashCommandCompletion(): Promise<void> {
 		await this.#tryTriggerAutocomplete();
 	}
 
-	/*
-https://github.com/EsotericSoftware/spine-runtimes/actions/runs/19536643416/job/559322883
-17 this job fails with https://github.com/EsotericSoftware/spine-runtimes/actions/runs/19
-536643416/job/55932288317 havea  look at .gi
-    */
-	async #forceFileAutocomplete(explicitTab: boolean = false): Promise<void> {
+	async #forceFileAutocomplete(): Promise<void> {
 		if (!this.#autocompleteProvider) return;
 
 		// File-aware providers expose getForceFileSuggestions; slash-only ones fall back to regular completion.
@@ -3022,27 +3112,6 @@ https://github.com/EsotericSoftware/spine-runtimes/actions/runs/19536643416/job/
 		if (requestId !== this.#autocompleteRequestId) return;
 
 		if (suggestions && Array.isArray(suggestions.items) && suggestions.items.length > 0) {
-			// If there's exactly one suggestion and this was an explicit Tab press, apply it immediately
-			if (explicitTab && suggestions.items.length === 1) {
-				const item = suggestions.items[0]!;
-				const result = this.#autocompleteProvider.applyCompletion(
-					this.#state.lines,
-					this.#state.cursorLine,
-					this.#state.cursorCol,
-					item,
-					suggestions.prefix,
-				);
-
-				this.#state.lines = result.lines;
-				this.#state.cursorLine = result.cursorLine;
-				this.#setCursorCol(result.cursorCol);
-
-				if (this.onChange) {
-					this.onChange(this.getText());
-				}
-				return;
-			}
-
 			this.#autocompletePrefix = suggestions.prefix;
 			this.#autocompleteList = this.#createAutocompleteList(suggestions.prefix, suggestions.items);
 			this.#autocompleteState = "force";

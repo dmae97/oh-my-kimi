@@ -139,6 +139,7 @@ describe("path-prefixed auth servers", () => {
 					JSON.stringify({
 						authorization_endpoint: "https://gateway.example.com/my-service/oauth",
 						token_endpoint: "https://gateway.example.com/my-service/token",
+						registration_endpoint: "https://gateway.example.com/my-service/register",
 					}),
 					{ status: 200, headers: { "Content-Type": "application/json" } },
 				);
@@ -154,6 +155,7 @@ describe("path-prefixed auth servers", () => {
 		expect(oauth).toEqual({
 			authorizationUrl: "https://gateway.example.com/my-service/oauth",
 			tokenUrl: "https://gateway.example.com/my-service/token",
+			registrationUrl: "https://gateway.example.com/my-service/register",
 		});
 		expect(calls).toContain("https://gateway.example.com/.well-known/oauth-authorization-server/my-service");
 	});
@@ -509,6 +511,7 @@ describe("RFC 8414 §3.3 issuer validation", () => {
 		expect(oauth).toEqual({
 			authorizationUrl: "https://mcp.atlassian.com/v1/authorize",
 			tokenUrl: "https://cf.mcp.atlassian.com/v1/token",
+			registrationUrl: "https://cf.mcp.atlassian.com/v1/register",
 		});
 		expect(calls[0]).toBe("https://mcp.atlassian.com/.well-known/oauth-authorization-server");
 	});
@@ -556,6 +559,7 @@ describe("RFC 8414 §3.3 issuer validation", () => {
 						issuer: "https://mcp.plane.so/http",
 						authorization_endpoint: "https://mcp.plane.so/http/authorize",
 						token_endpoint: "https://mcp.plane.so/http/token",
+						registration_endpoint: "https://mcp.plane.so/http/register",
 					}),
 					{ status: 200, headers: { "Content-Type": "application/json" } },
 				);
@@ -574,6 +578,7 @@ describe("RFC 8414 §3.3 issuer validation", () => {
 		expect(oauth).toEqual({
 			authorizationUrl: "https://mcp.plane.so/http/authorize",
 			tokenUrl: "https://mcp.plane.so/http/token",
+			registrationUrl: "https://mcp.plane.so/http/register",
 			resource: "https://mcp.plane.so/http/mcp",
 		});
 		// Wrong-issuer origin-root metadata WAS fetched and skipped.

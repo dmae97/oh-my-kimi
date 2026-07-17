@@ -5,7 +5,9 @@ import { FakeKernel } from "./helpers";
 
 describe("executePythonWithKernel streaming", () => {
 	it("truncates large output and tracks totals", async () => {
-		const largeOutput = "a".repeat(DEFAULT_MAX_BYTES + 128);
+		// Many short lines overflow the output window (single over-wide lines are
+		// column-capped instead and no longer count as window truncation).
+		const largeOutput = `${"a".repeat(100)}\n`.repeat(Math.ceil((DEFAULT_MAX_BYTES * 4) / 101));
 		const kernel = new FakeKernel(
 			{ status: "ok", cancelled: false, timedOut: false, stdinRequested: false },
 			options => options?.onChunk?.(largeOutput),

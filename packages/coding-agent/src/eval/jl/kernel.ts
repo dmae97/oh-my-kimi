@@ -13,7 +13,7 @@ import { $ } from "bun";
 import { Settings } from "../../config/settings";
 import { BaseKernel, getRemainingTimeMs, type KernelStartOptions } from "../kernel-base";
 import type { KernelDisplayOutput } from "../py/display";
-import { hostHasInheritableConsole, shouldHideKernelWindow } from "../py/spawn-options";
+import { hostHasInheritableConsole, shouldDetachKernel, shouldHideKernelWindow } from "../py/spawn-options";
 import { JULIA_PRELUDE } from "./prelude";
 import RUNNER_SCRIPT from "./runner.jl" with { type: "text" };
 import {
@@ -187,6 +187,7 @@ export class JuliaKernel extends BaseKernel<KernelExecuteOptions> {
 			[runtime.juliaPath, "--startup-file=no", "--history-file=no", "--color=no", "--project=@.", scriptPath],
 			{
 				cwd: options.cwd,
+				detached: shouldDetachKernel(process.platform),
 				env: spawnEnv,
 				stdin: "pipe",
 				stdout: "pipe",

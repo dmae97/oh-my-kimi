@@ -9,7 +9,7 @@ import {
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
 import type { AssistantMessage, Model, ToolCall } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
-import { Effort } from "@oh-my-pi/pi-ai";
+import { Effort, z } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 function createAssistantMessage(content: AssistantMessage["content"]): AssistantMessage {
@@ -29,6 +29,28 @@ function createAssistantMessage(content: AssistantMessage["content"]): Assistant
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
 		stopReason: "stop",
+	};
+}
+
+function createAssistantError(errorStatus: number, errorMessage: string): AssistantMessage {
+	return {
+		...createAssistantMessage([]),
+		stopReason: "error",
+		errorStatus,
+		errorMessage,
+	};
+}
+
+const handoffToolSchema = z.object({ note: z.string().optional() });
+
+function createHandoffTool(): AgentTool<typeof handoffToolSchema> {
+	return {
+		name: "handoff_probe",
+		label: "Handoff Probe",
+		description: "Confirms handoff requests keep live tools available.",
+		parameters: handoffToolSchema,
+		intent: "omit",
+		execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
 	};
 }
 
@@ -151,6 +173,101 @@ describe("handoff helpers", () => {
 			apiKey: "test-key",
 			sessionId: "sess-1:side:42",
 			promptCacheKey: "sess-1",
+			toolChoice: "none",
+			reasoning: Effort.Medium,
+		});
+	});
+
+	test("generateHandoffFromContext retries auto-only tool_choice rejection with live tools", async () => {
+		const completeSimpleSpy = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValueOnce(
+				createAssistantError(
+					400,
+					"400 Bad Request: Only a tool_choice of 'auto' is supported for this model; param=tool_choice",
+				),
+			)
+			.mockResolvedValueOnce(createAssistantMessage([{ type: "text", text: "## Goal\nRecovered on retry" }]));
+		const model = getTestModel();
+		const tools = [createHandoffTool()];
+		const context = {
+			systemPrompt: ["Live system prompt"],
+			tools,
+			messages: [{ role: "user" as const, content: "prepare handoff", timestamp: 1 }],
+		};
+
+		const document = await generateHandoffFromContext(context, model, {
+			streamOptions: {
+				apiKey: "test-key",
+				sessionId: "sess-auto-only:side:42",
+				promptCacheKey: "sess-auto-only",
+			},
+			thinkingLevel: ThinkingLevel.Medium,
+		});
+
+		expect(document).toBe("## Goal\nRecovered on retry");
+		expect(completeSimpleSpy).toHaveBeenCalledTimes(2);
+		const firstCall = completeSimpleSpy.mock.calls[0];
+		const secondCall = completeSimpleSpy.mock.calls[1];
+		if (!firstCall) throw new Error("Expected initial completeSimple call");
+		if (!secondCall) throw new Error("Expected retry completeSimple call");
+		const [firstModel, firstContext, firstOptions] = firstCall;
+		const [secondModel, secondContext, secondOptions] = secondCall;
+		expect(firstModel).toBe(model);
+		expect(secondModel).toBe(model);
+		expect(firstContext).toBe(context);
+		expect(secondContext).toBe(context);
+		expect(firstContext.tools).toBe(tools);
+		expect(secondContext.tools).toBe(tools);
+		expect(firstOptions).toMatchObject({
+			apiKey: "test-key",
+			sessionId: "sess-auto-only:side:42",
+			promptCacheKey: "sess-auto-only",
+			toolChoice: "none",
+			reasoning: Effort.Medium,
+		});
+		expect(secondOptions).toMatchObject({
+			apiKey: "test-key",
+			sessionId: "sess-auto-only:side:42",
+			promptCacheKey: "sess-auto-only",
+			toolChoice: "auto",
+			reasoning: Effort.Medium,
+		});
+	});
+
+	test("generateHandoffFromContext surfaces unrelated provider 400 without retrying", async () => {
+		const completeSimpleSpy = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValueOnce(createAssistantError(400, "400 Bad Request: unsupported max_tokens; param=max_tokens"));
+		const model = getTestModel();
+		const tools = [createHandoffTool()];
+		const context = {
+			systemPrompt: ["Live system prompt"],
+			tools,
+			messages: [{ role: "user" as const, content: "prepare handoff", timestamp: 1 }],
+		};
+
+		const error = await generateHandoffFromContext(context, model, {
+			streamOptions: {
+				apiKey: "test-key",
+				sessionId: "sess-unrelated-400:side:42",
+				promptCacheKey: "sess-unrelated-400",
+			},
+			thinkingLevel: ThinkingLevel.Medium,
+		}).catch((caught: unknown) => caught);
+
+		if (!(error instanceof Error)) throw new Error("Expected handoff generation to reject");
+		expect(error.message).toContain("unsupported max_tokens");
+		expect(completeSimpleSpy).toHaveBeenCalledTimes(1);
+		const call = completeSimpleSpy.mock.calls[0];
+		if (!call) throw new Error("Expected completeSimple call");
+		const [, calledContext, options] = call;
+		expect(calledContext).toBe(context);
+		expect(calledContext.tools).toBe(tools);
+		expect(options).toMatchObject({
+			apiKey: "test-key",
+			sessionId: "sess-unrelated-400:side:42",
+			promptCacheKey: "sess-unrelated-400",
 			toolChoice: "none",
 			reasoning: Effort.Medium,
 		});

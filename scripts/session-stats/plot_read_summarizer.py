@@ -15,6 +15,7 @@ thinking + user messages. That removes the "I worked harder that day" effect.
 
 Outputs to scripts/session-stats/out/read-summarizer-*.png.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -43,6 +44,7 @@ COHORT_COLORS = {
 
 # --------------------------------------------------------------------------- #
 # Classification
+
 
 def has_selector(path: str) -> bool:
     """True iff `path` carries a read selector (`:50-200`, `:raw`, ...)."""
@@ -76,6 +78,7 @@ def cohort_of(arg_json: str | None) -> str | None:
 # --------------------------------------------------------------------------- #
 # Data
 
+
 def fetch_read_calls(conn) -> dict[str, dict[str, np.ndarray]]:
     sql = """
         SELECT c.timestamp,
@@ -97,7 +100,10 @@ def fetch_read_calls(conn) -> dict[str, dict[str, np.ndarray]]:
     out: dict[str, dict[str, np.ndarray]] = {}
     for c, rows in by.items():
         if not rows:
-            out[c] = {"ts": np.array([], dtype=np.int64), "tok": np.array([], dtype=np.int64)}
+            out[c] = {
+                "ts": np.array([], dtype=np.int64),
+                "tok": np.array([], dtype=np.int64),
+            }
             continue
         ts = np.fromiter((r[0] for r in rows), dtype=np.int64, count=len(rows))
         tok = np.fromiter((r[1] for r in rows), dtype=np.int64, count=len(rows))
@@ -152,7 +158,9 @@ def daily_sum(ts_ms: np.ndarray, tok: np.ndarray, day_axis: np.ndarray) -> np.nd
     return out
 
 
-def daily_percentile(ts_ms: np.ndarray, tok: np.ndarray, q: float) -> tuple[np.ndarray, np.ndarray]:
+def daily_percentile(
+    ts_ms: np.ndarray, tok: np.ndarray, q: float
+) -> tuple[np.ndarray, np.ndarray]:
     if ts_ms.size == 0:
         return np.array([]), np.array([])
     day_idx = ts_ms // DAY_MS
@@ -164,7 +172,9 @@ def daily_percentile(ts_ms: np.ndarray, tok: np.ndarray, q: float) -> tuple[np.n
         lo, hi = order[i], order[i + 1]
         if hi > lo:
             pct[i] = np.percentile(tok[lo:hi], q)
-    dates = np.array([datetime.fromtimestamp(int(d) * DAY_MS / 1000, tz=timezone.utc) for d in days])
+    dates = np.array(
+        [datetime.fromtimestamp(int(d) * DAY_MS / 1000, tz=timezone.utc) for d in days]
+    )
     return dates, pct
 
 
@@ -183,9 +193,10 @@ def smooth_nan(y: np.ndarray, w: int) -> np.ndarray:
 # --------------------------------------------------------------------------- #
 # Plot helpers
 
+
 def thousands(x: float, _p=0) -> str:
     if x >= 1000:
-        return f"{x/1000:.1f}k"
+        return f"{x / 1000:.1f}k"
     return f"{x:.0f}"
 
 
@@ -195,11 +206,20 @@ def style_time(ax: plt.Axes, deploy: datetime) -> None:
     ax.grid(True, alpha=0.25, linestyle="--")
     ax.axvline(deploy, color="#dc2626", linestyle="--", linewidth=1.2, alpha=0.8)
     y1 = ax.get_ylim()[1] if ax.get_ylim()[1] > 0 else 1
-    ax.text(deploy, y1, "  summarizer\n  deploy", color="#dc2626",
-            va="top", ha="left", fontsize=9)
+    ax.text(
+        deploy,
+        y1,
+        "  summarizer\n  deploy",
+        color="#dc2626",
+        va="top",
+        ha="left",
+        fontsize=9,
+    )
 
 
-def panel_share_stacked(ax: plt.Axes, reads, denom_dates, denom, deploy: datetime) -> None:
+def panel_share_stacked(
+    ax: plt.Axes, reads, denom_dates, denom, deploy: datetime
+) -> None:
     """Stacked area: per-day read-cohort share of total tokens."""
     series = []
     labels = []
@@ -212,11 +232,13 @@ def panel_share_stacked(ax: plt.Axes, reads, denom_dates, denom, deploy: datetim
         series.append(smooth_nan(share, 7))
         labels.append(cohort)
         colors.append(color)
-    x = np.array([datetime.fromtimestamp(int(d) / 1000, tz=timezone.utc) for d in denom_dates])
+    x = np.array(
+        [datetime.fromtimestamp(int(d) / 1000, tz=timezone.utc) for d in denom_dates]
+    )
     ax.stackplot(x, series, labels=labels, colors=colors, alpha=0.85)
     ax.set_title("read share of daily token spend (7d MA)")
     ax.set_ylabel("share of all tokens that day")
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v*100:.0f}%"))
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v * 100:.0f}%"))
     ax.set_ylim(0, None)
     ax.legend(loc="upper left", frameon=False)
     style_time(ax, deploy)
@@ -224,7 +246,9 @@ def panel_share_stacked(ax: plt.Axes, reads, denom_dates, denom, deploy: datetim
 
 def panel_share_line(ax: plt.Axes, reads, denom_dates, denom, deploy: datetime) -> None:
     """Lines: each cohort's share, plus the combined total."""
-    x = np.array([datetime.fromtimestamp(int(d) / 1000, tz=timezone.utc) for d in denom_dates])
+    x = np.array(
+        [datetime.fromtimestamp(int(d) / 1000, tz=timezone.utc) for d in denom_dates]
+    )
     total = np.zeros(denom_dates.size, dtype=np.int64)
     for cohort, color in COHORT_COLORS.items():
         d = reads[cohort]
@@ -235,22 +259,37 @@ def panel_share_line(ax: plt.Axes, reads, denom_dates, denom, deploy: datetime) 
         ax.plot(x, smooth_nan(share, 7), label=cohort, color=color, linewidth=1.7)
     with np.errstate(divide="ignore", invalid="ignore"):
         combined = np.where(denom > 0, total / denom, 0.0)
-    ax.plot(x, smooth_nan(combined, 7), label="all reads", color="#111111", linewidth=2.2, linestyle="-")
+    ax.plot(
+        x,
+        smooth_nan(combined, 7),
+        label="all reads",
+        color="#111111",
+        linewidth=2.2,
+        linestyle="-",
+    )
     ax.set_title("read share by cohort (7d MA)")
     ax.set_ylabel("share of daily tokens")
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v*100:.0f}%"))
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v * 100:.0f}%"))
     ax.set_ylim(0, None)
     ax.legend(loc="upper left", frameon=False)
     style_time(ax, deploy)
 
 
-def panel_per_call(ax: plt.Axes, reads, deploy: datetime, q: float, label_q: str) -> None:
+def panel_per_call(
+    ax: plt.Axes, reads, deploy: datetime, q: float, label_q: str
+) -> None:
     for cohort, color in COHORT_COLORS.items():
         d = reads[cohort]
         if d["ts"].size == 0:
             continue
         dates, pct = daily_percentile(d["ts"], d["tok"], q)
-        ax.plot(dates, smooth_nan(pct, 7), label=f"{cohort} ({label_q})", color=color, linewidth=1.9)
+        ax.plot(
+            dates,
+            smooth_nan(pct, 7),
+            label=f"{cohort} ({label_q})",
+            color=color,
+            linewidth=1.9,
+        )
     ax.set_title(f"daily {label_q} tokens per read call (7d MA)")
     ax.set_ylabel("tokens / call")
     ax.set_yscale("log")
@@ -262,14 +301,19 @@ def panel_per_call(ax: plt.Axes, reads, deploy: datetime, q: float, label_q: str
 # --------------------------------------------------------------------------- #
 # Stats
 
+
 def share_stats(reads, denom_dates, denom, deploy_ms: int) -> None:
     pre_mask = denom_dates < deploy_ms
     post_mask = denom_dates >= deploy_ms
     pre_total = int(denom[pre_mask].sum())
     post_total = int(denom[post_mask].sum())
     print(f"\nshare-of-day (pre vs post deploy):")
-    print(f"  denominator pre  = {pre_total:>14,} tokens across {int(pre_mask.sum())} days")
-    print(f"  denominator post = {post_total:>14,} tokens across {int(post_mask.sum())} days")
+    print(
+        f"  denominator pre  = {pre_total:>14,} tokens across {int(pre_mask.sum())} days"
+    )
+    print(
+        f"  denominator post = {post_total:>14,} tokens across {int(post_mask.sum())} days"
+    )
     print(f"  {'cohort':<22} {'pre share':>10} {'post share':>11} {'delta':>10}")
     grand_pre = 0
     grand_post = 0
@@ -282,17 +326,23 @@ def share_stats(reads, denom_dates, denom, deploy_ms: int) -> None:
         grand_post += post
         pre_share = pre / pre_total if pre_total else 0
         post_share = post / post_total if post_total else 0
-        print(f"  {cohort:<22} {pre_share*100:>9.2f}% {post_share*100:>10.2f}% "
-              f"{(post_share-pre_share)*100:>+9.2f}pp")
+        print(
+            f"  {cohort:<22} {pre_share * 100:>9.2f}% {post_share * 100:>10.2f}% "
+            f"{(post_share - pre_share) * 100:>+9.2f}pp"
+        )
     pre_share = grand_pre / pre_total if pre_total else 0
     post_share = grand_post / post_total if post_total else 0
-    print(f"  {'all reads':<22} {pre_share*100:>9.2f}% {post_share*100:>10.2f}% "
-          f"{(post_share-pre_share)*100:>+9.2f}pp")
+    print(
+        f"  {'all reads':<22} {pre_share * 100:>9.2f}% {post_share * 100:>10.2f}% "
+        f"{(post_share - pre_share) * 100:>+9.2f}pp"
+    )
 
 
 def per_call_stats(reads, deploy_ms: int) -> None:
     print(f"\nper-call stats (pre vs post deploy):")
-    print(f"  {'cohort':<22} {'window':<6} {'n':>9}  {'p50':>7}  {'p90':>7}  {'mean':>8}")
+    print(
+        f"  {'cohort':<22} {'window':<6} {'n':>9}  {'p50':>7}  {'p90':>7}  {'mean':>8}"
+    )
     for cohort in COHORT_COLORS:
         d = reads[cohort]
         if d["ts"].size == 0:
@@ -302,19 +352,25 @@ def per_call_stats(reads, deploy_ms: int) -> None:
         for name, arr in (("pre", pre), ("post", post)):
             if arr.size == 0:
                 continue
-            print(f"  {cohort:<22} {name:<6} {arr.size:>9,}  "
-                  f"{int(np.percentile(arr,50)):>7,}  "
-                  f"{int(np.percentile(arr,90)):>7,}  "
-                  f"{int(arr.mean()):>8,}")
+            print(
+                f"  {cohort:<22} {name:<6} {arr.size:>9,}  "
+                f"{int(np.percentile(arr, 50)):>7,}  "
+                f"{int(np.percentile(arr, 90)):>7,}  "
+                f"{int(arr.mean()):>8,}"
+            )
 
 
 # --------------------------------------------------------------------------- #
 # Entry
 
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="read summarizer impact analysis")
-    ap.add_argument("--deploy", default=DEFAULT_DEPLOY,
-                    help=f"deploy date YYYY-MM-DD (default {DEFAULT_DEPLOY})")
+    ap.add_argument(
+        "--deploy",
+        default=DEFAULT_DEPLOY,
+        help=f"deploy date YYYY-MM-DD (default {DEFAULT_DEPLOY})",
+    )
     args = ap.parse_args()
 
     deploy = datetime.strptime(args.deploy, "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -343,7 +399,9 @@ def main() -> int:
     panel_share_line(axes[0, 1], reads, denom_dates, denom, deploy)
     panel_per_call(axes[1, 0], reads, deploy, q=50, label_q="p50")
     panel_per_call(axes[1, 1], reads, deploy, q=90, label_q="p90")
-    fig.suptitle(f"read summarizer impact — deploy = {args.deploy}", fontsize=13, y=0.995)
+    fig.suptitle(
+        f"read summarizer impact — deploy = {args.deploy}", fontsize=13, y=0.995
+    )
     fig.tight_layout()
     p = OUT_DIR / "read-summarizer.png"
     fig.savefig(p, bbox_inches="tight")

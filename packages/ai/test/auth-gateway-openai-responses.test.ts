@@ -276,6 +276,8 @@ describe("openai-responses encodeResponse", () => {
 
 		expect(body.object).toBe("response");
 		expect(body.status).toBe("completed");
+		expect(Object.hasOwn(body, "incomplete_details")).toBe(true);
+		expect(body.incomplete_details).toBeNull();
 		expect(body.model).toBe("gpt-5-requested");
 		expect(body.created_at).toBe(1_700_000_000);
 		expect(typeof body.id).toBe("string");

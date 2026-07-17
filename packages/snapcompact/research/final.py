@@ -38,7 +38,16 @@ sys.path.insert(0, str(HERE))
 import squad  # noqa: E402
 from bdf import capacity, render  # noqa: E402
 from providers import is_openai, llm_complete, load_env_key, openai_compact  # noqa: E402
-from run import CACHE, FONTS, QA_CACHE, RESULTS, TEXT_CHUNK, agent_prompt, load_prompt, sha8  # noqa: E402
+from run import (
+    CACHE,
+    FONTS,
+    QA_CACHE,
+    RESULTS,
+    TEXT_CHUNK,
+    agent_prompt,
+    load_prompt,
+    sha8,
+)  # noqa: E402
 
 # (family display, $/M input, $/M output). Cached reads bill at 0.1x input,
 # Anthropic cache writes at 1.25x. Edit prices here; `--report` recomputes.
@@ -53,7 +62,15 @@ MODELS = {
     "z-ai/glm-4.6v": (0.30, 0.90),
 }
 LENGTHS = (50, 150, 250)
-CONDITIONS = ("text", "handoff", "compact", "img-6x10-sent", "img-6x10-bw", "img-5x8-sent", "img-5x8-bw")
+CONDITIONS = (
+    "text",
+    "handoff",
+    "compact",
+    "img-6x10-sent",
+    "img-6x10-bw",
+    "img-5x8-sent",
+    "img-5x8-bw",
+)
 ACK = "Noted. I have read the passages and will keep them in mind."
 
 
@@ -91,15 +108,30 @@ def chunk_budget(cond: str, size: int) -> int:
 
 def session_frame(chunk_text: str) -> list[dict]:
     return [
-        {"role": "user", "content": [{"text": load_prompt("session-frame.md").format(context=chunk_text)}]},
+        {
+            "role": "user",
+            "content": [
+                {"text": load_prompt("session-frame.md").format(context=chunk_text)}
+            ],
+        },
         {"role": "assistant", "content": [{"text": ACK}]},
     ]
 
 
-def run_cell_chunk(model: str, cond: str, start: int, end: int, ctx: dict) -> list[dict]:
+def run_cell_chunk(
+    model: str, cond: str, start: int, end: int, ctx: dict
+) -> list[dict]:
     """One (model, condition, chunk) unit: build carrier, QA, score."""
-    args, flow, paras, offsets, keys = ctx["args"], ctx["flow"], ctx["paras"], ctx["offsets"], ctx["keys"]
-    questions = squad.sample_chunk_questions(paras, offsets, start, end, args.qpc, args.seed)
+    args, flow, paras, offsets, keys = (
+        ctx["args"],
+        ctx["flow"],
+        ctx["paras"],
+        ctx["offsets"],
+        ctx["keys"],
+    )
+    questions = squad.sample_chunk_questions(
+        paras, offsets, start, end, args.qpc, args.seed
+    )
     if not questions:
         return []
     chunk_text = flow[start:end]
@@ -117,11 +149,15 @@ def run_cell_chunk(model: str, cond: str, start: int, end: int, ctx: dict) -> li
         png = CACHE / f"img-{tag}-{sha8(chunk_text, str(args.size), *salt)}.png"
         if not png.exists() or png.stat().st_size == 0:
             tmp = png.with_suffix(f".{uuid.uuid4().hex[:8]}.tmp.png")
-            render(chunk_text, FONTS[font], CACHE, args.size, variant, columns=columns).save(tmp)
+            render(
+                chunk_text, FONTS[font], CACHE, args.size, variant, columns=columns
+            ).save(tmp)
             tmp.replace(png)
         cols, rows, _ = capacity(FONTS[font], args.size, columns)
         preamble = (
-            load_prompt("qa-image-cols.md").format(cols=cols, rows=rows, columns=columns)
+            load_prompt("qa-image-cols.md").format(
+                cols=cols, rows=rows, columns=columns
+            )
             if columns > 1
             else load_prompt("qa-image.md").format(cols=cols, rows=rows)
         )
@@ -137,25 +173,53 @@ def run_cell_chunk(model: str, cond: str, start: int, end: int, ctx: dict) -> li
         ]
     elif cond == "compact" and is_openai(model):
         comp = cached(
-            model, "remote-compact", {"chunk": chunk_text},
-            lambda: dict(zip(("items", "usage"), openai_compact(keys["openai"], model, session_frame(chunk_text)))),
+            model,
+            "remote-compact",
+            {"chunk": chunk_text},
+            lambda: dict(
+                zip(
+                    ("items", "usage"),
+                    openai_compact(keys["openai"], model, session_frame(chunk_text)),
+                )
+            ),
             args.fresh,
         )
         usage_rows.append(("compact", comp["usage"]))
         extra_items = comp["items"]
         messages = [
-            {"role": "user", "content": [{"text": load_prompt("qa-remote-compact.md").format(questions=q_block)}]}
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "text": load_prompt("qa-remote-compact.md").format(
+                            questions=q_block
+                        )
+                    }
+                ],
+            }
         ]
     elif cond in ("compact", "handoff"):
-        prompt_file = {"compact": "compaction-summary.md", "handoff": "handoff-document.md"}[cond]
+        prompt_file = {
+            "compact": "compaction-summary.md",
+            "handoff": "handoff-document.md",
+        }[cond]
         gen = cached(
-            model, f"summary-{cond}", {"chunk": chunk_text},
+            model,
+            f"summary-{cond}",
+            {"chunk": chunk_text},
             lambda: dict(
                 zip(
                     ("text", "usage", "stop"),
                     llm_complete(
-                        keys, model,
-                        session_frame(chunk_text) + [{"role": "user", "content": [{"text": agent_prompt(prompt_file)}]}],
+                        keys,
+                        model,
+                        session_frame(chunk_text)
+                        + [
+                            {
+                                "role": "user",
+                                "content": [{"text": agent_prompt(prompt_file)}],
+                            }
+                        ],
                         system=agent_prompt("summarization-system.md"),
                         max_tokens=args.max_tokens,
                     ),
@@ -167,25 +231,37 @@ def run_cell_chunk(model: str, cond: str, start: int, end: int, ctx: dict) -> li
         messages = [
             {
                 "role": "user",
-                "content": [{"text": load_prompt("qa-text.md").format(context=gen["text"])}, {"text": q_block}],
+                "content": [
+                    {"text": load_prompt("qa-text.md").format(context=gen["text"])},
+                    {"text": q_block},
+                ],
             }
         ]
     else:  # text
         messages = [
             {
                 "role": "user",
-                "content": [{"text": load_prompt("qa-text.md").format(context=chunk_text)}, {"text": q_block}],
+                "content": [
+                    {"text": load_prompt("qa-text.md").format(context=chunk_text)},
+                    {"text": q_block},
+                ],
             }
         ]
 
     qa = cached(
-        model, "qa", {"messages": messages, "extra": extra_items, "effort": args.effort},
+        model,
+        "qa",
+        {"messages": messages, "extra": extra_items, "effort": args.effort},
         lambda: dict(
             zip(
                 ("text", "usage", "stop"),
                 llm_complete(
-                    keys, model, messages,
-                    max_tokens=args.max_tokens, effort=args.effort, extra_input_items=extra_items,
+                    keys,
+                    model,
+                    messages,
+                    max_tokens=args.max_tokens,
+                    effort=args.effort,
+                    extra_input_items=extra_items,
                 ),
             )
         ),
@@ -220,8 +296,13 @@ def aggregate(records: list[dict], price_in: float, price_out: float) -> dict:
     mean_f1 = sum(f1s) / n
     se = (sum((x - mean_f1) ** 2 for x in f1s) / (n * (n - 1))) ** 0.5 if n > 1 else 0.0
     us = [u for r in records if "usage" in r for u in r["usage"]]
-    tok = {k: sum(u.get(k, 0) for u in us) for k in ("in", "out", "cache_w", "cache_r", "reasoning")}
-    cost_in = (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in
+    tok = {
+        k: sum(u.get(k, 0) for u in us)
+        for k in ("in", "out", "cache_w", "cache_r", "reasoning")
+    }
+    cost_in = (
+        (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in
+    )
     cost_out = tok["out"] / 1e6 * price_out
     return {
         "n": n,
@@ -246,11 +327,15 @@ def main() -> None:
     ap.add_argument("--size", type=int, default=1568)
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--max-tokens", type=int, default=16384)
-    ap.add_argument("--effort", default=None, help="reasoning effort; None = provider default")
+    ap.add_argument(
+        "--effort", default=None, help="reasoning effort; None = provider default"
+    )
     ap.add_argument("--fresh", action="store_true")
     ap.add_argument("--report", action="store_true", help="reprint from cache only")
     ap.add_argument("--env", default="~/.env")
-    ap.add_argument("--out", default="final", help="results subdirectory (isolate concurrent runs)")
+    ap.add_argument(
+        "--out", default="final", help="results subdirectory (isolate concurrent runs)"
+    )
     args = ap.parse_args()
 
     CACHE.mkdir(exist_ok=True)
@@ -276,18 +361,31 @@ def main() -> None:
     for length in lengths:
         paras = all_paras[:length]
         flow, offsets = squad.build_flow(paras)
-        ctx = {"args": args, "flow": flow, "paras": paras, "offsets": offsets, "keys": keys, "length": length}
+        ctx = {
+            "args": args,
+            "flow": flow,
+            "paras": paras,
+            "offsets": offsets,
+            "keys": keys,
+            "length": length,
+        }
         for model in models:
             for cond in conditions:
                 budget = chunk_budget(cond, args.size)
                 for start in range(0, len(flow), budget):
-                    tasks.append((model, cond, start, min(start + budget, len(flow)), ctx))
-    print(f"grid: {len(models)} models x {len(lengths)} lengths x {len(conditions)} conditions = {len(tasks)} chunk tasks")
+                    tasks.append(
+                        (model, cond, start, min(start + budget, len(flow)), ctx)
+                    )
+    print(
+        f"grid: {len(models)} models x {len(lengths)} lengths x {len(conditions)} conditions = {len(tasks)} chunk tasks"
+    )
 
     records: list[dict] = []
     done = 0
     with ThreadPoolExecutor(args.workers) as pool:
-        futures = [pool.submit(run_cell_chunk, m, c, s, e, ctx) for m, c, s, e, ctx in tasks]
+        futures = [
+            pool.submit(run_cell_chunk, m, c, s, e, ctx) for m, c, s, e, ctx in tasks
+        ]
         for fut in futures:
             records.extend(fut.result())
             done += 1
@@ -302,11 +400,26 @@ def main() -> None:
     for model in models:
         for length in lengths:
             for cond in conditions:
-                sub = [r for r in records if r["model"] == model and r["length"] == length and r["cond"] == cond]
+                sub = [
+                    r
+                    for r in records
+                    if r["model"] == model
+                    and r["length"] == length
+                    and r["cond"] == cond
+                ]
                 if not sub:
                     continue
-                cells.append({"model": model, "length": length, "condition": cond, **aggregate(sub, *MODELS[model])})
-    (out_dir / "summary.json").write_text(json.dumps({"args": vars(args), "cells": cells}, indent=1))
+                cells.append(
+                    {
+                        "model": model,
+                        "length": length,
+                        "condition": cond,
+                        **aggregate(sub, *MODELS[model]),
+                    }
+                )
+    (out_dir / "summary.json").write_text(
+        json.dumps({"args": vars(args), "cells": cells}, indent=1)
+    )
     with (out_dir / "matrix.csv").open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=list(cells[0].keys()))
         writer.writeheader()
@@ -319,7 +432,16 @@ def main() -> None:
         for cond in conditions:
             row = f"{cond:<15}"
             for model in models:
-                cell = next((c for c in cells if c["model"] == model and c["length"] == length and c["condition"] == cond), None)
+                cell = next(
+                    (
+                        c
+                        for c in cells
+                        if c["model"] == model
+                        and c["length"] == length
+                        and c["condition"] == cond
+                    ),
+                    None,
+                )
                 row += (
                     f"{cell['f1']:>10.3f} {cell['cost_in_usd']:>5.2f} {cell['cost_out_usd']:>5.2f}"
                     if cell

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { parseArgs } from "../src/cli/args";
 import { OPTIONAL_VALUE_FLAGS, STRING_VALUE_FLAGS } from "../src/cli/flag-tables";
+import { CliUsageError } from "../src/cli/usage-error";
 
 /**
  * Catches the set → args.ts direction of drift between
@@ -27,11 +28,18 @@ import { OPTIONAL_VALUE_FLAGS, STRING_VALUE_FLAGS } from "../src/cli/flag-tables
 describe("STRING_VALUE_FLAGS table is honored by args.ts parseArgs", () => {
 	for (const flag of STRING_VALUE_FLAGS) {
 		it(`${flag} consumes the next token unconditionally`, () => {
-			const result = parseArgs([flag, "--profile", "work"]);
-			expect(
-				result.profile,
-				`parseArgs should treat --profile as the value of ${flag}, not as a profile activation`,
-			).toBeUndefined();
+			try {
+				const result = parseArgs([flag, "--profile", "work"]);
+				expect(
+					result.profile,
+					`parseArgs should treat --profile as the value of ${flag}, not as a profile activation`,
+				).toBeUndefined();
+			} catch (error) {
+				// Value-validating flags (e.g. --max-time) reject "--profile" as their
+				// value; consuming-and-rejecting still proves the flag swallowed the
+				// token instead of activating the profile.
+				expect(error).toBeInstanceOf(CliUsageError);
+			}
 		});
 	}
 });
@@ -53,6 +61,14 @@ describe("--tools legacy aliases", () => {
 		const result = parseArgs(["--tools", "search,find,grep"]);
 
 		expect(result.tools).toEqual(["grep", "glob"]);
+	});
+
+	it("rejects unknown tool names instead of silently narrowing the toolset", () => {
+		// Removed tools (ssh, job, irc, launch, search_tool_bm25) used to be
+		// dropped with only a log-file warning, so `--tools bash,ssh` ran with
+		// just bash and no visible notice.
+		expect(() => parseArgs(["--tools", "bash,ssh"])).toThrow(CliUsageError);
+		expect(() => parseArgs(["--tools", "bash,ssh"])).toThrow(/Unknown tool in --tools: ssh/);
 	});
 });
 

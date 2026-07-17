@@ -81,6 +81,35 @@ describe("Ollama chat thinking controls", () => {
 		expect(payload?.think).toBe(false);
 	});
 
+	it("retries EOS-only empty completions before surfacing Ollama output", async () => {
+		let attempts = 0;
+		const fetchMock = async (): Promise<Response> => {
+			attempts++;
+			if (attempts === 1) {
+				return new Response(
+					'{"message":{"content":""},"done":true,"done_reason":"stop","prompt_eval_count":98563,"eval_count":1}\n',
+					{ status: 200 },
+				);
+			}
+			return new Response(
+				'{"message":{"content":"recovered"},"done":true,"done_reason":"stop","prompt_eval_count":98563,"eval_count":3}\n',
+				{ status: 200 },
+			);
+		};
+		const context: Context = {
+			messages: [{ role: "user", content: "Continue the task.", timestamp: 0 }],
+		};
+
+		const result = await streamOllama(createReasoningOllamaModel(), context, {
+			apiKey: "test-key",
+			fetch: fetchMock,
+			providerRetryWait: async () => {},
+		}).result();
+
+		expect(attempts).toBe(2);
+		expect(result.content).toEqual([{ type: "text", text: "recovered" }]);
+	});
+
 	it("normalizes tool schemas for Ollama's Go parser", async () => {
 		let payload: OllamaChatRequestPayload | undefined;
 		const fetchMock = async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {

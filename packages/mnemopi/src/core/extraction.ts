@@ -85,6 +85,10 @@ function stripFence(raw: string): string {
 const FLAT_FACT_LIMIT = 5;
 const STRUCTURED_CATEGORY_LIMIT = 5;
 const STRING_CATEGORY_KEYS = ["facts", "instructions", "preferences", "timelines"] as const;
+const FACT_TEXT_FIELD_KEYS = ["fact", "text", "content", "value", "statement"] as const;
+const INSTRUCTION_TEXT_FIELD_KEYS = ["instruction", "rule", ...FACT_TEXT_FIELD_KEYS] as const;
+const PREFERENCE_TEXT_FIELD_KEYS = ["preference", ...FACT_TEXT_FIELD_KEYS] as const;
+const TIMELINE_TEXT_FIELD_KEYS = ["description", "event", "timeline", "date", ...FACT_TEXT_FIELD_KEYS] as const;
 
 /** Parsed knowledge-graph edge emitted by the extractor LLM. */
 export interface ExtractedKgTriple {
@@ -112,14 +116,36 @@ function normalizeFact(fact: string): string {
 	return trimmed.replace(/[.!?]+$/, "");
 }
 
-function normalizeFactArray(items: unknown): string[] {
+interface FactArrayOptions {
+	fields: readonly string[];
+	joinFields?: boolean;
+}
+
+function normalizeFactArray(items: unknown, options: FactArrayOptions): string[] {
 	if (!Array.isArray(items)) {
 		return [];
 	}
 	const out: string[] = [];
 	for (const item of items) {
-		if (item !== null && item !== undefined && String(item).trim() !== "") {
-			const normalized = normalizeFact(String(item));
+		let text: string | null = null;
+		if (typeof item === "string") {
+			text = item.trim();
+		} else if (isRecord(item)) {
+			const parts: string[] = [];
+			for (const key of options.fields) {
+				const candidate = item[key];
+				if (typeof candidate === "string") {
+					const trimmed = candidate.trim();
+					if (trimmed !== "") {
+						parts.push(trimmed);
+						if (options.joinFields !== true) break;
+					}
+				}
+			}
+			text = parts.length > 0 ? parts.join(" ") : null;
+		}
+		if (text !== null && text !== "") {
+			const normalized = normalizeFact(text);
 			if (normalized !== "") {
 				out.push(normalized);
 				if (out.length >= STRUCTURED_CATEGORY_LIMIT) break;
@@ -205,10 +231,10 @@ export function parseExtractedFactCategories(rawOutput: string | null | undefine
 			const parsed: unknown = JSON.parse(rawClean);
 			if (isRecord(parsed)) {
 				return {
-					facts: normalizeFactArray(parsed.facts),
-					instructions: normalizeFactArray(parsed.instructions),
-					preferences: normalizeFactArray(parsed.preferences),
-					timelines: normalizeFactArray(parsed.timelines),
+					facts: normalizeFactArray(parsed.facts, { fields: FACT_TEXT_FIELD_KEYS }),
+					instructions: normalizeFactArray(parsed.instructions, { fields: INSTRUCTION_TEXT_FIELD_KEYS }),
+					preferences: normalizeFactArray(parsed.preferences, { fields: PREFERENCE_TEXT_FIELD_KEYS }),
+					timelines: normalizeFactArray(parsed.timelines, { fields: TIMELINE_TEXT_FIELD_KEYS, joinFields: true }),
 					kg: normalizeKgArray(parsed.kg),
 				};
 			}

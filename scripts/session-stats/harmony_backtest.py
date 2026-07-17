@@ -25,8 +25,12 @@ DB_PATH = Path.home() / ".omp" / "stats.db"
 
 MARKER_RE = re.compile(r"\bto=functions\.[A-Za-z_][A-Za-z0-9_]*")
 HARMONY_RE = re.compile(r"<\|(start|end|channel|message|call|return)\|>")
-CHANNEL_WORD_RE = re.compile(r"\b(analysis|commentary|assistant|user|system|developer|tool)\s+to=functions\.")
-GLITCH_RE = re.compile(r"\b(changedFiles|RTLU|Jsii(?:_commentary)?|Japgolly|tRTLUfunctions|Joshi_commentary|Japgolly_commentary|jsii_commentary|Jsii_commentary|Jsii)\b")
+CHANNEL_WORD_RE = re.compile(
+    r"\b(analysis|commentary|assistant|user|system|developer|tool)\s+to=functions\."
+)
+GLITCH_RE = re.compile(
+    r"\b(changedFiles|RTLU|Jsii(?:_commentary)?|Japgolly|tRTLUfunctions|Joshi_commentary|Japgolly_commentary|jsii_commentary|Jsii_commentary|Jsii)\b"
+)
 NULLISH_RE = re.compile(r"\b(undefined|null)\b")
 BODY_CASCADE_RE = re.compile(r"\bto=functions\.[A-Za-z_][A-Za-z0-9_]*\s+code(?:\s|$)")
 FAKE_RESULT_RE = re.compile(
@@ -38,18 +42,18 @@ FENCE_RE = re.compile(r"^\s*(```+|~~~+)")
 # ranges local and explicit.
 SCRIPT_RUN_RE = re.compile(
     "["
-    "\u3400-\u4DBF"  # CJK Extension A
-    "\u4E00-\u9FFF"  # CJK Unified Ideographs
-    "\uF900-\uFAFF"  # CJK Compatibility Ideographs
-    "\u0400-\u04FF"  # Cyrillic
-    "\u0E00-\u0E7F"  # Thai
-    "\u10A0-\u10FF"  # Georgian
-    "\u0530-\u058F"  # Armenian
-    "\u0C80-\u0CFF"  # Kannada
-    "\u0C00-\u0C7F"  # Telugu
-    "\u0900-\u097F"  # Devanagari
-    "\u0600-\u06FF"  # Arabic
-    "\u0D00-\u0D7F"  # Malayalam
+    "\u3400-\u4dbf"  # CJK Extension A
+    "\u4e00-\u9fff"  # CJK Unified Ideographs
+    "\uf900-\ufaff"  # CJK Compatibility Ideographs
+    "\u0400-\u04ff"  # Cyrillic
+    "\u0e00-\u0e7f"  # Thai
+    "\u10a0-\u10ff"  # Georgian
+    "\u0530-\u058f"  # Armenian
+    "\u0c80-\u0cff"  # Kannada
+    "\u0c00-\u0c7f"  # Telugu
+    "\u0900-\u097f"  # Devanagari
+    "\u0600-\u06ff"  # Arabic
+    "\u0d00-\u0d7f"  # Malayalam
     "]{2,}"
 )
 
@@ -64,9 +68,15 @@ BEGIN_PATCH_RE = re.compile(r"^\*\*\* Begin Patch\s*$")
 END_PATCH_RE = re.compile(r"^\*\*\* End Patch\s*$")
 
 # Legacy hashline ops (kept for historical session corpus).
-LEGACY_INSERT_RE = re.compile(r"^(?P<op>[«»])\s*(?P<anchor>BOF|EOF|[1-9][0-9]*[A-Za-z]{2})\s*$")
-LEGACY_RANGE_RE = re.compile(r"(?P<a>[1-9][0-9]*[A-Za-z]{2})(?:\.\.(?P<b>[1-9][0-9]*[A-Za-z]{2}))?")
-LEGACY_REPLACE_RE = re.compile(r"^≔\s*(?P<range>[1-9][0-9]*[A-Za-z]{2}(?:\.\.[1-9][0-9]*[A-Za-z]{2})?)\s*$")
+LEGACY_INSERT_RE = re.compile(
+    r"^(?P<op>[«»])\s*(?P<anchor>BOF|EOF|[1-9][0-9]*[A-Za-z]{2})\s*$"
+)
+LEGACY_RANGE_RE = re.compile(
+    r"(?P<a>[1-9][0-9]*[A-Za-z]{2})(?:\.\.(?P<b>[1-9][0-9]*[A-Za-z]{2}))?"
+)
+LEGACY_REPLACE_RE = re.compile(
+    r"^≔\s*(?P<range>[1-9][0-9]*[A-Za-z]{2}(?:\.\.[1-9][0-9]*[A-Za-z]{2})?)\s*$"
+)
 
 # Current hashline ops.
 NEW_INSERT_RE = re.compile(
@@ -183,7 +193,6 @@ def commas(n: int) -> str:
     return f"{n:,}"
 
 
-
 def one_line(text: str, limit: int = 180) -> str:
     text = text.replace("\r", "\\r").replace("\n", " | ").replace("\t", "\\t")
     if len(text) <= limit:
@@ -242,7 +251,9 @@ def marker_evidence_for(
     window16 = text[max(0, start - 16) : min(len(text), end + 16)]
     window200 = text[start : min(len(text), start + 200)]
 
-    for c in CHANNEL_WORD_RE.finditer(text[max(0, start - 64) : min(len(text), end + 16)]):
+    for c in CHANNEL_WORD_RE.finditer(
+        text[max(0, start - 64) : min(len(text), end + 16)]
+    ):
         absolute_start = max(0, start - 64) + c.start()
         absolute_end = max(0, start - 64) + c.end()
         if absolute_start <= start < absolute_end:
@@ -255,7 +266,9 @@ def marker_evidence_for(
         ev.classes.add("N")
     if script_mismatch_near(text, start, end):
         ev.classes.add("S")
-    if BODY_CASCADE_RE.match(window200) and MARKER_RE.search(window200[marker.end() - start :]):
+    if BODY_CASCADE_RE.match(window200) and MARKER_RE.search(
+        window200[marker.end() - start :]
+    ):
         ev.classes.add("B")
     if FAKE_RESULT_RE.match(text, start):
         ev.classes.add("R")
@@ -280,7 +293,9 @@ def detect_signals(
         signals.append(Signal("H", h.start(), h.end(), h.group(0)))
 
     for marker in MARKER_RE.finditer(text):
-        ev = marker_evidence_for(text, marker, parsed_end, respect_fences, include_nullish)
+        ev = marker_evidence_for(
+            text, marker, parsed_end, respect_fences, include_nullish
+        )
         if ev is None:
             continue
         marker_evidence.append(ev)
@@ -319,6 +334,7 @@ def line_spans(text: str) -> list[tuple[str, int, int]]:
     # splitlines(keepends=True) already includes the final unterminated line.
     return out
 
+
 def parse_legacy_diff_boundary(text: str, *, loose_tail: bool = False) -> EditBoundary:
     """Best-effort parser for pre-hashline edit inputs.
 
@@ -342,7 +358,12 @@ def parse_legacy_diff_boundary(text: str, *, loose_tail: bool = False) -> EditBo
 
     for line, _start, end in line_spans(text):
         line_no += 1
-        if loose_tail and (MARKER_RE.search(line) or HARMONY_RE.search(line)) and cur is not None and cur.op_count > 0:
+        if (
+            loose_tail
+            and (MARKER_RE.search(line) or HARMONY_RE.search(line))
+            and cur is not None
+            and cur.op_count > 0
+        ):
             break
 
         if line.startswith("---"):
@@ -395,7 +416,9 @@ def parse_legacy_diff_boundary(text: str, *, loose_tail: bool = False) -> EditBo
             in_payload = True
             continue
 
-        if in_payload and (line.startswith("-") or line.startswith(" ") or line.startswith("\\")):
+        if in_payload and (
+            line.startswith("-") or line.startswith(" ") or line.startswith("\\")
+        ):
             if line.startswith("-") and not line.startswith("---"):
                 cur.deleted_lines += 1
             parsed_end = end
@@ -415,7 +438,9 @@ def parse_legacy_diff_boundary(text: str, *, loose_tail: bool = False) -> EditBo
     return EditBoundary(
         ok=parsed_end > 0 and bool(sections),
         parsed_end=parsed_end,
-        reason="legacy-edit-ok" if parsed_end > 0 and sections else "no-complete-edit-prefix",
+        reason="legacy-edit-ok"
+        if parsed_end > 0 and sections
+        else "no-complete-edit-prefix",
         sections=sections,
         line_no=line_no,
     )
@@ -547,7 +572,9 @@ def parse_edit_boundary(text: str, *, legacy_loose_tail: bool = False) -> EditBo
             if rng:
                 sigil = rng.group("sigil")
                 cur.op_count += 1
-                cur.deleted_lines += new_range_deleted_lines(rng.group("a"), rng.group("b"))
+                cur.deleted_lines += new_range_deleted_lines(
+                    rng.group("a"), rng.group("b")
+                )
                 if sigil == ":" and rng.group("inline"):
                     cur.payload_lines += 1
                 parsed_end = end
@@ -620,17 +647,34 @@ def parse_arg_json(raw: str) -> tuple[Any | None, bool, str]:
         return None, False, f"json-error:{exc.pos}:{exc.msg}"
 
 
-def extract_primary_text(tool_name: str, arg_json: str, parsed: Any | None) -> tuple[str, str]:
-    if tool_name == "edit" and isinstance(parsed, dict) and isinstance(parsed.get("input"), str):
+def extract_primary_text(
+    tool_name: str, arg_json: str, parsed: Any | None
+) -> tuple[str, str]:
+    if (
+        tool_name == "edit"
+        and isinstance(parsed, dict)
+        and isinstance(parsed.get("input"), str)
+    ):
         return "edit.input", parsed["input"]
-    if tool_name == "eval" and isinstance(parsed, dict) and isinstance(parsed.get("input"), str):
+    if (
+        tool_name == "eval"
+        and isinstance(parsed, dict)
+        and isinstance(parsed.get("input"), str)
+    ):
         return "eval.input", parsed["input"]
-    if tool_name == "write" and isinstance(parsed, dict) and isinstance(parsed.get("content"), str):
+    if (
+        tool_name == "write"
+        and isinstance(parsed, dict)
+        and isinstance(parsed.get("content"), str)
+    ):
         return "write.content", parsed["content"]
-    if tool_name == "bash" and isinstance(parsed, dict) and isinstance(parsed.get("command"), str):
+    if (
+        tool_name == "bash"
+        and isinstance(parsed, dict)
+        and isinstance(parsed.get("command"), str)
+    ):
         return "bash.command", parsed["command"]
     return "arg_json", arg_json
-
 
 
 def action_for_tool(
@@ -642,7 +686,12 @@ def action_for_tool(
 ) -> str:
     if not signals:
         return "allow"
-    if tool_name == "edit" and surface == "edit.input" and boundary is not None and boundary.ok:
+    if (
+        tool_name == "edit"
+        and surface == "edit.input"
+        and boundary is not None
+        and boundary.ok
+    ):
         if all(sig.start >= boundary.parsed_end for sig in signals):
             return "sanitize_tail"
         return "abort_replay"
@@ -782,7 +831,9 @@ def candidate_where(column: str) -> str:
     )
 
 
-def scan_tools(conn: sqlite3.Connection, args: argparse.Namespace) -> list[ToolBacktest]:
+def scan_tools(
+    conn: sqlite3.Connection, args: argparse.Namespace
+) -> list[ToolBacktest]:
     where = candidate_where("arg_json")
     params: list[Any] = []
     if args.provider:
@@ -814,7 +865,9 @@ def scan_tools(conn: sqlite3.Connection, args: argparse.Namespace) -> list[ToolB
     ]
 
 
-def scan_assistant(conn: sqlite3.Connection, args: argparse.Namespace) -> list[TextBacktest]:
+def scan_assistant(
+    conn: sqlite3.Connection, args: argparse.Namespace
+) -> list[TextBacktest]:
     if not args.include_assistant:
         return []
     text_where = candidate_where("text_blob")
@@ -871,8 +924,13 @@ def print_tool_summary(results: list[ToolBacktest]) -> None:
     print("=== tool-call scan ===")
     print(f"candidate rows: {commas(len(results))}")
     print_counter("\nby action:", Counter(r.action for r in results))
-    print_counter("\nby tool/action:", Counter(f"{r.tool_name}:{r.action}" for r in results))
-    print_counter("\nby model/action:", Counter(f"{r.model or '<unknown>'}:{r.action}" for r in results))
+    print_counter(
+        "\nby tool/action:", Counter(f"{r.tool_name}:{r.action}" for r in results)
+    )
+    print_counter(
+        "\nby model/action:",
+        Counter(f"{r.model or '<unknown>'}:{r.action}" for r in results),
+    )
     signal_counter: Counter[str] = Counter()
     for r in results:
         if r.signals:
@@ -890,9 +948,17 @@ def print_tool_summary(results: list[ToolBacktest]) -> None:
         print(f"  sanitize_tail:                {commas(sanitized)}")
         print(f"  abort_replay:                 {commas(aborted)}")
         if sanitized:
-            preserved_ops = sum(r.edit_ops for r in edit_results if r.action == "sanitize_tail")
-            preserved_payload = sum(r.edit_payload_lines for r in edit_results if r.action == "sanitize_tail")
-            removed = sum(r.removed_len for r in edit_results if r.action == "sanitize_tail")
+            preserved_ops = sum(
+                r.edit_ops for r in edit_results if r.action == "sanitize_tail"
+            )
+            preserved_payload = sum(
+                r.edit_payload_lines
+                for r in edit_results
+                if r.action == "sanitize_tail"
+            )
+            removed = sum(
+                r.removed_len for r in edit_results if r.action == "sanitize_tail"
+            )
             print(f"  ops preserved by sanitize:    {commas(preserved_ops)}")
             print(f"  payload lines preserved:      {commas(preserved_payload)}")
             print(f"  tail bytes removed:           {commas(removed)}")
@@ -904,28 +970,40 @@ def print_text_summary(results: list[TextBacktest]) -> None:
     print("\n=== assistant message scan ===")
     print(f"candidate surfaces: {commas(len(results))}")
     print_counter("\nby action:", Counter(r.action for r in results))
-    print_counter("\nby surface/action:", Counter(f"{r.surface}:{r.action}" for r in results))
-    print_counter("\nby model/action:", Counter(f"{r.model or '<unknown>'}:{r.action}" for r in results))
-
+    print_counter(
+        "\nby surface/action:", Counter(f"{r.surface}:{r.action}" for r in results)
+    )
+    print_counter(
+        "\nby model/action:",
+        Counter(f"{r.model or '<unknown>'}:{r.action}" for r in results),
+    )
 
 
 def signal_summary(labels: list[str], limit: int = 6) -> str:
     if not labels:
         return "none"
     counts = Counter(labels)
-    parts = [f"{label}x{count}" if count > 1 else label for label, count in counts.most_common(limit)]
+    parts = [
+        f"{label}x{count}" if count > 1 else label
+        for label, count in counts.most_common(limit)
+    ]
     rest = sum(counts.values()) - sum(count for _, count in counts.most_common(limit))
     if rest:
         parts.append(f"+{rest} more")
     return ",".join(parts)
 
+
 def print_examples(results: list[ToolBacktest], show: int) -> None:
     if show <= 0:
         return
     print(f"\n=== sanitize_tail edit examples (up to {show}) ===")
-    sanitize_examples = [r for r in results if r.tool_name == "edit" and r.action == "sanitize_tail"]
+    sanitize_examples = [
+        r for r in results if r.tool_name == "edit" and r.action == "sanitize_tail"
+    ]
     for r in sanitize_examples[:show]:
-        print(f"\n[id={r.row_id} seq={r.seq} model={r.model} signals={signal_summary(r.signals)}]")
+        print(
+            f"\n[id={r.row_id} seq={r.seq} model={r.model} signals={signal_summary(r.signals)}]"
+        )
         print(f"session: {r.session_file}")
         print(f"file(s): {', '.join(r.edit_files) if r.edit_files else '<none>'}")
         print(
@@ -938,7 +1016,9 @@ def print_examples(results: list[ToolBacktest], show: int) -> None:
     print(f"\n=== abort_replay examples (up to {show}) ===")
     abort_examples = [r for r in results if r.action == "abort_replay"]
     for r in abort_examples[:show]:
-        print(f"\n[id={r.row_id} tool={r.tool_name} surface={r.surface} seq={r.seq} model={r.model} signals={signal_summary(r.signals)}]")
+        print(
+            f"\n[id={r.row_id} tool={r.tool_name} surface={r.surface} seq={r.seq} model={r.model} signals={signal_summary(r.signals)}]"
+        )
         print(f"session: {r.session_file}")
         if r.tool_name == "edit":
             print(
@@ -948,7 +1028,9 @@ def print_examples(results: list[ToolBacktest], show: int) -> None:
         print(f"context: {r.context_preview}")
 
 
-def write_json_report(path: Path, tools: list[ToolBacktest], texts: list[TextBacktest]) -> None:
+def write_json_report(
+    path: Path, tools: list[ToolBacktest], texts: list[TextBacktest]
+) -> None:
     def tool_dict(r: ToolBacktest) -> dict[str, Any]:
         return {
             "surface": r.surface,
@@ -998,7 +1080,9 @@ def write_json_report(path: Path, tools: list[ToolBacktest], texts: list[TextBac
         "assistant_surfaces": [text_dict(r) for r in texts],
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
 
 def main() -> int:
@@ -1016,22 +1100,46 @@ def main() -> int:
             "tail = only H or marker after parsed boundary"
         ),
     )
-    ap.add_argument("--provider", default=None, help="restrict tool/message rows to a provider")
-    ap.add_argument("--model", default=None, help="restrict tool/message rows to a model")
+    ap.add_argument(
+        "--provider", default=None, help="restrict tool/message rows to a provider"
+    )
+    ap.add_argument(
+        "--model", default=None, help="restrict tool/message rows to a model"
+    )
     ap.add_argument("--tool", default=None, help="restrict tool-call rows to one tool")
-    ap.add_argument("--include-assistant", action="store_true", help="also scan assistant text/thinking surfaces")
-    ap.add_argument("--include-nullish", action="store_true", help="treat adjacent null/undefined as signal N")
-    ap.add_argument("--no-fence-context", action="store_true", help="do not exempt Markdown fenced blocks")
-    ap.add_argument("--legacy-loose-tail", action="store_true", help="model old raw-payload edit inputs as tail-sanitizable at first marker line")
+    ap.add_argument(
+        "--include-assistant",
+        action="store_true",
+        help="also scan assistant text/thinking surfaces",
+    )
+    ap.add_argument(
+        "--include-nullish",
+        action="store_true",
+        help="treat adjacent null/undefined as signal N",
+    )
+    ap.add_argument(
+        "--no-fence-context",
+        action="store_true",
+        help="do not exempt Markdown fenced blocks",
+    )
+    ap.add_argument(
+        "--legacy-loose-tail",
+        action="store_true",
+        help="model old raw-payload edit inputs as tail-sanitizable at first marker line",
+    )
     ap.add_argument("--show", type=int, default=8, help="examples per action group")
-    ap.add_argument("--json-out", type=Path, default=None, help="write machine-readable report")
+    ap.add_argument(
+        "--json-out", type=Path, default=None, help="write machine-readable report"
+    )
     args = ap.parse_args()
 
     conn = open_ro(args.db)
     print("=== harmony leak backtest ===")
     print(f"db:        {args.db}")
     print(f"strategy:  {args.strategy}")
-    print(f"fences:    {'ignored for action' if not args.no_fence_context else 'scanned as active text'}")
+    print(
+        f"fences:    {'ignored for action' if not args.no_fence_context else 'scanned as active text'}"
+    )
     if args.legacy_loose_tail:
         print("legacy:   loose tail mode")
     if args.provider:

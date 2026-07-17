@@ -318,15 +318,20 @@ export class SpeakableStream {
 		this.#drain(out);
 	}
 
-	/** Emit every buffered character, force-splitting anything over the cap. */
+	/**
+	 * Emit every buffered character. Runs the bounded streaming segmenter first
+	 * so a large buffer (paste-sized delta, one-shot push) prefers sentence and
+	 * clause cuts within {@link MAX_SEGMENT}, instead of word-splitting whole
+	 * paragraphs at the cap ("…a big jump is" / "coming"). Not byte-identical to
+	 * char-by-char streaming — the soft-clause latency cut can fire earlier
+	 * there — but every segment obeys the same cap and boundary preferences.
+	 * {@link #extract} leaves at most MAX_SEGMENT behind, emitted as the
+	 * trailing segment.
+	 */
 	#drain(out: string[]): void {
-		let text = this.#buf;
+		this.#extract(out);
+		const text = this.#buf;
 		this.#buf = "";
-		while (text.length > MAX_SEGMENT) {
-			const cut = findForcedCut(text, MAX_SEGMENT);
-			this.#emit(text.slice(0, cut), out);
-			text = text.slice(cut);
-		}
 		this.#emit(text, out);
 	}
 
@@ -335,14 +340,19 @@ export class SpeakableStream {
 		for (;;) {
 			const buf = this.#buf;
 			const min = this.#spoke ? MIN_SEGMENT : FIRST_SEGMENT_MIN;
+			// Bounded: a sentence past MAX_SEGMENT risks Kokoro's ~510-phoneme
+			// truncation — fall through to clause/word cuts instead.
 			const sentence = findSentenceCut(buf, min);
-			if (sentence !== -1) {
+			if (sentence !== -1 && sentence <= MAX_SEGMENT) {
 				this.#cut(sentence, out);
 				continue;
 			}
 			if (!this.#spoke && buf.length >= FIRST_CLAUSE_MIN) {
+				// Bounded like the sentence branch: in a one-shot buffer the earliest
+				// clause can lie far past the cap; per-char streaming would have
+				// force-cut at FIRST_FORCED_MAX long before seeing it.
 				const clause = findClauseCut(buf, FIRST_SEGMENT_MIN);
-				if (clause !== -1) {
+				if (clause !== -1 && clause <= FIRST_FORCED_MAX) {
 					this.#cut(clause, out);
 					continue;
 				}

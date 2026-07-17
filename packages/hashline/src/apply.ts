@@ -7,7 +7,13 @@
  * which absorbs common model mistakes where a payload restates unchanged range
  * boundaries or duplicates/drops structural closers.
  */
-import { afterInsertLandingShiftWarning, blockInsertLandingShiftWarning, UNRESOLVED_BLOCK_INTERNAL } from "./messages";
+import {
+	afterInsertLandingShiftWarning,
+	ambiguousBoundaryEchoMessage,
+	ambiguousCloserSpareMessage,
+	blockInsertLandingShiftWarning,
+	UNRESOLVED_BLOCK_INTERNAL,
+} from "./messages";
 import { cloneCursor } from "./tokenizer";
 import type { Anchor, ApplyResult, Cursor, Edit } from "./types";
 
@@ -702,6 +708,12 @@ function describeBoundaryRepair(group: ReplacementGroup, action: string): string
  * carries no delimiter-balance signal itself, such as a JSX `</section>` close.
  * The dropped lines must keep the already-balanced result balanced, and must
  * not consume the whole payload.
+ *
+ * A detected echo is only *repairable* when the payload is long enough to be
+ * the widened range's full content (`payload ≥ range + echo`). Shorter
+ * payloads are ambiguous — the echo may instead mean the range itself was
+ * shifted by the echo, which keeps the far boundary line(s) the repair would
+ * delete — and the caller rejects the edit instead of guessing.
  */
 function findOneSidedBoundaryEcho(
 	group: ReplacementGroup,
@@ -800,6 +812,12 @@ function slotPatchDelta(slot: RepairSlot, fileLines: readonly string[]): Delimit
  * deleted is only kept when the patch as a whole is missing it — never when
  * another hunk already removed the matching opener. Returns the repaired edits
  * plus one warning per repaired group.
+ *
+ * Repairs fire only when exactly one reading explains the mistake. When the
+ * evidence is ambiguous — a one-sided echo whose payload is too short for the
+ * widened range, or a spared closer the payload neither opens nor indents
+ * into — the function throws instead of guessing, so the author re-issues the
+ * edit rather than shipping silently corrupted content.
  */
 function repairReplacementBoundaries(
 	edits: readonly AppliedEdit[],
@@ -842,6 +860,15 @@ function repairReplacementBoundaries(
 		if (balanceIsZero(delta)) {
 			const oneSided = findOneSidedBoundaryEcho(group, fileLines);
 			if (oneSided) {
+				// A payload shorter than range+echo cannot be the widened
+				// range's full content: the repair would delete range line(s)
+				// the payload never restates, while the "shifted range"
+				// reading keeps them. Reject rather than guess.
+				if (group.payload.length < group.deleteIndices.length + oneSided.count) {
+					throw new Error(
+						ambiguousBoundaryEchoMessage(group.startLine, group.endLine, oneSided.side, oneSided.count),
+					);
+				}
 				const trimmed =
 					oneSided.side === "leading"
 						? inserts.slice(oneSided.count)
@@ -934,6 +961,29 @@ function repairReplacementBoundaries(
 			insertedLineMaps,
 		);
 		if (droppedClosers) {
+			// Sparing a closer re-inserts it *after* the payload, which claims
+			// the payload lives inside the block the closer terminates. That
+			// claim needs evidence: the payload carries the closer's unmatched
+			// opener itself, or its indentation sits deeper than the closer.
+			// Without either, "before or after the closer" is a coin flip —
+			// reject rather than guess (e.g. a statement swapped onto a lone
+			// `}` at the closer's own depth belongs after the block).
+			const keptIndent = leadingIndent(fileLines[droppedClosers.startLine - 1] ?? "");
+			const payloadIndent = bodyTargetIndent(slot.group.payload);
+			const payloadOpens = balanceCovers(
+				computeDelimiterBalance(slot.group.payload),
+				balanceNegate(droppedClosers.balance),
+			);
+			if (!payloadOpens && !(payloadIndent !== undefined && isIndentDeeper(payloadIndent, keptIndent))) {
+				throw new Error(
+					ambiguousCloserSpareMessage(
+						slot.group.startLine,
+						slot.group.endLine,
+						droppedClosers.startLine,
+						droppedClosers.count,
+					),
+				);
+			}
 			warnings.push(
 				describeBoundaryRepair(
 					slot.group,

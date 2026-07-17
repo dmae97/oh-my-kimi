@@ -12,6 +12,8 @@ const DEFAULT_PRIMARY_COLUMN_WIDTH = 32;
 const PRIMARY_COLUMN_GAP = 2;
 const MIN_DESCRIPTION_WIDTH = 10;
 
+const DEFAULT_CURSOR_SYMBOL = ">";
+
 function sanitizeSingleLine(text: string): string {
 	return replaceTabs(text)
 		.replace(/[\r\n]+/g, " ")
@@ -372,9 +374,8 @@ export class SelectList implements Component, MouseRoutable {
 		width: number,
 		primaryColumnWidth: number,
 	): SelectItemLayout {
-		const prefix = isSelected
-			? `${this.theme.symbols.cursor} `
-			: padding(visibleWidth(this.theme.symbols.cursor) + 1);
+		const cursor = this.theme.symbols?.cursor ?? DEFAULT_CURSOR_SYMBOL;
+		const prefix = isSelected ? `${cursor} ` : padding(visibleWidth(cursor) + 1);
 		const prefixWidth = visibleWidth(prefix);
 		const descriptionSingleLine = item.description ? sanitizeSingleLine(item.description) : undefined;
 

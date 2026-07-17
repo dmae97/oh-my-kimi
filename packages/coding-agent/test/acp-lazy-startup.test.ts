@@ -90,7 +90,6 @@ class LazyFakeSession {
 
 	setThinkingLevel(): void {}
 	setSlashCommands(): void {}
-	async refreshSshTool(): Promise<void> {}
 	async setModel(): Promise<void> {}
 	subscribe(): () => void {
 		return () => {};
@@ -258,7 +257,7 @@ describe("ACP lazy startup", () => {
 			"task.batch": false,
 			"task.maxConcurrency": 4,
 			"task.maxRecursionDepth": 5,
-			"task.disabledAgents": ["explore"],
+			"task.disabledAgents": ["scout"],
 			"task.agentModelOverrides": { task: "claude-sonnet-4-20250514" },
 			"memory.backend": "local",
 			"memories.enabled": true,

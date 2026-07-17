@@ -399,13 +399,66 @@ fn print_version() {
 	let _ = writeln!(stdout(), "find (Rust) {}", env!("CARGO_PKG_VERSION"));
 }
 
+/// pi-uutils: BSD `find -E` compatibility (macOS muscle memory).
+///
+/// BSD `-E` selects POSIX extended regular expressions before the path list;
+/// GNU find rejects it, but supports the equivalent `-regextype
+/// posix-extended`. Rewriting is limited to otherwise-unparseable invocations:
+/// a valid GNU expression may use `-E` as an operand, so it must retain its
+/// existing meaning. The inserted setting starts the expression, before every
+/// `-regex`/`-iregex`, because matcher construction applies the current regex
+/// type as it encounters those predicates.
+fn rewrite_bsd_invocation(args: &[&str]) -> Option<Vec<String>> {
+	if !args.contains(&"-E") {
+		return None;
+	}
+	let Err(error) = parse_args(args) else {
+		return None;
+	};
+	if !error.to_string().contains("Unrecognized flag: '-E'") {
+		return None;
+	}
+
+	let mut rewritten: Vec<String> = args
+		.iter()
+		.filter(|arg| **arg != "-E")
+		.map(|arg| (*arg).to_string())
+		.collect();
+
+	let mut i = 0;
+	while i < rewritten.len() {
+		match rewritten[i].as_str() {
+			"-O0" | "-O1" | "-O2" | "-O3" | "-H" | "-L" | "-P" => i += 1,
+			"--" => {
+				i += 1;
+				break;
+			},
+			_ => break,
+		}
+	}
+	while i < rewritten.len()
+		&& (rewritten[i] == "-" || !rewritten[i].starts_with('-'))
+		&& rewritten[i] != "!"
+		&& rewritten[i] != "("
+	{
+		i += 1;
+	}
+	rewritten.splice(i..i, ["-regextype".to_string(), "posix-extended".to_string()]);
+	Some(rewritten)
+}
+
 /// Does all the work for find.
 ///
 /// All main has to do is pass in the command-line args and exit the process
 /// with the exit code. Note that the first string in args is expected to be
 /// the name of the executable.
 pub fn find_main(args: &[&str], deps: &dyn Dependencies) -> i32 {
-	match do_find(&args[1..], deps) {
+	let rewritten = rewrite_bsd_invocation(&args[1..]);
+	let args: Vec<&str> = match &rewritten {
+		Some(args) => args.iter().map(String::as_str).collect(),
+		None => args[1..].to_vec(),
+	};
+	match do_find(&args, deps) {
 		Ok(ret) => ret,
 		Err(e) => {
 			writeln!(&mut stderr(), "Error: {e}").unwrap();

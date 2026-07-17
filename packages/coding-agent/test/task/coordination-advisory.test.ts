@@ -8,13 +8,13 @@ import subagentSystemPromptTemplate from "../../src/prompts/system/subagent-syst
 // a proactive coordinate-via-irc suggestion, and the subagent COOP prompt
 // actively tells peers to coordinate before overlapping edits.
 
-const item = (): TaskItem => ({ assignment: "do the thing" });
+const item = (): TaskItem => ({ task: "do the thing" });
 
 describe("buildCoordinationAdvisory", () => {
-	it("suggests irc coordination for >=2 siblings with capacity and irc enabled", () => {
+	it("suggests hub coordination for >=2 siblings with capacity and hub messaging enabled", () => {
 		const advice = buildCoordinationAdvisory([item(), item()], true, true);
 		expect(advice).toBeDefined();
-		expect(advice).toContain("`irc`");
+		expect(advice).toContain("`hub`");
 	});
 
 	it("stays silent for a single spawn", () => {
@@ -47,49 +47,50 @@ describe("subagent COOP irc guidance", () => {
 // have already finished). composeSpawnAdvisory is the seam that decision flows
 // through, so the gating is pinned here rather than only inside the builders.
 describe("composeSpawnAdvisory", () => {
-	const worker = (role?: string): TaskItem => ({ assignment: "x", role });
+	const worker = (): TaskItem => ({ task: "x" });
 
 	it("joins the specialization tip and the irc coordination suggestion for an async generic fanout", () => {
 		const advisory = composeSpawnAdvisory({
-			agentName: "task",
+			agents: ["task", "task"],
 			items: [worker(), worker()],
 			depthCapacity: true,
 			ircEnabled: true,
 			willRunAsync: true,
 		});
-		expect(advisory).toContain("`role`");
+		expect(advisory).toContain("generic");
+		expect(advisory).toContain('`agent: "scout"`');
 		expect(advisory).toContain("Coordinate:");
 	});
 
 	it("drops the coordination suggestion on the sync path but keeps the specialization tip", () => {
 		const advisory = composeSpawnAdvisory({
-			agentName: "task",
+			agents: ["task", "task"],
 			items: [worker(), worker()],
 			depthCapacity: true,
 			ircEnabled: true,
 			willRunAsync: false,
 		});
-		expect(advisory).toContain("`role`");
+		expect(advisory).toContain("generic");
 		expect(advisory).not.toContain("Coordinate:");
 	});
 
 	it("omits coordination when irc is unavailable, even async", () => {
 		const advisory = composeSpawnAdvisory({
-			agentName: "task",
+			agents: ["task", "task"],
 			items: [worker(), worker()],
 			depthCapacity: true,
 			ircEnabled: false,
 			willRunAsync: true,
 		});
-		expect(advisory).toContain("`role`");
+		expect(advisory).toContain("generic");
 		expect(advisory).not.toContain("Coordinate:");
 	});
 
-	it("returns undefined for a single named spawn", () => {
+	it("returns undefined for a single non-generic spawn", () => {
 		expect(
 			composeSpawnAdvisory({
-				agentName: "reviewer",
-				items: [worker("Auth-flow security reviewer")],
+				agents: ["reviewer"],
+				items: [worker()],
 				depthCapacity: true,
 				ircEnabled: true,
 				willRunAsync: true,
@@ -100,7 +101,7 @@ describe("composeSpawnAdvisory", () => {
 	it("returns undefined at max depth (no spawn capacity)", () => {
 		expect(
 			composeSpawnAdvisory({
-				agentName: "task",
+				agents: ["task", "task"],
 				items: [worker(), worker()],
 				depthCapacity: false,
 				ircEnabled: true,

@@ -39,7 +39,7 @@ describe("role thinking helper propagation", () => {
 		const model = getModelOrThrow("claude-sonnet-4-5");
 		const settings = createSettings({
 			default: `${model.provider}/${model.id}:high`,
-			smol: "pi/default:minimal",
+			smol: "@default:minimal",
 		});
 		const registry = {
 			getAvailable: () => [model],
@@ -85,7 +85,7 @@ describe("role thinking helper propagation", () => {
 		const model = getModelOrThrow("claude-sonnet-4-5");
 		const settings = createSettings({
 			default: `${model.provider}/${model.id}:high`,
-			smol: "pi/default:low",
+			smol: "@default:low",
 		});
 		const registry = {
 			getAvailable: () => [model],
@@ -94,14 +94,7 @@ describe("role thinking helper propagation", () => {
 		};
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "end_turn",
-			content: [
-				{
-					type: "toolCall",
-					id: "call-title",
-					name: "set_title",
-					arguments: { title: "Investigate resolver" },
-				},
-			],
+			content: [{ type: "text", text: "<title>Investigate resolver</title>" }],
 		} as never);
 
 		const title = await generateSessionTitle("Investigate resolver", registry as never, settings);

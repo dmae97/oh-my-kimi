@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import type { Rule } from "../../capability/rule";
+import { compileRuleCondition, type Rule } from "../../capability/rule";
 import { buildRuleFromMarkdown, createSourceMeta } from "../../discovery/helpers";
 import { TtsrManager, type TtsrMatchContext } from "../../export/ttsr";
 
@@ -73,13 +73,13 @@ function normalizeConditionRegexes(conditions: readonly string[]): { condition: 
 
 function normalizeConditionRegex(condition: string): { condition: string } | { error: string } {
 	try {
-		new RegExp(condition);
+		compileRuleCondition(condition);
 		return { condition };
 	} catch (originalError) {
 		const repaired = unescapeRegexConditionOnce(condition);
 		if (repaired !== condition) {
 			try {
-				new RegExp(repaired);
+				compileRuleCondition(repaired);
 				return { condition: repaired };
 			} catch {}
 		}
@@ -404,7 +404,7 @@ export function ruleMatchesAssistantHistory(rule: Rule, messages: readonly Agent
 
 function isValidRegexCondition(condition: string): boolean {
 	try {
-		new RegExp(condition);
+		compileRuleCondition(condition);
 		return true;
 	} catch {
 		return false;

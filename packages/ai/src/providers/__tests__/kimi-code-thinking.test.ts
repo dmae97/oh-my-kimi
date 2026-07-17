@@ -1,7 +1,9 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
 import { getBundledModel } from "@oh-my-pi/pi-catalog";
+import * as kimiOauth from "../../registry/oauth/kimi";
 import type { Context } from "../../types";
 import type { MessageCreateParamsStreaming } from "../anthropic-wire";
+import { streamKimi } from "../kimi";
 import { streamOpenAIAnthropicShim } from "../openai-anthropic-shim";
 import {
 	applyChatCompletionsCompatPolicy,
@@ -10,6 +12,15 @@ import {
 } from "../openai-shared";
 
 const BASE_CHAT_COMPLETIONS_PARAMS: OpenAICompletionsParams = { messages: [], model: "unused", stream: true };
+const KIMI_HEADERS = Object.freeze({
+	"User-Agent": "KimiCLI/test",
+	"X-Msh-Platform": "kimi_cli",
+	"X-Msh-Version": "test",
+	"X-Msh-Device-Name": "test",
+	"X-Msh-Device-Model": "test",
+	"X-Msh-Os-Version": "test",
+	"X-Msh-Device-Id": "test",
+});
 const TITLE_CONTEXT: Context = {
 	systemPrompt: ["Generate a title."],
 	messages: [{ role: "user", content: "Explain the login failure", timestamp: 0 }],
@@ -26,6 +37,10 @@ const TITLE_CONTEXT: Context = {
 		},
 	],
 };
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
 describe("Kimi K2.7 Code thinking policy", () => {
 	it("omits disabled thinking for title-generator-style Kimi Code requests", () => {
@@ -69,6 +84,39 @@ describe("Kimi K2.7 Code thinking policy", () => {
 
 		expect(payload?.thinking?.type).toBe("enabled");
 		expect(payload?.tool_choice).toEqual({ type: "auto" });
+	});
+
+	it("uses the configured Kimi base URL for Anthropic requests", async () => {
+		vi.spyOn(kimiOauth, "getKimiCommonHeaders").mockReturnValue(KIMI_HEADERS);
+		const bundledModel = getBundledModel<"openai-completions">("kimi-code", "kimi-for-coding");
+		const model = { ...bundledModel, baseUrl: "https://gateway.example.com/v1" };
+		let requestedUrl: string | undefined;
+		const stream = streamKimi(
+			model,
+			{
+				systemPrompt: [],
+				messages: [{ role: "user", content: "Reply OK", timestamp: 0 }],
+				tools: [],
+			},
+			{
+				format: "anthropic",
+				apiKey: "gateway-key",
+				fetch: async input => {
+					requestedUrl = String(input);
+					return new Response(
+						JSON.stringify({
+							type: "error",
+							error: { type: "authentication_error", message: "stop after URL capture" },
+						}),
+						{ status: 401, headers: { "content-type": "application/json" } },
+					);
+				},
+			},
+		);
+
+		await stream.result();
+
+		expect(requestedUrl).toBe("https://gateway.example.com/v1/messages");
 	});
 
 	it("omits disabled thinking for native Moonshot Kimi K2.7 Code variants", () => {

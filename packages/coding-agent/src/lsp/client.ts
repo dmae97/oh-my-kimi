@@ -428,7 +428,7 @@ async function handleConfigurationRequest(client: LspClient, message: LspJsonRpc
 	const items = params?.items ?? [];
 	const result = items.map(item => {
 		const section = item.section ?? "";
-		return client.config.settings?.[section] ?? {};
+		return client.config.settings?.[section] ?? null;
 	});
 	await sendResponse(client, message.id, result, "workspace/configuration");
 }
@@ -750,8 +750,14 @@ export async function getOrCreateClient(
 
 			client.serverCapabilities = initResult.capabilities as LspClient["serverCapabilities"];
 
-			// Send initialized notification
+			// Finish the initialize handshake before publishing the client as ready.
 			await sendNotification(client, "initialized", {}, signal);
+			await sendNotification(
+				client,
+				"workspace/didChangeConfiguration",
+				{ settings: config.settings ?? {} },
+				signal,
+			);
 
 			client.status = "ready";
 			// Publish only after init succeeds: pre-init clients are reachable

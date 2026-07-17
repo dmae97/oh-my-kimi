@@ -6,8 +6,7 @@ describe("eval tool description", () => {
 		const description = getEvalToolDescription({ py: true, js: false, spawns: "fact-finder,oracle" });
 
 		expect(description).toContain('agent(prompt, agent?="fact-finder"');
-		expect(description).toContain("omit it to use `fact-finder`");
-		expect(description).toContain("Allowed agents: `fact-finder`, `oracle`.");
+		expect(description).toContain("Allowed: `fact-finder`, `oracle`.");
 	});
 
 	it("omits agent() when spawning is disabled", () => {

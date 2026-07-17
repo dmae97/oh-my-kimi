@@ -15,6 +15,7 @@ export interface PyToolBridgeEntry {
 	toolSession: ToolSession;
 	signal?: AbortSignal;
 	emitStatus?: (event: JsStatusEvent) => void;
+	abortRequested?: () => boolean;
 }
 
 export interface PyToolBridgeInfo {
@@ -31,23 +32,21 @@ const registrations = new Map<string, PyToolBridgeEntry>();
 let serverPromise: Promise<BridgeServer> | null = null;
 
 /**
- * Forward a bridge call to {@link callSessionTool}, but resolve the HTTP request
- * the instant the cell's signal aborts instead of waiting for the tool/subagent
- * to fully tear down.
+ * Forward a bridge call to {@link callSessionTool} while respecting eval abort
+ * shielding.
  *
- * The kernel invokes this bridge with a *blocking* `urllib` request from a
- * worker thread (each `agent()` / `tool.*` call). When the cell is interrupted,
- * `parallel()`'s `ThreadPoolExecutor.__exit__` joins those worker threads
- * (`shutdown(wait=True)`), so they cannot unwind until their `urllib` call
- * returns — i.e. until this handler responds. A host-side `agent()` teardown
- * (aborting nested LLM streams + tools across a wide fan-out) routinely exceeds
- * the kernel's SIGINT escalation window, so the kernel was hard-killed and its
- * persistent state lost while the subagents were still winding down. Responding
- * immediately on abort lets the kernel raise through the blocked call and settle
- * cleanly (preserving state); the already-signaled call keeps tearing down in
- * the background, its eventual result/rejection swallowed.
+ * Python invokes this bridge with blocking `urllib` requests from worker threads
+ * (each `agent()` / `tool.*` call). The base executor defers the registered
+ * signal while a bridge call is already paused so in-flight subagents can finish
+ * and persist output instead of being orphaned. Once an abort has been requested,
+ * later bridge calls are rejected before starting; once the shielded signal
+ * finally aborts, this handler still resolves the HTTP request promptly so the
+ * kernel can unwind without being hard-killed.
  */
 async function callSessionToolPromptOnAbort(name: string, args: unknown, entry: PyToolBridgeEntry): Promise<unknown> {
+	if (entry.abortRequested?.()) {
+		throw new Error(`bridge call ${JSON.stringify(name)} aborted: eval cell was interrupted`);
+	}
 	const call = callSessionTool(name, args, {
 		session: entry.toolSession,
 		signal: entry.signal,

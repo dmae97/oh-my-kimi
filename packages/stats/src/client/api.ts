@@ -59,8 +59,14 @@ export async function getRecentRequests(limit = 50, signal?: AbortSignal): Promi
 	return fetchJson<MessageStats[]>(`${API_BASE}/stats/recent?limit=${limit}`, { signal });
 }
 
-export async function getRecentErrors(limit = 50, signal?: AbortSignal): Promise<MessageStats[]> {
-	return fetchJson<MessageStats[]>(`${API_BASE}/stats/errors?limit=${limit}`, { signal });
+export async function getRecentErrors(
+	range: TimeRange = "24h",
+	limit = 50,
+	signal?: AbortSignal,
+): Promise<MessageStats[]> {
+	return fetchJson<MessageStats[]>(`${API_BASE}/stats/errors?range=${encodeURIComponent(range)}&limit=${limit}`, {
+		signal,
+	});
 }
 
 export async function getRequestDetails(id: number, signal?: AbortSignal): Promise<RequestDetails> {

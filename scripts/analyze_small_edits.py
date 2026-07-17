@@ -12,9 +12,21 @@ import sys
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from tool_io import ReservoirSample, ToolIOConfig, ToolInvocation, iter_tool_invocations, list_recent_session_files
+    from tool_io import (
+        ReservoirSample,
+        ToolIOConfig,
+        ToolInvocation,
+        iter_tool_invocations,
+        list_recent_session_files,
+    )
 else:
-    from scripts.tool_io import ReservoirSample, ToolIOConfig, ToolInvocation, iter_tool_invocations, list_recent_session_files
+    from scripts.tool_io import (
+        ReservoirSample,
+        ToolIOConfig,
+        ToolInvocation,
+        iter_tool_invocations,
+        list_recent_session_files,
+    )
 
 TOOL_NAMES = ("edit", "ast_edit")
 
@@ -81,10 +93,13 @@ class RunStats:
     small_edits_after_same_path_failed_edit: int = 0
 
 
-
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Analyze small edit/ast_edit tool usage in session logs.")
-    parser.add_argument("--sessions-dir", type=Path, default=Path.home() / ".omp" / "agent" / "sessions")
+    parser = argparse.ArgumentParser(
+        description="Analyze small edit/ast_edit tool usage in session logs."
+    )
+    parser.add_argument(
+        "--sessions-dir", type=Path, default=Path.home() / ".omp" / "agent" / "sessions"
+    )
     parser.add_argument("--sample-size", type=positive_int, default=30)
     parser.add_argument("--max-files", type=positive_int, default=500)
     parser.add_argument("--since-days", type=positive_int, default=30)
@@ -94,13 +109,11 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-
 def positive_int(value: str) -> int:
     parsed = int(value)
     if parsed <= 0:
         raise argparse.ArgumentTypeError("value must be a positive integer")
     return parsed
-
 
 
 def strip_decorations(line: str) -> str:
@@ -109,7 +122,6 @@ def strip_decorations(line: str) -> str:
 
 def is_delimiter_line(line: str) -> bool:
     return bool(re.match(r"^[\]}),;]+$", line))
-
 
 
 def is_tiny_structural_line(line: str) -> bool:
@@ -126,14 +138,16 @@ def is_tiny_structural_line(line: str) -> bool:
     return False
 
 
-
 def classify_success_issue(summary: DiffSummary) -> str:
     previews = summary.changed_preview
     if previews and all(len(line) == 0 for line in previews):
         return "blank-line-adjustment"
     if previews and all(is_delimiter_line(line) for line in previews):
         return "delimiter-adjustment"
-    if previews and all(re.match(r"^(pub\s+mod|pub\s+use|mod|use|import|export)\b", line) for line in previews):
+    if previews and all(
+        re.match(r"^(pub\s+mod|pub\s+use|mod|use|import|export)\b", line)
+        for line in previews
+    ):
         return "import-or-module-tweak"
     if summary.removed_lines == 1 and summary.added_lines == 0:
         return "single-line-delete"
@@ -144,22 +158,30 @@ def classify_success_issue(summary: DiffSummary) -> str:
     return "small-structural-fix"
 
 
-
 def classify_failure_issue(result_text: str) -> str:
     if re.search(r"identical content|No changes made", result_text, re.IGNORECASE):
         return "no-op-identical"
-    if re.search(r"Failed to find context|matches for context|expected lines|tag mismatch|>>>", result_text, re.IGNORECASE):
+    if re.search(
+        r"Failed to find context|matches for context|expected lines|tag mismatch|>>>",
+        result_text,
+        re.IGNORECASE,
+    ):
         return "context-mismatch"
-    if re.search(r"Unexpected line in hunk|parse error|SyntaxError", result_text, re.IGNORECASE):
+    if re.search(
+        r"Unexpected line in hunk|parse error|SyntaxError", result_text, re.IGNORECASE
+    ):
         return "invalid-patch-shape"
     if re.search(r"File not found", result_text, re.IGNORECASE):
         return "missing-file"
     if re.search(r"occurrence|ambiguous", result_text, re.IGNORECASE):
         return "ambiguous-target"
-    if re.search(r"Validation failed|required property|must have required property", result_text, re.IGNORECASE):
+    if re.search(
+        r"Validation failed|required property|must have required property",
+        result_text,
+        re.IGNORECASE,
+    ):
         return "invalid-arguments"
     return "other-failure"
-
 
 
 def summarize_diff(diff: str | None) -> DiffSummary:
@@ -188,7 +210,9 @@ def summarize_diff(diff: str | None) -> DiffSummary:
     previews = [line for line in all_changes if line or include_blank]
     changed_lines = len(added) + len(removed)
     tiny_only = all(is_tiny_structural_line(line) for line in all_changes)
-    small = changed_lines > 0 and (changed_lines <= 2 or (changed_lines <= 4 and tiny_only))
+    small = changed_lines > 0 and (
+        changed_lines <= 2 or (changed_lines <= 4 and tiny_only)
+    )
     preview_slice = previews[:4]
     category = None
     if small:
@@ -211,10 +235,8 @@ def summarize_diff(diff: str | None) -> DiffSummary:
     )
 
 
-
 def previews_need_blank_marker(lines: list[str]) -> bool:
     return any(len(line) == 0 for line in lines)
-
 
 
 def build_completed_edit(invocation: ToolInvocation) -> CompletedEdit | None:
@@ -222,7 +244,11 @@ def build_completed_edit(invocation: ToolInvocation) -> CompletedEdit | None:
         return None
     diff_summary = summarize_diff(invocation.diff)
     is_error = invocation.is_error
-    issue = classify_failure_issue(invocation.result_text) if is_error else (diff_summary.category or "other-success")
+    issue = (
+        classify_failure_issue(invocation.result_text)
+        if is_error
+        else (diff_summary.category or "other-success")
+    )
     return CompletedEdit(
         session_file=str(invocation.session_file),
         tool_call_id=invocation.tool_call_id,
@@ -245,8 +271,9 @@ def build_completed_edit(invocation: ToolInvocation) -> CompletedEdit | None:
     )
 
 
-
-def analyze_small_edits(stream: Iterable[ToolInvocation], *, sample_size: int, files_scanned: int) -> dict[str, object]:
+def analyze_small_edits(
+    stream: Iterable[ToolInvocation], *, sample_size: int, files_scanned: int
+) -> dict[str, object]:
     sample: ReservoirSample[Candidate] = ReservoirSample(size=sample_size)
     issue_counts: dict[str, int] = {}
     stats = RunStats(files_scanned=files_scanned)
@@ -295,7 +322,6 @@ def analyze_small_edits(stream: Iterable[ToolInvocation], *, sample_size: int, f
     }
 
 
-
 def candidate_to_dict(candidate: Candidate) -> dict[str, object]:
     payload = {"kind": candidate.kind, "edit": asdict(candidate.edit)}
     if candidate.previous_edit is not None:
@@ -303,26 +329,26 @@ def candidate_to_dict(candidate: Candidate) -> dict[str, object]:
     return payload
 
 
-
 def top_entries(counts: dict[str, int], limit: int) -> list[dict[str, object]]:
     return [
         {"name": name, "count": count}
-        for name, count in sorted(counts.items(), key=lambda entry: (-entry[1], entry[0]))[:limit]
+        for name, count in sorted(
+            counts.items(), key=lambda entry: (-entry[1], entry[0])
+        )[:limit]
     ]
-
 
 
 def short_path(target_path: str) -> str:
     home = str(Path.home())
-    return f"~{target_path[len(home):]}" if target_path.startswith(home) else target_path
-
+    return (
+        f"~{target_path[len(home) :]}" if target_path.startswith(home) else target_path
+    )
 
 
 def truncate(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return f"{text[: limit - 1]}…"
-
 
 
 def format_sample_entry(candidate: dict[str, object], index: int) -> str:
@@ -340,10 +366,16 @@ def format_sample_entry(candidate: dict[str, object], index: int) -> str:
         )
         changed_preview = edit.get("changed_preview")
         if isinstance(changed_preview, list) and changed_preview:
-            lines.append(f"   preview: {' | '.join(str(item) for item in changed_preview)}")
+            lines.append(
+                f"   preview: {' | '.join(str(item) for item in changed_preview)}"
+            )
         previous = candidate.get("previous_edit")
         if isinstance(previous, dict):
-            path_part = f" ({short_path(str(previous['path']))})" if previous.get("path") else ""
+            path_part = (
+                f" ({short_path(str(previous['path']))})"
+                if previous.get("path")
+                else ""
+            )
             lines.append(
                 "   previous edit: "
                 f"{'same-path' if previous.get('same_path') else 'other-path'} "
@@ -351,16 +383,21 @@ def format_sample_entry(candidate: dict[str, object], index: int) -> str:
             )
             previous_preview = previous.get("changed_preview")
             if isinstance(previous_preview, list) and previous_preview:
-                lines.append(f"   previous preview: {' | '.join(str(item) for item in previous_preview)}")
+                lines.append(
+                    f"   previous preview: {' | '.join(str(item) for item in previous_preview)}"
+                )
         else:
             lines.append("   previous edit: none")
     else:
-        lines.append(f"   result: {truncate(' '.join(str(edit['result_text']).split()), 220)}")
+        lines.append(
+            f"   result: {truncate(' '.join(str(edit['result_text']).split()), 220)}"
+        )
         changed_preview = edit.get("changed_preview")
         if isinstance(changed_preview, list) and changed_preview:
-            lines.append(f"   diff preview: {' | '.join(str(item) for item in changed_preview)}")
-    return '\n'.join(lines)
-
+            lines.append(
+                f"   diff preview: {' | '.join(str(item) for item in changed_preview)}"
+            )
+    return "\n".join(lines)
 
 
 def main() -> None:
@@ -375,7 +412,9 @@ def main() -> None:
     )
     files = list_recent_session_files(config)
     stream = iter_tool_invocations(TOOL_NAMES, config)
-    analysis = analyze_small_edits(stream, sample_size=options.sample_size, files_scanned=len(files))
+    analysis = analyze_small_edits(
+        stream, sample_size=options.sample_size, files_scanned=len(files)
+    )
 
     if options.json:
         print(
@@ -403,14 +442,20 @@ def main() -> None:
     assert isinstance(stats, dict)
     assert isinstance(top_issues, list)
     assert isinstance(sample, list)
-    print(f"Scanned {stats['files_scanned']} session file(s) from {short_path(str(options.sessions_dir))}")
+    print(
+        f"Scanned {stats['files_scanned']} session file(s) from {short_path(str(options.sessions_dir))}"
+    )
     print(f"Edit attempts: {stats['total_edit_attempts']}")
     print(f"Failed edits: {stats['failed_edits']}")
     print(f"Small edits: {stats['small_edits']}")
     print(f"Small edits with previous edit: {stats['small_edits_with_previous_edit']}")
-    print(f"Small edits with previous same-path edit: {stats['small_edits_with_previous_same_path']}")
+    print(
+        f"Small edits with previous same-path edit: {stats['small_edits_with_previous_same_path']}"
+    )
     print(f"Small edits after failed edit: {stats['small_edits_after_failed_edit']}")
-    print(f"Small edits after same-path failed edit: {stats['small_edits_after_same_path_failed_edit']}")
+    print(
+        f"Small edits after same-path failed edit: {stats['small_edits_after_same_path_failed_edit']}"
+    )
     print()
     print("Top issues:")
     for entry in top_issues[:12]:

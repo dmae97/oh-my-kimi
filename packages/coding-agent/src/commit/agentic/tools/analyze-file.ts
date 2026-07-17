@@ -83,10 +83,9 @@ export function createAnalyzeFileTool(options: {
 						related_files: relatedFiles,
 					});
 					const taskParams: TaskParams = {
+						name: `AnalyzeFile${index + 1}`,
 						agent: "sonic",
-						id: `AnalyzeFile${index + 1}`,
-						description: `Analyze ${file}`,
-						assignment,
+						task: assignment,
 					};
 					return taskTool.execute(`${toolCallId}-${index + 1}`, taskParams, signal);
 				}),

@@ -45,6 +45,8 @@ function createSession(options?: {
 		model: current ? currentModel : undefined,
 		thinkingLevel: options?.thinkingLevel,
 		sessionId: "session-1",
+		preferWebsockets: true,
+		providerSessionState: new Map(),
 		agent: { telemetry: undefined },
 	} as unknown as AgentSession;
 }
@@ -144,6 +146,43 @@ describe("guided goal setup", () => {
 
 		expect(result).toEqual({ kind: "question", question: "What is done?" });
 		expect(complete.mock.calls[0]?.[0]).toBe(planModel);
+	});
+
+	it("routes the guided-goal request through the session provider transport", async () => {
+		const complete = spyOn(core, "instrumentedCompleteSimple").mockResolvedValue(
+			mockResponse({ kind: "question", question: "What is done?" }) as never,
+		);
+		const session = createSession();
+
+		await runGuidedGoalTurn(session, { messages: [{ role: "user", content: "Ship it" }] });
+
+		// Regression (#5304): without a websocket-capable provider session, Codex
+		// falls back to SSE and rejects websocket-only models (gpt-5.6-luna) with
+		// "Model not found". The oneshot must inherit the session transport and use
+		// an isolated session id so it never pollutes the main conversation state.
+		const requestOptions = complete.mock.calls[0]?.[2];
+		expect(requestOptions?.preferWebsockets).toBe(true);
+		expect(requestOptions?.providerSessionState).toBe(session.providerSessionState);
+		expect(requestOptions?.promptCacheKey).toBe("session-1");
+		expect(requestOptions?.sessionId).toStartWith("session-1:guided-goal:");
+		expect(requestOptions?.sessionId).not.toBe("session-1");
+	});
+
+	it("reuses a supplied side session id across interview turns", async () => {
+		const complete = spyOn(core, "instrumentedCompleteSimple").mockResolvedValue(
+			mockResponse({ kind: "question", question: "What is done?" }) as never,
+		);
+		const session = createSession();
+		const sideSessionId = "session-1:guided-goal:fixed";
+
+		// Regression (#5471 review): a multi-question interview must share one Codex
+		// side session so it does not leak a websocket-only socket per turn and trip
+		// websocket_connection_limit_reached (which drops back to the rejected SSE path).
+		await runGuidedGoalTurn(session, { messages: [{ role: "user", content: "Ship it" }], sideSessionId });
+		await runGuidedGoalTurn(session, { messages: [{ role: "user", content: "More" }], sideSessionId });
+
+		expect(complete.mock.calls[0]?.[2]?.sessionId).toBe(sideSessionId);
+		expect(complete.mock.calls[1]?.[2]?.sessionId).toBe(sideSessionId);
 	});
 
 	it("falls back to slow when plan is unavailable", async () => {

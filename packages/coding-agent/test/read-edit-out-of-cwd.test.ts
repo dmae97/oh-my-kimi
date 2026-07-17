@@ -23,17 +23,27 @@ beforeAll(async () => {
 	await Settings.init({ inMemory: true, cwd: process.cwd() });
 });
 
-function createSession(cwd: string): ToolSession {
+function createSession(cwd: string, approvedPlan?: { artifactsDir: string; planFilePath: string }): ToolSession {
 	const settings = Settings.isolated();
 	settings.set("read.summarize.enabled", false);
+	const artifactsDir = approvedPlan?.artifactsDir ?? path.join(cwd, "artifacts");
 	return {
 		cwd,
 		hasUI: false,
 		getSessionFile: () => path.join(cwd, "session.jsonl"),
 		getSessionSpawns: () => "*",
-		getArtifactsDir: () => path.join(cwd, "artifacts"),
+		getArtifactsDir: () => artifactsDir,
 		allocateOutputArtifact: async () => ({ id: "artifact-1", path: path.join(cwd, "artifact-1.log") }),
 		settings,
+		...(approvedPlan
+			? {
+					getPlanReferencePath: () => approvedPlan.planFilePath,
+					localProtocolOptions: {
+						getArtifactsDir: () => artifactsDir,
+						getSessionId: () => "approved-plan-session",
+					},
+				}
+			: {}),
 	} as unknown as ToolSession;
 }
 
@@ -102,5 +112,49 @@ describe("read → edit round-trip for out-of-cwd files", () => {
 
 		expect(header).toMatch(/^\[settings\.json#[0-9A-F]{4}\]$/);
 		expect(header).not.toContain("src");
+	});
+
+	it("recovers a missing cwd path from the active approved local plan", async () => {
+		const artifactsDir = path.join(outDir, "artifacts");
+		const planFilePath = "local://windows-packaging-plan.md";
+		const planPath = path.join(artifactsDir, "local", "windows-packaging-plan.md");
+		await Bun.write(planPath, "# Windows packaging\n\nBuild the installer.\n");
+
+		const session = createSession(cwdDir, { artifactsDir, planFilePath });
+		const cwdPlanPath = path.join(cwdDir, "windows-packaging-plan.md");
+		const result = await new ReadTool(session).execute("read-approved-plan", { path: cwdPlanPath });
+		expect(textOutput(result)).toContain("Build the installer.");
+	});
+
+	it("prefers an existing cwd file over the approved local plan alias", async () => {
+		const artifactsDir = path.join(outDir, "artifacts");
+		const planFilePath = "local://windows-packaging-plan.md";
+		const planPath = path.join(artifactsDir, "local", "windows-packaging-plan.md");
+		const cwdPlanPath = path.join(cwdDir, "windows-packaging-plan.md");
+		await Bun.write(planPath, "# Local plan\n\nArtifact content.\n");
+		await Bun.write(cwdPlanPath, "# Working tree\n\nWorkspace content.\n");
+
+		const session = createSession(cwdDir, { artifactsDir, planFilePath });
+		const result = await new ReadTool(session).execute("read-workspace-plan", { path: cwdPlanPath });
+
+		expect(textOutput(result)).toContain("Workspace content.");
+		expect(textOutput(result)).not.toContain("Artifact content.");
+	});
+
+	it("prefers a unique workspace suffix match over the approved local plan alias", async () => {
+		const artifactsDir = path.join(outDir, "artifacts");
+		const planFilePath = "local://windows-packaging-plan.md";
+		const planPath = path.join(artifactsDir, "local", "windows-packaging-plan.md");
+		const workspacePlanPath = path.join(cwdDir, "docs", "windows-packaging-plan.md");
+		await Bun.write(planPath, "# Local plan\n\nArtifact content.\n");
+		await Bun.write(workspacePlanPath, "# Workspace plan\n\nNested workspace content.\n");
+
+		const session = createSession(cwdDir, { artifactsDir, planFilePath });
+		const result = await new ReadTool(session).execute("read-workspace-suffix-plan", {
+			path: "windows-packaging-plan.md",
+		});
+
+		expect(textOutput(result)).toContain("Nested workspace content.");
+		expect(textOutput(result)).not.toContain("Artifact content.");
 	});
 });

@@ -3,8 +3,20 @@ import {
 	__resetWindowsConsoleProbeCache,
 	consoleAttachedViaTTY,
 	hostHasInheritableConsole,
+	shouldDetachKernel,
 	shouldHideKernelWindow,
 } from "../py/spawn-options";
+
+describe("shouldDetachKernel", () => {
+	it("starts POSIX kernels in a new session", () => {
+		expect(shouldDetachKernel("darwin")).toBe(true);
+		expect(shouldDetachKernel("linux")).toBe(true);
+	});
+
+	it("leaves Windows console inheritance to windowsHide", () => {
+		expect(shouldDetachKernel("win32")).toBe(false);
+	});
+});
 
 /**
  * `shouldHideKernelWindow` decides whether the long-lived Python kernel

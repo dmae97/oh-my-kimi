@@ -105,9 +105,10 @@ export async function createReportBundle(options: ReportBundleOptions): Promise<
 		files.push("config.json");
 	}
 
-	// Recent logs (last 1000 lines)
-	const logPath = getLogPath();
-	const logs = await readLastLines(logPath, 1000);
+	// Recent logs (last 1000 lines) across every same-day process. PID-qualified
+	// filenames mean a report generated from a later invocation must still gather
+	// the crashed process's log, so read all of today's files, not just our own.
+	const logs = await collectSameDayLogs(1000);
 	if (logs) {
 		data["logs.txt"] = logs;
 		files.push("logs.txt");
@@ -241,7 +242,42 @@ export async function getLogText(): Promise<string> {
 	return readLastLines(getLogPath(), MAX_LOG_LINES);
 }
 
-const LOG_FILE_PATTERN = new RegExp(`^${APP_NAME}\\.(\\d{4}-\\d{2}-\\d{2})\\.log$`);
+/**
+ * Concatenate the tail of every same-day process log so a report generated
+ * after a crash still captures the fatal PID's `omp.<date>.<pid>.log`. Files
+ * are ordered oldest-first by mtime and separated by a filename header.
+ */
+async function collectSameDayLogs(linesPerFile: number): Promise<string> {
+	const logsDir = getLogsDir();
+	const today = new Date().toISOString().slice(0, 10);
+	const sameDay: Array<{ name: string; mtimeMs: number }> = [];
+	try {
+		const entries = await fs.readdir(logsDir, { withFileTypes: true });
+		for (const entry of entries) {
+			if (!entry.isFile()) continue;
+			const match = LOG_FILE_PATTERN.exec(entry.name);
+			if (!match || match[1] !== today) continue;
+			try {
+				const stat = await fs.stat(path.join(logsDir, entry.name));
+				sameDay.push({ name: entry.name, mtimeMs: stat.mtimeMs });
+			} catch {
+				// File may have rotated away between readdir and stat.
+			}
+		}
+	} catch {
+		return "";
+	}
+	sameDay.sort((a, b) => a.mtimeMs - b.mtimeMs);
+
+	const chunks: string[] = [];
+	for (const { name } of sameDay) {
+		const text = await readLastLines(path.join(logsDir, name), linesPerFile);
+		if (text) chunks.push(`===== ${name} =====\n${text}`);
+	}
+	return chunks.join("\n\n");
+}
+
+const LOG_FILE_PATTERN = new RegExp(`^${APP_NAME}\\.(\\d{4}-\\d{2}-\\d{2})\\.\\d+\\.log(?:\\.\\d+)?$`);
 
 export async function createDebugLogSource(): Promise<DebugLogSource> {
 	const logsDir = getLogsDir();

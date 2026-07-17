@@ -1,7 +1,10 @@
 import { describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type { CustomToolContext } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools";
 import { DeferredMCPTool, MCPTool, type MCPToolDefinition } from "@oh-my-pi/pi-coding-agent/mcp";
 import type { MCPServerConnection } from "@oh-my-pi/pi-coding-agent/mcp/types";
+import { TempDir } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { createMockConnection, createMockTransport } from "./mcp-test-utils";
 
@@ -38,6 +41,36 @@ function createCapturedConnection(calls: CapturedRequest[]): MCPServerConnection
 		(method, params) => calls.push({ method, params }),
 	);
 	return createMockConnection({ tools: {} }, transport);
+}
+
+const imageToolDefinition: MCPToolDefinition = {
+	name: "read_image_with_model",
+	description: "Read an image from a local filesystem path",
+	inputSchema: {
+		type: "object",
+		properties: {
+			image_path: { type: "string" },
+		},
+		required: ["image_path"],
+	},
+};
+
+async function createLocalImageContext(
+	tempDir: TempDir,
+): Promise<{ context: CustomToolContext; expectedPath: string }> {
+	const artifactsDir = tempDir.join("artifacts");
+	const writtenPath = path.join(artifactsDir, "local", "image-issue.png");
+	await Bun.write(writtenPath, "png bytes");
+	const expectedPath = await fs.realpath(writtenPath);
+	return {
+		context: {
+			localProtocolOptions: {
+				getArtifactsDir: () => artifactsDir,
+				getSessionId: () => "session-id",
+			},
+		} as CustomToolContext,
+		expectedPath,
+	};
 }
 
 describe("MCP tool arguments", () => {
@@ -153,5 +186,21 @@ describe("MCP tool arguments", () => {
 		await tool.execute("call-1", { i: "hello" }, undefined, unusedContext, undefined);
 
 		expect(calls).toEqual([{ method: "tools/call", params: { name: "echo", arguments: { i: "hello" } } }]);
+	});
+
+	it("resolves local image arguments before forwarding tools/call", async () => {
+		using tempDir = TempDir.createSync("@pi-mcp-local-image-");
+		const calls: CapturedRequest[] = [];
+		const { context, expectedPath } = await createLocalImageContext(tempDir);
+		const tool = new MCPTool(createCapturedConnection(calls), imageToolDefinition);
+
+		await tool.execute("call-1", { image_path: "local://image-issue.png" }, undefined, context, undefined);
+
+		expect(calls).toEqual([
+			{
+				method: "tools/call",
+				params: { name: "read_image_with_model", arguments: { image_path: expectedPath } },
+			},
+		]);
 	});
 });

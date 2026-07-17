@@ -182,6 +182,7 @@ def _require_review_comments(value: Any) -> list[dict[str, Any]]:
         comments.append(comment)
     return comments
 
+
 def _pool_dir(cfg: Settings, repo: str) -> Path:
     _validate_repo_name(repo)
     return Path(cfg.workspace_root) / "_pool" / repo.replace("/", "__")
@@ -508,6 +509,32 @@ def create_proxy_app(settings: Settings) -> FastAPI:
         github: GitHubClient = request.app.state.github
         try:
             items = await github.list_issues(repo, state=state, limit=limit)
+        except GitHubError as exc:
+            return _gh_error_response(exc)
+        return JSONResponse({"items": [_serialize(s) for s in items]})
+
+    @app.get("/gh/v1/search_issues")
+    async def search_issues(request: Request, repo: str, q: str, limit: int = 10) -> JSONResponse:
+        await _authenticate(request)
+        github: GitHubClient = request.app.state.github
+        try:
+            items = await github.search_issues(repo, q, limit=limit)
+        except GitHubError as exc:
+            return _gh_error_response(exc)
+        return JSONResponse({"items": [_serialize(s) for s in items]})
+
+    @app.get("/gh/v1/issue_index_entries")
+    async def list_issue_index_entries(
+        request: Request,
+        repo: str,
+        since: str | None = None,
+        page: int = 1,
+        per_page: int = 100,
+    ) -> JSONResponse:
+        await _authenticate(request)
+        github: GitHubClient = request.app.state.github
+        try:
+            items = await github.list_issue_index_entries(repo, since=since, page=page, per_page=per_page)
         except GitHubError as exc:
             return _gh_error_response(exc)
         return JSONResponse({"items": [_serialize(s) for s in items]})

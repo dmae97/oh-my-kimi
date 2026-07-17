@@ -60,12 +60,18 @@ export interface SegmentContext {
 		enabled: boolean;
 		paused: boolean;
 	} | null;
+	prewalk: {
+		enabled: boolean;
+	} | null;
 	loopMode: {
 		enabled: boolean;
 	} | null;
 	goalMode: {
 		enabled: boolean;
 		paused: boolean;
+	} | null;
+	vibeMode: {
+		enabled: boolean;
 	} | null;
 	collab: CollabStatus | null;
 	// Cached values for performance (computed once per render)

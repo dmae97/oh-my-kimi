@@ -63,7 +63,7 @@ describe("openai-codex usage parser", () => {
 		expect(report).not.toBeNull();
 		const main = report?.limits.filter(l => l.id === "openai-codex:primary" || l.id === "openai-codex:secondary");
 		expect(main?.map(l => l.id)).toEqual(["openai-codex:primary", "openai-codex:secondary"]);
-		expect(main?.[0].scope.tier).toBe("pro");
+		expect(main?.[0].scope).toEqual({ provider: "openai-codex", windowId: "5h", shared: true });
 		expect(main?.[0].amount.usedFraction).toBeCloseTo(0.04, 5);
 	});
 

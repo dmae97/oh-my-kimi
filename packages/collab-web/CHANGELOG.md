@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [17.0.1] - 2026-07-16
+
+### Fixed
+
+- Rendered user and host transcript messages as Markdown and separated adjacent assistant content blocks. ([#5559](https://github.com/can1357/oh-my-pi/issues/5559))
+
+## [17.0.0] - 2026-07-15
+
+### Changed
+
+- Consolidated the legacy irc and job tool renderers into a unified hub renderer for messaging, background jobs, and process supervision, while preserving existing visual styles.
+- Enhanced rendering for xd:// device dispatches to resolve through their inner tool's renderer, preserving generated-image thumbnails and MCP/autoresearch presentations under a unified xd://<tool> card label.
+
+### Removed
+
+- Removed custom visualization for the search_tool_bm25 tool, which now falls back to generic rendering.
+
+## [16.5.1] - 2026-07-14
+
+### Fixed
+
+- Fixed an issue in the live collaboration transcript where duplicate tool cards and a stale "thinking..." shimmer were rendered while a committed tool call was running.
+
 ## [16.3.7] - 2026-07-05
 
 ### Fixed

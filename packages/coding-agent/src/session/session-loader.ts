@@ -252,6 +252,15 @@ async function resolvePersistedBlobRefs(value: unknown, blobStore: BlobStore, ke
 	}
 
 	if (typeof value !== "object" || value === null) return;
+	if (
+		"type" in value &&
+		value.type === "image_generation_call" &&
+		"result" in value &&
+		typeof value.result === "string" &&
+		isBlobRef(value.result)
+	) {
+		value.result = await resolveImageData(blobStore, value.result);
+	}
 
 	if (hasImageUrl(value) && isBlobRef(value.image_url)) {
 		value.image_url = await resolveImageDataUrl(blobStore, value.image_url);

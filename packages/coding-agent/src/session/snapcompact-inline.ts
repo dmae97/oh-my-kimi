@@ -16,7 +16,6 @@
 
 import { countTokens } from "@oh-my-pi/pi-agent-core";
 import type { Context, ImageContent, Model, TextContent, ToolResultMessage, UserMessage } from "@oh-my-pi/pi-ai";
-import { isPersonalGitHubCopilotBaseUrl } from "@oh-my-pi/pi-catalog/wire/github-copilot";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 import contextFramesNote from "../prompts/system/snapcompact-context-frames-note.md" with { type: "text" };
 import contextStub from "../prompts/system/snapcompact-context-stub.md" with { type: "text" };
@@ -78,19 +77,6 @@ function passesSavingsGate(frames: number, shape: snapcompact.Shape, textTokens:
 	return frames * shape.frameTokenEstimate <= textTokens * SAVINGS_MARGIN;
 }
 
-/**
- * The model is vision-capable for the endpoint we're actually about to hit.
- * GitHub Copilot business and enterprise hosts respond `400 vision is not
- * supported` on image inputs (issue #3387), so even if a stale cached spec
- * still advertises `["text","image"]` we MUST not rasterize transcripts when
- * the resolved `baseUrl` is non-personal.
- */
-function canSendImages(model: Model): boolean {
-	if (!model.input.includes("image")) return false;
-	if (model.provider === "github-copilot" && !isPersonalGitHubCopilotBaseUrl(model.baseUrl)) return false;
-	return true;
-}
-
 interface SystemPromptImageTarget {
 	scope: Exclude<SnapcompactSystemPromptMode, "none">;
 	text: string;
@@ -99,7 +85,7 @@ interface SystemPromptImageTarget {
 }
 
 const CONTEXT_SECTION_PATTERNS = [
-	/<context>\n[\s\S]*?\n<\/context>/g,
+	/<repo-rules>\n[\s\S]*?\n<\/repo-rules>/g,
 	/## Context\n<instructions>\n[\s\S]*?\n<\/instructions>/g,
 ] as const;
 
@@ -291,7 +277,7 @@ export function estimateInlineSavings(input: {
 	messages: readonly InlineMessageView[];
 }): SnapcompactSavingsEstimate {
 	const { options, model } = input;
-	if (!model || !canSendImages(model)) {
+	if (!model?.input.includes("image")) {
 		return { visionCapable: false, savedTokens: 0 };
 	}
 
@@ -430,10 +416,8 @@ export class SnapcompactInlineTransformer {
 
 	async transform(context: Context, model: Model): Promise<Context> {
 		// Vision gate: providers silently DROP images on text-only models —
-		// rendering would lose the content entirely. Also short-circuits when the
-		// resolved endpoint rejects vision regardless of the model's input list
-		// (issue #3387: Copilot business endpoint).
-		if (!canSendImages(model)) return context;
+		// rendering would lose the content entirely.
+		if (!model.input.includes("image")) return context;
 
 		const shape = snapcompact.resolveShape(model, this.options.shape);
 		const budget = snapcompact.providerImageBudget(model.provider) - countContextImages(context);

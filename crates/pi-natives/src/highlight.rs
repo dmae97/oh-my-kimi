@@ -205,7 +205,6 @@ const LANG_ALIASES: &[(&[&str], &str)] = &[
 	(&["md", "markdown"], "Markdown"),
 	(&["sql"], "SQL"),
 	(&["lua"], "Lua"),
-	(&["perl", "pl", "pm"], "Perl"),
 	(&["r"], "R"),
 	(&["scala"], "Scala"),
 	(&["clj", "clojure"], "Clojure"),

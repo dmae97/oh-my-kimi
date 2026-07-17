@@ -3,6 +3,7 @@ import { streamOllama } from "@oh-my-pi/pi-ai/providers/ollama";
 import type { Context, Tool } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
 import { ollamaModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import type { FetchImpl, ModelSpec } from "@oh-my-pi/pi-catalog/types";
 
@@ -87,10 +88,14 @@ describe("ollama local provider discovery", () => {
 		const builtReasoningModel = reasoningModel ? buildModel(reasoningModel) : undefined;
 		const builtPlainModel = plainModel ? buildModel(plainModel) : undefined;
 
-		// Ollama's OpenAI-compatible endpoint rejects "minimal" with HTTP 400;
-		// reasoning models must bake a thinking effort map to an accepted level (low).
+		// Ollama's OpenAI-compatible endpoint accepts low/medium/high/max;
+		// reasoning models carry that wire-exact ladder with no remapping
+		// (minimal/xhigh never reach the wire because they are not offered).
 		expect(reasoningModel?.reasoning).toBe(true);
-		expect(builtReasoningModel?.thinking?.effortMap).toMatchObject({ minimal: "low" });
+		expect(builtReasoningModel?.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.Max],
+		});
 		// Non-reasoning models never send an effort, so they carry no thinking metadata.
 		expect(plainModel?.reasoning).toBe(false);
 		expect(builtPlainModel?.thinking).toBeUndefined();
@@ -150,7 +155,7 @@ describe("ollama tool forcing", () => {
 	});
 });
 
-describe("ollama reasoning effort backfill (buildModel)", () => {
+describe("ollama reasoning effort normalization (buildModel)", () => {
 	const staleOllamaSpec = <TApi extends "openai-responses" | "openai-completions">(
 		api: TApi,
 		compat?: ModelSpec<TApi>["compat"],
@@ -170,38 +175,32 @@ describe("ollama reasoning effort backfill (buildModel)", () => {
 			compat,
 		}) as ModelSpec<TApi>;
 
-	test("stamps the effort map on a stale ollama responses spec lacking compat", () => {
-		// A cache row or hand-written config written before the remap existed:
-		// reasoning-capable, `minimal` offered, but no reasoningEffortMap. The
-		// builder must backfill it so the wire never sends raw `minimal`/`xhigh`.
+	test("normalizes a stale ollama responses spec to the wire-exact ladder", () => {
+		// A cache row or hand-written config from the remap era: reasoning-capable
+		// with `minimal` offered. The builder must normalize the ladder so the
+		// wire never sends raw `minimal`/`xhigh`.
 		const model = buildModel(staleOllamaSpec("openai-responses"));
-		expect(model.compat.reasoningEffortMap).toMatchObject({ minimal: "low", xhigh: "max" });
-		// xhigh drops out of thinking.effortMap — it is not an offered effort.
-		expect(model.thinking?.effortMap).toEqual({ minimal: "low" });
+		expect(model.thinking?.efforts).toEqual([Effort.Low, Effort.Medium, Effort.High, Effort.Max]);
+		expect(model.thinking?.effortMap).toBeUndefined();
+		// Retired tiers clamp instead of erroring.
+		expect(clampThinkingLevelForModel(model, Effort.Minimal)).toBe(Effort.Low);
+		expect(clampThinkingLevelForModel(model, Effort.XHigh)).toBe(Effort.High);
 	});
 
-	test("backfills openai-completions ollama specs too", () => {
+	test("normalizes openai-completions ollama specs too", () => {
 		const model = buildModel(staleOllamaSpec("openai-completions"));
-		expect(model.compat.reasoningEffortMap).toMatchObject({ minimal: "low", xhigh: "max" });
+		expect(model.thinking?.efforts).toEqual([Effort.Low, Effort.Medium, Effort.High, Effort.Max]);
 	});
 
-	test("explicit overrides win while missing ollama defaults stay", () => {
-		const model = buildModel(staleOllamaSpec("openai-responses", { reasoningEffortMap: { minimal: "medium" } }));
-		expect(model.compat.reasoningEffortMap).toEqual({ minimal: "medium", xhigh: "max" });
+	test("explicit compat overrides survive for live tiers", () => {
+		const model = buildModel(staleOllamaSpec("openai-responses", { reasoningEffortMap: { high: "medium" } }));
+		expect(model.compat.reasoningEffortMap).toEqual({ high: "medium" });
+		expect(model.thinking?.effortMap).toEqual({ high: "medium" });
 	});
 
 	test("leaves non-ollama providers untouched", () => {
 		const model = buildModel({ ...staleOllamaSpec("openai-responses"), provider: "custom" });
 		expect(model.compat.reasoningEffortMap).toEqual({});
-	});
-
-	test("merges the ollama defaults into the whenThinking variant", () => {
-		const model = buildModel(
-			staleOllamaSpec("openai-completions", { whenThinking: { reasoningEffortMap: { minimal: "medium" } } }),
-		);
-		// The thinking-engaged variant must keep the xhigh default; otherwise a
-		// partial whenThinking override would re-leak raw `minimal`/`xhigh`.
-		expect(model.compat.whenThinking?.reasoningEffortMap).toEqual({ minimal: "medium", xhigh: "max" });
-		expect(model.compat.reasoningEffortMap).toEqual({ minimal: "low", xhigh: "max" });
+		expect(model.thinking?.efforts).toEqual([Effort.Minimal, Effort.Low, Effort.Medium, Effort.High]);
 	});
 });

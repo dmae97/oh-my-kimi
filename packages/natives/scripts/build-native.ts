@@ -4,6 +4,10 @@ import { $ } from "bun";
 import { detectHostAvx2Support } from "../../../scripts/host-detect";
 import { generateEnumExports } from "./gen-enums";
 
+// pcre2-sys prefers a system libpcre2 when pkg-config finds one. Release addons
+// must not retain host Homebrew paths such as /opt/homebrew/opt/pcre2/*.dylib.
+process.env.PCRE2_SYS_STATIC ??= "1";
+
 const repoRoot = path.join(import.meta.dir, "../../..");
 const rustDir = path.join(repoRoot, "crates/pi-natives");
 const nativeDir = path.join(import.meta.dir, "../native");
@@ -382,7 +386,11 @@ napiArgs[10] = buildOutputDir;
 // Resolve napi bin directly: `bunx @napi-rs/cli` can pick up the wrong bin on
 // systems where `cli` exists on PATH (e.g. Mono's /usr/bin/cli on Ubuntu).
 const napiBin = Bun.which("napi", {
-	PATH: `${path.join(import.meta.dir, "..", "node_modules", ".bin")}:${path.join(repoRoot, "node_modules", ".bin")}:${process.env.PATH ?? ""}`,
+	PATH: [
+		path.join(import.meta.dir, "..", "node_modules", ".bin"),
+		path.join(repoRoot, "node_modules", ".bin"),
+		process.env.PATH ?? "",
+	].join(path.delimiter),
 });
 if (!napiBin) {
 	throw new Error("Could not locate @napi-rs/cli `napi` binary in node_modules/.bin");

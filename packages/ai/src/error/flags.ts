@@ -1,12 +1,13 @@
 import { isUnexpectedSocketCloseMessage } from "@oh-my-pi/pi-utils";
 import type { Api, AssistantMessage } from "../types";
+import { AwsCredentialsError } from "./aws";
 import {
 	AnthropicConnectionError,
 	AnthropicConnectionTimeoutError,
 	ProviderHttpError,
 	STREAM_ENVELOPE_ERROR_PREFIX,
 } from "./classes";
-import { isOpaqueStatusBody, matchesUsageLimitText, parseRateLimitReason } from "./rate-limit";
+import { isOpaqueStatusBody, isUsageLimitStatus, matchesUsageLimitText, parseRateLimitReason } from "./rate-limit";
 
 export const Flag = {
 	Class: 0x1000,
@@ -17,12 +18,13 @@ export const Flag = {
 	StaleResponsesItem: 0x0010_0000,
 	MalformedFunctionCall: 0x0020_0000,
 	ProviderFinishError: 0x0040_0000,
+	ContentBlocked: 0x0000_8000,
 	ContextOverflow: 0x0080_0000,
 	AuthFailed: 0x0100_0000,
 	SilentAbort: 0x0200_0000,
 	UserInterrupt: 0x0400_0000,
 	Abort: 0x0800_0000,
-	/** Anthropic strict-tool grammar too large / schema too complex to compile (400). */
+	/** Strict-tool rejection (400): grammar too large, schema too complex, or structured outputs unsupported by the model/endpoint. */
 	Grammar: 0x1000_0000,
 	/** Anthropic model/account does not support fast mode / the `speed` parameter. */
 	FastModeUnsupported: 0x2000_0000,
@@ -40,6 +42,7 @@ const KIND_MASK =
 	Flag.StaleResponsesItem |
 	Flag.MalformedFunctionCall |
 	Flag.ProviderFinishError |
+	Flag.ContentBlocked |
 	Flag.ContextOverflow |
 	Flag.AuthFailed |
 	Flag.SilentAbort |
@@ -92,6 +95,7 @@ const AUTH_FAILURE_PATTERN =
 	/\b(?:401|403|unauthorized|forbidden|authentication|auth[_ ]?unavailable|no auth available|(?:invalid|no)[_ ]?api[_ ]?key)\b/i;
 const MALFORMED_FUNCTION_CALL_PATTERN = /\bmalformed.?function.?call\b/i;
 const PROVIDER_FINISH_ERROR_PATTERN = /\bProvider (?:returned error finish_reason|finish_reason:\s*error)\b/i;
+const CONTENT_FILTER_PATTERN = /\b(?:incomplete:\s*)?content_filter\b/i;
 const STALE_RESPONSE_ITEM_PATTERNS = [/\bItem with id ['"][^'"]+['"] not found\.?/i, /previous[ _]?response/i] as const;
 const STALE_RESPONSE_ITEM_DETAIL_PATTERN = /not[ _]?found|invalid|expired|stale|zero[ _-]?data[ _-]?retention/i;
 /**
@@ -108,12 +112,17 @@ export const LLAMA_CPP_TOOL_CALL_PARSE_PATTERN =
 // on a backend that has the model.
 const COPILOT_MODEL_NOT_SUPPORTED_PATTERN = /model_not_supported/i;
 // Anthropic strict-tool grammar too large / schema too complex (400 invalid_request_error).
+// Feature-gated deployments (Azure Foundry, Baseten, …) reject `strict: true`
+// tools outright when the hosted model lacks structured outputs, e.g.
+// "structured_outputs not supported" — without an invalid_request_error wrapper.
 const GRAMMAR_TOO_LARGE_PATTERN = /compiled grammar/i;
 const GRAMMAR_TOO_LARGE_DETAIL_PATTERN = /too large/i;
 const SCHEMA_TOO_COMPLEX_PATTERN = /schema/i;
 const SCHEMA_TOO_COMPLEX_DETAIL_PATTERN = /too complex/i;
 const SCHEMA_COMPILE_PATTERN = /compil/i;
 const INVALID_REQUEST_PATTERN = /invalid_request_error/i;
+const STRUCTURED_OUTPUTS_PATTERN = /structured[_ -]?outputs?/i;
+const FEATURE_NOT_SUPPORTED_PATTERN = /not (?:supported|available|enabled)|unsupported|does(?: not|n'?t) support/i;
 // Anthropic fast-mode unsupported: 400 rejecting `speed`, or 429 rate_limit_error
 // because the account lacks the extra-usage entitlement fast mode requires.
 const FAST_MODE_SPEED_PARAM_PATTERN = /\bspeed\b/i;
@@ -127,8 +136,9 @@ const OAUTH_TRANSIENT_FAILURE_PATTERN =
 	/timeout|network|fetch failed|ECONN(?:REFUSED|RESET)|ETIMEDOUT|EAI_AGAIN|socket hang up|\b(?:408|425|429|5\d{2})\b|rate.?limit|too many requests|temporar|unavailable|forbidden|permission_denied|cloudflare|captcha/i;
 const OAUTH_HTTP_AUTH_PATTERN = /\b401\b/;
 
-function matchesGrammarTooLarge(message: string, errorStatus: number | undefined): boolean {
+function matchesStrictToolsRejection(message: string, errorStatus: number | undefined): boolean {
 	if (errorStatus !== 400) return false;
+	if (STRUCTURED_OUTPUTS_PATTERN.test(message) && FEATURE_NOT_SUPPORTED_PATTERN.test(message)) return true;
 	if (!INVALID_REQUEST_PATTERN.test(message)) return false;
 	const grammarTooLarge = GRAMMAR_TOO_LARGE_PATTERN.test(message) && GRAMMAR_TOO_LARGE_DETAIL_PATTERN.test(message);
 	const schemaTooComplex =
@@ -167,6 +177,7 @@ const ERROR_KIND_LABELS: readonly [Flag, string][] = [
 	[Flag.StaleResponsesItem, "stale-responses-item"],
 	[Flag.MalformedFunctionCall, "malformed-function-call"],
 	[Flag.ProviderFinishError, "provider-finish-error"],
+	[Flag.ContentBlocked, "content-blocked"],
 	[Flag.ContextOverflow, "context-overflow"],
 	[Flag.AuthFailed, "auth-failed"],
 	[Flag.SilentAbort, "silent-abort"],
@@ -193,6 +204,7 @@ export function is(id: number | undefined, flag: Flag): boolean {
 }
 
 export function retriable(id: number | undefined, opts?: { replayUnsafe?: boolean }): boolean {
+	if (is(id, Flag.ContentBlocked)) return false;
 	if (is(id, Flag.MalformedFunctionCall)) return true;
 	if (opts?.replayUnsafe) return false;
 	return ((id ?? 0) & RETRIABLE_KINDS) !== 0;
@@ -285,6 +297,10 @@ function isProviderFinishErrorText(text: string): boolean {
 	return PROVIDER_FINISH_ERROR_PATTERN.test(text);
 }
 
+function isContentBlockedText(text: string): boolean {
+	return CONTENT_FILTER_PATTERN.test(text);
+}
+
 function matchesOverflowText(text: string): boolean {
 	return OVERFLOW_PATTERNS.some(p => p.test(text)) || OVERFLOW_NO_BODY_PATTERN.test(text);
 }
@@ -295,13 +311,14 @@ function classifyText(errorMessage: string | undefined, errorStatus: number | un
 		if (matchesOverflowText(errorMessage)) kinds |= Flag.ContextOverflow;
 		if (isMalformedFunctionCallText(errorMessage)) kinds |= Flag.MalformedFunctionCall;
 		if (isProviderFinishErrorText(errorMessage)) kinds |= Flag.ProviderFinishError;
+		if (isContentBlockedText(errorMessage)) kinds |= Flag.ContentBlocked;
 		if (isAuthFailureText(errorMessage)) kinds |= Flag.AuthFailed;
 
 		const statusClean = errorStatus ? errorStatus : (status({ message: errorMessage }) ?? undefined);
 		const cleanMessage = errorMessage;
 		const isOpaque = isOpaqueStatusBody(cleanMessage);
 
-		const isLimitStatus = statusClean === 429;
+		const isLimitStatus = isUsageLimitStatus(statusClean);
 		if (
 			matchesUsageLimitText(cleanMessage) ||
 			(isLimitStatus && (isOpaque || parseRateLimitReason(cleanMessage) === "QUOTA_EXHAUSTED"))
@@ -317,7 +334,7 @@ function classifyText(errorMessage: string | undefined, errorStatus: number | un
 
 		// Copilot per-client routing flap is transient.
 		if (statusClean === 400 && COPILOT_MODEL_NOT_SUPPORTED_PATTERN.test(cleanMessage)) kinds |= Flag.Transient;
-		if (matchesGrammarTooLarge(cleanMessage, statusClean)) kinds |= Flag.Grammar;
+		if (matchesStrictToolsRejection(cleanMessage, statusClean)) kinds |= Flag.Grammar;
 		if (matchesFastModeUnsupported(cleanMessage, statusClean)) kinds |= Flag.FastModeUnsupported;
 	}
 	if (kinds !== 0) return create(kinds);
@@ -340,7 +357,9 @@ export function classify(error: unknown, api?: Api): number {
 			}
 		}
 
-		if (link instanceof AnthropicConnectionTimeoutError) {
+		if (link instanceof AwsCredentialsError) {
+			kinds |= Flag.AuthFailed;
+		} else if (link instanceof AnthropicConnectionTimeoutError) {
 			kinds |= Flag.Timeout | Flag.Transient;
 		} else if (link instanceof AnthropicConnectionError) {
 			kinds |= Flag.Transient;
@@ -411,7 +430,8 @@ export function isUsageLimit(error: unknown, api?: Api): boolean {
 }
 
 /**
- * Anthropic strict-tool grammar too large / schema too complex to compile.
+ * Strict-tool rejection: grammar too large, schema too complex, or structured
+ * outputs unsupported by the model/endpoint.
  * Accessor for {@link Flag.Grammar}.
  */
 export function isGrammarError(error: unknown): boolean {

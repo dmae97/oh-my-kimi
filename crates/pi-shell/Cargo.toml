@@ -44,6 +44,41 @@ uu_find = { path = "../vendor/uu-find" }
 pi_uu_grep = { path = "../pi-uu-grep" }
 uu_cat = { path = "../vendor/uu-cat" }
 uu_uniq = { path = "../vendor/uu-uniq" }
+uu_base64 = { path = "../vendor/uu-base64" }
+uu_md5sum = { path = "../vendor/uu-md5sum" }
+uu_sha1sum = { path = "../vendor/uu-sha1sum" }
+uu_sha224sum = { path = "../vendor/uu-sha224sum" }
+uu_sha256sum = { path = "../vendor/uu-sha256sum" }
+uu_sha384sum = { path = "../vendor/uu-sha384sum" }
+uu_sha512sum = { path = "../vendor/uu-sha512sum" }
+uu_b2sum = { path = "../vendor/uu-b2sum" }
+uu_basename = { path = "../vendor/uu-basename" }
+uu_dirname = { path = "../vendor/uu-dirname" }
+uu_readlink = { path = "../vendor/uu-readlink" }
+uu_realpath = { path = "../vendor/uu-realpath" }
+uu_touch = { path = "../vendor/uu-touch" }
+uu_stat = { path = "../vendor/uu-stat" }
+uu_date = { path = "../vendor/uu-date" }
+uu_mktemp = { path = "../vendor/uu-mktemp" }
+uu_seq = { path = "../vendor/uu-seq" }
+uu_yes = { path = "../vendor/uu-yes" }
+uu_printenv = { path = "../vendor/uu-printenv" }
+uu_ln = { path = "../vendor/uu-ln" }
+uu_truncate = { path = "../vendor/uu-truncate" }
+uu_tac = { path = "../vendor/uu-tac" }
+uu_nproc = { path = "../vendor/uu-nproc" }
+uu_uname = { path = "../vendor/uu-uname" }
+uu_whoami = { path = "../vendor/uu-whoami" }
+uu_hostname = { path = "../vendor/uu-hostname" }
+pi_uu_diff = { path = "../pi-uu-diff" }
+uu_cut = { path = "../vendor/uu-cut" }
+uu_tee = { path = "../vendor/uu-tee" }
+uu_tr = { path = "../vendor/uu-tr" }
+uu_paste = { path = "../vendor/uu-paste" }
+uu_comm = { path = "../vendor/uu-comm" }
+uu_sed = { path = "../vendor/uu-sed" }
+uu_xargs = { path = "../vendor/uu-xargs" }
+jaq = { path = "../vendor/jaq" }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

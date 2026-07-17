@@ -196,19 +196,20 @@ export function parseMarketplaceCatalog(content: string, filePath: string): Mark
  * Catalog paths tried in priority order: omp-namespaced override first, then
  * the Claude Code-compatible fallback so existing marketplaces keep loading.
  */
-const CATALOG_RELATIVE_PATHS: readonly string[] = [
-	path.join(".omp-plugin", "marketplace.json"),
-	path.join(".claude-plugin", "marketplace.json"),
-];
+const CATALOG_RELATIVE_PATHS: readonly string[] = [".omp-plugin/marketplace.json", ".claude-plugin/marketplace.json"];
 
-async function readMarketplaceCatalog(root: string): Promise<{ catalogPath: string; content: string }> {
+async function readMarketplaceCatalog(
+	root: string,
+	options: { relativeDisplayPaths?: boolean } = {},
+): Promise<{ catalogPath: string; displayPath: string; content: string }> {
 	const tried: string[] = [];
 	for (const rel of CATALOG_RELATIVE_PATHS) {
-		const catalogPath = path.join(root, rel);
-		tried.push(catalogPath);
+		const catalogPath = path.join(root, ...rel.split("/"));
+		const displayPath = options.relativeDisplayPaths ? rel : catalogPath;
+		tried.push(displayPath);
 		try {
 			const content = await Bun.file(catalogPath).text();
-			return { catalogPath, content };
+			return { catalogPath, displayPath, content };
 		} catch (err) {
 			if (isEnoent(err)) continue;
 			throw err;
@@ -252,11 +253,11 @@ export async function fetchMarketplace(source: string, cacheDir: string): Promis
 
 	if (type === "github") {
 		const url = `https://github.com/${source}.git`;
-		return cloneAndReadCatalog(url, cacheDir);
+		return cloneAndReadCatalog(url, source, cacheDir);
 	}
 
 	if (type === "git") {
-		return cloneAndReadCatalog(source, cacheDir);
+		return cloneAndReadCatalog(source, source, cacheDir);
 	}
 
 	// type === "url"
@@ -284,7 +285,7 @@ export async function fetchMarketplace(source: string, cacheDir: string): Promis
  * responsible for promoting the clone to its final cache location via
  * `promoteCloneToCache` after any duplicate/drift checks pass.
  */
-async function cloneAndReadCatalog(url: string, cacheDir: string): Promise<FetchResult> {
+async function cloneAndReadCatalog(url: string, source: string, cacheDir: string): Promise<FetchResult> {
 	const tmpDir = path.join(cacheDir, `.tmp-clone-${Date.now()}`);
 	await fs.mkdir(cacheDir, { recursive: true });
 
@@ -292,12 +293,12 @@ async function cloneAndReadCatalog(url: string, cacheDir: string): Promise<Fetch
 	await git.clone(url, tmpDir);
 
 	try {
-		const { catalogPath, content } = await readMarketplaceCatalog(tmpDir);
-		const catalog = parseMarketplaceCatalog(content, catalogPath);
+		const { displayPath, content } = await readMarketplaceCatalog(tmpDir, { relativeDisplayPaths: true });
+		const catalog = parseMarketplaceCatalog(content, displayPath);
 		return { catalog, clonePath: tmpDir };
 	} catch (err) {
 		await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-		throw new Error(`Cloned repository ${url}: ${(err as Error).message}`, { cause: err });
+		throw new Error(`Cloned repository ${url}: ${(err as Error).message} (source: ${source})`, { cause: err });
 	}
 }
 

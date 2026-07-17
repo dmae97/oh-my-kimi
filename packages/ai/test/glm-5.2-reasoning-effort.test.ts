@@ -6,11 +6,12 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 
 // GLM-5.2 reasoning-effort dialects diverge per host (verified against live
-// endpoints): a direct GLM host (Fireworks) wants the top UI tier on the wire
-// as `max` while keeping its distinct lower tiers, whereas OpenRouter rejects
-// `max` (HTTP 400) and treats `xhigh` as its own max tier. The catalog bakes
-// the right `thinking.effortMap`; these tests pin the resulting wire value so a
-// future map change can't silently 400 either host.
+// endpoints): a direct GLM host (Fireworks) exposes a real `max` top tier and
+// keeps its distinct lower tiers (with the `minimal -> none` host quirk),
+// whereas OpenRouter rejects `max` (HTTP 400) and treats `xhigh` as its own
+// max tier. The catalog bakes the right ladder/`thinking.effortMap`; these
+// tests pin the resulting wire value so a future change can't silently 400
+// either host.
 const context: Context = { messages: [{ role: "user", content: "hi", timestamp: 0 }] };
 
 function chatSse(): Response {
@@ -105,8 +106,8 @@ const openRouter = buildModel({
 describe("GLM-5.2 reasoning effort wire mapping", () => {
 	afterEach(() => vi.restoreAllMocks());
 
-	it("maps the top tier to reasoning_effort:max on a direct GLM host (Fireworks), lower tiers literal", async () => {
-		expect(await captureChatEffort(fireworks, Effort.XHigh)).toBe("max");
+	it("sends reasoning_effort:max for the real max tier on a direct GLM host (Fireworks), lower tiers literal", async () => {
+		expect(await captureChatEffort(fireworks, Effort.Max)).toBe("max");
 		expect(await captureChatEffort(fireworks, Effort.High)).toBe("high");
 		expect(await captureChatEffort(fireworks, Effort.Medium)).toBe("medium");
 		// Fireworks rejects literal `minimal`; the host quirk merge keeps `minimal -> none`.

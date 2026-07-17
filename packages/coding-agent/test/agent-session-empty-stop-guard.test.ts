@@ -70,6 +70,7 @@ function thinkingOnlyStop(): MockResponse {
 async function createHarness(
 	responses: MockResponse[],
 	settingsOverrides: SettingsOverrides = {},
+	persistSession = false,
 ): Promise<Harness & { mock: MockModel }> {
 	const tempDir = TempDir.createSync("@pi-empty-stop-guard-");
 	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
@@ -87,7 +88,9 @@ async function createHarness(
 	});
 	settings.setModelRole("default", `${mock.provider}/${mock.id}`);
 
-	const sessionManager = SessionManager.inMemory(tempDir.path());
+	const sessionManager = persistSession
+		? SessionManager.create(tempDir.path(), tempDir.path())
+		: SessionManager.inMemory(tempDir.path());
 	const tools = [recordTool as AgentTool];
 	const agent = new Agent({
 		getApiKey: () => "test-key",
@@ -268,6 +271,28 @@ describe("AgentSession empty stop guard", () => {
 			.filter(entry => entry.type === "message")
 			.map(entry => entry.message as AgentMessage);
 		expect(emptyAssistantStops(activeBranchMessages)).toHaveLength(1);
+	});
+
+	it("emits failed auto-retry end when repeated empty stops exhaust the retry cap", async () => {
+		const { session, mock } = await createHarness([emptyStop(), emptyStop(), emptyStop(), emptyStop()]);
+		const retryEndEvents: Array<Extract<AgentSessionEvent, { type: "auto_retry_end" }>> = [];
+		session.subscribe(event => {
+			if (event.type === "auto_retry_end") {
+				retryEndEvents.push(event);
+			}
+		});
+
+		await expectPromptCompletes(session.prompt("answer without tools"));
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(4);
+		expect(retryEndEvents).toHaveLength(1);
+		expect(retryEndEvents[0]).toMatchObject({
+			type: "auto_retry_end",
+			success: false,
+			attempt: 3,
+		});
+		expect(retryEndEvents[0]?.finalError).toContain("empty stop");
 	});
 
 	it("ends auto-retry state when empty stop retries hit the cap", async () => {

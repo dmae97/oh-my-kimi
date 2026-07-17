@@ -188,6 +188,23 @@ pub fn var(key: &str) -> Option<String> {
 			.and_then(|ctx| ctx.env.get(key).cloned())
 	})
 }
+
+/// Returns a snapshot of the scope's entire environment map (the shell's
+/// exported variables), or an empty vector when no scope is installed.
+/// Utilities that spawn child processes use this to build the child
+/// environment (`env_clear().envs(..)`), because the shell's exported
+/// variables are not present in the host process environment.
+#[must_use]
+pub fn env_snapshot() -> Vec<(String, String)> {
+	CTX.with(|c| {
+		c.borrow().as_ref().map_or_else(Vec::new, |ctx| {
+			ctx.env
+				.iter()
+				.map(|(k, v)| (k.clone(), v.clone()))
+				.collect()
+		})
+	})
+}
 /// Returns true when scoped stdin is a shell pipe or custom stream that should
 /// be treated as `rg PATTERN`'s implicit input instead of searching `.`.
 #[must_use]

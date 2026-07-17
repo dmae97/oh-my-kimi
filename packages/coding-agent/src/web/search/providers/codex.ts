@@ -7,9 +7,12 @@
  * SQLite store, never POSTs the broker sentinel to an OpenAI token endpoint.
  */
 import * as os from "node:os";
-import { type AuthStorage, type FetchImpl, type OAuthAccess, withOAuthAccess } from "@oh-my-pi/pi-ai";
+import { type AuthStorage, type FetchImpl, type Model, type OAuthAccess, withOAuthAccess } from "@oh-my-pi/pi-ai";
 import { decodeJwt } from "@oh-my-pi/pi-ai/oauth/openai-codex";
+import { applyCodexResponsesLiteShape } from "@oh-my-pi/pi-ai/providers/openai-codex/request-transformer";
+import { createOpenAICodexCompatibilityMetadata } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { getBundledModels } from "@oh-my-pi/pi-catalog/models";
+import { CODEX_CLIENT_VERSION, OPENAI_HEADER_VALUES, OPENAI_HEADERS } from "@oh-my-pi/pi-catalog/wire/codex";
 import { $env, readSseJson } from "@oh-my-pi/pi-utils";
 import packageJson from "../../../../package.json" with { type: "json" };
 import type { SearchResponse, SearchSource } from "../../../web/search/types";
@@ -22,6 +25,9 @@ const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const CODEX_RESPONSES_PATH = "/codex/responses";
 const FALLBACK_MODEL = "gpt-5.5";
 const DEFAULT_MODEL_PREFERENCES = [
+	"gpt-5.6-luna",
+	"gpt-5.6-terra",
+	"gpt-5.6-sol",
 	"gpt-5.5",
 	"gpt-5.4",
 	"gpt-5-codex",
@@ -35,15 +41,38 @@ const JWT_CLAIM_PATH = "https://api.openai.com/auth";
 const DEFAULT_INSTRUCTIONS =
 	"You are a helpful assistant with web search capabilities. Search the web to answer the user's question accurately and cite your sources.";
 
-function getConfiguredModel(): string | undefined {
-	const configuredModel = $env.PI_CODEX_WEB_SEARCH_MODEL?.trim();
-	return configuredModel ? configuredModel : undefined;
+type CodexSearchModel = Model<"openai-codex-responses">;
+
+interface CodexModelCandidate {
+	modelId: string;
+	catalogModel?: CodexSearchModel;
 }
 
-function getDefaultModelCandidates(): string[] {
-	const bundledModels = getBundledModels("openai-codex");
-	const bundledIds = new Set(bundledModels.map(model => model.id));
-	const candidates = DEFAULT_MODEL_PREFERENCES.filter(modelId => bundledIds.has(modelId));
+function getBundledCodexModels(): CodexSearchModel[] {
+	const models: CodexSearchModel[] = [];
+	for (const model of getBundledModels("openai-codex")) {
+		if (model.api === "openai-codex-responses") {
+			models.push(model as CodexSearchModel);
+		}
+	}
+	return models;
+}
+
+function getConfiguredModel(): CodexModelCandidate | undefined {
+	const configuredModel = $env.PI_CODEX_WEB_SEARCH_MODEL?.trim();
+	if (!configuredModel) return undefined;
+
+	const catalogModel = getBundledCodexModels().find(model => model.id === configuredModel);
+	return { modelId: configuredModel, ...(catalogModel ? { catalogModel } : {}) };
+}
+
+function getDefaultModelCandidates(): CodexModelCandidate[] {
+	const bundledModels = getBundledCodexModels();
+	const candidates: CodexModelCandidate[] = [];
+	for (const modelId of DEFAULT_MODEL_PREFERENCES) {
+		const catalogModel = bundledModels.find(model => model.id === modelId);
+		if (catalogModel) candidates.push({ modelId, catalogModel });
+	}
 
 	if (candidates.length > 0) {
 		return candidates;
@@ -51,10 +80,11 @@ function getDefaultModelCandidates(): string[] {
 
 	const nonMini = bundledModels.find(model => !model.id.includes("mini") && !model.id.includes("spark"));
 	if (nonMini) {
-		return [nonMini.id];
+		return [{ modelId: nonMini.id, catalogModel: nonMini }];
 	}
 
-	return bundledModels[0]?.id ? [bundledModels[0].id] : [FALLBACK_MODEL];
+	const fallbackModel = bundledModels[0];
+	return fallbackModel ? [{ modelId: fallbackModel.id, catalogModel: fallbackModel }] : [{ modelId: FALLBACK_MODEL }];
 }
 
 function shouldRetryWithNextDefaultModel(error: unknown): boolean {
@@ -301,9 +331,10 @@ async function findCodexAuth(
 function buildCodexHeaders(accessToken: string, accountId: string): Record<string, string> {
 	return {
 		Authorization: `Bearer ${accessToken}`,
-		"chatgpt-account-id": accountId,
-		"OpenAI-Beta": "responses=experimental",
-		originator: "pi",
+		[OPENAI_HEADERS.ACCOUNT_ID]: accountId,
+		[OPENAI_HEADERS.BETA]: OPENAI_HEADER_VALUES.BETA_RESPONSES,
+		[OPENAI_HEADERS.ORIGINATOR]: OPENAI_HEADER_VALUES.ORIGINATOR_CODEX,
+		[OPENAI_HEADERS.VERSION]: CODEX_CLIENT_VERSION,
 		"User-Agent": `pi/${packageJson.version} (${os.platform()} ${os.release()}; ${os.arch()})`,
 		Accept: "text/event-stream",
 		"Content-Type": "application/json",
@@ -323,7 +354,8 @@ async function callCodexSearch(
 		signal?: AbortSignal;
 		systemPrompt?: string;
 		searchContextSize?: "low" | "medium" | "high";
-		modelId: string;
+		model: CodexModelCandidate;
+		sessionId?: string;
 		fetch?: FetchImpl;
 	},
 ): Promise<{
@@ -336,7 +368,8 @@ async function callCodexSearch(
 	const url = `${CODEX_BASE_URL}${CODEX_RESPONSES_PATH}`;
 	const headers = buildCodexHeaders(auth.accessToken, auth.accountId);
 
-	const requestedModel = options.modelId;
+	const requestedModel = options.model.modelId;
+	const usesResponsesLite = options.model.catalogModel?.useResponsesLite === true;
 
 	const body: Record<string, unknown> = {
 		model: requestedModel,
@@ -358,6 +391,18 @@ async function callCodexSearch(
 		tool_choice: { type: "web_search" },
 		instructions: options.systemPrompt ?? DEFAULT_INSTRUCTIONS,
 	};
+	if (usesResponsesLite) {
+		const metadata = createOpenAICodexCompatibilityMetadata({
+			sessionId: options.sessionId,
+			requestKind: "turn",
+			startNewTurn: true,
+		});
+		Object.assign(headers, metadata.headers);
+		headers[OPENAI_HEADERS.RESPONSES_LITE] = "true";
+		body.client_metadata = metadata.clientMetadata;
+		body.reasoning = { context: "all_turns" };
+		applyCodexResponsesLiteShape(body);
+	}
 
 	const fetchImpl = options.fetch ?? fetch;
 	const response = await fetchImpl(url, {
@@ -489,10 +534,11 @@ async function callCodexSearch(
  * Default-model behavior:
  * - If `PI_CODEX_WEB_SEARCH_MODEL` is set, use it exactly once and surface any
  *   upstream error verbatim.
- * - Otherwise prefer ChatGPT-account-safe bundled defaults (GPT-5.4, GPT-5
- *   Codex, GPT-5, …) and retry the next candidate only when Codex returns the
- *   known 400 "model is not supported" family. This avoids selecting
- *   `gpt-5-codex-mini` first on ChatGPT accounts, which OpenAI rejects.
+ * - Otherwise prefer ChatGPT-account-safe bundled defaults (GPT-5.6 Luna,
+ *   Terra, Sol, GPT-5.5, …) and retry the next candidate only when Codex
+ *   returns the known 400 "model is not supported" family. This avoids
+ *   selecting `gpt-5-codex-mini` first on ChatGPT accounts, which OpenAI
+ *   rejects.
  */
 export async function searchCodex(params: SearchParams): Promise<SearchResponse> {
 	const seed = await findCodexAuth(params.authStorage, params.sessionId, params.signal);
@@ -520,15 +566,16 @@ export async function searchCodex(params: SearchParams): Promise<SearchResponse>
 
 			let lastError: unknown;
 			for (let index = 0; index < modelCandidates.length; index += 1) {
-				const modelId = modelCandidates[index];
-				if (!modelId) continue;
+				const candidate = modelCandidates[index];
+				if (!candidate) continue;
 
 				try {
 					return await callCodexSearch(auth, params.query, {
 						signal: params.signal,
 						systemPrompt: params.systemPrompt,
 						searchContextSize: "high",
-						modelId,
+						model: candidate,
+						sessionId: params.sessionId,
 						fetch: params.fetch,
 					});
 				} catch (error) {

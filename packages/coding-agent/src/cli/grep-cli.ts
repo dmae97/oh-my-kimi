@@ -7,6 +7,7 @@ import * as path from "node:path";
 import { GrepOutputMode, grep } from "@oh-my-pi/pi-natives";
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
+import { expandPath } from "../tools/path-utils";
 
 export interface GrepCommandArgs {
 	pattern: string;
@@ -73,7 +74,7 @@ export async function runGrepCommand(cmd: GrepCommandArgs): Promise<void> {
 		process.exit(1);
 	}
 
-	const searchPath = path.resolve(cmd.path);
+	const searchPath = path.resolve(expandPath(cmd.path));
 	console.log(chalk.dim(`Searching in: ${searchPath}`));
 	console.log(chalk.dim(`Pattern: ${cmd.pattern}`));
 	console.log(

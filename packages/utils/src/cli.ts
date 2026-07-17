@@ -28,6 +28,20 @@ function startupMarker(text: string): void {
 	}
 }
 
+/**
+ * A user-facing argument/flag validation failure. Thrown by {@link Command.parse}
+ * for missing/invalid positionals and flags. The top-level {@link run} handler
+ * prints its message plus the command usage line to stderr and exits 1, instead
+ * of letting it bubble to the process-level catch — which would dump a minified
+ * `dist/cli.js` code frame over a plain argument mistake (issue #5369).
+ */
+export class CliUsageError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "CliUsageError";
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Flag & Arg descriptors
 // ---------------------------------------------------------------------------
@@ -190,12 +204,18 @@ export abstract class Command {
 
 		// strict=false when command declares args (positionals must pass through)
 		// or when the command itself opts out
-		const { values: rawValues, positionals } = nodeParseArgs({
-			args: this.argv,
-			options,
-			allowPositionals: true,
-			strict,
-		});
+		const { values: rawValues, positionals } = (() => {
+			try {
+				return nodeParseArgs({
+					args: this.argv,
+					options,
+					allowPositionals: true,
+					strict,
+				});
+			} catch (error) {
+				throw new CliUsageError(error instanceof Error ? error.message : String(error));
+			}
+		})();
 
 		// Convert raw values to proper types and validate
 		const flags: Record<string, unknown> = {};
@@ -207,7 +227,7 @@ export abstract class Command {
 				} else {
 					const n = Number.parseInt(raw as string, 10);
 					if (Number.isNaN(n)) {
-						throw new Error(`Expected integer for --${name}, got "${raw}"`);
+						throw new CliUsageError(`Expected integer for --${name}, got "${raw}"`);
 					}
 					flags[name] = n;
 				}
@@ -220,14 +240,16 @@ export abstract class Command {
 				// Validate options constraint
 				if (val !== undefined && desc.options && !Array.isArray(val)) {
 					if (!desc.options.includes(val as string)) {
-						throw new Error(`Expected --${name} to be one of: ${[...desc.options].join(", ")}; got "${val}"`);
+						throw new CliUsageError(
+							`Expected --${name} to be one of: ${[...desc.options].join(", ")}; got "${val}"`,
+						);
 					}
 				}
 				flags[name] = val;
 			}
 			// Validate required
 			if (desc.required && flags[name] === undefined) {
-				throw new Error(`Missing required flag: --${name}`);
+				throw new CliUsageError(`Missing required flag: --${name}`);
 			}
 		}
 
@@ -246,13 +268,15 @@ export abstract class Command {
 			}
 			// Validate required
 			if (desc.required && args[argName] === undefined) {
-				throw new Error(`Missing required argument: ${argName}`);
+				throw new CliUsageError(`Missing required argument: ${argName}`);
 			}
 			// Validate options constraint
 			const argVal = args[argName];
 			if (argVal !== undefined && desc.options && typeof argVal === "string") {
 				if (!desc.options.includes(argVal)) {
-					throw new Error(`Expected ${argName} to be one of: ${[...desc.options].join(", ")}; got "${argVal}"`);
+					throw new CliUsageError(
+						`Expected ${argName} to be one of: ${[...desc.options].join(", ")}; got "${argVal}"`,
+					);
 				}
 			}
 		}
@@ -294,15 +318,34 @@ export function renderRootHelp(config: CliConfig): void {
 	process.stdout.write(lines.join("\n"));
 }
 
+/**
+ * Format a command's positional args for a USAGE line. Required args render
+ * bare (`MODELS`), optional args wrapped in brackets (`[MODELS]`), and
+ * `multiple` args get a trailing ellipsis (`MODELS...`) so a required
+ * variadic reads as `MODELS...`, not the misleading optional `[MODELS]`.
+ */
+function formatUsageArgs(Cmd: CommandCtor): string {
+	const entries = Object.entries(Cmd.args ?? {});
+	if (entries.length === 0) return "";
+	const parts = entries.map(([name, desc]) => {
+		const label = `${name.toUpperCase()}${desc.multiple ? "..." : ""}`;
+		return desc.required ? label : `[${label}]`;
+	});
+	return ` ${parts.join(" ")}`;
+}
+
+/** Build the single USAGE line for a command (without the leading label). */
+export function commandUsageLine(bin: string, id: string, Cmd: CommandCtor): string {
+	const hasFlags = Object.keys(Cmd.flags ?? {}).length > 0;
+	return `$ ${bin} ${id}${formatUsageArgs(Cmd)}${hasFlags ? " [FLAGS]" : ""}`;
+}
+
 /** Render help for a single command. */
 export function renderCommandHelp(bin: string, id: string, Cmd: CommandCtor): void {
 	const lines: string[] = [];
 	if (Cmd.description) lines.push(`${Cmd.description}\n`);
 	lines.push("USAGE");
-	const argNames = Object.keys(Cmd.args ?? {});
-	const argStr = argNames.length > 0 ? ` ${argNames.map(n => `[${n.toUpperCase()}]`).join(" ")}` : "";
-	const hasFlags = Object.keys(Cmd.flags ?? {}).length > 0;
-	lines.push(`  $ ${bin} ${id}${argStr}${hasFlags ? " [FLAGS]" : ""}\n`);
+	lines.push(`  ${commandUsageLine(bin, id, Cmd)}\n`);
 	renderCommandBody(lines, Cmd);
 	process.stdout.write(lines.join("\n"));
 }
@@ -435,7 +478,22 @@ export async function run(opts: RunOptions): Promise<void> {
 	const Cmd = await loadEntry(entry);
 	const config: CliConfig = { bin, version, commands: new Map([[entry.name, Cmd]]) };
 	const instance = new Cmd(commandArgv, config);
-	await instance.run();
+	try {
+		await instance.run();
+	} catch (error) {
+		// A usage mistake (missing/invalid arg or flag) is not a crash: print the
+		// message and the command's usage line, then exit 1. Letting it reach the
+		// process-level catch would dump a minified `dist/cli.js` code frame over a
+		// plain argument error (issue #5369).
+		if (error instanceof CliUsageError) {
+			process.stderr.write(`error: ${error.message}\n\n`);
+			process.stderr.write(`USAGE\n  ${commandUsageLine(bin, entry.name, Cmd)}\n`);
+			process.stderr.write(`\nRun \`${bin} ${entry.name} --help\` for details.\n`);
+			process.exitCode = 1;
+			return;
+		}
+		throw error;
+	}
 }
 
 /** Load one command module, leaving streaming markers around the import. */

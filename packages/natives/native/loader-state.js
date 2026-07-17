@@ -583,7 +583,7 @@ function maybeStageNodeModulesAddon(ctx, errors) {
 	return stagedPath;
 }
 
-function validateLoadedBindings(ctx, bindings, candidate) {
+export function validateLoadedBindings(ctx, bindings, candidate) {
 	// In workspace dev (running out of `packages/natives/native/` rather than a
 	// `node_modules` install or a compiled bundle) the local `.node` only gains
 	// the renamed sentinel after `bun --cwd=packages/natives run build`. Skip
@@ -591,6 +591,41 @@ function validateLoadedBindings(ctx, bindings, candidate) {
 	// completes; install and compiled-binary paths still validate.
 	if (ctx.isWorkspaceLoad) return;
 	if (typeof bindings[ctx.versionSentinelExport] === "function") return;
+
+	// The expected sentinel is missing. Distinguish two failure modes by the
+	// sentinel the bindings DO carry:
+	//   - disk stale: the `.node` on disk predates this loader (its own build);
+	//     reinstalling re-syncs the file.
+	//   - process stale: an in-place upgrade landed a new release on disk while
+	//     this process still holds the previous addon generation resident in the
+	//     dynamic-loader's native-module cache. `require` returns those old
+	//     exports, which carry the PRIOR sentinel — disk is already consistent,
+	//     so reinstall is a no-op and only restarting the process re-syncs.
+	const residentSentinel = Object.keys(bindings).find(
+		key => key !== ctx.versionSentinelExport && /^__piNativesV[A-Za-z0-9_]+$/.test(key),
+	);
+	// A prior sentinel alone cannot distinguish a resident old module from an
+	// actually stale file: `require` returns the same exports in both cases.
+	// The restart diagnosis is valid only when the selected file itself carries
+	// the current sentinel; otherwise a restart would simply reload stale disk.
+	let diskHasExpectedSentinel = false;
+	try {
+		diskHasExpectedSentinel = fs.readFileSync(candidate).includes(ctx.versionSentinelExport);
+	} catch {
+		// The successful require above normally guarantees readability. If the
+		// file disappears concurrently, retain the safe reinstall diagnosis.
+	}
+	if (residentSentinel && diskHasExpectedSentinel) {
+		const residentVersion = residentSentinel.slice("__piNativesV".length).replace(/_/g, ".");
+		throw new Error(
+			`Loaded ${candidate}, which exposes the @oh-my-pi/pi-natives@${residentVersion} version ` +
+				`sentinel \`${residentSentinel}\` but not the @${ctx.packageVersion} sentinel ` +
+				`\`${ctx.versionSentinelExport}\` this loader expects. omp was upgraded to ` +
+				`${ctx.packageVersion} while this session was running; the ${residentVersion} addon is ` +
+				"still resident in this process. Disk is already consistent — restart omp to pick up " +
+				`${ctx.packageVersion} (reinstalling changes nothing).`,
+		);
+	}
 	throw new Error(
 		`Loaded ${candidate} but it does not expose the @oh-my-pi/pi-natives@${ctx.packageVersion} ` +
 			`version sentinel \`${ctx.versionSentinelExport}\`. The .node file on disk is from a different ` +

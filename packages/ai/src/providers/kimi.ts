@@ -20,9 +20,6 @@ import {
 
 export type KimiApiFormat = OpenAIAnthropicApiFormat;
 
-// Note: Anthropic SDK appends /v1/messages, so base URL should not include /v1
-const KIMI_ANTHROPIC_BASE_URL = "https://api.kimi.com/coding";
-
 export interface KimiOptions extends OpenAIAnthropicShimOptions {
 	/** API format: "openai" or "anthropic". Default: "anthropic" */
 	format?: KimiApiFormat;
@@ -38,7 +35,7 @@ export function streamKimi(
 	options?: KimiOptions,
 ): AssistantMessageEventStream {
 	return streamOpenAIAnthropicShim(model, context, options, {
-		anthropicBaseUrl: KIMI_ANTHROPIC_BASE_URL,
+		anthropicBaseUrl: model.baseUrl.replace(/\/v1\/?$/, ""),
 		defaultFormat: "anthropic",
 		extraHeaders: getKimiCommonHeaders,
 	});

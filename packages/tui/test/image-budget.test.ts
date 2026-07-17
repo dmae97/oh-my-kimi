@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { TUI } from "@oh-my-pi/pi-tui";
+import { Box } from "@oh-my-pi/pi-tui/components/box";
 import { Image, ImageBudget } from "@oh-my-pi/pi-tui/components/image";
+import { ScrollView } from "@oh-my-pi/pi-tui/components/scroll-view";
 import { Text } from "@oh-my-pi/pi-tui/components/text";
 import {
 	encodeKittyVirtualPlacement,
@@ -10,6 +12,7 @@ import {
 } from "@oh-my-pi/pi-tui/kitty-graphics";
 import {
 	type CellDimensions,
+	encodeKitty,
 	encodeKittyDeleteImage,
 	encodeKittyPlacement,
 	encodeKittyTransmit,
@@ -17,6 +20,7 @@ import {
 	ImageProtocol,
 	setCellDimensions,
 	TERMINAL,
+	wrapTmuxPassthrough,
 } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -25,6 +29,17 @@ const terminal = TERMINAL as unknown as MutableTerminalInfo;
 
 const BASE64_ONE_PIXEL_PNG =
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==";
+
+const ORIGINAL_TMUX = Bun.env.TMUX;
+
+beforeEach(() => {
+	delete Bun.env.TMUX;
+});
+
+afterEach(() => {
+	if (ORIGINAL_TMUX === undefined) delete Bun.env.TMUX;
+	else Bun.env.TMUX = ORIGINAL_TMUX;
+});
 
 /** Drive one render pass against the budget with `count` images (ids 1..count, stable across passes). */
 function pass(budget: ImageBudget, count: number): { suppressed: boolean[]; reset: boolean; purge: readonly number[] } {
@@ -273,6 +288,40 @@ describe("encodeKittyDeleteImage", () => {
 	});
 });
 
+describe("tmux Kitty graphics passthrough", () => {
+	beforeEach(() => {
+		Bun.env.TMUX = "/tmp/tmux-1000/default,1,0";
+	});
+
+	it("wraps every Kitty graphics command in a tmux DCS envelope", () => {
+		const expected = (payload: string) => `\x1bPtmux;${payload.replaceAll("\x1b", "\x1b\x1b")}\x1b\\`;
+
+		expect(encodeKitty("AA==", { columns: 1, rows: 1 })).toBe(expected("\x1b_Ga=T,f=100,q=2,C=1,c=1,r=1;AA==\x1b\\"));
+		expect(encodeKittyTransmit("AA==", 9)).toBe(expected("\x1b_Ga=t,f=100,q=2,i=9;AA==\x1b\\"));
+		expect(encodeKittyPlacement({ imageId: 9, placementId: 9, columns: 3, rows: 2 })).toBe(
+			expected("\x1b_Ga=p,q=2,C=1,i=9,p=9,c=3,r=2\x1b\\"),
+		);
+		expect(encodeKittyVirtualPlacement({ imageId: 9, placementId: 9, columns: 3, rows: 2 })).toBe(
+			expected("\x1b_Ga=p,U=1,q=2,i=9,p=9,c=3,r=2\x1b\\"),
+		);
+		expect(encodeKittyDeleteImage(9)).toBe(expected("\x1b_Ga=d,d=I,i=9,q=2\x1b\\"));
+	});
+
+	it("wraps each quiet chunk of a multi-part Kitty transmission separately", () => {
+		const sequence = encodeKittyTransmit("A".repeat(4097), 9);
+		expect(sequence.match(/\x1bPtmux;/gu)).toHaveLength(2);
+		expect(sequence.match(/\x1b\x1b_G/gu)).toHaveLength(2);
+		expect(sequence.match(/\x1b\x1b\\\x1b\\/gu)).toHaveLength(2);
+		expect(sequence).toContain("\x1b\x1b_Gq=2,m=0;");
+	});
+
+	it("leaves Kitty graphics commands bare outside tmux", () => {
+		delete Bun.env.TMUX;
+		expect(encodeKittyTransmit("AA==", 9)).toBe("\x1b_Ga=t,f=100,q=2,i=9;AA==\x1b\\");
+		expect(wrapTmuxPassthrough("\x1b_Gpayload\x1b\\")).toBe("\x1bPtmux;\x1b\x1b_Gpayload\x1b\x1b\\\x1b\\");
+	});
+});
+
 describe("Image budget integration", () => {
 	const originalProtocol = TERMINAL.imageProtocol;
 	const originalGraphics = { ...getKittyGraphics() };
@@ -306,10 +355,10 @@ describe("Image budget integration", () => {
 		const lines = image.render(20);
 		budget.endPass();
 
-		const last = lines.at(-1) ?? "";
-		expect(last).toContain("\x1b_G");
-		expect(last).toContain(`i=${id}`);
-		expect(last).not.toContain("[Image:");
+		const placement = lines[0] ?? "";
+		expect(placement).toContain("\x1b_G");
+		expect(placement).toContain(`i=${id}`);
+		expect(placement).not.toContain("[Image:");
 	});
 
 	it("transmits the base64 once via the budget and renders only a placement line", () => {
@@ -332,10 +381,10 @@ describe("Image budget integration", () => {
 		expect(transmits[0]).toContain("\x1b_Ga=t");
 		expect(transmits[0]).toContain(`i=${id}`);
 		expect(transmits[0]).toContain(BASE64_ONE_PIXEL_PNG);
-		// The render line is a placement (`a=p`) without the base64.
-		const last = lines.at(-1) ?? "";
-		expect(last).toContain("\x1b_Ga=p");
-		expect(last).not.toContain(BASE64_ONE_PIXEL_PNG);
+		// The first render line is a placement (`a=p`) without the base64.
+		const placement = lines[0] ?? "";
+		expect(placement).toContain("\x1b_Ga=p");
+		expect(placement).not.toContain(BASE64_ONE_PIXEL_PNG);
 
 		// A second render (cache hit) does not re-enqueue the data.
 		budget.beginPass();
@@ -344,7 +393,7 @@ describe("Image budget integration", () => {
 		expect([...budget.takeTransmits()]).toEqual([]);
 	});
 
-	it("moves back up before multi-row direct Kitty placements and restores the cursor below them", () => {
+	it("places stable multi-row Kitty graphics before reserved rows so they survive scrollback", () => {
 		const budget = new ImageBudget(3, () => {});
 		const id = budget.acquireId("k");
 		const image = new Image(
@@ -359,16 +408,19 @@ describe("Image budget integration", () => {
 		const lines = image.render(20);
 		budget.endPass();
 
-		const last = lines.at(-1) ?? "";
+		const first = lines[0] ?? "";
+		const placementIndex = first.indexOf("\x1b_Ga=p");
 		expect(lines).toHaveLength(4);
-		expect(lines.slice(0, -1)).toEqual(["\x1b[0m", "\x1b[0m", "\x1b[0m"]);
-		expect(last.startsWith("\x1b7\x1b[3A")).toBe(true);
-		expect(last.endsWith("\x1b8")).toBe(true);
-		expect(last).toContain("\x1b_Ga=p");
-		expect(last).toContain("C=1");
-		expect(last).toContain(`i=${id}`);
-		expect(last).toContain("c=4");
-		expect(last).toContain("r=4");
+		expect(placementIndex).toBeGreaterThan(-1);
+		const beforePlacement = first.slice(0, placementIndex);
+		expect(beforePlacement.match(/\x1b\[2K/g) ?? []).toHaveLength(4);
+		expect(beforePlacement.match(/\r\n/g) ?? []).toHaveLength(3);
+		expect(beforePlacement.indexOf("\x1b[3A")).toBeGreaterThan(beforePlacement.lastIndexOf("\r\n"));
+		expect(lines.slice(1).every(line => !line.includes("\x1b_G") && !line.includes("\x1b[K"))).toBe(true);
+		expect(first).toContain("C=1");
+		expect(first).toContain(`i=${id}`);
+		expect(first).toContain("c=4");
+		expect(first).toContain("r=4");
 	});
 
 	it("does not move the cursor around single-row direct Kitty placements", () => {
@@ -425,7 +477,7 @@ describe("Image budget integration", () => {
 
 		expect(olderLines.join("")).toContain("[Image:");
 		expect(olderLines.join("")).not.toContain("\x1b_G");
-		expect(newerLines.at(-1) ?? "").toContain("\x1b_G");
+		expect(newerLines[0] ?? "").toContain("\x1b_G");
 	});
 });
 
@@ -549,7 +601,7 @@ describe("TUI inline-image budget", () => {
 		);
 	}
 
-	it("renders following text below a multi-row direct Kitty placement", async () => {
+	it("advances every reserved row after placing a direct Kitty image", async () => {
 		const originalGraphics = { ...getKittyGraphics() };
 		const term = new VirtualTerminal(40, 12);
 		const writes: string[] = [];
@@ -577,12 +629,369 @@ describe("TUI inline-image budget", () => {
 			await settle(term);
 
 			const output = writes.join("");
-			expect(output).toContain("\x1b7\x1b[3A");
-			expect(output).toContain("C=1");
-			expect(output).toContain("\x1b8");
+			const placementStart = output.indexOf("\x1b_Ga=p");
+			const placementEnd = output.indexOf("\x1b\\", placementStart) + 2;
+			const textStart = output.indexOf("after-image", placementEnd);
+			const afterPlacement = output.slice(placementEnd, textStart);
+			expect(placementStart).toBeGreaterThan(-1);
+			expect(placementEnd).toBeGreaterThan(placementStart);
+			expect(textStart).toBeGreaterThan(placementEnd);
+			expect(afterPlacement.match(/\r\n/g) ?? []).toHaveLength(4);
+			expect(afterPlacement).not.toContain("\x1b[K");
+			expect(afterPlacement).not.toContain("\x1b[2K");
+			expect(output.slice(0, placementStart)).toContain("\x1b[2K");
+			expect(output).not.toContain("pi:img:");
 			const viewport = term.getViewport().map(line => line.trimEnd());
 			expect(viewport.slice(0, 5)).toEqual(["", "", "", "", "after-image"]);
 			expect(viewport.slice(0, 4).some(line => line.includes("after-image"))).toBe(false);
+		} finally {
+			tui.stop();
+			setKittyGraphics(originalGraphics);
+		}
+	});
+
+	it("keeps sequential direct Kitty image blocks and following text aligned", async () => {
+		const originalGraphics = { ...getKittyGraphics() };
+		const term = new VirtualTerminal(40, 16);
+		const writes: string[] = [];
+		const realWrite = term.write.bind(term);
+		vi.spyOn(term, "write").mockImplementation((data: string) => {
+			writes.push(data);
+			realWrite(data);
+		});
+
+		setKittyGraphics({ unicodePlaceholders: false });
+		const tui = new TUI(term);
+		tui.addChild(
+			new Image(
+				BASE64_ONE_PIXEL_PNG,
+				"image/png",
+				{ fallbackColor: t => t },
+				{ maxWidthCells: 4, maxHeightCells: 4, budget: tui.imageBudget, imageKey: "first-direct" },
+				{ widthPx: 40, heightPx: 20 },
+			),
+		);
+		tui.addChild(new Text("between-images", 0, 0));
+		tui.addChild(
+			new Image(
+				BASE64_ONE_PIXEL_PNG,
+				"image/png",
+				{ fallbackColor: t => t },
+				{ maxWidthCells: 4, maxHeightCells: 4, budget: tui.imageBudget, imageKey: "second-direct" },
+				{ widthPx: 40, heightPx: 30 },
+			),
+		);
+		tui.addChild(new Text("after-images", 0, 0));
+
+		try {
+			tui.start();
+			await settle(term);
+
+			const output = writes.join("");
+			const firstPlacement = output.indexOf("\x1b_Ga=p");
+			const firstPlacementEnd = output.indexOf("\x1b\\", firstPlacement) + 2;
+			const betweenText = output.indexOf("between-images", firstPlacementEnd);
+			const secondPlacement = output.indexOf("\x1b_Ga=p", betweenText);
+			const secondPlacementEnd = output.indexOf("\x1b\\", secondPlacement) + 2;
+			const afterText = output.indexOf("after-images", secondPlacementEnd);
+			expect(firstPlacement).toBeGreaterThan(-1);
+			expect(firstPlacementEnd).toBeGreaterThan(firstPlacement);
+			expect(betweenText).toBeGreaterThan(firstPlacementEnd);
+			expect(secondPlacement).toBeGreaterThan(betweenText);
+			expect(secondPlacementEnd).toBeGreaterThan(secondPlacement);
+			expect(afterText).toBeGreaterThan(secondPlacementEnd);
+			expect(output.slice(firstPlacementEnd, betweenText)).not.toContain("\x1b[K");
+			expect(output.slice(firstPlacementEnd, betweenText)).not.toContain("\x1b[2K");
+			expect(output.slice(secondPlacementEnd, afterText)).not.toContain("\x1b[K");
+			expect(output.slice(secondPlacementEnd, afterText)).not.toContain("\x1b[2K");
+			expect(output).not.toContain("pi:img:");
+			const viewport = term.getViewport().map(line => line.trimEnd());
+			expect(viewport.slice(0, 7)).toEqual(["", "", "between-images", "", "", "", "after-images"]);
+		} finally {
+			tui.stop();
+			setKittyGraphics(originalGraphics);
+		}
+	});
+
+	it("does not composite overlays into protected direct Kitty rows", async () => {
+		const originalGraphics = { ...getKittyGraphics() };
+		const term = new VirtualTerminal(40, 12);
+		const writes: string[] = [];
+		const realWrite = term.write.bind(term);
+		vi.spyOn(term, "write").mockImplementation((data: string) => {
+			writes.push(data);
+			realWrite(data);
+		});
+
+		setKittyGraphics({ unicodePlaceholders: false });
+		const tui = new TUI(term);
+		tui.addChild(
+			new Image(
+				BASE64_ONE_PIXEL_PNG,
+				"image/png",
+				{ fallbackColor: t => t },
+				{ maxWidthCells: 4, maxHeightCells: 4, budget: tui.imageBudget, imageKey: "overlay-direct" },
+				{ widthPx: 40, heightPx: 40 },
+			),
+		);
+		tui.addChild(new Text("after-overlay-image", 0, 0));
+		tui.showOverlay(
+			{
+				invalidate() {},
+				render: () => ["overlay-row-0", "overlay-row-1"],
+			},
+			{ row: 0, col: 0, width: 14 },
+		);
+
+		try {
+			tui.start();
+			await settle(term);
+
+			const output = writes.join("");
+			const placementStart = output.indexOf("\x1b_Ga=p");
+			const placementEnd = output.indexOf("\x1b\\", placementStart) + 2;
+			const textStart = output.indexOf("after-overlay-image", placementEnd);
+			expect(placementStart).toBeGreaterThan(-1);
+			expect(placementEnd).toBeGreaterThan(placementStart);
+			expect(textStart).toBeGreaterThan(placementEnd);
+			expect(output).not.toContain("overlay-row-");
+			expect(output).not.toContain("pi:img:");
+			expect(output.slice(placementEnd, textStart)).not.toContain("\x1b[K");
+			expect(output.slice(placementEnd, textStart)).not.toContain("\x1b[2K");
+		} finally {
+			tui.stop();
+			setKittyGraphics(originalGraphics);
+		}
+	});
+
+	it("omits direct Kitty blocks that exceed an overlay maxHeight", async () => {
+		const originalGraphics = { ...getKittyGraphics() };
+		const term = new VirtualTerminal(40, 12);
+		const writes: string[] = [];
+		const realWrite = term.write.bind(term);
+		vi.spyOn(term, "write").mockImplementation((data: string) => {
+			writes.push(data);
+			realWrite(data);
+		});
+		setKittyGraphics({ unicodePlaceholders: false });
+		const tui = new TUI(term);
+
+		try {
+			tui.start();
+			await settle(term);
+			writes.length = 0;
+			tui.showOverlay(
+				new Image(
+					BASE64_ONE_PIXEL_PNG,
+					"image/png",
+					{ fallbackColor: t => t },
+					{ maxWidthCells: 4, maxHeightCells: 4 },
+					{ widthPx: 40, heightPx: 40 },
+				),
+				{ row: 0, col: 0, width: 10, maxHeight: 2, margin: 0 },
+			);
+			await settle(term);
+
+			const output = writes.join("");
+			expect(output).not.toContain("\x1b_Ga=T");
+			expect(output).not.toContain("pi:img:");
+		} finally {
+			tui.stop();
+			setKittyGraphics(originalGraphics);
+		}
+	});
+
+	it("preserves the requested column for a direct Kitty image overlay", async () => {
+		const originalGraphics = { ...getKittyGraphics() };
+		const term = new VirtualTerminal(40, 12);
+		const writes: string[] = [];
+		const realWrite = term.write.bind(term);
+		vi.spyOn(term, "write").mockImplementation((data: string) => {
+			writes.push(data);
+			realWrite(data);
+		});
+
+		setKittyGraphics({ unicodePlaceholders: false });
+		const tui = new TUI(term);
+		try {
+			tui.start();
+			await settle(term);
+			writes.length = 0;
+			tui.showOverlay(
+				new Image(
+					BASE64_ONE_PIXEL_PNG,
+					"image/png",
+					{ fallbackColor: t => t },
+					{ maxWidthCells: 4, maxHeightCells: 4, budget: tui.imageBudget, imageKey: "positioned-direct" },
+					{ widthPx: 40, heightPx: 40 },
+				),
+				{ row: 0, col: 6, width: 4 },
+			);
+			await settle(term);
+
+			const output = writes.join("");
+			const placementStart = output.indexOf("\x1b_Ga=p");
+			expect(placementStart).toBeGreaterThan(-1);
+			expect(output.slice(0, placementStart).endsWith("\x1b[7G")).toBe(true);
+			expect(output).not.toContain("pi:img:");
+		} finally {
+			tui.stop();
+			setKittyGraphics(originalGraphics);
+		}
+	});
+
+	it("preserves base text around a narrow direct Kitty image overlay", async () => {
+		const originalGraphics = { ...getKittyGraphics() };
+		const term = new VirtualTerminal(40, 12);
+		const writes: string[] = [];
+		const realWrite = term.write.bind(term);
+		vi.spyOn(term, "write").mockImplementation((data: string) => {
+			writes.push(data);
+			realWrite(data);
+		});
+
+		setKittyGraphics({ unicodePlaceholders: false });
+		const tui = new TUI(term);
+		tui.addChild(new Text("left-base--middle--right-base", 0, 0));
+		try {
+			tui.start();
+			await settle(term);
+			writes.length = 0;
+			tui.showOverlay(
+				new Image(
+					BASE64_ONE_PIXEL_PNG,
+					"image/png",
+					{ fallbackColor: t => t },
+					{ maxWidthCells: 4, maxHeightCells: 4, budget: tui.imageBudget, imageKey: "overlay-base-text" },
+					{ widthPx: 40, heightPx: 40 },
+				),
+				{ row: 0, col: 10, width: 4 },
+			);
+			await settle(term);
+
+			const output = writes.join("");
+			const placementStart = output.indexOf("\x1b_Ga=p");
+			const rowClear = output.lastIndexOf("\x1b[2K", placementStart);
+			const left = output.indexOf("left-base", rowClear);
+			const right = output.indexOf("right-base", placementStart);
+			expect(placementStart).toBeGreaterThan(-1);
+			expect(rowClear).toBeGreaterThan(-1);
+			expect(left).toBeGreaterThan(rowClear);
+			expect(right).toBeGreaterThan(placementStart);
+			expect(output).not.toContain("pi:img:");
+		} finally {
+			tui.stop();
+			setKittyGraphics(originalGraphics);
+		}
+	});
+
+	it("preserves direct Kitty rows inside a scrolling fullscreen overlay", async () => {
+		const originalGraphics = { ...getKittyGraphics() };
+		const term = new VirtualTerminal(40, 12);
+		const writes: string[] = [];
+		const realWrite = term.write.bind(term);
+		vi.spyOn(term, "write").mockImplementation((data: string) => {
+			writes.push(data);
+			realWrite(data);
+		});
+
+		setKittyGraphics({ unicodePlaceholders: false });
+		const tui = new TUI(term);
+		try {
+			tui.start();
+			await settle(term);
+			writes.length = 0;
+			const image = new Image(
+				BASE64_ONE_PIXEL_PNG,
+				"image/png",
+				{ fallbackColor: t => t },
+				{ maxWidthCells: 4, maxHeightCells: 4, budget: tui.imageBudget, imageKey: "fullscreen-direct" },
+				{ widthPx: 40, heightPx: 40 },
+			);
+			tui.imageBudget.beginPass();
+			const imageRows = image.render(40);
+			tui.imageBudget.endPass();
+			tui.showOverlay(new ScrollView([...imageRows, "viewer-tail"], { height: 6, scrollbar: "always" }), {
+				fullscreen: true,
+				width: "100%",
+				maxHeight: "100%",
+				margin: 0,
+			});
+			await settle(term);
+
+			const output = writes.join("");
+			const placementStart = output.indexOf("\x1b_Ga=p");
+			const placementEnd = output.indexOf("\x1b\\", placementStart) + 2;
+			expect(output).toContain("\x1b[?1049h");
+			expect(placementStart).toBeGreaterThan(-1);
+			expect(placementEnd).toBeGreaterThan(placementStart);
+			expect(output).not.toContain("pi:img:");
+			const afterPlacement = output.slice(placementEnd);
+			const firstUnprotectedNewline = [...afterPlacement.matchAll(/\r\n/g)][imageRows.length - 1]?.index ?? -1;
+			expect(firstUnprotectedNewline).toBeGreaterThan(-1);
+			expect(afterPlacement.slice(0, firstUnprotectedNewline)).not.toContain("\x1b[K");
+			expect(afterPlacement.slice(0, firstUnprotectedNewline)).not.toContain("\x1b[2K");
+		} finally {
+			tui.stop();
+			setKittyGraphics(originalGraphics);
+		}
+	});
+
+	it("preserves Box wrappers on protected direct Kitty rows", async () => {
+		const originalGraphics = { ...getKittyGraphics() };
+		const term = new VirtualTerminal(40, 12);
+		const writes: string[] = [];
+		const realWrite = term.write.bind(term);
+		vi.spyOn(term, "write").mockImplementation((data: string) => {
+			writes.push(data);
+			realWrite(data);
+		});
+		setKittyGraphics({ unicodePlaceholders: false });
+		const tui = new TUI(term);
+		const box = new Box(2, 0, text => `\x1b[41m${text}\x1b[0m`, {
+			chars: {
+				topLeft: "+",
+				topRight: "+",
+				bottomLeft: "+",
+				bottomRight: "+",
+				horizontal: "-",
+				vertical: "|",
+			},
+		});
+		box.setIgnoreTight(true);
+		box.addChild(
+			new Image(
+				BASE64_ONE_PIXEL_PNG,
+				"image/png",
+				{ fallbackColor: t => t },
+				{ maxWidthCells: 3, maxHeightCells: 3 },
+				{ widthPx: 30, heightPx: 30 },
+			),
+		);
+		tui.addChild(box);
+
+		try {
+			tui.start();
+			await settle(term);
+
+			const output = writes.join("");
+			const placementStart = output.indexOf("\x1b_Ga=T");
+			const placementEnd = output.indexOf("\x1b\\", placementStart) + 2;
+			const bottomBorderStart = output.indexOf("+", placementEnd);
+			expect(placementStart).toBeGreaterThan(-1);
+			expect(placementEnd).toBeGreaterThan(placementStart);
+			expect(bottomBorderStart).toBeGreaterThan(placementEnd);
+			expect(output.slice(0, placementStart).endsWith("\x1b[4G")).toBe(true);
+			const lastErase = output.lastIndexOf("\x1b[2K", placementStart);
+			const backgroundStart = output.lastIndexOf("\x1b[41m", placementStart);
+			expect(lastErase).toBeGreaterThan(-1);
+			expect(backgroundStart).toBeGreaterThan(lastErase);
+			const protectedBlock = output.slice(placementEnd, bottomBorderStart);
+			expect(protectedBlock.match(/\x1b\[3C/g) ?? []).toHaveLength(3);
+			expect(protectedBlock.match(/\|/g) ?? []).toHaveLength(5);
+			expect(protectedBlock).not.toContain("\x1b[K");
+			expect(protectedBlock).not.toContain("\x1b[2K");
+			expect(output).not.toContain("pi:img:");
 		} finally {
 			tui.stop();
 			setKittyGraphics(originalGraphics);
@@ -709,6 +1118,71 @@ describe("TUI inline-image budget", () => {
 			const output = writes.join("");
 			expect(output).toContain("\x1b_Ga=t");
 			expect(output).toContain(BASE64_ONE_PIXEL_PNG);
+		} finally {
+			tui.stop();
+			terminal.id = originalId;
+			setKittyGraphics(originalGraphics);
+		}
+	});
+
+	it("keeps a deferred fullscreen exit until a Ghostty image repaint can emit it", () => {
+		const originalId = terminal.id;
+		const originalGraphics = { ...getKittyGraphics() };
+		const term = new VirtualTerminal(40, 12);
+		const writes: string[] = [];
+		const realWrite = term.write.bind(term);
+		vi.spyOn(term, "write").mockImplementation((data: string) => {
+			writes.push(data);
+			realWrite(data);
+		});
+		let now = 0;
+		const scheduled: Array<{ delayMs: number; callback: () => void; canceled: boolean }> = [];
+		const renderScheduler = {
+			now: () => now,
+			scheduleImmediate: (callback: () => void) => callback(),
+			scheduleRender: (callback: () => void, delayMs: number) => {
+				const entry = { delayMs, callback, canceled: false };
+				scheduled.push(entry);
+				return {
+					cancel: () => {
+						entry.canceled = true;
+					},
+				};
+			},
+		};
+
+		terminal.id = "ghostty";
+		terminal.imageProtocol = ImageProtocol.Kitty;
+		setKittyGraphics({ unicodePlaceholders: true });
+		const tui = new TUI(term, undefined, { renderScheduler });
+		tui.addChild(new Text("old session", 0, 0));
+
+		try {
+			tui.start();
+			const overlay = tui.showOverlay(new Text("session selector", 0, 0), {
+				width: "100%",
+				maxHeight: "100%",
+				fullscreen: true,
+			});
+			tui.addChild(makeImage(tui.imageBudget, "resumed-image"));
+			tui.requestRender(true, { clearScrollback: true });
+			overlay.hide();
+
+			const queued = scheduled.find(entry => !entry.canceled);
+			expect(queued).toBeDefined();
+			now = 40;
+			queued!.canceled = true;
+			queued!.callback();
+
+			const delayed = scheduled.find(entry => !entry.canceled);
+			expect(delayed).toBeDefined();
+			now = 100;
+			delayed!.canceled = true;
+			delayed!.callback();
+
+			const exitPaint = writes.find(write => write.includes("\x1b[?1049l"));
+			expect(exitPaint).toContain("\x1b[3J");
+			expect(exitPaint).toContain(BASE64_ONE_PIXEL_PNG);
 		} finally {
 			tui.stop();
 			terminal.id = originalId;

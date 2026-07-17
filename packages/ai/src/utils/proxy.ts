@@ -61,7 +61,7 @@ export function shouldBypassProxy(urlObj: URL): boolean {
 		.map(r => r.trim())
 		.filter(Boolean);
 	const targetHost = urlObj.hostname.toLowerCase();
-	const targetPort = urlObj.port || (urlObj.protocol === "https:" ? "443" : "80");
+	const targetPort = urlObj.port || (urlObj.protocol === "https:" || urlObj.protocol === "wss:" ? "443" : "80");
 
 	for (const rule of rules) {
 		if (rule === "*") {

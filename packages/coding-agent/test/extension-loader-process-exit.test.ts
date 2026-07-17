@@ -2,7 +2,7 @@
  * Regression test for #3680: third-party extension / hook modules that call
  * `process.exit()` at the top level must not terminate the host OMP process.
  *
- * The harness intercepts the load via `withExitGuard`; this test pins that the
+ * The harness intercepts the load via `withHostGuard`; this test pins that the
  * intercepted error surfaces as a per-module load failure (so OMP keeps going)
  * instead of crashing the test runner.
  */
@@ -11,7 +11,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { loadHooks } from "@oh-my-pi/pi-coding-agent/extensibility/hooks/loader";
-import { ExtensionExitError, withExitGuard } from "@oh-my-pi/pi-coding-agent/extensibility/utils";
+import { ExtensionExitError, withHostGuard } from "@oh-my-pi/pi-coding-agent/extensibility/utils";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 describe("extension/hook loader process.exit guard (#3680)", () => {
@@ -111,7 +111,7 @@ describe("extension/hook loader process.exit guard (#3680)", () => {
 		const originalExit = process.exit;
 
 		await expect(
-			withExitGuard(async () => {
+			withHostGuard(async () => {
 				throw new Error("boom");
 			}),
 		).rejects.toThrow("boom");
@@ -122,7 +122,7 @@ describe("extension/hook loader process.exit guard (#3680)", () => {
 	it("raises ExtensionExitError when the guarded callback calls process.exit", async () => {
 		const originalExit = process.exit;
 
-		await expect(withExitGuard(async () => process.exit(7))).rejects.toBeInstanceOf(ExtensionExitError);
+		await expect(withHostGuard(async () => process.exit(7))).rejects.toBeInstanceOf(ExtensionExitError);
 
 		expect(process.exit).toBe(originalExit);
 	});
@@ -130,11 +130,11 @@ describe("extension/hook loader process.exit guard (#3680)", () => {
 	it("only the outermost guard restores process.exit when guards nest", async () => {
 		const originalExit = process.exit;
 
-		await withExitGuard(async () => {
+		await withHostGuard(async () => {
 			const outer = process.exit;
 			expect(outer).not.toBe(originalExit);
 
-			await withExitGuard(async () => {
+			await withHostGuard(async () => {
 				expect(process.exit).toBe(outer);
 			});
 

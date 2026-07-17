@@ -23,6 +23,7 @@
 0ttik
 a-glapinski
 ak4153
+any-victor
 apoc
 arg3t
 asafmah
@@ -36,6 +37,7 @@ cexll
 chan1103
 chuaaron
 ckumar1
+cyjaysong
 daandden
 daaximus
 danzaio
@@ -43,6 +45,7 @@ darkphilosophy
 deprecatedluke
 djdembeck
 dmarsh-gusto
+dylanbohlender
 elikoga
 enieuwy
 fettpl
@@ -57,10 +60,14 @@ haosenwang1018
 heyitsgilbert
 hezhiyang2000
 hpost
+iacore
 igasmi
 infernix
 inprealpha
+insodimension
 itertea
+itzrnvr
+jaaneek
 jagravnaik
 jasonw22
 jchristman
@@ -74,6 +81,7 @@ kenmege
 korri123
 kukkerem
 lance0
+larkinwc
 ldx
 lederniermagicien
 loftiskg
@@ -81,13 +89,16 @@ lyc-aon
 m3ridian-zero
 makomakogo
 masonc15
+mathews-tom
 mattwilkinsonn
 maximhar
 maxvisionai
 metaphorics
 mikeei
 mokto
+moutazhaq
 mouyase
+mq1n
 muness
 nnk97
 nszceta
@@ -98,6 +109,7 @@ parsifa1
 pgupta-git
 phanthh
 pidevxplay
+pppobear
 qfrtt
 ravshansbox
 rburketaylor
@@ -115,10 +127,13 @@ slact
 smileynet
 sundbp
 superhedge22
+tbui17
 tc97222
 tdiant
+tjboudreaux
 tsagi2045
 turbomolli
+unravl
 usr-bin-roygbiv
 vmcall
 voidchecksum
@@ -126,6 +141,7 @@ voiys
 watzon
 wodenjay
 wolfiesch
+xaviergmail
 zakhar-kogan
 zamorakpds
 zekdevs

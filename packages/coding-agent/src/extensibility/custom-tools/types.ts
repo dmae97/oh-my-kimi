@@ -9,6 +9,7 @@ import type {
 	AgentToolUpdateCallback,
 	ToolApproval,
 	ToolApprovalDecision,
+	ToolLoadMode,
 	ToolTier,
 } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
@@ -23,6 +24,7 @@ import type { Settings } from "../../config/settings";
 import type { ExecOptions, ExecResult } from "../../exec/exec";
 import type { HookUIContext } from "../../extensibility/hooks/types";
 import type * as PiCodingAgent from "../../index";
+import type { LocalProtocolOptions } from "../../internal-urls/local-protocol";
 import type { Theme } from "../../modes/theme/theme";
 import type { ReadonlySessionManager } from "../../session/session-manager";
 import type { TodoItem } from "../../tools/todo";
@@ -96,6 +98,8 @@ export interface CustomToolContext {
 	settings?: Settings;
 	/** Fetch implementation for outbound HTTP; defaults to global fetch when omitted. */
 	fetch?: FetchImpl;
+	/** Calling session's `local://` root mapping for tools that bridge out of the OMP process. */
+	localProtocolOptions?: LocalProtocolOptions;
 	/** Whether to auto-approve all destructive tool operations (--auto-approve CLI flag) */
 	autoApprove?: boolean;
 }
@@ -205,6 +209,8 @@ export interface CustomTool<TParams extends TSchema = TSchema, TDetails = any> {
 	parameters: TParams;
 	/** If true, tool is excluded unless explicitly listed in --tools or agent's tools field */
 	hidden?: boolean;
+	/** How this tool is presented when enabled. See {@link ToolLoadMode}. Custom tools default to `"discoverable"`; set `"essential"` to stay top-level. */
+	loadMode?: ToolLoadMode;
 	/** If true, tool may stage deferred changes that require explicit resolve/discard. */
 	deferrable?: boolean;
 	/** MCP server name for discovery/search metadata when this tool fronts an MCP server. */

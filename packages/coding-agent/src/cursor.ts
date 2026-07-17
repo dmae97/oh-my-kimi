@@ -18,9 +18,20 @@ import { resolveToCwd } from "./tools/path-utils";
 
 interface CursorExecBridgeOptions {
 	cwd: string;
+	getCwd?: () => string;
 	tools: Map<string, AgentTool>;
+	getTool?: (name: string) => AgentTool | undefined;
 	getToolContext?: () => AgentToolContext | undefined;
 	emitEvent?: (event: AgentEvent) => void;
+	/**
+	 * Whether the Cursor native `delete` frame may remove files. Unlike every
+	 * other exec handler, `executeDelete` mutates the filesystem directly instead
+	 * of consulting {@link tools}, so a background read-only advisor could delete
+	 * workspace files it was never granted a mutating tool for (issue #5680
+	 * review). Defaults to allowed to preserve the primary agent's behavior;
+	 * callers with a restricted tool set (advisors) opt out.
+	 */
+	allowNativeDelete?: boolean;
 }
 
 function createToolResultMessage(
@@ -53,7 +64,7 @@ async function executeTool(
 	toolCallId: string,
 	args: Record<string, unknown>,
 ): Promise<ToolResultMessage> {
-	const tool = options.tools.get(toolName);
+	const tool = options.tools.get(toolName) ?? options.getTool?.(toolName);
 	if (!tool) {
 		const result = buildToolErrorResult(`Tool "${toolName}" not available`);
 		return createToolResultMessage(toolCallId, toolName, result, true);
@@ -93,6 +104,7 @@ async function executeTool(
 		result = buildToolErrorResult(message);
 		isError = true;
 	}
+	isError ||= result.isError === true;
 
 	const sanitizedFinalResult: AgentToolResult<unknown> = {
 		content: result.content.map(c => (c.type === "text" ? { ...c, text: sanitizeText(c.text) } : c)),
@@ -105,9 +117,15 @@ async function executeTool(
 
 async function executeDelete(options: CursorExecBridgeOptions, pathArg: string, toolCallId: string) {
 	const toolName = "delete";
+
+	if (options.allowNativeDelete === false) {
+		const result = buildToolErrorResult(`Tool "${toolName}" not available`);
+		return createToolResultMessage(toolCallId, toolName, result, true);
+	}
+
 	options.emitEvent?.({ type: "tool_execution_start", toolCallId, toolName, args: { path: pathArg } });
 
-	const absolutePath = resolveToCwd(pathArg, options.cwd);
+	const absolutePath = resolveToCwd(pathArg, options.getCwd?.() ?? options.cwd);
 	let isError = false;
 	let result: AgentToolResult<unknown>;
 
@@ -283,6 +301,7 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 			result = buildToolErrorResult(message);
 			isError = true;
 		}
+		isError ||= result.isError === true;
 
 		// onUpdate may not fire for every chunk — flush any remaining output
 		// from the final result that wasn't already streamed.
@@ -325,7 +344,7 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 	async mcp(call: CursorMcpCall) {
 		const toolName = call.toolName || call.name;
 		const toolCallId = decodeToolCallId(call.toolCallId);
-		const tool = this.options.tools.get(toolName);
+		const tool = this.options.tools.get(toolName) ?? this.options.getTool?.(toolName);
 		if (!tool) {
 			const availableTools = Array.from(this.options.tools.keys()).filter(name => name.startsWith("mcp__"));
 			const message = formatMcpToolErrorMessage(toolName, availableTools);

@@ -155,13 +155,21 @@ def render_frame(
         badge = f"'{ANSWER_BPE}' \u00b7 p={p_ans:.2f} \u00b7 CRYSTALLIZED"
         bw = text_w(F_BADGE, badge)
         bx = W - bw - 76
-        d.rounded_rectangle((bx, 22, bx + bw + 36, 56), radius=17, fill=(38, 30, 10), outline=AMBER, width=2)
+        d.rounded_rectangle(
+            (bx, 22, bx + bw + 36, 56),
+            radius=17,
+            fill=(38, 30, 10),
+            outline=AMBER,
+            width=2,
+        )
         d.text((bx + 18, 29), badge, font=F_BADGE, fill=AMBER)
 
     # ---------------------------------------------------------- context strip
     sx, sy = (W - strip.width) // 2, 96
     img.paste(strip, (sx, sy))
-    d.rectangle((sx, sy, sx + strip.width - 1, sy + strip.height - 1), outline=PANEL_EDGE)
+    d.rectangle(
+        (sx, sy, sx + strip.width - 1, sy + strip.height - 1), outline=PANEL_EDGE
+    )
     col = AMBER if locked else CYAN
     d.rectangle(
         (sx + strip_cell, sy, sx + strip_cell + strip.height, sy + strip.height - 1),
@@ -169,7 +177,12 @@ def render_frame(
         width=3,
     )
     cap = "carrier row 5 \u00b7 the model never sees glyphs \u2014 only these pixels"
-    d.text(((W - text_w(F_TINY, cap)) / 2, sy + strip.height + 6), cap, font=F_TINY, fill=DIM)
+    d.text(
+        ((W - text_w(F_TINY, cap)) / 2, sy + strip.height + 6),
+        cap,
+        font=F_TINY,
+        fill=DIM,
+    )
 
     # ---------------------------------------------------------- main row
     top_y = 232
@@ -178,7 +191,12 @@ def render_frame(
     img.paste(patch.resize((ps, ps), Image.NEAREST), (px, py))
     d.rectangle((px - 1, py - 1, px + ps, py + ps), outline=col, width=2)
     d.text((px, py + ps + 10), f"visual token #{TOKEN_IDX}", font=F_LABEL_B, fill=INK)
-    d.text((px, py + ps + 28), "28\u00d728 px \u00b7 reads: \u2018\"sp\u2019 / \u2018and\u2019", font=F_TINY, fill=MUTED)
+    d.text(
+        (px, py + ps + 28),
+        '28\u00d728 px \u00b7 reads: \u2018"sp\u2019 / \u2018and\u2019',
+        font=F_TINY,
+        fill=MUTED,
+    )
 
     # layer counter ----------------------------------------------------
     cx = 392
@@ -187,17 +205,34 @@ def render_frame(
     d.text((cx, top_y + 16), num, font=F_LAYER, fill=AMBER if locked else INK)
     d.text((cx + text_w(F_LAYER, num) + 8, top_y + 58), "/28", font=F_STAGE, fill=DIM)
     stage = stage_for(layer)
-    d.text((cx, top_y + 98), stage.upper(), font=F_STAGE, fill=GREEN if final else (AMBER if locked else MUTED))
+    d.text(
+        (cx, top_y + 98),
+        stage.upper(),
+        font=F_STAGE,
+        fill=GREEN if final else (AMBER if locked else MUTED),
+    )
     ry = top_y + 134  # mini rail of 29 ticks
     for i in range(29):
         tx = cx + i * 5
-        d.rectangle((tx, ry, tx + 3, ry + 10), fill=AMBER if i <= layer else (40, 48, 58))
-    d.text((cx, ry + 18), f"p('{ANSWER_BPE}') = {p_ans:.4f}", font=F_NUM, fill=AMBER if p_ans > 0.01 else DIM)
+        d.rectangle(
+            (tx, ry, tx + 3, ry + 10), fill=AMBER if i <= layer else (40, 48, 58)
+        )
+    d.text(
+        (cx, ry + 18),
+        f"p('{ANSWER_BPE}') = {p_ans:.4f}",
+        font=F_NUM,
+        fill=AMBER if p_ans > 0.01 else DIM,
+    )
 
     # top-5 panel ------------------------------------------------------
     tx0, ty0, tx1, ty1 = 580, top_y - 12, 1160, top_y + 318
     d.rounded_rectangle((tx0, ty0, tx1, ty1), radius=8, fill=PANEL, outline=PANEL_EDGE)
-    d.text((tx0 + 18, ty0 + 12), "TOP-5 DECODED VOCAB TOKENS \u00b7 what this patch \u201cmeans\u201d so far", font=F_LABEL, fill=MUTED)
+    d.text(
+        (tx0 + 18, ty0 + 12),
+        "TOP-5 DECODED VOCAB TOKENS \u00b7 what this patch \u201cmeans\u201d so far",
+        font=F_LABEL,
+        fill=MUTED,
+    )
     bar_x = tx0 + 230
     bar_max = tx1 - bar_x - 86
     scale = 0.45  # fixed probability scale across all frames
@@ -207,12 +242,24 @@ def render_frame(
         tok_s = sanitize(t["str"])
         if len(tok_s) > 16:
             tok_s = tok_s[:15] + "\u2026"
-        d.text((tx0 + 18, yy), f"'{tok_s}'", font=F_TOK_B if is_ans else F_TOK, fill=AMBER if is_ans else INK)
+        d.text(
+            (tx0 + 18, yy),
+            f"'{tok_s}'",
+            font=F_TOK_B if is_ans else F_TOK,
+            fill=AMBER if is_ans else INK,
+        )
         bw = max(2, int(min(t["p"] / scale, 1.0) * bar_max))
-        d.rectangle((bar_x, yy + 4, bar_x + bw, yy + 18), fill=AMBER if is_ans else (58, 70, 84))
+        d.rectangle(
+            (bar_x, yy + 4, bar_x + bw, yy + 18), fill=AMBER if is_ans else (58, 70, 84)
+        )
         if is_ans and heat > 0.3:
             d.rectangle((bar_x, yy + 4, bar_x + bw, yy + 18), outline=INK)
-        d.text((bar_x + bw + 10, yy + 3), f"{t['p']:.3f}", font=F_NUM, fill=AMBER if is_ans else MUTED)
+        d.text(
+            (bar_x + bw + 10, yy + 3),
+            f"{t['p']:.3f}",
+            font=F_NUM,
+            fill=AMBER if is_ans else MUTED,
+        )
         d.text((tx0 + 18, yy + 24), f"id {t['id']}", font=F_TINY, fill=DIM)
 
     # ---------------------------------------------------------- bottom row
@@ -220,7 +267,12 @@ def render_frame(
     # confidence meter for 'acular'
     mx0, mx1 = 40, 730
     d.rounded_rectangle((mx0, by0, mx1, by1), radius=8, fill=PANEL, outline=PANEL_EDGE)
-    d.text((mx0 + 16, by0 + 8), f"CONFIDENCE \u00b7 p('{ANSWER_BPE}') across layers", font=F_LABEL, fill=MUTED)
+    d.text(
+        (mx0 + 16, by0 + 8),
+        f"CONFIDENCE \u00b7 p('{ANSWER_BPE}') across layers",
+        font=F_LABEL,
+        fill=MUTED,
+    )
     leg_x = mx1 - 130
     d.rectangle((leg_x, by0 + 12, leg_x + 14, by0 + 15), fill=AMBER)
     d.text((leg_x + 20, by0 + 6), "answer", font=F_TINY, fill=AMBER)
@@ -241,8 +293,12 @@ def render_frame(
     def ys(p: float) -> float:
         return ch_y1 - min(p, p_max) / p_max * (ch_y1 - ch_y0)
 
-    pts = [(xs(l), ys(target[l]["answer_token_p"][ANSWER_SLOT])) for l in range(layer + 1)]
-    cpts = [(xs(l), ys(control[l]["answer_token_p"][ANSWER_SLOT])) for l in range(layer + 1)]
+    pts = [
+        (xs(l), ys(target[l]["answer_token_p"][ANSWER_SLOT])) for l in range(layer + 1)
+    ]
+    cpts = [
+        (xs(l), ys(control[l]["answer_token_p"][ANSWER_SLOT])) for l in range(layer + 1)
+    ]
     if len(cpts) > 1:
         d.line(cpts, fill=(60, 70, 80), width=2)
     if len(pts) > 1:
@@ -252,21 +308,36 @@ def render_frame(
     hx, hy = pts[-1]
     d.ellipse((hx - 5, hy - 5, hx + 5, hy + 5), fill=AMBER if p_ans > 0.01 else MUTED)
     head = f"{p_ans:.2f}" if p_ans >= 0.005 else f"{p_ans:.4f}"
-    d.text((min(hx + 8, ch_x1 - 8), hy - 18), head, font=F_NUM, fill=AMBER if p_ans > 0.01 else MUTED)
+    d.text(
+        (min(hx + 8, ch_x1 - 8), hy - 18),
+        head,
+        font=F_NUM,
+        fill=AMBER if p_ans > 0.01 else MUTED,
+    )
     for ml in (24, 28):
         if layer >= ml:
             mlx = xs(ml)
-            d.line((mlx, ch_y1, mlx, ys(target[ml]["answer_token_p"][ANSWER_SLOT])), fill=(90, 72, 30))
+            d.line(
+                (mlx, ch_y1, mlx, ys(target[ml]["answer_token_p"][ANSWER_SLOT])),
+                fill=(90, 72, 30),
+            )
             d.text((mlx - 10, ch_y1 + 6), f"L{ml}", font=F_TINY, fill=AMBER)
     d.text((ch_x0, ch_y1 + 6), "L0", font=F_TINY, fill=DIM)
 
     # control panel ----------------------------------------------------
     kx0, kx1 = 760, 1160
     d.rounded_rectangle((kx0, by0, kx1, by1), radius=8, fill=PANEL, outline=PANEL_EDGE)
-    d.text((kx0 + 16, by0 + 8), "CONTROL \u00b7 token #" + str(ce["token_index"]), font=F_LABEL, fill=MUTED)
+    d.text(
+        (kx0 + 16, by0 + 8),
+        "CONTROL \u00b7 token #" + str(ce["token_index"]),
+        font=F_LABEL,
+        fill=MUTED,
+    )
     cps = 60
     img.paste(ctrl_patch.resize((cps, cps), Image.NEAREST), (kx0 + 16, by0 + 30))
-    d.rectangle((kx0 + 15, by0 + 29, kx0 + 16 + cps, by0 + 30 + cps), outline=PANEL_EDGE)
+    d.rectangle(
+        (kx0 + 15, by0 + 29, kx0 + 16 + cps, by0 + 30 + cps), outline=PANEL_EDGE
+    )
     ct = ce["top"][0]
     ct_s = sanitize(ct["str"])
     if len(ct_s) > 12:
@@ -275,9 +346,19 @@ def render_frame(
     d.text((lx, by0 + 30), "top-1: ", font=F_NUM, fill=INK)
     tx = lx + text_w(F_NUM, "top-1: ")
     d.text((tx, by0 + 30), f"'{ct_s}'", font=F_TOK_S, fill=INK)
-    d.text((tx + text_w(F_TOK_S, f"'{ct_s}'") + 10, by0 + 30), f"{ct['p']:.3f}", font=F_NUM, fill=INK)
+    d.text(
+        (tx + text_w(F_TOK_S, f"'{ct_s}'") + 10, by0 + 30),
+        f"{ct['p']:.3f}",
+        font=F_NUM,
+        fill=INK,
+    )
     d.text((lx, by0 + 52), f"p('{ANSWER_BPE}') = {p_ctrl:.5f}", font=F_NUM, fill=MUTED)
-    d.text((lx, by0 + 74), "still noise \u2713" if p_ctrl < 0.01 else "?!", font=F_LABEL_B, fill=GREEN)
+    d.text(
+        (lx, by0 + 74),
+        "still noise \u2713" if p_ctrl < 0.01 else "?!",
+        font=F_LABEL_B,
+        fill=GREEN,
+    )
     d.text((kx0 + 224, by0 + 8), "never converges to the answer", font=F_TINY, fill=DIM)
 
     # ---------------------------------------------------------- glow
@@ -285,11 +366,23 @@ def render_frame(
         glow = Image.new("RGB", (W, H), (0, 0, 0))
         gd = ImageDraw.Draw(glow)
         a = int(70 + 110 * heat)
-        gd.rectangle((px - 6, py - 6, px + ps + 5, py + ps + 5), outline=(a, int(a * 0.77), int(a * 0.27)), width=10)
+        gd.rectangle(
+            (px - 6, py - 6, px + ps + 5, py + ps + 5),
+            outline=(a, int(a * 0.77), int(a * 0.27)),
+            width=10,
+        )
         if final:
-            gd.rectangle((px - 14, py - 14, px + ps + 13, py + ps + 13), outline=(a, int(a * 0.77), int(a * 0.27)), width=8)
+            gd.rectangle(
+                (px - 14, py - 14, px + ps + 13, py + ps + 13),
+                outline=(a, int(a * 0.77), int(a * 0.27)),
+                width=8,
+            )
         glow = glow.filter(ImageFilter.GaussianBlur(12 if final else 8))
-        img = Image.composite(Image.new("RGB", (W, H), AMBER), img, glow.convert("L").point(lambda v: min(v, 140)))
+        img = Image.composite(
+            Image.new("RGB", (W, H), AMBER),
+            img,
+            glow.convert("L").point(lambda v: min(v, 140)),
+        )
     return img
 
 
@@ -309,8 +402,12 @@ def main() -> None:
 
     frames, durations = [], []
     for layer in range(29):
-        fr = render_frame(layer, data, target, control, patch, ctrl_patch, strip, strip_cell)
-        frames.append(fr.quantize(colors=256, method=Image.MEDIANCUT, dither=Image.Dither.NONE))
+        fr = render_frame(
+            layer, data, target, control, patch, ctrl_patch, strip, strip_cell
+        )
+        frames.append(
+            fr.quantize(colors=256, method=Image.MEDIANCUT, dither=Image.Dither.NONE)
+        )
         if layer < 23:
             durations.append(220)
         elif layer < 28:
@@ -329,7 +426,9 @@ def main() -> None:
         optimize=False,
     )
     final_png = OUT_DIR / "crystal_final.png"
-    render_frame(28, data, target, control, patch, ctrl_patch, strip, strip_cell).save(final_png)
+    render_frame(28, data, target, control, patch, ctrl_patch, strip, strip_cell).save(
+        final_png
+    )
     print(f"wrote {gif} ({gif.stat().st_size / 1024:.0f} KB, {len(frames)} frames)")
     print(f"wrote {final_png}")
 

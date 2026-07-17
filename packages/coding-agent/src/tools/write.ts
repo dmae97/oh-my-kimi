@@ -10,7 +10,7 @@ import type {
 	AgentToolUpdateCallback,
 	ToolTier,
 } from "@oh-my-pi/pi-agent-core";
-import type { Component } from "@oh-my-pi/pi-tui";
+import { type Component, Text } from "@oh-my-pi/pi-tui";
 import { isEnoent, isRecord, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 
@@ -19,7 +19,9 @@ import { normalizeToLF } from "../edit/normalize";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { InternalUrlRouter } from "../internal-urls";
 import { parseInternalUrl } from "../internal-urls/parse";
+import { couldBecomeXdUrl, parseXdUrl } from "../internal-urls/xd-protocol";
 import { createLspWritethrough, type FileDiagnosticsResult, type WritethroughCallback, writethroughNoop } from "../lsp";
+import { DeferredDiagnostics } from "../lsp/deferred-diagnostics";
 import { getDiagnosticsLedger } from "../lsp/diagnostics-ledger";
 import { getLanguageFromPath, highlightCode, type Theme } from "../modes/theme/theme";
 import writeDescription from "../prompts/tools/write.md" with { type: "text" };
@@ -34,7 +36,7 @@ import {
 	writeArchive,
 } from "../utils/zip";
 import { routeWriteThroughBridge } from "./acp-bridge";
-import { truncateForPrompt } from "./approval";
+import { resolveToolTier, truncateForPrompt } from "./approval";
 import { assertEditableFile } from "./auto-generated-guard";
 import {
 	type ConflictEntry,
@@ -65,6 +67,8 @@ import {
 	TRUNCATE_LENGTHS,
 	truncateToWidth,
 } from "./render-utils";
+import { dispatchReportIssueDevice, REPORT_ISSUE_DEVICE_NAME, renderReportIssueDeviceCall } from "./report-tool-issue";
+import { dispatchResolutionDevice, isResolutionDeviceName, renderResolutionDeviceCall } from "./resolve";
 import {
 	deleteRowByKey,
 	deleteRowByRowId,
@@ -77,9 +81,103 @@ import {
 } from "./sqlite-reader";
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
+import { renderXdevCall, renderXdevResult, type XdevDispatch } from "./xdev";
 
 const LOOSE_HASHLINE_HEADER_RE = /^\s*\[[^#\r\n]+#[^ \t\r\n]*\]\s*$/;
 const EXECUTABLE_NOTICE = "[Notice: Made executable via chmod +x]";
+
+const BULK_DIRECTIVE_RE = /^#?(\d+)\s*[:=]\s*(@ours|@theirs|@base|@both)$/;
+/**
+ * The head of a per-id directive line — `<id>:` / `<id>=` (optionally `#`-prefixed),
+ * regardless of whether its value is a valid `@side` token. Used only to sharpen the
+ * error message when a directive block is malformed (e.g. `15: some literal text`).
+ */
+const BULK_DIRECTIVE_HEAD_RE = /^#?\d+\s*[:=]/;
+
+function truncateDirectiveLine(line: string): string {
+	return line.length > 60 ? `${line.slice(0, 57)}…` : line;
+}
+
+/**
+ * Parse `conflict://*` per-id directive content: every non-empty line must be
+ * `<id>: @side` (also accepted: `#<id> = @side`), where `@side` is one of
+ * `@ours` / `@theirs` / `@base` / `@both`.
+ *
+ * Returns `null` only when NO line is directive-shaped (→ uniform bulk mode).
+ * Throws on duplicate ids, and — critically — on a *partial* directive block:
+ * content that mixes valid `<id>: @side` lines with lines that aren't. Without
+ * that guard a per-id write carrying any non-token value (a literal or
+ * multi-line replacement, e.g. `15: <multi-line content>`) fell through to
+ * uniform bulk mode, which pasted the raw directive text verbatim into every
+ * block and still reported success. Per-id bulk is token-only; literal or
+ * multi-line replacements must go through individual `conflict://<N>` writes.
+ */
+function parseBulkDirectives(content: string): Map<number, string> | null {
+	const map = new Map<number, string>();
+	const stray: string[] = [];
+	let sawDirective = false;
+	for (const raw of content.split("\n")) {
+		const line = raw.trim();
+		if (line.length === 0) continue;
+		const match = line.match(BULK_DIRECTIVE_RE);
+		if (!match) {
+			stray.push(line);
+			continue;
+		}
+		sawDirective = true;
+		const id = Number.parseInt(match[1], 10);
+		if (map.has(id)) {
+			throw new ToolError(`Bulk directive lists conflict #${id} twice — each id may appear once.`);
+		}
+		map.set(id, match[2]);
+	}
+	// No directive lines at all → not a per-id block; caller uses uniform mode.
+	if (!sawDirective) return null;
+	if (stray.length > 0) {
+		const sample = stray[0]!;
+		const tokenHint = BULK_DIRECTIVE_HEAD_RE.test(sample)
+			? `Per-id bulk only accepts the tokens @ours/@theirs/@base/@both — one side per id, single line. `
+			: "";
+		throw new ToolError(
+			`Malformed \`conflict://*\` per-id block: ${stray.length} line(s) are not \`<id>: @side\` directives (first: \`${truncateDirectiveLine(sample)}\`). ` +
+				tokenHint +
+				`Literal or multi-line replacement content isn't supported in a per-id block — resolve those blocks with individual \`write({ path: "conflict://<N>", content })\` calls (you can issue several at once). ` +
+				`For a pure pick-a-side pass, make every non-empty line \`<id>: @ours\` (or @theirs/@base/@both).`,
+		);
+	}
+	return map;
+}
+
+/**
+ * Resolve per-id directives, preferring the pre-strip `raw` content and falling
+ * back to the hashline-stripped `stripped` content.
+ *
+ * Raw is preferred because the `<id>:` directive heads look exactly like
+ * hashline `LINE:` prefixes and would be eaten by stripping. When the two
+ * contents are identical (hashline mode off) a single parse decides everything,
+ * so a malformed-block error propagates straight through — the previous
+ * `?? parseBulkDirectives(...)` chain would have swallowed it and silently
+ * degraded to uniform bulk mode, pasting the raw directive text into every
+ * block. When they differ, a malformed raw block still defers to a *clean*
+ * stripped block, but otherwise surfaces its error rather than degrading.
+ */
+function resolveBulkDirectives(raw: string, stripped: string): Map<number, string> | null {
+	if (raw === stripped) return parseBulkDirectives(raw);
+	let rawResult: Map<number, string> | null;
+	try {
+		rawResult = parseBulkDirectives(raw);
+	} catch (rawError) {
+		let fallback: Map<number, string> | null = null;
+		try {
+			fallback = parseBulkDirectives(stripped);
+		} catch {
+			fallback = null;
+		}
+		if (fallback) return fallback;
+		throw rawError;
+	}
+	return rawResult ?? parseBulkDirectives(stripped);
+}
 
 const writeSchema = type({
 	path: type("string").describe("file path"),
@@ -97,6 +195,8 @@ export interface WriteToolDetails {
 	/** Absolute filesystem path the write resolved to. Used by the renderer to wrap
 	 * the (possibly cwd-relative) header path in an OSC 8 `file://` hyperlink. */
 	resolvedPath?: string;
+	/** Set when the write dispatched an `xd://` tool device; drives renderer delegation. */
+	xdev?: XdevDispatch;
 }
 
 /**
@@ -290,6 +390,36 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		// Unwrap a hashline `[path#TAG]` wrapper first (parity with execute) so a
 		// wrapped `[ssh://h/x#ABCD]` can't dodge scheme detection and the tier checks below.
 		const path = unwrapHashlineHeaderPath(rawPath);
+		// xd:// device writes execute the mounted tool — take its approval tier.
+		// The resolution devices (xd://resolve, xd://reject, xd://propose)
+		// finalize a staged, already-previewed action, so they stay at read tier.
+		const xdevTarget = parseXdUrl(path);
+		if (xdevTarget) {
+			if (xdevTarget.name === REPORT_ISSUE_DEVICE_NAME) return "write";
+			if (xdevTarget.name && isResolutionDeviceName(xdevTarget.name)) return "read";
+			const inst = xdevTarget.name ? this.session.xdevRegistry?.get(xdevTarget.name) : undefined;
+			if (!inst) return "exec";
+			// Decode the device JSON payload and evaluate the mounted tool's own
+			// approval (which may be argument-dependent, e.g. ast_edit is read-tier
+			// for internal-URL paths, debug is read-tier for inspection actions).
+			// Malformed JSON, non-object payloads, missing content, and approval
+			// functions that reject schema-invalid objects stay exec so the gate
+			// fails closed — the dispatch itself rejects invalid arguments too.
+			const rawContent = (args as Partial<WriteParams>).content;
+			if (typeof rawContent !== "string") return "exec";
+			let parsed: unknown;
+			try {
+				parsed = JSON.parse(rawContent);
+			} catch {
+				return "exec";
+			}
+			if (!isRecord(parsed)) return "exec";
+			try {
+				return resolveToolTier(inst, parsed);
+			} catch {
+				return "exec";
+			}
+		}
 		// Remote SSH writes open an outbound connection and run a remote shell —
 		// gate them like the exec-tier `ssh` tool, ahead of the handler-write
 		// logic. Substring match also covers selector-suffixed targets.
@@ -323,12 +453,15 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 	}
 
 	readonly #writethrough: WritethroughCallback;
+	readonly #deferredDiagnostics: DeferredDiagnostics | undefined;
 
 	constructor(private readonly session: ToolSession) {
 		const enableLsp = session.enableLsp ?? true;
 		const enableFormat = enableLsp && session.settings.get("lsp.formatOnWrite");
 		const enableDiagnostics = enableLsp && session.settings.get("lsp.diagnosticsOnWrite");
 		const dedup = enableDiagnostics && session.settings.get("lsp.diagnosticsDeduplicate");
+		this.#deferredDiagnostics =
+			enableDiagnostics && session.queueDeferredDiagnostics ? new DeferredDiagnostics(session, dedup) : undefined;
 		this.#writethrough = enableLsp
 			? createLspWritethrough(session.cwd, {
 					enableFormat,
@@ -587,7 +720,8 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 
 		const expanded = expandContentTokens(replacementContent, entry);
 		const originalText = await Bun.file(absolutePath).text();
-		const newContent = spliceConflict(originalText, entry, expanded);
+		const splice = spliceConflict(originalText, entry, expanded);
+		const newContent = splice.text;
 
 		await writethroughNoop(absolutePath, newContent, signal);
 		invalidateFsScanAfterWrite(absolutePath);
@@ -621,6 +755,10 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		let resultText = header ? `${header}\n${summary}` : summary;
 		if (stripped) {
 			resultText += `\nNote: auto-stripped hashline display prefixes from content before writing.`;
+		}
+		const echoTrimmed = splice.trimmedLeading + splice.trimmedTrailing;
+		if (echoTrimmed > 0) {
+			resultText += `\nNote: dropped ${echoTrimmed} content line(s) that duplicated the code adjacent to the conflict region — writes replace only the marker block; surrounding lines stay in place.`;
 		}
 
 		return {
@@ -667,6 +805,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		replacementContent: string,
 		stripped: boolean,
 		signal: AbortSignal | undefined,
+		rawContent: string = replacementContent,
 	): Promise<AgentToolResult<WriteToolDetails>> {
 		const history = getConflictHistory(this.session);
 		const allEntries = history.entries();
@@ -676,8 +815,28 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			);
 		}
 
+		// Per-id directive mode: content made solely of `<id>: @side` lines
+		// resolves each listed conflict with that side in one call. Ideal for
+		// merge-hell files where dozens of pick-one blocks each need their own
+		// winner — one call instead of one write per conflict. Parsed from the
+		// PRE-strip content: hashline prefix stripping would otherwise eat the
+		// `<id>: ` heads as echoed line numbers.
+		const directives = resolveBulkDirectives(rawContent, replacementContent);
+		if (directives) {
+			const known = new Set(allEntries.map(entry => entry.id));
+			const unknown = [...directives.keys()].filter(id => !known.has(id));
+			if (unknown.length > 0) {
+				throw new ToolError(
+					`Bulk directive references unknown conflict id(s) ${unknown.map(id => `#${id}`).join(", ")}. Currently registered: ${allEntries.map(e => `#${e.id}`).join(", ")}.`,
+				);
+			}
+		}
+		const selectedEntries = directives ? allEntries.filter(entry => directives.has(entry.id)) : allEntries;
+		const contentFor = (entry: ConflictEntry): string =>
+			directives ? (directives.get(entry.id) as string) : replacementContent;
+
 		const byFile = new Map<string, ConflictEntry[]>();
-		for (const entry of allEntries) {
+		for (const entry of selectedEntries) {
 			const bucket = byFile.get(entry.absolutePath) ?? [];
 			bucket.push(entry);
 			byFile.set(entry.absolutePath, bucket);
@@ -686,6 +845,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		const succeededFiles: { displayPath: string; count: number; header?: string }[] = [];
 		const failedFiles: { displayPath: string; count: number; error: string }[] = [];
 		let totalResolvedIds = 0;
+		let totalEchoTrimmed = 0;
 
 		for (const [absolutePath, fileEntries] of byFile) {
 			const sample = fileEntries[0]!;
@@ -716,8 +876,10 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			}
 			for (const entry of fileEntries) {
 				try {
-					const expanded = expandContentTokens(replacementContent, entry);
-					text = spliceConflict(text, entry, expanded);
+					const expanded = expandContentTokens(contentFor(entry), entry);
+					const splice = spliceConflict(text, entry, expanded);
+					text = splice.text;
+					totalEchoTrimmed += splice.trimmedLeading + splice.trimmedTrailing;
 					resolvedEntries.push(entry);
 				} catch (error) {
 					// A locate-miss for a region an earlier entry already spliced
@@ -762,6 +924,17 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				summaryLines.push(`  ${file.displayPath}: ${file.count} ${conflictWord(file.count)}`);
 			}
 		}
+		if (directives && selectedEntries.length < allEntries.length) {
+			const remaining = allEntries.filter(entry => !directives.has(entry.id)).map(entry => `#${entry.id}`);
+			summaryLines.push(
+				`Directive mode: ${remaining.length} unlisted ${conflictWord(remaining.length)} still registered (${remaining.join(", ")}).`,
+			);
+		}
+		if (totalEchoTrimmed > 0) {
+			summaryLines.push(
+				`Note: dropped ${totalEchoTrimmed} content line(s) that duplicated code adjacent to conflict regions — writes replace only the marker block; surrounding lines stay in place.`,
+			);
+		}
 		if (failedFiles.length > 0) {
 			summaryLines.push(
 				`Failed to resolve ${failedFiles.length} ${fileWord(failedFiles.length)} — registered entries left intact for retry:`,
@@ -777,7 +950,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			summaryLines.push("Snapshots:");
 			for (const header of headerLines) summaryLines.push(`  ${header}`);
 		}
-		if (stripped) {
+		if (stripped && !directives) {
 			summaryLines.push("Note: auto-stripped hashline display prefixes from content before writing.");
 		}
 		const resultText = summaryLines.join("\n");
@@ -819,20 +992,75 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				const scheme = parsed.protocol.replace(/:$/, "").toLowerCase();
 				const handler = internalRouter.getHandler(scheme);
 				if (handler?.write) {
-					// Handler-owned writes (vault:// notes, host URIs) mutate user
-					// data outside the local sandbox — plan mode must reject them.
-					enforcePlanModeWrite(this.session, path, { op: "update" });
-					emitWriteProgress(onUpdate, cleanContent, path);
-					await handler.write(parsed, cleanContent, { cwd: this.session.cwd, signal });
+					// Handler-owned writes mutate user data outside the local
+					// sandbox. xd:// dispatches retain each wrapped tool's tier.
+					if (scheme !== "xd") {
+						enforcePlanModeWrite(this.session, path, { op: "update" });
+						emitWriteProgress(onUpdate, cleanContent, path);
+					}
+					let xdResult: AgentToolResult<WriteToolDetails> | undefined;
+					await internalRouter.write(path, cleanContent, {
+						cwd: this.session.cwd,
+						signal,
+						xd: {
+							write: async (name, deviceContent) => {
+								if (name === REPORT_ISSUE_DEVICE_NAME) {
+									const { result, xdev } = await dispatchReportIssueDevice(this.session, deviceContent);
+									xdResult = {
+										content: result.content,
+										details: { xdev },
+										isError: result.isError,
+										useless: result.useless,
+									};
+									return;
+								}
+								if (name && isResolutionDeviceName(name)) {
+									const { result, xdev } = await dispatchResolutionDevice(this.session, name, deviceContent);
+									xdResult = {
+										content: result.content,
+										details: { xdev },
+										isError: result.isError,
+										useless: result.useless,
+									};
+									return;
+								}
+								const registry = this.session.xdevRegistry;
+								if (!registry || registry.size === 0) {
+									throw new ToolError("xd:// is not mounted in this session.");
+								}
+								if (!name) {
+									throw new ToolError(`Cannot write to xd:// itself — pick a device:\n${registry.listing()}`);
+								}
+								const { result, xdev } = await registry.dispatch(
+									name,
+									deviceContent,
+									_toolCallId,
+									signal,
+									onUpdate as AgentToolUpdateCallback,
+									// The write tool's own gate just resolved approval at this
+									// device's tier (see #approval above) — mark it so a wrapped
+									// inner tool does not prompt a second time.
+									context ? { ...context, xdevApproved: true } : undefined,
+								);
+								xdResult = {
+									content: result.content,
+									details: { xdev },
+									isError: result.isError,
+									useless: result.useless,
+								};
+							},
+						},
+					});
+					if (xdResult) return xdResult;
 					let resultText = `Successfully wrote ${cleanContent.length} bytes to ${path}`;
 					if (stripped) {
 						resultText += `\nNote: auto-stripped hashline display prefixes from content before writing.`;
 					}
 					return { content: [{ type: "text", text: resultText }], details: {} };
 				}
-				// Schemes without a `write` hook fall through to existing logic
-				// (local:// resolves to a backing file via plan-mode-guard) or are
-				// rejected downstream when no backing file exists.
+				if (scheme !== "local") await internalRouter.write(path, cleanContent);
+				// local:// is backed by the session-local artifact sandbox and is
+				// resolved by resolvePlanPath below so write/read share the same root.
 			}
 
 			const conflictUri = parseConflictUri(path);
@@ -845,7 +1073,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				emitWriteProgress(onUpdate, cleanContent, path);
 				const result =
 					conflictUri.id === "*"
-						? await this.#resolveAllConflicts(cleanContent, stripped, signal)
+						? await this.#resolveAllConflicts(cleanContent, stripped, signal, content)
 						: await this.#resolveSingleConflictById(conflictUri.id, cleanContent, stripped, signal);
 				if (conflictUri.recoveredPrefix !== undefined) {
 					appendNoteToResult(
@@ -931,9 +1159,18 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				};
 			}
 
-			const diagnostics = await this.#writethrough(absolutePath, cleanContent, signal, undefined, batchRequest);
+			const diagnostics = await this.#writethrough(
+				absolutePath,
+				cleanContent,
+				signal,
+				undefined,
+				batchRequest,
+				dst => this.#deferredDiagnostics?.begin(dst),
+			);
 			invalidateFsScanAfterWrite(absolutePath);
-			this.session.bumpFileMutationVersion?.(absolutePath);
+			if (!this.#deferredDiagnostics || batchRequest?.flush === false) {
+				this.session.bumpFileMutationVersion?.(absolutePath);
+			}
 			const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, cleanContent);
 
 			const header = maybeWriteSnapshotHeader(this.session, absolutePath, cleanContent);
@@ -983,6 +1220,24 @@ const WRITE_STREAMING_PREVIEW_LINES = 12;
 function countLines(text: string): number {
 	if (!text) return 0;
 	return text.split("\n").length;
+}
+
+/** Bounded newline scan: whether `text` spans more than `maxLines` lines.
+ *  Runs on every live compose (the repaint predicate below), so it must not
+ *  materialize the split the way `countLines` does. */
+function exceedsLineCount(text: string, maxLines: number): boolean {
+	if (!text) return false;
+	let lines = 1;
+	for (let index = text.indexOf("\n"); index !== -1; index = text.indexOf("\n", index + 1)) {
+		if (++lines > maxLines) return true;
+	}
+	return false;
+}
+
+function writeContentOf(args: unknown): string {
+	if (args == null || typeof args !== "object" || !("content" in args)) return "";
+	const content = args.content;
+	return typeof content === "string" ? content : "";
 }
 
 function formatLineCountSuffix(lineCount: number, uiTheme: Theme): string {
@@ -1086,10 +1341,33 @@ function renderContentPreview(
 	});
 }
 
+/** Render context for the write tool: resolves an `xd://`-mounted tool so its live renderer drives device dispatch previews. */
+export interface WriteRenderContext {
+	resolveXdevMounted?: (name: string) => AgentTool | undefined;
+}
+
 export const writeToolRenderer = {
-	renderCall(args: WriteRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
+	renderCall(
+		args: WriteRenderArgs,
+		options: RenderResultOptions & { renderContext?: WriteRenderContext },
+		uiTheme: Theme,
+	): Component | undefined {
 		const rawPath =
 			typeof args.file_path === "string" ? args.file_path : typeof args.path === "string" ? args.path : "";
+		// Render NOTHING until the streamed path arrives and provably is not an
+		// xd:// device; xd:// writes then delegate to the mounted tool's renderer.
+		// A present-but-malformed path (array/object from a bad provider parse)
+		// is definitively not xd:// — fall through to the legacy frame.
+		if (args.path === undefined && args.file_path === undefined) return undefined;
+		if (rawPath && couldBecomeXdUrl(rawPath)) {
+			const xdev = parseXdUrl(rawPath);
+			// The path string is settled once the content field started streaming.
+			const pathSettled = args.content !== undefined;
+			if (!xdev?.name || !pathSettled) return undefined;
+			if (isResolutionDeviceName(xdev.name)) return renderResolutionDeviceCall(xdev.name, args.content, uiTheme);
+			if (xdev.name === REPORT_ISSUE_DEVICE_NAME) return renderReportIssueDeviceCall(args.content, uiTheme);
+			return renderXdevCall(xdev.name, args.content, options, uiTheme, options.renderContext?.resolveXdevMounted);
+		}
 		const filePath = shortenPath(rawPath);
 		const lang = rawPath ? (getLanguageFromPath(rawPath) ?? "text") : "text";
 		const langIcon = uiTheme.fg("muted", uiTheme.getLangIcon(lang));
@@ -1132,10 +1410,18 @@ export const writeToolRenderer = {
 
 	renderResult(
 		result: { content: Array<{ type: string; text?: string }>; details?: WriteToolDetails; isError?: boolean },
-		options: RenderResultOptions,
+		options: RenderResultOptions & { renderContext?: WriteRenderContext },
 		uiTheme: Theme,
 		args?: WriteRenderArgs,
 	): Component {
+		// xd:// dispatch results render as the mounted tool's own result.
+		const xdev = result.details?.xdev;
+		if (xdev) {
+			const delegated = renderXdevResult(xdev, result, options, uiTheme, options.renderContext?.resolveXdevMounted);
+			if (delegated) return delegated;
+			const text = result.content?.find(c => c.type === "text")?.text ?? "";
+			return new Text(uiTheme.fg("toolOutput", replaceTabs(text)), 0, 0);
+		}
 		const rawPath =
 			typeof args?.file_path === "string" ? args.file_path : typeof args?.path === "string" ? args.path : "";
 		const filePath = shortenPath(rawPath);
@@ -1218,4 +1504,12 @@ export const writeToolRenderer = {
 		});
 	},
 	mergeCallAndResult: true,
+	// The collapsed pending preview follows the streaming edge with a tail
+	// window once the content outgrows it (`… (N earlier lines)` + last rows);
+	// the first partial result re-anchors the frame to the top of the file, so
+	// tail rows already committed to viewport/native scrollback would survive
+	// as stale content above the new frame without a full replay. Expanded and
+	// short previews stay top-anchored and skip the (scrollback-wiping) reset.
+	forceFirstResultViewportRepaint: (args: unknown, options: RenderResultOptions) =>
+		!options.expanded && exceedsLineCount(writeContentOf(args), WRITE_STREAMING_PREVIEW_LINES),
 };

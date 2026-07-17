@@ -109,6 +109,9 @@ export function wrapInbandToolStream(
 					case "thinking_end":
 						projector?.thinkingEnd();
 						break;
+					case "image_end":
+						projector?.keep(event.content);
+						break;
 					case "text_delta":
 						// `text()` returns true once the model starts fabricating its own
 						// tool result. In abort mode we cut the turn immediately so the
@@ -206,6 +209,14 @@ class InbandStreamProjector {
 		this.#closeText();
 		this.#closeThinking();
 		this.#partial.content.push(block);
+		if (this.#emitEvents && block.type === "image") {
+			this.#out.push({
+				type: "image_end",
+				contentIndex: this.#partial.content.length - 1,
+				content: block,
+				partial: this.#partial,
+			});
+		}
 	}
 
 	// Forward a native tool call's lifecycle live. `source` comes from the inner

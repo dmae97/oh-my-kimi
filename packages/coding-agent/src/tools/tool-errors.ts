@@ -30,8 +30,8 @@ export class ToolError extends Error {
 export class ToolAbortError extends Error {
 	static readonly MESSAGE = "Operation aborted";
 
-	constructor(message: string = ToolAbortError.MESSAGE) {
-		super(message);
+	constructor(message: string = ToolAbortError.MESSAGE, options?: ErrorOptions) {
+		super(message, options);
 		this.name = "ToolAbortError";
 	}
 }
@@ -43,7 +43,7 @@ export class ToolAbortError extends Error {
 export function throwIfAborted(signal?: AbortSignal): void {
 	if (signal?.aborted) {
 		const reason = signal.reason instanceof Error ? signal.reason : undefined;
-		throw reason instanceof ToolAbortError ? reason : new ToolAbortError();
+		throw reason instanceof ToolAbortError ? reason : new ToolAbortError(undefined, { cause: signal.reason });
 	}
 }
 

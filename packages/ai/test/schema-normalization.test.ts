@@ -252,7 +252,7 @@ describe("normalizeSchemaForGoogle", () => {
 		expect(sanitized.enum).toEqual([null]);
 	});
 
-	it("preserves a property schema literally named additionalProperties inside properties", () => {
+	it("coerces a boolean subschema literally named additionalProperties inside properties", () => {
 		const sanitized = normalizeSchemaForGoogle({
 			type: "object",
 			properties: {
@@ -262,20 +262,81 @@ describe("normalizeSchemaForGoogle", () => {
 		}) as Record<string, unknown>;
 
 		const properties = sanitized.properties as Record<string, unknown>;
+		// The key survives (it is a property, not the stripped keyword), but its
+		// boolean subschema value coerces to the object form (issue #5604).
 		expect(Object.hasOwn(properties, "additionalProperties")).toBe(true);
-		expect(properties.additionalProperties).toBe(false);
+		expect(properties.additionalProperties).toEqual({ not: {} });
 	});
 
-	it("preserves boolean schemas for a single property literally named additionalProperties", () => {
-		const schema = {
+	it("coerces a boolean subschema for a single property literally named additionalProperties", () => {
+		const sanitized = normalizeSchemaForGoogle({
 			type: "object",
 			properties: {
 				additionalProperties: false,
 			},
 			required: ["additionalProperties"],
-		} as const;
+		}) as Record<string, unknown>;
 
-		expect(normalizeSchemaForGoogle(schema)).toEqual(schema);
+		const properties = sanitized.properties as Record<string, unknown>;
+		expect(properties.additionalProperties).toEqual({ not: {} });
+		expect(sanitized.required).toEqual(["additionalProperties"]);
+	});
+
+	it("coerces boolean subschemas to object equivalents on the Google wire (issue #5604)", () => {
+		const google = normalizeSchemaForGoogle({
+			type: "object",
+			properties: {
+				propertyValue: true,
+				attributeValue: false,
+			},
+		}) as Record<string, unknown>;
+
+		expect(google.properties).toEqual({ propertyValue: {}, attributeValue: { not: {} } });
+		// Root-level and array-branch booleans are covered by the same choke point.
+		expect(normalizeSchemaForGoogle(true)).toEqual({});
+		expect(normalizeSchemaForGoogle(false)).toEqual({ not: {} });
+		expect(normalizeSchemaForGoogle({ anyOf: [true, { type: "string" }] })).toEqual({
+			anyOf: [{}, { type: "string" }],
+		});
+	});
+
+	it("strips draft-2019 conditional keywords the OpenAPI-style wire cannot model", () => {
+		// `dependentSchemas`/`dependencies`/`dependentRequired` have no Google
+		// OpenAPI Schema representation and are not caught by residual checks, so
+		// they must be dropped before serialization on both transports.
+		const input = {
+			type: "object",
+			properties: { propertyValue: true },
+			dependentSchemas: { hasFoo: true },
+			dependentRequired: { hasFoo: ["propertyValue"] },
+		};
+		const expected = { type: "object", properties: { propertyValue: {} } };
+
+		expect(normalizeSchemaForGoogle(input)).toEqual(expected);
+		expect(normalizeSchemaForCCA(input)).toEqual(expected);
+
+		// MCP accepts native JSON Schema booleans, so it preserves them.
+		expect(
+			normalizeSchemaForMCP({
+				type: "object",
+				dependentSchemas: { hasFoo: true, hasBar: false },
+			}),
+		).toEqual({
+			type: "object",
+			dependentSchemas: { hasFoo: true, hasBar: false },
+		});
+	});
+
+	it("falls back when a false subschema produces unsupported `not` on the CCA wire", () => {
+		const fallback = { type: "object", properties: {} };
+
+		expect(normalizeSchemaForCCA(false)).toEqual(fallback);
+		expect(normalizeSchemaForCCA({ type: "object", properties: { attributeValue: false } })).toEqual(fallback);
+		// A property named `not` is a schema-map entry, not the unsupported keyword.
+		expect(normalizeSchemaForCCA({ type: "object", properties: { not: { type: "string" } } })).toEqual({
+			type: "object",
+			properties: { not: { type: "string" } },
+		});
 	});
 
 	it("inlines local $ref / $defs entries for Google compatibility", () => {
@@ -1021,6 +1082,17 @@ describe("normalizeSchemaForCCA", () => {
 		});
 	});
 
+	it("keeps mixed unions when branch validation spill differs from the parent description", () => {
+		const normalized = normalizeSchemaForCCA({
+			anyOf: [{ type: "string" }, { type: "array", minItems: 1, items: { type: "string" } }],
+			description: "Optional result type",
+		}) as Record<string, unknown>;
+
+		expect(normalized.type).toBe("string");
+		expect(normalized.anyOf).toBeUndefined();
+		expect(normalized.description).toBe("Optional result type\n\n{minItems: 1}");
+	});
+
 	it("strips sibling type-specific keys copied from parent when mixed-type collapse picks opposing type", () => {
 		// Edge case: parent has a sibling `items` outside the anyOf,
 		// and the chosen type is string. The sibling must be stripped.
@@ -1202,6 +1274,13 @@ describe("normalizeSchemaForMoonshot", () => {
 		expect(props.extra.additionalProperties).toBe(true);
 		expect(props.skip.anyOf).toEqual([{ type: "number" }, { type: "null" }]);
 		expect(props.limit).toEqual({ type: "integer", default: 10 });
+	});
+
+	it("preserves boolean subschemas rather than synthesizing MFJS-forbidden not", () => {
+		expect(normalizeSchemaForMoonshot({ type: "object", properties: { forbidden: false } })).toEqual({
+			type: "object",
+			properties: { forbidden: false },
+		});
 	});
 
 	it("folds oneOf into anyOf (the only MFJS combinator)", () => {

@@ -4,6 +4,7 @@ condition:
   - '"golang.org/x/exp/slices"'
   - '"golang.org/x/exp/maps"'
 scope: "tool:edit(*.go), tool:write(*.go)"
+interruptMode: never
 ---
 
 `golang.org/x/exp/slices` and `golang.org/x/exp/maps` were promoted into the standard library as `slices` and `maps` in Go 1.21. Import the stdlib packages in new code instead of the experimental ones.

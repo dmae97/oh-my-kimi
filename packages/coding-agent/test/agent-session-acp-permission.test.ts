@@ -21,6 +21,7 @@ import type {
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { XdevRegistry } from "@oh-my-pi/pi-coding-agent/tools/xdev";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 
@@ -76,6 +77,7 @@ async function createSession(
 	tools: AgentTool[],
 	bridge?: ClientBridge,
 	settingsOverrides: Partial<Record<SettingPath, unknown>> = {},
+	options?: { xdevRegistry?: XdevRegistry; builtInToolNames?: string[]; initialMountedXdevToolNames?: string[] },
 ): Promise<AgentSession> {
 	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 	if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
@@ -101,6 +103,9 @@ async function createSession(
 		settings,
 		modelRegistry: {} as never,
 		toolRegistry: new Map(tools.map(t => [t.name, t])),
+		xdevRegistry: options?.xdevRegistry,
+		builtInToolNames: options?.builtInToolNames,
+		initialMountedXdevToolNames: options?.initialMountedXdevToolNames,
 	});
 
 	if (bridge) sess.setClientBridge(bridge);
@@ -252,6 +257,73 @@ it("delete and move tools request ACP permission before executing", async () => 
 	expect(moveTool.executeCalls).toBe(1);
 });
 
+it("mounted destructive tools retain the ACP permission gate", async () => {
+	const readTool = makeFakeTool("read");
+	const writeTool = makeFakeTool("write");
+	const deleteTool = makeFakeTool("delete");
+	deleteTool.loadMode = "discoverable";
+	const bridge = makeBridge({ outcome: "selected", optionId: "allow_once", kind: "allow_once" });
+	const permissionSpy = spyOn(bridge, "requestPermission");
+	const xdevRegistry = new XdevRegistry([]);
+	session = await createSession(
+		[readTool, writeTool],
+		bridge,
+		{},
+		{
+			xdevRegistry,
+			builtInToolNames: ["read", "write"],
+		},
+	);
+
+	await session.refreshRpcHostTools([deleteTool]);
+	const mountedDelete = xdevRegistry.get("delete");
+	expect(mountedDelete).toBeDefined();
+	expect(session.getActiveToolNames()).not.toContain("delete");
+	await mountedDelete!.execute(
+		"call-mounted-delete",
+		{ path: "/tmp/gone.ts" },
+		undefined,
+		undefined as never,
+		undefined as never,
+	);
+
+	expect(permissionSpy).toHaveBeenCalledTimes(1);
+	expect(deleteTool.executeCalls).toBe(1);
+});
+
+it("startup-mounted destructive tools gain the ACP permission gate when the bridge attaches", async () => {
+	const readTool = makeFakeTool("read");
+	const writeTool = makeFakeTool("write");
+	const deleteTool = makeFakeTool("delete");
+	deleteTool.loadMode = "discoverable";
+	const bridge = makeBridge({ outcome: "selected", optionId: "allow_once", kind: "allow_once" });
+	const permissionSpy = spyOn(bridge, "requestPermission");
+	const xdevRegistry = new XdevRegistry([]);
+	xdevRegistry.reconcile([deleteTool]);
+	session = await createSession(
+		[readTool, writeTool, deleteTool],
+		bridge,
+		{},
+		{
+			xdevRegistry,
+			builtInToolNames: ["read", "write"],
+			initialMountedXdevToolNames: ["delete"],
+		},
+	);
+
+	const mountedDelete = xdevRegistry.get("delete");
+	expect(mountedDelete).toBeDefined();
+	await mountedDelete!.execute(
+		"call-startup-delete",
+		{ path: "/tmp/gone.ts" },
+		undefined,
+		undefined as never,
+		undefined as never,
+	);
+
+	expect(permissionSpy).toHaveBeenCalledTimes(1);
+	expect(deleteTool.executeCalls).toBe(1);
+});
 it("edit, write, and ast_edit do not request ACP permission", async () => {
 	const editTool = makeFakeTool("edit");
 	const writeTool = makeFakeTool("write");
