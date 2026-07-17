@@ -21,11 +21,11 @@ import { $flag, getDebugLogPath } from "@oh-my-pi/pi-utils";
 import {
 	DEFAULT_MAX_INLINE_IMAGES,
 	getDirectKittyPlacementRows,
+	getDirectKittyRowWidth,
 	ImageBudget,
 	isDirectKittyContinuation,
 	isDirectKittyPlacement,
 	positionDirectKittyContinuation,
-	positionDirectKittyPlacement,
 	unwrapDirectKittyContinuation,
 	unwrapDirectKittyPlacement,
 } from "./components/image";
@@ -2605,8 +2605,6 @@ export class TUI extends Container {
 		overlayWidth: number,
 		totalWidth: number,
 	): string {
-		const positionedDirectKittyPlacement = positionDirectKittyPlacement(overlayLine, startCol);
-		if (positionedDirectKittyPlacement !== null) return positionedDirectKittyPlacement;
 		const positionedDirectKittyContinuation = positionDirectKittyContinuation(overlayLine, startCol);
 		if (positionedDirectKittyContinuation !== null) return positionedDirectKittyContinuation;
 		if (
@@ -2617,18 +2615,30 @@ export class TUI extends Container {
 			return baseLine;
 		}
 
-		// Single pass through baseLine extracts both before and after segments
-		const afterStart = startCol + overlayWidth;
+		// A direct Kitty placement clears its reserved rows when unwrapped. Keep
+		// the base segments in the framed row so that clear is followed by the
+		// text on both sides of a narrow overlay. Its marker has zero terminal
+		// width, so account for its declared cell width explicitly.
+		const directKittyWidth = isDirectKittyPlacement(overlayLine) ? getDirectKittyRowWidth(overlayLine) : null;
+		const effectiveOverlayWidth = Math.max(overlayWidth, directKittyWidth ?? 0);
+
+		// Single pass through baseLine extracts both before and after segments.
+		const afterStart = startCol + effectiveOverlayWidth;
 		const base = extractSegments(baseLine, startCol, afterStart, totalWidth - afterStart, true);
 
-		// Extract overlay with width tracking (strict=true to exclude wide chars at boundary)
-		const overlay = sliceWithWidth(overlayLine, 0, overlayWidth, true);
+		// Extract overlay with width tracking (strict=true to exclude wide chars at boundary).
+		// Direct Kitty marker control bytes occupy no text cells; its capability
+		// frame supplies their actual cell footprint.
+		const overlay =
+			directKittyWidth === null
+				? sliceWithWidth(overlayLine, 0, overlayWidth, true)
+				: { text: overlayLine, width: directKittyWidth };
 
 		// Pad segments to target widths
 		const beforePad = Math.max(0, startCol - base.beforeWidth);
-		const overlayPad = Math.max(0, overlayWidth - overlay.width);
+		const overlayPad = Math.max(0, effectiveOverlayWidth - overlay.width);
 		const actualBeforeWidth = Math.max(startCol, base.beforeWidth);
-		const actualOverlayWidth = Math.max(overlayWidth, overlay.width);
+		const actualOverlayWidth = Math.max(effectiveOverlayWidth, overlay.width);
 		const afterTarget = Math.max(0, totalWidth - actualBeforeWidth - actualOverlayWidth);
 		const afterPad = Math.max(0, afterTarget - base.afterWidth);
 

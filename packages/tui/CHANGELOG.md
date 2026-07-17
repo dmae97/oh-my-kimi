@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed multi-row direct Kitty images being clipped or detached from their cells in native terminal scrollback ([#5669](https://github.com/can1357/oh-my-pi/pull/5669) by [@jeffscottward](https://github.com/jeffscottward)).
+
 ## [17.0.1] - 2026-07-16
 
 ### Added

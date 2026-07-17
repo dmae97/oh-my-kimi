@@ -840,6 +840,51 @@ describe("TUI inline-image budget", () => {
 		}
 	});
 
+	it("preserves base text around a narrow direct Kitty image overlay", async () => {
+		const originalGraphics = { ...getKittyGraphics() };
+		const term = new VirtualTerminal(40, 12);
+		const writes: string[] = [];
+		const realWrite = term.write.bind(term);
+		vi.spyOn(term, "write").mockImplementation((data: string) => {
+			writes.push(data);
+			realWrite(data);
+		});
+
+		setKittyGraphics({ unicodePlaceholders: false });
+		const tui = new TUI(term);
+		tui.addChild(new Text("left-base--middle--right-base", 0, 0));
+		try {
+			tui.start();
+			await settle(term);
+			writes.length = 0;
+			tui.showOverlay(
+				new Image(
+					BASE64_ONE_PIXEL_PNG,
+					"image/png",
+					{ fallbackColor: t => t },
+					{ maxWidthCells: 4, maxHeightCells: 4, budget: tui.imageBudget, imageKey: "overlay-base-text" },
+					{ widthPx: 40, heightPx: 40 },
+				),
+				{ row: 0, col: 10, width: 4 },
+			);
+			await settle(term);
+
+			const output = writes.join("");
+			const placementStart = output.indexOf("\x1b_Ga=p");
+			const rowClear = output.lastIndexOf("\x1b[2K", placementStart);
+			const left = output.indexOf("left-base", rowClear);
+			const right = output.indexOf("right-base", placementStart);
+			expect(placementStart).toBeGreaterThan(-1);
+			expect(rowClear).toBeGreaterThan(-1);
+			expect(left).toBeGreaterThan(rowClear);
+			expect(right).toBeGreaterThan(placementStart);
+			expect(output).not.toContain("pi:img:");
+		} finally {
+			tui.stop();
+			setKittyGraphics(originalGraphics);
+		}
+	});
+
 	it("preserves direct Kitty rows inside a scrolling fullscreen overlay", async () => {
 		const originalGraphics = { ...getKittyGraphics() };
 		const term = new VirtualTerminal(40, 12);
