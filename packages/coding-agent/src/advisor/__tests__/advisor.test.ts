@@ -856,6 +856,57 @@ describe("advisor", () => {
 			expect(promptInputs[1]).toContain("second");
 		});
 
+		it("preserves the next user turn when an accepted empty stop is pruned", async () => {
+			const promptInputs: string[] = [];
+			const agent = makeAgent(promptInputs);
+			const messages: AgentMessage[] = [
+				{ role: "user", content: "synthetic capture", synthetic: true, timestamp: 1 } as AgentMessage,
+			];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+
+			runtime.onTurnEnd(messages);
+			await runtime.waitForCatchup(1000, 1);
+
+			messages.push({
+				role: "assistant",
+				content: [],
+				api: "mock",
+				provider: "mock",
+				model: "mock-primary",
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
+				stopReason: "stop",
+				timestamp: 2,
+			} as unknown as AgentMessage);
+			runtime.onTurnEnd(messages);
+			await runtime.waitForCatchup(1000, 1);
+
+			messages.pop();
+			messages.push(
+				{ role: "user", content: "real user instruction", timestamp: 3 } as AgentMessage,
+				{
+					role: "assistant",
+					content: [{ type: "thinking", thinking: "checking files" }],
+					api: "mock",
+					provider: "mock",
+					model: "mock-primary",
+					usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
+					stopReason: "toolUse",
+					timestamp: 4,
+				} as unknown as AgentMessage,
+			);
+			runtime.onTurnEnd(messages);
+			await runtime.waitForCatchup(1000, 1);
+
+			const nextTurn = promptInputs.at(-1);
+			expect(nextTurn).toContain("real user instruction");
+			expect(nextTurn?.match(/real user instruction/g)).toHaveLength(1);
+			expect(nextTurn?.indexOf("real user instruction")).toBeLessThan(nextTurn?.indexOf("checking files") ?? -1);
+		});
+
 		it("coalesces late-arriving deltas into the batch after context maintenance", async () => {
 			const promptInputs: string[] = [];
 			const { promise: firstMaintainStarted, resolve: startFirstMaintain } = Promise.withResolvers<void>();

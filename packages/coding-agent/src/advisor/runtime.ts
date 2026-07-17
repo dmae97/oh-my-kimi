@@ -192,8 +192,28 @@ interface CatchupWaiter {
 	timer?: NodeJS.Timeout;
 }
 
+interface DeliveredMessage {
+	message: AgentMessage;
+	fingerprint: bigint | undefined;
+}
+
+function fingerprintMessage(message: AgentMessage): bigint | undefined {
+	try {
+		const serialized = JSON.stringify(message);
+		if (serialized === undefined) return undefined;
+		return Bun.hash.wyhash(serialized);
+	} catch {
+		return undefined;
+	}
+}
+
 export class AdvisorRuntime {
 	#lastCount = 0;
+	/**
+	 * Delivered prefix identities. References make the normal append-only path
+	 * allocation-free; fingerprints preserve identity across equivalent clones.
+	 */
+	#deliveredPrefix: DeliveredMessage[] = [];
 	/** Last-shown body, keyed by primary-context customType (plan/goal mode rules,
 	 *  approved plan). These prompts are re-injected verbatim every primary turn;
 	 *  this lets {@link #renderDelta} collapse an unchanged copy to a one-line
@@ -295,6 +315,7 @@ export class AdvisorRuntime {
 
 	#resetAdvisorContext(clearBacklog: boolean, wakeWaiters: boolean): void {
 		this.#lastCount = 0;
+		this.#deliveredPrefix = [];
 		this.#pending = [];
 		this.#consecutiveFailures = 0;
 		this.#failureNotified = false;
@@ -331,7 +352,12 @@ export class AdvisorRuntime {
 	 * advisor (which would be expensive and likely stale).
 	 */
 	seedTo(count: number): void {
-		this.#lastCount = count;
+		const messages = this.host.snapshotMessages().slice(0, count);
+		this.#lastCount = messages.length;
+		this.#deliveredPrefix = messages.map(message => ({
+			message,
+			fingerprint: fingerprintMessage(message),
+		}));
 		this.#pending = [];
 		this.#backlog = 0;
 		this.#consecutiveFailures = 0;
@@ -342,15 +368,39 @@ export class AdvisorRuntime {
 
 	#renderDelta(messages?: AgentMessage[], wip = false): string | null {
 		const all = messages ?? this.#latestMessages ?? this.host.snapshotMessages();
-		if (all.length < this.#lastCount) {
-			this.#lastCount = all.length;
-			this.#seenContext.clear();
-			return null;
+		let prefixChanged = all.length < this.#lastCount;
+		for (let i = 0; !prefixChanged && i < this.#lastCount; i++) {
+			const delivered = this.#deliveredPrefix[i];
+			const current = all[i];
+			if (delivered === undefined || current === undefined) {
+				prefixChanged = true;
+				break;
+			}
+			if (delivered.message === current) continue;
+			const fingerprint = fingerprintMessage(current);
+			if (
+				delivered.fingerprint === undefined ||
+				fingerprint === undefined ||
+				delivered.fingerprint !== fingerprint
+			) {
+				prefixChanged = true;
+				break;
+			}
+			delivered.message = current;
+		}
+		if (prefixChanged) {
+			this.#epoch++;
+			this.#resetAdvisorContext(true, true);
 		}
 		const delta = all
 			.slice(this.#lastCount)
 			.filter(m => !(m.role === "custom" && m.customType === "advisor"))
 			.map(m => this.#dedupContextMessage(m));
+		for (let i = this.#lastCount; i < all.length; i++) {
+			const message = all[i];
+			if (message === undefined) continue;
+			this.#deliveredPrefix.push({ message, fingerprint: fingerprintMessage(message) });
+		}
 		this.#lastCount = all.length;
 		if (delta.length === 0) return null;
 		const obfuscator = this.host.obfuscator;
