@@ -240,6 +240,7 @@ const RUN_WATCH_TAIL_MAX = 200;
 const REVIEW_COMMENTS_PAGE_SIZE = 100;
 const RUN_JOBS_PAGE_SIZE = 100;
 const PR_DIFF_FILES_PAGE_SIZE = 100;
+const PR_DIFF_FILES_MAX = 3000;
 const PR_URL_PATTERN = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)(?:\/.*)?$/;
 const ISSUE_URL_PATTERN = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\/(\d+)(?:\/.*)?$/;
 const RUN_URL_PATTERN = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/actions\/runs\/(\d+)(?:\/.*)?$/;
@@ -2946,6 +2947,10 @@ interface GhPrFileApi {
 	patch?: string;
 }
 
+interface GhPrApi {
+	changed_files?: number;
+}
+
 /**
  * GitHub rejects the aggregate PR diff endpoint with HTTP 406 once the diff
  * exceeds 20,000 lines. Detect that specific failure so the caller can fall
@@ -2958,6 +2963,37 @@ function isPrDiffTooLargeError(err: unknown): boolean {
 		/exceeded the maximum number of lines/i.test(message) ||
 		/\btoo_large\b/.test(message)
 	);
+}
+
+function formatSyntheticDiffPath(prefix: "a/" | "b/", path: string): string {
+	const prefixedPath = `${prefix}${path}`;
+	if (!/[\u0000-\u001F\s"\\]/.test(prefixedPath)) return prefixedPath;
+
+	let escaped = "";
+	for (const char of prefixedPath) {
+		switch (char) {
+			case "\\":
+				escaped += "\\\\";
+				break;
+			case '"':
+				escaped += '\\"';
+				break;
+			case "\n":
+				escaped += "\\n";
+				break;
+			case "\r":
+				escaped += "\\r";
+				break;
+			case "\t":
+				escaped += "\\t";
+				break;
+			default: {
+				const code = char.charCodeAt(0);
+				escaped += code < 32 ? `\\${code.toString(8).padStart(3, "0")}` : char;
+			}
+		}
+	}
+	return `"${escaped}"`;
 }
 
 /**
@@ -2973,7 +3009,9 @@ function buildSyntheticDiffSection(file: GhPrFileApi): string | undefined {
 	if (!newPath) return undefined;
 	const status = file.status ?? "modified";
 	const oldPath = file.previous_filename ?? newPath;
-	const lines: string[] = [`diff --git a/${oldPath} b/${newPath}`];
+	const oldDiffPath = formatSyntheticDiffPath("a/", oldPath);
+	const newDiffPath = formatSyntheticDiffPath("b/", newPath);
+	const lines: string[] = [`diff --git ${oldDiffPath} ${newDiffPath}`];
 	if (status === "added") {
 		lines.push("new file mode 100644");
 	} else if (status === "removed") {
@@ -2982,8 +3020,8 @@ function buildSyntheticDiffSection(file: GhPrFileApi): string | undefined {
 		lines.push(`rename from ${oldPath}`, `rename to ${newPath}`);
 	}
 	if (typeof file.patch === "string" && file.patch.length > 0) {
-		lines.push(status === "added" ? "--- /dev/null" : `--- a/${oldPath}`);
-		lines.push(status === "removed" ? "+++ /dev/null" : `+++ b/${newPath}`);
+		lines.push(status === "added" ? "--- /dev/null" : `--- ${oldDiffPath}`);
+		lines.push(status === "removed" ? "+++ /dev/null" : `+++ ${newDiffPath}`);
 		lines.push(file.patch);
 	} else {
 		lines.push(
@@ -3005,6 +3043,18 @@ async function fetchPrDiffViaFilesApi(
 	number: number,
 	signal: AbortSignal | undefined,
 ): Promise<string> {
+	const pull = await git.github.json<GhPrApi>(
+		cwd,
+		["api", "--method", "GET", `/repos/${repo}/pulls/${number}`],
+		signal,
+		{ repoProvided: true },
+	);
+	if ((pull.changed_files ?? 0) > PR_DIFF_FILES_MAX) {
+		throw new ToolError(
+			`Pull request changes ${pull.changed_files} files, exceeding GitHub's ${PR_DIFF_FILES_MAX}-file limit for the per-file diff API.`,
+		);
+	}
+
 	const sections: string[] = [];
 	let page = 1;
 	while (true) {

@@ -289,6 +289,7 @@ describe("getOrFetchPrDiff diff-too-large fallback", () => {
 		vi.spyOn(git.github, "text").mockRejectedValue(http406());
 		const jsonSpy = vi
 			.spyOn(git.github, "json")
+			.mockResolvedValueOnce({ changed_files: 2 } as never)
 			.mockResolvedValueOnce([
 				{
 					filename: "src/big.ts",
@@ -304,8 +305,7 @@ describe("getOrFetchPrDiff diff-too-large fallback", () => {
 					deletions: 0,
 					patch: "@@ -0,0 +1 @@\n+brand new",
 				},
-			] as unknown as never)
-			.mockResolvedValueOnce([] as unknown as never);
+			] as unknown as never);
 
 		const result = await getOrFetchPrDiff({
 			cwd: "/tmp/test",
@@ -320,17 +320,17 @@ describe("getOrFetchPrDiff diff-too-large fallback", () => {
 		// The reassembled diff parses through parsePrUnifiedDiff identically.
 		expect(result.payload.unified).toContain("diff --git a/src/big.ts b/src/big.ts");
 		expect(result.payload.unified).toContain("new file mode");
-		// The files endpoint should have been hit; the first arg after `api` is GET.
-		expect(jsonSpy.mock.calls[0]?.[1]).toContain("/repos/owner/repo/pulls/79/files");
+		// The metadata lookup precedes the files endpoint.
+		expect(jsonSpy.mock.calls[1]?.[1]).toContain("/repos/owner/repo/pulls/79/files");
 	});
 
 	it("keeps files with omitted patches visible instead of dropping them", async () => {
 		vi.spyOn(git.github, "text").mockRejectedValue(http406());
 		vi.spyOn(git.github, "json")
+			.mockResolvedValueOnce({ changed_files: 1 } as never)
 			.mockResolvedValueOnce([
 				{ filename: "assets/logo.png", status: "modified", additions: 0, deletions: 0 },
-			] as unknown as never)
-			.mockResolvedValueOnce([] as unknown as never);
+			] as unknown as never);
 
 		const result = await getOrFetchPrDiff({
 			cwd: "/tmp/test",
@@ -341,6 +341,42 @@ describe("getOrFetchPrDiff diff-too-large fallback", () => {
 
 		expect(result.payload.files.map(f => f.path)).toEqual(["assets/logo.png"]);
 		expect(result.payload.unified).toContain("patch unavailable");
+	});
+
+	it("preserves paths containing a diff-header delimiter", async () => {
+		vi.spyOn(git.github, "text").mockRejectedValue(http406());
+		vi.spyOn(git.github, "json")
+			.mockResolvedValueOnce({ changed_files: 1 } as never)
+			.mockResolvedValueOnce([
+				{
+					filename: "dir b/file.ts",
+					status: "modified",
+					additions: 1,
+					deletions: 1,
+					patch: "@@ -1 +1 @@\n-old\n+new",
+				},
+			] as unknown as never);
+
+		const result = await getOrFetchPrDiff({
+			cwd: "/tmp/test",
+			repo: "owner/repo",
+			number: 83,
+			cacheAuthKey: null,
+		});
+
+		expect(result.payload.files[0]).toMatchObject({ path: "dir b/file.ts", additions: 1, deletions: 1 });
+		expect(result.payload.unified).toContain('diff --git "a/dir b/file.ts" "b/dir b/file.ts"');
+	});
+
+	it("rejects instead of silently reviewing a PR beyond the files API cap", async () => {
+		vi.spyOn(git.github, "text").mockRejectedValue(http406());
+		const jsonSpy = vi.spyOn(git.github, "json").mockResolvedValueOnce({ changed_files: 3001 } as never);
+
+		await expect(
+			getOrFetchPrDiff({ cwd: "/tmp/test", repo: "owner/repo", number: 82, cacheAuthKey: null }),
+		).rejects.toThrow("exceeding GitHub's 3000-file limit");
+		expect(jsonSpy.mock.calls).toHaveLength(1);
+		expect(jsonSpy.mock.calls[0]?.[1]).toContain("/repos/owner/repo/pulls/82");
 	});
 
 	it("propagates non-406 errors without hitting the files endpoint", async () => {
