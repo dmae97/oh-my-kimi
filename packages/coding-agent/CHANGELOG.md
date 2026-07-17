@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed expanded `!` bash and `eval` output keeping a stale `… N more lines (ctrl+o to expand)` footer after Ctrl+O revealed every line ([#5842](https://github.com/can1357/oh-my-pi/issues/5842)).
+
 ## [17.0.2] - 2026-07-17
 
 ### Added
