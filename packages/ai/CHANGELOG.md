@@ -5,7 +5,7 @@
 ### Fixed
 
 - Automatically invalidate and rotate OAuth credentials when an "invalidated oauth token" error occurs
-- Fixed GPT-5.6 Codex Responses-Lite requests leaving a forced top-level `tool_choice` (e.g. `{ type: "web_search" }`) after the Lite rewrite moves tools into an `additional_tools` developer item and drops top-level `tools`, which the ChatGPT Codex endpoint rejected with `HTTP 400 Tool choice '…' not found in 'tools' parameter`. `applyCodexResponsesLiteShape` now forces `tool_choice: "auto"`, matching codex-rs `build_responses_request` ([#5771](https://github.com/can1357/oh-my-pi/issues/5771)).
+- Fixed GPT-5.6 Codex Responses-Lite requests leaving a forced top-level `tool_choice` (e.g. `{ type: "web_search" }`) after the Lite rewrite moves tools into an `additional_tools` developer item and drops top-level `tools`, which the ChatGPT Codex endpoint rejected with `HTTP 400 Tool choice '…' not found in 'tools' parameter`. `applyCodexResponsesLiteShape` now downgrades forced hosted choices to `tool_choice: "auto"` while preserving explicit tool-use constraints ([#5771](https://github.com/can1357/oh-my-pi/issues/5771)).
 
 ## [17.0.1] - 2026-07-16
 
