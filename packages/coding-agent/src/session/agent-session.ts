@@ -2248,8 +2248,10 @@ export class AgentSession {
 		// the still-old context (the transition hasn't reached agent.reset() yet), start a
 		// stale provider turn that races the reset, and — once reconnected — append its
 		// output to the fresh session (issue #5800). A disconnected session never owns the
-		// queue: the transition does. Leave any queued steer/follow-up for the post-transition
-		// state (reset drops them; an explicit prompt flushes them).
+		// queue: the transition does. newSession/switchSession drop the queue (reset /
+		// clearAllQueues), so nothing survives; compaction preserves it and re-drains itself
+		// after #reconnectToAgent (see compact()'s finally); an explicit prompt flushes it
+		// in every case.
 		if (this.#unsubscribeAgent === undefined) return;
 		// A concern steered into a resumed streaming run after a user interrupt can
 		// strand at the turn tail (steered past the loop's final boundary poll). While
@@ -11023,6 +11025,13 @@ export class AgentSession {
 				this.#compactionAbortController = undefined;
 			}
 			this.#reconnectToAgent();
+			// Compaction disconnected before `await abort()`, so abort's finally drain
+			// (and any steer/follow-up that arrived mid-compaction — async IRC, an
+			// `xd://` mount notice, an SDK/RPC steer) was suppressed while disconnected
+			// (issue #5800). Unlike `/new`/switchSession, compaction preserves the agent
+			// queues, so nothing else resumes them: re-drain now that the listener is back
+			// and `isCompacting` is false, or the queued turn hangs until the next prompt.
+			this.#drainStrandedQueuedMessages();
 		}
 	}
 
