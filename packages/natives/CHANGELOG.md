@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `uv run --extra <package> pytest ...` bypassing native pytest minimization because the wrapper parser mistook the `--extra` value for the executable.
+
 ## [17.0.1] - 2026-07-16
 
 ### Fixed
