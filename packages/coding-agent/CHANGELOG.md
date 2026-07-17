@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed bundled Linux ffmpeg recording by selecting its available ALSA input when PulseAudio support is absent, and surfaced recorder stderr when capture fails ([#5907](https://github.com/can1357/oh-my-pi/issues/5907)).
+
 ## [17.0.3] - 2026-07-17
 
 ### Changed
