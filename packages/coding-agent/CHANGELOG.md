@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Bash command timeouts now render with a warning (yellow) border instead of an error (red) border, reflecting that the timeout ran its course rather than the command failed. `isError` remains `true` on the result so the model still knows the command did not complete normally. The `timedOut` flag is now propagated from the bash executor to distinguish timeouts from user aborts.
 ### Added
 
 - `retry.fallbackChains` wildcards now support id-prefixed targets and keys: a chain entry like `"openrouter/google/*"` re-prefixes the failing model's bare id (`google-antigravity/gemini-x` → `openrouter/google/gemini-x`), a plain `"provider/*"` entry falling back *from* an aggregator strips the vendor prefix when the target provider only knows the bare id (`openrouter/google/x` → `google-vertex/x`), and an id-prefixed key (`"openrouter/google/*"`) scopes a chain to that provider's ids under the prefix.

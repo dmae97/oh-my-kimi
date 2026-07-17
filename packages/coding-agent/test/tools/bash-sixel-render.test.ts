@@ -205,6 +205,28 @@ describe("bashToolRenderer", () => {
 		expect(rendered).toContain("boom");
 	});
 
+	it("renders a timed-out command with a warning border instead of an error border", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+		const component = bashToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "[Command timed out after 1 seconds]\n" }],
+				details: { timeoutSeconds: 1, timedOut: true },
+				isError: true,
+			},
+			{ expanded: false, isPartial: false },
+			uiTheme,
+			{ command: "sleep 3", timeout: 1 },
+		);
+		const rendered = component.render(120).join("\n");
+		const warningAnsi = uiTheme.fg("warning", "").replace("\x1b[39m", "");
+		const errorAnsi = uiTheme.fg("error", "").replace("\x1b[39m", "");
+
+		expect(rendered).toContain(warningAnsi);
+		expect(rendered).not.toContain(errorAnsi);
+	});
+
 	it("omits the status footer for a successful command", async () => {
 		const theme = await getThemeByName("dark");
 		expect(theme).toBeDefined();
