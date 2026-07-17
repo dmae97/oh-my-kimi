@@ -67,6 +67,9 @@
 - Fixed `/q` + Enter running `/queue` instead of `/quit`: the newer `/queue` command is registered before `/quit`, and the editor's sync slash-completion applies the first same-prefix match on Enter, so `/q` shadowed to `/queue`. Added an explicit `q` alias to `/quit` (exact matches outrank prefix matches) so `/q` deterministically quits ([#5335](https://github.com/can1357/oh-my-pi/issues/5335))
 - Fixed Ctrl+L (`app.display.reset`) not refreshing the dark/light theme on terminals without an end-to-end DEC Mode 2031 notification path (e.g. iTerm2 under tmux): the explicit reset gesture now issues one bounded OSC 11 background re-query before repainting, so a mid-session appearance switch is picked up without restarting. No timers or periodic polling are reintroduced ([#5352](https://github.com/can1357/oh-my-pi/issues/5352))
 - Added an opt-in per-project model role storage mode with global fallback from the model selector.
+### Fixed
+
+- Local llama.cpp Qwen-family models (including the Qwen3.6-based PrismLM Ternary Bonsai GGUFs) now honor `--thinking off`. Discovery routes them through the chat-completions API with the `qwen-template-false` disable dialect, `qwenPreserveThinking`, and a `/v1` base URL (models kept on a custom transport such as `pi-native` retain their gateway URL so the suffix is not doubled). The upgrade is re-applied as the outermost step after discovery merges, provider `baseUrl` overrides, and cache fallbacks, so a configured native-root base URL or a pre-fix cached row cannot leave the model on the old `openai-responses` / `reasoning: false` spec.
 
 ## [17.0.1] - 2026-07-16
 
