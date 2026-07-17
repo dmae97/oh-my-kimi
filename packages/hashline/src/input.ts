@@ -116,11 +116,6 @@ function parseHashlineHeaderLine(line: string, cwd?: string): RawSection | null 
 		// the half-dozen variants models actually emit.
 		const recovered = tryParseRecoveryHeader(trimmed, cwd);
 		if (recovered !== null) return recovered;
-		if (trimmed === "[" || trimmed.startsWith('["') || trimmed.startsWith("[{")) {
-			throw new Error(
-				"Edit input must be one patch string, not a JSON array. Join patch lines with newlines inside the `input` string.",
-			);
-		}
 		throw new Error(
 			`Input header must be ${HL_FILE_PREFIX}PATH${HL_FILE_SUFFIX} or ${HL_FILE_PREFIX}PATH${HL_FILE_HASH_SEP}TAG${HL_FILE_SUFFIX} with a ${HL_FILE_HASH_LENGTH}-hex content-hash tag; got ${JSON.stringify(trimmed)}.`,
 		);

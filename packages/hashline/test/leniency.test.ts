@@ -57,12 +57,6 @@ describe("hashline section headers", () => {
 			expect(message).not.toContain("#0A3");
 		}
 	});
-
-	it("explains that array-shaped tool input must be one patch string", () => {
-		expect(() => Patch.parse('["[a.ts#1A2B]", "SWAP 1.=1:", "+after"]')).toThrow(
-			/one patch string, not a JSON array/,
-		);
-	});
 });
 
 describe("hashline core — verb header forms", () => {
@@ -93,8 +87,6 @@ describe("hashline core — verb header forms", () => {
 		expect(applyPatch(FILE, "SWAP 2\u20263:\n+X")).toBe("a\nX\nd\ne");
 		expect(applyPatch(FILE, "SWAP 2 3:\n+X")).toBe("a\nX\nd\ne");
 		expect(applyPatch(FILE, "SWAP 2..3:\n+X")).toBe("a\nX\nd\ne"); // legacy `..` still accepted
-		expect(applyPatch(FILE, "SWAP 2,3:\n+X")).toBe("a\nX\nd\ne");
-		expect(applyPatch(FILE, "SWAP 2,3:=:\n+X")).toBe("a\nX\nd\ne");
 		expect(applyPatch(FILE, "SWAP 2.=3\n+X")).toBe("a\nX\nd\ne"); // missing colon
 	});
 
@@ -195,12 +187,8 @@ describe("hashline body contracts", () => {
 		expect(() => parsePatch("DEL 2\n+X")).toThrow(/does not take body rows/);
 	});
 
-	it("accepts a trailing colon on bodyless delete headers", () => {
-		expect(applyPatch(FILE, "DEL 2,3:")).toBe("a\nd\ne");
-	});
-
-	it("still rejects delete body rows after a trailing colon", () => {
-		expect(() => parsePatch("DEL 2:\n+X")).toThrow(/does not take body rows/);
+	it("rejects delete with a colon", () => {
+		expect(() => parsePatch("DEL 2:\n+X")).toThrow(/has no colon/);
 	});
 });
 

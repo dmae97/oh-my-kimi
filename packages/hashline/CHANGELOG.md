@@ -2,10 +2,6 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- Fixed repeated edit-tool rejections by recovering comma-separated ranges and malformed local-model trailers, while steering agents to canonical string input and `.=` syntax ([#5805](https://github.com/can1357/oh-my-pi/issues/5805)).
-
 ## [17.0.0] - 2026-07-15
 
 ### Added
