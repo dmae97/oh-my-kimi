@@ -6,6 +6,7 @@
 
 - Fixed `xd://` mount notices triggering unsolicited model turns by deferring hidden notices until the next user prompt.
 - Fixed `xd://` device tools appearing in the direct tool inventory and prompting invalid function calls ([#5797](https://github.com/can1357/oh-my-pi/issues/5797)).
+- Fixed `history://` read selectors being treated as part of the agent id instead of paging the transcript ([#5806](https://github.com/can1357/oh-my-pi/issues/5806)).
 
 ## [17.0.2] - 2026-07-17
 
