@@ -68,6 +68,9 @@
 ### Fixed
 
 - Fixed the `write` approval gate misclassifying `xd://` device writes as `exec` when the mounted tool declared a function-valued (argument-dependent) `approval`: the gate discarded the function and never decoded the device JSON payload, so read/write device operations prompted in non-yolo modes their approval mode permits. It now parses valid object payloads and evaluates the mounted tool's normal approval decision, while malformed JSON, non-object payloads, and unknown devices still fall back to `exec` and prompt ([#5727](https://github.com/can1357/oh-my-pi/issues/5727)).
+### Fixed
+
+- Fixed custom LSP servers such as `roslyn-language-server` crashing after initialization when they request unconfigured `workspace/configuration` sections; missing settings now receive the spec-required `null` instead of `{}` ([#5745](https://github.com/can1357/oh-my-pi/issues/5745)).
 
 ## [17.0.1] - 2026-07-16
 
