@@ -8,6 +8,7 @@ Settings are stored as plain YAML mappings. Every key, its type, default, and en
 - For custom model definitions in `models.yml`, see [Models](./models.md).
 - For instruction files discovered into the agent context (`AGENTS.md`, `.omp/`, etc.), see [Context files](./context-files.md).
 - For the full catalog of environment variables, see [Environment variables](./environment-variables.md).
+- For prompt words that activate specialized per-turn behavior, see [Magic keywords](./magic-keywords.md).
 
 ## Where settings live
 
