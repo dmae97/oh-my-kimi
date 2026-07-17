@@ -1520,10 +1520,14 @@ function b() {
 		it("should respect timeout", async () => {
 			// Reduce the effective timeout through the production clamp seam; the
 			// real subprocess kill-on-timeout path is still exercised, just faster.
+			// Timeouts settle as a flagged result (rendered as a warning) rather
+			// than a thrown error since #5546; ACP keeps its rejection semantics.
 			vi.spyOn(toolTimeouts, "clampTimeout").mockReturnValue(0.05);
-			await expect(bashTool.execute("test-call-10", { command: "sleep 5", timeout: 1 })).rejects.toThrow(
-				/timed out/i,
-			);
+			const result = await bashTool.execute("test-call-10", { command: "sleep 5", timeout: 1 });
+			expect(result.isError).toBe(true);
+			expect((result.details as { timedOut?: boolean } | undefined)?.timedOut).toBe(true);
+			const text = result.content.find(c => c.type === "text")?.text ?? "";
+			expect(text).toMatch(/timed out/i);
 		});
 
 		it("should abort and recover for subsequent commands", async () => {
