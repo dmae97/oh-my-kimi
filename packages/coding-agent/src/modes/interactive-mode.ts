@@ -123,7 +123,12 @@ import type { LspStartupServerInfo } from "../tools";
 import { normalizeLocalScheme } from "../tools/path-utils";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../tools/render-utils";
 import { setAutoQaConsentHandler } from "../tools/report-tool-issue";
-import { formatPhaseDisplayName, todoMatchesAnyDescription } from "../tools/todo";
+import {
+	formatPhaseDisplayName,
+	selectCollapsedTodos,
+	setActiveTodoDescriptionsProvider,
+	todoMatchesAnyDescription,
+} from "../tools/todo";
 import { ToolError } from "../tools/tool-errors";
 import { vocalizer } from "../tts/vocalizer";
 import { renderTreeList } from "../tui/tree-list";
@@ -951,6 +956,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#observerRegistry.onChange(kind => {
 			this.#scheduleObserverUiSync(kind);
 		});
+		// Let the transient todo tool result light up pending todos executed by a
+		// live subagent, matching the sticky HUD's active set (#5873).
+		setActiveTodoDescriptionsProvider(() => this.#getActiveSubagentDescriptions());
 
 		// Load initial todos
 		await this.#loadTodoList();
@@ -1895,24 +1903,27 @@ export class InteractiveMode implements InteractiveModeContext {
 		const isMatched = (todo: TodoItem): boolean =>
 			activeDescs.length > 0 && todoMatchesAnyDescription(todo.content, activeDescs);
 
-		// Task subtree for a phase. Collapsed previews the first open tasks — the
-		// stage's `done/total` makes the hidden count obvious, so there is no
-		// "… more" row; expanded lists every task.
+		// Task subtree for a phase. Collapsed runs the shared walking-viewport
+		// policy (completed/abandoned omitted, active work pulled to the head,
+		// then following pending tasks) so the HUD and the transient tool result
+		// can never disagree about the current work (#5873). Expanded lists all.
 		const renderTasks = (phase: TodoPhase): string[] => {
-			const open = phase.tasks.filter(t => t.status === "pending" || t.status === "in_progress");
-			const base = expanded ? phase.tasks : open.length > 0 ? open : phase.tasks;
-			// Anchor the collapsed window on the active work — the in-progress task,
-			// else the first subagent-matched pending task — so it stays visible
-			// instead of being dropped by a fixed head slice.
-			let anchorIdx = base.findIndex(t => t.status === "in_progress");
-			if (anchorIdx < 0) anchorIdx = base.findIndex(t => isMatched(t));
+			if (expanded) {
+				return renderTreeList(
+					{
+						items: phase.tasks,
+						expanded: true,
+						renderItem: todo => this.#formatTodoLine(todo, "", isMatched(todo)),
+					},
+					theme,
+				);
+			}
+			const selection = selectCollapsedTodos(phase.tasks, isMatched, activeTaskCap);
 			return renderTreeList(
 				{
-					items: base,
-					expanded,
-					maxCollapsed: activeTaskCap,
+					items: selection.items,
 					itemType: "task",
-					anchorIndex: anchorIdx >= 0 ? anchorIdx : undefined,
+					trailingSummary: selection.summary,
 					renderItem: todo => this.#formatTodoLine(todo, "", isMatched(todo)),
 				},
 				theme,

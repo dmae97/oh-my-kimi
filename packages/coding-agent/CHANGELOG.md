@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed collapsed todo views hiding the in-progress task in large phases. Both the transient `Todo` tool result and the sticky `Todos` HUD now anchor their collapsed window on the active task (or a subagent-matched pending task), keeping it visible with two-sided `… N more` summaries regardless of its position ([#5873](https://github.com/can1357/oh-my-pi/issues/5873)).
+- Fixed collapsed todo views hiding the in-progress task in large phases. Both the transient `Todo` tool result and the sticky `Todos` HUD now share one walking-viewport policy: completed/abandoned tasks are omitted, every active task (the in-progress one, or a pending task a live subagent is executing) is pulled to the head in todo order, remaining rows fill with the following pending tasks, and an explicit `… N more active todos` summary is shown when active work alone exceeds the preview cap ([#5873](https://github.com/can1357/oh-my-pi/issues/5873)).
 
 ## [17.0.2] - 2026-07-17
 
