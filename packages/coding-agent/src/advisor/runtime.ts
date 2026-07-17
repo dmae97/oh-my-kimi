@@ -571,7 +571,13 @@ export class AdvisorRuntime {
 					// restored without replaying any older primary transcript.
 					this.#clearAdvisorContextAtCurrentCursor();
 					const rerendered = this.#formatRawDelta(rawMessages, wip);
-					return { batch: rerendered ?? (batchText || null), rawMessages, finalTurns: turns, wip, resetContext: true };
+					return {
+						batch: rerendered ?? (batchText || null),
+						rawMessages,
+						finalTurns: turns,
+						wip,
+						resetContext: true,
+					};
 				}
 			}
 
@@ -765,9 +771,8 @@ export class AdvisorRuntime {
 								wip,
 								overflowRecovery: true,
 							});
-							logger.debug("advisor context overflow recovered at current primary cursor")
+							logger.debug("advisor context overflow recovered at current primary cursor");
 						}
-
 					} else {
 						this.#consecutiveFailures++;
 						if (this.#consecutiveFailures >= 3) {

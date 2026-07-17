@@ -1631,7 +1631,6 @@ describe("advisor", () => {
 			};
 			const runtime = new AdvisorRuntime(agent, host);
 
-
 			runtime.onTurnEnd(messages);
 			await firstPromptDone;
 			expect(promptInputs).toHaveLength(1);
@@ -1642,7 +1641,6 @@ describe("advisor", () => {
 			messages.push({ role: "user", content: "bbb", timestamp: 2 } as AgentMessage);
 			runtime.onTurnEnd(messages);
 			await secondPromptDone;
-
 
 			expect(promptInputs).toHaveLength(2);
 			expect(promptInputs[1]).toContain("bbb");

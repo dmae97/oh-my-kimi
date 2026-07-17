@@ -2182,7 +2182,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	async #clearTransientModeState(): Promise<void> {
 		if (this.planModeEnabled || this.planModePaused) {
 			this.session.setPlanModeState(undefined);
-try {
+			try {
 				if (this.#planModePreviousTools !== undefined) {
 					await this.session.setActiveToolsByName(this.#planModePreviousTools);
 				}
@@ -2417,7 +2417,7 @@ try {
 			if (this.#planModePreviousTools !== undefined) {
 				await this.session.setActiveToolsByName(this.#planModePreviousTools);
 			}
-if (this.#planModePreviousModelState) {
+			if (this.#planModePreviousModelState) {
 				if (!options?.deferModelRestore) {
 					await this.#restorePlanPreviousModel(this.#planModePreviousModelState);
 				}

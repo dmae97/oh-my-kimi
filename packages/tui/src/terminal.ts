@@ -560,7 +560,7 @@ export class ProcessTerminal implements Terminal {
 		}
 	}
 
-/**
+	/**
 	 * Re-query the terminal background via a single OSC 11 probe. Reuses the
 	 * startup query path — same DA1-sentinel FIFO, pending/queued gating, parsing,
 	 * dedup, and appearance callbacks — so a light/dark switch is picked up

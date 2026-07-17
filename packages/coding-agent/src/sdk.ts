@@ -2764,7 +2764,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				return settingsAwareStreamFn(streamModel, context, streamOptions);
 			},
 			cursorExecHandlers,
-getCursorTools: () => [...(toolSession.xdevRegistry?.list() ?? [])],
+			getCursorTools: () => [...(toolSession.xdevRegistry?.list() ?? [])],
 			transformToolCallArguments,
 			intentTracing: !!intentField,
 			pruneToolDescriptions: inlineToolDescriptors,
