@@ -104,7 +104,10 @@ describe("generate_image tool gating", () => {
 	});
 
 	it("includes generate_image top-level when explicitly requested and enabled", async () => {
-		const names = await activeToolNames(Settings.isolated({}), ["read", "generate_image"]);
+		const names = await activeToolNames(Settings.isolated({ "generate_image.enabled": true }), [
+			"read",
+			"generate_image",
+		]);
 		expect(names).toContain("generate_image");
 	});
 
@@ -117,7 +120,7 @@ describe("generate_image tool gating", () => {
 			agentDir: registryDir,
 			modelRegistry,
 			sessionManager: SessionManager.inMemory(),
-			settings: Settings.isolated({}),
+			settings: Settings.isolated({ "generate_image.enabled": true }),
 			model: getBundledModel("openai", "gpt-4o-mini"),
 			disableExtensionDiscovery: true,
 		});
@@ -156,7 +159,7 @@ describe("generate_image tool gating", () => {
 			agentDir: registryDir,
 			modelRegistry,
 			sessionManager: SessionManager.inMemory(),
-			settings: Settings.isolated({}),
+			settings: Settings.isolated({ "generate_image.enabled": true }),
 			model: getBundledModel("openai", "gpt-4o-mini"),
 			disableExtensionDiscovery: true,
 			toolNames: ["read", "generate_image"],
