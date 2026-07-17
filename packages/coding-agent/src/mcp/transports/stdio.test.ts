@@ -153,13 +153,21 @@ describe.skipIf(process.platform === "win32")("StdioTransport request write stal
 	}, 8000);
 });
 
+// `kill(pid, 0)` succeeds for a zombie too: a grandchild whose parent (the
+// killed leader) is gone sits as <defunct> until whatever reaps orphans
+// (init/subreaper) gets around to it — which can lag on some hosts. A
+// zombie already received and honored the group SIGKILL; it is just not
+// harvested yet, so treating it as "still alive" would make the group-kill
+// assertions below flaky rather than testing what they claim to test.
 function processExists(pid: number): boolean {
 	try {
 		process.kill(pid, 0);
-		return true;
 	} catch {
 		return false;
 	}
+	const result = Bun.spawnSync(["ps", "-o", "stat=", "-p", String(pid)]);
+	const state = result.stdout.toString().trim();
+	return result.exitCode === 0 && state.length > 0 && !state.startsWith("Z");
 }
 
 // Regression for #5578: `close()` used a bare `this.#process.kill()` (direct
