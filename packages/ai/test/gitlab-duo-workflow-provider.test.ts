@@ -378,10 +378,11 @@ describe("GitLab Duo Workflow provider protocol", () => {
 		expect(payload.goal).not.toContain("call-1");
 		expect(payload.goal).not.toContain('"id":');
 		expect(payload.goal).not.toContain(" id=");
-		// Content is forwarded verbatim — the provider performs no credential redaction.
-		for (const token of credentialTokens) {
-			expect(payload.goal).toContain(token);
-		}
+		// Outbound credential redaction (#5655) scrubs plausible live credentials
+		// from the rendered transcript; low-entropy look-alikes pass through.
+		expect(payload.goal).not.toContain(patToken);
+		expect(payload.goal).toContain("[gitlab_token_redacted]");
+		expect(payload.goal).toContain(sessionCookie);
 		expect(payload.goal).not.toContain("[REDACTED]");
 		// Bare transcript: user content is emitted verbatim (no escaping, no boundary
 		// declaration — that was the agreed "完全裸转录" design). A ChatML-breakout
@@ -394,7 +395,8 @@ describe("GitLab Duo Workflow provider protocol", () => {
 		// The OMP system prompt lives in the flow config system slot, not the goal.
 		const flowPrompt = payload.flowConfig?.prompts[0];
 		expect(flowPrompt?.prompt_template.system).toContain("OMP system instructions: preserve the local tool bridge.");
-		expect(flowPrompt?.prompt_template.system).toContain(patToken);
+		expect(flowPrompt?.prompt_template.system).not.toContain(patToken);
+		expect(flowPrompt?.prompt_template.system).toContain("[gitlab_token_redacted]");
 		// This goal IS a multi-turn ChatML transcript, so the system slot appends the
 		// history-note telling the model the `<|im_start|>`/`<ran …>` markers are a past
 		// record, not a tool-call syntax to emit.
